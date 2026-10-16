@@ -19,8 +19,9 @@ import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import type { AuthStorage } from "@veyyon/ai";
 import * as launch from "@veyyon/coding-agent/tools/web/browser/launch";
 import * as registry from "@veyyon/coding-agent/tools/web/browser/registry";
-import { getSearchProvider, SEARCH_PROVIDER_ORDER } from "@veyyon/coding-agent/tools/web/search/provider";
+import { getSearchProvider } from "@veyyon/coding-agent/tools/web/search/provider";
 import { RESULT_RENDER_TIMEOUT_MS, readyTimeoutMs } from "@veyyon/coding-agent/tools/web/search/providers/browser-page";
+import { SEARCH_PROVIDER_ORDER } from "@veyyon/coding-agent/tools/web/search/types";
 
 describe("RESULT_RENDER_TIMEOUT_MS", () => {
 	/**

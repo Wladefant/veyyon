@@ -7,13 +7,14 @@ import {
 	parseFrontmatter,
 	trimTrailingSlashes,
 } from "@veyyon/utils";
+import { htmlToBasicMarkdown } from "@veyyon/utils/html-markdown";
 import { parseHTML } from "linkedom";
 import { markdownLink } from "../../markdown-link";
 import { loadJson } from "../engine/declarative";
 import type { DocContext, DocDeclaration, DocMatch } from "../engine/documentation";
 import { renderDescriptionSection, renderStringList } from "../engine/markdown-assembly";
 import type { RenderResult, ScraperDegrade } from "../types";
-import { buildResult, htmlToBasicMarkdown, isScraperDegrade } from "../types";
+import { buildResult, isScraperDegrade } from "../types";
 import { asRecord, isRecord, renderMarkdownTable, trimmedString } from "../utils";
 
 // --- MDN Helpers & Types ---

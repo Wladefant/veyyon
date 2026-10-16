@@ -20,12 +20,11 @@ import {
 	formatSearchProviderFailure,
 	formatSearchProviderFailures,
 	getSearchProvider,
-	getSearchProviderLabel,
-	type SearchProvider,
 	selectSearchProviders,
 } from "./provider";
+import type { SearchProvider } from "./providers/base";
 import type { SearchProviderId, SearchRenderDetails, SearchResponse } from "./types";
-import { SearchProviderError } from "./types";
+import { getSearchProviderLabel, SearchProviderError } from "./types";
 import { webSearchToolView } from "./view";
 
 /**

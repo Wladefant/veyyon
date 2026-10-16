@@ -39,7 +39,6 @@ import {
 	applyCodeAction,
 	collectGlobMatches,
 	dedupeWorkspaceSymbols,
-	detectLanguageId,
 	fileToUri,
 	filterWorkspaceSymbols,
 	hasGlobPattern,
@@ -51,6 +50,7 @@ import { lspToolView } from "@veyyon/coding-agent/lsp/view";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
 import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
+import { detectLanguageId } from "@veyyon/coding-agent/utils/lang-from-path";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**

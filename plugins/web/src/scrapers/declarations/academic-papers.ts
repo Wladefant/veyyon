@@ -1,4 +1,5 @@
 import { formatNumber } from "@veyyon/utils";
+import { htmlToBasicMarkdown } from "@veyyon/utils/html-markdown";
 import { parseHTML } from "linkedom";
 import { markdownLink } from "../../markdown-link";
 import {
@@ -8,7 +9,7 @@ import {
 } from "../engine/academic-paper";
 import { loadJson } from "../engine/declarative";
 import { renderKeyValues, renderStringList } from "../engine/markdown-assembly";
-import { buildResult, htmlToBasicMarkdown, isScraperDegrade, type LoadPageResult } from "../types";
+import { buildResult, isScraperDegrade, type LoadPageResult } from "../types";
 import { partialIsoDate } from "../utils";
 
 // 1. arXiv

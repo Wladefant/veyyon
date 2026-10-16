@@ -5,6 +5,7 @@
 ### Removed
 
 - Removed the `stackoverflowDeclaration` alias; import `stackOverflowDeclaration`.
+- Removed the `formatNumber` and `htmlToBasicMarkdown` re-exports from `scrapers/types`; import them from `@veyyon/utils/format` and `@veyyon/utils/html-markdown`.
 
 ## [1.5.6] - 2026-10-13
 

@@ -4,6 +4,7 @@ import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { primarySessionCpuAdoption } from "../session/cpu-limit";
 import { ToolAbortError, throwIfAborted } from "../tools/core/tool-errors";
 import { MessageFramer } from "../utils/jsonrpc-framing";
+import { detectLanguageId } from "../utils/lang-from-path";
 import { applyWorkspaceEdit } from "./edits";
 import { getLspmuxCommand, isLspmuxSupported } from "./lspmux";
 import type {
@@ -16,7 +17,7 @@ import type {
 	ServerConfig,
 	WorkspaceEdit,
 } from "./types";
-import { detectLanguageId, fileToUri } from "./utils";
+import { fileToUri } from "./utils";
 
 // =============================================================================
 // Client State

@@ -1,4 +1,5 @@
 import { compareDottedNumeric, errorMessage, formatBytes, formatNumber, isCancellation, logger } from "@veyyon/utils";
+import { htmlToBasicMarkdown } from "@veyyon/utils/html-markdown";
 import { escapeMarkdownTableCell } from "@veyyon/utils/markdown-table";
 import { parseHTML } from "linkedom";
 import { markdownLink } from "../../markdown-link";
@@ -12,7 +13,7 @@ import {
 } from "../engine/markdown-assembly";
 import type { PackageRegistryContext, PackageRegistryDeclaration } from "../engine/package-registry";
 import type { LocalizedText } from "../types";
-import { buildResult, formatIsoDate, getLocalizedText, htmlToBasicMarkdown, looksLikeHtml } from "../types";
+import { buildResult, formatIsoDate, getLocalizedText, looksLikeHtml } from "../types";
 import { finiteNumber, isRecord, trimmedString } from "../utils";
 
 // ============================================================================

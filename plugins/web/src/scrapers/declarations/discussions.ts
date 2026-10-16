@@ -1,7 +1,9 @@
+import { formatNumber } from "@veyyon/utils/format";
+import { htmlToBasicMarkdown } from "@veyyon/utils/html-markdown";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { markdownLink } from "../../markdown-link";
 import type { DiscussionContext, DiscussionDeclaration, DiscussionMatch } from "../engine/discussion";
-import { buildResult, decodeHtmlEntities, formatIsoDate, formatNumber, htmlToBasicMarkdown } from "../types";
+import { buildResult, decodeHtmlEntities, formatIsoDate } from "../types";
 
 // =============================================================================
 // Hacker News Helper & Declaration

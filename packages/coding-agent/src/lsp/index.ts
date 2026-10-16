@@ -15,6 +15,7 @@ import { toolsPrompts } from "../prompts/tools/rows";
 import { theme } from "../theme/theme-binding";
 import type { ToolSession } from "../tools";
 import { truncateForPrompt } from "../tools/core/approval";
+import { formatGroupedDiagnosticMessages } from "../tools/core/grouped-file-output";
 import { formatPathRelativeToCwd, resolveToCwd } from "../tools/core/path-utils";
 // The leaf, not `tools/core/tool-result`: that module builds results and reaches 151 modules through
 // `tools/core/output-meta`, and this only prepends a string to one already built.
@@ -92,7 +93,6 @@ import {
 	formatDiagnostic,
 	formatDiagnosticsSummary,
 	formatDocumentSymbol,
-	formatGroupedDiagnosticMessages,
 	formatLocation,
 	formatSymbolInformation,
 	formatWorkspaceEdit,

@@ -2,11 +2,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { collapseWhitespace, errorMessage, ptree, Snowflake, truncate } from "@veyyon/utils";
+import { formatNumber } from "@veyyon/utils/format";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { throwIfCancelled } from "../abort";
 import { extractWithParallel, findParallelApiKey, getParallelExtractContent } from "../parallel";
 import type { RenderResult, ScrapeServices, SpecialHandler } from "./types";
-import { buildResult, formatMediaDuration, formatNumber, tryParseUrl } from "./types";
+import { buildResult, formatMediaDuration, tryParseUrl } from "./types";
 
 interface YouTubeUrl {
 	videoId: string;

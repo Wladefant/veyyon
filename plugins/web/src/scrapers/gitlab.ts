@@ -1,8 +1,8 @@
 import { tryParseJson } from "@veyyon/utils";
+import { formatNumber } from "@veyyon/utils/format";
 import {
 	buildResult,
 	formatIsoDate,
-	formatNumber,
 	loadPage,
 	type RenderResult,
 	type ScraperDegrade,

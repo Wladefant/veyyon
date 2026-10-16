@@ -1,7 +1,8 @@
 import { tryParseJson } from "@veyyon/utils";
+import { formatNumber } from "@veyyon/utils/format";
 import { markdownLink } from "../markdown-link";
 import type { LoadPageResult, RenderResult, ScraperDegrade, SpecialHandler } from "./types";
-import { buildResult, formatNumber, loadFailure, loadPage, scraperDegrade, tryParseUrl } from "./types";
+import { buildResult, loadFailure, loadPage, scraperDegrade, tryParseUrl } from "./types";
 
 const API_BASE = "https://public.api.bsky.app/xrpc";
 

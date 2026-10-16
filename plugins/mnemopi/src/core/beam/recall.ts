@@ -1,13 +1,8 @@
 import { batched } from "@veyyon/utils/array";
 import { clamp, clamp01 } from "@veyyon/utils/math";
+import { sqlPlaceholders, tableExists as tableExistsIn } from "@veyyon/utils/sqlite";
 import { type HybridWeights, normalizedRecallWeights, temporalHalflifeHours } from "../../config";
 import { parseQueryTime, recencyDecay, temporalBoost, toUtcIso } from "../../util/datetime";
-
-// Temporal scoring has one owner (util/datetime.ts). Re-export the two helpers
-// the recall surface has always exposed so callers keep importing them here.
-export { parseQueryTime, temporalBoost } from "../../util/datetime";
-
-import { sqlPlaceholders, tableExists as tableExistsIn } from "@veyyon/utils/sqlite";
 import { unicodeWordTokens } from "../../util/regex";
 import { SQLITE_IN_CLAUSE_BATCH } from "../../util/sqlite";
 import { embedQuery } from "../embeddings";

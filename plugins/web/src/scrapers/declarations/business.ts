@@ -1,9 +1,10 @@
+import { formatNumber } from "@veyyon/utils/format";
 import { escapeMarkdownTableCell } from "@veyyon/utils/markdown-table";
 import { markdownLink } from "../../markdown-link";
 import type { BusinessContext, BusinessDeclaration } from "../engine/business";
 import { loadJson } from "../engine/declarative";
 import { renderKeyValues } from "../engine/markdown-assembly";
-import { buildResult, formatNumber, isScraperDegrade, type ScraperDegrade } from "../types";
+import { buildResult, isScraperDegrade, type ScraperDegrade } from "../types";
 export interface Officer {
 	id: number;
 	name: string;

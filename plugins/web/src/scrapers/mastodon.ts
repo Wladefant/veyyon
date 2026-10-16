@@ -1,16 +1,10 @@
 import { tryParseJson } from "@veyyon/utils";
+import { formatNumber } from "@veyyon/utils/format";
+import { htmlToBasicMarkdown } from "@veyyon/utils/html-markdown";
 import { throwIfCancelled } from "../abort";
 import { markdownLink } from "../markdown-link";
 import type { LoadPageResult, RenderResult, ScraperDegrade, SpecialHandler } from "./types";
-import {
-	buildResult,
-	formatNumber,
-	htmlToBasicMarkdown,
-	loadFailure,
-	loadPage,
-	scraperDegrade,
-	tryParseUrl,
-} from "./types";
+import { buildResult, loadFailure, loadPage, scraperDegrade, tryParseUrl } from "./types";
 
 interface MastodonAccount {
 	id: string;

@@ -11,12 +11,6 @@ import { throwIfCancelled } from "../abort";
 import { CHROME_WINDOWS_USER_AGENT } from "../browser-fingerprint-constants";
 import type { CredentialStore } from "../credentials";
 
-export { formatNumber } from "@veyyon/utils/format";
-// The converter is a `@veyyon/utils` leaf rather than a scraper's: the eval display path and the
-// browser tool need HTML turned into markdown without reaching into this package for it. Re-exported
-// because thirty handlers import it from here alongside the rest of the shared surface.
-export { htmlToBasicMarkdown } from "@veyyon/utils/html-markdown";
-
 export interface RenderResult {
 	url: string;
 	finalUrl: string;

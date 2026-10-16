@@ -12,10 +12,6 @@ import type { AuthStorage } from "@veyyon/ai";
 import type { SearchProvider } from "./providers/base";
 import { getSearchProviderLabel, SEARCH_PROVIDER_ORDER, SearchProviderError, type SearchProviderId } from "./types";
 
-export type { SearchParams } from "./providers/base";
-export { SearchProvider } from "./providers/base";
-export { getSearchProviderLabel, SEARCH_PROVIDER_ORDER } from "./types";
-
 /** Lazy factories. Each one dynamic-imports its provider module on first call. */
 const PROVIDER_LOADERS: Record<SearchProviderId, () => Promise<SearchProvider>> = {
 	perplexity: async () => new (await import("./providers/perplexity")).PerplexityProvider(),

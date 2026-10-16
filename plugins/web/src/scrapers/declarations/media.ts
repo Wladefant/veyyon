@@ -1,8 +1,9 @@
 import { errorMessage, isCancellation } from "@veyyon/utils";
+import { htmlToBasicMarkdown } from "@veyyon/utils/html-markdown";
 import { markdownLink } from "../../markdown-link";
 import { loadJson } from "../engine/declarative";
 import type { MediaContext, MediaDeclaration } from "../engine/media";
-import { buildResult, formatMediaDuration, htmlToBasicMarkdown, isScraperDegrade } from "../types";
+import { buildResult, formatMediaDuration, isScraperDegrade } from "../types";
 
 // --- Discogs ---
 

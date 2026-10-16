@@ -4,8 +4,6 @@ import { clampLow } from "@veyyon/utils/math";
 import { embeddingDim, type VecType } from "../config";
 import { closeQuietly, type DatabasePath, openDatabase } from "../db";
 
-export { cosineSimilarity } from "./vector-math";
-
 export const BITS_PER_BYTE = 8;
 
 /**

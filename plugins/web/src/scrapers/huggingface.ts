@@ -1,14 +1,7 @@
 import { tryParseJson } from "@veyyon/utils";
+import { formatNumber } from "@veyyon/utils/format";
 import type { LoadPageResult, ScraperDegrade, SpecialHandler } from "./types";
-import {
-	buildResult,
-	formatNumber,
-	isScraperDegrade,
-	loadFailure,
-	loadPage,
-	scraperDegrade,
-	tryParseUrl,
-} from "./types";
+import { buildResult, isScraperDegrade, loadFailure, loadPage, scraperDegrade, tryParseUrl } from "./types";
 
 interface HfModelData {
 	modelId: string;
