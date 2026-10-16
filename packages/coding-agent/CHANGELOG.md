@@ -76,6 +76,7 @@
 - Permission intent and memory consolidation parsing read their arguments through the `isRecord` guard instead of repeating it as a cast; no user-visible change.
 - The inline tool-output budget no longer re-checks for a non-finite `tools.artifactSpillThreshold`, which the settings read already replaces with its default and reports; no user-visible change.
 - The session composition root drops a redundant field comment to stay within its measured size; no user-visible change.
+- Session creation applies the web search and image provider preferences through the one reader the session scope uses; no user-visible change.
 
 ### Fixed
 

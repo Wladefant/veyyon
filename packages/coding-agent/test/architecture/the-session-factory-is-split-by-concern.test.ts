@@ -54,9 +54,11 @@ const SDK = repoPath("packages/coding-agent/src/sdk.ts");
  * MEASURED at 1646 lines after `createAgentSession` became the `SessionStartup` steps and the
  * request hooks, the agent identity, the provider prompt cache key, the credential-disabled relay,
  * the tool discovery mode, the command input discovery and the memory hydration moved into
- * `src/session/` modules. This falls when `SessionStartup` is split again.
+ * `src/session/` modules. 1646 to 1626: the provider preferences moved to the one
+ * `config/provider-globals.ts` reader the session scope already ran. This falls when
+ * `SessionStartup` is split again.
  */
-const SDK_CEILING = 1646;
+const SDK_CEILING = 1626;
 
 /** MEASURED: the largest factory module is `factory-extensions.ts` at 395 lines. */
 const FACTORY_CEILING = 400;

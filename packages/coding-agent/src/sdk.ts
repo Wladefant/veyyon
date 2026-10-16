@@ -35,6 +35,7 @@ import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mo
 import { ModelRegistry } from "./config/model-registry";
 import { openaiWebsocketPreference } from "./config/openai-websockets-mode";
 import type { PromptTemplate } from "./config/prompt-templates";
+import { applyProviderGlobalsFromSettings } from "./config/provider-globals";
 import { Settings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
 import { initializeWithSettings } from "./discovery";
@@ -106,13 +107,6 @@ import {
 import { wrapToolWithMetaNotice } from "./tools/core/output-meta";
 import { createRepairToolCallArgumentsHook } from "./tools/core/repair/agent-hook";
 import { renderSearchToolBm25Description } from "./tools/search/search-tool-bm25";
-import { isImageProviderPreference, setPreferredImageProvider } from "./tools/web/image-gen";
-import {
-	isSearchProviderId,
-	isSearchProviderPreference,
-	setExcludedSearchProviders,
-	setPreferredSearchProvider,
-} from "./tools/web/search";
 import type { ActiveRepoContext } from "./utils/active-repo-context";
 import { EventBus } from "./utils/event-bus";
 import type { WorkspaceTree } from "./workspace-tree";
@@ -258,20 +252,6 @@ function registerSshCleanup(): void {
 	if (sshCleanupRegistered) return;
 	sshCleanupRegistered = true;
 	postmortem.register("ssh-cleanup", cleanupSshResources);
-}
-
-/** Apply the web search, excluded web search and image provider preferences in `settings`. */
-function applyProviderPreferences(settings: Settings): void {
-	const excludedWebSearchProviders = settings.get("providers.webSearchExclude");
-	if (Array.isArray(excludedWebSearchProviders)) {
-		setExcludedSearchProviders(excludedWebSearchProviders.filter(isSearchProviderId));
-	}
-	const webSearchProvider = settings.get("providers.webSearch");
-	if (typeof webSearchProvider === "string" && isSearchProviderPreference(webSearchProvider)) {
-		setPreferredSearchProvider(webSearchProvider);
-	}
-	const imageProvider = settings.get("providers.image");
-	if (isImageProviderPreference(imageProvider)) setPreferredImageProvider(imageProvider);
 }
 
 /**
@@ -570,7 +550,7 @@ class SessionStartup {
 		}
 		this.#projectInputs = discoverProjectInputs(cwd, agentDir, settings, options);
 		this.#commandInputs = discoverCommandInputs(cwd, agentDir, options);
-		applyProviderPreferences(settings);
+		applyProviderGlobalsFromSettings(settings);
 		// The operator-visible channel for non-fatal startup and runtime problems. It exists before the
 		// session manager, so load-time recovery notices use the same surface as secrets and filesystem
 		// faults. The default is stderr rather than dropping warnings.
