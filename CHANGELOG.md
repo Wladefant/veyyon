@@ -64,6 +64,8 @@
 - Paste intake, the `/queue` batch and dequeue, submission routing and the Esc chain moved out of `input-controller.ts` into `composer-paste.ts`, `queued-submissions.ts`, `prompt-submission.ts` and `composer-escape.ts`, and a detached abort from those paths is logged under the new module's name; no user-visible change.
 - The LSP server selection, diagnostics wait, project diagnostics, `rename_file` and the edit/write writethrough moved from `lsp/index.ts` into `lsp/servers.ts`, `lsp/diagnostics.ts`, `lsp/workspace-diagnostics.ts`, `lsp/rename-file.ts` and `lsp/writethrough.ts`, so the edit and write tools no longer load the `lsp` tool; no user-visible change.
 - Moved the usage-report fetch, cache, header ingest and fan-out out of `auth-storage.ts` into `auth-storage/usage-reporting.ts`, with no user-visible change.
+- Moved usage-backed credential ranking out of `auth-storage.ts` into `auth-storage/usage-ranking.ts`, with no user-visible change beyond the fixes below.
+- Moved the credential health check behind `AuthStorage.checkCredentials` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - `engine/` is grouped by concern into `members`, `plan`, `run`, `trial`, `kit`, `compare`, `harness`, `auth`, `io`, `wire` and `corpus`, and the overlay loaders and paired statistics every suite shares moved into it from the in-process backend and the DeepSWE suite.
 - The committed-prefix audit and resync are in `core/committed-prefix.ts` instead of `core/renderer.ts`, and the render scheduler, the root-child frame-segment helpers, the render intent and the alt-buffer caret mapping are in `core/render-scheduler.ts`, `core/frame-segments.ts`, `core/render-intent.ts` and `core/cursor.ts` instead of `core/tui.ts` and `core/frame-plan.ts`; behavior is unchanged.
 
@@ -113,6 +115,8 @@
 - A `browser` `text/` click releases its page handles and its deadline timer when it returns, instead of leaking a handle per clickable ancestor on every poll.
 - A browser the `browser` tool spawned is killed on session end or a failed attach when the native addon cannot load, instead of being left running.
 - A Bedrock, Codex, Ollama or Gemini CLI endpoint that never answers ends the turn with `Timed out after N ms waiting for the first event`, classified as a retryable timeout, instead of `Request was aborted` or `The operation timed out.`, which read as a cancellation or named no phase.
+- An OAuth account ranking whose usage fetch misses its deadline tries unblocked accounts first and blocked ones by the soonest reset, as API-key ranking already did, instead of storage order.
+- A credential ranking whose usage fetch fails clears its 5–15 s deadline timer instead of leaving it armed.
 - A trial cut short by a cancelled run gets no journal row, so `--resume` runs it again, and the retry backoff ends when the run is cancelled.
 - A trial whose agent exited before any provider request succeeded is retried as infrastructure whatever its stderr says, and a failed request no longer counts as a turn.
 - A journal whose last line was cut off by a killed process is repaired before the next append instead of becoming unreadable.
