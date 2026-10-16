@@ -3,10 +3,6 @@
  *
  * Agents are embedded at build time via Bun's import with { type: "text" }.
  */
-import { ThinkingLevel } from "@veyyon/agent-core/thinking";
-// The effort ladder from its owner (`@veyyon/catalog/effort`, 1 module) rather than the
-// `@veyyon/ai` barrel that re-exports it (346).
-import { Effort } from "@veyyon/catalog/effort";
 import { parseFrontmatter, prompt } from "@veyyon/utils";
 import { parseAgentFields } from "../discovery/helpers";
 import { agentsPrompts } from "../prompts/agents/rows";
@@ -48,7 +44,6 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 			description:
 				"Vague outcome, multi-step, owned end to end: works out what to change, changes it, tests it, and reviews its own work before returning. Scale it can carry: building a whole package from nothing. The most expensive lane, so do not reach for it when the outcome is already clear.",
 			spawns: "*",
-			thinkingLevel: ThinkingLevel.Inherit,
 		},
 		template: agentsPrompts["agents/deep"].text,
 	},
@@ -58,7 +53,6 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 			name: "sonic",
 			description:
 				"Clear outcome, contained change: you know what needs to happen, even if some details still need working out. It may look things up and ask back when something is ambiguous. The cheapest lane. Not for sprawling work that has to be discovered, built and verified in stages.",
-			thinkingLevel: Effort.Medium,
 		},
 		template: agentsPrompts["agents/sonic"].text,
 	},

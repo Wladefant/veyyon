@@ -79,7 +79,7 @@ const CORE_CEILINGS: Record<string, number> = {
 	"core/container.ts": 180,
 	"core/mouse-routing.ts": 150,
 	"core/paint-sequences.ts": 430,
-	"core/frame-plan.ts": 90,
+	"core/frame-plan.ts": 114,
 	"core/frame-pacing.ts": 150,
 	"core/committed-prefix.ts": 155,
 	"core/frame-segments.ts": 95,

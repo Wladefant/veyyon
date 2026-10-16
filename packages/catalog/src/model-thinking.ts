@@ -437,14 +437,11 @@ function inferThinkingControlMode<TApi extends Api>(
 	parsedModel: ParsedModel,
 ): ThinkingConfig["mode"] {
 	switch (spec.api) {
+		// Gemini 3 and later take `thinkingLevel`; Gemini 4 rejects `thinkingBudget` with HTTP 400.
 		case "google-generative-ai":
 		case "google-gemini-cli":
 		case "google-vertex":
-			return parsedModel.family === "gemini" &&
-				semverGte(parsedModel.version, "3.0") &&
-				parsedModel.version.major === 3
-				? "google-level"
-				: "budget";
+			return parsedModel.family === "gemini" && semverGte(parsedModel.version, "3.0") ? "google-level" : "budget";
 
 		case "anthropic-messages":
 			if (isMinimaxReasoningModelOnAnthropicEndpoint(spec)) {
@@ -574,6 +571,17 @@ export function mapEffortToGoogleThinkingLevel(effort: Effort): "MINIMAL" | "LOW
 		case Effort.Max:
 			return "HIGH";
 	}
+}
+
+/**
+ * The `thinkingLevel` a thinking-off request sends to a `google-level` model. Gemini 3 cannot switch
+ * thinking off, so the request names the lowest level the model declares: `MINIMAL` only where the
+ * model accepts it, `LOW` on a model whose ladder starts there.
+ */
+export function googleThinkingLevelWhenOff<TApi extends Api>(
+	model: ApiModel<TApi>,
+): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" {
+	return mapEffortToGoogleThinkingLevel(minimumSupportedEffort(model) ?? Effort.Minimal);
 }
 
 /**

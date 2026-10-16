@@ -8,6 +8,7 @@ import { isOfficialOpenAIEndpoint } from "@veyyon/catalog/compat/openai";
 import type { Effort } from "@veyyon/catalog/effort";
 import { isVertexExpressOpenAIUrl, isVertexRawPredictUrl } from "@veyyon/catalog/hosts";
 import {
+	googleThinkingLevelWhenOff,
 	mapEffortToAnthropicAdaptiveEffort,
 	mapEffortToGoogleThinkingLevel,
 	type ReasoningSelection,
@@ -1763,7 +1764,8 @@ function googleGeminiCliOptions(mapping: OptionsMapping): OptionsForApi<"google-
 	}
 	const thinking: GoogleGeminiCliOptions["thinking"] = { enabled: false };
 	if (model.reasoning && model.thinking?.suppressWhenOff) {
-		thinking.suppress = model.thinking.mode === "google-level" ? { level: "MINIMAL" } : { budget: 0 };
+		thinking.suppress =
+			model.thinking.mode === "google-level" ? { level: googleThinkingLevelWhenOff(model) } : { budget: 0 };
 	}
 	return {
 		...base,

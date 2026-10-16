@@ -36,7 +36,7 @@ const RUNTIME = `${SESSION_DIR}/agent-session.ts`;
 const FACADE = `${SESSION_DIR}/facade.ts`;
 
 /**
- * MEASURED at 9643 lines. Model target selection left earlier — the role resolver, the
+ * MEASURED at 9456 lines. Model target selection left earlier — the role resolver, the
  * configured-target reader, the compaction candidate walk and its effort map — and provider request
  * shaping (payload redaction, the Anthropic metadata block, the tool-order permutation check) left
  * after it, because not one of those members read or wrote a field of the runtime: every input was
@@ -55,8 +55,9 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * auto-approve flag, the `/yolo` bypass, the kept per-tool decisions and the ACP permission proxy)
  * and the provider wire shaping (the tool-call id map, the relativization root and the bytes each
  * request left out), the extension event forwarding with its turn index, the session title refresh
- * on a re-plan, the serialized scope transitions with the cwd re-scoping they run, and the in-flight
- * prompt count with the macOS power assertion left as collaborators under `runtime/`.
+ * on a re-plan, the serialized scope transitions with the cwd re-scoping they run, the in-flight
+ * prompt count with the macOS power assertion, and the end-of-turn context check with its overflow,
+ * incomplete-output, promoted-model retry and threshold cases left as collaborators under `runtime/`.
  * The number falls again when the next one leaves. It ratchets: slack is what it takes to not fail
  * on the next honest edit, and a ceiling left far above a shrinking file stops being a bound.
  * RE-MEASURED 2026-10-09 at 9811: the session-switch rollback record and its single-purpose
@@ -65,7 +66,7 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * (+11) and the verification reminder's active-tool-name source (+1) grew the class in place. The
  * session-switch adoption and rollback is the next concern to leave, and the ceiling falls with it.
  */
-const RUNTIME_CEILING = 9_830;
+const RUNTIME_CEILING = 9_475;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -107,6 +108,7 @@ const COLLABORATORS = [
 	"todo-runtime.ts",
 	"tool-discovery.ts",
 	"ttsr-runtime.ts",
+	"turn-context-check.ts",
 	"turns-in-flight.ts",
 	"user-executions.ts",
 	"yield-tracker.ts",

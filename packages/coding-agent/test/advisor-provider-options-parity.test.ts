@@ -93,7 +93,10 @@ describe("AgentSession advisor provider-options parity", () => {
 			advisorStreamFn,
 			preferWebsockets: true,
 		});
-		session.settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			advisor: { model: "anthropic/claude-sonnet-4-5" },
+		});
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 
 		const advisor = session.getAdvisorAgent();
@@ -186,7 +189,10 @@ describe("AgentSession advisor provider-options parity", () => {
 			transformProviderContext,
 			preferWebsockets: true,
 		});
-		session.settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			advisor: { model: "anthropic/claude-sonnet-4-5" },
+		});
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 
 		const advisor = session.getAdvisorAgent();
@@ -238,7 +244,10 @@ describe("AgentSession advisor provider-options parity", () => {
 			settings: settings(),
 			modelRegistry,
 		});
-		session.settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			advisor: { model: "anthropic/claude-sonnet-4-5" },
+		});
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 
 		const advisor = session.getAdvisorAgent();

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.5.8] - 2026-10-16
+
+### Changed
+
+- Supersede pruning no longer reads an `inContextRefusal` marker from a `read` result; a read refused as still in context is a failed read, which pruning already never counts as a newer read.
+
+## [1.5.6] - 2026-10-13
+
 ### Breaking Changes
 
 - `CompactionDetails` holds only the file paths a compaction's read and modified lists gained over the compaction it built on (`readFilesAdded`, `modifiedFilesAdded`, and that compaction's id as `base`) instead of `readFiles` and `modifiedFiles` in full; `prepareCompaction` still resolves records an earlier version wrote.
@@ -41,6 +49,7 @@
 
 ### Fixed
 
+- Supersede pruning does not count a `read` result whose details set `inContextRefusal` as a newer read of its file, so it no longer blanks the earlier result the refusal points back to.
 - A tool call whose `toolcall_end` the provider delivered before an abort is kept and answered with a result when the abort fires before the loop reads that event, instead of being dropped and reported as unfinished depending on microtask order.
 - A server-side compaction whose cut lands inside a turn that opened before the previous provider window chains that window and posts only the context behind it, instead of posting the whole session, which on a long single-turn Codex run outgrew the provider's context and failed every pass with `context_length_exceeded`.
 - A compaction reads the turns the previous compaction kept, so a local pass no longer drops them from the context and a chained server-side pass no longer omits them from the input it posts.

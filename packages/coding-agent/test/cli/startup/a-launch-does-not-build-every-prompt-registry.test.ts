@@ -303,20 +303,27 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * 1474 to 1475: `ai/src/dialect/bracket-walk.ts`, the zero-import bracket walk `gemini.ts` and
  * `gemma.ts` split call arguments with instead of each spelling it inline.
  *
- * 1475 to 1476: `catalog/wire/kimi-code.ts`, the Kimi Code region table and the API-key envelope
- * that carries a credential's region to the request. `catalog/provider-models/openai-compat.ts`,
- * already here, resolves the Kimi Code base URL through it so a request reaches the deployment that
- * issued its token. Its one import, `utils/url`, is already here.
+ * 1475 to 1476: `catalog/wire/kimi-code.ts`, the Kimi Code region table and the API-key envelope that
+ * holds a credential's deployment. `ai/src/registry/oauth/index.ts`, already here, builds a Kimi login's
+ * API key through it, and its one import, `utils/src/url.ts`, was already here.
  *
  * 1476 to 1477: `prompts/side-channel/composer-prediction.md`, the prompt the composer's next-message
- * prediction sends. `prompts/side-channel/rows.ts`, already here, holds it beside the other
- * side-channel prompts as a text import, so the growth is the one file and no subtree.
+ * prediction sends. `prompts/side-channel/rows.ts`, already here through `session/agent-session.ts`,
+ * imports every prompt in its directory as text.
+ *
+ * 1477 to 1478: `session/runtime/turn-context-check.ts`, the end-of-turn context check that left
+ * `session/agent-session.ts`. It imports only what that code imported there, so no other module arrived.
+ *
+ * 1478 to 1479: `ai/src/registry/oauth/token-response.ts`, the one reader that requires a token
+ * endpoint's JSON to be an object. `ai/src/registry/oauth/nous-research.ts`, already here, reads its
+ * token responses through it; its imports, `utils/src/type-guards.ts` and `ai/src/error`, were
+ * already here.
  *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1477;
+const LAUNCH_REACH_CEILING = 1479;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
@@ -340,6 +347,7 @@ const LAUNCH_REACH_CEILING = 1477;
  * 524 to 525: `ai/src/dialect/bracket-walk.ts`, for the reason the launch ceiling above records.
  *
  * 525 to 526: `catalog/wire/kimi-code.ts`, for the reason the launch ceiling above records.
+ * `catalog/provider-models/openai-compat.ts`, already here, resolves a Kimi request's endpoint through it.
  */
 const ASSEMBLER_REACH_CEILING = 526;
 

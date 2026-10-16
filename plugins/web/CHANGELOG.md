@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-13
+
 ### Changed
 
 - The marketplace repository-link reader, key-value renderer and package-registry handler test missing values with optional chains; behavior is unchanged.

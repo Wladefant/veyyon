@@ -344,7 +344,6 @@ function describeEvent(op: string, data: Record<string, unknown>): string {
 			break;
 		case "completion":
 			if (data.model) parts.push(String(data.model));
-			if (data.tier && data.tier !== data.model) parts.push(`(${String(data.tier)})`);
 			parts.push(`${eventCount(data.chars)} chars`);
 			break;
 		case "wc":

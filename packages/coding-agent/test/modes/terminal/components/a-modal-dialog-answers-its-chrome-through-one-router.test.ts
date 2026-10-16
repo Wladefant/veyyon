@@ -245,6 +245,7 @@ const ARMS: Record<string, () => Arm> = {
 				confirms += 1;
 			},
 			onClearRateLimitBlock: () => {},
+			onForgetSignedOut: () => {},
 			onCancel: () => {
 				cancels += 1;
 			},

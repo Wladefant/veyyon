@@ -75,7 +75,7 @@ beforeAll(async () => {
 	isolated = enterIsolatedConfigRoot("settled-facts-record", { defaultProfile: true });
 	resetLaunchFactsForTest();
 	await Settings.init({ inMemory: true });
-	settings.setModelRole("default", ROLE);
+	settings.setDefaultModel(ROLE);
 	await initTheme(false);
 });
 

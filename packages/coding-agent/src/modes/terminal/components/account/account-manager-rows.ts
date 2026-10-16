@@ -149,6 +149,10 @@ export function sidebarSummaryLine(inventory: AccountInventory): string {
  * again` beside a working account reads as one: the same card said the provider works and that the
  * user must act. With an account still standing the line states that instead, and offers the
  * signed-out one back as a choice.
+ *
+ * Both forms offer `f` to forget the note. A login that is never coming back (an address that
+ * moved to another account, a grant revoked on purpose) otherwise kept the provider reported as
+ * signed out for good, because a fresh login to that account was the only thing that cleared it.
  */
 export function providerDisabledNote(entry: {
 	disabledCause?: string;
@@ -165,8 +169,8 @@ export function providerDisabledNote(entry: {
 	const serving = entry.rows.filter(row => row.health !== "failed").length;
 	const action =
 		serving === 0
-			? "press a to sign in again"
-			: `${serving} other ${serving === 1 ? "account" : "accounts"} still signed in; press a to sign this one back in`;
+			? "press a to sign in again, or f to forget it"
+			: `${serving} other ${serving === 1 ? "account" : "accounts"} still signed in; press a to sign this one back in, or f to forget it`;
 	return [`${lead}: ${sanitizeAccountText(entry.disabledCause)}`, action];
 }
 

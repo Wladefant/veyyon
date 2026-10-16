@@ -16,6 +16,8 @@
  * width sweep spent most of its time styling escapes. Each row must stay within a fixed number of bytes per level,
  * the cost of one border, plus a constant for the content's own styling.
  *
+ * The theme is production-shaped (`test-themes.ts`: one raw SGR pair per style, as `theme-class.ts` writes them).
+ *
  * Not caught: a single quote level whose content row overflows by one wide grapheme at a one-cell width, which wraps
  * once and does not compound; content that is not ASCII is outside the width assertion for that reason.
  */

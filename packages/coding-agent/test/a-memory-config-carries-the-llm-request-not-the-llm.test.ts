@@ -30,7 +30,7 @@ import { TempDir } from "@veyyon/utils";
  * Mnemopi as raw setting text, so `${VAR}` reached the endpoint as a credential -- the exact fail-open the
  * config-value grammar exists to close, and the spelling the memory backend's own documentation shows.
  *
- * What this does not catch: whether the smol and on-device branches pick the right model. That needs a live
+ * What this does not catch: whether the online and on-device branches pick the right model. That needs a live
  * model registry and is covered by the provider-boundary suite.
  */
 
@@ -62,7 +62,7 @@ describe("a loaded memory config carries the LLM request", () => {
 	 * The defect itself. A remote request used to become a live `providerOptions.llm` here, and the object
 	 * is spread straight into a `Mnemopi` constructor by both `createMemory` and `createStatsMemory`.
 	 */
-	it.each([["none"], ["smol"], ["remote"]])("hands out no client for mode %s", mode => {
+	it.each([["none"], ["online"], ["remote"]])("hands out no client for mode %s", mode => {
 		const config = configFor({
 			"mnemopi.llmMode": mode,
 			"mnemopi.llmBaseUrl": "https://example.invalid/v1",

@@ -6,7 +6,6 @@
  *     bun scripts/demos/render-settings-ownership.ts --state default-model --width 110
  *     bun scripts/demos/render-settings-ownership.ts --state shadowed --width 110
  */
-import { DEFAULT_MODEL_SLOT } from "../../packages/coding-agent/src/config/model-roles";
 import { Settings } from "../../packages/coding-agent/src/config/settings";
 import { DEFAULT_MODEL_SETTING_ID } from "../../packages/coding-agent/src/modes/terminal/components/selectors/settings-defs";
 import { renderDemo } from "./render-args";
@@ -22,8 +21,8 @@ await renderDemo(
 			selector.selectSetting("contextPromotion.enabled");
 			selector.handleInput("\x1b[C");
 		} else {
-			Settings.instance.setPersistedModelRole(DEFAULT_MODEL_SLOT, "anthropic/claude-sonnet-4-5");
-			Settings.instance.override("modelRoles", { [DEFAULT_MODEL_SLOT]: "openai/gpt-5.2" });
+			Settings.instance.set("defaultModel", "anthropic/claude-sonnet-4-5");
+			Settings.instance.override("defaultModel", "openai/gpt-5.2");
 			selector.openTab("model");
 			selector.selectSetting(DEFAULT_MODEL_SETTING_ID);
 		}

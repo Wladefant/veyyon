@@ -169,7 +169,7 @@ describe("a cancel that lands while a recovery wait is announced cancels it", ()
 					"retry.baseDelayMs": 5,
 					"retry.maxRetries": 2,
 				});
-				settings.setModelRole("default", `${model.provider}/${model.id}`);
+				settings.setDefaultModel(`${model.provider}/${model.id}`);
 				const session = new AgentSession({
 					agent,
 					sessionManager: SessionManager.inMemory(),

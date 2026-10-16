@@ -126,7 +126,7 @@ describe("AgentSession context promotion", () => {
 
 	// Deterministically drain the fire-and-forget `agent_end` handler that
 	// `emitExternalEvent` dispatches. The handler's terminal maintenance work
-	// (`#checkCompaction`) is microtask-based on the no-promotion paths, so a
+	// (`TurnContextCheck.check`) is microtask-based on the no-promotion paths, so a
 	// single macrotask turn fully flushes it; `waitForIdle` then settles any
 	// tracked continuation. Used by the negative tests, which assert that *no*
 	// promotion happened and therefore need the handler to have actually run.
@@ -708,9 +708,12 @@ describe("AgentSession context promotion", () => {
 				messages: [],
 			},
 		});
-		// The retry is observed by the agent being continued; the await below hangs without it.
 		const continued = Promise.withResolvers<void>();
-		vi.spyOn(agent, "continue").mockImplementation(async () => continued.resolve());
+		let retries = 0;
+		vi.spyOn(agent, "continue").mockImplementation(async () => {
+			retries++;
+			continued.resolve();
+		});
 
 		session = new AgentSession({
 			agent,
@@ -725,6 +728,7 @@ describe("AgentSession context promotion", () => {
 
 		await continued.promise;
 
+		expect(retries).toBe(1);
 		expect(session.model?.id).toBe(codexModel.id);
 		expect(session.agent.state.messages).not.toContain(overflowMessage);
 		expect(

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.5.7] - 2026-10-15
+
+### Changed
+
+- `Markdown` borders a nested quote's laid-out rows without first checking whether the border symbol leads with a blank, since the final row wrap writes the same bytes either way; output is unchanged.
+
+## [1.5.6] - 2026-10-13
+
 ### Breaking Changes
 
 - `ImageOptions.onDisplayed` is replaced by `displayListener`, an `ImageDisplayListener` whose `imageDisplayed(fallback)` receives each change of the image's on-screen state, so a caller passes one object instead of a closure per image.
@@ -19,6 +27,7 @@
 
 ### Changed
 
+- `Markdown` borders the rows a nested quote already laid out without wrapping them again at each enclosing quote, so a quote nested 20 deep renders in 0.65 ms instead of 1.5 ms at width 40; output is byte-identical.
 - The TUI reports each keystroke and frame to its activity signal before handling it, so its loop watchdog arms no tick while the session rests and resumes on the next keystroke or frame.
 - `Input`, `Editor` and `wordWrapLine` take the shared grapheme segmenter on first use instead of when their module loads, so loading them builds no `Intl.Segmenter`.
 - The frame throttle and the terminal hosts' settle windows are in `core/frame-pacing.ts` instead of `core/tui.ts`; frame timing is unchanged.

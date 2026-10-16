@@ -147,18 +147,6 @@ export const MODEL_SETTINGS = {
 			description: "Consecutive identical tool calls required before the corrective steer is injected",
 		},
 	},
-	"model.toolCallLoopGuard.readSubsumptionThreshold": {
-		type: "number",
-		default: 3,
-		ui: {
-			min: 1,
-			tab: "model",
-			group: "Thinking",
-			label: "Read Subsumption Loop Threshold",
-			description:
-				"Consecutive fully-subsumed or redundant read calls on unchanged files before the corrective steer is injected",
-		},
-	},
 
 	"model.toolCallLoopGuard.exemptTools": {
 		type: "array",
@@ -514,7 +502,7 @@ export const MODEL_SETTINGS = {
 			group: "Retry & Fallback",
 			label: "Retry Fallback Chains",
 			description:
-				'JSON object mapping model roles, model selectors ("provider/model-id"), or provider wildcards ("provider/*") to ordered fallback selectors, e.g. {"default":["openai/gpt-4o-mini"],"google-antigravity/*":["google/*","google-vertex/*"]}. Model-oriented keys apply whenever that model/provider is active, regardless of role; a "provider/*" entry keeps the failing model\'s id and swaps the provider.',
+				'JSON object mapping "default" (the default model), model selectors ("provider/model-id"), or provider wildcards ("provider/*") to ordered fallback selectors, e.g. {"default":["openai/gpt-4o-mini"],"google-antigravity/*":["google/*","google-vertex/*"]}. Model-oriented keys apply whenever that model/provider is active; a "provider/*" entry keeps the failing model\'s id and swaps the provider.',
 		},
 	},
 	"retry.perProvider": {

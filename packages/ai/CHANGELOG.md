@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+## [1.5.8] - 2026-10-16
+
+### Fixed
+
+- A Cursor turn no longer stalls for 30 minutes and fails with "made no progress for 1800s" when the model calls a tool Cursor reaches over MCP (`goal`, `set_cwd`) or Cursor's built-in web search: the MCP state request Cursor sends first is failed the way Cursor's own client fails it, web search, Exa search and Exa fetch are approved, and prompts that need a Cursor UI are rejected.
+
+## [1.5.7] - 2026-10-15
+
+### Fixed
+
+- A Google or Cloud Code Assist request with thinking off names the model's lowest declared thinking level instead of `MINIMAL`, which a model without a minimal level rejects.
+- A Cursor end stream that refuses a request keeps its title, detail and error code, so a Free plan's refusal of a named model reports "Free plans can only use Auto" instead of `Error`.
+- A provider's refusal of a model for the account's plan is classified as `ModelNotInPlan`, recorded for that model only, and moves the session to an account that serves the model only when `accounts.loadBalancing` is on; with it off nothing moves and `onUsageLimitWithheld` reports the account and its idle siblings.
+- An OAuth refresh failure includes the HTTP status, so a token endpoint answering 401 with no OAuth error code disables the login instead of retrying it forever; the Gemini CLI refresh error body is redacted.
+- A login disabled by a failed refresh is no longer reported as signed out once a later login for the same provider is active.
+- Kimi Code and Synthetic models sent through the Anthropic-format shim accept every thinking effort the catalog declares, so `kimi-code/k3` at `max` no longer fails, and a model with no effort control is not sent thinking `disabled`.
+- An OAuth refresh that answers after its caller stopped waiting is persisted, and no second refresh spends the old refresh token while the first is still running, so a slow token endpoint no longer revokes the login.
+- The account health probe reports a refresh that timed out or met a network or provider failure as unverifiable and keeps the account serving; only a refusal of the grant marks it as failed.
+- A transient refresh failure while the access token is still valid serves that token instead of blocking the account for five minutes.
+- Aborting a request during a token refresh no longer blocks the account or serves the request from another account.
+- A token endpoint answering 200 without a usable access token keeps the login and its stored token instead of storing an empty token (Anthropic, Antigravity, Gemini CLI) or failing with a `TypeError` (Cursor).
+- A health probe that refreshes a credential writes the refreshed token onto that credential's row when the stored rows have no account identity.
+- An MCP server's OAuth refresh no longer aborts the token request after 10 seconds; the connection proceeds with the held credential and a rotation that answers later is persisted, so a slow token endpoint no longer signs the server out.
+- A token endpoint answering 200 with JSON `null`, a string or a number fails the refresh as an invalid response and keeps the login, instead of a `TypeError` in the Anthropic, OpenAI Codex, Cursor, Kimi, Antigravity, Gemini CLI, GitLab Duo and Nous Research refreshers.
+- A refresh refused with 403 and a JSON body `{"error":"invalid_grant"}` (or `invalid_token`, `unauthorized_client`) disables the dead login even when the status text says "Forbidden"; a bare 403 stays transient.
+- A token refresh that reaches the 120-second flight ceiling aborts its token request and holds the refresh lease until that request settles, so a second refresh, in this process or another, no longer spends the same refresh token beside it; `refreshToken` on an OAuth provider receives an `AbortSignal` for its token request.
+
+## [1.5.6] - 2026-10-13
+
 ### Breaking Changes
 
 - `clearAnthropicFastModeFallback` moved from `@veyyon/ai/providers/anthropic` to `@veyyon/ai/providers/anthropic-session-state`, `deriveClaudeDeviceId` to `providers/claude-device-id`, `createOpenAICodexCompactionRequestContext`, `resetOpenAICodexHistoryAfterCompaction`, `getOpenAICodexTransportDetails`, `getOpenAICodexWebSocketDebugStats` and their option and result types from `providers/openai-codex-responses` to `providers/openai-codex/session-state`, `normalizeOpenAIPromptCacheKey` and `normalizeOpenRouterResponsesSessionId` from `providers/openai-shared` to `providers/openai-stable-ids`, and `signaturePolicy`, `sendsSignature`, `elidedSignatureBytes`, `firstRetainedAssistantIndex` and `SignaturePolicy` from `providers/google-shared` to `providers/google-thought-signatures`; the `@veyyon/ai` barrel keeps every name it exported.
@@ -20,6 +49,8 @@
 - `@veyyon/ai/usage/openai-codex-predictions` exports `fetchCodexPredictionsConfig` and `parseCodexPredictionsConfig`, which read the Codex composer-prediction configuration from `/wham/predictions/config`, and the `codexFork` stream option sends an OpenAI Codex request as an ephemeral fork of another session's thread, setting `thread_source` and `forked_from_thread_id` in its turn metadata.
 - `AuthStorage.hasApiKeyOverride(provider)` reports whether an `--api-key` or a `models.yml` key replaces the provider's stored logins and environment token.
 - `@veyyon/ai/utils/schema` exports `ZOD_INSTANCE_KINDS`, every Zod 4 kind by which `decontaminateZodInstance` recognizes a serialized instance.
+- `AuthStorage.forgetSignedOutLogins(provider)` dismisses the provider's logins that a failed refresh signed out, keeping them disabled under a cause no reader reports and no successful refresh re-enables, and returns how many it dismissed.
+- A Google Antigravity or Gemini CLI login stores the Google account id as the credential's `accountId`, and a login with the same id under a new email replaces the login under the old email and purges its signed-out row.
 
 ### Changed
 
@@ -55,7 +86,7 @@
 - The JSON Schema meta-validator checks a node by looking each of its keys up in a keyword table instead of probing every known keyword, cutting validation of a 40-tool parameter schema set from 46.6 µs to 33.7 µs with identical verdicts, except that a `NaN` `multipleOf` is now rejected.
 - The JSON Schema value validator checks `if`/`then`/`else`, `anyOf`/`oneOf` branch issues, `required`, `properties`, `propertyNames`, property counts, `dependentRequired`, `dependentSchemas` and `uniqueItems` in separate steps; verdicts and issues are identical across 400,000 generated values, and validating a tool call with 60 nested entries takes 21.5 µs valid and 24.1 µs invalid against 21.6 and 24.2 µs before (median of 41 interleaved rounds).
 - `validateToolArguments` normalizes arguments through shared property, array-item and combinator walkers that return the input itself when nothing changes and copy an object or array only at its first change, cutting validation of a first-party tool call from 3.88 to 2.17 µs when no call needs a repair, from 4.99 to 2.78 µs when 10% of calls carry quirks and from 6.17 to 3.55 µs at 50% (median of 7 interleaved rounds), with identical results and errors across 54,800 generated calls.
-- Tool-argument repair finds a JSON string literal's closing quote in one scan and escapes raw control characters and replaces literal `\n` escapes by copying the unchanged runs between them instead of rebuilding the text one character at a time, skips the parse it already knows fails before healing a bracket, and runs JSON Pointer reads and writes, Zod issue flattening, issue-driven coercion and the arg-spill boundary search as separate steps; repairing a 40-entry stringified array argument takes 13.1 µs instead of 31.9 µs when its strings carry raw newlines, 19.9 µs instead of 35.8 µs when junk follows it and 11.5 µs instead of 30.4 µs when literal `\n` escapes separate its items, and splitting an arg spill takes 0.62 µs instead of 0.77 µs (median of 31 interleaved rounds), with identical results across 200,000 generated inputs per step.
+- Tool-argument repair finds a string literal's closing quote in one scan, escapes control characters and literal `\n` escapes by copying unchanged runs instead of rebuilding the text per character, skips a parse it knows fails, and runs JSON Pointer access, Zod issue flattening, coercion and the arg-spill search as separate steps; repairing a 40-entry stringified array argument takes 13.1 µs instead of 31.9 µs with raw newlines, 19.9 µs instead of 35.8 µs with trailing junk and 11.5 µs instead of 30.4 µs with literal `\n` separators (median of 31 rounds), with identical results across 200,000 generated inputs per step.
 - Responses and Codex request building parse each replayed thinking signature once instead of twice and build a turn's reasoning, text and tool-call items in separate steps, cutting `buildResponsesInput` on a 300-turn transcript with 4 KiB reasoning signatures from 1.40 to 1.08 ms, on a 1,000-turn one from 4.07 to 3.14 ms and with 256-byte signatures from 0.68 to 0.60 ms (median of five interleaved runs), with identical items across 40,000 generated turns.
 - Stream option mapping resolves each API's options in its own mapper over one shared base instead of one 420-line switch, cutting the mapping of 743,431 model and option combinations from 100.8 ms to 92.1 ms with identical options.
 - Cursor and Devin split their Connect response streams through one `ConnectFrameReader` that keeps each read as received and copies a frame only when it spans reads, instead of joining every read onto the unconsumed bytes, cutting the split of a 4 MiB frame arriving in 16 KiB reads from 46.9 ms (Cursor) and 51.8 ms (Devin) to 0.40 ms and of 2,000 200-byte frames arriving one per read from 0.61 ms and 0.22 ms to 0.13 ms (median of 15 interleaved rounds), with identical payloads.
@@ -159,6 +190,10 @@
 - A pi-native string element that contains its call's `</call:NAME>` keeps it as argument text at every chunking, instead of ending the call there when the same delta also opened the body's first element.
 - A pi-native element body the stream ends inside closes at its first rejected `</call:NAME>`, and the text after it is scanned once, instead of being folded into the call's raw block and then scanned again.
 - A scanner from `createInbandScanner` emits nothing on a second `flush()` and scans a reply fed after `flush()` as a new scanner does, instead of DeepSeek re-emitting events on the second flush and Kimi, DeepSeek, Gemini and Gemma carrying state into the next reply; streamed turns flush once and are unchanged.
+
+### Removed
+
+- Removed read-subsumption detection and the `readSubsumptionThreshold` option from `ToolCallLoopGuard`, which detects consecutive identical tool calls only.
 
 ## [1.5.4] - 2026-09-24
 

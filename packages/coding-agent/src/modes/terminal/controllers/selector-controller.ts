@@ -21,12 +21,7 @@ import {
 	type WatchdogConfigDoc,
 } from "../../../advisor";
 import { isRollbackSupported, rollbackToVersion } from "../../../cli/update-cli";
-import {
-	formatModelSelectorValue,
-	formatModelStringWithRouting,
-	resolveAdvisorRoleSelection,
-} from "../../../config/model-resolver";
-import { DEFAULT_MODEL_SLOT, getRoleInfo, isDefaultModelSlot } from "../../../config/model-roles";
+import { formatModelSelectorValue, formatModelStringWithRouting } from "../../../config/model-resolver";
 import { resolveAvailablePersonalities } from "../../../config/personality-resolver";
 // The slot leaf, not the 95-module store: this file reads settings, it does not fill them.
 import { settings } from "../../../config/settings-instance";
@@ -368,11 +363,7 @@ export class SelectorController {
 			this.ctx.showError(`Failed to build the advisor tools: ${errorMessage(err)}`);
 			return;
 		}
-		const advisorRole = resolveAdvisorRoleSelection(
-			this.ctx.settings,
-			this.ctx.session.modelRegistry.getAvailable(),
-			this.ctx.session.agent.state.model,
-		);
+		const advisorHelper = this.ctx.session.resolveHelperModel("advisor");
 		let overlay: OverlayHandle | undefined;
 		const component = new AdvisorConfigOverlayComponent(
 			this.ctx.ui,
@@ -381,8 +372,11 @@ export class SelectorController {
 				settings: this.ctx.settings,
 				scopedModels: this.ctx.session.scopedModels,
 				availableToolNames,
-				defaultModelLabel: advisorRole
-					? formatModelSelectorValue(formatModelStringWithRouting(advisorRole.model), advisorRole.thinkingLevel)
+				defaultModelLabel: advisorHelper
+					? formatModelSelectorValue(
+							formatModelStringWithRouting(advisorHelper.model),
+							advisorHelper.thinkingLevel,
+						)
 					: undefined,
 			},
 			"project",
@@ -652,14 +646,14 @@ export class SelectorController {
 				{
 					onPick: async (model, selector) => {
 						try {
-							const roleThinkingLevel = this.ctx.session.resolveTemporaryModelThinkingLevel(model);
+							const selectedThinking = this.ctx.session.resolveTemporaryModelThinkingLevel(model);
 							if (temporaryOnly) {
-								await this.ctx.session.setModelTemporary(model, roleThinkingLevel);
+								await this.ctx.session.setModelTemporary(model, selectedThinking);
 								this.ctx.showStatus(`Session-only model: ${selector}`);
 							} else {
-								await this.ctx.session.setModel(model, DEFAULT_MODEL_SLOT, {
+								await this.ctx.session.setModel(model, "default", {
 									selector,
-									thinkingLevel: roleThinkingLevel,
+									thinkingLevel: selectedThinking,
 									persist: true,
 									currentContextTokens,
 								});
@@ -710,74 +704,53 @@ export class SelectorController {
 			this.ctx.session.modelRegistry,
 			this.ctx.session.scopedModels,
 			{
-				onAssign: async (model, role, thinkingLevel, selector) => {
+				onSetDefault: async (model, thinkingLevel, selector) => {
 					const selectedThinking =
 						thinkingLevel === undefined || thinkingLevel === ThinkingLevel.Inherit ? undefined : thinkingLevel;
-					const selectorValue = selector ?? `${model.provider}/${model.id}`;
 					try {
-						if (isDefaultModelSlot(role)) {
-							const { switched } = await this.ctx.session.setModel(model, DEFAULT_MODEL_SLOT, {
-								selector,
-								thinkingLevel: selectedThinking,
-								persist: true,
-								currentContextTokens,
-							});
-							if (switched) {
-								this.ctx.statusLine.invalidate();
-								this.ctx.updateEditorBorderColor();
-							}
-							this.ctx.showStatus(`Model: ${selector ?? model.id}`);
-						} else {
-							this.ctx.settings.setModelRole(role, formatModelSelectorValue(selectorValue, selectedThinking));
-							const roleInfo = getRoleInfo(role, settings);
-							this.ctx.showStatus(`${roleInfo?.name ?? role} model: ${selector ?? model.id}`);
+						const { switched } = await this.ctx.session.setModel(model, "default", {
+							selector,
+							thinkingLevel: selectedThinking,
+							persist: true,
+							currentContextTokens,
+						});
+						if (switched) {
+							this.ctx.statusLine.invalidate();
+							this.ctx.updateEditorBorderColor();
 						}
+						this.ctx.showStatus(`Default model: ${selector}`);
 					} catch (error) {
 						this.ctx.showError(errorMessage(error));
 					}
 				},
-				onUnassign: role => {
+				onClearDefault: () => {
 					try {
-						this.ctx.settings.setModelRole(role, undefined);
-						const roleInfo = getRoleInfo(role, settings);
-						this.ctx.showStatus(`${roleInfo?.name ?? role} role cleared — auto-selection applies`);
+						this.ctx.settings.setDefaultModel(undefined);
+						this.ctx.showStatus("Default model cleared — launch auto-selects a model");
 					} catch (error) {
 						this.ctx.showError(errorMessage(error));
 					}
 				},
-				onFallbackChainChange: (role, chain) => {
+				onFallbackChainChange: (key, chain) => {
 					try {
 						const chains = { ...this.ctx.settings.get("retry.fallbackChains") };
 						if (chain.length === 0) {
-							delete chains[role];
+							delete chains[key];
 						} else {
-							chains[role] = chain;
+							chains[key] = chain;
 						}
 						this.ctx.settings.set("retry.fallbackChains", chains);
-						const roleInfo = getRoleInfo(role, settings);
+						const label = key === "default" ? "Default model" : key;
 						this.ctx.showStatus(
-							chain.length > 0
-								? `${roleInfo?.name ?? role} fallbacks: ${chain.join(" → ")}`
-								: `${roleInfo?.name ?? role} fallbacks cleared`,
+							chain.length > 0 ? `${label} fallbacks: ${chain.join(" → ")}` : `${label} fallbacks cleared`,
 						);
 					} catch (error) {
 						this.ctx.showError(errorMessage(error));
 					}
 				},
-
 				onLoginRequest: providerId => {
 					done();
 					void this.#loginThenReopenModelHub(providerId);
-				},
-				onCycleOrderChange: order => {
-					try {
-						this.ctx.settings.set("cycleOrder", order);
-						this.ctx.showStatus(
-							order.length > 0 ? `Quick-switch cycle: ${order.join(" → ")}` : "Quick-switch cycle cleared",
-						);
-					} catch (error) {
-						this.ctx.showError(errorMessage(error));
-					}
 				},
 				onCancel: () => done(),
 			},
@@ -1524,6 +1497,19 @@ export class SelectorController {
 					this.ctx.showStatus(
 						`${row.providerLabel}: cleared the rate-limit hold on ${accountDisplayLabel(row)} and re-checked it`,
 					);
+				},
+				onForgetSignedOut: provider => {
+					const forgotten = authStorage.forgetSignedOutLogins(provider);
+					reload();
+					if (forgotten > 0) {
+						this.ctx.showStatus(
+							`${formatProviderName(provider)}: forgot the signed-out login; its credential stays disabled`,
+						);
+					} else {
+						this.ctx.showWarning(
+							`${formatProviderName(provider)}: no signed-out login to forget in this credential store`,
+						);
+					}
 				},
 				onCancel: done,
 			},

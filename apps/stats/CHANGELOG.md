@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-13
+
 ### Changed
 
 - Split the session-file parser into one function per entry kind, the request-detail route and the model ranking the preference and cost charts share into their own functions; no user-visible change.

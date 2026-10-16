@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-13
+
 ### Breaking Changes
 
 - `SessionEntryIndex.entriesById()` is removed; `walkBranchPath`, `resolveContextLeaf` and `buildSessionContext` take any `SessionEntryLookup`, which `SessionEntryIndex` and a `Map<string, SessionEntry>` both satisfy.

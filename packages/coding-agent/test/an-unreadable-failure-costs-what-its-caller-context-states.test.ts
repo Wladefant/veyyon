@@ -89,7 +89,7 @@ describe("an unreadable failure costs what its caller context states", () => {
 			"retry.maxDelayMs": 120 * MINUTE_MS,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 		session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
 
 		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);

@@ -235,10 +235,10 @@ function planModeAgent(agent: AgentDefinition): AgentDefinition {
 /**
  * The model and effort the child runs, or why the spawn is refused. The model resolves through the ONE
  * owner, whose only scope is this agent: the lane row governing this spawn, then the definition's
- * frontmatter, then the default model role. The parent's live model is not a layer, so a keystroke aimed
- * at this session cannot move a child. A configured-but-unresolvable pattern refuses the spawn instead of
- * quietly running whatever the next layer names. Depth rows key on the CHILD's depth, one below this
- * session, matching the executor's `childDepth`.
+ * frontmatter, then this session's live model, which a layer naming `inherit` also selects.
+ * A configured-but-unresolvable pattern refuses the spawn instead of quietly running whatever the next
+ * layer names. Depth rows key on the CHILD's depth, one below this session, matching the executor's
+ * `childDepth`.
  */
 function resolveSpawnModel(session: ToolSession, agentName: string, runAgent: AgentDefinition): SpawnModel | string {
 	const taskDepth = (session.taskDepth ?? 0) + 1;
@@ -247,11 +247,12 @@ function resolveSpawnModel(session: ToolSession, agentName: string, runAgent: Ag
 		agentName,
 		agentModel: runAgent.model,
 		fallbackModelPattern: session.getModelString?.(),
+		sessionModelPattern: session.getActiveModelString?.(),
 		taskDepth,
 	});
 	if (resolved.unresolved) {
 		const { source, value, depth } = resolved.unresolved;
-		return `Cannot spawn "${agentName}": ${agentModelSourceLabel(source, agentName, depth)} is set to "${value}", which matches no available model. Fix that setting in Agents → Roster → ${agentName} (or clear it to fall back to the default model role) and try again.`;
+		return `Cannot spawn "${agentName}": ${agentModelSourceLabel(source, agentName, depth)} is set to "${value}", which matches no available model. Fix that setting in Agents → Roster → ${agentName} (or clear it to run the session's model) and try again.`;
 	}
 	return {
 		modelOverride: resolved.patterns,

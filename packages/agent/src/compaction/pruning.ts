@@ -260,8 +260,12 @@ function supersedeTargets(
 	// that reached it and failed. The second was unguarded: a read of a path that
 	// errored blanked the earlier successful read of the same path, so the content
 	// left context and only the error string remained. `collectUselessResults` below
-	// already excludes `isError` for this reason.
-	if (toolResultNeverRan(message.details) || message.isError === true) return undefined;
+	// already excludes `isError` for this reason. A read the tool refused because the
+	// lines it asked for were still in context is a failed read, so counting it as the
+	// newer read would blank the very result the refusal points the model back to.
+	if (toolResultNeverRan(message.details) || message.isError === true) {
+		return undefined;
+	}
 	const rawKey = supersedeKey(toolCall.name, toolCall.arguments as Record<string, unknown>);
 	if (rawKey === undefined) return undefined;
 	const targets: readonly string[] =

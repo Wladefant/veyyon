@@ -3,9 +3,12 @@ import type { ProviderDefinition } from "./types";
 
 // Every `await import` here is the registry's lazy boundary: the OAuth flow module stays out of the
 // eager startup graph until a login or refresh runs.
-async function refreshKimiCodeCredentials(credentials: OAuthCredentials): Promise<OAuthCredentials> {
+async function refreshKimiCodeCredentials(
+	credentials: OAuthCredentials,
+	signal?: AbortSignal,
+): Promise<OAuthCredentials> {
 	const { refreshKimiToken } = await import("./oauth/kimi");
-	return refreshKimiToken(credentials.refresh, credentials.apiEndpoint);
+	return refreshKimiToken(credentials.refresh, credentials.apiEndpoint, signal);
 }
 
 /**

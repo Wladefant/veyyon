@@ -120,17 +120,18 @@ const ADMITTED_ON_THE_FIRST_FRAME: readonly string[] = [];
  * statically. It replaced `winston`, `winston-daily-rotate-file` and 27 packages under them, which
  * the logger loaded through `require` on the first log line, an edge this walk does not follow.
  *
- * 315 rather than 311, RE-MEASURED 2026-10-09, is eight new files, none a barrel, less the modules
- * they replaced. The engine split its renderer into one module per concern: `core/frame-pacing.ts`,
- * `core/frame-segments.ts`, `core/render-intent.ts`, `core/render-scheduler.ts` and
- * `core/committed-prefix.ts`. The idle samplers park through `@veyyon/utils/activity-signal` and
- * `@veyyon/utils/rearming-timeout`, and the logger reads the clock through
- * `@veyyon/utils/local-time`.
+ * 312 rather than 311 is `config/model-pattern-list.ts`, the splitter `launch-facts.ts` reads the
+ * first `defaultModel` selector through. It imports nothing.
+ *
+ * 316 rather than 312 is four modules the engine split out of files the card already evaluates, each
+ * importing only what its source did: `core/committed-prefix.ts` from `core/renderer.ts`, and
+ * `core/render-scheduler.ts`, `core/frame-segments.ts` and `core/render-intent.ts` from `core/tui.ts`
+ * and `core/frame-plan.ts`.
  *
  * The floor is what stops a resolution table that stopped resolving from satisfying the ceiling with
  * a handful of modules while measuring nothing.
  */
-const LAUNCH_CARD_CEILING = 315;
+const LAUNCH_CARD_CEILING = 316;
 const LAUNCH_CARD_FLOOR = 150;
 
 describe("the launch card opens no database", () => {

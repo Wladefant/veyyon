@@ -30,8 +30,9 @@ import { getEnvApiKey } from "@veyyon/ai/env-api-key";
 import type { FetchImpl } from "@veyyon/ai/types";
 import { type CodexPredictionsConfig, fetchCodexPredictionsConfig } from "@veyyon/ai/usage/openai-codex-predictions";
 import { getCodexAccountId, getCodexPlanType } from "@veyyon/catalog/wire/codex";
+import { normalizeModelPatternList } from "../config/model-pattern-list";
 import type { ModelRegistry } from "../config/model-registry";
-import { getModelMatchPreferences, normalizeModelPatternList, resolveCliModel } from "../config/model-resolver";
+import { getModelMatchPreferences, resolveCliModel } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import { sideChannelPrompts } from "../prompts/side-channel/rows";
 import { concreteThinkingLevel, parseThinkingLevel } from "../thinking";
@@ -270,7 +271,6 @@ export class ComposerPredictor {
 				cliModel: pattern,
 				modelRegistry: registry,
 				preferences: getModelMatchPreferences(this.settings),
-				settings: this.settings,
 			});
 			if (resolved.error || !resolved.model) {
 				failures.push(`"${pattern}" does not resolve (${resolved.error ?? "no matching model"})`);

@@ -168,7 +168,10 @@ describe("AgentSession plan-mode convergence", () => {
 				},
 			],
 		});
-		harness.session.settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
+		harness.session.settings.set("agent.helpers", {
+			...harness.session.settings.get("agent.helpers"),
+			advisor: { model: "anthropic/claude-sonnet-4-5" },
+		});
 		expect(harness.session.setAdvisorEnabled(true)).toBe(true);
 		const advisor = harness.session.getAdvisorAgent();
 		if (!advisor) throw new Error("Expected advisor agent to be live");

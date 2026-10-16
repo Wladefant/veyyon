@@ -151,7 +151,7 @@ export const INTERACTION_SETTINGS = {
 		ui: {
 			tab: "interaction",
 			group: "Composer Predictions",
-			label: "Prediction Source",
+			label: "Suggest Next Message",
 			description:
 				"After each turn, suggest the message you are likely to send next as dim text in the empty composer. Tab inserts it; typing replaces it. Nothing is sent without Enter.",
 			options: [

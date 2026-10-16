@@ -23,7 +23,7 @@ if [[ ! -d "$PROFILE_AGENT_DIR" ]]; then
 fi
 
 "${CLI[@]}" --profile "$PROFILE" config set profile.displayName Demo >/dev/null
-"${CLI[@]}" --profile "$PROFILE" config set modelRoles "{\"default\":\"$MODEL\"}" >/dev/null
+"${CLI[@]}" --profile "$PROFILE" config set defaultModel "$MODEL" >/dev/null
 "${CLI[@]}" --profile "$PROFILE" config set defaultEffort "{\"*\":\"$THINKING\"}" >/dev/null
 "${CLI[@]}" --profile "$PROFILE" config set agent.thinkingLevel "$THINKING" >/dev/null
 "${CLI[@]}" --profile "$PROFILE" config set secrets.enabled false >/dev/null

@@ -116,12 +116,16 @@ function runtimeImportsOf(relative: string): string[] {
  * both still pass, and `env-api-key.ts` (68) and `usage/registry.ts` (20) do not reach the barrel and
  * did not move.
  *
- * RAISED BY ONE A FIFTH TIME, from 227, for `@veyyon/catalog/wire/kimi-code`, the Kimi Code region table and
- * the API-key envelope that carries a credential's region. The Kimi Code login and token refresh, already
- * in this graph, sign in at the deployment that issued the token through it, and its one import,
- * `@veyyon/utils/url`, was already reached, so the cost is exactly the one module.
+ * 228 since 2026-10-13, measured: `catalog/wire/kimi-code.ts`, the Kimi Code region table.
+ * `catalog/compat/kimi.ts`, already in this closure, resolves a token's deployment from it, and its only
+ * import is `@veyyon/utils/url`, already reached, so it adds one module and no subtree.
+ *
+ * 229 since 2026-10-15, measured: `registry/oauth/token-response.ts`, the shared reader that requires a
+ * token endpoint's JSON to be an object. `registry/oauth/nous-research.ts`, already in this closure,
+ * reads its token responses through it, and its imports are `@veyyon/utils/type-guards` and `./error`,
+ * both already reached, so it adds one module and no subtree.
  */
-const AUTH_STORAGE_CEILING = 228;
+const AUTH_STORAGE_CEILING = 229;
 
 /**
  * Measured 2026-07-26 at 158, down from 204/212. This module is four functions over a table and its doc
@@ -191,9 +195,9 @@ const AUTH_STORAGE_CEILING = 228;
  * `@veyyon/utils/log-file`, already in this closure, take the local time from it, and its only import is
  * `bun:ffi`, so it adds one module and no subtree.
  *
- * 86 since 2026-10-08, measured: `catalog/wire/kimi-code.ts`, the Kimi Code region table.
- * `provider-models/openai-compat.ts`, already in this closure, resolves the Kimi Code base URL through
- * it, and its one import, `@veyyon/utils/url`, was already reached, so it adds one module and no subtree.
+ * 86 since 2026-10-13, measured: `catalog/wire/kimi-code.ts`, the Kimi Code region table.
+ * `catalog/compat/kimi.ts`, already in this closure, resolves a token's deployment from it, and its only
+ * import is `@veyyon/utils/url`, already reached, so it adds one module and no subtree.
  */
 const ENV_API_KEY_CEILING = 86;
 

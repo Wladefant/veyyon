@@ -379,7 +379,7 @@ export interface CompactOptions {
 /**
  * Read-only model query facade exposed at `ctx.models`. Lets an extension select a
  * model the same way core does — list authenticated models, read the session model,
- * resolve a model string or role alias, and compare model families — without reaching
+ * resolve a model selector or chain, and compare model families — without reaching
  * into the mutable registry or re-implementing matching/family heuristics.
  */
 export interface ExtensionModelQuery {
@@ -388,9 +388,9 @@ export interface ExtensionModelQuery {
 	/** The current session model, if one is set. */
 	current(): Model | undefined;
 	/**
-	 * Resolve a model string (`provider/id`, bare id) or role alias (`@slow`, a
-	 * configured role) to a Model, using the same settings-backed aliases and match
-	 * preferences as core selection. Thinking/routing suffixes are accepted and resolved
+	 * Resolve a model selector (`provider/id`, bare id) or a comma-separated chain
+	 * of them to a Model, using the same match preferences as core selection; the
+	 * first entry that matches wins. Thinking/routing suffixes are accepted and resolved
 	 * to the base model (pass effort separately). Returns undefined when nothing matches.
 	 */
 	resolve(spec: string): Model | undefined;
@@ -1331,8 +1331,8 @@ export interface ProviderConfig {
 		name: string;
 		/** Run the provider login flow and return credentials (or a plain API key) to persist. */
 		login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials | string>;
-		/** Refresh expired credentials. */
-		refreshToken?(credentials: OAuthCredentials): Promise<OAuthCredentials>;
+		/** Refresh expired credentials. Pass `signal` to the token request so an abandoned refresh stops. */
+		refreshToken?(credentials: OAuthCredentials, signal?: AbortSignal): Promise<OAuthCredentials>;
 		/** Convert credentials to an API key string for requests. */
 		getApiKey?(credentials: OAuthCredentials): string;
 		/** Optional model rewrite hook for credential-aware routing (e.g., enterprise URLs). */

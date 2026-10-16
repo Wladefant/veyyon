@@ -2,6 +2,52 @@
 
 ## [Unreleased]
 
+## [1.5.8] - 2026-10-16
+
+### Changed
+
+- A `read` refused because its lines are unchanged and still in context is now a tool error naming the earlier output's `[path#TAG]` header, rendered and sent to the model like any other failed read instead of as a read card holding the refusal text.
+
+### Fixed
+
+- A session started with `--tools`, and every spawned agent with a tool list, no longer logs a false "TTSR rule is scoped to a tool that does not exist" warning for each built-in rule scoped to a tool the session did not build.
+
+## [1.5.7] - 2026-10-15
+
+### Breaking Changes
+
+- Model roles are removed: `modelRoles`, `modelTags`, `cycleOrder`, custom roles, the `@role`, `pi/role` and `*` selectors, the `--smol` and `--slow` flags, the `VEYYON_SMOL_MODEL`, `VEYYON_SLOW_MODEL` and `VEYYON_PLAN_MODEL` variables and the `/settings` Roles tab no longer exist; `defaultModel` holds the model chain a session starts on, and `agent.helpers.<id>` (`advisor`, `plan`, `vision`, `commit`, `title`, `memory`, `autoThinking`, `unexpectedStop`, `speech`, `completion`) sets the model and effort of each feature's own model call.
+- The `/settings` Roster page lists a Helpers section above the Subagents section, and a helper with no model or effort set runs the session's model and effort.
+- Ctrl+P cycles the scoped models, or every available model when none are scoped, instead of cycling roles.
+- The eval `completion()` helper runs the `completion` helper when `model` is omitted, the session's active model for `"default"`, and otherwise reads `model` as a model selector.
+- `retryFallbackChains` keys are `default`, a model selector or a `provider/*` wildcard, matched in that order of specificity: exact selector, then wildcard, then `default`.
+- The `@veyyon/coding-agent` exports `formatRoleChip`, `resolveRoleAssignments` and `retryFallbackChainsForRoles` are removed, and `resolveRetryFallbackRole` is renamed `resolveRetryFallbackKey`.
+
+### Added
+
+- A config written before this release migrates on load: `modelRoles.default` (or `interactive`) becomes `defaultModel`, the `advisor`, `plan`, `vision`, `commit`, `tiny` and `smol` roles become the matching helpers' models with `@role` references expanded, `mnemopi.llmMode: smol` becomes `online`, and each dropped key is reported once in the log.
+- An extension provider's `oauth.refreshToken(credentials, signal)` receives an `AbortSignal` that aborts when the refresh is abandoned.
+
+### Changed
+
+- An agent with no model or effort set on its roster page or in its definition runs the spawning session's live model and effort instead of the `default` model role at medium effort; bundled `scout`, `sonic` and `librarian` no longer pin an effort, `model: inherit` on a lane overrides a definition's model, and `/account status` counts the session's provider as an agent provider.
+- Resuming or switching to a transcript reads its starting service tier through the same function a new session uses; no user-visible change.
+- The `/settings` model hub's "Default & fallbacks" view and Default Model row edit `defaultModel`, and clearing the Default Model row keeps a `--model` launch as the session's model.
+- Advisor messages name `agent.helpers.advisor.model` and the Agents → Roster → Helpers → Advisor page.
+
+### Fixed
+
+- An agent whose effort is inherited or configured runs at the level its own model accepts, and its badge shows that level, rather than the parent's level for a model that lacks it; a parent with no effort leaves the agent at its own default instead of none.
+- An agent that resolves no effort of its own shows the effort its session settles on in its badge, and the `/settings` agent roster shows an agent that runs the session's model as `session model`, which leaves room for a read-only source marker.
+- The `Runs` line on a `/settings` agent page reads `the session's model and effort` for an agent with neither set, and `session effort` instead of `inherit effort` when only the model is set.
+- The plan-approval slider no longer offers the plan model as a second choice when it is the default model at the same effort.
+- Mnemopi online memory runs the session's model when no memory helper model is set, instead of the persisted `defaultModel`.
+- The `/settings` Roster page shows eight rows before it scrolls and a shorter description, so its `Enter to configure · Esc to go back` footer stays on screen in a 40-row terminal.
+- A turn whose model no account's plan includes, and no fallback model can take over, ends with the provider's refusal instead of retrying it.
+- The notice for a move `accounts.loadBalancing` withheld names a plan that does not include the model as well as a spent quota window, and the failover notice states why the previous account could not serve.
+
+## [1.5.6] - 2026-10-13
+
 ### Added
 
 - The `browser` tool's `open` takes `context`, an isolated cookie jar that every headless tab naming it shares and no other tab sees, closed with its last tab ([#947](https://github.com/santhreal/veyyon/issues/947)).
@@ -28,6 +74,8 @@
 - The `lsp` tool's `incoming_calls` and `outgoing_calls` actions list the functions that call the symbol at the cursor, or that it calls, with each call site, as the language server resolved them.
 - Composer predictions show the message you are likely to send next as dim text in the empty composer after each turn, inserted by Tab and sent only by Enter; `composer.predictions.mode` selects `off` (the default, which sends no request), `chatgpt-pro`, which requests a ChatGPT Codex prediction on GPT-6 Astra or GPT-6.1 Sol only with the token of a ChatGPT Pro plan Codex login, never a routed or API-key credential, may count against that account's usage limits, and otherwise sends nothing and shows as greyed out in `/settings`, or `custom`, which uses the first model with credentials in `composer.predictions.model`, chosen from any provider in the settings model picker; a stored `composer.predictions.enabled: false` loads as `off`.
 - A composer prediction ends with a dim `· tab to accept` hint showing the configured Tab key; the hint leaves with the suggestion when you type or press Tab, and a row too narrow for both drops the hint before it hides the suggestion.
+- `read` refuses a re-read whose every displayed row is still shown byte for byte under the same header by an earlier read result in context, returning a one-line pointer to that output instead of the content; no argument overrides the refusal, a pruned, shaken or compacted earlier result no longer counts, and no read is refused while an extension handles the `context` event.
+- The account card's signed-out login note offers `f` to forget it, which stops the card and `/account` from reporting a login you do not intend to sign back in.
 
 ### Changed
 
@@ -37,6 +85,8 @@
 - The status line fits its footline in one `QuietRowFit` pass in `status-line/quiet-row.ts` that keeps each half's joined text and width instead of re-joining the halves after every shed, so composing a default footline takes 999 ns instead of 1,454 ns at 160 columns and 9.46 µs instead of 12.15 µs at 60 columns, where it sheds zones (median of nine rounds of 20,000 calls); the drawn row is unchanged.
 - `StatusLineComponent` builds a frame's segment context through `#locationContext`, `#gitFacts` and `contextGaugeReadings`, and `renderLocation` and the `model` segment build their text in per-step functions; the drawn row and the git lookups it starts are unchanged.
 - The launch-facts recorder compares a recorded entry field by field instead of serializing both copies, so a status-row redraw that changes no recorded fact files in 338 ns instead of 1,119 ns, and a `git status` that finds the recorded tree in 528 ns instead of 1,313 ns (median of seven alternating processes of 450,000 calls).
+- The end-of-turn context check moved out of `AgentSession` into the `TurnContextCheck` session collaborator, and the starting service tier into session startup; no user-facing change.
+- The `composer.predictions.mode` row in `/settings` is named "Suggest Next Message" instead of repeating its "Composer Predictions" heading.
 - The retry ladder decides each attempt through `#parkUsageLimit`, `#switchModel` and `#closeUnrecoverable` in `session/runtime/retry-runtime.ts`; every retry, model or credential switch, wait and event is unchanged.
 - The settled edit card parses a hashline payload for its file only when neither the call nor the result names one, so re-rendering the card of a 2,000-line hashline edit takes 0.95 µs instead of 274 µs (median of seven rounds of 2,000 renders), and the call, result and multi-file cards are built in per-step functions in `edit/edit-view.ts`; every card is unchanged.
 - The `/models` hub maps a Roles-view key to its command through `rolesCommandFor`, routes each pointer report through its own wheel, motion and click step, and draws Roles-view and sidebar rows in per-row functions in `modes/terminal/components/selectors/model-hub.ts`; every frame, key and pointer action is unchanged.
@@ -287,6 +337,7 @@
 - A `browser` `open` with `visible` whose move fails or is interrupted after the tab left its browser, such as on a page that cannot load, puts the tab back on its browser with its page, context, cookies and localStorage instead of losing it, and a move whose tab has a page holding a dialog open fails within the call's timeout instead of after a minute.
 - A `browser` click or hover on an element in a cross-site frame, including a frame inside a frame, waits for the frames to draw first, so a press right after the page loads reaches the element instead of the document above its frame while reporting success.
 - With `browser.naturalInput` on, a `tab.id()` or `tab.ref()` handle whose element the page re-renders while the wheel scrolls to it scrolls to the replacement instead of failing as detached, and loading the `browser` tool no longer evaluates arktype before its first schema is built.
+- A read of a missing `artifact://` id, a missing `agent://` output or a missing PDF image member lists at most 20 of what exists followed by a count of the rest, instead of every id in every session, which printed thousands of artifact ids into one tool result in a long session.
 - A transcript rebuild, such as after a compaction, releases the tool cards and assistant segments it removed from the screen and the arguments of calls that settled, instead of holding every card a long agent run ever drew, so a 900-second soak of tool turns and compactions ends at 987 MB RSS instead of 1,512 MB with 481,732 heap objects instead of 945,900.
 - A collapsed edit card whose change lines alone pass 40 draws 40 diff rows and counts the rest as hidden, instead of drawing every line of the run that crossed the budget (a 600-line replacement drew 603 rows) or overflowing the call stack on a run of a million lines, and cutting the diff and counting its lines no longer copy each run or re-split the kept text, so cutting a 5,600-line, 400-hunk diff takes 355 µs instead of 544 µs and counting it 56 µs instead of 190 µs (median of nine rounds of 300).
 - A session switch, `/resume`, reload, `/new` or `/drop` that fails part-way, such as on a disk error while the outgoing transcript is flushed, keeps the session listening, so later turns reach the screen and the session file instead of running unseen and unsaved.
@@ -397,6 +448,7 @@
 - The unused built-in `designer` model role is gone from Settings → Model → Roles; a `modelRoles.designer` value you already set still resolves through `@designer` as a custom role.
 - The retired `statusLine.separator` and `statusLine.transparent` settings are gone; neither changed anything on screen, and a config file that still sets them loads unchanged.
 - 36 exported functions and constants that nothing called, and the unused Smithery Connect API client `mcp/smithery-connect.ts`, are gone; no user-visible change.
+- The `model.toolCallLoopGuard.readSubsumptionThreshold` setting and the tool-call loop guard's redundant-read steer are gone, replaced by `read` refusing reads still in context; a stored value is dropped from the config on load.
 
 ## [1.5.5] - 2026-09-25
 

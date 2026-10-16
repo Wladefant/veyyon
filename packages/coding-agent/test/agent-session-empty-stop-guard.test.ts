@@ -88,7 +88,7 @@ async function createHarness(
 		"todo.reminders": false,
 		...settingsOverrides,
 	});
-	settings.setModelRole("default", `${mock.provider}/${mock.id}`);
+	settings.setDefaultModel(`${mock.provider}/${mock.id}`);
 
 	const sessionManager = persistSession
 		? SessionManager.create(tempDir.path(), tempDir.path())

@@ -134,7 +134,7 @@ function lines(component: SettingsSelectorComponent): string[] {
 }
 
 function modeRow(component: SettingsSelectorComponent): string {
-	return lines(component).find(line => line.includes("Prediction Source")) ?? "";
+	return lines(component).find(line => line.includes("Suggest Next Message")) ?? "";
 }
 
 describe("the ChatGPT Pro prediction mode without a Pro login", () => {

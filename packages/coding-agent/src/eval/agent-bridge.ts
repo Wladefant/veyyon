@@ -6,7 +6,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { errorMessage, prompt, Snowflake } from "@veyyon/utils";
-import { resolveConfiguredModelPatterns } from "../config/model-resolver";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { registerArtifactsDir } from "../internal-urls/registry-helpers";
 import { mcpManagerInstance } from "../mcp/manager-instance";
@@ -49,6 +48,7 @@ import type { JsStatusEvent } from "./js/shared/types";
 import type { EvalBridgeOptions } from "./types";
 // Import review tools for side effects (registers agent tool handlers).
 import "../tools/agent/review";
+import { normalizeModelPatternList } from "../config/model-pattern-list";
 
 /**
  * Re-exported from its leaf, so a caller that only needs to RECOGNIZE the name does not load this
@@ -399,22 +399,23 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	// An explicit `agent(..., { model })` call is the caller speaking for this one
 	// spawn, so it outranks the settings layers; everything else goes through the
 	// one owner, whose only scope is this agent (lane row -> frontmatter ->
-	// default model role). The spawned agent runs one level below this session,
+	// the session's model). The spawned agent runs one level below this session,
 	// and lane rows key on that child depth — the same value the executor derives
 	// as `childDepth`.
 	const resolvedModel = parsed.model
-		? { patterns: resolveConfiguredModelPatterns(parsed.model, options.session.settings), source: "agent" as const }
+		? { patterns: normalizeModelPatternList(parsed.model), source: "agent" as const }
 		: resolveAgentModel({
 				settings: options.session.settings,
 				agentName,
 				agentModel: effectiveAgent.model,
 				fallbackModelPattern: options.session.getModelString?.(),
+				sessionModelPattern: parentActiveModelPattern,
 				taskDepth: (options.session.taskDepth ?? 0) + 1,
 			});
 	if ("unresolved" in resolvedModel && resolvedModel.unresolved) {
 		const { source, value, depth } = resolvedModel.unresolved;
 		throw new ToolError(
-			`Cannot spawn "${agentName}": ${agentModelSourceLabel(source, agentName, depth)} is set to "${value}", which matches no available model. Fix that setting in Agents → Roster → ${agentName} (or clear it to fall back to the default model role) and try again.`,
+			`Cannot spawn "${agentName}": ${agentModelSourceLabel(source, agentName, depth)} is set to "${value}", which matches no available model. Fix that setting in Agents → Roster → ${agentName} (or clear it to run the session's model) and try again.`,
 		);
 	}
 	if (parsed.model && resolvedModel.patterns.length === 0) {

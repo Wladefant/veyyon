@@ -55,12 +55,12 @@ describe("an interactive session's static import graph", () => {
 
 	test("holds exactly the controllers the session drives before any command", () => {
 		// Every other controller in the directory opens with its command: `/mcp`, `/ssh`, `/tan`,
-		// `/todo`, the selector cards and the setting effects they apply. The event controller builds
-		// `composer-prediction-controller.ts` with itself, since a prediction follows every finished turn.
+		// `/todo`, the selector cards and the setting effects they apply.
 		expect(reachedIn(interactiveSession, "modes/terminal/controllers")).toEqual([
 			"btw-controller.ts",
 			"command-controller-shared.ts",
 			"command-controller.ts",
+			// Asked for a composer prediction at the end of every turn, before any command runs.
 			"composer-prediction-controller.ts",
 			"event-controller.ts",
 			"extension-ui-controller.ts",

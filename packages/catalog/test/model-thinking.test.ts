@@ -20,6 +20,7 @@ function createModel<TApi extends Api>(overrides: {
 	baseUrl?: string;
 	compat?: ModelSpec<TApi>["compat"];
 	thinking?: ModelSpec<TApi>["thinking"];
+	reasoningOptions?: ModelSpec<TApi>["reasoningOptions"];
 }): Model<TApi> {
 	return buildModel({
 		id: overrides.id,
@@ -30,6 +31,7 @@ function createModel<TApi extends Api>(overrides: {
 		reasoning: overrides.reasoning ?? true,
 		compat: overrides.compat,
 		thinking: overrides.thinking,
+		reasoningOptions: overrides.reasoningOptions,
 		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 200000,
@@ -336,6 +338,33 @@ describe("model thinking derivation", () => {
 		expect(mapEffortToGoogleThinkingLevel(Effort.High)).toBe("HIGH");
 		expect(mapEffortToGoogleThinkingLevel(Effort.XHigh)).toBe("HIGH");
 		expect(() => requireSupportedEffort(model, Effort.Medium)).toThrow(/not supported/);
+	});
+
+	// Gemini 4 takes `thinkingLevel` and answers HTTP 400 to `thinkingBudget`. The control mode used
+	// to require major version 3 and the classifier knew only the pro/flash tiers, so a discovered
+	// `gemini-4-argon` row baked the budget transport on every Google API.
+	it("bakes the level transport for Gemini 4 on every Google API and keeps Gemini 2.5 on budgets", () => {
+		for (const api of ["google-generative-ai", "google-vertex", "google-gemini-cli"] as const) {
+			const argon = createModel({
+				id: "gemini-4-argon",
+				api,
+				provider: "google",
+				reasoningOptions: { efforts: [Effort.Low, Effort.Medium, Effort.High] },
+			});
+			expect(argon.thinking).toEqual({
+				mode: "google-level",
+				efforts: [Effort.Low, Effort.Medium, Effort.High],
+				requiresEffort: true,
+			});
+
+			const legacy = createModel({
+				id: "gemini-2.5-pro",
+				api,
+				provider: "google",
+				reasoningOptions: { efforts: [Effort.Low, Effort.Medium, Effort.High] },
+			});
+			expect(legacy.thinking?.mode).toBe("budget");
+		}
 	});
 
 	it("bakes requiresEffort for Gemini 3.x on any provider and backfills explicit metadata", () => {

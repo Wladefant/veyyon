@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-10-13
+
 ### Breaking Changes
 
 - `once` is removed; `lazy(build)` returns a `Lazy<T>` whose `value` getter calls `build` on the first read and returns that result afterwards, and `typeof held.value` states the built type without building it.
@@ -12,6 +14,7 @@
 ### Added
 
 - `getBrowserProfilesDir()` returns the persistent browser profiles directory under the agent directory.
+- `@veyyon/utils/format` exports `formatBoundedList`, which joins at most `limit` items (default 20) and appends `… N more` for the rest.
 - The `@veyyon/utils` barrel re-exports every export of `@veyyon/utils/abortable`, which adds `cancellationError` and `abortableSource` to it.
 - `LoopRace` races each pass of a loop against an outcome that settles once for the loop's life, such as an abort, and settles as `Promise.race([pass, outcome])` would without attaching a reaction per pass to the pending outcome, so the race holds no pass the loop moved past.
 - `@veyyon/utils/idle-trim` exports `BUSY_CPU_RATIO`, the share of wall time over which `IdleTrim` and `LoopWatchdog` count a window's process CPU as busy.

@@ -7,7 +7,7 @@ import { ANTIGRAVITY_PRIMARY_ENDPOINT, fetchAntigravityDiscoveryModels } from "@
 import { Effort } from "@veyyon/catalog/effort";
 import { stripThinkingVariantToken } from "@veyyon/catalog/identity/family";
 import { resolveProviderModels } from "@veyyon/catalog/model-manager";
-import { resolveWireModelId } from "@veyyon/catalog/model-thinking";
+import { resolveReasoningSelection, resolveWireModelId } from "@veyyon/catalog/model-thinking";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { googleGeminiCliModelManagerOptions } from "@veyyon/catalog/provider-models/google";
 import type { ModelSpec } from "@veyyon/catalog/types";
@@ -216,6 +216,81 @@ describe("collapseEffortVariants", () => {
 			expect(cli[0]?.thinking?.mode).toBe("google-level");
 		});
 	}
+
+	// Antigravity serves Gemini 4 Argon as three per-tier deployments, `gemini-4-argon-{low,medium,high}`,
+	// and no bare `gemini-4-argon`. A family keyed on the bare id matched nothing the endpoint listed, so
+	// the three tiers surfaced as raw rows or, under an old client version, not at all. Google rejects
+	// MINIMAL for Argon, so the ladder is low, medium and high.
+	it("collapses the per-tier gemini-4-argon deployments onto one effort-routed row on both CCA tables", () => {
+		const tiers = ["gemini-4-argon-low", "gemini-4-argon-medium", "gemini-4-argon-high"];
+		for (const table of [ANTIGRAVITY_VARIANT_COLLAPSE_TABLE, GEMINI_CLI_VARIANT_COLLAPSE_TABLE]) {
+			const out = collapseEffortVariants(
+				tiers.map(id => memberSpec(id)),
+				table,
+			);
+			expect(out).toHaveLength(1);
+			const argon = out[0];
+			expect(argon?.id).toBe("gemini-4-argon");
+			expect(argon?.name).toBe("Gemini 4 Argon");
+			expect(argon?.thinking?.mode).toBe("effort");
+			expect(argon?.thinking?.efforts).toEqual([Effort.Low, Effort.Medium, Effort.High]);
+			for (const tier of tiers) expect(resolveVariantAlias("google-antigravity", tier)).toBe("gemini-4-argon");
+
+			const model = buildModel(argon as ModelSpec<"google-gemini-cli">);
+			expect(model.thinking?.requiresEffort).toBe(true);
+			expect(resolveWireModelId(model, Effort.Low)).toBe("gemini-4-argon-low");
+			expect(resolveWireModelId(model, Effort.Medium)).toBe("gemini-4-argon-medium");
+			expect(resolveWireModelId(model, Effort.High)).toBe("gemini-4-argon-high");
+			// Thinking off clamps to the LOW floor: no MINIMAL and no suppression reach the wire.
+			const off = resolveReasoningSelection(model, { disabled: true });
+			expect(off.enabled).toBe(true);
+			expect(off.effort).toBe(Effort.Low);
+		}
+	});
+
+	// Antigravity serves Claude Opus 5.5 and Sonnet 5.5 as `-{low,medium,high}` deployments with no bare id.
+	// Without a family each tier showed as its own row, and a tier row took a separate effort on top, so a
+	// status line could read "Opus 5.5 (Low) · high". Thinking off stays available and runs the low tier.
+	it.each(["claude-opus-5-5", "claude-sonnet-5-5"])("collapses the per-tier %s deployments onto one row", id => {
+		const tiers = [`${id}-low`, `${id}-medium`, `${id}-high`];
+		const out = collapseEffortVariants(
+			tiers.map(tier => memberSpec(tier)),
+			ANTIGRAVITY_VARIANT_COLLAPSE_TABLE,
+		);
+		expect(out.map(spec => spec.id)).toEqual([id]);
+		for (const tier of tiers) expect(resolveVariantAlias("google-antigravity", tier)).toBe(id);
+
+		const model = buildModel(out[0] as ModelSpec<"google-gemini-cli">);
+		expect(model.thinking?.efforts).toEqual([Effort.Low, Effort.Medium, Effort.High]);
+		expect(model.thinking?.prefixBinding).toBe(true);
+		expect(resolveWireModelId(model, Effort.Low)).toBe(`${id}-low`);
+		expect(resolveWireModelId(model, Effort.Medium)).toBe(`${id}-medium`);
+		expect(resolveWireModelId(model, Effort.High)).toBe(`${id}-high`);
+		const off = resolveReasoningSelection(model, { disabled: true });
+		expect(off.enabled).toBe(false);
+		expect(off.wireModelId).toBe(`${id}-low`);
+	});
+
+	// A client reporting 3.0.0 or later is also listed `gemini-3.8-flash-{low,medium,high}` beside the
+	// tiered deployment. They join the 3.8 row instead of adding three raw rows, and requests stay on
+	// the tiered id the row has always used.
+	it("folds the per-tier 3.8 Flash deployments into the tiered 3.8 row", () => {
+		const ids = [
+			"gemini-3.8-flash-tiered",
+			"gemini-3.8-flash-low",
+			"gemini-3.8-flash-medium",
+			"gemini-3.8-flash-high",
+		];
+		const out = collapseEffortVariants(
+			ids.map(id => memberSpec(id)),
+			ANTIGRAVITY_VARIANT_COLLAPSE_TABLE,
+		);
+		expect(out.map(spec => spec.id)).toEqual(["gemini-3.8-flash"]);
+		const model = buildModel(out[0] as ModelSpec<"google-gemini-cli">);
+		for (const effort of [Effort.Low, Effort.Medium, Effort.High]) {
+			expect(resolveWireModelId(model, effort)).toBe("gemini-3.8-flash-tiered");
+		}
+	});
 
 	// `gemini-3.6-flash` already belongs to the per-tier effort family, and one
 	// family carries one axis: that family's mode is "effort" (the wire id

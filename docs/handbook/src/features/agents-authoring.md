@@ -51,8 +51,8 @@ else is optional.
 | `description` | What the role covers. This is the text the model routes on, so state the work, not the job title. |
 | `tools` | The tools this agent may call, as a list or a comma-separated string. Omitted grants the default set. `yield` is added if you list any tools at all. |
 | `spawns` | Which agents this one may spawn: a list, or `*` for any. Omitted means none. |
-| `model` | The model this agent runs when its roster row sets none. A list is a fallback chain. |
-| `thinkingLevel` | The effort it runs at when its roster row sets none: `off`, `minimal`, `low`, `medium`, `high`, `max`, `auto`, or `inherit`. `thinking` is accepted as a synonym. |
+| `model` | The model this agent runs when its roster row sets none. A list is a fallback chain. Omitted or `inherit` runs the spawning session's live model. |
+| `thinkingLevel` | The effort it runs at when its roster row sets none: `off`, `minimal`, `low`, `medium`, `high`, `max`, `auto`, or `inherit`. Omitted or `inherit` takes the spawning session's live effort, fitted to this agent's model. `thinking` is accepted as a synonym. |
 | `blocking` | `true` runs the agent to completion before the parent continues. |
 | `autoloadSkills` | Skills loaded into the agent's context at spawn. |
 | `readSummarize` | `false` makes its `read` tool return verbatim file content instead of structural summaries. |

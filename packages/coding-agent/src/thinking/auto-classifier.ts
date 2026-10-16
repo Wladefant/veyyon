@@ -5,7 +5,7 @@
  * {@link Effort}, clamped into the active model's supported range (never below
  * {@link Effort.Low}). Two backends, selected by `providers.autoThinkingModel`:
  *
- * - `online` (default): a smol model classifies into `low|medium|high|xhigh`.
+ * - `online` (default): the `autoThinking` helper model classifies into `low|medium|high|xhigh`.
  * - a local key: an on-device memory model classifies into the coarser
  *   `trivial|moderate|hard` scheme (3-class is more reliable than 4-way ordinal
  *   on sub-2B models), mapped to `low|high|xhigh`.
@@ -21,10 +21,10 @@ import { REASONING_SAFE_MAX_TOKENS } from "@veyyon/kernel/session/classifier-tok
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import { prompt } from "@veyyon/utils";
 import type { ModelRegistry } from "../config/model-registry";
-import { resolveRoleSelectionWithInherit } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import { thinkingPrompts } from "../prompts/thinking/rows";
 import { withAtomicSecretPlaceholders } from "../secrets/placeholder";
+import { helperSettingPath, resolveHelperModel } from "../task/helper-settings";
 import { preprocessTinyMessage } from "../tiny/message-preproc";
 import {
 	isTinyMemoryLocalModelKey,
@@ -75,16 +75,12 @@ export async function classifyDifficulty(
 }
 
 async function classifyOnline(input: string, deps: ClassifyDifficultyDeps): Promise<Effort> {
-	// Unset tiny/smol inherits the live main model (the classification prompt is tiny).
-	const resolved = resolveRoleSelectionWithInherit(
-		["tiny", "smol"],
-		deps.settings,
-		deps.registry.getAvailable(),
-		deps.model,
-	);
-	const model = resolved?.model;
+	// An unset `autoThinking` helper runs the live main model (the classification prompt is tiny).
+	const model = resolveHelperModel(deps.settings, "autoThinking", deps.registry.getAvailable(), deps.model)?.model;
 	if (!model) {
-		throw new Error("auto-thinking: no tiny/smol model available for classification");
+		throw new Error(
+			`auto-thinking: ${helperSettingPath("autoThinking", "model")} matches no available model for classification`,
+		);
 	}
 	const apiKey = await deps.registry.getApiKey(model, deps.sessionId);
 	if (!apiKey) {

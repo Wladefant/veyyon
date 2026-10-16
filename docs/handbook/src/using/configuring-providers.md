@@ -144,16 +144,18 @@ $ lms server start
 $ veyyon           # then /model and pick an lm-studio/… entry
 ```
 
-## Pinning models for roles and CI
+## Pinning models for profiles and CI
 
-Set the interactive model and optional roles in the profile `config.yml` (`modelRoles.default` is the interactive model):
+Set the session model, helper models and the agent model in the profile `config.yml`:
 
 ```yaml
 # ~/.veyyon/profiles/default/agent/config.yml
-modelRoles:
-  default: openai/gpt-5
-  smol: openai/gpt-5-mini
-  task: deepseek/deepseek-chat
+defaultModel: openai/gpt-5
+agent:
+  model: deepseek/deepseek-chat
+  helpers:
+    title:
+      model: openai/gpt-5-mini
 ```
 
 For a hermetic CI run, pass an explicit model and a one-shot config overlay:

@@ -59,14 +59,12 @@ afterEach(() => {
 	Settings.instance.override("git.enabled", true);
 });
 
-/**
- * `git status` answers dirty in the child repository and clean anywhere else; `gh` finds no PR.
- * Each stand-in records the process it stands for, so a case reads which processes the row started.
- */
+/** `git status` answers dirty in the child repository and clean anywhere else; `gh` finds no PR. */
+/** Stub the git and gh processes; returns the processes the row started, in order. */
 function stubGitProcesses(): { started: string[] } {
 	const started: string[] = [];
 	spyOn(git.status, "summary").mockImplementation(async cwd => {
-		started.push(`git status in ${cwd}`);
+		started.push(`git status ${cwd}`);
 		return cwd === childRepo
 			? { staged: 0, unstaged: 1, untracked: 0, truncated: false }
 			: { staged: 0, unstaged: 0, untracked: 0, truncated: false };

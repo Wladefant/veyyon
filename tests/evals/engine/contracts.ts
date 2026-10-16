@@ -396,6 +396,8 @@ export interface RunContext {
 	readonly suite: EvalSuite;
 	readonly workDir: string;
 	readonly runsDir: string;
+	/** The task corpus `--dataset-dir` named; a backend's `describeTask` resolves task paths against it. */
+	readonly datasetDir?: string;
 	readonly signal?: AbortSignal;
 	/** The harness roster this run was planned against. */
 	readonly harnesses: HarnessLookup;

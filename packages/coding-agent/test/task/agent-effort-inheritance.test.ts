@@ -4,7 +4,6 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import { TaskTool } from "@veyyon/coding-agent/task";
-import { AGENT_DEFAULT_EFFORT } from "@veyyon/coding-agent/task/agent-settings";
 import * as discoveryModule from "@veyyon/coding-agent/task/discovery";
 import * as executorModule from "@veyyon/coding-agent/task/executor";
 import type { AgentDefinition, SingleResult } from "@veyyon/coding-agent/task/types";
@@ -68,9 +67,6 @@ describe("task agent effort inheritance", () => {
 				}),
 				getSessionFile: () => tempDir.join("parent.jsonl"),
 				getSessionSpawns: () => "*",
-				// The bootstrap the resolver reads is the session's EXPLICIT model, not the one the
-				// operator happens to be viewing: a spawn that followed the active model would move
-				// every agent on a keystroke aimed at one.
 				getModelString: () => MODEL,
 				getActiveModelString: () => MODEL,
 				getActiveThinkingLevel: () => ThinkingLevel.High,
@@ -88,20 +84,15 @@ describe("task agent effort inheritance", () => {
 	}
 
 	/**
-	 * With no row anywhere, a spawn runs at the documented default and on the session's model
-	 * bootstrap, and the parent's own effort still crosses the boundary beside it: the executor
-	 * needs it for the case where the resolved level is `inherit` or names nothing.
-	 *
-	 * The child does NOT follow the parent's live effort here. A parent on `high` spawning a worker
-	 * that nobody configured runs that worker at the default, so a keystroke aimed at the main
-	 * assistant does not silently reprice every agent it spawns afterwards.
+	 * With no row anywhere, a spawn runs on the session's model and states `inherit` as its effort,
+	 * and the parent's own effort crosses the boundary beside it: the executor reads it to run the
+	 * child at the session's live effort, fitted to the child's model.
 	 */
-	it("runs an unconfigured agent at the documented default, carrying the parent effort beside it", async () => {
+	it("runs an unconfigured agent at the session's effort, carrying the parent effort beside it", async () => {
 		const options = await dispatch();
 
 		expect(options.modelOverride).toEqual([MODEL]);
-		expect(options.thinkingLevel).toBe(AGENT_DEFAULT_EFFORT);
-		expect(options.thinkingLevel).not.toBe(ThinkingLevel.High);
+		expect(options.thinkingLevel).toBe(ThinkingLevel.Inherit);
 		expect(options.parentThinkingLevel).toBe(ThinkingLevel.High);
 	});
 

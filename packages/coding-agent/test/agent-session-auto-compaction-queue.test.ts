@@ -209,7 +209,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 
 		// Drive auto-compaction through the event flow:
 		// message_end → stores #lastAssistantMessage
-		// agent_end   → #checkCompaction → shouldCompact → #runAutoCompaction
+		// agent_end   → TurnContextCheck.check → shouldCompact → #runAutoCompaction
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
 
@@ -488,7 +488,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 		// Regression for #3174. Goal mode is the most common scenario: the agent
 		// runs many tool-result-heavy turns and the per-turn "useless" /
 		// "supersede" passes shave tokens off every check. Pre-fix
-		// `#checkCompaction` subtracted those savings from the threshold input, so
+		// `TurnContextCheck.check` subtracted those savings from the threshold input, so
 		// with the reporter's fixed `compaction.thresholdTokens: 76384`, the
 		// threshold input fell below the trigger even when the provider-billed
 		// prompt (and the visible context anchored to it) sat above 90k tokens —

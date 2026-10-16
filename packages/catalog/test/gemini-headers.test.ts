@@ -31,8 +31,10 @@ describe("getGeminiCliHeaders", () => {
 });
 
 describe("getAntigravityUserAgent", () => {
+	// The endpoint lists Gemini 4 Argon only to a client reporting 3.0.0 or later, so the default
+	// version is part of the contract, not an incidental string.
 	it("maps the current platform/arch into Antigravity's antigravity/hub/<version> <os>/<arch> shape", () => {
-		const version = process.env.VEYYON_AI_ANTIGRAVITY_VERSION || "2.1.4";
+		const version = process.env.VEYYON_AI_ANTIGRAVITY_VERSION || "3.0.0";
 		const os = process.platform === "win32" ? "windows" : process.platform;
 		const arch = process.arch === "x64" ? "amd64" : process.arch === "ia32" ? "386" : process.arch;
 		expect(getAntigravityUserAgent()).toBe(`antigravity/hub/${version} ${os}/${arch}`);
@@ -93,6 +95,9 @@ describe("getAntigravityModelWireProfile", () => {
 			"gemini-3.6-flash-tiered": { maxOutputTokens: 65536 },
 			"gemini-3.7-flash-tiered": { maxOutputTokens: 65536 },
 			"gemini-3.8-flash-tiered": { maxOutputTokens: 65536 },
+			"gemini-4-argon-low": { modelEnum: "MODEL_PLACEHOLDER_M419", maxOutputTokens: 65536 },
+			"gemini-4-argon-medium": { modelEnum: "MODEL_PLACEHOLDER_M418", maxOutputTokens: 65536 },
+			"gemini-4-argon-high": { modelEnum: "MODEL_PLACEHOLDER_M417", maxOutputTokens: 65536 },
 			"claude-sonnet-4-6": { maxOutputTokens: 64000 },
 			"claude-opus-4-6-thinking": { maxOutputTokens: 64000 },
 		});

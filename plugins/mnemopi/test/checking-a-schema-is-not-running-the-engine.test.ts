@@ -151,16 +151,20 @@ describe("asking whether a model is configured is not calling one", () => {
 	});
 
 	/**
-	 * The calling half keeps the engine, because calling a model requires the streaming engine. Measured
-	 * at 203. RE-MEASURED 2026-10-09 at 216: the leaves the streaming engine took since, each imported by
-	 * a module already here and none of them a barrel. `contracts/model` split out `effort.ts`,
-	 * `service-tier.ts` and `stream-block.ts`; the dialects share `bracket-walk.ts` and
-	 * `json-tool-call-scanner.ts`; the catalog reads `catalog-spans.ts`, `compat/share.ts`,
-	 * `provider-models/command-code.ts`, `wire/opencode-headers.ts` and `wire/kimi-code.ts`; the logger
-	 * writes through `log-file.ts` and reads `local-time.ts`.
+	 * The calling half keeps the engine, because calling a model requires the streaming engine. Measured at 203.
+	 *
+	 * RE-MEASURED 2026-10-13 at 216. The streaming engine's graph grew by leaves reached through files
+	 * already in it; the ones added since 2026-09-20 are `utils/log-file.ts`, `catalog/compat/share.ts`,
+	 * `catalog/catalog-spans.ts`, `utils/local-time.ts`, `ai/dialect/json-tool-call-scanner.ts`,
+	 * `ai/dialect/bracket-walk.ts` and `catalog/wire/kimi-code.ts`. None is a mnemopi edge, so the cut this
+	 * file holds did not move.
+	 *
+	 * RE-MEASURED 2026-10-15 at 217: `ai/registry/oauth/token-response.ts`, the shared reader that requires
+	 * a token endpoint's JSON to be an object, reached through `ai/registry/oauth/nous-research.ts`. Not a
+	 * mnemopi edge.
 	 */
-	it("local-llm reaches at most 220 modules", () => {
-		expect(reach("core/local-llm.ts")).toBeLessThanOrEqual(220);
+	it("local-llm reaches at most 217 modules", () => {
+		expect(reach("core/local-llm.ts")).toBeLessThanOrEqual(217);
 	});
 
 	/**

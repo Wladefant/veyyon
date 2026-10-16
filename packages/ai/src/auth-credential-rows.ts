@@ -166,13 +166,41 @@ export function resolveProviderCredentialIdentityKey(provider: string, identifie
 		// No base identity at all: the org alone still distinguishes the row.
 		return orgIdentifier ?? null;
 	}
-	if (provider === "openai-codex" && emailIdentifier) return emailIdentifier;
+	// Email first where the account id is either shared (a ChatGPT workspace) or was added after rows
+	// were keyed by email (Google): keying a new login by its id would store a second row beside the
+	// email-keyed row of the same account and orphan the name stored against the email key.
+	if ((provider === "openai-codex" || emailKeyedWithPersonalAccountId(provider)) && emailIdentifier) {
+		return emailIdentifier;
+	}
 	const accountIdentifier = identifiers.find(identifier => identifier.startsWith("account:"));
 	if (accountIdentifier) return accountIdentifier;
 	if (emailIdentifier) return emailIdentifier;
 	const projectIdentifier = identifiers.find(identifier => identifier.startsWith("project:"));
 	if (projectIdentifier) return projectIdentifier;
 	return null;
+}
+
+/**
+ * Whether this provider keys its rows by email while its OAuth `accountId` still identifies one
+ * person's account, so sameness by account id has to be checked beside the identity key.
+ *
+ * Google's userinfo `id` is the account's own identifier and survives an email change, but Google
+ * rows were keyed by email before the login recorded it, and keying them by the id now would move
+ * every stored key. Most other providers key by account id already, so a shared id is a shared key;
+ * Codex and Anthropic key by email because their id is not personal (a ChatGPT workspace a team
+ * shares, an account uuid every organization of one login shares) and must not merge on it.
+ */
+export function emailKeyedWithPersonalAccountId(provider: string): boolean {
+	return provider === "google-antigravity" || provider === "google-gemini-cli";
+}
+
+/**
+ * The account id two credentials of `provider` must share to be the same login, or `undefined` when
+ * the provider is not {@link emailKeyedWithPersonalAccountId} or the credential holds none.
+ */
+export function personalAccountId(provider: string, credential: AuthCredential | null): string | undefined {
+	if (credential?.type !== "oauth" || !emailKeyedWithPersonalAccountId(provider)) return undefined;
+	return normalizeStoredAccountId(credential.accountId) ?? undefined;
 }
 
 export function resolveCredentialIdentityKey(provider: string, credential: AuthCredential): string | null {
@@ -220,6 +248,10 @@ export function matchesReplacementCredential(
 	const incomingIdentityKey = resolveProviderCredentialIdentityKey(provider, incomingIdentifiers);
 	if (incomingIdentityKey === null) return false;
 	if (incomingIdentityKey === existingIdentityKey) return true;
+	// The same Google account after an email change: the identity key moved with the email, the
+	// account id did not, and the new login takes over the old one's row.
+	const incomingAccountId = personalAccountId(provider, incoming);
+	if (incomingAccountId !== undefined && incomingAccountId === personalAccountId(provider, existing)) return true;
 	if (existingIdentityKey === null) return false;
 	return orgScopedLoginClaimsRow(incomingIdentifiers, incomingIdentityKey, existing, existingIdentityKey);
 }

@@ -17,9 +17,9 @@ const TASK_LABEL_SYSTEM_PROMPT = prompt.render(agentPrompts["agent/task-label"].
  * title model — fired by the executor spawn path because the task wire schema
  * no longer carries a `description`; null on empty input or failure.
  *
- * `liveModel` is the parent session's model, inherited when the tiny/commit/smol
- * roles are unset, exactly as a session title inherits it. Without it the title
- * generator takes its headless path and resolves the persisted default role,
+ * `liveModel` is the parent session's model, inherited when the title helper is
+ * unset, exactly as a session title inherits it. Without it the title
+ * generator takes its headless path and resolves the persisted `defaultModel`,
  * which is whatever the config file last named rather than what the session runs.
  */
 export async function generateTaskLabel(

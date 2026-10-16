@@ -5,7 +5,7 @@
  * so a typo in config turned one rate limit into a prompt that never settled.
  *
  * Class closed: every non-string JSON value (number, boolean, null, object, array) as a chain
- * entry, under every chain key kind (role, exact model, `provider/*` wildcard), plus a chain
+ * entry, under every chain key kind (`default`, exact model, `provider/*` wildcard), plus a chain
  * that is not an array and a value that is not a mapping. In each case the turn settles within
  * a stated bound, the well-formed entries still apply, and the configured shape is reported as a
  * warning.
@@ -55,10 +55,10 @@ const NON_STRING_ENTRIES: Record<string, unknown> = {
 };
 
 /** Every chain key kind that resolves to the failing primary model. */
-const CHAIN_KEYS: Record<string, { key: string; kind: "role" | "model" }> = {
-	role: { key: "default", kind: "role" },
-	model: { key: primarySelector, kind: "model" },
-	wildcard: { key: `${primary.provider}/*`, kind: "model" },
+const CHAIN_KEYS: Record<string, string> = {
+	default: "default",
+	model: primarySelector,
+	wildcard: `${primary.provider}/*`,
 };
 
 interface TurnOutcome {
@@ -109,7 +109,7 @@ async function runFailingTurn(fallbackChains: unknown): Promise<TurnOutcome> {
 		"retry.baseDelayMs": 5,
 		"retry.fallbackChains": fallbackChains,
 	});
-	settings.setModelRole("default", primarySelector);
+	settings.setDefaultModel(primarySelector);
 	const session = new AgentSession({
 		agent,
 		sessionManager: SessionManager.inMemory(),
@@ -148,7 +148,7 @@ async function runFailingTurn(fallbackChains: unknown): Promise<TurnOutcome> {
 }
 
 describe("a non-string fallback chain entry is skipped and the next entry is tried", () => {
-	for (const [keyName, { key, kind }] of Object.entries(CHAIN_KEYS)) {
+	for (const [keyName, key] of Object.entries(CHAIN_KEYS)) {
 		for (const [entryName, entry] of Object.entries(NON_STRING_ENTRIES)) {
 			it(`${entryName} entry in a ${keyName}-keyed chain`, async () => {
 				const outcome = await runFailingTurn({ [key]: [entry, fallbackSelector] });
@@ -156,7 +156,7 @@ describe("a non-string fallback chain entry is skipped and the next entry is tri
 				expect(outcome.thrown).toBeUndefined();
 				expect(outcome.requested).toEqual([primarySelector, fallbackSelector]);
 				expect(outcome.stopReason).toBe("stop");
-				expect(outcome.warnings).toEqual([`Fallback chain for ${kind} '${key}' contains a non-string selector.`]);
+				expect(outcome.warnings).toEqual([`Fallback chain '${key}' contains a non-string selector.`]);
 			});
 		}
 	}
@@ -170,7 +170,7 @@ describe("a chain or chains value of the wrong shape is reported and ignored", (
 		// No usable chain, so the failed primary is retried in place.
 		expect(outcome.requested).toEqual([primarySelector, primarySelector]);
 		expect(outcome.stopReason).toBe("stop");
-		expect(outcome.warnings).toEqual(["Fallback chain for role 'default' must be an array of selector strings."]);
+		expect(outcome.warnings).toEqual(["Fallback chain 'default' must be an array of selector strings."]);
 	});
 
 	for (const [name, value] of Object.entries({ array: [fallbackSelector], string: fallbackSelector, number: 1 })) {
@@ -181,7 +181,7 @@ describe("a chain or chains value of the wrong shape is reported and ignored", (
 			expect(outcome.requested).toEqual([primarySelector, primarySelector]);
 			expect(outcome.stopReason).toBe("stop");
 			expect(outcome.warnings).toEqual([
-				"retry.fallbackChains must be a mapping of role names or model selectors to selector arrays.",
+				"retry.fallbackChains must be a mapping of `default` or model selectors to selector arrays.",
 			]);
 		});
 	}

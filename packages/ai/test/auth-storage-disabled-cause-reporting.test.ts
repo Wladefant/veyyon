@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -204,5 +205,93 @@ describe("reporting why a provider's credential was disabled", () => {
 
 		expect(authStorage.disabledCredentialCause("other-provider")).toBeUndefined();
 		expect(authStorage.disabledCredentialCause(provider)).toContain("invalid_grant");
+	});
+
+	/**
+	 * Stamps are whole seconds from SQLite's own clock, so the order of a disable and a login is set
+	 * on the row instead of slept into existence.
+	 */
+	function stamp(id: number, column: "created_at" | "updated_at", epochSeconds: number): void {
+		const db = new Database(path.join(tempDir, "agent.db"));
+		try {
+			db.prepare(`UPDATE auth_credentials SET ${column} = ? WHERE id = ?`).run(epochSeconds, id);
+		} finally {
+			db.close();
+		}
+	}
+
+	async function signIn(email: string): Promise<number> {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		await authStorage.set(provider, [
+			{ type: "oauth", access: `access-${email}`, refresh: `refresh-${email}`, expires: Date.now() + 60_000, email },
+		]);
+		const row = store
+			.listAuthCredentials(provider)
+			.find(entry => entry.credential.type === "oauth" && entry.credential.email === email);
+		if (!row) throw new Error(`${email} did not land`);
+		return row.id;
+	}
+
+	const EPOCH = 1_900_000_000;
+
+	/**
+	 * A login to another account that is still active answers a refresh failure older than it: the
+	 * provider works again, and a note naming a login that died before it would sit on the account
+	 * screen for as long as the dead row exists, whatever the user does short of forgetting it.
+	 */
+	test("stays quiet once a later login of the provider is active, whichever account it signed in", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		const dead = await signIn("dead@example.com");
+		store.deleteAuthCredential(dead, "oauth refresh failed: HTTP 400 invalid_grant");
+		stamp(dead, "updated_at", EPOCH);
+		const live = await signIn("live@example.com");
+		stamp(live, "created_at", EPOCH + 60);
+		await authStorage.reload();
+
+		expect(authStorage.disabledCredentialCause(provider)).toBeUndefined();
+		expect(authStorage.listProvidersWithFailedRefresh().map(entry => entry.provider)).not.toContain(provider);
+	});
+
+	/**
+	 * The twin: a login that died AFTER the active one was created is news, and an active sibling
+	 * does not answer it. Without this the cut above would pass by hiding every note.
+	 */
+	test("still reports a refresh failure newer than every active login", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		const live = await signIn("live@example.com");
+		stamp(live, "created_at", EPOCH);
+		const dying = store
+			.upsertAuthCredentialForProvider(provider, {
+				type: "oauth",
+				access: "access-dying",
+				refresh: "refresh-dying",
+				expires: Date.now() + 60_000,
+				email: "dying@example.com",
+			})
+			.find(row => row.credential.type === "oauth" && row.credential.email === "dying@example.com")?.id;
+		if (dying === undefined) throw new Error("the second account did not land");
+		store.deleteAuthCredential(dying, "oauth refresh failed: HTTP 400 invalid_grant");
+		stamp(dying, "updated_at", EPOCH + 60);
+		await authStorage.reload();
+
+		expect(store.listAuthCredentials(provider).map(row => row.id)).toEqual([live]);
+		expect(authStorage.disabledCredentialCause(provider)).toContain("invalid_grant");
+		expect(authStorage.listProvidersWithFailedRefresh().map(entry => entry.provider)).toContain(provider);
+	});
+
+	/** A later login that is itself gone answers nothing. */
+	test("a later login that was disabled too does not answer the failure", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		const dead = await signIn("dead@example.com");
+		store.deleteAuthCredential(dead, "oauth refresh failed: HTTP 400 invalid_grant");
+		stamp(dead, "updated_at", EPOCH);
+		const later = await signIn("later@example.com");
+		stamp(later, "created_at", EPOCH + 60);
+		store.deleteAuthCredential(later, "oauth refresh failed: HTTP 401 the later one died too");
+		stamp(later, "updated_at", EPOCH + 120);
+		await authStorage.reload();
+
+		expect(authStorage.disabledCredentialCause(provider)).toContain("the later one died too");
+		expect(store.listDisabledAuthCredentials?.(provider).map(row => row.id)).toEqual([later, dead]);
 	});
 });

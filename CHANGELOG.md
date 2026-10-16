@@ -4,6 +4,74 @@
 
 ## [Unreleased]
 
+## [1.5.8] - 2026-10-16
+
+### Changed
+
+- A `read` refused because its lines are unchanged and still in context is now a tool error naming the earlier output's `[path#TAG]` header, rendered and sent to the model like any other failed read instead of as a read card holding the refusal text.
+- Supersede pruning no longer reads an `inContextRefusal` marker from a `read` result; a read refused as still in context is a failed read, which pruning already never counts as a newer read.
+
+### Fixed
+
+- A session started with `--tools`, and every spawned agent with a tool list, no longer logs a false "TTSR rule is scoped to a tool that does not exist" warning for each built-in rule scoped to a tool the session did not build.
+- A Cursor turn no longer stalls for 30 minutes and fails with "made no progress for 1800s" when the model calls a tool Cursor reaches over MCP (`goal`, `set_cwd`) or Cursor's built-in web search: the MCP state request Cursor sends first is failed the way Cursor's own client fails it, web search, Exa search and Exa fetch are approved, and prompts that need a Cursor UI are rejected.
+
+## [1.5.7] - 2026-10-15
+
+### Breaking Changes
+
+- Model roles are removed: `modelRoles`, `modelTags`, `cycleOrder`, custom roles, the `@role`, `pi/role` and `*` selectors, the `--smol` and `--slow` flags, the `VEYYON_SMOL_MODEL`, `VEYYON_SLOW_MODEL` and `VEYYON_PLAN_MODEL` variables and the `/settings` Roles tab no longer exist; `defaultModel` holds the model chain a session starts on, and `agent.helpers.<id>` (`advisor`, `plan`, `vision`, `commit`, `title`, `memory`, `autoThinking`, `unexpectedStop`, `speech`, `completion`) sets the model and effort of each feature's own model call.
+- The `/settings` Roster page lists a Helpers section above the Subagents section, and a helper with no model or effort set runs the session's model and effort.
+- Ctrl+P cycles the scoped models, or every available model when none are scoped, instead of cycling roles.
+- The eval `completion()` helper runs the `completion` helper when `model` is omitted, the session's active model for `"default"`, and otherwise reads `model` as a model selector.
+- `retryFallbackChains` keys are `default`, a model selector or a `provider/*` wildcard, matched in that order of specificity: exact selector, then wildcard, then `default`.
+- The `@veyyon/coding-agent` exports `formatRoleChip`, `resolveRoleAssignments` and `retryFallbackChainsForRoles` are removed, and `resolveRetryFallbackRole` is renamed `resolveRetryFallbackKey`.
+
+### Added
+
+- A config written before this release migrates on load: `modelRoles.default` (or `interactive`) becomes `defaultModel`, the `advisor`, `plan`, `vision`, `commit`, `tiny` and `smol` roles become the matching helpers' models with `@role` references expanded, `mnemopi.llmMode: smol` becomes `online`, and each dropped key is reported once in the log.
+- An extension provider's `oauth.refreshToken(credentials, signal)` receives an `AbortSignal` that aborts when the refresh is abandoned.
+- `@veyyon/catalog/model-thinking` exports `googleThinkingLevelWhenOff(model)`, the Google thinking level a request names when thinking is off: the model's lowest declared effort level.
+
+### Changed
+
+- An agent with no model or effort set on its roster page or in its definition runs the spawning session's live model and effort instead of the `default` model role at medium effort; bundled `scout`, `sonic` and `librarian` no longer pin an effort, `model: inherit` on a lane overrides a definition's model, and `/account status` counts the session's provider as an agent provider.
+- Resuming or switching to a transcript reads its starting service tier through the same function a new session uses; no user-visible change.
+- The `/settings` model hub's "Default & fallbacks" view and Default Model row edit `defaultModel`, and clearing the Default Model row keeps a `--model` launch as the session's model.
+- Advisor messages name `agent.helpers.advisor.model` and the Agents → Roster → Helpers → Advisor page.
+- Google Antigravity lists Claude Opus 5.5 and Claude Sonnet 5.5 as one model each (`claude-opus-5-5`, `claude-sonnet-5-5`) with low, medium and high routed to the `-low`, `-medium` and `-high` deployments, instead of three rows per model.
+- Comments in the xAI OAuth resolver and the model generator name the `defaultModel` setting instead of the removed model roles; no user-visible change.
+- `Markdown` borders a nested quote's laid-out rows without first checking whether the border symbol leads with a blank, since the final row wrap writes the same bytes either way; output is unchanged.
+
+### Fixed
+
+- An agent whose effort is inherited or configured runs at the level its own model accepts, and its badge shows that level, rather than the parent's level for a model that lacks it; a parent with no effort leaves the agent at its own default instead of none.
+- An agent that resolves no effort of its own shows the effort its session settles on in its badge, and the `/settings` agent roster shows an agent that runs the session's model as `session model`, which leaves room for a read-only source marker.
+- The `Runs` line on a `/settings` agent page reads `the session's model and effort` for an agent with neither set, and `session effort` instead of `inherit effort` when only the model is set.
+- The plan-approval slider no longer offers the plan model as a second choice when it is the default model at the same effort.
+- Mnemopi online memory runs the session's model when no memory helper model is set, instead of the persisted `defaultModel`.
+- The `/settings` Roster page shows eight rows before it scrolls and a shorter description, so its `Enter to configure · Esc to go back` footer stays on screen in a 40-row terminal.
+- A turn whose model no account's plan includes, and no fallback model can take over, ends with the provider's refusal instead of retrying it.
+- The notice for a move `accounts.loadBalancing` withheld names a plan that does not include the model as well as a spent quota window, and the failover notice states why the previous account could not serve.
+- A Google or Cloud Code Assist request with thinking off names the model's lowest declared thinking level instead of `MINIMAL`, which a model without a minimal level rejects.
+- A Cursor end stream that refuses a request keeps its title, detail and error code, so a Free plan's refusal of a named model reports "Free plans can only use Auto" instead of `Error`.
+- A provider's refusal of a model for the account's plan is classified as `ModelNotInPlan`, recorded for that model only, and moves the session to an account that serves the model only when `accounts.loadBalancing` is on; with it off nothing moves and `onUsageLimitWithheld` reports the account and its idle siblings.
+- An OAuth refresh failure includes the HTTP status, so a token endpoint answering 401 with no OAuth error code disables the login instead of retrying it forever; the Gemini CLI refresh error body is redacted.
+- A login disabled by a failed refresh is no longer reported as signed out once a later login for the same provider is active.
+- Kimi Code and Synthetic models sent through the Anthropic-format shim accept every thinking effort the catalog declares, so `kimi-code/k3` at `max` no longer fails, and a model with no effort control is not sent thinking `disabled`.
+- An OAuth refresh that answers after its caller stopped waiting is persisted, and no second refresh spends the old refresh token while the first is still running, so a slow token endpoint no longer revokes the login.
+- The account health probe reports a refresh that timed out or met a network or provider failure as unverifiable and keeps the account serving; only a refusal of the grant marks it as failed.
+- A transient refresh failure while the access token is still valid serves that token instead of blocking the account for five minutes.
+- Aborting a request during a token refresh no longer blocks the account or serves the request from another account.
+- A token endpoint answering 200 without a usable access token keeps the login and its stored token instead of storing an empty token (Anthropic, Antigravity, Gemini CLI) or failing with a `TypeError` (Cursor).
+- A health probe that refreshes a credential writes the refreshed token onto that credential's row when the stored rows have no account identity.
+- An MCP server's OAuth refresh no longer aborts the token request after 10 seconds; the connection proceeds with the held credential and a rotation that answers later is persisted, so a slow token endpoint no longer signs the server out.
+- A token endpoint answering 200 with JSON `null`, a string or a number fails the refresh as an invalid response and keeps the login, instead of a `TypeError` in the Anthropic, OpenAI Codex, Cursor, Kimi, Antigravity, Gemini CLI, GitLab Duo and Nous Research refreshers.
+- A refresh refused with 403 and a JSON body `{"error":"invalid_grant"}` (or `invalid_token`, `unauthorized_client`) disables the dead login even when the status text says "Forbidden"; a bare 403 stays transient.
+- A token refresh that reaches the 120-second flight ceiling aborts its token request and holds the refresh lease until that request settles, so a second refresh, in this process or another, no longer spends the same refresh token beside it; `refreshToken` on an OAuth provider receives an `AbortSignal` for its token request.
+
+## [1.5.6] - 2026-10-13
+
 ### Breaking Changes
 
 - `CompactionDetails` holds only the file paths a compaction's read and modified lists gained over the compaction it built on (`readFilesAdded`, `modifiedFilesAdded`, and that compaction's id as `base`) instead of `readFiles` and `modifiedFiles` in full; `prepareCompaction` still resolves records an earlier version wrote.
@@ -43,6 +111,8 @@
 - The `lsp` tool's `incoming_calls` and `outgoing_calls` actions list the functions that call the symbol at the cursor, or that it calls, with each call site, as the language server resolved them.
 - Composer predictions show the message you are likely to send next as dim text in the empty composer after each turn, inserted by Tab and sent only by Enter; `composer.predictions.mode` selects `off` (the default, which sends no request), `chatgpt-pro`, which requests a ChatGPT Codex prediction on GPT-6 Astra or GPT-6.1 Sol only with the token of a ChatGPT Pro plan Codex login, never a routed or API-key credential, may count against that account's usage limits, and otherwise sends nothing and shows as greyed out in `/settings`, or `custom`, which uses the first model with credentials in `composer.predictions.model`, chosen from any provider in the settings model picker; a stored `composer.predictions.enabled: false` loads as `off`.
 - A composer prediction ends with a dim `· tab to accept` hint showing the configured Tab key; the hint leaves with the suggestion when you type or press Tab, and a row too narrow for both drops the hint before it hides the suggestion.
+- `read` refuses a re-read whose every displayed row is still shown byte for byte under the same header by an earlier read result in context, returning a one-line pointer to that output instead of the content; no argument overrides the refusal, a pruned, shaken or compacted earlier result no longer counts, and no read is refused while an extension handles the `context` event.
+- The account card's signed-out login note offers `f` to forget it, which stops the card and `/account` from reporting a login you do not intend to sign back in.
 - `collectToolCallsById` takes an optional start index and resolves the call behind each tool result at or after it without walking the entries before it.
 - `PruneResult` lists the entries a prune rewrote in place as `prunedEntries`.
 - `Agent.buildSideRequestContext` takes an optional model, defaulting to the agent's, and normalizes messages and tools for that model.
@@ -55,6 +125,8 @@
 - `@veyyon/ai/usage/openai-codex-predictions` exports `fetchCodexPredictionsConfig` and `parseCodexPredictionsConfig`, which read the Codex composer-prediction configuration from `/wham/predictions/config`, and the `codexFork` stream option sends an OpenAI Codex request as an ephemeral fork of another session's thread, setting `thread_source` and `forked_from_thread_id` in its turn metadata.
 - `AuthStorage.hasApiKeyOverride(provider)` reports whether an `--api-key` or a `models.yml` key replaces the provider's stored logins and environment token.
 - `@veyyon/ai/utils/schema` exports `ZOD_INSTANCE_KINDS`, every Zod 4 kind by which `decontaminateZodInstance` recognizes a serialized instance.
+- `AuthStorage.forgetSignedOutLogins(provider)` dismisses the provider's logins that a failed refresh signed out, keeping them disabled under a cause no reader reports and no successful refresh re-enables, and returns how many it dismissed.
+- A Google Antigravity or Gemini CLI login stores the Google account id as the credential's `accountId`, and a login with the same id under a new email replaces the login under the old email and purges its signed-out row.
 - `@veyyon/catalog/wire/kimi-code` exports `KIMI_CODE_REGIONS`, the display name, site, OAuth host and API hosts of the global (kimi.ai) and mainland China (kimi.com) Kimi Code deployments in the order the login lists them, with `kimiCodeApiKey`, which encodes a credential's deployment into its API key, and `resolveKimiCodeEndpoint`, which reads the token and API bases a request uses from that key.
 - `@veyyon/catalog/wire/codex` exports `getCodexPlanType`, which reads the lowercased ChatGPT plan (`chatgpt_plan_type`) out of a Codex access token.
 - `suites/browser` runs hard web tasks on seeded local applications (a shop, webmail, a bank with a second-factor phone, a kanban board, a spreadsheet, flight booking with a cross-origin payment frame, a helpdesk seeded with prompt injections, an analytics dashboard drawn on canvas), five workflow tasks that carry one job across two or three of them, and four recovery tasks in which the application fails once, visibly (a declined charge, an expired session, a stale save, a dropped connection), and grades each by the state the applications recorded and the agent's answer.
@@ -68,6 +140,7 @@
 - `tests/evals/docs/` is the evals manual, replacing `EVALS.md`.
 - `benches/browser-fill.ts` times `tab.fill` in headless Chromium for 16, 256 and 4,096 characters and counts a fill correct only when the field holds the value.
 - `benches/natural-input.ts` times `tab.click`, `tab.type`, `tab.fill` on a text field, a date input and a range, and `tab.select` on a drop-down with `browser.naturalInput` off and on, and `benches/bot-detection.ts` opens public bot-detector pages through the browser tool and prints each verdict and the signals it flags.
+- Gemini 4 Argon (`gemini-4-argon`) is bundled for the Google provider with a 1,048,576-token context and the low, medium and high thinking levels, and for Google Antigravity with the same context, a 65,536-token output cap, and low, medium and high routed to the `gemini-4-argon-low`, `-medium` and `-high` deployments.
 - A tool domain manifest can list `resultCodecs`, each a `ToolResultCodec` whose `slim` drops a result `details` field the result's content rebuilds when the session writes the entry and whose `restore` rebuilds it when the session loads.
 - `SessionStorage` has an optional `rewriteTailAtomic` that replaces a file atomically with its first `keepBytes` bytes, a new head written over their start, and a new tail; `FileSessionStorage` implements it, and a backend without it receives whole-file writes.
 - `SessionManager.getMCPToolSelection()` returns the tool names the newest `mcp_tool_selection` entry on the context branch records, or `undefined` when the branch records none, without rebuilding the branch's messages; `resolveContextLeaf` is the rule `buildSessionContext` and that read share for which entry a context is built up to.
@@ -90,6 +163,7 @@
 - `Editor.setPrediction()` shows a suggested message as ghost text over the empty composer in place of the placeholder; Tab inserts it, and the first edit that leaves text in the composer dismisses it.
 - `getBrowserProfilesDir()` returns the persistent browser profiles directory under the agent directory.
 - `Editor.setPrediction()` shows a suggested message as ghost text over the empty composer in place of the placeholder; Tab inserts it, the first edit that leaves text in the composer dismisses it, and its optional `acceptHint` follows the suggestion in the same style and leaves with it.
+- `@veyyon/utils/format` exports `formatBoundedList`, which joins at most `limit` items (default 20) and appends `… N more` for the rest.
 - The `@veyyon/utils` barrel re-exports every export of `@veyyon/utils/abortable`, which adds `cancellationError` and `abortableSource` to it.
 - `LoopRace` races each pass of a loop against an outcome that settles once for the loop's life, such as an abort, and settles as `Promise.race([pass, outcome])` would without attaching a reaction per pass to the pending outcome, so the race holds no pass the loop moved past.
 - `@veyyon/utils/idle-trim` exports `BUSY_CPU_RATIO`, the share of wall time over which `IdleTrim` and `LoopWatchdog` count a window's process CPU as busy.
@@ -125,6 +199,8 @@
 - The status line fits its footline in one `QuietRowFit` pass in `status-line/quiet-row.ts` that keeps each half's joined text and width instead of re-joining the halves after every shed, so composing a default footline takes 999 ns instead of 1,454 ns at 160 columns and 9.46 µs instead of 12.15 µs at 60 columns, where it sheds zones (median of nine rounds of 20,000 calls); the drawn row is unchanged.
 - `StatusLineComponent` builds a frame's segment context through `#locationContext`, `#gitFacts` and `contextGaugeReadings`, and `renderLocation` and the `model` segment build their text in per-step functions; the drawn row and the git lookups it starts are unchanged.
 - The launch-facts recorder compares a recorded entry field by field instead of serializing both copies, so a status-row redraw that changes no recorded fact files in 338 ns instead of 1,119 ns, and a `git status` that finds the recorded tree in 528 ns instead of 1,313 ns (median of seven alternating processes of 450,000 calls).
+- The end-of-turn context check moved out of `AgentSession` into the `TurnContextCheck` session collaborator, and the starting service tier into session startup; no user-facing change.
+- The `composer.predictions.mode` row in `/settings` is named "Suggest Next Message" instead of repeating its "Composer Predictions" heading.
 - The retry ladder decides each attempt through `#parkUsageLimit`, `#switchModel` and `#closeUnrecoverable` in `session/runtime/retry-runtime.ts`; every retry, model or credential switch, wait and event is unchanged.
 - The settled edit card parses a hashline payload for its file only when neither the call nor the result names one, so re-rendering the card of a 2,000-line hashline edit takes 0.95 µs instead of 274 µs (median of seven rounds of 2,000 renders), and the call, result and multi-file cards are built in per-step functions in `edit/edit-view.ts`; every card is unchanged.
 - The `/models` hub maps a Roles-view key to its command through `rolesCommandFor`, routes each pointer report through its own wheel, motion and click step, and draws Roles-view and sidebar rows in per-row functions in `modes/terminal/components/selectors/model-hub.ts`; every frame, key and pointer action is unchanged.
@@ -419,7 +495,7 @@
 - The JSON Schema meta-validator checks a node by looking each of its keys up in a keyword table instead of probing every known keyword, cutting validation of a 40-tool parameter schema set from 46.6 µs to 33.7 µs with identical verdicts, except that a `NaN` `multipleOf` is now rejected.
 - The JSON Schema value validator checks `if`/`then`/`else`, `anyOf`/`oneOf` branch issues, `required`, `properties`, `propertyNames`, property counts, `dependentRequired`, `dependentSchemas` and `uniqueItems` in separate steps; verdicts and issues are identical across 400,000 generated values, and validating a tool call with 60 nested entries takes 21.5 µs valid and 24.1 µs invalid against 21.6 and 24.2 µs before (median of 41 interleaved rounds).
 - `validateToolArguments` normalizes arguments through shared property, array-item and combinator walkers that return the input itself when nothing changes and copy an object or array only at its first change, cutting validation of a first-party tool call from 3.88 to 2.17 µs when no call needs a repair, from 4.99 to 2.78 µs when 10% of calls carry quirks and from 6.17 to 3.55 µs at 50% (median of 7 interleaved rounds), with identical results and errors across 54,800 generated calls.
-- Tool-argument repair finds a JSON string literal's closing quote in one scan and escapes raw control characters and replaces literal `\n` escapes by copying the unchanged runs between them instead of rebuilding the text one character at a time, skips the parse it already knows fails before healing a bracket, and runs JSON Pointer reads and writes, Zod issue flattening, issue-driven coercion and the arg-spill boundary search as separate steps; repairing a 40-entry stringified array argument takes 13.1 µs instead of 31.9 µs when its strings carry raw newlines, 19.9 µs instead of 35.8 µs when junk follows it and 11.5 µs instead of 30.4 µs when literal `\n` escapes separate its items, and splitting an arg spill takes 0.62 µs instead of 0.77 µs (median of 31 interleaved rounds), with identical results across 200,000 generated inputs per step.
+- Tool-argument repair finds a string literal's closing quote in one scan, escapes control characters and literal `\n` escapes by copying unchanged runs instead of rebuilding the text per character, skips a parse it knows fails, and runs JSON Pointer access, Zod issue flattening, coercion and the arg-spill search as separate steps; repairing a 40-entry stringified array argument takes 13.1 µs instead of 31.9 µs with raw newlines, 19.9 µs instead of 35.8 µs with trailing junk and 11.5 µs instead of 30.4 µs with literal `\n` separators (median of 31 rounds), with identical results across 200,000 generated inputs per step.
 - Responses and Codex request building parse each replayed thinking signature once instead of twice and build a turn's reasoning, text and tool-call items in separate steps, cutting `buildResponsesInput` on a 300-turn transcript with 4 KiB reasoning signatures from 1.40 to 1.08 ms, on a 1,000-turn one from 4.07 to 3.14 ms and with 256-byte signatures from 0.68 to 0.60 ms (median of five interleaved runs), with identical items across 40,000 generated turns.
 - Stream option mapping resolves each API's options in its own mapper over one shared base instead of one 420-line switch, cutting the mapping of 743,431 model and option combinations from 100.8 ms to 92.1 ms with identical options.
 - Cursor and Devin split their Connect response streams through one `ConnectFrameReader` that keeps each read as received and copies a frame only when it spans reads, instead of joining every read onto the unconsumed bytes, cutting the split of a 4 MiB frame arriving in 16 KiB reads from 46.9 ms (Cursor) and 51.8 ms (Devin) to 0.40 ms and of 2,000 200-byte frames arriving one per read from 0.61 ms and 0.22 ms to 0.13 ms (median of 15 interleaved rounds), with identical payloads.
@@ -503,6 +579,7 @@
 - `engine/` is grouped by concern into `members`, `plan`, `run`, `trial`, `kit`, `compare`, `harness`, `auth`, `io`, `wire` and `corpus`, and the overlay loaders and paired statistics every suite shares moved into it from the in-process backend and the DeepSWE suite.
 - Patch recovery evaluates the `diff` package when it first maps an edit from a stale snapshot onto the current file instead of when the module loads; behavior is unchanged.
 - Boundary repair, block lowering, batch preparation, anchor remapping, header parsing and line streaming run as separate per-step functions; patch output, warnings and errors are unchanged.
+- File-tag normalization no longer uses a lookahead regex; a read tool range read of a 982 KB markdown file drops from 3.81 ms to 1.83 ms median.
 - `getRecentSessions` and `findMostRecentSession` scan session files newest first by mtime and stop once they hold the requested rows, instead of listing the whole directory through `.session-list-index.json` and rewriting it, cutting the welcome shortlist over 1,495 sessions from 37.8 ms to 17.1 ms in a fresh process and from 19.9 ms and 6.3 MiB of heap to 4.0 ms and 0.6 MiB warm (medians of 11 and 8 alternating runs).
 - 13 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - The session loader reads a session file 1 MiB at a time and splits lines synchronously instead of decoding each line through an async iterator, cutting the load phase of an 85 MB, 27,600-entry session from 210.0 ms to 149.9 ms (median of 7 alternating runs).
@@ -561,6 +638,7 @@
 - Split the session-file parser into one function per entry kind, the request-detail route and the model ranking the preference and cost charts share into their own functions; no user-visible change.
 - Cycle detection walks its queue by index instead of dequeuing with `Array.shift()`, so a swarm graph is checked in linear time. No user-visible behavior changes.
 - The edit card reads its target paths through `editInputPaths` from `@veyyon/utils/fs-tool-args`; rendered output is unchanged.
+- `Markdown` borders the rows a nested quote already laid out without wrapping them again at each enclosing quote, so a quote nested 20 deep renders in 0.65 ms instead of 1.5 ms at width 40; output is byte-identical.
 - The TUI reports each keystroke and frame to its activity signal before handling it, so its loop watchdog arms no tick while the session rests and resumes on the next keystroke or frame.
 - `Input`, `Editor` and `wordWrapLine` take the shared grapheme segmenter on first use instead of when their module loads, so loading them builds no `Intl.Segmenter`.
 - The frame throttle and the terminal hosts' settle windows are in `core/frame-pacing.ts` instead of `core/tui.ts`; frame timing is unchanged.
@@ -674,6 +752,8 @@
 - The unused built-in `designer` model role is gone from Settings → Model → Roles; a `modelRoles.designer` value you already set still resolves through `@designer` as a custom role.
 - The retired `statusLine.separator` and `statusLine.transparent` settings are gone; neither changed anything on screen, and a config file that still sets them loads unchanged.
 - 36 exported functions and constants that nothing called, and the unused Smithery Connect API client `mcp/smithery-connect.ts`, are gone; no user-visible change.
+- The `model.toolCallLoopGuard.readSubsumptionThreshold` setting and the tool-call loop guard's redundant-read steer are gone, replaced by `read` refusing reads still in context; a stored value is dropped from the config on load.
+- Removed read-subsumption detection and the `readSubsumptionThreshold` option from `ToolCallLoopGuard`, which detects consecutive identical tool calls only.
 
 ### Fixed
 
@@ -685,6 +765,7 @@
 - A `browser` `open` with `visible` whose move fails or is interrupted after the tab left its browser, such as on a page that cannot load, puts the tab back on its browser with its page, context, cookies and localStorage instead of losing it, and a move whose tab has a page holding a dialog open fails within the call's timeout instead of after a minute.
 - A `browser` click or hover on an element in a cross-site frame, including a frame inside a frame, waits for the frames to draw first, so a press right after the page loads reaches the element instead of the document above its frame while reporting success.
 - With `browser.naturalInput` on, a `tab.id()` or `tab.ref()` handle whose element the page re-renders while the wheel scrolls to it scrolls to the replacement instead of failing as detached, and loading the `browser` tool no longer evaluates arktype before its first schema is built.
+- A read of a missing `artifact://` id, a missing `agent://` output or a missing PDF image member lists at most 20 of what exists followed by a count of the rest, instead of every id in every session, which printed thousands of artifact ids into one tool result in a long session.
 - A transcript rebuild, such as after a compaction, releases the tool cards and assistant segments it removed from the screen and the arguments of calls that settled, instead of holding every card a long agent run ever drew, so a 900-second soak of tool turns and compactions ends at 987 MB RSS instead of 1,512 MB with 481,732 heap objects instead of 945,900.
 - A collapsed edit card whose change lines alone pass 40 draws 40 diff rows and counts the rest as hidden, instead of drawing every line of the run that crossed the budget (a 600-line replacement drew 603 rows) or overflowing the call stack on a run of a million lines, and cutting the diff and counting its lines no longer copy each run or re-split the kept text, so cutting a 5,600-line, 400-hunk diff takes 355 µs instead of 544 µs and counting it 56 µs instead of 190 µs (median of nine rounds of 300).
 - A session switch, `/resume`, reload, `/new` or `/drop` that fails part-way, such as on a disk error while the outgoing transcript is flushed, keeps the session listening, so later turns reach the screen and the session file instead of running unseen and unsaved.
@@ -787,6 +868,7 @@
 - A bash command whose caller cancels while the call joins the session CPU budget returns as cancelled without running, instead of running to completion and reporting success.
 - A `/queue` or `=>` line submitted with Enter whose first message fails to send comes back to the editor as the `=>` queue it was, with its pending images and their links, instead of leaving the editor empty.
 - `veyyon commit` edits a changelog's Unreleased section line by line, so adding or deleting an entry keeps the section's prose, categories outside Keep a Changelog, wrapped and nested entries and the file's final newline instead of dropping them, a `### toString` heading no longer stops the changelog from being read, an entry differing from a proposed one only in case, spacing or a trailing period counts as the same entry for duplicates and deletions, and a changelog the proposal leaves unchanged is no longer rewritten, staged or reported as updated.
+- Supersede pruning does not count a `read` result whose details set `inContextRefusal` as a newer read of its file, so it no longer blanks the earlier result the refusal points back to.
 - A tool call whose `toolcall_end` the provider delivered before an abort is kept and answered with a result when the abort fires before the loop reads that event, instead of being dropped and reported as unfinished depending on microtask order.
 - A server-side compaction whose cut lands inside a turn that opened before the previous provider window chains that window and posts only the context behind it, instead of posting the whole session, which on a long single-turn Codex run outgrew the provider's context and failed every pass with `context_length_exceeded`.
 - A compaction reads the turns the previous compaction kept, so a local pass no longer drops them from the context and a chained server-side pass no longer omits them from the input it posts.
@@ -844,6 +926,8 @@
 - A plan whose variant names reduce to one directory name is refused, naming both variants.
 - A sandboxed local-cli trial can no longer signal a process outside it or connect to an abstract Unix socket made outside it on a kernel with Landlock ABI 6 or later.
 - A sandboxed local-cli trial can no longer read files in `/run/user`, and `docs/backends.md` states that a trial still connects to every pathname Unix socket the runner's user can, the session bus and the Docker daemon among them.
+- Google Antigravity lists Gemini 4 Argon: the client reports version 3.0.0 instead of 2.1.4, which the endpoint served neither Argon nor the per-tier Gemini 3.8 Flash deployments; the model cache schema moves to v13 to drop lists discovered as 2.1.4.
+- The Google, Vertex and Gemini CLI transports send `thinkingLevel` to every Gemini model from 3.0 up, including Gemini 4 and the `argon` tier, instead of a `thinkingBudget` that Gemini 4 rejects with HTTP 400.
 - The session loader no longer instantiates the `@veyyon/utils` barrel through its cold-entry store, which cut the modules it loads from 141 to 88 and the modules the `read` tool loads from 360 to 333.
 - A title change made while a session file rewrite is queued or in progress is written to the file once instead of twice, and a change that lands after the rewrite read its body is published by a second pass instead of being lost with its title.
 - An enum setting whose configured value is outside its declared values reads as the declared default and logs one warning per setting.
@@ -1417,7 +1501,6 @@
 - An OpenAI-compatible listing's model name falls back to its id through the shared non-empty-string reader; discovered names are unchanged.
 - The package directory is `clients/web` instead of `packages/collab-web`; the package name, the relay and the guest client are unchanged.
 - Updated collaboration client to protocol v4, carrying tool execution displays on active tool state and tool result messages.
-- File-tag normalization no longer uses a lookahead regex; a read tool range read of a 982 KB markdown file drops from 3.81 ms to 1.83 ms median.
 - Unified patch operation definitions into a shared declarative operation table across tokenization and execution.
 - The package directory is `plugins/hashline` instead of `packages/hashline`; the published package name, entry points and behavior are unchanged.
 - Seen-line and clipped-line records merge into a snapshot through one keyed step; recorded provenance is unchanged.

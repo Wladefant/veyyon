@@ -231,7 +231,7 @@ export class EventController {
 	constructor(private ctx: EventControllerContext) {
 		this.#composerPrediction = new ComposerPredictionController(ctx);
 		// Enhanced speech (`speech.enhanced`) rewrites blocks through the
-		// tiny/smol role with this session's registry and credentials; the
+		// speech helper with this session's registry and credentials; the
 		// vocalizer falls back to mechanical cleanup when unset. Tolerates
 		// partial contexts (tests, minimal embeddings) by wiring null.
 		const session = ctx.session;
@@ -241,6 +241,7 @@ export class EventController {
 						settings: session.settings,
 						registry: session.modelRegistry,
 						sessionId: session.sessionId,
+						currentModel: () => session.model,
 						metadataResolver: provider => session.agent.metadataForProvider(provider),
 						obfuscateProviderText: text => session.obfuscateProviderText(text),
 					})

@@ -27,7 +27,9 @@ export const ANTIGRAVITY_SYSTEM_INSTRUCTION =
  * parse graph.
  */
 export let getAntigravityUserAgent = () => {
-	const DEFAULT_ANTIGRAVITY_VERSION = "2.1.4";
+	// The endpoint lists Gemini 4 Argon and the per-tier Gemini 3.8 Flash deployments only to a
+	// client reporting 3.0.0 or later; 2.9.x and earlier receive neither.
+	const DEFAULT_ANTIGRAVITY_VERSION = "3.0.0";
 	const version = process.env.VEYYON_AI_ANTIGRAVITY_VERSION || DEFAULT_ANTIGRAVITY_VERSION;
 	// Map Node.js platform/arch to Antigravity's expected format.
 	// Verified against Antigravity source: _qn() and wqn() in main.js.
@@ -69,6 +71,11 @@ export const ANTIGRAVITY_MODEL_WIRE_PROFILES: Readonly<Record<string, Antigravit
 	"gemini-3.6-flash-tiered": { maxOutputTokens: 65536 },
 	"gemini-3.7-flash-tiered": { maxOutputTokens: 65536 },
 	"gemini-3.8-flash-tiered": { maxOutputTokens: 65536 },
+	// Gemini 4 Argon is served per tier. One streamed request caps at 65536 tokens; a larger
+	// `maxOutputTokens` starts a long decode that ends the stream with `finishReason: CONTINUATION`.
+	"gemini-4-argon-low": { modelEnum: "MODEL_PLACEHOLDER_M419", maxOutputTokens: 65536 },
+	"gemini-4-argon-medium": { modelEnum: "MODEL_PLACEHOLDER_M418", maxOutputTokens: 65536 },
+	"gemini-4-argon-high": { modelEnum: "MODEL_PLACEHOLDER_M417", maxOutputTokens: 65536 },
 	// Claude on `daily-cloudcode-pa` rejects `maxOutputTokens > 64000` with a
 	// 400 (`Request contains an invalid argument`). The model_enum label is
 	// untracked for these ids; the backend does not require it.

@@ -1,4 +1,5 @@
 import type {
+	AgentMessage,
 	AgentTelemetryConfig,
 	AgentTool,
 	AgentToolContext,
@@ -314,6 +315,14 @@ export interface ToolSession extends ToolSessionLocalState {
 	 * session. See `inlineCapForTurn` in session/streaming-output.
 	 */
 	getTurnIndex?: () => number;
+	/**
+	 * The messages in this session's live context, as the next model request sends them: what the
+	 * pruning, shake, dedup and compaction passes left. `read` refuses a re-read of rows an earlier
+	 * result here still displays. Absent where no agent context answers for this session (the
+	 * advisor, a bare tool session), and `undefined` while an extension `context` handler rewrites
+	 * each request; nothing counts as already in context then.
+	 */
+	getLiveMessages?: () => readonly AgentMessage[] | undefined;
 	/** Get Hindsight runtime state for this agent session. */
 	getHindsightSessionState?: () => HindsightSessionState | undefined;
 	/** Get this session's Argot codec, forked into agents under `argot.agents: inherit`. */

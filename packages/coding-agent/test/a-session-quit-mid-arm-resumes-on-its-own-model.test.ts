@@ -74,7 +74,7 @@ describe("a session quit mid-arm resumes on its own model", () => {
 	 */
 	function liveSession(ownModel: Model<Api>): { session: AgentSession; file: string } {
 		const settings = Settings.isolated();
-		settings.setModelRole("default", `${ownModel.provider}/${ownModel.id}`);
+		settings.setDefaultModel(`${ownModel.provider}/${ownModel.id}`);
 		const sessionManager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), "active"));
 		const session = new AgentSession({
 			agent: new Agent({
@@ -124,7 +124,7 @@ describe("a session quit mid-arm resumes on its own model", () => {
 	/** The model the next launch opens `file` on. */
 	async function resumedModelId(file: string, ownModel: Model<Api>): Promise<string | undefined> {
 		const settings = Settings.isolated();
-		settings.setModelRole("default", `${ownModel.provider}/${ownModel.id}`);
+		settings.setDefaultModel(`${ownModel.provider}/${ownModel.id}`);
 		const result = await createAgentSession({
 			cwd: tempDir.path(),
 			agentDir: tempDir.path(),

@@ -65,6 +65,7 @@ const SETTINGS_INHERIT_LABEL = "Inherit";
 const MODEL_STEP_INHERIT_LABEL = "Model default";
 
 const ENTER = "\n";
+const RIGHT = "\x1b[C";
 
 /**
  * Panel width. The settings screen wraps its right column, so at a narrow width one sentence arrives
@@ -430,7 +431,7 @@ function openThinkingModal(model: Model<Api>): string {
 
 /**
  * The Models hub's thinking strip, reached the way a user reaches it: pick the model, press Enter to
- * open the role strip, assign a role, and the effort strip opens on the model just assigned.
+ * open the pick strip, choose "set default", and the effort strip opens on the model just set.
  *
  * Driven rather than skipped because the hub builds its own ladder in a private method. A private
  * method is not out of reach, it is only out of reach of a unit test, and a surface nobody drives is
@@ -439,17 +440,24 @@ function openThinkingModal(model: Model<Api>): string {
 function openModelHubEffortStrip(model: Model<Api>): string {
 	const ui = { requestRender: () => {}, terminal: { rows: 40 } } as unknown as TUI;
 	const hub = new ModelHubComponent(ui, settings, modelRegistry, [{ model }], {
-		onAssign: () => {},
-		onUnassign: () => {},
+		onSetDefault: () => {},
+		onClearDefault: () => {},
 		onLoginRequest: () => {},
 		onFallbackChainChange: () => {},
 		onCancel: () => {},
 	});
-	// Enter on the model opens the role strip; Enter again assigns the highlighted role, and the
-	// effort strip follows immediately.
+	// Enter on the model opens the pick strip; Enter again sets it as the default, and the effort
+	// strip follows immediately.
 	hub.handleInput(ENTER);
 	hub.handleInput(ENTER);
-	return stripVTControlCharacters(hub.render(PANEL_WIDTH).join("\n"));
+	// The strip is a horizontal window that drops chips past the right edge until the cursor
+	// reaches them, so every frame a user sees while stepping right is part of what it offers.
+	const frames: string[] = [];
+	for (let step = 0; step <= VOCABULARY.length; step++) {
+		frames.push(stripVTControlCharacters(hub.render(PANEL_WIDTH).join("\n")));
+		hub.handleInput(RIGHT);
+	}
+	return frames.join("\n");
 }
 
 /** Levels RPC `set_thinking_level` accepts, minus `inherit`, which is how a client clears its choice. */

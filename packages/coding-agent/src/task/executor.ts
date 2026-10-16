@@ -59,7 +59,7 @@ import { rootBudgetGroupOwnerId, withInheritedBudgetGroup } from "../session/cpu
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "../session/factory-options";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
 import { truncateTail } from "../session/streaming-output";
-import type { ConfiguredThinkingLevel } from "../thinking";
+import { AUTO_THINKING, type ConfiguredThinkingLevel, resolveThinkingLevelForModel } from "../thinking";
 import type { ContextFileEntry, ToolSession } from "../tools";
 import { isIrcEnabled } from "../tools/agent/irc";
 import { type ReportFindingDetails, toReviewFinding } from "../tools/agent/review";
@@ -158,8 +158,6 @@ function normalizeModelPatterns(value: string | string[] | undefined): string[] 
 		.filter(Boolean);
 }
 
-const AGENT_RETRY_FALLBACK_ROLE_PREFIX = "agent:";
-
 interface AgentRetryFallbackCandidate {
 	model: Model<Api>;
 	selector: string;
@@ -187,12 +185,11 @@ function resolveAgentRetryFallbackCandidates(
 
 function installAgentRetryFallbackChain(args: {
 	settings: Settings;
-	id: string;
 	candidates: AgentRetryFallbackCandidate[];
 	model: Model<Api> | undefined;
 	authFallbackUsed: boolean;
 }): string | undefined {
-	const { settings, id, candidates, model, authFallbackUsed } = args;
+	const { settings, candidates, model, authFallbackUsed } = args;
 	if (!model || authFallbackUsed || candidates.length <= 1) return undefined;
 
 	const selectedIndex = candidates.findIndex(
@@ -202,28 +199,16 @@ function installAgentRetryFallbackChain(args: {
 	const fallbackSelectors = candidates.slice(selectedIndex + 1).map(candidate => candidate.selector);
 	if (fallbackSelectors.length === 0) return undefined;
 
-	const role = `${AGENT_RETRY_FALLBACK_ROLE_PREFIX}${id}`;
-	const modelRoles: Record<string, string> = {};
-	const existingRoles = settings.getModelRoles();
-	for (const existingRole in existingRoles) {
-		const selector = existingRoles[existingRole];
-		if (selector) {
-			modelRoles[existingRole] = selector;
-		}
-	}
-	modelRoles[role] = candidates[selectedIndex].selector;
-	settings.override("modelRoles", modelRoles);
-	const fallbackChains: Record<string, string[]> = {
-		[role]: fallbackSelectors,
-	};
+	// Keyed by the primary's own selector, so the chain applies to that model in this agent's settings
+	// fork and never reaches the parent's chains.
+	const key = candidates[selectedIndex].selector;
+	const fallbackChains: Record<string, string[]> = { [key]: fallbackSelectors };
 	const existingFallbackChains = settings.get("retry.fallbackChains");
-	for (const existingRole in existingFallbackChains) {
-		if (existingRole !== role) {
-			fallbackChains[existingRole] = existingFallbackChains[existingRole];
-		}
+	for (const existingKey in existingFallbackChains) {
+		if (existingKey !== key) fallbackChains[existingKey] = existingFallbackChains[existingKey];
 	}
 	settings.override("retry.fallbackChains", fallbackChains);
-	return role;
+	return key;
 }
 
 function withAbortTimeout<T>(
@@ -1863,7 +1848,8 @@ interface ChildSessionContext {
 interface RunModel {
 	modelRegistry: ModelRegistry;
 	model: Model<Api> | undefined;
-	thinkingLevel: ConfiguredThinkingLevel;
+	/** Already fitted to `model`; undefined lets the child session resolve its own default. */
+	thinkingLevel: ConfiguredThinkingLevel | undefined;
 }
 
 type ChildSessionOptionsBuilder = (sessionManager: SessionManager, settings: Settings) => CreateAgentSessionOptions;
@@ -1918,16 +1904,15 @@ async function resolveRunModel(ctx: ChildSessionContext): Promise<RunModel> {
 			resolvedModel: model.id,
 		});
 	}
-	const retryFallbackRole = installAgentRetryFallbackChain({
+	const retryFallbackKey = installAgentRetryFallbackChain({
 		settings,
-		id: options.id,
 		candidates: resolveAgentRetryFallbackCandidates(modelPatterns, modelRegistry, settings),
 		model,
 		authFallbackUsed,
 	});
-	if (retryFallbackRole) {
+	if (retryFallbackKey) {
 		logger.debug("Configured agent runtime model fallback chain", {
-			role: retryFallbackRole,
+			key: retryFallbackKey,
 			requested: modelPatterns,
 		});
 	}
@@ -1936,18 +1921,25 @@ async function resolveRunModel(ctx: ChildSessionContext): Promise<RunModel> {
 		resolution.thinkingLevel,
 		options.thinkingLevel,
 	);
+	// `inherit` takes the parent's live effort, which was fitted to the PARENT's model. Fitting it, or a
+	// configured level, to the model this agent resolved to here makes the badge and the child session
+	// state the one level the child runs at; a level its model does not accept named a run that never
+	// happened. A parent with no level leaves nothing to inherit, so the child resolves its own default.
+	const requested =
+		selected === undefined || selected === ThinkingLevel.Inherit ? options.parentThinkingLevel : selected;
 	const thinkingLevel =
-		selected === undefined || selected === ThinkingLevel.Inherit
-			? (options.parentThinkingLevel ?? ThinkingLevel.Inherit)
-			: selected;
+		model === undefined || requested === undefined || requested === AUTO_THINKING
+			? requested
+			: resolveThinkingLevelForModel(model, requested);
 	if (model) {
 		if (model.contextWindow && model.contextWindow > 0) monitor.progress.contextWindow = model.contextWindow;
 		// The badge carries the effort this agent ACTUALLY runs at, not only an effort somebody typed as
 		// a `:level` suffix. Effort inherits on its own axis (this agent's row, then the blanket agent
 		// effort, then frontmatter, then the session), so the ordinary case is an agent running at a
 		// definite effort that no suffix names; a bare model there reads as "no effort level" next to a
-		// sibling that shows one.
-		monitor.progress.resolvedModel = resolvedModelBadge(model, thinkingLevel);
+		// sibling that shows one. With no level requested the session picks its own, so the badge waits
+		// for the session to state it.
+		if (requested !== undefined) monitor.progress.resolvedModel = resolvedModelBadge(model, thinkingLevel);
 	}
 	return { modelRegistry, model, thinkingLevel };
 }
@@ -2017,7 +2009,7 @@ function childSessionOptionsBuilder(ctx: ChildSessionContext, runModel: RunModel
 	const { modelRegistry, model, thinkingLevel } = runModel;
 	const id = options.id;
 	// A requested pattern that resolved to no model is handed to the session to resolve itself, with
-	// the parent's model as its auth fallback and the run's retry chain as its fallback role.
+	// the parent's model as its auth fallback and the run's retry chain as its fallback chain.
 	const deferredPattern = !model && options.modelOverride !== undefined;
 	const mcpProxyTools = options.mcpManager ? createMCPProxyTools(options.mcpManager) : [];
 	const promptInputs: AgentPromptInputs = {
@@ -2040,7 +2032,7 @@ function childSessionOptionsBuilder(ctx: ChildSessionContext, runModel: RunModel
 		model,
 		modelPattern: deferredPattern ? modelPatterns : undefined,
 		modelPatternAuthFallback: deferredPattern ? options.parentActiveModelPattern : undefined,
-		modelPatternFallbackRole: deferredPattern ? `${AGENT_RETRY_FALLBACK_ROLE_PREFIX}${id}` : undefined,
+		modelPatternFallbackChain: deferredPattern,
 		thinkingLevel,
 		toolNames,
 		requireYieldTool: true,
@@ -2177,8 +2169,9 @@ async function openChildSession(ctx: ChildSessionContext): Promise<OpenedChildSe
 	// events; the subscription survives this run.
 	syncStatusWithTurns(AgentRegistry.global(), options.id, session);
 	// No override resolved, so the session picked its model itself: the parent's, or the persisted
-	// default. The badge names what runs either way, at the effort the session settled on — `auto`
-	// resolved, an unsupported level clamped — the same authority the follow-up turn reads.
+	// default. Or no effort was requested, so the session picked its own level. The badge names what
+	// runs either way, at the effort the session settled on — `auto` resolved, an unsupported level
+	// clamped — the same authority the follow-up turn reads.
 	const progress = monitor.progress;
 	if (!progress.resolvedModel && session.model) {
 		progress.resolvedModel = resolvedModelBadge(session.model, session.thinkingLevel);

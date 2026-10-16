@@ -59,6 +59,8 @@ interface RetryAttempt {
 	/** Every attempt on the current model is spent; only a model switch can retry. */
 	readonly budgetExhausted: boolean;
 	readonly classifierRefusal: boolean;
+	/** The provider refused the model for the account's plan; only another account or model can serve it. */
+	readonly modelNotInPlan: boolean;
 	readonly options: RetryEntryOptions | undefined;
 	delayMs: number;
 	switchedCredential: boolean;
@@ -494,6 +496,7 @@ export class RetryRuntime {
 			// configured chain.
 			budgetExhausted: this.#attempt > policy.maxRetries,
 			classifierRefusal: isClassifierRefusal(message),
+			modelNotInPlan: AIError.is(id, AIError.Flag.ModelNotInPlan),
 			options,
 			delayMs: staleReplay ? 0 : calculateRetryBackoffDelayMs(policy.baseDelayMs, this.#attempt),
 			switchedCredential: false,
@@ -572,6 +575,7 @@ export class RetryRuntime {
 				retryAfterMs,
 				baseUrl: model.baseUrl,
 				modelId: model.id,
+				modelNotInPlan: attempt.modelNotInPlan,
 			},
 		);
 		// A live usage-limit 429 on the active Codex account, with a banked reset and the opt-in
@@ -641,21 +645,8 @@ export class RetryRuntime {
 	async #closeUnrecoverable(attempt: RetryAttempt, maxDelayMs: number): Promise<boolean> {
 		const { message, switchedModel } = attempt;
 		if (attempt.budgetExhausted) {
-			if (!switchedModel) {
-				await this.#host.persistLifecycleErrorMessage(message);
-				// Max retries exceeded and no fallback model to switch to: emit
-				// final failure and reset.
-				await this.#host.emitSessionEvent({
-					type: "auto_retry_end",
-					success: false,
-					attempt: this.#attempt - 1,
-					finalError: message.errorMessage,
-				});
-				this.#pendingRecoveredErrors = [];
-				this.#attempt = 0;
-				this.resolve(); // Resolve so waitForRetry() completes
-				return true;
-			}
+			// Max retries exceeded and no fallback model to switch to.
+			if (!switchedModel) return this.#endWithFailure(message, this.#attempt - 1, message.errorMessage);
 			// The fallback model gets a fresh retry budget — leaving the spent
 			// counter in place would exhaust it again on its first error.
 			this.#attempt = 1;
@@ -664,6 +655,11 @@ export class RetryRuntime {
 			this.#attempt = 0;
 			this.resolve();
 			return true;
+		}
+		// No account of this provider can serve the model on its plan and no fallback model took over.
+		// Waiting changes nothing the provider said, so the refusal is surfaced instead of retried.
+		if (attempt.modelNotInPlan && !attempt.switchedCredential && !switchedModel) {
+			return this.#endWithFailure(message, this.#attempt, attempt.errorMessage);
 		}
 		// A fallback switch was the whole reason we entered (Fast→base degrade or
 		// a hard-error chain consult) but it could not happen (e.g. no candidate
@@ -685,20 +681,23 @@ export class RetryRuntime {
 		// can act on it.
 		const { delayMs } = attempt;
 		if (maxDelayMs > 0 && delayMs > maxDelayMs && !attempt.switchedCredential && !switchedModel) {
-			await this.#host.persistLifecycleErrorMessage(message);
-			const ended = this.#attempt;
-			this.#attempt = 0;
-			await this.#host.emitSessionEvent({
-				type: "auto_retry_end",
-				success: false,
-				attempt: ended,
-				finalError: `Provider requested ${delayMs}ms wait, exceeds retry.maxDelayMs (${maxDelayMs}ms). Original error: ${attempt.errorMessage}`,
-			});
-			this.#pendingRecoveredErrors = [];
-			this.resolve();
-			return true;
+			return this.#endWithFailure(
+				message,
+				this.#attempt,
+				`Provider requested ${delayMs}ms wait, exceeds retry.maxDelayMs (${maxDelayMs}ms). Original error: ${attempt.errorMessage}`,
+			);
 		}
 		return false;
+	}
+
+	/** Keep `message` as the turn's error, report the sequence ended at `attempt` with `finalError`, and end it. */
+	async #endWithFailure(message: AssistantMessage, attempt: number, finalError: string | undefined): Promise<true> {
+		await this.#host.persistLifecycleErrorMessage(message);
+		this.#attempt = 0;
+		await this.#host.emitSessionEvent({ type: "auto_retry_end", success: false, attempt, finalError });
+		this.#pendingRecoveredErrors = [];
+		this.resolve(); // Resolve so waitForRetry() completes
+		return true;
 	}
 
 	/**

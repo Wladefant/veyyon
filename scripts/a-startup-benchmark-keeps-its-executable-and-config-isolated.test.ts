@@ -5,8 +5,8 @@
  * startup performance or detect a replacement restored before the final digest.
  *
  * A bench started from a veyyon session inherited `VEYYON_CODING_AGENT_DIR`, so every
- * measured launch loaded the caller's profile: its model roles, its credentials and the
- * network discovery an unresolvable role triggers, while the seeded home went unread.
+ * measured launch loaded the caller's profile: its default model, its credentials and the
+ * network discovery an unresolvable model triggers, while the seeded home went unread.
  * The directory-override sweep covers every spawn site the version and frame arms reach
  * (the natives probe, `timeRun`, `recordFrame`). It does not cover the settled and
  * responsive arms, which build their child environment from nothing.
@@ -37,22 +37,22 @@ afterEach(async () => {
 	for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true });
 });
 
-test.each([
-	"",
-	"startup:\n  checkUpdate: true\n  autoUpdate: true\n  quiet: false\nmodelRoles:\n  default: study/model\n",
-])("disables both update controls while preserving other seed values: %j", async source => {
-	const directory = await scratch();
-	const file = path.join(directory, "config.yml");
-	if (source) await writeFile(file, source);
-	await disableBenchmarkUpdates(file);
-	const config = parseDocument(await readFile(file, "utf8"));
-	expect(config.getIn(["startup", "checkUpdate"])).toBe(false);
-	expect(config.getIn(["startup", "autoUpdate"])).toBe(false);
-	if (source) {
-		expect(config.getIn(["startup", "quiet"])).toBe(false);
-		expect(config.getIn(["modelRoles", "default"])).toBe("study/model");
-	}
-});
+test.each(["", "startup:\n  checkUpdate: true\n  autoUpdate: true\n  quiet: false\ndefaultModel: study/model\n"])(
+	"disables both update controls while preserving other seed values: %j",
+	async source => {
+		const directory = await scratch();
+		const file = path.join(directory, "config.yml");
+		if (source) await writeFile(file, source);
+		await disableBenchmarkUpdates(file);
+		const config = parseDocument(await readFile(file, "utf8"));
+		expect(config.getIn(["startup", "checkUpdate"])).toBe(false);
+		expect(config.getIn(["startup", "autoUpdate"])).toBe(false);
+		if (source) {
+			expect(config.getIn(["startup", "quiet"])).toBe(false);
+			expect(config.getIn(["defaultModel"])).toBe("study/model");
+		}
+	},
+);
 
 test("rejects malformed seed YAML without rewriting it", async () => {
 	const directory = await scratch();

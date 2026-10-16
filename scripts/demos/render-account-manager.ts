@@ -82,6 +82,7 @@ const callbacks = {
 	onShowUsage: noop,
 	onAddAccount: noop,
 	onClearRateLimitBlock: noop,
+	onForgetSignedOut: noop,
 	onCancel: noop,
 };
 

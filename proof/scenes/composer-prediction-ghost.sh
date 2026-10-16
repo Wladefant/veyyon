@@ -62,7 +62,6 @@ off)
 	settle 45
 	screen_has "ask anything" || abandon_take "predicted" "the off arm replaced the resting hint"
 	screen_has "tab to accept" && abandon_take "predicted" "the off arm shows an accept hint"
-	shot predicted
 	;;
 on)
 	waited=0
@@ -75,10 +74,13 @@ on)
 	settle 2
 	screen_has "tab to accept" || abandon_take "predicted" "the prediction shows no accept hint"
 	settle 6
-	shot predicted
+	;;
+esac
+shot predicted
+
+if [ "${arm}" = on ]; then
 	k Tab
 	settle 2
 	screen_has "tab to accept" && abandon_take "tab" "the accept hint outlived the inserted suggestion"
 	shot tab
-	;;
-esac
+fi

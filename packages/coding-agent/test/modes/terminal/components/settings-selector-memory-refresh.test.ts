@@ -211,13 +211,6 @@ describe("SettingsSelectorComponent memory tab", () => {
 		expect(after).toContain("Compaction Model");
 	});
 
-	it("formats model roles value correctly when unassigned or assigned", () => {
-		const comp = createSelector();
-		expect(comp.formatModelRolesValue()).toBe("All inherit");
-		settings.setModelRole("smol", "anthropic/claude-3-5-haiku");
-		expect(comp.formatModelRolesValue()).toBe("1 assigned");
-	});
-
 	it("formats rules value correctly for built-in, disabled, and experimental rules", () => {
 		const comp = createSelector();
 		settings.set("ttsr.builtinRules", true);

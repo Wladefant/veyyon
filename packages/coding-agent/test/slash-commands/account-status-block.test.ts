@@ -383,7 +383,7 @@ describe("the status block points at a signed-out login", () => {
 		};
 
 		expect(render(withDeadLogin, fullRoles)).toContain(
-			"  1 provider has a signed-out login (Kimi Code) · /providers to sign in again",
+			"  1 provider has a signed-out login (Kimi Code) · /providers to sign in again or forget it",
 		);
 	});
 
@@ -399,7 +399,7 @@ describe("the status block points at a signed-out login", () => {
 		};
 
 		expect(render(withTwo, fullRoles)).toContain(
-			"  2 providers have a signed-out login (Kimi Code, Cursor) · /providers to sign in again",
+			"  2 providers have a signed-out login (Kimi Code, Cursor) · /providers to sign in again or forget it",
 		);
 	});
 
@@ -481,7 +481,7 @@ describe("styled account status applies AccountStatusStyle", () => {
 		};
 		const rendered = renderAccountStatus(withDeadLogin, NOW, fullRoles, mockStyle).join("\n");
 		expect(rendered).toContain(
-			"[WARN:1 provider has a signed-out login (Kimi Code)][MUTED: · ][CMD:/providers][MUTED: to sign in again]",
+			"[WARN:1 provider has a signed-out login (Kimi Code)][MUTED: · ][CMD:/providers][MUTED: to sign in again or forget it]",
 		);
 	});
 });

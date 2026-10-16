@@ -200,7 +200,7 @@ describe("AgentSession retry recovery", () => {
 			"retry.maxDelayMs": 100,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		const sessionManager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), "sessions"));
 		const session = new AgentSession({
@@ -313,7 +313,7 @@ describe("AgentSession retry recovery", () => {
 			"retry.maxRetries": 1,
 			"retry.modelFallback": false,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		const sessionManager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), "sessions"));
 		const session = new AgentSession({

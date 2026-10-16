@@ -115,7 +115,6 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 	model: [
 		"Models",
 		"Compaction",
-		"Roles",
 		"Thinking",
 		"Sampling",
 		"Prompt",
@@ -196,17 +195,6 @@ export type StatusLineSegmentId =
 // ═══════════════════════════════════════════════════════════════════════════
 // Schema Definition
 // ═══════════════════════════════════════════════════════════════════════════
-
-export interface ModelTagDef {
-	name: string;
-	color?: string;
-	/** If true, the role is functional but not shown in the model selector UI. */
-	hidden?: boolean;
-}
-
-export interface ModelTagsSettings {
-	[key: string]: ModelTagDef;
-}
 
 /**
  * Every domain slice, keyed by its file, in the order they are composed below.
@@ -366,9 +354,6 @@ export interface GroupTypeMap {
 	statusLine: StatusLineSettings;
 	thinkingBudgets: ThinkingBudgetsSettings;
 	stt: SttSettings;
-	modelRoles: Record<string, string>;
-	modelTags: ModelTagsSettings;
-	cycleOrder: string[];
 	shellMinimizer: ShellMinimizerSettings;
 	codexResets: CodexResetsSettings;
 	gc: GcSettings;
