@@ -5,14 +5,12 @@ import {
 	type GitLabDuoWorkflowNamespaceSelection,
 } from "@veyyon/catalog/discovery/gitlab-duo-workflow";
 import { GITLAB_SAAS_URL } from "@veyyon/catalog/provider-endpoints";
-import { tryParseJson } from "@veyyon/utils/json";
 import * as logger from "@veyyon/utils/logger";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { errorMessage, getNonBlankStringProperty, isRecord } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { parseToolArgsText } from "../dialect/coercion";
 import * as AIError from "../error";
-import { AI_PROMPTS } from "../prompts/registry";
 import type {
 	AssistantMessage,
 	Context,
@@ -27,10 +25,23 @@ import type {
 	ToolChoice,
 	ToolResultMessage,
 } from "../types";
-import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { openBoundedFirstEventBudget } from "../utils/first-event-budget";
 import { toolWireSchema } from "../utils/schema/wire";
+import {
+	extractGitLabDuoWorkflowAction,
+	extractGitLabDuoWorkflowCheckpoint,
+	type GitLabDuoWorkflowActionDescriptor,
+	type GitLabDuoWorkflowCheckpointAgentEntry,
+	type GitLabDuoWorkflowCheckpointContent,
+	type GitLabDuoWorkflowCheckpointKind,
+	type GitLabDuoWorkflowContextUsage,
+	getNestedRecordString,
+	getRecord,
+	getRecordString,
+	parseGitLabDuoWorkflowSocketData,
+} from "./gitlab-duo-workflow/frames";
+import { buildGitLabDuoWorkflowGoal, buildGitLabDuoWorkflowSystemPrompt } from "./gitlab-duo-workflow/goal";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
 
 export const GITLAB_DUO_WORKFLOW_PROVIDER_ID = "gitlab-duo-agent";
@@ -177,8 +188,6 @@ const GITLAB_DUO_WORKFLOW_INLINE_UI_LOG_EVENTS = [
 	"on_tool_execution_success",
 	"on_tool_execution_failed",
 ] as const;
-
-const GITLAB_DUO_WORKFLOW_ACTION_NAMES = ["runMCPTool", "run_mcp_tool"] as const;
 
 export interface GitLabMcpToolArgs {
 	name?: string;
@@ -350,12 +359,6 @@ export interface GitLabDuoWorkflowActionResponse {
 		requestID: string;
 		plainTextResponse?: GitLabPlainTextResponse;
 	};
-}
-
-interface GitLabDuoWorkflowActionDescriptor {
-	requestID: string;
-	name: string;
-	args: unknown;
 }
 
 export interface GitLabDuoWorkflowActiveSession {
@@ -2323,36 +2326,6 @@ type GitLabDuoWorkflowMessageResult =
 	| "retryable_error"
 	| "stalled";
 
-type GitLabDuoWorkflowCheckpointKind = "text" | "thinking";
-
-interface GitLabDuoWorkflowCheckpointAgentEntry {
-	kind: GitLabDuoWorkflowCheckpointKind;
-	messageIndex: number;
-	messageKey: string;
-	content: string;
-}
-
-interface GitLabDuoWorkflowCheckpointBoundaryEntry {
-	kind: "boundary";
-	messageIndex: number;
-}
-
-type GitLabDuoWorkflowCheckpointEntry =
-	| GitLabDuoWorkflowCheckpointAgentEntry
-	| GitLabDuoWorkflowCheckpointBoundaryEntry;
-
-interface GitLabDuoWorkflowContextUsage {
-	used: number;
-	window: number;
-}
-
-interface GitLabDuoWorkflowCheckpointContent {
-	entries: GitLabDuoWorkflowCheckpointEntry[];
-	contentLength: number;
-	latestMessageType?: string;
-	contextUsage?: GitLabDuoWorkflowContextUsage;
-}
-
 async function handleGitLabDuoWorkflowSocketMessage(
 	data: unknown,
 	state: GitLabDuoWorkflowStreamState,
@@ -2804,211 +2777,6 @@ function pauseGitLabDuoWorkflowStream(state: GitLabDuoWorkflowStreamState): void
 	state.output.stopDetails = { type: "pause_turn" };
 	state.stream.push({ type: "done", reason: "stop", message: state.output });
 }
-interface GitLabDuoWorkflowReplayToolCall {
-	id: string;
-	name: string;
-	arguments: Record<string, unknown>;
-}
-
-interface GitLabDuoWorkflowReplayMessage {
-	role: "user" | "assistant" | "tool";
-	content: string;
-	toolCalls?: GitLabDuoWorkflowReplayToolCall[];
-	toolCallId?: string;
-	toolName?: string;
-	isError?: boolean;
-}
-
-// Trimmed once: the static note tells the model the goal transcript's ChatML/`<ran>`
-// markers are a historical record, not a syntax to emit.
-const GITLAB_DUO_WORKFLOW_CHATML_HISTORY_NOTE = AI_PROMPTS["provider/gitlab-duo-workflow-chatml-note"].text.trim();
-
-// The veyyon system prompt that rides the inline flow's `prompt_template.system` slot.
-// DWS wraps it in its own gateway boilerplate, but the slot content is delivered to
-// the model verbatim, so veyyon's authoritative rules go here directly — no redirect
-// preamble and no embedding inside the goal. When the goal is a multi-turn ChatML
-// transcript (not a lone bare-text prompt), append the history-note so the model does
-// not mimic the transcript's `<|im_start|>`/`<ran …>` markers as its own tool-call
-// output — markers it kept copying even after they were reframed to past tense.
-function buildGitLabDuoWorkflowSystemPrompt(context: Context): string {
-	const base = normalizeSystemPrompts(context.systemPrompt).join("\n\n");
-	if (!isGitLabDuoWorkflowChatMlGoal(context)) return base;
-	return base ? `${base}\n\n${GITLAB_DUO_WORKFLOW_CHATML_HISTORY_NOTE}` : GITLAB_DUO_WORKFLOW_CHATML_HISTORY_NOTE;
-}
-
-// A goal renders as a literal ChatML transcript only when more than one turn survives
-// the replay filter; a lone turn is sent as bare text (see buildGitLabDuoWorkflowGoal),
-// so the history-note would describe markers that are not present.
-function isGitLabDuoWorkflowChatMlGoal(context: Context): boolean {
-	return buildGitLabDuoWorkflowConversationHistory(context.messages).length > 1;
-}
-
-// The goal carries ONLY the conversation, rendered as a bare ChatML transcript. The
-// system prompt lives in the flow's system slot, so the goal needs no envelope, no
-// `<instructions>` section, and no preamble. A lone turn is sent verbatim; a real
-// multi-turn session becomes the flat ChatML transcript, every turn equal-weight,
-// ending naturally on the last turn. ChatML markers are literal text here (DWS does
-// not tokenize the goal as a chat template), chosen because `<|im_start|>`/`<|im_end|>`
-// effectively never collide with natural message content and are not Claude-reserved
-// conversation sequences the way `Human:`/`Assistant:` are.
-function buildGitLabDuoWorkflowGoal(context: Context): string {
-	const conversation = buildGitLabDuoWorkflowConversationHistory(context.messages);
-	if (conversation.length <= 1) {
-		return extractLatestUserPrompt(context.messages);
-	}
-	return renderGitLabDuoWorkflowChatMl(conversation);
-}
-
-const GITLAB_DUO_WORKFLOW_CHATML_START = "<|im_start|>";
-const GITLAB_DUO_WORKFLOW_CHATML_END = "<|im_end|>";
-
-// Render the flat transcript as literal ChatML. Each turn is
-// `<|im_start|>role\n<body><|im_end|>`. An assistant turn that issued tool calls
-// renders them after its text as `<ran NAME>{args}</ran>` records — a PAST-tense log
-// of a call that already executed, deliberately NOT the `{name,arguments}` shape the
-// live structured tool-use channel uses, so the model reads history as a record and
-// does not mimic it as emittable call grammar. The paired result rides the next
-// `tool` turn, linked by adjacency (1 call/turn), so the chain stays intact.
-function renderGitLabDuoWorkflowChatMl(conversation: readonly GitLabDuoWorkflowReplayMessage[]): string {
-	return conversation.map(renderGitLabDuoWorkflowChatMlTurn).join("\n");
-}
-
-function renderGitLabDuoWorkflowChatMlTurn(message: GitLabDuoWorkflowReplayMessage): string {
-	const body = gitLabDuoWorkflowChatMlBody(message);
-	return `${GITLAB_DUO_WORKFLOW_CHATML_START}${message.role}\n${body}${GITLAB_DUO_WORKFLOW_CHATML_END}`;
-}
-
-function gitLabDuoWorkflowChatMlBody(message: GitLabDuoWorkflowReplayMessage): string {
-	const parts: string[] = [];
-	if (message.content.length > 0) parts.push(message.content);
-	if (message.role === "assistant" && message.toolCalls) {
-		for (const toolCall of message.toolCalls) {
-			parts.push(renderGitLabDuoWorkflowChatMlToolCall(toolCall));
-		}
-	}
-	if (message.role === "tool") {
-		const header = gitLabDuoWorkflowChatMlToolResultHeader(message);
-		return header ? `${header}\n${message.content}\n` : `${message.content}\n`;
-	}
-	return `${parts.join("\n")}\n`;
-}
-
-function gitLabDuoWorkflowChatMlToolResultHeader(message: GitLabDuoWorkflowReplayMessage): string | undefined {
-	if (!message.toolName && !message.toolCallId) return undefined;
-	const status = message.isError ? " status=error" : "";
-	// The tool name is omitted: the result rides the turn immediately after its call
-	// (1:1, adjacent), so the model pairs them by position; repeating the name is dead
-	// weight and makes the result read like an independent construct. `<ran:result>` is
-	// past-tense — the adjacent output of the prior historical run, not emittable grammar.
-	return `<ran:result${status}>`;
-}
-
-function renderGitLabDuoWorkflowChatMlToolCall(toolCall: GitLabDuoWorkflowReplayToolCall): string {
-	// The goal is a plain text transcript fed to the model, not an HTML/script
-	// context, so `<`/`>` need no escaping. Render as a past-tense `<ran NAME>` record:
-	// the tag names the tool, the body is just the arguments JSON (the `{name,arguments}`
-	// wrapper is dropped — it was the exact shape the model copied as a would-be live
-	// call). The call id is veyyon-internal wiring the model never reads (call→result pair
-	// by adjacency), so it is omitted to save bytes. `arguments` carries the `i` (intent)
-	// key only at live dispatch; on replay it is stripped (see gitLabDuoWorkflowAssistantToolCalls).
-	const args = JSON.stringify(toolCall.arguments) ?? "null";
-	return `<ran ${toolCall.name}>${args}</ran>`;
-}
-
-// The whole session as a flat, equal-weight transcript. Every turn — including the
-// latest user message — is one entry; nothing is elevated to a privileged
-// `<current_request>`. DWS' goal blob has no native turn priority, so elevating the
-// last turn (the old template) caused mid-task reminders / IRC wakes to outrank the
-// actual task. A flat transcript ending naturally on the last turn removes that skew.
-function buildGitLabDuoWorkflowConversationHistory(messages: readonly Message[]): GitLabDuoWorkflowReplayMessage[] {
-	const history: GitLabDuoWorkflowReplayMessage[] = [];
-	for (let index = 0; index < messages.length; index++) {
-		const replayMessage = buildGitLabDuoWorkflowReplayMessage(messages[index]);
-		if (replayMessage) history.push(replayMessage);
-	}
-	return history;
-}
-
-function buildGitLabDuoWorkflowReplayMessage(message: Message | undefined): GitLabDuoWorkflowReplayMessage | undefined {
-	if (!message) return undefined;
-	if (message.role === "toolResult") {
-		const content = gitLabDuoWorkflowMessageContentToText(message);
-		return {
-			role: "tool",
-			content,
-			toolCallId: message.toolCallId,
-			toolName: message.toolName,
-			isError: message.isError,
-		};
-	}
-	if (message.role === "assistant") {
-		const content = gitLabDuoWorkflowMessageContentToText(message);
-		const toolCalls = gitLabDuoWorkflowAssistantToolCalls(message);
-		if (content.length === 0 && toolCalls.length === 0) return undefined;
-		return toolCalls.length > 0 ? { role: "assistant", content, toolCalls } : { role: "assistant", content };
-	}
-	const content = gitLabDuoWorkflowMessageContentToText(message);
-	if (content.length === 0) return undefined;
-	return { role: "user", content };
-}
-
-function gitLabDuoWorkflowAssistantToolCalls(message: AssistantMessage): GitLabDuoWorkflowReplayToolCall[] {
-	const toolCalls: GitLabDuoWorkflowReplayToolCall[] = [];
-	for (const item of message.content) {
-		if (item.type === "toolCall") {
-			toolCalls.push({
-				id: item.id,
-				name: item.name,
-				arguments: stripGitLabDuoWorkflowReplayIntent(item.arguments),
-			});
-		}
-	}
-	return toolCalls;
-}
-
-// The `i` key is veyyon's per-call intent narration (e.g. "Reading kernel smoke body").
-// It is UI-time metadata describing the call as it is made; on replay the tool name
-// plus arguments already say what the call did, so the intent is dead transcript
-// weight. Drop it from the rendered history. (Live dispatch never reads the replayed
-// args, so this only affects the bytes the model sees, never tool execution.)
-function stripGitLabDuoWorkflowReplayIntent(args: Record<string, unknown>): Record<string, unknown> {
-	if (!("i" in args)) return args;
-	const { i: _intent, ...rest } = args;
-	return rest;
-}
-
-function extractLatestUserPrompt(messages: readonly Message[]): string {
-	const index = findLatestGitLabDuoWorkflowUserMessageIndex(messages);
-	if (index < 0) return "";
-	return gitLabDuoWorkflowUserContentToText(messages[index] as Exclude<Message, AssistantMessage>);
-}
-
-function findLatestGitLabDuoWorkflowUserMessageIndex(messages: readonly Message[]): number {
-	for (let index = messages.length - 1; index >= 0; index--) {
-		const message = messages[index];
-		if (message?.role === "user" || message?.role === "developer") return index;
-	}
-	return -1;
-}
-
-function gitLabDuoWorkflowMessageContentToText(message: Message): string {
-	if (message.role === "assistant") {
-		return message.content
-			.map(item => {
-				if (item.type === "text") return item.text;
-				if (item.type === "thinking" || item.type === "redactedThinking") return "";
-				return "";
-			})
-			.join("\n");
-	}
-	return gitLabDuoWorkflowUserContentToText(message);
-}
-
-function gitLabDuoWorkflowUserContentToText(message: Exclude<Message, AssistantMessage>): string {
-	if (typeof message.content === "string") return message.content;
-	return message.content.map(item => (item.type === "text" ? item.text : `[${item.mimeType} image]`)).join("\n");
-}
-
 export function describeGitLabDuoWorkflowSocketEvent(event: unknown): string {
 	const fields: string[] = [];
 	if (event && typeof event === "object") {
@@ -3168,223 +2936,4 @@ function resolveGitLabDuoWorkflowDefinition(
 		nonEmptyString(Bun.env.GITLAB_DUO_WORKFLOW_DEFINITION) ??
 		GITLAB_DUO_WORKFLOW_DEFINITION;
 	return configured;
-}
-
-function parseGitLabDuoWorkflowSocketData(data: unknown): Record<string, unknown> | null {
-	if (typeof data === "string") return parseJsonRecord(data);
-	if (data instanceof ArrayBuffer) return parseJsonRecord(new TextDecoder().decode(data));
-	if (data instanceof Uint8Array) return parseJsonRecord(new TextDecoder().decode(data));
-	if (data && typeof data === "object") return data as Record<string, unknown>;
-	return null;
-}
-
-function parseJsonRecord(text: string): Record<string, unknown> | null {
-	const parsed = tryParseJson(text);
-	return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
-}
-
-function numberField(record: Record<string, unknown>, key: string): number | undefined {
-	const value = record[key];
-	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-function extractGitLabDuoWorkflowCheckpoint(
-	event: Record<string, unknown>,
-): GitLabDuoWorkflowCheckpointContent | undefined {
-	const action = getRecord(event, "action");
-	const checkpoint =
-		getRecord(action, "newCheckpoint") ?? getRecord(event, "newCheckpoint") ?? getRecord(event, "checkpoint");
-	if (!checkpoint) return undefined;
-	const directText =
-		getRecordString(checkpoint, "message") ??
-		getRecordString(checkpoint, "text") ??
-		getRecordString(checkpoint, "content") ??
-		getNestedRecordString(checkpoint, "checkpoint", "message") ??
-		getNestedRecordString(checkpoint, "checkpoint", "text");
-	const contextUsage = extractGitLabDuoWorkflowContextUsage(event, action, checkpoint);
-	if (directText) {
-		return {
-			entries: [{ kind: "text", messageIndex: 0, messageKey: "direct:text", content: directText }],
-			contentLength: directText.length,
-			contextUsage,
-		};
-	}
-	const checkpointJson = getRecordString(checkpoint, "checkpoint");
-	const content = checkpointJson ? extractGitLabCheckpointEntries(checkpointJson) : undefined;
-	if (content) {
-		if (contextUsage) content.contextUsage = contextUsage;
-		return content;
-	}
-	if (contextUsage) {
-		return { entries: [], contentLength: 0, contextUsage };
-	}
-	return undefined;
-}
-
-// GitLab Duo Workflow Service attaches per-agent context occupancy to every checkpoint
-// (`checkpointer/notifier.py`): agent_context_usage[<agent>] = { total_tokens, max_tokens }.
-// total_tokens is the server-side token estimate of that agent's full history; max_tokens
-// is the model context window (claude_opus_4_8 observed at 1_000_000). The field rides on
-// the event root in practice but can also appear under `action`/`newCheckpoint`.
-function extractGitLabDuoWorkflowContextUsage(
-	...sources: (Record<string, unknown> | undefined)[]
-): GitLabDuoWorkflowContextUsage | undefined {
-	for (const source of sources) {
-		const usageMap = getRecord(source, "agent_context_usage");
-		if (!usageMap) continue;
-		const selected = selectGitLabDuoWorkflowContextUsageAgent(usageMap);
-		if (selected) return selected;
-	}
-	return undefined;
-}
-
-const GITLAB_DUO_WORKFLOW_CONTEXT_AGENT_PRIORITY = ["Chat Agent", "context_builder"];
-
-function selectGitLabDuoWorkflowContextUsageAgent(
-	usageMap: Record<string, unknown>,
-): GitLabDuoWorkflowContextUsage | undefined {
-	for (const preferred of GITLAB_DUO_WORKFLOW_CONTEXT_AGENT_PRIORITY) {
-		const usage = readGitLabDuoWorkflowAgentUsage(usageMap[preferred]);
-		if (usage) return usage;
-	}
-	for (const value of Object.values(usageMap)) {
-		const usage = readGitLabDuoWorkflowAgentUsage(value);
-		if (usage) return usage;
-	}
-	return undefined;
-}
-
-function readGitLabDuoWorkflowAgentUsage(value: unknown): GitLabDuoWorkflowContextUsage | undefined {
-	if (!value || typeof value !== "object") return undefined;
-	const record = value as Record<string, unknown>;
-	const used = numberField(record, "total_tokens");
-	const window = numberField(record, "max_tokens");
-	if (used === undefined || window === undefined || window <= 0) return undefined;
-	return { used, window };
-}
-
-function extractGitLabCheckpointEntries(checkpointJson: string): GitLabDuoWorkflowCheckpointContent | undefined {
-	const checkpoint = parseJsonRecord(checkpointJson);
-	const chatLog = getRecord(checkpoint, "channel_values")?.ui_chat_log;
-	if (!Array.isArray(chatLog)) return undefined;
-	const entries: GitLabDuoWorkflowCheckpointEntry[] = [];
-	for (let index = 0; index < chatLog.length; index++) {
-		const entry = readGitLabDuoWorkflowChatLogEntry(chatLog[index], index);
-		if (entry) entries.push(entry);
-	}
-	return {
-		entries,
-		contentLength: checkpointJson.length,
-		latestMessageType: getGitLabDuoWorkflowLatestMessageType(chatLog),
-	};
-}
-
-/** Maps one `ui_chat_log` record to a checkpoint entry: agent text or reasoning, or a request/tool turn boundary. */
-function readGitLabDuoWorkflowChatLogEntry(
-	value: unknown,
-	index: number,
-): GitLabDuoWorkflowCheckpointEntry | undefined {
-	if (!value || typeof value !== "object") return undefined;
-	const messageType = getRecordString(value, "message_type");
-	if (messageType === "request" || messageType === "tool") return { kind: "boundary", messageIndex: index };
-	if (messageType !== "agent") return undefined;
-	const content = getRecordString(value, "content");
-	if (!content) return undefined;
-	const messageId = getRecordString(value, "message_id");
-	// `message_sub_type: "reasoning"` is the agent's pre-tool-call
-	// commentary the inline flow opts into via `on_agent_reasoning`; map it
-	// to a thinking block. Other agent text is the answer → text.
-	const isReasoning = getRecordString(value, "message_sub_type") === "reasoning";
-	return {
-		kind: isReasoning ? "thinking" : "text",
-		messageIndex: index,
-		messageKey: messageId ? `agent:${messageId}` : isReasoning ? `reasoning:${index}` : `agent:${index}`,
-		content,
-	};
-}
-
-function getGitLabDuoWorkflowLatestMessageType(chatLog: unknown[]): string | undefined {
-	for (let index = chatLog.length - 1; index >= 0; index--) {
-		const entry = chatLog[index];
-		if (!entry || typeof entry !== "object") continue;
-		const messageType = getRecordString(entry, "message_type");
-		if (messageType) return messageType;
-	}
-	return undefined;
-}
-
-function extractGitLabDuoWorkflowAction(event: Record<string, unknown>): GitLabDuoWorkflowActionDescriptor | undefined {
-	const wrappedAction =
-		getRecord(event, "action") ?? getRecord(event, "workflowAction") ?? getRecord(event, "toolCall");
-	if (wrappedAction) {
-		if (getRecord(wrappedAction, "newCheckpoint")) return undefined;
-		const name =
-			getRecordString(wrappedAction, "name") ??
-			getRecordString(wrappedAction, "action") ??
-			getRecordString(wrappedAction, "type") ??
-			getRecordString(event, "actionName");
-		if (!name) return undefined;
-		const requestID =
-			getRecordString(wrappedAction, "requestID") ??
-			getRecordString(wrappedAction, "requestId") ??
-			getRecordString(wrappedAction, "id") ??
-			getRecordString(event, "requestID") ??
-			getRecordString(event, "requestId");
-		const resolvedRequestID = requireGitLabDuoWorkflowRequestID(requestID, name, wrappedAction);
-		const args = getRecord(wrappedAction, "args") ?? getRecord(wrappedAction, "arguments") ?? wrappedAction;
-		return { requestID: resolvedRequestID, name, args: withGitLabDuoWorkflowToolCallId(args, resolvedRequestID) };
-	}
-	for (const name of GITLAB_DUO_WORKFLOW_ACTION_NAMES) {
-		const args = getRecord(event, name);
-		if (args) {
-			const requestID = getRecordString(event, "requestID") ?? getRecordString(event, "requestId");
-			const resolvedRequestID = requireGitLabDuoWorkflowRequestID(requestID, name, event);
-			return { requestID: resolvedRequestID, name, args: withGitLabDuoWorkflowToolCallId(args, resolvedRequestID) };
-		}
-	}
-	return undefined;
-}
-
-// DWS assigns every executor Action a non-empty `requestID` (contract.proto Action
-// field 1; emitted verbatim by Workhorse's proto->JSON relay). The client MUST echo
-// that exact id back in `actionResponse.requestID` or the server's outbox silently
-// discards the response (outbox.set_action_response: a non-empty id that misses the
-// awaiting-futures map hits the "doesn't expect responses, discarding" branch) and
-// the tool call's future never resolves — the model then re-issues the same tool
-// call, looping. A synthesized id is therefore never correct: it is either redundant
-// (the real id was present) or actively harmful (guaranteed-discarded). Fail fast so
-// the socket loop surfaces a protocol drift instead of stalling.
-function requireGitLabDuoWorkflowRequestID(
-	requestID: string | undefined,
-	actionName: string,
-	source: Record<string, unknown>,
-): string {
-	if (requestID) return requestID;
-	throw new AIError.ValidationError(
-		`GitLab Duo Workflow action "${actionName}" missing requestID (keys: ${Object.keys(source).slice(0, 20).join(", ")})`,
-	);
-}
-
-function withGitLabDuoWorkflowToolCallId(args: unknown, requestID: string): unknown {
-	const record = isRecord(args) ? (args as Record<string, unknown>) : {};
-	if (typeof record.toolCallId === "string" || typeof record.tool_call_id === "string") {
-		return record;
-	}
-	return { ...record, toolCallId: requestID, tool_call_id: requestID };
-}
-
-function getRecord(value: unknown, key: string): Record<string, unknown> | undefined {
-	if (!value || typeof value !== "object") return undefined;
-	const nested = (value as Record<string, unknown>)[key];
-	return nested && typeof nested === "object" ? (nested as Record<string, unknown>) : undefined;
-}
-
-function getRecordString(value: unknown, key: string): string | undefined {
-	if (!value || typeof value !== "object") return undefined;
-	const nested = (value as Record<string, unknown>)[key];
-	return typeof nested === "string" || typeof nested === "number" ? String(nested) : undefined;
-}
-
-function getNestedRecordString(value: unknown, parentKey: string, key: string): string | undefined {
-	return getRecordString(getRecord(value, parentKey), key);
 }
