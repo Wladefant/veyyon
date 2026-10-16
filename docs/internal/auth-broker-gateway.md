@@ -129,7 +129,7 @@ Two layers cache the aggregate provider-usage report. Both are intentional and s
 
 ### Server-side cache (broker `AuthStorage`)
 
-`AuthStorage` caches each credential’s `UsageReport` in the broker’s SQLite store at a **5-minute per-credential TTL with ±25 % jitter**. Anthropic and OpenAI rate-limit `/usage` aggressively per source IP, and a synchronized 5-credential fan-out trips 429s every cycle; the jitter decorrelates refresh times within a few cycles. On fetch failure the store keeps the **last-good** report for up to 24 h with a short jittered re-poll window, so a transient upstream blip never blanks out the widget.
+`AuthStorage` caches each credential’s `UsageReport` in the broker’s SQLite store at a **5-minute per-credential TTL with ±25 % jitter**, through its `UsageReporting` collaborator (`packages/ai/src/auth-storage/usage-reporting.ts`). Anthropic and OpenAI rate-limit `/usage` aggressively per source IP, and a synchronized 5-credential fan-out trips 429s every cycle; the jitter decorrelates refresh times within a few cycles. On fetch failure the store keeps the **last-good** report for up to 24 h with a short jittered re-poll window, so a transient upstream blip never blanks out the widget.
 
 Constants: `USAGE_REPORT_TTL_MS = 5 * 60_000` (`packages/ai/src/auth-credential-rows.ts`), `USAGE_LAST_GOOD_RETENTION_MS = 24 * 60 * 60_000` (`packages/ai/src/auth-storage/usage-cache.ts`).
 
@@ -202,4 +202,4 @@ The broker only owns OAuth credentials and provider-API-key credentials that wer
 - [`../handbook/src/reference/models-yml.md`](../handbook/src/reference/models-yml.md): provider auth resolution order; the broker plugs in at layers 2–3 (stored credentials).
 - [`../handbook/src/reference/environment-complete.md`](../handbook/src/reference/environment-complete.md): full env reference including `VEYYON_AUTH_BROKER_URL` / `VEYYON_AUTH_BROKER_TOKEN`.
 
-*Verified against `87608618e8` on 2026-10-07.*
+*Verified against `2113aabdac` on 2026-10-16.*
