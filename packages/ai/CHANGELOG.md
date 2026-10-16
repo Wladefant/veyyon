@@ -9,6 +9,7 @@
 - Moved the credential health check behind `AuthStorage.checkCredentials` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - Moved Anthropic tool `input_schema` normalization and the strict-tool plan out of `providers/anthropic.ts` into `providers/anthropic-tool-schema.ts`, with no user-visible change.
 - Moved the Cursor native exec result builders (read, write, delete, shell, ls, grep, diagnostics) out of `providers/cursor.ts` into `providers/cursor-exec-results.ts`, with no user-visible change.
+- Moved the Codex WebSocket transport out of `providers/openai-codex-responses.ts` into `providers/openai-codex/websocket.ts`, and the turn-state headers and progress-event check both transports share into `providers/openai-codex/wire.ts`, with no user-visible change.
 
 ### Fixed
 
