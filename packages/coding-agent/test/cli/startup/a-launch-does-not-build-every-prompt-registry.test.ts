@@ -362,11 +362,15 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * provider compat to built models, and which left `config/model-registry.ts`. It imports only what
  * that code imported there. Measured 2026-10-16 at 1490.
  *
+ * 1490 to 1491: `goals/state.ts`, the goal types and `GOAL_STATUSES`, whose only import is
+ * type-only. `goals/goal-record.ts`, already here, checks a recorded goal's status against that
+ * tuple when a session resumes, so a status no build writes restores no goal.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1490;
+const LAUNCH_REACH_CEILING = 1491;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
