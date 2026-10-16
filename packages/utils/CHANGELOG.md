@@ -4,9 +4,14 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `withTimeoutSignal` is removed; use `withScopedTimeoutSignal(timeoutMs, fn, parent?)` or `scopedTimeoutSignal`, whose timer is cleared when the operation settles.
+
 ### Added
 
 - `getBrowserProfilesDir()` returns the persistent browser profiles directory under the agent directory.
+- `withScopedTimeoutSignal` accepts an optional parent signal, combined with its deadline.
 - `settleWithin(promise, timeoutMs, fallback)` resolves with the promise's value, or with `fallback` once the deadline passes, and clears its timer when the promise settles.
 
 ### Fixed

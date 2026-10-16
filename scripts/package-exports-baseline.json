@@ -4459,7 +4459,6 @@
 			"withFileLockSync",
 			"withScopedTimeoutSignal",
 			"withTimeout",
-			"withTimeoutSignal",
 			"workerHostEntry",
 			"wrapFetchForExtraCa",
 			"writeGlobalAuthBrokerToken",

@@ -8,26 +8,35 @@
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { isTimeoutError } from "../src/abortable";
-import {
-	raceWithTimeout,
-	scopedTimeoutSignal,
-	settleWithin,
-	withScopedTimeoutSignal,
-	withTimeoutSignal,
-} from "../src/scoped-timeout";
+import { raceWithTimeout, scopedTimeoutSignal, settleWithin, withScopedTimeoutSignal } from "../src/scoped-timeout";
 
-describe("withTimeoutSignal", () => {
-	it("returns a bare timeout signal without a caller signal", () => {
-		const signal = withTimeoutSignal(60_000);
-		expect(signal.aborted).toBe(false);
+describe("withScopedTimeoutSignal with a parent signal", () => {
+	afterEach(() => {
+		vi.useRealTimers();
 	});
 
-	it("propagates a pre-aborted caller signal", () => {
-		const controller = new AbortController();
-		controller.abort(new Error("caller cancelled"));
-		const signal = withTimeoutSignal(60_000, controller.signal);
-		expect(signal.aborted).toBe(true);
-		expect((signal.reason as Error).message).toBe("caller cancelled");
+	it("hands the callback a signal already aborted with the parent's reason", async () => {
+		const parent = new AbortController();
+		parent.abort(new Error("caller cancelled"));
+		const seen = await withScopedTimeoutSignal(60_000, async signal => signal.reason, parent.signal);
+		expect((seen as Error).message).toBe("caller cancelled");
+	});
+
+	it("leaves no timer armed once the operation settles", async () => {
+		vi.useFakeTimers();
+		const parent = new AbortController();
+		let captured: AbortSignal | undefined;
+		await withScopedTimeoutSignal(
+			60_000,
+			async signal => {
+				captured = signal;
+				expect(vi.getTimerCount()).toBe(1);
+			},
+			parent.signal,
+		);
+		expect(vi.getTimerCount()).toBe(0);
+		vi.advanceTimersByTime(60_000);
+		expect(captured?.aborted).toBe(false);
 	});
 });
 
