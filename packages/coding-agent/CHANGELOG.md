@@ -71,6 +71,7 @@
 - Dropping a failed assistant turn and its never-ran tool results from active context moved from `session/agent-session.ts` to `session/runtime/turn-context-check.ts`, beside the function that puts one back; no user-visible change.
 - The status line reads the session's provider and OAuth account through its typed members instead of a reflective record with a fallback for a session shape that no longer exists; no user-visible change.
 - The GitHub cache reads its three settings by their declared paths instead of through an untyped cast; no user-visible change.
+- MCP request params, the reloaded `ssh` tool and the argument display read through their declared types instead of `as unknown as` casts; no user-visible change.
 
 ### Fixed
 

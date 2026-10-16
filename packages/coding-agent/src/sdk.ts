@@ -1,5 +1,5 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import { Agent, type AgentTool, AppendOnlyContextManager, type StreamFn } from "@veyyon/agent-core";
+import { Agent, type AgentTool, type AnyAgentTool, AppendOnlyContextManager, type StreamFn } from "@veyyon/agent-core";
 import type { Model, ServiceTierByFamily } from "@veyyon/ai";
 import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import type { Dialect } from "@veyyon/ai/dialect";
@@ -1025,12 +1025,12 @@ class SessionStartup {
 	async #reloadSshTool(): Promise<AgentTool | null> {
 		if (!this.#requestedToolNames.has(TOOL.ssh)) return null;
 		const { loadSshTool } = await import("./tools/shell/ssh");
-		const sshTool = (await loadSshTool({
+		const sshTool: AnyAgentTool | null = await loadSshTool({
 			...this.#tools.toolSession,
 			cwd: this.#sessionManager.getCwd(),
-		})) as unknown as AgentTool | null;
+		});
 		if (!sshTool) return null;
-		return new ExtensionToolWrapper(wrapToolWithMetaNotice(sshTool), this.#extensionRunner) as AgentTool;
+		return new ExtensionToolWrapper(wrapToolWithMetaNotice(sshTool), this.#extensionRunner);
 	}
 
 	#createPromptInputs(): void {
