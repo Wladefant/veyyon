@@ -18,6 +18,7 @@
 
 - A nested `Markdown` blockquote styles each row once, at the outermost quote, instead of once per level, so a `>`×20 quote row is 242 bytes instead of 584 and renders in 0.03 ms instead of 0.05 ms averaged over widths 1 to 40.
 - `Loader.start()` replaces a running animation timer instead of arming a second one that `stop()` could not clear.
+- An SGR mouse or kitty escape that starts while an expired partial is being held is no longer merged into that partial and delivered as typed characters; the stale partial is delivered on its own and the new sequence gets its own hold window.
 
 ## [1.5.7] - 2026-10-15
 

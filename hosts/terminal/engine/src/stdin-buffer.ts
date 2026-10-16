@@ -381,9 +381,15 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 
 		if (this.#flushDeferral && this.#isFreshEscapeAfterDeferredFlush(str)) {
 			// The buffered partial already hit its flush timeout. A new escape is
-			// a fresh sequence, not a tail; flush the stale partial first so the
-			// new sequence can be parsed from a clean buffer.
-			this.#flushExpired();
+			// a fresh sequence, not a tail; deliver the stale partial first so the
+			// new sequence can be parsed from a clean buffer. Not `#flushExpired`:
+			// that holds a mouse or kitty partial for its tail, and holding here
+			// merges the stale head into the new sequence, which then matches
+			// neither the hold rule nor the parser.
+			this.#partialHoldStartMs = 0;
+			for (const sequence of this.flush()) {
+				this.#emitDataSequence(sequence);
+			}
 		} else {
 			// Cancel any pending flush — new data may complete the buffered partial.
 			this.#clearFlushTimer();
