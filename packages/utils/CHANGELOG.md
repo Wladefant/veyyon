@@ -23,6 +23,10 @@
 - A child spawned with a timeout no longer keeps the process alive until that timeout elapses after the child has already exited.
 - `postmortem.quit` clears its 5 s stdout-drain timer when the drain finishes first.
 
+### Removed
+
+- Removed the unused `easeInCubic` easing and `getHangulCompatibilityJamoWidth` getter.
+
 ## [1.5.6] - 2026-10-13
 
 ### Breaking Changes

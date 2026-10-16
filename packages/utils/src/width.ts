@@ -32,10 +32,6 @@ function nativeHangulCompatibilityJamoOverride(width: HangulCompatibilityJamoWid
 	return 0;
 }
 
-export function getHangulCompatibilityJamoWidth(): HangulCompatibilityJamoWidth {
-	return hangulCompatibilityJamoWidth;
-}
-
 export function setHangulCompatibilityJamoWidth(width: HangulCompatibilityJamoWidth): boolean {
 	const changed = hangulCompatibilityJamoWidth !== width;
 	hangulCompatibilityJamoWidth = width;

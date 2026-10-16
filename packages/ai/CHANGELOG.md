@@ -17,6 +17,10 @@
 - A credential ranking whose usage fetch fails clears its 5–15 s deadline timer instead of leaving it armed.
 - An OAuth token refresh clears its 5 s lease-renewal timer when the refresh finishes, instead of leaving it armed and holding the process open for up to 5 s after every refresh.
 
+### Removed
+
+- Removed the unused `isCursorTokenExpiringSoon`, `configuredProviderMaxInFlightRequests` and `mapToAnthropicToolChoice` exports and the `AnthropicToolChoice` type; `mapAnthropicToolChoice` in `stream.ts` is the Anthropic tool-choice mapping.
+
 ## [1.5.8] - 2026-10-16
 
 ### Fixed

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the unused `AGENT_PROMPT_IDS` export; `agentCorePrompts.ids` lists the registered prompt ids.
+
 ## [1.5.8] - 2026-10-16
 
 ### Changed

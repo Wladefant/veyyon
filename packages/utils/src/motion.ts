@@ -50,8 +50,6 @@ export const easeOutCubic: Easing = t => 1 - (1 - t) ** 3;
 export const easeOutQuint: Easing = t => 1 - (1 - t) ** 5;
 /** Symmetric, for a value that moves between two resting states. */
 export const easeInOutCubic: Easing = t => (t < 0.5 ? 4 * t ** 3 : 1 - (-2 * t + 2) ** 3 / 2);
-/** Gentle acceleration away, for anything leaving. */
-export const easeInCubic: Easing = t => t ** 3;
 
 /**
  * A mass-spring-damper, integrated per frame. `damping` at or above the

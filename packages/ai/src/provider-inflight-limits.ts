@@ -31,11 +31,6 @@ export function configureProviderMaxInFlightRequests(limits: Record<string, numb
 	configuredLimits = limits ?? {};
 }
 
-/** The caps in force, for a reader that wants the record rather than one provider's number. */
-export function configuredProviderMaxInFlightRequests(): Record<string, number> {
-	return configuredLimits;
-}
-
 /**
  * The cap for one provider, or `undefined` when it has none.
  *
