@@ -79,8 +79,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-16 at 7733: the goal todo context and the magic keyword notices left as the
  * `agent-session-turn-notices.ts` sibling (-101); it reads the session through a host interface
  * the session satisfies structurally.
+ * RE-MEASURED 2026-10-17 at 7423: extension and custom slash-command resolution, and the command
+ * context a session builds when no extension runner does, left as the `agent-session-commands.ts`
+ * sibling (-228); it reads the session through a host interface the session satisfies structurally.
  */
-const RUNTIME_CEILING = 7_750;
+const RUNTIME_CEILING = 7_450;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -143,12 +146,13 @@ const FACADE_CEILING = 500;
 
 /**
  * The concerns that left the runtime and still sit beside it, pinned by exact
- * equality. A tenth sibling, or one renamed, fails here before it fails anywhere
+ * equality. An eleventh sibling, or one renamed, fails here before it fails anywhere
  * useful. The compaction policy was one of them and is no longer here: it moved to
  * `@veyyon/kernel/session/agent-session-compaction-policy` with the session spine,
  * so a copy reappearing under `src/session/` is a drift this cell reports.
  */
 const SIBLINGS = [
+	"agent-session-commands.ts",
 	"agent-session-ephemeral-turn.ts",
 	"agent-session-message-shapes.ts",
 	"agent-session-model-targets.ts",

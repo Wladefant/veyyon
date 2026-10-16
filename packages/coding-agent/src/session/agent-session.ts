@@ -86,7 +86,6 @@ import {
 } from "@veyyon/kernel/session/agent-session-compaction-policy";
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import type { ClientBridge } from "@veyyon/kernel/session/client-bridge";
-import { abortDetached } from "@veyyon/kernel/session/detached-abort";
 import {
 	assistantRecordsToolCall,
 	collectPendingToolCalls,
@@ -128,7 +127,6 @@ import {
 	postmortem,
 	prompt,
 	Snowflake,
-	settleWithin,
 	withTimeout,
 } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
@@ -175,16 +173,8 @@ import { type BashResult, executeBash as executeBashCommand } from "../exec/bash
 import type { TtsrManager } from "../export/ttsr";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands/types";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
-import type {
-	ExtensionCommandContext,
-	ExtensionRunner,
-	ExtensionUIContext,
-	SessionBeforeSwitchResult,
-	SessionStopEventResult,
-} from "../extensibility/extensions";
-import { createExtensionModelQuery } from "../extensibility/extensions/model-api";
+import type { ExtensionRunner, SessionBeforeSwitchResult, SessionStopEventResult } from "../extensibility/extensions";
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
-import type { HookCommandContext } from "../extensibility/hooks/types";
 import type { Skill } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
 import { recordGoal } from "../goals/goal-record";
@@ -209,7 +199,6 @@ import { AgentRegistry } from "../registry/agent-registry";
 import { mapAssistantContentStrings, type SecretObfuscator } from "../secrets/obfuscator";
 import {
 	parseSlashCommand,
-	resolveSlashCommand,
 	unknownSlashCommandMessage,
 	unresolvedSlashCommandName,
 } from "../slash-commands/helpers/parse";
@@ -229,7 +218,6 @@ import {
 	type IrcPersistedDeliveryTelemetry,
 	projectIrcDeliveryTelemetry,
 } from "../task/irc-bus";
-import { theme } from "../theme/theme-binding";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import { buildResolveReminderMessage } from "../tools/agent/resolve";
 import type { TodoPhase } from "../tools/agent/todo";
@@ -243,7 +231,6 @@ import { clampTimeout } from "../tools/core/tool-timeouts";
 import type { CheckpointState, CompletedRewindState } from "../tools/fs/checkpoint";
 import type { BashExecutionMessage, PythonExecutionMessage } from "../tools/shell/execution-messages";
 import { loadPythonExecutor } from "../tools/shell/manifest";
-import { parseCommandArgs } from "../utils/command-args";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
@@ -252,6 +239,7 @@ import { describeAttachedImagesForTextModel } from "../utils/image-vision-fallba
 import { normalizePromptPath } from "../utils/prompt-path";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import { formatAdvisorStatus } from "./advisor-stats";
+import { throwIfExtensionCommand, tryExecuteCustomCommand, tryExecuteExtensionCommand } from "./agent-session-commands";
 import { type EphemeralTurnArgs, type EphemeralTurnResult, runEphemeralTurn } from "./agent-session-ephemeral-turn";
 import { findLastAssistantMessage, lastCopyCandidateAssistantMessage } from "./agent-session-message-shapes";
 import { contextPromotionTarget } from "./agent-session-model-targets";
@@ -295,7 +283,6 @@ import {
 	type SessionSpend,
 	type SessionStats,
 	type SetSessionNameWithTrigger,
-	SHUTDOWN_DISPOSE_TIMEOUT_MS,
 	TOOL_SHAPE_SETTING_PATHS,
 } from "./agent-session-types";
 // The accounting, not the drawing. It used to be imported from `modes/`, which put the terminal UI
@@ -369,31 +356,6 @@ function rebuildsThePrompt(path: string): boolean {
 }
 
 export type { ShakeMode, ShakeResult };
-
-const noOpUIContext: ExtensionUIContext = {
-	select: async (_title, _options, _dialogOptions) => undefined,
-	confirm: async (_title, _message, _dialogOptions) => false,
-	input: async (_title, _placeholder, _dialogOptions) => undefined,
-	notify: () => {},
-	onTerminalInput: () => () => {},
-	setStatus: () => {},
-	setWorkingMessage: () => {},
-	setWidget: () => {},
-	setTitle: () => {},
-	setEditorText: () => {},
-	pasteToEditor: () => {},
-	getEditorText: () => "",
-	editor: async () => undefined,
-	addAutocompleteProvider: () => {},
-	get theme() {
-		return theme;
-	},
-	getAllThemes: () => Promise.resolve([]),
-	getTheme: () => Promise.resolve(undefined),
-	setTheme: _theme => Promise.resolve({ success: false, error: "UI not available" }),
-	getToolsExpanded: () => false,
-	setToolsExpanded: () => {},
-};
 
 /**
  * Ask the active memory backend for an extra-context block to splice into
@@ -4594,13 +4556,15 @@ export class AgentSession {
 
 		// Handle extension commands first (execute immediately, even during streaming)
 		if (expandPromptTemplates && text.startsWith("/")) {
-			const handled = await this.#tryExecuteExtensionCommand(text);
+			const handled = await tryExecuteExtensionCommand(this.#config.extensionRunner, text);
 			if (handled) {
 				return false;
 			}
 
 			// Try custom commands (TypeScript slash commands)
-			const customResult = await this.#tryExecuteCustomCommand(text);
+			const customResult = await tryExecuteCustomCommand(this, this.customCommands, text, agent =>
+				this.#grantedAgents.add(agent),
+			);
 			if (customResult !== null) {
 				if (customResult === "") {
 					return false;
@@ -5043,183 +5007,11 @@ export class AgentSession {
 	}
 
 	/**
-	 * Try to execute an extension command. Returns true if command was found and executed.
-	 *
-	 * A plugin command is registered as `<plugin>:<name>`; `resolveSlashCommand` matches it from
-	 * either `/<plugin>:<name>` or `/<plugin> <name>`.
-	 */
-	async #tryExecuteExtensionCommand(text: string): Promise<boolean> {
-		const runner = this.#config.extensionRunner;
-		if (!runner) return false;
-
-		const parsed = parseSlashCommand(text);
-		if (!parsed) return false;
-
-		const resolved = resolveSlashCommand(parsed, name => runner.getCommand(name));
-		if (!resolved) return false;
-		const { command, args } = resolved;
-		const commandName = command.name;
-
-		// Get command context from extension runner (includes session control methods)
-		const ctx = runner.createCommandContext();
-
-		try {
-			await command.handler(args, ctx);
-			return true;
-		} catch (err) {
-			// Emit error via extension runner
-			runner.emitError({
-				extensionPath: `command:${commandName}`,
-				event: "command",
-				error: errorMessage(err),
-			});
-			return true;
-		}
-	}
-
-	#createCommandContext(): ExtensionCommandContext {
-		if (this.#config.extensionRunner) {
-			return this.#config.extensionRunner.createCommandContext();
-		}
-
-		return {
-			ui: noOpUIContext,
-			hasUI: false,
-			cwd: this.sessionManager.getCwd(),
-			sessionManager: this.sessionManager,
-			modelRegistry: this.#config.modelRegistry,
-			model: this.model ?? undefined,
-			models: createExtensionModelQuery(this.#config.modelRegistry, this.settings, () => this.model ?? undefined),
-			isIdle: () => !this.isStreaming,
-			// `ExtensionContextActions.abort` is `() => void`, so the promise from
-			// `this.abort()` was discarded with no rejection handler and a failing
-			// abort floated to postmortem, which exits the process. `abortDetached`
-			// is the shared helper for aborts no caller can await.
-			abort: () => {
-				abortDetached(this, "agent-session.commandContext.abort", USER_INTERRUPT_LABEL);
-			},
-			hasPendingMessages: () => this.queuedMessageCount > 0,
-			shutdown: () => {
-				// `dispose()` flushes session state. This used to fire it and call
-				// `process.exit(0)` on the very next line, so the flush was
-				// abandoned at its first await and anything not yet written was
-				// lost. Wait for it, but bound the wait so a wedged teardown still
-				// exits instead of hanging the caller forever.
-				void settleWithin(this.dispose(), SHUTDOWN_DISPOSE_TIMEOUT_MS, undefined)
-					.catch(error => {
-						logger.error("Session dispose failed during shutdown", { error: errorMessage(error) });
-					})
-					.finally(() => process.exit(0));
-			},
-			getContextUsage: () => this.getContextUsage(),
-			waitForIdle: () => this.waitForIdle(),
-			newSession: async options => {
-				const success = await this.newSession({ parentSession: options?.parentSession });
-				if (!success) {
-					return { cancelled: true };
-				}
-				if (options?.setup) {
-					await options.setup(this.sessionManager);
-				}
-				return { cancelled: false };
-			},
-			branch: async entryId => {
-				const result = await this.branch(entryId);
-				return { cancelled: result.cancelled };
-			},
-			navigateTree: async (targetId, options) => {
-				const result = await this.navigateTree(targetId, { summarize: options?.summarize });
-				return { cancelled: result.cancelled };
-			},
-			compact: async instructionsOrOptions => {
-				const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
-				const options =
-					instructionsOrOptions && typeof instructionsOrOptions === "object" ? instructionsOrOptions : undefined;
-				await this.compact(instructions, options);
-			},
-			switchSession: async sessionPath => {
-				const success = await this.switchSession(sessionPath);
-				return { cancelled: !success };
-			},
-			reload: async () => {
-				await this.reload();
-			},
-			getSystemPrompt: () => this.systemPrompt,
-		};
-	}
-
-	/**
-	 * Try to execute a custom command. Returns the prompt string if found, null otherwise.
-	 * If the command returns void, returns empty string to indicate it was handled.
-	 *
-	 * A plugin command is registered as `<plugin>:<name>`; `resolveSlashCommand` matches it from
-	 * either `/<plugin>:<name>` or `/<plugin> <name>`.
-	 */
-	async #tryExecuteCustomCommand(text: string): Promise<string | null> {
-		if (this.#customCommands.length === 0 && this.#mcpPromptCommands.length === 0) return null;
-
-		const parsed = parseSlashCommand(text);
-		if (!parsed) return null;
-
-		// Find matching command
-		const resolved = resolveSlashCommand(
-			parsed,
-			name =>
-				this.#customCommands.find(c => c.command.name === name) ??
-				this.#mcpPromptCommands.find(c => c.command.name === name),
-		);
-		if (!resolved) return null;
-		const { command: loaded, args: argsString } = resolved;
-		const commandName = loaded.command.name;
-
-		// Get command context from extension runner (includes session control methods)
-		const baseCtx = this.#createCommandContext();
-		const ctx: HookCommandContext = {
-			...baseCtx,
-			hasQueuedMessages: baseCtx.hasPendingMessages,
-			// Optional on the extension context, required on the hook one: a session built without an
-			// extension runner has no runner transform, and the session's own is the same boundary.
-			obfuscateProviderText: baseCtx.obfuscateProviderText ?? (text => this.obfuscateProviderText(text)),
-		};
-
-		try {
-			const args = parseCommandArgs(argsString);
-			const result = await loaded.command.execute(args, ctx);
-			// If result is a string, it's a prompt to send to LLM
-			// If void/undefined, command handled everything
-			//
-			// A command that produced a prompt gets its declared agents granted for the
-			// turn that prompt starts, so `/review` still spawns `reviewer` on a stock
-			// install where every bundled specialist is disabled. Granted only for a
-			// real prompt: a fire-and-forget command starts no turn, so a grant would
-			// have nothing to scope it and would sit open until the next settle.
-			if (typeof result === "string" && result.length > 0) {
-				const agents = loaded.command.spawnsAgents;
-				if (agents) for (const agent of agents) this.#grantedAgents.add(agent);
-			}
-			return result ?? "";
-		} catch (err) {
-			// Emit error via extension runner
-			if (this.#config.extensionRunner) {
-				this.#config.extensionRunner.emitError({
-					extensionPath: `custom-command:${commandName}`,
-					event: "command",
-					error: errorMessage(err),
-				});
-			} else {
-				const message = errorMessage(err);
-				logger.error("Custom command failed", { commandName, error: message });
-			}
-			return ""; // Command was handled (with error)
-		}
-	}
-
-	/**
 	 * Queue a steering message to interrupt the agent mid-run.
 	 */
 	async steer(text: string, images?: ImageContent[]): Promise<void> {
 		if (text.startsWith("/")) {
-			this.#throwIfExtensionCommand(text);
+			throwIfExtensionCommand(this.#config.extensionRunner, text);
 		}
 
 		const expandedText = expandPromptTemplate(text, [...this.#promptTemplates]);
@@ -5235,7 +5027,7 @@ export class AgentSession {
 	 */
 	async followUp(text: string, images?: ImageContent[], options?: FollowUpOptions): Promise<void> {
 		if (text.startsWith("/")) {
-			this.#throwIfExtensionCommand(text);
+			throwIfExtensionCommand(this.#config.extensionRunner, text);
 		}
 
 		const expandedText =
@@ -5399,26 +5191,6 @@ export class AgentSession {
 		} catch (error) {
 			this.#pendingNextTurnMessages = [...queuedMessages, ...this.#pendingNextTurnMessages];
 			throw error;
-		}
-	}
-
-	/**
-	 * Throw an error if the text is an extension command.
-	 */
-	#throwIfExtensionCommand(text: string): void {
-		const runner = this.#config.extensionRunner;
-		if (!runner) return;
-
-		const parsed = parseSlashCommand(text);
-		if (!parsed) return;
-		const resolved = resolveSlashCommand(parsed, name => runner.getCommand(name));
-		const commandName = resolved?.command.name ?? parsed.name;
-		const command = resolved?.command;
-
-		if (command) {
-			throw new Error(
-				`Extension command "/${commandName}" cannot be queued. Use prompt() or execute the command when not streaming.`,
-			);
 		}
 	}
 
