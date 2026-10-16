@@ -112,7 +112,8 @@
 - Removed the parameters autoresearch branch handling and the release installer accepted and never read; `veyyon update --force` still reinstalls the running version, with no user-visible change.
 - The auth broker command imports the credential store from `@veyyon/ai/auth-storage-sqlite`, with no user-visible change.
 - Modules import the timeout, whitespace, advisor transcript name and slash-command category helpers from their owning modules; the `utils/fetch-timeout` re-export module is removed, with no user-visible change.
-- The LSP client and diagnostics, the web search tool and the `web-search` command import the language-id, grouped-diagnostic and search-provider metadata helpers from their owning modules instead of the `lsp/utils` and `search/provider` re-exports, which are removed except `getSearchProviderLabel`; no user-visible change. Built the OpenRouter and Gemini image-generation URLs from the `@veyyon/catalog/provider-endpoints` constants instead of repeated host literals; no user-visible change.
+- The LSP client and diagnostics, the web search tool and the `web-search` command import the language-id, grouped-diagnostic and search-provider metadata helpers from their owning modules instead of the `lsp/utils` and `search/provider` re-exports, which are removed except `getSearchProviderLabel`; no user-visible change.
+- Built the OpenRouter and Gemini image-generation URLs from the `@veyyon/catalog/provider-endpoints` constants instead of repeated host literals; no user-visible change.
 - `normalizeTools` moved from `@veyyon/agent-core/agent-loop` to `@veyyon/agent-core/tool-normalization`, so building the provider-bound tool list no longer loads the agent loop; the package root still exports it.
 - Moved the usage-report fetch, cache, header ingest and fan-out out of `auth-storage.ts` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - Moved usage-backed credential ranking out of `auth-storage.ts` into `auth-storage/usage-ranking.ts`, with no user-visible change beyond the fixes below.
@@ -123,7 +124,8 @@
 - Removed the GitLab Duo Workflow inline-flow predicate that always held, the unread `inlineFlow` start-metadata option, and the user prompt threaded into workflow creation only to be discarded, with no user-visible change.
 - Removed the AWS region and GitLab Duo model parameters that credential and namespace resolution accepted and never read, with no user-visible change.
 - Moved the GitLab Duo Workflow goal transcript and system-slot rendering out of `providers/gitlab-duo-workflow.ts` into `providers/gitlab-duo-workflow/goal.ts`, and socket frame, checkpoint and tool-action reading into `providers/gitlab-duo-workflow/frames.ts`, with no user-visible change.
-- Moved the Responses stream decoder and the per-block accumulators it shares with the Codex decoder out of `providers/openai-shared.ts` into `providers/openai-responses-stream.ts`, with no user-visible change. Built the Anthropic OAuth, Claude usage, Cursor auth, OpenRouter key-check and Gemini key-check URLs from the `@veyyon/catalog/provider-endpoints` constants instead of repeated host literals; no user-visible change.
+- Moved the Responses stream decoder and the per-block accumulators it shares with the Codex decoder out of `providers/openai-shared.ts` into `providers/openai-responses-stream.ts`, with no user-visible change.
+- Built the Anthropic OAuth, Claude usage, Cursor auth, OpenRouter key-check and Gemini key-check URLs from the `@veyyon/catalog/provider-endpoints` constants instead of repeated host literals; no user-visible change.
 - OpenAI-compatible and LiteLLM discovery take their request deadline from `withScopedTimeoutSignal` in `@veyyon/utils` and `toNonEmptyString` from the catalog's own helpers instead of private copies; no user-visible change.
 - The `OPENROUTER_API_ENDPOINT` documentation states which clients fall back to it; no user-visible change.
 - `engine/` is grouped by concern into `members`, `plan`, `run`, `trial`, `kit`, `compare`, `harness`, `auth`, `io`, `wire` and `corpus`, and the overlay loaders and paired statistics every suite shares moved into it from the in-process backend and the DeepSWE suite.
@@ -139,7 +141,8 @@
 ### Removed
 
 - The headless browser no longer returns a made-up font list from `queryLocalFonts`.
-- Removed the `tinyModelClient` alias of `tinyTitleClient` and the `OPENROUTER_BASE_URL` alias in the Perplexity search provider; no user-visible change. Removed the `parseSha256Sidecar` re-export from `@veyyon/coding-agent/cli/update-cli`; import it from `@veyyon/natives/sha256-sidecar`.
+- Removed the `tinyModelClient` alias of `tinyTitleClient` and the `OPENROUTER_BASE_URL` alias in the Perplexity search provider; no user-visible change.
+- Removed the `parseSha256Sidecar` re-export from `@veyyon/coding-agent/cli/update-cli`; import it from `@veyyon/natives/sha256-sidecar`.
 - Removed the unused `AGENT_PROMPT_IDS` export; `agentCorePrompts.ids` lists the registered prompt ids.
 - Removed the threshold and `estimateTokens` re-exports from `@veyyon/agent-core/compaction/compaction`; import them from `@veyyon/agent-core/compaction/threshold`, `@veyyon/agent-core/compaction/token-estimate` or `@veyyon/agent-core/compaction`, which still exports all of them.
 - Removed the `splitReadSelector` and `stripReadSelector` re-exports from `@veyyon/agent-core/compaction/utils` and the legacy provider-native re-exports from `@veyyon/agent-core/compaction/remote-summarizer`; `@veyyon/agent-core/compaction` and the package root still export all four.
@@ -147,11 +150,16 @@
 - Removed the `SqliteAuthCredentialStore`, `isSqliteBusyError`, `isRefreshFailureDisableCause` and `OAUTH_REFRESH_FAILURE_DISABLE_PREFIX` re-exports from `@veyyon/ai/auth-storage`; import them from `@veyyon/ai/auth-storage-sqlite`, `@veyyon/ai/auth-credential-rows` or the package root, which still exports all four.
 - Removed the `getEnvApiKey`, `getEnvApiKeyName`, `listProvidersWithEnvKey` and `configureProviderMaxInFlightRequests` re-exports from `@veyyon/ai/stream`; import them from `@veyyon/ai/env-api-key`, `@veyyon/ai/provider-inflight-limits` or the package root, which still exports all four.
 - Removed the `CURSOR_API_URL` alias from `providers/cursor`; import `CURSOR_API_ENDPOINT` from `@veyyon/catalog/provider-endpoints`.
-- Removed the `createInitialResponsesAssistantMessage` re-export from `providers/openai-shared`; import it from `providers/initial-message`. Removed the `escapeXmlAttr` and `escapeXmlText` re-exports from `@veyyon/ai/dialect/rendering`; import `escapeXmlAttribute` and `escapeXmlText` from `@veyyon/utils/sanitize-text`.
+- Removed the `createInitialResponsesAssistantMessage` re-export from `providers/openai-shared`; import it from `providers/initial-message`.
+- Removed the `escapeXmlAttr` and `escapeXmlText` re-exports from `@veyyon/ai/dialect/rendering`; import `escapeXmlAttribute` and `escapeXmlText` from `@veyyon/utils/sanitize-text`.
+- Removed the `ANTIGRAVITY_PRIMARY_ENDPOINT` and `ANTIGRAVITY_SANDBOX_ENDPOINT` re-exports from `@veyyon/catalog/discovery/antigravity`; import them from `@veyyon/catalog/provider-endpoints` or `@veyyon/catalog/discovery`.
+- Removed the plugin-id helpers and installed-registry re-exports from `@veyyon/kernel/loader/plugins/marketplace/types` and `marketplace/registry`; import them from `@veyyon/kernel/loader/plugins/plugin-id` and `installed-registry`.
 - Removed the `escapeLike`, `sqlPlaceholders` and `tableExists` re-exports from `util/sqlite`; import them from `@veyyon/utils/sqlite`.
 - Removed the unused `deferredTransaction`, `REV_CATEGORY`, `REV_PHRASE`, `VEC_TYPE`, `vecSearch`, `fastembedCacheDir`, `modelCacheDir`, `HOST_LLM_TIMEOUT_SECONDS` and no-op `resetRecoveryForTests` exports; loading `core/binary-vectors` no longer reads `MNEMOPI_VEC_TYPE` at import time.
 - Removed the `setEmbeddingProvider`, `resetEmbeddingStateForTests`, `setLocalModelInitializerForTests`, `aaakEncode` and `containsSpacelessCjk` aliases, the duplicate `resetModuleStateForTests`, and the `beam/helpers` re-exports of the binary-vector, regex and id helpers; use `setEmbeddingProviderForTests`, `resetEmbeddingProviderForTests`, `setLocalModelInitializer`, `encode`, `hasCjk` and `resetMemoryForTests`.
-- Removed the `cosineSimilarity` re-export from `core/binary-vectors` and the `parseQueryTime`/`temporalBoost` re-exports from `core/beam/recall`; import them from `core/vector-math` and `util/datetime`, or `cosineSimilarity` from the package root. Removed the `local-llm-config` re-exports from `@veyyon/mnemopi/core/local-llm`; import the configuration and prompt helpers from `@veyyon/mnemopi/core/local-llm-config`.
+- Removed the `cosineSimilarity` re-export from `core/binary-vectors` and the `parseQueryTime`/`temporalBoost` re-exports from `core/beam/recall`; import them from `core/vector-math` and `util/datetime`, or `cosineSimilarity` from the package root.
+- Removed the `local-llm-config` re-exports from `@veyyon/mnemopi/core/local-llm`; import the configuration and prompt helpers from `@veyyon/mnemopi/core/local-llm-config`.
+- Removed the `ImageBudget` and `DEFAULT_MAX_INLINE_IMAGES` re-exports from `@veyyon/tui/components/image`; import them from `@veyyon/tui` or `@veyyon/tui/core/image-budget`.
 - Removed the unused `easeInCubic` easing and `getHangulCompatibilityJamoWidth` getter.
 - Removed the `stackoverflowDeclaration` alias; import `stackOverflowDeclaration`.
 - Removed the `formatNumber` and `htmlToBasicMarkdown` re-exports from `scrapers/types`; import them from `@veyyon/utils/format` and `@veyyon/utils/html-markdown`.
@@ -212,7 +220,9 @@
 - Startup configuration warnings state what a setting of the wrong kind or outside its allowed values reads as, and report such values in `--config` overlay files as well as the profile config.
 - The task tool's `context` argument streams into the pending preview as it arrives in batch mode instead of advancing in throttle-sized steps.
 - The update check, release-list and checksum fetches, release binary download, Smithery requests and Hindsight requests bound the response body with their deadline and clear its timer when the request finishes, instead of leaving it armed afterwards.
-- `/mcp smithery-login` falls back to API-key entry after five minutes when a browser-login poll request stalls, instead of hanging. The `/mcp add` wizard repaints a finished connection check and the review step that follows it without waiting for a key, and Esc or a newer check during the check or its pause keeps the step the wizard is on instead of jumping to the review step.
+- `/mcp smithery-login` falls back to API-key entry after five minutes when a browser-login poll request stalls, instead of hanging.
+- The `/mcp add` wizard repaints a finished connection check and the review step that follows it without waiting for a key, and Esc or a newer check during the check or its pause keeps the step the wizard is on instead of jumping to the review step.
+- Fixed the `/tree` and `/branch` pickers cancelling themselves 100 ms after opening over an empty list, which also cancelled twice when dismissed inside that window; they now stay open on their empty state until dismissed.
 - A Bedrock, Codex, Ollama or Gemini CLI endpoint that never answers ends the turn with `Timed out after N ms waiting for the first event`, classified as a retryable timeout, instead of `Request was aborted` or `The operation timed out.`, which read as a cancellation or named no phase.
 - An OAuth account ranking whose usage fetch misses its deadline tries unblocked accounts first and blocked ones by the soonest reset, as API-key ranking already did, instead of storage order.
 - A credential ranking whose usage fetch fails clears its 5–15 s deadline timer instead of leaving it armed.
