@@ -91,6 +91,7 @@
 - The LSP client and diagnostics, the web search tool and the `web-search` command import the language-id, grouped-diagnostic and search-provider metadata helpers from their owning modules instead of the `lsp/utils` and `search/provider` re-exports, which are removed except `getSearchProviderLabel`; no user-visible change.
 - Built the OpenRouter and Gemini image-generation URLs from the `@veyyon/catalog/provider-endpoints` constants instead of repeated host literals; no user-visible change.
 - 96 modules that read only the active theme import it from `theme/theme-binding` instead of loading the theme engine, so 60 of them no longer reach theme JSON loading, highlighting or mermaid; no user-visible change.
+- Removed two section comments in the `github` tool module that described fetchers now in `gh-fetch.ts`; no user-visible change.
 
 ### Fixed
 
