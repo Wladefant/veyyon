@@ -56,21 +56,14 @@ async function probeVersionOutput(executablePath: string): Promise<string> {
 	return promise;
 }
 
+/** Read the product, rejecting when the binary could not be read or run, which is no answer about it. */
 async function readProduct(executablePath: string): Promise<BrowserProduct | undefined> {
-	try {
-		const product =
-			process.platform === "win32"
-				? parseWindowsVersionResource(await fs.readFile(executablePath))
-				: parseVersionOutput(await probeVersionOutput(executablePath));
-		if (!product) logger.warn("The browser binary did not state its product and version", { executablePath });
-		return product;
-	} catch (error) {
-		logger.warn("The browser binary's product and version could not be read", {
-			executablePath,
-			error: errorMessage(error),
-		});
-		return undefined;
-	}
+	const product =
+		process.platform === "win32"
+			? parseWindowsVersionResource(await fs.readFile(executablePath))
+			: parseVersionOutput(await probeVersionOutput(executablePath));
+	if (!product) logger.warn("The browser binary did not state its product and version", { executablePath });
+	return product;
 }
 
 const products = new Map<string, Promise<BrowserProduct | undefined>>();
@@ -78,12 +71,22 @@ const products = new Map<string, Promise<BrowserProduct | undefined>>();
 /**
  * The binary's product name and version, read once per binary: the cache key is the path and its
  * modification time, so an updated browser is read again. Undefined, with a warning, when the binary
- * does not say.
+ * does not say or cannot be read. A read that failed (a probe that timed out on a loaded host, a
+ * binary mid-update) is not cached, so the next launch reads the binary again.
  */
 export async function readBrowserProduct(executablePath: string): Promise<BrowserProduct | undefined> {
-	let modified: number;
 	try {
-		modified = (await fs.stat(executablePath)).mtimeMs;
+		const key = `${executablePath}\0${(await fs.stat(executablePath)).mtimeMs}`;
+		let product = products.get(key);
+		if (!product) {
+			const read = readProduct(executablePath);
+			products.set(key, read);
+			read.catch(() => {
+				if (products.get(key) === read) products.delete(key);
+			});
+			product = read;
+		}
+		return await product;
 	} catch (error) {
 		logger.warn("The browser binary's product and version could not be read", {
 			executablePath,
@@ -91,11 +94,4 @@ export async function readBrowserProduct(executablePath: string): Promise<Browse
 		});
 		return undefined;
 	}
-	const key = `${executablePath}\0${modified}`;
-	let product = products.get(key);
-	if (!product) {
-		product = readProduct(executablePath);
-		products.set(key, product);
-	}
-	return product;
 }

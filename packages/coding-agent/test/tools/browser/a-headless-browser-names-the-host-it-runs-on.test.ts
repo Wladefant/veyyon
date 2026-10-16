@@ -13,9 +13,12 @@
  * different frozen platform token). The real-browser suite compares against a live binary for that.
  */
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import {
 	parseVersionOutput,
 	parseWindowsVersionResource,
+	readBrowserProduct,
 } from "@veyyon/coding-agent/tools/web/browser/browser-product";
 import {
 	type HostIdentity,
@@ -26,6 +29,7 @@ import {
 	resolveWindowPosition,
 	SUPPORTED_HOSTS,
 } from "@veyyon/coding-agent/tools/web/browser/host-identity";
+import { TempDir } from "@veyyon/utils";
 
 const CHROME = { name: "Google Chrome", version: "152.0.7977.82" };
 const BRANDS = [
@@ -291,5 +295,40 @@ describe("reading a browser binary's product before it starts", () => {
 		expect(parseWindowsVersionResource(whole.subarray(0, 64 + 52))).toBeUndefined();
 		// A `ProductName` key with an empty value.
 		expect(parseWindowsVersionResource(versionResource("", [152, 0, 7977, 82]))).toBeUndefined();
+	});
+});
+
+/**
+ * A product read is cached per binary, and a failed one must not be: a `--version` probe that failed
+ * once (a timeout on a loaded host, a binary mid-update) was cached as "no product" for the life of the
+ * process, so every later headless launch of that binary went out without `--user-agent` and named
+ * itself `HeadlessChrome`. A binary that answers without a product is an answer, and stays cached.
+ */
+describe.skipIf(process.platform === "win32")("caching a browser binary's product", () => {
+	/** A `--version` stub whose answer depends on a `ready` file beside it, so the binary itself never changes. */
+	async function stub(dir: TempDir, notReady: string): Promise<{ binary: string; ready: () => Promise<void> }> {
+		const binary = path.join(dir.path(), "chrome");
+		await fs.writeFile(
+			binary,
+			`#!/bin/sh\nif [ -f "$(dirname "$0")/ready" ]; then echo "Google Chrome 152.0.7977.82"; else ${notReady}; fi\n`,
+		);
+		await fs.chmod(binary, 0o755);
+		return { binary, ready: () => fs.writeFile(path.join(dir.path(), "ready"), "") };
+	}
+
+	it("reads the binary again after a read that failed", async () => {
+		using dir = TempDir.createSync("@veyyon-browser-product-");
+		const { binary, ready } = await stub(dir, "exit 3");
+		expect(await readBrowserProduct(binary)).toBeUndefined();
+		await ready();
+		expect(await readBrowserProduct(binary)).toEqual({ name: "Google Chrome", version: "152.0.7977.82" });
+	});
+
+	it("keeps the answer of a binary that states no product", async () => {
+		using dir = TempDir.createSync("@veyyon-browser-product-");
+		const { binary, ready } = await stub(dir, "echo unknown");
+		expect(await readBrowserProduct(binary)).toBeUndefined();
+		await ready();
+		expect(await readBrowserProduct(binary)).toBeUndefined();
 	});
 });
