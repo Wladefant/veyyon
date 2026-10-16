@@ -18,6 +18,9 @@
  * too small to compact, so the `compact` sweep covers its refusal path and not a summary that lands.
  * A new transition that detaches agent events is not swept until it is added to `TRANSITIONS`; the
  * only detach outside `#whileDisconnectedFromAgent` is dispose.
+ *
+ * Subject: `session/runtime/session-switch.ts` runs the `switchSession` swap and its rollback, driven
+ * through `AgentSession`.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";

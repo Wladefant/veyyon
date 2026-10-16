@@ -11,9 +11,10 @@
  *      the failure backoff window — a repeat poll within the window is served
  *      from cache (no refetch); the entry expires and the next poll retries.
  *
- * The suite drives `AuthStorage`, and through it the two-tier cache in
- * `auth-storage/usage-cache.ts`, the per-credential cache keys in
- * `auth-storage/usage-requests.ts` and the request cap in `auth-storage/http-concurrency.ts`.
+ * The suite drives `AuthStorage`, and through it the fetch and failure backoff in
+ * `auth-storage/usage-reporting.ts`, the two-tier cache in `auth-storage/usage-cache.ts`, the
+ * per-credential cache keys in `auth-storage/usage-requests.ts` and the request cap in
+ * `auth-storage/http-concurrency.ts`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import {
