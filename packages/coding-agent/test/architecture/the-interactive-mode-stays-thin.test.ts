@@ -55,12 +55,14 @@ const CONTROLLER_CEILING = 1000;
  * it is its own change. The list is expected to shrink, never grow.
  * `extension-ui-controller.ts` left on 2026-10-16 at 951 lines: the collab guest
  * dialogs, the dialog queue and the hook widgets moved into their own modules.
+ * `selector-controller.ts` left on 2026-10-16 at 953 lines: the login, logout,
+ * account card and reset flows moved to `account-flows.ts`, and the session
+ * picker, resume and delete to `session-flows.ts`.
  */
 const LEGACY_OVERSIZED_CONTROLLERS: readonly string[] = [
 	"command-controller.ts",
 	"event-controller.ts",
 	"input-controller.ts",
-	"selector-controller.ts",
 ];
 
 function controllers(): string[] {

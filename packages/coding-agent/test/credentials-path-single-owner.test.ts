@@ -85,7 +85,7 @@ describe("user-facing credential-store messages name the active store", () => {
 	it("keeps the login and logout screens resolving through getActiveAuthDbPath", () => {
 		for (const rel of [
 			"modes/terminal/setup-wizard/scenes/sign-in.ts",
-			"modes/terminal/controllers/selector-controller.ts",
+			"modes/terminal/controllers/account-flows.ts",
 		]) {
 			const src = readFileSync(join(SRC_ROOT, rel), "utf8");
 			expect(src, `${rel} must import the active-store resolver`).toContain("getActiveAuthDbPath");

@@ -27,6 +27,8 @@
  * `test/modes/terminal/components/account-manager.test.ts`; this suite drives the real component but asserts
  * on the removal and the report, not on the frame. Whether the removal reaches the database is the
  * store's contract, exercised here through a real `SqliteAuthCredentialStore` rather than a fake.
+ *
+ * Subject: `modes/terminal/controllers/account-flows.ts`, driven through `SelectorController.showLogout`.
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";

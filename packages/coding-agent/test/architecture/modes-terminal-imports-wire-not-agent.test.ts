@@ -70,6 +70,8 @@ const LEGACY_RUNTIME_READERS: readonly string[] = [
 	"components/transcript/compaction-summary-message.ts",
 	"components/transcript/tool-execution.ts",
 	"components/transcript/usage-row.ts",
+	// Carved out of selector-controller.ts, keeping the imports it already used.
+	"controllers/account-flows.ts",
 	"controllers/btw-controller.ts",
 	"controllers/command-controller.ts",
 	// Drives the session's composer prediction side request at each turn end, as btw-controller drives /btw.
@@ -80,6 +82,8 @@ const LEGACY_RUNTIME_READERS: readonly string[] = [
 	"controllers/input-controller.ts",
 	"controllers/omfg-rule.ts",
 	"controllers/selector-controller.ts",
+	// Carved out of selector-controller.ts, keeping the imports it already used.
+	"controllers/session-flows.ts",
 	"controllers/session-focus-controller.ts",
 	"controllers/tan-command-controller.ts",
 	"controllers/transcript-composer.ts",
