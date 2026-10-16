@@ -98,7 +98,10 @@ async function readTwice(
 }
 
 function refused(result: ToolResultMessage<ReadToolDetails>): boolean {
-	return result.details?.inContextRefusal === true;
+	return (
+		result.isError === true &&
+		result.content.some(block => block.type === "text" && block.text.startsWith("Read refused:"))
+	);
 }
 
 describe("a read under an extension context handler", () => {

@@ -2,8 +2,9 @@
  * A read whose every line is unchanged and still in context is refused; any other read delivers.
  *
  * WHY THIS SUITE EXISTS. A model that re-reads a file it can already see pays for the same bytes
- * twice and grows the context it reasons over. The `read` tool refuses such a call with a short
- * result that points back at the earlier output, and the model has no argument that overrides it. A refusal that fires
+ * twice and grows the context it reasons over. The `read` tool fails such a call with a tool error
+ * that points back at the earlier output, rendered and sent like any other failed read, and the
+ * model has no argument that overrides it. A refusal that fires
  * when it should not is worse than none: the model is told to work from output it cannot see, or
  * from bytes that no longer match the file. So the contract has two halves, and both are asserted:
  *
@@ -111,9 +112,8 @@ function header(result: ToolResultMessage<ReadToolDetails>): string {
 
 /** `"refused"` or `"delivered"`, after checking the result is consistent with that verdict. */
 function verdict(result: ToolResultMessage<ReadToolDetails>): "refused" | "delivered" {
-	expect(result.isError).toBe(false);
-	if (result.details?.inContextRefusal === true) {
-		expect(text(result)).toContain("Read refused:");
+	if (result.isError === true) {
+		expect(text(result)).toStartWith("Read refused:");
 		return "refused";
 	}
 	expect(text(result)).not.toContain("Read refused:");
@@ -133,12 +133,12 @@ function prune(index: number): (workspace: IntegrationWorkspace) => void {
 }
 
 describe("a read of lines still in context", () => {
-	it("refuses an unchanged whole-file re-read with the earlier output's header and a pointer back", async () => {
+	it("refuses an unchanged whole-file re-read with an error naming the earlier output's header", async () => {
 		const [first, second] = await drive([{ args: { path: "notes.txt" } }, { args: { path: "notes.txt" } }]);
 		expect(verdict(first)).toBe("delivered");
 		expect(verdict(second)).toBe("refused");
 		expect(text(second)).toBe(
-			`${header(first)}\nRead refused: \`notes.txt\` is unchanged since an earlier read whose output is still in your context. Work from that output; its line numbers and tag are current.`,
+			`Read refused: \`notes.txt\` is unchanged since an earlier read whose output is still in your context, under ${header(first)}. Work from that output; its line numbers and tag are current.`,
 		);
 	});
 

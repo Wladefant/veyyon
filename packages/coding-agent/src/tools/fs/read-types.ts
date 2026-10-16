@@ -51,10 +51,4 @@ export interface ReadToolDetails {
 	 * `veyyon read` CLI exit non-zero instead of reporting the refusal as success.
 	 */
 	contentUnavailable?: { reason: "binary" | "conversion-failed" };
-	/**
-	 * Set when the read was refused because its file is unchanged and every line it would display is
-	 * still visible from an earlier read in live context (`read-in-context.ts`). The result carries no
-	 * file content, so compaction's supersede pruning never counts it as a newer read of the file.
-	 */
-	inContextRefusal?: true;
 }

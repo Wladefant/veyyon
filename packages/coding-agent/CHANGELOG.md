@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- A `read` refused because its lines are unchanged and still in context is now a tool error naming the earlier output's `[path#TAG]` header, rendered and sent to the model like any other failed read instead of as a read card holding the refusal text.
+
 ## [1.5.7] - 2026-10-15
 
 ### Breaking Changes

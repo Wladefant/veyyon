@@ -35,11 +35,12 @@ to a budget:
 - **Truncation is explicit.** A summary footer or a `[Showing lines …]`-style notice states the
   continuation selector.
 - **Reads still in context are refused.** A re-read whose every displayed row is shown, byte for
-  byte under the same `[path#TAG]` header, by earlier read results the model still sees returns a
-  one-line pointer to that output instead of the content. A result that was pruned, shaken or
-  compacted away no longer counts. No argument overrides the refusal. No read is refused while an
-  extension handles the `context` event. Nothing earlier in the
-  conversation is rewritten, so the cached prompt prefix is unchanged.
+  byte under the same `[path#TAG]` header, by earlier read results the model still sees fails with a
+  one-line tool error that names that header instead of returning the content. The error renders
+  and is sent like any other failed read. A result that was pruned, shaken or compacted away no
+  longer counts. No argument overrides the refusal. No read is refused while an extension handles
+  the `context` event. Nothing earlier in the conversation is rewritten, so the cached prompt prefix
+  is unchanged.
 - **Beyond plain text files:** the same tool also reads directories (depth-limited listing), archives
   (`.tar`, `.tar.gz`, `.zip`, via `archive.zip:path/inside`), SQLite databases (`file.db:table`, with
   pagination and `where`/`order` filters), PDF/Word/PowerPoint/Excel/EPUB (extracted text), Jupyter

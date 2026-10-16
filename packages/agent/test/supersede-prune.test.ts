@@ -837,39 +837,3 @@ describe("pruneSupersededToolResults — a call that never ran is not a read", (
 		expect(resultText(result1)).toBe(SUPERSEDED_NOTICE);
 	});
 });
-
-describe("pruneSupersededToolResults — a read refused as still in context is not a read", () => {
-	/** A read call the tool refused because the lines it asked for were still in context. */
-	function refusedReadPair(path: string, timestamp: number): [SessionMessageEntry, SessionMessageEntry] {
-		const [call, result] = readPair(path, `[foo.ts#1A2B]\nRead refused: \`${path}\` is unchanged.`, timestamp);
-		const message = resultMessage(result);
-		message.details = { resolvedPath: `/repo/${path}`, inContextRefusal: true };
-		return [call, result];
-	}
-
-	test("a refusal does not blank the earlier read it points back to", () => {
-		const [call1, result1] = readPair("src/foo.ts", FILE_CONTENT, T0);
-		const [call2, result2] = refusedReadPair("src/foo.ts", T0 + 1_000);
-		const entries: SessionEntry[] = [call1, result1, call2, result2];
-
-		const result = pruneSupersededToolResults(entries, cfg({ now: T0 + 1_000 }));
-
-		expect(result.prunedCount).toBe(0);
-		expect(resultText(result1)).toBe(FILE_CONTENT);
-		expect(resultMessage(result1).prunedAt).toBeUndefined();
-	});
-
-	test("a delivered read after the refusal still supersedes the earlier one", () => {
-		// The control: the row above cannot pass by disabling supersede pruning altogether.
-		const [call1, result1] = readPair("src/foo.ts", FILE_CONTENT, T0);
-		const [call2, result2] = refusedReadPair("src/foo.ts", T0 + 1_000);
-		const [call3, result3] = readPair("src/foo.ts", FILE_CONTENT, T0 + 2_000);
-		const entries: SessionEntry[] = [call1, result1, call2, result2, call3, result3];
-
-		const result = pruneSupersededToolResults(entries, cfg({ now: T0 + 2_000 }));
-
-		expect(result.prunedCount).toBe(1);
-		expect(resultText(result1)).toBe(SUPERSEDED_NOTICE);
-		expect(resultText(result3)).toBe(FILE_CONTENT);
-	});
-});

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Supersede pruning no longer reads an `inContextRefusal` marker from a `read` result; a read refused as still in context is a failed read, which pruning already never counts as a newer read.
+
 ## [1.5.6] - 2026-10-13
 
 ### Breaking Changes

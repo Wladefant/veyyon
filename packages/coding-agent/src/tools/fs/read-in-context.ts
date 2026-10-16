@@ -10,16 +10,17 @@
  * summarized away by compaction no longer carries its numbered rows, so it stops counting the moment
  * the model stops seeing it.
  *
- * The refusal is appended as a new short result. Nothing earlier in the conversation is rewritten,
- * so the cached prompt prefix is untouched, and compaction's supersede pruning does not treat the
- * refusal as a newer read of the file (`supersedeTargets` in `@veyyon/agent-core/compaction`).
+ * The refusal is a tool error, rendered and recorded like any other failed read: it carries no file
+ * content, nothing earlier in the conversation is rewritten, so the cached prompt prefix is
+ * untouched, and compaction's supersede pruning never counts a failed read as a newer read of the
+ * file (`supersedeTargets` in `@veyyon/agent-core/compaction`).
  */
 import type { AgentMessage, AgentToolResult } from "@veyyon/agent-core";
 import type { ImageContent, TextContent, ToolResultMessage } from "@veyyon/ai";
 import { HASHLINE_LINE_PREFIX } from "../../edit/file-snapshot-store";
 import type { ToolSession } from "../../sdk";
 import { resolveToCwd, splitPathAndSel } from "../core/path-utils";
-import { toolResult } from "../core/tool-result";
+import { ToolError } from "../core/tool-errors";
 import type { ReadToolDetails } from "./read-types";
 
 /** A hashline section header on its own line: `[name#1A2B]`. */
@@ -103,8 +104,8 @@ function rowsStillInContext(
 }
 
 /**
- * The refusal for `result` when every row it displays is still in context, or
- * `undefined` to deliver `result` as read.
+ * Throw the refusal for `result` when every row it displays is still in context; return to deliver
+ * `result` as read.
  *
  * `result` is a finished single-file read of `absolutePath`. A read with no hashline header (raw,
  * binary, an image, line-number or plain display mode) carries no snapshot tag to prove the file is
@@ -115,22 +116,17 @@ export function refuseReadStillInContext(
 	result: AgentToolResult<ReadToolDetails>,
 	absolutePath: string,
 	requestedPath: string,
-): AgentToolResult<ReadToolDetails> | undefined {
+): void {
 	const messages = session.getLiveMessages?.();
-	if (!messages || messages.length === 0) return undefined;
+	if (!messages || messages.length === 0) return;
 	const sections = displayedRowsBySection(resultText(result.content));
-	if (sections.size !== 1) return undefined;
+	if (sections.size !== 1) return;
 	const [[header, requested]] = sections;
-	if (requested.size === 0) return undefined;
+	if (requested.size === 0) return;
 	const visible = rowsStillInContext(messages, absolutePath, header, session.cwd);
-	for (const row of requested) if (!visible.has(row)) return undefined;
+	for (const row of requested) if (!visible.has(row)) return;
 
-	const details: ReadToolDetails = { resolvedPath: absolutePath, inContextRefusal: true };
-	if (result.details?.suffixResolution) details.suffixResolution = result.details.suffixResolution;
-	return toolResult<ReadToolDetails>(details)
-		.text(
-			`${header}\nRead refused: \`${requestedPath}\` is unchanged since an earlier read whose output is still in your context. Work from that output; its line numbers and tag are current.`,
-		)
-		.sourcePath(absolutePath)
-		.done();
+	throw new ToolError(
+		`Read refused: \`${requestedPath}\` is unchanged since an earlier read whose output is still in your context, under ${header}. Work from that output; its line numbers and tag are current.`,
+	);
 }

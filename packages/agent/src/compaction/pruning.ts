@@ -242,17 +242,6 @@ function collectSupersededResults(
 	return candidates.reverse();
 }
 
-/**
- * Whether a tool result is a read refused because the lines it asked for were unchanged and still
- * displayed by an earlier result in context (`inContextRefusal` on the coding agent's read details).
- * It carries no file content of its own.
- */
-function isInContextRefusal(details: unknown): boolean {
-	return (
-		details != null && typeof details === "object" && (details as Record<string, unknown>).inContextRefusal === true
-	);
-}
-
 /** The targets a result's call reads, or `undefined` when the result carries no file content or the call names none. */
 function supersedeTargets(
 	message: ToolResultMessage,
@@ -271,12 +260,10 @@ function supersedeTargets(
 	// that reached it and failed. The second was unguarded: a read of a path that
 	// errored blanked the earlier successful read of the same path, so the content
 	// left context and only the error string remained. `collectUselessResults` below
-	// already excludes `isError` for this reason.
-	//
-	// A third member: a read the tool refused because the lines it asked for were
-	// still in context. Counting it as the newer read would blank the very result
-	// the refusal points the model back to.
-	if (toolResultNeverRan(message.details) || message.isError === true || isInContextRefusal(message.details)) {
+	// already excludes `isError` for this reason. A read the tool refused because the
+	// lines it asked for were still in context is a failed read, so counting it as the
+	// newer read would blank the very result the refusal points the model back to.
+	if (toolResultNeverRan(message.details) || message.isError === true) {
 		return undefined;
 	}
 	const rawKey = supersedeKey(toolCall.name, toolCall.arguments as Record<string, unknown>);

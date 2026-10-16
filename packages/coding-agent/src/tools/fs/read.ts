@@ -423,8 +423,8 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 		const outcome = await this.#readFileContent(readPath, target.path, resolved, parsed, signal);
 		const result =
 			outcome.kind === "result" ? outcome.result : finishLocalRead(outcome.read, resolved.suffixResolution);
-		if (!refuseInContext) return result;
-		return refuseReadStillInContext(this.session, result, resolved.absolutePath, readPath) ?? result;
+		if (refuseInContext) refuseReadStillInContext(this.session, result, resolved.absolutePath, readPath);
+		return result;
 	}
 
 	/** Read a member of an archive, a SQLite database or a PDF's extracted images, when the path names one. */
