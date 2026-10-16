@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- A `read` refused because its lines are unchanged and still in context is now a tool error naming the earlier output's `[path#TAG]` header, rendered and sent to the model like any other failed read instead of as a read card holding the refusal text.
+- Supersede pruning no longer reads an `inContextRefusal` marker from a `read` result; a read refused as still in context is a failed read, which pruning already never counts as a newer read.
+
+### Fixed
+
+- A Cursor turn no longer stalls for 30 minutes and fails with "made no progress for 1800s" when the server asks for approval (Cursor's built-in web search) or sends an exec request this client does not run: web search, Exa search and Exa fetch are approved, prompts that need a Cursor UI are rejected, and an unknown exec request is failed the way Cursor's own client fails it.
+
 ## [1.5.7] - 2026-10-15
 
 ### Breaking Changes
