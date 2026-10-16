@@ -165,16 +165,10 @@ function findingSummarySpans(findings: ReportFindingDetails[]): ViewSpan[] {
 
 const REVIEWER_ARRAY_LABELS: ReadonlySet<string> = new Set(["findings"]);
 
-function extractIncrementalReviewResult(
-	items: YieldItem[],
-): { summary: SubmitReviewDetails; findings: ReportFindingDetails[] } | undefined {
-	const assembled = assembleYieldResult(items, undefined, REVIEWER_ARRAY_LABELS);
-	const data = assembled?.data;
+/** The verdict a reviewer submitted, when every field the verdict row draws has the type it is drawn as. */
+function reviewSummaryOf(data: unknown): SubmitReviewDetails | undefined {
 	if (!isRecord(data)) return undefined;
-	const record = data as Record<string, unknown>;
-	const overallCorrectness = record.overall_correctness;
-	const explanation = record.explanation;
-	const confidence = record.confidence;
+	const { overall_correctness: overallCorrectness, explanation, confidence } = data;
 	if (
 		(overallCorrectness !== "correct" && overallCorrectness !== "incorrect") ||
 		typeof explanation !== "string" ||
@@ -182,11 +176,18 @@ function extractIncrementalReviewResult(
 	) {
 		return undefined;
 	}
-	return {
-		summary: { overall_correctness: overallCorrectness, explanation, confidence },
-		findings: normalizeReportFindings(record.findings),
-	};
+	return { overall_correctness: overallCorrectness, explanation, confidence };
 }
+
+function extractIncrementalReviewResult(
+	items: YieldItem[],
+): { summary: SubmitReviewDetails; findings: ReportFindingDetails[] } | undefined {
+	const data = assembleYieldResult(items, undefined, REVIEWER_ARRAY_LABELS)?.data;
+	const summary = reviewSummaryOf(data);
+	if (!summary || !isRecord(data)) return undefined;
+	return { summary, findings: normalizeReportFindings(data.findings) };
+}
+
 function extractReviewDetails(extractedToolData: Record<string, unknown> | undefined):
 	| {
 			summary: SubmitReviewDetails;
@@ -198,13 +199,8 @@ function extractReviewDetails(extractedToolData: Record<string, unknown> | undef
 	const incrementalReview = extractIncrementalReviewResult(completeData);
 	if (incrementalReview) return incrementalReview;
 	for (let i = completeData.length - 1; i >= 0; i--) {
-		const d = completeData[i].data;
-		if (d && typeof d === "object" && "overall_correctness" in d) {
-			return {
-				summary: d as unknown as SubmitReviewDetails,
-				findings: normalizeReportFindings(extractedToolData.report_finding),
-			};
-		}
+		const summary = reviewSummaryOf(completeData[i].data);
+		if (summary) return { summary, findings: normalizeReportFindings(extractedToolData.report_finding) };
 	}
 	return undefined;
 }
