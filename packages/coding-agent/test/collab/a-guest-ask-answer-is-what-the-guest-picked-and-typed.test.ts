@@ -11,6 +11,8 @@
  * CLASS CLOSED. Each sequence of guest replies is driven through `ExtensionUiController.showAskDialog` with a scripted
  * guest, and both the requests the guest received and the submitted result are compared whole.
  *
+ * Subject: `modes/terminal/controllers/collab-guest-dialogs.ts`, driven through `ExtensionUiController.showAskDialog`.
+ *
  * NOT CAUGHT. The wire transport and its ui-request frames (`guest-ui-request.test.ts`) and the local dialog's own
  * rendering (`ask-dialog` suites).
  */

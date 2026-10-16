@@ -43,6 +43,7 @@
 - The settings card's agent roster, model-chain picker and shared submenu pieces moved out of `settings-selector.ts` into `agents-submenu.ts`, `model-chain-submenu.ts` and `settings-submenus.ts`; no user-visible change.
 - Branching, the `/btw` branch and tree navigation moved from `session/agent-session.ts` to the `session/runtime/session-branch.ts` collaborator; no user-visible change.
 - The handoff document and the new session it seeds moved from `session/agent-session.ts` to the `session/runtime/session-handoff.ts` collaborator; no user-visible change.
+- The collab guest dialogs, the hook dialog queue and the extension widgets moved out of `extension-ui-controller.ts` into `collab-guest-dialogs.ts`, `dialog-queue.ts` and `hook-widgets.ts`; no user-visible change.
 - The LSP server selection, diagnostics wait, project diagnostics, `rename_file` and the edit/write writethrough moved from `lsp/index.ts` into `lsp/servers.ts`, `lsp/diagnostics.ts`, `lsp/workspace-diagnostics.ts`, `lsp/rename-file.ts` and `lsp/writethrough.ts`, so the edit and write tools no longer load the `lsp` tool; no user-visible change.
 
 ### Fixed

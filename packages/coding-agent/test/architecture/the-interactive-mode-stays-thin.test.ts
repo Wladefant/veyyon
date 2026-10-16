@@ -53,11 +53,12 @@ const CONTROLLER_CEILING = 1000;
  * Controllers that predate this change and already exceed the ceiling. Each one
  * is a subsystem that was written inline and then moved wholesale, and slimming
  * it is its own change. The list is expected to shrink, never grow.
+ * `extension-ui-controller.ts` left on 2026-10-16 at 951 lines: the collab guest
+ * dialogs, the dialog queue and the hook widgets moved into their own modules.
  */
 const LEGACY_OVERSIZED_CONTROLLERS: readonly string[] = [
 	"command-controller.ts",
 	"event-controller.ts",
-	"extension-ui-controller.ts",
 	"input-controller.ts",
 	"selector-controller.ts",
 ];
