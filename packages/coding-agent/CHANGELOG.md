@@ -61,6 +61,7 @@
 - The Julia kernel's execute-request encoder is the exported `buildExecutePayload` in `eval/jl/kernel.ts` instead of an inline constructor option; no user-visible change.
 - A prompt, a steer, a follow-up and a synthetic follow-up build their text-and-image content and the text-only model's image description through one session helper; no user-visible change.
 - The model registry's persisted `resolved-models.json` stage codec moved from `config/model-registry.ts` to `config/resolved-model-stage.ts`; no user-visible change.
+- The model registry builds custom-model and provider-override headers through `createLiveConfigHeaders` directly instead of two single-use wrappers; no user-visible change.
 
 ### Fixed
 

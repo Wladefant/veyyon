@@ -579,26 +579,11 @@ interface CustomModelOverlay extends ModelPatch {
 	isOAuth?: boolean;
 }
 
-function mergeCustomModelHeaders(
-	providerHeaders: Record<string, string> | undefined,
-	modelHeaders: Record<string, string> | undefined,
-	authHeader: boolean | undefined,
-	apiKeyConfig: string | undefined,
-): Record<string, string> | undefined {
-	return createLiveConfigHeaders([providerHeaders, modelHeaders], { authHeader, apiKeyConfig });
-}
-
-function mergeAuthHeaderSources(
-	sources: readonly HeaderSource[],
-	authHeader: boolean | undefined,
-	apiKeyConfig: string | undefined,
-): Record<string, string> | undefined {
-	return createLiveConfigHeaders(sources, { authHeader, apiKeyConfig });
-}
-
 /**
  * Decide whether a custom-yaml model should force OAuth-style request shaping.
  * - Explicit `auth: oauth` → force on.
+ * - Any other explicit `auth` → unset.
+ * - No `auth` and the `anthropic-messages` API → force on: such custom
  *   endpoints are typically Claude-Code-style proxies (e.g. CLIProxyAPI) that expect
  *   the cloaked request shape regardless of how the proxy itself is authenticated.
  * - Otherwise → unset.
@@ -637,7 +622,10 @@ function buildCustomModelOverlay(
 		contextWindow: modelDef.contextWindow,
 		maxTokens: modelDef.maxTokens,
 		omitMaxOutputTokens: modelDef.omitMaxOutputTokens,
-		headers: mergeCustomModelHeaders(providerHeaders, modelDef.headers, authHeader, providerApiKey),
+		headers: createLiveConfigHeaders([providerHeaders, modelDef.headers], {
+			authHeader,
+			apiKeyConfig: providerApiKey,
+		}),
 		compat: mergeCompat(providerCompat, modelDef.compat),
 		contextPromotionTarget: modelDef.contextPromotionTarget,
 		compactionModel: modelDef.compactionModel,
@@ -2686,11 +2674,10 @@ function applyProviderTransportOverride<T extends { baseUrl?: string; headers?: 
 	entry: T,
 	override: Pick<ProviderOverride, "baseUrl" | "headers" | "authHeader" | "apiKey" | "transport">,
 ): T {
-	const headers = mergeAuthHeaderSources(
-		override.headers ? [entry.headers, override.headers] : [entry.headers],
-		override.authHeader,
-		override.apiKey,
-	);
+	const headers = createLiveConfigHeaders(override.headers ? [entry.headers, override.headers] : [entry.headers], {
+		authHeader: override.authHeader,
+		apiKeyConfig: override.apiKey,
+	});
 	return {
 		...entry,
 		baseUrl: override.baseUrl ?? entry.baseUrl,
