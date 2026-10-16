@@ -224,7 +224,7 @@ function resolveApprovalGate<TParameters extends TSchema, TDetails>(
 	// be a second source of truth: a `yolo` one used to silently outrank a
 	// missing setting, which is how an approval system nobody had configured
 	// became an approval system that never fired.
-	const configuredMode = settings?.get("tools.approvalMode") as ApprovalMode | undefined;
+	const configuredMode = settings?.get("tools.approvalMode");
 	const planModeActive = context?.planModeActive === true;
 	const bypassAllApprovals = context?.bypassAllApprovals === true;
 	const mode = resolveEffectiveApprovalMode(configuredMode, { planModeActive, cliAutoApprove });

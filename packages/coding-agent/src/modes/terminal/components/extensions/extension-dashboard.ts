@@ -176,7 +176,7 @@ export class ExtensionDashboard implements Component {
 
 	async #init(): Promise<void> {
 		const sm = this.settings ?? (await Settings.init());
-		const disabledIds = sm ? ((sm.get("disabledExtensions") as string[]) ?? []) : [];
+		const disabledIds = sm ? sm.get("disabledExtensions") : [];
 		this.#state = await createInitialState(this.cwd, disabledIds);
 
 		const initialMaxVisible = Math.max(3, this.terminalHeight - 9);
@@ -421,7 +421,7 @@ export class ExtensionDashboard implements Component {
 			return;
 		}
 
-		const disabled = ((sm.get("disabledExtensions") as string[]) ?? []).slice();
+		const disabled = sm.get("disabledExtensions").slice();
 		if (enabled) {
 			const index = disabled.indexOf(extensionId);
 			if (index !== -1) {
@@ -457,7 +457,7 @@ export class ExtensionDashboard implements Component {
 		// state so a legacy `mcp:<name>` flag from before this routing change
 		// doesn't keep the server marked disabled after the user re-enables it
 		// via the UI.
-		const stored = ((sm.get("disabledExtensions") as string[]) ?? []).slice();
+		const stored = sm.get("disabledExtensions").slice();
 		const had = stored.indexOf(extensionId);
 		if (enabled && had !== -1) {
 			stored.splice(had, 1);
@@ -481,7 +481,7 @@ export class ExtensionDashboard implements Component {
 		const currentTabId = this.#state.tabs[this.#state.activeTabIndex]?.id;
 
 		const sm = this.settings ?? Settings.instance;
-		const disabledIds = sm ? ((sm.get("disabledExtensions") as string[]) ?? []) : [];
+		const disabledIds = sm ? sm.get("disabledExtensions") : [];
 		const nextState = await refreshState(this.#state, this.cwd, disabledIds);
 		if (refreshToken !== this.#refreshToken) return;
 		this.#state = nextState;

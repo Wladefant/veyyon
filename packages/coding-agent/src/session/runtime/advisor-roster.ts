@@ -246,7 +246,7 @@ export class AdvisorRoster {
 
 	/** Read `advisor.enabled` and start the advisors when it is on. */
 	enableFromSettings(): void {
-		this.#enabled = isAdvisorProductEnabled() && (this.#host.settings.get("advisor.enabled") as boolean);
+		this.#enabled = isAdvisorProductEnabled() && this.#host.settings.get("advisor.enabled");
 		if (this.#enabled) this.#build();
 	}
 
@@ -488,7 +488,7 @@ export class AdvisorRoster {
 	// ------------------------------------------------------------ building
 
 	#immuneTurnLimit(): number {
-		const immuneTurns = this.#host.settings.get("advisor.immuneTurns") as number;
+		const immuneTurns = this.#host.settings.get("advisor.immuneTurns");
 		if (!Number.isFinite(immuneTurns) || immuneTurns <= 0) return 0;
 		return Math.trunc(immuneTurns);
 	}

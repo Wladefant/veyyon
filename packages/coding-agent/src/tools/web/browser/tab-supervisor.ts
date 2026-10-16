@@ -1162,7 +1162,7 @@ async function waitForClosed(tab: WorkerTabSession): Promise<void> {
 }
 
 function expandBrowserScreenshotDir(session: ToolSession): string | undefined {
-	const value = session.settings.get("browser.screenshotDir") as string | undefined;
+	const value = session.settings.get("browser.screenshotDir");
 	return value ? expandPath(value) : undefined;
 }
 

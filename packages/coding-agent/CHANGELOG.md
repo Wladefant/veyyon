@@ -72,6 +72,7 @@
 - The status line reads the session's provider and OAuth account through its typed members instead of a reflective record with a fallback for a session shape that no longer exists; no user-visible change.
 - The GitHub cache reads its three settings by their declared paths instead of through an untyped cast; no user-visible change.
 - MCP request params, the reloaded `ssh` tool and the argument display read through their declared types instead of `as unknown as` casts; no user-visible change.
+- Settings reads in the status line, extension dashboard, speech input, browser, Hindsight memory, advisor roster, task agent settings, extension wrapper and ACP extension listing use their declared types instead of casts; no user-visible change.
 
 ### Fixed
 

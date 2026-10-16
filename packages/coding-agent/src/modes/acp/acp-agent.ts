@@ -953,11 +953,10 @@ export class AcpAgent implements Agent {
 				return { reports: reports ?? [] };
 			}
 			case "_veyyon/extensions": {
-				const cwd = typeof params.cwd === "string" ? (params.cwd as string) : undefined;
+				const cwd = typeof params.cwd === "string" ? params.cwd : undefined;
 				const sm = await Settings.init();
-				const disabledIds = (sm.get("disabledExtensions") as string[] | undefined) ?? [];
-				const extensions = await loadAllExtensions(cwd, disabledIds);
-				return { extensions: extensions as unknown as Array<{ [key: string]: unknown }> };
+				const extensions = await loadAllExtensions(cwd, sm.get("disabledExtensions"));
+				return { extensions };
 			}
 			case "_veyyon/extensions/toggle": {
 				const providerId = params.providerId;

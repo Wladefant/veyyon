@@ -239,7 +239,7 @@ export function resolveLocationOptions(): LocationPathOptions {
 	const store = settingsOrNull();
 	const preset = getPreset(store?.get("statusLine.preset"));
 	const fromPreset = preset.segmentOptions?.path ?? {};
-	const override = (store?.get("statusLine.segmentOptions") as StatusLineSegmentOptions | undefined)?.path ?? {};
+	const override = store?.get("statusLine.segmentOptions")?.path ?? {};
 	return { ...fromPreset, ...override };
 }
 

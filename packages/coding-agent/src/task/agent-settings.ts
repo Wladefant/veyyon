@@ -201,7 +201,7 @@ export function delegationBlockedNotice(state: DelegationState): string | undefi
  * with "undefined is not an object" where an empty row is the right answer.
  */
 export function agentSettingsFor(settings: Settings, name: string): AgentSettings {
-	const table = settings.get("agent.agents") as Record<string, AgentSettings> | undefined;
+	const table = settings.get("agent.agents");
 	// A row written under a retired name still governs the agent that replaced it.
 	// Without this an operator who had pinned a model on `agent.agents.task`
 	// would keep the row in their config and silently stop getting the model.

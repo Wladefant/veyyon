@@ -171,16 +171,14 @@ function resolveBrowserKind(
 		return { kind: "spawned", path: exe };
 	}
 	const cmuxKind = resolveCmuxKind({
-		settingEnabled: session.settings.get("browser.cmux") as boolean | undefined,
+		settingEnabled: session.settings.get("browser.cmux"),
 	});
 	if (cmuxKind) {
 		return cmuxKind;
 	}
 	const kept = current?.kind === "headless" ? current : undefined;
 	const headless =
-		params.visible === undefined
-			? (kept?.headless ?? (session.settings.get("browser.headless") as boolean))
-			: !params.visible;
+		params.visible === undefined ? (kept?.headless ?? session.settings.get("browser.headless")) : !params.visible;
 	const profile = params.profile === undefined ? kept?.profile : validateProfileName(params.profile);
 	return { kind: "headless", headless, ...(profile === undefined ? {} : { profile }) };
 }
