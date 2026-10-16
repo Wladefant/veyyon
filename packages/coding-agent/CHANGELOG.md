@@ -44,6 +44,7 @@
 
 - A provider error that ends a turn is logged at warn with the provider's message, model and error classification, and a failure's retry classification is logged once instead of once per recovery check ([#935](https://github.com/santhreal/veyyon/issues/935)).
 - A headless `browser` launch reads the binary's product and version again after a `--version` probe that failed or timed out, instead of launching every later tab of that binary without a matching `--user-agent`, which named itself `HeadlessChrome`.
+- A web search cancelled while its headless-browser fallback is opening a page closes that page once it opens instead of leaving it open in the shared browser, and a search cancelled during the fallback's retry delay ends at once instead of after the delay.
 - With `browser.naturalInput` on, a click whose `delay` an op deadline or abort cuts short releases the button at once instead of holding it for the rest of the `delay`, which failed the tab's next press with `'left' is already pressed`.
 - A `browser` `:has-text()` selector matches the text Playwright matches, so a page whose `<title>`, inline `<script>`, `<style>` or `<noscript>` holds the words acts on the element showing them instead of timing out on an element with no box, and a submit input's value and a shadow root's text count as their element's text.
 - `tab.fill` on a time or datetime input whose `min` and `max` narrow the hour field, such as `min="13:00" max="17:00"`, types the hour as a person does instead of setting the value by script with untrusted `input` and `change` events.

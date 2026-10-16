@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import type { FetchImpl } from "@veyyon/ai";
 import { untilAborted } from "@veyyon/utils";
 import { SEARCH_HARD_TIMEOUT_MS } from "@veyyon/web/hard-timeout";
@@ -118,7 +119,13 @@ async function browseHtmlPage(
 	holdBrowser(handle);
 	let page: Page | undefined;
 	try {
-		const activePage = await untilAborted(signal, () => handle.browser.newPage());
+		// A page that opens after the abort is never assigned to `page`, so the `finally` below does not
+		// close it, and it would stay open in a browser other tabs and searches share.
+		const opening = handle.browser.newPage();
+		const activePage = await untilAborted(signal, () => opening).catch(error => {
+			void opening.then(late => late.close()).catch(() => undefined);
+			throw error;
+		});
 		page = activePage;
 		await applyViewport(activePage, undefined, false);
 		await applyStealthPatches(activePage, handle.identity);
@@ -128,7 +135,10 @@ async function browseHtmlPage(
 			);
 		}
 		for (let attempt = 0; attempt < attempts; attempt++) {
-			if (attempt > 0 && options.retryDelayMs) await Bun.sleep(options.retryDelayMs);
+			if (attempt > 0 && options.retryDelayMs) {
+				const retryDelayMs = options.retryDelayMs;
+				await untilAborted(signal, () => delay(retryDelayMs, undefined, { signal }));
+			}
 
 			const response = await untilAborted(signal, () =>
 				activePage.goto(createAttempt().url, {
