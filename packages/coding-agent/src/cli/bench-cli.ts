@@ -3,7 +3,6 @@ import type {
 	Api,
 	ApiKeyResolver,
 	AssistantMessage,
-	AssistantMessageEvent,
 	AssistantMessageEventStream,
 	Context,
 	Effort,
@@ -37,6 +36,7 @@ import {
 	shouldDisableReasoning,
 	toReasoningEffort,
 } from "../thinking";
+import { isFirstTokenEvent } from "./first-token";
 import { createCliModelRuntime } from "./model-runtime";
 
 const DEFAULT_RUNS = 10;
@@ -147,20 +147,6 @@ function closeProviderSessionStates(providerSessionState: Map<string, ProviderSe
 		state.close();
 	}
 	providerSessionState.clear();
-}
-
-function isFirstTokenEvent(event: AssistantMessageEvent): boolean {
-	switch (event.type) {
-		case "text_delta":
-		case "thinking_delta":
-		case "toolcall_delta":
-			return event.delta.length > 0;
-		case "text_end":
-		case "thinking_end":
-			return event.content.length > 0;
-		default:
-			return false;
-	}
 }
 
 /** Final message carries visible output — non-empty text/thinking or a tool call. */

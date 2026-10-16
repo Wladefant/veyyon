@@ -2,7 +2,6 @@ import type {
 	Api,
 	ApiKeyResolver,
 	AssistantMessage,
-	AssistantMessageEvent,
 	AssistantMessageEventStream,
 	AuthCredentialSnapshotEntry,
 	Context,
@@ -26,6 +25,7 @@ import {
 } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import { benchPrompts } from "../prompts/bench/rows";
+import { isFirstTokenEvent } from "./first-token";
 import { createCliModelRuntime } from "./model-runtime";
 
 const DEFAULT_SAMPLE_COUNT = 100;
@@ -271,20 +271,6 @@ function isBenchSuccess(result: DryBalanceBenchResult): result is DryBalanceBenc
 	return result.ok;
 }
 
-function isBenchFirstTokenEvent(event: AssistantMessageEvent): boolean {
-	switch (event.type) {
-		case "text_delta":
-		case "thinking_delta":
-		case "toolcall_delta":
-			return event.delta.length > 0;
-		case "text_end":
-		case "thinking_end":
-			return event.content.length > 0;
-		default:
-			return false;
-	}
-}
-
 function resolveBenchMaxTokens(model: Model<Api>): number {
 	return model.maxTokens !== null && Number.isFinite(model.maxTokens) && model.maxTokens > 0
 		? Math.min(BENCH_MAX_TOKENS, model.maxTokens)
@@ -435,7 +421,7 @@ async function runBenchRequest(
 		});
 		let message: AssistantMessage | undefined;
 		for await (const event of stream) {
-			if (firstTokenAt === undefined && isBenchFirstTokenEvent(event)) {
+			if (firstTokenAt === undefined && isFirstTokenEvent(event)) {
 				firstTokenAt = now();
 			}
 			if (event.type === "error") {

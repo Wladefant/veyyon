@@ -800,7 +800,8 @@ function selectPackageImportTarget(entry: unknown): PackageImportTargetSelection
 	return null;
 }
 
-async function resolvePackageImportTarget(
+/** Resolve a package.json `imports` or `exports` target relative to the package root, substituting the matched `*`. */
+async function resolvePackageTarget(
 	packageRoot: string,
 	target: string,
 	wildcard: string | null,
@@ -832,7 +833,7 @@ async function resolvePackageImportSpecifier(specifier: string, importerPath: st
 		return null;
 	}
 	if (exactTarget !== null) {
-		return resolvePackageImportTarget(packageRoot, exactTarget, null);
+		return resolvePackageTarget(packageRoot, exactTarget, null);
 	}
 
 	let bestMatch: { keyLength: number; target: ResolvedPackageImportTargetSelection; wildcard: string } | null = null;
@@ -863,7 +864,7 @@ async function resolvePackageImportSpecifier(specifier: string, importerPath: st
 	if (!bestMatch || bestMatch.target === PACKAGE_IMPORT_EXCLUDED) {
 		return null;
 	}
-	return resolvePackageImportTarget(packageRoot, bestMatch.target, bestMatch.wildcard);
+	return resolvePackageTarget(packageRoot, bestMatch.target, bestMatch.wildcard);
 }
 
 const PACKAGE_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s+|import\s*\(\s*)["'])(#[^"'()\s]+)(["'])/g;
@@ -1004,18 +1005,6 @@ async function readPackageManifestUncached(packageRoot: string): Promise<Record<
 	}
 }
 
-async function resolvePackageExportTarget(
-	packageRoot: string,
-	target: string,
-	wildcard: string | null,
-): Promise<string | null> {
-	if (!target.startsWith("./")) {
-		return null;
-	}
-	const substituted = wildcard === null ? target : target.replaceAll("*", wildcard);
-	return resolveSourceModuleFile(path.resolve(packageRoot, substituted));
-}
-
 async function resolveNodePackageExport(
 	packageRoot: string,
 	subpath: string | null,
@@ -1024,7 +1013,7 @@ async function resolveNodePackageExport(
 	const exportsField = manifest.exports;
 	const rootTarget = subpath === null ? selectPackageImportTarget(exportsField) : null;
 	if (rootTarget !== null && rootTarget !== PACKAGE_IMPORT_EXCLUDED) {
-		return resolvePackageExportTarget(packageRoot, rootTarget, null);
+		return resolvePackageTarget(packageRoot, rootTarget, null);
 	}
 	if (!isRecord(exportsField)) {
 		return null;
@@ -1033,7 +1022,7 @@ async function resolveNodePackageExport(
 	const exactKey = subpath === null ? "." : `./${subpath}`;
 	const exactTarget = selectPackageImportTarget(exportsField[exactKey]);
 	if (exactTarget !== null && exactTarget !== PACKAGE_IMPORT_EXCLUDED) {
-		return resolvePackageExportTarget(packageRoot, exactTarget, null);
+		return resolvePackageTarget(packageRoot, exactTarget, null);
 	}
 
 	for (const [key, entry] of Object.entries(exportsField)) {
@@ -1048,11 +1037,7 @@ async function resolveNodePackageExport(
 		if (target === null || target === PACKAGE_IMPORT_EXCLUDED) {
 			continue;
 		}
-		return resolvePackageExportTarget(
-			packageRoot,
-			target,
-			subpath.slice(prefix.length, subpath.length - suffix.length),
-		);
+		return resolvePackageTarget(packageRoot, target, subpath.slice(prefix.length, subpath.length - suffix.length));
 	}
 	return null;
 }

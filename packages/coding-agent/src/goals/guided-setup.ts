@@ -1,7 +1,8 @@
 import { instrumentedCompleteSimple, resolveTelemetry } from "@veyyon/agent-core";
-import type { ApiKey, Context, Tool } from "@veyyon/ai";
+import type { Context, Tool } from "@veyyon/ai";
 import { isRecord, prompt, Snowflake } from "@veyyon/utils";
 import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit/utils";
+import { refreshAfterEachApiKeyResolution } from "../config/api-key-resolver";
 import { missingCredentialsMessage } from "../config/missing-credentials";
 import { goalsPrompts } from "../prompts/goals/rows";
 import { mapJsonStrings } from "../secrets/obfuscator";
@@ -83,18 +84,6 @@ function parseToolArguments(value: unknown): unknown {
 	return typeof value === "string" ? parseJsonPayload(value) : value;
 }
 
-function refreshGuidedContextForApiKey(apiKey: ApiKey, refresh: () => void): ApiKey {
-	// Static credentials still use the same builder. Resolver-backed credentials rebuild after
-	// every awaited resolution, including the credential selected for an authentication retry.
-	refresh();
-	if (typeof apiKey === "string") return apiKey;
-	return async context => {
-		const resolved = await apiKey(context);
-		refresh();
-		return resolved;
-	};
-}
-
 export async function runGuidedGoalTurn(
 	session: AgentSession,
 	options: GuidedGoalTurnOptions,
@@ -141,7 +130,7 @@ export async function runGuidedGoalTurn(
 		resolved.model,
 		providerContext,
 		{
-			apiKey: refreshGuidedContextForApiKey(
+			apiKey: refreshAfterEachApiKeyResolution(
 				session.modelRegistry.resolver(resolved.model, session.sessionId),
 				refreshProviderContext,
 			),

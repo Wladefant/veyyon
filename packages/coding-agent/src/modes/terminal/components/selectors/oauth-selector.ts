@@ -9,7 +9,7 @@ import { HoverFade } from "@veyyon/utils/motion";
 import type { SgrMouseEvent } from "@veyyon/utils/mouse";
 import { truncateToWidth } from "@veyyon/utils/width";
 // The slot leaf, not the 95-module store: this file reads settings, it does not fill them.
-import { settings } from "../../../../config/settings-instance";
+import { disabledProviderIds } from "../../../../config/settings-instance";
 import { theme } from "../../../../theme/theme";
 import { matchesSelectCancel } from "../../utils/keybinding-matchers";
 import { pointerMotionEnabled } from "../chrome/modal-shell";
@@ -18,20 +18,6 @@ import { hoverBandAt, renderScrollableList } from "./selector-helpers";
 
 /** Default visible provider rows when the host does not size the selector. */
 const OAUTH_SELECTOR_MAX_VISIBLE = 10;
-
-/**
- * Provider ids the user has disabled via settings. The sign-in list hides these
- * so a disabled provider's models stay out of reach end-to-end, mirroring
- * the model picker's `disabledProviders` filtering. Reads the settings singleton
- * defensively: it throws before `Settings.init()`, in which case nothing is disabled.
- */
-function getDisabledProviderIds(): ReadonlySet<string> {
-	try {
-		return new Set(settings.get("disabledProviders"));
-	} catch {
-		return new Set();
-	}
-}
 
 /** Compact, human-readable tag for each credential-origin leg. */
 const ORIGIN_LABELS: Record<CredentialOriginKind, string> = {
@@ -173,7 +159,7 @@ export class OAuthSelectorComponent implements Component {
 	}
 
 	#loadProviders(): void {
-		const disabled = getDisabledProviderIds();
+		const disabled = disabledProviderIds();
 		// Hide a login entry when either its own id or the provider id it stores credentials under is
 		// disabled, so alias logins (e.g. `openai-codex-device` ⇒ `openai-codex`) disappear alongside
 		// the model provider they authenticate.

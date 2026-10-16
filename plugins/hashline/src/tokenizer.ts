@@ -277,7 +277,8 @@ function scanInsertTarget(line: string, index: number, end: number): TargetScan 
 	return null;
 }
 
-function unquotePath(pathText: string): string {
+/** `pathText` without one pair of matching surrounding quotes (`"..."` or `'...'`); otherwise unchanged. */
+export function unquotePath(pathText: string): string {
 	if (pathText.length < 2) return pathText;
 	const first = pathText[0];
 	const last = pathText[pathText.length - 1];

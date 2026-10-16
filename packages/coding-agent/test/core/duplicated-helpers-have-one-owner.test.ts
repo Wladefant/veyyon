@@ -62,15 +62,32 @@
  *  - `buildTreePrefix`, drawn by three renderers, one of which had drifted to the opposite argument
  *    order; `isThenable`, whose two copies came with a comment justifying one of them; and the CLI
  *    model-runtime bootstrap, whose copies both had to close the credential store on failure.
+ *  - `isFirstTokenEvent`, the event that stops the time-to-first-token clock in `veyyon bench` and
+ *    `veyyon dry-balance`; `refreshAfterEachApiKeyResolution`, the per-attempt context rebuild that the
+ *    guided-goal turn and the memory passes each wrapped around a credential resolver; and
+ *    `disabledProviderIds`, the set the model registry and the sign-in list both filter on.
+ *  - Outside this package: the catalog's discovery deadline, which two discovery modules each built
+ *    from a private timer instead of `withScopedTimeoutSignal`; its `toNonEmptyString`, which
+ *    `provider-models/openai-compat.ts` kept a copy of after `utils.ts` claimed both copies were gone;
+ *    and the hashline path unquoting that `input.ts` repeated from the tokenizer.
  */
 
 import { describe, expect, it, spyOn } from "bun:test";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { ApiKeyResolveContext, AssistantMessageEvent } from "@veyyon/ai";
 import { tryReadHeadSha } from "@veyyon/coding-agent/autoresearch/git";
+import { isFirstTokenEvent } from "@veyyon/coding-agent/cli/first-token";
 import * as collabCrypto from "@veyyon/coding-agent/collab/crypto";
 import * as collabProtocol from "@veyyon/coding-agent/collab/protocol";
+import { refreshAfterEachApiKeyResolution } from "@veyyon/coding-agent/config/api-key-resolver";
+import { Settings } from "@veyyon/coding-agent/config/settings";
+import {
+	disabledProviderIds,
+	setSettingsInstance,
+	settingsOrNull,
+} from "@veyyon/coding-agent/config/settings-instance";
 import { canonicalProjectDir } from "@veyyon/coding-agent/launch/paths";
 import { buildTreePrefix } from "@veyyon/coding-agent/modes/terminal/draw/utils";
 import { formatProviderName } from "@veyyon/coding-agent/session/account-format";
@@ -78,10 +95,11 @@ import * as workerClient from "@veyyon/coding-agent/subprocess/worker-client";
 import type { WorkerLogPayload } from "@veyyon/coding-agent/subprocess/worker-log";
 import * as workerLog from "@veyyon/coding-agent/subprocess/worker-log";
 import { branch } from "@veyyon/coding-agent/utils/git";
+import { unquotePath } from "@veyyon/hashline";
 import { errorMessage, parseJsonOrYamlByExtension, TempDir } from "@veyyon/utils";
 import { asStrictBytes } from "@veyyon/utils/bytes";
 import * as logger from "@veyyon/utils/logger";
-import { moduleSpecifiersIn } from "@veyyon/utils/module-reach";
+import { moduleSpecifiersIn, namedImportsFrom } from "@veyyon/utils/module-reach";
 import * as wire from "@veyyon/wire";
 
 const SRC = path.join(import.meta.dir, "../../src");
@@ -724,5 +742,158 @@ describe("the worker log replay", () => {
 			warn.mockRestore();
 			error.mockRestore();
 		}
+	});
+});
+
+/** The names `relative` (under the repository root) imports from `specifier`, read from its import graph. */
+function namedImportsIn(relative: string, specifier: string): string[] {
+	return namedImportsFrom(fs.readFileSync(path.join(REPO_ROOT, relative), "utf-8"), specifier);
+}
+
+describe("isFirstTokenEvent", () => {
+	/**
+	 * `veyyon bench` and `veyyon dry-balance` each stopped their time-to-first-token clock with a private
+	 * copy of this predicate. A copy that counted an empty delta would report a faster first token than
+	 * the provider delivered, on one of the two benchmarks only, and the two would stop agreeing.
+	 */
+	it("is imported by both benchmark CLIs", () => {
+		for (const file of ["cli/bench-cli.ts", "cli/dry-balance-cli.ts"]) {
+			expect(importsOf(file), file).toContain("cli/first-token");
+		}
+	});
+
+	const event = (fields: Record<string, unknown>): AssistantMessageEvent => fields as unknown as AssistantMessageEvent;
+
+	it.each(["text_delta", "thinking_delta", "toolcall_delta"])("counts a %s only when it carries text", type => {
+		expect(isFirstTokenEvent(event({ type, delta: "a" }))).toBe(true);
+		expect(isFirstTokenEvent(event({ type, delta: "" }))).toBe(false);
+	});
+
+	it.each(["text_end", "thinking_end"])("counts a %s only when its block holds content", type => {
+		expect(isFirstTokenEvent(event({ type, content: "a" }))).toBe(true);
+		expect(isFirstTokenEvent(event({ type, content: "" }))).toBe(false);
+	});
+
+	it("does not count an event that carries no output", () => {
+		for (const type of ["start", "text_start", "toolcall_end", "done"]) {
+			expect(isFirstTokenEvent(event({ type, delta: "a", content: "a" })), type).toBe(false);
+		}
+	});
+});
+
+describe("refreshAfterEachApiKeyResolution", () => {
+	/**
+	 * The guided-goal turn and the memory passes rebuild the request context (the provider text they
+	 * obfuscate) before every physical attempt, and each wrapped the credential resolver privately to do
+	 * it. A copy that refreshed before the awaited resolution instead of after would send an
+	 * authentication retry the context built for the credential that had just been refused.
+	 */
+	it("is imported by both callers", () => {
+		for (const file of ["goals/guided-setup.ts", "memory/local.ts"]) {
+			expect(importsOf(file), file).toContain("config/api-key-resolver");
+		}
+	});
+
+	it("refreshes once for a static key and returns the key itself", () => {
+		let refreshes = 0;
+		const key = refreshAfterEachApiKeyResolution("sk-static", () => {
+			refreshes += 1;
+		});
+		expect(key).toBe("sk-static");
+		expect(refreshes).toBe(1);
+	});
+
+	it("refreshes after each awaited resolution and passes the resolved key through", async () => {
+		const order: string[] = [];
+		let resolutions = 0;
+		const key = refreshAfterEachApiKeyResolution(
+			async () => {
+				await Promise.resolve();
+				resolutions += 1;
+				order.push(`resolve ${resolutions}`);
+				return `sk-${resolutions}`;
+			},
+			() => {
+				order.push("refresh");
+			},
+		);
+		expect(order).toEqual(["refresh"]);
+		if (typeof key === "string") throw new Error("a resolver must stay a resolver");
+		const initial: ApiKeyResolveContext = { lastChance: false, error: undefined };
+		const retry: ApiKeyResolveContext = { lastChance: true, error: new Error("401") };
+
+		expect(await key(initial)).toBe("sk-1");
+		expect(await key(retry)).toBe("sk-2");
+		expect(order).toEqual(["refresh", "resolve 1", "refresh", "resolve 2", "refresh"]);
+	});
+});
+
+describe("disabledProviderIds", () => {
+	/**
+	 * The model registry and the sign-in list each read `disabledProviders` through a private
+	 * try/catch. A copy that drifted would let a disabled provider reappear in one of the two lists.
+	 */
+	it("is imported by both filters", () => {
+		for (const file of [
+			"packages/coding-agent/src/config/model-registry.ts",
+			"packages/coding-agent/src/modes/terminal/components/selectors/oauth-selector.ts",
+		]) {
+			const specifiers = packageImportsOf(file).filter(
+				specifier => specifier.endsWith("config/settings-instance") || specifier === "./settings-instance",
+			);
+			expect(specifiers, file).toHaveLength(1);
+			expect(namedImportsIn(file, specifiers[0]), file).toContain("disabledProviderIds");
+		}
+	});
+
+	it("is the configured set once settings exist, and empty before", () => {
+		const original = settingsOrNull();
+		try {
+			setSettingsInstance(null);
+			expect([...disabledProviderIds()]).toEqual([]);
+			setSettingsInstance(Settings.isolated({ disabledProviders: ["openai", "xai"] }));
+			expect([...disabledProviderIds()].sort()).toEqual(["openai", "xai"]);
+		} finally {
+			setSettingsInstance(original);
+		}
+	});
+});
+
+describe("the catalog's discovery helpers", () => {
+	/**
+	 * Two discovery modules each armed a private timer that `withScopedTimeoutSignal` already owns,
+	 * including the reason it exists (an armed abort-signal timeout crashed Bun's GC), and
+	 * `provider-models/openai-compat.ts` kept a `toNonEmptyString` beside the one in `utils.ts`
+	 * whose comment said the copies were gone.
+	 */
+	it("take the deadline from utils and the string coercion from the catalog's utils", () => {
+		for (const file of [
+			"packages/catalog/src/discovery/openai-compatible.ts",
+			"packages/catalog/src/provider-models/openai-compat.ts",
+		]) {
+			expect(namedImportsIn(file, "@veyyon/utils/scoped-timeout"), file).toContain("withScopedTimeoutSignal");
+		}
+		expect(namedImportsIn("packages/catalog/src/provider-models/openai-compat.ts", "../utils")).toContain(
+			"toNonEmptyString",
+		);
+	});
+});
+
+describe("the hashline path unquoting", () => {
+	/**
+	 * `input.ts` repeated the tokenizer's quote stripping for a section header path, so a header and a
+	 * move destination could have disagreed about which quotes a path may carry.
+	 */
+	it("is the tokenizer's, imported by the input parser", () => {
+		expect(namedImportsIn("plugins/hashline/src/input.ts", "./tokenizer")).toContain("unquotePath");
+	});
+
+	it("strips one matching pair of quotes and nothing else", () => {
+		expect(unquotePath('"a b.ts"')).toBe("a b.ts");
+		expect(unquotePath("'a.ts'")).toBe("a.ts");
+		expect(unquotePath("\"a.ts'")).toBe("\"a.ts'");
+		expect(unquotePath('""')).toBe("");
+		expect(unquotePath('"')).toBe('"');
+		expect(unquotePath("a.ts")).toBe("a.ts");
 	});
 });

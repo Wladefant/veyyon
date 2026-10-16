@@ -61,7 +61,7 @@ import { ModelsConfigFile, type ProviderValidationModel, validateProviderConfigu
 import type { ModelOverride, ModelsConfig, ProviderAuthMode } from "./models-config-schema";
 import { resolveConfigValueSync } from "./resolve-config-value-sync";
 import { REGISTRY_SNAPSHOT_VERSION, readStaticModelStage, writeStaticModelStage } from "./resolved-model-stage";
-import { settings } from "./settings";
+import { disabledProviderIds } from "./settings-instance";
 
 const SPECIAL_MODEL_MANAGER_PROVIDER_IDS: readonly string[] = [
 	"google-antigravity",
@@ -422,14 +422,6 @@ function normalizeSuppressedSelector(
 	// so persisted suppressions keyed by raw member ids still bind.
 	const aliasId = resolveVariantAlias(parsed.provider, parsed.id);
 	return `${parsed.provider}/${aliasId ?? parsed.id}`;
-}
-
-function getDisabledProviderIdsFromSettings(): Set<string> {
-	try {
-		return new Set(settings.get("disabledProviders"));
-	} catch {
-		return new Set();
-	}
 }
 
 /**
@@ -993,7 +985,7 @@ export class ModelRegistry {
 	}
 
 	#addImplicitDiscoverableProviders(configuredProviders: Set<string>): void {
-		const disabledProviders = getDisabledProviderIdsFromSettings();
+		const disabledProviders = disabledProviderIds();
 		for (const runtime of IMPLICIT_LOCAL_RUNTIMES) {
 			if (configuredProviders.has(runtime.provider) || disabledProviders.has(runtime.provider)) continue;
 			this.#discoverableProviders.push({
@@ -1127,7 +1119,7 @@ export class ModelRegistry {
 		strategy: ModelRefreshStrategy,
 		providerFilter?: ReadonlySet<string>,
 	): Promise<void> {
-		const disabledProviders = getDisabledProviderIdsFromSettings();
+		const disabledProviders = disabledProviderIds();
 		const selectedDiscoverableProviders = (
 			providerFilter
 				? this.#discoverableProviders.filter(provider => providerFilter.has(provider.provider))
@@ -1501,7 +1493,7 @@ export class ModelRegistry {
 				},
 			},
 		];
-		const disabledProviders = getDisabledProviderIdsFromSettings();
+		const disabledProviders = disabledProviderIds();
 		const discovers = ({ providerId }: { providerId: string }): boolean =>
 			!disabledProviders.has(providerId) &&
 			!configuredDiscoveryProviders.has(providerId) &&
@@ -1796,7 +1788,7 @@ export class ModelRegistry {
 	 * full bundled catalog (thousands of models, ~50 providers).
 	 */
 	#createAvailabilityCheck(): (provider: string) => boolean {
-		const disabledProviders = getDisabledProviderIdsFromSettings();
+		const disabledProviders = disabledProviderIds();
 		const byProvider = new Map<string, boolean>();
 		return provider => {
 			let available = byProvider.get(provider);
@@ -1852,7 +1844,7 @@ export class ModelRegistry {
 	}
 
 	getDiscoverableProviders(): string[] {
-		const disabledProviders = getDisabledProviderIdsFromSettings();
+		const disabledProviders = disabledProviderIds();
 		return this.#discoverableProviders
 			.filter(provider => !disabledProviders.has(provider.provider))
 			.map(provider => provider.provider);

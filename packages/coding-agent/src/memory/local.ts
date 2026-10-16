@@ -38,6 +38,7 @@ function clampMemoryEffort(model: Model, requested: Effort): Effort | undefined 
 	return clamped;
 }
 
+import { refreshAfterEachApiKeyResolution } from "../config/api-key-resolver";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import { memoriesPrompts } from "../prompts/memories/rows";
@@ -784,7 +785,7 @@ async function runStage1Job(options: {
 			];
 		};
 		const response = await completeSimple(model, providerContext, {
-			apiKey: refreshProviderContextForApiKey(apiKey, refreshProviderContext),
+			apiKey: refreshAfterEachApiKeyResolution(apiKey, refreshProviderContext),
 			metadata: options.metadata,
 			maxTokens: clampLow(Math.floor(modelMaxTokens * 0.2), 1024, 4096),
 			reasoning: clampMemoryEffort(model, Effort.Low),
@@ -974,7 +975,7 @@ async function runConsolidationModel(options: {
 		];
 	};
 	const response = await completeSimple(model, providerContext, {
-		apiKey: refreshProviderContextForApiKey(apiKey, refreshProviderContext),
+		apiKey: refreshAfterEachApiKeyResolution(apiKey, refreshProviderContext),
 		metadata: options.metadata,
 		maxTokens: 8192,
 		reasoning: clampMemoryEffort(model, Effort.Medium),
@@ -1304,18 +1305,6 @@ function sanitizeSkillRelativePath(rawPath: string): string | undefined {
 		if (!/^[A-Za-z0-9._-]+$/.test(part)) return undefined;
 	}
 	return parts.join("/");
-}
-
-function refreshProviderContextForApiKey(apiKey: ApiKey, refresh: () => void): ApiKey {
-	// Populate once for static keys and test seams. Resolver-backed keys refresh again only after
-	// every awaited credential resolution, immediately before completeSimple starts that attempt.
-	refresh();
-	if (typeof apiKey === "string") return apiKey;
-	return async context => {
-		const resolved = await apiKey(context);
-		refresh();
-		return resolved;
-	};
 }
 
 function truncateByApproxTokens(text: string, tokenLimit: number): string {
