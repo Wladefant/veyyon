@@ -39,6 +39,7 @@
 - The `browser` tool no longer scans every evaluated script for a `sourceURL` suffix the pinned puppeteer never appends; no user-visible change.
 - The `browser` tool description (1,815 estimated tokens, from 1,440) states that run code executes outside the page, that raw `page.evaluate` cannot see page globals, that a click never presses a cover and that refs chain, that a state file loads only into a headless tab, that iframe content nests in a snapshot with `f1e3` refs, which selector forms act, what `profile` and `visible` do, and that a `Challenge:` line needing a person is handed off rather than solved, and asks the model to act on an open's snapshot without reading the page again, to act and read back in one run, and to act through `tab` actions instead of probing hit targets or page scripts first.
 - The retry recovery helpers moved from `session/runtime/retry-runtime.ts` to `session/failed-turn.ts`; no user-visible change.
+- Session switching and its rollback moved from `session/agent-session.ts` to the `session/runtime/session-switch.ts` collaborator; no user-visible change.
 
 ### Fixed
 

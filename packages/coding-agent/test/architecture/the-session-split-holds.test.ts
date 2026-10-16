@@ -63,10 +63,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-09 at 9811: the session-switch rollback record and its single-purpose
  * adoption steps (+92), the end-of-turn context check split into its recovery cases (+32), the
  * agent-event reattachment after a part-way failed transition (+24), the composer prediction hook
- * (+11) and the verification reminder's active-tool-name source (+1) grew the class in place. The
- * session-switch adoption and rollback is the next concern to leave, and the ceiling falls with it.
+ * (+11) and the verification reminder's active-tool-name source (+1) grew the class in place.
+ * RE-MEASURED 2026-10-16 at 9015: session-switch adoption and rollback left as the
+ * `session-switch.ts` collaborator (-371).
  */
-const RUNTIME_CEILING = 9_475;
+const RUNTIME_CEILING = 9_100;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -102,6 +103,7 @@ const COLLABORATORS = [
 	"session-approvals.ts",
 	"session-scope.ts",
 	"session-secrets.ts",
+	"session-switch.ts",
 	"stop-retries.ts",
 	"streaming-edit-guard.ts",
 	"thinking-runtime.ts",
