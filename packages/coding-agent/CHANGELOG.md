@@ -48,10 +48,12 @@
 - The `/usage` and `/session` panels and the `/memory` command moved out of `command-controller.ts` into `usage-report-view.ts`, `session-info-view.ts` and `memory-command-controller.ts`; no user-visible change.
 - The tool-call cards, the compaction and retry loaders with the pinned turn error, the idle compaction and recap, the IRC cards, the replaceable `job` and `todo` blocks and the speech hooks moved out of `event-controller.ts` into `tool-call-cards.ts`, `turn-recovery.ts`, `idle-follow-ups.ts`, `irc-cards.ts`, `displaceable-blocks.ts` and `turn-speech.ts`; no user-visible change.
 - Paste intake, the `/queue` batch and dequeue, submission routing and the Esc chain moved out of `input-controller.ts` into `composer-paste.ts`, `queued-submissions.ts`, `prompt-submission.ts` and `composer-escape.ts`, and a detached abort from those paths is logged under the new module's name; no user-visible change.
+- The composer, plan review, plan annotation, `/todo edit` and hook-editor external-editor handoffs share one `editInTerminal`, so `/todo edit` now runs the editor on the controlling terminal like the composer's `ctrl+g` instead of on the inherited stdin.
 - The LSP server selection, diagnostics wait, project diagnostics, `rename_file` and the edit/write writethrough moved from `lsp/index.ts` into `lsp/servers.ts`, `lsp/diagnostics.ts`, `lsp/workspace-diagnostics.ts`, `lsp/rename-file.ts` and `lsp/writethrough.ts`, so the edit and write tools no longer load the `lsp` tool; no user-visible change.
 
 ### Fixed
 
+- `ctrl+g` in a hook or ask-input editor whose `$VISUAL`/`$EDITOR` cannot start shows the failure under the text instead of ending the session, and with no editor configured shows that instead of doing nothing.
 - A provider error that ends a turn is logged at warn with the provider's message, model and error classification, and a failure's retry classification is logged once instead of once per recovery check ([#935](https://github.com/santhreal/veyyon/issues/935)).
 - A headless `browser` launch reads the binary's product and version again after a `--version` probe that failed or timed out, instead of launching every later tab of that binary without a matching `--user-agent`, which named itself `HeadlessChrome`.
 - A credential-free web search that returns before its soft or hard deadline cancels the deadline's timer instead of holding the embedding process open until the deadline passes.

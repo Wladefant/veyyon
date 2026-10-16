@@ -12,7 +12,7 @@ import {
 	USER_TODO_EDIT_CUSTOM_TYPE,
 } from "../../../tools/agent/todo";
 import { copyToClipboard } from "../../../utils/clipboard";
-import { getEditorCommand, openInEditor } from "../../../utils/external-editor";
+import { editInTerminal, getEditorCommand, NO_EDITOR_CONFIGURED } from "../../../utils/external-editor";
 import type { InteractiveModeContext } from "../types";
 
 /**
@@ -370,7 +370,7 @@ export class TodoCommandController {
 	async #editInExternalEditor(): Promise<void> {
 		const editorCmd = getEditorCommand();
 		if (!editorCmd) {
-			this.ctx.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
+			this.ctx.showWarning(NO_EDITOR_CONFIGURED);
 			return;
 		}
 
@@ -378,16 +378,8 @@ export class TodoCommandController {
 		const initialMarkdown =
 			current.length > 0 ? phasesToMarkdown(current) : "# Todos\n- [ ] (replace this with your tasks)\n";
 
-		const fileHandle = await openTtyHandle();
-		this.ctx.ui.stop();
 		try {
-			const stdio: [number | "inherit", number | "inherit", number | "inherit"] = fileHandle
-				? [fileHandle.fd, fileHandle.fd, fileHandle.fd]
-				: ["inherit", "inherit", "inherit"];
-			const result = await openInEditor(editorCmd, initialMarkdown, {
-				extension: ".todo.md",
-				stdio,
-			});
+			const result = await editInTerminal(this.ctx.ui, editorCmd, initialMarkdown, { extension: ".todo.md" });
 			if (result === null) {
 				this.ctx.showWarning("Editor exited without saving; todos unchanged.");
 				return;
@@ -402,14 +394,6 @@ export class TodoCommandController {
 			this.ctx.showStatus(`Todos updated from editor: ${parsed.length} phase(s), ${taskCount} task(s).`);
 		} catch (error) {
 			this.ctx.showWarning(`Failed to open external editor: ${errorMessage(error)}`);
-		} finally {
-			if (fileHandle) {
-				// The temp file has already been read (or the read failed and was reported above); a close that
-				// fails in this `finally` must not replace that report, and the descriptor dies with the process.
-				await fileHandle.close().catch(() => {});
-			}
-			this.ctx.ui.start();
-			this.ctx.ui.requestRender();
 		}
 	}
 
@@ -433,18 +417,5 @@ export class TodoCommandController {
 		};
 		this.ctx.agent.appendMessage(message);
 		this.ctx.sessionManager.appendMessage(message);
-	}
-}
-
-async function openTtyHandle(): Promise<fs.FileHandle | null> {
-	const stdinPath = (process.stdin as unknown as { path?: string }).path;
-	const candidate = typeof stdinPath === "string" ? stdinPath : undefined;
-	if (!candidate) return null;
-	try {
-		return await fs.open(candidate, "r+");
-	} catch {
-		// Same as the editor handle: no usable tty means the caller keeps the in-app path, which the
-		// user sees. Null is the "not available" answer, not a swallowed failure to open a real tty.
-		return null;
 	}
 }

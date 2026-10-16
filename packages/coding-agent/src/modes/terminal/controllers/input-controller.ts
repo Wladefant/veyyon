@@ -1,4 +1,3 @@
-import * as fs from "node:fs/promises";
 import { ThinkingLevel } from "@veyyon/agent-core";
 import type { ImageContent } from "@veyyon/ai";
 import { errorMessage, logger, sanitizeText } from "@veyyon/utils";
@@ -16,7 +15,7 @@ import {
 	readMacFileUrlsFromClipboard,
 	readTextFromClipboard,
 } from "../../../utils/clipboard";
-import { getEditorCommand, openInEditor } from "../../../utils/external-editor";
+import { editInTerminal, getEditorCommand, NO_EDITOR_CONFIGURED } from "../../../utils/external-editor";
 import { createPromptActionAutocompleteProvider } from "../autocomplete/prompt-action-autocomplete";
 import { renderSegmentTrack } from "../components/chrome/segment-track";
 import { CONFIGURABLE_EDITOR_ACTIONS, type DeferredEditorAction } from "../components/composer/custom-editor";
@@ -697,52 +696,21 @@ export class InputController {
 		this.ctx.showStatus(`Thinking blocks: ${this.ctx.hideThinkingBlock ? "hidden" : "visible"}`);
 	}
 
-	async #openEditorTerminalHandle(): Promise<fs.FileHandle | null> {
-		const terminalPath = getEditorTerminalPath();
-		if (!terminalPath) {
-			return null;
-		}
-		try {
-			return await fs.open(terminalPath, "r+");
-		} catch {
-			// No controlling terminal to hand the external editor. Null is the documented "not available"
-			// answer the caller already handles by falling back to the in-app editor, which is visible to
-			// the user in a way a log line would not be.
-			return null;
-		}
-	}
-
 	async openExternalEditor(): Promise<void> {
 		const editorCmd = getEditorCommand();
 		if (!editorCmd) {
-			this.ctx.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
+			this.ctx.showWarning(NO_EDITOR_CONFIGURED);
 			return;
 		}
 
 		const currentText = this.ctx.editor.getExpandedText?.() ?? this.ctx.editor.getText();
-
-		let ttyHandle: fs.FileHandle | null = null;
 		try {
-			ttyHandle = await this.#openEditorTerminalHandle();
-			this.ctx.ui.stop();
-
-			const stdio: [number | "inherit", number | "inherit", number | "inherit"] = ttyHandle
-				? [ttyHandle.fd, ttyHandle.fd, ttyHandle.fd]
-				: ["inherit", "inherit", "inherit"];
-
-			const result = await openInEditor(editorCmd, currentText, { extension: ".veyyon.md", stdio });
+			const result = await editInTerminal(this.ctx.ui, editorCmd, currentText, { extension: ".veyyon.md" });
 			if (result !== null) {
 				this.ctx.editor.setText(result);
 			}
 		} catch (error) {
 			this.ctx.showWarning(`Failed to open external editor: ${errorMessage(error)}`);
-		} finally {
-			if (ttyHandle) {
-				await ttyHandle.close();
-			}
-
-			this.ctx.ui.start();
-			this.ctx.ui.requestRender();
 		}
 	}
 
@@ -767,11 +735,4 @@ export class InputController {
 			});
 		}
 	}
-}
-
-function getEditorTerminalPath(): string | null {
-	if (process.platform === "win32") {
-		return null;
-	}
-	return "/dev/tty";
 }

@@ -143,7 +143,7 @@ import { ToolError } from "../../tools/core/tool-errors";
 import { hasForegroundBashWait, onForegroundBashWaitChange } from "../../tools/shell/bash-foreground-registry";
 import { copyToClipboard } from "../../utils/clipboard";
 import type { EventBus } from "../../utils/event-bus";
-import { getEditorCommand, openInEditor } from "../../utils/external-editor";
+import { editInTerminal, getEditorCommand, NO_EDITOR_CONFIGURED } from "../../utils/external-editor";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../../utils/session-color";
 import { messageHasDisplayableThinking } from "../../utils/thinking-display";
 import { popTerminalTitle, pushTerminalTitle, setSessionTerminalTitle } from "../../utils/title-generator";
@@ -2835,21 +2835,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#hidePlanReview();
 	}
 
-	async #openEditorTerminalHandle(): Promise<fs.FileHandle | null> {
-		const terminalPath = getEditorTerminalPath();
-		if (!terminalPath) {
-			return null;
-		}
-		try {
-			return await fs.open(terminalPath, "r+");
-		} catch {
-			// No controlling terminal: piped stdin, a CI runner, a detached process. That is ordinary rather
-			// than a failure, and null is the same "cannot hand a terminal to an editor" the win32 branch above
-			// returns, so the caller already has one path for it.
-			return null;
-		}
-	}
-
 	#getPlanApprovalContextUsage(): ContextUsage | undefined {
 		const executionModel = this.#planModePreviousModelState?.model ?? this.session.model;
 		const contextWindow = executionModel?.contextWindow;
@@ -2871,7 +2856,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	async #openPlanInExternalEditor(planFilePath: string): Promise<void> {
 		const editorCmd = getEditorCommand();
 		if (!editorCmd) {
-			this.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
+			this.showWarning(NO_EDITOR_CONFIGURED);
 			return;
 		}
 
@@ -2888,18 +2873,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 
-		let ttyHandle: fs.FileHandle | null = null;
 		try {
-			ttyHandle = await this.#openEditorTerminalHandle();
-			this.ui.stop();
-
-			const stdio: [number | "inherit", number | "inherit", number | "inherit"] = ttyHandle
-				? [ttyHandle.fd, ttyHandle.fd, ttyHandle.fd]
-				: ["inherit", "inherit", "inherit"];
-
-			const result = await openInEditor(editorCmd, currentText, {
+			const result = await editInTerminal(this.ui, editorCmd, currentText, {
 				extension: path.extname(resolvedPath) || ".md",
-				stdio,
 				trimTrailingNewline: false,
 			});
 			if (result !== null) {
@@ -2909,43 +2885,23 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 		} catch (error) {
 			this.showWarning(`Failed to open external editor: ${errorMessage(error)}`);
-		} finally {
-			if (ttyHandle) {
-				await ttyHandle.close();
-			}
-			this.ui.start();
-			this.ui.requestRender(true);
 		}
 	}
 
 	async #openPlanAnnotationInExternalEditor(draft: string, commit: (text: string | null) => void): Promise<void> {
 		const editorCmd = getEditorCommand();
 		if (!editorCmd) {
-			this.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
+			this.showWarning(NO_EDITOR_CONFIGURED);
 			return;
 		}
 
-		let ttyHandle: fs.FileHandle | null = null;
 		try {
-			ttyHandle = await this.#openEditorTerminalHandle();
-			this.ui.stop();
-
-			const stdio: [number | "inherit", number | "inherit", number | "inherit"] = ttyHandle
-				? [ttyHandle.fd, ttyHandle.fd, ttyHandle.fd]
-				: ["inherit", "inherit", "inherit"];
-
-			const result = await openInEditor(editorCmd, draft, { extension: ".md", stdio });
+			const result = await editInTerminal(this.ui, editorCmd, draft, { extension: ".md" });
 			if (result !== null) {
 				commit(result);
 			}
 		} catch (error) {
 			this.showWarning(`Failed to open external editor: ${errorMessage(error)}`);
-		} finally {
-			if (ttyHandle) {
-				await ttyHandle.close();
-			}
-			this.ui.start();
-			this.ui.requestRender(true);
 		}
 	}
 
@@ -4714,13 +4670,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 function isClosedTodo(task: TodoItem): boolean {
 	return isTerminalTodoStatus(task.status);
-}
-
-function getEditorTerminalPath(): string | null {
-	if (process.platform === "win32") {
-		return null;
-	}
-	return "/dev/tty";
 }
 
 function formatKeepContextLabel(contextUsage: ContextUsage | undefined): string {
