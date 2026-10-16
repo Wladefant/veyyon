@@ -57,6 +57,8 @@ describe("an interactive session's static import graph", () => {
 		// Every other controller in the directory opens with its command: `/mcp`, `/ssh`, `/tan`,
 		// `/todo`, the selector cards and the setting effects they apply.
 		expect(reachedIn(interactiveSession, "modes/terminal/controllers")).toEqual([
+			// Carved out of interactive-mode.ts, which loads with the session.
+			"anchored-blocks.ts",
 			"btw-controller.ts",
 			// Carved out of extension-ui-controller.ts, which loads with the session.
 			"collab-guest-dialogs.ts",
