@@ -11,6 +11,10 @@
 - OpenAI-compatible and LiteLLM discovery take their request deadline from `withScopedTimeoutSignal` in `@veyyon/utils` and `toNonEmptyString` from the catalog's own helpers instead of private copies; no user-visible change.
 - The `OPENROUTER_API_ENDPOINT` documentation states which clients fall back to it; no user-visible change.
 
+### Fixed
+
+- Moonshot-hosted Kimi K2.7 Code ids spelled with underscores (`kimi_k2_7_code`) force thinking on through the OpenAI-compatible path, as they already did through the Anthropic-compatible one.
+
 ## [1.5.7] - 2026-10-15
 
 ### Added
