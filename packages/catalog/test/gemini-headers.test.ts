@@ -32,7 +32,7 @@ describe("getGeminiCliHeaders", () => {
 
 describe("getAntigravityUserAgent", () => {
 	it("maps the current platform/arch into Antigravity's antigravity/hub/<version> <os>/<arch> shape", () => {
-		const version = process.env.VEYYON_AI_ANTIGRAVITY_VERSION || "2.1.4";
+		const version = process.env.VEYYON_AI_ANTIGRAVITY_VERSION || "2.23.0";
 		const os = process.platform === "win32" ? "windows" : process.platform;
 		const arch = process.arch === "x64" ? "amd64" : process.arch === "ia32" ? "386" : process.arch;
 		expect(getAntigravityUserAgent()).toBe(`antigravity/hub/${version} ${os}/${arch}`);
@@ -85,6 +85,9 @@ describe("getAntigravityModelWireProfile", () => {
 	 */
 	it("holds the exact per-id ceiling the backend accepts", () => {
 		expect(ANTIGRAVITY_MODEL_WIRE_PROFILES).toEqual({
+			"gemini-4-argon-low": { modelEnum: "MODEL_PLACEHOLDER_M419", maxOutputTokens: 65536 },
+			"gemini-4-argon-medium": { modelEnum: "MODEL_PLACEHOLDER_M418", maxOutputTokens: 65536 },
+			"gemini-4-argon-high": { modelEnum: "MODEL_PLACEHOLDER_M417", maxOutputTokens: 65536 },
 			"gemini-3.5-flash-extra-low": { modelEnum: "MODEL_PLACEHOLDER_M187", maxOutputTokens: 65536 },
 			"gemini-3.5-flash-low": { modelEnum: "MODEL_PLACEHOLDER_M20", maxOutputTokens: 65536 },
 			"gemini-3-flash-agent": { modelEnum: "MODEL_PLACEHOLDER_M132", maxOutputTokens: 65536 },
