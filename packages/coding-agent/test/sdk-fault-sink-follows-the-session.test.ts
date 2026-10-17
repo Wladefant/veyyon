@@ -29,6 +29,7 @@ import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
+import type { CreateAgentSessionResult } from "@veyyon/coding-agent/session/factory-options";
 import { type OperatorNotice, OperatorNotices } from "@veyyon/kernel/session/operator-notices";
 import { publishNativeNotice } from "@veyyon/natives/loader-state";
 import { faultSinkCount, removeSyncWithRetries, reportFault, Snowflake } from "@veyyon/utils";
@@ -68,7 +69,7 @@ describe("the fault sink follows the session that installed it", () => {
 	}
 
 	/** A session in a fresh tree, with the notices channel supplied so the test can read it. */
-	async function openSession(notices: OperatorNotices): ReturnType<typeof createAgentSession> {
+	async function openSession(notices: OperatorNotices): Promise<CreateAgentSessionResult> {
 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `veyyon-fault-sink-sdk-${Snowflake.next()}-`));
 		tempDirs.push(tempDir);
 		const cwd = path.join(tempDir, `project-${Snowflake.next()}`);

@@ -19,6 +19,8 @@ import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import {
 	customMessageContentText,
+	findLastAssistantMessage,
+	lastCopyCandidateAssistantMessage,
 	sanitizeAssistantForReparentedHistory,
 	stringProperty,
 	textFromContent,
@@ -165,5 +167,27 @@ describe("a message shape reader tolerates the content it is handed", () => {
 		} as unknown as AgentMessage;
 
 		expect(titleConversationTurnFromMessage(toolResult)).toBeUndefined();
+	});
+
+	it("finds the newest assistant turn, an aborted one included, past a later user message", () => {
+		const older = assistant([{ type: "text", text: "older" }]);
+		const aborted = { ...assistant([]), stopReason: "aborted" } as AssistantMessage;
+		const user = { role: "user", content: "next", timestamp: 0 } as AgentMessage;
+
+		expect(findLastAssistantMessage([older, aborted, user])).toBe(aborted);
+		expect(findLastAssistantMessage([user])).toBeUndefined();
+	});
+
+	it("copies the newest assistant turn that said something, skipping an aborted turn left empty", () => {
+		const said = assistant([{ type: "text", text: "said" }]);
+		const abortedEmpty = { ...assistant([]), stopReason: "aborted" } as AssistantMessage;
+		const abortedPartial = {
+			...assistant([{ type: "text", text: "partial" }]),
+			stopReason: "aborted",
+		} as AssistantMessage;
+
+		expect(lastCopyCandidateAssistantMessage([said, abortedEmpty])).toBe(said);
+		expect(lastCopyCandidateAssistantMessage([said, abortedPartial])).toBe(abortedPartial);
+		expect(lastCopyCandidateAssistantMessage([abortedEmpty])).toBeUndefined();
 	});
 });

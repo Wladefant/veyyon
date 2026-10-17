@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
 	BinaryVectorStore,
-	cosineSimilarity,
 	FastBinarySearch,
 	getVecType,
 	hammingDistance,
@@ -9,6 +8,7 @@ import {
 	maximallyInformativeBinarization,
 	quantizeInt8,
 } from "@veyyon/mnemopi/core/binary-vectors";
+import { cosineSimilarity } from "@veyyon/mnemopi/core/vector-math";
 import { useMnemopiTestEnv } from "./setup";
 
 useMnemopiTestEnv();

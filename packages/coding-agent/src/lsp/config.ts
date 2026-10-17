@@ -656,22 +656,3 @@ export function getServersForFile(config: LspConfig, filePath: string): Array<[s
 		return aIsLinter - bIsLinter;
 	});
 }
-
-/**
- * Find the primary server for a file (prefers type-checkers over linters).
- * Used for operations like definition, hover, references that need type intelligence.
- */
-export function getServerForFile(config: LspConfig, filePath: string): [string, ServerConfig] | null {
-	const servers = getServersForFile(config, filePath);
-	return servers.length > 0 ? servers[0] : null;
-}
-
-/**
- * Check if a server has a specific capability
- */
-export function hasCapability(
-	config: ServerConfig,
-	capability: keyof NonNullable<ServerConfig["capabilities"]>,
-): boolean {
-	return config.capabilities?.[capability] === true;
-}

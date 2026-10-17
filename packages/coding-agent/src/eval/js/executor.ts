@@ -1,4 +1,5 @@
 import { errorMessage, isCancellation, isTimeoutError } from "@veyyon/utils";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { OutputSink } from "../../session/streaming-output";
 import type { ToolSession } from "../../tools";
 import { inlineBudgetFor } from "../../tools/core/output-artifact";
@@ -8,7 +9,6 @@ import {
 	resolveOutputSinkArtifactMaxBytes,
 	resolveOutputSinkHeadBytes,
 } from "../../tools/core/output-meta";
-import { scopedTimeoutSignal } from "../../utils/fetch-timeout";
 import { isEvalTimeoutControlEvent } from "../bridge-timeout";
 import { executeInVmContext, type JsDisplayOutput } from "./context-manager";
 import type { JsStatusEvent } from "./shared/types";

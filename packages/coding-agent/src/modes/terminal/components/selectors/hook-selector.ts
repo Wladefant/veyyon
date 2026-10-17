@@ -24,7 +24,8 @@ import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth } from "@veyyon/utils/width";
 import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
 import { getMarkdownTheme, markdownTextStyle } from "../../../../theme/markdown-theme";
-import { type ThemeColor, theme } from "../../../../theme/theme";
+import type { ThemeColor } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import {
 	matchesAppExternalEditor,
 	matchesSelectCancel,

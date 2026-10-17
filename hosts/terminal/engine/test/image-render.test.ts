@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { Image, ImageBudget } from "@veyyon/tui/components/image";
+import { Image } from "@veyyon/tui/components/image";
+import { ImageBudget } from "@veyyon/tui/core/image-budget";
 import {
 	type CellDimensions,
 	getCellDimensions,

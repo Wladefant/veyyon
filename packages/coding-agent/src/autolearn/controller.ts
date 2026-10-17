@@ -17,7 +17,6 @@ import type { AgentSession } from "../session/agent-session";
 import type { AgentSessionEvent } from "../session/agent-session-types";
 
 const AUTOLEARN_NUDGE_AUTOCONTINUE = autolearnPrompts["autolearn/nudge-autocontinue"].text.trim();
-const DEFAULT_MIN_TOOL_CALLS = 5;
 
 /**
  * Build the standing auto-learn guidance for the system prompt from the tools
@@ -109,7 +108,7 @@ export class AutoLearnController {
 		// Honor a live opt-out: the subscription outlives the setting, so re-check
 		// the current flag rather than trusting install-time state.
 		if (!this.#settings.get("autolearn.enabled")) return;
-		const minToolCalls = this.#settings.get("autolearn.minToolCalls") ?? DEFAULT_MIN_TOOL_CALLS;
+		const minToolCalls = this.#settings.get("autolearn.minToolCalls");
 		if (toolCalls < minToolCalls) return;
 		// Never interrupt plan-mode review.
 		if (this.#session.getPlanModeState()?.enabled) return;

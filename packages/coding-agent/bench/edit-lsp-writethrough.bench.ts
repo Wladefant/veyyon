@@ -27,7 +27,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { createLspWritethrough, writethroughNoop } from "../src/lsp";
+import { createLspWritethrough, writethroughNoop } from "../src/lsp/writethrough";
 
 const REPO = path.resolve(import.meta.dir, "../../..");
 const target = path.join(REPO, "packages/coding-agent/src/__bench_lsp_tmp.ts");

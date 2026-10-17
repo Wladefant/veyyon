@@ -4,8 +4,8 @@
  *
  * WHY THIS SUITE EXISTS. `render()` builds a body of `splitRows` split lines
  * plus ONE trailing strip row, and that strip row is the whole contextual
- * surface of the hub: the hint line that names every key, the role chip strip,
- * the thinking strip, the fallback-target strip, the new-role name input. The
+ * surface of the hub: the hint line that names every key, the pick strip,
+ * the thinking strip, and the fallback-target strip. The
  * body budget it sized the split against restated ModalShell's chrome
  * arithmetic as `3 + footerLines + vPad`, charging `vPad` ONCE where the shell
  * charges it twice, above AND below the body. The body therefore ran exactly
@@ -17,8 +17,8 @@
  * `minModalChromeRows` is the one owner of those terms and exists precisely
  * because `ask-dialog.ts` made the identical mistake; the hub now calls it.
  *
- * Reclaiming the two rows made the roles pane genuinely shorter, which exposed
- * the second defect: the roles list drew from index 0 until it ran out of
+ * Reclaiming the two rows made the chain pane genuinely shorter, which exposed
+ * the second defect: the chain list drew from index 0 until it ran out of
  * budget and silently stopped. Rows past the cut vanished with no cue, and
  * arrowing onto one moved a cursor nobody could see. It now windows around the
  * selection, and mouse hit-testing shifts by the same offset.
@@ -35,7 +35,6 @@ import { stripVTControlCharacters } from "node:util";
 import type { Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
-import { MODEL_ROLES, SELECTABLE_MODEL_ROLE_IDS } from "@veyyon/coding-agent/config/model-roles";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import {
 	computeModalDims,
@@ -90,8 +89,8 @@ function makeHub(options: { rows: number; settings?: Settings; models?: Model[] 
 		registry,
 		models.map(model => ({ model })),
 		{
-			onAssign: vi.fn(),
-			onUnassign: vi.fn(),
+			onSetDefault: vi.fn(),
+			onClearDefault: vi.fn(),
 			onLoginRequest: vi.fn(),
 			onFallbackChainChange: vi.fn(),
 			onCancel: vi.fn(),
@@ -112,9 +111,9 @@ function cardRows(frame: readonly string[]): string[] {
 	return lines.slice(top, bottom + 1);
 }
 
-/** Open the roles view: the sidebar starts on All models, one row below Roles. */
-function enterRolesView(hub: ModelHubComponent): void {
-	hub.handleInput(UP); // All models → Roles
+/** Open the chain view: the sidebar starts on All models, one row below Default & fallbacks. */
+function enterChainView(hub: ModelHubComponent): void {
+	hub.handleInput(UP); // All models → Default & fallbacks
 	hub.handleInput("\n"); // dive into the rows
 }
 
@@ -361,7 +360,7 @@ describe("ModelHub strip row", () => {
 	test("the contextual hint line renders at a 40-row terminal", () => {
 		const hub = makeHub({ rows: 40 });
 		const frame = plain(hub.render(220)).join("\n");
-		expect(frame).toContain("Enter assign roles");
+		expect(frame).toContain("Enter set default or fallback");
 		expect(frame).toContain("Esc close");
 	});
 
@@ -401,7 +400,7 @@ describe("ModelHub strip row", () => {
 		const lines = plain(makeHub({ rows: 40 }).render(220));
 		const divider = lines.findIndex(line => line.trim().startsWith("├"));
 		expect(divider).toBeGreaterThan(0);
-		const strip = lines.slice(0, divider).find(line => line.includes("Enter assign roles"));
+		const strip = lines.slice(0, divider).find(line => line.includes("Enter set default or fallback"));
 		const chips = lines.slice(divider).find(line => line.includes("esc close"));
 		expect(strip).toBeDefined();
 		expect(chips).toBeDefined();
@@ -412,15 +411,15 @@ describe("ModelHub strip row", () => {
 	test("an active strip takes the hint's place rather than a new row", () => {
 		const hub = makeHub({ rows: 40 });
 		const before = plain(hub.render(220));
-		const hintRow = before.findIndex(line => line.includes("Enter assign roles"));
+		const hintRow = before.findIndex(line => line.includes("Enter set default or fallback"));
 		expect(hintRow).toBeGreaterThan(0);
 
 		hub.handleInput("\x1b[C"); // → focus the model list
-		hub.handleInput("\n"); // Enter opens the role strip for the selected model
+		hub.handleInput("\n"); // Enter opens the pick strip for the selected model
 		const after = plain(hub.render(220));
 		expect(after[hintRow]).toContain("model-a");
 		expect(after[hintRow]).toContain("→");
-		expect(after.join("\n")).not.toContain("Enter assign roles");
+		expect(after.join("\n")).not.toContain("Enter set default or fallback");
 	});
 });
 
@@ -490,7 +489,7 @@ describe("session picker card height", () => {
 	});
 });
 
-describe("ModelHub roles list windowing", () => {
+describe("ModelHub chain list windowing", () => {
 	beforeAll(async () => {
 		const theme = await getThemeByName("dark");
 		if (!theme) throw new Error("Failed to load dark theme");
@@ -498,10 +497,16 @@ describe("ModelHub roles list windowing", () => {
 	});
 
 	/** Fallback chains, each on its own model so every rendered row is unique. */
-	const CHAIN_COUNT = 8;
+	const CHAIN_COUNT = 11;
+
+	/** Text of the default-model row while no default is set. */
+	const DEFAULT_ROW = "auto-select on launch";
+
+	/** Two-digit index, so no chain's text is a prefix of another's. */
+	const pad = (i: number): string => String(i).padStart(2, "0");
 
 	/**
-	 * Enough chains that the roles list overflows the card at 40 rows.
+	 * Enough chains that the chain list overflows the card at 40 rows.
 	 *
 	 * The row COUNT is what forces the window, not the terminal height. Sizing
 	 * the overflow by "the card happens to be short at this height" made these
@@ -510,40 +515,26 @@ describe("ModelHub roles list windowing", () => {
 	 */
 	function chainSettings(): Settings {
 		const chains: Record<string, string[]> = {};
-		for (let i = 0; i < CHAIN_COUNT; i++) chains[`test/pattern-${i}`] = [`test/model-${i}`];
+		for (let i = 0; i < CHAIN_COUNT; i++) chains[`test/pattern-${pad(i)}`] = [`test/model-${pad(i)}`];
 		return Settings.isolated({ "retry.fallbackChains": chains });
 	}
 
 	/** Every model a chain points at, so no row renders as an unknown id. */
 	function chainModels(): Model[] {
-		return Array.from({ length: CHAIN_COUNT }, (_, i) => makeModel("test", `model-${i}`));
+		return Array.from({ length: CHAIN_COUNT }, (_, i) => makeModel("test", `model-${pad(i)}`));
 	}
 
-	/**
-	 * The rows the roles view draws, top to bottom, for {@link chainSettings}.
-	 *
-	 * The role tags come from `SELECTABLE_MODEL_ROLE_IDS`, which is the list the view itself draws
-	 * from. A copy of the tags here went stale the moment `advisor` left the table — the window
-	 * cases then failed for a missing row rather than for a windowing defect, and a role ADDED to
-	 * the table would have gone unwindowed with every case still green.
-	 */
+	/** The rows the chain view draws, top to bottom, for {@link chainSettings}; the unset default leads. */
 	function chainRowLabels(): string[] {
-		const rows = SELECTABLE_MODEL_ROLE_IDS.map(role => {
-			// A selectable role with no tag has no bytes to find its row by, which would silently
-			// drop it from the sweep. Fail instead: the sweep is the reason this list is derived.
-			const tag = MODEL_ROLES[role].tag;
-			if (tag === undefined) throw new Error(`selectable role ${role} carries no tag`);
-			return tag;
-		});
-		rows.push("+ New role…");
-		for (let i = 0; i < CHAIN_COUNT; i++) rows.push(`test/pattern-${i}`, `↳ test/model-${i}`);
+		const rows = [DEFAULT_ROW];
+		for (let i = 0; i < CHAIN_COUNT; i++) rows.push(`test/pattern-${pad(i)}`, `↳ test/model-${pad(i)}`);
 		rows.push("+ New fallback…");
 		return rows;
 	}
 
-	function rolesHub(rows: number): ModelHubComponent {
+	function chainHub(rows: number): ModelHubComponent {
 		const hub = makeHub({ rows, settings: chainSettings(), models: chainModels() });
-		enterRolesView(hub);
+		enterChainView(hub);
 		return hub;
 	}
 
@@ -553,7 +544,7 @@ describe("ModelHub roles list windowing", () => {
 	 * budget, and the cursor could sit on one that was not on screen.
 	 */
 	test("wrapping the selection to the last row scrolls it into view", () => {
-		const hub = rolesHub(40);
+		const hub = chainHub(40);
 		expect(plain(hub.render(220)).join("\n")).not.toContain("+ New fallback…");
 
 		hub.handleInput(UP); // wraps past the end
@@ -562,13 +553,13 @@ describe("ModelHub roles list windowing", () => {
 
 	/** Coming back to the top scrolls back, so the window is not one-way. */
 	test("returning to the first row scrolls the window back to the start", () => {
-		const hub = rolesHub(40);
+		const hub = chainHub(40);
 		hub.handleInput(UP); // last row
 		expect(plain(hub.render(220)).join("\n")).toContain("+ New fallback…");
 
-		hub.handleInput(DOWN); // wraps back to the first role
+		hub.handleInput(DOWN); // wraps back to the default row
 		const frame = plain(hub.render(220)).join("\n");
-		expect(frame).toContain("SMOL");
+		expect(frame).toContain(DEFAULT_ROW);
 		expect(frame).not.toContain("+ New fallback…");
 	});
 
@@ -580,8 +571,8 @@ describe("ModelHub roles list windowing", () => {
 	 * convention, so this asserts the actual glyphs rather than "something
 	 * changed".
 	 */
-	test("an overflowing roles list draws the scrollbar track and thumb", () => {
-		const hub = rolesHub(40);
+	test("an overflowing chain list draws the scrollbar track and thumb", () => {
+		const hub = chainHub(40);
 		const frame = plain(hub.render(220)).join("\n");
 		expect(frame).toContain("█"); // thumb
 		expect(frame).toContain("│"); // track
@@ -589,16 +580,16 @@ describe("ModelHub roles list windowing", () => {
 
 	/** And it is absent when everything fits, so the bar means what it says. */
 	test("a list that fits draws no scrollbar", () => {
-		const hub = rolesHub(60);
-		const rolesPane = plain(hub.render(220))
-			.filter(line => line.includes("SMOL") || line.includes("+ New fallback…"))
+		const hub = chainHub(60);
+		const chainPane = plain(hub.render(220))
+			.filter(line => line.includes(DEFAULT_ROW) || line.includes("+ New fallback…"))
 			.join("\n");
-		expect(rolesPane).not.toContain("█");
+		expect(chainPane).not.toContain("█");
 	});
 
 	/** The thumb tracks the window, so it is not painted at a fixed position. */
 	test("the thumb moves when the window scrolls", () => {
-		const hub = rolesHub(40);
+		const hub = chainHub(40);
 		const thumbRows = (): number[] =>
 			plain(hub.render(220))
 				.map((line, i) => (line.includes("█") ? i : -1))
@@ -613,7 +604,7 @@ describe("ModelHub roles list windowing", () => {
 
 	/** A tall terminal has room for everything, so no window is applied at all. */
 	test("a tall terminal shows the whole list with no scrolling", () => {
-		const frame = plain(rolesHub(60).render(220)).join("\n");
+		const frame = plain(chainHub(60).render(220)).join("\n");
 		const missing = chainRowLabels().filter(label => !frame.includes(label));
 		expect(missing).toEqual([]);
 	});
@@ -623,7 +614,7 @@ describe("ModelHub roles list windowing", () => {
 	 * to hold, and it is asserted for every row rather than the two ends.
 	 */
 	test("every row in the list is on screen while it is selected", () => {
-		const hub = rolesHub(40);
+		const hub = chainHub(40);
 		const offScreen: string[] = [];
 		for (const label of chainRowLabels()) {
 			const frame = plain(hub.render(220));

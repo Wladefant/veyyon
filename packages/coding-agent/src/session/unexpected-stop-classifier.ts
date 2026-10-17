@@ -7,11 +7,11 @@ import { REASONING_SAFE_MAX_TOKENS } from "@veyyon/kernel/session/classifier-tok
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import { errorMessage, logger, prompt } from "@veyyon/utils";
 import type { ModelRegistry } from "../config/model-registry";
-import { resolveRoleSelectionWithInherit } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import { turnControlPrompts } from "../prompts/turn-control/rows";
+import { helperSettingPath, resolveHelperModel } from "../task/helper-settings";
 import { isTinyMemoryLocalModelKey, ONLINE_MEMORY_MODEL_KEY } from "../tiny/models";
-import { tinyModelClient } from "../tiny/title-client";
+import { tinyTitleClient } from "../tiny/title-client";
 
 /**
  * The instruction half only: the online path sends the message as its own user
@@ -31,7 +31,7 @@ const ANSWER_MAX_TOKENS = 16;
 export interface ClassifyUnexpectedStopDeps {
 	settings: Settings;
 	registry: ModelRegistry;
-	/** Live main model — inherited when tiny/smol roles are unset. */
+	/** Live main model, which the `unexpectedStop` helper runs when it names none. */
 	model?: Model;
 	sessionId: string;
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
@@ -101,15 +101,11 @@ function createOnlineClassificationError(response: AssistantMessage, deps: Class
 }
 
 async function classifyOnline(text: string, deps: ClassifyUnexpectedStopDeps): Promise<boolean | undefined> {
-	const resolved = resolveRoleSelectionWithInherit(
-		["tiny", "smol"],
-		deps.settings,
-		deps.registry.getAvailable(),
-		deps.model,
-	);
-	const model = resolved?.model;
+	const model = resolveHelperModel(deps.settings, "unexpectedStop", deps.registry.getAvailable(), deps.model)?.model;
 	if (!model) {
-		throw new Error("unexpected-stop: no tiny/smol model available for classification");
+		throw new Error(
+			`unexpected-stop: ${helperSettingPath("unexpectedStop", "model")} matches no available model for classification`,
+		);
 	}
 	const apiKey = await deps.registry.getApiKey(model, deps.sessionId);
 	if (!apiKey) {
@@ -163,7 +159,7 @@ async function classifyLocal(
 	const builtPrompt = prompt.render(turnControlPrompts["turn-control/unexpected-stop-classifier"].text, {
 		message: text,
 	});
-	const output = await tinyModelClient.complete(modelKey, builtPrompt, {
+	const output = await tinyTitleClient.complete(modelKey, builtPrompt, {
 		maxTokens: ANSWER_MAX_TOKENS,
 		signal: deps.signal,
 	});

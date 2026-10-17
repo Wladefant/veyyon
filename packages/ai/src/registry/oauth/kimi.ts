@@ -7,6 +7,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
+import {
+	KIMI_CODE_REGIONS,
+	type KimiCodeRegion,
+	kimiCodeApiEndpointOf,
+	kimiCodeRegionOfApiEndpoint,
+	kimiCodeRegionOfOAuthHost,
+} from "@veyyon/catalog/wire/kimi-code";
 import { getAgentDir } from "@veyyon/utils/dirs";
 import { $env } from "@veyyon/utils/env";
 import { isEnoent } from "@veyyon/utils/fs-error";
@@ -14,10 +21,11 @@ import packageJson from "../../../package.json" with { type: "json" };
 import * as AIError from "../../error";
 import { credentialExpiryFromExpiresIn } from "./expiry";
 import { emitOAuthSuccessPage } from "./success-page";
+import { requireTokenResponseObject } from "./token-response";
 import type { OAuthController, OAuthCredentials } from "./types";
 
+// One client id serves both regions; only the hosts differ.
 const CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098";
-const DEFAULT_OAUTH_HOST = "https://auth.kimi.com";
 const DEVICE_ID_FILENAME = "kimi-device-id";
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const DEFAULT_DEVICE_FLOW_TTL_MS = 15 * 60 * 1000;
@@ -42,8 +50,9 @@ interface TokenResponse {
 	interval?: number;
 }
 
-function resolveOAuthHost(): string {
-	return $env.KIMI_CODE_OAUTH_HOST || $env.KIMI_OAUTH_HOST || DEFAULT_OAUTH_HOST;
+/** The OAuth host for `region`. `KIMI_CODE_OAUTH_HOST` and `KIMI_OAUTH_HOST` override both regions. */
+function resolveOAuthHost(region: KimiCodeRegion): string {
+	return $env.KIMI_CODE_OAUTH_HOST || $env.KIMI_OAUTH_HOST || KIMI_CODE_REGIONS[region].oauthHost;
 }
 
 function formatDeviceModel(system: string, release: string, arch: string): string {
@@ -106,7 +115,7 @@ export let getKimiCommonHeaders = () => {
 	return headers;
 };
 
-async function requestDeviceAuthorization(): Promise<{
+async function requestDeviceAuthorization(oauthHost: string): Promise<{
 	userCode: string;
 	deviceCode: string;
 	verificationUri: string;
@@ -114,7 +123,7 @@ async function requestDeviceAuthorization(): Promise<{
 	expiresInMs: number;
 	intervalMs: number;
 }> {
-	const response = await fetch(`${resolveOAuthHost()}/api/oauth/device_authorization`, {
+	const response = await fetch(`${oauthHost}/api/oauth/device_authorization`, {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/x-www-form-urlencoded",
@@ -159,7 +168,12 @@ async function requestDeviceAuthorization(): Promise<{
 	};
 }
 
-function parseTokenPayload(payload: TokenResponse, refreshTokenFallback?: string): OAuthCredentials {
+/** The credential a granting token response describes, scoped to the region named by `apiEndpoint`. */
+function parseTokenPayload(
+	payload: TokenResponse,
+	apiEndpoint: string | undefined,
+	refreshTokenFallback?: string,
+): OAuthCredentials {
 	if (!payload.access_token || typeof payload.expires_in !== "number") {
 		throw new AIError.OAuthError("Kimi token response missing required fields", {
 			kind: "validation",
@@ -179,15 +193,40 @@ function parseTokenPayload(payload: TokenResponse, refreshTokenFallback?: string
 		access: payload.access_token,
 		refresh,
 		expires: credentialExpiryFromExpiresIn(payload.expires_in, { provider: "kimi" }),
+		...(apiEndpoint !== undefined && { apiEndpoint }),
 	};
 }
 
+// The wait before the next poll after a non-token response; throws when the device flow cannot continue.
+function nextPollWaitMs(payload: TokenResponse, status: number, waitMs: number): number {
+	switch (payload.error) {
+		case "authorization_pending":
+			return waitMs;
+		case "slow_down": {
+			const slowedMs = waitMs + 5000;
+			const retryAfterMs = typeof payload.interval === "number" ? payload.interval * 1000 : undefined;
+			return retryAfterMs && retryAfterMs > slowedMs ? retryAfterMs : slowedMs;
+		}
+		case "expired_token":
+			throw new AIError.OAuthError("Kimi device authorization expired", { kind: "validation", provider: "kimi" });
+		case "access_denied":
+			throw new AIError.OAuthError("Kimi device authorization denied", { kind: "validation", provider: "kimi" });
+	}
+	const description = payload.error_description ? `: ${payload.error_description}` : "";
+	throw new AIError.OAuthError(`Kimi device flow failed: ${payload.error ?? status}${description}`, {
+		kind: "polling",
+		provider: "kimi",
+	});
+}
+
+/** Poll `oauthHost` until it grants a token, and return the granting response. */
 async function pollForToken(
+	oauthHost: string,
 	deviceCode: string,
 	intervalMs: number,
 	expiresInMs: number,
 	signal?: AbortSignal,
-): Promise<OAuthCredentials> {
+): Promise<TokenResponse> {
 	const deadline = Date.now() + expiresInMs;
 	let waitMs = Math.max(1000, intervalMs);
 
@@ -196,7 +235,7 @@ async function pollForToken(
 			throw new AIError.LoginCancelledError();
 		}
 
-		const response = await fetch(`${resolveOAuthHost()}/api/oauth/token`, {
+		const response = await fetch(`${oauthHost}/api/oauth/token`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/x-www-form-urlencoded",
@@ -211,42 +250,10 @@ async function pollForToken(
 
 		const payload = (await response.json()) as TokenResponse;
 		if (response.ok && payload.access_token) {
-			return parseTokenPayload(payload);
+			return payload;
 		}
-
-		const error = payload.error;
-		if (error === "authorization_pending") {
-			await scheduler.wait(waitMs, { signal });
-			continue;
-		}
-
-		if (error === "slow_down") {
-			waitMs += 5000;
-			const retryAfter = typeof payload.interval === "number" ? payload.interval * 1000 : undefined;
-			if (retryAfter && retryAfter > waitMs) waitMs = retryAfter;
-			await scheduler.wait(waitMs, { signal });
-			continue;
-		}
-
-		if (error === "expired_token") {
-			throw new AIError.OAuthError("Kimi device authorization expired", {
-				kind: "validation",
-				provider: "kimi",
-			});
-		}
-
-		if (error === "access_denied") {
-			throw new AIError.OAuthError("Kimi device authorization denied", {
-				kind: "validation",
-				provider: "kimi",
-			});
-		}
-
-		const description = payload.error_description ? `: ${payload.error_description}` : "";
-		throw new AIError.OAuthError(`Kimi device flow failed: ${error ?? response.status}${description}`, {
-			kind: "polling",
-			provider: "kimi",
-		});
+		waitMs = nextPollWaitMs(payload, response.status, waitMs);
+		await scheduler.wait(waitMs, { signal });
 	}
 
 	throw new AIError.OAuthError("Kimi device flow timed out", {
@@ -255,27 +262,80 @@ async function pollForToken(
 	});
 }
 
+/** The regions in the order the region menu lists them; an empty answer selects the first. */
+const REGION_MENU = Object.keys(KIMI_CODE_REGIONS) as KimiCodeRegion[];
+
 /**
- * Login with Kimi Code OAuth (device code flow).
+ * Ask which Kimi Code deployment the account belongs to. The menu lists every region of
+ * `KIMI_CODE_REGIONS` by number; an empty answer selects the first, and any other answer that is not
+ * a listed number fails the login.
  */
-export async function loginKimi(options: OAuthController): Promise<OAuthCredentials> {
-	const device = await requestDeviceAuthorization();
+export async function askKimiCodeRegion(options: OAuthController): Promise<KimiCodeRegion> {
+	if (!options.onPrompt) throw new AIError.OnPromptRequiredError("Kimi Code");
+	const numbers = REGION_MENU.map((_, index) => String(index + 1));
+	const choices = REGION_MENU.map((region, index) => {
+		const { name, site } = KIMI_CODE_REGIONS[region];
+		return `${numbers[index]}=${name} (${site}${index === 0 ? ", default" : ""})`;
+	});
+	const answer = await options.onPrompt({
+		message: `Select your Kimi Code region: ${choices.join(", ")} — enter ${numbers.join(" or ")}`,
+		placeholder: numbers[0],
+		// A menu number, not a credential: masking it would hide which region you picked.
+		secret: false,
+	});
+	// Escape answers "" and aborts the signal; an empty answer without an abort selects the default.
+	if (options.signal?.aborted) throw new AIError.LoginCancelledError();
+	const choice = answer.trim();
+	const index = choice === "" ? 0 : numbers.indexOf(choice);
+	const region = REGION_MENU[index];
+	if (region === undefined) {
+		throw new AIError.ConfigurationError(
+			`Unknown Kimi Code region "${choice}". Fix: run the login again and enter ${numbers.join(" or ")}.`,
+		);
+	}
+	return region;
+}
+
+/**
+ * Login with Kimi Code OAuth (device code flow) at the deployment of `region`: `mainland-cn` signs in
+ * at kimi.com, `global` at kimi.ai. An OAuth host set in the environment overrides the region's host,
+ * and the credential records the deployment of that host, or `region` when the host is neither's.
+ */
+export async function loginKimi(options: OAuthController, region: KimiCodeRegion): Promise<OAuthCredentials> {
+	const oauthHost = resolveOAuthHost(region);
+	const device = await requestDeviceAuthorization(oauthHost);
 	options.onAuth?.({
 		url: device.verificationUriComplete,
 		instructions: `Enter code: ${device.userCode}`,
 	});
 
-	const credentials = await pollForToken(device.deviceCode, device.intervalMs, device.expiresInMs, options.signal);
+	const granted = await pollForToken(
+		oauthHost,
+		device.deviceCode,
+		device.intervalMs,
+		device.expiresInMs,
+		options.signal,
+	);
+	const credentials = parseTokenPayload(
+		granted,
+		kimiCodeApiEndpointOf(kimiCodeRegionOfOAuthHost(oauthHost) ?? region),
+	);
 	// Device-code flow has no browser redirect; show the branded success page.
 	emitOAuthSuccessPage(options);
 	return credentials;
 }
 
 /**
- * Refresh Kimi OAuth token.
+ * Refresh a Kimi OAuth token at the OAuth host of the region the credential's `apiEndpoint` names, so
+ * a kimi.ai credential is never posted to kimi.com. `signal` aborts the token request.
  */
-export async function refreshKimiToken(refreshToken: string): Promise<OAuthCredentials> {
-	const response = await fetch(`${resolveOAuthHost()}/api/oauth/token`, {
+export async function refreshKimiToken(
+	refreshToken: string,
+	apiEndpoint: string | undefined,
+	signal?: AbortSignal,
+): Promise<OAuthCredentials> {
+	const region = kimiCodeRegionOfApiEndpoint(apiEndpoint);
+	const response = await fetch(`${resolveOAuthHost(region)}/api/oauth/token`, {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/x-www-form-urlencoded",
@@ -286,6 +346,7 @@ export async function refreshKimiToken(refreshToken: string): Promise<OAuthCrede
 			refresh_token: refreshToken,
 			client_id: CLIENT_ID,
 		}),
+		signal,
 	});
 
 	if (!response.ok) {
@@ -310,6 +371,6 @@ export async function refreshKimiToken(refreshToken: string): Promise<OAuthCrede
 		});
 	}
 
-	const payload = (await response.json()) as TokenResponse;
-	return parseTokenPayload(payload, refreshToken);
+	const payload = requireTokenResponseObject<TokenResponse>(await response.json(), "kimi", "token refresh");
+	return parseTokenPayload(payload, kimiCodeApiEndpointOf(region), refreshToken);
 }

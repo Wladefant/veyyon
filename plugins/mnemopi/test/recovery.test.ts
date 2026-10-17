@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -98,6 +99,11 @@ describe("SQLite recovery helpers", () => {
 		expect(backup.original_size).toBe(statSync(dbPath).size);
 		expect(backup.backup_size).toBe(statSync(backup.backup_path).size);
 		expect(backup.compressed).toBe(true);
+		// Each checksum is the first 16 hex digits of the sha256 of the file it describes.
+		const sha256Prefix = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex").slice(0, 16);
+		expect(backup.db_checksum).toBe(sha256Prefix(dbPath));
+		expect(backup.backup_checksum).toBe(sha256Prefix(backup.backup_path));
+		expect(JSON.parse(readFileSync(backup.metadata_path, "utf8")).db_checksum).toBe(backup.db_checksum);
 		expect(
 			Buffer.from(gunzipSync(readFileSync(backup.backup_path)))
 				.subarray(0, 16)

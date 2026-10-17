@@ -2,7 +2,7 @@ import type { Component } from "@veyyon/tui";
 import { clamp01, clampLow, formatBytes } from "@veyyon/utils";
 import { subCellBar } from "@veyyon/utils/bar";
 import { type MotionClock, SettleValue } from "@veyyon/utils/motion";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { getTinyTitleModelSpec, type TinyTitleLocalModelKey } from "../../../../tiny/models";
 import type { TinyTitleProgressEvent } from "../../../../tiny/title-protocol";
 import { COMPOSER_INSET_COLS } from "../composer/composer-chrome";

@@ -1,8 +1,8 @@
 import { clampLow, logger } from "@veyyon/utils";
+import { isTimeoutError } from "@veyyon/utils/abortable";
 import { isRecord } from "@veyyon/utils/type-guards";
 import { type ProviderTextTransformResolver, resolveProviderTextTransform } from "../provider-boundary";
-import { isTimeoutError } from "../utils/fetch-timeout";
-import { smitheryTimeoutSignal } from "./smithery-http";
+import { withSmitheryDeadline } from "./smithery-http";
 import type { MCPServerConfig } from "./types";
 
 const SMITHERY_REGISTRY_BASE_URL = "https://registry.smithery.ai";
@@ -403,24 +403,24 @@ async function fetchServerDetails(
 		.split("/")
 		.map(segment => encodeURIComponent(segment))
 		.join("/");
-	const response = await fetch(`${SMITHERY_REGISTRY_BASE_URL}/servers/${encodedPath}`, {
-		headers,
-		signal: smitheryTimeoutSignal(options?.signal),
-	});
-	if (response.status === 404) return null;
-	if (!response.ok) {
-		throw new SmitheryRegistryError(
-			`The Smithery registry refused the details request for "${path}" with HTTP ${response.status}. Fix: ${
-				response.status === 401 || response.status === 403
-					? "the registry rejected the API key. Run `/mcp smithery-login` to obtain a new one, or set `SMITHERY_API_KEY` in the environment."
-					: response.status === 429
-						? "the registry is rate limiting. Wait and search again."
-						: "retry in a moment; if it persists, add the server by hand with `/mcp add <name> url <url>`."
-			}`,
-			response.status,
-		);
-	}
-	const details = await parseRegistryObject(response, "detail request");
+	const details = await withSmitheryDeadline(async signal => {
+		const response = await fetch(`${SMITHERY_REGISTRY_BASE_URL}/servers/${encodedPath}`, { headers, signal });
+		if (response.status === 404) return null;
+		if (!response.ok) {
+			throw new SmitheryRegistryError(
+				`The Smithery registry refused the details request for "${path}" with HTTP ${response.status}. Fix: ${
+					response.status === 401 || response.status === 403
+						? "the registry rejected the API key. Run `/mcp smithery-login` to obtain a new one, or set `SMITHERY_API_KEY` in the environment."
+						: response.status === 429
+							? "the registry is rate limiting. Wait and search again."
+							: "retry in a moment; if it persists, add the server by hand with `/mcp add <name> url <url>`."
+				}`,
+				response.status,
+			);
+		}
+		return parseRegistryObject(response, "detail request");
+	}, options?.signal);
+	if (details === null) return null;
 	if (!isServerDetails(details)) {
 		throw new SmitheryRegistryError(
 			`The Smithery registry returned an entry for "${path}" that is missing the fields needed to configure a server. Fix: this listing is unusable as it stands. Open it on smithery.ai and add the server by hand with \`/mcp add <name> url <url>\`.`,
@@ -524,35 +524,34 @@ export async function searchSmitheryRegistry(
 		url.searchParams.set("q", outboundQuery);
 		url.searchParams.set("pageSize", String(pageSize));
 		if (page > 1) url.searchParams.set("page", String(page));
-		let response: Response;
-		try {
-			response = await fetch(url.toString(), {
-				headers,
-				signal: smitheryTimeoutSignal(options?.signal),
-			});
-		} catch (err) {
-			options?.signal?.throwIfAborted();
-			if (isTimeoutError(err)) {
+		const payload = await withSmitheryDeadline(async signal => {
+			let response: Response;
+			try {
+				response = await fetch(url.toString(), { headers, signal });
+			} catch (err) {
+				options?.signal?.throwIfAborted();
+				if (isTimeoutError(err)) {
+					throw new SmitheryRegistryError(
+						`The Smithery registry did not answer this search within 10s. Fix: check that smithery.ai is reachable from this network, then search again. To skip the registry entirely, add the server by hand with \`/mcp add <name> url <url>\`.`,
+						0,
+					);
+				}
+				throw err;
+			}
+			if (!response.ok) {
 				throw new SmitheryRegistryError(
-					`The Smithery registry did not answer this search within 10s. Fix: check that smithery.ai is reachable from this network, then search again. To skip the registry entirely, add the server by hand with \`/mcp add <name> url <url>\`.`,
-					0,
+					`The Smithery registry refused this search with HTTP ${response.status}. Fix: ${
+						response.status === 401 || response.status === 403
+							? "the registry rejected the API key. Run `/mcp smithery-login` to obtain a new one, or set `SMITHERY_API_KEY` in the environment."
+							: response.status === 429
+								? "the registry is rate limiting. Wait and search again."
+								: "retry in a moment; if it persists, add the server by hand with `/mcp add <name> url <url>`."
+					}`,
+					response.status,
 				);
 			}
-			throw err;
-		}
-		if (!response.ok) {
-			throw new SmitheryRegistryError(
-				`The Smithery registry refused this search with HTTP ${response.status}. Fix: ${
-					response.status === 401 || response.status === 403
-						? "the registry rejected the API key. Run `/mcp smithery-login` to obtain a new one, or set `SMITHERY_API_KEY` in the environment."
-						: response.status === 429
-							? "the registry is rate limiting. Wait and search again."
-							: "retry in a moment; if it persists, add the server by hand with `/mcp add <name> url <url>`."
-				}`,
-				response.status,
-			);
-		}
-		const payload = await parseRegistryObject(response, "search");
+			return parseRegistryObject(response, "search");
+		}, options?.signal);
 		const servers = payload.servers;
 		if (servers !== undefined && !Array.isArray(servers)) {
 			throw new SmitheryRegistryError(

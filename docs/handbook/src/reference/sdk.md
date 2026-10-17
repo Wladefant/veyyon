@@ -219,7 +219,7 @@ const { session } = await createAgentSession({
 When no explicit `model`/`modelPattern` is provided:
 
 1. restore model from existing session (if restorable + key available)
-2. settings default model role (`default`)
+2. the `defaultModel` setting
 3. first available model with valid auth
 
 If restore fails, `modelFallbackMessage` explains fallback.

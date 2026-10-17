@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { RELAY_FATAL_CLOSE_REASONS } from "@veyyon/wire/relay";
 import { type LocalRelay, startLocalRelay } from "../scripts/local-relay";
 import { packEnvelope, unpackEnvelope } from "../src/lib/link";
 
@@ -121,7 +122,7 @@ describe("local collab relay", () => {
 		const guest = socket(`/r/${ROOM}?role=guest`);
 		const close = await waitEvent<CloseEvent>(guest, "close", "missing-room guest close");
 		expect(close.code).toBe(4004);
-		expect(close.reason).toBe("no such room");
+		expect(close.reason).toBe(RELAY_FATAL_CLOSE_REASONS[4004] as string);
 	});
 
 	it("routes opaque envelopes without decrypting them", async () => {
@@ -165,7 +166,7 @@ describe("local collab relay", () => {
 		const duplicateHost = socket(`/r/${ROOM}?role=host`);
 		const duplicateClose = await waitEvent<CloseEvent>(duplicateHost, "close", "duplicate host close");
 		expect(duplicateClose.code).toBe(4009);
-		expect(duplicateClose.reason).toBe("a host is already connected for this room");
+		expect(duplicateClose.reason).toBe(RELAY_FATAL_CLOSE_REASONS[4009] as string);
 
 		const guest = socket(`/r/${ROOM}?role=guest`);
 		await waitOpen(guest);
@@ -175,6 +176,8 @@ describe("local collab relay", () => {
 		const guestClose = waitEvent<CloseEvent>(guest, "close", "guest room close");
 		host.close(1000);
 		expect(JSON.parse(await closure)).toEqual({ t: "room-closed" });
-		expect((await guestClose).code).toBe(4001);
+		const roomClosed = await guestClose;
+		expect(roomClosed.code).toBe(4001);
+		expect(roomClosed.reason).toBe(RELAY_FATAL_CLOSE_REASONS[4001] as string);
 	});
 });

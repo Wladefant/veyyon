@@ -2,6 +2,8 @@
  * A streamed event rebuilds the anchored todo board only when an input the board
  * reads has moved.
  *
+ * Subject: `modes/terminal/controllers/anchored-blocks.ts`, driven through `InteractiveMode`.
+ *
  * WHAT THIS CLOSES. Every streamed event of a turn (each `message_update` delta,
  * each tool start and end) reaches `ensureLoadingAnimation`, which rebuilt the
  * board unconditionally: the tree, the rail sweep and a new mounted `Text` the
@@ -237,4 +239,19 @@ describe("a streamed event rebuilds the todo board only when its inputs move", (
 			expect(mountedBoard(mode)).toBe(rebuilt);
 		});
 	}
+
+	// The agent stopping is the other motion edge: the loader clears with no streamed event after it,
+	// so the board the turn left moving is rebuilt still on that call and not on the next clock step.
+	it("rebuilds the board when the working loader clears after the agent stops", () => {
+		mode.setTodos(plan);
+		motion.streaming = true;
+		mode.ensureLoadingAnimation();
+		const moving = mountedBoard(mode);
+		expect(moving).toBeDefined();
+
+		motion.streaming = false;
+		expect(mode.clearWorkingLoader()).toBe(true);
+
+		expect(mountedBoard(mode)).not.toBe(moving);
+	});
 });

@@ -145,27 +145,36 @@ export function syncStatusWithTurns(registry: AgentRegistry, id: string, session
 export class AgentLifecycleManager {
 	static #global: AgentLifecycleManager | undefined;
 
+	/**
+	 * The manager of the process-wide registry. It is rebuilt when that registry has been replaced, so
+	 * a manager never terminates, parks or revives through a registry nothing else reads any more.
+	 */
 	static global(): AgentLifecycleManager {
-		if (!AgentLifecycleManager.#global) {
-			AgentLifecycleManager.#global = new AgentLifecycleManager();
-		}
+		const registry = AgentRegistry.global();
+		const current = AgentLifecycleManager.#global;
+		if (current && current.#registry === registry) return current;
+		if (current) current.#retire();
+		AgentLifecycleManager.#global = new AgentLifecycleManager(registry);
 		return AgentLifecycleManager.#global;
 	}
 
 	/** Reset the global manager. Test-only. */
 	static resetGlobalForTests(): void {
 		const current = AgentLifecycleManager.#global;
-		if (current) {
-			current.#unsubscribe?.();
-			current.#unsubscribe = undefined;
-			current.#clearTimer();
-			current.#adopted.clear();
-			current.#revivals.clear();
-			current.#parking.clear();
-			current.#pinned.clear();
-			current.#persistedReviverFactory = undefined;
-		}
+		if (current) current.#retire();
 		AgentLifecycleManager.#global = undefined;
+	}
+
+	/** Stop listening to the registry and drop every timer and tracked agent. */
+	#retire(): void {
+		this.#unsubscribe?.();
+		this.#unsubscribe = undefined;
+		this.#clearTimer();
+		this.#adopted.clear();
+		this.#revivals.clear();
+		this.#parking.clear();
+		this.#pinned.clear();
+		this.#persistedReviverFactory = undefined;
 	}
 
 	readonly #registry: AgentRegistry;

@@ -36,7 +36,7 @@
  * to send (`completion.notify` / `ask.notify` gating lives in the coding-agent
  * package and has its own suites), only that whatever is sent respects focus.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import * as desktopNotify from "@veyyon/tui/desktop-notify";
 import { ProcessTerminal } from "@veyyon/tui/terminal";
 import { NotifyProtocol, TERMINAL } from "@veyyon/tui/terminal-capabilities";
@@ -77,7 +77,7 @@ function restoreEnv(key: string, original: string | undefined): void {
 }
 
 /** Captured stdout writes plus the libnotify fan-out, the two halves a toast can arrive through. */
-function captureDelivery(): { writes: string[]; dbus: ReturnType<typeof vi.fn> } {
+function captureDelivery(): { writes: string[]; dbus: Mock<typeof desktopNotify.sendDesktopNotification> } {
 	const writes: string[] = [];
 	vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
 		writes.push(typeof chunk === "string" ? chunk : chunk.toString());

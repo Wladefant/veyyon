@@ -183,7 +183,7 @@ function loadDefaultRegistryModel(lookup: ModelLookup): ModelSnapshot | undefine
 	// a defaultProfile, and a startup-resolved profile makes the child IGNORE
 	// VEYYON_CODING_AGENT_DIR (profile derives its own agent dir).
 	const spawnEnv = hermeticSpawnEnv({ VEYYON_CODING_AGENT_DIR: tempDir.path() });
-	let result: ReturnType<typeof Bun.spawnSync>;
+	let result: Bun.SyncSubprocess<"pipe", "pipe">;
 	try {
 		result = Bun.spawnSync([process.execPath, "-e", script], {
 			cwd: packageRoot,

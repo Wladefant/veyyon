@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $which, errorMessage, logger, readPipeText, Snowflake } from "@veyyon/utils";
+import { $which, errorMessage, logger, readPipeText, Snowflake, settleWithin } from "@veyyon/utils";
 import { $, type Subprocess } from "bun";
 import { adoptIntoPrimarySessionCpuBudget } from "../../session/cpu-limit";
 import { ensureTool, getToolPath } from "../../utils/tools-manager";
@@ -221,8 +221,10 @@ export async function awaitStartupMarker(
 			// The read's failure still reaches the `await Promise.race` below and propagates from there; this
 			// only marks it handled for the case where the timeout branch wins and nobody awaits the read.
 			readPromise.catch(() => {});
-			const timeoutPromise = Bun.sleep(deadline - Date.now()).then(() => ({ done: true, value: undefined }));
-			const { done, value } = await Promise.race([readPromise, timeoutPromise]);
+			const { done, value } = await settleWithin(readPromise, deadline - Date.now(), {
+				done: true,
+				value: undefined,
+			});
 			if (done || !value) break;
 			output += decoder.decode(value, { stream: true });
 			if (output.includes(marker)) break;
@@ -305,7 +307,7 @@ type RecorderProcess = Subprocess<"ignore" | "pipe", "pipe", "ignore">;
 async function verifyProcessAlive(proc: RecorderProcess, tool: string): Promise<void> {
 	await Bun.sleep(300);
 
-	const exited = await Promise.race([proc.exited.then(code => code), Bun.sleep(0).then(() => "running" as const)]);
+	const exited = await settleWithin(proc.exited, 0, "running" as const);
 
 	if (exited !== "running") {
 		let stderr = "";

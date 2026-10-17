@@ -135,7 +135,7 @@ describe("AgentSession per-turn prune", () => {
 		});
 	}
 
-	/** Drive one completed turn so `#checkCompaction` (and the prune passes) runs. */
+	/** Drive one completed turn so `TurnContextCheck.check` (and the prune passes) runs. */
 	async function runTurn(): Promise<void> {
 		const finalAssistant = {
 			role: "assistant" as const,

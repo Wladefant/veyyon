@@ -39,9 +39,9 @@
  * The cell is total in `ViewTone`, as `TONE_COLORS: Record<ViewTone, ThemeColor>` and
  * `STATUS_ICONS: Record<ViewStatus, ToolUIStatus>` in `modes/terminal/draw/draw-tool-view.ts` are, so either union
  * growing a member fails `check:ts` rather than drawing the wrong thing. And it says nothing
- * about the streamed preview: `exposesRawPartialJson` in `controllers/event-controller.ts` counts a
- * `view.renderCall` so a conversion does not narrow what the live preview is handed, and that
- * predicate is private to a controller this suite does not drive.
+ * about the streamed preview: `exposesRawPartialJson` in `controllers/tool-call-cards.ts` counts a
+ * `view.renderCall` so a conversion does not narrow what the live preview is handed, and
+ * `a-tool-call-card-settles-the-way-its-turn-ended.test.ts` drives that predicate.
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";

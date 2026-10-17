@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { spawnSync } from "node:child_process";
 import {
 	combineSignals,
 	type Exception,
@@ -115,6 +116,26 @@ describe("exec — cancellation", () => {
 		expect(r.exitError).toBeInstanceOf(ProcessAbortError);
 		expect(r.exitError?.aborted).toBe(true);
 		expect(r.exitCode).toBeNull();
+	});
+
+	it("lets the process exit once the child has exited, not when its timeout would have fired", () => {
+		// The timeout raced a `Bun.sleep(ms)` that nothing cancelled, so a run
+		// that spawned a child with a ten-minute timeout stayed alive for ten
+		// minutes after the child finished, and every call held a live timer
+		// for its whole timeout.
+		const ptreeUrl = new URL("../src/ptree.ts", import.meta.url).href;
+		const started = performance.now();
+		const run = spawnSync(
+			process.execPath,
+			[
+				"-e",
+				`const { exec } = await import(${JSON.stringify(ptreeUrl)}); await exec(["true"], { timeout: 10_000 });`,
+			],
+			{ encoding: "utf8", timeout: 4_000 },
+		);
+		const elapsedMs = performance.now() - started;
+		expect({ status: run.status, stderr: run.stderr }).toEqual({ status: 0, stderr: "" });
+		expect(elapsedMs).toBeLessThan(3_000);
 	});
 });
 

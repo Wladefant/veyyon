@@ -37,7 +37,11 @@ import type { LoopLimitRuntime } from "../loop-limit";
 import type { CustomEditor } from "./components/composer/custom-editor";
 import type { HookEditorComponent } from "./components/dialogs/hook-editor";
 import type { HookInputComponent } from "./components/dialogs/hook-input";
-import type { HookSelectorComponent, HookSelectorOptions } from "./components/selectors/hook-selector";
+import type {
+	HookSelectorComponent,
+	HookSelectorOptions,
+	HookSelectorSlider,
+} from "./components/selectors/hook-selector";
 import type { StatusLineComponent } from "./components/status-line";
 import type { AssistantMessageComponent } from "./components/transcript/assistant-message";
 import type { BashExecutionComponent } from "./components/transcript/bash-execution";
@@ -92,6 +96,16 @@ import type { TodoItem, TodoPhase } from "../../tools/agent/todo";
 export type { TodoItem, TodoPhase, TodoStatus } from "../../tools/agent/todo";
 
 export type InteractiveSelectorDialogOptions = ExtensionUIDialogOptions & Pick<HookSelectorOptions, "disabledIndices">;
+
+/** Dialog options for the plan-review overlay opened by `showPlanReview`. */
+export interface PlanReviewDialogOptions {
+	helpText?: string;
+	disabledIndices?: number[];
+	onExternalEditor?: () => void;
+	onPlanEdited?: (content: string) => void;
+	onFeedbackChange?: (feedback: string) => void;
+	initialIndex?: number;
+}
 
 export interface InteractiveModeContext {
 	// UI access
@@ -173,6 +187,7 @@ export interface InteractiveModeContext {
 	toolOutputExpanded: boolean;
 	todoExpanded: boolean;
 	planModeEnabled: boolean;
+	planModePaused: boolean;
 	vibeModeEnabled: boolean;
 	goalModeEnabled: boolean;
 	goalModePaused: boolean;
@@ -374,7 +389,7 @@ export interface InteractiveModeContext {
 	findLastAssistantMessage(): AssistantMessage | undefined;
 	extractAssistantText(message: AssistantMessage): string;
 	/** Refresh the running-agents status badge from the active local or collab registry. */
-	syncRunningAgentBadge(): void;
+	syncRunningAgentBadge(options?: { requestRender?: boolean }): void;
 	updateEditorBorderColor(): void;
 	rebuildChatFromMessages(): void;
 	setTodos(todos: TodoItem[] | TodoPhase[]): void;
@@ -404,7 +419,12 @@ export interface InteractiveModeContext {
 	handlePythonCommand(code: string, excludeFromContext?: boolean): Promise<void>;
 	handleMCPCommand(text: string): Promise<void>;
 	handleSSHCommand(text: string): Promise<void>;
-	handleCompactCommand(customInstructions?: string, mode?: CompactMode): Promise<CompactionOutcome>;
+	handleCompactCommand(
+		customInstructions?: string,
+		mode?: CompactMode,
+		beforeFlush?: (outcome: CompactionOutcome) => void | Promise<void>,
+		internalGuidance?: string,
+	): Promise<CompactionOutcome>;
 	handleHandoffCommand(customInstructions?: string): Promise<void>;
 	handleShakeCommand(mode: ShakeMode): Promise<void>;
 	handleMoveCommand(targetPath?: string): Promise<void>;
@@ -504,7 +524,7 @@ export interface InteractiveModeContext {
 	hasActiveOmfg(): boolean;
 	handleOmfgEscape(): boolean;
 	cycleThinkingLevel(): void;
-	cycleRoleModel(direction?: "forward" | "backward"): Promise<void>;
+	cycleModel(direction?: "forward" | "backward"): Promise<void>;
 	toggleToolOutputExpansion(): void;
 	setToolsExpanded(expanded: boolean): void;
 	toggleThinkingBlockVisibility(): void;
@@ -520,6 +540,13 @@ export interface InteractiveModeContext {
 	disableLoopMode(): void;
 	pauseLoop(): void;
 	handlePlanApproval(details: PlanApprovalDetails): Promise<void>;
+	showPlanReview(
+		planContent: string,
+		title: string,
+		options: string[],
+		dialogOptions?: PlanReviewDialogOptions,
+		extra?: { slider?: HookSelectorSlider },
+	): Promise<string | undefined>;
 	openPlanReview(): Promise<void>;
 
 	// Hook UI methods

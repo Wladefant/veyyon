@@ -5,7 +5,7 @@
  * through {@link callSessionTool}. Reserving the synthetic tool name
  * {@link EVAL_COMPLETION_BRIDGE_NAME} lets a single host handler serve both
  * transports without registering an agent-visible tool: cell code calls
- * `completion(prompt, opts)`, the prelude forwards `{ prompt, model, system?, schema? }`
+ * `completion(prompt, opts)`, the prelude forwards `{ prompt, model?, system?, schema? }`
  * through the bridge, and this module performs one stateless completion.
  *
  * The call is oneshot and toolless from the model's perspective — pure text
@@ -14,17 +14,18 @@
 import { instrumentedCompleteSimple, resolveTelemetry } from "@veyyon/agent-core";
 import type { Api, Model, Tool } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { Effort } from "@veyyon/catalog/effort";
+import type { Effort } from "@veyyon/catalog/effort";
 import { getSupportedEfforts } from "@veyyon/catalog/model-thinking";
 import { lazy } from "@veyyon/utils";
 import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit/utils";
-
 import {
-	expandRoleAlias,
 	formatModelString,
 	getModelMatchPreferences,
 	resolveModelFromString,
+	resolveModelSelectorValue,
 } from "../config/model-resolver";
+import { helperSettingPath, resolveHelperModel } from "../task/helper-settings";
+import { AUTO_THINKING, type ConfiguredThinkingLevel, toReasoningEffort } from "../thinking";
 import type { ToolSession } from "../tools";
 import { ToolError } from "../tools/core/tool-errors";
 import { withBridgeTimeoutPause } from "./bridge-timeout";
@@ -36,18 +37,13 @@ export const EVAL_COMPLETION_BRIDGE_NAME = "__completion__";
 /** Synthetic tool the model is forced to call when a `schema` is supplied. */
 const STRUCTURED_TOOL_NAME = "respond";
 
-type CompletionTier = "smol" | "default" | "slow";
-
-const TIER_TO_PATTERN: Record<CompletionTier, string> = {
-	smol: "@smol",
-	default: "@default",
-	slow: "@slow",
-};
+/** The `model` value that names the session's active model. */
+const SESSION_MODEL_SELECTOR = "default";
 
 const completionArgsSchema = lazy(() =>
 	type({
 		prompt: "string>0",
-		"model?": "'smol'|'default'|'slow'",
+		"model?": "string>0",
 		"system?": "string",
 		"schema?": "Record<string,unknown>",
 	}),
@@ -57,45 +53,65 @@ export interface EvalCompletionBridgeOptions extends EvalBridgeOptions {}
 
 export interface EvalCompletionResult {
 	text: string;
-	details: { model: string; tier: CompletionTier; structured: boolean };
+	details: { model: string; structured: boolean };
+}
+
+interface CompletionModel {
+	model: Model<Api>;
+	thinkingLevel?: ConfiguredThinkingLevel;
 }
 
 /**
- * Resolve a tier to a concrete {@link Model}. `default` prefers the session's
- * active model and falls back to the `@default` role; `smol`/`slow` resolve
- * their respective role patterns. Returns `undefined` when nothing matches.
+ * Resolve the model a `completion()` call runs. An omitted `model` runs the
+ * completion helper, which is the session's model until
+ * `agent.helpers.completion.model` names another. `"default"` runs the
+ * session's active model. Any other value is a model selector, and its
+ * `:level` suffix sets the effort. Throws a {@link ToolError} naming what to
+ * fix when nothing matches.
  */
-function resolveTierModel(tier: CompletionTier, session: ToolSession): Model<Api> | undefined {
-	const modelRegistry = session.modelRegistry;
-	if (!modelRegistry) return undefined;
-	const available = modelRegistry.getAvailable();
-	if (available.length === 0) return undefined;
-
-	const matchPreferences = getModelMatchPreferences(session.settings);
-	const resolve = (pattern: string | undefined): Model<Api> | undefined => {
-		if (!pattern) return undefined;
-		const expanded = expandRoleAlias(pattern, session.settings);
-		return resolveModelFromString(expanded, available, matchPreferences);
-	};
-
-	if (tier === "default") {
-		const activePattern = session.getActiveModelString?.() ?? session.getModelString?.();
-		return resolve(activePattern) ?? resolve(TIER_TO_PATTERN.default);
+function resolveCompletionModel(selector: string | undefined, session: ToolSession): CompletionModel {
+	const available = session.modelRegistry?.getAvailable() ?? [];
+	if (available.length === 0) {
+		throw new ToolError("completion() found no available model. Configure credentials for a provider.");
 	}
-	return resolve(TIER_TO_PATTERN[tier]);
+	const matchPreferences = getModelMatchPreferences(session.settings);
+	const activePattern = session.getActiveModelString?.() ?? session.getModelString?.();
+	const activeModel = activePattern ? resolveModelFromString(activePattern, available, matchPreferences) : undefined;
+	if (selector === undefined) {
+		const helper = resolveHelperModel(session.settings, "completion", available, activeModel);
+		if (!helper) {
+			throw new ToolError(
+				`completion() could not resolve a model: ${helperSettingPath("completion", "model")} matches no available model. Fix it in Agents → Roster → Helpers, or pass \`model\`.`,
+			);
+		}
+		return helper;
+	}
+	if (selector === SESSION_MODEL_SELECTOR) {
+		if (!activeModel) throw new ToolError("completion() could not resolve the session's active model.");
+		return { model: activeModel };
+	}
+	const resolved = resolveModelSelectorValue(selector, available, { settings: session.settings, matchPreferences });
+	if (!resolved.model) {
+		throw new ToolError(`completion() could not resolve model "${selector}": it matches no available model.`);
+	}
+	return {
+		model: resolved.model,
+		thinkingLevel: resolved.explicitThinkingLevel ? resolved.thinkingLevel : undefined,
+	};
 }
 
 /**
- * Choose the reasoning effort for a tier. Only `slow` opts into thinking, and
- * only on reasoning-capable models — guarding against `requireSupportedEffort`
- * throwing downstream on models that cannot reason. Clamps to the highest
- * supported effort so a reasoning model without `high` does not 400.
+ * The reasoning effort a completion sends: the effort named for it, or none.
+ * Models that cannot reason get none, so `requireSupportedEffort` never throws
+ * downstream, and the effort is clamped to what the model supports.
  */
-function reasoningForTier(tier: CompletionTier, model: Model<Api>): Effort | undefined {
-	if (tier !== "slow" || !model.reasoning) return undefined;
+function completionReasoning(model: Model<Api>, level: ConfiguredThinkingLevel | undefined): Effort | undefined {
+	if (!model.reasoning || level === undefined || level === AUTO_THINKING) return undefined;
+	const effort = toReasoningEffort(level);
+	if (effort === undefined) return undefined;
 	const efforts = getSupportedEfforts(model);
 	if (efforts.length === 0) return undefined;
-	return efforts.includes(Effort.High) ? Effort.High : efforts[efforts.length - 1];
+	return efforts.includes(effort) ? effort : efforts[efforts.length - 1];
 }
 
 /**
@@ -156,22 +172,14 @@ export async function runEvalCompletion(
 	if (parsed instanceof type.errors) {
 		throw new ToolError(`completion() received invalid arguments: ${parsed.summary}`);
 	}
-	const { prompt, model: modelTier, system, schema } = parsed;
-	// Apply default value for model if not provided
-	const finalTier: CompletionTier = modelTier ?? "default";
-
-	const model = resolveTierModel(finalTier, options.session);
-	if (!model) {
-		throw new ToolError(
-			`completion() could not resolve a model for the "${finalTier}" tier. Configure modelRoles.${finalTier === "default" ? "default" : finalTier} or ensure a provider is available.`,
-		);
-	}
+	const { prompt, model: selector, system, schema } = parsed;
+	const { model, thinkingLevel } = resolveCompletionModel(selector, options.session);
 
 	const registry = options.session.modelRegistry;
 	const apiKey = await registry?.getApiKey(model);
 	if (!registry || !apiKey) {
 		throw new ToolError(
-			`completion() has no API key for ${formatModelString(model)}. Configure credentials for this provider or choose another tier.`,
+			`completion() has no API key for ${formatModelString(model)}. Configure credentials for this provider or choose another model.`,
 		);
 	}
 
@@ -219,7 +227,7 @@ export async function runEvalCompletion(
 			{
 				apiKey: registry.resolver(model, options.session.getSessionId?.() ?? undefined),
 				signal: options.signal,
-				reasoning: reasoningForTier(finalTier, model),
+				reasoning: completionReasoning(model, thinkingLevel),
 				toolChoice: schema ? { type: "tool", name: STRUCTURED_TOOL_NAME } : undefined,
 				onPayload: payload => sanitizeProviderJson(payload, sanitizeLive),
 			},
@@ -258,12 +266,11 @@ export async function runEvalCompletion(
 	options.emitStatus?.({
 		op: "completion",
 		model: formatModelString(model),
-		tier: finalTier,
 		chars: resultText.length,
 	});
 
 	return {
 		text: resultText,
-		details: { model: formatModelString(model), tier: finalTier, structured: Boolean(schema) },
+		details: { model: formatModelString(model), structured: Boolean(schema) },
 	};
 }

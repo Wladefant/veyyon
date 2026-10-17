@@ -477,15 +477,24 @@ describe("runSubprocess yield reminders", () => {
 
 		const createAgentSessionSpy = mockCreateAgentSession(session);
 
+		// A level only reaches the child when its model accepts it; a non-reasoning model runs at none.
 		const modelRegistry = {
 			refresh: async () => {},
-			getAvailable: () => [{ provider: "openai", id: "gpt-4o", name: "GPT-4o" }],
+			getAvailable: () => [
+				{
+					provider: "openai",
+					id: "gpt-5",
+					name: "GPT-5",
+					reasoning: true,
+					thinking: { efforts: [Effort.Low, Effort.Medium, Effort.High] },
+				},
+			],
 		} as unknown as ModelRegistry;
 
 		await runSubprocess({
 			...baseOptions,
 			id: "agent-thinking-fallback",
-			modelOverride: "openai/gpt-4o",
+			modelOverride: "openai/gpt-5",
 			thinkingLevel: Effort.High,
 			modelRegistry,
 		});

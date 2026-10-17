@@ -137,7 +137,7 @@ describe("Tier-A settings precedence", () => {
 	 * nobody noticed until a clean typecheck ran.
 	 */
 	function expectKnobs(
-		settings: Awaited<ReturnType<typeof load>>,
+		settings: Settings,
 		expected: {
 			gitEnabled: boolean;
 			immuneTurns: number;

@@ -2,7 +2,7 @@ import type { Usage } from "@veyyon/ai";
 import { supportsOpenAIPromptCacheBreakpoints } from "@veyyon/catalog/identity";
 import type { Component } from "@veyyon/tui";
 import { formatNumber } from "@veyyon/utils";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { renderTranscriptDivider } from "./transcript-divider";
 
 /**

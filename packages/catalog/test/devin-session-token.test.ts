@@ -13,6 +13,8 @@
  */
 
 import { describe, expect, it } from "bun:test";
+import { namedImportsFrom } from "@veyyon/utils/module-reach";
+import { stringConstantsIn } from "@veyyon/utils/source-declarations";
 import { DEVIN_SESSION_TOKEN_PREFIX, normalizeDevinSessionToken } from "../src/discovery/devin";
 
 describe("normalizing a pasted token", () => {
@@ -47,12 +49,15 @@ describe("normalizing a pasted token", () => {
 });
 
 describe("the two packages that send it", () => {
-	/** The lock: `@veyyon/ai` imports this rather than spelling the prefix again. */
+	/**
+	 * The lock: `@veyyon/ai` imports this rather than spelling the prefix again. Importing the
+	 * normalizer is also the proof the provider defines no copy: the compiler refuses a module that
+	 * imports a name and declares it.
+	 */
 	it("share one owner, and the provider defines neither the prefix nor the normalizer", async () => {
 		const provider = await Bun.file(new URL("../../ai/src/providers/devin.ts", import.meta.url)).text();
 
-		expect(provider).not.toContain('const DEVIN_SESSION_TOKEN_PREFIX = "devin-session-token$"');
-		expect(provider).not.toContain("function normalizeDevinSessionToken(");
-		expect(provider).toContain("normalizeDevinSessionToken");
+		expect(namedImportsFrom(provider, "@veyyon/catalog/discovery/devin")).toContain("normalizeDevinSessionToken");
+		expect(stringConstantsIn(provider).map(constant => constant.value)).not.toContain(DEVIN_SESSION_TOKEN_PREFIX);
 	});
 });

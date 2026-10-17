@@ -10,8 +10,10 @@
  * merged, and the sweep below runs every combination of the two inputs that select it, including
  * neither. Each run streams events one at a time through the real `agentLoop`, holds a weak reference
  * to each, and counts the events still reachable before the terminal event arrives. The collector
- * scans the native stack conservatively, so a stale slot can keep a few events alive in any run; the
- * defect keeps every event, so the bound is a small constant far below the stream length.
+ * scans the native stack conservatively, so a stale slot can keep a few events alive in any run, and
+ * which ones differs from run to run (up to 5 scattered indexes out of 300 were seen under load). The
+ * defect keeps every event in every run, so each variant streams {@link RUNS} times and counts only
+ * the events reachable in all of them; the bound is a small constant far below the stream length.
  *
  * Not caught: retention by a consumer of the loop's own event feed, or by a provider stream that
  * buffers its events; this suite drains the feed and pushes each event only after the loop took the
@@ -28,7 +30,9 @@ import { isHarmonyLeakMitigationTarget } from "@veyyon/ai/utils/harmony-leak";
 import { createAssistantMessage, createUserMessage } from "./helpers";
 
 const EVENTS = 300;
-/** Events a conservative stack scan may keep through stale slots, independent of {@link EVENTS}. */
+/** Independent streams per variant; an event retained by the loop is reachable in every one of them. */
+const RUNS = 3;
+/** Events a conservative stack scan may keep in every run, independent of {@link EVENTS}. */
 const STRAY_SURVIVORS = 4;
 
 interface Variant {
@@ -105,8 +109,12 @@ describe("a streamed event is released once the loop has handled it", () => {
 	for (const variant of VARIANTS) {
 		const name = `${variant.callerSignal ? "with" : "without"} a caller signal, ${variant.harmonyTarget ? "a" : "no"} harmony target`;
 		it(`holds a bounded number of events ${name}`, async () => {
-			const reachable = await reachableEventsBeforeTheEnd(variant);
-			expect(reachable.length).toBeLessThanOrEqual(STRAY_SURVIVORS);
+			let retained = new Set(await reachableEventsBeforeTheEnd(variant));
+			for (let run = 1; run < RUNS; run++) {
+				const reachable = new Set(await reachableEventsBeforeTheEnd(variant));
+				retained = new Set([...retained].filter(index => reachable.has(index)));
+			}
+			expect(retained.size).toBeLessThanOrEqual(STRAY_SURVIVORS);
 		});
 	}
 });

@@ -42,7 +42,7 @@ engine is TypeScript in `@veyyon/hashline`, with native helpers for block resolu
   them before anything reaches disk. A failed patch returns a structured error to the
   model instead of a half-written file.
 - **Model slots.** The interactive model (`/model`), the agent model, and the
-  compaction model are separate settings. Named roles pin a model to a kind of work.
+  compaction model are separate settings. Helpers pin a model to one feature.
 - **Approvals.** `tools.approvalMode` controls the read, write, and exec tiers. There is
   no operating-system sandbox: no Landlock, no seccomp, no Seatbelt, no bubblewrap.
   Approvals are the control point.

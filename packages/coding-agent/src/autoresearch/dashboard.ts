@@ -13,7 +13,7 @@ import { formatCount } from "@veyyon/utils";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
 import { sanitizeSingleLine } from "@veyyon/utils/wrap";
 import type { ExtensionContext } from "../extensibility/extensions";
-import { theme } from "../theme/theme";
+import { theme } from "../theme/theme-binding";
 import type { LoopConsoleModel } from "./console";
 import { formatElapsed, formatNum, formatPercentChange } from "./helpers";
 import { AUTORESEARCH_SCREEN_KEY } from "./shortcuts";

@@ -17,8 +17,6 @@
  *
  * Not here: anything that needs a `Theme` (the styled artifact reference and the styled truncation
  * warning stay in `output-meta.ts`, which already reaches the theme), the builder, and the wrapper.
- *
- * `output-meta.ts` re-exports every name below, so no existing caller changed.
  */
 
 // Owners, not the `@veyyon/utils` barrel: 1 module against 74.

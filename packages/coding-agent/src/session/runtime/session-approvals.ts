@@ -144,7 +144,7 @@ export class SessionApprovals {
 		if (!bridge?.capabilities.requestPermission || !bridge.requestPermission) return tool;
 		if (!PERMISSION_REQUIRED_TOOLS.has(tool.name)) return tool;
 		if (this.#isExplicitAutoApprove()) {
-			const userPolicies = (this.#host.settings.get("tools.approval") ?? {}) as Record<string, unknown>;
+			const userPolicies = this.#host.settings.get("tools.approval") as Record<string, unknown>;
 			const toolPolicy = userPolicies[tool.name];
 			if (!toolPolicy || toolPolicy === "allow") return tool;
 		}

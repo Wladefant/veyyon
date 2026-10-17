@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import {
 	type MarketplaceAutoUpdateResult,
 	runMarketplaceAutoUpdate,
@@ -21,7 +21,7 @@ import { logger } from "@veyyon/utils";
  * another, and a failure is reported rather than swallowed.
  */
 describe("marketplace auto-update", () => {
-	let warnSpy: ReturnType<typeof vi.spyOn>;
+	let warnSpy: Mock<typeof logger.warn>;
 
 	/** A manager stub standing in for the dynamic `./marketplace` import. */
 	function stubManager(behavior: {

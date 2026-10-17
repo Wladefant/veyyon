@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import type { Api, Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
-import type { Settings } from "@veyyon/coding-agent/config/settings";
 import { createExtensionModelQuery } from "../../src/extensibility/extensions/model-api";
 
 function model(id: string, name: string, provider: string): Model<"anthropic-messages"> {
@@ -53,14 +52,6 @@ describe("createExtensionModelQuery", () => {
 		expect(q.resolve("anthropic/claude-opus-4-8")).toBe(claude);
 		expect(q.resolve("gpt-5.4")?.provider).toBe("openai");
 		expect(q.resolve("definitely-not-a-model")).toBeUndefined();
-	});
-
-	test("resolve() honors configured role aliases via the same settings-backed path as core", () => {
-		const settings = {
-			getModelRole: (role: string) => (role === "slow" ? "anthropic/claude-opus-4-8" : undefined),
-		} as unknown as Settings;
-		const q = createExtensionModelQuery(registry(), settings, () => undefined);
-		expect(q.resolve("@slow")).toBe(claude);
 	});
 
 	test("family() groups a vendor's point releases and separates vendors", () => {
