@@ -67,6 +67,24 @@ echo "Bun version: $(bun --version)"
 # Frozen dependency install
 echo "Installing dependencies from frozen lockfile..."
 bun install --frozen-lockfile
+# Download bubblewrap from the distro without root, then expose its extracted binary.
+bwrap_tools="$repo_root/.cf-bwrap"
+mkdir -p "$bwrap_tools/packages" "$bwrap_tools/root" \
+  "$bwrap_tools/lists/partial" "$bwrap_tools/cache/archives/partial"
+(
+  cd "$bwrap_tools/packages"
+  apt_options=(-o "Dir::State::Lists=$bwrap_tools/lists" -o "Dir::Cache=$bwrap_tools/cache")
+  timeout 120 apt-get "${apt_options[@]}" update
+  timeout 120 apt-get "${apt_options[@]}" download bubblewrap
+  timeout 120 dpkg-deb -x ./*.deb "$bwrap_tools/root"
+)
+export PATH="$bwrap_tools/root/usr/bin:$PATH"
+if ! command -v bwrap >/dev/null 2>&1; then
+  echo "FATAL: bubblewrap was not extracted to $bwrap_tools/root/usr/bin/bwrap" >&2
+  exit 1
+fi
+export VEYYON_SANDBOX_REMOTE=0
+export VEYYON_SANDBOX_RUNG=bwrap
 
 # Pre-native regression gate: run pure shard helper regression suite inside sandbox
 # This proves sharding logic remotely even if native compilation encounters time or toolchain issues
