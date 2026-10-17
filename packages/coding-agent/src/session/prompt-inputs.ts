@@ -4,9 +4,15 @@
  * caller's replacement prompt.
  */
 
+import { createHash } from "node:crypto";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentTool } from "@veyyon/agent-core";
+import { parseFrontmatter } from "@veyyon/utils";
+import { isMissingPath } from "@veyyon/utils/fs-error";
+import { errorMessage } from "@veyyon/utils/type-guards";
 import type { DiscoveredAdvisors } from "../advisor/config";
+import { captureDiscoveryReadErrors, clearCache as clearDiscoveryFsCache } from "../discovery/capability/fs";
 import type { Rule } from "../discovery/capability/rule";
 import { type BucketRulesOptions, bucketRules, type RuleBuckets } from "../discovery/capability/rule-buckets";
 import type { EffectiveToolDiscoveryMode } from "../discovery/mode";
@@ -73,6 +79,8 @@ export interface DiscoveredProjectInputs {
 
 export interface ProjectPromptInputsOptions {
 	readonly initial: ProjectPromptSnapshot;
+	/** Caller-owned inputs are never validated or refreshed from disk. */
+	readonly supplied?: Pick<CreateAgentSessionOptions, "contextFiles" | "skills" | "rules">;
 	/** The session's live cwd; `set_cwd` and `/move` change it mid-session. */
 	getCwd(): string;
 	discover(cwd: string): ProjectInputDiscovery;
@@ -94,10 +102,13 @@ export class ProjectPromptInputs {
 	#snapshot: ProjectPromptSnapshot;
 	#pending: Promise<void> = Promise.resolve();
 	readonly #options: ProjectPromptInputsOptions;
+	#skillDigests: Map<string, string>;
+	#reloadWarnings: string[] = [];
 
 	constructor(options: ProjectPromptInputsOptions) {
 		this.#options = options;
 		this.#snapshot = options.initial;
+		this.#skillDigests = this.#readSkillDigests(options.initial.skills);
 	}
 
 	get current(): ProjectPromptSnapshot {
@@ -124,10 +135,74 @@ export class ProjectPromptInputs {
 		};
 	}
 
+	/** Force the existing re-root discovery path to read the current directory again. */
+	async reload(): Promise<string[]> {
+		const before = this.#fileContents();
+		await this.refresh(true);
+		if (this.#reloadWarnings.length) {
+			return this.#reloadWarnings.map(error => `Could not reload ${error}; keeping the previous rules and skills.`);
+		}
+		const after = this.#fileContents();
+		const added: string[] = [];
+		const changed: string[] = [];
+		const dropped: string[] = [];
+		for (const [file, content] of after) {
+			if (!before.has(file)) added.push(file);
+			else if (before.get(file) !== content) changed.push(file);
+		}
+		for (const file of before.keys()) {
+			if (!after.has(file)) dropped.push(file);
+		}
+		const lines: string[] = [];
+		if (added.length)
+			lines.push(
+				`Rule files and skills now in effect: ${added.join(", ")}. Follow them for the rest of the session.`,
+			);
+		if (changed.length)
+			lines.push(`Changed rule files and skills: ${changed.join(", ")}. Follow their reloaded contents.`);
+		if (dropped.length) lines.push(`No longer in effect: ${dropped.join(", ")}. Stop applying them.`);
+		if (!lines.length) lines.push("The rule files and skills in effect are unchanged.");
+		lines.push("Rule files and skills reloaded. The next model turn uses the rebuilt system prompt.");
+		return lines;
+	}
+
+	#fileContents(): Map<string, string> {
+		const current = this.#snapshot;
+		const files = new Map(current.contextFiles.map(file => [file.path, file.content]));
+		for (const skill of current.skills) {
+			if (this.#options.supplied?.skills === undefined)
+				files.set(skill.filePath, `${JSON.stringify(skill)}\n${this.#skillDigests.get(skill.filePath) ?? ""}`);
+			else files.set(skill.filePath, JSON.stringify(skill));
+		}
+		for (const rule of [
+			...current.rulebookRules,
+			...current.alwaysApplyRules,
+			...this.#options.ttsrManager.getRules(),
+		]) {
+			files.set(rule.path, JSON.stringify(rule));
+		}
+		return files;
+	}
+
+	#readSkillDigests(skills: Skill[]): Map<string, string> {
+		const digests = new Map<string, string>();
+		if (this.#options.supplied?.skills !== undefined) return digests;
+		for (const skill of skills) {
+			try {
+				if (fs.statSync(skill.filePath).isFile()) {
+					digests.set(skill.filePath, createHash("sha256").update(fs.readFileSync(skill.filePath)).digest("hex"));
+				}
+			} catch {
+				// Caller-owned skills may not have a disk file. Discovery reports disk read failures.
+			}
+		}
+		return digests;
+	}
+
 	/** Re-discover the project when the live cwd differs from the rendered one; resolves once they agree. */
-	async refresh(): Promise<void> {
-		if (this.#liveCwd() === this.#snapshot.cwd) return;
-		const refresh = this.#pending.catch(() => undefined).then(() => this.#discoverLiveCwd());
+	async refresh(force = false): Promise<void> {
+		if (!force && this.#liveCwd() === this.#snapshot.cwd) return;
+		const refresh = this.#pending.catch(() => undefined).then(() => this.#discoverLiveCwd(force));
 		this.#pending = refresh;
 		await refresh;
 		if (this.#liveCwd() !== this.#snapshot.cwd) await this.refresh();
@@ -137,11 +212,50 @@ export class ProjectPromptInputs {
 		return path.resolve(this.#options.getCwd());
 	}
 
-	async #discoverLiveCwd(): Promise<void> {
+	async #discoverLiveCwd(force: boolean): Promise<void> {
 		const cwd = this.#liveCwd();
-		if (cwd === this.#snapshot.cwd) return;
+		if (!force && cwd === this.#snapshot.cwd) return;
+		if (force) {
+			this.#reloadWarnings = [];
+			// A fail-soft loader must not turn an unreadable loaded file into an intentional removal.
+			const { supplied } = this.#options;
+			const files = new Set([
+				...(supplied?.contextFiles === undefined ? this.#snapshot.contextFiles.map(file => file.path) : []),
+				...(supplied?.skills === undefined ? this.#snapshot.skills.map(skill => skill.filePath) : []),
+				...(supplied?.rules === undefined
+					? [
+							...this.#snapshot.rulebookRules,
+							...this.#snapshot.alwaysApplyRules,
+							...this.#options.ttsrManager.getRules(),
+						].map(rule => rule.path)
+					: []),
+			]);
+			for (const file of files) {
+				try {
+					const stat = await fs.promises.stat(file);
+					if (!stat.isFile()) throw new Error("not a regular file");
+					await fs.promises.readFile(file);
+				} catch (error) {
+					if (!isMissingPath(error)) this.#reloadWarnings.push(`${file}: ${errorMessage(error)}`);
+				}
+			}
+			if (this.#reloadWarnings.length) return;
+			clearDiscoveryFsCache();
+		}
 
-		const discovery = this.#options.discover(cwd);
+		const captured = await captureDiscoveryReadErrors(async () => {
+			const discovery = this.#options.discover(cwd);
+			return Promise.all([
+				discovery.contextFiles,
+				discovery.workspaceTree,
+				discovery.activeRepoContext,
+				discovery.nonProjectCwd,
+				discovery.skills,
+				discovery.rules,
+				discovery.watchdogFiles,
+				discovery.advisors,
+			]);
+		});
 		const [
 			contextFiles,
 			workspaceTree,
@@ -151,16 +265,27 @@ export class ProjectPromptInputs {
 			rules,
 			watchdogFiles,
 			advisors,
-		] = await Promise.all([
-			discovery.contextFiles,
-			discovery.workspaceTree,
-			discovery.activeRepoContext,
-			discovery.nonProjectCwd,
-			discovery.skills,
-			discovery.rules,
-			discovery.watchdogFiles,
-			discovery.advisors,
-		]);
+		] = captured.result;
+		if (force && captured.errors.length) {
+			this.#reloadWarnings = captured.errors;
+			return;
+		}
+		if (force && this.#options.supplied?.rules === undefined) {
+			for (const file of new Set(rules.map(rule => rule.path))) {
+				try {
+					if (!(await fs.promises.stat(file)).isFile()) throw new Error("not a regular file");
+					const content = await fs.promises.readFile(file, "utf8");
+					parseFrontmatter(content, { source: file, level: "fatal" });
+				} catch (error) {
+					// Builtin rules have logical paths, not disk files.
+					if (isMissingPath(error)) continue;
+					this.#reloadWarnings.push(
+						`${file}: invalid or unreadable rule frontmatter (${error instanceof Error ? error.name : "error"})`,
+					);
+				}
+			}
+			if (this.#reloadWarnings.length) return;
+		}
 		if (this.#liveCwd() !== cwd) return;
 
 		const buckets = this.#registerRules(rules);
@@ -186,6 +311,7 @@ export class ProjectPromptInputs {
 			rulebookRules: buckets.rulebookRules,
 			alwaysApplyRules: buckets.alwaysApplyRules,
 		};
+		this.#skillDigests = this.#readSkillDigests(next.skills);
 		this.#options.onChange(next);
 	}
 

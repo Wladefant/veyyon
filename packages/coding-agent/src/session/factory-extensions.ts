@@ -12,6 +12,7 @@ import type { ModelRegistry } from "../config/model-registry";
 import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate } from "../config/prompt-templates";
 import type { Settings, SkillsSettings } from "../config/settings";
 import { type CapabilityResult, loadCapability } from "../discovery/capability";
+import { reportDiscoveryFailures } from "../discovery/capability/fs";
 import { type Rule, ruleCapability } from "../discovery/capability/rule";
 import {
 	type CustomCommandsLoadResult,
@@ -211,7 +212,9 @@ export async function discoverSkills(
  * and cannot be forgotten at a call site again.
  */
 export async function discoverRules(cwd?: string, agentDir?: string): Promise<CapabilityResult<Rule>> {
-	return await loadCapability<Rule>(ruleCapability.id, discoveryRoots(cwd, agentDir));
+	const result = await loadCapability<Rule>(ruleCapability.id, discoveryRoots(cwd, agentDir));
+	reportDiscoveryFailures(result.warnings);
+	return result;
 }
 
 /**
