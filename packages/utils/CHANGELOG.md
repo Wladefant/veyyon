@@ -15,6 +15,10 @@
 - `settleWithin(promise, timeoutMs, fallback)` resolves with the promise's value, or with `fallback` once the deadline passes, and clears its timer when the promise settles.
 - `@veyyon/utils/keys` exports `KITTY_CSI_U_PATTERN`, the Kitty CSI-u key-sequence pattern its keypad fast path matches.
 
+### Changed
+
+- `levenshteinDistance` computes the distance bit-parallel, 32 rows per step, and returns the same values 4 to 8 times faster on strings of 32 to 100 characters.
+
 ### Fixed
 
 - `RotatingLogFile` keeps a full log file under one generation when two processes rotate it at once, instead of leaving a second generation that repeats every line of it.
