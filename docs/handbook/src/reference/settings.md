@@ -658,19 +658,20 @@ page inside **Roster**.
 
 #### Which model an agent runs
 
-The first row of **Roster** is **Same Model for All Agents**, and it selects which of two
-chains applies. It is off by default.
+The **Same Model for All Agents** row of the Agents tab selects which of two chains
+applies. It is off by default.
 
 Off, each agent answers for itself. The first layer that specifies a model wins:
 
-1. the agent's own lane, `agent.agents.<name>.model`, edited on that agent's page.
-2. `agent.modelByDepth.<n>`, for a spawn at that depth.
-3. the agent definition's own `model:` frontmatter, for an agent you wrote.
-4. otherwise the agent inherits the model you are working with.
+1. the agent's own lane at the spawn's depth, edited on that agent's page: `agent.agents.<name>.model`
+   for a direct spawn, and the level under **Can spawn** (`agent.agents.<name>.agents`) for a
+   deeper one. A level that sets no model takes the level above.
+2. the agent definition's own `model:` frontmatter, for an agent you wrote.
+3. otherwise the agent inherits the model you are working with.
 
 On, one model answers for every agent: `agent.model`, else the model you are working
-with. Nothing per-agent is read, so the lanes, the depth rows and an agent file's own
-`model:` all stop applying. The agent rows stay listed and go grey, because they still set
+with. Nothing per-agent is read, so the lanes and an agent file's own `model:` stop
+applying. The agent rows stay listed and go grey, because they still set
 which agents are enabled.
 
 The shared model and its effort appear on screen only while the switch is on. Off, they
@@ -695,7 +696,7 @@ levels, then ignored. It is never rounded to a neighbouring effort: running at a
 you did not choose costs money and would not show up anywhere.
 
 Every surface that shows an agent's model also shows the setting that selected it
-(`agent.agents.deep.agents`, `agent.modelByDepth.2`, `agent.model`), so an unexpected
+(`agent.agents.deep.model`, `agent.agents.deep.agents`, `agent.model`), so an unexpected
 model traces to the setting that selected it.
 
 #### The two views in `/agents`
