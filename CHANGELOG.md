@@ -47,6 +47,7 @@
 
 ### Changed
 
+- A replace-mode edit whose old text is not in the file finds its closest candidate about 18 times faster (1.6 s to 90 ms on a 7,400-line file), and its streamed preview no longer repeats the search on every argument chunk, which held the terminal for seconds while a near-miss edit streamed.
 - The `browser` tool sends a run's displayed and returned objects to the model as one line of compact JSON instead of two-space indented JSON, which is 36–41% fewer characters for a `tab.observe()` of a real page; the card still lays them out indented.
 - A `browser` run no longer sends a return value that it already displayed, which was 20% of all run-result text in bench sessions.
 - The `browser` tool's `tab.ariaSnapshot()` and an `open`'s page snapshot leave out bare `generic` wrappers (layout `<div>`s with no name, text, state or pointer), 7–30% of a real page's snapshot.
@@ -139,6 +140,7 @@
 - Removed the unread `commit` parameter of veracity conflict recording and the unread `beam` parameter of recall context formatting; no user-visible change.
 - Backup checksums use the shared `sha256Hex16` helper instead of a private copy; no user-visible change.
 - The committed-prefix audit and resync are in `core/committed-prefix.ts` instead of `core/renderer.ts`, and the render scheduler, the root-child frame-segment helpers, the render intent and the alt-buffer caret mapping are in `core/render-scheduler.ts`, `core/frame-segments.ts`, `core/render-intent.ts` and `core/cursor.ts` instead of `core/tui.ts` and `core/frame-plan.ts`; behavior is unchanged.
+- `levenshteinDistance` computes the distance bit-parallel, 32 rows per step, and returns the same values 4 to 8 times faster on strings of 32 to 100 characters.
 
 ### Removed
 
