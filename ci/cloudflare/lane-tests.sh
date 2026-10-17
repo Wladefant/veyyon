@@ -73,7 +73,9 @@ mkdir -p "$bwrap_tools/packages" "$bwrap_tools/root" \
   "$bwrap_tools/lists/partial" "$bwrap_tools/cache/archives/partial"
 (
   cd "$bwrap_tools/packages"
-  apt_options=(-o "Dir::State::Lists=$bwrap_tools/lists" -o "Dir::Cache=$bwrap_tools/cache")
+  apt_config="$bwrap_tools/apt.conf"
+  printf '%s\n' '#clear APT::Update::Post-Invoke;' > "$apt_config"
+  apt_options=(-c "$apt_config" -o "Dir::State::Lists=$bwrap_tools/lists" -o "Dir::Cache=$bwrap_tools/cache")
   timeout 120 apt-get "${apt_options[@]}" update
   timeout 120 apt-get "${apt_options[@]}" download bubblewrap
   timeout 120 dpkg-deb -x ./*.deb "$bwrap_tools/root"
