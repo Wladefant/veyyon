@@ -251,6 +251,7 @@
 - An SGR mouse or kitty escape that starts while an expired partial is being held is no longer merged into that partial and delivered as typed characters; the stale partial is delivered on its own and the new sequence gets its own hold window.
 - A terminal started again while running no longer leaves its first keyboard-probe fallback armed, which enabled modifyOtherKeys on the restored terminal after `stop()`.
 - `RotatingLogFile` keeps a full log file under one generation when two processes rotate it at once, instead of leaving a second generation that repeats every line of it.
+- `RotatingLogFile` no longer deletes a fresh live log file another process starts while a rotation releases the full one, which lost every line written to it.
 - `fetchWithRetry` ends with the signal's `TimeoutError` when a deadline aborts it, instead of a generic `AbortError: Request was aborted` that reported the timeout as a cancellation.
 - A killed child process gets SIGKILL after a 1s grace when the native addon cannot load, so a child that ignores SIGTERM no longer holds a timeout, an abort or a dispose open forever.
 - A child spawned with a timeout no longer keeps the process alive until that timeout elapses after the child has already exited.
