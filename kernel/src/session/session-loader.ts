@@ -874,21 +874,43 @@ function settleBlobSite(
 	}
 }
 
+/**
+ * The restore of each distinct reference one load has started, per decoding: a transcript repeats
+ * one payload in every turn that resends it (a 5,660-reference session held 267 distinct blobs),
+ * and every site of it receives the one string the first read decoded.
+ */
+interface BlobReads {
+	imageData: Map<string, Promise<string>>;
+	imageUrl: Map<string, Promise<string>>;
+	text: Map<string, Promise<string>>;
+}
+
+function readBlobSite(site: BlobSite, reference: string, blobStore: BlobStore, reads: BlobReads): Promise<string> {
+	const started =
+		site.kind === "image-data" ? reads.imageData : site.kind === "image-url" ? reads.imageUrl : reads.text;
+	let read = started.get(reference);
+	if (read === undefined) {
+		read =
+			site.kind === "image-data"
+				? resolveImageData(blobStore, reference)
+				: site.kind === "image-url"
+					? resolveImageDataUrl(blobStore, reference)
+					: resolveTextBlobRef(blobStore, reference);
+		started.set(reference, read);
+	}
+	return read;
+}
+
 async function resolveBlobSite(
 	site: BlobSite,
 	blobStore: BlobStore,
 	lost: LostPayloads,
 	strings: StringPool,
+	reads: BlobReads,
 ): Promise<void> {
 	const reference = siteReference(site);
 	if (reference === undefined) return;
-	const resolved =
-		site.kind === "image-data"
-			? await resolveImageData(blobStore, reference)
-			: site.kind === "image-url"
-				? await resolveImageDataUrl(blobStore, reference)
-				: await resolveTextBlobRef(blobStore, reference);
-	settleBlobSite(site, reference, resolved, lost, strings);
+	settleBlobSite(site, reference, await readBlobSite(site, reference, blobStore, reads), lost, strings);
 }
 
 function resolveBlobSiteSync(site: BlobSite, blobStore: BlobStore, lost: LostPayloads, strings: StringPool): void {
@@ -906,13 +928,14 @@ function resolveBlobSiteSync(site: BlobSite, blobStore: BlobStore, lost: LostPay
 async function resolveBlobSites(scan: EntryScan, blobStore: BlobStore, lost: LostPayloads): Promise<void> {
 	const { sites, strings } = scan;
 	if (sites.length === 0) return;
+	const reads: BlobReads = { imageData: new Map(), imageUrl: new Map(), text: new Map() };
 	let next = 0;
 	const workers = Math.min(BLOB_READ_CONCURRENCY, sites.length);
 	await Promise.all(
 		Array.from({ length: workers }, async () => {
 			for (let index = next++; index < sites.length; index = next++) {
 				const site = sites[index];
-				if (site) await resolveBlobSite(site, blobStore, lost, strings);
+				if (site) await resolveBlobSite(site, blobStore, lost, strings, reads);
 			}
 		}),
 	);
@@ -958,7 +981,9 @@ export interface BlobResolutionOptions {
  *
  * Two phases for the blobs: collect every reference in the session synchronously, then read them
  * through one bounded pool. The cap is session-wide rather than per-entry, so a transcript of a
- * thousand entries each holding one payload reads eight files at a time and not a thousand.
+ * thousand entries each holding one payload reads eight files at a time and not a thousand. Each
+ * distinct reference is read once per decoding (see {@link BlobReads}), and every site of it
+ * receives that one string.
  */
 export async function resolveBlobRefsInEntries(
 	entries: FileEntry[],
