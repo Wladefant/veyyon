@@ -487,6 +487,26 @@ describe("antigravity usage provider", () => {
 		expect(report?.limits).toHaveLength(1);
 		expect(report?.limits[0]?.id).toContain(":claude-gpt:");
 	});
+
+	it("returns the partial summary when supplementary listing transport throws", async () => {
+		const fetch: FetchImpl = async input => {
+			if (String(input).includes("retrieveUserQuotaSummary")) {
+				return new Response(JSON.stringify({
+					groups: [{
+						displayName: "Claude and GPT models",
+						buckets: [{ bucketId: "3p-5h", window: "5h", remainingFraction: 0.8 }],
+					}],
+				}), { status: 200, headers: { "content-type": "application/json" } });
+			}
+			throw new Error("listing transport failed");
+		};
+		const report = await antigravityUsageProvider.fetchUsage!(
+			{ provider: "google-antigravity", credential: makeCredential(), signal: undefined },
+			makeCtx(fetch),
+		);
+		expect(report?.limits).toHaveLength(1);
+		expect(report?.limits[0]?.id).toContain(":claude-gpt:");
+	});
 });
 
 describe("antigravity ranking strategy", () => {
