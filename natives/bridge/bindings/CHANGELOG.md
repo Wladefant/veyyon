@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Block-boundary lookups and code summaries parse a PHP file that leaves PHP for HTML with `?>` instead of failing it as a syntax error, which cuts a 191KB WordPress source from 767ms to 18ms and restores tree-sitter block context and the structural summary for it.
+- Block-boundary lookups and code summaries parse a PHP file that leaves PHP for HTML with `?>` instead of failing it as a syntax error, which cuts a 191KB plugin source from 767ms to 18ms and gives such a file tree-sitter block context and a structural summary.
 
 ## [1.5.6] - 2026-10-13
 
