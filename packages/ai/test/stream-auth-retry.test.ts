@@ -467,7 +467,11 @@ describe("streamSimple resolver auth retry", () => {
 		);
 
 		const stream = streamSimple(model(), context, {
-			apiKey: async () => resolved[resolveIndex++],
+			apiKey: async ctx => {
+				const index = resolveIndex++;
+				ctx.onCredentialSelected?.(index === 1 ? "20" : "13");
+				return resolved[index];
+			},
 		});
 		for await (const _event of stream) {
 			// drain
@@ -475,6 +479,10 @@ describe("streamSimple resolver auth retry", () => {
 
 		expect((await stream.result()).stopReason).toBe("error");
 		expect(keys).toEqual(["credential-A", "credential-B"]);
+		// Resolving duplicate A changes routing, but no request used it.
+		// The terminal refusal still belongs to the last wire attempt, B.
+		expect((await stream.result()).usage.credentialId).toBe("20");
+		expect(JSON.stringify(await stream.result())).not.toContain("credential-B");
 	});
 
 	it("rotates before emitting content for Codex quota payloads", async () => {
