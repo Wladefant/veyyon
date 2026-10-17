@@ -11,6 +11,7 @@
 # after, the first subagent is the first row and the six bundled subagents sit
 # above the first helper. Commit is the fourth helper, not the first, so the
 # roster-return frame tells a return to the opening row from a return to the top.
+# needle-source: Helper: Commit -- the helper page title, `Helper: ` and the Commit helper's label from HELPERS
 settle 18
 submit "/settings"
 expect_screen "Settings" 60 settings-open
