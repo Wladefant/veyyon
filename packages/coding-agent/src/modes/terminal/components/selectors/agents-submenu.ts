@@ -82,11 +82,10 @@ const ROSTER_NAME_COLUMN = 17;
 const ROSTER_STATE_COLUMN = 10;
 
 /**
- * Width of the model cell. The roster's row is about 75 cells inside the settings card, and the
- * name, state, model and effort columns fit in that. A longer selector is cut with an ellipsis;
- * its own page shows it whole.
+ * Width of the effort cell: the longest level, `minimal`, or the `session` an unset cell reads,
+ * and the two-cell gap after it. The model cell after it takes the rest of the row.
  */
-const ROSTER_MODEL_COLUMN = 36;
+const ROSTER_EFFORT_COLUMN = 9;
 
 /** Columns the select list draws before a row's name: the cursor and the gap after it. */
 const ROSTER_ROW_PREFIX = 2;
@@ -369,12 +368,12 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 		const head = resolved.inherited ? undefined : resolved.patterns[0];
 		const model = head === undefined ? SESSION_CELL : modelCell(resolved.patterns);
 		const origin = runsOrigin(resolved, depth);
-		return `${runsText(model, effortCell(head, level))}${origin ? theme.fg("dim", ` (${origin})`) : ""}`;
+		return `${runsText(model, this.#effortCell(head, level))}${origin ? theme.fg("dim", ` (${origin})`) : ""}`;
 	}
 
 	/**
-	 * One subagent's row: whether it may be spawned, then the model and effort a spawn runs. A row
-	 * an override layer supplies shows `overridden` across the Model and Effort columns instead,
+	 * One subagent's row: whether it may be spawned, then the effort and model a spawn runs. A row
+	 * an override layer supplies shows `overridden` across the Effort and Model columns instead,
 	 * since this page cannot change it, and its detail line shows what it runs.
 	 */
 	#agentRow(agent: AgentDefinition, overridden?: string): string {
@@ -392,14 +391,14 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 			return rosterRow(
 				stateText,
 				{ text: `${resolved.unresolved.value} matches no model`, tone: "error" },
-				effortCell(undefined, level),
+				this.#effortCell(undefined, level),
 			);
 		}
-		if (resolved.inherited) return rosterRow(stateText, SESSION_CELL, effortCell(undefined, level));
+		if (resolved.inherited) return rosterRow(stateText, SESSION_CELL, this.#effortCell(undefined, level));
 		return rosterRow(
 			stateText,
 			modelCell(resolved.patterns, ROSTER_SOURCE_NOTE[resolved.source]),
-			effortCell(resolved.patterns[0], level),
+			this.#effortCell(resolved.patterns[0], level),
 		);
 	}
 
@@ -407,7 +406,23 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 	#helperRow(id: HelperId, overridden?: string): string {
 		if (overridden) return `${padding(ROSTER_STATE_COLUMN)}${theme.fg("dim", overridden)}`;
 		const patterns = helperModelPatterns(settings, id);
-		return rosterRow("", modelCell(patterns), effortCell(patterns[0], helperThinkingLevel(settings, id)));
+		return rosterRow("", modelCell(patterns), this.#effortCell(patterns[0], helperThinkingLevel(settings, id)));
+	}
+
+	/**
+	 * The effort a row runs: a `:level` on its model head wins, as it does at dispatch, then the
+	 * configured level. Inherit and nothing both follow the session. A head that is a catalog id
+	 * ending in `:max` names that model, as the resolver reads it, and carries no effort.
+	 */
+	#effortCell(head: string | undefined, level: string | undefined): RosterCell {
+		const models = this.models;
+		const explicit = extractExplicitThinkingSelector(head, {
+			isLiteralModelId: (provider, id) =>
+				models?.some(model => model.provider === provider && model.id === id) === true,
+		});
+		const effective = explicit ?? level;
+		if (effective === undefined || effective === ThinkingLevel.Inherit) return SESSION_CELL;
+		return { text: effective, tone: "set" };
 	}
 
 	/**
@@ -794,7 +809,7 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 	/** What a helper runs, for its page header: the model, then the effort. */
 	#helperSummary(id: HelperId): string {
 		const patterns = helperModelPatterns(settings, id);
-		return runsText(modelCell(patterns), effortCell(patterns[0], helperThinkingLevel(settings, id)));
+		return runsText(modelCell(patterns), this.#effortCell(patterns[0], helperThinkingLevel(settings, id)));
 	}
 
 	/**
@@ -1013,14 +1028,18 @@ function paintCell(cell: RosterCell, width?: number): string {
 	return theme.fg(ROSTER_CELL_COLOR[cell.tone], text);
 }
 
-/** One roster row's description: state, model and effort, each in its column. */
+/**
+ * One roster row's description: state, effort and model, each in its column. The model is last
+ * so it takes whatever width the card has left, and the list cuts it with an ellipsis where the
+ * card is narrow; the fixed columns before it stay whole.
+ */
 function rosterRow(state: string, model: RosterCell, effort: RosterCell): string {
-	return `${padEnd(state, ROSTER_STATE_COLUMN)}${paintCell(model, ROSTER_MODEL_COLUMN)}${paintCell(effort)}`;
+	return `${padEnd(state, ROSTER_STATE_COLUMN)}${paintCell(effort, ROSTER_EFFORT_COLUMN)}${paintCell(model)}`;
 }
 
 /** The column heading over the roster, laid out from the widths the rows are drawn with. */
 function rosterHeading(): string {
-	return `${padding(ROSTER_ROW_PREFIX + ROSTER_NAME_COLUMN)}${padEnd("State", ROSTER_STATE_COLUMN)}${padEnd("Model", ROSTER_MODEL_COLUMN)}Effort`;
+	return `${padding(ROSTER_ROW_PREFIX + ROSTER_NAME_COLUMN)}${padEnd("State", ROSTER_STATE_COLUMN)}${padEnd("Effort", ROSTER_EFFORT_COLUMN)}Model`;
 }
 
 /** A line above an agent's or a helper's rows, its value in the rows' value column. */
@@ -1052,16 +1071,6 @@ function modelCell(patterns: ReadonlyArray<string>, note?: string): RosterCell {
 	if (head === undefined) return SESSION_CELL;
 	const fallbacks = patterns.length > 1 ? ` +${patterns.length - 1}` : "";
 	return { text: `${bareModel(head)}${fallbacks}${note ? ` · ${note}` : ""}`, tone: "set" };
-}
-
-/**
- * The effort a row runs: a `:level` on its model head wins, as it does at dispatch, then the
- * configured level. Inherit and nothing both follow the session.
- */
-function effortCell(head: string | undefined, level: string | undefined): RosterCell {
-	const effective = extractExplicitThinkingSelector(head) ?? level;
-	if (effective === undefined || effective === ThinkingLevel.Inherit) return SESSION_CELL;
-	return { text: effective, tone: "set" };
 }
 
 /**

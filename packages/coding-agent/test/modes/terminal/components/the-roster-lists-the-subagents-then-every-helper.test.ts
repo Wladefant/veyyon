@@ -4,13 +4,15 @@
  * section below the Subagents section. The defects this closes: a helper missing from the page (so
  * its model can only be set by hand-editing config), the sections in the wrong order, a helper row
  * whose editor writes another helper's entry or the agents table, a row that does not show the
- * value its page wrote, and leaving a page landing on the top of the list instead of the row that
- * opened it.
+ * value its page wrote, leaving a page landing on the top of the list instead of the row that
+ * opened it, a narrow card cutting the effort off a row, and a catalog id ending in `:max` read as
+ * max effort.
  *
  * The sweep runs over `HELPER_IDS`, so a new helper is listed and edited here without touching this
  * file. It drives the Effort row; the Model row writes through the same `#writeHelper` path, and the
- * chain picker it opens is covered by the model-chain suites, not here. It does not cover the
- * column widths themselves, which a narrower settings card may cut with an ellipsis.
+ * chain picker it opens is covered by the model-chain suites, not here. The narrow-card case runs
+ * at the widths in `NARROW_WIDTHS`; a card narrower than the fixed columns drops the description,
+ * which the select list owns.
  *
  * Subject: `selectors/agents-submenu.ts`, driven through `SettingsSelectorComponent`.
  */
@@ -29,6 +31,7 @@ import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/c
 import { HELPER_IDS, HELPERS, type HelperId } from "@veyyon/coding-agent/task/helper-settings";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { configuredThinkingLevelOptions } from "@veyyon/coding-agent/thinking";
+import * as YAML from "yaml";
 import { stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 import { useTrackedTempDirs } from "../../../helpers/tracked-temp-dir";
 
@@ -36,6 +39,9 @@ const ENTER = "\n";
 const DOWN = "\x1b[B";
 const ESC = "\x1b";
 const WIDTH = 220;
+
+/** Terminal widths at which the settings card leaves the roster less room than its widest row. */
+const NARROW_WIDTHS = [100, 120, 140];
 
 /** More presses than the roster has rows, so a walk that never arrives fails instead of hanging. */
 const MAX_WALK = 64;
@@ -84,20 +90,28 @@ interface Roster {
 	changes: SettingPath[];
 }
 
-function frameOf(component: SettingsSelectorComponent): string {
+function frameOf(component: SettingsSelectorComponent, width = WIDTH): string {
 	return component
-		.render(WIDTH)
+		.render(width)
 		.map(line => stripVTControlCharacters(line))
 		.join("\n");
 }
 
+interface RosterOptions {
+	/** The profile's `config.yml`, written before settings load. */
+	config?: Record<string, unknown>;
+	/** The models the settings screen offers; the reasoning model alone by default. */
+	models?: Model[];
+}
+
 /** The settings screen with the Roster open, after agent discovery has drawn the list. */
-async function openRoster(): Promise<Roster> {
+async function openRoster(options: RosterOptions = {}): Promise<Roster> {
 	const root = makeTempDir();
 	const agentDir = path.join(root, "profile");
 	const cwd = path.join(root, "project");
 	fs.mkdirSync(agentDir, { recursive: true });
 	fs.mkdirSync(cwd, { recursive: true });
+	if (options.config) fs.writeFileSync(path.join(agentDir, "config.yml"), YAML.stringify(options.config));
 	await Settings.init({ agentDir, cwd });
 
 	let rendered = Promise.withResolvers<void>();
@@ -111,7 +125,7 @@ async function openRoster(): Promise<Roster> {
 			providers: [],
 			cwd,
 			modelRegistry,
-			availableModels: [model],
+			availableModels: options.models ?? [model],
 			requestRender: () => rendered.resolve(),
 		},
 		{ onChange: changed => changes.push(changed), onCancel: () => {} },
@@ -188,6 +202,46 @@ describe("the Roster page", () => {
 		walkToHelper(component, HELPER_IDS[0]);
 		const row = focusedRow(component, HELPERS[HELPER_IDS[0]].label);
 		expect(row?.match(/\bsession\b/g)).toHaveLength(2);
+	});
+
+	it("keeps a row's effort whole in a narrow card and cuts the model instead", async () => {
+		const long = "test/a-model-selector-long-enough-to-run-past-every-card-width-the-roster-is-drawn-at";
+		const { component } = await openRoster({
+			config: { agent: { helpers: { commit: { model: long, thinkingLevel: "high" } } } },
+		});
+		walkToHelper(component, "commit");
+		for (const width of NARROW_WIDTHS) {
+			const lines = frameOf(component, width).split("\n");
+			const heading = lines.find(line => /\bState\s+Effort\s+Model\b/.test(line));
+			expect({ width, heading: heading !== undefined }).toEqual({ width, heading: true });
+			const row = lines.find(line => line.includes(`› ${HELPERS.commit.label} `));
+			expect({ width, row }).toEqual({ width, row: expect.stringMatching(/\bhigh\s+test\/a-\S*…/) });
+		}
+	});
+
+	it("reads a catalog id ending in :max as that model, not as max effort", async () => {
+		const literal = buildModel({
+			id: "router:max",
+			name: "Router max",
+			api: "openai-completions",
+			provider: "test",
+			baseUrl: "https://example.test",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 10_000,
+			maxTokens: 1_000,
+		});
+		const { component } = await openRoster({
+			config: {
+				agent: { helpers: { commit: { model: "test/router:max" }, plan: { model: "test/reasoning-model:max" } } },
+			},
+			models: [model, literal],
+		});
+		walkToHelper(component, "plan");
+		expect(focusedRow(component, HELPERS.plan.label)).toMatch(/\bmax\s+test\/reasoning-model:max\b/);
+		walkToHelper(component, "commit");
+		expect(focusedRow(component, HELPERS.commit.label)).toMatch(/\bsession\s+test\/router:max\b/);
 	});
 
 	it("returns from an agent's page to that agent's row, and from a nested level to Can spawn", async () => {

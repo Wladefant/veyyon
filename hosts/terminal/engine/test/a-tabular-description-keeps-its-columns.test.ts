@@ -1,12 +1,14 @@
 /**
- * WHY: a list whose descriptions are fixed-width columns (the Roster's State, Model and Effort
+ * WHY: a list whose descriptions are fixed-width columns (the Roster's State, Effort and Model
  * cells) pads each cell with spaces so the columns line up under a heading. `SelectList` flattened
  * every description to one line by collapsing each run of whitespace to one space, which took the
  * padding with it: every row's columns started wherever the previous cell happened to end.
  *
- * `tabularDescription` keeps runs of spaces and still turns line breaks into spaces, and the row draws
- * a tab as spaces, so a description cannot break its row. Without the option a description collapses
- * as before. This does not cover how a host picks its column widths.
+ * `tabularDescription` keeps runs of spaces and still turns every other whitespace character into
+ * a space, swept over every BMP character `\s` matches, and the row draws a tab as spaces, so a
+ * description cannot break its row. Without the option a description collapses as before. This
+ * does not cover non-whitespace control characters, which neither mode removes, or how a host
+ * picks its column widths.
  */
 import { describe, expect, it } from "bun:test";
 import { SelectList, type SelectListTheme } from "@veyyon/tui/components/select-list";
@@ -84,5 +86,28 @@ describe("a SelectList description", () => {
 		expect(row).toMatch(/first second +third/);
 		expect(row).not.toContain("\t");
 		expect(lines.some(line => line.includes("second") && !line.includes("alpha"))).toBe(false);
+	});
+
+	// Every whitespace character the row cannot draw as one space in place: a vertical tab or form
+	// feed moves the terminal's cursor, and a line or paragraph separator breaks the row.
+	const OTHER_WHITESPACE = Array.from({ length: 0x10000 }, (_, code) => String.fromCharCode(code)).filter(
+		char => /\s/.test(char) && char !== " " && char !== "\t",
+	);
+
+	it("turns every other whitespace character into one space in a tabular list", () => {
+		expect(OTHER_WHITESPACE).toContain("\v");
+		for (const char of OTHER_WHITESPACE) {
+			const description = `first${char}second${char}${char}third`;
+			const row = rowOf(
+				new SelectList([{ value: "a", label: "alpha", description }], 5, theme, {
+					tabularDescription: true,
+				}).render(WIDTH),
+				"alpha",
+			);
+			expect({ code: char.charCodeAt(0), row }).toEqual({
+				code: char.charCodeAt(0),
+				row: expect.stringContaining("first second third"),
+			});
+		}
 	});
 });

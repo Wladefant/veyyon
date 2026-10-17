@@ -256,7 +256,7 @@ const SCENARIOS: Record<string, () => Scenario | Promise<Scenario>> = {
 
 const RECORD_DEFS = getAllSettingDefs().filter(def => isRecordSetting(def.path));
 
-/** The row of one agent in the roster: its name, then the State, Model and Effort columns. */
+/** The row of one agent in the roster: its name, then the State, Effort and Model columns. */
 function agentRow(component: SettingsSelectorComponent, name: string): string | undefined {
 	const row = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s{2,}\\S`);
 	return frameOf(component)
@@ -279,7 +279,11 @@ async function agentScenario(): Promise<Scenario> {
 		async exercise({ component, changes }, label, setting) {
 			// Discovery reports, then the subagents lead the roster with the overridden one selected.
 			await until(() => agentRow(component, overridden!) !== undefined);
-			expect(agentRow(component, overridden!)).toContain(`${label} · read-only`);
+			// The layer's note takes the Effort and Model columns, right after the state cell, so a
+			// narrow card cuts nothing but the note's tail.
+			expect(agentRow(component, overridden!)).toMatch(
+				new RegExp(`\\b(?:Enabled|Disabled)\\s+${label} · read-only`),
+			);
 			expect(agentRow(component, free!)).toBeDefined();
 			expect(agentRow(component, free!)).not.toContain("read-only");
 			// The overridden row cannot be opened, so its detail states what it runs instead of
@@ -340,7 +344,8 @@ describe("a record setting with one overridden entry", () => {
 			// and six more reach Commit.
 			await until(() => agentRow(component, "designer") !== undefined);
 			for (let step = 0; step < 7; step++) component.handleInput(UP);
-			expect(agentRow(component, "Commit")).toContain(`${label} · read-only`);
+			// A helper's state cell is blank, so the note follows the name's column directly.
+			expect(agentRow(component, "Commit")).toMatch(new RegExp(`\\bCommit\\s+${label} · read-only`));
 			expect(agentRow(component, "Memory")).toBeDefined();
 			expect(agentRow(component, "Memory")).not.toContain("read-only");
 			expect(frameOf(component)).toMatch(RUNS_DETAIL);

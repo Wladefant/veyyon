@@ -142,7 +142,8 @@ export interface SelectListLayoutOptions {
 	 * space.
 	 *
 	 * Set true when each description is a row of fixed-width columns padded with spaces, so the
-	 * columns line up under a heading the host draws. Tabs and line breaks still become spaces.
+	 * columns line up under a heading the host draws. Tabs and every other whitespace character
+	 * still become spaces.
 	 */
 	tabularDescription?: boolean;
 }
@@ -816,12 +817,13 @@ export class SelectList implements Component, MouseRoutable {
 	}
 
 	/**
-	 * A description as one line: whitespace collapsed, or in a table only line breaks replaced, so
-	 * the padding between cells survives. A tab is measured and drawn at the tab width by the row.
+	 * A description as one line: whitespace collapsed, or in a table each run of whitespace other
+	 * than spaces and tabs replaced by one space, so the padding between cells survives. A tab is
+	 * measured and drawn at the tab width by the row.
 	 */
 	#descriptionLine(description: string): string {
 		if (!this.layout.tabularDescription) return sanitizeSingleLine(description);
-		return description.replace(/[\r\n]+/g, " ").trimEnd();
+		return description.replace(/[^\S \t]+/g, " ").trimEnd();
 	}
 
 	/**
