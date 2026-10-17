@@ -245,6 +245,7 @@
 - A sandboxed local-cli trial can no longer signal a process outside it or connect to an abstract Unix socket made outside it on a kernel with Landlock ABI 6 or later.
 - A sandboxed local-cli trial can no longer read files in `/run/user`, and `docs/backends.md` states that a trial still connects to every pathname Unix socket the runner's user can, the session bus and the Docker daemon among them.
 - Sleep consolidation compacts "complete", "completed" and "working" only as whole words, so "incomplete" no longer becomes "inDONE" and "completed" no longer becomes "DONEd".
+- Block-boundary lookups and code summaries parse a PHP file that leaves PHP for HTML with `?>` instead of failing it as a syntax error, which cuts a 191KB plugin source from 767ms to 18ms and gives such a file tree-sitter block context and a structural summary.
 - A nested `Markdown` blockquote styles each row once, at the outermost quote, instead of once per level, so a `>`×20 quote row is 242 bytes instead of 584 and renders in 0.03 ms instead of 0.05 ms averaged over widths 1 to 40.
 - `Loader.start()` replaces a running animation timer instead of arming a second one that `stop()` could not clear.
 - An SGR mouse or kitty escape that starts while an expired partial is being held is no longer merged into that partial and delivered as typed characters; the stale partial is delivered on its own and the new sequence gets its own hold window.
