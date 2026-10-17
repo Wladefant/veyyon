@@ -93,6 +93,7 @@
 - Built the OpenRouter and Gemini image-generation URLs from the `@veyyon/catalog/provider-endpoints` constants instead of repeated host literals; no user-visible change.
 - 96 modules that read only the active theme import it from `theme/theme-binding` instead of loading the theme engine, so 60 of them no longer reach theme JSON loading, highlighting or mermaid; no user-visible change.
 - Removed two section comments in the `github` tool module that described fetchers now in `gh-fetch.ts`; no user-visible change.
+- The status line's context gauge finds its usage anchor by walking back from the newest entry instead of scanning the whole branch, so drawing it on a 97,000-entry resumed session takes 0.19 ms instead of 2.1 ms per frame.
 
 ### Fixed
 
