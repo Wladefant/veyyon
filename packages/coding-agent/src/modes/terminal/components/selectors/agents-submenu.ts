@@ -90,6 +90,14 @@ const ROSTER_EFFORT_COLUMN = 9;
 /** Columns the select list draws before a row's name: the cursor and the gap after it. */
 const ROSTER_ROW_PREFIX = 2;
 
+/**
+ * Narrowest pane that draws the column heading: the row's prefix and name column, its State and
+ * Effort cells, and the select list's scrollbar and two-cell margin. Narrower, the list cuts the
+ * cells the heading names, so the heading is left out rather than wrapped onto a second line.
+ */
+const ROSTER_HEADING_MIN_WIDTH =
+	ROSTER_ROW_PREFIX + ROSTER_NAME_COLUMN + ROSTER_STATE_COLUMN + ROSTER_EFFORT_COLUMN + 3;
+
 /** What a cell holding no value of its own reads: the row follows the session. */
 const SESSION_CELL_TEXT = "session";
 
@@ -541,7 +549,7 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 			title: "Roster",
 			description: `A cell that reads ${SESSION_CELL_TEXT} follows this session's model and effort${session}.`,
 			headerExtra,
-			bodyLead: new Text(theme.fg("dim", rosterHeading()), 0, 0),
+			bodyLead: new RosterHeading(),
 			body: selectList,
 			footerExtra: detail,
 		});
@@ -1037,9 +1045,23 @@ function rosterRow(state: string, model: RosterCell, effort: RosterCell): string
 	return `${padEnd(state, ROSTER_STATE_COLUMN)}${paintCell(effort, ROSTER_EFFORT_COLUMN)}${paintCell(model)}`;
 }
 
-/** The column heading over the roster, laid out from the widths the rows are drawn with. */
-function rosterHeading(): string {
-	return `${padding(ROSTER_ROW_PREFIX + ROSTER_NAME_COLUMN)}${padEnd("State", ROSTER_STATE_COLUMN)}${padEnd("Effort", ROSTER_EFFORT_COLUMN)}Model`;
+/**
+ * The column heading over the roster, laid out from the widths the rows are drawn with: one line,
+ * cut at the pane's edge, and absent below {@link ROSTER_HEADING_MIN_WIDTH}.
+ */
+class RosterHeading extends TruncatedText {
+	constructor() {
+		super(
+			theme.fg(
+				"dim",
+				`${padding(ROSTER_ROW_PREFIX + ROSTER_NAME_COLUMN)}${padEnd("State", ROSTER_STATE_COLUMN)}${padEnd("Effort", ROSTER_EFFORT_COLUMN)}Model`,
+			),
+		);
+	}
+
+	override render(width: number): readonly string[] {
+		return width < ROSTER_HEADING_MIN_WIDTH ? [] : super.render(width);
+	}
 }
 
 /** A line above an agent's or a helper's rows, its value in the rows' value column. */

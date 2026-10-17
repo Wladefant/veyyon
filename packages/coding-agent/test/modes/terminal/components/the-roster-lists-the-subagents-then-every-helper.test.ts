@@ -5,14 +5,14 @@
  * its model can only be set by hand-editing config), the sections in the wrong order, a helper row
  * whose editor writes another helper's entry or the agents table, a row that does not show the
  * value its page wrote, leaving a page landing on the top of the list instead of the row that
- * opened it, a narrow card cutting the effort off a row, and a catalog id ending in `:max` read as
- * max effort.
+ * opened it, a narrow card cutting the effort off a row or wrapping the column heading, and a
+ * catalog id ending in `:max` read as max effort.
  *
  * The sweep runs over `HELPER_IDS`, so a new helper is listed and edited here without touching this
  * file. It drives the Effort row; the Model row writes through the same `#writeHelper` path, and the
- * chain picker it opens is covered by the model-chain suites, not here. The narrow-card case runs
- * at the widths in `NARROW_WIDTHS`; a card narrower than the fixed columns drops the description,
- * which the select list owns.
+ * chain picker it opens is covered by the model-chain suites, not here. The narrow-card cases run
+ * at the widths in `NARROW_WIDTHS` and `TOO_NARROW_WIDTHS`; which row cells a card narrower than
+ * the fixed columns still draws is the select list's layout, not covered here.
  *
  * Subject: `selectors/agents-submenu.ts`, driven through `SettingsSelectorComponent`.
  */
@@ -39,6 +39,9 @@ const ENTER = "\n";
 const DOWN = "\x1b[B";
 const ESC = "\x1b";
 const WIDTH = 220;
+
+/** Terminal widths at which the settings card leaves the roster less room than its State and Effort cells. */
+const TOO_NARROW_WIDTHS = [70, 78];
 
 /** Terminal widths at which the settings card leaves the roster less room than its widest row. */
 const NARROW_WIDTHS = [100, 120, 140];
@@ -216,6 +219,15 @@ describe("the Roster page", () => {
 			expect({ width, heading: heading !== undefined }).toEqual({ width, heading: true });
 			const row = lines.find(line => line.includes(`› ${HELPERS.commit.label} `));
 			expect({ width, row }).toEqual({ width, row: expect.stringMatching(/\bhigh\s+test\/a-\S*…/) });
+		}
+	});
+
+	it("leaves the column heading out of a card too narrow for its cells instead of wrapping it", async () => {
+		const { component } = await openRoster();
+		for (const width of TOO_NARROW_WIDTHS) {
+			const frame = frameOf(component, width);
+			expect({ width, frame }).toEqual({ width, frame: expect.stringContaining("SUBAGENTS ─") });
+			expect({ width, heading: /\b(?:State|Effort)\b/.test(frame) }).toEqual({ width, heading: false });
 		}
 	});
 
