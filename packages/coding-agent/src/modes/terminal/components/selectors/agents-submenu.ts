@@ -372,10 +372,15 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 		return `${runsText(model, effortCell(head, level))}${origin ? theme.fg("dim", ` (${origin})`) : ""}`;
 	}
 
-	/** One subagent's row: whether it may be spawned, then the model and effort a spawn runs. */
-	#agentRow(agent: AgentDefinition): string {
+	/**
+	 * One subagent's row: whether it may be spawned, then the model and effort a spawn runs. A row
+	 * an override layer supplies shows `overridden` across the Model and Effort columns instead,
+	 * since this page cannot change it, and its detail line shows what it runs.
+	 */
+	#agentRow(agent: AgentDefinition, overridden?: string): string {
 		const state = agentEnableState(agent, this.#row(agent.name).enabled);
 		const stateText = theme.fg(state === "on" ? "success" : "dim", AGENT_ENABLE_STATE_LABEL[state]);
+		if (overridden) return `${padEnd(stateText, ROSTER_STATE_COLUMN)}${theme.fg("dim", overridden)}`;
 		const resolved = resolveAgentModel({ settings, agentName: agent.name, agentModel: agent.model, taskDepth: 1 });
 		const level = resolveAgentThinkingLevel({
 			settings,
@@ -399,7 +404,8 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 	}
 
 	/** One helper's row, on the subagent row's columns with the state cell left blank. */
-	#helperRow(id: HelperId): string {
+	#helperRow(id: HelperId, overridden?: string): string {
+		if (overridden) return `${padding(ROSTER_STATE_COLUMN)}${theme.fg("dim", overridden)}`;
 		const patterns = helperModelPatterns(settings, id);
 		return rosterRow("", modelCell(patterns), effortCell(patterns[0], helperThinkingLevel(settings, id)));
 	}
@@ -452,38 +458,41 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 		// what made "I changed the model" and "my agents changed model" one event.
 		const items: SelectItem[] = [];
 		for (const agent of this.#agents) {
-			const shown = this.#agentRow(agent);
 			const source = recordEntrySource(AGENTS_PATH, agent.name);
 			if (isOverrideSource(source)) {
 				items.push({
 					value: agent.name,
 					label: agent.name,
-					description: `${shown} · ${overriddenEntryLabel(source)}`,
+					description: this.#agentRow(agent, overriddenEntryLabel(source)),
 					group: SUBAGENTS_GROUP,
 					disabled: true,
 				});
 				continue;
 			}
-			items.push({ value: agent.name, label: agent.name, description: shown, group: SUBAGENTS_GROUP });
+			items.push({
+				value: agent.name,
+				label: agent.name,
+				description: this.#agentRow(agent),
+				group: SUBAGENTS_GROUP,
+			});
 		}
 		if (this.#agents.length === 0) {
 			items.push({ value: AGENT_ROW_NONE, label: "No agent types found", group: SUBAGENTS_GROUP, disabled: true });
 		}
 		for (const id of HELPER_IDS) {
 			const value = `${HELPER_ROW_PREFIX}${id}`;
-			const shown = this.#helperRow(id);
 			const source = recordEntrySource(HELPERS_PATH, id);
 			if (isOverrideSource(source)) {
 				items.push({
 					value,
 					label: HELPERS[id].label,
-					description: `${shown} · ${overriddenEntryLabel(source)}`,
+					description: this.#helperRow(id, overriddenEntryLabel(source)),
 					group: HELPERS_GROUP,
 					disabled: true,
 				});
 				continue;
 			}
-			items.push({ value, label: HELPERS[id].label, description: shown, group: HELPERS_GROUP });
+			items.push({ value, label: HELPERS[id].label, description: this.#helperRow(id), group: HELPERS_GROUP });
 		}
 
 		const selectList = createFocusedSelectList(items, clamp(items.length, 1, ROSTER_MAX_ROWS), focus, {
@@ -529,7 +538,8 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 
 	/**
 	 * The focused row's detail under the list: its description on one line, which the row's own
-	 * page shows whole, so the list keeps its rows at any description length. A subagent row adds
+	 * page shows whole, so the list keeps its rows at any description length. A row an override
+	 * layer supplies cannot be opened, so its detail adds what it runs. Any other subagent row adds
 	 * where a new agent type is written, since the roster is where someone looking for an agent
 	 * that does not exist yet arrives.
 	 */
@@ -537,8 +547,17 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 		detail.clear();
 		if (value === undefined) return;
 		const helper = helperFromRowValue(value);
-		const description = helper ? HELPERS[helper].description : this.#agent(value)?.description?.trim();
+		const agent = helper ? undefined : this.#agent(value);
+		const description = helper ? HELPERS[helper].description : agent?.description?.trim();
 		if (description) detail.addChild(new TruncatedText(theme.fg("muted", `  ${description}`)));
+		const overridden = helper
+			? isOverrideSource(recordEntrySource(HELPERS_PATH, helper))
+			: isOverrideSource(recordEntrySource(AGENTS_PATH, value));
+		if (overridden) {
+			const runs = helper ? this.#helperSummary(helper) : agent ? this.#runsSummary(agent) : undefined;
+			if (runs) detail.addChild(new TruncatedText(pageHeaderRow("Runs", runs)));
+			return;
+		}
 		if (!helper) detail.addChild(new Text(theme.fg("dim", `  ${CUSTOM_AGENT_HINT}`), 0, 0));
 	}
 

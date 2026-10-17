@@ -34,7 +34,6 @@ import { isRecordSetting } from "@veyyon/coding-agent/modes/terminal/components/
 import { getAllSettingDefs } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-defs";
 import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
 import { discoverAgents } from "@veyyon/coding-agent/task/discovery";
-import { HELPER_IDS } from "@veyyon/coding-agent/task/helper-settings";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { SettingTab } from "@veyyon/settings";
 import * as YAML from "yaml";
@@ -257,13 +256,16 @@ const SCENARIOS: Record<string, () => Scenario | Promise<Scenario>> = {
 
 const RECORD_DEFS = getAllSettingDefs().filter(def => isRecordSetting(def.path));
 
-/** The row of one agent in the roster: its name, then its state and model. */
+/** The row of one agent in the roster: its name, then the State, Model and Effort columns. */
 function agentRow(component: SettingsSelectorComponent, name: string): string | undefined {
-	const row = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b.*·`);
+	const row = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s{2,}\\S`);
 	return frameOf(component)
 		.split("\n")
 		.find(line => row.test(line));
 }
+
+/** The detail line a read-only roster row shows under the list: what that row runs. */
+const RUNS_DETAIL = /\bRuns {2,}\S/;
 
 /** The first two discovered agents: the first overridden, the second left to the profile. */
 async function agentScenario(): Promise<Scenario> {
@@ -275,16 +277,21 @@ async function agentScenario(): Promise<Scenario> {
 		override: { [overridden!]: { enabled: false } },
 		profile: { [free!]: { thinkingLevel: "low" } },
 		async exercise({ component, changes }, label, setting) {
-			// Discovery reports, then the Helpers section leads the roster: step past it so the
-			// list scrolls to the first agent, the overridden one.
-			await until(() => frameOf(component).includes("Session Title"));
-			for (let i = 0; i < HELPER_IDS.length; i++) component.handleInput(DOWN);
+			// Discovery reports, then the subagents lead the roster with the overridden one selected.
+			await until(() => agentRow(component, overridden!) !== undefined);
 			expect(agentRow(component, overridden!)).toContain(`${label} · read-only`);
+			expect(agentRow(component, free!)).toBeDefined();
 			expect(agentRow(component, free!)).not.toContain("read-only");
+			// The overridden row cannot be opened, so its detail states what it runs instead of
+			// where a new agent type is written.
+			expect(frameOf(component)).toMatch(RUNS_DETAIL);
+			expect(frameOf(component)).not.toContain("Write your own");
 
 			component.handleInput(ENTER);
 			expect(frameOf(component)).not.toContain(`Agent: ${overridden!}`);
 			component.handleInput(DOWN);
+			expect(frameOf(component)).not.toMatch(RUNS_DETAIL);
+			expect(frameOf(component)).toContain("Write your own");
 			component.handleInput(ENTER);
 			expect(frameOf(component)).toContain(`Agent: ${free!}`);
 			// The Enabled row is first: toggling it writes this agent's lane.
@@ -315,5 +322,34 @@ describe("a record setting with one overridden entry", () => {
 				await scenario.exercise(opened, label, def.path);
 			});
 		}
+	}
+
+	// `agent.helpers` has no row of its own: the roster draws its entries beside the subagents.
+	for (const { layer, label } of LAYERS) {
+		it(`an agent.helpers entry under a ${label} reads as read-only in the roster and states what it runs`, async () => {
+			const cwd = await initSettings("agent.helpers", layer, {
+				override: { commit: { thinkingLevel: "low" } },
+				profile: { memory: { thinkingLevel: "high" } },
+				async exercise() {},
+			});
+			const roster = getAllSettingDefs().find(def => def.path === "agent.agents");
+			expect(roster).toBeDefined();
+			const { component } = openRow("agent.agents", roster!.tab, cwd, []);
+			// The subagents lead the roster, so its helpers come into view once discovery reports
+			// and focus moves down to them. Up wraps from the first subagent to the last helper,
+			// and six more reach Commit.
+			await until(() => agentRow(component, "designer") !== undefined);
+			for (let step = 0; step < 7; step++) component.handleInput(UP);
+			expect(agentRow(component, "Commit")).toContain(`${label} · read-only`);
+			expect(agentRow(component, "Memory")).toBeDefined();
+			expect(agentRow(component, "Memory")).not.toContain("read-only");
+			expect(frameOf(component)).toMatch(RUNS_DETAIL);
+			component.handleInput(ENTER);
+			expect(frameOf(component)).not.toContain("Helper: Commit");
+			component.handleInput(UP);
+			expect(frameOf(component)).not.toMatch(RUNS_DETAIL);
+			component.handleInput(ENTER);
+			expect(frameOf(component)).toContain("Helper: Vision");
+		});
 	}
 });

@@ -23,7 +23,7 @@
 
 ### Changed
 
-- Settings → Agents → Roster lists the subagents before the helpers, in aligned State, Model and Effort columns under a heading with `session` in an unset cell, drops its duplicate key hints, returns to the opening row on Esc, and the agent page labels its spawn row "Can spawn" ([#966](https://github.com/santhreal/veyyon/issues/966)).
+- Settings → Agents → Roster lists the subagents before the helpers, in aligned State, Model and Effort columns under a heading with `session` in an unset cell, shows an overridden row's layer in its Model column and what it runs in its detail line, drops its duplicate key hints, returns to the opening row on Esc, and the agent page labels its spawn row "Can spawn" ([#966](https://github.com/santhreal/veyyon/issues/966)).
 - A replace-mode edit whose old text is not in the file finds its closest candidate about 18 times faster (1.6 s to 90 ms on a 7,400-line file), and its streamed preview no longer repeats the search on every argument chunk, which held the terminal for seconds while a near-miss edit streamed.
 - The `browser` tool sends a run's displayed and returned objects to the model as one line of compact JSON instead of two-space indented JSON, which is 36–41% fewer characters for a `tab.observe()` of a real page; the card still lays them out indented.
 - A `browser` run no longer sends a return value that it already displayed, which was 20% of all run-result text in bench sessions.

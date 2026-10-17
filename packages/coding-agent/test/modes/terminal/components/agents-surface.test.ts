@@ -308,7 +308,7 @@ describe("agent.agents settings surface", () => {
 		settings.set("agent.model", ["anthropic/claude-sonnet-4"]);
 		settings.set("agent.thinkingLevel", "high");
 		const { component, selectRow } = await openRoster();
-		// The helpers lead the list; the agents scroll into the window below them.
+		// The subagents lead the list, above the helpers.
 		selectRow("designer");
 		const lines = paneLines(component);
 
