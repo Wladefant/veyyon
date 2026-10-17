@@ -6,6 +6,10 @@
 
 - `normalizeTools` moved from `@veyyon/agent-core/agent-loop` to `@veyyon/agent-core/tool-normalization`, so building the provider-bound tool list no longer loads the agent loop; the package root still exports it.
 
+### Fixed
+
+- Preparing a compaction behind server-side compaction windows no longer reads the summarized history back from the session file; `CompactionPreparation.fileOps` is computed on first read.
+
 ### Removed
 
 - Removed the unused `AGENT_PROMPT_IDS` export; `agentCorePrompts.ids` lists the registered prompt ids.

@@ -1653,8 +1653,8 @@ export interface CompactionPreparation {
 	 * with the pointer, and persists the rewrite once the pass completes.
 	 */
 	tailElisions?: TailElision[];
-	/** File operations extracted from messagesToSummarize */
-	fileOps: FileOperations;
+	/** File operations extracted from messagesToSummarize, computed on first read */
+	readonly fileOps: FileOperations;
 	/**
 	 * The file lists `fileOps` starts from and the compaction that records them; `compact` stores
 	 * only the paths its lists add to these. Absent when no earlier compaction records any.
@@ -2322,11 +2322,13 @@ export function prepareCompaction(
 	// elision above so the retained view is the bounded one.
 	const recentMessages = messagesInRange(pathEntries, cutPoint.firstKeptEntryIndex, boundaryEnd, excluded);
 
-	// Extract file operations from messages, the turn prefix a split cut summarizes, and the lists the
-	// previous compaction records
+	// File operations from messages, the turn prefix a split cut summarizes, and the lists the previous
+	// compaction records, extracted on first read. Behind a server-side window the summarized span
+	// reaches back to the newest local compaction, or to the start of the session, and that span is
+	// compacted history a session holds on disk: walking its tool calls reads every line of it back.
+	// A server-side pass sends its own span and records no lists, so it never pays for that walk.
 	const fileListBase = prevCompaction ? resolveCompactionFileLists(pathEntries, prevCompactionIndex) : undefined;
-	const fileOps = extractFileOperations(messagesToSummarize, fileListBase);
-	if (turnPrefixMessages.length > 0) extractFileOpsFromMessages(turnPrefixMessages, fileOps);
+	let fileOps: FileOperations | undefined;
 
 	const remoteChain =
 		windowIndices.length > 0
@@ -2345,7 +2347,13 @@ export function prepareCompaction(
 		previousSummary: prevCompaction?.summary,
 		previousPreserveData: prevCompaction?.preserveData,
 		remoteChain,
-		fileOps,
+		get fileOps(): FileOperations {
+			if (fileOps === undefined) {
+				fileOps = extractFileOperations(messagesToSummarize, fileListBase);
+				if (turnPrefixMessages.length > 0) extractFileOpsFromMessages(turnPrefixMessages, fileOps);
+			}
+			return fileOps;
+		},
 		fileListBase,
 		settings,
 	};
