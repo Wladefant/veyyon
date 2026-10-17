@@ -4,12 +4,14 @@
 
 ### Fixed
 
+- Quota refusals block the failed request's credential, not a healthy account selected by a later resolver call ([PR](https://github.com/Wladefant/veyyon/pull/619)).
 - Automatic lane handoff reserves the summary model's full output limit, including reasoning, before selection. The request sends the same limit ([issue](https://github.com/Wladefant/veyyon/issues/552)).
 - Extension browser sessions reuse their exact connect tab and remove pages created by failed opens. Closing a tab removes it before the extension can disconnect ([issue](https://github.com/Wladefant/veyyon/issues/548)).
 - Session factory callback typing and mixed native actor rosters now pass the workspace type check ([Refs](https://github.com/Wladefant/veyyon/issues/569)).
 
 ### Changed
 
+- `/reload-config` and `/reload` re-read rule layers and skills without restarting the session. The summary lists added, changed, and removed paths. Unreadable files keep the last good snapshot, and unchanged rules keep the existing advisor ([issue](https://github.com/Wladefant/veyyon/issues/577)).
 - Extension navigation no longer uses an origin allowlist. HTTP and HTTPS origins pass without configuration. The separate production-host refusal remains.
 
 ### Added
