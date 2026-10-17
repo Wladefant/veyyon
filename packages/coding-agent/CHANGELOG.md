@@ -94,6 +94,7 @@
 - 96 modules that read only the active theme import it from `theme/theme-binding` instead of loading the theme engine, so 60 of them no longer reach theme JSON loading, highlighting or mermaid; no user-visible change.
 - Removed two section comments in the `github` tool module that described fetchers now in `gh-fetch.ts`; no user-visible change.
 - The status line's context gauge finds its usage anchor by walking back from the newest entry instead of scanning the whole branch, so drawing it on a 97,000-entry resumed session takes 0.19 ms instead of 2.1 ms per frame.
+- Writing a message after a custom entry adds only the new entries to the session's message-timestamp index instead of re-reading the whole branch, so each such write on a 97,000-entry session takes 0.49 ms instead of 5.4 ms.
 
 ### Fixed
 
