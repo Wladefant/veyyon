@@ -108,6 +108,27 @@ describe("collapseEffortVariants", () => {
 		});
 	});
 
+	it("collapses Argon tiers and routes each supported effort to its exact deployment", () => {
+		const out = collapseEffortVariants(
+			[memberSpec("gemini-4-argon-low"), memberSpec("gemini-4-argon-medium"), memberSpec("gemini-4-argon-high")],
+			ANTIGRAVITY_VARIANT_COLLAPSE_TABLE,
+		);
+		expect(out.map(model => model.id)).toEqual(["gemini-4-argon"]);
+		expect(out[0]?.requestModelId).toBe("gemini-4-argon-low");
+		expect(out[0]?.thinking?.defaultLevel).toBe(Effort.Medium);
+		expect(out[0]?.thinking?.effortRouting).toEqual({
+			low: "gemini-4-argon-low",
+			medium: "gemini-4-argon-medium",
+			high: "gemini-4-argon-high",
+		});
+		const model = buildModel(out[0] as ModelSpec<"google-gemini-cli">);
+		expect(resolveWireModelId(model, Effort.Low)).toBe("gemini-4-argon-low");
+		expect(resolveWireModelId(model, Effort.Medium)).toBe("gemini-4-argon-medium");
+		expect(resolveWireModelId(model, Effort.High)).toBe("gemini-4-argon-high");
+		expect(resolveVariantAlias("google-antigravity", "gemini-4-argon-high")).toBe("gemini-4-argon");
+		expect(resolveVariantAlias("google-gemini-cli", "gemini-4-argon-high")).toBe("gemini-4-argon");
+	});
+
 	// Regression: Gemini 3.6 Flash ships explicit per-tier wire ids
 	// (`-low`/`-medium`/`-high`), one deployment per tier. Before this family
 	// existed they never collapsed, so a user selected a raw `-low` deployment

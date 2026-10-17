@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getConfigRootDir } from "@veyyon/utils";
+import { atomicWriteFileSync, getConfigRootDir, isProcessAlive } from "@veyyon/utils";
 import type { TerminalOwner } from "./terminal-control";
 
 /**
@@ -70,15 +70,6 @@ function queueDir(root: string, sessionId: string): string {
 	return path.join(root, "run", "notices", sessionId);
 }
 
-function isPidAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return (error as NodeJS.ErrnoException).code === "EPERM";
-	}
-}
-
 /** Session ids of the terminals that are registered and whose process runs, ignoring this process's own session. */
 export function listLiveSessionIds(root = getConfigRootDir(), exceptSessionId?: string): string[] {
 	const directory = path.join(root, "run", "terminals");
@@ -100,7 +91,7 @@ export function listLiveSessionIds(root = getConfigRootDir(), exceptSessionId?: 
 		}
 		if (owner.version !== 1 || typeof owner.sessionId !== "string" || !isValidSessionId(owner.sessionId)) continue;
 		if (typeof owner.pid !== "number" || !Number.isSafeInteger(owner.pid) || owner.pid <= 0) continue;
-		if (owner.sessionId === exceptSessionId || !isPidAlive(owner.pid)) continue;
+		if (owner.sessionId === exceptSessionId || !isProcessAlive(owner.pid)) continue;
 		ids.add(owner.sessionId);
 	}
 	return [...ids];
@@ -210,10 +201,7 @@ function writeNotice(
 	const notice: SessionNotice = { version: 1, id, ...fields };
 	if (notice.ttlMs === undefined) delete notice.ttlMs;
 	if (notice.kind === undefined) delete notice.kind;
-	// Written under a dot name, then renamed: a reader never sees half a notice.
-	const temporary = path.join(directory, `.${id}.tmp`);
-	fs.writeFileSync(temporary, JSON.stringify(notice), { mode: 0o600 });
-	fs.renameSync(temporary, path.join(directory, `${id}.json`));
+	atomicWriteFileSync(path.join(directory, `${id}.json`), JSON.stringify(notice), { mode: 0o600 });
 	return id;
 }
 

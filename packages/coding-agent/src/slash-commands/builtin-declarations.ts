@@ -86,7 +86,7 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 	{
 		name: "reload-config",
 		aliases: ["reload"],
-		description: "Reload model and effort defaults for new subagents and reload loaded extensions",
+		description: "Reload config defaults, rule files, skills and loaded extensions without restarting",
 		textMode: true,
 	},
 	{

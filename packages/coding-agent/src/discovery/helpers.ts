@@ -533,7 +533,7 @@ export async function scanSkillsFromDir(options: ScanSkillsFromDirOptions): Prom
 
 	let entries: fs.Dirent[];
 	try {
-		entries = await fs.promises.readdir(dir, { withFileTypes: true });
+		entries = await readDirEntries(dir);
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
 			warnings.push(`Failed to read skills directory: ${dir} (${errorMessage(error)})`);
@@ -570,17 +570,13 @@ export async function scanSkillsFromDir(options: ScanSkillsFromDirOptions): Prom
 	const work: Promise<void>[] = [];
 	if (options.includeSelf) {
 		const selfSkillPath = path.join(dir, "SKILL.md");
-		if (fs.existsSync(selfSkillPath)) {
-			work.push(loadSkill(selfSkillPath));
-		}
+		work.push(loadSkill(selfSkillPath));
 	}
 	for (const entry of entries) {
 		if (entry.name.startsWith(".")) continue;
 		if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
 		const skillPath = path.join(dir, entry.name, "SKILL.md");
-		if (fs.existsSync(skillPath)) {
-			work.push(loadSkill(skillPath));
-		}
+		work.push(loadSkill(skillPath));
 	}
 	await Promise.all(work);
 

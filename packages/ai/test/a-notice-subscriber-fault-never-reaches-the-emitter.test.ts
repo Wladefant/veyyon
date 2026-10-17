@@ -142,7 +142,11 @@ describe("a notice subscriber fault never reaches the emitter", () => {
 			await settled.promise;
 			await Bun.sleep(0);
 
-			expect(result).toEqual({ switched: false, retryAtMs: NOW_MS + 60_000 });
+			expect(result).toEqual({
+				switched: false,
+				retryAtMs: NOW_MS + 60_000,
+				quotaMessage: `Quota reached on ${PROVIDER} account target@example.com; resets ${new Date(NOW_MS + 60_000).toISOString()}. 1 other account available but load balancing is off, so Veyyon waits for this account.`,
+			});
 			expect(withheld).toEqual([
 				{
 					provider: PROVIDER,

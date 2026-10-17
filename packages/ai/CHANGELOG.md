@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Codex account ranking ignores usage windows of length 0, so one account no longer takes every new session.
+
 ## [1.5.6] - 2026-10-10
 
 ### Breaking Changes
