@@ -5,6 +5,7 @@
 ### Fixed
 
 - Codex account ranking ignores usage windows of length 0, so one account no longer takes every new session.
+- Merges supplementary model listing quotas into Google Antigravity quota summaries when the summary omits counters ([Refs #620](https://github.com/Wladefant/veyyon/pull/620)).
 
 ## [1.5.6] - 2026-10-10
 
