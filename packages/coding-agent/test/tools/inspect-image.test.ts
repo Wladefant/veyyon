@@ -61,7 +61,10 @@ function createSession(
 	const availableModels = options.availableModels ?? [model];
 	const activeModel = options.activeModel ?? model;
 	if (options.configureVisionRole !== false) {
-		settings.setModelRole("vision", `${model.provider}/${model.id}`);
+		settings.set("agent.helpers", {
+			...settings.get("agent.helpers"),
+			vision: { model: `${model.provider}/${model.id}` },
+		});
 	}
 
 	const session: ToolSession = {
@@ -272,7 +275,10 @@ describe("InspectImageTool", () => {
 		const authStorage = await AuthStorage.create(path.join(testDir, "auth.db"));
 		const modelRegistry = new ModelRegistry(authStorage);
 		const settings = Settings.isolated({ "compaction.enabled": false, "inspect_image.enabled": true });
-		settings.setModelRole("vision", `${visionModel.provider}/${visionModel.id}`);
+		settings.set("agent.helpers", {
+			...settings.get("agent.helpers"),
+			vision: { model: `${visionModel.provider}/${visionModel.id}` },
+		});
 
 		try {
 			const { session } = await createAgentSession({
@@ -422,7 +428,7 @@ describe("InspectImageTool", () => {
 		fs.writeFileSync(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
 
 		const settings = Settings.isolated();
-		settings.setModelRole("default", `${visionModel.provider}/${visionModel.id}`);
+		settings.setDefaultModel(`${visionModel.provider}/${visionModel.id}`);
 
 		const stub = createCompleteSimpleSuccessStub("Fallback default model used");
 		const tool = new InspectImageTool(

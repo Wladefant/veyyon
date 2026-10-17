@@ -93,7 +93,7 @@ describe("the facade's surface", () => {
 			authStorage.setRuntimeApiKey("mock", "test-key");
 			const mock = createMockModel({ responses: [{ content: [{ type: "text", text: "hi" }], stopReason: "stop" }] });
 			const settings = Settings.isolated({ "compaction.enabled": false, "retry.enabled": false });
-			settings.setModelRole("default", `${mock.provider}/${mock.id}`);
+			settings.setDefaultModel(`${mock.provider}/${mock.id}`);
 			const tools = [noopTool as AgentTool];
 			const session = new AgentSession({
 				agent: new Agent({

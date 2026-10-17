@@ -2,6 +2,8 @@ import { describe, expect, it } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { isAuthenticated, kNoAuth } from "@veyyon/coding-agent/config/auth-state";
+import { dynamicImportSpecifiersIn, moduleSpecifiersIn, typeOnlyModuleSpecifiersIn } from "@veyyon/utils/module-reach";
+import { exportedDeclarationsIn } from "@veyyon/utils/source-declarations";
 
 const AUTH_STATE = path.join(import.meta.dir, "../../src/config/auth-state.ts");
 
@@ -103,10 +105,10 @@ describe("config/auth-state has no dependencies", () => {
 	 */
 	it("imports nothing at all", () => {
 		const source = fs.readFileSync(AUTH_STATE, "utf8");
-		const imports = source.match(/(?:^|\n)[ \t]*(?:import|export)\b[^\n]*\bfrom\b[^\n]*/g) ?? [];
-		const sideEffectImports = source.match(/(?:^|\n)[ \t]*import\s+["'][^"']+["']/g) ?? [];
 
-		expect([...imports, ...sideEffectImports]).toEqual([]);
+		expect(moduleSpecifiersIn(source)).toEqual([]);
+		expect(typeOnlyModuleSpecifiersIn(source)).toEqual([]);
+		expect(dynamicImportSpecifiersIn(source)).toEqual([]);
 	});
 
 	/**
@@ -117,10 +119,8 @@ describe("config/auth-state has no dependencies", () => {
 	it("reads the real file, and the pattern does match imports", () => {
 		const source = fs.readFileSync(AUTH_STATE, "utf8");
 
-		expect(source).toContain("export const kNoAuth");
-		expect(source).toContain("export function isAuthenticated");
-		expect(`\nimport { x } from "./y";`.match(/(?:^|\n)[ \t]*(?:import|export)\b[^\n]*\bfrom\b[^\n]*/g)).toHaveLength(
-			1,
-		);
+		expect(exportedDeclarationsIn(source)).toEqual(expect.arrayContaining(["kNoAuth", "isAuthenticated"]));
+		expect(moduleSpecifiersIn(`\nimport { x } from "./y";`)).toEqual(["./y"]);
+		expect(typeOnlyModuleSpecifiersIn(`\nimport type { X } from "./y";`)).toEqual(["./y"]);
 	});
 });

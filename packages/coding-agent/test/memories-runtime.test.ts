@@ -6,11 +6,8 @@ import type { Context, Model, SimpleStreamOptions } from "@veyyon/ai";
 import * as ai from "@veyyon/ai/stream";
 import { Effort } from "@veyyon/catalog/effort";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import {
-	buildMemoryToolDeveloperInstructions,
-	getMemoryRoot,
-	startMemoryStartupTask,
-} from "@veyyon/coding-agent/memory/local";
+import { buildMemoryToolDeveloperInstructions, startMemoryStartupTask } from "@veyyon/coding-agent/memory/local";
+import { getMemoryRoot } from "@veyyon/coding-agent/memory/paths";
 import * as memoryStorage from "@veyyon/coding-agent/memory/storage";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
 import { getAgentDbPath, Snowflake, TempDir } from "@veyyon/utils";

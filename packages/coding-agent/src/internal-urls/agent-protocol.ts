@@ -13,7 +13,8 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-// Owners, not the `@veyyon/utils` barrel: 2 modules against 74.
+// Owners, not the `@veyyon/utils` barrel: 3 modules against 74.
+import { formatBoundedList } from "@veyyon/utils/format";
 import { isEnoent } from "@veyyon/utils/fs-error";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { applyQuery, pathToQuery } from "./json-query";
@@ -106,8 +107,7 @@ export class AgentProtocolHandler implements ProtocolHandler {
 
 		const foundPath = matches[0];
 		if (!foundPath) {
-			const availableStr = availableIds.size > 0 ? Array.from(availableIds).join(", ") : "none";
-			throw new Error(`Not found: ${outputId}\nAvailable: ${availableStr}`);
+			throw new Error(`Not found: ${outputId}\nAvailable: ${formatBoundedList(Array.from(availableIds))}`);
 		}
 
 		const rawContent = await Bun.file(foundPath).text();

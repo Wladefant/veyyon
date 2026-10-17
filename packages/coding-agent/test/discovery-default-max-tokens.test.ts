@@ -12,8 +12,8 @@ import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
  * `maxTokens: 8192`, which made providers (DeepSeek, etc.) drop the streaming
  * connection mid-response on large `write`/`edit` tool calls and surfaced as
  * Bun's opaque "socket connection was closed unexpectedly". The cap is now
- * `DISCOVERY_DEFAULT_MAX_TOKENS = 32_768` (`packages/coding-agent/src/config/
- * model-registry.ts`). These tests pin the externally observable default for
+ * `DISCOVERY_DEFAULT_MAX_TOKENS` (`config/model-discovery.ts`), which is
+ * `OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS = 32_768` from the catalog. These tests pin the externally observable default for
  * every discovery branch that previously hardcoded 8192.
  */
 describe("issue #1528 discovery maxTokens default", () => {

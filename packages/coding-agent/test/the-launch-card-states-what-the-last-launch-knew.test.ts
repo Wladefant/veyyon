@@ -201,7 +201,7 @@ beforeEach(async () => {
 	resetSettingsForTest();
 	resetLaunchFactsForTest();
 	await Settings.init({ cwd: isolated.root });
-	settings.setModelRole("default", MODEL_A);
+	settings.setDefaultModel(MODEL_A);
 });
 
 afterEach(() => {
@@ -271,7 +271,7 @@ describe("what the launch card knows before a session exists", () => {
 	it("drops the gauge when the model changed, and keeps the tree's marker", async () => {
 		await record({ modelName: "Claude Sonnet 4", providerName: "anthropic", contextPercent: 40, gitStatus: DIRTY });
 
-		settings.setModelRole("default", MODEL_B);
+		settings.setDefaultModel(MODEL_B);
 
 		expect(readLaunchFacts()).toEqual({ ...ABSENT, gitStatus: DIRTY });
 	});
@@ -360,7 +360,7 @@ describe("what the launch card knows before a session exists", () => {
 	it("states no reading at all when the model has never rested", async () => {
 		await record({ contextPercent: 40, modelName: "Claude Sonnet 4" });
 
-		settings.setModelRole("default", MODEL_B);
+		settings.setDefaultModel(MODEL_B);
 
 		expect(readLaunchFacts().contextPercent).toBeNull();
 	});
@@ -666,7 +666,7 @@ describe("what the launch card knows before a session exists", () => {
 	it("writes again when the model changed and the values did not", async () => {
 		await record({ contextPercent: 40, modelName: "Claude Sonnet 4" });
 
-		settings.setModelRole("default", MODEL_B);
+		settings.setDefaultModel(MODEL_B);
 		await record({ contextPercent: 40, modelName: "Claude Sonnet 4" });
 
 		expect(readLaunchFacts()).toEqual({ ...ABSENT, modelName: "Claude Sonnet 4", contextPercent: 40 });
@@ -680,7 +680,7 @@ describe("what the launch card knows before a session exists", () => {
 	it("never carries a model's facts onto another model", async () => {
 		await record({ modelName: "Claude Sonnet 4", providerName: "anthropic", contextPercent: 40 });
 
-		settings.setModelRole("default", MODEL_B);
+		settings.setDefaultModel(MODEL_B);
 		await record({ gitStatus: DIRTY });
 
 		expect(readLaunchFacts()).toEqual({ ...ABSENT, gitStatus: DIRTY });
@@ -729,7 +729,7 @@ describe("the row the card can afford", () => {
 
 	for (const [role, label] of ROLE_LABELS) {
 		it(`prints ${label} for a default role of ${role}`, () => {
-			settings.setModelRole("default", role);
+			settings.setDefaultModel(role);
 
 			expect(factsAtLaunch().model).toEqual({ id: role, name: label, supportsThinking: false });
 		});
@@ -742,7 +742,7 @@ describe("the row the card can afford", () => {
 	 */
 	it("never prints a path on a row that pays by the column", () => {
 		for (const [role] of ROLE_LABELS) {
-			settings.setModelRole("default", role);
+			settings.setDefaultModel(role);
 			const model = factsAtLaunch().model;
 
 			expect(model?.name).not.toContain("/");
@@ -764,11 +764,11 @@ describe("the row the card can afford", () => {
 	 */
 	it("costs the row nothing that its tail did not", async () => {
 		await initTheme(false);
-		settings.setModelRole("default", "glm-5.1");
+		settings.setDefaultModel("glm-5.1");
 		const width = narrowestWidthWithGauge();
 		const tailRow = cardFootRow(width);
 
-		settings.setModelRole("default", "nous-research/z-ai/glm-5.1");
+		settings.setDefaultModel("nous-research/z-ai/glm-5.1");
 
 		// Byte-identical, not merely gauged: the qualified role prints the same label, so it
 		// composes the same row. A row that kept the gauge by clipping the path instead would pass
@@ -785,7 +785,7 @@ describe("the row the card can afford", () => {
 	 */
 	it("states the configured model in the hero rather than offering a login", async () => {
 		await initTheme(false);
-		settings.setModelRole("default", "nous-research/z-ai/glm-5.1");
+		settings.setDefaultModel("nous-research/z-ai/glm-5.1");
 
 		const frame = paintFirstFrame("1.1.1");
 		try {
@@ -816,7 +816,7 @@ describe("the row the card can afford", () => {
 	 * placeholder with a fabricated model.
 	 */
 	it("states no model when none is configured", () => {
-		settings.setModelRole("default", "");
+		settings.setDefaultModel("");
 
 		expect(factsAtLaunch().model).toBeNull();
 		expect(launchModelLabel()).toBe("");
@@ -829,13 +829,13 @@ describe("the row the card can afford", () => {
 	 * no recording to name it. A bare id states nothing, correctly.
 	 */
 	it("names the provider the configured role names before any recording exists", () => {
-		settings.setModelRole("default", "nous-research/z-ai/glm-5.1");
+		settings.setDefaultModel("nous-research/z-ai/glm-5.1");
 		expect(launchProviderLabel()).toBe("nous-research");
 
-		settings.setModelRole("default", "glm-5.1");
+		settings.setDefaultModel("glm-5.1");
 		expect(launchProviderLabel()).toBe("");
 
-		settings.setModelRole("default", "");
+		settings.setDefaultModel("");
 		expect(launchProviderLabel()).toBe("");
 	});
 
@@ -849,7 +849,7 @@ describe("the row the card can afford", () => {
 	 */
 	it("repaints the hero when a record lands after the frame", async () => {
 		await initTheme(false);
-		settings.setModelRole("default", "anthropic/claude-sonnet-4");
+		settings.setDefaultModel("anthropic/claude-sonnet-4");
 
 		const frame = paintFirstFrame("1.1.1");
 		try {
@@ -921,7 +921,7 @@ describe("what a running session records for the next launch", () => {
 
 	beforeEach(async () => {
 		await initTheme(false);
-		settings.setModelRole("default", ROLE);
+		settings.setDefaultModel(ROLE);
 	});
 
 	it("records the reading and the name of the model the role names", () => {
@@ -946,7 +946,7 @@ describe("what a running session records for the next launch", () => {
 
 	/** A role carrying a thinking level or a route still names the same model, and still records. */
 	it("records for a role that carries a suffix", () => {
-		settings.setModelRole("default", `${ROLE}:thinking`);
+		settings.setDefaultModel(`${ROLE}:thinking`);
 
 		expect(recordedAfterRender(RUNS_THE_ROLE).contextPercent).toBe(25);
 	});
@@ -957,7 +957,7 @@ describe("what a running session records for the next launch", () => {
 	 * cross-model leak the keys exist to prevent, arriving through the writer instead of the reader.
 	 */
 	it("records nothing for a role whose id merely starts with the model's", () => {
-		settings.setModelRole("default", "anthropic/claude-sonnet-45");
+		settings.setDefaultModel("anthropic/claude-sonnet-45");
 
 		expect(recordedAfterRender(RUNS_THE_ROLE).contextPercent).toBeNull();
 	});
@@ -1099,7 +1099,7 @@ describe("the effort the card prints before a session resolves one", () => {
 
 	beforeEach(async () => {
 		await initTheme(false);
-		settings.setModelRole("default", ROLE);
+		settings.setDefaultModel(ROLE);
 	});
 
 	it("records the rung the row settled on", () => {
@@ -1168,7 +1168,7 @@ describe("the effort the card prints before a session resolves one", () => {
 	/** Model-scoped like the gauge: a rung is clamped to one model's ladder and states nothing of another's. */
 	it("drops the rung when the role names another model", () => {
 		recordedAfterRender({ ...THINKS, thinkingLevel: ThinkingLevel.High });
-		settings.setModelRole("default", "openai/gpt-5");
+		settings.setDefaultModel("openai/gpt-5");
 
 		expect(readLaunchFacts().thinking).toBeNull();
 	});
@@ -1253,9 +1253,9 @@ describe("the background the card paints on before the terminal answers", () => 
 	 * because both were measured against the model; the window's background was not.
 	 */
 	it("keeps the background when the model the card names changes", async () => {
-		settings.setModelRole("default", MODEL_A);
+		settings.setDefaultModel(MODEL_A);
 		await record({ terminalGround: GROUND, modelName: "Claude Sonnet 4", contextPercent: 40 });
-		settings.setModelRole("default", MODEL_B);
+		settings.setDefaultModel(MODEL_B);
 
 		const facts = readLaunchFacts();
 		expect(facts.modelName).toBeNull();

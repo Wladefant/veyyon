@@ -6,6 +6,7 @@
 import type { AgentToolResult } from "@veyyon/agent-core";
 import type { ImageContent, TextContent } from "@veyyon/ai";
 import { isProbablyBinary } from "@veyyon/utils/binary";
+import { formatBytes } from "@veyyon/utils/format";
 import {
 	canonicalSnapshotKey,
 	contiguousLineNumbers,
@@ -21,7 +22,6 @@ import { buildLineEntriesWithBlockContext } from "../../utils/block-context";
 import { type FileDisplayMode, resolveFileDisplayMode } from "../../utils/file-display-mode";
 import { resolveOutputMaxColumns, type TruncationOptions } from "../core/output-meta";
 import { formatPathRelativeToCwd, isRawSelector, type LineRange, type ParsedSelector } from "../core/path-utils";
-import { formatBytes } from "../core/render-utils";
 import { toolResult } from "../core/tool-result";
 import { windowConflictWarning } from "./read-conflicts";
 import type { ReadDisplayContent } from "./read-display";

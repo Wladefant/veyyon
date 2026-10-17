@@ -13,7 +13,8 @@
  * Both are asserted by running the function in a CHILD process and reading its real stderr,
  * not by stubbing `fs.writeSync`, which Bun makes read-only on the module namespace anyway. A
  * stub would also assert the wrong thing: that a function was called, rather than that bytes
- * reached the descriptor a hung process still flushes.
+ * reached the descriptor a hung process still flushes. The hang itself is stood in for by a
+ * child that kills itself with SIGKILL straight after the marker, which no stream flushes past.
  *
  * The function also existed TWICE, in `logger.ts` and in `cli.ts`, the second copy documented
  * as deliberate: the CLI bootstrap must not pull in the logger module, so
@@ -24,7 +25,7 @@
 
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { moduleSpecifiersIn } from "../src/module-reach";
+import { moduleSpecifiersIn, namedImportsFrom } from "../src/module-reach";
 
 const MODULE_PATH = path.join(import.meta.dir, "../src/startup-marker.ts");
 
@@ -34,17 +35,20 @@ const MODULE_PATH = path.join(import.meta.dir, "../src/startup-marker.ts");
  * `flag` is the value of `VEYYON_DEBUG_STARTUP`, or null to leave it unset.
  */
 function runMarkers(markers: readonly string[], flag: string | null): string {
-	const script = [
-		`const { startupMarker } = await import(${JSON.stringify(MODULE_PATH)});`,
-		...markers.map(marker => `startupMarker(${JSON.stringify(marker)});`),
-	].join("\n");
+	return runScript(markers.map(marker => `startupMarker(${JSON.stringify(marker)});`).join("\n"), flag).stderr;
+}
+
+/** Run `body` in a child that has `startupMarker` imported, and return its exit code and both streams. */
+function runScript(body: string, flag: string | null): { exitCode: number | null; stdout: string; stderr: string } {
+	const script = [`const { startupMarker } = await import(${JSON.stringify(MODULE_PATH)});`, body].join("\n");
 	const env: Record<string, string> = { ...process.env } as Record<string, string>;
 	if (flag === null) delete env.VEYYON_DEBUG_STARTUP;
 	else env.VEYYON_DEBUG_STARTUP = flag;
 
 	const result = Bun.spawnSync([process.execPath, "-e", script], { env, stderr: "pipe", stdout: "pipe" });
 
-	return new TextDecoder().decode(result.stderr);
+	const decoder = new TextDecoder();
+	return { exitCode: result.exitCode, stdout: decoder.decode(result.stdout), stderr: decoder.decode(result.stderr) };
 }
 
 describe("with VEYYON_DEBUG_STARTUP set", () => {
@@ -91,28 +95,32 @@ describe("without the flag", () => {
 
 describe("the write itself", () => {
 	/**
-	 * `fs.writeSync(2, …)` rather than `console.error` or `process.stderr.write`: only the raw
-	 * synchronous write is guaranteed to land before a blocked event loop, and landing is the
-	 * entire point of the marker. Asserted on the source, because a stream-based write produces
-	 * the same bytes in a healthy process and differs only in the hang this exists to diagnose.
+	 * Only a write that completes inside the call is guaranteed to land before a blocked event
+	 * loop, and landing is the entire point of the marker. A write deferred to a microtask or a
+	 * timer produces the same bytes in a healthy process; a process killed with SIGKILL right
+	 * after the call shows the difference. Not caught: `console.error`, `process.stderr.write`
+	 * and a callback `fs.write` all complete a small write to a pipe before returning on Bun,
+	 * so a switch to one of them passes here.
 	 */
-	it("goes through fs.writeSync to descriptor 2", async () => {
-		const source = await Bun.file(MODULE_PATH).text();
+	it("has landed on stderr before a process killed straight after it exits", () => {
+		const result = runScript(`startupMarker("phase");\nprocess.kill(process.pid, "SIGKILL");`, "1");
 
-		expect(source).toContain("fs.writeSync(2,");
-		expect(source).not.toContain("console.");
-		expect(source).not.toContain("process.stderr");
+		expect(result.exitCode).toBeNull();
+		expect(result.stderr).toBe("[startup] phase\n");
 	});
 
 	/**
 	 * A marker must never be the thing that breaks startup: stderr can be closed or full, and a
 	 * diagnostic that throws while diagnosing is worse than a missing line.
 	 */
-	it("swallows a failing write rather than throwing", async () => {
-		const source = await Bun.file(MODULE_PATH).text();
+	it("swallows a failing write rather than throwing", () => {
+		const result = runScript(
+			`(await import("node:fs")).closeSync(2);\nstartupMarker("phase");\nprocess.stdout.write("survived");`,
+			"1",
+		);
 
-		expect(source).toContain("try {");
-		expect(source).toContain("} catch {");
+		expect(result.stdout).toBe("survived");
+		expect(result.exitCode).toBe(0);
 	});
 });
 
@@ -124,18 +132,16 @@ describe("the module itself", () => {
 	 * logging stack back into the bootstrap.
 	 */
 	it("imports nothing but node:fs", async () => {
-		const source = await Bun.file(MODULE_PATH).text();
-		const imports = [...source.matchAll(/^import .* from "([^"]+)";$/gm)].map(match => match[1]);
-
-		expect(imports).toEqual(["node:fs"]);
+		expect(moduleSpecifiersIn(await Bun.file(MODULE_PATH).text())).toEqual(["node:fs"]);
 	});
 
 	it("is what both former owners now use, and neither defines its own", async () => {
 		for (const name of ["logger.ts", "cli.ts"]) {
 			const source = await Bun.file(path.join(import.meta.dir, "../src", name)).text();
 
-			expect(source).not.toContain("function startupMarker(");
-			expect(moduleSpecifiersIn(source)).toContain("./startup-marker");
+			// An imported binding cannot share its name with a local declaration, so importing it is
+			// also the proof the module defines no copy of its own.
+			expect(namedImportsFrom(source, "./startup-marker")).toContain("startupMarker");
 		}
 	});
 });

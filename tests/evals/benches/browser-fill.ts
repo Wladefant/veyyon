@@ -7,9 +7,9 @@
  * field holds exactly the value after every fill. A fill that is fast and wrong is not counted as a
  * fill.
  *
- * It imports nothing newer than the browser tool's public API, so the same file runs against any tree
- * that has the tool: run it in the tree before a change and in the tree after, same flags, and the
- * two reports differ only by the change.
+ * Apart from the flag parser in `engine/plan/flag-grammar`, it imports only the browser tool's public
+ * API, so a copy runs in any tree that has both: run it in the tree before a change and in the tree
+ * after, same flags, and the two reports differ only by the change.
  *
  * Deliberately NOT a test: it launches Chromium and its numbers belong to the machine it ran on.
  *
@@ -24,7 +24,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/sdk";
 import { BrowserTool } from "@veyyon/coding-agent/tools/web/browser";
 import { errorMessage } from "@veyyon/utils";
-import { type FlagGrammar, flagCount, parseFlags } from "../engine/flag-grammar";
+import { type FlagGrammar, flagCount, parseFlags } from "../engine/plan/flag-grammar";
 
 /** Value lengths timed: a word, a paragraph, a page. */
 const LENGTHS = [16, 256, 4096] as const;

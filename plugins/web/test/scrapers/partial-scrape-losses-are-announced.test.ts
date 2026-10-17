@@ -34,7 +34,7 @@ import { isCancellation, logger } from "@veyyon/utils";
 import { AbortError } from "@veyyon/utils/abortable";
 import { handleOpenVsx } from "@veyyon/web/scrapers/open-vsx";
 import { handleOpenLibrary } from "@veyyon/web/scrapers/openlibrary";
-import { isScraperDegrade } from "@veyyon/web/scrapers/types";
+import { isScraperDegrade, type RenderResult, type ScraperDegrade } from "@veyyon/web/scrapers/types";
 import { handleW3c } from "@veyyon/web/scrapers/w3c";
 import { handleWikidata } from "@veyyon/web/scrapers/wikidata";
 
@@ -71,7 +71,7 @@ afterEach(() => {
 });
 
 /** The rendered markdown, asserting the handler actually produced a page rather than a degrade. */
-function markdown(result: Awaited<ReturnType<typeof handleWikidata>>): string {
+function markdown(result: RenderResult | ScraperDegrade | null): string {
 	expect(result).not.toBeNull();
 	expect(isScraperDegrade(result)).toBe(false);
 	return (result as { content: string }).content;

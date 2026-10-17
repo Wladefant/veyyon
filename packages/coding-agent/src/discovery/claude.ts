@@ -200,7 +200,7 @@ async function loadExtensionModules(ctx: LoadContext): Promise<LoadResult<Extens
  */
 function claudeUserCommandsEnabled(): boolean {
 	try {
-		return settings.get("commands.enableClaudeUser") ?? true;
+		return settings.get("commands.enableClaudeUser");
 	} catch {
 		return true;
 	}

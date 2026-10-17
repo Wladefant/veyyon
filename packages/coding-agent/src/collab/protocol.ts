@@ -281,8 +281,8 @@ function toWireMessage(
  *
  * Same reason as {@link toWireSessionHeader}, one frame over, and the same discipline: written out
  * field by field rather than as a destructuring rest, so a field added to a host entry does NOT
- * start shipping on its own. `isWireSessionEntry` in `host.ts` narrows the TYPE and leaves the
- * VALUE alone, which is what let every extra field through.
+ * start shipping on its own. The type guard this replaced, `isWireSessionEntry`, narrowed the TYPE
+ * and left the VALUE alone, which is what let every extra field through.
  *
  * Returns `undefined` for an entry type no guest renders, so callers filter and project in one
  * step and cannot broadcast an entry that was never projected.

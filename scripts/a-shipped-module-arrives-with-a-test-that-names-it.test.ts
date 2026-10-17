@@ -306,7 +306,6 @@ const NAMED_BY_NO_TEST: readonly string[] = [
 	"packages/coding-agent/src/commands/auth-gateway.ts",
 	"packages/coding-agent/src/commands/complete.ts",
 	"packages/coding-agent/src/commands/dry-balance.ts",
-	"packages/coding-agent/src/commands/gc.ts",
 	"packages/coding-agent/src/commands/rollback.ts",
 	"packages/coding-agent/src/commands/say.ts",
 	"packages/coding-agent/src/commands/supervisor.ts",
@@ -391,7 +390,6 @@ const NAMED_BY_NO_TEST: readonly string[] = [
 	"plugins/web/src/scrapers/rawg.ts",
 	"plugins/web/src/scrapers/searchcode.ts",
 	"plugins/web/src/scrapers/snapcraft.ts",
-	"plugins/web/src/scrapers/sourcegraph.ts",
 	"plugins/web/src/scrapers/spdx.ts",
 	"plugins/web/src/scrapers/vscode-marketplace.ts",
 ];

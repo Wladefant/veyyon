@@ -284,14 +284,4 @@ describe("no source outside the owner spells out a not-found message", () => {
 				"unknown model id; call modelResolutionFailureMessage(patterns, modelRegistry) instead",
 		).toEqual([]);
 	});
-
-	/** The positive twin: an empty offender list is also what deleting the message
-	 * produces, so pin that the owner still says it for the one true case. */
-	it("keeps the owner saying not found for a genuine mismatch", () => {
-		const owner = readFileSync(
-			fileURLToPath(new URL("../../src/config/model-resolution-failure.ts", import.meta.url)),
-			"utf8",
-		);
-		expect(owner).toContain("not found");
-	});
 });

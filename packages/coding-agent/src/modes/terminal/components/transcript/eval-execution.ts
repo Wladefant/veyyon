@@ -7,24 +7,23 @@ import { Container, type Loader, Text, type TUI } from "@veyyon/tui";
 import { sanitizeText } from "@veyyon/utils";
 import { highlightCode } from "../../../../theme/highlight";
 import { theme } from "../../../../theme/theme-binding";
-import type { OutputMeta } from "../../../../tools/core/output-meta";
+import type { OutputMeta } from "../../../../tools/core/output-notice";
 import {
 	buildExecutionFrame,
 	buildStatusFooter,
-	capExecutionOutputLines,
 	clampExecutionDisplayLine,
 	createCollapsedPreview,
 	EXECUTION_PREVIEW_LINES,
 	type ExecutionColorKey,
 	type ExecutionStatus,
 	resolveExecutionStatus,
+	StreamedOutputLines,
 } from "./execution-shared";
 
 export type EvalExecutionLanguage = "python" | "js";
 
 export class EvalExecutionComponent extends Container {
-	#outputLines: string[] = [];
-	#droppedLineCount = 0;
+	#output = new StreamedOutputLines(clampLines);
 	#status: ExecutionStatus = "running";
 	#exitCode: number | undefined = undefined;
 	#loader: Loader;
@@ -84,20 +83,7 @@ export class EvalExecutionComponent extends Container {
 
 	appendOutput(chunk: string): void {
 		// Chunk is pre-sanitized by OutputSink.push() — no need to sanitize again.
-		const newLines = chunk.split("\n").map(line => clampExecutionDisplayLine(line));
-		if (this.#outputLines.length > 0 && newLines.length > 0) {
-			this.#outputLines[this.#outputLines.length - 1] = clampExecutionDisplayLine(
-				`${this.#outputLines[this.#outputLines.length - 1]}${newLines[0]}`,
-			);
-			this.#outputLines.push(...newLines.slice(1));
-		} else {
-			this.#outputLines.push(...newLines);
-		}
-
-		// Same bound bash has always had. Without it a long-running cell grew its retained lines without limit,
-		// which is the whole reason this now comes from one place.
-		this.#droppedLineCount += capExecutionOutputLines(this.#outputLines);
-
+		this.#output.push(chunk);
 		this.#updateDisplay();
 	}
 
@@ -122,7 +108,7 @@ export class EvalExecutionComponent extends Container {
 		this.#updateDisplay();
 	}
 	#updateDisplay(): void {
-		const availableLines = this.#outputLines;
+		const availableLines = this.#output.lines();
 		const previewLogicalLines = availableLines.slice(-EXECUTION_PREVIEW_LINES);
 		const hiddenLineCount = availableLines.length - previewLogicalLines.length;
 
@@ -149,7 +135,7 @@ export class EvalExecutionComponent extends Container {
 				exitCode: this.#exitCode,
 				meta: this.#meta,
 				hiddenLineCount,
-				droppedLineCount: this.#droppedLineCount,
+				droppedLineCount: this.#output.dropped(),
 			});
 			if (footer) this.#contentContainer.addChild(footer);
 		}
@@ -157,16 +143,19 @@ export class EvalExecutionComponent extends Container {
 
 	#setOutput(output: string): void {
 		const clean = sanitizeText(output);
-		this.#outputLines = clean ? clean.split("\n").map(line => clampExecutionDisplayLine(line)) : [];
 		// The authoritative output replaces whatever streaming kept, so nothing is missing any more.
-		this.#droppedLineCount = 0;
+		this.#output.replace(clean ? clampLines(clean.split("\n")) : []);
 	}
 
 	getOutput(): string {
-		return this.#outputLines.join("\n");
+		return this.#output.lines().join("\n");
 	}
 
 	getCode(): string {
 		return this.code;
 	}
+}
+
+function clampLines(lines: string[]): string[] {
+	return lines.map(line => clampExecutionDisplayLine(line));
 }

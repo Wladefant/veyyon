@@ -11,8 +11,8 @@ import { Settings } from "../config/settings";
 import { drawToolView } from "../modes/terminal/draw/draw-tool-view";
 import { initTheme, theme } from "../theme/theme";
 import { runSearchQuery, type SearchQueryParams } from "../tools/web/search/index";
-import { SEARCH_PROVIDER_ORDER } from "../tools/web/search/provider";
 import type { SearchProviderId } from "../tools/web/search/types";
+import { SEARCH_PROVIDER_ORDER } from "../tools/web/search/types";
 import { webSearchToolView } from "../tools/web/search/view";
 import { EXIT_USAGE } from "./exit-codes";
 

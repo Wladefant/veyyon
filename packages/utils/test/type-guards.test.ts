@@ -298,13 +298,10 @@ function isIsRecordCloneBody(body: string): boolean {
 // The SAME three-term predicate also appeared inline (written straight into an
 // `if`/ternary/assignment on a value or member expression, not behind a guard
 // name), which neither name lock nor the body lock above sees. Those were swept
-// onto isRecord(X) on 2026-07-19 across six packages (~50 sites). Two remain in
+// onto isRecord(X) on 2026-07-19 across six packages (~50 sites). One remains in
 // the coding-agent modes/ UI lane, which an active feature branch owns; convert
-// them when that lane unblocks, then remove the entry. Shrink-only.
-const ISRECORD_INLINE_GRANDFATHERED = new Set([
-	"coding-agent/src/modes/terminal/controllers/event-controller.ts",
-	"coding-agent/src/modes/terminal/utils/transcript-render-helpers.ts",
-]);
+// it when that lane unblocks, then remove the entry. Shrink-only.
+const ISRECORD_INLINE_GRANDFATHERED = new Set(["coding-agent/src/modes/terminal/utils/transcript-render-helpers.ts"]);
 
 // A dotted value/member expression (no call parens, no index brackets).
 const INLINE_ID = "[A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*";
@@ -346,7 +343,6 @@ const NEGATED_INLINE_ISRECORD = [
 const NEGATED_ISRECORD_INLINE_GRANDFATHERED = new Set([
 	"coding-agent/src/modes/acp/acp-event-mapper.ts",
 	"coding-agent/src/modes/terminal/controllers/omfg-rule.ts",
-	"coding-agent/src/modes/rpc/rpc-mode.ts",
 ]);
 
 function hasNegatedInlineIsRecord(text: string): boolean {

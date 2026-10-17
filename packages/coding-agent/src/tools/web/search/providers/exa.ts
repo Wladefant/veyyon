@@ -37,7 +37,7 @@ let exaSearchThrottle = Promise.resolve();
 function configuredExaSearchDelayMs(): number {
 	try {
 		const delayMs = settings.get("exa.searchDelayMs");
-		return Number.isFinite(delayMs) && delayMs > 0 ? Math.floor(delayMs) : 0;
+		return delayMs > 0 ? Math.floor(delayMs) : 0;
 	} catch {
 		return DEFAULT_EXA_SEARCH_DELAY_MS;
 	}

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { promises as fsp, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import { writethroughNoop } from "@veyyon/coding-agent/lsp";
+import { writethroughNoop } from "@veyyon/coding-agent/lsp/writethrough";
 import { ToolAbortError } from "@veyyon/coding-agent/tools/core/tool-errors";
 import { useTrackedTempDirs } from "../helpers/tracked-temp-dir";
 

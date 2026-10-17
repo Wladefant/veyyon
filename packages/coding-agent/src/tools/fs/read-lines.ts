@@ -5,13 +5,14 @@
 
 import * as path from "node:path";
 import { formatHashlineHeader, formatNumberedLine, formatNumberedLines } from "@veyyon/hashline";
+import { formatBytes } from "@veyyon/utils/format";
 import { canonicalSnapshotKey, getFileSnapshotStore } from "../../edit/file-snapshot-store";
 import { normalizeToLF } from "../../edit/normalize";
 import type { ToolSession } from "../../sdk";
 import { truncateLine } from "../../session/streaming-output";
 import { type LineEntry, lineEntriesToPlainText } from "../../utils/block-context";
 import { formatPathRelativeToCwd } from "../core/path-utils";
-import { formatBytes, shortenPath } from "../core/render-utils";
+import { shortenPath } from "../core/render-utils";
 import { ToolError } from "../core/tool-errors";
 import type { ReadDisplayContent } from "./read-display";
 

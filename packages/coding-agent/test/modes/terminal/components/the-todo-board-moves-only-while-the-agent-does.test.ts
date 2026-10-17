@@ -16,7 +16,7 @@
  * WHAT IT DOES NOT CATCH.
  * Visual perception and contrast of glyphs on different terminal background themes
  * (which are proven by render fixtures / image captures), or the real-time event loop
- * ticker inside `interactive-mode.ts` that drives `#anchoredStep`.
+ * ticker inside `controllers/anchored-blocks.ts` that drives `#anchoredStep`.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, type Mock, mock, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -15,7 +15,7 @@ import * as utils from "@veyyon/utils";
 
 let currentAgentDir = "";
 const created: string[] = [];
-let getAgentDirSpy: ReturnType<typeof spyOn> | undefined;
+let getAgentDirSpy: Mock<typeof utils.getAgentDir> | undefined;
 
 beforeEach(() => {
 	currentAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "custom-share-"));

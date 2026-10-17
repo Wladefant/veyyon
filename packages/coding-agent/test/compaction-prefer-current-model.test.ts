@@ -14,12 +14,12 @@ import { TempDir } from "@veyyon/utils";
 import { assistantMsg, userMsg } from "./helpers/e2e-session";
 
 /**
- * Regression: when the user sets `modelRoles.default` to a model on a different
+ * Regression: when `defaultModel` names a model on a different
  * provider than the current chat, compaction must still pick the active chat's
  * model first, so an Anthropic chat summarizes on Anthropic rather than billing
  * and routing through a provider the live conversation never used.
  */
-describe("compaction prefers the current session model over modelRoles.default", () => {
+describe("compaction prefers the current session model over defaultModel", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
 	let session: AgentSession;
@@ -38,15 +38,15 @@ describe("compaction prefers the current session model over modelRoles.default",
 		tempDir.removeSync();
 	});
 
-	it("uses the active Anthropic chat model when modelRoles.default points at an OpenAI model", async () => {
+	it("uses the active Anthropic chat model when defaultModel points at an OpenAI model", async () => {
 		const currentModel = getBundledModel("anthropic", "claude-sonnet-4-5");
-		const defaultRoleModel = getBundledModel("openai", "gpt-5");
-		if (!currentModel || !defaultRoleModel) {
+		const configuredDefaultModel = getBundledModel("openai", "gpt-5");
+		if (!currentModel || !configuredDefaultModel) {
 			throw new Error("Expected bundled test models to exist");
 		}
 
 		const settings = Settings.isolated({ "compaction.keepRecentTokens": 1, "compaction.strategy": "context-full" });
-		settings.setModelRole("default", `${defaultRoleModel.provider}/${defaultRoleModel.id}`);
+		settings.setDefaultModel(`${configuredDefaultModel.provider}/${configuredDefaultModel.id}`);
 
 		const agent = new Agent({
 			initialState: {
@@ -61,7 +61,7 @@ describe("compaction prefers the current session model over modelRoles.default",
 		// Both providers have credentials so an "auth failure" wouldn't be the
 		// reason a candidate is skipped — order alone must drive the choice.
 		authStorage.setRuntimeApiKey(currentModel.provider, "anthropic-token");
-		authStorage.setRuntimeApiKey(defaultRoleModel.provider, "openai-token");
+		authStorage.setRuntimeApiKey(configuredDefaultModel.provider, "openai-token");
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 
 		session = new AgentSession({
@@ -107,7 +107,7 @@ describe("compaction prefers the current session model over modelRoles.default",
 		}
 
 		const settings = Settings.isolated({ "compaction.keepRecentTokens": 1, "compaction.strategy": "context-full" });
-		settings.setModelRole("smol", `${fallbackModel.provider}/${fallbackModel.id}`);
+		settings.setDefaultModel(`${fallbackModel.provider}/${fallbackModel.id}`);
 
 		const agent = new Agent({
 			initialState: {

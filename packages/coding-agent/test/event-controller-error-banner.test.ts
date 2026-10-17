@@ -6,6 +6,8 @@
  * `ctx.showPinnedError`, and the banner must be cleared at the next turn's
  * `agent_start` via `ctx.clearPinnedError`. Aborts and normal stops must NOT
  * pin a banner.
+ *
+ * Subject: `modes/terminal/controllers/turn-recovery.ts`, driven through `EventController`.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@veyyon/ai";

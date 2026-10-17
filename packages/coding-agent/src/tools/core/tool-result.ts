@@ -3,12 +3,12 @@ import type { ImageContent, TextContent } from "@veyyon/ai";
 import type { OutputSummary, TruncationResult } from "../../session/streaming-output";
 import type {
 	LimitsInput,
-	OutputMeta,
 	TruncationOptions,
 	TruncationSummaryOptions,
 	TruncationTextOptions,
 } from "./output-meta";
 import { outputMeta } from "./output-meta";
+import type { OutputMeta } from "./output-notice";
 
 type ToolContent = Array<TextContent | ImageContent>;
 

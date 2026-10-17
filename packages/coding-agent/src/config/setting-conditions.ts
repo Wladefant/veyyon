@@ -92,6 +92,7 @@ export const SETTING_CONDITIONS: Record<string, SettingCondition> = {
 	secretsEnabled: settingFlag("secrets.enabled"),
 	prewalkEnabled: settingFlag("prewalk.enabled"),
 	newKeepsBackgroundEnabled: settingFlag("session.newKeepsBackground"),
+	composerPredictionsCustom: settingValue("composer.predictions.mode", v => v === "custom"),
 };
 
 /**

@@ -1,4 +1,4 @@
-/** Default session-title model: the online @smol path (no local download / on-device inference). */
+/** Default session-title model: the online title helper (no local download / on-device inference). */
 export const ONLINE_TINY_TITLE_MODEL_KEY = "online";
 /** Local model the `tiny-models` CLI downloads when none is named. Not the session-title default — that is {@link ONLINE_TINY_TITLE_MODEL_KEY}. */
 export const DEFAULT_TINY_TITLE_LOCAL_MODEL_KEY = "lfm2-700m";
@@ -87,9 +87,9 @@ void TINY_TITLE_MODEL_VALUES_MATCH_REGISTRY;
 export const TINY_TITLE_MODEL_OPTIONS = [
 	{
 		value: ONLINE_TINY_TITLE_MODEL_KEY,
-		label: "Online (TINY role, else @smol)",
+		label: "Online (title helper, else the session model)",
 		description:
-			"Online title generation: the TINY model role (set one in /models) when assigned, otherwise the online fallback (commit role, then @smol). No local download or on-device inference.",
+			"Online title generation: the title helper's model (Roster > Helpers) when set, otherwise the session's model. No local download or on-device inference.",
 	},
 	...TINY_TITLE_LOCAL_MODELS.map(model => ({
 		value: model.key,
@@ -108,7 +108,7 @@ export function getTinyTitleModelSpec(key: TinyTitleLocalModelKey): (typeof TINY
 	return spec;
 }
 
-/** Default memory model: the online path (the configured smol / remote LLM; no local download). */
+/** Default memory model: the online path (the memory helper or the session model; no local download). */
 export const ONLINE_MEMORY_MODEL_KEY = "online";
 /** Recommended local model for memory tasks when none is named. */
 export const DEFAULT_MEMORY_LOCAL_MODEL_KEY = "lfm2-1.2b";
@@ -194,9 +194,9 @@ void TINY_MEMORY_MODEL_VALUES_MATCH_REGISTRY;
 export const TINY_MEMORY_MODEL_OPTIONS = [
 	{
 		value: ONLINE_MEMORY_MODEL_KEY,
-		label: "Online (TINY role, else @smol)",
+		label: "Online (memory helper, else the session model)",
 		description:
-			"Use the online model: the TINY role from /models when set, otherwise @smol. No local model download or on-device inference.",
+			"Use the online model: the memory helper's model (Roster > Helpers) when set, otherwise the session's model. No local model download or on-device inference.",
 	},
 	...TINY_MEMORY_LOCAL_MODELS.map(model => ({
 		value: model.key,
@@ -244,7 +244,7 @@ export const TINY_LOCAL_MODELS = [
 
 /**
  * Difficulty-classifier model for the `auto` thinking level. Defaults to the
- * online smol path; the local options reuse the memory-model registry because
+ * online helper path; the local options reuse the memory-model registry because
  * the shared worker's `complete()` only accepts memory local keys, and the
  * 1B+ memory models classify coding difficulty far more reliably than the
  * sub-1B title models.
@@ -256,9 +256,9 @@ export type AutoThinkingModelKey = TinyMemoryModelKey;
 export const AUTO_THINKING_MODEL_OPTIONS = [
 	{
 		value: ONLINE_AUTO_THINKING_MODEL_KEY,
-		label: "Online (TINY role, else @smol)",
+		label: "Online (auto-thinking helper, else the session model)",
 		description:
-			"Classify prompt difficulty online with the TINY role model (set one in /models) or @smol; no local download or on-device inference.",
+			"Classify prompt difficulty online with the auto-thinking helper's model (Roster > Helpers) or the session's model; no local download or on-device inference.",
 	},
 	...TINY_MEMORY_LOCAL_MODELS.map(model => ({
 		value: model.key,

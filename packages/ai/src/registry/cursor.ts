@@ -13,9 +13,9 @@ export const cursorProvider = {
 		);
 	},
 	credential: "oauth",
-	refreshToken: async (credentials: OAuthCredentials) => {
+	refreshToken: async (credentials: OAuthCredentials, signal?: AbortSignal) => {
 		// Lazy import: keep heavy OAuth flow modules out of the eager registry graph.
 		const { refreshCursorToken } = await import("./oauth/cursor");
-		return refreshCursorToken(credentials.refresh);
+		return refreshCursorToken(credentials.refresh, signal);
 	},
 } as const satisfies ProviderDefinition;

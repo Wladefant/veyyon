@@ -5,12 +5,12 @@ import {
 	buildCursorHistoryForTest,
 	buildCursorSystemPromptJsons,
 	createCursorUsageAccount,
-	emptyGrepPatternRejection,
 	handleServerMessage,
 	resolveExecHandler,
 	streamCursor,
 	type ToolCallState,
 } from "@veyyon/ai/providers/cursor";
+import { emptyGrepPatternRejection } from "@veyyon/ai/providers/cursor-exec-results";
 import {
 	streamCursor as lazyStreamCursor,
 	setProviderModuleOverrideForTest,

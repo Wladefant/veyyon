@@ -13,8 +13,6 @@
  * the hyperlink module, `tools/web/fetch.ts` takes two names from that barrel, and `tools/fs/read.ts` imports
  * `fetch`. So reading a local file statically depended on the code that asks a model to summarise your
  * memory, through five hops, none of which looked wrong on its own.
- *
- * `memories/index.ts` re-exports both names, so no existing caller changed.
  */
 
 import * as path from "node:path";

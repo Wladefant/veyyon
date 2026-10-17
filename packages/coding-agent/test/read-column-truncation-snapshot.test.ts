@@ -18,7 +18,7 @@ import type { AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { canonicalSnapshotKey, getFileSnapshotStore } from "@veyyon/coding-agent/edit/file-snapshot-store";
 import { HashlineFilesystem } from "@veyyon/coding-agent/edit/hashline/filesystem";
-import { writethroughNoop } from "@veyyon/coding-agent/lsp";
+import { writethroughNoop } from "@veyyon/coding-agent/lsp/writethrough";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import type { ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";

@@ -7,6 +7,11 @@
  * `--timeout-multiplier` and `--attempts` changed nothing. A dry run reported `ok` for
  * the same invocation, because that path built its own context correctly.
  *
+ * `--dataset-dir` reached the option bag but not `RunContext.datasetDir`, which is the
+ * field a backend's `describeTask(cell.task, context)` reads. Pier then resolved every
+ * task under `<workDir>/tasks` and failed each trial on a missing `task.toml`, while
+ * discovery, run on the plan's own context, had found the task in the named corpus.
+ *
  * CLASS: an option parsed at the entrypoint never reaches the party that reads it. The
  * parity assertion below derives its key set from `suiteContext` at run time, so a new
  * option added to the bag and not forwarded to the run turns this suite red without
@@ -23,7 +28,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { EvalSuite, ExecutionBackend, HarnessAdapter, RunContext, TrialCell } from "../../engine/contracts";
-import { backends, harnesses, suites } from "../../engine/loaded-members";
+import { backends, harnesses, suites } from "../../engine/members/loaded";
 import { main, parseEvalsArgs, suiteContext } from "../../evals";
 
 const SUITE = "option-parity-suite";
@@ -31,9 +36,14 @@ const BACKEND = "option-parity-backend";
 const HARNESS = "option-parity-harness";
 
 /** Every `context.options` bag the probe backend was handed, in call order. */
-const seen: { prepare: Record<string, unknown>[]; runTrial: Record<string, unknown>[] } = {
+const seen: {
+	prepare: Record<string, unknown>[];
+	runTrial: Record<string, unknown>[];
+	trialTaskCorpus: (string | undefined)[];
+} = {
 	prepare: [],
 	runTrial: [],
+	trialTaskCorpus: [],
 };
 
 function probeSuite(): EvalSuite {
@@ -68,7 +78,7 @@ function probeHarness(): HarnessAdapter {
 		description: "Probe harness bound to the probe backend.",
 		flags: ["vey-binary"],
 		defaultModel: null,
-		capabilities: { replay: false, compaction: false, armAttachments: false, promptOverrides: false },
+		capabilities: { replay: false, compaction: false, armAttachments: false, promptOverrides: false, builds: false },
 		backends: { [BACKEND]: { agentImportPath: "probe_agent:ProbeAgent" } },
 		async preflight() {
 			return { ok: true };
@@ -89,6 +99,8 @@ function probeBackend(): ExecutionBackend {
 		},
 		async runTrial(cell: TrialCell, context: RunContext) {
 			seen.runTrial.push({ ...context.options });
+			// Pier's `describeTask(cell.task, context)` resolves the task directory from this field.
+			seen.trialTaskCorpus.push(context.datasetDir);
 			return { logPaths: [], trialDir: path.join(context.runsDir, "probe", cell.task) };
 		},
 		async cleanup() {},
@@ -118,6 +130,7 @@ describe("every option the CLI parses reaches the running trial", () => {
 	beforeEach(() => {
 		seen.prepare.length = 0;
 		seen.runTrial.length = 0;
+		seen.trialTaskCorpus.length = 0;
 		runsDir = fs.mkdtempSync(path.join(os.tmpdir(), "evals-option-parity-"));
 		suites.register(probeSuite());
 		harnesses.register(probeHarness());
@@ -198,6 +211,18 @@ describe("every option the CLI parses reaches the running trial", () => {
 
 			expect(code).toBe(0);
 			expect(seen.runTrial[0]?.datasetDir).toBe(datasetDir);
+		} finally {
+			fs.rmSync(datasetDir, { recursive: true, force: true });
+		}
+	});
+
+	it("resolves the trial's task against the dataset directory, not the work directory", async () => {
+		const datasetDir = fs.mkdtempSync(path.join(os.tmpdir(), "evals-option-parity-ds-"));
+		try {
+			const code = await main(argvFor(["--dataset-dir", datasetDir]));
+
+			expect(code).toBe(0);
+			expect(seen.trialTaskCorpus).toEqual([datasetDir]);
 		} finally {
 			fs.rmSync(datasetDir, { recursive: true, force: true });
 		}

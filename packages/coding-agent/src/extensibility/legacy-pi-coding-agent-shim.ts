@@ -26,6 +26,7 @@ import {
 	getProjectDir,
 	parseFrontmatter as parseOmpFrontmatter,
 } from "@veyyon/utils";
+import { formatBytes } from "@veyyon/utils/format";
 import type { PromptTemplate } from "../config/prompt-templates";
 import { type SettingPath, Settings } from "../config/settings";
 import { EditTool } from "../edit";
@@ -48,7 +49,6 @@ import {
 import type { Tool, ToolSession } from "../tools";
 import { TOOL_EXECUTION_ENTRIES } from "../tools/core/execution-registry";
 import type { ToolPolicyFrame } from "../tools/core/refusal-fence";
-import { formatBytes } from "../tools/core/render-utils";
 import { ReadTool } from "../tools/fs/read";
 import { WriteTool } from "../tools/fs/write";
 import { SearchTool } from "../tools/search/search";
@@ -908,7 +908,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 					? Promise.resolve({ skills: [], warnings: [] })
 					: discoverSkills(cwd, agentDir, {
 							...settings.getGroup("skills"),
-							disabledExtensions: settings.get("disabledExtensions") ?? [],
+							disabledExtensions: settings.get("disabledExtensions"),
 						}),
 				this.#loadAdditionalSkills(),
 				options.noPromptTemplates ? Promise.resolve([]) : discoverPromptTemplates(cwd, agentDir),
@@ -992,7 +992,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 		const result = await loadExtensions(paths, cwd, eventBus, undefined, {
 			agentDir,
-			configuredPaths: [...additionalExtensionPaths, ...(settings.get("extensions") ?? [])],
+			configuredPaths: [...additionalExtensionPaths, ...settings.get("extensions")],
 		});
 		for (let i = 0; i < extensionFactories.length; i++) {
 			const loaded = await loadExtensionFromFactory(
@@ -1241,5 +1241,5 @@ export async function createAgentSession(
 }
 
 export { Type } from "@veyyon/kernel/registry/typebox";
+export { formatBytes as formatSize } from "@veyyon/utils/format";
 export * from "../index";
-export { formatBytes as formatSize } from "../tools/core/render-utils";

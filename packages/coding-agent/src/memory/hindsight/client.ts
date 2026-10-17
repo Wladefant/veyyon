@@ -9,7 +9,8 @@
  */
 
 import { errorMessage, trimTrailingSlashes, tryParseJson } from "@veyyon/utils";
-import { isTimeoutError, withTimeoutSignal } from "../../utils/fetch-timeout";
+import { isTimeoutError } from "@veyyon/utils/abortable";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import type { HindsightConfig } from "./config";
 
 const USER_AGENT = "veyyon-coding-agent";
@@ -595,28 +596,34 @@ export class HindsightApi {
 			// Authentication is transport configuration, not caller payload.
 			// Never feed it through the session's recursive text transform.
 			headers: this.#headers,
-			signal: withTimeoutSignal(effectiveTimeoutMs, opts?.signal),
 		};
 		if (opts?.body !== undefined) {
 			const body = transformHindsightRecord(opts.body, transform);
 			init.body = JSON.stringify(pruneUndefined(body));
 		}
 
+		// The deadline covers the body read too, and its timer is cleared once the
+		// body is in hand so no armed timer outlives the request.
+		const deadline = scopedTimeoutSignal(effectiveTimeoutMs, opts?.signal);
+		init.signal = deadline.signal;
 		let response: Response;
+		let text: string;
 		try {
-			response = await fetch(url, init);
-		} catch (err) {
-			const message = isTimeoutError(err)
-				? `${operation} request timed out after ${Math.round(effectiveTimeoutMs / 1000)}s`
-				: `${operation} request failed: ${errorMessage(err)}`;
-			throw new HindsightError(message, undefined, err);
+			try {
+				response = await fetch(url, init);
+			} catch (err) {
+				const message = isTimeoutError(err)
+					? `${operation} request timed out after ${Math.round(effectiveTimeoutMs / 1000)}s`
+					: `${operation} request failed: ${errorMessage(err)}`;
+				throw new HindsightError(message, undefined, err);
+			}
+			if (opts?.allow404 && response.status === 404) {
+				return null as T;
+			}
+			text = await response.text();
+		} finally {
+			deadline.cancel();
 		}
-
-		if (opts?.allow404 && response.status === 404) {
-			return null as T;
-		}
-
-		const text = await response.text();
 		const parsed = text ? tryParseJson(text) : null;
 
 		if (!response.ok) {

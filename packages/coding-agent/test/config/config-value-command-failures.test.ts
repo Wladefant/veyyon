@@ -13,17 +13,22 @@
  * that failed (Law 10).
  *
  * Two implementations of one behaviour is the usual duplication, so the report
- * has a single owner and these tests pin that both resolvers reach it.
+ * has a single owner, both resolvers drive one caching and back-off policy, and
+ * these tests pin that a failure is reported once across both paths.
  *
  * What each resolver can say differs, and that difference is deliberate rather
  * than an oversight, so it is pinned here too. Stdout carries the secret and
- * must never reach a log. The `model-registry` resolver runs commands through
- * `execSync` with separate pipes, so it can report stderr, which is where
- * `op: not signed in` and `command not found` appear. This resolver runs them
- * through `executeShell`, which merges the two streams with no way to tell them
- * apart, so it reports no output at all and sends the reader to run the command
- * themselves. Reporting merged output here would risk writing the credential
- * into a log file, which is worse than the silence being fixed.
+ * must never reach a log. The synchronous resolver the model registry uses runs
+ * commands through `execSync` with separate pipes, so it can report stderr,
+ * which is where `op: not signed in` and `command not found` appear. The async
+ * resolver runs them through `executeShell`, which merges the two streams with
+ * no way to tell them apart, so it reports no output at all and sends the reader
+ * to run the command themselves. Reporting merged output there would risk
+ * writing the credential into a log file, which is worse than the silence being
+ * fixed.
+ *
+ * WHAT THIS SUITE DOES NOT CATCH. The 10 s command timeout is not driven: a
+ * spawned process cannot run on fake time, and a real 10 s wait is not run here.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
@@ -34,8 +39,8 @@ import {
 	resolveConfigValue,
 	resolveHeaders,
 } from "@veyyon/coding-agent/config/resolve-config-value";
-import { logger } from "@veyyon/utils";
-import { moduleSpecifiersIn } from "@veyyon/utils/module-reach";
+import { resolveConfigValueSync } from "@veyyon/coding-agent/config/resolve-config-value-sync";
+import { logger, TempDir } from "@veyyon/utils";
 
 /** A shell command that exits non-zero after writing a diagnostic to stderr. */
 const FAILS_LOUDLY = `!${process.execPath} -e "process.stderr.write('op: not signed in'); process.exit(3)"`;
@@ -266,91 +271,103 @@ describe("resolveConfigValue reports why a credential command produced nothing",
 });
 
 /**
- * The owner being correct is not enough: both resolvers have to reach it.
+ * The synchronous resolver the model registry uses for provider API keys and headers.
  *
- * The original defect was a bare `catch` in each of two files, and nothing
- * about a well-tested reporter stops one of them coming back. The two resolvers
- * now share a single caching/back-off/report policy (`configCommandPolicy`) in
- * `config-value-resolution.ts`, and a failure reaches the report only by way of
- * `recordFailure`, so these scans pin that BOTH resolvers route through the
- * shared policy and NEITHER keeps its own report. The `model-registry` resolver
- * is module-private and only reachable through a fully constructed
- * `ModelRegistry`, so it is guarded by reading the source rather than by
- * exporting it purely for a test and widening the public surface for no
- * production caller. A source scan is weaker than a behavioural test and is used
- * here only because the alternative is worse.
+ * It runs the command with separate pipes, so unlike the async resolver its report carries the
+ * command's stderr. The two share one caching, back-off and report-once policy, so a command that
+ * fails on one path is reported once across both, not once per path.
  */
-describe("both config-value resolvers route a failed command through the shared policy", () => {
-	const OWNER = path.resolve(import.meta.dir, "../../src/config/config-value-resolution.ts");
-	const RESOLVERS = [
-		{ name: "resolve-config-value", path: path.resolve(import.meta.dir, "../../src/config/resolve-config-value.ts") },
-		{ name: "model-registry", path: path.resolve(import.meta.dir, "../../src/config/model-registry.ts") },
-	];
+describe("resolveConfigValueSync reports why a credential command produced nothing", () => {
+	let warnings: Array<{ message: string; fields: Record<string, unknown> }>;
 
-	for (const resolver of RESOLVERS) {
-		it(`${resolver.name} records a failure through the shared policy`, () => {
-			const source = fs.readFileSync(resolver.path, "utf8");
-
-			expect(source).toContain("configCommandPolicy.recordFailure(");
-			expect(moduleSpecifiersIn(source)).toContain("./config-value-resolution");
+	beforeEach(() => {
+		clearConfigValueCache();
+		warnings = [];
+		vi.spyOn(logger, "warn").mockImplementation((message: string, fields?: Record<string, unknown>) => {
+			warnings.push({ message, fields: fields ?? {} });
 		});
-
-		it(`${resolver.name} does not call the reporter directly, so the report has one caller`, () => {
-			// `reportUnresolvedConfigValue` is now invoked ONLY inside the shared
-			// policy's `recordFailure`. A resolver calling it directly again would be
-			// a second path to the report and the start of the drift the policy ends.
-			const source = fs.readFileSync(resolver.path, "utf8");
-
-			expect(source).not.toContain("reportUnresolvedConfigValue(");
-		});
-
-		it(`${resolver.name} does not reintroduce its own copy of the report text`, () => {
-			// A second `logger.warn` with this wording would mean the two resolvers
-			// had drifted apart again, which is the state the owner exists to end.
-			const source = fs.readFileSync(resolver.path, "utf8");
-
-			expect(source).not.toContain("so the setting it resolves is unset");
-		});
-	}
-
-	it("the report has exactly one caller, in the owner", () => {
-		// The whole point of the shared policy: `reportUnresolvedConfigValue` is
-		// called from one place. If a second call appears anywhere, the ONE PLACE
-		// guarantee is gone.
-		const owner = fs.readFileSync(OWNER, "utf8");
-		const callSites = owner.split("reportUnresolvedConfigValue(").length - 1;
-
-		// One definition (`export function reportUnresolvedConfigValue(`) plus one
-		// call inside `recordFailure`.
-		expect(callSites).toBe(2);
 	});
 
-	it("model-registry no longer swallows the command failure with a bare catch", () => {
-		// The exact shape of the original defect, in the function that had it.
-		const source = fs.readFileSync(RESOLVERS[1].path, "utf8");
-		const resolver = source.slice(
-			source.indexOf("function resolveCommandConfig"),
-			source.indexOf("function resolveCommandConfig") + 2_000,
-		);
-
-		expect(resolver).not.toContain("} catch {");
-		expect(resolver).toContain("configCommandPolicy.recordFailure(");
+	afterEach(() => {
+		vi.restoreAllMocks();
+		clearConfigValueCache();
 	});
 
-	it("model-registry pipes stderr separately, which is what makes its report possible", () => {
-		// `execSync` inherits stderr by default, in which case there is nothing to
-		// report. The explicit stdio triple is load-bearing, not incidental.
-		const source = fs.readFileSync(RESOLVERS[1].path, "utf8");
+	const reports = (): Array<Record<string, unknown>> =>
+		warnings
+			.filter(w => w.message === "A configured command produced no value, so the setting it resolves is unset")
+			.map(w => w.fields);
 
-		expect(source).toContain('stdio: ["ignore", "pipe", "pipe"]');
+	it("reports a non-zero exit with the exit code and the command's stderr", () => {
+		expect(resolveConfigValueSync(FAILS_LOUDLY)).toBeUndefined();
+
+		expect(reports()).toHaveLength(1);
+		expect(String(reports()[0]?.reason)).toContain("exited with code 3");
+		expect(reports()[0]?.stderr).toBe("op: not signed in");
 	});
 
-	it("reads real resolver sources, so a passing scan means something", () => {
-		// Anti-vacuity. A moved or renamed file would otherwise make every scan
-		// above pass against an empty string.
-		for (const resolver of [...RESOLVERS, { name: "owner", path: OWNER }]) {
-			const source = fs.readFileSync(resolver.path, "utf8");
-			expect(source.length).toBeGreaterThan(1_000);
+	it("names the setting the failing command was resolving", () => {
+		// A provider API key that resolves to nothing surfaces as a 401. The setting name is what
+		// connects that 401 to this command.
+		resolveConfigValueSync(FAILS_LOUDLY, 'API key for provider "acme"');
+		resolveConfigValueSync(SUCCEEDS_SILENTLY, 'header "X-Api-Key"');
+
+		expect(reports().map(report => report.setting)).toEqual(['API key for provider "acme"', 'header "X-Api-Key"']);
+	});
+
+	it("distinguishes a command that succeeded but printed nothing", () => {
+		expect(resolveConfigValueSync(SUCCEEDS_SILENTLY)).toBeUndefined();
+
+		expect(reports()).toHaveLength(1);
+		expect(String(reports()[0]?.reason)).toContain("wrote nothing to stdout");
+	});
+
+	it("returns the value and says nothing when the command resolves one", () => {
+		expect(resolveConfigValueSync(SUCCEEDS)).toBe("sk-live-secret-value");
+		expect(reports()).toEqual([]);
+	});
+
+	it("never puts the command's stdout in the log, because that is the secret", () => {
+		resolveConfigValueSync(SUCCEEDS);
+		resolveConfigValueSync(SUCCEEDS_SILENTLY);
+
+		expect(JSON.stringify(warnings)).not.toContain("sk-live-secret-value");
+	});
+
+	it("reports a failing command once, not on every resolution that needs it", () => {
+		resolveConfigValueSync(FAILS_LOUDLY);
+		resolveConfigValueSync(FAILS_LOUDLY);
+		resolveConfigValueSync(FAILS_LOUDLY);
+
+		expect(reports()).toHaveLength(1);
+	});
+
+	it("reports a command that failed on the async path once across both resolvers", async () => {
+		await resolveConfigValue(FAILS_LOUDLY);
+		expect(resolveConfigValueSync(FAILS_LOUDLY)).toBeUndefined();
+
+		expect(reports()).toHaveLength(1);
+	});
+
+	it("reports a command that failed on the sync path once across both resolvers", async () => {
+		resolveConfigValueSync(FAILS_LOUDLY);
+		await expect(resolveConfigValue(FAILS_LOUDLY)).resolves.toBeUndefined();
+
+		expect(reports()).toHaveLength(1);
+	});
+
+	it("serves a value the async path resolved without running the command again", async () => {
+		const dir = TempDir.createSync("@config-value-sync-");
+		try {
+			const runs = path.join(dir.path(), "runs");
+			const counted = `!${process.execPath} -e "require('node:fs').appendFileSync('${runs}', 'x'); process.stdout.write('v')"`;
+
+			await expect(resolveConfigValue(counted)).resolves.toBe("v");
+			expect(resolveConfigValueSync(counted)).toBe("v");
+
+			expect(fs.readFileSync(runs, "utf8")).toBe("x");
+		} finally {
+			dir.removeSync();
 		}
 	});
 });

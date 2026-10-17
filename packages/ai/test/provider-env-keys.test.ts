@@ -28,9 +28,9 @@ import { CATALOG_PROVIDERS, type ProviderCatalogEntry } from "@veyyon/catalog/pr
 import { moduleSpecifiersIn } from "@veyyon/utils/module-reach";
 import { getEnvApiKey } from "../src/env-api-key";
 import { PROVIDER_ENV_KEY_OVERRIDES, resetVertexAdcProbeForTests } from "../src/provider-env-keys";
+import { PROVIDER_REGISTRY } from "../src/registry/registry";
 
 const SRC = path.join(import.meta.dir, "..", "src");
-const REGISTRY = path.join(SRC, "registry");
 
 /**
  * Every AWS, Google and Anthropic variable the three probes read, cleared before each case.
@@ -296,28 +296,23 @@ describe("where an env-key rule is allowed to live", () => {
 	 * would be configuration that does nothing, and the provider would silently fall back to its catalog
 	 * entry or to no key at all. `ProviderDefinition` no longer declares the field, so `satisfies` catches
 	 * most of it, but a definition written without the `satisfies` clause would not be caught by the compiler
-	 * at all. Source scan, so the failure names the file.
+	 * at all. Read from the registered definitions, so the failure names the provider.
 	 */
 	it("has no provider definition still declaring an envKeys field", () => {
-		const offenders: string[] = [];
-		for (const entry of fs.readdirSync(REGISTRY, { withFileTypes: true })) {
-			if (!entry.isFile() || !entry.name.endsWith(".ts")) continue;
-			const source = fs.readFileSync(path.join(REGISTRY, entry.name), "utf-8");
-			if (/^\t*envKeys\s*:/m.test(source)) offenders.push(entry.name);
-		}
+		const offenders = PROVIDER_REGISTRY.filter(definition => "envKeys" in definition).map(
+			definition => definition.id,
+		);
 
 		expect(offenders.sort()).toEqual([]);
 	});
 
 	/**
-	 * NON-VACUITY for the scan above: the same reader, pointed at this table, finds the rules. A scan whose
-	 * pattern stopped matching would report zero offenders forever.
+	 * NON-VACUITY for the check above: it reads the registered definitions, including one whose key the
+	 * override table answers for. An empty or unreachable registry would report zero offenders forever.
 	 */
-	it("finds the rules where they now live, so the scan is not blind", () => {
-		const source = fs.readFileSync(path.join(SRC, "provider-env-keys.ts"), "utf-8");
-
-		expect(source).toContain('"amazon-bedrock": amazonBedrockEnvKey');
-		expect(Object.keys(PROVIDER_ENV_KEY_OVERRIDES).length).toBeGreaterThanOrEqual(13);
+	it("reads the registered definitions, so the check is not blind", () => {
+		expect(PROVIDER_REGISTRY.map(definition => definition.id)).toContain("amazon-bedrock");
+		expect(typeof PROVIDER_ENV_KEY_OVERRIDES["amazon-bedrock"]).toBe("function");
 	});
 
 	/**

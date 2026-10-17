@@ -101,6 +101,7 @@ export async function refreshGatewayApiKeyAfterAuthError(
 			modelId: model.id,
 			apiKey: oldKey,
 			signal,
+			modelNotInPlan: AIError.isModelNotInPlan(error),
 		});
 		logger.debug("auth-gateway retrying provider request after usage-limit block", {
 			format,

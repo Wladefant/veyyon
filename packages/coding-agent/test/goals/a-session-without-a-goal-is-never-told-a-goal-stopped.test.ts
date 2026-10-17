@@ -105,7 +105,7 @@ describe("the goal stand-down warning belongs to a goal that is actually running
 			"todo.reminders": false,
 			...overrides,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		const noteTool: AgentTool = {
 			name: "note",

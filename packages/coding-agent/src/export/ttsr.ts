@@ -10,6 +10,7 @@ import { AstMatchStrictness, astMatch } from "@veyyon/natives";
 import { errorMessage, logger, nearestNames } from "@veyyon/utils";
 import type { TtsrSettings } from "../config/settings";
 import type { Rule } from "../discovery/capability/rule";
+import { BUILTIN_TOOL_NAMES, HIDDEN_TOOL_NAMES } from "../tools/core/builtin-names";
 
 export type TtsrMatchSource = "text" | "thinking" | "tool";
 
@@ -626,12 +627,16 @@ export class TtsrManager {
 	 * registry is complete, including MCP and extension tools. It never refuses the rule. A tool can be
 	 * registered later in a session, and refusing would break a rule that is scoped to one deliberately.
 	 * The closest registered name is offered, because the overwhelmingly likely cause is a typo.
+	 *
+	 * A built-in tool exists whether or not this session built it: `--tools` and a spawned agent's tool
+	 * list build only the tools they name, and a rule scoped to `search` is not a typo there.
 	 */
-	reportUnknownToolScopes(knownToolNames: Iterable<string>): void {
+	reportUnknownToolScopes(registeredToolNames: Iterable<string>): void {
 		const known = new Set<string>();
-		for (const name of knownToolNames) known.add(name.trim().toLowerCase());
+		for (const name of registeredToolNames) known.add(name.trim().toLowerCase());
 		if (known.size === 0) return;
-
+		for (const name of BUILTIN_TOOL_NAMES) known.add(name);
+		for (const name of HIDDEN_TOOL_NAMES) known.add(name);
 		for (const [ruleName, entry] of this.#rules) {
 			for (const toolScope of entry.scope.toolScopes) {
 				const toolName = toolScope.toolName;

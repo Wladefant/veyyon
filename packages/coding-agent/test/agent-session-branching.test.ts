@@ -5,6 +5,8 @@
  * - Branching from a single message works
  * - Branching in --no-session mode (in-memory only)
  * - getUserMessagesForBranching returns correct entries
+ *
+ * Subject: `session/runtime/session-branch.ts`, driven through `AgentSession.branch`.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";

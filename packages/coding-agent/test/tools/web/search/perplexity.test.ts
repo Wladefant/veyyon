@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AuthStorage, FetchImpl } from "@veyyon/ai";
+import {
+	PERPLEXITY_HEADERS,
+	PERPLEXITY_NATIVE_APP_API_VERSION,
+	PERPLEXITY_NATIVE_APP_USER_AGENT,
+} from "@veyyon/catalog/wire/perplexity";
 import { PerplexityProvider, searchPerplexity } from "@veyyon/coding-agent/tools/web/search/providers/perplexity";
 import { getAvailableAuthMethods } from "@veyyon/coding-agent/tools/web/search/providers/perplexity-auth";
+import { CHROME_DESKTOP_USER_AGENT } from "@veyyon/web/browser-fingerprint-constants";
 
 const API_URL = "https://api.perplexity.ai/chat/completions";
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -380,6 +386,26 @@ describe("Perplexity OAuth request shape", () => {
 		expect(response.authMode).toBe("oauth");
 		expect(response.answer).toBe("OAuth answer");
 	});
+
+	/**
+	 * The session was minted by the login flow claiming the macOS app's User-Agent and API version. A
+	 * request that spends it while claiming anything else is answered by the free model with no error, so
+	 * the header and the body field the app sends the version in both have to carry the owner's value.
+	 */
+	it("claims the app identity the session was minted under, in the headers and the body", async () => {
+		let body: Record<string, unknown> | undefined;
+		let headers: Headers | undefined;
+		const fetchMock = mockOAuth((b, h) => {
+			body = b;
+			headers = h;
+		});
+
+		await searchPerplexity({ query: "quic vs tcp", authStorage: oauthAuthStorage, fetch: fetchMock });
+
+		expect(headers?.get("user-agent")).toBe(PERPLEXITY_NATIVE_APP_USER_AGENT);
+		expect(headers?.get(PERPLEXITY_HEADERS.API_VERSION)).toBe(PERPLEXITY_NATIVE_APP_API_VERSION);
+		expect(body?.params).toMatchObject({ version: PERPLEXITY_NATIVE_APP_API_VERSION });
+	});
 });
 
 describe("Perplexity OAuth transport failure (issue #5315)", () => {
@@ -591,7 +617,9 @@ describe("Perplexity anonymous fallback", () => {
 
 		expect(headers?.has("authorization")).toBe(false);
 		expect(headers?.has("cookie")).toBe(false);
-		expect(headers?.get("user-agent")).toContain("Mozilla/5.0");
+		// No app session to match, so the request looks like the browser the shared fingerprint describes.
+		expect(headers?.get("user-agent")).toBe(CHROME_DESKTOP_USER_AGENT);
+		expect(headers?.has(PERPLEXITY_HEADERS.API_VERSION)).toBe(false);
 		expect(requestParams.model_preference).toBe("experimental");
 		expect(requestParams.send_back_text_in_streaming_api).toBe(true);
 		expect(requestParams.source).toBe("default");

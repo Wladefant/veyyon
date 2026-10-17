@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
+import type { Api, Model } from "@veyyon/ai";
 import { Effort } from "@veyyon/catalog/effort";
 import { getBundledModel } from "@veyyon/catalog/models";
-import { resolvePrimaryModel, resolveSmolModel } from "@veyyon/coding-agent/commit/model-selection";
+import { resolveCommitHelperModel, resolvePrimaryModel } from "@veyyon/coding-agent/commit/model-selection";
 
 function getModelOrThrow(id: string) {
 	const model = getBundledModel("anthropic", id);
@@ -9,81 +10,76 @@ function getModelOrThrow(id: string) {
 	return model;
 }
 
-function createSettings(modelRoles: Record<string, string>) {
+function createSettings(helpers: Record<string, { model?: string; thinkingLevel?: string }>, defaultModel?: string) {
 	return {
-		getModelRole(role: string) {
-			return modelRoles[role];
-		},
-		setModelRole(role: string, value: string) {
-			modelRoles[role] = value;
-		},
 		get(path: string) {
-			if (path === "modelRoles") return modelRoles;
+			if (path === "agent.helpers") return helpers;
+			if (path === "defaultModel") return defaultModel ? [defaultModel] : [];
 			return undefined;
 		},
 	} as never;
 }
 
-describe("commit role thinking selection", () => {
-	// Which selector decides, and what the model does with it, are two questions,
-	// and a fixture that asks them on one model can answer neither. This case asks
-	// which selector decides, so the level it checks on the OTHER role must be one
-	// that model declares: Opus 4.5 declares `low`/`medium`/`high` and takes `low`
-	// as `low`, which a dropped alias suffix could not fake by clamping. The commit
-	// role's `:max` is the second question and resolution answers it here, against
-	// Sonnet 4.5's budget ladder, which stops at `xhigh`.
-	it("lets an alias's own thinking suffix replace the one stored on the role it points at", async () => {
-		const defaultModel = getModelOrThrow("claude-opus-4-5");
-		const commitModel = getModelOrThrow("claude-sonnet-4-5");
+function registryOf(...models: Model<Api>[]) {
+	return {
+		getAvailable: () => models,
+		getApiKey: async () => "test-key",
+		getApiKeyForProvider: async () => "test-key",
+		authStorage: { rotateSessionCredential: async () => false as const },
+		resolver: () => async () => "test-key",
+	};
+}
+
+describe("commit helper effort selection", () => {
+	// Opus 4.5 declares `low`/`medium`/`high` and takes `low` as `low`, so a
+	// suffix that never reached the request could not fake the assertion by
+	// clamping. Sonnet 4.5's budget ladder stops at `xhigh`, which answers the
+	// separate question of what a level the model lacks resolves to.
+	it("lets a `:level` suffix on the commit helper's model outrank the row's effort", async () => {
+		const model = getModelOrThrow("claude-opus-4-5");
 		const settings = createSettings({
-			default: `${defaultModel.provider}/${defaultModel.id}:high`,
-			commit: `${commitModel.provider}/${commitModel.id}:max`,
-			smol: "@default:low",
+			commit: { model: `${model.provider}/${model.id}:low`, thinkingLevel: "high" },
 		});
-		const registry = {
-			getAvailable: () => [defaultModel, commitModel],
-			getApiKey: async () => "test-key",
-			getApiKeyForProvider: async () => "test-key",
-			authStorage: { rotateSessionCredential: async () => false as const },
-			resolver: () => async () => "test-key",
-		};
+		const registry = registryOf(model);
 
 		const primary = await resolvePrimaryModel(undefined, settings, registry);
-		expect(primary.model.id).toBe(commitModel.id);
-		expect(primary.thinkingLevel).toBe(Effort.XHigh);
+		expect(primary.model.id).toBe(model.id);
+		expect(primary.thinkingLevel).toBe(Effort.Low);
 
-		const smol = await resolveSmolModel(settings, registry, commitModel, "fallback-key");
-		expect(smol.model.id).toBe(defaultModel.id);
-		// `low` rather than the `high` stored on the `default` role: the suffix
-		// nearest the caller wins, and it is not appended to produce `high:low`.
-		expect(smol.thinkingLevel).toBe(Effort.Low);
+		const helper = await resolveCommitHelperModel(settings, registry, model, "fallback-key");
+		expect(helper.model.id).toBe(model.id);
+		expect(helper.thinkingLevel).toBe(Effort.Low);
 	});
 
-	it("clamps a level the aliased model cannot take to its lowest, not to the aliased role's level", async () => {
+	it("resolves a suffix the model cannot take against the model's own ladder", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		const settings = createSettings({ commit: { model: `${model.provider}/${model.id}:max` } });
+
+		const primary = await resolvePrimaryModel(undefined, settings, registryOf(model));
+
+		expect(primary.model.id).toBe(model.id);
+		expect(primary.thinkingLevel).toBe(Effort.XHigh);
+	});
+
+	it("fits an unset helper's effort to the default model, never to the default model's own suffix", async () => {
 		const defaultModel = getModelOrThrow("claude-opus-4-5");
 		const commitModel = getModelOrThrow("claude-sonnet-4-5");
-		const settings = createSettings({
-			default: `${defaultModel.provider}/${defaultModel.id}:high`,
-			commit: `${commitModel.provider}/${commitModel.id}:max`,
-			smol: "@default:minimal",
-		});
-		const registry = {
-			getAvailable: () => [defaultModel, commitModel],
-			getApiKey: async () => "test-key",
-			getApiKeyForProvider: async () => "test-key",
-			authStorage: { rotateSessionCredential: async () => false as const },
-			resolver: () => async () => "test-key",
-		};
+		const settings = createSettings(
+			{ commit: { thinkingLevel: "minimal" } },
+			`${defaultModel.provider}/${defaultModel.id}:high`,
+		);
 
-		const smol = await resolveSmolModel(settings, registry, commitModel, "fallback-key");
+		const helper = await resolveCommitHelperModel(
+			settings,
+			registryOf(defaultModel, commitModel),
+			commitModel,
+			"fallback-key",
+		);
 
-		expect(smol.model.id).toBe(defaultModel.id);
-		// Opus 4.5 declares no level below `low`, so `minimal` resolves to `low`.
-		// The assertion that matters is the second one: the clamp lands on the
-		// model's floor and never on the `high` the aliased role stores, which is
-		// what inheriting the alias target's suffix would produce.
-		expect(smol.thinkingLevel).toBe(Effort.Low);
-		expect(smol.thinkingLevel).not.toBe(Effort.High);
+		expect(helper.model.id).toBe(defaultModel.id);
+		// Opus 4.5 declares no level below `low`, so `minimal` resolves to `low`,
+		// and never to the `high` the default model's selector stores.
+		expect(helper.thinkingLevel).toBe(Effort.Low);
 	});
 });
 
@@ -91,7 +87,7 @@ describe("commit unavailable-default fallback (parity with the main session)", (
 	it("substitutes an available model with a loud warning when the configured default is unavailable", async () => {
 		const availableModel = getModelOrThrow("claude-sonnet-4-5");
 		// Configured default points at a provider/model that is not available.
-		const settings = createSettings({ default: "gonezo/model-that-left" });
+		const settings = createSettings({}, "gonezo/model-that-left");
 		const registry = {
 			getAvailable: () => [availableModel],
 			getApiKey: async () => "test-key",
@@ -127,7 +123,7 @@ describe("commit unavailable-default fallback (parity with the main session)", (
 		expect(warnings).toHaveLength(0);
 	});
 
-	it("substitutes silently when no default role is configured at all", async () => {
+	it("substitutes silently when no default model is configured at all", async () => {
 		const availableModel = getModelOrThrow("claude-sonnet-4-5");
 		const settings = createSettings({});
 		const registry = {
@@ -147,32 +143,32 @@ describe("commit unavailable-default fallback (parity with the main session)", (
 		expect(warnings).toHaveLength(0);
 	});
 
-	it("warns when a configured smol model is skipped for missing credentials", async () => {
+	it("warns when a configured commit helper model is skipped for missing credentials", async () => {
 		const primaryModel = getModelOrThrow("claude-sonnet-4-5");
-		const smolModel = getModelOrThrow("claude-opus-4-5");
-		const settings = createSettings({ smol: `${smolModel.provider}/${smolModel.id}` });
+		const helperModel = getModelOrThrow("claude-opus-4-5");
+		const settings = createSettings({ commit: { model: `${helperModel.provider}/${helperModel.id}` } });
 		const registry = {
-			getAvailable: () => [primaryModel, smolModel],
-			// The configured smol model resolves but its provider has no key.
-			getApiKey: async (model: { id: string }) => (model.id === smolModel.id ? undefined : "test-key"),
+			getAvailable: () => [primaryModel, helperModel],
+			// The configured commit helper model resolves but its provider has no key.
+			getApiKey: async (model: { id: string }) => (model.id === helperModel.id ? undefined : "test-key"),
 			getApiKeyForProvider: async () => "test-key",
 			authStorage: { rotateSessionCredential: async () => false as const },
 			resolver: () => async () => "test-key",
 		};
 
 		const warnings: string[] = [];
-		const smol = await resolveSmolModel(settings, registry, primaryModel, "fallback-key", message =>
+		const helper = await resolveCommitHelperModel(settings, registry, primaryModel, "fallback-key", message =>
 			warnings.push(message),
 		);
 
 		expect(warnings).toHaveLength(1);
-		expect(warnings[0]).toContain(`${smolModel.provider}/${smolModel.id}`);
+		expect(warnings[0]).toContain(`${helperModel.provider}/${helperModel.id}`);
 		// Substitution still lands on an authenticated model, never the unauthed one.
-		expect(smol.model.id).not.toBe(smolModel.id);
+		expect(helper.model.id).not.toBe(helperModel.id);
 	});
 
 	it("still fails hard when no model is available at all", async () => {
-		const settings = createSettings({ default: "gonezo/model-that-left" });
+		const settings = createSettings({}, "gonezo/model-that-left");
 		const registry = {
 			getAvailable: () => [],
 			getApiKey: async () => "test-key",

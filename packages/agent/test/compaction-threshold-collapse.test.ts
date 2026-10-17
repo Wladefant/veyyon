@@ -1,16 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import {
+	AUTO_COMPACTION_THRESHOLD,
 	type CompactionSettings,
 	DEFAULT_COMPACTION_SETTINGS,
-	isThresholdTokensClampedForWindow,
-	resolveThresholdTokens,
-	resolveThresholdWithOrigin,
-} from "@veyyon/agent-core/compaction/compaction";
-import {
-	AUTO_COMPACTION_THRESHOLD,
 	formatCompactionThreshold,
+	isThresholdTokensClampedForWindow,
 	parseCompactionThreshold,
 	resolveCompactionThreshold,
+	resolveThresholdTokens,
+	resolveThresholdWithOrigin,
 	withLegacyCompactionThreshold,
 } from "@veyyon/agent-core/compaction/threshold";
 

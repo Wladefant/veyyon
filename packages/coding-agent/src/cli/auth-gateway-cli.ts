@@ -26,6 +26,7 @@ import { DEFAULT_AUTH_GATEWAY_BIND, startAuthGateway } from "@veyyon/ai/auth-gat
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { type GeneratedProvider, getBundledChatModels, getBundledProviders } from "@veyyon/catalog/models";
 import { errorMessage, formatCount, VERSION } from "@veyyon/utils";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import chalk from "chalk";
 import { Settings } from "../config/settings";
 import {
@@ -33,7 +34,6 @@ import {
 	accountLoadBalancingSetting,
 	resolveAuthBrokerConfig,
 } from "../session/auth-broker-config";
-import { scopedTimeoutSignal } from "../utils/fetch-timeout";
 import { AuthTokenFile, printToken } from "./auth-token-file";
 
 export type AuthGatewayAction = "serve" | "token" | "status" | "check";

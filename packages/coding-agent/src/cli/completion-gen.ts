@@ -88,8 +88,6 @@ export function binNames(spec: CompletionSpec): string[] {
 /** Single-value flags resolved against the live model catalog. */
 const MODEL_FLAGS: Record<string, true> = {
 	model: true,
-	smol: true,
-	slow: true,
 	plan: true,
 	// Both name the model a phase hands off to; their descriptions say so.
 	"prewalk-into": true,

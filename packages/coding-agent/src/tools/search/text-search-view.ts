@@ -12,6 +12,7 @@
  * budget is spent on groups and a group that does not fit is dropped entire.
  */
 
+import { formatCount } from "@veyyon/utils/format";
 import type {
 	StatusRowView,
 	ToolView,
@@ -31,7 +32,6 @@ import {
 	emptyTextBlock,
 	errorTextBlock,
 	FILE_NOUN,
-	formatCount,
 	heldBack,
 	ITEM_NOUN,
 	LINE_NOUN,

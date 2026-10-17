@@ -10,12 +10,13 @@
 
 import { Ellipsis } from "@veyyon/natives";
 import { Container, Editor, Spacer, Text, type TUI } from "@veyyon/tui";
+import { errorMessage } from "@veyyon/utils";
 import { matchesKey } from "@veyyon/utils/keys";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth } from "@veyyon/utils/width";
 import { getEditorTheme, theme } from "../../../../theme/theme";
-import { getEditorCommand, openInEditor } from "../../../../utils/external-editor";
+import { editInTerminal, getEditorCommand, NO_EDITOR_CONFIGURED } from "../../../../utils/external-editor";
 import { actionKeyHint } from "../../utils/key-hint";
 import { matchesAppExternalEditor, matchesAppFollowUp, matchesAppInterrupt } from "../../utils/keybinding-matchers";
 import {
@@ -44,6 +45,8 @@ export interface HookEditorOptions {
 
 export class HookEditorComponent extends Container {
 	#editor: Editor;
+	/** One row under the editor stating why the last external-editor attempt did not run; empty otherwise. */
+	#notice = new Text("", HOOK_EDITOR_TEXT_PAD_COLS, 0);
 	#onSubmitCallback: (value: string) => void;
 	#onCancelCallback: () => void;
 	#tui: TUI;
@@ -92,6 +95,7 @@ export class HookEditorComponent extends Container {
 			this.#editor.setText(prefill);
 		}
 		this.addChild(this.#editor);
+		this.addChild(this.#notice);
 
 		// Embedded, the keys are a dim line under the editor, because the host's
 		// card footer names its own. A card puts them in that footer instead.
@@ -290,19 +294,27 @@ export class HookEditorComponent extends Container {
 	}
 
 	async #openExternalEditor(): Promise<void> {
+		this.#notice.setText("");
 		const editorCmd = getEditorCommand();
-		if (!editorCmd) return;
+		if (!editorCmd) {
+			this.#showNotice(NO_EDITOR_CONFIGURED);
+			return;
+		}
 
-		const currentText = this.#editor.getExpandedText();
 		try {
-			this.#tui.stop();
-			const result = await openInEditor(editorCmd, currentText);
+			const result = await editInTerminal(this.#tui, editorCmd, this.#editor.getExpandedText());
 			if (result !== null) {
 				this.#editor.setText(result);
 			}
-		} finally {
-			this.#tui.start();
-			this.#tui.requestRender(true);
+		} catch (error) {
+			// This runs detached from the keypress that started it, so a rejection here would reach the
+			// process-wide handler and end the session over an editor that failed to start.
+			this.#showNotice(`Failed to open external editor: ${errorMessage(error)}`);
 		}
+	}
+
+	#showNotice(message: string): void {
+		this.#notice.setText(theme.fg("warning", message));
+		this.#onRequestRender?.();
 	}
 }

@@ -1,13 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-// The marketplace types module re-exports the same three symbols; importing
-// through it proves the re-export surface stays wired for `./types` consumers.
-import {
-	buildPluginId as buildPluginIdViaTypes,
-	isValidNameSegment as isValidNameSegmentViaTypes,
-	parsePluginId as parsePluginIdViaTypes,
-} from "@veyyon/kernel/loader/plugins/marketplace/types";
 import { buildPluginId, isValidNameSegment, parsePluginId } from "@veyyon/kernel/loader/plugins/plugin-id";
 
 /**
@@ -83,14 +76,6 @@ describe("parsePluginId", () => {
 	it("round-trips a built ID", () => {
 		const id = buildPluginId("my-plugin", "my-market");
 		expect(parsePluginId(id)).toEqual({ name: "my-plugin", marketplace: "my-market" });
-	});
-});
-
-describe("marketplace/types re-export identity", () => {
-	it("re-exports the exact same function references as the single owner", () => {
-		expect(isValidNameSegmentViaTypes).toBe(isValidNameSegment);
-		expect(buildPluginIdViaTypes).toBe(buildPluginId);
-		expect(parsePluginIdViaTypes).toBe(parsePluginId);
 	});
 });
 

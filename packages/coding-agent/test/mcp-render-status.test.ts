@@ -6,8 +6,8 @@ import { DeferredMCPTool, MCPTool, type MCPToolDetails } from "@veyyon/coding-ag
 import type { MCPServerConnection, MCPToolDefinition, MCPTransport } from "@veyyon/coding-agent/mcp/types";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
 import { getThemeByName, initTheme, type Theme } from "@veyyon/coding-agent/theme/theme";
-import { formatOutputNotice, type OutputMeta } from "@veyyon/coding-agent/tools/core/output-meta";
-import { formatStatusIcon } from "@veyyon/coding-agent/tools/core/render-utils";
+import { formatOutputNotice, type OutputMeta } from "@veyyon/coding-agent/tools/core/output-notice";
+import { formatStatusIcon } from "@veyyon/coding-agent/tools/core/tool-ui-status";
 import { TUI } from "@veyyon/tui";
 import { VirtualTerminal } from "../../../hosts/terminal/engine/test/virtual-terminal";
 import { createToolExecution } from "./helpers/tool-execution";

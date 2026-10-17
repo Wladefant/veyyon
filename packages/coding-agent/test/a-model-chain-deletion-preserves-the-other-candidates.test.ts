@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { ModelChainSubmenu } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
+import { ModelChainSubmenu } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-chain-submenu";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { useTrackedTempDirs } from "./helpers/tracked-temp-dir";
 
