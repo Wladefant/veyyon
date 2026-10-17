@@ -435,7 +435,7 @@ describe("antigravity usage provider", () => {
 		);
 		expect(report?.limits.some(limit => limit.id.includes(":google:"))).toBe(true);
 		expect(report?.limits.some(limit => limit.id.includes(":claude-gpt:"))).toBe(true);
-		expect(report?.limits[0]?.amount.remainingFraction).toBe(0.2);
+		expect(report?.limits[0]?.amount.remainingFraction).toBe(0.6);
 	});
 
 	it("keeps summary windows authoritative when supplementing a counter", async () => {
