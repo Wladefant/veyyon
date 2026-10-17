@@ -305,6 +305,21 @@ impl SupportLang {
 		]
 	}
 
+	/// Grammar for a whole source file.
+	///
+	/// Equal to [`LanguageExt::get_ts_language`] for every language but PHP. A
+	/// structural pattern is PHP code without an opening `<?php` tag, which
+	/// only the PHP-only grammar parses. A file can close the tag with `?>` and
+	/// continue as HTML, which only the full grammar parses: the PHP-only
+	/// grammar reports that HTML as a syntax error, after error recovery that
+	/// costs 767ms on a 191KB plugin source the full grammar parses in 18ms.
+	pub fn document_language(self) -> TSLanguage {
+		match self {
+			Self::Php => tree_sitter_php::LANGUAGE_PHP.into(),
+			lang => lang.get_ts_language(),
+		}
+	}
+
 	/// The canonical lowercase name used as a stable key in alias maps,
 	/// file-type inference results, and error messages.
 	pub const fn canonical_name(self) -> &'static str {

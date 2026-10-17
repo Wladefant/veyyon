@@ -292,7 +292,6 @@ pub fn enclosing_block_boundaries(options: EnclosingBoundaryOptions) -> Result<O
 
 #[cfg(test)]
 mod tests {
-	use ast_grep_core::tree_sitter::LanguageExt;
 	use tree_sitter::Parser;
 
 	use super::*;
@@ -582,6 +581,21 @@ mod tests {
 		assert_eq!(boundaries(TS_FN, "x.unknownext", &[(1, 1)]), None);
 	}
 
+	/// A PHP file that closes its tag to emit HTML and reopens it, the shape of
+	/// most plugin templates and admin pages.
+	const PHP_WITH_HTML: &str = "<?php\nfunction render($items) {\n    foreach ($items as $item) \
+	                             {\n        ?>\n        <li><?php echo $item; ?></li>\n        \
+	                             <?php\n    }\n}\n";
+
+	#[test]
+	fn a_php_file_that_leaves_php_for_html_answers_from_its_tree() {
+		// The PHP-only grammar reads the HTML after `?>` as a syntax error, which
+		// sent every such file to the lexical fallback after a slow error-recovery
+		// parse. The document grammar parses it, so the function's closer is found.
+		assert_eq!(boundaries(PHP_WITH_HTML, "view.php", &[(2, 2)]), Some(vec![8]));
+		assert_eq!(boundaries(PHP_WITH_HTML, "view.php", &[(8, 8)]), Some(vec![2]));
+	}
+
 	const MD_DOC: &str = "# H1\nintro\n\n## H2 alpha\nbody a\nmore a\n\n### H3 deep\ndeep \
 	                      body\n\n## H2 beta\nbody b\n";
 
@@ -672,7 +686,7 @@ mod tests {
 		);
 		let mut parser = Parser::new();
 		parser
-			.set_language(&lang.get_ts_language())
+			.set_language(&lang.document_language())
 			.expect("language loads");
 		let tree = parser.parse(code, None).expect("source parses");
 		let root = tree.root_node();
@@ -742,7 +756,7 @@ mod tests {
 			(ObjC, "@implementation A\n- (int)b {\n  return 1;\n}\n@end\n"),
 			(Ocaml, "let f x =\n  let y = x + 1 in\n  y\n"),
 			(Odin, "main :: proc() {\n\tx := 1\n\t_ = x\n}\n"),
-			(Php, "<?php\nfunction f() {\n    return 1;\n}\n"),
+			(Php, PHP_WITH_HTML),
 			(Powershell, "function f {\n    if ($true) {\n        1\n    }\n}\n"),
 			(Proto, "message A {\n  string b = 1;\n  int32 c = 2;\n}\n"),
 			(Python, "def greet(name):\n    a = 1\n    return a\n"),
