@@ -599,7 +599,7 @@ async function fetchAntigravityUsage(params: UsageFetchParams, ctx: UsageFetchCo
 		if (summaryReport?.limits.length) return summaryReport;
 		throw error;
 	}
-	if (!isAntigravityUsageResponse(listing?.data)) return summaryReport ?? null;
+	if (!isAntigravityUsageResponse(listing?.data)) return summaryReport?.limits.length ? summaryReport : null;
 	const listingReport = buildReportFromModels(listing.data, params, credential, nowMs, listing.endpoint);
 	if (!summaryReport?.limits.length) return listingReport;
 
