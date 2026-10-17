@@ -23,6 +23,7 @@
 
 ### Changed
 
+- A replace-mode edit whose old text is not in the file finds its closest candidate about 18 times faster (1.6 s to 90 ms on a 7,400-line file), and its streamed preview no longer repeats the search on every argument chunk, which held the terminal for seconds while a near-miss edit streamed.
 - The `browser` tool sends a run's displayed and returned objects to the model as one line of compact JSON instead of two-space indented JSON, which is 36–41% fewer characters for a `tab.observe()` of a real page; the card still lays them out indented.
 - A `browser` run no longer sends a return value that it already displayed, which was 20% of all run-result text in bench sessions.
 - The `browser` tool's `tab.ariaSnapshot()` and an `open`'s page snapshot leave out bare `generic` wrappers (layout `<div>`s with no name, text, state or pointer), 7–30% of a real page's snapshot.

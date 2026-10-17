@@ -314,6 +314,13 @@ export function similarity(a: string, b: string): number {
 	return 1 - distance / maxLen;
 }
 
+/** Upper bound of {@link similarity} from lengths alone: an edit distance is at least the length difference. */
+function similarityBound(a: string, b: string): number {
+	const maxLen = Math.max(a.length, b.length);
+	if (maxLen === 0) return 1;
+	return 1 - Math.abs(a.length - b.length) / maxLen;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Line-Based Utilities
 // ═══════════════════════════════════════════════════════════════════════════
@@ -372,28 +379,93 @@ interface BestFuzzyMatchResult {
 	secondBestScore: number;
 }
 
+/** A content line as the window score reads it, computed once per search rather than once per window. */
+interface FuzzyLine {
+	indent: number;
+	blank: boolean;
+	/** `normalizeForFuzzy` of the trimmed line. */
+	text: string;
+}
+
+function toFuzzyLines(lines: string[]): FuzzyLine[] {
+	return lines.map(line => {
+		const trimmed = line.trim();
+		return {
+			indent: countLeadingWhitespace(line),
+			blank: trimmed.length === 0,
+			text: trimmed.length === 0 ? "" : normalizeForFuzzy(trimmed),
+		};
+	});
+}
+
+/**
+ * Fill `out` with the window's lines in the form {@link normalizeLines} gives them: the indent depth
+ * relative to the window's own shallowest line, `|`, then the normalized text.
+ */
+function fillDepthKeys(lines: FuzzyLine[], start: number, out: string[]): void {
+	const count = out.length;
+	let minIndent = Number.POSITIVE_INFINITY;
+	for (let k = 0; k < count; k++) {
+		const line = lines[start + k];
+		if (!line.blank && line.indent < minIndent) minIndent = line.indent;
+	}
+	if (minIndent === Number.POSITIVE_INFINITY) minIndent = 0;
+	let indentUnit = Number.POSITIVE_INFINITY;
+	for (let k = 0; k < count; k++) {
+		const line = lines[start + k];
+		const step = line.indent - minIndent;
+		if (!line.blank && step > 0 && step < indentUnit) indentUnit = step;
+	}
+	if (indentUnit === Number.POSITIVE_INFINITY) indentUnit = 1;
+	for (let k = 0; k < count; k++) {
+		const line = lines[start + k];
+		const depth = line.blank ? 0 : Math.round((line.indent - minIndent) / indentUnit);
+		out[k] = `${depth}|${line.text}`;
+	}
+}
+
 function findBestFuzzyMatchCore(
+	content: string,
 	contentLines: string[],
+	fuzzyLines: FuzzyLine[],
 	targetLines: string[],
 	offsets: number[],
 	threshold: number,
 	includeDepth: boolean,
 ): BestFuzzyMatchResult {
 	const targetNormalized = normalizeLines(targetLines, includeDepth);
+	const count = targetLines.length;
+	// Without depth a line's key is the same in every window, so it is built once.
+	const flatKeys = includeDepth ? undefined : fuzzyLines.map(line => `|${line.text}`);
+	const windowKeys = new Array<string>(count);
+	// boundsAfter[i]: the sum of the length bounds of lines i..count-1 of the current window.
+	const boundsAfter = new Float64Array(count + 1);
 
 	let best: FuzzyMatch | undefined;
 	let bestScore = -1;
 	let secondBestScore = -1;
 	let aboveThresholdCount = 0;
 
-	for (let start = 0; start <= contentLines.length - targetLines.length; start++) {
-		const windowLines = contentLines.slice(start, start + targetLines.length);
-		const windowNormalized = normalizeLines(windowLines, includeDepth);
-		let score = 0;
-		for (let i = 0; i < targetLines.length; i++) {
-			score += similarity(targetNormalized[i], windowNormalized[i]);
+	for (let start = 0; start <= contentLines.length - count; start++) {
+		if (flatKeys === undefined) fillDepthKeys(fuzzyLines, start, windowKeys);
+		const keyAt = (i: number): string => (flatKeys === undefined ? windowKeys[i] : flatKeys[start + i]);
+		// A window changes the result only when it reaches the threshold or beats the second best.
+		// An edit distance is at least the length difference, so each line's similarity has an upper
+		// bound from lengths alone; once the exact lines so far plus the bounds of the rest fall short
+		// of both, the window is skipped without computing its remaining distances. The margin keeps
+		// summation order from skipping a window whose exact score ties.
+		const floor = Math.min(threshold, secondBestScore) * count - 1e-9;
+		for (let i = count - 1; i >= 0; i--) {
+			boundsAfter[i] = boundsAfter[i + 1] + similarityBound(targetNormalized[i], keyAt(i));
 		}
-		score = score / targetLines.length;
+		let score = 0;
+		let i = 0;
+		for (; i < count; i++) {
+			score += similarity(targetNormalized[i], keyAt(i));
+			if (score + boundsAfter[i + 1] < floor) break;
+		}
+		if (i < count) continue;
+		score = score / count;
 
 		if (score >= threshold) {
 			aboveThresholdCount++;
@@ -402,8 +474,9 @@ function findBestFuzzyMatchCore(
 		if (score > bestScore) {
 			secondBestScore = bestScore;
 			bestScore = score;
+			const last = start + count - 1;
 			best = {
-				actualText: windowLines.join("\n"),
+				actualText: content.slice(offsets[start], offsets[last] + contentLines[last].length),
 				startIndex: offsets[start],
 				startLine: start + 1,
 				confidence: score,
@@ -416,7 +489,23 @@ function findBestFuzzyMatchCore(
 	return { best, aboveThresholdCount, secondBestScore };
 }
 
+/**
+ * The last fuzzy search. A streamed edit preview searches again after every argument chunk while its
+ * file and old text stay the same and only the new text grows, so the repeat is answered from here.
+ * One entry: it holds the last searched file's text until the next search replaces it. The result
+ * is shared with every caller that repeats the search, and no caller writes to it.
+ */
+let lastFuzzySearch: { content: string; target: string; threshold: number; result: BestFuzzyMatchResult } | undefined;
+
 function findBestFuzzyMatch(content: string, target: string, threshold: number): BestFuzzyMatchResult {
+	const last = lastFuzzySearch;
+	if (last && last.threshold === threshold && last.target === target && last.content === content) return last.result;
+	const result = searchBestFuzzyMatch(content, target, threshold);
+	lastFuzzySearch = { content, target, threshold, result };
+	return result;
+}
+
+function searchBestFuzzyMatch(content: string, target: string, threshold: number): BestFuzzyMatchResult {
 	const contentLines = content.split("\n");
 	const targetLines = target.split("\n");
 
@@ -428,11 +517,20 @@ function findBestFuzzyMatch(content: string, target: string, threshold: number):
 	}
 
 	const offsets = computeLineOffsets(contentLines);
-	let result = findBestFuzzyMatchCore(contentLines, targetLines, offsets, threshold, true);
+	const fuzzyLines = toFuzzyLines(contentLines);
+	let result = findBestFuzzyMatchCore(content, contentLines, fuzzyLines, targetLines, offsets, threshold, true);
 
 	// Retry without indent depth if match is close but below threshold
 	if (result.best && result.best.confidence < threshold && result.best.confidence >= FALLBACK_THRESHOLD) {
-		const noDepthResult = findBestFuzzyMatchCore(contentLines, targetLines, offsets, threshold, false);
+		const noDepthResult = findBestFuzzyMatchCore(
+			content,
+			contentLines,
+			fuzzyLines,
+			targetLines,
+			offsets,
+			threshold,
+			false,
+		);
 		if (noDepthResult.best && noDepthResult.best.confidence > result.best.confidence) {
 			result = noDepthResult;
 		}

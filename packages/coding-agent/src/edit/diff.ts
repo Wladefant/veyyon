@@ -11,7 +11,7 @@ import { resolveToCwd } from "../tools/core/path-utils";
 import { type BlockContextSource, exceedsBlockContextScanCeiling, findBlockContextLines } from "../utils/block-context";
 import { parseUnifiedHunkHeader } from "../utils/unified-hunk-header";
 import { EOF_MARKER, FILE_OP_MARKERS, PATCH_WRAPPER_MARKERS } from "./apply-patch/markers";
-import { DEFAULT_FUZZY_THRESHOLD, EditMatchError, findMatch } from "./match";
+import { DEFAULT_FUZZY_THRESHOLD, EditMatchError, findMatch, type MatchOutcome } from "./match";
 import { adjustIndentation, normalizeToLF, stripBom } from "./normalize";
 import { formatNumberedDiffLine, parseNumberedDiffRow } from "./numbered-diff-row";
 import { readPreviewText } from "./preview-text-cache";
@@ -363,6 +363,11 @@ export interface ReplaceResult {
 	content: string;
 	/** Number of replacements made */
 	count: number;
+	/**
+	 * The match search that found nothing to replace, set exactly when `count` is 0. Its closest
+	 * candidate feeds the error, so the caller does not run the fuzzy search a second time.
+	 */
+	unmatched?: MatchOutcome;
 }
 
 /**
@@ -841,8 +846,9 @@ export function replaceText(content: string, oldText: string, newText: string, o
 		}
 
 		// No exact matches - try fuzzy matching iteratively
+		let matchOutcome: MatchOutcome;
 		while (true) {
-			const matchOutcome = findMatch(normalizedContent, normalizedOldText, {
+			matchOutcome = findMatch(normalizedContent, normalizedOldText, {
 				allowFuzzy: options.fuzzy,
 				threshold,
 			});
@@ -868,7 +874,9 @@ export function replaceText(content: string, oldText: string, newText: string, o
 			count++;
 		}
 
-		return { content: normalizedContent, count };
+		return count === 0
+			? { content: normalizedContent, count, unmatched: matchOutcome }
+			: { content: normalizedContent, count };
 	}
 
 	// Single replacement mode
@@ -882,7 +890,7 @@ export function replaceText(content: string, oldText: string, newText: string, o
 	}
 
 	if (!matchOutcome.match) {
-		return { content: normalizedContent, count: 0 };
+		return { content: normalizedContent, count: 0, unmatched: matchOutcome };
 	}
 
 	const match = matchOutcome.match;
@@ -940,12 +948,8 @@ export async function computeEditDiff(
 			threshold,
 		});
 
-		if (result.count === 0) {
-			// Get closest match for error message
-			const matchOutcome = findMatch(normalizedContent, normalizedOldText, {
-				allowFuzzy: fuzzy,
-				threshold: threshold ?? DEFAULT_FUZZY_THRESHOLD,
-			});
+		if (result.unmatched) {
+			const matchOutcome = result.unmatched;
 
 			if (matchOutcome.occurrences && matchOutcome.occurrences > 1) {
 				return {
