@@ -4,6 +4,7 @@ import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as crypto from "node:crypto";
 // THE OTHER DOOR, closed on purpose rather than by luck. This script SPAWNS every `bun
 // test` chunk itself, so running it on the host runs the whole suite on the host. The gate
 // exits the process when isolation is not proven, once, here, instead of the per-chunk
@@ -44,10 +45,24 @@ type Mode =
 
 type CodingAgentBucket = "singleton" | "ui" | "runtime" | "native";
 
-interface TestCommand {
+export interface TestCommand {
 	label: string;
 	cwd: string;
 	command: string[];
+}
+
+export interface ShardConfig {
+	index: number;
+	count: number;
+}
+
+export interface BunTestSummary {
+	pass: number;
+	fail: number;
+	skip: number;
+	todo: number;
+	total: number;
+	files: number;
 }
 
 type CodingAgentTestPartition = Record<CodingAgentBucket, string[]>;
@@ -321,7 +336,6 @@ export const repoScriptTests = [
 	"scripts/a-package-module-loads-through-one-build.test.ts",
 	"scripts/arktype-values-load-through-the-deferred-module.test.ts",
 	"scripts/a-package-is-added-only-when-an-existing-one-cannot-serve.test.ts",
-	"scripts/a-package-module-loads-through-one-build.test.ts",
 	"scripts/a-shipped-module-arrives-with-a-test-that-names-it.test.ts",
 	"scripts/a-suite-is-named-for-the-behavior-it-defends.test.ts",
 	"scripts/a-test-proves-behavior-not-that-a-spy-was-called.test.ts",
@@ -515,6 +529,7 @@ export const repoScriptTests = [
 	// No source file the build reads is ignored, and no unanchored pattern names
 	// a directory that holds source.
 	"scripts/every-source-file-the-build-reads-is-in-the-repository.test.ts",
+	"scripts/cf-runtime-sharding.test.ts",
 ];
 
 /**
@@ -711,21 +726,48 @@ function rustTestCommand(): TestCommand {
 	};
 }
 
-async function collectTestsUnder(root: string, baseDir: string): Promise<string[]> {
-	const entries = await fs.readdir(root, { withFileTypes: true });
+const BUN_TEST_FILE_RE = /(?:\.test|\.spec|_test|_spec)\.(?:[jt]sx?|[mc][jt]s)$/i;
+
+export function isBunTestFile(filename: string): boolean {
+	if (filename.endsWith(".d.ts")) return false;
+	return BUN_TEST_FILE_RE.test(filename);
+}
+
+const SKIP_SCAN_DIRS: Record<string, true> = {
+	node_modules: true,
+	".git": true,
+	dist: true,
+	target: true,
+	".next": true,
+	".cf-proof-tools": true,
+	".cache": true,
+	coverage: true,
+};
+
+export async function collectTestFiles(dir: string, baseDir: string = dir): Promise<string[]> {
+	let entries: nodeFs.Dirent[];
+	try {
+		entries = await fs.readdir(dir, { withFileTypes: true });
+	} catch {
+		return [];
+	}
 	const files: string[] = [];
 	for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-		const filePath = path.join(root, entry.name);
 		if (entry.isDirectory()) {
-			files.push(...(await collectTestsUnder(filePath, baseDir)));
-			continue;
+			if (SKIP_SCAN_DIRS[entry.name]) continue;
+			const subFiles = await collectTestFiles(path.join(dir, entry.name), baseDir);
+			files.push(...subFiles);
+		} else if (entry.isFile() && isBunTestFile(entry.name)) {
+			const rel = path.relative(baseDir, path.join(dir, entry.name)).split(path.sep).join("/");
+			files.push(rel.startsWith("./") ? rel : `./${rel}`);
 		}
-		if (!entry.isFile() || !entry.name.endsWith(".test.ts")) {
-			continue;
-		}
-		files.push(path.relative(baseDir, filePath).split(path.sep).join("/"));
 	}
 	return files;
+}
+
+async function collectTestsUnder(root: string, baseDir: string): Promise<string[]> {
+	const files = await collectTestFiles(root, baseDir);
+	return files.map(f => (f.startsWith("./") ? f.slice(2) : f));
 }
 
 function hasAnyMarker(content: string, markers: string[]): boolean {
@@ -806,14 +848,175 @@ async function codingAgentTestCommands(bucket: CodingAgentBucket): Promise<TestC
 	const commands: TestCommand[] = [];
 	for (let i = 0; i < testFiles.length; i += chunkSize) {
 		const chunk = testFiles.slice(i, i + chunkSize);
+		const chunkWithDotSlash = chunk.map(f => (f.startsWith("./") ? f : `./${f}`));
 		const chunkLabel = chunkCount > 1 ? ` chunk ${commands.length + 1}/${chunkCount}` : "";
 		commands.push({
 			label: `packages/coding-agent (${plan.label}; ${testFiles.length} files; parallel=${plan.parallel}${chunkLabel}; ${chunk.length} files)`,
 			cwd: "packages/coding-agent",
-			command: ["bun", "test", ...preloadArgs, `--parallel=${plan.parallel}`, ...onlyFailuresArgs, ...chunk],
+			command: ["bun", "test", ...preloadArgs, `--parallel=${plan.parallel}`, ...onlyFailuresArgs, ...chunkWithDotSlash],
 		});
 	}
 	return commands;
+}
+
+export function validateShardBounds(index: number, count: number): void {
+	if (!Number.isInteger(count) || count < 1) {
+		throw new Error(`Invalid CF_SHARD_COUNT: ${count}. Expected an integer >= 1.`);
+	}
+	if (!Number.isInteger(index) || index < 0 || index >= count) {
+		throw new Error(
+			`Invalid CF_SHARD_INDEX: ${index}. Expected a zero-based integer in range [0, ${count - 1}].`,
+		);
+	}
+}
+
+export function parseShardConfig(
+	env: Record<string, string | undefined> = Bun.env,
+): ShardConfig | null {
+	const rawIndex = env.CF_SHARD_INDEX?.trim();
+	const rawCount = env.CF_SHARD_COUNT?.trim();
+
+	if (rawIndex === undefined && rawCount === undefined) {
+		return null;
+	}
+	if (rawIndex === undefined || rawCount === undefined) {
+		throw new Error(
+			`Incomplete shard configuration: both CF_SHARD_INDEX and CF_SHARD_COUNT must be set if either is defined (received CF_SHARD_INDEX=${rawIndex}, CF_SHARD_COUNT=${rawCount}).`,
+		);
+	}
+
+	const index = Number(rawIndex);
+	const count = Number(rawCount);
+
+	if (!Number.isFinite(index) || !Number.isInteger(index)) {
+		throw new Error(`Invalid CF_SHARD_INDEX: "${rawIndex}". Expected an integer.`);
+	}
+	if (!Number.isFinite(count) || !Number.isInteger(count)) {
+		throw new Error(`Invalid CF_SHARD_COUNT: "${rawCount}". Expected an integer.`);
+	}
+
+	validateShardBounds(index, count);
+	return { index, count };
+}
+
+export function shardTestCommands<T>(
+	items: readonly T[],
+	shardIndex: number,
+	shardCount: number,
+): T[] {
+	validateShardBounds(shardIndex, shardCount);
+	const sharded: T[] = [];
+	for (let i = 0; i < items.length; i++) {
+		if (i % shardCount === shardIndex) {
+			sharded.push(items[i]);
+		}
+	}
+	return sharded;
+}
+
+export function calculateDiscoveryHash(files: readonly string[]): string {
+	const sorted = [...files].sort();
+	return crypto.createHash("sha256").update(sorted.join("\n")).digest("hex").slice(0, 16);
+}
+
+export async function expandWorkspaceCommand(baseCommand: TestCommand, chunkSize = 10): Promise<TestCommand[]> {
+	const pkgDir = path.join(repoRoot, baseCommand.cwd);
+	const testFiles = await collectTestFiles(pkgDir, pkgDir);
+	if (testFiles.length === 0) {
+		return [baseCommand];
+	}
+	const chunkCount = Math.ceil(testFiles.length / chunkSize);
+	const commands: TestCommand[] = [];
+	for (let i = 0; i < testFiles.length; i += chunkSize) {
+		const chunk = testFiles.slice(i, i + chunkSize);
+		const chunkLabel = chunkCount > 1 ? ` (chunk ${commands.length + 1}/${chunkCount}; ${chunk.length} files)` : ` (${testFiles.length} files)`;
+		commands.push({
+			label: `${baseCommand.label}${chunkLabel}`,
+			cwd: baseCommand.cwd,
+			command: [...baseCommand.command, ...chunk],
+		});
+	}
+	return commands;
+}
+
+export function expandScriptCommand(baseCommand: TestCommand, chunkSize = 10): TestCommand[] {
+	const files = [...new Set(repoScriptTests)].map(f => (f.startsWith("./") ? f : `./${f}`)).sort();
+	const chunkCount = Math.ceil(files.length / chunkSize);
+	const baseArgs = baseCommand.command.filter(arg => !repoScriptTests.includes(arg) && !files.includes(arg));
+	const commands: TestCommand[] = [];
+	for (let i = 0; i < files.length; i += chunkSize) {
+		const chunk = files.slice(i, i + chunkSize);
+		const chunkLabel = chunkCount > 1 ? ` (chunk ${commands.length + 1}/${chunkCount}; ${chunk.length} files)` : ` (${files.length} files)`;
+		commands.push({
+			label: `scripts${chunkLabel}`,
+			cwd: baseCommand.cwd,
+			command: [...baseArgs, ...chunk],
+		});
+	}
+	return commands;
+}
+
+export async function expandTestCommands(commands: readonly TestCommand[]): Promise<TestCommand[]> {
+	const expanded: TestCommand[] = [];
+	for (const cmd of commands) {
+		if (cmd.cwd === "." && (cmd.label === "scripts" || cmd.label.startsWith("scripts"))) {
+			expanded.push(...expandScriptCommand(cmd));
+		} else if (cmd.cwd === "packages/coding-agent") {
+			expanded.push(cmd);
+		} else {
+			const hasExplicitTestFiles = cmd.command.some(arg => isBunTestFile(path.basename(arg)));
+			if (hasExplicitTestFiles) {
+				expanded.push(cmd);
+			} else {
+				expanded.push(...(await expandWorkspaceCommand(cmd)));
+			}
+		}
+	}
+	return expanded;
+}
+
+export function extractCommandTestFiles(cmd: TestCommand): string[] {
+	const directFiles = cmd.command.filter(arg => isBunTestFile(path.basename(arg)));
+	const files = directFiles.length > 0 ? directFiles : chunkTestFiles(cmd.command.map(shellQuote).join(" "));
+	return files.map(file => {
+		const clean = file.startsWith("./") ? file.slice(2) : file;
+		return cmd.cwd === "." ? clean : `${cmd.cwd}/${clean}`;
+	});
+}
+
+export function applySharding(
+	commands: readonly TestCommand[],
+	config: ShardConfig,
+): TestCommand[] {
+	validateShardBounds(config.index, config.count);
+	if (commands.length === 0) {
+		throw new Error("Cannot shard empty test commands inventory.");
+	}
+
+	const allFiles = commands.flatMap(cmd => extractCommandTestFiles(cmd));
+	const discoveryHash = calculateDiscoveryHash(allFiles);
+
+	const sharded = shardTestCommands(commands, config.index, config.count);
+	if (sharded.length === 0) {
+		throw new Error(
+			`Empty shard ${config.index}/${config.count} assigned (0 chunks). Full inventory of ${commands.length} chunks requires non-empty shards.`,
+		);
+	}
+
+	console.log(
+		`CLOUDFLARE_SHARD_DISCOVERY hash=${discoveryHash} total_files=${allFiles.length} total_chunks=${commands.length} shard=${config.index}/${config.count} assigned_chunks=${sharded.length}`,
+	);
+
+	console.log(`\n--- Selected Shard Chunks (${sharded.length} chunks) ---`);
+	for (const cmd of sharded) {
+		const files = extractCommandTestFiles(cmd);
+		console.log(`  - ${cmd.label} [cwd: ${cmd.cwd}] (${files.length} files)`);
+		for (const f of files) {
+			console.log(`      ${f}`);
+		}
+	}
+
+	return sharded;
 }
 
 async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
@@ -845,13 +1048,20 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 		// `all` has to mean all. It previously reached the 15 script tests only as a
 		// side effect of `workspace` carrying them, so pulling that copy out would have
 		// quietly emptied scripts from `all` as well. It names the bucket directly now.
-		case "all":
-			return [
+		case "all": {
+			const baseCommands = [
 				...(await commandsForMode("workspace")),
 				...(await commandsForMode("native")),
 				...(await commandsForMode("coding-agent-heavy")),
 				...(await commandsForMode("scripts")),
 			];
+			const shardConfig = parseShardConfig(Bun.env);
+			if (!shardConfig) {
+				return baseCommands;
+			}
+			const expandedCommands = await expandTestCommands(baseCommands);
+			return applySharding(expandedCommands, shardConfig);
+		}
 		// `local-ts` is the full local TypeScript run that root `bun run test:ts`
 		// drives: every package the old `--workspaces` fan-out covered (the CI
 		// `all` set PLUS veybot-web, which CI omits) and every repo
@@ -910,31 +1120,120 @@ function isScrubbedEnvVar(key: string): boolean {
 	return /_(API_KEY|OAUTH_TOKEN)$/.test(key) || key.includes("BEARER_TOKEN");
 }
 
-async function runTestCommand(testCommand: TestCommand): Promise<void> {
+function drainInto(
+	stream: ReadableStream<Uint8Array>,
+	sink: { text: string },
+): { done: Promise<void>; cancel: () => void } {
+	const reader = stream.getReader();
+	const decoder = new TextDecoder();
+	let cancelled = false;
+	const done = (async () => {
+		try {
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done || cancelled) {
+					break;
+				}
+				sink.text += decoder.decode(value, { stream: true });
+			}
+		} catch {
+			// EPIPE or stream closed from the other end.
+		} finally {
+			reader.releaseLock();
+		}
+	})();
+	return {
+		done,
+		cancel() {
+			cancelled = true;
+			reader.cancel().catch(() => {});
+		},
+	};
+}
+
+async function settleWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+	const { promise: expired, resolve } = Promise.withResolvers<boolean>();
+	const timer = setTimeout(() => resolve(false), ms);
+	const settled = await Promise.race([
+		promise.then(() => true, () => true),
+		expired,
+	]);
+	clearTimeout(timer);
+	return settled;
+}
+
+async function runTestCommand(testCommand: TestCommand): Promise<ChunkOutcome> {
 	const cwd = path.join(repoRoot, testCommand.cwd);
 	const renderedCommand = testCommand.command.map(shellQuote).join(" ");
 	console.log(`\n==> ${testCommand.label}`);
 	console.log(`$ ${renderedCommand}`);
 
 	if (isDryRun) {
-		return;
+		return { label: testCommand.label, command: renderedCommand, exitCode: 0, seconds: 0, output: "" };
 	}
 
 	const env = buildChildEnv();
+	const startedAt = performance.now();
 	const proc = Bun.spawn(testCommand.command, {
 		cwd,
 		env,
-		stdout: "inherit",
-		stderr: "inherit",
+		stdout: "pipe",
+		stderr: "pipe",
 	});
-	const killTimer = setTimeout(() => proc.kill("SIGKILL"), chunkTimeoutMs());
+
+	const stdout = { text: "" };
+	const stderr = { text: "" };
+	const stdoutDrain = drainInto(proc.stdout as ReadableStream<Uint8Array>, stdout);
+	const stderrDrain = drainInto(proc.stderr as ReadableStream<Uint8Array>, stderr);
+	const drains = Promise.all([stdoutDrain.done, stderrDrain.done]);
+	let timedOut = false;
+	const killTimer = setTimeout(() => {
+		timedOut = true;
+		proc.kill("SIGKILL");
+	}, chunkTimeoutMs());
 	const exitCode = await proc.exited;
 	clearTimeout(killTimer);
-	if (exitCode !== 0) {
-		const files = chunkTestFiles(renderedCommand);
+	if (!(await settleWithin(drains, 5000))) {
+		stdoutDrain.cancel();
+		stderrDrain.cancel();
+		await drains;
+	}
+
+	const seconds = (performance.now() - startedAt) / 1000;
+	const fullOutput = `${stdout.text}${stderr.text}${timedOut ? `\n[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (VEYYON_TEST_CHUNK_TIMEOUT to change)\n` : ""}`;
+	const outcome: ChunkOutcome = {
+		label: testCommand.label,
+		command: renderedCommand,
+		exitCode,
+		seconds,
+		output: fullOutput,
+	};
+
+	const summary = extractBunSummary(fullOutput);
+	const files = extractCommandTestFiles(testCommand);
+
+	if (fullOutput.trim()) {
+		process.stdout.write(`${fullOutput}\n`);
+	}
+
+	process.stdout.write(
+		`CLOUDFLARE_CHUNK_SUMMARY files=${files.length} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo}\n`,
+	);
+
+	for (const file of files) {
+		if (file.includes("quota-refusals-belong-to-the-failed-request.test.ts")) {
+			process.stdout.write(
+				`CLOUDFLARE_FILE_SUMMARY file=${file} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo}\n`,
+			);
+		}
+	}
+
+	if (exitCode !== 0 || timedOut) {
 		const composition = files.length > 1 ? `\n${files.length} files in this chunk:\n  ${files.join("\n  ")}` : "";
 		throw new Error(`${testCommand.label} failed with exit code ${exitCode}: ${renderedCommand}${composition}`);
 	}
+
+	return outcome;
 }
 
 // Child env shared by every spawned test process: the parent env with all CI
@@ -1139,8 +1438,41 @@ export function extractFailingTests(output: string): FailingTest[] {
 export function chunkTestFiles(command: string): string[] {
 	// Two alternatives because `shellQuote` wraps a path holding a shell character:
 	// quoted paths may contain spaces, bare ones may not.
-	const pattern = /(?:^|\s)(?:'([^']+\.test\.tsx?)'|([\w./@-]+\.test\.tsx?))(?=\s|$)/g;
+	const pattern = /(?:^|\s)(?:'([^']+(?:\.test|\.spec|_test|_spec)\.[cm]?[jt]sx?)'|([\w./@-]+(?:\.test|\.spec|_test|_spec)\.[cm]?[jt]sx?))(?=\s|$)/gi;
 	return [...command.matchAll(pattern)].map(match => match[1] ?? match[2]);
+}
+
+export function extractBunSummary(output: string): BunTestSummary {
+	const clean = output.replace(/\x1b\[[0-9;]*m/g, "");
+
+	let pass = 0;
+	let fail = 0;
+	let skip = 0;
+	let todo = 0;
+	let total = 0;
+	let files = 0;
+
+	const passMatch = /^\s*(\d+)\s+pass/m.exec(clean);
+	if (passMatch) pass = parseInt(passMatch[1], 10);
+
+	const failMatch = /^\s*(\d+)\s+fail/m.exec(clean);
+	if (failMatch) fail = parseInt(failMatch[1], 10);
+
+	const skipMatch = /^\s*(\d+)\s+skip/m.exec(clean);
+	if (skipMatch) skip = parseInt(skipMatch[1], 10);
+
+	const todoMatch = /^\s*(\d+)\s+todo/m.exec(clean);
+	if (todoMatch) todo = parseInt(todoMatch[1], 10);
+
+	const ranMatch = /Ran\s+(\d+)\s+tests?\s+across\s+(\d+)\s+files?/m.exec(clean);
+	if (ranMatch) {
+		total = parseInt(ranMatch[1], 10);
+		files = parseInt(ranMatch[2], 10);
+	} else {
+		total = pass + fail + skip + todo;
+	}
+
+	return { pass, fail, skip, todo, total, files };
 }
 
 export function formatChunkFailure(failure: ChunkOutcome, replayOutput: boolean): string {
@@ -1196,6 +1528,7 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 	const env = buildChildEnv();
 	const queue = [...commands];
 	const failures: ChunkOutcome[] = [];
+	const outcomes: ChunkOutcome[] = [];
 	let completed = 0;
 	console.log(
 		`Running ${commands.length} test command(s), up to ${concurrency} in parallel ` +
@@ -1203,44 +1536,6 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 	);
 
 	// Incremental, cancellable drain into a mutable sink, so a watchdog-killed
-	// chunk still reports whatever the child managed to print before it wedged.
-	function drainInto(
-		stream: ReadableStream<Uint8Array>,
-		sink: { text: string },
-	): { done: Promise<void>; cancel: () => void } {
-		const decoder = new TextDecoder();
-		const reader = stream.getReader();
-		const done = (async () => {
-			try {
-				for (;;) {
-					const { done: ended, value } = await reader.read();
-					if (ended) break;
-					sink.text += decoder.decode(value, { stream: true });
-				}
-			} catch {
-				// cancelled or broken pipe — keep what was captured
-			}
-			sink.text += decoder.decode();
-		})();
-		return { done, cancel: () => void reader.cancel().catch(() => {}) };
-	}
-
-	// Wait for `promise` at most `ms`; resolves `true` when it settled in time.
-	// Never rejects.
-	async function settleWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
-		const { promise: expired, resolve } = Promise.withResolvers<boolean>();
-		const timer = setTimeout(() => resolve(false), ms);
-		const settled = await Promise.race([
-			promise.then(
-				() => true,
-				() => true,
-			),
-			expired,
-		]);
-		clearTimeout(timer);
-		return settled;
-	}
-
 	async function worker(): Promise<void> {
 		for (;;) {
 			const testCommand = queue.shift();
@@ -1285,8 +1580,18 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 				seconds: (performance.now() - startedAt) / 1000,
 				output: `${stdout.text}${stderr.text}${timedOut ? `\n[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (VEYYON_TEST_CHUNK_TIMEOUT to change)\n` : ""}`,
 			};
+			outcomes.push(outcome);
+			const summary = extractBunSummary(outcome.output);
+			const files = extractCommandTestFiles(testCommand);
+			const chunkSummaryLine = `CLOUDFLARE_CHUNK_SUMMARY files=${files.length} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo}\n`;
+			let fileSummaryLines = "";
+			for (const file of files) {
+				if (file.includes("quota-refusals-belong-to-the-failed-request.test.ts")) {
+					fileSummaryLines += `CLOUDFLARE_FILE_SUMMARY file=${file} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo}\n`;
+				}
+			}
 			if (quiet) {
-				let msg = `${formatProgressLine(outcome)}\n`;
+				let msg = `${formatProgressLine(outcome)}\n${chunkSummaryLine}${fileSummaryLines}`;
 				if (exitCode !== 0 || timedOut) {
 					msg += `${formatChunkFailure(outcome, true)}\n`;
 				}
@@ -1294,7 +1599,7 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 			} else {
 				const status = exitCode === 0 ? "ok" : `FAILED exit ${exitCode}`;
 				process.stdout.write(
-					`\n==> [${completed}/${commands.length}] ${testCommand.label} (${status}, ${outcome.seconds.toFixed(1)}s)\n$ ${renderedCommand}\n${outcome.output}`,
+					`\n==> [${completed}/${commands.length}] ${testCommand.label} (${status}, ${outcome.seconds.toFixed(1)}s)\n$ ${renderedCommand}\n${outcome.output}\n${chunkSummaryLine}${fileSummaryLines}`,
 				);
 			}
 			if (exitCode !== 0 || timedOut) {
@@ -1305,6 +1610,23 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 
 	const runStartedAt = performance.now();
 	await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+	let totalPass = 0;
+	let totalFail = 0;
+	let totalSkip = 0;
+	let totalTodo = 0;
+	let totalTests = 0;
+	for (const outcome of outcomes) {
+		const s = extractBunSummary(outcome.output);
+		totalPass += s.pass;
+		totalFail += s.fail;
+		totalSkip += s.skip;
+		totalTodo += s.todo;
+		totalTests += s.total;
+	}
+	process.stdout.write(
+		`\nCLOUDFLARE_TEST_TOTALS pass=${totalPass} fail=${totalFail} skip=${totalSkip} todo=${totalTodo} total=${totalTests} chunks=${commands.length}\n`,
+	);
 
 	if (quiet) {
 		const totalSeconds = (performance.now() - runStartedAt) / 1000;
@@ -1577,9 +1899,23 @@ if (import.meta.main) {
 		if (!isDryRun && !isCI() && testCommands.length > 1) {
 			await runTestCommandsInParallel(testCommands, testConcurrency(testCommands.length));
 		} else {
+			let totalPass = 0;
+			let totalFail = 0;
+			let totalSkip = 0;
+			let totalTodo = 0;
+			let totalTests = 0;
 			for (const testCommand of testCommands) {
-				await runTestCommand(testCommand);
+				const outcome = await runTestCommand(testCommand);
+				const s = extractBunSummary(outcome.output);
+				totalPass += s.pass;
+				totalFail += s.fail;
+				totalSkip += s.skip;
+				totalTodo += s.todo;
+				totalTests += s.total;
 			}
+			process.stdout.write(
+				`\nCLOUDFLARE_TEST_TOTALS pass=${totalPass} fail=${totalFail} skip=${totalSkip} todo=${totalTodo} total=${totalTests} chunks=${testCommands.length}\n`,
+			);
 		}
 	} finally {
 		// In `finally` on purpose: a failing or interrupted run is exactly when a
