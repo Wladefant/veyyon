@@ -7,16 +7,20 @@
  * that keeps appending to a moved file past the point it is compressed, or a compression that
  * publishes before the copy finishes each loses lines in silence: nothing reads the log until
  * something has gone wrong. Two writers that claim the same full file under two generation numbers
- * keep every line of it twice. The multi-process test drives real concurrent writers on the real
- * clock, because the compression bound ({@link SETTLED_MS}) is a statement about wall time.
+ * keep every line of it twice, and a writer that checks the live name and then unlinks it deletes a
+ * fresh live file another writer started between the two calls. The multi-process test drives real
+ * concurrent writers on the real clock, because the compression bound ({@link SETTLED_MS}) is a
+ * statement about wall time; it reached the release race on a loaded CI runner and lost a writer's
+ * last 840 lines.
  *
  * The single-process tests pass a synthetic `now` to reach each maintenance branch (rotation,
  * day change, retention, compression age, stale files, a moved or removed file, a failing
  * destination) without sleeping.
  *
- * NOT COVERED: a destination on a filesystem without hard links (`link` claims a generation), and
- * a crash between claiming a generation and unlinking the live name, which leaves the live name
- * and the generation sharing one inode until the next rotation.
+ * NOT COVERED: a destination on a filesystem without hard links (`link` claims a generation), a
+ * crash between claiming a generation and unlinking the live name, which leaves the live name and
+ * the generation sharing one inode until the next rotation, and a crash between moving another
+ * writer's live file aside and putting it back, whose lines are deleted with the abandoned name.
  */
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
@@ -136,6 +140,39 @@ function withWriterAfterClaim(interleave: () => void, write: () => void): void {
 		write();
 	} finally {
 		spy.mockRestore();
+	}
+}
+
+/**
+ * Runs `write` with `before` executed right before the writer first removes or moves the live file
+ * `target`, and `after` right after that call: another writer acting while this one releases the live
+ * name it already claimed as a generation.
+ */
+function aroundRelease(target: string, before: () => void, after: () => void, write: () => void): void {
+	const realUnlink = fs.unlinkSync;
+	const realRename = fs.renameSync;
+	const restore = () => {
+		unlinkSpy.mockRestore();
+		renameSpy.mockRestore();
+	};
+	const unlinkSpy = spyOn(fs, "unlinkSync").mockImplementation(((file: fs.PathLike) => {
+		if (file !== target) return realUnlink(file);
+		restore();
+		before();
+		realUnlink(file);
+		after();
+	}) as typeof fs.unlinkSync);
+	const renameSpy = spyOn(fs, "renameSync").mockImplementation(((from: fs.PathLike, to: fs.PathLike) => {
+		if (from !== target) return realRename(from, to);
+		restore();
+		before();
+		realRename(from, to);
+		after();
+	}) as typeof fs.renameSync);
+	try {
+		write();
+	} finally {
+		restore();
 	}
 }
 
@@ -375,6 +412,62 @@ describe("rotation", () => {
 			[live]: [JSON.stringify({ second: 1 }), JSON.stringify({ first: 1 })],
 		});
 	});
+
+	it("keeps a fresh live file another writer starts just before this writer releases the live name", async () => {
+		const dir = tempDir();
+		const log = new RotatingLogFile(dir, { maxBytes: 64, keep: 100, onError: noErrors() });
+		const start = Date.now();
+		const live = path.join(dir, logFileName(new Date(start)));
+		log.write(`${FULL_LINE}\n`, new Date(start));
+		// The other writer claimed the same full file first and released the live name, and a third
+		// started a fresh live file, after this writer last looked at the name and before it releases it.
+		aroundRelease(
+			live,
+			() => {
+				fs.unlinkSync(live);
+				fs.writeFileSync(live, `${OTHER_LINE}\n`);
+			},
+			() => {},
+			() => log.write(`${JSON.stringify({ i: 1 })}\n`, new Date(start + CHECK_INTERVAL_MS)),
+		);
+		log.close();
+		await settled(dir);
+
+		expect(Object.fromEntries(readLogFiles(dir))).toEqual({
+			[`${path.basename(live)}.1`]: [FULL_LINE],
+			[path.basename(live)]: [OTHER_LINE, JSON.stringify({ i: 1 })],
+		});
+		expect(fs.readdirSync(dir).filter(name => !LOG_NAME.test(name))).toEqual([]);
+	});
+
+	it("keeps another writer's live file as a generation when a newer one takes the name during the release", async () => {
+		const dir = tempDir();
+		const log = new RotatingLogFile(dir, { maxBytes: 64, keep: 100, onError: noErrors() });
+		const start = Date.now();
+		const live = path.join(dir, logFileName(new Date(start)));
+		const newer = JSON.stringify({ newer: true });
+		log.write(`${FULL_LINE}\n`, new Date(start));
+		aroundRelease(
+			live,
+			() => {
+				fs.unlinkSync(live);
+				fs.writeFileSync(live, `${OTHER_LINE}\n`);
+			},
+			// A fourth writer finds no live file while the name is released and starts one.
+			() => fs.writeFileSync(live, `${newer}\n`, { flag: "a" }),
+			() => log.write(`${JSON.stringify({ i: 1 })}\n`, new Date(start + CHECK_INTERVAL_MS)),
+		);
+		log.close();
+		await settled(dir);
+
+		const files = Object.fromEntries(readLogFiles(dir));
+		expect(files).toEqual({
+			[`${path.basename(live)}.1`]: [FULL_LINE],
+			[`${path.basename(live)}.2`]: [OTHER_LINE],
+			[path.basename(live)]: [newer, JSON.stringify({ i: 1 })],
+		});
+		expect(fs.readdirSync(dir).filter(name => !LOG_NAME.test(name))).toEqual([]);
+	});
 });
 
 describe("the day's file", () => {
@@ -544,6 +637,22 @@ describe("leftovers in the directory", () => {
 		log.close();
 		expect(fs.existsSync(abandoned)).toBe(false);
 		expect(fs.existsSync(inFlight)).toBe(true);
+	});
+
+	it("deletes a release name a dead process abandoned, and keeps one still in use", () => {
+		const dir = tempDir();
+		const now = new Date();
+		const abandoned = path.join(dir, `.${logFileName(now)}.4242.1.release`);
+		const inUse = path.join(dir, `.${logFileName(now)}.4243.1.release`);
+		fs.writeFileSync(abandoned, "a line\n");
+		fs.writeFileSync(inUse, "a line\n");
+		const old = new Date(now.getTime() - 61_000);
+		fs.utimesSync(abandoned, old, old);
+		const log = new RotatingLogFile(dir, { onError: noErrors() });
+		log.write("line\n", now);
+		log.close();
+		expect(fs.existsSync(abandoned)).toBe(false);
+		expect(fs.existsSync(inUse)).toBe(true);
 	});
 
 	it("skips a generation another writer deletes while the directory is scanned", () => {

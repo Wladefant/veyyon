@@ -65,6 +65,16 @@ const COMPRESS_TEMPORARY = new RegExp(
 /** Age at which a compression temporary belongs to a process that exited mid-copy. */
 const ABANDONED_TEMPORARY_MS = 60_000;
 
+/**
+ * The private name a rotation moves the live name to before it checks which file that name held
+ * (`.<file>.<pid>.<counter>.release`). Removed by the same rotation; one a process left by exiting
+ * between the move and the removal is deleted after {@link ABANDONED_TEMPORARY_MS}.
+ */
+const RELEASE_ASIDE = new RegExp(`^\\.${APP_DIRECTORY_SLUG}\\.\\d{4}-\\d{2}-\\d{2}\\.log\\.\\d+\\.\\d+\\.release$`);
+
+/** Makes each {@link RELEASE_ASIDE} name of this process unique. */
+let releaseCounter = 0;
+
 /** Attempts to claim a generation number before a rotation is abandoned to the next check. */
 const MAX_ROTATE_ATTEMPTS = 8;
 
@@ -107,8 +117,8 @@ function statUnlessMissing(file: string): fs.Stats | undefined {
 
 /**
  * Log files in `dir` other than `live`, unsorted. Deletes on the way the audit files an earlier writer
- * left and the compression temporaries abandoned for {@link ABANDONED_TEMPORARY_MS}. A file another
- * writer removes during the scan is left out.
+ * left, and the compression temporaries and release names abandoned for {@link ABANDONED_TEMPORARY_MS}.
+ * A file another writer removes during the scan is left out.
  */
 function scanGenerations(dir: string, live: string, ms: number): LogGeneration[] {
 	// One normalization for the whole listing: `path.join` per entry costs about 150 ns, and these
@@ -122,7 +132,7 @@ function scanGenerations(dir: string, live: string, ms: number): LogGeneration[]
 			continue;
 		}
 		const match = LOG_ENTRY.exec(name);
-		if (match === null && !COMPRESS_TEMPORARY.test(name)) continue;
+		if (match === null && !COMPRESS_TEMPORARY.test(name) && !RELEASE_ASIDE.test(name)) continue;
 		const stat = statUnlessMissing(prefix + name);
 		if (stat === undefined) continue;
 		if (match !== null) {
@@ -163,7 +173,7 @@ function claimedBelow(target: string, generation: number, ino: number): boolean 
  * `target` (inode `ino`). Undoes the claim when `moved` names another inode, because another writer
  * already moved `ino`. Drops the claim when a lower generation already names `ino`, because another
  * writer claimed the same file first and a second name would hold every line twice; the live name is
- * still released, as that writer releases it. Otherwise unlinks `target` while it still names `ino`.
+ * still released, as that writer releases it. Otherwise releases `target` while it still names `ino`.
  */
 function finishRotation(target: string, moved: string, generation: number, ino: number): void {
 	if (fs.statSync(moved).ino !== ino) {
@@ -171,10 +181,48 @@ function finishRotation(target: string, moved: string, generation: number, ino: 
 		return;
 	}
 	if (claimedBelow(target, generation, ino)) fs.unlinkSync(moved);
+	releaseLiveName(target, ino);
+}
+
+/**
+ * Removes the live name `target` when it names inode `ino`, which a generation already names.
+ *
+ * A stat of the name followed by an unlink of it deletes the fresh live file another writer starts
+ * between the two calls, with every line written to it until that writer next checks. `rename` is
+ * atomic, so the name is moved aside first and the file it held is read after the move: `ino` is
+ * unlinked, and another writer's live file goes back to the live name, or to the next free generation
+ * when a newer live file took the name meanwhile.
+ */
+function releaseLiveName(target: string, ino: number): void {
+	const aside = path.join(
+		path.dirname(target),
+		`.${path.basename(target)}.${process.pid}.${++releaseCounter}.release`,
+	);
 	try {
-		if (fs.statSync(target).ino === ino) fs.unlinkSync(target);
+		fs.renameSync(target, aside);
 	} catch (error) {
-		if (!isEnoent(error)) throw error;
+		if (isEnoent(error)) return;
+		throw error;
+	}
+	if (fs.statSync(aside).ino !== ino) keepLiveFile(target, aside);
+	fs.unlinkSync(aside);
+}
+
+/** Links `aside`, another writer's live file, back to the live name `target`, else to the next free generation. */
+function keepLiveFile(target: string, aside: string): void {
+	try {
+		fs.linkSync(aside, target);
+		return;
+	} catch (error) {
+		if (!isEexist(error)) throw error;
+	}
+	for (let generation = highestGeneration(path.dirname(target), path.basename(target)) + 1; ; generation++) {
+		try {
+			fs.linkSync(aside, `${target}.${generation}`);
+			return;
+		} catch (error) {
+			if (!isEexist(error)) throw error;
+		}
 	}
 }
 
