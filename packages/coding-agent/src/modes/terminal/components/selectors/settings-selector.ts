@@ -1480,8 +1480,9 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	#settingsShortcuts(): readonly ModalShortcut[] {
+		// A submenu opened from a search result takes the keys, so its footer is the submenu's.
+		if ((this.#searchList ?? this.#currentList)?.hasOpenSubmenu()) return SETTINGS_SUBPANE_SHORTCUTS;
 		if (this.#searchList) return SETTINGS_FILTER_SHORTCUTS;
-		if (this.#currentList?.hasOpenSubmenu()) return SETTINGS_SUBPANE_SHORTCUTS;
 		if (this.#sidebarFocused) return SETTINGS_SIDEBAR_SHORTCUTS;
 		if (this.#pluginComponent) return this.#pluginComponent.shortcuts();
 		const selected = this.#currentList?.getSelectedItem();

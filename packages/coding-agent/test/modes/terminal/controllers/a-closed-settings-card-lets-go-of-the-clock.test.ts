@@ -233,7 +233,7 @@ describe("a closed settings card lets go of the clock", () => {
 		const { card } = await openSettings({ withModels: true });
 		drain(performance.now());
 
-		// Agents → Roster → the first helper's page → its model picker, each step asserted by what
+		// Agents → Roster → the last helper's page → its model picker, each step asserted by what
 		// the card paints: a navigation that silently landed somewhere else would test nothing at all.
 		clickCategory(card, "Agents");
 		expect(card.selectSetting("agent.agents")).toBe(true);
@@ -244,8 +244,10 @@ describe("a closed settings card lets go of the clock", () => {
 			expect(spin, "agent discovery landed").toBeLessThan(20_000);
 			await setImmediate();
 		}
+		// The helpers follow the subagents; Up from the first row wraps to the last helper.
+		card.handleInput("\x1b[A");
 		card.handleInput("\r");
-		expect(plain(card).some(line => line.includes("Helper: Advisor"))).toBe(true);
+		expect(plain(card).some(line => line.includes("Helper: Eval Completion"))).toBe(true);
 		card.handleInput("\r");
 		expect(plain(card).some(line => line.includes("alpha/two"))).toBe(true);
 
@@ -256,7 +258,7 @@ describe("a closed settings card lets go of the clock", () => {
 		// Escape here does not close the card: the submenu rebuilds its children back into the
 		// helper's page, and the panel it drops is the thing that has to give the clock back.
 		card.handleInput("\x1b");
-		expect(plain(card).some(line => line.includes("Helper: Advisor"))).toBe(true);
+		expect(plain(card).some(line => line.includes("Helper: Eval Completion"))).toBe(true);
 
 		const now = performance.now();
 		for (let frame = 1; frame <= 2; frame++) motionClock.tick(now + frame * FRAME);

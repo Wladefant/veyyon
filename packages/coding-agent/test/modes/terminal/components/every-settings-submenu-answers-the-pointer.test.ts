@@ -36,7 +36,6 @@ import {
 	type SettingPath,
 } from "@veyyon/coding-agent/config/settings-schema";
 import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
-import { HELPER_IDS } from "@veyyon/coding-agent/task/helper-settings";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
 
@@ -202,13 +201,15 @@ describe("settings submenus answer the pointer", () => {
 			component.openTab("agents");
 			expect(component.selectSetting("agent.agents")).toBe(true);
 			component.handleInput("\n");
-			await awaitRow(component, awaitRenderRequest, "Session Title");
+			await awaitRow(component, awaitRenderRequest, "designer");
+			// The helpers follow the subagents; Up from the first row wraps to the last helper,
+			// which scrolls the helpers into the window and leaves Speech as a row the band owns.
+			component.handleInput("\x1b[A");
 
-			// Row 0 (Advisor) is the selected one; hover another helper, which the band owns.
-			expectHoverBand(component, "Session Title");
+			expectHoverBand(component, "Speech");
 
-			component.handleInput(clickAt(rowIndex(component, "Advisor") + 1));
-			expect(frameText(component)).toContain("Helper: Advisor");
+			component.handleInput(clickAt(rowIndex(component, "Speech") + 1));
+			expect(frameText(component)).toContain("Helper: Speech");
 		},
 		{ timeout: 30_000 },
 	);
@@ -220,11 +221,9 @@ describe("settings submenus answer the pointer", () => {
 			component.openTab("agents");
 			expect(component.selectSetting("agent.agents")).toBe(true);
 			component.handleInput("\n");
-			await awaitRow(component, awaitRenderRequest, "Session Title");
-			// The Helpers section leads the roster; step past it so the list scrolls to the agents.
-			// The first agent is then selected, and the second is the row the band can own.
-			for (let i = 0; i < HELPER_IDS.length; i++) component.handleInput("\x1b[B");
-
+			await awaitRow(component, awaitRenderRequest, "designer");
+			// The subagents lead the roster: the first agent is selected, and the second is the row
+			// the band can own.
 			expectHoverBand(component, "designer");
 
 			component.handleInput(clickAt(rowIndex(component, "designer") + 1));

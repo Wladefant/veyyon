@@ -103,6 +103,8 @@ export abstract class MouseRoutedSubmenu extends Container {
 		title: string;
 		description?: string;
 		headerExtra?: Component;
+		/** Drawn directly above the body with no gap: a column heading for a list body. */
+		bodyLead?: Component;
 		body: Component;
 		footerHint?: string;
 		footerExtra?: Component;
@@ -118,6 +120,7 @@ export abstract class MouseRoutedSubmenu extends Container {
 			this.addChild(options.headerExtra);
 		}
 		this.addChild(new Spacer(1));
+		if (options.bodyLead) this.addChild(options.bodyLead);
 		this.addChild(options.body);
 		if (options.footerExtra) {
 			this.addChild(new Spacer(1));

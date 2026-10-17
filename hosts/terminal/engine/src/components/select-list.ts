@@ -137,6 +137,14 @@ export interface SelectListLayoutOptions {
 	 * once a query exists, where it shows that query.
 	 */
 	searchPrompt?: boolean;
+	/**
+	 * Keep runs of spaces inside a description. Defaults to false, which collapses every run to one
+	 * space.
+	 *
+	 * Set true when each description is a row of fixed-width columns padded with spaces, so the
+	 * columns line up under a heading the host draws. Tabs and line breaks still become spaces.
+	 */
+	tabularDescription?: boolean;
 }
 
 /** A row with a description column beside its label. */
@@ -331,7 +339,7 @@ export class SelectList implements Component, MouseRoutable {
 		let widestRow = 0;
 		let described = false;
 		for (const item of this.items) {
-			const description = item.description ? sanitizeSingleLine(item.description) : "";
+			const description = item.description ? this.#descriptionLine(item.description) : "";
 			if (description) {
 				described = true;
 				// `#computeItemLayout` drops a description it can give no more than MIN_DESCRIPTION_WIDTH cells.
@@ -773,7 +781,7 @@ export class SelectList implements Component, MouseRoutable {
 		const cursor = this.theme.symbols?.cursor ?? DEFAULT_CURSOR_SYMBOL;
 		const prefix = isSelected ? `${cursor} ` : padding(visibleWidth(cursor) + 1);
 		const prefixWidth = visibleWidth(prefix);
-		const descriptionSingleLine = item.description ? sanitizeSingleLine(item.description) : undefined;
+		const descriptionSingleLine = item.description ? this.#descriptionLine(item.description) : undefined;
 
 		if (descriptionSingleLine && width > DESCRIPTION_LAYOUT_MIN_WIDTH) {
 			const effectivePrimaryColumnWidth = clamp(primaryColumnWidth, 1, width - prefixWidth - 4);
@@ -808,6 +816,15 @@ export class SelectList implements Component, MouseRoutable {
 	}
 
 	/**
+	 * A description as one line: whitespace collapsed, or in a table only line breaks replaced, so
+	 * the padding between cells survives. A tab is measured and drawn at the tab width by the row.
+	 */
+	#descriptionLine(description: string): string {
+		if (!this.layout.tabularDescription) return sanitizeSingleLine(description);
+		return description.replace(/[\r\n]+/g, " ").trimEnd();
+	}
+
+	/**
 	 * The name column for a row of `width` cells. A column set wider than the default gives cells
 	 * back when the descriptions would not fit whole beside it, down to three fifths of the row and
 	 * never below the default width, so one long label does not squeeze the description off every
@@ -818,7 +835,7 @@ export class SelectList implements Component, MouseRoutable {
 		let widestDescription = 0;
 		for (const item of this.#filteredItems) {
 			if (!item.description) continue;
-			widestDescription = Math.max(widestDescription, visibleWidth(sanitizeSingleLine(item.description)));
+			widestDescription = Math.max(widestDescription, visibleWidth(this.#descriptionLine(item.description)));
 		}
 		if (widestDescription === 0) return primaryColumnWidth;
 		const cursor = this.theme.symbols?.cursor ?? DEFAULT_CURSOR_SYMBOL;

@@ -159,7 +159,7 @@ Configure the default model, agent policy, helper models, and compaction model s
 | --- | --- |
 | Choose the model you talk to | `--model` / `/model` (persisted as `defaultModel`) |
 | Run every agent on one model and effort | `agent.sharedModel`, then `agent.model` and `agent.thinkingLevel` |
-| Customize one agent | `agent.agents.<name>` or Settings → Agents → Agents |
+| Customize one agent | `agent.agents.<name>` or Settings → Agents → Roster |
 | Choose the model for context compaction | `compaction.model` |
 | Choose the model a feature runs (plan, advisor, titles, …) | `agent.helpers.<id>` or Settings → Agents → Roster → Helpers |
 | Add a local or BYOK provider | a `providers:` entry in `models.yml` (see [Models](../reference/models-yml.md)) |

@@ -277,8 +277,8 @@ describe("agent.agents settings surface", () => {
 			const { component, selectRow } = await openRoster();
 			selectRow("designer");
 			component.handleInput("\n");
-			const row = paneLines(component).find(line => labelOf(line) === "Agents");
-			if (row === undefined) throw new Error(`no Agents row:\n${paneLines(component).join("\n")}`);
+			const row = paneLines(component).find(line => labelOf(line) === "Can spawn");
+			if (row === undefined) throw new Error(`no Can spawn row:\n${paneLines(component).join("\n")}`);
 			return row;
 		};
 

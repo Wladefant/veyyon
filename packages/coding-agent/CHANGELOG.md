@@ -23,6 +23,7 @@
 
 ### Changed
 
+- Settings → Agents → Roster lists the subagents before the helpers, in aligned State, Model and Effort columns under a heading with `session` in an unset cell, drops its duplicate key hints, returns to the opening row on Esc, and the agent page labels its spawn row "Can spawn" ([#966](https://github.com/santhreal/veyyon/issues/966)).
 - A replace-mode edit whose old text is not in the file finds its closest candidate about 18 times faster (1.6 s to 90 ms on a 7,400-line file), and its streamed preview no longer repeats the search on every argument chunk, which held the terminal for seconds while a near-miss edit streamed.
 - The `browser` tool sends a run's displayed and returned objects to the model as one line of compact JSON instead of two-space indented JSON, which is 36–41% fewer characters for a `tab.observe()` of a real page; the card still lays them out indented.
 - A `browser` run no longer sends a return value that it already displayed, which was 20% of all run-result text in bench sessions.
@@ -98,6 +99,7 @@
 
 ### Fixed
 
+- A settings submenu opened from a search result shows "enter confirm · esc back" in the card footer instead of the search's "enter keep filter · esc clear search" ([#966](https://github.com/santhreal/veyyon/issues/966)).
 - A `tools.approvalMode` in a config file that is not one of its values reads as `ask` instead of the default `auto`, and every configured value that does not match its declared type is shown at startup with the file to edit.
 - A failing `!command` for a provider API key or header in `models.yml` names the setting it was resolving in its log report, as the other config values already did.
 - `ctrl+g` in a hook or ask-input editor whose `$VISUAL`/`$EDITOR` cannot start shows the failure under the text instead of ending the session, and with no editor configured shows that instead of doing nothing.

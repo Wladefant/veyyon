@@ -56,7 +56,7 @@ agent:
       model: anthropic/claude-opus-4-5:high
 ```
 
-In `/settings`, Agents → Roster lists the helpers above the subagents. Enter opens a helper's page, which edits its model and effort. Choosing the first row of a picker, or Del or Backspace with an empty search, returns the value to unset.
+In `/settings`, Agents → Roster lists the subagents, then the helpers, with the model and effort each one runs; a cell that reads `session` follows the session's model or effort. Enter opens a helper's page, which edits its model and effort, and Esc returns to the helper's row. Choosing the first row of a picker, or Del or Backspace with an empty search, returns the value to unset.
 
 A config from an earlier version that holds `modelRoles` is migrated on load. `modelRoles.default` becomes `defaultModel`. Each helper takes the first role that was set, in this order:
 
