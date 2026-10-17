@@ -579,20 +579,36 @@ async function fetchAntigravityUsage(params: UsageFetchParams, ctx: UsageFetchCo
 	const baseUrl = params.baseUrl === undefined ? undefined : trimTrailingSlashes(params.baseUrl);
 	const endpoints = baseUrl ? [baseUrl] : ANTIGRAVITY_ENDPOINTS.slice();
 
-	// The quota summary is the provider's own account of its quota: named groups,
-	// each with a 5-hour bucket and the weekly one above it, and the reset of each.
-	// The models listing carries a fraction or a reset and NOTHING that names a
-	// window, so it can only ever be the fallback.
+	// The summary is authoritative for every counter/window it names. The model
+	// listing can supplement counters the summary omitted, but never replace one.
 	const summary = await postAntigravityCall(ctx, params, endpoints, RETRIEVE_USER_QUOTA_SUMMARY_PATH, accessToken);
+	let summaryReport: UsageReport | undefined;
 	if (isUserQuotaSummaryResponse(summary?.data)) {
-		const report = buildReportFromQuotaSummary(summary.data, params, credential, nowMs, summary.endpoint);
-		// A summary that names no bucket must not blank out a listing that does.
-		if (report.limits.length > 0) return report;
+		summaryReport = buildReportFromQuotaSummary(summary.data, params, credential, nowMs, summary.endpoint);
+		const summaryCounters = new Set(
+			summaryReport.limits.map(limit => (limit.id.includes(":google:") ? "google" : limit.id.includes(":claude-gpt:") ? "claude-gpt" : "unknown")),
+		);
+		if (summaryReport.limits.length > 0 && summaryCounters.has("google") && summaryCounters.has("claude-gpt")) {
+			return summaryReport;
+		}
 	}
 
 	const listing = await postAntigravityCall(ctx, params, endpoints, FETCH_AVAILABLE_MODELS_PATH, accessToken);
-	if (!isAntigravityUsageResponse(listing?.data)) return null;
-	return buildReportFromModels(listing.data, params, credential, nowMs, listing.endpoint);
+	if (!isAntigravityUsageResponse(listing?.data)) return summaryReport ?? null;
+	const listingReport = buildReportFromModels(listing.data, params, credential, nowMs, listing.endpoint);
+	if (!summaryReport?.limits.length) return listingReport;
+
+	const summaryCounters = new Set(
+		summaryReport.limits.map(limit => (limit.id.includes(":google:") ? "google" : limit.id.includes(":claude-gpt:") ? "claude-gpt" : "unknown")),
+	);
+	const mergedLimits = [
+		...summaryReport.limits,
+		...listingReport.limits.filter(limit => {
+			const counter = limit.id.includes(":google:") ? "google" : limit.id.includes(":claude-gpt:") ? "claude-gpt" : "unknown";
+			return !summaryCounters.has(counter);
+		}),
+	].sort((a, b) => (a.amount.remainingFraction ?? 1) - (b.amount.remainingFraction ?? 1));
+	return { ...summaryReport, limits: mergedLimits };
 }
 
 /**
