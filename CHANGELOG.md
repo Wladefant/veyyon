@@ -138,6 +138,7 @@
 - A setting whose configured value is not of its declared kind (a string for a boolean, `null` for an array, a non-finite number) reads as its default and is reported once; `hasDeclaredKind` states the rule.
 - `declareSettings` rejects a table in which one setting path is the parent of another, since one config key holds a value or a group of settings, not both.
 - `invalidValues` lists mismatched values from `--config` overlay files as well as the profile file, and each entry's `replaced` marks a value a read serves the default or fallback in place of.
+- Opening a session reads each distinct blob once instead of once per reference, and a missing blob logs one warning per open instead of one per reference.
 - The fastembed load-or-install fallback is the exported `loadFastembedOrInstall(importInstalled, installRuntime)`; no user-visible change.
 - Removed the unread `commit` parameter of veracity conflict recording and the unread `beam` parameter of recall context formatting; no user-visible change.
 - Backup checksums use the shared `sha256Hex16` helper instead of a private copy; no user-visible change.
