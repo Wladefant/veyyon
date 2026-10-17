@@ -27,7 +27,7 @@ export const ANTIGRAVITY_SYSTEM_INSTRUCTION =
  * parse graph.
  */
 export let getAntigravityUserAgent = () => {
-	const DEFAULT_ANTIGRAVITY_VERSION = "2.1.4";
+	const DEFAULT_ANTIGRAVITY_VERSION = "2.23.0";
 	const version = process.env.VEYYON_AI_ANTIGRAVITY_VERSION || DEFAULT_ANTIGRAVITY_VERSION;
 	// Map Node.js platform/arch to Antigravity's expected format.
 	// Verified against Antigravity source: _qn() and wqn() in main.js.
@@ -58,6 +58,9 @@ export interface AntigravityModelWireProfile {
 	maxOutputTokens: number;
 }
 export const ANTIGRAVITY_MODEL_WIRE_PROFILES: Readonly<Record<string, AntigravityModelWireProfile>> = {
+	"gemini-4-argon-low": { modelEnum: "MODEL_PLACEHOLDER_M419", maxOutputTokens: 65536 },
+	"gemini-4-argon-medium": { modelEnum: "MODEL_PLACEHOLDER_M418", maxOutputTokens: 65536 },
+	"gemini-4-argon-high": { modelEnum: "MODEL_PLACEHOLDER_M417", maxOutputTokens: 65536 },
 	"gemini-3.5-flash-extra-low": { modelEnum: "MODEL_PLACEHOLDER_M187", maxOutputTokens: 65536 },
 	"gemini-3.5-flash-low": { modelEnum: "MODEL_PLACEHOLDER_M20", maxOutputTokens: 65536 },
 	"gemini-3-flash-agent": { modelEnum: "MODEL_PLACEHOLDER_M132", maxOutputTokens: 65536 },

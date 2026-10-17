@@ -35,19 +35,34 @@ $ veyyon config path                     # print the active agent directory
 `/settings` does the same inside a live session. A key must be a full schema path
 (`theme.dark`, not `theme`).
 
-### Reload routing defaults without restarting
+### <a id="reload-routing-defaults-without-restarting"></a>Reload configuration, rules, and skills without restarting
 
-After editing the active profile configuration, send `/reload-config` in the running TUI,
-RPC, or ACP session. SDK callers use `await session.settings.reloadConfig()`.
-The command rediscovers the main filename in normal startup order, then re-reads existing
-`--config` overlays. Deleting the main file restores absent/default routing; replacing
+After editing the active profile configuration, rule files, or skills, send `/reload-config`
+(or `/reload`) in the running TUI, RPC, or ACP session. SDK callers use `await session.settings.reloadConfig()` and `await session.reloadRules()`.
+The command rediscovers the main configuration filename in normal startup order, re-reads existing
+`--config` overlays, re-reads loaded extensions, and re-reads global, profile, and project rule
+files (`AGENTS.md`, `CLAUDE.md`, sticky rules) and skills from disk without restarting the session.
+Deleting the main file restores absent/default routing; replacing
 `config.yml` with a supported alternate filename is discovered on the next reload.
 Malformed or unreadable files, invalid lane members (including nested lanes), and missing
-explicit overlays reject the whole reload and preserve prior routing. No file is quarantined
+explicit overlays reject the affected reload and preserve prior routing. No file is quarantined
 or rewritten. If a settings save is in flight, wait for it to finish and retry.
 Starting a newer reload supersedes older in-flight reloads, including while the newer
 request is still reading or when later edits restore the original values.
 A superseded request rejects without changing live routing; retry the command to read the current files.
+
+**Rule files, skills, and next-turn semantics:** Reload re-reads global rules (`~/.veyyon/AGENTS.md`),
+active profile rules (`AGENTS.md`, sticky rules), project rules (workspace `AGENTS.md` / `CLAUDE.md`),
+and discovered skills from disk without a session restart. It rebuilds the running session's system prompt,
+so modified instructions take effect on the very next turn.
+The reload summary names added, changed, and dropped paths without repeating file contents.
+It preserves the normal layer precedence and discovery warnings.
+If a file cannot be read or rule frontmatter cannot be parsed, reload keeps the last good rule and skill snapshot and reports the path and error.
+Deleted files still leave the snapshot. Fix an unreadable file and retry to apply pending edits.
+Skill body edits count as changed files, even when their names and descriptions stay the same.
+An unchanged reload keeps the existing advisor agent.
+SDK-supplied context files, skills, and rules remain caller-owned and do not become disk-discovered inputs.
+There is no automatic file watching or mtime polling. Running workers need their own reload command or SDK call.
 
 **Hot-reloadable:** non-startup `modelRoles.<role>` values (including `modelRoles.advisor`), `agent.agents` lane
 settings (including nested `model` and `thinkingLevel`), `agent.model`,
@@ -98,7 +113,7 @@ overlapping requests and commits the applicable leaves synchronously.
 change Main. Settings outside this narrow routing reload—including tools, provider
 initialization, transports, lifecycle, concurrency limits other than `agent.maxConcurrency`, plugins, UI and role presentation
 metadata—retain their active values and report changed keys as requiring restart.
-Credentials, environment variables, agent definitions/prompts, catalogs and profile
+Credentials, environment variables, catalogs, and profile
 selection are not reloaded.
 `Settings.init()` is startup initialization, not a reload API. `/reload-plugins` refreshes
 plugin/project registries, not profile routing; SIGHUP tears down the session.

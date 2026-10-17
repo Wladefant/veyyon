@@ -315,6 +315,10 @@ export function parseCodexRateLimitHeaders(headers: Record<string, string>, now 
 		const usedPercent = toNumber(headers[`x-codex-${key}-used-percent`]);
 		if (usedPercent === undefined) return undefined;
 		const windowMinutes = toNumber(headers[`x-codex-${key}-window-minutes`]);
+		// OpenAI sends `window-minutes: 0` for a window the account does not have. A zero-length window
+		// with no reset clock reads as 0% used and, in ranking, as a required drain of 1.0, which beats
+		// every real 7-day window and pins all new sessions on the account that sent it.
+		if (windowMinutes !== undefined && windowMinutes <= 0) return undefined;
 		const resetAt = toNumber(headers[`x-codex-${key}-reset-at`]);
 		return {
 			usedPercent,
@@ -506,6 +510,9 @@ function isCodexSparkRequest(context?: CredentialRankingContext): boolean {
 function scopeCodexLimitsForRequest(report: UsageReport, context?: CredentialRankingContext): UsageLimit[] {
 	const isSparkRequest = isCodexSparkRequest(context);
 	return report.limits.filter(limit => {
+		// A zero-length window is the header placeholder for "no such window" (see
+		// parseCodexRateLimitHeaders); reports cached before that fix still carry one.
+		if (limit.window?.durationMs === 0) return false;
 		if (limit.id === "openai-codex:primary" || limit.id === "openai-codex:secondary") {
 			return !isSparkRequest;
 		}

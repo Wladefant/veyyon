@@ -878,6 +878,7 @@ export const SETUP_HANDLERS = {
 		handle: async (_command, runtime) => {
 			try {
 				const result = await runtime.settings.reloadConfig();
+				const ruleLines = await runtime.session.reloadRules();
 				let extensionRunner: { reloadExtensions: () => Promise<ExtensionReloadResult[]> } | undefined;
 				try {
 					extensionRunner = runtime.session?.extensionRunner;
@@ -925,6 +926,7 @@ export const SETUP_HANDLERS = {
 							? "Applied routing values are used by new spawns."
 							: "No effective routing changes.",
 						...extensionLines,
+						...ruleLines,
 					].join("\n"),
 				);
 				return commandConsumed();
