@@ -5,6 +5,7 @@
 ### Fixed
 
 - Codex account ranking ignores usage windows of length 0, so one account no longer takes every new session.
+- Aligned OpenAI Codex responses imports with openai-responses-stream exports and restored the UsageCostHistoryEntry interface in usage types, with no user-visible change.
 
 ## [1.5.6] - 2026-10-10
 ### Changed
