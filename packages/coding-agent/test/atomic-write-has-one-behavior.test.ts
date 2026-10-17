@@ -416,6 +416,12 @@ const JUSTIFIED_TEMP_RENAMES: ReadonlyMap<string, string> = new Map([
 			"directories rather than replacing a file's contents.",
 	],
 	[
+		"utils/src/log-file.ts",
+		"renames the live log name to a private name to release it during rotation, then reads which " +
+			"file it held, since POSIX has no unlink-if-inode; no file is written. Its `.tmp` names are " +
+			"compression temporaries, which atomicWriteFileWith writes.",
+	],
+	[
 		"coding-agent/src/secrets/vault.ts",
 		"publishes through the kernel's no-replace and exchange operations (secrets/atomic-path.ts: " +
 			"renameat2 RENAME_NOREPLACE / RENAME_EXCHANGE, renameatx_np, ReplaceFileW) rather than a " +
