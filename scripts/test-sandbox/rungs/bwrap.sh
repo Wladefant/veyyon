@@ -9,6 +9,16 @@
 # despite enabling unprivileged user namespaces, so the probe runs bwrap rather
 # than merely checking PATH.
 
+# Resolve Bun while the host PATH is still intact. The PATH proof narrows PATH
+# after sourcing this rung, but the sandbox still needs the same host executable.
+BWRAP_HOST_BUN_PATH=""
+if bun_command="$(command -v bun 2>/dev/null)"; then
+	BWRAP_HOST_BUN_PATH="$(readlink -f -- "$bun_command" 2>/dev/null || true)"
+	if [ ! -x "$BWRAP_HOST_BUN_PATH" ]; then
+		BWRAP_HOST_BUN_PATH=""
+	fi
+fi
+
 probe_bwrap() {
 	command -v bwrap >/dev/null 2>&1 || { skip bwrap "bubblewrap not on PATH"; return 1; }
 	# Run it. The sysctls claim unprivileged userns is enabled on hosts where
@@ -27,6 +37,14 @@ run_bwrap() {
 	# not a repository. The driver leaves SANDBOX_GITDIR empty for a checkout that owns
 	# its own `.git`, and for one whose git directory is inside the home being hidden.
 	local -a gitdir_args=()
+	local -a bun_mounts=()
+	if [ -n "${BWRAP_HOST_BUN_PATH:-}" ] && [ -x "$BWRAP_HOST_BUN_PATH" ]; then
+		log "Bun executable resolved to ${BWRAP_HOST_BUN_PATH}"
+		bun_mounts=(--ro-bind "$BWRAP_HOST_BUN_PATH" /sandbox/runtime/bun/bun)
+	else
+		log "Bun executable is unavailable on the host PATH; Bun is not mounted"
+	fi
+
 	[ -n "${SANDBOX_GITDIR:-}" ] && gitdir_args=(--ro-bind "${SANDBOX_GITDIR}" "${SANDBOX_GITDIR}")
 
 	local -a extra_mounts=()
@@ -55,12 +73,14 @@ run_bwrap() {
 		--ro-bind /usr /usr --ro-bind /etc /etc \
 		--symlink usr/lib /lib --symlink usr/lib64 /lib64 --symlink usr/bin /bin --symlink usr/sbin /sbin \
 		--proc /proc --dev /dev \
-		--tmpfs /home --tmpfs /tmp --tmpfs /sandbox --tmpfs /run \
+		--tmpfs /sandbox --tmpfs /run \
+		"${bun_mounts[@]}" \
+		--tmpfs /home --tmpfs /tmp \
 		--bind "${REPO_ROOT}" "${REPO_ROOT}" \
 		"${gitdir_args[@]+"${gitdir_args[@]}"}" \
 		"${extra_mounts[@]}" \
 		--chdir "${REPO_ROOT}" \
-		--setenv PATH /usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin \
+		--setenv PATH /sandbox/runtime/bun:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin \
 		--setenv VEYYON_TEST_SANDBOX bwrap-userns \
 		--setenv VEYYON_TEST_HOST_HOME "${HOST_HOME}" \
 		--setenv HOME /sandbox/home \

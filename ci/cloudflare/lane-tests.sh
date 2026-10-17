@@ -90,6 +90,9 @@ export VEYYON_SANDBOX_RUNG=bwrap
 
 # Pre-native regression gate: run pure shard helper regression suite inside sandbox
 # This proves sharding logic remotely even if native compilation encounters time or toolchain issues
+echo "Bun version inside bwrap:"
+bash scripts/test-sandbox/run.sh bun --version
+
 echo "Running pure sharding helper regression suite inside sandbox before native build..."
 bash scripts/test-sandbox/run.sh bun test ./scripts/cf-runtime-sharding.test.ts
 
