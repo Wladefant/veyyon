@@ -289,6 +289,12 @@ export interface CredentialRankingStrategy {
 	 * not block unrelated families on the same OAuth credential.
 	 */
 	blockScope?(context?: CredentialRankingContext): string | undefined;
+	/**
+	 * The block scopes this provider writes, each with the limits of the counter it covers in
+	 * `report`. Lets a fresh report heal a block whose scope it proves healthy; a scope the report
+	 * does not name is never healed. Providers with one account-wide quota omit this.
+	 */
+	reportedBlockScopes?(report: UsageReport): Array<{ scope: string; limits: UsageLimit[] }>;
 	/** Fallback window durations (ms) when limits don't specify durationMs. */
 	windowDefaults: {
 		primaryMs: number;
