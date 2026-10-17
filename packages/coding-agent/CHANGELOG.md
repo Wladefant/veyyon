@@ -5,6 +5,7 @@
 ### Fixed
 
 - Spawn model lists fall back after quota failures with global fallback disabled, and new spawns prefer healthy cheap candidates when both shared pools are suppressed ([issue](https://github.com/Wladefant/veyyon/issues/613)).
+- Quota refusals block the failed request's credential, not a healthy account selected by a later resolver call ([PR](https://github.com/Wladefant/veyyon/pull/619)).
 - Automatic lane handoff reserves the summary model's full output limit, including reasoning, before selection. The request sends the same limit ([issue](https://github.com/Wladefant/veyyon/issues/552)).
 - Extension browser sessions reuse their exact connect tab and remove pages created by failed opens. Closing a tab removes it before the extension can disconnect ([issue](https://github.com/Wladefant/veyyon/issues/548)).
 - Session factory callback typing and mixed native actor rosters now pass the workspace type check ([Refs](https://github.com/Wladefant/veyyon/issues/569)).
