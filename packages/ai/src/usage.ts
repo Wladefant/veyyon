@@ -246,18 +246,6 @@ export interface UsageHistoryQuery {
 	sinceMs?: number;
 }
 
-/** One observed provider request cost, attributed to the credential that made it. */
-export interface UsageCostHistoryEntry {
-	/** Epoch ms the request completed. */
-	recordedAt: number;
-	provider: Provider;
-	/** Stable credential identity key (account/email/project/secret derived). */
-	accountKey: string;
-	/** Estimated request cost in USD. */
-	costUsd: number;
-}
-
-
 /**
  * Aggregated request usage a client observed for one (provider, model) pair.
  * Clients fold every completed request into per-pair buckets and flush them to

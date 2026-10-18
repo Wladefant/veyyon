@@ -347,7 +347,7 @@ class GatewayExchange<O> {
 		const { signal } = this;
 		let apiKey: string | undefined;
 		try {
-			apiKey = await storage.getApiKey(model.provider, sessionId, { modelId: model.id, signal });
+			apiKey = await storage.keys.get(model.provider, sessionId, { modelId: model.id, signal });
 		} catch (error) {
 			if (signal.aborted) return this.closed();
 			const classified = classifyGatewayError(error);
@@ -606,7 +606,7 @@ async function handleUsage(storage: AuthStorage, signal: AbortSignal): Promise<R
  * a clean diagnosis and getting a 429 storm.
  */
 async function handleCredentialsCheck(storage: AuthStorage, signal: AbortSignal): Promise<Response> {
-	const credentials = await storage.checkCredentials({ signal });
+	const credentials = await storage.health.check({ signal });
 	return json(200, { generatedAt: Date.now(), credentials });
 }
 

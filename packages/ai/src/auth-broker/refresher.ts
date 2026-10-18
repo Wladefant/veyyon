@@ -81,8 +81,8 @@ export class AuthBrokerRefresher {
 		this.#running = true;
 		this.#nextSweepAt = this.#now();
 		try {
-			await this.#storage.reload();
-			const snapshot = this.#storage.exportSnapshot();
+			await this.#storage.credentials.reload();
+			const snapshot = this.#storage.credentials.snapshot();
 			const now = this.#now();
 			const deadline = now + this.#refreshSkewMs;
 			const targets: number[] = [];
@@ -102,7 +102,7 @@ export class AuthBrokerRefresher {
 
 	async #refreshOne(id: number): Promise<void> {
 		try {
-			await this.#storage.refreshCredentialById(id);
+			await this.#storage.oauth.refresh(id);
 		} catch (error) {
 			const errorMsg = String(error);
 			if (isDefinitiveOAuthFailure(errorMsg)) {

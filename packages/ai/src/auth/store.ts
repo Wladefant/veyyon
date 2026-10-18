@@ -50,6 +50,22 @@ export interface CredentialRowStore {
 	 * endpoint); stores without tombstones omit it.
 	 */
 	listDisabledCredentials?(provider?: string, signal?: AbortSignal): Promise<DisabledCredentialSummary[]>;
+	/**
+	 * Disabled tombstones the user is told about: newest first, with a row dropped when a later active
+	 * login for the same provider was created after it was disabled. Optional like its sibling.
+	 */
+	listReportableDisabledCredentials?(provider?: string): Promise<DisabledCredentialSummary[]>;
+	/**
+	 * User-chosen account display names, keyed by the identity from `resolveAccountNameIdentity`.
+	 * Optional: the remote-broker store has no local table, so it keeps no names.
+	 */
+	getAccountName?(identity: string): string | undefined;
+	setAccountName?(identity: string, name: string): void;
+	deleteAccountName?(identity: string): void;
+	/** Chosen account identity for a provider, or undefined when no choice was made. */
+	getProviderSelection?(provider: string): string | undefined;
+	setProviderSelection?(provider: string, identity: string): void;
+	clearProviderSelection?(provider: string): void;
 	updateAuthCredential(id: number, credential: AuthCredential): void;
 	/**
 	 * Disable one active row; return false if it was already absent or disabled.

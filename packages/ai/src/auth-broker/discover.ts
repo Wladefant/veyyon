@@ -231,7 +231,7 @@ export async function discoverAuthStorage(options: DiscoverAuthStorageOptions = 
 	const storage = brokerConfig
 		? await openBrokerStorage(brokerConfig, options)
 		: await openLocalStorage(agentDir, options);
-	await storage.reload();
+	await storage.credentials.reload();
 	return storage;
 }
 

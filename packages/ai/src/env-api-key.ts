@@ -21,7 +21,7 @@
  * `@veyyon/ai` still re-exports all four names, so nothing outside this package changed: the owner
  * moved, it was not duplicated.
  */
-import { CATALOG_PROVIDERS, type ProviderCatalogEntry } from "@veyyon/catalog/provider-models";
+import { providerEntries } from "@veyyon/catalog/compat/providers";
 // The owner, not the `@veyyon/utils` barrel: `@veyyon/utils/env` is 21 modules against 82, and both names
 // are defined there. It matters here more than in most places. Eighteen web-search providers in
 // `@veyyon/coding-agent` import this module for one env-var lookup, and so does `web/parallel.ts`, which
@@ -38,7 +38,7 @@ import { type KeyResolver, PROVIDER_ENV_KEY_OVERRIDES } from "./provider-env-key
  * provider env-var names. `./provider-env-keys` merges over these with the computed resolvers
  * (Foundry/ADC/Bedrock probes) and the ids the catalog does not model.
  */
-const CATALOG_ENTRY_ENV_KEYS = (CATALOG_PROVIDERS as readonly ProviderCatalogEntry[]).flatMap(provider => {
+const CATALOG_ENTRY_ENV_KEYS = Object.values(providerEntries()).flatMap(provider => {
 	const envVars = provider.envVars;
 	if (!envVars || envVars.length === 0) return [];
 	const resolver: KeyResolver = envVars.length === 1 ? envVars[0] : () => $pickenv(...envVars);

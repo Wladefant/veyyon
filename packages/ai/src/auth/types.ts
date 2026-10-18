@@ -1402,18 +1402,6 @@ export interface UsageApi {
 	 */
 	history(query?: UsageHistoryQuery): UsageHistoryEntry[];
 	/**
-	 * Record one observed provider request cost for later local usage aggregation.
-	 *
-	 * Preserves cost-only history semantics without fabricating token counts or
-	 * model identity. Returns false when cost is non-positive/non-finite or when
-	 * no credential is observed/store cost recording is unavailable.
-	 */
-	recordCost(
-		provider: Provider,
-		costUsd: number,
-		options?: { sessionId?: string; recordedAt?: number; baseUrl?: string },
-	): boolean;
-	/**
 	 * Forward one completed request's usage to the store's observer hook.
 	 * Broker-backed stores batch these into per-install reports so the broker
 	 * can track actual token burn per client; local stores have no hook and
