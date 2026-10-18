@@ -187,11 +187,16 @@ function refuseUnprotectableEntries(entries: SecretEntry[], paths: { profilePath
  * an operator can extend it) and the boundary rule that keeps a keyword from matching as a
  * substring. Passing it in rather than reading a module-level regex is what lets that list be
  * loaded from disk at all.
+ *
+ * `env` defaults to `process.env`. A caller that must not see the ambient environment passes its own.
  */
-export function collectEnvSecrets(pattern: RegExp = bundledEnvSecretPattern()): SecretEntry[] {
+export function collectEnvSecrets(
+	pattern: RegExp = bundledEnvSecretPattern(),
+	env: Record<string, string | undefined> = process.env,
+): SecretEntry[] {
 	const entries: SecretEntry[] = [];
 	const seen = new Set<string>();
-	for (const [name, value] of Object.entries(process.env)) {
+	for (const [name, value] of Object.entries(env)) {
 		if (!value || secretCharacterLength(value) < MIN_AUTODETECTED_ENV_VALUE_LENGTH) continue;
 		pattern.lastIndex = 0;
 		const nameMatches = pattern.test(name);

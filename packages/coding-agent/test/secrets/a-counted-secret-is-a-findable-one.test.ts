@@ -52,37 +52,12 @@ const NOW = 1_700_000_000_000;
 const PATTERN = buildEnvSecretPattern(["TOKEN", "SECRET"]);
 
 /**
- * Build an obfuscator from an environment, the way `loadSecretRuntime` does.
- *
- * `collectEnvSecrets` reads `process.env`, so the variables are set for the length of the call and
- * removed again: no test may leave a credential in the process environment for the next file.
+ * Build an obfuscator from exactly the variables given. The collector scans the environment it is
+ * handed, so passing the map keeps the host's own credentials (CI tokens, `BWS_ACCESS_TOKEN`, and
+ * so on) out of every count in this file. The counts are therefore the same on every machine.
  */
 function fromEnvironment(vars: Record<string, string>): SecretObfuscator {
-	const previous = new Map<string, string | undefined>();
-	for (const [name, value] of Object.entries(vars)) {
-		previous.set(name, process.env[name]);
-		process.env[name] = value;
-	}
-	try {
-		return new SecretObfuscator(collectEnvSecrets(PATTERN));
-	} finally {
-		for (const [name, value] of previous) {
-			if (value === undefined) delete process.env[name];
-			else process.env[name] = value;
-		}
-	}
-}
-
-/** The entries the real collector builds for one keyword-matching variable, environment restored. */
-function collectEnvSecretsFor(name: string, content: string): SecretEntry[] {
-	const previous = process.env[name];
-	process.env[name] = content;
-	try {
-		return collectEnvSecrets(PATTERN);
-	} finally {
-		if (previous === undefined) delete process.env[name];
-		else process.env[name] = previous;
-	}
+	return new SecretObfuscator(collectEnvSecrets(PATTERN, vars));
 }
 
 describe("a value the session masks is reported by the counter that will substitute it", () => {
@@ -205,20 +180,13 @@ describe("a value the session masks is reported by the counter that will substit
 	 * they have two things when they have one.
 	 */
 	it("does not report a stored credential as unnameable", () => {
-		const previous = process.env.FINDABLE_API_TOKEN;
-		process.env.FINDABLE_API_TOKEN = TOKEN;
-		try {
-			const obfuscator = new SecretObfuscator([
-				{ type: "plain", content: TOKEN, mode: "obfuscate", origin: "vault", name: "FINDABLE" },
-				...collectEnvSecrets(PATTERN),
-			]);
+		const obfuscator = new SecretObfuscator([
+			{ type: "plain", content: TOKEN, mode: "obfuscate", origin: "vault", name: "FINDABLE" },
+			...collectEnvSecrets(PATTERN, { FINDABLE_API_TOKEN: TOKEN }),
+		]);
 
-			expect(obfuscator.namedSecretNames()).toEqual(["FINDABLE"]);
-			expect(obfuscator.maskedInventory()).toEqual({ count: 0, sources: [], unlabelled: 0 });
-		} finally {
-			if (previous === undefined) delete process.env.FINDABLE_API_TOKEN;
-			else process.env.FINDABLE_API_TOKEN = previous;
-		}
+		expect(obfuscator.namedSecretNames()).toEqual(["FINDABLE"]);
+		expect(obfuscator.maskedInventory()).toEqual({ count: 0, sources: [], unlabelled: 0 });
 	});
 
 	/** Nothing masked, nothing added: the answer an empty session gives is unchanged. */
@@ -262,7 +230,7 @@ describe("every source a session builds protection from", () => {
 	});
 
 	it("gives an environment value no name, which is why anything is masked at all", () => {
-		const entries = collectEnvSecretsFor("VEYYON_DEMO_SECRET", TOKEN);
+		const entries = collectEnvSecrets(PATTERN, { VEYYON_DEMO_SECRET: TOKEN });
 		expect(entries).toHaveLength(1);
 		expect(entries[0]).toMatchObject({ type: "plain", origin: "environment", mode: "obfuscate" });
 		expect(entries[0]?.name).toBeUndefined();

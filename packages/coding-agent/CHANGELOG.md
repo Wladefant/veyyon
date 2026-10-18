@@ -14,6 +14,8 @@
 - Streaming tool-argument previews no longer reparse long string values on every 256-byte update.
 - `/account use` picker descriptions now fit at a terminal width of 131 columns.
 - Browser-extension relay requests keep the 10-second timeout and clear its timer when each request settles.
+- Secret inventory accepts an explicit environment map while production collection still uses `process.env` by default.
+- Status lines handle the home directory correctly when it is inside a temporary root.
 
 ### Changed
 
