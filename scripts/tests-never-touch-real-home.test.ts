@@ -166,7 +166,7 @@ export const ALLOWLIST: ReadonlyArray<AllowlistEntry> = [
 		reason:
 			"It is the gate's own suite, and half its subject is the tripwire, which cannot be probed without naming the variable that tells the tripwire what to forbid. What it names is NOT the real config root: every occurrence sets `VEYYON_TEST_REAL_CONFIG_ROOT` to a freshly `mkdtemp`ed directory in the child it spawns, precisely so a door that turns out to be UNGUARDED writes there instead of into the operator's home — which is what makes the red proofs of the six write doors safe to run at all. Each probe removes its own root in a `finally`, and each asserts the root is empty afterwards, so an unguarded door is reported by the absence of the file rather than by damage. The real `~/.veyyon` is never resolved, opened, or written by this file.",
 	},
-	// The eight below are all `unresolved-spawn-target`: a spawn whose command argument is a
+	// The ten below are all `unresolved-spawn-target`: a spawn whose command argument is a
 	// variable, a parameter or a property, so no reader of the source alone can say what it
 	// runs. Each reason therefore has to answer the one question the analyzer could not, which
 	// is what the target actually holds at runtime. Two of them genuinely execute a file NAMED
@@ -176,6 +176,12 @@ export const ALLOWLIST: ReadonlyArray<AllowlistEntry> = [
 		rule: "unresolved-spawn-target",
 		reason:
 			'`pythonPath` is `Bun.env.PYTHON ?? "python3"`, resolved through PATH, and the spawn is `-c` on the eval prelude with a stubbed display hook. The prelude IS a python source file, so its behaviour can only be asserted by a python interpreter; the child writes nothing outside the temp cwd it is given and reads no config root. This suite sits beside its subject in `src/`, which is why it went unread until the walk crossed whole members rather than each `test/` directory.',
+	},
+	{
+		file: "packages/coding-agent/src/eval/py/__tests__/an-idle-python-kernel-returns-the-memory-a-cell-freed.test.ts",
+		rule: "unresolved-spawn-target",
+		reason:
+			'`pythonPath` is `Bun.env.PYTHON ?? "python3"`, resolved through PATH, and the spawn is `-u` on the eval runner beside the suite. The suite reads the kernel\'s resident memory from `/proc/<pid>/status` after a cell, which only a real python interpreter running the real runner can answer; the cells build and drop byte strings in memory and touch no file and no config root.',
 	},
 	{
 		file: "packages/coding-agent/test/update-while-running.test.ts",
