@@ -6,6 +6,7 @@
 
 ### Breaking Changes
 
+- `releaseFreeHeapPages()` returns a `Promise<boolean>` and walks the C allocator's arenas on libuv's thread pool instead of on the calling thread, where the walk held a 6 GiB session's event loop 250 to 1127 ms per call.
 - `withTimeoutSignal` is removed; use `withScopedTimeoutSignal(timeoutMs, fn, parent?)` or `scopedTimeoutSignal`, whose timer is cleared when the operation settles.
 
 ### Added
@@ -173,6 +174,10 @@
 
 ### Fixed
 
+- A saved session's eval kernels, in every language, follow it across a directory change instead of starting a new kernel in each directory and keeping every earlier one alive until the session ended, so a session that visited five directories holds one Python kernel (102 MB) instead of five (211 MB) and keeps its variables; a directory with its own Python venv still gets its own kernel.
+- `/new`, `/resume` of another session and a handoff shut down the eval kernels of the conversation being left instead of keeping them alive until the session ended, so five conversations in one session hold one Python kernel (86 MB) instead of five (427 MB).
+- An eval cell that prints many lines no longer freezes the terminal while it runs: it sends one live update per 50 ms instead of one per printed line, and its output buffer re-encodes its window once per window of output instead of once per line, so a cell printing 100,000 lines finishes in 0.33 s instead of 10 s and the longest event-loop stall falls from 10 s to 14 ms.
+- An `ssh` command's live output is sent at most once per 50 ms, as `bash` output already was, instead of once per received chunk.
 - A `tools.approvalMode` in a config file that is not one of its values reads as `ask` instead of the default `auto`, and every configured value that does not match its declared type is shown at startup with the file to edit.
 - A failing `!command` for a provider API key or header in `models.yml` names the setting it was resolving in its log report, as the other config values already did.
 - `ctrl+g` in a hook or ask-input editor whose `$VISUAL`/`$EDITOR` cannot start shows the failure under the text instead of ending the session, and with no editor configured shows that instead of doing nothing.
@@ -245,6 +250,10 @@
 - A plan whose variant names reduce to one directory name is refused, naming both variants.
 - A sandboxed local-cli trial can no longer signal a process outside it or connect to an abstract Unix socket made outside it on a kernel with Landlock ABI 6 or later.
 - A sandboxed local-cli trial can no longer read files in `/run/user`, and `docs/backends.md` states that a trial still connects to every pathname Unix socket the runner's user can, the session bus and the Docker daemon among them.
+- A session no longer moves compacted history out of memory after another window appended to its file, which read entries back from shifted offsets and failed compaction with "could not be read back from bytes".
+- An append made while a write fault lasts no longer rewrites the whole session file on the caller's stack: the retry publishes on the disk chain and entries that arrive before it runs share it, so on a 146 MB session an append takes 0.1 ms instead of 570 ms and the longest event-loop stall falls from 1.3 s to 100 ms.
+- A write fault that lands while a recovery publish waits its turn no longer cancels that publish, which left every later entry in memory only and never written to a healthy disk.
+- Reading a session file back for another window's lines no longer parses the lines this session wrote, cutting the read from 304 ms to 107 ms on a 146 MB file.
 - Sleep consolidation compacts "complete", "completed" and "working" only as whole words, so "incomplete" no longer becomes "inDONE" and "completed" no longer becomes "DONEd".
 - Block-boundary lookups and code summaries parse a PHP file that leaves PHP for HTML with `?>` instead of failing it as a syntax error, which cuts a 191KB plugin source from 767ms to 18ms and gives such a file tree-sitter block context and a structural summary.
 - A nested `Markdown` blockquote styles each row once, at the outermost quote, instead of once per level, so a `>`×20 quote row is 242 bytes instead of 584 and renders in 0.03 ms instead of 0.05 ms averaged over widths 1 to 40.
@@ -257,6 +266,7 @@
 - A killed child process gets SIGKILL after a 1s grace when the native addon cannot load, so a child that ignores SIGTERM no longer holds a timeout, an abort or a dispose open forever.
 - A child spawned with a timeout no longer keeps the process alive until that timeout elapses after the child has already exited.
 - `postmortem.quit` clears its 5 s stdout-drain timer when the drain finishes first.
+- `trimEngine` no longer holds the event loop while it returns the C allocator's free pages: the longest loop pause during the walk of a fragmented 1.6 GiB heap drops from 72 to 83 ms to 4.9 to 9.5 ms.
 
 ## [1.5.8] - 2026-10-16
 
