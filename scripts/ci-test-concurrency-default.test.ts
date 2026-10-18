@@ -1,10 +1,10 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { childJUnitCountMismatch } from "./ci-test-ts";
 import { afterEach, describe, expect, it } from "bun:test";
 import {
 	addBunTestTotals,
+	childJUnitCountMismatch,
 	allocateCloudflareTestCommands,
 	commandsForMode,
 	fastWorkspacePackages,
