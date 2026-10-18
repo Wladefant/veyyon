@@ -46,6 +46,7 @@ Names are stable and unique within one profile's project directory. Two profiles
   "ready": {
     "log": "Local:.*http",
     "port": 5173,
+    "healthPath": "/health",
     "timeout": 30
   }
 }
@@ -63,7 +64,7 @@ Defaults:
 
 `detached: true` implies `persist: true`, forces `pty: false`, and disables stdin. Its process survives broker shutdown and every veyyon exit; a later broker reconnects to its records for logs and explicit `stop`.
 
-`ready.log` is a regular expression matched against captured output. `ready.port` probes TCP at `ready.host` (default `127.0.0.1`). When both are present, both must pass. A readiness timeout leaves the process running and returns its current state so the caller can inspect logs or stop it.
+`ready.log` is a regular expression matched against captured output. `ready.port` probes TCP at `ready.host` (default `127.0.0.1`). When `ready.healthPath` is set, readiness also requires an HTTP 2xx response from that path on the configured host and port. When both log and port are present, all conditions must pass. A readiness timeout leaves the process running and returns its current state so the caller can inspect logs or stop it.
 
 Without a readiness condition, a successfully created process enters `running`. With readiness configured, it moves `starting` → `ready`; launch or nonzero-exit failures move to `failed`.
 
@@ -118,7 +119,7 @@ After the last tool socket disconnects, the broker evaluates managed processes. 
 
 When active non-persistent processes exist, live veyyon PIDs keep them running even when those sessions make no active launch calls. Dead PIDs are removed. Once every veyyon process exits, the broker waits three seconds, stops non-persistent managed processes, and exits. This PID check works even if a veyyon process dies without cleanup.
 
-`persist: true` explicitly opts a managed process out of last-client teardown. A broker with a live persistent process remains available without clients until another veyyon reconnects and stops it, or until the persistent process ends on its own. The non-persistent processes beside it are still stopped at the idle grace, recorded as `terminated-by=idle-reaper`; once the persistent process ends, the broker re-arms the same grace and exits. Broker recovery terminates stale recorded children and preserves their records as exited instead of adopting an unknown process state.
+`persist: true` explicitly opts a managed process out of last-client teardown. A broker with a live persistent process remains available without clients until another veyyon reconnects and stops it, or until the persistent process ends on its own. The non-persistent processes beside it are still stopped at the idle grace, recorded as `terminated-by=idle-reaper`; once the persistent process ends, the broker re-arms the same grace and exits. Broker recovery adopts a detached child only when its PID and OS process-start identity match the saved owner; a configured health target must also pass. Recovery never signals a PID whose identity cannot be verified.
 
 A process that dies to a signal nothing in veyyon sent is recorded as `terminated-by=external-signal` with the signal name (`SIGKILL`, `SIGTERM`), under a PTY and under pipes alike; the PTY run reports the signal from the child's wait status rather than the shell's exit code.
 
@@ -127,11 +128,12 @@ A process that dies to a signal nothing in veyyon sent is recorded as `terminate
 - `on-failure`: restart after a nonzero exit or runtime failure
 - `always`: restart after any unexpected exit
 
-Automatic restarts use bounded exponential backoff up to 30 seconds. Explicit `stop` suppresses restart. `restart` always reuses the retained application, arguments, environment, working directory, PTY, readiness, persistence, and detached settings.
+Automatic restarts use bounded exponential backoff up to 30 seconds. Before a restart, the broker probes any configured readiness target. A healthy target is adopted only when the saved PID, OS process-start identity, and process creation time prove ownership; otherwise the broker reports the ownership gap instead of spawning a duplicate. Explicit `stop` suppresses restart. `restart` always reuses the retained application, arguments, environment, working directory, PTY, readiness, persistence, and detached settings.
 
 ## Errors and limits
 - Names must be 1-48 letters, numbers, dots, underscores, or hyphens.
 - `ready.port` must be an integer from 1 through 65535.
+- `ready.healthPath` requires `ready.port` and a single-slash absolute path.
 - Invalid readiness, wait, or log regular expressions are rejected before use.
 - Sending to a stopped managed process or to unavailable stdin is an error.
 - `logs`, `wait`, and `stop` timeouts are capped at one hour by the tool.

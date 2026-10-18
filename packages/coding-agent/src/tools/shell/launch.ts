@@ -46,6 +46,7 @@ const launchSchema = lazy(() =>
 			"log?": type("string > 0").describe("regex matched against output"),
 			"port?": type("number").describe("TCP port that must accept connections"),
 			"host?": type("string > 0").describe("TCP readiness host; default 127.0.0.1"),
+			"healthPath?": type("string > 0").describe("HTTP path on the ready port that must return 2xx"),
 			"timeout?": type("number > 0").describe("seconds to wait; default 30"),
 		}).describe("start: readiness conditions; all supplied conditions must pass"),
 		"restart?": type("'no' | 'on-failure' | 'always'").describe("start: restart policy; default no"),
@@ -119,6 +120,12 @@ function commandSpec(params: LaunchParams, session: ToolSession): DaemonSpec {
 	if (ready?.port !== undefined && (!Number.isInteger(ready.port) || ready.port < 1 || ready.port > 65_535)) {
 		throw new ToolError("ready.port must be an integer from 1 to 65535");
 	}
+	if (ready?.healthPath !== undefined) {
+		if (ready.port === undefined) throw new ToolError("ready.healthPath requires ready.port");
+		if (!ready.healthPath.startsWith("/") || ready.healthPath.startsWith("//")) {
+			throw new ToolError("ready.healthPath must be an absolute path");
+		}
+	}
 	if (ready && !ready.log && ready.port === undefined) throw new ToolError("ready requires log or port");
 	return {
 		name,
@@ -132,6 +139,7 @@ function commandSpec(params: LaunchParams, session: ToolSession): DaemonSpec {
 					log: ready.log,
 					port: ready.port,
 					host: ready.host,
+					healthPath: ready.healthPath,
 					timeoutMs: timeoutMs(ready.timeout, 30),
 				}
 			: undefined,

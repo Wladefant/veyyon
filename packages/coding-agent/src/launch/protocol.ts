@@ -38,6 +38,7 @@ export interface DaemonReadySpec {
 	log?: string;
 	port?: number;
 	host?: string;
+	healthPath?: string;
 	timeoutMs: number;
 }
 
@@ -312,9 +313,16 @@ function readySpec(value: unknown): DaemonReadySpec {
 	const log = optionalString(source.log, "ready.log");
 	const port = optionalNumber(source.port, "ready.port");
 	const host = optionalString(source.host, "ready.host");
+	const healthPath = optionalString(source.healthPath, "ready.healthPath");
 	const timeoutMs = numberValue(source.timeoutMs, "ready.timeoutMs");
 	if (!log && port === undefined) throw new Error("ready requires log or port");
-	return { log, port, host, timeoutMs };
+	if (healthPath !== undefined) {
+		if (port === undefined) throw new Error("ready.healthPath requires ready.port");
+		if (!healthPath.startsWith("/") || healthPath.startsWith("//")) {
+			throw new Error("ready.healthPath must be an absolute path");
+		}
+	}
+	return { log, port, host, healthPath, timeoutMs };
 }
 
 /** Decode and validate a daemon launch specification. */

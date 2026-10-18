@@ -16,6 +16,12 @@ import {
 	sanitizeText,
 } from "@veyyon/utils";
 import { processHandle } from "@veyyon/utils/native-process";
+import {
+	getProcessStartIdentity,
+	getProcessStartTime,
+	isProcessAlive,
+	isProcessInstanceAlive,
+} from "@veyyon/utils/process-liveness";
 import { truncateHead, truncateHeadBytes, truncateTail, truncateTailBytes } from "../session/streaming-output";
 import { workerEnvFromParent } from "../subprocess/worker-client";
 import { acquireBrokerLease, releaseBrokerLease } from "./broker-lease";
@@ -100,6 +106,7 @@ const SIGNAL_NUMBER: Record<DaemonSignal, number> = {
 
 interface ManagedProcess {
 	pid: number;
+	exitCode: number | null;
 	exited: Promise<number>;
 	/**
 	 * The signal that terminated the process, if any (Bun.Subprocess.signalCode:
@@ -118,6 +125,8 @@ interface ManagedDaemon {
 	dir: string;
 	log?: DaemonLog;
 	process?: ManagedProcess;
+	processStartIdentity?: string;
+	processStartTime?: number;
 	input?: Bun.FileSink;
 	pty?: PtySession;
 	generation: number;
@@ -290,6 +299,24 @@ function connectPort(host: string, port: number): Promise<boolean> {
 	socket.once("error", () => finish(false));
 	socket.setTimeout(250, () => finish(false));
 	return promise;
+}
+
+async function readinessTargetResponds(ready: DaemonReadySpec): Promise<boolean> {
+	const port = ready.port;
+	if (port === undefined) return false;
+	const host = ready.host ?? "127.0.0.1";
+	if (!ready.healthPath) return connectPort(host, port);
+	try {
+		const urlHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+		const response = await fetch(`http://${urlHost}:${port}${ready.healthPath}`, {
+			signal: AbortSignal.timeout(1_000),
+			redirect: "manual",
+		});
+		await response.body?.cancel();
+		return response.status >= 200 && response.status < 300;
+	} catch {
+		return false;
+	}
 }
 
 export class DaemonBroker {
@@ -550,6 +577,56 @@ export class DaemonBroker {
 		return { op: "start", daemon: record.snapshot, readyTimedOut };
 	}
 
+	#captureProcessIdentity(record: ManagedDaemon, pid: number): void {
+		record.processStartIdentity = getProcessStartIdentity(pid) ?? undefined;
+		record.processStartTime = getProcessStartTime(pid) ?? undefined;
+	}
+
+	#processIdentityMayBeAlive(record: ManagedDaemon): boolean {
+		const pid = record.snapshot.pid;
+		const identity = record.processStartIdentity;
+		return pid !== undefined && identity !== undefined && isProcessInstanceAlive(pid, identity);
+	}
+
+	#processIdentityVerified(record: ManagedDaemon): boolean {
+		const pid = record.snapshot.pid;
+		const identity = record.processStartIdentity;
+		const startedAt = record.processStartTime;
+		return (
+			pid !== undefined &&
+			identity !== undefined &&
+			startedAt !== undefined &&
+			isProcessInstanceAlive(pid, identity) &&
+			getProcessStartTime(pid) === startedAt
+		);
+	}
+
+	async #markOwnershipFailure(record: ManagedDaemon, reason: string): Promise<void> {
+		record.snapshot.state = "failed";
+		record.snapshot.exitedAt = Date.now();
+		record.snapshot.exitCode = undefined;
+		record.snapshot.signal = undefined;
+		record.snapshot.terminatedBy = "process-exit";
+		record.snapshot.exitReason = reason;
+		record.snapshot.readyPending = undefined;
+		record.stopRequested = true;
+		await record.log?.close();
+		record.log = undefined;
+		this.#queueCompletion(record);
+		persist(record);
+		if (record.snapshot.pid === undefined) this.#scheduleCleanup(record);
+	}
+
+	async #waitForTrackedProcessExit(record: ManagedDaemon, generation: number, error: string): Promise<void> {
+		while (
+			generation === record.generation &&
+			(record.process?.exitCode === null || this.#processIdentityMayBeAlive(record))
+		) {
+			await Bun.sleep(250);
+		}
+		if (generation === record.generation) await this.#settle(record, generation, undefined, error);
+	}
+
 	async #launch(record: ManagedDaemon): Promise<void> {
 		record.generation++;
 		const generation = record.generation;
@@ -564,6 +641,8 @@ export class DaemonBroker {
 		record.snapshot.exitReason = undefined;
 		record.snapshot.terminatedBy = undefined;
 		record.snapshot.pid = undefined;
+		record.processStartIdentity = undefined;
+		record.processStartTime = undefined;
 		record.snapshot.readyMatch = undefined;
 		record.logReady = !record.spec.ready?.log;
 		record.portReady = record.spec.ready?.port === undefined;
@@ -635,6 +714,7 @@ export class DaemonBroker {
 				const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
 				if (Number.isSafeInteger(pid) && pid > 0) {
 					record.snapshot.pid = pid;
+					this.#captureProcessIdentity(record, pid);
 					persist(record);
 					return;
 				}
@@ -658,6 +738,7 @@ export class DaemonBroker {
 		record.process = process;
 		record.input = process.stdin;
 		record.snapshot.pid = process.pid;
+		this.#captureProcessIdentity(record, process.pid);
 		persist(record);
 		const stdout = this.#drain(record, generation, process.stdout);
 		const stderr = this.#drain(record, generation, process.stderr);
@@ -678,6 +759,7 @@ export class DaemonBroker {
 			});
 			record.process = process;
 			record.snapshot.pid = process.pid;
+			this.#captureProcessIdentity(record, process.pid);
 			persist(record);
 			process.unref();
 			void process.exited
@@ -762,25 +844,69 @@ export class DaemonBroker {
 		const generation = record.generation;
 		await this.#readDetachedOutput(record, generation);
 		if (generation !== record.generation || record.process) return;
-		const processRef = record.snapshot.pid === undefined ? null : processHandle(record.snapshot.pid);
-		if (processRef?.status() === "running") return;
-		await this.#settle(record, generation);
+		const pid = record.snapshot.pid;
+		if (pid === undefined) {
+			await this.#markOwnershipFailure(record, "saved PID and process creation identity are missing; refusing adoption or signalling");
+			return;
+		}
+		if (this.#processIdentityMayBeAlive(record)) {
+			if (!this.#processIdentityVerified(record)) {
+				await this.#markOwnershipFailure(
+					record,
+					"saved PID is live but its process-start identity or creation time cannot be verified; refusing adoption or signalling",
+				);
+				return;
+			}
+			if (record.spec.ready?.port !== undefined && !(await readinessTargetResponds(record.spec.ready))) {
+				record.snapshot.state = "starting";
+				record.snapshot.readyAt = undefined;
+				record.portReady = record.spec.ready.port === undefined;
+				syncReadyPending(record);
+				persist(record);
+			}
+			return;
+		}
+		if (isProcessAlive(pid)) {
+			await this.#markOwnershipFailure(
+				record,
+				"saved PID now belongs to a different process incarnation; refusing adoption or signalling",
+			);
+			return;
+		}
+		await this.#settle(record, generation, undefined, "the saved process identity is no longer alive");
 	}
 
 	async #pollPort(record: ManagedDaemon, generation: number, ready: DaemonReadySpec): Promise<void> {
-		const host = ready.host ?? "127.0.0.1";
-		const port = ready.port;
-		if (port === undefined) return;
+		if (ready.port === undefined) return;
 		while (generation === record.generation && !terminalState(record.snapshot.state)) {
-			if (await connectPort(host, port)) {
+			if (await readinessTargetResponds(ready)) {
+				if (record.spec.detached && !record.process && !this.#processIdentityVerified(record)) {
+					await this.#markOwnershipFailure(
+						record,
+						"readiness target responds but the saved PID and process creation identity cannot prove ownership; refusing adoption",
+					);
+					return;
+				}
 				record.portReady = true;
 				syncReadyPending(record);
 				this.#markReady(record);
 				return;
 			}
+			if (record.spec.detached && !record.process) {
+				const pid = record.snapshot.pid;
+				if (pid === undefined) {
+					await this.#markOwnershipFailure(record, "saved PID and process creation identity are missing; refusing adoption");
+					return;
+				}
+				if (!isProcessAlive(pid)) {
+					await this.#settle(record, generation, undefined, "the saved process exited before readiness");
+					return;
+				}
+			}
 			await Bun.sleep(100);
 		}
 	}
+
 
 	#markReady(record: ManagedDaemon): void {
 		if (!record.spec.ready || record.snapshot.state !== "starting") return;
@@ -808,6 +934,17 @@ export class DaemonBroker {
 		ptySignal?: string,
 	): Promise<void> {
 		if (generation !== record.generation || terminalState(record.snapshot.state)) return;
+		if (
+			(error !== undefined || (exitCode === undefined && ptySignal === undefined)) &&
+			(record.process?.exitCode === null || this.#processIdentityMayBeAlive(record))
+		) {
+			const exitError = error ?? "the child exit notification had no exit code while its process remains live";
+			record.log?.append(
+				`\n[ignored a child-exit notification while PID ${record.snapshot.pid ?? "unknown"} still appears alive]\n`,
+			);
+			void this.#waitForTrackedProcessExit(record, generation, exitError);
+			return;
+		}
 		await this.#readDetachedOutput(record, generation);
 		// Capture the terminating signal BEFORE clearing record.process below, so a
 		// signal-killed process reports the signal (e.g. SIGTERM) rather than a
@@ -836,6 +973,8 @@ export class DaemonBroker {
 		record.input = undefined;
 		record.pty = undefined;
 		record.snapshot.pid = undefined;
+		record.processStartIdentity = undefined;
+		record.processStartTime = undefined;
 		record.snapshot.exitedAt = Date.now();
 		record.snapshot.exitCode = signal ? undefined : exitCode;
 		record.snapshot.signal = signal ?? undefined;
@@ -859,6 +998,14 @@ export class DaemonBroker {
 			!record.stopRequested &&
 			(record.spec.restart === "always" || (record.spec.restart === "on-failure" && failed));
 		if (shouldRestart && !this.#shuttingDown) {
+			if (record.spec.ready?.port !== undefined && (await readinessTargetResponds(record.spec.ready))) {
+				await this.#markOwnershipFailure(
+					record,
+					"configured readiness target is still responding after the child exited; saved PID and process creation identity cannot prove ownership, so refusing to restart",
+				);
+				if (record.spec.persist) this.#scheduleIdleShutdown();
+				return;
+			}
 			this.#queueCompletion(record);
 			const uptime = Date.now() - record.snapshot.startedAt;
 			record.consecutiveFailures = uptime >= 30_000 ? 0 : record.consecutiveFailures + 1;
@@ -1006,6 +1153,15 @@ export class DaemonBroker {
 		if (operation.data === undefined && operation.signal === undefined) {
 			throw new Error("send requires data or signal");
 		}
+		const windowsPty = process.platform === "win32" && record.pty !== undefined;
+		const pid = record.snapshot.pid;
+		const processRef =
+			operation.signal && !windowsPty && pid !== undefined && this.#processIdentityVerified(record)
+				? processHandle(pid)
+				: null;
+		if (operation.signal && !windowsPty && !processRef && !record.process) {
+			throw new Error(`Daemon ${operation.name} process-start identity cannot verify a safe signal target`);
+		}
 		if (operation.data !== undefined) {
 			if (record.pty) record.pty.write(operation.data);
 			else if (record.input) {
@@ -1014,21 +1170,19 @@ export class DaemonBroker {
 			} else throw new Error(`Daemon ${operation.name} stdin is unavailable`);
 		}
 		if (operation.signal) {
-			// Attribute before signalling: the settle that observes this death
-			// reports WHO sent the signal rather than an unexplained termination.
 			record.termination = {
 				owner: "operator-signal",
 				reason: `${operation.signal} delivered by launch send`,
 				signal: operation.signal,
 				at: Date.now(),
 			};
-			if (process.platform === "win32" && record.pty) {
+			if (windowsPty && record.pty) {
 				if (operation.signal === "SIGINT") record.pty.write("\u0003");
 				else record.pty.kill();
-			} else {
-				const processRef = record.snapshot.pid === undefined ? null : processHandle(record.snapshot.pid);
-				if (!processRef) throw new Error(`Daemon ${operation.name} process is unavailable`);
+			} else if (processRef) {
 				processRef.killTree(SIGNAL_NUMBER[operation.signal]);
+			} else if (record.process) {
+				record.process.kill(SIGNAL_NUMBER[operation.signal]);
 			}
 		}
 		return { op: "send", daemon: record.snapshot };
@@ -1046,9 +1200,9 @@ export class DaemonBroker {
 	): Promise<void> {
 		await this.#refreshDetached(record);
 		if (terminalState(record.snapshot.state)) return;
-		record.stopRequested = true;
-		record.termination = termination;
 		if (record.restartTimer) {
+			record.stopRequested = true;
+			record.termination = termination;
 			clearTimeout(record.restartTimer);
 			record.restartTimer = undefined;
 			record.snapshot.terminatedBy = termination.owner;
@@ -1058,41 +1212,40 @@ export class DaemonBroker {
 			persist(record);
 			await record.log?.close();
 			record.log = undefined;
-			// No completion is queued here. `#settle` already queued one for this
-			// execution generation when the process crashed and armed the restart, so
-			// a second write put two deaths for one run into `completions.json`. The
-			// operator-stop attribution reaches `list` through the persisted snapshot
-			// above.
+			// #settle already queued one completion for the crashed generation.
 			this.#scheduleCleanup(record);
 			return;
 		}
+		const pid = record.snapshot.pid;
+		const processRef =
+			pid !== undefined && this.#processIdentityVerified(record) ? processHandle(pid) : null;
+		if (!processRef && !record.process && !record.pty) {
+			throw new Error(`Daemon ${record.snapshot.name} process-start identity cannot verify a safe stop target`);
+		}
+		record.stopRequested = true;
+		record.termination = termination;
 		record.snapshot.state = "stopping";
 		persist(record);
-		const processRef = record.snapshot.pid === undefined ? null : processHandle(record.snapshot.pid);
 		if (processRef) {
 			try {
 				await processRef.terminate({ group: true, gracefulMs: timeoutMs, timeoutMs: timeoutMs + 1_000 });
 			} catch (error) {
 				logger.debug("Daemon process tree termination failed", {
 					name: record.snapshot.name,
-					pid: record.snapshot.pid,
+					pid,
 					error: errorMessage(error),
 				});
 			}
 		} else {
 			record.pty?.kill();
 		}
-		// Process.terminate kills the OS PID and its group, but for pipe-spawned
-		// daemons Bun's Subprocess streams may not close immediately, blocking the
-		// `Promise.all([stdout, stderr, process.exited])` settle path.  Kill the
-		// Bun Subprocess directly so its streams are torn down and #settle fires.
+		// Kill the direct child handle so Bun's output streams close and #settle fires.
 		record.process?.kill();
 		const settled = await this.#waitUntil(record, () => terminalState(record.snapshot.state), timeoutMs + 1_000);
 		if (!settled) {
-			// The process is confirmed dead (Process.terminate awaited above) but the
-			// settle callback has not fired yet — the PTY or Bun Subprocess exit
-			// notification lagged.  Force-settle so the completion record is queued
-			// before shutdown flushes the queue.
+			if (record.process?.exitCode === null || this.#processIdentityMayBeAlive(record)) {
+				throw new Error(`Daemon ${record.snapshot.name} remains live after the bounded stop attempt`);
+			}
 			record.pty?.kill();
 			record.process?.kill();
 			await this.#settle(record, record.generation);
@@ -1215,76 +1368,159 @@ export class DaemonBroker {
 				}
 				const snapshot = parseDaemonSnapshot(decoded.daemon);
 				const spec = parseDaemonSpec(decoded.spec);
-				const processRef = snapshot.pid === undefined ? null : processHandle(snapshot.pid);
-				const wasTerminal = terminalState(snapshot.state);
-				const detached =
-					spec.detached && !wasTerminal && snapshot.state !== "stopping" && processRef?.status() === "running";
-				if (!detached && !wasTerminal) {
-					if (processRef) {
-						try {
-							await processRef.terminate({ group: true, gracefulMs: 500, timeoutMs: 2_000 });
-						} catch (error) {
-							logger.debug("Failed to terminate unmanaged daemon process during recovery", {
-								name: snapshot.name,
-								pid: snapshot.pid,
-								error: errorMessage(error),
-							});
-						}
-					}
-					snapshot.pid = undefined;
-					snapshot.state = "exited";
-					snapshot.exitedAt = Date.now();
-					if (spec.detached) {
-						// A detached daemon outlives its broker by design, so one that is
-						// already gone was not terminated by this replacement. Recording
-						// `broker-recovery` here asserted both that the replacement killed
-						// it and that it was non-detached, and neither is true.
-						snapshot.terminatedBy = "process-exit";
-						snapshot.exitReason = "exited while no broker was supervising it";
-					} else {
-						snapshot.terminatedBy = "broker-recovery";
-						snapshot.exitReason =
-							"the previous broker exited; its replacement terminated this non-detached daemon";
-					}
-				} else if (wasTerminal) {
-					snapshot.pid = undefined;
-				}
+				const processStartIdentity =
+					"processStartIdentity" in decoded && typeof decoded.processStartIdentity === "string"
+						? decoded.processStartIdentity
+						: undefined;
+				const processStartTime =
+					"processStartTime" in decoded &&
+					typeof decoded.processStartTime === "number" &&
+					Number.isFinite(decoded.processStartTime)
+						? decoded.processStartTime
+						: undefined;
 				snapshot.persist = spec.persist;
 				snapshot.detached = spec.detached;
-				if (this.#cleanupWaitMs > 0 && terminalState(snapshot.state)) {
+				const record: ManagedDaemon = {
+					spec,
+					snapshot,
+					dir,
+					processStartIdentity,
+					processStartTime,
+					generation: 0,
+					stopRequested: false,
+					logReady: false,
+					portReady: false,
+					readinessBuffer: "",
+					outputOffset: 0,
+					readyPattern: spec.ready?.log ? new RegExp(spec.ready.log, "u") : undefined,
+					consecutiveFailures: 0,
+					persistQueue: Promise.resolve(),
+				};
+				const wasTerminal = terminalState(snapshot.state);
+				const pid = snapshot.pid;
+				const processIdentityMayBeAlive = this.#processIdentityMayBeAlive(record);
+				const pidAlive = pid !== undefined && isProcessAlive(pid);
+				const processIdentityVerified = this.#processIdentityVerified(record);
+				if (pid !== undefined && (processIdentityMayBeAlive || pidAlive) && !processIdentityVerified) {
+					this.#records.set(snapshot.name, record);
+					await this.#markOwnershipFailure(
+						record,
+						"saved PID is live but its process-start identity or creation time is missing or mismatched; refusing to adopt or signal it",
+					);
+					continue;
+				}
+				let detached = false;
+				let queueRecoveryCompletion = false;
+				if (spec.detached && processIdentityVerified && snapshot.state !== "stopping") {
+					detached = true;
+					if (wasTerminal) {
+						snapshot.state = spec.ready ? "starting" : "running";
+						snapshot.exitedAt = undefined;
+						snapshot.exitCode = undefined;
+						snapshot.signal = undefined;
+						snapshot.exitReason = undefined;
+						snapshot.terminatedBy = undefined;
+					}
+					record.logReady = !spec.ready?.log || snapshot.readyMatch !== undefined;
+					record.portReady =
+						spec.ready?.port === undefined || (await readinessTargetResponds(spec.ready));
+					if (spec.ready && (!record.logReady || !record.portReady)) {
+						snapshot.state = "starting";
+						snapshot.readyAt = undefined;
+					} else if (wasTerminal) {
+						snapshot.state = spec.ready ? "ready" : "running";
+						if (spec.ready) snapshot.readyAt ??= Date.now();
+					}
+				} else if (processIdentityVerified) {
+					const processRef = pid === undefined ? null : processHandle(pid);
+					if (!processRef) {
+						this.#records.set(snapshot.name, record);
+						await this.#markOwnershipFailure(
+							record,
+							"saved PID and process creation identity match, but no process handle is available; refusing to signal it",
+						);
+						continue;
+					}
+					try {
+						await processRef.terminate({ group: true, gracefulMs: 500, timeoutMs: 2_000 });
+					} catch (error) {
+						logger.debug("Failed to terminate verified daemon process during recovery", {
+							name: snapshot.name,
+							pid,
+							error: errorMessage(error),
+						});
+					}
+					if (this.#processIdentityMayBeAlive(record)) {
+						this.#records.set(snapshot.name, record);
+						await this.#markOwnershipFailure(
+							record,
+							"the replacement broker could not terminate the verified prior process; it remains live and will not be signalled again",
+						);
+						continue;
+					}
+					snapshot.pid = undefined;
+					record.processStartIdentity = undefined;
+					record.processStartTime = undefined;
+					snapshot.state = "exited";
+					snapshot.exitedAt = Date.now();
+					snapshot.exitCode = undefined;
+					snapshot.signal = undefined;
+					snapshot.readyPending = undefined;
+					snapshot.terminatedBy = "broker-recovery";
+					snapshot.exitReason = spec.detached
+						? "the previous broker had already requested a stop; its replacement terminated the verified daemon"
+						: "the previous broker exited; its replacement terminated this verified non-detached daemon";
+					queueRecoveryCompletion = !wasTerminal;
+				} else if (pid === undefined && !wasTerminal) {
+					this.#records.set(snapshot.name, record);
+					await this.#markOwnershipFailure(
+						record,
+						"saved daemon has no PID and process creation identity; refusing to adopt or signal it",
+					);
+					continue;
+				} else if (pid !== undefined && !pidAlive) {
+					snapshot.pid = undefined;
+					record.processStartIdentity = undefined;
+					record.processStartTime = undefined;
+					if (wasTerminal || !spec.detached) {
+						if (!wasTerminal) {
+							snapshot.state = "exited";
+							snapshot.exitedAt = Date.now();
+							snapshot.terminatedBy = "process-exit";
+							snapshot.exitReason = "the daemon exited while no broker was supervising it";
+							queueRecoveryCompletion = true;
+						}
+					} else {
+						snapshot.state = spec.ready ? "starting" : "running";
+						snapshot.exitedAt = undefined;
+						snapshot.exitCode = undefined;
+						snapshot.signal = undefined;
+						snapshot.exitReason = undefined;
+						snapshot.terminatedBy = undefined;
+						record.stopRequested = false;
+						this.#records.set(snapshot.name, record);
+						await this.#settle(record, record.generation, undefined, "the saved detached process exited while no broker was supervising it");
+						continue;
+					}
+				}
+				record.stopRequested = !detached && !terminalState(snapshot.state);
+				record.logReady ||= detached && (!spec.ready?.log || snapshot.readyMatch !== undefined);
+				record.portReady ||= detached && spec.ready?.port === undefined;
+				record.outputOffset = detached ? snapshot.outputBytes : 0;
+				if (this.#cleanupWaitMs > 0 && terminalState(snapshot.state) && snapshot.pid === undefined) {
 					const exitedAt = snapshot.exitedAt ?? Date.now();
 					if (Date.now() - exitedAt >= this.#cleanupWaitMs) {
 						await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
 						continue;
 					}
 				}
-				const record: ManagedDaemon = {
-					spec,
-					snapshot,
-					dir,
-					generation: 0,
-					stopRequested: !detached || snapshot.state === "stopping",
-					logReady: detached && (!spec.ready?.log || snapshot.state === "ready"),
-					portReady: detached && (spec.ready?.port === undefined || snapshot.state === "ready"),
-					readinessBuffer: "",
-					outputOffset: detached ? snapshot.outputBytes : 0,
-					readyPattern: spec.ready?.log ? new RegExp(spec.ready.log, "u") : undefined,
-					consecutiveFailures: 0,
-					persistQueue: Promise.resolve(),
-				};
-				syncReadyPending(record);
 				this.#records.set(snapshot.name, record);
+				syncReadyPending(record);
 				if (detached && spec.ready?.port !== undefined && snapshot.state !== "ready") {
 					void this.#pollPort(record, record.generation, spec.ready);
 				}
-				// A daemon the dead broker never settled never got a completion
-				// record; the recovery kill above IS its terminal transition, so
-				// retain it here. One already terminal on disk was recorded by the
-				// broker that settled it.
-				if (!detached && !wasTerminal) this.#queueCompletion(record);
-				if (terminalState(snapshot.state)) {
-					this.#scheduleCleanup(record);
-				}
+				if (queueRecoveryCompletion) this.#queueCompletion(record);
+				if (terminalState(snapshot.state) && snapshot.pid === undefined) this.#scheduleCleanup(record);
 				persist(record);
 			} catch (error) {
 				logger.warn("Failed to recover daemon record", {
@@ -1348,7 +1584,17 @@ export class DaemonBroker {
 function persist(record: ManagedDaemon): void {
 	const metaPath = managedDaemonMetaPath(record.dir);
 	record.persistQueue = record.persistQueue
-		.then(() => atomicWriteFile(metaPath, JSON.stringify({ daemon: record.snapshot, spec: record.spec })))
+		.then(() =>
+			atomicWriteFile(
+				metaPath,
+				JSON.stringify({
+					daemon: record.snapshot,
+					spec: record.spec,
+					processStartIdentity: record.processStartIdentity,
+					processStartTime: record.processStartTime,
+				}),
+			),
+		)
 		.catch(error => {
 			logger.warn("Failed to persist daemon metadata", {
 				name: record.snapshot.name,
