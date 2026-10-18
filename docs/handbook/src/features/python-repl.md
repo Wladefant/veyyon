@@ -57,6 +57,13 @@ Kernel shutdown:
 - Wait for process exit with `SHUTDOWN_GRACE_MS` budget.
 - Escalate to `SIGTERM` and finally `SIGKILL` if the process does not exit in time.
 
+Between cells: on Linux with glibc, the runner calls `malloc_trim(0)` after each cell and before the cell's `done`
+frame. glibc keeps a freed block under its mmap threshold inside its heap and returns only the top of
+the heap to the system; the trim returns the free pages inside the heap as well. A kernel that has
+reported a cell done holds the memory its namespace references and the interpreter's own. The walk
+takes under 1 ms on a heap with nothing to return and about 25 ms to return 1.4 GB. Other platforms
+and C libraries skip the trim.
+
 ## Wire protocol (NDJSON, host ↔ runner)
 
 One JSON object per line, UTF-8, `\n` terminated.

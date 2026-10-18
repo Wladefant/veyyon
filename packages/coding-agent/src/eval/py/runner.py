@@ -1205,6 +1205,37 @@ def _start_parent_watchdog() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Heap trim
+# ---------------------------------------------------------------------------
+
+# glibc keeps a freed block below its mmap threshold inside its heap and returns
+# only the heap's top to the system, so a cell that read files or responses of
+# varying sizes leaves its peak resident after it drops them. ``malloc_trim(0)``
+# returns the free pages inside the heap as well. None until first use, False
+# where the C library has no such call (macOS, musl, Windows).
+_MALLOC_TRIM: Any = None
+
+
+def _trim_freed_heap() -> None:
+    """Return the free pages of the C heap to the system, where glibc provides ``malloc_trim``."""
+    global _MALLOC_TRIM
+    if _MALLOC_TRIM is None:
+        _MALLOC_TRIM = False
+        if sys.platform.startswith("linux"):
+            try:
+                import ctypes
+
+                trim = ctypes.CDLL(None).malloc_trim
+                trim.argtypes = [ctypes.c_size_t]
+                trim.restype = ctypes.c_int
+                _MALLOC_TRIM = trim
+            except (ImportError, OSError, AttributeError):
+                pass
+    if _MALLOC_TRIM:
+        _MALLOC_TRIM(0)
+
+
+# ---------------------------------------------------------------------------
 # Request dispatch
 # ---------------------------------------------------------------------------
 
@@ -1273,6 +1304,9 @@ async def _handle_request_async(req: dict) -> None:
                 pass
 
         _flush_stream_proxies(rid)
+        # Before the done frame, so a kernel the host sees finish a cell holds
+        # only what its namespace still references.
+        _trim_freed_heap()
         _emit(
             {
                 "type": "done",
