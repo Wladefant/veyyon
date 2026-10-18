@@ -318,7 +318,7 @@ process.stdout.write("ready\\n");
 		},
 		stdin: "pipe",
 		stdout: "pipe",
-		stderr: "ignore",
+		stderr: "inherit",
 	});
 
 	const reader = child.stdout.getReader();
