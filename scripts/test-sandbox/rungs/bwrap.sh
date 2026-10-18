@@ -12,9 +12,10 @@
 # Resolve Bun while the host PATH is still intact. The PATH proof narrows PATH
 # after sourcing this rung, but the sandbox still needs the same host executable.
 BWRAP_HOST_BUN_PATH=""
-if bun_command="$(command -v bun 2>/dev/null)"; then
-	BWRAP_HOST_BUN_PATH="$(readlink -f -- "$bun_command" 2>/dev/null || true)"
-	if [ ! -x "$BWRAP_HOST_BUN_PATH" ]; then
+if bun_executable="$(bun -e 'process.stdout.write(process.execPath)' 2>/dev/null)"; then
+	BWRAP_HOST_BUN_PATH="$(readlink -f -- "$bun_executable" 2>/dev/null || true)"
+	bun_magic="$(od -An -tx1 -N4 -- "$BWRAP_HOST_BUN_PATH" 2>/dev/null || true)"
+	if [ ! -x "$BWRAP_HOST_BUN_PATH" ] || [ "${bun_magic//[[:space:]]/}" != "7f454c46" ]; then
 		BWRAP_HOST_BUN_PATH=""
 	fi
 fi
@@ -42,7 +43,8 @@ run_bwrap() {
 		log "Bun executable resolved to ${BWRAP_HOST_BUN_PATH}"
 		bun_mounts=(--ro-bind "$BWRAP_HOST_BUN_PATH" /sandbox/runtime/bun/bun)
 	else
-		log "Bun executable is unavailable on the host PATH; Bun is not mounted"
+		log "Bun runtime resolution failed: expected an executable ELF binary from process.execPath"
+		return "${RUNG_SETUP_FAILED:-126}"
 	fi
 
 	[ -n "${SANDBOX_GITDIR:-}" ] && gitdir_args=(--ro-bind "${SANDBOX_GITDIR}" "${SANDBOX_GITDIR}")

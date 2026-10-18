@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && /bin/pwd -P)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && /bin/pwd -P)"
 HOST_HOME="$(getent passwd "$(id -u)" | cut -d: -f6)"
-HOST_BUN="$(command -v bun)"
+HOST_BUN="$(bun -e 'process.stdout.write(process.execPath)')"
 HOST_BUN="$(readlink -f -- "$HOST_BUN")"
 if [ ! -x "$HOST_BUN" ]; then
 	printf 'FATAL: host Bun is not executable: %s\n' "$HOST_BUN" >&2
@@ -36,6 +36,8 @@ for b in bun git sh; do command -v "$b"; done
 bun --version
 [ ! -e "$VEYYON_TEST_HOST_HOME/$1" ]
 [ ! -e "/sandbox/runtime/bun/$1" ]
+[ ! -d /opt/buildhome/.asdf ]
+[ "$(find /sandbox/runtime/bun -mindepth 1 -maxdepth 1 | wc -l)" -eq 1 ]
 [ "$VEYYON_TEST_SANDBOX" = bwrap-userns ]
 ' _ "$BWRAP_PATH_PROOF_MARKER"
 printf 'bwrap PATH proof: PASS\n'
