@@ -287,4 +287,4 @@ Text functions generally return deterministic transformed output; errors are lim
 5. Rust shapes outputs into N-API objects (`lineNumber`, `matchCount`, `limitReached`, `patternTreatedAsLiteral`, etc.).
 6. The package's lazy binding returns typed JS objects and optional per-match callbacks for `grep`/`glob`.
 
-*Verified against `0eb8d74a3ecf60e1b2ec37c15e9255f2dbe310dc` on 2026-07-30.*
+*Verified against `4507f0a3aeda070a05fc79b90d4239a631e2b80c` on 2026-10-18.*
