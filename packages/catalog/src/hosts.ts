@@ -194,6 +194,13 @@ export function modelMatchesHost(model: { provider: string; baseUrl: string }, h
 
 // --- Endpoint-shape predicates (URL path/verb shapes, not vendor hosts) ---
 
+/** Vertex AI API host for a location: `global`, the `eu`/`us` multi-regions, or a single region. */
+export function resolveVertexEndpointHost(location: string): string {
+	if (location === "global") return "aiplatform.googleapis.com";
+	if (location === "eu" || location === "us") return `aiplatform.${location}.rep.googleapis.com`;
+	return `${location}-aiplatform.googleapis.com`;
+}
+
 /** Vertex AI express-mode OpenAI-compatible endpoint (`…/endpoints/openapi`). */
 export function isVertexExpressOpenAIUrl(baseUrl: string): boolean {
 	return baseUrl.includes("/endpoints/openapi");

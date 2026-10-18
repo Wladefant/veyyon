@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `@veyyon/catalog/hosts` exports `resolveVertexEndpointHost(location)`, the Vertex AI API host for `global`, the `eu`/`us` multi-regions, or a single region.
+
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.
