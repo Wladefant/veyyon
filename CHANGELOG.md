@@ -6,21 +6,27 @@
 
 ### Added
 
-- Optional encrypted cloud checkpoints preserve native journals, artifacts, blobs, dirty files and version pins. The default-off client supports restore and explicit forks. Durable Object epochs fence synchronized prompt and tool admission ([issue](https://github.com/Wladefant/veyyon/issues/567)).
+- Optional encrypted cloud checkpoints preserve native journals, artifacts, blobs, dirty files and version pins. The default-off client supports restore and explicit forks. Durable Object epochs fence synchronized prompt and tool admission. The existing `sessions` command alias remains available ([issue](https://github.com/Wladefant/veyyon/issues/567)).
 - Task and qa-verifier spawns share configured Gemini 3.8 Flash and GPT-6 Luna models evenly by spawn identity.
+- `deepseek` is a `web_search` provider and a `fetch` reader backend. Both use the `DEEPSEEK_API_KEY` that the DeepSeek model provider already reads, so a machine with a DeepSeek key searches and reads pages with no second credential.
 - Terminal provider HTTP 429 and 402 lane errors notify `model_routing.py record-error` without waiting. The reporter uses a hidden child, a 10-second timeout and payload-free failure logs ([Refs](https://github.com/Wladefant/superboard/issues/451)).
 - `irc` sends a durable notice to another session with `to: "session:<id>"` or `to: "session:all"`. A session reads its notices at the start of each prompt and at step boundaries, shows them to the model and forwards them to its running lanes, so a warning survives a dropped terminal pipe and reaches the lanes ([Refs](https://github.com/Wladefant/veyyon/issues/537)).
 - A delivered cross-session notice carries a header with the sender, the send and delivery times (Europe/Berlin and UTC) and the delay when it is late. A notice older than 2 hours (`ttlMinutes` on the send sets another limit) is not injected; the sender gets a "Not delivered" notice ([Refs](https://github.com/Wladefant/veyyon/pull/539)).
 - Topic replenishment pauses producer dispatch while downstream verification is blocked and resumes within existing worker caps once pressure clears ([Refs https://github.com/Wladefant/veyyon/issues/549](https://github.com/Wladefant/veyyon/issues/549)).
+- The DeepSeek Fetch client reads one page through `https://api.deepseek.com/v1/tools/fetch` and returns its title and Markdown body, using the DeepSeek API key the coding agent already stores.
 
 ### Changed
 
+- `/reload-config` and `/reload` re-read rule layers and skills without restarting the session. The summary lists added, changed, and removed paths. Unreadable files keep the last good snapshot, and unchanged rules keep the existing advisor ([issue](https://github.com/Wladefant/veyyon/issues/577)).
 - Extension navigation no longer uses an origin allowlist. HTTP and HTTPS origins pass without configuration. The separate production-host refusal remains.
 
 ### Fixed
 
+- Quota refusals block the failed request's credential, not a healthy account selected by a later resolver call ([PR](https://github.com/Wladefant/veyyon/pull/619)).
 - Automatic lane handoff reserves the summary model's full output limit, including reasoning, before selection. The request sends the same limit ([issue](https://github.com/Wladefant/veyyon/issues/552)).
 - Extension browser sessions reuse their exact connect tab and remove pages created by failed opens. Closing a tab removes it before the extension can disconnect ([issue](https://github.com/Wladefant/veyyon/issues/548)).
+- Session factory callback typing and mixed native actor rosters now pass the workspace type check ([Refs](https://github.com/Wladefant/veyyon/issues/569)).
+- Codex account ranking ignores usage windows of length 0, so one account no longer takes every new session.
 
 ## [1.5.6] - 2026-10-10
 

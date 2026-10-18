@@ -17,6 +17,7 @@
 ### Added
 - Optional encrypted cloud checkpoints preserve native journals, artifacts, blobs, dirty files and version pins. The default-off client supports restore and explicit forks. Durable Object epochs fence synchronized prompt and tool admission. The existing `sessions` command alias remains available ([issue](https://github.com/Wladefant/veyyon/issues/567)).
 - Task and qa-verifier spawns share configured Gemini 3.8 Flash and GPT-6 Luna models evenly by spawn identity.
+- `deepseek` is a `web_search` provider and a `fetch` reader backend. Both use the `DEEPSEEK_API_KEY` that the DeepSeek model provider already reads, so a machine with a DeepSeek key searches and reads pages with no second credential.
 
 - Terminal provider HTTP 429 and 402 lane errors notify `model_routing.py record-error` without waiting. The reporter uses a hidden child, a 10-second timeout and payload-free failure logs ([Refs](https://github.com/Wladefant/superboard/issues/451)).
 - `irc` sends a durable notice to another session with `to: "session:<id>"` or `to: "session:all"`. A session reads its notices at the start of each prompt and at step boundaries, shows them to the model and forwards them to its running lanes, so a warning survives a dropped terminal pipe and reaches the lanes ([Refs](https://github.com/Wladefant/veyyon/issues/537)).

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- The DeepSeek Fetch client reads one page through `https://api.deepseek.com/v1/tools/fetch` and returns its title and Markdown body, using the DeepSeek API key the coding agent already stores.
+
 ## [1.5.6] - 2026-10-10
 
 ### Changed
