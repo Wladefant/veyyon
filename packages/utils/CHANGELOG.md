@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `$envExact`, `USER_AGENT`, `once` and `slugify` to the shared utility API.
+
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.

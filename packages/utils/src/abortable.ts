@@ -307,3 +307,21 @@ export function lazy<T>(build: () => T): Lazy<T> {
 		},
 	};
 }
+
+/**
+ * Memoizes a function with no arguments, calling it once and caching the result.
+ *
+ * @param fn - Function to be called once
+ * @returns A function that returns the cached result of `fn`
+ */
+export function once<T>(fn: () => T): () => T {
+	let store = undefined as { value: T } | undefined;
+	return () => {
+		if (store) {
+			return store.value;
+		}
+		const value = fn();
+		store = { value };
+		return value;
+	};
+}

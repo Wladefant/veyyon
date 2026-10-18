@@ -223,6 +223,25 @@ export function $pickenv(...keys: string[]): string | undefined {
 }
 
 /**
+ * Returns the value of `name` only when `env` holds that key with exactly this casing, otherwise `undefined`.
+ *
+ * Enumeration preserves real key casing on Windows, unlike the getter. Use this instead of
+ * `process.env[name] ?? literal` wherever `name` may be a user-supplied literal (e.g. a stored API key):
+ * a same-named system variable with different casing must not hijack the literal.
+ *
+ * @param name - Environment variable name to look up.
+ * @param env - Environment source; defaults to `process.env`.
+ */
+export function $envExact(name: string, env: Record<string, string | undefined> = process.env): string | undefined {
+	const value = env[name];
+	if (value === undefined) return undefined;
+	for (const key in env) {
+		if (key === name) return value;
+	}
+	return undefined;
+}
+
+/**
  * Parses a positive decimal integer from `$env[name]`, or `defaultValue` when the
  * variable is unset or empty.
  *

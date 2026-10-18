@@ -58,6 +58,9 @@ export const APP_ALIAS: string = "vey";
 /** Canonical marketing/docs site. Single owner — import, never re-hardcode. */
 export const SITE_URL: string = "https://veyyon.dev";
 
+/** Public homepage that inference gateways (OpenRouter, Vercel AI Gateway) credit veyyon traffic to. Derived from {@link SITE_URL}. */
+export const APP_URL: string = `${SITE_URL}/`;
+
 /** Public changelog/releases page. Where `/changelog` and the update notice point. */
 export const CHANGELOG_URL: string = "https://veyyon.dev/changelog";
 
@@ -113,6 +116,9 @@ const INSTALL_ID_FILE = "install-id";
 
 /** Version (e.g. "1.0.0") */
 export const VERSION: string = version;
+
+/** Default User-Agent header string (e.g. "veyyon/1.0.0"). */
+export const USER_AGENT = `veyyon/${VERSION}`;
 
 /**
  * Build metadata tag embedded at compile time (e.g. "a19ab2a13-local").
