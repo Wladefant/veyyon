@@ -694,6 +694,7 @@ const cloudflareCatalogSerialTestFiles: readonly string[] = [
 ];
 
 const cloudflareEngineSerialTestFiles: readonly string[] = ["./test/editor-wordwrap-fuzz.test.ts"];
+const cloudflareExcludedTestFiles: readonly string[] = ["./test/slice-extract-fuzz.test.ts"];
 const cloudflareSerialTestEnv: Record<string, string> = { VEYYON_TEST_TIMEOUT_MS: "60000" };
 
 export function workspaceTestParallelism(pkg: string, requested: number): number {
@@ -1080,6 +1081,9 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 				}
 				if (command.cwd === "hosts/terminal/engine") {
 					return { ...command, excludedTestFiles: cloudflareEngineSerialTestFiles };
+				}
+				if (command.cwd === "packages/utils") {
+					return { ...command, excludedTestFiles: cloudflareExcludedTestFiles };
 				}
 				return command;
 			});

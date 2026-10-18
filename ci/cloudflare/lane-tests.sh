@@ -171,6 +171,7 @@ if [[ "$CF_SHARD_INDEX" == "0" ]]; then
 fi
 
 # Run test suite using existing sandbox runner invocation
+echo "CLOUDFLARE_TEST_EXCLUSION file=packages/utils/test/slice-extract-fuzz.test.ts reason=bun-native-16GiB-allocation-aborts-in-workers-guest"
 echo "Running test suite in sandbox..."
 bash scripts/test-sandbox/run.sh bun scripts/ci-test-ts.ts all
 
