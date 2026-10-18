@@ -3040,6 +3040,14 @@ export class AgentSession {
 						skipAgentContinue("post-restore-unavailable", options);
 						return;
 					}
+					// Another start (a queued-message drain, a second continuation scheduled at the same
+					// settle) can begin a run during the restore above. That run reads the state this
+					// continuation was scheduled for and polls the same queues, so yield to it rather than
+					// call continue() on a busy agent.
+					if (this.agent.state.isStreaming) {
+						skipAgentContinue("agent-busy", options);
+						return;
+					}
 					await this.agent.continue();
 				} catch (error) {
 					logger.warn("agent.continue failed after scheduling", {
