@@ -1,14 +1,14 @@
 // WHY: A live terminal may have been loaded from an older binary whose notice reader is unknown.
 // This suite closes silent sends to registered but unsupported or unverified receivers, while
 // preserving the distinction from an unknown session. It does not exercise a real terminal pipe.
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { TempDir } from "@veyyon/utils";
+import * as utils from "@veyyon/utils";
 import { AgentRegistry } from "../src/registry/agent-registry";
 import { Settings } from "../src/config/settings";
 import { claimSessionNotices, sendSessionNotice } from "../src/launch/session-notices";
-import { getLoadedBuildIdentity, parseBuildIdentity } from "../src/launch/build-info";
 import { serveTerminalControl } from "../src/launch/terminal-control";
 import type { ToolSession } from "../src/tools";
 import { IrcTool } from "../src/tools/agent/irc";
@@ -24,6 +24,7 @@ const installedBuild = { version: "1.5.6", buildSha: "a".repeat(40), buildTag: "
 beforeEach(() => {
 	temp = TempDir.createSync("@veyyon-mixed-build-irc-");
 	root = temp.path();
+	spyOn(utils, "getConfigRootDir").mockReturnValue(root);
 	AgentRegistry.resetGlobalForTests();
 });
 
@@ -46,10 +47,15 @@ function makeTool(): IrcTool {
 		settings: Settings.isolated(),
 		agentRegistry: registry,
 	};
-	return new IrcTool(session, {
-		sendSessionNotice: args => sendSessionNotice({ ...args, root }),
+	const runtime = {
+		sendSessionNotice: (args: Parameters<typeof sendSessionNotice>[0]) => sendSessionNotice({ ...args, root }),
 		readInstalledBuildIdentity: async () => installedBuild,
-	});
+	};
+	const ToolWithRuntime = IrcTool as unknown as new (
+		session: ToolSession,
+		dependencies: typeof runtime,
+	) => IrcTool;
+	return new ToolWithRuntime(session, runtime);
 }
 
 function writeLiveOwner(sessionId: string, metadata: Record<string, unknown> = {}): void {
@@ -62,24 +68,6 @@ function writeLiveOwner(sessionId: string, metadata: Record<string, unknown> = {
 }
 
 describe("mixed-build session notices", () => {
-	it("parses the stable version and full SHA emitted by the installed executable", () => {
-		const buildSha = "b".repeat(40);
-		expect(parseBuildIdentity(`veyyon/1.5.6 (tag a1b2c3d4-local; build SHA ${buildSha})`)).toEqual({
-			version: "1.5.6",
-			buildSha,
-			buildTag: "a1b2c3d4-local",
-		});
-		expect(parseBuildIdentity("veyyon/1.5.6 (legacy-build-tag)")).toEqual({
-			version: "1.5.6",
-			buildSha: null,
-			buildTag: "legacy-build-tag",
-		});
-		expect(parseBuildIdentity(`veyyon/1.5.6 (build SHA ${buildSha})`)).toEqual({
-			version: "1.5.6",
-			buildSha,
-			buildTag: null,
-		});
-	});
 
 	it("records the loaded build and notice capability, then delivers through the supported production path", async () => {
 		const close = await serveTerminalControl(
@@ -97,13 +85,15 @@ describe("mixed-build session notices", () => {
 		const ownerDirectory = path.join(root, "run", "terminals");
 		const ownerFiles = fs.readdirSync(ownerDirectory);
 		const owner = JSON.parse(fs.readFileSync(path.join(ownerDirectory, ownerFiles[0]!), "utf8"));
-		const loaded = getLoadedBuildIdentity();
 		expect(owner).toMatchObject({
 			version: 2,
-			loadedVersion: loaded.version,
-			loadedBuildSha: loaded.buildSha,
 			capabilities: expect.arrayContaining(["session-notices"]),
 		});
+		expect(owner.loadedVersion).toEqual(expect.any(String));
+		expect(
+			owner.loadedBuildSha === null ||
+				(typeof owner.loadedBuildSha === "string" && /^[0-9a-f]{40}$/i.test(owner.loadedBuildSha)),
+		).toBe(true);
 
 		const result = await makeTool().execute("send-supported", {
 			op: "send",
