@@ -12,6 +12,7 @@
 - Planning a history summary measures the span in slices that yield to the event loop every 8 ms and stages a span whose byte count already puts one request past the window without serializing it whole, so on a resumed 34,572-entry session the candidate estimate holds the event loop at most 9.5 ms instead of 405 ms; `estimateCompactionRequestTokens` and `planSummarySegments` are now async, and `planSummarySegments` takes the `SummarySource` that `measureSummarySource` returns.
 - Summarization requests that do not replay the session prefix (the turn-prefix summary of a split turn, a history summary without cache alignment, staged segment and merge summaries, and branch summaries) are sent with `cacheRetention: "none"`, so Anthropic no longer bills a cache write that is never read and no longer warns "prompt cache prefix changed" after each split-turn compaction.
 - A compaction no longer cuts between a tool call and its result when a message sits between them, such as the `cwd_changed` and `prompt_cache_invalidated` messages `set_cwd` appends while it runs, so the kept history no longer starts with a result whose call was summarized and every later request no longer folds that result into a note.
+- A compaction on a model that does not accept the requested effort logs "Compaction effort is not accepted by the model" once per model and effort instead of once per request, so a staged compaction of a 146 MB session logs it once instead of 133 times; `clampPassEffort` in `@veyyon/agent-core/effort-clamp` is the shared clamp.
 
 ### Removed
 

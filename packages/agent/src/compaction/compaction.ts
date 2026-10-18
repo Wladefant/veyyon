@@ -32,9 +32,9 @@ import { createOpenAICodexCompactionRequestContext } from "@veyyon/ai/providers/
 import { detectDegenerateRepetition } from "@veyyon/ai/utils/thinking-loop";
 import { Effort } from "@veyyon/catalog/effort";
 import { preferredDialect } from "@veyyon/catalog/identity";
-import { clampThinkingLevelForModel } from "@veyyon/catalog/model-thinking";
 import { errorMessage, logger, prompt, TimeSlice } from "@veyyon/utils";
 import { stripReadSelector } from "@veyyon/utils/read-selector";
+import { clampPassEffort } from "../effort-clamp";
 import { instrumentedCompleteSimple, type OneshotKind } from "../instrumented-complete";
 import { AGENT_PROMPTS } from "../prompts/registry";
 import type { AgentTelemetry } from "../telemetry";
@@ -728,7 +728,8 @@ function effortFromThinkingLevel(level: ThinkingLevel): Effort {
  *   (preserves current behavior for users who never touched the dial).
  * - Explicit effort → respect user choice → clamped per model.
  *
- * The clamp routes through `clampThinkingLevelForModel`, which returns
+ * The clamp routes through `clampPassEffort`, which logs a move once per model, and
+ * `clampThinkingLevelForModel`, which returns
  * `undefined` for reasoning models without a thinking config — the build-time
  * encoding of `compat.supportsReasoningEffort: false` (e.g.
  * `xai-oauth/grok-4.20-0309-reasoning`). That `undefined` then flows through to the
@@ -739,15 +740,7 @@ function resolveCompactionEffort(model: Model, level: ThinkingLevel | undefined)
 	if (level === ThinkingLevel.Off) return undefined;
 	const requested: Effort =
 		level === undefined || level === ThinkingLevel.Inherit ? Effort.High : effortFromThinkingLevel(level);
-	const clamped = clampThinkingLevelForModel(model, requested);
-	if (clamped !== requested) {
-		logger.warn("Compaction effort is not accepted by the model; using the nearest supported level", {
-			model: `${model.provider}/${model.id}`,
-			requested,
-			using: clamped ?? "provider default",
-		});
-	}
-	return clamped;
+	return clampPassEffort(model, requested, "Compaction");
 }
 
 /**

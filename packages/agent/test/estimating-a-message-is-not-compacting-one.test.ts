@@ -172,8 +172,13 @@ const PRUNING_CEILING = 197;
  * RE-MEASURED 2026-10-18: engine 309. The one new module is `compaction/summary-source.ts`, which sizes
  * and serializes a summary span in time slices. It imports `@veyyon/utils`, `../tokenizer` and `./utils`,
  * all already on the engine's reach, so the growth is that one file and no subtree.
+ *
+ * RE-MEASURED 2026-10-18 again: engine 310. The one new module is `effort-clamp.ts`, the clamp every
+ * compaction request and memory pass sends its fixed effort through, which logs a moved effort once per
+ * model. It imports `@veyyon/catalog/model-thinking` and `@veyyon/utils`, both already on the engine's
+ * reach, so the growth is that one file and no subtree.
  */
-const COMPACTION_ENGINE_CEILING = 309;
+const COMPACTION_ENGINE_CEILING = 310;
 const REMOTE_SUMMARIZER_CEILING = 101;
 
 describe("the estimator is a leaf", () => {
