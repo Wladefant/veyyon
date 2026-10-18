@@ -1864,6 +1864,9 @@ const TARGET_TRACKED_TEST_FILES: readonly string[] = [
 	"packages/utils/test/math.test.ts",
 	"hosts/terminal/engine/test/editor-wordwrap-fuzz.test.ts",
 	"packages/utils/test/an-idle-process-samples-its-stack-ten-times-less-often.test.ts",
+	"packages/coding-agent/test/tools/web/search/a-deepseek-search-call-sends-the-documented-body-and-limits.test.ts",
+	"packages/coding-agent/test/tools/fetch-deepseek-reader.test.ts",
+	"packages/coding-agent/test/tools/web/search/a-search-provider-resolves-result-limits-by-its-own-precedence.test.ts",
 ];
 
 interface FileTestReceipt {
