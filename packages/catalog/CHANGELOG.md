@@ -15,6 +15,7 @@
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.
+- Catalog generation applies provider-specific model policies and preserves selective regeneration for named providers.
 
 ## [1.5.6] - 2026-10-10
 ### Removed
