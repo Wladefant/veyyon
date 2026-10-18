@@ -201,7 +201,14 @@ export function classifyProjectDir(pwd: string): ProjectDirClass {
 	const key = roots.join("\u0000");
 	if (scratchClassCache?.pwd === pwd && scratchClassCache.key === key) return scratchClassCache.result;
 	let result: ProjectDirClass = { scratch: false, relative: null };
+	const home = os.homedir();
 	for (const root of roots) {
+		// When a temporary root encloses the home directory (e.g. in sandboxes or CI workspaces),
+		// paths within the home directory are user projects, not scratch folders, unless they sit
+		// under the home directory's own scratch subfolder (`~/tmp`).
+		if (pathIsWithin(root, home) && pathIsWithin(home, pwd) && !pathIsWithin(path.join(home, "tmp"), pwd)) {
+			continue;
+		}
 		if (pathIsWithin(root, pwd)) {
 			result = { scratch: true, relative: relativePathWithinRoot(root, pwd) };
 			break;
@@ -260,14 +267,24 @@ export function renderLocation(input: LocationInput): RenderedLocation {
 		return { content: theme.fg("statusLinePath", content), pin: iconPin(theme.icon.worktree) };
 	}
 
-	const { scratch, relative } = classifyProjectDir(input.projectDir);
 	let pwd = input.projectDir;
+	let displayRelative: string | null = null;
+	if (stripPrefix) {
+		const stripped = stripDisplayRoot(pwd, opts.displayRoots);
+		if (stripped !== pwd) {
+			displayRelative = stripped;
+		}
+	}
+
+	const { scratch, relative } = displayRelative
+		? { scratch: false, relative: null }
+		: classifyProjectDir(input.projectDir);
 
 	if (stripPrefix) {
-		if (scratch) {
-			if (relative) pwd = relative;
-		} else {
-			pwd = stripDisplayRoot(pwd, opts.displayRoots);
+		if (displayRelative) {
+			pwd = displayRelative;
+		} else if (scratch && relative) {
+			pwd = relative;
 		}
 	}
 	const repoSuffix = input.activeRepoRelativeRoot ? ` ↳ ${sanitizeStatusText(input.activeRepoRelativeRoot)}` : "";

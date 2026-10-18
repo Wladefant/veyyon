@@ -181,7 +181,7 @@ export class AnnotationStore {
 			this.#ownsConnection = true;
 		} else {
 			const shared = options.conn ?? options.db;
-			this.dbPath = options.dbPath ?? options.db_path ?? dbPath();
+			this.dbPath = options.dbPath ?? options.db_path ?? (shared ? ":memory:" : dbPath());
 			this.db = shared ?? openDatabase(this.dbPath);
 			this.#ownsConnection = shared === undefined;
 		}

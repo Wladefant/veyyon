@@ -66,6 +66,7 @@ import {
 	prefixesOf,
 	runArm,
 	type SessionLedger,
+	SHALLOW_ANCHOR,
 	SIMPLE_PLACEMENT,
 	type Step,
 	systemPrompt,
@@ -107,7 +108,7 @@ function readAfterFirstTurn(ledger: SessionLedger): number {
 describe("a system block that changes every turn", () => {
 	it("costs production more than the simpler placement it was compared against", async () => {
 		const volatile = volatileTailSession();
-		const production = await runArm(PRODUCTION, volatile);
+		const production = await runArm(SHALLOW_ANCHOR, volatile);
 		const simple = await runArm(SIMPLE_PLACEMENT, volatile);
 
 		// Direction first: the simpler rule reads MORE of the prompt, on identical
@@ -123,7 +124,7 @@ describe("a system block that changes every turn", () => {
 
 	it("leaves production reading only the harness, while the others reach the project block", async () => {
 		const volatile = volatileTailSession();
-		const production = await runArm(PRODUCTION, volatile);
+		const production = await runArm(SHALLOW_ANCHOR, volatile);
 		const deeper = await runArm(deepAnchor(1), volatile);
 
 		// Both arms mark the same COUNT; what differs is how much survives a change
@@ -143,9 +144,9 @@ describe("a system block that changes every turn", () => {
 	 */
 	it("is fixed by a deeper anchor that costs nothing when the system prompt is stable", async () => {
 		const volatile = volatileTailSession();
-		const productionVolatile = await runArm(PRODUCTION, volatile);
+		const productionVolatile = await runArm(SHALLOW_ANCHOR, volatile);
 		const deeperVolatile = await runArm(deepAnchor(1), volatile);
-		const productionStable = await runArm(PRODUCTION, STABLE);
+		const productionStable = await runArm(SHALLOW_ANCHOR, STABLE);
 		const deeperStable = await runArm(deepAnchor(1), STABLE);
 
 		expect(deeperVolatile.cost).toBeLessThan(productionVolatile.cost);
@@ -161,7 +162,7 @@ describe("a system block that changes every turn", () => {
 	 */
 	it("is made worse, not better, by anchoring the block that changes", async () => {
 		const volatile = volatileTailSession();
-		const production = await runArm(PRODUCTION, volatile);
+		const production = await runArm(SHALLOW_ANCHOR, volatile);
 		const ontoTheChange = await runArm(deepAnchor(2), volatile);
 
 		expect(readAfterFirstTurn(ontoTheChange)).toBe(0);
@@ -174,7 +175,7 @@ describe("a system block that changes every turn", () => {
 	 * an argument for adopting the simpler rule.
 	 */
 	it("does not indict the shipped placement on a stable system prompt", async () => {
-		const production = await runArm(PRODUCTION, STABLE);
+		const production = await runArm(SHALLOW_ANCHOR, STABLE);
 		const simple = await runArm(SIMPLE_PLACEMENT, STABLE);
 
 		expect(production.cost).toBeLessThanOrEqual(simple.cost);

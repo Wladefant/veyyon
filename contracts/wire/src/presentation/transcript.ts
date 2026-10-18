@@ -11,6 +11,21 @@
 import type { ToolView } from "@veyyon/view";
 import type { BranchSummaryView, CompactionSummaryView } from "./summary";
 
+/** Turn activity attached to forwarded terminal transcript entries. */
+export interface TerminalTurnProvenance {
+	hasOperatorMessage: boolean;
+	hasSubstantiveToolCall: boolean;
+	toolNames: string[];
+	isMain: boolean;
+}
+
+/** Assistant text as forwarded over terminal control. */
+export interface TerminalTranscriptEntry {
+	entryId: string;
+	text: string;
+	turn?: TerminalTurnProvenance;
+}
+
 /** Stable identity of a block across updates. Assigned by the builder, opaque to the renderer. */
 export type BlockId = string;
 

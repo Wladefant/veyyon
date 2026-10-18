@@ -66,13 +66,13 @@ export function isWordNavJoiner(grapheme: string): boolean {
  */
 function floorToGraphemeBoundary(text: string, cursor: number): number {
 	if (cursor <= 0) return 0;
-	let prev = 0;
-	for (const { segment } of getSegmenter().segment(text)) {
-		const next = prev + segment.length;
-		if (next >= cursor) return next === cursor ? cursor : prev;
-		prev = next;
+	if (cursor >= text.length) return text.length;
+	let boundary = 0;
+	for (const { index } of getSegmenter().segment(text)) {
+		if (index > cursor) break;
+		boundary = index;
 	}
-	return prev;
+	return boundary;
 }
 
 /**

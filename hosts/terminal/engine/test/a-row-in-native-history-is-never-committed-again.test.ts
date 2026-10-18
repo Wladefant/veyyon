@@ -120,6 +120,14 @@ class Footer implements Component {
 	}
 }
 
+class PlainBlock implements Component {
+	rows: string[] = [];
+	invalidate(): void {}
+	render(): string[] {
+		return [...this.rows];
+	}
+}
+
 interface Variant {
 	height: number;
 	source: ShrinkSource;
@@ -312,4 +320,90 @@ describe("a row in native history is never committed again", () => {
 		expect(failures).toEqual([]);
 		expect([...swept]).toEqual([...SHRINK_SOURCES]);
 	}, 180_000);
+
+	test("cursorless component collapsing to an identical prefix floors at committed rows without reviving history rows", async () => {
+		if (process.platform === "win32") return;
+		const term = new VirtualTerminal(100, 24, 50_000);
+		const tui = new TUI(term, true);
+		tui.setScrollbackRebuild(true);
+
+		const block = new PlainBlock();
+		block.rows = Array.from({ length: 100 }, (_, i) => `plain row ${i.toString().padStart(3, "0")}`);
+		tui.addChild(block);
+		tui.start();
+		await settleFrames(term, tui);
+
+		// First render: 100 rows, height 24 commits 76 rows (0..75) and viewport displays 76..99.
+		const initialHistory = history(term);
+		expect(initialHistory).toHaveLength(76);
+		const initialViewport = term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
+		expect(initialViewport[0]).toBe("plain row 076");
+		expect(initialViewport[23]).toBe("plain row 099");
+
+		// Shrink to identical 50-row prefix: strict-prefix reconciliation reduces the ledger
+		// to 50, so no live uncommitted tail remains. Cursorless ordinary windows floor at
+		// committedRows (50), so already-committed history rows (0..49) are never revived on the
+		// grid. The viewport floors at committedRows, displaying exact 24 blank rows, while
+		// native history remains exact and unchanged.
+		block.rows = Array.from({ length: 50 }, (_, i) => `plain row ${i.toString().padStart(3, "0")}`);
+		tui.requestRender();
+		await settleFrames(term, tui);
+
+		const collapsedViewport = term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
+		expect(collapsedViewport).toHaveLength(24);
+		expect(collapsedViewport).toEqual(Array.from({ length: 24 }, () => ""));
+
+		const collapsedHistory = history(term);
+		expect(collapsedHistory).toEqual(initialHistory);
+		expect(duplicates(collapsedHistory)).toEqual([]);
+
+		// Subsequent requestRender without changes proves stability: viewport remains exact 24 blank
+		// rows and native history remains exact and unchanged with no duplicate rows.
+		tui.requestRender();
+		await settleFrames(term, tui);
+
+		const stableViewport = term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
+		expect(stableViewport).toHaveLength(24);
+		expect(stableViewport).toEqual(Array.from({ length: 24 }, () => ""));
+
+		const finalHistory = history(term);
+		expect(finalHistory).toEqual(initialHistory);
+		expect(duplicates(finalHistory)).toEqual([]);
+		tui.stop();
+	});
+
+	test("cursorless component collapsing with divergent rows preserves the surviving tail without recommitting", async () => {
+		if (process.platform === "win32") return;
+		const term = new VirtualTerminal(100, 24, 50_000);
+		const tui = new TUI(term, true);
+		tui.setScrollbackRebuild(true);
+
+		const block = new PlainBlock();
+		block.rows = Array.from({ length: 100 }, (_, i) => `plain row ${i.toString().padStart(3, "0")}`);
+		tui.addChild(block);
+		tui.start();
+		await settleFrames(term, tui);
+
+		expect(history(term)).toHaveLength(76);
+
+		// Shrink to 50 rows with rows 40..49 diverged (edited): prefix reconciliation
+		// rebases committedRows to 40 and sets committedRowsResynced=true. Native scrollback
+		// semantics floor the window at the committed boundary (row 40) so already-committed
+		// rows (0..39) are never re-shown on the grid.
+		block.rows = Array.from({ length: 50 }, (_, i) =>
+			i >= 40 ? `diverged row ${i.toString().padStart(3, "0")}` : `plain row ${i.toString().padStart(3, "0")}`,
+		);
+		tui.requestRender();
+		await settleFrames(term, tui);
+
+		const collapsedViewport = term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
+		expect(collapsedViewport).toHaveLength(24);
+		expect(collapsedViewport[0]).toBe("diverged row 040");
+		expect(collapsedViewport[9]).toBe("diverged row 049");
+		expect(collapsedViewport.slice(10)).toEqual(Array.from({ length: 14 }, () => ""));
+
+		const finalHistory = history(term);
+		expect(duplicates(finalHistory)).toEqual([]);
+		tui.stop();
+	});
 });

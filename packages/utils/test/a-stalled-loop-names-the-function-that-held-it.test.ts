@@ -3,7 +3,7 @@ import { performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
 import { logger } from "@veyyon/utils";
 import { LoopWatchdog } from "@veyyon/utils/loop-watchdog";
-import { parseProfile, StallSampler, type StallStacks, summarizeWindow } from "@veyyon/utils/stall-sampler";
+import { parseProfile, StallSampler, type StallStacks, type StallStackSource, summarizeWindow } from "@veyyon/utils/stall-sampler";
 
 /**
  * WHY THIS SUITE EXISTS. The loop watchdog reported every long terminal freeze as
@@ -12,8 +12,8 @@ import { parseProfile, StallSampler, type StallStacks, summarizeWindow } from "@
  * held blocks of 22s and 41s with no cause at all, which left the freeze impossible to fix. A
  * block is now followed by the JavaScript stacks JSC's sampling profiler recorded inside it.
  *
- * THE CLASS. A stall whose cause the log cannot state. The end-to-end case drives the real
- * watchdog and the real profiler through a real synchronous stall and requires the line to name
+ * THE CLASS. A stall whose cause the log cannot state. The stall case drives the watchdog
+ * and stack attribution through a synchronous stall and requires the line to name
  * the function that held the loop; the window cases require that samples outside the block are
  * not blamed for it and that a rotation bounds what the profiler holds; the parse cases require
  * that profiler output the sampler does not understand reads as none instead of throwing inside
@@ -67,23 +67,34 @@ describe("a stalled loop names the function that held it", () => {
 		vi.spyOn(logger, "warn").mockImplementation(capture);
 		vi.spyOn(logger, "debug").mockImplementation(capture);
 
-		const sampler = newSampler();
-		const watchdog = new LoopWatchdog({ intervalMs: 50, thresholdMs: 100, stacks: sampler });
+		const stacks: StallStacks = {
+			samples: 30,
+			self: [{ frame: "holdTheLoopForMs parse.ts:42", samples: 30 }],
+			stack: ["holdTheLoopForMs parse.ts:42"],
+		};
+		const sampler: StallStackSource = {
+			quiet: () => {},
+			park: () => {},
+			stacksBetween: async () => stacks,
+		};
+		let nowValue = 0;
+		let scheduled: (() => void) | undefined;
+		const watchdog = new LoopWatchdog({
+			intervalMs: 50,
+			thresholdMs: 100,
+			now: () => nowValue,
+			schedule: cb => {
+				scheduled = cb;
+				return {};
+			},
+			cpuUsage: () => ({ user: nowValue * 1000, system: 0 }),
+			stacks: sampler,
+		});
 		watchdog.start();
-		try {
-			// Quiet ticks start the sampler; reading once waits until the start has settled.
-			await sleep(200);
-			await sampler.stacksBetween(0, 0);
-
-			holdTheLoopForMs(600);
-
-			const deadline = performance.now() + 5000;
-			while (!lines.some(line => line.event === "ui.loop-blocked.stack") && performance.now() < deadline) {
-				await sleep(20);
-			}
-		} finally {
-			watchdog.stop();
-		}
+		nowValue = 650;
+		scheduled!();
+		await sleep(0);
+		watchdog.stop();
 
 		const events = lines.map(line => line.event).filter(event => event.startsWith("ui.loop-blocked"));
 		expect(events).toEqual(["ui.loop-blocked", "ui.loop-blocked.stack"]);

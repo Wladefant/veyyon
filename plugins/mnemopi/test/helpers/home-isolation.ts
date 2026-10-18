@@ -42,13 +42,17 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-if (!process.env.MNEMOPI_HOME) {
-	const root = mkdtempSync(join(tmpdir(), "mnemopi-test-home-"));
-	process.env.MNEMOPI_HOME = root;
-	process.on("exit", () => {
-		rmSync(root, { recursive: true, force: true });
-	});
+const isolatedHome = mkdtempSync(join(tmpdir(), "mnemopi-test-home-"));
+// Test processes own their isolation boundary. Replacing inherited values here
+// keeps late writers isolated even after per-suite helpers restore their snapshots.
+process.env.MNEMOPI_HOME = isolatedHome;
+process.env.VEYYON_CONFIG_DIR = join(isolatedHome, "config");
+for (const name of ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"]) {
+	process.env[name] = join(isolatedHome, name.slice(4).toLowerCase());
 }
+process.on("exit", () => {
+	rmSync(isolatedHome, { recursive: true, force: true });
+});
 
 /**
  * The one entry a mnemopi suite creates in the shared home on purpose.

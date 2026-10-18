@@ -635,30 +635,108 @@ describe("TUI overlays", () => {
 		}
 	});
 
-	it("stays anchored across shrink-grow cycles while overflowing viewport", async () => {
+	it("keeps cursorless shrink-grow cycles on the committed ledger slice", async () => {
 		const term = new VirtualTerminal(30, 6);
 		const tui = new TUI(term);
-		const component = new MutableContentComponent(Array.from({ length: 64 }, (_v, i) => `row-${i}`));
+		const component = new MutableContentComponent(buildRows(64));
 		tui.addChild(component);
 		try {
 			tui.start();
 			await flushRender(term, tui);
+			expect(term.getViewport().map(line => line.trim())).toEqual(["row-58", "row-59", "row-60", "row-61", "row-62", "row-63"]);
 
 			for (let cycle = 0; cycle < 3; cycle++) {
-				component.setLines(Array.from({ length: 64 - cycle * 8 }, (_v, i) => `row-${i}`));
+				const count = 64 - cycle * 8;
+				component.setLines(buildRows(count));
 				tui.requestRender();
 				await flushRender(term, tui);
+				// Cursorless shrink floors at committed history; growth cannot re-expose those rows.
+				expect(term.getViewport().map(line => line.trim())).toEqual(
+					cycle === 0 ? buildRows(64).slice(58) : Array.from({ length: 6 }, () => ""),
+				);
 
-				component.setLines(Array.from({ length: 64 - cycle * 8 + 4 }, (_v, i) => `row-${i}`));
+				component.setLines(buildRows(count + 4));
 				tui.requestRender();
 				await flushRender(term, tui);
+				expect(term.getViewport().map(line => line.trim())).toEqual(
+					cycle === 0 ? buildRows(68).slice(62) : [...buildRows(count + 4).slice(count), "", ""],
+				);
+			}
+		} finally {
+			tui.stop();
+		}
+	});
+
+	it("does not revive a cursor marker owned by native history", async () => {
+		const term = new VirtualTerminal(30, 6);
+		const tui = new TUI(term, true);
+		const lines = buildRows(64);
+		lines[2] += CURSOR_MARKER;
+		const component = new MutableContentComponent(lines);
+		tui.addChild(component);
+		try {
+			tui.start();
+			await flushRender(term, tui);
+			const history = term.getScrollBuffer().slice(0, -term.rows);
+			component.setLines(lines.slice(0, 56));
+			for (let i = 0; i < 2; i++) {
+				tui.requestRender();
+				await flushRender(term, tui);
+				expect(term.getViewport().map(line => line.trim())).toEqual(Array.from({ length: 6 }, () => ""));
+				expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
+			}
+		} finally {
+			tui.stop();
+		}
+	});
+
+	it("does not collapse committed rows back into the viewport", async () => {
+		const term = new VirtualTerminal(30, 6);
+		const tui = new TUI(term);
+		const component = new MutableContentComponent(buildRows(64));
+		tui.addChild(component);
+		try {
+			tui.start();
+			await flushRender(term, tui);
+			const history = term.getScrollBuffer().slice(0, -term.rows);
+
+			// A strict-prefix collapse leaves the viewport blank rather than reviving committed rows.
+			component.setLines(buildRows(56));
+			tui.requestRender();
+			await flushRender(term, tui);
+			const blank = ["", "", "", "", "", ""];
+			expect(term.getViewport().map(line => line.trim())).toEqual(blank);
+			expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
+
+			for (let i = 0; i < 2; i++) {
+				tui.requestRender();
+				await flushRender(term, tui);
+				expect(term.getViewport().map(line => line.trim())).toEqual(blank);
+				expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
 			}
 
-			const viewport = term.getViewport().map(line => line.trim());
-			expect(viewport.every(line => /^row-\d+$/.test(line))).toBeTruthy();
-			const viewportRows = viewport.map(line => Number.parseInt(line.slice(4), 10));
-			expect(viewportRows.at(-1)).toBe(51);
-			expect(viewportRows[0]).toBeGreaterThanOrEqual(40);
+			const handle = tui.showOverlay(new LineComponent("overlay-", 2), { anchor: "center" });
+			await flushRender(term, tui);
+			expect(term.getViewport().some(line => line.trim().length > 0)).toBe(true);
+			expect(term.getViewport()[0]?.trim()).toBe("row-50");
+			expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
+			handle.hide();
+			await flushRender(term, tui);
+			expect(term.getViewport().map(line => line.trim())).toEqual(blank);
+			expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
+
+			component.setLines([...buildRows(55), "divergent"]);
+			tui.requestRender();
+			await flushRender(term, tui);
+			// An in-place edit of an audited history row does not make that row live.
+			expect(term.getViewport().map(line => line.trim())).toEqual(blank);
+			expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
+
+			component.setLines([...buildRows(56), "live-suffix"]);
+			tui.requestRender();
+			await flushRender(term, tui);
+			expect(term.getViewport().map(line => line.trim())).toEqual(["live-suffix", "", "", "", "", ""]);
+			expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
 		} finally {
 			tui.stop();
 		}
@@ -724,12 +802,18 @@ describe("TUI overlays", () => {
 			tui.start();
 			await flushRender(term, tui);
 			const before = term.getScrollBuffer().length;
-
+			expect(term.getViewport().map(line => line.trim())).toEqual(Array.from({ length: 10 }, (_v, i) => `row-${140 + i}`));
 			for (let i = 0; i < 12; i++) {
+				const history = term.getScrollBuffer().slice(0, -term.rows);
 				const handle = tui.showOverlay(new LineComponent(`overlay-${i}-`, 3), { anchor: "center" });
 				await flushRender(term, tui);
+				expect(term.getViewport().some(line => line.trim().length > 0)).toBe(true);
+				expect(term.getViewport()[0]?.trim()).toBe(i === 0 ? "row-140" : "row-130");
+				expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
+				expect(term.getViewport().some(line => line.includes(`overlay-${i}-0`))).toBe(true);
 				handle.hide();
 				await flushRender(term, tui);
+				expect(term.getScrollBuffer().slice(0, -term.rows)).toEqual(history);
 
 				if (i % 4 === 0) {
 					component.setLines(buildRows(140 + (i % 4) * 10));
@@ -737,7 +821,8 @@ describe("TUI overlays", () => {
 					await flushRender(term, tui);
 				}
 
-				expect(viewportRowNumbers(term).length).toBeGreaterThan(0);
+				// Collapsing 150 rows to the committed 140 leaves an empty viewport; history owns that prefix.
+				expect(term.getViewport().map(line => line.trim())).toEqual(Array.from({ length: 10 }, () => ""));
 			}
 
 			const scrollback = term.getScrollBuffer();

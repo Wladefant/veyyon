@@ -272,7 +272,7 @@ describe("worktree isolation helpers", () => {
 			});
 
 			it("clears a claim whose process is gone", async () => {
-				const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+				const gone = Bun.spawn([process.execPath, "-e", ""], { env: { HOME: repo }, stdout: "ignore", stderr: "ignore" });
 				await gone.exited;
 				const slot = path.join(getWorktreesDir(), "tdeadca11a");
 				await fs.mkdir(slot, { recursive: true });
@@ -319,7 +319,7 @@ describe("worktree isolation helpers", () => {
 				vi.spyOn(console, "log").mockImplementation(() => {});
 				const live = await ensureIsolation(repo, "crash-live-owner");
 				const crashed = await ensureIsolation(repo, "crash-dead-owner");
-				const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+				const gone = Bun.spawn([process.execPath, "-e", ""], { env: { HOME: repo }, stdout: "ignore", stderr: "ignore" });
 				await gone.exited;
 				const crashedBase = path.dirname(crashed.mergedDir);
 				const owner = JSON.parse(await fs.readFile(path.join(crashedBase, ISOLATION_OWNER_FILE), "utf8"));
@@ -348,7 +348,7 @@ describe("worktree isolation helpers", () => {
 				vi.spyOn(console, "log").mockImplementation(() => {});
 				const crashed = await ensureIsolation(repo, "crash-registered");
 				const base = path.dirname(crashed.mergedDir);
-				const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+				const gone = Bun.spawn([process.execPath, "-e", ""], { env: { HOME: repo }, stdout: "ignore", stderr: "ignore" });
 				await gone.exited;
 				const owner = JSON.parse(await fs.readFile(path.join(base, ISOLATION_OWNER_FILE), "utf8"));
 				await fs.writeFile(
@@ -555,7 +555,7 @@ describe("worktree isolation helpers", () => {
 			const makeDir = (_source: string, mergedDir: string) =>
 				fs.mkdir(mergedDir, { recursive: true }).then(() => {});
 			async function deadPid(): Promise<number> {
-				const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+				const gone = Bun.spawn([process.execPath, "-e", ""], { env: { HOME: repo }, stdout: "ignore", stderr: "ignore" });
 				await gone.exited;
 				return gone.pid;
 			}

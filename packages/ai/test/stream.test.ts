@@ -1243,7 +1243,7 @@ describe("Generate E2E Tests", () => {
 			{ retry: 3 },
 		);
 
-		it.skip(
+		it(
 			"should handle thinking mode",
 			async () => {
 				await handleThinking(llm, { reasoning: Effort.Medium });
@@ -1799,6 +1799,7 @@ describe("Generate E2E Tests", () => {
 		let llm: Model<"openai-completions"> | undefined;
 		let ollamaProcess: ChildProcess | null = null;
 
+		if (ollamaInstalled) {
 		beforeAll(async () => {
 			if (!ollamaInstalled) return;
 			// Check if model is available, if not pull it
@@ -1862,6 +1863,7 @@ describe("Generate E2E Tests", () => {
 				ollamaProcess = null;
 			}
 		});
+		}
 
 		it(
 			"should complete basic text generation",

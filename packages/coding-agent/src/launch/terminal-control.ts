@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as path from "node:path";
 import { atomicWriteFile, getConfigRootDir, postmortem } from "@veyyon/utils";
+import type { TerminalTranscriptEntry } from "@veyyon/wire/presentation/transcript";
 
 /** Versioned, private discovery record. Only the owning terminal publishes this. */
 export interface TerminalOwner {
@@ -15,13 +16,15 @@ export interface TerminalOwner {
 	token: string;
 }
 
-export interface TerminalControlTarget {
+
+export type TerminalControlTarget = {
 	identity(): { sessionId: string; cwd: string; sessionFile: string };
 	deliver(text: string, mode: "auto" | "steer" | "followUp"): Promise<string>;
 	abort(): Promise<boolean>;
-	history(): { entryId: string; text: string }[];
+	history(): TerminalTranscriptEntry[];
 	subscribe(listener: (event: unknown) => void): () => void;
-}
+};
+
 
 /** Optional protocol features this build serves. A peer that lacks one never sees the field. */
 export const TERMINAL_CAPABILITIES = ["deliver-ack"] as const;

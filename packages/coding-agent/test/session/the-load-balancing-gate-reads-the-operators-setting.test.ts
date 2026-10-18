@@ -107,7 +107,7 @@ describe("the load balancing gate reads the operator's setting", () => {
 		return { targetId: rows[0]!.id, siblingId: rows[1]!.id };
 	}
 
-	function exhaust(target: number): Promise<{ switched: boolean; retryAtMs?: number }> {
+	function exhaust(target: number): Promise<{ switched: boolean; retryAtMs?: number; quotaMessage?: string }> {
 		if (!storage) throw new Error("test setup failed");
 		return storage.markUsageLimitReached(PROVIDER, SESSION_ID, {
 			credentialId: target,
@@ -135,7 +135,8 @@ describe("the load balancing gate reads the operator's setting", () => {
 
 		const result = await exhaust(targetId);
 
-		expect(result).toEqual({ switched: true });
+		expect(result.switched).toBe(true);
+		expect(result.quotaMessage).toBeDefined();
 	});
 
 	/**

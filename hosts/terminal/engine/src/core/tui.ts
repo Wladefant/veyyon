@@ -1756,7 +1756,7 @@ export class TUI extends Container {
 			return;
 		}
 
-		const windowTop = Math.max(this.#committedRows, this.#composedFrame.length - height, 0);
+		const windowTop = this.#tailWindowTop(this.#composedFrame.length, height);
 		if (windowTop !== this.#windowTopRow) {
 			this.requestComponentRender(component);
 			return;
@@ -2946,6 +2946,16 @@ export class TUI extends Container {
 	}
 
 	/**
+	 * Window top for a frame with no live cursor: the frame tail, floored at the commit boundary
+	 * only while uncommitted rows remain. Once every frame row is committed, that floor would park
+	 * the window past the last row and paint blank lines, so the surviving tail is shown instead.
+	 */
+	#tailWindowTop(frameLength: number, height: number): number {
+		const floor = this.#committedRows < frameLength ? this.#committedRows : 0;
+		return Math.max(floor, frameLength - height, 0);
+	}
+
+	/**
 	 * Place the window and the commit boundary for this frame (lengths only;
 	 * {@link #assembleWindow} prepares the content).
 	 */
@@ -2956,7 +2966,7 @@ export class TUI extends Container {
 		hasVisibleOverlay: boolean,
 		fullPaint: boolean,
 	): WindowPlan {
-		const { prevWindowTop, geometryChanged } = transition;
+		const { geometryChanged } = transition;
 		const frameLength = rawFrame.length;
 		let committedPrefixResliced = false;
 		// Ceiling on what may enter native scrollback: chrome mounted after the
@@ -2972,39 +2982,26 @@ export class TUI extends Container {
 			windowTop = Math.max(0, frameLength - height);
 			chunkTo = Math.min(windowTop, historyEnd);
 		} else if (
-			frameLength <= this.#committedRows ||
-			(frameLength - this.#committedRows < height &&
-				(prevWindowTop < this.#committedRows ||
-					this.#frameCursorMarkers.some(marker => marker.row >= this.#committedRows)))
+			frameLength - this.#committedRows < height &&
+			this.#frameCursorMarkers.some(marker => marker.row >= this.#committedRows)
 		) {
 			// Tail re-anchor (a direct terminal may instead take the
 			// divergenceRebuild full paint above when the prefix resynced):
-			// either the frame shrank into the committed prefix, or the live tail
-			// below the committed boundary no longer fills the viewport while the
-			// focused cursor sits in it. Both happen when a tall transient block
-			// collapses — a streaming reply aborting after part of its
-			// declared-final prefix reached scrollback (the audit resyncs), a
-			// tall transient prompt (the ask dialog's inline editor) shrinking
-			// back to the one-line editor, or an ephemeral card (an IRC message,
-			// a displaced todo snapshot) retracting from under a tall live block
-			// whose rows had already scrolled off. Flooring windowTop at
-			// #committedRows would pin the editor mid-screen with blank rows
-			// underneath. The prompt NEVER floats, so the frame tail is re-shown
-			// even when the transcript still overflows the viewport.
+			// The live tail below the committed boundary no longer fills the
+			// viewport while a live cursor sits in it. A marker inside committed
+			// history is not a focus anchor and must not revive those rows.
+			// A collapsing transient prompt or ephemeral card can shorten the
+			// live region below the committed prefix. Keep the live editor at
+			// the viewport bottom instead of pinning it above blank rows.
 			//
 			// Re-shown is not re-committed. The rows above the new window top
 			// are already in native history; the commit index stays where it is,
 			// so the next growth slides the window in place (`#emitUpdate`'s
 			// uncommitted-slide rewrite) until it passes the committed boundary,
 			// and only rows beyond that boundary ever scroll off into history.
-			// That slide is the third way in: a window that already shows
-			// committed rows (`prevWindowTop < #committedRows`) keeps the frame
-			// tail while the tail is still shorter than the viewport, cursor or
-			// no cursor — flooring it at the boundary now would paint a short
-			// window over rows the grid already shows, with blank rows under it.
-			// Lowering the index here is what made every insert/retract cycle
-			// under a tall running card append the same rows to native scrollback
-			// again — thousands of copies of one status row over a long turn.
+			// Cursorless frames keep windowTop at or above the committed boundary:
+			// hiding the caret does not make history live again. An overlay may
+			// project that history onto the grid, but never changes this ledger.
 			windowTop = Math.max(0, frameLength - height);
 			if (this.#committedRows > frameLength) {
 				// Only a geometry frame arrives here with the index past the frame
@@ -3026,7 +3023,7 @@ export class TUI extends Container {
 			// grid would duplicate them for a scrolling reader. On a
 			// multiplexer resize the pane reflowed its own history; committed
 			// rows keep their old wrap there, same as any shell output.
-			windowTop = Math.max(this.#committedRows, frameLength - height, 0);
+			windowTop = this.#tailWindowTop(frameLength, height);
 			// Whatever scrolls above the window commits — the tape is the visual
 			// record; nothing that was painted may vanish. Overlays freeze
 			// commits: composited rows must never enter history, and the hidden
@@ -3047,7 +3044,11 @@ export class TUI extends Container {
 			// still paints in place, and the only rows that miss native scrollback
 			// are chrome rows, which were never history to begin with.
 			const commitWouldTakeLiveRows = windowTop > historyEnd;
-			chunkTo = hasVisibleOverlay || geometryChanged || commitWouldTakeLiveRows ? this.#committedRows : windowTop;
+			// A window above the boundary re-shows committed rows only; it never rewinds the commit ledger.
+			chunkTo =
+				hasVisibleOverlay || geometryChanged || commitWouldTakeLiveRows || windowTop < this.#committedRows
+					? this.#committedRows
+					: windowTop;
 			if (geometryChanged) {
 				committedPrefixResliced = true;
 				this.#committedPrefix = rawFrame.slice(0, this.#committedRows);
@@ -3133,9 +3134,10 @@ export class TUI extends Container {
 				altCaret = { row: regionRows + (cursorPos.row - footerTop), col: cursorPos.col };
 			}
 		} else {
-			for (let r = 0; r < height; r++) window[r] = frame[windowTop + r] ?? "";
+			const projectedTop = hasVisibleOverlay ? Math.max(0, frameLength - height) : windowTop;
+			for (let r = 0; r < height; r++) window[r] = frame[projectedTop + r] ?? "";
 			if (this.#pinnedFooterRows > 0) {
-				overlayFooterTop = Math.min(height, Math.max(0, frameLength - this.#pinnedFooterRows - windowTop));
+				overlayFooterTop = Math.min(height, Math.max(0, frameLength - this.#pinnedFooterRows - projectedTop));
 			}
 			if (cursorPos !== null && cursorPos.row >= windowTop && cursorPos.row < windowTop + height) {
 				altCaret = { row: cursorPos.row - windowTop, col: cursorPos.col };
