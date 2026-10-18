@@ -16,6 +16,7 @@
 - `invalidValues` lists mismatched values from `--config` overlay files as well as the profile file, and each entry's `replaced` marks a value a read serves the default or fallback in place of.
 - Opening a session reads each distinct blob once instead of once per reference, and a missing blob logs one warning per open instead of one per reference.
 - A cold message entry keeps its message's `usage` in memory and records how many `toolCall` blocks its moved content held, which `coldToolCallCount` returns, so a spend tally over compacted history reads no assistant line back.
+- A streamed load that moves compacted history to disk parses the native skim of each line instead of the line and re-reads from the file only the entries that stay in memory, so a 146 MB session resumes to an editable prompt in 490 ms instead of 710 ms and peaks at 421 MB instead of 472 MB, and a 284 MB session opens in 440 ms instead of 720 ms.
 - `readColdMessage(message)` returns a cold message stand-in's full message read back from the session file without keeping it in memory, and returns any other message as it is.
 - `session-cold-payloads` imports the logger from `@veyyon/utils/logger` instead of the `@veyyon/utils` barrel, so the read tool's module graph again loads no module through the barrel; no user-visible change.
 

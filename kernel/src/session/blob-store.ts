@@ -16,6 +16,9 @@ const BLOB_PREFIX = "blob:sha256:";
  */
 const TEXT_BLOB_PREFIX = "blobtext:sha256:";
 
+/** Every prefix a blob reference starts with: {@link isBlobRef} and {@link isTextBlobRef}. */
+export const BLOB_REF_PREFIXES: readonly string[] = [BLOB_PREFIX, TEXT_BLOB_PREFIX];
+
 export interface BlobPutOptions {
 	/** Optional file extension for a sidecar hardlink/copy that OS openers can type-detect. */
 	extension?: string;

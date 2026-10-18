@@ -25,9 +25,10 @@
  * or externalizes comes back truncated or restored from the blob store, and a replayed reasoning
  * signature persistence drops does not come back.
  */
+import type { SessionSkimRules } from "@veyyon/natives";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
-import { isBlobRef, isTextBlobRef } from "./blob-store";
+import { BLOB_REF_PREFIXES, isBlobRef, isTextBlobRef } from "./blob-store";
 import type { SessionEntry } from "./session-entries";
 import type { PinnedSessionReader } from "./session-storage";
 
@@ -51,6 +52,21 @@ const MESSAGE_ENTRY_RESIDENT_KEYS: ReadonlySet<string> = new Set([...RESIDENT_KE
  * each message, a few numbers that a read-back would parse a whole line to return.
  */
 const MESSAGE_RESIDENT_KEYS: ReadonlySet<string> = new Set(["usage"]);
+
+/**
+ * What {@link ColdEntryPayloads.cool} moves out of an entry, as `skimSessionFile` takes it: the skim
+ * reports each line as the record {@link ColdEntryPayloads.adopt} makes cold.
+ */
+export const COLD_FIELD_RULES: Pick<
+	SessionSkimRules,
+	"minLineBytes" | "minStringLength" | "residentKeys" | "messageResidentKeys" | "largeStringPrefixes"
+> = {
+	minLineBytes: MIN_COLD_LINE_BYTES,
+	minStringLength: MIN_COLD_STRING_LENGTH,
+	residentKeys: [...RESIDENT_KEYS],
+	messageResidentKeys: [...MESSAGE_RESIDENT_KEYS],
+	largeStringPrefixes: [...BLOB_REF_PREFIXES],
+};
 
 const NO_FIELDS: readonly string[] = [];
 
@@ -471,7 +487,61 @@ export class ColdEntryPayloads {
 		const nested = isRecord(original) ? original : undefined;
 		const entryNode = this.#largeKeys(record, nested === undefined ? RESIDENT_KEYS : MESSAGE_ENTRY_RESIDENT_KEYS);
 		const movedFromMessage = nested === undefined ? NO_FIELDS : this.#largeKeys(nested, MESSAGE_RESIDENT_KEYS).keys;
+		const toolCalls =
+			nested !== undefined && movedFromMessage.includes("content") ? toolCallCount(nested) : undefined;
+		return this.#install(entry, file, offset, length, entryNode, nested, movedFromMessage, toolCalls);
+	}
+
+	/**
+	 * {@link cool} for an entry parsed from the skim of its line, `length` bytes at `offset`: each
+	 * value {@link cool} would move is an empty placeholder of its kind. Bit `i` of `keys` is set when
+	 * the `i`th member of the entry moved, and bit `i` of `messageKeys` when the `i`th member of its
+	 * message did; `toolCalls` counts the `toolCall` blocks of the moved content of an assistant
+	 * message, or is -1. The placeholders are dropped, so the entry holds what {@link cool} leaves.
+	 */
+	adopt(
+		entry: SessionEntry,
+		offset: number,
+		length: number,
+		keys: number,
+		messageKeys: number,
+		toolCalls: number,
+	): boolean {
+		const file = this.#current;
+		if (file === undefined || ColdEntrySlot.layoutOf(entry) !== undefined) return false;
+		const record = entry as unknown as Record<string, unknown>;
+		const original = entry.type === "message" ? record.message : undefined;
+		const nested = isRecord(original) ? original : undefined;
+		const entryNode = this.#maskedKeys(record, keys);
+		const movedFromMessage = nested === undefined ? NO_FIELDS : this.#maskedKeys(nested, messageKeys).keys;
+		return this.#install(
+			entry,
+			file,
+			offset,
+			length,
+			entryNode,
+			nested,
+			movedFromMessage,
+			toolCalls < 0 ? undefined : toolCalls,
+		);
+	}
+
+	/**
+	 * Replace the `entryNode` fields of `entry` and the `movedFromMessage` fields of its message
+	 * `nested` by accessors reading `length` bytes at `offset` of `file`. False when neither moves.
+	 */
+	#install(
+		entry: SessionEntry,
+		file: ColdFile,
+		offset: number,
+		length: number,
+		entryNode: KeyListNode,
+		nested: Record<string, unknown> | undefined,
+		movedFromMessage: readonly string[],
+		toolCalls: number | undefined,
+	): boolean {
 		if (entryNode.keys.length === 0 && movedFromMessage.length === 0) return false;
+		const record = entry as unknown as Record<string, unknown>;
 		let message: Record<string, unknown> | undefined;
 		if (nested !== undefined && movedFromMessage.length > 0) {
 			// Built in the original's key order, so the entry serializes as it did. `movedFromMessage`
@@ -493,8 +563,6 @@ export class ColdEntryPayloads {
 		ColdEntrySlot.cool(entry, file, offset, length, layout, message);
 		if (message !== undefined) {
 			Object.defineProperty(record, "message", this.#messageAccessor());
-			const toolCalls =
-				nested !== undefined && movedFromMessage.includes("content") ? toolCallCount(nested) : undefined;
 			StandInSlot.set(message, entry, toolCalls);
 		}
 		file.cold += 1;
@@ -571,15 +639,36 @@ export class ColdEntryPayloads {
 		let node = this.#keyLists;
 		for (const key in record) {
 			if (resident.has(key) || !isLarge(record[key]) || !Object.hasOwn(record, key)) continue;
-			let next = node.next?.get(key);
-			if (next === undefined) {
-				next = { keys: [...node.keys, key], next: undefined, layouts: undefined };
-				node.next ??= new Map();
-				node.next.set(key, next);
-			}
-			node = next;
+			node = this.#nextKeyList(node, key);
 		}
 		return node;
+	}
+
+	/**
+	 * {@link #largeKeys} for a record whose moved fields `mask` states: bit `i` is set when the `i`th
+	 * own key moved. A skimmed record has no integer-like key, so `for...in` visits its keys in the
+	 * order its line holds them.
+	 */
+	#maskedKeys(record: Record<string, unknown>, mask: number): KeyListNode {
+		let node = this.#keyLists;
+		let bit = 1;
+		for (const key in record) {
+			if (!Object.hasOwn(record, key)) continue;
+			if ((mask & bit) !== 0) node = this.#nextKeyList(node, key);
+			bit <<= 1;
+		}
+		return node;
+	}
+
+	/** The trie node below `node` whose list adds `key`. */
+	#nextKeyList(node: KeyListNode, key: string): KeyListNode {
+		let next = node.next?.get(key);
+		if (next === undefined) {
+			next = { keys: [...node.keys, key], next: undefined, layouts: undefined };
+			node.next ??= new Map();
+			node.next.set(key, next);
+		}
+		return next;
 	}
 
 	/** The layout every entry shares whose moved fields are `keys` and whose stand-in's are `messageKeys`. */

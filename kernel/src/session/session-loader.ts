@@ -1,10 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { AgentMessage } from "@veyyon/agent-core";
+import { type SessionSkim, type SessionSkimRules, skimSessionFile } from "@veyyon/natives";
 import { isEnoent } from "@veyyon/utils/fs-error";
 // Owners, not the `@veyyon/utils` barrel: 3 modules against 74.
 import * as logger from "@veyyon/utils/logger";
 import { StreamFrameLimitError, streamFrameCeiling } from "@veyyon/utils/stream";
+import { errorMessage } from "@veyyon/utils/type-guards";
 import {
 	BlobStore,
 	blobsDirForSessionDir,
@@ -18,8 +21,8 @@ import {
 	resolveTextBlobRefSync,
 } from "./blob-store";
 import type { OperatorNotices } from "./operator-notices";
-import { coldFieldsOf } from "./session-cold-payloads";
-import { buildSessionContext } from "./session-context";
+import { COLD_FIELD_RULES, coldFieldsOf } from "./session-cold-payloads";
+import { BRANCH_SETTINGS_ENTRY_TYPES, buildSessionContext } from "./session-context";
 import {
 	type FileEntry,
 	SESSION_TITLE_SLOT_BYTES,
@@ -28,7 +31,7 @@ import {
 	type SessionTitleSlotEntry,
 } from "./session-entries";
 import { checkSessionEntryShape } from "./session-entry-shape";
-import { LoadCooling, type LoadedColdHistory } from "./session-load-cooling";
+import { LoadCooling, type LoadedColdHistory, type SkimmedProjection } from "./session-load-cooling";
 import { migrateToCurrentVersion } from "./session-migrations";
 import { isImageBlock, isImageDataPayload } from "./session-persistence";
 import {
@@ -219,6 +222,8 @@ class SessionRecordLoop {
 	/** 0-based byte offset of each record line after the header, parallel to `entries.slice(1)`. */
 	readonly #offsets: number[] = [];
 	#headerLine: string | undefined;
+	/** The title slot a streamed load found on the file's first line. */
+	titleSlot: SessionTitleUpdate | undefined;
 	/** 0-based byte offset just past the last record's newline. */
 	#end = 0;
 	#stitched = 0;
@@ -291,23 +296,73 @@ class SessionRecordLoop {
 		this.push(decodeLine(bytes, start, end), end - start);
 	}
 
+	/**
+	 * {@link pushBytes} for the next line of a streamed file, `bytes[start, end)`. The first line may
+	 * be the fixed-size title slot, which is not a record and never reaches the shape check; the
+	 * cursor still steps over its bytes.
+	 */
+	pushFileLine(bytes: Buffer, start: number, end: number): void {
+		if (this.#line > 1) {
+			this.pushBytes(bytes, start, end);
+			return;
+		}
+		const text = decodeLine(bytes, start, end);
+		const slot = parseTitleSlotLine(text.trim());
+		if (slot) {
+			this.titleSlot = titleUpdateFromSlot(slot);
+			this.skipTitleSlot(end - start);
+			return;
+		}
+		this.push(text, end - start);
+	}
+
+	/**
+	 * Keep `value`, the whole value of the next line after the header, `byteLength` bytes, as
+	 * {@link pushBytes} keeps a line it parsed.
+	 */
+	takeRecord(value: unknown, byteLength: number): void {
+		this.#take(value, undefined, byteLength);
+	}
+
+	/**
+	 * Keep the record a skim projected from the next line after the header, as {@link pushBytes}
+	 * keeps the line's value, or return false and consume nothing when it does not have an entry's
+	 * shape: the line is parsed in full to report why.
+	 */
+	takeProjected(projection: SkimmedProjection): boolean {
+		const record = projection[1];
+		if (!checkSessionEntryShape(record).ok) return false;
+		this.#keep(record, undefined, projection[0], projection);
+		return true;
+	}
+
 	/** Keep the parsed `value` of a line when it has an entry's shape. `text` is the line, for the header. */
 	#take(value: unknown, text: string | undefined, byteLength: number): void {
 		const shape = checkSessionEntryShape(value);
 		if (shape.ok) {
-			if (this.entries.length === 0) this.#headerLine = text;
-			else this.#offsets.push(this.#byteOffset - 1);
-			this.entries.push(value as FileEntry);
-			this.#cooling?.add(value as FileEntry, this.#byteOffset - 1, byteLength);
-			this.#end = this.#byteOffset + byteLength;
-		} else {
-			this.#issues.push({ line: this.#line, byteOffset: this.#byteOffset, problem: shape.problem });
-			logger.warn("Dropped a session record that decoded to the wrong shape (data lost)", {
-				source: this.#logSource,
-				offset: this.#byteOffset,
-				problem: shape.problem,
-			});
+			this.#keep(value as FileEntry, text, byteLength, undefined);
+			return;
 		}
+		this.#issues.push({ line: this.#line, byteOffset: this.#byteOffset, problem: shape.problem });
+		logger.warn("Dropped a session record that decoded to the wrong shape (data lost)", {
+			source: this.#logSource,
+			offset: this.#byteOffset,
+			problem: shape.problem,
+		});
+		this.skip(byteLength);
+	}
+
+	#keep(
+		record: FileEntry,
+		text: string | undefined,
+		byteLength: number,
+		projection: SkimmedProjection | undefined,
+	): void {
+		if (this.entries.length === 0) this.#headerLine = text;
+		else this.#offsets.push(this.#byteOffset - 1);
+		this.entries.push(record);
+		this.#cooling?.add(record, this.#byteOffset - 1, byteLength, projection);
+		this.#end = this.#byteOffset + byteLength;
 		this.skip(byteLength);
 	}
 
@@ -383,21 +438,23 @@ function decodeLine(bytes: Buffer, start: number, end: number): string {
 }
 
 /**
- * Hand each line of the file open at `handle` to `onLine` as the window `bytes[start, end)`,
- * reading {@link STREAM_READ_BYTES} at a time. The window is valid only during the call. A line is
- * the bytes before a line feed, or the bytes after the last one when the file does not end with
- * one; an empty line is a line. A line longer than the stream frame bound fails with
- * `StreamFrameLimitError`, as every line reader does.
+ * Hand each line of the file open at `handle` from byte `from` on to `onLine` as the window
+ * `bytes[start, end)`, reading {@link STREAM_READ_BYTES} at a time. The window is valid only during
+ * the call. A line is the bytes before a line feed, or the bytes after the last one when the file
+ * does not end with one; an empty line is a line. A line longer than the stream frame bound fails
+ * with `StreamFrameLimitError`, as every line reader does.
  *
  * Each read is split synchronously: an async iterator over lines cost one promise per line, and
  * with a `TextDecoder` per line it took 97 ms of a 139 ms load of an 85.6 MB, 27,602-line session.
  */
 async function forEachFileLine(
 	handle: fs.promises.FileHandle,
+	from: number,
 	onLine: (bytes: Buffer, start: number, end: number) => void,
 ): Promise<void> {
 	const limit = streamFrameCeiling();
 	let buffer = Buffer.allocUnsafe(STREAM_READ_BYTES);
+	let position = from;
 	// Bytes of a line that started in an earlier read, kept at the front of `buffer`.
 	let carried = 0;
 	for (;;) {
@@ -406,7 +463,8 @@ async function forEachFileLine(
 			buffer.copy(grown, 0, 0, carried);
 			buffer = grown;
 		}
-		const { bytesRead } = await handle.read(buffer, carried, buffer.length - carried, null);
+		const { bytesRead } = await handle.read(buffer, carried, buffer.length - carried, position);
+		position += bytesRead;
 		const filled = buffer.subarray(0, carried + bytesRead);
 		let start = 0;
 		for (let end = filled.indexOf(LINE_FEED, carried); end !== -1; end = filled.indexOf(LINE_FEED, start)) {
@@ -422,6 +480,179 @@ async function forEachFileLine(
 		}
 		filled.copyWithin(0, start);
 	}
+}
+
+/** The least one read of a {@link FileLineWindow} asks for. */
+const WINDOW_READ_BYTES = 64 << 10;
+
+/**
+ * Lines of the file open at `fd`, read by offset through one window of the file that a read
+ * outside it moves. A read asks for the line, or {@link WINDOW_READ_BYTES} when the line is
+ * shorter, so lines read in file order share reads and a lone long line is read once.
+ */
+class FileLineWindow {
+	bytes = Buffer.allocUnsafe(WINDOW_READ_BYTES);
+	readonly #fd: number;
+	/** File offset of `bytes[0]`. */
+	#start = 0;
+	#filled = 0;
+
+	constructor(fd: number) {
+		this.#fd = fd;
+	}
+
+	/** Where the `length` bytes at file offset `offset` start in {@link bytes}. */
+	at(offset: number, length: number): number {
+		if (offset >= this.#start && offset + length <= this.#start + this.#filled) return offset - this.#start;
+		const want = Math.max(length, WINDOW_READ_BYTES);
+		if (want > this.bytes.length) this.bytes = Buffer.allocUnsafe(want);
+		let filled = 0;
+		while (filled < want) {
+			const read = fs.readSync(this.#fd, this.bytes, filled, want - filled, offset + filled);
+			if (read === 0) break;
+			filled += read;
+		}
+		this.#start = offset;
+		this.#filled = filled;
+		if (filled < length) {
+			throw new Error(`Session file ended at byte ${offset + filled}, inside a line it held at byte ${offset}`);
+		}
+		return 0;
+	}
+}
+
+/**
+ * What the skim of a load that moves compacted history to disk reports whole and what it projects
+ * (see `skimSessionFile`): the header and every entry kind the load keeps in memory are whole, and
+ * the title slot and the header line are read as a streamed load reads its first lines. One skim
+ * returns about `outputBytes` of output, and the load parses it before it reads the next, so it
+ * holds that much of the skim at a time rather than the skim of the whole file.
+ */
+const SKIM_RULES: Omit<SessionSkimRules, "maxLineBytes"> = {
+	...COLD_FIELD_RULES,
+	wholeEntryTypes: ["session", ...BRANCH_SETTINGS_ENTRY_TYPES],
+	rawLines: 2,
+	outputBytes: 8 << 20,
+};
+
+/** Bytes of skim output one parse reads, cut at a line feed so it holds whole values. */
+const SKIM_PARSE_BYTES = 1 << 20;
+
+/** The length of the line the skim value `value` reports, or undefined when it reports none. */
+function skimmedLineLength(value: unknown): number | undefined {
+	if (typeof value === "number") return value;
+	if (!Array.isArray(value) || (value.length !== 2 && value.length !== 6)) return undefined;
+	return typeof value[0] === "number" ? value[0] : undefined;
+}
+
+/**
+ * The record loop of a streamed load that moves compacted history to disk, fed from the skim of
+ * the file instead of a parse of every line, and ready for {@link SessionRecordLoop.finish}. The
+ * skim reports each line as the record the load keeps once the entry is cold, so an entry the load
+ * moves is made cold from that record and its large values are never parsed. An entry the load
+ * keeps in memory is parsed from its line once the last line is read. A line the skim leaves to
+ * the caller, and every line after the skim's end, is read as a streamed load reads it. The file
+ * is skimmed again from where each skim ends until one reports no line. The load yields a turn of
+ * the event loop for each {@link STREAM_READ_BYTES} of the file it passes, as a streamed load
+ * yields after each read.
+ *
+ * Undefined when the skim cannot stand in for a full load: the skim failed, the header leaves the
+ * load nothing to move, or a line disagrees with its skim. `cooling` then holds entries the caller
+ * discards.
+ */
+async function loadSkimmed(
+	handle: fs.promises.FileHandle,
+	filePath: string,
+	notices: SessionLoadOptions,
+	cooling: LoadCooling,
+): Promise<SessionRecordLoop | undefined> {
+	const rules: SessionSkimRules = { ...SKIM_RULES, maxLineBytes: streamFrameCeiling() };
+	const loop = new SessionRecordLoop({ streaming: true, logSource: filePath, notices, cooling });
+	const window = new FileLineWindow(handle.fd);
+	// Entry index, line offset and line length of each record kept from its projection.
+	const projected: number[] = [];
+	let offset = 0;
+	let yieldAt = STREAM_READ_BYTES;
+	for (;;) {
+		const from = offset;
+		let skim: SessionSkim;
+		try {
+			// Only the first lines of the file are read as a streamed load reads them.
+			skim = await skimSessionFile(handle.fd, from, from === 0 ? rules : { ...rules, rawLines: 0 });
+		} catch (err) {
+			logger.warn("Session skim failed; parsing every line", { source: filePath, error: errorMessage(err) });
+			return undefined;
+		}
+		const out = skim.lines;
+		for (let at = 0; at < out.length; ) {
+			let end = out.lastIndexOf(LINE_FEED, Math.min(out.length, at + SKIM_PARSE_BYTES) - 1);
+			if (end < at) end = out.indexOf(LINE_FEED, at);
+			const parsed = end === -1 ? undefined : Bun.JSONL.parseChunk(out, at, end + 1);
+			if (parsed === undefined || !parsed.done || parsed.error !== null) {
+				logger.warn("Session skim output did not parse; parsing every line", { source: filePath, offset });
+				return undefined;
+			}
+			for (const value of parsed.values) {
+				const length = skimmedLineLength(value);
+				if (length === undefined) {
+					logger.warn("Session skim reported no line; parsing every line", { source: filePath, offset });
+					return undefined;
+				}
+				let kept = false;
+				if (Array.isArray(value) && loop.entries.length > 0) {
+					if (value.length === 2) {
+						loop.takeRecord(value[1], length);
+						kept = true;
+					} else if (loop.takeProjected(value as unknown as SkimmedProjection)) {
+						projected.push(loop.entries.length - 1, offset, length);
+						kept = true;
+					}
+				}
+				if (!kept) {
+					const start = window.at(offset, length);
+					loop.pushFileLine(window.bytes, start, start + length);
+				}
+				if (loop.entries.length > 0 && !cooling.active) return undefined;
+				offset += length + 1;
+				if (offset >= yieldAt) {
+					yieldAt = offset + STREAM_READ_BYTES;
+					await yieldToEventLoop();
+				}
+			}
+			at = end + 1;
+		}
+		if (offset !== skim.end) {
+			logger.warn("Session skim ended off its last line; parsing every line", { source: filePath, offset });
+			return undefined;
+		}
+		if (offset === from) break;
+	}
+	await forEachFileLine(handle, offset, (bytes, start, end) => loop.pushFileLine(bytes, start, end));
+	const entries = loop.entries;
+	let reread = 0;
+	for (let i = 0; i < projected.length; i += 3) {
+		const index = projected[i]!;
+		if (coldFieldsOf(entries[index]!) !== undefined) continue;
+		const lineOffset = projected[i + 1]!;
+		const length = projected[i + 2]!;
+		const start = window.at(lineOffset, length);
+		const parsed = Bun.JSONL.parseChunk(window.bytes, start, start + length);
+		const record = parsed.done && parsed.values.length === 1 ? parsed.values[0] : undefined;
+		if (!checkSessionEntryShape(record).ok) {
+			logger.warn("A session line disagreed with its skim; parsing every line", {
+				source: filePath,
+				offset: lineOffset,
+			});
+			return undefined;
+		}
+		entries[index] = record as FileEntry;
+		reread += length;
+		if (reread >= STREAM_READ_BYTES) {
+			reread = 0;
+			await yieldToEventLoop();
+		}
+	}
+	return loop;
 }
 
 /**
@@ -466,36 +697,22 @@ export async function loadEntriesFromFileStream(
 	}
 	let cooling: LoadCooling | undefined;
 	try {
+		const notices = { ...options, source: options.source ?? filePath };
 		cooling = options.coolCompactedHistory ? await loadCoolingFor(handle, filePath, storage) : undefined;
-		let titleSlot: SessionTitleUpdate | undefined;
-		const loop = new SessionRecordLoop({
-			streaming: true,
-			logSource: filePath,
-			notices: { ...options, source: options.source ?? filePath },
-			cooling,
-		});
-		let first = true;
-		await forEachFileLine(handle, (bytes, start, end) => {
-			if (first) {
-				first = false;
-				// The slot is a fixed-size first line, not a record, so it never reaches the
-				// shape check; the cursor still has to step over its bytes.
-				const text = decodeLine(bytes, start, end);
-				const slot = parseTitleSlotLine(text.trim());
-				if (slot) {
-					titleSlot = titleUpdateFromSlot(slot);
-					loop.skipTitleSlot(end - start);
-					return;
-				}
-				loop.push(text, end - start);
-				return;
+		let loop = cooling === undefined ? undefined : await loadSkimmed(handle, filePath, notices, cooling);
+		if (loop === undefined) {
+			if (cooling !== undefined) {
+				cooling.abandon();
+				cooling = await loadCoolingFor(handle, filePath, storage);
 			}
-			loop.pushBytes(bytes, start, end);
-		});
-		const entries = foldTitleSlot(loop.finish(), titleSlot);
+			const full = new SessionRecordLoop({ streaming: true, logSource: filePath, notices, cooling });
+			await forEachFileLine(handle, 0, (bytes, start, end) => full.pushFileLine(bytes, start, end));
+			loop = full;
+		}
+		const entries = foldTitleSlot(loop.finish(), loop.titleSlot);
 		const cold = cooling?.finish();
 		cooling = undefined;
-		return { entries, titleSlot, layout: loop.layout(), cold };
+		return { entries, titleSlot: loop.titleSlot, layout: loop.layout(), cold };
 	} finally {
 		cooling?.finish();
 		await handle.close();
