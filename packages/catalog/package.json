@@ -30,7 +30,9 @@
     "test": "bun test --parallel",
     "fix": "biome check --write --unsafe .",
     "fmt": "biome format --write .",
-    "gen:models": "bun scripts/generate-models.ts"
+    "gen:compat": "bun scripts/compile-compat.ts",
+    "gen:models": "bun scripts/generate-models.ts",
+    "gen:proto": "bun scripts/generate-protocols.ts"
   },
   "dependencies": {
     "@bufbuild/protobuf": "catalog:",
@@ -39,6 +41,7 @@
     "arktype": "catalog:"
   },
   "devDependencies": {
+    "@bgotink/kdl": "0.4.0",
     "@veyyon/ai": "catalog:",
     "@veyyon/coding-agent": "catalog:",
     "@veyyon/mnemopi": "catalog:",
