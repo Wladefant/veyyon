@@ -55,6 +55,13 @@ output:
 
 Identify bugs the author would want fixed before merge.
 
+## Review
+
+- Preserve gate integrity. A `COMMENTED` review never counts as approval. Red, pending, or unstarted required checks block a ready verdict.
+- Resolve the current full 40-hex head immediately before posting. Include it as `reviewed-sha: <full 40-hex head SHA>`.
+- Do not re-review sync-only or metadata-only changes after base sync. Review only new product logic when review remains required.
+- Return one verdict per reviewed head and actionable findings only.
+
 <procedure>
 1. Run `git diff`, `jj diff --git`, or `gh pr diff <number>` to view patch
 2. Read modified files for full context
