@@ -6,6 +6,7 @@
 
 - `@veyyon/catalog/hosts` exports `resolveVertexEndpointHost(location)`, the Vertex AI API host for `global`, the `eu`/`us` multi-regions, or a single region.
 - Added provider wire helpers for Alibaba Token Plan, Charm Hyper, Cline Pass, Cloudflare AI Gateway, Cursor, Devin, Factory Droid and SingularityAPI, and moved compatibility imports to shared utilities.
+- Cursor discovery combines account model RPCs, reports failures, and retries HTTP/2 only after a transport failure.
 
 ### Changed
 
