@@ -53,8 +53,8 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/ast-edit": 375,
 	"tools/async-result": 105,
 	"tools/bash": 1564,
-	// 1440 -> 1575: the `context` and `storage_state` parameters, the `save_state` action and the signed-in-session example.
-	"tools/browser": 1575,
+	// 1440 -> 1575 -> 1752: `context`/`storage_state`/`save_state`, then the `app.extension` backend through the Playwright Extension relay (0d34d448eb, Refs #484-#490).
+	"tools/browser": 1752,
 	"tools/checkpoint": 166,
 	"tools/debug": 414,
 	"tools/eval": 2007,
@@ -67,7 +67,10 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/image-gen": 110,
 	"tools/inspect-image": 255,
 	"tools/inspect-image-system": 192,
-	"tools/irc": 681,
+	// 681 -> 865: cross-session notices (`to: "session:<id>"`, `to: "session:all"`) with expiry and receipts (54d456c22c, ee96d84e05, Refs #537, #539).
+	"tools/irc": 865,
+	// 0 -> 293: error prompt row for task isolation failure capture and recovery hints (dbf7fe97cd, 2b11abeafc, Refs #107).
+	"tools/isolation-error": 293,
 	"tools/isolation-recovery-hint": 83,
 	"tools/isolation-summary": 589,
 	"tools/job": 413,
@@ -105,7 +108,7 @@ const RECORDED_TOKENS: Record<string, number> = {
 };
 
 /** The sum the recorded table claims, so the total is in the diff of any trim. */
-const RECORDED_TOTAL = 21992;
+const RECORDED_TOTAL = 22646;
 
 const measured = new Map<string, number>([
 	...Object.entries(toolsPrompts).map(([id, entry]) => [id, estimateTokensFromText(entry.text)] as const),
