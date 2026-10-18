@@ -14,7 +14,7 @@
 import { emptyUsage } from "@veyyon/catalog/models";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import * as AIError from "../error";
-import type { Api, AssistantMessage, AssistantMessageEvent, Context, Model, OptionsForApi } from "../types";
+import type { Api, AssistantMessage, AssistantMessageEvent, CompatOf, Context, Model, OptionsForApi } from "../types";
 import { type AbortSourceTracker, createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream as EventStreamImpl } from "../utils/event-stream";
 import {
@@ -110,6 +110,11 @@ export interface LazyStreamLimits {
 	 */
 	openAIIdleEnvFloorsFirstEvent?: boolean;
 	/**
+	 * The provider retries or fails over when no first event arrives. The lazy wrapper keeps the
+	 * steady-state idle watchdog and drops its own first-event one.
+	 */
+	providerHandlesFirstEventTimeouts?: boolean;
+	/**
 	 * The provider decides for itself when silence means death, by asking the transport rather
 	 * than by timing it. The lazy wrapper keeps its first-event watchdog and drops its idle one,
 	 * unless the environment or the caller pins an idle budget explicitly.
@@ -118,6 +123,15 @@ export interface LazyStreamLimits {
 }
 const PROVIDER_HANDLED_STREAM_TIMEOUTS: LazyStreamLimits = {
 	providerHandlesStreamTimeouts: true,
+};
+
+/**
+ * Cloud Code Assist owns first-event detection because Antigravity can return successful headers
+ * and then never emit an SSE event. Keeping the watchdog in the provider lets it fail over before
+ * surfacing an error; the lazy wrapper still catches post-first-event stalls.
+ */
+const GOOGLE_GEMINI_CLI_LAZY_STREAM_LIMITS: LazyStreamLimits = {
+	providerHandlesFirstEventTimeouts: true,
 };
 
 const OPENAI_IDLE_FLOORED_LAZY_STREAM_LIMITS: LazyStreamLimits = {
@@ -185,21 +199,27 @@ export const CURSOR_LAZY_STREAM_LIMITS: LazyStreamLimits = {
 export function resolveLazyStreamBudget(
 	options: { streamIdleTimeoutMs?: number; streamFirstEventTimeoutMs?: number },
 	limits?: LazyStreamLimits,
+	compatIdleTimeoutMs?: number,
 ): { idleTimeoutMs: number | undefined; firstItemTimeoutMs: number | undefined } {
 	if (limits?.providerHandlesStreamTimeouts === true) {
 		return { idleTimeoutMs: undefined, firstItemTimeoutMs: 0 };
 	}
+	// Per-model catalog compat can widen the fallback idle watchdog for hosts that go quiet for minutes
+	// mid-thinking (issue #4758). Caller options and env overrides still take precedence over it.
+	const idleFallbackMs = compatIdleTimeoutMs ?? limits?.defaultIdleTimeoutMs;
 	const idleTimeoutMs = limits?.providerHandlesIdleTimeout
 		? (options.streamIdleTimeoutMs ?? getStreamIdleTimeoutOverrideMs())
 		: (options.streamIdleTimeoutMs ??
 			(limits?.openAIIdleEnvFloorsFirstEvent
-				? getOpenAIStreamIdleTimeoutMs(limits.defaultIdleTimeoutMs)
-				: getStreamIdleTimeoutMs(limits?.defaultIdleTimeoutMs)));
+				? getOpenAIStreamIdleTimeoutMs(idleFallbackMs)
+				: getStreamIdleTimeoutMs(idleFallbackMs)));
 	const firstItemTimeoutMs =
-		options.streamFirstEventTimeoutMs ??
-		(limits?.openAIIdleEnvFloorsFirstEvent
-			? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs, limits.defaultFirstEventTimeoutMs)
-			: getStreamFirstEventTimeoutMs(idleTimeoutMs, limits?.defaultFirstEventTimeoutMs));
+		limits?.providerHandlesFirstEventTimeouts === true
+			? 0
+			: (options.streamFirstEventTimeoutMs ??
+				(limits?.openAIIdleEnvFloorsFirstEvent
+					? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs, limits.defaultFirstEventTimeoutMs)
+					: getStreamFirstEventTimeoutMs(idleTimeoutMs, limits?.defaultFirstEventTimeoutMs)));
 	return { idleTimeoutMs, firstItemTimeoutMs };
 }
 
@@ -213,7 +233,12 @@ function forwardStream<TApi extends Api>(
 ): void {
 	(async () => {
 		try {
-			const { idleTimeoutMs, firstItemTimeoutMs } = resolveLazyStreamBudget(options, limits);
+			// Per-model compat may carry its own idle budget (`streamIdleTimeoutMs`); read it through the
+			// widest compat type so any provider compat shape that declares it reaches this watchdog.
+			const compat: CompatOf<Api> | undefined = model.compat;
+			const compatIdleTimeoutMs =
+				compat !== undefined && "streamIdleTimeoutMs" in compat ? compat.streamIdleTimeoutMs : undefined;
+			const { idleTimeoutMs, firstItemTimeoutMs } = resolveLazyStreamBudget(options, limits, compatIdleTimeoutMs);
 			// Providers with a server-driven local tool bridge (e.g. the Cursor
 			// exec channel) mark their stream busy while a local tool runs; the
 			// watchdog must not read that silence as a provider stall (#4593).
@@ -266,6 +291,7 @@ function createLazyLoadErrorMessage<TApi extends Api>(
 		model: model.id,
 		usage: emptyUsage(),
 		stopReason,
+		errorId: stopReason === "error" ? AIError.classify(error, model.api) || undefined : undefined,
 		errorMessage: stopReason === "aborted" ? "Request was aborted" : errorMessage(error),
 		timestamp: Date.now(),
 	};
@@ -330,8 +356,10 @@ export const streamAzureOpenAIResponses = createLazyStream(
 export const streamGoogle = createLazyStream("google-generative-ai", () =>
 	import("./google").then(module => ({ stream: module.streamGoogle })),
 );
-export const streamGoogleGeminiCli = createLazyStream("google-gemini-cli", () =>
-	import("./google-gemini-cli").then(module => ({ stream: module.streamGoogleGeminiCli })),
+export const streamGoogleGeminiCli = createLazyStream(
+	"google-gemini-cli",
+	() => import("./google-gemini-cli").then(module => ({ stream: module.streamGoogleGeminiCli })),
+	GOOGLE_GEMINI_CLI_LAZY_STREAM_LIMITS,
 );
 export const streamGoogleVertex = createLazyStream("google-vertex", () =>
 	import("./google-vertex").then(module => ({ stream: module.streamGoogleVertex })),

@@ -45,3 +45,43 @@ export type DemotedThinkingCarrier = object & { [kDemotedThinking]?: boolean };
 export function isDemotedThinking(block: DemotedThinkingCarrier | null | undefined): boolean {
 	return block?.[kDemotedThinking] === true;
 }
+
+/**
+ * Marks a thinking block that `transformMessages` carried natively from
+ * another host serving the same model (see `compat/reasoning-carry` in the
+ * catalog). Its host-bound signature and item id are gone, so encoders that
+ * replay reasoning from stored payloads (Responses) emit a plaintext item for
+ * it instead. Symbol-keyed so the marker never persists or reaches the wire.
+ */
+export const kCarriedReasoning = Symbol("provider.block.carriedReasoning");
+
+/** Carries the carried-reasoning marker without exposing a string-keyed property. */
+export type CarriedReasoningCarrier = object & { [kCarriedReasoning]?: boolean };
+
+/** True for thinking blocks carried natively from another host of the same model. */
+export function isCarriedReasoning(block: CarriedReasoningCarrier | null | undefined): boolean {
+	return block?.[kCarriedReasoning] === true;
+}
+
+/**
+ * Marks a `role: "user"` message that `transformMessages` synthesized rather
+ * than one the user sent.
+ *
+ * The stale-tool-result note is deliberately emitted as `user` so no provider
+ * elevates untrusted tool output to instruction priority, which leaves it
+ * indistinguishable from a real turn by role alone. Prompt-cache decimation
+ * must not count it, or an orphan result appearing or disappearing in a
+ * compacted history shifts every later checkpoint.
+ *
+ * Symbol-keyed so the marker never persists across the JSONL round-trip and
+ * never reaches the wire.
+ */
+export const kSyntheticUser = Symbol("provider.message.syntheticUser");
+
+/** Carries the synthetic-user marker without exposing a string-keyed property. */
+export type SyntheticUserCarrier = object & { [kSyntheticUser]?: boolean };
+
+/** True for `user` messages synthesized by message transformation. */
+export function isSyntheticUser(message: SyntheticUserCarrier | null | undefined): boolean {
+	return message?.[kSyntheticUser] === true;
+}
