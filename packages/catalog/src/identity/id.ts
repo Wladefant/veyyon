@@ -1,5 +1,17 @@
 const LEADING_BRACKETED_AFFIX_PATTERN = /^(?:\s*(?:\[|【)[^\]】]+(?:\]|】)\s*)+/u;
 const TRAILING_BRACKETED_AFFIX_PATTERN = /(?:\s*(?:\[|【)[^\]】]+(?:\]|】)\s*)+$/u;
+/** Strip a provider namespace prefix (`openai/gpt-5.4` → `gpt-5.4`). */
+// Cache keyed by model id (a bounded set of bundled/aggregator ids), so no eviction is needed.
+const bareModelIdCache = new Map<string, string>();
+export function bareModelId(modelId: string): string {
+	const cached = bareModelIdCache.get(modelId);
+	if (cached !== undefined) return cached;
+	const separator = modelId.lastIndexOf("/");
+	const result = separator === -1 ? modelId : modelId.slice(separator + 1);
+	bareModelIdCache.set(modelId, result);
+	return result;
+}
+
 const MODEL_ID_SEGMENT_PATTERN = /[a-z0-9.:-]+/g;
 const MODEL_FAMILY_PREFIX_PATTERN =
 	/^(claude|gemini|gpt|grok|glm|qwen|deepseek|kimi|mimo|doubao|ernie|gpt-oss|gemma|minimax|step|command|jamba|llama|o[1345])/i;
@@ -20,7 +32,7 @@ export function getModelLikeIdSegments(modelId: string): string[] {
 	for (const segment of matches) {
 		if (MODEL_FAMILY_PREFIX_PATTERN.test(segment) && /\d/.test(segment)) segments.add(segment);
 	}
-	return Array.from(segments).sort(compareSegmentPreference);
+	return [...segments].sort(compareSegmentPreference);
 }
 
 export function getLongestModelLikeIdSegment(modelId: string): string | undefined {
@@ -73,7 +85,7 @@ export function getBracketStrippedModelIdCandidates(modelId: string): string[] {
 			candidates.add(candidate);
 		}
 	}
-	return Array.from(candidates);
+	return [...candidates];
 }
 
 export function stripBracketedModelIdAffixes(modelId: string): string | undefined {
