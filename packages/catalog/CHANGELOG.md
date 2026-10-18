@@ -25,6 +25,10 @@
 - Consolidated model identity classification and shared model compatibility records across catalog builders ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Catalog generation applies provider-specific model policies and preserves selective regeneration for named providers.
 
+### Removed
+
+- Removed the Apple provider and authentication policy from the catalog ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+
 ## [1.5.6] - 2026-10-10
 ### Removed
 

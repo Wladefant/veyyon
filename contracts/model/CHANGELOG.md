@@ -14,6 +14,10 @@
 - Consolidated LongContextCost into LongContextTokenCost across model contracts ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Sync upstream changes from santhreal/veyyon.
 
+### Removed
+
+- Removed the on-device Foundation Models API from the public `KnownApi` vocabulary ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+
 ## [1.5.6] - 2026-10-10
 
 ### Added

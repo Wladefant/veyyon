@@ -7,7 +7,7 @@
 - Added usage tracking and credential ranking providers for Alibaba Token Plan, Charm Hyper, Cline Pass, CommandCode, Devin, Factory Droid, MiniMax Code, Muse Code, Synthetic, Umans, and xAI ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added provider type contracts for embeddings, rerank, judgment, video generation, and shared image utilities ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added sanitizeSchemaForCursor to strip schema combiners and normalize schemas for Cursor catalog compatibility ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
-- Added schema normalization for Factory Droid and Foundation Models, with shared RFC 6901 pointer resolution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added schema normalization for Factory Droid, with shared RFC 6901 pointer resolution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added tool call id normalization, carried reasoning markers, and lazy stream idle budget resolution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added transportFetch utility and ported Anthropic wire compaction types and Google signature re-exports ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Enforced vision guard image format validation and payload boundary constraints ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -42,6 +42,8 @@
 
 - Removed the local request-cost history API; durable usage-limit history and broker client usage totals, including cost, remain.
 - Removed legacy auth-storage/* package subpaths; import features from the matching @veyyon/ai/auth/* module instead.
+- Removed the Apple Foundation Models API provider and its schema dialect helpers ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Removed duplicate auth-storage modules and unused native-scheme callback code, with no user-visible change ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ## [1.5.6] - 2026-10-10
 ### Changed

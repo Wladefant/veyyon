@@ -54,7 +54,6 @@ import type { BedrockOptions } from "./providers/amazon-bedrock";
 import type { AnthropicOptions } from "./providers/anthropic";
 import type { AnthropicSlowModeHooks } from "./providers/anthropic-slow-mode";
 import type { FallbackParam, MessageCreateParamsStreaming } from "./providers/anthropic-wire";
-import type { AppleFoundationModelsOptions } from "./providers/apple-foundation-models";
 import type { AzureOpenAIResponsesOptions } from "./providers/azure-openai-responses";
 import type { CursorOptions } from "./providers/cursor";
 import type { DevinOptions } from "./providers/devin";
@@ -102,7 +101,6 @@ export interface ApiOptionsMap {
 	"factory-droid-agent": FactoryDroidOptions;
 	"gitlab-duo-agent": GitLabDuoWorkflowOptions;
 	"devin-agent": DevinOptions;
-	"apple-foundation-models": AppleFoundationModelsOptions;
 }
 // Compile-time exhaustiveness check - this will fail if ApiOptionsMap doesn't have all KnownApi keys
 type _CheckExhaustive =

@@ -221,8 +221,8 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  *   persistence, model handoff, plan mode, provider sessions, provider usage, retry fallback, retry
  *   runtime, session approvals, session secrets, stop retries and yield tracking. Each imports
  *   modules the class already reached.
- * - Thirteen `packages/ai/src/auth-storage/*.ts` modules split out of `auth-storage.ts` (7449 lines
- *   to 4794). Each imports modules `auth-storage.ts` already reached.
+ * - Thirteen auth-storage collaborators split out of `auth-storage.ts` (7449 lines to 4794). Each imports
+ *   modules `auth-storage.ts` already reached.
  * - `session/provider-replay-projection.ts`, the replayed-field comparison a same-file reload runs,
  *   split out of `session/agent-session.ts`.
  * - `kernel/src/session/session-entry-index.ts` and `kernel/src/session/session-cold-payloads.ts`,
@@ -318,8 +318,8 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * 1479 to 1480: `session/runtime/session-switch.ts`, session switching and its rollback, which left
  * `session/agent-session.ts`. It imports only what that code imported there, so no other module arrived.
  *
- * 1480 to 1481: `ai/src/auth-storage/usage-reporting.ts`, the usage-report fetch, cache and header
- * ingest, which left `ai/src/auth-storage.ts`. Its imports were already here through that file.
+ * 1480 to 1481: the usage-report service and cache now live under `ai/src/auth/usage.ts` and
+ * `ai/src/auth/usage-cache.ts`; they left `ai/src/auth-storage.ts`. Their imports were already here
  * Measured 2026-10-16 at 1481.
  *
  * 1481 to 1482: `session/runtime/session-branch.ts`, branching and tree navigation, which left
@@ -384,7 +384,7 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  *
  * 1665 to 1668, re-measured 2026-10-04 in the sandbox (Refs #472):
  * The 3 modules added since 12356a91d4 are justified leaves required at startup:
- * - `packages/ai/src/auth-storage/usage-redaction.ts` (PR #449): credential redaction for usage
+ * - `packages/ai/src/auth/usage-redaction.ts` (PR #449): credential redaction for usage
  *   reporting and probes, imported by `auth-storage.ts` so credentials never leak into logs or errors.
  * - `packages/ai/src/github-copilot-client-id.ts` (PR #470): zero-import leaf configuring the GitHub
  *   Copilot OAuth client ID setter for `providers.githubCopilot.oauthClientId` in `config/settings.ts`.

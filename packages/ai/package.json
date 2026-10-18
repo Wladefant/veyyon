@@ -72,7 +72,6 @@
       "types": "./src/error/*.ts",
       "import": "./src/error/*.ts"
     },
-    "./auth-storage/*": null,
     "./*": {
       "types": "./src/*.ts",
       "import": "./src/*.ts"

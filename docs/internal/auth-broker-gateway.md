@@ -129,9 +129,9 @@ Two layers cache the aggregate provider-usage report. Both are intentional and s
 
 ### Server-side cache (broker `AuthStorage`)
 
-`AuthStorage` caches each credential’s `UsageReport` in the broker’s SQLite store at a **5-minute per-credential TTL with ±25 % jitter**, through its `UsageReporting` collaborator (`packages/ai/src/auth-storage/usage-reporting.ts`). Anthropic and OpenAI rate-limit `/usage` aggressively per source IP, and a synchronized 5-credential fan-out trips 429s every cycle; the jitter decorrelates refresh times within a few cycles. On fetch failure the store keeps the **last-good** report for up to 24 h with a short jittered re-poll window, so a transient upstream blip never blanks out the widget.
+`AuthStorage` caches each credential’s `UsageReport` in the broker’s SQLite store at a **5-minute per-credential TTL with ±25 % jitter**, through its `UsageService` (`packages/ai/src/auth/usage.ts`). Anthropic and OpenAI rate-limit `/usage` aggressively per source IP, and a synchronized 5-credential fan-out trips 429s every cycle; the jitter decorrelates refresh times within a few cycles. On fetch failure the store keeps the **last-good** report for up to 24 h with a short jittered re-poll window, so a transient upstream blip never blanks out the widget.
 
-Constants: `USAGE_REPORT_TTL_MS = 5 * 60_000` (`packages/ai/src/auth-credential-rows.ts`), `USAGE_LAST_GOOD_RETENTION_MS = 24 * 60 * 60_000` (`packages/ai/src/auth-storage/usage-cache.ts`).
+Constants: `USAGE_REPORT_TTL_MS = 5 * 60_000` (`packages/ai/src/auth-credential-rows.ts`), `USAGE_LAST_GOOD_RETENTION_MS = 24 * 60 * 60_000` (`packages/ai/src/auth/usage-cache.ts`).
 
 ### Client-side single-flight (`RemoteAuthCredentialStore`)
 

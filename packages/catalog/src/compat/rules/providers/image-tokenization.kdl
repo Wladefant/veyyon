@@ -34,7 +34,7 @@ on-api "google-generative-ai" "google-gemini-cli" "google-vertex" priority=-1 {
 
 // Anthropic wires and every other adapter bill Claude's high-res tier, the
 // largest per-image bill, so an unpriced reader is never undercounted.
-on-api "anthropic-messages" "bedrock-converse-stream" "openrouter" "ollama-chat" "cursor-agent" "factory-droid-agent" "gitlab-duo-agent" "devin-agent" "apple-foundation-models" priority=-1 {
+on-api "anthropic-messages" "bedrock-converse-stream" "openrouter" "ollama-chat" "cursor-agent" "factory-droid-agent" "gitlab-duo-agent" "devin-agent" priority=-1 {
 	image-tokenization {
 		regime "anthropic-patch"
 		max-edge 2576

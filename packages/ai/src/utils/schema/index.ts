@@ -5,7 +5,6 @@ export * from "./dereference";
 export * from "./draft";
 export * from "./equality";
 export * from "./fields";
-export * from "./foundation-models";
 export * from "./json-schema-validator";
 export * from "./meta-validator";
 export * from "./multiple-of";

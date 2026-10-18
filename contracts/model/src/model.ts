@@ -16,7 +16,6 @@ export const KNOWN_APIS = [
 	"gitlab-duo-agent",
 	"devin-agent",
 	"factory-droid-agent",
-	"apple-foundation-models",
 ] as const;
 
 export type KnownApi = (typeof KNOWN_APIS)[number];

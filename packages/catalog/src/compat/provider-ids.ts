@@ -9,7 +9,6 @@ export type KnownProvider =
 	| "alibaba-token-plan"
 	| "amazon-bedrock"
 	| "anthropic"
-	| "apple"
 	| "azure"
 	| "baseten"
 	| "bedrock-mantle"
