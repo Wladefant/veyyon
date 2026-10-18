@@ -3,7 +3,6 @@ import { $env, $envExact, logger } from "@veyyon/utils";
 import { type ApiKeyResolver, markAfterSiblingWait, type ResolvedApiKey } from "../auth-retry";
 import { getEnvApiKey, getEnvApiKeyName } from "../env-api-key";
 import * as AIError from "../error";
-import { isUsageLimitOutcome } from "../error/rate-limit";
 import { AUTHENTICATED_SENTINEL } from "../registry/types";
 import type { SessionAffinity } from "./affinity";
 import type { CredentialPool } from "./pool";
@@ -33,6 +32,7 @@ export class KeyOverrides {
 	#runtimeOverrides: Map<string, string> = new Map();
 	#configOverrides: Map<string, string> = new Map();
 	#configFallbacks: Map<string, string> = new Map();
+	#fallbackResolver?: (provider: string) => string | undefined;
 	#configValueResolver: (config: string) => Promise<string | undefined>;
 
 	constructor(resolver?: (config: string) => Promise<string | undefined>) {
@@ -65,6 +65,14 @@ export class KeyOverrides {
 	/** Config value consulted only after stored OAuth/login credentials. */
 	fallbackKey(provider: string): string | undefined {
 		return this.#configFallbacks.get(provider);
+	}
+
+	fallbackResolver(): ((provider: string) => string | undefined) | undefined {
+		return this.#fallbackResolver;
+	}
+
+	setFallbackResolver(resolver?: (provider: string) => string | undefined): void {
+		this.#fallbackResolver = resolver;
 	}
 
 	/** Resolve a config value (env var name, "!command", literal) to the secret. */
@@ -194,6 +202,10 @@ export class KeyCascade implements KeysApi {
 		return stored.length > 0 && stored.every(credential => this.isKeylessFallback(provider, credential));
 	}
 
+	hasApiKeyOverride(provider: string): boolean {
+		return this.#deps.overrides.has(provider);
+	}
+
 	/**
 	 * Env auth that belongs to this provider, not a cross-provider alias.
 	 * A declared OAuth token env list excludes borrowed API-key aliases from
@@ -208,11 +220,13 @@ export class KeyCascade implements KeysApi {
 	/**
 	 * Classify where a provider's auth comes from, following the same precedence
 	 * as {@link KeyCascade.get}: runtime override → config override →
-	 * stored OAuth → login-stored api_key → config fallback → env var → stored api_key.
+	 * stored OAuth → login-stored api_key → config fallback → env var →
+	 * stored api_key → ChatGPT Web's Codex OAuth fallback → fallback resolver.
 	 * Returns undefined when no auth is configured.
 	 *
 	 * Compact, structured counterpart to {@link KeyCascade.describe}; `env`
-	 * selects dedicated-only, alias-aware, or no environment fallback.
+	 * selects dedicated-only, alias-aware, or no environment fallback. The
+	 * configured fallback resolver is independent of that env selection.
 	 */
 	source(provider: string, { env = "dedicated" }: AuthSourceOptions = {}): AuthSource | undefined {
 		if (this.#deps.overrides.runtimeKey(provider) !== undefined) return { kind: "runtime", concrete: true };
@@ -231,7 +245,23 @@ export class KeyCascade implements KeysApi {
 			return { kind: "env", envVar: getEnvApiKeyName(provider), concrete };
 		}
 		if (bearing.some(credential => credential.type === "api_key")) return { kind: "api_key", concrete: true };
+		if (this.#chatgptWebOAuthFallback(provider)) {
+			return { kind: "oauth", concrete: true, effectiveProvider: "openai-codex" };
+		}
+		const fallback = this.#deps.overrides.fallbackResolver()?.(provider);
+		if (fallback) return { kind: "fallback", concrete: fallback !== AUTHENTICATED_SENTINEL };
 		return undefined;
+	}
+
+	/** ChatGPT Web can borrow Codex OAuth only when it has no auth of its own. */
+	#chatgptWebOAuthFallback(provider: string): boolean {
+		return (
+			provider === "chatgpt-web" &&
+			!this.#deps.overrides.has(provider) &&
+			this.#deps.pool.credentials(provider).length === 0 &&
+			!getEnvApiKey(provider) &&
+			this.#deps.pool.credentials("openai-codex").some(credential => credential.type === "oauth")
+		);
 	}
 
 	/** Check if a provider has a concrete env token, excluding ambient sentinel auth. */
@@ -245,6 +275,7 @@ export class KeyCascade implements KeysApi {
 		const envApiKey = getEnvApiKey(provider);
 		return envApiKey !== undefined && envApiKey !== AUTHENTICATED_SENTINEL;
 	}
+
 
 	/**
 	 * Peek at API key for a provider without refreshing OAuth tokens.
@@ -315,7 +346,19 @@ export class KeyCascade implements KeysApi {
 		if (apiKeySelection) {
 			return this.#deps.overrides.resolve(apiKeySelection.credential.key);
 		}
-		return undefined;
+
+		if (this.#chatgptWebOAuthFallback(provider)) {
+			const selection =
+				this.#deps.selector.selectByType(
+					"openai-codex",
+					"oauth",
+					undefined,
+					credential =>
+						credential.type === "oauth" && Number.isFinite(credential.expires) && credential.expires > now,
+				) ?? (options?.includeExpired ? this.#deps.selector.selectByType("openai-codex", "oauth") : undefined);
+			if (selection) return selection.credential.access;
+		}
+		return this.#deps.overrides.fallbackResolver()?.(provider);
 	}
 
 	/**
@@ -426,11 +469,12 @@ export class KeyCascade implements KeysApi {
 			if (options?.recordAffinity !== false) {
 				this.#deps.affinity.record(provider, sessionId, "api_key", loginApiKeySelection.index);
 			}
-			const credentialId = onCredentialId
-				? this.#deps.pool.entries(provider)[loginApiKeySelection.index]?.id
-				: undefined;
+			const credentialId = this.#deps.pool.entries(provider)[loginApiKeySelection.index]?.id;
 			const apiKey = await this.#deps.overrides.resolve(loginApiKeySelection.credential.key);
-			if (apiKey !== undefined && credentialId !== undefined) onCredentialId?.(credentialId);
+			if (apiKey !== undefined && credentialId !== undefined) {
+				this.#deps.pool.recordServing(provider, credentialId);
+				onCredentialId?.(credentialId);
+			}
 			return apiKey;
 		}
 
@@ -454,11 +498,31 @@ export class KeyCascade implements KeysApi {
 			if (options?.recordAffinity !== false) {
 				this.#deps.affinity.record(provider, sessionId, "api_key", apiKeySelection.index);
 			}
-			const credentialId = onCredentialId ? this.#deps.pool.entries(provider)[apiKeySelection.index]?.id : undefined;
+			const credentialId = this.#deps.pool.entries(provider)[apiKeySelection.index]?.id;
 			const apiKey = await this.#deps.overrides.resolve(apiKeySelection.credential.key);
-			if (apiKey !== undefined && credentialId !== undefined) onCredentialId?.(credentialId);
+			if (apiKey !== undefined && credentialId !== undefined) {
+				this.#deps.pool.recordServing(provider, credentialId);
+				onCredentialId?.(credentialId);
+			}
 			return apiKey;
 		}
+		if (this.#chatgptWebOAuthFallback(provider)) {
+			try {
+				oauthResolved = await this.#deps.selector.resolveOAuth("openai-codex", sessionId, options);
+			} catch (error) {
+				if (!(error instanceof AIError.OAuthRefreshUnavailableError)) throw error;
+				oauthRefreshFailure = error;
+			}
+			if (oauthResolved) {
+				if (onCredentialId && oauthResolved.credentialId !== undefined) {
+					const { orgId, region, inferenceRegion } = oauthResolved.credential;
+					onCredentialId(oauthResolved.credentialId, { orgId, region, inferenceRegion });
+				}
+				return oauthResolved.apiKey;
+			}
+		}
+		const fallback = this.#deps.overrides.fallbackResolver()?.(provider);
+		if (fallback !== undefined) return fallback;
 		if (oauthRefreshFailure) throw oauthRefreshFailure;
 		return undefined;
 	}
@@ -492,12 +556,10 @@ export class KeyCascade implements KeysApi {
 					apiKey: previousKey,
 				});
 				if (!rotation.switched) {
-					const status = AIError.status(error);
-					const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
 					// Preserve no-sibling quota backoff instead of re-resolving an
 					// already-blocked fallback. Hard-auth declines still re-resolve
 					// because a peer may have refreshed the failed bearer.
-					if (AIError.isUsageLimit(error) || isUsageLimitOutcome(status, message)) return undefined;
+					if (AIError.isUsageLimit(error)) return undefined;
 				}
 				const resolved = await this.getWithCredential(provider, sessionId, {
 					baseUrl,
@@ -601,5 +663,8 @@ export class KeyCascade implements KeysApi {
 
 	setResolver(resolver: (config: string) => Promise<string | undefined>): void {
 		this.#deps.overrides.setResolver(resolver);
+	}
+	setFallbackResolver(resolver?: (provider: string) => string | undefined): void {
+		this.#deps.overrides.setFallbackResolver(resolver);
 	}
 }

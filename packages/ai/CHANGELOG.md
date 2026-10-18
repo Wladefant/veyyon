@@ -23,6 +23,7 @@
 
 ### Fixed
 - Replaced ModelNotInPlan with canonical AccountPolicy failure flag and audited unique sign-bit representations ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Auth source reporting includes host fallback keys and ChatGPT Web's borrowed Codex OAuth credential ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - Mapped provider server and user profile schema imports to local schema adapters with no user-visible change ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Aligned SQLite credential store import subpath and converted UsageService to dynamic usage provider inventory ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
