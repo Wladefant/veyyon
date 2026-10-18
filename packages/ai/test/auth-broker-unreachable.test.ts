@@ -141,10 +141,10 @@ describe("an unreachable auth broker is never reported as an empty credential se
 			);
 
 			const storage = await discoverAuthStorage(discoverOptions());
-			expect(storage.listStoredCredentials()).toEqual([]);
+			expect(storage.credentials.list()).toEqual([]);
 			// And the provider list is empty too, which is what the UI reads to decide
 			// whether to offer a login.
-			expect(storage.list()).toEqual([]);
+			expect(storage.credentials.providers()).toEqual([]);
 		});
 	});
 

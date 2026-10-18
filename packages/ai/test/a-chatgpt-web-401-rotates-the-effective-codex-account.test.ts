@@ -102,7 +102,7 @@ describe("a ChatGPT Web 401 rotates the effective Codex account", () => {
 		provider: string,
 		accessTokens: readonly string[],
 	): Promise<void> {
-		await auth.set(
+		await auth.credentials.set(
 			provider,
 			accessTokens.map((access, index) => ({
 				type: "oauth" as const,
@@ -116,29 +116,27 @@ describe("a ChatGPT Web 401 rotates the effective Codex account", () => {
 
 	/** The bearer ChatGPT Web resolved, narrowed: every assertion below names the account it belongs to. */
 	async function servedBearer(auth: AuthStorage): Promise<string> {
-		const apiKey = await auth.getApiKey("chatgpt-web", SESSION);
+		const apiKey = await auth.keys.get("chatgpt-web", SESSION);
 		if (apiKey === undefined) throw new Error("expected ChatGPT Web to resolve a bearer");
 		return apiKey;
 	}
 
 	/** The row whose access token served the turn, so assertions name an account rather than an index. */
 	function servedRowId(auth: AuthStorage, provider: string, access: string): number {
-		const row = auth
-			.listStoredCredentials(provider)
+		const row = auth.credentials.list(provider)
 			.find(entry => entry.credential.type === "oauth" && entry.credential.access === access);
 		if (!row) throw new Error(`no ${provider} row serves ${access}`);
 		return row.id;
 	}
 
 	function blockedPairs(auth: AuthStorage, provider: string): Array<{ credentialId: number; providerKey: string }> {
-		const ids = auth.listStoredCredentials(provider).map(entry => entry.id);
-		return auth
-			.listCredentialBlocks(ids)
+		const ids = auth.credentials.list(provider).map(entry => entry.id);
+		return auth.blocks.list(ids)
 			.map(block => ({ credentialId: block.credentialId, providerKey: block.providerKey }));
 	}
 
 	function accountEmail(auth: AuthStorage, provider: string, credentialId: number): string {
-		const row = auth.listStoredCredentials(provider).find(entry => entry.id === credentialId);
+		const row = auth.credentials.list(provider).find(entry => entry.id === credentialId);
 		if (!row || row.credential.type !== "oauth" || !row.credential.email) {
 			throw new Error(`expected OAuth account email for ${provider} credential ${credentialId}`);
 		}
@@ -153,7 +151,7 @@ describe("a ChatGPT Web 401 rotates the effective Codex account", () => {
 		expect(CODEX_ACCESS).toContain(first);
 		const deadId = servedRowId(storage, "openai-codex", first);
 
-		expect(await storage.rotateSessionCredential("chatgpt-web", SESSION, { error: authError() })).toBe(true);
+		expect(await storage.limits.rotate("chatgpt-web", SESSION, { error: authError() })).toBe(true);
 
 		// The dead account is blocked under the provider whose row actually served, which is the only
 		// key credential selection consults for it.
@@ -173,7 +171,7 @@ describe("a ChatGPT Web 401 rotates the effective Codex account", () => {
 		await seedOAuthAccounts(storage, "openai-codex", [SOLO_CODEX_ACCESS]);
 
 		expect(await servedBearer(storage)).toBe(SOLO_CODEX_ACCESS);
-		expect(await storage.rotateSessionCredential("chatgpt-web", SESSION, { error: authError() })).toBe(false);
+		expect(await storage.limits.rotate("chatgpt-web", SESSION, { error: authError() })).toBe(false);
 		// `false` here means "no sibling", not "nothing happened": the dead row is still blocked.
 		expect(blockedPairs(storage, "openai-codex")).toEqual([
 			{ credentialId: servedRowId(storage, "openai-codex", SOLO_CODEX_ACCESS), providerKey: "openai-codex:oauth" },
@@ -188,12 +186,12 @@ describe("a ChatGPT Web 401 rotates the effective Codex account", () => {
 		const exhaustedId = servedRowId(storage, "openai-codex", served);
 
 		const markedAt = Date.now();
-		expect(await storage.markUsageLimitReached("chatgpt-web", SESSION, { retryAfterMs: HALF_HOUR_MS })).toEqual({
+		expect(await storage.limits.markReached("chatgpt-web", SESSION, { retryAfterMs: HALF_HOUR_MS })).toEqual({
 			switched: true,
 			quotaMessage: `Quota reached on openai-codex account ${accountEmail(storage, "openai-codex", exhaustedId)}; resets ${new Date(NOW_MS + HALF_HOUR_MS).toISOString()}. 1 other account available; balancer will try it next.`,
 		});
 
-		const blocks = storage.listCredentialBlocks(storage.listStoredCredentials("openai-codex").map(row => row.id));
+		const blocks = storage.blocks.list(storage.credentials.list("openai-codex").map(row => row.id));
 		expect(blocks.map(block => ({ credentialId: block.credentialId, providerKey: block.providerKey }))).toEqual([
 			{ credentialId: exhaustedId, providerKey: "openai-codex:oauth" },
 		]);
@@ -212,7 +210,7 @@ describe("a ChatGPT Web 401 rotates the effective Codex account", () => {
 		const first = await servedBearer(storage);
 		expect(WEB_ACCESS).toContain(first);
 
-		expect(await storage.rotateSessionCredential("chatgpt-web", SESSION, { error: authError() })).toBe(true);
+		expect(await storage.limits.rotate("chatgpt-web", SESSION, { error: authError() })).toBe(true);
 
 		expect(blockedPairs(storage, "chatgpt-web")).toEqual([
 			{ credentialId: servedRowId(storage, "chatgpt-web", first), providerKey: "chatgpt-web:oauth" },
@@ -232,7 +230,7 @@ describe("a ChatGPT Web 401 rotates the effective Codex account", () => {
 		const served = await servedBearer(storage);
 		const markedAt = NOW_MS;
 		const servedId = servedRowId(storage, "chatgpt-web", served);
-		expect(await storage.markUsageLimitReached("chatgpt-web", SESSION, { retryAfterMs: HALF_HOUR_MS })).toEqual({
+		expect(await storage.limits.markReached("chatgpt-web", SESSION, { retryAfterMs: HALF_HOUR_MS })).toEqual({
 			switched: true,
 			quotaMessage: `Quota reached on chatgpt-web account ${accountEmail(storage, "chatgpt-web", servedId)}; resets ${new Date(markedAt + HALF_HOUR_MS).toISOString()}. 1 other account available; balancer will try it next.`,
 		});
@@ -247,10 +245,10 @@ describe("a ChatGPT Web 401 rotates the effective Codex account", () => {
 		if (!storage) throw new Error("test setup failed");
 		await seedOAuthAccounts(storage, "openai-codex", CODEX_ACCESS);
 
-		expect(await storage.getApiKey("unrelated-provider", SESSION)).toBeUndefined();
-		expect(await storage.rotateSessionCredential("unrelated-provider", SESSION, { error: authError() })).toBe(false);
+		expect(await storage.keys.get("unrelated-provider", SESSION)).toBeUndefined();
+		expect(await storage.limits.rotate("unrelated-provider", SESSION, { error: authError() })).toBe(false);
 		expect(
-			await storage.markUsageLimitReached("unrelated-provider", SESSION, { retryAfterMs: HALF_HOUR_MS }),
+			await storage.limits.markReached("unrelated-provider", SESSION, { retryAfterMs: HALF_HOUR_MS }),
 		).toEqual({ switched: false });
 		expect(blockedPairs(storage, "openai-codex")).toEqual([]);
 	});

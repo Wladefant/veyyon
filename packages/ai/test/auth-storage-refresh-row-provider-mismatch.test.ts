@@ -96,7 +96,7 @@ describe("An OAuth refresh refuses a store row that has become another provider'
 		const authStorage = new AuthStorage(store);
 
 		// The victim holds an EXPIRED credential, so getApiKey must refresh it.
-		await authStorage.set(victim, [
+		await authStorage.credentials.set(victim, [
 			{ type: "oauth", access: "victim-stale", refresh: "victim-stale-refresh", expires: Date.now() - 60_000 },
 		]);
 		const credentialId = store.listAuthCredentials(victim)[0]?.id;
@@ -117,7 +117,7 @@ describe("An OAuth refresh refuses a store row that has become another provider'
 		};
 		vi.spyOn(store, "readAuthCredentialById").mockImplementation(() => squatterRow);
 
-		const key = await authStorage.getApiKey(victim, "session-mismatch");
+		const key = await authStorage.keys.get(victim, "session-mismatch");
 
 		// The squatter's secret must never reach the victim's caller, by any route.
 		expect(key).not.toBe("squatter-access");
@@ -135,7 +135,7 @@ describe("An OAuth refresh refuses a store row that has become another provider'
 		closers.push(store);
 		const authStorage = new AuthStorage(store);
 
-		await authStorage.set(provider, [
+		await authStorage.credentials.set(provider, [
 			{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: Date.now() - 60_000 },
 		]);
 		const credentialId = store.listAuthCredentials(provider)[0]?.id as number;
@@ -147,7 +147,7 @@ describe("An OAuth refresh refuses a store row that has become another provider'
 			expires: Date.now() + 60 * 60_000,
 		});
 
-		const key = await authStorage.getApiKey(provider, "session-matching");
+		const key = await authStorage.keys.get(provider, "session-matching");
 
 		expect(key).toBe("peer-rotated-access");
 		// Zero token-endpoint calls is the whole point of the short circuit: the
@@ -173,7 +173,7 @@ describe("An OAuth refresh refuses a store row that has become another provider'
 		const store = await SqliteAuthCredentialStore.open(dbPath);
 		closers.push(store);
 		const authStorage = new AuthStorage(store);
-		await authStorage.set(victim, [
+		await authStorage.credentials.set(victim, [
 			{ type: "oauth", access: "victim-stale", refresh: "victim-stale-refresh", expires: Date.now() - 60_000 },
 		]);
 		const credentialId = store.listAuthCredentials(victim)[0]?.id as number;
@@ -189,7 +189,7 @@ describe("An OAuth refresh refuses a store row that has become another provider'
 			disabledCause: null,
 		}));
 
-		await authStorage.getApiKey(victim, "session-logged");
+		await authStorage.keys.get(victim, "session-logged");
 
 		const refusal = warnings.find(w => w.message.includes("changed provider mid-refresh"));
 		expect(refusal).toBeDefined();

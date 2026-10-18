@@ -88,7 +88,7 @@ describe("A successful OAuth refresh re-enables a concurrently-disabled row", ()
 			},
 		});
 
-		await authStorage.set(provider, [
+		await authStorage.credentials.set(provider, [
 			{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: expired },
 		]);
 		const credentialId = store.listAuthCredentials(provider)[0]!.id;
@@ -99,7 +99,7 @@ describe("A successful OAuth refresh re-enables a concurrently-disabled row", ()
 		const peerStore = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
 		let key: string | undefined;
 		try {
-			const pending = authStorage.getApiKey(provider, "reenable-session");
+			const pending = authStorage.keys.get(provider, "reenable-session");
 			await refreshStarted.promise;
 
 			// Peer process B, holding the same stale R1, fails its own refresh with
@@ -131,9 +131,9 @@ describe("A successful OAuth refresh re-enables a concurrently-disabled row", ()
 		}
 
 		// A follow-up request (the "next run") reads the healed row directly.
-		const next = await authStorage.getApiKey(provider, "next-session");
+		const next = await authStorage.keys.get(provider, "next-session");
 		expect(next).toBe("rotated-access");
-		expect(authStorage.list()).toContain(provider);
+		expect(authStorage.credentials.providers()).toContain(provider);
 	});
 
 	test("a genuinely dead grant is NOT resurrected — a failed refresh leaves the row disabled", async () => {
@@ -158,11 +158,11 @@ describe("A successful OAuth refresh re-enables a concurrently-disabled row", ()
 			},
 		});
 
-		await authStorage.set(provider, [
+		await authStorage.credentials.set(provider, [
 			{ type: "oauth", access: "dead-access", refresh: "dead-refresh", expires: expired },
 		]);
 
-		const key = await authStorage.getApiKey(provider, "dead-session");
+		const key = await authStorage.keys.get(provider, "dead-session");
 		expect(key).toBeUndefined();
 		// The re-enable path only fires on a SUCCESSFUL refresh; a dead grant must stay
 		// disabled so it drops out instead of being retried forever.
@@ -196,17 +196,17 @@ describe("A successful OAuth refresh re-enables a concurrently-disabled row", ()
 			},
 		});
 
-		await authStorage.set(provider, [
+		await authStorage.credentials.set(provider, [
 			{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: Date.now() - 60_000 },
 		]);
 		const credentialId = store.listAuthCredentials(provider)[0]!.id;
 
-		const pending = authStorage.getApiKey(provider, "logout-session");
+		const pending = authStorage.keys.get(provider, "logout-session");
 		await refreshStarted.promise;
 
 		// The user logs out while the refresh is still in flight. Logout disables the row
 		// with a NON-refresh-failure cause (not the "oauth refresh failed…" prefix).
-		expect(authStorage.disableCredentialById(credentialId, "user logged out")).toBe(true);
+		expect(authStorage.credentials.disable(credentialId, "user logged out")).toBe(true);
 		expect(store.listAuthCredentials(provider)).toHaveLength(0);
 
 		// The refresh now completes successfully. A successful refresh proves the grant is
@@ -216,8 +216,8 @@ describe("A successful OAuth refresh re-enables a concurrently-disabled row", ()
 		await pending;
 
 		expect(store.listAuthCredentials(provider)).toHaveLength(0);
-		expect(authStorage.list()).not.toContain(provider);
+		expect(authStorage.credentials.providers()).not.toContain(provider);
 		// A follow-up request still sees no credential — the logout stuck.
-		expect(await authStorage.getApiKey(provider, "after-logout")).toBeUndefined();
+		expect(await authStorage.keys.get(provider, "after-logout")).toBeUndefined();
 	});
 });

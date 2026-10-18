@@ -210,7 +210,7 @@ describe("AuthStorage usage cache: last-good failure fallback", () => {
 		storage = new AuthStorage(store, {
 			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
 		});
-		await storage.reload();
+		await storage.credentials.reload();
 	});
 
 	afterEach(() => {
@@ -226,11 +226,11 @@ describe("AuthStorage usage cache: last-good failure fallback", () => {
 			return goldReport;
 		});
 
-		const first = anthropicReports(await storage.fetchUsageReports());
+		const first = anthropicReports(await storage.usage.reports());
 		expect(first).toHaveLength(1);
 		expect(calls).toBe(1);
 
-		const second = anthropicReports(await storage.fetchUsageReports());
+		const second = anthropicReports(await storage.usage.reports());
 		expect(second).toHaveLength(1);
 		// Cache hit — provider was NOT called a second time.
 		expect(calls).toBe(1);
@@ -244,18 +244,18 @@ describe("AuthStorage usage cache: last-good failure fallback", () => {
 		});
 
 		// First poll: cold fetch fails → caches null for the backoff window.
-		const first = anthropicReports(await storage.fetchUsageReports());
+		const first = anthropicReports(await storage.usage.reports());
 		expect(first).toHaveLength(0);
 		expect(calls).toBe(1);
 
 		// Second poll within the window: served from the cold-null cache — no refetch.
-		const second = anthropicReports(await storage.fetchUsageReports());
+		const second = anthropicReports(await storage.usage.reports());
 		expect(calls).toBe(1);
 		expect(second).toHaveLength(0);
 
 		// Expire the backoff entry → the next poll refetches (and fails again).
 		expireCachePayloads(store);
-		const third = anthropicReports(await storage.fetchUsageReports());
+		const third = anthropicReports(await storage.usage.reports());
 		expect(calls).toBe(2);
 		expect(third).toHaveLength(0);
 	});
@@ -270,7 +270,7 @@ describe("AuthStorage usage cache: last-good failure fallback", () => {
 		});
 
 		// First poll: real fetch → cached.
-		const first = anthropicReports(await storage.fetchUsageReports());
+		const first = anthropicReports(await storage.usage.reports());
 		expect(first).toHaveLength(1);
 		expect(calls).toBe(1);
 
@@ -282,7 +282,7 @@ describe("AuthStorage usage cache: last-good failure fallback", () => {
 
 		// Second poll: cache expired → refetch → provider returns null →
 		// AuthStorage falls back to last-good and the report stays populated.
-		const second = anthropicReports(await storage.fetchUsageReports());
+		const second = anthropicReports(await storage.usage.reports());
 		expect(calls).toBe(2);
 		expect(second).toHaveLength(1);
 		// The fallback value must be the SAME report (not a synthetic empty one).
@@ -299,19 +299,19 @@ describe("AuthStorage usage cache: last-good failure fallback", () => {
 			return goldReport;
 		});
 
-		const first = anthropicReports(await storage.fetchUsageReports());
+		const first = anthropicReports(await storage.usage.reports());
 		expect(first).toHaveLength(1);
 		expect(calls).toBe(1);
 
 		// Expire success cache → poll 2 fetches and 429s → cool-down written.
 		expireCachePayloads(store);
-		const second = anthropicReports(await storage.fetchUsageReports());
+		const second = anthropicReports(await storage.usage.reports());
 		expect(second).toHaveLength(1); // last-good fallback
 		expect(calls).toBe(2);
 
 		// Expire the cool-down → poll 3 refetches → success.
 		expireCachePayloads(store);
-		const third = anthropicReports(await storage.fetchUsageReports());
+		const third = anthropicReports(await storage.usage.reports());
 		expect(third).toHaveLength(1);
 		expect(calls).toBe(3);
 	});
@@ -333,7 +333,7 @@ describe("AuthStorage usage cache: bounded HTTP concurrency", () => {
 		const localStorage = new AuthStorage(localStore, {
 			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
 		});
-		await localStorage.reload();
+		await localStorage.credentials.reload();
 
 		const failFirst = Promise.withResolvers<void>();
 		const releaseRemaining = Promise.withResolvers<void>();
@@ -370,7 +370,7 @@ describe("AuthStorage usage cache: bounded HTTP concurrency", () => {
 		});
 
 		try {
-			const pendingReports = localStorage.fetchUsageReports();
+			const pendingReports = localStorage.usage.reports();
 			await firstWaveFull.promise;
 			failFirst.resolve();
 			await queuedAfterFailure.promise;
@@ -400,7 +400,7 @@ describe("AuthStorage usage cache: jitter", () => {
 		const storage = new AuthStorage(store, {
 			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
 		});
-		await storage.reload();
+		await storage.credentials.reload();
 		try {
 			const goldA = makeReport("a@example.com");
 			const goldB = makeReport("b@example.com");
@@ -408,7 +408,7 @@ describe("AuthStorage usage cache: jitter", () => {
 				return params.credential.email === "a@example.com" ? goldA : goldB;
 			});
 
-			await storage.fetchUsageReports();
+			await storage.usage.reports();
 
 			// The store-level TTL is bumped to the 24h durable-retention floor so
 			// `getStale` can recover last-good values; the freshness TTL we actually
@@ -442,7 +442,7 @@ describe("AuthStorage usage cache: header ingestion", () => {
 		storage = new AuthStorage(store, {
 			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
 		});
-		await storage.reload();
+		await storage.credentials.reload();
 	});
 
 	afterEach(() => {
@@ -457,10 +457,10 @@ describe("AuthStorage usage cache: header ingestion", () => {
 			throw new Error("usage endpoint should not be probed after header ingestion");
 		});
 
-		expect(await storage.getApiKey("anthropic", "s")).toBe("oat-1");
-		expect(storage.ingestUsageHeaders("anthropic", usageHeaders("0.02", "0.3"), { sessionId: "s" })).toBe(true);
+		expect(await storage.keys.get("anthropic", "s")).toBe("oat-1");
+		expect(storage.usage.ingestHeaders("anthropic", usageHeaders("0.02", "0.3"), { sessionId: "s" })).toBe(true);
 
-		const report = requireAnthropicReport(await storage.fetchUsageReports());
+		const report = requireAnthropicReport(await storage.usage.reports());
 		expect(calls).toBe(0);
 		expect(report.metadata?.source).toBe("ratelimit-headers");
 		expect(report.metadata?.email).toBe("a@example.com");
@@ -472,9 +472,9 @@ describe("AuthStorage usage cache: header ingestion", () => {
 	it("merges active credential metadata into existing header cache entries", async () => {
 		const start = Date.now();
 		const now = vi.spyOn(Date, "now").mockReturnValue(start);
-		expect(await storage.getApiKey("anthropic", "legacy-session")).toBe("oat-1");
+		expect(await storage.keys.get("anthropic", "legacy-session")).toBe("oat-1");
 		expect(
-			storage.ingestUsageHeaders("anthropic", usageHeaders("0.02", "0.3"), { sessionId: "legacy-session" }),
+			storage.usage.ingestHeaders("anthropic", usageHeaders("0.02", "0.3"), { sessionId: "legacy-session" }),
 		).toBe(true);
 
 		let rewroteLegacyEntry = false;
@@ -489,10 +489,10 @@ describe("AuthStorage usage cache: header ingestion", () => {
 
 		now.mockReturnValue(start + 60_001);
 		expect(
-			storage.ingestUsageHeaders("anthropic", usageHeaders("0.05", "0.6"), { sessionId: "legacy-session" }),
+			storage.usage.ingestHeaders("anthropic", usageHeaders("0.05", "0.6"), { sessionId: "legacy-session" }),
 		).toBe(true);
 
-		const report = requireAnthropicReport(await storage.fetchUsageReports());
+		const report = requireAnthropicReport(await storage.usage.reports());
 		expect(report.metadata?.source).toBe("ratelimit-headers");
 		expect(report.metadata?.email).toBe("a@example.com");
 		expect(report.metadata?.accountId).toBe("account-1");
@@ -500,9 +500,9 @@ describe("AuthStorage usage cache: header ingestion", () => {
 	});
 
 	it("throttles repeated header ingestion for the same credential cache key", async () => {
-		expect(await storage.getApiKey("anthropic", "s")).toBe("oat-1");
-		expect(storage.ingestUsageHeaders("anthropic", usageHeaders("0.02", "0.3"), { sessionId: "s" })).toBe(true);
-		expect(storage.ingestUsageHeaders("anthropic", usageHeaders("0.05", "0.6"), { sessionId: "s" })).toBe(false);
+		expect(await storage.keys.get("anthropic", "s")).toBe("oat-1");
+		expect(storage.usage.ingestHeaders("anthropic", usageHeaders("0.02", "0.3"), { sessionId: "s" })).toBe(true);
+		expect(storage.usage.ingestHeaders("anthropic", usageHeaders("0.05", "0.6"), { sessionId: "s" })).toBe(false);
 	});
 
 	it("merges header umbrella windows onto the last real report and preserves tier limits", async () => {
@@ -513,17 +513,17 @@ describe("AuthStorage usage cache: header ingestion", () => {
 			return realReport;
 		});
 
-		const initialReport = requireAnthropicReport(await storage.fetchUsageReports());
+		const initialReport = requireAnthropicReport(await storage.usage.reports());
 		expect(requireLimit(initialReport, "anthropic:7d:opus").amount.used).toBe(12);
 		expect(calls).toBe(1);
 
-		expect(await storage.getApiKey("anthropic", "merge-session")).toBe("oat-1");
+		expect(await storage.keys.get("anthropic", "merge-session")).toBe("oat-1");
 		const beforeIngest = Date.now();
-		expect(storage.ingestUsageHeaders("anthropic", usageHeaders("0.05", "0.9"), { sessionId: "merge-session" })).toBe(
+		expect(storage.usage.ingestHeaders("anthropic", usageHeaders("0.05", "0.9"), { sessionId: "merge-session" })).toBe(
 			true,
 		);
 
-		const mergedReport = requireAnthropicReport(await storage.fetchUsageReports());
+		const mergedReport = requireAnthropicReport(await storage.usage.reports());
 		expect(calls).toBe(1);
 		expect(mergedReport.fetchedAt).toBeGreaterThan(realReport.fetchedAt);
 		expect(mergedReport.metadata?.email).toBe("a@example.com");
@@ -583,18 +583,18 @@ describe("AuthStorage usage cache: header ingestion", () => {
 			return realReport;
 		});
 
-		const initialReport = requireAnthropicReport(await storage.fetchUsageReports());
+		const initialReport = requireAnthropicReport(await storage.usage.reports());
 		expect(requireLimit(initialReport, "anthropic:7d:fable").amount.used).toBe(11);
 		expect(calls).toBe(1);
 
-		expect(await storage.getApiKey("anthropic", "fable-session")).toBe("oat-1");
+		expect(await storage.keys.get("anthropic", "fable-session")).toBe("oat-1");
 		expect(
-			storage.ingestUsageHeaders("anthropic", usageHeaders("0.05", "0.9", "0.61"), {
+			storage.usage.ingestHeaders("anthropic", usageHeaders("0.05", "0.9", "0.61"), {
 				sessionId: "fable-session",
 			}),
 		).toBe(true);
 
-		const mergedReport = requireAnthropicReport(await storage.fetchUsageReports());
+		const mergedReport = requireAnthropicReport(await storage.usage.reports());
 		expect(calls).toBe(1);
 		expect(mergedReport.limits.filter(limit => limit.id === "anthropic:7d:fable")).toHaveLength(1);
 		expect(requireLimit(mergedReport, "anthropic:5h").amount.used).toBe(5);
@@ -681,12 +681,12 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 				throw new Error("OAuth refresh failed: 400 invalid_grant: refresh token revoked");
 			},
 		});
-		await storage.reload();
+		await storage.credentials.reload();
 
 		const fetchSpy = vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage");
 
 		try {
-			const reports = anthropicReports(await storage.fetchUsageReports());
+			const reports = anthropicReports(await storage.usage.reports());
 
 			// No last-good fallback: the row was disabled before lastGood could leak.
 			expect(reports).toHaveLength(0);
@@ -706,7 +706,7 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 			// And a second poll surfaces nothing — the credential is gone from
 			// `listAuthCredentials`, so `UsageReporting`'s request collection doesn't even
 			// look it up.
-			const secondPoll = anthropicReports(await storage.fetchUsageReports());
+			const secondPoll = anthropicReports(await storage.usage.reports());
 			expect(secondPoll).toHaveLength(0);
 		} finally {
 			storage.close();
@@ -759,7 +759,7 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 				throw new Error("fetch failed: connect ECONNREFUSED 1.2.3.4:443");
 			},
 		});
-		await storage.reload();
+		await storage.credentials.reload();
 
 		// The provider probe runs with the stale credential and fails — we don't
 		// need a real upstream response, just a deterministic null so the lastGood
@@ -767,7 +767,7 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockResolvedValue(null);
 
 		try {
-			const reports = anthropicReports(await storage.fetchUsageReports());
+			const reports = anthropicReports(await storage.usage.reports());
 			expect(reports).toHaveLength(1);
 			expect(reports[0]?.metadata?.email).toBe("b@example.com");
 			expect(rows[0].disabledCause).toBeNull();
@@ -796,7 +796,7 @@ describe("AuthStorage usage cache: org-only identity stability", () => {
 		const storage = new AuthStorage(store, {
 			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
 		});
-		await storage.reload();
+		await storage.credentials.reload();
 		try {
 			let calls = 0;
 			vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async () => {
@@ -804,7 +804,7 @@ describe("AuthStorage usage cache: org-only identity stability", () => {
 				return makeReport("org-only");
 			});
 
-			const first = anthropicReports(await storage.fetchUsageReports());
+			const first = anthropicReports(await storage.usage.reports());
 			expect(first).toHaveLength(1);
 			expect(calls).toBe(1);
 			const reportKeysBefore = [...store.cache.keys()].filter(key => key.startsWith("usage_cache:reportv2:")).sort();
@@ -813,9 +813,9 @@ describe("AuthStorage usage cache: org-only identity stability", () => {
 			// An OAuth refresh rotates both tokens. The rotated credential must
 			// resolve to the SAME cache entry — served from cache, no refetch.
 			row.credential = { ...credential, access: "oat-rotated", refresh: "refresh-rotated" };
-			await storage.reload();
+			await storage.credentials.reload();
 
-			const second = anthropicReports(await storage.fetchUsageReports());
+			const second = anthropicReports(await storage.usage.reports());
 			expect(second).toHaveLength(1);
 			expect(calls).toBe(1);
 			const reportKeysAfter = [...store.cache.keys()].filter(key => key.startsWith("usage_cache:reportv2:")).sort();

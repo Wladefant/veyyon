@@ -160,7 +160,7 @@ async function kimiLogin(
 	const prompts: string[] = [];
 	const sent: Sent[] = [];
 	vi.spyOn(globalThis, "fetch").mockImplementation(kimiServer(sent));
-	const outcome = storage.login("kimi-code", {
+	const outcome = storage.oauth.login("kimi-code", {
 		signal,
 		onAuth: () => {},
 		onProgress: () => {},
@@ -185,7 +185,7 @@ describe("a Kimi token reaches only the deployment that issued it", () => {
 		db = new Database(":memory:");
 		store = new SqliteAuthCredentialStore(db);
 		storage = new AuthStorage(store);
-		await storage.reload();
+		await storage.credentials.reload();
 	});
 
 	afterEach(() => {
@@ -206,7 +206,7 @@ describe("a Kimi token reaches only the deployment that issued it", () => {
 			const model = kimiModel();
 
 			const prompts: string[] = [];
-			await storage.login("kimi-code", {
+			await storage.oauth.login("kimi-code", {
 				onAuth: () => {},
 				onProgress: () => {},
 				onPrompt: async ({ message }) => {
@@ -220,7 +220,7 @@ describe("a Kimi token reaches only the deployment that issued it", () => {
 				{ url: `${endpoints.oauthHost}/api/oauth/token`, credential: null },
 			]);
 
-			const apiKey = await storage.getApiKey("kimi-code", "s");
+			const apiKey = await storage.keys.get("kimi-code", "s");
 			if (apiKey === undefined) throw new Error("the login stored no kimi-code credential");
 
 			let mark = sent.length;
@@ -255,7 +255,7 @@ describe("a Kimi token reaches only the deployment that issued it", () => {
 			expect(since(sent, mark)).toEqual([{ url: `${endpoints.baseUrl}/models`, credential: "access-issued" }]);
 
 			mark = sent.length;
-			const refreshedKey = await storage.getApiKey("kimi-code", "s", { forceRefresh: true });
+			const refreshedKey = await storage.keys.get("kimi-code", "s", { forceRefresh: true });
 			if (refreshedKey === undefined) throw new Error("the refresh left no kimi-code credential");
 			expect(since(sent, mark)).toEqual([{ url: `${endpoints.oauthHost}/api/oauth/token`, credential: null }]);
 

@@ -86,19 +86,19 @@ describe("routing answers which account serves next", () => {
 
 	/** Three accounts, so a predictor that always answers "the first row" cannot pass by luck. */
 	async function seedThree(storage: AuthStorage): Promise<number[]> {
-		await storage.set(PROVIDER, [oauthRow("first"), oauthRow("second"), oauthRow("third")]);
-		return storage.listStoredCredentials(PROVIDER).map(row => row.id);
+		await storage.credentials.set(PROVIDER, [oauthRow("first"), oauthRow("second"), oauthRow("third")]);
+		return storage.credentials.list(PROVIDER).map(row => row.id);
 	}
 
 	/** The access token of one stored row, so a predicted id can be compared against a served bearer. */
 	function accessOf(storage: AuthStorage, credentialId: number): string {
-		const row = storage.listStoredCredentials(PROVIDER).find(entry => entry.id === credentialId);
+		const row = storage.credentials.list(PROVIDER).find(entry => entry.id === credentialId);
 		if (row?.credential.type !== "oauth") throw new Error(`no oauth row ${credentialId}`);
 		return row.credential.access;
 	}
 
 	function blockFor(storage: AuthStorage, credentialId: number, ms: number): void {
-		storage.upsertCredentialBlock({
+		storage.blocks.upsert({
 			credentialId,
 			providerKey: `${PROVIDER}:oauth`,
 			blockScope: "",
@@ -114,7 +114,7 @@ describe("routing answers which account serves next", () => {
 		if (!authStorage) throw new Error("test setup failed");
 		await seedThree(authStorage);
 
-		const routing = authStorage.sessionCredentialRouting(PROVIDER, SESSION_ID);
+		const routing = authStorage.sessions.routing(PROVIDER, SESSION_ID);
 
 		expect(routing?.activeCredentialId).toBeDefined();
 		expect(routing?.activeIsPrediction).toBe(true);
@@ -130,10 +130,10 @@ describe("routing answers which account serves next", () => {
 		const storage = authStorage;
 		await seedThree(storage);
 
-		const predicted = storage.sessionCredentialRouting(PROVIDER, SESSION_ID)?.activeCredentialId;
+		const predicted = storage.sessions.routing(PROVIDER, SESSION_ID)?.activeCredentialId;
 		if (predicted === undefined) throw new Error("routing predicted nothing");
 
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe(accessOf(storage, predicted));
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe(accessOf(storage, predicted));
 	});
 
 	/**
@@ -147,13 +147,13 @@ describe("routing answers which account serves next", () => {
 		const storage = authStorage;
 		await seedThree(storage);
 
-		const first = storage.sessionCredentialRouting(PROVIDER, undefined)?.activeCredentialId;
+		const first = storage.sessions.routing(PROVIDER, undefined)?.activeCredentialId;
 		if (first === undefined) throw new Error("routing predicted nothing");
 		for (let i = 0; i < 10; i++) {
-			expect(storage.sessionCredentialRouting(PROVIDER, undefined)?.activeCredentialId).toBe(first);
+			expect(storage.sessions.routing(PROVIDER, undefined)?.activeCredentialId).toBe(first);
 		}
 
-		expect(await storage.getApiKey(PROVIDER)).toBe(accessOf(storage, first));
+		expect(await storage.keys.get(PROVIDER)).toBe(accessOf(storage, first));
 	});
 
 	/**
@@ -165,8 +165,8 @@ describe("routing answers which account serves next", () => {
 		const storage = authStorage;
 		const ids = await seedThree(storage);
 
-		const served = await storage.getApiKey(PROVIDER, SESSION_ID);
-		const routing = storage.sessionCredentialRouting(PROVIDER, SESSION_ID);
+		const served = await storage.keys.get(PROVIDER, SESSION_ID);
+		const routing = storage.sessions.routing(PROVIDER, SESSION_ID);
 		const servedId = ids.find(id => accessOf(storage, id) === served);
 
 		expect(routing?.activeCredentialId).toBe(servedId);
@@ -183,12 +183,12 @@ describe("routing answers which account serves next", () => {
 		const storage = authStorage;
 		const ids = await seedThree(storage);
 
-		const served = await storage.getApiKey(PROVIDER, SESSION_ID);
+		const served = await storage.keys.get(PROVIDER, SESSION_ID);
 		const servedId = ids.find(id => accessOf(storage, id) === served);
 		if (servedId === undefined) throw new Error("no credential served");
 		blockFor(storage, servedId, HOUR_MS);
 
-		const routing = storage.sessionCredentialRouting(PROVIDER, SESSION_ID);
+		const routing = storage.sessions.routing(PROVIDER, SESSION_ID);
 
 		expect(routing?.activeCredentialId).toBeDefined();
 		expect(routing?.activeCredentialId).not.toBe(servedId);
@@ -206,7 +206,7 @@ describe("routing answers which account serves next", () => {
 		const ids = await seedThree(storage);
 		for (const id of ids) blockFor(storage, id, HOUR_MS);
 
-		const routing = storage.sessionCredentialRouting(PROVIDER, SESSION_ID);
+		const routing = storage.sessions.routing(PROVIDER, SESSION_ID);
 
 		// Narrowed rather than compared through `?.`: an answer of `undefined` is the failure this
 		// test is about, so it has to fail here rather than passing a hole to a membership check.
@@ -227,13 +227,13 @@ describe("routing answers which account serves next", () => {
 		const chosen = ids[2];
 		if (chosen === undefined) throw new Error("seed produced too few rows");
 
-		expect(storage.selectProviderCredential(PROVIDER, chosen, { sessionId: SESSION_ID })).toBe(true);
-		const routing = storage.sessionCredentialRouting(PROVIDER, SESSION_ID);
+		expect(storage.sessions.selectProviderCredential(PROVIDER, chosen, { sessionId: SESSION_ID })).toBe(true);
+		const routing = storage.sessions.routing(PROVIDER, SESSION_ID);
 
 		expect(routing?.selectedCredentialId).toBe(chosen);
 		expect(routing?.activeCredentialId).toBe(chosen);
 		expect(routing?.activeIsPrediction).toBeFalsy();
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe(accessOf(storage, chosen));
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe(accessOf(storage, chosen));
 	});
 
 	/**
@@ -249,15 +249,15 @@ describe("routing answers which account serves next", () => {
 		const ids = await seedThree(storage);
 		const chosen = ids[0];
 		if (chosen === undefined) throw new Error("seed produced too few rows");
-		expect(storage.selectProviderCredential(PROVIDER, chosen, { sessionId: SESSION_ID })).toBe(true);
+		expect(storage.sessions.selectProviderCredential(PROVIDER, chosen, { sessionId: SESSION_ID })).toBe(true);
 		blockFor(storage, chosen, HOUR_MS);
 
-		const routing = storage.sessionCredentialRouting(PROVIDER, SESSION_ID);
+		const routing = storage.sessions.routing(PROVIDER, SESSION_ID);
 
 		expect(routing?.selectedCredentialId).toBe(chosen);
 		expect(routing?.selectedBlockedUntilMs).toBeGreaterThan(Date.now());
 		expect(routing?.activeCredentialId).toBe(chosen);
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe(accessOf(storage, chosen));
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe(accessOf(storage, chosen));
 	});
 
 	/**
@@ -273,7 +273,7 @@ describe("routing answers which account serves next", () => {
 		if (held === undefined) throw new Error("seed produced too few rows");
 		blockFor(storage, held, HOUR_MS);
 
-		const routing = storage.sessionCredentialRouting(PROVIDER, SESSION_ID);
+		const routing = storage.sessions.routing(PROVIDER, SESSION_ID);
 
 		expect(routing?.activeCredentialId).not.toBe(held);
 		expect(routing?.activeIsPrediction).toBe(true);
@@ -283,6 +283,6 @@ describe("routing answers which account serves next", () => {
 	test("a provider with no credentials routes to nothing", () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		expect(authStorage.sessionCredentialRouting(PROVIDER, SESSION_ID)).toBeUndefined();
+		expect(authStorage.sessions.routing(PROVIDER, SESSION_ID)).toBeUndefined();
 	});
 });

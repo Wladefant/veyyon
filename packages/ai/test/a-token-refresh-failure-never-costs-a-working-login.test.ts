@@ -114,7 +114,7 @@ async function storageWith(
 			disabled.push(event);
 		},
 	});
-	await storage.reload();
+	await storage.credentials.reload();
 	return { storage, ids: store!.listAuthCredentials(PROVIDER).map(row => row.id) };
 }
 
@@ -169,7 +169,7 @@ describe("a refresh flight outlives the caller that started it", () => {
 		const { storage, ids } = await storageWith([oauth("home", 0)], held.refresh);
 		vi.useFakeTimers();
 
-		const caller = storage.refreshCredentialById(ids[0]!).catch((error: unknown) => error);
+		const caller = storage.oauth.refresh(ids[0]!).catch((error: unknown) => error);
 		await held.started;
 		vi.advanceTimersByTime(CALLER_WAIT_MS);
 		expect(String(await caller)).toContain("timed out");
@@ -185,12 +185,12 @@ describe("a refresh flight outlives the caller that started it", () => {
 		const { storage, ids } = await storageWith([oauth("home", 0)], held.refresh);
 		vi.useFakeTimers();
 
-		const first = storage.refreshCredentialById(ids[0]!).catch((error: unknown) => error);
+		const first = storage.oauth.refresh(ids[0]!).catch((error: unknown) => error);
 		await held.started;
 		vi.advanceTimersByTime(CALLER_WAIT_MS);
 		await first;
 
-		const second = storage.refreshCredentialById(ids[0]!);
+		const second = storage.oauth.refresh(ids[0]!);
 		held.answer.resolve(ROTATED);
 		expect((await second).credential.type).toBe("oauth");
 		expect(held.calls).toBe(1);
@@ -202,7 +202,7 @@ describe("a refresh flight outlives the caller that started it", () => {
 		const { storage, ids } = await storageWith([oauth("home", 0)], held.refresh);
 		vi.useFakeTimers();
 
-		const caller = storage.refreshCredentialById(ids[0]!).catch((error: unknown) => error);
+		const caller = storage.oauth.refresh(ids[0]!).catch((error: unknown) => error);
 		await held.started;
 		vi.advanceTimersByTime(CALLER_WAIT_MS);
 		await caller;
@@ -220,7 +220,7 @@ describe("a refresh flight outlives the caller that started it", () => {
 		const { storage, ids } = await storageWith([oauth("home", 0)], held.refresh);
 		vi.useFakeTimers();
 
-		const caller = storage.refreshCredentialById(ids[0]!).catch((error: unknown) => error);
+		const caller = storage.oauth.refresh(ids[0]!).catch((error: unknown) => error);
 		await held.started;
 		vi.advanceTimersByTime(CALLER_WAIT_MS);
 		await caller;
@@ -267,7 +267,7 @@ describe("a refresh flight outlives the caller that started it", () => {
 			);
 			vi.useFakeTimers();
 
-			const first = storage.refreshCredentialById(ids[0]!).catch((error: unknown) => error);
+			const first = storage.oauth.refresh(ids[0]!).catch((error: unknown) => error);
 			await held.started;
 			vi.advanceTimersByTime(FLIGHT_CEILING_MS);
 			await first;
@@ -275,7 +275,7 @@ describe("a refresh flight outlives the caller that started it", () => {
 			vi.advanceTimersByTime(FLIGHT_CEILING_MS * 10);
 			await settle();
 
-			const second = storage.refreshCredentialById(ids[0]!);
+			const second = storage.oauth.refresh(ids[0]!);
 			await settle();
 			held.answer.resolve(ROTATED);
 			expect((await second).credential.type).toBe("oauth");
@@ -289,13 +289,13 @@ describe("a refresh flight outlives the caller that started it", () => {
 		const { storage, ids } = await storageWith([oauth("home", 0)], held.refresh);
 		vi.useFakeTimers();
 
-		const first = storage.refreshCredentialById(ids[0]!).catch((error: unknown) => error);
+		const first = storage.oauth.refresh(ids[0]!).catch((error: unknown) => error);
 		await held.started;
 		vi.advanceTimersByTime(FLIGHT_CEILING_MS);
 		expect(String(await first)).toContain("timed out");
 		await settle();
 
-		const second = storage.refreshCredentialById(ids[0]!).catch((error: unknown) => error);
+		const second = storage.oauth.refresh(ids[0]!).catch((error: unknown) => error);
 		await settle();
 		expect(held.calls).toBe(2);
 		vi.advanceTimersByTime(FLIGHT_CEILING_MS);
@@ -316,11 +316,11 @@ describe("an MCP credential refresh outlives the caller that started it", () => 
 				disabled.push(event);
 			},
 		});
-		await storage.reload();
+		await storage.credentials.reload();
 		const id = store!.listAuthCredentials(MCP)[0]!.id;
 		const failures: unknown[] = [];
 		const resolve = () =>
-			storage.refreshStoredOAuthCredential(MCP, {
+			storage.oauth.refreshStored(MCP, {
 				credentialFromRow: row => row,
 				refresh: (_current, signal) => refresh(signal),
 				isDefinitiveFailure: error => isDefinitiveOAuthFailure(String(error)),
@@ -458,11 +458,11 @@ describe("the account health probe", () => {
 		);
 		const [homeId, siblingId] = ids;
 
-		const [result] = await storage.checkCredentials({ credentialIds: [homeId!] });
+		const [result] = await storage.health.check({ credentialIds: [homeId!] });
 
 		expect(result!.ok).toBe(definitive ? false : null);
 		expect(result!.reason?.startsWith("oauth refresh failed")).toBe(definitive);
-		expect(storage.sessionCredentialRouting(PROVIDER, SESSION)?.activeCredentialId).toBe(
+		expect(storage.sessions.routing(PROVIDER, SESSION)?.activeCredentialId).toBe(
 			definitive ? siblingId : homeId,
 		);
 		expect(disabled).toEqual([]);
@@ -473,13 +473,13 @@ describe("the account health probe", () => {
 		const { storage, ids } = await storageWith([oauth("home", 0), oauth("sibling", 4_102_444_800_000)], held.refresh);
 		vi.useFakeTimers();
 
-		const probe = storage.checkCredentials({ credentialIds: [ids[0]!], timeoutMs: 5_000 });
+		const probe = storage.health.check({ credentialIds: [ids[0]!], timeoutMs: 5_000 });
 		await held.started;
 		vi.advanceTimersByTime(5_000);
 		const [result] = await probe;
 
 		expect(result!.ok).toBeNull();
-		expect(storage.sessionCredentialRouting(PROVIDER, SESSION)?.activeCredentialId).toBe(ids[0]);
+		expect(storage.sessions.routing(PROVIDER, SESSION)?.activeCredentialId).toBe(ids[0]);
 	});
 
 	it("writes a refreshed token onto the row it refreshed when no row carries an identity", async () => {
@@ -493,7 +493,7 @@ describe("the account health probe", () => {
 			Promise.resolve(ROTATED),
 		);
 
-		await storage.checkCredentials({ credentialIds: [ids[1]!] });
+		await storage.health.check({ credentialIds: [ids[1]!] });
 
 		expect(storedRefresh(ids[0]!)).toBe("refresh-first");
 		expect(storedRefresh(ids[1]!)).toBe("refresh-rotated");
@@ -507,9 +507,9 @@ describe("a request whose refresh did not complete", () => {
 			() => Promise.reject(new Error("fetch failed: ECONNRESET")),
 		);
 
-		expect(await storage.getApiKey(PROVIDER, SESSION)).toBe("access-home");
-		expect(await storage.getApiKey(PROVIDER, SESSION)).toBe("access-home");
-		expect(storage.credentialBlockedUntil(PROVIDER, `${PROVIDER}:oauth`, 0)).toBeUndefined();
+		expect(await storage.keys.get(PROVIDER, SESSION)).toBe("access-home");
+		expect(await storage.keys.get(PROVIDER, SESSION)).toBe("access-home");
+		expect(storage.blocks.blockedUntil(PROVIDER, `${PROVIDER}:oauth`, 0)).toBeUndefined();
 	});
 
 	it("persists a rotation whose access token is unusable, keeping the new refresh token", async () => {
@@ -521,7 +521,7 @@ describe("a request whose refresh did not complete", () => {
 		let calls = 0;
 		const { storage, ids } = await storageWith([oauth("home", 0)], () => (answers[calls++] ?? networkFailure)());
 
-		expect(await storage.getApiKey(PROVIDER, SESSION)).toBeUndefined();
+		expect(await storage.keys.get(PROVIDER, SESSION)).toBeUndefined();
 		expect(calls).toBeGreaterThanOrEqual(2);
 		expect(storedRefresh(ids[0]!)).toBe("refresh-rotated");
 		expect(disabled).toEqual([]);
@@ -543,20 +543,20 @@ describe("a request whose refresh did not complete", () => {
 				loadBalancing,
 			);
 			const homeId = ids[homeIndex]!;
-			expect(await storage.getApiKey(PROVIDER, SESSION)).toBe("access-home");
+			expect(await storage.keys.get(PROVIDER, SESSION)).toBe("access-home");
 			setSystemTime(new Date(startedAt + 2 * 3_600_000));
 
 			const controller = new AbortController();
-			const aborted = storage.getApiKey(PROVIDER, SESSION, { signal: controller.signal });
+			const aborted = storage.keys.get(PROVIDER, SESSION, { signal: controller.signal });
 			await held.started;
 			controller.abort();
 			expect(await aborted).toBeUndefined();
-			expect(storage.credentialBlockedUntil(PROVIDER, `${PROVIDER}:oauth`, homeIndex)).toBeUndefined();
+			expect(storage.blocks.blockedUntil(PROVIDER, `${PROVIDER}:oauth`, homeIndex)).toBeUndefined();
 
 			held.answer.resolve(ROTATED);
 			await settle();
 			expect(storedRefresh(homeId)).toBe("refresh-rotated");
-			expect(await storage.getApiKey(PROVIDER, SESSION)).toBe("access-rotated");
+			expect(await storage.keys.get(PROVIDER, SESSION)).toBe("access-rotated");
 			expect(held.calls).toBe(1);
 		},
 	);
@@ -603,10 +603,10 @@ describe("a token endpoint answering 200 without a usable token", () => {
 					disabled.push(event);
 				},
 			});
-			await storage.reload();
+			await storage.credentials.reload();
 			const id = store!.listAuthCredentials(provider)[0]!.id;
 
-			const outcome = await storage.refreshCredentialById(id).then(
+			const outcome = await storage.oauth.refresh(id).then(
 				() => undefined,
 				(error: unknown) => error,
 			);
@@ -720,7 +720,7 @@ describe("a refresher aborted by its flight", () => {
 	async function abortedAtCeiling(provider: string, hang: HangingRefresh) {
 		store!.saveOAuth(provider, { ...oauth("flight", 0), projectId: "project" });
 		const storage = new AuthStorage(store!, { onCredentialDisabled: event => void disabled.push(event) });
-		await storage.reload();
+		await storage.credentials.reload();
 		vi.useFakeTimers();
 		const caller = storage
 			.refreshCredentialById(store!.listAuthCredentials(provider)[0]!.id)

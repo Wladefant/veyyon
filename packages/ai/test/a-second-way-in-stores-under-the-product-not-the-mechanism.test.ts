@@ -49,7 +49,7 @@ describe("a second way in stores under the product, not the mechanism", () => {
 		db = new Database(":memory:");
 		store = new SqliteAuthCredentialStore(db);
 		storage = new AuthStorage(store);
-		await storage.reload();
+		await storage.credentials.reload();
 	});
 
 	afterEach(() => {
@@ -71,7 +71,7 @@ describe("a second way in stores under the product, not the mechanism", () => {
 			const database = new Database(":memory:");
 			const scopedStore = new SqliteAuthCredentialStore(database);
 			const scopedStorage = new AuthStorage(scopedStore);
-			await scopedStorage.reload();
+			await scopedStorage.credentials.reload();
 			try {
 				// Stub this entry's own flow, not the storage: what is under test is the branch
 				// `AuthStorage` takes with the value the flow returns.
@@ -79,7 +79,7 @@ describe("a second way in stores under the product, not the mechanism", () => {
 				const original = definition.login;
 				definition.login = async () => `sk-${provider.id}`;
 				try {
-					await scopedStorage.login(provider.id as Parameters<AuthStorage["login"]>[0], {
+					await scopedStorage.oauth.login(provider.id as Parameters<AuthStorage["oauth"]["login"]>[0], {
 						onAuth: () => {},
 						onProgress: () => {},
 						onPrompt: async () => "",
@@ -89,10 +89,10 @@ describe("a second way in stores under the product, not the mechanism", () => {
 				}
 
 				expect(providersWithRows(database)).toEqual([provider.storeCredentialsAs]);
-				expect(await scopedStorage.getApiKey(provider.storeCredentialsAs, "s")).toBe(`sk-${provider.id}`);
+				expect(await scopedStorage.keys.get(provider.storeCredentialsAs, "s")).toBe(`sk-${provider.id}`);
 				// And nothing is readable under the mechanism id, which is what looked
 				// like a login that succeeded and changed nothing.
-				expect(await scopedStorage.getApiKey(provider.id, "s")).toBeFalsy();
+				expect(await scopedStorage.keys.get(provider.id, "s")).toBeFalsy();
 			} finally {
 				scopedStore.close();
 			}
@@ -114,7 +114,7 @@ describe("a second way in stores under the product, not the mechanism", () => {
 		const original = definition.login;
 		definition.login = async () => "sk-nous-portal";
 		try {
-			await storage.login("nous-research-api-key" as Parameters<AuthStorage["login"]>[0], {
+			await storage.oauth.login("nous-research-api-key" as Parameters<AuthStorage["oauth"]["login"]>[0], {
 				onAuth: () => {},
 				onProgress: () => {},
 				onPrompt: async () => "",
@@ -123,7 +123,7 @@ describe("a second way in stores under the product, not the mechanism", () => {
 			definition.login = original;
 		}
 
-		expect(await storage.getApiKey("nous-research", "s")).toBe("sk-nous-portal");
+		expect(await storage.keys.get("nous-research", "s")).toBe("sk-nous-portal");
 		expect(providersWithRows(db)).toEqual(["nous-research"]);
 	});
 
@@ -155,7 +155,7 @@ describe("a second way in stores under the product, not the mechanism", () => {
 		const original = definition.login;
 		definition.login = async () => "sk-command-code";
 		try {
-			await storage.login("command-code" as Parameters<AuthStorage["login"]>[0], {
+			await storage.oauth.login("command-code" as Parameters<AuthStorage["oauth"]["login"]>[0], {
 				onAuth: () => {},
 				onProgress: () => {},
 				onPrompt: async () => "",

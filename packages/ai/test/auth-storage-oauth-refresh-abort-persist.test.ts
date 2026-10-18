@@ -108,12 +108,12 @@ describe("AuthStorage OAuth refresh survives a caller abort mid-rotation", () =>
 			},
 		});
 
-		await authStorage.set(provider, [
+		await authStorage.credentials.set(provider, [
 			{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: expired },
 		]);
 
 		const controller = new AbortController();
-		const pending = authStorage.getApiKey(provider, "abort-session", { signal: controller.signal });
+		const pending = authStorage.keys.get(provider, "abort-session", { signal: controller.signal });
 
 		// Refresh is in flight (stale token already consumed at the provider).
 		await refreshStarted.promise;
@@ -173,12 +173,12 @@ describe("AuthStorage OAuth refresh survives a caller abort mid-rotation", () =>
 			},
 		});
 
-		await authStorage.set(provider, [
+		await authStorage.credentials.set(provider, [
 			{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: expired },
 		]);
 
 		const controller = new AbortController();
-		const aborted = authStorage.getApiKey(provider, "abort-session", { signal: controller.signal });
+		const aborted = authStorage.keys.get(provider, "abort-session", { signal: controller.signal });
 		await refreshStarted.promise;
 		controller.abort();
 		await expect(aborted).resolves.toBeUndefined();
@@ -187,11 +187,11 @@ describe("AuthStorage OAuth refresh survives a caller abort mid-rotation", () =>
 
 		// The next request finds the rotated, still-fresh access token on disk and
 		// returns it directly — no second refresh, no disable, no re-login.
-		const key = await authStorage.getApiKey(provider, "next-session");
+		const key = await authStorage.keys.get(provider, "next-session");
 		expect(key).toBe("rotated-access");
 		expect(refreshCalls).toBe(1);
 		expect(events).toHaveLength(0);
-		expect(authStorage.list()).toContain(provider);
+		expect(authStorage.credentials.providers()).toContain(provider);
 	});
 
 	test("a late post-abort persist does not overwrite a token a peer rotated forward in the meantime", async () => {
@@ -225,13 +225,13 @@ describe("AuthStorage OAuth refresh survives a caller abort mid-rotation", () =>
 			},
 		});
 
-		await authStorage.set(provider, [
+		await authStorage.credentials.set(provider, [
 			{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: expired },
 		]);
 		const credentialId = store.listAuthCredentials(provider)[0]!.id;
 
 		const controller = new AbortController();
-		const pending = authStorage.getApiKey(provider, "abort-session", { signal: controller.signal });
+		const pending = authStorage.keys.get(provider, "abort-session", { signal: controller.signal });
 		await refreshStarted.promise;
 		controller.abort();
 		await expect(pending).resolves.toBeUndefined();
@@ -293,7 +293,7 @@ describe("AuthStorage OAuth refresh survives a caller abort mid-rotation", () =>
 			},
 		});
 
-		await authStorage.set(provider, [
+		await authStorage.credentials.set(provider, [
 			{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: expired },
 		]);
 		const credentialId = store.listAuthCredentials(provider)[0]!.id;
@@ -302,7 +302,7 @@ describe("AuthStorage OAuth refresh survives a caller abort mid-rotation", () =>
 		const peerStore = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
 		try {
 			const controller = new AbortController();
-			const pending = authStorage.getApiKey(provider, "abort-session", { signal: controller.signal });
+			const pending = authStorage.keys.get(provider, "abort-session", { signal: controller.signal });
 			await refreshStarted.promise;
 			// Rebuild aborts the caller...
 			controller.abort();

@@ -76,11 +76,11 @@ describe("credential selection under a provider-wide quota wall", () => {
 		const rows = store.listAuthCredentials(PROVIDER);
 		// Availability ordering is movement; the library holds it off unless a host opts in.
 		storage = new AuthStorage(store, { loadBalancing: true, rankingStrategyResolver: () => undefined });
-		await storage.reload();
+		await storage.credentials.reload();
 		const now = Date.now();
 		for (const [position, offset] of offsets.entries()) {
 			if (offset === undefined) continue;
-			storage.upsertCredentialBlock({
+			storage.blocks.upsert({
 				credentialId: rows[position]!.id,
 				providerKey: `${PROVIDER}:${type}`,
 				blockScope: "",
@@ -92,12 +92,12 @@ describe("credential selection under a provider-wide quota wall", () => {
 
 	it("peekApiKey hands back the account that frees up soonest, not the round-robin head", async () => {
 		const auth = await seed("oauth", BLOCK_OFFSETS_MS);
-		expect(await auth.peekApiKey(PROVIDER)).toBe(`access-${SOONEST_SUFFIX}`);
+		expect(await auth.keys.peek(PROVIDER)).toBe(`access-${SOONEST_SUFFIX}`);
 	});
 
 	it("peekApiKey does the same for stored api keys", async () => {
 		const auth = await seed("api_key", BLOCK_OFFSETS_MS);
-		expect(await auth.peekApiKey(PROVIDER)).toBe(`access-${SOONEST_SUFFIX}`);
+		expect(await auth.keys.peek(PROVIDER)).toBe(`access-${SOONEST_SUFFIX}`);
 	});
 
 	// Session id seeds the round-robin rotation, so a single id can land on the
@@ -108,7 +108,7 @@ describe("credential selection under a provider-wide quota wall", () => {
 		for (const sessionId of SESSION_IDS) {
 			await afterEachCleanup();
 			const auth = await seed("oauth", BLOCK_OFFSETS_MS);
-			expect(`${sessionId}: ${await auth.getApiKey(PROVIDER, sessionId)}`).toBe(
+			expect(`${sessionId}: ${await auth.keys.get(PROVIDER, sessionId)}`).toBe(
 				`${sessionId}: access-${SOONEST_SUFFIX}`,
 			);
 		}
@@ -118,7 +118,7 @@ describe("credential selection under a provider-wide quota wall", () => {
 		for (const sessionId of SESSION_IDS) {
 			await afterEachCleanup();
 			const auth = await seed("api_key", BLOCK_OFFSETS_MS);
-			expect(`${sessionId}: ${await auth.getApiKey(PROVIDER, sessionId)}`).toBe(
+			expect(`${sessionId}: ${await auth.keys.get(PROVIDER, sessionId)}`).toBe(
 				`${sessionId}: access-${SOONEST_SUFFIX}`,
 			);
 		}
@@ -131,8 +131,8 @@ describe("credential selection under a provider-wide quota wall", () => {
 			for (const sessionId of SESSION_IDS) {
 				await afterEachCleanup();
 				const auth = await seed(type, [1000, 2000, undefined]);
-				expect(`${type}/${sessionId}: ${await auth.peekApiKey(PROVIDER)}`).toBe(`${type}/${sessionId}: access-3`);
-				expect(`${type}/${sessionId}: ${await auth.getApiKey(PROVIDER, sessionId)}`).toBe(
+				expect(`${type}/${sessionId}: ${await auth.keys.peek(PROVIDER)}`).toBe(`${type}/${sessionId}: access-3`);
+				expect(`${type}/${sessionId}: ${await auth.keys.get(PROVIDER, sessionId)}`).toBe(
 					`${type}/${sessionId}: access-3`,
 				);
 			}
@@ -152,7 +152,7 @@ describe("credential selection under a provider-wide quota wall", () => {
 				await afterEachCleanup();
 				const auth = await seed(type, offsets);
 				const soonest = `access-${offsets.indexOf(Math.min(...offsets)) + 1}`;
-				expect(`${type}/${offsets.join(",")}: ${await auth.peekApiKey(PROVIDER)}`).toBe(
+				expect(`${type}/${offsets.join(",")}: ${await auth.keys.peek(PROVIDER)}`).toBe(
 					`${type}/${offsets.join(",")}: ${soonest}`,
 				);
 			}

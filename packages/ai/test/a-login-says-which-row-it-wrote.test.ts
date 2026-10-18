@@ -49,7 +49,7 @@ function fixtureProvider(id: string, answers: readonly (string | OAuthCredential
 async function freshStorage(): Promise<{ store: SqliteAuthCredentialStore; storage: AuthStorage }> {
 	const store = new SqliteAuthCredentialStore(new Database(":memory:"));
 	const storage = new AuthStorage(store);
-	await storage.reload();
+	await storage.credentials.reload();
 	return { store, storage };
 }
 
@@ -73,8 +73,8 @@ describe("a login says which row it wrote", () => {
 		const { store, storage } = await freshStorage();
 		fixtureProvider("fixture-keys", ["key-one", "key-two"]);
 
-		const first = await storage.login("fixture-keys" as OAuthProvider, CONTROLLER);
-		const second = await storage.login("fixture-keys" as OAuthProvider, CONTROLLER);
+		const first = await storage.oauth.login("fixture-keys" as OAuthProvider, CONTROLLER);
+		const second = await storage.oauth.login("fixture-keys" as OAuthProvider, CONTROLLER);
 
 		expect(store.listAuthCredentials("fixture-keys")).toHaveLength(2);
 		expect(first?.credentialId).toBe(rowIdHolding(store, "fixture-keys", "key-one"));
@@ -86,8 +86,8 @@ describe("a login says which row it wrote", () => {
 		const { store, storage } = await freshStorage();
 		fixtureProvider("fixture-same", ["same-key", "same-key"]);
 
-		const first = await storage.login("fixture-same" as OAuthProvider, CONTROLLER);
-		const again = await storage.login("fixture-same" as OAuthProvider, CONTROLLER);
+		const first = await storage.oauth.login("fixture-same" as OAuthProvider, CONTROLLER);
+		const again = await storage.oauth.login("fixture-same" as OAuthProvider, CONTROLLER);
 
 		// One row, so the second login must report that row rather than a row it did not create.
 		expect(store.listAuthCredentials("fixture-same")).toHaveLength(1);
@@ -101,8 +101,8 @@ describe("a login says which row it wrote", () => {
 			oauthCredentials("access-bob", "bob@example.test"),
 		]);
 
-		const alice = await storage.login("fixture-oauth" as OAuthProvider, CONTROLLER);
-		const bob = await storage.login("fixture-oauth" as OAuthProvider, CONTROLLER);
+		const alice = await storage.oauth.login("fixture-oauth" as OAuthProvider, CONTROLLER);
+		const bob = await storage.oauth.login("fixture-oauth" as OAuthProvider, CONTROLLER);
 
 		expect(alice?.type).toBe("oauth");
 		expect(alice?.credentialId).toBe(rowIdHolding(store, "fixture-oauth", "access-alice"));
@@ -114,7 +114,7 @@ describe("a login says which row it wrote", () => {
 		const { store, storage } = await freshStorage();
 		fixtureProvider("fixture-empty", [""]);
 
-		const identity = await storage.login("fixture-empty" as OAuthProvider, CONTROLLER);
+		const identity = await storage.oauth.login("fixture-empty" as OAuthProvider, CONTROLLER);
 
 		// An empty answer means "no key was entered": there is no row, so there is no id to invent.
 		expect(identity).toBeUndefined();

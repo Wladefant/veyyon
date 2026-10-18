@@ -19,6 +19,11 @@ function oauthCredential(suffix: string) {
 	};
 }
 
+async function accessAt(storage: AuthStorage, position: number) {
+	const account = storage.oauth.accounts(PROVIDER)[position];
+	return account ? storage.oauth.accessById(PROVIDER, account.credentialId) : undefined;
+}
+
 describe("AuthStorage OAuth account selection", () => {
 	let tempDir = "";
 	let store: AuthCredentialStore | null = null;
@@ -41,13 +46,13 @@ describe("AuthStorage OAuth account selection", () => {
 		}
 	});
 
-	test("listOAuthAccounts reports stored order, positions, and identity without refreshing", async () => {
+	test("oauth.accounts reports stored order, positions, and identity without refreshing", async () => {
 		const storage = authStorage;
 		if (!storage) throw new Error("test setup failed");
 		const refreshSpy = vi.spyOn(oauthUtils, "getOAuthApiKey");
-		await storage.set(PROVIDER, [oauthCredential("a"), oauthCredential("b"), oauthCredential("c")]);
+		await storage.credentials.set(PROVIDER, [oauthCredential("a"), oauthCredential("b"), oauthCredential("c")]);
 
-		const accounts = storage.listOAuthAccounts(PROVIDER);
+		const accounts = storage.oauth.accounts(PROVIDER);
 
 		expect(accounts.map(a => a.position)).toEqual([0, 1, 2]);
 		expect(accounts.map(a => a.accountId)).toEqual(["acc-a", "acc-b", "acc-c"]);
@@ -56,7 +61,7 @@ describe("AuthStorage OAuth account selection", () => {
 		expect(refreshSpy).not.toHaveBeenCalled();
 	});
 
-	test("getOAuthAccessAt resolves the credential at the requested position and touches only that one", async () => {
+	test("oauth.accessById resolves the requested position and touches only that account", async () => {
 		const storage = authStorage;
 		if (!storage) throw new Error("test setup failed");
 		const seen: string[] = [];
@@ -66,7 +71,7 @@ describe("AuthStorage OAuth account selection", () => {
 			seen.push(credential.access);
 			return { newCredentials: credential, apiKey: credential.access };
 		});
-		await storage.set(PROVIDER, [oauthCredential("a"), oauthCredential("b"), oauthCredential("c")]);
+		await storage.credentials.set(PROVIDER, [oauthCredential("a"), oauthCredential("b"), oauthCredential("c")]);
 
 		for (const [position, suffix] of [
 			[0, "a"],
@@ -74,7 +79,7 @@ describe("AuthStorage OAuth account selection", () => {
 			[2, "c"],
 		] as const) {
 			seen.length = 0;
-			const result = await storage.getOAuthAccessAt(PROVIDER, position);
+			const result = await accessAt(storage, position);
 			expect(result?.ok).toBe(true);
 			if (!result?.ok) throw new Error("expected ok resolution");
 			expect(result.accountId).toBe(`acc-${suffix}`);
@@ -84,15 +89,15 @@ describe("AuthStorage OAuth account selection", () => {
 		}
 	});
 
-	test("getOAuthAccessAt returns undefined for an out-of-range position", async () => {
+	test("oauth.accessById returns undefined for an out-of-range account position", async () => {
 		const storage = authStorage;
 		if (!storage) throw new Error("test setup failed");
-		await storage.set(PROVIDER, [oauthCredential("a"), oauthCredential("b")]);
-		expect(await storage.getOAuthAccessAt(PROVIDER, 2)).toBeUndefined();
-		expect(await storage.getOAuthAccessAt(PROVIDER, -1)).toBeUndefined();
+		await storage.credentials.set(PROVIDER, [oauthCredential("a"), oauthCredential("b")]);
+		expect(await accessAt(storage, 2)).toBeUndefined();
+		expect(await accessAt(storage, -1)).toBeUndefined();
 	});
 
-	test("getOAuthAccessAt fails the requested account without touching siblings", async () => {
+	test("oauth.accessById fails the requested account without touching siblings", async () => {
 		const storage = authStorage;
 		if (!storage) throw new Error("test setup failed");
 		// The targeted account (acc-b) fails definitively; siblings would refresh fine.
@@ -104,9 +109,9 @@ describe("AuthStorage OAuth account selection", () => {
 			if (credential.access === "access-b") throw new Error("invalid_grant");
 			return { newCredentials: credential, apiKey: credential.access };
 		});
-		await storage.set(PROVIDER, [oauthCredential("a"), oauthCredential("b"), oauthCredential("c")]);
+		await storage.credentials.set(PROVIDER, [oauthCredential("a"), oauthCredential("b"), oauthCredential("c")]);
 
-		const result = await storage.getOAuthAccessAt(PROVIDER, 1);
+		const result = await accessAt(storage, 1);
 
 		expect(result?.ok).toBe(false);
 		if (!result || result.ok) throw new Error("expected failed resolution");

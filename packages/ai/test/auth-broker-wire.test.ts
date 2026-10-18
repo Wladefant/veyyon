@@ -43,7 +43,7 @@ describe("auth-broker wire surface", () => {
 		store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
 		store.saveOAuth("anthropic", mintOAuthCredential("a", Date.now() + 60_000));
 		storage = new AuthStorage(store);
-		await storage.reload();
+		await storage.credentials.reload();
 		token = "test-bearer";
 		handle = startAuthBroker({
 			storage,
@@ -115,8 +115,8 @@ describe("auth-broker wire surface", () => {
 		if (initial.status !== 200) throw new Error("expected snapshot");
 
 		const pending = client.fetchSnapshot({ ifGenerationGt: initial.generation, waitMs: 1000 });
-		setTimeout(() => {
-			storage!.upsertCredential("anthropic", mintOAuthCredential("b", Date.now() + 120_000));
+		setTimeout(async () => {
+			await storage!.credentials.upsert("anthropic", mintOAuthCredential("b", Date.now() + 120_000));
 		}, 10);
 
 		const changed = await pending;
@@ -199,7 +199,7 @@ describe("auth-broker wire surface", () => {
 				expect(first.value.credentials[0].provider).toBe("anthropic");
 			}
 
-			storage!.upsertCredential("anthropic", mintOAuthCredential("b", Date.now() + 120_000));
+			await storage!.credentials.upsert("anthropic", mintOAuthCredential("b", Date.now() + 120_000));
 
 			const next = await nextMatching(iter, event => event.kind === "entry");
 			if (next.kind !== "entry") throw new Error("expected entry frame");
@@ -236,7 +236,7 @@ describe("auth-broker wire surface", () => {
 			const first = await iter.next();
 			if (first.done) throw new Error("expected snapshot frame");
 
-			await storage!.refreshCredentialById(id);
+			await storage!.oauth.refresh(id);
 
 			const next = await nextMatching(
 				iter,
@@ -264,7 +264,7 @@ describe("auth-broker wire surface", () => {
 			const first = await iter.next();
 			if (first.done) throw new Error("expected snapshot frame");
 
-			const disabled = storage!.disableCredentialById(id, "revoked by test");
+			const disabled = await storage!.credentials.disable(id, "revoked by test");
 			expect(disabled).toBe(true);
 
 			const next = await nextMatching(iter, event => event.kind === "removed");
@@ -280,7 +280,7 @@ describe("auth-broker wire surface", () => {
 		const localStore = await SqliteAuthCredentialStore.open(path.join(tempDir, "keepalive.db"));
 		localStore.saveOAuth("anthropic", mintOAuthCredential("k", Date.now() + 60_000));
 		const localStorage = new AuthStorage(localStore);
-		await localStorage.reload();
+		await localStorage.credentials.reload();
 		const localToken = "keepalive-bearer";
 		const localHandle = startAuthBroker({
 			storage: localStorage,

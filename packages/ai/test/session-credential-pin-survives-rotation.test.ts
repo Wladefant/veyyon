@@ -54,7 +54,7 @@ describe("sessionCredentialRouting reports a pin that rotation moved off", () =>
 	});
 
 	async function seedTwoAccounts(storage: AuthStorage): Promise<[number, number]> {
-		await storage.set(PROVIDER, [
+		await storage.credentials.set(PROVIDER, [
 			{
 				type: "oauth",
 				access: "access-first",
@@ -72,7 +72,7 @@ describe("sessionCredentialRouting reports a pin that rotation moved off", () =>
 				email: "second@example.com",
 			},
 		]);
-		const rows = storage.listStoredCredentials(PROVIDER);
+		const rows = storage.credentials.list(PROVIDER);
 		return [rows[0]!.id, rows[1]!.id];
 	}
 
@@ -87,10 +87,10 @@ describe("sessionCredentialRouting reports a pin that rotation moved off", () =>
 		const [, secondId] = await seedTwoAccounts(storage);
 		const sessionId = "session-healthy-pin";
 
-		expect(storage.pinSessionCredential(PROVIDER, sessionId, secondId)).toBe(true);
-		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe("access-second");
+		expect(storage.sessions.pin(PROVIDER, sessionId, secondId)).toBe(true);
+		expect(await storage.keys.get(PROVIDER, sessionId)).toBe("access-second");
 
-		expect(storage.sessionCredentialRouting(PROVIDER, sessionId)).toEqual({
+		expect(storage.sessions.routing(PROVIDER, sessionId)).toEqual({
 			provider: PROVIDER,
 			selectedCredentialId: secondId,
 			activeCredentialId: secondId,
@@ -111,16 +111,16 @@ describe("sessionCredentialRouting reports a pin that rotation moved off", () =>
 		const [, secondId] = await seedTwoAccounts(storage);
 		const sessionId = "session-rotated-pin";
 
-		expect(storage.pinSessionCredential(PROVIDER, sessionId, secondId)).toBe(true);
-		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe("access-second");
+		expect(storage.sessions.pin(PROVIDER, sessionId, secondId)).toBe(true);
+		expect(await storage.keys.get(PROVIDER, sessionId)).toBe("access-second");
 
-		await storage.markUsageLimitReached(PROVIDER, sessionId, {
+		await storage.limits.markReached(PROVIDER, sessionId, {
 			credentialId: secondId,
 			retryAfterMs: BLOCK_FOR_MS,
 		});
 
-		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe("access-second");
-		expect(storage.sessionCredentialRouting(PROVIDER, sessionId)).toEqual({
+		expect(await storage.keys.get(PROVIDER, sessionId)).toBe("access-second");
+		expect(storage.sessions.routing(PROVIDER, sessionId)).toEqual({
 			provider: PROVIDER,
 			selectedCredentialId: secondId,
 			selectedBlockedUntilMs: NOW_MS + BLOCK_FOR_MS,
@@ -142,17 +142,17 @@ describe("sessionCredentialRouting reports a pin that rotation moved off", () =>
 		const [firstId, secondId] = await seedTwoAccounts(storage);
 		const sessionId = "session-dead-pin";
 
-		expect(storage.pinSessionCredential(PROVIDER, sessionId, secondId)).toBe(true);
-		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe("access-second");
+		expect(storage.sessions.pin(PROVIDER, sessionId, secondId)).toBe(true);
+		expect(await storage.keys.get(PROVIDER, sessionId)).toBe("access-second");
 
-		const moved = await storage.rotateSessionCredential(PROVIDER, sessionId, {
+		const moved = await storage.limits.rotate(PROVIDER, sessionId, {
 			credentialId: secondId,
 			error: Object.assign(new Error("invalid_grant: token revoked"), { status: 401 }),
 		});
 		expect(moved).toBe(true);
 
-		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe("access-first");
-		const routing = storage.sessionCredentialRouting(PROVIDER, sessionId);
+		expect(await storage.keys.get(PROVIDER, sessionId)).toBe("access-first");
+		const routing = storage.sessions.routing(PROVIDER, sessionId);
 		expect(routing?.selectedCredentialId).toBe(secondId);
 		expect(routing?.activeCredentialId).toBe(firstId);
 	});
@@ -168,18 +168,18 @@ describe("sessionCredentialRouting reports a pin that rotation moved off", () =>
 		const [, secondId] = await seedTwoAccounts(storage);
 		const sessionId = "session-unblocks";
 
-		expect(storage.pinSessionCredential(PROVIDER, sessionId, secondId)).toBe(true);
-		await storage.markUsageLimitReached(PROVIDER, sessionId, {
+		expect(storage.sessions.pin(PROVIDER, sessionId, secondId)).toBe(true);
+		await storage.limits.markReached(PROVIDER, sessionId, {
 			credentialId: secondId,
 			retryAfterMs: BLOCK_FOR_MS,
 		});
-		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe("access-second");
-		expect(storage.sessionCredentialRouting(PROVIDER, sessionId)?.selectedBlockedUntilMs).toBe(NOW_MS + BLOCK_FOR_MS);
+		expect(await storage.keys.get(PROVIDER, sessionId)).toBe("access-second");
+		expect(storage.sessions.routing(PROVIDER, sessionId)?.selectedBlockedUntilMs).toBe(NOW_MS + BLOCK_FOR_MS);
 
 		setSystemTime(new Date(NOW_MS + BLOCK_FOR_MS + 1_000));
 
-		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe("access-second");
-		expect(storage.sessionCredentialRouting(PROVIDER, sessionId)).toEqual({
+		expect(await storage.keys.get(PROVIDER, sessionId)).toBe("access-second");
+		expect(storage.sessions.routing(PROVIDER, sessionId)).toEqual({
 			provider: PROVIDER,
 			selectedCredentialId: secondId,
 			activeCredentialId: secondId,

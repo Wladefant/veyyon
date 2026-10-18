@@ -1,10 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { gunzipSync } from "node:zlib";
-import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
+import { clone, create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { streamDevin } from "@veyyon/ai/providers/devin";
 import type { Context, Message, Model } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import {
+	type GetChatMessageRequest,
 	GetChatMessageRequestSchema,
 	GetChatMessageResponseSchema,
 } from "@veyyon/catalog/discovery/devin-gen/exa/api_server_pb/api_server_pb";
@@ -70,35 +71,6 @@ function successfulChatResponse(): Response {
 	return new Response(frameConnectMessage(toBinary(GetChatMessageResponseSchema, response)));
 }
 
-/**
- * The shape `onPayload` receives: canonical proto3 JSON, not a protobuf
- * message. Only the fields these tests read are named.
- */
-interface DevinPayloadJson {
-	prompt?: string;
-	chatModelUid?: string;
-	chatMessagePrompts?: { prompt?: string }[];
-	tools?: { description?: string }[];
-	metadata?: { apiKey?: string; userJwt?: string; requestId?: unknown };
-}
-
-/**
- * WHY this seam hands over JSON rather than the protobuf message it used to.
- *
- * `onPayload` is the last hook before the wire, and veyyon installs the secret
- * redactor there. That redactor walks the payload rewriting every string and
- * REFUSES any value JSON cannot express. A protobuf message is not that shape:
- * `metadata.requestId` is a uint64 and therefore a bigint, and bytes fields are
- * Uint8Array. Handing the message over made every Devin request fail with
- * "the provider request contains a non-JSON value/object; confidentiality
- * transform failed." for any operator with secrets configured -- the provider
- * was unusable, not degraded.
- *
- * These tests therefore pin the JSON contract deliberately; the earlier
- * protobuf-shaped assertions described the defect. What they do NOT catch: a
- * sibling provider (Bedrock's ConverseStreamRequest, Cursor's AgentRunRequest)
- * committing the same mistake at its own seam.
- */
 describe("streamDevin onPayload transport seam", () => {
 	it("serializes and gzips only the awaited replacement while preserving resolved auth", async () => {
 		const authResponse = toBinary(
@@ -128,32 +100,25 @@ describe("streamDevin onPayload transport seam", () => {
 			onPayload: async (payload, model) => {
 				hookCalls++;
 				hookModel = model;
-				const request = payload as DevinPayloadJson;
+				const request = payload as GetChatMessageRequest;
 				expect(request.prompt).toBe(ORIGINAL_SYSTEM);
-				expect(request.chatMessagePrompts?.[0]?.prompt).toBe(ORIGINAL_USER);
-				expect(request.tools?.[0]?.description).toBe(ORIGINAL_TOOL);
-				// Mutating the handed object must not reach the wire: only the
-				// awaited return value does.
+				expect(request.chatMessagePrompts[0]?.prompt).toBe(ORIGINAL_USER);
+				expect(request.tools[0]?.description).toBe(ORIGINAL_TOOL);
+				// The replacement is a copy taken before the handed object is mutated,
+				// so the mutations below must not reach the wire.
+				const replacement = clone(GetChatMessageRequestSchema, request);
 				request.prompt = MUTATED_SYSTEM;
-				const mutatedPrompt = request.chatMessagePrompts?.[0];
-				if (mutatedPrompt) mutatedPrompt.prompt = MUTATED_USER;
-				const mutatedTool = request.tools?.[0];
-				if (mutatedTool) mutatedTool.description = MUTATED_TOOL;
-				const metadata = request.metadata;
-				if (metadata) {
-					metadata.apiKey = "mutated-api-key";
-					metadata.userJwt = "mutated-user-jwt";
+				if (request.chatMessagePrompts[0]) request.chatMessagePrompts[0].prompt = MUTATED_USER;
+				if (request.tools[0]) request.tools[0].description = MUTATED_TOOL;
+				if (request.metadata) {
+					request.metadata.apiKey = "mutated-api-key";
+					request.metadata.userJwt = "mutated-user-jwt";
 				}
 				await Promise.resolve();
-				return {
-					...request,
-					prompt: REPLACEMENT_SYSTEM,
-					chatMessagePrompts: (request.chatMessagePrompts ?? []).map(prompt => ({
-						...prompt,
-						prompt: REPLACEMENT_USER,
-					})),
-					tools: (request.tools ?? []).map(tool => ({ ...tool, description: REPLACEMENT_TOOL })),
-				};
+				replacement.prompt = REPLACEMENT_SYSTEM;
+				for (const prompt of replacement.chatMessagePrompts) prompt.prompt = REPLACEMENT_USER;
+				for (const tool of replacement.tools) tool.description = REPLACEMENT_TOOL;
+				return replacement;
 			},
 		}).result();
 
@@ -219,77 +184,58 @@ describe("streamDevin onPayload transport seam", () => {
 	});
 
 	/**
-	 * The invariant, checked at the choke point rather than per field: EVERY
-	 * node handed to `onPayload` must be expressible in JSON. This is what the
-	 * secret redactor requires, so a new protobuf field that is a bigint, a
-	 * Uint8Array, a Date or a class instance turns this red the day it is added
-	 * -- which is the failure mode that shipped.
+	 * WHY THIS TEST. The redaction hook receives the typed request, so a secret
+	 * redactor walks a message carrying a uint64 (`metadata.requestId`, a bigint)
+	 * and bytes (image data, a Uint8Array). Both used to make every request with
+	 * secrets configured fail. This sends a typed replacement carrying a secret
+	 * string, the uint64 and the bytes, and asserts the secret is gone while the
+	 * other two survive the wire. It does not cover the session's own secret
+	 * lookup or the host walker, which have their own suites.
 	 */
-	it("hands the payload hook a payload JSON can express, every node of it", async () => {
+	it("sends a typed redacted replacement with its uint64 and bytes intact", async () => {
+		const REQUEST_ID = 18446744073709551615n;
 		const authResponse = toBinary(
 			GetUserJwtResponseSchema,
 			create(GetUserJwtResponseSchema, { userJwt: RESOLVED_USER_JWT }),
 		);
-		const fetchImpl = (async (input: string | URL | Request) => {
+		let capturedFrame: Uint8Array | undefined;
+		const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
 			if (String(input).includes("GetUserJwt")) return new Response(authResponse);
+			capturedFrame = Uint8Array.from(bodyBytes(init?.body));
 			return successfulChatResponse();
 		}) as typeof fetch;
 
 		const imageMessage: Message = {
 			role: "user",
 			timestamp: 1,
-			content: [
-				{ type: "text", text: "look at this" },
-				{ type: "image", data: "aGVsbG8=", mimeType: "image/png" },
-			],
+			content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
 		};
 		const imageContext: Context = { ...context, messages: [...context.messages, imageMessage] };
-
-		let captured: unknown;
-		const offenders: string[] = [];
-		const seen = new WeakSet<object>();
-		const walk = (value: unknown, path: string): void => {
-			if (value === null) return;
-			const kind = typeof value;
-			if (kind === "string" || kind === "number" || kind === "boolean") return;
-			if (kind !== "object") {
-				offenders.push(`${path || "<root>"}: ${kind}`);
-				return;
-			}
-			const node = value as object;
-			if (seen.has(node)) return;
-			seen.add(node);
-			if (Array.isArray(node)) {
-				node.forEach((entry, index) => {
-					walk(entry, `${path}[${index}]`);
-				});
-				return;
-			}
-			const prototype = Object.getPrototypeOf(node);
-			if (prototype !== Object.prototype && prototype !== null) {
-				const name = prototype?.constructor?.name ?? "<null prototype>";
-				offenders.push(`${path || "<root>"}: ${name}`);
-				return;
-			}
-			for (const [key, entry] of Object.entries(node)) walk(entry, path ? `${path}.${key}` : key);
-		};
 
 		const result = await streamDevin(devinModel, imageContext, {
 			apiKey: RESOLVED_API_KEY,
 			fetch: fetchImpl,
 			onPayload: payload => {
-				captured = payload;
-				return undefined;
+				const request = payload as GetChatMessageRequest;
+				const replacement = clone(GetChatMessageRequestSchema, request);
+				if (!replacement.metadata) throw new Error("Devin request carried no metadata");
+				replacement.metadata.requestId = REQUEST_ID;
+				replacement.prompt = replacement.prompt.replaceAll(ORIGINAL_SYSTEM, "[redacted]");
+				for (const prompt of replacement.chatMessagePrompts) {
+					prompt.prompt = prompt.prompt.replaceAll(ORIGINAL_USER, "[redacted]");
+				}
+				return replacement;
 			},
 		}).result();
 
 		expect(result.stopReason).toBe("stop");
-		walk(captured, "");
-		// Exact equality, never a count: one tolerated node is how the next one
-		// slips in behind it.
-		expect(offenders).toEqual([]);
-		// The redactor serializes what it walked; a value JSON drops silently is
-		// the same defect wearing a different hat.
-		expect(JSON.parse(JSON.stringify(captured))).toEqual(captured as object);
+		if (!capturedFrame) throw new Error("Devin chat request was not dispatched");
+		const protobufBytes = gunzipSync(Buffer.from(capturedFrame).subarray(5));
+		expect(protobufBytes.includes(Buffer.from(ORIGINAL_USER))).toBe(false);
+		expect(protobufBytes.includes(Buffer.from("[redacted]"))).toBe(true);
+		const decoded = fromBinary(GetChatMessageRequestSchema, protobufBytes);
+		expect(decoded.metadata?.requestId).toBe(REQUEST_ID);
+		expect(JSON.stringify(decoded, (_key, value: unknown) => (value instanceof Uint8Array ? [...value] : value)))
+			.toContain(JSON.stringify([...Buffer.from("hello")]));
 	});
 });

@@ -66,7 +66,7 @@ describe("A failing session-stickiness cache is surfaced, not swallowed at debug
 		const store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
 		closers.push(store);
 		const authStorage = new AuthStorage(store);
-		await authStorage.set(provider, [{ type: "api_key", key: "sk-test-key" }]);
+		await authStorage.credentials.set(provider, [{ type: "api_key", key: "sk-test-key" }]);
 		// The shape a read-only or corrupt cache table takes: the credential rows
 		// are fine, only the cache is broken, which is why the request still works.
 		vi.spyOn(store, "setCache").mockImplementation(() => {
@@ -89,7 +89,7 @@ describe("A failing session-stickiness cache is surfaced, not swallowed at debug
 		const provider = "sticky-loud-write";
 		const { authStorage } = await storeWithBrokenCache(provider);
 
-		const key = await authStorage.getApiKey(provider, "session-a");
+		const key = await authStorage.keys.get(provider, "session-a");
 
 		// The request itself is unaffected: a broken cache is not a broken login.
 		expect(key).toBe("sk-test-key");
@@ -112,7 +112,7 @@ describe("A failing session-stickiness cache is surfaced, not swallowed at debug
 		const { authStorage } = await storeWithBrokenCache(provider);
 
 		for (let i = 0; i < 5; i++) {
-			await authStorage.getApiKey(provider, `session-${i}`);
+			await authStorage.keys.get(provider, `session-${i}`);
 		}
 
 		expect(stickyWarnings(warnings)).toHaveLength(1);
@@ -131,10 +131,10 @@ describe("A failing session-stickiness cache is surfaced, not swallowed at debug
 		const first = "sticky-loud-a";
 		const { authStorage } = await storeWithBrokenCache(first);
 		const second = "sticky-loud-b";
-		await authStorage.set(second, [{ type: "api_key", key: "sk-second" }]);
+		await authStorage.credentials.set(second, [{ type: "api_key", key: "sk-second" }]);
 
-		await authStorage.getApiKey(first, "s1");
-		await authStorage.getApiKey(second, "s2");
+		await authStorage.keys.get(first, "s1");
+		await authStorage.keys.get(second, "s2");
 
 		const reported = stickyWarnings(warnings);
 		expect(reported).toHaveLength(2);
@@ -151,9 +151,9 @@ describe("A failing session-stickiness cache is surfaced, not swallowed at debug
 		const store = await SqliteAuthCredentialStore.open(path.join(tempDir, "healthy.db"));
 		closers.push(store);
 		const authStorage = new AuthStorage(store);
-		await authStorage.set(provider, [{ type: "api_key", key: "sk-healthy" }]);
+		await authStorage.credentials.set(provider, [{ type: "api_key", key: "sk-healthy" }]);
 
-		const key = await authStorage.getApiKey(provider, "session-healthy");
+		const key = await authStorage.keys.get(provider, "session-healthy");
 
 		expect(key).toBe("sk-healthy");
 		expect(stickyWarnings(warnings)).toHaveLength(0);

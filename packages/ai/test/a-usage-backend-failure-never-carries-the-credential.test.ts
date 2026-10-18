@@ -111,10 +111,10 @@ describe("a usage backend that echoes the credential", () => {
 		};
 		const r = rig(backend);
 		cleanups.push(() => r.store.close());
-		await r.storage.reload();
-		await r.storage.set("fake-usage-backend", { type: "api_key", key: API_KEY });
+		await r.storage.credentials.reload();
+		await r.storage.credentials.set("fake-usage-backend", { type: "api_key", key: API_KEY });
 
-		const reports = await r.storage.fetchUsageReports();
+		const reports = await r.storage.usage.reports();
 
 		expect(reports).toEqual([]);
 		expectNoSecret("global log", captured.join("\n"));
@@ -139,10 +139,10 @@ describe("a usage backend that echoes the credential", () => {
 		};
 		const r = rig(backend);
 		cleanups.push(() => r.store.close());
-		await r.storage.reload();
-		await r.storage.set("fake-usage-backend", { type: "api_key", key: API_KEY });
+		await r.storage.credentials.reload();
+		await r.storage.credentials.set("fake-usage-backend", { type: "api_key", key: API_KEY });
 
-		const reports = await r.storage.fetchUsageReports();
+		const reports = await r.storage.usage.reports();
 
 		expect(reports).toHaveLength(1);
 		expectNoSecret("returned report", JSON.stringify(reports));
@@ -160,10 +160,10 @@ describe("a usage backend that echoes the credential", () => {
 		};
 		const r = rig(backend);
 		cleanups.push(() => r.store.close());
-		await r.storage.reload();
-		await r.storage.set("fake-usage-backend", { type: "api_key", key: API_KEY });
+		await r.storage.credentials.reload();
+		await r.storage.credentials.set("fake-usage-backend", { type: "api_key", key: API_KEY });
 
-		const results = await r.storage.checkCredentials();
+		const results = await r.storage.health.check();
 
 		expect(results).toHaveLength(1);
 		expect(results[0]?.ok).toBe(false);
@@ -180,10 +180,10 @@ describe("a usage backend that echoes the credential", () => {
 		};
 		const r = rig(backend);
 		cleanups.push(() => r.store.close());
-		await r.storage.reload();
-		await r.storage.set("fake-usage-backend", { type: "api_key", key: API_KEY });
+		await r.storage.credentials.reload();
+		await r.storage.credentials.set("fake-usage-backend", { type: "api_key", key: API_KEY });
 
-		const results = await r.storage.checkCredentials();
+		const results = await r.storage.health.check();
 
 		expect(results[0]?.ok).toBe(true);
 		expectNoSecret("check result", JSON.stringify(results));
@@ -200,10 +200,10 @@ describe("a usage backend that echoes the credential", () => {
 		};
 		const r = rig(backend);
 		cleanups.push(() => r.store.close());
-		await r.storage.reload();
-		await r.storage.set("fake-usage-backend", { type: "api_key", key: API_KEY });
+		await r.storage.credentials.reload();
+		await r.storage.credentials.set("fake-usage-backend", { type: "api_key", key: API_KEY });
 
-		await r.storage.fetchUsageReports();
+		await r.storage.usage.reports();
 
 		expect(captured.join("\n")).not.toContain(other);
 		expect(captured.join("\n")).toContain("proxy leaked");
@@ -220,15 +220,15 @@ describe("a usage backend that echoes the credential", () => {
 			throw new Error(`invalid_grant: refresh token ${REFRESH} is revoked`);
 		});
 		cleanups.push(() => r.store.close());
-		await r.storage.reload();
-		await r.storage.set("fake-usage-backend", {
+		await r.storage.credentials.reload();
+		await r.storage.credentials.set("fake-usage-backend", {
 			type: "oauth",
 			access: ACCESS,
 			refresh: REFRESH,
 			expires: Date.now() - 60_000,
 		});
 
-		await r.storage.fetchUsageReports();
+		await r.storage.usage.reports();
 
 		const disabled = JSON.stringify(r.db.query("SELECT disabled_cause FROM auth_credentials").all());
 		expect(disabled).toContain("oauth refresh failed during usage probe");
@@ -248,15 +248,15 @@ describe("a usage backend that echoes the credential", () => {
 			throw new Error(`temporary failure with ${REFRESH}`);
 		});
 		cleanups.push(() => r.store.close());
-		await r.storage.reload();
-		await r.storage.set("fake-usage-backend", {
+		await r.storage.credentials.reload();
+		await r.storage.credentials.set("fake-usage-backend", {
 			type: "oauth",
 			access: ACCESS,
 			refresh: REFRESH,
 			expires: Date.now() - 60_000,
 		});
 
-		const results = await r.storage.checkCredentials();
+		const results = await r.storage.health.check();
 
 		expect(results[0]?.reason).toContain("oauth refresh failed: temporary failure with");
 		expectNoSecret("check result", JSON.stringify(results));
@@ -298,11 +298,11 @@ describe("every registered usage backend", () => {
 				for (const mode of ["http-body", "network-error"] as const) {
 					const captured = globalLogCapture();
 					const r = rig(backend, upstream(mode, SECRETS_BY_TYPE[credentialType]));
-					await r.storage.reload();
+					await r.storage.credentials.reload();
 					if (credentialType === "api_key") {
-						await r.storage.set(backend.id, { type: "api_key", key: API_KEY });
+						await r.storage.credentials.set(backend.id, { type: "api_key", key: API_KEY });
 					} else {
-						await r.storage.set(backend.id, {
+						await r.storage.credentials.set(backend.id, {
 							type: "oauth",
 							access: ACCESS,
 							refresh: REFRESH,
@@ -312,8 +312,8 @@ describe("every registered usage backend", () => {
 						});
 					}
 
-					const reports = await r.storage.fetchUsageReports();
-					const checks = await r.storage.checkCredentials();
+					const reports = await r.storage.usage.reports();
+					const checks = await r.storage.health.check();
 					if (r.fetchCalls() > 0) exercised.add(backend.id);
 
 					const where = `${backend.id}/${credentialType}/${mode}`;

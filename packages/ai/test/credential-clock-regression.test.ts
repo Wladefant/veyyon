@@ -112,7 +112,7 @@ describe("AuthStorage credential selection across a backward clock jump", () => 
 		// A block taking a key out of the pool is movement; the library holds it off unless a host
 		// opts in.
 		auth = new AuthStorage(store, { loadBalancing: true });
-		await auth.set(PROVIDER, [
+		await auth.credentials.set(PROVIDER, [
 			{ type: "api_key", key: "key-a", source: "login" },
 			{ type: "api_key", key: "key-b", source: "login" },
 		]);
@@ -136,7 +136,7 @@ describe("AuthStorage credential selection across a backward clock jump", () => 
 	async function selectableKeys(storage: AuthStorage, label: string, count = 8): Promise<string[]> {
 		const seen = new Set<string>();
 		for (let i = 0; i < count; i++) {
-			const key = await storage.getApiKey(PROVIDER, `${label}-${i}`);
+			const key = await storage.keys.get(PROVIDER, `${label}-${i}`);
 			if (key) seen.add(key);
 		}
 		return [...seen].sort();
@@ -145,10 +145,10 @@ describe("AuthStorage credential selection across a backward clock jump", () => 
 	it("removes a blocked credential from the pool, then restores it once the clock moves backward", async () => {
 		if (!auth) throw new Error("test setup failed");
 		// Block whichever credential the first session resolved to, for an hour.
-		const blocked = await auth.getApiKey(PROVIDER, "session");
+		const blocked = await auth.keys.get(PROVIDER, "session");
 		expect(blocked).toBeString();
 		const sibling = blocked === "key-a" ? "key-b" : "key-a";
-		await auth.markUsageLimitReached(PROVIDER, "session", { retryAfterMs: HOUR_MS });
+		await auth.limits.markReached(PROVIDER, "session", { retryAfterMs: HOUR_MS });
 
 		// Precondition: the block is real. Only the sibling is selectable.
 		expect(await selectableKeys(auth, "blocked")).toEqual([sibling]);
@@ -168,9 +168,9 @@ describe("AuthStorage credential selection across a backward clock jump", () => 
 		// The control for the case above: the guard must not be a blanket
 		// "expire blocks early", or every rate-limit backoff becomes a no-op and
 		// the agent hammers a provider that just refused it.
-		const blocked = await auth.getApiKey(PROVIDER, "session");
+		const blocked = await auth.keys.get(PROVIDER, "session");
 		const sibling = blocked === "key-a" ? "key-b" : "key-a";
-		await auth.markUsageLimitReached(PROVIDER, "session", { retryAfterMs: HOUR_MS });
+		await auth.limits.markReached(PROVIDER, "session", { retryAfterMs: HOUR_MS });
 
 		const jumpedTo = realNow() + 30 * 60 * 1000; // still inside the hour
 		Date.now = () => jumpedTo;
@@ -182,8 +182,8 @@ describe("AuthStorage credential selection across a backward clock jump", () => 
 		if (!auth) throw new Error("test setup failed");
 		// The ordinary path, asserted so the guard cannot be credited for an
 		// unblock that plain expiry was going to produce anyway.
-		await auth.getApiKey(PROVIDER, "session");
-		await auth.markUsageLimitReached(PROVIDER, "session", { retryAfterMs: HOUR_MS });
+		await auth.keys.get(PROVIDER, "session");
+		await auth.limits.markReached(PROVIDER, "session", { retryAfterMs: HOUR_MS });
 
 		const jumpedTo = realNow() + HOUR_MS + 1_000;
 		Date.now = () => jumpedTo;
@@ -197,16 +197,16 @@ describe("AuthStorage credential selection across a backward clock jump", () => 
 		// deadlines, which is right for two genuine rate-limit responses and wrong
 		// across a jump: the stale deadline would win the comparison forever and
 		// the credential could never be re-blocked for a sane interval.
-		const blocked = await auth.getApiKey(PROVIDER, "session");
+		const blocked = await auth.keys.get(PROVIDER, "session");
 		const sibling = blocked === "key-a" ? "key-b" : "key-a";
-		await auth.markUsageLimitReached(PROVIDER, "session", { retryAfterMs: 6 * HOUR_MS });
+		await auth.limits.markReached(PROVIDER, "session", { retryAfterMs: 6 * HOUR_MS });
 
 		const jumpedTo = realNow() - 2 * HOUR_MS;
 		Date.now = () => jumpedTo;
 		expect(await selectableKeys(auth, "jumped")).toEqual(["key-a", "key-b"].sort());
 
 		// A fresh rate-limit response on the new clock blocks for one minute.
-		await auth.markUsageLimitReached(PROVIDER, "session", { retryAfterMs: 60_000 });
+		await auth.limits.markReached(PROVIDER, "session", { retryAfterMs: 60_000 });
 		expect(await selectableKeys(auth, "reblocked")).toEqual([sibling]);
 
 		// One minute later on that same clock it is usable again. If the six-hour
@@ -220,9 +220,9 @@ describe("AuthStorage credential selection across a backward clock jump", () => 
 		// The persisted half of the same defect. The row is written with the real
 		// clock, so reading it two hours in the past is exactly what a machine
 		// whose clock was corrected backward does on its next launch.
-		const blocked = await auth.getApiKey(PROVIDER, "session");
+		const blocked = await auth.keys.get(PROVIDER, "session");
 		const sibling = blocked === "key-a" ? "key-b" : "key-a";
-		await auth.markUsageLimitReached(PROVIDER, "session", { retryAfterMs: 6 * HOUR_MS });
+		await auth.limits.markReached(PROVIDER, "session", { retryAfterMs: 6 * HOUR_MS });
 		expect(await selectableKeys(auth, "blocked")).toEqual([sibling]);
 		auth.close();
 		store.close();
@@ -233,7 +233,7 @@ describe("AuthStorage credential selection across a backward clock jump", () => 
 		// Reopen exactly as a fresh process would: only the database carries state.
 		store = await SqliteAuthCredentialStore.open(dbPath);
 		auth = new AuthStorage(store, { loadBalancing: true });
-		await auth.reload();
+		await auth.credentials.reload();
 		expect(await selectableKeys(auth, "restarted")).toEqual(["key-a", "key-b"].sort());
 	});
 });

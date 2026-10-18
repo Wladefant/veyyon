@@ -58,15 +58,15 @@ describe("Abliteration login wiring", () => {
 
 		const store = new SqliteAuthCredentialStore(new Database(":memory:"));
 		const storage = new AuthStorage(store);
-		await storage.reload();
+		await storage.credentials.reload();
 
-		await storage.login("abliteration", {
+		await storage.oauth.login("abliteration", {
 			onAuth: () => {},
 			onPrompt: async () => "ak_validated",
 			fetch: fetchMock,
 		});
 
-		const credential = await storage.get("abliteration");
+		const credential = await storage.credentials.get("abliteration");
 		expect(credential).toEqual({ type: "api_key", key: "ak_validated", source: "login" });
 
 		const modelsCall = fetchCalls.find(call => call.url.endsWith("/v1/models"));
@@ -88,17 +88,17 @@ describe("Abliteration login wiring", () => {
 
 		const store = new SqliteAuthCredentialStore(new Database(":memory:"));
 		const storage = new AuthStorage(store);
-		await storage.reload();
+		await storage.credentials.reload();
 
 		await expect(
-			storage.login("abliteration", {
+			storage.oauth.login("abliteration", {
 				onAuth: () => {},
 				onPrompt: async () => "ak_bogus",
 				fetch: fetchMock,
 			}),
 		).rejects.toThrow(/Abliteration API key validation failed \(401\)/);
 
-		expect(await storage.get("abliteration")).toBeUndefined();
+		expect(await storage.credentials.get("abliteration")).toBeUndefined();
 		store.close();
 	});
 });

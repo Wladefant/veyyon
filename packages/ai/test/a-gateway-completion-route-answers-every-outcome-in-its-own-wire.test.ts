@@ -103,7 +103,7 @@ beforeAll(async () => {
 	registerMockApi();
 	dir = await fs.mkdtemp(path.join(os.tmpdir(), "gw-route-outcomes-"));
 	storage = await AuthStorage.create(path.join(dir, "auth.db"));
-	storage.setRuntimeApiKey("openrouter", "test-key");
+	storage.keys.setRuntime("openrouter", "test-key");
 	gateway = startAuthGateway({
 		bind: "127.0.0.1:0",
 		bearerTokens: ["t"],
@@ -217,7 +217,7 @@ describe.each(Object.entries(ROUTES))("completion route %s", (route, fixture) =>
 
 	it("answers a credential lookup that throws with the classifier's verdict", async () => {
 		const failure = statusError(503, "credential broker unreachable");
-		vi.spyOn(storage, "getApiKey").mockRejectedValue(failure);
+		vi.spyOn(storage.keys, "get").mockRejectedValue(failure);
 		const res = await post(route, JSON.stringify(fixture.request(keyed.id, false)));
 		const verdict = classifyGatewayError(failure);
 		expect(verdict.status).toBe(503);

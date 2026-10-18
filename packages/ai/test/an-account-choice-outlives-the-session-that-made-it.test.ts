@@ -80,8 +80,8 @@ describe("an account choice outlives the session that made it", () => {
 	}
 
 	async function seedTwoAccounts(storage: AuthStorage): Promise<[number, number]> {
-		await storage.set(PROVIDER, [oauthRow("first", "access-first"), oauthRow("second", "access-second")]);
-		const rows = storage.listStoredCredentials(PROVIDER);
+		await storage.credentials.set(PROVIDER, [oauthRow("first", "access-first"), oauthRow("second", "access-second")]);
+		const rows = storage.credentials.list(PROVIDER);
 		return [rows[0]!.id, rows[1]!.id];
 	}
 
@@ -97,7 +97,7 @@ describe("an account choice outlives the session that made it", () => {
 		storage: AuthStorage,
 	): Promise<{ chosenId: number; chosenSuffix: string; defaultAccess: string; otherId: number }> {
 		const [firstId, secondId] = await seedTwoAccounts(storage);
-		const defaultAccess = await storage.getApiKey(PROVIDER, "ranking-probe-session");
+		const defaultAccess = await storage.keys.get(PROVIDER, "ranking-probe-session");
 		if (defaultAccess !== "access-first" && defaultAccess !== "access-second") {
 			throw new Error(`ranking probe resolved to an unexpected credential: ${String(defaultAccess)}`);
 		}
@@ -111,7 +111,7 @@ describe("an account choice outlives the session that made it", () => {
 		store?.close();
 		store = await SqliteAuthCredentialStore.open(dbPath);
 		const reopened = new AuthStorage(store);
-		await reopened.reload();
+		await reopened.credentials.reload();
 		authStorage = reopened;
 		return reopened;
 	}
@@ -125,16 +125,16 @@ describe("an account choice outlives the session that made it", () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const { chosenId, chosenSuffix } = await seedAndPickTheLosingAccount(authStorage);
 
-		expect(authStorage.selectProviderCredential(PROVIDER, chosenId, { sessionId: SESSION_ID })).toBe(true);
-		expect(authStorage.selectedProviderCredentialId(PROVIDER)).toBe(chosenId);
+		expect(authStorage.sessions.selectProviderCredential(PROVIDER, chosenId, { sessionId: SESSION_ID })).toBe(true);
+		expect(authStorage.sessions.selectedProviderCredentialId(PROVIDER)).toBe(chosenId);
 
 		const reopened = await reopen();
 
-		expect(reopened.selectedProviderCredentialId(PROVIDER)).toBe(chosenId);
-		expect(await reopened.getApiKey(PROVIDER, OTHER_SESSION_ID)).toBe(`access-${chosenSuffix}`);
-		expect(await reopened.getApiKey(PROVIDER)).toBe(`access-${chosenSuffix}`);
-		expect(reopened.sessionCredentialRouting(PROVIDER, undefined)?.selectedCredentialId).toBe(chosenId);
-		expect(reopened.getOAuthAccountIdentity(PROVIDER, OTHER_SESSION_ID)).toEqual({
+		expect(reopened.sessions.selectedProviderCredentialId(PROVIDER)).toBe(chosenId);
+		expect(await reopened.keys.get(PROVIDER, OTHER_SESSION_ID)).toBe(`access-${chosenSuffix}`);
+		expect(await reopened.keys.get(PROVIDER)).toBe(`access-${chosenSuffix}`);
+		expect(reopened.sessions.routing(PROVIDER, undefined)?.selectedCredentialId).toBe(chosenId);
+		expect(reopened.oauth.identity(PROVIDER, OTHER_SESSION_ID)).toEqual({
 			accountId: `account-${chosenSuffix}`,
 			email: `${chosenSuffix}@example.com`,
 		});
@@ -149,31 +149,30 @@ describe("an account choice outlives the session that made it", () => {
 	test("a re-login under the same identity keeps the choice, across new row ids", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const { chosenId, chosenSuffix, defaultAccess } = await seedAndPickTheLosingAccount(authStorage);
-		expect(authStorage.selectProviderCredential(PROVIDER, chosenId)).toBe(true);
+		expect(authStorage.sessions.selectProviderCredential(PROVIDER, chosenId)).toBe(true);
 
 		// A logout of the chosen account: the selection resolves to nothing and is deliberately LEFT
 		// in the store, which a fresh process is the only honest way to observe.
-		expect(await authStorage.removeCredential(PROVIDER, chosenId)).toBe(true);
+		expect(await authStorage.credentials.removeById(PROVIDER, chosenId)).toBe(true);
 		const withoutTheAccount = await reopen();
-		expect(withoutTheAccount.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
-		expect(await withoutTheAccount.getApiKey(PROVIDER, SESSION_ID)).toBe(defaultAccess);
+		expect(withoutTheAccount.sessions.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
+		expect(await withoutTheAccount.keys.get(PROVIDER, SESSION_ID)).toBe(defaultAccess);
 
 		// The re-login. Same account, new token, new row.
 		const otherSuffix = chosenSuffix === "first" ? "second" : "first";
-		await withoutTheAccount.set(PROVIDER, [
+		await withoutTheAccount.credentials.set(PROVIDER, [
 			oauthRow(otherSuffix, `access-${otherSuffix}`),
 			oauthRow(chosenSuffix, `access-${chosenSuffix}-again`),
 		]);
-		const reloggedRow = withoutTheAccount
-			.listStoredCredentials(PROVIDER)
+		const reloggedRow = withoutTheAccount.credentials.list(PROVIDER)
 			.find(row => row.credential.type === "oauth" && row.credential.email === `${chosenSuffix}@example.com`);
 		if (!reloggedRow) throw new Error("re-login did not store the chosen account");
 
 		// The row really is a new one: this is the id churn a selection keyed by row id would lose to.
 		expect(reloggedRow.id).not.toBe(chosenId);
-		expect(withoutTheAccount.selectedProviderCredentialId(PROVIDER)).toBe(reloggedRow.id);
-		expect(await withoutTheAccount.getApiKey(PROVIDER, SESSION_ID)).toBe(`access-${chosenSuffix}-again`);
-		expect(await withoutTheAccount.getApiKey(PROVIDER)).toBe(`access-${chosenSuffix}-again`);
+		expect(withoutTheAccount.sessions.selectedProviderCredentialId(PROVIDER)).toBe(reloggedRow.id);
+		expect(await withoutTheAccount.keys.get(PROVIDER, SESSION_ID)).toBe(`access-${chosenSuffix}-again`);
+		expect(await withoutTheAccount.keys.get(PROVIDER)).toBe(`access-${chosenSuffix}-again`);
 	});
 
 	/**
@@ -186,16 +185,16 @@ describe("an account choice outlives the session that made it", () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
 		const { defaultAccess } = await seedAndPickTheLosingAccount(storage);
-		await storage.set(OTHER_PROVIDER, [oauthRow("sibling", "access-sibling")]);
-		const siblingId = storage.listStoredCredentials(OTHER_PROVIDER)[0]!.id;
+		await storage.credentials.set(OTHER_PROVIDER, [oauthRow("sibling", "access-sibling")]);
+		const siblingId = storage.credentials.list(OTHER_PROVIDER)[0]!.id;
 
-		expect(storage.selectProviderCredential(PROVIDER, 987_654)).toBe(false);
-		expect(storage.selectProviderCredential(PROVIDER, siblingId)).toBe(false);
+		expect(storage.sessions.selectProviderCredential(PROVIDER, 987_654)).toBe(false);
+		expect(storage.sessions.selectProviderCredential(PROVIDER, siblingId)).toBe(false);
 
-		expect(storage.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe(defaultAccess);
+		expect(storage.sessions.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe(defaultAccess);
 		const reopened = await reopen();
-		expect(reopened.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
+		expect(reopened.sessions.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
 	});
 
 	/**
@@ -209,17 +208,17 @@ describe("an account choice outlives the session that made it", () => {
 		const storage = authStorage;
 		const { chosenId, chosenSuffix, defaultAccess, otherId } = await seedAndPickTheLosingAccount(storage);
 
-		expect(storage.pinSessionCredential(PROVIDER, SESSION_ID, otherId)).toBe(true);
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe(defaultAccess);
+		expect(storage.sessions.pin(PROVIDER, SESSION_ID, otherId)).toBe(true);
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe(defaultAccess);
 
-		expect(storage.selectProviderCredential(PROVIDER, chosenId, { sessionId: SESSION_ID })).toBe(true);
+		expect(storage.sessions.selectProviderCredential(PROVIDER, chosenId, { sessionId: SESSION_ID })).toBe(true);
 
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe(`access-${chosenSuffix}`);
-		expect(storage.sessionCredentialRouting(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(chosenId);
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe(`access-${chosenSuffix}`);
+		expect(storage.sessions.routing(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(chosenId);
 		// Durably retired: a fresh process must not resurrect the pin from the sticky cache row.
 		const reopened = await reopen();
-		expect(await reopened.getApiKey(PROVIDER, SESSION_ID)).toBe(`access-${chosenSuffix}`);
-		expect(reopened.selectedProviderCredentialId(PROVIDER)).toBe(chosenId);
+		expect(await reopened.keys.get(PROVIDER, SESSION_ID)).toBe(`access-${chosenSuffix}`);
+		expect(reopened.sessions.selectedProviderCredentialId(PROVIDER)).toBe(chosenId);
 	});
 
 	/**
@@ -232,13 +231,13 @@ describe("an account choice outlives the session that made it", () => {
 		const storage = authStorage;
 		const { chosenId, chosenSuffix, defaultAccess, otherId } = await seedAndPickTheLosingAccount(storage);
 
-		expect(storage.selectProviderCredential(PROVIDER, chosenId)).toBe(true);
-		expect(storage.pinSessionCredential(PROVIDER, SESSION_ID, otherId)).toBe(true);
+		expect(storage.sessions.selectProviderCredential(PROVIDER, chosenId)).toBe(true);
+		expect(storage.sessions.pin(PROVIDER, SESSION_ID, otherId)).toBe(true);
 
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe(defaultAccess);
-		expect(await storage.getApiKey(PROVIDER, OTHER_SESSION_ID)).toBe(`access-${chosenSuffix}`);
-		expect(await storage.getApiKey(PROVIDER)).toBe(`access-${chosenSuffix}`);
-		expect(storage.selectedProviderCredentialId(PROVIDER)).toBe(chosenId);
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe(defaultAccess);
+		expect(await storage.keys.get(PROVIDER, OTHER_SESSION_ID)).toBe(`access-${chosenSuffix}`);
+		expect(await storage.keys.get(PROVIDER)).toBe(`access-${chosenSuffix}`);
+		expect(storage.sessions.selectedProviderCredentialId(PROVIDER)).toBe(chosenId);
 	});
 
 	/**
@@ -251,41 +250,41 @@ describe("an account choice outlives the session that made it", () => {
 		const { chosenId, chosenSuffix, otherId } = await seedAndPickTheLosingAccount(balancingStorage);
 
 		// With balancing true and a session, selection pins only this session and does not write global choice
-		expect(balancingStorage.selectProviderCredential(PROVIDER, chosenId, { sessionId: SESSION_ID })).toBe(true);
-		expect(balancingStorage.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
-		expect(balancingStorage.sessionCredentialRouting(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(chosenId);
+		expect(balancingStorage.sessions.selectProviderCredential(PROVIDER, chosenId, { sessionId: SESSION_ID })).toBe(true);
+		expect(balancingStorage.sessions.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
+		expect(balancingStorage.sessions.routing(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(chosenId);
 		expect(
-			balancingStorage.sessionCredentialRouting(PROVIDER, OTHER_SESSION_ID)?.selectedCredentialId,
+			balancingStorage.sessions.routing(PROVIDER, OTHER_SESSION_ID)?.selectedCredentialId,
 		).toBeUndefined();
-		expect(balancingStorage.sessionCredentialRouting(PROVIDER, undefined)?.selectedCredentialId).toBeUndefined();
-		expect(await balancingStorage.getApiKey(PROVIDER, SESSION_ID)).toBe(`access-${chosenSuffix}`);
+		expect(balancingStorage.sessions.routing(PROVIDER, undefined)?.selectedCredentialId).toBeUndefined();
+		expect(await balancingStorage.keys.get(PROVIDER, SESSION_ID)).toBe(`access-${chosenSuffix}`);
 
 		// Missing session id cannot pin globally under balancing true
-		expect(balancingStorage.selectProviderCredential(PROVIDER, otherId, { sessionId: undefined })).toBe(false);
-		expect(balancingStorage.selectProviderCredential(PROVIDER, otherId)).toBe(false);
-		expect(balancingStorage.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
+		expect(balancingStorage.sessions.selectProviderCredential(PROVIDER, otherId, { sessionId: undefined })).toBe(false);
+		expect(balancingStorage.sessions.selectProviderCredential(PROVIDER, otherId)).toBe(false);
+		expect(balancingStorage.sessions.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
 
 		// Switching to another account for the same session replaces the session pin
-		expect(balancingStorage.selectProviderCredential(PROVIDER, otherId, { sessionId: SESSION_ID })).toBe(true);
-		expect(balancingStorage.sessionCredentialRouting(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(otherId);
-		expect(balancingStorage.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
+		expect(balancingStorage.sessions.selectProviderCredential(PROVIDER, otherId, { sessionId: SESSION_ID })).toBe(true);
+		expect(balancingStorage.sessions.routing(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(otherId);
+		expect(balancingStorage.sessions.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
 
 		// Reopening the database confirms no global selection was persisted
 		const reopened = new AuthStorage(store, { loadBalancing: true });
-		await reopened.reload();
-		expect(reopened.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
+		await reopened.credentials.reload();
+		expect(reopened.sessions.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
 
 		// With balancing false, global persistence is preserved
 		const globalStorage = new AuthStorage(store, { loadBalancing: false });
-		await globalStorage.reload();
-		expect(globalStorage.selectProviderCredential(PROVIDER, chosenId, { sessionId: SESSION_ID })).toBe(true);
-		expect(globalStorage.selectedProviderCredentialId(PROVIDER)).toBe(chosenId);
-		expect(globalStorage.sessionCredentialRouting(PROVIDER, OTHER_SESSION_ID)?.selectedCredentialId).toBe(chosenId);
-		expect(globalStorage.sessionCredentialRouting(PROVIDER, undefined)?.selectedCredentialId).toBe(chosenId);
+		await globalStorage.credentials.reload();
+		expect(globalStorage.sessions.selectProviderCredential(PROVIDER, chosenId, { sessionId: SESSION_ID })).toBe(true);
+		expect(globalStorage.sessions.selectedProviderCredentialId(PROVIDER)).toBe(chosenId);
+		expect(globalStorage.sessions.routing(PROVIDER, OTHER_SESSION_ID)?.selectedCredentialId).toBe(chosenId);
+		expect(globalStorage.sessions.routing(PROVIDER, undefined)?.selectedCredentialId).toBe(chosenId);
 
 		const reopenedGlobal = new AuthStorage(store, { loadBalancing: false });
-		await reopenedGlobal.reload();
-		expect(reopenedGlobal.selectedProviderCredentialId(PROVIDER)).toBe(chosenId);
+		await reopenedGlobal.credentials.reload();
+		expect(reopenedGlobal.sessions.selectedProviderCredentialId(PROVIDER)).toBe(chosenId);
 	});
 
 	/**
@@ -297,26 +296,26 @@ describe("an account choice outlives the session that made it", () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
 		const { chosenId, defaultAccess } = await seedAndPickTheLosingAccount(storage);
-		await storage.set(OTHER_PROVIDER, [oauthRow("sibling", "access-sibling"), oauthRow("cousin", "access-cousin")]);
-		const siblingRows = storage.listStoredCredentials(OTHER_PROVIDER);
-		const otherProviderDefault = await storage.getApiKey(OTHER_PROVIDER, "ranking-probe-session");
+		await storage.credentials.set(OTHER_PROVIDER, [oauthRow("sibling", "access-sibling"), oauthRow("cousin", "access-cousin")]);
+		const siblingRows = storage.credentials.list(OTHER_PROVIDER);
+		const otherProviderDefault = await storage.keys.get(OTHER_PROVIDER, "ranking-probe-session");
 		const otherProviderChoice = siblingRows.find(
 			row => row.credential.type === "oauth" && row.credential.access !== otherProviderDefault,
 		);
 		if (otherProviderChoice?.credential.type !== "oauth") {
 			throw new Error("both sibling credentials resolved the same way");
 		}
-		expect(storage.selectProviderCredential(PROVIDER, chosenId)).toBe(true);
-		expect(storage.selectProviderCredential(OTHER_PROVIDER, otherProviderChoice.id)).toBe(true);
+		expect(storage.sessions.selectProviderCredential(PROVIDER, chosenId)).toBe(true);
+		expect(storage.sessions.selectProviderCredential(OTHER_PROVIDER, otherProviderChoice.id)).toBe(true);
 
-		storage.clearProviderSelection(PROVIDER, { sessionId: SESSION_ID });
+		storage.sessions.clearProviderSelection(PROVIDER, { sessionId: SESSION_ID });
 
-		expect(storage.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe(defaultAccess);
+		expect(storage.sessions.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe(defaultAccess);
 		const reopened = await reopen();
-		expect(reopened.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
-		expect(reopened.selectedProviderCredentialId(OTHER_PROVIDER)).toBe(otherProviderChoice.id);
-		expect(await reopened.getApiKey(OTHER_PROVIDER)).toBe(otherProviderChoice.credential.access);
+		expect(reopened.sessions.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
+		expect(reopened.sessions.selectedProviderCredentialId(OTHER_PROVIDER)).toBe(otherProviderChoice.id);
+		expect(await reopened.keys.get(OTHER_PROVIDER)).toBe(otherProviderChoice.credential.access);
 	});
 
 	/**
@@ -329,7 +328,7 @@ describe("an account choice outlives the session that made it", () => {
 	test("a store with no selection table opens, reports no choice, and accepts a new one", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const { chosenId, chosenSuffix } = await seedAndPickTheLosingAccount(authStorage);
-		expect(authStorage.selectProviderCredential(PROVIDER, chosenId)).toBe(true);
+		expect(authStorage.sessions.selectProviderCredential(PROVIDER, chosenId)).toBe(true);
 
 		store?.close();
 		store = null;
@@ -339,15 +338,15 @@ describe("an account choice outlives the session that made it", () => {
 
 		store = await SqliteAuthCredentialStore.open(dbPath);
 		const recovered = new AuthStorage(store);
-		await recovered.reload();
+		await recovered.credentials.reload();
 		authStorage = recovered;
-		const rows = recovered.listStoredCredentials(PROVIDER);
+		const rows = recovered.credentials.list(PROVIDER);
 		expect(rows.length).toBe(2);
-		expect(recovered.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
+		expect(recovered.sessions.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
 
-		expect(recovered.selectProviderCredential(PROVIDER, chosenId)).toBe(true);
+		expect(recovered.sessions.selectProviderCredential(PROVIDER, chosenId)).toBe(true);
 		const reopened = await reopen();
-		expect(reopened.selectedProviderCredentialId(PROVIDER)).toBe(chosenId);
-		expect(await reopened.getApiKey(PROVIDER)).toBe(`access-${chosenSuffix}`);
+		expect(reopened.sessions.selectedProviderCredentialId(PROVIDER)).toBe(chosenId);
+		expect(await reopened.keys.get(PROVIDER)).toBe(`access-${chosenSuffix}`);
 	});
 });

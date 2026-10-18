@@ -49,7 +49,7 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 			email: "a@example.com",
 		});
 		serverStorage = new AuthStorage(serverStore);
-		await serverStorage.reload();
+		await serverStorage.credentials.reload();
 		handle = startAuthBroker({
 			storage: serverStorage,
 			bind: "127.0.0.1:0",
@@ -107,9 +107,9 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 				};
 			},
 		});
-		await clientStorage.reload();
+		await clientStorage.credentials.reload();
 
-		const apiKey = await clientStorage.getApiKey("anthropic");
+		const apiKey = await clientStorage.keys.get("anthropic");
 		expect(apiKey).toBe("server-access-rotated");
 		expect(overrideCalls).toBe(1);
 		// The local oauth refresh helper was used exactly once — by the broker server.
@@ -1002,7 +1002,7 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		// Pre-existing api_key for the same provider on the server side — a fresh
 		// login should disable it and replace it with the new key.
 		serverStore!.saveApiKey("kagi", "old-key");
-		await serverStorage!.reload();
+		await serverStorage!.credentials.reload();
 
 		const brokerClient = new AuthBrokerClient({ url: handle!.url, token });
 		const initialResult = await brokerClient.fetchSnapshot();
@@ -1012,9 +1012,9 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 			initialSnapshot: initialResult.snapshot,
 		});
 		const clientStorage = new AuthStorage(remoteStore);
-		await clientStorage.reload();
+		await clientStorage.credentials.reload();
 
-		await clientStorage.set("kagi", { type: "api_key", key: "new-key" });
+		await clientStorage.credentials.set("kagi", { type: "api_key", key: "new-key" });
 
 		// Server is the source of truth — only the new key should be active.
 		const activeOnServer = serverStore!.listAuthCredentials("kagi");
@@ -1023,7 +1023,7 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 
 		// Client reflects the new key through the broker's `POST /v1/credential`
 		// response without waiting for the long-poll snapshot tick.
-		expect(clientStorage.get("kagi")).toEqual({ type: "api_key", key: "new-key" });
+		expect(clientStorage.credentials.get("kagi")).toEqual({ type: "api_key", key: "new-key" });
 		clientStorage.close();
 	});
 
@@ -1036,7 +1036,7 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 			accountId: "acct-kagi",
 			email: "user@example.com",
 		});
-		await serverStorage!.reload();
+		await serverStorage!.credentials.reload();
 
 		const brokerClient = new AuthBrokerClient({ url: handle!.url, token });
 		const initialResult = await brokerClient.fetchSnapshot();
@@ -1046,12 +1046,12 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 			initialSnapshot: initialResult.snapshot,
 		});
 		const clientStorage = new AuthStorage(remoteStore);
-		await clientStorage.reload();
+		await clientStorage.credentials.reload();
 
-		await clientStorage.remove("kagi");
+		await clientStorage.credentials.remove("kagi");
 
 		expect(serverStore!.listAuthCredentials("kagi")).toEqual([]);
-		expect(clientStorage.get("kagi")).toBeUndefined();
+		expect(clientStorage.credentials.get("kagi")).toBeUndefined();
 		clientStorage.close();
 	});
 
@@ -1064,7 +1064,7 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 			initialSnapshot: initialResult.snapshot,
 		});
 		const clientStorage = new AuthStorage(remoteStore);
-		await clientStorage.reload();
+		await clientStorage.credentials.reload();
 
 		const serverInvalidateSpy = vi.spyOn(serverStorage!, "invalidateUsageCache");
 

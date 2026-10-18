@@ -423,11 +423,11 @@ describe("anthropic usage report dedupe partitions by org", () => {
 				usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
 			},
 		);
-		await storage.reload();
+		await storage.credentials.reload();
 
 		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async () => emailOnlyReport());
 
-		const reports = ((await storage.fetchUsageReports()) ?? []).filter(r => r.provider === "anthropic");
+		const reports = ((await storage.usage.reports()) ?? []).filter(r => r.provider === "anthropic");
 		expect(reports).toHaveLength(2);
 		const orgIds = reports.map(report => report.metadata?.orgId).sort();
 		expect(orgIds).toEqual([MAX_ORG, TEAM_ORG].sort());
@@ -448,14 +448,14 @@ describe("anthropic usage report dedupe partitions by org", () => {
 				usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
 			},
 		);
-		await storage.reload();
+		await storage.credentials.reload();
 
 		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async () => ({
 			...emailOnlyReport(),
 			metadata: { accountId: "account-shared" },
 		}));
 
-		const reports = ((await storage.fetchUsageReports()) ?? []).filter(r => r.provider === "anthropic");
+		const reports = ((await storage.usage.reports()) ?? []).filter(r => r.provider === "anthropic");
 		expect(reports).toHaveLength(2);
 		const orgIds = reports.map(report => report.metadata?.orgId).sort();
 		expect(orgIds).toEqual([MAX_ORG, TEAM_ORG].sort());
@@ -468,14 +468,14 @@ describe("anthropic usage report dedupe partitions by org", () => {
 		storage = new AuthStorage(makeStore([oauthRow(1, TEAM_ORG, "Team Workspace")]), {
 			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
 		});
-		await storage.reload();
+		await storage.credentials.reload();
 
 		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async () => ({
 			...emailOnlyReport(),
 			metadata: { email: EMAIL, accountId: "account-shared", orgId: TEAM_ORG },
 		}));
 
-		const reports = ((await storage.fetchUsageReports()) ?? []).filter(r => r.provider === "anthropic");
+		const reports = ((await storage.usage.reports()) ?? []).filter(r => r.provider === "anthropic");
 		expect(reports).toHaveLength(1);
 		expect(reports[0]?.metadata?.orgId).toBe(TEAM_ORG);
 		expect(reports[0]?.metadata?.orgName).toBe("Team Workspace");
@@ -485,11 +485,11 @@ describe("anthropic usage report dedupe partitions by org", () => {
 		storage = new AuthStorage(makeStore([oauthRow(1), oauthRow(2)]), {
 			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
 		});
-		await storage.reload();
+		await storage.credentials.reload();
 
 		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async () => emailOnlyReport());
 
-		const reports = ((await storage.fetchUsageReports()) ?? []).filter(r => r.provider === "anthropic");
+		const reports = ((await storage.usage.reports()) ?? []).filter(r => r.provider === "anthropic");
 		expect(reports).toHaveLength(1);
 	});
 
@@ -522,10 +522,10 @@ describe("anthropic usage report dedupe partitions by org", () => {
 			metadata: undefined,
 		});
 		const anthropicReports = async (): Promise<UsageReport[]> =>
-			((await storage?.fetchUsageReports()) ?? []).filter(r => r.provider === "anthropic");
+			((await storage?.usage.reports()) ?? []).filter(r => r.provider === "anthropic");
 
 		storage = noEmailStorage();
-		await storage.reload();
+		await storage.credentials.reload();
 		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async () =>
 			scoped([" account-shared "]),
 		);
@@ -533,7 +533,7 @@ describe("anthropic usage report dedupe partitions by org", () => {
 
 		storage.close();
 		storage = noEmailStorage();
-		await storage.reload();
+		await storage.credentials.reload();
 		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async () =>
 			scoped(["account-shared", "account-other"]),
 		);
@@ -567,9 +567,9 @@ describe("anthropic usage report dedupe partitions by org", () => {
 						}
 					: undefined,
 		});
-		await storage.reload();
+		await storage.credentials.reload();
 
-		expect(((await storage.fetchUsageReports()) ?? []).filter(r => r.provider === provider)).toHaveLength(1);
+		expect(((await storage.usage.reports()) ?? []).filter(r => r.provider === provider)).toHaveLength(1);
 	});
 });
 
@@ -606,11 +606,11 @@ describe("broker-backed refresh row addressing", () => {
 				}),
 			},
 		);
-		await storage.reload();
+		await storage.credentials.reload();
 
 		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async () => emailOnlyReport());
 
-		await storage.fetchUsageReports();
+		await storage.usage.reports();
 		// Only the expired Max row (id 2) was rewritten; the Team row was never touched.
 		expect(updates).toEqual([2]);
 	});

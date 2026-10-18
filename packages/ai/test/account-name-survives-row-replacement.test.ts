@@ -54,9 +54,9 @@ describe("account names are keyed by identity, not by credential row", () => {
 		dbPath = path.join(tempDir, "agent.db");
 		store = await SqliteAuthCredentialStore.open(dbPath);
 		authStorage = new AuthStorage(store);
-		await authStorage.set(PROVIDER, [originalCredential]);
-		originalId = authStorage.listStoredCredentials(PROVIDER)[0]!.id;
-		expect(authStorage.setAccountName(PROVIDER, originalId, ACCOUNT_NAME)).toBe(true);
+		await authStorage.credentials.set(PROVIDER, [originalCredential]);
+		originalId = authStorage.credentials.list(PROVIDER)[0]!.id;
+		expect(authStorage.credentials.setAccountName(PROVIDER, originalId, ACCOUNT_NAME)).toBe(true);
 	});
 
 	afterEach(async () => {
@@ -79,8 +79,8 @@ describe("account names are keyed by identity, not by credential row", () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
 
-		expect(await storage.removeCredential(PROVIDER, originalId)).toBe(true);
-		storage.upsertCredential(PROVIDER, {
+		expect(await storage.credentials.removeById(PROVIDER, originalId)).toBe(true);
+		storage.credentials.upsert(PROVIDER, {
 			type: "oauth",
 			access: "access-after-relogin",
 			refresh: "refresh-after-relogin",
@@ -89,14 +89,14 @@ describe("account names are keyed by identity, not by credential row", () => {
 			email: "stable@example.com",
 		});
 
-		const rows = storage.listStoredCredentials(PROVIDER);
+		const rows = storage.credentials.list(PROVIDER);
 		expect(rows).toHaveLength(1);
 		const replacedId = rows[0]!.id;
 		// The row really was replaced; without this the test could pass on an update in place.
 		expect(replacedId).not.toBe(originalId);
 		expect(rows[0]?.credential).toMatchObject({ access: "access-after-relogin" });
 
-		expect(storage.getAccountName(PROVIDER, replacedId)).toBe(ACCOUNT_NAME);
+		expect(storage.credentials.getAccountName(PROVIDER, replacedId)).toBe(ACCOUNT_NAME);
 	});
 
 	/**
@@ -111,7 +111,7 @@ describe("account names are keyed by identity, not by credential row", () => {
 		const payloadBefore = readCredentialPayloads(dbPath);
 		expect(payloadBefore).toHaveLength(1);
 
-		const result = await storage.refreshStoredOAuthCredential(PROVIDER, {
+		const result = await storage.oauth.refreshStored(PROVIDER, {
 			forceRefresh: true,
 			credentialFromRow: credential => credential,
 			refresh: async () => ({
@@ -130,7 +130,7 @@ describe("account names are keyed by identity, not by credential row", () => {
 		expect(payloadAfter[0]?.data).not.toBe(payloadBefore[0]?.data);
 		expect(payloadAfter[0]?.data).toContain("access-rotated");
 
-		expect(storage.getAccountName(PROVIDER, originalId)).toBe(ACCOUNT_NAME);
+		expect(storage.credentials.getAccountName(PROVIDER, originalId)).toBe(ACCOUNT_NAME);
 	});
 
 	/**
@@ -138,11 +138,11 @@ describe("account names are keyed by identity, not by credential row", () => {
 	 * same provider must come back unnamed, so the manager can still offer to name it rather
 	 * than showing two rows with the same label.
 	 */
-	test("a sibling account of the same provider does not inherit the name", () => {
+	test("a sibling account of the same provider does not inherit the name", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
 
-		storage.upsertCredential(PROVIDER, {
+		await storage.credentials.upsert(PROVIDER, {
 			type: "oauth",
 			access: "access-sibling",
 			refresh: "refresh-sibling",
@@ -151,12 +151,12 @@ describe("account names are keyed by identity, not by credential row", () => {
 			email: "sibling@example.com",
 		});
 
-		const rows = storage.listStoredCredentials(PROVIDER);
+		const rows = storage.credentials.list(PROVIDER);
 		expect(rows).toHaveLength(2);
 		const siblingId = rows.find(row => row.id !== originalId)?.id;
 		if (siblingId === undefined) throw new Error("sibling credential missing");
 
-		expect(storage.getAccountName(PROVIDER, originalId)).toBe(ACCOUNT_NAME);
-		expect(storage.getAccountName(PROVIDER, siblingId)).toBeUndefined();
+		expect(storage.credentials.getAccountName(PROVIDER, originalId)).toBe(ACCOUNT_NAME);
+		expect(storage.credentials.getAccountName(PROVIDER, siblingId)).toBeUndefined();
 	});
 });

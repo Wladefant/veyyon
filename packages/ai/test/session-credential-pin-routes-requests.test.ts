@@ -52,7 +52,7 @@ describe("AuthStorage.pinSessionCredential routes this session's requests", () =
 	});
 
 	async function seedTwoAccounts(storage: AuthStorage, provider: string, tag: string): Promise<[number, number]> {
-		await storage.set(provider, [
+		await storage.credentials.set(provider, [
 			{
 				type: "oauth",
 				access: `${tag}-access-first`,
@@ -70,7 +70,7 @@ describe("AuthStorage.pinSessionCredential routes this session's requests", () =
 				email: `${tag}.second@example.com`,
 			},
 		]);
-		const rows = storage.listStoredCredentials(provider);
+		const rows = storage.credentials.list(provider);
 		expect(rows).toHaveLength(2);
 		return [rows[0]!.id, rows[1]!.id];
 	}
@@ -93,7 +93,7 @@ describe("AuthStorage.pinSessionCredential routes this session's requests", () =
 		const pinnedSession = "session-pinned";
 		const siblingSession = "session-untouched";
 
-		const bearerBeforePin = await storage.getApiKey(PROVIDER, pinnedSession);
+		const bearerBeforePin = await storage.keys.get(PROVIDER, pinnedSession);
 		const servedFirst = bearerBeforePin === "pin-access-first";
 		expect(bearerBeforePin).toBe(servedFirst ? "pin-access-first" : "pin-access-second");
 		// Pin the account this session is NOT on, so a no-op pin cannot pass.
@@ -103,18 +103,18 @@ describe("AuthStorage.pinSessionCredential routes this session's requests", () =
 			? { accountId: "pin-account-second", email: "pin.second@example.com" }
 			: { accountId: "pin-account-first", email: "pin.first@example.com" };
 
-		const siblingBearerBefore = await storage.getApiKey(PROVIDER, siblingSession);
-		const siblingIdentityBefore = storage.getOAuthAccountIdentity(PROVIDER, siblingSession);
-		const siblingRoutingBefore = storage.sessionCredentialRouting(PROVIDER, siblingSession);
+		const siblingBearerBefore = await storage.keys.get(PROVIDER, siblingSession);
+		const siblingIdentityBefore = storage.oauth.identity(PROVIDER, siblingSession);
+		const siblingRoutingBefore = storage.sessions.routing(PROVIDER, siblingSession);
 
-		expect(storage.pinSessionCredential(PROVIDER, pinnedSession, targetId)).toBe(true);
+		expect(storage.sessions.pin(PROVIDER, pinnedSession, targetId)).toBe(true);
 
-		expect(await storage.getApiKey(PROVIDER, pinnedSession)).toBe(targetBearer);
-		expect(storage.getOAuthAccountIdentity(PROVIDER, pinnedSession)).toEqual(targetIdentity);
+		expect(await storage.keys.get(PROVIDER, pinnedSession)).toBe(targetBearer);
+		expect(storage.oauth.identity(PROVIDER, pinnedSession)).toEqual(targetIdentity);
 
-		expect(await storage.getApiKey(PROVIDER, siblingSession)).toBe(siblingBearerBefore);
-		expect(storage.getOAuthAccountIdentity(PROVIDER, siblingSession)).toEqual(siblingIdentityBefore);
-		expect(storage.sessionCredentialRouting(PROVIDER, siblingSession)).toEqual(siblingRoutingBefore);
+		expect(await storage.keys.get(PROVIDER, siblingSession)).toBe(siblingBearerBefore);
+		expect(storage.oauth.identity(PROVIDER, siblingSession)).toEqual(siblingIdentityBefore);
+		expect(storage.sessions.routing(PROVIDER, siblingSession)).toEqual(siblingRoutingBefore);
 		expect(siblingRoutingBefore?.selectedCredentialId).toBeUndefined();
 	});
 
@@ -134,17 +134,17 @@ describe("AuthStorage.pinSessionCredential routes this session's requests", () =
 		await seedTwoAccounts(storage, OTHER_PROVIDER, "other");
 		const sessionId = "session-two-providers";
 
-		const otherBearerBefore = await storage.getApiKey(OTHER_PROVIDER, sessionId);
-		const otherIdentityBefore = storage.getOAuthAccountIdentity(OTHER_PROVIDER, sessionId);
-		const otherRoutingBefore = storage.sessionCredentialRouting(OTHER_PROVIDER, sessionId);
+		const otherBearerBefore = await storage.keys.get(OTHER_PROVIDER, sessionId);
+		const otherIdentityBefore = storage.oauth.identity(OTHER_PROVIDER, sessionId);
+		const otherRoutingBefore = storage.sessions.routing(OTHER_PROVIDER, sessionId);
 		expect(otherRoutingBefore?.selectedCredentialId).toBeUndefined();
 
-		expect(storage.pinSessionCredential(PROVIDER, sessionId, secondId)).toBe(true);
-		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe("pin-access-second");
+		expect(storage.sessions.pin(PROVIDER, sessionId, secondId)).toBe(true);
+		expect(await storage.keys.get(PROVIDER, sessionId)).toBe("pin-access-second");
 
-		expect(storage.sessionCredentialRouting(OTHER_PROVIDER, sessionId)).toEqual(otherRoutingBefore);
-		expect(await storage.getApiKey(OTHER_PROVIDER, sessionId)).toBe(otherBearerBefore);
-		expect(storage.getOAuthAccountIdentity(OTHER_PROVIDER, sessionId)).toEqual(otherIdentityBefore);
+		expect(storage.sessions.routing(OTHER_PROVIDER, sessionId)).toEqual(otherRoutingBefore);
+		expect(await storage.keys.get(OTHER_PROVIDER, sessionId)).toBe(otherBearerBefore);
+		expect(storage.oauth.identity(OTHER_PROVIDER, sessionId)).toEqual(otherIdentityBefore);
 	});
 
 	/**
@@ -161,9 +161,9 @@ describe("AuthStorage.pinSessionCredential routes this session's requests", () =
 
 		// Establish a routing record BEFORE pinning, so the pin has an existing record to
 		// outrank rather than an empty slot; then pin the account that record is not on.
-		const bearerBeforePin = await storage.getApiKey(PROVIDER, sessionId);
+		const bearerBeforePin = await storage.keys.get(PROVIDER, sessionId);
 		const servedFirst = bearerBeforePin === "pin-access-first";
-		expect(storage.sessionCredentialRouting(PROVIDER, sessionId)).toEqual({
+		expect(storage.sessions.routing(PROVIDER, sessionId)).toEqual({
 			provider: PROVIDER,
 			activeCredentialId: servedFirst ? firstId : secondId,
 		});
@@ -173,13 +173,13 @@ describe("AuthStorage.pinSessionCredential routes this session's requests", () =
 			? { accountId: "pin-account-second", email: "pin.second@example.com" }
 			: { accountId: "pin-account-first", email: "pin.first@example.com" };
 
-		expect(storage.pinSessionCredential(PROVIDER, sessionId, targetId)).toBe(true);
+		expect(storage.sessions.pin(PROVIDER, sessionId, targetId)).toBe(true);
 
 		for (let attempt = 0; attempt < 3; attempt++) {
-			expect(await storage.getApiKey(PROVIDER, sessionId)).toBe(targetBearer);
+			expect(await storage.keys.get(PROVIDER, sessionId)).toBe(targetBearer);
 		}
-		expect(storage.getOAuthAccountIdentity(PROVIDER, sessionId)).toEqual(targetIdentity);
-		expect(storage.sessionCredentialRouting(PROVIDER, sessionId)).toEqual({
+		expect(storage.oauth.identity(PROVIDER, sessionId)).toEqual(targetIdentity);
+		expect(storage.sessions.routing(PROVIDER, sessionId)).toEqual({
 			provider: PROVIDER,
 			selectedCredentialId: targetId,
 			activeCredentialId: targetId,

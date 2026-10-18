@@ -59,7 +59,7 @@ describe("with load balancing off one account serves a provider", () => {
 	});
 
 	async function seedOAuth(storage: AuthStorage): Promise<{ firstId: number; secondId: number }> {
-		await storage.set(PROVIDER, [
+		await storage.credentials.set(PROVIDER, [
 			{
 				type: "oauth",
 				access: "access-first",
@@ -77,12 +77,12 @@ describe("with load balancing off one account serves a provider", () => {
 				email: "second@example.com",
 			},
 		]);
-		const rows = storage.listStoredCredentials(PROVIDER);
+		const rows = storage.credentials.list(PROVIDER);
 		return { firstId: rows[0]!.id, secondId: rows[1]!.id };
 	}
 
 	async function seedApiKeys(storage: AuthStorage): Promise<void> {
-		await storage.set(PROVIDER, [
+		await storage.credentials.set(PROVIDER, [
 			{ type: "api_key", key: "key-first" },
 			{ type: "api_key", key: "key-second" },
 		]);
@@ -94,9 +94,9 @@ describe("with load balancing off one account serves a provider", () => {
 		await seedOAuth(storage);
 
 		const served = new Set<string | undefined>();
-		for (const sessionId of SESSION_IDS) served.add(await storage.getApiKey(PROVIDER, sessionId));
-		served.add(await storage.getApiKey(PROVIDER));
-		served.add(await storage.getApiKey(PROVIDER));
+		for (const sessionId of SESSION_IDS) served.add(await storage.keys.get(PROVIDER, sessionId));
+		served.add(await storage.keys.get(PROVIDER));
+		served.add(await storage.keys.get(PROVIDER));
 
 		expect([...served]).toEqual(["access-first"]);
 	});
@@ -107,9 +107,9 @@ describe("with load balancing off one account serves a provider", () => {
 		await seedApiKeys(storage);
 
 		const served = new Set<string | undefined>();
-		for (const sessionId of SESSION_IDS) served.add(await storage.getApiKey(PROVIDER, sessionId));
-		served.add(await storage.getApiKey(PROVIDER));
-		served.add(await storage.getApiKey(PROVIDER));
+		for (const sessionId of SESSION_IDS) served.add(await storage.keys.get(PROVIDER, sessionId));
+		served.add(await storage.keys.get(PROVIDER));
+		served.add(await storage.keys.get(PROVIDER));
 
 		expect([...served]).toEqual(["key-first"]);
 	});
@@ -124,8 +124,8 @@ describe("with load balancing off one account serves a provider", () => {
 		const { firstId } = await seedOAuth(storage);
 		const sessionId = SESSION_IDS[0]!;
 
-		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe("access-first");
-		const exhausted = await storage.markUsageLimitReached(PROVIDER, sessionId, {
+		expect(await storage.keys.get(PROVIDER, sessionId)).toBe("access-first");
+		const exhausted = await storage.limits.markReached(PROVIDER, sessionId, {
 			credentialId: firstId,
 			retryAfterMs: 60_000,
 		});
@@ -135,10 +135,10 @@ describe("with load balancing off one account serves a provider", () => {
 			quotaMessage: `Quota reached on ${PROVIDER} account first@example.com; resets ${new Date(NOW_MS + 60_000).toISOString()}. 1 other account available but load balancing is off, so Veyyon waits for this account.`,
 		});
 
-		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe("access-first");
-		expect(await storage.getApiKey(PROVIDER, "another-session")).toBe("access-first");
-		expect(await storage.getApiKey(PROVIDER)).toBe("access-first");
-		const routing = storage.sessionCredentialRouting(PROVIDER, sessionId);
+		expect(await storage.keys.get(PROVIDER, sessionId)).toBe("access-first");
+		expect(await storage.keys.get(PROVIDER, "another-session")).toBe("access-first");
+		expect(await storage.keys.get(PROVIDER)).toBe("access-first");
+		const routing = storage.sessions.routing(PROVIDER, sessionId);
 		expect(routing?.activeCredentialId).toBe(firstId);
 	});
 
@@ -147,13 +147,13 @@ describe("with load balancing off one account serves a provider", () => {
 		const storage = new AuthStorage(store, { loadBalancing: false });
 		await seedApiKeys(storage);
 		const sessionId = SESSION_IDS[1]!;
-		const firstId = storage.listStoredCredentials(PROVIDER)[0]!.id;
+		const firstId = storage.credentials.list(PROVIDER)[0]!.id;
 
-		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe("key-first");
-		await storage.markUsageLimitReached(PROVIDER, sessionId, { credentialId: firstId, retryAfterMs: 60_000 });
+		expect(await storage.keys.get(PROVIDER, sessionId)).toBe("key-first");
+		await storage.limits.markReached(PROVIDER, sessionId, { credentialId: firstId, retryAfterMs: 60_000 });
 
-		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe("key-first");
-		expect(await storage.getApiKey(PROVIDER)).toBe("key-first");
+		expect(await storage.keys.get(PROVIDER, sessionId)).toBe("key-first");
+		expect(await storage.keys.get(PROVIDER)).toBe("key-first");
 	});
 
 	/** A usage report for one account: the first window near its limit or barely touched. */
@@ -204,16 +204,16 @@ describe("with load balancing off one account serves a provider", () => {
 		const storage = headroomContest(true);
 		await seedOAuth(storage);
 
-		expect(await storage.getApiKey(PROVIDER, SESSION_IDS[2])).toBe("access-second");
+		expect(await storage.keys.get(PROVIDER, SESSION_IDS[2])).toBe("access-second");
 	});
 
 	test("the same contest moves nothing with the setting off", async () => {
 		const storage = headroomContest(false);
 		await seedOAuth(storage);
 
-		expect(await storage.getApiKey(PROVIDER, SESSION_IDS[2])).toBe("access-first");
-		expect(await storage.getApiKey(PROVIDER, SESSION_IDS[3])).toBe("access-first");
-		expect(await storage.getApiKey(PROVIDER)).toBe("access-first");
+		expect(await storage.keys.get(PROVIDER, SESSION_IDS[2])).toBe("access-first");
+		expect(await storage.keys.get(PROVIDER, SESSION_IDS[3])).toBe("access-first");
+		expect(await storage.keys.get(PROVIDER)).toBe("access-first");
 	});
 
 	test("the account card predicts the account that will serve, blocked or not", async () => {
@@ -222,12 +222,12 @@ describe("with load balancing off one account serves a provider", () => {
 		const { firstId } = await seedOAuth(storage);
 
 		for (const sessionId of SESSION_IDS.slice(0, 4)) {
-			expect(storage.sessionCredentialRouting(PROVIDER, sessionId)?.activeCredentialId).toBe(firstId);
+			expect(storage.sessions.routing(PROVIDER, sessionId)?.activeCredentialId).toBe(firstId);
 		}
-		expect(storage.sessionCredentialRouting(PROVIDER, undefined)?.activeCredentialId).toBe(firstId);
+		expect(storage.sessions.routing(PROVIDER, undefined)?.activeCredentialId).toBe(firstId);
 
-		await storage.markUsageLimitReached(PROVIDER, SESSION_IDS[0], { credentialId: firstId, retryAfterMs: 60_000 });
-		expect(storage.sessionCredentialRouting(PROVIDER, SESSION_IDS[5])?.activeCredentialId).toBe(firstId);
+		await storage.limits.markReached(PROVIDER, SESSION_IDS[0], { credentialId: firstId, retryAfterMs: 60_000 });
+		expect(storage.sessions.routing(PROVIDER, SESSION_IDS[5])?.activeCredentialId).toBe(firstId);
 	});
 
 	/** A refused grant cannot serve, so it moves, and the move is announced rather than silent. */
@@ -238,14 +238,14 @@ describe("with load balancing off one account serves a provider", () => {
 		const { firstId, secondId } = await seedOAuth(storage);
 		const sessionId = SESSION_IDS[6]!;
 
-		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe("access-first");
-		await storage.rotateSessionCredential(PROVIDER, sessionId, {
+		expect(await storage.keys.get(PROVIDER, sessionId)).toBe("access-first");
+		await storage.limits.rotate(PROVIDER, sessionId, {
 			credentialId: firstId,
 			error: Object.assign(new Error("invalid_grant: token revoked"), { status: 401 }),
 		});
 
-		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe("access-second");
-		expect(await storage.getApiKey(PROVIDER, "fresh-session")).toBe("access-second");
+		expect(await storage.keys.get(PROVIDER, sessionId)).toBe("access-second");
+		expect(await storage.keys.get(PROVIDER, "fresh-session")).toBe("access-second");
 		expect(events.map(e => [e.from.credentialId, e.to.credentialId])).toEqual([[firstId, secondId]]);
 	});
 
@@ -257,11 +257,11 @@ describe("with load balancing off one account serves a provider", () => {
 		const { firstId } = await seedOAuth(storage);
 		const sessionId = SESSION_IDS[7]!;
 
-		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe("access-first");
-		await storage.markUsageLimitReached(PROVIDER, sessionId, { credentialId: firstId, retryAfterMs: 60_000 });
-		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe("access-first");
+		expect(await storage.keys.get(PROVIDER, sessionId)).toBe("access-first");
+		await storage.limits.markReached(PROVIDER, sessionId, { credentialId: firstId, retryAfterMs: 60_000 });
+		expect(await storage.keys.get(PROVIDER, sessionId)).toBe("access-first");
 
 		enabled = true;
-		expect(await storage.getApiKey(PROVIDER, sessionId)).toBe("access-second");
+		expect(await storage.keys.get(PROVIDER, sessionId)).toBe("access-second");
 	});
 });

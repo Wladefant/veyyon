@@ -49,7 +49,7 @@ describe("session credential pin lifecycle", () => {
 	});
 
 	async function seedTwoAccounts(storage: AuthStorage): Promise<[number, number]> {
-		await storage.set(PROVIDER, [
+		await storage.credentials.set(PROVIDER, [
 			{
 				type: "oauth",
 				access: "access-first",
@@ -67,7 +67,7 @@ describe("session credential pin lifecycle", () => {
 				email: "second@example.com",
 			},
 		]);
-		const rows = storage.listStoredCredentials(PROVIDER);
+		const rows = storage.credentials.list(PROVIDER);
 		return [rows[0]!.id, rows[1]!.id];
 	}
 
@@ -76,7 +76,7 @@ describe("session credential pin lifecycle", () => {
 		store?.close();
 		store = await SqliteAuthCredentialStore.open(dbPath);
 		const reopened = new AuthStorage(store);
-		await reopened.reload();
+		await reopened.credentials.reload();
 		authStorage = reopened;
 		return reopened;
 	}
@@ -92,13 +92,13 @@ describe("session credential pin lifecycle", () => {
 		await seedTwoAccounts(storage);
 		const unknownId = 987_654;
 
-		const bearerBefore = await storage.getApiKey(PROVIDER, SESSION_ID);
-		const routingBefore = storage.sessionCredentialRouting(PROVIDER, SESSION_ID);
+		const bearerBefore = await storage.keys.get(PROVIDER, SESSION_ID);
+		const routingBefore = storage.sessions.routing(PROVIDER, SESSION_ID);
 
-		expect(storage.pinSessionCredential(PROVIDER, SESSION_ID, unknownId)).toBe(false);
+		expect(storage.sessions.pin(PROVIDER, SESSION_ID, unknownId)).toBe(false);
 
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe(bearerBefore);
-		expect(storage.sessionCredentialRouting(PROVIDER, SESSION_ID)).toEqual(routingBefore);
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe(bearerBefore);
+		expect(storage.sessions.routing(PROVIDER, SESSION_ID)).toEqual(routingBefore);
 		expect(routingBefore?.selectedCredentialId).toBeUndefined();
 	});
 
@@ -113,18 +113,18 @@ describe("session credential pin lifecycle", () => {
 		const storage = authStorage;
 		const [firstId, secondId] = await seedTwoAccounts(storage);
 
-		expect(storage.pinSessionCredential(PROVIDER, SESSION_ID, secondId)).toBe(true);
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe("access-second");
+		expect(storage.sessions.pin(PROVIDER, SESSION_ID, secondId)).toBe(true);
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe("access-second");
 
-		expect(await storage.removeCredential(PROVIDER, secondId)).toBe(true);
+		expect(await storage.credentials.removeById(PROVIDER, secondId)).toBe(true);
 
-		expect(storage.sessionCredentialRouting(PROVIDER, SESSION_ID)?.selectedCredentialId).toBeUndefined();
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe("access-first");
-		expect(storage.getOAuthAccountIdentity(PROVIDER, SESSION_ID)).toEqual({
+		expect(storage.sessions.routing(PROVIDER, SESSION_ID)?.selectedCredentialId).toBeUndefined();
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe("access-first");
+		expect(storage.oauth.identity(PROVIDER, SESSION_ID)).toEqual({
 			accountId: "account-first",
 			email: "first@example.com",
 		});
-		expect(storage.listStoredCredentials(PROVIDER).map(row => row.id)).toEqual([firstId]);
+		expect(storage.credentials.list(PROVIDER).map(row => row.id)).toEqual([firstId]);
 	});
 
 	/**
@@ -136,13 +136,13 @@ describe("session credential pin lifecycle", () => {
 	test("a pin survives a fresh AuthStorage over the same database", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const [, secondId] = await seedTwoAccounts(authStorage);
-		expect(authStorage.pinSessionCredential(PROVIDER, SESSION_ID, secondId)).toBe(true);
+		expect(authStorage.sessions.pin(PROVIDER, SESSION_ID, secondId)).toBe(true);
 
 		const reopened = await reopen();
 
-		expect(reopened.sessionCredentialRouting(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(secondId);
-		expect(await reopened.getApiKey(PROVIDER, SESSION_ID)).toBe("access-second");
-		expect(reopened.getOAuthAccountIdentity(PROVIDER, SESSION_ID)).toEqual({
+		expect(reopened.sessions.routing(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(secondId);
+		expect(await reopened.keys.get(PROVIDER, SESSION_ID)).toBe("access-second");
+		expect(reopened.oauth.identity(PROVIDER, SESSION_ID)).toEqual({
 			accountId: "account-second",
 			email: "second@example.com",
 		});
@@ -161,13 +161,13 @@ describe("session credential pin lifecycle", () => {
 	test("clearSessionCredentialPin removes the pin durably", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const [, secondId] = await seedTwoAccounts(authStorage);
-		expect(authStorage.pinSessionCredential(PROVIDER, SESSION_ID, secondId)).toBe(true);
-		expect(await authStorage.getApiKey(PROVIDER, SESSION_ID)).toBe("access-second");
+		expect(authStorage.sessions.pin(PROVIDER, SESSION_ID, secondId)).toBe(true);
+		expect(await authStorage.keys.get(PROVIDER, SESSION_ID)).toBe("access-second");
 
-		authStorage.clearSessionCredentialPin(PROVIDER, SESSION_ID);
+		authStorage.sessions.clearPin(PROVIDER, SESSION_ID);
 
 		const reopened = await reopen();
-		expect(reopened.sessionCredentialRouting(PROVIDER, SESSION_ID)).toEqual({
+		expect(reopened.sessions.routing(PROVIDER, SESSION_ID)).toEqual({
 			provider: PROVIDER,
 			activeCredentialId: secondId,
 		});

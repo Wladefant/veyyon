@@ -52,7 +52,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
 		store.saveOAuth("anthropic", mintOAuthCredential("a", Date.now() + 60_000));
 		storage = new AuthStorage(store);
-		await storage.reload();
+		await storage.credentials.reload();
 		handle = startAuthBroker({
 			storage,
 			bind: "127.0.0.1:0",
@@ -90,7 +90,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const initialGeneration = remote!.snapshot.generation;
 
 		// 2. Server-side upsert is delivered as an `entry` frame.
-		storage!.upsertCredential("anthropic", mintOAuthCredential("b", Date.now() + 120_000));
+		await storage!.credentials.upsert("anthropic", mintOAuthCredential("b", Date.now() + 120_000));
 		await waitUntil(() => remote!.snapshot.credentials.length === 2);
 		expect(remote!.snapshot.generation).toBeGreaterThan(initialGeneration);
 		const accessTokens = remote!.snapshot.credentials
@@ -104,7 +104,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			entry => entry.credential.type === "oauth" && entry.credential.access === "access-b",
 		)?.id;
 		expect(bId).toBeDefined();
-		const disabled = storage!.disableCredentialById(bId!, "revoked by test");
+		const disabled = await storage!.credentials.disable(bId!, "revoked by test");
 		expect(disabled).toBe(true);
 		await waitUntil(() => remote!.snapshot.credentials.length === 1);
 		expect(remote!.snapshot.credentials[0].id).not.toBe(bId);

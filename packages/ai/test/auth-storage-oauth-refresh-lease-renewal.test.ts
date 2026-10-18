@@ -101,7 +101,7 @@ describe("A lost refresh lease is reported to the caller, never thrown over the 
 		const store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
 		closers.push(store);
 		const authStorage = new AuthStorage(store);
-		await authStorage.set(provider, [
+		await authStorage.credentials.set(provider, [
 			{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: Date.now() - 60_000 },
 		]);
 		return { store, authStorage };
@@ -115,8 +115,7 @@ describe("A lost refresh lease is reported to the caller, never thrown over the 
 		installFakeTime();
 
 		const thrown = await driveFakeTime(
-			authStorage
-				.refreshStoredOAuthCredential(provider, {
+			authStorage.oauth.refreshStored(provider, {
 					credentialFromRow: credential => credential,
 					async refresh() {
 						// Outlast the renewal tick so the ownership loss is recorded BEFORE
@@ -170,13 +169,13 @@ describe("A lost refresh lease is reported to the caller, never thrown over the 
 				disabled.push(event);
 			},
 		});
-		await authStorage.set(provider, [
+		await authStorage.credentials.set(provider, [
 			{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: Date.now() - 60_000 },
 		]);
 		vi.spyOn(store, "renewCredentialRefreshLease").mockReturnValue(false);
 		installFakeTime();
 
-		const key = await driveFakeTime(authStorage.getApiKey(provider, "renewal-session"));
+		const key = await driveFakeTime(authStorage.keys.get(provider, "renewal-session"));
 
 		expect(key).toBeUndefined();
 		expect(disabled).toHaveLength(1);
@@ -197,7 +196,7 @@ describe("A lost refresh lease is reported to the caller, never thrown over the 
 		installFakeTime();
 
 		const result = await driveFakeTime(
-			authStorage.refreshStoredOAuthCredential(provider, {
+			authStorage.oauth.refreshStored(provider, {
 				credentialFromRow: credential => credential,
 				keepCredentialOnRefreshFailure: true,
 				onRefreshFailure: error => failures.push(error),
@@ -230,7 +229,7 @@ describe("A lost refresh lease is reported to the caller, never thrown over the 
 		const provider = "unit-oauth-renewal-definitive";
 		const { store, authStorage } = await seedExpiredCredential(provider);
 
-		const result = await authStorage.refreshStoredOAuthCredential(provider, {
+		const result = await authStorage.oauth.refreshStored(provider, {
 			credentialFromRow: credential => credential,
 			isDefinitiveFailure: error => error instanceof Error && error.message.includes("invalid_grant"),
 			async refresh() {
@@ -256,7 +255,7 @@ describe("A lost refresh lease is reported to the caller, never thrown over the 
 		const { store, authStorage } = await seedExpiredCredential(provider);
 		let refreshCalls = 0;
 
-		const result = await authStorage.refreshStoredOAuthCredential(provider, {
+		const result = await authStorage.oauth.refreshStored(provider, {
 			credentialFromRow: credential => credential,
 			async refresh(credential) {
 				refreshCalls++;
@@ -286,8 +285,7 @@ describe("A lost refresh lease is reported to the caller, never thrown over the 
 		const provider = "unit-oauth-renewal-release";
 		const { store, authStorage } = await seedExpiredCredential(provider);
 
-		await authStorage
-			.refreshStoredOAuthCredential(provider, {
+		await authStorage.oauth.refreshStored(provider, {
 				credentialFromRow: credential => credential,
 				async refresh() {
 					throw new Error("transient_failure");
@@ -295,7 +293,7 @@ describe("A lost refresh lease is reported to the caller, never thrown over the 
 			})
 			.catch(() => undefined);
 
-		const retry = await authStorage.refreshStoredOAuthCredential(provider, {
+		const retry = await authStorage.oauth.refreshStored(provider, {
 			credentialFromRow: credential => credential,
 			async refresh(credential) {
 				return { ...credential, access: "retry-access", refresh: "retry-refresh", expires: Date.now() + 3_600_000 };
@@ -319,7 +317,7 @@ describe("A lost refresh lease is reported to the caller, never thrown over the 
 		installFakeTime();
 
 		const result = await driveFakeTime(
-			authStorage.refreshStoredOAuthCredential(provider, {
+			authStorage.oauth.refreshStored(provider, {
 				credentialFromRow: credential => credential,
 				async refresh(credential) {
 					return {

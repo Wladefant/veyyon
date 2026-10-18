@@ -53,7 +53,7 @@ describe("AuthBrokerRefresher", () => {
 		});
 
 		storage = new AuthStorage(store!);
-		await storage.reload();
+		await storage.credentials.reload();
 		const refresher = new AuthBrokerRefresher({
 			storage,
 			refreshSkewMs: skew,
@@ -83,7 +83,7 @@ describe("AuthBrokerRefresher", () => {
 		});
 
 		storage = new AuthStorage(store!);
-		await storage.reload();
+		await storage.credentials.reload();
 		const refresher = new AuthBrokerRefresher({
 			storage,
 			refreshSkewMs: skew,
@@ -106,10 +106,10 @@ describe("AuthBrokerRefresher", () => {
 
 		storage = new AuthStorage(store!);
 		const disableEvents: string[] = [];
-		storage.onCredentialDisabled(event => {
+		storage.credentials.onDisabled(event => {
 			disableEvents.push(event.disabledCause);
 		});
-		await storage.reload();
+		await storage.credentials.reload();
 		const refresher = new AuthBrokerRefresher({
 			storage,
 			refreshSkewMs: 5 * 60_000,
@@ -120,7 +120,7 @@ describe("AuthBrokerRefresher", () => {
 		expect(disableEvents).toHaveLength(1);
 		expect(disableEvents[0]).toMatch(/invalid_grant/);
 		// The active row is now disabled; storage.exportSnapshot reflects it.
-		expect(storage.exportSnapshot().credentials).toHaveLength(0);
+		expect(storage.credentials.snapshot().credentials).toHaveLength(0);
 	});
 
 	test("keeps credentials on transient failures (timeout/network)", async () => {
@@ -135,10 +135,10 @@ describe("AuthBrokerRefresher", () => {
 
 		storage = new AuthStorage(store!);
 		const disableEvents: string[] = [];
-		storage.onCredentialDisabled(event => {
+		storage.credentials.onDisabled(event => {
 			disableEvents.push(event.disabledCause);
 		});
-		await storage.reload();
+		await storage.credentials.reload();
 		const refresher = new AuthBrokerRefresher({
 			storage,
 			refreshSkewMs: 5 * 60_000,
@@ -147,7 +147,7 @@ describe("AuthBrokerRefresher", () => {
 		await refresher.tick();
 
 		expect(disableEvents).toHaveLength(0);
-		expect(storage.exportSnapshot().credentials).toHaveLength(1);
+		expect(storage.credentials.snapshot().credentials).toHaveLength(1);
 	});
 
 	test("does not disable a credential a peer rotated during the refresh (CAS)", async () => {
@@ -160,10 +160,10 @@ describe("AuthBrokerRefresher", () => {
 		});
 		storage = new AuthStorage(store!);
 		const disableEvents: string[] = [];
-		storage.onCredentialDisabled(event => {
+		storage.credentials.onDisabled(event => {
 			disableEvents.push(event.disabledCause);
 		});
-		await storage.reload();
+		await storage.credentials.reload();
 		const id = store!.listAuthCredentials("anthropic")[0]!.id;
 
 		// Our refresh fails with a dead-grant error, but a peer (another process /
@@ -215,8 +215,8 @@ describe("AuthBrokerRefresher", () => {
 		}
 
 		storage = new AuthStorage(store!);
-		await storage.reload();
-		const snapshot = storage.exportSnapshot();
+		await storage.credentials.reload();
+		const snapshot = storage.credentials.snapshot();
 		expect(snapshot.credentials).toHaveLength(credentialCount);
 		const firstTarget = snapshot.credentials[0]!;
 		if (firstTarget.credential.type !== "oauth") throw new Error("expected OAuth target");
@@ -267,7 +267,7 @@ describe("AuthBrokerRefresher", () => {
 		// The overlapping sweep returns instead of scheduling a duplicate batch.
 		await refresher.tick();
 		// A direct request for the active first row must join its existing refresh.
-		const sameRowRefresh = storage.refreshCredentialById(firstTarget.id).catch(() => undefined);
+		const sameRowRefresh = storage.oauth.refresh(firstTarget.id).catch(() => undefined);
 
 		failFirst.resolve();
 		await queuedAfterFailure.promise;

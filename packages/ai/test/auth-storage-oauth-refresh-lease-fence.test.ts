@@ -116,18 +116,18 @@ describe("The main OAuth refresh path is fenced across processes so a single-use
 			},
 		});
 
-		await authA.set(provider, [
+		await authA.credentials.set(provider, [
 			{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: expired },
 		]);
 		// Process B learns about the same row from disk.
-		await authB.reload();
+		await authB.credentials.reload();
 		const credentialId = storeA.listAuthCredentials(provider)[0]!.id;
 		expect(storeB.listAuthCredentials(provider)[0]?.id).toBe(credentialId);
 
 		// Both processes hit getApiKey at the same time on the expired credential.
 		const [keyA, keyB] = await Promise.all([
-			authA.getApiKey(provider, "session-a"),
-			authB.getApiKey(provider, "session-b"),
+			authA.keys.get(provider, "session-a"),
+			authB.keys.get(provider, "session-b"),
 		]);
 
 		// Both get the live rotated token...
@@ -185,7 +185,7 @@ describe("The main OAuth refresh path is fenced across processes so a single-use
 		const authA = new AuthStorage(storeA);
 		// Seed an EXPIRED credential, then have a "peer" rotate it to a fresh token on
 		// disk before A ever refreshes.
-		await authA.set(provider, [
+		await authA.credentials.set(provider, [
 			{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: Date.now() - 60_000 },
 		]);
 		const credentialId = storeA.listAuthCredentials(provider)[0]!.id;
@@ -198,7 +198,7 @@ describe("The main OAuth refresh path is fenced across processes so a single-use
 
 		// A still holds the stale token in memory; its refresh must observe the peer's
 		// fresh rotation on disk and reuse it rather than replay the dead single-use token.
-		const key = await authA.getApiKey(provider, "session-a");
+		const key = await authA.keys.get(provider, "session-a");
 		expect(key).toBe("peer-rotated-access");
 		expect(refreshCalls).toBe(0);
 	});
@@ -241,7 +241,7 @@ describe("The main OAuth refresh path is fenced across processes so a single-use
 					disabled.push(e);
 				},
 			});
-			await authStorage.set(provider, [
+			await authStorage.credentials.set(provider, [
 				{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: Date.now() - 60_000 },
 			]);
 			const credentialId = store.listAuthCredentials(provider)[0]!.id;
@@ -251,7 +251,7 @@ describe("The main OAuth refresh path is fenced across processes so a single-use
 			// provider has already issued the rotated token and killed the old one.
 			vi.spyOn(store, "renewCredentialRefreshLease").mockReturnValue(false);
 
-			const key = await authStorage.getApiKey(provider, "lease-lost-session");
+			const key = await authStorage.keys.get(provider, "lease-lost-session");
 
 			// The request still succeeds with the freshly rotated token: losing the lease
 			// must not turn a completed rotation into a failure.
@@ -283,13 +283,13 @@ describe("The main OAuth refresh path is fenced across processes so a single-use
 			const store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
 			closers.push(store);
 			const authStorage = new AuthStorage(store);
-			await authStorage.set(provider, [
+			await authStorage.credentials.set(provider, [
 				{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: Date.now() - 60_000 },
 			]);
 
 			vi.spyOn(store, "renewCredentialRefreshLease").mockReturnValue(false);
 
-			const result = await authStorage.refreshStoredOAuthCredential(provider, {
+			const result = await authStorage.oauth.refreshStored(provider, {
 				credentialFromRow: credential => credential,
 				async refresh(credential) {
 					await Bun.sleep(LEASE_RENEW_TICK_MS + 400);
@@ -345,7 +345,7 @@ describe("The main OAuth refresh path is fenced across processes so a single-use
 		const peerStore = await SqliteAuthCredentialStore.open(dbPath);
 		closers.push(store, peerStore);
 		const authStorage = new AuthStorage(store);
-		await authStorage.set(provider, [
+		await authStorage.credentials.set(provider, [
 			{ type: "oauth", access: "live-access", refresh: "live-refresh", expires: Date.now() + 60_000 },
 		]);
 		const credentialId = store.listAuthCredentials(provider)[0]!.id;
@@ -358,7 +358,7 @@ describe("The main OAuth refresh path is fenced across processes so a single-use
 		// A forced refresh succeeds — proof the grant is alive — so it must clear the
 		// peer's disable when it persists (the gap the fix closed: force-refresh used the
 		// non-re-enabling write and left a live token on a disabled row).
-		const entry = await authStorage.forceRefreshCredentialById(credentialId);
+		const entry = await authStorage.oauth.refresh(credentialId);
 		expect(entry.credential.type).toBe("oauth");
 
 		const active = store.listAuthCredentials(provider);
@@ -396,11 +396,11 @@ describe("The main OAuth refresh path is fenced across processes so a single-use
 		// to the plain refresh rather than dereferencing the absent lease API.
 		const store = new NoLeaseMemoryStore();
 		const authStorage = new AuthStorage(store);
-		await authStorage.set(provider, [
+		await authStorage.credentials.set(provider, [
 			{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: Date.now() - 60_000 },
 		]);
 
-		const key = await authStorage.getApiKey(provider, "session");
+		const key = await authStorage.keys.get(provider, "session");
 		expect(key).toBe("fallback-access");
 		expect(refreshCalls).toBe(1);
 		const active = store.listAuthCredentials(provider);

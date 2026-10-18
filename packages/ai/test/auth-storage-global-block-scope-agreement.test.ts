@@ -77,15 +77,15 @@ async function blockedUntilAfterRestart(
 	const [row] = store.listAuthCredentials(provider);
 	if (!row) throw new Error("expected credential row");
 	const writer = new AuthStorage(store);
-	await writer.reload();
-	writer.upsertCredentialBlock({ credentialId: row.id, providerKey, blockScope: writeScope, blockedUntilMs });
+	await writer.credentials.reload();
+	writer.blocks.upsert({ credentialId: row.id, providerKey, blockScope: writeScope, blockedUntilMs });
 	writer.close();
 
 	const reopened = await SqliteAuthCredentialStore.open(dbPath);
 	const reader = new AuthStorage(reopened);
-	await reader.reload();
+	await reader.credentials.reload();
 	try {
-		return reader.credentialBlockedUntil(provider, providerKey, 0, readScope);
+		return reader.blocks.blockedUntil(provider, providerKey, 0, readScope);
 	} finally {
 		reader.close();
 	}
@@ -134,14 +134,14 @@ describe("credential block visibility across scopes", () => {
 		const [row] = store.listAuthCredentials("anthropic");
 		if (!row) throw new Error("expected credential row");
 		const writer = new AuthStorage(store);
-		await writer.reload();
-		writer.upsertCredentialBlock({
+		await writer.credentials.reload();
+		writer.blocks.upsert({
 			credentialId: row.id,
 			providerKey: "anthropic:oauth",
 			blockScope: "",
 			blockedUntilMs: FUTURE_BLOCK_MS,
 		});
-		writer.upsertCredentialBlock({
+		writer.blocks.upsert({
 			credentialId: row.id,
 			providerKey: "anthropic:oauth",
 			blockScope: "tier:fable",
@@ -151,9 +151,9 @@ describe("credential block visibility across scopes", () => {
 
 		const reopened = await SqliteAuthCredentialStore.open(dbPath);
 		const reader = new AuthStorage(reopened);
-		await reader.reload();
+		await reader.credentials.reload();
 		try {
-			expect(reader.credentialBlockedUntil("anthropic", "anthropic:oauth", 0, "tier:fable")).toBe(
+			expect(reader.blocks.blockedUntil("anthropic", "anthropic:oauth", 0, "tier:fable")).toBe(
 				FUTURE_BLOCK_MS + 60_000,
 			);
 		} finally {

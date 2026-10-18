@@ -96,12 +96,12 @@ describe("the account that was chosen", () => {
 			options?.loadBalancing === undefined
 				? new AuthStorage(store)
 				: new AuthStorage(store, { loadBalancing: options.loadBalancing });
-		await storage.reload();
+		await storage.credentials.reload();
 		const heldId = store.listAuthCredentials(PROVIDER)[0]!.id;
 		if (options?.choose !== false) {
-			expect(storage.selectProviderCredential(PROVIDER, heldId, { sessionId: options?.sessionId })).toBe(true);
+			expect(storage.sessions.selectProviderCredential(PROVIDER, heldId, { sessionId: options?.sessionId })).toBe(true);
 		}
-		storage.upsertCredentialBlock({
+		storage.blocks.upsert({
 			credentialId: heldId,
 			providerKey: OAUTH_KEY,
 			blockScope: "",
@@ -115,7 +115,7 @@ describe("the account that was chosen", () => {
 		// and the value the shipped setting resolves to.
 		const { storage } = await twoAccountsFirstHeld();
 		try {
-			expect(await storage.getApiKey(PROVIDER, "session-1")).toBe("access-chosen");
+			expect(await storage.keys.get(PROVIDER, "session-1")).toBe("access-chosen");
 		} finally {
 			storage.close();
 		}
@@ -126,7 +126,7 @@ describe("the account that was chosen", () => {
 		// may move among accounts nobody named; it never means a choice can be overruled.
 		const { storage } = await twoAccountsFirstHeld({ loadBalancing: true, sessionId: "session-1" });
 		try {
-			expect(await storage.getApiKey(PROVIDER, "session-1")).toBe("access-chosen");
+			expect(await storage.keys.get(PROVIDER, "session-1")).toBe("access-chosen");
 		} finally {
 			storage.close();
 		}
@@ -137,7 +137,7 @@ describe("the account that was chosen", () => {
 		// choice recorded, a hold still sorts the account behind a usable sibling.
 		const { storage } = await twoAccountsFirstHeld({ loadBalancing: true, choose: false });
 		try {
-			expect(await storage.getApiKey(PROVIDER, "session-1")).toBe("access-sibling");
+			expect(await storage.keys.get(PROVIDER, "session-1")).toBe("access-sibling");
 		} finally {
 			storage.close();
 		}
@@ -150,7 +150,7 @@ describe("the account that was chosen", () => {
 		// request went to the account that was chosen.
 		const { storage } = await twoAccountsFirstHeld();
 		try {
-			expect(await storage.peekApiKey(PROVIDER)).toBe("access-chosen");
+			expect(await storage.keys.peek(PROVIDER)).toBe("access-chosen");
 		} finally {
 			storage.close();
 		}
@@ -161,7 +161,7 @@ describe("the account that was chosen", () => {
 		// availability like everything else, so the held account is not what discovery reports.
 		const { storage } = await twoAccountsFirstHeld({ choose: false, loadBalancing: true });
 		try {
-			expect(await storage.peekApiKey(PROVIDER)).toBe("access-sibling");
+			expect(await storage.keys.peek(PROVIDER)).toBe("access-sibling");
 		} finally {
 			storage.close();
 		}
@@ -171,9 +171,9 @@ describe("the account that was chosen", () => {
 		const { storage } = await twoAccountsFirstHeld();
 		storage.close();
 		const reopened = new AuthStorage(await SqliteAuthCredentialStore.open(dbPath));
-		await reopened.reload();
+		await reopened.credentials.reload();
 		try {
-			expect(await reopened.getApiKey(PROVIDER, "session-2")).toBe("access-chosen");
+			expect(await reopened.keys.get(PROVIDER, "session-2")).toBe("access-chosen");
 		} finally {
 			reopened.close();
 		}
@@ -182,19 +182,19 @@ describe("the account that was chosen", () => {
 	it("can have its hold lifted, and the lift survives a reload", async () => {
 		const { storage, heldId } = await twoAccountsFirstHeld({ loadBalancing: false });
 		try {
-			expect(storage.credentialBlockedUntil(PROVIDER, OAUTH_KEY, 0)).toBe(HOLD_UNTIL_MS);
-			storage.clearCredentialBlocks(PROVIDER, heldId);
-			expect(storage.credentialBlockedUntil(PROVIDER, OAUTH_KEY, 0)).toBeUndefined();
-			expect(storage.listCredentialBlocks([heldId])).toEqual([]);
-			expect(await storage.getApiKey(PROVIDER, "session-3")).toBe("access-chosen");
+			expect(storage.blocks.blockedUntil(PROVIDER, OAUTH_KEY, 0)).toBe(HOLD_UNTIL_MS);
+			storage.blocks.clearAll(PROVIDER, heldId);
+			expect(storage.blocks.blockedUntil(PROVIDER, OAUTH_KEY, 0)).toBeUndefined();
+			expect(storage.blocks.list([heldId])).toEqual([]);
+			expect(await storage.keys.get(PROVIDER, "session-3")).toBe("access-chosen");
 		} finally {
 			storage.close();
 		}
 
 		const reopened = new AuthStorage(await SqliteAuthCredentialStore.open(dbPath), { loadBalancing: false });
-		await reopened.reload();
+		await reopened.credentials.reload();
 		try {
-			expect(reopened.credentialBlockedUntil(PROVIDER, OAUTH_KEY, 0)).toBeUndefined();
+			expect(reopened.blocks.blockedUntil(PROVIDER, OAUTH_KEY, 0)).toBeUndefined();
 		} finally {
 			reopened.close();
 		}
@@ -205,20 +205,20 @@ describe("the account that was chosen", () => {
 		// ordered, not in the OAuth path alone, or half the product still overrules the choice.
 		const store = await SqliteAuthCredentialStore.open(dbPath);
 		const storage = new AuthStorage(store, { loadBalancing: false });
-		await storage.set(PROVIDER, [
+		await storage.credentials.set(PROVIDER, [
 			{ type: "api_key", key: "key-chosen" },
 			{ type: "api_key", key: "key-sibling" },
 		]);
 		try {
 			const chosenId = store.listAuthCredentials(PROVIDER)[0]!.id;
-			expect(storage.selectProviderCredential(PROVIDER, chosenId)).toBe(true);
-			storage.upsertCredentialBlock({
+			expect(storage.sessions.selectProviderCredential(PROVIDER, chosenId)).toBe(true);
+			storage.blocks.upsert({
 				credentialId: chosenId,
 				providerKey: API_KEY_KEY,
 				blockScope: "",
 				blockedUntilMs: HOLD_UNTIL_MS,
 			});
-			expect(await storage.getApiKey(PROVIDER, "session-4")).toBe("key-chosen");
+			expect(await storage.keys.get(PROVIDER, "session-4")).toBe("key-chosen");
 		} finally {
 			storage.close();
 		}
@@ -229,27 +229,27 @@ describe("the account that was chosen", () => {
 		// by anything at all, including the redeem path that was its only caller.
 		const store = await SqliteAuthCredentialStore.open(dbPath);
 		const storage = new AuthStorage(store, { loadBalancing: true });
-		await storage.set(PROVIDER, [
+		await storage.credentials.set(PROVIDER, [
 			{ type: "api_key", key: "key-chosen" },
 			{ type: "api_key", key: "key-sibling" },
 		]);
 		try {
 			const heldId = store.listAuthCredentials(PROVIDER)[0]!.id;
-			storage.upsertCredentialBlock({
+			storage.blocks.upsert({
 				credentialId: heldId,
 				providerKey: API_KEY_KEY,
 				blockScope: "",
 				blockedUntilMs: HOLD_UNTIL_MS,
 			});
-			expect(storage.credentialBlockedUntil(PROVIDER, API_KEY_KEY, 0)).toBe(HOLD_UNTIL_MS);
+			expect(storage.blocks.blockedUntil(PROVIDER, API_KEY_KEY, 0)).toBe(HOLD_UNTIL_MS);
 			// Unchosen and held, so automation is free to route around it.
-			expect(await storage.getApiKey(PROVIDER, "session-5")).toBe("key-sibling");
+			expect(await storage.keys.get(PROVIDER, "session-5")).toBe("key-sibling");
 
-			storage.clearCredentialBlocks(PROVIDER, heldId);
+			storage.blocks.clearAll(PROVIDER, heldId);
 
-			expect(storage.credentialBlockedUntil(PROVIDER, API_KEY_KEY, 0)).toBeUndefined();
-			expect(storage.listCredentialBlocks([heldId])).toEqual([]);
-			expect(await storage.getApiKey(PROVIDER, "session-5")).toBe("key-chosen");
+			expect(storage.blocks.blockedUntil(PROVIDER, API_KEY_KEY, 0)).toBeUndefined();
+			expect(storage.blocks.list([heldId])).toEqual([]);
+			expect(await storage.keys.get(PROVIDER, "session-5")).toBe("key-chosen");
 		} finally {
 			storage.close();
 		}
@@ -263,13 +263,13 @@ describe("the account that was chosen", () => {
 		const { storage, heldId } = await twoAccountsFirstHeld();
 		try {
 			expect(
-				await storage.rotateSessionCredential(PROVIDER, "session-6", { error: new Error("invalid_grant") }),
+				await storage.limits.rotate(PROVIDER, "session-6", { error: new Error("invalid_grant") }),
 			).toBe(true);
-			expect(await storage.getApiKey(PROVIDER, "session-6")).toBe("access-sibling");
+			expect(await storage.keys.get(PROVIDER, "session-6")).toBe("access-sibling");
 
-			storage.clearCredentialBlocks(PROVIDER, heldId);
+			storage.blocks.clearAll(PROVIDER, heldId);
 
-			expect(await storage.getApiKey(PROVIDER, "session-6")).toBe("access-chosen");
+			expect(await storage.keys.get(PROVIDER, "session-6")).toBe("access-chosen");
 		} finally {
 			storage.close();
 		}
@@ -281,7 +281,7 @@ describe("the account that was chosen", () => {
 		// is the lie, and nothing then says whether the chosen account is spending.
 		const { storage, heldId } = await twoAccountsFirstHeld();
 		try {
-			expect(storage.sessionCredentialRouting(PROVIDER, "session-7")).toEqual({
+			expect(storage.sessions.routing(PROVIDER, "session-7")).toEqual({
 				provider: PROVIDER,
 				selectedCredentialId: heldId,
 				selectedBlockedUntilMs: HOLD_UNTIL_MS,
@@ -298,7 +298,7 @@ describe("the account that was chosen", () => {
 		// the flag exists.
 		const { storage } = await twoAccountsFirstHeld({ choose: false });
 		try {
-			const routing = storage.sessionCredentialRouting(PROVIDER, "session-8");
+			const routing = storage.sessions.routing(PROVIDER, "session-8");
 			expect(routing?.selectedCredentialId).toBeUndefined();
 			expect(routing?.activeIsPrediction).toBe(true);
 		} finally {

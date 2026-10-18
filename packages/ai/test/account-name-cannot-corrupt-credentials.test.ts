@@ -70,7 +70,7 @@ describe("setAccountName leaves the credential row untouched", () => {
 		dbPath = path.join(tempDir, "agent.db");
 		store = await SqliteAuthCredentialStore.open(dbPath);
 		authStorage = new AuthStorage(store);
-		await authStorage.set(PROVIDER, [
+		await authStorage.credentials.set(PROVIDER, [
 			{
 				type: "oauth",
 				access: "access-token-bytes",
@@ -81,7 +81,7 @@ describe("setAccountName leaves the credential row untouched", () => {
 				orgId: "org-corruption",
 			},
 		]);
-		credentialId = authStorage.listStoredCredentials(PROVIDER)[0]!.id;
+		credentialId = authStorage.credentials.list(PROVIDER)[0]!.id;
 	});
 
 	afterEach(async () => {
@@ -106,7 +106,7 @@ describe("setAccountName leaves the credential row untouched", () => {
 		const before = readCredentialRows(dbPath);
 		expect(before).toHaveLength(1);
 
-		expect(storage.setAccountName(PROVIDER, credentialId, HOSTILE_NAME)).toBe(true);
+		expect(storage.credentials.setAccountName(PROVIDER, credentialId, HOSTILE_NAME)).toBe(true);
 
 		expect(readCredentialRows(dbPath)).toEqual(before);
 	});
@@ -120,7 +120,7 @@ describe("setAccountName leaves the credential row untouched", () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
 
-		expect(storage.setAccountName(PROVIDER, credentialId, HOSTILE_NAME)).toBe(true);
+		expect(storage.credentials.setAccountName(PROVIDER, credentialId, HOSTILE_NAME)).toBe(true);
 
 		const row = readCredentialRows(dbPath)[0];
 		if (!row) throw new Error("credential row disappeared");
@@ -143,10 +143,10 @@ describe("setAccountName leaves the credential row untouched", () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
 
-		expect(storage.setAccountName(PROVIDER, credentialId, HOSTILE_NAME)).toBe(true);
-		await storage.reload();
+		expect(storage.credentials.setAccountName(PROVIDER, credentialId, HOSTILE_NAME)).toBe(true);
+		await storage.credentials.reload();
 
-		const stored = storage.listStoredCredentials(PROVIDER);
+		const stored = storage.credentials.list(PROVIDER);
 		expect(stored).toHaveLength(1);
 		expect(stored[0]?.credential).toEqual({
 			type: "oauth",
@@ -157,7 +157,7 @@ describe("setAccountName leaves the credential row untouched", () => {
 			email: "corruption@example.com",
 			orgId: "org-corruption",
 		});
-		expect(storage.getOAuthAccountIdentity(PROVIDER)).toEqual({
+		expect(storage.oauth.identity(PROVIDER)).toEqual({
 			accountId: "account-corruption",
 			email: "corruption@example.com",
 			orgId: "org-corruption",
@@ -173,11 +173,11 @@ describe("setAccountName leaves the credential row untouched", () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
 
-		expect(storage.setAccountName(PROVIDER, credentialId, HOSTILE_NAME)).toBe(true);
+		expect(storage.credentials.setAccountName(PROVIDER, credentialId, HOSTILE_NAME)).toBe(true);
 
 		expect(readNameRows(dbPath)).toEqual([
 			{ identity: `${PROVIDER}|account:account-corruption`, name: HOSTILE_NAME },
 		]);
-		expect(storage.getAccountName(PROVIDER, credentialId)).toBe(HOSTILE_NAME);
+		expect(storage.credentials.getAccountName(PROVIDER, credentialId)).toBe(HOSTILE_NAME);
 	});
 });

@@ -41,7 +41,7 @@ interface Rig {
 	globalLog: string[];
 }
 
-type StoredCredential = Parameters<AuthStorage["set"]>[1];
+type StoredCredential = Parameters<AuthStorage["credentials"]["set"]>[1];
 
 async function rig(backend: UsageProvider, key: string = KEY, credential?: StoredCredential): Promise<Rig> {
 	const globalLog: string[] = [];
@@ -60,14 +60,14 @@ async function rig(backend: UsageProvider, key: string = KEY, credential?: Store
 		usageProviderResolver: id => (id === PROVIDER ? backend : undefined),
 		usageLogger,
 	});
-	await storage.reload();
-	await storage.set(PROVIDER, credential ?? { type: "api_key", key });
+	await storage.credentials.reload();
+	await storage.credentials.set(PROVIDER, credential ?? { type: "api_key", key });
 	return { db, storage, usageLog, globalLog };
 }
 
 function historyRows(r: Rig): string {
 	const persisted = r.db.query("SELECT * FROM usage_history").all();
-	return JSON.stringify({ persisted, listed: r.storage.listUsageHistory() });
+	return JSON.stringify({ persisted, listed: r.storage.usage.history() });
 }
 
 function usageRows(db: Database): string {
@@ -120,8 +120,8 @@ async function drive(
 	r: Rig,
 	completionProbe?: CompletionProbe,
 ): Promise<{ reports: UsageReport[]; checks: CredentialHealthResult[] }> {
-	const reports = await r.storage.fetchUsageReports();
-	const checks = await r.storage.checkCredentials(completionProbe ? { completionProbe } : undefined);
+	const reports = await r.storage.usage.reports();
+	const checks = await r.storage.health.check(completionProbe ? { completionProbe } : undefined);
 	return { reports: reports ?? [], checks };
 }
 
@@ -443,9 +443,9 @@ describe("the usage credential boundary", () => {
 
 		it("is not served fresh and is rewritten without the key", async () => {
 			const r = await rig(reporting(() => ({ metadata: { echo: "clean" } })));
-			await r.storage.fetchUsageReports();
+			await r.storage.usage.reports();
 			await seedLegacyRow(r, Date.now() + 3_600_000);
-			const reports = await r.storage.fetchUsageReports();
+			const reports = await r.storage.usage.reports();
 			expectClean(observe(r, { reports: reports ?? [] }), [KEY]);
 			expect(JSON.stringify(reports)).toContain("clean");
 		});
@@ -460,10 +460,10 @@ describe("the usage credential boundary", () => {
 				},
 			} as UsageProvider;
 			const r = await rig(backend);
-			await r.storage.fetchUsageReports();
+			await r.storage.usage.reports();
 			await seedLegacyRow(r, Date.now() - 1000);
 			fail = true;
-			const reports = await r.storage.fetchUsageReports();
+			const reports = await r.storage.usage.reports();
 			expectClean(observe(r, { reports: reports ?? [] }), [KEY]);
 		});
 	});
@@ -499,7 +499,7 @@ describe("the usage credential boundary", () => {
 				KEY,
 				oauth,
 			);
-			await r.storage.fetchUsageReports();
+			await r.storage.usage.reports();
 			expect(usageRows(r.db)).toContain("clean");
 			expectClean(observe(r, {}), [KEY]);
 		});
@@ -510,8 +510,8 @@ describe("the usage credential boundary", () => {
 				KEY,
 				oauth,
 			);
-			await r.storage.fetchUsageReports();
-			await r.storage.fetchUsageReports();
+			await r.storage.usage.reports();
+			await r.storage.usage.reports();
 			const rows = r.db.query("SELECT key FROM cache WHERE key LIKE 'usage_cache:%'").all();
 			expect(rows).toHaveLength(1);
 		});
@@ -529,7 +529,7 @@ describe("the usage credential boundary", () => {
 			const reopened = new SqliteAuthCredentialStore(r.db);
 			cleanups.push(() => reopened.close());
 			const next = new AuthStorage(reopened, { usageProviderResolver: () => undefined });
-			await next.reload();
+			await next.credentials.reload();
 			expectClean({ persistedUsageRows: usageRows(r.db) }, [KEY]);
 		});
 	});
@@ -559,7 +559,7 @@ describe("the usage credential boundary", () => {
 
 	it("keeps a base URL query string out of the cache row key", async () => {
 		const r = await rig(reporting(() => ({ metadata: { echo: "clean" } })));
-		await r.storage.fetchUsageReports({ baseUrlResolver: () => `https://usage.example.test/v1?key=${KEY}` });
+		await r.storage.usage.reports({ baseUrlResolver: () => `https://usage.example.test/v1?key=${KEY}` });
 		expect(usageRows(r.db)).toContain("clean");
 		expectClean({ persistedUsageRows: usageRows(r.db) }, [KEY]);
 	});
@@ -645,10 +645,10 @@ describe("the usage credential boundary", () => {
 					},
 				} as UsageProvider;
 				const r = await rig(backend);
-				expect(JSON.stringify(await r.storage.fetchUsageReports())).toContain("good");
+				expect(JSON.stringify(await r.storage.usage.reports())).toContain("good");
 				expireRows(r);
 				fail = true;
-				expect(JSON.stringify((await r.storage.fetchUsageReports()) ?? [])).not.toContain("good");
+				expect(JSON.stringify((await r.storage.usage.reports()) ?? [])).not.toContain("good");
 			});
 		}
 	});
@@ -668,14 +668,14 @@ describe("the usage credential boundary", () => {
 
 		it("is redacted and does not escape fetchUsageReports", async () => {
 			const r = await rig(unsupportedBy());
-			const reports = await r.storage.fetchUsageReports();
+			const reports = await r.storage.usage.reports();
 			expect(reports ?? []).toEqual([]);
 			expectClean(observe(r, { reports: reports ?? [] }), [KEY]);
 		});
 
 		it("is redacted and does not escape checkCredentials", async () => {
 			const r = await rig(unsupportedBy());
-			const checks = await r.storage.checkCredentials();
+			const checks = await r.storage.health.check();
 			expect(checks.map(check => check.ok)).toEqual([false]);
 			expectClean(observe(r, { checks }), [KEY]);
 		});
@@ -694,12 +694,12 @@ describe("the usage credential boundary", () => {
 			const storage = new AuthStorage(store, {
 				usageProviderResolver: id => (id === PROVIDER ? unsupportedBy() : id === OTHER ? working : undefined),
 			});
-			await storage.reload();
-			await storage.set(PROVIDER, { type: "api_key", key: KEY });
-			await storage.set(OTHER, { type: "api_key", key: "other-key-456" });
-			const reports = await storage.fetchUsageReports();
+			await storage.credentials.reload();
+			await storage.credentials.set(PROVIDER, { type: "api_key", key: KEY });
+			await storage.credentials.set(OTHER, { type: "api_key", key: "other-key-456" });
+			const reports = await storage.usage.reports();
 			expect(JSON.stringify(reports)).toContain("other-ok");
-			const checks = await storage.checkCredentials();
+			const checks = await storage.health.check();
 			expect(checks.map(check => [check.provider, check.ok]).sort()).toEqual([
 				[PROVIDER, false],
 				[OTHER, true],
@@ -863,7 +863,7 @@ describe("the usage credential boundary", () => {
 				it(`keeps the key out of every channel: ${entryLabel}, ${valueLabel}`, async () => {
 					const r = await rig(build(value), KEY, oauth);
 					if (mode.ingest) {
-						expect(() => r.storage.ingestUsageHeaders(PROVIDER, {}, {})).not.toThrow();
+						expect(() => r.storage.usage.ingestHeaders(PROVIDER, {}, {})).not.toThrow();
 					}
 					const probe = mode.completionThrows
 						? async () => {
@@ -911,7 +911,7 @@ describe("the usage credential boundary", () => {
 			orgId: "org-placeholder",
 			orgName: `Team ${KEY}`,
 		} as StoredCredential);
-		expect(r.storage.ingestUsageHeaders(PROVIDER, {}, {})).toBe(true);
+		expect(r.storage.usage.ingestHeaders(PROVIDER, {}, {})).toBe(true);
 		const out = await drive(r);
 		expectClean(observe(r, out), [KEY]);
 	});
@@ -964,7 +964,7 @@ describe("the usage credential boundary", () => {
 			} as StoredCredential,
 		);
 		const out = await drive(r);
-		const rows = r.storage.listUsageHistory();
+		const rows = r.storage.usage.history();
 		expect(rows.length).toBeGreaterThan(0);
 		expect(new Set(rows.map(row => row.accountKey)).size).toBe(1);
 		expectClean(observe(r, out), [KEY]);

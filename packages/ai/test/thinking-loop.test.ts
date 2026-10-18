@@ -746,35 +746,35 @@ describe("isGeminiThinkingModel", () => {
 	});
 });
 
-describe("thinking-loop cook fallback (result path)", () => {
+describe("thinking-loop retry budget (result path)", () => {
 	function loopResponse(): { content: MockContent[] } {
 		return { content: [{ type: "thinking", thinking: nearDuplicateLoop(12) }] };
 	}
 
-	test("completeSimple re-samples a loop then cooks through with the guard disabled", async () => {
+	test("completeSimple fails closed after three guarded attempts", async () => {
 		registerMockApi();
 		const waitSpy = spyOn(scheduler, "wait").mockResolvedValue(undefined);
 		try {
 			const mock = createMockModel({ provider: "openrouter", id: "google/gemini-3.5-flash" });
 			for (let i = 0; i < 4; i++) mock.push(loopResponse());
+			const attempts: AssistantMessage[] = [];
 
-			const result = await completeSimple(mock.model, context());
+			const result = await completeSimple(mock.model, context(), { onAttempt: message => attempts.push(message) });
 
-			// Three guarded attempts raise the stall; the fourth (guard disabled) cooks through.
-			expect(mock.calls).toHaveLength(4);
-			expect(result.stopReason).toBe("stop");
-			expect(result.content.some(block => block.type === "thinking")).toBe(true);
-			expect(result.errorMessage).toBeUndefined();
-			// First three dispatches are guarded; only the final cook pass disables it.
-			expect(mock.calls[0]?.options?.loopGuard?.enabled).toBeUndefined();
-			expect(mock.calls[3]?.options?.loopGuard?.enabled).toBe(false);
+			expect(mock.calls).toHaveLength(3);
+			expect(attempts).toHaveLength(3);
+			expect(result.stopReason).toBe("error");
+			expect(result.content).toEqual([]);
+			expect(result.errorMessage).toContain(THINKING_LOOP_ERROR_MARKER);
+			expect(AIError.is(result.errorId, AIError.Flag.ThinkingLoop)).toBe(true);
+			expect(mock.calls.every(call => call.options?.loopGuard?.enabled !== false)).toBe(true);
 		} finally {
 			waitSpy.mockRestore();
 			clearCustomApis();
 		}
 	});
 
-	test("complete (non-simple) also cooks through after the abort budget", async () => {
+	test("complete (non-simple) also fails closed after three guarded attempts", async () => {
 		registerMockApi();
 		const waitSpy = spyOn(scheduler, "wait").mockResolvedValue(undefined);
 		try {
@@ -783,11 +783,12 @@ describe("thinking-loop cook fallback (result path)", () => {
 
 			const result = await complete(mock.model, context());
 
-			expect(mock.calls).toHaveLength(4);
-			expect(result.stopReason).toBe("stop");
-			expect(result.errorMessage).toBeUndefined();
-			expect(mock.calls[0]?.options?.loopGuard?.enabled).toBeUndefined();
-			expect(mock.calls[3]?.options?.loopGuard?.enabled).toBe(false);
+			expect(mock.calls).toHaveLength(3);
+			expect(result.stopReason).toBe("error");
+			expect(result.content).toEqual([]);
+			expect(result.errorMessage).toContain(THINKING_LOOP_ERROR_MARKER);
+			expect(AIError.is(result.errorId, AIError.Flag.ThinkingLoop)).toBe(true);
+			expect(mock.calls.every(call => call.options?.loopGuard?.enabled !== false)).toBe(true);
 		} finally {
 			waitSpy.mockRestore();
 			clearCustomApis();

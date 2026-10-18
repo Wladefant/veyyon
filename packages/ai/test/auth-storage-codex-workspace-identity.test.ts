@@ -198,12 +198,12 @@ describe("openai-codex usage report dedupe partitions by workspace", () => {
 			]),
 			{ usageProviderResolver: p => (p === "openai-codex" ? codexUsage.openaiCodexUsageProvider : undefined) },
 		);
-		await storage.reload();
+		await storage.credentials.reload();
 		vi.spyOn(codexUsage.openaiCodexUsageProvider, "fetchUsage").mockImplementation(async () =>
 			emailOnlyReport(EMAIL),
 		);
 
-		const reports = ((await storage.fetchUsageReports()) ?? []).filter(r => r.provider === "openai-codex");
+		const reports = ((await storage.usage.reports()) ?? []).filter(r => r.provider === "openai-codex");
 		expect(reports).toHaveLength(2);
 		expect(reports.map(r => r.metadata?.orgId).sort()).toEqual([PERSONAL_WS, TEAM_WS].sort());
 		expect(reports.map(r => r.metadata?.orgName).sort()).toEqual(["enterprise", "plus"].sort());
@@ -213,12 +213,12 @@ describe("openai-codex usage report dedupe partitions by workspace", () => {
 		storage = new AuthStorage(makeStore([codexRow(1), codexRow(2)]), {
 			usageProviderResolver: p => (p === "openai-codex" ? codexUsage.openaiCodexUsageProvider : undefined),
 		});
-		await storage.reload();
+		await storage.credentials.reload();
 		vi.spyOn(codexUsage.openaiCodexUsageProvider, "fetchUsage").mockImplementation(async () =>
 			emailOnlyReport(EMAIL),
 		);
 
-		const reports = ((await storage.fetchUsageReports()) ?? []).filter(r => r.provider === "openai-codex");
+		const reports = ((await storage.usage.reports()) ?? []).filter(r => r.provider === "openai-codex");
 		expect(reports).toHaveLength(1);
 	});
 });

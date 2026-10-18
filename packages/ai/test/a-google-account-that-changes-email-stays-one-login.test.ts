@@ -29,7 +29,11 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { matchesReplacementCredential, resolveCredentialIdentityKey } from "@veyyon/ai/auth-credential-rows";
+import {
+	isRefreshFailureDisableCause,
+	matchesReplacementCredential,
+	resolveCredentialIdentityKey,
+} from "@veyyon/ai/auth-credential-rows";
 import { AuthStorage, type OAuthCredential } from "@veyyon/ai/auth-storage";
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import { getOAuthProviders } from "@veyyon/ai/registry/oauth";
@@ -50,6 +54,31 @@ function oauth(email: string, accountId: string | undefined, token: string): OAu
 		email,
 		...(accountId ? { accountId } : {}),
 	};
+}
+
+async function latestReportableCause(storage: AuthStorage, provider: string): Promise<string | undefined> {
+	const [latest] = await storage.credentials.listReportableDisabled(provider);
+	if (!latest?.cause || !isRefreshFailureDisableCause(latest.cause)) return undefined;
+	return latest.cause;
+}
+
+async function latestReportableAccount(storage: AuthStorage, provider: string): Promise<string | undefined> {
+	const [latest] = await storage.credentials.listReportableDisabled(provider);
+	if (!latest?.cause || !isRefreshFailureDisableCause(latest.cause) || latest.type !== "oauth") return undefined;
+	return latest.email || latest.accountId || undefined;
+}
+
+async function latestReportableFailures(storage: AuthStorage): Promise<Array<{ provider: string; cause: string }>> {
+	const seen = new Set<string>();
+	const failures: Array<{ provider: string; cause: string }> = [];
+	for (const row of await storage.credentials.listReportableDisabled()) {
+		if (seen.has(row.provider)) continue;
+		seen.add(row.provider);
+		if (row.cause && isRefreshFailureDisableCause(row.cause)) {
+			failures.push({ provider: row.provider, cause: row.cause });
+		}
+	}
+	return failures;
 }
 
 describe("which providers treat a shared account id as one login", () => {
@@ -102,16 +131,16 @@ describe("the credential store", () => {
 		return store;
 	}
 
-	test("a login under the new address purges the signed-out login under the old one", () => {
+	test("a login under the new address purges the signed-out login under the old one", async () => {
 		const active = signedOutOldAddress("google-antigravity", GOOGLE_ID);
-		expect(new AuthStorage(active).disabledCredentialAccount("google-antigravity")).toBe(OLD_EMAIL);
+		expect(await latestReportableAccount(new AuthStorage(active), "google-antigravity")).toBe(OLD_EMAIL);
 
 		active.upsertAuthCredentialForProvider("google-antigravity", oauth(NEW_EMAIL, GOOGLE_ID, "new"));
 
 		const storage = new AuthStorage(active);
 		expect(active.listDisabledAuthCredentials("google-antigravity")).toEqual([]);
-		expect(storage.disabledCredentialCause("google-antigravity")).toBeUndefined();
-		expect(storage.listProvidersWithFailedRefresh()).toEqual([]);
+		expect(await latestReportableCause(storage, "google-antigravity")).toBeUndefined();
+		expect(await latestReportableFailures(storage)).toEqual([]);
 	});
 
 	test("a login under the new address takes over the old address's active row", () => {
@@ -124,18 +153,18 @@ describe("the credential store", () => {
 		]);
 	});
 
-	test("keeps the signed-out login when the rows share no account id", () => {
+	test("keeps the signed-out login when the rows share no account id", async () => {
 		const active = signedOutOldAddress("google-antigravity", undefined);
 		active.upsertAuthCredentialForProvider("google-antigravity", oauth(NEW_EMAIL, GOOGLE_ID, "new"));
 
-		expect(new AuthStorage(active).disabledCredentialAccount("google-antigravity")).toBe(OLD_EMAIL);
+		expect(await latestReportableAccount(new AuthStorage(active), "google-antigravity")).toBe(OLD_EMAIL);
 	});
 
-	test("keeps two Codex logins of one shared workspace apart", () => {
+	test("keeps two Codex logins of one shared workspace apart", async () => {
 		const active = signedOutOldAddress("openai-codex", "workspace-1");
 		active.upsertAuthCredentialForProvider("openai-codex", oauth(NEW_EMAIL, "workspace-1", "new"));
 
-		expect(new AuthStorage(active).disabledCredentialAccount("openai-codex")).toBe(OLD_EMAIL);
+		expect(await latestReportableAccount(new AuthStorage(active), "openai-codex")).toBe(OLD_EMAIL);
 	});
 });
 

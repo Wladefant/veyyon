@@ -36,7 +36,7 @@ describe("AuthStorage.login default manual-code prompt gating", () => {
 	beforeEach(async () => {
 		store = new SqliteAuthCredentialStore(new Database(":memory:"));
 		storage = new AuthStorage(store);
-		await storage.reload();
+		await storage.credentials.reload();
 	});
 
 	afterEach(() => {
@@ -48,7 +48,7 @@ describe("AuthStorage.login default manual-code prompt gating", () => {
 	it("does NOT synthesize a default manual-code prompt for a loopback provider", async () => {
 		const capture = registerCapturingLoopbackProvider("loopback-capture-provider");
 
-		await storage.login("loopback-capture-provider", {
+		await storage.oauth.login("loopback-capture-provider", {
 			onAuth: () => {},
 			onPrompt: async () => "should-not-be-called",
 		});
@@ -65,7 +65,7 @@ describe("AuthStorage.login default manual-code prompt gating", () => {
 		const capture = registerCapturingLoopbackProvider("loopback-explicit-provider");
 		const explicit = async () => "explicit-code";
 
-		await storage.login("loopback-explicit-provider", {
+		await storage.oauth.login("loopback-explicit-provider", {
 			onAuth: () => {},
 			onPrompt: async () => "unused",
 			onManualCodeInput: explicit,
@@ -89,7 +89,7 @@ describe("AuthStorage.login default manual-code prompt gating", () => {
 			},
 		);
 
-		await storage.login("gitlab-duo-agent", {
+		await storage.oauth.login("gitlab-duo-agent", {
 			onAuth: () => {},
 			onPrompt: async prompt => {
 				// The synthesized default routes its prompt through onPrompt; return a

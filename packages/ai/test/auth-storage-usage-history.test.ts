@@ -132,7 +132,7 @@ describe("AuthStorage usage history recording", () => {
 		storage = new AuthStorage(store, {
 			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
 		});
-		await storage.reload();
+		await storage.credentials.reload();
 	});
 
 	afterEach(() => {
@@ -167,9 +167,9 @@ describe("AuthStorage usage history recording", () => {
 		};
 		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async () => report);
 
-		await storage.fetchUsageReports();
+		await storage.usage.reports();
 
-		const rows = storage.listUsageHistory();
+		const rows = storage.usage.history();
 		expect(rows).toHaveLength(2);
 
 		const fiveHour = rows.find(row => row.limitId === "anthropic:5h");
@@ -211,8 +211,8 @@ describe("OpenCode Go usage via the upstream endpoint", () => {
 				provider === "opencode-go" ? opencodeGoUsage.opencodeGoUsageProvider : undefined,
 			usageFetch: (async () => respond()) as unknown as typeof fetch,
 		});
-		await storage.reload();
-		await storage.set("opencode-go", { type: "api_key", key: "opencode-go-key" });
+		await storage.credentials.reload();
+		await storage.credentials.set("opencode-go", { type: "api_key", key: "opencode-go-key" });
 		return storage;
 	}
 
@@ -226,12 +226,12 @@ describe("OpenCode Go usage via the upstream endpoint", () => {
 		try {
 			const nowMs = Date.now();
 			setSystemTime(new Date(nowMs));
-			const fresh = await storage.fetchUsageReports();
+			const fresh = await storage.usage.reports();
 			expect(fresh?.some(report => report.provider === "opencode-go")).toBe(true);
 
 			unauthorized = true;
 			setSystemTime(new Date(nowMs + 10 * 60_000));
-			const after = await storage.fetchUsageReports();
+			const after = await storage.usage.reports();
 			expect(after?.some(report => report.provider === "opencode-go")).toBe(false);
 		} finally {
 			storage.close();
@@ -246,12 +246,12 @@ describe("OpenCode Go usage via the upstream endpoint", () => {
 		try {
 			const nowMs = Date.now();
 			setSystemTime(new Date(nowMs));
-			const fresh = await storage.fetchUsageReports();
+			const fresh = await storage.usage.reports();
 			expect(fresh?.find(report => report.provider === "opencode-go")?.limits).toHaveLength(3);
 
 			partial = true;
 			setSystemTime(new Date(nowMs + 10 * 60_000));
-			const after = await storage.fetchUsageReports();
+			const after = await storage.usage.reports();
 			const retained = after?.find(report => report.provider === "opencode-go");
 			expect(retained?.limits.map(limit => limit.id)).toEqual(["rolling-5h", "weekly", "monthly"]);
 		} finally {

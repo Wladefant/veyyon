@@ -145,11 +145,9 @@ async function countApiKeySelections(
 ): Promise<Map<string, number>> {
 	const counts = new Map<string, number>();
 	for (let index = 0; index < samples; index += 1) {
-		const apiKey = await authStorage.getApiKey(
-			provider,
+		const apiKey = await authStorage.keys.get(provider,
 			`${sessionPrefix}-${index}`,
-			modelId === undefined ? undefined : { modelId },
-		);
+			modelId === undefined ? undefined : { modelId },);
 		if (!apiKey) continue;
 		counts.set(apiKey, (counts.get(apiKey) ?? 0) + 1);
 	}
@@ -251,7 +249,7 @@ describe("AuthStorage codex oauth ranking", () => {
 
 	test("preserves the uncapped-Pro priority signal when only the secondary window is reported", async () => {
 		if (!authStorage) throw new Error("test setup failed");
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-uncapped-pro", "uncapped-pro@example.com") },
 			{ type: "oauth", ...createCredential("acct-capped", "capped@example.com") },
 		]);
@@ -277,7 +275,7 @@ describe("AuthStorage codex oauth ranking", () => {
 
 	test("does not boost incomplete or differently-scoped Codex usage over measured quota", async () => {
 		if (!authStorage) throw new Error("test setup failed");
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-status", "status@example.com") },
 			{ type: "oauth", ...createCredential("acct-chat", "chat@example.com") },
 			{ type: "oauth", ...createCredential("acct-chat-only", "chat-only@example.com") },
@@ -350,21 +348,21 @@ describe("AuthStorage codex oauth ranking", () => {
 			return { type: "oauth" as const, ...createCredential(id, email) };
 		};
 		// Account A: Chat 10%, Spark 100%; Account B: Chat 20%, Spark 20% -> Chat prefers A
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			seed("acct-chat-healthy-spark-exhausted", "a@example.com", 0.1, 1.0),
 			seed("acct-both-moderate", "b@example.com", 0.2, 0.2),
 		]);
-		expect(await authStorage.getApiKey("openai-codex", "session-chat-exhausted-spark")).toBe(
+		expect(await authStorage.keys.get("openai-codex", "session-chat-exhausted-spark")).toBe(
 			"api-acct-chat-healthy-spark-exhausted",
 		);
 
 		// Account C: Chat 100%, Spark 10%; Account D: Chat 50%, Spark 50% -> Spark prefers C
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			seed("acct-chat-exhausted-spark-healthy", "c@example.com", 1.0, 0.1),
 			seed("acct-both-half", "d@example.com", 0.5, 0.5),
 		]);
 		expect(
-			await authStorage.getApiKey("openai-codex", "session-spark-exhausted-chat", {
+			await authStorage.keys.get("openai-codex", "session-spark-exhausted-chat", {
 				modelId: "gpt-5.3-codex-spark",
 			}),
 		).toBe("api-acct-chat-exhausted-spark-healthy");
@@ -373,7 +371,7 @@ describe("AuthStorage codex oauth ranking", () => {
 	test("prefers near-reset weekly account over lower-used far-reset account", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-near", "near@example.com") },
 			{ type: "oauth", ...createCredential("acct-far", "far@example.com") },
 		]);
@@ -402,7 +400,7 @@ describe("AuthStorage codex oauth ranking", () => {
 	test("prefers fresh 5h ticker account at 0% usage", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-zero", "zero@example.com") },
 			{ type: "oauth", ...createCredential("acct-progress", "progress@example.com") },
 		]);
@@ -454,7 +452,7 @@ describe("AuthStorage codex oauth ranking", () => {
 
 	test("prefers renewable allowance over credit-funded account even with fresh 5h window", async () => {
 		if (!authStorage) throw new Error("test setup failed");
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-credit-funded", "credit@example.com") },
 			{ type: "oauth", ...createCredential("acct-renewable-plan", "plan@example.com") },
 		]);
@@ -475,18 +473,18 @@ describe("AuthStorage codex oauth ranking", () => {
 
 	test("evicts warm automatic session pin when renewable allowance is spent and unblocked sibling has quota", async () => {
 		if (!authStorage || !store) throw new Error("test setup failed");
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-warm-pin", "warm@example.com") },
 			{ type: "oauth", ...createCredential("acct-sibling-quota", "sibling@example.com") },
 		]);
 		setCreditRep("acct-warm-pin", 0.1, 0.2);
 		setCreditRep("acct-sibling-quota", 0.1, 0.4);
 		const sessionId = "mid-session-credit-eviction";
-		expect(await authStorage.getApiKey("openai-codex", sessionId)).toBe("api-acct-warm-pin");
+		expect(await authStorage.keys.get("openai-codex", sessionId)).toBe("api-acct-warm-pin");
 
 		setCreditRep("acct-warm-pin", 0.1, 1.0, { limitReached: true });
-		await authStorage.invalidateUsageCache("openai-codex");
-		expect(await authStorage.getApiKey("openai-codex", sessionId)).toBe("api-acct-sibling-quota");
+		await authStorage.usage.invalidate("openai-codex");
+		expect(await authStorage.keys.get("openai-codex", sessionId)).toBe("api-acct-sibling-quota");
 		const warmPinId = store.listAuthCredentials("openai-codex")[0]?.id;
 		expect(warmPinId).toBeDefined();
 		expect(store.getCredentialBlock(warmPinId!, "openai-codex:oauth", "shared")).toBeUndefined();
@@ -498,23 +496,23 @@ describe("AuthStorage codex oauth ranking", () => {
 			loadBalancing: false,
 			usageProviderResolver: provider => (provider === "openai-codex" ? usageProvider : undefined),
 		});
-		await staticStorage.set("openai-codex", [
+		await staticStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-lb-first", "first@example.com") },
 			{ type: "oauth", ...createCredential("acct-lb-second", "second@example.com") },
 		]);
 		setCreditRep("acct-lb-first", 0.1, 0.2);
 		setCreditRep("acct-lb-second", 0.1, 0.4);
 		const sessionId = "lb-false-session";
-		expect(await staticStorage.getApiKey("openai-codex", sessionId)).toBe("api-acct-lb-first");
+		expect(await staticStorage.keys.get("openai-codex", sessionId)).toBe("api-acct-lb-first");
 
 		setCreditRep("acct-lb-first", 0.1, 1.0, { limitReached: true });
-		await staticStorage.invalidateUsageCache("openai-codex");
-		expect(await staticStorage.getApiKey("openai-codex", sessionId)).toBe("api-acct-lb-first");
+		await staticStorage.usage.invalidate("openai-codex");
+		expect(await staticStorage.keys.get("openai-codex", sessionId)).toBe("api-acct-lb-first");
 	});
 
 	test("retains explicit user pin even when allowance is spent", async () => {
 		if (!authStorage || !store) throw new Error("test setup failed");
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-explicit-pin", "explicit@example.com") },
 			{ type: "oauth", ...createCredential("acct-alt-sibling", "alt@example.com") },
 		]);
@@ -525,21 +523,21 @@ describe("AuthStorage codex oauth ranking", () => {
 		if (credId === undefined) throw new Error("expected credential id");
 
 		const sessionId = "explicit-pin-session";
-		authStorage.pinSessionCredential("openai-codex", sessionId, credId);
+		authStorage.sessions.pin("openai-codex", sessionId, credId);
 		setCreditRep("acct-explicit-pin", 0.1, 1.0, { limitReached: true });
 		setCreditRep("acct-alt-sibling", 0.1, 0.2);
-		expect(await authStorage.getApiKey("openai-codex", sessionId)).toBe("api-acct-explicit-pin");
+		expect(await authStorage.keys.get("openai-codex", sessionId)).toBe("api-acct-explicit-pin");
 	});
 
 	test("serves all credit-funded accounts at 100% allowance without creating false hard blocks", async () => {
 		if (!authStorage || !store) throw new Error("test setup failed");
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-all-1", "all1@example.com") },
 			{ type: "oauth", ...createCredential("acct-all-2", "all2@example.com") },
 		]);
 		setCreditRep("acct-all-1", 0.1, 1.0, { limitReached: true });
 		setCreditRep("acct-all-2", 0.1, 1.0, { limitReached: true });
-		expect(await authStorage.getApiKey("openai-codex", "session-all-credit")).toBeDefined();
+		expect(await authStorage.keys.get("openai-codex", "session-all-credit")).toBeDefined();
 		for (const entry of store.listAuthCredentials("openai-codex")) {
 			expect(store.getCredentialBlock(entry.id, "openai-codex:oauth", "shared")).toBeUndefined();
 		}
@@ -585,7 +583,7 @@ describe("AuthStorage codex oauth ranking", () => {
 	test("skips exhausted weekly account even when reset is near", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-exhausted", "exhausted@example.com") },
 			{ type: "oauth", ...createCredential("acct-healthy", "healthy@example.com") },
 		]);
@@ -607,7 +605,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			}),
 		);
 
-		const apiKey = await authStorage.getApiKey("openai-codex", "session-exhausted");
+		const apiKey = await authStorage.keys.get("openai-codex", "session-exhausted");
 		expect(apiKey).toBe("api-acct-healthy");
 	});
 
@@ -616,7 +614,7 @@ describe("AuthStorage codex oauth ranking", () => {
 
 		// The mirror of the all-exhausted fallback below: the soonest reset sits at the end of the
 		// list, so only a block ordered by its reset, not the list order, can name it.
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-later-first", "later-first@example.com") },
 			{ type: "oauth", ...createCredential("acct-soon-last", "soon-last@example.com") },
 		]);
@@ -638,14 +636,14 @@ describe("AuthStorage codex oauth ranking", () => {
 			}),
 		);
 
-		const apiKey = await authStorage.getApiKey("openai-codex", "session-all-exhausted-reversed");
+		const apiKey = await authStorage.keys.get("openai-codex", "session-all-exhausted-reversed");
 		expect(apiKey).toBe("api-acct-soon-last");
 	});
 
 	test("temporarily blocks only the exhausted Codex OAuth credential after a quota 429", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-A", "a@example.com") },
 			{ type: "oauth", ...createCredential("acct-B", "b@example.com") },
 		]);
@@ -667,7 +665,7 @@ describe("AuthStorage codex oauth ranking", () => {
 		);
 
 		const sessionId = "session-codex-quota-429";
-		const firstKey = await authStorage.getApiKey("openai-codex", sessionId);
+		const firstKey = await authStorage.keys.get("openai-codex", sessionId);
 		if (!firstKey) throw new Error("expected initial Codex credential");
 		const exhaustedAccount = firstKey.replace(/^api-/, "");
 		const healthyAccount = exhaustedAccount === "acct-A" ? "acct-B" : "acct-A";
@@ -680,15 +678,15 @@ describe("AuthStorage codex oauth ranking", () => {
 			}),
 		);
 
-		const usageLimitSpy = vi.spyOn(authStorage, "markUsageLimitReached");
-		const switched = await authStorage.rotateSessionCredential("openai-codex", sessionId, {
+		const usageLimitSpy = vi.spyOn(authStorage.limits, "markReached");
+		const switched = await authStorage.limits.rotate("openai-codex", sessionId, {
 			error: Object.assign(new Error("insufficient_quota"), { status: 429 }),
 		});
 
 		expect(switched).toBe(true);
 		expect(usageLimitSpy).toHaveBeenCalledTimes(1);
-		expect(await authStorage.getApiKey("openai-codex", sessionId)).toBe(`api-${healthyAccount}`);
-		const activeAccounts = (await authStorage.checkCredentials())
+		expect(await authStorage.keys.get("openai-codex", sessionId)).toBe(`api-${healthyAccount}`);
+		const activeAccounts = (await authStorage.health.check())
 			.map(result => result.accountId)
 			.filter((accountId): accountId is string => accountId !== undefined)
 			.sort();
@@ -700,7 +698,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			throw new Error("test setup failed");
 		}
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-blocked", "blocked@example.com") },
 			{ type: "oauth", ...createCredential("acct-healthy", "healthy@example.com") },
 		]);
@@ -751,12 +749,12 @@ describe("AuthStorage codex oauth ranking", () => {
 			}),
 		);
 
-		const generationBeforeFetch = authStorage.getGeneration();
+		const generationBeforeFetch = authStorage.credentials.generation;
 
-		await authStorage.fetchUsageReports();
+		await authStorage.usage.reports();
 
 		expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeUndefined();
-		expect(authStorage.getGeneration()).toBeGreaterThan(generationBeforeFetch);
+		expect(authStorage.credentials.generation).toBeGreaterThan(generationBeforeFetch);
 
 		const reconciledSelectionCounts = await countApiKeySelections(
 			authStorage,
@@ -772,7 +770,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			throw new Error("test setup failed");
 		}
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-recovered-blocked", "recovered-blocked@example.com") },
 			{ type: "oauth", ...createCredential("acct-recovered-sibling", "recovered-sibling@example.com") },
 		]);
@@ -847,7 +845,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			throw new Error("test setup failed");
 		}
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-secondary-exhausted", "secondary-exhausted@example.com") },
 			{ type: "oauth", ...createCredential("acct-secondary-healthy", "secondary-healthy@example.com") },
 		]);
@@ -922,7 +920,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			throw new Error("test setup failed");
 		}
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-fresh-blocked", "fresh-blocked@example.com") },
 			{ type: "oauth", ...createCredential("acct-fresh-healthy", "fresh-healthy@example.com") },
 		]);
@@ -967,19 +965,19 @@ describe("AuthStorage codex oauth ranking", () => {
 		let blockedSessionId: string | undefined;
 		for (let index = 0; index < 100; index += 1) {
 			const sessionId = `codex-fresh-block-selected-${index}`;
-			if ((await authStorage.getApiKey("openai-codex", sessionId)) === "api-acct-fresh-blocked") {
+			if ((await authStorage.keys.get("openai-codex", sessionId)) === "api-acct-fresh-blocked") {
 				blockedSessionId = sessionId;
 				break;
 			}
 		}
 		if (!blockedSessionId) throw new Error("expected a session selecting the soon-blocked account");
 
-		const markResult = await authStorage.markUsageLimitReached("openai-codex", blockedSessionId, {
+		const markResult = await authStorage.limits.markReached("openai-codex", blockedSessionId, {
 			retryAfterMs: 6 * 24 * HOUR_MS,
 		});
 
 		expect(markResult.switched).toBe(true);
-		const selectionAfterBlock = await authStorage.getApiKey("openai-codex", blockedSessionId);
+		const selectionAfterBlock = await authStorage.keys.get("openai-codex", blockedSessionId);
 		expect(selectionAfterBlock).not.toBe("api-acct-fresh-blocked");
 		expect(selectionAfterBlock).toBe("api-acct-fresh-healthy");
 		expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeDefined();
@@ -990,7 +988,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			throw new Error("test setup failed");
 		}
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-reopened-blocked", "reopened-blocked@example.com") },
 			{ type: "oauth", ...createCredential("acct-reopened-healthy", "reopened-healthy@example.com") },
 		]);
@@ -1027,7 +1025,7 @@ describe("AuthStorage codex oauth ranking", () => {
 		);
 
 		const firstSelectionSessionId = "codex-reopened-fresh-block-initial";
-		const firstSelection = await authStorage.getApiKey("openai-codex", firstSelectionSessionId);
+		const firstSelection = await authStorage.keys.get("openai-codex", firstSelectionSessionId);
 		if (!firstSelection) throw new Error("expected initial Codex credential");
 
 		const blockedAccountId = firstSelection.replace(/^api-/, "");
@@ -1040,7 +1038,7 @@ describe("AuthStorage codex oauth ranking", () => {
 		});
 		if (!blockedRow) throw new Error("expected blocked credential row");
 
-		const markResult = await authStorage.markUsageLimitReached("openai-codex", firstSelectionSessionId, {
+		const markResult = await authStorage.limits.markReached("openai-codex", firstSelectionSessionId, {
 			retryAfterMs: 6 * 24 * HOUR_MS,
 		});
 
@@ -1057,9 +1055,9 @@ describe("AuthStorage codex oauth ranking", () => {
 			usageProviderResolver: provider => (provider === "openai-codex" ? usageProvider : undefined),
 		});
 		try {
-			await reopenedAuthStorage.reload();
+			await reopenedAuthStorage.credentials.reload();
 
-			const selectionAfterReopen = await reopenedAuthStorage.getApiKey(
+			const selectionAfterReopen = await reopenedAuthStorage.keys.get(
 				"openai-codex",
 				"codex-reopened-fresh-block-sibling",
 			);
@@ -1075,7 +1073,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			throw new Error("test setup failed");
 		}
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-broker-fresh-blocked", "broker-fresh-blocked@example.com") },
 			{ type: "oauth", ...createCredential("acct-broker-fresh-healthy", "broker-fresh-healthy@example.com") },
 		]);
@@ -1141,20 +1139,20 @@ describe("AuthStorage codex oauth ranking", () => {
 			});
 			const clientStorageA = new AuthStorage(remoteStoreA, { loadBalancing: true });
 			const clientStorageB = new AuthStorage(remoteStoreB, { loadBalancing: true });
-			await clientStorageA.reload();
-			await clientStorageB.reload();
+			await clientStorageA.credentials.reload();
+			await clientStorageB.credentials.reload();
 			try {
 				let blockedSessionId: string | undefined;
 				for (let index = 0; index < 100; index += 1) {
 					const sessionId = `codex-broker-fresh-block-selected-${index}`;
-					if ((await clientStorageA.getApiKey("openai-codex", sessionId)) === "api-acct-broker-fresh-blocked") {
+					if ((await clientStorageA.keys.get("openai-codex", sessionId)) === "api-acct-broker-fresh-blocked") {
 						blockedSessionId = sessionId;
 						break;
 					}
 				}
 				if (!blockedSessionId) throw new Error("expected client A to select the soon-blocked account");
 
-				const markResult = await clientStorageA.markUsageLimitReached("openai-codex", blockedSessionId, {
+				const markResult = await clientStorageA.limits.markReached("openai-codex", blockedSessionId, {
 					retryAfterMs: 6 * 24 * HOUR_MS,
 				});
 				expect(markResult.switched).toBe(true);
@@ -1169,7 +1167,7 @@ describe("AuthStorage codex oauth ranking", () => {
 				expect(remoteStoreB.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeDefined();
 				expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeDefined();
 
-				expect(await clientStorageB.getApiKey("openai-codex", "codex-broker-fresh-block-sibling")).toBe(
+				expect(await clientStorageB.keys.get("openai-codex", "codex-broker-fresh-block-sibling")).toBe(
 					"api-acct-broker-fresh-healthy",
 				);
 				expect(remoteStoreB.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeDefined();
@@ -1190,7 +1188,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			throw new Error("test setup failed");
 		}
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{
 				type: "oauth",
 				...createCredential("acct-broker-same-deadline-blocked", "broker-same-deadline-blocked@example.com"),
@@ -1288,7 +1286,7 @@ describe("AuthStorage codex oauth ranking", () => {
 				streamSnapshots: false,
 			});
 			const clientStorageB = new AuthStorage(remoteStoreB, { loadBalancing: true });
-			await clientStorageB.reload();
+			await clientStorageB.credentials.reload();
 			try {
 				expect(remoteStoreB.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBe(blockedUntilMs);
 				expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBe(blockedUntilMs);
@@ -1315,7 +1313,7 @@ describe("AuthStorage codex oauth ranking", () => {
 				expect(refreshedBlock?.blockedUntilMs).toBe(blockedUntilMs);
 				expect(refreshedBlock?.updatedAtMs).toBeGreaterThan(initialSnapshotBlock!.updatedAtMs!);
 
-				expect(await clientStorageB.getApiKey("openai-codex", "codex-broker-same-deadline-sibling")).toBe(
+				expect(await clientStorageB.keys.get("openai-codex", "codex-broker-same-deadline-sibling")).toBe(
 					"api-acct-broker-same-deadline-healthy",
 				);
 				expect(remoteStoreB.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBe(blockedUntilMs);
@@ -1334,7 +1332,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			throw new Error("test setup failed");
 		}
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{
 				type: "oauth",
 				...createCredential("acct-broker-initial-snapshot-blocked", "broker-initial-snapshot-blocked@example.com"),
@@ -1395,13 +1393,13 @@ describe("AuthStorage codex oauth ranking", () => {
 				streamSnapshots: false,
 			});
 			const clientStorageA = new AuthStorage(remoteStoreA, { loadBalancing: true });
-			await clientStorageA.reload();
+			await clientStorageA.credentials.reload();
 			try {
 				let blockedSessionId: string | undefined;
 				let blockedAccountId: string | undefined;
 				for (let index = 0; index < 100; index += 1) {
 					const sessionId = `codex-broker-initial-snapshot-block-selected-${index}`;
-					const apiKey = await clientStorageA.getApiKey("openai-codex", sessionId);
+					const apiKey = await clientStorageA.keys.get("openai-codex", sessionId);
 					if (
 						apiKey === "api-acct-broker-initial-snapshot-blocked" ||
 						apiKey === "api-acct-broker-initial-snapshot-healthy"
@@ -1419,7 +1417,7 @@ describe("AuthStorage codex oauth ranking", () => {
 						? "acct-broker-initial-snapshot-healthy"
 						: "acct-broker-initial-snapshot-blocked";
 
-				const markResult = await clientStorageA.markUsageLimitReached("openai-codex", blockedSessionId, {
+				const markResult = await clientStorageA.limits.markReached("openai-codex", blockedSessionId, {
 					retryAfterMs: 6 * 24 * HOUR_MS,
 				});
 				expect(markResult.switched).toBe(true);
@@ -1448,11 +1446,11 @@ describe("AuthStorage codex oauth ranking", () => {
 					streamSnapshots: false,
 				});
 				const clientStorageB = new AuthStorage(remoteStoreB, { loadBalancing: true });
-				await clientStorageB.reload();
+				await clientStorageB.credentials.reload();
 				try {
 					expect(remoteStoreB.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeDefined();
 
-					expect(await clientStorageB.getApiKey("openai-codex", "codex-broker-initial-snapshot-sibling")).toBe(
+					expect(await clientStorageB.keys.get("openai-codex", "codex-broker-initial-snapshot-sibling")).toBe(
 						`api-${healthyAccountId}`,
 					);
 					expect(remoteStoreB.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeDefined();
@@ -1475,7 +1473,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			throw new Error("test setup failed");
 		}
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-race-blocked", "race-blocked@example.com") },
 			{ type: "oauth", ...createCredential("acct-race-healthy", "race-healthy@example.com") },
 		]);
@@ -1518,7 +1516,7 @@ describe("AuthStorage codex oauth ranking", () => {
 		let blockedSessionId: string | undefined;
 		for (let index = 0; index < 100; index += 1) {
 			const sessionId = `codex-inflight-race-selected-${index}`;
-			if ((await authStorage.getApiKey("openai-codex", sessionId)) === "api-acct-race-blocked") {
+			if ((await authStorage.keys.get("openai-codex", sessionId)) === "api-acct-race-blocked") {
 				blockedSessionId = sessionId;
 				break;
 			}
@@ -1538,13 +1536,13 @@ describe("AuthStorage codex oauth ranking", () => {
 			return usageByAccount.get(accountId) ?? null;
 		});
 
-		const inFlightReports = authStorage.fetchUsageReports({
+		const inFlightReports = authStorage.usage.reports({
 			baseUrlResolver: provider => (provider === "openai-codex" ? inFlightBaseUrl : undefined),
 		});
 		await inFlightStarted.promise;
 		expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeUndefined();
 
-		const markResult = await authStorage.markUsageLimitReached("openai-codex", blockedSessionId, {
+		const markResult = await authStorage.limits.markReached("openai-codex", blockedSessionId, {
 			retryAfterMs: 6 * 24 * HOUR_MS,
 		});
 
@@ -1562,7 +1560,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			throw new Error("test setup failed");
 		}
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-broker-blocked", "broker-blocked@example.com") },
 			{ type: "oauth", ...createCredential("acct-broker-healthy", "broker-healthy@example.com") },
 		]);
@@ -1634,18 +1632,18 @@ describe("AuthStorage codex oauth ranking", () => {
 				streamSnapshots: false,
 			});
 			const clientStorage = new AuthStorage(remoteStore, { loadBalancing: true });
-			await clientStorage.reload();
+			await clientStorage.credentials.reload();
 			try {
 				expect(remoteStore.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeDefined();
 				expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeDefined();
 				remoteStore.cleanExpiredCredentialBlocks(Date.now() + STALE_BLOCK_GUARD_MS);
 				store.cleanExpiredCredentialBlocks?.(Date.now() + STALE_BLOCK_GUARD_MS);
 
-				await clientStorage.fetchUsageReports();
+				await clientStorage.usage.reports();
 
 				expect(remoteStore.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeUndefined();
 				expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeUndefined();
-				expect(await clientStorage.getApiKey("openai-codex", "broker-codex-reconciled")).toBe(
+				expect(await clientStorage.keys.get("openai-codex", "broker-codex-reconciled")).toBe(
 					"api-acct-broker-blocked",
 				);
 			} finally {
@@ -1662,7 +1660,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			throw new Error("test setup failed");
 		}
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-blocked", "blocked@example.com") },
 			{ type: "oauth", ...createCredential("acct-healthy", "healthy@example.com") },
 		]);
@@ -1712,7 +1710,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			}),
 		);
 
-		await authStorage.fetchUsageReports();
+		await authStorage.usage.reports();
 
 		expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBe(blockedUntilMs);
 	});
@@ -1720,7 +1718,7 @@ describe("AuthStorage codex oauth ranking", () => {
 	test("falls back to earliest-unblocking account when all exhausted", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-soon", "soon@example.com") },
 			{ type: "oauth", ...createCredential("acct-later", "later@example.com") },
 		]);
@@ -1742,14 +1740,14 @@ describe("AuthStorage codex oauth ranking", () => {
 			}),
 		);
 
-		const apiKey = await authStorage.getApiKey("openai-codex", "session-all-exhausted");
+		const apiKey = await authStorage.keys.get("openai-codex", "session-all-exhausted");
 		expect(apiKey).toBe("api-acct-soon");
 	});
 
 	test("works with single credential (no ranking)", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("openai-codex", [{ type: "oauth", ...createCredential("acct-solo", "solo@example.com") }]);
+		await authStorage.credentials.set("openai-codex", [{ type: "oauth", ...createCredential("acct-solo", "solo@example.com") }]);
 
 		usageByAccount.set(
 			"acct-solo",
@@ -1760,7 +1758,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			}),
 		);
 
-		const apiKey = await authStorage.getApiKey("openai-codex", "session-single");
+		const apiKey = await authStorage.keys.get("openai-codex", "session-single");
 		expect(apiKey).toBe("api-acct-solo");
 	});
 
@@ -1771,7 +1769,7 @@ describe("AuthStorage codex oauth ranking", () => {
 	])("%s routes away from a less-used %s account to an eligible %s account", async (modelId, freePlan, paidPlan) => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-free", "free@example.com") },
 			{ type: "oauth", ...createCredential("acct-paid", "paid@example.com") },
 		]);
@@ -1795,7 +1793,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			}),
 		);
 
-		const apiKey = await authStorage.getApiKey("openai-codex", undefined, { modelId });
+		const apiKey = await authStorage.keys.get("openai-codex", undefined, { modelId });
 		expect(apiKey).toBe("api-acct-paid");
 	});
 
@@ -1807,7 +1805,7 @@ describe("AuthStorage codex oauth ranking", () => {
 		async (modelId, lowUsagePlan, highUsagePlan) => {
 			if (!authStorage) throw new Error("test setup failed");
 
-			await authStorage.set("openai-codex", [
+			await authStorage.credentials.set("openai-codex", [
 				{ type: "oauth", ...createCredential("acct-low-usage", "low-usage@example.com") },
 				{ type: "oauth", ...createCredential("acct-high-usage", "high-usage@example.com") },
 			]);
@@ -1831,7 +1829,7 @@ describe("AuthStorage codex oauth ranking", () => {
 				}),
 			);
 
-			const apiKey = await authStorage.getApiKey("openai-codex", undefined, { modelId });
+			const apiKey = await authStorage.keys.get("openai-codex", undefined, { modelId });
 			expect(apiKey).toBe("api-acct-low-usage");
 		},
 	);
@@ -1839,7 +1837,7 @@ describe("AuthStorage codex oauth ranking", () => {
 	test("reranks a Terra session on a Go account when it switches to Sol", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-go", "go@example.com") },
 			{ type: "oauth", ...createCredential("acct-business", "business@example.com") },
 		]);
@@ -1867,7 +1865,7 @@ describe("AuthStorage codex oauth ranking", () => {
 		let terraApiKey: string | undefined;
 		for (let index = 0; index < 100; index += 1) {
 			const sessionId = `session-terra-to-sol-${index}`;
-			const apiKey = await authStorage.getApiKey("openai-codex", sessionId, {
+			const apiKey = await authStorage.keys.get("openai-codex", sessionId, {
 				modelId: "gpt-5.6-terra",
 			});
 			if (apiKey === "api-acct-go") {
@@ -1879,7 +1877,7 @@ describe("AuthStorage codex oauth ranking", () => {
 		expect(terraApiKey).toBe("api-acct-go");
 		if (!terraSession) throw new Error("expected Terra to select the lower-usage Go account");
 
-		const solApiKey = await authStorage.getApiKey("openai-codex", terraSession, {
+		const solApiKey = await authStorage.keys.get("openai-codex", terraSession, {
 			modelId: "gpt-5.6-sol",
 		});
 		expect(solApiKey).toBe("api-acct-business");
@@ -1888,7 +1886,7 @@ describe("AuthStorage codex oauth ranking", () => {
 	test("falls back by ordinary usage ranking for Sol when no account is confirmed paid", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-free", "free@example.com") },
 			{ type: "oauth", ...createCredential("acct-go", "go@example.com") },
 		]);
@@ -1912,7 +1910,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			}),
 		);
 
-		const apiKey = await authStorage.getApiKey("openai-codex", undefined, {
+		const apiKey = await authStorage.keys.get("openai-codex", undefined, {
 			modelId: "gpt-5.6-sol",
 		});
 		expect(apiKey).toBe("api-acct-go");
@@ -1928,7 +1926,7 @@ describe("AuthStorage codex oauth ranking", () => {
 		// blocked — and the idle free account ranked first. The plan-fitting
 		// last-resort pass must yield the exhausted paid account instead, so
 		// the caller gets real usage-limit semantics from the wire.
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-free", "free@example.com") },
 			{ type: "oauth", ...createCredential("acct-paid", "paid@example.com") },
 		]);
@@ -1952,7 +1950,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			}),
 		);
 
-		const apiKey = await authStorage.getApiKey("openai-codex", "session-paid-gated-all-blocked", {
+		const apiKey = await authStorage.keys.get("openai-codex", "session-paid-gated-all-blocked", {
 			modelId: "gpt-5.6-sol",
 		});
 		expect(apiKey).toBe("api-acct-paid");
@@ -1966,7 +1964,7 @@ describe("AuthStorage codex oauth ranking", () => {
 		// only a later-resetting paid seat can serve gpt-5.6-sol. The blocked
 		// pass must keep iterating past the plan-ineligible free seat instead
 		// of giving up after the first blocked candidate.
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-free", "free@example.com") },
 			{ type: "oauth", ...createCredential("acct-paid", "paid@example.com") },
 		]);
@@ -1990,7 +1988,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			}),
 		);
 
-		const apiKey = await authStorage.getApiKey("openai-codex", "session-sol-all-exhausted", {
+		const apiKey = await authStorage.keys.get("openai-codex", "session-sol-all-exhausted", {
 			modelId: "gpt-5.6-sol",
 		});
 		expect(apiKey).toBe("api-acct-paid");
@@ -1999,7 +1997,7 @@ describe("AuthStorage codex oauth ranking", () => {
 	test("prefers Pro accounts for codex spark models over Plus accounts", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-plus", "plus@example.com") },
 			{ type: "oauth", ...createCredential("acct-pro", "pro@example.com") },
 		]);
@@ -2020,7 +2018,7 @@ describe("AuthStorage codex oauth ranking", () => {
 		proReport.metadata = { ...proReport.metadata, planType: "pro" };
 		usageByAccount.set("acct-pro", proReport);
 
-		const apiKey = await authStorage.getApiKey("openai-codex", "session-spark-prefers-pro", {
+		const apiKey = await authStorage.keys.get("openai-codex", "session-spark-prefers-pro", {
 			modelId: "gpt-5.3-codex-spark",
 		});
 		expect(apiKey).toBe("api-acct-pro");
@@ -2029,7 +2027,7 @@ describe("AuthStorage codex oauth ranking", () => {
 	test("routes codex spark to a single Plus account when no Pro is connected", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("openai-codex", [{ type: "oauth", ...createCredential("acct-plus", "plus@example.com") }]);
+		await authStorage.credentials.set("openai-codex", [{ type: "oauth", ...createCredential("acct-plus", "plus@example.com") }]);
 
 		const plusReport = createCodexUsageReport({
 			accountId: "acct-plus",
@@ -2039,7 +2037,7 @@ describe("AuthStorage codex oauth ranking", () => {
 		plusReport.metadata = { ...plusReport.metadata, planType: "plus" };
 		usageByAccount.set("acct-plus", plusReport);
 
-		const apiKey = await authStorage.getApiKey("openai-codex", "session-spark-single-plus", {
+		const apiKey = await authStorage.keys.get("openai-codex", "session-spark-single-plus", {
 			modelId: "gpt-5.3-codex-spark",
 		});
 		expect(apiKey).toBe("api-acct-plus");
@@ -2048,7 +2046,7 @@ describe("AuthStorage codex oauth ranking", () => {
 	test("falls back to Plus accounts for codex spark models when no Pro is connected", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-plus-a", "plus-a@example.com") },
 			{ type: "oauth", ...createCredential("acct-plus-b", "plus-b@example.com") },
 		]);
@@ -2063,7 +2061,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			usageByAccount.set(accountId, plusReport);
 		}
 
-		const apiKey = await authStorage.getApiKey("openai-codex", "session-spark-all-plus", {
+		const apiKey = await authStorage.keys.get("openai-codex", "session-spark-all-plus", {
 			modelId: "gpt-5.3-codex-spark",
 		});
 		expect(apiKey).toBeDefined();
@@ -2093,13 +2091,13 @@ describe("AuthStorage codex oauth ranking", () => {
 			usageRequestTimeoutMs: 10,
 		});
 
-		await slowAuthStorage.set("openai-codex", [
+		await slowAuthStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-first", "first@example.com") },
 			{ type: "oauth", ...createCredential("acct-second", "second@example.com") },
 		]);
 
 		const startedAt = Date.now();
-		const apiKey = await slowAuthStorage.getApiKey("openai-codex");
+		const apiKey = await slowAuthStorage.keys.get("openai-codex");
 		const elapsedMs = Date.now() - startedAt;
 
 		expect(apiKey).toBe("api-acct-first");
@@ -2112,7 +2110,7 @@ describe("AuthStorage codex oauth ranking", () => {
 	test("weights 3 accounts by weekly drain rate", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-fast", "fast@example.com") },
 			{ type: "oauth", ...createCredential("acct-medium", "medium@example.com") },
 			{ type: "oauth", ...createCredential("acct-slow", "slow@example.com") },
@@ -2151,7 +2149,7 @@ describe("AuthStorage codex oauth ranking", () => {
 	test("handles usage fetch failure gracefully (null report)", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-null", "null@example.com") },
 			{ type: "oauth", ...createCredential("acct-known", "known@example.com") },
 		]);
@@ -2173,7 +2171,7 @@ describe("AuthStorage codex oauth ranking", () => {
 	test("exhausted response headers block the sticky account before the next request", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-hdr-a", "hdr-a@example.com") },
 			{ type: "oauth", ...createCredential("acct-hdr-b", "hdr-b@example.com") },
 		]);
@@ -2189,7 +2187,7 @@ describe("AuthStorage codex oauth ranking", () => {
 		}
 
 		const sessionId = "hdr-sticky-session";
-		const stickyKey = await authStorage.getApiKey("openai-codex", sessionId);
+		const stickyKey = await authStorage.keys.get("openai-codex", sessionId);
 		if (!stickyKey) throw new Error("expected sticky key");
 		const stickyAccount = stickyKey.replace("api-", "");
 		const siblingKey = stickyAccount === "acct-hdr-a" ? "api-acct-hdr-b" : "api-acct-hdr-a";
@@ -2202,19 +2200,19 @@ describe("AuthStorage codex oauth ranking", () => {
 			"x-codex-secondary-window-minutes": String(7 * 24 * 60),
 			"x-codex-secondary-reset-at": String(Math.floor((Date.now() + 5 * 24 * HOUR_MS) / 1000)),
 		};
-		expect(authStorage.ingestUsageHeaders("openai-codex", healthyHeaders, { sessionId })).toBe(true);
+		expect(authStorage.usage.ingestHeaders("openai-codex", healthyHeaders, { sessionId })).toBe(true);
 		// Within the ingest throttle window a healthy snapshot is dropped...
-		expect(authStorage.ingestUsageHeaders("openai-codex", healthyHeaders, { sessionId })).toBe(false);
+		expect(authStorage.usage.ingestHeaders("openai-codex", healthyHeaders, { sessionId })).toBe(false);
 		// ...but an exhausted weekly window bypasses the throttle immediately.
 		const exhaustedHeaders = {
 			...healthyHeaders,
 			"x-codex-secondary-used-percent": "100",
 		};
-		expect(authStorage.ingestUsageHeaders("openai-codex", exhaustedHeaders, { sessionId })).toBe(true);
+		expect(authStorage.usage.ingestHeaders("openai-codex", exhaustedHeaders, { sessionId })).toBe(true);
 
 		// The next request for the same session must rotate to the sibling
 		// without a wire 429: the ingested snapshot blocks the sticky account.
-		const rotatedKey = await authStorage.getApiKey("openai-codex", sessionId);
+		const rotatedKey = await authStorage.keys.get("openai-codex", sessionId);
 		expect(rotatedKey).toBe(siblingKey);
 	});
 	test("refreshes expired oauth candidates in parallel before selection", async () => {
@@ -2257,13 +2255,13 @@ describe("AuthStorage codex oauth ranking", () => {
 		});
 
 		const expiredAt = Date.now() - HOUR_MS;
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-first", "first@example.com"), expires: expiredAt },
 			{ type: "oauth", ...createCredential("acct-second", "second@example.com"), expires: expiredAt },
 			{ type: "oauth", ...createCredential("acct-third", "third@example.com"), expires: expiredAt },
 		]);
 
-		const apiKey = await authStorage.getApiKey("openai-codex");
+		const apiKey = await authStorage.keys.get("openai-codex");
 
 		expect(apiKey).toBe("refreshed-acct-third");
 		expect(refreshStarts).toHaveLength(3);
@@ -2276,7 +2274,7 @@ describe("AuthStorage codex oauth ranking", () => {
 	test("skips expired access-token-only sticky credential and selects fresh sibling", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const sessionId = "sticky-token-only-session";
-		await authStorage.set("openai-codex", [{ type: "oauth", ...createCredential("acct-k12", "k12@example.com") }]);
+		await authStorage.credentials.set("openai-codex", [{ type: "oauth", ...createCredential("acct-k12", "k12@example.com") }]);
 		usageByAccount.set(
 			"acct-k12",
 			createCodexUsageReport({
@@ -2285,7 +2283,7 @@ describe("AuthStorage codex oauth ranking", () => {
 				secondary: { usedFraction: 0.2, resetInMs: 5 * 24 * 60 * 60 * 1000 },
 			}),
 		);
-		expect(await authStorage.getApiKey("openai-codex", sessionId)).toBe("api-acct-k12");
+		expect(await authStorage.keys.get("openai-codex", sessionId)).toBe("api-acct-k12");
 		usageByAccount.set(
 			"acct-k12",
 			createCodexUsageReport({
@@ -2303,7 +2301,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			}),
 		);
 
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{
 				type: "oauth",
 				access: "access-acct-k12",
@@ -2318,12 +2316,12 @@ describe("AuthStorage codex oauth ranking", () => {
 			},
 		]);
 
-		expect(await authStorage.getApiKey("openai-codex", sessionId)).toBe("api-acct-plus");
+		expect(await authStorage.keys.get("openai-codex", sessionId)).toBe("api-acct-plus");
 	});
 
 	test("ignores legacy global Codex blocks when a scoped quota window has fresh siblings", async () => {
 		if (!authStorage || !store) throw new Error("test setup failed");
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", ...createCredential("acct-k12", "k12@example.com") },
 			{ type: "oauth", ...createCredential("acct-plus", "plus@example.com") },
 		]);
@@ -2364,7 +2362,7 @@ describe("AuthStorage codex oauth ranking", () => {
 			blockedUntilMs: Date.now() + HOUR_MS,
 		});
 
-		expect(await authStorage.getApiKey("openai-codex", "session-with-legacy-global-block")).toBe("api-acct-plus");
+		expect(await authStorage.keys.get("openai-codex", "session-with-legacy-global-block")).toBe("api-acct-plus");
 	});
 });
 
@@ -2495,7 +2493,7 @@ describe("AuthStorage claude oauth ranking", () => {
 	test("prefers the account whose expiring weekly headroom drains fastest", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("anthropic", [
+		await authStorage.credentials.set("anthropic", [
 			{ type: "oauth", ...createCredential("acct-near", "near@example.com") },
 			{ type: "oauth", ...createCredential("acct-far", "far@example.com") },
 		]);
@@ -2524,7 +2522,7 @@ describe("AuthStorage claude oauth ranking", () => {
 	test("resolves equal-priority accounts to one deterministic pick", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("anthropic", [
+		await authStorage.credentials.set("anthropic", [
 			{ type: "oauth", ...createCredential("acct-a", "a@example.com") },
 			{ type: "oauth", ...createCredential("acct-b", "b@example.com") },
 		]);
@@ -2547,7 +2545,7 @@ describe("AuthStorage claude oauth ranking", () => {
 	test("routes every session to the top-ranked account without weighted spread", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("anthropic", [
+		await authStorage.credentials.set("anthropic", [
 			{ type: "oauth", ...createCredential("acct-best", "best@example.com") },
 			{ type: "oauth", ...createCredential("acct-base-a", "base-a@example.com") },
 			{ type: "oauth", ...createCredential("acct-base-b", "base-b@example.com") },
@@ -2580,7 +2578,7 @@ describe("AuthStorage claude oauth ranking", () => {
 	test("demotes an account whose 5h window is nearly exhausted despite higher weekly drain", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("anthropic", [
+		await authStorage.credentials.set("anthropic", [
 			{ type: "oauth", ...createCredential("acct-urgent-hot", "urgent-hot@example.com") },
 			{ type: "oauth", ...createCredential("acct-cool", "cool@example.com") },
 		]);
@@ -2612,7 +2610,7 @@ describe("AuthStorage claude oauth ranking", () => {
 	test("skips exhausted account and picks healthy", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("anthropic", [
+		await authStorage.credentials.set("anthropic", [
 			{ type: "oauth", ...createCredential("acct-exhausted", "exhausted@example.com") },
 			{ type: "oauth", ...createCredential("acct-healthy", "healthy@example.com") },
 		]);
@@ -2634,14 +2632,14 @@ describe("AuthStorage claude oauth ranking", () => {
 			}),
 		);
 
-		const apiKey = await authStorage.getApiKey("anthropic", "session-claude-exhausted");
+		const apiKey = await authStorage.keys.get("anthropic", "session-claude-exhausted");
 		expect(apiKey).toBe("api-acct-healthy");
 	});
 
 	test("falls back to earliest-unblocking when all exhausted", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("anthropic", [
+		await authStorage.credentials.set("anthropic", [
 			{ type: "oauth", ...createCredential("acct-soon", "soon@example.com") },
 			{ type: "oauth", ...createCredential("acct-later", "later@example.com") },
 		]);
@@ -2663,14 +2661,14 @@ describe("AuthStorage claude oauth ranking", () => {
 			}),
 		);
 
-		const apiKey = await authStorage.getApiKey("anthropic", "session-claude-all-exhausted");
+		const apiKey = await authStorage.keys.get("anthropic", "session-claude-all-exhausted");
 		expect(apiKey).toBe("api-acct-soon");
 	});
 
 	test("weights 3 accounts by secondary drain rate", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("anthropic", [
+		await authStorage.credentials.set("anthropic", [
 			{ type: "oauth", ...createCredential("acct-fast", "fast@example.com") },
 			{ type: "oauth", ...createCredential("acct-medium", "medium@example.com") },
 			{ type: "oauth", ...createCredential("acct-slow", "slow@example.com") },
@@ -2709,7 +2707,7 @@ describe("AuthStorage claude oauth ranking", () => {
 	test("selects the account with lower Fable weekly usage for Claude Fable requests", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("anthropic", [
+		await authStorage.credentials.set("anthropic", [
 			{ type: "oauth", ...createCredential("acct-a", "a@example.com") },
 			{ type: "oauth", ...createCredential("acct-b", "b@example.com") },
 		]);
@@ -2733,14 +2731,14 @@ describe("AuthStorage claude oauth ranking", () => {
 			}),
 		);
 
-		const apiKey = await authStorage.getApiKey("anthropic", undefined, { modelId: "claude-fable-5" });
+		const apiKey = await authStorage.keys.get("anthropic", undefined, { modelId: "claude-fable-5" });
 		expect(apiKey).toBe("api-acct-b");
 	});
 
 	test("single credential works without ranking", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		await authStorage.set("anthropic", [{ type: "oauth", ...createCredential("acct-solo", "solo@example.com") }]);
+		await authStorage.credentials.set("anthropic", [{ type: "oauth", ...createCredential("acct-solo", "solo@example.com") }]);
 
 		usageByAccount.set(
 			"acct-solo",
@@ -2751,7 +2749,7 @@ describe("AuthStorage claude oauth ranking", () => {
 			}),
 		);
 
-		const apiKey = await authStorage.getApiKey("anthropic", "session-claude-single");
+		const apiKey = await authStorage.keys.get("anthropic", "session-claude-single");
 		expect(apiKey).toBe("api-acct-solo");
 	});
 });

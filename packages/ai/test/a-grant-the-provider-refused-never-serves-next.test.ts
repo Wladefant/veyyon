@@ -105,7 +105,7 @@ describe("a grant the provider refused", () => {
 		const { store, storage } = await storageWithFailingRefresh();
 		store.saveOAuth(PROVIDER, oauthCredential("revoked", { expired: true }));
 		store.saveOAuth(PROVIDER, oauthCredential("healthy"));
-		await storage.reload();
+		await storage.credentials.reload();
 		const rows = store.listAuthCredentials(PROVIDER);
 		const revokedId = rows[0]!.id;
 		const healthyId = rows[1]!.id;
@@ -113,89 +113,89 @@ describe("a grant the provider refused", () => {
 		// Before the probe the product has been told nothing, so naming the revoked grant is honest
 		// here: it is first in order and no refusal has been observed. This is the state the card
 		// opens in, and it is why the probe must feed routing rather than only its own result.
-		const results = await storage.checkCredentials({ credentialIds: [revokedId] });
+		const results = await storage.health.check({ credentialIds: [revokedId] });
 		expect(results.map(result => [result.id, result.ok])).toEqual([[revokedId, false]]);
 		expect(results[0]!.reason).toContain("oauth refresh failed");
 
-		const routing = storage.sessionCredentialRouting(PROVIDER, SESSION);
+		const routing = storage.sessions.routing(PROVIDER, SESSION);
 		expect(routing?.activeCredentialId).toBe(healthyId);
 		expect(routing?.activeIsPrediction).toBe(true);
 		// And the resolve agrees with the report, which is the half a card cannot show.
-		expect(await storage.getApiKey(PROVIDER, SESSION)).toBe("access-healthy");
+		expect(await storage.keys.get(PROVIDER, SESSION)).toBe("access-healthy");
 	});
 
 	it("still gets named when it is the only account there is", async () => {
 		const { store, storage } = await storageWithFailingRefresh();
 		store.saveOAuth(PROVIDER, oauthCredential("revoked", { expired: true }));
-		await storage.reload();
+		await storage.credentials.reload();
 		const onlyId = store.listAuthCredentials(PROVIDER)[0]!.id;
 
-		await storage.checkCredentials({ credentialIds: [onlyId] });
+		await storage.health.check({ credentialIds: [onlyId] });
 
 		// A provider holding one refused account must not read as a provider holding none: the row is
 		// there, the operator can see it, and the answer to "what serves next" is still that account.
-		const routing = storage.sessionCredentialRouting(PROVIDER, SESSION);
+		const routing = storage.sessions.routing(PROVIDER, SESSION);
 		expect(routing?.activeCredentialId).toBe(onlyId);
 	});
 
 	it("loses its lead to a stored key when every login of its type is refused", async () => {
 		const { storage } = await storageWithFailingRefresh();
-		await storage.set(PROVIDER, [
+		await storage.credentials.set(PROVIDER, [
 			oauthCredential("revoked", { expired: true }),
 			{ type: "api_key", key: "sk-live-key" },
 		]);
-		const stored = storage.listStoredCredentials(PROVIDER);
+		const stored = storage.credentials.list(PROVIDER);
 		const revokedId = stored.find(row => row.credential.type === "oauth")!.id;
 		const keyId = stored.find(row => row.credential.type === "api_key")!.id;
 
-		await storage.checkCredentials({ credentialIds: [revokedId] });
+		await storage.health.check({ credentialIds: [revokedId] });
 
 		// The cascade prefers a login to a stored key, and that preference is about which credential
 		// is better, not about which one exists: a login the provider has refused is not a candidate,
 		// so the key behind it is what serves — which is what the real resolve does too.
-		const routing = storage.sessionCredentialRouting(PROVIDER, SESSION);
+		const routing = storage.sessions.routing(PROVIDER, SESSION);
 		expect(routing?.activeCredentialId).toBe(keyId);
-		expect(await storage.getApiKey(PROVIDER, SESSION)).toBe("sk-live-key");
+		expect(await storage.keys.get(PROVIDER, SESSION)).toBe("sk-live-key");
 	});
 
 	it("leads again the moment the hold on it is lifted", async () => {
 		const { store, storage } = await storageWithFailingRefresh();
 		store.saveOAuth(PROVIDER, oauthCredential("revoked", { expired: true }));
 		store.saveOAuth(PROVIDER, oauthCredential("healthy"));
-		await storage.reload();
+		await storage.credentials.reload();
 		const revokedId = store.listAuthCredentials(PROVIDER)[0]!.id;
 
-		await storage.checkCredentials({ credentialIds: [revokedId] });
-		expect(storage.sessionCredentialRouting(PROVIDER, SESSION)?.activeCredentialId).not.toBe(revokedId);
+		await storage.health.check({ credentialIds: [revokedId] });
+		expect(storage.sessions.routing(PROVIDER, SESSION)?.activeCredentialId).not.toBe(revokedId);
 
 		// Lifting the hold is the operator asserting the account works again — a re-login, a plan
 		// change, a support credit, anything this process cannot see. It retires the refusal with it,
 		// or the assertion would be silently ignored.
-		storage.clearCredentialBlocks(PROVIDER, revokedId);
-		expect(storage.sessionCredentialRouting(PROVIDER, SESSION)?.activeCredentialId).toBe(revokedId);
+		storage.blocks.clearAll(PROVIDER, revokedId);
+		expect(storage.sessions.routing(PROVIDER, SESSION)?.activeCredentialId).toBe(revokedId);
 	});
 
 	it("is refused by the request path as well as by the probe", async () => {
 		const store = await SqliteAuthCredentialStore.open(dbPath);
 		const storage = new AuthStorage(store);
-		await storage.set(PROVIDER, [
+		await storage.credentials.set(PROVIDER, [
 			{ type: "api_key", key: "sk-refused" },
 			{ type: "api_key", key: "sk-live" },
 		]);
-		const refusedId = storage.listStoredCredentials(PROVIDER)[0]!.id;
-		const liveId = storage.listStoredCredentials(PROVIDER)[1]!.id;
+		const refusedId = storage.credentials.list(PROVIDER)[0]!.id;
+		const liveId = storage.credentials.list(PROVIDER)[1]!.id;
 		expect(REFUSAL_BY_TYPE.api_key.feeder).toBe("request");
 
 		// A hard 401 mid-turn. Not a usage limit: that is a hold, and the control arm below is what
 		// keeps the two apart.
-		await storage.rotateSessionCredential(PROVIDER, SESSION, {
+		await storage.limits.rotate(PROVIDER, SESSION, {
 			credentialId: refusedId,
 			error: new Error("HTTP 401 invalid api key"),
 		});
 
-		const routing = storage.sessionCredentialRouting(PROVIDER, SESSION);
+		const routing = storage.sessions.routing(PROVIDER, SESSION);
 		expect(routing?.activeCredentialId).toBe(liveId);
-		expect(await storage.getApiKey(PROVIDER, SESSION)).toBe("sk-live");
+		expect(await storage.keys.get(PROVIDER, SESSION)).toBe("sk-live");
 	});
 
 	it("is not the same thing as an account this product decided to hold", async () => {
@@ -203,10 +203,10 @@ describe("a grant the provider refused", () => {
 		store.saveOAuth(PROVIDER, oauthCredential("held"));
 		store.saveOAuth(PROVIDER, oauthCredential("idle"));
 		const storage = new AuthStorage(store);
-		await storage.reload();
+		await storage.credentials.reload();
 		const heldId = store.listAuthCredentials(PROVIDER)[0]!.id;
-		expect(storage.selectProviderCredential(PROVIDER, heldId)).toBe(true);
-		storage.upsertCredentialBlock({
+		expect(storage.sessions.selectProviderCredential(PROVIDER, heldId)).toBe(true);
+		storage.blocks.upsert({
 			credentialId: heldId,
 			providerKey: `${PROVIDER}:oauth`,
 			blockScope: "",
@@ -219,7 +219,7 @@ describe("a grant the provider refused", () => {
 		// ever asks for a prediction, so the arm below is the one that reaches the code in question. It
 		// was green under a mutation that skipped held accounts alongside refused ones, which is
 		// exactly the assumption a control arm is supposed to catch.
-		const routing = storage.sessionCredentialRouting(PROVIDER, SESSION);
+		const routing = storage.sessions.routing(PROVIDER, SESSION);
 		expect(routing?.activeCredentialId).toBe(heldId);
 		expect(routing?.selectedCredentialId).toBe(heldId);
 		expect(routing?.activeIsPrediction).toBeUndefined();
@@ -229,18 +229,18 @@ describe("a grant the provider refused", () => {
 		const { store, storage } = await storageWithFailingRefresh();
 		store.saveOAuth(PROVIDER, oauthCredential("revoked", { expired: true }));
 		store.saveOAuth(PROVIDER, oauthCredential("held"));
-		await storage.reload();
+		await storage.credentials.reload();
 		const rows = store.listAuthCredentials(PROVIDER);
 		const revokedId = rows[0]!.id;
 		const heldId = rows[1]!.id;
-		storage.upsertCredentialBlock({
+		storage.blocks.upsert({
 			credentialId: heldId,
 			providerKey: `${PROVIDER}:oauth`,
 			blockScope: "",
 			blockedUntilMs: HOLD_UNTIL_MS,
 		});
 
-		await storage.checkCredentials({ credentialIds: [revokedId] });
+		await storage.health.check({ credentialIds: [revokedId] });
 
 		// Nobody chose either account, so this reaches the prediction, and neither candidate can serve
 		// right now: one is refused and the other is held. They are not equally bad. The held account
@@ -249,6 +249,6 @@ describe("a grant the provider refused", () => {
 		// skipped held accounts too would answer with the revoked grant, which is the defect wearing
 		// a different hat. Routing only: what the resolve does with a pair like this is a request
 		// against a provider, and this file asserts nothing about provider answers.
-		expect(storage.sessionCredentialRouting(PROVIDER, SESSION)?.activeCredentialId).toBe(heldId);
+		expect(storage.sessions.routing(PROVIDER, SESSION)?.activeCredentialId).toBe(heldId);
 	});
 });

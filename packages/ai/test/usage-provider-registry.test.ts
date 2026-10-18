@@ -58,9 +58,9 @@ describe("the registry once the defaults are loaded", () => {
 		expect(usageProvidersRegistered()).toBe(true);
 	});
 
-	/** Every one of the eleven backends is reachable by its own provider id, not just present in a list. */
-	it("resolves each of the eleven backends by provider id", () => {
-		expect(DEFAULT_USAGE_PROVIDERS.length).toBe(11);
+	/** Every one of the twenty-two backends is reachable by its own provider id, not just present in a list. */
+	it("resolves each backend by provider id", () => {
+		expect(DEFAULT_USAGE_PROVIDERS.length).toBe(22);
 		for (const provider of DEFAULT_USAGE_PROVIDERS) {
 			expect(resolveRegisteredUsageProvider(provider.id)).toBe(provider);
 		}
@@ -70,33 +70,50 @@ describe("the registry once the defaults are loaded", () => {
 	 * The exact set, sorted. A count would pass while registering a different backend than the one it
 	 * counted, and the whole risk of moving a table is that it arrives slightly different.
 	 */
-	it("registers exactly the eleven providers the credential store used to hold", () => {
+	it("registers the expected usage providers", () => {
 		expect(
 			listRegisteredUsageProviders()
 				.map(provider => provider.id)
 				.sort(),
 		).toEqual([
+			"alibaba-token-plan",
 			"anthropic",
+			"charm-hyper",
+			"cline-pass",
+			"commandcode",
 			"cursor",
+			"devin",
+			"factory-droid",
 			"github-copilot",
 			"google-antigravity",
 			"google-gemini-cli",
 			"kimi-code",
+			"minimax-code",
+			"muse-code",
 			"ollama",
 			"ollama-cloud",
 			"openai-codex",
 			"opencode-go",
+			"synthetic",
+			"umans",
+			"xai-oauth",
 			"zai",
 		]);
 	});
 
-	/** The five providers that rank their credentials by their own rules, and only those five. */
-	it("registers exactly the five ranking strategies", () => {
+	/** The eleven providers that rank their credentials by their own rules, and only those eleven. */
+	it("registers exactly the eleven ranking strategies", () => {
 		expect(DEFAULT_RANKING_STRATEGIES.map(([provider]) => provider).sort()).toEqual([
+			"alibaba-token-plan",
 			"anthropic",
+			"commandcode",
+			"cursor",
+			"factory-droid",
 			"google-antigravity",
+			"kimi-code",
 			"openai-codex",
 			"opencode-go",
+			"xai-oauth",
 			"zai",
 		]);
 		for (const [provider, strategy] of DEFAULT_RANKING_STRATEGIES) {

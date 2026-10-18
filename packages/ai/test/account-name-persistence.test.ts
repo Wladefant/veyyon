@@ -53,7 +53,7 @@ describe("AuthStorage account names round-trip", () => {
 		dbPath = path.join(tempDir, "agent.db");
 		store = await SqliteAuthCredentialStore.open(dbPath);
 		authStorage = new AuthStorage(store);
-		await authStorage.set(PROVIDER, [
+		await authStorage.credentials.set(PROVIDER, [
 			{
 				type: "oauth",
 				access: "access-only",
@@ -63,7 +63,7 @@ describe("AuthStorage account names round-trip", () => {
 				email: "only@example.com",
 			},
 		]);
-		credentialId = authStorage.listStoredCredentials(PROVIDER)[0]!.id;
+		credentialId = authStorage.credentials.list(PROVIDER)[0]!.id;
 	});
 
 	afterEach(async () => {
@@ -86,9 +86,9 @@ describe("AuthStorage account names round-trip", () => {
 		const storage = authStorage;
 		const name = "работа · Mükund's Max 20x";
 
-		expect(storage.setAccountName(PROVIDER, credentialId, name)).toBe(true);
+		expect(storage.credentials.setAccountName(PROVIDER, credentialId, name)).toBe(true);
 
-		expect(storage.getAccountName(PROVIDER, credentialId)).toBe(name);
+		expect(storage.credentials.getAccountName(PROVIDER, credentialId)).toBe(name);
 	});
 
 	/**
@@ -104,10 +104,10 @@ describe("AuthStorage account names round-trip", () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
 
-		expect(storage.setAccountName(PROVIDER, credentialId, "   work  laptop   ")).toBe(true);
+		expect(storage.credentials.setAccountName(PROVIDER, credentialId, "   work  laptop   ")).toBe(true);
 
 		expect(storedNameBytes(dbPath)).toBe("work  laptop");
-		expect(storage.getAccountName(PROVIDER, credentialId)).toBe("work  laptop");
+		expect(storage.credentials.getAccountName(PROVIDER, credentialId)).toBe("work  laptop");
 	});
 
 	/**
@@ -119,12 +119,12 @@ describe("AuthStorage account names round-trip", () => {
 	test("an empty name clears the row rather than storing an empty string", () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
-		expect(storage.setAccountName(PROVIDER, credentialId, "work")).toBe(true);
+		expect(storage.credentials.setAccountName(PROVIDER, credentialId, "work")).toBe(true);
 		expect(countNameRows(dbPath)).toBe(1);
 
-		expect(storage.setAccountName(PROVIDER, credentialId, "")).toBe(true);
+		expect(storage.credentials.setAccountName(PROVIDER, credentialId, "")).toBe(true);
 
-		expect(storage.getAccountName(PROVIDER, credentialId)).toBeUndefined();
+		expect(storage.credentials.getAccountName(PROVIDER, credentialId)).toBeUndefined();
 		expect(countNameRows(dbPath)).toBe(0);
 	});
 
@@ -132,11 +132,11 @@ describe("AuthStorage account names round-trip", () => {
 	test("a whitespace-only name clears the row", () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
-		expect(storage.setAccountName(PROVIDER, credentialId, "work")).toBe(true);
+		expect(storage.credentials.setAccountName(PROVIDER, credentialId, "work")).toBe(true);
 
-		expect(storage.setAccountName(PROVIDER, credentialId, "   ")).toBe(true);
+		expect(storage.credentials.setAccountName(PROVIDER, credentialId, "   ")).toBe(true);
 
-		expect(storage.getAccountName(PROVIDER, credentialId)).toBeUndefined();
+		expect(storage.credentials.getAccountName(PROVIDER, credentialId)).toBeUndefined();
 		expect(countNameRows(dbPath)).toBe(0);
 	});
 
@@ -149,10 +149,10 @@ describe("AuthStorage account names round-trip", () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
 
-		expect(storage.setAccountName(PROVIDER, credentialId + 5_000, "ghost")).toBe(false);
+		expect(storage.credentials.setAccountName(PROVIDER, credentialId + 5_000, "ghost")).toBe(false);
 
 		expect(countNameRows(dbPath)).toBe(0);
-		expect(storage.getAccountName(PROVIDER, credentialId + 5_000)).toBeUndefined();
+		expect(storage.credentials.getAccountName(PROVIDER, credentialId + 5_000)).toBeUndefined();
 	});
 
 	/**
@@ -163,10 +163,10 @@ describe("AuthStorage account names round-trip", () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
 
-		expect(storage.setAccountName(PROVIDER, credentialId, "first")).toBe(true);
-		expect(storage.setAccountName(PROVIDER, credentialId, "second")).toBe(true);
+		expect(storage.credentials.setAccountName(PROVIDER, credentialId, "first")).toBe(true);
+		expect(storage.credentials.setAccountName(PROVIDER, credentialId, "second")).toBe(true);
 
-		expect(storage.getAccountName(PROVIDER, credentialId)).toBe("second");
+		expect(storage.credentials.getAccountName(PROVIDER, credentialId)).toBe("second");
 		expect(countNameRows(dbPath)).toBe(1);
 	});
 });

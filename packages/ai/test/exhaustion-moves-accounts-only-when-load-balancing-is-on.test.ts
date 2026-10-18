@@ -77,7 +77,7 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 	async function seed(
 		storage: AuthStorage,
 	): Promise<{ targetId: number; siblingId: number; targetEmail: string; siblingEmail: string }> {
-		await storage.set(PROVIDER, [
+		await storage.credentials.set(PROVIDER, [
 			{
 				type: "oauth",
 				access: "access-target",
@@ -95,7 +95,7 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 				email: "sibling@example.com",
 			},
 		]);
-		const rows = storage.listStoredCredentials(PROVIDER);
+		const rows = storage.credentials.list(PROVIDER);
 		return {
 			targetId: rows[0]!.id,
 			siblingId: rows[1]!.id,
@@ -117,7 +117,7 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 		const storage = new AuthStorage(store);
 		const { targetId } = await seed(storage);
 
-		const result = await storage.markUsageLimitReached(PROVIDER, SESSION_ID, {
+		const result = await storage.limits.markReached(PROVIDER, SESSION_ID, {
 			credentialId: targetId,
 			retryAfterMs: 30_000,
 		});
@@ -135,7 +135,7 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 		const storage = new AuthStorage(store, { loadBalancing: true });
 		const { targetId } = await seed(storage);
 
-		const result = await storage.markUsageLimitReached(PROVIDER, SESSION_ID, {
+		const result = await storage.limits.markReached(PROVIDER, SESSION_ID, {
 			credentialId: targetId,
 			retryAfterMs: 30_000,
 		});
@@ -159,7 +159,7 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 		const siblingResetMs = NOW_MS + 1_000;
 		const targetResetMs = NOW_MS + 60_000;
 
-		const siblingResult = await storage.markUsageLimitReached(PROVIDER, SESSION_ID, {
+		const siblingResult = await storage.limits.markReached(PROVIDER, SESSION_ID, {
 			credentialId: siblingId,
 			retryAfterMs: 1_000,
 		});
@@ -169,8 +169,8 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 			quotaMessage: `Quota reached on ${PROVIDER} account sibling@example.com; resets ${new Date(siblingResetMs).toISOString()}. 1 other account available but load balancing is off, so Veyyon waits for this account.`,
 		});
 
-		expect(storage.pinSessionCredential(PROVIDER, SESSION_ID, targetId)).toBe(true);
-		const result = await storage.markUsageLimitReached(PROVIDER, SESSION_ID, {
+		expect(storage.sessions.pin(PROVIDER, SESSION_ID, targetId)).toBe(true);
+		const result = await storage.limits.markReached(PROVIDER, SESSION_ID, {
 			credentialId: targetId,
 			retryAfterMs: 60_000,
 		});
@@ -182,7 +182,7 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 		});
 		expect(result.retryAtMs).not.toBe(siblingResetMs);
 		// Recorded as blocked, which is what lets the account list say when the window returns.
-		const routing = storage.sessionCredentialRouting(PROVIDER, SESSION_ID);
+		const routing = storage.sessions.routing(PROVIDER, SESSION_ID);
 		expect(routing?.selectedCredentialId).toBe(targetId);
 		expect(routing?.selectedBlockedUntilMs).toBe(targetResetMs);
 	});
@@ -198,7 +198,7 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 		const storage = new AuthStorage(store, { loadBalancing: () => enabled });
 		const { targetId } = await seed(storage);
 
-		const refused = await storage.markUsageLimitReached(PROVIDER, SESSION_ID, {
+		const refused = await storage.limits.markReached(PROVIDER, SESSION_ID, {
 			credentialId: targetId,
 			retryAfterMs: 30_000,
 		});
@@ -209,7 +209,7 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 		});
 
 		enabled = true;
-		const allowed = await storage.markUsageLimitReached(PROVIDER, SESSION_ID, {
+		const allowed = await storage.limits.markReached(PROVIDER, SESSION_ID, {
 			credentialId: targetId,
 			retryAfterMs: 30_000,
 		});
@@ -228,19 +228,19 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 		const storage = new AuthStorage(store, { loadBalancing: false });
 		const { targetId } = await seed(storage);
 
-		const quota = await storage.markUsageLimitReached(PROVIDER, SESSION_ID, {
+		const quota = await storage.limits.markReached(PROVIDER, SESSION_ID, {
 			credentialId: targetId,
 			retryAfterMs: 30_000,
 		});
 		expect(quota.switched).toBe(false);
 
-		const moved = await storage.rotateSessionCredential(PROVIDER, SESSION_ID, {
+		const moved = await storage.limits.rotate(PROVIDER, SESSION_ID, {
 			credentialId: targetId,
 			error: Object.assign(new Error("invalid_grant: token revoked"), { status: 401 }),
 		});
 
 		expect(moved).toBe(true);
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe("access-sibling");
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe("access-sibling");
 	});
 
 	/**
@@ -260,14 +260,14 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 		});
 		const { targetId, siblingId, targetEmail, siblingEmail } = await seed(storage);
 
-		await storage.rotateSessionCredential(PROVIDER, SESSION_ID, {
+		await storage.limits.rotate(PROVIDER, SESSION_ID, {
 			credentialId: targetId,
 			error: Object.assign(new Error("invalid_grant: token revoked"), { status: 401 }),
 		});
 		expect(events).toEqual([]);
 
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe("access-sibling");
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe("access-sibling");
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe("access-sibling");
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe("access-sibling");
 
 		expect(events).toEqual([
 			{
@@ -295,17 +295,17 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 		});
 		const { targetId, targetEmail } = await seed(storage);
 
-		await storage.rotateSessionCredential(PROVIDER, SESSION_ID, {
+		await storage.limits.rotate(PROVIDER, SESSION_ID, {
 			credentialId: targetId,
 			error: Object.assign(new Error("invalid_grant: token revoked"), { status: 401 }),
 		});
-		expect(await storage.removeCredential(PROVIDER, targetId)).toBe(true);
+		expect(await storage.credentials.removeById(PROVIDER, targetId)).toBe(true);
 
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe("access-sibling");
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe("access-sibling");
 
 		expect(events.length).toBe(1);
 		expect(events[0]?.from).toEqual({ credentialId: targetId, label: targetEmail });
-		expect(storage.listStoredCredentials(PROVIDER).some(row => row.id === targetId)).toBe(false);
+		expect(storage.credentials.list(PROVIDER).some(row => row.id === targetId)).toBe(false);
 	});
 
 	/**
@@ -324,15 +324,15 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 		const { targetId, siblingId } = await seed(storage);
 
 		// A sibling must exist for the rotation to park anything at all.
-		const moved = await storage.rotateSessionCredential(PROVIDER, SESSION_ID, {
+		const moved = await storage.limits.rotate(PROVIDER, SESSION_ID, {
 			credentialId: targetId,
 			error: Object.assign(new Error("invalid_grant: token revoked"), { status: 401 }),
 		});
 		expect(moved).toBe(true);
 		// ...and then it is gone, so the only credential that can serve is the one that failed.
-		expect(await storage.removeCredential(PROVIDER, siblingId)).toBe(true);
+		expect(await storage.credentials.removeById(PROVIDER, siblingId)).toBe(true);
 
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe("access-target");
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe("access-target");
 
 		expect(events).toEqual([]);
 	});
@@ -355,22 +355,22 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 		// Blocked well past the notice window, so the resolve below genuinely lands on the SIBLING:
 		// otherwise the target's own backoff has expired by then, the same account serves again, and
 		// the silence would be explained by the same-account rule instead of the window.
-		await storage.markUsageLimitReached(PROVIDER, SESSION_ID, {
+		await storage.limits.markReached(PROVIDER, SESSION_ID, {
 			credentialId: targetId,
 			retryAfterMs: 10 * 60_000,
 		});
 
-		await storage.rotateSessionCredential(PROVIDER, SESSION_ID, {
+		await storage.limits.rotate(PROVIDER, SESSION_ID, {
 			credentialId: targetId,
 			error: Object.assign(new Error("invalid_grant: token revoked"), { status: 401 }),
 		});
 
 		setSystemTime(new Date(NOW_MS + NOTICE_WINDOW_MS + 1));
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe("access-sibling");
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe("access-sibling");
 		expect(events).toEqual([]);
 
 		setSystemTime(new Date(NOW_MS + NOTICE_WINDOW_MS + 2));
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe("access-sibling");
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe("access-sibling");
 		expect(events).toEqual([]);
 	});
 
@@ -391,7 +391,7 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 		});
 		const { targetId, targetEmail } = await seed(storage);
 
-		const result = await storage.markUsageLimitReached(PROVIDER, SESSION_ID, {
+		const result = await storage.limits.markReached(PROVIDER, SESSION_ID, {
 			credentialId: targetId,
 			retryAfterMs: 60_000,
 		});
@@ -429,14 +429,14 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 		});
 		const { targetId } = await seed(storage);
 
-		await storage.markUsageLimitReached(PROVIDER, SESSION_ID, { credentialId: targetId, retryAfterMs: 60_000 });
-		await storage.markUsageLimitReached(PROVIDER, SESSION_ID, { credentialId: targetId, retryAfterMs: 60_000 });
+		await storage.limits.markReached(PROVIDER, SESSION_ID, { credentialId: targetId, retryAfterMs: 60_000 });
+		await storage.limits.markReached(PROVIDER, SESSION_ID, { credentialId: targetId, retryAfterMs: 60_000 });
 		expect(withheld).toHaveLength(1);
 
 		// The window reset arrived and quota ran out again, which the operator has not been told
 		// about: same account, different window.
 		setSystemTime(new Date(NOW_MS + 2 * 60_000));
-		await storage.markUsageLimitReached(PROVIDER, SESSION_ID, { credentialId: targetId, retryAfterMs: 60_000 });
+		await storage.limits.markReached(PROVIDER, SESSION_ID, { credentialId: targetId, retryAfterMs: 60_000 });
 
 		expect(withheld.map(event => (event.reason === "quota" ? event.retryAtMs : undefined))).toEqual([
 			NOW_MS + 60_000,
@@ -459,7 +459,7 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 				withheld.push(event);
 			},
 		});
-		await storage.set(PROVIDER, [
+		await storage.credentials.set(PROVIDER, [
 			{
 				type: "oauth",
 				access: "access-only",
@@ -469,17 +469,17 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 				email: "only@example.com",
 			},
 		]);
-		const onlyId = storage.listStoredCredentials(PROVIDER)[0]!.id;
+		const onlyId = storage.credentials.list(PROVIDER)[0]!.id;
 
-		await storage.markUsageLimitReached(PROVIDER, SESSION_ID, { credentialId: onlyId, retryAfterMs: 60_000 });
+		await storage.limits.markReached(PROVIDER, SESSION_ID, { credentialId: onlyId, retryAfterMs: 60_000 });
 		expect(withheld).toEqual([]);
 
 		// Now two accounts, both exhausted. The second mark has a sibling, and that sibling is
 		// blocked, so the gate withheld nothing.
 		const { targetId, siblingId } = await seed(storage);
-		await storage.markUsageLimitReached(PROVIDER, SESSION_ID, { credentialId: siblingId, retryAfterMs: 60_000 });
+		await storage.limits.markReached(PROVIDER, SESSION_ID, { credentialId: siblingId, retryAfterMs: 60_000 });
 		const before = withheld.length;
-		await storage.markUsageLimitReached(PROVIDER, SESSION_ID, { credentialId: targetId, retryAfterMs: 60_000 });
+		await storage.limits.markReached(PROVIDER, SESSION_ID, { credentialId: targetId, retryAfterMs: 60_000 });
 
 		expect(withheld.slice(before).filter(event => event.account.credentialId === targetId)).toEqual([]);
 	});
@@ -499,7 +499,7 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 		});
 		const { targetId } = await seed(storage);
 
-		const result = await storage.markUsageLimitReached(PROVIDER, SESSION_ID, {
+		const result = await storage.limits.markReached(PROVIDER, SESSION_ID, {
 			credentialId: targetId,
 			retryAfterMs: 60_000,
 		});

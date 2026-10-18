@@ -64,7 +64,7 @@ describe("shared credential store (PROF-1)", () => {
 		await writeCredential(getAgentDbPath(profileDir), "google-antigravity", oauth("live"));
 
 		const storage = await discoverAuthStorage({ agentDir: profileDir, storeAgentDir: sharedDir });
-		expect(storage.hasAuth("google-antigravity")).toBe(true);
+		expect(storage.keys.source("google-antigravity", { env: "aliases" }) !== undefined).toBe(true);
 
 		// The full credential — including the refresh token — landed in the shared
 		// store, so no re-login is forced.
@@ -86,7 +86,7 @@ describe("shared credential store (PROF-1)", () => {
 		// A different profile with an EMPTY per-profile store still sees the login,
 		// because the shared store is the one being read.
 		const storage = await discoverAuthStorage({ agentDir: otherProfileDir, storeAgentDir: sharedDir });
-		expect(storage.hasAuth("google-antigravity")).toBe(true);
+		expect(storage.keys.source("google-antigravity", { env: "aliases" }) !== undefined).toBe(true);
 	});
 
 	it("never clobbers a shared store that already has credentials", async () => {
@@ -145,7 +145,7 @@ describe("shared credential store (PROF-1)", () => {
 			storeAgentDir: sharedDir,
 			seedSourceDbPaths: [getAgentDbPath(profileDir), getAgentDbPath(legacyDir)],
 		});
-		expect(storage.hasAuth("google-antigravity")).toBe(true);
+		expect(storage.keys.source("google-antigravity", { env: "aliases" }) !== undefined).toBe(true);
 
 		const shared = await SqliteAuthCredentialStore.open(getAgentDbPath(sharedDir));
 		try {
@@ -248,7 +248,7 @@ describe("shared credential store (PROF-1)", () => {
 		await writeCredential(getAgentDbPath(profileDir), "google-antigravity", oauth("profile"));
 
 		const storage = await discoverAuthStorage({ agentDir: profileDir });
-		expect(storage.hasAuth("google-antigravity")).toBe(true);
+		expect(storage.keys.source("google-antigravity", { env: "aliases" }) !== undefined).toBe(true);
 		// Nothing was written to the shared location.
 		let sharedExists = true;
 		try {

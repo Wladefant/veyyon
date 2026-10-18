@@ -53,7 +53,7 @@ describe("a notice subscriber fault never reaches the emitter", () => {
 	});
 
 	async function seed(storage: AuthStorage): Promise<{ targetId: number; siblingId: number }> {
-		await storage.set(PROVIDER, [
+		await storage.credentials.set(PROVIDER, [
 			{
 				type: "oauth",
 				access: "access-target",
@@ -71,7 +71,7 @@ describe("a notice subscriber fault never reaches the emitter", () => {
 				email: "sibling@example.com",
 			},
 		]);
-		const rows = storage.listStoredCredentials(PROVIDER);
+		const rows = storage.credentials.list(PROVIDER);
 		return { targetId: rows[0]!.id, siblingId: rows[1]!.id };
 	}
 
@@ -81,18 +81,18 @@ describe("a notice subscriber fault never reaches the emitter", () => {
 		const storage = new AuthStorage(store, { loadBalancing: false });
 		const { targetId, siblingId } = await seed(storage);
 		const events: CredentialFailoverEvent[] = [];
-		storage.onCredentialFailover(() => {
+		storage.keys.onCredentialFailover(() => {
 			throw new Error("failover renderer exploded");
 		});
-		storage.onCredentialFailover(event => {
+		storage.keys.onCredentialFailover(event => {
 			events.push(event);
 		});
 
-		await storage.rotateSessionCredential(PROVIDER, SESSION_ID, {
+		await storage.limits.rotate(PROVIDER, SESSION_ID, {
 			credentialId: targetId,
 			error: Object.assign(new Error("invalid_grant: token revoked"), { status: 401 }),
 		});
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe("access-sibling");
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe("access-sibling");
 
 		expect(events).toEqual([
 			{
@@ -121,12 +121,12 @@ describe("a notice subscriber fault never reaches the emitter", () => {
 		const { targetId } = await seed(storage);
 		const withheld: UsageLimitWithheldEvent[] = [];
 		const settled = Promise.withResolvers<void>();
-		storage.onUsageLimitWithheld(async () => {
+		storage.limits.onUsageLimitWithheld(async () => {
 			await Promise.resolve();
 			settled.resolve();
 			throw new Error("withheld renderer exploded");
 		});
-		storage.onUsageLimitWithheld(event => {
+		storage.limits.onUsageLimitWithheld(event => {
 			withheld.push(event);
 		});
 
@@ -136,7 +136,7 @@ describe("a notice subscriber fault never reaches the emitter", () => {
 		};
 		process.on("unhandledRejection", onUnhandled);
 		try {
-			const result = await storage.markUsageLimitReached(PROVIDER, SESSION_ID, {
+			const result = await storage.limits.markReached(PROVIDER, SESSION_ID, {
 				credentialId: targetId,
 				retryAfterMs: 60_000,
 			});

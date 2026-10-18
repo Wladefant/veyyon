@@ -84,7 +84,7 @@ describe("Anthropic usage-limit reset through AuthStorage", () => {
 	async function storageFor(scenario: Scenario, calls: Recorded[], orgId?: string): Promise<AuthStorage> {
 		if (!store) throw new Error("test setup failed");
 		const storage = new AuthStorage(store, { usageFetch: fakeFetch(scenario, calls) });
-		await storage.set("anthropic", [
+		await storage.credentials.set("anthropic", [
 			{
 				type: "oauth",
 				access: "access-token",
@@ -98,7 +98,7 @@ describe("Anthropic usage-limit reset through AuthStorage", () => {
 	}
 
 	const redeem = (storage: AuthStorage) =>
-		storage.redeemResetCredit({ target: { provider: "anthropic", email: "me@example.com" } });
+		storage.resets.redeem({ target: { provider: "anthropic", email: "me@example.com" } });
 
 	test("lists the resets left on spendable grants only", async () => {
 		const calls: Recorded[] = [];
@@ -118,7 +118,7 @@ describe("Anthropic usage-limit reset through AuthStorage", () => {
 			calls,
 		);
 
-		const [account] = await storage.listResetCredits({ provider: "anthropic" });
+		const [account] = await storage.resets.list({ provider: "anthropic" });
 
 		expect(account).toMatchObject({ provider: "anthropic", email: "me@example.com", availableCount: 2 });
 		expect(account?.credits.map(credit => [credit.id, credit.status])).toEqual([
@@ -247,7 +247,7 @@ describe("Anthropic usage-limit reset through AuthStorage", () => {
 		const calls: Recorded[] = [];
 		const storage = await storageFor({ status: null }, calls);
 
-		const outcome = await storage.redeemResetCredit({
+		const outcome = await storage.resets.redeem({
 			target: { provider: "anthropic", email: "other@example.com" },
 		});
 

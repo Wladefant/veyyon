@@ -73,15 +73,15 @@ describe("AuthStorage credential block persistence", () => {
 		// Every arm here asserts that a persisted block moves selection off an account, which is
 		// movement; the library holds it off unless a host opts in.
 		const firstStorage = new AuthStorage(firstStore, { loadBalancing: true });
-		await firstStorage.reload();
+		await firstStorage.credentials.reload();
 		try {
-			firstStorage.upsertCredentialBlock({
+			firstStorage.blocks.upsert({
 				credentialId: rows[0]!.id,
 				providerKey: PROVIDER_KEY,
 				blockScope: "tier:fable",
 				blockedUntilMs: FUTURE_BLOCK_MS,
 			});
-			firstStorage.upsertCredentialBlock({
+			firstStorage.blocks.upsert({
 				credentialId: rows[1]!.id,
 				providerKey: PROVIDER_KEY,
 				blockScope: "",
@@ -93,9 +93,9 @@ describe("AuthStorage credential block persistence", () => {
 
 		const reopenedStore = await SqliteAuthCredentialStore.open(dbPath);
 		const reopenedStorage = new AuthStorage(reopenedStore, { loadBalancing: true });
-		await reopenedStorage.reload();
+		await reopenedStorage.credentials.reload();
 		try {
-			const fableKey = await reopenedStorage.getApiKey(PROVIDER, "session-3", { modelId: "claude-fable-5" });
+			const fableKey = await reopenedStorage.keys.get(PROVIDER, "session-3", { modelId: "claude-fable-5" });
 			expect(fableKey).toBe("access-3");
 		} finally {
 			reopenedStorage.close();
@@ -108,16 +108,16 @@ describe("AuthStorage credential block persistence", () => {
 		const [row] = store.listAuthCredentials(PROVIDER);
 		if (!row) throw new Error("expected credential row");
 		const storage = new AuthStorage(store, { loadBalancing: true });
-		await storage.reload();
+		await storage.credentials.reload();
 		try {
 			const longerBlock = FUTURE_BLOCK_MS + 60_000;
-			storage.upsertCredentialBlock({
+			storage.blocks.upsert({
 				credentialId: row.id,
 				providerKey: PROVIDER_KEY,
 				blockScope: "tier:fable",
 				blockedUntilMs: longerBlock,
 			});
-			storage.upsertCredentialBlock({
+			storage.blocks.upsert({
 				credentialId: row.id,
 				providerKey: PROVIDER_KEY,
 				blockScope: "tier:fable",
@@ -126,7 +126,7 @@ describe("AuthStorage credential block persistence", () => {
 
 			// `updatedAtMs` is the row's DB write time (issue #4980: same-deadline
 			// refreshes must be observable), so only its presence is asserted.
-			expect(storage.listCredentialBlocks([row.id])).toEqual([
+			expect(storage.blocks.list([row.id])).toEqual([
 				{
 					credentialId: row.id,
 					providerKey: PROVIDER_KEY,
@@ -146,22 +146,22 @@ describe("AuthStorage credential block persistence", () => {
 		const [row] = store.listAuthCredentials(PROVIDER);
 		if (!row) throw new Error("expected credential row");
 		const storage = new AuthStorage(store, { loadBalancing: true });
-		await storage.reload();
+		await storage.credentials.reload();
 		try {
-			storage.upsertCredentialBlock({
+			storage.blocks.upsert({
 				credentialId: row.id,
 				providerKey: PROVIDER_KEY,
 				blockScope: "tier:fable",
 				blockedUntilMs: FUTURE_BLOCK_MS,
 			});
-			storage.upsertCredentialBlock({
+			storage.blocks.upsert({
 				credentialId: row.id,
 				providerKey: PROVIDER_KEY,
 				blockScope: "",
 				blockedUntilMs: EXPIRED_BLOCK_MS,
 			});
 
-			expect(storage.listCredentialBlocks([row.id])).toEqual([
+			expect(storage.blocks.list([row.id])).toEqual([
 				{
 					credentialId: row.id,
 					providerKey: PROVIDER_KEY,
@@ -171,10 +171,10 @@ describe("AuthStorage credential block persistence", () => {
 				},
 			]);
 
-			const generationBeforeDelete = storage.getGeneration();
-			storage.deleteCredentialBlocks(row.id);
-			expect(storage.listCredentialBlocks([row.id])).toEqual([]);
-			expect(storage.getGeneration()).toBe(generationBeforeDelete + 1);
+			const generationBeforeDelete = storage.credentials.generation;
+			storage.blocks.deleteAll(row.id);
+			expect(storage.blocks.list([row.id])).toEqual([]);
+			expect(storage.credentials.generation).toBe(generationBeforeDelete + 1);
 		} finally {
 			storage.close();
 		}
@@ -187,9 +187,9 @@ describe("AuthStorage credential block persistence", () => {
 		store.saveOAuth(PROVIDER, oauthCredential("3"));
 		const rows = store.listAuthCredentials(PROVIDER);
 		const storage = new AuthStorage(store, { loadBalancing: true });
-		await storage.reload();
+		await storage.credentials.reload();
 		try {
-			storage.upsertCredentialBlock({
+			storage.blocks.upsert({
 				credentialId: rows[1]!.id,
 				providerKey: PROVIDER_KEY,
 				blockScope: "",
@@ -205,9 +205,9 @@ describe("AuthStorage credential block persistence", () => {
 
 		const reopenedStore = await SqliteAuthCredentialStore.open(dbPath);
 		const reopenedStorage = new AuthStorage(reopenedStore, { loadBalancing: true });
-		await reopenedStorage.reload();
+		await reopenedStorage.credentials.reload();
 		try {
-			const key = await reopenedStorage.getApiKey(PROVIDER, "a");
+			const key = await reopenedStorage.keys.get(PROVIDER, "a");
 			expect(key).toBe("access-3");
 		} finally {
 			reopenedStorage.close();

@@ -66,7 +66,7 @@ describe("Command Code API key validation and error mapping", () => {
 		db = new Database(":memory:");
 		store = new SqliteAuthCredentialStore(db);
 		storage = new AuthStorage(store);
-		await storage.reload();
+		await storage.credentials.reload();
 	});
 
 	afterEach(() => {
@@ -301,9 +301,9 @@ describe("Command Code API key validation and error mapping", () => {
 				fetch,
 			};
 
-			await storage.login("command-code" as Parameters<AuthStorage["login"]>[0], callbacks);
+			await storage.oauth.login("command-code" as Parameters<AuthStorage["oauth"]["login"]>[0], callbacks);
 
-			const storedKey = await storage.getApiKey("command-code", "session-1");
+			const storedKey = await storage.keys.get("command-code", "session-1");
 			expect(storedKey).toBe("sk-command-stored-key");
 
 			const rows = db.prepare("SELECT provider, credential_type FROM auth_credentials").all() as Array<{

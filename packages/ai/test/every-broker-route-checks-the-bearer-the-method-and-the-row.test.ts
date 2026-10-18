@@ -63,8 +63,8 @@ describe("every auth-broker route", () => {
 		store.saveOAuth("anthropic", oauthCredential("a"));
 		store.saveOAuth("anthropic", oauthCredential("b"));
 		storage = new AuthStorage(store);
-		await storage.reload();
-		liveIds = storage.exportSnapshot().credentials.map(entry => entry.id);
+		await storage.credentials.reload();
+		liveIds = storage.credentials.snapshot().credentials.map(entry => entry.id);
 		expect(liveIds).toHaveLength(2);
 		handle = startAuthBroker({
 			storage,
@@ -172,7 +172,7 @@ describe("every auth-broker route", () => {
 	});
 
 	it("answers a handler that throws with the JSON 500", async () => {
-		vi.spyOn(storage, "reload").mockRejectedValue(new Error("store unavailable"));
+		vi.spyOn(storage.credentials, "reload").mockRejectedValue(new Error("store unavailable"));
 		const res = await send("GET /v1/snapshot", { authorization: `Bearer ${ACCEPTED_TOKEN}` });
 		expect(res.status).toBe(500);
 		expect(res.headers.get("content-type")).toBe("application/json");

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { isRefreshFailureDisableCause } from "@veyyon/ai/auth-credential-rows";
 import { type AuthCredentialStore, AuthStorage } from "@veyyon/ai/auth-storage";
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import { removeWithRetries } from "../../utils/src/temp";
@@ -54,12 +55,31 @@ describe("reporting why a provider's credential was disabled", () => {
 	/** Store one OAuth credential and return its row id. */
 	async function seedCredential(): Promise<number> {
 		if (!authStorage || !store) throw new Error("test setup failed");
-		await authStorage.set(provider, [
+		await authStorage.credentials.set(provider, [
 			{ type: "oauth", access: "access", refresh: "refresh", expires: Date.now() + 60_000 },
 		]);
 		const row = store.listAuthCredentials(provider)[0];
 		if (!row) throw new Error("seeded credential did not land");
 		return row.id;
+	}
+
+	async function latestReportableCause(storage: AuthStorage, provider: string): Promise<string | undefined> {
+		const [latest] = await storage.credentials.listReportableDisabled(provider);
+		if (!latest?.cause || !isRefreshFailureDisableCause(latest.cause)) return undefined;
+		return latest.cause;
+	}
+
+	async function latestReportableFailures(storage: AuthStorage): Promise<Array<{ provider: string; cause: string }>> {
+		const seen = new Set<string>();
+		const failures: Array<{ provider: string; cause: string }> = [];
+		for (const row of await storage.credentials.listReportableDisabled()) {
+			if (seen.has(row.provider)) continue;
+			seen.add(row.provider);
+			if (row.cause && isRefreshFailureDisableCause(row.cause)) {
+				failures.push({ provider: row.provider, cause: row.cause });
+			}
+		}
+		return failures;
 	}
 
 	/**
@@ -72,15 +92,15 @@ describe("reporting why a provider's credential was disabled", () => {
 
 		// The real disable path, so the in-memory view drops the row exactly the
 		// way it does in a live session.
-		authStorage.disableCredentialById(id, "oauth refresh failed: HTTP 400 invalid_grant");
+		await authStorage.credentials.disable(id, "oauth refresh failed: HTTP 400 invalid_grant");
 
 		// The condition that makes this invisible everywhere else: the row is gone
 		// from the active list AND from `hasAuth`, so nothing downstream can tell
 		// this apart from a user who never signed in.
 		expect(store.listAuthCredentials(provider)).toHaveLength(0);
-		expect(authStorage.hasAuth(provider)).toBe(false);
+		expect(authStorage.keys.source(provider, { env: "aliases" }) !== undefined).toBe(false);
 
-		expect(authStorage.disabledCredentialCause(provider)).toBe("oauth refresh failed: HTTP 400 invalid_grant");
+		expect(await latestReportableCause(authStorage, provider)).toBe("oauth refresh failed: HTTP 400 invalid_grant");
 	});
 
 	/**
@@ -94,8 +114,8 @@ describe("reporting why a provider's credential was disabled", () => {
 
 		store.deleteAuthCredential(id, "oauth refresh failed: 402 payment required (subscription lapsed)");
 
-		expect(authStorage.disabledCredentialCause(provider)).toContain("402 payment required");
-		expect(authStorage.disabledCredentialCause(provider)).toContain("subscription lapsed");
+		expect(await latestReportableCause(authStorage, provider)).toContain("402 payment required");
+		expect(await latestReportableCause(authStorage, provider)).toContain("subscription lapsed");
 	});
 
 	/**
@@ -109,7 +129,7 @@ describe("reporting why a provider's credential was disabled", () => {
 
 		store.deleteAuthCredential(id, "logged out");
 
-		expect(authStorage.disabledCredentialCause(provider)).toBeUndefined();
+		expect(await latestReportableCause(authStorage, provider)).toBeUndefined();
 	});
 
 	/**
@@ -122,7 +142,7 @@ describe("reporting why a provider's credential was disabled", () => {
 
 		store.deleteAuthCredential(id, "replaced by newer credential");
 
-		expect(authStorage.disabledCredentialCause(provider)).toBeUndefined();
+		expect(await latestReportableCause(authStorage, provider)).toBeUndefined();
 	});
 
 	/**
@@ -136,14 +156,14 @@ describe("reporting why a provider's credential was disabled", () => {
 		const first = await seedCredential();
 		store.deleteAuthCredential(first, "oauth refresh failed: an old failure the user already fixed");
 
-		await authStorage.set(provider, [
+		await authStorage.credentials.set(provider, [
 			{ type: "oauth", access: "second", refresh: "second-refresh", expires: Date.now() + 60_000 },
 		]);
 		const second = store.listAuthCredentials(provider)[0];
 		if (!second) throw new Error("second credential did not land");
 		store.deleteAuthCredential(second.id, "oauth refresh failed: the failure happening now");
 
-		expect(authStorage.disabledCredentialCause(provider)).toContain("the failure happening now");
+		expect(await latestReportableCause(authStorage, provider)).toContain("the failure happening now");
 	});
 
 	/**
@@ -157,14 +177,14 @@ describe("reporting why a provider's credential was disabled", () => {
 		const first = await seedCredential();
 		store.deleteAuthCredential(first, "oauth refresh failed: an earlier failure");
 
-		await authStorage.set(provider, [
+		await authStorage.credentials.set(provider, [
 			{ type: "oauth", access: "second", refresh: "second-refresh", expires: Date.now() + 60_000 },
 		]);
 		const second = store.listAuthCredentials(provider)[0];
 		if (!second) throw new Error("second credential did not land");
 		store.deleteAuthCredential(second.id, "logged out");
 
-		expect(authStorage.disabledCredentialCause(provider)).toBeUndefined();
+		expect(await latestReportableCause(authStorage, provider)).toBeUndefined();
 	});
 
 	/**
@@ -172,10 +192,10 @@ describe("reporting why a provider's credential was disabled", () => {
 	 * twin the suite would pass against a reader that invented a cause for every
 	 * provider, turning a first run into a scary error.
 	 */
-	test("reports nothing for a provider with no credential at all", () => {
+	test("reports nothing for a provider with no credential at all", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		expect(authStorage.disabledCredentialCause("never-signed-in")).toBeUndefined();
+		expect(await latestReportableCause(authStorage, "never-signed-in")).toBeUndefined();
 	});
 
 	/**
@@ -187,8 +207,8 @@ describe("reporting why a provider's credential was disabled", () => {
 		if (!authStorage) throw new Error("test setup failed");
 		await seedCredential();
 
-		expect(authStorage.hasAuth(provider)).toBe(true);
-		expect(authStorage.disabledCredentialCause(provider)).toBeUndefined();
+		expect(authStorage.keys.source(provider, { env: "aliases" }) !== undefined).toBe(true);
+		expect(await latestReportableCause(authStorage, provider)).toBeUndefined();
 	});
 
 	/**
@@ -200,12 +220,12 @@ describe("reporting why a provider's credential was disabled", () => {
 		const id = await seedCredential();
 		store.deleteAuthCredential(id, "oauth refresh failed: HTTP 400 invalid_grant");
 
-		await authStorage.set("other-provider", [
+		await authStorage.credentials.set("other-provider", [
 			{ type: "oauth", access: "fine", refresh: "fine-refresh", expires: Date.now() + 60_000 },
 		]);
 
-		expect(authStorage.disabledCredentialCause("other-provider")).toBeUndefined();
-		expect(authStorage.disabledCredentialCause(provider)).toContain("invalid_grant");
+		expect(await latestReportableCause(authStorage, "other-provider")).toBeUndefined();
+		expect(await latestReportableCause(authStorage, provider)).toContain("invalid_grant");
 	});
 
 	/**
@@ -223,7 +243,7 @@ describe("reporting why a provider's credential was disabled", () => {
 
 	async function signIn(email: string): Promise<number> {
 		if (!authStorage || !store) throw new Error("test setup failed");
-		await authStorage.set(provider, [
+		await authStorage.credentials.set(provider, [
 			{ type: "oauth", access: `access-${email}`, refresh: `refresh-${email}`, expires: Date.now() + 60_000, email },
 		]);
 		const row = store
@@ -247,10 +267,10 @@ describe("reporting why a provider's credential was disabled", () => {
 		stamp(dead, "updated_at", EPOCH);
 		const live = await signIn("live@example.com");
 		stamp(live, "created_at", EPOCH + 60);
-		await authStorage.reload();
+		await authStorage.credentials.reload();
 
-		expect(authStorage.disabledCredentialCause(provider)).toBeUndefined();
-		expect(authStorage.listProvidersWithFailedRefresh().map(entry => entry.provider)).not.toContain(provider);
+		expect(await latestReportableCause(authStorage, provider)).toBeUndefined();
+		expect((await latestReportableFailures(authStorage)).map(entry => entry.provider)).not.toContain(provider);
 	});
 
 	/**
@@ -273,11 +293,11 @@ describe("reporting why a provider's credential was disabled", () => {
 		if (dying === undefined) throw new Error("the second account did not land");
 		store.deleteAuthCredential(dying, "oauth refresh failed: HTTP 400 invalid_grant");
 		stamp(dying, "updated_at", EPOCH + 60);
-		await authStorage.reload();
+		await authStorage.credentials.reload();
 
 		expect(store.listAuthCredentials(provider).map(row => row.id)).toEqual([live]);
-		expect(authStorage.disabledCredentialCause(provider)).toContain("invalid_grant");
-		expect(authStorage.listProvidersWithFailedRefresh().map(entry => entry.provider)).toContain(provider);
+		expect(await latestReportableCause(authStorage, provider)).toContain("invalid_grant");
+		expect((await latestReportableFailures(authStorage)).map(entry => entry.provider)).toContain(provider);
 	});
 
 	/** A later login that is itself gone answers nothing. */
@@ -290,9 +310,9 @@ describe("reporting why a provider's credential was disabled", () => {
 		stamp(later, "created_at", EPOCH + 60);
 		store.deleteAuthCredential(later, "oauth refresh failed: HTTP 401 the later one died too");
 		stamp(later, "updated_at", EPOCH + 120);
-		await authStorage.reload();
+		await authStorage.credentials.reload();
 
-		expect(authStorage.disabledCredentialCause(provider)).toContain("the later one died too");
+		expect(await latestReportableCause(authStorage, provider)).toContain("the later one died too");
 		expect(store.listDisabledAuthCredentials?.(provider).map(row => row.id)).toEqual([later, dead]);
 	});
 });

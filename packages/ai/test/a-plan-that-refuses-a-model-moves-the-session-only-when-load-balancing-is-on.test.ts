@@ -128,8 +128,8 @@ describe("a plan refusal moves the session only when load balancing is on", () =
 	}
 
 	async function seed(storage: AuthStorage, names: string[]): Promise<number[]> {
-		await storage.set(PROVIDER, names.map(oauth));
-		return storage.listStoredCredentials(PROVIDER).map(row => row.id);
+		await storage.credentials.set(PROVIDER, names.map(oauth));
+		return storage.credentials.list(PROVIDER).map(row => row.id);
 	}
 
 	function storageWith(loadBalancing: boolean): {
@@ -149,7 +149,7 @@ describe("a plan refusal moves the session only when load balancing is on", () =
 	}
 
 	function refuse(storage: AuthStorage, credentialId: number | undefined): Promise<boolean> {
-		return storage.rotateSessionCredential(PROVIDER, SESSION_ID, {
+		return storage.limits.rotate(PROVIDER, SESSION_ID, {
 			credentialId,
 			modelId: NAMED_MODEL,
 			error: endStream(PLAN_REFUSAL_END_STREAM),
@@ -160,12 +160,12 @@ describe("a plan refusal moves the session only when load balancing is on", () =
 		const { storage, events, withheld } = storageWith(true);
 		const ids = await seed(storage, ["first", "second"]);
 		const names = ["first", "second"];
-		const served = await storage.getApiKey(PROVIDER, SESSION_ID, { modelId: NAMED_MODEL });
+		const served = await storage.keys.get(PROVIDER, SESSION_ID, { modelId: NAMED_MODEL });
 		const refused = served === "access-first" ? 0 : 1;
 		const sibling = 1 - refused;
 
 		expect(await refuse(storage, ids[refused])).toBe(true);
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID, { modelId: NAMED_MODEL })).toBe(`access-${names[sibling]}`);
+		expect(await storage.keys.get(PROVIDER, SESSION_ID, { modelId: NAMED_MODEL })).toBe(`access-${names[sibling]}`);
 		expect(events).toEqual([
 			{
 				provider: PROVIDER,
@@ -182,11 +182,11 @@ describe("a plan refusal moves the session only when load balancing is on", () =
 		const { storage, events, withheld } = storageWith(false);
 		const ids = await seed(storage, ["first", "second"]);
 		const names = ["first", "second"];
-		const served = await storage.getApiKey(PROVIDER, SESSION_ID, { modelId: NAMED_MODEL });
+		const served = await storage.keys.get(PROVIDER, SESSION_ID, { modelId: NAMED_MODEL });
 		const refused = served === "access-first" ? 0 : 1;
 
 		expect(await refuse(storage, ids[refused])).toBe(false);
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID, { modelId: NAMED_MODEL })).toBe(`access-${names[refused]}`);
+		expect(await storage.keys.get(PROVIDER, SESSION_ID, { modelId: NAMED_MODEL })).toBe(`access-${names[refused]}`);
 		// The turn's retry hits the same refusal; the notice is not repeated.
 		expect(await refuse(storage, ids[refused])).toBe(false);
 		expect(events).toEqual([]);
@@ -211,7 +211,7 @@ describe("a plan refusal moves the session only when load balancing is on", () =
 		const servedFor = async (modelId: string): Promise<Set<string | undefined>> => {
 			const served = new Set<string | undefined>();
 			for (const session of ["fresh-a", "fresh-b", "fresh-c", "fresh-d"]) {
-				served.add(await storage.getApiKey(PROVIDER, `${modelId}-${session}`, { modelId }));
+				served.add(await storage.keys.get(PROVIDER, `${modelId}-${session}`, { modelId }));
 			}
 			return served;
 		};
@@ -227,8 +227,8 @@ describe("a plan refusal moves the session only when load balancing is on", () =
 			await refuse(storage, freeId);
 
 			const peer = storageWith(loadBalancing).storage;
-			await peer.reload();
-			expect(await peer.getApiKey(PROVIDER, "a-fresh-session", { modelId: NAMED_MODEL })).toBe(expected);
+			await peer.credentials.reload();
+			expect(await peer.keys.get(PROVIDER, "a-fresh-session", { modelId: NAMED_MODEL })).toBe(expected);
 		});
 	}
 
@@ -257,7 +257,7 @@ describe("a plan refusal moves the session only when load balancing is on", () =
 		const { storage, events, withheld } = storageWith(false);
 		const [freeId] = await seed(storage, ["free", "paid"]);
 
-		const switched = await storage.rotateSessionCredential(PROVIDER, SESSION_ID, {
+		const switched = await storage.limits.rotate(PROVIDER, SESSION_ID, {
 			credentialId: freeId,
 			modelId: NAMED_MODEL,
 			error: endStream(QUOTA_END_STREAM),

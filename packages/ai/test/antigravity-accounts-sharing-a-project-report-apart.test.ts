@@ -160,9 +160,9 @@ describe("two Antigravity accounts sharing one project report apart", () => {
 				usageProviderResolver: provider =>
 					provider === "google-antigravity" ? antigravityUsageProvider : undefined,
 			});
-			await storage.reload();
+			await storage.credentials.reload();
 
-			const reports = ((await storage.fetchUsageReports()) ?? []).filter(
+			const reports = ((await storage.usage.reports()) ?? []).filter(
 				report => report.provider === "google-antigravity",
 			);
 

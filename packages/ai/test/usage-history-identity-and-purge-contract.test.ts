@@ -133,8 +133,8 @@ describe("raw history rows never leave AuthStorage (N2)", () => {
 
 	async function listed(store: SqliteAuthCredentialStore) {
 		const storage = new AuthStorage(store, { usageProviderResolver: () => undefined });
-		await storage.reload();
-		return storage.listUsageHistory();
+		await storage.credentials.reload();
+		return storage.usage.history();
 	}
 
 	it("lists no raw row from a store without purgeUsageHistory, and still lists digest-keyed rows", async () => {

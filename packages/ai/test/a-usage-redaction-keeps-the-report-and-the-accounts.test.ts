@@ -80,10 +80,10 @@ describe("a backend that echoes a cut-short or encoded credential", () => {
 				},
 			};
 			const r = rig(backend);
-			await r.storage.reload();
-			await r.storage.set(PROVIDER, { type: "api_key", key: LONG_KEY });
-			await r.storage.fetchUsageReports();
-			const checks = await r.storage.checkCredentials();
+			await r.storage.credentials.reload();
+			await r.storage.credentials.set(PROVIDER, { type: "api_key", key: LONG_KEY });
+			await r.storage.usage.reports();
+			const checks = await r.storage.health.check();
 			const text = everything(r, checks);
 			expect(text).not.toContain(echo);
 			// The distinguishing core of the echo, not just its whole spelling.
@@ -108,9 +108,9 @@ describe("a backend that echoes a cut-short or encoded credential", () => {
 			},
 		};
 		const r = rig(backend);
-		await r.storage.reload();
-		await r.storage.set(PROVIDER, { type: "api_key", key: LONG_KEY });
-		const reports = await r.storage.fetchUsageReports();
+		await r.storage.credentials.reload();
+		await r.storage.credentials.set(PROVIDER, { type: "api_key", key: LONG_KEY });
+		const reports = await r.storage.usage.reports();
 		expect(reports).toHaveLength(1);
 		const text = everything(r, reports);
 		expect(text).not.toContain(Buffer.from(LONG_KEY).toString("base64").slice(0, 16));
@@ -128,19 +128,19 @@ describe("a short credential does not damage the public report shape", () => {
 				},
 			};
 			const r = rig(backend);
-			await r.storage.reload();
-			await r.storage.set(PROVIDER, { type: "api_key", key });
-			const reports = await r.storage.fetchUsageReports();
+			await r.storage.credentials.reload();
+			await r.storage.credentials.set(PROVIDER, { type: "api_key", key });
+			const reports = await r.storage.usage.reports();
 			expect(reports).toHaveLength(1);
 			expect(reports?.[0]?.limits).toHaveLength(1);
 			expect(reports?.[0]?.limits[0]?.status).toBe("ok");
 			expect(reports?.[0]?.limits[0]?.amount.unit).toBe("percent");
-			const checks = await r.storage.checkCredentials();
+			const checks = await r.storage.health.check();
 			expect(checks[0]?.ok).toBe(true);
 			expect(checks[0]?.provider).toBe(PROVIDER);
 			// The check result's report is sanitized once: a second pass would turn "percent" into text.
 			expect(checks[0]?.report?.limits[0]?.amount.unit).toBe("percent");
-			expect(r.storage.listUsageHistory()[0]?.status).toBe("ok");
+			expect(r.storage.usage.history()[0]?.status).toBe("ok");
 		});
 	}
 
@@ -158,9 +158,9 @@ describe("a short credential does not damage the public report shape", () => {
 			},
 		};
 		const r = rig(backend);
-		await r.storage.reload();
-		await r.storage.set(PROVIDER, { type: "api_key", key });
-		const reports = await r.storage.fetchUsageReports();
+		await r.storage.credentials.reload();
+		await r.storage.credentials.set(PROVIDER, { type: "api_key", key });
+		const reports = await r.storage.usage.reports();
 		expect(reports?.[0]?.metadata).toBeDefined();
 		expect(Object.keys(reports?.[0]?.metadata ?? {})).not.toContain(key);
 		expect(JSON.stringify(reports?.[0]?.metadata)).not.toContain("the key is scope");
@@ -191,8 +191,8 @@ describe("usage history", () => {
 			},
 		};
 		const r = rig(backend);
-		await r.storage.reload();
-		await r.storage.set(
+		await r.storage.credentials.reload();
+		await r.storage.credentials.set(
 			PROVIDER,
 			keys.map(key => ({
 				type: "oauth" as const,
@@ -203,8 +203,8 @@ describe("usage history", () => {
 				orgId: key,
 			})),
 		);
-		await r.storage.fetchUsageReports();
-		const rows = r.storage.listUsageHistory();
+		await r.storage.usage.reports();
+		const rows = r.storage.usage.history();
 		expect(rows.map(row => row.usedFraction).sort()).toEqual([0.25, 0.85]);
 		expect(new Set(rows.map(row => row.accountKey)).size).toBe(2);
 		for (const key of keys) expect(JSON.stringify(rows)).not.toContain(key);
@@ -238,8 +238,8 @@ describe("usage history", () => {
 		expect(JSON.stringify(seed.listUsageHistory())).toContain(legacy);
 
 		const storage = new AuthStorage(seed, { usageProviderResolver: () => backend });
-		await storage.reload();
-		expect(storage.listUsageHistory()).toEqual([]);
+		await storage.credentials.reload();
+		expect(storage.usage.history()).toEqual([]);
 		expect(JSON.stringify(db.query("SELECT * FROM usage_history").all())).not.toContain(legacy);
 		expect(seed.getCache("unrelated:key")).toBe("kept");
 
@@ -255,8 +255,8 @@ describe("usage history", () => {
 			},
 		]);
 		const again = new AuthStorage(seed, { usageProviderResolver: () => backend });
-		await again.reload();
-		expect(again.listUsageHistory()).toHaveLength(1);
+		await again.credentials.reload();
+		expect(again.usage.history()).toHaveLength(1);
 		seed.close();
 	});
 });
@@ -285,20 +285,20 @@ describe("review round 2 of https://github.com/Wladefant/veyyon/pull/449", () =>
 			},
 		};
 		const r = rig(backend);
-		await r.storage.reload();
-		await r.storage.set(PROVIDER, { type: "api_key", key });
-		const reports = await r.storage.fetchUsageReports();
-		const checks = await r.storage.checkCredentials();
+		await r.storage.credentials.reload();
+		await r.storage.credentials.set(PROVIDER, { type: "api_key", key });
+		const reports = await r.storage.usage.reports();
+		const checks = await r.storage.health.check();
 		const text = everything(r, { reports, checks });
 		expect(text).not.toContain(encoded);
 		expect(text).not.toContain(encoded.replace(/=+$/, ""));
 		expect(reports).toHaveLength(1);
 
 		const r2 = rig(failing);
-		await r2.storage.reload();
-		await r2.storage.set("fake-failing-backend", { type: "api_key", key });
-		await r2.storage.fetchUsageReports();
-		const checks2 = await r2.storage.checkCredentials();
+		await r2.storage.credentials.reload();
+		await r2.storage.credentials.set("fake-failing-backend", { type: "api_key", key });
+		await r2.storage.usage.reports();
+		const checks2 = await r2.storage.health.check();
 		expect(everything(r2, checks2)).not.toContain(encoded);
 	});
 
@@ -311,9 +311,9 @@ describe("review round 2 of https://github.com/Wladefant/veyyon/pull/449", () =>
 			},
 		};
 		const r = rig(backend);
-		await r.storage.reload();
-		await r.storage.set(PROVIDER, { type: "api_key", key });
-		const checks = await r.storage.checkCredentials({
+		await r.storage.credentials.reload();
+		await r.storage.credentials.set(PROVIDER, { type: "api_key", key });
+		const checks = await r.storage.health.check({
 			completionProbe: async () =>
 				({ ok: true, [key]: "x", provider: key, type: key, status: key, nested: { status: key } }) as never,
 		});
@@ -337,12 +337,12 @@ describe("review round 2 of https://github.com/Wladefant/veyyon/pull/449", () =>
 			},
 		};
 		const r = rig(backend);
-		await r.storage.reload();
-		await r.storage.set(PROVIDER, { type: "api_key", key: "any-key-445" });
-		const reports = await r.storage.fetchUsageReports();
+		await r.storage.credentials.reload();
+		await r.storage.credentials.set(PROVIDER, { type: "api_key", key: "any-key-445" });
+		const reports = await r.storage.usage.reports();
 		expect(reports).toHaveLength(1);
 		expect(reports?.[0]?.limits).toHaveLength(1);
-		const checks = await r.storage.checkCredentials();
+		const checks = await r.storage.health.check();
 		expect(checks[0]?.ok).toBe(true);
 	});
 
@@ -363,10 +363,10 @@ describe("review round 2 of https://github.com/Wladefant/veyyon/pull/449", () =>
 			},
 		};
 		const r = rig(backend);
-		await r.storage.reload();
-		await r.storage.set(PROVIDER, { type: "api_key", key });
-		const reports = await r.storage.fetchUsageReports();
-		const checks = await r.storage.checkCredentials();
+		await r.storage.credentials.reload();
+		await r.storage.credentials.set(PROVIDER, { type: "api_key", key });
+		const reports = await r.storage.usage.reports();
+		const checks = await r.storage.health.check();
 		const text = everything(r, { reports, checks });
 		expect(text).not.toMatch(/(?<![A-Za-z0-9+/_=-])YWJj(?![A-Za-z0-9+/_=-])/);
 		expect(reports).toHaveLength(1);
@@ -382,9 +382,9 @@ describe("review round 2 of https://github.com/Wladefant/veyyon/pull/449", () =>
 			},
 		};
 		const r = rig(backend);
-		await r.storage.reload();
-		await r.storage.set(PROVIDER, { type: "api_key", key: "latency-key-445" });
-		const checks = await r.storage.checkCredentials({
+		await r.storage.credentials.reload();
+		await r.storage.credentials.set(PROVIDER, { type: "api_key", key: "latency-key-445" });
+		const checks = await r.storage.health.check({
 			completionProbe: async () => ({ ok: true, modelId: "m1", latencyMs: 42 }),
 		});
 		expect(checks[0]?.completion).toEqual({ ok: true, modelId: "m1", latencyMs: 42 });

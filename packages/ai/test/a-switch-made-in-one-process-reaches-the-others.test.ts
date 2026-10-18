@@ -51,19 +51,19 @@ describe("an account switch made in another process", () => {
 		storeA.saveOAuth(PROVIDER, oauthCredential("first"));
 		storeA.saveOAuth(PROVIDER, oauthCredential("second"));
 		const switcher = new AuthStorage(storeA, { loadBalancing: false });
-		await switcher.reload();
+		await switcher.credentials.reload();
 		const [first, second] = storeA.listAuthCredentials(PROVIDER).map(row => row.id);
 
 		const lane = new AuthStorage(await SqliteAuthCredentialStore.open(dbPath), { loadBalancing: false });
-		await lane.reload();
+		await lane.credentials.reload();
 		try {
-			expect(switcher.selectProviderCredential(PROVIDER, first!)).toBe(true);
-			expect(await lane.getApiKey(PROVIDER, "lane-session")).toBe("access-first");
+			expect(switcher.sessions.selectProviderCredential(PROVIDER, first!)).toBe(true);
+			expect(await lane.keys.get(PROVIDER, "lane-session")).toBe("access-first");
 
-			expect(switcher.selectProviderCredential(PROVIDER, second!)).toBe(true);
+			expect(switcher.sessions.selectProviderCredential(PROVIDER, second!)).toBe(true);
 			const realNow = Date.now();
 			vi.spyOn(Date, "now").mockReturnValue(realNow + 700);
-			expect(await lane.getApiKey(PROVIDER, "lane-session")).toBe("access-second");
+			expect(await lane.keys.get(PROVIDER, "lane-session")).toBe("access-second");
 		} finally {
 			vi.restoreAllMocks();
 			lane.close();
@@ -76,15 +76,15 @@ describe("an account switch made in another process", () => {
 		store.saveOAuth(PROVIDER, oauthCredential("first"));
 		store.saveOAuth(PROVIDER, oauthCredential("second"));
 		const storage = new AuthStorage(store, { loadBalancing: false });
-		await storage.reload();
+		await storage.credentials.reload();
 		const [, second] = store.listAuthCredentials(PROVIDER).map(row => row.id);
 		store.setProviderSelection = () => {
 			throw new Error("disk full");
 		};
 		try {
-			expect(storage.selectProviderCredential(PROVIDER, second!)).toBe(true);
+			expect(storage.sessions.selectProviderCredential(PROVIDER, second!)).toBe(true);
 			vi.spyOn(Date, "now").mockReturnValue(Date.now() + 700);
-			expect(await storage.getApiKey(PROVIDER, "s")).toBe("access-second");
+			expect(await storage.keys.get(PROVIDER, "s")).toBe("access-second");
 		} finally {
 			vi.restoreAllMocks();
 			storage.close();
@@ -96,18 +96,18 @@ describe("an account switch made in another process", () => {
 		store.saveOAuth(PROVIDER, oauthCredential("first"));
 		store.saveOAuth(PROVIDER, oauthCredential("second"));
 		const storage = new AuthStorage(store, { loadBalancing: false });
-		await storage.reload();
+		await storage.credentials.reload();
 		const [, second] = store.listAuthCredentials(PROVIDER).map(row => row.id);
 		Object.defineProperties(store, {
 			getProviderSelection: { value: undefined },
 			setProviderSelection: { value: undefined },
 		});
 		try {
-			expect(storage.selectProviderCredential(PROVIDER, second!)).toBe(true);
+			expect(storage.sessions.selectProviderCredential(PROVIDER, second!)).toBe(true);
 			const realNow = Date.now();
 			vi.spyOn(Date, "now").mockReturnValue(realNow + 700);
-			expect(storage.selectedProviderCredentialId(PROVIDER)).toBe(second);
-			expect(await storage.getApiKey(PROVIDER, "s")).toBe("access-second");
+			expect(storage.sessions.selectedProviderCredentialId(PROVIDER)).toBe(second);
+			expect(await storage.keys.get(PROVIDER, "s")).toBe("access-second");
 		} finally {
 			vi.restoreAllMocks();
 			storage.close();
@@ -119,18 +119,18 @@ describe("an account switch made in another process", () => {
 		store.saveOAuth(PROVIDER, oauthCredential("first"));
 		store.saveOAuth(PROVIDER, oauthCredential("second"));
 		const storage = new AuthStorage(store, { loadBalancing: false });
-		await storage.reload();
+		await storage.credentials.reload();
 		const [, second] = store.listAuthCredentials(PROVIDER).map(row => row.id);
 		try {
-			expect(storage.selectProviderCredential(PROVIDER, second!)).toBe(true);
+			expect(storage.sessions.selectProviderCredential(PROVIDER, second!)).toBe(true);
 			store.clearProviderSelection = () => {
 				throw new Error("disk full");
 			};
-			storage.clearProviderSelection(PROVIDER);
-			expect(storage.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
+			storage.sessions.clearProviderSelection(PROVIDER);
+			expect(storage.sessions.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
 			const realNow = Date.now();
 			vi.spyOn(Date, "now").mockReturnValue(realNow + 700);
-			expect(storage.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
+			expect(storage.sessions.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
 			expect(store.getProviderSelection(PROVIDER)).toBeDefined();
 		} finally {
 			vi.restoreAllMocks();

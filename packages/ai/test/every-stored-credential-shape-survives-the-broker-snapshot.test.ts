@@ -80,7 +80,7 @@ describe("every stored credential shape survives the broker snapshot", () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "auth-broker-credential-shapes-"));
 		serverStore = await SqliteAuthCredentialStore.open(path.join(tempDir, "broker.db"));
 		serverStorage = new AuthStorage(serverStore);
-		await serverStorage.reload();
+		await serverStorage.credentials.reload();
 		handle = startAuthBroker({
 			storage: serverStorage,
 			bind: "127.0.0.1:0",
@@ -92,7 +92,7 @@ describe("every stored credential shape survives the broker snapshot", () => {
 			streamSnapshots: false,
 		});
 		clientStorage = new AuthStorage(remote);
-		await clientStorage.reload();
+		await clientStorage.credentials.reload();
 	});
 
 	afterEach(async () => {

@@ -47,15 +47,15 @@ describe("openrouter login wiring", () => {
 
 		const store = new SqliteAuthCredentialStore(new Database(":memory:"));
 		const storage = new AuthStorage(store);
-		await storage.reload();
+		await storage.credentials.reload();
 
-		await storage.login("openrouter", {
+		await storage.oauth.login("openrouter", {
 			onAuth: () => {},
 			onPrompt: async () => "sk-or-validated",
 			fetch: fetchMock,
 		});
 
-		const credential = await storage.get("openrouter");
+		const credential = await storage.credentials.get("openrouter");
 		expect(credential).toEqual({ type: "api_key", key: "sk-or-validated", source: "login" });
 
 		const authCall = fetchCalls.find(call => call.url.includes("/api/v1/auth/key"));
@@ -77,17 +77,17 @@ describe("openrouter login wiring", () => {
 
 		const store = new SqliteAuthCredentialStore(new Database(":memory:"));
 		const storage = new AuthStorage(store);
-		await storage.reload();
+		await storage.credentials.reload();
 
 		await expect(
-			storage.login("openrouter", {
+			storage.oauth.login("openrouter", {
 				onAuth: () => {},
 				onPrompt: async () => "sk-or-bogus",
 				fetch: fetchMock,
 			}),
 		).rejects.toThrow(/OpenRouter API key validation failed \(401\)/);
 
-		expect(await storage.get("openrouter")).toBeUndefined();
+		expect(await storage.credentials.get("openrouter")).toBeUndefined();
 		store.close();
 	});
 });

@@ -105,7 +105,7 @@ describe("recovering the OAuth refresh path after a process was killed mid-refre
 		closers.push(store);
 		const auth = new AuthStorage(store);
 		closers.push(auth);
-		await auth.set(provider, [
+		await auth.credentials.set(provider, [
 			{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: Date.now() - 60_000 },
 		]);
 		const credentialId = store.listAuthCredentials(provider)[0]!.id;
@@ -113,7 +113,7 @@ describe("recovering the OAuth refresh path after a process was killed mid-refre
 		// The corpse's lease: taken, never released, with a little life left on it.
 		expect(store.tryAcquireCredentialRefreshLease(credentialId, "killed-process", Date.now() + 300)).toBe(true);
 
-		expect(await auth.getApiKey(provider, "after-crash")).toBe("rotated-access");
+		expect(await auth.keys.get(provider, "after-crash")).toBe("rotated-access");
 		expect(refresh.calls()).toBe(1);
 		const [row] = store.listAuthCredentials(provider);
 		expect(row?.credential.type).toBe("oauth");
@@ -166,11 +166,11 @@ describe("recovering the OAuth refresh path after a process was killed mid-refre
 			},
 		});
 		closers.push(auth);
-		await auth.set(provider, [
+		await auth.credentials.set(provider, [
 			{ type: "oauth", access: "dead-access", refresh: "consumed-refresh", expires: Date.now() - 60_000 },
 		]);
 
-		expect(await auth.getApiKey(provider, "after-crash")).toBeUndefined();
+		expect(await auth.keys.get(provider, "after-crash")).toBeUndefined();
 
 		// Loud: exactly one disable, naming this provider and the provider's own
 		// rejection. A bare "no API key found" with nothing in the event stream is
@@ -209,11 +209,11 @@ describe("recovering the OAuth refresh path after a process was killed mid-refre
 			},
 		});
 		closers.push(auth);
-		await auth.set(provider, [
+		await auth.credentials.set(provider, [
 			{ type: "oauth", access: "stale-access", refresh: "still-good-refresh", expires: Date.now() - 60_000 },
 		]);
 
-		await auth.getApiKey(provider, "after-crash").catch(() => undefined);
+		await auth.keys.get(provider, "after-crash").catch(() => undefined);
 
 		expect(disabled).toHaveLength(0);
 		// THREE attempts, and each one is deliberate: the preflight refresh, the
@@ -250,7 +250,7 @@ describe("recovering the OAuth refresh path after a process was killed mid-refre
 		closers.push(crashedStore);
 		const crashedAuth = new AuthStorage(crashedStore);
 		closers.push(crashedAuth);
-		await crashedAuth.set(provider, [
+		await crashedAuth.credentials.set(provider, [
 			{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: Date.now() - 60_000 },
 		]);
 		const credentialId = crashedStore.listAuthCredentials(provider)[0]!.id;
@@ -261,16 +261,16 @@ describe("recovering the OAuth refresh path after a process was killed mid-refre
 		closers.push(survivorStore);
 		const survivorAuth = new AuthStorage(survivorStore);
 		closers.push(survivorAuth);
-		await survivorAuth.reload();
+		await survivorAuth.credentials.reload();
 
 		// The doomed process rotates, persists, and is killed with the lease held.
-		expect(await crashedAuth.getApiKey(provider, "doomed")).toBe("rotated-access");
+		expect(await crashedAuth.keys.get(provider, "doomed")).toBe("rotated-access");
 		expect(store_refreshToken(crashedStore, provider)).toBe("rotated-refresh");
 		expect(crashedStore.tryAcquireCredentialRefreshLease(credentialId, "killed-process", Date.now() + 250)).toBe(
 			true,
 		);
 
-		expect(await survivorAuth.getApiKey(provider, "survivor")).toBe("rotated-access");
+		expect(await survivorAuth.keys.get(provider, "survivor")).toBe("rotated-access");
 		// The token endpoint was reached once in total: by the process that died.
 		// A second call would mean the survivor replayed the dead token.
 		expect(refresh.calls()).toBe(1);

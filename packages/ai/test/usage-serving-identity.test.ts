@@ -131,7 +131,7 @@ describe("usage serving identity", () => {
 	it("reports stored row IDs and omits identity for runtime and environment keys", async () => {
 		const store = new SqliteAuthCredentialStore(new Database(":memory:"));
 		const storage = new AuthStorage(store);
-		await storage.reload();
+		await storage.credentials.reload();
 		registerCredentialProvider("usage-attribution-api-key", "stored-api-key");
 		registerCredentialProvider("usage-attribution-oauth", {
 			access: "stored-oauth-access",
@@ -142,30 +142,30 @@ describe("usage serving identity", () => {
 		const controller = { onAuth: () => {}, onPrompt: async () => "" };
 		const originalEnvKey = process.env.OPENAI_API_KEY;
 		try {
-			await storage.login("usage-attribution-api-key" as OAuthProvider, controller);
+			await storage.oauth.login("usage-attribution-api-key" as OAuthProvider, controller);
 			const apiKeyRow = store.listAuthCredentials("usage-attribution-api-key")[0];
 			const apiKeySelection: string[] = [];
 			expect(
-				await storage.getApiKey("usage-attribution-api-key", undefined, {
+				await storage.keys.get("usage-attribution-api-key", undefined, {
 					onCredentialSelected: id => apiKeySelection.push(id),
 				}),
 			).toBe("stored-api-key");
 			expect(apiKeySelection).toEqual([String(apiKeyRow.id)]);
 
-			await storage.login("usage-attribution-oauth" as OAuthProvider, controller);
+			await storage.oauth.login("usage-attribution-oauth" as OAuthProvider, controller);
 			const oauthRow = store.listAuthCredentials("usage-attribution-oauth")[0];
 			const oauthSelection: string[] = [];
 			expect(
-				await storage.getApiKey("usage-attribution-oauth", undefined, {
+				await storage.keys.get("usage-attribution-oauth", undefined, {
 					onCredentialSelected: id => oauthSelection.push(id),
 				}),
 			).toBe("stored-oauth-access");
 			expect(oauthSelection).toEqual([String(oauthRow.id)]);
 
 			const runtimeSelection: string[] = [];
-			storage.setRuntimeApiKey("usage-attribution-runtime", "runtime-api-key");
+			storage.keys.setRuntime("usage-attribution-runtime", "runtime-api-key");
 			expect(
-				await storage.getApiKey("usage-attribution-runtime", undefined, {
+				await storage.keys.get("usage-attribution-runtime", undefined, {
 					onCredentialSelected: id => runtimeSelection.push(id),
 				}),
 			).toBe("runtime-api-key");
@@ -174,7 +174,7 @@ describe("usage serving identity", () => {
 			process.env.OPENAI_API_KEY = "environment-api-key";
 			const envSelection: string[] = [];
 			expect(
-				await storage.getApiKey("openai", undefined, { onCredentialSelected: id => envSelection.push(id) }),
+				await storage.keys.get("openai", undefined, { onCredentialSelected: id => envSelection.push(id) }),
 			).toBe("environment-api-key");
 			expect(envSelection).toEqual([]);
 		} finally {

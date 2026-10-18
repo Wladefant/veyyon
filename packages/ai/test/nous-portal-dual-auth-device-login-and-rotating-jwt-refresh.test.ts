@@ -93,7 +93,7 @@ describe("Nous Research dual authentication and rotating JWT refresh lifecycle",
 		db = new Database(":memory:");
 		store = new SqliteAuthCredentialStore(db);
 		storage = new AuthStorage(store);
-		await storage.reload();
+		await storage.credentials.reload();
 	});
 
 	afterEach(() => {
@@ -166,9 +166,9 @@ describe("Nous Research dual authentication and rotating JWT refresh lifecycle",
 				fetch,
 			};
 
-			await storage.login("nous-research-api-key" as Parameters<AuthStorage["login"]>[0], callbacks);
+			await storage.oauth.login("nous-research-api-key" as Parameters<AuthStorage["oauth"]["login"]>[0], callbacks);
 
-			const resolvedKey = await storage.getApiKey("nous-research", "session-test");
+			const resolvedKey = await storage.keys.get("nous-research", "session-test");
 			expect(resolvedKey).toBe("sk-nous-portal-pasted");
 
 			const rows = db.prepare("SELECT provider, credential_type FROM auth_credentials").all() as Array<{
@@ -314,9 +314,9 @@ describe("Nous Research dual authentication and rotating JWT refresh lifecycle",
 				fetch,
 			};
 
-			await storage.login("nous-research" as Parameters<AuthStorage["login"]>[0], callbacks);
+			await storage.oauth.login("nous-research" as Parameters<AuthStorage["oauth"]["login"]>[0], callbacks);
 
-			const resolvedKey = await storage.getApiKey("nous-research", "session-oauth");
+			const resolvedKey = await storage.keys.get("nous-research", "session-oauth");
 			expect(resolvedKey).toBe(validJwt);
 
 			const rows = db.prepare("SELECT provider, credential_type FROM auth_credentials").all() as Array<{
@@ -373,8 +373,8 @@ describe("Nous Research dual authentication and rotating JWT refresh lifecycle",
 				expires: initialExp * 1000 - 120_000,
 			};
 			store.saveOAuth("nous-research", initialCreds);
-			await storage.reload();
-			const resolvedKey = await storage.getApiKey("nous-research", "session-refresh");
+			await storage.credentials.reload();
+			const resolvedKey = await storage.keys.get("nous-research", "session-refresh");
 			expect(resolvedKey).toBe(freshJwt);
 			expect(refreshCount).toBe(1);
 
@@ -398,7 +398,7 @@ describe("Nous Research dual authentication and rotating JWT refresh lifecycle",
 			expect(storedData.refresh).toBe("rt-rotated-token-2");
 			expect(storedData.expires).toBe(nextExp * 1000 - 120_000);
 
-			const secondResolveKey = await storage.getApiKey("nous-research", "session-refresh");
+			const secondResolveKey = await storage.keys.get("nous-research", "session-refresh");
 			expect(secondResolveKey).toBe(freshJwt);
 			expect(refreshCount).toBe(1);
 		});
@@ -430,9 +430,9 @@ describe("Nous Research dual authentication and rotating JWT refresh lifecycle",
 
 			// In AuthStorage, a definitive failure disables the stored row and returns undefined
 			store.saveOAuth("nous-research", revokedCreds);
-			await storage.reload();
+			await storage.credentials.reload();
 
-			const resolved = await storage.getApiKey("nous-research", "session-fail");
+			const resolved = await storage.keys.get("nous-research", "session-fail");
 			expect(resolved).toBeUndefined();
 
 			const rows = db
@@ -532,10 +532,10 @@ describe("Nous Research dual authentication and rotating JWT refresh lifecycle",
 				expires: Date.now() - 100_000,
 			};
 			store.saveOAuth("nous-research", creds);
-			await storage.reload();
-			const request1 = storage.getApiKey("nous-research", "session-c1");
-			const request2 = storage.getApiKey("nous-research", "session-c2");
-			const request3 = storage.getApiKey("nous-research", "session-c3");
+			await storage.credentials.reload();
+			const request1 = storage.keys.get("nous-research", "session-c1");
+			const request2 = storage.keys.get("nous-research", "session-c2");
+			const request3 = storage.keys.get("nous-research", "session-c3");
 
 			completeRefresh(
 				Response.json({

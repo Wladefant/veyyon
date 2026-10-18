@@ -62,44 +62,44 @@ describe("AuthStorage active account and usage cache invalidation", () => {
 
 	test("the globally selected account is the active identity, not the first stored one", async () => {
 		const storage = createStorage();
-		await storage.set(PROVIDER, [oauth("exhausted@example.com"), oauth("healthy@example.com")]);
-		expect(storage.getOAuthAccountIdentity(PROVIDER)?.email).toBe("exhausted@example.com");
+		await storage.credentials.set(PROVIDER, [oauth("exhausted@example.com"), oauth("healthy@example.com")]);
+		expect(storage.oauth.identity(PROVIDER)?.email).toBe("exhausted@example.com");
 
 		const healthyId = store.listAuthCredentials(PROVIDER).find(row => {
 			const credential = row.credential;
 			return credential.type === "oauth" && credential.email === "healthy@example.com";
 		})?.id;
 		if (healthyId === undefined) throw new Error("expected healthy credential id");
-		expect(storage.selectProviderCredential(PROVIDER, healthyId)).toBe(true);
+		expect(storage.sessions.selectProviderCredential(PROVIDER, healthyId)).toBe(true);
 
-		expect(storage.getOAuthAccountIdentity(PROVIDER)?.email).toBe("healthy@example.com");
-		expect(storage.getOAuthAccountIdentity(PROVIDER, "some-session")?.email).toBe("healthy@example.com");
+		expect(storage.oauth.identity(PROVIDER)?.email).toBe("healthy@example.com");
+		expect(storage.oauth.identity(PROVIDER, "some-session")?.email).toBe("healthy@example.com");
 	});
 
 	test("invalidateUsageCache evicts the report cached under the provider base URL", async () => {
 		const storage = createStorage();
-		await storage.set(PROVIDER, [oauth("healthy@example.com")]);
+		await storage.credentials.set(PROVIDER, [oauth("healthy@example.com")]);
 		const baseUrlResolver = (provider: string) => (provider === PROVIDER ? SIDECAR : undefined);
 
-		await storage.fetchUsageReports({ baseUrlResolver });
-		await storage.fetchUsageReports({ baseUrlResolver });
+		await storage.usage.reports({ baseUrlResolver });
+		await storage.usage.reports({ baseUrlResolver });
 		expect(fetchCount).toBe(1);
 
-		await storage.invalidateUsageCache(PROVIDER, undefined, baseUrlResolver);
-		await storage.fetchUsageReports({ baseUrlResolver });
+		await storage.usage.invalidate(PROVIDER, undefined, baseUrlResolver);
+		await storage.usage.reports({ baseUrlResolver });
 		expect(fetchCount).toBe(2);
 	});
 
 	test("invalidateUsageCache without a provider also evicts base-URL keyed entries", async () => {
 		const storage = createStorage();
-		await storage.set(PROVIDER, [oauth("healthy@example.com")]);
+		await storage.credentials.set(PROVIDER, [oauth("healthy@example.com")]);
 		const baseUrlResolver = (provider: string) => (provider === PROVIDER ? SIDECAR : undefined);
 
-		await storage.fetchUsageReports({ baseUrlResolver });
+		await storage.usage.reports({ baseUrlResolver });
 		expect(fetchCount).toBe(1);
 
-		await storage.invalidateUsageCache(undefined, undefined, baseUrlResolver);
-		await storage.fetchUsageReports({ baseUrlResolver });
+		await storage.usage.invalidate(undefined, undefined, baseUrlResolver);
+		await storage.usage.reports({ baseUrlResolver });
 		expect(fetchCount).toBe(2);
 	});
 });
