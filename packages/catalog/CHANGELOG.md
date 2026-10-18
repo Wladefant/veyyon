@@ -10,6 +10,7 @@
 - Devin discovery maps account model configurations to priced model families and capabilities.
 - The catalog discovery barrel exports the Factory Droid and Gemini CLI discovery APIs.
 - Gemini CLI discovery reads the credential's Cloud Code Assist quota and returns available models.
+- Factory Droid discovery filters registry models by account scope, live routing, feature flags and organization policy.
 
 ### Changed
 
