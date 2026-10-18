@@ -347,13 +347,24 @@ fi
 
 # `coding-agent-heavy` aggregates the four following coding-agent buckets. Run
 # their named CI buckets once each instead of repeating the same assertions.
-run_bucket workspace-cloudflare
-run_bucket native
-run_bucket coding-agent-singleton
-run_bucket coding-agent-ui
-run_bucket coding-agent-runtime
-run_bucket coding-agent-native
-run_bucket scripts
+#
+# A failing bucket must not hide the buckets after it: the summary gate below
+# already fails the shard on any failing test, so record the bucket status and
+# keep going instead of letting `set -e` abandon the remaining buckets.
+bucket_failures=0
+run_bucket_recording_failure() {
+  if ! run_bucket "$@"; then
+    bucket_failures=$((bucket_failures + 1))
+  fi
+}
+run_bucket_recording_failure workspace-cloudflare
+run_bucket_recording_failure native
+run_bucket_recording_failure coding-agent-singleton
+run_bucket_recording_failure coding-agent-ui
+run_bucket_recording_failure coding-agent-runtime
+run_bucket_recording_failure coding-agent-native
+run_bucket_recording_failure scripts
+echo "CLOUDFLARE_TEST_BUCKETS_FAILED count=$bucket_failures"
 
 # Require real test cases and matching test-runner totals; chunk completion is reported separately.
 test_total=$((test_passes + test_failures + test_skips + test_todos))
