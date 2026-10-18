@@ -9,6 +9,7 @@
 - Cursor discovery combines account model RPCs, reports failures, and retries HTTP/2 only after a transport failure.
 - Devin discovery maps account model configurations to priced model families and capabilities.
 - The catalog discovery barrel exports the Factory Droid and Gemini CLI discovery APIs.
+- Gemini CLI discovery reads the credential's Cloud Code Assist quota and returns available models.
 
 ### Changed
 
