@@ -738,6 +738,31 @@ pub struct WalkOutcome {
 	pub stats:   WalkStats,
 }
 
+/// Entries a [`WalkRequest`] accepts, read in place from the scan cache or the
+/// fresh scan. Returned by [`WalkRequest::collect_shared_with_heartbeat`].
+pub struct SharedWalk {
+	entries:      Arc<Vec<CollectedEntry>>,
+	filter:       WalkFilter,
+	limit:        Option<usize>,
+	cache_age_ms: u64,
+}
+
+impl SharedWalk {
+	/// Accepted entries in walk order, at most the request's limit.
+	pub fn iter(&self) -> impl Iterator<Item = &CollectedEntry> {
+		self
+			.entries
+			.iter()
+			.filter(|entry| self.filter.accepts_collected(entry))
+			.take(self.limit.unwrap_or(usize::MAX))
+	}
+
+	/// Age of the cache entry in milliseconds; zero means freshly scanned.
+	pub const fn cache_age_ms(&self) -> u64 {
+		self.cache_age_ms
+	}
+}
+
 /// Options shared by native traversal consumers.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct WalkOptions {
@@ -1114,6 +1139,66 @@ impl WalkRequest {
 		E: fmt::Display,
 	{
 		self.collect_with_rank_and_limit(Some(rank), Some(limit), heartbeat)
+	}
+
+	/// Read the entries this request accepts without copying them.
+	///
+	/// The entries stay where the walk or the scan cache holds them, so a
+	/// caller that reads every entry and keeps a few, such as a fuzzy ranking,
+	/// allocates for what it keeps and nothing else. The filter and the limit
+	/// apply as [`SharedWalk::iter`] reads; the request has no ranking here, and
+	/// an empty result rechecks a stale cache entry as [`WalkRequest::collect`]
+	/// does.
+	pub fn collect_shared_with_heartbeat<E, H>(
+		&self,
+		heartbeat: H,
+	) -> std::result::Result<SharedWalk, WalkError<String>>
+	where
+		H: Fn() -> std::result::Result<(), E> + Sync,
+		E: fmt::Display,
+	{
+		let mut options = self.effective_options();
+		let mut scan = self.collect_shared_with_options(options, &heartbeat)?;
+		let accepts_none = |entries: &[CollectedEntry]| {
+			!entries
+				.iter()
+				.any(|entry| self.filter.accepts_collected(entry))
+		};
+		if accepts_none(&scan.entries) && self.should_recheck_empty(scan.cache_age_ms) {
+			options.cache = false;
+			scan = self.collect_shared_with_options(options, &heartbeat)?;
+		}
+		Ok(SharedWalk {
+			entries:      scan.entries,
+			filter:       self.filter.clone(),
+			limit:        self.limit,
+			cache_age_ms: scan.cache_age_ms,
+		})
+	}
+
+	fn collect_shared_with_options<E, H>(
+		&self,
+		options: WalkOptions,
+		heartbeat: &H,
+	) -> std::result::Result<cache::SharedEntries, WalkError<String>>
+	where
+		H: Fn() -> std::result::Result<(), E> + Sync,
+		E: fmt::Display,
+	{
+		match self.overrides.clone() {
+			// Globs that outrank the ignore rules are not part of the cache key, so
+			// such a request never reads or writes the cache.
+			Some(overrides) => {
+				let mut options = options;
+				options.cache = false;
+				let scan =
+					collect_entries_native_with_overrides(&self.root, options, Some(overrides), || {
+						heartbeat().map_err(|err| err.to_string())
+					})?;
+				Ok(cache::SharedEntries { entries: Arc::new(scan.entries), cache_age_ms: 0 })
+			},
+			None => cache::collect_entries_shared(&self.root, options, heartbeat),
+		}
 	}
 
 	/// Collect regular files accepted by this request.

@@ -8,7 +8,7 @@
 //! The class closed is any expired scan that outlives both release points: the
 //! cold path of each cached walk, which drops every expired scan before it
 //! allocates a new one, and `release_expired_scans`, which the addon's idle
-//! heap release calls. Both cold paths are enumerated in [`COLD_PATHS`], and
+//! heap release calls. Every cold path is enumerated in [`COLD_PATHS`], and
 //! the bytes are read from a counting allocator, because the map's length
 //! cannot show a scan whose entries leaked elsewhere.
 //!
@@ -19,6 +19,7 @@
 
 use std::{
 	alloc::{GlobalAlloc, Layout, System},
+	convert::Infallible,
 	fs,
 	path::Path,
 	sync::{
@@ -144,9 +145,9 @@ fn owned_walk(root: &Path) {
 	drop(collect_entries_without_heartbeat(root, options(true)).expect("owned walk should succeed"));
 }
 
-/// The filtered walk every `WalkRequest` without overrides takes, the one `@`
-/// completion and structural search use. The filter keeps nothing, so the
-/// caller holds no entry.
+/// The filtered walk every `WalkRequest` without overrides takes, the one
+/// structural search uses. The filter keeps nothing, so the caller holds no
+/// entry.
 fn filtered_walk(root: &Path) {
 	let outcome =
 		WalkRequest::from_options(root, options(true))
@@ -159,7 +160,18 @@ fn filtered_walk(root: &Path) {
 	assert!(outcome.entries.is_empty(), "the filter keeps nothing");
 }
 
-const COLD_PATHS: [(&str, ColdPath); 2] = [("owned", owned_walk), ("filtered", filtered_walk)];
+/// The shared walk `@` completion reads in place. The walk is dropped, so the
+/// cache holds the only reference to the scan.
+fn shared_walk(root: &Path) {
+	let walk = WalkRequest::from_options(root, options(true))
+		.empty_recheck(EmptyRecheck::Never)
+		.collect_shared_with_heartbeat(|| Ok::<(), Infallible>(()))
+		.expect("shared walk should succeed");
+	assert!(walk.iter().next().is_some(), "the shared walk reads the scan");
+}
+
+const COLD_PATHS: [(&str, ColdPath); 3] =
+	[("owned", owned_walk), ("filtered", filtered_walk), ("shared", shared_walk)];
 
 /// Bytes the cache holds for one scan of `root` taken through `walk`, measured
 /// from an empty cache with the walker's threads already started.

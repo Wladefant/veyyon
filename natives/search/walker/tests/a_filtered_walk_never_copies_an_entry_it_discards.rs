@@ -15,6 +15,10 @@
 //! The filter shapes are enumerated so that a shape nobody exercised does not
 //! exist rather than being forgotten.
 //!
+//! The shared lane, `collect_shared_with_heartbeat`, is held to the same rows:
+//! it hands out the cached scan itself, so a hit copies no entry at all, and
+//! every equivalence row reads it beside the owned lane.
+//!
 //! What it does not catch: a copy made further out, in a caller that takes
 //! these entries and rebuilds them (the N-API conversion in `veyyon-natives`
 //! has its own instrument); the streaming walk, which never builds an owned
@@ -23,6 +27,7 @@
 
 use std::{
 	alloc::{GlobalAlloc, Layout, System},
+	convert::Infallible,
 	fs,
 	path::Path,
 	sync::{
@@ -35,9 +40,9 @@ use std::{
 
 use veyyon_test_scratch::{TempTree, scratch_dir};
 use veyyon_walker::{
-	CollectedEntry, CompiledWalkGlob, EmptyRecheck, FileType, WalkBackend, WalkDetail, WalkFilter,
-	WalkOptions, WalkOverridePattern, WalkOverrides, WalkRequest, collect_entries_without_heartbeat,
-	invalidate_all,
+	CollectedEntry, CompiledWalkGlob, EmptyRecheck, FileType, SharedWalk, WalkBackend, WalkDetail,
+	WalkFilter, WalkOptions, WalkOverridePattern, WalkOverrides, WalkRequest,
+	collect_entries_without_heartbeat, invalidate_all,
 };
 
 /// Bytes this test binary has allocated, so a copy can be observed rather than
@@ -144,6 +149,18 @@ fn paths(entries: &[CollectedEntry]) -> Vec<String> {
 	entries.iter().map(|entry| entry.path.clone()).collect()
 }
 
+/// A shared read of `request`, the lane that hands out the cached scan itself.
+fn shared(request: &WalkRequest) -> SharedWalk {
+	request
+		.collect_shared_with_heartbeat(|| Ok::<(), Infallible>(()))
+		.expect("shared walk should succeed")
+}
+
+/// What a shared read yields, copied so it compares with an owned read.
+fn owned(walk: &SharedWalk) -> Vec<CollectedEntry> {
+	walk.iter().cloned().collect()
+}
+
 /// Bytes allocated while `body` ran.
 fn allocated_during<R>(body: impl FnOnce() -> R) -> (R, u64) {
 	let before = ALLOCATED.load(Ordering::Relaxed);
@@ -234,6 +251,47 @@ fn a_narrow_filter_on_a_cold_scan_pays_for_the_survivors_only() {
 		 read's {wide_bytes}, which is not a copy less",
 		wide.entries.len()
 	);
+}
+
+#[test]
+fn a_shared_read_copies_no_entry() {
+	let _serial = ready();
+	let tree = temp_tree("shared-allocation");
+	write_tree(tree.path(), 5_000);
+	let request =
+		WalkRequest::from_options(tree.path(), options(true)).empty_recheck(EmptyRecheck::Never);
+
+	// Warm the page cache and the walker's thread pool, so the two cold scans
+	// differ in the lane and not in first-run setup.
+	request.collect().expect("warmup");
+	invalidate_all();
+	let (owned_cold, owned_cold_bytes) = allocated_during(|| request.collect().expect("owned cold"));
+	invalidate_all();
+	let (shared_cold, shared_cold_bytes) = allocated_during(|| shared(&request));
+	assert_eq!(owned(&shared_cold), owned_cold.entries, "both cold lanes read the same scan");
+	// Both cold lanes walk the tree and keep it in the cache. The owned lane also
+	// copies all 5,051 entries for its caller (~340KiB); the shared lane hands
+	// the caller the scan the cache keeps.
+	let saved = owned_cold_bytes.saturating_sub(shared_cold_bytes);
+	assert!(
+		saved > 150 * 1024,
+		"a shared cold read allocated {shared_cold_bytes} bytes against the owned read's \
+		 {owned_cold_bytes}, so it copied the scan it returned"
+	);
+
+	// A hit is the cache entry itself: a reference count and a filter, not a
+	// copy. The owned hit is the control and must be expensive.
+	let (owned_hit, owned_hit_bytes) = allocated_during(|| request.collect().expect("owned hit"));
+	let (shared_hit, shared_hit_bytes) = allocated_during(|| shared(&request));
+	assert!(owned_hit_bytes > 100 * 1024, "an owned hit copies every entry");
+	assert!(
+		shared_hit_bytes < 4 * 1024,
+		"a shared hit over {} entries allocated {shared_hit_bytes} bytes",
+		owned_hit.entries.len()
+	);
+	let (read, read_bytes) = allocated_during(|| shared_hit.iter().count());
+	assert_eq!(read, owned_hit.entries.len());
+	assert_eq!(read_bytes, 0, "reading a shared walk allocated {read_bytes} bytes");
 }
 
 #[test]
@@ -338,6 +396,14 @@ fn filtering_at_the_source_returns_what_filtering_after_the_copy_returned() {
 				"{name} a cold read is fresh, cached={cached}"
 			);
 			assert_eq!(cold.stats.cache_age_ms, 0, "{name} a cold read has no age, cached={cached}");
+
+			// The shared lane over the same request: cold, then a hit when caching is on.
+			invalidate_all();
+			let shared_cold = shared(&request);
+			let shared_warm = shared(&request);
+			assert_eq!(owned(&shared_cold), expected, "{name} shared cold entries, cached={cached}");
+			assert_eq!(owned(&shared_warm), expected, "{name} shared warm entries, cached={cached}");
+			assert_eq!(shared_cold.cache_age_ms(), 0, "{name} a shared cold read has no age");
 		}
 	}
 }
@@ -361,6 +427,12 @@ fn a_cache_hit_serves_the_filtered_answer_out_of_the_cached_scan() {
 	assert_eq!(paths(&warm.entries), paths(&cold.entries), "the second read was not a cache hit");
 	assert_eq!(warm.stats.scanned_entries, cold.stats.scanned_entries);
 	assert_eq!(warm.stats.filtered_entries, cold.stats.filtered_entries);
+	let shared_warm = shared(&request);
+	assert_eq!(
+		paths(&owned(&shared_warm)),
+		paths(&cold.entries),
+		"the shared read was not a cache hit"
+	);
 }
 
 #[test]
@@ -375,8 +447,8 @@ fn a_limit_truncates_what_the_filter_kept_and_never_what_it_rejected() {
 	let all = request.collect().expect("unlimited walk should succeed");
 	assert_eq!(all.entries.len(), 100, "f00000..f00099 match");
 
-	let limited = request
-		.limit(7)
+	let limited_request = request.limit(7);
+	let limited = limited_request
 		.collect()
 		.expect("limited walk should succeed");
 	assert_eq!(paths(&limited.entries), paths(&all.entries)[..7], "the first seven survivors");
@@ -386,6 +458,11 @@ fn a_limit_truncates_what_the_filter_kept_and_never_what_it_rejected() {
 		"a limit is not a filter"
 	);
 	assert_eq!(limited.stats.scanned_entries, all.stats.scanned_entries);
+	assert_eq!(
+		paths(&owned(&shared(&limited_request))),
+		paths(&all.entries)[..7],
+		"the shared lane yields the first seven survivors"
+	);
 }
 
 #[test]
@@ -482,6 +559,10 @@ fn an_empty_filtered_result_still_obeys_the_recheck_policy() {
 		never.collect().expect("warm").entries.is_empty(),
 		"EmptyRecheck::Never must serve the cached empty answer even once a match exists"
 	);
+	assert!(
+		owned(&shared(&never)).is_empty(),
+		"EmptyRecheck::Never must serve the cached empty answer to the shared lane too"
+	);
 
 	let rechecking = WalkRequest::from_options(tree.path(), options(true))
 		.filter(WalkFilter::files_only().glob(glob("**/*.txt")))
@@ -496,6 +577,37 @@ fn an_empty_filtered_result_still_obeys_the_recheck_policy() {
 	assert_eq!(rechecked.stats.cache_age_ms, 0, "a recheck reports no cache age");
 	assert_eq!(rechecked.stats.scanned_entries, 3, "src, src/keep.log, src/added.txt");
 	assert_eq!(rechecked.stats.filtered_entries, 2);
+	let shared_rechecked = shared(&rechecking);
+	assert_eq!(
+		paths(&owned(&shared_rechecked)),
+		vec!["src/added.txt".to_owned()],
+		"an empty shared result at or past the threshold must rescan"
+	);
+	assert_eq!(shared_rechecked.cache_age_ms(), 0, "a shared recheck reports no cache age");
+}
+
+#[test]
+fn a_non_empty_answer_past_the_recheck_threshold_is_still_a_cache_hit() {
+	let _serial = ready();
+	let tree = temp_tree("non-empty-hit");
+	write_file(tree.path().join("src/first.txt"));
+
+	let request = WalkRequest::from_options(tree.path(), options(true))
+		.filter(WalkFilter::files_only().glob(glob("**/*.txt")))
+		.empty_recheck(EmptyRecheck::AfterMillis(1));
+	let first = vec!["src/first.txt".to_owned()];
+	assert_eq!(paths(&request.collect().expect("cold").entries), first);
+
+	// Only an empty answer is rechecked. A file that appears after the fill is
+	// the discriminator: a rescan would return it, a cache hit cannot.
+	write_file(tree.path().join("src/second.txt"));
+	thread::sleep(Duration::from_millis(3));
+	let owned_hit = request.collect().expect("owned hit");
+	assert_eq!(paths(&owned_hit.entries), first, "a non-empty owned answer was rescanned");
+	assert!(owned_hit.stats.cache_age_ms >= 3, "the owned answer came from the cache");
+	let shared_hit = shared(&request);
+	assert_eq!(paths(&owned(&shared_hit)), first, "a non-empty shared answer was rescanned");
+	assert!(shared_hit.cache_age_ms() >= 3, "the shared answer came from the cache");
 }
 
 #[test]
@@ -537,11 +649,10 @@ fn caller_named_globs_still_have_their_own_filter_applied() {
 
 	let overrides = WalkOverrides::new(tree.path(), [WalkOverridePattern::new("*.txt")])
 		.expect("override globs should compile");
-	let outcome = WalkRequest::from_options(tree.path(), options(true))
-		.overrides(overrides)
-		.filter(WalkFilter::files_only().glob(glob("**/f0000*.txt")))
-		.collect()
-		.expect("override walk should succeed");
+	let request = WalkRequest::from_options(tree.path(), options(true))
+		.overrides(overrides.clone())
+		.filter(WalkFilter::files_only().glob(glob("**/f0000*.txt")));
+	let outcome = request.collect().expect("override walk should succeed");
 
 	assert_eq!(outcome.entries.len(), 10, "f00000..f00009, and never the .log");
 	let mut kept = paths(&outcome.entries);
@@ -553,4 +664,19 @@ fn caller_named_globs_still_have_their_own_filter_applied() {
 	assert_eq!(outcome.stats.filtered_entries, outcome.stats.scanned_entries - 10);
 	assert_eq!(outcome.backend, WalkBackend::Fresh, "an override request is never cached");
 	assert_eq!(outcome.stats.cache_age_ms, 0);
+
+	let shared_outcome = shared(&request);
+	let mut shared_kept = paths(&owned(&shared_outcome));
+	shared_kept.sort_unstable();
+	assert_eq!(shared_kept, expected, "the shared lane filters an override result too");
+	assert_eq!(shared_outcome.cache_age_ms(), 0, "an override request is never cached");
+
+	// The override, not the filter, is what leaves the .log out here: a shared
+	// read that dropped the override would walk the whole tree.
+	let files = WalkRequest::from_options(tree.path(), options(true))
+		.overrides(overrides)
+		.filter(WalkFilter::files_only());
+	let owned_files = files.collect().expect("override walk should succeed");
+	assert_eq!(owned(&shared(&files)), owned_files.entries, "both lanes read the override walk");
+	assert_eq!(owned_files.entries.len(), 40, "every .txt file and never the .log");
 }

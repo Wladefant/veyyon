@@ -4,12 +4,64 @@
 //! subsequence scoring. Uses `veyyon-walker` for directory traversal and
 //! caching.
 
-use std::path::Path;
+use std::{cmp::Ordering, collections::BinaryHeap, path::Path};
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 use crate::{iofs, task};
+
+/// A kept match. Orders worst first: a lower score, then a deeper path, then a
+/// later path, so a max-heap of these has the worst kept match on top and its
+/// sorted vector lists the best first.
+struct Ranked {
+	score:        u32,
+	depth:        usize,
+	/// Relative path, with a trailing `/` for a directory.
+	path:         String,
+	is_directory: bool,
+}
+
+impl Ord for Ranked {
+	fn cmp(&self, other: &Self) -> Ordering {
+		other
+			.score
+			.cmp(&self.score)
+			.then_with(|| self.depth.cmp(&other.depth))
+			.then_with(|| self.path.cmp(&other.path))
+	}
+}
+
+impl PartialOrd for Ranked {
+	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+		Some(self.cmp(other))
+	}
+}
+
+impl PartialEq for Ranked {
+	fn eq(&self, other: &Self) -> bool {
+		self.cmp(other).is_eq()
+	}
+}
+
+impl Eq for Ranked {}
+
+/// Whether a candidate, not yet copied, ranks before `kept` in [`Ranked`]
+/// order. The candidate's path is compared with the `/` a directory gets, so
+/// the answer matches comparing the two as [`Ranked`] values.
+fn ranks_before(score: u32, depth: usize, path: &str, is_directory: bool, kept: &Ranked) -> bool {
+	kept
+		.score
+		.cmp(&score)
+		.then_with(|| depth.cmp(&kept.depth))
+		.then_with(|| {
+			path
+				.bytes()
+				.chain(is_directory.then_some(b'/'))
+				.cmp(kept.path.bytes())
+		})
+		.is_lt()
+}
 
 /// Options for fuzzy file path search.
 #[napi(object)]
@@ -169,36 +221,6 @@ struct FuzzyFindConfig {
 	cache:       Option<bool>,
 }
 
-fn score_entries(
-	entries: &[iofs::GlobMatch],
-	query_lower: &str,
-	normalized_query: &str,
-	query_chars: &[char],
-	ct: &task::CancelToken,
-) -> Result<Vec<FuzzyFindMatch>> {
-	let mut scored = Vec::with_capacity(entries.len().min(256));
-	for entry in entries {
-		ct.heartbeat()?;
-		if entry.file_type == iofs::FileType::Symlink {
-			continue;
-		}
-
-		let is_directory = entry.file_type == iofs::FileType::Dir;
-		let score =
-			score_fuzzy_path(&entry.path, is_directory, query_lower, normalized_query, query_chars);
-		if score == 0 {
-			continue;
-		}
-
-		let mut path = entry.path.clone();
-		if is_directory {
-			path.push('/');
-		}
-		scored.push(FuzzyFindMatch { path, is_directory, score });
-	}
-	Ok(scored)
-}
-
 fn fuzzy_find_sync(config: FuzzyFindConfig, ct: task::CancelToken) -> Result<FuzzyFindResult> {
 	let root = veyyon_walker::resolve_search_path(&config.path).map_err(iofs::map_walker_error)?;
 	let include_hidden = config.hidden.unwrap_or(false);
@@ -215,7 +237,7 @@ fn fuzzy_find_sync(config: FuzzyFindConfig, ct: task::CancelToken) -> Result<Fuz
 		return Ok(FuzzyFindResult { matches: Vec::new(), total_matches: 0 });
 	}
 
-	let outcome = veyyon_walker::WalkRequest::new(root)
+	let walk = veyyon_walker::WalkRequest::new(root)
 		.hidden(include_hidden)
 		.gitignore(respect_gitignore)
 		.skip_git(true)
@@ -228,24 +250,73 @@ fn fuzzy_find_sync(config: FuzzyFindConfig, ct: task::CancelToken) -> Result<Fuz
 		.directory_errors(veyyon_walker::DirectoryErrorMode::SkipSkippable)
 		.cache(config.cache.unwrap_or(false))
 		.empty_recheck(veyyon_walker::EmptyRecheck::Configured)
-		.collect_with_heartbeat(|| ct.heartbeat())
+		.collect_shared_with_heartbeat(|| ct.heartbeat())
 		.map_err(iofs::map_walker_error)?;
-	let entries: Vec<iofs::GlobMatch> = outcome
-		.entries
+	let query = FuzzyQuery {
+		lower:      &query_lower,
+		normalized: &normalized_query,
+		chars:      &query_chars,
+	};
+	let (best, total_matches) = best_matches(walk.iter(), &query, max_results, &ct)?;
+	let matches = best
 		.into_iter()
-		.map(iofs::GlobMatch::from)
+		.map(|Ranked { score, path, is_directory, .. }| FuzzyFindMatch { path, is_directory, score })
 		.collect();
-	let mut scored = score_entries(&entries, &query_lower, &normalized_query, &query_chars, &ct)?;
+	Ok(FuzzyFindResult { matches, total_matches: crate::utils::clamp_u32(total_matches) })
+}
 
-	scored.sort_by(|a, b| {
-		b.score
-			.cmp(&a.score)
-			.then_with(|| path_depth(&a.path).cmp(&path_depth(&b.path)))
-			.then_with(|| a.path.cmp(&b.path))
-	});
-	let total_matches = crate::utils::clamp_u32(scored.len() as u64);
-	let matches = scored.into_iter().take(max_results).collect();
-	Ok(FuzzyFindResult { matches, total_matches })
+/// A query in the three forms [`score_fuzzy_path`] reads.
+struct FuzzyQuery<'a> {
+	lower:      &'a str,
+	normalized: &'a str,
+	chars:      &'a [char],
+}
+
+/// The best `max_results` matches among `entries`, best first, and the number
+/// of entries that matched at all.
+///
+/// The entries are borrowed from the walk, and a path is copied only while its
+/// match ranks among the best `max_results`. The result does not depend on the
+/// order the entries arrive in, because [`Ranked`] order is total over unique
+/// paths.
+fn best_matches<'a>(
+	entries: impl Iterator<Item = &'a veyyon_walker::CollectedEntry>,
+	query: &FuzzyQuery<'_>,
+	max_results: usize,
+	ct: &task::CancelToken,
+) -> Result<(Vec<Ranked>, u64)> {
+	let mut kept = BinaryHeap::with_capacity(max_results.min(1024) + 1);
+	let mut total_matches = 0_u64;
+	for entry in entries {
+		ct.heartbeat()?;
+		if entry.file_type == veyyon_walker::FileType::Symlink {
+			continue;
+		}
+
+		let is_directory = entry.file_type == veyyon_walker::FileType::Dir;
+		let score =
+			score_fuzzy_path(&entry.path, is_directory, query.lower, query.normalized, query.chars);
+		if score == 0 {
+			continue;
+		}
+		total_matches += 1;
+
+		let depth = path_depth(&entry.path);
+		if kept.len() == max_results {
+			let Some(worst) = kept.peek() else { continue };
+			if !ranks_before(score, depth, &entry.path, is_directory, worst) {
+				continue;
+			}
+			kept.pop();
+		}
+		let mut path = String::with_capacity(entry.path.len() + usize::from(is_directory));
+		path.push_str(&entry.path);
+		if is_directory {
+			path.push('/');
+		}
+		kept.push(Ranked { score, depth, path, is_directory });
+	}
+	Ok((kept.into_sorted_vec(), total_matches))
 }
 
 /// Fuzzy file path search for autocomplete.
@@ -263,10 +334,147 @@ mod tests {
 	#[cfg(unix)]
 	use std::{fs, os::unix::fs as unix_fs};
 
+	use veyyon_walker::{CollectedEntry, FileType};
+
 	#[cfg(unix)]
 	use super::{FuzzyFindConfig, fuzzy_find_sync};
-	#[cfg(unix)]
+	use super::{FuzzyQuery, best_matches, normalize_fuzzy_text, path_depth, score_fuzzy_path};
 	use crate::task;
+
+	// WHY: fuzzy find used to score every entry, copy every match and sort them
+	// all before keeping `max_results`; an empty query copied all 510 000 paths
+	// of a scanned `/usr`. It now keeps a bounded heap and copies a path only
+	// while its match is among the best. The class these tests close is any
+	// selection whose answer differs from that full sort cut at `max_results`:
+	// a comparator that disagrees with the kept order, an admission that
+	// evicts a better match, a tie broken by arrival order instead of by path,
+	// and a match count that counts kept matches instead of all of them. Every
+	// cut and every rotation of the entries in both directions is checked,
+	// because a wrong admission shows only when a better match arrived first.
+	// What they do not catch: whether the entries were borrowed or copied, which
+	// the walker's allocation tests and the binary measurement cover.
+
+	/// The walk entries the selection tests rank: directories that tie on score
+	/// and depth and differ by a byte below `/` (`foo`, `foo-`, `foo.d`),
+	/// sibling directories whose walk order is not their byte order (`a`,
+	/// `a-b`), the same name at two depths, and a symlink, which is never a
+	/// match.
+	fn corpus() -> Vec<CollectedEntry> {
+		let entry = |path: &str, file_type| CollectedEntry {
+			path: path.to_owned(),
+			file_type,
+			mtime: None,
+			size: None,
+		};
+		vec![
+			entry("foo", FileType::Dir),
+			entry("foo-", FileType::Dir),
+			entry("foo.d", FileType::Dir),
+			entry("scripts", FileType::Dir),
+			entry("a", FileType::Dir),
+			entry("a-b", FileType::Dir),
+			entry("a/scripts", FileType::Dir),
+			entry("a-b/scripts", FileType::Dir),
+			entry("foo-/x.txt", FileType::File),
+			entry("scripts.md", FileType::File),
+			entry("a/scripts.md", FileType::File),
+			entry("a/notes.txt", FileType::File),
+			entry("s-c-r-i-p-t-s", FileType::File),
+			entry("link-to-foo", FileType::Symlink),
+		]
+	}
+
+	/// Every match ranked by a full sort, best first, as `(path, score)`.
+	fn fully_sorted(entries: &[CollectedEntry], query: &FuzzyQuery<'_>) -> Vec<(String, u32)> {
+		let mut scored: Vec<(String, u32)> = entries
+			.iter()
+			.filter(|entry| entry.file_type != FileType::Symlink)
+			.filter_map(|entry| {
+				let is_directory = entry.file_type == FileType::Dir;
+				let score = score_fuzzy_path(
+					&entry.path,
+					is_directory,
+					query.lower,
+					query.normalized,
+					query.chars,
+				);
+				let path = if is_directory {
+					format!("{}/", entry.path)
+				} else {
+					entry.path.clone()
+				};
+				(score > 0).then_some((path, score))
+			})
+			.collect();
+		scored.sort_by(|a, b| {
+			b.1.cmp(&a.1)
+				.then_with(|| path_depth(&a.0).cmp(&path_depth(&b.0)))
+				.then_with(|| a.0.cmp(&b.0))
+		});
+		scored
+	}
+
+	#[test]
+	fn the_kept_matches_are_the_full_ranking_cut_at_max_results_in_any_arrival_order() {
+		let corpus = corpus();
+		let forward: Vec<&CollectedEntry> = corpus.iter().collect();
+		let backward: Vec<&CollectedEntry> = corpus.iter().rev().collect();
+		let ct = task::CancelToken::default();
+		for raw_query in ["", "scripts", "foo"] {
+			let lower = raw_query.trim().to_lowercase();
+			let normalized = normalize_fuzzy_text(&lower);
+			let chars: Vec<char> = normalized.chars().collect();
+			let query = FuzzyQuery { lower: &lower, normalized: &normalized, chars: &chars };
+			let ranking = fully_sorted(&corpus, &query);
+			assert!(ranking.len() > 2, "{raw_query:?} should match enough entries to cut");
+
+			for order in [&forward, &backward] {
+				for start in 0..order.len() {
+					let arrival = order[start..].iter().chain(&order[..start]).copied();
+					for max_results in 1..=ranking.len() + 1 {
+						let (best, total) = best_matches(arrival.clone(), &query, max_results, &ct)
+							.expect("selection should succeed");
+						let kept: Vec<(String, u32)> = best
+							.into_iter()
+							.map(|ranked| (ranked.path, ranked.score))
+							.collect();
+						let cut = &ranking[..max_results.min(ranking.len())];
+						assert_eq!(
+							kept, cut,
+							"query {raw_query:?}, max_results {max_results}, arrival starting at {:?}",
+							order[start].path
+						);
+						assert_eq!(total, ranking.len() as u64, "every match is counted");
+					}
+				}
+			}
+		}
+	}
+
+	#[test]
+	fn an_empty_query_ranks_directories_then_shallow_paths_then_bytes() {
+		let corpus = corpus();
+		let query = FuzzyQuery { lower: "", normalized: "", chars: &[] };
+		let (best, total) = best_matches(corpus.iter(), &query, 100, &task::CancelToken::default())
+			.expect("selection should succeed");
+		let paths: Vec<&str> = best.iter().map(|ranked| ranked.path.as_str()).collect();
+		assert_eq!(paths, [
+			"a-b/",
+			"a/",
+			"foo-/",
+			"foo.d/",
+			"foo/",
+			"scripts/",
+			"a-b/scripts/",
+			"a/scripts/",
+			"s-c-r-i-p-t-s",
+			"scripts.md",
+			"a/notes.txt",
+			"a/scripts.md",
+			"foo-/x.txt",
+		]);
+		assert_eq!(total, 13, "every entry but the symlink matches an empty query");
+	}
 
 	#[cfg(unix)]
 	/// A scratch directory for one case.

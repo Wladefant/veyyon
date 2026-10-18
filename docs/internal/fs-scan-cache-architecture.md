@@ -15,10 +15,10 @@ Primary goals:
 ## Ownership and public surface
 
 - Cache implementation and policy: `natives/search/walker/src/cache.rs` (`collect_entries`, `invalidate_path`, `invalidate_path_string`, `invalidate_all`, env-configured policy getters)
-- Walk entry point that consults the cache: `veyyon_walker::WalkRequest` (`natives/search/walker/src/lib.rs`): the `.cache(bool)` builder flag routes `collect_entries` through `get_or_scan`
+- Walk entry point that consults the cache: `veyyon_walker::WalkRequest` (`natives/search/walker/src/lib.rs`): the `.cache(bool)` builder flag routes `collect_entries` through `get_or_scan`, a filtered request through `collect_entries_filtered`, and `collect_shared_with_heartbeat` through `collect_entries_shared`
 - Native consumers (`natives/bridge/addon/src/`):
   - `glob.rs`: cache opt-in via config
-  - `fd.rs` (`fuzzyFind`): cache opt-in via config
+  - `fd.rs` (`fuzzyFind`): cache opt-in via config; reads the scan in place through `collect_shared_with_heartbeat`
   - `ast.rs` (`astGrep`/`astEdit` file discovery): always cached (`.cache(true)`)
   - `grep.rs`: **not cached**: it builds its walk with `.cache(false)`; there is no cached grep directory mode today
 - JS binding/export:
@@ -80,11 +80,12 @@ Global policy (environment-overridable):
 - `FS_SCAN_EMPTY_RECHECK_MS` (default `200`)
 - `FS_SCAN_CACHE_MAX_ENTRIES` (default `16`)
 
-Behavior (`get_or_scan` and `collect_entries_filtered`, internal to `cache.rs`):
+Behavior (`get_or_scan`, `collect_entries_filtered` and `collect_entries_shared`, internal to `cache.rs`):
 
 - if TTL is `0`: bypass cache entirely, always fresh scan (`cache_age_ms = 0`)
-- on cache hit within TTL: return cloned cached entries + non-zero `cache_age_ms`
+- on cache hit within TTL: `get_or_scan` returns a clone of every cached entry, `collect_entries_filtered` a clone of each accepted entry, and `collect_entries_shared` the cache entry's own `Arc<Vec<CollectedEntry>>`, each with a non-zero `cache_age_ms`
 - on expired hit or miss: drop every expired entry (`release_expired_scans`), scan fresh, store, return with `cache_age_ms = 0`
+- a caller holding a shared scan keeps its entries allocated after an eviction or a release drops the cache's reference, until the caller drops its own
 - max entry enforcement is oldest-first eviction by `created_at` after insert (`evict_oldest`)
 - the addon's `releaseFreeHeapPages()`, which the idle trim calls, drops every expired entry before `malloc_trim`, so a quiet process holds no scan past its TTL
 
@@ -188,4 +189,4 @@ When introducing cache use in a new scanner/search path:
 - `glob`/`fuzzyFind`/`astGrep` share scan entries only when the full `WalkOptions` key matches.
 - Every native consumer sets `skip_git=true`, so `.git` is excluded from all cached scans in practice; `should_skip_path` re-enforces it at the discovery-filter layer.
 
-*Verified against `f3df2e7f575d` on 2026-10-18.*
+*Verified against `3100447712f0` on 2026-10-18.*

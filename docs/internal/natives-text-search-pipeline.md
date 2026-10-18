@@ -142,12 +142,13 @@ The loader tries install-specific addon candidates in priority order. Source and
 ### `fuzzyFind` flow
 
 1. Rust implementation lives in `fd.rs`; generated export is `fuzzyFind`.
-2. Shared scan source from the `veyyon-walker` cache with the same cache/no-cache split and stale-empty recheck policy (fd walks with `FollowLinks::Always`).
+2. Shared scan source from the `veyyon-walker` cache with the same cache/no-cache split and stale-empty recheck policy (fd walks with `FollowLinks::Always`). The entries are read in place through `collect_shared_with_heartbeat`, so a cache hit copies no entry.
 3. Scoring:
    - exact / starts-with / contains / subsequence-based fuzzy score;
    - separator/punctuation-normalized scoring path;
-   - directory bonus (+10) and deterministic ordering: `score` desc, then path-depth asc (shallower paths first), then `path` asc.
+   - directory bonus (+10) and deterministic ordering: `score` desc, then path-depth asc (shallower paths first), then `path` asc, where a directory path ends in `/`.
 4. Symlink entries are excluded from fuzzy results.
+5. Selection: a bounded heap keeps the best `maxResults` matches, and a path is copied only while its match ranks among them. The result equals a full sort cut at `maxResults` for any entry order. `totalMatches` counts every match.
 
 ### Failure behavior
 
@@ -287,4 +288,4 @@ Text functions generally return deterministic transformed output; errors are lim
 5. Rust shapes outputs into N-API objects (`lineNumber`, `matchCount`, `limitReached`, `patternTreatedAsLiteral`, etc.).
 6. The package's lazy binding returns typed JS objects and optional per-match callbacks for `grep`/`glob`.
 
-*Verified against `4507f0a3aeda070a05fc79b90d4239a631e2b80c` on 2026-10-18.*
+*Verified against `3100447712f0` on 2026-10-18.*

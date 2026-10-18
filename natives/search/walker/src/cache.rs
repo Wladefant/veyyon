@@ -4,7 +4,7 @@ use std::{
 	borrow::Cow,
 	fmt,
 	path::{Path, PathBuf},
-	sync::LazyLock,
+	sync::{Arc, LazyLock},
 	time::{Duration, Instant},
 };
 
@@ -22,7 +22,7 @@ struct CacheKey {
 #[derive(Clone)]
 struct CacheEntry {
 	created_at: Instant,
-	entries:    Vec<CollectedEntry>,
+	entries:    Arc<Vec<CollectedEntry>>,
 }
 
 static CACHE_TTL_MS: LazyLock<u64> =
@@ -349,7 +349,7 @@ where
 		let age = now.duration_since(entry.created_at);
 		if age < Duration::from_millis(ttl) {
 			return Ok(CollectedEntries {
-				entries:      entry.entries.clone(),
+				entries:      entry.entries.as_ref().clone(),
 				cache_age_ms: age.as_millis() as u64,
 			});
 		}
@@ -357,7 +357,8 @@ where
 	release_expired_scans();
 
 	let scan = collect_entries_uncached(root, options, heartbeat)?;
-	SCAN_CACHE.insert(key, CacheEntry { created_at: now, entries: scan.entries.clone() });
+	SCAN_CACHE
+		.insert(key, CacheEntry { created_at: now, entries: Arc::new(scan.entries.clone()) });
 	evict_oldest();
 	Ok(CollectedEntries { entries: scan.entries, cache_age_ms: 0 })
 }
@@ -448,9 +449,60 @@ where
 	let scan = collect_entries_uncached(root, options, heartbeat)?;
 	let scanned = scan.entries.len();
 	let entries = clone_accepted(&scan.entries, accept);
-	SCAN_CACHE.insert(key, CacheEntry { created_at: now, entries: scan.entries });
+	SCAN_CACHE.insert(key, CacheEntry { created_at: now, entries: Arc::new(scan.entries) });
 	evict_oldest();
 	Ok(FilteredEntries { entries, cache_age_ms: 0, scanned })
+}
+
+/// Every entry a walk or a cache entry holds, shared rather than copied.
+pub struct SharedEntries {
+	/// The entries, unfiltered, in the order the walk or the cache held them.
+	pub entries:      Arc<Vec<CollectedEntry>>,
+	/// Age of the cache entry in milliseconds; zero means freshly scanned.
+	pub cache_age_ms: u64,
+}
+
+/// Collect entries without copying them out of the cache.
+///
+/// The owned paths copy every entry they deliver: a fuzzy ranking that reads
+/// all 510 000 entries of a cached scan to keep the best hundred cloned them
+/// all first. A hit here hands the caller the cache entry's own vector behind
+/// a reference count, and the cold path stores the scan it returns, so reading
+/// the entries allocates nothing. A caller that holds the vector past an
+/// eviction or a release keeps it alive until it drops it.
+pub fn collect_entries_shared<H, E>(
+	root: &Path,
+	options: WalkOptions,
+	heartbeat: &H,
+) -> Result<SharedEntries, WalkError<String>>
+where
+	H: Fn() -> std::result::Result<(), E> + Sync,
+	E: fmt::Display,
+{
+	let ttl = *CACHE_TTL_MS;
+	if !options.cache || ttl == 0 {
+		let scan = collect_entries_uncached(root, options, heartbeat)?;
+		return Ok(SharedEntries { entries: Arc::new(scan.entries), cache_age_ms: 0 });
+	}
+
+	let key = cache_key(root, options);
+	let now = Instant::now();
+	if let Some(entry) = SCAN_CACHE.get(&key) {
+		let age = now.duration_since(entry.created_at);
+		if age < Duration::from_millis(ttl) {
+			return Ok(SharedEntries {
+				entries:      Arc::clone(&entry.entries),
+				cache_age_ms: age.as_millis() as u64,
+			});
+		}
+	}
+	release_expired_scans();
+
+	let scan = collect_entries_uncached(root, options, heartbeat)?;
+	let entries = Arc::new(scan.entries);
+	SCAN_CACHE.insert(key, CacheEntry { created_at: now, entries: Arc::clone(&entries) });
+	evict_oldest();
+	Ok(SharedEntries { entries, cache_age_ms: 0 })
 }
 
 pub fn collect_entries<H, E>(

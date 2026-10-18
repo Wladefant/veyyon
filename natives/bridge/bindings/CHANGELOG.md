@@ -7,6 +7,10 @@
 - `releaseFreeHeapPages()` returns a `Promise<boolean>` and walks the C allocator's arenas on libuv's thread pool instead of on the calling thread, where the walk held a 6 GiB session's event loop 250 to 1127 ms per call.
 - `enclosingBlockBoundaries()` returns a `Promise` and parses on libuv's thread pool instead of on the calling thread, where a 3.5 MB TypeScript source held the event loop 153 ms; every call shares one retained parse tree, so a second window of the same source answers in 4 ms on any pool thread.
 
+### Changed
+
+- `fuzzyFind` reads the scan cache in place and copies a path only while it ranks among the best `maxResults`, so a cached lookup over a 612,000-entry tree answers in 17 ms instead of 1.4 s for an empty query and in 67 ms instead of 104 ms for `zq`, and peaks at 85 MB instead of 380 MB.
+
 ### Fixed
 
 - Loading the addon caps glibc's malloc arenas at eight unless `MALLOC_ARENA_MAX` or `glibc.malloc.arena_max` sets a limit, so 48 shell commands, 32 searches and 16 globs at once peak at 311 MiB RSS instead of 488 MiB and settle at 187 MiB instead of 335 MiB after the idle trim.
