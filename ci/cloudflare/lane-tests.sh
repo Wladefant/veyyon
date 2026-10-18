@@ -9,6 +9,88 @@ elif [[ "$WORKERS_CI_BRANCH" != cf-ci/* ]]; then
   exit 0
 fi
 
+# Outer memory sampler & safe minimal bridge (every 30s, stops with runner)
+diag_dir=""
+OUTER_SAMPLER_PID=""
+
+write_cgroup_bridge() {
+  local cur="unavailable"
+  local peak="unavailable"
+  local oom="unavailable"
+  local oom_kill="unavailable"
+  local raw_events=""
+  local supported="false"
+  local cgroup_base="/sys/fs/cgroup"
+
+  if [[ -f "$cgroup_base/memory.current" ]]; then
+    cur="$(cat "$cgroup_base/memory.current" 2>/dev/null || echo "unavailable")"
+    supported="true"
+  fi
+  if [[ -f "$cgroup_base/memory.peak" ]]; then
+    peak="$(cat "$cgroup_base/memory.peak" 2>/dev/null || echo "unavailable")"
+    supported="true"
+  fi
+  if [[ -f "$cgroup_base/memory.events" ]]; then
+    raw_events="$(tr '\n' ' ' < "$cgroup_base/memory.events" 2>/dev/null || echo "")"
+    oom="$(awk '$1=="oom"{print $2}' "$cgroup_base/memory.events" 2>/dev/null || echo "unavailable")"
+    oom_kill="$(awk '$1=="oom_kill"{print $2}' "$cgroup_base/memory.events" 2>/dev/null || echo "unavailable")"
+    supported="true"
+  fi
+  if [[ "$cur" == "unavailable" && -f "$cgroup_base/memory/memory.usage_in_bytes" ]]; then
+    cur="$(cat "$cgroup_base/memory/memory.usage_in_bytes" 2>/dev/null || echo "unavailable")"
+    peak="$(cat "$cgroup_base/memory/memory.max_usage_in_bytes" 2>/dev/null || echo "unavailable")"
+    supported="true"
+    if [[ -f "$cgroup_base/memory/memory.oom_control" ]]; then
+      raw_events="$(tr '\n' ' ' < "$cgroup_base/memory/memory.oom_control" 2>/dev/null || echo "")"
+      oom_kill="$(awk '$1=="oom_kill"{print $2}' "$cgroup_base/memory/memory.oom_control" 2>/dev/null || echo "unavailable")"
+    fi
+  fi
+
+  cat > "$diag_dir/cgroup-latest.json.tmp" <<EOF
+{
+  "supported": $supported,
+  "current": "$cur",
+  "peak": "$peak",
+  "oom": "$oom",
+  "oom_kill": "$oom_kill",
+  "raw_events": "$raw_events"
+}
+EOF
+  mv "$diag_dir/cgroup-latest.json.tmp" "$diag_dir/cgroup-latest.json"
+}
+
+stop_outer_sampler() {
+  if [[ -n "${OUTER_SAMPLER_PID:-}" ]]; then
+    kill "$OUTER_SAMPLER_PID" 2>/dev/null || true
+    wait "$OUTER_SAMPLER_PID" 2>/dev/null || true
+  fi
+}
+on_lane_exit() {
+  local status=$?
+  stop_outer_sampler
+  echo "CLOUDFLARE_LANE_EXIT status=$status"
+}
+trap on_lane_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+diag_dir="$(mktemp -d /var/tmp/veyyon-diag-XXXXXX)"
+write_cgroup_bridge
+
+(
+  while true; do
+    sleep 30
+    write_cgroup_bridge
+    free_summary="$(free -m 2>/dev/null | awk '/^Mem:/{printf "total=%sMB used=%sMB free=%sMB avail=%sMB", $2, $3, $4, $7}' || echo "unavailable")"
+    cur="$(sed -n 's/.*"current": "\([^"]*\)".*/\1/p' "$diag_dir/cgroup-latest.json" 2>/dev/null || echo "unavailable")"
+    peak="$(sed -n 's/.*"peak": "\([^"]*\)".*/\1/p' "$diag_dir/cgroup-latest.json" 2>/dev/null || echo "unavailable")"
+    oom="$(sed -n 's/.*"oom": "\([^"]*\)".*/\1/p' "$diag_dir/cgroup-latest.json" 2>/dev/null || echo "unavailable")"
+    oom_kill="$(sed -n 's/.*"oom_kill": "\([^"]*\)".*/\1/p' "$diag_dir/cgroup-latest.json" 2>/dev/null || echo "unavailable")"
+    echo "CLOUDFLARE_HEARTBEAT_30S current=$cur peak=$peak oom=$oom oom_kill=$oom_kill free=\"$free_summary\""
+  done
+) &
+OUTER_SAMPLER_PID=$!
+
 # Fail-fast CI execution
 export CI=1
 
@@ -71,6 +153,8 @@ if ! command -v bun >/dev/null 2>&1 || [[ "$(bun --version)" != "$expected_bun" 
   npm install --global "bun@$expected_bun"
 fi
 echo "Bun version: $(bun --version)"
+echo "Build uid: $(id -u) ($(id -un))"
+echo "Node version: $(node --version)"
 
 # Frozen dependency install
 echo "Installing dependencies from frozen lockfile..."
@@ -98,7 +182,7 @@ if ! git cat-file -e "${baseline_sha}^{commit}" >/dev/null 2>&1; then
 fi
 echo "Baseline commit $baseline_sha verified in object store."
 # Download bubblewrap from the distro without root, then expose its extracted binary.
-bwrap_tools="$repo_root/.cf-bwrap"
+bwrap_tools="$(mktemp -d /var/tmp/veyyon-bwrap-tools-XXXXXX)"
 mkdir -p "$bwrap_tools/packages" "$bwrap_tools/root" \
   "$bwrap_tools/lists/partial" "$bwrap_tools/cache/archives/partial"
 (
@@ -108,9 +192,18 @@ mkdir -p "$bwrap_tools/packages" "$bwrap_tools/root" \
   apt_options=(-c "$apt_config" -o "Dir::State::Lists=$bwrap_tools/lists" -o "Dir::Cache=$bwrap_tools/cache")
   timeout 120 apt-get "${apt_options[@]}" update
   timeout 120 apt-get "${apt_options[@]}" download bubblewrap
-  timeout 120 dpkg-deb -x ./*.deb "$bwrap_tools/root"
+  timeout 120 apt-get "${apt_options[@]}" download gh
+  for deb in ./*.deb; do
+    timeout 120 dpkg-deb -x "$deb" "$bwrap_tools/root"
+  done
 )
 export PATH="$bwrap_tools/root/usr/bin:$PATH"
+export VEYYON_BWRAP_GH="$bwrap_tools/root/usr/bin/gh"
+if [[ ! -x "$VEYYON_BWRAP_GH" ]]; then
+  echo "FATAL: gh was not extracted to $VEYYON_BWRAP_GH" >&2
+  exit 1
+fi
+echo "gh version: $("$VEYYON_BWRAP_GH" --version | head -n1)"
 if ! command -v bwrap >/dev/null 2>&1; then
   echo "FATAL: bubblewrap was not extracted to $bwrap_tools/root/usr/bin/bwrap" >&2
   exit 1
@@ -128,6 +221,32 @@ export VEYYON_SANDBOX_REPO_ROOT="$sandbox_root/repo"
 # This proves sharding logic remotely even if native compilation encounters time or toolchain issues
 echo "Bun version inside bwrap:"
 bash scripts/test-sandbox/run.sh bun --version
+# Guest permission probe, run through the rung. It fails loud unless the guest is non-root, HOME and
+# TMPDIR accept a write, and a write to the root path is refused with EACCES. It removes only its own
+# probe file, and only when the root write was accepted.
+guest_probe_sh='set -eu
+uid="$(id -u)"
+if [ "$uid" = 0 ]; then echo "GUEST PROBE FAILED: id -u is 0" >&2; exit 1; fi
+echo "guest id: uid=$uid gid=$(id -g)"
+echo "guest caps: $(grep "^CapEff" /proc/self/status)"
+node --version >/dev/null
+gh --version >/dev/null
+bun --version >/dev/null
+echo "guest runtimes: node $(node --version) gh $(gh --version | head -n1) bun $(bun --version)"
+bun -e "$1"'
+guest_probe_js='const fs = require("node:fs");
+const fail = (message) => { console.error("GUEST PROBE FAILED: " + message); process.exit(1); };
+for (const dir of [process.env.HOME, process.env.TMPDIR]) {
+  const file = dir + "/.guest-probe-" + process.pid;
+  try { fs.writeFileSync(file, "ok"); fs.rmSync(file); } catch (error) { fail("cannot write " + dir + ": " + error.code); }
+}
+const rootFile = "/.guest-probe-root-" + process.pid;
+let rootWritten = false;
+try { fs.writeFileSync(rootFile, "x"); rootWritten = true; } catch (error) { if (error.code !== "EACCES") fail("root write expected EACCES, got " + error.code); }
+if (rootWritten) { fs.rmSync(rootFile, { force: true }); fail("root path accepted a write: " + rootFile); }
+console.log("GUEST PROBE OK: root write refused with EACCES");'
+echo "Guest permission probe inside bwrap..."
+bash scripts/test-sandbox/run.sh /bin/sh -c "$guest_probe_sh" _ "$guest_probe_js" || { echo "FATAL: guest permission probe failed" >&2; exit 1; }
 
 echo "Running pure sharding helper regression suite inside sandbox before native build..."
 bash scripts/test-sandbox/run.sh bun test ./scripts/cf-runtime-sharding.test.ts
@@ -191,90 +310,20 @@ if [[ "$CF_SHARD_INDEX" == "0" ]]; then
   echo "Running explicit quota-refusals single-file verification on shard 0..."
   bash scripts/test-sandbox/run.sh bun test ./packages/coding-agent/test/session/quota-refusals-belong-to-the-failed-request.test.ts
 fi
+# Remove only the gitignored evals cache left by an earlier step of this checkout.
+# A path git tracks is never deleted, so tracked fixtures survive.
+if [[ -d tests/evals/.cache ]] && git check-ignore -q tests/evals/.cache \
+  && ! git ls-files --error-unmatch -- tests/evals/.cache >/dev/null 2>&1; then
+  echo "Removing generated cache tests/evals/.cache before the test scan"
+  rm -rf -- tests/evals/.cache
+fi
 
 # Run test suite using existing sandbox runner invocation
 echo "CLOUDFLARE_TEST_EXCLUSION file=packages/utils/test/slice-extract-fuzz.test.ts reason=bun-native-16GiB-allocation-aborts-in-workers-guest"
-# Outer memory sampler & safe minimal bridge (every 5s, stops with runner)
-diag_dir="$repo_root/.cf-diagnostics"
-mkdir -p "$diag_dir"
-
-write_cgroup_bridge() {
-  local cur="unavailable"
-  local peak="unavailable"
-  local oom="unavailable"
-  local oom_kill="unavailable"
-  local raw_events=""
-  local supported="false"
-  local cgroup_base="/sys/fs/cgroup"
-
-  if [[ -f "$cgroup_base/memory.current" ]]; then
-    cur="$(cat "$cgroup_base/memory.current" 2>/dev/null || echo "unavailable")"
-    supported="true"
-  fi
-  if [[ -f "$cgroup_base/memory.peak" ]]; then
-    peak="$(cat "$cgroup_base/memory.peak" 2>/dev/null || echo "unavailable")"
-    supported="true"
-  fi
-  if [[ -f "$cgroup_base/memory.events" ]]; then
-    raw_events="$(tr '\n' ' ' < "$cgroup_base/memory.events" 2>/dev/null || echo "")"
-    oom="$(awk '$1=="oom"{print $2}' "$cgroup_base/memory.events" 2>/dev/null || echo "unavailable")"
-    oom_kill="$(awk '$1=="oom_kill"{print $2}' "$cgroup_base/memory.events" 2>/dev/null || echo "unavailable")"
-    supported="true"
-  fi
-  if [[ "$cur" == "unavailable" && -f "$cgroup_base/memory/memory.usage_in_bytes" ]]; then
-    cur="$(cat "$cgroup_base/memory/memory.usage_in_bytes" 2>/dev/null || echo "unavailable")"
-    peak="$(cat "$cgroup_base/memory/memory.max_usage_in_bytes" 2>/dev/null || echo "unavailable")"
-    supported="true"
-    if [[ -f "$cgroup_base/memory/memory.oom_control" ]]; then
-      raw_events="$(tr '\n' ' ' < "$cgroup_base/memory/memory.oom_control" 2>/dev/null || echo "")"
-      oom_kill="$(awk '$1=="oom_kill"{print $2}' "$cgroup_base/memory/memory.oom_control" 2>/dev/null || echo "unavailable")"
-    fi
-  fi
-
-  cat > "$diag_dir/cgroup-latest.json.tmp" <<EOF
-{
-  "supported": $supported,
-  "current": "$cur",
-  "peak": "$peak",
-  "oom": "$oom",
-  "oom_kill": "$oom_kill",
-  "raw_events": "$raw_events"
-}
-EOF
-  mv "$diag_dir/cgroup-latest.json.tmp" "$diag_dir/cgroup-latest.json"
-}
-
-write_cgroup_bridge
-
-OUTER_SAMPLER_PID=""
-(
-  while true; do
-    sleep 5
-    write_cgroup_bridge
-    free_summary="$(free -m 2>/dev/null | awk '/^Mem:/{printf "total=%sMB used=%sMB free=%sMB avail=%sMB", $2, $3, $4, $7}' || echo "unavailable")"
-    cur="$(sed -n 's/.*"current": "\([^"]*\)".*/\1/p' "$diag_dir/cgroup-latest.json" 2>/dev/null || echo "unavailable")"
-    peak="$(sed -n 's/.*"peak": "\([^"]*\)".*/\1/p' "$diag_dir/cgroup-latest.json" 2>/dev/null || echo "unavailable")"
-    oom="$(sed -n 's/.*"oom": "\([^"]*\)".*/\1/p' "$diag_dir/cgroup-latest.json" 2>/dev/null || echo "unavailable")"
-    oom_kill="$(sed -n 's/.*"oom_kill": "\([^"]*\)".*/\1/p' "$diag_dir/cgroup-latest.json" 2>/dev/null || echo "unavailable")"
-    echo "CLOUDFLARE_OUTER_SAMPLER_5S current=$cur peak=$peak oom=$oom oom_kill=$oom_kill free=\"$free_summary\""
-  done
-) &
-OUTER_SAMPLER_PID=$!
-
-stop_outer_sampler() {
-  if [[ -n "${OUTER_SAMPLER_PID:-}" ]]; then
-    kill "$OUTER_SAMPLER_PID" 2>/dev/null || true
-    wait "$OUTER_SAMPLER_PID" 2>/dev/null || true
-  fi
-}
-trap stop_outer_sampler EXIT INT TERM
 
 echo "Running test suite in sandbox..."
 test_exit=0
 bash scripts/test-sandbox/run.sh bun scripts/ci-test-ts.ts all || test_exit=$?
-
-stop_outer_sampler
-trap - EXIT INT TERM
 
 if [[ $test_exit -ne 0 ]]; then
   echo "FATAL: Test suite failed with exit code $test_exit" >&2
