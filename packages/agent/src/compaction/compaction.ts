@@ -388,44 +388,90 @@ function estimateEntriesTokens(
 	return total;
 }
 
+/** Message roles a kept tail may begin at: user-role context and the assistant turn itself. */
+const CUT_POINT_ROLES: ReadonlySet<string> = new Set([
+	"bashExecution",
+	"hookMessage",
+	"branchSummary",
+	"compactionSummary",
+	"user",
+	"assistant",
+]);
+
 /**
- * Find valid cut points: indices of user, assistant, custom, or bashExecution messages.
- * Never cut at tool results (they must follow their tool call).
- * When we cut at an assistant message with tool calls, its tool results follow it
- * and will be kept.
+ * Marks every index in `[scanStart, endIndex)` that lies inside a tool-call window: a tool result at or
+ * after the index answers a call issued before it. A kept tail that begins at a marked index keeps that
+ * result and summarizes its call away, and every later request then carries a result whose call is
+ * missing from the history, folded into a note until another compaction passes it. A tool that appends
+ * a message while it runs (`set_cwd` appends `cwd_changed` and `prompt_cache_invalidated`) puts that
+ * message inside its own call's window. A result whose call precedes `idsFrom`, or no longer exists,
+ * marks every index from `idsFrom` up to it, so a cut never keeps a result that is already separated
+ * from its call.
+ *
+ * Results are matched to calls by id from `idsFrom` on. Behind it the entries are compacted history
+ * whose message bodies may be on disk, so a result there is matched to the assistant message nearest
+ * before it, reading only an entry's type and its message's role.
+ *
+ * Indexed by entry index; indices before `scanStart` are unmarked.
+ */
+function toolCallWindowInteriors(
+	entries: SessionEntry[],
+	scanStart: number,
+	idsFrom: number,
+	endIndex: number,
+): Uint8Array {
+	const interior = new Uint8Array(endIndex);
+	const awaitingCall = new Set<string>();
+	for (let i = endIndex - 1; i >= idsFrom; i--) {
+		const entry = entries[i];
+		if (entry.type === "message") {
+			const message = entry.message;
+			if (message.role === "toolResult") {
+				awaitingCall.add(message.toolCallId);
+			} else if (message.role === "assistant" && awaitingCall.size > 0) {
+				for (const block of message.content) {
+					if (block.type === "toolCall") awaitingCall.delete(block.id);
+				}
+			}
+		}
+		if (awaitingCall.size > 0) interior[i] = 1;
+	}
+	let awaitingResult = awaitingCall.size > 0;
+	for (let i = Math.min(idsFrom, endIndex) - 1; i >= scanStart; i--) {
+		const entry = entries[i];
+		if (entry.type === "message") {
+			const role = entry.message.role;
+			if (role === "toolResult") awaitingResult = true;
+			else if (role === "assistant") awaitingResult = false;
+		}
+		if (awaitingResult) interior[i] = 1;
+	}
+	return interior;
+}
+
+/**
+ * Find valid cut points: indices of user, assistant, custom, or bashExecution messages outside every
+ * tool-call window (see {@link toolCallWindowInteriors}). A tool result is never one, and neither is a
+ * message a tool appended while it ran: a cut there separates the result from its call. A cut at the
+ * assistant message that issued the calls keeps the calls and their results together.
  * BashExecutionMessage is treated like a user message (user-initiated context).
  */
-function findValidCutPoints(entries: SessionEntry[], startIndex: number, endIndex: number): number[] {
+function findValidCutPoints(
+	entries: SessionEntry[],
+	startIndex: number,
+	endIndex: number,
+	interior: Uint8Array,
+): number[] {
 	const cutPoints: number[] = [];
 	for (let i = startIndex; i < endIndex; i++) {
+		if (interior[i] === 1) continue;
 		const entry = entries[i];
-		switch (entry.type) {
-			case "message": {
-				const role = entry.message.role as string;
-				switch (role) {
-					case "bashExecution":
-					case "hookMessage":
-					case "branchSummary":
-					case "compactionSummary":
-					case "user":
-					case "assistant":
-						cutPoints.push(i);
-						break;
-					case "toolResult":
-						break;
-				}
-				break;
-			}
-			case "thinking_level_change":
-			case "model_change":
-			case "compaction":
-			case "branch_summary":
-			case "custom":
-			case "custom_message":
-			case "label":
-		}
 		// branch_summary and custom_message are user-role messages, valid cut points
-		if (entry.type === "branch_summary" || entry.type === "custom_message") {
+		if (
+			entry.type === "branch_summary" ||
+			entry.type === "custom_message" ||
+			(entry.type === "message" && CUT_POINT_ROLES.has(entry.message.role))
+		) {
 			cutPoints.push(i);
 		}
 	}
@@ -434,11 +480,18 @@ function findValidCutPoints(entries: SessionEntry[], startIndex: number, endInde
 
 /**
  * Find the user message (or bashExecution) that starts the turn containing the given entry index.
- * Returns -1 if no turn start found before the index.
+ * Returns -1 if no turn start found before the index. An entry inside a tool-call window never starts a
+ * turn: the turn it would start begins between a call and its result.
  * BashExecutionMessage is treated like a user message for turn boundaries.
  */
-export function findTurnStartIndex(entries: SessionEntry[], entryIndex: number, startIndex: number): number {
+export function findTurnStartIndex(
+	entries: SessionEntry[],
+	entryIndex: number,
+	startIndex: number,
+	interior: Uint8Array = toolCallWindowInteriors(entries, startIndex, startIndex, entries.length),
+): number {
 	for (let i = entryIndex; i >= startIndex; i--) {
+		if (interior[i] === 1) continue;
 		const entry = entries[i];
 		// branch_summary and custom_message are user-role messages, can start a turn
 		if (entry.type === "branch_summary" || entry.type === "custom_message") {
@@ -495,6 +548,7 @@ function cutIndexAtCrossing(
 	crossedIndex: number,
 	startIndex: number,
 	endIndex: number,
+	interior: Uint8Array,
 ): number {
 	const kept = cutPoints.find(point => point >= crossedIndex);
 	if (kept !== undefined) return kept;
@@ -516,7 +570,7 @@ function cutIndexAtCrossing(
 	// No turn start inside the range means the turn's opening was summarized
 	// by an earlier pass, so no cut here keeps call and result together:
 	// keep nothing and let the summary stand in for the whole range.
-	const turnStart = findTurnStartIndex(entries, crossedIndex, startIndex);
+	const turnStart = findTurnStartIndex(entries, crossedIndex, startIndex, interior);
 	return turnStart === -1 ? endIndex : turnStart;
 }
 
@@ -545,8 +599,9 @@ function includePrecedingNonMessageEntries(
  * Algorithm: Walk backwards from newest, accumulating estimated message sizes.
  * Stop when we've accumulated >= keepRecentTokens. Cut at that point.
  *
- * Can cut at user OR assistant messages (never tool results). When cutting at an
- * assistant message with tool calls, its tool results come after and will be kept.
+ * Can cut at user OR assistant messages, never at a tool result or anywhere else inside a tool-call
+ * window. When cutting at an assistant message with tool calls, its tool results come after and will be
+ * kept.
  *
  * Returns CutPointResult with:
  * - firstKeptEntryIndex: the entry index to start keeping from
@@ -565,7 +620,9 @@ export function findCutPoint(
 	keepRecentTokens: number,
 	turnSearchStart = startIndex,
 ): CutPointResult {
-	const cutPoints = findValidCutPoints(entries, startIndex, endIndex);
+	// Behind `startIndex` the turn search reads compacted history, so ids are read only from it on.
+	const interior = toolCallWindowInteriors(entries, Math.min(turnSearchStart, startIndex), startIndex, endIndex);
+	const cutPoints = findValidCutPoints(entries, startIndex, endIndex, interior);
 
 	// No valid cut point anywhere in the range means nothing can be kept on a
 	// boundary. Fall through with `startIndex` rather than returning: the
@@ -575,7 +632,7 @@ export function findCutPoint(
 	// A range that fits the budget keeps from its first message (not the header).
 	const crossed = crossedIndex !== -1;
 	const budgetCut = crossed
-		? cutIndexAtCrossing(entries, cutPoints, crossedIndex, startIndex, endIndex)
+		? cutIndexAtCrossing(entries, cutPoints, crossedIndex, startIndex, endIndex, interior)
 		: (cutPoints[0] ?? startIndex);
 	let cutIndex = includePrecedingNonMessageEntries(entries, budgetCut, startIndex, endIndex);
 
@@ -602,7 +659,7 @@ export function findCutPoint(
 	// Determine if this is a split turn
 	const cutEntry = entries[cutIndex];
 	const isUserMessage = cutEntry.type === "message" && cutEntry.message.role === "user";
-	const turnStartIndex = isUserMessage ? -1 : findTurnStartIndex(entries, cutIndex, turnSearchStart);
+	const turnStartIndex = isUserMessage ? -1 : findTurnStartIndex(entries, cutIndex, turnSearchStart, interior);
 
 	return {
 		firstKeptEntryIndex: cutIndex,
