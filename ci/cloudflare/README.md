@@ -70,7 +70,7 @@ When Bun omits a testcase name or class for a skipped suite, the parser uses the
 `LOCAL_SERVICE` applies only when the test source checks for a local model service. Name the missing service in the allowlist reason.
 The Cloudflare hashline shard sets `HASHLINE_SEED_SOAK=1` and runs the full corpus. Sampling tests select bounded mode and also run.
 
-The existing TypeScript test map excludes `clients/python/veybot/web`, which belongs to the Python client and sits outside every Bun test bucket. This lane follows that existing exclusion and does not run `bun run test:py`.
+The Python client suites are run by `python3 ci/cloudflare/python-tests.py --suite all`; `--suite rpc` and `--suite veybot` select one client. The helper creates a temporary isolated virtual environment, installs `veyyon-rpc` and `veybot[dev]` from their `pyproject.toml` declarations, then runs the selected real pytest suites. It emits `PYTEST_SUMMARY` counts from JUnit XML, including collected, passed, failed and skipped tests; test failures, collection/import errors and zero collection fail the helper. Focused runner regression tests run with `python3 ci/cloudflare/python-tests.py --runner-tests`, using the same isolated setup. Python test results belong in the existing Python test report, outside the Bun test map.
 
 Before each test bucket starts, the shared test runner removes `CLOUDFLARE_API_TOKEN` from each child process. The normal branch path also unsets the release variables before any dependency, build, or test command starts.
 
