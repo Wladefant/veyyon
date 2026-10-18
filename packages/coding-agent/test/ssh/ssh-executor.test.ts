@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { LIVE_OUTPUT_INTERVAL_MS } from "@veyyon/coding-agent/session/streaming-output";
 import * as connectionManager from "@veyyon/coding-agent/ssh/connection-manager";
 import { executeSSH } from "@veyyon/coding-agent/ssh/ssh-executor";
 import * as sshfsMount from "@veyyon/coding-agent/ssh/sshfs-mount";
@@ -97,5 +98,39 @@ describe("executeSSH", () => {
 		expect(result.cancelled).toBe(true);
 		expect(result.exitCode).toBeUndefined();
 		expect(result.output).toContain("Command aborted");
+	});
+
+	// Each live chunk becomes an update that carries the whole visible tail, so a command printing a line per
+	// chunk must not send one per line; the chunks it does send still add up to everything it printed.
+	it("sends a burst of printed lines at most once per live-output interval and loses none of them", async () => {
+		const printed = Array.from({ length: 2000 }, (_, i) => `line ${i}\n`);
+		vi.spyOn(connectionManager, "ensureConnection").mockResolvedValue();
+		vi.spyOn(connectionManager, "buildRemoteCommand").mockResolvedValue(["remote", "seq 2000"]);
+		vi.spyOn(sshfsMount, "hasSshfs").mockReturnValue(false);
+		vi.spyOn(ptree, "spawn").mockImplementation(
+			<In extends TestStdin>() =>
+				({
+					stdout: new ReadableStream<Uint8Array>({
+						start(controller) {
+							for (const line of printed) controller.enqueue(new TextEncoder().encode(line));
+							controller.close();
+						},
+					}),
+					stderr: undefined,
+					exited: Promise.resolve(0),
+					[Symbol.dispose]() {},
+				}) as unknown as ChildProcess<In>,
+		);
+
+		const sent: string[] = [];
+		const started = performance.now();
+		const result = await executeSSH({ name: "remote", host: "remote" }, "seq 2000", {
+			onChunk: chunk => sent.push(chunk),
+		});
+		const elapsedMs = performance.now() - started;
+
+		expect(result.exitCode).toBe(0);
+		expect(sent.join("")).toBe(printed.join(""));
+		expect(sent.length).toBeLessThanOrEqual(2 + Math.ceil(elapsedMs / LIVE_OUTPUT_INTERVAL_MS));
 	});
 });
