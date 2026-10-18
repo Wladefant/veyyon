@@ -54,6 +54,14 @@ export interface PinnedSessionReader {
 	readonly identity: string;
 	/** The UTF-8 text of `length` bytes starting at byte `offset`. Throws on a short read. */
 	read(offset: number, length: number): string;
+	/**
+	 * Visit each newline-terminated line from byte `from` on, in order: the first `headBytes` bytes of
+	 * the line decoded as UTF-8, its byte offset, and its length including the newline. A last line
+	 * with no newline yet is not visited. Returns the offset just past the last line visited, where a
+	 * scan for lines written later resumes. Reads in fixed-size chunks, so a scan of the whole object
+	 * holds one chunk and the heads, never the object.
+	 */
+	scanLines(from: number, headBytes: number, visit: (head: string, offset: number, length: number) => void): number;
 	/** Release the handle. Later reads throw. */
 	close(): void;
 }
@@ -252,6 +260,9 @@ const pinnedReaderRegistry = new FinalizationRegistry<number>(fd => {
 	}
 });
 
+/** Bytes a {@link FilePinnedSessionReader.scanLines} pass reads at a time. */
+const SCAN_CHUNK_BYTES = 1 << 20;
+
 class FilePinnedSessionReader implements PinnedSessionReader {
 	readonly identity: string;
 	#fd: number | undefined;
@@ -277,6 +288,29 @@ class FilePinnedSessionReader implements PinnedSessionReader {
 			filled += read;
 		}
 		return buffer.toString("utf-8");
+	}
+
+	scanLines(from: number, headBytes: number, visit: (head: string, offset: number, length: number) => void): number {
+		const fd = this.#fd;
+		if (fd === undefined) throw new Error("Pinned session reader is closed");
+		const chunk = Buffer.allocUnsafe(SCAN_CHUNK_BYTES);
+		let lineStart = from;
+		let position = from;
+		for (;;) {
+			const read = fs.readSync(fd, chunk, 0, chunk.length, position);
+			if (read === 0) return lineStart;
+			const view = chunk.subarray(0, read);
+			for (let newline = view.indexOf(10); newline !== -1; newline = view.indexOf(10, newline + 1)) {
+				const end = position + newline + 1;
+				const bytes = Math.min(headBytes, end - lineStart);
+				const start = lineStart - position;
+				// A line that began in an earlier chunk has its head read on its own.
+				const head = start >= 0 ? view.toString("utf-8", start, start + bytes) : this.read(lineStart, bytes);
+				visit(head, lineStart, end - lineStart);
+				lineStart = end;
+			}
+			position += read;
+		}
 	}
 
 	close(): void {

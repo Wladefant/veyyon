@@ -24,6 +24,7 @@
  * or externalizes comes back truncated or restored from the blob store, and a replayed reasoning
  * signature persistence drops does not come back.
  */
+import { logger } from "@veyyon/utils";
 import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
 import { isBlobRef, isTextBlobRef } from "./blob-store";
 import type { SessionEntry } from "./session-entries";
@@ -49,6 +50,16 @@ const NO_KEYS: ReadonlySet<string> = new Set();
 const NO_FIELDS: readonly string[] = [];
 
 /**
+ * The top-level id of a session line, read off its first bytes: the line opens with `id`, or with a
+ * string `type` and then `id`, the two orders entries are built in. A line of any other shape needs
+ * a parse to name its id.
+ */
+export const LEADING_ENTRY_ID = /^\{(?:"type":"[^"\\]*",)?"id":"([^"\\]*)"/;
+
+/** Bytes of a line {@link LEADING_ENTRY_ID} reads: a type name, its key, and an id, with room left over. */
+const LINE_HEAD_BYTES = 160;
+
+/**
  * Entry kinds a session writes for replay and study and never reads while it runs: the prompt and
  * tools a session started with, the effective settings it ran under, and the index of the agents it
  * spawned. Their payloads go to disk wherever they sit on the branch; a spawned agent's
@@ -60,12 +71,32 @@ export const RECORD_ONLY_ENTRY_TYPES: ReadonlySet<SessionEntry["type"]> = new Se
 	"subagent_spawn",
 ]);
 
+/** Where one line of a pinned object is. */
+interface LinePosition {
+	readonly offset: number;
+	readonly length: number;
+}
+
+/**
+ * Where the lines of a pinned object are, by the id each opens with. Built on the first read-back
+ * that does not find its entry at the recorded offset, and extended past `end` when an id is missing.
+ */
+interface LineIndex {
+	readonly lines: Map<string, LinePosition>;
+	/** Offset just past the last line scanned, where a scan for lines written since resumes. */
+	end: number;
+	/** Whether a read-back from a moved line of this object has been logged. */
+	reported: boolean;
+}
+
 /** One file object cold entries read back from, and how many entries still read from it. */
 interface ColdFile {
 	readonly reader: PinnedSessionReader;
 	/** Parses and restores a line of this object, against the blob store of the session it belongs to. */
 	readonly restore: ColdLineRestore;
 	cold: number;
+	/** The object's lines by id, once a read-back missed its line. */
+	lines?: LineIndex;
 }
 
 /**
@@ -187,6 +218,13 @@ class ColdEntrySlot extends ReturnsTarget {
 		slot.#standIn = undefined;
 	}
 
+	/** Point the cold `entry` at `length` bytes at `offset` of the object it reads. */
+	static relocate(entry: object, offset: number, length: number): void {
+		if (!(#file in entry)) return;
+		(entry as ColdEntrySlot).#offset = offset;
+		(entry as ColdEntrySlot).#length = length;
+	}
+
 	/** Point `entry` at `to` when it reads through `from`; false when it does not. */
 	static moveFile(entry: object, from: ColdFile, to: ColdFile): boolean {
 		if (!(#file in entry) || (entry as ColdEntrySlot).#file !== from) return false;
@@ -222,18 +260,19 @@ export function coldFieldsOf(target: object): readonly string[] | undefined {
 	return entry === undefined ? undefined : ColdEntrySlot.layoutOf(entry)?.messageKeys;
 }
 
-/**
- * Read the line of the cold `entry` back as a load restores it, and check that it is the entry
- * the line was recorded for.
- */
-function readBack(entry: SessionEntry, state: ColdState): Record<string, unknown> {
-	const { file, offset, length, standIn } = state;
-	const line = file.reader.read(offset, length);
+/** `entry` restored from `length` bytes at `offset` of its object, or why those bytes are not it. */
+function restoreAt(
+	entry: SessionEntry,
+	state: ColdState,
+	offset: number,
+	length: number,
+): Record<string, unknown> | Error {
+	const { file, standIn } = state;
 	let restored: Record<string, unknown>;
 	try {
-		restored = file.restore(line) as unknown as Record<string, unknown>;
+		restored = file.restore(file.reader.read(offset, length)) as unknown as Record<string, unknown>;
 	} catch (err) {
-		throw new Error(
+		return new Error(
 			`Session entry ${entry.id} could not be read back from bytes ${offset}-${offset + length} of session object ${file.reader.identity}: ${errorMessage(err)}`,
 		);
 	}
@@ -242,11 +281,62 @@ function readBack(entry: SessionEntry, state: ColdState): Record<string, unknown
 		restored.type !== entry.type ||
 		(standIn !== undefined && !isRecord(restored.message))
 	) {
-		throw new Error(
+		return new Error(
 			`Session entry ${entry.id} read back as ${String(restored.type)} ${String(restored.id)} from bytes ${offset}-${offset + length} of session object ${file.reader.identity}`,
 		);
 	}
 	return restored;
+}
+
+/**
+ * Where the line opening with `id` is in `file`'s object, scanning it once for every id and then
+ * only past the last scan. Undefined when no line opens with `id` or the object cannot be scanned.
+ */
+function locateLine(file: ColdFile, id: string): LinePosition | undefined {
+	file.lines ??= { lines: new Map(), end: 0, reported: false };
+	const index = file.lines;
+	const known = index.lines.get(id);
+	if (known !== undefined) return known;
+	try {
+		index.end = file.reader.scanLines(index.end, LINE_HEAD_BYTES, (head, offset, length) => {
+			const lineId = LEADING_ENTRY_ID.exec(head)?.[1];
+			if (lineId !== undefined) index.lines.set(lineId, { offset, length });
+		});
+	} catch {
+		return undefined;
+	}
+	return index.lines.get(id);
+}
+
+/**
+ * Read the line of the cold `entry` back as a load restores it, and check that it is the entry
+ * the line was recorded for.
+ *
+ * A recorded offset that no longer holds the entry's line is looked up by id in the object it reads
+ * and the entry is pointed at the line found there, which must pass the same check. Without that, an
+ * offset recorded wrong once failed every later read-back of the entry, every compaction and every
+ * rescue that touched it, for as long as the process lived, while the line sat intact further on in
+ * the file. An entry whose line is in no part of the object still fails, naming the bytes it read.
+ */
+function readBack(entry: SessionEntry, state: ColdState): Record<string, unknown> {
+	const restored = restoreAt(entry, state, state.offset, state.length);
+	if (!(restored instanceof Error)) return restored;
+	const moved = locateLine(state.file, entry.id);
+	if (moved === undefined || (moved.offset === state.offset && moved.length === state.length)) throw restored;
+	const relocated = restoreAt(entry, state, moved.offset, moved.length);
+	if (relocated instanceof Error) throw restored;
+	ColdEntrySlot.relocate(entry, moved.offset, moved.length);
+	const index = state.file.lines;
+	if (index !== undefined && !index.reported) {
+		index.reported = true;
+		logger.warn("Session entries read back from lines that moved in the session file", {
+			sessionObject: state.file.reader.identity,
+			entryId: entry.id,
+			recordedOffset: state.offset,
+			offset: moved.offset,
+		});
+	}
+	return relocated;
 }
 
 /**

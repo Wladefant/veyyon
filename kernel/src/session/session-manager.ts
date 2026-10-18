@@ -25,7 +25,12 @@ import {
 } from "./custom-message-payload";
 import { SESSION_EXIT_CUSTOM_TYPE } from "./exit-diagnostics";
 import type { OperatorNotices } from "./operator-notices";
-import { ColdEntryPayloads, MIN_COLD_LINE_BYTES, RECORD_ONLY_ENTRY_TYPES } from "./session-cold-payloads";
+import {
+	ColdEntryPayloads,
+	LEADING_ENTRY_ID,
+	MIN_COLD_LINE_BYTES,
+	RECORD_ONLY_ENTRY_TYPES,
+} from "./session-cold-payloads";
 import {
 	BRANCH_SETTINGS_ENTRY_TYPES,
 	type BuildSessionContextOptions,
@@ -108,9 +113,6 @@ const DRAFT_ONLY_SESSION_MARKER = ".draft-only-session";
  * bounded is bounded either way.
  */
 const CHUNK_TARGET_CHARS = 1 << 20;
-
-/** The id of a session line whose first key is `id`, the order most entries are built in. */
-const LEADING_ENTRY_ID = /^\{"id":"([^"\\]*)"/;
 
 /**
  * Where this manager's entry lines sit in the file it last published. Valid while that file is

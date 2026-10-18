@@ -72,6 +72,15 @@
  * server-side windows, pins the reads of a preparation at zero, and checks that its file
  * operations still read the span back when a local pass asks for them.
  *
+ * A cold entry reads its line from the byte offset recorded when it was moved, and an offset that
+ * stopped holding the line failed every later read-back of the entry for the life of the process: a
+ * window whose appends landed after another window's recorded each offset short of its line, and
+ * every compaction and rescue after that failed on one entry while its line sat intact further on.
+ * The relocation sweep rewrites the file in place, moving every line under the pinned handle, and
+ * pins that each entry reads back as a fresh load restores it, that one scan of the object finds them
+ * all, and that an entry read back once reads from its new place after. An entry whose line is gone,
+ * or whose id another kind of entry now holds, still fails naming the entry.
+ *
  * NOT CAUGHT: the heap bounds have a 2x and 4x margin, so a regression that keeps a quarter of the
  * cold payloads resident passes. Windows holds no pinned reader, so there every entry stays in
  * memory and the fd assertions are skipped. A branch scan this suite does not run that reads a
@@ -82,6 +91,8 @@
  * only fields a moved entry keeps in memory, so the migration sweep sees the older file load whole
  * through `cold` and not through a wrong value. A server-side pass that reads `fileOps`, or a
  * memory backend that walks the summarized span, still reads the history back.
+ * A cold entry whose line opens with neither `id` nor a string `type` and then `id` is not found by
+ * the relocation scan, and its read-back still fails once its offset stops holding its line.
  */
 
 import { afterEach, describe, expect, it, vi } from "bun:test";
@@ -111,6 +122,7 @@ import {
 	coldFieldsOf,
 	MIN_COLD_STRING_LENGTH,
 	RECORD_ONLY_ENTRY_TYPES,
+	readColdEntry,
 } from "@veyyon/kernel/session/session-cold-payloads";
 import type { SessionEntry, SessionEntryBase } from "@veyyon/kernel/session/session-entries";
 import {
@@ -160,10 +172,11 @@ registerToolResultCodecs([
 	},
 ]);
 
-/** Pinned readers a manager opened on the session file, and every read through them. */
+/** Pinned readers a manager opened on the session file, and every read and line scan through them. */
 class ObservedStorage extends FileSessionStorage {
 	readonly open = new Set<PinnedSessionReader>();
 	reads = 0;
+	scans = 0;
 
 	openPinnedReaderSync(filePath: string): PinnedSessionReader | undefined {
 		const inner = super.openPinnedReaderSync(filePath);
@@ -174,6 +187,10 @@ class ObservedStorage extends FileSessionStorage {
 			read: (offset, length) => {
 				this.reads += 1;
 				return inner.read(offset, length);
+			},
+			scanLines: (from, headBytes, visit) => {
+				this.scans += 1;
+				return inner.scanLines(from, headBytes, visit);
 			},
 			close: () => {
 				open.delete(reader);
@@ -1039,6 +1056,78 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 			expect(storage.open.size).toBe(0);
 		},
 	);
+
+	/** A line another program writes ahead of the session's own when it rewrites the file in place. */
+	const foreignLabel = (id: string, label: string): string =>
+		`${JSON.stringify({ type: "label", id, parentId: null, timestamp: "2025-01-01T00:00:00.000Z", targetId: "foreign-0", label: big(label) })}\n`;
+
+	it.each(LOAD_PATHS)(
+		"reads each cold entry from where its line moved when the file is rewritten in place ($load)",
+		async arm => {
+			const fixture = await writeSession(everyKindHistory(), arm.padding);
+			expectLoadPath(fixture.file, arm);
+			const expected = await freshLoad(fixture);
+			const storage = new ObservedStorage();
+			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
+			const custom = manager.getEntries().find(entry => entry.type === "custom");
+			if (custom === undefined) throw new Error("fixture lost its custom entry");
+			expect(coldFieldsOf(custom)).toBeDefined();
+
+			// The object the session pinned now holds every line further on: what an offset recorded short of
+			// another window's append meets.
+			const identity = storage.statSync(fixture.file).identity;
+			fs.writeFileSync(
+				fixture.file,
+				`${foreignLabel("foreign-1", "rewritten")}${fs.readFileSync(fixture.file, "utf8")}`,
+			);
+			expect(storage.statSync(fixture.file).identity).toBe(identity);
+
+			// The first read-back misses and finds the line; the second reads it where it was found.
+			const reads = storage.reads;
+			expect(JSON.stringify(readColdEntry(custom))).toBe(expected.get(custom.id)!);
+			expect(storage.reads - reads).toBe(2);
+			expect(JSON.stringify(readColdEntry(custom))).toBe(expected.get(custom.id)!);
+			expect(storage.reads - reads).toBe(3);
+
+			for (const [id, line] of expected) {
+				const entry = manager.getEntry(id);
+				expect(entry && JSON.stringify(entry)).toBe(line);
+			}
+			expect(storage.scans).toBe(1);
+			expect(storage.open.size).toBe(0);
+			await manager.close();
+		},
+	);
+
+	it.each([
+		{ change: "dropped", replace: (): string => "" },
+		{ change: "given to another kind of entry", replace: (id: string): string => foreignLabel(id, "impostor") },
+	])("fails the read-back of a cold entry whose line the in-place rewrite $change", async ({ replace }) => {
+		const fixture = await writeSession(everyKindHistory());
+		const storage = new ObservedStorage();
+		const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
+		const custom = manager.getEntries().find(entry => entry.type === "custom");
+		if (custom === undefined) throw new Error("fixture lost its custom entry");
+		expect(coldFieldsOf(custom)).toBeDefined();
+
+		const lines = fs.readFileSync(fixture.file, "utf8").split(/(?<=\n)/);
+		const at = lines.findIndex(line => line.trim() !== "" && JSON.parse(line).id === custom.id);
+		expect(at).toBeGreaterThan(-1);
+		lines[at] = replace(custom.id);
+		fs.writeFileSync(fixture.file, `${foreignLabel("foreign-1", "rewritten")}${lines.join("")}`);
+
+		// `toThrow` also passes on a returned Error, so the throw is caught here and the return is pinned.
+		let thrown: unknown;
+		let returned: unknown;
+		try {
+			returned = readColdEntry(custom);
+		} catch (err) {
+			thrown = err;
+		}
+		expect(returned).toBeUndefined();
+		expect(String(thrown)).toStartWith(`Error: Session entry ${custom.id} `);
+		await manager.close();
+	});
 
 	it.each(LOAD_PATHS)(
 		"builds the context of a resumed branch that leaves the newest compaction behind ($load)",

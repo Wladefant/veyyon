@@ -103,12 +103,16 @@ function generate(seed: number, count: number): Record<string, unknown>[] {
 	return records;
 }
 
-/** Payloads pinned on a reader that returns the line recorded at each offset. */
+/** Payloads pinned on a reader that returns the line recorded at each offset, a line's index. */
 function pinnedPayloads(lines: readonly string[]): ColdEntryPayloads {
 	const payloads = new ColdEntryPayloads();
 	const reader = {
 		identity: "test:1",
 		read: (offset: number) => lines[offset]!,
+		scanLines: (from: number, headBytes: number, visit: (head: string, offset: number, length: number) => void) => {
+			for (let index = from; index < lines.length; index++) visit(lines[index]!.slice(0, headBytes), index, 1);
+			return lines.length;
+		},
 		close: () => {},
 	};
 	const pinned = payloads.pin(
