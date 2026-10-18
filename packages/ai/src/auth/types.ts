@@ -71,7 +71,7 @@ export type AuthAccountPolicies = readonly AuthAccountPolicy[];
  * Cascade leg that supplies a provider's active credential, highest precedence
  * first — mirrors {@link AuthStorage.keys.get}'s resolution order.
  */
-export type CredentialOriginKind = "runtime" | "config" | "oauth" | "api_key" | "env";
+export type CredentialOriginKind = "runtime" | "config" | "oauth" | "api_key" | "env" | "fallback";
 
 /**
  * Structured provenance for a provider's auth, for UI that needs a machine
@@ -717,8 +717,10 @@ export interface AuthPeekOptions {
 	includeExpired?: boolean;
 }
 
-/** Where a provider's auth comes from ({@link CredentialOrigin}) plus whether any leg holds a concrete key. */
+/** Where a provider's auth comes from plus whether the source holds a concrete key. */
 export interface AuthSource extends CredentialOrigin {
+	/** Provider that actually supplies a borrowed credential (e.g. ChatGPT Web borrowing Codex OAuth). */
+	effectiveProvider?: string;
 	/** False when the only auth is an ambient AUTHENTICATED_SENTINEL source (AWS profile, ADC). */
 	concrete: boolean;
 }
@@ -955,6 +957,8 @@ export interface KeysApi {
 	peek(provider: string, options?: AuthPeekOptions): Promise<string | undefined>;
 	/** Resolve the first active auth source by precedence without refreshing credentials. */
 	source(provider: string, options?: AuthSourceOptions): AuthSource | undefined;
+	/** True when a runtime or direct config API-key override replaces the provider's other sources. */
+	hasApiKeyOverride(provider: string): boolean;
 	/**
 	 * True when the provider has stored credentials but none of them carries
 	 * auth — i.e. its only credential is the KDL `empty-fallback` keyless-mode
@@ -1017,6 +1021,8 @@ export interface KeysApi {
 	 * independently and later attached to a registry.
 	 */
 	setResolver(resolver: (config: string) => Promise<string | undefined>): void;
+	/** Set or clear a fallback resolver for custom provider API keys. */
+	setFallbackResolver(resolver?: (provider: string) => string | undefined): void;
 	/**
 	 * Build an {@link ApiKeyResolver} backed by this storage, implementing the
 	 * central a/b/c auth-retry policy:
