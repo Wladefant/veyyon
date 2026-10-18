@@ -1,21 +1,11 @@
+import { loginCursorHook, refreshCursorHook } from "./oauth/cursor";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "./oauth/types";
 import type { ProviderDefinition } from "./types";
 
 export const cursorProvider = {
 	id: "cursor",
 	name: "Cursor (Claude, GPT, etc.)",
-	login: async (cb: OAuthLoginCallbacks) => {
-		// Lazy import: keep heavy OAuth flow modules out of the eager registry graph.
-		const { loginCursor } = await import("./oauth/cursor");
-		return loginCursor(
-			url => cb.onAuth({ url }),
-			cb.onProgress ? () => cb.onProgress?.("Waiting for browser authentication...") : undefined,
-		);
-	},
+	login: (cb: OAuthLoginCallbacks) => loginCursorHook(cb),
 	credential: "oauth",
-	refreshToken: async (credentials: OAuthCredentials, signal?: AbortSignal) => {
-		// Lazy import: keep heavy OAuth flow modules out of the eager registry graph.
-		const { refreshCursorToken } = await import("./oauth/cursor");
-		return refreshCursorToken(credentials.refresh, signal);
-	},
+	refreshToken: (credentials: OAuthCredentials, signal?: AbortSignal) => refreshCursorHook(credentials, signal),
 } as const satisfies ProviderDefinition;

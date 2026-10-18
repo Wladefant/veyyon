@@ -267,9 +267,9 @@ describe("cursor usage provider", () => {
 				cleanExpiredCache() {},
 			};
 			const storage = new AuthStorage(store);
-			await storage.reload();
+			await storage.credentials.reload();
 			try {
-				expect(storage.usageProviderFor("cursor")).toBe(cursorUsageProvider);
+				expect(storage.usage.providerFor("cursor")).toBe(cursorUsageProvider);
 			} finally {
 				storage.close();
 			}

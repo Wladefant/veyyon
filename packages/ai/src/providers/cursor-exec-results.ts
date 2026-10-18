@@ -4,7 +4,7 @@
  * rejected results the exec channel sends when the call failed or was refused.
  */
 
-import { create } from "@bufbuild/protobuf";
+import { create } from "@veyyon/catalog/discovery/protobuf";
 import {
 	DeleteErrorSchema,
 	DeleteRejectedSchema,
@@ -35,6 +35,7 @@ import {
 	LsResultSchema,
 	LsSuccessSchema,
 	ReadErrorSchema,
+	ReadFileNotFoundSchema,
 	ReadRejectedSchema,
 	ReadResultSchema,
 	ReadSuccessSchema,
@@ -46,7 +47,7 @@ import {
 	WriteRejectedSchema,
 	WriteResultSchema,
 	WriteSuccessSchema,
-} from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
+} from "@veyyon/catalog/discovery/cursor-proto";
 import type { ToolResultMessage } from "../types";
 
 export function toolResultToText(toolResult: ToolResultMessage): string {
@@ -69,21 +70,47 @@ function toolResultDetailBoolean(toolResult: ToolResultMessage, key: string): bo
 	return typeof value === "boolean" ? value : false;
 }
 
-export function buildReadResultFromToolResult(path: string, toolResult: ToolResultMessage) {
+function readTotalLinesFromDetails(toolResult: ToolResultMessage): number | undefined {
+	const details = toolResult.details;
+	if (!details || typeof details !== "object") return undefined;
+	const direct = "totalLines" in details ? details.totalLines : undefined;
+	if (typeof direct === "number" && Number.isFinite(direct)) return direct;
+	const meta = "meta" in details ? details.meta : undefined;
+	if (!meta || typeof meta !== "object") return undefined;
+	const truncation = "truncation" in meta ? meta.truncation : undefined;
+	if (!truncation || typeof truncation !== "object") return undefined;
+	const totalLines = "totalLines" in truncation ? truncation.totalLines : undefined;
+	return typeof totalLines === "number" && Number.isFinite(totalLines) ? totalLines : undefined;
+}
+
+function readFileSizeFromDetails(toolResult: ToolResultMessage): number | undefined {
+	const details = toolResult.details;
+	if (!details || typeof details !== "object" || !("fileSize" in details)) return undefined;
+	const { fileSize } = details;
+	return typeof fileSize === "number" && Number.isSafeInteger(fileSize) && fileSize >= 0 ? fileSize : undefined;
+}
+
+export function buildReadResultFromToolResult(path: string, toolResult: ToolResultMessage, rangeApplied = false) {
 	const text = toolResultToText(toolResult);
 	if (toolResult.isError) {
+		if (/^Path '.*' not found$/.test(text)) {
+			return create(ReadResultSchema, {
+				result: { case: "fileNotFound", value: create(ReadFileNotFoundSchema, { path }) },
+			});
+		}
 		return buildReadErrorResult(path, text || "Read failed");
 	}
-	const totalLines = text ? text.split("\n").length : 0;
+	const totalLines = readTotalLinesFromDetails(toolResult) ?? (rangeApplied ? 0 : text ? text.split("\n").length : 0);
 	return create(ReadResultSchema, {
 		result: {
 			case: "success",
 			value: create(ReadSuccessSchema, {
 				path,
 				totalLines,
-				fileSize: BigInt(Buffer.byteLength(text, "utf-8")),
+				fileSize: BigInt(readFileSizeFromDetails(toolResult) ?? Buffer.byteLength(text, "utf-8")),
 				truncated: toolResultWasTruncated(toolResult),
 				output: { case: "content", value: text },
+				rangeApplied,
 			}),
 		},
 	});
@@ -160,7 +187,7 @@ export function buildDeleteResultFromToolResult(path: string, toolResult: ToolRe
 			value: create(DeleteSuccessSchema, {
 				path,
 				deletedFile: path,
-				fileSize: BigInt(0),
+				fileSize: BigInt(readFileSizeFromDetails(toolResult) ?? 0),
 				prevContent: "",
 			}),
 		},
@@ -191,7 +218,14 @@ export function buildShellResultFromToolResult(
 ) {
 	const output = toolResultToText(toolResult);
 	if (toolResult.isError) {
-		return buildShellFailureResult(args.command, args.workingDirectory, output || "Shell failed");
+		const details = toolResult.details;
+		const code = details && typeof details === "object" && "exitCode" in details ? details.exitCode : undefined;
+		return buildShellFailureResult(
+			args.command,
+			args.workingDirectory,
+			output || "Shell failed",
+			typeof code === "number" && Number.isInteger(code) ? code : 1,
+		);
 	}
 	return create(ShellResultSchema, {
 		result: {
@@ -209,14 +243,14 @@ export function buildShellResultFromToolResult(
 	});
 }
 
-export function buildShellFailureResult(command: string, workingDirectory: string, error: string) {
+export function buildShellFailureResult(command: string, workingDirectory: string, error: string, exitCode = 1) {
 	return create(ShellResultSchema, {
 		result: {
 			case: "failure",
 			value: create(ShellFailureSchema, {
 				command,
 				workingDirectory,
-				exitCode: 1,
+				exitCode,
 				signal: "",
 				stdout: "",
 				stderr: error,
@@ -309,7 +343,7 @@ export function buildLsRejectedResult(path: string, reason: string) {
 }
 
 export function buildGrepResultFromToolResult(
-	args: { pattern: string; path?: string; outputMode?: string },
+	args: { pattern: string; path?: string; outputMode?: string; offset?: number },
 	toolResult: ToolResultMessage,
 ) {
 	const text = toolResultToText(toolResult);
@@ -328,7 +362,11 @@ export function buildGrepResultFromToolResult(
 	let unionResult: GrepUnionResult;
 
 	if (outputMode === "files_with_matches") {
-		const files = lines;
+		const details = toolResult.details;
+		const files =
+			details && typeof details === "object" && "files" in details && Array.isArray(details.files)
+				? details.files.filter((file): file is string => typeof file === "string")
+				: lines;
 		unionResult = create(GrepUnionResultSchema, {
 			result: {
 				case: "files",
@@ -337,6 +375,7 @@ export function buildGrepResultFromToolResult(
 					totalFiles: files.length,
 					clientTruncated,
 					ripgrepTruncated: false,
+					offsetApplied: args.offset,
 				}),
 			},
 		});

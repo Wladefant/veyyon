@@ -20,13 +20,12 @@ import {
 	WebSearchRequestResponse_ApprovedSchema,
 	WebSearchRequestResponseSchema,
 } from "@veyyon/catalog/discovery/cursor-proto";
-import { create, toBinary } from "@veyyon/catalog/discovery/protobuf";
+import { create, type ProtoUnknownField, toBinary } from "@veyyon/catalog/discovery/protobuf";
 import { $env, logger } from "@veyyon/utils";
 import { frameConnectMessage } from "../connect-frame";
 
 const NOT_IMPLEMENTED_SUFFIX = "not implemented by this client";
 
-type ProtoUnknownField = { no: number; wireType: number; data: Uint8Array };
 type ProtoUnknownBag = { $unknown?: ProtoUnknownField[] };
 
 interface CursorInteractionWriter {

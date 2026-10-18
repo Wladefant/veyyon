@@ -1,14 +1,16 @@
-import { CURSOR_API_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
-import { decodeJwtPayload } from "@veyyon/utils/jwt";
 import * as AIError from "../../error";
-import { credentialExpiryFromJwtExp } from "./expiry";
+import type { FetchImpl } from "../../types";
+import { isRecord } from "../../utils";
 import { generatePKCE } from "./pkce";
-import { requireTokenResponseObject } from "./token-response";
-import type { OAuthCredentials } from "./types";
+import type { OAuthController, OAuthCredentials } from "./types";
 
 const CURSOR_LOGIN_URL = "https://cursor.com/loginDeepControl";
-const CURSOR_POLL_URL = `${CURSOR_API_ENDPOINT}/auth/poll`;
-const CURSOR_REFRESH_URL = `${CURSOR_API_ENDPOINT}/auth/exchange_user_api_key`;
+const CURSOR_POLL_URL = "https://api2.cursor.sh/auth/poll";
+const CURSOR_REFRESH_URL = "https://api2.cursor.sh/oauth/token";
+/** OAuth client the Cursor IDE renews its login session with. */
+const CURSOR_CLIENT_ID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB";
+const CURSOR_PROFILE_URL = "https://cursor.com/api/auth/me";
+const CURSOR_PROFILE_TIMEOUT_MS = 3_000;
 
 const POLL_MAX_ATTEMPTS = 150;
 const POLL_BASE_DELAY = 1000;
@@ -110,56 +112,150 @@ export async function loginCursor(
 	};
 }
 
-export async function refreshCursorToken(
-	apiKeyOrRefreshToken: string,
-	signal?: AbortSignal,
-): Promise<OAuthCredentials> {
+export async function loginCursorHook(callbacks: OAuthController): Promise<OAuthCredentials> {
+	const credentials = await loginCursor(
+		url => callbacks.onAuth?.({ url }),
+		callbacks.onProgress ? () => callbacks.onProgress?.("Waiting for browser authentication...") : undefined,
+	);
+	return withCursorAccountEmail(credentials, callbacks.fetch ?? fetch, callbacks.signal);
+}
+
+export async function refreshCursorToken(refreshToken: string): Promise<OAuthCredentials> {
 	const response = await fetch(CURSOR_REFRESH_URL, {
 		method: "POST",
-		headers: {
-			Authorization: `Bearer ${apiKeyOrRefreshToken}`,
-			"Content-Type": "application/json",
-		},
-		body: "{}",
-		signal,
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ grant_type: "refresh_token", client_id: CURSOR_CLIENT_ID, refresh_token: refreshToken }),
 	});
 
 	if (!response.ok) {
-		// A refresh endpoint's error body can echo the credential it refused, so it is read
-		// through the shared bounded reader and its redactor.
-		// The status leads the message: a dead Cursor key answers `401 {"message":"Invalid User API
-		// Key"}`, which carries no OAuth error code, so the status is the only definitive signal.
-		const error = await AIError.readProviderErrorDetail(response);
-		throw new AIError.OAuthError(`Cursor token refresh failed: ${response.status} ${error}`, {
+		const error = await response.text();
+		throw new AIError.OAuthError(`Cursor token refresh failed: ${error}`, {
 			kind: "token-refresh",
 			provider: "cursor",
-			status: response.status,
 		});
 	}
 
-	const data = requireTokenResponseObject<{ accessToken?: unknown; refreshToken?: unknown }>(
-		await response.json(),
-		"cursor",
-		"token refresh",
-	);
-	if (typeof data.accessToken !== "string" || data.accessToken.length === 0) {
-		throw new AIError.OAuthError("Cursor token refresh response missing accessToken", {
-			kind: "validation",
+	const data = (await response.json()) as { access_token?: string; refresh_token?: string; shouldLogout?: boolean };
+	// Cursor answers a session it will not renew with 200, an empty token and `shouldLogout`.
+	if (data.shouldLogout === true) {
+		throw new AIError.OAuthError("invalid_grant: Cursor ended this session; run /login cursor again", {
+			kind: "token-refresh",
+			provider: "cursor",
+		});
+	}
+	if (!data.access_token) {
+		throw new AIError.OAuthError("Cursor token refresh returned no access token", {
+			kind: "token-refresh",
 			provider: "cursor",
 		});
 	}
 
+	// Cursor's renewal answers only an access token; the IDE keeps its stored refresh token, so do the same
+	// unless a rotated one is returned.
 	return {
-		access: data.accessToken,
-		refresh: typeof data.refreshToken === "string" && data.refreshToken ? data.refreshToken : apiKeyOrRefreshToken,
-		expires: getTokenExpiry(data.accessToken),
+		access: data.access_token,
+		refresh: data.refresh_token || refreshToken,
+		expires: getTokenExpiry(data.access_token),
 	};
 }
 
+export async function refreshCursorHook(
+	credentials: OAuthCredentials,
+	signal?: AbortSignal,
+): Promise<OAuthCredentials> {
+	const refreshed = await refreshCursorToken(credentials.refresh);
+	// A stored email survives the refresh merge; rows stored before email capture gain it here.
+	return credentials.email ? refreshed : withCursorAccountEmail(refreshed, fetch, signal);
+}
+
+/** Request headers that present `accessToken` to cursor.com as its user's web session. */
+export function cursorSessionHeaders(userId: string, accessToken: string): Record<string, string> {
+	return {
+		Accept: "application/json",
+		Cookie: `WorkosCursorSessionToken=${encodeURIComponent(`${userId}::${accessToken}`)}`,
+	};
+}
+
+/**
+ * Email of the Cursor account that owns `accessToken`, read from its cursor.com
+ * profile. Undefined when the token names no user or the profile names another.
+ */
+export async function fetchCursorAccountEmail(
+	accessToken: string,
+	fetchImpl: FetchImpl = fetch,
+	signal?: AbortSignal,
+): Promise<string | undefined> {
+	const userId = extractCursorAccessTokenUserId(accessToken);
+	if (!userId) return undefined;
+	const response = await fetchImpl(CURSOR_PROFILE_URL, { headers: cursorSessionHeaders(userId, accessToken), signal });
+	if (!response.ok) {
+		throw new AIError.ProviderHttpError(`Cursor profile request failed: ${response.status}`, response.status);
+	}
+	const payload: unknown = await response.json();
+	if (!isRecord(payload) || payload.sub !== userId || typeof payload.email !== "string") return undefined;
+	return payload.email.trim() || undefined;
+}
+
+/** Attach the account email so account policies and pickers can name this login; a failed lookup leaves it off. */
+async function withCursorAccountEmail(
+	credentials: OAuthCredentials,
+	fetchImpl: FetchImpl,
+	signal?: AbortSignal,
+): Promise<OAuthCredentials> {
+	// Refresh runs under a 10s deadline; a stalled lookup must not discard tokens the exchange already minted.
+	const timeout = AbortSignal.timeout(CURSOR_PROFILE_TIMEOUT_MS);
+	const email = await fetchCursorAccountEmail(
+		credentials.access,
+		fetchImpl,
+		signal ? AbortSignal.any([signal, timeout]) : timeout,
+	).catch(() => undefined);
+	return email ? { ...credentials, email } : credentials;
+}
+
+function decodeCursorAccessTokenPayload(token: string): unknown | undefined {
+	const parts = token.split(".");
+	if (parts.length !== 3) return undefined;
+	const payload = parts[1];
+	if (!payload) return undefined;
+	return JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/")));
+}
+
+export function extractCursorAccessTokenUserId(accessToken: string): string | undefined {
+	try {
+		const payload = decodeCursorAccessTokenPayload(accessToken);
+		if (!payload || typeof payload !== "object" || !("sub" in payload) || typeof payload.sub !== "string") {
+			return undefined;
+		}
+		const { sub } = payload;
+		const parts = sub.split("|");
+		const userId = (parts.length > 1 ? parts[1] : sub).trim();
+		return userId || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 function getTokenExpiry(token: string): number {
-	const decoded = decodeJwtPayload<{ exp?: unknown }>(token);
-	if (decoded && typeof decoded.exp === "number") {
-		return credentialExpiryFromJwtExp(decoded.exp, { provider: "cursor" });
+	try {
+		const decoded = decodeCursorAccessTokenPayload(token);
+		if (decoded && typeof decoded === "object" && "exp" in decoded && typeof decoded.exp === "number") {
+			return decoded.exp * 1000 - 5 * 60 * 1000;
+		}
+	} catch {
+		// Ignore parsing errors
 	}
 	return Date.now() + 3600 * 1000;
+}
+
+export function isCursorTokenExpiringSoon(token: string, thresholdSeconds = 300): boolean {
+	try {
+		const decoded = decodeCursorAccessTokenPayload(token);
+		if (!decoded || typeof decoded !== "object" || !("exp" in decoded) || typeof decoded.exp !== "number") {
+			return true;
+		}
+		const currentTime = Math.floor(Date.now() / 1000);
+		return decoded.exp - currentTime < thresholdSeconds;
+	} catch {
+		return true;
+	}
 }
