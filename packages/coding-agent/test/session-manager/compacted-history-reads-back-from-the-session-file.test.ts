@@ -976,6 +976,48 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		await manager.close();
 	});
 
+	it("keeps a compacted history in memory when another writer appended to the file since this session published", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-cold-shared-"));
+		tempDirs.push(root);
+		const dir = path.join(root, "sessions");
+		fs.mkdirSync(dir);
+		fs.mkdirSync(path.join(root, "blobs"));
+		const storage = new ObservedStorage();
+		const manager = SessionManager.create(root, dir, storage);
+
+		let keptId = "";
+		for (let turn = 0; turn < 40; turn++) {
+			if (turn === 10) {
+				// A second window on the same session appends to the same file object, so every line this
+				// manager appends from here on starts later than the size it recorded.
+				const file = manager.getSessionFile();
+				if (file === undefined) throw new Error("the session wrote no file");
+				fs.appendFileSync(
+					file,
+					`${JSON.stringify({ type: "label", id: "foreign-1", parentId: null, timestamp: "2025-01-01T00:00:00.000Z", targetId: "foreign-0", label: big("foreign") })}\n`,
+				);
+			}
+			const id = manager.appendMessage({
+				role: "user",
+				content: big(`shared-prompt-${turn}`, 4096),
+				timestamp: turn,
+			});
+			if (turn === 35) keptId = id;
+			manager.appendMessage(assistantTurn(`shared-answer-${turn}`, turn));
+		}
+		manager.appendCompaction(big("shared-summary"), undefined, keptId, 1000);
+		manager.coolCompactedHistory();
+		expect(storage.open.size).toBe(0);
+
+		await manager.flush();
+		const file = manager.getSessionFile();
+		if (file === undefined) throw new Error("the session wrote no file");
+		const onDisk = await freshLoad({ dir, file });
+		for (const [id, line] of serialized(manager)) expect(line).toBe(onDisk.get(id)!);
+		expect(storage.reads).toBe(0);
+		await manager.close();
+	});
+
 	it.each(LOAD_PATHS)(
 		"reads the bytes it resumed from after another writer republishes the path ($load)",
 		async arm => {

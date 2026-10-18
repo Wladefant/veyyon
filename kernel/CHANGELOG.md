@@ -16,6 +16,13 @@
 - `invalidValues` lists mismatched values from `--config` overlay files as well as the profile file, and each entry's `replaced` marks a value a read serves the default or fallback in place of.
 - Opening a session reads each distinct blob once instead of once per reference, and a missing blob logs one warning per open instead of one per reference.
 
+### Fixed
+
+- A session no longer moves compacted history out of memory after another window appended to its file, which read entries back from shifted offsets and failed compaction with "could not be read back from bytes".
+- An append made while a write fault lasts no longer rewrites the whole session file on the caller's stack: the retry publishes on the disk chain and entries that arrive before it runs share it, so on a 146 MB session an append takes 0.1 ms instead of 570 ms and the longest event-loop stall falls from 1.3 s to 100 ms.
+- A write fault that lands while a recovery publish waits its turn no longer cancels that publish, which left every later entry in memory only and never written to a healthy disk.
+- Reading a session file back for another window's lines no longer parses the lines this session wrote, cutting the read from 304 ms to 107 ms on a 146 MB file.
+
 ## [1.5.6] - 2026-10-13
 
 ### Breaking Changes

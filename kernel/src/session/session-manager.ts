@@ -109,6 +109,9 @@ const DRAFT_ONLY_SESSION_MARKER = ".draft-only-session";
  */
 const CHUNK_TARGET_CHARS = 1 << 20;
 
+/** The id of a session line whose first key is `id`, the order most entries are built in. */
+const LEADING_ENTRY_ID = /^\{"id":"([^"\\]*)"/;
+
 /**
  * Where this manager's entry lines sit in the file it last published. Valid while that file is
  * exactly what it published plus the entries it appended since, and holds no line from another
@@ -550,8 +553,9 @@ export class SessionManager {
 	 * The attempt needs no schedule and no backoff, because a full-file publish is
 	 * self-sufficient: it writes every entry this manager holds, so ONE successful
 	 * rewrite makes the file whole again however many appends were refused before
-	 * it. It costs one serialization of the transcript, entries arrive at the pace
-	 * of a conversation, and a fault that is still there simply latches again.
+	 * it. An append takes the attempt on the disk chain (`#publishInBackground`),
+	 * so the entries that arrive before it runs share it and none of them waits on
+	 * it, and a fault that is still there simply latches again.
 	 */
 	#retryPersistenceAfterFailure(): boolean {
 		if (!this.#diskFailure) return false;
@@ -941,6 +945,13 @@ export class SessionManager {
 		const foreign: string[] = [];
 		let liveWriterEntries = 0;
 		for (const raw of text.split("\n")) {
+			// Most entry lines open with their id, so a line this manager wrote is known
+			// without parsing it. Parsing every line was most of a refresh: 231ms of a
+			// 146MB transcript against 19ms for this match, and a refresh runs on every
+			// publish while another window holds the file. A line of any other shape takes
+			// the full parse below.
+			const leadingId = LEADING_ENTRY_ID.exec(raw)?.[1];
+			if (leadingId !== undefined && this.#isOwnId(leadingId)) continue;
 			if (!raw.trim()) continue;
 			let parsed: { type?: unknown; id?: unknown; customType?: unknown } | undefined;
 			try {
@@ -1056,8 +1067,27 @@ export class SessionManager {
 					this.#coolUnreachablePayloads();
 				}
 			},
-			{ epoch: startEpoch },
+			// A whole-file publish is how a fault heals, so a fault latched while this waited its turn
+			// is no reason to skip it. Skipping also stranded the fence `#publishInBackground` takes:
+			// every later append was absorbed for a publish that never ran, and `flush()` resolved
+			// with those entries in memory only.
+			{ epoch: startEpoch, ignorePriorError: true },
 		);
+	}
+
+	/**
+	 * Publish the whole transcript on the disk chain, and absorb every append into that publish
+	 * until it runs: the fence is taken now, at the epoch the publish runs under, so an append
+	 * landing before it starts sets `#atomicRewriteDirty` instead of writing on its own.
+	 *
+	 * A failure is latched and reported by `#noteDiskFailure`, and the next append retries it.
+	 */
+	#publishInBackground(): void {
+		this.#fileIsCurrent = false;
+		this.#rewriteRequired = true;
+		this.#atomicRewriteDirty = true;
+		this.#atomicRewriteFenceEpoch = this.#diskEpoch;
+		this.#rewriteAtomically().catch(() => undefined);
 	}
 
 	/**
@@ -1113,10 +1143,9 @@ export class SessionManager {
 	#appendToSessionFile(entry: SessionEntry): void {
 		if (!this.#persist || !this.#sessionFile) return;
 		// A latched fault does not refuse this entry: it makes the entry the reason to
-		// try the file again. The retry marks the file divergent, so the branch below
-		// publishes the whole transcript rather than appending one line to a file that
-		// is missing everything since the fault.
-		this.#retryPersistenceAfterFailure();
+		// try the file again, with a publish of the whole transcript rather than one line
+		// appended to a file that is missing everything since the fault.
+		const retrying = this.#retryPersistenceAfterFailure();
 
 		// Lazy gate: a brand-new session is not written until it has an assistant
 		// message (or someone forced creation), so sessions that never produce
@@ -1139,6 +1168,19 @@ export class SessionManager {
 			this.#atomicRewriteDirty = true;
 			return;
 		}
+
+		// The retry publishes on the disk chain, not here. A fault that lasts made the
+		// synchronous rewrite below run once per entry, each one reading and writing the
+		// whole transcript on the event loop: 1.7s per entry on a 146MB session, so the
+		// window froze for every keystroke that appended. On the chain a burst of entries
+		// shares one publish, and the loop keeps running while it writes. Durability moves
+		// to the disk chain (`flush()`) for these entries, which were not reaching the
+		// file anyway.
+		if (retrying) {
+			this.#publishInBackground();
+			return;
+		}
+
 		// Cold/divergent: not on disk yet, or in-memory entries diverged from the
 		// file → rewrite the whole file synchronously and keep going.
 		if (!this.#fileIsCurrent || this.#rewriteRequired) {
@@ -1147,23 +1189,14 @@ export class SessionManager {
 		}
 
 		// Another window may have replaced the file since the writer was opened, in
-		// which case the handle addresses an inode nothing can reach any more. The
-		// merge that carries both histories needs to READ the file, which this
-		// synchronous path cannot do, so hand the entry to the atomic rewrite: it
-		// refreshes the foreign lines and republishes everything, including this
-		// entry. Durability moves to the disk chain (`flush()`) for this one entry,
-		// which is the cost of not writing it into a file that no longer exists.
+		// which case the handle addresses an inode nothing can reach any more. The merge
+		// that carries both histories needs to READ the file, which this synchronous path
+		// cannot do, so hand the entry to the atomic rewrite: it refreshes the foreign
+		// lines and republishes everything, including this entry. Durability moves to the
+		// disk chain (`flush()`) for this one entry, which is the cost of not writing it
+		// into a file that no longer exists.
 		if (this.#fileReplacedUnderWriter()) {
-			this.#fileIsCurrent = false;
-			this.#rewriteRequired = true;
-			// Take the fence NOW, at the epoch the rewrite below will run under, so an
-			// append landing before that task starts is absorbed by its loop
-			// (`#atomicRewriteDirty`) instead of falling to the synchronous rewrite,
-			// which cannot read and would publish a body missing the other window's
-			// lines: the loss this whole path exists to prevent.
-			this.#atomicRewriteDirty = true;
-			this.#atomicRewriteFenceEpoch = this.#diskEpoch;
-			void this.#rewriteAtomically();
+			this.#publishInBackground();
 			return;
 		}
 
@@ -1277,7 +1310,10 @@ export class SessionManager {
 	 * Runs only while every entry's line in the file is what the entry holds: after a load that
 	 * changed nothing, after this manager's own publish, and after a compaction the caller has
 	 * persisted ({@link coolCompactedHistory}). An in-place update not yet handed to
-	 * {@link rewriteEntries}, a publish in flight, or a line of another writer's stops it.
+	 * {@link rewriteEntries}, a publish in flight, or a line of another writer's stops it. So does a
+	 * file that is not the size this manager published: another writer appending to the same file
+	 * object moves every line this manager appended after it, so the offsets recorded for them
+	 * name another entry's bytes.
 	 *
 	 * The live context is the active branch from the newest compaction's keep boundary on, plus
 	 * every entry on the branch whose kind the settings walk of each context build reads. Everything
@@ -1295,7 +1331,8 @@ export class SessionManager {
 			this.#rewriteRequired ||
 			this.#firstUpdatedEntry !== Number.POSITIVE_INFINITY ||
 			this.#atomicRewriteFenceEpoch !== null ||
-			this.#foreignLines.length > 0
+			this.#foreignLines.length > 0 ||
+			!this.#fileIsExactlyAsPublished()
 		) {
 			return;
 		}
