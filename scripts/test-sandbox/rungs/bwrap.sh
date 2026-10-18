@@ -2,8 +2,8 @@
 # The bwrap rung: bubblewrap with a mount and user namespace.
 #
 # Usage: sourced by scripts/test-sandbox/run.sh; not run directly. It defines
-# probe_bwrap, run_bwrap and binprobe_bwrap and reads REPO_ROOT and HOST_HOME from
-# the driver.
+# probe_bwrap, run_bwrap and binprobe_bwrap and reads REPO_ROOT, GUEST_REPO and
+# HOST_HOME from the driver.
 #
 # It is last on the ladder. Some hosts deny the uid_map write through AppArmor
 # despite enabling unprivileged user namespaces, so the probe runs bwrap rather
@@ -55,7 +55,7 @@ run_bwrap() {
 			log "Linux node_modules directory does not exist: ${VEYYON_SANDBOX_NODE_MODULES}"
 			return "${RUNG_SETUP_FAILED:-126}"
 		fi
-		extra_mounts+=(--ro-bind "${VEYYON_SANDBOX_NODE_MODULES}" "${REPO_ROOT}/node_modules")
+		extra_mounts+=(--ro-bind "${VEYYON_SANDBOX_NODE_MODULES}" "${GUEST_REPO}/node_modules")
 	elif [ -L "${REPO_ROOT}/node_modules" ]; then
 		local nm_target
 		nm_target="$(readlink "${REPO_ROOT}/node_modules" 2>/dev/null || true)"
@@ -78,10 +78,10 @@ run_bwrap() {
 		--tmpfs /sandbox --tmpfs /run \
 		"${bun_mounts[@]}" \
 		--tmpfs /home --tmpfs /tmp \
-		--bind "${REPO_ROOT}" "${REPO_ROOT}" \
+		--bind "${REPO_ROOT}" "${GUEST_REPO}" \
 		"${gitdir_args[@]+"${gitdir_args[@]}"}" \
 		"${extra_mounts[@]}" \
-		--chdir "${REPO_ROOT}" \
+		--chdir "${GUEST_REPO}" \
 		--setenv PATH /sandbox/runtime/bun:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin \
 		--setenv VEYYON_TEST_SANDBOX bwrap-userns \
 		--setenv VEYYON_TEST_HOST_HOME "${HOST_HOME}" \

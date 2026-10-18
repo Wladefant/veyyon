@@ -3,6 +3,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && /bin/pwd -P)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && /bin/pwd -P)"
+GUEST_REPO=/srv/veyyon
 HOST_HOME="$(getent passwd "$(id -u)" | cut -d: -f6)"
 HOST_BUN="$(bun -e 'process.stdout.write(process.execPath)')"
 HOST_BUN="$(readlink -f -- "$HOST_BUN")"
