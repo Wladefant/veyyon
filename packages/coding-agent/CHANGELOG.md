@@ -17,6 +17,7 @@
 ### Added
 - Optional encrypted cloud checkpoints preserve native journals, artifacts, blobs, dirty files and version pins. The default-off client supports restore and explicit forks. Durable Object epochs fence synchronized prompt and tool admission. The existing `sessions` command alias remains available ([issue](https://github.com/Wladefant/veyyon/issues/567)).
 - Task and qa-verifier spawns share configured Gemini 3.8 Flash and GPT-6 Luna models evenly by spawn identity.
+- Browser tab inventory lists only relay-controlled tabs, and close actions respect lane ownership or exact approved tab IDs ([Refs](https://github.com/Wladefant/veyyon/issues/538)).
 
 - Terminal provider HTTP 429 and 402 lane errors notify `model_routing.py record-error` without waiting. The reporter uses a hidden child, a 10-second timeout and payload-free failure logs ([Refs](https://github.com/Wladefant/superboard/issues/451)).
 - `irc` sends a durable notice to another session with `to: "session:<id>"` or `to: "session:all"`. A session reads its notices at the start of each prompt and at step boundaries, shows them to the model and forwards them to its running lanes, so a warning survives a dropped terminal pipe and reaches the lanes ([Refs](https://github.com/Wladefant/veyyon/issues/537)).

@@ -10,6 +10,7 @@ import {
 	isProductionUrl,
 	readExtensionToken,
 	redactSecrets,
+	redactTabInventoryUrl,
 	removeExtensionToken,
 	secretsEqual,
 	writeExtensionToken,
@@ -132,6 +133,12 @@ describe("secrets", () => {
 		expect(readExtensionToken("work/profile")).toBe("tok-work-456");
 		expect(removeExtensionToken(undefined)).toBe(true);
 		expect(removeExtensionToken(undefined)).toBe(false);
+	});
+
+	test("inventory URLs redact credentials and sensitive query values", () => {
+		expect(
+			redactTabInventoryUrl("https://user:pass@example.com/path?access_token=SECRET&view=full&client_secret=KEY"),
+		).toBe("https://%5Bredacted%5D:%5Bredacted%5D@example.com/path?access_token=%5Bredacted%5D&view=full&client_secret=%5Bredacted%5D");
 	});
 
 	test("redaction removes every listed secret", () => {

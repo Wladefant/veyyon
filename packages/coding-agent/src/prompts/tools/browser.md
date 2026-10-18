@@ -2,18 +2,20 @@ Drives real Chromium tab; full puppeteer access via JS.
 
 <instruction>
 - Static content (articles, docs, issues/PRs, JSON, PDFs, feeds)? `read` the URL. Browser only for JS execution, auth, interactive actions.
-- Four actions:
-  - `open` — acquire/reuse named tab (`name` defaults `"main"`). Optional `url` (navigate once ready), `viewport`, `dialogs: "accept" | "dismiss"` (auto-handle `alert`/`confirm`/`beforeunload`; else page hangs till you wire `page.on('dialog', …)`). Headless only: `context` (tabs naming it share cookies/storage, isolated from others — e.g. one per user role), `storage_state` (state file loaded before navigating).
-  - `close` — release tab by `name`, or all with `all: true`. `kill: true` also kills spawned-app process trees.
+- Five actions:
+  - `open` — acquire/reuse named tab (`name` defaults `"main"`). Optional `url` (navigate once ready), `viewport`, `dialogs: "accept" | "dismiss"` (auto-handle `alert`/`confirm`/`beforeunload`; else page hangs till you wire `page.on('dialog', …)`). Headless only: `context` (tabs naming the same one share cookies and storage, isolated from others — e.g. one per user role), `storage_state` (state file loaded before navigating).
+  - `close` — release only tabs owned by this session; `all: true` still respects ownership. Supply exact `approved_tab_ids` from `inventory` to explicitly close other relay-controlled tabs. `kill: true` also kills spawned-app processes.
+  - `inventory` — list only existing relay-controlled extension tabs, with Chrome tab IDs, known window IDs, last-known URL/title, and `owned` or `attached` status. It opens no browser connection and does not list unrelated Chrome tabs.
   - `run` — execute JS in existing tab. `code` = async function body; `page`, `browser`, `tab`, `display`, `assert`, `wait` in scope. Return value JSON-stringified into result; `display(value)` accumulates text/images. `wait(ms)` sleeps; `wait(fn, { timeout?, interval? })` polls `fn` (sync or async) until truthy and resolves with that value (default 100ms interval; deadline min(30s, cell budget − 1s), named error on timeout) — use it instead of in-page polling Promises inside `tab.evaluate`.
-  - `save_state` — write the tab context's cookies + localStorage to `storage_state` (required). It holds live credentials: keep it out of git.
+  - `save_state` — write the tab context's cookies + localStorage to `storage_state` (required). It holds live credentials: keep it out of the transcript.
+- Inventory URLs redact credentials and sensitive query-parameter values. Window IDs are last-known; the relay cannot query Chrome's full tab list or learn when a tab moves, so it cannot guarantee the current last tab in a window.
 - Tabs survive `run` calls and in-process spawned agents — open once, reuse.
 - Browser kinds (`app` on `open`):
   - default (no `app`) → headless Chromium with stealth patches.
   - `app.path` → spawn absolute binary (Electron/CDP). No stealth patches — NEVER tamper with a real desktop app.
   - `app.cdp_url` → connect to existing CDP endpoint (e.g. `http://127.0.0.1:9222`).
   - `app.target` (with `path`/`cdp_url`) — substring on url+title picks BrowserWindow.
-  - `app: { extension: true, instance_id?, profile? }` → the operator's own signed-in Chrome through the Playwright Extension and a loopback relay. This is the backend for the operator's real Chrome: use it whenever a task needs the operator's logged-in browser, and never attach to it over CDP or `chrome://inspect`. Routine work without a login stays on headless. Needs a stored token (`veyyon browser-extension set-token`). HTTP and HTTPS origins load by default, except production hosts are refused; `context`/`storage_state` are headless only; the tab you open is closed by `close`, and `close` with `all: true` disconnects every tab. Chrome shows its "debugging this browser" bar on controlled tabs.
+- `app: { extension: true, instance_id?, profile? }` → the operator's own signed-in Chrome through the Playwright Extension and a loopback relay. This is the backend for the operator's real Chrome: use it whenever a task needs the operator's logged-in browser, and never attach to it over CDP or `chrome://inspect`. Routine work without a login stays on headless. Needs a stored token (`veyyon browser-extension set-token`). HTTP and HTTPS origins load by default, except production hosts are refused; `context`/`storage_state` are headless only; the relay creates and closes only controlled tabs. Chrome shows its "debugging this browser" bar on controlled tabs.
 - `tab` helpers; drop to raw puppeteer `page` for anything uncovered:
   - `tab.goto(url, { waitUntil? })` — navigate. A hung load fails ~1s before the cell budget with a named, catchable error and the pending navigation is stopped; for slow pages raise `timeout` or use `waitUntil: "domcontentloaded"`.
   - `tab.observe({ includeAll?, viewportOnly? })` — accessibility snapshot: `{ url, title, viewport, scroll, elements: [{ id, role, name, value, states, … }] }`. Ids stable until next observe/goto.
