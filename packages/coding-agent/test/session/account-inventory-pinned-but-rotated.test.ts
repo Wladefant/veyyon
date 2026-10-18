@@ -40,13 +40,13 @@ describe("selectedButRotated", () => {
 		setSystemTime(new Date(NOW_MS));
 		store = new SqliteAuthCredentialStore(new Database(":memory:"));
 		authStorage = new AuthStorage(store);
-		await authStorage.reload();
+		await authStorage.credentials.reload();
 		vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async (provider, credentials) => {
 			const credential = credentials[provider];
 			if (!credential) return null;
 			return { newCredentials: credential, apiKey: credential.access };
 		});
-		await authStorage.set(PROVIDER, [
+		await authStorage.credentials.set(PROVIDER, [
 			{
 				type: "oauth",
 				access: "access-personal",
@@ -64,11 +64,11 @@ describe("selectedButRotated", () => {
 				email: "work@example.com",
 			},
 		]);
-		const rows = authStorage.listStoredCredentials(PROVIDER);
+		const rows = authStorage.credentials.list(PROVIDER);
 		personalId = rows[0]?.id ?? 0;
 		workId = rows[1]?.id ?? 0;
-		authStorage.setAccountName(PROVIDER, workId, "work");
-		authStorage.setAccountName(PROVIDER, personalId, "personal");
+		authStorage.credentials.setAccountName(PROVIDER, workId, "work");
+		authStorage.credentials.setAccountName(PROVIDER, personalId, "personal");
 	});
 
 	afterEach(() => {
@@ -86,8 +86,8 @@ describe("selectedButRotated", () => {
 	test("returns undefined while the pinned account is the one serving", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
-		expect(storage.pinSessionCredential(PROVIDER, SESSION_ID, workId)).toBe(true);
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe("access-work");
+		expect(storage.sessions.pin(PROVIDER, SESSION_ID, workId)).toBe(true);
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe("access-work");
 
 		const inventory = buildAccountInventory(storage, { sessionId: SESSION_ID });
 
@@ -106,12 +106,12 @@ describe("selectedButRotated", () => {
 	test("returns undefined when the session never pinned anything, even after a rotation", async () => {
 		if (!store) throw new Error("test setup failed");
 		const storage = new AuthStorage(store, { loadBalancing: true });
-		await storage.reload();
-		await storage.markUsageLimitReached(PROVIDER, SESSION_ID, {
+		await storage.credentials.reload();
+		await storage.limits.markReached(PROVIDER, SESSION_ID, {
 			credentialId: personalId,
 			retryAfterMs: BLOCK_FOR_MS,
 		});
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe("access-work");
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe("access-work");
 
 		const inventory = buildAccountInventory(storage, { sessionId: SESSION_ID });
 		const rows = inventory.providers[0]?.rows ?? [];
@@ -133,14 +133,14 @@ describe("selectedButRotated", () => {
 	test("reports nothing while a hold leaves the pinned account serving", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
-		expect(storage.pinSessionCredential(PROVIDER, SESSION_ID, workId)).toBe(true);
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe("access-work");
+		expect(storage.sessions.pin(PROVIDER, SESSION_ID, workId)).toBe(true);
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe("access-work");
 
-		await storage.markUsageLimitReached(PROVIDER, SESSION_ID, {
+		await storage.limits.markReached(PROVIDER, SESSION_ID, {
 			credentialId: workId,
 			retryAfterMs: BLOCK_FOR_MS,
 		});
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe("access-work");
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe("access-work");
 
 		const inventory = buildAccountInventory(storage, { sessionId: SESSION_ID });
 		expect(selectedButRotated(inventory, PROVIDER)).toBeUndefined();
@@ -158,15 +158,15 @@ describe("selectedButRotated", () => {
 	test("returns the pinned row and the serving row once a revoked grant moves traffic off the pin", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
-		expect(storage.pinSessionCredential(PROVIDER, SESSION_ID, workId)).toBe(true);
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe("access-work");
+		expect(storage.sessions.pin(PROVIDER, SESSION_ID, workId)).toBe(true);
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe("access-work");
 
-		const moved = await storage.rotateSessionCredential(PROVIDER, SESSION_ID, {
+		const moved = await storage.limits.rotate(PROVIDER, SESSION_ID, {
 			credentialId: workId,
 			error: Object.assign(new Error("invalid_grant: token revoked"), { status: 401 }),
 		});
-		expect(moved).toBe(true);
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe("access-personal");
+		expect(moved.switched).toBe(true);
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe("access-personal");
 
 		const inventory = buildAccountInventory(storage, { sessionId: SESSION_ID });
 		const rotated = selectedButRotated(inventory, PROVIDER);
@@ -190,13 +190,13 @@ describe("selectedButRotated", () => {
 	test("reports nothing for a provider that holds no credentials", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
-		expect(storage.pinSessionCredential(PROVIDER, SESSION_ID, workId)).toBe(true);
-		await storage.getApiKey(PROVIDER, SESSION_ID);
-		await storage.markUsageLimitReached(PROVIDER, SESSION_ID, {
+		expect(storage.sessions.pin(PROVIDER, SESSION_ID, workId)).toBe(true);
+		await storage.keys.get(PROVIDER, SESSION_ID);
+		await storage.limits.markReached(PROVIDER, SESSION_ID, {
 			credentialId: workId,
 			retryAfterMs: BLOCK_FOR_MS,
 		});
-		await storage.getApiKey(PROVIDER, SESSION_ID);
+		await storage.keys.get(PROVIDER, SESSION_ID);
 
 		const inventory = buildAccountInventory(storage, { sessionId: SESSION_ID });
 

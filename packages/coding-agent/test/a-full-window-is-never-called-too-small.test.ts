@@ -112,7 +112,7 @@ describe("a session with a full context window is never told it is too small to 
 		}));
 
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `auth-${cleanups.length}.db`));
-		authStorage.setRuntimeApiKey(MODEL_PROVIDER, "test-key");
+		authStorage.keys.setRuntime(MODEL_PROVIDER, "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), `models-${cleanups.length}.yml`));
 		const settings = Settings.isolated({
 			// Manual `/compact` only: an auto pass firing during the seed prompt

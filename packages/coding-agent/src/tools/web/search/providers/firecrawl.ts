@@ -47,7 +47,7 @@ export function findApiKey(
 	sessionId?: string,
 	signal?: AbortSignal,
 ): Promise<string | undefined> {
-	return authStorage.getApiKey("firecrawl", sessionId, { signal });
+	return authStorage.keys.get("firecrawl", sessionId, { signal });
 }
 
 export function buildRequestBody(params: FirecrawlSearchParams): Record<string, unknown> {
@@ -96,7 +96,7 @@ export async function searchFirecrawl(params: SearchParams): Promise<SearchRespo
 		resolveProviderTextTransform: params.resolveProviderTextTransform,
 		endpoint: process.env.FIRECRAWL_ENDPOINT,
 	};
-	const keyOrResolver: ApiKey = params.authStorage.resolver("firecrawl", {
+	const keyOrResolver: ApiKey = params.authStorage.keys.resolver("firecrawl", {
 		sessionId: params.sessionId,
 	});
 	const numResults = clampNumResults(firecrawlParams.num_results, SEARCH_DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS);

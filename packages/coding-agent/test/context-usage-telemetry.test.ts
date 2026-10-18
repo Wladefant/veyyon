@@ -29,7 +29,7 @@ describe("context snapshot session telemetry", () => {
 	beforeAll(async () => {
 		sharedDir = TempDir.createSync("@context-telemetry-");
 		authStorage = await AuthStorage.create(path.join(sharedDir.path(), "auth.db"));
-		authStorage.setRuntimeApiKey("openai", "test-key");
+		authStorage.keys.setRuntime("openai", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 		await Settings.init({ inMemory: true });
 	});

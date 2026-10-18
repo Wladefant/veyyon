@@ -31,13 +31,13 @@ describe("AuthStorage account rotation", () => {
 			loadBalancing: true,
 		});
 		try {
-			await control.set(provider, finalCredentials);
-			await authStorage.set(provider, initialCredentials);
+			await control.credentials.set(provider, finalCredentials);
+			await authStorage.credentials.set(provider, initialCredentials);
 
 			for (let attempt = 0; attempt < 128; attempt += 1) {
 				const sessionId = `issue-4982-session-${attempt}`;
-				const stickyKey = await authStorage.getApiKey(provider, sessionId);
-				const freshKey = await control.getApiKey(provider, sessionId);
+				const stickyKey = await authStorage.keys.get(provider, sessionId);
+				const freshKey = await control.keys.get(provider, sessionId);
 				if (stickyKey && freshKey && stickyKey !== freshKey) {
 					return { sessionId, stickyKey, freshKey };
 				}
@@ -122,7 +122,7 @@ describe("AuthStorage account rotation", () => {
 	});
 
 	test("returns a fallback key when every OAuth account is usage-limited", async () => {
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{
 				type: "oauth",
 				access: "access-1",
@@ -140,19 +140,19 @@ describe("AuthStorage account rotation", () => {
 		]);
 
 		const sessionId = "issue-55-session";
-		const firstKey = await authStorage.getApiKey("openai-codex", sessionId);
+		const firstKey = await authStorage.keys.get("openai-codex", sessionId);
 		expect(firstKey).toMatch(/^access-/);
 
 		usageExhausted = true;
-		const { switched } = await authStorage.markUsageLimitReached("openai-codex", sessionId);
+		const { switched } = await authStorage.limits.markReached("openai-codex", sessionId);
 		expect(switched).toBe(true);
 
-		const exhaustedFallbackKey = await authStorage.getApiKey("openai-codex", sessionId);
+		const exhaustedFallbackKey = await authStorage.keys.get("openai-codex", sessionId);
 		expect(exhaustedFallbackKey).toMatch(/^access-/);
 	});
 
 	test("usage-limit rotation can match the failed bearer when session stickiness is missing", async () => {
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{
 				type: "oauth",
 				access: "access-1",
@@ -170,13 +170,13 @@ describe("AuthStorage account rotation", () => {
 		]);
 
 		const sessionId = "missing-sticky-session";
-		const result = await authStorage.markUsageLimitReached("openai-codex", sessionId, { apiKey: "access-1" });
+		const result = await authStorage.limits.markReached("openai-codex", sessionId, { apiKey: "access-1" });
 		expect(result.switched).toBe(true);
-		expect(await authStorage.getApiKey("openai-codex", sessionId)).toBe("access-2");
+		expect(await authStorage.keys.get("openai-codex", sessionId)).toBe("access-2");
 	});
 
 	test("usage-limit rotation trusts the failed bearer over stale session stickiness", async () => {
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{
 				type: "oauth",
 				access: "plus-access",
@@ -194,11 +194,11 @@ describe("AuthStorage account rotation", () => {
 		]);
 
 		const sessionId = "stale-sticky-session";
-		const stickyKey = await authStorage.getApiKey("openai-codex", sessionId);
+		const stickyKey = await authStorage.keys.get("openai-codex", sessionId);
 		const failedKey = stickyKey === "plus-access" ? "k12-access" : "plus-access";
-		const result = await authStorage.markUsageLimitReached("openai-codex", sessionId, { apiKey: failedKey });
+		const result = await authStorage.limits.markReached("openai-codex", sessionId, { apiKey: failedKey });
 		expect(result.switched).toBe(true);
-		expect(await authStorage.getApiKey("openai-codex", sessionId)).toBe(stickyKey);
+		expect(await authStorage.keys.get("openai-codex", sessionId)).toBe(stickyKey);
 	});
 
 	test("API key resolver re-resolves after a concurrent OAuth refresh makes a 401 bearer stale", async () => {
@@ -259,7 +259,7 @@ describe("AuthStorage account rotation", () => {
 	});
 
 	test("withAuth reaches a fourth healthy Codex OAuth sibling through ModelRegistry", async () => {
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{
 				type: "oauth",
 				access: "access-a",
@@ -345,7 +345,7 @@ describe("AuthStorage account rotation", () => {
 			targetFinalCredentials,
 		);
 
-		await authStorage.set(unrelatedProvider, [
+		await authStorage.credentials.set(unrelatedProvider, [
 			{
 				type: "oauth",
 				access: "unrelated-access-a",
@@ -364,12 +364,12 @@ describe("AuthStorage account rotation", () => {
 			},
 		]);
 		const unrelatedSessionId = "issue-4982-unrelated-session";
-		const unrelatedStickyKey = await authStorage.getApiKey(unrelatedProvider, unrelatedSessionId);
+		const unrelatedStickyKey = await authStorage.keys.get(unrelatedProvider, unrelatedSessionId);
 		expect(unrelatedStickyKey).toMatch(/^unrelated-access-/);
 
 		const { type: _type, ...loginCredential } = targetAddedCredential;
 		nextLoginCredential = loginCredential;
-		await authStorage.login(targetProvider, {
+		await authStorage.oauth.login(targetProvider, {
 			onAuth: () => {},
 			onPrompt: async () => "",
 		});
@@ -380,11 +380,11 @@ describe("AuthStorage account rotation", () => {
 			usageProviderResolver: provider => (provider === "openai-codex" ? usageProvider : undefined),
 			loadBalancing: true,
 		});
-		await authStorage.reload();
+		await authStorage.credentials.reload();
 
-		const reloadedTargetKey = await authStorage.getApiKey(targetProvider, sessionId);
+		const reloadedTargetKey = await authStorage.keys.get(targetProvider, sessionId);
 		expect(reloadedTargetKey).toBe(freshKey);
 		expect(reloadedTargetKey).not.toBe(stickyKey);
-		expect(await authStorage.getApiKey(unrelatedProvider, unrelatedSessionId)).toBe(unrelatedStickyKey);
+		expect(await authStorage.keys.get(unrelatedProvider, unrelatedSessionId)).toBe(unrelatedStickyKey);
 	});
 });

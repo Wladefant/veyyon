@@ -586,16 +586,28 @@ export class RetryRuntime {
 			attempt.parsedRetryAfterMs ??
 			calculateRateLimitBackoffMs(parseRateLimitReason(attempt.errorMessage), "credential-park");
 		const failedCredentialId = Number(attempt.message.usage?.credentialId);
-		const outcome = await this.#session.modelRegistry.authStorage.markUsageLimitReached(
+		const credentialId =
+			Number.isSafeInteger(failedCredentialId) && failedCredentialId > 0 ? failedCredentialId : Number.NaN;
+		if (attempt.modelNotInPlan) {
+			const rotation = await this.#session.modelRegistry.authStorage.limits.rotate(
+				model.provider,
+				this.#session.sessionId,
+				{ error: attempt.errorMessage, modelId: model.id, credentialId },
+			);
+			if (rotation.switched) {
+				attempt.switchedCredential = true;
+				attempt.delayMs = 0;
+			}
+			return;
+		}
+		const outcome = await this.#session.modelRegistry.authStorage.limits.markReached(
 			model.provider,
 			this.#session.sessionId,
 			{
-				credentialId:
-					Number.isSafeInteger(failedCredentialId) && failedCredentialId > 0 ? failedCredentialId : Number.NaN,
+				credentialId,
 				retryAfterMs,
 				baseUrl: model.baseUrl,
 				modelId: model.id,
-				modelNotInPlan: attempt.modelNotInPlan,
 			},
 		);
 		attempt.quotaMessage = outcome.quotaMessage;

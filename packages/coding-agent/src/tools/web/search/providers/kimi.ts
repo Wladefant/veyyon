@@ -83,8 +83,8 @@ async function resolveKey(
 	if (envKey) return envKey;
 
 	for (const provider of ["moonshot", "kimi-code"] as const) {
-		const stored = await authStorage.getApiKey(provider, sessionId, { signal });
-		if (stored) return authStorage.resolver(provider, { sessionId });
+		const stored = await authStorage.keys.get(provider, sessionId, { signal });
+		if (stored) return authStorage.keys.resolver(provider, { sessionId });
 	}
 	return undefined;
 }
@@ -190,8 +190,8 @@ export class KimiProvider extends SearchProvider {
 		return (
 			Boolean(asTrimmed($env.MOONSHOT_SEARCH_API_KEY)) ||
 			Boolean(asTrimmed($env.KIMI_SEARCH_API_KEY)) ||
-			authStorage.hasAuth("moonshot") ||
-			authStorage.hasAuth("kimi-code")
+			authStorage.keys.source("moonshot", { env: "aliases" }) !== undefined || authStorage.keys.keyless("moonshot") ||
+			authStorage.keys.source("kimi-code", { env: "aliases" }) !== undefined || authStorage.keys.keyless("kimi-code")
 		);
 	}
 

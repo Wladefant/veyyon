@@ -71,7 +71,7 @@ function signedThinking(thinking: string, thinkingSignature: string): MockConten
 async function createHarness(responses: MockResponse[]): Promise<Harness & { mock: MockModel }> {
 	const tempDir = TempDir.createSync("@pi-checkpoint-rewind-branch-");
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
-	authStorage.setRuntimeApiKey("mock", "test-key");
+	authStorage.keys.setRuntime("mock", "test-key");
 
 	const mock = createMockModel({ responses });
 	const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));

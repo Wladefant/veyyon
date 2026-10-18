@@ -52,7 +52,7 @@ export function findApiKey(
 	sessionId?: string,
 	signal?: AbortSignal,
 ): Promise<string | undefined> {
-	return authStorage.getApiKey("tinyfish", sessionId, { signal });
+	return authStorage.keys.get("tinyfish", sessionId, { signal });
 }
 
 export function buildTinyFishUrl(params: TinyFishSearchParams): URL {
@@ -107,7 +107,7 @@ export async function searchTinyFish(params: SearchParams): Promise<SearchRespon
 		fetch: params.fetch,
 		resolveProviderTextTransform: params.resolveProviderTextTransform,
 	};
-	const keyOrResolver: ApiKey = params.authStorage.resolver("tinyfish", {
+	const keyOrResolver: ApiKey = params.authStorage.keys.resolver("tinyfish", {
 		sessionId: params.sessionId,
 	});
 	const sources = await withAuth(

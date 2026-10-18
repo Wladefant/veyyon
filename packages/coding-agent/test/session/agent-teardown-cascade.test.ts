@@ -66,7 +66,7 @@ describe("agent teardown cascade", () => {
 		AgentRegistry.resetGlobalForTests();
 		tempDir = TempDir.createSync("veyyon-agent-teardown-cascade-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 		manager = new AsyncJobManager({ onJobComplete: async () => {} });

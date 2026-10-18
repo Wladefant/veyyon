@@ -60,7 +60,7 @@ describe("a dead login names the account it belonged to", () => {
 
 	/** Kill the account named by `email`, then sign a different one in — the reported shape. */
 	async function killOneAndKeepAnother(storage: AuthStorage, activeStore: SqliteAuthCredentialStore): Promise<void> {
-		await storage.set(PROVIDER, [
+		await storage.credentials.set(PROVIDER, [
 			{
 				type: "oauth",
 				access: "access-dead",
@@ -69,10 +69,10 @@ describe("a dead login names the account it belonged to", () => {
 				email: DEAD,
 			},
 		]);
-		const id = storage.listStoredCredentials(PROVIDER)[0]!.id;
+		const id = storage.credentials.list(PROVIDER)[0]!.id;
 		activeStore.deleteAuthCredential(id, REFRESH_FAILURE);
-		await storage.reload();
-		await storage.set(PROVIDER, [
+		await storage.credentials.reload();
+		await storage.credentials.set(PROVIDER, [
 			{
 				type: "oauth",
 				access: "access-live",
@@ -112,12 +112,12 @@ describe("a dead login names the account it belonged to", () => {
 
 	test("keeps the unattributed wording when the dead credential names no account", async () => {
 		if (!authStorage || !store) throw new Error("test setup failed");
-		await authStorage.set(PROVIDER, [
+		await authStorage.credentials.set(PROVIDER, [
 			{ type: "oauth", access: "access-anon", refresh: "refresh-anon", expires: Date.now() + 3_600_000 },
 		]);
-		const id = authStorage.listStoredCredentials(PROVIDER)[0]!.id;
+		const id = authStorage.credentials.list(PROVIDER)[0]!.id;
 		store.deleteAuthCredential(id, REFRESH_FAILURE);
-		await authStorage.reload();
+		await authStorage.credentials.reload();
 
 		const entry = buildAccountInventory(authStorage).providers.find(group => group.provider === PROVIDER);
 		const note = providerDisabledNote(entry ?? { rows: [] });
@@ -136,7 +136,7 @@ describe("a dead login names the account it belonged to", () => {
 	 */
 	test("asks for a login only when no account is left serving the provider", async () => {
 		if (!authStorage || !store) throw new Error("test setup failed");
-		await authStorage.set(PROVIDER, [
+		await authStorage.credentials.set(PROVIDER, [
 			{
 				type: "oauth",
 				access: "access-dead",
@@ -145,9 +145,9 @@ describe("a dead login names the account it belonged to", () => {
 				email: DEAD,
 			},
 		]);
-		const id = authStorage.listStoredCredentials(PROVIDER)[0]!.id;
+		const id = authStorage.credentials.list(PROVIDER)[0]!.id;
 		store.deleteAuthCredential(id, REFRESH_FAILURE);
-		await authStorage.reload();
+		await authStorage.credentials.reload();
 
 		const entry = buildAccountInventory(authStorage).providers.find(group => group.provider === PROVIDER);
 		const note = providerDisabledNote(entry ?? { rows: [] });
@@ -174,7 +174,7 @@ describe("a dead login names the account it belonged to", () => {
 
 	test("says nothing at all when no refresh failure tore a login down", async () => {
 		if (!authStorage || !store) throw new Error("test setup failed");
-		await authStorage.set(PROVIDER, [
+		await authStorage.credentials.set(PROVIDER, [
 			{
 				type: "oauth",
 				access: "access-live",

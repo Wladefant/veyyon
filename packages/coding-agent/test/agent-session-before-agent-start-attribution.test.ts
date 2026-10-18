@@ -25,7 +25,7 @@ describe("AgentSession before_agent_start attribution fallback", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-before-agent-start-attribution-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 	});
 

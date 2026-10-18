@@ -61,7 +61,7 @@ async function launch(): Promise<Launched> {
 	await Bun.write(`${cwd}/.keep`, "");
 	const authStorage = await AuthStorage.create(tempDir.join("testauth.db"));
 	authStorages.push(authStorage);
-	authStorage.setRuntimeApiKey("openai", "test-key");
+	authStorage.keys.setRuntimeApiKey("openai", "test-key");
 	const settings = Settings.isolated({ "async.enabled": false, "advisor.enabled": true });
 	settings.set("agent.helpers", { ...settings.get("agent.helpers"), advisor: { model: "openai/gpt-4o-mini" } });
 

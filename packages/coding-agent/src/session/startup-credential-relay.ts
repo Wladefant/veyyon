@@ -17,7 +17,7 @@ function deliverCredentialDisabled(runner: ExtensionRunner, event: CredentialDis
 /**
  * Delivers an auth store's `credential_disabled` events to the session's extension runner.
  *
- * Subscribed before any `getApiKey()` call, so a startup model probe cannot raise an event unseen. An
+ * Subscribed before any `keys.get()` call, so a startup model probe cannot raise an event unseen. An
  * embedder's constructor handler makes the store's listener set non-empty from construction, which
  * defeats the store's own no-listener buffer, so events raised before the runner exists are held here
  * and delivered when it attaches. Delivery is not awaited: handler errors are isolated onto the runner's
@@ -30,7 +30,7 @@ export class CredentialDisabledRelay {
 	readonly #unsubscribe: () => void;
 
 	constructor(authStorage: AuthStorage) {
-		this.#unsubscribe = authStorage.onCredentialDisabled(event => {
+		this.#unsubscribe = authStorage.credentials.onDisabled(event => {
 			if (this.#runner) {
 				deliverCredentialDisabled(
 					this.#runner,

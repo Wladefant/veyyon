@@ -56,13 +56,13 @@ describe("ModelRegistry runtime source cleanup", () => {
 		registry.registerProvider("runtime-provider", config, sourceId);
 
 		expect(registry.find("runtime-provider", "runtime-model")).toBeDefined();
-		expect(registry.authStorage.hasAuth("runtime-provider")).toBe(true);
+		expect(registry.authStorage.keys.has("runtime-provider")).toBe(true);
 		expect(getCustomApi("custom-runtime-cleanup-api")).toBeDefined();
 
 		registry.clearSourceRegistrations(sourceId);
 
 		expect(registry.find("runtime-provider", "runtime-model")).toBeUndefined();
-		expect(registry.authStorage.hasAuth("runtime-provider")).toBe(false);
+		expect(registry.authStorage.keys.has("runtime-provider")).toBe(false);
 		expect(getCustomApi("custom-runtime-cleanup-api")).toBeUndefined();
 	});
 });

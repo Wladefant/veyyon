@@ -2,7 +2,7 @@
  * OpenAI Codex Web Search Provider
  *
  * Uses Codex's built-in web_search tool via the Responses API.
- * Auth is resolved through `AuthStorage.getOAuthAccess("openai-codex")` so the
+ * Auth is resolved through `AuthStorage.oauth.access("openai-codex")` so the
  * broker is the sole refresh authority — this module never opens a sibling
  * SQLite store, never POSTs the broker sentinel to an OpenAI token endpoint.
  */
@@ -284,7 +284,7 @@ async function callCodexSearch(
  *   rejects.
  */
 export async function searchCodex(params: SearchParams): Promise<SearchResponse> {
-	const seed = await params.authStorage.getOAuthAccess("openai-codex", params.sessionId, {
+	const seed = await params.authStorage.oauth.access("openai-codex", params.sessionId, {
 		signal: params.signal,
 	});
 	if (!seed) {
@@ -352,7 +352,7 @@ export async function hasCodexSearch(authStorage: AuthStorage): Promise<boolean>
 	// `hasOAuth(...)` is a synchronous in-memory check that returns true as soon
 	// as a Codex OAuth credential is loaded, without driving the refresh
 	// pipeline. The actual refresh happens lazily in `searchCodex`.
-	return authStorage.hasOAuth("openai-codex");
+	return authStorage.credentials.hasOAuth("openai-codex");
 }
 
 /** Search provider for OpenAI Codex web search. */

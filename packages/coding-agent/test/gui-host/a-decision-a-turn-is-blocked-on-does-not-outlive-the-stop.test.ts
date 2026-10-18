@@ -214,7 +214,7 @@ describe("a decision a turn is blocked on does not outlive the stop", () => {
 		await fs.writeFile(path.join(tempDir, "config.yml"), config, "utf8");
 		resetSettingsForTest();
 		const authStorage = await isolatedAuthStorage(tempDir);
-		authStorage.upsertCredential("openai", { type: "api_key", key: "test-key" });
+		await authStorage.credentials.upsert("openai", { type: "api_key", key: "test-key" });
 		server = await startGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,

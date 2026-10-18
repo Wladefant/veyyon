@@ -364,16 +364,16 @@ describe("ModelRegistry", () => {
 			const registry = new ModelRegistry(authStorage, modelsJsonPath);
 			const model = registry.find("zhipu-coding-plan", "glm-5.2");
 			if (!model) throw new Error("expected bundled zhipu-coding-plan/glm-5.2 model");
-			await authStorage.set("zhipu-coding-plan", { type: "api_key", key: "zhipu-domestic-key" });
-			await authStorage.set("zai", { type: "api_key", key: "zai-international-key" });
+			await authStorage.credentials.set("zhipu-coding-plan", { type: "api_key", key: "zhipu-domestic-key" });
+			await authStorage.credentials.set("zai", { type: "api_key", key: "zai-international-key" });
 
 			const calls: Array<{
 				provider: string;
 				sessionId: string | undefined;
 				options: { baseUrl?: string; modelId?: string; forceRefresh?: boolean; signal?: AbortSignal } | undefined;
 			}> = [];
-			const originalGetApiKey = authStorage.getApiKey.bind(authStorage);
-			authStorage.getApiKey = async (
+			const originalGetApiKey = authStorage.keys.get.bind(authStorage.keys);
+			authStorage.keys.get = async (
 				provider: string,
 				sessionId?: string,
 				options?: { baseUrl?: string; modelId?: string; forceRefresh?: boolean; signal?: AbortSignal },
@@ -1445,7 +1445,7 @@ describe("ModelRegistry", () => {
 		});
 
 		test("refreshProvider uses enterprise Copilot discovery host for peeked credentials", async () => {
-			await authStorage.set("github-copilot", [
+			await authStorage.credentials.set("github-copilot", [
 				{
 					type: "oauth",
 					access: "ghu_enterprise_token_456",
@@ -1497,7 +1497,7 @@ describe("ModelRegistry", () => {
 					discovery: { type: "ollama" },
 				},
 			});
-			await authStorage.set("github-copilot", [
+			await authStorage.credentials.set("github-copilot", [
 				{
 					type: "oauth",
 					access: "ghu_test_token_for_disabled",
@@ -1682,8 +1682,8 @@ describe("ModelRegistry", () => {
 		];
 		beforeAll(async () => {
 			oauthAuth = await AuthStorage.create(":memory:");
-			oauthAuth.setRuntimeApiKey("proxy-anthropic", "literal-key");
-			oauthAuth.setRuntimeApiKey("proxy-openai", "literal-key");
+			oauthAuth.keys.setRuntime("proxy-anthropic", "literal-key");
+			oauthAuth.keys.setRuntime("proxy-openai", "literal-key");
 			const build = async (config: Record<string, unknown>) => {
 				const registry = new ModelRegistry(oauthAuth, sharedConfigPath(config));
 				await registry.refresh("offline");
@@ -2085,7 +2085,7 @@ describe("ModelRegistry", () => {
 		});
 
 		test("does not re-add bundled synthetic models after authoritative refresh", async () => {
-			authStorage.setRuntimeApiKey("synthetic", "synthetic-test-key");
+			authStorage.keys.setRuntime("synthetic", "synthetic-test-key");
 			const fetchMock = mockOpenAiCompatibleModels("https://api.synthetic.new/openai/v1/models", [
 				"hf:zai-org/GLM-5.1",
 			]);
@@ -2099,7 +2099,7 @@ describe("ModelRegistry", () => {
 		});
 
 		test("does not re-add bundled Zhipu Coding Plan models after account discovery", async () => {
-			authStorage.setRuntimeApiKey("zhipu-coding-plan", "zhipu-test-key");
+			authStorage.keys.setRuntime("zhipu-coding-plan", "zhipu-test-key");
 			const fetchMock = mockOpenAiCompatibleModels("https://open.bigmodel.cn/api/coding/paas/v4/models", [
 				"glm-5.1",
 			]);

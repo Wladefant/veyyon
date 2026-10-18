@@ -88,7 +88,7 @@ describe("a provider-reported context window", () => {
 			streamFn: requestedModel => replyReportingWindow(requestedModel, window),
 		});
 		authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const registry = new ModelRegistry(authStorage, tempDir.join(`models-${Snowflake.next()}.yml`));
 		const created = new AgentSession({
 			agent,

@@ -35,7 +35,7 @@ describe("a service tier survives a reload and carries into a new session", () =
 	beforeAll(async () => {
 		sharedDir = TempDir.createSync("@service-tier-reload-shared-");
 		authStorage = await AuthStorage.create(path.join(sharedDir.path(), "auth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!bundled) throw new Error("Expected a bundled anthropic model");

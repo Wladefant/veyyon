@@ -193,7 +193,7 @@ describe("a turn the desktop leaves behind is ended and stated", () => {
 		await fs.mkdir(sessionDir, { recursive: true });
 		await fs.writeFile(path.join(tempDir, "config.yml"), "modelRoles:\n  default: openai/gpt-4o-mini\n", "utf8");
 		const authStorage = await isolatedAuthStorage(tempDir);
-		authStorage.upsertCredential("openai", { type: "api_key", key: "test-key" });
+		await authStorage.credentials.upsert("openai", { type: "api_key", key: "test-key" });
 		vi.spyOn(ai, "streamSimple").mockImplementation((_model, context, options) =>
 			isTheTurnUnderTest(context) ? abortableStream(options?.signal) : completedStream("Answered."),
 		);

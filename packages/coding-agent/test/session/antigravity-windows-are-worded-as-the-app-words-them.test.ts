@@ -48,7 +48,7 @@ describe("two Antigravity logins that share one project", () => {
 	test("each row keeps only the limits reported for its own email", async () => {
 		store = new SqliteAuthCredentialStore(new Database(":memory:"));
 		const storage = new AuthStorage(store);
-		await storage.reload();
+		await storage.credentials.reload();
 		const credential = (n: string) => ({
 			type: "oauth" as const,
 			access: `access-${n}`,
@@ -57,7 +57,7 @@ describe("two Antigravity logins that share one project", () => {
 			email: `${n}@example.com`,
 			projectId: "aicode-consumers",
 		});
-		await storage.set("google-antigravity", [credential("first"), credential("second")]);
+		await storage.credentials.set("google-antigravity", [credential("first"), credential("second")]);
 		const report = (n: string, used: number): UsageReport => ({
 			provider: "google-antigravity",
 			fetchedAt: 1,

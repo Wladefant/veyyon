@@ -26,8 +26,8 @@ describe("session descriptor placement across model switches", () => {
 	beforeAll(async () => {
 		dir = TempDir.createSync("@descriptor-model-switch-");
 		authStorage = await AuthStorage.create(path.join(dir.path(), "auth.db"));
-		authStorage.setRuntimeApiKey("google-antigravity", "test-google-key");
-		authStorage.setRuntimeApiKey("openai-codex", "test-openai-key");
+		authStorage.keys.setRuntime("google-antigravity", "test-google-key");
+		authStorage.keys.setRuntime("openai-codex", "test-openai-key");
 		modelRegistry = new ModelRegistry(authStorage, path.join(dir.path(), "models.yml"));
 	});
 

@@ -18,7 +18,7 @@ describe("model switch from vision to text-only", () => {
 		const dir = TempDir.createSync("@nonvision-history-");
 		const auth = await AuthStorage.create(path.join(dir.path(), "auth.db"));
 		try {
-			auth.setRuntimeApiKey("mock", "test-key");
+			auth.keys.setRuntimeApiKey("mock", "test-key");
 			const vision = createMockModel({ id: "vision", handler: () => ({ content: ["first"] }) });
 			vision.input.push("image");
 			const text = createMockModel({ id: "text", handler: () => ({ content: ["second"] }) });

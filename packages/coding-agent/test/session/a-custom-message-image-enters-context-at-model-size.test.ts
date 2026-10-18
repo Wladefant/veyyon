@@ -50,7 +50,7 @@ describe("a custom message image enters context at model size", () => {
 	beforeAll(async () => {
 		dir = TempDir.createSync("@custom-message-image-");
 		authStorage = await AuthStorage.create(path.join(dir.path(), "auth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 	});
 

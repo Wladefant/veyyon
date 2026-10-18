@@ -98,7 +98,7 @@ describe("compaction model chain", () => {
 			secondChoice.provider,
 			unnamedProvider,
 		])) {
-			authStorage.setRuntimeApiKey(provider, `${provider}-token`);
+			authStorage.keys.setRuntime(provider, `${provider}-token`);
 		}
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 		vi.spyOn(modelRegistry, "getApiKey").mockImplementation(async model =>

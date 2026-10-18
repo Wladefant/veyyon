@@ -115,7 +115,7 @@ describe("the active tool set and its prompt follow every change", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("veyyon-tool-activation-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
-		authStorage.setRuntimeApiKey("mock", "test-key");
+		authStorage.keys.setRuntimeApiKey("mock", "test-key");
 	});
 
 	afterEach(async () => {
@@ -245,7 +245,7 @@ describe("the active tool set and its prompt follow every change", () => {
 			const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models-switch.yml"));
 			const target = registry.getAll().find(model => model.provider !== "mock");
 			if (!target) throw new Error("expected a bundled model");
-			authStorage.setRuntimeApiKey(target.provider, "key-b");
+			authStorage.keys.setRuntimeApiKey(target.provider, "key-b");
 			const { session, rebuilds } = build({
 				registry: [basicTool("read"), basicTool("lookup")],
 				active: ["read"],

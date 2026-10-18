@@ -165,8 +165,8 @@ describe("AgentSession retry recovery", () => {
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "balanced-auth.db"), { loadBalancing: true });
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 
-		authStorage.removeRuntimeApiKey("anthropic");
-		await authStorage.set("anthropic", [
+		authStorage.keys.removeRuntime("anthropic");
+		await authStorage.credentials.set("anthropic", [
 			{ type: "api_key", key: "anthropic-key-1" },
 			{ type: "api_key", key: "anthropic-key-2" },
 		]);
@@ -291,7 +291,7 @@ describe("AgentSession retry recovery", () => {
 		if (!model) {
 			throw new Error("Expected bundled Anthropic test model to exist");
 		}
-		authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
+		authStorage.keys.setRuntime("anthropic", "anthropic-test-key");
 
 		const mock = createMockModel({
 			responses: [{ throw: RETRIABLE_SERVER_ERROR }, { throw: RETRIABLE_SERVER_ERROR }],

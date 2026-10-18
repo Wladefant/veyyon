@@ -28,7 +28,7 @@ describe("advisor watchdog prompt discovery", () => {
 		const authStorage = await AuthStorage.create(tempDir.join("testauth.db"));
 		let session: AgentSession | undefined;
 		try {
-			authStorage.setRuntimeApiKey("openai", "test-key");
+			authStorage.keys.setRuntime("openai", "test-key");
 			const modelRegistry = new ModelRegistry(authStorage);
 			const sessionManager = SessionManager.create(cwd, tempDir.join("sessions"));
 			const result = await createAgentSession({
@@ -89,7 +89,7 @@ describe("advisor watchdog prompt discovery", () => {
 		const authStorage = await AuthStorage.create(tempDir.join("testauth.db"));
 		let session: AgentSession | undefined;
 		try {
-			authStorage.setRuntimeApiKey("openai", "test-key");
+			authStorage.keys.setRuntime("openai", "test-key");
 			const modelRegistry = new ModelRegistry(authStorage);
 			const sessionManager = SessionManager.create(cwd, tempDir.join("sessions"));
 			const result = await createAgentSession({
@@ -182,7 +182,7 @@ describe("advisor watchdog prompt discovery", () => {
 		const authStorage = await AuthStorage.create(tempDir.join("testauth.db"));
 		let session: AgentSession | undefined;
 		try {
-			authStorage.setRuntimeApiKey("openai", "test-key");
+			authStorage.keys.setRuntime("openai", "test-key");
 			const modelRegistry = new ModelRegistry(authStorage);
 			const sessionManager = SessionManager.create(childCwd, tempDir.join("sessions"));
 			const result = await createAgentSession({
@@ -255,7 +255,7 @@ describe("advisor watchdog prompt discovery", () => {
 		const authStorage = await AuthStorage.create(tempDir.join("testauth.db"));
 		let session: AgentSession | undefined;
 		try {
-			authStorage.setRuntimeApiKey("openai", "test-key");
+			authStorage.keys.setRuntime("openai", "test-key");
 			const modelRegistry = new ModelRegistry(authStorage);
 			const sessionManager = SessionManager.create(cwd, tempDir.join("sessions"));
 			const result = await createAgentSession({

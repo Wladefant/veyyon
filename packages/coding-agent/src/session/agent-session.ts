@@ -3004,7 +3004,7 @@ export class AgentSession {
 			msg.provider === "github-copilot" &&
 			AIError.is(AIError.classifyMessage(msg), AIError.Flag.AuthFailed)
 		) {
-			await this.#config.modelRegistry.authStorage.remove("github-copilot");
+			await this.#config.modelRegistry.authStorage.credentials.remove("github-copilot");
 		}
 	}
 
@@ -5102,24 +5102,25 @@ export class AgentSession {
 			if (!apiKey) {
 				const provider = this.model.provider;
 				// Distinguish "never signed in" from "signed in, but no usable token
-				// right now". `hasAuth` reports whether a credential is configured
-				// WITHOUT refreshing; `getApiKey` refreshes and just returned nothing.
-				// So when `hasAuth` is true the credential IS stored and the token
+				// right now". `keys.source` and `keys.keyless` inspect configured auth
+				// without refreshing; `ModelRegistry.getApiKey` just failed to resolve it.
+				// So when `signedIn` is true, auth is configured but the token
 				// could not be produced — an expired OAuth token whose refresh failed,
 				// or the provider rejecting the refresh (e.g. a 403/402 for a lapsed
 				// subscription). Reporting "No API key found" there reads as lost
 				// credentials and pushes the user into a re-login loop; name the real
 				// cause instead so a provider-side account problem is not mistaken for
 				// veyyon losing the login.
-				const signedIn = this.#config.modelRegistry.authStorage.hasAuth(provider);
-				// A credential a failed refresh disabled is invisible to `hasAuth`,
-				// because disabled rows are filtered out of the credential list. So
-				// the user whose login was torn down looks identical to the one who
-				// never signed in, and gets told to sign in with nothing saying what
-				// happened to the login they had. Name the cause instead.
+				const signedIn =
+					this.#config.modelRegistry.authStorage.keys.source(provider, { env: "aliases" }) !== undefined ||
+					this.#config.modelRegistry.authStorage.keys.keyless(provider);
+				// A credential disabled after a failed refresh is absent from the
+				// active source and ordinary credential list. So the user whose login
+				// was torn down looks identical to the one who never signed in, and gets
+				// no explanation. `listReportableDisabled` supplies the cause.
 				const disabledCause = signedIn
 					? undefined
-					: this.#config.modelRegistry.authStorage.disabledCredentialCause(provider);
+					: (await this.#config.modelRegistry.authStorage.credentials.listReportableDisabled(provider))[0]?.cause;
 				throw new Error(
 					signedIn
 						? `Signed in to ${provider}, but could not get a usable token right now.\n\n` +

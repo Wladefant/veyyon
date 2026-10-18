@@ -88,7 +88,7 @@ async function create(extra: Partial<CreateAgentSessionOptions>): Promise<AgentS
 beforeAll(async () => {
 	sharedDir = fs.mkdtempSync(path.join(os.tmpdir(), "spawn-launch-facts-"));
 	authStorage = await AuthStorage.create(path.join(sharedDir, "auth.db"));
-	authStorage.setRuntimeApiKey(PROVIDER, "anthropic-test-key");
+	authStorage.keys.setRuntime(PROVIDER, "anthropic-test-key");
 	modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir, "models.yml"));
 });
 

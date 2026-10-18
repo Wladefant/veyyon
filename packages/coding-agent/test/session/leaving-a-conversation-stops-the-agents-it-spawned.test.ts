@@ -68,7 +68,7 @@ describe("leaving a conversation", () => {
 		calls = [];
 		tempDir = TempDir.createSync("veyyon-leaving-a-conversation-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected built-in anthropic model to exist");
 		session = new AgentSession({

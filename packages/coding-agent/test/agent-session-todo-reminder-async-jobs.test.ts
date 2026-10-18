@@ -111,7 +111,7 @@ describe("AgentSession todo reminder async-job deferral", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-todo-reminder-async-jobs-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 		manager = new AsyncJobManager({ onJobComplete: async () => {} });

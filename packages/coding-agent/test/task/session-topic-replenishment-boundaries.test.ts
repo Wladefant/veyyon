@@ -69,7 +69,7 @@ async function runChild(root: string): Promise<void> {
 			fs.writeFileSync(ledgerPath, JSON.stringify({ version: 2, requests: {} }), "utf8");
 			const authStorage = await AuthStorage.create(path.join(agentDir, "auth.db"));
 			authStores.push(authStorage);
-			authStorage.setRuntimeApiKey("openai", "test-key");
+			authStorage.keys.setRuntimeApiKey("openai", "test-key");
 			const modelRegistry = new ModelRegistry(authStorage);
 			const sessionManager = SessionManager.create(process.cwd(), path.join(agentDir, "sessions"));
 			sessionManagers.push(sessionManager);
@@ -144,7 +144,7 @@ async function runChild(root: string): Promise<void> {
 		fs.mkdirSync(deniedAgentDir, { recursive: true });
 		const deniedAuth = await AuthStorage.create(path.join(deniedAgentDir, "auth.db"));
 		authStores.push(deniedAuth);
-		deniedAuth.setRuntimeApiKey("openai", "test-key");
+		deniedAuth.keys.setRuntimeApiKey("openai", "test-key");
 		const deniedRegistry = new ModelRegistry(deniedAuth);
 		const deniedManager = SessionManager.create(process.cwd(), path.join(deniedAgentDir, "sessions"));
 		sessionManagers.push(deniedManager);

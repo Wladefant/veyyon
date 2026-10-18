@@ -56,7 +56,7 @@ describe("a failed compaction must not strand tail elisions on the branch", () =
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-tailrev-compaction-failure-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("openai", "test-key");
+		authStorage.keys.setRuntimeApiKey("openai", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 

@@ -59,7 +59,7 @@ async function readTwice(
 	for (const dir of [agentDir, cwd]) fs.mkdirSync(dir, { recursive: true });
 	fs.writeFileSync(path.join(cwd, "notes.txt"), "note 1\nnote 2\nnote 3\n");
 	const authStorage = await AuthStorage.create(path.join(agentDir, "auth.db"));
-	authStorage.setRuntimeApiKey("mock", "mock-key");
+	authStorage.keys.setRuntime("mock", "mock-key");
 	registerMockApi(MOCK_API_SOURCE);
 	const readNotes = { content: [{ type: "toolCall" as const, name: "read", arguments: { path: "notes.txt" } }] };
 	const model = createMockModel({ responses: [readNotes, readNotes], handler: { content: ["done"] } });

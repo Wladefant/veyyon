@@ -30,7 +30,7 @@ describe("AgentSession prewalk", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-prewalk-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 	});
 
 	afterEach(async () => {

@@ -1,5 +1,5 @@
 import type { UsageLimit, UsageReport } from "@veyyon/ai";
-import type { OAuthAccountIdentity } from "@veyyon/ai/auth-storage";
+import type { OAuthAccountIdentity } from "@veyyon/ai/auth/types";
 import { resolveDisplayFraction } from "@veyyon/ai/usage";
 import { formatCount, sanitizeText } from "@veyyon/utils";
 import { formatDurationCoarse, formatProviderName } from "../../session/account-format";
@@ -158,7 +158,7 @@ export async function buildUsageReportText(runtime: SlashCommandRuntime): Promis
 		if (reports && reports.length > 0) {
 			const currentProvider = runtime.session.model?.provider;
 			const activeAccount = currentProvider
-				? runtime.session.modelRegistry.authStorage.getOAuthAccountIdentity(
+				? runtime.session.modelRegistry.authStorage.oauth.identity(
 						currentProvider,
 						runtime.session.sessionId,
 					)

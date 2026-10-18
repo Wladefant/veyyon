@@ -49,7 +49,7 @@ export async function findApiKey(
 	sessionId: string | undefined,
 	signal: AbortSignal | undefined,
 ): Promise<string | null> {
-	return (await authStorage.getApiKey("tavily", sessionId, { signal })) ?? null;
+	return (await authStorage.keys.get("tavily", sessionId, { signal })) ?? null;
 }
 
 /** Exported for testing. Builds the Tavily request body from unified params. */
@@ -132,7 +132,7 @@ export async function searchTavily(params: SearchParams): Promise<SearchResponse
 		fetch: params.fetch,
 		resolveProviderTextTransform: params.resolveProviderTextTransform,
 	};
-	const keyOrResolver: ApiKey = params.authStorage.resolver("tavily", {
+	const keyOrResolver: ApiKey = params.authStorage.keys.resolver("tavily", {
 		sessionId: params.sessionId,
 	});
 

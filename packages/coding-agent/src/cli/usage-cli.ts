@@ -623,7 +623,7 @@ const SPARK_LEVELS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"] as
 
 interface HistorySeries {
 	title: string;
-	/** Snapshots ascending by recordedAt (listUsageHistory order). */
+	/** Snapshots ascending by recordedAt (`usage.history` order). */
 	entries: UsageHistoryEntry[];
 }
 
@@ -761,7 +761,7 @@ export function formatUsageHistory(
 
 function collectStoredAccounts(authStorage: AuthStorage): UsageAccountIdentity[] {
 	const accounts: UsageAccountIdentity[] = [];
-	const all = authStorage.getAll();
+	const all = authStorage.credentials.all();
 	for (const provider in all) {
 		const entry = all[provider];
 		const credentials = Array.isArray(entry) ? entry : [entry];
@@ -792,7 +792,7 @@ function collectStoredAccounts(authStorage: AuthStorage): UsageAccountIdentity[]
  * keyless servers, inference providers without a usage API) would only ever
  * render as noise, so they are dropped.
  *
- * `hasUsageProvider` is injected (in practice {@link AuthStorage.usageProviderFor})
+ * `hasUsageProvider` is injected (in practice {@link AuthStorage.usage.providerFor})
  * so custom/broker resolvers stay authoritative — no provider list is duplicated
  * here. An explicit `--provider` request bypasses the cull, so
  * `veyyon usage --provider xai` can still confirm the stored credential has no
@@ -844,8 +844,7 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 	try {
 		if (cmd.action === "invalidate") {
 			const provider = cmd.provider?.toLowerCase();
-			const modelRegistry = new ModelRegistry(authStorage);
-			await authStorage.invalidateUsageCache(provider, undefined, p => modelRegistry.getProviderBaseUrl(p));
+			await authStorage.usage.invalidate(provider);
 			if (provider) {
 				process.stdout.write(`Invalidated cached usage reports for provider "${provider}".\n`);
 			} else {
@@ -857,7 +856,7 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 			const days = cmd.days !== undefined && Number.isFinite(cmd.days) && cmd.days > 0 ? cmd.days : 7;
 			const nowMs = Date.now();
 			const sinceMs = nowMs - days * DAY_MS;
-			const entries = authStorage.listUsageHistory({ sinceMs, provider: cmd.provider?.toLowerCase() });
+			const entries = authStorage.usage.history({ sinceMs, provider: cmd.provider?.toLowerCase() });
 			const redaction = cmd.redact ? buildRedactionMap(collectHistoryIdentityStrings(entries)) : undefined;
 			if (cmd.json) {
 				const masked = redaction
@@ -886,13 +885,13 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 		}
 		const modelRegistry = new ModelRegistry(authStorage);
 		const reports =
-			(await authStorage.fetchUsageReports({
+			(await authStorage.usage.reports({
 				baseUrlResolver: provider => modelRegistry.getProviderBaseUrl(provider),
 			})) ?? [];
 		const storedAccounts = collectStoredAccounts(authStorage);
 		let accounts = selectReportableAccounts(
 			storedAccounts,
-			provider => authStorage.usageProviderFor(provider) !== undefined,
+			provider => authStorage.usage.providerFor(provider) !== undefined,
 			cmd.provider,
 		);
 		let filteredReports = reports;

@@ -1492,7 +1492,7 @@ export class MCPManager {
 			let outcome: MCPAuthResolution;
 			try {
 				const REFRESH_BUFFER_MS = 5 * 60_000;
-				const refreshResult = await this.#authStorage.refreshStoredOAuthCredential<MCPStoredOAuthCredential>(
+				const refreshResult = await this.#authStorage.oauth.refreshStored<MCPStoredOAuthCredential>(
 					credentialId,
 					{
 						observedCredential: observed,

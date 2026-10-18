@@ -79,7 +79,7 @@ describe("AgentSession display expansion", () => {
 			streamFn: mock.stream,
 		});
 		authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const argot = new ArgotSession();
 		argot.loadVocab(parseDict(DICT, `/repo/${DICT_FILENAME}`));
 		const created = new AgentSession({

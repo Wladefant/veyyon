@@ -47,7 +47,7 @@ describe("a turn that ends with text after a tool call settles as text", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@veyyon-settle-message-order-");
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected the bundled anthropic model to exist");
 

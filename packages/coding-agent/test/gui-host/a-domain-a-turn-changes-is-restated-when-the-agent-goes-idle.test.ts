@@ -224,7 +224,7 @@ describe("a domain a turn changes is re-stated when the agent goes idle", () => 
 		await git(workDir, "commit", "-m", "initial commit");
 
 		const authStorage = await isolatedAuthStorage(agentDir);
-		authStorage.upsertCredential("openai", { type: "api_key", key: "test-key" });
+		await authStorage.credentials.upsert("openai", { type: "api_key", key: "test-key" });
 		turnRequests = 0;
 		vi.spyOn(ai, "streamSimple").mockImplementation((_model, context) => {
 			if (isTitleRequest(context)) return endedStream("<title>A title</title>");

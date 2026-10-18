@@ -201,7 +201,7 @@ async function resumeHeld(stamp: (nonMessageTokens: number) => number | null): P
 beforeAll(async () => {
 	sharedDir = fs.mkdtempSync(path.join(os.tmpdir(), "held-at-rest-"));
 	authStorage = await AuthStorage.create(path.join(sharedDir, "auth.db"));
-	authStorage.setRuntimeApiKey(PROVIDER, "anthropic-test-key");
+	authStorage.keys.setRuntime(PROVIDER, "anthropic-test-key");
 	modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir, "models.yml"));
 	const theme = await getThemeByName("dark");
 	if (!theme) throw new Error("theme unavailable");

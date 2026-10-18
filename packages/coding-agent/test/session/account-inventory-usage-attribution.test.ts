@@ -39,7 +39,7 @@ describe("applyUsageReports attributes limits per account", () => {
 	beforeEach(async () => {
 		store = new SqliteAuthCredentialStore(new Database(":memory:"));
 		authStorage = new AuthStorage(store);
-		await authStorage.reload();
+		await authStorage.credentials.reload();
 	});
 
 	afterEach(() => {
@@ -56,7 +56,7 @@ describe("applyUsageReports attributes limits per account", () => {
 	test("one report carrying limits for two accounts attaches each limit to its own row", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
-		await storage.set(MULTI_ACCOUNT_PROVIDER, [
+		await storage.credentials.set(MULTI_ACCOUNT_PROVIDER, [
 			{
 				type: "oauth",
 				access: "access-one",
@@ -106,7 +106,7 @@ describe("applyUsageReports attributes limits per account", () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
 		const sharedEmail = "shared@example.com";
-		await storage.set(ANTHROPIC, [
+		await storage.credentials.set(ANTHROPIC, [
 			{
 				type: "oauth",
 				access: "access-team",
@@ -167,7 +167,7 @@ describe("applyUsageReports attributes limits per account", () => {
 	test("the sole credential of a provider absorbs its report even with no identity", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
-		await storage.set(MULTI_ACCOUNT_PROVIDER, [{ type: "api_key", key: "raw-key" }]);
+		await storage.credentials.set(MULTI_ACCOUNT_PROVIDER, [{ type: "api_key", key: "raw-key" }]);
 		const report: UsageReport = {
 			provider: MULTI_ACCOUNT_PROVIDER,
 			fetchedAt: RESETS_AT - HOUR_MS,
@@ -188,7 +188,7 @@ describe("applyUsageReports attributes limits per account", () => {
 	test("an identity-less row absorbs nothing while a sibling exists", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
-		await storage.set(MULTI_ACCOUNT_PROVIDER, [
+		await storage.credentials.set(MULTI_ACCOUNT_PROVIDER, [
 			{ type: "api_key", key: "raw-key" },
 			{
 				type: "oauth",
@@ -218,7 +218,7 @@ describe("applyUsageReports attributes limits per account", () => {
 	test("a report for a different provider is ignored", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
-		await storage.set(MULTI_ACCOUNT_PROVIDER, [
+		await storage.credentials.set(MULTI_ACCOUNT_PROVIDER, [
 			{
 				type: "oauth",
 				access: "access-one",
@@ -243,7 +243,7 @@ describe("applyUsageReports attributes limits per account", () => {
 	test("two accounts sharing projectId 'aicode-consumers' with different emails get only their own limits", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
-		await storage.set("google-antigravity", [
+		await storage.credentials.set("google-antigravity", [
 			{
 				type: "oauth",
 				access: "access-alice",

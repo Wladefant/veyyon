@@ -113,7 +113,7 @@ describe("an oversized tool result is capped before it is persisted or sent", ()
 		await Settings.init({ inMemory: true, cwd: tempDir });
 
 		authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntimeApiKey("anthropic", "test-key");
 
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("expected claude-sonnet-4-5 to be bundled");

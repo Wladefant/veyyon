@@ -78,7 +78,7 @@ describe("an Anthropic usage report names the account that fetched it", () => {
 	beforeEach(async () => {
 		store = new SqliteAuthCredentialStore(new Database(":memory:"));
 		authStorage = new AuthStorage(store);
-		await authStorage.reload();
+		await authStorage.credentials.reload();
 	});
 
 	afterEach(() => {
@@ -97,7 +97,7 @@ describe("an Anthropic usage report names the account that fetched it", () => {
 	test("two stored accounts each receive their own windows from their own reports", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
-		await storage.set("anthropic", [
+		await storage.credentials.set("anthropic", [
 			{
 				type: "oauth",
 				access: "access-first",

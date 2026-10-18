@@ -144,7 +144,7 @@ describe("a session the desktop prompts is named from that prompt", () => {
 		sessionDir = computeDefaultSessionDir(tempDir, new FileSessionStorage(), path.join(tempDir, "sessions"));
 		await fs.writeFile(path.join(tempDir, "config.yml"), "modelRoles:\n  default: openai/gpt-4o-mini\n", "utf8");
 		const authStorage = await isolatedAuthStorage(tempDir);
-		authStorage.upsertCredential("openai", { type: "api_key", key: "test-key" });
+		await authStorage.credentials.upsert("openai", { type: "api_key", key: "test-key" });
 		titleRequests = [];
 		holdTitle = undefined;
 		const requested = Promise.withResolvers<string>();

@@ -71,7 +71,7 @@ describe("the load balancing gate reads the operator's setting", () => {
 	afterEach(async () => {
 		vi.restoreAllMocks();
 		if (storage) {
-			await storage.remove(PROVIDER);
+			await storage.credentials.remove(PROVIDER);
 			storage.close();
 			storage = null;
 		}
@@ -84,7 +84,7 @@ describe("the load balancing gate reads the operator's setting", () => {
 		const opened = await discoverAuthStorage();
 		storage = opened;
 		const now = Date.now();
-		await opened.set(PROVIDER, [
+		await opened.credentials.set(PROVIDER, [
 			{
 				type: "oauth",
 				access: "access-target",
@@ -102,14 +102,14 @@ describe("the load balancing gate reads the operator's setting", () => {
 				email: "sibling@example.com",
 			},
 		]);
-		const rows = opened.listStoredCredentials(PROVIDER);
+		const rows = opened.credentials.list(PROVIDER);
 		expect(rows.length).toBe(2);
 		return { targetId: rows[0]!.id, siblingId: rows[1]!.id };
 	}
 
 	function exhaust(target: number): Promise<{ switched: boolean; retryAtMs?: number }> {
 		if (!storage) throw new Error("test setup failed");
-		return storage.markUsageLimitReached(PROVIDER, SESSION_ID, {
+		return storage.limits.markReached(PROVIDER, SESSION_ID, {
 			credentialId: target,
 			retryAfterMs: 30_000,
 		});
@@ -188,12 +188,12 @@ describe("the load balancing gate reads the operator's setting", () => {
 		if (!storage) throw new Error("test setup failed");
 		settingsOrThrow().set("accounts.loadBalancing", false);
 
-		const moved = await storage.rotateSessionCredential(PROVIDER, SESSION_ID, {
+		const rotation = await storage.limits.rotate(PROVIDER, SESSION_ID, {
 			credentialId: targetId,
 			error: Object.assign(new Error("invalid_grant: token revoked"), { status: 401 }),
 		});
 
-		expect(moved).toBe(true);
-		expect(await storage.getApiKey(PROVIDER, SESSION_ID)).toBe("access-sibling");
+		expect(rotation.switched).toBe(true);
+		expect(await storage.keys.get(PROVIDER, SESSION_ID)).toBe("access-sibling");
 	});
 });

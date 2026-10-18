@@ -89,7 +89,7 @@ describe("the model list the gui host sends", () => {
 	}
 
 	test("every provider it offers holds a credential or needs none", async () => {
-		await authStorage.set(PROVIDER, { type: "api_key", key: SECRET });
+		await authStorage.credentials.set(PROVIDER, { type: "api_key", key: SECRET });
 		const client = await start();
 		try {
 			// The truth is asked of the credential store and the registry's own
@@ -100,7 +100,7 @@ describe("the model list the gui host sends", () => {
 
 			expect(offered).toContain(PROVIDER);
 			const unrunnable = offered.filter(
-				provider => !authStorage.hasAuth(provider) && !registry.isKeylessProvider(provider),
+				provider => authStorage.keys.source(provider) === undefined && !registry.isKeylessProvider(provider),
 			);
 			expect(unrunnable).toEqual([]);
 		} finally {
@@ -178,7 +178,7 @@ describe("the model list the gui host sends", () => {
 		const client = await start();
 		try {
 			const view = modelsFrom((await client.request(1, "RefreshModels")).frames);
-			expect(authStorage.hasAuth("keyless")).toBeFalse();
+			expect(authStorage.keys.source("keyless") !== undefined).toBeFalse();
 			expect(view.models.find(model => model.provider === "keyless")).toMatchObject({
 				provider: "keyless",
 				id: "local-model",

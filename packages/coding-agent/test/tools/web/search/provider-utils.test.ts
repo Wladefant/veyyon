@@ -149,13 +149,13 @@ describe("resolveProviderKey", () => {
 		const store = new SqliteAuthCredentialStore(db);
 		const authStorage = new AuthStorage(store);
 		try {
-			await authStorage.set("brave", [
+			await authStorage.credentials.set("brave", [
 				{ type: "api_key", key: "key-default" },
 				{ type: "api_key", key: "key-session-a" },
 			]);
-			const credentials = authStorage.listStoredCredentials("brave");
+			const credentials = authStorage.credentials.list("brave");
 			expect(credentials).toHaveLength(2);
-			authStorage.pinSessionCredential("brave", "sess-a", credentials[1]!.id);
+			authStorage.sessions.pin("brave", "sess-a", credentials[1]!.id);
 
 			const resolveContext = { lastChance: false, error: undefined };
 			const resolverDefault = resolveProviderKey(authStorage, "brave");
@@ -215,7 +215,7 @@ describe("real search provider availability contracts", () => {
 			expect(provider.isExplicitlyAvailable(authStorage)).toBe(false);
 
 			// 2. Stored credential in AuthStorage
-			await authStorage.set("brave", { type: "api_key", key: "stored-brave-key" });
+			await authStorage.credentials.set("brave", { type: "api_key", key: "stored-brave-key" });
 			expect(provider.isAvailable(authStorage)).toBe(true);
 			expect(provider.isExplicitlyAvailable(authStorage)).toBe(true);
 

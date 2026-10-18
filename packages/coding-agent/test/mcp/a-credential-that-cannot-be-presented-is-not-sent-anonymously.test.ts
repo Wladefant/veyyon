@@ -117,20 +117,20 @@ describe("a credential that cannot be presented is not sent anonymously", () => 
 
 	beforeEach(async () => {
 		authStorage = new AuthStorage(new SqliteAuthCredentialStore(new Database(":memory:")));
-		await authStorage.reload();
+		await authStorage.credentials.reload();
 		servers = [];
 		managers = [];
 		// The failure paths log deliberately; the assertions read the thrown error, not the log.
 		vi.spyOn(logger, "warn").mockImplementation(() => {});
 
 		// Bystanders in the same store. A refusal must not touch them.
-		await authStorage.set(PROVIDER_OAUTH_ID, {
+		await authStorage.credentials.set(PROVIDER_OAUTH_ID, {
 			type: "oauth",
 			access: "provider-access",
 			refresh: "provider-refresh",
 			expires: Date.now() + 3_600_000,
 		});
-		await authStorage.set(PROVIDER_API_KEY_ID, { type: "api_key", key: "provider-api-key" });
+		await authStorage.credentials.set(PROVIDER_API_KEY_ID, { type: "api_key", key: "provider-api-key" });
 	});
 
 	afterEach(async () => {
@@ -155,7 +155,7 @@ describe("a credential that cannot be presented is not sent anonymously", () => 
 
 	/** Store the MCP credential this suite's server config points at. */
 	async function storeCredential(options: { expires: number; refresh: string }): Promise<void> {
-		await authStorage.set(MCP_CREDENTIAL_ID, {
+		await authStorage.credentials.set(MCP_CREDENTIAL_ID, {
 			type: "oauth",
 			access: ACCESS_TOKEN,
 			refresh: options.refresh,
@@ -173,8 +173,8 @@ describe("a credential that cannot be presented is not sent anonymously", () => 
 
 	function bystanders(): Record<string, unknown> {
 		return {
-			apiKey: authStorage.get(PROVIDER_API_KEY_ID),
-			oauth: authStorage.get(PROVIDER_OAUTH_ID),
+			apiKey: authStorage.credentials.get(PROVIDER_API_KEY_ID),
+			oauth: authStorage.credentials.get(PROVIDER_OAUTH_ID),
 		};
 	}
 
@@ -235,7 +235,7 @@ describe("a credential that cannot be presented is not sent anonymously", () => 
 		expect(error).toContain("/mcp reconnect <name>");
 		expect(server.seen).toEqual([]);
 		// Nothing was deleted: the store failed, the credential did not.
-		expect(authStorage.get(MCP_CREDENTIAL_ID)).toBeDefined();
+		expect(authStorage.credentials.get(MCP_CREDENTIAL_ID)).toBeDefined();
 		expect(bystanders()).toEqual(before);
 	});
 
@@ -273,7 +273,7 @@ describe("a credential that cannot be presented is not sent anonymously", () => 
 		// No token endpoint was called either: there is no refresh token to send.
 		expect(refreshSpy).not.toHaveBeenCalled();
 		// The row stays, because the broker can still authorize it again.
-		expect(authStorage.get(MCP_CREDENTIAL_ID)).toBeDefined();
+		expect(authStorage.credentials.get(MCP_CREDENTIAL_ID)).toBeDefined();
 	});
 
 	it("still connects when a broker-held refresh fails but the access token is live", async () => {

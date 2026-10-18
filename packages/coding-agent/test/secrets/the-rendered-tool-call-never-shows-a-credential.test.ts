@@ -107,7 +107,7 @@ async function drive(note: string): Promise<Drive> {
 	});
 
 	const authStorage = await AuthStorage.create(path.join(agentDir, "auth.db"));
-	authStorage.setRuntimeApiKey("mock", "mock-key");
+	authStorage.keys.setRuntimeApiKey("mock", "mock-key");
 	registerMockApi(MOCK_API_SOURCE);
 	const executed: string[] = [];
 	const events: { type: string; json: string }[] = [];

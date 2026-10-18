@@ -63,7 +63,7 @@ describe("AgentSession retry delay cap", () => {
 		// A live env var now overrides a stored static api_key; these tests rotate stored Anthropic
 		// credentials, so neutralize env resolution (ignores every provider's ambient env key).
 		vi.spyOn(envApiKeyModule, "getEnvApiKey").mockReturnValue(undefined);
-		authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
+		authStorage.keys.setRuntime("anthropic", "anthropic-test-key");
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 	});
 
@@ -91,7 +91,7 @@ describe("AgentSession retry delay cap", () => {
 	async function withAccountMovement(): Promise<AuthStorage> {
 		authStorage.close();
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "balanced-auth.db"), { loadBalancing: true });
-		authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
+		authStorage.keys.setRuntime("anthropic", "anthropic-test-key");
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 		return authStorage;
 	}
@@ -174,7 +174,7 @@ describe("AgentSession retry delay cap", () => {
 		if (!model) {
 			throw new Error("Expected bundled OpenAI test model to exist");
 		}
-		authStorage.setRuntimeApiKey("openai", "openai-test-key");
+		authStorage.keys.setRuntime("openai", "openai-test-key");
 
 		const mock = createMockModel({
 			responses: [
@@ -239,9 +239,9 @@ describe("AgentSession retry delay cap", () => {
 		const providerSessionId = "retry-four-credential-session-3";
 
 		registerMockApi(RETRY_CAP_MOCK_API_SOURCE);
-		authStorage.removeRuntimeApiKey("anthropic");
-		authStorage.setRuntimeApiKey("openai", "openai-fallback-key");
-		await authStorage.set("anthropic", [
+		authStorage.keys.removeRuntime("anthropic");
+		authStorage.keys.setRuntime("openai", "openai-fallback-key");
+		await authStorage.credentials.set("anthropic", [
 			{ type: "api_key", key: "anthropic-key-A" },
 			{ type: "api_key", key: "anthropic-key-B" },
 			{ type: "api_key", key: "anthropic-key-C" },
@@ -344,9 +344,9 @@ describe("AgentSession retry delay cap", () => {
 			throw new Error("Expected bundled primary and fallback test models to exist");
 		}
 
-		authStorage.removeRuntimeApiKey("anthropic");
-		authStorage.setRuntimeApiKey("openai", "openai-fallback-key");
-		await authStorage.set("anthropic", [
+		authStorage.keys.removeRuntime("anthropic");
+		authStorage.keys.setRuntime("openai", "openai-fallback-key");
+		await authStorage.credentials.set("anthropic", [
 			{ type: "api_key", key: "anthropic-key-1" },
 			{ type: "api_key", key: "anthropic-key-2" },
 		]);
@@ -423,8 +423,8 @@ describe("AgentSession retry delay cap", () => {
 			throw new Error("Expected bundled Anthropic test model to exist");
 		}
 
-		authStorage.removeRuntimeApiKey("anthropic");
-		await authStorage.set("anthropic", [
+		authStorage.keys.removeRuntime("anthropic");
+		await authStorage.credentials.set("anthropic", [
 			{ type: "api_key", key: "anthropic-key-1" },
 			{ type: "api_key", key: "anthropic-key-2" },
 		]);
@@ -432,7 +432,7 @@ describe("AgentSession retry delay cap", () => {
 		// Another session holds one credential and parks it for 2s — the test
 		// session lands on the sibling.
 		await modelRegistry.getApiKeyForProvider("anthropic", "other-session");
-		const blocked = await authStorage.markUsageLimitReached("anthropic", "other-session", { retryAfterMs: 2_000 });
+		const blocked = await authStorage.limits.markReached("anthropic", "other-session", { retryAfterMs: 2_000 });
 		expect(blocked.switched).toBe(true);
 
 		const rateLimitError =

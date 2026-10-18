@@ -117,8 +117,8 @@ describe("a server-side compaction the active provider cannot read", () => {
 		options: { overThreshold?: boolean } = {},
 	): Promise<Harness> {
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `auth-${cleanups.length}.db`));
-		authStorage.setRuntimeApiKey(active.provider, "test-key");
-		if (mintingHasCredential) authStorage.setRuntimeApiKey(MINTING.provider, "test-key");
+		authStorage.keys.setRuntime(active.provider, "test-key");
+		if (mintingHasCredential) authStorage.keys.setRuntime(MINTING.provider, "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), `models-${cleanups.length}.yml`));
 		const sessionManager = SessionManager.inMemory(tempDir.path());
 		const activeModel = bundled(active);

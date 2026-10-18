@@ -282,8 +282,8 @@ describe("early first-frame actions are retained and executed", () => {
 		tempDir = TempDir.createSync("@pi-early-submit-test-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		authStorage.setRuntimeApiKey("mock", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		authStorage.keys.setRuntime("mock", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 		dirOverrides = captureDirOverrides();
 	});

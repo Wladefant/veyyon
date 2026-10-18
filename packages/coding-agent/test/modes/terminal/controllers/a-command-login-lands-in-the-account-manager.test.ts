@@ -104,11 +104,11 @@ async function harness(outcome: Outcome): Promise<Harness> {
 	if (!storage) throw new Error("no auth storage");
 	vi.restoreAllMocks();
 	// Health probing is an HTTP call per credential and has nothing to do with this contract.
-	vi.spyOn(storage, "checkCredentials").mockResolvedValue([]);
-	await storage.set("anthropic", [credential("first@example.com", "acct-first")]);
+	vi.spyOn(storage.health, "check").mockResolvedValue([]);
+	await storage.credentials.set("anthropic", [credential("first@example.com", "acct-first")]);
 
 	const started = Promise.withResolvers<void>();
-	vi.spyOn(storage, "login").mockImplementation((async (provider: OAuthProvider, options: { signal: AbortSignal }) => {
+	vi.spyOn(storage.oauth, "login").mockImplementation((async (provider: OAuthProvider, options: { signal: AbortSignal }) => {
 		started.resolve();
 		if (outcome === "fails") throw new Error("provider refused");
 		if (outcome === "cancelled") {
@@ -118,12 +118,12 @@ async function harness(outcome: Outcome): Promise<Harness> {
 			options.signal.addEventListener("abort", () => aborted.reject(new Error("Login cancelled")));
 			return aborted.promise;
 		}
-		await storage.set("anthropic", [
+		await storage.credentials.set("anthropic", [
 			credential("first@example.com", "acct-first"),
 			credential("second@example.com", "acct-second"),
 		]);
 		return { type: "oauth" as const, email: "second@example.com", provider };
-	}) as unknown as AuthStorage["login"]);
+	}) as unknown as AuthStorage["oauth"]["login"]);
 
 	const cards: AccountManagerComponent[] = [];
 	const dialogs: LoginDialogComponent[] = [];

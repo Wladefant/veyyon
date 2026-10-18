@@ -121,8 +121,8 @@ async function openCard(outcome: "stores" | "fails" | "hangs", entry: "card" | "
 	if (!storage) throw new Error("no auth storage");
 	vi.restoreAllMocks();
 	// Health probing is an HTTP call per credential and has nothing to do with this contract.
-	vi.spyOn(storage, "checkCredentials").mockResolvedValue([]);
-	await storage.set("anthropic", [credential("first@example.com", "acct-first")]);
+	vi.spyOn(storage.health, "check").mockResolvedValue([]);
+	await storage.credentials.set("anthropic", [credential("first@example.com", "acct-first")]);
 
 	const login = vi.fn(async (provider: OAuthProvider, options?: { signal?: AbortSignal }) => {
 		if (outcome === "fails") throw new Error("provider refused");
@@ -135,13 +135,13 @@ async function openCard(outcome: "stores" | "fails" | "hangs", entry: "card" | "
 			);
 			throw new Error("login cancelled");
 		}
-		await storage.set("anthropic", [
+		await storage.credentials.set("anthropic", [
 			credential("first@example.com", "acct-first"),
 			credential("second@example.com", "acct-second"),
 		]);
 		return { type: "oauth" as const, email: "second@example.com", provider };
 	});
-	vi.spyOn(storage, "login").mockImplementation(login as unknown as AuthStorage["login"]);
+	vi.spyOn(storage.oauth, "login").mockImplementation(login as unknown as AuthStorage["oauth"]["login"]);
 
 	const cards: AccountManagerComponent[] = [];
 	const fullscreen: string[] = [];
@@ -360,12 +360,12 @@ describe("adding an account from the card", () => {
 		const harness = await openCard("stores");
 		const storage = authStorage;
 		if (!storage) throw new Error("no auth storage");
-		const before = storage.listStoredCredentials("anthropic")[0]!.id;
-		storage.selectProviderCredential("anthropic", before, { sessionId: SESSION_ID });
+		const before = storage.credentials.list("anthropic")[0]!.id;
+		storage.sessions.selectProviderCredential("anthropic", before, { sessionId: SESSION_ID });
 
 		harness.card().handleInput("a");
 		await until(() => harness.cards.length > 1, "the card to reopen");
 
-		expect(storage.sessionCredentialRouting("anthropic", SESSION_ID)?.selectedCredentialId).toBe(before);
+		expect(storage.sessions.routing("anthropic", SESSION_ID)?.selectedCredentialId).toBe(before);
 	});
 });

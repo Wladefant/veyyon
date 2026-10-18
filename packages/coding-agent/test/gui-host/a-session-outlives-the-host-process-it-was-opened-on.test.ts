@@ -87,7 +87,7 @@ describe("a session outlives the host process it was opened on", () => {
 		await fs.writeFile(path.join(tempDir, "config.yml"), "modelRoles:\n  default: openai/gpt-4o-mini\n", "utf8");
 		socketPath = path.join(tempDir, "gui-host.sock");
 		authStorage = await isolatedAuthStorage(tempDir);
-		authStorage.upsertCredential("openai", { type: "api_key", key: "test-key" });
+		await authStorage.credentials.upsert("openai", { type: "api_key", key: "test-key" });
 	});
 
 	afterEach(async () => {

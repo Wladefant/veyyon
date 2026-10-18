@@ -78,8 +78,8 @@ let modelRegistry: ModelRegistry;
 beforeAll(async () => {
 	sharedDir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-advisor-tools-shared-"));
 	authStorage = await AuthStorage.create(path.join(sharedDir, "auth.db"));
-	authStorage.setRuntimeApiKey("anthropic", "test-key");
-	authStorage.setRuntimeApiKey("mock", "test-key");
+	authStorage.keys.setRuntime("anthropic", "test-key");
+	authStorage.keys.setRuntime("mock", "test-key");
 	modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir, "models.yml"));
 });
 

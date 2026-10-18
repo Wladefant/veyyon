@@ -64,7 +64,7 @@ interface SessionFixture {
 async function createSessionWithObfuscator(obfuscator?: SecretObfuscator): Promise<SessionFixture> {
 	const tempDir = TempDir.createSync("@pi-silent-abort-");
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-	authStorage.setRuntimeApiKey("anthropic", "test-key");
+	authStorage.keys.setRuntime("anthropic", "test-key");
 	const modelRegistry = new ModelRegistry(authStorage);
 	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 	if (!model) throw new Error("Expected built-in anthropic model to exist");

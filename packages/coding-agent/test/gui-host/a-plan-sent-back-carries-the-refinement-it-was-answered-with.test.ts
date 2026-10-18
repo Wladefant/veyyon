@@ -160,7 +160,7 @@ describe("a plan sent back carries the refinement it was answered with", () => {
 			"utf8",
 		);
 		const authStorage = await isolatedAuthStorage(tempDir);
-		authStorage.upsertCredential("openai", { type: "api_key", key: "test-key" });
+		await authStorage.credentials.upsert("openai", { type: "api_key", key: "test-key" });
 		server = await startGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,

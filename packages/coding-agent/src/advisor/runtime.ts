@@ -55,7 +55,7 @@ export interface AdvisorRuntimeHost {
 	 * the advisor loop lacks: the in-stream a/b/c auth retry rotates through
 	 * sibling credentials within one request but never blocks the LAST failing
 	 * one — the primary agent's retry pipeline does that via
-	 * `markUsageLimitReached`, so without this hook the advisor re-picks the
+	 * `limits.markReached`, so without this hook the advisor re-picks the
 	 * same usage-limited account on every retry. Errors thrown here are logged
 	 * and swallowed.
 	 */

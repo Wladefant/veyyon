@@ -60,7 +60,7 @@ let modelRegistry: ModelRegistry;
 beforeAll(async () => {
 	sharedDir = fs.mkdtempSync(path.join(os.tmpdir(), "raw-sse-roles-"));
 	authStorage = await AuthStorage.create(path.join(sharedDir, "auth.db"));
-	authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
+	authStorage.keys.setRuntime("anthropic", "anthropic-test-key");
 	modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir, "models.yml"));
 });
 

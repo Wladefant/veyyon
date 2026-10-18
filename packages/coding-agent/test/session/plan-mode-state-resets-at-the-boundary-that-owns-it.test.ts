@@ -94,7 +94,7 @@ describe("plan mode state across its boundaries", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@plan-mode-boundaries-");
 		authStorage = await AuthStorage.create(tempDir.join("auth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntimeApiKey("anthropic", "test-key");
 	});
 
 	afterEach(async () => {

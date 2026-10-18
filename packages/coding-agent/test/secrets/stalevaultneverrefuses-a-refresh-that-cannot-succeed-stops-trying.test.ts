@@ -83,7 +83,7 @@ async function fixture(scriptedNote?: string): Promise<Fixture> {
 	await seed.add({ name: DOOMED_NAME, value: DOOMED_VALUE, scope: "profile", ttl: null });
 
 	const authStorage = await AuthStorage.create(path.join(agentDir, "auth.db"));
-	authStorage.setRuntimeApiKey("mock", "mock-key");
+	authStorage.keys.setRuntimeApiKey("mock", "mock-key");
 	registerMockApi(MOCK_API_SOURCE);
 
 	const observed: { note: string }[] = [];

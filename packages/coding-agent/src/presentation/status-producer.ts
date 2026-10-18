@@ -555,16 +555,16 @@ export class StatusPresentationProducer implements StatusDataSource {
 		const activeProvider = session.state?.model?.provider ?? session.model?.provider;
 		const authStorage = session.modelRegistry?.authStorage;
 		if (!activeProvider || !authStorage) return null;
-		const stored = authStorage.listStoredCredentials(activeProvider);
+		const stored = authStorage.credentials.list(activeProvider);
 		if (stored.length === 0) return null;
-		const routing = authStorage.sessionCredentialRouting(activeProvider, session.sessionId);
+		const routing = authStorage.sessions.routing(activeProvider, session.sessionId);
 		const servingId = routing?.activeCredentialId ?? routing?.selectedCredentialId ?? stored[0]?.id;
 		if (servingId === undefined) return null;
 		const key = [
 			activeProvider,
 			servingId,
 			stored.length,
-			authStorage.getAccountName(activeProvider, servingId) ?? "",
+			authStorage.credentials.getAccountName(activeProvider, servingId) ?? "",
 			routing?.activeIsPrediction === true ? "next" : "serving",
 		].join("\0");
 		if (this.#cachedServingAccount?.key === key) return this.#cachedServingAccount.value;
@@ -598,7 +598,7 @@ export class StatusPresentationProducer implements StatusDataSource {
 		const session = this.#session;
 		const provider = session.state?.model?.provider ?? session.model?.provider;
 		const identity = provider
-			? session.modelRegistry?.authStorage?.getOAuthAccountIdentity?.(provider, session.sessionId)
+			? session.modelRegistry?.authStorage?.oauth.identity(provider, session.sessionId)
 			: undefined;
 		return { provider, identity };
 	}

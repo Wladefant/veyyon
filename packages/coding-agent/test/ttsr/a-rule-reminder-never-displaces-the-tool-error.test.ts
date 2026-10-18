@@ -313,7 +313,7 @@ describe("a TTSR rule that matches a tool call", () => {
 
 		const authStorage = await AuthStorage.create(path.join(tempDir, `auth-${sessionCount++}.db`));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),

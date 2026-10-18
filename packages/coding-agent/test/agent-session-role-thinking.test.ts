@@ -62,10 +62,10 @@ describe("AgentSession model effort behavior", () => {
 		});
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const runtimeApiKeys = options.runtimeApiKeys ?? {};
 		for (const provider in runtimeApiKeys) {
-			authStorage.setRuntimeApiKey(provider, runtimeApiKeys[provider]);
+			authStorage.keys.setRuntime(provider, runtimeApiKeys[provider]);
 		}
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 
@@ -188,7 +188,7 @@ describe("AgentSession model effort behavior", () => {
 		});
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth-non-xhigh.db"));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models-non-xhigh.yml"));
 
 		sessionSettings = Settings.isolated();
@@ -218,7 +218,7 @@ describe("AgentSession model effort behavior", () => {
 		});
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth-max-clamp.db"));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models-max-clamp.yml"));
 
 		sessionSettings = Settings.isolated();
@@ -248,7 +248,7 @@ describe("AgentSession model effort behavior", () => {
 		});
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth-cycle-thinking.db"));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models-cycle-thinking.yml"));
 
 		sessionSettings = Settings.isolated();
@@ -283,7 +283,7 @@ describe("AgentSession model effort behavior", () => {
 		});
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth-cycle-max.db"));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models-cycle-max.yml"));
 
 		sessionSettings = Settings.isolated();
@@ -341,7 +341,7 @@ describe("AgentSession model effort behavior", () => {
 		});
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth-auto-resume.db"));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models-auto-resume.yml"));
 		const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 		sessionSettings = Settings.isolated();
@@ -387,7 +387,7 @@ describe("AgentSession model effort behavior", () => {
 		});
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth-manual-resume.db"));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models-manual-resume.yml"));
 		const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 		sessionSettings = Settings.isolated();
@@ -433,7 +433,7 @@ describe("AgentSession model effort behavior", () => {
 		});
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth-pin-eq.db"));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models-pin-eq.yml"));
 		const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 		sessionSettings = Settings.isolated();
@@ -487,7 +487,7 @@ describe("AgentSession model effort behavior", () => {
 		});
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth-pin-row.db"));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models-pin-row.yml"));
 		sessionSettings = Settings.isolated();
 		sessionSettings.set("defaultEffort", { [selector]: Effort.Low, [ANY_MODEL_EFFORT_KEY]: Effort.Minimal });
@@ -600,7 +600,7 @@ describe("AgentSession model effort behavior", () => {
 		});
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth-non-reasoning-auto.db"));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("openai", "test-key");
+		authStorage.keys.setRuntime("openai", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models-non-reasoning-auto.yml"));
 		sessionSettings = Settings.isolated();
 		sessionSettings.set("defaultThinkingLevel", AUTO_THINKING);

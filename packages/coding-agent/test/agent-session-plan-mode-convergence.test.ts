@@ -119,7 +119,7 @@ describe("AgentSession plan-mode convergence", () => {
 
 		const authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, tempDir.join(`models-${Snowflake.next()}.yml`));
 
 		let advisorMock: MockModel | undefined;

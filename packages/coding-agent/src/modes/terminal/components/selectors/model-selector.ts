@@ -53,7 +53,7 @@ export interface ModelSelectorCallbacks {
 
 /** Resolve whether a model can be used without further login. */
 export function resolveModelAuthStatus(registry: ModelRegistry, model: Model): ModelAuthStatus {
-	if (registry.isKeylessProvider(model.provider) && !registry.authStorage.hasAuth(model.provider)) {
+	if (registry.isKeylessProvider(model.provider) && !(registry.authStorage.keys.source(model.provider, { env: "aliases" }) !== undefined || registry.authStorage.keys.keyless(model.provider))) {
 		return "keyless";
 	}
 	if (registry.hasConfiguredAuth(model)) return "authenticated";

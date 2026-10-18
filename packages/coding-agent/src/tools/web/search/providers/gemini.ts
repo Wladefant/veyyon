@@ -2,7 +2,7 @@
  * Google Gemini Web Search Provider
  *
  * Uses Gemini's Google Search grounding via Cloud Code Assist API.
- * Auth is resolved through `AuthStorage.getOAuthAccess(...)` for both
+ * Auth is resolved through `AuthStorage.oauth.access(...)` for both
  * `google-gemini-cli` (stable prod) and `google-antigravity` (daily sandbox)
  * — the broker is the sole refresh authority, so this module never opens a
  * sibling SQLite store and never POSTs the broker sentinel to a Google token
@@ -121,7 +121,7 @@ interface GeminiSearchResult {
 /**
  * Walks the configured Gemini OAuth providers in deterministic order and
  * returns the first one that yields a usable access token + projectId via
- * {@link AuthStorage.getOAuthAccess}. AuthStorage handles refresh + broker
+ * {@link AuthStorage.oauth.access}. AuthStorage handles refresh + broker
  * routing internally; this helper never touches refresh tokens directly.
  * The resolved access seeds `withOAuthAccess` so the happy path resolves once.
  */
@@ -131,7 +131,7 @@ export async function findGeminiAuth(
 	signal: AbortSignal | undefined,
 ): Promise<GeminiAuthSeed | null> {
 	for (const provider of GEMINI_PROVIDERS) {
-		const access = await authStorage.getOAuthAccess(provider, sessionId, { signal });
+		const access = await authStorage.oauth.access(provider, sessionId, { signal });
 		if (!access?.accessToken || !access.projectId) continue;
 		return { provider, access, projectId: access.projectId };
 	}
@@ -139,7 +139,7 @@ export async function findGeminiAuth(
 }
 
 function hasGeminiOAuth(authStorage: AuthStorage): boolean {
-	return GEMINI_PROVIDERS.some((provider: GeminiProviderId) => authStorage.hasOAuth(provider));
+	return GEMINI_PROVIDERS.some((provider: GeminiProviderId) => authStorage.credentials.hasOAuth(provider));
 }
 
 /** Cloud Code Assist API response types */
@@ -581,7 +581,7 @@ export async function searchGemini(params: GeminiSearchParams): Promise<SearchRe
 			{ sessionId: params.sessionId, signal: params.signal, seed: seed.access },
 		);
 	} else {
-		const apiKey = await params.authStorage.getApiKey(DEVELOPER_API_PROVIDER, params.sessionId, {
+		const apiKey = await params.authStorage.keys.get(DEVELOPER_API_PROVIDER, params.sessionId, {
 			signal: params.signal,
 		});
 		if (!apiKey) {
@@ -645,7 +645,7 @@ export class GeminiProvider extends SearchProvider {
 		// Cheap, in-memory check — avoids driving the refresh pipeline during
 		// the provider-chain probe. `searchGemini` refreshes OAuth lazily on the
 		// actual request and resolves developer API keys through AuthStorage.
-		return hasGeminiOAuth(authStorage) || authStorage.hasAuth(DEVELOPER_API_PROVIDER);
+		return hasGeminiOAuth(authStorage) || authStorage.keys.source(DEVELOPER_API_PROVIDER, { env: "aliases" }) !== undefined || authStorage.keys.keyless(DEVELOPER_API_PROVIDER);
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {

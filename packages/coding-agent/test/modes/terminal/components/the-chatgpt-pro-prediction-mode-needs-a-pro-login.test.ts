@@ -68,7 +68,7 @@ async function registryWith(logins: CodexLogins): Promise<ModelRegistry> {
 	stores.push(auth);
 	await storeCodexLogins(auth, logins.stored ?? []);
 	if (logins.env !== undefined) Bun.env[CODEX_ENV_TOKEN] = logins.env;
-	if (logins.runtimeKey !== undefined) auth.setRuntimeApiKey("openai-codex", logins.runtimeKey);
+	if (logins.runtimeKey !== undefined) auth.keys.setRuntimeApiKey("openai-codex", logins.runtimeKey);
 	const modelsPath = path.join(dir, "models.yml");
 	if (logins.modelsYml !== undefined) await fs.writeFile(modelsPath, logins.modelsYml);
 	return new ModelRegistry(auth, modelsPath, {

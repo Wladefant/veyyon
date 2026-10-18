@@ -142,7 +142,7 @@ describe("AgentSession approved-plan reference re-injection after compaction (is
 		const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
 
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `testauth-${cleanups.length}.db`));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), `models-${cleanups.length}.yml`));
 		const settings = Settings.isolated({
 			"compaction.enabled": true,

@@ -84,7 +84,7 @@ async function createRig(options: {
 	const authStorage = await AuthStorage.create(path.join(cwd, "testauth.db"));
 	// The session refuses to prompt a provider it has no credential for, which is
 	// production behaviour and not something to bypass: give the mock one.
-	authStorage.setRuntimeApiKey(model.provider, "test-key");
+	authStorage.keys.setRuntime(model.provider, "test-key");
 	const session = new AgentSession({
 		agent,
 		sessionManager: SessionManager.create(cwd, cwd),

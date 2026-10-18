@@ -134,7 +134,7 @@ describe("AgentSession eager todo enforcement", () => {
 		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
 
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 		const settings = Settings.isolated({
 			"compaction.enabled": false,

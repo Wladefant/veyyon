@@ -163,7 +163,7 @@ describe("InteractiveMode loop auto-submit", () => {
 	it("Esc ends the live turn, suspends resubmission, and resumes only with a manual prompt", async () => {
 		// Only the external provider stream is faked; loop timers, pause, editor dispatch and session abort are real.
 		const started = Promise.withResolvers<void>();
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		session.agent.streamFn = (_model, _context, options) => {
 			const stream = new AssistantMessageEventStream();
 			queueMicrotask(() => {

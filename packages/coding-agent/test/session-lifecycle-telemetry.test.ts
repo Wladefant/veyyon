@@ -435,7 +435,7 @@ describe("session lifecycle telemetry persistence", () => {
 		const cwd = makeTempDir("@pi-lifecycle-sdk-");
 		const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
 		try {
-			authStorage.setRuntimeApiKey("anthropic", "test-key");
+			authStorage.keys.setRuntimeApiKey("anthropic", "test-key");
 			const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
 			expect(manager.getLifecycleState()).toBe("unknown");
 

@@ -36,11 +36,11 @@ describe("AgentSession advisor descriptor thinking level", () => {
 	beforeAll(async () => {
 		sharedDir = TempDir.createSync("@pi-advisor-devin-thinking-shared-");
 		authStorage = await AuthStorage.create(path.join(sharedDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		// Seeding a runtime API key exposes the bundled Devin catalog for
 		// `resolveAdvisorRoleSelection` / `getAvailable()` without any live
 		// network discovery.
-		authStorage.setRuntimeApiKey("devin", "test-key");
+		authStorage.keys.setRuntime("devin", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 		const anthropic = getBundledModel("anthropic", "claude-sonnet-4-5");
 		// A Devin model that still has the regression shape: `reasoning: true` with

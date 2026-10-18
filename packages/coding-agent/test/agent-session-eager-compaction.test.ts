@@ -176,7 +176,7 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 		const model = { ...selectedModel, contextWindow: 200_000, maxTokens: 64_000 };
 
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `testauth-${cleanups.length}.db`));
-		authStorage.setRuntimeApiKey(model.provider, "test-key");
+		authStorage.keys.setRuntime(model.provider, "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), `models-${cleanups.length}.yml`));
 		const settings = Settings.isolated({
 			"compaction.enabled": true,

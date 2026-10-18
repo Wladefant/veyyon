@@ -155,7 +155,7 @@ describe("how hard the model thinks has one owner", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-thinking-owner-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const bundled = getBundledModel("anthropic", "claude-sonnet-4-6");
 		if (!bundled) throw new Error("Expected bundled Claude Sonnet 4.6 model");
 		model = bundled;

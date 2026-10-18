@@ -176,7 +176,7 @@ describe("compaction round-trip: the continued turn sees the summary and the kep
 
 	async function createHarness(): Promise<Harness> {
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntimeApiKey("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage);
 		const sessionManager = SessionManager.inMemory(tempDir.path());
 

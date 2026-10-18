@@ -1244,7 +1244,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			// A refused grant moves regardless of `accounts.loadBalancing`; a plan that does not include
 			// the model moves only with that setting on. Either way the notice names both accounts, so a
 			// second subscription is never spent silently.
-			this.session.modelRegistry.authStorage.onCredentialFailover(event => {
+			this.session.modelRegistry.authStorage.keys.onCredentialFailover(event => {
 				const why =
 					event.reason === "model-not-in-plan"
 						? `cannot serve this model (${event.cause})`
@@ -1257,7 +1257,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			// `accounts.loadBalancing` is off. The notice names what is wrong, how many accounts are
 			// sitting unused, and the one toggle that would use them. AuthStorage emits this once per
 			// exhausted window, or per refused model, so a retrying turn does not repeat it.
-			this.session.modelRegistry.authStorage.onUsageLimitWithheld(event => {
+			this.session.modelRegistry.authStorage.limits.onUsageLimitWithheld(event => {
 				const idle = event.idleSiblings === 1 ? "1 other account is" : `${event.idleSiblings} other accounts are`;
 				const problem =
 					event.reason === "quota"

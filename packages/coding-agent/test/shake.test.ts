@@ -37,7 +37,7 @@ describe("AgentSession shake", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-shake-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntimeApiKey("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 		events = [];

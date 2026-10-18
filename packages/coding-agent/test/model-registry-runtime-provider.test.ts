@@ -473,12 +473,12 @@ describe("ModelRegistry runtime provider registration", () => {
 			};
 
 			registry.registerProvider("runtime-provider", config, "ext://runtime");
-			expect(registry.authStorage.hasAuth("runtime-provider")).toBe(true);
+			expect(registry.authStorage.keys.has("runtime-provider")).toBe(true);
 
 			await registry.refresh("offline");
 
 			// The fallback resolver should still find the API key after refresh
-			expect(registry.authStorage.hasAuth("runtime-provider")).toBe(true);
+			expect(registry.authStorage.keys.has("runtime-provider")).toBe(true);
 		} finally {
 			if (previousRuntimeKey === undefined) delete process.env.TEST_RUNTIME_KEY;
 			else process.env.TEST_RUNTIME_KEY = previousRuntimeKey;

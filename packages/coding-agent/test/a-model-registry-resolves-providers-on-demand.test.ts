@@ -151,7 +151,7 @@ describe("a model registry resolves providers on demand", () => {
 	});
 
 	it("preserves exact model reference identity between find, getAvailable, and getAll", () => {
-		authStorage.setConfigApiKey("anthropic", "test-key");
+		authStorage.keys.setConfig("anthropic", "test-key");
 		const registry = new ModelRegistry(authStorage, modelsPath, { snapshotIo: false });
 
 		const found = registry.find("anthropic", "claude-3-7-sonnet-20250219");
@@ -192,7 +192,7 @@ describe("a model registry resolves providers on demand", () => {
 	});
 
 	it("updates provider reported context window without breaking model lookup", () => {
-		authStorage.setConfigApiKey("anthropic", "test-key");
+		authStorage.keys.setConfig("anthropic", "test-key");
 		const registry = new ModelRegistry(authStorage, modelsPath, { snapshotIo: false });
 
 		const initial = registry.find("anthropic", "claude-3-7-sonnet-20250219");
@@ -210,7 +210,7 @@ describe("a model registry resolves providers on demand", () => {
 	});
 
 	it("getAvailable returns only keyless or authenticated providers", () => {
-		authStorage.setConfigApiKey("anthropic", "test-key");
+		authStorage.keys.setConfig("anthropic", "test-key");
 		const registry = new ModelRegistry(authStorage, modelsPath, { snapshotIo: false });
 
 		const available = registry.getAvailable();
@@ -287,7 +287,7 @@ describe("a model registry resolves providers on demand", () => {
 	});
 
 	it("registerProvider oauth.modifyModels receives prewarmed catalog with new models, rewrites unrelated models, and respects removal", async () => {
-		await authStorage.set("test-oauth-provider", {
+		await authStorage.credentials.set("test-oauth-provider", {
 			type: "oauth",
 			access: "test-token",
 			refresh: "test-refresh",
@@ -492,8 +492,8 @@ describe("a model registry resolves providers on demand", () => {
 	});
 
 	it("preserves exact model reference identity across find -> getAvailable -> getAll -> unrelated change -> find", () => {
-		authStorage.setConfigApiKey("anthropic", "test-key");
-		authStorage.setConfigApiKey("openai", "test-key");
+		authStorage.keys.setConfig("anthropic", "test-key");
+		authStorage.keys.setConfig("openai", "test-key");
 		fs.writeFileSync(
 			modelsPath,
 			JSON.stringify({
@@ -536,8 +536,8 @@ describe("a model registry resolves providers on demand", () => {
 	});
 
 	it("preserves global layer order in getAvailable when custom model is added to an existing early bundled provider", () => {
-		authStorage.setConfigApiKey("anthropic", "test-key");
-		authStorage.setConfigApiKey("openai", "test-key");
+		authStorage.keys.setConfig("anthropic", "test-key");
+		authStorage.keys.setConfig("openai", "test-key");
 
 		// Add a custom model to "anthropic" (an early bundled provider)
 		fs.writeFileSync(

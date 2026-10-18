@@ -20,6 +20,7 @@
 
 import type {
 	AuthStorage,
+	DisabledCredentialSummary,
 	CredentialHealthResult,
 	CredentialOrigin,
 	CredentialOriginKind,
@@ -159,12 +160,11 @@ export interface ProviderAccounts {
 	 * NOT a row: a disabled credential cannot be pinned, named or logged out, so putting it in the
 	 * account list would add an entry most keys do nothing to. It is a note about the provider.
 	 *
-	 * It is here because a disabled credential is invisible everywhere else. `listAuthCredentials`
+	 * It is here because a disabled credential is invisible everywhere else. `credentials.list()`
 	 * filters disabled rows, so a provider whose only login died reads as one you never signed into,
 	 * and the user is told to log in without being told that the login they had was thrown away or
-	 * why. `AuthStorage.disabledCredentialCause` already narrows this to refresh failures, which are
-	 * the disables the user did not perform and has not been told about; a logout or a superseded
-	 * duplicate stays silent because they already know.
+	 * why. `credentials.listReportableDisabled()` supplies current refresh failures in recency order.
+	 * A logout or later login stays silent because it already answers that warning.
 	 */
 	disabledCause?: string;
 	/**
@@ -193,6 +193,8 @@ export interface BuildAccountInventoryOptions {
 	 * identically in a session, in a one-shot CLI run, and in a test with no session at all.
 	 */
 	sessionId?: string;
+	/** Current reportable disabled credentials, in the target API's recency order. */
+	reportableDisabled?: readonly DisabledCredentialSummary[];
 }
 
 /**
@@ -267,7 +269,7 @@ export function buildAccountInventory(
 	const { sessionId } = options;
 	const byProvider = new Map<string, AccountRow[]>();
 
-	for (const stored of authStorage.listStoredCredentials()) {
+	for (const stored of authStorage.credentials.list()) {
 		const { provider, credential } = stored;
 		const providerLabel = formatProviderName(provider);
 		const row: AccountRow = {
@@ -280,7 +282,7 @@ export function buildAccountInventory(
 			activeIsPrediction: false,
 			selectedForProvider: false,
 		};
-		const name = authStorage.getAccountName(provider, stored.id);
+		const name = authStorage.credentials.getAccountName(provider, stored.id);
 		if (name) row.name = name;
 		if (credential.type === "oauth") {
 			if (credential.email) row.email = credential.email;
@@ -295,15 +297,17 @@ export function buildAccountInventory(
 			}
 			row.renewable = credential.refresh.trim().length > 0;
 		}
-		const origin = authStorage.getCredentialOrigin(provider);
-		if (origin) row.origin = origin;
+		const source = authStorage.keys.source(provider, { env: "aliases" });
+		if (source) {
+			row.origin = { kind: source.kind, ...(source.envVar === undefined ? {} : { envVar: source.envVar }) };
+		}
 		const rows = byProvider.get(provider) ?? [];
 		rows.push(row);
 		byProvider.set(provider, rows);
 	}
 
 	for (const [provider, rows] of byProvider) {
-		const routing = authStorage.sessionCredentialRouting(provider, sessionId);
+		const routing = authStorage.sessions.routing(provider, sessionId);
 		for (let index = 0; index < rows.length; index++) {
 			const row = rows[index]!;
 			if (routing?.activeCredentialId === row.credentialId) {
@@ -317,29 +321,28 @@ export function buildAccountInventory(
 			if (row.blockedUntilMs === undefined) {
 				// `${provider}:${type}` is the block key AuthStorage writes; the bare type matches
 				// no row, so the rate-limit glyph and its countdown never appeared.
-				const blockedUntil = authStorage.credentialBlockedUntil(provider, `${provider}:${row.type}`, index);
+				const blockedUntil = authStorage.blocks.blockedUntil(provider, `${provider}:${row.type}`, index);
 				if (blockedUntil !== undefined) row.blockedUntilMs = blockedUntil;
 			}
 		}
 	}
 
-	// Providers whose ONLY login was torn down hold no active credential, so the loop above never saw
-	// them. They get an accountless entry carrying just the cause: without it, the total-loss case
-	// renders as a provider you never signed into, which is precisely the silence being fixed.
-	const failedRefreshes = new Map(
-		authStorage.listProvidersWithFailedRefresh().map(entry => [entry.provider, entry.cause]),
-	);
-	for (const [provider] of failedRefreshes) {
+	// The target API applies the same reportability, timestamp, and ordering rules as the legacy helpers.
+	const disabledByProvider = new Map<string, DisabledCredentialSummary>();
+	for (const summary of options.reportableDisabled ?? []) {
+		if (!disabledByProvider.has(summary.provider)) disabledByProvider.set(summary.provider, summary);
+	}
+	for (const [provider] of disabledByProvider) {
 		if (!byProvider.has(provider)) byProvider.set(provider, []);
 	}
 
 	const providers = Array.from(byProvider.entries())
 		.map(([provider, rows]) => {
 			const entry: ProviderAccounts = { provider, label: formatProviderName(provider), rows };
-			const disabledCause = failedRefreshes.get(provider) ?? authStorage.disabledCredentialCause(provider);
-			if (disabledCause) {
-				entry.disabledCause = disabledCause;
-				const account = authStorage.disabledCredentialAccount(provider);
+			const disabled = disabledByProvider.get(provider);
+			if (disabled) {
+				entry.disabledCause = disabled.cause;
+				const account = disabled.type === "oauth" ? disabled.email || disabled.accountId : undefined;
 				if (account) entry.disabledAccount = account;
 			}
 			return entry;
@@ -456,8 +459,9 @@ export async function loadAccountInventory(
 	authStorage: AuthStorage,
 	options: BuildAccountInventoryOptions = {},
 ): Promise<AccountInventory> {
-	await authStorage.reload();
-	return buildAccountInventory(authStorage, options);
+	await authStorage.credentials.reload();
+	const reportableDisabled = await authStorage.credentials.listReportableDisabled();
+	return buildAccountInventory(authStorage, { ...options, reportableDisabled });
 }
 
 /**

@@ -374,7 +374,7 @@ for (const command of LOGOUT_COMMANDS) {
 			const storage = authStorage;
 			if (!storage) throw new Error("no auth storage");
 			for (const provider of apiKeyProviders) {
-				await storage.set(provider.id, [{ type: "api_key", key: `key-${provider.id}` }]);
+				await storage.credentials.set(provider.id, [{ type: "api_key", key: `key-${provider.id}` }]);
 				try {
 					for (const spelling of [provider.id, provider.name, provider.id.toUpperCase()]) {
 						const calls = recorder();
@@ -383,9 +383,9 @@ for (const command of LOGOUT_COMMANDS) {
 						expect(calls.warnings).toEqual([]);
 					}
 				} finally {
-					await storage.set(provider.id, []);
+					await storage.credentials.set(provider.id, []);
 				}
-				expect(storage.listStoredCredentials(provider.id)).toEqual([]);
+				expect(storage.credentials.list(provider.id)).toEqual([]);
 			}
 		});
 	});

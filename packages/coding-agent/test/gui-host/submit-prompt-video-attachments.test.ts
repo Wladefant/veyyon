@@ -34,7 +34,7 @@ describe("GUI host video attachment validation and model input support", () => {
 	beforeEach(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gui-host-video-test-"));
 		authStorage = await isolatedAuthStorage(tempDir);
-		await authStorage.set("test-provider", { type: "api_key", key: "test-api-key" });
+		await authStorage.credentials.set("test-provider", { type: "api_key", key: "test-api-key" });
 
 		// Write custom models: one with video input support, one text-only
 		const modelsConfig = {

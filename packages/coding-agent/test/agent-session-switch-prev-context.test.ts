@@ -33,7 +33,7 @@ describe("AgentSession.switchSession previous-context build", () => {
 	beforeAll(async () => {
 		sharedDir = TempDir.createSync("@pi-switch-prev-ctx-shared-");
 		authStorage = await AuthStorage.create(path.join(sharedDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!bundled) throw new Error("Expected built-in anthropic model to exist");

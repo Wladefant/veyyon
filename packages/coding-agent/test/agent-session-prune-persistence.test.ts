@@ -198,7 +198,7 @@ describe("AgentSession per-turn prune", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-prune-persistence-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 	});
 

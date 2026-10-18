@@ -130,7 +130,7 @@ describe("a remote compaction result reaching the driver write path", () => {
 		compactServer = await startCompactServer();
 
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("openai", "test-key");
+		authStorage.keys.setRuntimeApiKey("openai", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
@@ -319,7 +319,7 @@ describe("compaction.remote off: the local pass runs with the configured compact
 		compactServer = await startCompactServer();
 
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("openai", "test-key");
+		authStorage.keys.setRuntimeApiKey("openai", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
@@ -462,7 +462,7 @@ describe("remote compaction with no resolvable credential", () => {
 		// session, so the anthropic model is ALSO named as `defaultModel` below.
 		// That keeps the row about the downgrade notice rather than about
 		// cross-provider candidate selection.
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntimeApiKey("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage);
 		const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
@@ -625,7 +625,7 @@ describe("a compact route that answers 404 during a live session", () => {
 		compactServer = await startCompactServer(404);
 
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("openai", "test-key");
+		authStorage.keys.setRuntimeApiKey("openai", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 

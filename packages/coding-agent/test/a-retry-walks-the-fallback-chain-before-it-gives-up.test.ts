@@ -89,11 +89,11 @@ describe("AgentSession retry fallback", () => {
 	beforeAll(async () => {
 		tempDir = TempDir.createSync("@pi-retry-fallback-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
-		authStorage.setRuntimeApiKey("openai", "openai-test-key");
-		authStorage.setRuntimeApiKey("google", "google-test-key");
-		authStorage.setRuntimeApiKey("google-vertex", "google-vertex-test-key");
-		authStorage.setRuntimeApiKey("openrouter", "openrouter-test-key");
+		authStorage.keys.setRuntime("anthropic", "anthropic-test-key");
+		authStorage.keys.setRuntime("openai", "openai-test-key");
+		authStorage.keys.setRuntime("google", "google-test-key");
+		authStorage.keys.setRuntime("google-vertex", "google-vertex-test-key");
+		authStorage.keys.setRuntime("openrouter", "openrouter-test-key");
 		sharedRegistry = new ModelRegistry(authStorage);
 	});
 

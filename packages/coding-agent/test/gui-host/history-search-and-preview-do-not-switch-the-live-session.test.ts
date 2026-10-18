@@ -53,7 +53,7 @@ beforeEach(async () => {
 	betaPath = beta.getSessionFile()!;
 	await fs.writeFile(path.join(root, "config.yml"), "modelRoles:\n  default: openai/gpt-4o-mini\n");
 	const authStorage = await isolatedAuthStorage(root);
-	authStorage.upsertCredential("openai", { type: "api_key", key: "test-key" });
+	await authStorage.credentials.upsert("openai", { type: "api_key", key: "test-key" });
 	server = await startGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: alpha.getCwd(), agentDir: root, authStorage });
 	client = await TestSocketClient.connect(server.endpoint);
 	await client.nextFrame();

@@ -77,7 +77,7 @@ const live: Harness[] = [];
 async function createHarness(responses: MockResponse[]): Promise<Harness> {
 	const tempDir = TempDir.createSync("@pi-facade-");
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
-	authStorage.setRuntimeApiKey("mock", "test-key");
+	authStorage.keys.setRuntime("mock", "test-key");
 
 	const mock = createMockModel({ responses });
 	const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));

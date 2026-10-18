@@ -11,6 +11,7 @@ import type {
 	SimpleStreamOptions,
 } from "@veyyon/ai";
 import { streamSimple } from "@veyyon/ai";
+import type { AuthApiKeyOptions, OAuthRefreshByIdOptions } from "@veyyon/ai/auth/types";
 import { formatDuration } from "@veyyon/utils";
 import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth } from "@veyyon/utils/width";
@@ -48,25 +49,27 @@ export interface DryBalanceCommandArgs {
 	};
 }
 
-export interface DryBalanceAuthOptions {
-	baseUrl?: string;
-	modelId?: string;
-	signal?: AbortSignal;
-}
+export type DryBalanceAuthOptions = AuthApiKeyOptions;
 
 export interface DryBalanceAuthStorage {
-	getOAuthAccess(
-		provider: string,
-		sessionId?: string,
-		options?: DryBalanceAuthOptions,
-	): Promise<OAuthAccess | undefined>;
-	getOAuthAccesses?(provider: string, options?: DryBalanceAuthOptions): Promise<OAuthAccessResolution[]>;
-	/**
-	 * Force-refresh a single credential by id (step (b) of the auth-retry
-	 * policy). The bench re-mints the failing account's token in place on a
-	 * 401 rather than rotating accounts — it is measuring each account.
-	 */
-	forceRefreshCredentialById?(id: number, signal?: AbortSignal): Promise<AuthCredentialSnapshotEntry>;
+	oauth: {
+		access(
+			provider: string,
+			sessionId?: string,
+			options?: DryBalanceAuthOptions,
+		): Promise<OAuthAccess | undefined>;
+		accessAll?(provider: string, options?: DryBalanceAuthOptions): Promise<OAuthAccessResolution[]>;
+		/**
+		 * Force-refresh a single credential by id (step (b) of the auth-retry
+		 * policy). The bench re-mints the failing account's token in place on a
+		 * 401 rather than rotating accounts — it is measuring each account.
+		 */
+		refresh?(
+			id: number,
+			signal?: AbortSignal,
+			options?: OAuthRefreshByIdOptions,
+		): Promise<AuthCredentialSnapshotEntry>;
+	};
 }
 
 export interface DryBalanceModelRegistry {
@@ -396,8 +399,8 @@ async function runBenchRequest(
 	// The bench measures one account, so the switch step intentionally declines.
 	const apiKey: ApiKeyResolver = async ({ lastChance, error }) => {
 		if (error === undefined) return accessToken;
-		if (lastChance || credentialId === undefined || !authStorage.forceRefreshCredentialById) return undefined;
-		const refreshed = await authStorage.forceRefreshCredentialById(credentialId);
+		if (lastChance || credentialId === undefined || !authStorage.oauth.refresh) return undefined;
+		const refreshed = await authStorage.oauth.refresh(credentialId, undefined, { reuseRecentMint: false });
 		return refreshed.credential.type === "oauth" ? refreshed.credential.access : undefined;
 	};
 	try {
@@ -458,13 +461,13 @@ async function resolveBenchTargets(
 	model: Model<Api>,
 	authStorage: DryBalanceAuthStorage,
 ): Promise<DryBalanceBenchTarget[]> {
-	const resolved = authStorage.getOAuthAccesses
-		? await authStorage.getOAuthAccesses(model.provider, {
+	const resolved = authStorage.oauth.accessAll
+		? await authStorage.oauth.accessAll(model.provider, {
 				baseUrl: model.baseUrl,
 				modelId: model.id,
 			})
-		: await authStorage
-				.getOAuthAccess(model.provider, undefined, {
+		: await authStorage.oauth
+				.access(model.provider, undefined, {
 					baseUrl: model.baseUrl,
 					modelId: model.id,
 				})
@@ -564,10 +567,10 @@ async function runOneAttempt(
 	sessionId: string,
 ): Promise<DryBalanceAttemptResult> {
 	try {
-		// AuthStorage.getOAuthAccess shares the OAuth credential ranking, refresh,
-		// usage-limit, broker, and session-sticky path used by getApiKey(), while
+		// AuthStorage.oauth.access shares the OAuth credential ranking, refresh,
+		// usage-limit, broker, and session-sticky path used by keys.get(), while
 		// returning the selected account metadata instead of bearer bytes.
-		const access = await modelRegistry.authStorage.getOAuthAccess(model.provider, sessionId, {
+		const access = await modelRegistry.authStorage.oauth.access(model.provider, sessionId, {
 			baseUrl: model.baseUrl,
 			modelId: model.id,
 		});

@@ -86,7 +86,7 @@ export interface CodexAutoRedeemInput {
 	/** `this.model.id`. */
 	modelId: string;
 	settings: { autoRedeem: boolean; minBlockedMinutes: number; keepCredits: number };
-	/** `getOAuthAccountIdentity("openai-codex", sessionId)`, captured at hook entry before any await. */
+	/** `oauth.identity("openai-codex", sessionId)`, captured at hook entry before any await. */
 	identity: OAuthAccountIdentity | undefined;
 	/** `session.fetchUsageReports()` (≤5-min cache). */
 	reports: UsageReport[] | null;

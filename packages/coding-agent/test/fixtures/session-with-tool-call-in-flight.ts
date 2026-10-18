@@ -80,7 +80,7 @@ async function heartbeatReaches(accept: (beat: SessionHeartbeat) => boolean): Pr
 
 async function run(): Promise<void> {
 	const authStorage = await AuthStorage.create(path.join(stateDir, "auth.db"));
-	authStorage.setRuntimeApiKey("anthropic", "test-key");
+	authStorage.keys.setRuntimeApiKey("anthropic", "test-key");
 	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 	if (!model) throw new Error("Expected built-in anthropic model to exist");
 

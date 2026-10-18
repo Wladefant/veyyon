@@ -93,7 +93,7 @@ describe("a successful compaction persists a pointered, correctly estimated elis
 		primedEstimate = undefined;
 		tempDir = TempDir.createSync("@pi-tailrev-elision-persist-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntimeApiKey("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 

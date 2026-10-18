@@ -184,7 +184,7 @@ function bundledModelFor(api: KnownApi): Model {
 async function sessionPromptFor(api: KnownApi, scopes: OperatorScopes): Promise<string[]> {
 	const model = bundledModelFor(api);
 	const authStorage = await AuthStorage.create(path.join(scopes.home, `auth-${api}.db`));
-	authStorage.setRuntimeApiKey(model.provider, "test-token");
+	authStorage.keys.setRuntimeApiKey(model.provider, "test-token");
 	const created = await createAgentSession({
 		cwd: scopes.cwd,
 		agentDir: scopes.agentDir,

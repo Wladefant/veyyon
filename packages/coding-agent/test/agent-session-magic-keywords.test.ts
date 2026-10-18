@@ -43,7 +43,7 @@ async function createMagicKeywordSession(
 		},
 	});
 	const authStorage = await AuthStorage.create(path.join(root, "auth.db"));
-	authStorage.setRuntimeApiKey("anthropic", "test-key");
+	authStorage.keys.setRuntime("anthropic", "test-key");
 	const modelRegistry = new ModelRegistry(authStorage, path.join(root, "models.yml"));
 	const settings = Settings.isolated();
 	const session = new AgentSession({

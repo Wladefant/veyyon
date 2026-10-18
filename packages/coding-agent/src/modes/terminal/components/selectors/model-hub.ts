@@ -445,7 +445,9 @@ export class ModelHubComponent implements Component {
 				// Discoverable without stored auth: catalog-backed providers stay
 				// locked; keyless/custom endpoints (ollama, vllm, …) surface as
 				// selectable so discovery can populate them.
-				if (authStorage.hasAuth(provider) || !locked.has(provider)) {
+				const hasAuth =
+					authStorage.keys.source(provider, { env: "aliases" }) !== undefined || authStorage.keys.keyless(provider);
+				if (hasAuth || !locked.has(provider)) {
 					locked.delete(provider);
 					unlocked.add(provider);
 				}

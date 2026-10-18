@@ -13,7 +13,6 @@ export type {
 	AuthCredentialEntry,
 	AuthCredentialStore,
 	AuthStorageData,
-	AuthStorageOptions,
 	CredentialOrigin,
 	CredentialOriginKind,
 	OAuthAccountIdentity,
@@ -24,6 +23,7 @@ export type {
 	SerializedAuthStorage,
 	StoredAuthCredential,
 } from "@veyyon/ai/auth-storage";
+export type { AuthStorageOptions } from "@veyyon/ai/auth/types";
 export { AuthStorage, REMOTE_REFRESH_SENTINEL } from "@veyyon/ai/auth-storage";
 export { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 export * from "@veyyon/kernel/session/agent-session-compaction-policy";

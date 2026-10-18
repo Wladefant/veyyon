@@ -90,7 +90,7 @@ let registry: ModelRegistry;
 beforeAll(async () => {
 	tempDir = TempDir.createSync("@recovery-wait-cancel-");
 	authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
-	authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
+	authStorage.keys.setRuntime("anthropic", "anthropic-test-key");
 	registry = new ModelRegistry(authStorage);
 });
 

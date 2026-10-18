@@ -93,7 +93,7 @@ describe("runtime provider apiKey vs /login credential (Refs #107, upstream 1f2a
 	}
 
 	async function login(): Promise<void> {
-		await authStorage.login(provider, {
+		await authStorage.oauth.login(provider, {
 			onAuth() {},
 			onPrompt: async () => savedKey,
 		});
@@ -146,7 +146,7 @@ describe("runtime provider apiKey vs /login credential (Refs #107, upstream 1f2a
 		process.env[envName] = "env-key";
 		register({ oauth: false });
 		// A /login-sourced key outranks the fallback tier, so env-key wins only as an override.
-		await authStorage.set(provider, { type: "api_key", key: "stored-key", source: "login" });
+		await authStorage.credentials.set(provider, { type: "api_key", key: "stored-key", source: "login" });
 
 		expect(await registry.getApiKeyForProvider(provider)).toBe("env-key");
 	});
@@ -162,7 +162,7 @@ describe("runtime provider apiKey vs /login credential (Refs #107, upstream 1f2a
 		if (!model) throw new Error("missing listed model after login discovery");
 		expect(await registry.getApiKey(model)).toBe(savedKey);
 		expect(await registry.getApiKeyForProvider(provider)).toBe(savedKey);
-		expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("api_key");
+		expect(authStorage.keys.source(provider)?.kind).toBe("api_key");
 	});
 
 	test("a command fallback keeps saved login auth during discovery", async () => {
@@ -171,14 +171,14 @@ describe("runtime provider apiKey vs /login credential (Refs #107, upstream 1f2a
 		await registry.refreshProvider(provider, "online");
 		expect(discoveryKeys).toEqual([savedKey]);
 		expect(registry.find(provider, "listed-model")?.id).toBe("listed-model");
-		expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("api_key");
+		expect(authStorage.keys.source(provider)?.kind).toBe("api_key");
 	});
 
 	test("a command fallback keeps saved login auth for provider requests", async () => {
 		register({ oauth: true, apiKey: commandKey });
 		await login();
 		expect(await registry.getApiKeyForProvider(provider)).toBe(savedKey);
-		expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("api_key");
+		expect(authStorage.keys.source(provider)?.kind).toBe("api_key");
 	});
 
 	test("a command fallback keeps saved login auth for model requests", async () => {
@@ -186,7 +186,7 @@ describe("runtime provider apiKey vs /login credential (Refs #107, upstream 1f2a
 		await login();
 		const model = requestModel();
 		expect(await registry.getApiKey(model)).toBe(savedKey);
-		expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("api_key");
+		expect(authStorage.keys.source(provider)?.kind).toBe("api_key");
 	});
 
 	test("a command fallback is usable without a saved login", async () => {
@@ -199,9 +199,9 @@ describe("runtime provider apiKey vs /login credential (Refs #107, upstream 1f2a
 
 	test("a command without a login flow keeps its override tier", async () => {
 		register({ oauth: false, apiKey: commandKey });
-		await authStorage.set(provider, { type: "api_key", key: savedKey, source: "login" });
+		await authStorage.credentials.set(provider, { type: "api_key", key: savedKey, source: "login" });
 		expect(await registry.getApiKeyForProvider(provider)).toBe("command-fallback-key");
-		expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("config");
+		expect(authStorage.keys.source(provider)?.kind).toBe("config");
 	});
 
 	for (const override of [
@@ -227,17 +227,17 @@ describe("runtime provider apiKey vs /login credential (Refs #107, upstream 1f2a
 					"utf8",
 				);
 				await registry.refresh("offline");
-				expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("config");
+				expect(authStorage.keys.source(provider)?.kind).toBe("config");
 				expect(await registry.getApiKeyForProvider(provider)).toBe(override.key);
-				expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("config");
+				expect(authStorage.keys.source(provider)?.kind).toBe("config");
 				const model = withModels ? registry.find(provider, "static-model") : requestModel();
 				if (!model) throw new Error("missing configured static model");
 				expect(await registry.getApiKey(model)).toBe(override.key);
-				expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("config");
+				expect(authStorage.keys.source(provider)?.kind).toBe("config");
 				discoveryKeys.length = 0;
 				await registry.refreshProvider(provider, "online");
 				expect(discoveryKeys).toEqual([override.key]);
-				expect(authStorage.getCredentialOrigin(provider)?.kind).toBe("config");
+				expect(authStorage.keys.source(provider)?.kind).toBe("config");
 			});
 		}
 	}

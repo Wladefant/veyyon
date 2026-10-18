@@ -30,7 +30,7 @@ async function searchWithAuthStorage(
 	authStorage: AuthStorage,
 	sessionId?: string,
 ): Promise<ParallelSearchResult> {
-	const apiKey = await authStorage.getApiKey("parallel", sessionId, { signal: params.signal });
+	const apiKey = await authStorage.keys.get("parallel", sessionId, { signal: params.signal });
 	if (!apiKey) {
 		throw new ParallelApiError(
 			"Parallel credentials not found. Set PARALLEL_API_KEY or login with 'veyyon /login parallel'.",
@@ -41,7 +41,7 @@ async function searchWithAuthStorage(
 	// sibling-rotate retry policy. The `ParallelApiError` thrown below carries a
 	// `statusCode`, which `withAuth`'s default classifier reads to detect a
 	// retryable 401 / usage-limit.
-	const keyOrResolver: ApiKey = authStorage.resolver("parallel", { sessionId });
+	const keyOrResolver: ApiKey = authStorage.keys.resolver("parallel", { sessionId });
 	return withAuth(
 		keyOrResolver,
 		async key => {

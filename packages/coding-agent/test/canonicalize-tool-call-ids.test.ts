@@ -389,7 +389,7 @@ describe("AgentSession transformProviderContext canonicalization", () => {
 		if (!model) throw new Error("Expected claude-sonnet-4-5");
 
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `auth-${cleanups.length}.db`));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), `models-${cleanups.length}.yml`));
 		const settings = Settings.isolated({
 			"compaction.enabled": false,

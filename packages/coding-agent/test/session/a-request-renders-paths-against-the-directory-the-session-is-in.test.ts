@@ -124,7 +124,7 @@ describe("a request renders paths against the directory the session is in", () =
 	beforeAll(async () => {
 		sharedDir = TempDir.createSync("veyyon-wire-root-shared-");
 		authStorage = await AuthStorage.create(path.join(sharedDir.path(), "auth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir.path(), "models.yml"));
 		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!bundled) throw new Error("Expected the bundled anthropic model to exist");

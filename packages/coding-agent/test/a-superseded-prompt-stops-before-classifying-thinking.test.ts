@@ -43,7 +43,7 @@ describe("a prompt superseded inside before_agent_start", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-superseded-before-agent-start-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 	});
 

@@ -48,7 +48,7 @@ describe("a failed compaction parks the run instead of looping", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-failed-compaction-park-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 

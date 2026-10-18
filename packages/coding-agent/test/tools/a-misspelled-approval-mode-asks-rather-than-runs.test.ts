@@ -157,7 +157,7 @@ describe("the session reports a configured value that does not match its declara
 
 	beforeAll(async () => {
 		authStorage = await AuthStorage.create(path.join(makeDir(), "auth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
+		authStorage.keys.setRuntime("anthropic", "anthropic-test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 	});
 

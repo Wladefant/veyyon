@@ -36,7 +36,7 @@ export async function runDoctorChecks(): Promise<DoctorCheck[]> {
 		];
 
 		for (const provider of providers) {
-			const hasOAuth = authStorage ? await authStorage.getOAuthAccess(provider.id) : null;
+			const hasOAuth = authStorage ? await authStorage.oauth.access(provider.id) : null;
 			const hasEnvKey = !!Bun.env[provider.envKey];
 			const isAuth = !!hasOAuth || hasEnvKey;
 			checks.push({

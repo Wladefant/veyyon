@@ -28,23 +28,39 @@ describe("SelectorController login", () => {
 	it("presents OAuth success as soon as credentials are saved", async () => {
 		const loginSaved = Promise.withResolvers<void>();
 		const presentedBlocks: unknown[] = [];
+		const loginMock = vi.fn(async () => {
+			loginSaved.resolve();
+		});
+		const reloadMock = vi.fn(async () => {});
+		const listStoredMock = vi.fn(() => []);
 		const authStorage = {
-			login: vi.fn(async () => {
-				loginSaved.resolve();
-			}),
-			// A finished login now opens the account manager, which reloads storage and reads the rows
-			// back. The stub answers that with an empty account list: this case is about the success
-			// block, and an incomplete stub turned a passing assertion into an unhandled rejection.
-			reload: vi.fn(async () => {}),
-			listStoredCredentials: vi.fn(() => []),
-			listProvidersWithFailedRefresh: vi.fn(() => []),
-			getAccountName: vi.fn(() => undefined),
-			getCredentialOrigin: vi.fn(() => undefined),
-			sessionCredentialRouting: vi.fn(() => undefined),
-			credentialBlockedUntil: vi.fn(() => undefined),
-			disabledCredentialCause: vi.fn(() => undefined),
-			checkCredentials: vi.fn(async () => []),
-			listUsageWindows: vi.fn(() => []),
+			oauth: {
+				login: loginMock,
+			},
+			credentials: {
+				list: listStoredMock,
+				reload: reloadMock,
+				listProvidersWithFailedRefresh: vi.fn(() => []),
+				getAccountName: vi.fn(() => undefined),
+				listDisabled: vi.fn(async () => []),
+			},
+			keys: {
+				describe: vi.fn(() => undefined),
+				source: vi.fn(() => undefined),
+			},
+			sessions: {
+				routing: vi.fn(() => undefined),
+			},
+			blocks: {
+				blockedUntil: vi.fn(() => undefined),
+				clearAll: vi.fn(),
+			},
+			health: {
+				check: vi.fn(async () => []),
+			},
+			usage: {
+				windows: vi.fn(() => []),
+			},
 		} as unknown as AuthStorage;
 		const refresh = vi.fn(() => new Promise<void>(() => {}));
 		const refreshInBackground = vi.fn();
@@ -111,7 +127,7 @@ describe("SelectorController login", () => {
 					ctrl.signal?.addEventListener("abort", () => reject(new Error("aborted")));
 				}),
 		);
-		const authStorage = { login } as unknown as AuthStorage;
+		const authStorage = { oauth: { login } } as unknown as AuthStorage;
 		const overlays: unknown[] = [];
 		const hide = vi.fn();
 		const editor = {};

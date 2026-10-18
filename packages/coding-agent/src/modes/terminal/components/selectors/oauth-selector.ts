@@ -1,4 +1,4 @@
-import type { AuthStorage, CredentialOriginKind } from "@veyyon/ai";
+import type { AuthStorage, CredentialOrigin, CredentialOriginKind } from "@veyyon/ai/auth-storage";
 import { getOAuthProviders } from "@veyyon/ai/oauth";
 import type { OAuthProviderInfo } from "@veyyon/ai/oauth/types";
 import type { Component } from "@veyyon/tui";
@@ -155,7 +155,7 @@ export class OAuthSelectorComponent implements Component {
 	}
 
 	#hasSelectableAuth(providerId: string): boolean {
-		return this.#authStorage.hasAuth(providerId);
+		return this.#authStorage.keys.source(providerId, { env: "aliases" }) !== undefined || this.#authStorage.keys.keyless(providerId);
 	}
 
 	#loadProviders(): void {
@@ -234,12 +234,20 @@ export class OAuthSelectorComponent implements Component {
 		}
 	}
 
+	#getCredentialOrigin(providerId: string): CredentialOrigin | undefined {
+		const source = this.#authStorage.keys.source(providerId, { env: "aliases" });
+		if (!source) return undefined;
+		return source.envVar === undefined
+			? { kind: source.kind }
+			: { kind: source.kind, envVar: source.envVar };
+	}
+
 	/**
 	 * Muted provenance suffix (" (env: COPILOT_GITHUB_TOKEN)", " (login)", …) so
 	 * the list distinguishes a real login from an env var aliasing the provider.
 	 */
 	#getSourceLabel(providerId: string): string {
-		const origin = this.#authStorage.getCredentialOrigin(providerId);
+		const origin = this.#getCredentialOrigin(providerId);
 		if (!origin) return "";
 		const detail = origin.kind === "env" && origin.envVar ? `env: ${origin.envVar}` : ORIGIN_LABELS[origin.kind];
 		return theme.fg("muted", ` (${detail})`);
@@ -280,7 +288,7 @@ export class OAuthSelectorComponent implements Component {
 
 	#getProviderSearchText(provider: OAuthProviderInfo): string {
 		let text = `${provider.name} ${provider.id} ${CREDENTIAL_LABELS[provider.credential]}`;
-		const origin = this.#authStorage.getCredentialOrigin(provider.id);
+		const origin = this.#getCredentialOrigin(provider.id);
 		if (origin) {
 			text += ` logged in authenticated ${ORIGIN_LABELS[origin.kind]}`;
 			if (origin.envVar) text += ` ${origin.envVar}`;

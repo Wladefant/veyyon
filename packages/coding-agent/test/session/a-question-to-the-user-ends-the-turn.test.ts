@@ -258,7 +258,7 @@ describe("a reply that asks the user something ends the turn", () => {
 		beforeEach(async () => {
 			tempDir = TempDir.createSync("@veyyon-settle-question-");
 			authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-			authStorage.setRuntimeApiKey("anthropic", "test-key");
+			authStorage.keys.setRuntime("anthropic", "test-key");
 			sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
 			const model = getBundledModel("anthropic", "claude-sonnet-4-5");

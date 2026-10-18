@@ -41,8 +41,8 @@ describe("AgentSession compaction confidentiality wiring", () => {
 		tempDirs.push(tempDir);
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		authStores.push(authStorage);
-		authStorage.setRuntimeApiKey(currentModel.provider, "current-key");
-		authStorage.setRuntimeApiKey(fallbackModel.provider, "fallback-key");
+		authStorage.keys.setRuntime(currentModel.provider, "current-key");
+		authStorage.keys.setRuntime(fallbackModel.provider, "fallback-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 		const settings = Settings.isolated({
 			"compaction.keepRecentTokens": 1,

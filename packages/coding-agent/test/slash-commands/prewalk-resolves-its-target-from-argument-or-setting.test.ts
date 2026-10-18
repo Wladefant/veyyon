@@ -39,7 +39,7 @@ describe("/prewalk resolves its cheap target", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-prewalk-target-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntimeApiKey("anthropic", "test-key");
 	});
 
 	afterEach(async () => {

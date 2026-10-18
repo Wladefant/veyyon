@@ -217,7 +217,7 @@ export async function searchWithKagi(
 
 	return withHardTimeout(options.signal, async hardSignal => {
 		const response = await withAuth(
-			authStorage.resolver("kagi", { sessionId: options.sessionId }),
+			authStorage.keys.resolver("kagi", { sessionId: options.sessionId }),
 			async apiKey => {
 				const transform = resolveProviderTextTransform(options.resolveProviderTextTransform, "Kagi search request");
 				const body = JSON.stringify(

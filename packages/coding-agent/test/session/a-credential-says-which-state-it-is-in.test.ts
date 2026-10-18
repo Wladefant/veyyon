@@ -299,7 +299,7 @@ describe("the inventory reads a token's clock off the store", () => {
 
 	async function seed(credential: AuthCredential): Promise<AccountRow> {
 		if (!authStorage) throw new Error("test setup failed");
-		await authStorage.set("unit-credential-state", [credential]);
+		await authStorage.credentials.set("unit-credential-state", [credential]);
 		const entry = buildAccountInventory(authStorage).providers.find(
 			group => group.provider === "unit-credential-state",
 		);

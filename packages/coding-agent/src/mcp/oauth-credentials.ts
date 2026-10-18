@@ -50,14 +50,14 @@ export function lookupMcpOAuthCredentialForServer(
 		auth?.credentialId &&
 		(!auth.credentialId.startsWith("mcp_oauth:profile:") || urlKeyedCredentialIds.includes(auth.credentialId))
 	) {
-		const credential = authStorage.get(auth.credentialId);
+		const credential = authStorage.credentials.get(auth.credentialId);
 		if (credential?.type === "oauth") {
 			return { credentialId: auth.credentialId, credential };
 		}
 	}
 	if (options.allowUrlKeyedFallback === false) return undefined;
 	for (const credentialId of urlKeyedCredentialIds) {
-		const credential = authStorage.get(credentialId);
+		const credential = authStorage.credentials.get(credentialId);
 		if (credential?.type === "oauth") {
 			return { credentialId, credential };
 		}
@@ -93,8 +93,8 @@ export async function removeManagedMcpOAuthCredential(
 	if (!isManagedMCPOAuthCredentialId(credentialId)) return false;
 	const scopedProfile = mcpOAuthCredentialProfile(credentialId);
 	if (scopedProfile !== undefined && scopedProfile !== (getActiveProfile() ?? "default")) return false;
-	if (authStorage.get(credentialId)?.type !== "oauth") return false;
-	await authStorage.remove(credentialId);
+	if (authStorage.credentials.get(credentialId)?.type !== "oauth") return false;
+	await authStorage.credentials.remove(credentialId);
 	return true;
 }
 

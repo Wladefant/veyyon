@@ -304,7 +304,7 @@ describe("a cursor-agent turn carries every instruction layer the session found"
 	): Promise<AgentSession> {
 		const cwd = overrides.cwd ?? ws.cwd;
 		const authStorage = await AuthStorage.create(path.join(ws.home, `auth-${path.basename(cwd)}.db`));
-		authStorage.setRuntimeApiKey("cursor", "test-token");
+		authStorage.keys.setRuntime("cursor", "test-token");
 		const created = await createAgentSession({
 			cwd,
 			agentDir: overrides.agentDir ?? ws.agentDir,

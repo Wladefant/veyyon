@@ -50,25 +50,43 @@ function storedRows(count: number): { provider: string; id: number; credential: 
 
 function harness(options: { rows: number; credentialId?: number; nameAccepted?: boolean }) {
 	const setAccountName = vi.fn(() => options.nameAccepted !== false);
+	const listStored = vi.fn((provider?: string) =>
+		provider === undefined || provider === "groq" ? storedRows(options.rows) : [],
+	);
+	const loginMock = vi.fn(async () => ({
+		type: "api_key" as const,
+		...(options.credentialId !== undefined ? { credentialId: options.credentialId } : {}),
+	}));
+	const reloadMock = vi.fn(async () => {});
 	const authStorage = {
-		login: vi.fn(async () => ({
-			type: "api_key" as const,
-			...(options.credentialId !== undefined ? { credentialId: options.credentialId } : {}),
-		})),
-		listStoredCredentials: vi.fn((provider?: string) =>
-			provider === undefined || provider === "groq" ? storedRows(options.rows) : [],
-		),
-		setAccountName,
-		// The account manager opens once the login settles; it reloads and reads the rows back.
-		reload: vi.fn(async () => {}),
-		listProvidersWithFailedRefresh: vi.fn(() => []),
-		getAccountName: vi.fn(() => undefined),
-		getCredentialOrigin: vi.fn(() => undefined),
-		sessionCredentialRouting: vi.fn(() => undefined),
-		credentialBlockedUntil: vi.fn(() => undefined),
-		disabledCredentialCause: vi.fn(() => undefined),
-		checkCredentials: vi.fn(async () => []),
-		listUsageWindows: vi.fn(() => []),
+		oauth: {
+			login: loginMock,
+		},
+		credentials: {
+			list: listStored,
+			setAccountName,
+			reload: reloadMock,
+			listProvidersWithFailedRefresh: vi.fn(() => []),
+			getAccountName: vi.fn(() => undefined),
+			listDisabled: vi.fn(async () => []),
+		},
+		keys: {
+			describe: vi.fn(() => undefined),
+			source: vi.fn(() => undefined),
+		},
+		sessions: {
+			routing: vi.fn(() => undefined),
+		},
+		blocks: {
+			blockedUntil: vi.fn(() => undefined),
+			clearAll: vi.fn(),
+		},
+		health: {
+			check: vi.fn(async () => []),
+		},
+		usage: {
+			windows: vi.fn(() => []),
+		},
 	} as unknown as AuthStorage;
 	const editorSlot: unknown[] = [];
 	const overlayStack: unknown[] = [];

@@ -42,7 +42,7 @@ describe("plan mode thinking level", () => {
 	beforeAll(async () => {
 		tempDir = TempDir.createSync("@pi-plan-thinking-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntimeApiKey("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 	});
 

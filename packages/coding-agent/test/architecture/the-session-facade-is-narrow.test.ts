@@ -90,7 +90,7 @@ describe("the facade's surface", () => {
 		const tempDir = TempDir.createSync("@pi-facade-narrow-");
 		try {
 			const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
-			authStorage.setRuntimeApiKey("mock", "test-key");
+			authStorage.keys.setRuntimeApiKey("mock", "test-key");
 			const mock = createMockModel({ responses: [{ content: [{ type: "text", text: "hi" }], stopReason: "stop" }] });
 			const settings = Settings.isolated({ "compaction.enabled": false, "retry.enabled": false });
 			settings.setDefaultModel(`${mock.provider}/${mock.id}`);

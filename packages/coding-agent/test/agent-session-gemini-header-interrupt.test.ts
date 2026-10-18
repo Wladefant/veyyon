@@ -138,7 +138,7 @@ describe("AgentSession Gemini header-runaway interrupt", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-gemini-header-interrupt-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
-		authStorage.setRuntimeApiKey("openrouter", "openrouter-test-key");
+		authStorage.keys.setRuntime("openrouter", "openrouter-test-key");
 	});
 
 	afterEach(async () => {

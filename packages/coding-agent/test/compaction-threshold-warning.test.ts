@@ -58,7 +58,7 @@ describe("compaction threshold clamp warning", () => {
 	async function createSession(threshold: string): Promise<void> {
 		tempDir = TempDir.createSync("@pi-compaction-threshold-warning-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage);
 		const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 

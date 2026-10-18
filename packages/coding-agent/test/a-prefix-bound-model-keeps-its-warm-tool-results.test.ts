@@ -67,7 +67,7 @@ describe("a prefix-bound model's warm tool results", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@veyyon-prefix-binding-prune-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 	});
 

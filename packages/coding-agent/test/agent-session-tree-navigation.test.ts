@@ -339,7 +339,7 @@ describe("AgentSession tree navigation branch summary options", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-tree-nav-summary-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 

@@ -379,7 +379,7 @@ async function storeOAuthCredential(
 	const credentialId = serverUrl
 		? mcpOAuthCredentialId(serverUrl)
 		: `mcp_oauth_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
-	await ctx.session.modelRegistry.authStorage.set(credentialId, credential);
+	await ctx.session.modelRegistry.authStorage.credentials.set(credentialId, credential);
 	return { credentialId, clientId: flow.resolvedClientId, resource: flow.resource };
 }
 

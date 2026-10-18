@@ -30,13 +30,13 @@ describe("buildAccountInventory", () => {
 		setSystemTime(new Date(NOW_MS));
 		store = new SqliteAuthCredentialStore(new Database(":memory:"));
 		authStorage = new AuthStorage(store);
-		await authStorage.reload();
+		await authStorage.credentials.reload();
 		vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async (provider, credentials) => {
 			const credential = credentials[provider];
 			if (!credential) return null;
 			return { newCredentials: credential, apiKey: credential.access };
 		});
-		await authStorage.set(OAUTH_PROVIDER, [
+		await authStorage.credentials.set(OAUTH_PROVIDER, [
 			{
 				type: "oauth",
 				access: "zeta-access-first",
@@ -56,7 +56,7 @@ describe("buildAccountInventory", () => {
 				projectId: "zeta-project",
 			},
 		]);
-		await authStorage.set(API_KEY_PROVIDER, [{ type: "api_key", key: "alpha-secret-key" }]);
+		await authStorage.credentials.set(API_KEY_PROVIDER, [{ type: "api_key", key: "alpha-secret-key" }]);
 	});
 
 	afterEach(() => {
@@ -133,9 +133,9 @@ describe("buildAccountInventory", () => {
 	test("activeForSession marks exactly the credential the session resolved to", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
-		const bearer = await storage.getApiKey(OAUTH_PROVIDER, SESSION_ID);
+		const bearer = await storage.keys.get(OAUTH_PROVIDER, SESSION_ID);
 		const servedIndex = bearer === "zeta-access-first" ? 0 : 1;
-		const servedId = storage.listStoredCredentials(OAUTH_PROVIDER)[servedIndex]?.id;
+		const servedId = storage.credentials.list(OAUTH_PROVIDER)[servedIndex]?.id;
 
 		const inventory = buildAccountInventory(storage, { sessionId: SESSION_ID });
 		const oauthRows = inventory.providers[1]?.rows ?? [];
@@ -157,9 +157,9 @@ describe("buildAccountInventory", () => {
 	test("a healthy pin marks its row as both pinned and active", () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
-		const [firstRow, secondRow] = storage.listStoredCredentials(OAUTH_PROVIDER);
+		const [firstRow, secondRow] = storage.credentials.list(OAUTH_PROVIDER);
 		if (!firstRow || !secondRow) throw new Error("credentials missing");
-		expect(storage.pinSessionCredential(OAUTH_PROVIDER, SESSION_ID, secondRow.id)).toBe(true);
+		expect(storage.sessions.pin(OAUTH_PROVIDER, SESSION_ID, secondRow.id)).toBe(true);
 
 		const rows = buildAccountInventory(storage, { sessionId: SESSION_ID }).providers[1]?.rows ?? [];
 
@@ -179,10 +179,10 @@ describe("buildAccountInventory", () => {
 	test("a rate-limit blocked credential carries its exact unblock deadline", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
-		const firstId = storage.listStoredCredentials(OAUTH_PROVIDER)[0]?.id;
+		const firstId = storage.credentials.list(OAUTH_PROVIDER)[0]?.id;
 		if (firstId === undefined) throw new Error("first credential missing");
 
-		await storage.markUsageLimitReached(OAUTH_PROVIDER, SESSION_ID, {
+		await storage.limits.markReached(OAUTH_PROVIDER, SESSION_ID, {
 			credentialId: firstId,
 			retryAfterMs: BLOCK_FOR_MS,
 		});

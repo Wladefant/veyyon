@@ -615,22 +615,22 @@ describe("On-disk SessionManager and AuthStorage UX audit", () => {
 		const authStorage = new AuthStorage(authStore);
 
 		// Seed API key row for openai
-		await authStorage.set("openai", {
+		await authStorage.credentials.set("openai", {
 			type: "api_key",
 			key: "sk-test-openai-key-12345",
 		});
 
 		// Seed fake OAuth row for anthropic
-		await authStorage.set("anthropic", {
+		await authStorage.credentials.set("anthropic", {
 			type: "oauth",
 			refresh: "rt_test_refresh_token_abc",
 			access: "at_test_access_token_xyz",
 			expires: Date.now() + 3600000,
 			email: "lead@example.com",
 		});
-		const anthropicRow = authStorage.listStoredCredentials("anthropic")[0];
+		const anthropicRow = authStorage.credentials.list("anthropic")[0];
 		if (anthropicRow) {
-			authStorage.setAccountName("anthropic", anthropicRow.id, "Engineering Lead");
+			authStorage.credentials.setAccountName("anthropic", anthropicRow.id, "Engineering Lead");
 		}
 
 		const inventory = await loadAccountInventory(authStorage, { sessionId: "session-audit-1" });

@@ -124,12 +124,12 @@ describe("MCPManager OAuth refresh failure", () => {
 	beforeEach(async () => {
 		store = new SqliteAuthCredentialStore(new Database(":memory:"));
 		authStorage = new AuthStorage(store);
-		await authStorage.reload();
+		await authStorage.credentials.reload();
 
 		// Seed an expired credential so `#resolveAuthConfig` decides to refresh
 		// (a non-expired credential takes the no-refresh branch and never reaches
 		// the bug).
-		await authStorage.set(CREDENTIAL_ID, {
+		await authStorage.credentials.set(CREDENTIAL_ID, {
 			type: "oauth",
 			access: STALE_ACCESS,
 			refresh: STALE_REFRESH,
@@ -178,7 +178,7 @@ describe("MCPManager OAuth refresh failure", () => {
 		);
 		// The credential row is gone so neither this nor a future session keeps
 		// shipping the dead refresh token.
-		expect(authStorage.get(CREDENTIAL_ID)).toBeUndefined();
+		expect(authStorage.credentials.get(CREDENTIAL_ID)).toBeUndefined();
 	});
 
 	test("clears the credential when the token endpoint replies HTTP 401", async () => {
@@ -188,7 +188,7 @@ describe("MCPManager OAuth refresh failure", () => {
 
 		await expect(manager.prepareConfig(serverConfig)).rejects.toThrow(MCPAuthRequiredError);
 
-		expect(authStorage.get(CREDENTIAL_ID)).toBeUndefined();
+		expect(authStorage.credentials.get(CREDENTIAL_ID)).toBeUndefined();
 	});
 
 	test("keeps the credential and falls back to the existing token on transient failure", async () => {
@@ -202,7 +202,7 @@ describe("MCPManager OAuth refresh failure", () => {
 		const prepared = await manager.prepareConfig(serverConfig);
 
 		expect(getAuthorizationHeader(prepared)).toBe(`Bearer ${STALE_ACCESS}`);
-		const remaining = authStorage.get(CREDENTIAL_ID);
+		const remaining = authStorage.credentials.get(CREDENTIAL_ID);
 		expect(remaining?.type).toBe("oauth");
 	});
 
@@ -219,7 +219,7 @@ describe("MCPManager OAuth refresh failure", () => {
 		const prepared = await manager.prepareConfig(serverConfig);
 
 		expect(getAuthorizationHeader(prepared)).toBe("Bearer fresh-access");
-		const remaining = authStorage.get(CREDENTIAL_ID);
+		const remaining = authStorage.credentials.get(CREDENTIAL_ID);
 		expect(remaining).toMatchObject({ type: "oauth", access: "fresh-access", refresh: "fresh-refresh" });
 	});
 

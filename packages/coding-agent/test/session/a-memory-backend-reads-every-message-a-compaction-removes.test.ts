@@ -59,7 +59,7 @@ describe("a memory backend reads every message a compaction removes", () => {
 		if (!model) throw new Error("Expected a bundled anthropic model");
 		dir = TempDir.createSync("@memory-compaction-reads-");
 		authStorage = await AuthStorage.create(path.join(dir.path(), "auth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const sessionManager = SessionManager.inMemory(dir.path());
 		const firstKeptEntryId = sessionManager.appendMessage(userText("kept", 3));
 		const preparation: CompactionPreparation = {

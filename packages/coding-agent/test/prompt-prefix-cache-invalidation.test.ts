@@ -130,8 +130,8 @@ describe("system prompt prefix invalidation", () => {
 		expect(Bun.env.VEYYON_STRICT_EDIT_MODE).toBeUndefined();
 
 		const [hashlineModel, replaceModel] = pickEditVariantPair();
-		authStorage.setRuntimeApiKey(hashlineModel.provider, "key-a");
-		authStorage.setRuntimeApiKey(replaceModel.provider, "key-b");
+		authStorage.keys.setRuntimeApiKey(hashlineModel.provider, "key-a");
+		authStorage.keys.setRuntimeApiKey(replaceModel.provider, "key-b");
 
 		session = newSession(
 			hashlineModel,
@@ -160,8 +160,8 @@ describe("system prompt prefix invalidation", () => {
 		const defaultPolicy = all.find(model => !usesCodexTaskPrompt(model.id));
 		const codexPolicy = all.find(model => usesCodexTaskPrompt(model.id));
 		if (!defaultPolicy || !codexPolicy) throw new Error("Expected default-policy and GPT-5.6 models");
-		authStorage.setRuntimeApiKey(defaultPolicy.provider, "key-a");
-		authStorage.setRuntimeApiKey(codexPolicy.provider, "key-b");
+		authStorage.keys.setRuntimeApiKey(defaultPolicy.provider, "key-a");
+		authStorage.keys.setRuntimeApiKey(codexPolicy.provider, "key-b");
 
 		session = newSession(
 			defaultPolicy,
@@ -190,7 +190,7 @@ describe("system prompt prefix invalidation", () => {
 	 */
 	it("records nothing when a rebuild reproduces the same bytes", async () => {
 		const [model] = pickEditVariantPair();
-		authStorage.setRuntimeApiKey(model.provider, "key-a");
+		authStorage.keys.setRuntimeApiKey(model.provider, "key-a");
 
 		session = newSession(model, Settings.isolated({ "compaction.enabled": false }), ["stable-a", "stable-b"]);
 

@@ -51,7 +51,7 @@ function sessionProviderSection(ctx: SessionInfoContext, sessionId: string): str
 		model,
 		sessionId,
 		authMode: resolveProviderAuthMode(authStorage, model.provider),
-		credentialSource: authStorage.describeCredentialSource(model.provider, sessionId),
+		credentialSource: authStorage.keys.describe(model.provider, sessionId),
 		preferWebsockets: openaiWebsocketPreference(ctx.settings.get("providers.openaiWebsockets")),
 		providerSessionState: ctx.session.providerSessionState,
 	});
@@ -132,16 +132,18 @@ function formatLspServers(servers: LspStartupServerInfo[] | undefined): string {
 }
 
 function resolveProviderAuthMode(authStorage: AuthStorage, provider: string): string {
-	if (authStorage.hasOAuth(provider)) {
+	const source = authStorage.keys.source(provider, { env: "aliases" });
+	const hasOAuth = source?.kind === "oauth";
+	if (hasOAuth) {
 		return "oauth";
 	}
-	if (authStorage.has(provider)) {
+	if (authStorage.credentials.has(provider)) {
 		return "api key";
 	}
 	if (getEnvApiKey(provider)) {
 		return "env api key";
 	}
-	if (authStorage.hasAuth(provider)) {
+	if (source !== undefined || authStorage.keys.keyless(provider)) {
 		return "runtime/fallback";
 	}
 	return "unknown";

@@ -5,7 +5,8 @@ import {
 	registerCustomApi,
 	unregisterCustomApis,
 } from "@veyyon/ai/api-registry";
-import type { AuthStorage, OAuthCredential } from "@veyyon/ai/auth-storage";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
+import type { OAuthCredential } from "@veyyon/ai/auth/types";
 import {
 	registerOAuthProvider,
 	unregisterOAuthProviders,
@@ -453,7 +454,7 @@ function getOAuthCredentialsForProvider(
 	authStorage: AuthStorage,
 	provider: string,
 ): OAuthCredential[] {
-	const providerEntry = authStorage.getAll()[provider];
+	const providerEntry = authStorage.credentials.all()[provider];
 	if (!providerEntry) {
 		return [];
 	}
@@ -474,7 +475,7 @@ async function resolveCodexDiscoveryAccounts(
 	authStorage: AuthStorage,
 	resolvedAccessToken: string,
 ): Promise<OpenAICodexAccount[] | null> {
-	const accesses = await authStorage.getOAuthAccesses("openai-codex");
+	const accesses = await authStorage.oauth.accessAll("openai-codex");
 	const accounts: OpenAICodexAccount[] = [];
 	for (const access of accesses) {
 		if (!access.ok) return null;
@@ -501,7 +502,7 @@ function resolveCodexAccountFingerprint(
 	authStorage: AuthStorage,
 	fallbackKey?: string,
 ): string {
-	const accounts = authStorage.listOAuthAccounts("openai-codex");
+	const accounts = authStorage.oauth.accounts("openai-codex");
 	const identifiers = accounts
 		.map((a) => a.accountId ?? a.email ?? a.credentialId ?? String(a.position))
 		.sort();
@@ -612,10 +613,10 @@ export class ModelRegistry {
 			`API key for provider "${provider}"`,
 		);
 		if (value) {
-			this.authStorage.setConfigApiKey(provider, value, config);
+			this.authStorage.keys.setConfig(provider, value, config);
 			return { configured: true, value, fallback };
 		}
-		this.authStorage.removeConfigApiKey(provider);
+		this.authStorage.keys.removeConfig(provider);
 		return { configured: true, fallback };
 	}
 
@@ -630,7 +631,7 @@ export class ModelRegistry {
 			`API key for provider "${provider}"`,
 		);
 		if (resolved) {
-			this.authStorage.setConfigApiKey(provider, resolved, config);
+			this.authStorage.keys.setConfig(provider, resolved, config);
 		} else if (
 			isConfigValueCommand(keyConfig) ||
 			describeConfigEnvReference(keyConfig)
@@ -638,7 +639,7 @@ export class ModelRegistry {
 			// The config names a source that produced nothing — a failing command or an
 			// unset variable. Whatever was installed for this provider before is not what
 			// the config says now, so it is dropped rather than kept and sent.
-			this.authStorage.removeConfigApiKey(provider);
+			this.authStorage.keys.removeConfig(provider);
 		}
 	}
 
@@ -669,7 +670,7 @@ export class ModelRegistry {
 			? path.join(path.dirname(modelsPath), "models.db")
 			: undefined;
 		// Set up fallback resolver for custom provider API keys
-		this.authStorage.setFallbackResolver((provider) => {
+		this.authStorage.keys.setFallbackResolver((provider) => {
 			const keyConfig = this.#customProviderApiKeys.get(provider)?.keyConfig;
 			if (!keyConfig) return undefined;
 			return resolveConfigValueSync(keyConfig, `API key for provider "${provider}"`);
@@ -847,7 +848,7 @@ export class ModelRegistry {
 		// Drop config-sourced apiKeys from AuthStorage before reload; entries
 		// removed from models.yml must actually disappear from the resolver, not
 		// linger from the previous parse. The post-load setters below repopulate.
-		this.authStorage.clearConfigApiKeys();
+		this.authStorage.keys.clearConfig();
 		// Restore runtime API keys before #loadModels — survives because
 		// #loadModels only calls .set() on #customProviderApiKeys, never reassigns it.
 		for (const [k, v] of this.#runtimeProviderApiKeys) {
@@ -1247,7 +1248,7 @@ export class ModelRegistry {
 			});
 			if (
 				runtime.keyless === "always" ||
-				!this.authStorage.hasAuth(runtime.provider)
+				!this.#hasAuth(runtime.provider)
 			) {
 				this.#keylessProviders.add(runtime.provider);
 			}
@@ -1622,7 +1623,7 @@ export class ModelRegistry {
 	 */
 	#hasStoredCredential(provider: string): boolean {
 		return (
-			this.authStorage.hasAuth(provider) ||
+			this.#hasAuth(provider) ||
 			this.#customProviderApiKeys.has(provider) ||
 			this.#runtimeProviderApiKeys.has(provider)
 		);
@@ -2216,9 +2217,16 @@ export class ModelRegistry {
 		return available;
 	}
 
+	#hasAuth(provider: string): boolean {
+		return (
+			this.authStorage.keys.keyless(provider) ||
+			this.authStorage.keys.source(provider, { env: "aliases" }) !== undefined
+		);
+	}
+
 	/**
 	 * Availability predicate with per-provider memoization. Auth lookups
-	 * (`authStorage.hasAuth`) and the disabled-provider set are resolved once
+	 * (`#hasAuth`) and the disabled-provider set are resolved once
 	 * per provider instead of once per model, which matters when filtering the
 	 * full bundled catalog (thousands of models, ~50 providers).
 	 */
@@ -2231,7 +2239,7 @@ export class ModelRegistry {
 				available =
 					!disabledProviders.has(provider) &&
 					(this.#keylessProviders.has(provider) ||
-						this.authStorage.hasAuth(provider));
+						this.#hasAuth(provider));
 				byProvider.set(provider, available);
 			}
 			return available;
@@ -2249,14 +2257,14 @@ export class ModelRegistry {
 	 *
 	 * Side-effect-free and synchronous: a command-backed key (`!cmd`) counts as
 	 * configured by its presence alone — the program is NOT executed — and OAuth
-	 * tokens are NOT refreshed (`authStorage.hasAuth`). This is what keeps the
+	 * tokens are NOT refreshed (the presence-only auth check). This is what keeps the
 	 * model-switch pre-flight off the event loop's hot path; the real key
 	 * (command execution + OAuth refresh) is resolved lazily per request via
 	 * {@link ModelRegistry.resolver}.
 	 */
 	#isKeylessProvider(provider: string): boolean {
 		if (this.#keylessProviders.has(provider)) return true;
-		const stored = this.authStorage.listStoredCredentials(provider);
+		const stored = this.authStorage.credentials.list(provider);
 		return (
 			stored.length > 0 &&
 			stored.every(
@@ -2270,7 +2278,7 @@ export class ModelRegistry {
 		return (
 			isConfigValueCommand(keyConfig) ||
 			this.#isKeylessProvider(model.provider) ||
-			this.authStorage.hasAuth(model.provider)
+			this.#hasAuth(model.provider)
 		);
 	}
 
@@ -2279,7 +2287,7 @@ export class ModelRegistry {
 		return (
 			isConfigValueCommand(this.#customProviderApiKeys.get(provider)?.keyConfig) ||
 			this.#isKeylessProvider(provider) ||
-			this.authStorage.hasConcreteAuth(provider)
+			this.authStorage.keys.source(provider, { env: "aliases" })?.concrete === true
 		);
 	}
 
@@ -2291,7 +2299,7 @@ export class ModelRegistry {
 	hasApiKeyOverride(provider: string): boolean {
 		return (
 			isConfigValueCommand(this.#customProviderApiKeys.get(provider)?.keyConfig) ||
-			this.authStorage.hasApiKeyOverride(provider)
+			this.authStorage.keys.hasApiKeyOverride(provider)
 		);
 	}
 
@@ -2346,7 +2354,7 @@ export class ModelRegistry {
 	): Promise<string | undefined> {
 		const commandKey = this.#resolveCommandBackedApiKey(model.provider);
 		if (commandKey.configured && !commandKey.fallback) return commandKey.value;
-		const apiKey = await this.authStorage.getApiKey(model.provider, sessionId, {
+		const apiKey = await this.authStorage.keys.get(model.provider, sessionId, {
 			baseUrl: model.baseUrl,
 			modelId: model.id,
 		});
@@ -2373,7 +2381,7 @@ export class ModelRegistry {
 	): Promise<string | undefined> {
 		const commandKey = this.#resolveCommandBackedApiKey(provider);
 		if (commandKey.configured && !commandKey.fallback) return commandKey.value;
-		const apiKey = await this.authStorage.getApiKey(provider, sessionId, {
+		const apiKey = await this.authStorage.keys.get(provider, sessionId, {
 			baseUrl: options?.baseUrl,
 			modelId: options?.modelId,
 			forceRefresh: options?.forceRefresh,
@@ -2415,18 +2423,18 @@ export class ModelRegistry {
 		if (commandKey.configured && !commandKey.fallback) return commandKey.value;
 		if (
 			this.#keylessProviders.has(provider) &&
-			!this.authStorage.hasAuth(provider)
+			!this.#hasAuth(provider)
 		) {
 			return kNoAuth;
 		}
-		return this.authStorage.peekApiKey(provider);
+		return this.authStorage.keys.peek(provider);
 	}
 
 	/**
 	 * Check if a model is using OAuth credentials (subscription).
 	 */
 	isUsingOAuth(model: Model<Api>): boolean {
-		return this.authStorage.hasOAuth(model.provider);
+		return this.authStorage.keys.source(model.provider, { env: "aliases" })?.kind === "oauth";
 	}
 
 	#clearRuntimeProviderState(providerName: string): void {
@@ -2436,7 +2444,7 @@ export class ModelRegistry {
 			(overlay) => overlay.provider !== providerName,
 		);
 		this.#runtimeModelManagers.delete(providerName);
-		this.authStorage.removeConfigApiKey(providerName);
+		this.authStorage.keys.removeConfig(providerName);
 	}
 
 	/**
@@ -2632,7 +2640,7 @@ export class ModelRegistry {
 			);
 
 			if (config.oauth?.modifyModels) {
-				const credential = this.authStorage.getOAuthCredential(providerName);
+				const credential = this.authStorage.credentials.getOAuth(providerName);
 				if (credential) {
 					const modified = config.oauth.modifyModels(
 						fullWithRegistered,

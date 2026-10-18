@@ -143,7 +143,7 @@ export async function refreshActiveAccounts(session: AgentSession): Promise<stri
 	if (routed.length === 0) {
 		return "No provider has routed a request in this session yet, so there is nothing to re-probe. /providers to probe a stored account.";
 	}
-	const after = applyCredentialHealth(before, await authStorage.checkCredentials());
+	const after = applyCredentialHealth(before, await authStorage.health.check());
 	const lines = ["Re-probed the accounts this session is using"];
 	let failed = 0;
 	for (const row of routed) {
@@ -193,7 +193,7 @@ export async function renameActiveAccount(
 	}
 	const before = accountDisplayLabel(row);
 	const trimmed = text.trim();
-	if (!session.modelRegistry.authStorage.setAccountName(provider, row.credentialId, trimmed)) {
+	if (!session.modelRegistry.authStorage.credentials.setAccountName(provider, row.credentialId, trimmed)) {
 		const verb = trimmed ? "name" : "clear the name of";
 		return {
 			ok: false,
@@ -274,16 +274,10 @@ export async function useProviderAccount(
 	}
 	const row = matched[0] as AccountRow;
 	const label = accountDisplayLabel(row);
-	if (!authStorage.selectProviderCredential(provider, row.credentialId, { sessionId: session.sessionId })) {
+	if (!authStorage.sessions.selectProviderCredential(provider, row.credentialId, { sessionId: session.sessionId })) {
 		return { ok: false, message: `Could not switch to ${label}: that account is no longer stored.` };
 	}
-	const scope = (
-		typeof authStorage.isLoadBalancingEnabled === "function"
-			? authStorage.isLoadBalancingEnabled()
-			: session.settings.get("accounts.loadBalancing") === true
-	)
-		? "for this session only"
-		: "everywhere on this machine";
+	const scope = authStorage.sessions.isLoadBalancingEnabled() ? "for this session only" : "everywhere on this machine";
 	return {
 		ok: true,
 		message: `${row.providerLabel}: now using ${label} ${scope}.`,
@@ -412,7 +406,7 @@ export function findLogoutProvider(requested: string, authStorage: AuthStorage):
 	const oauth = findOAuthProvider(requested);
 	if (oauth) return oauth.id;
 	const provider = findRegistryProvider(requested);
-	if (provider && authStorage.listStoredCredentials(provider.id).length > 0) return provider.id;
+	if (provider && authStorage.credentials.list(provider.id).length > 0) return provider.id;
 	return undefined;
 }
 

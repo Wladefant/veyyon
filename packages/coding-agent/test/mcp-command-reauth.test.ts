@@ -138,7 +138,7 @@ describe("/mcp auth commands", () => {
 
 	test("stores definition-only OAuth credentials under the expanded URL key", async () => {
 		const authStorage = freshAuthStorage();
-		await authStorage.reload();
+		await authStorage.credentials.reload();
 		const connectToServer = vi.spyOn(mcpClient, "connectToServer").mockRejectedValue(AUTH_ERROR);
 		vi.spyOn(oauthFlow.MCPOAuthFlow.prototype, "login").mockResolvedValue({
 			access: "fresh-access",
@@ -158,7 +158,7 @@ describe("/mcp auth commands", () => {
 			expect.any(String),
 			expect.objectContaining({ url: EXPANDED_SERVER_URL }),
 		);
-		expect(authStorage.get(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL))).toMatchObject({
+		expect(authStorage.credentials.get(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL))).toMatchObject({
 			type: "oauth",
 			access: "fresh-access",
 			refresh: "fresh-refresh",
@@ -166,7 +166,7 @@ describe("/mcp auth commands", () => {
 			resource: EXPANDED_SERVER_URL,
 			authorizationUrl: "https://auth.example.com/authorize",
 		});
-		expect(authStorage.get(oauthFlow.mcpOAuthCredentialId(RAW_SERVER_URL))).toBeUndefined();
+		expect(authStorage.credentials.get(oauthFlow.mcpOAuthCredentialId(RAW_SERVER_URL))).toBeUndefined();
 
 		const saved = JSON.parse(await Bun.file(configPath).text()) as TestConfigFile;
 		const savedServer = saved.mcpServers?.envserver;
@@ -251,10 +251,10 @@ describe("/mcp auth commands", () => {
 		]) {
 			test(`${transport} reauth preserves ${scenario.name} through DCR and authorization`, async () => {
 				const authStorage = freshAuthStorage();
-				await authStorage.reload();
+				await authStorage.credentials.reload();
 				const credentialId = oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL);
 				const previous = { type: "oauth" as const, access: "old-access", refresh: "old-refresh", expires: 12345 };
-				await authStorage.set(credentialId, previous);
+				await authStorage.credentials.set(credentialId, previous);
 				await fs.writeFile(
 					configPath,
 					JSON.stringify({
@@ -327,14 +327,14 @@ describe("/mcp auth commands", () => {
 				expect(authorizationScopes).toEqual([scenario.expected]);
 				expect(registeredScopes).toEqual([scenario.expected]);
 				expect(showError.mock.calls.flat().join("\n")).toContain("Consent cancelled");
-				expect(authStorage.get(credentialId)).toEqual(previous);
+				expect(authStorage.credentials.get(credentialId)).toEqual(previous);
 			});
 		}
 	}
 
 	test("uses the registration endpoint discovered from a pathful issuer", async () => {
 		const authStorage = freshAuthStorage();
-		await authStorage.reload();
+		await authStorage.credentials.reload();
 		const resourceMetadataUrl = "https://gateway.example.com/.well-known/oauth-protected-resource/my-service/mcp";
 		vi.spyOn(mcpClient, "connectToServer").mockRejectedValue(
 			new Error(`HTTP 401: WWW-Authenticate: Bearer resource_metadata="${resourceMetadataUrl}"`),
@@ -392,7 +392,7 @@ describe("/mcp auth commands", () => {
 
 		expect(showError).not.toHaveBeenCalled();
 		expect(registrationRequests).toEqual(["https://auth.example.com/auth/v1/oauth/register"]);
-		expect(authStorage.get(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL))).toMatchObject({
+		expect(authStorage.credentials.get(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL))).toMatchObject({
 			type: "oauth",
 			clientId: "pathful-dcr-client",
 		});
@@ -400,8 +400,8 @@ describe("/mcp auth commands", () => {
 
 	test("reuses embedded DCR client secret during reauth token exchange", async () => {
 		const authStorage = freshAuthStorage();
-		await authStorage.reload();
-		await authStorage.set(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL), {
+		await authStorage.credentials.reload();
+		await authStorage.credentials.set(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL), {
 			type: "oauth",
 			access: "old-access",
 			refresh: "old-refresh",
@@ -435,7 +435,7 @@ describe("/mcp auth commands", () => {
 		const tokenRequest = new URLSearchParams(tokenRequestBody);
 		expect(tokenRequest.get("client_id")).toBe("dcr-client");
 		expect(tokenRequest.get("client_secret")).toBe("dcr-secret");
-		expect(authStorage.get(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL))).toMatchObject({
+		expect(authStorage.credentials.get(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL))).toMatchObject({
 			type: "oauth",
 			access: "fresh-access",
 			clientId: "dcr-client",
@@ -445,7 +445,7 @@ describe("/mcp auth commands", () => {
 
 	test("Esc aborts the OAuth flow during /mcp reauth", async () => {
 		const authStorage = freshAuthStorage();
-		await authStorage.reload();
+		await authStorage.credentials.reload();
 		vi.spyOn(mcpClient, "connectToServer").mockRejectedValue(AUTH_ERROR);
 
 		// Simulate the real flow: login hangs waiting for the OAuth callback and
@@ -492,7 +492,7 @@ describe("/mcp auth commands", () => {
 
 	test("Esc cancels even when OAuth login has not registered its signal listener yet", async () => {
 		const authStorage = freshAuthStorage();
-		await authStorage.reload();
+		await authStorage.credentials.reload();
 		vi.spyOn(mcpClient, "connectToServer").mockRejectedValue(AUTH_ERROR);
 
 		// Simulates the review race: Esc aborts oauthTimeout before
@@ -524,7 +524,7 @@ describe("/mcp auth commands", () => {
 
 	test("OAuth deadline still surfaces as a reauthorization error, not a cancellation", async () => {
 		const authStorage = freshAuthStorage();
-		await authStorage.reload();
+		await authStorage.credentials.reload();
 		vi.spyOn(mcpClient, "connectToServer").mockRejectedValue(AUTH_ERROR);
 
 		// Deadline path bypasses both the editor's Esc hook and any external
@@ -548,14 +548,14 @@ describe("/mcp auth commands", () => {
 
 	test("clears both expanded and stale raw URL-keyed credentials on unauth", async () => {
 		const authStorage = freshAuthStorage();
-		await authStorage.reload();
-		await authStorage.set(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL), {
+		await authStorage.credentials.reload();
+		await authStorage.credentials.set(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL), {
 			type: "oauth",
 			access: "expanded-access",
 			refresh: "expanded-refresh",
 			expires: Date.now() + 3_600_000,
 		});
-		await authStorage.set(oauthFlow.mcpOAuthCredentialId(RAW_SERVER_URL), {
+		await authStorage.credentials.set(oauthFlow.mcpOAuthCredentialId(RAW_SERVER_URL), {
 			type: "oauth",
 			access: "raw-access",
 			refresh: "raw-refresh",
@@ -566,8 +566,8 @@ describe("/mcp auth commands", () => {
 		await controller.handle("/mcp unauth envserver");
 
 		expect(showError).not.toHaveBeenCalled();
-		expect(authStorage.get(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL))).toBeUndefined();
-		expect(authStorage.get(oauthFlow.mcpOAuthCredentialId(RAW_SERVER_URL))).toBeUndefined();
+		expect(authStorage.credentials.get(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL))).toBeUndefined();
+		expect(authStorage.credentials.get(oauthFlow.mcpOAuthCredentialId(RAW_SERVER_URL))).toBeUndefined();
 		const saved = JSON.parse(await Bun.file(configPath).text()) as TestConfigFile;
 		const savedServer = saved.mcpServers?.envserver;
 		const savedUrl = savedServer?.type === "http" || savedServer?.type === "sse" ? savedServer.url : undefined;
@@ -577,8 +577,8 @@ describe("/mcp auth commands", () => {
 
 	test("clears url-keyed auth for discovered definition-only servers", async () => {
 		const authStorage = freshAuthStorage();
-		await authStorage.reload();
-		await authStorage.set(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL), {
+		await authStorage.credentials.reload();
+		await authStorage.credentials.set(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL), {
 			type: "oauth",
 			access: "discovered-access",
 			refresh: "discovered-refresh",
@@ -592,7 +592,7 @@ describe("/mcp auth commands", () => {
 		await controller.handle("/mcp unauth discovered");
 
 		expect(showError).not.toHaveBeenCalled();
-		expect(authStorage.get(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL))).toBeUndefined();
+		expect(authStorage.credentials.get(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL))).toBeUndefined();
 		const userConfigPath = getMCPConfigPath("user", projectDir);
 		const userConfig = JSON.parse(
 			await Bun.file(userConfigPath)

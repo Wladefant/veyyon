@@ -56,7 +56,7 @@ describe("model selection and thinking level gui-host behaviour", () => {
 	// is signed in first; `the-model-list-holds-the-models-a-turn-could-run`
 	// owns the filter itself.
 	test("RefreshModels lists catalog models with exact context window and reflects default/session model", async () => {
-		await authStorage.set("anthropic", { type: "api_key", key: "sk-ant-test-key-for-refresh" });
+		await authStorage.credentials.set("anthropic", { type: "api_key", key: "sk-ant-test-key-for-refresh" });
 		server = await startGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir, authStorage });
 		const client = await TestSocketClient.connect(server.endpoint);
 
@@ -133,7 +133,7 @@ describe("model selection and thinking level gui-host behaviour", () => {
 	);
 
 	test("SelectModel applies model to session and updates Models.current", async () => {
-		await authStorage.set("anthropic", { type: "api_key", key: "sk-ant-test-key-for-select" });
+		await authStorage.credentials.set("anthropic", { type: "api_key", key: "sk-ant-test-key-for-select" });
 
 		server = await startGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir, authStorage });
 		const client = await TestSocketClient.connect(server.endpoint);

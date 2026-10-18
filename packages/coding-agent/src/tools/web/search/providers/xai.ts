@@ -226,22 +226,22 @@ function parseResponse(response: XAIResponsesResponse, resultCap: number): Searc
 function shouldPreferXAIOAuth(authStorage: AuthStorage): boolean {
 	if ($env.XAI_OAUTH_TOKEN) return true;
 
-	const origin = authStorage.getCredentialOrigin("xai-oauth");
+	const origin = authStorage.keys.source("xai-oauth", { env: "aliases" });
 	if (!origin || origin.kind === "env") return false;
 	if ((origin.kind === "api_key" || origin.kind === "fallback") && $env.XAI_API_KEY) return false;
 	return true;
 }
 
 function resolveXAIWebSearchApiKey(params: SearchParams): ApiKeyResolver {
-	const xaiResolver = params.authStorage.resolver("xai", {
+	const xaiResolver = params.authStorage.keys.resolver("xai", {
 		sessionId: params.sessionId,
 	});
-	const xaiOAuthOrigin = params.authStorage.getCredentialOrigin("xai-oauth");
+	const xaiOAuthOrigin = params.authStorage.keys.source("xai-oauth", { env: "aliases" });
 	if (!shouldPreferXAIOAuth(params.authStorage)) {
 		return xaiResolver;
 	}
 
-	const xaiOAuthResolver = params.authStorage.resolver("xai-oauth", {
+	const xaiOAuthResolver = params.authStorage.keys.resolver("xai-oauth", {
 		sessionId: params.sessionId,
 	});
 	return async ctx => {
@@ -280,7 +280,7 @@ export class XAIProvider extends SearchProvider {
 	readonly label = "xAI";
 
 	isAvailable(authStorage: AuthStorage): boolean {
-		return shouldPreferXAIOAuth(authStorage) || authStorage.hasAuth("xai");
+		return shouldPreferXAIOAuth(authStorage) || authStorage.keys.source("xai", { env: "aliases" }) !== undefined || authStorage.keys.keyless("xai");
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {

@@ -204,13 +204,13 @@ describe("/account use makes the durable choice from both paths", () => {
 		loadBalancingSetting = false;
 		store = new SqliteAuthCredentialStore(new Database(":memory:"));
 		const storage = new AuthStorage(store, { loadBalancing: () => loadBalancingSetting });
-		await storage.reload();
+		await storage.credentials.reload();
 		vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async (provider, credentials) => {
 			const credential = credentials[provider];
 			if (!credential) return null;
 			return { newCredentials: credential, apiKey: credential.access };
 		});
-		await storage.set(PROVIDER, [
+		await storage.credentials.set(PROVIDER, [
 			{
 				type: "oauth",
 				access: "access-work",
@@ -228,7 +228,7 @@ describe("/account use makes the durable choice from both paths", () => {
 				email: "personal@example.com",
 			},
 		]);
-		const rows = storage.listStoredCredentials(PROVIDER);
+		const rows = storage.credentials.list(PROVIDER);
 		workId = rows[0]?.id ?? 0;
 		personalId = rows[1]?.id ?? 0;
 		authStorage = storage;
@@ -288,7 +288,7 @@ describe("/account use makes the durable choice from both paths", () => {
 
 	function chosen(): number | undefined {
 		if (!authStorage) throw new Error("test setup failed");
-		return authStorage.selectedProviderCredentialId(PROVIDER);
+		return authStorage.sessions.selectedProviderCredentialId(PROVIDER);
 	}
 
 	/**
@@ -356,8 +356,8 @@ describe("/account use makes the durable choice from both paths", () => {
 	 */
 	test("an exact match wins over an account the same text is a prefix of", async () => {
 		if (!authStorage) throw new Error("test setup failed");
-		expect(authStorage.setAccountName(PROVIDER, workId, "work")).toBe(true);
-		expect(authStorage.setAccountName(PROVIDER, personalId, "workstation")).toBe(true);
+		expect(authStorage.credentials.setAccountName(PROVIDER, workId, "work")).toBe(true);
+		expect(authStorage.credentials.setAccountName(PROVIDER, personalId, "workstation")).toBe(true);
 
 		const said = await viaText(`${PROVIDER} work`);
 
@@ -388,22 +388,22 @@ describe("/account use makes the durable choice from both paths", () => {
 		loadBalancingSetting = true;
 
 		// Stale session pin on personalId is cleared/replaced by the new choice
-		expect(authStorage.pinSessionCredential(PROVIDER, SESSION_ID, personalId)).toBe(true);
-		expect(authStorage.sessionCredentialRouting(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(personalId);
+		expect(authStorage.sessions.pin(PROVIDER, SESSION_ID, personalId)).toBe(true);
+		expect(authStorage.sessions.routing(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(personalId);
 
 		// 1. Text path: /account use
 		const said = await viaText(`${PROVIDER} work@example.com`);
 		expect(said).toBe("Unit Accounts: now using work@example.com for this session only.");
 		expect(chosen()).toBeUndefined();
-		expect(authStorage.sessionCredentialRouting(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(workId);
-		expect(authStorage.sessionCredentialRouting(PROVIDER, "other-session")?.selectedCredentialId).toBeUndefined();
+		expect(authStorage.sessions.routing(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(workId);
+		expect(authStorage.sessions.routing(PROVIDER, "other-session")?.selectedCredentialId).toBeUndefined();
 
 		// 2. Interactive path: /account use
 		const { status, warnings } = await viaTui(`${PROVIDER} work@example.com`);
 		expect(status).toEqual(["Unit Accounts: now using work@example.com for this session only."]);
 		expect(warnings).toEqual([]);
 		expect(chosen()).toBeUndefined();
-		expect(authStorage.sessionCredentialRouting(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(workId);
+		expect(authStorage.sessions.routing(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(workId);
 
 		// 3. Enter-card path: onUseAccount handler through shared policy
 		let cardStatus = "";
@@ -440,10 +440,10 @@ describe("/account use makes the durable choice from both paths", () => {
 		});
 		expect(cardStatus).toBe("Unit Accounts: now using personal@example.com for this session only");
 		expect(chosen()).toBeUndefined();
-		expect(authStorage.sessionCredentialRouting(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(personalId);
+		expect(authStorage.sessions.routing(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(personalId);
 
 		// 4. Missing session cannot pin globally under balancing true
-		expect(authStorage.selectProviderCredential(PROVIDER, workId, { sessionId: undefined })).toBe(false);
+		expect(authStorage.sessions.selectProviderCredential(PROVIDER, workId, { sessionId: undefined })).toBe(false);
 		expect(chosen()).toBeUndefined();
 
 		// 5. When load balancing is disabled, global choice is preserved
@@ -451,7 +451,7 @@ describe("/account use makes the durable choice from both paths", () => {
 		const saidOff = await viaText(`${PROVIDER} work@example.com`);
 		expect(saidOff).toBe("Unit Accounts: now using work@example.com everywhere on this machine.");
 		expect(chosen()).toBe(workId);
-		expect(authStorage.sessionCredentialRouting(PROVIDER, "other-session")?.selectedCredentialId).toBe(workId);
+		expect(authStorage.sessions.routing(PROVIDER, "other-session")?.selectedCredentialId).toBe(workId);
 
 		onUseAccount({
 			provider: PROVIDER,

@@ -189,7 +189,7 @@ describe("a mode the operator set is the mode the agent runs in", () => {
 			"utf8",
 		);
 		const authStorage = await isolatedAuthStorage(tempDir);
-		authStorage.upsertCredential("openai", { type: "api_key", key: "test-key" });
+		await authStorage.credentials.upsert("openai", { type: "api_key", key: "test-key" });
 		server = await startGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
@@ -400,7 +400,7 @@ describe("plan mode disabled in settings cannot be entered from the desktop", ()
 			"utf8",
 		);
 		const authStorage = await isolatedAuthStorage(tempDir);
-		authStorage.upsertCredential("openai", { type: "api_key", key: "test-key" });
+		await authStorage.credentials.upsert("openai", { type: "api_key", key: "test-key" });
 		server = await startGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,

@@ -87,7 +87,7 @@ beforeEach(async () => {
 		"xai",
 		"zai",
 	]) {
-		await authStorage.set(provider, { type: "api_key", key: `test-${provider}-key` });
+		await authStorage.credentials.set(provider, { type: "api_key", key: `test-${provider}-key` });
 	}
 	originalSearxngEndpoint = process.env.SEARXNG_ENDPOINT;
 	process.env.SEARXNG_ENDPOINT = "https://searx.example.org";

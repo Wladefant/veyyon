@@ -60,7 +60,7 @@ export default class Token extends Command {
 		const authStorage = await discoverAuthStorage();
 		try {
 			if (flags.list || flags.account !== undefined) {
-				const accounts = authStorage.listOAuthAccounts(provider);
+				const accounts = authStorage.oauth.accounts(provider);
 				if (accounts.length === 0) {
 					process.stderr.write(`${chalk.red(`No OAuth accounts found for provider "${providerName}".`)}\n`);
 					process.stderr.write("--account/--list select among OAuth accounts; this provider has none stored.\n");
@@ -89,9 +89,12 @@ export default class Token extends Command {
 					process.exitCode = 1;
 					return;
 				}
-				const resolution = await authStorage.getOAuthAccessAt(provider, n - 1, {
-					forceRefresh: flags["force-refresh"],
-				});
+				const targetAccount = accounts[n - 1];
+				const resolution = targetAccount
+					? await authStorage.oauth.accessById(provider, targetAccount.credentialId, {
+							forceRefresh: flags["force-refresh"],
+						})
+					: undefined;
 				if (!resolution?.ok) {
 					const reason = resolution && !resolution.ok ? resolution.error : "no OAuth credential available";
 					process.stderr.write(
@@ -129,13 +132,13 @@ export default class Token extends Command {
 				// Find all active/configured providers
 				const activeProviders = new Set<string>();
 				for (const p of PROVIDER_REGISTRY) {
-					if (authStorage.hasAuth(p.id)) {
+					if (authStorage.keys.source(p.id, { env: "aliases" }) !== undefined || authStorage.keys.keyless(p.id)) {
 						activeProviders.add(p.id);
 					}
 				}
-				const all = authStorage.getAll();
+				const all = authStorage.credentials.all();
 				for (const p in all) {
-					if (authStorage.hasAuth(p)) {
+					if (authStorage.keys.source(p, { env: "aliases" }) !== undefined || authStorage.keys.keyless(p)) {
 						activeProviders.add(p);
 					}
 				}

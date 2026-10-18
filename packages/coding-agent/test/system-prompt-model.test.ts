@@ -153,8 +153,8 @@ describe("AgentSession model-change prompt refresh", () => {
 
 	it("rebuilds the prompt with the new model when includeModelInPrompt is enabled", async () => {
 		const [modelA, modelB] = pickTwoModels();
-		authStorage.setRuntimeApiKey(modelA.provider, "key-a");
-		authStorage.setRuntimeApiKey(modelB.provider, "key-b");
+		authStorage.keys.setRuntimeApiKey(modelA.provider, "key-a");
+		authStorage.keys.setRuntimeApiKey(modelB.provider, "key-b");
 
 		let rebuildCount = 0;
 		// Explicit rather than inherited: the shipped default is off, and this test is
@@ -177,8 +177,8 @@ describe("AgentSession model-change prompt refresh", () => {
 
 	it("does not rebuild a hidden-model prompt when the task policy stays the same", async () => {
 		const [modelA, modelB] = pickTwoModelsWithSameTaskPolicy();
-		authStorage.setRuntimeApiKey(modelA.provider, "key-a");
-		authStorage.setRuntimeApiKey(modelB.provider, "key-b");
+		authStorage.keys.setRuntimeApiKey(modelA.provider, "key-a");
+		authStorage.keys.setRuntimeApiKey(modelB.provider, "key-b");
 
 		let rebuildCount = 0;
 		session = newSession(
@@ -197,8 +197,8 @@ describe("AgentSession model-change prompt refresh", () => {
 
 	it("rebuilds a hidden-model prompt when the task policy changes", async () => {
 		const [modelA, modelB] = pickModelsAcrossTaskPolicies();
-		authStorage.setRuntimeApiKey(modelA.provider, "key-a");
-		authStorage.setRuntimeApiKey(modelB.provider, "key-b");
+		authStorage.keys.setRuntimeApiKey(modelA.provider, "key-a");
+		authStorage.keys.setRuntimeApiKey(modelB.provider, "key-b");
 
 		let rebuildCount = 0;
 		session = newSession(

@@ -30,7 +30,7 @@ describe("Anthropic search request body", () => {
 		using tempDir = TempDir.createSync("@pi-anthropic-search-apikey-");
 		const authStorage = await CodingAuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		try {
-			authStorage.setRuntimeApiKey("anthropic", "test-key");
+			authStorage.keys.setRuntime("anthropic", "test-key");
 
 			const cap = makeCaptureFetch();
 			await searchAnthropic({

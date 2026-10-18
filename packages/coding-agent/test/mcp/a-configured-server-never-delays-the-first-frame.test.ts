@@ -117,7 +117,7 @@ describe("a configured MCP server never delays the first frame", () => {
 
 	async function boot(fixture: Fixture, hasUI: boolean): Promise<AgentSession> {
 		const authStorage = await AuthStorage.create(fixture.tempDir.join(`auth-${hasUI}.db`));
-		authStorage.setRuntimeApiKey("openai", "test-key");
+		authStorage.keys.setRuntime("openai", "test-key");
 		const { session } = await createAgentSession({
 			cwd: fixture.cwd,
 			agentDir: fixture.agentDir,

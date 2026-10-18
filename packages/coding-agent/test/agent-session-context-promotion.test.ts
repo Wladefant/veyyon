@@ -25,7 +25,7 @@ describe("AgentSession context promotion", () => {
 		// so build them once instead of paying ~950ms across the 9 cases.
 		tempDir = TempDir.createSync("@pi-context-promotion-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("openai-codex", "test-key");
+		authStorage.keys.setRuntime("openai-codex", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 	});
 
@@ -226,7 +226,7 @@ describe("AgentSession context promotion", () => {
 		if (!codexModel || !nonCodexModel) {
 			throw new Error("Expected codex and non-codex models to exist");
 		}
-		authStorage.setRuntimeApiKey(nonCodexModel.provider, "test-other-key");
+		authStorage.keys.setRuntime(nonCodexModel.provider, "test-other-key");
 
 		const agent = new Agent({
 			initialState: {
@@ -263,7 +263,7 @@ describe("AgentSession context promotion", () => {
 		if (!codexModel || !nonCodexModel) {
 			throw new Error("Expected codex and non-codex models to exist");
 		}
-		authStorage.setRuntimeApiKey(nonCodexModel.provider, "test-other-key");
+		authStorage.keys.setRuntime(nonCodexModel.provider, "test-other-key");
 
 		const agent = new Agent({
 			initialState: {

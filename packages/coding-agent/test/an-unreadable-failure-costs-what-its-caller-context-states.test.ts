@@ -49,7 +49,7 @@ describe("an unreadable failure costs what its caller context states", () => {
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		// A stored credential, not a runtime key: the park is recorded against a stored row.
 		vi.spyOn(envApiKeyModule, "getEnvApiKey").mockReturnValue(undefined);
-		await authStorage.set("anthropic", [{ type: "api_key", key: "anthropic-key-1" }]);
+		await authStorage.credentials.set("anthropic", [{ type: "api_key", key: "anthropic-key-1" }]);
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 	});
 

@@ -131,7 +131,7 @@ describe("advisor compaction closes out tail elisions", () => {
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		// The primary turn preflights auth through the registry for the main
 		// (mock) model; the scripted streamFn never uses the key.
-		authStorage.setRuntimeApiKey("mock", "test-key");
+		authStorage.keys.setRuntime("mock", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage);
 		let compactionStreamCalls = 0;
 		const streamSimple: NonNullable<ProviderConfigInput["streamSimple"]> = requestModel => {

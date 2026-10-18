@@ -604,7 +604,7 @@ async function findOpenRouterImageCredentials(
 	sessionId?: string,
 ): Promise<ImageApiKey | null> {
 	if (modelRegistry) {
-		// AuthStorage.getApiKey already falls back to env keys, so this covers OPENROUTER_API_KEY too.
+		// AuthStorage.keys.get already falls back to env keys, so this covers OPENROUTER_API_KEY too.
 		const apiKey = await modelRegistry.getApiKeyForProvider("openrouter", sessionId);
 		if (apiKey) return { provider: "openrouter", apiKey: modelRegistry.resolver("openrouter", { sessionId }) };
 		return null;
@@ -619,7 +619,7 @@ async function findGeminiImageCredentials(
 	sessionId?: string,
 ): Promise<ImageApiKey | null> {
 	if (modelRegistry) {
-		// AuthStorage.getApiKey already falls back to env keys (GEMINI_API_KEY), so only
+		// AuthStorage.keys.get already falls back to env keys (GEMINI_API_KEY), so only
 		// GOOGLE_API_KEY needs the explicit check below.
 		const apiKey = await modelRegistry.getApiKeyForProvider("google", sessionId);
 		if (apiKey) return { provider: "gemini", apiKey: modelRegistry.resolver("google", { sessionId }) };

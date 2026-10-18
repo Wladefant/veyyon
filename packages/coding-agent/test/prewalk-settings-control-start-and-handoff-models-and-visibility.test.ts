@@ -61,7 +61,7 @@ describe("prewalk settings end-to-end", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@veyyon-prewalk-settings-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key-anthropic");
+		authStorage.keys.setRuntimeApiKey("anthropic", "test-key-anthropic");
 		resetSettingsForTest();
 	});
 

@@ -58,14 +58,14 @@ describe("quota refusals belong to the failed request", () => {
 		const [failed, healthy] = store.listAuthCredentials(PROVIDER);
 		if (!failed || !healthy) throw new Error("expected two stored credentials");
 		const storage = new AuthStorage(store, { loadBalancing: true });
-		await storage.reload();
+		await storage.credentials.reload();
 		try {
 			// Record the failed request's identity, then move sticky routing before retry recovery.
-			expect(await storage.getApiKey(PROVIDER, SESSION)).toBe("failed-api-key");
-			expect(storage.sessionCredentialRouting(PROVIDER, SESSION)?.activeCredentialId).toBe(failed.id);
-			expect(storage.selectProviderCredential(PROVIDER, healthy.id, { sessionId: SESSION })).toBe(true);
-			expect(await storage.getApiKey(PROVIDER, SESSION)).toBe("healthy-api-key");
-			expect(storage.sessionCredentialRouting(PROVIDER, SESSION)?.activeCredentialId).toBe(healthy.id);
+			expect(await storage.keys.get(PROVIDER, SESSION)).toBe("failed-api-key");
+			expect(storage.sessions.routing(PROVIDER, SESSION)?.activeCredentialId).toBe(failed.id);
+			expect(storage.sessions.selectProviderCredential(PROVIDER, healthy.id, { sessionId: SESSION })).toBe(true);
+			expect(await storage.keys.get(PROVIDER, SESSION)).toBe("healthy-api-key");
+			expect(storage.sessions.routing(PROVIDER, SESSION)?.activeCredentialId).toBe(healthy.id);
 
 			const message = refused(
 				identity === undefined ? undefined : identity === "__failed_id__" ? String(failed.id) : identity,
@@ -108,7 +108,7 @@ describe("quota refusals belong to the failed request", () => {
 	it("parks the failed credential, not the sticky selected after its refusal", async () => {
 		const { storage, failedId, healthyId } = await recover("__failed_id__");
 		try {
-			const blocks = storage.listCredentialBlocks([failedId, healthyId]);
+			const blocks = storage.blocks.list([failedId, healthyId]);
 			expect(blocks).toHaveLength(1);
 			expect(blocks[0]).toMatchObject({
 				credentialId: failedId,
@@ -125,7 +125,7 @@ describe("quota refusals belong to the failed request", () => {
 		it(`does not guess an account when request identity is ${String(identity)}`, async () => {
 			const { storage, failedId, healthyId } = await recover(identity);
 			try {
-				expect(storage.listCredentialBlocks([failedId, healthyId])).toEqual([]);
+				expect(storage.blocks.list([failedId, healthyId])).toEqual([]);
 			} finally {
 				storage.close();
 			}

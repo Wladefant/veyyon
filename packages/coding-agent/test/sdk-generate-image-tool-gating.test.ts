@@ -173,7 +173,7 @@ describe("generate_image tool gating", () => {
 	 * result without replacing global fetch or module state.
 	 */
 	it("executes generate_image after search activation with the exact provider result", async () => {
-		authStorage.setRuntimeApiKey("openai", "test-openai-key");
+		authStorage.keys.setRuntimeApiKey("openai", "test-openai-key");
 		let requests = 0;
 		const server = Bun.serve({
 			port: 0,

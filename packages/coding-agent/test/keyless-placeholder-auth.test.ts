@@ -42,7 +42,7 @@ describe("keyless local placeholder auth (Refs #107, upstream 1d78d2b9 & 0e48342
 	});
 
 	test("a local placeholder preserves the production stream bearer value", async () => {
-		await authStorage.set("vllm", { type: "api_key", key: "vllm-local" });
+		await authStorage.credentials.set("vllm", { type: "api_key", key: "vllm-local" });
 		const registry = new ModelRegistryImpl(authStorage, modelsPath);
 		const model = localModel("vllm");
 		const authorizations: Array<string | null> = [];
@@ -93,7 +93,7 @@ describe("keyless local placeholder auth (Refs #107, upstream 1d78d2b9 & 0e48342
 		expect(await registry.getApiKeyForProvider("vllm")).toBeUndefined();
 
 		// User logs in to local vllm with empty prompt, storing the local placeholder token
-		await authStorage.set("vllm", { type: "api_key", key: "vllm-local" });
+		await authStorage.credentials.set("vllm", { type: "api_key", key: "vllm-local" });
 
 		// After login: provider is recognized as keyless
 		expect(registry.isKeylessProvider("vllm")).toBe(true);
@@ -121,7 +121,7 @@ describe("keyless local placeholder auth (Refs #107, upstream 1d78d2b9 & 0e48342
 			reasoning: false,
 			input: ["text"],
 		});
-		await authStorage.set(provider, { type: "api_key", key: placeholder });
+		await authStorage.credentials.set(provider, { type: "api_key", key: placeholder });
 		expect(registry.isKeylessProvider(provider)).toBe(true);
 		expect(registry.hasConfiguredAuth(model)).toBe(true);
 		expect(registry.hasConcreteAuth(provider)).toBe(true);
@@ -144,7 +144,7 @@ describe("keyless local placeholder auth (Refs #107, upstream 1d78d2b9 & 0e48342
 		});
 
 		// Storing a concrete token instead of a local placeholder
-		await authStorage.set("vllm", { type: "api_key", key: "sk-real-vllm-token" });
+		await authStorage.credentials.set("vllm", { type: "api_key", key: "sk-real-vllm-token" });
 
 		expect(registry.isKeylessProvider("vllm")).toBe(false);
 		expect(registry.hasConfiguredAuth(vllmModel)).toBe(true);
@@ -169,7 +169,7 @@ describe("keyless local placeholder auth (Refs #107, upstream 1d78d2b9 & 0e48342
 
 	test("literal config outranks a saved local placeholder in both resolvers", async () => {
 		fs.writeFileSync(modelsPath, JSON.stringify({ providers: { vllm: { apiKey: "real-config-key" } } }));
-		await authStorage.set("vllm", { type: "api_key", key: "vllm-local" });
+		await authStorage.credentials.set("vllm", { type: "api_key", key: "vllm-local" });
 		const registry = new ModelRegistryImpl(authStorage, modelsPath);
 		expect(await registry.getApiKey(localModel("vllm"))).toBe("real-config-key");
 		expect(await registry.getApiKeyForProvider("vllm")).toBe("real-config-key");
@@ -180,7 +180,7 @@ describe("keyless local placeholder auth (Refs #107, upstream 1d78d2b9 & 0e48342
 			provider === "vllm" ? "real-env-key" : undefined,
 		);
 		try {
-			await authStorage.set("vllm", { type: "api_key", key: "vllm-local" });
+			await authStorage.credentials.set("vllm", { type: "api_key", key: "vllm-local" });
 			const registry = new ModelRegistryImpl(authStorage, modelsPath);
 			expect(await registry.getApiKey(localModel("vllm"))).toBe("real-env-key");
 			expect(await registry.getApiKeyForProvider("vllm")).toBe("real-env-key");
@@ -190,9 +190,9 @@ describe("keyless local placeholder auth (Refs #107, upstream 1d78d2b9 & 0e48342
 	});
 
 	test("runtime auth outranks a saved local placeholder in both resolvers", async () => {
-		await authStorage.set("vllm", { type: "api_key", key: "vllm-local" });
+		await authStorage.credentials.set("vllm", { type: "api_key", key: "vllm-local" });
 		const registry = new ModelRegistryImpl(authStorage, modelsPath);
-		authStorage.setRuntimeApiKey("vllm", "real-runtime-key");
+		authStorage.keys.setRuntime("vllm", "real-runtime-key");
 		expect(await registry.getApiKey(localModel("vllm"))).toBe("real-runtime-key");
 		expect(await registry.getApiKeyForProvider("vllm")).toBe("real-runtime-key");
 	});
@@ -202,7 +202,7 @@ describe("keyless local placeholder auth (Refs #107, upstream 1d78d2b9 & 0e48342
 		const model = localModel("lm-studio");
 		expect(await registry.getApiKey(model)).toBe(kNoAuth);
 		expect(await registry.getApiKeyForProvider("lm-studio")).toBe(kNoAuth);
-		await authStorage.set("lm-studio", { type: "api_key", key: "real-login-key" });
+		await authStorage.credentials.set("lm-studio", { type: "api_key", key: "real-login-key" });
 		expect(await registry.getApiKey(model)).toBe("real-login-key");
 		expect(await registry.getApiKeyForProvider("lm-studio")).toBe("real-login-key");
 	});

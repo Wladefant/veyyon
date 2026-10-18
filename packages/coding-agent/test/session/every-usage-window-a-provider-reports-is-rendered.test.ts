@@ -454,7 +454,7 @@ describe("every usage window a provider reports is rendered", () => {
 
 	async function rowFor(provider: string, providerCase: ProviderCase, reports: readonly UsageReport[]) {
 		if (!authStorage) throw new Error("test setup failed");
-		await authStorage.set(provider, [storedCredential(providerCase.credential)]);
+		await authStorage.credentials.set(provider, [storedCredential(providerCase.credential)]);
 		const inventory = applyUsageReports(buildAccountInventory(authStorage), reports);
 		const row = inventory.providers.find(entry => entry.provider === provider)?.rows[0];
 		if (!row) throw new Error(`no account row for ${provider}`);
@@ -608,7 +608,7 @@ describe("identity matching arbitrates between siblings and only between sibling
 	for (const provider of registeredProviders) {
 		test(`${provider.id}: a sole identity-less credential absorbs its provider's report`, async () => {
 			if (!authStorage) throw new Error("test setup failed");
-			await authStorage.set(provider.id, [{ type: "api_key", key: `${provider.id}-only` }]);
+			await authStorage.credentials.set(provider.id, [{ type: "api_key", key: `${provider.id}-only` }]);
 			const report: UsageReport = {
 				provider: provider.id,
 				fetchedAt: NOW_MS,
@@ -622,7 +622,7 @@ describe("identity matching arbitrates between siblings and only between sibling
 
 		test(`${provider.id}: an identity-less credential absorbs nothing once a sibling exists`, async () => {
 			if (!authStorage) throw new Error("test setup failed");
-			await authStorage.set(provider.id, [
+			await authStorage.credentials.set(provider.id, [
 				{ type: "api_key", key: `${provider.id}-anonymous` },
 				{
 					type: "oauth",

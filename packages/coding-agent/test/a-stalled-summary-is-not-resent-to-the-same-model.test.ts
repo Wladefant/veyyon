@@ -53,7 +53,7 @@ describe("a stalled summary is not re-sent to the same model", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-auto-compaction-stall-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 		vi.spyOn(modelRegistry, "getApiKey").mockResolvedValue("test-key");
 	});

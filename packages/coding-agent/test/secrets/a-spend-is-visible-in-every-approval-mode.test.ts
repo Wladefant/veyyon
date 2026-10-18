@@ -522,7 +522,7 @@ async function withProbeSession(options: {
 	await vault.add({ name: E2E_SECRET_NAME, value: E2E_SECRET_VALUE, scope: "profile", ttl: null });
 
 	const authStorage = await AuthStorage.create(path.join(agentDir, "auth.db"));
-	authStorage.setRuntimeApiKey("mock", "mock-key");
+	authStorage.keys.setRuntime("mock", "mock-key");
 	registerMockApi(E2E_MOCK_API_SOURCE);
 	const sessionManager = SessionManager.create(cwd, tempDir.join("sessions"));
 	const observed: ProbeObservation[] = [];

@@ -42,7 +42,7 @@ afterEach(async () => {
 async function harness(): Promise<AgentSession> {
 	const tempDir = TempDir.createSync("@pi-startup-hydration-");
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
-	authStorage.setRuntimeApiKey("mock", "test-key");
+	authStorage.keys.setRuntimeApiKey("mock", "test-key");
 	const mock = createMockModel({ responses: [{ content: [{ type: "text", text: "ok" }], stopReason: "stop" }] });
 	const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 	const settings = Settings.isolated({

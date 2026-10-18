@@ -43,10 +43,11 @@ export const CODEX_AUTO_REDEEM_TIMEOUT_MS = 15_000;
 export const CODEX_AUTO_REDEEM_SOURCE = "codex-auto-reset";
 
 /** The credential store slice usage reads and writes. `AuthStorage` satisfies this. */
-export type ProviderUsageAuth = Pick<
-	AuthStorage,
-	"ingestUsageHeaders" | "fetchUsageReports" | "redeemResetCredit" | "listResetCredits" | "getOAuthAccountIdentity"
->;
+export type ProviderUsageAuth = {
+	usage: Pick<AuthStorage["usage"], "ingestHeaders" | "reports">;
+	resets: Pick<AuthStorage["resets"], "redeem" | "list">;
+	oauth: Pick<AuthStorage["oauth"], "identity">;
+};
 
 /** What {@link ProviderUsage} needs from the session that holds it. */
 export interface ProviderUsageHost {
@@ -76,7 +77,7 @@ export class ProviderUsage {
 		const provider = model?.provider;
 		if (!provider) return;
 		const host = this.#host;
-		host.authStorage().ingestUsageHeaders(provider, response.headers, {
+		host.authStorage().usage.ingestHeaders(provider, response.headers, {
 			sessionId: host.agentSessionId(),
 			baseUrl: host.providerBaseUrl(provider),
 		});
@@ -86,8 +87,8 @@ export class ProviderUsage {
 	async fetchReports(signal?: AbortSignal): Promise<UsageReport[] | null> {
 		const host = this.#host;
 		const authStorage = host.authStorage();
-		if (!authStorage.fetchUsageReports) return null;
-		return authStorage.fetchUsageReports({
+
+		return authStorage.usage.reports({
 			baseUrlResolver: provider => {
 				if (provider === "google-antigravity") {
 					const mode = host.settings.get("providers.antigravityEndpoint");
@@ -102,7 +103,7 @@ export class ProviderUsage {
 
 	async redeem(target: ResetCreditTarget, signal?: AbortSignal): Promise<ResetCreditRedeemOutcome> {
 		const host = this.#host;
-		return host.authStorage().redeemResetCredit({
+		return host.authStorage().resets.redeem({
 			target,
 			baseUrlResolver: provider => host.providerBaseUrl(provider),
 			signal,
@@ -111,7 +112,7 @@ export class ProviderUsage {
 
 	async listResetCredits(signal?: AbortSignal): Promise<ResetCreditAccountStatus[]> {
 		const host = this.#host;
-		return host.authStorage().listResetCredits({
+		return host.authStorage().resets.list({
 			sessionId: host.sessionId(),
 			baseUrlResolver: provider => host.providerBaseUrl(provider),
 			signal,
@@ -136,7 +137,7 @@ export class ProviderUsage {
 		const authStorage = host.authStorage();
 		// Read before any await: a usage-limit block leaves the session credential sticky, so this is
 		// the blocked account.
-		const identity = authStorage.getOAuthAccountIdentity("openai-codex", host.sessionId());
+		const identity = authStorage.oauth.identity("openai-codex", host.sessionId());
 		const accountKey = (identity?.accountId ?? identity?.email)?.trim().toLowerCase();
 		if (!accountKey) return false;
 		const existing = coordinator.inFlightByAccount.get(accountKey);
@@ -184,7 +185,7 @@ export class ProviderUsage {
 		// The scoped deadline is cleared the moment the redeem settles. It is not tied to the retry's
 		// abort controller: aborting a consume mid-flight leaves the credit state unknown.
 		const outcome = await withScopedTimeoutSignal(CODEX_AUTO_REDEEM_TIMEOUT_MS, signal =>
-			host.authStorage().redeemResetCredit({
+			host.authStorage().resets.redeem({
 				target: decision.target,
 				baseUrlResolver: provider => host.providerBaseUrl(provider),
 				signal,

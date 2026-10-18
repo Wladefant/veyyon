@@ -54,7 +54,7 @@ describe("an image sent to a text-only model", () => {
 			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [], thinkingLevel: Effort.High },
 		});
 		authStorage = await AuthStorage.create(path.join(root, "auth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const settings = Settings.isolated({ "images.describeForTextModels": true });
 		session = new AgentSession({
 			agent,

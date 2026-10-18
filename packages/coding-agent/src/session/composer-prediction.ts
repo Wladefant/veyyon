@@ -62,7 +62,7 @@ const CODEX_API: Api = "openai-codex-responses";
 
 /** A Codex login that can answer a `chatgpt-pro` prediction. */
 export type IncludedPredictionLogin =
-	/** A stored OAuth account, by its position in `AuthStorage.listOAuthAccounts`. */
+	/** A stored OAuth account, by its position in `AuthStorage.oauth.accounts`. */
 	| { kind: "account"; position: number }
 	/** The `OPENAI_CODEX_OAUTH_TOKEN` environment token. */
 	| { kind: "env"; token: string };
@@ -83,12 +83,11 @@ export function includedPredictionLogins(registry: ModelRegistry, sessionId?: st
 	if (registry.hasApiKeyOverride(CODEX_PROVIDER)) return [];
 	const auth = registry.authStorage;
 	const accessById = new Map<number, string>();
-	for (const row of auth.listStoredCredentials(CODEX_PROVIDER)) {
+	for (const row of auth.credentials.list(CODEX_PROVIDER)) {
 		if (row.credential.type === "oauth") accessById.set(row.id, row.credential.access);
 	}
-	const routed = sessionId ? auth.sessionCredentialRouting(CODEX_PROVIDER, sessionId)?.activeCredentialId : undefined;
-	const accounts = auth
-		.listOAuthAccounts(CODEX_PROVIDER)
+	const routed = sessionId ? auth.sessions.routing(CODEX_PROVIDER, sessionId)?.activeCredentialId : undefined;
+	const accounts = auth.oauth.accounts(CODEX_PROVIDER)
 		.filter(account => statesIncludedPlan(accessById.get(account.credentialId)))
 		.sort((a, b) => Number(b.credentialId === routed) - Number(a.credentialId === routed));
 	const logins: IncludedPredictionLogin[] = accounts.map(account => ({ kind: "account", position: account.position }));
@@ -214,9 +213,11 @@ export class ComposerPredictor {
 	/** The login's current access token when it still states the Pro plan; refreshes a stored account alone. */
 	async #includedAccessToken(login: IncludedPredictionLogin, signal: AbortSignal): Promise<string | undefined> {
 		if (login.kind === "env") return login.token;
-		const access = await this.session.modelRegistry.authStorage.getOAuthAccessAt(CODEX_PROVIDER, login.position, {
-			signal,
-		});
+		const oauth = this.session.modelRegistry.authStorage.oauth;
+		const summary = oauth.accounts(CODEX_PROVIDER)[login.position];
+		const access = summary
+			? await oauth.accessById(CODEX_PROVIDER, summary.credentialId, { signal })
+			: undefined;
 		return access?.ok && statesIncludedPlan(access.accessToken) ? access.accessToken : undefined;
 	}
 

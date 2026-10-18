@@ -168,7 +168,7 @@ describe("session resume and event-log integrity across a compaction boundary", 
 
 	async function createHarness(): Promise<Harness> {
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntimeApiKey("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage);
 		// Disk-backed: the JSONL file IS the artifact under test.
 		const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());

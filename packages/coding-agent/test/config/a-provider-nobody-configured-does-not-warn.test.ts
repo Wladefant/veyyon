@@ -218,7 +218,7 @@ describe("a configured provider", () => {
 		const { warnings, debugs } = await driveDiscovery({
 			provider: "llama.cpp",
 			seedAuth: authStorage => {
-				authStorage.setRuntimeApiKey("llama.cpp", "custom-key");
+				authStorage.keys.setRuntime("llama.cpp", "custom-key");
 			},
 			respond: () => {
 				throw new Error("connect ECONNREFUSED 127.0.0.1:8080");

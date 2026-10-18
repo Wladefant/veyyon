@@ -112,9 +112,9 @@ async function harness(seed: { provider: string; credentials: AuthCredential[] }
 	const storage = authStorage;
 	if (!storage) throw new Error("no auth storage");
 	// Health and usage are network round trips and say nothing about a removal.
-	vi.spyOn(storage, "checkCredentials").mockResolvedValue([]);
+	vi.spyOn(storage.health, "check").mockResolvedValue([]);
 	for (const provider of ["anthropic", "groq"]) {
-		await storage.set(provider, provider === seed.provider ? seed.credentials : []);
+		await storage.credentials.set(provider, provider === seed.provider ? seed.credentials : []);
 	}
 
 	const cards: AccountManagerComponent[] = [];
@@ -201,7 +201,7 @@ describe("/logout lands in the account card", () => {
 			provider: "anthropic",
 			credentials: [oauth("a@example.com", "acct-a"), oauth("b@example.com", "acct-b")],
 		});
-		const before = h.storage.listStoredCredentials("anthropic").map(row => row.id);
+		const before = h.storage.credentials.list("anthropic").map(row => row.id);
 		expect(before).toHaveLength(2);
 
 		await h.controller.showLogout("anthropic");
@@ -212,7 +212,7 @@ describe("/logout lands in the account card", () => {
 		// so waiting on the store alone would observe a half-finished logout.
 		await until("the logout report to be printed", () => h.presented().length > 0);
 
-		expect(h.storage.listStoredCredentials("anthropic").map(row => row.id)).toEqual([before[0]]);
+		expect(h.storage.credentials.list("anthropic").map(row => row.id)).toEqual([before[0]]);
 		const report = h.presented();
 		expect(report).toContain("Successfully logged out b@example.com from Anthropic");
 		// The store that is open, which under profile sharing is not this profile's own agent.db.
@@ -227,7 +227,7 @@ describe("/logout lands in the account card", () => {
 	 */
 	it("refuses a provider with nothing stored, and names where its auth comes from", async () => {
 		const h = await harness({ provider: "anthropic", credentials: [] });
-		vi.spyOn(h.storage, "describeCredentialSource").mockReturnValue("the ANTHROPIC_API_KEY environment variable");
+		vi.spyOn(h.storage.keys, "describe").mockReturnValue("the ANTHROPIC_API_KEY environment variable");
 
 		await h.controller.showLogout("anthropic");
 
@@ -240,7 +240,7 @@ describe("/logout lands in the account card", () => {
 	/** With no source to name, the refusal still stands and still says nothing was stored. */
 	it("refuses a provider with nothing stored even when no other auth source exists", async () => {
 		const h = await harness({ provider: "anthropic", credentials: [] });
-		vi.spyOn(h.storage, "describeCredentialSource").mockReturnValue(undefined);
+		vi.spyOn(h.storage.keys, "describe").mockReturnValue(undefined);
 
 		await h.controller.showLogout("anthropic");
 

@@ -129,7 +129,7 @@ describe("the severity of a recorded session exit", () => {
 		const dir = TempDir.createSync("@pi-exit-severity-");
 		tempDirs.push(dir);
 		sharedAuth = await AuthStorage.create(path.join(dir.path(), "auth.db"));
-		sharedAuth.setRuntimeApiKey("anthropic", "test-key");
+		sharedAuth.keys.setRuntime("anthropic", "test-key");
 		sharedRegistry = new ModelRegistry(sharedAuth, path.join(dir.path(), "models.json"));
 		return sharedRegistry;
 	};

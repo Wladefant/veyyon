@@ -1,4 +1,5 @@
-import type { Api, ApiKey, ApiKeyResolver, AuthStorage, Model } from "@veyyon/ai";
+import type { Api, ApiKey, ApiKeyResolver, Model } from "@veyyon/ai";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as AIError from "@veyyon/ai/error";
 
 /** Model slice accepted by the model-form `resolver(model, sessionId)` overload. */
@@ -30,7 +31,7 @@ export interface ApiKeyResolverRegistry {
 			onCredentialSelected?: (credentialId: string) => void;
 		},
 	): Promise<string | undefined>;
-	authStorage: Pick<AuthStorage, "rotateSessionCredential">;
+	authStorage: Pick<AuthStorage, "limits">;
 	/**
 	 * Build an {@link ApiKeyResolver} implementing the central a/b/c auth-retry
 	 * policy: initial → resolve; step (b) → force-refresh same account; step (c)
@@ -64,15 +65,15 @@ export function createApiKeyResolver(
 			// Account constraint (401 / usage / account-rate-limit): rotate to a
 			// sibling credential. We do NOT honor any retry-after here — if a
 			// sibling exists we switch immediately; the precise no-sibling backoff
-			// is owned by `markUsageLimitReached` (default + server usage-report
+			// is owned by `limits.markReached` (default + server usage-report
 			// reset) and the outer whole-turn retry layer.
-			const switched = await registry.authStorage.rotateSessionCredential(provider, sessionId, {
+			const rotation = await registry.authStorage.limits.rotate(provider, sessionId, {
 				error,
 				modelId,
 				signal,
 				apiKey: previousKey,
 			});
-			if (!switched) {
+			if (!rotation.switched) {
 				// No sibling for an account-quota failure: stop so the outer
 				// whole-turn retry layer can honor the recorded backoff. A hard
 				// auth decline can instead mean a peer refreshed the bearer.

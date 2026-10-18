@@ -125,25 +125,31 @@ function harness(
 		select: undefined,
 	};
 	const auth: ProviderUsageAuth = {
-		ingestUsageHeaders(provider, headers, options) {
-			h.ingested.push({ provider, headers, sessionId: options?.sessionId, baseUrl: options?.baseUrl });
-			return true;
+		usage: {
+			ingestHeaders(provider, headers, options) {
+				h.ingested.push({ provider, headers, sessionId: options?.sessionId, baseUrl: options?.baseUrl });
+				return true;
+			},
+			async reports(options) {
+				h.fetches.push(provider => options?.baseUrlResolver?.(provider));
+				return h.reports;
+			},
 		},
-		async fetchUsageReports(options) {
-			h.fetches.push(provider => options?.baseUrlResolver?.(provider));
-			return h.reports;
+		resets: {
+			async redeem(options) {
+				h.redeems.push({ signal: options.signal });
+				return h.redeem(options.signal);
+			},
+			async list(options) {
+				h.listed.push(options?.sessionId);
+				return [];
+			},
 		},
-		redeemResetCredit(options) {
-			h.redeems.push({ signal: options.signal });
-			return h.redeem(options.signal);
-		},
-		async listResetCredits(options) {
-			h.listed.push(options?.sessionId);
-			return [];
-		},
-		getOAuthAccountIdentity(_provider, sessionId) {
-			h.identityLookups.push(sessionId);
-			return h.identity;
+		oauth: {
+			identity(_provider, sessionId) {
+				h.identityLookups.push(sessionId);
+				return h.identity;
+			},
 		},
 	};
 	const usage = new ProviderUsage({

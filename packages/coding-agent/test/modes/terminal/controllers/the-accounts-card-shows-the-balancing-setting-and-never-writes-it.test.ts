@@ -54,8 +54,8 @@ beforeAll(async () => {
 	// credential. A suite that made it would be neither hermetic nor fast: the fake token here
 	// can only produce a network error after a timeout, and the balancing contract has nothing to
 	// do with health. Stubbed on the real instance rather than by faking the whole storage.
-	vi.spyOn(authStorage, "checkCredentials").mockResolvedValue([]);
-	await authStorage.set("anthropic", [
+	vi.spyOn(authStorage.health, "check").mockResolvedValue([]);
+	await authStorage.credentials.set("anthropic", [
 		{
 			type: "oauth",
 			access: "test-access",

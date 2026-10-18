@@ -196,7 +196,7 @@ describe("the working directory is not part of the cached prompt prefix", () => 
 		});
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `auth-${authStorages.length}.db`));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const sessionManager = options?.persisted
 			? SessionManager.create(cwd, path.join(tempDir.path(), `sessions-${authStorages.length}`))
 			: SessionManager.inMemory();

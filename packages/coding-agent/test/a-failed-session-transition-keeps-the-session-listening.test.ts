@@ -140,7 +140,7 @@ describe("a failed session transition keeps the session listening", () => {
 		if (!targetFile) throw new Error("expected a persisted target session file");
 
 		const authStorage = await AuthStorage.create(path.join(tempDir, `auth-${Snowflake.next()}.db`));
-		authStorage.setRuntimeApiKey("mock", "test-key");
+		authStorage.keys.setRuntime("mock", "test-key");
 		const session = new AgentSession({
 			agent,
 			sessionManager,

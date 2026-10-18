@@ -162,7 +162,7 @@ describe("a turn that ends stops being listed as running", () => {
 			"utf8",
 		);
 		const authStorage = await isolatedAuthStorage(tempDir);
-		authStorage.upsertCredential("openai", { type: "api_key", key: "test-key" });
+		await authStorage.credentials.upsert("openai", { type: "api_key", key: "test-key" });
 		replyEnding = "stop";
 		callsATool = false;
 		turnRequests = 0;

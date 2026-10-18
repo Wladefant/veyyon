@@ -52,7 +52,7 @@ beforeAll(async () => {
 	tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-overlay-repaint-"));
 	store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
 	authStorage = new AuthStorage(store);
-	await authStorage.set("anthropic", [
+	await authStorage.credentials.set("anthropic", [
 		{
 			type: "oauth",
 			access: "access-repaint",
@@ -84,7 +84,7 @@ async function mountCard(): Promise<Mounted> {
 	const storage = authStorage;
 	if (!storage) throw new Error("no auth storage");
 	// A health probe is an HTTP round trip per credential and says nothing about repaint scope.
-	vi.spyOn(storage, "checkCredentials").mockResolvedValue([]);
+	vi.spyOn(storage.health, "check").mockResolvedValue([]);
 
 	const cards: AccountManagerComponent[] = [];
 	const requestRender = vi.fn(() => undefined);

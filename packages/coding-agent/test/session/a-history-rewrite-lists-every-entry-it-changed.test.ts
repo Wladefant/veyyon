@@ -140,7 +140,7 @@ describe("a history rewrite lists every entry it changed", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@veyyon-history-rewrite-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		storage = new RecordingStorage();
 		manager = SessionManager.create(tempDir.path(), tempDir.path(), storage);
 		log = verifyListedRewrites(manager);

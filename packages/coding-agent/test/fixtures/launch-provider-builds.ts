@@ -39,7 +39,7 @@ async function offline(input: string | URL | Request): Promise<Response> {
 globalThis.fetch = Object.assign(offline, { preconnect: fetch.preconnect });
 const authStorage = await AuthStorage.create(path.join(dir, "auth.db"));
 for (const provider of keyed.split(",").filter(Boolean)) {
-	await authStorage.set(provider, { type: "api_key", key: `sk-test-${provider}` });
+	await authStorage.credentials.set(provider, { type: "api_key", key: `sk-test-${provider}` });
 }
 const registry = new ModelRegistry(authStorage, path.join(dir, "models.yml"), { snapshotIo: false, fetch: offline });
 const model = registry.getProviderModels(configProvider)[0];
@@ -58,7 +58,7 @@ const spy = spyOn(build, "buildModel").mockImplementation(spec => {
 });
 
 await registry.refresh("online-if-uncached");
-await authStorage.fetchUsageReports?.({ baseUrlResolver: provider => registry.getProviderBaseUrl(provider) });
+await authStorage.usage.reports?.({ baseUrlResolver: provider => registry.getProviderBaseUrl(provider) });
 const agent = new Agent({ initialState: { model } });
 spy.mockRestore();
 authStorage.close();

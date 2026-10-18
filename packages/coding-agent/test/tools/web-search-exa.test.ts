@@ -577,7 +577,7 @@ describe("searchExa", () => {
 		};
 
 		await withLocalAuthStorage(async authStorage => {
-			authStorage.setRuntimeApiKey("exa", "stored-key-xyz");
+			authStorage.keys.setRuntimeApiKey("exa", "stored-key-xyz");
 			const result = await searchExa({ query: "from auth storage", authStorage, fetch: fetchMock });
 			expect(result.provider).toBe("exa");
 			expect(result.sources).toHaveLength(3);
@@ -612,7 +612,7 @@ describe("searchExa", () => {
 	it("reports available when AuthStorage holds a credential", async () => {
 		delete process.env.EXA_API_KEY;
 		const available = await withLocalAuthStorage(authStorage => {
-			authStorage.setRuntimeApiKey("exa", "stored-key");
+			authStorage.keys.setRuntimeApiKey("exa", "stored-key");
 			return Promise.resolve(new ExaProvider().isAvailable(authStorage));
 		});
 		expect(available).toBe(true);

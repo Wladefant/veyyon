@@ -42,7 +42,7 @@ describe("/fast targets the current model's service-tier family", () => {
 			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
 		});
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey(model.provider, "token");
+		authStorage.keys.setRuntime(model.provider, "token");
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 		session = new AgentSession({
 			agent,

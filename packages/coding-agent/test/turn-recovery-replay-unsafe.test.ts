@@ -143,9 +143,9 @@ describe("RetryFallback replay safety filtering", () => {
 	beforeAll(async () => {
 		tempDir = TempDir.createSync("@veyyon-replay-unsafe-");
 		authStorage = await AuthStorage.create(tempDir.join("testauth.db"));
-		await authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
-		await authStorage.setRuntimeApiKey("openai", "openai-test-key");
-		await authStorage.setRuntimeApiKey("fireworks", "fireworks-test-key");
+		await authStorage.keys.setRuntimeApiKey("anthropic", "anthropic-test-key");
+		await authStorage.keys.setRuntimeApiKey("openai", "openai-test-key");
+		await authStorage.keys.setRuntimeApiKey("fireworks", "fireworks-test-key");
 
 		const modelsYmlContent = `providers:
   fireworks:
@@ -272,7 +272,7 @@ describe("AgentSession transient-error recovery replay safety", () => {
 	beforeAll(async () => {
 		tempDir = TempDir.createSync("@veyyon-transient-replay-");
 		authStorage = await AuthStorage.create(tempDir.join("testauth.db"));
-		await authStorage.setRuntimeApiKey("openai", "openai-test-key");
+		await authStorage.keys.setRuntimeApiKey("openai", "openai-test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 	});
 
@@ -605,7 +605,7 @@ describe("AgentSession Fireworks Fast recovery replay safety", () => {
 	beforeAll(async () => {
 		tempDir = TempDir.createSync("@veyyon-fireworks-replay-");
 		authStorage = await AuthStorage.create(tempDir.join("testauth.db"));
-		await authStorage.setRuntimeApiKey("fireworks", "fireworks-test-key");
+		await authStorage.keys.setRuntimeApiKey("fireworks", "fireworks-test-key");
 
 		const modelsYmlContent = `providers:
   fireworks:

@@ -48,7 +48,7 @@ describe("a Kimi search goes to the deployment that issued the token", () => {
 
 	for (const region of Object.keys(KIMI_CODE_REGIONS) as KimiCodeRegion[]) {
 		it(`posts a ${region} token to the ${region} search endpoint`, async () => {
-			await authStorage.set("kimi-code", [
+			await authStorage.credentials.set("kimi-code", [
 				{
 					type: "oauth",
 					access: `token-${region}`,

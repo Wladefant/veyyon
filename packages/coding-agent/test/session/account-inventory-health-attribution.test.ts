@@ -36,10 +36,10 @@ describe("applyCredentialHealth", () => {
 	beforeEach(async () => {
 		store = new SqliteAuthCredentialStore(new Database(":memory:"));
 		authStorage = new AuthStorage(store);
-		await authStorage.reload();
+		await authStorage.credentials.reload();
 		// Two subscriptions on ONE login: same email, same account id, different org. This is
 		// the real Anthropic shape, and the reason id matching is not an implementation detail.
-		await authStorage.set(PROVIDER, [
+		await authStorage.credentials.set(PROVIDER, [
 			{
 				type: "oauth",
 				access: "access-team",
@@ -61,7 +61,7 @@ describe("applyCredentialHealth", () => {
 				orgName: "Personal",
 			},
 		]);
-		const rows = authStorage.listStoredCredentials(PROVIDER);
+		const rows = authStorage.credentials.list(PROVIDER);
 		teamId = rows[0]?.id ?? 0;
 		personalId = rows[1]?.id ?? 0;
 		inventory = buildAccountInventory(authStorage);
@@ -150,7 +150,7 @@ describe("applyCredentialHealth", () => {
 	test("probe identity fills a blank field and never overwrites a stored one", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		const storage = authStorage;
-		await storage.set(PROVIDER, [
+		await storage.credentials.set(PROVIDER, [
 			{ type: "oauth", access: "access-bare", refresh: "refresh-bare", expires: Date.now() + HOUR_MS },
 			{
 				type: "oauth",
@@ -161,7 +161,7 @@ describe("applyCredentialHealth", () => {
 				orgName: "Known Org",
 			},
 		]);
-		const rows = storage.listStoredCredentials(PROVIDER);
+		const rows = storage.credentials.list(PROVIDER);
 		const bareId = rows[0]?.id ?? 0;
 		const knownId = rows[1]?.id ?? 0;
 

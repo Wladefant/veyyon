@@ -45,12 +45,12 @@ describe("an inventory surfaces a login a failed refresh tore down", () => {
 
 	/** Soft-delete with a refresh-failure cause: exactly what the refresh path writes. */
 	async function seedThenKill(storage: AuthStorage, activeStore: SqliteAuthCredentialStore): Promise<number> {
-		await storage.set(PROVIDER, [
+		await storage.credentials.set(PROVIDER, [
 			{ type: "oauth", access: "access-dead", refresh: "refresh-dead", expires: Date.now() + 3_600_000 },
 		]);
-		const id = storage.listStoredCredentials(PROVIDER)[0]!.id;
+		const id = storage.credentials.list(PROVIDER)[0]!.id;
 		activeStore.deleteAuthCredential(id, REFRESH_FAILURE);
-		await storage.reload();
+		await storage.credentials.reload();
 		return id;
 	}
 
@@ -62,7 +62,7 @@ describe("an inventory surfaces a login a failed refresh tore down", () => {
 		if (!authStorage || !store) throw new Error("test setup failed");
 		await seedThenKill(authStorage, store);
 
-		expect(authStorage.listStoredCredentials(PROVIDER)).toHaveLength(0);
+		expect(authStorage.credentials.list(PROVIDER)).toHaveLength(0);
 
 		const entry = buildAccountInventory(authStorage).providers.find(group => group.provider === PROVIDER);
 		expect(entry).toBeDefined();
@@ -87,10 +87,10 @@ describe("an inventory surfaces a login a failed refresh tore down", () => {
 	 */
 	test("stays silent for a deliberate logout", async () => {
 		if (!authStorage || !store) throw new Error("test setup failed");
-		await authStorage.set(PROVIDER, [
+		await authStorage.credentials.set(PROVIDER, [
 			{ type: "oauth", access: "access-bye", refresh: "refresh-bye", expires: Date.now() + 3_600_000 },
 		]);
-		await authStorage.logout(PROVIDER);
+		await authStorage.credentials.remove(PROVIDER);
 
 		const entry = buildAccountInventory(authStorage).providers.find(group => group.provider === PROVIDER);
 		expect(entry?.disabledCause).toBeUndefined();
@@ -103,7 +103,7 @@ describe("an inventory surfaces a login a failed refresh tore down", () => {
 	test("reports a dead login beside a surviving account", async () => {
 		if (!authStorage || !store) throw new Error("test setup failed");
 		await seedThenKill(authStorage, store);
-		await authStorage.set(PROVIDER, [
+		await authStorage.credentials.set(PROVIDER, [
 			{ type: "oauth", access: "access-live", refresh: "refresh-live", expires: Date.now() + 3_600_000 },
 		]);
 

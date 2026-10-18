@@ -138,7 +138,7 @@ async function runProbe(run: ProbeRun): Promise<ProbeOutcome> {
 	});
 
 	const authStorage = await AuthStorage.create(path.join(agentDir, "auth.db"));
-	authStorage.setRuntimeApiKey("mock", "mock-key");
+	authStorage.keys.setRuntimeApiKey("mock", "mock-key");
 	registerMockApi(MOCK_API_SOURCE);
 	const observed: ProbeObservation[] = [];
 	const toolResultTexts: string[] = [];

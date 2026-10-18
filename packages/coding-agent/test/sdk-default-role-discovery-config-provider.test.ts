@@ -79,8 +79,8 @@ describe("issue #6162 fresh launch default model from models.yml discovery provi
 		// The configured provider's key resolves the role model; a competing
 		// bundled provider key would otherwise win the startup fallback via
 		// `pickDefaultAvailableModel`.
-		authStorage.setRuntimeApiKey("my-provider", "test-provider-key");
-		authStorage.setRuntimeApiKey("openai", "test-openai-key");
+		authStorage.keys.setRuntimeApiKey("my-provider", "test-provider-key");
+		authStorage.keys.setRuntimeApiKey("openai", "test-openai-key");
 
 		// Fresh registry: no cached my-provider catalog on disk, so the static
 		// catalog the SDK resolves against at startup is empty for the provider.
@@ -131,7 +131,7 @@ describe("issue #6162 fresh launch default model from models.yml discovery provi
 
 		const authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
 		authStoragesToClose.push(authStorage);
-		authStorage.setRuntimeApiKey("openai", "test-openai-key");
+		authStorage.keys.setRuntimeApiKey("openai", "test-openai-key");
 
 		let discoveryCalls = 0;
 		const countingFetch: FetchImpl = async input => {

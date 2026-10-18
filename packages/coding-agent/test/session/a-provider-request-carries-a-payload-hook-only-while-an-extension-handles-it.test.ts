@@ -52,7 +52,7 @@ async function startSession(extension?: ExtensionFactory): Promise<Drive> {
 	const cwd = tempDir.join("project");
 	for (const dir of [agentDir, cwd]) fs.mkdirSync(dir, { recursive: true });
 	const authStorage = await AuthStorage.create(path.join(agentDir, "auth.db"));
-	authStorage.setRuntimeApiKey("mock", "mock-key");
+	authStorage.keys.setRuntime("mock", "mock-key");
 	registerMockApi(MOCK_API_SOURCE);
 	const model = createMockModel({ handler: { content: ["done"] } });
 	const { session } = await createAgentSession({

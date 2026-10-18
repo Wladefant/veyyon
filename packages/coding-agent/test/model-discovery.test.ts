@@ -170,7 +170,7 @@ describe("ModelRegistry runtime discovery", () => {
 
 	test("refreshProvider online refreshes expired anthropic OAuth before model discovery", async () => {
 		const { refreshCalls } = await useAuthStorageWithRefreshTracker();
-		await authStorage.set("anthropic", {
+		await authStorage.credentials.set("anthropic", {
 			type: "oauth",
 			access: "sk-ant-oat-expired-anthropic",
 			refresh: "refresh-anthropic",
@@ -192,13 +192,13 @@ describe("ModelRegistry runtime discovery", () => {
 
 	test("refreshProvider online does not refresh unrelated expired OAuth credentials", async () => {
 		const { refreshCalls } = await useAuthStorageWithRefreshTracker();
-		await authStorage.set("anthropic", {
+		await authStorage.credentials.set("anthropic", {
 			type: "oauth",
 			access: "sk-ant-oat-expired-anthropic",
 			refresh: "refresh-anthropic",
 			expires: Date.now() - 60_000,
 		});
-		await authStorage.set("openai", {
+		await authStorage.credentials.set("openai", {
 			type: "oauth",
 			access: "expired-openai",
 			refresh: "refresh-openai",
@@ -212,13 +212,13 @@ describe("ModelRegistry runtime discovery", () => {
 		await registry.refreshProvider("anthropic", "online");
 
 		expect(refreshCalls).toEqual(["anthropic"]);
-		expect(authStorage.getOAuthCredential("openai")?.access).toBe("expired-openai");
+		expect(authStorage.credentials.getOAuth("openai")?.access).toBe("expired-openai");
 		expect(capture.modelListCalls).toBe(1);
 	});
 
 	test("refreshProvider offline does not touch expired OAuth credentials", async () => {
 		const { refreshCalls } = await useAuthStorageWithRefreshTracker();
-		await authStorage.set("anthropic", {
+		await authStorage.credentials.set("anthropic", {
 			type: "oauth",
 			access: "sk-ant-oat-expired-anthropic",
 			refresh: "refresh-anthropic",
@@ -233,11 +233,11 @@ describe("ModelRegistry runtime discovery", () => {
 		await registry.refreshProvider("anthropic", "offline");
 
 		expect(refreshCalls).toEqual([]);
-		expect(authStorage.getOAuthCredential("anthropic")?.access).toBe("sk-ant-oat-expired-anthropic");
+		expect(authStorage.credentials.getOAuth("anthropic")?.access).toBe("sk-ant-oat-expired-anthropic");
 	});
 	test("online-if-uncached refreshes expired OAuth when the discovery cache is stale for the model manager", async () => {
 		const { refreshCalls } = await useAuthStorageWithRefreshTracker();
-		await authStorage.set("anthropic", {
+		await authStorage.credentials.set("anthropic", {
 			type: "oauth",
 			access: "sk-ant-oat-expired-anthropic",
 			refresh: "refresh-anthropic",
@@ -260,7 +260,7 @@ describe("ModelRegistry runtime discovery", () => {
 
 	test("online-if-uncached leaves expired OAuth untouched when the discovery cache is fresh", async () => {
 		const { refreshCalls } = await useAuthStorageWithRefreshTracker();
-		await authStorage.set("anthropic", {
+		await authStorage.credentials.set("anthropic", {
 			type: "oauth",
 			access: "sk-ant-oat-expired-anthropic",
 			refresh: "refresh-anthropic",
@@ -278,7 +278,7 @@ describe("ModelRegistry runtime discovery", () => {
 
 		expect(refreshCalls).toEqual([]);
 		expect(capture.modelListCalls).toBe(0);
-		expect(authStorage.getOAuthCredential("anthropic")?.access).toBe("sk-ant-oat-expired-anthropic");
+		expect(authStorage.credentials.getOAuth("anthropic")?.access).toBe("sk-ant-oat-expired-anthropic");
 	});
 
 	test("online-if-uncached refreshes expired OAuth for authoritative providers even when the cache is fresh", async () => {
@@ -289,7 +289,7 @@ describe("ModelRegistry runtime discovery", () => {
 		// the manager is never added and unsupported bundled ids (gpt-5.4-nano)
 		// remain selectable for the whole cache TTL.
 		const { refreshCalls } = await useAuthStorageWithRefreshTracker();
-		await authStorage.set("openai-codex", {
+		await authStorage.credentials.set("openai-codex", {
 			type: "oauth",
 			access: "expired-openai-codex",
 			refresh: "refresh-openai-codex",
@@ -329,7 +329,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("configured discovery suppresses built-in special OAuth discovery", async () => {
-		await authStorage.set("google-gemini-cli", {
+		await authStorage.credentials.set("google-gemini-cli", {
 			type: "oauth",
 			access: "fresh-google-gemini-cli",
 			refresh: "refresh-google-gemini-cli",
@@ -372,7 +372,7 @@ describe("ModelRegistry runtime discovery", () => {
 				return { ...cred, expires: Date.now() + 3_600_000 };
 			},
 		});
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", access: "fresh-codex", refresh: "r-fresh", expires: Date.now() + 3_600_000 },
 			{ type: "oauth", access: "expired-codex", refresh: "r-expired", expires: Date.now() - 60_000 },
 		]);
@@ -388,7 +388,7 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(getModelsForProvider(registry, "openai-codex").length).toBeGreaterThan(0);
 	});
 	test("Codex discovery invalidates single-account cache and unions models when sibling account is added, rejecting stale cache", async () => {
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", access: "tok-a", refresh: "r-a", accountId: "acc-a", expires: Date.now() + 3_600_000 },
 		]);
 		let calls = 0;
@@ -405,7 +405,7 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(registry.find("openai-codex", "m-b")).toBeUndefined();
 		await registry.refreshProvider("openai-codex", "online-if-uncached");
 		expect(calls).toBe(1);
-		await authStorage.set("openai-codex", [
+		await authStorage.credentials.set("openai-codex", [
 			{ type: "oauth", access: "tok-a", refresh: "r-a", accountId: "acc-a", expires: Date.now() + 3_600_000 },
 			{ type: "oauth", access: "tok-b", refresh: "r-b", accountId: "acc-b", expires: Date.now() + 3_600_000 },
 		]);
@@ -416,7 +416,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("Codex discovery falls back to non-OAuth bearer token and invalidates cache when token switches", async () => {
-		authStorage.setRuntimeApiKey("openai-codex", "key-a");
+		authStorage.keys.setRuntime("openai-codex", "key-a");
 		let calls = 0;
 		const fetchMock: FetchImpl = async (_i, init) => {
 			calls++;
@@ -427,7 +427,7 @@ describe("ModelRegistry runtime discovery", () => {
 		await registry.refreshProvider("openai-codex", "online");
 		expect(calls).toBe(1);
 		expect(registry.find("openai-codex", "model-a")).toBeDefined();
-		authStorage.setRuntimeApiKey("openai-codex", "key-b");
+		authStorage.keys.setRuntime("openai-codex", "key-b");
 		await registry.refreshProvider("openai-codex", "online-if-uncached");
 		expect(calls).toBe(2);
 		expect(registry.find("openai-codex", "gpt-6-astra")).toBeDefined();
@@ -590,7 +590,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("discovers ollama-cloud through built-in descriptor flow without regressing local implicit ollama", async () => {
-		authStorage.setRuntimeApiKey("ollama-cloud", "cloud-test-key");
+		authStorage.keys.setRuntime("ollama-cloud", "cloud-test-key");
 
 		const fetchMock: FetchImpl = async (input, init) => {
 			const url = String(input);
@@ -922,7 +922,7 @@ describe("ModelRegistry runtime discovery", () => {
 				discovery: { type: "ollama" },
 			},
 		});
-		authStorage.setRuntimeApiKey("custom-local", "test-key");
+		authStorage.keys.setRuntime("custom-local", "test-key");
 
 		{
 			const fetchMock: FetchImpl = async input => {
@@ -945,7 +945,7 @@ describe("ModelRegistry runtime discovery", () => {
 			await primedRegistry.refreshProvider("custom-local");
 		}
 
-		authStorage.setRuntimeApiKey("custom-local", "");
+		authStorage.keys.setRuntime("custom-local", "");
 		// Empty credentials must short-circuit discovery to "unauthenticated" *before*
 		// any transport call; this guard fetch keeps the path provably network-free
 		// (no real socket, no connect timeout) and makes a future regression that
@@ -962,7 +962,7 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(state?.models).toContain("local-coder");
 	});
 	test("llama.cpp discovery honors configured API key", async () => {
-		authStorage.setRuntimeApiKey("llama.cpp", "test-llama-key");
+		authStorage.keys.setRuntime("llama.cpp", "test-llama-key");
 		const fetchMock: FetchImpl = async (input, init) => {
 			const url = String(input);
 			if (url === "http://127.0.0.1:8080/models") {

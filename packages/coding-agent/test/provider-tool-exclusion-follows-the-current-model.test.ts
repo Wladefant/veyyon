@@ -85,8 +85,8 @@ describe("the edit tool survives every provider and every model switch", () => {
 		fs.mkdirSync(agentDir, { recursive: true });
 
 		const authStorage = await AuthStorage.create(path.join(agentDir, "auth.db"));
-		authStorage.setRuntimeApiKey("cursor", "test-token");
-		authStorage.setRuntimeApiKey("anthropic", "test-token");
+		authStorage.keys.setRuntimeApiKey("cursor", "test-token");
+		authStorage.keys.setRuntimeApiKey("anthropic", "test-token");
 
 		const created = await createAgentSession({
 			cwd,

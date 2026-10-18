@@ -97,7 +97,7 @@ describe("provider authentication and oauth flows gui-host behaviour", () => {
 		expect(basetenAfter!.authenticated).toBeTrue();
 
 		// Verify in the store the server was given, and nowhere else
-		expect(authStorage.hasAuth("baseten")).toBeTrue();
+		expect(authStorage.credentials.has("baseten")).toBeTrue();
 
 		client.destroy();
 	});

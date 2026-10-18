@@ -49,7 +49,7 @@ describe("AgentSession video attachments and queued message lifecycle", () => {
 	beforeEach(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-video-test-"));
 		authStorage = await isolatedAuthStorage(tempDir);
-		await authStorage.set("test-provider", { type: "api_key", key: "test-api-key" });
+		await authStorage.credentials.set("test-provider", { type: "api_key", key: "test-api-key" });
 
 		const created = await createAgentSession({
 			cwd: tempDir,

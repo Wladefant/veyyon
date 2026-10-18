@@ -79,7 +79,7 @@ describe("an agent's re-root leaves the process where it is", () => {
 		});
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `auth-${authStorages.length}.db`));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const sessionManager = SessionManager.inMemory();
 		await sessionManager.setCwd(cwd);
 		const session = new AgentSession({
@@ -221,7 +221,7 @@ describe("an agent's re-root leaves the process where it is", () => {
 		});
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth-default.db"));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const sessionManager = SessionManager.inMemory();
 		await sessionManager.setCwd(originDir);
 		const session = new AgentSession({

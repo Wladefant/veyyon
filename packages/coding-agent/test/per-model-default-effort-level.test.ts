@@ -57,7 +57,7 @@ describe("per-model default effort", () => {
 		});
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntimeApiKey("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 		session = new AgentSession({
 			agent,

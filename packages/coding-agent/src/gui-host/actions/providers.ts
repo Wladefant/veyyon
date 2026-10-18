@@ -24,7 +24,7 @@ function buildProvidersView(authStorage: AuthStorage): ProviderView[] {
 		providers.push({
 			id: def.id,
 			name: def.name,
-			authenticated: authStorage.hasAuth(def.id),
+			authenticated: authStorage.keys.source(def.id, { env: "aliases" }) !== undefined || authStorage.keys.keyless(def.id),
 			oauth: isOauth,
 			api_key: true,
 		});
@@ -39,7 +39,7 @@ function buildProvidersView(authStorage: AuthStorage): ProviderView[] {
 				"catalogDiscovery" in entry && entry.catalogDiscovery
 					? entry.catalogDiscovery.label
 					: formatProviderName(entry.id),
-			authenticated: authStorage.hasAuth(entry.id),
+			authenticated: authStorage.keys.source(entry.id, { env: "aliases" }) !== undefined || authStorage.keys.keyless(entry.id),
 			oauth: oauthIds.has(entry.id),
 			api_key: true,
 		});
@@ -115,7 +115,7 @@ const handleStartProviderAuth: ActionHandler<StartProviderAuthPayload | undefine
 	const runFlow = () => {
 		void (async () => {
 			try {
-				await authStorage.login(providerId as never, {
+				await authStorage.oauth.login(providerId as never, {
 					signal: abortController.signal,
 					onAuth: info => {
 						currentUrl = info.url;
@@ -245,7 +245,7 @@ const handleSubmitAuthSecret: ActionHandler<SubmitAuthSecretPayload | undefined>
 
 	try {
 		const authStorage = await ctx.authStorage();
-		await authStorage.set(payload.provider, { type: "api_key", key: payload.secret });
+		await authStorage.credentials.set(payload.provider, { type: "api_key", key: payload.secret });
 		if (ctx.clientState.authFlow?.provider === payload.provider) {
 			ctx.clientState.authFlow.state = "Completed";
 			ctx.reply.snapshot({

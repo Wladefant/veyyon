@@ -125,7 +125,7 @@ export class AccountFlows {
 		this.#ctx.ui.setFocus(dialog);
 		this.#ctx.ui.requestRender();
 		try {
-			const identity = await this.#ctx.session.modelRegistry.authStorage.login(providerId as OAuthProvider, {
+			const identity = await this.#ctx.session.modelRegistry.authStorage.oauth.login(providerId as OAuthProvider, {
 				signal: dialog.signal,
 				onAuth: (info: { url: string; launchUrl?: string; instructions?: string }) => {
 					// The dialog renders the full URL (SSH-safe copy target) and
@@ -212,10 +212,10 @@ export class AccountFlows {
 		// worse than not asking.
 		if (credentialId === undefined) return undefined;
 		const authStorage = this.#ctx.session.modelRegistry.authStorage;
-		if (authStorage.listStoredCredentials(providerId).length < 2) return undefined;
+		if (authStorage.credentials.list(providerId).length < 2) return undefined;
 		const name = await dialog.askOptionalName(`Name this ${providerLabel} account (optional)`, "work");
 		if (!name) return undefined;
-		if (!authStorage.setAccountName(providerId, credentialId, name)) {
+		if (!authStorage.credentials.setAccountName(providerId, credentialId, name)) {
 			this.#ctx.showWarning(
 				`Could not name that account: ${providerLabel} credentials are stored where names cannot be kept`,
 			);
@@ -236,7 +236,7 @@ export class AccountFlows {
 		const providerLabel = formatProviderName(providerId);
 		try {
 			const authStorage = this.#ctx.session.modelRegistry.authStorage;
-			const removed = await authStorage.removeCredential(providerId, credentialId);
+			const removed = await authStorage.credentials.removeById(providerId, credentialId);
 			if (!removed) {
 				this.#ctx.showError(`Logout skipped: ${label} is no longer stored for ${providerLabel}.`);
 				return;
@@ -252,7 +252,7 @@ export class AccountFlows {
 				),
 			);
 			block.addChild(new Text(theme.fg("dim", `Credential removed from ${getActiveAuthDbPath()}`), 1, 0));
-			const remainingSource = authStorage.describeCredentialSource(providerId, this.#ctx.session.sessionId);
+			const remainingSource = authStorage.keys.describe(providerId, this.#ctx.session.sessionId);
 			if (remainingSource) {
 				block.addChild(
 					new Text(theme.fg("warning", `${providerLabel} is still authenticated via ${remainingSource}`), 1, 0),
@@ -298,14 +298,14 @@ export class AccountFlows {
 	async showLogout(providerId?: string): Promise<void> {
 		const authStorage = this.#ctx.session.modelRegistry.authStorage;
 		try {
-			await authStorage.reload();
+			await authStorage.credentials.reload();
 		} catch (error: unknown) {
 			this.#ctx.showError(`Could not load stored credentials: ${errorMessage(error)}`);
 			return;
 		}
 		if (providerId) {
-			if (authStorage.listStoredCredentials(providerId).length === 0) {
-				const source = authStorage.describeCredentialSource(providerId, this.#ctx.session.sessionId);
+			if (authStorage.credentials.list(providerId).length === 0) {
+				const source = authStorage.keys.describe(providerId, this.#ctx.session.sessionId);
 				const suffix = source ? ` Current auth comes from ${source}; remove that source to log out.` : "";
 				this.#ctx.showError(
 					`Logout skipped: no stored credentials for ${formatProviderName(providerId)}.${suffix}`,
@@ -315,7 +315,7 @@ export class AccountFlows {
 			await this.showAccountManager(providerId);
 			return;
 		}
-		if (authStorage.listStoredCredentials().length === 0) {
+		if (authStorage.credentials.list().length === 0) {
 			this.#ctx.showStatus("No stored provider credentials to log out. Remove env or config auth at its source.");
 			return;
 		}
@@ -354,21 +354,29 @@ export class AccountFlows {
 		// without them is how naming an account blanked the health mark and every usage bar on the
 		// card until the next probe landed: the rename succeeded and the card looked like it had lost
 		// the account's readings.
-		const reload = () => {
+		let inventoryRevision = 0;
+		const reload = async () => {
 			if (closed) return;
-			let inventory = applyCredentialHealth(buildAccountInventory(authStorage, { sessionId }), [
-				...probes.health.values(),
-			]);
-			if (probes.usage) inventory = applyUsageReports(inventory, probes.usage);
-			manager?.setInventory(inventory);
-			this.#ctx.ui.requestRender();
+			const revision = ++inventoryRevision;
+			try {
+				const reportableDisabled = await authStorage.credentials.listReportableDisabled();
+				if (closed || revision !== inventoryRevision) return;
+				let inventory = applyCredentialHealth(buildAccountInventory(authStorage, { sessionId, reportableDisabled }), [
+					...probes.health.values(),
+				]);
+				if (probes.usage) inventory = applyUsageReports(inventory, probes.usage);
+				manager?.setInventory(inventory);
+				this.#ctx.ui.requestRender();
+			} catch (error: unknown) {
+				logger.debug("account manager: credential inventory refresh failed", { error: errorMessage(error) });
+			}
 		};
 
 		manager = new AccountManagerComponent(
 			await loadAccountInventory(authStorage, { sessionId }),
 			{
 				onUseAccount: row => {
-					if (authStorage.selectProviderCredential(row.provider, row.credentialId, { sessionId })) {
+					if (authStorage.sessions.selectProviderCredential(row.provider, row.credentialId, { sessionId })) {
 						this.#ctx.showStatus(
 							`${row.providerLabel}: now using ${accountDisplayLabel(row)} everywhere on this machine`,
 						);
@@ -381,7 +389,7 @@ export class AccountFlows {
 				},
 				onRename: (row, name) => {
 					const previous = accountDisplayLabel(row);
-					if (!authStorage.setAccountName(row.provider, row.credentialId, name)) {
+					if (!authStorage.credentials.setAccountName(row.provider, row.credentialId, name)) {
 						this.#ctx.showWarning(
 							`Could not name that account — ${row.providerLabel} credentials are stored where names cannot be kept`,
 						);
@@ -421,7 +429,7 @@ export class AccountFlows {
 					void this.#loginThenReopenAccountManager(provider);
 				},
 				onClearRateLimitBlock: row => {
-					authStorage.clearCredentialBlocks(row.provider, row.credentialId);
+					authStorage.blocks.clearAll(row.provider, row.credentialId);
 					// Re-probe the one account, so the row's countdown is replaced by what the provider
 					// says now rather than by an empty space this cleared. Lifting a block that really
 					// is still in force therefore shows it again, which is the honest outcome: the
@@ -438,7 +446,7 @@ export class AccountFlows {
 					);
 				},
 				onForgetSignedOut: provider => {
-					const forgotten = authStorage.forgetSignedOutLogins(provider);
+					const forgotten = authStorage.credentials.forgetSignedOutLogins(provider);
 					reload();
 					if (forgotten > 0) {
 						this.#ctx.showStatus(
@@ -526,8 +534,7 @@ export class AccountFlows {
 		const sessionId = this.#ctx.session.sessionId;
 		const baseUrlResolver = (target: string) => this.#ctx.session.modelRegistry.getProviderBaseUrl?.(target);
 		const [health, usage] = await Promise.all([
-			authStorage
-				.checkCredentials(credentialIds ? { baseUrlResolver, credentialIds } : { baseUrlResolver })
+			authStorage.health.check(credentialIds ? { baseUrlResolver, credentialIds } : { baseUrlResolver })
 				.catch(error => {
 					logger.debug("account manager: credential health probe failed", { error: errorMessage(error) });
 					return [];

@@ -174,6 +174,15 @@ describe("a configuration that cannot be satisfied is refused, not widened", () 
 describe("the search the tool actually runs", () => {
 	const emptyStore = {
 		hasAuth: () => false,
+		keys: {
+			has: () => false,
+			async get() {
+				throw new Error("a provider with no credential must not be asked for one");
+			},
+			resolver() {
+				throw new Error("a provider with no credential must not be asked for a resolver");
+			},
+		},
 		async getApiKey() {
 			throw new Error("a provider with no credential must not be asked for one");
 		},

@@ -268,7 +268,7 @@ export async function searchAnthropic(
 	const keyOrResolver: ApiKey | undefined = searchApiKey
 		? searchApiKey
 		: "authStorage" in params
-			? params.authStorage.resolver("anthropic", { sessionId: params.sessionId })
+			? params.authStorage.keys.resolver("anthropic", { sessionId: params.sessionId })
 			: undefined;
 
 	if (!keyOrResolver) {
@@ -282,7 +282,7 @@ export async function searchAnthropic(
 	const maxTokens = "authStorage" in params ? params.maxOutputTokens : params.max_tokens;
 	const callerSessionId = "authStorage" in params ? params.sessionId : undefined;
 	const accountId =
-		"authStorage" in params ? params.authStorage.getOAuthAccountId("anthropic", params.sessionId) : undefined;
+		"authStorage" in params ? params.authStorage.oauth.identity("anthropic", params.sessionId)?.accountId : undefined;
 	const response = await withAuth(
 		keyOrResolver,
 		key => {
@@ -335,7 +335,7 @@ export class AnthropicProvider extends SearchProvider {
 	readonly label = "Anthropic";
 
 	isAvailable(authStorage: AuthStorage): Promise<boolean> | boolean {
-		return Boolean($env.ANTHROPIC_SEARCH_API_KEY) || authStorage.hasAuth("anthropic");
+		return Boolean($env.ANTHROPIC_SEARCH_API_KEY) || authStorage.keys.source("anthropic", { env: "aliases" }) !== undefined || authStorage.keys.keyless("anthropic");
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {

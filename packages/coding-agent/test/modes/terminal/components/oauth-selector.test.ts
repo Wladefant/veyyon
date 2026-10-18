@@ -22,9 +22,12 @@ beforeAll(async () => {
 });
 
 const authStorage = {
-	has: (_providerId: string) => false,
-	hasAuth: (_providerId: string) => false,
-	getCredentialOrigin: (_providerId: string) => undefined,
+	credentials: {
+		has: (_providerId: string) => false,
+	},
+	keys: {
+		source: (_providerId: string) => undefined,
+	},
 } as unknown as AuthStorage;
 
 describe("OAuthSelectorComponent", () => {

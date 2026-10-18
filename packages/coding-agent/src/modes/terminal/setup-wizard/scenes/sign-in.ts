@@ -263,7 +263,7 @@ export class SignInTab implements SetupTab {
 		this.host.restoreFocus();
 		this.host.requestRender();
 		try {
-			await this.#authStorage.login(providerId as OAuthProvider, {
+			await this.#authStorage.oauth.login(providerId as OAuthProvider, {
 				signal: this.#loginAbort.signal,
 				onAuth: info => {
 					// Store the full authorization URL as the primary copy/display

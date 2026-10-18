@@ -410,10 +410,8 @@ export class CommandController {
 		const availableWidth = Math.max(40, (this.ctx.ui.terminal.columns ?? 100) - 2);
 		const currentProvider = this.ctx.session.model?.provider;
 		const activeAccount = currentProvider
-			? this.ctx.session.modelRegistry.authStorage.getOAuthAccountIdentity(
-					currentProvider,
-					this.ctx.session.sessionId,
-				)
+			? this.ctx.session.modelRegistry.authStorage.oauth.identity(currentProvider,
+					this.ctx.session.sessionId,)
 			: undefined;
 		const output = renderUsageReports(usageReports, theme, Date.now(), availableWidth, provider =>
 			provider === currentProvider ? activeAccount : undefined,

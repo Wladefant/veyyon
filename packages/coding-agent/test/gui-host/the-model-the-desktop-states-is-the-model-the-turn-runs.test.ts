@@ -169,7 +169,7 @@ describe("the model the desktop states", () => {
 		ran: ModelRef | null;
 		turnFrames: RequestFrame[];
 	}> {
-		await authStorage.set(PROVIDER, { type: "api_key", key: SECRET });
+		await authStorage.credentials.set(PROVIDER, { type: "api_key", key: SECRET });
 		const connected = await start(config);
 		vi.spyOn(ai, "streamSimple").mockImplementation(() => completedStream("Hello from engine!"));
 		const stated = modelsFrom((await connected.request(1, "RefreshModels")).frames).current;
@@ -226,7 +226,7 @@ describe("the model the desktop states", () => {
 	});
 
 	test("enabledModels narrows the offered list to what a turn could run", async () => {
-		await authStorage.set(PROVIDER, { type: "api_key", key: SECRET });
+		await authStorage.credentials.set(PROVIDER, { type: "api_key", key: SECRET });
 		const connected = await start(`enabledModels:\n  - ${PROVIDER}/claude-opus-4-8\n`);
 		const view = modelsFrom((await connected.request(1, "RefreshModels")).frames);
 		expect(view.models.map(model => `${model.provider}/${model.id}`)).toEqual([`${PROVIDER}/claude-opus-4-8`]);
@@ -234,7 +234,7 @@ describe("the model the desktop states", () => {
 	});
 
 	test("SelectModel refuses a model outside the enabledModels scope", async () => {
-		await authStorage.set(PROVIDER, { type: "api_key", key: SECRET });
+		await authStorage.credentials.set(PROVIDER, { type: "api_key", key: SECRET });
 		const connected = await start(`enabledModels:\n  - ${PROVIDER}/claude-opus-4-8\n`);
 		const { outcome } = await connected.request(1, {
 			SelectModel: { provider: PROVIDER, model: "claude-sonnet-4-5" },

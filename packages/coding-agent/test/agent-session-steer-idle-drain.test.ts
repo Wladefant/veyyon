@@ -84,7 +84,7 @@ describe("AgentSession steer idle drain", () => {
 		tempDir = TempDir.createSync("@pi-steer-idle-drain-");
 		vi.useFakeTimers();
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 	});
 
 	afterEach(async () => {

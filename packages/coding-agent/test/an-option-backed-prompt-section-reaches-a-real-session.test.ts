@@ -119,7 +119,7 @@ describe("an option-backed prompt section reaches a real session", () => {
 		originalProjectDir = getProjectDir();
 		root = TempDir.createSync("@option-backed-section-");
 		authStorage = await AuthStorage.create(root.join("auth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage, root.join("models.yml"));
 	});
 

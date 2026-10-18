@@ -62,7 +62,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
 	if (!authStorage) throw new Error("test setup failed");
-	await authStorage.set(PROVIDER, []);
+	await authStorage.credentials.set(PROVIDER, []);
 });
 
 function oauth(options: { email?: string; accountId?: string; orgId?: string; orgName?: string }): AuthCredential {
@@ -98,7 +98,7 @@ function paint(): AccountRow[] {
 async function seed(credentials: AuthCredential[]): Promise<AccountRow[]> {
 	const storage = authStorage;
 	if (!storage) throw new Error("test setup failed");
-	await storage.set(PROVIDER, credentials);
+	await storage.credentials.set(PROVIDER, credentials);
 	return paint();
 }
 
@@ -125,7 +125,7 @@ function predictedIds(rows: readonly AccountRow[]): number[] {
 
 function pin(credentialId: number): boolean {
 	if (!authStorage) throw new Error("test setup failed");
-	return authStorage.pinSessionCredential(PROVIDER, SESSION_ID, credentialId);
+	return authStorage.sessions.pin(PROVIDER, SESSION_ID, credentialId);
 }
 
 describe("two subscriptions on one email", () => {

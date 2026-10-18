@@ -921,7 +921,7 @@ export class PerplexityProvider extends SearchProvider {
 	 * `webSearch: perplexity` explicitly — see {@link isExplicitlyAvailable}.
 	 */
 	isAvailable(authStorage: AuthStorage): boolean {
-		return !!$env.PERPLEXITY_COOKIES?.trim() || authStorage.hasAuth("perplexity");
+		return !!$env.PERPLEXITY_COOKIES?.trim() || authStorage.keys.source("perplexity", { env: "aliases" }) !== undefined || authStorage.keys.keyless("perplexity");
 	}
 
 	/**

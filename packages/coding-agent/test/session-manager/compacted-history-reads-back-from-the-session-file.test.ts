@@ -717,9 +717,9 @@ async function summarizeBranch(
 	onCredential: () => void,
 ): Promise<string> {
 	const authStorage = await AuthStorage.create(path.join(root, `auth-${++authFiles}.db`));
-	authStorage.setRuntimeApiKey("anthropic", "test-key");
-	const resolveKey = authStorage.getApiKey.bind(authStorage);
-	vi.spyOn(authStorage, "getApiKey").mockImplementation(async (provider, sessionId, options) => {
+	authStorage.keys.setRuntime("anthropic", "test-key");
+	const resolveKey = authStorage.keys.get.bind(authStorage.keys);
+	vi.spyOn(authStorage.keys, "get").mockImplementation(async (provider, sessionId, options) => {
 		onCredential();
 		return resolveKey(provider, sessionId, options);
 	});
@@ -768,7 +768,7 @@ async function resumeSession(
 	reply: AssistantMessage,
 ): Promise<{ session: AgentSession; close: () => Promise<void> }> {
 	const authStorage = await AuthStorage.create(path.join(root, `auth-${++authFiles}.db`));
-	authStorage.setRuntimeApiKey("anthropic", "test-key");
+	authStorage.keys.setRuntime("anthropic", "test-key");
 	const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
 	if (!bundled) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
 	const session = new AgentSession({

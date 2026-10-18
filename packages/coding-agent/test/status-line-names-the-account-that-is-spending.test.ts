@@ -106,15 +106,15 @@ function credential(email: string) {
 async function storeAccounts(...emails: readonly string[]): Promise<number[]> {
 	const storage = authStorage;
 	if (!storage) throw new Error("no auth storage");
-	await storage.set("anthropic", emails.map(credential));
-	return storage.listStoredCredentials("anthropic").map(entry => entry.id);
+	await storage.credentials.set("anthropic", emails.map(credential));
+	return storage.credentials.list("anthropic").map(entry => entry.id);
 }
 
 /** Credentials for a provider other than the active one, so cross-provider leakage is observable. */
 async function storeOtherProvider(provider: string, count: number): Promise<void> {
 	const storage = authStorage;
 	if (!storage) throw new Error("no auth storage");
-	await storage.set(
+	await storage.credentials.set(
 		provider,
 		Array.from({ length: count }, (_, index) => ({ type: "api_key" as const, key: `key-${provider}-${index}` })),
 	);
@@ -179,7 +179,7 @@ describe("the footline names the account that is spending", () => {
 	 */
 	it("names the selected account once a second one is stored", async () => {
 		const [first] = await storeAccounts("selected@example.com", "unselected@example.com");
-		authStorage?.selectProviderCredential("anthropic", first!, { sessionId: SESSION_ID });
+		authStorage?.sessions.selectProviderCredential("anthropic", first!, { sessionId: SESSION_ID });
 
 		expect(accountOnly().line()).toContain("as selected@example.com");
 	});
@@ -191,7 +191,7 @@ describe("the footline names the account that is spending", () => {
 	 */
 	it("follows the selection rather than storage order", async () => {
 		const ids = await storeAccounts("row.one@example.com", "row.two@example.com");
-		authStorage?.selectProviderCredential("anthropic", ids[1]!, { sessionId: SESSION_ID });
+		authStorage?.sessions.selectProviderCredential("anthropic", ids[1]!, { sessionId: SESSION_ID });
 
 		const line = accountOnly().line();
 		expect(line).toContain("as row.two@example.com");
@@ -211,7 +211,7 @@ describe("the footline names the account that is spending", () => {
 		const ids = await storeAccounts("chosen@example.com", "substitute@example.com");
 		const storage = authStorage;
 		if (!storage) throw new Error("no auth storage");
-		vi.spyOn(storage, "sessionCredentialRouting").mockReturnValue({
+		vi.spyOn(storage.sessions, "routing").mockReturnValue({
 			provider: "anthropic",
 			selectedCredentialId: ids[0]!,
 			activeCredentialId: ids[1]!,
@@ -231,12 +231,12 @@ describe("the footline names the account that is spending", () => {
 	 */
 	it("prefers the operator's own name, and a rename lands on the next render", async () => {
 		const ids = await storeAccounts("renamed@example.com", "untouched@example.com");
-		authStorage?.selectProviderCredential("anthropic", ids[0]!, { sessionId: SESSION_ID });
+		authStorage?.sessions.selectProviderCredential("anthropic", ids[0]!, { sessionId: SESSION_ID });
 		const surface = accountOnly();
 
 		expect(surface.line()).toContain("as renamed@example.com");
 
-		authStorage?.setAccountName("anthropic", ids[0]!, "work");
+		authStorage?.credentials.setAccountName("anthropic", ids[0]!, "work");
 
 		expect(surface.line()).toContain("as work");
 		expect(surface.line()).not.toContain("renamed@example.com");
@@ -274,7 +274,7 @@ describe("the footline names the account that is spending", () => {
 	 */
 	it("reads the live model's provider, not the session's configured one", async () => {
 		const ids = await storeAccounts("live@example.com", "live.other@example.com");
-		authStorage?.selectProviderCredential("anthropic", ids[0]!, { sessionId: SESSION_ID });
+		authStorage?.sessions.selectProviderCredential("anthropic", ids[0]!, { sessionId: SESSION_ID });
 		await storeOtherProvider("openai", 0);
 
 		expect(accountOnly({ live: "openai", configured: "anthropic" }).line()).not.toContain("as ");
@@ -287,7 +287,7 @@ describe("the footline names the account that is spending", () => {
 	 */
 	it("reaches the footline on the default preset", async () => {
 		const ids = await storeAccounts("preset@example.com", "preset.other@example.com");
-		authStorage?.selectProviderCredential("anthropic", ids[0]!, { sessionId: SESSION_ID });
+		authStorage?.sessions.selectProviderCredential("anthropic", ids[0]!, { sessionId: SESSION_ID });
 		const component = new StatusLineComponent(new StatusPresentationProducer(makeSession()));
 		component.updateSettings({ preset: "default" });
 

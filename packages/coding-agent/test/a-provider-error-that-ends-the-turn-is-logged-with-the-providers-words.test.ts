@@ -41,7 +41,7 @@ describe("a provider error that ends the turn", () => {
 	beforeAll(async () => {
 		tempDir = TempDir.createSync("@veyyon-turn-error-log-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
+		authStorage.keys.setRuntime("anthropic", "anthropic-test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 	});
 

@@ -39,8 +39,8 @@ describe("a model no account can serve", () => {
 	beforeAll(async () => {
 		tempDir = TempDir.createSync("@veyyon-plan-refusal-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
-		authStorage.setRuntimeApiKey("openai", "openai-test-key");
+		authStorage.keys.setRuntime("anthropic", "anthropic-test-key");
+		authStorage.keys.setRuntime("openai", "openai-test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 	});
 

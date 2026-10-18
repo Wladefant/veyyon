@@ -44,12 +44,12 @@ describe("an MCP auth failure leaves model-provider credentials alone", () => {
 	beforeEach(async () => {
 		store = new SqliteAuthCredentialStore(new Database(":memory:"));
 		authStorage = new AuthStorage(store);
-		await authStorage.reload();
+		await authStorage.credentials.reload();
 
 		// Expired, so `#resolveAuthConfig` decides to refresh and reaches the
 		// failure path. A live credential takes the no-refresh branch and never
 		// exercises anything this suite is about.
-		await authStorage.set(MCP_CREDENTIAL_ID, {
+		await authStorage.credentials.set(MCP_CREDENTIAL_ID, {
 			access: "mcp-stale-access",
 			expires: Date.now() - 60_000,
 			refresh: "mcp-stale-refresh",
@@ -60,13 +60,13 @@ describe("an MCP auth failure leaves model-provider credentials alone", () => {
 		// plausibly be caught by a provider-wide sweep; an API key is the one a
 		// "clear all oauth" mistake would spare, so both are present and both are
 		// checked.
-		await authStorage.set(PROVIDER_OAUTH_ID, {
+		await authStorage.credentials.set(PROVIDER_OAUTH_ID, {
 			access: "provider-access",
 			expires: Date.now() + 3_600_000,
 			refresh: "provider-refresh",
 			type: "oauth",
 		});
-		await authStorage.set(PROVIDER_API_KEY_ID, { key: "provider-api-key", type: "api_key" });
+		await authStorage.credentials.set(PROVIDER_API_KEY_ID, { key: "provider-api-key", type: "api_key" });
 
 		manager = new MCPManager(process.cwd());
 		manager.setAuthStorage(authStorage);
@@ -86,8 +86,8 @@ describe("an MCP auth failure leaves model-provider credentials alone", () => {
 	/** Snapshot every non-MCP credential so a change of any kind is visible. */
 	function bystanders(): Record<string, unknown> {
 		return {
-			apiKey: authStorage.get(PROVIDER_API_KEY_ID),
-			oauth: authStorage.get(PROVIDER_OAUTH_ID),
+			apiKey: authStorage.credentials.get(PROVIDER_API_KEY_ID),
+			oauth: authStorage.credentials.get(PROVIDER_OAUTH_ID),
 		};
 	}
 
@@ -106,7 +106,7 @@ describe("an MCP auth failure leaves model-provider credentials alone", () => {
 
 		// The deletion really happened; without this the isolation check below
 		// would pass against a build that deleted nothing.
-		expect(authStorage.get(MCP_CREDENTIAL_ID)).toBeUndefined();
+		expect(authStorage.credentials.get(MCP_CREDENTIAL_ID)).toBeUndefined();
 		expect(bystanders()).toEqual(before);
 	});
 
@@ -119,7 +119,7 @@ describe("an MCP auth failure leaves model-provider credentials alone", () => {
 
 		await expect(manager.prepareConfig(serverConfig)).rejects.toThrow(MCPAuthRequiredError);
 
-		expect(authStorage.get(MCP_CREDENTIAL_ID)).toBeUndefined();
+		expect(authStorage.credentials.get(MCP_CREDENTIAL_ID)).toBeUndefined();
 		expect(bystanders()).toEqual(before);
 	});
 
@@ -136,7 +136,7 @@ describe("an MCP auth failure leaves model-provider credentials alone", () => {
 
 		await manager.prepareConfig(serverConfig);
 
-		expect(authStorage.get(MCP_CREDENTIAL_ID)).toBeDefined();
+		expect(authStorage.credentials.get(MCP_CREDENTIAL_ID)).toBeDefined();
 		expect(bystanders()).toEqual(before);
 	});
 
@@ -161,7 +161,7 @@ describe("an MCP auth failure leaves model-provider credentials alone", () => {
 		await manager.prepareConfig(serverConfig);
 		await manager.prepareConfig(serverConfig);
 
-		expect(authStorage.get(MCP_CREDENTIAL_ID)).toBeUndefined();
+		expect(authStorage.credentials.get(MCP_CREDENTIAL_ID)).toBeUndefined();
 		expect(bystanders()).toEqual(before);
 	});
 
@@ -173,13 +173,13 @@ describe("an MCP auth failure leaves model-provider credentials alone", () => {
 	 */
 	test("leaves another MCP server's credential alone", async () => {
 		const otherId = "mcp_oauth_isolation_other";
-		await authStorage.set(otherId, {
+		await authStorage.credentials.set(otherId, {
 			access: "other-access",
 			expires: Date.now() + 3_600_000,
 			refresh: "other-refresh",
 			type: "oauth",
 		});
-		const otherBefore = authStorage.get(otherId);
+		const otherBefore = authStorage.credentials.get(otherId);
 
 		vi.spyOn(oauthFlow, "refreshMCPOAuthToken").mockRejectedValue(
 			new Error('MCP OAuth refresh failed: 400 {"error":"invalid_grant"}'),
@@ -187,7 +187,7 @@ describe("an MCP auth failure leaves model-provider credentials alone", () => {
 
 		await expect(manager.prepareConfig(serverConfig)).rejects.toThrow(MCPAuthRequiredError);
 
-		expect(authStorage.get(MCP_CREDENTIAL_ID)).toBeUndefined();
-		expect(authStorage.get(otherId)).toEqual(otherBefore);
+		expect(authStorage.credentials.get(MCP_CREDENTIAL_ID)).toBeUndefined();
+		expect(authStorage.credentials.get(otherId)).toEqual(otherBefore);
 	});
 });

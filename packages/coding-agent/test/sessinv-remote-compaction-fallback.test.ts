@@ -102,7 +102,7 @@ describe("compaction.remote on, endpoint failing: one compact request, one local
 		compactServer = await startRefusingCompactServer();
 
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("openai", "test-key");
+		authStorage.keys.setRuntimeApiKey("openai", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 

@@ -51,7 +51,7 @@ describe("a failed auto-compaction must roll its tail elisions back", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-tailrev-auto-rollback-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntimeApiKey("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 

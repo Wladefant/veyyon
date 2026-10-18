@@ -107,13 +107,13 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		sourceLabel: `broker ${brokerConfig.url}`,
 		loadBalancing: accountLoadBalancingSetting,
 	});
-	await storage.reload();
+	await storage.credentials.reload();
 
 	// Build the model resolver + catalog from pi-ai's bundled metadata, scoped
 	// to providers we hold credentials for. Format handlers ask `resolveModel`
 	// to translate a client-requested `model` field into a pi-ai `Model<Api>`
 	// before dispatch; `listModels` powers `/v1/models`.
-	const snapshot = storage.exportSnapshot();
+	const snapshot = storage.credentials.snapshot();
 	const providersWithCreds = new Set<string>();
 	for (const entry of snapshot.credentials) providersWithCreds.add(entry.provider);
 	const modelById = new Map<string, Model<Api>>();
@@ -310,7 +310,7 @@ const STRICT_PROBE_MAX_CANDIDATES = 4;
 const STRICT_PROBE_PER_ATTEMPT_TIMEOUT_MS = 15_000;
 
 /**
- * Overall per-credential budget passed to {@link AuthStorage.checkCredentials}.
+ * Overall per-credential budget passed to {@link AuthStorage.health.check}.
  * Big enough to walk every candidate at the per-attempt cap with a small
  * margin for refresh/network overhead.
  */
@@ -404,7 +404,7 @@ async function probeOneModel(
 
 /**
  * Build the {@link CompletionProbe} consumed by
- * {@link AuthStorage.checkCredentials} in `--strict` mode. Walks the cheapest
+ * {@link AuthStorage.health.check} in `--strict` mode. Walks the cheapest
  * candidates per provider, retrying on "model not found / invalid model"
  * errors so a stale catalog entry doesn't masquerade as a bad credential.
  * Stops as soon as one model returns a successful response (the credential
@@ -476,8 +476,8 @@ async function runCheck(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	const store = new RemoteAuthCredentialStore({ client, initialSnapshot });
 	const storage = new AuthStorage(store, { sourceLabel: `broker ${brokerConfig.url}` });
 	try {
-		await storage.reload();
-		const results = await storage.checkCredentials(
+		await storage.credentials.reload();
+		const results = await storage.health.check(
 			flags.strict
 				? { completionProbe: createStrictCompletionProbe(), completionTimeoutMs: STRICT_PROBE_OVERALL_TIMEOUT_MS }
 				: undefined,

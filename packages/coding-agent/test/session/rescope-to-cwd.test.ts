@@ -70,7 +70,7 @@ describe("AgentSession re-scopes to the destination directory", () => {
 		});
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `auth-${authStorages.length}.db`));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntimeApiKey("anthropic", "test-key");
 		const sessionManager = SessionManager.inMemory();
 		await sessionManager.setCwd(cwd);
 		session = new AgentSession({

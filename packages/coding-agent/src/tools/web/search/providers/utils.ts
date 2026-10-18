@@ -31,7 +31,7 @@ export function resolveProviderKey(
 	sessionId?: string,
 ): ApiKey | undefined {
 	if (authStorage) {
-		return authStorage.resolver(provider, { sessionId });
+		return authStorage.keys.resolver(provider, { sessionId });
 	}
 	return getEnvApiKey(provider) ?? undefined;
 }

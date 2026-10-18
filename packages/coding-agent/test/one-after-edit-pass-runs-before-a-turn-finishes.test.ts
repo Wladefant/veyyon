@@ -336,7 +336,7 @@ async function settleAfterEdits(options: {
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 	let session: AgentSession | undefined;
 	try {
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntimeApiKey("anthropic", "test-key");
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const agent = new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } });
 		session = new AgentSession({

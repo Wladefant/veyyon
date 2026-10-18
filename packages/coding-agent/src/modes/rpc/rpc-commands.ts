@@ -326,7 +326,7 @@ async function loginCommand(
 	// A provider that prompts before it has sent an authorization URL needs interactive input no
 	// RPC client can supply; after the URL, a prompt reads the pasted OAuth code or redirect URL.
 	let authEmitted = false;
-	await session.modelRegistry.authStorage.login(command.providerId, {
+	await session.modelRegistry.authStorage.oauth.login(command.providerId, {
 		onAuth: info => {
 			authEmitted = true;
 			host.output({
@@ -526,7 +526,7 @@ const RPC_COMMAND_HANDLERS: { readonly [T in RpcCommandType]: RpcCommandHandler<
 			id: provider.id,
 			name: provider.name,
 			available: provider.available,
-			authenticated: session.modelRegistry.authStorage.hasAuth(provider.id),
+			authenticated: session.modelRegistry.authStorage.keys.source(provider.id, { env: "aliases" }) !== undefined || session.modelRegistry.authStorage.keys.keyless(provider.id),
 		})),
 	}),
 	login: loginCommand,

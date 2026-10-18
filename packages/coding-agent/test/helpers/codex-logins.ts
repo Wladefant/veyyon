@@ -21,7 +21,7 @@ export function codexToken(plan: string | undefined, accountId = "acct_test"): s
 export async function storeCodexLogins(auth: AuthStorage, plans: readonly string[]): Promise<string[]> {
 	const tokens = plans.map((plan, index) => codexToken(plan, `acct_${index}`));
 	if (tokens.length === 0) return tokens;
-	await auth.set(
+	await auth.credentials.set(
 		"openai-codex",
 		tokens.map((access, index) => ({
 			type: "oauth" as const,

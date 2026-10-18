@@ -96,12 +96,12 @@ describe("forgetting a signed-out login", () => {
 		disabledRow(store, OTHER_PROVIDER, DEAD, REFRESH_FAILURE);
 		store.upsertAuthCredentialForProvider(PROVIDER, oauth(LIVE, "live"));
 		const storage = new AuthStorage(store);
-		await storage.reload();
+		await storage.credentials.reload();
 		expect(buildAccountInventory(storage).providers.find(entry => entry.provider === PROVIDER)?.disabledCause).toBe(
 			REFRESH_FAILURE,
 		);
 
-		expect(storage.forgetSignedOutLogins(PROVIDER)).toBe(1);
+		expect(storage.credentials.forgetSignedOutLogins(PROVIDER)).toBe(1);
 
 		const inventory = buildAccountInventory(storage);
 		const forgotten = inventory.providers.find(entry => entry.provider === PROVIDER);
@@ -109,7 +109,11 @@ describe("forgetting a signed-out login", () => {
 		expect(forgotten?.disabledAccount).toBeUndefined();
 		expect(forgotten?.rows.map(row => row.email)).toEqual([LIVE]);
 		expect(inventory.providers.find(entry => entry.provider === OTHER_PROVIDER)?.disabledCause).toBe(REFRESH_FAILURE);
-		expect(storage.listProvidersWithFailedRefresh().map(entry => entry.provider)).toEqual([OTHER_PROVIDER]);
+		expect(
+			(await storage.credentials.listDisabled())
+				.filter(entry => isRefreshFailureDisableCause(entry.cause))
+				.map(entry => entry.provider),
+		).toEqual([OTHER_PROVIDER]);
 
 		const causes = new Map(store.listDisabledAuthCredentials(PROVIDER).map(row => [row.id, row.disabledCause]));
 		// The dead row stays disabled and on disk, under a cause a successful refresh may not heal.
@@ -118,7 +122,7 @@ describe("forgetting a signed-out login", () => {
 		// A logout is not a refresh failure and keeps the cause it was given.
 		expect(causes.get(loggedOut)).toBe("deleted by user");
 		// Nothing left to dismiss.
-		expect(storage.forgetSignedOutLogins(PROVIDER)).toBe(0);
+		expect(storage.credentials.forgetSignedOutLogins(PROVIDER)).toBe(0);
 	});
 
 	test("clears a provider whose only login died", () => {
@@ -127,7 +131,7 @@ describe("forgetting a signed-out login", () => {
 		const storage = new AuthStorage(store);
 		expect(buildAccountInventory(storage).providers.map(entry => entry.provider)).toContain(PROVIDER);
 
-		storage.forgetSignedOutLogins(PROVIDER);
+		storage.credentials.forgetSignedOutLogins(PROVIDER);
 
 		expect(buildAccountInventory(storage).providers.map(entry => entry.provider)).not.toContain(PROVIDER);
 	});
@@ -246,9 +250,9 @@ describe("the host forgets through the controller", () => {
 		const dead = rows.find(row => row.credential.type === "oauth" && row.credential.email === DEAD)!.id;
 		store.deleteAuthCredential(dead, REFRESH_FAILURE);
 		const storage = new AuthStorage(store);
-		await storage.reload();
+		await storage.credentials.reload();
 		// Opening the card probes every credential over the network; the contract here is the store.
-		vi.spyOn(storage, "checkCredentials").mockResolvedValue([]);
+		vi.spyOn(storage.health, "check").mockResolvedValue([]);
 
 		const statuses: string[] = [];
 		const warnings: string[] = [];
@@ -295,7 +299,11 @@ describe("the host forgets through the controller", () => {
 
 		card.handleInput("f");
 
-		expect(storage.listProvidersWithFailedRefresh().map(entry => entry.provider)).not.toContain(PROVIDER);
+		expect(
+			(await storage.credentials.listDisabled())
+				.filter(entry => isRefreshFailureDisableCause(entry.cause))
+				.map(entry => entry.provider),
+		).not.toContain(PROVIDER);
 		expect(offersChip()).toBe(false);
 		expect(statuses.some(line => line.includes("forgot the signed-out login"))).toBe(true);
 		expect(warnings).toEqual([]);
@@ -304,7 +312,7 @@ describe("the host forgets through the controller", () => {
 	test("warns instead of reporting success when the store has nothing left to forget", async () => {
 		const { card, storage, statuses, warnings, offersChip } = await openCard();
 		// Another process dismissed it after the card painted: the note is still on screen.
-		storage.forgetSignedOutLogins(PROVIDER);
+		storage.credentials.forgetSignedOutLogins(PROVIDER);
 		expect(offersChip()).toBe(true);
 
 		card.handleInput("f");

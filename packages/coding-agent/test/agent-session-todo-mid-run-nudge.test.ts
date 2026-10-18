@@ -147,7 +147,7 @@ describe("AgentSession mid-run todo reconciliation nudge", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-todo-mid-run-nudge-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 

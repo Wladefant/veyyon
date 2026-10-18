@@ -11,8 +11,7 @@ import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { EventLoopKeepalive } from "@veyyon/agent-core";
-import type { Model } from "@veyyon/ai";
-import type { AuthStorage } from "@veyyon/ai/auth-storage";
+import type { AuthStorage, Model } from "@veyyon/ai";
 import { describePendingToolCalls } from "@veyyon/kernel/session/exit-diagnostics";
 import { formatNotice, OperatorNotices, stderrNoticeSink } from "@veyyon/kernel/session/operator-notices";
 import {
@@ -514,7 +513,7 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 			titleSystemPrompt,
 		});
 		if (args.parsedArgs.apiKey && !args.baseOptions.model && nextSession.model) {
-			args.authStorage.setRuntimeApiKey(nextSession.model.provider, args.parsedArgs.apiKey);
+			args.authStorage.keys.setRuntime(nextSession.model.provider, args.parsedArgs.apiKey);
 		}
 		applyExtensionFlags(nextSession.extensionRunner, args.rawArgs);
 		return nextSession;
@@ -1942,7 +1941,7 @@ async function buildLaunchSessionOptions(
 			process.exit(EXIT_FAILURE);
 		}
 		if (sessionOptions.model) {
-			authStorage.setRuntimeApiKey(sessionOptions.model.provider, parsedArgs.apiKey);
+			authStorage.keys.setRuntime(sessionOptions.model.provider, parsedArgs.apiKey);
 		}
 	}
 	return sessionOptions;
@@ -2309,7 +2308,7 @@ async function runSessionLaunch(
 	installTelegramNativeControlHost(() => session.sessionManager.getSessionId());
 	installPersistedAgentReviver(launch, session, eventBus, sessionOptions.enableLsp ?? true);
 	if (launch.parsedArgs.apiKey && !sessionOptions.model && session.model) {
-		launch.authStorage.setRuntimeApiKey(session.model.provider, launch.parsedArgs.apiKey);
+		launch.authStorage.keys.setRuntime(session.model.provider, launch.parsedArgs.apiKey);
 	}
 	const createNextSession = nextSessionFactory(
 		sessionOptions,

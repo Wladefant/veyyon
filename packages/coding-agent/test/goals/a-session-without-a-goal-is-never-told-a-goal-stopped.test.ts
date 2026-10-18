@@ -88,7 +88,7 @@ describe("the goal stand-down warning belongs to a goal that is actually running
 		tempDir = TempDir.createSync("@pi-goalless-warning-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("openai", "openai-test-key");
+		authStorage.keys.setRuntime("openai", "openai-test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 		const model = getBundledModel("openai", "gpt-5");
 		if (!model) throw new Error("Expected bundled openai/gpt-5 test model");

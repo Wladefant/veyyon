@@ -105,13 +105,13 @@ describe("/account verbs", () => {
 		setSystemTime(new Date(NOW_MS));
 		store = new SqliteAuthCredentialStore(new Database(":memory:"));
 		const authStorage = new AuthStorage(store);
-		await authStorage.reload();
+		await authStorage.credentials.reload();
 		vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async (provider, credentials) => {
 			const credential = credentials[provider];
 			if (!credential) return null;
 			return { newCredentials: credential, apiKey: credential.access };
 		});
-		await authStorage.set(PROVIDER, [
+		await authStorage.credentials.set(PROVIDER, [
 			{
 				type: "oauth",
 				access: "access-work",
@@ -129,7 +129,7 @@ describe("/account verbs", () => {
 				email: "personal@example.com",
 			},
 		]);
-		await authStorage.set(OTHER_PROVIDER, [
+		await authStorage.credentials.set(OTHER_PROVIDER, [
 			{
 				type: "oauth",
 				access: "access-idle",
@@ -139,10 +139,10 @@ describe("/account verbs", () => {
 				email: "idle@example.com",
 			},
 		]);
-		const rows = authStorage.listStoredCredentials(PROVIDER);
+		const rows = authStorage.credentials.list(PROVIDER);
 		workId = rows[0]?.id ?? 0;
 		personalId = rows[1]?.id ?? 0;
-		authStorage.pinSessionCredential(PROVIDER, SESSION_ID, workId);
+		authStorage.sessions.pin(PROVIDER, SESSION_ID, workId);
 		harness = buildHarness(authStorage, PROVIDER);
 	});
 
@@ -196,8 +196,8 @@ describe("/account verbs", () => {
 	test("/account name stores the name for the account in use", async () => {
 		await executeBuiltinSlashCommand("/account name home", current().runtime);
 
-		expect(current().authStorage.getAccountName(PROVIDER, workId)).toBe("home");
-		expect(current().authStorage.getAccountName(PROVIDER, personalId)).toBeUndefined();
+		expect(current().authStorage.credentials.getAccountName(PROVIDER, workId)).toBe("home");
+		expect(current().authStorage.credentials.getAccountName(PROVIDER, personalId)).toBeUndefined();
 		expect(current().status).toEqual(["Unit Accounts account renamed: work@example.com → home"]);
 	});
 
@@ -212,7 +212,7 @@ describe("/account verbs", () => {
 
 		await executeBuiltinSlashCommand("/account name", current().runtime);
 
-		expect(current().authStorage.getAccountName(PROVIDER, workId)).toBeUndefined();
+		expect(current().authStorage.credentials.getAccountName(PROVIDER, workId)).toBeUndefined();
 		expect(current().status).toEqual(["Unit Accounts account name cleared: home → work@example.com"]);
 	});
 
@@ -223,7 +223,7 @@ describe("/account verbs", () => {
 	 * command's reaction to it.
 	 */
 	test("/account name reports a refused write instead of claiming a save", async () => {
-		vi.spyOn(current().authStorage, "setAccountName").mockReturnValue(false);
+		vi.spyOn(current().authStorage.credentials, "setAccountName").mockReturnValue(false);
 
 		await executeBuiltinSlashCommand("/account name home", current().runtime);
 
@@ -231,7 +231,7 @@ describe("/account verbs", () => {
 		expect(current().warnings).toEqual([
 			"Could not name work@example.com: the credential is unknown to the store, or this store keeps no account names (remote broker).",
 		]);
-		expect(current().authStorage.getAccountName(PROVIDER, workId)).toBeUndefined();
+		expect(current().authStorage.credentials.getAccountName(PROVIDER, workId)).toBeUndefined();
 	});
 
 	/**
@@ -284,7 +284,7 @@ describe("/account verbs", () => {
 
 		expect(noModel.warnings).toEqual(["No model is active, so no account is routed. Pick one with /model first."]);
 		expect(noModel.status).toEqual([]);
-		expect(current().authStorage.getAccountName(PROVIDER, workId)).toBeUndefined();
+		expect(current().authStorage.credentials.getAccountName(PROVIDER, workId)).toBeUndefined();
 	});
 
 	/**
@@ -298,7 +298,7 @@ describe("/account verbs", () => {
 
 		expect(idleModel.warnings).toEqual(["No Unit Idle account is serving this session yet. /providers to pick one."]);
 		expect(idleModel.status).toEqual([]);
-		expect(current().authStorage.getAccountName(OTHER_PROVIDER, 1)).toBeUndefined();
+		expect(current().authStorage.credentials.getAccountName(OTHER_PROVIDER, 1)).toBeUndefined();
 	});
 
 	/**
@@ -307,7 +307,7 @@ describe("/account verbs", () => {
 	 * rate limit means wait, and a bare "failed" cannot tell a user which.
 	 */
 	test("/account refresh reports the health delta with the upstream reason", async () => {
-		vi.spyOn(current().authStorage, "checkCredentials").mockResolvedValue([
+		vi.spyOn(current().authStorage.health, "check").mockResolvedValue([
 			{
 				id: workId,
 				provider: PROVIDER,
@@ -335,7 +335,7 @@ describe("/account verbs", () => {
 	 * credential, and printing all of them would bury the one line that matters in an inline report.
 	 */
 	test("/account refresh names only the routed accounts", async () => {
-		vi.spyOn(current().authStorage, "checkCredentials").mockResolvedValue([
+		vi.spyOn(current().authStorage.health, "check").mockResolvedValue([
 			{ id: workId, provider: PROVIDER, type: "oauth", ok: true },
 			{ id: personalId, provider: PROVIDER, type: "oauth", ok: false, reason: "rate limited" },
 		]);

@@ -97,7 +97,7 @@ describe("a failing tool becomes an error tool-result with the message intact", 
 		await Settings.init({ inMemory: true, cwd: tempDir });
 
 		authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntimeApiKey("anthropic", "test-key");
 
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("expected claude-sonnet-4-5 to be bundled");

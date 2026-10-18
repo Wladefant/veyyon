@@ -31,7 +31,7 @@ describe("a mid-session intent tracing flip", () => {
 	beforeAll(async () => {
 		dir = TempDir.createSync("@intent-tracing-flip-");
 		authStorage = await AuthStorage.create(path.join(dir.path(), "auth.db"));
-		authStorage.setRuntimeApiKey("openai-codex", "test-openai-key");
+		authStorage.keys.setRuntime("openai-codex", "test-openai-key");
 	});
 
 	afterAll(async () => {

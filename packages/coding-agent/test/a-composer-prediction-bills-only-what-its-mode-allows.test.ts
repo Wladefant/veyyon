@@ -118,10 +118,10 @@ const makeTempDir = useTrackedTempDirs("veyyon-composer-prediction-");
  * `keys` holds one for it or `auth` has a login for it.
  */
 function registry(auth: AuthStorage, keys: Record<string, string>, models: readonly Model<Api>[]) {
-	const authed = (candidate: Model<Api>) => candidate.provider in keys || auth.hasAuth(candidate.provider);
+	const authed = (candidate: Model<Api>) => candidate.provider in keys || auth.keys.source(candidate.provider, { env: "aliases" }) !== undefined;
 	return {
 		authStorage: auth,
-		hasApiKeyOverride: (provider: string) => auth.hasApiKeyOverride(provider),
+		hasApiKeyOverride: (provider: string) => auth.keys.hasApiKeyOverride(provider),
 		getAll: () => models,
 		getAvailable: () => models.filter(authed),
 		getProviderModels: (provider: string) =>
@@ -166,8 +166,8 @@ describe("ComposerPredictor", () => {
 		const codex = options.codex ?? {};
 		const tokens = await storeCodexLogins(auth, codex.stored ?? []);
 		if (codex.env !== undefined) Bun.env[CODEX_ENV_TOKEN] = codex.env;
-		if (codex.runtimeKey !== undefined) auth.setRuntimeApiKey(CODEX, codex.runtimeKey);
-		if (codex.configKey !== undefined) auth.setConfigApiKey(CODEX, codex.configKey);
+		if (codex.runtimeKey !== undefined) auth.keys.setRuntime(CODEX, codex.runtimeKey);
+		if (codex.configKey !== undefined) auth.keys.setConfig(CODEX, codex.configKey);
 
 		const reply = options.reply ?? '{"suggestion":"run the parser tests"}';
 		const sent: Sent[] = [];
@@ -316,9 +316,9 @@ describe("ComposerPredictor", () => {
 				activeModel: CODEX_MODEL,
 				codex: { stored: ["pro", "pro"] },
 			});
-			const second = auth.listStoredCredentials(CODEX)[1];
+			const second = auth.credentials.list(CODEX)[1];
 			if (!second) throw new Error("expected two stored Codex accounts");
-			expect(auth.selectProviderCredential(CODEX, second.id, { sessionId: session.sessionId })).toBe(true);
+			expect(auth.sessions.selectProviderCredential(CODEX, second.id, { sessionId: session.sessionId })).toBe(true);
 			await predict(session, settings);
 
 			expect(sent[0]?.options?.apiKey).toBe(tokens[1]);

@@ -371,11 +371,11 @@ export async function searchExa(params: ExaSearchParams): Promise<SearchResponse
 	// so the env-key and keyless-MCP fallbacks below stay intact, then drive the
 	// authStorage path through the central force-refresh/rotate retry policy.
 	const storedKey = params.authStorage
-		? await params.authStorage.getApiKey("exa", params.sessionId, { signal: params.signal })
+		? await params.authStorage.keys.get("exa", params.sessionId, { signal: params.signal })
 		: undefined;
 	const keyOrResolver: ApiKey | undefined =
 		storedKey && params.authStorage
-			? params.authStorage.resolver("exa", { sessionId: params.sessionId })
+			? params.authStorage.keys.resolver("exa", { sessionId: params.sessionId })
 			: getEnvApiKey("exa");
 	// Clamp once at the shared entry so BOTH call paths (the REST `numResults`
 	// and the MCP `num_results`) and the post-fetch slice below are bounded to
@@ -430,7 +430,7 @@ export class ExaProvider extends SearchProvider {
 
 	isAvailable(authStorage: AuthStorage): boolean {
 		if (!settingsAllowSearch()) return false;
-		return !!getEnvApiKey("exa") || authStorage.hasAuth("exa");
+		return !!getEnvApiKey("exa") || authStorage.keys.source("exa", { env: "aliases" }) !== undefined || authStorage.keys.keyless("exa");
 	}
 
 	/**

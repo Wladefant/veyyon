@@ -48,7 +48,7 @@ describe("a session quit mid-arm resumes on its own model", () => {
 	beforeAll(async () => {
 		sharedDir = TempDir.createSync("@pi-arm-resume-shared-");
 		authStorage = await AuthStorage.create(path.join(sharedDir.path(), "auth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir.path(), "models.yml"));
 	});
 

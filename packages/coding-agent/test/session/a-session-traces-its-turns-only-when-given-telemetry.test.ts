@@ -151,7 +151,7 @@ function exported(spans: readonly ReadableSpan[]): string {
 beforeAll(async () => {
 	sharedDir = fs.mkdtempSync(path.join(os.tmpdir(), "traces-only-when-given-"));
 	authStorage = await AuthStorage.create(path.join(sharedDir, "auth.db"));
-	authStorage.setRuntimeApiKey(PROVIDER, "anthropic-test-key");
+	authStorage.keys.setRuntime(PROVIDER, "anthropic-test-key");
 	modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir, "models.yml"));
 });
 

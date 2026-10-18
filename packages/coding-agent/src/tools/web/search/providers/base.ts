@@ -103,7 +103,7 @@ export abstract class SearchProvider {
  */
 export abstract class ApiKeySearchProvider extends SearchProvider {
 	isAvailable(authStorage: AuthStorage): boolean {
-		return authStorage.hasAuth(this.id) || !!getEnvApiKey(this.id);
+		return authStorage.keys.source(this.id, { env: "aliases" }) !== undefined || authStorage.keys.keyless(this.id) || !!getEnvApiKey(this.id);
 	}
 }
 

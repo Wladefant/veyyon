@@ -75,7 +75,7 @@ function resolveXAIBaseURL(modelRegistry: ModelRegistry, provider: XAIProvider, 
  * Credential priority:
  *   1. xai-oauth — only when a *dedicated* xai-oauth source exists. Composed
  *      of two checks against the registry layer:
- *        a. `authStorage.hasNonEnvCredential("xai-oauth")` covers stored
+ *        a. `authStorage.keys.source("xai-oauth", { env: "none" }) !== undefined` covers stored
  *           credentials (OAuth or api_key), runtime overrides (CLI
  *           `--api-key` for xai-oauth), config overrides (models.yml
  *           `providers.xai-oauth.apiKey`), and fallback resolvers.
@@ -88,7 +88,7 @@ function resolveXAIBaseURL(modelRegistry: ModelRegistry, provider: XAIProvider, 
  *      overrides for image/TTS traffic. The gate routes the borrow case to
  *      step 2 while preserving every dedicated xai-oauth path.
  *   2. xai (plain API key). Delegates to ModelRegistry.getApiKeyForProvider
- *      which runs AuthStorage.getApiKey's full cascade: runtime override →
+ *      which runs AuthStorage.keys.get's full cascade: runtime override →
  *      models.yml config override → stored api_key credential → OAuth
  *      resolution → XAI_API_KEY env var → custom fallback resolver.
  *
@@ -105,7 +105,7 @@ export async function resolveXAIHttpCredentials(
 	modelId?: string,
 ): Promise<XAICredentials | null> {
 	const hasDedicatedXaiOAuth =
-		modelRegistry.authStorage.hasNonEnvCredential("xai-oauth") || Boolean($env.XAI_OAUTH_TOKEN);
+		modelRegistry.authStorage.keys.source("xai-oauth", { env: "none" }) !== undefined || Boolean($env.XAI_OAUTH_TOKEN);
 	if (hasDedicatedXaiOAuth) {
 		const oauthKey = await modelRegistry.getApiKeyForProvider("xai-oauth");
 		if (oauthKey) {

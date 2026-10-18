@@ -219,7 +219,7 @@ describe("an interrupted todo call is not a payload refusal", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-skip-not-refusal-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntimeApiKey("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 

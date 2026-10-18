@@ -152,7 +152,7 @@ describe("argot agent-driven adoption loop (e2e)", () => {
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true, cwd: tempDir });
 		authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const model = getBundledModel("anthropic", MODEL_ID);
 		if (!model) throw new Error(`expected ${MODEL_ID} to be bundled`);
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));

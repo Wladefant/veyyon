@@ -280,7 +280,7 @@ describe("a session reading its notices", () => {
 			streamFn: mock.stream,
 		});
 		auth = await AuthStorage.create(temp.join(`auth-${Snowflake.next()}.db`));
-		auth.setRuntimeApiKey("anthropic", "test-key");
+		auth.keys.setRuntime("anthropic", "test-key");
 		const sessionManager = SessionManager.inMemory();
 		session = new AgentSession({
 			agent,

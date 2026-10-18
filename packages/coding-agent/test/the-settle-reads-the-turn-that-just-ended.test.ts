@@ -130,7 +130,7 @@ describe("the settle reads the turn that just ended", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-settle-reads-turn-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntimeApiKey("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 

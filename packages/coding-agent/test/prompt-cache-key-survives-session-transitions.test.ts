@@ -74,7 +74,7 @@ describe("provider prompt-cache key across session transitions", () => {
 			options?.persist === true ? SessionManager.create(tempDir, tempDir) : SessionManager.inMemory(tempDir);
 		const authStorage = await AuthStorage.create(path.join(tempDir, `auth-${Snowflake.next()}.db`));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("mock", "test-key");
+		authStorage.keys.setRuntimeApiKey("mock", "test-key");
 		const session = new AgentSession({
 			agent,
 			sessionManager,

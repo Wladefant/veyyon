@@ -123,7 +123,7 @@ describe("a prompt queued behind a running turn is stated to the desktop", () =>
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gui-host-queued-prompt-"));
 		await fs.writeFile(path.join(tempDir, "config.yml"), "modelRoles:\n  default: openai/gpt-4o-mini\n", "utf8");
 		const authStorage = await isolatedAuthStorage(tempDir);
-		authStorage.upsertCredential("openai", { type: "api_key", key: "test-key" });
+		await authStorage.credentials.upsert("openai", { type: "api_key", key: "test-key" });
 		server = await startGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,

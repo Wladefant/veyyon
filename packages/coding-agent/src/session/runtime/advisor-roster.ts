@@ -872,14 +872,22 @@ export class AdvisorRoster {
 				// suspect-mark a credential on a transient advisor error).
 				const message = errorMessage(error);
 				if (!AIError.isUsageLimit(error)) return;
-				await host.modelRegistry.authStorage.markUsageLimitReached(
+				const modelNotInPlan = AIError.isCursorPlanAccountPolicyError(error, advisorModel.provider);
+				if (modelNotInPlan) {
+					await host.modelRegistry.authStorage.limits.rotate(
+						advisorModel.provider,
+						advisorProviderSessionId,
+						{ error, modelId: advisorModel.id },
+					);
+					return;
+				}
+				await host.modelRegistry.authStorage.limits.markReached(
 					advisorModel.provider,
 					advisorProviderSessionId,
 					{
 						retryAfterMs: extractRetryHint(undefined, message),
 						baseUrl: advisorModel.baseUrl,
 						modelId: advisorModel.id,
-						modelNotInPlan: AIError.isCursorPlanAccountPolicyError(error, advisorModel.provider),
 					},
 				);
 			},

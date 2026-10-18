@@ -96,7 +96,7 @@ async function runServe(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 	const dbPath = getActiveAuthDbPath();
 	const store = await SqliteAuthCredentialStore.open(dbPath);
 	const storage = new AuthStorage(store);
-	await storage.reload();
+	await storage.credentials.reload();
 	const handle = startAuthBroker({
 		storage,
 		bind,
@@ -106,7 +106,7 @@ async function runServe(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 	logger.info("auth-broker listening", { url: handle.url });
 	logger.info("auth-broker bearer token loaded", { path: TOKEN_FILE.path(), mode: "0600" });
 
-	const credentialDisabledUnsub = storage.onCredentialDisabled((event: CredentialDisabledEvent) => {
+	const credentialDisabledUnsub = storage.credentials.onDisabled((event: CredentialDisabledEvent) => {
 		logger.warn("auth-broker credential disabled", { ...event });
 	});
 
@@ -157,7 +157,7 @@ async function runLocalLogin(provider: OAuthProvider): Promise<void> {
 	const ask = (msg: string) => promptLine(rl, `${msg} `);
 	const store = await SqliteAuthCredentialStore.open(getActiveAuthDbPath());
 	const storage = new AuthStorage(store);
-	await storage.reload();
+	await storage.credentials.reload();
 	try {
 		// Only paste-code providers (fixed non-loopback redirect, e.g. GitLab Duo
 		// Agent's vscode:// URI) get the manual paste fallback. An explicit
@@ -170,7 +170,7 @@ async function runLocalLogin(provider: OAuthProvider): Promise<void> {
 		const usesManualInput = PASTE_CODE_LOGIN_PROVIDERS.has(provider);
 		// An API-key login's URL is where a key is obtained; the flow is not waiting on it.
 		const credential = getLoginCredential(provider);
-		await storage.login(provider, {
+		await storage.oauth.login(provider, {
 			onAuth({ url, launchUrl, instructions }) {
 				process.stdout.write(
 					credential === "api-key" ? "\nGet an API key at:\n" : "\nOpen this URL in your browser:\n",
