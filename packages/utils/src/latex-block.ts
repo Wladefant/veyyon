@@ -445,35 +445,24 @@ interface Span {
 	end: number;
 }
 
-/** Read a balanced `{…}` beginning at `i` (which must point at `{`). */
+/** Read a balanced `{…}` beginning at `i` (which must point at `{`). Inner text is one slice of `src`. */
 function readBraceGroup(src: string, i: number): Span {
 	let depth = 0;
-	let out = "";
 	let j = i;
 	for (; j < src.length; j++) {
 		const c = src[j];
 		if (c === "\\") {
-			out += c + (src[j + 1] ?? "");
-			j++;
+			j++; // skip the escaped char so `\{` / `\}` never move depth
 			continue;
 		}
 		if (c === "{") {
 			depth++;
-			if (depth > 1) out += c;
-			continue;
-		}
-		if (c === "}") {
+		} else if (c === "}") {
 			depth--;
-			if (depth === 0) {
-				j++;
-				break;
-			}
-			out += c;
-			continue;
+			if (depth === 0) return { text: src.slice(i + 1, j), end: j + 1 };
 		}
-		out += c;
 	}
-	return { text: out, end: j };
+	return { text: src.slice(i + 1), end: j };
 }
 
 /**

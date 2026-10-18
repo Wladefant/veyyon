@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { SESSION_FILE_EXTENSION } from "@veyyon/utils/session-file";
 import { blobsDirForSessionDir } from "../../../../kernel/src/session/blob-store";
 import { assertNotTerminalOwned } from "../../../../kernel/src/session/terminal-ownership";
 import { type CheckpointFile, filterCheckpointFiles } from "./cloud-checkpoints";
@@ -95,7 +96,8 @@ export async function captureNativeCheckpoint(
 	const journalPath = resolve(sessionFile);
 	await assertNoSymlink(journalPath);
 	await assertNotTerminalOwned(journalPath);
-	if (!journalPath.endsWith(".jsonl")) throw new Error("Native session path must end with .jsonl");
+	if (!journalPath.endsWith(SESSION_FILE_EXTENSION))
+		throw new Error(`Native session path must end with ${SESSION_FILE_EXTENSION}`);
 	const bytes = await readStable(journalPath);
 	const header = parseHeader(bytes);
 	const sessionId = header.id as string;
@@ -111,7 +113,7 @@ export async function captureNativeCheckpoint(
 	const journals = [
 		Buffer.from(bytes).toString("utf8"),
 		...Object.entries(artifacts)
-			.filter(([name]) => name.endsWith(".jsonl"))
+			.filter(([name]) => name.endsWith(SESSION_FILE_EXTENSION))
 			.map(([, content]) => Buffer.from(content, "base64").toString("utf8")),
 	];
 	for (const journal of journals) {
