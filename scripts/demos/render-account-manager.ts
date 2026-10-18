@@ -95,7 +95,7 @@ await renderDemo(
 		const authStorage = new AuthStorage(store);
 
 		try {
-			await authStorage.set("anthropic", [
+			await authStorage.credentials.set("anthropic", [
 				{
 					type: "oauth",
 					access: "proof-access-work",
@@ -125,7 +125,7 @@ await renderDemo(
 					orgName: "Former Org",
 				},
 			]);
-			await authStorage.set("openai-codex", [
+			await authStorage.credentials.set("openai-codex", [
 				{
 					type: "oauth",
 					access: "proof-access-codex",
@@ -135,17 +135,17 @@ await renderDemo(
 					email: "first-account@example.com",
 				},
 			]);
-			await authStorage.set("groq", [{ type: "api_key", key: "proof-groq-key" }]);
+			await authStorage.credentials.set("groq", [{ type: "api_key", key: "proof-groq-key" }]);
 
-			const anthropicRows = authStorage.listStoredCredentials("anthropic");
+			const anthropicRows = authStorage.credentials.list("anthropic");
 			const workId = anthropicRows[0]!.id;
 			const personalId = anthropicRows[1]!.id;
 			const staleId = anthropicRows[2]!.id;
-			const codexId = authStorage.listStoredCredentials("openai-codex")[0]!.id;
+			const codexId = authStorage.credentials.list("openai-codex")[0]!.id;
 
-			authStorage.setAccountName("anthropic", workId, "work");
-			authStorage.setAccountName("anthropic", personalId, "personal");
-			authStorage.setAccountName("openai-codex", codexId, "codex-main");
+			authStorage.credentials.setAccountName("anthropic", workId, "work");
+			authStorage.credentials.setAccountName("anthropic", personalId, "personal");
+			authStorage.credentials.setAccountName("openai-codex", codexId, "codex-main");
 
 			const health: CredentialHealthResult[] = [
 				{ id: workId, provider: "anthropic", type: "oauth", ok: true, email: "first-account@example.com" },
@@ -193,13 +193,13 @@ await renderDemo(
 			section("an api-key provider with no OAuth identity", () => {}, "groq");
 
 			if (!only || "the chosen account serves through its rate limit".includes(only)) {
-				await authStorage.removeCredential("anthropic", staleId);
-				authStorage.pinSessionCredential("anthropic", SESSION, workId);
-				await authStorage.markUsageLimitReached("anthropic", SESSION, {
+				await authStorage.credentials.removeById("anthropic", staleId);
+				authStorage.sessions.pin("anthropic", SESSION, workId);
+				await authStorage.limits.markReached("anthropic", SESSION, {
 					credentialId: workId,
 					retryAfterMs: 2 * HOUR,
 				});
-				await authStorage.getApiKey("anthropic", SESSION);
+				await authStorage.keys.get("anthropic", SESSION);
 				section("the chosen account serves through its rate limit", () => {});
 			}
 

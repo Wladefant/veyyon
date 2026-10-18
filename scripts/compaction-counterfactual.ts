@@ -362,7 +362,7 @@ async function main() {
 		console.error(`running ${spec.workflow} x ${spec.provider}/${spec.modelId} ...`);
 		try {
 			const model = await resolveModel(registry, spec);
-			const apiKey = await authStorage.getApiKey(model.provider);
+			const apiKey = await authStorage.keys.get(model.provider);
 			if (!apiKey) throw new Error(`no credential for ${model.provider}`);
 			results.push(await runArm(spec, preparation, model, apiKey, truth));
 		} catch (err) {

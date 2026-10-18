@@ -26,7 +26,9 @@
 import { afterEach, beforeEach, describe, expect, it, type Mock, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { AuthStorage, type CredentialHealthResult } from "@veyyon/ai";
+import type { CredentialHealthResult } from "@veyyon/ai";
+import { CredentialHealth } from "@veyyon/ai/auth/health";
+import { CredentialPool } from "@veyyon/ai/auth/pool";
 import type { HarnessAdapter } from "../../../engine/contracts";
 import { harnesses } from "../../../engine/members/loaded";
 import { internalScratchDir } from "../../../engine/package-paths";
@@ -87,8 +89,8 @@ describe("staging and execution failures throw errors and survive process", () =
 
 	beforeEach(() => {
 		tempDir = createScratchDir("deep-swe-error-test-");
-		reloadSpy = spyOn(AuthStorage.prototype, "reload").mockResolvedValue();
-		checkSpy = spyOn(AuthStorage.prototype, "checkCredentials").mockResolvedValue([
+		reloadSpy = spyOn(CredentialPool.prototype, "reload").mockResolvedValue();
+		checkSpy = spyOn(CredentialHealth.prototype, "check").mockResolvedValue([
 			{ id: 1, type: "oauth", provider: "anthropic", ok: true },
 			{ id: 2, type: "oauth", provider: "google-antigravity", ok: true },
 		]);

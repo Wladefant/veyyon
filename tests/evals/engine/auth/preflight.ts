@@ -287,8 +287,8 @@ export async function requireStagedAuthCanServeToken(
 	let probes: CredentialProbe[];
 	try {
 		const storage = new AuthStorage(store);
-		await storage.reload();
-		probes = await storage.checkCredentials();
+		await storage.credentials.reload();
+		probes = await storage.health.check();
 	} finally {
 		store.close();
 	}

@@ -26,7 +26,8 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { AuthStorage } from "@veyyon/ai";
+import { CredentialHealth } from "@veyyon/ai/auth/health";
+import { CredentialPool } from "@veyyon/ai/auth/pool";
 import type { Variant } from "../../engine/contracts";
 import { programDirFor } from "../../engine/harness/container-program";
 import { preflightHarnesses } from "../../engine/harness/preflight";
@@ -236,8 +237,8 @@ describe("harness preflight fails closed and keys staged variant paths", () => {
 	});
 
 	it("passes preflight for every registered harness when valid fixtures are provided", async () => {
-		const reloadSpy = spyOn(AuthStorage.prototype, "reload").mockResolvedValue();
-		const checkSpy = spyOn(AuthStorage.prototype, "checkCredentials").mockResolvedValue([
+		const reloadSpy = spyOn(CredentialPool.prototype, "reload").mockResolvedValue();
+		const checkSpy = spyOn(CredentialHealth.prototype, "check").mockResolvedValue([
 			{ id: 1, type: "oauth", provider: "google-antigravity", ok: true },
 			{ id: 2, type: "oauth", provider: "google", ok: true },
 		]);
@@ -333,8 +334,8 @@ describe("harness preflight fails closed and keys staged variant paths", () => {
 	});
 
 	it("preflightHarnesses reports one entry per variant and fails closed on unregistered harnesses", async () => {
-		const reloadSpy = spyOn(AuthStorage.prototype, "reload").mockResolvedValue();
-		const checkSpy = spyOn(AuthStorage.prototype, "checkCredentials").mockResolvedValue([
+		const reloadSpy = spyOn(CredentialPool.prototype, "reload").mockResolvedValue();
+		const checkSpy = spyOn(CredentialHealth.prototype, "check").mockResolvedValue([
 			{ id: 1, type: "oauth", provider: "google-antigravity", ok: true },
 			{ id: 2, type: "oauth", provider: "google", ok: true },
 		]);

@@ -18,7 +18,7 @@ import { Database } from "bun:sqlite";
 import { describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai";
+import { OAuthAccounts } from "@veyyon/ai/auth/oauth";
 import { TempDir } from "@veyyon/utils";
 import { refreshExpiringSignIns } from "../../../backends/local-cli/credentials";
 import { LocalCliBackend, localTrialLayout } from "../../../backends/local-cli/main";
@@ -79,7 +79,7 @@ describe("refreshing a sign-in before it is staged", () => {
 		});
 		store.close();
 		const refreshed: number[] = [];
-		const refresh = spyOn(AuthStorage.prototype, "forceRefreshCredentialById").mockImplementation(async id => {
+		const refresh = spyOn(OAuthAccounts.prototype, "refresh").mockImplementation(async id => {
 			refreshed.push(id);
 			throw new Error("the provider is not reachable from a test");
 		});

@@ -895,9 +895,9 @@ export async function createSimulation(options: SimulationOptions): Promise<Simu
 	// The session refuses to prompt a provider it holds no credential for, so
 	// the simulation registers a runtime key. Nothing reads it: the scripted
 	// module replaces the transport before any request is shaped.
-	authStorage.setRuntimeApiKey("amazon-bedrock", "simulation-key");
+	authStorage.keys.setRuntime("amazon-bedrock", "simulation-key");
 	if (options.model?.provider) {
-		authStorage.setRuntimeApiKey(options.model.provider, "simulation-key");
+		authStorage.keys.setRuntime(options.model.provider, "simulation-key");
 	}
 	const modelsConfigFile = `${tempDir.path()}/models.yml`;
 	// Written before the registry exists: the loader reads the file on

@@ -87,11 +87,11 @@ export async function refreshExpiringSignIns(source: string, provider: string, u
 	const store = await SqliteAuthCredentialStore.open(source);
 	try {
 		const storage = new AuthStorage(store);
-		await storage.reload();
-		for (const entry of storage.exportSnapshot().credentials) {
+		await storage.credentials.reload();
+		for (const entry of storage.credentials.snapshot().credentials) {
 			const credential = entry.credential;
 			if (entry.provider !== provider || credential.type !== "oauth" || credential.expires >= until) continue;
-			await storage.forceRefreshCredentialById(entry.id).catch((error: unknown) => {
+			await storage.oauth.refresh(entry.id).catch((error: unknown) => {
 				logger.warn("local-cli could not refresh a sign-in before staging it", {
 					provider,
 					id: entry.id,

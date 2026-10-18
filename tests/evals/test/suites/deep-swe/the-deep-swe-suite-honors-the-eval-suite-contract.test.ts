@@ -1,5 +1,6 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { AuthStorage } from "@veyyon/ai";
+import { CredentialHealth } from "@veyyon/ai/auth/health";
+import { CredentialPool } from "@veyyon/ai/auth/pool";
 import type { EvalSuite } from "../../../engine/contracts";
 import { suites } from "../../../engine/members/loaded";
 import { Registry } from "../../../engine/members/registry";
@@ -73,8 +74,8 @@ describe("DeepSweSuite", () => {
 		expect(score.error).toBe("failed to start container");
 	});
 	it("preflight returns a structured verdict", async () => {
-		const reloadSpy = spyOn(AuthStorage.prototype, "reload").mockResolvedValue();
-		const checkSpy = spyOn(AuthStorage.prototype, "checkCredentials").mockResolvedValue([
+		const reloadSpy = spyOn(CredentialPool.prototype, "reload").mockResolvedValue();
+		const checkSpy = spyOn(CredentialHealth.prototype, "check").mockResolvedValue([
 			{ id: 1, type: "oauth", provider: "anthropic", ok: true },
 		]);
 		try {

@@ -11,10 +11,12 @@ describe("fetchCodexDiscoveryModels", () => {
 
 	it("unions models across all configured OAuth accounts via the generator entrypoint", async () => {
 		const authStorage = {
-			getOAuthAccesses: async () => [
-				{ ok: true, accessToken: "token-a", accountId: "acc-a" },
-				{ ok: true, accessToken: "token-b", accountId: "acc-b" },
-			],
+			oauth: {
+				accessAll: async () => [
+					{ ok: true, accessToken: "token-a", accountId: "acc-a" },
+					{ ok: true, accessToken: "token-b", accountId: "acc-b" },
+				],
+			},
 			close: () => {},
 		} as unknown as AuthStorage;
 
@@ -62,10 +64,12 @@ describe("fetchCodexDiscoveryModels", () => {
 
 	it("aborts discovery (returns empty array to keep previous models) when any account access fails", async () => {
 		const authStorage = {
-			getOAuthAccesses: async () => [
-				{ ok: true, accessToken: "token-a", accountId: "acc-a" },
-				{ ok: false, error: "expired and refresh failed" },
-			],
+			oauth: {
+				accessAll: async () => [
+					{ ok: true, accessToken: "token-a", accountId: "acc-a" },
+					{ ok: false, error: "expired and refresh failed" },
+				],
+			},
 			close: () => {},
 		} as unknown as AuthStorage;
 

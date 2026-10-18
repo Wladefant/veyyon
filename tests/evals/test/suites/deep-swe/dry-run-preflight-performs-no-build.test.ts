@@ -25,7 +25,9 @@
 import { afterEach, beforeEach, describe, expect, it, type Mock, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { AuthStorage, type CredentialHealthResult } from "@veyyon/ai";
+import type { CredentialHealthResult } from "@veyyon/ai";
+import { CredentialHealth } from "@veyyon/ai/auth/health";
+import { CredentialPool } from "@veyyon/ai/auth/pool";
 import { suites } from "../../../engine/members/loaded";
 import { internalScratchDir } from "../../../engine/package-paths";
 import { deepSweSuite } from "../../../suites/deep-swe/main";
@@ -45,8 +47,8 @@ describe("dry-run preflight purity and artifact reporting", () => {
 		// The staged credential store is a live SQLite file with real tokens, and probing
 		// it reaches the network. Preflight's verdict is the subject here, not the
 		// operator's credentials, so both reads are answered locally.
-		reloadSpy = spyOn(AuthStorage.prototype, "reload").mockResolvedValue();
-		checkSpy = spyOn(AuthStorage.prototype, "checkCredentials").mockResolvedValue([
+		reloadSpy = spyOn(CredentialPool.prototype, "reload").mockResolvedValue();
+		checkSpy = spyOn(CredentialHealth.prototype, "check").mockResolvedValue([
 			{ id: 1, type: "oauth", provider: "anthropic", ok: true },
 			{ id: 2, type: "oauth", provider: "google-antigravity", ok: true },
 		]);
