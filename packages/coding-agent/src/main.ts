@@ -27,7 +27,6 @@ import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
 import { releaseEmbeddedModulePages } from "@veyyon/natives";
 import {
 	$env,
-	BUILD_TAG,
 	errorMessage,
 	getActiveProfileOrDefault,
 	getLogPath,
@@ -37,9 +36,9 @@ import {
 	postmortem,
 	setInteractiveHost,
 	setProjectDir,
-	VERSION,
 } from "@veyyon/utils";
 import { IdleTrim } from "@veyyon/utils/idle-trim";
+import { formatBuildIdentity, getLoadedBuildIdentity } from "./launch/build-info";
 import chalk from "chalk";
 import {
 	type Args,
@@ -2372,7 +2371,7 @@ async function runRootCommandInner(parsed: Args, rawArgs: string[], deps: RunRoo
 	const notifs: (InteractiveModeNotify | null)[] = [];
 	const discovery = startCredentialDiscovery(deps);
 	if (parsedArgs.version) {
-		const displayVersion = BUILD_TAG ? `${VERSION} (${BUILD_TAG})` : VERSION;
+		const displayVersion = formatBuildIdentity(getLoadedBuildIdentity());
 		writeStartupNotice(parsedArgs, `${displayVersion}\n`);
 		process.exit(EXIT_OK);
 	}

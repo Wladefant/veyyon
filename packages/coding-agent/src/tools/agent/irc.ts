@@ -13,13 +13,33 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { errorMessage, formatDuration, lazy, prompt } from "@veyyon/utils";
-import { DEFAULT_DELIVERY_TTL_MS, sendSessionNotice } from "../../launch/session-notices";
+import {
+	DEFAULT_DELIVERY_TTL_MS,
+	sendSessionNotice,
+	SessionNoticeCapabilityError,
+} from "../../launch/session-notices";
+import {
+	formatBuildIdentity,
+	getLoadedBuildIdentity,
+	readInstalledBuildIdentity,
+	type BuildIdentity,
+} from "../../launch/build-info";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { AgentRegistry } from "../../registry/agent-registry";
 import { IrcBus, type IrcDeliveryReceipt, type IrcMessage } from "../../task/irc-bus";
 import type { ToolSession } from "..";
 
 const DEFAULT_IRC_TIMEOUT_MS = 120_000;
+
+type IrcNoticeRuntime = {
+	sendSessionNotice: typeof sendSessionNotice;
+	readInstalledBuildIdentity: typeof readInstalledBuildIdentity;
+};
+
+const DEFAULT_IRC_NOTICE_RUNTIME: IrcNoticeRuntime = {
+	sendSessionNotice,
+	readInstalledBuildIdentity,
+};
 
 // Re-exported for back-compat: the definition lives in the light module so the
 // tool registry can gate irc without loading this implementation at boot.
@@ -111,7 +131,10 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 		},
 	];
 	readonly loadMode = "discoverable";
-	constructor(private readonly session: ToolSession) {
+	constructor(
+		private readonly session: ToolSession,
+		private readonly noticeRuntime: IrcNoticeRuntime = DEFAULT_IRC_NOTICE_RUNTIME,
+	) {
 		this.description = prompt.render(toolsPrompts["tools/irc"].text);
 	}
 
@@ -152,16 +175,16 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 	}
 
 	/** A durable notice for another session, or `all` of them; see `launch/session-notices.ts`. */
-	#executeSessionNotice(
+	async #executeSessionNotice(
 		senderId: string,
 		target: string,
 		message: string,
 		ttlMinutes?: number,
-	): AgentToolResult<IrcDetails> {
+	): Promise<AgentToolResult<IrcDetails>> {
 		const from = this.session.getSessionId?.() ?? senderId;
 		const to = `session:${target}`;
 		try {
-			const receipts = sendSessionNotice({
+			const receipts = this.noticeRuntime.sendSessionNotice({
 				from,
 				to: target,
 				body: message,
@@ -185,6 +208,10 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 				},
 			};
 		} catch (error) {
+			if (error instanceof SessionNoticeCapabilityError) {
+				const installed = await this.noticeRuntime.readInstalledBuildIdentity();
+				return errorResult(formatSessionNoticeCapabilityError(error, installed), { op: "send", from: senderId, to });
+			}
 			return errorResult(errorMessage(error), { op: "send", from: senderId, to });
 		}
 	}
@@ -428,6 +455,25 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 		}
 		return normalizeIrcTimeoutMs(this.session.settings.get("irc.timeoutMs"));
 	}
+}
+
+function formatSessionNoticeCapabilityError(error: SessionNoticeCapabilityError, installed: BuildIdentity | null): string {
+	const { recipient, support } = error;
+	const loadedReceiver =
+		recipient.loadedVersion || recipient.loadedBuildSha
+			? `${recipient.loadedVersion ?? "version unavailable"} (build SHA ${recipient.loadedBuildSha ?? "unavailable"})`
+			: "unknown (loaded version/build SHA are unavailable)";
+	return [
+		`Receiver session:${recipient.sessionId} is registered, but capability support is ${support}.`,
+		`Loaded sender: ${formatBuildIdentity(getLoadedBuildIdentity())}.`,
+		`Loaded receiver: ${loadedReceiver}.`,
+		`Advertised capabilities: ${recipient.capabilities?.join(", ") ?? "unavailable in this owner record"}.`,
+		`Installed executable: ${installed ? formatBuildIdentity(installed) : "unavailable (no version was verified)"}.`,
+		"The installed executable on disk does not identify what an already-running session loaded.",
+		"This release records loaded version, full build SHA, and capabilities for sessions it starts.",
+		"The terminal-control pipe reaches the receiver's Main only, not its lanes, and does not guarantee acceptance.",
+		"No terminal-control fallback was sent; the notice was not queued.",
+	].join("\n");
 }
 
 function executeList(registry: AgentRegistry, senderId: string): AgentToolResult<IrcDetails> {
