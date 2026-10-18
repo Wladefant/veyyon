@@ -1,5 +1,5 @@
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
-import { redactUsageText } from "@veyyon/ai/auth-storage/usage-redaction";
+import { redactUsageText } from "@veyyon/ai/auth/usage-redaction";
 import { validateToolArguments } from "@veyyon/ai/utils/validation";
 import { errorMessage, isRecord } from "@veyyon/utils";
 import { INTENT_FIELD } from "@veyyon/wire";

@@ -20,7 +20,7 @@ import {
 	AuthStorage,
 	type StoredAuthCredential,
 } from "@veyyon/ai/auth-storage";
-import { getUsageReportIdentifiers } from "@veyyon/ai/auth-storage/usage-reports";
+import { usageReportIdentifiers } from "@veyyon/ai/auth/usage-report";
 import type { UsageReport } from "@veyyon/ai/usage";
 import { antigravityUsageProvider } from "@veyyon/ai/usage/google-antigravity";
 
@@ -188,7 +188,7 @@ describe("the project fallback for a provider whose accounts do not share one", 
 			limits: [],
 			metadata: { projectId: "project-a", accountId: "acct-x" },
 		};
-		expect(getUsageReportIdentifiers(report)).toEqual([
+		expect(usageReportIdentifiers(report)).toEqual([
 			"google-gemini-cli:project:project-a",
 			"google-gemini-cli:account:acct-x",
 		]);
@@ -201,6 +201,6 @@ describe("the project fallback for a provider whose accounts do not share one", 
 			limits: [],
 			metadata: { projectId: PROJECT },
 		};
-		expect(getUsageReportIdentifiers(report)).toEqual([]);
+		expect(usageReportIdentifiers(report)).toEqual([]);
 	});
 });

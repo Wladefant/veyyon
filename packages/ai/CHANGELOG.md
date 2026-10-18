@@ -40,7 +40,8 @@
 
 ### Removed
 
-- Removed the unused request-cost history API; durable usage-limit history remains available.
+- Removed the local request-cost history API; durable usage-limit history and broker client usage totals, including cost, remain.
+- Removed legacy auth-storage/* package subpaths; import features from the matching @veyyon/ai/auth/* module instead.
 
 ## [1.5.6] - 2026-10-10
 ### Changed

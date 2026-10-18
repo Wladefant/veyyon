@@ -7,7 +7,7 @@
  * in this file drives the real resolver (`getApiKey`) against a real sqlite store and asserts
  * on the bearer bytes that came back plus the identity every display surface reads, so a pin
  * the resolver quietly ignored cannot pass. The pin and the routing it selects are defined in
- * `auth-storage/credential-routing.ts`.
+ * `auth/affinity.ts`.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";

@@ -10,7 +10,7 @@ import { removeWithRetries } from "../../utils/src/temp";
 const SOURCE_ID = "auth-storage-oauth-refresh-lease-renewal-test";
 
 /**
- * Mirrors `OAUTH_REFRESH_LEASE_RENEW_MS` in auth-storage/oauth-refresh.ts (module-private). Every
+ * Mirrors `OAUTH_REFRESH_LEASE_RENEW_MS` in auth/refresh.ts (module-private). Every
  * test that needs the lease to lapse mid-refresh has to outlast one renewal tick; fake time makes
  * that instant. Keep this in sync if the source constant changes.
  */
@@ -55,7 +55,7 @@ async function driveFakeTime<T>(work: Promise<T>): Promise<T> {
 
 /**
  * Both fenced refresh paths renew the lease through ONE helper
- * (`OAuthRefresher.withRefreshLeaseRenewal` in auth-storage/oauth-refresh.ts), and these tests pin the contract that helper owes
+ * (`OAuthRefresher.withRefreshLeaseRenewal` in auth/refresh.ts), and these tests pin the contract that helper owes
  * its callers.
  *
  * There used to be two copies of the renewal loop, one per path, and they disagreed

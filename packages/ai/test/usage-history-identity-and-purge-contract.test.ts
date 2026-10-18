@@ -17,7 +17,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
-import { buildUsageCacheIdentity, buildUsageHistoryAccountKey } from "@veyyon/ai/auth-storage/usage-requests";
+import { usageCacheIdentity, usageHistoryAccountKey } from "@veyyon/ai/auth/usage-cache";
 import type { UsageCredential } from "@veyyon/ai/usage";
 
 const cleanups: Array<() => void> = [];
@@ -33,21 +33,21 @@ describe("usage identity is unambiguous (N1)", () => {
 	it("keeps an accountId that embeds `|email:` apart from the account with that accountId and email", () => {
 		const embedded = credential({ accountId: "x|email:y@z.io" });
 		const split = credential({ accountId: "x", email: "y@z.io" });
-		expect(buildUsageCacheIdentity(embedded)).not.toBe(buildUsageCacheIdentity(split));
-		expect(buildUsageHistoryAccountKey(embedded)).not.toBe(buildUsageHistoryAccountKey(split));
+		expect(usageCacheIdentity(embedded)).not.toBe(usageCacheIdentity(split));
+		expect(usageHistoryAccountKey(embedded)).not.toBe(usageHistoryAccountKey(split));
 	});
 
 	it("keeps a backslash-ended accountId apart from an accountId that holds the escaped pipe (pipe-only escape collides)", () => {
 		const backslashEnded = credential({ accountId: "a\\", email: "b" });
 		const pipeEmbedded = credential({ accountId: "a|email:b" });
-		expect(buildUsageCacheIdentity(backslashEnded)).not.toBe(buildUsageCacheIdentity(pipeEmbedded));
-		expect(buildUsageHistoryAccountKey(backslashEnded)).not.toBe(buildUsageHistoryAccountKey(pipeEmbedded));
+		expect(usageCacheIdentity(backslashEnded)).not.toBe(usageCacheIdentity(pipeEmbedded));
+		expect(usageHistoryAccountKey(backslashEnded)).not.toBe(usageHistoryAccountKey(pipeEmbedded));
 	});
 
 	it("keeps a backslash-ended field apart from the field that follows it", () => {
 		const a = credential({ accountId: "x\\", email: "y@z.io" });
 		const b = credential({ accountId: "x", email: "\\y@z.io" });
-		expect(buildUsageHistoryAccountKey(a)).not.toBe(buildUsageHistoryAccountKey(b));
+		expect(usageHistoryAccountKey(a)).not.toBe(usageHistoryAccountKey(b));
 	});
 
 	const FIELD_CASES: Array<[string, Partial<UsageCredential>, Partial<UsageCredential>]> = [
@@ -59,8 +59,8 @@ describe("usage identity is unambiguous (N1)", () => {
 		it(`keeps a ${field} that embeds the next part apart from the identity with the split fields`, () => {
 			const a = credential(embedded);
 			const b = credential(split);
-			expect(buildUsageCacheIdentity(a)).not.toBe(buildUsageCacheIdentity(b));
-			expect(buildUsageHistoryAccountKey(a)).not.toBe(buildUsageHistoryAccountKey(b));
+			expect(usageCacheIdentity(a)).not.toBe(usageCacheIdentity(b));
+			expect(usageHistoryAccountKey(a)).not.toBe(usageHistoryAccountKey(b));
 		});
 	}
 
@@ -72,21 +72,19 @@ describe("usage identity is unambiguous (N1)", () => {
 	}
 
 	it("writes a pipe inside the type as one part", () => {
-		const identity = buildUsageCacheIdentity(credential({ type: "oauth|account:x" as UsageCredential["type"] }));
+		const identity = usageCacheIdentity(credential({ type: "oauth|account:x" as UsageCredential["type"] }));
 		expect(unescapedParts(identity)).toEqual(["oauth\\|account:x", expect.stringMatching(/^secret:/)]);
 	});
 
 	it("writes a pipe inside the enterpriseUrl as one part", () => {
-		const identity = buildUsageCacheIdentity(credential({ enterpriseUrl: "a|anonymous", accessToken: undefined }));
+		const identity = usageCacheIdentity(credential({ enterpriseUrl: "a|anonymous", accessToken: undefined }));
 		expect(unescapedParts(identity)).toEqual(["oauth", "enterprise:a\\|anonymous", "anonymous"]);
 	});
 
 	it("keeps existing history keys for identities that need no escaping", () => {
 		const legacyIdentity = "oauth|account:acct-1|email:a@example.com|org:org-1";
 		const legacyKey = createHash("sha256").update(legacyIdentity).digest("hex").slice(0, 32);
-		const key = buildUsageHistoryAccountKey(
-			credential({ accountId: "acct-1", email: "A@Example.com", orgId: "org-1" }),
-		);
+		const key = usageHistoryAccountKey(credential({ accountId: "acct-1", email: "A@Example.com", orgId: "org-1" }),);
 		expect(key).toBe(legacyKey);
 	});
 });

@@ -37,7 +37,7 @@ function usageReportScopeProjectId(report: UsageReport): string | undefined {
 	return undefined;
 }
 
-function usageReportIdentifiers(report: UsageReport): string[] {
+export function usageReportIdentifiers(report: UsageReport): string[] {
 	const identifiers: string[] = [];
 	const email = usageReportMetadataValue(report, "email");
 	if (email) identifiers.push(`email:${email.toLowerCase()}`);

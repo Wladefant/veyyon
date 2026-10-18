@@ -14,7 +14,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
 import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
-import { redactUsageText } from "@veyyon/ai/auth-storage/usage-redaction";
+import { redactUsageText } from "@veyyon/ai/auth/usage-redaction";
 import type { UsageLimit, UsageLogger, UsageProvider, UsageReport } from "@veyyon/ai/usage";
 
 const PROVIDER = "fake-usage-backend";

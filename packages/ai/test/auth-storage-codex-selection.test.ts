@@ -1,6 +1,6 @@
 /**
  * Drives `AuthStorage` credential selection for openai-codex: usage-ranked ordering in
- * `auth-storage/usage-ranking.ts` and plan eligibility in `auth-storage/openai-codex-plan.ts`.
+ * `auth/select.ts` and plan eligibility in `usage/openai-codex.ts`.
  */
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
@@ -15,7 +15,7 @@ import * as oauthUtils from "@veyyon/ai/registry/oauth";
 import type { OAuthCredentials } from "@veyyon/ai/registry/oauth/types";
 import type { UsageLimit, UsageProvider, UsageReport } from "@veyyon/ai/usage";
 import { removeWithRetries } from "../../utils/src/temp";
-import { isAllowanceSpent } from "../src/auth-storage/usage-ranking";
+import { remainingUsageFraction } from "../src/auth/usage-report";
 import type { CredentialRankingStrategy } from "../src/usage";
 import { codexRankingStrategy } from "../src/usage/openai-codex";
 
@@ -543,7 +543,7 @@ describe("AuthStorage codex oauth ranking", () => {
 		}
 	});
 
-	test("isAllowanceSpent respects request scope and does not treat healthy scoped meters as spent", () => {
+	test("remainingUsageFraction scopes allowance to the requested model", () => {
 		const scopedStrategy: CredentialRankingStrategy = {
 			...codexRankingStrategy,
 			scopeLimits: (report, ctx) =>
@@ -577,8 +577,10 @@ describe("AuthStorage codex oauth ranking", () => {
 			],
 			metadata: { allowed: true, limitReached: true },
 		};
-		expect(isAllowanceSpent(scopedStrategy, report, { modelId: "gpt-5.3-codex-spark" }, Date.now())).toBe(false);
-		expect(isAllowanceSpent(scopedStrategy, report, {}, Date.now())).toBe(true);
+		expect(
+			remainingUsageFraction(scopedStrategy, report, { modelId: "gpt-5.3-codex-spark" }, Date.now()),
+		).toBeGreaterThan(0);
+		expect(remainingUsageFraction(scopedStrategy, report, {}, Date.now())).toBe(0);
 	});
 	test("skips exhausted weekly account even when reset is near", async () => {
 		if (!authStorage) throw new Error("test setup failed");

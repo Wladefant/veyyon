@@ -30,7 +30,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { buildUsageCredential } from "@veyyon/ai/auth-storage/usage-requests";
+import { buildUsageCredential } from "@veyyon/ai/auth/usage-cache";
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import * as envApiKeyModule from "@veyyon/ai/env-api-key";
 import { PROVIDER_REGISTRY } from "@veyyon/ai/registry";

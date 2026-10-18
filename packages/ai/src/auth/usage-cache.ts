@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AuthCredentialStore } from "./store";
 import type { AuthCredential, OAuthCredential } from "./types";
 import type { CredentialPool } from "./pool";
@@ -7,7 +8,7 @@ import { isRecord } from "../utils";
 
 const USAGE_CACHE_PREFIX = "usage_cache:";
 const USAGE_FORCE_REFRESH_CACHE_PREFIX = "force-refresh:";
-const USAGE_REPORT_KEY_PREFIX = "report:";
+const USAGE_REPORT_KEY_PREFIX = "reportv2:";
 /** Minimum interval between non-exhausted header snapshots; used by UsageService. */
 export const USAGE_HEADER_INGEST_INTERVAL_MS = 60_000;
 const USAGE_LAST_GOOD_RETENTION_MS = 24 * 60 * 60_000;
@@ -120,8 +121,14 @@ export function usageCacheIdentity(credential: UsageCredential): string {
 			parts.push("anonymous");
 		}
 	}
-	return parts.join("|");
+	return parts.map(part => part.replace(/[\\|]/g, "\\$&")).join("|");
 }
+
+/** Digest an identity before it is persisted as a usage-history account key. */
+export function usageHistoryAccountKey(credential: UsageCredential): string {
+	return createHash("sha256").update(usageCacheIdentity(credential)).digest("hex").slice(0, 32);
+}
+
 
 /** Build one provider usage request; used by usage and health services. */
 export function usageRequest(
@@ -139,6 +146,16 @@ export function oauthUsageRequest(
 	baseUrl?: string,
 ): UsageRequestDescriptor {
 	return usageRequest(provider, buildUsageCredential(credential), baseUrl);
+}
+
+/** Build a report cache key without persisting account identity or URL query values. */
+export function usageReportCacheKey(request: UsageRequestDescriptor, providerKey = request.provider): string {
+	const baseUrl = request.baseUrl?.trim().replace(/\/+$/, "") || "default";
+	const digest = createHash("sha256")
+		.update(`${baseUrl}\n${usageCacheIdentity(request.credential)}`)
+		.digest("hex")
+		.slice(0, 32);
+	return `${USAGE_REPORT_KEY_PREFIX}${providerKey}:${digest}`;
 }
 
 /** Store-backed usage report cache: keys, epoch, force-refresh markers, invalidation; used by AuthStorage. */
@@ -166,6 +183,11 @@ export class UsageCache {
 			this.#store.cleanExpiredCache();
 		} catch {
 			// Best-effort.
+		}
+		try {
+			this.#store.deleteCachePrefix?.(`${USAGE_CACHE_PREFIX}report:`);
+		} catch {
+			// Old report keys can contain credential identities; a failed purge must not block construction.
 		}
 	}
 
@@ -236,14 +258,11 @@ export class UsageCache {
 		return true;
 	}
 
-	#normalizeUsageBaseUrl(baseUrl?: string): string {
-		return baseUrl?.trim().replace(/\/+$/, "") ?? "";
-	}
-
 	#usageCacheProviderKey(provider: Provider): string {
 		const cacheVersion = this.#usageProviders(provider)?.cacheVersion;
 		return cacheVersion === undefined ? provider : `${cacheVersion}:${provider}`;
 	}
+
 
 	#usageForceRefreshCacheKey(provider?: Provider): string {
 		return provider
@@ -294,10 +313,7 @@ export class UsageCache {
 	}
 
 	reportKey(request: UsageRequestDescriptor): string {
-		const baseUrl = this.#normalizeUsageBaseUrl(request.baseUrl) || "default";
-		const identity = usageCacheIdentity(request.credential);
-		const providerKey = this.#usageCacheProviderKey(request.provider);
-		const cacheKey = `${USAGE_REPORT_KEY_PREFIX}${providerKey}:${baseUrl}:${identity}`;
+		const cacheKey = usageReportCacheKey(request, this.#usageCacheProviderKey(request.provider));
 		const cacheKeys = this.#usageReportCacheKeysByProvider.get(request.provider) ?? new Set<string>();
 		cacheKeys.add(cacheKey);
 		this.#usageReportCacheKeysByProvider.set(request.provider, cacheKeys);
@@ -308,11 +324,12 @@ export class UsageCache {
 		const snapshot = requests
 			.map(request => {
 				const providerKey = this.#usageCacheProviderKey(request.provider);
-				return `${providerKey}:${this.#normalizeUsageBaseUrl(request.baseUrl) || "default"}:${usageCacheIdentity(request.credential)}`;
+				const baseUrl = request.baseUrl?.trim().replace(/\/+$/, "") || "default";
+				return `${providerKey}:${baseUrl}:${usageCacheIdentity(request.credential)}`;
 			})
 			.sort()
 			.join("\n");
-		return `reports:${Bun.hash(snapshot).toString(16)}`;
+		return `reports:${createHash("sha256").update(snapshot).digest("hex").slice(0, 32)}`;
 	}
 
 	/**
@@ -341,7 +358,7 @@ export class UsageCache {
 	invalidateAfterReset(provider: Provider, baseUrl?: string, options?: { resetSpentCredentialId?: number }): void {
 		this.#recoveryEpochs.set(provider, this.recoveryEpoch(provider) + 1);
 		this.#bumpRefreshEpoch(provider);
-		if (!this.deletePrefix(`failure:report:${this.#usageCacheProviderKey(provider)}:`)) {
+		if (!this.deletePrefix(`failure:${USAGE_REPORT_KEY_PREFIX}${this.#usageCacheProviderKey(provider)}:`)) {
 			const keys = new Set(this.#usageReportCacheKeysByProvider.get(provider));
 			for (const entry of this.#pool.entries(provider)) {
 				keys.add(this.reportKey(usageRequest(provider, buildUsageCredential(entry.credential), baseUrl)));

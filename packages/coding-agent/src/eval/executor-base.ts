@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { redactUsageText } from "@veyyon/ai/auth-storage/usage-redaction";
+import { redactUsageText } from "@veyyon/ai/auth/usage-redaction";
 import { registerOwnedResourceDisposer } from "@veyyon/kernel/session/owned-resources";
 import { errorMessage, getProjectDir, isCancellation, isTimeoutError, logger, postmortem } from "@veyyon/utils";
 import { Settings } from "../config/settings";

@@ -5,7 +5,7 @@
  * served last.
  */
 import { describe, expect, it } from "bun:test";
-import { computeWindowRequiredDrain } from "../src/auth-storage/usage-ranking";
+import { windowRequiredDrain } from "../src/auth/usage-report";
 import type { UsageReport } from "../src/usage";
 import { codexRankingStrategy, parseCodexRateLimitHeaders } from "../src/usage/openai-codex";
 
@@ -22,7 +22,7 @@ const headers = {
 
 function secondaryDrain(report: UsageReport): number {
 	const { secondary } = codexRankingStrategy.findWindowLimits(report, {});
-	return computeWindowRequiredDrain(secondary, NOW, WEEK_MS);
+	return windowRequiredDrain(secondary, NOW, WEEK_MS);
 }
 
 describe("a zero-length codex header window", () => {

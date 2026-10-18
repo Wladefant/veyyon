@@ -12,7 +12,7 @@
  *   3. An org-less credential never clobbers org-scoped rows.
  *   4. Usage reports from two orgs on one email do NOT merge into a single
  *      report; org-less reports keep merging by email as before. The grouping
- *      and merge are defined in `auth-storage/usage-reports.ts`.
+ *      and merge are defined in `auth/usage-report.ts`.
  */
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";

@@ -53,7 +53,7 @@ import * as AIError from "@veyyon/ai/error";
 import { isDefinitiveOAuthFailure } from "@veyyon/ai/error/flags";
 import { type OAuthCredentials, registerOAuthProvider, unregisterOAuthProviders } from "@veyyon/ai/registry/oauth";
 import { removeWithRetries } from "../../utils/src/temp";
-import { getHashedIndex } from "../src/auth-storage/credentials";
+
 import { PROVIDER_REGISTRY } from "../src/registry/registry";
 
 const PROVIDER = "anthropic";
@@ -534,7 +534,7 @@ describe("a request whose refresh did not complete", () => {
 			const startedAt = Date.now();
 			// The selector starts at storage order with movement off and at the session's hash with it on;
 			// the home row goes where the selector starts, so the first request settles the session on it.
-			const homeIndex = loadBalancing ? getHashedIndex(SESSION, 2) : 0;
+			const homeIndex = loadBalancing ? (Bun.hash.xxHash32(SESSION) % 2) : 0;
 			const home = oauth("home", startedAt + 3_600_000);
 			const sibling = oauth("sibling", 4_102_444_800_000);
 			const { storage, ids } = await storageWith(

@@ -12,9 +12,9 @@
  *      from cache (no refetch); the entry expires and the next poll retries.
  *
  * The suite drives `AuthStorage`, and through it the fetch and failure backoff in
- * `auth-storage/usage-reporting.ts`, the two-tier cache in `auth-storage/usage-cache.ts`, the
- * per-credential cache keys in `auth-storage/usage-requests.ts` and the request cap in
- * `auth-storage/http-concurrency.ts`.
+ * `auth/usage.ts`, the two-tier cache in `auth/usage-cache.ts`, the
+ * per-credential cache keys in `auth/usage-cache.ts` and the request cap in
+ * `auth/http-concurrency.ts`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import {
@@ -23,8 +23,8 @@ import {
 	AuthStorage,
 	type StoredAuthCredential,
 } from "@veyyon/ai/auth-storage";
-import { AUTH_HTTP_CONCURRENCY_LIMIT } from "@veyyon/ai/auth-storage/http-concurrency";
-import { buildUsageReportCacheKey, buildUsageRequest } from "@veyyon/ai/auth-storage/usage-requests";
+import { AUTH_HTTP_CONCURRENCY_LIMIT } from "@veyyon/ai/auth/http-concurrency";
+import { usageReportCacheKey, usageRequest } from "@veyyon/ai/auth/usage-cache";
 import type { UsageLimit, UsageReport } from "@veyyon/ai/usage";
 import * as claudeUsage from "@veyyon/ai/usage/claude";
 
@@ -669,7 +669,7 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 		// is in the past (so `get()` misses) but the entry is still reachable via
 		// `getStale()`. Mirrors what the prior poll would have written.
 		const lastGood = makeReport("a@example.com");
-		const cacheKey = `usage_cache:${buildUsageReportCacheKey(buildUsageRequest("anthropic", { type: "oauth", accountId: "account-1", email: "a@example.com" }))}`;
+		const cacheKey = `usage_cache:${usageReportCacheKey(usageRequest("anthropic", { type: "oauth", accountId: "account-1", email: "a@example.com" }))}`;
 		cache.set(cacheKey, {
 			value: JSON.stringify({ v: 2, value: lastGood, expiresAt: 1 }),
 			expiresAtSec: Math.floor((Date.now() + 24 * 60 * 60_000) / 1000),
@@ -747,7 +747,7 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 		};
 
 		const lastGood = makeReport("b@example.com");
-		const cacheKey = `usage_cache:${buildUsageReportCacheKey(buildUsageRequest("anthropic", { type: "oauth", accountId: "account-2", email: "b@example.com" }))}`;
+		const cacheKey = `usage_cache:${usageReportCacheKey(usageRequest("anthropic", { type: "oauth", accountId: "account-2", email: "b@example.com" }))}`;
 		cache.set(cacheKey, {
 			value: JSON.stringify({ v: 2, value: lastGood, expiresAt: 1 }),
 			expiresAtSec: Math.floor((Date.now() + 24 * 60 * 60_000) / 1000),

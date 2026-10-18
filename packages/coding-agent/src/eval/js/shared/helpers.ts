@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { types } from "node:util";
-import { redactUsageText } from "@veyyon/ai/auth-storage/usage-redaction";
+import { redactUsageText } from "@veyyon/ai/auth/usage-redaction";
 
 import { ToolError } from "../../../tools/core/tool-errors";
 import { type KernelStore, openKernelStore } from "../../kernel-store";

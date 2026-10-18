@@ -11,7 +11,8 @@
  * the next snapshot pull surfaces a clean delete on the client.
  */
 import * as logger from "@veyyon/utils/logger";
-import { type AuthStorage, withAuthHttpConcurrency } from "../auth-storage";
+import { type AuthStorage } from "../auth-storage";
+import { withAuthHttpConcurrency } from "../auth/http-concurrency";
 import { isDefinitiveOAuthFailure } from "../error/flags";
 import { DEFAULT_REFRESH_INTERVAL_MS, DEFAULT_REFRESH_SKEW_MS } from "./types";
 

@@ -25,7 +25,7 @@
  *      ends, a caller abort stops the check before the next row, and the
  *      returned report omits the provider's raw response.
  *
- * Subject: `auth-storage/usage-reporting.ts`, driven through `AuthStorage.checkCredentials`.
+ * Subject: `auth/usage.ts`, driven through `AuthStorage.checkCredentials`.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import {

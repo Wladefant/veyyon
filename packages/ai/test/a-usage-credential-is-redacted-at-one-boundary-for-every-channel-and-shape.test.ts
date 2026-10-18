@@ -19,7 +19,7 @@ import {
 	type CredentialHealthResult,
 	SqliteAuthCredentialStore,
 } from "@veyyon/ai/auth-storage";
-import { redactUsageError } from "@veyyon/ai/auth-storage/usage-redaction";
+import { redactUsageError } from "@veyyon/ai/auth/usage-redaction";
 import { ProviderHttpError } from "@veyyon/ai/error";
 import { redactProviderSecrets } from "@veyyon/ai/error/error-body";
 import type { UsageLimit, UsageLogger, UsageProvider, UsageReport } from "@veyyon/ai/usage";

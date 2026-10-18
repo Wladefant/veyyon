@@ -29,12 +29,14 @@ import {
 	USAGE_FAILURE_BACKOFF_MS,
 	USAGE_HEADER_INGEST_INTERVAL_MS,
 	usageCacheIdentity,
+	usageHistoryAccountKey,
 	usageRequest,
 } from "./usage-cache";
 import type { UsageCache, UsageRequestDescriptor } from "./usage-cache";
 import type { CredentialPool } from "./pool";
 import type { RankingStrategyResolver } from "../usage/registry";
 import { mergeRefreshedOrganizationScope, OAUTH_REFRESH_SKEW_MS } from "./refresh";
+import { withAuthHttpConcurrency } from "./http-concurrency";
 import type { OAuthRefresher } from "./refresh";
 import { USAGE_REPORT_TTL_MS } from "./sqlite-credential-store";
 import type { AuthCredentialStore } from "./store";
@@ -352,7 +354,7 @@ export class UsageService implements UsageApi {
 		const refreshEpoch = this.#deps.cache.refreshEpoch(request.provider);
 		const recoveryEpoch = this.#deps.cache.recoveryEpoch(request.provider);
 		const promise = (async () => {
-			const report = await this.#fetchUsageUncached(request, timeoutMs);
+			const report = await withAuthHttpConcurrency(() => this.#fetchUsageUncached(request, timeoutMs));
 			// Block marks bump the generation too: a report racing a fresh 429 may
 			// predate it, so it answers this probe but is neither cached nor used
 			// to heal blocks.
@@ -412,7 +414,7 @@ export class UsageService implements UsageApi {
 		const record = this.#deps.store.recordUsageSnapshots;
 		if (!record || report.limits.length === 0) return;
 		const recordedAt = Number.isFinite(report.fetchedAt) && report.fetchedAt > 0 ? report.fetchedAt : Date.now();
-		const accountKey = usageCacheIdentity(request.credential);
+		const accountKey = usageHistoryAccountKey(request.credential);
 		const metadata = report.metadata ?? {};
 		const metaEmail = typeof metadata.email === "string" ? metadata.email : undefined;
 		const metaAccountId = typeof metadata.accountId === "string" ? metadata.accountId : undefined;
@@ -679,7 +681,9 @@ export class UsageService implements UsageApi {
 		if (credential.type === "oauth") {
 			const storeHook = this.#deps.store.getUsageReport?.bind(this.#deps.store);
 			if (storeHook) {
-				const report = await storeHook(provider, credential, options?.signal);
+				const report = await withAuthHttpConcurrency(() =>
+					storeHook(provider, credential, options?.signal),
+				);
 				if (report) {
 					this.#deps.blocks.reconcileRequest(oauthUsageRequest(provider, credential, options?.baseUrl), report);
 				}
@@ -774,7 +778,7 @@ export class UsageService implements UsageApi {
 			if (!shared) {
 				// Don't forward the caller signal into the shared fetch — first caller's
 				// abort would otherwise cancel the upstream for every peer.
-				shared = override().finally(() => {
+				shared = withAuthHttpConcurrency(override).finally(() => {
 					this.#usageReportsInFlight.delete(overrideKey);
 				});
 				this.#usageReportsInFlight.set(overrideKey, shared);
