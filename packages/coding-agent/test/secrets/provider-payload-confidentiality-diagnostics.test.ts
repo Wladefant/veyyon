@@ -81,11 +81,11 @@ describe("provider payload confidentiality diagnostics", () => {
 	});
 
 	/**
-	 * BigInt and other non-JSON primitives cannot be sent by JSON providers. The
-	 * transform must refuse before fetch and report the safe primitive category.
+	 * A function is not a JSON value and no protobuf field carries one, so the transform must
+	 * refuse before fetch and report the safe primitive category. BigInt and bytes pass through.
 	 */
 	it("identifies non-JSON primitive values", () => {
-		const error = diagnosticFailure({ value: 1n, secret: RAW_SECRET });
+		const error = diagnosticFailure({ value: () => 1, secret: RAW_SECRET });
 
 		expect(error.code).toBe("non-json-value");
 		expect(error.message).toContain("the provider request contains a non-JSON value");

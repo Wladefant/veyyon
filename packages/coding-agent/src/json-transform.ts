@@ -166,8 +166,9 @@ class BoundedJsonWalk {
 
 	/** Map a primitive, or push a frame for a container and return {@link ENTERED}. */
 	#enter(value: unknown, depth: number): unknown {
-		if (typeof value === "object" && value !== null) return this.#enterContainer(value, depth);
-		if (!isJsonPrimitive(value)) {
+		const opaque = typeof value === "bigint" || value instanceof Uint8Array;
+		if (!opaque && typeof value === "object" && value !== null) return this.#enterContainer(value, depth);
+		if (!opaque && !isJsonPrimitive(value)) {
 			refuse("non-json-value", "Refusing a non-JSON value in secret transformation data.");
 		}
 		if (++this.#nodes > MAX_JSON_TRANSFORM_NODES) {
