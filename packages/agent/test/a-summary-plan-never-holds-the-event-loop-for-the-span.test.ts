@@ -6,10 +6,9 @@ import {
 	createFileOps,
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateCompactionRequestTokens,
-	measureSummarySource,
-	SUMMARY_TRANSCRIPT_GLUE_BYTES,
 	stagedSegmentBudget,
 } from "@veyyon/agent-core/compaction";
+import { measureSummarySource, SUMMARY_TRANSCRIPT_GLUE_BYTES } from "@veyyon/agent-core/compaction/summary-source";
 import * as compactionUtils from "@veyyon/agent-core/compaction/utils";
 import type { AssistantMessage, Context, Message, Model } from "@veyyon/ai";
 import { DIALECTS } from "@veyyon/catalog/identity";

@@ -168,8 +168,12 @@ const PRUNING_CEILING = 197;
  * shared reader that requires a token endpoint's JSON to be an object, which `registry/oauth/nous-research.ts`
  * reads its token responses through. It imports only `@veyyon/utils/type-guards` and `ai/error`, both
  * already on the engine's reach, so the growth is that one file and no subtree.
+ *
+ * RE-MEASURED 2026-10-18: engine 309. The one new module is `compaction/summary-source.ts`, which sizes
+ * and serializes a summary span in time slices. It imports `@veyyon/utils`, `../tokenizer` and `./utils`,
+ * all already on the engine's reach, so the growth is that one file and no subtree.
  */
-const COMPACTION_ENGINE_CEILING = 308;
+const COMPACTION_ENGINE_CEILING = 309;
 const REMOTE_SUMMARIZER_CEILING = 101;
 
 describe("the estimator is a leaf", () => {
