@@ -33,13 +33,13 @@ import { detectDegenerateRepetition } from "@veyyon/ai/utils/thinking-loop";
 import { Effort } from "@veyyon/catalog/effort";
 import { preferredDialect } from "@veyyon/catalog/identity";
 import { clampThinkingLevelForModel } from "@veyyon/catalog/model-thinking";
-import { errorMessage, logger, prompt } from "@veyyon/utils";
+import { errorMessage, logger, prompt, TimeSlice } from "@veyyon/utils";
 import { stripReadSelector } from "@veyyon/utils/read-selector";
 import { instrumentedCompleteSimple, type OneshotKind } from "../instrumented-complete";
 import { AGENT_PROMPTS } from "../prompts/registry";
 import type { AgentTelemetry } from "../telemetry";
 import { ThinkingLevel } from "../thinking";
-import { countTokens } from "../tokenizer";
+import { countTokens, minTokensForBytes } from "../tokenizer";
 import type { AgentMessage } from "../types";
 import {
 	buildCacheAlignedCompactionContext,
@@ -74,6 +74,7 @@ import {
 	type SummarySegment,
 	stagedSegmentBudget,
 } from "./staged-summary";
+import { measureSummarySource, type SummarySource } from "./summary-source";
 // The trigger decision is in `./threshold` and the estimator in `./token-estimate`. What is left here
 // is the ENGINE: the summarizer, the cut point, the provider round trip.
 import {
@@ -970,36 +971,70 @@ function summaryOutputBudget(model: Model, reserveTokens: number, share: number)
 	return Math.floor(share * (impossibleForWindow ? proportionalReserve : reserveTokens));
 }
 
-function buildSummaryPrompt(
-	currentMessages: AgentMessage[],
+/** What a history summary request sends after the conversation, and the answer's budget. */
+interface SummaryPromptParts {
+	/** The previous summary, the hook context and the instruction, in that order. */
+	tail: string;
+	maxTokens: number;
+}
+
+function summaryPromptParts(
 	model: Model,
 	reserveTokens: number,
 	customInstructions: string | undefined,
 	previousSummary: string | undefined,
 	options: SummaryOptions | undefined,
-	cacheAligned: boolean,
-): { promptText: string; maxTokens: number } {
+): SummaryPromptParts {
 	let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
 	if (options?.promptOverride) basePrompt = options.promptOverride;
 	if (customInstructions) basePrompt = `${basePrompt}\n\nAdditional focus: ${customInstructions}`;
+	let tail = previousSummary ? `<previous-summary>\n${previousSummary}\n</previous-summary>\n\n` : "";
+	tail += formatAdditionalContext(options?.extraContext);
+	tail += basePrompt;
+	return { tail, maxTokens: summaryOutputBudget(model, reserveTokens, 0.8) };
+}
 
-	// Cache-aligned mode replays the conversation as real messages and hands the
-	// system slot back to the session, so nothing is re-serialized here and the
-	// summarizer framing rides in the appended user turn instead.
-	const conversationText = cacheAligned
-		? undefined
-		: serializeConversationForSummary(
-				transformSummarySourceMessages((options?.convertToLlm ?? defaultConvertToLlm)(currentMessages), options),
-				preferredDialect(model.id),
-			);
-	let promptText =
+/**
+ * The user turn of one summary request over the whole span. Without `conversationText` the
+ * request is cache-aligned: it replays the conversation as real messages and hands the system slot
+ * back to the session, so nothing is re-serialized and the summarizer framing rides in this turn.
+ */
+function summaryPromptText(conversationText: string | undefined, parts: SummaryPromptParts): string {
+	const head =
 		conversationText === undefined
 			? `${SUMMARIZATION_SYSTEM_PROMPT}\n\n`
 			: `<conversation>\n${conversationText}\n</conversation>\n\n`;
-	if (previousSummary) promptText += `<previous-summary>\n${previousSummary}\n</previous-summary>\n\n`;
-	promptText += formatAdditionalContext(options?.extraContext);
-	promptText += basePrompt;
-	return { promptText, maxTokens: summaryOutputBudget(model, reserveTokens, 0.8) };
+	return head + parts.tail;
+}
+
+/** The span serialized as the single request carries it, in one synchronous pass. */
+function summaryConversationText(
+	currentMessages: AgentMessage[],
+	model: Model,
+	options: SummaryOptions | undefined,
+): string {
+	return serializeConversationForSummary(
+		transformSummarySourceMessages((options?.convertToLlm ?? defaultConvertToLlm)(currentMessages), options),
+		preferredDialect(model.id),
+	);
+}
+
+/** The span's provider-visible messages, measured one at a time in slices. See `./summary-source`. */
+function measureSpan(
+	currentMessages: AgentMessage[],
+	model: Model,
+	options: SummaryOptions | undefined,
+	slice: TimeSlice,
+): Promise<SummarySource> {
+	const transform = options?.obfuscateProviderText
+		? (text: string) => sanitizeCompactionProviderText(text, options)
+		: undefined;
+	return measureSummarySource(
+		(options?.convertToLlm ?? defaultConvertToLlm)(currentMessages),
+		preferredDialect(model.id),
+		transform,
+		slice,
+	);
 }
 
 /** The text of a completed summarization response, refused when it is unusable. */
@@ -1196,21 +1231,22 @@ function buildMergePrompt(
 }
 
 /**
- * The largest request a staged summary of `currentMessages` sends: the largest
+ * The largest request a staged summary over `segments` sends: the largest
  * segment request, or the first merge round's largest request. Every later round
  * reads fewer summaries than the first.
  */
-function stagedRequestTokens(
-	currentMessages: AgentMessage[],
+async function stagedRequestTokens(
+	segments: readonly SummarySegment[],
 	model: Model,
 	reserveTokens: number,
 	customInstructions: string | undefined,
 	previousSummary: string | undefined,
 	options: SummaryOptions | undefined,
-): number {
-	const segments = planStagedSegments(currentMessages, model, options);
+	slice: TimeSlice,
+): Promise<number> {
 	let largest = 0;
 	for (const segment of segments) {
+		if (slice.due) await slice.yield();
 		const tokens = countTokens([SUMMARIZATION_SYSTEM_PROMPT, buildSegmentPrompt(segment, options)]);
 		largest = Math.max(largest, tokens + segmentOutputBudget(model, reserveTokens));
 	}
@@ -1225,16 +1261,78 @@ function stagedRequestTokens(
 	return Math.max(largest, largestMerge + summaryOutputBudget(model, reserveTokens, 0.8));
 }
 
-function planStagedSegments(
+/** One request over the whole span, as it is sent. */
+interface SingleHistoryRequest {
+	kind: "single";
+	promptText: string;
+	maxTokens: number;
+	tokens: number;
+}
+
+/** How a history summary is requested: one request over the whole span, or stages over its segments. */
+type HistoryRequest = SingleHistoryRequest | { kind: "staged"; segments: SummarySegment[]; reason: string };
+
+const EXCEEDS_WINDOW = "the single request exceeds the context window";
+
+/**
+ * The fewest tokens one request over the source's span counts: the system prompt, the user turn
+ * holding at least the source's conversation byte floor, and the output budget. Undefined when the
+ * token count has no byte floor.
+ */
+function singleRequestTokensFloor(source: SummarySource, parts: SummaryPromptParts): number | undefined {
+	const promptBytes = source.conversationBytesFloor + Buffer.byteLength(summaryPromptText("", parts), "utf-8");
+	const promptTokens = minTokensForBytes(promptBytes);
+	return promptTokens === undefined
+		? undefined
+		: countTokens(SUMMARIZATION_SYSTEM_PROMPT) + promptTokens + parts.maxTokens;
+}
+
+/**
+ * Decide how the history summary of `currentMessages` is requested, the way the request is then
+ * sent: staged when the caller asks for stages or when one request cannot fit the window, and one
+ * request otherwise.
+ *
+ * The span is measured in slices (see `./summary-source`). A span whose byte floor already puts
+ * the single request past the window is staged without serializing it whole, so the whole span is
+ * serialized synchronously only when the request it builds can fit the window. A model with no
+ * window bound serializes it whole, as the single request it always sends.
+ */
+async function planHistoryRequest(
 	currentMessages: AgentMessage[],
 	model: Model,
+	reserveTokens: number,
+	customInstructions: string | undefined,
+	previousSummary: string | undefined,
 	options: SummaryOptions | undefined,
-): SummarySegment[] {
-	const llmMessages = transformSummarySourceMessages(
-		(options?.convertToLlm ?? defaultConvertToLlm)(currentMessages),
-		options,
-	);
-	return planSummarySegments(llmMessages, preferredDialect(model.id), stagedSegmentBudget(model));
+	cacheAligned: boolean,
+	slice: TimeSlice,
+): Promise<HistoryRequest> {
+	const parts = summaryPromptParts(model, reserveTokens, customInstructions, previousSummary, options);
+	const single = (conversationText: string | undefined): SingleHistoryRequest => {
+		const promptText = summaryPromptText(conversationText, parts);
+		const tokens = singleRequestTokens({ promptText, maxTokens: parts.maxTokens }, options, cacheAligned);
+		return { kind: "single", promptText, maxTokens: parts.maxTokens, tokens };
+	};
+	const staged = async (reason: string, source?: SummarySource): Promise<HistoryRequest> => {
+		const measured = source ?? (await measureSpan(currentMessages, model, options, slice));
+		return {
+			kind: "staged",
+			segments: await planSummarySegments(measured, stagedSegmentBudget(model), slice),
+			reason,
+		};
+	};
+	if (options?.summaryStaging === "staged") return staged("requested");
+	if (cacheAligned) {
+		const request = single(undefined);
+		return singleRequestFitsWindow(model, request.tokens) ? request : staged(EXCEEDS_WINDOW);
+	}
+	const contextWindow = model.contextWindow ?? 0;
+	if (contextWindow <= 0) return single(summaryConversationText(currentMessages, model, options));
+	const source = await measureSpan(currentMessages, model, options, slice);
+	const floor = singleRequestTokensFloor(source, parts);
+	if (floor !== undefined && floor > contextWindow) return staged(EXCEEDS_WINDOW, source);
+	const request = single(serializeConversationForSummary(source.messages, source.dialect));
+	return singleRequestFitsWindow(model, request.tokens) ? request : staged(EXCEEDS_WINDOW, source);
 }
 
 /**
@@ -1320,18 +1418,13 @@ export async function generateSummary(
 	const sessionSystemPrompt = options?.sessionSystemPrompt;
 	const sessionMessages = options?.sessionMessages;
 	const cacheAligned = canUseCacheAlignedCompaction({ model, sessionSystemPrompt, sessionMessages });
-	const built = buildSummaryPrompt(
-		currentMessages,
-		model,
-		reserveTokens,
-		customInstructions,
-		previousSummary,
-		options,
-		cacheAligned,
-	);
-	const { promptText, maxTokens } = built;
 
 	if (options?.remoteEndpoint) {
+		// The remote summarizer reads one prompt over the whole span; it has no stages to fall back to.
+		const promptText = summaryPromptText(
+			cacheAligned ? undefined : summaryConversationText(currentMessages, model, options),
+			summaryPromptParts(model, reserveTokens, customInstructions, previousSummary, options),
+		);
 		const endpoint = options.remoteEndpoint;
 		const remote = await withAuth(
 			apiKey,
@@ -1355,8 +1448,7 @@ export async function generateSummary(
 		return { summary: remote.summary, stages: 1 };
 	}
 
-	const staged = (reason: string): Promise<GeneratedSummary> => {
-		const segments = planStagedSegments(currentMessages, model, options);
+	const staged = (segments: SummarySegment[], reason: string): Promise<GeneratedSummary> => {
 		logger.info("Compaction summary runs in stages", {
 			model: `${model.provider}/${model.id}`,
 			reason,
@@ -1375,10 +1467,19 @@ export async function generateSummary(
 		);
 	};
 
-	if (options?.summaryStaging === "staged") return staged("requested");
-	if (!singleRequestFitsWindow(model, singleRequestTokens(built, options, cacheAligned))) {
-		return staged("the single request exceeds the context window");
-	}
+	const slice = new TimeSlice();
+	const request = await planHistoryRequest(
+		currentMessages,
+		model,
+		reserveTokens,
+		customInstructions,
+		previousSummary,
+		options,
+		cacheAligned,
+		slice,
+	);
+	if (request.kind === "staged") return staged(request.segments, request.reason);
+	const { promptText, maxTokens } = request;
 
 	const sessionPrefix =
 		cacheAligned && sessionSystemPrompt && sessionMessages ? { sessionSystemPrompt, sessionMessages } : undefined;
@@ -1409,12 +1510,19 @@ export async function generateSummary(
 		if (!isSummaryTimeout(error, model) || signal?.aborted) throw error;
 		// The whole span in one request never answered. A span of one segment
 		// would send the same request again; anything larger is retried in stages.
-		if (planStagedSegments(currentMessages, model, options).length < 2) throw error;
+		// The span is measured again, so the text transform reads the secrets as
+		// they stand after the wait.
+		const segments = await planSummarySegments(
+			await measureSpan(currentMessages, model, options, slice),
+			stagedSegmentBudget(model),
+			slice,
+		);
+		if (segments.length < 2) throw error;
 		logger.warn("Compaction summary timed out as one request, retrying in stages", {
 			model: `${model.provider}/${model.id}`,
 			error: errorMessage(error),
 		});
-		return staged("the single request timed out");
+		return staged(segments, "the single request timed out");
 	}
 }
 
@@ -1452,7 +1560,9 @@ export async function summarizeRemoteCompactionWindow(
 	const windowMessages = (options?.convertToLlm ?? defaultConvertToLlm)([
 		createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp, undefined, providerPayload),
 	]);
-	const { promptText, maxTokens } = buildSummaryPrompt([], model, reserveTokens, undefined, undefined, options, true);
+	const parts = summaryPromptParts(model, reserveTokens, undefined, undefined, options);
+	const { maxTokens } = parts;
+	const promptText = summaryPromptText(undefined, parts);
 	return requestSummary(
 		model,
 		() =>
@@ -1904,14 +2014,15 @@ export function assertValidCompactionResult(preparation: CompactionPreparation, 
  * A history request that would not fit the model's window is not the request
  * that is sent: `generateSummary` summarizes such a span in stages, so the
  * estimate is the largest staged request instead, and a candidate whose window
- * holds one segment is admitted for a span of any size.
+ * holds one segment is admitted for a span of any size. The span is measured
+ * in slices that yield to the event loop, as `generateSummary` measures it.
  */
-export function estimateCompactionRequestTokens(
+export async function estimateCompactionRequestTokens(
 	preparation: CompactionPreparation,
 	model: Model,
 	customInstructions?: string,
 	options?: SummaryOptions,
-): number {
+): Promise<number> {
 	const reserveTokens = preparation.settings.reserveTokens ?? DEFAULT_RESERVE_TOKENS;
 	const previousSummary = previousCompactionSummaryText(preparation);
 	const requests: number[] = [];
@@ -1923,7 +2034,8 @@ export function estimateCompactionRequestTokens(
 	const hasHistoryRequest =
 		preparation.messagesToSummarize.length > 0 || (preparation.isSplitTurn && previousSummary !== undefined);
 	if (hasHistoryRequest) {
-		const built = buildSummaryPrompt(
+		const slice = new TimeSlice();
+		const request = await planHistoryRequest(
 			preparation.messagesToSummarize,
 			model,
 			reserveTokens,
@@ -1931,18 +2043,19 @@ export function estimateCompactionRequestTokens(
 			previousSummary,
 			options,
 			cacheAligned,
+			slice,
 		);
-		const singleRequest = singleRequestTokens(built, options, cacheAligned);
 		requests.push(
-			options?.summaryStaging !== "staged" && singleRequestFitsWindow(model, singleRequest)
-				? singleRequest
-				: stagedRequestTokens(
-						preparation.messagesToSummarize,
+			request.kind === "single"
+				? request.tokens
+				: await stagedRequestTokens(
+						request.segments,
 						model,
 						reserveTokens,
 						customInstructions,
 						previousSummary,
 						options,
+						slice,
 					),
 		);
 	}

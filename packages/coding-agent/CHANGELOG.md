@@ -98,6 +98,7 @@
 
 ### Fixed
 
+- An automatic compaction on a resumed session no longer freezes the terminal while it prepares its summary: compacted history is read back as copies in 8 ms slices instead of in one pass that kept every entry in memory, so on a resumed 34,572-entry session the longest event-loop stall before the summary request falls from 405 ms to 9.5 ms and 16,977 compacted entries stay on disk instead of in memory.
 - The first session spend tally after a resume (`/session`, a goal charge) no longer reads every compacted assistant reply back from the session file, so on a resumed 34,575-entry session it takes 3 ms instead of 95 ms.
 - A saved session's eval kernels, in every language, follow it across a directory change instead of starting a new kernel in each directory and keeping every earlier one alive until the session ended, so a session that visited five directories holds one Python kernel (102 MB) instead of five (211 MB) and keeps its variables; a directory with its own Python venv still gets its own kernel.
 - `/new`, `/resume` of another session and a handoff shut down the eval kernels of the conversation being left instead of keeping them alive until the session ended, so five conversations in one session hold one Python kernel (86 MB) instead of five (427 MB).

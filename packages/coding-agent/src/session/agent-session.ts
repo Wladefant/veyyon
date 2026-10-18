@@ -304,6 +304,7 @@ import { SESSION_STATE_MESSAGE_TYPE, SESSION_STOP_CONTINUATION_CAP } from "./nud
 import { AdvisorRoster, type AdvisorRosterHost } from "./runtime/advisor-roster";
 import { CheckpointRuntime } from "./runtime/checkpoint-runtime";
 import { CompactionRuntime } from "./runtime/compaction-runtime";
+import { readCompactionSpanBack } from "./runtime/compaction-summarizer";
 import { ContextAccounting } from "./runtime/context-accounting";
 import { ExtensionEventForwarder } from "./runtime/extension-event-forwarder";
 import { FinalizeReminders } from "./runtime/finalize-reminders";
@@ -366,6 +367,7 @@ async function collectMemoryBackendContext(
 ): Promise<string | undefined> {
 	const backend = await resolveMemoryBackend(session.settings);
 	if (!backend.preCompactionContext) return undefined;
+	await readCompactionSpanBack(preparation);
 	const messages = preparation.messagesToSummarize.concat(preparation.turnPrefixMessages);
 	try {
 		return await backend.preCompactionContext(messages, session.settings, session);

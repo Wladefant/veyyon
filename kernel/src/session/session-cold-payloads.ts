@@ -375,6 +375,20 @@ export function readColdEntry(entry: SessionEntry): SessionEntry | undefined {
 }
 
 /**
+ * `message` as a load restores it when it is the stand-in of a cold message entry, or `message`
+ * itself otherwise. The entry stays cold, so a pass that reads each message of compacted history
+ * once, such as the summary request a compaction sends, leaves that history on disk.
+ */
+export function readColdMessage<T extends object>(message: T): T {
+	const entry = StandInSlot.entryOf(message) as SessionEntry | undefined;
+	if (entry === undefined) return message;
+	const state = ColdEntrySlot.state(entry);
+	if (state === undefined) return message;
+	const restored = readBack(entry, state).message;
+	return isRecord(restored) ? (restored as T) : message;
+}
+
+/**
  * How many `toolCall` blocks the content moved out of the cold assistant message entry `entry` held,
  * or undefined when `entry` is warm or its message's content is in memory. A tally of tool calls
  * over compacted history reads this, and the stand-in's resident `usage`, instead of each line.

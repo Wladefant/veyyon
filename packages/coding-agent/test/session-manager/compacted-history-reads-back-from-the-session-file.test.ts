@@ -116,6 +116,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { Agent, type AgentMessage } from "@veyyon/agent-core";
+import * as compactionModule from "@veyyon/agent-core/compaction";
 import { DEFAULT_COMPACTION_SETTINGS, prepareCompaction } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
@@ -124,6 +125,8 @@ import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import type { MemoryBackend } from "@veyyon/coding-agent/memory/backend";
+import * as memoryBackendModule from "@veyyon/coding-agent/memory/backend";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { SessionSpend, SessionStats } from "@veyyon/coding-agent/session/agent-session-types";
 import { isSuccessfulCheckpointEntry } from "@veyyon/coding-agent/session/rewind-checkpoint";
@@ -569,6 +572,7 @@ interface SessionFixture {
 const tempDirs: string[] = [];
 
 afterEach(() => {
+	vi.restoreAllMocks();
 	for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -940,6 +944,115 @@ function spendOf({ sessionFile: _file, sessionId: _id, contextUsage: _context, .
 const HISTORY_SHAPES = [
 	{ shape: "a side branch", sideBranch: true },
 	{ shape: "no branch", sideBranch: false },
+];
+
+/**
+ * Three rounds of six read turns, each ending in a server-side window, then a fourth round, with
+ * the history behind each window moved out of memory. The model that minted the windows is the
+ * branch's default, so its context replays the newest window and the rounds before it are
+ * compacted history. A local pass cannot build on a window, so the span it summarizes reaches
+ * back to the first round. Returns the first round's first prompt.
+ */
+function appendWindowedRounds(manager: SessionManager): SessionEntry {
+	manager.appendModelChange("openai-codex/gpt-5.5");
+	const appendTurns = (round: number, turns: number): string[] => {
+		const prompts: string[] = [];
+		for (let turn = 0; turn < turns; turn++) {
+			const at = round * 100 + turn;
+			const callId = `read-${round}-${turn}`;
+			prompts.push(
+				manager.appendMessage({ role: "user", content: big(`round-${round}-prompt-${turn}`), timestamp: at }),
+			);
+			manager.appendMessage({
+				...assistantTurn("", at),
+				content: [
+					{ type: "text", text: big(`round-${round}-answer-${turn}`) },
+					{
+						type: "toolCall",
+						id: callId,
+						name: "read",
+						arguments: { path: `src/round-${round}/file-${turn}.ts` },
+					},
+				],
+			});
+			manager.appendMessage({
+				role: "toolResult",
+				toolCallId: callId,
+				toolName: "read",
+				content: [{ type: "text", text: big(`round-${round}-body-${turn}`, 4096) }],
+				isError: false,
+				timestamp: at,
+			});
+		}
+		return prompts;
+	};
+	// Each round ends in a server-side window, as a session compacting through the OpenAI Responses
+	// compaction endpoint records one: an empty summary, the window under `preserveData`, and the
+	// last two turns kept.
+	const rounds = 3;
+	for (let round = 0; round < rounds; round++) {
+		const prompts = appendTurns(round, 6);
+		manager.appendCompaction("", undefined, prompts.at(-2)!, 50_000, undefined, false, {
+			remoteCompaction: {
+				version: 1,
+				provider: "openai-codex",
+				api: "openai-codex-responses",
+				model: "gpt-5.5",
+				window: [{ type: "compaction", encrypted_content: `window-${round}` }],
+				compactedAt: new Date(Date.UTC(2025, 0, 1, round)).toISOString(),
+			},
+		});
+		manager.coolCompactedHistory();
+	}
+	appendTurns(rounds, 6);
+	const firstPrompt = manager.getBranch().find(entry => entry.type === "message");
+	if (firstPrompt === undefined) throw new Error("the branch recorded no message");
+	return firstPrompt;
+}
+
+/** A threshold-crossing turn on `session`'s model, run to the end of the automatic pass it starts. */
+async function crossThreshold(session: AgentSession): Promise<void> {
+	const { promise: ended, resolve } = Promise.withResolvers<void>();
+	const unsubscribe = session.subscribe(event => {
+		if (event.type === "auto_compaction_end") resolve();
+	});
+	const turn: AssistantMessage = {
+		...assistantTurn("Done.", 40),
+		usage: {
+			input: 190_000,
+			output: 1_000,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 191_000,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+	};
+	session.agent.emitExternalEvent({ type: "message_end", message: turn });
+	session.agent.emitExternalEvent({ type: "agent_end", messages: [turn] });
+	await ended;
+	unsubscribe();
+	await session.waitForIdle();
+}
+
+/**
+ * The consumers that read the span a pass summarizes, each reached the way a session reaches it:
+ * the summary request of `/compact` and of the automatic pass a threshold starts, and a memory
+ * backend that reads the span before the summary. A pass reads the span back into the arrays of
+ * its preparation, so the first consumer's read serves the later ones and each consumer has an
+ * arm in which it reads first.
+ */
+const SPAN_CONSUMERS: {
+	consumer: string;
+	run: (session: AgentSession) => Promise<void>;
+	memoryBackend: boolean;
+}[] = [
+	{ consumer: "the /compact summary", run: async session => void (await session.compact()), memoryBackend: false },
+	{ consumer: "the automatic summary", run: crossThreshold, memoryBackend: false },
+	{
+		consumer: "the memory backend",
+		run: async session => void (await session.compact()),
+		memoryBackend: true,
+	},
 ];
 
 describe.skipIf(!pins)("compacted history reads back from the session file", () => {
@@ -1824,64 +1937,9 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		fs.mkdirSync(path.join(root, "blobs"));
 		const storage = new ObservedStorage();
 		const manager = SessionManager.create(root, dir, storage);
-		// The model that minted the windows is the branch's default, so its context replays the newest
-		// window and the rounds before it are compacted history.
-		manager.appendModelChange("openai-codex/gpt-5.5");
-		const appendTurns = (round: number, turns: number): string[] => {
-			const prompts: string[] = [];
-			for (let turn = 0; turn < turns; turn++) {
-				const at = round * 100 + turn;
-				const callId = `read-${round}-${turn}`;
-				prompts.push(
-					manager.appendMessage({ role: "user", content: big(`round-${round}-prompt-${turn}`), timestamp: at }),
-				);
-				manager.appendMessage({
-					...assistantTurn("", at),
-					content: [
-						{ type: "text", text: big(`round-${round}-answer-${turn}`) },
-						{
-							type: "toolCall",
-							id: callId,
-							name: "read",
-							arguments: { path: `src/round-${round}/file-${turn}.ts` },
-						},
-					],
-				});
-				manager.appendMessage({
-					role: "toolResult",
-					toolCallId: callId,
-					toolName: "read",
-					content: [{ type: "text", text: big(`round-${round}-body-${turn}`, 4096) }],
-					isError: false,
-					timestamp: at,
-				});
-			}
-			return prompts;
-		};
-		// Each round ends in a server-side window, as a session compacting through the OpenAI Responses
-		// compaction endpoint records one: an empty summary, the window under `preserveData`, and the
-		// last two turns kept. A local pass cannot build on such an entry, so the span it summarizes
-		// reaches back to the start of the session.
-		const rounds = 3;
-		for (let round = 0; round < rounds; round++) {
-			const prompts = appendTurns(round, 6);
-			manager.appendCompaction("", undefined, prompts.at(-2)!, 50_000, undefined, false, {
-				remoteCompaction: {
-					version: 1,
-					provider: "openai-codex",
-					api: "openai-codex-responses",
-					model: "gpt-5.5",
-					window: [{ type: "compaction", encrypted_content: `window-${round}` }],
-					compactedAt: new Date(Date.UTC(2025, 0, 1, round)).toISOString(),
-				},
-			});
-			manager.coolCompactedHistory();
-		}
-		appendTurns(rounds, 6);
+		const firstPrompt = appendWindowedRounds(manager);
 		const branch = manager.getBranch();
 		// The first round is compacted history, so a zero below is a preparation that left it on disk.
-		const firstPrompt = branch.find(entry => entry.type === "message");
-		if (firstPrompt === undefined) throw new Error("the branch recorded no message");
 		expect(coldFieldsOf(firstPrompt)).toBeDefined();
 
 		const before = storage.reads;
@@ -1895,4 +1953,80 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		expect(storage.reads - before).toBeGreaterThan(0);
 		await manager.close();
 	});
+
+	/**
+	 * The span a local pass summarizes behind server-side windows is the whole compacted history.
+	 * Each pass reads it back once into copies its consumers read, and leaves the entries on disk; a
+	 * consumer that read it through the entries would read each one back on the event loop at first
+	 * touch, the summary during its candidate estimate, and hold all of them in memory afterwards.
+	 */
+	it.each(SPAN_CONSUMERS)(
+		"hands $consumer compacted history as copies, and leaves it on disk",
+		async ({ run: runPass, memoryBackend }) => {
+			const root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-cold-summary-"));
+			tempDirs.push(root);
+			const dir = path.join(root, "sessions");
+			fs.mkdirSync(dir);
+			fs.mkdirSync(path.join(root, "blobs"));
+			const storage = new ObservedStorage();
+			const manager = SessionManager.create(root, dir, storage);
+			const firstPrompt = appendWindowedRounds(manager);
+			expect(coldFieldsOf(firstPrompt)).toBeDefined();
+			const { session, close } = await resumeSession(manager, root, RESUMED_REPLY);
+
+			/**
+			 * What a consumer read, the files a summary lists, and whether the first prompt's entry was
+			 * still on disk once the consumer had read everything.
+			 */
+			const seen: { cold: boolean; text: string; files: string[] | undefined; reads: number }[] = [];
+			const observe = (messages: readonly AgentMessage[], readFiles?: () => string[]): void => {
+				const before = storage.reads;
+				const text = JSON.stringify(messages);
+				const files = readFiles?.();
+				seen.push({ cold: coldFieldsOf(firstPrompt) !== undefined, text, files, reads: storage.reads - before });
+			};
+			if (memoryBackend) {
+				const backend: MemoryBackend = {
+					id: "local",
+					start() {},
+					async buildDeveloperInstructions() {
+						return undefined;
+					},
+					async clear() {},
+					async enqueue() {},
+					async preCompactionContext(messages) {
+						observe(messages);
+						return undefined;
+					},
+				};
+				vi.spyOn(memoryBackendModule, "resolveMemoryBackend").mockResolvedValue(backend);
+			}
+			vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => {
+				if (!memoryBackend) {
+					observe([...preparation.messagesToSummarize, ...preparation.turnPrefixMessages], () => [
+						...preparation.fileOps.read,
+					]);
+				}
+				return {
+					summary: "summary",
+					firstKeptEntryId: preparation.firstKeptEntryId,
+					tokensBefore: preparation.tokensBefore,
+					details: {},
+				};
+			});
+			try {
+				await runPass(session);
+			} finally {
+				await close();
+			}
+
+			expect(seen).toHaveLength(1);
+			const [read] = seen;
+			expect(read.cold).toBe(true);
+			expect(read.text).toContain(big("round-0-prompt-0"));
+			expect(read.text).toContain(big("round-0-body-0", 4096));
+			expect(read.files).toEqual(memoryBackend ? undefined : expect.arrayContaining(["src/round-0/file-0.ts"]));
+			expect(read.reads).toBe(0);
+		},
+	);
 });

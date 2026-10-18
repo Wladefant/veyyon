@@ -162,6 +162,15 @@ export async function compactWithProvider(
 }
 
 /**
+ * Whether a server-side pass of `preparation` on `model` chains a previous window, and so posts
+ * the messages since that window rather than the span a local pass summarizes.
+ */
+export function serverCompactionChainsWindow(preparation: CompactionPreparation, model: Model): boolean {
+	const links = preparation.remoteChain?.links ?? [];
+	return links.some(link => chainableRemoteCompactionWindow(link.previousPreserveData, model) !== undefined);
+}
+
+/**
  * The previous window and the messages a server-side pass posts: the context
  * the session model is sent, up to the cut.
  *

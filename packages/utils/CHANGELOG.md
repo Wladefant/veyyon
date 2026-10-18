@@ -14,6 +14,8 @@
 - `withScopedTimeoutSignal` accepts an optional parent signal, combined with its deadline.
 - `settleWithin(promise, timeoutMs, fallback)` resolves with the promise's value, or with `fallback` once the deadline passes, and clears its timer when the promise settles.
 - `@veyyon/utils/keys` exports `KITTY_CSI_U_PATTERN`, the Kitty CSI-u key-sequence pattern its keypad fast path matches.
+- `estimateTokensFromBytes(bytes)` returns the token estimate `estimateTokensFromText` gives a text of that many UTF-8 bytes.
+- `TimeSlice` and `TIME_SLICE_MS` let a long synchronous loop yield to the event loop once every 8 ms.
 
 ### Changed
 
