@@ -13,7 +13,7 @@
  * until someone adds a row here.
  */
 
-import type { LongContextCost, Model, ModelSpec } from "../types";
+import type { LongContextTokenCost, Model, ModelSpec } from "../types";
 import { CODEX_BASE_URL } from "../wire/codex";
 
 type CodexTier = NonNullable<Model["serviceTierCost"]>;
@@ -72,7 +72,7 @@ const COST_PATCH: Readonly<Record<string, CodexCost>> = {
  * Subscription Codex rates GPT-5.6 on the same whole-request premium tier as
  * the first-party API once prompt input passes 272K tokens (openai/codex#32486).
  */
-const LONG_CONTEXT_COST: Readonly<Record<string, LongContextCost>> = {
+const LONG_CONTEXT_COST: Readonly<Record<string, LongContextTokenCost>> = {
 	"gpt-5.6-luna": { inputThreshold: 272_000, input: 0.4, output: 1.8, cacheRead: 0.04, cacheWrite: 0.5 },
 	"gpt-5.6-sol": { inputThreshold: 272_000, input: 10, output: 45, cacheRead: 1, cacheWrite: 12.5 },
 	"gpt-5.6-terra": { inputThreshold: 272_000, input: 4, output: 18, cacheRead: 0.4, cacheWrite: 5 },
@@ -123,7 +123,7 @@ export function codexCostPatch(id: string): CodexCost | undefined {
 }
 
 /** The >272K rate card for one SKU, or `undefined` when it bills one rate. */
-export function codexLongContextCost(id: string): LongContextCost | undefined {
+export function codexLongContextCost(id: string): LongContextTokenCost | undefined {
 	const key = longContextKey(id);
 	return key === undefined ? undefined : own(LONG_CONTEXT_COST, key);
 }

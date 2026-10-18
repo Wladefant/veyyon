@@ -54,6 +54,20 @@ export const RUNNER_APIS = [
 	"xai-tts",
 	"openai-speech",
 ] as const;
+export type RunnerApi = (typeof RUNNER_APIS)[number];
+/** Kind each single-purpose runner API serves; `local-inference` hosts several kinds, so it has no single kind here. */
+const RUNNER_API_KINDS: Readonly<Partial<Record<RunnerApi, ModelKind>>> = {
+	"web-search": "search",
+	typesafe: "judge",
+	"openai-images": "image",
+	"openrouter-images": "image",
+	"xai-tts": "tts",
+	"openai-speech": "tts",
+};
+/** Kind a runner API serves; `undefined` for chat transports and multi-kind `local-inference`. */
+export function runnerApiKind(api: Api): ModelKind | undefined {
+	return Object.hasOwn(RUNNER_API_KINDS, api) ? RUNNER_API_KINDS[api as RunnerApi] : undefined;
+}
 
 /** Resolve a model's kind while preserving chat semantics for existing catalog rows. */
 export function modelKind(model: Pick<Model, "kind">): ModelKind {
@@ -83,27 +97,6 @@ export const THINKING_CONTROL_MODES = [
 	"anthropic-adaptive",
 	"anthropic-budget-effort",
 ] as const;
-
-/**
- * The second rate card of a model that bills by prompt size.
- *
- * Every rate is $/million tokens, on the same terms as `Model.cost`, and the
- * whole request bills at these rates once it qualifies — not the tokens above
- * the threshold. That is how the upstreams that have this tier price it.
- */
-export interface LongContextCost {
-	/**
-	 * Prompt tokens above which this card applies, counted across new input,
-	 * cache reads and cache writes together. Counting new input alone would put
-	 * a 300K-token cached conversation in the cheap tier, which is the
-	 * under-report this card exists to stop.
-	 */
-	inputThreshold: number;
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-}
 
 /** Canonical thinking transport used by a model. */
 export type ThinkingControlMode = (typeof THINKING_CONTROL_MODES)[number];
@@ -620,6 +613,12 @@ export interface AnthropicCompat {
 	 * blocks instead of normal `tool_use` calls.
 	 */
 	escapeBuiltinToolNames?: boolean;
+	/**
+	 * Wire form of a disabled-thinking turn: omit the field, send
+	 * `{ type: "disabled" }`, keep adaptive thinking, or send
+	 * `{ type: "between_tools" }`. Unset keeps the direct-provider behavior.
+	 */
+	disabledThinking?: DisabledThinkingWire;
 }
 
 /**
@@ -808,7 +807,9 @@ export type ResolvedOpenRouterCompat = ResolvedOpenAICompat &
 	ResolvedOpenAIResponsesCompat;
 
 /** Fully-resolved anthropic-messages compat view (same contract as `ResolvedOpenAICompat`). */
-export type ResolvedAnthropicCompat = Required<AnthropicCompat> & {
+export type ResolvedAnthropicCompat = Required<Omit<AnthropicCompat, "disabledThinking">> & {
+	/** Unset keeps the direct-provider behavior, so the resolved view never defaults it. */
+	disabledThinking?: DisabledThinkingWire;
 	/**
 	 * The configured endpoint is the official first-party Anthropic API
 	 * (https + exact `api.anthropic.com` host; a missing baseUrl counts as
@@ -869,6 +870,143 @@ export interface CursorCompat {
 /** Fully-resolved cursor-agent compat view. */
 export type ResolvedCursorCompat = Required<CursorCompat>;
 
+/** Wire form of a disabled-thinking turn; the `disabled-thinking` axis emits these values for Anthropic and Bedrock. */
+export type DisabledThinkingWire = "omit" | "disabled" | "adaptive" | "between-tools";
+
+/** Sparse, user-authored compat overrides for the bedrock-converse-stream API (models.json / config vocabulary). */
+export interface BedrockCompat {
+	/** Explicit disabled-thinking wire form; unset preserves the provider's existing behavior. */
+	disabledThinking?: DisabledThinkingWire;
+	/** Whether this endpoint accepts no checkpoints, automatic caching, or explicit cachePoint blocks. */
+	promptCacheMode?: "none" | "automatic" | "explicit";
+	/** Whether this wire may revise already-streamed text. Unassigned: append-only. */
+	streamRevision?: "none" | "possible";
+	/** Whether explicit cachePoint blocks accept `ttl: "1h"`; omitted TTL means Bedrock's 5-minute default. */
+	supportsLongPromptCacheRetention?: boolean;
+	/**
+	 * Bedrock-enforced minimum prompt-prefix tokens for an effective checkpoint.
+	 * Capability metadata only: emitters must not estimate local token counts.
+	 * Zero means no explicit checkpoints.
+	 */
+	promptCacheMinimumTokens?: number;
+	/**
+	 * Bedrock-enforced maximum explicit cache checkpoints per request.
+	 * Capability metadata only; zero means no explicit checkpoints.
+	 */
+	promptCacheMaximumCheckpoints?: number;
+	/**
+	 * Stream-watchdog idle-timeout fallback in ms; 0 disables the idle watchdog.
+	 * Undefined defers to `PI_STREAM_IDLE_TIMEOUT_MS`, then the legacy
+	 * `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS` alias, then the 300s default.
+	 */
+	streamIdleTimeoutMs?: number;
+	/** Whether the served model accepts explicit sampling parameters. Unassigned: accepted. */
+	supportsSamplingParams?: boolean;
+	/**
+	 * Whether the model accepts a forced `toolChoice` (`any` / `tool`). The request
+	 * builder downgrades forced choices to `auto` when this is false. Default: true.
+	 */
+	supportsForcedToolChoice?: boolean;
+	/**
+	 * Whether the endpoint accepts thinking-binding controls on prefix-bound models.
+	 * Only consulted when `thinking.prefixBinding` is set; `false` omits the controls
+	 * while keeping the local prefix-binding safeguards. Default: true.
+	 */
+	supportsThinkingBindingControls?: boolean;
+}
+
+/** Fully-resolved Bedrock Converse compat view, materialized once by `buildModel`. */
+export interface ResolvedBedrockCompat {
+	/** See {@link BedrockCompat.disabledThinking}. */
+	disabledThinking?: BedrockCompat["disabledThinking"];
+	promptCacheMode: NonNullable<BedrockCompat["promptCacheMode"]>;
+	/** See {@link BedrockCompat.streamRevision}. */
+	streamRevision?: BedrockCompat["streamRevision"];
+	supportsLongPromptCacheRetention: boolean;
+	promptCacheMinimumTokens: number;
+	promptCacheMaximumCheckpoints: number;
+	/** See {@link BedrockCompat.supportsSamplingParams}. */
+	supportsSamplingParams?: boolean;
+	supportsForcedToolChoice: boolean;
+	/** See {@link BedrockCompat.supportsThinkingBindingControls}. */
+	supportsThinkingBindingControls: boolean;
+	/** See {@link BedrockCompat.streamIdleTimeoutMs}. */
+	streamIdleTimeoutMs?: number;
+}
+
+/** Sparse, user-authored compat overrides for the Google Generative AI, Vertex and Gemini CLI APIs. */
+export interface GoogleCompat {
+	/** Whether functionCall/functionResponse parts carry the `id` field. */
+	supportsFunctionPartId?: boolean;
+	/** Add the bypass sentinel to every unsigned Gemini function call. */
+	requiresSkipThoughtSignature?: boolean;
+	/** Add the bypass sentinel when a Gemini turn's first function call is unsigned. */
+	requiresSkipThoughtSignatureOnFirstFunctionCall?: boolean;
+	/** Drop unsigned thinking blocks from replayed history (Antigravity Claude). */
+	dropUnsignedThinking?: boolean;
+	/** Cloud Code Assist legacy `parameters` schema field instead of `parametersJsonSchema`. */
+	ccaLegacyParametersSchema?: boolean;
+	/** Whether multimodal (non-text) functionResponse parts are accepted (Gemini 3+). */
+	multimodalFunctionResponse?: boolean;
+	/** Stream-watchdog first-event timeout in ms; 0 disables it. */
+	streamFirstEventTimeoutMs?: number;
+	/** Stream-watchdog idle-timeout floor in ms. */
+	streamIdleTimeoutMs?: number;
+	/** Work around the Flash streaming leak (duplicate first chunk) on gemini-cli. */
+	flashStreamLeakWorkaround?: boolean;
+	/** Send the Claude thinking beta header on Antigravity Claude requests. */
+	claudeThinkingBetaHeader?: boolean;
+	/** Antigravity Claude tool-mode request framing. */
+	antigravityClaudeToolMode?: boolean;
+	/** Usage-label bucket Antigravity reports this model under. */
+	antigravityUsageLabel?: string;
+	/** Strip image inputs before encoding (text-only serving of a multimodal id). */
+	stripImageInput?: boolean;
+	/**
+	 * Largest width or height a single image may carry for a Claude reader on
+	 * this host. Setting this or {@link maxImagePayloadBytes} turns on Claude's
+	 * image clamp; unset leaves images as sent.
+	 */
+	maxImageDimension?: number;
+	/** Largest base64 payload a single image may carry, in bytes. */
+	maxImagePayloadBytes?: number;
+	/** Thinking-loop watchdog guard family applied to streamed reasoning. */
+	thinkingLoopGuard?: "gemini" | "deepseek" | "xai";
+	/** See {@link BedrockCompat.supportsSamplingParams}. */
+	supportsSamplingParams?: boolean;
+}
+
+/** Fully-resolved google-API compat view, materialized once by `buildModel`. */
+export type ResolvedGoogleCompat = Required<
+	Omit<
+		GoogleCompat,
+		| "streamFirstEventTimeoutMs"
+		| "streamIdleTimeoutMs"
+		| "thinkingLoopGuard"
+		| "antigravityUsageLabel"
+		| "supportsSamplingParams"
+		| "maxImageDimension"
+		| "maxImagePayloadBytes"
+	>
+> & {
+	streamFirstEventTimeoutMs?: number;
+	streamIdleTimeoutMs?: number;
+	thinkingLoopGuard?: GoogleCompat["thinkingLoopGuard"];
+	antigravityUsageLabel?: string;
+	supportsSamplingParams?: boolean;
+	maxImageDimension?: number;
+	maxImagePayloadBytes?: number;
+};
+
+/** Sparse, user-authored compat overrides for the ollama-chat API. */
+export interface OllamaCompat {
+	/** Omit assistant thinking when the deployment rejects it in history. */
+	stripThinkingHistory?: boolean;
+}
+
+/** Fully-resolved ollama-chat compat view, materialized once by `buildModel`. */
+export type ResolvedOllamaCompat = Required<OllamaCompat>;
+
 /** Sparse, user-authored compat overrides for a given API (models.json / config vocabulary). */
 export type CompatConfigOf<TApi extends Api> = TApi extends
 	| "openai-completions"
@@ -879,11 +1017,17 @@ export type CompatConfigOf<TApi extends Api> = TApi extends
 	? OpenAICompat
 	: TApi extends "anthropic-messages"
 		? AnthropicCompat
-		: TApi extends "devin-agent"
-			? DevinCompat
-			: TApi extends "cursor-agent"
-				? CursorCompat
-				: undefined;
+		: TApi extends "bedrock-converse-stream"
+			? BedrockCompat
+			: TApi extends "devin-agent"
+				? DevinCompat
+				: TApi extends "cursor-agent"
+					? CursorCompat
+					: TApi extends "google-generative-ai" | "google-vertex" | "google-gemini-cli"
+						? GoogleCompat
+						: TApi extends "ollama-chat"
+							? OllamaCompat
+							: undefined;
 
 /** Resolved compat for a given API: complete record, materialized once by `buildModel`. */
 export type CompatOf<TApi extends Api> = TApi extends "openrouter"
@@ -897,11 +1041,17 @@ export type CompatOf<TApi extends Api> = TApi extends "openrouter"
 			? ResolvedOpenAIResponsesCompat
 			: TApi extends "anthropic-messages"
 				? ResolvedAnthropicCompat
-				: TApi extends "devin-agent"
-					? ResolvedDevinCompat
-					: TApi extends "cursor-agent"
-						? ResolvedCursorCompat
-						: undefined;
+				: TApi extends "bedrock-converse-stream"
+					? ResolvedBedrockCompat
+					: TApi extends "devin-agent"
+						? ResolvedDevinCompat
+						: TApi extends "cursor-agent"
+							? ResolvedCursorCompat
+							: TApi extends "google-generative-ai" | "google-vertex" | "google-gemini-cli"
+								? ResolvedGoogleCompat
+								: TApi extends "ollama-chat"
+									? ResolvedOllamaCompat
+									: undefined;
 
 /** User-facing interpretation of a model's token-rate card. */
 export type ModelPricingStatus = "fixed" | "free" | "included" | "variable" | "unknown";
@@ -1165,7 +1315,7 @@ export interface Model<TApi extends Api = Api> {
 	pricing?: "published" | "unknown";
 	/**
 	 * Rates that replace {@link cost} for the whole request once its prompt
-	 * crosses {@link LongContextCost.inputThreshold} tokens.
+	 * crosses {@link LongContextTokenCost.inputThreshold} tokens.
 	 *
 	 * Several upstreams bill one model at two rate cards and switch on prompt
 	 * size: Qwen's 32K and 256K steps, xAI's 2x tier above 200K. {@link cost}
@@ -1173,7 +1323,7 @@ export interface Model<TApi extends Api = Api> {
 	 * request against a model that has a tier, and the error grows with the
 	 * session. Absent means the upstream bills one rate at every prompt size.
 	 */
-	longContextCost?: LongContextCost;
+	longContextCost?: LongContextTokenCost;
 	/** Premium Copilot requests charged per user-initiated request (defaults to 1). */
 	premiumMultiplier?: number;
 	contextWindow: number | null;

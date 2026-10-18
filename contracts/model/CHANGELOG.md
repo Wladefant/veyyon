@@ -6,10 +6,12 @@
 
 ### Added
 
+- Added RunnerApi, runnerApiKind helper, DisabledThinkingWire, and Bedrock/Google/Ollama model compatibility types ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added the provider vocabulary from oh-my-pi 117ee8b209685463ecdf3b19c5e7bc89857a44ce: Anthropic, Cursor and computer-use payload types, model pricing and remote-compaction types, and the `ultrafast` service tier.
 
 ### Changed
 
+- Consolidated LongContextCost into LongContextTokenCost across model contracts ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Sync upstream changes from santhreal/veyyon.
 
 ## [1.5.6] - 2026-10-10

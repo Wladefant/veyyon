@@ -24,7 +24,7 @@
 import { fetchOpenAICompatibleModels } from "../discovery/openai-compatible";
 import { Effort } from "../effort";
 import type { ModelManagerOptions } from "../model-manager";
-import type { FetchImpl, LongContextCost, ModelSpec } from "../types";
+import type { FetchImpl, LongContextTokenCost, ModelSpec } from "../types";
 import { toPositiveNumber } from "../utils";
 import { createBundledReferenceMap } from "./bundled-references";
 
@@ -124,7 +124,7 @@ export const COMMAND_CODE_FREE_MODELS: readonly string[] = [
 ];
 
 /** Prompt-size rate tiers for the served ids that bill at two rate cards. */
-export const COMMAND_CODE_LONG_CONTEXT_COSTS: Readonly<Record<string, LongContextCost>> = {
+export const COMMAND_CODE_LONG_CONTEXT_COSTS: Readonly<Record<string, LongContextTokenCost>> = {
 	"Qwen/Qwen3.7-Plus": { inputThreshold: 256000, input: 1.2, output: 4.8, cacheRead: 0.24, cacheWrite: 1.5 },
 	"Qwen/Qwen3.7-Flash": { inputThreshold: 32000, input: 0.2, output: 0.8, cacheRead: 0.04, cacheWrite: 0.25 },
 	"xai/grok-4.6": { inputThreshold: 200000, input: 4, output: 12, cacheRead: 1, cacheWrite: 0.0 },

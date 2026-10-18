@@ -18,6 +18,7 @@
 
 ### Changed
 
+- Migrated provider model definitions to canonical LongContextTokenCost with no user-visible change ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Sync upstream changes from santhreal/veyyon.
 - Consolidated model identity classification and shared model compatibility records across catalog builders ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Catalog generation applies provider-specific model policies and preserves selective regeneration for named providers.
