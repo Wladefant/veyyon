@@ -13,6 +13,7 @@ import {
 } from "@veyyon/catalog/provider-endpoints";
 import {
 	ANTIGRAVITY_SYSTEM_INSTRUCTION,
+	ensureAntigravityVersion,
 	getAntigravityModelWireProfile,
 	getAntigravityUserAgent,
 	getGeminiCliHeaders,
@@ -37,7 +38,7 @@ import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { extractGoogleValidationUrl, formatGoogleValidationRequiredMessage } from "../utils/google-validation";
 import { materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
-import { armPreResponseTimeout, getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
+import { armPreResponseTimeout, getStreamFirstEventTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
 import { fetchProviderWithRetry } from "../utils/provider-fetch";
 // Refresh is the sole responsibility of AuthStorage (broker-aware, single-flighted);
 // the stream provider trusts the access token threaded through `options.apiKey`.
@@ -45,6 +46,8 @@ import { normalizeSchemaForCCA } from "../utils/schema";
 import { type } from "../utils/schema/arktype";
 import { StreamMarkupHealing, type StreamMarkupHealingEvent } from "../utils/stream-markup-healing";
 import { interleavedThinkingBeta } from "./anthropic";
+import { prepareAnthropicImageContext } from "./anthropic-images";
+import forcedToolDirective from "./google-antigravity-forced-tool.md" with { type: "text" };
 import type { Content, FunctionCallingConfigMode, ThinkingConfig, ThinkingLevel } from "./google-shared";
 import {
 	applyGoogleFinishReason,
@@ -67,6 +70,9 @@ import {
 	throwIfGooglePromptBlocked,
 } from "./google-shared";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
+
+const DEFAULT_FIRST_EVENT_TIMEOUT_MS = 300_000;
+const FIRST_EVENT_TIMEOUT_ERROR = "Cloud Code Assist stream timed out while waiting for the first event";
 
 /**
  * Thinking level for Gemini 3 models. Re-exported from `google-shared` so existing
@@ -352,11 +358,31 @@ const RATE_LIMIT_BUDGET_MS = 5 * 60 * 1000;
 const GOOGLE_GEMINI_REFRESH_SKEW_MS = 60_000;
 const ANTIGRAVITY_REFRESH_SKEW_MS = 60_000;
 
+interface GeminiCliCompat {
+	streamFirstEventTimeoutMs?: number;
+	antigravityUsageLabel?: string;
+	antigravityClaudeToolMode?: boolean;
+	claudeThinkingBetaHeader?: boolean;
+	maxImageDimension?: number;
+	maxImagePayloadBytes?: number;
+}
+
+function getGeminiCliCompat(model: unknown): GeminiCliCompat | undefined {
+	if (model && typeof model === "object" && "compat" in model && model.compat && typeof model.compat === "object") {
+		return model.compat as GeminiCliCompat;
+	}
+	return undefined;
+}
+
 function isClaudeModel(modelId: string): boolean {
 	return modelId.toLowerCase().includes("claude");
 }
 
 function needsClaudeThinkingBetaHeader(model: Model<"google-gemini-cli">): boolean {
+	const claudeBeta = getGeminiCliCompat(model)?.claudeThinkingBetaHeader;
+	if (claudeBeta !== undefined) {
+		return claudeBeta && isClaudeModel(model.id) && model.reasoning;
+	}
 	return model.provider === "google-antigravity" && model.id.startsWith("claude-") && model.reasoning;
 }
 
@@ -547,6 +573,10 @@ class CloudCodeAssistResponseDecoder {
 	responseId: string | undefined;
 	/** Whether the body carried anything to deliver: content, or a dropped planning leak. */
 	receivedContent = false;
+	get sawLeak(): boolean {
+		return this.#sawLeak;
+	}
+
 
 	constructor(
 		readonly model: Model<"google-gemini-cli">,
@@ -765,6 +795,7 @@ class GeminiCliStreamRun {
 		}
 
 		const isAntigravity = model.provider === "google-antigravity";
+		if (isAntigravity) await ensureAntigravityVersion(options?.fetch ?? fetch, options?.signal);
 		const credentials = parseGeminiCliCredentials(apiKeyRaw);
 		// AuthStorage already refreshed credentials before threading them here (see
 		// {@link OAUTH_REFRESH_SKEW_MS}). A credential that lands expired fails rather than
@@ -781,7 +812,14 @@ class GeminiCliStreamRun {
 			: undefined;
 		const endpoints = cloudCodeAssistEndpoints(model, options, providerState);
 
-		let requestBody = buildRequest(model, context, credentials.projectId, options, isAntigravity);
+		const compat = getGeminiCliCompat(model);
+		const requestContext =
+			compat?.maxImageDimension !== undefined ||
+			compat?.maxImagePayloadBytes !== undefined ||
+			(isAntigravity && isClaudeModel(model.id))
+				? await prepareAnthropicImageContext(context, model)
+				: context;
+		let requestBody = buildRequest(model, requestContext, credentials.projectId, options, isAntigravity);
 		const replacementPayload = await options?.onPayload?.(requestBody, model);
 		if (replacementPayload !== undefined) {
 			requestBody = replacementPayload as typeof requestBody;
@@ -810,11 +848,17 @@ class GeminiCliStreamRun {
 			bodyJson,
 			providerState,
 			email: credentials.email,
-			// Direct callers that skip `register-builtins` (which installs the iterator-level
-			// watchdog) need a pre-response timer alongside `timeout: false`; otherwise a
-			// stalled Cloud Code Assist proxy would hang forever. Floor matches the lazy
-			// wrapper's 5min default.
-			firstEventTimeoutMs: options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(undefined, 300_000),
+			// The provider owns the first-event watchdog so a silent successful
+			// response can fail over to the alternate Antigravity endpoint before
+			// anything user-visible has streamed. Flash should not inherit the
+			// five-minute allowance reserved for cold Pro reasoning starts.
+			firstEventTimeoutMs:
+				options?.streamFirstEventTimeoutMs ??
+				getStreamFirstEventTimeoutMs(
+					undefined,
+					compat?.streamFirstEventTimeoutMs ??
+						(model.id.includes("flash") ? 60_000 : DEFAULT_FIRST_EVENT_TIMEOUT_MS),
+				),
 			toolNames: new Set(context.tools?.map(t => t.name) ?? []),
 		};
 	}
@@ -862,7 +906,7 @@ class GeminiCliStreamRun {
 			throw await cloudCodeAssistApiError(response, plan.email);
 		}
 
-		const decoder = await this.#streamWithEmptyRetries(plan, requestUrl, response);
+		const decoder = await this.#streamWithEmptyRetries(plan, requestUrl, response, isLastEndpoint);
 		googleDoneReason(this.#output, this.model.provider);
 		if (!decoder?.receivedContent) {
 			const thoughtOnly = this.#hasThinkingOutput();
@@ -923,6 +967,7 @@ class GeminiCliStreamRun {
 		plan: CloudCodeAssistPlan,
 		requestUrl: string,
 		response: Response,
+		isLastEndpoint: boolean,
 	): Promise<CloudCodeAssistResponseDecoder | undefined> {
 		let current = response;
 		for (let emptyAttempt = 0; emptyAttempt <= MAX_EMPTY_STREAM_RETRIES; emptyAttempt++) {
@@ -930,11 +975,16 @@ class GeminiCliStreamRun {
 				throw new AIError.RequestAbortError("Request was aborted");
 			}
 			if (emptyAttempt > 0) current = await this.#resend(plan, requestUrl, emptyAttempt);
-			const decoder = await this.#decode(current, plan.toolNames);
-			if (this.#output.stopReason !== "stop" || decoder.receivedContent) return decoder;
-			// A thought-only STOP is a complete provider response, not a
-			// transiently empty transport. Replaying the identical request
-			// burns another full reasoning pass; let session recovery add
+			const decoder = await this.#decode(current, plan);
+			const thoughtOnly = this.#hasThinkingOutput();
+			const acceptedSilence =
+				this.options?.acceptEmptyResponse === true &&
+				!decoder.sawLeak &&
+				(isLastEndpoint || thoughtOnly);
+			if (this.#output.stopReason !== "stop" || decoder.receivedContent || acceptedSilence) {
+				if (acceptedSilence) decoder.receivedContent = true;
+				return decoder;
+			}
 			// an explicit final-output reminder instead.
 			if (this.#hasThinkingOutput()) break;
 			if (emptyAttempt < MAX_EMPTY_STREAM_RETRIES) resetGoogleStreamOutputForRetry(this.model, this.#output);
@@ -975,7 +1025,7 @@ class GeminiCliStreamRun {
 		return response;
 	}
 
-	async #decode(response: Response, toolNames: Set<string>): Promise<CloudCodeAssistResponseDecoder> {
+	async #decode(response: Response, plan: CloudCodeAssistPlan): Promise<CloudCodeAssistResponseDecoder> {
 		const body = response.body;
 		if (!body) {
 			throw new AIError.ProviderResponseError("No response body", {
@@ -988,12 +1038,30 @@ class GeminiCliStreamRun {
 			model,
 			this.#output,
 			this.stream,
-			toolNames,
+			plan.toolNames,
 			this.#ensureStarted,
 		);
-		for await (const chunk of readSseJson<CloudCodeAssistResponseChunk>(body, options?.signal, event =>
-			options?.onSseEvent?.({ event: event.event, data: event.data, raw: event.raw.slice() }, model),
-		)) {
+		const responseAbortController = new AbortController();
+		const responseSignal = options?.signal
+			? AbortSignal.any([options.signal, responseAbortController.signal])
+			: responseAbortController.signal;
+		const onSseEvent = options?.onSseEvent;
+		const rawStream = readSseJson<CloudCodeAssistResponseChunk>(
+			body,
+			responseSignal,
+			onSseEvent
+				? event => onSseEvent({ event: event.event, data: event.data, raw: event.raw.slice() }, model)
+				: undefined,
+		);
+		const chunks = iterateWithIdleTimeout(rawStream, {
+			firstItemTimeoutMs: plan.firstEventTimeoutMs,
+			errorMessage: FIRST_EVENT_TIMEOUT_ERROR,
+			firstItemErrorMessage: FIRST_EVENT_TIMEOUT_ERROR,
+			onFirstItemTimeout: () =>
+				responseAbortController.abort(new AIError.StreamTimeoutError(FIRST_EVENT_TIMEOUT_ERROR)),
+			abortSignal: options?.signal,
+		});
+		for await (const chunk of chunks) {
 			decoder.apply(chunk);
 		}
 		decoder.finish();
@@ -1143,8 +1211,9 @@ function buildAntigravityRequestEnvelope(
 	labels.last_step_index = String(step - 1);
 	if (profile?.modelEnum !== undefined) labels.model_enum = profile.modelEnum;
 	labels.trajectory_id = trajectoryId;
-	labels.used_claude = String(isClaude);
-	labels.used_claude_conservative = String(isClaude);
+	const usageLabel = getGeminiCliCompat(model)?.antigravityUsageLabel ?? String(isClaude);
+	labels.used_claude = usageLabel;
+	labels.used_claude_conservative = usageLabel;
 	return { sessionId, requestId, labels };
 }
 
@@ -1212,6 +1281,17 @@ export function buildRequest(
 		const toolConfig = buildGoogleToolConfig(options.toolChoice);
 		if (toolConfig) {
 			request.toolConfig = toolConfig;
+			// Cloud Code Assist drops `toolConfig` on Antigravity's Gemini routes:
+			// the backend answers in text under `mode: "ANY"` and still emits calls
+			// under `"NONE"`. Claude routes implement it, so only Gemini needs the
+			// forced choice restated in the transcript.
+			if (
+				isAntigravity &&
+				!isClaudeModel(model.id) &&
+				toolConfig.functionCallingConfig.mode === "ANY"
+			) {
+				contents.push({ role: "user", parts: [{ text: forcedToolDirective }] });
+			}
 		}
 		// Antigravity's default tool mode is VALIDATED (verified for Gemini and
 		// Claude); an explicit non-auto tool choice above wins.
@@ -1223,7 +1303,8 @@ export function buildRequest(
 	}
 
 	// Claude on Antigravity always forces VALIDATED, even with no tools declared.
-	if (isAntigravity && isClaudeModel(model.id)) {
+	const claudeToolMode = getGeminiCliCompat(model)?.antigravityClaudeToolMode ?? true;
+	if (isAntigravity && isClaudeModel(model.id) && claudeToolMode) {
 		request.toolConfig = {
 			functionCallingConfig: {
 				mode: "VALIDATED" as FunctionCallingConfigMode,

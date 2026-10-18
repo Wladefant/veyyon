@@ -41,6 +41,12 @@ export interface InlineDataPart {
 	data: string;
 }
 
+/** Remote media reference; the backend fetches `fileUri` server-side. */
+export interface FileDataPart {
+	fileUri: string;
+	mimeType?: string;
+}
+
 /** Function call emitted by the model. */
 export interface FunctionCallPart {
 	name?: string;
@@ -65,6 +71,7 @@ export interface Part {
 	thought?: boolean;
 	thoughtSignature?: string;
 	inlineData?: InlineDataPart;
+	fileData?: FileDataPart;
 	functionCall?: FunctionCallPart;
 	functionResponse?: FunctionResponsePart;
 }

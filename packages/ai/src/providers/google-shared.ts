@@ -20,6 +20,7 @@ import type {
 	AssistantMessage,
 	Context,
 	FetchImpl,
+	ImageContent,
 	Message,
 	Model,
 	ServiceTier,
@@ -30,10 +31,11 @@ import type {
 	Tool,
 	ToolCall,
 	ToolResultMessage,
+	Usage,
 	UserMessage,
 } from "../types";
 import { shouldSendServiceTier } from "../types";
-import { normalizeSystemPrompts } from "../utils";
+import { normalizeSystemPrompts, normalizeToolCallId } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
 import { notifyProviderResponse } from "../utils/provider-response";
@@ -76,6 +78,14 @@ export type {
 export { normalizeSchemaForGoogle };
 
 type GoogleApiType = "google-generative-ai" | "google-gemini-cli" | "google-vertex";
+function convertGoogleImagePart(image: ImageContent): Part {
+	if (image.providerFile?.provider === "google" && image.providerFile.uri) {
+		return { fileData: { fileUri: image.providerFile.uri, mimeType: image.mimeType } };
+	}
+	return image.url
+		? { fileData: { fileUri: image.url, mimeType: image.mimeType } }
+		: { inlineData: { mimeType: image.mimeType, data: image.data } };
+}
 
 /**
  * Thinking level for Gemini 3 models. Mirrors Google's `ThinkingLevel` enum values.
@@ -104,6 +114,12 @@ export interface GoogleSharedStreamOptions extends StreamOptions {
 	hideThinkingSummary?: boolean;
 	/** Gemini/Vertex serving tier (`flex`/`priority`); other values are omitted. */
 	serviceTier?: ServiceTier;
+	/**
+	 * Caller-owned Google context-cache resource name for GenerateContent.
+	 * Passed through opaquely as the wire `cachedContent` field. OMP does not
+	 * create, refresh, validate compatibility, or delete the resource.
+	 */
+	cachedContent?: string;
 }
 
 /**
@@ -146,61 +162,23 @@ function resolveThoughtSignature(isSameProviderAndModel: boolean, signature: str
 	return isSameProviderAndModel && isValidThoughtSignature(signature) ? signature : undefined;
 }
 
-function getGeminiMajorVersion(modelId: string): number | undefined {
-	const match = modelId.toLowerCase().match(/^gemini(?:-live)?-(\d+)/);
-	if (!match) return undefined;
-	return Number.parseInt(match[1], 10);
-}
-
-function isGemini3Model(modelId: string): boolean {
-	return modelId.includes("gemini-3");
-}
-
 /** The per-model wire facts every converted message reads, resolved once per request. */
 interface GoogleWireTraits {
 	readonly supportsImages: boolean;
 	readonly supportsVideos: boolean;
-	/**
-	 * Function call and response parts carry the call id. Vertex AI GenerateContent
-	 * rejects an `id` in either part, whatever API the model is reached through.
-	 */
+	/** Function call and response parts carry ids only when the resolved model supports them. */
 	readonly sendsPartId: boolean;
-	/**
-	 * What a tool call with no usable signature sends. Gemini 3 requires a thought signature on
-	 * the function calls it makes; for calls we cannot sign (cross-model replay, secret-redacted
-	 * args, the secondary calls of a parallel turn) the public Gemini API accepts the
-	 * `skip_thought_signature_validator` sentinel as a bypass. Cloud Code Assist / Antigravity
-	 * and Vertex AI reject that sentinel with 400 INVALID_ARGUMENT, permanently wedging any
-	 * session whose history holds one, so those transports omit the field instead. (#9638)
-	 */
-	readonly unsignedCallSignature: string | undefined;
-	/**
-	 * Tool-result images nest inside `functionResponse.parts`. Gemini 3+ and the
-	 * non-Gemini models behind Cloud Code Assist / Antigravity accept that shape;
-	 * Gemini < 3 needs the images in a separate user turn.
-	 */
+	/** Tool-result images may be nested inside `functionResponse.parts`. */
 	readonly multimodalFunctionResponse: boolean;
 }
 
 function googleWireTraits<T extends GoogleApiType>(model: Model<T>): GoogleWireTraits {
-	const gemini3 = isGemini3Model(model.id);
-	const geminiMajorVersion = getGeminiMajorVersion(model.id);
 	return {
 		supportsImages: model.input.includes("image"),
 		supportsVideos: model.input.includes("video"),
-		sendsPartId:
-			model.api !== "google-vertex" &&
-			model.provider !== "google-vertex" &&
-			(model.id.startsWith("claude-") || (model.api === "google-generative-ai" && gemini3)),
-		unsignedCallSignature: gemini3 && model.api === "google-generative-ai" ? SKIP_THOUGHT_SIGNATURE : undefined,
-		multimodalFunctionResponse: geminiMajorVersion === undefined || geminiMajorVersion >= 3,
+		sendsPartId: model.compat.supportsFunctionPartId,
+		multimodalFunctionResponse: model.compat.multimodalFunctionResponse,
 	};
-}
-
-const NON_TOOL_CALL_ID_CHARS = /[^a-zA-Z0-9_-]/g;
-
-function normalizeGoogleToolCallId(id: string): string {
-	return id.replace(NON_TOOL_CALL_ID_CHARS, "_").slice(0, 64);
 }
 
 /** The parts of a user or developer turn, empty when nothing in it is sendable. */
@@ -216,7 +194,7 @@ function userParts(content: UserMessage["content"], traits: GoogleWireTraits): P
 			const text = item.text.toWellFormed();
 			if (text.trim().length > 0) parts.push({ text });
 		} else if (item.type === "image") {
-			if (traits.supportsImages) parts.push({ inlineData: { mimeType: item.mimeType, data: item.data } });
+			if (traits.supportsImages) parts.push(convertGoogleImagePart(item));
 			else omittedImages = true;
 		} else if (item.type === "video") {
 			if (traits.supportsVideos) parts.push({ inlineData: { mimeType: item.mimeType, data: item.data } });
@@ -283,6 +261,7 @@ class GoogleContentWriter {
 		// Signatures are replayed only to the provider and model that minted them.
 		const sameModel = message.provider === this.model.provider && message.model === this.model.id;
 		const parts: Part[] = [];
+		let isFirstToolCall = true;
 		for (const block of message.content) {
 			let part: Part | undefined;
 			switch (block.type) {
@@ -293,7 +272,8 @@ class GoogleContentWriter {
 					part = this.#thinkingPart(block, messageIndex, sameModel);
 					break;
 				case "toolCall":
-					part = this.#functionCallPart(block, messageIndex, sameModel);
+					part = this.#functionCallPart(block, messageIndex, sameModel, isFirstToolCall);
+					isFirstToolCall = false;
 					break;
 			}
 			if (part) parts.push(part);
@@ -302,31 +282,39 @@ class GoogleContentWriter {
 	}
 
 	#thinkingPart(block: ThinkingContent, messageIndex: number, sameModel: boolean): Part | undefined {
-		if (!block.thinking || block.thinking.trim() === "") return undefined;
 		const thoughtSignature = resolveThoughtSignature(sameModel, block.thinkingSignature);
-		if (thoughtSignature) return { thought: true, text: block.thinking.toWellFormed(), thoughtSignature };
-		// An UNSIGNED thinking block older than the window is dropped outright. Gemini puts
-		// the signature on the function call, never on the thought summary, so an unsigned
-		// summary carries no reasoning context the provider can replay: it is transcript
-		// text and nothing more, and it was measured at 10.8% of the conversation body. A
-		// SIGNED block is never dropped here, whatever the window says, because dropping it
-		// would discard replayable reasoning.
+		if ((!block.thinking || block.thinking.trim() === "") && !thoughtSignature) return undefined;
+		if (this.model.compat.dropUnsignedThinking && !thoughtSignature) return undefined;
+		if (sameModel) {
+			return {
+				thought: true,
+				text: block.thinking.toWellFormed(),
+				...(thoughtSignature && { thoughtSignature }),
+			};
+		}
+		// Keep the fork's transcript retention bound for demoted, cross-model thoughts.
 		if (messageIndex < this.retainThinkingFrom) return undefined;
 		return { text: renderDemotedThinking(this.model.id, block.thinking) };
 	}
 
-	#functionCallPart(block: ToolCall, messageIndex: number, sameModel: boolean): Part {
+	#functionCallPart(
+		block: ToolCall,
+		messageIndex: number,
+		sameModel: boolean,
+		isFirstToolCall: boolean,
+	): Part {
 		this.#emittedToolCallNames.set(block.id, block.name);
-		// Elided by either signature rule means the call falls through the same path as one
-		// that never had a signature: it sends the transport's unsigned-call signature.
 		const thoughtSignature =
 			block.thoughtSignature && !sendsSignature(this.signatures, messageIndex, block.thoughtSignature)
 				? undefined
 				: resolveThoughtSignature(sameModel, block.thoughtSignature);
 		const functionCall: FunctionCallPart = { name: block.name, args: block.arguments ?? {} };
 		if (this.traits.sendsPartId) functionCall.id = block.id;
+		const requiresFallback =
+			this.model.compat.requiresSkipThoughtSignature ||
+			(isFirstToolCall && this.model.compat.requiresSkipThoughtSignatureOnFirstFunctionCall);
+		const effectiveSignature = thoughtSignature || (requiresFallback ? SKIP_THOUGHT_SIGNATURE : undefined);
 		const part: Part = { functionCall };
-		const effectiveSignature = thoughtSignature || this.traits.unsignedCallSignature;
 		if (effectiveSignature) part.thoughtSignature = effectiveSignature;
 		return part;
 	}
@@ -341,7 +329,7 @@ class GoogleContentWriter {
 			if (block.type === "text") {
 				text = text === undefined ? block.text : `${text}\n${block.text}`;
 			} else if (block.type === "image") {
-				if (supportsImages) imageParts.push({ inlineData: { mimeType: block.mimeType, data: block.data } });
+				if (supportsImages) imageParts.push(convertGoogleImagePart(block));
 				else omittedImages = true;
 			} else if (block.type === "video" && !supportsVideos) {
 				omittedVideos = true;
@@ -398,7 +386,7 @@ function textPart(block: TextContent, sameModel: boolean): Part | undefined {
  * Convert internal messages to Gemini Content[] format.
  */
 export function convertMessages<T extends GoogleApiType>(model: Model<T>, context: Context): Content[] {
-	const messages = transformMessages(context.messages, model, normalizeGoogleToolCallId);
+	const messages = transformMessages(context.messages, model, normalizeToolCallId);
 	const writer = new GoogleContentWriter(
 		model,
 		googleWireTraits(model),
@@ -430,7 +418,7 @@ export function convertTools(
 	 * Claude models on Cloud Code Assist need the legacy `parameters` field;
 	 * the API translates it into Anthropic's `input_schema`.
 	 */
-	const useParameters = model.id.startsWith("claude-");
+	const useParameters = model.compat.ccaLegacyParametersSchema;
 
 	return [
 		{
@@ -546,24 +534,95 @@ export function resetGoogleStreamOutputForRetry(model: Model<Api>, output: Assis
 }
 
 /**
- * Module-local counter for generating unique tool call IDs across Google providers.
- * Shared so that a single monotonically-increasing sequence is used regardless of which
- * Google API surface produced the stream — purely for uniqueness, not ordering semantics.
+ * Map Gemini's cumulative token counts onto the shared usage shape.
+ * `promptTokenCount` includes cached tokens; clamp cache reads so reported
+ * input cannot go negative when an upstream endpoint over-reports cache usage.
  */
+export function mapGoogleUsage(metadata: UsageMetadata): Usage {
+	const candidates = metadata.candidatesTokenCount || 0;
+	const thinking = metadata.thoughtsTokenCount || 0;
+	const total = metadata.totalTokenCount || 0;
+	const prompt = metadata.promptTokenCount || Math.max(0, total - candidates - thinking);
+	const cacheRead = Math.min(metadata.cachedContentTokenCount || 0, prompt);
+	return {
+		input: prompt - cacheRead,
+		output: candidates + thinking,
+		cacheRead,
+		cacheWrite: 0,
+		totalTokens: total,
+		...(thinking > 0 ? { reasoningTokens: thinking } : {}),
+		cost: emptyCost(),
+	};
+}
+
+/** Module-local counter for generating unique tool call IDs across Google providers. */
+
 let toolCallCounter = 0;
 
-function nextToolCallId(name: string): string {
+export function nextToolCallId(name: string): string {
 	return `${name}_${Date.now()}_${++toolCallCounter}`;
+}
+
+/** Whether streamed thought text is healed or kept verbatim. */
+export type GoogleThoughtText = "healed" | "verbatim";
+
+const REASONING_FENCE_OPENER = /^ {0,3}`{3,}(?:thinking|reasoning)[ \t]*\r?$/i;
+
+function couldBeReasoningFencePrefix(line: string): boolean {
+	const current = line.endsWith("\r") ? line.slice(0, -1) : line;
+	const match = /^ {0,3}(`*)([\s\S]*)$/.exec(current);
+	if (!match) return false;
+	const ticks = match[1]!.length;
+	const rest = match[2]!;
+	if (rest === "") return true;
+	if (ticks < 3) return false;
+	const word = rest.replace(/[ \t]+$/, "").toLowerCase();
+	return "thinking".startsWith(word) || "reasoning".startsWith(word);
+}
+
+/** Streaming-safe removal of standalone reasoning-fence opener lines. */
+class GoogleThinkingFenceStripper {
+	#carry = "";
+	#passthrough = false;
+
+	push(chunk: string): string {
+		let out = "";
+		for (const char of chunk) {
+			if (this.#passthrough) {
+				out += char;
+				if (char === "\n") this.#passthrough = false;
+				continue;
+			}
+			if (char === "\n") {
+				if (!REASONING_FENCE_OPENER.test(this.#carry)) out += `${this.#carry}\n`;
+				this.#carry = "";
+				continue;
+			}
+			this.#carry += char;
+			if (!couldBeReasoningFencePrefix(this.#carry)) {
+				out += this.#carry;
+				this.#carry = "";
+				this.#passthrough = true;
+			}
+		}
+		return out;
+	}
+
+	flush(): string {
+		const carry = this.#carry;
+		this.#carry = "";
+		this.#passthrough = false;
+		return REASONING_FENCE_OPENER.test(carry) ? "" : carry;
+	}
 }
 
 /**
  * The content blocks one Google response streams into `output`, and the events each one
- * pushes. The SDK-shaped decoder ({@link consumeGoogleStream}) and the Cloud Code Assist
- * SSE decoder both drive it, so block transitions, signature retention, tool-call ids and
- * event order are defined once.
+ * pushes. The SDK-shaped decoder and Cloud Code Assist SSE decoder share these transitions.
  */
 export class GoogleResponseBlocks {
 	#current: TextContent | ThinkingContent | null = null;
+	#thinkingStripper: GoogleThinkingFenceStripper | null = null;
 
 	constructor(
 		readonly output: AssistantMessage,
@@ -572,6 +631,7 @@ export class GoogleResponseBlocks {
 		readonly retainTextSignature: boolean,
 		/** Runs after a block or tool call is appended and before its first event. */
 		readonly onBlockAppended?: () => void,
+		readonly thoughtText: GoogleThoughtText = "verbatim",
 	) {}
 
 	appendText(delta: string, thoughtSignature?: string): void {
@@ -587,15 +647,23 @@ export class GoogleResponseBlocks {
 	}
 
 	appendThinking(delta: string, thoughtSignature?: string): void {
-		if (!delta) return;
+		if (!delta && !thoughtSignature) return;
 		let block = this.#current;
 		if (block?.type !== "thinking") {
-			block = { type: "thinking", thinking: "", thinkingSignature: undefined };
+			block = { type: "thinking", thinking: "", thinkingSignature: undefined, summary: true };
 			this.#open(block);
 		}
-		block.thinking += delta;
 		block.thinkingSignature = retainThoughtSignature(block.thinkingSignature, thoughtSignature);
-		this.stream.push({ type: "thinking_delta", contentIndex: this.#lastIndex(), delta, partial: this.output });
+		const cleanDelta =
+			this.thoughtText === "healed" ? (this.#thinkingStripper ??= new GoogleThinkingFenceStripper()).push(delta) : delta;
+		if (!cleanDelta) return;
+		block.thinking += cleanDelta;
+		this.stream.push({
+			type: "thinking_delta",
+			contentIndex: this.#lastIndex(),
+			delta: cleanDelta,
+			partial: this.output,
+		});
 	}
 
 	/** A signature-only part belongs to the open block; with none open it is dropped. */
@@ -639,6 +707,19 @@ export class GoogleResponseBlocks {
 	endBlock(): void {
 		const block = this.#current;
 		if (!block) return;
+		if (block.type === "thinking" && this.#thinkingStripper) {
+			const tail = this.#thinkingStripper.flush();
+			if (tail) {
+				block.thinking += tail;
+				this.stream.push({
+					type: "thinking_delta",
+					contentIndex: this.#lastIndex(),
+					delta: tail,
+					partial: this.output,
+				});
+			}
+		}
+		this.#thinkingStripper = null;
 		this.#current = null;
 		const contentIndex = this.#lastIndex();
 		if (block.type === "text") {
@@ -663,6 +744,30 @@ export class GoogleResponseBlocks {
 
 	#lastIndex(): number {
 		return this.output.content.length - 1;
+	}
+}
+/** Shared text/thought folding for provider SSE consumers. */
+export class GoogleTextBlocks {
+	readonly #blocks: GoogleResponseBlocks;
+
+	constructor(output: AssistantMessage, stream: AssistantMessageEventStream, thoughtText: GoogleThoughtText) {
+		this.#blocks = new GoogleResponseBlocks(output, stream, true, undefined, thoughtText);
+	}
+
+	push(part: Part): void {
+		if (part.text === undefined) return;
+		if (part.text === "") {
+			if (!part.thoughtSignature || part.functionCall) return;
+			if (isThinkingPart(part)) this.#blocks.appendThinking("", part.thoughtSignature);
+			else this.#blocks.retainSignature(part.thoughtSignature);
+			return;
+		}
+		if (isThinkingPart(part)) this.#blocks.appendThinking(part.text, part.thoughtSignature);
+		else this.#blocks.appendText(part.text, part.thoughtSignature);
+	}
+
+	close(): void {
+		this.#blocks.endBlock();
 	}
 }
 
@@ -706,17 +811,7 @@ export function applyGoogleFinishReason(output: AssistantMessage, mapped: StopRe
  * Ref: https://ai.google.dev/api/generate-content#v1beta.GenerateContentResponse.UsageMetadata
  */
 export function applyGoogleUsage(model: Model<Api>, output: AssistantMessage, usage: UsageMetadata): void {
-	const cacheRead = usage.cachedContentTokenCount || 0;
-	const thinkingTokens = usage.thoughtsTokenCount || 0;
-	output.usage = inheritUsageCarryovers(output.usage, {
-		input: (usage.promptTokenCount || 0) - cacheRead,
-		output: (usage.candidatesTokenCount || 0) + thinkingTokens,
-		cacheRead,
-		cacheWrite: 0,
-		totalTokens: usage.totalTokenCount || 0,
-		...(thinkingTokens > 0 ? { reasoningTokens: thinkingTokens } : {}),
-		cost: emptyCost(),
-	});
+	output.usage = inheritUsageCarryovers(output.usage, mapGoogleUsage(usage));
 	calculateCost(model, output.usage);
 }
 
@@ -756,6 +851,18 @@ export function googleDoneReason(
 	});
 }
 
+/** Preserve Google RPC status in stream errors so quota classification stays accurate. */
+export function googleStreamChunkError(error: NonNullable<GenerateContentResponse["error"]>, provider: string): Error {
+	const detail =
+		error.message && error.status
+			? `${error.message} (${error.status})`
+			: error.message || error.status || "unknown error";
+	const message = `Google API stream error: ${detail}`;
+	return typeof error.code === "number" && error.code >= 400
+		? new AIError.GoogleApiError(message, error.code)
+		: new AIError.ProviderResponseError(message, { provider, kind: "output" });
+}
+
 /**
  * Drives the chunked `generateContentStream` iterator into an `AssistantMessage` and
  * the corresponding `AssistantMessageEventStream`. Shared between `streamGoogle` and
@@ -777,32 +884,29 @@ export async function consumeGoogleStream<T extends GoogleApiType>(args: {
 	onFirstToken?: () => void;
 }): Promise<void> {
 	const { googleStream, output, stream, model, options, onFirstToken } = args;
-	const blocks = new GoogleResponseBlocks(output, stream, args.retainTextSignature === true);
+	const blocks = new GoogleResponseBlocks(output, stream, args.retainTextSignature ?? true, undefined, "healed");
 	let firstTokenSeen = false;
 	let sawFinishReason = false;
 
 	for await (const chunk of googleStream) {
-		if (chunk.error) {
-			const detail = chunk.error.message || chunk.error.status || "unknown error";
-			const message = `Google API stream error: ${detail}`;
-			throw typeof chunk.error.code === "number" && chunk.error.code >= 400
-				? new AIError.GoogleApiError(message, chunk.error.code)
-				: new AIError.ProviderResponseError(message, { provider: model.provider, kind: "output" });
-		}
+		if (chunk.error) throw googleStreamChunkError(chunk.error, model.provider);
 		throwIfGooglePromptBlocked(chunk, model.provider);
 		const candidate = chunk.candidates?.[0];
 		const parts = candidate?.content?.parts;
 		if (parts) {
 			for (const part of parts) {
-				if (part.text !== undefined && part.text !== "") {
-					if (!firstTokenSeen) {
-						firstTokenSeen = true;
-						onFirstToken?.();
+				if (part.text !== undefined) {
+					if (part.text !== "") {
+						if (!firstTokenSeen) {
+							firstTokenSeen = true;
+							onFirstToken?.();
+						}
+						if (isThinkingPart(part)) blocks.appendThinking(part.text, part.thoughtSignature);
+						else blocks.appendText(part.text, part.thoughtSignature);
+					} else if (part.thoughtSignature && !part.functionCall) {
+						if (isThinkingPart(part)) blocks.appendThinking("", part.thoughtSignature);
+						else blocks.retainSignature(part.thoughtSignature);
 					}
-					if (isThinkingPart(part)) blocks.appendThinking(part.text, part.thoughtSignature);
-					else blocks.appendText(part.text, part.thoughtSignature);
-				} else if (part.text === "" && part.thoughtSignature && !part.functionCall) {
-					blocks.retainSignature(part.thoughtSignature);
 				}
 				if (part.functionCall) blocks.appendFunctionCall(part.functionCall, part.thoughtSignature);
 			}
@@ -928,6 +1032,23 @@ export function buildGoogleGenerateContentParams<T extends "google-generative-ai
 		config.abortSignal = options.signal;
 	}
 
+	if (options.cachedContent !== undefined) {
+		if (options.cachedContent.trim().length === 0) {
+			throw new AIError.ValidationError("cachedContent must not be blank");
+		}
+		const incompatibleFields = [
+			config.systemInstruction !== undefined && "systemInstruction",
+			config.tools !== undefined && "tools",
+			config.toolConfig !== undefined && "toolConfig",
+		].filter((field): field is string => Boolean(field));
+		if (incompatibleFields.length > 0) {
+			throw new AIError.ValidationError(
+				`cachedContent cannot be combined with request-level ${incompatibleFields.join(", ")}`,
+			);
+		}
+		config.cachedContent = options.cachedContent;
+	}
+
 	return {
 		model: model.id,
 		contents,
@@ -1015,7 +1136,7 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 					// size a provider promised.
 					const errorBody = await AIError.readProviderErrorBody(response);
 					throw new AIError.GoogleApiError(
-						`Google API error (${response.status}): ${extractGoogleErrorMessage(errorBody)}`,
+						`Google API error (${response.status}): ${extractGoogleErrorMessage(errorBody, response.status)}`,
 						response.status,
 						{ headers: response.headers },
 					);
@@ -1065,7 +1186,7 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 					},
 				});
 
-				if (output.stopReason !== "stop" || hasMeaningfulGoogleContent(output)) break;
+				if (output.stopReason !== "stop" || hasMeaningfulGoogleContent(output) || options?.acceptEmptyResponse) break;
 				if (emptyAttempt >= MAX_EMPTY_STREAM_RETRIES) {
 					throw new AIError.ProviderResponseError(
 						`Google API returned an empty response (finishReason STOP with no content) after ${MAX_EMPTY_STREAM_RETRIES + 1} attempts`,
@@ -1155,16 +1276,24 @@ function paramsToWireBody(params: GenerateContentParameters): Record<string, unk
  * response body, because the per-site caps had drifted to four different
  * numbers and three of them were "none".
  */
-function extractGoogleErrorMessage(body: AIError.ProviderErrorBody): string {
-	if (!body.text) return "Unknown error";
+export function extractGoogleErrorMessage(errorText: string | AIError.ProviderErrorBody, status?: number): string {
+	const body = typeof errorText === "string" ? undefined : errorText;
+	const text = typeof errorText === "string" ? errorText : errorText.text;
+	if (!text) return body?.detail || "Unknown error";
 	try {
-		const parsed = JSON.parse(body.text) as { error?: { message?: string } };
-		if (parsed.error?.message) return AIError.boundProviderErrorDetail(parsed.error.message);
+		const parsed = JSON.parse(text) as {
+			error?: { message?: string; status?: string; details?: unknown[] };
+		};
+		const error = parsed.error;
+		if (!error?.message) return body?.detail ?? AIError.boundProviderErrorDetail(text);
+		const message = AIError.boundProviderErrorDetail(error.message);
+		if (!AIError.isUsageLimitStatus(status) || (error.status === undefined && error.details === undefined)) return message;
+		return AIError.boundProviderErrorDetail(
+			`${message} ${JSON.stringify({ error: { status: error.status, details: error.details } })}`,
+		);
 	} catch {
-		// Non-JSON body: the bounded read's own detail, which is capped and says when it
-		// stopped early.
+		return body?.detail ?? AIError.boundProviderErrorDetail(text);
 	}
-	return body.detail;
 }
 
 export { convertMessages as convertGoogleMessages };

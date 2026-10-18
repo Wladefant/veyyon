@@ -7,6 +7,7 @@
 - Provider requests compress eligible bodies with gzip or Zstandard above 1 KiB and fall back per host when an encoding is rejected.
 - Added Anthropic API request, stream and response handling for provider integration.
 - Added Amazon Bedrock request signing, credential resolution and streaming provider support.
+- Added Google Gemini, Gemini CLI, Antigravity and Vertex AI provider authentication and streaming adapters.
 
 ### Fixed
 

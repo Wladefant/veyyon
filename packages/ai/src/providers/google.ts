@@ -1,4 +1,5 @@
 import { GEMINI_DEVELOPER_API_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
+import { applyInferenceHeaders } from "./inference-headers";
 import { getEnvApiKey } from "../env-api-key";
 import * as AIError from "../error";
 import type { Context, Model, StreamFunction } from "../types";
@@ -40,6 +41,11 @@ export const streamGoogle: StreamFunction<"google-generative-ai"> = (
 				...(model.headers ?? {}),
 				...(options?.headers ?? {}),
 			};
+			applyInferenceHeaders(headers, {
+				provider: model.provider,
+				protocol: "google",
+				sessionId: options?.sessionId ?? options?.promptCacheKey,
+			});
 			return { params, url, headers, fetch: options?.fetch };
 		},
 	});

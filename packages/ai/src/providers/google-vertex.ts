@@ -1,3 +1,4 @@
+import { resolveVertexEndpointHost } from "@veyyon/catalog/hosts";
 import { $env } from "@veyyon/utils/env";
 import * as AIError from "../error";
 import type { Context, Model, StreamFunction } from "../types";
@@ -117,9 +118,6 @@ function resolveProject(options?: GoogleVertexOptions): string {
 	return project;
 }
 
-function resolveEndpointHost(location: string): string {
-	return location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
-}
 function resolveAmbientLocation(): string | undefined {
 	return $env.GOOGLE_VERTEX_LOCATION || $env.GOOGLE_CLOUD_LOCATION || $env.VERTEX_LOCATION || undefined;
 }
