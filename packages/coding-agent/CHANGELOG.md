@@ -166,6 +166,7 @@
 - Fixed the `/tree` and `/branch` pickers cancelling themselves 100 ms after opening over an empty list, which also cancelled twice when dismissed inside that window; they now stay open on their empty state until dismissed.
 - The `!` command block draws every streamed output window instead of skipping any that arrive within 50 ms of the previous one, which left the last line before a quiet period undrawn and joined the lines on either side of a skipped window; the `!` and `%` blocks also no longer overflow the call stack on an output window of about a million lines.
 - A continuation scheduled while another run starts, such as the queued-message drain after a user interrupt or a `/retry` racing a steer, yields to that run instead of failing with "Agent is already processing".
+- The diff shown for an edit of a large file compares only the lines between the first and last change instead of both whole files, so a one-line edit of a 3.5 MB file holds the event loop 7-9.5 ms instead of 44-67 ms.
 
 ### Removed
 
