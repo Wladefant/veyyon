@@ -1,7 +1,8 @@
 import type { Database, Statement } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { AsyncDrain, getDbBusyTimeoutMs, getHistoryDbPath, logger, NON_ALNUM_RUN_RE } from "@veyyon/utils";
+import { AsyncDrain, getHistoryDbPath, logger, NON_ALNUM_RUN_RE } from "@veyyon/utils";
+import { getDbBusyTimeoutMs } from "@veyyon/utils/interactive-host";
 import { escapeLike, openSqliteDatabaseSync, SQLITE_NOW_EPOCH, tableExists } from "@veyyon/utils/sqlite";
 
 export interface HistoryEntry {

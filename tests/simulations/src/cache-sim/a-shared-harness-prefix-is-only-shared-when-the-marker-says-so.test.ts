@@ -1,75 +1,36 @@
 /**
- * The shipped anchor on the first system block is there so an agent can read
- * the harness its parent already cached. Two sessions sharing one modelled cache
- * are what price that, and the first thing they show is that the sharing does not
- * happen: an entry is keyed by session unless the marker asks otherwise, and
- * nothing in this product asks.
+ * The shipped placement reads the shared harness across sessions only when the
+ * marker asks for it. Nothing in this product asks: every breakpoint is
+ * session-scoped today, so an agent reads nothing its parent wrote.
  *
- * WHY THIS FILE EXISTS. The placement scenario beside this one measures the cost
- * of anchoring `system[0]` — every block between the anchor and a changing tail is
- * re-read forever — and then refuses to recommend moving the marker, because the
- * justification for its depth is cross-session sharing that a single-session
- * simulation cannot see. This file is that missing half. It answers the only
- * question that decides the patch: how many agent sessions must share a parent's
- * harness before the shallow anchor pays for the parent's loss?
+ * WHY THE CONTRACT CHANGED. Production marks the deepest stable system block as
+ * well as system[0] (`cacheSystemPrefixBreakpoints`, packages/ai/src/providers/anthropic.ts:3158-3183).
+ * An earlier version of this file asked whether a one-block-deeper anchor could pay
+ * for itself, and assumed the deeper arm was not shipped. Under session scope the
+ * shipped code already ties that arm, so those rows now assert the tie. Under shared
+ * scope the rows compare the block-1 marker alone, which is the only difference.
  *
- * The answer turns out to depend on a field that is not set. `scope: "global"` is
- * the prompt-caching-scope beta; this repo sends the beta header on both Anthropic
- * layouts and the field is first-class on the wire type, but no code path assigns
- * it. So today every breakpoint is session-scoped, an agent reads nothing its
- * parent wrote, and the depth of the anchor buys exactly zero of what it was
- * chosen for. The fleet is run both ways, and the crossover only exists in the arm
- * where the flag is set.
+ * `scope: "global"` is the prompt-caching-scope beta. This repo sends that beta header on
+ * both Anthropic layouts (anthropic.ts:180,188), and the field is first-class on the wire
+ * type (anthropic-wire.ts:23-24), but nothing sets it. Shared scope is therefore a
+ * counterfactual arm (`sharedGlobally`), not a description of production. The public
+ * Messages API doc does not document the field
+ * (https://platform.claude.com/docs/en/api/beta/messages/create), so nothing here claims
+ * how a provider prices a shared write.
  *
  * WHAT THIS DOES NOT CATCH.
- *   - Whether the provider is session-scoped by default at all. That is modelled
- *     from this repo's own wire documentation ("shares the breakpoint across
- *     sessions"), not derived from traffic: a provider that shared everything by
- *     default would make the session-keyed rows here pessimistic, and nothing in
- *     the file would notice.
- *   - Real agent fan-out. The crossover is reported as a count, and which side
- *     of it a given workload sits on is a question about that workload. Nothing
- *     here claims a typical fan-out.
- *   - The write the parent pays to publish a shared prefix is modelled as the same
- *     write it pays anyway, because it marks that prefix either way. A provider
- *     charging a premium for a globally scoped write would change the crossover
- *     and is not modelled.
+ *   - Whether the provider scopes a breakpoint by default. Session scope is modelled
+ *     from this repo's own wire notes, not from traffic.
+ *   - Real agent fan-out. Every row sweeps the same fixed range; none claims a
+ *     typical workload.
+ *   - The premium on a shared write. The pessimistic rows bound it; they do not measure it.
  *
- * RED PROOFS, observed rather than predicted.
- *   - the global-scope decorator made a no-op (marker returned unchanged): the
- *     sharing row reds, which is what says the row is about the field and not
- *     about the two sessions sending identical harness bytes.
- *   - the agent's project block made identical to the parent's: the crossover
- *     row reds, since a deeper anchor then shares too and the trade disappears.
- *   - the modelled cache made to ignore which session owns an entry: the
- *     session-scoped row reds, so that row is about the key and not about the
- *     interleaving. This is also the mistake the model shipped with for one run —
- *     it made a session-scoped cache look account-wide and credited the shipped
- *     anchor with a saving it does not collect.
- *   - the shared-write premium made a no-op (the multiplier ignored): the
- *     pessimistic row reds on its own sensitivity check, so that row cannot pass by
- *     pricing two identical arms.
- *   - the anchor-only scoping widened to every system marker: the trap row reds,
- *     and it reds the way it was found — the premium turned the switch into a loss
- *     before the decorator was narrowed to the anchor.
+ * NUMBERS. Earlier MEASURED figures predate the placement change and are removed.
+ * The rows assert order and ties; exact costs come from the run.
  *
- * MEASURED, one six-turn parent with a changing system tail plus N three-turn
- * agents that share its harness block and differ from block 1 on, in
- * base-input-price equivalents. Session-scoped, as the product ships: the shipped
- * anchor costs 24472 against 13892 at N=0 and 111882 against 75897 at N=6, so the
- * gap WIDENS by about 4234 per agent and the shallow anchor never breaks even.
- * With `scope: "global"` on the anchor, an agent's first request reads the
- * 4811-token harness prefix its parent wrote thirty seconds earlier, the gap
- * NARROWS by 1298 per agent (10580 at N=0, 2790 at N=6, 193 at N=8, −1105 at
- * N=9), so the crossover is at nine simultaneously sharing agents. Below it the
- * deeper anchor is cheaper even with sharing switched on.
- *
- * The switch itself, at N=1: 39040 unshared, 33508 shared, and 37116 shared under
- * the pessimistic assumption that a shared write costs what the dearest write in
- * the table costs — still cheaper than not sharing. Scoping every system marker
- * instead of the anchor costs 49639 under the same assumption, which is worse than
- * not sharing at all, because the deepest system marker sits on a block that
- * changes every turn.
+ * REMOTE VERIFICATION. Not run locally (repo policy). The ties and orderings are
+ * derived from the builder source, [INFERENCE] until the cf-ci run names these rows
+ * with pass counts.
  */
 import { describe, expect, it } from "bun:test";
 import {
@@ -141,7 +102,7 @@ async function fleetCost(arm: Arm, fanOut: number): Promise<number> {
 	return (await runFleet(arm, fleetOf(fanOut))).cost;
 }
 
-/** Wide enough to contain the crossover this fixture produces, with room above it. */
+/** The fan-out range every row sweeps. */
 const MAX_FAN_OUT = 14;
 
 /**
@@ -172,33 +133,32 @@ describe("a harness prefix shared between a parent and its agents", () => {
 		expect(globallyScoped.cost).toBeLessThan(sessionScoped.cost);
 	});
 
-	it("leaves the shallow anchor buying nothing, at every fan-out, as the product ships today", async () => {
+	it("ties production and a one-block-deeper anchor at every fan-out while the scope is unset", async () => {
 		const deltas = await deltasAcrossFanOut(PRODUCTION, deepAnchor(1));
 
-		// Every fan-out, not most of them: with no sharing the extra depth is free
-		// money and more agents only widen the gap, which is the whole finding.
-		expect(deltas.every(delta => delta > 0)).toBe(true);
-		const widening = deltas.slice(1).every((delta, index) => delta > deltas[index]);
-		expect(widening).toBe(true);
+		// Production already marks the stable project block, so a deeper anchor has
+		// nothing to add to a session-keyed cache. Every fan-out must tie.
+		expect(deltas.every(delta => Math.abs(delta) < 1e-6)).toBe(true);
 	});
 
-	it("pays for its depth only once the scope is set, and only above a fan-out this run reports", async () => {
-		const deltas = await deltasAcrossFanOut(sharedGlobally(PRODUCTION), sharedGlobally(deepAnchor(1)));
+	it("differs from production at every fan-out when the shallow anchor is session-scoped", async () => {
+		// Negative control for the tie above: a layout known to differ. Without the block-1
+		// marker, each parent turn after the first reads only the harness, while production
+		// reads the harness plus the project block. Derived from PrefixCache.serve, not measured.
+		const deltas = await deltasAcrossFanOut(deepAnchor(0), PRODUCTION);
 
-		// The trade is one parent penalty against one saving per sharing agent, so
-		// the delta shrinks by a constant per agent and crosses zero exactly once.
-		// Anything else means the fixture is measuring something other than the trade.
-		const narrowing = deltas.slice(1).every((delta, index) => delta < deltas[index]);
-		expect(narrowing).toBe(true);
-		const crossover = deltas.findIndex(delta => delta <= 0);
-		expect(crossover).toBeGreaterThan(0);
-		expect(crossover).toBeLessThanOrEqual(MAX_FAN_OUT);
+		expect(deltas.every(delta => delta > 0)).toBe(true);
+	});
 
-		// The number is the point: the anchor is not justified by "agents exist",
-		// it is justified by a fan-out this large sharing that exact harness at once.
-		// Below the crossover the deeper anchor is cheaper even with sharing on.
-		expect(deltas[crossover - 1]).toBeGreaterThan(0);
-		expect(crossover).toBeGreaterThan(2);
+	it("saves the block-1 marker's share at every fan-out once the scope is set", async () => {
+		const deltas = await deltasAcrossFanOut(sharedGlobally(deepAnchor(0)), sharedGlobally(PRODUCTION));
+
+		// Only the block-1 marker differs between these arms, and it is session-owned. Both
+		// arms share the global block-0 entry, so both read the harness. Production's block-1
+		// entry is read on every later turn; the shallow arm must bill that block as a write
+		// instead. Derived from PrefixCache.serve, so the sign is positive at every fan-out.
+		// The magnitude is not asserted.
+		expect(deltas.every(delta => delta > 0)).toBe(true);
 	});
 
 	/**

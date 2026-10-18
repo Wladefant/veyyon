@@ -6,7 +6,7 @@ import {
 	decryptCheckpointBundle,
 	encryptCheckpointBundle,
 	filterCheckpointFiles,
-} from "../src/checkpoints/cloud-checkpoints";
+} from "../src/session/cloud-checkpoints";
 
 const bundle: CheckpointBundle = {
 	version: 1,

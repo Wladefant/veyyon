@@ -837,11 +837,8 @@ describe("AgentSession retry delay cap", () => {
 
 					if (streamCalls === 1) {
 						const thinking = { type: "thinking" as const, thinking: "partial thought" };
-						// No visible text: a committed text block makes the failed turn
-						// replay-unsafe (hasReplayUnsafeOutput), which would
-						// correctly suppress this retry. The delay-cap contract under test
-						// needs a replay-safe partial turn, so only thinking plus an
-						// incomplete (never toolcall_end'd) tool call is emitted.
+						// Thinking plus an incomplete (never toolcall_end'd) tool call: no tool ran,
+						// so the partial is replay-safe and the retry this test measures happens.
 						const toolCall: ToolCall = {
 							type: "toolCall",
 							id: "tc-incomplete",

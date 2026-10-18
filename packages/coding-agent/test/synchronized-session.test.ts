@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { CheckpointClient, type CheckpointFetch } from "../src/checkpoints/cloud-checkpoints";
-import { SynchronizedSession } from "../src/checkpoints/synchronized-session";
+import { CheckpointClient, type CheckpointFetch } from "../src/session/cloud-checkpoints";
+import { SynchronizedSession } from "../src/session/synchronized-session";
 
 test("server epoch loss blocks admission and does not reacquire silently", async () => {
 	let owns = true;

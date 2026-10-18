@@ -5,7 +5,6 @@
 import "./cli/first-frame-replay-entry";
 import { writeSync } from "node:fs";
 import { CliUsageError } from "@veyyon/utils/cli-usage-error";
-import { DAY_MS } from "@veyyon/utils/time";
 // Subpath, NOT the "@veyyon/utils" barrel: the barrel re-exports ./env, which
 // eagerly parses the agent-directory .env at import time (env.ts). Pulling that
 // in here would load the .env BEFORE runCli() calls setProfile(), so
@@ -636,9 +635,12 @@ export function formatCliFatal(err: unknown, opts: { stack: boolean; colors: boo
 	return `${out}\n  (set VEYYON_STACK=1 for the full stack trace)\n`;
 }
 
+// This keepalive period stays local, not imported, to keep the boot path thin.
+const CLI_KEEPALIVE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
 /** A pending CLI promise must not masquerade as a successful empty launch. */
 export async function awaitCliCompletion(command: Promise<void>): Promise<void> {
-	const keepalive = setInterval(() => {}, DAY_MS);
+	const keepalive = setInterval(() => {}, CLI_KEEPALIVE_INTERVAL_MS);
 	const unfinished = () => {
 		writeSync(2, "Error: Veyyon's event loop ended before the command finished. Startup did not complete.\n");
 		process.exitCode = EXIT_FAILURE;

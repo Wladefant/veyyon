@@ -150,9 +150,38 @@ describe("asking whether a model is configured is not calling one", () => {
 		expect(reach(relative)).toBeLessThanOrEqual(ceiling);
 	});
 
-	/** The calling half keeps the engine, because calling a model requires the streaming engine. Measured at 203. */
-	it("local-llm reaches at most 215 modules", () => {
-		expect(reach("core/local-llm.ts")).toBeLessThanOrEqual(215);
+	/**
+	 * The calling half keeps the engine, because calling a model requires the streaming engine.
+	 * Measured at 203 at a731819167a766190b7d6958cff5e4da6c239af0 (the commit that also set 215).
+	 * Static attribution of the growth since then, module and introducing commit, 203 -> 222 at HEAD:
+	 *   + packages/utils/src/backoff.ts                        cfc7fb6a44dd9732aaaac5eabb0455dfcfd24bb3 (stream.ts:21)
+	 *   + packages/utils/src/local-time.ts                     dd058dd817406518965f2aaa7a679cd38e21f91f (logger.ts:17)
+	 *   + packages/utils/src/log-file.ts                       4b93b43081fb4acc82248009d90324042c8afeca (logger.ts:18)
+	 *   + packages/utils/src/ansi.ts                           668d5b967b675a24f5ebb0341206bbabd154eeba (sanitize-text.ts:15)
+	 *   + packages/catalog/src/catalog-spans.ts                3e36ec07281752a4eb1e33f839238b9d2a55eca1 (models.ts:5)
+	 *   + packages/catalog/src/types.ts                        f3bc816b7a6c1c535ea614c24d534f0313ca0854 (models.ts:8)
+	 *   + packages/catalog/src/compat/share.ts                 20d1928c75bec5d9e1c29fa1810156b199156b21 (build.ts:17)
+	 *   + packages/catalog/src/discovery/chatgpt-web.ts        a96b3dac0e43c8ea565a6957067be95c2bcb98ee
+	 *   + packages/catalog/src/provider-models/chatgpt-web.ts  a96b3dac0e43c8ea565a6957067be95c2bcb98ee
+	 *   + packages/catalog/src/provider-models/command-code.ts ca5c55df9540c9d2c25b17be97970a8170e9d309
+	 *   + packages/catalog/src/provider-models/models-dev-policies.ts 21600d65d941613a48aa832a16a2010ee10ec23b
+	 *   + packages/catalog/src/discovery/failure.ts            084973bfe48f929c629124cf46781a394e1af22a
+	 *   + packages/catalog/src/discovery/typesafe.ts           5fcd8e4a24c6d8b2b0c76ef040a8881d852fe0a7
+	 *   + packages/catalog/src/wire/opencode-headers.ts (and package.json) 731fdd71c34861a4dd69d1ed13c8cbdce6755a5b
+	 *   + packages/catalog/src/provider-models/codex-subscription.ts d789b0c361168ea9f1054619a2465ba6974dada5
+	 *   + packages/ai/src/dialect/bracket-walk.ts              90dbb499bf5e48d76b1e868520b1defdf4ab9f5a (gemini.ts:3)
+	 *   + packages/ai/src/dialect/json-tool-call-scanner.ts    a9a2cf98de439846f195a453b604b4aedfc9081e (hermes.ts:2)
+	 *   + contracts/model/src/{service-tier,effort,model,stream-block}.ts fbc069ac221bee7968fe5b0f8bcc9cf4a3d2c4d7
+	 *   - removed: ai/providers/gitlab-duo-workflow.ts, ai/utils.ts, ai/utils/first-event-budget.ts
+	 * +1 at the working tree: the interactive-host leaf that ReachRepairs added (utils env.ts re-export).
+	 * 223 total. The growth is deliberate. stream.ts importing `discardAttemptUsage` from the catalog
+	 * models registry adds no reach and is not credited. `models.ts` is already eagerly reached through
+	 * `emptyUsage` in `providers/pi-native-client.ts` and `providers/register-builtins.ts`, both imported
+	 * eagerly by stream.ts (since 9f62a780cd, 2026-07-19). The stream edge itself came later, in
+	 * 7bc6222b79 (2026-08-10). Moving the helper therefore removes no module, so no ceiling is cut for it.
+	 */
+	it("local-llm reaches at most 223 modules", () => {
+		expect(reach("core/local-llm.ts")).toBeLessThanOrEqual(223);
 	});
 
 	/**

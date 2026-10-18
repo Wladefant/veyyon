@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Exercise the WSL inherited-PATH case through the real bwrap boundary.
+# Exercise the WSL inherited-PATH case through the real bwrap boundary and verify the guest resolves the host Bun.
+# Run: bash scripts/test-sandbox/bwrap-path-proof.sh
 set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && /bin/pwd -P)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && /bin/pwd -P)"

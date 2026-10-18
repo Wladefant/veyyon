@@ -201,8 +201,8 @@ describe("defs()", () => {
 			kernelOwnerId: OWNER,
 		});
 		expect(listed.exitCode).toBe(0);
-		expect(listed.output).toContain("hunt: function hunt(target, depth)");
-		expect(listed.output).toContain("rateLimit: number 5");
+		expect(listed.output).toMatch(/^hunt: function$/m);
+		expect(listed.output).toMatch(/^rateLimit: number$/m);
 		for (const preludeName of ["read", "kv", "defs", "parallel", "pipeline", "agent", "budget"]) {
 			expect(listed.output).not.toMatch(new RegExp(`^${preludeName}:`, "m"));
 		}
@@ -535,8 +535,8 @@ describeRequiringTool("python3", "the store across languages", () => {
 			artifactsDir: artifacts,
 		});
 		expect(listed.exitCode).toBe(0);
-		expect(listed.output).toContain("probe: function probe");
-		expect(listed.output).toContain("retries: int 3");
+		expect(listed.output).toMatch(/^probe: function$/m);
+		expect(listed.output).toMatch(/^retries: int$/m);
 		for (const preludeName of ["read", "kv", "defs", "parallel", "agent", "budget"]) {
 			expect(listed.output).not.toMatch(new RegExp(`^${preludeName}:`, "m"));
 		}

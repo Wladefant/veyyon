@@ -1200,10 +1200,9 @@ export class SessionManager {
 		// opens a fresh append handle and the entry still lands.
 		const line = this.#lineFor(entry);
 		try {
-			void this.#appendWriter()
-				.append(line)
-				.catch(err => this.#noteDiskFailure(err));
-			this.#notePublishedAppend(entry, line);
+			const written = this.#appendWriter().append(line);
+			void written.catch(err => this.#noteDiskFailure(err));
+			this.#notePublishedAppend(entry, line, written);
 		} catch (err) {
 			this.#noteDiskFailure(err);
 		}
@@ -1214,7 +1213,7 @@ export class SessionManager {
 	 * the same synchronous step as `append`: file and memory writers write in-body and indexed writers
 	 * queue in call order, so the line starts where the file ended when `append` was called.
 	 */
-	#notePublishedAppend(entry: SessionEntry, line: string): void {
+	#notePublishedAppend(entry: SessionEntry, line: string, written: Promise<void>): void {
 		const state = this.#publishedFileState;
 		if (state === null) return;
 		const offset = state.size;
@@ -1222,7 +1221,15 @@ export class SessionManager {
 		state.lines?.appended.push(entry);
 		state.lines?.entryOffsets.push(offset);
 		state.size += length;
-		if (RECORD_ONLY_ENTRY_TYPES.has(entry.type)) this.#coolAppendedRecord(entry, line, offset, length);
+		if (!RECORD_ONLY_ENTRY_TYPES.has(entry.type)) return;
+		// Cooled only once this write resolves. A rejected write leaves its line unwritten, and a peer's
+		// line of the same length at that offset would pass the size check for it.
+		void written.then(
+			() => {
+				if (this.#publishedFileState === state) this.#coolAppendedRecord(entry, offset, length);
+			},
+			() => undefined,
+		);
 	}
 
 	/**
@@ -1368,13 +1375,14 @@ export class SessionManager {
 	}
 
 	/**
-	 * Move a {@link RECORD_ONLY_ENTRY_TYPES} entry the append path just wrote out of memory. The
-	 * write completes inside `append`, so the line is in the file object the last publish recorded;
-	 * {@link ColdEntryPayloads.coolWritten} reads it back before cooling. Without this, a spawned
-	 * agent's `session_init` appended after its file was created, and every `subagent_spawn`, stays
-	 * in memory until the next whole-file publish.
+	 * Move a {@link RECORD_ONLY_ENTRY_TYPES} entry the append path wrote out of memory, once its write
+	 * resolved. A rejected write never gets here, so a line that did not land is never cooled. The line
+	 * is in the file object the last publish recorded;
+	 * {@link ColdEntryPayloads.coolWritten} checks that object ends at the line before cooling, with
+	 * no read. Without this, a spawned agent's `session_init` appended after its file was created, and
+	 * every `subagent_spawn`, stays in memory until the next whole-file publish.
 	 */
-	#coolAppendedRecord(entry: SessionEntry, line: string, offset: number, length: number): void {
+	#coolAppendedRecord(entry: SessionEntry, offset: number, length: number): void {
 		const sessionFile = this.#sessionFile;
 		const identity = this.#publishedFileState?.identity;
 		if (!this.#persist || sessionFile === undefined || identity === undefined) return;
@@ -1385,7 +1393,7 @@ export class SessionManager {
 			() => this.#openPinnedReader(sessionFile),
 			restored => restoreColdLine(restored, blobs),
 		);
-		if (pinned) this.#cold.coolWritten(entry, line, offset, length);
+		if (pinned) this.#cold.coolWritten(entry, offset, length);
 	}
 
 	/**
@@ -1449,12 +1457,12 @@ export class SessionManager {
 				const sessionFile = this.#sessionFile;
 				if (!sessionFile || this.#publishedFileState !== published) return;
 				try {
-					const appended = this.#appendWriter().append(line);
+					const written = this.#appendWriter().append(line);
 					// A synchronous append that ran since the entry joined `#entries` is ahead of it in
 					// the file, so the file order differs from the log's there and a rewrite plan ends
 					// its kept run at that entry.
-					this.#notePublishedAppend(entry, line);
-					await appended;
+					this.#notePublishedAppend(entry, line, written);
+					await written;
 					await this.#storage.updateSessionTitle(sessionFile, update);
 					if (this.#diskEpoch === epoch) this.#fileIsCurrent = true;
 				} catch {

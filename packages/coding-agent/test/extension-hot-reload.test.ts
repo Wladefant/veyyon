@@ -262,7 +262,7 @@ describe("Extension hot reload", () => {
 		const runtimeNoExt: SlashCommandRuntime = {
 			settings,
 			cwd: tempDir.path(),
-			session: { extensionRunner: undefined } as unknown as AgentSession,
+			session: { extensionRunner: undefined, reloadRules: async () => {} } as unknown as AgentSession,
 			sessionManager,
 			output: text => {
 				outputNoExt.push(text);
@@ -285,6 +285,7 @@ describe("Extension hot reload", () => {
 				extensionRunner: {
 					reloadExtensions: async () => [{ path: "/path/to/my-ext.ts", status: "reloaded", hookCount: 3 }],
 				},
+				reloadRules: async () => {},
 			} as unknown as AgentSession,
 			sessionManager,
 			output: text => {
@@ -310,6 +311,7 @@ describe("Extension hot reload", () => {
 						{ path: "/path/to/bad-ext.ts", status: "failed", error: "Unexpected token" },
 					],
 				},
+				reloadRules: async () => {},
 			} as unknown as AgentSession,
 			sessionManager,
 			output: text => {
@@ -329,8 +331,7 @@ describe("Extension hot reload", () => {
 		const runtimeAlias: SlashCommandRuntime = {
 			settings,
 			cwd: tempDir.path(),
-			session: { extensionRunner: undefined } as unknown as AgentSession,
-			sessionManager,
+			session: { extensionRunner: undefined, reloadRules: async () => {} } as unknown as AgentSession,
 			output: text => {
 				outputAlias.push(text);
 			},

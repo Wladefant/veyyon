@@ -7,7 +7,7 @@ import {
 	captureNativeCheckpoint,
 	forkNativeCheckpoint,
 	restoreNativeCheckpoint,
-} from "../src/checkpoints/native-recovery";
+} from "../src/session/native-recovery";
 
 const roots: string[] = [];
 async function scratch(): Promise<string> {

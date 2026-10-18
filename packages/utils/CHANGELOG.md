@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- SQLite initialization now reads its busy-timeout setting from `@veyyon/utils/interactive-host` without importing the env module closure; timeout values are unchanged.
+
 ## [1.5.6] - 2026-10-10
 
 ### Breaking Changes

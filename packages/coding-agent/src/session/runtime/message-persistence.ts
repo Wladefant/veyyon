@@ -87,8 +87,8 @@ export interface MessagePersistenceHost {
 	pendingContextSnapshot(): PendingContextSnapshot | undefined;
 	/** Tokens the prompt spends outside the message list: system prompt and tool schemas. */
 	nonMessageTokens(): number;
-	/** True once for a rewind tool result whose rewind already rewrote the branch. */
-	consumeRewoundResult(toolCallId: string): boolean;
+	/** True for a rewind tool result whose rewind already rewrote the branch; such a result is never appended. */
+	hasRewoundResult(toolCallId: string): boolean;
 	/** A `ttsr-injection` custom message reached the log. */
 	onTtsrInjectionPersisted(details: unknown): void;
 }
@@ -349,7 +349,7 @@ export class MessagePersistence {
 		const skipPersistedRewindResult =
 			message.role === "toolResult" &&
 			message.toolName === TOOL.rewind &&
-			this.#host.consumeRewoundResult(message.toolCallId);
+			this.#host.hasRewoundResult(message.toolCallId);
 		if (!skipPersistedRewindResult) {
 			this.append(persistenceMessage);
 		}
@@ -370,6 +370,15 @@ export class MessagePersistence {
 		for (const message of turnMessages) {
 			await this.waitFor(message);
 		}
+		// A turn whose rewind already rewrote the branch was written before the rewind moved the
+		// branch away from it. Re-appending it would put the rewound assistant after the report.
+		const rewindRewroteBranch = turnMessages.some(
+			message =>
+				message.role === "toolResult" &&
+				message.toolName === TOOL.rewind &&
+				this.#host.hasRewoundResult(message.toolCallId),
+		);
+		if (rewindRewroteBranch) return true;
 		const turnKeys = turnMessages.map(sessionMessagePersistenceKey);
 		const persistedKeys = new Set<string>();
 		for (let index = 0; index < turnMessages.length; index++) {

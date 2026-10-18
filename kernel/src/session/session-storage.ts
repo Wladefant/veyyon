@@ -54,6 +54,8 @@ export interface PinnedSessionReader {
 	readonly identity: string;
 	/** The UTF-8 text of `length` bytes starting at byte `offset`. Throws on a short read. */
 	read(offset: number, length: number): string;
+	/** Bytes in the object the handle reads now, from its descriptor. Reads none of them. Throws once closed. */
+	size(): number;
 	/** Release the handle. Later reads throw. */
 	close(): void;
 }
@@ -277,6 +279,12 @@ class FilePinnedSessionReader implements PinnedSessionReader {
 			filled += read;
 		}
 		return buffer.toString("utf-8");
+	}
+
+	size(): number {
+		const fd = this.#fd;
+		if (fd === undefined) throw new Error("Pinned session reader is closed");
+		return fs.fstatSync(fd).size;
 	}
 
 	close(): void {

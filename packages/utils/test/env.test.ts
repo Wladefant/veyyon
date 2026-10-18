@@ -8,14 +8,12 @@ import {
 	$pickenv,
 	filterChildShellEnv,
 	filterProcessEnv,
-	getDbBusyTimeoutMs,
-	isInteractiveHost,
 	isTerminalHeadless,
 	isValidEnvName,
 	parseEnvFile,
-	setInteractiveHost,
 	setTerminalHeadless,
 } from "@veyyon/utils/env";
+import { getDbBusyTimeoutMs, isInteractiveHost, setInteractiveHost } from "@veyyon/utils/interactive-host";
 
 const tempDirs: string[] = [];
 

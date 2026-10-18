@@ -1,7 +1,7 @@
 /**
- * WHY: stale version-3 sessions retain oversized raw display values. Resume must
- * migrate the domain payload to version 1 only after storing its complete value.
- * This covers atomic storage refusal and repeated resume, not OS power loss.
+ * WHY: stale version-3 sessions retain oversized raw display values. A writable flush must persist
+ * the complete value before migrating its details to version 1. This covers atomic storage refusal
+ * and repeated resume, not OS power loss.
  */
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
@@ -57,6 +57,7 @@ describe("resuming stale eval display values", () => {
 		const payload = { payload: `begin-${"😀".repeat(25_000)}-end` };
 		await writeStaleSession(file, temp.path(), payload);
 		const manager = await SessionManager.open(file);
+		await manager.flush();
 		const details = loadedDisplay(manager);
 		expect(details.displayVersion).toBe(1);
 		expect(Buffer.byteLength(JSON.stringify(details))).toBeLessThan(10_000);
@@ -72,7 +73,6 @@ describe("resuming stale eval display values", () => {
 		const artifact = await manager.getArtifactPath(value.artifactId);
 		if (!artifact) throw new Error("Migrated display artifact does not resolve");
 		expect(JSON.parse(await fs.readFile(artifact, "utf8"))).toEqual(payload);
-		await manager.flush();
 		expect(Buffer.byteLength(await fs.readFile(file, "utf8"))).toBeLessThan(20_000);
 		const second = await SessionManager.open(file);
 		expect(loadedDisplay(second)).toEqual(details);
@@ -85,7 +85,8 @@ describe("resuming stale eval display values", () => {
 		const file = temp.join("stale.jsonl");
 		const source = await writeStaleSession(file, temp.path(), { payload: "x".repeat(100_000) });
 		await fs.writeFile(sessionFileStem(file), "artifact directory is blocked");
-		await expect(SessionManager.open(file)).rejects.toThrow(/EEXIST|ENOTDIR/);
+		const manager = await SessionManager.open(file);
+		await expect(manager.flush()).rejects.toThrow(/EEXIST|ENOTDIR/);
 		expect(await fs.readFile(file, "utf8")).toBe(source);
 	});
 
@@ -93,7 +94,8 @@ describe("resuming stale eval display values", () => {
 		using temp = TempDir.createSync("eval-display-future-version-");
 		const file = temp.join("future.jsonl");
 		const source = await writeStaleSession(file, temp.path(), { payload: "value" }, 99);
-		await expect(SessionManager.open(file)).rejects.toThrow("Unsupported eval display version: 99");
+		const manager = await SessionManager.open(file);
+		await expect(manager.flush()).rejects.toThrow("Unsupported eval display version: 99");
 		expect(await fs.readFile(file, "utf8")).toBe(source);
 	});
 

@@ -247,6 +247,11 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 		wired: false,
 		reason: "out-of-process crash supervisor; spawns the main veyyon process itself, outside any session budget",
 	},
+	"packages/coding-agent/src/session/native-recovery.ts": {
+		wired: false,
+		reason:
+			"standalone checkpoint export runs a bounded synchronous git comparison before a session exists, so no session budget can adopt it",
+	},
 	"packages/coding-agent/src/config/model-registry.ts": {
 		wired: false,
 		reason: "execSync provider probes at CLI/model discovery time, before the first session registers",
@@ -265,6 +270,10 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 		reason:
 			"the task ledger's Python bridge and lock holder are harness bookkeeping; killing the holder on a budget breach would drop the ledger lock mid-claim",
 	},
+	"packages/coding-agent/src/task/provider-error-reporter.ts": {
+		wired: false,
+		reason: "a best-effort local model-routing notification of terminal provider errors, not agent compute",
+	},
 	"packages/coding-agent/src/tools/core/polysim-main-guard.ts": {
 		wired: false,
 		reason:
@@ -277,6 +286,10 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 	"packages/coding-agent/src/tools/web/browser/tab-supervisor.ts": {
 		wired: false,
 		reason: "Bun Worker threads run inside the harness process; a cgroup holds processes, not threads of one",
+	},
+	"packages/coding-agent/src/tools/web/browser/extension-session.ts": {
+		wired: false,
+		reason: "opens the extension connection page in the operator's Chrome, an operator-owned app rather than agent compute",
 	},
 	"packages/coding-agent/src/eval/js/context-manager.ts": {
 		wired: false,

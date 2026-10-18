@@ -361,22 +361,23 @@ export class ColdEntryPayloads {
 	}
 
 	/**
-	 * {@link cool} for an entry whose `line`, `length` bytes, was just appended at `offset`: the
-	 * pinned object is read there first, and the entry is cooled only when it holds `line`. An
-	 * append of another writer's that landed first, or a write that did not complete, leaves the
-	 * entry in memory, and closes the handle when no cold entry reads through it.
+	 * {@link cool} for an entry whose line, `length` bytes, was just appended at `offset`. The caller
+	 * calls this only after that append's write resolved: the entry cools only when the pinned object
+	 * ends at that line, so an append of another writer's that landed first leaves it in memory. The
+	 * size is the only check, and it cannot tell a peer's line of the same length from this one when
+	 * this write never landed, which is why a rejected write must not reach here. No payload is read back.
 	 */
-	coolWritten(entry: SessionEntry, line: string, offset: number, length: number): boolean {
+	coolWritten(entry: SessionEntry, offset: number, length: number): boolean {
 		const file = this.#current;
 		if (file === undefined || length < MIN_COLD_LINE_BYTES || ColdEntrySlot.layoutOf(entry) !== undefined)
 			return false;
-		let written: string | undefined;
+		let size: number | undefined;
 		try {
-			written = file.reader.read(offset, length);
+			size = file.reader.size();
 		} catch {
-			written = undefined;
+			size = undefined;
 		}
-		if (written === line && this.cool(entry, offset, length)) return true;
+		if (size === offset + length && this.cool(entry, offset, length)) return true;
 		if (file.cold === 0) {
 			this.#current = undefined;
 			file.reader.close();

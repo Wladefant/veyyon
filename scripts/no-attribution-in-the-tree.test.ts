@@ -81,6 +81,7 @@ const EXTENSION_POLICY: Readonly<Record<string, ExtensionDecision>> = {
 	".ts": "scan",
 	".tsx": "scan",
 	".js": "scan",
+	".mjs": "scan",
 	".cjs": "scan",
 	".rs": "scan",
 	".py": "scan",

@@ -364,13 +364,12 @@ export class PrefixCache {
  * Mark the deepest system block that does NOT change between turns, instead of
  * the first one.
  *
- * This is the counterfactual for a production change, not a description of one.
- * The shipped placement anchors `system[0]` (or `[2]` under the Claude Code
- * layout) so that a changing project, assignment or Argot block cannot
- * invalidate the harness shared with agents. That is sound as far as it goes,
- * and it is also as shallow as an anchor can be: when a later system block does
- * change, the deepest prefix that survives covers the harness alone, and every
- * block between it and the change is re-read on every turn.
+ * This is the counterfactual for a placement change, not a description of one. It
+ * marks the block `index` names, plus the trailing block and the last two messages.
+ * `deepAnchor(0)` is the block-0-only placement; `deepAnchor(1)` drops the block-0
+ * marker. Production marks system[0] and the deepest stable block (see
+ * `cacheSystemPrefixBreakpoints`), so a comparison against block 0 alone and one
+ * against block 1 ask different questions, and each file states which it asks.
  *
  * `index` is the block a caller asserts is stable. A simulation can know that; a
  * request cannot, which is exactly what makes this a question to price rather
@@ -716,8 +715,8 @@ export async function runFleet(
  *
  * `scope: "global"` is the Claude Code prompt-caching-scope beta. This repo
  * already sends the beta header on both Anthropic layouts
- * (`packages/ai/src/providers/anthropic.ts:152,160`) and the field is first-class
- * on the wire type (`anthropic-wire.ts:23`), but nothing sets it, which is why
+ * (`packages/ai/src/providers/anthropic.ts:180,188`) and the field is first-class
+ * on the wire type (`anthropic-wire.ts:23-24`), but nothing sets it, which is why
  * this is a counterfactual arm rather than a description of production.
  *
  * Only the shallowest system marker is scoped, and that is a decision the numbers

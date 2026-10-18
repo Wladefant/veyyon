@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { atomicWriteFileSync } from "./atomic-write";
 import { exponentialBackoffDelay } from "./backoff";
-import { getDbBusyTimeoutMs } from "./env";
+import { getDbBusyTimeoutMs } from "./interactive-host";
 import { withFileLockSync } from "./file-lock";
 import { isEnoent } from "./fs-error";
 import * as logger from "./logger";

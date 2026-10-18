@@ -17,7 +17,7 @@ import * as fs from "node:fs";
 import { isIPv4, isIPv6 } from "node:net";
 import * as path from "node:path";
 import { logger } from "@veyyon/utils";
-import { type } from "arktype";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import type { Server, ServerWebSocket } from "bun";
 import {
 	checkCdpMethod,

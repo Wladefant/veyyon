@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Prove external Linux dependencies resolve workspace links to the tested source.
+# Prove external Linux dependencies resolve workspace links to tested source and keep the sandbox independent of host package copies.
+# Run: bash scripts/test-sandbox/bwrap-deps-proof.sh
 set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && /bin/pwd -P)"
 HOST_HOME="$(getent passwd "$(id -u)" | cut -d: -f6)"

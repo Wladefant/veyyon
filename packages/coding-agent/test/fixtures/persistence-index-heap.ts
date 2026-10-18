@@ -65,7 +65,7 @@ function session(count: number): { store: SessionManager; persistence: MessagePe
 		instrumentationLevel: () => "off",
 		pendingContextSnapshot: () => undefined,
 		nonMessageTokens: () => 0,
-		consumeRewoundResult: () => false,
+		hasRewoundResult: () => false,
 		onTtsrInjectionPersisted: () => {},
 	});
 	return { store, persistence };

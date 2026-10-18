@@ -10,7 +10,7 @@ import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
-import { hasReplayUnsafeOutput } from "@veyyon/coding-agent/session/failed-turn";
+import { hasReplayUnsafeToolOutput } from "@veyyon/coding-agent/session/failed-turn";
 import {
 	RetryFallback,
 	type RetryFallbackHost,
@@ -80,32 +80,32 @@ function trackSessionEvents(session: AgentSession): {
 }
 
 describe("turn recovery replay-unsafe output classification", () => {
-	it("treats a failed turn with partial non-whitespace text as replay-unsafe", () => {
+	it("treats a failed turn with partial non-whitespace text as replay-safe when no tool ran", () => {
 		const message = makeMessage([{ type: "text", text: "Here is the first part of my answer" }]);
-		expect(hasReplayUnsafeOutput(message, [])).toBe(true);
+		expect(hasReplayUnsafeToolOutput(message, [])).toBe(false);
 	});
 
 	it("treats a thinking-only partial turn as replay-safe", () => {
 		const message = makeMessage([{ type: "thinking", thinking: "Let me reason about this step by step." }]);
-		expect(hasReplayUnsafeOutput(message, [])).toBe(false);
+		expect(hasReplayUnsafeToolOutput(message, [])).toBe(false);
 	});
 
 	it("treats a whitespace-only text partial as replay-safe", () => {
 		const message = makeMessage([{ type: "text", text: "   \n\n  " }]);
-		expect(hasReplayUnsafeOutput(message, [])).toBe(false);
+		expect(hasReplayUnsafeToolOutput(message, [])).toBe(false);
 	});
 
 	it("keeps an empty-content error replay-safe", () => {
 		const message = makeMessage([]);
-		expect(hasReplayUnsafeOutput(message, [])).toBe(false);
+		expect(hasReplayUnsafeToolOutput(message, [])).toBe(false);
 	});
 
-	it("treats a mix of thinking and text as replay-unsafe (text wins)", () => {
+	it("treats a mix of thinking and text as replay-safe when no tool ran", () => {
 		const message = makeMessage([
 			{ type: "thinking", thinking: "Reasoning before the visible answer." },
 			{ type: "text", text: "The answer is 42." },
 		]);
-		expect(hasReplayUnsafeOutput(message, [])).toBe(true);
+		expect(hasReplayUnsafeToolOutput(message, [])).toBe(false);
 	});
 
 	it("treats thinking plus whitespace-only text as replay-safe", () => {
@@ -113,7 +113,7 @@ describe("turn recovery replay-unsafe output classification", () => {
 			{ type: "thinking", thinking: "Long reasoning." },
 			{ type: "text", text: "  " },
 		]);
-		expect(hasReplayUnsafeOutput(message, [])).toBe(false);
+		expect(hasReplayUnsafeToolOutput(message, [])).toBe(false);
 	});
 
 	it("treats a tool-call with executed result in context as replay-unsafe", () => {
@@ -128,7 +128,7 @@ describe("turn recovery replay-unsafe output classification", () => {
 				timestamp: Date.now(),
 			},
 		];
-		expect(hasReplayUnsafeOutput(message, context)).toBe(true);
+		expect(hasReplayUnsafeToolOutput(message, context)).toBe(true);
 	});
 });
 
@@ -208,22 +208,22 @@ describe("RetryFallback replay safety filtering", () => {
 		expect(fallback.hardErrorEligible(message)).toBe(true);
 	});
 
-	it("excludes a failed turn with partial non-whitespace text from fallback candidates", () => {
+	it("finds a failed turn with partial text fallback-eligible when no tool ran", () => {
 		const fallback = createFallback({
 			fallbackChains: {
 				[`${model.provider}/${model.id}`]: ["openai/gpt-4o-mini"],
 			},
 		});
 		const message = makeMessage([{ type: "text", text: "partial visible output" }]);
-		expect(fallback.hardErrorEligible(message)).toBe(false);
+		expect(fallback.hardErrorEligible(message)).toBe(true);
 	});
 
-	it("excludes a Fireworks Fast failed turn with partial non-whitespace text from base fallback", () => {
+	it("finds a Fireworks Fast failed turn with partial text eligible for base fallback", () => {
 		const fastModel = modelRegistry.find("fireworks", "deepseek-v3-fast");
 		if (!fastModel) throw new Error("Expected deepseek-v3-fast in registry");
 		const fallback = createFallback({ model: fastModel });
 		const message = makeFireworksFastMessage([{ type: "text", text: "Already visible answer" }]);
-		expect(fallback.fireworksFastEligible(message)).toBe(false);
+		expect(fallback.fireworksFastEligible(message)).toBe(true);
 	});
 
 	it("finds a Fireworks Fast failed turn with thinking-only content eligible for base fallback (positive control)", () => {
@@ -281,7 +281,7 @@ describe("AgentSession transient-error recovery replay safety", () => {
 		tempDir.removeSync();
 	});
 
-	it("disallows retry when a failed turn streamed partial visible text on transient error", async () => {
+	it("retries and recovers when a failed turn streamed partial visible text on transient error", async () => {
 		const requestedModels: string[] = [];
 		const mock = createMockModel({
 			responses: [
@@ -291,7 +291,7 @@ describe("AgentSession transient-error recovery replay safety", () => {
 					errorMessage: "rate limit exceeded retry-after-ms=5",
 				},
 				{
-					content: ["should never be requested because turn is replay-unsafe"],
+					content: ["recovered answer on retry"],
 					stopReason: "stop",
 				},
 			],
@@ -323,23 +323,22 @@ describe("AgentSession transient-error recovery replay safety", () => {
 			settings,
 			modelRegistry,
 		});
-		const { retryStartEvents } = trackSessionEvents(session);
+		const { retryStartEvents, retryEndEvents } = trackSessionEvents(session);
 
 		await session.prompt("test prompt");
 		await session.waitForIdle();
 
-		expect(requestedModels).toHaveLength(1);
-		expect(mock.calls).toHaveLength(1);
-		expect(retryStartEvents).toHaveLength(0);
+		expect(requestedModels).toHaveLength(2);
+		expect(mock.calls).toHaveLength(2);
+		expect(retryStartEvents).toHaveLength(1);
+		expect(retryEndEvents).toEqual([expect.objectContaining({ success: true, attempt: 1 })]);
 		expect(session.isRetrying).toBe(false);
 
 		const lastMsg = session.messages.at(-1);
 		expect(lastMsg?.role).toBe("assistant");
 		if (lastMsg?.role === "assistant") {
-			expect(lastMsg.stopReason).toBe("error");
-			expect(lastMsg.content).toEqual([
-				{ type: "text", text: "partial visible output that already reached the user" },
-			]);
+			expect(lastMsg.stopReason).toBe("stop");
+			expect(lastMsg.content).toEqual([{ type: "text", text: "recovered answer on retry" }]);
 		}
 		await session.dispose();
 	});
@@ -632,7 +631,7 @@ describe("AgentSession Fireworks Fast recovery replay safety", () => {
 		tempDir.removeSync();
 	});
 
-	it("disallows Fireworks Fast base-model fallback when the failed turn streamed visible text", async () => {
+	it("degrades Fireworks Fast to base model when the failed turn streamed visible text", async () => {
 		const fastModel = modelRegistry.find("fireworks", "deepseek-v3-fast");
 		if (!fastModel) throw new Error("Expected deepseek-v3-fast in registry");
 		const requestedModels: string[] = [];
@@ -644,7 +643,7 @@ describe("AgentSession Fireworks Fast recovery replay safety", () => {
 					errorMessage: "router unavailable",
 				},
 				{
-					content: ["should not be called on base model"],
+					content: ["recovered on base model"],
 					stopReason: "stop",
 				},
 			],
@@ -676,22 +675,30 @@ describe("AgentSession Fireworks Fast recovery replay safety", () => {
 			settings,
 			modelRegistry,
 		});
-		const { retryStartEvents, fallbackAppliedEvents } = trackSessionEvents(session);
+		const { retryStartEvents, retryEndEvents, fallbackAppliedEvents } = trackSessionEvents(session);
 
 		await session.prompt("test prompt");
 		await session.waitForIdle();
 
-		expect(requestedModels).toEqual(["fireworks/deepseek-v3-fast"]);
-		expect(mock.calls).toHaveLength(1);
-		expect(retryStartEvents).toHaveLength(0);
-		expect(fallbackAppliedEvents).toHaveLength(0);
-		expect(session.model?.id).toBe("deepseek-v3-fast");
+		expect(requestedModels).toEqual(["fireworks/deepseek-v3-fast", "fireworks/deepseek-v3"]);
+		expect(mock.calls).toHaveLength(2);
+		expect(retryStartEvents).toHaveLength(1);
+		expect(fallbackAppliedEvents).toEqual([
+			{
+				type: "retry_fallback_applied",
+				from: "fireworks/deepseek-v3-fast",
+				to: "fireworks/deepseek-v3",
+				role: "fireworks-fast",
+			},
+		]);
+		expect(retryEndEvents).toEqual([expect.objectContaining({ success: true, attempt: 1 })]);
+		expect(session.model?.id).toBe("deepseek-v3");
 
 		const lastMsg = session.messages.at(-1);
 		expect(lastMsg?.role).toBe("assistant");
 		if (lastMsg?.role === "assistant") {
-			expect(lastMsg.stopReason).toBe("error");
-			expect(lastMsg.content).toEqual([{ type: "text", text: "Already visible answer before router died" }]);
+			expect(lastMsg.stopReason).toBe("stop");
+			expect(lastMsg.content).toEqual([{ type: "text", text: "recovered on base model" }]);
 		}
 		await session.dispose();
 	});

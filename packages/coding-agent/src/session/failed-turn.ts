@@ -1,10 +1,11 @@
 /**
  * The shapes of a failed assistant turn the retry ladder reads before it re-sends the turn, switches
- * the model, or continues from the results already in context.
+ * the model, or continues from the results already in context, and how a recovered turn is labelled.
  */
 
 import { type AgentMessage, toolResultNeverRan } from "@veyyon/agent-core";
-import type { AssistantMessage } from "@veyyon/ai";
+import type { AssistantMessage, AssistantRetryRecoveryKind } from "@veyyon/ai";
+import * as AIError from "@veyyon/ai/error";
 import { type CursorExecResolvedCarrier, kCursorExecResolved } from "@veyyon/ai/utils/block-symbols";
 
 /** Whether the turn ended on a content-classifier refusal or sensitivity stop. */
@@ -12,6 +13,36 @@ export function isClassifierRefusal(message: AssistantMessage): boolean {
 	if (message.stopReason !== "error") return false;
 	const stopType = message.stopDetails?.type;
 	return stopType === "refusal" || stopType === "sensitive";
+}
+
+export function retryRecoveryKind(
+	id: number,
+	switchedCredential: boolean,
+	switchedModel: boolean,
+	delayMs: number,
+): AssistantRetryRecoveryKind {
+	if (switchedCredential) return "credential";
+	if (switchedModel) return "model";
+	if (AIError.is(id, AIError.Flag.UsageLimit) && delayMs > 0) return "wait";
+	return "plain";
+}
+
+export function retryRecoveryNote(recovery: AssistantRetryRecoveryKind, rateLimited: boolean): string {
+	const parts: string[] = [];
+	if (rateLimited) {
+		parts.push("rate-limited");
+	} else if (recovery === "plain") {
+		parts.push("error");
+	}
+	if (recovery === "credential") {
+		parts.push("switched account");
+	} else if (recovery === "model") {
+		parts.push("switched model");
+	} else if (recovery === "wait") {
+		parts.push("waited");
+	}
+	parts.push("retried");
+	return parts.join("; ");
 }
 
 /**
@@ -52,23 +83,6 @@ export function hasReplayUnsafeToolOutput(message: AssistantMessage, context: re
 	return false;
 }
 
-/**
- * Retried turns remove the failed assistant message from active context.
- * Thinking-only partials are safe to discard and replay: reasoning models
- * routinely stall after long thinking with no visible output, and duplicated
- * thinking display is materially lower harm than duplicated final text.
- * Whitespace-only text is likewise safe since nothing meaningful reached the
- * user. Completed visible text and retained tool calls are NOT safe: visible
- * text already reached the user, so replaying the turn duplicates it; a
- * completed tool call may already have emitted its tool result after this
- * assistant message, so replaying can duplicate work.
- */
-export function hasReplayUnsafeOutput(message: AssistantMessage, context: readonly AgentMessage[]): boolean {
-	if (message.content.some(block => block.type === "text" && block.text.trim().length > 0)) {
-		return true;
-	}
-	return hasReplayUnsafeToolOutput(message, context);
-}
 /**
  * Whether sending the turn now in context moves the work forward, asked per CALL.
  *

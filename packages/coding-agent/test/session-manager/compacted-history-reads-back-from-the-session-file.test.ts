@@ -166,6 +166,7 @@ class ObservedStorage extends FileSessionStorage {
 				this.reads += 1;
 				return inner.read(offset, length);
 			},
+			size: () => inner.size(),
 			close: () => {
 				open.delete(reader);
 				inner.close();

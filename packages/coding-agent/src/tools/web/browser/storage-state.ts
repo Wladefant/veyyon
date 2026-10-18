@@ -14,7 +14,7 @@
 import * as fs from "node:fs";
 import { atomicWriteFile, errorMessage } from "@veyyon/utils";
 import { bestEffort } from "@veyyon/utils/discarded-fault";
-import { type } from "arktype";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 import type { BrowserContext, Cookie, CookieData, Frame, HTTPRequest } from "puppeteer-core";
 import { ToolError } from "../../core/tool-errors";
 

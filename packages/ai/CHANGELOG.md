@@ -5,6 +5,7 @@
 ### Fixed
 
 - Codex account ranking ignores usage windows of length 0, so one account no longer takes every new session.
+- OpenAI transcription schemas now use the deferred ArkType loader; transcription behavior is unchanged.
 
 ## [1.5.6] - 2026-10-10
 

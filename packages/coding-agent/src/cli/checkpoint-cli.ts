@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-import { CheckpointClient } from "../checkpoints/cloud-checkpoints";
-import { captureNativeCheckpoint, forkNativeCheckpoint, restoreNativeCheckpoint } from "../checkpoints/native-recovery";
+import { CheckpointClient } from "../session/cloud-checkpoints";
+import { captureNativeCheckpoint, forkNativeCheckpoint, restoreNativeCheckpoint } from "../session/native-recovery";
 import { settings } from "../config/settings";
 
 export interface CheckpointCommandArgs {

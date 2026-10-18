@@ -31,9 +31,10 @@ import type {
 	ScheduledAgentContinueOptions,
 } from "../agent-session-types";
 import {
-	hasReplayUnsafeOutput,
 	hasReplayUnsafeToolOutput,
 	isClassifierRefusal,
+	retryRecoveryKind,
+	retryRecoveryNote,
 	toolBatchCanContinue,
 } from "../failed-turn";
 import { THINKING_LOOP_REDIRECT_TYPE } from "../nudges";
@@ -79,40 +80,6 @@ export interface RetryHost {
 	/** Persist an empty error turn the retry ladder is about to drop, once. */
 	persistLifecycleErrorMessage(message: AssistantMessage): Promise<void>;
 	resetSessionStopContinuationState(): void;
-}
-
-function isGenericAbortSentinel(message: AssistantMessage): boolean {
-	return message.errorMessage === "Request was aborted" || message.errorMessage === "Request was aborted.";
-}
-
-function retryRecoveryKind(
-	id: number,
-	switchedCredential: boolean,
-	switchedModel: boolean,
-	delayMs: number,
-): AssistantRetryRecoveryKind {
-	if (switchedCredential) return "credential";
-	if (switchedModel) return "model";
-	if (AIError.is(id, AIError.Flag.UsageLimit) && delayMs > 0) return "wait";
-	return "plain";
-}
-
-function retryRecoveryNote(recovery: AssistantRetryRecoveryKind, rateLimited: boolean): string {
-	const parts: string[] = [];
-	if (rateLimited) {
-		parts.push("rate-limited");
-	} else if (recovery === "plain") {
-		parts.push("error");
-	}
-	if (recovery === "credential") {
-		parts.push("switched account");
-	} else if (recovery === "model") {
-		parts.push("switched model");
-	} else if (recovery === "wait") {
-		parts.push("waited");
-	}
-	parts.push("retried");
-	return parts.join("; ");
 }
 
 export class RetryRuntime {
@@ -219,7 +186,12 @@ export class RetryRuntime {
 
 		const id = this.#classify(message);
 		if (message.stopReason === "aborted" && AIError.is(id, AIError.Flag.Abort)) return true;
-		if (!isGenericAbortSentinel(message)) return false;
+		if (
+			message.errorMessage !== "Request was aborted" &&
+			message.errorMessage !== "Request was aborted."
+		) {
+			return false;
+		}
 
 		message.errorId = AIError.create(AIError.Flag.Abort);
 		return true;
@@ -240,7 +212,7 @@ export class RetryRuntime {
 
 		if (isClassifierRefusal(message)) return true;
 		return AIError.retriable(id, {
-			replayUnsafe: hasReplayUnsafeOutput(message, this.#session.agent.state.messages),
+			replayUnsafe: hasReplayUnsafeToolOutput(message, this.#session.agent.state.messages),
 		});
 	}
 

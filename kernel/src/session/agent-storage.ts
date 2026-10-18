@@ -13,7 +13,7 @@ import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import { AsyncDrain } from "@veyyon/utils/async";
 import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import { getAgentDbPath, getStatsDbPath } from "@veyyon/utils/dirs";
-import { getDbBusyTimeoutMs } from "@veyyon/utils/env";
+import { getDbBusyTimeoutMs } from "@veyyon/utils/interactive-host";
 // Owners, not the `@veyyon/utils` barrel: 5 modules against 74.
 import * as logger from "@veyyon/utils/logger";
 import { openSqliteDatabaseSync, SQLITE_NOW_EPOCH } from "@veyyon/utils/sqlite";

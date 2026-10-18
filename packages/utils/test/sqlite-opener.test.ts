@@ -3,7 +3,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
-import { getDbBusyTimeoutMs } from "../src/env";
+import { getDbBusyTimeoutMs } from "../src/interactive-host";
 import { checkpointWal, isSqliteBusyError, isSqliteCorruptionError, openSqliteDatabase } from "../src/sqlite";
 import { TempDir } from "../src/temp";
 

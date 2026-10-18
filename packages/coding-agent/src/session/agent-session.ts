@@ -82,8 +82,8 @@ import * as AIError from "@veyyon/ai/error";
 import { sessionTelemetryDetail } from "@veyyon/ai/instrumentation";
 import { clearAnthropicFastModeFallback } from "@veyyon/ai/providers/anthropic-session-state";
 import { streamSimple } from "@veyyon/ai/stream";
-import { CheckpointClient } from "../checkpoints/cloud-checkpoints";
-import { SynchronizedSession } from "../checkpoints/synchronized-session";
+import { CheckpointClient } from "./cloud-checkpoints";
+import { SynchronizedSession } from "./synchronized-session";
 // Session initialization registers usage backends without loading the AI package barrel.
 import "@veyyon/ai/usage/defaults";
 import { assistantText } from "@veyyon/ai/utils/message-text";
@@ -1632,7 +1632,7 @@ export class AgentSession {
 			instrumentationLevel: () => this.settings.get("session.instrumentation"),
 			pendingContextSnapshot: () => this.#context.pending,
 			nonMessageTokens: () => computeNonMessageTokens(this),
-			consumeRewoundResult: toolCallId => this.#checkpoint.consumeRewoundResult(toolCallId),
+			hasRewoundResult: toolCallId => this.#checkpoint.hasRewoundResult(toolCallId),
 			onTtsrInjectionPersisted: details => this.#ttsr.onInjectionPersisted(details),
 		});
 		this.#secrets = new SessionSecrets(config, {
