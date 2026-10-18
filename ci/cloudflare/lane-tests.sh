@@ -16,8 +16,17 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
 # Parse command-line shard arguments if provided
+changed_since="${CF_CHANGED_SINCE:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --changed-since)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: --changed-since requires a commit SHA" >&2
+        exit 1
+      fi
+      changed_since="$2"
+      shift 2
+      ;;
     --shard-index)
       CF_SHARD_INDEX="$2"
       shift 2
@@ -42,6 +51,25 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -n "${WORKERS_CI_COMMIT_SHA:-}" ]] && [[ "$(git rev-parse HEAD)" != "$WORKERS_CI_COMMIT_SHA" ]]; then
+  echo "ERROR: checkout does not match WORKERS_CI_COMMIT_SHA" >&2
+  exit 1
+fi
+
+selection_args=()
+if [[ -n "$changed_since" ]]; then
+  selection_args=(--changed-since "$changed_since")
+  if [[ "$changed_since" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    if ! git cat-file -e "${changed_since}^{commit}" >/dev/null 2>&1; then
+      if ! git fetch --no-tags --depth=1 origin "$changed_since"; then
+        echo "CLOUDFLARE_SELECTION_FALLBACK reason=base-fetch-failed base=$changed_since"
+      fi
+    fi
+  else
+    echo "CLOUDFLARE_SELECTION_FALLBACK reason=invalid-base-sha"
+  fi
+fi
 
 echo "=== Cloudflare Workers Builds CI ==="
 echo "Branch: ${WORKERS_CI_BRANCH:-unset}"
@@ -130,7 +158,16 @@ echo "Bun version inside bwrap:"
 bash scripts/test-sandbox/run.sh bun --version
 
 echo "Running pure sharding helper regression suite inside sandbox before native build..."
-bash scripts/test-sandbox/run.sh bun test ./scripts/cf-runtime-sharding.test.ts
+bash scripts/test-sandbox/run.sh bun test \
+  ./scripts/cf-runtime-sharding.test.ts \
+  ./scripts/workspace-layout.test.ts \
+  ./scripts/workspace-dependency-graph.test.ts \
+  ./scripts/affected-workspace-selection-keeps-safe-coverage.test.ts
+
+if [[ "$CF_SHARD_INDEX" == "0" ]]; then
+  echo "Running affected-selection historical PR replay inside sandbox on shard 0..."
+  bash scripts/test-sandbox/run.sh bun ci/cloudflare/replay-affected-selection.ts
+fi
 
 # Rust toolchain probe & dynamic pinned install
 echo "Deriving pinned Rust toolchain from rust-toolchain.toml..."
@@ -269,9 +306,14 @@ stop_outer_sampler() {
 }
 trap stop_outer_sampler EXIT INT TERM
 
+if [[ -n "$changed_since" ]]; then
+  echo "Emitting affected-selection plan JSON in sandbox..."
+  bash scripts/test-sandbox/run.sh bun scripts/ci-test-ts.ts all --dry-run --plan-json "${selection_args[@]}"
+fi
+
 echo "Running test suite in sandbox..."
 test_exit=0
-bash scripts/test-sandbox/run.sh bun scripts/ci-test-ts.ts all || test_exit=$?
+bash scripts/test-sandbox/run.sh bun scripts/ci-test-ts.ts all "${selection_args[@]}" || test_exit=$?
 
 stop_outer_sampler
 trap - EXIT INT TERM
