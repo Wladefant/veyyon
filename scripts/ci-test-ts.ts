@@ -1402,7 +1402,6 @@ async function runTestCommand(testCommand: TestCommand): Promise<ChunkOutcome> {
 		}
 		printChunkDiagnostics(testCommand.label, "BEFORE");
 	}
-SWAP 1258.=1258:
 	// files already extracted above
 
 	const env = { ...buildChildEnv(), ...testCommand.env };
