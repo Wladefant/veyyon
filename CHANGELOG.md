@@ -7,6 +7,7 @@
 ### Breaking Changes
 
 - `releaseFreeHeapPages()` returns a `Promise<boolean>` and walks the C allocator's arenas on libuv's thread pool instead of on the calling thread, where the walk held a 6 GiB session's event loop 250 to 1127 ms per call.
+- `enclosingBlockBoundaries()` returns a `Promise` and parses on libuv's thread pool instead of on the calling thread, where a 3.5 MB TypeScript source held the event loop 153 ms; every call shares one retained parse tree, so a second window of the same source answers in 4 ms on any pool thread.
 - `withTimeoutSignal` is removed; use `withScopedTimeoutSignal(timeoutMs, fn, parent?)` or `scopedTimeoutSignal`, whose timer is cleared when the operation settles.
 
 ### Added
@@ -179,6 +180,8 @@
 
 ### Fixed
 
+- A partial read of a large source file and an edit preview of one no longer freeze the terminal while tree-sitter finds the enclosing block: the parse runs off the event loop, so on a 3.5 MB TypeScript file the longest event-loop stall falls from 153 ms to 1 ms (0.5 MB: 51 ms to under 4 ms).
+- An eval cell whose output arrives as one large frame no longer freezes the terminal while the kernel's output is read: each pipe chunk is scanned once instead of rescanning everything received so far, so a 32 MB frame takes 33 ms instead of 541 ms; a frame over the 64 MiB stream frame ceiling (`VEYYON_STREAM_FRAME_MAX_BYTES`) ends the cell with the reason and restarts the kernel instead of hanging it.
 - An automatic compaction on a resumed session no longer freezes the terminal while it prepares its summary: compacted history is read back as copies in 8 ms slices instead of in one pass that kept every entry in memory, so on a resumed 34,572-entry session the longest event-loop stall before the summary request falls from 405 ms to 9.5 ms and 16,977 compacted entries stay on disk instead of in memory.
 - The first session spend tally after a resume (`/session`, a goal charge) no longer reads every compacted assistant reply back from the session file, so on a resumed 34,575-entry session it takes 3 ms instead of 95 ms.
 - A saved session's eval kernels, in every language, follow it across a directory change instead of starting a new kernel in each directory and keeping every earlier one alive until the session ended, so a session that visited five directories holds one Python kernel (102 MB) instead of five (211 MB) and keeps its variables; a directory with its own Python venv still gets its own kernel.
