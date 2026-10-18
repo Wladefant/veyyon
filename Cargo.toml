@@ -194,6 +194,7 @@ veyyon-diff-kernel = { path = "natives/diff/kernel" }
 veyyon-glob = { path = "natives/search/glob" }
 veyyon-grep-kernel = { path = "natives/search/grep-kernel" }
 veyyon-keys = { path = "natives/text/keys" }
+veyyon-session-skim = { path = "natives/text/session-skim" }
 veyyon-shell = { path = "natives/shell" }
 veyyon-test-scratch = { path = "natives/testing/scratch" }
 veyyon-text = { path = "natives/text/measure" }

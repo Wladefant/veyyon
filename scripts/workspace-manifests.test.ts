@@ -52,6 +52,7 @@ const CRATE_PATHS: ReadonlyMap<string, string> = new Map([
 	["veyyon-iso", "natives/fs/iso"],
 	["veyyon-keys", "natives/text/keys"],
 	["veyyon-natives", "natives/bridge/addon"],
+	["veyyon-session-skim", "natives/text/session-skim"],
 	["veyyon-shell", "natives/shell"],
 	["veyyon-test-scratch", "natives/testing/scratch"],
 	["veyyon-text", "natives/text/measure"],

@@ -1533,6 +1533,45 @@ export interface SearchResult {
 }
 
 /**
+ * The skim of a session file: one JSON value per line, and where the lines it
+ * covers end.
+ */
+export interface SessionSkim {
+  /** One JSON value per line, each followed by a line feed. */
+  lines: Buffer
+  /** The offset just past the line feed of the last line reported. */
+  end: number
+}
+
+/**
+ * What moves out of a session entry, as the load that parses the skim decides
+ * it.
+ */
+export interface SessionSkimRules {
+  /** A line shorter than this many bytes is reported whole. */
+  minLineBytes: number
+  /** A string of at least this many UTF-16 code units moves. */
+  minStringLength: number
+  /** An entry's members that never move. */
+  residentKeys: Array<string>
+  /** A message's members that never move. */
+  messageResidentKeys: Array<string>
+  /** A string starting with one of these moves whatever its length. */
+  largeStringPrefixes: Array<string>
+  /** Entry types reported whole. */
+  wholeEntryTypes: Array<string>
+  /** Lines at the start of the read reported by length alone. */
+  rawLines: number
+  /** The longest line the caller reads; the skim stops before a longer one. */
+  maxLineBytes: number
+  /**
+   * The skim stops at the end of the first block whose lines bring its
+   * output to this many bytes; the caller skims again from `end`.
+   */
+  outputBytes: number
+}
+
+/**
  * Override the cell width reported for Hangul compatibility jamo.
  *
  * Terminals disagree about these, so the host measures one and tells us.
@@ -1621,6 +1660,17 @@ export interface ShellRunResult {
   /** Shell working directory after command completion. */
   workingDir?: string
 }
+
+/**
+ * Skim the session file open at descriptor `fd` from byte `start`, reading it
+ * on the thread pool through a duplicate of `fd`, so the caller may close its
+ * own once the promise settles.
+ *
+ * Each line is reported as the record the load keeps for a cold entry: small
+ * values copied, each value `rules` moves replaced by an empty value of its
+ * kind (see `veyyon_session_skim`).
+ */
+export declare function skimSessionFile(fd: number, start: number, rules: SessionSkimRules): Promise<SessionSkim>
 
 /**
  * Visible slice of a line after ANSI-aware column selection

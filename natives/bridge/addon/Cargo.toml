@@ -40,6 +40,7 @@ veyyon-iso.workspace = true
 veyyon-glob.workspace = true
 veyyon-grep-kernel.workspace = true
 veyyon-keys.workspace = true
+veyyon-session-skim.workspace = true
 veyyon-shell.workspace = true
 veyyon-text.workspace = true
 veyyon-walker.workspace = true

@@ -3719,6 +3719,7 @@
 			"releaseFreeHeapPages",
 			"search",
 			"setHangulCompatJamoWidthOverride",
+			"skimSessionFile",
 			"sliceWithWidth",
 			"summarizeCode",
 			"supportsLanguage",

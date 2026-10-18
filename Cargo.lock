@@ -6091,6 +6091,7 @@ dependencies = [
  "veyyon-grep-kernel",
  "veyyon-iso",
  "veyyon-keys",
+ "veyyon-session-skim",
  "veyyon-shell",
  "veyyon-test-scratch",
  "veyyon-text",
@@ -6099,6 +6100,16 @@ dependencies = [
  "windows-sys 0.61.2",
  "winreg 0.56.0",
  "xxhash-rust",
+]
+
+[[package]]
+name = "veyyon-session-skim"
+version = "1.5.8"
+dependencies = [
+ "memchr",
+ "rayon",
+ "serde_json",
+ "veyyon-test-scratch",
 ]
 
 [[package]]
