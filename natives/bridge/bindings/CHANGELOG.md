@@ -10,6 +10,7 @@
 ### Changed
 
 - `fuzzyFind` reads the scan cache in place and copies a path only while it ranks among the best `maxResults`, so a cached lookup over a 612,000-entry tree answers in 17 ms instead of 1.4 s for an empty query and in 67 ms instead of 104 ms for `zq`, and peaks at 85 MB instead of 380 MB.
+- `fuzzyFind` scores a name without copying it and rejects an ASCII name that lacks the query's characters in one byte scan, so a cached lookup over a 612,000-entry tree answers in 17 ms instead of 68 ms for `zq` and in 31 ms instead of 190 ms for `lib/zq`.
 
 ### Fixed
 

@@ -4,7 +4,7 @@
 //! subsequence scoring. Uses `veyyon-walker` for directory traversal and
 //! caching.
 
-use std::{cmp::Ordering, collections::BinaryHeap, path::Path};
+use std::{borrow::Cow, cmp::Ordering, collections::BinaryHeap, path::Path};
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -104,22 +104,44 @@ pub struct FuzzyFindResult {
 	pub total_matches: u32,
 }
 
-fn normalize_fuzzy_text(value: &str) -> String {
+/// `value` lowercased, borrowed when lowercasing leaves it unchanged.
+///
+/// The scorer lowercases the name of every entry it reads, and most names are
+/// lowercase ASCII already, so allocating a copy of each is most of a
+/// lookup's cost. Any other string goes through `str::to_lowercase`, whose
+/// context rules (a final sigma) a per-character lowercase does not follow.
+fn lowercase(value: &str) -> Cow<'_, str> {
+	if value
+		.bytes()
+		.any(|byte| byte.is_ascii_uppercase() || !byte.is_ascii())
+	{
+		Cow::Owned(value.to_lowercase())
+	} else {
+		Cow::Borrowed(value)
+	}
+}
+
+/// The characters fuzzy scoring compares: `value` without whitespace and path
+/// punctuation, lowercased one character at a time.
+fn normalized_chars(value: &str) -> impl Iterator<Item = char> + '_ {
 	value
 		.chars()
 		.filter(|ch| !ch.is_whitespace() && !matches!(ch, '/' | '\\' | '.' | '_' | '-'))
-		.flat_map(|ch| ch.to_lowercase())
-		.collect()
+		.flat_map(char::to_lowercase)
 }
 
-fn fuzzy_subsequence_score(query_chars: &[char], target: &str) -> u32 {
+fn normalize_fuzzy_text(value: &str) -> String {
+	normalized_chars(value).collect()
+}
+
+fn fuzzy_subsequence_score(query_chars: &[char], target: impl Iterator<Item = char>) -> u32 {
 	if query_chars.is_empty() {
 		return 1;
 	}
 	let mut query_index = 0usize;
 	let mut gaps = 0u32;
 	let mut last_match_index: Option<usize> = None;
-	for (target_index, target_ch) in target.chars().enumerate() {
+	for (target_index, target_ch) in target.enumerate() {
 		if query_index >= query_chars.len() {
 			break;
 		}
@@ -140,11 +162,49 @@ fn fuzzy_subsequence_score(query_chars: &[char], target: &str) -> u32 {
 	40u32.saturating_sub(gap_penalty).max(1)
 }
 
+/// The last component of a walk path, as `Path::file_name` reads it with the
+/// whole path as the fallback.
+///
+/// A walk path is relative with `/` separators, so the component after the
+/// last `/` is the answer unless it is empty, `.` or `..`, which go to `Path`.
+/// A path without a `/` is its own answer either way.
+fn file_name(path: &str) -> &str {
+	match path.rsplit_once('/') {
+		None => path,
+		Some((_, name)) if !matches!(name, "" | "." | "..") => name,
+		_ => Path::new(path)
+			.file_name()
+			.and_then(|name| name.to_str())
+			.unwrap_or(path),
+	}
+}
+
+/// Whether `query_chars` occur in order in the ASCII string `haystack`, which
+/// is lowercased byte by byte.
+///
+/// Normalized query characters are never whitespace or path punctuation, so
+/// the bytes normalization drops cannot match and need no skipping, and a
+/// character outside ASCII cannot occur at all.
+fn holds_ascii_subsequence(haystack: &str, query_chars: &[char]) -> bool {
+	let mut wanted = query_chars.iter();
+	let Some(mut next) = wanted.next() else {
+		return true;
+	};
+	for byte in haystack.bytes() {
+		if char::from(byte.to_ascii_lowercase()) == *next {
+			match wanted.next() {
+				Some(following) => next = following,
+				None => return true,
+			}
+		}
+	}
+	false
+}
+
 fn score_fuzzy_path(
 	path: &str,
 	is_directory: bool,
 	query_lower: &str,
-	normalized_query: &str,
 	query_chars: &[char],
 ) -> u32 {
 	if query_lower.is_empty() {
@@ -156,11 +216,16 @@ fn score_fuzzy_path(
 	// '@plan' surfaces every file whose ancestor directories contain 'plan'.
 	let query_has_slash = query_lower.contains('/');
 
-	let file_name = Path::new(path)
-		.file_name()
-		.and_then(|name| name.to_str())
-		.unwrap_or(path);
-	let lower_file_name = file_name.to_lowercase();
+	let file_name = file_name(path);
+	// Every nonzero score needs the query's characters in order in the name,
+	// or in the path for a query with a `/`, once both are normalized. For
+	// ASCII that is one byte scan, and it rejects most entries before anything
+	// is lowercased or searched.
+	let searched = if query_has_slash { path } else { file_name };
+	if searched.is_ascii() && !holds_ascii_subsequence(searched, query_chars) {
+		return 0;
+	}
+	let lower_file_name = lowercase(file_name);
 
 	let mut score = if lower_file_name == query_lower {
 		120
@@ -169,29 +234,22 @@ fn score_fuzzy_path(
 	} else if lower_file_name.contains(query_lower) {
 		80
 	} else if !query_has_slash {
-		let normalized_file_name = normalize_fuzzy_text(file_name);
-		let file_name_fuzzy = fuzzy_subsequence_score(query_chars, &normalized_file_name);
+		let file_name_fuzzy = fuzzy_subsequence_score(query_chars, normalized_chars(file_name));
 		if file_name_fuzzy > 0 {
 			50 + file_name_fuzzy
 		} else {
 			0
 		}
 	} else {
-		let lower_path = path.to_lowercase();
+		let lower_path = lowercase(path);
 		if lower_path.contains(query_lower) {
 			60
 		} else {
-			let normalized_file_name = normalize_fuzzy_text(file_name);
-			let file_name_fuzzy = fuzzy_subsequence_score(query_chars, &normalized_file_name);
+			let file_name_fuzzy = fuzzy_subsequence_score(query_chars, normalized_chars(file_name));
 			if file_name_fuzzy > 0 {
 				50 + file_name_fuzzy
 			} else {
-				let normalized_path = normalize_fuzzy_text(path);
-				let path_fuzzy = if normalized_path == normalized_query {
-					40
-				} else {
-					fuzzy_subsequence_score(query_chars, &normalized_path)
-				};
+				let path_fuzzy = fuzzy_subsequence_score(query_chars, normalized_chars(path));
 				if path_fuzzy > 0 { 30 + path_fuzzy } else { 0 }
 			}
 		}
@@ -252,11 +310,7 @@ fn fuzzy_find_sync(config: FuzzyFindConfig, ct: task::CancelToken) -> Result<Fuz
 		.empty_recheck(veyyon_walker::EmptyRecheck::Configured)
 		.collect_shared_with_heartbeat(|| ct.heartbeat())
 		.map_err(iofs::map_walker_error)?;
-	let query = FuzzyQuery {
-		lower:      &query_lower,
-		normalized: &normalized_query,
-		chars:      &query_chars,
-	};
+	let query = FuzzyQuery { lower: &query_lower, chars: &query_chars };
 	let (best, total_matches) = best_matches(walk.iter(), &query, max_results, &ct)?;
 	let matches = best
 		.into_iter()
@@ -265,11 +319,10 @@ fn fuzzy_find_sync(config: FuzzyFindConfig, ct: task::CancelToken) -> Result<Fuz
 	Ok(FuzzyFindResult { matches, total_matches: crate::utils::clamp_u32(total_matches) })
 }
 
-/// A query in the three forms [`score_fuzzy_path`] reads.
+/// A query in the two forms [`score_fuzzy_path`] reads.
 struct FuzzyQuery<'a> {
-	lower:      &'a str,
-	normalized: &'a str,
-	chars:      &'a [char],
+	lower: &'a str,
+	chars: &'a [char],
 }
 
 /// The best `max_results` matches among `entries`, best first, and the number
@@ -294,8 +347,7 @@ fn best_matches<'a>(
 		}
 
 		let is_directory = entry.file_type == veyyon_walker::FileType::Dir;
-		let score =
-			score_fuzzy_path(&entry.path, is_directory, query.lower, query.normalized, query.chars);
+		let score = score_fuzzy_path(&entry.path, is_directory, query.lower, query.chars);
 		if score == 0 {
 			continue;
 		}
@@ -338,7 +390,10 @@ mod tests {
 
 	#[cfg(unix)]
 	use super::{FuzzyFindConfig, fuzzy_find_sync};
-	use super::{FuzzyQuery, best_matches, normalize_fuzzy_text, path_depth, score_fuzzy_path};
+	use super::{
+		FuzzyQuery, best_matches, fuzzy_subsequence_score, normalize_fuzzy_text, path_depth,
+		score_fuzzy_path,
+	};
 	use crate::task;
 
 	// WHY: fuzzy find used to score every entry, copy every match and sort them
@@ -391,13 +446,7 @@ mod tests {
 			.filter(|entry| entry.file_type != FileType::Symlink)
 			.filter_map(|entry| {
 				let is_directory = entry.file_type == FileType::Dir;
-				let score = score_fuzzy_path(
-					&entry.path,
-					is_directory,
-					query.lower,
-					query.normalized,
-					query.chars,
-				);
+				let score = score_fuzzy_path(&entry.path, is_directory, query.lower, query.chars);
 				let path = if is_directory {
 					format!("{}/", entry.path)
 				} else {
@@ -424,7 +473,7 @@ mod tests {
 			let lower = raw_query.trim().to_lowercase();
 			let normalized = normalize_fuzzy_text(&lower);
 			let chars: Vec<char> = normalized.chars().collect();
-			let query = FuzzyQuery { lower: &lower, normalized: &normalized, chars: &chars };
+			let query = FuzzyQuery { lower: &lower, chars: &chars };
 			let ranking = fully_sorted(&corpus, &query);
 			assert!(ranking.len() > 2, "{raw_query:?} should match enough entries to cut");
 
@@ -454,7 +503,7 @@ mod tests {
 	#[test]
 	fn an_empty_query_ranks_directories_then_shallow_paths_then_bytes() {
 		let corpus = corpus();
-		let query = FuzzyQuery { lower: "", normalized: "", chars: &[] };
+		let query = FuzzyQuery { lower: "", chars: &[] };
 		let (best, total) = best_matches(corpus.iter(), &query, 100, &task::CancelToken::default())
 			.expect("selection should succeed");
 		let paths: Vec<&str> = best.iter().map(|ranked| ranked.path.as_str()).collect();
@@ -474,6 +523,149 @@ mod tests {
 			"foo-/x.txt",
 		]);
 		assert_eq!(total, 13, "every entry but the symlink matches an empty query");
+	}
+
+	/// The scorer before it borrowed: each name and path lowercased with
+	/// `str::to_lowercase` and normalized into a new `String`, and a path whose
+	/// normalized form equals the query scored 40 by comparison, which the
+	/// subsequence score of an identical string also gives. The borrowing scorer
+	/// must agree with it on every name, including the ones it still copies.
+	fn copying_score(
+		path: &str,
+		is_directory: bool,
+		query_lower: &str,
+		normalized_query: &str,
+		query_chars: &[char],
+	) -> u32 {
+		let normalize = |value: &str| -> String {
+			value
+				.chars()
+				.filter(|ch| !ch.is_whitespace() && !matches!(ch, '/' | '\\' | '.' | '_' | '-'))
+				.flat_map(|ch| ch.to_lowercase())
+				.collect()
+		};
+		if query_lower.is_empty() {
+			return if is_directory { 11 } else { 1 };
+		}
+		let file_name = std::path::Path::new(path)
+			.file_name()
+			.and_then(|name| name.to_str())
+			.unwrap_or(path);
+		let lower_file_name = file_name.to_lowercase();
+		let file_name_fuzzy = || fuzzy_subsequence_score(query_chars, normalize(file_name).chars());
+		let score = if lower_file_name == query_lower {
+			120
+		} else if lower_file_name.starts_with(query_lower) {
+			100
+		} else if lower_file_name.contains(query_lower) {
+			80
+		} else if !query_lower.contains('/') {
+			match file_name_fuzzy() {
+				0 => 0,
+				fuzzy => 50 + fuzzy,
+			}
+		} else if path.to_lowercase().contains(query_lower) {
+			60
+		} else {
+			match file_name_fuzzy() {
+				0 => {
+					let normalized_path = normalize(path);
+					let path_fuzzy = if normalized_path == normalized_query {
+						40
+					} else {
+						fuzzy_subsequence_score(query_chars, normalized_path.chars())
+					};
+					if path_fuzzy > 0 { 30 + path_fuzzy } else { 0 }
+				},
+				fuzzy => 50 + fuzzy,
+			}
+		};
+		if is_directory && score > 0 {
+			score + 10
+		} else {
+			score
+		}
+	}
+
+	// WHY: the scorer lowercased and normalized every entry's name into a new
+	// string, two allocations per entry on every keystroke of an `@` lookup. It
+	// now borrows a name that lowercasing leaves unchanged, normalizes as it
+	// compares, rejects an ASCII name that lacks the query's characters in one
+	// byte scan, and splits the name off at the last `/` instead of parsing a
+	// `Path`. The class closed is any name the borrowing scorer reads
+	// differently from the copying one: uppercase ASCII, non-ASCII whose
+	// lowercase depends on context (a final sigma, a dotted capital I), Unicode
+	// whitespace, a match only a directory in the path holds, a path ending in
+	// `/`, `.` or `..`, and every score class, each pinned below so the
+	// comparison covers it. What it does not catch: a name outside this corpus
+	// whose lowercase differs in a way none of these share.
+	#[test]
+	fn scoring_a_borrowed_name_agrees_with_scoring_a_lowercased_copy() {
+		let classes = [
+			("src/Main.rs", "main.rs", 120),
+			("README.md", "readme", 100),
+			("lib/libzq.so", "zq", 80),
+			("z-q.txt", "zq", 90),
+			("usr/lib/zq.py", "lib/zq", 60),
+			("a/x_z_q", "x/zq", 90),
+			("A/B", "a/b.", 70),
+			("q/r/s/t", "q/s", 65),
+			("ΣΑΣ", "\u{3C3}\u{3B1}\u{3C2}", 120),
+			("dir/ΟΔΟΣ.txt", "\u{3BF}\u{3B4}\u{3BF}\u{3C3}", 100),
+			("\u{130}stanbul", "i\u{307}stanbul", 120),
+			("x\u{0B}y", "xy", 90),
+			("nothing.txt", "zq", 0),
+		];
+		let mut paths: Vec<&str> = classes.iter().map(|(path, ..)| *path).collect();
+		paths.extend([
+			"STRASSE",
+			"straße",
+			"Makefile",
+			"tab\tname",
+			"lib/ZQ/Zq",
+			"ZQ.TXT",
+			"foo bar.txt",
+			"lib/zq/x",
+			"ünïcode/zq.txt",
+			"a/b/.",
+			"a/..",
+			".",
+			"..",
+			"trailing/",
+			"a//b",
+			"",
+		]);
+		let mut queries: Vec<&str> = classes.iter().map(|(_, query, _)| *query).collect();
+		queries.extend([
+			"strasse", "straße", "make", "tabname", "zq/zq", "Σ", "trailing", "b", "foo bar", "..",
+			"a/..",
+		]);
+
+		for raw_query in queries {
+			let lower = raw_query.trim().to_lowercase();
+			let normalized = normalize_fuzzy_text(&lower);
+			let chars: Vec<char> = normalized.chars().collect();
+			for path in &paths {
+				for is_directory in [false, true] {
+					let copied = copying_score(path, is_directory, &lower, &normalized, &chars);
+					let borrowed = score_fuzzy_path(path, is_directory, &lower, &chars);
+					assert_eq!(
+						borrowed, copied,
+						"{path:?} against {raw_query:?}, directory {is_directory}"
+					);
+				}
+			}
+		}
+		for (path, query, score) in classes {
+			let lower = query.to_lowercase();
+			let normalized = normalize_fuzzy_text(&lower);
+			let chars: Vec<char> = normalized.chars().collect();
+			assert_eq!(
+				copying_score(path, false, &lower, &normalized, &chars),
+				score,
+				"{path:?} against {query:?} is the score class it stands for"
+			);
+		}
 	}
 
 	#[cfg(unix)]
