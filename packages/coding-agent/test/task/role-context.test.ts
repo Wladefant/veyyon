@@ -140,8 +140,9 @@ describe("selectRoleContext", () => {
 		const reviewer = getBundledAgent("reviewer");
 		const prompt = reviewer?.systemPrompt ?? "";
 
-		expect(reviewer?.spawns).toEqual(["task", "scout"]);
+		expect(reviewer?.spawns).toEqual(["task", "qa-verifier", "haiku"]);
 		expect(prompt).toContain("A `COMMENTED` review never counts as approval");
+		expect(prompt).toContain("Red, pending, or unstarted required checks block a ready verdict");
 		expect(prompt).toContain("reviewed-sha: <full 40-hex head SHA>");
 		expect(prompt).toContain("Do not re-review sync-only or metadata-only changes after base sync");
 		expect(prompt).toContain("one verdict per reviewed head and actionable findings only");
