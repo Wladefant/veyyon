@@ -360,10 +360,29 @@ run_bucket coding-agent-runtime
 run_bucket coding-agent-native
 run_bucket scripts
 
+if (( shard_index == 1 )); then
+  python_output="$(python3 ci/cloudflare/python-tests.py --suite all 2>&1)" || {
+    python_status=$?
+    printf '%s\n' "$python_output"
+    echo "CLOUDFLARE_PYTHON_TESTS_FAILED status=$python_status" >&2
+    exit "$python_status"
+  }
+  printf '%s\n' "$python_output"
+  if ! awk '
+    /^PYTEST_SUMMARY suite=(rpc|veybot) collected=[1-9][0-9]* pass=[0-9]+ fail=0 skip=[0-9]+$/ {
+      split($2, suite, "=")
+      seen[suite[2]] = 1
+    }
+    END { exit !(seen["rpc"] && seen["veybot"]) }
+  ' <<< "$python_output"; then
+    echo 'CLOUDFLARE_PYTHON_TESTS_FAILED missing positive suite summaries' >&2
+    exit 1
+  fi
+fi
 # Require real test cases and matching test-runner totals; chunk completion is reported separately.
 test_total=$((test_passes + test_failures + test_skips + test_todos))
 skip_allowlist_status=0
-if [[ "$shard_count" == "3" ]]; then
+if [[ "$shard_count" == "3" || "$shard_count" == "12" ]]; then
   if python3 ci/cloudflare/check-test-skips.py check "$test_report_root" ci/cloudflare/expected-skips.txt --shard "$shard_spec" --expected-total "$junit_test_skips"; then
     echo 'CLOUDFLARE_SKIP_ALLOWLIST=passed'
   else

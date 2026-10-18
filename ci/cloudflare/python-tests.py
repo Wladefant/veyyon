@@ -88,6 +88,7 @@ def bootstrap_venv(venv_dir: Path) -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runner-tests", action="store_true", help="run this helper's real-pytest regression suite")
+    parser.add_argument("--suite", choices=("all", *SUITES), default="all")
     args = parser.parse_args()
     try:
         suites = selected_suites(args.suite)

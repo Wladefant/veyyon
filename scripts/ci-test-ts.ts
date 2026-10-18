@@ -994,6 +994,42 @@ function isScrubbedEnvVar(key: string): boolean {
 	return /_(API_KEY|OAUTH_TOKEN)$/.test(key) || key.includes("BEARER_TOKEN");
 }
 
+export function childJUnitCountMismatch(output: string, junitPath: string): string | undefined {
+	const runPattern = /^Ran (\d+) tests? across (\d+) files?\./gm;
+	let summary: RegExpMatchArray | undefined;
+	for (const match of output.matchAll(runPattern)) summary = match;
+	if (!summary || summary.index === undefined) return "missing Bun test summary";
+	const counts = { pass: 0, fail: 0, skip: 0, todo: 0 };
+	for (const match of output.slice(0, summary.index).matchAll(/^\s*(\d+) (pass|fail|skip|todo)\s*$/gm)) {
+		counts[match[2] as keyof typeof counts] = Number(match[1]);
+	}
+	const reported = Number(summary[1]);
+	if (reported !== counts.pass + counts.fail + counts.skip + counts.todo) {
+		return `Bun summary cases=${reported} but statuses=${counts.pass + counts.fail + counts.skip + counts.todo}`;
+	}
+	let xml: string;
+	try {
+		xml = nodeFs.readFileSync(junitPath, "utf8");
+	} catch {
+		return `missing JUnit report ${junitPath}`;
+	}
+	let cases = 0;
+	let failures = 0;
+	let skips = 0;
+	for (const match of xml.matchAll(/<testcase\b[^>]*>([\s\S]*?)<\/testcase\s*>|<testcase\b[^>]*\/>/g)) {
+		cases += 1;
+		const body = match[1] ?? "";
+		if (/<(?:failure|error)\b/.test(body)) failures += 1;
+		if (/<skipped\b/.test(body)) skips += 1;
+	}
+	const junitPasses = cases - failures - skips;
+	if (cases !== reported || failures !== counts.fail || skips !== counts.skip || junitPasses !== counts.pass) {
+		return `Bun pass=${counts.pass} fail=${counts.fail} skip=${counts.skip} tests=${reported}; ` +
+			`JUnit pass=${junitPasses} fail=${failures} skip=${skips} tests=${cases}`;
+	}
+	return undefined;
+}
+
 function commandWithJUnitReport(testCommand: TestCommand): string[] {
 	if (!junitReportDir || testCommand.command[1] !== "test") {
 		return testCommand.command;
@@ -1624,20 +1660,31 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 				seconds: (performance.now() - startedAt) / 1000,
 				output: `${stdout.text}${stderr.text}${timedOut ? `\n[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (VEYYON_TEST_CHUNK_TIMEOUT to change)\n` : ""}`,
 			};
+			const junitMismatch = junitReportDir && testCommand.command[1] === "test"
+				? childJUnitCountMismatch(
+					outcome.output,
+					path.join(
+						junitReportDir,
+						`${testCommand.cwd === "." ? "root" : testCommand.cwd.replaceAll("/", "__")}--${testCommand.label.replaceAll(/[^A-Za-z0-9_.-]/g, "_")}.xml`,
+					),
+				)
+				: undefined;
+			if (junitMismatch) outcome.output += `\n[JUnit validation] ${junitMismatch}\n`;
+			if (junitMismatch && outcome.exitCode === 0) outcome.exitCode = 1;
 			addBunTestTotals(testTotals, outcome.output);
 			if (quiet) {
 				let msg = `${formatProgressLine(outcome)}\n`;
-				if (exitCode !== 0 || timedOut) {
+				if (outcome.exitCode !== 0 || timedOut) {
 					msg += `${formatChunkFailure(outcome, true)}\n`;
 				}
 				process.stdout.write(msg);
 			} else {
-				const status = exitCode === 0 ? "ok" : `FAILED exit ${exitCode}`;
+				const status = outcome.exitCode === 0 ? "ok" : `FAILED exit ${outcome.exitCode}`;
 				process.stdout.write(
 					`\n==> [${completed}/${commands.length}] ${testCommand.label} (${status}, ${outcome.seconds.toFixed(1)}s)\n$ ${renderedCommand}\n${outcome.output}`,
 				);
 			}
-			if (exitCode !== 0 || timedOut) {
+			if (outcome.exitCode !== 0 || timedOut) {
 				failures.push(outcome);
 			}
 		}

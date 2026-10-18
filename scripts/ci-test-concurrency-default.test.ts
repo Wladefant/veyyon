@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { childJUnitCountMismatch } from "./ci-test-ts";
 import { afterEach, describe, expect, it } from "bun:test";
 import {
 	addBunTestTotals,
@@ -197,4 +201,28 @@ describe("Cloudflare test command sharding", () => {
 		}
 	});
 
+});
+describe("Cloudflare child JUnit totals", () => {
+	it("accepts matching Bun and JUnit case totals", () => {
+		const dir = mkdtempSync(join(tmpdir(), "veyyon-junit-counts-"));
+		try {
+			const report = join(dir, "child.xml");
+			writeFileSync(report, '<testsuite><testcase name="pass"/><testcase name="skip"><skipped/></testcase></testsuite>');
+			expect(childJUnitCountMismatch("1 pass\n1 skip\nRan 2 tests across 1 file.", report)).toBeUndefined();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects missing summaries and JUnit totals that disagree", () => {
+		const dir = mkdtempSync(join(tmpdir(), "veyyon-junit-counts-"));
+		try {
+			const report = join(dir, "child.xml");
+			writeFileSync(report, '<testsuite><testcase name="pass"/></testsuite>');
+			expect(childJUnitCountMismatch("no summary", report)).toContain("missing Bun test summary");
+			expect(childJUnitCountMismatch("2 pass\nRan 2 tests across 1 file.", report)).toContain("JUnit");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });
