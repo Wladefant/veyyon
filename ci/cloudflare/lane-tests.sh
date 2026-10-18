@@ -129,8 +129,10 @@ phase_seconds=$SECONDS
 setup_seconds=$((setup_seconds + phase_seconds))
 echo "CLOUDFLARE_SETUP_PHASE name=rust-zig-toolchain seconds=$phase_seconds"
 SECONDS=0
+# The trusted native cache holds no artifact for this natives revision yet, and its reader
+# treats a cold miss as fatal, so build the variant here instead of reading the cache.
 CARGO_BUILD_JOBS=4 CROSS_TARGET=x86_64-unknown-linux-gnu.2.17 TARGET_PLATFORM=linux TARGET_ARCH=x64 \
-  TARGET_VARIANTS="$native_variant" bun ci/cloudflare/native-cache.mjs
+  TARGET_VARIANTS="$native_variant" bun run ci:build:native
 unset VEYYON_NATIVE_CACHE_CREDENTIALS VEYYON_NATIVE_CACHE_WRITE_CREDENTIALS
 phase_seconds=$SECONDS
 setup_seconds=$((setup_seconds + phase_seconds))
