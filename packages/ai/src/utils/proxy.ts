@@ -132,6 +132,15 @@ export function getProxyForProvider(provider: string): string | undefined {
 	proxyCache.set(provider, value);
 	return value;
 }
+/** Resolves provider and standard proxy variables for a target URL, honoring `NO_PROXY`. */
+export function getProxyForUrl(provider: string, url: URL): string | undefined {
+	if (shouldBypassProxy(url)) return undefined;
+	const protocolProxy =
+		url.protocol === "https:" || url.protocol === "wss:"
+			? Bun.env.HTTPS_PROXY || Bun.env.https_proxy
+			: Bun.env.HTTP_PROXY || Bun.env.http_proxy;
+	return getProxyForProvider(provider) || protocolProxy || Bun.env.ALL_PROXY || Bun.env.all_proxy || undefined;
+}
 
 /**
  * Wraps a fetch implementation to inject proxy options for non-local hosts.
