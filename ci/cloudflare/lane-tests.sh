@@ -305,6 +305,23 @@ console.log("GUEST PROBE OK: root write refused with EACCES");'
 echo "Guest permission probe inside bwrap..."
 bash scripts/test-sandbox/run.sh /bin/sh -c "$guest_probe_sh" _ "$guest_probe_js" || { echo "FATAL: guest permission probe failed" >&2; exit 1; }
 
+py_probe_sh='set +e
+p="$(command -v python3 2>/dev/null)"
+echo "PYDIAG command_v=${p:-missing}"
+if [ -z "$p" ]; then exit 0; fi
+real="$(readlink -f -- "$p")"
+echo "PYDIAG realpath=$real"
+echo "PYDIAG elf_magic=$(od -An -tx1 -N4 -- "$real" | tr -d " ")"
+echo "PYDIAG version=$("$p" -VV 2>&1 | head -n1)"
+ldd "$real" 2>&1 | sed "s/^/PYDIAG ldd /"
+t0=$(date +%s%N); timeout 60 "$p" -c "pass"; t1=$(date +%s%N)
+echo "PYDIAG startup_ms=$(( (t1 - t0) / 1000000 ))"
+t2=$(date +%s%N); PYTHONPATH=tests/evals/agents timeout 60 "$p" -c "import json, sys, pathlib, common.arm_attachments"; rc=$?; t3=$(date +%s%N)
+echo "PYDIAG import_ms=$(( (t3 - t2) / 1000000 )) import_rc=$rc"
+exit 0'
+echo "Guest Python diagnostics (outside any timed test; never gates the lane)..."
+bash scripts/test-sandbox/run.sh /bin/sh -c "$py_probe_sh" _ || echo "PYDIAG run_failed"
+
 echo "Running pure sharding helper regression suite inside sandbox before native build..."
 bash scripts/test-sandbox/run.sh bun test ./scripts/cf-runtime-sharding.test.ts
 
