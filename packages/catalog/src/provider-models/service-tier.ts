@@ -12,13 +12,14 @@ import { isOpenAIModelId } from "../identity/family";
 import type { Api, Model } from "../types";
 import {
 	OPENAI_WIRE_TIERS,
+	isServiceTier,
 	providerWireCapabilities,
 	type ServiceTier,
 	type ServiceTierByFamily,
 	type ServiceTierFamily,
 } from "./wire-capabilities";
 
-type ServiceTierModel = Pick<Model, "provider" | "api" | "id">;
+type ServiceTierModel = Pick<Model, "provider" | "api" | "id"> & Partial<Pick<Model, "serviceTiers">>;
 
 function isOpenAIServiceTierApi(api: Api | undefined): boolean {
 	return api === "openai-completions" || api === "openai-responses" || api === "openai-codex-responses";
@@ -77,23 +78,71 @@ export function resolveModelServiceTier(
 	return family ? tiers[family] : undefined;
 }
 
+/** True when `ultrafast` is accepted by this provider and model's discovery metadata. */
+function canSendUltrafastServiceTier(
+	target: string | ServiceTierModel | undefined,
+	provider: string | undefined,
+): boolean {
+	if (typeof target === "string") return providerWireCapabilities(provider)?.serviceTier?.family === "openai";
+	if (!target) return false;
+	if (target.api === "openai-codex-responses") return target.serviceTiers?.includes("ultrafast") === true;
+	return target.provider === "openai";
+}
+
 /**
  * True when the tier should be sent on the wire as the provider's service-tier
- * request field: the provider declares it, or the request reaches an
- * OpenAI-compatible relay serving an OpenAI model id.
+ * request field. Codex models with a non-empty discovered tier list send only
+ * advertised tiers; `ultrafast` requires discovery for Codex and is accepted
+ * directly by OpenAI.
  */
 export function shouldSendServiceTier(
 	serviceTier: ServiceTier | null | undefined,
 	target: string | ServiceTierModel | undefined,
 ): boolean {
-	if (!serviceTier) return false;
+	if (!serviceTier || serviceTier === "auto") return false;
 	const provider = typeof target === "string" ? target : target?.provider;
+	if (
+		typeof target !== "string" &&
+		target?.api === "openai-codex-responses" &&
+		serviceTier !== "flex" &&
+		serviceTier !== "default"
+	) {
+		const advertised = target.serviceTiers;
+		if (serviceTier === "ultrafast") return advertised?.includes(serviceTier) === true;
+		if (advertised !== undefined && advertised.length > 0) return advertised.includes(serviceTier);
+	}
+	if (serviceTier === "ultrafast") return canSendUltrafastServiceTier(target, provider);
 	const capability = providerWireCapabilities(provider)?.serviceTier;
 	if (capability) return capability.wireTiers.includes(serviceTier);
 	if (typeof target !== "string" && target && isOpenAIRelayModel(target)) {
 		return (OPENAI_WIRE_TIERS as readonly ServiceTier[]).includes(serviceTier);
 	}
 	return false;
+}
+
+/**
+ * Premium-request weight contributed by a provider-reported or requested tier.
+ * `served: true` records a tier the provider actually served, even when model
+ * discovery metadata is unavailable for a historical request.
+ */
+export function getPremiumServiceTierRequests(
+	serviceTier: ServiceTier | null | undefined,
+	model: ServiceTierModel,
+	options?: { served?: boolean },
+): number {
+	if (serviceTier === "ultrafast") {
+		const capability = providerWireCapabilities(model.provider)?.serviceTier;
+		if (capability?.family !== "openai" || !capability.premiumPriority) return 0;
+		return options?.served === true || shouldSendServiceTier(serviceTier, model) ? 1 : 0;
+	}
+	if (serviceTier !== "priority") return 0;
+	if (options?.served !== true) return getPriorityPremiumRequests(serviceTier, model);
+	return providerWireCapabilities(model.provider)?.serviceTier?.premiumPriority ? 1 : 0;
+}
+
+/** Parse a provider-reported service-tier echo, or return `undefined` if unknown. */
+export function parseServiceTier(value: unknown): ServiceTier | undefined {
+	return isServiceTier(value) ? value : undefined;
 }
 
 /**

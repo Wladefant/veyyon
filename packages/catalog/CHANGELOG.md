@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added premium service tier request calculation and validation helpers for provider priority routing ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added ClinePass model descriptors, account-scoped catalog union, and credential-scoped model cache resolution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added model identity metrics indexing, scheduled dated pricing support, and model tokenizer resolution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - `@veyyon/catalog/hosts` exports `resolveVertexEndpointHost(location)`, the Vertex AI API host for `global`, the `eu`/`us` multi-regions, or a single region.

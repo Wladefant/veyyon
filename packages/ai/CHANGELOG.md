@@ -4,6 +4,7 @@
 
 ### Added
 
+- Re-exported service tier request resolution and parsing helpers from the catalog provider model definitions ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Provider requests compress eligible bodies with gzip or Zstandard above 1 KiB and fall back per host when an encoding is rejected.
 - Added Anthropic API request, stream and response handling for provider integration.
 - Added Amazon Bedrock request signing, credential resolution and streaming provider support.
