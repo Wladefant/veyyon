@@ -22,8 +22,8 @@ resolve_host_elf() {
 	return 0
 }
 BWRAP_HOST_BUN_PATH="$(resolve_host_elf "$(bun -e 'process.stdout.write(process.execPath)' 2>/dev/null || true)")"
-BWRAP_HOST_NODE_PATH="$(resolve_host_elf "$(command -v node 2>/dev/null || true)")"
-BWRAP_HOST_GH_PATH="$(resolve_host_elf "${VEYYON_BWRAP_GH:-}")"
+BWRAP_HOST_NODE_PATH="$(resolve_host_elf "$(node -p process.execPath 2>/dev/null || true)")"
+BWRAP_HOST_GH_PATH="$(resolve_host_elf "${VEYYON_BWRAP_GH:-$(command -v gh 2>/dev/null || true)}")"
 
 probe_bwrap() {
 	command -v bwrap >/dev/null 2>&1 || { skip bwrap "bubblewrap not on PATH"; return 1; }
@@ -55,14 +55,14 @@ run_bwrap() {
 		log "Node executable resolved to ${BWRAP_HOST_NODE_PATH}"
 		runtime_mounts+=(--ro-bind "$BWRAP_HOST_NODE_PATH" /sandbox/runtime/bun/node)
 	else
-		log "Node runtime resolution failed: expected an ELF binary from command -v node"
+		log "Node runtime resolution failed: expected an ELF binary from node process.execPath"
 		return "${RUNG_SETUP_FAILED:-126}"
 	fi
 	if [ -n "${BWRAP_HOST_GH_PATH:-}" ] && [ -x "$BWRAP_HOST_GH_PATH" ]; then
 		log "gh executable resolved to ${BWRAP_HOST_GH_PATH}"
 		runtime_mounts+=(--ro-bind "$BWRAP_HOST_GH_PATH" /sandbox/runtime/bun/gh)
 	else
-		log "gh runtime resolution failed: VEYYON_BWRAP_GH must name an ELF binary"
+		log "gh runtime resolution failed: gh must name an ELF binary"
 		return "${RUNG_SETUP_FAILED:-126}"
 	fi
 
