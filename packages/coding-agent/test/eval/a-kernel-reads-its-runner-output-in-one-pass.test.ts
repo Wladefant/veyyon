@@ -11,13 +11,17 @@ import type { Subprocess } from "bun";
  * reader now splits lines with `readLines`, which scans each piece once.
  *
  * The class this closes is "runner output read in time that grows faster than its size", pinned by
- * the ratio of the time a frame four times as large takes (one pass: about 4; rescanning: about 16),
- * together with what a one-pass splitter must still get right: a frame split anywhere, including
- * inside a multibyte character, several frames in one piece, and a last frame with no newline. A
- * frame over the stream frame ceiling cannot be read at all; the execution waiting on it ends with
- * the reason instead of waiting forever, and the kernel stops, since no later frame can reach it.
+ * what reading a 16 MiB frame costs against one pass over its bytes, a decode and a parse of each
+ * line, which any reader has to do. Measured: the one-pass reader takes 1.8-2.5 times that pass,
+ * the rescanning one 117-160 times. Both are timed in the same process, alternately, so a slow
+ * host slows both; a ratio of the run times of two frame sizes leaves a gap of 10 against 40
+ * between the readers, and a CI runner measured 22.7 for a linear reader. The test also pins what a
+ * one-pass splitter must still get right: a frame split anywhere, including inside a multibyte
+ * character, several frames in one piece, and a last frame with no newline. A frame over the stream
+ * frame ceiling cannot be read at all; the execution waiting on it ends with the reason instead of
+ * waiting forever, and the kernel stops, since no later frame can reach it.
  *
- * What it does not catch: a slowdown that scales linearly, and the time `JSON.parse` takes on one
+ * What it does not catch: a slowdown within twenty passes, and the time `JSON.parse` takes on one
  * large frame, which still runs on the event loop.
  */
 
@@ -79,30 +83,33 @@ afterEach(() => {
 });
 
 describe("a kernel reads its runner output in one pass", () => {
-	it("reads a frame four times as large in about four times the time", async () => {
-		const timeFor = async (megabytes: number): Promise<number> => {
-			let fastest = Number.POSITIVE_INFINITY;
-			for (let attempt = 0; attempt < 3; attempt++) {
-				const id = `scale-${megabytes}-${attempt}`;
-				const data = "x".repeat(megabytes * 1024 * 1024);
-				const start = performance.now();
-				const { result, chunks } = await run(
-					id,
-					frames => cut(frames, 64 * 1024),
-					`${stdoutFrame(id, data)}\n${doneFrame(id)}\n`,
-				);
-				fastest = Math.min(fastest, performance.now() - start);
-				expect(result.status).toBe("ok");
-				expect(chunks.join("").length).toBe(data.length);
-			}
-			return fastest;
+	it("reads a 16 MiB frame in a small multiple of one pass over its bytes", async () => {
+		const id = "scale";
+		const data = "x".repeat(16 * 1024 * 1024);
+		const bytes = encoder.encode(`${stdoutFrame(id, data)}\n${doneFrame(id)}\n`);
+		const pieces = cut(bytes, 16 * 1024);
+		/** Decode the bytes and parse each line: the least any reader of them does. */
+		const onePass = (): number => {
+			let parsed = 0;
+			for (const line of new TextDecoder().decode(bytes).split("\n")) if (line) parsed += JSON.parse(line).id.length;
+			return parsed;
 		};
 
-		const small = await timeFor(8);
-		const large = await timeFor(32);
+		let reader = Number.POSITIVE_INFINITY;
+		let pass = Number.POSITIVE_INFINITY;
+		for (let attempt = 0; attempt < 5; attempt++) {
+			let start = performance.now();
+			expect(onePass()).toBe(2 * id.length);
+			pass = Math.min(pass, performance.now() - start);
+			start = performance.now();
+			const { result, chunks } = await run(id, () => pieces, "");
+			reader = Math.min(reader, performance.now() - start);
+			expect(result.status).toBe("ok");
+			expect(chunks.join("").length).toBe(data.length);
+		}
 
-		expect(large / small).toBeLessThan(8);
-	}, 30_000);
+		expect(reader / pass).toBeLessThan(20);
+	}, 60_000);
 
 	it("delivers frames split anywhere, packed together, or left without a final newline", async () => {
 		const id = "split";
