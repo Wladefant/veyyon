@@ -154,3 +154,18 @@ export function orderUsageRankedCandidates<T extends AuthCredential>(
 		allowanceSpent: candidate.allowanceSpent,
 	}));
 }
+
+/**
+ * Promotes the chosen account to the head of an ordered candidate list.
+ *
+ * If `chosenIndex` is undefined or does not appear in `candidates`, the list is
+ * returned unchanged. If present, the matching element is moved to position 0
+ * without disturbing the relative order of the remaining candidates.
+ */
+export function leadWithChosenAccount<C extends { index: number }>(ordered: C[], chosenIndex: number | undefined): C[] {
+	if (chosenIndex === undefined) return ordered;
+	const pos = ordered.findIndex(c => c.index === chosenIndex);
+	if (pos <= 0) return ordered;
+	const [chosen] = ordered.splice(pos, 1);
+	return [chosen!, ...ordered];
+}

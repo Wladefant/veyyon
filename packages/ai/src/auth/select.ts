@@ -17,6 +17,7 @@ import {
 import type { AccountPolicies } from "./policy";
 import { authCredentialEquals, type CredentialPool } from "./pool";
 import {
+	leadWithChosenAccount,
 	orderUsageRankedCandidates,
 	planPriority,
 	type ApiKeyCandidate,
@@ -131,6 +132,7 @@ export class CredentialSelector {
 	 */
 	#getCredentialOrder(providerKey: string, sessionId: string | undefined, total: number): number[] {
 		if (total <= 1) return [0];
+		if (!this.#deps.affinity.isLoadBalancingEnabled()) return Array.from({ length: total }, (_, i) => i);
 		const start = sessionId
 			? this.#getHashedIndex(sessionId, total)
 			: this.#getNextRoundRobinIndex(providerKey, total);
@@ -139,6 +141,36 @@ export class CredentialSelector {
 			order.push((start + i) % total);
 		}
 		return order;
+	}
+
+	#orderByBlockAvailability<C extends { index: number }>(
+		provider: string,
+		providerKey: string,
+		candidates: readonly (C | undefined)[],
+		blockScope?: string,
+	): C[] {
+		const present = candidates.filter((candidate): candidate is C => candidate !== undefined);
+		if (!this.#deps.affinity.isLoadBalancingEnabled()) {
+			const stored = this.#deps.pool.entries(provider);
+			const refused = (candidate: C): boolean => {
+				const id = stored[candidate.index]?.id;
+				return id !== undefined && this.#deps.affinity.isAuthDead(id);
+			};
+			return [...present.filter(candidate => !refused(candidate)), ...present.filter(refused)];
+		}
+		return present
+			.map((candidate, position) => ({
+				candidate,
+				position,
+				blockedUntil:
+					this.#deps.blocks.blockedUntil(provider, providerKey, candidate.index, blockScope) ?? 0,
+			}))
+			.sort((left, right) =>
+				left.blockedUntil === right.blockedUntil
+					? left.position - right.position
+					: left.blockedUntil - right.blockedUntil,
+			)
+			.map(entry => entry.candidate);
 	}
 
 	/**
@@ -178,16 +210,15 @@ export class CredentialSelector {
 		const order = sessionId
 			? this.#getCredentialOrder(providerKey, sessionId, credentials.length)
 			: credentials.map((_, index) => index);
-		const fallback = credentials[order[0]];
-
-		for (const idx of order) {
-			const candidate = credentials[idx];
-			if (!this.#deps.blocks.isBlocked(provider, providerKey, candidate.index)) {
-				return candidate;
-			}
-		}
-
-		return fallback;
+		const ordered = leadWithChosenAccount(
+			this.#orderByBlockAvailability(
+				provider,
+				providerKey,
+				order.map(idx => credentials[idx]),
+			),
+			this.#deps.affinity.homeIndex(provider, sessionId, type),
+		);
+		return ordered[0] ?? credentials[order[0]];
 	}
 
 	async #rankApiKeySelections(args: {
@@ -318,14 +349,17 @@ export class CredentialSelector {
 		const order = this.#getCredentialOrder(providerKey, sessionId, credentials.length);
 		const fallback = credentials[order[0]];
 		const strategy = this.#deps.strategies(provider);
-		if (!strategy) {
-			for (const idx of order) {
-				const candidate = credentials[idx];
-				if (!this.#deps.blocks.isBlocked(provider, providerKey, candidate.index)) {
-					return candidate;
-				}
-			}
-			return fallback;
+		const homeIndex = this.#deps.affinity.homeIndex(provider, sessionId, "api_key");
+		const home = homeIndex === undefined ? undefined : credentials.find(entry => entry.index === homeIndex);
+		if (home) return home;
+
+		if (!strategy || !this.#deps.affinity.isLoadBalancingEnabled()) {
+			const ordered = this.#orderByBlockAvailability(
+				provider,
+				providerKey,
+				order.map(idx => credentials[idx]),
+			);
+			return ordered[0] ?? fallback;
 		}
 
 		const rankingContext: CredentialRankingContext = {
@@ -599,7 +633,9 @@ export class CredentialSelector {
 			sessionPreferredIndex !== undefined &&
 			sessionPreferredCanRefreshOrUse &&
 			!this.#deps.blocks.isBlocked(provider, providerKey, sessionPreferredIndex, blockScopes);
-		const sessionPinIsExplicit = sessionCredential?.type === "oauth" && sessionCredential.explicit === true;
+		const chosenIndex = this.#deps.affinity.explicitChoiceIndex(provider, sessionId, "oauth");
+		const movementAllowed = this.#deps.affinity.isLoadBalancingEnabled();
+		const sessionPinIsExplicit = chosenIndex !== undefined || (sessionCredential?.type === "oauth" && sessionCredential.explicit === true);
 		const rankDespitePin =
 			!sessionPreferredIsAvailable ||
 			!sessionPreferredIsWarm ||
@@ -660,18 +696,20 @@ export class CredentialSelector {
 					blockScope,
 					blockScopes,
 				})
-			: policyOrder
-					.map(idx => credentials[idx])
-					.filter((selection): selection is { credential: OAuthCredential; index: number } => Boolean(selection))
-					.map(selection =>
-						selection.index === sessionPreferredIndex && sessionPreferredUsage !== undefined
-							? { selection, usage: sessionPreferredUsage, usageChecked: true }
-							: { selection, usage: null, usageChecked: false },
-					);
+			: this.#orderByBlockAvailability(
+					provider,
+					providerKey,
+					policyOrder.map(idx => credentials[idx]),
+					blockScope,
+				).map(selection =>
+					selection.index === sessionPreferredIndex && sessionPreferredUsage !== undefined
+						? { selection, usage: sessionPreferredUsage, usageChecked: true }
+						: { selection, usage: null, usageChecked: false },
+				);
 		// Keep the candidate object: preflight may rebind its positional index
 		// after a peer changes the credential pool.
 		const explicitPin = sessionPinIsExplicit
-			? candidates.find(candidate => candidate.selection.index === sessionPreferredIndex)
+			? candidates.find(candidate => candidate.selection.index === (chosenIndex ?? sessionPreferredIndex))
 			: undefined;
 		const preflightFailures = new Set<OAuthCandidate>();
 		// The last retryable refresh error (network, timeout, 5xx) that removed a candidate.
@@ -890,6 +928,35 @@ export class CredentialSelector {
 				candidates.unshift(preferred);
 			}
 		}
+		const leadIndex = movementAllowed
+			? (chosenIndex ?? sessionPreferredIndex)
+			: (this.#deps.affinity.homeIndex(provider, sessionId, "oauth") ??
+				credentials.find(entry => {
+					const id = this.#deps.pool.entries(provider)[entry.index]?.id;
+					return id === undefined || !this.#deps.affinity.isAuthDead(id);
+				})?.index);
+
+		if (leadIndex !== undefined && (!pinEvictedAfterPreflight || leadIndex !== sessionPreferredIndex)) {
+			const leadCandidate = candidates.findIndex(
+				candidate =>
+					candidate.selection.index === leadIndex &&
+					(candidate.selection.index === chosenIndex ||
+						!movementAllowed ||
+						!this.#deps.blocks.isBlocked(provider, providerKey, candidate.selection.index, blockScopes)) &&
+					(!enforcePlanRequirement || planGate?.(candidate.usage) === true),
+			);
+			if (leadCandidate > 0) {
+				const [lead] = candidates.splice(leadCandidate, 1);
+				candidates.unshift(lead);
+			}
+		}
+
+		const home = movementAllowed ? undefined : candidates[0];
+		const homeIneligible =
+			home !== undefined &&
+			enforcePlanRequirement &&
+			planGate?.(home.usage) !== true;
+		if (home && !homeIneligible) candidates.splice(1);
 
 		const passes: Array<{
 			allowBlocked: boolean;
@@ -1130,6 +1197,9 @@ export class CredentialSelector {
 				}
 			}
 			this.#deps.pool.noteBearer(provider, result.apiKey, credentialId);
+			if (credentialId !== undefined) {
+				this.#deps.pool.recordServing(provider, credentialId);
+			}
 			if (options?.recordAffinity !== false) {
 				this.#deps.affinity.record(provider, sessionId, "oauth", selection.index);
 			}
@@ -1161,9 +1231,11 @@ export class CredentialSelector {
 				}
 				if (outcome === "cas-lost") return undefined;
 				if (this.#deps.pool.credentials(provider).some(credential => credential.type === "oauth")) {
+					if (credentialId !== undefined) {
+						this.#deps.pool.recordFailed(provider, credentialId, "auth", errorMsg);
+					}
 					if (allowFallback) return this.resolveOAuth(provider, sessionId, options);
 				}
-			} else {
 				usageOptions.onTransientRefreshFailure?.(error);
 				// Block temporarily for transient failures (5 minutes)
 				this.#deps.blocks.mark(
