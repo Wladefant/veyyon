@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added Cloudflare AI Gateway credential serialization and parsing wire helper ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added KDL schema dependency and compilation scripts for catalog protocols and compatibility ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Exported Anthropic signing proxy predicates, xAI reasoning effort mapping, and discovery configuration constants ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added premium service tier request calculation and validation helpers for provider priority routing ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
