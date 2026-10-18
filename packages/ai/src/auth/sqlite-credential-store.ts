@@ -99,7 +99,7 @@ function storesSerializedCredential(row: CredentialStateRow, serialized: Seriali
 	);
 }
 
-const AUTH_SCHEMA_VERSION = 8;
+const AUTH_SCHEMA_VERSION = 7;
 const SQLITE_NOW_EPOCH = "CAST(strftime('%s','now') AS INTEGER)";
 const LEGACY_CODEX_BLOCK_PROVIDER_KEY = "openai-codex:oauth";
 const LEGACY_CODEX_BLOCK_SCOPE = "shared";
@@ -398,6 +398,14 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	#listActiveByProviderStmt: Statement;
 	#listDisabledStmt: Statement;
 	#listDisabledByProviderStmt: Statement;
+	#getAccountNameStmt: Statement;
+	#upsertAccountNameStmt: Statement;
+	#deleteAccountNameStmt: Statement;
+	#getProviderSelectionStmt: Statement;
+	#upsertProviderSelectionStmt: Statement;
+	#deleteProviderSelectionStmt: Statement;
+	#listReportableDisabledStmt: Statement;
+	#listReportableDisabledByProviderStmt: Statement;
 	#insertStmt: Statement;
 	#updateStmt: Statement;
 	#deleteStmt: Statement;
@@ -455,6 +463,34 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		);
 		this.#listDisabledByProviderStmt = this.#db.prepare(
 			"SELECT id, provider, credential_type, data, disabled_cause, identity_key, updated_at FROM auth_credentials WHERE provider = ? AND disabled_cause IS NOT NULL ORDER BY id ASC",
+		);
+		this.#getAccountNameStmt = this.#db.prepare("SELECT name FROM auth_account_names WHERE identity = ?");
+		this.#upsertAccountNameStmt = this.#db.prepare(
+			`INSERT INTO auth_account_names (identity, name, updated_at) VALUES (?, ?, ${SQLITE_NOW_EPOCH})
+			 ON CONFLICT(identity) DO UPDATE SET name = excluded.name, updated_at = ${SQLITE_NOW_EPOCH}`,
+		);
+		this.#deleteAccountNameStmt = this.#db.prepare("DELETE FROM auth_account_names WHERE identity = ?");
+		this.#getProviderSelectionStmt = this.#db.prepare(
+			"SELECT identity FROM auth_provider_selection WHERE provider = ?",
+		);
+		this.#upsertProviderSelectionStmt = this.#db.prepare(
+			`INSERT INTO auth_provider_selection (provider, identity, updated_at) VALUES (?, ?, ${SQLITE_NOW_EPOCH})
+			 ON CONFLICT(provider) DO UPDATE SET identity = excluded.identity, updated_at = ${SQLITE_NOW_EPOCH}`,
+		);
+		this.#deleteProviderSelectionStmt = this.#db.prepare("DELETE FROM auth_provider_selection WHERE provider = ?");
+		this.#listReportableDisabledStmt = this.#db.prepare(
+			`SELECT id, provider, credential_type, data, disabled_cause, identity_key, updated_at FROM auth_credentials AS disabled
+			 WHERE disabled.disabled_cause IS NOT NULL AND NOT EXISTS (
+				SELECT 1 FROM auth_credentials AS later
+				WHERE later.provider = disabled.provider AND later.disabled_cause IS NULL AND later.created_at > disabled.updated_at
+			 ) ORDER BY id DESC`,
+		);
+		this.#listReportableDisabledByProviderStmt = this.#db.prepare(
+			`SELECT id, provider, credential_type, data, disabled_cause, identity_key, updated_at FROM auth_credentials AS disabled
+			 WHERE disabled.provider = ? AND disabled.disabled_cause IS NOT NULL AND NOT EXISTS (
+				SELECT 1 FROM auth_credentials AS later
+				WHERE later.provider = disabled.provider AND later.disabled_cause IS NULL AND later.created_at > disabled.updated_at
+			 ) ORDER BY id DESC`,
 		);
 		this.#insertStmt = this.#db.prepare(
 			`INSERT INTO auth_credentials (provider, credential_type, data, identity_key, created_at, updated_at) VALUES (?, ?, ?, ?, ${SQLITE_NOW_EPOCH}, ${SQLITE_NOW_EPOCH}) RETURNING id`,
@@ -656,6 +692,16 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			);
 			CREATE INDEX IF NOT EXISTS idx_usage_history_series ON usage_history(provider, account_key, limit_id, recorded_at);
 			CREATE INDEX IF NOT EXISTS idx_usage_history_recorded ON usage_history(recorded_at);
+			CREATE TABLE IF NOT EXISTS auth_account_names (
+				identity TEXT PRIMARY KEY,
+				name TEXT NOT NULL,
+				updated_at INTEGER NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS auth_provider_selection (
+				provider TEXT PRIMARY KEY,
+				identity TEXT NOT NULL,
+				updated_at INTEGER NOT NULL
+			);
 			CREATE TABLE IF NOT EXISTS clients (
 				install_id TEXT PRIMARY KEY,
 				hostname TEXT,
@@ -1031,9 +1077,6 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		if (fromVersion < 7) {
 			this.#migrateAuthSchemaV6ToV7();
 		}
-		if (fromVersion < 8) {
-			this.#migrateAuthSchemaV7ToV8();
-		}
 	}
 
 	#migrateAuthSchemaV0ToV1(): void {
@@ -1200,30 +1243,21 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				DELETE FROM auth_credential_block_mirror_guard;
 			`);
 			this.#createAuthCredentialBlockCompatibilityTriggers();
-			this.#writeAuthSchemaVersion(7);
-		});
-		migrate.immediate();
-	}
-
-	#migrateAuthSchemaV7ToV8(): void {
-		const migrate = this.#db.transaction(() => {
-			// SingularityAPI split into two providers — the pay-as-you-go universal
-			// gateway and the slot-reserved lanes — and keys stored under the
-			// retired shared id belong to one or the other by format: the gateway
-			// issues `sk-sapi-...` while the lanes issue plain `sk-...` (both
-			// observed live 2026-09-22), and neither key is accepted by the other
-			// host. Route each stored credential to the product that serves it
-			// instead of orphaning it under an id nothing reads anymore.
-			const select = this.#db.prepare(
+			// The retired provider id is the only source row this startup migration may rewrite.
+			const selectLegacySingularityCredentials = this.#db.prepare(
 				"SELECT id, credential_type, data FROM auth_credentials WHERE provider = 'singularityapi'",
 			);
-			let rows: Array<{ id: number; credential_type: string; data: string }>;
+			let legacySingularityRows: Array<{ id: number; credential_type: string; data: string }>;
 			try {
-				rows = select.all() as Array<{ id: number; credential_type: string; data: string }>;
+				legacySingularityRows = selectLegacySingularityCredentials.all() as Array<{
+					id: number;
+					credential_type: string;
+					data: string;
+				}>;
 			} finally {
-				select.finalize();
+				selectLegacySingularityCredentials.finalize();
 			}
-			for (const row of rows) {
+			for (const row of legacySingularityRows) {
 				let provider = "singularityapi-tech";
 				try {
 					const parsed = JSON.parse(row.data) as { key?: unknown };
@@ -1231,19 +1265,22 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 						provider = "singularityapi-dev";
 					}
 				} catch {
-					// Unparsable payload takes the lane default; whichever product the
-					// key really belongs to then answers 401 and the owner re-logs in.
+					// Unparsable payloads default to the lane provider and can be relogged if rejected.
 				}
-				this.#db.run("UPDATE auth_credentials SET provider = ? WHERE id = ?", [provider, row.id]);
+				this.#db.run(
+					"UPDATE auth_credentials SET provider = ? WHERE id = ? AND provider = 'singularityapi'",
+					[provider, row.id],
+				);
 				this.#db.run(
 					"UPDATE auth_credential_blocks SET provider_key = ? WHERE credential_id = ? AND provider_key = ?",
 					[`${provider}:${row.credential_type}`, row.id, `singularityapi:${row.credential_type}`],
 				);
 			}
-			this.#writeAuthSchemaVersion(8);
+			this.#writeAuthSchemaVersion(7);
 		});
 		migrate.immediate();
 	}
+
 
 	#backfillCredentialIdentityKeys(): void {
 		const selectRowsStmt = this.#db.prepare(
@@ -1290,10 +1327,29 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	async listDisabledCredentials(provider?: string): Promise<DisabledCredentialSummary[]> {
-		const rows =
-			(provider
-				? (this.#listDisabledByProviderStmt.all(provider) as DisabledAuthRow[])
-				: (this.#listDisabledStmt.all() as DisabledAuthRow[])) ?? [];
+		const rows = (
+			provider
+				? this.#listDisabledByProviderStmt.all(provider)
+				: this.#listDisabledStmt.all()
+		) as DisabledAuthRow[];
+		return this.#summarizeDisabled(rows);
+	}
+
+	/**
+	 * Disabled rows no later login has answered, newest first. A row disabled BEFORE a login that is
+	 * still active for its provider was created is left out: that login answers the signed-out note.
+	 * `updated_at` of a disabled row is the moment of its disable; `created_at` of an active row is its login.
+	 */
+	async listReportableDisabledCredentials(provider?: string): Promise<DisabledCredentialSummary[]> {
+		const rows = (
+			provider
+				? this.#listReportableDisabledByProviderStmt.all(provider)
+				: this.#listReportableDisabledStmt.all()
+		) as DisabledAuthRow[];
+		return this.#summarizeDisabled(rows);
+	}
+
+	#summarizeDisabled(rows: DisabledAuthRow[]): DisabledCredentialSummary[] {
 		const results: DisabledCredentialSummary[] = [];
 		for (const row of rows) {
 			const credential = deserializeCredential(row);
@@ -1315,6 +1371,43 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			results.push(summary);
 		}
 		return results;
+	}
+
+	/**
+	 * Names live in their OWN table, never inside `auth_credentials.data`. Several persist paths rebuild
+	 * an OAuth credential from a field list, so a name inside the blob would be lost on the next refresh.
+	 */
+	getAccountName(identity: string): string | undefined {
+		const row = this.#getAccountNameStmt.get(identity) as { name?: string } | undefined;
+		const name = row?.name?.trim();
+		return name && name.length > 0 ? name : undefined;
+	}
+
+	setAccountName(identity: string, name: string): void {
+		this.#upsertAccountNameStmt.run(identity, name);
+	}
+
+	deleteAccountName(identity: string): void {
+		this.#deleteAccountNameStmt.run(identity);
+	}
+
+	/**
+	 * Account chosen for a provider, keyed by the same stable identity as the names table.
+	 * Returns undefined when no choice is recorded or when the identity is empty.
+	 */
+	getProviderSelection(provider: string): string | undefined {
+		const row = this.#getProviderSelectionStmt.get(provider) as { identity?: string } | undefined;
+		if (!row || typeof row !== "object" || !("identity" in row)) return undefined;
+		const identity = typeof row.identity === "string" ? row.identity.trim() : "";
+		return identity.length > 0 ? identity : undefined;
+	}
+
+	setProviderSelection(provider: string, identity: string): void {
+		this.#upsertProviderSelectionStmt.run(provider, identity);
+	}
+
+	clearProviderSelection(provider: string): void {
+		this.#deleteProviderSelectionStmt.run(provider);
 	}
 
 	async replaceAuthCredentials(provider: string, credentials: AuthCredential[]): Promise<StoredAuthCredential[]> {
@@ -2099,6 +2192,8 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#listActiveStmt.finalize();
+		this.#listReportableDisabledStmt.finalize();
+		this.#listReportableDisabledByProviderStmt.finalize();
 		this.#listActiveByProviderStmt.finalize();
 		this.#listDisabledStmt.finalize();
 		this.#listDisabledByProviderStmt.finalize();
@@ -2133,6 +2228,12 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#releaseCredentialRefreshLeaseStmt.finalize();
 		this.#getCredentialStateStmt.finalize();
 		this.#holdsCredentialRefreshLeaseStmt.finalize();
+		this.#getAccountNameStmt.finalize();
+		this.#upsertAccountNameStmt.finalize();
+		this.#deleteAccountNameStmt.finalize();
+		this.#getProviderSelectionStmt.finalize();
+		this.#upsertProviderSelectionStmt.finalize();
+		this.#deleteProviderSelectionStmt.finalize();
 		this.#db.close();
 	}
 }
