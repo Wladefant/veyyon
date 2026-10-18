@@ -5,6 +5,7 @@
 ### Added
 
 - Provider requests compress eligible bodies with gzip or Zstandard above 1 KiB and fall back per host when an encoding is rejected.
+- Added Anthropic API request, stream and response handling for provider integration.
 
 ### Fixed
 
