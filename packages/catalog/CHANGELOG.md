@@ -8,6 +8,7 @@
 - Added provider wire helpers for Alibaba Token Plan, Charm Hyper, Cline Pass, Cloudflare AI Gateway, Cursor, Devin, Factory Droid and SingularityAPI, and moved compatibility imports to shared utilities.
 - Cursor discovery combines account model RPCs, reports failures, and retries HTTP/2 only after a transport failure.
 - Devin discovery maps account model configurations to priced model families and capabilities.
+- The catalog discovery barrel exports the Factory Droid and Gemini CLI discovery APIs.
 
 ### Changed
 
