@@ -15,7 +15,7 @@
  * Per-family scoping is expressed by {@link ServiceTierByFamily}, not by
  * scoped sentinel values — see {@link serviceTierFamily}.
  */
-export const SERVICE_TIERS = ["auto", "default", "flex", "scale", "priority"] as const;
+export const SERVICE_TIERS = ["auto", "default", "flex", "scale", "priority", "ultrafast"] as const;
 
 export type ServiceTier = (typeof SERVICE_TIERS)[number];
 

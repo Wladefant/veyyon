@@ -1,4 +1,5 @@
 import type { AssistantTurnMetrics, AssistantTurnRequest, ToolCallMetrics } from "./instrumentation";
+import type { ServiceTier } from "./service-tier";
 import type { Api, Provider, Usage } from "./model";
 import type { kStreamingPartialJson } from "./stream-block";
 
@@ -46,6 +47,24 @@ export interface ThinkingContent {
 	thinking: string;
 	thinkingSignature?: string; // e.g., for OpenAI responses, the reasoning item ID
 	itemId?: string; // item.id from output_item.added, used to match output_item.done
+	/**
+	 * `true`: `thinking` is a provider-written summary of the model's reasoning
+	 * (OpenAI Responses `summary_text`, Gemini thought summaries). `false`: the
+	 * wire delivered it as the reasoning itself, not marked as a summary
+	 * (chat-completions reasoning fields, Responses `reasoning_text`, Devin
+	 * `thinking`); whether that is the full trace is vouched for per family by
+	 * the catalog's `portable-reasoning`. Unset when provenance is unknown,
+	 * including turns recorded before parsers set it. Only `false` blocks
+	 * replay natively on another host.
+	 */
+	summary?: boolean;
+	/**
+	 * `true`: the block is narration — prose the model addressed to the user
+	 * between tool calls, which the provider returned as a signed thinking block
+	 * (Anthropic connector-text summarization). It stays a thinking block for
+	 * replay; user-facing surfaces present it as answer text.
+	 */
+	narration?: boolean;
 }
 
 export interface RedactedThinkingContent {
@@ -66,6 +85,36 @@ export interface AnthropicFallbackContent {
 	from: { model: string };
 	to: { model: string };
 }
+/**
+ * Verbatim Anthropic web-search or tool-search call/result retained for
+ * same-provider history replay. Other providers discard it in
+ * `transformMessages`.
+ */
+export interface AnthropicServerToolContent {
+	type: "anthropicServerTool";
+	block:
+		| {
+				type: "server_tool_use";
+				id: string;
+				name: "web_search" | "tool_search_tool_regex" | "tool_search_tool_bm25";
+				input?: Record<string, unknown> | null;
+				[key: string]: unknown;
+		  }
+		| {
+				type: "web_search_tool_result" | "tool_search_tool_result";
+				tool_use_id: string;
+				content: unknown;
+				[key: string]: unknown;
+		  };
+}
+
+/** Provider-native uploaded file reference for image reuse without retransmitting bytes. */
+export interface ProviderFileReference {
+	provider: "openai" | "anthropic" | "google";
+	id?: string;
+	uri?: string;
+	expiresAt?: number;
+}
 
 export interface ImageContent {
 	type: "image";
@@ -73,11 +122,66 @@ export interface ImageContent {
 	mimeType: string; // e.g., "image/jpeg", "image/png"
 	/**
 	 * OpenAI-only resolution hint. `"original"` preserves native resolution
-	 * (useful for dense text-in-image content whose glyphs do not survive
-	 * the default `auto` downscale). Providers without a detail knob ignore it.
+	 * (required for snapcompact frames, whose glyphs do not survive the
+	 * default `auto` downscale). Providers without a detail knob ignore it.
 	 */
 	detail?: "auto" | "low" | "high" | "original";
+	/** Provider-native file reference preferred only by its matching provider. */
+	providerFile?: ProviderFileReference;
+	/**
+	 * Optional https mirror of `data`, served by a caller-run blob server.
+	 * Providers whose API fetches remote images send this URL instead of the
+	 * base64 payload; every other provider ignores it. `data` remains the
+	 * source of truth — the URL must serve exactly those bytes, and callers
+	 * are responsible for keeping it stable across turns (prefix caches hash
+	 * the URL string, and Anthropic silently forgets images when a resent
+	 * turn differs byte-wise).
+	 */
+	url?: string;
 }
+export type ComputerAction =
+	| {
+			type: "click";
+			button: "left" | "right" | "wheel" | "back" | "forward";
+			x: number;
+			y: number;
+			keys?: string[] | null;
+	  }
+	| { type: "double_click"; x: number; y: number; keys: string[] | null }
+	| { type: "drag"; path: Array<{ x: number; y: number }>; keys?: string[] | null }
+	| { type: "keypress"; keys: string[] }
+	| { type: "move"; x: number; y: number; keys?: string[] | null }
+	| { type: "screenshot" }
+	| { type: "scroll"; x: number; y: number; scroll_x: number; scroll_y: number; keys?: string[] | null }
+	| { type: "type"; text: string }
+	| { type: "wait" };
+
+export interface ComputerSafetyCheck {
+	id: string;
+	code?: string | null;
+	message?: string | null;
+}
+
+export interface ComputerToolCallMetadata {
+	type: "computer";
+	providerItemId: string;
+	actions: ComputerAction[];
+	pendingSafetyChecks: ComputerSafetyCheck[];
+}
+
+export type ToolCallProviderMetadata = ComputerToolCallMetadata;
+
+export type ComputerScreenshotRef =
+	| { type: "computer_screenshot"; image_url: string; file_id?: never }
+	| { type: "computer_screenshot"; file_id: string; image_url?: never };
+
+export interface ComputerToolResultMetadata {
+	type: "computer";
+	screenshot: ComputerScreenshotRef;
+	acknowledgedSafetyChecks: ComputerSafetyCheck[];
+}
+
+export type ToolResultProviderMetadata = ComputerToolResultMetadata;
 
 /**
  * A video clip sent inline with a user message. Only a model whose
@@ -112,6 +216,8 @@ export interface ToolCall {
 	 * JSON function tools.
 	 */
 	customWireName?: string;
+	/** Provider-native metadata required to execute and faithfully replay this call. */
+	providerMetadata?: ToolCallProviderMetadata;
 }
 
 export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
@@ -123,7 +229,126 @@ export interface OpenAIResponsesHistoryPayload {
 	items: Array<Record<string, unknown>>;
 }
 
-export type ProviderPayload = OpenAIResponsesHistoryPayload;
+/** Anthropic `output_config.effort` level. */
+export type AnthropicOutputEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
+/** One `tool_addition`/`tool_removal` block of an Anthropic mid-conversation system message. */
+export interface AnthropicToolChange {
+	type: "tool_addition" | "tool_removal";
+	name: string;
+}
+
+/** Anthropic-only controls attached to a mid-conversation system message. */
+export interface AnthropicMessagePayload {
+	type: "anthropicMessage";
+	clearAt?: "never" | "next_user_message";
+	effort?: AnthropicOutputEffort;
+	toolChanges?: AnthropicToolChange[];
+}
+
+/**
+ * Controls an Anthropic request declared, recorded on its response so later
+ * requests over the same transcript replay a byte-identical prefix.
+ * Written by the Anthropic provider; read by it and by the Agent's inactive-tool lookup.
+ */
+export interface AnthropicRequestControls {
+	/**
+	 * `context.messages.length` of the request that produced this response, i.e. the
+	 * response's own index. A record found at another index belongs to a history that was
+	 * rewritten before it (compaction, dropped messages) and is not replayed as controls.
+	 */
+	messageIndex: number;
+	/** Present when the request kept a stable tool declaration (`supportsMidConversationToolChanges`). Source tool names, not wire names. */
+	tools?: {
+		/** Top-level `tools` in wire order. */
+		declared: string[];
+		/** Subset of `declared` sent with `defer_loading: true`. */
+		deferred: string[];
+		/** Tools active at the end of the request, in `context.tools` order. */
+		active: string[];
+	};
+	/** Present when the request kept a stable effort (`supportsPerMessageEffort`); `null` = API default. */
+	effort?: { topLevel: AnthropicOutputEffort | null; tail: AnthropicOutputEffort | null };
+}
+
+/**
+ * Anthropic on-demand compaction summary (`compact-2026-09-04` beta).
+ *
+ * Produced by the Anthropic provider on the assistant message of a request
+ * that streamed a `compaction` content block, and attached to the user-role
+ * compaction summary message that replaces the compacted history so the
+ * provider can replay the block verbatim: the API drops every block that
+ * precedes it. `content` is the plain-text summary, so every other provider
+ * reads the message text and ignores the payload.
+ */
+export interface AnthropicCompactionPayload {
+	type: "anthropicCompaction";
+	/** Provider that produced the summary; only that provider replays it natively. */
+	provider: string;
+	content: string;
+	/** Signature of an on-demand block; replayed verbatim. */
+	signature?: string;
+	/** Legacy threshold block state (`compact-2026-01-12`); replay-only. */
+	encryptedContent?: string;
+	/**
+	 * Harness-appended file metadata (`<files>` section) kept out of the
+	 * byte-identical block. The converter replaces the summary message with the
+	 * block and skips its text, so it replays this as a user message after the
+	 * block's retained tail: before the first message created after the summary.
+	 */
+	filesText?: string;
+	/**
+	 * File metadata of earlier summaries whose replay position lies inside this
+	 * summary's retained tail. Retained messages must reach the API unchanged,
+	 * so each keeps replaying where it did: before the first message created
+	 * after `after` (the earlier summary's commit time).
+	 */
+	retainedFiles?: AnthropicCompactionFiles[];
+	/**
+	 * Set on summaries whose retained tail replays unchanged: file metadata
+	 * after the tail, earlier metadata at `retainedFiles`. Summaries persisted
+	 * without it keep their original layout (metadata after the first retained
+	 * turn), since later thinking was signed against those bytes.
+	 */
+	exactTail?: true;
+}
+
+/** File metadata replayed at a fixed point of a natively compacted conversation. */
+export interface AnthropicCompactionFiles {
+	text: string;
+	/** Replays before the first message created after this time (ms). */
+	after: number;
+}
+
+/**
+ * Records Cursor's server wrote into the client's conversation store for one
+ * assistant turn: the `rootPromptMessagesJson` entries after the user's message,
+ * reasoning signatures and redacted reasoning included. Written and read by the
+ * Cursor provider, which sends them back unchanged to the wire model that produced them.
+ */
+export interface CursorHistoryPayload {
+	type: "cursorHistory";
+	/** Wire route the records were written under, as sent (requested model, details id, max mode, parameters). */
+	wireRoute: string;
+	/** Digest of the turn's opening user message, content and paired tool results when recorded; a rewritten turn rebuilds instead. */
+	digest: string;
+	/** Record bytes (UTF-8 JSON) in conversation order; each blob id is the SHA-256 of its bytes. */
+	records: string[];
+}
+
+export type ProviderPayload =
+	| OpenAIResponsesHistoryPayload
+	| AnthropicMessagePayload
+	| AnthropicCompactionPayload
+	| CursorHistoryPayload;
+
+/** Provider-reported rewrite applied to request content before inference. */
+export interface ProviderInputTransformation {
+	type: string;
+	path?: string;
+	reason?: string;
+	[key: string]: unknown;
+}
 
 /**
  * Marks a user or developer message whose body is prior-turn reasoning demoted
@@ -153,6 +378,8 @@ export interface UserMessage {
 	synthetic?: boolean;
 	/** True when injected mid-turn as a steer; consumed by the agent's pre-LLM transform to wrap it for emphasis. Never rendered. */
 	steering?: boolean;
+	/** True when the provider delivered this steer into the response it was streaming (`response.steer`). Display-only; never sent. */
+	liveSteered?: boolean;
 	/** Who initiated this message for billing/attribution semantics. */
 	attribution?: MessageAttribution;
 	/** Provider-specific opaque payload used to reconstruct transport-native history. */
@@ -176,6 +403,10 @@ export interface DeveloperMessage {
 	content: string | (TextContent | ImageContent | VideoContent)[];
 	/** Who initiated this message for billing/attribution semantics. */
 	attribution?: MessageAttribution;
+	/** True if the message was injected by the system (e.g., auto-continue) and initiates a fresh run rather than continuing the current one. */
+	synthetic?: boolean;
+	/** True when the synthetic prompt was a deliberate operator action (`.`, `c` continue shortcut) rather than an automatic continuation — its timestamp is the turn's prompt time. */
+	userInitiated?: boolean;
 	/** Provider-specific opaque payload used to reconstruct transport-native history. */
 	providerPayload?: ProviderPayload;
 	/** See {@link UserMessage.historyRewriteAt}. */
@@ -187,24 +418,48 @@ export interface DeveloperMessage {
 
 export type AssistantRetryRecoveryKind = "credential" | "model" | "wait" | "plain";
 
-export interface AssistantRetryRecovery {
-	kind: "auto-retry";
-	status: "recovered";
-	attempt: number;
-	recoveredAt: string;
-	recovery: AssistantRetryRecoveryKind;
-	note: string;
-	supersededBy?: {
-		timestamp: number;
-		responseId?: string;
-		provider: string;
-		model: string;
-	};
-}
+/** Persisted presentation state for an assistant error superseded by an automatic retry saga. */
+export type AssistantRetryRecovery =
+	| {
+			kind: "auto-retry";
+			status: "recovered";
+			attempt: number;
+			recoveredAt: string;
+			recovery: AssistantRetryRecoveryKind;
+			note: string;
+			supersededBy?: {
+				timestamp: number;
+				responseId?: string;
+				provider: string;
+				model: string;
+			};
+	  }
+	| {
+			kind: "auto-retry";
+			status: "superseded";
+			attempt: number;
+			recovery: AssistantRetryRecoveryKind;
+			note: string;
+	  };
 
 export interface ContextSnapshot {
 	promptTokens: number; // authoritative provider prompt/input tokens
 	nonMessageTokens: number; // estimated non-message total at send time
+	/**
+	 * Estimated tool-schema tokens included in `nonMessageTokens` (0 when the
+	 * model defers schemas server-side). Lets a later model whose schema policy
+	 * differs rebase the provider anchor instead of inheriting its schemas.
+	 */
+	toolSchemaTokens?: number;
+	/** Estimated prompt tokens removed by local history rewrites after this provider snapshot was recorded. */
+	historyRewriteTokensRemoved?: number;
+	/**
+	 * Compaction epoch current when this snapshot's provider request was recorded.
+	 * A later compaction bumps the session epoch, so an anchor whose epoch is
+	 * older than the current in-flight snapshot describes pre-compaction history
+	 * and must not override the rebased estimate.
+	 */
+	compactionEpoch?: number;
 	/** Estimated stored conversation messages included in the request. Rich session telemetry only. */
 	storedMessagesTokens?: number;
 	/** Estimated not-yet-stored request tail included alongside the stored conversation. Rich telemetry only. */
@@ -251,12 +506,15 @@ export interface AssistantMessage {
 		| ThinkingContent
 		| RedactedThinkingContent
 		| AnthropicFallbackContent
-		| ToolCall
+		| AnthropicServerToolContent
 		| ImageContent
+		| ToolCall
 	)[];
 	api: Api;
 	provider: Provider;
 	model: string;
+	/** Stored credential row that produced this turn; absent for external or unknown keys. */
+	credentialId?: number;
 	contextSnapshot?: ContextSnapshot;
 	retryRecovery?: AssistantRetryRecovery;
 	responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
@@ -268,6 +526,23 @@ export interface AssistantMessage {
 	 * providers that expose no such field.
 	 */
 	upstreamProvider?: string;
+	/**
+	 * Concrete model that produced this turn when it is knowable independently
+	 * of the requested id: reported by a router that selected one, or recovered
+	 * from a signed thinking block (Anthropic signatures name the serving
+	 * model). Compared against `model` to notice a gateway serving something
+	 * other than what was requested.
+	 */
+	upstreamModel?: string;
+	/**
+	 * Service tier the provider reported serving this turn, when the API echoes
+	 * one (`response.service_tier`), falling back to the tier the request carried
+	 * when the response omits the echo. Absent when the provider reports no tier
+	 * or the echo cannot be trusted (proxies). This is the tier the turn actually
+	 * ran on, which is what cost, premium-request, and speed accounting key on —
+	 * the session's live setting may already have changed.
+	 */
+	serviceTier?: ServiceTier;
 	/**
 	 * Context window the PROVIDER reported for this conversation on the wire.
 	 *
@@ -301,9 +576,19 @@ export interface AssistantMessage {
 	 */
 	providerContextComposition?: ProviderContextBucket[];
 	usage: Usage;
+	/**
+	 * Visible output tokens a history rewrite (shake) has since removed from
+	 * `content`. `usage.output` still counts them, so a replay estimate subtracts
+	 * them to keep the turn's reasoning without recharging the removed text.
+	 */
+	elidedOutputTokens?: number;
 	stopReason: StopReason;
 	stopDetails?: StopDetails | null;
 	errorMessage?: string;
+	/** Stable recovery-classification text when errorMessage includes display-only diagnostics. */
+	errorClassificationMessage?: string;
+	/** True only when an exact request-body-read timeout failed on a full Responses replay, not a previous-response delta. */
+	requestBodyReadTimeoutFullReplay?: boolean;
 	/** Per-tool abort messages used when an aborted assistant turn needs different placeholder results per tool call. */
 	toolCallAbortMessages?: Record<string, string>;
 	/**
@@ -331,11 +616,20 @@ export interface AssistantMessage {
 	 * server's actual state.
 	 */
 	disabledFeatures?: string[];
+	/** Provider-reported input rewrites such as dropped bound-thinking blocks. */
+	inputTransformations?: ProviderInputTransformation[];
+	/**
+	 * Controls an Anthropic request declared, recorded on its response so later
+	 * requests over the same transcript replay a byte-identical prefix.
+	 */
+	requestControls?: AnthropicRequestControls;
 	/** Provider-specific opaque payload used to reconstruct transport-native history. */
 	providerPayload?: ProviderPayload;
 	timestamp: number; // Unix timestamp in milliseconds
 	duration?: number; // Request duration in milliseconds
 	ttft?: number; // Time to first token in milliseconds
+	/** Local wall-clock time the response finished streaming (ms since epoch); stamped by the session at message_end so prompt→yield timing never depends on provider-reported duration. */
+	completedAt?: number;
 	/**
 	 * Dense per-turn study record (request-start wall-clock, ttft, throughput),
 	 * present when session instrumentation is on. The graded, single-owner form of
@@ -378,6 +672,8 @@ export interface ToolResultMessage<TDetails = unknown> {
 	attribution?: MessageAttribution;
 	/** Timestamp when output was pruned (ms since epoch). Undefined if unpruned. */
 	prunedAt?: number;
+	/** Provider-native metadata required to faithfully replay this result. */
+	providerMetadata?: ToolResultProviderMetadata;
 	/**
 	 * Tool-declared: this result carried no information worth retaining once
 	 * consumed (zero matches, elapsed wait). Compaction passes may elide it.

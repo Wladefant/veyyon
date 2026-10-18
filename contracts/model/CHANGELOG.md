@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the provider vocabulary from oh-my-pi 117ee8b209685463ecdf3b19c5e7bc89857a44ce: Anthropic, Cursor and computer-use payload types, model pricing and remote-compaction types, and the `ultrafast` service tier.
+
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.

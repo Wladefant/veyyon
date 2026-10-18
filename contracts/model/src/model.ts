@@ -15,6 +15,8 @@ export const KNOWN_APIS = [
 	"cursor-agent",
 	"gitlab-duo-agent",
 	"devin-agent",
+	"factory-droid-agent",
+	"apple-foundation-models",
 ] as const;
 
 export type KnownApi = (typeof KNOWN_APIS)[number];
@@ -32,6 +34,9 @@ export const MODEL_KINDS = [
 ] as const;
 /** Technical capability of a catalog model; absent model kinds mean chat. */
 export type ModelKind = (typeof MODEL_KINDS)[number];
+/** Kinds a provider maps to a runner transport through `kind-apis` in its KDL; discovery drops rows of these kinds when the provider declares no API. */
+export const KIND_API_KINDS = ["image", "tts", "stt", "embedding", "rerank", "video"] as const;
+export type KindApiKind = (typeof KIND_API_KINDS)[number];
 /** Grounding transport available to chat models selected by the web role. */
 export type WebSearchGrounding =
 	| "gemini"
@@ -416,6 +421,17 @@ export interface OpenAICompat {
 	 * Non-Qwen templates ignore the flag, so the auto-detection is safe.
 	 */
 	qwenPreserveThinking?: boolean;
+	/**
+	 * Whether replayed Responses history is bound to the provider connection, so
+	 * native `type: "reasoning"` and item ids remain valid only on the same host
+	 * (e.g. GitHub Copilot). Default: false.
+	 */
+	connectionBoundNativeHistory?: boolean;
+	/**
+	 * Retry without the `strict` tool flag when the provider rejects a tool grammar
+	 * as too large. Default: false.
+	 */
+	retryWithoutStrictOnGrammarError?: boolean;
 	/** Whether assistant tool-call messages must include non-empty content. Default: false. */
 	requiresAssistantContentForToolCalls?: boolean;
 	/** Whether the provider supports the `tool_choice` parameter. Default: true. */
@@ -887,6 +903,122 @@ export type CompatOf<TApi extends Api> = TApi extends "openrouter"
 						? ResolvedCursorCompat
 						: undefined;
 
+/** User-facing interpretation of a model's token-rate card. */
+export type ModelPricingStatus = "fixed" | "free" | "included" | "variable" | "unknown";
+
+/**
+ * Best-effort prompt-cache entry lifetime in seconds for each retention tier a
+ * request can ask for. A missing tier means the lifetime is unknown; consumers
+ * must not schedule cache warming against unknown lifetimes.
+ */
+export type ModelPromptCache = Partial<Record<"short" | "long", number>>;
+
+/**
+ * Exact local content tokenizer family for a model.
+ *
+ * Absent means no first-party local tokenizer is known and consumers retain
+ * their estimate/default-tokenizer policy. The values name tokenizer
+ * generations rather than providers: DeepSeek V3 through V4 share
+ * `"deepseek-v3"`; Kimi K2 through K3 share `"kimi-k2"`.
+ */
+export type ModelTokenizer =
+	| "claude-v3"
+	| "claude-v47"
+	| "claude-v5"
+	| "claude-v5-sonnet"
+	| "qwen3"
+	| "deepseek-v3"
+	| "kimi-k2"
+	| "glm5"
+	| "o200k";
+
+/** One account's discovered entitlements on a model; see {@link Model.accountAccess}. */
+export interface ModelAccountAccess {
+	/**
+	 * Codex `available_access_programs.cyber`: cyber access programs this account
+	 * may request on the model (`standard`, `daybreak_blue`, `daybreak_red`).
+	 * Absent when the backend reported no program metadata.
+	 */
+	cyberPrograms?: readonly string[];
+}
+
+/** One Cursor `RequestedModel.parameters` entry recovered from rich discovery. */
+export interface CursorModelParameter {
+	id: string;
+	value: string;
+}
+
+/** Cursor wire target selected after local effort/variant routing. */
+export interface CursorModelRoute {
+	modelId: string;
+	parameters: readonly CursorModelParameter[];
+	maxMode?: boolean;
+}
+
+/** Provider-native compaction endpoint configuration for one model. */
+export interface RemoteCompactionConfig<TApi extends Api = Api> {
+	/** Enables provider-native compaction for providers not enabled by built-in policy. */
+	enabled?: boolean;
+	/** Adapter family used by the configured compaction endpoint. */
+	api?: TApi;
+	/** Absolute V1 compact endpoint URL; when omitted, the adapter derives it from the model base URL. */
+	endpoint?: string;
+	/** Enables Responses-stream V2 compaction for models verified to support `compaction_trigger`. */
+	v2StreamingEnabled?: boolean;
+	/** Absolute Responses-stream endpoint URL for V2 compaction; overrides `streamingEndpoint`. */
+	v2Endpoint?: string;
+	/** Absolute provider streaming endpoint URL used by V2 compaction when no dedicated endpoint is set. */
+	streamingEndpoint?: string;
+	/** Model id sent to the compaction endpoint when it differs from the active model id. */
+	model?: string;
+}
+
+/** Per-million-token rates for one model pricing tier. */
+export interface TokenCost {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+}
+
+/**
+ * Rates applied to the full request when its prompt exceeds `inputThreshold`,
+ * or reaches it when `inputThresholdInclusive` is true. Prompt input is the
+ * sum of uncached, cached-read, cache-write, and provider-orchestration input
+ * tokens.
+ */
+export interface LongContextTokenCost extends TokenCost {
+	inputThreshold: number;
+	/** Whether the long-context tier starts exactly at `inputThreshold`. */
+	inputThresholdInclusive?: boolean;
+}
+
+/** Recurring UTC peak interval; weekdays use Sunday = 0, and the end is exclusive. */
+export interface PeakPricingWindow {
+	weekdays: readonly number[];
+	startMinute: number;
+	endMinute: number;
+}
+
+/** Complete replacement rate card effective from a Unix-millisecond timestamp. */
+export interface EffectiveTokenCost extends TokenCost {
+	effectiveFrom: number;
+	longContext?: LongContextTokenCost;
+}
+
+/** Scheduled discounts applied after selecting the effective rate card and context tier. */
+export interface TimeBasedCost {
+	offPeakMultiplier: number;
+	peakWindows: readonly PeakPricingWindow[];
+	effectiveRates?: readonly EffectiveTokenCost[];
+}
+
+/** Base token rates plus optional long-context and time-based pricing. */
+export interface ModelCost extends TokenCost {
+	longContext?: LongContextTokenCost;
+	timeBased?: TimeBasedCost;
+}
+
 // Model interface for the unified model system
 export interface Model<TApi extends Api = Api> {
 	id: string;
@@ -913,8 +1045,20 @@ export interface Model<TApi extends Api = Api> {
 	name: string;
 	api: TApi;
 	provider: Provider;
+	/**
+	 * Discovery backend whose catalog policy applies when it differs from the
+	 * credential-bearing provider id. Persisted so cached and rebuilt custom
+	 * providers retain their transport backend's policy.
+	 */
+	providerType?: string;
 	baseUrl: string;
 	reasoning: boolean;
+	/**
+	 * Exact local tokenizer family resolved from the model identity or supplied
+	 * explicitly by a catalog/discovery source. Absent leaves local counting to
+	 * the consumer's fallback policy.
+	 */
+	tokenizer?: ModelTokenizer;
 	input: ("text" | "image" | "video")[];
 	/**
 	 * Decoder family used for image inputs when it has narrower format support
@@ -922,22 +1066,88 @@ export interface Model<TApi extends Api = Api> {
 	 */
 	imageInputDecoder?: "stb";
 	/**
+	 * Most images one request may carry, from user configuration. Replaces the
+	 * catalog's `image-count-budget` for hosts no rule names, such as a custom
+	 * gateway in front of a vendor with a higher limit.
+	 */
+	imageCountBudget?: number;
+	/**
 	 * Native provider tool-call support. `false` is the only unsupported signal:
 	 * `true` and `undefined` both mean callers may use native tools. Catalog and
 	 * discovery sources should set this sparsely when an upstream explicitly
 	 * reports that native tool calling is unsupported.
 	 */
 	supportsTools?: boolean;
+	/** Whether this model accepts the GA OpenAI Responses `{ type: "computer" }` native tool. */
+	supportsComputerUse?: boolean;
+	/** Verbatim explicit computer-use support from the spec; undefined when `buildModel` inferred the runtime value. */
+	supportsComputerUseConfig?: boolean;
 	/** GitLab Duo Workflow root namespace selected during catalog discovery. */
 	gitlabDuoWorkflowRootNamespaceId?: string;
 	/** Cursor `max_mode` request flag returned by `GetUsableModels` for premium models that require max mode. */
 	cursorMaxMode?: boolean;
-	cost: {
-		input: number; // $/million tokens
-		output: number; // $/million tokens
-		cacheRead: number; // $/million tokens
-		cacheWrite: number; // $/million tokens
-	};
+	/**
+	 * Per-wire-id `max_mode` markers for the members a collapsed Cursor row
+	 * routes to, recorded by `collapseVariants` from live `GetUsableModels`
+	 * rows. {@link cursorMaxMode} on a collapsed row is an OR across members,
+	 * so it cannot tell a `-low` route that needs no max mode from an Opus
+	 * `-fast` route that does; transports look the routed wire id up here
+	 * first. Absent on raw rows (their own `cursorMaxMode` already describes
+	 * their single wire id) and on bundled snapshots that predate discovery.
+	 */
+	cursorMaxModeRoutes?: Readonly<Record<string, boolean>>;
+	/**
+	 * Per-account availability recorded by multi-account discovery: provider
+	 * account key (Codex: ChatGPT `chatgpt_account_id`; Antigravity: login
+	 * email) → that account's entitlements on this model. An account appears
+	 * only when its own catalog lists the model, so credential selection can
+	 * route account-gated models (e.g. `gpt-daybreak-blue-latest`, Antigravity
+	 * Claude 5.5) straight to eligible accounts. Absent on bundled/config rows.
+	 */
+	accountAccess?: Readonly<Record<string, ModelAccountAccess>>;
+	/** Cursor `RequestedModel.parameters` for this model's default variant. */
+	cursorModelParameters?: readonly CursorModelParameter[];
+	/**
+	 * Per-wire-id Cursor routes recovered from `AvailableModels`. Generic effort
+	 * collapse retains these while routing selects one key at request time.
+	 */
+	cursorModelRoutes?: Readonly<Record<string, CursorModelRoute>>;
+	/** Cursor's account-relative model price/multiplier; not a per-token USD rate. */
+	cursorPrice?: number;
+	/** Cursor requires data retention to invoke this model. */
+	cursorRequiresDataRetention?: boolean;
+	/** Cursor explicitly reports support for its Agent surface. */
+	cursorSupportsAgent?: boolean;
+	/** Cursor explicitly reports support for sandboxed execution. */
+	cursorSupportsSandboxing?: boolean;
+	/** Factory Droid: account-resolved upstream rotation (first entry is the default `x-api-provider`). */
+	factoryDroidApiProviders?: string[];
+	/** Factory Droid: `configured_order` when live routing chose the rotation; absent means registry order. */
+	factoryDroidRoutingSource?: "configured_order";
+	/** Factory Droid Standard Credits base rate (relative per-token weight, not dollars). */
+	factoryDroidCredits?: number;
+	/** Canonical organization resolved during Factory discovery. */
+	factoryDroidOrgId?: string;
+	cost: ModelCost;
+	/**
+	 * Prompt-cache entry lifetime per retention tier, in seconds. Populated only
+	 * for providers whose cache-expiry and replay behavior has been validated
+	 * for cache warming (direct Anthropic: 5m / 1h). A missing entry means the
+	 * provider's cache behavior is unknown — such models are never warmed.
+	 * Custom models and provider overrides opt in via models.yml `promptCache`.
+	 */
+	promptCache?: ModelPromptCache;
+	/**
+	 * Verbatim configured lifetimes (models.yml, `modelOverrides`, runtime
+	 * registrations). `buildModel` applies them over catalog `prompt-cache`
+	 * rules on every rebuild; `{}` keeps warming disabled.
+	 */
+	promptCacheConfig?: ModelPromptCache;
+	/**
+	 * Interpretation of an all-zero token-rate card. Omitted zero-rate cards
+	 * are unknown; any non-zero rate is always treated as fixed pricing.
+	 */
+	pricingStatus?: Exclude<ModelPricingStatus, "fixed">;
 	/**
 	 * Whether the numbers in {@link cost} were actually published by the upstream.
 	 *
@@ -967,6 +1177,10 @@ export interface Model<TApi extends Api = Api> {
 	/** Premium Copilot requests charged per user-initiated request (defaults to 1). */
 	premiumMultiplier?: number;
 	contextWindow: number | null;
+	/** Preserve the host's supplied window instead of applying inferred expansion or reference-price caps. */
+	contextWindowAuthoritative?: boolean;
+	/** The long-context price tier does not cap the runtime context window when extended context is off. */
+	longContextWindowUncapped?: boolean;
 	/**
 	 * Larger prompt window the model accepts when extended context is enabled.
 	 * {@link contextWindow} stays the default window; a catalog or discovery
@@ -978,7 +1192,7 @@ export interface Model<TApi extends Api = Api> {
 	 * request by tier (Codex: `flex` is half price, `priority` a premium). A
 	 * tier the record omits bills at 1x.
 	 */
-	serviceTierCost?: Readonly<Partial<Record<"flex" | "priority", number>>>;
+	serviceTierCost?: Readonly<Partial<Record<"flex" | "priority" | "ultrafast", number>>>;
 	maxTokens: number | null;
 	/**
 	 * When `true`, providers MUST omit `max_output_tokens` (Responses) /
@@ -993,6 +1207,12 @@ export interface Model<TApi extends Api = Api> {
 	 */
 	omitMaxOutputTokens?: boolean;
 	headers?: Record<string, string>;
+	/**
+	 * Materialize config-backed headers immediately before a request. Catalog
+	 * inspection never invokes this hook; transports receive a cloned model
+	 * whose `headers` is a plain resolved record and whose hook is removed.
+	 */
+	resolveHeaders?: (signal?: AbortSignal) => Promise<Record<string, string> | undefined>;
 	/**
 	 * Streaming transport override. When `"pi-native"`, `streamSimple` routes
 	 * the request to the model's `baseUrl` via the auth-gateway's
@@ -1012,14 +1232,39 @@ export interface Model<TApi extends Api = Api> {
 	preferWebsockets?: boolean;
 	/** Codex Responses Lite transport: send the lite marker and carry instructions/tools as input items (mirrors codex-rs `use_responses_lite`). */
 	useResponsesLite?: boolean;
+	/**
+	 * Service-tier ids the provider advertises for this model (Codex discovery
+	 * `service_tiers[].id`, e.g. `priority`, `ultrafast`). Absent when the
+	 * provider publishes no per-model tier list.
+	 */
+	serviceTiers?: readonly string[];
 	/** Preferred model to switch to when context promotion is triggered (model id or provider/id). */
 	contextPromotionTarget?: string;
 	/** Preferred model to use only for compaction (model id or provider/id); the active session model is unchanged. */
 	compactionModel?: string;
 	/** Provider-assigned priority value (lower = higher priority). */
 	priority?: number;
+	/** Provider-native compaction endpoint configuration. */
+	remoteCompaction?: RemoteCompactionConfig<TApi>;
+	/**
+	 * Provider-supplied one-line blurb for this model. Set only when an upstream
+	 * ships one (Devin's `GetCliModelConfigs`); never synthesized locally.
+	 */
+	description?: string;
+	/** Upstream marks this model as newly released. */
+	isNew?: boolean;
+	/** Upstream marks this model as beta / preview quality. */
+	isBeta?: boolean;
+	/** Authenticated catalog marks this as the account's default; the startup pick prefers it over `default-model`. */
+	isProviderDefault?: boolean;
+	/** Upstream marks this model as one of its recommended picks. */
+	isRecommended?: boolean;
 	/** Canonical thinking capability metadata for this model. */
 	thinking?: ThinkingConfig;
+	/** Intelligence score delivered by the model catalog. */
+	int?: number | null;
+	/** Catalog-estimated output speed in tokens per second. */
+	tps?: number | null;
 	/**
 	 * Discovery-declared reasoning surface (models.dev `reasoning_options`),
 	 * carried as data so generation-time re-baking and runtime `buildModel`
@@ -1042,12 +1287,37 @@ export interface Model<TApi extends Api = Api> {
 	 */
 	applyPatchToolType?: "freeform" | "function";
 	/**
+	 * Edit-tool description density for this model. `"compact"` selects the
+	 * terse mode prompt (all operations and invariants preserved) for hosts
+	 * where per-request prompt bytes are the dominant cost. Generated catalog
+	 * policy sets it; the edit tool falls back to the full prompt when unset.
+	 */
+	editPromptVariant?: "full" | "compact";
+	/**
 	 * Force OAuth-style request shaping for providers whose API key prefix doesn't
 	 * match an OAuth token (e.g. routing Anthropic traffic through a proxy that
 	 * expects Claude Code framing). When true, the streaming layer sets
 	 * `options.isOAuth = true` for the underlying provider call.
 	 */
 	isOAuth?: boolean;
+	/**
+	 * Amazon Bedrock Guardrail id or ARN attached to every Converse request for
+	 * this model. Set from `providers.amazon-bedrock.guardrailIdentifier`; the
+	 * streaming layer forwards it as `options.guardrailIdentifier` so accounts
+	 * that gate `bedrock:InvokeModel*` on the `bedrock:GuardrailIdentifier`
+	 * condition key stop returning an explicit deny.
+	 */
+	guardrailIdentifier?: string;
+	/** Bedrock guardrail version. Defaults to `"DRAFT"` at request time when unset. */
+	guardrailVersion?: string;
+	/** Bedrock guardrail trace verbosity. */
+	guardrailTrace?: "enabled" | "disabled" | "enabled_full";
+	/**
+	 * Bedrock invocation-log tags attached to every Converse request for this
+	 * model. Set from `providers.<provider>.requestMetadata`; the Bedrock
+	 * transport reads it directly and validates it against AWS's limits.
+	 */
+	requestMetadata?: Record<string, string>;
 }
 
 /**

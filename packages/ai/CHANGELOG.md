@@ -8,6 +8,7 @@
 - Added Anthropic API request, stream and response handling for provider integration.
 - Added Amazon Bedrock request signing, credential resolution and streaming provider support.
 - Added Google Gemini, Gemini CLI, Antigravity and Vertex AI provider authentication and streaming adapters.
+- Added provider option types for Anthropic slow mode, fallback credit redemption, live steering and Cursor Pi tool handlers, from oh-my-pi 117ee8b209685463ecdf3b19c5e7bc89857a44ce.
 
 ### Fixed
 
