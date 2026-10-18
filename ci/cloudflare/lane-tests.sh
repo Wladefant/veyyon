@@ -95,6 +95,12 @@ if ! command -v bwrap >/dev/null 2>&1; then
 fi
 export VEYYON_SANDBOX_REMOTE=0
 export VEYYON_SANDBOX_RUNG=bwrap
+# The bwrap rung binds the requested repository path verbatim. Use an alias outside
+# the hidden build user's home and TMPDIR: a /tmp alias is scanned as repository
+# data by the test temp-directory janitor, while the real checkout is under HOME.
+sandbox_root="$(mktemp -d /var/tmp/veyyon-workers-XXXXXX)"
+ln -s "$repo_root" "$sandbox_root/repo"
+export VEYYON_SANDBOX_REPO_ROOT="$sandbox_root/repo"
 
 # Pre-native regression gate: run pure shard helper regression suite inside sandbox
 # This proves sharding logic remotely even if native compilation encounters time or toolchain issues
