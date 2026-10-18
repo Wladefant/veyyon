@@ -45,6 +45,8 @@
 - `withScopedTimeoutSignal` accepts an optional parent signal, combined with its deadline.
 - `settleWithin(promise, timeoutMs, fallback)` resolves with the promise's value, or with `fallback` once the deadline passes, and clears its timer when the promise settles.
 - `@veyyon/utils/keys` exports `KITTY_CSI_U_PATTERN`, the Kitty CSI-u key-sequence pattern its keypad fast path matches.
+- `estimateTokensFromBytes(bytes)` returns the token estimate `estimateTokensFromText` gives a text of that many UTF-8 bytes.
+- `TimeSlice` and `TIME_SLICE_MS` let a long synchronous loop yield to the event loop once every 8 ms.
 
 ### Changed
 
@@ -141,6 +143,7 @@
 - `invalidValues` lists mismatched values from `--config` overlay files as well as the profile file, and each entry's `replaced` marks a value a read serves the default or fallback in place of.
 - Opening a session reads each distinct blob once instead of once per reference, and a missing blob logs one warning per open instead of one per reference.
 - A cold message entry keeps its message's `usage` in memory and records how many `toolCall` blocks its moved content held, which `coldToolCallCount` returns, so a spend tally over compacted history reads no assistant line back.
+- `readColdMessage(message)` returns a cold message stand-in's full message read back from the session file without keeping it in memory, and returns any other message as it is.
 - `session-cold-payloads` imports the logger from `@veyyon/utils/logger` instead of the `@veyyon/utils` barrel, so the read tool's module graph again loads no module through the barrel; no user-visible change.
 - The fastembed load-or-install fallback is the exported `loadFastembedOrInstall(importInstalled, installRuntime)`; no user-visible change.
 - Removed the unread `commit` parameter of veracity conflict recording and the unread `beam` parameter of recall context formatting; no user-visible change.
@@ -176,6 +179,7 @@
 
 ### Fixed
 
+- An automatic compaction on a resumed session no longer freezes the terminal while it prepares its summary: compacted history is read back as copies in 8 ms slices instead of in one pass that kept every entry in memory, so on a resumed 34,572-entry session the longest event-loop stall before the summary request falls from 405 ms to 9.5 ms and 16,977 compacted entries stay on disk instead of in memory.
 - The first session spend tally after a resume (`/session`, a goal charge) no longer reads every compacted assistant reply back from the session file, so on a resumed 34,575-entry session it takes 3 ms instead of 95 ms.
 - A saved session's eval kernels, in every language, follow it across a directory change instead of starting a new kernel in each directory and keeping every earlier one alive until the session ended, so a session that visited five directories holds one Python kernel (102 MB) instead of five (211 MB) and keeps its variables; a directory with its own Python venv still gets its own kernel.
 - `/new`, `/resume` of another session and a handoff shut down the eval kernels of the conversation being left instead of keeping them alive until the session ended, so five conversations in one session hold one Python kernel (86 MB) instead of five (427 MB).
@@ -242,6 +246,7 @@
 - The `!` command block draws every streamed output window instead of skipping any that arrive within 50 ms of the previous one, which left the last line before a quiet period undrawn and joined the lines on either side of a skipped window; the `!` and `%` blocks also no longer overflow the call stack on an output window of about a million lines.
 - A continuation scheduled while another run starts, such as the queued-message drain after a user interrupt or a `/retry` racing a steer, yields to that run instead of failing with "Agent is already processing".
 - Preparing a compaction behind server-side compaction windows no longer reads the summarized history back from the session file; `CompactionPreparation.fileOps` is computed on first read.
+- Planning a history summary measures the span in slices that yield to the event loop every 8 ms and stages a span whose byte count already puts one request past the window without serializing it whole, so on a resumed 34,572-entry session the candidate estimate holds the event loop at most 9.5 ms instead of 405 ms; `estimateCompactionRequestTokens` and `planSummarySegments` are now async, and `planSummarySegments` takes the `SummarySource` that `measureSummarySource` returns.
 - Summarization requests that do not replay the session prefix (the turn-prefix summary of a split turn, a history summary without cache alignment, staged segment and merge summaries, and branch summaries) are sent with `cacheRetention: "none"`, so Anthropic no longer bills a cache write that is never read and no longer warns "prompt cache prefix changed" after each split-turn compaction.
 - A compaction no longer cuts between a tool call and its result when a message sits between them, such as the `cwd_changed` and `prompt_cache_invalidated` messages `set_cwd` appends while it runs, so the kept history no longer starts with a result whose call was summarized and every later request no longer folds that result into a note.
 - A Bedrock, Codex, Ollama or Gemini CLI endpoint that never answers ends the turn with `Timed out after N ms waiting for the first event`, classified as a retryable timeout, instead of `Request was aborted` or `The operation timed out.`, which read as a cancellation or named no phase.
