@@ -604,6 +604,7 @@ class SessionStartup {
 		if (this.#agentRegistry.get(id)?.status === "parked") return;
 		if (AgentLifecycleManager.global().isParking(id)) return;
 		this.#agentRegistry.unregister(id);
+		if (this.#isSpawned) this.#scopedAsyncJobManager?.markOwnerDisposed(id);
 	}
 
 	/**

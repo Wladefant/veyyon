@@ -114,4 +114,61 @@ describe("background completion owner routing", () => {
 			await manager.dispose();
 		}
 	});
+	it("sends a disposed owner's completions to Main as one note listing each result once", async () => {
+		const notes: { jobId: string; text: string }[] = [];
+		const noteArrived = Promise.withResolvers<void>();
+		const main = {
+			deliverAsyncJobResult: (jobId: string, text: string) => {
+				notes.push({ jobId, text });
+				noteArrived.resolve();
+			},
+		};
+		const manager = createOwnedAsyncJobManager({
+			options: {},
+			settings: Settings.isolated({}),
+			sessionManager: { allocateArtifactPath: async () => ({}) },
+			target: ownerId => (ownerId === undefined ? main : undefined),
+		})!;
+		try {
+			manager.markOwnerDisposed("Lane");
+			const ids = [1, 2, 3].map(n =>
+				manager.register("launch", `orphan ${n}`, async () => `output ${n}`, { ownerId: "Lane" }),
+			);
+			await noteArrived.promise;
+			expect(await manager.drainDeliveries({ timeoutMs: 2000 })).toBe(true);
+			expect(notes).toHaveLength(1);
+			for (const id of ids) expect(notes[0].text).toContain(id);
+			for (const n of [1, 2, 3]) expect(notes[0].text).toContain(`output ${n}`);
+		} finally {
+			await manager.dispose();
+		}
+	});
+	it("keeps an absent owner's completion for that owner, never for Main", async () => {
+		const main: string[] = [];
+		const lane: string[] = [];
+		let attached = false;
+		const manager = createOwnedAsyncJobManager({
+			options: {},
+			settings: Settings.isolated({}),
+			sessionManager: { allocateArtifactPath: async () => ({}) },
+			target: ownerId =>
+				ownerId === undefined
+					? { deliverAsyncJobResult: id => main.push(id) }
+					: attached
+						? { deliverAsyncJobResult: id => lane.push(id) }
+						: undefined,
+		})!;
+		try {
+			const id = manager.register("launch", "absent lane", async () => "exit", { ownerId: "Lane" });
+			await manager.waitForAll();
+			expect(await manager.drainDeliveries({ timeoutMs: 50 })).toBe(false);
+			expect(main).toEqual([]);
+			attached = true;
+			expect(await manager.drainDeliveries({ timeoutMs: 2000 })).toBe(true);
+			expect(lane).toEqual([id]);
+			expect(main).toEqual([]);
+		} finally {
+			await manager.dispose();
+		}
+	});
 });
