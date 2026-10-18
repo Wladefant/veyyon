@@ -1,5 +1,4 @@
 import { isCancellation } from "@veyyon/utils/abortable";
-import { withTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { isRecord } from "@veyyon/utils/type-guards";
 import * as AIError from "../../error";
 import type { FetchImpl } from "../../types";
@@ -46,7 +45,8 @@ export interface MuseCodeKeyResponse {
 }
 
 function requestSignal(signal?: AbortSignal): AbortSignal {
-	return withTimeoutSignal(REQUEST_TIMEOUT_MS, signal);
+	const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+	return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
 export function parseMuseCodeCredential(value: string): MuseCodeCredential {

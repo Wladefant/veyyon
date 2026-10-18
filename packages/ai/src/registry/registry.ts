@@ -1,4 +1,9 @@
 import type { KnownProvider } from "@veyyon/catalog";
+import { authPolicyFor } from "@veyyon/catalog/compat/auth";
+import * as AIError from "../error";
+import { buildProviderDefinition, type ProviderTransport } from "./build";
+import { bedrockMantleTransport } from "./bedrock-mantle";
+import { snowflakeTransport } from "./snowflake";
 import { abliterationProvider } from "./abliteration";
 import { aimlApiProvider } from "./aimlapi";
 import { alibabaCodingPlanProvider } from "./alibaba-coding-plan";
@@ -80,6 +85,13 @@ import { xiaomiTokenPlanSgpProvider } from "./xiaomi-token-plan-sgp";
 import { zaiProvider } from "./zai";
 import { zenmuxProvider } from "./zenmux";
 import { zhipuCodingPlanProvider } from "./zhipu-coding-plan";
+
+/** A provider whose definition is its compiled auth policy plus its TypeScript transport hooks. */
+function providerFromPolicy(id: string, transport?: ProviderTransport): ProviderDefinition {
+	const policy = authPolicyFor(id);
+	if (!policy) throw new AIError.ConfigurationError(`auth policy missing for provider "${id}"`);
+	return buildProviderDefinition(policy, transport);
+}
 
 /**
  * The single per-provider list. Adding a provider = create `./providers/<id>.ts`
@@ -169,6 +181,8 @@ const ALL = [
 	localProvider,
 	webProvider,
 	typesafeProvider,
+	providerFromPolicy("snowflake", snowflakeTransport),
+	providerFromPolicy("bedrock-mantle", bedrockMantleTransport),
 ];
 
 export type RegistryDef = (typeof ALL)[number];

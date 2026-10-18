@@ -1,5 +1,5 @@
 import * as logger from "@veyyon/utils/logger";
-import type { OAuthAccess } from "./auth-storage";
+import type { CredentialRotation, OAuthAccess, OAuthRequestIdentity } from "./auth/types";
 // The owners, not the barrel: this module throws two error classes, and reaching
 // them through `./error` pulled the whole registry and every domain behind it.
 import { RequestAbortError } from "./error/abort";
@@ -42,10 +42,51 @@ export interface ApiKeyResolveContext {
  * Resolves the API key to send for a request, retried through the a/b/c policy
  * described on {@link ApiKeyResolveContext}.
  */
+export interface ResolvedApiKey {
+	apiKey: string;
+	/** Durable row id of the credential that supplied this bearer, when known. */
+	credentialId?: number;
+	/**
+	 * Resolved after `LimitsApi.rotate` slept out a sibling's short block
+	 * (`afterSiblingWait`): the driver accepts this bearer even if the request
+	 * already sent it before that block.
+	 */
+	afterSiblingWait?: boolean;
+	/** Non-secret request scope belonging to this bearer, replaced on account rotation. */
+	oauthIdentity?: OAuthRequestIdentity;
+}
+
+export type ApiKeyResolution = string | ResolvedApiKey | undefined;
+
+/**
+ * Resolves the API key to send for a request, retried through the a/b/c policy
+ * described on {@link ApiKeyResolveContext}.
+ */
 export type ApiKeyResolver = (ctx: ApiKeyResolveContext) => Promise<string | undefined> | string | undefined;
+
+/** Extract the bearer while preserving optional credential provenance for streaming callers. */
+export function resolvedApiKeyBearer(resolved: ApiKeyResolution): string | undefined {
+	return (typeof resolved === "string" ? resolved : resolved?.apiKey) || undefined;
+}
+
+/**
+ * Mark a post-rotation resolution as following a sibling-unblock wait so the
+ * retry driver may resend a bearer it already tried. Used by the rotating
+ * resolvers (`KeyCascade.resolver`, coding-agent `createApiKeyResolver`).
+ */
+export function markAfterSiblingWait(resolved: ApiKeyResolution): ApiKeyResolution {
+	const apiKey = resolvedApiKeyBearer(resolved);
+	if (apiKey === undefined) return resolved;
+	return typeof resolved === "string"
+		? { apiKey, afterSiblingWait: true }
+		: { ...resolved, apiKey, afterSiblingWait: true };
+}
 
 /** A static bearer string, or a {@link ApiKeyResolver} that mints/rotates one. */
 export type ApiKey = string | ApiKeyResolver;
+
+/** Keyless-provider credential marker; transports must not send it in authentication headers. */
+export const NO_AUTH_SENTINEL = "N/A";
 
 /** Narrows {@link ApiKey} to its resolver form. */
 export function isApiKeyResolver(key: ApiKey | undefined): key is ApiKeyResolver {
@@ -289,20 +330,23 @@ export async function withAuth<T>(
 
 /**
  * Minimal structural slice of `AuthStorage` consumed by {@link withOAuthAccess}.
- * Typed structurally (and importing only the `OAuthAccess` type) so this module
- * never takes a runtime dependency on `./auth-storage`.
+ * Typed structurally so this module never takes a runtime dependency on `./auth-storage`.
  */
 export interface OAuthAccessSource {
-	getOAuthAccess(
-		provider: string,
-		sessionId?: string,
-		options?: { forceRefresh?: boolean; signal?: AbortSignal },
-	): Promise<OAuthAccess | undefined>;
-	rotateSessionCredential(
-		provider: string,
-		sessionId: string | undefined,
-		options?: { error?: unknown; signal?: AbortSignal; apiKey?: string; credentialId?: number },
-	): Promise<boolean>;
+	oauth: {
+		access(
+			provider: string,
+			sessionId?: string,
+			options?: { forceRefresh?: boolean; signal?: AbortSignal },
+		): Promise<OAuthAccess | undefined>;
+	};
+	limits: {
+		rotate(
+			provider: string,
+			sessionId: string | undefined,
+			options?: { error?: unknown; signal?: AbortSignal; apiKey?: string; credentialId?: number },
+		): Promise<CredentialRotation>;
+	};
 }
 
 export interface WithOAuthAccessOptions {
@@ -404,7 +448,7 @@ class OAuthAccessRetry<T> {
 		const { storage, provider, sessionId, signal } = this.#input;
 		let next: OAuthAccess | undefined;
 		try {
-			next = await storage.getOAuthAccess(provider, sessionId, { forceRefresh: true, signal });
+			next = await storage.oauth.access(provider, sessionId, { forceRefresh: true, signal });
 		} catch (refreshError) {
 			throwIfAuthRetryAborted(signal);
 			// The retry falls through to rotation and the user eventually sees the
@@ -425,15 +469,15 @@ class OAuthAccessRetry<T> {
 		const { storage, provider, sessionId, signal } = this.#input;
 		let next: OAuthAccess | undefined;
 		try {
-			const rotated = await storage.rotateSessionCredential(provider, sessionId, {
+			const rotation = await storage.limits.rotate(provider, sessionId, {
 				error: this.#lastError,
 				signal,
 				apiKey: this.#lastAccess.accessToken,
 				credentialId: this.#lastAccess.credentialId,
 			});
 			throwIfAuthRetryAborted(signal);
-			if (!rotated) return undefined;
-			next = await storage.getOAuthAccess(provider, sessionId, { signal });
+			if (!rotation.switched && !rotation.afterSiblingWait) return undefined;
+			next = await storage.oauth.access(provider, sessionId, { signal });
 		} catch (rotateError) {
 			throwIfAuthRetryAborted(signal);
 			// A failed rotation ends the retry loop. The caller reports `lastError`, the
@@ -454,19 +498,11 @@ class OAuthAccessRetry<T> {
  * full {@link OAuthAccess} (bearer + identity metadata: `accountId`,
  * `projectId`, `enterpriseUrl`) instead of bare API-key bytes.
  *
- * - initial → `getOAuthAccess` (or `opts.seed`).
- * - 401/auth failure → one `getOAuthAccess` with `forceRefresh: true` for the
+ * - initial → `oauth.access` (or `opts.seed`).
+ * - 401/auth failure → one `oauth.access` with `forceRefresh: true` for the
  *   current account, then sibling rotation.
- * - usage-limit failure → `rotateSessionCredential` directly, without a
+ * - usage-limit failure → `limits.rotate` directly, without a
  *   force-refresh detour.
- *
- * A refresh-same step may retry a new bearer for the same credential identity;
- * sibling rotation stops when it yields a credential identity
- * (`credentialId ?? accessToken`) or bearer already attempted in this turn.
- * All OAuth attempts share the {@link AUTH_RETRY_MAX_ATTEMPTS} ceiling.
- * Non-auth errors propagate immediately. Use this instead of hand-rolled
- * `getOAuthAccess` + fetch flows so 401s and usage-limits rotate credentials
- * instead of failing the call.
  */
 export async function withOAuthAccess<T>(
 	storage: OAuthAccessSource,
@@ -479,7 +515,7 @@ export async function withOAuthAccess<T>(
 
 	let first = opts?.seed;
 	if (!first) {
-		first = await storage.getOAuthAccess(provider, sessionId, { signal });
+		first = await storage.oauth.access(provider, sessionId, { signal });
 		throwIfAuthRetryAborted(signal);
 	}
 	if (!first) {

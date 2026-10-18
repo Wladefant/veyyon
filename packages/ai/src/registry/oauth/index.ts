@@ -3,10 +3,13 @@
 // ============================================================================
 
 import { kimiCodeApiKey } from "@veyyon/catalog/wire/kimi-code";
+import { authPolicyFor } from "@veyyon/catalog/compat/auth";
 import { decodeJwtPayload } from "@veyyon/utils/jwt";
 import * as AIError from "../../error";
+import { jwtExpiryMs, NEVER_EXPIRES } from "../engine/common";
 import { getProviderDefinition, PROVIDER_REGISTRY } from "../registry";
 import type { LoginCredential } from "../types";
+import { OAUTH_EXPIRY_SKEW_MS } from "./expiry";
 import type {
 	OAuthCredentials,
 	OAuthProvider,
@@ -81,6 +84,23 @@ export async function refreshOAuthToken(
 	// don't expire) return the credentials unchanged.
 	return def.refreshToken ? def.refreshToken(credentials, signal) : credentials;
 }
+
+/**
+ * Apply the provider's JWT expiry policy to stored credentials. A JWT `exp` claim wins; otherwise
+ * a session that does not expire is recorded as never expiring. Only providers whose auth policy
+ * declares `expiry: "jwt-or-never"` are touched.
+ */
+export function normalizeOAuthCredentialExpiry<T extends OAuthCredentials>(provider: string, credentials: T): T {
+	if (authPolicyFor(provider)?.expiry !== "jwt-or-never") return credentials;
+
+	// Trust a JWT expiry claim when present; otherwise treat providers with
+	// non-expiring sessions as such rather than honoring stale stored expiry
+	// timestamps written by older login implementations.
+	const normalizedExpires =
+		credentials.expires > 0 && credentials.expires < 10_000_000_000 ? credentials.expires * 1000 : credentials.expires;
+	const expires = jwtExpiryMs(credentials.access, OAUTH_EXPIRY_SKEW_MS) ?? Math.max(normalizedExpires, NEVER_EXPIRES);
+	return expires === credentials.expires ? credentials : ({ ...credentials, expires } as T);
+}
 function getPerplexityJwtExpiryMs(token: string): number | undefined {
 	const decoded = decodeJwtPayload<{ exp?: unknown }>(token);
 	if (!decoded || typeof decoded.exp !== "number" || !Number.isFinite(decoded.exp)) return undefined;
@@ -108,19 +128,7 @@ export async function getOAuthApiKey(
 		return null;
 	}
 
-	if (provider === "perplexity") {
-		// Perplexity JWTs usually omit `exp` (server-side sessions). Trust the JWT
-		// claim when present; otherwise treat the credential as non-expiring rather
-		// than honoring a stale stored `expires` (older logins wrote loginTime+1h).
-		const NEVER_EXPIRES = 8.64e15;
-		const normalizedExpires =
-			creds.expires > 0 && creds.expires < 10_000_000_000 ? creds.expires * 1000 : creds.expires;
-		const jwtExpiry = getPerplexityJwtExpiryMs(creds.access);
-		const expires = jwtExpiry ?? Math.max(normalizedExpires, NEVER_EXPIRES);
-		if (expires !== creds.expires) {
-			creds = { ...creds, expires };
-		}
-	}
+	creds = normalizeOAuthCredentialExpiry(provider, creds);
 	// Refresh is the sole responsibility of `AuthStorage` (which calls
 	// `refreshOAuthToken` directly with broker-aware single-flighting). If we
 	// reach here with an expired credential, the outer pipeline failed to

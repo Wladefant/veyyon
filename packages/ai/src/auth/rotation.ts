@@ -1,6 +1,6 @@
 import { scheduler } from "node:timers/promises";
+import { normalizeStoredAccountId, normalizeStoredEmail } from "../auth-credential-rows";
 import * as AIError from "../error";
-import { isUsageLimitOutcome } from "../error/rate-limit";
 import { extractProviderRetryHint } from "../utils/retry-after";
 import type { CredentialRankingContext, CredentialRankingStrategy } from "../usage";
 import type { RankingStrategyResolver } from "../usage/registry";
@@ -26,6 +26,7 @@ import type {
 	MarkUsageLimitOptions,
 	RotateCredentialOptions,
 	UsageLimitMarkResult,
+	UsageLimitWithheldEvent,
 } from "./types";
 import type { UsageService } from "./usage";
 import {
@@ -45,6 +46,10 @@ import {
 const SIBLING_UNBLOCK_WAIT_MAX_MS = 5_000;
 /** Slack past a sibling's deadline so the post-wait resolve sees the block expired. */
 const SIBLING_UNBLOCK_SLACK_MS = 25;
+/**
+ * How long an account stays recorded as unable to serve a model its plan does not include.
+ */
+const MODEL_NOT_IN_PLAN_HOLD_MS = 60 * 60_000;
 
 /** Routing scope and strategy for one failed credential. */
 export type CredentialBlockRouting = {
@@ -72,6 +77,99 @@ export class RateLimits implements LimitsApi {
 
 	constructor(deps: RateLimitsDeps) {
 		this.#deps = deps;
+	}
+
+	#isLoadBalancingEnabled(): boolean {
+		return this.#deps.affinity.isLoadBalancingEnabled();
+	}
+
+	#accountNoticeLabel(provider: string, credentialId: number): string {
+		const named = this.#deps.pool.getAccountName(provider, credentialId);
+		const row = this.#deps.pool.entries(provider).find(entry => entry.id === credentialId);
+		if (!row) return `#${credentialId}`;
+		if (row.credential.type === "oauth") {
+			const email = normalizeStoredEmail(row.credential.email);
+			if (email) return email;
+			const accountId = normalizeStoredAccountId(row.credential.accountId);
+			if (accountId) return accountId;
+		}
+		return `#${credentialId}`;
+	}
+
+	#formatQuotaMessage(
+		provider: string,
+		credentialId: number,
+		blockedUntilMs: number,
+		detail: { modelId?: string; available: number; siblingRetryAtMs?: number; balancing: boolean },
+	): string {
+		const account = this.#accountNoticeLabel(provider, credentialId);
+		const scope = detail.modelId ? ` for ${detail.modelId}` : "";
+		const head = `Quota reached on ${provider} account ${account}${scope}; resets ${new Date(blockedUntilMs).toISOString()}.`;
+		const others = `${detail.available} other account${detail.available === 1 ? "" : "s"} available`;
+		if (!detail.balancing) {
+			return `${head} ${others} but load balancing is off, so Veyyon waits for this account.`;
+		}
+		if (detail.available > 0) return `${head} ${others}; balancer will try it next.`;
+		const next =
+			detail.siblingRetryAtMs === undefined
+				? "no sibling account exists"
+				: `the earliest sibling resets ${new Date(detail.siblingRetryAtMs).toISOString()}`;
+		return `${head} 0 other accounts available; ${next}.`;
+	}
+
+	#markModelNotInPlan(
+		provider: string,
+		sessionId: string | undefined,
+		index: number,
+		target: { id: number; credential: AuthCredential },
+		modelId: string,
+	): UsageLimitMarkResult {
+		const providerKey = providerTypeKey(provider, target.credential.type);
+		const modelPolicyScope = modelAccountPolicyBlockScope(provider, modelId) ?? `model-policy:${modelId}`;
+		this.#deps.blocks.mark(
+			provider,
+			providerKey,
+			index,
+			Date.now() + MODEL_NOT_IN_PLAN_HOLD_MS,
+			modelPolicyScope,
+		);
+		const remaining = this.#deps.pool
+			.entries(provider)
+			.map((entry, candIndex) => ({ id: entry.id, credential: entry.credential, index: candIndex }))
+			.filter(
+				(entry): entry is { id: number; credential: AuthCredential; index: number } =>
+					entry.credential.type === target.credential.type &&
+					entry.index !== index &&
+					this.#deps.affinity.allows(provider, sessionId, entry.credential) &&
+					!this.#deps.affinity.isAuthDead(entry.id),
+			);
+		const idleSiblings = remaining.filter(
+			candidate =>
+				this.#deps.blocks.blockedUntil(provider, providerKey, candidate.index, [
+					AUTH_BLOCK_SCOPE,
+					ACCOUNT_POLICY_BLOCK_SCOPE,
+					modelPolicyScope,
+				]) === undefined,
+		).length;
+
+		if (idleSiblings === 0) return { switched: false };
+		if (!this.#isLoadBalancingEnabled()) {
+			this.#deps.pool.emitWithheld({
+				provider,
+				account: { credentialId: target.id, label: this.#accountNoticeLabel(provider, target.id) },
+				idleSiblings,
+				reason: "model-not-in-plan",
+				modelId,
+			});
+			return { switched: false };
+		}
+		this.#deps.pool.recordFailed(
+			provider,
+			target.id,
+			"model-not-in-plan",
+			`its plan does not include ${modelId}`,
+		);
+		return { switched: true };
 	}
 
 	async #resolveCredentialTarget(
@@ -185,16 +283,18 @@ export class RateLimits implements LimitsApi {
 				: blockedUntil;
 
 		const remainingCredentials = this.#deps.pool
-			.credentials(provider)
-			.map((credential, index) => ({ credential, index }))
+			.entries(provider)
+			.map((entry, index) => ({ id: entry.id, credential: entry.credential, index }))
 			.filter(
-				(entry): entry is { credential: AuthCredential; index: number } =>
+				(entry): entry is { id: number; credential: AuthCredential; index: number } =>
 					entry.credential.type === credentialType &&
 					entry.index !== targetIndex &&
-					this.#deps.affinity.allows(provider, sessionId, entry.credential),
+					this.#deps.affinity.allows(provider, sessionId, entry.credential) &&
+					!this.#deps.affinity.isAuthDead(entry.id),
 			);
 
 		let retryAtMs: number | undefined;
+		let idleSiblings = 0;
 		for (const candidate of remainingCredentials) {
 			// Sibling availability must use the same scope set selection reads, or
 			// this reports a sibling as free that selection will then refuse.
@@ -204,14 +304,59 @@ export class RateLimits implements LimitsApi {
 				candidate.index,
 				routing.siblingBlockScopes,
 			);
-			if (candidateBlockedUntil === undefined)
-				return {
-					switched: true,
-					blockedUntilMs: mergedBlockedUntil,
-					priorBlockedUntilMs,
-					priorBlockedUntilTimed,
-				};
-			if (retryAtMs === undefined || candidateBlockedUntil < retryAtMs) retryAtMs = candidateBlockedUntil;
+			if (candidateBlockedUntil === undefined) {
+				idleSiblings += 1;
+			} else if (retryAtMs === undefined || candidateBlockedUntil < retryAtMs) {
+				retryAtMs = candidateBlockedUntil;
+			}
+		}
+
+		if (!this.#isLoadBalancingEnabled()) {
+			if (idleSiblings > 0 && targetId !== undefined) {
+				this.#deps.pool.emitWithheld({
+					provider,
+					account: {
+						credentialId: targetId,
+						label: this.#accountNoticeLabel(provider, targetId),
+					},
+					idleSiblings,
+					reason: "quota",
+					retryAtMs: mergedBlockedUntil,
+				});
+			}
+			const quotaMessage =
+				targetId !== undefined
+					? this.#formatQuotaMessage(provider, targetId, mergedBlockedUntil, {
+							modelId: routing.rankingContext.modelId,
+							available: idleSiblings,
+							balancing: false,
+						})
+					: undefined;
+			return {
+				switched: false,
+				retryAtMs: mergedBlockedUntil,
+				...(quotaMessage ? { quotaMessage } : {}),
+			};
+		}
+
+		const quotaMessage =
+			targetId !== undefined
+				? this.#formatQuotaMessage(provider, targetId, mergedBlockedUntil, {
+						modelId: routing.rankingContext.modelId,
+						available: idleSiblings,
+						siblingRetryAtMs: retryAtMs,
+						balancing: true,
+					})
+				: undefined;
+
+		if (idleSiblings > 0) {
+			return {
+				switched: true,
+				blockedUntilMs: mergedBlockedUntil,
+				priorBlockedUntilMs,
+				priorBlockedUntilTimed,
+				...(quotaMessage ? { quotaMessage } : {}),
+			};
 		}
 		return {
 			switched: false,
@@ -219,6 +364,7 @@ export class RateLimits implements LimitsApi {
 			blockedUntilMs: mergedBlockedUntil,
 			priorBlockedUntilMs,
 			priorBlockedUntilTimed,
+			...(quotaMessage ? { quotaMessage } : {}),
 		};
 	}
 
@@ -245,6 +391,10 @@ export class RateLimits implements LimitsApi {
 		if (!target || target.credential.type !== sessionCredential.type) return { switched: false };
 		const credentialType = sessionCredential.type;
 		const targetCredentialId = target.id;
+
+		if (options?.modelNotInPlan && options.modelId !== undefined) {
+			return this.#markModelNotInPlan(provider, sessionId, sessionCredential.index, target, options.modelId);
+		}
 
 		const routing = this.#credentialBlockRouting(provider, credentialType, options?.modelId);
 		const now = Date.now();
@@ -302,6 +452,9 @@ export class RateLimits implements LimitsApi {
 			routing,
 			providerTimed,
 		);
+		if (!this.#isLoadBalancingEnabled()) {
+			return rotation;
+		}
 		return {
 			...rotation,
 			requestedBlockedUntilMs,
@@ -356,6 +509,17 @@ export class RateLimits implements LimitsApi {
 			AUTH_BLOCK_SCOPE,
 		);
 
+		const providerKey = providerTypeKey(provider, matched.type);
+		const hasSibling = stored.some(
+			(entry, index) =>
+				entry.credential.type === matched.type &&
+				index !== matched.index &&
+				!this.#deps.blocks.isBlocked(provider, providerKey, index) &&
+				!this.#deps.affinity.isAuthDead(entry.id),
+		);
+			this.#deps.pool.recordFailed(provider, matched.id, "auth", "authentication failed");
+		}
+
 		const markSuspect = this.#deps.store.markCredentialSuspect?.bind(this.#deps.store);
 		if (markSuspect) {
 			await markSuspect(matched.id, { signal });
@@ -404,11 +568,10 @@ export class RateLimits implements LimitsApi {
 	): Promise<CredentialRotation> {
 		await this.#deps.pool.adoptExternalChanges();
 		const error = options?.error;
-		const status = AIError.status(error);
 		const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
 		const exactCursorModelPolicy = AIError.isCursorPlanAccountPolicyError(error, provider);
 		const accountPolicy = exactCursorModelPolicy || AIError.isAccountPolicyError(error);
-		if (!accountPolicy && (AIError.isUsageLimit(error) || isUsageLimitOutcome(status, message))) {
+		if (!accountPolicy && AIError.isUsageLimit(error)) {
 			// Thread the provider-specified reset window (e.g. Devin "Your limit
 			// will reset in 13 minutes") into the block duration so the credential
 			// is not reselected and hammered while the cap remains active.
@@ -421,6 +584,9 @@ export class RateLimits implements LimitsApi {
 				credentialId: options?.credentialId,
 				signal: options?.signal,
 			});
+			if (!this.#isLoadBalancingEnabled()) {
+				return { switched: false };
+			}
 			return awaitSiblingUnblock(mark, options?.signal);
 		}
 
@@ -458,15 +624,61 @@ export class RateLimits implements LimitsApi {
 			) {
 				this.#deps.affinity.clear(provider, sessionId);
 			}
+			const target = this.#deps.pool.entries(provider)[sessionCredential.index];
+			const remaining = this.#deps.pool
+				.entries(provider)
+				.map((entry, index) => ({ id: entry.id, credential: entry.credential, index }))
+				.filter(
+					(entry): entry is { id: number; credential: AuthCredential; index: number } =>
+						entry.credential.type === sessionCredential.type &&
+						entry.index !== sessionCredential.index &&
+						this.#deps.affinity.allows(provider, sessionId, entry.credential) &&
+						!this.#deps.affinity.isAuthDead(entry.id),
+				);
+			const idleSiblings = remaining.filter(
+				candidate =>
+					this.#deps.blocks.blockedUntil(
+						provider,
+						routing.providerKey,
+						candidate.index,
+						routing.siblingBlockScopes,
+					) === undefined,
+			).length;
+
 			const mark = this.#blockCredentialForRotation(
 				provider,
 				sessionId,
 				sessionCredential.type,
 				sessionCredential.index,
-				Date.now() + DEFAULT_BLOCK_MS,
+				Date.now() + (exactModelPolicy ? MODEL_NOT_IN_PLAN_HOLD_MS : DEFAULT_BLOCK_MS),
 				routing,
 				false,
 			);
+
+			if (!this.#isLoadBalancingEnabled()) {
+				if (target && idleSiblings > 0 && exactModelPolicy) {
+					this.#deps.pool.emitWithheld({
+						provider,
+						account: {
+							credentialId: target.id,
+							label: this.#accountNoticeLabel(provider, target.id),
+						},
+						idleSiblings,
+						reason: "model-not-in-plan",
+						modelId: options?.modelId ?? "unknown",
+					});
+				}
+				return { switched: false };
+			}
+
+			if (target && idleSiblings > 0 && exactModelPolicy) {
+				this.#deps.pool.recordFailed(
+					provider,
+					target.id,
+					"model-not-in-plan",
+					options?.modelId ? `its plan does not include ${options.modelId}` : (message ?? "model not in plan"),
+				);
+			}
 			return awaitSiblingUnblock(mark, options?.signal);
 		}
 
@@ -474,13 +686,14 @@ export class RateLimits implements LimitsApi {
 		// Snapshot sibling availability before mutating so a soft-deleting
 		// suspect hook can't reindex the answer out from under us.
 		const hasSibling = this.#deps.pool
-			.credentials(provider)
+			.entries(provider)
 			.some(
-				(credential, index) =>
-					credential.type === sessionCredential.type &&
+				(entry, index) =>
+					entry.credential.type === sessionCredential.type &&
 					index !== sessionCredential.index &&
 					!this.#deps.blocks.isBlocked(provider, providerKey, index) &&
-					this.#deps.affinity.allows(provider, sessionId, credential),
+					this.#deps.affinity.allows(provider, sessionId, entry.credential) &&
+					!this.#deps.affinity.isAuthDead(entry.id),
 			);
 		const target = this.#deps.pool.entries(provider)[sessionCredential.index];
 		const sticky = this.#deps.affinity.get(provider, sessionId);
@@ -512,6 +725,7 @@ export class RateLimits implements LimitsApi {
 		}
 
 		if (target) {
+			this.#deps.affinity.markAuthDead(target.id);
 			const markSuspect = this.#deps.store.markCredentialSuspect?.bind(this.#deps.store);
 			if (markSuspect) {
 				await markSuspect(target.id, { signal: options?.signal });
@@ -525,7 +739,23 @@ export class RateLimits implements LimitsApi {
 			);
 		}
 
+		if (target && hasSibling) {
+			this.#deps.pool.recordFailed(
+				provider,
+				target.id,
+				"auth",
+				message ?? (AIError.isInvalidatedOAuthTokenError(error) ? "upstream reported invalidated OAuth token" : "authentication failed"),
+			);
+		}
 		return { switched: hasSibling };
+	}
+
+	/**
+	 * Subscribe to withheld-quota notices (quota exhausted, siblings idle, balancing off).
+	 * Returns an unsubscribe handle. Listener faults are isolated like every other notice here.
+	 */
+	onUsageLimitWithheld(listener: (event: UsageLimitWithheldEvent) => void | Promise<void>): () => void {
+		return this.#deps.pool.onWithheld(listener);
 	}
 }
 

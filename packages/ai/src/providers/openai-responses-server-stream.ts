@@ -7,7 +7,14 @@
 
 import { errorMessage } from "@veyyon/utils/type-guards";
 import type { AuthGatewayParsedRequest, AuthGatewayStreamControl, FrameSink } from "../auth-gateway/types";
-import type { AssistantMessage, AssistantMessageEvent, AssistantMessageEventStream, ToolCall } from "../types";
+import type {
+	AssistantMessage,
+	AssistantMessageEvent,
+	AssistantMessageEventStream,
+	ComputerAction,
+	ComputerSafetyCheck,
+	ToolCall,
+} from "../types";
 import {
 	buildOutputItems,
 	buildUsage,
@@ -57,7 +64,16 @@ interface OpenFunctionCall {
 	/** Set when the underlying ToolCall is a custom-tool emission. */
 	customWireName?: string;
 }
-type OpenItem = OpenMessage | OpenReasoning | OpenFunctionCall;
+interface OpenComputerCall {
+	kind: "computer_call";
+	itemId: string;
+	outputIndex: number;
+	contentIndex: number;
+	callId: string;
+	actions: ComputerAction[];
+	pendingSafetyChecks: ComputerSafetyCheck[];
+}
+type OpenItem = OpenMessage | OpenReasoning | OpenFunctionCall | OpenComputerCall;
 
 const TERMINAL_EVENT: Record<ResponseStatus, string> = {
 	completed: "response.completed",
@@ -74,8 +90,8 @@ function sseEvent(name: string, data: unknown): string {
  * The SSE frames for one response. {@link apply} takes the events in stream order; {@link finish}
  * or {@link fail} writes the terminal event and `[DONE]`.
  *
- * At most one message or reasoning item is open at a time. Tool calls stay open per content index,
- * so parallel calls whose events interleave each write to their own item.
+ * At most one message or reasoning item is open at a time. A tool call opened beside it leaves it open,
+ * and every open item is found by the content index its events carry, so interleaved events each reach their own item.
  */
 class ResponsesStreamWriter {
 	readonly #sink: FrameSink;
@@ -84,8 +100,10 @@ class ResponsesStreamWriter {
 	#sequence = 0;
 	#createdAt = Math.floor(Date.now() / 1000);
 	#outputIndex = 0;
-	#open: OpenItem | null = null;
-	readonly #openCalls = new Map<number, OpenFunctionCall>();
+	/** Every open item, keyed by the content index its events arrive under. */
+	readonly #openItems = new Map<number, OpenItem>();
+	/** The one open message or reasoning item. Opening another prose item closes it first. */
+	#openProse: OpenMessage | OpenReasoning | null = null;
 	readonly #finished: OutputItem[] = [];
 	#final: AssistantMessage | undefined;
 	#failure: AssistantMessage | undefined;
@@ -103,15 +121,15 @@ class ResponsesStreamWriter {
 			case "text_start":
 				return this.#textStart(ev.partial, ev.contentIndex);
 			case "text_delta":
-				return this.#textDelta(ev.delta);
+				return this.#textDelta(ev.contentIndex, ev.delta);
 			case "text_end":
-				return this.#textEnd(ev.content);
+				return this.#textEnd(ev.contentIndex, ev.content);
 			case "thinking_start":
 				return this.#thinkingStart(ev.partial, ev.contentIndex);
 			case "thinking_delta":
-				return this.#thinkingDelta(ev.delta);
+				return this.#thinkingDelta(ev.contentIndex, ev.delta);
 			case "thinking_end":
-				return this.#thinkingEnd(ev.content);
+				return this.#thinkingEnd(ev.contentIndex, ev.content);
 			case "toolcall_start":
 				return this.#toolCallStart(ev.partial, ev.contentIndex);
 			case "toolcall_delta":
@@ -133,8 +151,7 @@ class ResponsesStreamWriter {
 	 * final message's stop reason selects, carrying the items built from that message.
 	 */
 	async finish(events: AssistantMessageEventStream): Promise<void> {
-		for (const call of Array.from(this.#openCalls.values())) this.#closeCall(call);
-		this.#closeOpen();
+		this.#closeAll();
 		if (this.#failure) return this.#failWith(this.#failure.errorMessage ?? "stream failed");
 		// A stream that produced no `done` event is asked for its result, and a rejection there is a
 		// failure like any other: a generation that failed after emitting some text must not reach the
@@ -225,20 +242,21 @@ class ResponsesStreamWriter {
 
 	/** Close the open message or reasoning item before another one opens. An open tool call stays open. */
 	#closeOpenProse(): void {
-		if (this.#open && this.#open.kind !== "function_call") this.#closeOpen();
+		if (this.#openProse) this.#closeProse(this.#openProse);
 	}
 
 	#textStart(partial: AssistantMessage, contentIndex: number): void {
 		const block = partial.content[contentIndex];
 		const signature = block?.type === "text" ? parseTextSignature(block.textSignature) : undefined;
 		let cur: OpenMessage;
-		if (this.#open?.kind === "message" && sameMessageSignature(this.#open.signature, signature)) {
+		if (this.#openProse?.kind === "message" && sameMessageSignature(this.#openProse.signature, signature)) {
 			// Continue the same message item with a new content part.
-			cur = this.#open;
+			cur = this.#openProse;
 			cur.currentPartText = "";
+			this.#openItems.set(contentIndex, cur);
 		} else {
 			this.#closeOpenProse();
-			cur = this.#openMessage(signature);
+			cur = this.#openMessage(signature, contentIndex);
 		}
 		this.#emit("response.content_part.added", {
 			item_id: cur.itemId,
@@ -248,7 +266,7 @@ class ResponsesStreamWriter {
 		});
 	}
 
-	#openMessage(signature: MessageSignature | undefined): OpenMessage {
+	#openMessage(signature: MessageSignature | undefined, contentIndex: number): OpenMessage {
 		const outputIndex = this.#outputIndex++;
 		const itemId = signature?.id ?? makeMsgId();
 		const phase = signature?.phase ? { phase: signature.phase } : {};
@@ -263,13 +281,14 @@ class ResponsesStreamWriter {
 			content: [],
 			...(signature ? { signature } : {}),
 		};
-		this.#open = next;
+		this.#openProse = next;
+		this.#openItems.set(contentIndex, next);
 		return next;
 	}
 
-	#textDelta(delta: string): void {
-		if (this.#open?.kind !== "message") return;
-		const cur = this.#open;
+	#textDelta(contentIndex: number, delta: string): void {
+		const cur = this.#openItems.get(contentIndex);
+		if (cur?.kind !== "message") return;
 		cur.currentPartText += delta;
 		this.#emit("response.output_text.delta", {
 			item_id: cur.itemId,
@@ -283,9 +302,9 @@ class ResponsesStreamWriter {
 		// `response.output_text.annotation.added` here.
 	}
 
-	#textEnd(content: string | undefined): void {
-		if (this.#open?.kind !== "message") return;
-		const cur = this.#open;
+	#textEnd(contentIndex: number, content: string | undefined): void {
+		const cur = this.#openItems.get(contentIndex);
+		if (cur?.kind !== "message") return;
 		const text = content ?? cur.currentPartText;
 		const where = { item_id: cur.itemId, output_index: cur.outputIndex, content_index: cur.contentIndex };
 		this.#emit("response.output_text.done", { ...where, text, logprobs: [] });
@@ -313,12 +332,14 @@ class ResponsesStreamWriter {
 			summary_index: 0,
 			part: { type: "summary_text", text: "" },
 		});
-		this.#open = { kind: "reasoning", itemId, outputIndex, reasoningText: "" };
+		const next: OpenReasoning = { kind: "reasoning", itemId, outputIndex, reasoningText: "" };
+		this.#openProse = next;
+		this.#openItems.set(contentIndex, next);
 	}
 
-	#thinkingDelta(delta: string): void {
-		if (this.#open?.kind !== "reasoning") return;
-		const cur = this.#open;
+	#thinkingDelta(contentIndex: number, delta: string): void {
+		const cur = this.#openItems.get(contentIndex);
+		if (cur?.kind !== "reasoning") return;
 		cur.reasoningText += delta;
 		this.#emit("response.reasoning_summary_text.delta", {
 			item_id: cur.itemId,
@@ -328,22 +349,46 @@ class ResponsesStreamWriter {
 		});
 	}
 
-	#thinkingEnd(content: string | undefined): void {
-		if (this.#open?.kind !== "reasoning") return;
-		const cur = this.#open;
+	#thinkingEnd(contentIndex: number, content: string | undefined): void {
+		const cur = this.#openItems.get(contentIndex);
+		if (cur?.kind !== "reasoning") return;
 		const text = content ?? cur.reasoningText;
 		cur.reasoningText = text;
 		const where = { item_id: cur.itemId, output_index: cur.outputIndex, summary_index: 0 };
 		this.#emit("response.reasoning_summary_text.done", { ...where, text });
 		this.#emit("response.reasoning_summary_part.done", { ...where, part: { type: "summary_text", text } });
-		this.#closeOpen();
+		this.#closeProse(cur);
 	}
 
 	#toolCallStart(partial: AssistantMessage, contentIndex: number): void {
-		this.#closeOpenProse();
 		const outputIndex = this.#outputIndex++;
 		const part = partial.content[contentIndex];
 		const tc = part?.type === "toolCall" ? part : undefined;
+		if (tc?.providerMetadata?.type === "computer") {
+			const metadata = tc.providerMetadata;
+			const callId = wireCallId(tc.id);
+			this.#emit("response.output_item.added", {
+				output_index: outputIndex,
+				item: {
+					type: "computer_call",
+					id: metadata.providerItemId,
+					call_id: callId,
+					actions: metadata.actions,
+					pending_safety_checks: metadata.pendingSafetyChecks,
+					status: "in_progress",
+				},
+			});
+			this.#openItems.set(contentIndex, {
+				kind: "computer_call",
+				itemId: metadata.providerItemId,
+				outputIndex,
+				contentIndex,
+				callId,
+				actions: metadata.actions,
+				pendingSafetyChecks: metadata.pendingSafetyChecks,
+			});
+			return;
+		}
 		const customWireName = tc?.customWireName || undefined;
 		const itemId = tc?.thoughtSignature ?? (customWireName !== undefined ? makeCustomCallId() : makeFuncCallId());
 		const callId = wireCallId(tc?.id ?? "");
@@ -353,7 +398,7 @@ class ResponsesStreamWriter {
 				? { type: "custom_tool_call", id: itemId, call_id: callId, name, input: "", status: "in_progress" }
 				: { type: "function_call", id: itemId, call_id: callId, name, arguments: "", status: "in_progress" };
 		this.#emit("response.output_item.added", { output_index: outputIndex, item });
-		const next: OpenFunctionCall = {
+		this.#openItems.set(contentIndex, {
 			kind: "function_call",
 			itemId,
 			outputIndex,
@@ -362,21 +407,12 @@ class ResponsesStreamWriter {
 			name,
 			argsText: "",
 			...(customWireName !== undefined ? { customWireName } : {}),
-		};
-		this.#openCalls.set(contentIndex, next);
-		this.#open = next;
-	}
-
-	/** The open call an event at `contentIndex` writes to: the call opened there, else the open item when it is a call. */
-	#callFor(contentIndex: number): OpenFunctionCall | undefined {
-		const byIndex = this.#openCalls.get(contentIndex);
-		if (byIndex) return byIndex;
-		return this.#open?.kind === "function_call" ? this.#open : undefined;
+		});
 	}
 
 	#toolCallDelta(contentIndex: number, delta: string): void {
-		const cur = this.#callFor(contentIndex);
-		if (!cur) return;
+		const cur = this.#openItems.get(contentIndex);
+		if (cur?.kind !== "function_call") return;
 		cur.argsText += delta;
 		const name = cur.customWireName
 			? "response.custom_tool_call_input.delta"
@@ -385,8 +421,19 @@ class ResponsesStreamWriter {
 	}
 
 	#toolCallEnd(contentIndex: number, tc: ToolCall): void {
-		const cur = this.#callFor(contentIndex);
-		if (!cur) return;
+		const cur = this.#openItems.get(contentIndex);
+		if (cur?.kind === "computer_call") {
+			cur.callId = wireCallId(tc.id);
+			const metadata = tc.providerMetadata;
+			if (metadata?.type === "computer") {
+				cur.itemId = metadata.providerItemId;
+				cur.actions = metadata.actions;
+				cur.pendingSafetyChecks = metadata.pendingSafetyChecks;
+			}
+			this.#closeCall(cur);
+			return;
+		}
+		if (cur?.kind !== "function_call") return;
 		// Promote possibly-late info from the canonical ToolCall.
 		if (tc.customWireName && !cur.customWireName) cur.customWireName = tc.customWireName;
 		if (tc.thoughtSignature) cur.itemId = tc.thoughtSignature;
@@ -408,21 +455,45 @@ class ResponsesStreamWriter {
 		this.#closeCall(cur);
 	}
 
-	#closeCall(call: OpenFunctionCall): void {
-		const item = call.customWireName
-			? customToolCallItem(call.itemId, call.callId, call.customWireName, call.argsText)
-			: functionCallItem(call.itemId, call.callId, call.name, call.argsText);
-		this.#emit("response.output_item.done", { output_index: call.outputIndex, item });
-		this.#finished.push(item);
-		this.#openCalls.delete(call.contentIndex);
-		if (this.#open === call) this.#open = null;
+	/** Every open item, closed in the order it opened. */
+	#closeAll(): void {
+		for (const item of new Set(this.#openItems.values())) {
+			if (item.kind === "function_call" || item.kind === "computer_call") this.#closeCall(item);
+			else this.#closeProse(item);
+		}
 	}
 
-	#closeOpen(): void {
-		const open = this.#open;
-		if (!open) return;
-		if (open.kind === "function_call") return this.#closeCall(open);
-		this.#open = null;
+	/** Drop an item from the open set: every content index it was reached by, and the prose slot. */
+	#forget(item: OpenItem): void {
+		for (const [contentIndex, candidate] of this.#openItems) {
+			if (candidate === item) this.#openItems.delete(contentIndex);
+		}
+		if (this.#openProse === item) this.#openProse = null;
+	}
+
+	#closeCall(call: OpenFunctionCall | OpenComputerCall): void {
+		let item: OutputItem;
+		if (call.kind === "computer_call") {
+			item = {
+				type: "computer_call",
+				id: call.itemId,
+				call_id: call.callId,
+				actions: call.actions,
+				pending_safety_checks: call.pendingSafetyChecks,
+				status: "completed",
+			};
+		} else {
+			item = call.customWireName
+				? customToolCallItem(call.itemId, call.callId, call.customWireName, call.argsText)
+				: functionCallItem(call.itemId, call.callId, call.name, call.argsText);
+		}
+		this.#forget(call);
+		this.#emit("response.output_item.done", { output_index: call.outputIndex, item });
+		this.#finished.push(item);
+	}
+
+	#closeProse(open: OpenMessage | OpenReasoning): void {
+		this.#forget(open);
 		const item: OutputItem =
 			open.kind === "message"
 				? {

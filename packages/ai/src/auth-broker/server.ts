@@ -18,6 +18,7 @@ import { BearerAllowList, json, resolvePeer } from "../utils/http-server";
 import { parseBind } from "../utils/parse-bind";
 import { type } from "../utils/schema/arktype";
 import { formatGenerationTag, parseGenerationTag } from "./generation-tag";
+import { compareCredentialBlockSnapshots } from "./protocol";
 import { AuthBrokerRefresher, type AuthBrokerRefresherSchedule } from "./refresher";
 import type {
 	CredentialBlockResponse,
@@ -148,11 +149,11 @@ class GenerationGate {
 
 	constructor(storage: AuthStorage) {
 		this.#storage = storage;
-		this.#unsubscribe = storage.onGenerationChanged(generation => this.#wake(generation));
+		this.#unsubscribe = storage.credentials.onGeneration(generation => this.#wake(generation));
 	}
 
 	waitForChange(afterGeneration: number, signal: AbortSignal): Promise<"changed" | "aborted"> {
-		if (this.#storage.getGeneration() !== afterGeneration) return Promise.resolve("changed");
+		if (this.#storage.credentials.generation !== afterGeneration) return Promise.resolve("changed");
 		if (signal.aborted) return Promise.resolve("aborted");
 
 		const done = Promise.withResolvers<"changed" | "aborted">();
@@ -242,14 +243,6 @@ function computeRotatesInMs(
 	return Math.max(0, rotatesAt - serverNowMs);
 }
 
-function compareCredentialBlockSnapshots(a: CredentialBlockSnapshot, b: CredentialBlockSnapshot): number {
-	const provider = a.providerKey.localeCompare(b.providerKey);
-	if (provider !== 0) return provider;
-	const scope = a.blockScope.localeCompare(b.blockScope);
-	if (scope !== 0) return scope;
-	return a.blockedUntilMs - b.blockedUntilMs;
-}
-
 function buildCredentialBlockGroups(
 	blocks: readonly StoredCredentialBlock[],
 	serverNowMs: number,
@@ -276,10 +269,10 @@ function buildCredentialBlockGroups(
 
 function buildSnapshot(storage: AuthStorage, refresher: AuthBrokerRefresher | undefined): SnapshotResponse {
 	const serverNowMs = Date.now();
-	const base = storage.exportSnapshot();
+	const base = storage.credentials.snapshot();
 	const { wire, nextSweepAt } = resolveRefresherSchedule(refresher, serverNowMs);
 	const credentialIds = base.credentials.map(entry => entry.id);
-	const blocksByCredentialId = buildCredentialBlockGroups(storage.listCredentialBlocks(credentialIds), serverNowMs);
+	const blocksByCredentialId = buildCredentialBlockGroups(storage.blocks.list(credentialIds), serverNowMs);
 	const credentials: SnapshotEntry[] = base.credentials.map(entry => {
 		const blocks = blocksByCredentialId.get(entry.id);
 		const rotatesInMs = computeRotatesInMs(entry, wire, nextSweepAt, serverNowMs);
@@ -302,8 +295,8 @@ async function serveSnapshot(
 	refresher: AuthBrokerRefresher | undefined,
 	peer: string,
 ): Promise<Response> {
-	await storage.reload();
-	let currentGeneration = storage.getGeneration();
+	await storage.credentials.reload();
+	let currentGeneration = storage.credentials.generation;
 	const clientGeneration = parseGenerationTag(req.headers.get("if-none-match"));
 	const waitMs = parseWaitMs(url);
 
@@ -325,8 +318,8 @@ async function serveSnapshot(
 	waitController.abort();
 	if (result === "aborted" || req.signal.aborted) return empty(499, snapshotHeaders(currentGeneration));
 
-	await storage.reload();
-	currentGeneration = storage.getGeneration();
+	await storage.credentials.reload();
+	currentGeneration = storage.credentials.generation;
 	if (currentGeneration !== clientGeneration) {
 		const body = buildSnapshot(storage, refresher);
 		logger.info("auth-broker snapshot long-poll changed", {
@@ -429,7 +422,7 @@ function serveSnapshotStream(
 		try {
 			do {
 				pendingBumps = 0;
-				await storage.reload();
+				await storage.credentials.reload();
 				if (closed) return;
 				const snapshot = buildSnapshot(storage, refresher);
 				// Generation must move forward; a duplicate listener firing without a
@@ -485,7 +478,7 @@ function serveSnapshotStream(
 	const stream = new ReadableStream<Uint8Array>({
 		async start(c) {
 			controller = c;
-			await storage.reload();
+			await storage.credentials.reload();
 			const initial = buildSnapshot(storage, refresher);
 			lastGeneration = initial.generation;
 			for (const entry of initial.credentials) lastByCredId.set(entry.id, fingerprintEntry(entry));
@@ -495,7 +488,7 @@ function serveSnapshotStream(
 				write(": keepalive\n\n");
 			}, keepaliveMs);
 			keepaliveTimer.unref?.();
-			unsubscribe = storage.onGenerationChanged(() => {
+			unsubscribe = storage.credentials.onGeneration(() => {
 				void processGenerationBump();
 			});
 			abortHandler = (): void => cleanup();
@@ -550,7 +543,7 @@ function credentialWriteFailed(event: string, id: number, peer: string, error: u
 
 /** A logged 404 when no loaded row carries `id`; undefined when one does. */
 function unknownCredential(storage: AuthStorage, id: number, peer: string, event: string): Response | undefined {
-	if (storage.hasCredentialId(id)) return undefined;
+	if (storage.credentials.hasId(id)) return undefined;
 	logger.info(event, { id, peer });
 	return json(404, { error: `No credential with id=${id}` });
 }
@@ -562,7 +555,7 @@ async function serveUsage({ storage }: BrokerContext, { req, peer }: BrokerReque
 		// last fetch instead of hitting provider endpoints repeatedly.
 		// `req.signal` propagates HTTP-client disconnects all the way to the
 		// per-caller cancel without touching the shared upstream fetch.
-		const reports = (await storage.fetchUsageReports?.({ signal: req.signal })) ?? [];
+		const reports = (await storage.usage.reports({ signal: req.signal })) ?? [];
 		// Drop the `raw` field — it's the provider-specific upstream body,
 		// large and unstable. Everything UI-relevant lives in `limits` and
 		// `metadata`.
@@ -576,9 +569,9 @@ async function serveUsage({ storage }: BrokerContext, { req, peer }: BrokerReque
 	}
 }
 
-function markUsageStale({ storage }: BrokerContext, { peer }: BrokerRequest): Response {
+async function markUsageStale({ storage }: BrokerContext, { peer }: BrokerRequest): Promise<Response> {
 	try {
-		storage.invalidateUsageCache?.();
+		await storage.usage.invalidate();
 		logger.info("auth-broker usage cache invalidated", { peer });
 		return json(200, { ok: true });
 	} catch (error) {
@@ -593,7 +586,7 @@ async function uploadCredential({ storage }: BrokerContext, { req, peer }: Broke
 	if (!parsed.ok) return parsed.response;
 	const { provider, credential } = parsed.data;
 	try {
-		const entries = storage.upsertCredential(provider, credential);
+		const entries = await storage.credentials.upsert(provider, credential);
 		const identity =
 			credential.type === "oauth"
 				? (credential.email ?? credential.accountId ?? credential.projectId ?? "(no identity)")
@@ -620,7 +613,7 @@ async function refreshCredential(
 	id: number,
 ): Promise<Response> {
 	try {
-		const entry = await storage.refreshCredentialById(id, req.signal);
+		const entry = await storage.oauth.refresh(id, req.signal);
 		const body: CredentialRefreshResponse = { entry };
 		logger.info("auth-broker credential refreshed", {
 			id,
@@ -642,7 +635,7 @@ async function disableCredential(
 	const parsed = await parseBody(req, wireSchemas().credentialDisableRequestSchema, { allowEmpty: true });
 	if (!parsed.ok) return parsed.response;
 	const cause = parsed.data.cause && parsed.data.cause.length > 0 ? parsed.data.cause : "disabled via auth-broker";
-	if (!storage.disableCredentialById(id, cause)) {
+	if (!(await storage.credentials.disable(id, cause))) {
 		logger.info("auth-broker disable miss", { id, peer, cause });
 		return json(404, { error: `No credential with id=${id}` });
 	}
@@ -667,7 +660,7 @@ async function blockCredential(
 		blockedUntilMs: parsed.data.blockedUntilMs,
 	};
 	try {
-		storage.upsertCredentialBlock(block);
+		storage.blocks.upsert(block);
 		logger.info("auth-broker credential block upserted", {
 			id,
 			peer,
@@ -686,7 +679,7 @@ function deleteCredentialBlocks({ storage }: BrokerContext, { peer }: BrokerRequ
 	const unknown = unknownCredential(storage, id, peer, "auth-broker credential blocks delete miss");
 	if (unknown) return unknown;
 	try {
-		storage.deleteCredentialBlocks(id);
+		storage.blocks.deleteAll(id);
 		logger.info("auth-broker credential blocks deleted", { id, peer });
 		const response: CredentialBlocksDeleteResponse = { ok: true };
 		return json(200, response);

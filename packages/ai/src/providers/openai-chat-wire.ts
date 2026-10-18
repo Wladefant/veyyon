@@ -196,6 +196,8 @@ export interface ChatCompletionContentPartText {
 	text: string;
 	/** Always `text`. */
 	type: "text";
+	/** Explicit OpenAI prompt-cache breakpoint. */
+	prompt_cache_breakpoint?: { mode: "explicit" };
 }
 
 /** Image content part. */
@@ -203,6 +205,8 @@ export interface ChatCompletionContentPartImage {
 	image_url: ChatCompletionContentPartImageImageURL;
 	/** Always `image_url`. */
 	type: "image_url";
+	/** Explicit OpenAI prompt-cache breakpoint. */
+	prompt_cache_breakpoint?: { mode: "explicit" };
 }
 
 /** SDK `ChatCompletionContentPartImage.ImageURL`. */
@@ -218,6 +222,8 @@ export interface ChatCompletionContentPartInputAudio {
 	input_audio: ChatCompletionContentPartInputAudioInputAudio;
 	/** Always `input_audio`. */
 	type: "input_audio";
+	/** Explicit OpenAI prompt-cache breakpoint. */
+	prompt_cache_breakpoint?: { mode: "explicit" };
 }
 
 /** SDK `ChatCompletionContentPartInputAudio.InputAudio`. */
@@ -233,6 +239,8 @@ export interface ChatCompletionContentPartFile {
 	file: ChatCompletionContentPartFileFile;
 	/** Always `file`. */
 	type: "file";
+	/** Explicit OpenAI prompt-cache breakpoint. */
+	prompt_cache_breakpoint?: { mode: "explicit" };
 }
 
 /** SDK `ChatCompletionContentPart.File.File`. */
@@ -251,6 +259,8 @@ export interface ChatCompletionContentPartRefusal {
 	refusal: string;
 	/** Always `refusal`. */
 	type: "refusal";
+	/** Explicit OpenAI prompt-cache breakpoint. */
+	prompt_cache_breakpoint?: { mode: "explicit" };
 }
 
 /** Video content part. */
@@ -342,6 +352,12 @@ export interface ChatCompletionUserMessageParam {
 	name?: string;
 }
 
+/** Mistral Medium 3.5 reasoning content part on assistant history. */
+export interface ChatCompletionMistralThinkingPart {
+	type: "thinking";
+	thinking: ChatCompletionContentPartText[];
+}
+
 /** Assistant (model) message. */
 export interface ChatCompletionAssistantMessageParam {
 	/** Always `assistant`. */
@@ -349,7 +365,11 @@ export interface ChatCompletionAssistantMessageParam {
 	/** Data about a previous audio response from the model. */
 	audio?: ChatCompletionAssistantMessageParamAudio | null;
 	/** Message contents. Required unless `tool_calls` or `function_call` is specified. */
-	content?: string | Array<ChatCompletionContentPartText | ChatCompletionContentPartRefusal> | null;
+	/** Message contents. Mistral reasoning uses typed thinking parts in this array. */
+	content?:
+		| string
+		| Array<ChatCompletionContentPartText | ChatCompletionContentPartRefusal | ChatCompletionMistralThinkingPart>
+		| null;
 	/** Deprecated by OpenAI; replaced by `tool_calls`. */
 	function_call?: ChatCompletionAssistantMessageParamFunctionCall | null;
 	/** Optional participant name. */
@@ -550,7 +570,7 @@ export interface ChatCompletionChunk {
 	/** Moderation results, present on the moderation chunk when requested. */
 	moderation?: ChatCompletionChunkModeration | null;
 	/** Processing type actually used for serving the request. */
-	service_tier?: "auto" | "default" | "flex" | "scale" | "priority" | null;
+	service_tier?: "auto" | "default" | "flex" | "scale" | "priority" | "ultrafast" | null;
 	/** Deprecated by OpenAI: backend configuration fingerprint, pairs with `seed`. */
 	system_fingerprint?: string;
 	/** Only with `stream_options: {"include_usage": true}`; null except on the last chunk. */
@@ -807,6 +827,8 @@ export interface ChatCompletionCreateParamsBase {
 	prompt_cache_key?: string;
 	/** Retention policy for the prompt cache; `24h` enables extended caching. */
 	prompt_cache_retention?: "in_memory" | "24h" | null;
+	/** Explicit prompt-cache mode and minimum lifetime for GPT-5.6+ models. */
+	prompt_cache_options?: { mode: "implicit" | "explicit"; ttl?: "30m" };
 	/** Constrains effort on reasoning for reasoning models. */
 	reasoning_effort?: ReasoningEffort | null;
 	/** Output format: text, JSON mode, or Structured Outputs JSON schema. */
@@ -816,7 +838,7 @@ export interface ChatCompletionCreateParamsBase {
 	/** Deprecated by OpenAI (Beta): best-effort deterministic sampling seed. */
 	seed?: number | null;
 	/** Processing type used for serving the request. */
-	service_tier?: "auto" | "default" | "flex" | "scale" | "priority" | null;
+	service_tier?: "auto" | "default" | "flex" | "scale" | "priority" | "ultrafast" | null;
 	/** Up to 4 sequences where the API will stop generating further tokens. */
 	stop?: string | null | Array<string>;
 	/** Whether to store the output for model distillation or evals. */

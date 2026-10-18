@@ -1,5 +1,5 @@
 import { retryResetTimezoneOffsetFor } from "@veyyon/catalog/compat/behavior";
-import { anthropicResetDelayMs, extractRetryHint, resetHeaderTargetMs } from "@veyyon/utils/fetch-retry";
+import { extractRetryHint } from "@veyyon/utils/fetch-retry";
 
 export type HeadersLike = Headers | Record<string, string | undefined> | undefined | null;
 
@@ -43,24 +43,17 @@ export function formatErrorMessageWithRetryAfter(error: unknown, headers?: Heade
 
 export function getRetryAfterMsFromHeaders(headers: HeadersLike): number | undefined {
 	if (!headers) return undefined;
-
 	try {
-		const retryAfterMs = parseRetryAfterMsHeader(getHeaderValue(headers, "retry-after-ms"));
-		const retryAfter = parseRetryAfterHeader(getHeaderValue(headers, "retry-after"));
-		const resetMs = parseResetHeader(getHeaderValue(headers, "x-ratelimit-reset-ms"), "ms");
-		const resetSeconds = parseResetHeader(getHeaderValue(headers, "x-ratelimit-reset"), "s");
-
-		const candidates = [retryAfterMs, retryAfter, resetMs, resetSeconds].filter(
-			(value): value is number => value !== undefined,
-		);
-		if (candidates.length > 0) return Math.max(...candidates);
-		// Anthropic omits `retry-after` on a meaningful share of its 429s while
-		// still stating, per bucket, when the limit refills. Consulted only after
-		// the generic headers because those are the provider's direct answer to
-		// "how long should you wait"; the reset clocks are the fallback for when
-		// it did not give one.
-		if (!(headers instanceof Headers)) return undefined;
-		return anthropicResetDelayMs(headers);
+		let normalized: Headers;
+		if (headers instanceof Headers) {
+			normalized = headers;
+		} else {
+			normalized = new Headers();
+			for (const [key, value] of Object.entries(headers)) {
+				if (typeof value === "string") normalized.set(key, value);
+			}
+		}
+		return extractRetryHint(normalized);
 	} catch {
 		// Header bags are provider-controlled and occasionally Proxy-backed. A
 		// malformed bag must not replace the request error we are formatting.
@@ -107,57 +100,3 @@ function isHeaderRecord(value: unknown): value is Record<string, string | undefi
 	return Object.values(value).every(entry => entry === undefined || typeof entry === "string");
 }
 
-function getHeaderValue(headers: Headers | Record<string, string | undefined>, name: string): string | undefined {
-	if (headers instanceof Headers) {
-		const value = headers.get(name);
-		return value ?? undefined;
-	}
-
-	const target = name.toLowerCase();
-	for (const [key, value] of Object.entries(headers)) {
-		if (key.toLowerCase() === target && typeof value === "string") {
-			return value;
-		}
-	}
-	return undefined;
-}
-
-/** `retry-after-ms` (Anthropic-style): a plain millisecond delta. */
-function parseRetryAfterMsHeader(value: string | undefined): number | undefined {
-	if (!value) return undefined;
-	const ms = Number(value.trim());
-	if (!Number.isFinite(ms) || ms < 0) return undefined;
-	return Math.ceil(ms);
-}
-
-function parseRetryAfterHeader(value: string | undefined): number | undefined {
-	if (!value) return undefined;
-	const trimmed = value.trim();
-	if (!trimmed) return undefined;
-
-	const numeric = Number(trimmed);
-	if (Number.isFinite(numeric)) {
-		if (numeric < 0) return undefined;
-		return Math.ceil(numeric * 1000);
-	}
-
-	const dateMs = Date.parse(trimmed);
-	if (!Number.isNaN(dateMs)) {
-		return Math.max(0, Math.ceil(dateMs - Date.now()));
-	}
-
-	return undefined;
-}
-
-function parseResetHeader(value: string | undefined, unit: "ms" | "s"): number | undefined {
-	if (!value) return undefined;
-	const numeric = Number(value);
-	if (!Number.isFinite(numeric) || numeric < 0) return undefined;
-
-	const target = resetHeaderTargetMs(numeric);
-	if ("delta" in target) {
-		// Not a timestamp: the raw value is a wait in the header's own unit.
-		return Math.ceil(unit === "ms" ? numeric : numeric * 1000);
-	}
-	return Math.max(0, Math.ceil(target.atMs - Date.now()));
-}

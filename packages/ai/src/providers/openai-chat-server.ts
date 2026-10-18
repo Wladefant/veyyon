@@ -38,6 +38,8 @@ import {
 	type OpenAIChatToolChoice,
 	openaiChatRequestSchema,
 } from "./openai-chat-server-schema";
+import { decodeDataUri } from "./openai-data-uri";
+import { coerceNullMessageContentInPlace } from "./openai-shared";
 
 export type { ParsedRequest };
 
@@ -47,12 +49,45 @@ type RequestBody = typeof openaiChatRequestSchema.infer;
 // parseRequest
 // ---------------------------------------------------------------------------
 
+const UNSUPPORTED_EXPLICIT_PROMPT_CACHE_MESSAGE =
+	"openai-chat: prompt_cache_options and prompt_cache_breakpoint are unsupported by this auth-gateway route; use /v1/pi/stream with options.promptCache instead";
+
+function hasUnsupportedExplicitPromptCacheFields(body: unknown): boolean {
+	if (typeof body !== "object" || body === null || Array.isArray(body)) return false;
+	const request = body as Record<string, unknown>;
+	if ("prompt_cache_options" in request || "prompt_cache_breakpoint" in request) return true;
+	if (!Array.isArray(request.messages)) return false;
+
+	return request.messages.some(message => {
+		if (typeof message !== "object" || message === null || Array.isArray(message)) return false;
+		const wireMessage = message as Record<string, unknown>;
+		if ("prompt_cache_breakpoint" in wireMessage) return true;
+		return (
+			Array.isArray(wireMessage.content) &&
+			wireMessage.content.some(
+				part =>
+					typeof part === "object" && part !== null && !Array.isArray(part) && "prompt_cache_breakpoint" in part,
+			)
+		);
+	});
+}
+
+function rejectUnsupportedExplicitPromptCacheFields(body: unknown): void {
+	if (hasUnsupportedExplicitPromptCacheFields(body)) {
+		throw new AIError.ValidationError(UNSUPPORTED_EXPLICIT_PROMPT_CACHE_MESSAGE);
+	}
+}
+
 export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 	// Header capture is centralized in `auth-gateway/server.ts` (allow-listed
 	// headers like openai-organization/openai-project/openai-beta/x-stainless-*
 	// land on `options.headers` automatically). We consult `headers` here too
 	// for `resolvePromptCacheKey` to pull a cache identity out of inbound
 	// vendor-neutral headers when the body doesn't carry one.
+	rejectUnsupportedExplicitPromptCacheFields(body);
+	const request =
+		typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : undefined;
+	coerceNullMessageContentInPlace(request?.messages, message => message.role !== "function");
 	const data = openaiChatRequestSchema(body);
 	if (data instanceof type.errors) {
 		throw new AIError.ValidationError(`openai-chat: ${data.summary}`);
@@ -182,7 +217,9 @@ function applyRequestOptions(
 	if (data.user !== undefined) options.user = data.user;
 	if (data.response_format !== undefined) options.responseFormat = data.response_format;
 	if (data.parallel_tool_calls !== undefined) options.parallelToolCalls = data.parallel_tool_calls;
-	if (isEffort(data.reasoning_effort)) options.reasoning = data.reasoning_effort;
+	if (data.reasoning_effort === "none") {
+		options.forceReasoningOff = true;
+	} else if (isEffort(data.reasoning_effort)) options.reasoning = data.reasoning_effort;
 	if (isServiceTier(data.service_tier)) options.serviceTier = data.service_tier;
 	if (data.metadata !== undefined) options.metadata = data.metadata;
 	if (promptCacheKey !== undefined) options.promptCacheKey = promptCacheKey;
@@ -228,18 +265,6 @@ function contentPartBlock(part: OpenAIChatContentPart): TextContent | ImageConte
 	return decoded
 		? { type: "image", data: decoded.data, mimeType: decoded.mimeType }
 		: { type: "text", text: `[image: ${url}]` };
-}
-
-function decodeDataUri(url: string): { data: string; mimeType: string } | undefined {
-	if (!url.startsWith("data:")) return undefined;
-	const comma = url.indexOf(",");
-	if (comma < 0) return undefined;
-	const header = url.slice(5, comma);
-	const payload = url.slice(comma + 1);
-	const isBase64 = header.endsWith(";base64");
-	const mimeType = (isBase64 ? header.slice(0, -";base64".length) : header) || "application/octet-stream";
-	const data = isBase64 ? payload : Buffer.from(decodeURIComponent(payload), "utf8").toString("base64");
-	return { data, mimeType };
 }
 
 function buildAssistantMessage(
@@ -512,6 +537,8 @@ function makeId(): string {
 interface SentToolCall {
 	id: string;
 	name: string;
+	/** Whether a delta has streamed argument bytes, so the start chunk's empty arguments stand. */
+	hasArgumentBytes: boolean;
 }
 
 /**
@@ -601,7 +628,7 @@ class ChatCompletionStreamWriter {
 		this.#wireIndexByContentIndex.set(contentIndex, index);
 		const part = partial.content[contentIndex];
 		const call = part?.type === "toolCall" ? part : undefined;
-		const sent: SentToolCall = { id: call?.id ?? "", name: call?.name ?? "" };
+		const sent: SentToolCall = { id: call?.id ?? "", name: call?.name ?? "", hasArgumentBytes: false };
 		this.#sentToolCalls.push(sent);
 		this.#emitChunk(
 			{ tool_calls: [{ index, id: sent.id, type: "function", function: { name: sent.name, arguments: "" } }] },
@@ -612,13 +639,15 @@ class ChatCompletionStreamWriter {
 	#toolCallDelta(contentIndex: number, delta: string): void {
 		const index = this.#wireIndexByContentIndex.get(contentIndex);
 		if (index === undefined) return;
+		const sent = this.#sentToolCalls[index];
+		if (delta.length > 0) sent.hasArgumentBytes = true;
 		this.#emitChunk({ tool_calls: [{ index, function: { arguments: delta } }] }, null);
 	}
 
 	/**
-	 * Upstream completions providers can receive the real id/name in a later chunk than
-	 * toolcall_start. Emit a corrective chunk only when the streamed value was empty: accumulating
-	 * clients concatenate string fields, so "" + value is the only safe correction.
+	 * Upstream providers can settle the id, name, or arguments after the start chunk. Emit a
+	 * correction only for fields whose streamed value was empty: accumulating clients concatenate
+	 * each field, so "" + value is the only safe correction.
 	 */
 	#toolCallEnd(contentIndex: number, call: ToolCall): void {
 		const index = this.#wireIndexByContentIndex.get(contentIndex);
@@ -626,11 +655,19 @@ class ChatCompletionStreamWriter {
 		const sent = this.#sentToolCalls[index];
 		const id = sent.id === "" && call.id !== "" ? call.id : undefined;
 		const name = sent.name === "" && call.name !== "" ? call.name : undefined;
-		if (id === undefined && name === undefined) return;
+		const args = sent.hasArgumentBytes ? undefined : stringifyArgs(call.arguments);
+		if (id === undefined && name === undefined && args === undefined) return;
 		const correction = {
 			index,
 			...(id !== undefined ? { id } : {}),
-			...(name !== undefined ? { function: { name } } : {}),
+			...(name !== undefined || args !== undefined
+				? {
+						function: {
+							...(name !== undefined ? { name } : {}),
+							...(args !== undefined ? { arguments: args } : {}),
+						},
+					}
+				: {}),
 		};
 		this.#emitChunk({ tool_calls: [correction] }, null);
 	}
@@ -672,6 +709,9 @@ class ChatCompletionStreamWriter {
 	}
 }
 
+const STREAM_KEEPALIVE_INTERVAL_MS = 15_000;
+const SSE_KEEPALIVE = ": keepalive\n\n";
+
 export function encodeStream(
 	events: AssistantMessageEventStream,
 	requestedModelId: string,
@@ -685,6 +725,13 @@ export function encodeStream(
 		cancelled = true;
 	};
 	control?.signal?.addEventListener("abort", markCancelled, { once: true });
+	let keepaliveTimer: NodeJS.Timeout | undefined;
+	const stopKeepalive = () => {
+		if (keepaliveTimer !== undefined) {
+			clearInterval(keepaliveTimer);
+			keepaliveTimer = undefined;
+		}
+	};
 
 	return new ReadableStream<Uint8Array>({
 		async start(controller) {
@@ -695,6 +742,21 @@ export function encodeStream(
 				enqueue: frame => controller.enqueue(encoder.encode(frame)),
 			};
 			const writer = new ChatCompletionStreamWriter(sink, requestedModelId, includeUsage);
+			// Some upstreams go silent for minutes mid-stream (e.g. xAI emits a large tool call's
+			// arguments only when complete); bytes on the wire keep the listener's idle timeout and
+			// client watchdogs from dropping a healthy stream. SSE comment lines are ignored by spec.
+			keepaliveTimer = setInterval(() => {
+				try {
+					if (cancelled) {
+						stopKeepalive();
+						return;
+					}
+					controller.enqueue(encoder.encode(SSE_KEEPALIVE));
+				} catch {
+					// Controller already closed or errored (client gone); stop the timer.
+					stopKeepalive();
+				}
+			}, STREAM_KEEPALIVE_INTERVAL_MS);
 			try {
 				if (cancelled) {
 					controller.close();
@@ -707,11 +769,13 @@ export function encodeStream(
 					controller.close();
 				}
 			} finally {
+				stopKeepalive();
 				control?.signal?.removeEventListener("abort", markCancelled);
 			}
 		},
 		cancel(reason) {
 			cancelled = true;
+			stopKeepalive();
 			control?.signal?.removeEventListener("abort", markCancelled);
 			control?.onCancel?.(reason);
 		},

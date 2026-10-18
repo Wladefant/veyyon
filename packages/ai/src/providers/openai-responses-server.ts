@@ -12,27 +12,45 @@
 
 import { isEffort } from "@veyyon/catalog/effort";
 import { emptyUsage } from "@veyyon/catalog/models";
+import { structuredCloneJSON } from "@veyyon/utils/json";
 import * as logger from "@veyyon/utils/logger";
 import { isRecord } from "@veyyon/utils/type-guards";
 import { resolvePromptCacheKey } from "../auth-gateway/http";
 import type { AuthGatewayParsedRequest as ParsedRequest } from "../auth-gateway/types";
 import * as AIError from "../error";
-import type { AssistantMessage, Context, Message, TextContent, ThinkingContent, Tool, ToolCall } from "../types";
+import type {
+	AssistantMessage,
+	ComputerAction,
+	ComputerSafetyCheck,
+	ComputerScreenshotRef,
+	Context,
+	ImageContent,
+	Message,
+	TextContent,
+	ThinkingContent,
+	Tool,
+	ToolCall,
+} from "../types";
 import { isServiceTier } from "../types";
 import { type } from "../utils/schema/arktype";
+import { decodeDataUri } from "./openai-data-uri";
 import { makeMsgId, stringOrUndefined } from "./openai-responses-server-output";
 import {
+	type OpenAIResponsesComputerCallItem,
+	type OpenAIResponsesComputerCallOutputItem,
 	type OpenAIResponsesCustomToolCallItem,
 	type OpenAIResponsesCustomToolCallOutputItem,
 	type OpenAIResponsesFunctionCallItem,
 	type OpenAIResponsesFunctionCallOutputItem,
 	type OpenAIResponsesInputContent,
+	type OpenAIResponsesInputFileBlock,
+	type OpenAIResponsesInputImageBlock,
 	type OpenAIResponsesOutputContent,
 	type OpenAIResponsesReasoningItem,
 	type OpenAIResponsesTool,
 	openaiResponsesRequestSchema,
 } from "./openai-responses-server-schema";
-import { encodeTextSignatureV1 } from "./openai-shared";
+import { coerceNullMessageContentInPlace, encodeTextSignatureV1 } from "./openai-shared";
 
 export { encodeResponse } from "./openai-responses-server-output";
 export { encodeStream } from "./openai-responses-server-stream";
@@ -42,11 +60,35 @@ export type { ParsedRequest };
 type RequestBody = typeof openaiResponsesRequestSchema.infer;
 type RequestInputItem = Exclude<NonNullable<RequestBody["input"]>, string>[number];
 
+// ─── prompt-cache guards ────────────────────────────────────────────────────
+
+const UNSUPPORTED_EXPLICIT_PROMPT_CACHE_MESSAGE =
+	"openai-responses: prompt_cache_options and prompt_cache_breakpoint are unsupported by this auth-gateway route; use /v1/pi/stream with options.promptCache instead";
+
+function hasUnsupportedExplicitPromptCacheFields(body: unknown): boolean {
+	if (!isRecord(body)) return false;
+	if ("prompt_cache_options" in body || "prompt_cache_breakpoint" in body) return true;
+	const input = body.input;
+	if (!Array.isArray(input)) return false;
+	return input.some((item: unknown) => {
+		if (!isRecord(item)) return false;
+		if ("prompt_cache_breakpoint" in item) return true;
+		return (
+			Array.isArray(item.content) &&
+			item.content.some((part: unknown) => isRecord(part) && "prompt_cache_breakpoint" in part)
+		);
+	});
+}
+
+function rejectUnsupportedExplicitPromptCacheFields(body: unknown): void {
+	if (hasUnsupportedExplicitPromptCacheFields(body)) {
+		throw new AIError.ValidationError(UNSUPPORTED_EXPLICIT_PROMPT_CACHE_MESSAGE);
+	}
+}
+
 // ─── once-only warnings ─────────────────────────────────────────────────────
 // Module-scoped so we don't spam logs once per turn.
 
-let warnedImageNotSupported = false;
-let warnedFileNotSupported = false;
 let warnedReasoningSummaryLevel = false;
 
 // ─── inbound parser helpers ─────────────────────────────────────────────────
@@ -69,36 +111,10 @@ function extractReasoningTextFromItem(item: OpenAIResponsesReasoningItem): strin
 type InputBlockUnion =
 	| { type: "input_text"; text: string }
 	| { type: "text"; text: string }
-	| { type: "input_image"; detail?: "auto" | "low" | "high"; image_url?: string; file_id?: string }
-	| { type: "input_file"; file_id?: string; filename?: string; file_data?: string };
+	| OpenAIResponsesInputImageBlock
+	| OpenAIResponsesInputFileBlock;
 
-/**
- * The text an `input_image` / `input_file` block stands in as. pi-ai's `ImageContent` only carries
- * inline base64 data and there is no resolver for OpenAI `image_url` / `file_id` references, so
- * each becomes a bracketed placeholder. Logs once per kind.
- */
-function referencePlaceholder(block: Exclude<InputBlockUnion, { text: string }>): string {
-	if (block.type === "input_image") {
-		if (!warnedImageNotSupported) {
-			warnedImageNotSupported = true;
-			logger.warn("openai-responses-server: input_image dropped (no pi-ai bridge for image_url/file_id)", {
-				hasUrl: typeof block.image_url === "string",
-				hasFileId: typeof block.file_id === "string",
-			});
-		}
-		return `[image: ${block.image_url ?? block.file_id ?? "?"}]`;
-	}
-	if (!warnedFileNotSupported) {
-		warnedFileNotSupported = true;
-		logger.warn("openai-responses-server: input_file dropped (no pi-ai bridge for file_id/file_data)", {
-			hasFileId: typeof block.file_id === "string",
-			hasFileData: typeof block.file_data === "string",
-		});
-	}
-	return `[file: ${block.file_id ?? block.filename ?? "?"}]`;
-}
-
-/** Walk an input message's content array and produce pi-ai's `TextContent[]`. */
+/** Walk an input message's content array and retain only text; native image and file references ride on the provider payload. */
 function inputContentParts(blocks: OpenAIResponsesInputContent[] | string | undefined): string | TextContent[] {
 	if (typeof blocks === "string") return blocks;
 	if (!blocks) return [];
@@ -107,8 +123,6 @@ function inputContentParts(blocks: OpenAIResponsesInputContent[] | string | unde
 		const block = raw as InputBlockUnion;
 		if (block.type === "input_text" || block.type === "text") {
 			parts.push({ type: "text", text: block.text });
-		} else if (block.type === "input_image" || block.type === "input_file") {
-			parts.push({ type: "text", text: referencePlaceholder(block) });
 		}
 	}
 	return parts.length === 1 ? parts[0].text : parts;
@@ -194,21 +208,65 @@ function buildTools(tools: Array<OpenAIResponsesTool | { type: string }> | undef
 	return out.length > 0 ? out : undefined;
 }
 
-/** Flatten a function_call_output array form (text + refusal) into a single string. */
-function flattenFunctionOutputArray(blocks: readonly unknown[]): string {
-	const parts: string[] = [];
-	for (const raw of blocks) {
+/** The content a function or custom tool output carries: text, refusals and native images, in order. */
+function functionOutputContent(output: string | readonly unknown[] | undefined): (TextContent | ImageContent)[] {
+	if (typeof output === "string") return [{ type: "text", text: output }];
+	if (!output) return [{ type: "text", text: "" }];
+
+	const content: (TextContent | ImageContent)[] = [];
+	let legacyText = "";
+	const flushLegacyText = (): void => {
+		if (legacyText.length === 0) return;
+		content.push({ type: "text", text: legacyText });
+		legacyText = "";
+	};
+	for (const raw of output) {
 		if (!isRecord(raw)) continue;
-		const t = raw.type;
-		if (t === "output_text" || t === "text") {
+		const blockType = raw.type;
+		if (blockType === "input_text") {
+			flushLegacyText();
 			const text = stringOrUndefined(raw.text);
-			if (text) parts.push(text);
-		} else if (t === "refusal") {
+			if (text !== undefined) content.push({ type: "text", text });
+			continue;
+		}
+		if (blockType === "output_text" || blockType === "text") {
+			const text = stringOrUndefined(raw.text);
+			if (text) legacyText += text;
+			continue;
+		}
+		if (blockType === "refusal") {
 			const refusal = stringOrUndefined(raw.refusal);
-			if (refusal) parts.push(`[refusal: ${refusal}]`);
+			if (refusal) legacyText += `[refusal: ${refusal}]`;
+			continue;
+		}
+		if (blockType === "input_image") {
+			flushLegacyText();
+			const imageUrl = stringOrUndefined(raw.image_url) || undefined;
+			const decoded = imageUrl ? decodeDataUri(imageUrl) : undefined;
+			const detail =
+				raw.detail === "auto" || raw.detail === "low" || raw.detail === "high" || raw.detail === "original"
+					? raw.detail
+					: undefined;
+			if (decoded) {
+				content.push({ type: "image", ...decoded, ...(detail ? { detail } : {}) });
+			} else {
+				const referenceImage: ImageContent = {
+					type: "image",
+					data: "",
+					mimeType: "application/octet-stream",
+					...(detail ? { detail } : {}),
+				};
+				if (imageUrl) {
+					content.push({ ...referenceImage, url: imageUrl });
+				} else {
+					const fileId = stringOrUndefined(raw.file_id) || undefined;
+					if (fileId) content.push({ ...referenceImage, providerFile: { provider: "openai", id: fileId } });
+				}
+			}
 		}
 	}
-	return parts.join("");
+	flushLegacyText();
+	return content.length > 0 ? content : [{ type: "text", text: "" }];
 }
 
 // ─── input items ────────────────────────────────────────────────────────────
@@ -253,15 +311,40 @@ type MessageItem = {
 function bridgeMessage(msg: MessageItem, into: InputBridge): void {
 	switch (msg.role) {
 		case "system": {
-			const text = inputContentParts(msg.content as OpenAIResponsesInputContent[] | string | undefined);
-			const flat = typeof text === "string" ? text : text.map(p => p.text).join("");
-			if (flat.length > 0) into.systemPrompt.push(flat);
+			const content = inputContentParts(msg.content as OpenAIResponsesInputContent[] | string | undefined);
+			const flat = typeof content === "string" ? content : content.map(part => part.text).join("");
+			const hasNativeRefs =
+				Array.isArray(msg.content) &&
+				msg.content.some(part => part.type === "input_image" || part.type === "input_file");
+			if (hasNativeRefs) {
+				into.messages.push({
+					role: "developer",
+					content,
+					providerPayload: {
+						type: "openaiResponsesHistory",
+						items: [structuredCloneJSON(msg) as unknown as Record<string, unknown>],
+						dt: true,
+					},
+					timestamp: into.now,
+				});
+			} else if (flat.length > 0) {
+				into.systemPrompt.push(flat);
+			}
 			return;
 		}
 		case "user":
 		case "developer": {
 			const content = inputContentParts(msg.content as OpenAIResponsesInputContent[] | string | undefined);
-			into.messages.push({ role: msg.role, content, timestamp: into.now });
+			into.messages.push({
+				role: msg.role,
+				content,
+				providerPayload: {
+					type: "openaiResponsesHistory",
+					items: [structuredCloneJSON(msg) as unknown as Record<string, unknown>],
+					dt: true,
+				},
+				timestamp: into.now,
+			});
 			return;
 		}
 		case "assistant": {
@@ -316,20 +399,48 @@ function bridgeCustomToolCall(call: OpenAIResponsesCustomToolCallItem, into: Inp
 	openAssistantTurn(into).content.push(toolCall);
 }
 
-function bridgeToolOutput(callId: string, text: string, into: InputBridge): void {
+function bridgeComputerCall(call: OpenAIResponsesComputerCallItem, into: InputBridge): void {
+	const actions = (call.actions?.length ? call.actions : call.action ? [call.action] : []) as ComputerAction[];
+	const toolCall: ToolCall = {
+		type: "toolCall",
+		id: call.call_id,
+		name: "computer",
+		arguments: { actions },
+		providerMetadata: {
+			type: "computer",
+			providerItemId: call.id,
+			actions,
+			pendingSafetyChecks: call.pending_safety_checks as ComputerSafetyCheck[],
+		},
+	};
+	openAssistantTurn(into).content.push(toolCall);
+}
+
+function bridgeComputerCallOutput(output: OpenAIResponsesComputerCallOutputItem, into: InputBridge): void {
 	into.messages.push({
 		role: "toolResult",
-		toolCallId: callId,
-		toolName: findToolNameById(into.messages, callId),
-		content: [{ type: "text", text }],
-		isError: false,
+		toolCallId: output.call_id,
+		toolName: findToolNameById(into.messages, output.call_id) || "computer",
+		content: [],
+		isError: output.status === "failed",
+		providerMetadata: {
+			type: "computer",
+			screenshot: output.output as ComputerScreenshotRef,
+			acknowledgedSafetyChecks: (output.acknowledged_safety_checks ?? []) as ComputerSafetyCheck[],
+		},
 		timestamp: into.now,
 	});
 }
 
-function functionOutputText(output: OpenAIResponsesFunctionCallOutputItem["output"]): string {
-	if (typeof output === "string") return output;
-	return Array.isArray(output) ? flattenFunctionOutputArray(output) : "";
+function bridgeToolOutput(callId: string, content: (TextContent | ImageContent)[], into: InputBridge): void {
+	into.messages.push({
+		role: "toolResult",
+		toolCallId: callId,
+		toolName: findToolNameById(into.messages, callId),
+		content,
+		isError: false,
+		timestamp: into.now,
+	});
 }
 
 function bridgeInputItem(item: RequestInputItem, into: InputBridge): void {
@@ -345,12 +456,16 @@ function bridgeInputItem(item: RequestInputItem, into: InputBridge): void {
 			return bridgeCustomToolCall(item as OpenAIResponsesCustomToolCallItem, into);
 		case "function_call_output": {
 			const output = item as OpenAIResponsesFunctionCallOutputItem;
-			return bridgeToolOutput(output.call_id, functionOutputText(output.output), into);
+			return bridgeToolOutput(output.call_id, functionOutputContent(output.output), into);
 		}
 		case "custom_tool_call_output": {
 			const output = item as OpenAIResponsesCustomToolCallOutputItem;
-			return bridgeToolOutput(output.call_id, output.output, into);
+			return bridgeToolOutput(output.call_id, functionOutputContent(output.output), into);
 		}
+		case "computer_call":
+			return bridgeComputerCall(item as OpenAIResponsesComputerCallItem, into);
+		case "computer_call_output":
+			return bridgeComputerCallOutput(item as OpenAIResponsesComputerCallOutputItem, into);
 	}
 	// Other item types are tolerated but not bridged.
 }
@@ -420,6 +535,8 @@ function routingOptions(
 // ─── parseRequest ───────────────────────────────────────────────────────────
 
 export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
+	rejectUnsupportedExplicitPromptCacheFields(body);
+	coerceNullMessageContentInPlace(isRecord(body) ? body.input : undefined);
 	const data = openaiResponsesRequestSchema(body);
 	if (data instanceof type.errors) {
 		throw new AIError.ValidationError(`openai-responses: ${data.summary}`);

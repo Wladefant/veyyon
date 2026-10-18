@@ -29,10 +29,18 @@
 - Mapped provider server and user profile schema imports to local schema adapters with no user-visible change ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Aligned SQLite credential store import subpath and converted UsageService to dynamic usage provider inventory ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Codex account ranking ignores usage windows of length 0, so one account no longer takes every new session.
-- Aligned OpenAI Codex responses imports with openai-responses-stream exports and restored the UsageCostHistoryEntry interface in usage types, with no user-visible change.
+- Aligned OpenAI Codex responses imports with openai-responses-stream exports, with no user-visible change.
 - Bedrock resolves ambient AWS regions from `AWS_REGION`, `AWS_DEFAULT_REGION` or an enabled shared AWS config profile.
 - AnthropicConnectionError takes (error, url) and AnthropicApiError.fromResponse takes (response, callerSignal), at upstream parity.
 - Exported THINKING_BINDING_CONTROLS_BETA and parseAnthropicInputTransformations from Anthropic wire types, with no user-visible change.
+
+### Changed
+
+- Modularized auth storage into keys, credentials, sessions, limits, blocks, usage, and pool namespaces, with no user-visible change ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+
+### Removed
+
+- Removed the unused request-cost history API; durable usage-limit history remains available.
 
 ## [1.5.6] - 2026-10-10
 ### Changed

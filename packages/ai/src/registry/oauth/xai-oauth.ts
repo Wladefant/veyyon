@@ -25,6 +25,10 @@ const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api
 
 const DISCOVERY_TIMEOUT_MS = 15_000;
 const TOKEN_REQUEST_TIMEOUT_MS = 20_000;
+const XAI_OAUTH_USERINFO_URL = `${XAI_OAUTH_ISSUER}/oauth2/userinfo`;
+const XAI_CLI_BILLING_BASE_URL = "https://cli-chat-proxy.grok.com";
+const XAI_CLI_BILLING_PATH = "/v1/billing";
+const XAI_CLI_BILLING_FORMAT = "credits";
 
 interface XAIOAuthDiscovery {
 	token_endpoint: string;
@@ -141,6 +145,100 @@ export function isXAIAccessTokenExpiring(jwt: string, skewSeconds: number = 0): 
 	const now = Math.floor(Date.now() / 1000);
 	const skew = Math.max(0, Math.floor(skewSeconds));
 	return exp <= now + skew;
+}
+
+/** Decode an xAI access-token JWT payload without verifying its signature. */
+export function parseXAIAccessTokenPayload(jwt: string): Record<string, unknown> | null {
+	const payload = decodeJwtPayload(jwt);
+	return isRecord(payload) && !Array.isArray(payload) ? payload : null;
+}
+
+/** Extract the stable xAI subject UUID from an access token. */
+export function extractXAIAccessTokenSubject(jwt: string): string | undefined {
+	const sub = parseXAIAccessTokenPayload(jwt)?.sub;
+	return typeof sub === "string" && sub.trim() ? sub.trim() : undefined;
+}
+
+export interface XAIOAuthIdentity {
+	accountId?: string;
+	email?: string;
+	name?: string;
+}
+
+/** Fetch optional OIDC userinfo for a valid xAI access token. */
+export async function fetchXAIOAuthIdentity(
+	accessToken: string,
+	fetchOverride?: FetchImpl,
+	signal?: AbortSignal,
+): Promise<XAIOAuthIdentity | null> {
+	const token = accessToken.trim();
+	if (!token) return null;
+	const fetchImpl = fetchOverride ?? fetch;
+	try {
+		const response = await fetchImpl(XAI_OAUTH_USERINFO_URL, {
+			method: "GET",
+			headers: {
+				Authorization: `Bearer ${token}`,
+				Accept: "application/json",
+			},
+			redirect: "error",
+			signal: signal
+				? AbortSignal.any([signal, AbortSignal.timeout(DISCOVERY_TIMEOUT_MS)])
+				: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
+		});
+		if (!response.ok) return null;
+		const payload = (await response.json()) as unknown;
+		if (!isRecord(payload) || Array.isArray(payload)) return null;
+		const sub = typeof payload.sub === "string" && payload.sub.trim() ? payload.sub.trim() : undefined;
+		const email = typeof payload.email === "string" && payload.email.trim() ? payload.email.trim() : undefined;
+		const name = typeof payload.name === "string" && payload.name.trim() ? payload.name.trim() : undefined;
+		if (!sub && !email && !name) return null;
+		return {
+			...(sub ? { accountId: sub } : {}),
+			...(email ? { email: email.toLowerCase() } : {}),
+			...(name ? { name } : {}),
+		};
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Pin SuperGrok billing URLs to HTTPS `grok.com` / `*.grok.com`.
+ * The CLI billing proxy is intentionally not on `*.x.ai`.
+ */
+export function validateXAIBillingEndpoint(url: string, field: string = "billing_url"): string {
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		throw new AIError.OAuthError(`Invalid xAI ${field}: ${url}`, { kind: "validation", provider: "xai" });
+	}
+	const host = parsed.hostname.toLowerCase();
+	if (parsed.protocol !== "https:" || !host || !(host === "grok.com" || host.endsWith(".grok.com"))) {
+		throw new AIError.OAuthError(`Invalid xAI ${field}: ${url}`, { kind: "validation", provider: "xai" });
+	}
+	return url;
+}
+
+/** Build the SuperGrok CLI billing URL. Pass `""` to omit `format` (unified monthly payload). */
+export function buildXAICliBillingUrl(format: string = XAI_CLI_BILLING_FORMAT): string {
+	const url = new URL(XAI_CLI_BILLING_PATH, XAI_CLI_BILLING_BASE_URL);
+	if (format) url.searchParams.set("format", format);
+	return validateXAIBillingEndpoint(url.toString());
+}
+
+/**
+ * Headers for SuperGrok CLI billing (`cli-chat-proxy.grok.com`).
+ * Official Grok CLI also sends `X-XAI-Token-Auth: xai-grok-cli` on this host;
+ * include it so billing stays on the same product gate as chat inference.
+ */
+export function getXAICliBillingHeaders(options: { accessToken: string }): Record<string, string> {
+	return {
+		Authorization: `Bearer ${options.accessToken}`,
+		Accept: "application/json",
+		"X-XAI-Token-Auth": "xai-grok-cli",
+	};
 }
 
 function parseXAIDeviceAuthorization(payload: unknown): XAIDeviceAuthorization {

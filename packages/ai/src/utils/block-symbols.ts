@@ -85,3 +85,42 @@ export type SyntheticUserCarrier = object & { [kSyntheticUser]?: boolean };
 export function isSyntheticUser(message: SyntheticUserCarrier | null | undefined): boolean {
 	return message?.[kSyntheticUser] === true;
 }
+
+/**
+ * Marks a `role: "user"` message that came from a source user message.
+ *
+ * Symbol-keyed so the marker never persists across the JSONL round-trip and
+ * never reaches the wire.
+ */
+export const kConversationalUser = Symbol("provider.message.conversationalUser");
+
+/** Carries the conversational-user marker without exposing a string-keyed property. */
+export type ConversationalUserCarrier = object & { [kConversationalUser]?: boolean };
+
+/** True for wire messages serialized from a source `role: "user"` message. */
+export function isConversationalUser(message: ConversationalUserCarrier | null | undefined): boolean {
+	return message?.[kConversationalUser] === true;
+}
+
+/**
+ * Marks a message synthesized by a per-call context transform rather than
+ * loaded from persisted conversation history. Symbol-keyed so the marker never
+ * persists or reaches the provider wire.
+ */
+export const kPerCallContextMessage = Symbol("agent.message.perCallContext");
+
+/** Carries per-call context provenance without exposing a string-keyed property. */
+export type PerCallContextMessageCarrier = object & { [kPerCallContextMessage]?: true };
+
+/** Copies per-call context provenance to a converted or projected message. */
+export function copyPerCallContextMessage(
+	target: PerCallContextMessageCarrier,
+	source: PerCallContextMessageCarrier,
+): void {
+	if (source[kPerCallContextMessage] === true) target[kPerCallContextMessage] = true;
+}
+
+/** True when a message was synthesized for the current provider call. */
+export function isPerCallContextMessage(message: PerCallContextMessageCarrier | null | undefined): boolean {
+	return message?.[kPerCallContextMessage] === true;
+}

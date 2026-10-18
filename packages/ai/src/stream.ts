@@ -6,7 +6,7 @@ import { scheduler } from "node:timers/promises";
 import { isOfficialAnthropicApiUrl } from "@veyyon/catalog/compat/anthropic";
 import { isOfficialOpenAIEndpoint } from "@veyyon/catalog/compat/openai";
 import type { Effort } from "@veyyon/catalog/effort";
-import { isVertexExpressOpenAIUrl, isVertexRawPredictUrl } from "@veyyon/catalog/hosts";
+import { isVertexExpressOpenAIUrl, isVertexRawPredictUrl, resolveVertexEndpointHost } from "@veyyon/catalog/hosts";
 import {
 	googleThinkingLevelWhenOff,
 	mapEffortToAnthropicAdaptiveEffort,
@@ -18,7 +18,7 @@ import {
 } from "@veyyon/catalog/model-thinking";
 import { discardAttemptUsage } from "@veyyon/catalog/models";
 import { CODEX_BASE_URL } from "@veyyon/catalog/wire/codex";
-import { atomicWriteFile } from "@veyyon/utils/atomic-write";
+import { untilAborted } from "@veyyon/utils/abortable";
 import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import { getConfigRootDir } from "@veyyon/utils/dirs";
 import { $env } from "@veyyon/utils/env";
@@ -50,6 +50,7 @@ import { isKimiModel, streamKimi } from "./providers/kimi";
 import type { OllamaChatOptions } from "./providers/ollama";
 import type { OpenAICompletionsOptions } from "./providers/openai-completions";
 import { streamPiNative } from "./providers/pi-native-client";
+import { getProviderDefinition } from "./registry";
 // Heavy provider stream functions are imported lazily via register-builtins,
 // which wraps each provider module in a dynamic import. This keeps the
 // AWS SDK, google-auth-library, @google/genai, @bufbuild/protobuf, and
@@ -172,8 +173,8 @@ function healLeakedThinking(model: Model<Api>, inner: AssistantMessageEventStrea
 
 type ProviderInFlightLease = {
 	path: string;
-	heartbeat: NodeJS.Timeout;
-	flushHeartbeat: () => Promise<void>;
+	/** Stops the interval and waits for the in-flight heartbeat write, bounded by the flush timeout. */
+	stopHeartbeat: () => Promise<void>;
 	/** Run one heartbeat now and wait for it, so a test does not have to wait for the interval. */
 	touchHeartbeat: () => Promise<void>;
 };
@@ -190,6 +191,11 @@ const PROVIDER_INFLIGHT_LOCK_STALE_MS = 10_000;
 const PROVIDER_INFLIGHT_LEASE_STALE_MS = 30_000;
 const PROVIDER_INFLIGHT_HEARTBEAT_MS = 5_000;
 const PROVIDER_INFLIGHT_SIGNAL_FALLBACK_MS = 250;
+const PROVIDER_INFLIGHT_HEARTBEAT_FLUSH_TIMEOUT_MS = 1_000;
+const PROVIDER_INFLIGHT_RELEASE_TIMEOUT_MS = 5_000;
+const PROVIDER_INFLIGHT_LOCK_RETRY_INITIAL_MS = 25;
+const PROVIDER_INFLIGHT_LOCK_RETRY_MAX_MS = 250;
+const PROVIDER_INFLIGHT_LOCK_RETRY_BUDGET_MS = 3_000;
 /**
  * Consecutive heartbeat write failures that mean this lease WILL be treated as dead.
  *
@@ -204,6 +210,18 @@ const PROVIDER_INFLIGHT_HEARTBEAT_FAILURES_BEFORE_STALE = Math.ceil(
 );
 
 let providerInFlightRootOverride: string | undefined;
+let providerInFlightHeartbeatMsOverride: number | undefined;
+let providerInFlightHeartbeatFlushTimeoutMsOverride: number | undefined;
+let providerInFlightHeartbeatWriterOverride:
+	| ((writeProviderInFlightInfo: () => Promise<void>) => Promise<void>)
+	| undefined;
+let providerInFlightLeaseRemoverOverride: ((leasePath: string) => Promise<void>) | undefined;
+let providerInFlightWaitObserverOverride: ((provider: string) => void) | undefined;
+let providerInFlightLockCreatedObserverOverride: ((lockDir: string) => Promise<void>) | undefined;
+let providerInFlightLockIdentifiedObserverOverride: ((lockDir: string) => Promise<void>) | undefined;
+let providerInFlightLockMkdirOverride: ((lockDir: string) => Promise<void>) | undefined;
+let providerInFlightLockPlatformOverride: NodeJS.Platform | undefined;
+let providerInFlightLockRetryTimings: { budgetMs?: number; initialDelayMs?: number; maxDelayMs?: number } | undefined;
 
 function providerInFlightRoot(): string {
 	if (providerInFlightRootOverride) return providerInFlightRootOverride;
@@ -244,7 +262,17 @@ async function readProviderInFlightInfo(infoPath: string): Promise<ProviderInFli
 
 async function writeProviderInFlightInfo(dir: string, token: string): Promise<void> {
 	const info: ProviderInFlightLeaseInfo = { pid: process.pid, timestamp: Date.now(), token };
-	await atomicWriteFile(path.join(dir, "info.json"), JSON.stringify(info));
+	const infoPath = path.join(dir, "info.json");
+	const tempPath = path.join(dir, `.info-${process.pid}-${crypto.randomUUID()}.tmp`);
+	try {
+		// Unlike atomicWriteFile, fs.writeFile does not recreate a lease directory that
+		// was removed while a timed-out heartbeat was still pending.
+		await fs.writeFile(tempPath, JSON.stringify(info), "utf8");
+		await fs.rename(tempPath, infoPath);
+	} catch (error) {
+		await fs.rm(tempPath, { force: true }).catch(() => {});
+		throw error;
+	}
 }
 
 async function isProviderInFlightDirStale(dir: string, staleMs: number): Promise<boolean> {
@@ -389,6 +417,38 @@ async function releaseProviderInFlightLockDirIfSame(
 	}
 }
 
+// On Windows, mkdir on a lock directory another process is concurrently deleting
+// fails with EPERM/EACCES instead of EEXIST. On win32 only, back off and retry
+// briefly; past the budget the original error is rethrown so a real permission
+// problem still surfaces. Every other outcome exits immediately.
+function isTransientProviderInFlightLockMkdirError(error: NodeJS.ErrnoException): boolean {
+	if ((providerInFlightLockPlatformOverride ?? process.platform) !== "win32") return false;
+	return error.code === "EPERM" || error.code === "EACCES";
+}
+
+async function mkdirProviderInFlightLockDir(lockDir: string, signal?: AbortSignal): Promise<void> {
+	const mkdir = providerInFlightLockMkdirOverride ?? ((dir: string) => fs.mkdir(dir));
+	let failures = 0;
+	let since = Date.now();
+	while (true) {
+		try {
+			await mkdir(lockDir);
+			return;
+		} catch (error) {
+			if (!isTransientProviderInFlightLockMkdirError(error as NodeJS.ErrnoException)) throw error;
+			const now = Date.now();
+			if (failures === 0) since = now;
+			const budgetMs = providerInFlightLockRetryTimings?.budgetMs ?? PROVIDER_INFLIGHT_LOCK_RETRY_BUDGET_MS;
+			if (now - since >= budgetMs) throw error;
+			const initialMs = providerInFlightLockRetryTimings?.initialDelayMs ?? PROVIDER_INFLIGHT_LOCK_RETRY_INITIAL_MS;
+			const maxMs = providerInFlightLockRetryTimings?.maxDelayMs ?? PROVIDER_INFLIGHT_LOCK_RETRY_MAX_MS;
+			const delayMs = Math.min(maxMs, initialMs * 2 ** failures);
+			failures++;
+			await untilAborted(signal, Bun.sleep(delayMs));
+		}
+	}
+}
+
 async function acquireProviderInFlightLock(provider: string, signal?: AbortSignal): Promise<() => Promise<void>> {
 	const lockDir = providerInFlightLockDir(provider);
 	await fs.mkdir(path.dirname(lockDir), { recursive: true });
@@ -397,13 +457,22 @@ async function acquireProviderInFlightLock(provider: string, signal?: AbortSigna
 		if (signal?.aborted)
 			throw signal.reason ?? new AIError.RequestAbortError("Provider request aborted before dispatch");
 		try {
-			await fs.mkdir(lockDir);
-			const lockIdentity = await readProviderInFlightLockIdentity(lockDir);
+			await mkdirProviderInFlightLockDir(lockDir, signal);
+			await providerInFlightLockCreatedObserverOverride?.(lockDir);
+			let lockIdentity: ProviderInFlightLockIdentity;
+			try {
+				lockIdentity = await readProviderInFlightLockIdentity(lockDir);
+			} catch (error) {
+				if (isEnoent(error)) continue;
+				throw error;
+			}
 			const token = crypto.randomUUID();
 			try {
+				await providerInFlightLockIdentifiedObserverOverride?.(lockDir);
 				await writeProviderInFlightInfo(lockDir, token);
 			} catch (error) {
 				await releaseProviderInFlightLockDirIfSame(lockDir, lockIdentity);
+				if (isEnoent(error)) continue;
 				throw error;
 			}
 			return async () => {
@@ -493,6 +562,7 @@ async function tryAcquireProviderInFlightLease(
 			await removeProviderInFlightLeaseDir(leaseDir).catch(() => {});
 			throw error;
 		}
+		let heartbeatActive = true;
 		let heartbeatFlush = Promise.resolve();
 		// A heartbeat that keeps failing lets the lease age past PROVIDER_INFLIGHT_LEASE_STALE_MS, after which
 		// another process treats this in-flight request as dead and proceeds: the concurrency guard fails OPEN
@@ -502,50 +572,63 @@ async function tryAcquireProviderInFlightLease(
 		// single transient write failure is normal and the next beat repairs it.
 		let consecutiveFailures = 0;
 		let reportedStaleRisk = false;
+		const beat = async (): Promise<void> => {
+			if (!heartbeatActive) return;
+			const write = () => {
+				if (!heartbeatActive) return Promise.resolve();
+				return writeProviderInFlightInfo(leaseDir, token);
+			};
+			if (providerInFlightHeartbeatWriterOverride) {
+				await providerInFlightHeartbeatWriterOverride(write);
+			} else {
+				await write();
+			}
+		};
 		const touchHeartbeat = (): Promise<void> => {
-			heartbeatFlush = heartbeatFlush
-				.then(
-					() => writeProviderInFlightInfo(leaseDir, token),
-					() => writeProviderInFlightInfo(leaseDir, token),
-				)
-				.then(
-					() => {
-						if (reportedStaleRisk) {
-							logger.warn("Provider in-flight lease heartbeat recovered", {
-								provider,
-								lease: leaseDir,
-								missedBeats: consecutiveFailures,
-							});
-						}
-						consecutiveFailures = 0;
-						reportedStaleRisk = false;
-					},
-					(error: unknown) => {
-						consecutiveFailures++;
-						if (consecutiveFailures < PROVIDER_INFLIGHT_HEARTBEAT_FAILURES_BEFORE_STALE || reportedStaleRisk) {
-							return;
-						}
-						reportedStaleRisk = true;
-						logger.warn(
-							"Provider in-flight lease heartbeat keeps failing; another process may treat this request as dead and exceed the in-flight limit",
-							{
-								provider,
-								lease: leaseDir,
-								missedBeats: consecutiveFailures,
-								staleAfterMs: PROVIDER_INFLIGHT_LEASE_STALE_MS,
-								error: errorMessage(error),
-							},
-						);
-					},
-				);
+			heartbeatFlush = heartbeatFlush.then(beat, beat).then(
+				() => {
+					if (reportedStaleRisk) {
+						logger.warn("Provider in-flight lease heartbeat recovered", {
+							provider,
+							lease: leaseDir,
+							missedBeats: consecutiveFailures,
+						});
+					}
+					consecutiveFailures = 0;
+					reportedStaleRisk = false;
+				},
+				(error: unknown) => {
+					consecutiveFailures++;
+					if (consecutiveFailures < PROVIDER_INFLIGHT_HEARTBEAT_FAILURES_BEFORE_STALE || reportedStaleRisk) {
+						return;
+					}
+					reportedStaleRisk = true;
+					logger.warn(
+						"Provider in-flight lease heartbeat keeps failing; another process may treat this request as dead and exceed the in-flight limit",
+						{
+							provider,
+							lease: leaseDir,
+							missedBeats: consecutiveFailures,
+							staleAfterMs: PROVIDER_INFLIGHT_LEASE_STALE_MS,
+							error: errorMessage(error),
+						},
+					);
+				},
+			);
 			return heartbeatFlush;
 		};
-		const heartbeat = setInterval(touchHeartbeat, PROVIDER_INFLIGHT_HEARTBEAT_MS);
+		const heartbeat = setInterval(
+			touchHeartbeat,
+			providerInFlightHeartbeatMsOverride ?? PROVIDER_INFLIGHT_HEARTBEAT_MS,
+		);
 		heartbeat.unref?.();
 		return {
 			path: leaseDir,
-			heartbeat,
-			flushHeartbeat: () => heartbeatFlush,
+			stopHeartbeat: () => {
+				heartbeatActive = false;
+				clearInterval(heartbeat);
+				return heartbeatFlush;
+			},
 			touchHeartbeat: () => touchHeartbeat(),
 		};
 	} finally {
@@ -577,6 +660,7 @@ function waitForProviderInFlightSignal(provider: string, signal?: AbortSignal): 
 	if (signal?.aborted)
 		return Promise.reject(signal.reason ?? new AIError.RequestAbortError("Provider request aborted before dispatch"));
 	const signalPath = providerInFlightSignalPath(provider);
+	providerInFlightWaitObserverOverride?.(provider);
 	const waitStarted = Date.now();
 	const { promise, resolve, reject } = Promise.withResolvers<void>();
 	let settled = false;
@@ -646,21 +730,38 @@ async function removeProviderInFlightLeaseDir(leasePath: string): Promise<void> 
 // the in-flight root has been repointed (only the test seam does that) must not
 // write `.wakeup` into an unrelated provider directory.
 async function releaseProviderInFlightLease(lease: ProviderInFlightLease): Promise<void> {
-	clearInterval(lease.heartbeat);
-	await lease.flushHeartbeat();
+	const heartbeatFlush = lease.stopHeartbeat();
+	const flushTimeout = Promise.withResolvers<"timeout">();
+	const flushTimer = setTimeout(
+		() => flushTimeout.resolve("timeout"),
+		providerInFlightHeartbeatFlushTimeoutMsOverride ?? PROVIDER_INFLIGHT_HEARTBEAT_FLUSH_TIMEOUT_MS,
+	);
+	flushTimer.unref?.();
 	try {
-		await removeProviderInFlightLeaseDir(lease.path);
-	} catch (error) {
-		// Never rethrow. This runs from the `finally` in `withProviderInFlightLimit`, where a throw
-		// REPLACES whatever the request was already reporting: a provider's real failure became an
-		// `EACCES` about a temp directory, and a successful stream had the throw swallowed silently
-		// because `outer` was already ended. Both outcomes destroyed the information that mattered.
-		reportProviderInFlightLeaseLeak(lease.path, "own lease", error);
+		const outcome = await Promise.race([heartbeatFlush.then(() => "flushed" as const), flushTimeout.promise]);
+		if (outcome === "timeout") {
+			logger.warn("Provider in-flight heartbeat flush timed out; forcing lease cleanup", { path: lease.path });
+		}
+	} finally {
+		clearTimeout(flushTimer);
 	}
-	// Signalled even when the removal failed. Waiters are woken by the `.wakeup` write, not by the
-	// directory disappearing, and a waiter that is never woken pays the fallback timer on top of a
-	// slot it may not get anyway.
-	await signalProviderInFlightWaitersInDir(path.dirname(lease.path));
+	const releaseTimeout = Promise.withResolvers<never>();
+	const releaseTimer = setTimeout(
+		() => releaseTimeout.reject(new Error("Provider in-flight lease cleanup timed out")),
+		PROVIDER_INFLIGHT_RELEASE_TIMEOUT_MS,
+	);
+	releaseTimer.unref?.();
+	try {
+		const removeLease = providerInFlightLeaseRemoverOverride ?? removeProviderInFlightLeaseDir;
+		await Promise.race([removeLease(lease.path), releaseTimeout.promise]);
+	} catch (error) {
+		// Never rethrow: this runs from the request's `finally`, where a throw would replace the request's outcome.
+		reportProviderInFlightLeaseLeak(lease.path, "own lease", error);
+	} finally {
+		clearTimeout(releaseTimer);
+	}
+	// Wake-up is an optimization: waiters also poll. Never let a notification stall keep a request open.
+	void signalProviderInFlightWaitersInDir(path.dirname(lease.path));
 }
 
 async function acquireProviderInFlightSlot(
@@ -686,6 +787,34 @@ async function acquireProviderInFlightSlot(
 export const __providerInFlightForTesting = {
 	setRoot(root: string | undefined): void {
 		providerInFlightRootOverride = root;
+	},
+	setHeartbeatTimings(timings: { heartbeatMs?: number; heartbeatFlushTimeoutMs?: number } | undefined): void {
+		providerInFlightHeartbeatMsOverride = timings?.heartbeatMs;
+		providerInFlightHeartbeatFlushTimeoutMsOverride = timings?.heartbeatFlushTimeoutMs;
+	},
+	setHeartbeatWriter(writer: ((writeProviderInFlightInfo: () => Promise<void>) => Promise<void>) | undefined): void {
+		providerInFlightHeartbeatWriterOverride = writer;
+	},
+	setLeaseRemover(remover: ((leasePath: string) => Promise<void>) | undefined): void {
+		providerInFlightLeaseRemoverOverride = remover;
+	},
+	setWaitObserver(observer: ((provider: string) => void) | undefined): void {
+		providerInFlightWaitObserverOverride = observer;
+	},
+	setLockCreatedObserver(observer: ((lockDir: string) => Promise<void>) | undefined): void {
+		providerInFlightLockCreatedObserverOverride = observer;
+	},
+	setLockIdentifiedObserver(observer: ((lockDir: string) => Promise<void>) | undefined): void {
+		providerInFlightLockIdentifiedObserverOverride = observer;
+	},
+	setLockMkdirOverride(mkdir: ((lockDir: string) => Promise<void>) | undefined): void {
+		providerInFlightLockMkdirOverride = mkdir;
+	},
+	setLockPlatformOverride(platform: NodeJS.Platform | undefined): void {
+		providerInFlightLockPlatformOverride = platform;
+	},
+	setLockRetryTimings(timings: { budgetMs?: number; initialDelayMs?: number; maxDelayMs?: number } | undefined): void {
+		providerInFlightLockRetryTimings = timings;
 	},
 	providerDir(provider: string): string {
 		return providerInFlightDir(provider);
@@ -732,23 +861,38 @@ export const __providerInFlightForTesting = {
 function withProviderInFlightLimit<TOptions extends Pick<StreamOptions, "signal" | "maxInFlightRequests">>(
 	model: Model<Api>,
 	options: TOptions | undefined,
-	dispatch: () => AssistantMessageEventStream,
+	dispatch: (limited: boolean) => AssistantMessageEventStream,
 ): AssistantMessageEventStream {
 	// Leaked-thinking healing folds in here — the one shared provider-dispatch
 	// chokepoint — so the loop guard (which wraps this) sees healed events and all
 	// provider exits are covered by one wrap. Official first-party providers are
 	// exempt (see `healLeakedThinking`); healing is otherwise idempotent.
 	const limit = resolveProviderInFlightLimit(model.provider, options?.maxInFlightRequests);
-	if (limit === undefined) return healLeakedThinking(model, dispatch());
+	if (limit === undefined) return healLeakedThinking(model, dispatch(false));
 
 	const outer = new AssistantMessageEventStream();
 	void (async () => {
 		let release: (() => Promise<void>) | undefined;
-		let released = false;
-		const releaseOnce = async () => {
-			if (!release || released) return;
-			released = true;
-			await release();
+		let releasePromise: Promise<void> | undefined;
+		const releaseOnce = () => {
+			if (!release) return Promise.resolve();
+			releasePromise ??= release();
+			return releasePromise;
+		};
+		const releaseBestEffort = async () => {
+			try {
+				await releaseOnce();
+			} catch (releaseError) {
+				// The lease has stopped heartbeating and stale cleanup will reap it
+				// within PROVIDER_INFLIGHT_LEASE_STALE_MS. Until then, its slot may
+				// remain unavailable and waiters rely on the fallback poll.
+				// Never replace a completed response or the provider's original error
+				// with a coordination-directory cleanup failure.
+				logger.warn("Provider in-flight permit release failed", {
+					provider: model.provider,
+					error: String(releaseError),
+				});
+			}
 		};
 		try {
 			const startedWaitingAt = Date.now();
@@ -759,18 +903,30 @@ function withProviderInFlightLimit<TOptions extends Pick<StreamOptions, "signal"
 			if (options?.signal?.aborted) {
 				throw options.signal.reason ?? new AIError.RequestAbortError("Provider request aborted before dispatch");
 			}
-			const inner = healLeakedThinking(model, dispatch());
-			try {
-				for await (const event of inner) {
-					outer.push(event);
-					if (outer.done) return;
+			const inner = healLeakedThinking(model, dispatch(true));
+			let terminalEvent: AssistantMessageEvent | undefined;
+			for await (const event of inner) {
+				if (event.type === "done" || event.type === "error") {
+					terminalEvent = event;
+					break;
 				}
-				if (!outer.done) outer.end(await inner.result());
-			} finally {
-				await releaseOnce();
+				outer.push(event);
+				if (outer.done) {
+					await releaseBestEffort();
+					return;
+				}
+			}
+			const result = await inner.result();
+			// Releasing the permit is part of request completion. Publishing the
+			// result first lets an immediate follow-up turn contend with its own
+			// still-live lease, which is particularly costly on Windows.
+			await releaseBestEffort();
+			if (!outer.done) {
+				if (terminalEvent) outer.push(terminalEvent);
+				else outer.end(result);
 			}
 		} catch (error) {
-			await releaseOnce();
+			await releaseBestEffort();
 			if (!outer.done) outer.fail(error);
 		}
 	})();
@@ -835,7 +991,7 @@ function resolveVertexRequest(input: string | URL | Request): string | URL | Req
 			url.includes("{location}") ||
 			url.includes("%7Bproject%7D") ||
 			url.includes("%7Blocation%7D");
-		const host = location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
+		const host = resolveVertexEndpointHost(location);
 		const rewritten = hasPlaceholder
 			? url
 					.replace("https://{location}-aiplatform.googleapis.com", `https://${host}`)
@@ -936,7 +1092,7 @@ export function stream<TApi extends Api>(
 	return withUsageIdentity(
 		model,
 		withGeminiThinkingLoopGuard(model, observed.options, opts =>
-			withProviderInFlightLimit(model, opts, () => streamDispatch(model, context, opts)),
+			withProviderInFlightLimit(model, opts, limited => streamDispatch(model, context, opts, limited)),
 		),
 		observed.transport,
 	);
@@ -946,6 +1102,7 @@ function streamDispatch<TApi extends Api>(
 	model: Model<TApi>,
 	context: Context,
 	options?: OptionsForApi<TApi>,
+	limited = false,
 ): AssistantMessageEventStream {
 	const baseOptions = (options || {}) as StreamOptions;
 	const debugOptions = withExtraCaFetch(withRequestDebugFetch(baseOptions));
@@ -957,7 +1114,7 @@ function streamDispatch<TApi extends Api>(
 	// Check custom API registry first (extension-provided APIs like "vertex-claude-api")
 	const customApiProvider = getCustomApi(model.api);
 	if (customApiProvider) {
-		return customApiProvider.stream(model, context, requestOptions as StreamOptions);
+		return customApiProvider.stream(model, context, { ...requestOptions, waitForTerminalDrain: limited } as StreamOptions);
 	}
 
 	if (isGitLabDuoModel(model)) {
@@ -968,6 +1125,7 @@ function streamDispatch<TApi extends Api>(
 		return streamGitLabDuo(model, context, {
 			...(requestOptions as SimpleStreamOptions),
 			apiKey,
+			waitForTerminalDrain: limited,
 		});
 	}
 
@@ -979,6 +1137,7 @@ function streamDispatch<TApi extends Api>(
 		return streamGitLabDuoWorkflow(model as Model<"gitlab-duo-agent">, context, {
 			...(requestOptions as StreamOptions | undefined),
 			apiKey,
+			waitForTerminalDrain: limited,
 		} as GitLabDuoWorkflowOptions);
 	}
 
@@ -990,25 +1149,31 @@ function streamDispatch<TApi extends Api>(
 		return streamBedrock(model as Model<"bedrock-converse-stream">, context, requestOptions as BedrockOptions);
 	}
 
-	const apiKey = resolveRequestApiKey(model, requestOptions.apiKey);
+	const providerDefinition = getProviderDefinition(model.provider);
+	const requestModel = providerDefinition?.prepareModel?.(model) ?? model;
+	const prepared = providerDefinition?.prepareRequest?.(requestModel, requestOptions as StreamOptions);
+	const providerModel = prepared?.model ?? requestModel;
+	const preparedOptions = (prepared?.options ?? requestOptions) as StreamOptions;
+	const apiKey = resolveRequestApiKey(providerModel, preparedOptions.apiKey);
 	if (!apiKey) {
 		throw new AIError.MissingApiKeyError(model.provider);
 	}
-	const providerOptions = isGoogleVertexAuthenticatedModel(model)
+	const providerOptions = isGoogleVertexAuthenticatedModel(providerModel)
 		? {
-				...requestOptions,
+				...preparedOptions,
 				apiKey: "vertex-adc",
-				fetch: createVertexAuthenticatedFetch(requestOptions),
+				fetch: createVertexAuthenticatedFetch(preparedOptions),
+				waitForTerminalDrain: limited,
 			}
-		: { ...requestOptions, apiKey };
+		: { ...preparedOptions, apiKey, waitForTerminalDrain: limited };
 
-	const api: Api = model.api;
+	const api: Api = providerModel.api;
 	switch (api) {
 		case "anthropic-messages": {
 			const anthropicOptions = providerOptions as AnthropicOptions;
-			return streamAnthropic(model as Model<"anthropic-messages">, context, {
+			return streamAnthropic(providerModel as Model<"anthropic-messages">, context, {
 				...anthropicOptions,
-				isOAuth: anthropicOptions.isOAuth ?? model.isOAuth,
+				isOAuth: anthropicOptions.isOAuth ?? providerModel.isOAuth,
 			});
 		}
 
@@ -1016,13 +1181,13 @@ function streamDispatch<TApi extends Api>(
 			const useResponses = $env.VEYYON_OPENROUTER_RESPONSES !== "0";
 			if (useResponses) {
 				return streamOpenAIResponses(
-					model as Model<"openai-responses">,
+					providerModel as Model<"openai-responses">,
 					context,
 					providerOptions as OptionsForApi<"openai-responses">,
 				);
 			}
 			return streamOpenAICompletions(
-				model as Model<"openai-completions">,
+				providerModel as Model<"openai-completions">,
 				context,
 				providerOptions as OptionsForApi<"openai-completions">,
 			);
@@ -1030,80 +1195,92 @@ function streamDispatch<TApi extends Api>(
 
 		case "openai-completions":
 			return streamOpenAICompletions(
-				model as Model<"openai-completions">,
+				providerModel as Model<"openai-completions">,
 				context,
 				providerOptions as OptionsForApi<"openai-completions">,
 			);
 
 		case "openai-responses":
 			return streamOpenAIResponses(
-				model as Model<"openai-responses">,
+				providerModel as Model<"openai-responses">,
 				context,
 				providerOptions as OptionsForApi<"openai-responses">,
 			);
 
 		case "azure-openai-responses":
 			return streamAzureOpenAIResponses(
-				model as Model<"azure-openai-responses">,
+				providerModel as Model<"azure-openai-responses">,
 				context,
 				providerOptions as OptionsForApi<"azure-openai-responses">,
 			);
 
 		case "openai-codex-responses":
 			return streamOpenAICodexResponses(
-				model as Model<"openai-codex-responses">,
+				providerModel as Model<"openai-codex-responses">,
 				context,
 				providerOptions as OptionsForApi<"openai-codex-responses">,
 			);
 
 		case "google-generative-ai":
-			return streamGoogle(model as Model<"google-generative-ai">, context, providerOptions);
+			return streamGoogle(providerModel as Model<"google-generative-ai">, context, providerOptions);
 
 		case "google-gemini-cli":
 			return streamGoogleGeminiCli(
-				model as Model<"google-gemini-cli">,
+				providerModel as Model<"google-gemini-cli">,
 				context,
 				providerOptions as GoogleGeminiCliOptions,
 			);
 
 		case "ollama-chat":
-			return streamOllama(model as Model<"ollama-chat">, context, providerOptions as OllamaChatOptions);
+			return streamOllama(providerModel as Model<"ollama-chat">, context, providerOptions as OllamaChatOptions);
 
 		case "cursor-agent":
-			return streamCursor(model as Model<"cursor-agent">, context, providerOptions as CursorOptions);
+			return streamCursor(providerModel as Model<"cursor-agent">, context, providerOptions as CursorOptions);
 
 		case "devin-agent":
-			return streamDevin(model as Model<"devin-agent">, context, providerOptions as DevinOptions);
+			return streamDevin(providerModel as Model<"devin-agent">, context, providerOptions as DevinOptions);
 
 		default:
 			throw new AIError.ConfigurationError(`Unhandled API: ${api}`);
 	}
 }
 
-/** Thinking-loop re-samples spent before {@link resolveWithThinkingLoopCook} cooks. */
-const THINKING_LOOP_MAX_ABORTS = 3;
+/** Maximum guarded attempts for a detected thinking loop. */
+const THINKING_LOOP_MAX_ATTEMPTS = 3;
 const THINKING_LOOP_RETRY_BASE_DELAY_MS = 500;
 const THINKING_LOOP_RETRY_MAX_DELAY_MS = 8_000;
 
 /**
- * Resolve a completion, re-sampling a thinking-loop stall up to
- * {@link THINKING_LOOP_MAX_ABORTS} times before letting it cook. The loop guard
- * raises an empty `stopReason: "error"` stall on each guarded attempt; this
- * result-path consumer re-dispatches a fresh request per stall and, once the abort
- * budget is spent, runs one final pass with the guard disabled so a stubborn loop
- * returns the model's raw output instead of a fatal stall. Non-stall results —
- * including genuine errors — return immediately; a caller abort during backoff
- * propagates so cancellation surfaces as an abort, never a stale stall result.
+ * Resolve a completion, re-sampling a thinking-loop stall for at most
+ * {@link THINKING_LOOP_MAX_ATTEMPTS} guarded attempts. The loop guard raises an
+ * empty `stopReason: "error"` stall; after the budget is spent that error is
+ * returned unchanged. Detection is never disabled as a fallback, because an
+ * unguarded retry can consume the remaining output budget and persist runaway
+ * content. Non-stall results, including genuine errors, return immediately. A
+ * caller abort during backoff propagates so cancellation surfaces as an abort,
+ * never a stale stall result.
  */
-async function resolveWithThinkingLoopCook<TApi extends Api>(
+async function resolveWithThinkingLoopRetries<TApi extends Api>(
 	model: Model<TApi>,
 	signal: AbortSignal | undefined,
 	dispatch: () => AssistantMessageEventStream,
-	cook: () => AssistantMessageEventStream,
+	onAttempt?: (message: AssistantMessage) => void,
 ): Promise<AssistantMessage> {
-	let message = await dispatch().result();
-	let thinkingLoopRetry = AIError.is(message.errorId, AIError.Flag.ThinkingLoop);
-	for (let attempt = 0; thinkingLoopRetry && attempt < THINKING_LOOP_MAX_ABORTS - 1; attempt += 1) {
+	const dispatchAttempt = async (): Promise<AssistantMessage> => {
+		const response = dispatch();
+		for await (const _event of response) {
+			// Completion callers do not consume deltas; drain them as they arrive to avoid retaining the response history.
+		}
+		const message = await response.result();
+		onAttempt?.(message);
+		return message;
+	};
+	let message = await dispatchAttempt();
+	let thinkingLoopRetry =
+		message.stopReason === "error" &&
+		message.content.length === 0 &&
+		AIError.is(message.errorId, AIError.Flag.ThinkingLoop);
+	for (let attempt = 0; thinkingLoopRetry && attempt < THINKING_LOOP_MAX_ATTEMPTS - 1; attempt += 1) {
 		// A caller abort surfaces as a thrown abort (never the stall, which would
 		// misclassify as a 502): throwIfAborted before backoff, and scheduler.wait
 		// rejects if the abort lands mid-delay.
@@ -1115,7 +1292,7 @@ async function resolveWithThinkingLoopCook<TApi extends Api>(
 		});
 		await scheduler.wait(delay, { signal });
 		const stalled = message;
-		message = await dispatch().result();
+		message = await dispatchAttempt();
 		// A loop is sampled tokens the provider bills and this re-sample throws
 		// away, which is the most expensive discard in the system: carry it.
 		discardAttemptUsage(model, stalled.usage, message.usage);
@@ -1124,12 +1301,8 @@ async function resolveWithThinkingLoopCook<TApi extends Api>(
 			message.content.length === 0 &&
 			AIError.is(message.errorId, AIError.Flag.ThinkingLoop);
 	}
-	if (!thinkingLoopRetry) return message;
-	signal?.throwIfAborted();
-	// Abort budget spent and still looping: let it cook with the guard disabled.
-	const cooked = await cook().result();
-	discardAttemptUsage(model, message.usage, cooked.usage);
-	return cooked;
+	if (thinkingLoopRetry) signal?.throwIfAborted();
+	return message;
 }
 
 export async function complete<TApi extends Api>(
@@ -1137,12 +1310,7 @@ export async function complete<TApi extends Api>(
 	context: Context,
 	options?: OptionsForApi<TApi>,
 ): Promise<AssistantMessage> {
-	return resolveWithThinkingLoopCook(
-		model,
-		options?.signal,
-		() => stream(model, context, options),
-		() => stream(model, context, { ...options, loopGuard: { ...options?.loopGuard, enabled: false } }),
-	);
+	return resolveWithThinkingLoopRetries(model, options?.signal, () => stream(model, context, options));
 }
 
 type AuthRetryFailure = {
@@ -1326,7 +1494,7 @@ function streamSimpleDispatch<TApi extends Api>(
 	// pi-native transport.
 	if (model.transport === "pi-native") {
 		return withGeminiThinkingLoopGuard(model, requestOptions, opts =>
-			withProviderInFlightLimit(model, opts, () => streamPiNative(model, context, opts)),
+			withProviderInFlightLimit(model, opts, limited => streamPiNative(model, context, { ...opts, waitForTerminalDrain: limited })),
 		);
 	}
 
@@ -1334,7 +1502,9 @@ function streamSimpleDispatch<TApi extends Api>(
 	const customApiProvider = getCustomApi(model.api);
 	if (customApiProvider) {
 		return withGeminiThinkingLoopGuard(model, requestOptions, opts =>
-			withProviderInFlightLimit(model, opts, () => customApiProvider.streamSimple(model, context, opts)),
+			withProviderInFlightLimit(model, opts, limited =>
+				customApiProvider.streamSimple(model, context, { ...opts, waitForTerminalDrain: limited }),
+			),
 		);
 	}
 
@@ -1360,10 +1530,11 @@ function streamSimpleDispatch<TApi extends Api>(
 
 	// GitLab Duo - wraps Anthropic/OpenAI behind GitLab AI Gateway direct access tokens
 	if (isGitLabDuoModel(model)) {
-		return withProviderInFlightLimit(model, requestOptions, () =>
+		return withProviderInFlightLimit(model, requestOptions, limited =>
 			streamGitLabDuo(model, context, {
 				...requestOptions,
 				apiKey,
+				waitForTerminalDrain: limited,
 			}),
 		);
 	}
@@ -1383,11 +1554,12 @@ function streamSimpleDispatch<TApi extends Api>(
 	// Kimi Code - route to dedicated handler that wraps OpenAI or Anthropic API
 	if (isKimiModel(model)) {
 		// Pass raw SimpleStreamOptions - streamKimi handles mapping internally
-		return withProviderInFlightLimit(model, requestOptions, () =>
+		return withProviderInFlightLimit(model, requestOptions, limited =>
 			streamKimi(model as Model<"openai-completions">, context, {
 				...requestOptions,
 				apiKey,
 				format: requestOptions?.kimiApiFormat ?? "anthropic",
+				waitForTerminalDrain: limited,
 			}),
 		);
 	}
@@ -1395,11 +1567,12 @@ function streamSimpleDispatch<TApi extends Api>(
 	// Synthetic - route to dedicated handler that wraps OpenAI or Anthropic API
 	if (isSyntheticModel(model)) {
 		// Pass raw SimpleStreamOptions - streamSynthetic handles mapping internally
-		return withProviderInFlightLimit(model, requestOptions, () =>
+		return withProviderInFlightLimit(model, requestOptions, limited =>
 			streamSynthetic(model as Model<"openai-completions">, context, {
 				...requestOptions,
 				apiKey,
 				format: requestOptions?.syntheticApiFormat ?? "openai", // Default to OpenAI format
+				waitForTerminalDrain: limited,
 			}),
 		);
 	}
@@ -1407,16 +1580,26 @@ function streamSimpleDispatch<TApi extends Api>(
 	return stream(model, context, providerOptions);
 }
 
+function withInferenceSessionId(options?: SimpleStreamOptions): SimpleStreamOptions {
+	if (options?.sessionId) return options;
+	return { ...options, sessionId: crypto.randomUUID() };
+}
+
 export async function completeSimple<TApi extends Api>(
 	model: Model<TApi>,
 	context: Context,
-	options?: SimpleStreamOptions,
+	options?: SimpleStreamOptions & {
+		/** Receives every completed result, including results retried by the thinking-loop guard. */
+		onAttempt?: (message: AssistantMessage) => void;
+	},
 ): Promise<AssistantMessage> {
-	return resolveWithThinkingLoopCook(
+	const { onAttempt, ...streamOptions } = options ?? {};
+	const sessionOptions = withInferenceSessionId(streamOptions);
+	return resolveWithThinkingLoopRetries(
 		model,
 		options?.signal,
-		() => streamSimple(model, context, options),
-		() => streamSimple(model, context, { ...options, loopGuard: { ...options?.loopGuard, enabled: false } }),
+		() => streamSimple(model, context, sessionOptions),
+		onAttempt,
 	);
 }
 
@@ -1529,11 +1712,12 @@ export function mapOptionsForApi<TApi extends Api>(
 		disabled: rawOptions?.disableReasoning || rawOptions?.forceReasoningOff,
 	});
 	const options = applyReasoningSelection(rawOptions, selection) ?? NO_OPTIONS;
+	const providerSimpleOptions = getProviderDefinition(model.provider)?.mapSimpleOptions?.(options);
 	return optionsForApi({
 		model,
 		options,
 		selection,
-		base: sharedStreamOptions(model, options, apiKey),
+		base: { ...sharedStreamOptions(model, options, apiKey), ...providerSimpleOptions },
 		maxTokensExplicit: rawOptions?.maxTokens !== undefined,
 	});
 }

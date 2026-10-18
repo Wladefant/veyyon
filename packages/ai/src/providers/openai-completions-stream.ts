@@ -20,6 +20,8 @@ import {
 	StreamMarkupHealing,
 	type StreamMarkupHealingEvent,
 } from "../utils/stream-markup-healing";
+import { parseToolCallArguments } from "../utils/tool-call-arguments";
+import { servedModelFromOpenRouterReasoning } from "./anthropic-signature";
 import type { ChatCompletionChunk } from "./openai-chat-wire";
 import type { OpenAICompatPolicy } from "./openai-shared";
 
@@ -32,6 +34,9 @@ export type OpenAICompletionsUsageLike = {
 	prompt_cache_miss_tokens?: unknown;
 	prompt_tokens_details?: unknown;
 	completion_tokens_details?: unknown;
+	// Vertex/Gemini reports cache hits here (camelCase) when fronted by an
+	// OpenAI-compatible gateway; the OpenAI-shaped cached fields stay absent.
+	cachedContentTokenCount?: unknown;
 };
 
 export type OpenAICompletionsPromptTokenDetails = {
@@ -82,38 +87,142 @@ function normalizeStreamingContentText(content: unknown): string {
 	return out;
 }
 
-type GeminiThoughtSignatureNamespace = "google" | "vertex";
-type GeminiThoughtSignatureExtraContent = Partial<
+export type GeminiMessageThoughtSignatureField = "thinking_signature" | "thought_signature" | "reasoning_signature";
+
+export type GeminiMessageThoughtSignature = {
+	field: GeminiMessageThoughtSignatureField;
+	signature: string;
+};
+
+export type GeminiThoughtSignatureNamespace = "google" | "vertex";
+
+export type GeminiThoughtSignatureExtraContent = Partial<
 	Record<GeminiThoughtSignatureNamespace, { thought_signature: string }>
 >;
 
-function getGeminiThoughtSignatureExtraContent(value: unknown): GeminiThoughtSignatureExtraContent | undefined {
+const GEMINI_THOUGHT_SIGNATURE_NAMESPACES: readonly GeminiThoughtSignatureNamespace[] = ["google", "vertex"];
+
+const GEMINI_MESSAGE_THOUGHT_SIGNATURE_FIELDS: readonly GeminiMessageThoughtSignatureField[] = [
+	"thinking_signature",
+	"thought_signature",
+	"reasoning_signature",
+];
+
+export function getGeminiThoughtSignatureExtraContent(value: unknown): GeminiThoughtSignatureExtraContent | undefined {
 	if (typeof value !== "object" || value === null) return undefined;
-	for (const namespace of ["google", "vertex"] as const) {
+	for (const namespace of GEMINI_THOUGHT_SIGNATURE_NAMESPACES) {
 		const providerContent = Reflect.get(value, namespace);
 		if (typeof providerContent !== "object" || providerContent === null) continue;
 		const thoughtSignature = Reflect.get(providerContent, "thought_signature");
-		if (typeof thoughtSignature === "string" && thoughtSignature.length > 0) {
-			return namespace === "google"
-				? { google: { thought_signature: thoughtSignature } }
-				: { vertex: { thought_signature: thoughtSignature } };
-		}
+		if (typeof thoughtSignature !== "string" || thoughtSignature.length === 0) continue;
+		return namespace === "google"
+			? { google: { thought_signature: thoughtSignature } }
+			: { vertex: { thought_signature: thoughtSignature } };
 	}
 	return undefined;
 }
 
-function mergeStoredGeminiSignature(existing: string | undefined, perCall: unknown): string {
-	let stored: Record<string, unknown> = {};
-	if (existing) {
-		try {
-			const parsed: unknown = JSON.parse(existing);
-			if (typeof parsed === "object" && parsed !== null) stored = { ...parsed };
-		} catch {
-			// An unrecognized legacy signature is replaced by the structured wire value.
+export function getGeminiMessageThoughtSignature(value: unknown): GeminiMessageThoughtSignature | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	for (const field of GEMINI_MESSAGE_THOUGHT_SIGNATURE_FIELDS) {
+		const signature = Reflect.get(value, field);
+		if (typeof signature === "string" && signature.length > 0) return { field, signature };
+	}
+	return undefined;
+}
+
+export function parseStoredThoughtSignature(thoughtSignature: string | undefined): unknown {
+	if (!thoughtSignature) return undefined;
+	try {
+		return JSON.parse(thoughtSignature);
+	} catch {
+		return undefined;
+	}
+}
+
+// A single tool-call turn on an OpenAI-compatible Gemini wire can carry two independent signatures: a
+// per-call one (`extra_content.google|vertex` or an encrypted `reasoning_details` entry) and a
+// message-level one (`thinking_signature`, `thought_signature`, or `reasoning_signature`). Both are
+// stashed on the originating tool call's `thoughtSignature`, so persistence and replay keep each field.
+// `perCall` holds the raw extra_content object or reasoning detail; `message` holds the message-level
+// signature in its wire shape.
+export type StoredGeminiSignature = {
+	perCall?: unknown;
+	message?: Partial<Record<GeminiMessageThoughtSignatureField, string>>;
+};
+
+// Reads the stored envelope, also accepting the legacy raw shapes emitted before the envelope existed
+// (a bare extra_content object, reasoning detail, or message-level signature) so persisted history keeps
+// replaying.
+export function normalizeStoredGeminiSignature(value: unknown): StoredGeminiSignature | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	const perCall = Reflect.get(value, "perCall");
+	const envelopeMessage = getGeminiMessageThoughtSignature(Reflect.get(value, "message"));
+	if (perCall !== undefined || envelopeMessage) {
+		const normalized: StoredGeminiSignature = {};
+		if (perCall !== undefined) normalized.perCall = perCall;
+		if (envelopeMessage) normalized.message = { [envelopeMessage.field]: envelopeMessage.signature };
+		return normalized;
+	}
+	const legacyMessage = getGeminiMessageThoughtSignature(value);
+	if (legacyMessage) return { message: { [legacyMessage.field]: legacyMessage.signature } };
+	return { perCall: value };
+}
+
+// Merges a new per-call or message-level signature into whatever is already stored, so a later
+// message-level signature never clobbers an earlier per-call one (and vice versa).
+export function mergeStoredGeminiSignature(existing: string | undefined, update: StoredGeminiSignature): string {
+	const merged = normalizeStoredGeminiSignature(parseStoredThoughtSignature(existing)) ?? {};
+	if (update.perCall !== undefined) merged.perCall = update.perCall;
+	if (update.message) merged.message = update.message;
+	return JSON.stringify(merged);
+}
+
+/**
+ * LiteLLM's wire shape for Anthropic thinking: streamed as `delta.thinking_blocks` (mirrored under
+ * `delta.provider_specific_fields.thinking_blocks`) and required back verbatim, in order, on the
+ * assistant turn that carries `tool_calls`; otherwise the upstream rejects the turn or LiteLLM silently
+ * drops its thinking. https://docs.litellm.ai/docs/reasoning_content#tool-calling-with-thinking
+ */
+export type LiteLLMThinkingBlock =
+	| { type: "thinking"; thinking: string; signature: string }
+	| { type: "redacted_thinking"; data: string };
+
+function getLiteLLMThinkingBlocksDelta(delta: object): unknown[] | undefined {
+	const direct = Reflect.get(delta, "thinking_blocks");
+	if (Array.isArray(direct) && direct.length > 0) return direct;
+	const providerFields = Reflect.get(delta, "provider_specific_fields");
+	if (typeof providerFields !== "object" || providerFields === null) return undefined;
+	const mirrored = Reflect.get(providerFields, "thinking_blocks");
+	return Array.isArray(mirrored) && mirrored.length > 0 ? mirrored : undefined;
+}
+
+/**
+ * Rebuilds LiteLLM `thinking_blocks` from a stored assistant turn. Thinking blocks parsed from
+ * `thinking_blocks` keep the raw Anthropic signature as `thinkingSignature`; blocks parsed from
+ * `reasoning_content`-style fields carry the field name instead and are skipped. `transformMessages`
+ * strips signatures and redacted blocks on cross-model replays, so only the issuing model ever receives
+ * them back.
+ */
+export function encodeLiteLLMThinkingBlocks(content: AssistantMessage["content"]): LiteLLMThinkingBlock[] {
+	const blocks: LiteLLMThinkingBlock[] = [];
+	for (const block of content) {
+		if (block.type === "thinking") {
+			const signature = block.thinkingSignature;
+			if (
+				!signature ||
+				signature === "reasoning_content" ||
+				signature === "reasoning" ||
+				signature === "reasoning_text"
+			) {
+				continue;
+			}
+			blocks.push({ type: "thinking", thinking: block.thinking, signature });
+		} else if (block.type === "redactedThinking") {
+			blocks.push({ type: "redacted_thinking", data: block.data });
 		}
 	}
-	stored.perCall = perCall;
-	return JSON.stringify(stored);
+	return blocks;
 }
 
 /** An own key of a streamed argument object that may be copied without touching a prototype. */
@@ -220,13 +329,47 @@ function applyOpenAIReasoningDetails(delta: OpenAIChunkDelta, output: AssistantM
 	if (!Array.isArray(details)) return;
 	for (const detail of details) {
 		if (!isRecord(detail)) continue;
+		if (!output.upstreamModel) output.upstreamModel = servedModelFromOpenRouterReasoning(detail);
 		if (detail.type === "reasoning.encrypted" && typeof detail.id === "string" && detail.data) {
 			const matchingToolCall = output.content.find(b => b.type === "toolCall" && b.id === detail.id);
 			if (matchingToolCall && matchingToolCall.type === "toolCall") {
-				matchingToolCall.thoughtSignature = mergeStoredGeminiSignature(matchingToolCall.thoughtSignature, detail);
+				matchingToolCall.thoughtSignature = mergeStoredGeminiSignature(matchingToolCall.thoughtSignature, {
+					perCall: detail,
+				});
 			}
 		}
 	}
+}
+
+type OpenAICompletionsRepetitionChoice = ChatCompletionChunk.Choice & {
+	stop_reason?: unknown;
+};
+
+/**
+ * Detect a server-declared repetition stop on a streamed choice.
+ *
+ * vLLM and other OpenAI-compatible servers report a generation that degenerated into repetition as a
+ * terminal signal: `finish_reason: "repetition"`, and/or `stop_reason: "repetition_detected"`. The
+ * `stop_reason` form arrives alongside an ordinary `finish_reason: "stop"`, or with none, so it is read
+ * independently of `finish_reason`.
+ *
+ * Returns the raw values for the diagnostic message, or `undefined` when the choice carries no signal.
+ */
+function detectRepetitionStop(choice: ChatCompletionChunk.Choice): string | undefined {
+	const finishReason: string | null | undefined = choice.finish_reason;
+	const stopReason = (choice as OpenAICompletionsRepetitionChoice).stop_reason;
+	const namesRepetition = (value: string): boolean => {
+		const lower = value.toLowerCase();
+		return lower === "repetition" || lower === "repetition_detected";
+	};
+	const flagged =
+		(typeof finishReason === "string" && namesRepetition(finishReason)) ||
+		(typeof stopReason === "string" && namesRepetition(stopReason));
+	if (!flagged) return undefined;
+	const parts: string[] = [];
+	if (typeof finishReason === "string" && finishReason.length > 0) parts.push(`finish_reason=${finishReason}`);
+	if (typeof stopReason === "string" && stopReason.length > 0) parts.push(`stop_reason=${stopReason}`);
+	return parts.join(" ") || "repetition";
 }
 
 // The tail of `text` that may still become a special token once the next chunk arrives:
@@ -271,6 +414,7 @@ function hasPositiveCacheReadTokenField(rawUsage: object): boolean {
 	const usageLike = rawUsage as OpenAICompletionsUsageLike;
 	if (typeof usageLike.cached_tokens === "number" && usageLike.cached_tokens > 0) return true;
 	if (typeof usageLike.prompt_cache_hit_tokens === "number" && usageLike.prompt_cache_hit_tokens > 0) return true;
+	if (typeof usageLike.cachedContentTokenCount === "number" && usageLike.cachedContentTokenCount > 0) return true;
 
 	const rawPromptTokenDetails = usageLike.prompt_tokens_details;
 	if (typeof rawPromptTokenDetails !== "object" || rawPromptTokenDetails === null) return false;
@@ -284,11 +428,17 @@ function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | str
 	errorMessage?: string;
 } {
 	if (reason === null) return { stopReason: "stop" };
-	switch (reason) {
+	// Some OpenAI-compatible gateways fronting Google Gemini backends emit the
+	// native uppercase finish reasons (`STOP`, `MAX_TOKENS`) instead of the
+	// lowercase OpenAI contract values. Fold case so a clean completion isn't
+	// misclassified as a provider error.
+	const normalized = typeof reason === "string" ? reason.toLowerCase() : reason;
+	switch (normalized) {
 		case "stop":
 		case "end":
 			return { stopReason: "stop" };
 		case "length":
+		case "max_tokens":
 			return { stopReason: "length" };
 		case "function_call":
 		case "tool_calls":
@@ -297,6 +447,29 @@ function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | str
 			return { stopReason: "error", errorMessage: AIError.providerFinishErrorMessage("content_filter") };
 		case "network_error":
 			return { stopReason: "error", errorMessage: AIError.providerFinishErrorMessage("network_error") };
+		case "insufficient_system_resource":
+			// DeepSeek kills the generation mid-stream when its inference system runs
+			// out of resources (docs: "the request is interrupted due to insufficient
+			// resource of the inference system"). Server-side capacity failure: word
+			// the message to match the transient-transport retry pattern so the turn is
+			// auto-retried instead of pinned as an error.
+			return {
+				stopReason: "error",
+				errorMessage: "Provider returned error finish_reason: insufficient_system_resource",
+			};
+		case "unknown":
+		case "other":
+		case "unspecified":
+		case "finish_reason_unspecified":
+			// The provider ended the stream without saying why (a dropped
+			// connection behind a gateway, a backend that lost the stop code).
+			// Pinning it as a terminal error strands a turn that a resample
+			// fixes. Word the message to match the transient-transport retry
+			// pattern; the retry budget bounds the replay.
+			return {
+				stopReason: "error",
+				errorMessage: `Provider returned error finish_reason: ${normalized}`,
+			};
 		default:
 			// Gateways (OpenRouter, Vercel AI Gateway, …) report upstream model
 			// failures as a bare `finish_reason: "error"` with no detail, which the
@@ -365,6 +538,14 @@ export class OpenAICompletionsTurn {
 	 * a choiceless chunk may end the turn while those details are pending.
 	 */
 	#awaitTrailingUsageDetails = false;
+	/** The server-declared repetition stop latched from the chunks; `throwIfRepetitionStop` fails the turn on it. */
+	#repetitionStop: string | undefined;
+	/** A message-level Gemini thought signature, waiting for the first open tool call to carry it. */
+	#messageThoughtSignature: GeminiMessageThoughtSignature | undefined;
+	/** The LiteLLM thinking block whose text and signature fragments are still arriving. */
+	#liteLLMThinkingBlock: ThinkingContent | undefined;
+	/** Block to its index in `output.content`; content is append-only, so the per-delta lookup stays O(1). */
+	readonly #contentIndexByBlock = new Map<OpenAIStreamBlock, number>();
 
 	constructor(
 		output: AssistantMessage,
@@ -395,6 +576,11 @@ export class OpenAICompletionsTurn {
 			const choiceUsage = (choice as OpenAICompletionsChoiceUsage).usage;
 			if (typeof choiceUsage === "object" && choiceUsage !== null) this.#applyUsage(choiceUsage);
 		}
+		// A server-declared repetition stop completes the response, so it takes the same terminal bookkeeping
+		// as a `finish_reason` chunk. Latched: a trailing frame without the signal must not clear the one an
+		// earlier chunk carried.
+		this.#repetitionStop ??= detectRepetitionStop(choice);
+		if (this.#repetitionStop) this.finishedAt ??= Date.now();
 		if (choice.finish_reason) this.#applyFinishReason(choice.finish_reason);
 		if (choice.delta) this.#applyDelta(choice.delta);
 
@@ -425,10 +611,31 @@ export class OpenAICompletionsTurn {
 		this.closeOpenBlocks();
 	}
 
+	/**
+	 * Fails the turn when the server declared a repetition stop. Call it after `flush()`: the sweep has
+	 * closed every block, so the partial output is dropped here rather than committed or replayed into the
+	 * retry. The error carries `AIError.Flag.ThinkingLoop`, the flag the loop guard uses, because degenerate
+	 * reasoning is replay garbage (#12525).
+	 */
+	throwIfRepetitionStop(): void {
+		const repetitionStop = this.#repetitionStop;
+		if (repetitionStop === undefined) return;
+		this.#output.content = [];
+		// The sweep already closed every block. Clear the handle so no later `thinking_end` targets an index that is gone.
+		this.#current = undefined;
+		throw AIError.attach(
+			new AIError.ProviderResponseError(`Provider reported a repetition stop: ${repetitionStop}`, {
+				provider: this.#output.provider,
+				kind: "runtime",
+			}),
+			AIError.create(AIError.Flag.ThinkingLoop),
+		);
+	}
+
 	/** Closes the open text or thinking block, then every tool call still taking arguments. */
 	closeOpenBlocks(): void {
 		this.#closeTextOrThinking();
-		for (const block of this.#pendingToolCalls.slice()) this.#finishToolCall(block);
+		for (const block of Array.from(this.#pendingToolCalls)) this.#finishToolCall(block);
 	}
 
 	#applyUsage(rawUsage: object): void {
@@ -464,6 +671,23 @@ export class OpenAICompletionsTurn {
 		this.#applyContent(delta);
 		if (delta.tool_calls && delta.tool_calls.length > 0) this.#applyToolCalls(delta.tool_calls);
 		applyOpenAIReasoningDetails(delta, this.#output);
+		this.#applyMessageThoughtSignature(delta);
+	}
+
+	/** Stamps the message-level Gemini signature on the first tool call that is open when it arrives. */
+	#applyMessageThoughtSignature(delta: OpenAIChunkDelta): void {
+		const incoming = getGeminiMessageThoughtSignature(delta);
+		if (incoming) this.#messageThoughtSignature = incoming;
+		const pending = this.#messageThoughtSignature;
+		if (!pending) return;
+		for (const block of this.#output.content) {
+			if (block.type !== "toolCall") continue;
+			block.thoughtSignature = mergeStoredGeminiSignature(block.thoughtSignature, {
+				message: { [pending.field]: pending.signature },
+			});
+			this.#messageThoughtSignature = undefined;
+			break;
+		}
 	}
 
 	/**
@@ -471,6 +695,14 @@ export class OpenAICompletionsTurn {
 	 * non-empty alias is used so a chunk carrying several aliases of one text is not duplicated.
 	 */
 	#applyReasoning(delta: OpenAIChunkDelta): void {
+		// LiteLLM mirrors Anthropic thinking into both `reasoning_content` and `thinking_blocks`; only the
+		// latter carries the signature, so it wins and the text alias is skipped to avoid duplication.
+		const liteLLMThinkingBlocks = getLiteLLMThinkingBlocksDelta(delta);
+		if (liteLLMThinkingBlocks) {
+			for (const entry of liteLLMThinkingBlocks) this.#appendLiteLLMThinkingBlock(entry);
+			this.#suppressHealedThinking = true;
+			return;
+		}
 		const { field, delta: reasoning } = extractOpenAIReasoningDelta(delta as Record<string, unknown>);
 		if (!field) return;
 		this.#appendThinking(reasoning, field, this.#reasoningMayBeCumulative);
@@ -534,7 +766,7 @@ export class OpenAICompletionsTurn {
 			this.#closeTextOrThinking();
 			block = { type: "text", text: "" };
 			this.#current = block;
-			this.#output.content.push(block);
+			this.#pushContentBlock(block);
 			this.#stream.push({ type: "text_start", contentIndex: this.#blockIndex(block), partial: this.#output });
 		}
 		block.text += text;
@@ -547,30 +779,79 @@ export class OpenAICompletionsTurn {
 	}
 
 	/**
-	 * Appends reasoning to the current thinking block, opening one when none is current or the
-	 * reasoning field changed. A `cumulative` host resends the whole reasoning so far, so only the
-	 * growth past the last snapshot of that field is appended.
+	 * Opens a thinking block after the current text or thinking block closes. The wire marks no summaries
+	 * here; `portable-reasoning` vouches per family that this text is the full trace.
+	 */
+	#openThinkingBlock(signature?: string): ThinkingContent {
+		// Same as appendText: leave toolCall blocks pending so index-only continuation deltas can still find them.
+		this.#closeTextOrThinking();
+		const block: ThinkingContent = { type: "thinking", thinking: "", thinkingSignature: signature, summary: false };
+		this.#current = block;
+		this.#pushContentBlock(block);
+		this.#stream.push({ type: "thinking_start", contentIndex: this.#blockIndex(block), partial: this.#output });
+		return block;
+	}
+
+	/**
+	 * Appends reasoning to the current thinking block, opening one when none is current or the reasoning
+	 * field changed. A `cumulative` host resends the whole reasoning so far, so only the growth past the
+	 * last snapshot of that field is appended.
 	 */
 	#appendThinking(thinking: string, signature: string | undefined, cumulative: boolean): void {
 		if (!thinking) return;
 		const delta = cumulative ? this.#reasoningGrowth(thinking, signature ?? "") : thinking;
 		if (!delta) return;
 		this.firstTokenTime ||= performance.now();
-		let block = this.#current;
-		if (block?.type !== "thinking" || (signature !== undefined && block.thinkingSignature !== signature)) {
-			this.#closeTextOrThinking();
-			block = { type: "thinking", thinking: "", thinkingSignature: signature };
-			this.#current = block;
-			this.#output.content.push(block);
-			this.#stream.push({ type: "thinking_start", contentIndex: this.#blockIndex(block), partial: this.#output });
-		}
+		const current = this.#current;
+		const block =
+			current?.type === "thinking" && (signature === undefined || current.thinkingSignature === signature)
+				? current
+				: this.#openThinkingBlock(signature);
+		if (signature !== undefined && !block.thinkingSignature) block.thinkingSignature = signature;
 		block.thinking += delta;
-		this.#stream.push({
-			type: "thinking_delta",
-			contentIndex: this.#blockIndex(block),
-			delta,
-			partial: this.#output,
-		});
+		this.#stream.push({ type: "thinking_delta", contentIndex: this.#blockIndex(block), delta, partial: this.#output });
+	}
+
+	/**
+	 * LiteLLM `thinking_blocks` entries each carry a text fragment, a signature fragment, or a whole
+	 * redacted block. A signature seals its block, so text arriving after one opens the next block;
+	 * signature fragments concatenate like Anthropic `signature_delta`. The raw signature lands in
+	 * `thinkingSignature` for `encodeLiteLLMThinkingBlocks`.
+	 */
+	#appendLiteLLMThinkingBlock(entry: unknown): void {
+		if (typeof entry !== "object" || entry === null) return;
+		const type = Reflect.get(entry, "type");
+		if (type === "redacted_thinking") {
+			const data = Reflect.get(entry, "data");
+			if (typeof data !== "string" || data.length === 0) return;
+			this.#closeTextOrThinking();
+			this.#current = undefined;
+			this.#liteLLMThinkingBlock = undefined;
+			this.#output.content.push({ type: "redactedThinking", data });
+			return;
+		}
+		if (type !== "thinking") return;
+		const rawThinking = Reflect.get(entry, "thinking");
+		const rawSignature = Reflect.get(entry, "signature");
+		const thinking = typeof rawThinking === "string" ? rawThinking : "";
+		const signature = typeof rawSignature === "string" ? rawSignature : "";
+		if (!thinking && !signature) return;
+		this.firstTokenTime ||= performance.now();
+		let block = this.#current === this.#liteLLMThinkingBlock ? this.#liteLLMThinkingBlock : undefined;
+		if (!block || (thinking && block.thinkingSignature)) {
+			block = this.#openThinkingBlock();
+			this.#liteLLMThinkingBlock = block;
+		}
+		if (thinking) {
+			block.thinking += thinking;
+			this.#stream.push({
+				type: "thinking_delta",
+				contentIndex: this.#blockIndex(block),
+				delta: thinking,
+				partial: this.#output,
+			});
+		}
+		if (signature) block.thinkingSignature = (block.thinkingSignature ?? "") + signature;
 	}
 
 	#reasoningGrowth(snapshot: string, field: string): string {
@@ -590,7 +871,7 @@ export class OpenAICompletionsTurn {
 		};
 		block.arguments = parseStreamingJson(call.arguments);
 		this.#current = block;
-		this.#output.content.push(block);
+		this.#pushContentBlock(block);
 		const contentIndex = this.#blockIndex(block);
 		this.#stream.push({ type: "toolcall_start", contentIndex, partial: this.#output });
 		this.#stream.push({ type: "toolcall_delta", contentIndex, delta: call.arguments, partial: this.#output });
@@ -599,12 +880,14 @@ export class OpenAICompletionsTurn {
 	}
 
 	#applyToolCalls(toolCalls: OpenAIChunkToolCall[]): void {
+		// A pure tool-call chunk emits no text or thinking delta, so the first structured call stamps TTFT here.
+		this.firstTokenTime ||= performance.now();
 		for (let offset = 0; offset < toolCalls.length; offset++) {
 			const toolCall = toolCalls[offset]!;
 			const block = this.#toolCallBlock(toolCall, offset, toolCalls.length);
 			const extraContent = getGeminiThoughtSignatureExtraContent(Reflect.get(toolCall, "extra_content"));
 			if (extraContent) {
-				block.thoughtSignature = mergeStoredGeminiSignature(block.thoughtSignature, extraContent);
+				block.thoughtSignature = mergeStoredGeminiSignature(block.thoughtSignature, { perCall: extraContent });
 			}
 
 			if (toolCall.id) block.id = toolCall.id;
@@ -637,7 +920,8 @@ export class OpenAICompletionsTurn {
 			);
 		}
 		this.#current = existing;
-		if (streamIndex !== undefined && existing.streamIndex === undefined) {
+		// Rebind the index so id-less continuations follow the call that last spoke on it.
+		if (streamIndex !== undefined && this.#toolCallByIndex.get(streamIndex) !== existing) {
 			existing.streamIndex = streamIndex;
 			this.#toolCallByIndex.set(streamIndex, existing);
 		}
@@ -645,19 +929,20 @@ export class OpenAICompletionsTurn {
 	}
 
 	/**
-	 * The block an entry continues: by stream `index`, by `id`, by offset within an unkeyed batch,
-	 * or the current tool call when the entry names no other id.
+	 * The block an entry continues: by `id`, then by stream `index` unless the entry opens a new call (a
+	 * different id with a `function.name`), then by offset within an unkeyed batch, or the current tool
+	 * call when the entry names no other id.
 	 */
 	#continuedToolCall(
 		toolCall: OpenAIChunkToolCall,
 		streamIndex: number | undefined,
 		batchOffset: number | undefined,
 	): ToolCallStreamBlock | undefined {
-		const byIndex = streamIndex === undefined ? undefined : this.#toolCallByIndex.get(streamIndex);
-		if (byIndex) return byIndex;
 		const id = toolCall.id;
 		const byId = id ? this.#pendingToolCalls.find(candidate => candidate.id === id) : undefined;
 		if (byId) return byId;
+		const indexedBlock = streamIndex === undefined ? undefined : this.#toolCallByIndex.get(streamIndex);
+		if (indexedBlock && (!id || !indexedBlock.id || !toolCall.function?.name)) return indexedBlock;
 		if (batchOffset !== undefined) {
 			const sibling = this.#unkeyedBatch[batchOffset];
 			return sibling?.partialArgs !== undefined ? sibling : undefined;
@@ -676,7 +961,7 @@ export class OpenAICompletionsTurn {
 		if (streamIndex !== undefined) this.#toolCallByIndex.set(streamIndex, block);
 		this.#pendingToolCalls.push(block);
 		this.#current = block;
-		this.#output.content.push(block);
+		this.#pushContentBlock(block);
 		this.#stream.push({ type: "toolcall_start", contentIndex: this.#blockIndex(block), partial: this.#output });
 		if (batchOffset !== undefined) this.#unkeyedBatch[batchOffset] = block;
 		return block;
@@ -730,7 +1015,7 @@ export class OpenAICompletionsTurn {
 		const contentIndex = this.#blockIndex(block);
 		if (contentIndex < 0) return;
 		if (typeof partialArgs === "string") {
-			block.arguments = parseStreamingJson(partialArgs);
+			block.arguments = parseToolCallArguments(partialArgs);
 		} else {
 			this.#flushObjectArguments(partialArgs, contentIndex);
 			block.arguments = partialArgs;
@@ -740,7 +1025,7 @@ export class OpenAICompletionsTurn {
 		// `agent-loop.ts` tells a call whose arguments never finished from one that closed normally.
 		clearStreamingPartialJson(block);
 		if (block.streamIndex !== undefined) {
-			this.#toolCallByIndex.delete(block.streamIndex);
+			if (this.#toolCallByIndex.get(block.streamIndex) === block) this.#toolCallByIndex.delete(block.streamIndex);
 			delete block.streamIndex;
 		}
 		const pendingIndex = this.#pendingToolCalls.indexOf(block);
@@ -765,6 +1050,11 @@ export class OpenAICompletionsTurn {
 	}
 
 	#blockIndex(block: OpenAIStreamBlock): number {
-		return this.#output.content.indexOf(block);
+		return this.#contentIndexByBlock.get(block) ?? this.#output.content.indexOf(block);
+	}
+
+	#pushContentBlock(block: OpenAIStreamBlock): void {
+		this.#contentIndexByBlock.set(block, this.#output.content.length);
+		this.#output.content.push(block);
 	}
 }

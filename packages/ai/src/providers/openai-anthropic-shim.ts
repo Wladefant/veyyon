@@ -10,6 +10,7 @@
 
 import { buildModel } from "@veyyon/catalog/build";
 import { resolveReasoningSelection } from "@veyyon/catalog/model-thinking";
+import type { ThinkingControlMode } from "@veyyon/model/model";
 import { ANTHROPIC_THINKING_BUDGETS, resolveThinkingBudget } from "../reasoning-budget";
 import { mapAnthropicToolChoice } from "../stream";
 import type { Context, Model, ModelSpec, SimpleStreamOptions } from "../types";
@@ -33,6 +34,10 @@ export interface OpenAIAnthropicShimConfig {
 	defaultFormat: OpenAIAnthropicApiFormat;
 	/** Provider-specific headers (e.g. auth/session) merged ahead of user-supplied headers. */
 	extraHeaders?: () => Record<string, string>;
+	/** Thinking transport used when this provider's Anthropic endpoint differs from generic budget semantics. */
+	anthropicThinkingMode?: ThinkingControlMode;
+	/** Forward cache-retention and request-metadata options to the selected transport. Default: false. */
+	forwardCacheOptions?: boolean;
 }
 
 /**
@@ -54,7 +59,7 @@ export function streamOpenAIAnthropicShim(
 	(async () => {
 		try {
 			const mergedHeaders = {
-				...(config.extraHeaders?.() ?? {}),
+				...config.extraHeaders?.(),
 				...options?.headers,
 			};
 
@@ -73,6 +78,9 @@ export function streamOpenAIAnthropicShim(
 					contextWindow: model.contextWindow,
 					maxTokens: model.maxTokens,
 					reasoning: model.reasoning,
+					...(config.anthropicThinkingMode && model.thinking
+						? { thinking: { ...model.thinking, mode: config.anthropicThinkingMode } }
+						: {}),
 					reasoningOptions: model.thinking ? { efforts: model.thinking.efforts } : { noEffortControl: true },
 					input: model.input,
 					cost: model.cost,
@@ -102,13 +110,17 @@ export function streamOpenAIAnthropicShim(
 					maxTokens: options?.maxTokens ?? model.maxTokens ?? undefined,
 					signal: options?.signal,
 					headers: mergedHeaders,
+					cacheRetention: config.forwardCacheOptions ? options?.cacheRetention : undefined,
+					metadata: config.forwardCacheOptions ? options?.metadata : undefined,
 					sessionId: options?.sessionId,
+					promptCacheKey: options?.promptCacheKey,
 					onPayload: options?.onPayload,
 					onResponse: options?.onResponse,
 					onSseEvent: options?.onSseEvent,
 					fetch: options?.fetch,
 					thinkingEnabled,
 					thinkingBudgetTokens: thinkingBudget,
+					reasoning: config.anthropicThinkingMode ? reasoningEffort : undefined,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					serviceTier: options?.serviceTier,
 				});
@@ -140,9 +152,13 @@ export function streamOpenAIAnthropicShim(
 					presencePenalty: options?.presencePenalty,
 					repetitionPenalty: options?.repetitionPenalty,
 					maxTokens: options?.maxTokens ?? model.maxTokens ?? undefined,
+					maxHttpAttempts: options?.maxHttpAttempts,
 					signal: options?.signal,
 					headers: mergedHeaders,
+					cacheRetention: config.forwardCacheOptions ? options?.cacheRetention : undefined,
+					metadata: config.forwardCacheOptions ? options?.metadata : undefined,
 					sessionId: options?.sessionId,
+					promptCacheKey: options?.promptCacheKey,
 					onPayload: options?.onPayload,
 					onResponse: options?.onResponse,
 					onSseEvent: options?.onSseEvent,
@@ -151,6 +167,7 @@ export function streamOpenAIAnthropicShim(
 					toolChoice: options?.toolChoice,
 					serviceTier: options?.serviceTier,
 					disableReasoning: options?.disableReasoning,
+					waitForTerminalDrain: options?.waitForTerminalDrain,
 				});
 
 				for await (const event of innerStream) {

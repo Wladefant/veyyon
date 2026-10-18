@@ -8,6 +8,7 @@ import type { AuthCredentialStore } from "./store";
 import { isUsageLimitReached, usageReportMetadataValue, usageReportScopeAccountId } from "./usage-report";
 import type { UsageCache, UsageRequestDescriptor } from "./usage-cache";
 import type { AuthCredential, BlocksApi, StoredCredentialBlock } from "./types";
+import type { SessionAffinity } from "./affinity";
 
 /** Default block when no provider reset time is known; used by selectors and rate limits. */
 export const DEFAULT_BLOCK_MS = 60_000;
@@ -130,7 +131,11 @@ export class CredentialBlocks implements BlocksApi {
 	readonly #deps: CredentialBlocksDeps;
 	/** Backoff key (provider:type, optionally scoped) -> credential row id -> live in-memory block. */
 	#credentialBackoff: Map<string, Map<number, CredentialBackoff>> = new Map();
+	#affinity?: SessionAffinity;
 
+	setAffinity(affinity: SessionAffinity): void {
+		this.#affinity = affinity;
+	}
 	constructor(deps: CredentialBlocksDeps) {
 		this.#deps = deps;
 		try {
@@ -444,9 +449,9 @@ export class CredentialBlocks implements BlocksApi {
 	}
 
 	/**
-	 * Lift any temporary backoff blocks on one credential (across the bare
-	 * `provider:oauth` key and its scoped `\0`-suffixed derivatives). Called
-	 * after a saved reset is redeemed so the just-reset account is immediately
+	 * Lift any temporary backoff blocks on one credential across all provider types
+	 * and scopes (bare provider:type keys, scoped derivatives, auth-dead, and quota holds).
+	 * Called after a saved reset is redeemed so the just-reset account is immediately
 	 * selectable again instead of being skipped/under-ranked by a stale block
 	 * that `markUsageLimitReached` set for the now-obsolete reset time.
 	 */
@@ -461,11 +466,23 @@ export class CredentialBlocks implements BlocksApi {
 			});
 		}
 
-		const providerKey = providerTypeKey(provider, "oauth");
-		const scopedPrefix = `${providerKey}\0`;
-		for (const key of this.#credentialBackoff.keys()) {
-			if (key === providerKey || key.startsWith(scopedPrefix)) this.#deleteCredentialBackoff(key, credentialId);
+		this.#affinity?.reviveAuthDead(credentialId);
+		const oauthKey = providerTypeKey(provider, "oauth");
+		const apiKey = providerTypeKey(provider, "api_key");
+		const oauthScopedPrefix = `${oauthKey}\0`;
+		const apiScopedPrefix = `${apiKey}\0`;
+		for (const key of Array.from(this.#credentialBackoff.keys())) {
+			if (
+				key === oauthKey ||
+				key.startsWith(oauthScopedPrefix) ||
+				key === apiKey ||
+				key.startsWith(apiScopedPrefix)
+			) {
+				this.#deleteCredentialBackoff(key, credentialId);
+			}
 		}
+
+		this.#deps.usageCache.invalidate(provider, undefined, { resetSpentCredentialId: credentialId });
 	}
 
 	/** Clear exactly one quota scope, preserving unrelated account and model blocks. */

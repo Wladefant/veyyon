@@ -1,7 +1,6 @@
 import { calculateCost, emptyUsage } from "@veyyon/catalog/models";
 import type { Api, Model, Usage } from "@veyyon/catalog/types";
 import { VERSION } from "@veyyon/utils/dirs";
-import { withTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { withAuth } from "../auth-retry";
 import * as AIError from "../error";
@@ -21,7 +20,8 @@ export async function postSpeechRequest(
 	format: SpeechFormat,
 	options: SpeechOptions,
 ): Promise<SpeechResult> {
-	const signal = withTimeoutSignal(SPEECH_TIMEOUT_MS, options.signal);
+	const timeout = AbortSignal.timeout(SPEECH_TIMEOUT_MS);
+	const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
 	const fetchImpl = options.fetch ?? fetch;
 	const label = `${model.provider}/${model.id}`;
 	const seenKeys = new Set<string>();

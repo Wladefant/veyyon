@@ -10,6 +10,7 @@
  * `@veyyon/catalog`'s descriptor table.
  */
 import type { OAuthCredentials, OAuthLoginCallbacks } from "./oauth/types";
+import type { Api, FetchImpl, Model, SimpleStreamOptions, StreamOptions } from "../types";
 
 /**
  * API-key environment fallback, re-exported from its owner so the name stays where callers expect it.
@@ -18,6 +19,27 @@ import type { OAuthCredentials, OAuthLoginCallbacks } from "./oauth/types";
  * `../provider-env-keys.ts` owns both the type and the table it describes.
  */
 export type { KeyResolver } from "../provider-env-keys";
+
+/** Credentials are resolved by the provider transport rather than used as a bearer string. */
+export const AUTHENTICATED_SENTINEL = "<authenticated>";
+
+export interface PreparedProviderRequest {
+	readonly model: Model<Api>;
+	readonly options: StreamOptions;
+}
+
+export type ProviderRequestPreparer = (model: Model<Api>, options: StreamOptions) => PreparedProviderRequest;
+export type ProviderModelPreparer = (model: Model<Api>) => Model<Api>;
+export type ProviderSimpleOptionsMapper = (options: SimpleStreamOptions) => Readonly<Record<string, unknown>>;
+
+export interface ProviderModelDiscoveryConfig {
+	readonly apiKey?: string;
+	readonly baseUrl?: string;
+	readonly fetch?: FetchImpl;
+	readonly authenticated?: boolean;
+}
+
+export type ProviderModelDiscoveryPreparer = (config: ProviderModelDiscoveryConfig) => ProviderModelDiscoveryConfig;
 
 /**
  * What a provider's interactive login asks the operator for.
@@ -70,6 +92,14 @@ interface ProviderDefinitionFields {
 	readonly callbackPort?: number;
 	/** OAuth flow needs a pasted code/redirect URL rather than a callback server. */
 	readonly pasteCodeFlow?: boolean;
+	/** Provider-owned model normalization that must run before API-specific option mapping. */
+	readonly prepareModel?: ProviderModelPreparer;
+	/** Provider-owned request shaping applied before generic API dispatch. */
+	readonly prepareRequest?: ProviderRequestPreparer;
+	/** Provider-owned projection from the generic simple-stream option bag. */
+	readonly mapSimpleOptions?: ProviderSimpleOptionsMapper;
+	/** Provider-owned authentication and endpoint setup for model discovery. */
+	readonly prepareModelDiscovery?: ProviderModelDiscoveryPreparer;
 }
 
 /** A row with a `login` states its `credential`; a row without one has neither. */

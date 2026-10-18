@@ -8,7 +8,7 @@
  */
 
 import { isRecord } from "@veyyon/utils/type-guards";
-import type { AssistantMessage, ThinkingContent, ToolCall } from "../types";
+import type { AssistantMessage, ComputerAction, ComputerSafetyCheck, ThinkingContent, ToolCall } from "../types";
 import { parseTextSignature } from "./openai-shared";
 
 export type AssistantItemPhase = "commentary" | "final_answer";
@@ -101,7 +101,21 @@ export type CustomToolCallOutputItem = {
 	status: "completed";
 };
 
-export type OutputItem = ReasoningOutputItem | MessageOutputItem | FunctionCallOutputItem | CustomToolCallOutputItem;
+export type ComputerCallOutputItem = {
+	type: "computer_call";
+	id: string;
+	call_id: string;
+	actions: ComputerAction[];
+	pending_safety_checks: ComputerSafetyCheck[];
+	status: "completed";
+};
+
+export type OutputItem =
+	| ReasoningOutputItem
+	| MessageOutputItem
+	| FunctionCallOutputItem
+	| CustomToolCallOutputItem
+	| ComputerCallOutputItem;
 
 /** The serialized Responses reasoning item a thinking block's signature holds, if it holds one. */
 function signatureRecord(part: ThinkingContent): Record<string, unknown> | undefined {
@@ -148,7 +162,18 @@ export function customToolCallItem(id: string, callId: string, name: string, inp
 	return { type: "custom_tool_call", id, call_id: callId, name, input, status: "completed" };
 }
 
-function toolCallItem(part: ToolCall): FunctionCallOutputItem | CustomToolCallOutputItem {
+function toolCallItem(part: ToolCall): FunctionCallOutputItem | CustomToolCallOutputItem | ComputerCallOutputItem {
+	if (part.providerMetadata?.type === "computer") {
+		const metadata = part.providerMetadata;
+		return {
+			type: "computer_call",
+			id: metadata.providerItemId,
+			call_id: wireCallId(part.id),
+			actions: metadata.actions,
+			pending_safety_checks: metadata.pendingSafetyChecks,
+			status: "completed",
+		};
+	}
 	if (part.customWireName) {
 		const input = part.arguments?.input;
 		const id = part.thoughtSignature ?? makeCustomCallId();

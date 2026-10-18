@@ -103,6 +103,7 @@ export interface UsageServiceDeps {
 	fetch: typeof fetch;
 	requestTimeoutMs: number;
 	logger: UsageLogger;
+	reportsOverride?: (signal?: AbortSignal) => Promise<UsageReport[] | null>;
 }
 
 type UsageReportsOptions = {
@@ -446,6 +447,7 @@ export class UsageService implements UsageApi {
 		return this.#deps.store.listUsageHistory?.(query) ?? [];
 	}
 
+
 	/**
 	 * Forward one completed request's usage to the store's observer hook.
 	 * Broker-backed stores batch these into per-install reports so the broker
@@ -532,7 +534,7 @@ export class UsageService implements UsageApi {
 			return ingested;
 		}
 
-		if (this.#deps.store.fetchUsageReports) return false;
+		if (this.#deps.reportsOverride || this.#deps.store.fetchUsageReports) return false;
 		const priorEntry = this.#deps.cache.getStale<UsageReport | null>(cacheKey);
 		const prior = priorEntry?.value;
 		let merged = report;
@@ -761,7 +763,8 @@ export class UsageService implements UsageApi {
 		// The broker owns its providers' reports; runtime providers registered
 		// only in this process still need local per-credential probes.
 		const storeOverride = this.#deps.store.fetchUsageReports?.bind(this.#deps.store);
-		if (storeOverride) {
+		const override = this.#deps.reportsOverride ?? storeOverride;
+		if (override) {
 			// Reuse the in-flight map so concurrent callers (widget poll + format
 			// dispatch + credential selection) coalesce into one upstream call.
 			// Each caller's `signal` only cancels THAT caller's await; the
@@ -771,7 +774,7 @@ export class UsageService implements UsageApi {
 			if (!shared) {
 				// Don't forward the caller signal into the shared fetch — first caller's
 				// abort would otherwise cancel the upstream for every peer.
-				shared = storeOverride().finally(() => {
+				shared = override().finally(() => {
 					this.#usageReportsInFlight.delete(overrideKey);
 				});
 				this.#usageReportsInFlight.set(overrideKey, shared);

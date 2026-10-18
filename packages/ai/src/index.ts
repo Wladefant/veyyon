@@ -71,6 +71,7 @@ export * from "./utils/message-text";
 export * from "./utils/opencode-headers";
 export * from "./utils/openrouter-headers";
 export * from "./utils/retry";
+export * from "./utils/retry-wait";
 export * from "./utils/schema";
 export { type } from "./utils/schema/arktype";
 export * from "./utils/thinking-loop";

@@ -5,6 +5,7 @@ import {
 	describeChatGptWebFailure,
 	isChatGptWebLoopbackUrl,
 } from "@veyyon/catalog/discovery/chatgpt-web";
+import { getSupportedEfforts } from "@veyyon/catalog/model-thinking";
 import { calculateCost, discardAttemptUsage, emptyUsage, scaleUsageCost } from "@veyyon/catalog/models";
 import { toFields, toStringValue } from "@veyyon/catalog/utils";
 import {
@@ -1881,6 +1882,21 @@ async function* drainCodexCompactionEvents(
 	validator.finish();
 }
 
+/**
+ * Resolve the wire effort controls for one Codex request. `forceReasoningOff` always turns native
+ * reasoning off. `disableReasoning` runs at the least reasoning the model allows: the `none` tier
+ * where the catalog's disable mode is `none-effort`, else the model's lowest supported effort.
+ */
+function codexReasoningControls(
+	model: Model<"openai-codex-responses">,
+	options: OpenAICodexResponsesOptions | undefined,
+): Pick<CodexRequestOptions, "reasoningEffort" | "reasoningOff"> {
+	if (options?.forceReasoningOff) return { reasoningOff: true };
+	if (!options?.disableReasoning) return { reasoningEffort: options?.reasoning };
+	if (model.reasoning && model.compat.reasoningDisableMode === "none-effort") return { reasoningOff: true };
+	return { reasoningEffort: getSupportedEfforts(model)[0] };
+}
+
 /** @internal Exported for tests. */
 export async function buildTransformedCodexRequestBody(
 	model: Model<"openai-codex-responses">,
@@ -1923,7 +1939,7 @@ export async function buildTransformedCodexRequestBody(
 		params.client_metadata = { ...options.clientMetadata };
 	}
 	const codexOptions: CodexRequestOptions = {
-		reasoningEffort: options?.reasoning,
+		...codexReasoningControls(model, options),
 		reasoningSummary: options?.reasoningSummary === undefined ? "auto" : options.reasoningSummary,
 		reasoningContext: options?.reasoningContext,
 		textVerbosity: options?.textVerbosity,

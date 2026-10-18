@@ -25,7 +25,7 @@
  * bounded stall ladder (Anthropic, Codex) declare `providerRetriesStalls` so
  * the two ladders never multiply.
  */
-import { scheduler } from "node:timers/promises";
+import { waitForRetry } from "./retry-wait";
 import { discardAttemptUsage } from "@veyyon/catalog/models";
 import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import type { Api, AssistantMessage, AssistantMessageEvent, Context, Model, Usage } from "../types";
@@ -241,9 +241,7 @@ class TurnRetries<TApi extends Api> {
 		const signal = this.#options?.signal;
 		try {
 			signal?.throwIfAborted();
-			const wait = this.#options?.providerRetryWait;
-			if (wait) await wait(delayMs, signal);
-			else await scheduler.wait(delayMs, { signal });
+			await waitForRetry(this.#options?.providerRetryWait, delayMs, signal);
 			signal?.throwIfAborted();
 		} catch (waitError) {
 			// Backoff is part of the operation: cancellation must reject it,

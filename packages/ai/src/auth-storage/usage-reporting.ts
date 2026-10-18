@@ -1,7 +1,7 @@
 /**
  * Provider usage reports for the credentials `AuthStorage` holds: the per-credential fetch with
  * refresh-on-expiry, the persisted report cache and its failure backoff, rate-limit header ingest,
- * recorded history and cost, the coalesced fan-out over every stored credential, and the
+ * the recorded usage history, the coalesced fan-out over every stored credential, and the
  * credential health check that probes each stored row against its usage endpoint.
  *
  * Row writes, credential disabling, routing and rate-limit block reconciliation are defined in
@@ -17,7 +17,6 @@ import * as AIError from "../error";
 import type { OAuthCredentials } from "../registry/oauth/types";
 import type { Provider } from "../types";
 import type {
-	UsageCostHistoryEntry,
 	UsageCredential,
 	UsageFetchContext,
 	UsageFetchParams,
@@ -169,7 +168,6 @@ export class UsageReporting {
 		return {
 			fetch: this.fetch,
 			logger: this.#logger,
-			listUsageCosts: query => this.#store.listUsageCosts?.(query) ?? [],
 		};
 	}
 
@@ -391,64 +389,6 @@ export class UsageReporting {
 	/** See {@link AuthStorage.listUsageHistory}. */
 	listHistory(query?: UsageHistoryQuery): UsageHistoryEntry[] {
 		return this.#store.listUsageHistory?.(query) ?? [];
-	}
-
-	/** See {@link AuthStorage.recordUsageCost}. */
-	recordCost(
-		provider: Provider,
-		costUsd: number,
-		options?: { sessionId?: string; recordedAt?: number; baseUrl?: string },
-	): boolean {
-		if (!Number.isFinite(costUsd) || costUsd <= 0) return false;
-		const record = this.#store.recordUsageCosts;
-		if (!record) return false;
-		const credential = this.#observedCredential(provider, options?.sessionId);
-		if (!credential) return false;
-		const entry: UsageCostHistoryEntry = {
-			recordedAt: options?.recordedAt ?? Date.now(),
-			provider,
-			accountKey: buildUsageCacheIdentity(credential),
-			costUsd,
-		};
-		try {
-			record.call(this.#store, [entry]);
-			const cacheKey = buildUsageReportCacheKey({
-				provider,
-				credential,
-				baseUrl: options?.baseUrl,
-			});
-			const existing = this.#cache.getStale<UsageReport | null>(cacheKey);
-			this.#cache.set(cacheKey, { value: existing?.value ?? null, expiresAt: Date.now() - 1 });
-			return true;
-		} catch (error) {
-			this.#logger.debug("usage cost record failed", {
-				provider,
-				error: String(error),
-			});
-			return false;
-		}
-	}
-
-	#observedCredential(provider: Provider, sessionId?: string): UsageCredential | undefined {
-		const entries = this.#host.storedCredentials(provider);
-		const routedIndex = this.#host.routedCredentialIndex(provider, sessionId);
-		if (routedIndex !== undefined) {
-			const credential = entries[routedIndex]?.credential;
-			if (credential) {
-				return credential.type === "api_key"
-					? { type: "api_key", apiKey: credential.key }
-					: buildUsageCredential(credential);
-			}
-		}
-		if (entries.length === 1) {
-			const credential = entries[0]!.credential;
-			return credential.type === "api_key"
-				? { type: "api_key", apiKey: credential.key }
-				: buildUsageCredential(credential);
-		}
-		const envKey = getEnvApiKey(provider);
-		if (envKey) return { type: "api_key", apiKey: envKey };
-		return undefined;
 	}
 
 	/** See {@link AuthStorage.ingestUsageHeaders}. */

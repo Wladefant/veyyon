@@ -46,7 +46,7 @@ export function resolveGatewayAccount(
 	sessionId: string,
 	apiKey: string,
 ): string {
-	const identity = storage.getOAuthAccountIdentity(provider, sessionId);
+	const identity = storage.oauth.identity(provider, sessionId);
 	if (identity) {
 		return `oauth:${JSON.stringify([
 			identity.accountId ?? "",
@@ -67,7 +67,7 @@ export async function resolveGatewayApiKey(
 ): Promise<string | GatewayErrorClassification> {
 	let apiKey: string | undefined;
 	try {
-		apiKey = await storage.getApiKey(model.provider, sessionId, { modelId: model.id, signal });
+		apiKey = await storage.keys.get(model.provider, sessionId, { modelId: model.id, signal });
 	} catch (error) {
 		const classified = classifyGatewayError(error);
 		logger.warn("auth-gateway getApiKey threw", { provider: model.provider, peer, error: classified.message });
@@ -95,14 +95,28 @@ export async function refreshGatewayApiKeyAfterAuthError(
 	const message = errorMessage(error);
 	if (AIError.isUsageLimit(error)) {
 		const retryAfterMs = extractRetryHint(undefined, message);
-		const { switched, retryAtMs } = await storage.markUsageLimitReached(provider, sessionId, {
-			retryAfterMs,
-			baseUrl: model.baseUrl,
-			modelId: model.id,
-			apiKey: oldKey,
-			signal,
-			modelNotInPlan: AIError.isCursorPlanAccountPolicyError(error, provider),
-		});
+		const isModelEntitlement = AIError.isCursorPlanAccountPolicyError(error, provider);
+		let switched: boolean;
+		let retryAtMs: number | undefined;
+		if (isModelEntitlement) {
+			const rotation = await storage.limits.rotate(provider, sessionId, {
+				error,
+				modelId: model.id,
+				apiKey: oldKey,
+				signal,
+			});
+			switched = rotation.switched || rotation.afterSiblingWait === true;
+		} else {
+			const mark = await storage.limits.markReached(provider, sessionId, {
+				retryAfterMs,
+				baseUrl: model.baseUrl,
+				modelId: model.id,
+				apiKey: oldKey,
+				signal,
+			});
+			switched = mark.switched;
+			retryAtMs = mark.retryAtMs;
+		}
 		logger.debug("auth-gateway retrying provider request after usage-limit block", {
 			format,
 			provider,
@@ -113,16 +127,16 @@ export async function refreshGatewayApiKeyAfterAuthError(
 			error: message,
 		});
 		if (!switched) return undefined;
-		return storage.getApiKey(provider, sessionId, { modelId: model.id, signal });
+		return storage.keys.get(provider, sessionId, { modelId: model.id, signal });
 	}
-	await storage.invalidateCredentialMatching(provider, oldKey, { sessionId, signal });
+	await storage.limits.invalidateMatching(provider, oldKey, { sessionId, signal });
 	logger.debug("auth-gateway retrying provider request after credential invalidation", {
 		format,
 		provider,
 		peer,
 		error: message,
 	});
-	return storage.getApiKey(provider, sessionId, { modelId: model.id, signal });
+	return storage.keys.get(provider, sessionId, { modelId: model.id, signal });
 }
 
 /** Resolve retries against the most recently refreshed credential, not the initial bearer. */
@@ -143,7 +157,7 @@ export function buildGatewayApiKeyResolver(
 			return initialKey;
 		}
 		if (!lastChance) {
-			const refreshed = await storage.getApiKey(model.provider, sessionId, {
+			const refreshed = await storage.keys.get(model.provider, sessionId, {
 				modelId: model.id,
 				signal: sig,
 				forceRefresh: true,

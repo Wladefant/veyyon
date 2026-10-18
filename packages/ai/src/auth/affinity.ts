@@ -1,16 +1,30 @@
 import { logger } from "@veyyon/utils";
 import { LRUCache } from "@veyyon/utils/lru";
 import { getEnvApiKey } from "../env-api-key";
-import type { AuthCredential, OAuthCredential, SessionRestrictionLease, SessionsApi } from "./types";
+import type {
+	AuthCredential,
+	OAuthCredential,
+	SessionCredentialRouting,
+	SessionRestrictionLease,
+	SessionsApi,
+	StoredAuthCredential,
+} from "./types";
 import type { AuthCredentialStore } from "./store";
 import type { CredentialPool } from "./pool";
 import type { KeyOverrides } from "./cascade";
-import { resolveCredentialIdentityKey } from "./sqlite-credential-store";
+import { resolveAccountNameIdentity, resolveCredentialIdentityKey } from "../auth-credential-rows";
+import { providerTypeKey, type CredentialBlocks } from "./blocks";
 
 /** Prefix for persisted session-to-credential affinity. */
 export const SESSION_STICKY_CACHE_PREFIX = "session:sticky:";
+/** Prefix for persisted user account choices (session pins). */
+export const SESSION_PIN_CACHE_PREFIX = "session:pin:";
 /** Persisted sticky rows live this long past their last use. */
 const SESSION_STICKY_TTL_SEC = 30 * 24 * 60 * 60;
+/** Persisted pin rows live for 30 days. */
+const SESSION_PIN_TTL_SECONDS = 30 * 24 * 60 * 60;
+/** In-memory TTL before re-reading provider selection from store. */
+const PROVIDER_SELECTION_TTL_MS = 500;
 /**
  * Same-credential re-records rewrite the persisted row at most this often. The
  * in-memory sticky stays exact; only the copy other processes resume from lags.
@@ -40,6 +54,13 @@ export type SessionCredential = {
 	explicit?: true;
 };
 
+/** Chosen account for a provider (session pin or global selection). */
+export interface ChosenCredential {
+	type: AuthCredential["type"];
+	index: number;
+	credentialId: number;
+};
+
 /** One installed restriction: the allowed OAuth identity keys and the lease that lifts it. */
 type SessionRestriction = { readonly allowed: ReadonlySet<string>; readonly lease: SessionRestrictionLease };
 
@@ -56,21 +77,61 @@ export class SessionAffinity implements SessionsApi {
 	#sessionLastCredential: Map<string, LRUCache<string, SessionCredential>> = new Map();
 	/** Persisted sticky rows per provider, keyed by session id, so unchanged re-records skip the write. */
 	#persistedSticky: Map<string, LRUCache<string, PersistedSticky>> = new Map();
+	/** Explicit user pins per session, keyed by provider. */
+	#sessionPinnedCredential: Map<string, LRUCache<string, number>> = new Map();
+	/** Process-memoised global provider account choice. */
+	#providerSelection: Map<string, { identity: string | null; readAtMs: number; persisted: boolean }> = new Map();
+	/** Credentials with confirmed definitive authentication failure. */
+	#authDeadCredentials: Set<number> = new Set();
+	/** Round-robin index per provider key for deterministic prediction. */
+	#providerRoundRobinIndex: Map<string, number> = new Map();
+	#reportedStickyCacheFailures = new Set<string>();
 	#store: AuthCredentialStore;
 	#pool: CredentialPool;
 	#overrides: KeyOverrides;
 	#restrictions: SessionRestrictions;
+	#loadBalancing?: boolean | (() => boolean);
+	#blocks?: CredentialBlocks;
 
 	constructor(
 		store: AuthCredentialStore,
 		pool: CredentialPool,
 		overrides: KeyOverrides,
 		restrictions: SessionRestrictions,
+		options?: { loadBalancing?: boolean | (() => boolean) },
 	) {
 		this.#store = store;
 		this.#pool = pool;
 		this.#overrides = overrides;
 		this.#restrictions = restrictions;
+		this.#loadBalancing = options?.loadBalancing;
+	}
+
+	/** Whether multi-account load balancing is currently enabled. */
+	isLoadBalancingEnabled(): boolean {
+		const setting = this.#loadBalancing;
+		if (setting === undefined) return false;
+		return typeof setting === "function" ? setting() : Boolean(setting);
+	}
+
+	setBlocks(blocks: CredentialBlocks): void {
+		this.#blocks = blocks;
+	}
+
+	markAuthDead(credentialId: number): void {
+		this.#authDeadCredentials.add(credentialId);
+	}
+
+	unmarkAuthDead(credentialId: number): void {
+		this.#authDeadCredentials.delete(credentialId);
+	}
+
+	reviveAuthDead(credentialId: number): void {
+		this.#authDeadCredentials.delete(credentialId);
+	}
+
+	isAuthDead(credentialId: number): boolean {
+		return this.#authDeadCredentials.has(credentialId);
 	}
 
 	restrict(provider: string, sessionId: string, identityKeys: readonly string[]): SessionRestrictionLease {
@@ -133,9 +194,11 @@ export class SessionAffinity implements SessionsApi {
 	clearProvider(provider: string): void {
 		this.#sessionLastCredential.delete(provider);
 		this.#persistedSticky.delete(provider);
-		const prefix = `${SESSION_STICKY_CACHE_PREFIX}${provider}:`;
+		this.#sessionPinnedCredential.delete(provider);
+		this.#providerRoundRobinIndex.delete(provider);
 		try {
-			this.#store.deleteCachePrefix?.(prefix);
+			this.#store.deleteCachePrefix?.(`${SESSION_STICKY_CACHE_PREFIX}${provider}:`);
+			this.#store.deleteCachePrefix?.(`${SESSION_PIN_CACHE_PREFIX}${provider}:`);
 		} catch (err) {
 			logger.debug("Failed to clear provider session sticky credentials from persistent store cache", { err });
 		}
@@ -217,9 +280,23 @@ export class SessionAffinity implements SessionsApi {
 	 * before the restriction — so it re-ranks inside the allowlist instead.
 	 */
 	get(provider: string, sessionId: string | undefined): SessionCredential | undefined {
+		const pin = this.getSessionCredentialPin(provider, sessionId);
+		if (pin && this.#permits(provider, sessionId ?? "", pin.index)) {
+			return {
+				type: pin.type,
+				index: pin.index,
+				credentialId: pin.credentialId,
+				explicit: true,
+			};
+		}
 		if (!sessionId) return undefined;
 		const credential = this.#lookup(provider, sessionId);
 		return credential && this.#permits(provider, sessionId, credential.index) ? credential : undefined;
+	}
+
+	getStickySessionCredential(provider: string, sessionId: string | undefined): SessionCredential | undefined {
+		if (!sessionId) return undefined;
+		return this.#lookup(provider, sessionId);
 	}
 
 	#lookup(provider: string, sessionId: string): SessionCredential | undefined {
@@ -353,16 +430,367 @@ export class SessionAffinity implements SessionsApi {
 	 * account, a stale resume re-ranks.
 	 */
 	pin(provider: string, sessionId: string, credentialId: number, options?: { restoredAtMs?: number }): boolean {
-		if (!sessionId || this.#overrides.suppressesOAuth(provider, this.isRestricted(provider, sessionId))) {
+		if (!sessionId) return false;
+		const stored = this.#pool.entries(provider);
+		const index = stored.findIndex(entry => entry.id === credentialId);
+		if (index === -1) return false;
+		const target = stored[index];
+		if (!target) return false;
+		if (target.credential.type === "oauth" && this.#overrides.suppressesOAuth(provider, this.isRestricted(provider, sessionId))) {
 			return false;
+		}
+		if (!this.allows(provider, sessionId, target.credential)) return false;
+
+		const restoredAtMs = options?.restoredAtMs;
+		if (restoredAtMs !== undefined) {
+			this.record(provider, sessionId, target.credential.type, index, restoredAtMs, false);
+			return true;
+		}
+
+		// Explicit user pin
+		const pinSessions = SessionAffinity.#sessionsFor(this.#sessionPinnedCredential, provider);
+		pinSessions.set(sessionId, credentialId);
+		try {
+			this.#store.setCache(
+				`${SESSION_PIN_CACHE_PREFIX}${provider}:${sessionId}`,
+				JSON.stringify({ credentialId }),
+				Math.floor(Date.now() / 1000) + SESSION_PIN_TTL_SECONDS,
+			);
+		} catch (err) {
+			this.reportStickyCacheFailure("pin-write", provider, err);
+		}
+		this.record(provider, sessionId, target.credential.type, index, undefined, true);
+		return true;
+	}
+
+	clearPin(provider: string, sessionId: string): void {
+		if (!sessionId) return;
+		const pinMap = this.#sessionPinnedCredential.get(provider);
+		if (pinMap) {
+			pinMap.delete(sessionId);
+			if (pinMap.size === 0) this.#sessionPinnedCredential.delete(provider);
+		}
+		try {
+			this.#store.setCache(`${SESSION_PIN_CACHE_PREFIX}${provider}:${sessionId}`, "", 0);
+		} catch (err) {
+			this.reportStickyCacheFailure("pin-clear", provider, err);
+		}
+		const live = this.#sessionLastCredential.get(provider)?.get(sessionId);
+		if (live && live.explicit) {
+			delete live.explicit;
+		}
+		const persisted = this.#persistedSticky.get(provider)?.get(sessionId);
+		if (persisted && persisted.explicit) {
+			persisted.explicit = false;
+		}
+	}
+
+	selectProviderCredential(provider: string, credentialId: number, options?: { sessionId?: string }): boolean {
+		const sessionId = options?.sessionId;
+		const stored = this.#pool.entries(provider);
+		const entry = stored.find(row => row.id === credentialId);
+		if (!entry) return false;
+		if (!this.allows(provider, sessionId, entry.credential)) return false;
+
+		if (this.isLoadBalancingEnabled()) {
+			if (!sessionId) return false;
+			return this.pin(provider, sessionId, credentialId);
+		}
+
+		const identity = resolveAccountNameIdentity(provider, entry);
+		let persisted = false;
+		const write = this.#store.setProviderSelection;
+		if (write) {
+			try {
+				write.call(this.#store, provider, identity);
+				persisted = this.#store.getProviderSelection !== undefined;
+			} catch (err) {
+				this.reportStickyCacheFailure("selection-write", provider, err);
+			}
+		}
+		this.#providerSelection.set(provider, { identity, readAtMs: Date.now(), persisted });
+		if (sessionId) {
+			this.clearPin(provider, sessionId);
+			this.clear(provider, sessionId);
+		} else {
+			this.clearProvider(provider);
+		}
+		return true;
+	}
+
+	selectedProviderCredentialId(provider: string): number | undefined {
+		if (this.isLoadBalancingEnabled()) return undefined;
+		return this.getSelectedCredential(provider)?.credentialId;
+	}
+
+	clearProviderSelection(provider: string, options?: { sessionId?: string }): void {
+		const sessionId = options?.sessionId;
+		if (this.isLoadBalancingEnabled()) {
+			if (sessionId) this.clearPin(provider, sessionId);
+		}
+		let persisted = false;
+		const clear = this.#store.clearProviderSelection;
+		if (clear) {
+			try {
+				clear.call(this.#store, provider);
+				persisted = this.#store.getProviderSelection !== undefined;
+			} catch (err) {
+				this.reportStickyCacheFailure("selection-clear", provider, err);
+			}
+		}
+		this.#providerSelection.set(provider, { identity: null, readAtMs: Date.now(), persisted });
+		if (sessionId) {
+			this.clear(provider, sessionId);
+		} else {
+			this.clearProvider(provider);
+		}
+	}
+
+	#readProviderSelection(provider: string): string | undefined {
+		const now = Date.now();
+		const memo = this.#providerSelection.get(provider);
+		if (memo !== undefined && (!memo.persisted || now - memo.readAtMs < PROVIDER_SELECTION_TTL_MS)) {
+			return memo.identity ?? undefined;
+		}
+		const read = this.#store.getProviderSelection;
+		const identity = read ? read.call(this.#store, provider) : undefined;
+		this.#providerSelection.set(provider, {
+			identity: identity ?? null,
+			readAtMs: now,
+			persisted: read !== undefined,
+		});
+		return identity;
+	}
+
+	getSelectedCredential(provider: string): ChosenCredential | undefined {
+		const identity = this.#readProviderSelection(provider);
+		if (!identity) return undefined;
+		const stored = this.#pool.entries(provider);
+		const index = stored.findIndex(entry => resolveAccountNameIdentity(provider, entry) === identity);
+		const entry = index === -1 ? undefined : stored[index];
+		if (!entry) return undefined;
+		return { type: entry.credential.type, index, credentialId: entry.id };
+	}
+
+	getSessionCredentialPin(provider: string, sessionId: string | undefined): ChosenCredential | undefined {
+		if (!sessionId) return this.getSelectedCredential(provider);
+		let credentialId = this.#sessionPinnedCredential.get(provider)?.get(sessionId);
+		if (credentialId === undefined) {
+			try {
+				const raw = this.#store.getCache(`${SESSION_PIN_CACHE_PREFIX}${provider}:${sessionId}`);
+				if (!raw) return this.getSelectedCredential(provider);
+				const parsed = JSON.parse(raw) as { credentialId?: number };
+				if (typeof parsed.credentialId !== "number") return this.getSelectedCredential(provider);
+				credentialId = parsed.credentialId;
+				const pinMap = SessionAffinity.#sessionsFor(this.#sessionPinnedCredential, provider);
+				pinMap.set(sessionId, credentialId);
+			} catch (err) {
+				this.reportStickyCacheFailure("pin-read", provider, err);
+				return this.getSelectedCredential(provider);
+			}
 		}
 		const stored = this.#pool.entries(provider);
 		const index = stored.findIndex(entry => entry.id === credentialId);
-		const target = stored[index];
-		if (target?.credential.type !== "oauth" || !this.allows(provider, sessionId, target.credential)) return false;
-		const restoredAtMs = options?.restoredAtMs;
-		this.record(provider, sessionId, "oauth", index, restoredAtMs, restoredAtMs === undefined);
-		return true;
+		if (index === -1) {
+			this.clearPin(provider, sessionId);
+			return this.getSelectedCredential(provider);
+		}
+		const entry = stored[index];
+		if (!entry || !this.allows(provider, sessionId, entry.credential)) {
+			return this.getSelectedCredential(provider);
+		}
+		return { type: entry.credential.type, index, credentialId };
+	}
+
+	explicitChoiceIndex(
+		provider: string,
+		sessionId: string | undefined,
+		type: AuthCredential["type"],
+	): number | undefined {
+		const chosen = this.getSessionCredentialPin(provider, sessionId);
+		if (chosen?.type !== type) return undefined;
+		const credentialId = chosen.credentialId;
+		if (credentialId !== undefined && this.isAuthDead(credentialId)) return undefined;
+		return chosen.index;
+	}
+
+	homeIndex(provider: string, sessionId: string | undefined, type: AuthCredential["type"]): number | undefined {
+		const chosen = this.explicitChoiceIndex(provider, sessionId, type);
+		if (chosen !== undefined || this.isLoadBalancingEnabled()) return chosen;
+		const sticky = this.getStickySessionCredential(provider, sessionId);
+		if (sticky?.type !== type) return undefined;
+		const credentialId = sticky.credentialId;
+		if (credentialId === undefined || this.isAuthDead(credentialId)) return undefined;
+		return sticky.index;
+	}
+
+	routing(provider: string, sessionId: string | undefined): SessionCredentialRouting | undefined {
+		const stored = this.#pool.entries(provider);
+		if (stored.length === 0) return undefined;
+		const routing: SessionCredentialRouting = { provider };
+		const pin = this.getSessionCredentialPin(provider, sessionId);
+		const sticky = this.getStickySessionCredential(provider, sessionId);
+		const stickyEntry = sticky ? stored[sticky.index] : undefined;
+
+		if (pin) {
+			routing.selectedCredentialId = pin.credentialId;
+			const blockedUntil = this.#credentialBlockedUntil(
+				provider,
+				pin.credentialId,
+				stored[pin.index]!.credential.type,
+				pin.index,
+			);
+			if (blockedUntil !== undefined) routing.selectedBlockedUntilMs = blockedUntil;
+
+			const choiceStillLeads =
+				this.explicitChoiceIndex(provider, sessionId, stored[pin.index]!.credential.type) === pin.index;
+			if (choiceStillLeads) {
+				routing.activeCredentialId = pin.credentialId;
+				return routing;
+			}
+		}
+
+		if (
+			sticky &&
+			stickyEntry &&
+			(!this.isLoadBalancingEnabled() || this.#credentialUsableNow(provider, stickyEntry.id, stickyEntry.credential.type, sticky.index)) &&
+			!this.isAuthDead(stickyEntry.id)
+		) {
+			routing.activeCredentialId = stickyEntry.id;
+			return routing;
+		}
+
+		const predicted = this.#predictNextCredentialId(provider, sessionId);
+		if (predicted !== undefined) {
+			routing.activeCredentialId = predicted;
+			routing.activeIsPrediction = true;
+			return routing;
+		}
+
+		if (stickyEntry) routing.activeCredentialId = stickyEntry.id;
+		return routing;
+	}
+
+	#predictNextCredentialId(provider: string, sessionId: string | undefined): number | undefined {
+		const stored = this.#pool.entries(provider);
+		if (stored.length === 0) return undefined;
+		let refused: number | undefined;
+		for (const type of ["oauth", "api_key"] as const) {
+			const candidates = stored
+				.map((entry, index) => ({ entry, index }))
+				.filter(
+					candidate =>
+						candidate.entry.credential.type === type &&
+						this.allows(provider, sessionId, candidate.entry.credential),
+				);
+			if (candidates.length === 0) continue;
+			const providerKey = providerTypeKey(provider, type);
+			const start = !this.isLoadBalancingEnabled()
+				? 0
+				: sessionId
+					? this.#getHashedIndex(sessionId, candidates.length)
+					: ((((this.#providerRoundRobinIndex.get(providerKey) ?? -1) + 1) % candidates.length) +
+							candidates.length) %
+						candidates.length;
+			const rotated = candidates.map((_, offset) => candidates[(start + offset) % candidates.length]!);
+			const ordered = this.#orderByBlockAvailability(provider, providerKey, rotated);
+			const chosen = ordered.find(candidate => !this.isAuthDead(candidate.entry.id));
+			if (chosen) return chosen.entry.id;
+			refused ??= ordered[0]?.entry.id;
+		}
+		return refused;
+	}
+
+	#credentialBlockedUntil(
+		provider: string,
+		credentialId: number,
+		type: AuthCredential["type"],
+		index: number,
+	): number | undefined {
+		const providerKey = providerTypeKey(provider, type);
+		if (this.#blocks) {
+			const until = this.#blocks.blockedUntil(provider, providerKey, index);
+			if (until !== undefined) return until;
+		}
+		if (this.#store.getCredentialBlockScopes) {
+			try {
+				const scopes = this.#store.getCredentialBlockScopes(credentialId, providerKey);
+				let maxBlockedUntil: number | undefined;
+				for (const blockedUntil of scopes.values()) {
+					if (blockedUntil > Date.now()) {
+						if (maxBlockedUntil === undefined || blockedUntil > maxBlockedUntil) {
+							maxBlockedUntil = blockedUntil;
+						}
+					}
+				}
+				if (maxBlockedUntil !== undefined) return maxBlockedUntil;
+			} catch {}
+		}
+		if (this.#store.getCredentialBlock) {
+			try {
+				const blockedUntil = this.#store.getCredentialBlock(credentialId, providerKey, "");
+				if (blockedUntil && blockedUntil > Date.now()) return blockedUntil;
+			} catch {}
+		}
+		return undefined;
+	}
+
+	#credentialUsableNow(
+		provider: string,
+		credentialId: number,
+		type: AuthCredential["type"],
+		index: number,
+	): boolean {
+		return this.#credentialBlockedUntil(provider, credentialId, type, index) === undefined;
+	}
+
+	#getHashedIndex(sessionId: string, total: number): number {
+		if (total <= 1) return 0;
+		return Bun.hash.xxHash32(sessionId) % total;
+	}
+
+	#orderByBlockAvailability<C extends { entry: StoredAuthCredential; index: number }>(
+		provider: string,
+		providerKey: string,
+		candidates: readonly C[],
+	): C[] {
+		if (!this.isLoadBalancingEnabled()) {
+			const refused = (candidate: C): boolean => this.isAuthDead(candidate.entry.id);
+			return [...candidates.filter(candidate => !refused(candidate)), ...candidates.filter(refused)];
+		}
+		return [...candidates]
+			.map((candidate, position) => ({
+				candidate,
+				position,
+				blockedUntil:
+					this.#credentialBlockedUntil(
+						provider,
+						candidate.entry.id,
+						candidate.entry.credential.type,
+						candidate.index,
+					) ?? 0,
+			}))
+			.sort((left, right) =>
+				left.blockedUntil === right.blockedUntil
+					? left.position - right.position
+					: left.blockedUntil - right.blockedUntil,
+			)
+			.map(entry => entry.candidate);
+	}
+
+	reportStickyCacheFailure(operation: string, provider: string, error: unknown): void {
+		const key = `${operation}:${provider}`;
+		const alreadyReported = this.#reportedStickyCacheFailures.has(key);
+		this.#reportedStickyCacheFailures.add(key);
+		const detail = { provider, operation, error: String(error) };
+		if (alreadyReported) {
+			logger.debug("Session sticky credential cache still failing", detail);
+			return;
+		}
+		logger.warn(
+			"Session sticky credential cache failed; this session is no longer pinned to one credential and may route to a different account",
+			detail,
+		);
 	}
 
 	/**

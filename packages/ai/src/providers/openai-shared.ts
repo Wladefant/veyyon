@@ -1,6 +1,5 @@
 import type { Effort } from "@veyyon/catalog/effort";
 import { toFirepassWireModelId, toFireworksWireModelId } from "@veyyon/catalog/fireworks-model-id";
-import { isGlm52ReasoningEffortModelId } from "@veyyon/catalog/identity";
 import { getSupportedEfforts } from "@veyyon/catalog/model-thinking";
 import { emptyCost, inheritUsageCarryovers, scaleUsageCost } from "@veyyon/catalog/models";
 import type {
@@ -21,6 +20,7 @@ import {
 } from "@veyyon/catalog/wire/coreweave";
 import { parseGitHubCopilotApiKey } from "@veyyon/catalog/wire/github-copilot";
 import { resolveKimiCodeEndpoint } from "@veyyon/catalog/wire/kimi-code";
+import { USER_AGENT } from "@veyyon/utils";
 import { $env } from "@veyyon/utils/env";
 import { extractHttpStatusFromError } from "@veyyon/utils/fetch-retry";
 import { stringifyJson } from "@veyyon/utils/json";
@@ -39,6 +39,8 @@ import {
 	type MessageAttribution,
 	type Model,
 	OPENAI_MAX_OUTPUT_TOKENS,
+	getPremiumServiceTierRequests,
+	parseServiceTier,
 	type ServiceTier,
 	type StreamOptions,
 	shouldSendServiceTier,
@@ -71,7 +73,10 @@ import { VERCEL_AI_GATEWAY_REFERER, VERCEL_AI_GATEWAY_TITLE } from "../utils/ver
 import {
 	applyCopilotHeaders,
 	buildCopilotDynamicHeaders,
+	getCachedCopilotIntegrationId,
+	getCopilotIntegrationCacheKey,
 	hasCopilotVisionInput,
+	resolveCopilotRequestIdentity,
 	resolveGitHubCopilotBaseUrl,
 } from "./github-copilot-headers";
 import type { ChatCompletionCreateParamsStreaming } from "./openai-chat-wire";
@@ -94,6 +99,7 @@ import {
 	NON_VISION_IMAGE_PLACEHOLDER,
 	partitionVisionContent,
 } from "./vision-content";
+import { resolveXaiBaseUrl } from "./xai-base-url";
 
 // `openai-compaction.ts` is byte-locked (`scripts/the-codex-compaction-route-is-locked.test.ts`) and imports
 // this name from here.
@@ -163,10 +169,19 @@ export interface OpenAIRequestSetupOptions {
 }
 
 export interface OpenAIRequestSetup {
+	copilotPremiumRequests: number | undefined;
 	baseUrl: string | undefined;
 	headers: Record<string, string>;
 	query: Record<string, string> | undefined;
 	requestHeaders: Record<string, string>;
+	/** Working-identity cache key for this credential+host; undefined off the Copilot path. */
+	copilotCacheKey: string | undefined;
+	/**
+	 * Build-time cache provenance for the wrapper: the cached value the
+	 * outgoing headers were built from, or `null` when the cache was empty at
+	 * build. `undefined` off the Copilot path.
+	 */
+	copilotCacheSnapshot: string | null | undefined;
 }
 
 function normalizeSakanaRequestBaseUrl(baseUrl: string | undefined): string | undefined {
@@ -251,6 +266,8 @@ interface OpenAIProviderEndpoint {
 	apiKey: string;
 	baseUrl: string | undefined;
 	copilotPremiumRequests?: number;
+	copilotCacheKey?: string;
+	copilotCacheSnapshot?: string | null;
 }
 
 /** An Alibaba Coding Plan key may be JSON naming the token and an enterprise endpoint. */
@@ -289,19 +306,26 @@ function resolveOpenAIProviderEndpoint(
 		case "sakana":
 			return { apiKey: rawApiKey, baseUrl: resolveSakanaRequestBaseUrl() ?? model.baseUrl };
 		case "github-copilot": {
-			const apiKey = parseGitHubCopilotApiKey(rawApiKey).accessToken;
+			const copilotApiKey = parseGitHubCopilotApiKey(rawApiKey);
+			const copilotBaseUrl = resolveGitHubCopilotBaseUrl(model.baseUrl, rawApiKey) ?? model.baseUrl;
+			const copilotCacheKey = getCopilotIntegrationCacheKey(rawApiKey, copilotBaseUrl);
+			const copilotCached = getCachedCopilotIntegrationId(copilotCacheKey);
 			const copilot = buildCopilotDynamicHeaders({
 				messages: options.messages,
 				hasImages: hasCopilotVisionInput(options.messages),
-				premiumMultiplier: model.premiumMultiplier,
 				headers,
 				initiatorOverride: options.initiatorOverride,
+				enterpriseUrl: copilotApiKey.enterpriseUrl,
+				integrationId: resolveCopilotRequestIdentity(options.extraHeaders),
+				cachedIntegrationId: copilotCached,
 			});
 			applyCopilotHeaders(headers, copilot.headers);
 			return {
-				apiKey,
-				baseUrl: resolveGitHubCopilotBaseUrl(model.baseUrl, rawApiKey) ?? model.baseUrl,
+				apiKey: copilotApiKey.accessToken,
+				baseUrl: copilotBaseUrl,
 				copilotPremiumRequests: copilot.premiumRequests,
+				copilotCacheKey,
+				copilotCacheSnapshot: copilotCached ?? null,
 			};
 		}
 		case "alibaba-coding-plan":
@@ -338,6 +362,9 @@ export function resolveOpenAIRequestSetup(
 	const headers = buildOpenAIRequestHeaders(model, options);
 	const endpoint = resolveOpenAIProviderEndpoint(model, options, headers, rawApiKey);
 	let baseUrl = endpoint.baseUrl;
+	if (model.provider === "xai" || model.provider === "xai-oauth") {
+		baseUrl = resolveXaiBaseUrl(model.provider, baseUrl, rawApiKey);
+	}
 	let query: Record<string, string> | undefined;
 	if (options.azureChatCompletions && baseUrl?.includes(".openai.azure.com")) {
 		if (!baseUrl.includes("/deployments/")) {
@@ -349,9 +376,21 @@ export function resolveOpenAIRequestSetup(
 	if (options.defaultBaseUrl !== undefined) {
 		baseUrl = baseUrl ?? ($env.OPENAI_BASE_URL?.trim() || options.defaultBaseUrl);
 	}
+	// Attribute xAI traffic as omp unless a User-Agent is already set.
+	if (model.provider === "xai" || model.provider === "xai-oauth") {
+		setHeaderIfAbsent(headers, "User-Agent", USER_AGENT);
+	}
 	const requestHeaders = { ...headers };
 	headers.Authorization ??= `Bearer ${endpoint.apiKey}`;
-	return { copilotPremiumRequests: endpoint.copilotPremiumRequests, baseUrl, headers, query, requestHeaders };
+	return {
+		copilotPremiumRequests: endpoint.copilotPremiumRequests,
+		baseUrl,
+		headers,
+		query,
+		requestHeaders,
+		copilotCacheKey: endpoint.copilotCacheKey,
+		copilotCacheSnapshot: endpoint.copilotCacheSnapshot,
+	};
 }
 
 export function applyOpenAIServiceTier(
@@ -360,18 +399,26 @@ export function applyOpenAIServiceTier(
 	model: Pick<Model, "provider" | "api" | "id">,
 ): void {
 	if (!shouldSendServiceTier(serviceTier, model)) return;
-	if (serviceTier === "flex" || serviceTier === "scale" || serviceTier === "priority") {
-		params.service_tier = serviceTier;
-	}
+	params.service_tier = serviceTier;
 }
 
 /**
  * Standard OpenAI Responses service-tier cost multipliers. The non-Codex
  * Responses path bills the tier it was served (or requested): Flex processing is
- * half price; Priority is a 2x premium. Codex bills the same tiers with its own
- * table (Priority is 2.5x on gpt-5.5) and applies that separately.
+ * half price; Priority (Fast mode) is a 2x premium. Codex bills the same tiers
+ * with its own table (Fast is 2.5x on every model) and applies that separately.
+ * `ultrafast` has no API-generic default — only models with a published
+ * ultrafast price carry a `serviceTierCost.ultrafast` entry (GPT-6 Astra and
+ * GPT-6.1 Sol, 6x) and everything else stays at 1x rather than an invented
+ * multiplier.
  */
-function getOpenAIResponsesServiceTierCostMultiplier(tier: string | null | undefined): number {
+function getOpenAIResponsesServiceTierCostMultiplier(
+	model: Pick<Model, "serviceTierCost">,
+	tier: string | null | undefined,
+): number {
+	const resolvedMultiplier =
+		tier === "flex" || tier === "priority" || tier === "ultrafast" ? model.serviceTierCost?.[tier] : undefined;
+	if (resolvedMultiplier !== undefined) return resolvedMultiplier;
 	switch (tier) {
 		case "flex":
 			return 0.5;
@@ -389,20 +436,24 @@ function getOpenAIResponsesServiceTierCostMultiplier(tier: string | null | undef
  * resolved request tier. Scoped to `provider: "openai"` (the only standard
  * Responses biller) so an echoed `service_tier` from an Azure/OpenRouter/Copilot
  * proxy can never skew those costs.
+ *
+ * Returns the tier the turn ran on for the caller to record on the message, and
+ * counts the premium request the tier bills.
  */
 export function applyOpenAIResponsesServiceTierCost(
-	model: Pick<Model, "provider">,
+	model: Pick<Model, "provider" | "serviceTierCost" | "api" | "id">,
 	usage: AssistantMessage["usage"],
 	responseServiceTier: unknown,
 	requestServiceTier: ServiceTier | null | undefined,
-): void {
-	if (model.provider !== "openai") return;
+): ServiceTier | undefined {
+	if (model.provider !== "openai") return undefined;
 	// The response echo is authoritative when present (OpenAI may downgrade a
 	// requested priority/flex turn to default under load); only fall back to the
 	// requested tier when the response omits the echo entirely.
-	const served = typeof responseServiceTier === "string" ? responseServiceTier : (requestServiceTier ?? undefined);
-	const multiplier = getOpenAIResponsesServiceTierCostMultiplier(served);
-	scaleUsageCost(usage, multiplier);
+	const served = parseServiceTier(responseServiceTier) ?? requestServiceTier ?? undefined;
+	usage.premiumRequests ??= getPremiumServiceTierRequests(served, model);
+	scaleUsageCost(usage, getOpenAIResponsesServiceTierCostMultiplier(model, served));
+	return served;
 }
 
 export interface OpenAIUsageAccountingInput {
@@ -722,8 +773,8 @@ export type OpenAICompletionsParams = Omit<ChatCompletionCreateParamsStreaming, 
 	thinking?: { type: "enabled" | "disabled"; keep?: "all" };
 	enable_thinking?: boolean;
 	preserve_thinking?: boolean;
-	chat_template_kwargs?: { enable_thinking?: boolean; preserve_thinking?: boolean };
-	reasoning?: { effort?: string } | { enabled: false };
+	chat_template_kwargs?: { enable_thinking?: boolean; thinking?: boolean; preserve_thinking?: boolean; reasoning_effort?: string };
+	reasoning?: { effort?: string; enabled?: boolean; max_tokens?: number };
 	reasoning_effort?: string | null;
 	service_tier?: ServiceTier;
 	tool_stream?: boolean;
@@ -735,11 +786,12 @@ export type OpenAICompletionsParams = Omit<ChatCompletionCreateParamsStreaming, 
 export interface ChatCompletionsReasoningOptions {
 	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	disableReasoning?: boolean;
+	thinkingBudgets?: Partial<Record<Effort, number>>;
 }
 
 export type OpenAICompatEndpoint = "chat-completions" | "responses";
 
-export type OpenAIReasoningDisableReason = "caller" | "forced-tool-choice" | "tool-choice" | "not-requested";
+export type OpenAIReasoningDisableReason = "caller" | "forced-tool-choice" | "tool-choice" | "tools" | "not-requested";
 
 export type OpenAICompatPolicyCompat = ResolvedOpenAISharedCompat &
 	Partial<ResolvedOpenAICompat> &
@@ -751,6 +803,7 @@ export interface ResolveOpenAICompatPolicyOptions {
 	reasoning?: string;
 	disableReasoning?: boolean;
 	toolChoice?: unknown;
+	hasTools?: boolean;
 	strictResponsesPairing?: boolean;
 	includeEncryptedReasoning?: boolean;
 	filterReasoningHistory?: boolean;
@@ -815,7 +868,8 @@ function isImplicitDisableWhenNotRequested(disableMode: OpenAIReasoningDisableMo
 	return (
 		disableMode === "zai-thinking-disabled" ||
 		disableMode === "qwen-enable-thinking-false" ||
-		disableMode === "qwen-template-false"
+		disableMode === "qwen-template-false" ||
+		disableMode === "chat-template-thinking-false"
 	);
 }
 
@@ -890,7 +944,9 @@ function resolveOpenAIReasoningPolicy<TApi extends Api>(
 ): Pick<OpenAICompatPolicy, "compat" | "reasoning"> {
 	const requestedEffort = options.reasoning;
 	const modelSupported = Boolean(model.reasoning);
-	const conflictDisableReason = reasoningToolChoiceConflict(baseCompat, options.toolChoice);
+	const conflictDisableReason =
+		reasoningToolChoiceConflict(baseCompat, options.toolChoice) ??
+		(baseCompat.disableReasoningWithTools && options.hasTools === true ? "tools" : undefined);
 	const disableReason = options.disableReasoning ? "caller" : conflictDisableReason;
 	const requested = resolveRequestedReasoning(model, baseCompat, requestedEffort, disableReason !== undefined);
 	const compat = requested.compat;
@@ -914,9 +970,12 @@ function resolveOpenAIReasoningPolicy<TApi extends Api>(
 			modelSupported,
 			supportsParams: compat.supportsReasoningParams,
 			requestedEffort,
-			wireEffort: callerTurnedOffUnrequested
-				? lowestEffortStandIn(model, compat, omitReasoningEffort)
-				: requested.wireEffort,
+			wireEffort:
+				disabled && compat.supportsReasoningEffort && !omitReasoningEffort && disableMode === "none-effort"
+					? "none"
+					: callerTurnedOffUnrequested
+						? lowestEffortStandIn(model, compat, omitReasoningEffort)
+						: requested.wireEffort,
 			enabled: requested.enabled,
 			disabled,
 			disableReason:
@@ -976,6 +1035,9 @@ function encodeChatCompletionsDisabledReasoning(
 ): void {
 	delete params.reasoning_effort;
 	switch (disableMode) {
+		case "none-effort":
+			params.reasoning_effort = "none";
+			break;
 		case "zai-thinking-disabled":
 			params.thinking = { type: "disabled" };
 			break;
@@ -985,11 +1047,20 @@ function encodeChatCompletionsDisabledReasoning(
 		case "qwen-template-false":
 			params.chat_template_kwargs = { ...params.chat_template_kwargs, enable_thinking: false };
 			break;
+		case "chat-template-thinking-false":
+			params.chat_template_kwargs = { ...params.chat_template_kwargs, thinking: false };
+			break;
 		case "openrouter-enabled-false":
+		case "cline-enabled-false":
 			(params as typeof params & { reasoning?: { effort?: string } | { enabled: false } }).reasoning = {
 				enabled: false,
 			};
 			break;
+		case "venice-disable-thinking": {
+			const venice = params as typeof params & { venice_parameters?: Record<string, unknown> };
+			venice.venice_parameters = { ...venice.venice_parameters, disable_thinking: true };
+			break;
+		}
 		default:
 			delete params.reasoning;
 			break;
@@ -1060,12 +1131,33 @@ function encodeChatCompletionsEnabledReasoning(params: OpenAICompletionsParams, 
 			break;
 		case "qwen-enable-thinking-false":
 			params.enable_thinking = true;
+			// Qwen 3.8+ templates steer thinking depth via the `reasoning_effort` kwarg. Mirror it on the
+			// top-level field too, since older llama.cpp builds and Alibaba-style servers read only the kwargs.
+			// The `qwen-chat-template` dialect rides kwargs alone because NIM rejects unknown top-level fields.
+			if (policy.compat.qwenTemplateReasoningEffort && reasoning.wireEffort !== undefined) {
+				params.reasoning_effort = reasoning.wireEffort as Effort;
+				params.chat_template_kwargs = {
+					...params.chat_template_kwargs,
+					reasoning_effort: reasoning.wireEffort,
+				};
+			}
 			break;
 		case "qwen-template-false":
-			// Spread so the `preserve_thinking` kwarg set by
-			// `applyQwenPreserveThinking` survives the merge — a bare
-			// `{ enable_thinking: true }` would clobber it.
-			params.chat_template_kwargs = { ...params.chat_template_kwargs, enable_thinking: true };
+			// Spread so the `preserve_thinking` kwarg set by `applyQwenPreserveThinking` survives the merge.
+			params.chat_template_kwargs = {
+				...params.chat_template_kwargs,
+				enable_thinking: true,
+				...(policy.compat.qwenTemplateReasoningEffort && reasoning.wireEffort !== undefined
+					? { reasoning_effort: reasoning.wireEffort }
+					: {}),
+			};
+			break;
+		case "chat-template-thinking-false":
+			params.chat_template_kwargs = {
+				...params.chat_template_kwargs,
+				thinking: true,
+				...(reasoning.wireEffort !== undefined ? { reasoning_effort: reasoning.wireEffort } : {}),
+			};
 			break;
 		case "openrouter-enabled-false":
 			if (reasoning.wireEffort !== undefined) {
@@ -1094,7 +1186,7 @@ export function applyChatCompletionsCompatPolicy(params: OpenAICompletionsParams
 	if (
 		reasoning.disableReason === "caller" &&
 		reasoning.requestedEffort === undefined &&
-		reasoning.disableMode === "lowest-effort" &&
+		(reasoning.disableMode === "lowest-effort" || reasoning.disableMode === "none-effort") &&
 		reasoning.wireEffort !== undefined
 	) {
 		params.reasoning_effort = reasoning.wireEffort as Effort;
@@ -1107,18 +1199,29 @@ export function applyChatCompletionsReasoningParams(
 	params: OpenAICompletionsParams,
 	model: Model<"openai-completions">,
 	compat: ResolvedOpenAICompat,
-	options: (ChatCompletionsReasoningOptions & { toolChoice?: unknown }) | undefined,
+	options: (ChatCompletionsReasoningOptions & { toolChoice?: unknown; hasTools?: boolean }) | undefined,
 ): void {
-	applyChatCompletionsCompatPolicy(
-		params,
-		resolveOpenAICompatPolicy(model, {
-			endpoint: "chat-completions",
-			compat,
-			reasoning: options?.reasoning,
-			disableReasoning: options?.disableReasoning,
-			toolChoice: options?.toolChoice,
-		}),
-	);
+	const policy = resolveOpenAICompatPolicy(model, {
+		endpoint: "chat-completions",
+		compat,
+		reasoning: options?.reasoning,
+		disableReasoning: options?.disableReasoning,
+		toolChoice: options?.toolChoice,
+		hasTools: options?.hasTools,
+	});
+	applyChatCompletionsCompatPolicy(params, policy);
+	if (
+		model.provider !== "cline-pass" ||
+		!policy.reasoning.enabled ||
+		model.thinking?.mode !== "budget" ||
+		options?.reasoning === undefined
+	) {
+		return;
+	}
+	const budget = options.thinkingBudgets?.[options.reasoning] ?? model.thinking.effortBudgets?.[options.reasoning];
+	if (budget === undefined) return;
+	delete params.reasoning_effort;
+	params.reasoning = { ...params.reasoning, max_tokens: budget };
 }
 
 export function disableChatCompletionsReasoningForDialect(
@@ -1129,28 +1232,106 @@ export function disableChatCompletionsReasoningForDialect(
 }
 
 /**
- * Z.AI/GLM-5.2 reasoning-effort dialect predicate. GLM-5.2 models served on a
- * Z.AI-format host (thinkingFormat "zai") accept `reasoning_effort`, stream tool
- * calls via `tool_stream`, and clamp output to the model cap. Moonshot Kimi and
- * Xiaomi MiMo also resolve to thinkingFormat "zai" with supportsReasoningEffort
- * true but are NOT GLM-5.2, so the model-id check is load-bearing — never swap it
- * for `compat.supportsReasoningEffort`.
+ * Output-token clamp for Chat Completions. Cline Pass and the Z.AI/GLM-5.2 reasoning dialect accept the full model
+ * window, and `clampOutputToModelMax` opts a compat policy in to the same. Returns `undefined` for every other model,
+ * leaving {@link resolveOpenAIOutputTokenParam} on its default `OPENAI_MAX_OUTPUT_TOKENS` clamp.
  */
-function isZaiReasoningEffortDialect(model: Model<"openai-completions">, compat: ResolvedOpenAICompat): boolean {
-	return compat.thinkingFormat === "zai" && isGlm52ReasoningEffortModelId(model.id);
-}
-
-/**
- * Output-token clamp for the Z.AI/GLM-5.2 reasoning dialect: these hosts accept
- * the full model window on reasoning turns, so clamp to the model cap. Returns
- * `undefined` for every other model, leaving {@link resolveOpenAIOutputTokenParam}
- * on its default `OPENAI_MAX_OUTPUT_TOKENS` clamp.
- */
-export function resolveZaiReasoningOutputClamp(
+export function resolveOpenAICompletionsOutputClamp(
 	model: Model<"openai-completions">,
 	compat: ResolvedOpenAICompat,
 ): number | undefined {
-	return isZaiReasoningEffortDialect(model, compat) ? (model.maxTokens ?? OPENAI_MAX_OUTPUT_TOKENS) : undefined;
+	if (model.provider === "cline-pass") return model.maxTokens ?? OPENAI_MAX_OUTPUT_TOKENS;
+	if (compat.thinkingFormat === "zai" && compat.zaiReasoningEffortDialect) return model.maxTokens ?? OPENAI_MAX_OUTPUT_TOKENS;
+	if (compat.clampOutputToModelMax) return model.maxTokens ?? OPENAI_MAX_OUTPUT_TOKENS;
+	return undefined;
+}
+
+/**
+ * Adds the provider-reported cost to a usage record. OpenRouter and Cline Pass report the real charge; a BYOK turn
+ * adds `cost_details.upstream_inference_cost` to the credits charge. The reported total rescales the estimated
+ * components, or becomes the input component when the estimate is unavailable.
+ */
+export function applyProviderReportedCost(model: Pick<Model, "provider">, usage: Usage, rawUsage: unknown): void {
+	if (
+		(model.provider !== "openrouter" && model.provider !== "cline-pass") ||
+		typeof rawUsage !== "object" ||
+		rawUsage === null
+	)
+		return;
+	let reportedCost = Reflect.get(rawUsage, "cost");
+	// BYOK turns run on the account's own provider key: `cost` carries only the credits charge OpenRouter bills
+	// the turn, while `cost_details.upstream_inference_cost` carries the provider spend. Both are real charges.
+	if (Reflect.get(rawUsage, "is_byok") === true) {
+		const details = Reflect.get(rawUsage, "cost_details");
+		const upstreamCost =
+			typeof details === "object" && details !== null ? Reflect.get(details, "upstream_inference_cost") : undefined;
+		if (typeof upstreamCost === "number" && Number.isFinite(upstreamCost) && upstreamCost >= 0) {
+			const creditsCharge =
+				typeof reportedCost === "number" && Number.isFinite(reportedCost) && reportedCost >= 0 ? reportedCost : 0;
+			reportedCost = creditsCharge + upstreamCost;
+		}
+	}
+	if (typeof reportedCost !== "number" || !Number.isFinite(reportedCost) || reportedCost < 0) return;
+
+	const estimatedCost = usage.cost.total;
+	if (Number.isFinite(estimatedCost) && estimatedCost > 0) {
+		const scale = reportedCost / estimatedCost;
+		usage.cost.input *= scale;
+		usage.cost.output *= scale;
+		usage.cost.cacheRead *= scale;
+		usage.cost.cacheWrite *= scale;
+	} else {
+		// Legacy component-only aggregators stay additive when catalog pricing is unavailable.
+		usage.cost.input = reportedCost;
+		usage.cost.output = 0;
+		usage.cost.cacheRead = 0;
+		usage.cost.cacheWrite = 0;
+	}
+}
+
+/** Replaces null `content` with `[]` on each record that `isEligible` accepts (default: every record). */
+export function coerceNullMessageContentInPlace(
+	items: unknown,
+	isEligible?: (item: Record<string, unknown>) => boolean,
+): void {
+	if (!Array.isArray(items)) return;
+	for (const item of items) {
+		if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
+		const record = item as Record<string, unknown>;
+		if (record.content === null && (isEligible?.(record) ?? true)) record.content = [];
+	}
+}
+
+/** True when an `auto` tool choice must drop reasoning on a reasoning model that the compat policy disables it for. */
+export function shouldDropAutoToolChoiceForReasoning(
+	model: Pick<Model, "reasoning">,
+	compat: { disableReasoningOnToolChoice: boolean },
+	toolChoice: unknown,
+	options: { reasoning?: string; disableReasoning?: boolean } | undefined,
+): boolean {
+	return (
+		toolChoice === "auto" &&
+		compat.disableReasoningOnToolChoice &&
+		Boolean(model.reasoning) &&
+		options?.reasoning !== undefined &&
+		!options.disableReasoning
+	);
+}
+
+/** Reads the OpenRouter `error.metadata.raw` text from a captured error response, or `undefined` when absent or blank. */
+export function readOpenRouterRawMetadata(
+	capturedErrorResponse: CapturedHttpErrorResponse | undefined,
+): string | undefined {
+	const body = capturedErrorResponse?.bodyJson;
+	if (!body || typeof body !== "object" || !("error" in body)) return undefined;
+	const errorBody = body.error;
+	if (!errorBody || typeof errorBody !== "object" || !("metadata" in errorBody)) return undefined;
+	const metadata = errorBody.metadata;
+	if (!metadata || typeof metadata !== "object" || !("raw" in metadata)) return undefined;
+	const raw = metadata.raw;
+	if (typeof raw !== "string") return undefined;
+	const trimmed = raw.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
 }
 
 /**
@@ -1173,11 +1354,11 @@ export function resolveOpenAIResponsesOutputClamp(model: Pick<Model, "provider" 
  */
 export function applyChatCompletionsToolStream(
 	params: OpenAICompletionsParams,
-	model: Model<"openai-completions">,
+	_model: Model<"openai-completions">,
 	compat: ResolvedOpenAICompat,
 ): void {
 	if (
-		isZaiReasoningEffortDialect(model, compat) &&
+		compat.thinkingFormat === "zai" && compat.zaiReasoningEffortDialect &&
 		compat.supportsReasoningEffort &&
 		Array.isArray(params.tools) &&
 		params.tools.length > 0
@@ -1370,12 +1551,31 @@ interface ResponsesToolPairItem {
 
 const ORPHAN_OUTPUT_LIMIT = 16_000;
 
+/** Pairing family: a call and its output match only within the same family, so a `function_call` is never satisfied by a `custom_tool_call_output`. */
+type ToolPairFamily = "function" | "custom" | "computer";
+
+function toolPairKey(type: string | null | undefined, callId: string): string | undefined {
+	switch (type) {
+		case "function_call":
+		case "function_call_output":
+			return `function:${callId}`;
+		case "custom_tool_call":
+		case "custom_tool_call_output":
+			return `custom:${callId}`;
+		case "computer_call":
+		case "computer_call_output":
+			return `computer:${callId}`;
+		default:
+			return undefined;
+	}
+}
+
 function isToolCallItemType(type: string | null | undefined): boolean {
-	return type === "function_call" || type === "custom_tool_call";
+	return type === "function_call" || type === "custom_tool_call" || type === "computer_call";
 }
 
 function isToolOutputItemType(type: string | null | undefined): boolean {
-	return type === "function_call_output" || type === "custom_tool_call_output";
+	return type === "function_call_output" || type === "custom_tool_call_output" || type === "computer_call_output";
 }
 
 /**
@@ -1391,27 +1591,30 @@ function isToolOutputItemType(type: string | null | undefined): boolean {
  *   needs to recover, so the note keeps the call id and the truncated output. {@link staleToolResultNote} sets the
  *   envelope and the role, and states why the role is never `assistant` (#472, #1351).
  * - A `function_call` / `custom_tool_call` with no matching output (`400 No tool output found for function call …`)
- *   gets a placeholder output right after it. Branching the session tree to a node that ends on a tool call drops
- *   the result child, and a turn aborted after the call streamed never persists its result. The placeholder keeps
- *   the call visible so the model can re-issue it.
+ *   gets a placeholder output right after it. A `computer_call` gets an assistant message naming the interruption
+ *   instead, since a computer output is a screenshot that was never recorded. Branching the session tree to a node
+ *   that ends on a tool call drops the result child, and a turn aborted after the call streamed never persists its
+ *   result. The placeholder keeps the call visible so the model can re-issue it.
  *
  * Returns `input` itself when every call and output is paired.
  */
 export function repairResponsesToolPairs<T extends ResponsesToolPairItem>(input: T[]): T[] {
-	const callIds = new Set<string>();
-	const outputCallIds = new Set<string>();
+	const callKeys = new Set<string>();
+	const outputKeys = new Set<string>();
 	for (const item of input) {
 		// Replayed items come from a stored payload, so the declared string type is not enforced at run time.
 		const callId = item.call_id;
 		if (typeof callId !== "string") continue;
-		if (isToolCallItemType(item.type)) callIds.add(callId);
-		else if (isToolOutputItemType(item.type)) outputCallIds.add(callId);
+		const key = toolPairKey(item.type, callId);
+		if (key === undefined) continue;
+		if (isToolCallItemType(item.type)) callKeys.add(key);
+		else outputKeys.add(key);
 	}
 	const orphanOutputCallIds: string[] = [];
-	for (const callId of outputCallIds) if (!callIds.has(callId)) orphanOutputCallIds.push(callId);
+	for (const key of outputKeys) if (!callKeys.has(key)) orphanOutputCallIds.push(key.slice(key.indexOf(":") + 1));
 	let hasOrphanCall = false;
-	for (const callId of callIds) {
-		if (outputCallIds.has(callId)) continue;
+	for (const key of callKeys) {
+		if (outputKeys.has(key)) continue;
 		hasOrphanCall = true;
 		break;
 	}
@@ -1421,25 +1624,34 @@ export function repairResponsesToolPairs<T extends ResponsesToolPairItem>(input:
 		// session with no compaction and every result paired in storage) cannot be diagnosed from the transcript alone.
 		logger.warn("openai-responses: folding tool outputs whose call is missing from the request", {
 			orphanCallIds: orphanOutputCallIds,
-			knownCallIds: [...callIds],
+			knownCallIds: [...callKeys].map(key => key.slice(key.indexOf(":") + 1)),
 			inputItems: input.length,
 		});
 	}
 	const repaired: T[] = [];
 	for (const item of input) {
 		const callId = item.call_id;
-		if (typeof callId !== "string") {
+		const key = typeof callId === "string" ? toolPairKey(item.type, callId) : undefined;
+		if (typeof callId !== "string" || key === undefined) {
 			repaired.push(item);
-		} else if (isToolOutputItemType(item.type) && !callIds.has(callId)) {
+		} else if (isToolOutputItemType(item.type) && !callKeys.has(key)) {
 			repaired.push(orphanToolOutputNote(item, callId));
 		} else {
 			repaired.push(item);
-			if (isToolCallItemType(item.type) && !outputCallIds.has(callId)) {
-				repaired.push({
-					type: item.type === "custom_tool_call" ? "custom_tool_call_output" : "function_call_output",
-					call_id: callId,
-					output: ORPHAN_TOOL_CALL_PLACEHOLDER,
-				} as T);
+			if (isToolCallItemType(item.type) && !outputKeys.has(key)) {
+				if (item.type === "computer_call") {
+					repaired.push({
+						type: "message",
+						role: "assistant",
+						content: `[Computer call interrupted before a screenshot was recorded; call_id=${callId}]`,
+					} as T);
+				} else {
+					repaired.push({
+						type: item.type === "custom_tool_call" ? "custom_tool_call_output" : "function_call_output",
+						call_id: callId,
+						output: ORPHAN_TOOL_CALL_PLACEHOLDER,
+					} as T);
+				}
 			}
 		}
 	}
@@ -2434,6 +2646,14 @@ type ReasoningOptions = {
 export interface ApplyResponsesCompatPolicyOptions {
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
 	mapEffort?: (effort: string) => string;
+	/**
+	 * Suppress native reasoning by sending `reasoning.effort: "none"` — the only
+	 * disable level the Responses API defines (`"off"` is not a wire value and
+	 * 400s everywhere). Gateways that reject `none` for a given model are
+	 * handled by the reasoning-effort fallback retry, which clamps to the
+	 * lowest level the error reports as allowed.
+	 */
+	forceReasoningOff?: boolean;
 }
 
 export function applyResponsesCompatPolicy<P extends ResponseCreateParamsStreaming>(
@@ -2442,6 +2662,10 @@ export function applyResponsesCompatPolicy<P extends ResponseCreateParamsStreami
 	options: ApplyResponsesCompatPolicyOptions | undefined,
 ): void {
 	const reasoning = policy.reasoning;
+	if (options?.forceReasoningOff) {
+		params.reasoning = { effort: "none" } as P["reasoning"];
+		return;
+	}
 	if (!reasoning.modelSupported) return;
 	if (reasoning.includeEncryptedReasoning) {
 		const include = params.include ?? [];
@@ -2455,7 +2679,7 @@ export function applyResponsesCompatPolicy<P extends ResponseCreateParamsStreami
 			return;
 		}
 		if (
-			reasoning.disableMode === "lowest-effort" &&
+			(reasoning.disableMode === "lowest-effort" || reasoning.disableMode === "none-effort") &&
 			reasoning.wireEffort !== undefined &&
 			!reasoning.omitReasoningEffort
 		) {

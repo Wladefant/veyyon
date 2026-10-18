@@ -1,4 +1,5 @@
 import { $env } from "@veyyon/utils/env";
+import type { ServerSentEvent } from "@veyyon/utils/stream";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { getEnvApiKey } from "../env-api-key";
 import * as AIError from "../error";
@@ -6,12 +7,12 @@ import type {
 	AssistantMessage,
 	Context,
 	Model,
-	RawSseEvent,
 	ServiceTier,
 	StreamFunction,
 	StreamOptions,
 	ToolChoice,
 } from "../types";
+import { resolveCacheRetention } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { withEmptyCompletionRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
@@ -69,6 +70,7 @@ export interface AzureOpenAIResponsesOptions extends StreamOptions {
 	azureDeploymentName?: string;
 	toolChoice?: ToolChoice;
 	serviceTier?: ServiceTier;
+	disableReasoning?: boolean;
 }
 
 type AzureOpenAIResponsesSamplingParams = ResponseCreateParamsStreaming & {
@@ -109,9 +111,12 @@ const streamAzureOpenAIResponsesOnce = (
 		);
 		const { requestAbortController, requestSignal } = abortTracker;
 		const onSseEvent = options?.onSseEvent;
-		const modelSseObserver = onSseEvent ? (event: RawSseEvent) => onSseEvent(event, model) : undefined;
+		const modelSseObserver = onSseEvent
+			? (event: ServerSentEvent) =>
+					onSseEvent({ event: event.event, data: event.data, raw: [...event.raw] }, model)
+			: undefined;
 		const rawSseObserver = modelSseObserver
-			? (event: RawSseEvent) => {
+			? (event: ServerSentEvent) => {
 					resolveOpenAiSseEventName(event);
 					notifyRawSseEvent(modelSseObserver, event);
 				}
@@ -119,8 +124,9 @@ const streamAzureOpenAIResponsesOnce = (
 
 		try {
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-			const { url, headers } = buildAzureResponsesRequest(model, apiKey, options);
-			const params = buildParams(model, context, options, deploymentName);
+			const { url, headers, baseUrl } = buildAzureResponsesRequest(model, apiKey, options);
+			const requestModel = modelForAzureEndpoint(model, baseUrl);
+			const params = buildParams(requestModel, context, options, deploymentName);
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
 			const firstEventTimeoutMs =
 				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
@@ -148,7 +154,7 @@ const streamAzureOpenAIResponsesOnce = (
 				let wireParams = params;
 				if (options?.onPayload) {
 					const attemptParams = JSON.parse(bodyJson) as typeof params;
-					const replacementPayload = await options.onPayload(attemptParams, model);
+					const replacementPayload = await options.onPayload(attemptParams, requestModel);
 					wireParams =
 						replacementPayload !== undefined && replacementPayload !== attemptParams
 							? (replacementPayload as typeof params)
@@ -283,8 +289,14 @@ const streamAzureOpenAIResponsesOnce = (
 /**
  * Retries Azure terminal completions that contain no visible assistant output.
  */
-export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"> = (model, context, options) =>
-	withEmptyCompletionRetry(model, context, options, streamAzureOpenAIResponsesOnce);
+export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"> = (model, context, options) => {
+	if (options?.promptCache?.mode === "explicit" && resolveCacheRetention(options.cacheRetention) !== "none") {
+		throw new AIError.ConfigurationError(
+			`OpenAI explicit prompt caching is unsupported for ${model.provider}/${model.id}; Azure Responses does not emit explicit cache controls.`,
+		);
+	}
+	return withEmptyCompletionRetry(model, context, options, streamAzureOpenAIResponsesOnce);
+};
 
 function resolveAzureConfig(
 	model: Model<"azure-openai-responses">,
@@ -317,6 +329,23 @@ function resolveAzureConfig(
 	};
 }
 
+function modelForAzureEndpoint(
+	model: Model<"azure-openai-responses">,
+	baseUrl: string,
+): Model<"azure-openai-responses"> {
+	if (model.supportsComputerUseConfig !== undefined || model.supportsComputerUse !== true) return model;
+	try {
+		const url = new URL(baseUrl);
+		if (
+			url.protocol === "https:" &&
+			(url.hostname.endsWith(".openai.azure.com") || url.hostname === "models.inference.ai.azure.com")
+		) {
+			return model;
+		}
+	} catch {}
+	return { ...model, supportsComputerUse: false };
+}
+
 /**
  * Replicates the `AzureOpenAI` SDK client's request shape for `/responses`:
  * a string api key becomes a single `api-key` header (azure.mjs `authHeaders`;
@@ -330,7 +359,7 @@ function buildAzureResponsesRequest(
 	model: Model<"azure-openai-responses">,
 	apiKey: string,
 	options?: AzureOpenAIResponsesOptions,
-): { url: string; headers: Record<string, string> } {
+): { url: string; headers: Record<string, string>; baseUrl: string } {
 	if (!apiKey) {
 		const envKey = $env.AZURE_OPENAI_API_KEY;
 		if (!envKey) {
@@ -342,7 +371,7 @@ function buildAzureResponsesRequest(
 		apiKey = envKey;
 	}
 
-	const headers: Record<string, string> = { "api-key": apiKey, ...(model.headers ?? {}) };
+	const headers: Record<string, string> = { "api-key": apiKey, ...model.headers };
 	if (options?.headers) {
 		Object.assign(headers, options.headers);
 	}
@@ -352,6 +381,7 @@ function buildAzureResponsesRequest(
 	return {
 		url: `${baseUrl}/responses?api-version=${encodeURIComponent(apiVersion)}`,
 		headers,
+		baseUrl,
 	};
 }
 
@@ -370,15 +400,12 @@ function buildParams(
 		// The tools below are all `function` tools, so a custom tool call replays as a function call.
 		supportsCustomToolCalls: false,
 		supportsDeveloperRole: model.compat.supportsDeveloperRole,
-		// replay stays off (Azure assistant payloads are not spliced today), but
-		// declaring the policy opens the compaction-window seam: a stored
-		// server-side compaction window on a summary message replays in place of
-		// its summary text, exactly as on the official OpenAI host.
-		nativeHistory: { replay: false, filterReasoning: model.compat.filterReasoningHistory },
+		nativeHistory: { replay: true, filterReasoning: false },
 		systemRole,
 		includeThinkingSignatures: true,
 		developerStringContent: true,
 		preserveAssistantMessageIds: true,
+		repairOrphanOutputs: true,
 	});
 
 	const params: AzureOpenAIResponsesSamplingParams = {
@@ -392,24 +419,31 @@ function buildParams(
 	};
 
 	applyCommonResponsesSamplingParams(params, options, model);
+	if (options?.include?.length) params.include = Array.from(new Set(options.include));
 
 	if (context.tools) {
-		params.tools = context.tools.map(tool => ({
-			type: "function" as const,
-			name: tool.name,
-			description: tool.description || "",
-			parameters: sanitizeSchemaForOpenAIResponses(toolWireSchema(tool)),
-			strict: false,
-		}));
-		if (options?.toolChoice && context.tools.length > 0) {
-			const toolChoice = mapToOpenAIResponsesToolChoice(options.toolChoice);
-			if (
-				toolChoice &&
-				(typeof toolChoice === "string" ||
-					toolChoice.type !== "function" ||
-					context.tools.some(tool => tool.name === toolChoice.name))
-			) {
-				params.tool_choice = toolChoice;
+		const serializedTools: NonNullable<AzureOpenAIResponsesSamplingParams["tools"]> = [];
+		for (const tool of context.tools) {
+			serializedTools.push({
+				type: "function",
+				name: tool.name,
+				description: tool.description || "",
+				parameters: sanitizeSchemaForOpenAIResponses(toolWireSchema(tool)),
+				strict: false,
+			});
+		}
+		if (serializedTools.length > 0) {
+			params.tools = serializedTools;
+			if (options?.toolChoice && context.tools.length > 0) {
+				const toolChoice = mapToOpenAIResponsesToolChoice(options.toolChoice);
+				if (
+					toolChoice &&
+					(typeof toolChoice === "string" ||
+						toolChoice.type !== "function" ||
+						serializedTools.some(tool => tool.type === "function" && tool.name === toolChoice.name))
+				) {
+					params.tool_choice = toolChoice;
+				}
 			}
 		}
 	}

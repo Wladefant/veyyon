@@ -328,15 +328,16 @@ function resolveCodexCompactRequest(
 	apiKey: string,
 	request: ServerCompactionRequest,
 ): { url: string; headers: Record<string, string>; clientMetadata: Record<string, string> } {
+	const codexModel = model as Model<"openai-codex-responses">;
 	return createOpenAICodexDirectRequest({
-		model: model as Model<"openai-codex-responses">,
+		model: codexModel,
 		accessToken: apiKey,
 		requestKind: "compaction",
 		sessionId: request.sessionId,
 		promptCacheKey: request.promptCacheKey,
 		providerSessionState: request.providerSessionState,
 		compaction: request.codexCompaction,
-		responsesLite: resolveCodexResponsesLite(model, undefined),
+		responsesLite: resolveCodexResponsesLite(codexModel, codexModel.useResponsesLite === true),
 	});
 }
 

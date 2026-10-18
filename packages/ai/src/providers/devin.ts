@@ -1,6 +1,5 @@
-import { scheduler } from "node:timers/promises";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { create, fromBinary, fromJson, type JsonValue, toBinary, toJson } from "@bufbuild/protobuf";
+import { create, fromBinary, toBinary } from "@veyyon/catalog/discovery/protobuf";
 import {
 	DEVIN_EXTENSION_NAME,
 	DEVIN_EXTENSION_VERSION,
@@ -13,11 +12,11 @@ import {
 	GetChatMessageRequestSchema,
 	type GetChatMessageResponse,
 	GetChatMessageResponseSchema,
-} from "@veyyon/catalog/discovery/devin-gen/exa/api_server_pb/api_server_pb";
+} from "@veyyon/catalog/discovery/devin-proto";
 import {
 	GetUserJwtRequestSchema,
 	GetUserJwtResponseSchema,
-} from "@veyyon/catalog/discovery/devin-gen/exa/auth_pb/auth_pb";
+} from "@veyyon/catalog/discovery/devin-proto";
 import {
 	CacheControlType,
 	type ChatMessagePrompt,
@@ -25,7 +24,7 @@ import {
 	ChatToolChoiceSchema,
 	ChatToolDefinitionSchema,
 	PromptCacheOptionsSchema,
-} from "@veyyon/catalog/discovery/devin-gen/exa/chat_pb/chat_pb";
+} from "@veyyon/catalog/discovery/devin-proto";
 import {
 	ChatMessageSource,
 	type ChatToolCall,
@@ -37,7 +36,7 @@ import {
 	MetadataSchema,
 	type ModelUsageStats,
 	StopReason,
-} from "@veyyon/catalog/discovery/devin-gen/exa/codeium_common_pb/codeium_common_pb";
+} from "@veyyon/catalog/discovery/devin-proto";
 import { calculateCost, discardAttemptUsage } from "@veyyon/catalog/models";
 import { DEVIN_CASCADE_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { isAbortError } from "@veyyon/utils/abortable";
@@ -80,6 +79,7 @@ import {
 import { deterministicUuid } from "../utils/deterministic-id";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { toolWireSchema } from "../utils/schema/wire";
+import { waitForRetry } from "../utils/retry-wait";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
 import { NON_VIDEO_MODEL_PLACEHOLDER } from "./vision-content";
 
@@ -224,22 +224,11 @@ async function postDevinChatRequest(
 	const resolvedApiKey = request.metadata?.apiKey ?? apiKey;
 	const resolvedUserJwt = request.metadata?.userJwt ?? auth.userJwt;
 
-	// `onPayload` is a JSON seam: the secret-redaction walker behind it
-	// (`transformProviderPayload`) rewrites every string and refuses any
-	// value JSON cannot express. A protobuf message is not that shape --
-	// `metadata.requestId` is a uint64 and therefore a bigint, and bytes
-	// fields are Uint8Array -- so handing the message straight over made
-	// EVERY Devin request fail with "the provider request contains a
-	// non-JSON value/object; confidentiality transform failed." for any
-	// operator with secrets configured. Canonical proto3 JSON carries the
-	// 64-bit fields as strings, so the hook sees, and can redact, the
-	// whole payload. Only paid when a hook is installed.
+	// The hook receives the typed request and may return a replacement; a non-undefined return replaces it directly.
 	const payloadHook = options?.onPayload;
 	if (payloadHook) {
-		const replacementPayload = await payloadHook(toJson(GetChatMessageRequestSchema, request), model);
-		if (replacementPayload !== undefined) {
-			request = fromJson(GetChatMessageRequestSchema, replacementPayload as JsonValue);
-		}
+		const replacementRequest = await payloadHook(request, model);
+		if (replacementRequest !== undefined) request = replacementRequest as typeof request;
 	}
 	const wireMetadata = create(MetadataSchema, request.metadata);
 	wireMetadata.apiKey = resolvedApiKey;
@@ -525,8 +514,7 @@ async function forwardDevinRetry(
 		delayMs: retry.delayMs,
 		error: String(retry.error),
 	});
-	if (options?.providerRetryWait) await options.providerRetryWait(retry.delayMs, options.signal);
-	else await scheduler.wait(retry.delayMs, { signal: options?.signal });
+	await waitForRetry(options?.providerRetryWait, retry.delayMs, options?.signal);
 
 	const retried = streamDevin(model, context, { ...options, devinRetryAttempt: retry.attempt + 1 });
 	// The abandoned attempt's text reaches nobody, but Devin billed whatever it reported before

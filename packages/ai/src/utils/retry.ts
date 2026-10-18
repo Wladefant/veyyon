@@ -1,7 +1,7 @@
-import { scheduler } from "node:timers/promises";
 import { isCopilotTransientModelError, status } from "../error/flags";
 import { isProviderRetryableError } from "../error/retryable";
 import { getHeadersFromError, getRetryAfterMsFromHeaders } from "./retry-after";
+import { type RetryWaitHook, waitForRetry } from "./retry-wait";
 
 const COPILOT_MODEL_RETRY_MAX_ATTEMPTS = 3;
 const COPILOT_MODEL_RETRY_BASE_DELAY_MS = 400;
@@ -17,7 +17,7 @@ const COPILOT_RETRY_AFTER_MAX_WAIT_MS = 30_000;
  */
 export async function callWithCopilotModelRetry<T>(
 	fn: () => Promise<T>,
-	options: { provider: string; signal?: AbortSignal; retryBaseDelayMs?: number },
+	options: { provider: string; signal?: AbortSignal; retryBaseDelayMs?: number; retryWait?: RetryWaitHook },
 ): Promise<T> {
 	if (options.provider !== "github-copilot") return fn();
 
@@ -34,18 +34,8 @@ export async function callWithCopilotModelRetry<T>(
 			if (signal?.aborted) throw signal.reason ?? error;
 			const delayMs = copilotRetryDelayMs(error, attempt, retryBaseDelayMs);
 			if (delayMs === undefined) throw error;
-			await waitForRetry(delayMs, signal);
+			await waitForRetry(options.retryWait, delayMs, signal);
 		}
-	}
-}
-
-/** Sleep `delayMs` before a retry; a cancelled sleep rethrows the caller's reason over the timer's AbortError. */
-async function waitForRetry(delayMs: number, signal: AbortSignal | undefined): Promise<void> {
-	try {
-		await scheduler.wait(delayMs, { signal });
-	} catch (waitError) {
-		// `reason` is undefined until the signal aborts, so a timer failure of its own passes through.
-		throw signal?.reason ?? waitError;
 	}
 }
 

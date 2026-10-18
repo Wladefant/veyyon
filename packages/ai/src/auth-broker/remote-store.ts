@@ -26,6 +26,7 @@ import type { Provider } from "../types";
 import type { UsageReport } from "../usage";
 import { raceWithSignal } from "../utils/abort";
 import type { AuthBrokerClient } from "./client";
+import { compareCredentialBlockSnapshots } from "./protocol";
 import type {
 	CredentialBlockSnapshot,
 	RefresherSchedule,
@@ -47,16 +48,6 @@ const WAIT_THRESHOLD_MS = 1_000;
 const MAX_WAIT_MS = 5_000;
 const BACKGROUND_WAIT_MS = 30_000;
 const BACKGROUND_BACKOFF = { baseMs: 500, maxMs: 30_000, jitter: 0 };
-
-function compareCredentialBlockSnapshots(a: CredentialBlockSnapshot, b: CredentialBlockSnapshot): number {
-	const provider = a.providerKey.localeCompare(b.providerKey);
-	if (provider !== 0) return provider;
-	const scope = a.blockScope.localeCompare(b.blockScope);
-	if (scope !== 0) return scope;
-	const blockedUntil = a.blockedUntilMs - b.blockedUntilMs;
-	if (blockedUntil !== 0) return blockedUntil;
-	return (a.updatedAtMs ?? 0) - (b.updatedAtMs ?? 0);
-}
 
 function toCredentialBlockSnapshot(block: StoredCredentialBlock): CredentialBlockSnapshot {
 	return {
