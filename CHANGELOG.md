@@ -141,6 +141,7 @@
 - `invalidValues` lists mismatched values from `--config` overlay files as well as the profile file, and each entry's `replaced` marks a value a read serves the default or fallback in place of.
 - Opening a session reads each distinct blob once instead of once per reference, and a missing blob logs one warning per open instead of one per reference.
 - A cold message entry keeps its message's `usage` in memory and records how many `toolCall` blocks its moved content held, which `coldToolCallCount` returns, so a spend tally over compacted history reads no assistant line back.
+- `session-cold-payloads` imports the logger from `@veyyon/utils/logger` instead of the `@veyyon/utils` barrel, so the read tool's module graph again loads no module through the barrel; no user-visible change.
 - The fastembed load-or-install fallback is the exported `loadFastembedOrInstall(importInstalled, installRuntime)`; no user-visible change.
 - Removed the unread `commit` parameter of veracity conflict recording and the unread `beam` parameter of recall context formatting; no user-visible change.
 - Backup checksums use the shared `sha256Hex16` helper instead of a private copy; no user-visible change.
@@ -239,6 +240,7 @@
 - The `/mcp add` wizard repaints a finished connection check and the review step that follows it without waiting for a key, and Esc or a newer check during the check or its pause keeps the step the wizard is on instead of jumping to the review step.
 - Fixed the `/tree` and `/branch` pickers cancelling themselves 100 ms after opening over an empty list, which also cancelled twice when dismissed inside that window; they now stay open on their empty state until dismissed.
 - The `!` command block draws every streamed output window instead of skipping any that arrive within 50 ms of the previous one, which left the last line before a quiet period undrawn and joined the lines on either side of a skipped window; the `!` and `%` blocks also no longer overflow the call stack on an output window of about a million lines.
+- A continuation scheduled while another run starts, such as the queued-message drain after a user interrupt or a `/retry` racing a steer, yields to that run instead of failing with "Agent is already processing".
 - Preparing a compaction behind server-side compaction windows no longer reads the summarized history back from the session file; `CompactionPreparation.fileOps` is computed on first read.
 - A Bedrock, Codex, Ollama or Gemini CLI endpoint that never answers ends the turn with `Timed out after N ms waiting for the first event`, classified as a retryable timeout, instead of `Request was aborted` or `The operation timed out.`, which read as a cancellation or named no phase.
 - An OAuth account ranking whose usage fetch misses its deadline tries unblocked accounts first and blocked ones by the soonest reset, as API-key ranking already did, instead of storage order.
