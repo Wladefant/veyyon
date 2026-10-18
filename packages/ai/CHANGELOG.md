@@ -7,6 +7,7 @@
 - Codex account ranking ignores usage windows of length 0, so one account no longer takes every new session.
 - Aligned OpenAI Codex responses imports with openai-responses-stream exports and restored the UsageCostHistoryEntry interface in usage types, with no user-visible change.
 - Bedrock resolves ambient AWS regions from `AWS_REGION`, `AWS_DEFAULT_REGION` or an enabled shared AWS config profile.
+- AnthropicConnectionError takes (error, url) and AnthropicApiError.fromResponse takes (response, callerSignal), at upstream parity.
 
 ## [1.5.6] - 2026-10-10
 ### Changed

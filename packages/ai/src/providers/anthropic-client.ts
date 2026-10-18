@@ -1,12 +1,11 @@
 /**
- * Minimal HTTP client for the Anthropic Messages API.
+ * Minimal HTTP transport for Anthropic Messages and related REST APIs.
  *
- * pi-ai builds every request header itself (`buildAnthropicHeaders`), serializes
- * the body itself (`buildParams`), and parses SSE frames itself
- * (`iterateAnthropicEvents`), so the only `@anthropic-ai/sdk` surface this
- * package ever exercised was URL assembly, auth-header injection, bounded
- * retries, the pre-response timeout, and HTTP-error-to-status mapping. This
- * module implements exactly that surface and nothing else.
+ * pi-ai builds every Messages request header itself (`buildAnthropicHeaders`),
+ * serializes its body itself (`buildParams`), and parses SSE frames itself
+ * (`iterateAnthropicEvents`), so its provider path only relies on SDK-style URL
+ * assembly, auth-header injection, bounded retries, the pre-response timeout,
+ * and HTTP-error mapping. Resource clients use the same transport for JSON requests.
  *
  * Behavioral contract (kept compatible with the SDK so downstream error
  * classification keeps working):
@@ -51,9 +50,9 @@ export interface AnthropicRequestOptions {
 	/** Per-request retry budget override. */
 	maxRetries?: number;
 	/**
-	 * Longest single server-directed wait this request will sit on. A
-	 * `retry-after` above it surfaces the refusal instead. Defaults to
-	 * {@link DEFAULT_MAX_DELAY_MS}.
+	 * Longest single server-directed wait this request will sit on. A longer
+	 * `retry-after` declines the retry. Values at or below zero disable the cap.
+	 * Defaults to {@link DEFAULT_MAX_DELAY_MS}.
 	 */
 	maxRetryDelayMs?: number;
 	/** Per-request headers merged after client defaults. */
@@ -92,6 +91,8 @@ export interface AnthropicClientOptions {
 	authToken?: string | null;
 	baseURL?: string | null;
 	maxRetries?: number;
+	/** Longest server-directed retry wait for all requests; values at or below zero disable the cap. */
+	maxRetryDelayMs?: number;
 	/** Pre-response timeout in milliseconds. Defaults to 10 minutes. */
 	timeout?: number;
 	defaultHeaders?: Record<string, string>;
@@ -184,21 +185,43 @@ export class AnthropicMessages {
 export interface AnthropicMessagesClientLike {
 	messages: { create(params: MessageCreateParamsStreaming, options?: AnthropicRequestOptions): unknown };
 	beta?: { messages: { create(params: MessageCreateParamsStreaming, options?: AnthropicRequestOptions): unknown } };
+	/** Endpoint the client targets, when it exposes one. */
+	baseURL?: string;
 }
 
 export class AnthropicMessagesClient implements AnthropicMessagesClientLike {
 	readonly messages: AnthropicMessages;
 	readonly beta: { readonly messages: AnthropicMessages };
-	#options: AnthropicClientOptions;
+	#http: AnthropicHttpClient;
+
+	/** Endpoint shared with the HTTP transport. */
+	get baseURL(): string {
+		return this.#http.baseURL;
+	}
 
 	constructor(options: AnthropicClientOptions) {
-		this.#options = options;
+		this.#http = new AnthropicHttpClient(options);
 		this.messages = new AnthropicMessages(this, "/v1/messages");
 		this.beta = { messages: new AnthropicMessages(this, "/v1/messages?beta=true") };
 	}
 
-	request(path: string, params: MessageCreateParamsStreaming, options?: AnthropicRequestOptions): AnthropicApiRequest {
-		return new AnthropicApiRequest(() => this.#send(path, params, options));
+	request(
+		path: string,
+		params: MessageCreateParamsStreaming,
+		options?: AnthropicRequestOptions,
+	): AnthropicApiRequest {
+		return new AnthropicApiRequest(() => this.#http.request("POST", path, params, options));
+	}
+}
+
+/** Shared Anthropic HTTP transport for Messages and resource APIs. */
+export class AnthropicHttpClient {
+	#options: AnthropicClientOptions;
+	readonly baseURL: string;
+
+	constructor(options: AnthropicClientOptions) {
+		this.#options = options;
+		this.baseURL = options.baseURL ?? ANTHROPIC_API_ENDPOINT;
 	}
 
 	#buildHeaders(requestHeaders?: Record<string, string>): Record<string, string> {
@@ -212,13 +235,21 @@ export class AnthropicMessagesClient implements AnthropicMessagesClientLike {
 			headers.Authorization = `Bearer ${opts.authToken}`;
 		}
 		Object.assign(headers, defaults);
-		Object.assign(headers, requestHeaders);
+		if (requestHeaders) {
+			for (const key in requestHeaders) {
+				for (const existing in headers) {
+					if (existing !== key && existing.toLowerCase() === key.toLowerCase()) delete headers[existing];
+				}
+				headers[key] = requestHeaders[key];
+			}
+		}
 		return headers;
 	}
 
-	async #send(
+	async request(
+		method: "GET" | "POST",
 		path: string,
-		params: MessageCreateParamsStreaming,
+		params?: unknown,
 		options?: AnthropicRequestOptions,
 	): Promise<Response> {
 		const opts = this.#options;
@@ -226,17 +257,17 @@ export class AnthropicMessagesClient implements AnthropicMessagesClientLike {
 		const callerSignal = options?.signal;
 		const timeoutMs = options?.timeout ?? opts.timeout ?? DEFAULT_TIMEOUT_MS;
 		const maxRetries = Math.max(0, options?.maxRetries ?? opts.maxRetries ?? DEFAULT_MAX_RETRIES);
-		const maxRetryDelayMs = options?.maxRetryDelayMs ?? DEFAULT_MAX_DELAY_MS;
-		const url = `${opts.baseURL ?? ANTHROPIC_API_ENDPOINT}${path}`;
+		const maxRetryDelayMs = options?.maxRetryDelayMs ?? opts.maxRetryDelayMs ?? DEFAULT_MAX_DELAY_MS;
+		const url = `${this.baseURL}${path}`;
 		const headers = this.#buildHeaders(options?.headers);
-		const body = options?.serializedBody ?? JSON.stringify(params);
+		const body = options?.serializedBody ?? (params === undefined ? undefined : JSON.stringify(params));
 
 		for (let attempt = 0; ; attempt++) {
 			if (callerSignal?.aborted) throw createAbortError();
 
 			let response: Response;
 			try {
-				response = await this.#fetchOnce(fetchFn, url, headers, body, timeoutMs, callerSignal);
+				response = await this.#fetchOnce(fetchFn, url, method, headers, body, timeoutMs, callerSignal);
 			} catch (error) {
 				if (callerSignal?.aborted) throw createAbortError();
 				if (attempt < maxRetries) {
@@ -244,7 +275,7 @@ export class AnthropicMessagesClient implements AnthropicMessagesClientLike {
 					continue;
 				}
 				if (error instanceof AIError.AnthropicConnectionTimeoutError) throw error;
-				throw new AIError.AnthropicConnectionError(error);
+				throw new AIError.AnthropicConnectionError(error, url);
 			}
 
 			if (response.ok) return response;
@@ -253,29 +284,24 @@ export class AnthropicMessagesClient implements AnthropicMessagesClientLike {
 				attempt < maxRetries &&
 				(await AIError.retryResponseAfterReading(response, ANTHROPIC_RESPONSE_RETRY_POLICY))
 			) {
-				// A hint longer than the caller will wait is an answer, not a delay:
-				// the wait was taken verbatim, so a `retry-after` measured in hours
-				// held the request for hours with nothing armed to interrupt it.
-				// Surfacing the refusal is what `fetchWithRetry` does with the same
-				// header, and the status is what tells the operator to wait.
 				const hintedMs = retryDelayFromHeaders(response.headers);
-				if (hintedMs === undefined || hintedMs <= maxRetryDelayMs) {
-					// Cancelling a body no one will read. The error that matters is raised around this line, and a stream
-					// that refuses to cancel -- usually because it already ended -- changes nothing about it.
+				if (hintedMs === undefined || maxRetryDelayMs <= 0 || hintedMs <= maxRetryDelayMs) {
 					await response.body?.cancel().catch(() => {});
 					await backoff(attempt, response.headers, callerSignal);
 					continue;
 				}
 			}
-			throw await AIError.AnthropicApiError.fromResponse(response);
+
+			throw await AIError.AnthropicApiError.fromResponse(response, callerSignal);
 		}
 	}
 
 	async #fetchOnce(
 		fetchFn: FetchImpl,
 		url: string,
+		method: "GET" | "POST",
 		headers: Record<string, string>,
-		body: string,
+		body: string | undefined,
 		timeoutMs: number,
 		callerSignal: AbortSignal | undefined,
 	): Promise<Response> {
@@ -290,7 +316,7 @@ export class AnthropicMessagesClient implements AnthropicMessagesClientLike {
 		try {
 			return await fetchFn(url, {
 				...(this.#options.fetchOptions ?? {}),
-				method: "POST",
+				method,
 				headers,
 				body,
 				signal: controller.signal,
