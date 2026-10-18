@@ -1,0 +1,9 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "veyyon-ci-health",
+	"main": "worker.mjs",
+	"compatibility_date": "2026-10-12",
+	"account_id": "259beca7f28fdcd483c1ff85104c21f4",
+	"workers_dev": false,
+	"preview_urls": false
+}
