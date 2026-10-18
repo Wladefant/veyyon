@@ -4,17 +4,30 @@ A skill is a folder that adds a reusable capability to Veyyon. For how skills ar
 
 ## Directory structure
 
-Skills load only from the active profile. Veyyon reads these locations, all under the profile's agent dir (`profiles/default/` when you have not selected a profile):
+Skills load from the active profile and, when trusted, the current project. Project roots load
+before profile skills:
 
 | Scope | Directory | Purpose |
 | --- | --- | --- |
-| User | `$HOME/.veyyon/profiles/<profile>/agent/skills` | Skills you author or install for the active profile. |
+| Project | `<project-root>/.agents/skills`, `<project-root>/.github/skills`, `<project-root>/.claude/skills`, in that order | Project skills, with earlier roots taking precedence |
+| User | `$HOME/.veyyon/profiles/<profile>/agent/skills` | Skills you author or install for the active profile |
 | Managed | `$HOME/.veyyon/profiles/<profile>/agent/managed-skills` | Auto-learn skills Veyyon writes itself. A same-named user skill always wins. |
-| Plugins | plugins installed into the active profile | Skills bundled with a plugin you added to this profile. |
+| Plugins | plugins installed into the active profile | Skills bundled with a plugin you added to this profile |
 
-Nothing else contributes skills. A project-local `.veyyon/skills` directory and another tool's skill directory (`$HOME/.claude/skills`, `$HOME/.codex/skills`, `$HOME/.agents/skills`, and the rest) are never scanned. To use a skill from another tool, import it into your profile, see [Skills](../reference/skills.md#foreign-providers-are-import-only). For the full provider list and dedup rules, see [Skills](../reference/skills.md#discovery-pipeline).
+The project root is discovery's `repoRoot`, or `cwd` when no repository root is available. Veyyon
+does not scan nested package skill roots, `.agent/skills` or `.veyyon/skills`. It also never scans
+foreign home skill directories such as `$HOME/.claude/skills`, `$HOME/.codex/skills` or
+`$HOME/.agents/skills`. To use a foreign home skill, import it into your profile; see
+[Skills](../reference/skills.md#foreign-providers-are-import-only).
 
-Create a new skill by making a directory inside the profile's `skills` dir and adding a `SKILL.md` file. The name of the directory is the default name of the skill.
+Project skills need trust through their `SKILL.md` path. Veyyon hashes every relative path and file
+content in the skill directory, in sorted order. Any change requires approval again. Scripts and
+assets are included in this single skill-folder approval. Veyyon does not approve them separately and does not sandbox them.
+A symlink that resolves outside the project root is refused with a logger warning. See [Project trust](../reference/project-trust.md).
+
+For a profile skill, create a directory inside the profile's `skills` directory and add a `SKILL.md`
+file. The directory name is the default skill name.
+
 
 A skill directory may contain additional files:
 
@@ -24,7 +37,8 @@ my-skill/
 └── scripts/, references/, assets/ ...optional
 ```
 
-Only `SKILL.md` is required. The other files are loaded when the skill is active or when the model requests them.
+Only `SKILL.md` is required. For a project skill, the trust decision covers the full folder's paths and contents. Scripts and assets are included in that approval. Veyyon does not approve them separately and does not sandbox them. The other files are read or used only when the skill instructions request them.
+
 
 ## SKILL.md frontmatter
 
@@ -76,9 +90,9 @@ Do not leave comments on external platforms unless the user explicitly asks for 
 
 ## Configuring in config.yml
 
-There is no registration step: a skill placed in any discovered directory (see
-[Skills](../reference/skills.md)) loads automatically. The `skills` section of `config.yml` controls
-which discovered skills are active.
+There is no registration step. A profile skill in a discovered profile directory loads automatically.
+A project skill loads only after you approve it with `veyyon trust` or `/trust approve`.
+
 
 Turn skill discovery off entirely:
 
