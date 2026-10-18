@@ -11,7 +11,6 @@
  * Import this instead of reading `agent.*` keys directly.
  */
 
-import { createHash } from "node:crypto";
 import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import { isRecord, logger } from "@veyyon/utils";
 import { parseConfiguredEffortSetting } from "../config/effort-resolver";
@@ -69,9 +68,10 @@ function shareTaskModelPools(
 	const lunaIndex = patterns.findIndex(pattern => SHARED_LUNA_POOL.test(pattern));
 	if (flashIndex < 0 || lunaIndex < 0) return patterns;
 
-	let selectedFirst = createHash("sha256").update(spawnId).digest()[0] & 1 ? flashIndex : lunaIndex;
+	const configuredFirst = flashIndex < lunaIndex ? flashIndex : lunaIndex;
+	let selectedFirst = configuredFirst;
 	// A pool in cooldown is skipped at the first selection, not only at retry. When both are
-	// suppressed the hash decides, so the retry ladder keeps its own order.
+	// suppressed the configured order is kept, so the retry ladder keeps its own order.
 	const flashDown = suppression?.isSelectorSuppressed(patterns[flashIndex]!) === true;
 	const lunaDown = suppression?.isSelectorSuppressed(patterns[lunaIndex]!) === true;
 	if (flashDown !== lunaDown) selectedFirst = flashDown ? lunaIndex : flashIndex;
