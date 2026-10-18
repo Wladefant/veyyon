@@ -71,6 +71,8 @@ if ! command -v bun >/dev/null 2>&1 || [[ "$(bun --version)" != "$expected_bun" 
   npm install --global "bun@$expected_bun"
 fi
 echo "Bun version: $(bun --version)"
+echo "Build uid: $(id -u) ($(id -un))"
+echo "Node version: $(node --version)"
 
 # Frozen dependency install
 echo "Installing dependencies from frozen lockfile..."
@@ -98,7 +100,7 @@ if ! git cat-file -e "${baseline_sha}^{commit}" >/dev/null 2>&1; then
 fi
 echo "Baseline commit $baseline_sha verified in object store."
 # Download bubblewrap from the distro without root, then expose its extracted binary.
-bwrap_tools="$repo_root/.cf-bwrap"
+bwrap_tools="$(mktemp -d /var/tmp/veyyon-bwrap-tools-XXXXXX)"
 mkdir -p "$bwrap_tools/packages" "$bwrap_tools/root" \
   "$bwrap_tools/lists/partial" "$bwrap_tools/cache/archives/partial"
 (
@@ -108,9 +110,16 @@ mkdir -p "$bwrap_tools/packages" "$bwrap_tools/root" \
   apt_options=(-c "$apt_config" -o "Dir::State::Lists=$bwrap_tools/lists" -o "Dir::Cache=$bwrap_tools/cache")
   timeout 120 apt-get "${apt_options[@]}" update
   timeout 120 apt-get "${apt_options[@]}" download bubblewrap
+  timeout 120 apt-get "${apt_options[@]}" download gh
   timeout 120 dpkg-deb -x ./*.deb "$bwrap_tools/root"
 )
 export PATH="$bwrap_tools/root/usr/bin:$PATH"
+export VEYYON_BWRAP_GH="$bwrap_tools/root/usr/bin/gh"
+if [[ ! -x "$VEYYON_BWRAP_GH" ]]; then
+  echo "FATAL: gh was not extracted to $VEYYON_BWRAP_GH" >&2
+  exit 1
+fi
+echo "gh version: $("$VEYYON_BWRAP_GH" --version | head -n1)"
 if ! command -v bwrap >/dev/null 2>&1; then
   echo "FATAL: bubblewrap was not extracted to $bwrap_tools/root/usr/bin/bwrap" >&2
   exit 1
@@ -191,12 +200,18 @@ if [[ "$CF_SHARD_INDEX" == "0" ]]; then
   echo "Running explicit quota-refusals single-file verification on shard 0..."
   bash scripts/test-sandbox/run.sh bun test ./packages/coding-agent/test/session/quota-refusals-belong-to-the-failed-request.test.ts
 fi
+# Remove only the gitignored evals cache left by an earlier step of this checkout.
+# A path git tracks is never deleted, so tracked fixtures survive.
+if [[ -d tests/evals/.cache ]] && git check-ignore -q tests/evals/.cache \
+  && ! git ls-files --error-unmatch -- tests/evals/.cache >/dev/null 2>&1; then
+  echo "Removing generated cache tests/evals/.cache before the test scan"
+  rm -rf -- tests/evals/.cache
+fi
 
 # Run test suite using existing sandbox runner invocation
 echo "CLOUDFLARE_TEST_EXCLUSION file=packages/utils/test/slice-extract-fuzz.test.ts reason=bun-native-16GiB-allocation-aborts-in-workers-guest"
-# Outer memory sampler & safe minimal bridge (every 5s, stops with runner)
-diag_dir="$repo_root/.cf-diagnostics"
-mkdir -p "$diag_dir"
+# Outer memory sampler & safe minimal bridge (every 30s, stops with runner)
+diag_dir="$(mktemp -d /var/tmp/veyyon-diag-XXXXXX)"
 
 write_cgroup_bridge() {
   local cur="unavailable"
@@ -249,14 +264,14 @@ write_cgroup_bridge
 OUTER_SAMPLER_PID=""
 (
   while true; do
-    sleep 5
+    sleep 30
     write_cgroup_bridge
     free_summary="$(free -m 2>/dev/null | awk '/^Mem:/{printf "total=%sMB used=%sMB free=%sMB avail=%sMB", $2, $3, $4, $7}' || echo "unavailable")"
     cur="$(sed -n 's/.*"current": "\([^"]*\)".*/\1/p' "$diag_dir/cgroup-latest.json" 2>/dev/null || echo "unavailable")"
     peak="$(sed -n 's/.*"peak": "\([^"]*\)".*/\1/p' "$diag_dir/cgroup-latest.json" 2>/dev/null || echo "unavailable")"
     oom="$(sed -n 's/.*"oom": "\([^"]*\)".*/\1/p' "$diag_dir/cgroup-latest.json" 2>/dev/null || echo "unavailable")"
     oom_kill="$(sed -n 's/.*"oom_kill": "\([^"]*\)".*/\1/p' "$diag_dir/cgroup-latest.json" 2>/dev/null || echo "unavailable")"
-    echo "CLOUDFLARE_OUTER_SAMPLER_5S current=$cur peak=$peak oom=$oom oom_kill=$oom_kill free=\"$free_summary\""
+    echo "CLOUDFLARE_HEARTBEAT_30S current=$cur peak=$peak oom=$oom oom_kill=$oom_kill free=\"$free_summary\""
   done
 ) &
 OUTER_SAMPLER_PID=$!
@@ -267,14 +282,18 @@ stop_outer_sampler() {
     wait "$OUTER_SAMPLER_PID" 2>/dev/null || true
   fi
 }
-trap stop_outer_sampler EXIT INT TERM
+on_lane_exit() {
+  local status=$?
+  stop_outer_sampler
+  echo "CLOUDFLARE_LANE_EXIT status=$status"
+}
+trap on_lane_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 echo "Running test suite in sandbox..."
 test_exit=0
 bash scripts/test-sandbox/run.sh bun scripts/ci-test-ts.ts all || test_exit=$?
-
-stop_outer_sampler
-trap - EXIT INT TERM
 
 if [[ $test_exit -ne 0 ]]; then
   echo "FATAL: Test suite failed with exit code $test_exit" >&2

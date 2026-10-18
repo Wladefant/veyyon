@@ -29,16 +29,18 @@ printf 'Bun resolved on host: %s\n' "$BWRAP_HOST_BUN_PATH"
 # Linux tools from PATH, as happens in that invocation.
 bwrap() { "${BWRAP_BIN}" "$@"; }
 export PATH=/windows-only
-probe_output="$(binprobe_bwrap 'for b in bun git sh; do command -v "$b" || exit 1; done; bun --version')"
+probe_output="$(binprobe_bwrap 'for b in bun node gh git sh; do command -v "$b" || exit 1; done; bun --version')"
 printf '%s\n' "$probe_output"
 run_bwrap /bin/sh -c '
 set -e
-for b in bun git sh; do command -v "$b"; done
+for b in bun node gh git sh; do command -v "$b"; done
 bun --version
+node --version >/dev/null
+gh --version >/dev/null
 [ ! -e "$VEYYON_TEST_HOST_HOME/$1" ]
 [ ! -e "/sandbox/runtime/bun/$1" ]
-[ ! -d /opt/buildhome/.asdf ]
-[ "$(find /sandbox/runtime/bun -mindepth 1 -maxdepth 1 | wc -l)" -eq 1 ]
+[ ! -e "$2" ]
+[ "$(find /sandbox/runtime/bun -mindepth 1 -maxdepth 1 | wc -l)" -eq 3 ]
 [ "$VEYYON_TEST_SANDBOX" = bwrap-userns ]
-' _ "$BWRAP_PATH_PROOF_MARKER"
+' _ "$BWRAP_PATH_PROOF_MARKER" "$HOST_HOME/.asdf"
 printf 'bwrap PATH proof: PASS\n'

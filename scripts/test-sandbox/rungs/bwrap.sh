@@ -9,16 +9,21 @@
 # despite enabling unprivileged user namespaces, so the probe runs bwrap rather
 # than merely checking PATH.
 
-# Resolve Bun while the host PATH is still intact. The PATH proof narrows PATH
-# after sourcing this rung, but the sandbox still needs the same host executable.
-BWRAP_HOST_BUN_PATH=""
-if bun_executable="$(bun -e 'process.stdout.write(process.execPath)' 2>/dev/null)"; then
-	BWRAP_HOST_BUN_PATH="$(readlink -f -- "$bun_executable" 2>/dev/null || true)"
-	bun_magic="$(od -An -tx1 -N4 -- "$BWRAP_HOST_BUN_PATH" 2>/dev/null || true)"
-	if [ ! -x "$BWRAP_HOST_BUN_PATH" ] || [ "${bun_magic//[[:space:]]/}" != "7f454c46" ]; then
-		BWRAP_HOST_BUN_PATH=""
-	fi
-fi
+# Resolve host executables while the host PATH is still intact. Only a real ELF file
+# is bound into the sandbox: a shell wrapper would reach it as a broken command, and
+# a directory bind would expose the host tree. The PATH proof narrows PATH after
+# sourcing this rung, so the resolution must happen here.
+resolve_host_elf() {
+	local resolved magic
+	resolved="$(readlink -f -- "$1" 2>/dev/null || true)"
+	if [ -z "$resolved" ] || [ ! -x "$resolved" ]; then return 0; fi
+	magic="$(od -An -tx1 -N4 -- "$resolved" 2>/dev/null || true)"
+	if [ "${magic//[[:space:]]/}" = 7f454c46 ]; then printf '%s\n' "$resolved"; fi
+	return 0
+}
+BWRAP_HOST_BUN_PATH="$(resolve_host_elf "$(bun -e 'process.stdout.write(process.execPath)' 2>/dev/null || true)")"
+BWRAP_HOST_NODE_PATH="$(resolve_host_elf "$(command -v node 2>/dev/null || true)")"
+BWRAP_HOST_GH_PATH="$(resolve_host_elf "${VEYYON_BWRAP_GH:-}")"
 
 probe_bwrap() {
 	command -v bwrap >/dev/null 2>&1 || { skip bwrap "bubblewrap not on PATH"; return 1; }
@@ -38,12 +43,26 @@ run_bwrap() {
 	# not a repository. The driver leaves SANDBOX_GITDIR empty for a checkout that owns
 	# its own `.git`, and for one whose git directory is inside the home being hidden.
 	local -a gitdir_args=()
-	local -a bun_mounts=()
+	local -a runtime_mounts=()
 	if [ -n "${BWRAP_HOST_BUN_PATH:-}" ] && [ -x "$BWRAP_HOST_BUN_PATH" ]; then
 		log "Bun executable resolved to ${BWRAP_HOST_BUN_PATH}"
-		bun_mounts=(--ro-bind "$BWRAP_HOST_BUN_PATH" /sandbox/runtime/bun/bun)
+		runtime_mounts=(--ro-bind "$BWRAP_HOST_BUN_PATH" /sandbox/runtime/bun/bun)
 	else
 		log "Bun runtime resolution failed: expected an executable ELF binary from process.execPath"
+		return "${RUNG_SETUP_FAILED:-126}"
+	fi
+	if [ -n "${BWRAP_HOST_NODE_PATH:-}" ] && [ -x "$BWRAP_HOST_NODE_PATH" ]; then
+		log "Node executable resolved to ${BWRAP_HOST_NODE_PATH}"
+		runtime_mounts+=(--ro-bind "$BWRAP_HOST_NODE_PATH" /sandbox/runtime/bun/node)
+	else
+		log "Node runtime resolution failed: expected an ELF binary from command -v node"
+		return "${RUNG_SETUP_FAILED:-126}"
+	fi
+	if [ -n "${BWRAP_HOST_GH_PATH:-}" ] && [ -x "$BWRAP_HOST_GH_PATH" ]; then
+		log "gh executable resolved to ${BWRAP_HOST_GH_PATH}"
+		runtime_mounts+=(--ro-bind "$BWRAP_HOST_GH_PATH" /sandbox/runtime/bun/gh)
+	else
+		log "gh runtime resolution failed: VEYYON_BWRAP_GH must name an ELF binary"
 		return "${RUNG_SETUP_FAILED:-126}"
 	fi
 
@@ -81,7 +100,7 @@ run_bwrap() {
 		--proc /proc --dev /dev \
 		--tmpfs /sandbox --tmpfs /run \
 		"${cgroup_mounts[@]}" \
-		"${bun_mounts[@]}" \
+		"${runtime_mounts[@]}" \
 		--tmpfs /home --tmpfs /tmp \
 		--bind "${REPO_ROOT}" "${GUEST_REPO}" \
 		"${gitdir_args[@]+"${gitdir_args[@]}"}" \
