@@ -1756,7 +1756,7 @@ export class TUI extends Container {
 			return;
 		}
 
-		const windowTop = Math.max(this.#committedRows, this.#composedFrame.length - height, 0);
+		const windowTop = this.#tailWindowTop(this.#composedFrame.length, height);
 		if (windowTop !== this.#windowTopRow) {
 			this.requestComponentRender(component);
 			return;
@@ -2946,6 +2946,16 @@ export class TUI extends Container {
 	}
 
 	/**
+	 * Window top for a frame with no live cursor: the frame tail, floored at the commit boundary
+	 * only while uncommitted rows remain. Once every frame row is committed, that floor would park
+	 * the window past the last row and paint blank lines, so the surviving tail is shown instead.
+	 */
+	#tailWindowTop(frameLength: number, height: number): number {
+		const floor = this.#committedRows < frameLength ? this.#committedRows : 0;
+		return Math.max(floor, frameLength - height, 0);
+	}
+
+	/**
 	 * Place the window and the commit boundary for this frame (lengths only;
 	 * {@link #assembleWindow} prepares the content).
 	 */
@@ -3013,7 +3023,7 @@ export class TUI extends Container {
 			// grid would duplicate them for a scrolling reader. On a
 			// multiplexer resize the pane reflowed its own history; committed
 			// rows keep their old wrap there, same as any shell output.
-			windowTop = Math.max(this.#committedRows, frameLength - height, 0);
+			windowTop = this.#tailWindowTop(frameLength, height);
 			// Whatever scrolls above the window commits — the tape is the visual
 			// record; nothing that was painted may vanish. Overlays freeze
 			// commits: composited rows must never enter history, and the hidden
@@ -3034,7 +3044,11 @@ export class TUI extends Container {
 			// still paints in place, and the only rows that miss native scrollback
 			// are chrome rows, which were never history to begin with.
 			const commitWouldTakeLiveRows = windowTop > historyEnd;
-			chunkTo = hasVisibleOverlay || geometryChanged || commitWouldTakeLiveRows ? this.#committedRows : windowTop;
+			// A window above the boundary re-shows committed rows only; it never rewinds the commit ledger.
+			chunkTo =
+				hasVisibleOverlay || geometryChanged || commitWouldTakeLiveRows || windowTop < this.#committedRows
+					? this.#committedRows
+					: windowTop;
 			if (geometryChanged) {
 				committedPrefixResliced = true;
 				this.#committedPrefix = rawFrame.slice(0, this.#committedRows);
