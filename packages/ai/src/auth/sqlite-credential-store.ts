@@ -10,14 +10,8 @@ import * as path from "node:path";
 import { authPolicyFor } from "@veyyon/catalog/compat/auth";
 import { parseAlibabaTokenPlanCredential } from "@veyyon/catalog/wire/alibaba-token-plan";
 import { parseCloudflareCredential } from "@veyyon/catalog/wire/cloudflare";
-import {
-	getAgentDbPath,
-	getDbBusyTimeoutMs,
-	isSqliteBusyError,
-	isSqliteCorruptionError,
-	logger,
-	openSqliteDatabase,
-} from "@veyyon/utils";
+import { getAgentDbPath, getDbBusyTimeoutMs, logger } from "@veyyon/utils";
+import { isSqliteBusyError, isSqliteCorruptionError, openSqliteDatabase } from "@veyyon/utils/sqlite";
 import type { AuthCredentialStore, CredentialRefreshLeaseFence } from "./store";
 import type {
 	AuthCredential,

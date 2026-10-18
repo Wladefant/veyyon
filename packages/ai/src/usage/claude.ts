@@ -27,7 +27,10 @@ import {
 	parseAnthropicResetStatus,
 } from "./anthropic-reset";
 import { claudeOAuthHeaders, normalizeClaudeBaseUrl } from "./claude-oauth-endpoint";
-import { usageStatusFromUsedFraction } from "./shared";
+import { usageStatus, usageStatusFromUsedFraction } from "./shared";
+
+/** Shared windows that gate every Claude request, whatever the model. */
+const CLAUDE_SHARED_GATE_WINDOW_IDS = ["5h", "7d"] as const;
 
 const FIVE_HOURS_MS = 5 * HOUR_MS;
 const MAX_ATTEMPTS = 3;
@@ -42,6 +45,31 @@ interface ParsedUsageBucket {
 	utilization?: number;
 	resetsAt?: number;
 }
+interface ClaudeExtraUsage {
+	is_enabled?: boolean;
+	monthly_limit?: number | null;
+	used_credits?: number;
+	decimal_places?: number;
+	currency?: string;
+}
+
+interface ClaudeMoneyAmount {
+	amount_minor?: number;
+	currency?: string;
+	exponent?: number;
+}
+
+interface ClaudeSpend {
+	used?: ClaudeMoneyAmount | null;
+	limit?: ClaudeMoneyAmount | null;
+	enabled?: boolean;
+}
+
+interface ParsedClaudeExtraUsage {
+	used: number;
+	limit?: number;
+}
+
 type ClaudeUnifiedWindow = "5h" | "7d" | "7d_oi";
 type ClaudeModelKind = "opus" | "sonnet" | "fable" | "mythos";
 
@@ -51,6 +79,9 @@ interface ClaudeUsageResponse {
 	seven_day_opus?: ClaudeUsageBucket | null;
 	seven_day_sonnet?: ClaudeUsageBucket | null;
 	limits?: unknown;
+	extra_usage?: ClaudeExtraUsage | null;
+	spend?: ClaudeSpend | null;
+
 	/** Reset-program status block, present when the query asks for it; see `./anthropic-reset`. */
 	cedar_ember?: unknown;
 }
@@ -371,6 +402,102 @@ function buildUsageAmount(utilization: number | undefined): UsageAmount | undefi
 	};
 }
 
+function parseDollarAmount(
+	amountMinor: unknown,
+	exponent: unknown,
+	currency: unknown,
+	currencyRequired: boolean,
+): number | undefined {
+	if (
+		typeof amountMinor !== "number" ||
+		!Number.isSafeInteger(amountMinor) ||
+		amountMinor < 0 ||
+		typeof exponent !== "number" ||
+		!Number.isSafeInteger(exponent) ||
+		exponent < 0
+	) {
+		return undefined;
+	}
+	if (currency === undefined) {
+		if (currencyRequired) return undefined;
+	} else if (typeof currency !== "string" || currency.toUpperCase() !== "USD") {
+		return undefined;
+	}
+	const divisor = 10 ** exponent;
+	if (!Number.isFinite(divisor)) return undefined;
+	const dollars = amountMinor / divisor;
+	return Number.isFinite(dollars) ? dollars : undefined;
+}
+
+function parseSpendExtraUsage(value: unknown): ParsedClaudeExtraUsage | null {
+	if (!isRecord(value) || value.enabled !== true || !Object.hasOwn(value, "limit") || !isRecord(value.used)) {
+		return null;
+	}
+	const used = parseDollarAmount(value.used.amount_minor, value.used.exponent, value.used.currency, true);
+	if (used === undefined) return null;
+	if (value.limit === null) return { used };
+	if (!isRecord(value.limit)) return null;
+	const limit = parseDollarAmount(value.limit.amount_minor, value.limit.exponent, value.limit.currency, true);
+	// Reject non-positive caps rather than normalizing them into contradictory zero fractions.
+	return limit === undefined || limit <= 0 ? null : { used, limit };
+}
+
+function parseLegacyExtraUsage(value: unknown): ParsedClaudeExtraUsage | null {
+	if (!isRecord(value) || value.is_enabled !== true || !Object.hasOwn(value, "monthly_limit")) return null;
+	const decimalPlaces = value.decimal_places === undefined ? 2 : value.decimal_places;
+	const used = parseDollarAmount(value.used_credits, decimalPlaces, value.currency, false);
+	if (used === undefined) return null;
+	if (value.monthly_limit === null || value.monthly_limit === undefined) return { used };
+	const limit = parseDollarAmount(value.monthly_limit, decimalPlaces, value.currency, false);
+	return limit === undefined || limit <= 0 ? null : { used, limit };
+}
+
+function buildExtraUsageAmount(used: number, limit: number | undefined): UsageAmount | undefined {
+	if (limit === undefined) return { used, unit: "usd" };
+	const remaining = Math.max(0, limit - used);
+	const usedFraction = used / limit;
+	const remainingFraction = remaining / limit;
+	if (!Number.isFinite(remaining) || !Number.isFinite(usedFraction) || !Number.isFinite(remainingFraction)) {
+		return undefined;
+	}
+	return {
+		used,
+		unit: "usd",
+		limit,
+		remaining,
+		usedFraction,
+		remainingFraction,
+	};
+}
+
+function buildClaudeExtraUsageLimit(payload: ClaudeUsageResponse): UsageLimit | null {
+	const parsed =
+		payload.spend === null || payload.spend === undefined
+			? parseLegacyExtraUsage(payload.extra_usage)
+			: parseSpendExtraUsage(payload.spend);
+	if (!parsed) return null;
+
+	const amount = buildExtraUsageAmount(parsed.used, parsed.limit);
+	if (!amount) return null;
+	// A defined limit makes `buildExtraUsageAmount` set `usedFraction`.
+	const status =
+		parsed.limit === undefined
+			? undefined
+			: parsed.used >= parsed.limit
+				? "exhausted"
+				: usageStatus(amount.usedFraction);
+	return {
+		id: "anthropic:extra",
+		label: "Claude Extra Usage",
+		scope: {
+			provider: "anthropic",
+			windowId: "extra",
+		},
+		amount,
+		...(status !== undefined ? { status } : {}),
+	};
+}
+
 // Claude omits the status field entirely when the used fraction is unknown
 // (rather than emitting "unknown"), so the undefined case stays here; the
 // defined-fraction ladder is the shared owner.
@@ -541,6 +668,86 @@ function buildClaudeUsageLimits(payload: ClaudeUsageResponse): UsageLimit[] {
 	].filter((limit): limit is UsageLimit => limit !== null);
 }
 
+export function parseClaudeUsagePayload(
+	raw: unknown,
+	identity: { accountId?: string; email?: string; orgId?: string } = {},
+	endpoint?: string,
+	fetchedAt = Date.now(),
+): UsageReport | null {
+	if (!isRecord(raw)) return null;
+	const payload: ClaudeUsageResponse = raw;
+	const apiLimitEntries = parseApiLimitEntries(payload.limits);
+	const fiveHour = parseBucket(payload.five_hour) ?? apiLimitEntries.find(entry => entry.kind === "session")?.bucket;
+	const sevenDay =
+		parseBucket(payload.seven_day) ?? apiLimitEntries.find(entry => entry.kind === "weekly_all")?.bucket;
+	const sevenDayOpus = parseBucket(payload.seven_day_opus);
+	const sevenDaySonnet = parseBucket(payload.seven_day_sonnet);
+
+	const limits = [
+		buildUsageLimit({
+			id: "anthropic:5h",
+			label: "Claude 5 Hour",
+			windowId: "5h",
+			windowLabel: "5 Hour",
+			durationMs: 5 * HOUR_MS,
+			bucket: fiveHour,
+			provider: "anthropic",
+			shared: true,
+		}),
+		buildUsageLimit({
+			id: "anthropic:7d",
+			label: "Claude 7 Day",
+			windowId: "7d",
+			windowLabel: "7 Day",
+			durationMs: WEEK_MS,
+			bucket: sevenDay,
+			provider: "anthropic",
+			shared: true,
+		}),
+		buildUsageLimit({
+			id: "anthropic:7d:opus",
+			label: "Claude 7 Day (Opus)",
+			windowId: "7d",
+			windowLabel: "7 Day",
+			durationMs: WEEK_MS,
+			bucket: sevenDayOpus,
+			provider: "anthropic",
+			tier: "opus",
+		}),
+		buildUsageLimit({
+			id: "anthropic:7d:sonnet",
+			label: "Claude 7 Day (Sonnet)",
+			windowId: "7d",
+			windowLabel: "7 Day",
+			durationMs: WEEK_MS,
+			bucket: sevenDaySonnet,
+			provider: "anthropic",
+			tier: "sonnet",
+		}),
+		...buildScopedWeeklyUsageLimits(apiLimitEntries),
+		buildClaudeExtraUsageLimit(payload),
+	].filter((limit): limit is UsageLimit => limit !== null);
+
+	if (limits.length === 0) return null;
+	// The response speaks for the token that fetched it; stored metadata may be stale.
+	const payloadIdentity = extractUsageIdentity(payload);
+	const accountId = payloadIdentity.accountId ?? identity.accountId;
+	const email = payloadIdentity.email ?? identity.email;
+	return {
+		provider: "anthropic",
+		fetchedAt,
+		limits,
+		metadata: {
+			...(endpoint ? { endpoint } : {}),
+			...(accountId ? { accountId } : {}),
+			...(email ? { email } : {}),
+			...(identity.orgId ? { orgId: identity.orgId } : {}),
+		},
+		raw: payload,
+	};
+}
+
+
 /** The usage payload's identity, completed from the credential and then, while either is missing, from `/profile`. */
 async function resolveClaudeIdentity(
 	params: UsageFetchParams,
@@ -706,12 +913,27 @@ function findClaudeSecondaryLimit(
 }
 
 export const claudeRankingStrategy: CredentialRankingStrategy = {
+	healsGlobalBlocks: true,
+	/**
+	 * Anthropic-only idle window after which a session's pinned credential no
+	 * longer suppresses usage-based re-ranking. Anthropic caps OAuth prompt-cache
+	 * retention at `ttl: "1h"` (ephemeral ~5min otherwise), so after this long
+	 * without an Anthropic resolve the conversation-prefix cache is no longer
+	 * guaranteed warm. Other providers retain indefinite stickiness until their
+	 * own cache lifetimes are verified.
+	 */
+	stickyWarmMs: 60 * 60_000,
 	findWindowLimits(report, context) {
 		const primary = report.limits.find(limit => limit.id === "anthropic:5h");
 		const secondary = findClaudeSecondaryLimit(report, context);
 		return { primary, secondary };
 	},
 	scopeLimits: scopeClaudeLimitsForModelHardBlock,
+	// Reserve health is a non-destructive fallback, not a credential hard
+	// block, so it trusts the mapped tier row before confirmed exhaustion: a
+	// Fable/Mythos weekly cap inside the reserve margin should move the turn to
+	// a healthy candidate rather than serve until 100%.
+	scopeLimitsForReserve: scopeClaudeLimitsForModel,
 	/**
 	 * Fable/Mythos usage-limit errors map to tier-local weekly counters. Scope
 	 * reactive backoff blocks for those tiers, mirroring the per-counter
@@ -720,6 +942,44 @@ export const claudeRankingStrategy: CredentialRankingStrategy = {
 	blockScope(context) {
 		const kind = getClaudeModelKind(context);
 		return kind === "fable" || kind === "mythos" ? `tier:${kind}` : undefined;
+	},
+	/**
+	 * A reactive Fable/Mythos block carries the reset the 429 reported, but
+	 * Anthropic can restore the tier earlier (plan change, corrected counter),
+	 * and the block then idles a usable account for days. Judge each tier scope
+	 * against the limits that actually gate a request of that kind — its own
+	 * weekly row plus the shared umbrella windows — so a healthy report lifts
+	 * the block while a spent shared 5-hour wall keeps it.
+	 *
+	 * Legacy and shared quota errors also leave account-wide blocks. Only a
+	 * complete report with every reported quota healthy can heal that scope.
+	 */
+	healableBlockScopes(report) {
+		const sharedLimits = report.limits.filter(limit => limit.scope.shared === true);
+		// The endpoint returns a report as soon as one window parses, and a tier
+		// 429 can be caused by a shared wall. A payload missing a shared gate
+		// leaves the block's cause unknown, so vouch for nothing rather than
+		// clear a block that still holds.
+		const everySharedGateReported = CLAUDE_SHARED_GATE_WINDOW_IDS.every(windowId =>
+			sharedLimits.some(limit => limit.scope.windowId === windowId || limit.window?.id === windowId),
+		);
+		if (!everySharedGateReported) return [];
+		const tiers = new Set<string>();
+		for (const limit of report.limits) {
+			const tier = limit.scope.tier;
+			if (tier === "fable" || tier === "mythos") tiers.add(tier);
+		}
+		return [
+			{
+				blockScope: "",
+				limits: report.limits.filter(limit => limit.scope.shared === true || limit.scope.tier !== undefined),
+				healthy: report.metadata?.source === "ratelimit-headers" ? false : undefined,
+			},
+			...[...tiers].map(tier => ({
+				blockScope: `tier:${tier}`,
+				limits: [...sharedLimits, ...report.limits.filter(limit => limit.scope.tier === tier)],
+			})),
+		];
 	},
 	windowDefaults: { primaryMs: 5 * HOUR_MS, secondaryMs: WEEK_MS },
 };

@@ -22,6 +22,12 @@ export interface UsageWindow {
 	durationMs?: number;
 	/** Absolute reset timestamp in milliseconds since epoch. */
 	resetsAt?: number;
+	/**
+	 * Verb rendered before the {@link resetsAt} countdown (e.g. "tick", "regen").
+	 * Defaults to "resets" — override for rolling windows where the timestamp is
+	 * an incremental regeneration step rather than a full window reset.
+	 */
+	resetLabel?: string;
 }
 
 /** Quantitative usage data. */
@@ -50,6 +56,8 @@ export interface UsageScope {
 	tier?: string;
 	windowId?: string;
 	shared?: boolean;
+	/** Stable identity shared by routing-specific copies of one upstream quota. */
+	sharedGroup?: string;
 }
 
 /**
@@ -91,6 +99,14 @@ export interface UsageResetCreditDetail {
 	id?: string;
 	/** Human-facing title, e.g. "One free rate limit reset". */
 	title?: string;
+	/** Provider reset program/family. */
+	program?: string;
+	/** Resets still banked in this credit/grant. */
+	remainingCount?: number;
+	/** Whether the provider says this credit can be redeemed now. */
+	usable?: boolean;
+	/** Whether redemption requires an exhausted covered limit. */
+	requiresLimit?: boolean;
 	/** ISO timestamp when the credit was granted. */
 	grantedAt?: string;
 	/** ISO timestamp when the credit expires and can no longer be redeemed. */
@@ -99,6 +115,15 @@ export interface UsageResetCreditDetail {
 	status?: string;
 	/** Usage windows one redeem clears, in the provider's names, when the provider states them. */
 	clears?: string[];
+	/** Normalized limit ids currently preventing redemption. */
+	blocking?: string[];
+	/** Used fractions for covered limits, keyed by normalized limit id. */
+	usedFractions?: Record<string, number>;
+}
+
+/** Reset credit carrying the provider id required by its consume endpoint. */
+export interface UsageResetCredit extends UsageResetCreditDetail {
+	id: string;
 }
 
 /**
@@ -112,6 +137,16 @@ export interface UsageResetCreditDetail {
 export interface UsageResetCredits {
 	/** Number of resets available to redeem right now. */
 	availableCount: number;
+	/** Number of resets the provider says can be redeemed now. */
+	redeemableCount?: number;
+	/** Provider-selected credit/grant eligible for the next redemption. */
+	nextCreditId?: string;
+	/** Whether this account is eligible for the reset program. */
+	eligible?: boolean;
+	/** Provider reason the program or its credits are unavailable. */
+	reason?: string;
+	/** ISO timestamp until which redemption is cooling down. */
+	cooldownUntil?: string;
 	/** Individual credit details (expiry dates, etc.) when the provider exposes them. */
 	credits?: UsageResetCreditDetail[];
 }
@@ -170,6 +205,14 @@ export function resolveDisplayFraction(limit: UsageLimit): number | undefined {
 	return fractionToDraw(resolveUsedFraction(limit), limit.display);
 }
 
+/** Float slack so a remaining fraction derived as `1 - used` still matches a reserve it sits exactly on. */
+const RESERVE_BOUNDARY_EPSILON = 1e-9;
+
+/** Whether remaining quota is at or below the reserve (both 0..1 fractions). */
+export function isWithinUsageReserve(remainingFraction: number, reserveFraction: number): boolean {
+	return remainingFraction <= reserveFraction + RESERVE_BOUNDARY_EPSILON;
+}
+
 /**
  * One recorded usage-limit snapshot: a single limit window of one account at
  * a point in time. The usage cache itself is latest-snapshot-only; history
@@ -214,6 +257,77 @@ export interface UsageCostHistoryEntry {
 	costUsd: number;
 }
 
+
+/**
+ * Aggregated request usage a client observed for one (provider, model) pair.
+ * Clients fold every completed request into per-pair buckets and flush them to
+ * the auth broker on a short cadence, so the broker can attribute token burn
+ * to the install that produced it.
+ */
+export interface ObservedUsageEntry {
+	/** Epoch ms of the newest request folded into this bucket. */
+	at: number;
+	provider: Provider;
+	model: string;
+	/** Completed requests folded into this bucket. */
+	requests: number;
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+	/** Estimated USD cost of the folded requests (0 when unknown). */
+	costUsd: number;
+}
+
+/** One client's observed-usage report, keyed by its stable install id. */
+export interface ClientUsageReport {
+	/** Stable per-machine install id — the client primary key. */
+	installId: string;
+	/** Human-readable machine name for display surfaces. */
+	hostname?: string;
+	/** Application label for the process that burned the tokens (e.g. `omp`, `robomp`). */
+	app?: string;
+	entries: ObservedUsageEntry[];
+}
+
+/**
+ * Identity a client presents for usage attribution. Defaults to this
+ * process's install id / hostname / app label; the auth-gateway overrides it
+ * with the identity its caller sent so token burn lands on the originating
+ * machine and application instead of the gateway host.
+ */
+export interface ClientUsageIdentity {
+	installId: string;
+	hostname?: string;
+	app?: string;
+}
+
+/** Per-provider aggregate of one client's recorded usage. */
+export interface ClientProviderUsage {
+	/** Application label the usage was reported under; absent for legacy rows. */
+	app?: string;
+	provider: string;
+	requests: number;
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+	costUsd: number;
+}
+
+/** One known client with its usage aggregates over the queried window. */
+export interface ClientUsageClientSummary {
+	installId: string;
+	hostname?: string;
+	firstSeen: number;
+	lastSeen: number;
+	providers: ClientProviderUsage[];
+}
+
+/** Aggregated per-client usage recorded by the broker host. */
+export interface ClientUsageSummary {
+	clients: ClientUsageClientSummary[];
+}
 // The wire schemas for a usage report live in `./usage/report-wire`, built on first use.
 // Declaring them here made every consumer of this module -- which is every launch, through
 // `auth-storage.ts` -> `api-registry.ts` -> `stream.ts` -- evaluate arktype for 362ms in
@@ -240,6 +354,10 @@ export interface UsageCredential {
 	/** Human-readable organization name for display. */
 	orgName?: string;
 	enterpriseUrl?: string;
+	/** Account residency used for region-aware provider routing. */
+	region?: string;
+	inferenceRegion?: "global" | "eu" | "us";
+	activeOrganizationId?: string;
 	metadata?: Record<string, unknown>;
 	apiEndpoint?: string;
 }
@@ -259,17 +377,33 @@ export interface UsageFetchContext {
 	fetch: FetchImpl;
 	logger?: UsageLogger;
 	retryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+	/**
+	 * Last report cached for this exact credential cache key, when one exists.
+	 * Lets a fetcher keep a field it could not re-read this time (a failed
+	 * secondary probe) instead of reporting it as absent.
+	 */
+	previousReport?: UsageReport;
 }
 
 /** Provider implementation for fetching usage information. */
 export interface UsageProvider {
 	id: Provider;
+	/** Bump to retire cached reports of an older shape during last-good retention. */
+	cacheVersion?: number;
 	fetchUsage(params: UsageFetchParams, ctx: UsageFetchContext): Promise<UsageReport | null>;
 	/** Parse provider rate-limit response headers (lowercased keys) into a usage report, if supported. */
-	parseRateLimitHeaders?(headers: Record<string, string>, now?: number): UsageReport | null;
+	parseRateLimitHeaders?(
+		headers: Record<string, string>,
+		now?: number,
+		context?: { responseStatus?: number },
+	): UsageReport | null;
 	supports?(params: UsageFetchParams): boolean;
 	/** True when fetchUsage contacts upstream and can authenticate the credential for health checks. */
 	validatesCredentials?: boolean;
+	/** Whether a failed refresh may serve the previous successful report. Defaults to true. */
+	retainLastGoodOnFailure?: boolean;
+	/** Provider-specific cool-down after a failed refresh. Defaults to the shared short backoff. */
+	failureBackoffMs?: number;
 }
 
 /** Request context used when ranking usage for a specific model. */
@@ -278,8 +412,19 @@ export interface CredentialRankingContext {
 	modelId?: string;
 }
 
+/** Classify an account report as eligible, ineligible, or unknown for a model's plan gate. */
+export type PlanGate = (report: UsageReport | null) => boolean | undefined;
+
 /** Strategy for usage-based credential ranking. Providers implement this to opt into smart credential selection. */
 export interface CredentialRankingStrategy {
+	/**
+	 * Account-plan gate for `context.modelId`: a classifier for the account behind a usage report —
+	 * eligible (`true`), ineligible (`false`), or unknown (`undefined`, plan not reported) — or
+	 * `undefined` when every plan may serve the model.
+	 */
+	planGate?(context: CredentialRankingContext): PlanGate | undefined;
+	/** Idle window after which a session pin stops suppressing usage re-ranking because the provider's prompt cache cannot still be warm; omit for indefinite stickiness. */
+	stickyWarmMs?: number;
 	/** Extract the primary (short) and secondary (long) window limits from a usage report. */
 	findWindowLimits(
 		report: UsageReport,
@@ -295,11 +440,45 @@ export interface CredentialRankingStrategy {
 	 */
 	scopeLimits?(report: UsageReport, context?: CredentialRankingContext): UsageLimit[];
 	/**
+	 * Restrict limits for the opt-in, non-destructive usage-reserve health
+	 * check ({@link AuthStorage.health.model}). Distinct from
+	 * {@link scopeLimits}, which gates credential-wide hard blocks: a provider
+	 * whose model/tier counters are trusted only at confirmed exhaustion for
+	 * hard-blocking can still expose them here so the reserve margin protects
+	 * the mapped quota before it hits the cap. Falls back to {@link scopeLimits}
+	 * when omitted.
+	 */
+	scopeLimitsForReserve?(report: UsageReport, context?: CredentialRankingContext): UsageLimit[];
+	/**
 	 * Return a provider-local backoff scope for the requested model. Providers
 	 * with backend-specific quotas use this so one exhausted model family does
 	 * not block unrelated families on the same OAuth credential.
 	 */
 	blockScope?(context?: CredentialRankingContext): string | undefined;
+	/**
+	 * Scopes that apply to a request, most specific first. With a context, the
+	 * request's own scope plus any legacy catch-all scope whose blocks still
+	 * apply to everything. Without one — reconciliation runs with no request —
+	 * every scope whose blocks must be healed.
+	 *
+	 * A provider that scopes backoff by model family must implement this, or a
+	 * block written under one scope is invisible to requests and to healing.
+	 */
+	blockScopes?(context?: CredentialRankingContext): string[];
+	/**
+	 * Backoff scopes a fresh usage report can vouch for, each with the limits
+	 * gating it. {@link AuthStorage} clears a stale block under a returned scope
+	 * once every listed limit is below exhaustion, so a 429 whose retry-after
+	 * overstated the real reset does not sideline a recovered account until the
+	 * clock runs out. Scopes not returned expire by clock only.
+	 *
+	 * `healthy` is the provider's own verdict for the scope (e.g. meter metadata):
+	 * false never heals; true heals even with empty limits; absent requires
+	 * non-empty limits with none exhausted.
+	 */
+	healableBlockScopes?(report: UsageReport): { blockScope: string; limits: UsageLimit[]; healthy?: boolean }[];
+	/** Whether fresh reports can heal legacy account-wide quota backoffs. */
+	healsGlobalBlocks?: boolean;
 	/** Fallback window durations (ms) when limits don't specify durationMs. */
 	windowDefaults: {
 		primaryMs: number;
@@ -310,5 +489,9 @@ export interface CredentialRankingStrategy {
 	 * ticker start). `primaryUncapped` is true only when the fetched report has
 	 * an applicable secondary window but no applicable primary window.
 	 */
-	hasPriorityBoost?(primary: UsageLimit | undefined, primaryUncapped?: boolean): boolean;
+	hasPriorityBoost?(
+		primary: UsageLimit | undefined,
+		primaryUncapped?: boolean,
+		context?: CredentialRankingContext,
+	): boolean;
 }

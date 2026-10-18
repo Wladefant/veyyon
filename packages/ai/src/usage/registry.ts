@@ -22,6 +22,8 @@
 import * as logger from "@veyyon/utils/logger";
 import type { Provider } from "../types";
 import type { CredentialRankingStrategy, UsageProvider } from "../usage";
+/** Resolves the usage-based ranking strategy for a provider. */
+export type RankingStrategyResolver = (provider: Provider) => CredentialRankingStrategy | undefined;
 
 const usageProviders = new Map<Provider, UsageProvider>();
 const rankingStrategies = new Map<Provider, CredentialRankingStrategy>();

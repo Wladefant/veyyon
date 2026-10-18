@@ -18,7 +18,7 @@ import type {
 	UsageProvider,
 	UsageReport,
 } from "../usage";
-import { DEFAULT_USAGE_PROVIDERS } from "../usage/registry";
+import { listRegisteredUsageProviders } from "../usage/registry";
 import { raceSignal } from "./abort";
 import type { SessionAffinity } from "./affinity";
 import type { CredentialBlocks } from "./blocks";
@@ -586,7 +586,7 @@ export class UsageService implements UsageApi {
 			new Set<string>([
 				...this.#deps.pool.providers(),
 				...this.#runtimeUsageProviderOverrides.keys(),
-				...DEFAULT_USAGE_PROVIDERS.map(provider => provider.id),
+				...listRegisteredUsageProviders().map(provider => provider.id),
 			]);
 
 		for (const providerId of providers) {

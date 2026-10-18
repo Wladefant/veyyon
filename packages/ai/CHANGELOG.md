@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added usage tracking and credential ranking providers for Alibaba Token Plan, Charm Hyper, Cline Pass, CommandCode, Devin, Factory Droid, MiniMax Code, Muse Code, Synthetic, Umans, and xAI ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added provider type contracts for embeddings, rerank, judgment, video generation, and shared image utilities ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added sanitizeSchemaForCursor to strip schema combiners and normalize schemas for Cursor catalog compatibility ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added schema normalization for Factory Droid and Foundation Models, with shared RFC 6901 pointer resolution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -23,6 +24,7 @@
 ### Fixed
 
 - Mapped provider server and user profile schema imports to local schema adapters with no user-visible change ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Aligned SQLite credential store import subpath and converted UsageService to dynamic usage provider inventory ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Codex account ranking ignores usage windows of length 0, so one account no longer takes every new session.
 - Aligned OpenAI Codex responses imports with openai-responses-stream exports and restored the UsageCostHistoryEntry interface in usage types, with no user-visible change.
 - Bedrock resolves ambient AWS regions from `AWS_REGION`, `AWS_DEFAULT_REGION` or an enabled shared AWS config profile.

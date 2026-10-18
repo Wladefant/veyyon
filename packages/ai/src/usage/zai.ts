@@ -50,10 +50,9 @@ interface ZaiUsageLimitItem {
 
 interface ZaiQuotaPayload {
 	success?: boolean;
-	code?: number;
-	msg?: string;
 	data?: {
 		limits?: ZaiUsageLimitItem[];
+		level?: string;
 	};
 }
 
@@ -95,14 +94,21 @@ function parseLimitItem(value: unknown): ZaiUsageLimitItem | null {
 	};
 }
 
-function buildUsageAmount(parsed: ZaiUsageLimitItem, unit: UsageAmount["unit"]): UsageAmount {
+function buildUsageAmount(
+	parsed: ZaiUsageLimitItem,
+	unit: UsageAmount["unit"],
+	preferAbsolute = false,
+): UsageAmount {
 	const { currentValue: used, usage: limit, remaining, percentage } = parsed;
+	const hasAbsoluteMeter = used !== undefined && limit !== undefined && limit > 0;
 	const usedFraction =
-		percentage !== undefined
-			? clamp01(percentage / 100)
-			: used !== undefined && limit !== undefined && limit > 0
-				? Math.min(used / limit, 1)
-				: undefined;
+		preferAbsolute && hasAbsoluteMeter
+			? clamp01(used / limit)
+			: percentage !== undefined
+				? clamp01(percentage / 100)
+				: hasAbsoluteMeter
+					? clamp01(used / limit)
+					: undefined;
 	const remainingFraction = usedFraction !== undefined ? Math.max(1 - usedFraction, 0) : undefined;
 	return { used, limit, remaining, usedFraction, remainingFraction, unit };
 }
@@ -201,6 +207,18 @@ function zaiRequestLimit(parsed: ZaiUsageLimitItem, provider: Provider): UsageLi
 		status: getUsageStatus(amount.usedFraction),
 	};
 }
+function zaiCreditLimit(parsed: ZaiUsageLimitItem, provider: Provider): UsageLimit {
+	const window = buildZaiWindow(parsed);
+	const amount = buildUsageAmount(parsed, "credits", true);
+	return {
+		id: `zai:credits:${window.id}`,
+		label: `ZAI ${window.label} Credit Quota`,
+		scope: { provider, windowId: window.id, shared: true },
+		window,
+		amount,
+		status: getUsageStatus(amount.usedFraction),
+	};
+}
 
 function buildModelUsageUrl(baseUrl: string, now: Date): string {
 	const start = new Date(now.getTime() - WEEK_MS);
@@ -211,16 +229,32 @@ function buildModelUsageUrl(baseUrl: string, now: Date): string {
 
 function getZaiCredentialLimits(report: UsageReport): UsageLimit[] {
 	const limits = report.limits.filter(
-		limit => limit.id.startsWith("zai:requests:") || limit.id.startsWith("zai:tokens:"),
+		limit =>
+			limit.id.startsWith("zai:requests:") ||
+			limit.id.startsWith("zai:tokens:") ||
+			limit.id.startsWith("zai:credits:"),
 	);
 	return limits;
+}
+
+function zaiLimitPressure(limit: UsageLimit): number {
+	const fraction = limit.amount.usedFraction;
+	return typeof fraction === "number" && Number.isFinite(fraction) ? fraction : -1;
 }
 
 function rankZaiRequestLimits(report: UsageReport): UsageLimit[] {
 	const requestLimits = report.limits.filter(limit => limit.id.startsWith("zai:requests:"));
 	const credentialLimits = getZaiCredentialLimits(report);
 	const limits = requestLimits.length > 0 ? requestLimits : credentialLimits;
-	const ranked = limits.slice();
+	// Mixed-meter payloads can repeat a window; keep its most-binding limit so a
+	// duplicate 5h row cannot displace the weekly window during positional ranking.
+	const byWindow = new Map<number, UsageLimit>();
+	for (const limit of limits) {
+		const durationMs = limit.window?.durationMs ?? Number.POSITIVE_INFINITY;
+		const current = byWindow.get(durationMs);
+		if (!current || zaiLimitPressure(limit) > zaiLimitPressure(current)) byWindow.set(durationMs, limit);
+	}
+	const ranked = [...byWindow.values()];
 	ranked.sort((left, right) => {
 		const leftDuration = left.window?.durationMs ?? Number.POSITIVE_INFINITY;
 		const rightDuration = right.window?.durationMs ?? Number.POSITIVE_INFINITY;
@@ -278,12 +312,14 @@ async function fetchZaiModelUsage(
 async function fetchZaiUsage(params: UsageFetchParams, ctx: UsageFetchContext): Promise<UsageReport | null> {
 	if (params.provider !== "zai") return null;
 	const credential = params.credential;
-	if (credential.type !== "api_key" || !credential.apiKey) return null;
+	// OAuth stores the minted id.secret key in accessToken; both credential forms use the raw key.
+	const token = credential.type === "oauth" ? credential.accessToken : credential.apiKey;
+	if (!token) return null;
 
 	const baseUrl = normalizeZaiBaseUrl(params.baseUrl);
 	const url = `${baseUrl}${QUOTA_PATH}`;
 	const headers: Record<string, string> = {
-		Authorization: credential.apiKey,
+		Authorization: token,
 		"Content-Type": "application/json",
 		"User-Agent": "OpenCode-Status-Plugin/1.0",
 	};
@@ -296,6 +332,7 @@ async function fetchZaiUsage(params: UsageFetchParams, ctx: UsageFetchContext): 
 		const parsed = parseLimitItem(rawLimit);
 		if (parsed?.type === "TOKENS_LIMIT") limits.push(zaiTokenLimit(parsed, params.provider));
 		else if (parsed?.type === "TIME_LIMIT") limits.push(zaiRequestLimit(parsed, params.provider));
+		else if (parsed?.type === "CREDIT_LIMIT") limits.push(zaiCreditLimit(parsed, params.provider));
 	}
 	if (limits.length === 0) return null;
 
@@ -306,9 +343,9 @@ async function fetchZaiUsage(params: UsageFetchParams, ctx: UsageFetchContext): 
 		fetchedAt,
 		limits,
 		metadata: {
-			endpoint: url,
 			accountId: credential.accountId,
 			email: credential.email,
+			...(typeof payload.data?.level === "string" && payload.data.level ? { planType: payload.data.level } : {}),
 			...(modelUsage ? { modelUsage } : {}),
 		},
 		raw: payload,
@@ -318,10 +355,14 @@ async function fetchZaiUsage(params: UsageFetchParams, ctx: UsageFetchContext): 
 export const zaiUsageProvider: UsageProvider = {
 	id: "zai",
 	fetchUsage: fetchZaiUsage,
-	supports: params => params.provider === "zai" && params.credential.type === "api_key",
+	supports: params =>
+		params.provider === "zai" &&
+		(params.credential.type === "oauth" ? Boolean(params.credential.accessToken) : Boolean(params.credential.apiKey)),
 };
 
 export const zaiRankingStrategy: CredentialRankingStrategy = {
+	// Legacy quota backoffs were provider-wide; probe them against fresh usage.
+	healsGlobalBlocks: true,
 	findWindowLimits(report) {
 		const ranked = rankZaiRequestLimits(report);
 		return { primary: ranked[0], secondary: ranked[1] };
@@ -329,6 +370,20 @@ export const zaiRankingStrategy: CredentialRankingStrategy = {
 	scopeLimits(report) {
 		const limits = getZaiCredentialLimits(report);
 		return limits;
+	},
+	// Keep ZAI quota backoffs separate from provider-wide failures.
+	blockScope() {
+		return "credits";
+	},
+	healableBlockScopes(report) {
+		const limits = getZaiCredentialLimits(report);
+		if (!limits.some(limit => limit.id.startsWith("zai:credits:") || limit.id.startsWith("zai:tokens:"))) {
+			return [];
+		}
+		return [
+			{ blockScope: "credits", limits },
+			{ blockScope: "", limits },
+		];
 	},
 	windowDefaults: {
 		primaryMs: 5 * HOUR_MS,
