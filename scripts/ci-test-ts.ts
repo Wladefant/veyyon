@@ -30,6 +30,7 @@ import {
 } from "../packages/utils/test/helpers/temp-dir-janitor";
 import { isCI } from "./ci-signal";
 import { ensureToolViewsGenerated } from "./ensure-tool-views";
+import { existingOnly } from "./workspace-layout";
 
 type Mode =
 	| "all"
@@ -79,6 +80,13 @@ const repoRoot = path.join(import.meta.dir, "..");
 // The parent resolves it once, hands it down, and the tripwire uses it to know
 // exactly what to forbid.
 const REAL_CONFIG_ROOT = path.join(os.homedir(), ".veyyon");
+
+// Per-run random nonce generated in the runner parent process. An out-of-band trusted nonce
+// may be supplied via VEYYON_RUNNER_TRUSTED_NONCE; otherwise a 128-bit cryptographic random
+// hex string is generated. This nonce is attached to parent chunk summary markers and the
+// final parent envelope so external counters can verify authenticity. It is never exported to
+// child test environments or arguments, and never announced in logs before children exit.
+export const RUNNER_NONCE = process.env.VEYYON_RUNNER_TRUSTED_NONCE || crypto.randomBytes(16).toString("hex");
 
 // Absolute path to the real-data tripwire preload, passed to every spawned
 // `bun test`. Chunks run with their package directory as cwd, and Bun reads
@@ -1447,10 +1455,12 @@ export async function runTestCommand(testCommand: TestCommand): Promise<ChunkOut
 	}
 
 	if (missingSummary) {
-		process.stdout.write(`CLOUDFLARE_CHUNK_SUMMARY_MISSING files=${files.length} label="${testCommand.label}"\n`);
+		process.stdout.write(
+			`CLOUDFLARE_CHUNK_SUMMARY_MISSING files=${files.length} label="${testCommand.label}" nonce=${RUNNER_NONCE}\n`,
+		);
 	} else {
 		process.stdout.write(
-			`CLOUDFLARE_CHUNK_SUMMARY files=${files.length} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo}\n`,
+			`CLOUDFLARE_CHUNK_SUMMARY files=${files.length} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo} nonce=${RUNNER_NONCE} chunk="${testCommand.label}"\n`,
 		);
 	}
 
@@ -1525,6 +1535,7 @@ function isBunTestCommand(command: readonly string[]): boolean {
 
 function childEnvironment(testCommand: TestCommand): Record<string, string | undefined> {
 	const env = { ...buildChildEnv(), ...testCommand.env };
+	delete env.VEYYON_RUNNER_TRUSTED_NONCE;
 	if (isBunTestCommand(testCommand.command)) {
 		delete env.CLAUDECODE;
 		delete env.REPL_ID;
@@ -1714,26 +1725,45 @@ export function extractBunSummary(output: string): BunTestSummary {
 	const ranPattern = /Ran\s+(\d+)\s+tests?\s+across\s+(\d+)\s+files?/g;
 	let ranMatch: RegExpExecArray | null = null;
 	for (const match of clean.matchAll(ranPattern)) ranMatch = match;
-	const summaryText = ranMatch ? clean.slice(0, ranMatch.index) : clean;
-	const finalCount = (name: string): RegExpExecArray | null => {
-		const pattern = new RegExp(`^\\s*(\\d+)\\s+${name}\\b`, "gm");
-		let latest: RegExpExecArray | null = null;
-		for (const match of summaryText.matchAll(pattern)) latest = match;
-		return latest;
-	};
 
-	const passMatch = finalCount("pass");
-	const failMatch = finalCount("fail");
-	const skipMatch = finalCount("skip");
-	const todoMatch = finalCount("todo");
-	const pass = passMatch ? parseInt(passMatch[1], 10) : 0;
-	const fail = failMatch ? parseInt(failMatch[1], 10) : 0;
-	const skip = skipMatch ? parseInt(skipMatch[1], 10) : 0;
-	const todo = todoMatch ? parseInt(todoMatch[1], 10) : 0;
+	const textToScan = ranMatch ? clean.slice(0, ranMatch.index).trimEnd() : clean.trimEnd();
+	const lines = textToScan.split(/\r?\n/);
+	const counts: Partial<Record<"pass" | "fail" | "skip" | "todo", number>> = {};
+	let seenCount = false;
+
+	for (let i = lines.length - 1; i >= 0; i--) {
+		const line = lines[i].trim();
+		if (!line) {
+			if (seenCount) break;
+			continue;
+		}
+		if (/^\d+\s+expect\(\)\s+calls\b/.test(line)) {
+			continue;
+		}
+		const m = line.match(/^(\d+)\s+(pass|fail|skip|todo)\b/);
+		if (m) {
+			seenCount = true;
+			const key = m[2] as "pass" | "fail" | "skip" | "todo";
+			if (counts[key] === undefined) {
+				counts[key] = parseInt(m[1], 10);
+			}
+			continue;
+		}
+		break;
+	}
+
+	const pass = counts.pass ?? 0;
+	const fail = counts.fail ?? 0;
+	const skip = counts.skip ?? 0;
+	const todo = counts.todo ?? 0;
 	const ranTotal = ranMatch ? parseInt(ranMatch[1], 10) : 0;
 	const total = ranMatch ? ranTotal : pass + fail + skip + todo;
 	const files = ranMatch ? parseInt(ranMatch[2], 10) : 0;
-	const countsWerePrinted = [passMatch, failMatch, skipMatch, todoMatch].some(match => match !== null);
+	const countsWerePrinted =
+		counts.pass !== undefined ||
+		counts.fail !== undefined ||
+		counts.skip !== undefined ||
+		counts.todo !== undefined;
 	const executedCount = pass + fail + skip;
 	const hasFinalCounts =
 		ranMatch !== null &&
@@ -1858,8 +1888,8 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 			outcomes.push(outcome);
 			const files = extractCommandTestFiles(testCommand);
 			const chunkSummaryLine = missingSummary
-				? `CLOUDFLARE_CHUNK_SUMMARY_MISSING files=${files.length} label="${testCommand.label}"\n`
-				: `CLOUDFLARE_CHUNK_SUMMARY files=${files.length} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo}\n`;
+				? `CLOUDFLARE_CHUNK_SUMMARY_MISSING files=${files.length} label="${testCommand.label}" nonce=${RUNNER_NONCE}\n`
+				: `CLOUDFLARE_CHUNK_SUMMARY files=${files.length} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo} nonce=${RUNNER_NONCE} chunk="${testCommand.label}"\n`;
 			let fileSummaryLines = "";
 			if (!missingSummary) {
 				for (const file of files) {
@@ -1903,7 +1933,10 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 		totalTests += s.total;
 	}
 	process.stdout.write(
-		`\nCLOUDFLARE_TEST_TOTALS pass=${totalPass} fail=${totalFail} skip=${totalSkip} todo=${totalTodo} total=${totalTests} chunks=${commands.length}\n`,
+		`\nCLOUDFLARE_TEST_TOTALS pass=${totalPass} fail=${totalFail} skip=${totalSkip} todo=${totalTodo} total=${totalTests} chunks=${commands.length} nonce=${RUNNER_NONCE}\n`,
+	);
+	process.stdout.write(
+		`CLOUDFLARE_PARENT_ENVELOPE nonce=${RUNNER_NONCE} total_chunks=${commands.length} pass=${totalPass} fail=${totalFail} skip=${totalSkip} todo=${totalTodo}\n`,
 	);
 
 	if (quiet) {
@@ -1975,7 +2008,9 @@ function cleanGeneratedEvalsCacheBeforeSourceScan(): void {
 	if (tracked.status !== 0) {
 		throw new Error(`git ls-files failed for ${GENERATED_EVAL_CACHE} (exit ${tracked.status}): ${tracked.stderr}`);
 	}
-	if (tracked.stdout.length > 0) {
+	const trackedPaths = tracked.stdout.split("\0").filter(Boolean);
+	const existingTracked = existingOnly(repoRoot, trackedPaths);
+	if (existingTracked.length > 0) {
 		process.stdout.write(`[cache-cleanup] ${GENERATED_EVAL_CACHE}: tracked paths exist; leaving it untouched\n`);
 		return;
 	}
