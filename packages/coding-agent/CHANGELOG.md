@@ -98,6 +98,10 @@
 
 ### Fixed
 
+- A saved session's eval kernels, in every language, follow it across a directory change instead of starting a new kernel in each directory and keeping every earlier one alive until the session ended, so a session that visited five directories holds one Python kernel (102 MB) instead of five (211 MB) and keeps its variables; a directory with its own Python venv still gets its own kernel.
+- `/new`, `/resume` of another session and a handoff shut down the eval kernels of the conversation being left instead of keeping them alive until the session ended, so five conversations in one session hold one Python kernel (86 MB) instead of five (427 MB).
+- An eval cell that prints many lines no longer freezes the terminal while it runs: it sends one live update per 50 ms instead of one per printed line, and its output buffer re-encodes its window once per window of output instead of once per line, so a cell printing 100,000 lines finishes in 0.33 s instead of 10 s and the longest event-loop stall falls from 10 s to 14 ms.
+- An `ssh` command's live output is sent at most once per 50 ms, as `bash` output already was, instead of once per received chunk.
 - A `tools.approvalMode` in a config file that is not one of its values reads as `ask` instead of the default `auto`, and every configured value that does not match its declared type is shown at startup with the file to edit.
 - A failing `!command` for a provider API key or header in `models.yml` names the setting it was resolving in its log report, as the other config values already did.
 - `ctrl+g` in a hook or ask-input editor whose `$VISUAL`/`$EDITOR` cannot start shows the failure under the text instead of ending the session, and with no editor configured shows that instead of doing nothing.

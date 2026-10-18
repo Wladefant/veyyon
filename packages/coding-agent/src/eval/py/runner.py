@@ -1143,15 +1143,26 @@ _MANAGED_ENV_KEYS = (
 )
 
 
+# The cwd the previous request put at the front of sys.path. One kernel serves a
+# session in every directory it moves to, so the previous project leaves the
+# import path when the next cell runs somewhere else.
+_REQUEST_CWD: str | None = None
+
+
 def _apply_request_runtime(req: dict) -> None:
+    global _REQUEST_CWD
     cwd = req.get("cwd")
     if isinstance(cwd, str) and cwd:
         os.chdir(cwd)
-        try:
-            sys.path.remove(cwd)
-        except ValueError:
-            pass
+        for entry in (_REQUEST_CWD, cwd):
+            if entry is None:
+                continue
+            try:
+                sys.path.remove(entry)
+            except ValueError:
+                pass
         sys.path.insert(0, cwd)
+        _REQUEST_CWD = cwd
 
     env = req.get("env")
     if isinstance(env, dict):

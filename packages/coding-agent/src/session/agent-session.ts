@@ -1785,7 +1785,7 @@ export class AgentSession {
 				this.#scheduledHiddenNextTurnGeneration = undefined;
 			},
 			cancelOwnAsyncJobs: () => this.#cancelOwnAsyncJobs(),
-			rescopeAgentRegistry: () => this.#rescopeAgentRegistry(),
+			endConversation: () => this.#endConversation(),
 			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
 			resetAllAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),
 		});
@@ -1830,7 +1830,7 @@ export class AgentSession {
 				this.#toolActivation.restoreMCPSelections(sessionContext, options),
 			setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
 			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
-			rescopeAgentRegistry: () => this.#rescopeAgentRegistry(),
+			endConversation: () => this.#endConversation(),
 			resetAllAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),
 		});
 	}
@@ -2201,6 +2201,29 @@ export class AgentSession {
 		manager.cancelAll({ ownerId: this.#config.agentId });
 		for (const descendant of AgentRegistry.global().descendantsOf(this.#config.agentId)) {
 			manager.cancelAll({ ownerId: descendant });
+		}
+	}
+
+	/**
+	 * Release what the conversation this session just left holds: its spawned agents and registry
+	 * scope, then its eval kernels.
+	 *
+	 * A kernel is keyed by the transcript's eval session id, so no cell of the next conversation
+	 * reaches the previous one's kernel, and it kept its interpreter's memory until the session
+	 * ended: a window open for days held one kernel per conversation. The release runs the
+	 * registry `dispose` uses, so every eval language goes with it; a kernel a spawned agent still
+	 * shares stays alive for that agent. A cell still running in a released kernel ends cancelled:
+	 * the pool no longer holds its session, so it is not retried into a fresh kernel. A release that
+	 * fails is logged and does not fail the switch.
+	 */
+	async #endConversation(): Promise<void> {
+		await this.#rescopeAgentRegistry();
+		try {
+			await disposeOwnedResources("eval-kernel-owner", this.#evalKernelOwnerId);
+		} catch (error) {
+			logger.warn("Some eval kernels of the previous conversation failed to release", {
+				error: errorMessage(error),
+			});
 		}
 	}
 
@@ -4172,7 +4195,7 @@ export class AgentSession {
 	get sessionId(): string {
 		return this.#providerSessions.activeId();
 	}
-	getEvalSessionId(): string | null {
+	getEvalSessionId(): string {
 		const parentEvalSessionId = this.#config.parentEvalSessionId;
 		if (parentEvalSessionId !== undefined) return parentEvalSessionId;
 		return defaultEvalSessionId({
@@ -5642,9 +5665,8 @@ export class AgentSession {
 			await this.sessionManager.flush();
 		}
 		await this.sessionManager.newSession(options);
-		// The transcript changed under this session, so its spawned agents belong to a
-		// conversation the operator has left. Release them and re-root this ref.
-		await this.#rescopeAgentRegistry();
+		// The transcript changed under this session: release what the conversation it left held.
+		await this.#endConversation();
 
 		this.#checkpoint.clear();
 		this.setTodoPhases([]);
@@ -6729,12 +6751,7 @@ export class AgentSession {
 			}
 
 			// Use the same session ID as eval's Python backend for kernel sharing.
-			const sessionId =
-				this.getEvalSessionId() ??
-				defaultEvalSessionId({
-					cwd,
-					getSessionFile: () => this.sessionManager.getSessionFile() ?? null,
-				});
+			const sessionId = this.getEvalSessionId();
 			const { executePython: executePythonCommand } = await loadPythonExecutor();
 			this.assertEvalExecutionAllowed();
 			const result = await executePythonCommand(code, {
