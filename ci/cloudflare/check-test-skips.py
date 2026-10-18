@@ -1,16 +1,37 @@
 #!/usr/bin/env python3
-"""Report and enforce the Cloudflare lane's named skipped-test allowlist."""
+"""Report and enforce the Cloudflare lane's named skipped-test allowlist.
+
+``--shard i/3`` keeps the canonical three-shard contract: entries are selected by their stored ``shard``
+label, and an allowed identity may repeat. ``--shard i/12`` checks a twelve-shard partition without that
+label. Its expected identities are the allowlist entries whose files a JUnit case executed in this report
+root (passed, failed or skipped), and the actual skips must match those identities exactly, one for one.
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import xml.etree.ElementTree as ET
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 VALID_CLASSES = {"E2E", "GATEWAY", "LOCAL_SERVICE", "PROVIDER_KEY", "VERTEX", "WINDOWS"}
+SHARD_PATTERN = re.compile(r"([1-9][0-9]*)/(3|12)")
+
+Identity = tuple[str, str]
+
+
+@dataclass
+class _Scan:
+    skips: Counter[Identity]
+    reports: list[Path]
+    unidentified: list[dict[str, str]]
+    suite_fallbacks: list[dict[str, str]]
+    executed_files: set[str]
+    unattributed_executed: list[str]
 
 
 def _report_files(report_root: Path) -> list[Path]:
@@ -40,29 +61,26 @@ def _repo_relative_file(case: ET.Element, suite: ET.Element, report: Path, repo_
     return PurePosixPath(raw).as_posix()
 
 
-def _read_skips(
-    report_root: Path, repo_root: Path
-) -> tuple[Counter[tuple[str, str]], list[Path], list[dict[str, str]], list[dict[str, str]]]:
+def _read_skips(report_root: Path, repo_root: Path) -> _Scan:
     reports = _report_files(report_root)
     if not reports:
         raise ValueError(f"no JUnit XML reports found under {report_root}")
-    skips: Counter[tuple[str, str]] = Counter()
-    unidentified: list[dict[str, str]] = []
-    suite_fallbacks: list[dict[str, str]] = []
+    scan = _Scan(Counter(), reports, [], [], set(), [])
     for report in reports:
         root = ET.parse(report).getroot()
         suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
         for suite in suites:
             for case in suite.findall("testcase"):
-                if case.find("skipped") is None:
-                    continue
+                skipped = case.find("skipped") is not None
                 try:
                     file_name = _repo_relative_file(case, suite, report, repo_root)
                 except ValueError as error:
-                    file_name = case.get("file") or suite.get("file") or ""
-                    unidentified.append(
+                    if not skipped:
+                        scan.unattributed_executed.append(f"{report.name}: {error}")
+                        continue
+                    scan.unidentified.append(
                         {
-                            "file": file_name,
+                            "file": case.get("file") or suite.get("file") or "",
                             "testcase_name": case.get("name", ""),
                             "testcase_classname": case.get("classname", ""),
                             "suite_name": suite.get("name", ""),
@@ -71,6 +89,9 @@ def _read_skips(
                             "error": str(error),
                         }
                     )
+                    continue
+                scan.executed_files.add(file_name)
+                if not skipped:
                     continue
                 test_name = case.get("name") or ""
                 test_class = case.get("classname") or ""
@@ -88,7 +109,7 @@ def _read_skips(
                     if not test_class:
                         test_class = suite_class
                     if not test_name or not test_class:
-                        unidentified.append(
+                        scan.unidentified.append(
                             {
                                 "file": file_name,
                                 "testcase_name": case.get("name", ""),
@@ -100,7 +121,7 @@ def _read_skips(
                             }
                         )
                         continue
-                    suite_fallbacks.append(
+                    scan.suite_fallbacks.append(
                         {
                             "file": file_name,
                             "test": f"{test_class} > {test_name}",
@@ -109,12 +130,23 @@ def _read_skips(
                         }
                     )
                 test_name = f"{test_class} > {test_name}"
-                skips[(file_name, test_name)] += 1
-    return skips, reports, unidentified, suite_fallbacks
+                scan.skips[(file_name, test_name)] += 1
+    return scan
 
 
-def _read_allowlist(path: Path, shard: str) -> dict[tuple[str, str], dict[str, str]]:
-    entries: dict[tuple[str, str], dict[str, str]] = {}
+def _parse_shard(value: str) -> tuple[int, int]:
+    match = SHARD_PATTERN.fullmatch(value)
+    if match is None or not 1 <= int(match.group(1)) <= int(match.group(2)):
+        raise ValueError(f"unsupported shard {value!r}")
+    return int(match.group(1)), int(match.group(2))
+
+
+def _allowlist_identity(entry: dict[str, str]) -> Identity:
+    return PurePosixPath(entry["file"].replace("\\", "/")).as_posix(), entry["test"]
+
+
+def _read_allowlist_entries(path: Path) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
     seen: set[tuple[str, str, str]] = set()
     expected_fields = {"file", "test", "class", "reason", "shard"}
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
@@ -134,15 +166,29 @@ def _read_allowlist(path: Path, shard: str) -> dict[tuple[str, str], dict[str, s
             raise ValueError(f"{path}:{line_number}: unsupported gate class {entry['class']!r}")
         if entry["shard"] not in {"1/3", "2/3", "3/3"}:
             raise ValueError(f"{path}:{line_number}: unsupported shard {entry['shard']!r}")
-        file_name = PurePosixPath(entry["file"].replace("\\", "/")).as_posix()
-        key = (file_name, entry["test"])
+        file_name = _allowlist_identity(entry)[0]
         seen_key = (entry["shard"], file_name, entry["test"])
         if seen_key in seen:
             raise ValueError(f"{path}:{line_number}: duplicate skip entry {seen_key!r}")
         seen.add(seen_key)
-        if entry["shard"] == shard:
-            entries[key] = entry
+        entries.append(entry)
     return entries
+
+
+def _select_three_shard(entries: list[dict[str, str]], label: str) -> dict[Identity, dict[str, str]]:
+    return {_allowlist_identity(entry): entry for entry in entries if entry["shard"] == label}
+
+
+def _partition_allowlist(entries: list[dict[str, str]], executed: set[str]) -> dict[Identity, dict[str, str]]:
+    scoped: dict[Identity, dict[str, str]] = {}
+    for entry in entries:
+        identity = _allowlist_identity(entry)
+        if identity[0] not in executed:
+            continue
+        if identity in scoped:
+            raise ValueError(f"duplicate expected skip in executed files: {identity[0]} > {identity[1]}")
+        scoped[identity] = entry
+    return scoped
 
 
 def main() -> int:
@@ -155,24 +201,24 @@ def main() -> int:
     args = parser.parse_args()
     repo_root = Path.cwd()
     try:
-        if args.shard is not None and args.shard not in {"1/3", "2/3", "3/3"}:
-            raise ValueError(f"unsupported shard {args.shard!r}")
-        if args.mode == "check" and args.shard is None:
-            raise ValueError("check mode requires --shard <index>/3")
-        actual, reports, unidentified, suite_fallbacks = _read_skips(args.report_root, repo_root)
+        shard = _parse_shard(args.shard) if args.shard is not None else None
+        if args.mode == "check" and shard is None:
+            raise ValueError("check mode requires --shard <index>/3 or --shard <index>/12")
+        scan = _read_skips(args.report_root, repo_root)
+        actual = scan.skips
         named_total = sum(actual.values())
-        total = named_total + len(unidentified)
+        total = named_total + len(scan.unidentified)
         count_mismatch = args.expected_total is not None and total != args.expected_total
         print(
-            f"CLOUDFLARE_JUNIT_REPORTS count={len(reports)} skips={total} "
-            f"named={named_total} unidentified={len(unidentified)} suite_fallbacks={len(suite_fallbacks)}"
+            f"CLOUDFLARE_JUNIT_REPORTS count={len(scan.reports)} skips={total} "
+            f"named={named_total} unidentified={len(scan.unidentified)} suite_fallbacks={len(scan.suite_fallbacks)}"
         )
-        for entry in suite_fallbacks:
+        for entry in scan.suite_fallbacks:
             print(
                 "CLOUDFLARE_TEST_SKIP_SUITE_FALLBACK "
                 f"{json.dumps(entry, ensure_ascii=False, sort_keys=True)}"
             )
-        for entry in unidentified:
+        for entry in scan.unidentified:
             print(
                 "CLOUDFLARE_TEST_SKIP_UNIDENTIFIED "
                 f"{json.dumps(entry, ensure_ascii=False, sort_keys=True)}"
@@ -192,14 +238,30 @@ def main() -> int:
             return 0
         if args.allowlist is None:
             raise ValueError("check mode requires an allowlist path")
-        allowed = _read_allowlist(args.allowlist, args.shard)
-        unlisted = Counter({key: count for key, count in actual.items() if key not in allowed})
-        stale = Counter({key: 1 for key in allowed if key not in actual})
+        assert shard is not None
+        index, partition = shard
+        entries = _read_allowlist_entries(args.allowlist)
+        if partition == 12:
+            if scan.unattributed_executed:
+                raise ValueError(
+                    "executed JUnit case has no file attribute: " + "; ".join(scan.unattributed_executed)
+                )
+            if not scan.executed_files:
+                raise ValueError("12-shard partition executed no test files")
+            expected = _partition_allowlist(entries, scan.executed_files)
+        else:
+            expected = _select_three_shard(entries, f"{index}/3")
         class_counts: Counter[str] = Counter()
+        has_unlisted = False
         for (file_name, test_name), count in sorted(actual.items()):
-            entry = allowed.get((file_name, test_name))
-            allowed_count = count if entry is not None else 0
-            if entry is not None:
+            entry = expected.get((file_name, test_name))
+            if entry is None:
+                allowed_count = 0
+            elif partition == 12:
+                allowed_count = min(count, 1)
+            else:
+                allowed_count = count
+            if entry is not None and allowed_count:
                 class_counts[entry["class"]] += allowed_count
                 print(
                     "CLOUDFLARE_TEST_SKIP_ALLOWLISTED "
@@ -208,16 +270,19 @@ def main() -> int:
                     f"reason={json.dumps(entry['reason'], ensure_ascii=False)} count={allowed_count}"
                 )
             if count > allowed_count:
+                has_unlisted = True
                 print(
                     "CLOUDFLARE_TEST_SKIP_UNLISTED "
                     f"file={json.dumps(file_name, ensure_ascii=False)} "
                     f"test={json.dumps(test_name, ensure_ascii=False)} count={count - allowed_count}"
                 )
-        for (file_name, test_name), count in sorted(stale.items()):
+        has_stale = False
+        for file_name, test_name in sorted(identity for identity in expected if identity not in actual):
+            has_stale = True
             print(
                 "CLOUDFLARE_TEST_SKIP_STALE "
                 f"file={json.dumps(file_name, ensure_ascii=False)} "
-                f"test={json.dumps(test_name, ensure_ascii=False)} count={count}"
+                f"test={json.dumps(test_name, ensure_ascii=False)} count=1"
             )
         if count_mismatch:
             print(f"CLOUDFLARE_SKIP_COUNT_MISMATCH expected={args.expected_total} actual={total}")
@@ -226,9 +291,9 @@ def main() -> int:
             f"CLOUDFLARE_SKIP_ALLOWLIST_SUMMARY total={total} "
             f"allowlisted={sum(class_counts.values())} by_class={classes}"
         )
-        if unidentified or count_mismatch:
+        if scan.unidentified or count_mismatch:
             return 2
-        return 1 if unlisted or stale else 0
+        return 1 if has_unlisted or has_stale else 0
     except (OSError, ET.ParseError, ValueError) as error:
         print(f"CLOUDFLARE_SKIP_REPORT_ERROR {error}", file=sys.stderr)
         return 2
@@ -236,5 +301,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
