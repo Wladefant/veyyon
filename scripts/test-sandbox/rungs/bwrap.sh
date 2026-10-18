@@ -68,6 +68,10 @@ run_bwrap() {
 			fi
 		fi
 	fi
+	local -a cgroup_mounts=()
+	if [ -d "/sys/fs/cgroup" ]; then
+		cgroup_mounts=(--dir /sys --dir /sys/fs --ro-bind-try /sys/fs/cgroup /sys/fs/cgroup)
+	fi
 
 	bwrap \
 		--unshare-user --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup \
@@ -76,6 +80,7 @@ run_bwrap() {
 		--symlink usr/lib /lib --symlink usr/lib64 /lib64 --symlink usr/bin /bin --symlink usr/sbin /sbin \
 		--proc /proc --dev /dev \
 		--tmpfs /sandbox --tmpfs /run \
+		"${cgroup_mounts[@]}" \
 		"${bun_mounts[@]}" \
 		--tmpfs /home --tmpfs /tmp \
 		--bind "${REPO_ROOT}" "${GUEST_REPO}" \

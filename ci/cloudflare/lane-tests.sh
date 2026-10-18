@@ -194,7 +194,91 @@ fi
 
 # Run test suite using existing sandbox runner invocation
 echo "CLOUDFLARE_TEST_EXCLUSION file=packages/utils/test/slice-extract-fuzz.test.ts reason=bun-native-16GiB-allocation-aborts-in-workers-guest"
+# Outer memory sampler & safe minimal bridge (every 5s, stops with runner)
+diag_dir="$repo_root/.cf-diagnostics"
+mkdir -p "$diag_dir"
+
+write_cgroup_bridge() {
+  local cur="unavailable"
+  local peak="unavailable"
+  local oom="unavailable"
+  local oom_kill="unavailable"
+  local raw_events=""
+  local supported="false"
+  local cgroup_base="/sys/fs/cgroup"
+
+  if [[ -f "$cgroup_base/memory.current" ]]; then
+    cur="$(cat "$cgroup_base/memory.current" 2>/dev/null || echo "unavailable")"
+    supported="true"
+  fi
+  if [[ -f "$cgroup_base/memory.peak" ]]; then
+    peak="$(cat "$cgroup_base/memory.peak" 2>/dev/null || echo "unavailable")"
+    supported="true"
+  fi
+  if [[ -f "$cgroup_base/memory.events" ]]; then
+    raw_events="$(tr '\n' ' ' < "$cgroup_base/memory.events" 2>/dev/null || echo "")"
+    oom="$(awk '$1=="oom"{print $2}' "$cgroup_base/memory.events" 2>/dev/null || echo "unavailable")"
+    oom_kill="$(awk '$1=="oom_kill"{print $2}' "$cgroup_base/memory.events" 2>/dev/null || echo "unavailable")"
+    supported="true"
+  fi
+  if [[ "$cur" == "unavailable" && -f "$cgroup_base/memory/memory.usage_in_bytes" ]]; then
+    cur="$(cat "$cgroup_base/memory/memory.usage_in_bytes" 2>/dev/null || echo "unavailable")"
+    peak="$(cat "$cgroup_base/memory/memory.max_usage_in_bytes" 2>/dev/null || echo "unavailable")"
+    supported="true"
+    if [[ -f "$cgroup_base/memory/memory.oom_control" ]]; then
+      raw_events="$(tr '\n' ' ' < "$cgroup_base/memory/memory.oom_control" 2>/dev/null || echo "")"
+      oom_kill="$(awk '$1=="oom_kill"{print $2}' "$cgroup_base/memory/memory.oom_control" 2>/dev/null || echo "unavailable")"
+    fi
+  fi
+
+  cat > "$diag_dir/cgroup-latest.json.tmp" <<EOF
+{
+  "supported": $supported,
+  "current": "$cur",
+  "peak": "$peak",
+  "oom": "$oom",
+  "oom_kill": "$oom_kill",
+  "raw_events": "$raw_events"
+}
+EOF
+  mv "$diag_dir/cgroup-latest.json.tmp" "$diag_dir/cgroup-latest.json"
+}
+
+write_cgroup_bridge
+
+OUTER_SAMPLER_PID=""
+(
+  while true; do
+    sleep 5
+    write_cgroup_bridge
+    free_summary="$(free -m 2>/dev/null | awk '/^Mem:/{printf "total=%sMB used=%sMB free=%sMB avail=%sMB", $2, $3, $4, $7}' || echo "unavailable")"
+    cur="$(sed -n 's/.*"current": "\([^"]*\)".*/\1/p' "$diag_dir/cgroup-latest.json" 2>/dev/null || echo "unavailable")"
+    peak="$(sed -n 's/.*"peak": "\([^"]*\)".*/\1/p' "$diag_dir/cgroup-latest.json" 2>/dev/null || echo "unavailable")"
+    oom="$(sed -n 's/.*"oom": "\([^"]*\)".*/\1/p' "$diag_dir/cgroup-latest.json" 2>/dev/null || echo "unavailable")"
+    oom_kill="$(sed -n 's/.*"oom_kill": "\([^"]*\)".*/\1/p' "$diag_dir/cgroup-latest.json" 2>/dev/null || echo "unavailable")"
+    echo "CLOUDFLARE_OUTER_SAMPLER_5S current=$cur peak=$peak oom=$oom oom_kill=$oom_kill free=\"$free_summary\""
+  done
+) &
+OUTER_SAMPLER_PID=$!
+
+stop_outer_sampler() {
+  if [[ -n "${OUTER_SAMPLER_PID:-}" ]]; then
+    kill "$OUTER_SAMPLER_PID" 2>/dev/null || true
+    wait "$OUTER_SAMPLER_PID" 2>/dev/null || true
+  fi
+}
+trap stop_outer_sampler EXIT INT TERM
+
 echo "Running test suite in sandbox..."
-bash scripts/test-sandbox/run.sh bun scripts/ci-test-ts.ts all
+test_exit=0
+bash scripts/test-sandbox/run.sh bun scripts/ci-test-ts.ts all || test_exit=$?
+
+stop_outer_sampler
+trap - EXIT INT TERM
+
+if [[ $test_exit -ne 0 ]]; then
+  echo "FATAL: Test suite failed with exit code $test_exit" >&2
+  exit "$test_exit"
+fi
 
 echo "CLOUDFLARE_LANE_SUCCESS=1"

@@ -1207,6 +1207,179 @@ async function settleWithin(promise: Promise<unknown>, ms: number): Promise<bool
 	return settled;
 }
 
+export function isCloudflareCI(): boolean {
+	return Boolean(
+		Bun.env.WORKERS_CI ||
+		Bun.env.WORKERS_CI_BRANCH ||
+		Bun.env.CF_SHARD_INDEX !== undefined ||
+		Bun.env.CF_SHARD_COUNT !== undefined,
+	);
+}
+
+interface CgroupSample {
+	supported: boolean;
+	source: "sys_cgroup_v2" | "sys_cgroup_v1" | "bridge_file" | "unavailable";
+	current: string;
+	peak: string;
+	oom: string;
+	oom_kill: string;
+	raw_events: string;
+}
+
+export function readCgroupDiagnostics(): CgroupSample {
+	// 1. Try /sys/fs/cgroup (cgroup v2 or v1 inside sandbox if mounted)
+	try {
+		const cgroupDir = "/sys/fs/cgroup";
+		if (nodeFs.existsSync(cgroupDir)) {
+			let current = "unavailable";
+			let peak = "unavailable";
+			let oom = "unavailable";
+			let oom_kill = "unavailable";
+			let raw_events = "";
+
+			const curPath = path.join(cgroupDir, "memory.current");
+			if (nodeFs.existsSync(curPath)) {
+				current = nodeFs.readFileSync(curPath, "utf8").trim();
+			}
+			const peakPath = path.join(cgroupDir, "memory.peak");
+			if (nodeFs.existsSync(peakPath)) {
+				peak = nodeFs.readFileSync(peakPath, "utf8").trim();
+			}
+			const eventsPath = path.join(cgroupDir, "memory.events");
+			if (nodeFs.existsSync(eventsPath)) {
+				raw_events = nodeFs.readFileSync(eventsPath, "utf8").trim();
+				for (const line of raw_events.split("\n")) {
+					const [key, val] = line.trim().split(/\s+/);
+					if (key === "oom") oom = val;
+					if (key === "oom_kill") oom_kill = val;
+				}
+			}
+
+			// Also check cgroup v1 if current is still unavailable
+			if (current === "unavailable") {
+				const v1CurPath = path.join(cgroupDir, "memory", "memory.usage_in_bytes");
+				if (nodeFs.existsSync(v1CurPath)) {
+					current = nodeFs.readFileSync(v1CurPath, "utf8").trim();
+					const v1PeakPath = path.join(cgroupDir, "memory", "memory.max_usage_in_bytes");
+					if (nodeFs.existsSync(v1PeakPath)) {
+						peak = nodeFs.readFileSync(v1PeakPath, "utf8").trim();
+					}
+					const v1OomPath = path.join(cgroupDir, "memory", "memory.oom_control");
+					if (nodeFs.existsSync(v1OomPath)) {
+						raw_events = nodeFs.readFileSync(v1OomPath, "utf8").trim();
+						for (const line of raw_events.split("\n")) {
+							const [key, val] = line.trim().split(/\s+/);
+							if (key === "oom_kill") oom_kill = val;
+						}
+					}
+					return {
+						supported: true,
+						source: "sys_cgroup_v1",
+						current,
+						peak,
+						oom,
+						oom_kill,
+						raw_events,
+					};
+				}
+			}
+
+			if (current !== "unavailable" || peak !== "unavailable" || oom !== "unavailable") {
+				return {
+					supported: true,
+					source: "sys_cgroup_v2",
+					current,
+					peak,
+					oom,
+					oom_kill,
+					raw_events,
+				};
+			}
+		}
+	} catch {
+		// ignore filesystem errors reading /sys/fs/cgroup
+	}
+
+	// 2. Try bridge file from outer lane-tests sampler
+	try {
+		const bridgePath = path.join(repoRoot, ".cf-diagnostics", "cgroup-latest.json");
+		if (nodeFs.existsSync(bridgePath)) {
+			const data = JSON.parse(nodeFs.readFileSync(bridgePath, "utf8"));
+			return {
+				supported: Boolean(data.supported),
+				source: "bridge_file",
+				current: String(data.current ?? "unavailable"),
+				peak: String(data.peak ?? "unavailable"),
+				oom: String(data.oom ?? "unavailable"),
+				oom_kill: String(data.oom_kill ?? "unavailable"),
+				raw_events: String(data.raw_events ?? ""),
+			};
+		}
+	} catch {
+		// ignore bridge read errors
+	}
+
+	return {
+		supported: false,
+		source: "unavailable",
+		current: "unavailable",
+		peak: "unavailable",
+		oom: "unavailable",
+		oom_kill: "unavailable",
+		raw_events: "unavailable",
+	};
+}
+
+export function readFreeMemDiagnostics(): string {
+	try {
+		const res = Bun.spawnSync(["free", "-m"]);
+		if (res.exitCode === 0 && res.stdout) {
+			const txt = res.stdout.toString().trim();
+			if (txt.length > 0) return txt;
+		}
+	} catch {
+		// free command failed or not found
+	}
+
+	// Fallback to /proc/meminfo
+	try {
+		if (nodeFs.existsSync("/proc/meminfo")) {
+			const meminfo = nodeFs.readFileSync("/proc/meminfo", "utf8");
+			const fields: Record<string, string> = {};
+			for (const line of meminfo.split("\n")) {
+				const parts = line.split(":");
+				if (parts.length >= 2) {
+					fields[parts[0].trim()] = parts[1].trim();
+				}
+			}
+			return `[meminfo fallback] MemTotal: ${fields["MemTotal"] ?? "unknown"}, MemFree: ${fields["MemFree"] ?? "unknown"}, MemAvailable: ${fields["MemAvailable"] ?? "unknown"}, SwapTotal: ${fields["SwapTotal"] ?? "unknown"}, SwapFree: ${fields["SwapFree"] ?? "unknown"}`;
+		}
+	} catch {
+		// proc meminfo failed
+	}
+
+	return "free -m: unavailable";
+}
+
+export function printChunkDiagnostics(
+	chunkLabel: string,
+	phase: "BEFORE" | "AFTER",
+	procInfo?: { exitCode?: number | null; signalCode?: string | number | null; killed?: boolean },
+): void {
+	const cgroup = readCgroupDiagnostics();
+	const freeMem = readFreeMemDiagnostics();
+	const exitStr = procInfo ? ` exitCode=${procInfo.exitCode ?? "none"} signal=${procInfo.signalCode ?? "none"} killed=${procInfo.killed ?? false}` : "";
+
+	console.log(`\nCLOUDFLARE_CHUNK_DIAG phase=${phase} chunk="${chunkLabel}"${exitStr}`);
+	console.log(
+		`  cgroup: source=${cgroup.source} supported=${cgroup.supported} memory.current=${cgroup.current} memory.peak=${cgroup.peak} oom=${cgroup.oom} oom_kill=${cgroup.oom_kill}`,
+	);
+	if (cgroup.raw_events && cgroup.raw_events !== "unavailable") {
+		console.log(`  cgroup.events: ${cgroup.raw_events.replace(/\n/g, ", ")}`);
+	}
+	console.log(`  free -m:\n${freeMem.split("\n").map(l => "    " + l).join("\n")}`);
+}
+
 async function runTestCommand(testCommand: TestCommand): Promise<ChunkOutcome> {
 	const cwd = path.join(repoRoot, testCommand.cwd);
 	const renderedCommand = testCommand.command.map(shellQuote).join(" ");
@@ -1216,6 +1389,21 @@ async function runTestCommand(testCommand: TestCommand): Promise<ChunkOutcome> {
 	if (isDryRun) {
 		return { label: testCommand.label, command: renderedCommand, exitCode: 0, seconds: 0, output: "" };
 	}
+	const files = extractCommandTestFiles(testCommand);
+	const isCloudflare = isCloudflareCI();
+
+	if (isCloudflare) {
+		const isEvals = testCommand.cwd === "tests/evals" || testCommand.label.includes("tests/evals");
+		if (isEvals) {
+			console.log(`CLOUDFLARE_EVALS_CHUNK_FILES count=${files.length}`);
+			for (const file of files) {
+				console.log(`  evals_file: ${file}`);
+			}
+		}
+		printChunkDiagnostics(testCommand.label, "BEFORE");
+	}
+SWAP 1258.=1258:
+	// files already extracted above
 
 	const env = { ...buildChildEnv(), ...testCommand.env };
 	const startedAt = performance.now();
@@ -1271,6 +1459,16 @@ async function runTestCommand(testCommand: TestCommand): Promise<ChunkOutcome> {
 				`CLOUDFLARE_FILE_SUMMARY file=${file} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo}\n`,
 			);
 		}
+	}
+	if (isCloudflare) {
+		console.log(
+			`CLOUDFLARE_CHUNK_EXIT chunk="${testCommand.label}" exitCode=${proc.exitCode ?? exitCode} signal=${proc.signalCode ?? "none"} killed=${proc.killed}`,
+		);
+		printChunkDiagnostics(testCommand.label, "AFTER", {
+			exitCode: proc.exitCode ?? exitCode,
+			signalCode: proc.signalCode,
+			killed: proc.killed,
+		});
 	}
 
 	if (exitCode !== 0 || timedOut) {
@@ -1940,6 +2138,20 @@ if (import.meta.main) {
 	const ownershipBefore = scanLiveVeyyonOwnership();
 	const before = snapshotRealConfigRoot();
 
+	const isCloudflare = isCloudflareCI();
+	let runnerSampler: Timer | null = null;
+	if (isCloudflare) {
+		runnerSampler = setInterval(() => {
+			try {
+				const cgroup = readCgroupDiagnostics();
+				console.log(
+					`CLOUDFLARE_RUNNER_SAMPLER_5S memory.current=${cgroup.current} memory.peak=${cgroup.peak} oom=${cgroup.oom} oom_kill=${cgroup.oom_kill} source=${cgroup.source}`,
+				);
+			} catch {
+				// avoid error in timer
+			}
+		}, 5000);
+	}
 	try {
 		if (!isDryRun && !isCI() && testCommands.length > 1) {
 			await runTestCommandsInParallel(testCommands, testConcurrency(testCommands.length));
@@ -1963,6 +2175,10 @@ if (import.meta.main) {
 			);
 		}
 	} finally {
+		if (runnerSampler !== null) {
+			clearInterval(runnerSampler);
+			runnerSampler = null;
+		}
 		// In `finally` on purpose: a failing or interrupted run is exactly when a
 		// half-finished suite is most likely to have left damage behind.
 		const ownershipAfter = scanLiveVeyyonOwnership();
