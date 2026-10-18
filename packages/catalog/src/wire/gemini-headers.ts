@@ -1,3 +1,5 @@
+import type { FetchImpl } from "../types";
+
 /**
  * Build a User-Agent string that identifies as Gemini CLI to unlock higher rate limits.
  * Uses the same format as the official Gemini CLI (v0.35+):
@@ -25,22 +27,95 @@ export const ANTIGRAVITY_SYSTEM_INSTRUCTION =
  * and usage code can read it without pulling the heavy google-gemini-cli provider
  * (and its @google/genai → google-auth-library dependency chain) into the startup
  * parse graph.
+ *
+ * The backend gates newer models on the client version. The version is, in order: the
+ * VEYYON_AI_ANTIGRAVITY_VERSION override, the latest release from the official update manifest
+ * (see {@link ensureAntigravityVersion}), then the pinned fallback. The endpoint lists Gemini 4 Argon
+ * and the per-tier Gemini 3.8 Flash deployments only to a client reporting 3.0.0 or later; 2.9.x and
+ * earlier receive neither, so the fallback stays at 3.0.0 even though the manifest may report older.
  */
-export let getAntigravityUserAgent = () => {
-// The endpoint lists Gemini 4 Argon and the per-tier Gemini 3.8 Flash deployments only to a
-	// client reporting 3.0.0 or later; 2.9.x and earlier receive neither.
-	const DEFAULT_ANTIGRAVITY_VERSION = "3.0.0";
-	const version = process.env.VEYYON_AI_ANTIGRAVITY_VERSION || DEFAULT_ANTIGRAVITY_VERSION;
+const DEFAULT_ANTIGRAVITY_VERSION = "3.0.0";
+
+const ANTIGRAVITY_VERSION_MANIFEST_URL =
+	"https://antigravity-hub-auto-updater-974169037036.us-central1.run.app/manifest/latest-arm64-mac.yml";
+const ANTIGRAVITY_VERSION_FETCH_TIMEOUT_MS = 5_000;
+/** Failed manifest lookups are not retried before this delay, so request paths never stall per call. */
+const ANTIGRAVITY_VERSION_RETRY_MS = 10 * 60_000;
+
+let discoveredAntigravityVersion: string | null = null;
+let antigravityVersionFetch: Promise<void> | null = null;
+let antigravityVersionFailedAt: number | undefined;
+
+/**
+ * Extracts the client version from an electron-builder update manifest.
+ * Returns null when no well-formed `version:` line is present.
+ */
+function parseAntigravityManifestVersion(yamlText: string): string | null {
+	for (const line of yamlText.split(/\r?\n/)) {
+		const match = /^\s*version\s*:\s*(?:"([^"]*)"|'([^']*)'|([^\s#]+))\s*(?:#.*)?$/.exec(line);
+		if (!match) continue;
+		const version = (match[1] ?? match[2] ?? match[3] ?? "").trim();
+		return /^\d+\.\d+\.\d+$/.test(version) ? version : null;
+	}
+	return null;
+}
+
+/**
+ * Resolves the latest Antigravity release from the official update manifest.
+ * Success is cached for the process lifetime; failures are silent (the pinned
+ * fallback stays valid) and suppress further lookups for
+ * `ANTIGRAVITY_VERSION_RETRY_MS`. Skipped entirely when VEYYON_AI_ANTIGRAVITY_VERSION is set.
+ *
+ * The lookup is shared by concurrent callers, so it is bounded only by its own
+ * timeout; `signal` ends this caller's wait without cancelling the lookup.
+ */
+export function ensureAntigravityVersion(fetcher: FetchImpl = fetch, signal?: AbortSignal): Promise<void> {
+	if (process.env.VEYYON_AI_ANTIGRAVITY_VERSION || discoveredAntigravityVersion) return Promise.resolve();
+	if (!antigravityVersionFetch) {
+		if (
+			antigravityVersionFailedAt !== undefined &&
+			Date.now() - antigravityVersionFailedAt < ANTIGRAVITY_VERSION_RETRY_MS
+		) {
+			return Promise.resolve();
+		}
+		antigravityVersionFetch = (async () => {
+			try {
+				const response = await fetcher(ANTIGRAVITY_VERSION_MANIFEST_URL, {
+					headers: { "Cache-Control": "no-cache", "User-Agent": "electron-builder" },
+					signal: AbortSignal.timeout(ANTIGRAVITY_VERSION_FETCH_TIMEOUT_MS),
+				});
+				if (response.ok) {
+					discoveredAntigravityVersion = parseAntigravityManifestVersion(await response.text());
+				}
+			} catch {
+				// Silent: the pinned fallback remains valid when version discovery fails.
+			} finally {
+				antigravityVersionFetch = null;
+				if (!discoveredAntigravityVersion) antigravityVersionFailedAt = Date.now();
+			}
+		})();
+	}
+	const lookup = antigravityVersionFetch;
+	if (!signal) return lookup;
+	if (signal.aborted) return Promise.resolve();
+	const { promise: aborted, resolve } = Promise.withResolvers<void>();
+	const onAbort = () => resolve();
+	signal.addEventListener("abort", onAbort, { once: true });
+	return Promise.race([lookup, aborted]).finally(() => signal.removeEventListener("abort", onAbort));
+}
+
+/** Antigravity `User-Agent` header value. Reads the version at call time so a discovered version takes effect. */
+export function getAntigravityUserAgent(): string {
+	const version =
+		process.env.VEYYON_AI_ANTIGRAVITY_VERSION || discoveredAntigravityVersion || DEFAULT_ANTIGRAVITY_VERSION;
 	// Map Node.js platform/arch to Antigravity's expected format.
 	// Verified against Antigravity source: _qn() and wqn() in main.js.
 	// process.platform: win32→windows, others pass through (darwin, linux)
 	// process.arch:     x64→amd64, ia32→386, others pass through (arm64)
 	const os = process.platform === "win32" ? "windows" : process.platform;
 	const arch = process.arch === "x64" ? "amd64" : process.arch === "ia32" ? "386" : process.arch;
-	const userAgent = `antigravity/hub/${version} ${os}/${arch}`;
-	getAntigravityUserAgent = () => userAgent;
-	return userAgent;
-};
+	return `antigravity/hub/${version} ${os}/${arch}`;
+}
 
 /**
  * Per-wire-id Antigravity Cloud Code Assist request constants, captured from the
