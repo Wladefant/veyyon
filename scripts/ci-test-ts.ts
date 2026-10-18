@@ -1442,7 +1442,6 @@ async function runTestCommand(testCommand: TestCommand): Promise<ChunkOutcome> {
 	};
 
 	const summary = extractBunSummary(fullOutput);
-	const files = extractCommandTestFiles(testCommand);
 
 	if (fullOutput.trim()) {
 		process.stdout.write(`${fullOutput}\n`);
