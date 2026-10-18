@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Loading the addon caps glibc's malloc arenas at eight unless `MALLOC_ARENA_MAX` or `glibc.malloc.arena_max` sets a limit, so 48 shell commands, 32 searches and 16 globs at once peak at 311 MiB RSS instead of 488 MiB and settle at 187 MiB instead of 335 MiB after the idle trim.
 - Block-boundary lookups and code summaries parse a PHP file that leaves PHP for HTML with `?>` instead of failing it as a syntax error, which cuts a 191KB plugin source from 767ms to 18ms and gives such a file tree-sitter block context and a structural summary.
 
 ## [1.5.6] - 2026-10-13

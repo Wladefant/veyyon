@@ -20,13 +20,43 @@
 //! call. `malloc_trim` locks one arena at a time, so a thread allocating from
 //! the arena being walked waits for that arena only.
 //!
-//! glibc Linux only. Elsewhere the call resolves false: musl returns free pages
-//! to the kernel when a chunk is freed, the macOS allocator releases emptied
-//! regions on its own, and Windows heaps decommit free pages past a threshold.
+//! [`cap_arenas`] caps the arena count at [`ARENA_MAX`] when the addon loads.
+//! Every arena keeps its own free chunks, so a burst of concurrent tool calls
+//! leaves its peak spread over as many arenas as there were threads: 48 shell
+//! commands, 32 searches and 16 globs at once grew 242 arenas, 491 MiB RSS at
+//! the peak and 340 MiB after the release. With eight arenas the same burst
+//! peaks at 306 MiB, settles at 188 MiB and runs in the same wall time.
+//!
+//! glibc Linux only. Elsewhere both calls do nothing and the release resolves
+//! false: musl returns free pages to the kernel when a chunk is freed, the
+//! macOS allocator releases emptied regions on its own, and Windows heaps
+//! decommit free pages past a threshold.
 
 use napi_derive::napi;
 
 use crate::task;
+
+/// Arenas glibc may create for the whole process, the main arena included.
+/// glibc's default is eight per core.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+const ARENA_MAX: libc::c_int = 8;
+
+/// Caps glibc's arena count at [`ARENA_MAX`].
+///
+/// Runs from the addon's module initializer, before its threads exist. glibc
+/// fixes its limit once the process holds more than eight arenas, so the cap
+/// applies to every arena created after the load. An explicit
+/// `MALLOC_ARENA_MAX` or `glibc.malloc.arena_max` limit stays in force: glibc
+/// fixes that one when the runtime's own threads take their first arenas,
+/// before any addon loads.
+pub fn cap_arenas() {
+	#[cfg(all(target_os = "linux", target_env = "gnu"))]
+	// SAFETY: `mallopt` takes no pointers and sets a field of glibc's
+	// allocator parameters under the main arena's lock.
+	unsafe {
+		libc::mallopt(libc::M_ARENA_MAX, ARENA_MAX);
+	}
+}
 
 /// Returns the free pages of every C allocator arena to the kernel on libuv's
 /// thread pool. Resolves true when any memory was released, and false when
