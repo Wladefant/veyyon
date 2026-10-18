@@ -165,6 +165,26 @@ fn evict_oldest() {
 	}
 }
 
+/// Drops every cached scan older than the TTL and returns how many it dropped.
+///
+/// A scan is served for one TTL and never again, but the map held it until a
+/// request for the same root and options replaced it or sixteen newer scans
+/// pushed it out, so a process that scanned a tree once kept that scan for the
+/// rest of its life: one `@` completion over a tree of 510 000 entries held
+/// 79 MiB. The cold path of every cached walk calls this before it scans, so
+/// the next scan allocates into the pages the expired ones freed, and the
+/// addon's heap release calls it before returning free pages to the kernel.
+pub fn release_expired_scans() -> usize {
+	let ttl = Duration::from_millis(*CACHE_TTL_MS);
+	let mut released = 0;
+	SCAN_CACHE.retain(|_, entry| {
+		let fresh = entry.created_at.elapsed() < ttl;
+		released += usize::from(!fresh);
+		fresh
+	});
+	released
+}
+
 fn cache_key(root: &Path, mut options: WalkOptions) -> CacheKey {
 	options.cache = false;
 	CacheKey { root: root.to_path_buf(), options }
@@ -333,9 +353,8 @@ where
 				cache_age_ms: age.as_millis() as u64,
 			});
 		}
-		drop(entry);
-		SCAN_CACHE.remove(&key);
 	}
+	release_expired_scans();
 
 	let scan = collect_entries_uncached(root, options, heartbeat)?;
 	SCAN_CACHE.insert(key, CacheEntry { created_at: now, entries: scan.entries.clone() });
@@ -423,9 +442,8 @@ where
 			let entries = clone_accepted(&entry.entries, accept);
 			return Ok(FilteredEntries { entries, cache_age_ms: age.as_millis() as u64, scanned });
 		}
-		drop(entry);
-		SCAN_CACHE.remove(&key);
 	}
+	release_expired_scans();
 
 	let scan = collect_entries_uncached(root, options, heartbeat)?;
 	let scanned = scan.entries.len();

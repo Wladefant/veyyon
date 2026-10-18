@@ -1467,9 +1467,12 @@ export declare function readImageFromClipboard(): Promise<ClipboardImage | undef
 export declare function releaseEmbeddedModulePages(): number
 
 /**
- * Returns the free pages of every C allocator arena to the kernel on libuv's
- * thread pool. Resolves true when any memory was released, and false when
- * none was or the platform allocator has no such call.
+ * Drops expired cached scans and returns free heap pages to the kernel.
+ *
+ * Runs on libuv's thread pool: drops the walker's expired cached scans, then
+ * returns the free pages of every C allocator arena. Resolves true when any
+ * memory was released, and false when none was or the platform allocator has
+ * no such call.
  */
 export declare function releaseFreeHeapPages(): Promise<boolean>
 

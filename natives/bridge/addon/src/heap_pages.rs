@@ -10,10 +10,12 @@
 //! arenas after every result was dropped. `Bun.shrink()` releases the engine's
 //! heaps and leaves the C allocator's untouched.
 //!
-//! [`release_free_heap_pages`] calls `malloc_trim(0)`, which walks every arena
-//! and returns each whole free page to the kernel with `MADV_DONTNEED`. Live
-//! allocations stay where they are; a later allocation faults fresh zeroed
-//! pages back in. The same four searches drop to 54 MiB, in 11 ms.
+//! [`release_free_heap_pages`] first drops the walker's expired cached scans,
+//! which the cache otherwise keeps until a later scan replaces them, then calls
+//! `malloc_trim(0)`, which walks every arena and returns each whole free page
+//! to the kernel with `MADV_DONTNEED`. Live allocations stay where they are; a
+//! later allocation faults fresh zeroed pages back in. The same four searches
+//! drop to 54 MiB, in 11 ms.
 //!
 //! The walk runs on libuv's thread pool. Its cost grows with the free chunks in
 //! every arena: in a 6 GiB session it held the event loop 250 to 1127 ms per
@@ -27,10 +29,11 @@
 //! the peak and 340 MiB after the release. With eight arenas the same burst
 //! peaks at 306 MiB, settles at 188 MiB and runs in the same wall time.
 //!
-//! glibc Linux only. Elsewhere both calls do nothing and the release resolves
-//! false: musl returns free pages to the kernel when a chunk is freed, the
-//! macOS allocator releases emptied regions on its own, and Windows heaps
-//! decommit free pages past a threshold.
+//! The arena cap and the trim are glibc Linux only. Elsewhere the release drops
+//! expired scans and resolves true only when it dropped one: musl returns free
+//! pages to the kernel when a chunk is freed, the macOS allocator releases
+//! emptied regions on its own, and Windows heaps decommit free pages past a
+//! threshold.
 
 use napi_derive::napi;
 
@@ -58,12 +61,20 @@ pub fn cap_arenas() {
 	}
 }
 
-/// Returns the free pages of every C allocator arena to the kernel on libuv's
-/// thread pool. Resolves true when any memory was released, and false when
-/// none was or the platform allocator has no such call.
+/// Drops expired cached scans and returns free heap pages to the kernel.
+///
+/// Runs on libuv's thread pool: drops the walker's expired cached scans, then
+/// returns the free pages of every C allocator arena. Resolves true when any
+/// memory was released, and false when none was or the platform allocator has
+/// no such call.
 #[napi]
 pub fn release_free_heap_pages() -> task::Promise<bool> {
-	task::blocking("release_free_heap_pages", (), |_| Ok(trim_arenas()))
+	task::blocking("release_free_heap_pages", (), |_| Ok(release_heap()))
+}
+
+fn release_heap() -> bool {
+	let released_scans = veyyon_walker::release_expired_scans();
+	trim_arenas() || released_scans > 0
 }
 
 fn trim_arenas() -> bool {
@@ -147,5 +158,33 @@ mod tests {
 		})
 		.join()
 		.unwrap();
+	}
+}
+
+/// The idle release is the only point that frees the last scan a quiet
+/// process took: the walker drops an expired scan on its next cold walk, and a
+/// quiet process takes none.
+#[cfg(test)]
+mod scan_tests {
+	use std::{fs, thread, time::Duration};
+
+	use veyyon_test_scratch::scratch_dir;
+	use veyyon_walker::{WalkRequest, cache_ttl_ms, release_expired_scans};
+
+	use super::release_heap;
+
+	#[test]
+	fn the_release_leaves_no_expired_scan_cached() {
+		let tree = scratch_dir("heap-release-expired-scan");
+		fs::write(tree.path().join("file.txt"), b"x").unwrap();
+		let outcome = WalkRequest::new(tree.path())
+			.cache(true)
+			.collect()
+			.expect("cached walk should succeed");
+		assert!(!outcome.entries.is_empty(), "the walk saw the file");
+		thread::sleep(Duration::from_millis(cache_ttl_ms() + 100));
+
+		assert!(release_heap(), "dropping an expired scan releases memory");
+		assert_eq!(release_expired_scans(), 0, "the release left an expired scan cached");
 	}
 }

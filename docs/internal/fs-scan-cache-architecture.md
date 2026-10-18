@@ -80,13 +80,13 @@ Global policy (environment-overridable):
 - `FS_SCAN_EMPTY_RECHECK_MS` (default `200`)
 - `FS_SCAN_CACHE_MAX_ENTRIES` (default `16`)
 
-Behavior (`get_or_scan`, internal to `cache.rs`):
+Behavior (`get_or_scan` and `collect_entries_filtered`, internal to `cache.rs`):
 
 - if TTL is `0`: bypass cache entirely, always fresh scan (`cache_age_ms = 0`)
 - on cache hit within TTL: return cloned cached entries + non-zero `cache_age_ms`
-- on expired hit: evict key, rescan, store fresh entry
-- on miss: scan fresh, store, return with `cache_age_ms = 0`
+- on expired hit or miss: drop every expired entry (`release_expired_scans`), scan fresh, store, return with `cache_age_ms = 0`
 - max entry enforcement is oldest-first eviction by `created_at` after insert (`evict_oldest`)
+- the addon's `releaseFreeHeapPages()`, which the idle trim calls, drops every expired entry before `malloc_trim`, so a quiet process holds no scan past its TTL
 
 There is no public `force_rescan` API anymore; an uncached request (`.cache(false)`) simply walks fresh without touching the shared cache.
 
@@ -188,4 +188,4 @@ When introducing cache use in a new scanner/search path:
 - `glob`/`fuzzyFind`/`astGrep` share scan entries only when the full `WalkOptions` key matches.
 - Every native consumer sets `skip_git=true`, so `.git` is excluded from all cached scans in practice; `should_skip_path` re-enforces it at the discovery-filter layer.
 
-*Verified against `632fd91c3b4e` on 2026-08-28.*
+*Verified against `f3df2e7f575d` on 2026-10-18.*
