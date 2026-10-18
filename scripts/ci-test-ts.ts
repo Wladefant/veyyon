@@ -65,6 +65,7 @@ export interface BunTestSummary {
 	todo: number;
 	total: number;
 	files: number;
+	hasFinalCounts: boolean;
 }
 
 type CodingAgentTestPartition = Record<CodingAgentBucket, string[]>;
@@ -147,20 +148,10 @@ process.on("exit", () => {
 const args = process.argv.slice(2);
 const isDryRun = args.includes("--dry-run");
 const requestedMode = args.find(arg => !arg.startsWith("--")) ?? "all";
-// `--only-failures` is Bun's output filter — it hides passing tests within each
-// chunk, keeping the log terse, and is the default here (CI and the root
-// `test:ts` aggregate append it). It does NOT skip tests or share any
-// cross-process cache, so chunks are safe to run concurrently. The package-level
-// `test` script passes `--full` for verbose output (every test line); an explicit
-// `--only-failures` still wins.
-const onlyFailures = args.includes("--only-failures") || !args.includes("--full");
-const onlyFailuresArgs = onlyFailures ? ["--only-failures"] : [];
-// Quiet mode (the default) collapses each parallel chunk to a one-line pass/fail
-// progress entry and replays full stdout/stderr only for chunks that failed, so
-// the failure is never buried under thousands of passing-chunk lines. `--full`
-// opts back into inline replay of every chunk. Tied to `onlyFailures` so the
-// quiet path is whatever the verbose filter is not.
-const quiet = onlyFailures;
+// Bun's documented AI mode hides passing, skipped, and todo indicators while
+// retaining failure details and the final summary. Keep the runner switch for
+// existing callers; `--full` opts back into Bun's ordinary output.
+const quiet = args.includes("--only-failures") || !args.includes("--full");
 
 const validModes: Record<Mode, true> = {
 	all: true,
@@ -563,7 +554,6 @@ function scriptTestCommand(): TestCommand {
 			"--parallel=4",
 			"--timeout",
 			"30000",
-			...onlyFailuresArgs,
 			...repoScriptTests,
 		],
 	};
@@ -868,7 +858,7 @@ async function codingAgentTestCommands(bucket: CodingAgentBucket): Promise<TestC
 		commands.push({
 			label: `packages/coding-agent (${plan.label}; ${testFiles.length} files; parallel=${plan.parallel}${chunkLabel}; ${chunk.length} files)`,
 			cwd: "packages/coding-agent",
-			command: ["bun", "test", ...preloadArgs, `--parallel=${plan.parallel}`, ...onlyFailuresArgs, ...chunkWithDotSlash],
+			command: ["bun", "test", ...preloadArgs, `--parallel=${plan.parallel}`, ...chunkWithDotSlash],
 		});
 	}
 	return commands;
@@ -1092,14 +1082,14 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 				{
 					...workspaceTestCommand("packages/catalog", 1, {
 						env: cloudflareSerialTestEnv,
-						extraArgs: [...onlyFailuresArgs, ...cloudflareCatalogSerialTestFiles],
+						extraArgs: cloudflareCatalogSerialTestFiles,
 					}),
 					label: "packages/catalog (isolated)",
 				},
 				{
 					...workspaceTestCommand("hosts/terminal/engine", 1, {
 						env: cloudflareSerialTestEnv,
-						extraArgs: [...onlyFailuresArgs, ...cloudflareEngineSerialTestFiles],
+						extraArgs: cloudflareEngineSerialTestFiles,
 						smol: true,
 					}),
 					label: "hosts/terminal/engine (isolated)",
@@ -1121,11 +1111,9 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 			return [scriptTestCommand()];
 		case "local-ts":
 			return [
-				...fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8, { extraArgs: onlyFailuresArgs })),
-				...nativeAndIntegrationPackages.map(pkg =>
-					workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs, smol: true }),
-				),
-				...localOnlyWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs })),
+				...fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8)),
+				...nativeAndIntegrationPackages.map(pkg => workspaceTestCommand(pkg, 4, { smol: true })),
+				...localOnlyWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 4)),
 				...(await commandsForMode("coding-agent-heavy")),
 				scriptTestCommand(),
 			];
@@ -1405,7 +1393,7 @@ export async function runTestCommand(testCommand: TestCommand): Promise<ChunkOut
 	}
 	// files already extracted above
 
-	const env = { ...buildChildEnv(), ...testCommand.env };
+	const env = childEnvironment(testCommand);
 	const startedAt = performance.now();
 	const proc = Bun.spawn(testCommand.command, {
 		cwd,
@@ -1433,10 +1421,18 @@ export async function runTestCommand(testCommand: TestCommand): Promise<ChunkOut
 	}
 
 	const seconds = (performance.now() - startedAt) / 1000;
-	const fullOutput = `${stdout.text}${stderr.text}${timedOut ? `\n[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (VEYYON_TEST_CHUNK_TIMEOUT to change)\n` : ""}`;
-	const effectiveExitCode = timedOut
-		? (exitCode !== 0 && exitCode !== null ? exitCode : 1)
-		: (exitCode ?? (timedOut ? 1 : 0));
+	const summary = extractBunSummary(`${stdout.text}${stderr.text}`);
+	const missingSummary = isBunTestCommand(testCommand.command) && !summary.hasFinalCounts;
+	const fullOutput =
+		`${stdout.text}${stderr.text}` +
+		(timedOut
+			? `\n[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (VEYYON_TEST_CHUNK_TIMEOUT to change)\n`
+			: "") +
+		(missingSummary ? "\n[runner] Bun test command omitted final pass/fail counts; refusing to report zero counts.\n" : "");
+	const effectiveExitCode =
+		timedOut || missingSummary
+			? (exitCode !== 0 && exitCode !== null ? exitCode : 1)
+			: (exitCode ?? 0);
 	const outcome: ChunkOutcome = {
 		label: testCommand.label,
 		command: renderedCommand,
@@ -1445,22 +1441,29 @@ export async function runTestCommand(testCommand: TestCommand): Promise<ChunkOut
 		output: fullOutput,
 	};
 
-	const summary = extractBunSummary(fullOutput);
-
-	if (fullOutput.trim()) {
+	if (fullOutput.trim() && (!quiet || effectiveExitCode !== 0 || !isBunTestCommand(testCommand.command))) {
 		process.stdout.write(`${fullOutput}\n`);
 	}
 
-	process.stdout.write(
-		`CLOUDFLARE_CHUNK_SUMMARY files=${files.length} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo}\n`,
-	);
+	if (missingSummary) {
+		process.stdout.write(`CLOUDFLARE_CHUNK_SUMMARY_MISSING files=${files.length} label="${testCommand.label}"\n`);
+	} else {
+		process.stdout.write(
+			`CLOUDFLARE_CHUNK_SUMMARY files=${files.length} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo}\n`,
+		);
+	}
 
-	for (const file of files) {
-		if (file.includes("quota-refusals-belong-to-the-failed-request.test.ts")) {
-			process.stdout.write(
-				`CLOUDFLARE_FILE_SUMMARY file=${file} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo}\n`,
-			);
+	if (!missingSummary) {
+		for (const file of files) {
+			if (file.includes("quota-refusals-belong-to-the-failed-request.test.ts")) {
+				process.stdout.write(
+					`CLOUDFLARE_FILE_SUMMARY file=${file} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo}\n`,
+				);
+			}
 		}
+	}
+	if (quiet) {
+		process.stdout.write(`${formatProgressLine(outcome)}\n`);
 	}
 	if (isCloudflare) {
 		console.log(
@@ -1510,6 +1513,24 @@ function buildChildEnv(): Record<string, string | undefined> {
 	for (const key of Object.keys(env)) {
 		if (isScrubbedEnvVar(key)) {
 			delete env[key];
+		}
+	}
+	return env;
+}
+
+function isBunTestCommand(command: readonly string[]): boolean {
+	return /^bun(?:\.exe)?$/i.test(path.basename(command[0] ?? "")) && command[1] === "test";
+}
+
+function childEnvironment(testCommand: TestCommand): Record<string, string | undefined> {
+	const env = { ...buildChildEnv(), ...testCommand.env };
+	if (isBunTestCommand(testCommand.command)) {
+		delete env.CLAUDECODE;
+		delete env.REPL_ID;
+		if (quiet) {
+			env.AGENT = "1";
+		} else {
+			delete env.AGENT;
 		}
 	}
 	return env;
@@ -1600,11 +1621,9 @@ export function formatProgressLine(outcome: ChunkOutcome): string {
 	return `${style.bold(style.red(`✗ ${outcome.label}`))} ${time}${detail}`;
 }
 
-// Closing tally in `bun test` style, but counting test *chunks* (child commands),
-// not individual tests — the runner never parses child summaries. A green
-// `N chunks passed` line, a `N failed` line (red when non-zero, dim when clean),
-// then the total wall time. Printed after the failure report so a run always
-// ends on an at-a-glance verdict.
+// Closing tally in `bun test` style, but counting test chunks (child commands),
+// not individual tests. Bun test counts remain visible in each chunk's
+// CLOUDFLARE_CHUNK_SUMMARY record.
 export function formatSummaryFooter(passed: number, failed: number, totalSeconds: number): string {
 	const failLine = failed > 0 ? style.red(`${failed} failed`) : style.dim("0 failed");
 	return [
@@ -1691,35 +1710,36 @@ export function chunkTestFiles(command: string): string[] {
 
 export function extractBunSummary(output: string): BunTestSummary {
 	const clean = output.replace(/\x1b\[[0-9;]*m/g, "");
+	const ranPattern = /Ran\s+(\d+)\s+tests?\s+across\s+(\d+)\s+files?/g;
+	let ranMatch: RegExpExecArray | null = null;
+	for (const match of clean.matchAll(ranPattern)) ranMatch = match;
+	const summaryText = ranMatch ? clean.slice(0, ranMatch.index) : clean;
+	const finalCount = (name: string): RegExpExecArray | null => {
+		const pattern = new RegExp(`^\\s*(\\d+)\\s+${name}\\b`, "gm");
+		let latest: RegExpExecArray | null = null;
+		for (const match of summaryText.matchAll(pattern)) latest = match;
+		return latest;
+	};
 
-	let pass = 0;
-	let fail = 0;
-	let skip = 0;
-	let todo = 0;
-	let total = 0;
-	let files = 0;
+	const passMatch = finalCount("pass");
+	const failMatch = finalCount("fail");
+	const skipMatch = finalCount("skip");
+	const todoMatch = finalCount("todo");
+	const pass = passMatch ? parseInt(passMatch[1], 10) : 0;
+	const fail = failMatch ? parseInt(failMatch[1], 10) : 0;
+	const skip = skipMatch ? parseInt(skipMatch[1], 10) : 0;
+	const todo = todoMatch ? parseInt(todoMatch[1], 10) : 0;
+	const ranTotal = ranMatch ? parseInt(ranMatch[1], 10) : 0;
+	const total = ranMatch ? ranTotal : pass + fail + skip + todo;
+	const files = ranMatch ? parseInt(ranMatch[2], 10) : 0;
+	const countsWerePrinted = [passMatch, failMatch, skipMatch, todoMatch].some(match => match !== null);
+	const executedCount = pass + fail + skip;
+	const hasFinalCounts =
+		ranMatch !== null &&
+		countsWerePrinted &&
+		(executedCount === ranTotal || executedCount + todo === ranTotal);
 
-	const passMatch = /^\s*(\d+)\s+pass/m.exec(clean);
-	if (passMatch) pass = parseInt(passMatch[1], 10);
-
-	const failMatch = /^\s*(\d+)\s+fail/m.exec(clean);
-	if (failMatch) fail = parseInt(failMatch[1], 10);
-
-	const skipMatch = /^\s*(\d+)\s+skip/m.exec(clean);
-	if (skipMatch) skip = parseInt(skipMatch[1], 10);
-
-	const todoMatch = /^\s*(\d+)\s+todo/m.exec(clean);
-	if (todoMatch) todo = parseInt(todoMatch[1], 10);
-
-	const ranMatch = /Ran\s+(\d+)\s+tests?\s+across\s+(\d+)\s+files?/m.exec(clean);
-	if (ranMatch) {
-		total = parseInt(ranMatch[1], 10);
-		files = parseInt(ranMatch[2], 10);
-	} else {
-		total = pass + fail + skip + todo;
-	}
-
-	return { pass, fail, skip, todo, total, files };
+	return { pass, fail, skip, todo, total, files, hasFinalCounts };
 }
 
 export function formatChunkFailure(failure: ChunkOutcome, replayOutput: boolean): string {
@@ -1772,7 +1792,6 @@ export function formatFailureReport(failures: ChunkOutcome[], total: number, rep
 // failures are collected and reported together instead of failing fast, so one
 // run surfaces every broken chunk and exits non-zero without a runner stack trace.
 export async function runTestCommandsInParallel(commands: TestCommand[], concurrency: number): Promise<void> {
-	const env = buildChildEnv();
 	const queue = [...commands];
 	const failures: ChunkOutcome[] = [];
 	const outcomes: ChunkOutcome[] = [];
@@ -1793,7 +1812,7 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 			const startedAt = performance.now();
 			const proc = Bun.spawn(testCommand.command, {
 				cwd: path.join(repoRoot, testCommand.cwd),
-				env: testCommand.env ? { ...env, ...testCommand.env } : env,
+				env: childEnvironment(testCommand),
 				stdout: "pipe",
 				stderr: "pipe",
 			});
@@ -1819,37 +1838,48 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 				stderrDrain.cancel();
 				await drains;
 			}
-			completed += 1;
+			const seconds = (performance.now() - startedAt) / 1000;
+			const rawOutput =
+				`${stdout.text}${stderr.text}` +
+				(timedOut ? `\n[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (VEYYON_TEST_CHUNK_TIMEOUT to change)\n` : "");
+			const summary = extractBunSummary(rawOutput);
+			const missingSummary = isBunTestCommand(testCommand.command) && !summary.hasFinalCounts;
+			const output =
+				rawOutput +
+				(missingSummary ? "\n[runner] Bun test command omitted final pass/fail counts; refusing to report zero counts.\n" : "");
 			const outcome: ChunkOutcome = {
 				label: testCommand.label,
 				command: renderedCommand,
-				exitCode,
-				seconds: (performance.now() - startedAt) / 1000,
-				output: `${stdout.text}${stderr.text}${timedOut ? `\n[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (VEYYON_TEST_CHUNK_TIMEOUT to change)\n` : ""}`,
+				exitCode: timedOut || missingSummary ? (exitCode !== 0 ? exitCode : 1) : exitCode,
+				seconds,
+				output,
 			};
 			outcomes.push(outcome);
-			const summary = extractBunSummary(outcome.output);
 			const files = extractCommandTestFiles(testCommand);
-			const chunkSummaryLine = `CLOUDFLARE_CHUNK_SUMMARY files=${files.length} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo}\n`;
+			const chunkSummaryLine = missingSummary
+				? `CLOUDFLARE_CHUNK_SUMMARY_MISSING files=${files.length} label="${testCommand.label}"\n`
+				: `CLOUDFLARE_CHUNK_SUMMARY files=${files.length} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo}\n`;
 			let fileSummaryLines = "";
-			for (const file of files) {
-				if (file.includes("quota-refusals-belong-to-the-failed-request.test.ts")) {
-					fileSummaryLines += `CLOUDFLARE_FILE_SUMMARY file=${file} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo}\n`;
+			if (!missingSummary) {
+				for (const file of files) {
+					if (file.includes("quota-refusals-belong-to-the-failed-request.test.ts")) {
+						fileSummaryLines += `CLOUDFLARE_FILE_SUMMARY file=${file} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo}\n`;
+					}
 				}
 			}
 			if (quiet) {
 				let msg = `${formatProgressLine(outcome)}\n${chunkSummaryLine}${fileSummaryLines}`;
-				if (exitCode !== 0 || timedOut) {
+				if (outcome.exitCode !== 0) {
 					msg += `${formatChunkFailure(outcome, true)}\n`;
 				}
 				process.stdout.write(msg);
 			} else {
-				const status = exitCode === 0 ? "ok" : `FAILED exit ${exitCode}`;
+				const status = outcome.exitCode === 0 ? "ok" : `FAILED exit ${outcome.exitCode}`;
 				process.stdout.write(
 					`\n==> [${completed}/${commands.length}] ${testCommand.label} (${status}, ${outcome.seconds.toFixed(1)}s)\n$ ${renderedCommand}\n${outcome.output}\n${chunkSummaryLine}${fileSummaryLines}`,
 				);
 			}
-			if (exitCode !== 0 || timedOut) {
+			if (outcome.exitCode !== 0) {
 				failures.push(outcome);
 			}
 		}

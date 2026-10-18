@@ -11,16 +11,36 @@
  * 1. `runTestCommand` returns a `ChunkOutcome` with a non-zero `exitCode` without throwing.
  * 2. `runTestCommandsSequentially` executes every chunk in the sequence even if earlier chunks fail.
  * 3. All failed chunks are accumulated in `failures`.
- * 4. Summary totals are accumulated across all chunks.
- * 5. `process.exitCode` is set to 1 if any chunk fails, and remains 0 if all pass.
+ * 4. Every chunk's native Bun summary yields exact pass/fail/skip/todo counts; missing summaries fail.
+ * 5. Quiet successful chunks hide test indicators while preserving summary counts, and failures keep their bytes.
+ * 6. `process.exitCode` is set to 1 if any chunk fails, and remains 0 if all pass.
  */
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import * as path from "node:path";
+import { $which } from "@veyyon/utils";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import {
 	extractBunSummary,
 	runTestCommand,
 	runTestCommandsSequentially,
 	type TestCommand,
 } from "./ci-test-ts";
+
+function nativeBunSummary(pass: number, fail: number, skip = 0, todo = 0): string {
+	const counts = [
+		[pass, "pass"],
+		[fail, "fail"],
+		[skip, "skip"],
+		[todo, "todo"],
+	] as const;
+	const total = pass + fail + skip + todo;
+	const countLines = counts
+		.filter(([count, name]) => count > 0 || name === "pass" || name === "fail")
+		.map(([count, name]) => `${count} ${name}`);
+	return (
+		`${countLines.join("\n")}\nRan ${total} ${total === 1 ? "test" : "tests"} ` +
+		"across 1 file. [1.00ms]\n"
+	);
+}
 
 describe("scheduler run-all-chunks contract", () => {
 	const originalExitCode = process.exitCode;
@@ -34,37 +54,119 @@ describe("scheduler run-all-chunks contract", () => {
 	});
 
 	it("runTestCommand returns non-zero outcome without throwing when a chunk fails", async () => {
-		const bun = Bun.which("bun") ?? "bun";
+		const bun = $which("bun") ?? process.execPath;
+		const failureBytes = "\u001b[31merror: full failure bytes\u001b[0m\n";
 		const failingCommand: TestCommand = {
 			label: "failing-chunk-test",
 			cwd: ".",
-			command: [bun, "-e", 'console.log("CLOUDFLARE_CHUNK_SUMMARY files=1 pass=0 fail=1 skip=0 todo=0"); process.exit(1)'],
+			command: [
+				bun,
+				"-e",
+				`process.stdout.write(${JSON.stringify(nativeBunSummary(0, 1))}); ` +
+					`process.stderr.write(${JSON.stringify(failureBytes)}); process.exitCode = 1`,
+			],
 		};
 
 		const outcome = await runTestCommand(failingCommand);
 		expect(outcome.exitCode).toBe(1);
 		expect(outcome.label).toBe("failing-chunk-test");
-		const summary = extractBunSummary(outcome.output);
-		expect(summary.fail).toBe(1);
+		expect(outcome.output).toContain(failureBytes);
+		expect(extractBunSummary(outcome.output)).toEqual({
+			pass: 0,
+			fail: 1,
+			skip: 0,
+			todo: 0,
+			total: 1,
+			files: 1,
+			hasFinalCounts: true,
+		});
+	});
+
+	it("keeps passing Bun output quiet while preserving native exact counts", async () => {
+		const bun = $which("bun") ?? process.execPath;
+		const testFile = path.join(import.meta.dir, "cf-runtime-sharding.test.ts");
+		const writes: string[] = [];
+		const stdoutSpy = spyOn(process.stdout, "write").mockImplementation(chunk => {
+			writes.push(String(chunk));
+			return true;
+		});
+		try {
+			const outcome = await runTestCommand({
+				label: "quiet-success-chunk",
+				cwd: ".",
+				command: [bun, "test", testFile],
+			});
+			const summary = extractBunSummary(outcome.output);
+			expect(outcome.exitCode).toBe(0);
+			expect(outcome.output).not.toContain("accepts valid bounds");
+			expect(summary.hasFinalCounts).toBe(true);
+			expect(summary.pass).toBeGreaterThan(0);
+			expect(summary.fail).toBe(0);
+			expect(summary.skip).toBe(0);
+			expect(summary.files).toBe(1);
+
+			const runnerOutput = writes.join("");
+			expect(runnerOutput).not.toContain("accepts valid bounds");
+			expect(runnerOutput).toContain(
+				`CLOUDFLARE_CHUNK_SUMMARY files=1 pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo}`,
+			);
+		} finally {
+			stdoutSpy.mockRestore();
+		}
+	});
+
+	it("fails loudly when Bun exits without final counts", async () => {
+		const bun = $which("bun") ?? process.execPath;
+		const writes: string[] = [];
+		const stdoutSpy = spyOn(process.stdout, "write").mockImplementation(chunk => {
+			writes.push(String(chunk));
+			return true;
+		});
+		try {
+			const outcome = await runTestCommand({
+				label: "missing-summary-chunk",
+				cwd: ".",
+				command: [bun, "test", "--help"],
+			});
+
+			expect(outcome.exitCode).toBe(1);
+			expect(outcome.output).toContain("Bun test command omitted final pass/fail counts");
+			expect(extractBunSummary(outcome.output).hasFinalCounts).toBe(false);
+			expect(writes.join("")).toContain("CLOUDFLARE_CHUNK_SUMMARY_MISSING");
+		} finally {
+			stdoutSpy.mockRestore();
+		}
 	});
 
 	it("executes all chunks and accumulates failures when an earlier chunk fails", async () => {
-		const bun = Bun.which("bun") ?? "bun";
+		const bun = $which("bun") ?? process.execPath;
 		const commands: TestCommand[] = [
 			{
 				label: "chunk-1-passes",
 				cwd: ".",
-				command: [bun, "-e", 'console.log("CLOUDFLARE_CHUNK_SUMMARY files=1 pass=5 fail=0 skip=0 todo=0"); process.exit(0)'],
+				command: [
+					bun,
+					"-e",
+					`process.stdout.write(${JSON.stringify(nativeBunSummary(5, 0, 2, 1))})`,
+				],
 			},
 			{
 				label: "chunk-2-fails",
 				cwd: ".",
-				command: [bun, "-e", 'console.log("CLOUDFLARE_CHUNK_SUMMARY files=1 pass=1 fail=2 skip=0 todo=0"); process.exit(1)'],
+				command: [
+					bun,
+					"-e",
+					`process.stdout.write(${JSON.stringify(nativeBunSummary(1, 2))}); process.exitCode = 1`,
+				],
 			},
 			{
 				label: "chunk-3-passes",
 				cwd: ".",
-				command: [bun, "-e", 'console.log("CLOUDFLARE_CHUNK_SUMMARY files=1 pass=10 fail=0 skip=0 todo=0"); process.exit(0)'],
+				command: [
+					bun,
+					"-e",
+					`process.stdout.write(${JSON.stringify(nativeBunSummary(10, 0))})`,
+				],
 			},
 		];
 
@@ -74,10 +176,37 @@ describe("scheduler run-all-chunks contract", () => {
 		expect(result.outcomes.length).toBe(3);
 		expect(result.outcomes[0].label).toBe("chunk-1-passes");
 		expect(result.outcomes[0].exitCode).toBe(0);
+		expect(extractBunSummary(result.outcomes[0].output)).toEqual({
+			pass: 5,
+			fail: 0,
+			skip: 2,
+			todo: 1,
+			total: 8,
+			files: 1,
+			hasFinalCounts: true,
+		});
 		expect(result.outcomes[1].label).toBe("chunk-2-fails");
 		expect(result.outcomes[1].exitCode).toBe(1);
+		expect(extractBunSummary(result.outcomes[1].output)).toEqual({
+			pass: 1,
+			fail: 2,
+			skip: 0,
+			todo: 0,
+			total: 3,
+			files: 1,
+			hasFinalCounts: true,
+		});
 		expect(result.outcomes[2].label).toBe("chunk-3-passes");
 		expect(result.outcomes[2].exitCode).toBe(0);
+		expect(extractBunSummary(result.outcomes[2].output)).toEqual({
+			pass: 10,
+			fail: 0,
+			skip: 0,
+			todo: 0,
+			total: 10,
+			files: 1,
+			hasFinalCounts: true,
+		});
 
 		// Failures must be accumulated
 		expect(result.failures.length).toBe(1);
@@ -88,23 +217,26 @@ describe("scheduler run-all-chunks contract", () => {
 	});
 
 	it("leaves exitCode 0 when all chunks succeed", async () => {
-		const bun = Bun.which("bun") ?? "bun";
+		const bun = $which("bun") ?? process.execPath;
 		const commands: TestCommand[] = [
 			{
 				label: "chunk-pass-a",
 				cwd: ".",
-				command: [bun, "-e", 'console.log("CLOUDFLARE_CHUNK_SUMMARY files=1 pass=3 fail=0 skip=0 todo=0"); process.exit(0)'],
+				command: [bun, "-e", `process.stdout.write(${JSON.stringify(nativeBunSummary(3, 0))})`],
 			},
 			{
 				label: "chunk-pass-b",
 				cwd: ".",
-				command: [bun, "-e", 'console.log("CLOUDFLARE_CHUNK_SUMMARY files=1 pass=7 fail=0 skip=0 todo=0"); process.exit(0)'],
+				command: [bun, "-e", `process.stdout.write(${JSON.stringify(nativeBunSummary(7, 0))})`],
 			},
 		];
 
 		const result = await runTestCommandsSequentially(commands);
 		expect(result.outcomes.length).toBe(2);
 		expect(result.failures.length).toBe(0);
+		expect(extractBunSummary(result.outcomes[0].output).pass).toBe(3);
+		expect(extractBunSummary(result.outcomes[1].output).pass).toBe(7);
 		expect(process.exitCode).toBe(0);
 	});
+
 });
