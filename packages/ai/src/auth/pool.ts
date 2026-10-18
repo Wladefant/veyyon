@@ -1,9 +1,15 @@
 import { logger } from "@veyyon/utils";
 import { resolveCredentialIdentityKey, serializeCredential } from "./sqlite-credential-store";
+import {
+	isRefreshFailureDisableCause,
+	normalizeStoredAccountId,
+	normalizeStoredEmail,
+	resolveAccountNameIdentity,
+} from "../auth-credential-rows";
+import { REMOTE_REFRESH_SENTINEL } from "./types";
 import type { BlockStoreHealth } from "./blocks";
 import type { AccountPolicies } from "./policy";
 import type { AuthCredentialStore } from "./store";
-import { REMOTE_REFRESH_SENTINEL } from "./types";
 import type {
 	ApiKeyCredential,
 	AuthCredential,
@@ -12,16 +18,29 @@ import type {
 	AuthCredentialSnapshotEntry,
 	AuthStorageData,
 	CredentialDisabledEvent,
+	CredentialFailoverEvent,
+	CredentialFailoverReason,
 	CredentialsApi,
 	DisabledCredentialSummary,
 	OAuthCredential,
 	SnapshotCredential,
 	StoredAuthCredential,
+	UsageLimitWithheldEvent,
 } from "./types";
 import type { UsageCredential } from "../usage";
 
 const OAUTH_BEARER_FINGERPRINT_HISTORY_LIMIT = 8;
 const MAX_PENDING_DISABLED_EVENTS = 32;
+const FAILOVER_NOTICE_WINDOW_MS = 60_000;
+const MAX_WITHHELD_NOTICES = 64;
+
+/** Provider → the account auth death just retired, awaiting the resolve that names its replacement. */
+interface PendingFailover {
+	from: { credentialId: number; label: string };
+	reason: CredentialFailoverReason;
+	cause: string;
+	at: number;
+}
 
 /** SHA-256 bearer fingerprint, so superseded OAuth token bytes never enter the identity cache. */
 function fingerprintOAuthBearer(bearer: string): string {
@@ -105,6 +124,12 @@ export class CredentialPool implements CredentialsApi {
 	#generation = 1;
 	#generationListeners: Set<(generation: number) => void> = new Set();
 	#closed = false;
+	#credentialFailoverListeners: Set<(event: CredentialFailoverEvent) => void | Promise<void>> = new Set();
+	#usageLimitWithheldListeners: Set<(event: UsageLimitWithheldEvent) => void | Promise<void>> = new Set();
+	/** Unbuffered: a failover notice describes the request in flight, never a move from long ago. */
+	#pendingFailover: Map<string, PendingFailover> = new Map();
+	/** `provider:credentialId:window` of every withheld notice already emitted, so one window is announced once. */
+	#withheldNotices: Set<string> = new Set();
 
 	#store: AuthCredentialStore;
 	#options: CredentialPoolOptions;
@@ -217,6 +242,11 @@ export class CredentialPool implements CredentialsApi {
 		this.#pendingDisabledEvents = previous.#pendingDisabledEvents;
 		previous.#pendingDisabledEvents = [];
 		this.#generation = previous.#generation;
+		this.#credentialFailoverListeners = previous.#credentialFailoverListeners;
+		this.#usageLimitWithheldListeners = previous.#usageLimitWithheldListeners;
+		this.#pendingFailover = previous.#pendingFailover;
+		previous.#pendingFailover = new Map();
+		this.#withheldNotices = previous.#withheldNotices;
 	}
 
 	onGeneration(listener: (generation: number) => void): () => void {
@@ -266,7 +296,7 @@ export class CredentialPool implements CredentialsApi {
 			const drained = this.#pendingDisabledEvents;
 			this.#pendingDisabledEvents = [];
 			for (const event of drained) {
-				this.#invokeListener(listener, event);
+				this.#invokeListener("onCredentialDisabled", listener, event);
 			}
 		}
 		return () => {
@@ -457,6 +487,9 @@ export class CredentialPool implements CredentialsApi {
 		if (!serialized) return false;
 		const disabled = this.#store.tryDisableAuthCredentialIfMatches(target.id, serialized.data, disabledCause);
 		if (!disabled) return false;
+		if (isRefreshFailureDisableCause(disabledCause)) {
+			this.recordFailed(provider, target.id, "auth", disabledCause);
+		}
 		const updated = entries.filter((_value, idx) => idx !== index);
 		this.replace(provider, updated);
 		this.reset(provider);
@@ -532,19 +565,17 @@ export class CredentialPool implements CredentialsApi {
 		// can't observe a partially-mutated set or receive an event it just registered for.
 		const listeners = [...this.#credentialDisabledListeners];
 		for (const listener of listeners) {
-			this.#invokeListener(listener, event);
+			this.#invokeListener("onCredentialDisabled", listener, event);
 		}
 	}
 
-	#invokeListener(
-		listener: (event: CredentialDisabledEvent) => void | Promise<void>,
-		event: CredentialDisabledEvent,
+	#invokeListener<E extends { provider: string }>(
+		hook: "onCredentialDisabled" | "onCredentialFailover" | "onUsageLimitWithheld",
+		listener: (event: E) => void | Promise<void>,
+		event: E,
 	): void {
 		const logListenerError = (error: unknown): void => {
-			logger.warn("onCredentialDisabled listener threw", {
-				provider: event.provider,
-				error: String(error),
-			});
+			logger.warn(`${hook} listener threw`, { provider: event.provider, error: String(error) });
 		};
 		try {
 			const result = listener(event);
@@ -554,6 +585,98 @@ export class CredentialPool implements CredentialsApi {
 		} catch (error) {
 			logListenerError(error);
 		}
+	}
+
+	/** Subscribe to auth-death failover notices. Unbuffered: a notice describes the request in flight. */
+	onFailover(listener: (event: CredentialFailoverEvent) => void | Promise<void>): () => void {
+		this.#credentialFailoverListeners.add(listener);
+		return () => {
+			this.#credentialFailoverListeners.delete(listener);
+		};
+	}
+
+	/** Subscribe to withheld-move notices. Unbuffered, for the same reason as {@link CredentialPool.onFailover}. */
+	onWithheld(listener: (event: UsageLimitWithheldEvent) => void | Promise<void>): () => void {
+		this.#usageLimitWithheldListeners.add(listener);
+		return () => {
+			this.#usageLimitWithheldListeners.delete(listener);
+		};
+	}
+
+	/**
+	 * Announce a withheld move. One exhausted window (or one refused model) per account is announced
+	 * once, however many times a turn retries into it.
+	 */
+	emitWithheld(event: UsageLimitWithheldEvent): void {
+		const window = event.reason === "quota" ? String(event.retryAtMs) : event.modelId;
+		const key = `${event.provider}:${event.account.credentialId}:${event.reason}:${window}`;
+		if (this.#withheldNotices.has(key)) return;
+		// Past the cap the whole set clears: the worst a cleared key costs is one repeated notice,
+		// and a window that old has already reset.
+		if (this.#withheldNotices.size >= MAX_WITHHELD_NOTICES) this.#withheldNotices.clear();
+		this.#withheldNotices.add(key);
+		for (const listener of [...this.#usageLimitWithheldListeners]) {
+			this.#invokeListener("onUsageLimitWithheld", listener, event);
+		}
+	}
+
+	/**
+	 * A request on `provider` was served by `credentialId`. A failover parked by {@link CredentialPool.recordFailed}
+	 * completes here, named by both accounts, when the served account differs and the window has not lapsed.
+	 */
+	recordServing(provider: string, credentialId: number): void {
+		const pending = this.#pendingFailover.get(provider);
+		if (!pending) return;
+		this.#pendingFailover.delete(provider);
+		if (pending.from.credentialId === credentialId) return;
+		// A notice describes the request in flight. Past the window the rotation was abandoned.
+		if (Date.now() - pending.at > FAILOVER_NOTICE_WINDOW_MS) return;
+		const event: CredentialFailoverEvent = {
+			provider,
+			from: pending.from,
+			to: { credentialId, label: this.#accountLabel(provider, credentialId) },
+			reason: pending.reason,
+			cause: pending.cause,
+		};
+		for (const listener of [...this.#credentialFailoverListeners]) {
+			this.#invokeListener("onCredentialFailover", listener, event);
+		}
+	}
+
+	/**
+	 * `credentialId` could not serve `provider` for `reason`. When a same-type sibling remains, the move is
+	 * parked: the dying account's label is read now, before its row is torn down, and the notice fires from
+	 * the {@link CredentialPool.recordServing} that names the replacement.
+	 */
+	recordFailed(provider: string, credentialId: number, reason: CredentialFailoverReason, cause: string): void {
+		const entries = this.entries(provider);
+		const failed = entries.find(entry => entry.id === credentialId);
+		if (!failed) return;
+		const siblingRemains = entries.some(
+			entry => entry.id !== credentialId && entry.credential.type === failed.credential.type,
+		);
+		if (!siblingRemains) return;
+		this.#pendingFailover.set(provider, {
+			from: { credentialId, label: this.#accountLabel(provider, credentialId) },
+			reason,
+			cause,
+			at: Date.now(),
+		});
+	}
+
+	/** The label a notice uses for an account: the operator's name for it, else its identity, else `#id`. Never a secret. */
+	#accountLabel(provider: string, credentialId: number): string {
+		const named = this.getAccountName(provider, credentialId);
+		if (named) return named;
+		const row = this.entries(provider).find(entry => entry.id === credentialId);
+		if (!row) return `#${credentialId}`;
+		if (row.credential.type === "oauth") {
+			const email = normalizeStoredEmail(row.credential.email);
+			if (email) return email;
+			const accountId = normalizeStoredAccountId(row.credential.accountId);
+			if (accountId) return accountId;
+		}
+		return `#${credentialId}`;
 	}
 
 	/**
@@ -726,6 +849,69 @@ export class CredentialPool implements CredentialsApi {
 	async listDisabled(provider?: string, signal?: AbortSignal): Promise<DisabledCredentialSummary[]> {
 		if (!this.#store.listDisabledCredentials) return [];
 		return this.#store.listDisabledCredentials(provider, signal);
+	}
+
+	/**
+	 * The reporting contract for disabled tombstones: newest first, dropping a row when a later active
+	 * login for the provider was created after it was disabled. Empty when the store keeps no tombstones.
+	 */
+	async listReportableDisabled(provider?: string): Promise<DisabledCredentialSummary[]> {
+		if (!this.#store.listReportableDisabledCredentials) return [];
+		return this.#store.listReportableDisabledCredentials(provider);
+	}
+
+	/** Whether an active stored credential with this row id exists for the provider. */
+	hasId(provider: string, credentialId: number): boolean {
+		return this.entries(provider).some(entry => entry.id === credentialId);
+	}
+
+	/**
+	 * The name a user gave one account, keyed by its identity so the name survives a row replacement.
+	 * Undefined when none is set or the store keeps no names.
+	 */
+	getAccountName(provider: string, credentialId: number): string | undefined {
+		const read = this.#store.getAccountName?.bind(this.#store);
+		if (!read) return undefined;
+		const row = this.entries(provider).find(entry => entry.id === credentialId);
+		if (!row) return undefined;
+		return read(resolveAccountNameIdentity(provider, row));
+	}
+
+	/**
+	 * Name an account, or clear the name with an empty string. Writes only the names table, never the
+	 * token row. Returns false when the store keeps no names or the credential is unknown.
+	 */
+	setAccountName(provider: string, credentialId: number, name: string): boolean {
+		const row = this.entries(provider).find(entry => entry.id === credentialId);
+		if (!row) return false;
+		const identity = resolveAccountNameIdentity(provider, row);
+		const trimmed = name.trim();
+		if (trimmed.length === 0) {
+			const remove = this.#store.deleteAccountName?.bind(this.#store);
+			if (!remove) return false;
+			remove(identity);
+			return true;
+		}
+		const write = this.#store.setAccountName?.bind(this.#store);
+		if (!write) return false;
+		write(identity, trimmed);
+		return true;
+	}
+
+	/**
+	 * Dismiss every signed-out login (refresh-failure tombstone) for the provider. Rows stay disabled and
+	 * on disk; only their cause changes, so no reader reports them again. Returns how many were dismissed.
+	 */
+	async forgetSignedOutLogins(provider: string): Promise<number> {
+		const listDisabled = this.#store.listDisabledCredentials?.bind(this.#store);
+		if (!listDisabled) return 0;
+		let forgotten = 0;
+		for (const row of await listDisabled(provider)) {
+			if (!isRefreshFailureDisableCause(row.cause)) continue;
+			await this.#store.deleteAuthCredential(row.id, "signed-out login dismissed by user");
+			forgotten++;
+		}
+		return forgotten;
 	}
 
 	/**

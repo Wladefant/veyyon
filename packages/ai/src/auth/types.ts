@@ -327,6 +327,56 @@ export interface CredentialDisabledEvent {
 	orgName?: string;
 }
 
+/**
+ * Event payload describing an automatic move from one account to another.
+ *
+ * Emitted only for a credential that cannot serve the request at all, whatever the load-balancing
+ * setting says: AUTH DEATH (revoked token, `invalid_grant`, a row disabled underneath us), or a plan
+ * that does not include the requested model. Quota and rate-limit movement never emits this.
+ *
+ * Both accounts are named, so the notice says which credential died and which one is now serving.
+ */
+export interface CredentialFailoverEvent {
+	provider: string;
+	/** The account that could no longer serve, and why. */
+	from: { credentialId: number; label: string };
+	/** The account routing moved to. */
+	to: { credentialId: number; label: string };
+	/** `auth`: the grant was refused. `model-not-in-plan`: the account's plan does not include the model. */
+	reason: CredentialFailoverReason;
+	cause: string;
+}
+
+/** Why a {@link CredentialFailoverEvent} moved off an account. */
+export type CredentialFailoverReason = "auth" | "model-not-in-plan";
+
+/**
+ * Event payload for the move that did NOT happen: this account cannot serve the request, sibling
+ * accounts are sitting unblocked, and `accounts.loadBalancing` is off so nothing moved.
+ *
+ * Emitted at most once per exhausted window, or per refused model, per account, so a turn that
+ * retries does not repeat itself.
+ */
+export type UsageLimitWithheldEvent = {
+	provider: string;
+	/** The account that cannot serve the request. */
+	account: { credentialId: number; label: string };
+	/** Stored, same-type accounts that would have served this request. Always >= 1. */
+	idleSiblings: number;
+} & (
+	| {
+			/** The account's quota window is exhausted. */
+			reason: "quota";
+			/** Epoch ms when this account's own window is expected back. */
+			retryAtMs: number;
+	  }
+	| {
+			/** The account's plan does not include the model, so no wait lets it serve. */
+			reason: "model-not-in-plan";
+			modelId: string;
+	  }
+);
+
 /** Why a delegated OAuth refresh was requested. */
 export type OAuthRefreshReason = "auth-recovery";
 
@@ -341,6 +391,13 @@ export type AuthStorageOptions = {
 	usageRequestTimeoutMs?: number;
 	usageLogger?: UsageLogger;
 	/**
+	 * Override aggregate usage report fetching. When present, `AuthStorage`
+	 * routes `usage.reports()` here instead of fanning out per-credential.
+	 *
+	 * Precedence: this option > store.fetchUsageReports hook > local fan-out.
+	 */
+	fetchUsageReports?: (signal?: AbortSignal) => Promise<UsageReport[] | null>;
+	/**
 	 * Resolve a config value (API key, header value, etc.) to an actual value.
 	 * - coding-agent injects its resolveConfigValue (supports "!command" syntax via pi-natives)
 	 * - Default: checks environment variable first, then treats as literal
@@ -354,6 +411,25 @@ export type AuthStorageOptions = {
 	 * (uninteresting hygiene).
 	 */
 	onCredentialDisabled?: (event: CredentialDisabledEvent) => void | Promise<void>;
+	/**
+	 * Fired when auth death moved a provider from one account to another. See
+	 * {@link CredentialFailoverEvent}; never fired for quota or rate-limit movement.
+	 */
+	onCredentialFailover?: (event: CredentialFailoverEvent) => void | Promise<void>;
+	/**
+	 * Fired when quota exhaustion could have moved to an idle sibling and the load-balancing
+	 * setting withheld it. See {@link UsageLimitWithheldEvent}.
+	 */
+	onUsageLimitWithheld?: (event: UsageLimitWithheldEvent) => void | Promise<void>;
+	/**
+	 * Whether multi-account load balancing is enabled across same-type credentials.
+	 *
+	 * When false or omitted, storage order dictates serving and the first stored
+	 * usable account serves every request. When true, requests distribute across
+	 * available same-type credentials. May be supplied as a dynamic predicate
+	 * (e.g. reading a live setting or environment variable). Defaults to false.
+	 */
+	loadBalancing?: boolean | (() => boolean);
 	/**
 	 * Override OAuth refresh. When set, `AuthStorage` calls this instead of the
 	 * per-provider local refresh function. Receives the credential id so the
@@ -443,6 +519,8 @@ export interface UsageLimitMarkResult {
 	priorBlockedUntilMs?: number;
 	priorBlockedUntilTimed?: boolean;
 	reportResetAtMs?: number;
+	/** Human-readable account, reset time and sibling availability for the refusal; no secrets. */
+	quotaMessage?: string;
 }
 
 /** Combined model availability state across stored accounts. */
@@ -755,6 +833,8 @@ export type MarkUsageLimitOptions = {
 	apiKey?: string;
 	credentialId?: number;
 	signal?: AbortSignal;
+	/** When true, records that this account's plan does not include `modelId`. */
+	modelNotInPlan?: boolean;
 };
 
 /** Resolve a failed request to its credential and rotate if possible. */
@@ -829,6 +909,16 @@ export interface CredentialsApi {
 	 * @returns A function that removes this listener from the subscriber set.
 	 */
 	onDisabled(listener: (event: CredentialDisabledEvent) => void | Promise<void>): () => void;
+	/** Subscribe to auth-death failover notices. See {@link CredentialFailoverEvent}. */
+	onFailover(listener: (event: CredentialFailoverEvent) => void | Promise<void>): () => void;
+	/** Subscribe to withheld-move notices. See {@link UsageLimitWithheldEvent}. */
+	onWithheld(listener: (event: UsageLimitWithheldEvent) => void | Promise<void>): () => void;
+	/** Announce a withheld move, once per exhausted window. */
+	emitWithheld(event: UsageLimitWithheldEvent): void;
+	/** A request on `provider` was served by `credentialId`; a parked failover completes here. */
+	recordServing(provider: string, credentialId: number): void;
+	/** `credentialId` could not serve `provider`; a same-type sibling parks the failover. */
+	recordFailed(provider: string, credentialId: number, reason: CredentialFailoverReason, cause: string): void;
 	/**
 	 * Reload credentials from storage.
 	 */
@@ -906,6 +996,31 @@ export interface CredentialsApi {
 	 * keeps no tombstones or the remote broker predates the endpoint.
 	 */
 	listDisabled(provider?: string, signal?: AbortSignal): Promise<DisabledCredentialSummary[]>;
+	/**
+	 * Disabled tombstones reported to the user, newest first. Every tombstone
+	 * the store keeps is reported; no later active row suppresses one. Same empty-store
+	 * behavior as {@link CredentialsApi.listDisabled}.
+	 */
+	listReportableDisabled(provider?: string): Promise<DisabledCredentialSummary[]>;
+	/** Providers that currently hold at least one active stored credential. */
+	providers(): IterableIterator<string>;
+	/** Whether an active stored credential with this row id exists for the provider. */
+	hasId(provider: string, credentialId: number): boolean;
+	/**
+	 * The name a user gave one account, or undefined when none is set. Keyed by the account identity,
+	 * so the name survives the row being replaced by a token refresh.
+	 */
+	getAccountName(provider: string, credentialId: number): string | undefined;
+	/**
+	 * Name an account, or clear the name with an empty string. Returns false when the store keeps no
+	 * names or the credential is unknown.
+	 */
+	setAccountName(provider: string, credentialId: number, name: string): boolean;
+	/**
+	 * Dismiss every signed-out login (refresh-failure tombstone) for the provider. Rows stay disabled;
+	 * their cause changes to a dismissal. Returns how many were dismissed.
+	 */
+	forgetSignedOutLogins(provider: string): Promise<number>;
 	/**
 	 * Build a redacted snapshot of all loaded credentials for the auth-broker
 	 * wire. OAuth refresh tokens are replaced with {@link REMOTE_REFRESH_SENTINEL}
@@ -1153,6 +1268,17 @@ export interface OAuthApi {
  * lifts a restriction only with the lease of the call that installed it.
  */
 export type SessionRestrictionLease = symbol;
+/**
+ * Routing diagnostics and current state for a provider's session routing.
+ */
+export interface SessionCredentialRouting {
+	provider: string;
+	selectedCredentialId?: number;
+	activeCredentialId?: number;
+	activeIsPrediction?: boolean;
+	selectedBlockedUntilMs?: number;
+}
+
 
 /** Session credential affinity operations. */
 export interface SessionsApi {
@@ -1170,6 +1296,35 @@ export interface SessionsApi {
 	 * account, a stale resume re-ranks.
 	 */
 	pin(provider: string, sessionId: string, credentialId: number, options?: { restoredAtMs?: number }): boolean;
+	/**
+	 * Clear an explicit user pin for `sessionId` on `provider`.
+	 *
+	 * The session falls back to its last-used sticky credential or provider-default
+	 * routing, preserving any automatic warm-window affinity recorded by traffic.
+	 */
+	clearPin(provider: string, sessionId: string): void;
+	/**
+	 * Select one stored account as the default credential for `provider`.
+	 *
+	 * When load balancing is disabled, this records a provider-global choice that
+	 * outlives individual sessions. When load balancing is enabled, an explicit
+	 * choice requires `options.sessionId` and pins that session.
+	 */
+	selectProviderCredential(provider: string, credentialId: number, options?: { sessionId?: string }): boolean;
+	/**
+	 * Durable row ID of the chosen provider-global account, or undefined when
+	 * load balancing is enabled or no account has been chosen.
+	 */
+	selectedProviderCredentialId(provider: string): number | undefined;
+	/**
+	 * Clear the chosen account for `provider`. When load balancing is enabled,
+	 * optionally clears `options.sessionId`'s pin.
+	 */
+	clearProviderSelection(provider: string, options?: { sessionId?: string }): void;
+	/**
+	 * Report routing diagnostics for `provider` in `sessionId`.
+	 */
+	routing(provider: string, sessionId: string | undefined): SessionCredentialRouting | undefined;
 	/**
 	 * Copy stored credential affinities from one live session to another.
 	 *
@@ -1218,6 +1373,8 @@ export interface SessionsApi {
 	 * headroom, before considering a model/provider fallback.
 	 */
 	release(provider: string, sessionId: string): boolean;
+	/** Whether account load balancing is enabled. */
+	isLoadBalancingEnabled(): boolean;
 }
 
 /** Usage reporting, observation, and provider configuration. */
@@ -1244,6 +1401,18 @@ export interface UsageApi {
 	 * store has no durable history (e.g. a broker-backed remote store).
 	 */
 	history(query?: UsageHistoryQuery): UsageHistoryEntry[];
+	/**
+	 * Record one observed provider request cost for later local usage aggregation.
+	 *
+	 * Preserves cost-only history semantics without fabricating token counts or
+	 * model identity. Returns false when cost is non-positive/non-finite or when
+	 * no credential is observed/store cost recording is unavailable.
+	 */
+	recordCost(
+		provider: Provider,
+		costUsd: number,
+		options?: { sessionId?: string; recordedAt?: number; baseUrl?: string },
+	): boolean;
 	/**
 	 * Forward one completed request's usage to the store's observer hook.
 	 * Broker-backed stores batch these into per-install reports so the broker
@@ -1373,6 +1542,11 @@ export interface LimitsApi {
 		apiKey: string,
 		options?: InvalidateCredentialMatchingOptions,
 	): Promise<boolean>;
+	/**
+	 * Subscribe to withheld-quota notices (quota exhausted, siblings idle, balancing off).
+	 * Returns an unsubscribe handle. Listener faults are isolated like every other notice here.
+	 */
+	onUsageLimitWithheld(listener: (event: UsageLimitWithheldEvent) => void | Promise<void>): () => void;
 }
 
 /** Saved reset-credit listing and redemption. */
@@ -1402,4 +1576,15 @@ export interface BlocksApi {
 	delete(credentialId: number, providerKey: string, blockScope: string): void;
 	/** Delete all persisted blocks for a credential. */
 	deleteAll(credentialId: number): void;
+	/** Returns block expiry timestamp for a credential, checking unscoped and scoped blocks. */
+	blockedUntil(
+		provider: string,
+		providerKey: string,
+		credentialIndex: number,
+		blockScopeOrScopes?: string | readonly string[],
+	): number | undefined;
+	/**
+	 * Lift any temporary backoff blocks on one credential across all provider types and scopes.
+	 */
+	clearAll(provider: string, credentialId: number): void;
 }
