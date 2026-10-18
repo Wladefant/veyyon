@@ -38,7 +38,6 @@ import {
 	type CompactionResult,
 	calculateContextTokens,
 	compactionContextTokens,
-	resolveCompactionBoundaryIndex,
 	type SessionMessageEntry,
 	type ShakeConfig,
 	shouldCompact,
@@ -100,15 +99,11 @@ import { OperatorNotices, stderrNoticeSink } from "@veyyon/kernel/session/operat
 import { disposeOwnedResources } from "@veyyon/kernel/session/owned-resources";
 import {
 	type BuildSessionContextOptions,
-	getEffectiveCompactionEntry,
+	compactedHistoryEnd,
+	contextCompaction,
 	type SessionContext,
 } from "@veyyon/kernel/session/session-context";
-import {
-	type CompactionEntry,
-	EPHEMERAL_MODEL_CHANGE_ROLE,
-	type NewSessionOptions,
-	type SessionEntry,
-} from "@veyyon/kernel/session/session-entries";
+import { EPHEMERAL_MODEL_CHANGE_ROLE, type NewSessionOptions } from "@veyyon/kernel/session/session-entries";
 import { cleanupEmptyMoveSession, type SessionManager } from "@veyyon/kernel/session/session-manager";
 import {
 	isAwaitingUserAnswer,
@@ -653,17 +648,6 @@ async function saveBashOriginalArtifact(
 }
 
 /**
- * The compaction the prompt is built from: the newest one the active provider
- * can read, which is the one `buildSessionContext` applies. A provider switch
- * can leave the latest entry an unreadable server-side window, and every pass
- * that treats "before the keep marker" as absent from the prompt must use this
- * entry's marker, not the latest one's, or it misreads live entries as gone.
- */
-function promptCompaction(branch: readonly SessionEntry[], model: Model | undefined): CompactionEntry | null {
-	return getEffectiveCompactionEntry(branch, model?.provider);
-}
-
-/**
  * `details` with the text the queue chip shows for a queued custom message. Details that are not an
  * object are replaced, since the chip text needs a record to ride on.
  */
@@ -777,7 +761,6 @@ export class AgentSession {
 		estimateStoredContextTokens: () => this.#context.estimateStoredTokens(),
 		memoryBackendContext: preparation => collectMemoryBackendContext(this, preparation),
 		withPlanProtection: config => this.#planMode.withProtection(config),
-		promptCompaction: branch => promptCompaction(branch, this.model),
 		offloadAndApplyShakeRegions: regions => this.#rewrites.offloadAndApply(regions),
 		rebasePendingContextSnapshotAfterHistoryRewrite: () => this.#context.rebaseAfterHistoryRewrite(),
 		resetAllAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),
@@ -1536,7 +1519,7 @@ export class AgentSession {
 			settings: this.settings,
 			withPlanProtection: config => this.#planMode.withProtection(config),
 			model: () => this.model,
-			keepBoundaryId: branch => promptCompaction(branch, this.model)?.firstKeptEntryId,
+			keepBoundaryId: branch => contextCompaction(branch)?.firstKeptEntryId,
 			rebuiltMessages: () => this.buildDisplaySessionContext().messages,
 			resetAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),
 			closeCodexSessions: () => this.#providerSessions.closeCodexForHistoryRewrite(this.model),
@@ -7128,7 +7111,7 @@ export class AgentSession {
 	 */
 	#sessionSpend(): SessionSpend {
 		const branch = this.sessionManager.getBranch();
-		const boundary = resolveCompactionBoundaryIndex(branch, promptCompaction(branch, this.model)?.firstKeptEntryId);
+		const boundary = compactedHistoryEnd(branch);
 		return this.#spendLedger.total(branch, boundary, this.state.messages);
 	}
 

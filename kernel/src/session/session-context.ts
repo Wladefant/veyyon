@@ -364,18 +364,37 @@ function readBranchSettings(path: readonly SessionEntry[]): BranchSettings {
 }
 
 /**
- * Index on `path` of the first entry a context built from it can send: the keep boundary of the
- * newest compaction that is not a legacy provider-native one, or 0 when there is none. Entries
- * before it are read by the whole-history transcript, a tree view or an export, and by a context
- * whose newest compaction the active provider cannot use.
+ * The provider a context built from a branch whose settings are `settings` applies compactions for:
+ * the `provider` half of the branch's default model.
+ */
+function contextProvider(settings: BranchSettings): string | undefined {
+	return settings.models.default?.split("/")[0];
+}
+
+/**
+ * The compaction whose keep boundary a context built from `path` starts at, as
+ * {@link buildSessionContextFromPath} applies it: the newest one the branch's default model can
+ * read, or null when none can and the context sends the whole branch. The model a session runs on
+ * can differ from that default (a resume onto another model, a fallback, a temporary pick), and a
+ * pass that resolved the boundary for it walked history the prompt does not hold, reading every
+ * cold entry of it back from disk.
+ */
+export function contextCompaction(path: readonly SessionEntry[]): CompactionEntry | null {
+	return getEffectiveCompactionEntry(path, contextProvider(readBranchSettings(path)));
+}
+
+/**
+ * Index on `path` of the first entry a context built from it sends: the keep boundary of
+ * {@link contextCompaction}, or 0 when none applies. Entries before it are read by the
+ * whole-history transcript, a tree view or an export.
  */
 export function compactedHistoryEnd(path: readonly SessionEntry[]): number {
-	for (let i = path.length - 1; i >= 0; i--) {
-		const entry = path[i]!;
-		if (entry.type !== "compaction" || hasLegacyProviderNativeCompaction(entry.preserveData)) continue;
-		return resolveCompactionBoundaryIndex(path, entry.firstKeptEntryId);
-	}
-	return 0;
+	const compaction = contextCompaction(path);
+	if (compaction === null) return 0;
+	// The keep-nothing marker names no entry, and the shared reader resolves it past the NEWEST
+	// compaction. The context starts past the one it applies, which an unreadable newer one follows.
+	if (compaction.firstKeptEntryId === KEEP_NOTHING_ENTRY_ID) return path.lastIndexOf(compaction) + 1;
+	return resolveCompactionBoundaryIndex(path, compaction.firstKeptEntryId);
 }
 
 /** The summary message a compaction entry renders as, with any legacy archived history re-attached as text. */
@@ -657,7 +676,7 @@ export function buildSessionContextFromPath(
 	options?: BuildSessionContextOptions,
 ): SessionContext {
 	const settings = readBranchSettings(path);
-	const activeProvider = settings.models.default?.split("/")[0];
+	const activeProvider = contextProvider(settings);
 	const compaction = getEffectiveCompactionEntry(path, activeProvider) ?? settings.latestCompaction;
 	const transcript = options?.transcript === true;
 	const out = new ContextMessages(transcript);

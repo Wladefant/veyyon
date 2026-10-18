@@ -72,6 +72,18 @@
  * server-side windows, pins the reads of a preparation at zero, and checks that its file
  * operations still read the span back when a local pass asks for them.
  *
+ * The context a session sends starts at the keep boundary of the newest compaction the branch's
+ * default model can read. The prune passes resolved it for the model the session runs on instead,
+ * and a session resumed onto another model than the one that minted its server-side windows found
+ * no compaction that model reads: every turn walked the whole session from its first entry, and
+ * reading it back kept a 146 MiB session's history in memory for good. Moving history out of
+ * memory resolved it for the newest compaction, readable or not, so a branch whose default model
+ * reads none of its compactions had the history its context re-expands moved out again on every
+ * publish and read back on every build. The turn sweep runs on each kind of boundary a resume rests
+ * on, and the re-expansion sweep moves history out between two builds and pins the second at zero
+ * reads; `every-reader-of-the-sent-context-boundary-agrees-with-the-context-builder.test.ts` pins the
+ * boundary itself against the builder for every bundled provider.
+ *
  * A cold entry reads its line from the byte offset recorded when it was moved, and an offset that
  * stopped holding the line failed every later read-back of the entry for the life of the process: a
  * window whose appends landed after another window's recorded each offset short of its line, and
@@ -603,11 +615,23 @@ function readBackEntries(
 	return readBack;
 }
 
+/** The newest compaction of a {@link writeSession} file, and the default model its branch records. */
+interface NewestCompaction {
+	/** A server-side window this provider minted, written with no summary, instead of a local summary. */
+	windowBy?: string;
+	/** The branch's default model, recorded after the history as a `model_change`. */
+	defaultModel?: string;
+}
+
 /**
  * Write `paddingBytes` of compacted tool output, `history` after it, then a kept tail and a
  * compaction over both, and publish the file through {@link publishLines}.
  */
-async function writeSession(history: SessionEntry[], paddingBytes = 0): Promise<SessionFixture> {
+async function writeSession(
+	history: SessionEntry[],
+	paddingBytes = 0,
+	newest: NewestCompaction = {},
+): Promise<SessionFixture> {
 	let counter = 0;
 	const base = (parentId: string | null): SessionEntryBase => ({
 		type: "",
@@ -631,6 +655,9 @@ async function writeSession(history: SessionEntry[], paddingBytes = 0): Promise<
 		compacted.push(entry.id);
 		parent = entry.id;
 	}
+	if (newest.defaultModel !== undefined) {
+		parent = push({ ...base(parent), type: "model_change", model: newest.defaultModel });
+	}
 	// Large enough to move, so a load that moves the entry a compaction keeps reads it back for the context.
 	const keptId = push({
 		...base(parent),
@@ -638,8 +665,28 @@ async function writeSession(history: SessionEntry[], paddingBytes = 0): Promise<
 		message: { role: "user", content: big("kept prompt"), timestamp: 10 },
 	});
 	parent = push({ ...base(keptId), type: "message", message: assistantTurn("kept answer", 11) });
-	const summary = big("newest-compaction");
-	parent = push({ ...base(parent), type: "compaction", summary, firstKeptEntryId: keptId, tokensBefore: 100 });
+	const summary = newest.windowBy === undefined ? big("newest-compaction") : "";
+	const preserveData =
+		newest.windowBy === undefined
+			? undefined
+			: {
+					remoteCompaction: {
+						version: 1,
+						provider: newest.windowBy,
+						api: "openai-codex-responses",
+						model: "gpt-5.5",
+						window: [{ type: "compaction", encrypted_content: big("window") }],
+						compactedAt: new Date(Date.UTC(2025, 0, 1, 1)).toISOString(),
+					},
+				};
+	parent = push({
+		...base(parent),
+		type: "compaction",
+		summary,
+		firstKeptEntryId: keptId,
+		tokensBefore: 100,
+		...(preserveData === undefined ? {} : { preserveData }),
+	});
 	parent = push({
 		...base(parent),
 		type: "message",
@@ -862,6 +909,21 @@ const RESUMED_REPLY: AssistantMessage = {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.25 },
 	},
 };
+
+/**
+ * The compactions a resumed session's keep boundary rests on, each resumed onto
+ * `anthropic/claude-sonnet-4-5` ({@link resumeSession}): a summary every model reads, and a
+ * server-side window the branch's default model minted. The running model cannot read the window,
+ * and the context built from the branch still replays it, so a pass that resolved the boundary for
+ * the running model treated the whole session as live and read it back.
+ */
+const RESUMED_BOUNDARIES: { boundary: string; newest: NewestCompaction }[] = [
+	{ boundary: "a summary", newest: {} },
+	{
+		boundary: "a window the default model minted",
+		newest: { windowBy: "openai-codex", defaultModel: "openai-codex/gpt-5.5" },
+	},
+];
 
 /** The spend of a session's stats, without what names the session or measures its live context. */
 function spendOf({ sessionFile: _file, sessionId: _id, contextUsage: _context, ...spend }: SessionStats): SessionSpend {
@@ -1373,10 +1435,10 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		},
 	);
 
-	it.each(LOAD_PATHS)(
-		"runs a turn on a resumed session without reading the summarized history back ($load)",
+	it.each(LOAD_PATHS.flatMap(arm => RESUMED_BOUNDARIES.map(boundary => ({ ...arm, ...boundary }))))(
+		"runs a turn on a resumed session without reading the summarized history back ($load, $boundary)",
 		async arm => {
-			const fixture = await writeSession(spendHistory(), arm.padding);
+			const fixture = await writeSession(spendHistory(), arm.padding, arm.newest);
 			expectLoadPath(fixture.file, arm);
 			const storage = new ObservedStorage();
 			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
@@ -1396,6 +1458,32 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 				expect(inMemory()).toEqual([]);
 			} finally {
 				await close();
+			}
+		},
+	);
+
+	it.each(LOAD_PATHS)(
+		"leaves the history a context re-expands in memory when compacted history is moved out again ($load)",
+		async arm => {
+			// The branch's default model cannot read the newest window, so its context sends the whole branch.
+			const fixture = await writeSession(spendHistory(), arm.padding, {
+				windowBy: "openai-codex",
+				defaultModel: "anthropic/claude-sonnet-4-5",
+			});
+			expectLoadPath(fixture.file, arm);
+			const storage = new ObservedStorage();
+			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
+			try {
+				const context = manager.buildSessionContext().messages;
+				expect(context.length).toBeGreaterThan(fixture.compacted.length);
+				const sent = JSON.stringify(context);
+				const readsOnFirstBuild = storage.reads;
+
+				manager.coolCompactedHistory();
+				expect(JSON.stringify(manager.buildSessionContext().messages)).toBe(sent);
+				expect(storage.reads).toBe(readsOnFirstBuild);
+			} finally {
+				await manager.close();
 			}
 		},
 	);
@@ -1719,6 +1807,9 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		fs.mkdirSync(path.join(root, "blobs"));
 		const storage = new ObservedStorage();
 		const manager = SessionManager.create(root, dir, storage);
+		// The model that minted the windows is the branch's default, so its context replays the newest
+		// window and the rounds before it are compacted history.
+		manager.appendModelChange("openai-codex/gpt-5.5");
 		const appendTurns = (round: number, turns: number): string[] => {
 			const prompts: string[] = [];
 			for (let turn = 0; turn < turns; turn++) {
@@ -1772,7 +1863,9 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		appendTurns(rounds, 6);
 		const branch = manager.getBranch();
 		// The first round is compacted history, so a zero below is a preparation that left it on disk.
-		expect(coldFieldsOf(branch[0]!)).toBeDefined();
+		const firstPrompt = branch.find(entry => entry.type === "message");
+		if (firstPrompt === undefined) throw new Error("the branch recorded no message");
+		expect(coldFieldsOf(firstPrompt)).toBeDefined();
 
 		const before = storage.reads;
 		const preparation = prepareCompaction(branch, DEFAULT_COMPACTION_SETTINGS, { contextWindow: 200_000 });
