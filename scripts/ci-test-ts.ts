@@ -27,6 +27,14 @@ import {
 	sweepStaleTempDirs,
 	TEST_TEMP_DIR_PREFIXES,
 } from "../packages/utils/test/helpers/temp-dir-janitor";
+import {
+	AFFECTED_SELECTOR_ID,
+	AFFECTED_DYNAMIC_IMPORT_LOADER_FILES,
+	AFFECTED_STATIC_DEPENDENCY_POLICY,
+	inspectAffectedWorkspaceSelection,
+	type AffectedWorkspaceInspection,
+	workingTreeDrift,
+} from "./affected-workspace-tests";
 import { isCI } from "./ci-signal";
 import { ensureToolViewsGenerated } from "./ensure-tool-views";
 
@@ -42,6 +50,113 @@ type Mode =
 	| "coding-agent-runtime"
 	| "coding-agent-native"
 	| "coding-agent-heavy";
+
+export interface RunnerArguments {
+	mode: Mode;
+	dryRun: boolean;
+	onlyFailures: boolean;
+	changedSince?: string;
+	planJson: boolean;
+}
+
+const validModes: Record<Mode, true> = {
+	all: true,
+	local: true,
+	"local-ts": true,
+	workspace: true,
+	scripts: true,
+	native: true,
+	"coding-agent-singleton": true,
+	"coding-agent-ui": true,
+	"coding-agent-runtime": true,
+	"coding-agent-native": true,
+	"coding-agent-heavy": true,
+};
+
+export function parseRunnerArguments(input: readonly string[]): RunnerArguments {
+	let mode: string | undefined;
+	let changedSince: string | undefined;
+	let dryRun = false;
+	let fullOutput = false;
+	let onlyFailureOutput = false;
+	let planJson = false;
+
+	for (let index = 0; index < input.length; index++) {
+		const argument = input[index];
+		if (argument === undefined) continue;
+		if (argument === "--dry-run") {
+			dryRun = true;
+			continue;
+		}
+		if (argument === "--full") {
+			fullOutput = true;
+			continue;
+		}
+		if (argument === "--only-failures") {
+			onlyFailureOutput = true;
+			continue;
+		}
+		if (argument === "--plan-json") {
+			planJson = true;
+			continue;
+		}
+		if (argument === "--changed-since") {
+			const value = input[++index];
+			if (value === undefined || value.startsWith("--")) {
+				throw new Error("--changed-since requires a full commit SHA");
+			}
+			if (changedSince !== undefined) {
+				throw new Error("--changed-since may be supplied only once");
+			}
+			changedSince = value;
+			continue;
+		}
+		if (argument.startsWith("--changed-since=")) {
+			if (changedSince !== undefined) {
+				throw new Error("--changed-since may be supplied only once");
+			}
+			changedSince = argument.slice("--changed-since=".length);
+			continue;
+		}
+		if (argument.startsWith("--")) {
+			throw new Error(`Unknown runner option: ${argument}`);
+		}
+		if (mode !== undefined) {
+			throw new Error(`Unexpected positional argument: ${argument}`);
+		}
+		mode = argument;
+	}
+
+	const requestedMode = mode ?? "all";
+	if (!Object.hasOwn(validModes, requestedMode)) {
+		throw new Error(
+			`Unknown mode ${shellQuote(requestedMode)}. Expected one of: ${Object.keys(validModes).join(", ")}`,
+		);
+	}
+	if (changedSince !== undefined && requestedMode !== "all") {
+		throw new Error("--changed-since is supported only with the all mode");
+	}
+	if (changedSince !== undefined && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(changedSince)) {
+		throw new Error("--changed-since requires a full 40- or 64-character commit SHA");
+	}
+	if (planJson && (!dryRun || changedSince === undefined)) {
+		throw new Error("--plan-json requires --dry-run and --changed-since <sha>");
+	}
+	return {
+		mode: requestedMode as Mode,
+		dryRun,
+		onlyFailures: onlyFailureOutput || !fullOutput,
+		changedSince,
+		planJson,
+	};
+}
+
+const runnerArguments = import.meta.main ? parseRunnerArguments(process.argv.slice(2)) : parseRunnerArguments([]);
+const isDryRun = runnerArguments.dryRun;
+const requestedMode = runnerArguments.mode;
+const onlyFailures = runnerArguments.onlyFailures;
+const onlyFailuresArgs = onlyFailures ? ["--only-failures"] : [];
+const quiet = onlyFailures;
 
 type CodingAgentBucket = "singleton" | "ui" | "runtime" | "native";
 
@@ -144,38 +259,6 @@ process.on("exit", () => {
 		);
 	}
 }
-const args = process.argv.slice(2);
-const isDryRun = args.includes("--dry-run");
-const requestedMode = args.find(arg => !arg.startsWith("--")) ?? "all";
-// `--only-failures` is Bun's output filter — it hides passing tests within each
-// chunk, keeping the log terse, and is the default here (CI and the root
-// `test:ts` aggregate append it). It does NOT skip tests or share any
-// cross-process cache, so chunks are safe to run concurrently. The package-level
-// `test` script passes `--full` for verbose output (every test line); an explicit
-// `--only-failures` still wins.
-const onlyFailures = args.includes("--only-failures") || !args.includes("--full");
-const onlyFailuresArgs = onlyFailures ? ["--only-failures"] : [];
-// Quiet mode (the default) collapses each parallel chunk to a one-line pass/fail
-// progress entry and replays full stdout/stderr only for chunks that failed, so
-// the failure is never buried under thousands of passing-chunk lines. `--full`
-// opts back into inline replay of every chunk. Tied to `onlyFailures` so the
-// quiet path is whatever the verbose filter is not.
-const quiet = onlyFailures;
-
-const validModes: Record<Mode, true> = {
-	all: true,
-	local: true,
-	"local-ts": true,
-	workspace: true,
-	scripts: true,
-	native: true,
-	"coding-agent-singleton": true,
-	"coding-agent-ui": true,
-	"coding-agent-runtime": true,
-	"coding-agent-native": true,
-	"coding-agent-heavy": true,
-};
-
 // `chunkSize` splits a bucket's file list into that-many-file groups, each run as a
 // separate `bun test` child process. A fresh process per chunk resets Bun's
 // heap and reaps any dangling spawned children between groups, keeping peak RSS
@@ -532,6 +615,7 @@ export const repoScriptTests = [
 	// No source file the build reads is ignored, and no unanchored pattern names
 	// a directory that holds source.
 	"scripts/every-source-file-the-build-reads-is-in-the-repository.test.ts",
+	"scripts/affected-workspace-selection-keeps-safe-coverage.test.ts",
 	"scripts/cf-runtime-sharding.test.ts",
 ];
 
@@ -851,10 +935,14 @@ async function getCodingAgentTestPartition(): Promise<CodingAgentTestPartition> 
 	return codingAgentTestPartitionPromise;
 }
 
-async function codingAgentTestCommands(bucket: CodingAgentBucket): Promise<TestCommand[]> {
+async function codingAgentTestCommands(
+	bucket: CodingAgentBucket,
+	includeTestFile?: (testFile: string) => boolean,
+): Promise<TestCommand[]> {
 	const partition = await getCodingAgentTestPartition();
-	const testFiles = partition[bucket];
+	const testFiles = partition[bucket].filter(testFile => includeTestFile?.(testFile) ?? true);
 	if (testFiles.length === 0) {
+		if (includeTestFile) return [];
 		throw new Error(`No coding-agent ${bucket} tests matched`);
 	}
 	const plan = codingAgentBucketPlans[bucket];
@@ -1036,6 +1124,211 @@ export function applySharding(
 	return sharded;
 }
 
+export interface AllModeCommandPlan {
+	commands: TestCommand[];
+	shardConfig: ShardConfig | null;
+}
+
+export async function buildAllModeCommandPlan(
+	selectedMembers?: readonly string[],
+	shardConfig: ShardConfig | null = parseShardConfig(Bun.env),
+): Promise<AllModeCommandPlan> {
+	const selectedMemberSet = selectedMembers === undefined ? undefined : new Set(selectedMembers);
+	const includeMember = (directory: string): boolean =>
+		selectedMemberSet === undefined || selectedMemberSet.has(directory);
+	const codingAgentCommands =
+		selectedMemberSet === undefined || selectedMemberSet.has("packages/coding-agent")
+			? await commandsForCodingAgentHeavy()
+			: await commandsForCodingAgentArchitectureOnly();
+	const baseCommands = [
+		...fastWorkspacePackages.filter(includeMember).map(pkg => workspaceTestCommand(pkg, 8)),
+		...nativeAndIntegrationPackages.filter(includeMember).map(pkg => workspaceTestCommand(pkg, 4, { smol: true })),
+		...codingAgentCommands,
+		scriptTestCommand(),
+	];
+	if (!shardConfig) return { commands: baseCommands, shardConfig: null };
+
+	const shardCommands = baseCommands.map(command => {
+		if (command.cwd === "packages/catalog") {
+			return { ...command, excludedTestFiles: cloudflareCatalogSerialTestFiles };
+		}
+		if (command.cwd === "hosts/terminal/engine") {
+			return { ...command, excludedTestFiles: cloudflareEngineSerialTestFiles };
+		}
+		if (command.cwd === "packages/utils") {
+			return { ...command, excludedTestFiles: cloudflareExcludedTestFiles };
+		}
+		return command;
+	});
+	const isolatedCommands: TestCommand[] = [];
+	if (includeMember("packages/catalog")) {
+		isolatedCommands.push({
+			...workspaceTestCommand("packages/catalog", 1, {
+				env: cloudflareSerialTestEnv,
+				extraArgs: [...onlyFailuresArgs, ...cloudflareCatalogSerialTestFiles],
+			}),
+			label: "packages/catalog (isolated)",
+		});
+	}
+	if (includeMember("hosts/terminal/engine")) {
+		isolatedCommands.push({
+			...workspaceTestCommand("hosts/terminal/engine", 1, {
+				env: cloudflareSerialTestEnv,
+				extraArgs: [...onlyFailuresArgs, ...cloudflareEngineSerialTestFiles],
+				smol: true,
+			}),
+			label: "hosts/terminal/engine (isolated)",
+		});
+	}
+	return {
+		commands: await expandTestCommands([...shardCommands, ...isolatedCommands]),
+		shardConfig,
+	};
+}
+
+
+async function commandsForCodingAgentHeavy(): Promise<TestCommand[]> {
+	return [
+		...(await codingAgentTestCommands("singleton")),
+		...(await codingAgentTestCommands("ui")),
+		...(await codingAgentTestCommands("runtime")),
+		...(await codingAgentTestCommands("native")),
+	];
+}
+
+async function commandsForCodingAgentArchitectureOnly(): Promise<TestCommand[]> {
+	return [
+		...(await codingAgentTestCommands("singleton", testFile => testFile.startsWith("test/architecture/"))),
+		...(await codingAgentTestCommands("ui", testFile => testFile.startsWith("test/architecture/"))),
+		...(await codingAgentTestCommands("runtime", testFile => testFile.startsWith("test/architecture/"))),
+		...(await codingAgentTestCommands("native", testFile => testFile.startsWith("test/architecture/"))),
+	];
+}
+
+export interface AffectedPlanChunk {
+	label: string;
+	cwd: string;
+	files: string[];
+}
+
+export interface AffectedTestPlan {
+	selectorId: string;
+	mode: "affected" | "full";
+	baseSha: string;
+	headSha: string | null;
+	fallbackReason?: string;
+	changedPaths: string[];
+	selectedMembers: string[];
+	changeMembers: AffectedWorkspaceInspection["changeMembers"];
+	importEdgeCount: number;
+	importEdgeCountsByRevision: AffectedWorkspaceInspection["importEdgeCountsByRevision"];
+	dynamicImportLoaderFiles: string[];
+	selectedInventory: string[];
+	selectionHash: string;
+	dependencyPolicy: string;
+	shardConfig: ShardConfig | null;
+	commands: TestCommand[];
+	chunks: AffectedPlanChunk[];
+}
+
+async function filesForPlanCommand(command: TestCommand): Promise<string[]> {
+	const directFiles = command.command.filter(argument => isBunTestFile(path.basename(argument)));
+	if (directFiles.length > 0) return extractCommandTestFiles(command);
+	if (command.cwd === ".") return [];
+	const packageRoot = path.join(repoRoot, command.cwd);
+	return (await collectTestFiles(packageRoot, packageRoot))
+		.filter(file => !command.excludedTestFiles?.includes(file))
+		.map(file => `${command.cwd}/${file.startsWith("./") ? file.slice(2) : file}`);
+}
+
+export async function buildAffectedTestPlan(
+	inspection: AffectedWorkspaceInspection,
+	shardConfig: ShardConfig | null = parseShardConfig(Bun.env),
+): Promise<AffectedTestPlan> {
+	const excludedLocalOnlyMembers =
+		inspection.mode === "affected"
+			? inspection.selectedMembers.filter(member => localOnlyWorkspacePackages.includes(member))
+			: [];
+	const unsupportedMemberReason =
+		excludedLocalOnlyMembers.length > 0
+			? `selected member is excluded from existing all-mode buckets: ${excludedLocalOnlyMembers.join(", ")}`
+			: undefined;
+	const mode = unsupportedMemberReason === undefined ? inspection.mode : "full";
+	const fullModeMembers = [
+		...fastWorkspacePackages,
+		...nativeAndIntegrationPackages,
+		"packages/coding-agent",
+	].sort();
+	const selectedMembers =
+		mode === "full" ? fullModeMembers : [...inspection.selectedMembers].sort();
+	const fallbackReason = unsupportedMemberReason ?? inspection.fallbackReason;
+	const commandPlan = await buildAllModeCommandPlan(mode === "full" ? undefined : selectedMembers, shardConfig);
+	const chunks = await Promise.all(
+		commandPlan.commands.map(async command => ({
+			label: command.label,
+			cwd: command.cwd,
+			files: await filesForPlanCommand(command),
+		})),
+	);
+	const selectedInventory = [...new Set(chunks.flatMap(chunk => chunk.files))].sort();
+	// A selected member that ships tests but that no bucket runs is reported, never counted as covered.
+	const bucketCovered = new Set<string>([...workspaceTestPackages, "packages/coding-agent"]);
+	const unrunnableMembers: string[] = [];
+	for (const member of selectedMembers) {
+		if (bucketCovered.has(member)) continue;
+		const memberRoot = path.join(repoRoot, member);
+		if ((await collectTestFiles(memberRoot, memberRoot)).length > 0) unrunnableMembers.push(member);
+	}
+	// Every input that changes what runs is bound here, so one selection hash names one command plan.
+	// The shard index stays out (every Worker shares the hash); the shard count stays in.
+	const selectionHash = crypto
+		.createHash("sha256")
+		.update(
+			JSON.stringify({
+				selectorId: AFFECTED_SELECTOR_ID,
+				mode,
+				headSha: inspection.headSha,
+				baseSha: inspection.baseSha,
+				fallbackReason: fallbackReason ?? null,
+				changedPaths: inspection.changedPaths,
+				selectedMembers,
+				excludedLocalOnlyMembers,
+				unrunnableMembers,
+				shardCount: shardConfig?.count ?? null,
+				commands: commandPlan.commands.map(command => ({
+					label: command.label,
+					cwd: command.cwd,
+					command: command.command,
+					env: command.env ?? null,
+					excludedTestFiles: command.excludedTestFiles ?? null,
+				})),
+				selectedInventory,
+			}),
+		)
+		.digest("hex");
+	return {
+		selectorId: AFFECTED_SELECTOR_ID,
+		mode,
+		baseSha: inspection.baseSha,
+		headSha: inspection.headSha,
+		fallbackReason,
+		changedPaths: [...inspection.changedPaths],
+		selectedMembers,
+		excludedLocalOnlyMembers,
+		unrunnableMembers,
+		changeMembers: inspection.changeMembers,
+		importEdgeCount: inspection.importEdgeCount,
+		importEdgeCountsByRevision: inspection.importEdgeCountsByRevision,
+		dynamicImportLoaderFiles: [...AFFECTED_DYNAMIC_IMPORT_LOADER_FILES],
+		selectedInventory,
+		selectionHash,
+		dependencyPolicy: AFFECTED_STATIC_DEPENDENCY_POLICY,
+		shardConfig: commandPlan.shardConfig,
+		commands: commandPlan.commands,
+		chunks,
+	};
+}
+
 async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 	switch (mode) {
 		// `workspace` is packages only. It used to append its own hardcoded list of 15
@@ -1066,47 +1359,9 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 		// side effect of `workspace` carrying them, so pulling that copy out would have
 		// quietly emptied scripts from `all` as well. It names the bucket directly now.
 		case "all": {
-			const shardConfig = parseShardConfig(Bun.env);
-			const baseCommands = [
-				...(await commandsForMode("workspace")),
-				...(await commandsForMode("native")),
-				...(await commandsForMode("coding-agent-heavy")),
-				...(await commandsForMode("scripts")),
-			];
-			if (!shardConfig) {
-				return baseCommands;
-			}
-			const shardCommands = baseCommands.map(command => {
-				if (command.cwd === "packages/catalog") {
-					return { ...command, excludedTestFiles: cloudflareCatalogSerialTestFiles };
-				}
-				if (command.cwd === "hosts/terminal/engine") {
-					return { ...command, excludedTestFiles: cloudflareEngineSerialTestFiles };
-				}
-				if (command.cwd === "packages/utils") {
-					return { ...command, excludedTestFiles: cloudflareExcludedTestFiles };
-				}
-				return command;
-			});
-			const isolatedCommands = [
-				{
-					...workspaceTestCommand("packages/catalog", 1, {
-						env: cloudflareSerialTestEnv,
-						extraArgs: [...onlyFailuresArgs, ...cloudflareCatalogSerialTestFiles],
-					}),
-					label: "packages/catalog (isolated)",
-				},
-				{
-					...workspaceTestCommand("hosts/terminal/engine", 1, {
-						env: cloudflareSerialTestEnv,
-						extraArgs: [...onlyFailuresArgs, ...cloudflareEngineSerialTestFiles],
-						smol: true,
-					}),
-					label: "hosts/terminal/engine (isolated)",
-				},
-			];
-			const expandedCommands = await expandTestCommands([...shardCommands, ...isolatedCommands]);
-			return applySharding(expandedCommands, shardConfig);
+			const plan = await buildAllModeCommandPlan();
+			if (!plan.shardConfig) return plan.commands;
+			return applySharding(plan.commands, plan.shardConfig);
 		}
 		// `local-ts` is the full local TypeScript run that root `bun run test:ts`
 		// drives: every package the old `--workspaces` fan-out covered (the CI
@@ -2182,15 +2437,7 @@ export function diffRealConfigRoot(
 
 // Skipped when imported (e.g. by the runner's own unit tests), where
 // `process.argv` carries test-file paths rather than a mode/flags.
-if (import.meta.main) {
-	if (!(requestedMode in validModes)) {
-		throw new Error(
-			`Unknown mode ${shellQuote(requestedMode)}. Expected one of: ${Object.keys(validModes).join(", ")}`,
-		);
-	}
-
-	await ensureToolViewsGenerated();
-	const testCommands = await commandsForMode(requestedMode as Mode);
+async function executePlannedCommands(testCommands: TestCommand[]): Promise<void> {
 	// Outside CI, fan the independent chunk processes out across cores; CI keeps the
 	// sequential, fail-fast path so each memory-capped runner job stays bounded.
 	// Third protection layer: PROOF. Layers one and two (a sandboxed HOME for every
@@ -2228,7 +2475,7 @@ if (import.meta.main) {
 			clearInterval(runnerSampler);
 			runnerSampler = null;
 		}
-		// In `finally` on purpose: a failing or interrupted run is exactly when a
+		// In `finally` on purpose: a failing or interrupted suite is exactly when a
 		// half-finished suite is most likely to have left damage behind.
 		const ownershipAfter = scanLiveVeyyonOwnership();
 		const ownershipEvidenceAvailable = ownershipBefore.supported && ownershipAfter.supported;
@@ -2268,4 +2515,70 @@ if (import.meta.main) {
 			}
 		}
 	}
+}
+if (import.meta.main) {
+	if (!runnerArguments.planJson) await ensureToolViewsGenerated();
+	let testCommands: TestCommand[] = [];
+	if (runnerArguments.changedSince !== undefined) {
+		const inspected = await inspectAffectedWorkspaceSelection(runnerArguments.changedSince);
+		// Selection reads HEAD objects; a tracked or relevant untracked change makes that snapshot a lie about what runs.
+		const drift = await workingTreeDrift(["."], isBunTestFile);
+		const inspection =
+			drift.length === 0
+				? inspected
+				: {
+						...inspected,
+						mode: "full" as const,
+						fallbackReason: `working tree differs from HEAD: ${drift.join(", ")}`,
+					};
+		const plan = await buildAffectedTestPlan(inspection);
+		const selectionMetadata = {
+			selectorId: plan.selectorId,
+			mode: plan.mode,
+			baseSha: plan.baseSha,
+			headSha: plan.headSha,
+			fallbackReason: plan.fallbackReason ?? null,
+			changedPaths: plan.changedPaths,
+			selectedMembers: plan.selectedMembers,
+			changeMembers: plan.changeMembers,
+			importEdgeCount: plan.importEdgeCount,
+			importEdgeCountsByRevision: plan.importEdgeCountsByRevision,
+			dynamicImportLoaderFiles: plan.dynamicImportLoaderFiles,
+			selectedInventory: plan.selectedInventory,
+			selectionHash: plan.selectionHash,
+			dependencyPolicy: plan.dependencyPolicy,
+		};
+		if (runnerArguments.planJson) {
+			process.stderr.write(`CLOUDFLARE_AFFECTED_SELECTION ${JSON.stringify(selectionMetadata)}\n`);
+			const assignedCommands = plan.shardConfig
+				? shardTestCommands(plan.commands, plan.shardConfig.index, plan.shardConfig.count)
+				: plan.commands;
+			if (plan.shardConfig && assignedCommands.length === 0) {
+				throw new Error(
+					`Empty shard ${plan.shardConfig.index}/${plan.shardConfig.count} assigned (0 chunks). Full inventory of ${plan.commands.length} chunks requires non-empty shards.`,
+				);
+			}
+			const assignedChunks: AffectedPlanChunk[] = [];
+			for (const command of assignedCommands) {
+				const chunk = plan.chunks[plan.commands.indexOf(command)];
+				if (chunk) assignedChunks.push(chunk);
+			}
+			process.stdout.write(
+				`${JSON.stringify({
+					...selectionMetadata,
+					chunkInventory: plan.chunks,
+					shardConfig: plan.shardConfig,
+					assignedChunks,
+				})}\n`,
+			);
+		} else {
+			process.stdout.write(`CLOUDFLARE_AFFECTED_SELECTION ${JSON.stringify(selectionMetadata)}\n`);
+			testCommands = plan.shardConfig
+				? applySharding(plan.commands, plan.shardConfig)
+				: plan.commands;
+		}
+	} else {
+		testCommands = await commandsForMode(requestedMode);
+	}
+	if (!runnerArguments.planJson) await executePlannedCommands(testCommands);
 }
