@@ -15,7 +15,7 @@
 - `/account use` picker descriptions now fit at a terminal width of 131 columns.
 - Browser-extension relay requests keep the 10-second timeout and clear its timer when each request settles.
 - Secret inventory accepts an explicit environment map while production collection still uses `process.env` by default.
-- Status lines handle the home directory correctly when it is inside a temporary root.
+- Status-line location detection does not mark home projects as scratch when home is inside a temporary root.
 
 ### Changed
 

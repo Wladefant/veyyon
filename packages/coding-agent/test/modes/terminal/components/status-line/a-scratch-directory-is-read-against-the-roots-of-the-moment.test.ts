@@ -54,4 +54,28 @@ describe("a scratch directory is read against the roots of the moment", () => {
 		expect(classifyProjectDir(path.join(TMP_A, "second"))).toEqual({ scratch: true, relative: "second" });
 		expect(classifyProjectDir(path.join(HOME_A, "project"))).toEqual({ scratch: false, relative: null });
 	});
+
+	it("does not classify a project in the home directory as scratch when the home directory is inside a scratch root", () => {
+		const homeUnderTmp = path.join(TMP_A, "fake-home");
+		spyOn(os, "tmpdir").mockReturnValue(TMP_A);
+		spyOn(os, "homedir").mockReturnValue(homeUnderTmp);
+
+		// A project inside HOME is not scratch just because HOME sits under TMP_A (e.g. CI running in /tmp)
+		expect(classifyProjectDir(path.join(homeUnderTmp, "Projects", "app"))).toEqual({
+			scratch: false,
+			relative: null,
+		});
+
+		// But a temporary directory inside that home directory is still scratch
+		expect(classifyProjectDir(path.join(homeUnderTmp, "tmp", "scratch-app"))).toEqual({
+			scratch: true,
+			relative: "scratch-app",
+		});
+
+		// And a scratch directory directly under TMP_A (outside home) is still scratch
+		expect(classifyProjectDir(path.join(TMP_A, "other-scratch"))).toEqual({
+			scratch: true,
+			relative: "other-scratch",
+		});
+	});
 });
