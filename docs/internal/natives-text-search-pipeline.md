@@ -180,7 +180,7 @@ For a directory operand, `astGrep` and `astEdit` discover candidates through a w
 The adjacent N-API adapters expose three in-memory tree-sitter helpers:
 
 - `blockRangeAt({ code, line, lang?, path? })` returns the 1-indexed inclusive range of the outermost named node beginning on `line`. It returns `null` for an unknown language, an out-of-range or blank line, no node beginning on the line, or a resolved subtree containing a syntax error.
-- `enclosingBlockBoundaries({ code, ranges, lang?, path? })` returns sorted, unique, 1-indexed boundary lines for multi-line named nodes crossing the visible ranges. It returns `null` for an unknown language or a parse tree with syntax errors, signaling that the caller should use a lexical fallback.
+- `enclosingBlockBoundaries({ code, ranges, lang?, path? })` resolves a Promise of sorted, unique, 1-indexed boundary lines for multi-line named nodes crossing the visible ranges. It resolves `null` for an unknown language or a parse tree with syntax errors, signaling that the caller should use a lexical fallback. The parse runs on the libuv thread pool, and every call shares one retained parse tree (`veyyon_ast::with_shared_slot`), so a second window of the same source reuses the tree whichever pool thread serves it.
 - `summarizeCode(options)` produces an in-memory tree-sitter summary with canonical language and parse status, total-line and elision metadata, and source-ordered `kept`/`elided` segments. Its options control body/comment elision thresholds and breadth-first unfolding targets and limits.
 
 All six public functions are reached through the package's lazy JS wrappers. Once the addon is loaded they call N-API directly; no package-local TypeScript layer changes their contracts.

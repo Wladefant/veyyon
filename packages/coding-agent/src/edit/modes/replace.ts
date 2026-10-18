@@ -126,7 +126,7 @@ export async function executeReplaceSingle(
 		invalidateFsScanAfterWrite(absolutePath);
 	}
 
-	const diffResult = generateDiffString(normalizedContent, result.content, undefined, { path });
+	const diffResult = await generateDiffString(normalizedContent, result.content, undefined, { path });
 	const resultText =
 		result.count > 1
 			? `Successfully replaced ${result.count} occurrences in ${path}.`

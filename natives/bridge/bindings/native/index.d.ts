@@ -602,8 +602,13 @@ export declare enum Ellipsis {
  * Returns `null` when the language is unrecognized or the source fails to
  * parse / carries a syntax error (caller should fall back to a lexical scan);
  * a sorted, unique list of 1-indexed boundary lines otherwise.
+ *
+ * The parse runs on the thread pool, so a large source never holds the event
+ * loop, and every lookup borrows one retained tree
+ * ([`veyyon_ast::with_shared_slot`]): a second window of the same file, or the
+ * file an edit would produce, reuses the tree whichever pool thread asks.
  */
-export declare function enclosingBlockBoundaries(options: EnclosingBoundaryOptions): Array<number> | null
+export declare function enclosingBlockBoundaries(options: EnclosingBoundaryOptions): Promise<Array<number> | undefined | null>
 
 export interface EnclosingBoundaryOptions {
   /** Source code to inspect. */

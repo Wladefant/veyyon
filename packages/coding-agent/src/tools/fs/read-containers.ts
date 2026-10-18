@@ -157,7 +157,7 @@ export async function readArchive(
 	// an archive, and a hashline tag keyed to the archive file would invite
 	// (and fail) edits while clobbering sibling members' snapshots.
 	const raw = isRawSelector(sel);
-	const result = buildInMemoryResult(session, text, sel, {
+	const result = await buildInMemoryResult(session, text, sel, {
 		details,
 		sourcePath: resolvedArchivePath.absolutePath,
 		entityLabel: "archive entry",

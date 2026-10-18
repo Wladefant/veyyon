@@ -5,6 +5,7 @@
 ### Breaking Changes
 
 - `releaseFreeHeapPages()` returns a `Promise<boolean>` and walks the C allocator's arenas on libuv's thread pool instead of on the calling thread, where the walk held a 6 GiB session's event loop 250 to 1127 ms per call.
+- `enclosingBlockBoundaries()` returns a `Promise` and parses on libuv's thread pool instead of on the calling thread, where a 3.5 MB TypeScript source held the event loop 153 ms; every call shares one retained parse tree, so a second window of the same source answers in 4 ms on any pool thread.
 
 ### Fixed
 

@@ -171,20 +171,21 @@ function visibleSetToSpans(visible: ReadonlySet<number>): LineSpan[] {
  * Tree-sitter-backed block boundaries. For each multi-line named node whose
  * span crosses the visible window, the native side returns the boundary line
  * outside that window (closer when the opener is shown, opener when the closer
- * is shown). Returns `null` when the language is unrecognized or the source has
- * a syntax error so the caller can fall back to a lexical bracket scan.
+ * is shown). Resolves `null` when the language is unrecognized or the source has
+ * a syntax error so the caller can fall back to a lexical bracket scan. The
+ * parse runs on the native thread pool, never on the event loop.
  */
-function nativeBlockContext(
+async function nativeBlockContext(
 	fullLines: readonly string[],
 	visible: ReadonlySet<number>,
 	source: BlockContextSource,
-): Map<number, string> | null {
+): Promise<Map<number, string> | null> {
 	if (!source.path && !source.lang) return null;
 	const ranges = visibleSetToSpans(visible);
 	if (ranges.length === 0) return new Map();
-	let boundaries: number[] | null;
+	let boundaries: number[] | null | undefined;
 	try {
-		boundaries = enclosingBlockBoundaries({
+		boundaries = await enclosingBlockBoundaries({
 			code: source.text ?? fullLines.join("\n"),
 			path: source.path,
 			lang: source.lang,
@@ -194,7 +195,7 @@ function nativeBlockContext(
 		logger.debug("enclosingBlockBoundaries failed; using lexical bracket fallback", { error });
 		return null;
 	}
-	if (boundaries === null) return null;
+	if (!boundaries) return null;
 	const context = new Map<number, string>();
 	for (const lineNumber of boundaries) {
 		if (visible.has(lineNumber)) continue;
@@ -343,15 +344,15 @@ function lexicalBracketContext(fullLines: readonly string[], visible: ReadonlySe
  * boundary lines: both backends scan the whole source, and past that size
  * nothing retains the result, so the scan would be paid again on every redraw.
  */
-export function findBlockContextLines(
+export async function findBlockContextLines(
 	fullLines: readonly string[],
 	visibleInput: ReadonlySet<number> | readonly number[],
 	source: BlockContextSource = {},
-): Map<number, string> {
+): Promise<Map<number, string>> {
 	const visible = visibleInput instanceof Set ? visibleInput : new Set(visibleInput);
 	if (visible.size === 0 || hasEveryLineVisible(visible, fullLines.length)) return new Map();
 	if (exceedsScanCeiling(fullLines, source)) return new Map();
-	return nativeBlockContext(fullLines, visible, source) ?? lexicalBracketContext(fullLines, visible);
+	return (await nativeBlockContext(fullLines, visible, source)) ?? lexicalBracketContext(fullLines, visible);
 }
 
 /**
@@ -360,17 +361,17 @@ export function findBlockContextLines(
  * non-contiguous gaps. `options.lineText` lets callers substitute display text
  * (e.g. column-truncated lines) for a given line number.
  */
-export function buildLineEntriesWithBlockContext(
+export async function buildLineEntriesWithBlockContext(
 	fullLines: readonly string[],
 	visibleSpans: readonly LineSpan[],
 	source: BlockContextSource = {},
 	options: {
 		lineText?: (lineNumber: number, sourceText: string, context: boolean) => string;
 	} = {},
-): LineEntry[] {
+): Promise<LineEntry[]> {
 	const spans = normalizeLineSpans(visibleSpans, fullLines.length);
 	const visible = visibleLineNumbers(spans);
-	const context = findBlockContextLines(fullLines, visible, source);
+	const context = await findBlockContextLines(fullLines, visible, source);
 	const allLines = new Set<number>(visible);
 	for (const lineNumber of context.keys()) allLines.add(lineNumber);
 
