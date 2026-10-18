@@ -91,9 +91,23 @@ run_bwrap() {
 	if [ -d "/sys/fs/cgroup" ]; then
 		cgroup_mounts=(--dir /sys --dir /sys/fs --ro-bind-try /sys/fs/cgroup /sys/fs/cgroup)
 	fi
+	# Non-root identity. Pass --uid/--gid explicitly: bwrap.xml documents them as requiring
+	# --unshare-user. A nonzero host uid and gid map to themselves, so the bound repository keeps
+	# its host owner and nothing is chowned. A root host identity falls back to 65534.
+	# --chmod is applied as the last filesystem operation, after every mount that creates a
+	# directory under /, so the root path is 0555 and refuses writes to the sandbox user (EACCES).
+	local host_uid host_gid sandbox_uid sandbox_gid
+	host_uid="$(id -u)"
+	host_gid="$(id -g)"
+	sandbox_uid="$host_uid"
+	sandbox_gid="$host_gid"
+	if [ "$sandbox_uid" = 0 ]; then sandbox_uid=65534; fi
+	if [ "$sandbox_gid" = 0 ]; then sandbox_gid=65534; fi
+	log "Sandbox identity uid=${sandbox_uid} gid=${sandbox_gid} (host ${host_uid}:${host_gid})"
 
 	bwrap \
 		--unshare-user --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup \
+		--uid "$sandbox_uid" --gid "$sandbox_gid" \
 		--die-with-parent --new-session \
 		--ro-bind /usr /usr --ro-bind /etc /etc \
 		--symlink usr/lib /lib --symlink usr/lib64 /lib64 --symlink usr/bin /bin --symlink usr/sbin /sbin \
@@ -101,10 +115,11 @@ run_bwrap() {
 		--tmpfs /sandbox --tmpfs /run \
 		"${cgroup_mounts[@]}" \
 		"${runtime_mounts[@]}" \
-		--tmpfs /home --tmpfs /tmp \
+		--tmpfs /home --perms 1777 --tmpfs /tmp \
 		--bind "${REPO_ROOT}" "${GUEST_REPO}" \
 		"${gitdir_args[@]+"${gitdir_args[@]}"}" \
 		"${extra_mounts[@]}" \
+		--chmod 0555 / \
 		--chdir "${GUEST_REPO}" \
 		--setenv PATH /sandbox/runtime/bun:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin \
 		--setenv VEYYON_TEST_SANDBOX bwrap-userns \

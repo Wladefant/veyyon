@@ -137,6 +137,32 @@ export VEYYON_SANDBOX_REPO_ROOT="$sandbox_root/repo"
 # This proves sharding logic remotely even if native compilation encounters time or toolchain issues
 echo "Bun version inside bwrap:"
 bash scripts/test-sandbox/run.sh bun --version
+# Guest permission probe, run through the rung. It fails loud unless the guest is non-root, HOME and
+# TMPDIR accept a write, and a write to the root path is refused with EACCES. It removes only its own
+# probe file, and only when the root write was accepted.
+guest_probe_sh='set -eu
+uid="$(id -u)"
+if [ "$uid" = 0 ]; then echo "GUEST PROBE FAILED: id -u is 0" >&2; exit 1; fi
+echo "guest id: uid=$uid gid=$(id -g)"
+echo "guest caps: $(grep "^CapEff" /proc/self/status)"
+node --version >/dev/null
+gh --version >/dev/null
+bun --version >/dev/null
+echo "guest runtimes: node $(node --version) gh $(gh --version | head -n1) bun $(bun --version)"
+bun -e "$1"'
+guest_probe_js='const fs = require("node:fs");
+const fail = (message) => { console.error("GUEST PROBE FAILED: " + message); process.exit(1); };
+for (const dir of [process.env.HOME, process.env.TMPDIR]) {
+  const file = dir + "/.guest-probe-" + process.pid;
+  try { fs.writeFileSync(file, "ok"); fs.rmSync(file); } catch (error) { fail("cannot write " + dir + ": " + error.code); }
+}
+const rootFile = "/.guest-probe-root-" + process.pid;
+let rootWritten = false;
+try { fs.writeFileSync(rootFile, "x"); rootWritten = true; } catch (error) { if (error.code !== "EACCES") fail("root write expected EACCES, got " + error.code); }
+if (rootWritten) { fs.rmSync(rootFile, { force: true }); fail("root path accepted a write: " + rootFile); }
+console.log("GUEST PROBE OK: root write refused with EACCES");'
+echo "Guest permission probe inside bwrap..."
+bash scripts/test-sandbox/run.sh /bin/sh -c "$guest_probe_sh" _ "$guest_probe_js" || { echo "FATAL: guest permission probe failed" >&2; exit 1; }
 
 echo "Running pure sharding helper regression suite inside sandbox before native build..."
 bash scripts/test-sandbox/run.sh bun test ./scripts/cf-runtime-sharding.test.ts
