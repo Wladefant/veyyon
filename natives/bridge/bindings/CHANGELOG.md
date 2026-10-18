@@ -11,11 +11,14 @@
 
 - `fuzzyFind` reads the scan cache in place and copies a path only while it ranks among the best `maxResults`, so a cached lookup over a 612,000-entry tree answers in 17 ms instead of 1.4 s for an empty query and in 67 ms instead of 104 ms for `zq`, and peaks at 85 MB instead of 380 MB.
 - `fuzzyFind` scores a name without copying it and rejects an ASCII name that lacks the query's characters in one byte scan, so a cached lookup over a 612,000-entry tree answers in 17 ms instead of 68 ms for `zq` and in 31 ms instead of 190 ms for `lib/zq`.
+- `fuzzyFind`, `glob` and AST file discovery share one walk per root and walk options while it runs instead of each starting its own, so the three lookups `@` completion issues while `@zqx` is typed over a 612,000-entry tree peak at 86 MB instead of 254 MB and finish in 500 ms instead of 630 ms.
 
 ### Fixed
 
 - Loading the addon caps glibc's malloc arenas at eight unless `MALLOC_ARENA_MAX` or `glibc.malloc.arena_max` sets a limit, so 48 shell commands, 32 searches and 16 globs at once peak at 311 MiB RSS instead of 488 MiB and settle at 187 MiB instead of 335 MiB after the idle trim.
 - The scan cache drops every scan past its TTL on the next cached walk and on `releaseFreeHeapPages()`, instead of keeping it until a scan of the same root replaced it, so a session that completed one `@` file mention over a 510,000-entry tree settles at 123 MB of anonymous memory after the idle trim instead of 201 MB.
+- A cached scan's TTL counts from when its walk finished instead of when it began, so a tree whose walk outlasts the TTL is served from the cache, and a repeated lookup answers in 19 ms instead of walking again for 500 ms.
+- A walk that began before `invalidateFsScanCache()` is neither cached nor shared after it, so a file written while a tree was being walked appears in the next lookup instead of after the TTL.
 - Block-boundary lookups and code summaries parse a PHP file that leaves PHP for HTML with `?>` instead of failing it as a syntax error, which cuts a 191KB plugin source from 767ms to 18ms and gives such a file tree-sitter block context and a structural summary.
 
 ## [1.5.6] - 2026-10-13

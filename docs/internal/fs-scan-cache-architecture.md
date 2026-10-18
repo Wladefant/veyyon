@@ -83,10 +83,14 @@ Global policy (environment-overridable):
 Behavior (`get_or_scan`, `collect_entries_filtered` and `collect_entries_shared`, internal to `cache.rs`):
 
 - if TTL is `0`: bypass cache entirely, always fresh scan (`cache_age_ms = 0`)
+- the TTL counts from the moment a walk finishes (`CacheEntry::stored_at`), so a walk that takes longer than the TTL is still served for one TTL after it lands
 - on cache hit within TTL: `get_or_scan` returns a clone of every cached entry, `collect_entries_filtered` a clone of each accepted entry, and `collect_entries_shared` the cache entry's own `Arc<Vec<CollectedEntry>>`, each with a non-zero `cache_age_ms`
-- on expired hit or miss: drop every expired entry (`release_expired_scans`), scan fresh, store, return with `cache_age_ms = 0`
+- on expired hit or miss, all three go through `cached_entries`, which runs at most one walk per key at a time (`FLIGHTS`):
+  - if a walk of the same key is running and no invalidation has landed since it began, the request waits for it and returns its scan; while waiting it calls its own heartbeat every `JOIN_POLL` (10 ms), so a cancelled request stops waiting and the walk continues for the others
+  - otherwise the request leads: drop every expired entry (`release_expired_scans`), walk, store, return with `cache_age_ms = 0`
+  - a walk that fails, is cancelled or panics stores nothing, and each request waiting on it starts over, one of them leading a new walk
 - a caller holding a shared scan keeps its entries allocated after an eviction or a release drops the cache's reference, until the caller drops its own
-- max entry enforcement is oldest-first eviction by `created_at` after insert (`evict_oldest`)
+- max entry enforcement is oldest-first eviction by `stored_at` after insert (`evict_oldest`)
 - the addon's `releaseFreeHeapPages()`, which the idle trim calls, drops every expired entry before `malloc_trim`, so a quiet process holds no scan past its TTL
 
 There is no public `force_rescan` API anymore; an uncached request (`.cache(false)`) simply walks fresh without touching the shared cache.
@@ -128,6 +132,8 @@ Native invalidation entrypoint:
 - `invalidateFsScanCache(path?: string)` → `cache::invalidate_path_string` / `cache::invalidate_all`
   - with `path`: remove cache entries whose root is a prefix of the target path (`target.starts_with(root)`)
   - without path: clear all scan cache entries
+- every invalidation increments `GENERATION` and holds its lock while it removes entries; a walk records the generation when it starts and stores its scan under the same lock only if the generation is unchanged
+  - a walk that an invalidation overtook is neither stored nor joined, whatever its root, because it may have listed a directory before the change; the next request for its key starts a new walk
 
 Path handling details:
 
@@ -189,4 +195,4 @@ When introducing cache use in a new scanner/search path:
 - `glob`/`fuzzyFind`/`astGrep` share scan entries only when the full `WalkOptions` key matches.
 - Every native consumer sets `skip_git=true`, so `.git` is excluded from all cached scans in practice; `should_skip_path` re-enforces it at the discovery-filter layer.
 
-*Verified against `3100447712f0` on 2026-10-18.*
+*Verified against `ab0a97f9285dbf82914fcb1af5580f717271ae7d` on 2026-10-18.*
