@@ -291,7 +291,6 @@ describe("GitLab Duo Workflow provider protocol", () => {
 	it("builds startRequest goal as a bare ChatML transcript with tool-run linkage", () => {
 		const patToken = `${"glpat"}-abcdefgh12345678ijkl`;
 		const sessionCookie = "_gitlab_session=0123456789abcdef0123456789abcdef";
-		const credentialTokens = [patToken, sessionCookie];
 
 		const replayContext: Context = {
 			systemPrompt: [`veyyon system instructions: preserve the local tool bridge. token ${patToken}`],
@@ -378,12 +377,12 @@ describe("GitLab Duo Workflow provider protocol", () => {
 		expect(payload.goal).not.toContain("call-1");
 		expect(payload.goal).not.toContain('"id":');
 		expect(payload.goal).not.toContain(" id=");
-		// Content is forwarded verbatim — the provider performs no credential redaction.
-		for (const token of credentialTokens) {
-			expect(payload.goal).toContain(token);
-		}
+		// Outbound credential redaction scrubs plausible live credentials from the rendered transcript.
+		expect(payload.goal).not.toContain(patToken);
+		expect(payload.goal).toContain("[gitlab_token_redacted]");
+		expect(payload.goal).toContain(sessionCookie);
 		expect(payload.goal).not.toContain("[REDACTED]");
-		// Bare transcript: user content is emitted verbatim (no escaping, no boundary
+		// Apart from outbound credential redaction, user content is emitted verbatim (no escaping, no boundary
 		// declaration — that was the agreed "完全裸转录" design). A ChatML-breakout
 		// attempt in content therefore appears literally inside its own turn body; it
 		// does NOT create a counterfeit leading turn because every turn the renderer
@@ -402,6 +401,18 @@ describe("GitLab Duo Workflow provider protocol", () => {
 		// record, not a tool-call syntax to emit.
 		expect(flowPrompt?.prompt_template.system).toContain("written as a plain-text log");
 		expect(flowPrompt?.prompt_template.system).toContain("never write `<ran …>`");
+	});
+
+	it("redacts credentials from a single-turn workflow goal", () => {
+		const patToken = `${"glpat"}-abcdefgh12345678ijkl`;
+		const payload = buildGitLabDuoWorkflowStartRequest("workflow-1", model, {
+			systemPrompt: [],
+			messages: [{ role: "user", content: `Check this token: ${patToken}`, timestamp: 1 }],
+			tools: [],
+		});
+
+		expect(payload.goal).not.toContain(patToken);
+		expect(payload.goal).toContain("[gitlab_token_redacted]");
 	});
 
 	it("strips the veyyon-internal intent (i) field from replayed tool-call args", () => {
@@ -4128,6 +4139,75 @@ describe("GitLab Duo Workflow WebSocket state machine", () => {
 			{ type: "toolCall", id: "req-mcp-1", name: "read", arguments: { path: "src/index.ts" } },
 		]);
 		expect(eventTypes).toEqual(["toolcall_start", "toolcall_delta", "toolcall_end", "done"]);
+	});
+
+	it("preserves malformed MCP arguments as a diagnostic tool call", async () => {
+		const rawArgs = '{"path":"src/index.ts"} trailing';
+		const sent: string[] = [];
+		let closed = false;
+		const stream = new AssistantMessageEventStream();
+		const socket: GitLabDuoWorkflowWebSocketLike = {
+			onopen: null,
+			onmessage: null,
+			onerror: null,
+			onclose: null,
+			send(data) {
+				sent.push(data);
+			},
+			close() {
+				closed = true;
+			},
+		};
+		const output: AssistantMessage = {
+			role: "assistant",
+			content: [],
+			api: "gitlab-duo-agent",
+			provider: "gitlab-duo-agent",
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		};
+		const streamPromise = runGitLabDuoWorkflowSocket(
+			socket,
+			buildGitLabDuoWorkflowStartRequest("workflow-1", model, context),
+			{ stream, output, started: true },
+			{ apiKey: "redacted" },
+		);
+
+		socket.onopen?.(new Event("open"));
+		socket.onmessage?.(
+			new MessageEvent("message", {
+				data: JSON.stringify({
+					requestID: "req-mcp-invalid-1",
+					runMCPTool: { name: "mcp__veyyon__read", args: rawArgs },
+				}),
+			}),
+		);
+
+		await expect(streamPromise).resolves.toBe("action");
+		for await (const event of stream) {
+			void event;
+		}
+
+		expect(sent).toHaveLength(1);
+		expect(closed).toBe(false);
+		expect(output.stopReason).toBe("toolUse");
+		expect(output.content).toMatchObject([
+			{
+				type: "toolCall",
+				id: "req-mcp-invalid-1",
+				name: "read",
+				arguments: { __parseError: expect.any(String), __rawJson: rawArgs },
+			},
+		]);
 	});
 
 	it("rejects a runMCPTool action frame missing requestID instead of synthesizing one", async () => {

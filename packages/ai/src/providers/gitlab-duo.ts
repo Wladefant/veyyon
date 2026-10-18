@@ -1,174 +1,22 @@
 import { buildModel } from "@veyyon/catalog/build";
-import { resolveReasoningSelection } from "@veyyon/catalog/model-thinking";
+import { apiRouteFor } from "@veyyon/catalog/compat/behavior";
+import { resolveGitLabDuoModelIdentity } from "@veyyon/catalog/provider-models";
 import { GITLAB_SAAS_URL } from "@veyyon/catalog/provider-endpoints";
 import * as AIError from "../error";
-import { ANTHROPIC_THINKING_BUDGETS, resolveThinkingBudget } from "../reasoning-budget";
-import { mapAnthropicToolChoice } from "../stream";
+import { ANTHROPIC_THINKING, mapAnthropicToolChoice } from "../stream";
 import type { Api, Context, FetchImpl, Model, ModelSpec, SimpleStreamOptions } from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { createProviderErrorMessage } from "./error-message";
 import type { OpenAICompletionsOptions } from "./openai-completions";
 import type { OpenAIResponsesOptions } from "./openai-responses";
 import { streamAnthropic, streamOpenAICompletions, streamOpenAIResponses } from "./register-builtins";
+export { getGitLabDuoModels } from "@veyyon/catalog/provider-models";
 
 const AI_GATEWAY_URL = "https://cloud.gitlab.com";
 const ANTHROPIC_PROXY_URL = `${AI_GATEWAY_URL}/ai/v1/proxy/anthropic/`;
 const OPENAI_PROXY_URL = `${AI_GATEWAY_URL}/ai/v1/proxy/openai/v1`;
 const DIRECT_ACCESS_TTL_MS = 25 * 60 * 1000;
 
-type GitLabProvider = "anthropic" | "openai";
-type GitLabOpenAIApiType = "chat" | "responses";
-
-export type GitLabModelMapping = {
-	provider: GitLabProvider;
-	model: string;
-	openaiApiType?: GitLabOpenAIApiType;
-	name: string;
-	reasoning: boolean;
-	input: ("text" | "image")[];
-	cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
-	contextWindow: number;
-	maxTokens: number;
-};
-
-export const MODEL_MAPPINGS: Record<string, GitLabModelMapping> = {
-	"duo-chat-opus-4-6": {
-		provider: "anthropic",
-		model: "claude-opus-4-6",
-		name: "Duo Chat Opus 4.6",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 200000,
-		maxTokens: 64000,
-	},
-	"duo-chat-sonnet-4-6": {
-		provider: "anthropic",
-		model: "claude-sonnet-4-6",
-		name: "Duo Chat Sonnet 4.6",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 200000,
-		maxTokens: 64000,
-	},
-	"duo-chat-opus-4-5": {
-		provider: "anthropic",
-		model: "claude-opus-4-5-20251101",
-		name: "Duo Chat Opus 4.5",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
-		contextWindow: 200000,
-		maxTokens: 64000,
-	},
-	"duo-chat-sonnet-4-5": {
-		provider: "anthropic",
-		model: "claude-sonnet-4-5-20250929",
-		name: "Duo Chat Sonnet 4.5",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-		contextWindow: 200000,
-		maxTokens: 64000,
-	},
-	"duo-chat-haiku-4-5": {
-		provider: "anthropic",
-		model: "claude-haiku-4-5-20251001",
-		name: "Duo Chat Haiku 4.5",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
-		contextWindow: 200000,
-		maxTokens: 64000,
-	},
-	"duo-chat-gpt-5-1": {
-		provider: "openai",
-		model: "gpt-5.1-2025-11-13",
-		openaiApiType: "chat",
-		name: "Duo Chat GPT-5.1",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 2.5, output: 10, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 128000,
-		maxTokens: 16384,
-	},
-	"duo-chat-gpt-5-2": {
-		provider: "openai",
-		model: "gpt-5.2-2025-12-11",
-		openaiApiType: "chat",
-		name: "Duo Chat GPT-5.2",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 128000,
-		maxTokens: 16384,
-	},
-	"duo-chat-gpt-5-mini": {
-		provider: "openai",
-		model: "gpt-5-mini-2025-08-07",
-		openaiApiType: "chat",
-		name: "Duo Chat GPT-5 Mini",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 0.15, output: 0.6, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 128000,
-		maxTokens: 16384,
-	},
-	"duo-chat-gpt-5-codex": {
-		provider: "openai",
-		model: "gpt-5-codex",
-		openaiApiType: "responses",
-		name: "Duo Chat GPT-5 Codex",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 2.5, output: 10, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 272000,
-		maxTokens: 128000,
-	},
-	"duo-chat-gpt-5-2-codex": {
-		provider: "openai",
-		model: "gpt-5.2-codex",
-		openaiApiType: "responses",
-		name: "Duo Chat GPT-5.2 Codex",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 272000,
-		maxTokens: 128000,
-	},
-};
-
-export function getModelMapping(modelId: string): GitLabModelMapping | undefined {
-	const direct = MODEL_MAPPINGS[modelId];
-	if (direct) return direct;
-
-	// Support canonical model IDs (e.g. "gpt-5-codex", "claude-sonnet-4-5-20250929")
-	// in addition to Duo aliases (e.g. "duo-chat-gpt-5-codex").
-	return Object.values(MODEL_MAPPINGS).find(mapping => mapping.model === modelId);
-}
-
-export function getGitLabDuoModels(): Model<Api>[] {
-	return Object.entries(MODEL_MAPPINGS).map(([id, mapping]) =>
-		buildModel({
-			id,
-			name: mapping.name,
-			api:
-				mapping.provider === "anthropic"
-					? "anthropic-messages"
-					: mapping.openaiApiType === "responses"
-						? "openai-responses"
-						: "openai-completions",
-			provider: "gitlab-duo",
-			baseUrl: mapping.provider === "anthropic" ? ANTHROPIC_PROXY_URL : OPENAI_PROXY_URL,
-			reasoning: mapping.reasoning,
-			input: mapping.input.slice(),
-			cost: { ...mapping.cost },
-			contextWindow: mapping.contextWindow,
-			maxTokens: mapping.maxTokens,
-		} as ModelSpec<Api>),
-	);
-}
 
 interface DirectAccessToken {
 	token: string;
@@ -254,20 +102,23 @@ export function streamGitLabDuo(
 		try {
 			const apiKey = typeof options?.apiKey === "string" ? options.apiKey : undefined;
 			if (!apiKey || !options) {
-				// `/login` is a TUI-only slash command: it carries no `textMode: true`
-				// in the coding agent's `slash-commands/builtin-declarations.ts`, so an
-				// ACP client, a `--print` run and the model itself all cannot reach it.
-				// A provider error surfaces in every one of those channels, so the
-				// message names a command for each channel it can actually reach.
 				throw new AIError.MissingApiKeyError(
 					undefined,
 					"Missing GitLab access token, so no GitLab Duo request can be signed. Fix: set GITLAB_TOKEN in the environment, or run `veyyon auth-broker login gitlab-duo` to sign in from a terminal (`/login gitlab-duo` in an interactive veyyon session).",
 				);
 			}
 
-			const mapping = getModelMapping(model.id);
-			if (!mapping) {
+			const identity = resolveGitLabDuoModelIdentity(model.id);
+			if (!identity) {
 				throw new AIError.ConfigurationError(`Unsupported GitLab Duo model: ${model.id}`);
+			}
+			const route = apiRouteFor("gitlab-duo", model.id);
+			if (
+				route?.api !== "anthropic-messages" &&
+				route?.api !== "openai-responses" &&
+				route?.api !== "openai-completions"
+			) {
+				throw new AIError.ConfigurationError(`Missing GitLab Duo API route for model: ${model.id}`);
 			}
 
 			const directAccess = await getDirectAccessToken(apiKey, options.fetch);
@@ -276,77 +127,132 @@ export function streamGitLabDuo(
 				...options.headers,
 			};
 
-			const reasoningSelection = resolveReasoningSelection(model, {
-				effort: options.reasoning,
-				disabled: options.disableReasoning,
-			});
-			const reasoningEffort = reasoningSelection.effort;
+			// This wrapper dispatches directly to the routed provider and bypasses
+			// mapOptionsForApi(), so preserve the shared reasoning contracts here as
+			// well. Anthropic derives thinking on/off from the effort itself, so fold
+			// explicit off into a cleared effort. OpenAI routes take the flags
+			// themselves and keep the requested effort for their off/fallback handling.
+			const reasoningEffort = options.reasoning;
+			const anthropicReasoningEffort =
+				options.disableReasoning || options.forceReasoningOff ? undefined : options.reasoning;
 
-			const shared = {
-				apiKey: directAccess.token,
-				temperature: options.temperature,
-				topP: options.topP,
-				topK: options.topK,
-				minP: options.minP,
-				presencePenalty: options.presencePenalty,
-				repetitionPenalty: options.repetitionPenalty,
-				maxTokens: options.maxTokens ?? model.maxTokens ?? undefined,
-				signal: options.signal,
-				cacheRetention: options.cacheRetention,
-				headers,
-				maxRetryDelayMs: options.maxRetryDelayMs,
-				metadata: options.metadata,
-				sessionId: options.sessionId,
-				providerSessionState: options.providerSessionState,
-				onPayload: options.onPayload,
-				onResponse: options.onResponse,
-				onSseEvent: options.onSseEvent,
-				fetch: options.fetch,
-				reasoning: reasoningEffort,
-			};
 			const inner =
-				mapping.provider === "anthropic"
+				route.api === "anthropic-messages"
 					? streamAnthropic(
 							buildModel({
 								...model,
-								id: mapping.model,
+								id: identity.upstreamModelId,
 								api: "anthropic-messages",
 								baseUrl: ANTHROPIC_PROXY_URL,
 								compat: model.compatConfig,
 							} as ModelSpec<"anthropic-messages">),
 							context,
 							{
-								...shared,
+								apiKey: directAccess.token,
 								isOAuth: true,
-								thinkingEnabled: reasoningSelection.enabled,
-								thinkingBudgetTokens: reasoningEffort
-									? resolveThinkingBudget(reasoningEffort, ANTHROPIC_THINKING_BUDGETS, options.thinkingBudgets)
+								temperature: options.temperature,
+								topP: options.topP,
+								topK: options.topK,
+								minP: options.minP,
+								presencePenalty: options.presencePenalty,
+								repetitionPenalty: options.repetitionPenalty,
+								maxTokens: options.maxTokens ?? model.maxTokens ?? undefined,
+								signal: options.signal,
+								cacheRetention: options.cacheRetention,
+								headers,
+								maxRetryDelayMs: options.maxRetryDelayMs,
+								metadata: options.metadata,
+								sessionId: options.sessionId,
+								promptCacheKey: options.promptCacheKey,
+								providerSessionState: options.providerSessionState,
+								onPayload: options.onPayload,
+								onResponse: options.onResponse,
+								onSseEvent: options.onSseEvent,
+								fetch: options.fetch,
+								thinkingEnabled: Boolean(anthropicReasoningEffort) && model.reasoning,
+								thinkingBudgetTokens: anthropicReasoningEffort
+									? (options.thinkingBudgets?.[anthropicReasoningEffort] ??
+										ANTHROPIC_THINKING[anthropicReasoningEffort])
 									: undefined,
+								reasoning: anthropicReasoningEffort,
 								toolChoice: mapAnthropicToolChoice(options.toolChoice),
 							},
 						)
-					: mapping.openaiApiType === "responses"
+					: route.api === "openai-responses"
 						? streamOpenAIResponses(
 								buildModel({
 									...model,
-									id: mapping.model,
+									id: identity.upstreamModelId,
 									api: "openai-responses",
 									baseUrl: OPENAI_PROXY_URL,
 									compat: model.compatConfig,
 								} as ModelSpec<"openai-responses">),
 								context,
-								{ ...shared, toolChoice: options.toolChoice } satisfies OpenAIResponsesOptions,
+								{
+									apiKey: directAccess.token,
+									temperature: options.temperature,
+									topP: options.topP,
+									topK: options.topK,
+									minP: options.minP,
+									presencePenalty: options.presencePenalty,
+									repetitionPenalty: options.repetitionPenalty,
+									maxTokens: options.maxTokens ?? model.maxTokens ?? undefined,
+									signal: options.signal,
+									cacheRetention: options.cacheRetention,
+									headers,
+									maxRetryDelayMs: options.maxRetryDelayMs,
+									metadata: options.metadata,
+									sessionId: options.sessionId,
+									promptCacheKey: options.promptCacheKey,
+									statefulResponses: options.statefulResponses,
+									providerSessionState: options.providerSessionState,
+									onPayload: options.onPayload,
+									onResponse: options.onResponse,
+									onSseEvent: options.onSseEvent,
+									fetch: options.fetch,
+									reasoning: reasoningEffort,
+									disableReasoning: options.disableReasoning,
+									forceReasoningOff: options.forceReasoningOff,
+									toolChoice: options.toolChoice,
+								} satisfies OpenAIResponsesOptions,
 							)
 						: streamOpenAICompletions(
 								buildModel({
 									...model,
-									id: mapping.model,
+									id: identity.upstreamModelId,
 									api: "openai-completions",
 									baseUrl: OPENAI_PROXY_URL,
 									compat: model.compatConfig,
 								} as ModelSpec<"openai-completions">),
 								context,
-								{ ...shared, toolChoice: options.toolChoice } satisfies OpenAICompletionsOptions,
+								{
+									apiKey: directAccess.token,
+									temperature: options.temperature,
+									topP: options.topP,
+									topK: options.topK,
+									minP: options.minP,
+									presencePenalty: options.presencePenalty,
+									repetitionPenalty: options.repetitionPenalty,
+									maxTokens: options.maxTokens ?? model.maxTokens ?? undefined,
+									signal: options.signal,
+									cacheRetention: options.cacheRetention,
+									headers,
+									maxRetryDelayMs: options.maxRetryDelayMs,
+									metadata: options.metadata,
+									sessionId: options.sessionId,
+									promptCacheKey: options.promptCacheKey,
+									providerSessionState: options.providerSessionState,
+									onPayload: options.onPayload,
+									onResponse: options.onResponse,
+									onSseEvent: options.onSseEvent,
+									fetch: options.fetch,
+									reasoning: reasoningEffort,
+									// OpenAICompletionsOptions carries no forceReasoningOff; fold it
+									// like the azure-openai-responses mapping does.
+									disableReasoning: options.disableReasoning || options.forceReasoningOff,
+									toolChoice: options.toolChoice,
+									waitForTerminalDrain: options.waitForTerminalDrain,
+								} satisfies OpenAICompletionsOptions,
 							);
 
 			for await (const event of inner) {

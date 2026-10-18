@@ -4,6 +4,7 @@
  * copying the transcript's markers.
  */
 import { AI_PROMPTS } from "../../prompts/registry";
+import { redactSensitiveCredentials } from "../transform-messages";
 import type { AssistantMessage, Context, Message } from "../../types";
 import { normalizeSystemPrompts } from "../../utils";
 
@@ -57,9 +58,9 @@ function isGitLabDuoWorkflowChatMlGoal(context: Context): boolean {
 export function buildGitLabDuoWorkflowGoal(context: Context): string {
 	const conversation = buildGitLabDuoWorkflowConversationHistory(context.messages);
 	if (conversation.length <= 1) {
-		return extractLatestUserPrompt(context.messages);
+		return redactSensitiveCredentials(extractLatestUserPrompt(context.messages));
 	}
-	return renderGitLabDuoWorkflowChatMl(conversation);
+	return redactSensitiveCredentials(renderGitLabDuoWorkflowChatMl(conversation));
 }
 
 const GITLAB_DUO_WORKFLOW_CHATML_START = "<|im_start|>";

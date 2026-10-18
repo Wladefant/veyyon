@@ -1,15 +1,14 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import {
 	discoverGitLabDuoWorkflowRuntimeNamespace,
 	type GitLabDuoWorkflowNamespaceSelection,
 } from "@veyyon/catalog/discovery/gitlab-duo-workflow";
 import { GITLAB_SAAS_URL } from "@veyyon/catalog/provider-endpoints";
-import * as logger from "@veyyon/utils/logger";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { errorMessage, getNonBlankStringProperty, isRecord } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
-import { parseToolArgsText } from "../dialect/coercion";
 import * as AIError from "../error";
 import type {
 	AssistantMessage,
@@ -27,6 +26,7 @@ import type {
 } from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { openBoundedFirstEventBudget } from "../utils/first-event-budget";
+import { parseToolCallArguments } from "../utils/tool-call-arguments";
 import { toolWireSchema } from "../utils/schema/wire";
 import {
 	extractGitLabDuoWorkflowAction,
@@ -791,24 +791,20 @@ function mapGitLabDuoWorkflowMcpToolCall(args: Record<string, unknown>): {
 		getNonBlankStringProperty(args, "name") ??
 		"";
 	const toolName = rawName.startsWith("mcp__veyyon__") ? rawName.slice("mcp__veyyon__".length) : rawName;
-	const parsedArgs = parseGitLabDuoWorkflowMcpArguments(args.args ?? args.arguments, toolName || undefined);
+	const parsedArgs = parseGitLabDuoWorkflowMcpArguments(args.args ?? args.arguments);
 	if (toolName === "edit" && typeof parsedArgs.input === "string") {
 		return { name: "edit", arguments: { input: parsedArgs.input } };
 	}
 	return { name: toolName, arguments: parsedArgs };
 }
 
-function parseGitLabDuoWorkflowMcpArguments(value: unknown, tool?: string): Record<string, unknown> {
+function parseGitLabDuoWorkflowMcpArguments(value: unknown): Record<string, unknown> {
 	if (value === undefined) return {};
-	// Arguments arriving as text go through the same owner the streaming dialects use, so a payload that
-	// will not parse is reported instead of being flattened to "this call had no arguments".
-	if (typeof value === "string") return parseToolArgsText(value, { source: "gitlab-duo-workflow", tool });
+	if (typeof value === "string") {
+		const parsed = parseToolCallArguments(value);
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+	}
 	if (isRecord(value)) return value as Record<string, unknown>;
-	logger.warn("Tool call arguments were not an object; the tool is being called with none", {
-		source: "gitlab-duo-workflow",
-		tool,
-		received: Array.isArray(value) ? "array" : typeof value,
-	});
 	return {};
 }
 
@@ -2597,13 +2593,24 @@ function recordGitLabDuoWorkflowCheckpointEntry(
 	const contentByKey = state.checkpointAgentContentByKey ?? {};
 	const contentSignatures = state.checkpointAgentContentSignatures ?? {};
 	const previousContent = contentByKey[entry.messageKey];
-	// The signature omits the entry kind, so reasoning re-labelled as an answer (or the reverse) still matches.
-	const signature = `${turnIndex}\u0000content\u0000${entry.content}`;
-	let delta: string;
-	if (previousContent === undefined) delta = contentSignatures[signature] === true ? "" : entry.content;
-	else delta = entry.content.startsWith(previousContent) ? entry.content.slice(previousContent.length) : "";
+	const contentHash = createHash("sha256").update(entry.content).digest("hex");
+	const contentSignature = `${turnIndex}\u0000${entry.kind}\u0000${contentHash}`;
+	const contentOnlySignature = `${turnIndex}\u0000content\u0000${contentHash}`;
+	const duplicateContent =
+		previousContent === undefined &&
+		(contentSignatures[contentSignature] === true || contentSignatures[contentOnlySignature] === true);
+	const rewroteExistingContent =
+		previousContent !== undefined && !entry.content.startsWith(previousContent) && previousContent !== entry.content;
+	const delta = duplicateContent
+		? ""
+		: rewroteExistingContent
+			? ""
+			: previousContent !== undefined
+				? entry.content.slice(previousContent.length)
+				: entry.content;
 	contentByKey[entry.messageKey] = entry.content;
-	contentSignatures[signature] = true;
+	contentSignatures[contentSignature] = true;
+	contentSignatures[contentOnlySignature] = true;
 	state.checkpointAgentContentByKey = contentByKey;
 	state.checkpointAgentContentSignatures = contentSignatures;
 	syncGitLabDuoWorkflowCheckpointState(state);

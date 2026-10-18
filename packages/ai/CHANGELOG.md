@@ -4,6 +4,7 @@
 
 ### Added
 
+- Redacted credentials from GitLab Duo workflow goals and ported cache affinity contracts ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added Ollama in-band stream error recovery, prompt caching accounting, and thinking history controls ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added getProxyForUrl in proxy utilities to resolve proxy configuration per URL with bypass support ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Re-exported service tier request resolution and parsing helpers from the catalog provider model definitions ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
