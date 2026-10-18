@@ -49,6 +49,7 @@ import {
 	sendsSignature,
 	signaturePolicy,
 } from "./google-thought-signatures";
+export { SKIP_THOUGHT_SIGNATURE };
 import type {
 	Content,
 	FinishReason,

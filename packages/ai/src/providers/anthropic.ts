@@ -9,7 +9,7 @@ import { isAnthropicOAuthToken } from "@veyyon/catalog/utils";
 import { parseGitHubCopilotApiKey } from "@veyyon/catalog/wire/github-copilot";
 import { $env, $flag } from "@veyyon/utils/env";
 import { isEnoent } from "@veyyon/utils/fs-error";
-import { logger } from "@veyyon/utils/logger";
+import { logger } from "@veyyon/utils";
 import { parseJsonWithRepair, parseStreamingJsonThrottled } from "@veyyon/utils/json-parse";
 import { readSseEvents } from "@veyyon/utils/stream";
 import { NO_AUTH_SENTINEL } from "../auth-retry";
@@ -292,7 +292,7 @@ const claudeCodeAgentBetaDefaults = [
 ] as const;
 const extendedCacheTtlBeta = "extended-cache-ttl-2025-04-11";
 const fineGrainedToolStreamingBeta = "fine-grained-tool-streaming-2025-05-14";
-const interleavedThinkingBeta = "interleaved-thinking-2025-05-14";
+export const interleavedThinkingBeta = "interleaved-thinking-2025-05-14";
 const fastModeBeta = "fast-mode-2026-02-01";
 const taskBudgetBeta = "task-budgets-2026-03-13";
 const effortBeta = "effort-2025-11-24";
