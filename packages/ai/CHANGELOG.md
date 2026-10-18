@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Provider requests compress eligible bodies with gzip or Zstandard above 1 KiB and fall back per host when an encoding is rejected.
+
 ### Fixed
 
 - Codex account ranking ignores usage windows of length 0, so one account no longer takes every new session.
