@@ -1022,7 +1022,8 @@ export async function resolveBlobRefsInEntries(
 /**
  * Restore one entry read back from its session line without awaiting: the externalized payloads
  * and codec-dropped fields {@link resolveBlobRefsInEntries} restores on load. Returns how many
- * references the blob store could not answer; the blob store logs each of them.
+ * references the blob store could not answer; the blob store logs each missing blob the first time
+ * the process finds it missing.
  */
 export function restoreEntryPayloadsSync(entry: FileEntry, blobStore: BlobStore): number {
 	const lost: LostPayloads = { count: 0 };
