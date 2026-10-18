@@ -9,6 +9,7 @@
 ### Fixed
 
 - Preparing a compaction behind server-side compaction windows no longer reads the summarized history back from the session file; `CompactionPreparation.fileOps` is computed on first read.
+- Summarization requests that do not replay the session prefix (the turn-prefix summary of a split turn, a history summary without cache alignment, staged segment and merge summaries, and branch summaries) are sent with `cacheRetention: "none"`, so Anthropic no longer bills a cache write that is never read and no longer warns "prompt cache prefix changed" after each split-turn compaction.
 
 ### Removed
 

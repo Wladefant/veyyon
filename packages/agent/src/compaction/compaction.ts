@@ -35,7 +35,7 @@ import { preferredDialect } from "@veyyon/catalog/identity";
 import { clampThinkingLevelForModel } from "@veyyon/catalog/model-thinking";
 import { errorMessage, logger, prompt } from "@veyyon/utils";
 import { stripReadSelector } from "@veyyon/utils/read-selector";
-import { instrumentedCompleteSimple } from "../instrumented-complete";
+import { instrumentedCompleteSimple, type OneshotKind } from "../instrumented-complete";
 import { AGENT_PROMPTS } from "../prompts/registry";
 import type { AgentTelemetry } from "../telemetry";
 import { ThinkingLevel } from "../thinking";
@@ -983,20 +983,39 @@ function usableSummaryText(response: AssistantMessage, what: string): string {
 	return textContent;
 }
 
+/** What one summarization request is: its label in errors, its telemetry kind and its cache. */
+interface SummaryRequest {
+	/** Prefix of the error a failed request raises. */
+	what: string;
+	oneshotKind: OneshotKind;
+	/**
+	 * The context replays the live session's system prompt, tools and messages
+	 * (see `./cache-aligned-context`), so it reads the prefix the live turns cached.
+	 *
+	 * A standalone context opens with `SUMMARIZATION_SYSTEM_PROMPT` and one user
+	 * message that no later request repeats, so it is sent with
+	 * `cacheRetention: "none"`. A cache marker on it buys only the write premium
+	 * (2x for an hour-long Anthropic entry), and on the session's cache key the
+	 * write that is never read is reported as "prompt cache prefix changed".
+	 */
+	replaysSessionPrefix: boolean;
+}
+
 /**
  * One summarization request over `context`, through the session's credential
- * refresh and side-request transport, returning the usable summary text.
+ * refresh and side-request transport. Every local summarization request is sent
+ * here.
  */
-async function requestSummary(
+async function sendSummaryRequest(
 	model: Model,
 	buildContext: () => Context,
 	maxTokens: number,
 	apiKey: ApiKey,
 	signal: AbortSignal | undefined,
 	options: SummaryOptions | undefined,
-	what: string,
-): Promise<string> {
-	const response = await withAuth(
+	request: SummaryRequest,
+): Promise<AssistantMessage> {
+	return withAuth(
 		apiKey,
 		async key => {
 			// Build a fresh context inside the auth-attempt closure. A runtime
@@ -1014,21 +1033,35 @@ async function requestSummary(
 					fetch: options?.fetch,
 					sessionId: options?.sessionId,
 					promptCacheKey: options?.promptCacheKey,
+					cacheRetention: request.replaysSessionPrefix ? undefined : "none",
 					providerSessionState: options?.providerSessionState,
 					codexCompaction: localCodexCompaction(options),
 					serviceTier: options?.serviceTier,
 				},
-				{ telemetry: options?.telemetry, oneshotKind: "compaction_summary", completeImpl: options?.completeImpl },
+				{ telemetry: options?.telemetry, oneshotKind: request.oneshotKind, completeImpl: options?.completeImpl },
 			);
 			throwIfCompactionCancelled(attemptResponse);
 			if (attemptResponse.stopReason === "error") {
-				throw createSummarizationError(`${what} failed`, attemptResponse, options);
+				throw createSummarizationError(`${request.what} failed`, attemptResponse, options);
 			}
 			return attemptResponse;
 		},
 		{ signal },
 	);
-	return usableSummaryText(response, what);
+}
+
+/** A summarization request whose answer replaces history, returning the usable summary text. */
+async function requestSummary(
+	model: Model,
+	buildContext: () => Context,
+	maxTokens: number,
+	apiKey: ApiKey,
+	signal: AbortSignal | undefined,
+	options: SummaryOptions | undefined,
+	request: SummaryRequest,
+): Promise<string> {
+	const response = await sendSummaryRequest(model, buildContext, maxTokens, apiKey, signal, options, request);
+	return usableSummaryText(response, request.what);
 }
 
 /** A history summary and how many segments it was produced from. */
@@ -1176,7 +1209,7 @@ async function generateStagedSummary(
 			apiKey,
 			signal,
 			options,
-			what,
+			{ what, oneshotKind: "compaction_summary", replaysSessionPrefix: false },
 		);
 		if (key !== undefined) checkpoints?.set(key, summary);
 		return summary;
@@ -1290,14 +1323,15 @@ export async function generateSummary(
 		return staged("the single request exceeds the context window");
 	}
 
+	const sessionPrefix =
+		cacheAligned && sessionSystemPrompt && sessionMessages ? { sessionSystemPrompt, sessionMessages } : undefined;
 	try {
 		const summary = await requestSummary(
 			model,
 			() =>
-				cacheAligned && sessionSystemPrompt && sessionMessages
+				sessionPrefix
 					? buildCacheAlignedCompactionContext({
-							sessionSystemPrompt,
-							sessionMessages,
+							...sessionPrefix,
 							tools: options?.tools,
 							instruction: promptText,
 							sanitize: text => sanitizeCompactionProviderText(text, options),
@@ -1307,7 +1341,11 @@ export async function generateSummary(
 			apiKey,
 			signal,
 			options,
-			"Summarization",
+			{
+				what: "Summarization",
+				oneshotKind: "compaction_summary",
+				replaysSessionPrefix: sessionPrefix !== undefined,
+			},
 		);
 		return { summary, stages: 1 };
 	} catch (error) {
@@ -1372,7 +1410,13 @@ export async function summarizeRemoteCompactionWindow(
 		apiKey,
 		signal,
 		options,
-		"Compaction port",
+		// Without the session's own system prompt the window is replayed behind
+		// `SUMMARIZATION_SYSTEM_PROMPT`, a prefix no live turn sent.
+		{
+			what: "Compaction port",
+			oneshotKind: "compaction_summary",
+			replaysSessionPrefix: options?.sessionSystemPrompt !== undefined,
+		},
 	);
 }
 
@@ -1846,12 +1890,7 @@ export function estimateCompactionRequestTokens(
 		);
 	}
 	if (preparation.isSplitTurn && preparation.turnPrefixMessages.length > 0) {
-		const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(preparation.turnPrefixMessages);
-		const conversationText = serializeConversationForSummary(
-			transformSummarySourceMessages(llmMessages, options),
-			preferredDialect(model.id),
-		);
-		const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
+		const promptText = buildTurnPrefixPrompt(preparation.turnPrefixMessages, model, options);
 		requests.push(
 			countTokens([SUMMARIZATION_SYSTEM_PROMPT, promptText]) + summaryOutputBudget(model, reserveTokens, 0.5),
 		);
@@ -2509,6 +2548,16 @@ export async function compact(
 	};
 }
 
+/** The user turn of a turn-prefix summary request. */
+function buildTurnPrefixPrompt(messages: AgentMessage[], model: Model, options: SummaryOptions | undefined): string {
+	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(messages);
+	const conversationText = serializeConversationForSummary(
+		transformSummarySourceMessages(llmMessages, options),
+		preferredDialect(model.id),
+	);
+	return `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
+}
+
 /**
  * Generate a summary for a turn prefix (when splitting a turn).
  */
@@ -2522,49 +2571,16 @@ async function generateTurnPrefixSummary(
 ): Promise<string> {
 	// Smaller budget for a turn prefix, bounded by the window like the main summary.
 	const maxTokens = summaryOutputBudget(model, reserveTokens, 0.5);
-
-	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(messages);
-	const conversationText = serializeConversationForSummary(
-		transformSummarySourceMessages(llmMessages, options),
-		preferredDialect(model.id),
-	);
-	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
-
-	const response = await withAuth(
+	const promptText = buildTurnPrefixPrompt(messages, model, options);
+	const response = await sendSummaryRequest(
+		model,
+		() => buildCompactionProviderContext(SUMMARIZATION_SYSTEM_PROMPT, promptText, options),
+		maxTokens,
 		apiKey,
-		async key => {
-			const attemptResponse = await instrumentedCompleteSimple(
-				model,
-				buildCompactionProviderContext(SUMMARIZATION_SYSTEM_PROMPT, promptText, options),
-				{
-					maxTokens,
-					signal,
-					apiKey: key,
-					reasoning: resolveCompactionEffort(model, options?.thinkingLevel),
-					initiatorOverride: options?.initiatorOverride,
-					metadata: options?.metadata,
-					fetch: options?.fetch,
-					sessionId: options?.sessionId,
-					promptCacheKey: options?.promptCacheKey,
-					providerSessionState: options?.providerSessionState,
-					codexCompaction: localCodexCompaction(options),
-					serviceTier: options?.serviceTier,
-				},
-				{
-					telemetry: options?.telemetry,
-					oneshotKind: "compaction_turn_prefix",
-					completeImpl: options?.completeImpl,
-				},
-			);
-			throwIfCompactionCancelled(attemptResponse);
-			if (attemptResponse.stopReason === "error") {
-				throw createSummarizationError("Turn prefix summarization failed", attemptResponse, options);
-			}
-			return attemptResponse;
-		},
-		{ signal },
+		signal,
+		options,
+		{ what: "Turn prefix summarization", oneshotKind: "compaction_turn_prefix", replaysSessionPrefix: false },
 	);
-
 	return response.content
 		.filter((c): c is { type: "text"; text: string } => c.type === "text")
 		.map(c => c.text)
