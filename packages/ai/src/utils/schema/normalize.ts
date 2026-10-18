@@ -2223,3 +2223,275 @@ function resolveStrictRef(root: Record<string, unknown>, ref: string): Record<st
 	}
 	return isRecord(cursor) ? cursor : undefined;
 }
+
+/** The three JSON Schema composition keywords Cursor's catalog rejects. */
+const CURSOR_COMPOSITION_COMBINERS = ["allOf", "anyOf", "oneOf"] as const;
+type CursorCombiner = (typeof CURSOR_COMPOSITION_COMBINERS)[number];
+
+/** Keywords whose object value maps arbitrary names to subschemas. */
+const CURSOR_SCHEMA_MAP_KEYS: Record<string, true> = {
+	properties: true,
+	patternProperties: true,
+	dependencies: true,
+	dependentSchemas: true,
+	$defs: true,
+	definitions: true,
+};
+
+/**
+ * Keywords whose value is a single subschema, an array of subschemas, or a
+ * boolean-or-schema. Cursor's projection walks only these positions.
+ */
+const CURSOR_SCHEMA_VALUE_KEYS: Record<string, true> = {
+	items: true,
+	additionalItems: true,
+	unevaluatedItems: true,
+	not: true,
+	if: true,
+	// biome-ignore lint/suspicious/noThenProperty: JSON Schema subschema keyword
+	then: true,
+	else: true,
+	contains: true,
+	propertyNames: true,
+	contentSchema: true,
+	anyOf: true,
+	oneOf: true,
+	allOf: true,
+	prefixItems: true,
+};
+
+/** Keywords whose value is a boolean keyword value or an object subschema. */
+const CURSOR_BOOLEAN_OR_SCHEMA_VALUE_KEYS: Record<string, true> = {
+	additionalProperties: true,
+	unevaluatedProperties: true,
+};
+
+type CursorSchemaChildKind = "schema" | "map";
+
+/** Classify only JSON Schema-valued children; instance payloads remain opaque. */
+function classifyCursorSchemaChild(
+	key: string,
+	value: unknown,
+	insideSchemaMap: boolean,
+): CursorSchemaChildKind | undefined {
+	if (insideSchemaMap) return "schema";
+	const normalizedKey = SNAKE_TO_CAMEL_RENAMES.get(key) ?? key;
+	if (Object.hasOwn(CURSOR_SCHEMA_MAP_KEYS, normalizedKey)) return "map";
+	if (Object.hasOwn(CURSOR_SCHEMA_VALUE_KEYS, normalizedKey)) return "schema";
+	if (Object.hasOwn(CURSOR_BOOLEAN_OR_SCHEMA_VALUE_KEYS, normalizedKey) && isRecord(value)) return "schema";
+	return undefined;
+}
+
+/** True when a subtree carries a composition keyword in a schema position. */
+function containsCursorCombiner(value: unknown, insideSchemaMap: boolean, epoch: number): boolean {
+	if (Array.isArray(value)) {
+		if (!once(value, epoch)) return false;
+		return value.some(entry => containsCursorCombiner(entry, false, epoch));
+	}
+	if (!isRecord(value)) return false;
+	if (!once(value, epoch)) return false;
+	if (!insideSchemaMap) {
+		for (const combiner of CURSOR_COMPOSITION_COMBINERS) {
+			if (Array.isArray(value[combiner])) return true;
+		}
+	}
+	for (const key in value) {
+		if (!Object.hasOwn(value, key)) continue;
+		const childKind = classifyCursorSchemaChild(key, value[key], insideSchemaMap);
+		if (childKind && containsCursorCombiner(value[key], childKind === "map", epoch)) return true;
+	}
+	return false;
+}
+
+/** Fold one combiner's object-shaped branches into the node's own `properties`. */
+function mergeCursorCombinerVariants(schema: JsonObject, combiner: CursorCombiner): JsonObject {
+	const variantsRaw = schema[combiner];
+	if (!Array.isArray(variantsRaw) || variantsRaw.length === 0) return schema;
+
+	const variants: JsonObject[] = [];
+	for (const entry of variantsRaw) {
+		if (!isRecord(entry)) return schema;
+		const variantType = entry.type;
+		const hasObjectShape =
+			isRecord(entry.properties) || Array.isArray(entry.required) || Object.hasOwn(entry, "additionalProperties");
+		if (variantType === undefined && !hasObjectShape) return schema;
+		if (variantType !== undefined && variantType !== "object") return schema;
+		if (entry.properties !== undefined && !isRecord(entry.properties)) return schema;
+		if (entry.required !== undefined && !Array.isArray(entry.required)) return schema;
+		variants.push(entry);
+	}
+
+	const mergedProperties: JsonObject = {};
+	const ownProperties = isRecord(schema.properties) ? schema.properties : {};
+	for (const name in ownProperties) {
+		if (Object.hasOwn(ownProperties, name)) mergedProperties[name] = ownProperties[name];
+	}
+	for (const variant of variants) {
+		const properties = isRecord(variant.properties) ? variant.properties : {};
+		for (const name in properties) {
+			if (!Object.hasOwn(properties, name)) continue;
+			const propertySchema = properties[name];
+			const existingSchema = mergedProperties[name];
+			mergedProperties[name] =
+				existingSchema === undefined ? propertySchema : mergePropertySchemas(existingSchema, propertySchema);
+		}
+	}
+
+	const nextSchema = copySchemaWithout(schema, combiner);
+	nextSchema.type = "object";
+	nextSchema.properties = mergedProperties;
+
+	const branchRequired = variants.map(variant =>
+		Array.isArray(variant.required) ? variant.required.filter((r): r is string => typeof r === "string") : [],
+	);
+	let combinedRequired: string[];
+	if (combiner === "allOf") {
+		// allOf demands every branch, so the canonical `required` is the union.
+		const union = new Set<string>();
+		for (const required of branchRequired) {
+			for (const name of required) union.add(name);
+		}
+		combinedRequired = [...union];
+	} else {
+		// anyOf/oneOf accept any single branch, so only fields every branch requires stay.
+		let intersection: string[] | undefined;
+		for (const required of branchRequired) {
+			if (intersection === undefined) {
+				intersection = [...required];
+			} else {
+				const reqSet = new Set(required);
+				intersection = intersection.filter(r => reqSet.has(r));
+			}
+		}
+		combinedRequired = intersection ?? [];
+	}
+	const parentRequired = Array.isArray(schema.required)
+		? schema.required.filter((r): r is string => typeof r === "string")
+		: [];
+	const safeRequired = new Set<string>();
+	for (const name of combinedRequired) {
+		if (Object.hasOwn(mergedProperties, name)) safeRequired.add(name);
+	}
+	for (const name of parentRequired) {
+		if (Object.hasOwn(ownProperties, name) && Object.hasOwn(mergedProperties, name)) safeRequired.add(name);
+	}
+	const requiredInPropertyOrder: string[] = [];
+	for (const name in mergedProperties) {
+		if (Object.hasOwn(mergedProperties, name) && safeRequired.has(name)) requiredInPropertyOrder.push(name);
+	}
+	if (requiredInPropertyOrder.length > 0) {
+		nextSchema.required = requiredInPropertyOrder;
+	} else {
+		delete nextSchema.required;
+	}
+	return nextSchema;
+}
+
+/**
+ * Fold every composition keyword out of one already child-projected node while
+ * only ever widening acceptance. Object-shaped branches merge into the node's
+ * own `properties`; any combiner whose branches are not all object-shaped is
+ * dropped so the node widens to accept-all. Merging can synthesize a fresh
+ * combiner inside a shared property, so property values are re-projected until
+ * the node is combiner-free.
+ */
+function projectNodeCombinersForCursor(node: JsonObject): JsonObject {
+	let current = node;
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (const combiner of CURSOR_COMPOSITION_COMBINERS) {
+			if (!Array.isArray(current[combiner])) continue;
+			const source = current;
+			const merged = mergeCursorCombinerVariants(current, combiner);
+			if (merged !== current) {
+				current = merged;
+				const properties = current.properties;
+				if (isRecord(properties)) {
+					if (combiner !== "allOf") {
+						const sourceProperties = isRecord(source.properties) ? source.properties : {};
+						const sourceVariants = source[combiner] as JsonObject[];
+						for (const name in properties) {
+							if (!Object.hasOwn(properties, name)) continue;
+							if (Object.hasOwn(sourceProperties, name)) {
+								properties[name] = sourceProperties[name];
+								continue;
+							}
+							let widenedProperty: unknown;
+							for (const variant of sourceVariants) {
+								const variantProperties = isRecord(variant.properties) ? variant.properties : {};
+								let constraint: unknown;
+								if (Object.hasOwn(variantProperties, name)) {
+									constraint = variantProperties[name];
+								} else if (variant.additionalProperties === false) {
+									continue;
+								} else if (isRecord(variant.additionalProperties)) {
+									constraint = variant.additionalProperties;
+								} else {
+									constraint = {};
+								}
+								widenedProperty =
+									widenedProperty === undefined
+										? constraint
+										: mergePropertySchemas(widenedProperty, constraint);
+							}
+							properties[name] = widenedProperty ?? {};
+						}
+					}
+					for (const name in properties) {
+						if (Object.hasOwn(properties, name)) {
+							properties[name] = projectCursorSchema(properties[name], false);
+						}
+					}
+				}
+			} else {
+				current = copySchemaWithout(current, combiner);
+			}
+			changed = true;
+		}
+	}
+	return current;
+}
+
+function projectCursorSchema(value: unknown, insideSchemaMap: boolean): unknown {
+	if (Array.isArray(value)) {
+		if (!enter(value)) return [];
+		try {
+			return value.map(entry => projectCursorSchema(entry, false));
+		} finally {
+			exit(value);
+		}
+	}
+	if (!isRecord(value)) return value;
+	if (!enter(value)) return {};
+	try {
+		const result: JsonObject = {};
+		for (const key in value) {
+			if (!Object.hasOwn(value, key)) continue;
+			const entry = value[key];
+			// A `not` subschema is a negative constraint: widening its contents would
+			// make the negation reject a superset of the canonical schema, so drop the
+			// whole negation. Removing a restriction only broadens acceptance.
+			if (!insideSchemaMap && key === "not" && containsCursorCombiner(entry, false, epochNext())) {
+				continue;
+			}
+			const childKind = classifyCursorSchemaChild(key, entry, insideSchemaMap);
+			result[key] = childKind ? projectCursorSchema(entry, childKind === "map") : entry;
+		}
+		return insideSchemaMap ? result : projectNodeCombinersForCursor(result);
+	} finally {
+		exit(value);
+	}
+}
+
+/**
+ * Project a tool's wire schema onto the subset Cursor's MCP tool catalog
+ * accepts. Cursor rejects the entire request with a provider 400 when any
+ * advertised schema carries a composition keyword (issue #10432); this removes
+ * `anyOf`/`oneOf`/`allOf` everywhere while preserving representable guidance and
+ * only ever widening acceptance. The canonical schema used for execution-time
+ * argument validation is never mutated.
+ */
+export function sanitizeSchemaForCursor(schema: JsonObject): JsonObject {
+	return projectCursorSchema(dereferenceJsonSchema(schema), false) as JsonObject;
+}

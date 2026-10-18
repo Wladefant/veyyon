@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added sanitizeSchemaForCursor to strip schema combiners and normalize schemas for Cursor catalog compatibility ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added schema normalization for Factory Droid and Foundation Models, with shared RFC 6901 pointer resolution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added tool call id normalization, carried reasoning markers, and lazy stream idle budget resolution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added transportFetch utility and ported Anthropic wire compaction types and Google signature re-exports ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
