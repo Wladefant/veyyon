@@ -75,6 +75,28 @@ echo "Bun version: $(bun --version)"
 # Frozen dependency install
 echo "Installing dependencies from frozen lockfile..."
 bun install --frozen-lockfile
+
+# Prepare Git history for test suites comparing against baseline commits
+echo "=== Preparing Git History ==="
+is_shallow="$(git rev-parse --is-shallow-repository)"
+echo "Git shallow repository status: $is_shallow"
+if [[ "$is_shallow" == "true" ]]; then
+  echo "Shallow repository detected. Fetching --unshallow from origin with origin/main..."
+  git fetch --unshallow origin +refs/heads/main:refs/remotes/origin/main
+else
+  if ! git rev-parse --verify refs/remotes/origin/main >/dev/null 2>&1; then
+    echo "Non-shallow repository missing origin/main. Fetching origin/main..."
+    git fetch origin +refs/heads/main:refs/remotes/origin/main
+  else
+    echo "Non-shallow repository already has origin/main."
+  fi
+fi
+
+main_sha="$(git rev-parse refs/remotes/origin/main)"
+echo "Git history ready: origin/main is at $main_sha (shallow=$(git rev-parse --is-shallow-repository))"
+if git cat-file -e "81eee11283051f29967dbfc506b297d45fd375b1^{commit}" >/dev/null 2>&1; then
+  echo "Baseline commit 81eee11283051f29967dbfc506b297d45fd375b1 verified in object store."
+fi
 # Download bubblewrap from the distro without root, then expose its extracted binary.
 bwrap_tools="$repo_root/.cf-bwrap"
 mkdir -p "$bwrap_tools/packages" "$bwrap_tools/root" \
