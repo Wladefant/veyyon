@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+# Cloudflare injects the branch name from the push event:
+# https://developers.cloudflare.com/workers/ci-cd/builds/configuration/#default-variables
+if [[ "${WORKERS_CI_BRANCH:-}" != cf-ci/* ]]; then
+  echo "Skipping Cloudflare lane tests: WORKERS_CI_BRANCH is not a cf-ci/ branch"
+  exit 0
+fi
 
 # Fail-fast CI execution
 export CI=1
