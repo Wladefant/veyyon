@@ -15,17 +15,28 @@
 //! allocations stay where they are; a later allocation faults fresh zeroed
 //! pages back in. The same four searches drop to 54 MiB, in 11 ms.
 //!
-//! glibc Linux only. Elsewhere the call returns false: musl returns free pages
+//! The walk runs on libuv's thread pool. Its cost grows with the free chunks in
+//! every arena: in a 6 GiB session it held the event loop 250 to 1127 ms per
+//! call. `malloc_trim` locks one arena at a time, so a thread allocating from
+//! the arena being walked waits for that arena only.
+//!
+//! glibc Linux only. Elsewhere the call resolves false: musl returns free pages
 //! to the kernel when a chunk is freed, the macOS allocator releases emptied
 //! regions on its own, and Windows heaps decommit free pages past a threshold.
 
 use napi_derive::napi;
 
-/// Returns the free pages of every C allocator arena to the kernel. Returns
-/// true when any memory was released, and false when none was or the platform
-/// allocator has no such call.
+use crate::task;
+
+/// Returns the free pages of every C allocator arena to the kernel on libuv's
+/// thread pool. Resolves true when any memory was released, and false when
+/// none was or the platform allocator has no such call.
 #[napi]
-pub fn release_free_heap_pages() -> bool {
+pub fn release_free_heap_pages() -> task::Promise<bool> {
+	task::blocking("release_free_heap_pages", (), |_| Ok(trim_arenas()))
+}
+
+fn trim_arenas() -> bool {
 	#[cfg(all(target_os = "linux", target_env = "gnu"))]
 	{
 		// SAFETY: `malloc_trim` takes no pointers and locks each arena while it
@@ -45,7 +56,7 @@ pub fn release_free_heap_pages() -> bool {
 /// pages directly, so allocation elsewhere in the process does not move it.
 #[cfg(all(test, target_os = "linux", target_env = "gnu"))]
 mod tests {
-	use super::release_free_heap_pages;
+	use super::trim_arenas;
 
 	const BLOCK: usize = 64 * 1024;
 	const BLOCKS: usize = 512;
@@ -96,7 +107,7 @@ mod tests {
 				"freed blocks must stay resident before the release: {before} of {total} pages"
 			);
 
-			assert!(release_free_heap_pages(), "the release reported nothing released");
+			assert!(trim_arenas(), "the release reported nothing released");
 			let (after, total) = residency(&ranges);
 			assert!(
 				after * 10 <= total,

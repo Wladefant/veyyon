@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `releaseFreeHeapPages()` returns a `Promise<boolean>` and walks the C allocator's arenas on libuv's thread pool instead of on the calling thread, where the walk held a 6 GiB session's event loop 250 to 1127 ms per call.
+
 ### Fixed
 
 - Block-boundary lookups and code summaries parse a PHP file that leaves PHP for HTML with `?>` instead of failing it as a syntax error, which cuts a 191KB plugin source from 767ms to 18ms and gives such a file tree-sitter block context and a structural summary.

@@ -27,6 +27,7 @@
 - A killed child process gets SIGKILL after a 1s grace when the native addon cannot load, so a child that ignores SIGTERM no longer holds a timeout, an abort or a dispose open forever.
 - A child spawned with a timeout no longer keeps the process alive until that timeout elapses after the child has already exited.
 - `postmortem.quit` clears its 5 s stdout-drain timer when the drain finishes first.
+- `trimEngine` no longer holds the event loop while it returns the C allocator's free pages: the longest loop pause during the walk of a fragmented 1.6 GiB heap drops from 72 to 83 ms to 4.9 to 9.5 ms.
 
 ### Removed
 
