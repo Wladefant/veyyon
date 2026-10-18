@@ -62,7 +62,8 @@
  * it resumes on, a usage total that misses a moved entry, a blob resolution that reads a moved
  * entry back, an older file whose moved lines read back unmigrated, and a load whose peak still
  * holds the whole history. The read-back sweeps run once per load path (`LOAD_PATHS`), with
- * compacted padding putting the streamed arm past the threshold; the branch sweep resumes on a
+ * compacted padding putting the streamed arms past the threshold: one parses the skim of each
+ * line, the other every line, as a load does when the skim fails. The branch sweep resumes on a
  * turn off summarized history; the migration sweep loads an older file; the heap bound samples
  * the heap at every turn of the event loop while a file with a compaction every eight results
  * streams in.
@@ -151,6 +152,7 @@ import {
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { FileSessionStorage, type PinnedSessionReader } from "@veyyon/kernel/session/session-storage";
 import { registerToolResultCodecs } from "@veyyon/kernel/session/tool-result-codecs";
+import * as natives from "@veyyon/natives";
 import type { ColdHistoryHeap } from "../fixtures/cold-history-heap";
 import type { DroppedDescriptors } from "../fixtures/dropped-session-manager-descriptors";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
@@ -515,27 +517,35 @@ const OVERSIZED_TEXT = big("oversized", 520_000);
 const PADDING_CHARS = 450_000;
 
 interface LoadPath {
-	load: "whole" | "streamed";
+	load: "whole" | "streamed" | "streamed line by line";
 	/** Text of compacted tool output {@link writeSession} puts ahead of the history. */
 	padding: number;
 }
 
 /**
- * The two ways a resume reads a session file: as one string, and as a stream of reads that moves
- * compacted history out of memory as each compaction is read. The streamed arm's padding puts the
- * file past the stream threshold.
+ * The ways a resume reads a session file: as one string; as a stream that parses the skim of each
+ * line and moves compacted history out of memory as each compaction is read; and as that stream
+ * when the skim fails, parsing every line. The streamed arms' padding puts the file past the
+ * stream threshold.
  */
 const LOAD_PATHS: LoadPath[] = [
 	{ load: "whole", padding: 0 },
 	{ load: "streamed", padding: STREAM_LOAD_THRESHOLD_BYTES },
+	{ load: "streamed line by line", padding: STREAM_LOAD_THRESHOLD_BYTES },
 ];
 
-/** Fails unless a load of `file` reads it the way `arm` names. */
-function expectLoadPath(file: string, arm: LoadPath): void {
-	expect([arm.load, fs.statSync(file).size >= STREAM_LOAD_THRESHOLD_BYTES]).toEqual([
-		arm.load,
-		arm.load === "streamed",
-	]);
+/**
+ * Fails unless a load of `file` reads it the way `arm` names, and makes the loads of the test read
+ * it that way: the line-by-line arm's skim fails until the test ends.
+ */
+function useLoadPath(file: string, arm: LoadPath): void {
+	const streamed = arm.load !== "whole";
+	expect([arm.load, fs.statSync(file).size >= STREAM_LOAD_THRESHOLD_BYTES]).toEqual([arm.load, streamed]);
+	if (arm.load === "streamed line by line") {
+		vi.spyOn(natives, "skimSessionFile").mockImplementation(async () => {
+			throw new Error("skim disabled for the line-by-line arm");
+		});
+	}
 }
 
 /** Compacted tool results ahead of a history, `paddingBytes` of text in all, chained from `base`. */
@@ -1060,7 +1070,7 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		"reads back every entry kind as a fresh load of the file, and never reads the disk for the live context ($load, $shape)",
 		async arm => {
 			const fixture = await writeSession(everyKindHistory(arm.sideBranch), arm.padding);
-			expectLoadPath(fixture.file, arm);
+			useLoadPath(fixture.file, arm);
 			// Persistence moved every payload kind out of the line, so each restore path is exercised.
 			const text = fs.readFileSync(fixture.file, "utf8");
 			expect(text).not.toContain(OVERSIZED_TEXT.slice(0, 4096));
@@ -1102,7 +1112,7 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		"keeps an in-place update of a cold entry across a tail republish, and moves the rest onto the new file ($load)",
 		async arm => {
 			const fixture = await writeSession(everyKindHistory(), arm.padding);
-			expectLoadPath(fixture.file, arm);
+			useLoadPath(fixture.file, arm);
 			const storage = new ObservedStorage();
 			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
 			const original = storage.statSync(fixture.file).identity!;
@@ -1217,7 +1227,7 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		"reads the bytes it resumed from after another writer republishes the path ($load)",
 		async arm => {
 			const fixture = await writeSession(everyKindHistory(), arm.padding);
-			expectLoadPath(fixture.file, arm);
+			useLoadPath(fixture.file, arm);
 			const expected = await freshLoad(fixture);
 			const storage = new ObservedStorage();
 			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
@@ -1243,7 +1253,7 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		"reads each cold entry from where its line moved when the file is rewritten in place ($load)",
 		async arm => {
 			const fixture = await writeSession(everyKindHistory(), arm.padding);
-			expectLoadPath(fixture.file, arm);
+			useLoadPath(fixture.file, arm);
 			const expected = await freshLoad(fixture);
 			const storage = new ObservedStorage();
 			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
@@ -1311,7 +1321,7 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		"builds the context of a resumed branch that leaves the newest compaction behind ($load)",
 		async arm => {
 			const fixture = await writeSession(everyRoleHistory(), arm.padding);
-			expectLoadPath(fixture.file, arm);
+			useLoadPath(fixture.file, arm);
 			// A turn off an entry the newest compaction summarized, as a navigation back before it writes
 			// one, is the last line of the file: the branch the session resumes on.
 			fs.appendFileSync(
@@ -1378,7 +1388,7 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 			cwd: root,
 		};
 		fs.writeFileSync(file, `${[header, ...lines].map(line => JSON.stringify(line)).join("\n")}\n`);
-		expectLoadPath(file, arm);
+		useLoadPath(file, arm);
 
 		// A moved entry reads its line back as the older version wrote it, so the load moves nothing.
 		const loaded = await loadSessionFile(file, new ObservedStorage(), { coolCompactedHistory: true });
@@ -1501,7 +1511,7 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		"picks compacted message entries by their small fields without reading the session file back ($load)",
 		async arm => {
 			const fixture = await writeSession(everyRoleHistory(), arm.padding);
-			expectLoadPath(fixture.file, arm);
+			useLoadPath(fixture.file, arm);
 			const expected = await freshLoad(fixture);
 			const storage = new ObservedStorage();
 			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
@@ -1567,7 +1577,7 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		"runs a turn on a resumed session without reading the summarized history back ($load, $boundary)",
 		async arm => {
 			const fixture = await writeSession(spendHistory(), arm.padding, arm.newest);
-			expectLoadPath(fixture.file, arm);
+			useLoadPath(fixture.file, arm);
 			const storage = new ObservedStorage();
 			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
 			const compacted = fixture.compacted.map(id => manager.getEntry(id)!);
@@ -1598,7 +1608,7 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 				windowBy: "openai-codex",
 				defaultModel: "anthropic/claude-sonnet-4-5",
 			});
-			expectLoadPath(fixture.file, arm);
+			useLoadPath(fixture.file, arm);
 			const storage = new ObservedStorage();
 			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
 			try {
@@ -1620,7 +1630,7 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		"charges a goal the spend of the summarized history and leaves that history on disk ($load)",
 		async arm => {
 			const fixture = await writeSession(spendHistory(), arm.padding);
-			expectLoadPath(fixture.file, arm);
+			useLoadPath(fixture.file, arm);
 			const root = path.dirname(fixture.dir);
 			const storage = new ObservedStorage();
 			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
