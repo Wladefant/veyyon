@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import * as nodeFs from "node:fs";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -1920,6 +1921,71 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 	}
 }
 
+const GENERATED_EVAL_CACHE = "tests/evals/.cache";
+const SOURCE_TREE_SCANNER = "scripts/every-source-file-the-build-reads-is-in-the-repository.test.ts";
+
+/**
+ * The TypeScript-edit eval suite extracts its committed fixtures archive into
+ * GENERATED_EVAL_CACHE and leaves that derived tree in place. The source-tree
+ * scanner must not mistake those generated files for ignored source.
+ *
+ * This runs only at the scanner's sequential chunk boundary. The ignore and
+ * tracked-file checks make deletion fail-safe: the runner removes only this
+ * exact ignored directory when git reports no tracked paths beneath it.
+ */
+function cleanGeneratedEvalsCacheBeforeSourceScan(): void {
+	const cachePath = path.join(repoRoot, GENERATED_EVAL_CACHE);
+	if (!nodeFs.existsSync(cachePath)) {
+		process.stdout.write(
+			`[cache-cleanup] ${GENERATED_EVAL_CACHE}: absent before source scanner; nothing to remove\n`,
+		);
+		return;
+	}
+
+	const stat = nodeFs.lstatSync(cachePath);
+	if (!stat.isDirectory() || stat.isSymbolicLink()) {
+		process.stdout.write(`[cache-cleanup] ${GENERATED_EVAL_CACHE}: not a plain directory; leaving it untouched\n`);
+		return;
+	}
+
+	const ignore = spawnSync("git", ["check-ignore", "--quiet", "--", `${GENERATED_EVAL_CACHE}/`], {
+		cwd: repoRoot,
+		encoding: "utf8",
+	});
+	if (ignore.error) {
+		throw new Error(`Could not check ignore status for ${GENERATED_EVAL_CACHE}: ${ignore.error.message}`);
+	}
+	if (ignore.status === 1) {
+		process.stdout.write(`[cache-cleanup] ${GENERATED_EVAL_CACHE}: not ignored; leaving it untouched\n`);
+		return;
+	}
+	if (ignore.status !== 0) {
+		throw new Error(
+			`git check-ignore failed for ${GENERATED_EVAL_CACHE} (exit ${ignore.status}): ${ignore.stderr}`,
+		);
+	}
+
+	const tracked = spawnSync("git", ["ls-files", "-z", "--", `${GENERATED_EVAL_CACHE}/`], {
+		cwd: repoRoot,
+		encoding: "utf8",
+	});
+	if (tracked.error) {
+		throw new Error(`Could not check tracked paths under ${GENERATED_EVAL_CACHE}: ${tracked.error.message}`);
+	}
+	if (tracked.status !== 0) {
+		throw new Error(`git ls-files failed for ${GENERATED_EVAL_CACHE} (exit ${tracked.status}): ${tracked.stderr}`);
+	}
+	if (tracked.stdout.length > 0) {
+		process.stdout.write(`[cache-cleanup] ${GENERATED_EVAL_CACHE}: tracked paths exist; leaving it untouched\n`);
+		return;
+	}
+
+	process.stdout.write(
+		`[cache-cleanup] ${GENERATED_EVAL_CACHE}: removing ignored untracked eval cache before source scanner\n`,
+	);
+	nodeFs.rmSync(cachePath, { recursive: true });
+}
+
 /**
  * Run every command sequentially, preserving bounded memory in CI and
  * fail-safe environments. All failures are collected and reported together
@@ -1941,6 +2007,9 @@ export async function runTestCommandsSequentially(commands: TestCommand[]): Prom
 	for (const testCommand of commands) {
 		let outcome: ChunkOutcome;
 		try {
+			if (extractCommandTestFiles(testCommand).includes(SOURCE_TREE_SCANNER)) {
+				cleanGeneratedEvalsCacheBeforeSourceScan();
+			}
 			outcome = await runTestCommand(testCommand);
 		} catch (err) {
 			const renderedCommand = testCommand.command.map(shellQuote).join(" ");
