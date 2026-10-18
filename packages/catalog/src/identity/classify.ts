@@ -5,6 +5,8 @@
  * classification lives here, the rules that consume it stay with their domain.
  */
 
+import { bareModelId } from "./id";
+
 export type SemVer = {
 	major: number;
 	minor: number;
@@ -54,12 +56,6 @@ export interface UnknownModel {
 }
 
 export type ParsedModel = GeminiModel | AnthropicModel | OpenAIModel | UnknownModel;
-
-/** Strip a provider namespace prefix (`openai/gpt-5.4` → `gpt-5.4`). */
-export function bareModelId(modelId: string): string {
-	const p = modelId.lastIndexOf("/");
-	return p !== -1 ? modelId.slice(p + 1) : modelId;
-}
 
 export function parseKnownModel(modelId: string): ParsedModel {
 	const canonicalId = bareModelId(modelId);

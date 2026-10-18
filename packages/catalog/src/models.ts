@@ -206,6 +206,15 @@ export function getBundledModel<TApi extends Api = Api>(provider: GeneratedProvi
 	return providerModels?.get(modelId) as Model<TApi>;
 }
 
+/** The provider ids the catalog file holds, read once. The list outlives the parsed catalog. */
+function bundledProviderNameList(): readonly GeneratedProvider[] {
+	if (bundledProviderNames === undefined) {
+		const spans = parsedModels === undefined ? readCatalog().spans : null;
+		bundledProviderNames = spans === null ? Object.keys(getParsedModels()) : Array.from(spans.keys());
+	}
+	return bundledProviderNames;
+}
+
 export function getBundledProviders(): GeneratedProvider[] {
 	if (snapshotStore) {
 		const full = restoreFullRegistryFromSnapshotIfAvailable();
@@ -214,11 +223,12 @@ export function getBundledProviders(): GeneratedProvider[] {
 		}
 	}
 	// The provider list outlives the parsed catalog, so listing providers never reads the catalog again.
-	if (bundledProviderNames === undefined) {
-		const spans = parsedModels === undefined ? readCatalog().spans : null;
-		bundledProviderNames = spans === null ? Object.keys(getParsedModels()) : Array.from(spans.keys());
-	}
-	return bundledProviderNames.slice();
+	return bundledProviderNameList().slice();
+}
+
+/** Whether `provider` has bundled rows in models.json (e.g. a provider id authored in KDL). */
+export function isGeneratedProvider(provider: string): provider is GeneratedProvider {
+	return bundledProviderNameList().includes(provider);
 }
 
 export function getBundledModels(provider: GeneratedProvider): Model<Api>[] {

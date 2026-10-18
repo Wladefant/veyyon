@@ -1,492 +1,20 @@
 /**
- * Thinking metadata: declared-surface resolution and runtime field reads.
+ * Thinking metadata: runtime field-read helpers.
  *
- * The effort ladder a model exposes is EXACTLY the ladder its endpoint
- * declared (models.dev `reasoning_options`, normalized onto
- * `spec.reasoningOptions`) or an explicit hand-authored `spec.thinking`.
- * When neither exists the model carries no `thinking` at all and the picker
- * stays closed — the same contract OpenCode implements in
- * `provider/transform.ts` `reasoningVariants` (undefined options, no
- * variants). Identity-derived ladders were removed on purpose: a guessed
- * ladder offers tiers the endpoint rejects, and it silently lags every
- * upstream release.
- *
- * Resolution (`resolveModelThinking`) runs exactly once per model — from
- * `buildModel` for dynamic specs and from the catalog generator for bundled
- * entries. Identity is still consulted for WIRE facts a declared ladder does
- * not carry: the control mode (budget vs effort vs adaptive), the effort wire
- * map, and mandatory-reasoning floors. Everything below the "runtime helpers"
- * divider reads baked fields only: no id parsing, no host matching, no compat
- * detection per request.
+ * Derivation lives in the compat engine (`compat/resolve`) and runs exactly
+ * once per model — from `buildModel` for dynamic specs and from the catalog
+ * generator for bundled entries. Everything here reads baked fields only: no
+ * id parsing, no host matching, no compat detection per request.
  */
-import { canonicalizeEfforts, Effort, THINKING_EFFORTS } from "./effort";
-import { modelMatchesHost } from "./hosts";
-import {
-	bareModelId,
-	isAnthropicAdaptiveGenAtLeast,
-	type ParsedModel,
-	parseKnownModel,
-	semverGte,
-} from "./identity/classify";
-import {
-	enforcesThinkingPrefixBinding,
-	findThinkingVariantToken,
-	isGlm52ModelId,
-	isGlm52ReasoningEffortModelId,
-	isMimoModelIdOrName,
-	isMinimaxM2FamilyModelId,
-	isMinimaxM3FamilyModelId,
-	supportsAdaptiveThinkingDisplay,
-} from "./identity/family";
-import type {
-	Api,
-	CompatOf,
-	Model,
-	ModelSpec,
-	ResolvedCursorCompat,
-	ResolvedDevinCompat,
-	ResolvedOpenAICompat,
-	ResolvedOpenAIResponsesCompat,
-	ThinkingConfig,
-} from "./types";
+import { readCompatEffortMap, resolveModelPolicy } from "./compat/resolve";
+import { Effort, THINKING_EFFORTS } from "./effort";
+import type { Api, Model, ModelSpec, ThinkingConfig } from "./types";
 
 /**
  * Runtime helpers read baked metadata only, so they accept both pre-build
  * specs and built models.
  */
 type ApiModel<TApi extends Api = Api> = ModelSpec<TApi> | Model<TApi>;
-
-type EffortMap = Partial<Record<Effort, string>>;
-
-const GROQ_QWEN3_32B_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
-	[Effort.Minimal]: "default",
-	[Effort.Low]: "default",
-	[Effort.Medium]: "default",
-	[Effort.High]: "default",
-	[Effort.XHigh]: "default",
-};
-const FIREWORKS_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
-	[Effort.Minimal]: "none",
-};
-const MIMO_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
-	[Effort.Minimal]: "low",
-	[Effort.XHigh]: "high",
-};
-
-const MINIMAX_ANTHROPIC_ADAPTIVE_EFFORT_MAP: Readonly<EffortMap> = {
-	[Effort.Low]: "adaptive",
-	[Effort.Medium]: "adaptive",
-	[Effort.High]: "adaptive",
-};
-
-// ---------------------------------------------------------------------------
-// Build-time derivation (buildModel + catalog generator only)
-// ---------------------------------------------------------------------------
-
-/**
- * Resolve the canonical thinking metadata for a spec. Called exactly once per
- * model by `buildModel`, after compat resolution.
- *
- * - Non-reasoning models never carry thinking.
- * - Models that reason natively but reject the wire effort param
- *   (`compat.supportsReasoningEffort: false` on openai-responses*) carry no
- *   thinking either: `reasoning: true, thinking: undefined` IS the encoding
- *   for "thinks, but exposes no control surface".
- * - The models.dev-declared surface (`reasoningOptions`) owns the ladder when
- *   present; an explicit `spec.thinking` owns it otherwise. The wire facts
- *   (`effortMap`, `supportsDisplay`, mandatory-reasoning floors) are
- *   backfilled around the declared ladder, never in place of it.
- * - A spec with no declared surface gets NO thinking config. There is no
- *   identity inference: guessing a ladder from the model id is how the picker
- *   used to offer tiers the endpoint rejects.
- */
-/**
- * Ollama declares its effort vocabulary server-wide, not per model:
- * `reasoning.effort` accepts low|medium|high|max (plus `none` to disable) for
- * every thinking model on both the local daemon and Ollama Cloud. models.dev
- * cannot catalog a local daemon, so this host fact is declared at discovery
- * time; stale cache rows from the remap era still carry minimal/xhigh and get
- * normalized back to the wire vocabulary in fillThinkingWireDefaults.
- */
-export const OLLAMA_WIRE_EFFORTS: readonly Effort[] = [Effort.Low, Effort.Medium, Effort.High, Effort.Max];
-
-const OLLAMA_CLOUD_GLM_52_WIRE_EFFORTS: readonly Effort[] = [Effort.High, Effort.Max];
-
-function normalizeOllamaWireEfforts<TApi extends Api>(
-	spec: ModelSpec<TApi>,
-	efforts: readonly Effort[],
-): readonly Effort[] {
-	if (spec.provider !== "ollama" && spec.provider !== "ollama-cloud") return efforts;
-	// Ollama Cloud's GLM-5.2 endpoint 400s on every level except high/max.
-	if (spec.provider === "ollama-cloud" && isGlm52ModelId(spec.id)) {
-		return OLLAMA_CLOUD_GLM_52_WIRE_EFFORTS;
-	}
-	if (efforts.includes(Effort.Minimal) || efforts.includes(Effort.XHigh)) {
-		return OLLAMA_WIRE_EFFORTS;
-	}
-	return efforts;
-}
-
-/**
- * The ladder a pure budget transport can express.
- *
- * A `budget` model takes a token count, never an effort name, so no upstream
- * effort list is a wire fact about it: Veyyon's own effort→budget schedule
- * decides which tiers exist, and it has a budget for every tier below `max`.
- * `max` is left out because the Anthropic and Bedrock schedules give it the same
- * 32768 tokens as `xhigh`, which makes it a second name for the top tier rather
- * than a tier of its own: offering it puts a selection in the picker that
- * cannot change a single byte on the wire.
- */
-const BUDGET_CONTROL_EFFORTS: readonly Effort[] = [
-	Effort.Minimal,
-	Effort.Low,
-	Effort.Medium,
-	Effort.High,
-	Effort.XHigh,
-];
-
-export function resolveModelThinking<TApi extends Api>(
-	spec: ModelSpec<TApi>,
-	compat: CompatOf<TApi>,
-): ThinkingConfig | undefined {
-	if (!spec.reasoning) return undefined;
-	if (omitsWireReasoningEffort(spec.api, compat)) return undefined;
-	// A routed row's surface is owned by its collapse table: the per-effort
-	// wire ids ARE the control, and neither discovery nor identity may
-	// re-derive them.
-	if (spec.thinking?.effortRouting !== undefined) {
-		return fillThinkingWireDefaults(spec, compat, spec.thinking);
-	}
-	// Discovery-declared reasoning surfaces (models.dev `reasoning_options`)
-	// win over every derived or previously baked ladder: the endpoint stated
-	// which efforts it accepts. `noEffortControl` (empty options, or a binary
-	// toggle with no levels) means the model reasons but exposes no control,
-	// the same encoding as `reasoning: true, thinking: undefined`.
-	if (spec.reasoningOptions !== undefined) {
-		if (spec.reasoningOptions.noEffortControl === true) return undefined;
-		const discovered = spec.reasoningOptions.efforts;
-		if (discovered !== undefined && discovered.length > 0) {
-			return thinkingConfigFromEfforts(
-				spec,
-				compat,
-				normalizeOllamaWireEfforts(spec, canonicalizeEfforts(discovered)),
-			);
-		}
-	}
-	if (spec.thinking && Array.isArray(spec.thinking.efforts) && spec.thinking.efforts.length > 0) {
-		return fillThinkingWireDefaults(spec, compat, spec.thinking);
-	}
-	// Cascade/Cursor select effort only by routing to a sibling model id, so a
-	// model on those transports with no explicit routed thinking has no
-	// controllable surface: never fabricate an effort ladder from identity.
-	if ((compat as ResolvedDevinCompat | ResolvedCursorCompat | undefined)?.trustExplicitThinkingOnly === true) {
-		return undefined;
-	}
-	// A pure budget transport takes a token count and never an effort name, so a
-	// row that declares no ladder still has one: the tiers Veyyon has a budget
-	// for. This is a control-mode fact rather than identity derivation: nothing
-	// here reads the model id to decide WHICH tiers exist, and a row whose
-	// endpoint really exposes no control says so through `noEffortControl` or a
-	// transport that trusts explicit thinking only, both of which return above.
-	if (inferThinkingControlMode(spec, parseKnownModel(spec.id)) === "budget") {
-		return thinkingConfigFromEfforts(spec, compat, BUDGET_CONTROL_EFFORTS);
-	}
-	// Ollama declares its effort vocabulary host-wide (see OLLAMA_WIRE_EFFORTS)
-	// and models.dev cannot catalog a local daemon, so bare ollama specs — stale
-	// cache rows from before discovery declared the ladder — still get the host
-	// vocabulary. This is a host fact, not per-model identity derivation.
-	if (spec.reasoning === true && (spec.provider === "ollama" || spec.provider === "ollama-cloud")) {
-		return thinkingConfigFromEfforts(spec, compat, normalizeOllamaWireEfforts(spec, OLLAMA_WIRE_EFFORTS));
-	}
-	// Nothing declared: the model reasons (or not) as shipped, and no effort
-	// surface is offered. Fabricating a ladder from the model id is how the
-	// picker used to offer tiers the endpoint rejects.
-	return undefined;
-}
-
-/**
- * Backfill wire facts onto declared thinking metadata. The declared ladder
- * always stands; only the wire encoding around it (`effortMap`,
- * `supportsDisplay`, `requiresEffort`) is derived, and only when not
- * explicitly set.
- */
-function fillThinkingWireDefaults<TApi extends Api>(
-	spec: ModelSpec<TApi>,
-	compat: CompatOf<TApi>,
-	thinking: ThinkingConfig,
-): ThinkingConfig {
-	const parsed = parseKnownModel(spec.id);
-	// Canonicalize the ladder so a hand-authored `thinking.efforts` that violates
-	// the documented least->most order (or carries duplicates) still bakes into a
-	// canonical ladder. Without it, an out-of-order user ladder reaches the clamp
-	// helpers, which walk it in array order and pick the wrong effort.
-	const normalizedEfforts = normalizeOllamaWireEfforts(spec, canonicalizeEfforts(thinking.efforts));
-	const effortsChanged = !sameEffortList(normalizedEfforts, thinking.efforts);
-	const effortMap =
-		thinking.effortMap === undefined || effortsChanged
-			? inferEffortMap(spec, compat, thinking.mode, normalizedEfforts)
-			: undefined;
-	const shouldReplaceEffortMap = thinking.effortMap === undefined ? effortMap !== undefined : effortsChanged;
-	const needsDisplay =
-		thinking.supportsDisplay === undefined &&
-		(spec.api === "anthropic-messages" || spec.api === "bedrock-converse-stream") &&
-		supportsAdaptiveThinkingDisplay(spec.id);
-	const needsPrefixBinding = thinking.prefixBinding === undefined && enforcesThinkingPrefixBinding(spec.id);
-	const needsRequiresEffort = thinking.requiresEffort === undefined && impliesMandatoryReasoning(parsed, spec.id);
-	if (!effortsChanged && !shouldReplaceEffortMap && !needsDisplay && !needsPrefixBinding && !needsRequiresEffort) {
-		return thinking;
-	}
-	const filled: ThinkingConfig = { ...thinking };
-	if (effortsChanged) {
-		filled.efforts = normalizedEfforts;
-	}
-	if (shouldReplaceEffortMap) {
-		if (effortMap === undefined) {
-			delete filled.effortMap;
-		} else {
-			filled.effortMap = effortMap;
-		}
-	}
-	if (needsDisplay) {
-		filled.supportsDisplay = true;
-	}
-	if (needsPrefixBinding) {
-		filled.prefixBinding = true;
-	}
-	if (needsRequiresEffort) {
-		filled.requiresEffort = true;
-	}
-	return filled;
-}
-
-/**
- * Assemble the thinking config around a declared ladder: the control mode and
- * every wire fact (effort map, adaptive display, mandatory reasoning) derive
- * from identity + compat, so any declared ladder bakes into the same shape.
- */
-function thinkingConfigFromEfforts<TApi extends Api>(
-	spec: ModelSpec<TApi>,
-	compat: CompatOf<TApi>,
-	efforts: readonly Effort[],
-): ThinkingConfig {
-	const parsed = parseKnownModel(spec.id);
-	const config: ThinkingConfig = {
-		mode: inferThinkingControlMode(spec, parsed),
-		efforts,
-	};
-	const effortMap = inferEffortMap(spec, compat, config.mode, config.efforts);
-	if (effortMap !== undefined) {
-		config.effortMap = effortMap;
-	}
-	if (
-		(spec.api === "anthropic-messages" || spec.api === "bedrock-converse-stream") &&
-		supportsAdaptiveThinkingDisplay(spec.id)
-	) {
-		config.supportsDisplay = true;
-	}
-	if (enforcesThinkingPrefixBinding(spec.id)) {
-		config.prefixBinding = true;
-	}
-	if (impliesMandatoryReasoning(parsed, spec.id)) {
-		config.requiresEffort = true;
-	}
-	return config;
-}
-
-/**
- * True when the model reasons natively but rejects the wire `reasoning.effort`
- * param. Scoped to openai-responses* because that's the only API surface where
- * `compat.supportsReasoningEffort: false` means "omit the field entirely"
- * (xAI Grok off the `isGrokReasoningEffortCapable` allowlist: grok-build,
- * grok-4.20-0309-reasoning). openai-completions keeps its thinking config even
- * without effort support — binary thinking formats (zai/qwen) drive reasoning
- * through other request fields.
- */
-function omitsWireReasoningEffort(api: Api, compat: CompatOf<Api>): boolean {
-	if (api !== "openai-responses" && api !== "openai-codex-responses" && api !== "azure-openai-responses") {
-		return false;
-	}
-	return (compat as ResolvedOpenAIResponsesCompat | undefined)?.supportsReasoningEffort === false;
-}
-
-function inferEffortMap<TApi extends Api>(
-	spec: ModelSpec<TApi>,
-	compat: CompatOf<TApi>,
-	mode: ThinkingConfig["mode"],
-	efforts: readonly Effort[],
-): EffortMap | undefined {
-	const detected = inferDetectedEffortMap(spec, compat, mode);
-	const configured = readCompatEffortMap(compat);
-	const merged =
-		detected === undefined ? configured : configured === undefined ? detected : { ...detected, ...configured };
-	return merged === undefined ? undefined : filterEffortMapToSupportedEfforts(merged, efforts);
-}
-
-function filterEffortMapToSupportedEfforts(map: EffortMap, efforts: readonly Effort[]): EffortMap | undefined {
-	let filtered: EffortMap | undefined;
-	for (const effort of efforts) {
-		const mapped = map[effort];
-		if (mapped === undefined) continue;
-		if (filtered === undefined) filtered = {};
-		filtered[effort] = mapped;
-	}
-	return filtered;
-}
-
-function sameEffortList(left: readonly Effort[], right: readonly Effort[]): boolean {
-	if (left.length !== right.length) return false;
-	for (let index = 0; index < left.length; index++) {
-		if (left[index] !== right[index]) return false;
-	}
-	return true;
-}
-
-function isOpenAICompatReasoningApi(api: Api): boolean {
-	return api === "openai-completions" || api === "openrouter";
-}
-
-function isAnthropicMessagesGlm52ReasoningEffortModel<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
-	return (
-		spec.api === "anthropic-messages" &&
-		(spec.provider === "umans" || spec.provider === "zai") &&
-		isGlm52ReasoningEffortModelId(spec.id)
-	);
-}
-
-function isMinimaxReasoningModelOnAnthropicEndpoint<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
-	return spec.api === "anthropic-messages" && (isMinimaxM2FamilyModelId(spec.id) || isMinimaxM3FamilyModelId(spec.id));
-}
-
-function isOpenAICompatMimoReasoningEffortModel<TApi extends Api>(
-	spec: ModelSpec<TApi>,
-	compat: CompatOf<TApi>,
-): boolean {
-	if (!isOpenAICompatReasoningApi(spec.api)) return false;
-	if (!isMimoModelIdOrName(spec.id) && !isMimoModelIdOrName(spec.name ?? "")) return false;
-	const resolved = compat as ResolvedOpenAICompat | undefined;
-	return (
-		(resolved?.thinkingFormat === "openai" || resolved?.thinkingFormat === "openrouter") &&
-		resolved.supportsReasoningEffort
-	);
-}
-
-function readCompatEffortMap(compat: unknown): EffortMap | undefined {
-	if (typeof compat !== "object" || compat === null || !("reasoningEffortMap" in compat)) {
-		return undefined;
-	}
-	const map = (compat as { reasoningEffortMap?: EffortMap }).reasoningEffortMap;
-	return map && Object.keys(map).length > 0 ? map : undefined;
-}
-
-function inferDetectedEffortMap<TApi extends Api>(
-	spec: ModelSpec<TApi>,
-	compat: CompatOf<TApi>,
-	mode: ThinkingConfig["mode"],
-): EffortMap | undefined {
-	if (mode === "anthropic-adaptive") {
-		if (isMinimaxReasoningModelOnAnthropicEndpoint(spec)) {
-			return MINIMAX_ANTHROPIC_ADAPTIVE_EFFORT_MAP;
-		}
-		// Adaptive effort ladders are wire-exact (see
-		// getAnthropicAdaptiveEfforts) — no mapping needed.
-		return undefined;
-	}
-	if (!isOpenAICompatReasoningApi(spec.api)) {
-		return undefined;
-	}
-	if (spec.provider === "groq" && spec.id === "qwen/qwen3-32b") {
-		return GROQ_QWEN3_32B_REASONING_EFFORT_MAP;
-	}
-	if (isOpenAICompatMimoReasoningEffortModel(spec, compat)) {
-		return MIMO_REASONING_EFFORT_MAP;
-	}
-	// Host quirk: Fireworks rejects `minimal` (maps to `none`) on ladders
-	// that genuinely include it. Filtered to supported efforts later.
-	if (modelMatchesHost(spec, "fireworks")) {
-		return FIREWORKS_REASONING_EFFORT_MAP;
-	}
-	return undefined;
-}
-
-const OPENAI_O_SERIES_RE = /^o[134](?:$|[-:.])/i;
-
-/**
- * Reasoning-only upstreams reject disabled or omitted thinking ("Reasoning is
- * mandatory for this endpoint and cannot be disabled") — the floor is the
- * lowest effort, never off:
- * - Gemini 3.x exposes levels only; Gemini 2.5 Pro floors thinkingBudget at
- *   128 and rejects 0 (2.5 Flash/Flash-Lite keep the off switch).
- * - OpenAI o-series and MiniMax M2 are reasoning-first architectures.
- * - Thinking-variant SKUs (`*-thinking`, `*-reasoner`, `*-reasoning`) ARE the
- *   thinking checkpoint; live bare twins pair-collapse away
- *   (variant-collapse) and the collapsed entry owns off — this floor protects
- *   the orphans.
- */
-function impliesMandatoryReasoning(parsed: ParsedModel, modelId: string): boolean {
-	if (parsed.family === "gemini") {
-		if (semverGte(parsed.version, "3.0")) return true;
-		if (parsed.kind === "pro" && semverGte(parsed.version, "2.5")) return true;
-	}
-	if (isMinimaxM2FamilyModelId(modelId)) return true;
-	if (OPENAI_O_SERIES_RE.test(bareModelId(modelId))) return true;
-	return findThinkingVariantToken(modelId) !== undefined;
-}
-
-function inferThinkingControlMode<TApi extends Api>(
-	spec: ModelSpec<TApi>,
-	parsedModel: ParsedModel,
-): ThinkingConfig["mode"] {
-	switch (spec.api) {
-		// Gemini 3 and later take `thinkingLevel`; Gemini 4 rejects `thinkingBudget` with HTTP 400.
-		case "google-generative-ai":
-		case "google-gemini-cli":
-		case "google-vertex":
-			return parsedModel.family === "gemini" && semverGte(parsedModel.version, "3.0") ? "google-level" : "budget";
-
-		case "anthropic-messages":
-			if (isMinimaxReasoningModelOnAnthropicEndpoint(spec)) {
-				return "anthropic-adaptive";
-			}
-			if (isAnthropicMessagesGlm52ReasoningEffortModel(spec)) {
-				return "anthropic-budget-effort";
-			}
-			if (parsedModel.family === "anthropic") {
-				if (semverGte(parsedModel.version, "4.6")) {
-					return "anthropic-adaptive";
-				}
-				// Opus 4.5 supports `output_config.effort` (sent alongside
-				// `thinking.budget_tokens`); Sonnet 4.5 and Haiku 4.5 reject the
-				// field with HTTP 400 "This model does not support the effort
-				// parameter." (#3497).
-				if (parsedModel.kind === "opus" && semverGte(parsedModel.version, "4.5")) {
-					return "anthropic-budget-effort";
-				}
-			}
-			return "budget";
-
-		case "bedrock-converse-stream":
-			if (parsedModel.family === "anthropic") {
-				if (isAnthropicAdaptiveGenAtLeast(parsedModel, "4.6")) {
-					return "anthropic-adaptive";
-				}
-				// Opus 4.5 on Bedrock metadata mirrors the direct-Anthropic
-				// shape; the Bedrock provider still emits plain budget thinking
-				// on the wire for the budget-effort mode.
-				if (parsedModel.kind === "opus" && semverGte(parsedModel.version, "4.5")) {
-					return "anthropic-budget-effort";
-				}
-			}
-			return "budget";
-
-		default:
-			return "effort";
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Runtime helpers (field reads only — safe per request)
-// ---------------------------------------------------------------------------
 
 /**
  * Returns the supported thinking efforts declared on the model metadata.
@@ -498,6 +26,18 @@ export function getSupportedEfforts<TApi extends Api>(model: ApiModel<TApi>): re
 		return [];
 	}
 	return model.thinking?.efforts ?? [];
+}
+
+/**
+ * Neutral view of a model whose thinking ladder is unverified: `reasoning: false`
+ * and no ladder. Re-entering policy resolution starts from it (the ladder is
+ * derived output, not authored input), and requests without an effort send it so
+ * no reasoning or disable fields reach an upstream that may reject them.
+ */
+export function withoutUnverifiedThinking<T extends { reasoning: boolean; thinking?: ThinkingConfig }>(model: T): T {
+	if (!model.thinking?.unverified) return model;
+	const { thinking: _derived, ...rest } = model;
+	return { ...rest, reasoning: false } as T;
 }
 
 /**
@@ -543,14 +83,6 @@ export function requireSupportedEffort<TApi extends Api>(model: ApiModel<TApi>, 
 	}
 	const levels = getSupportedEfforts(model);
 	if (!levels.includes(effort)) {
-		if (levels.length === 0) {
-			// Distinct message for the no-effort-surface case: the old text ended
-			// "Supported efforts: " with an empty list, which reads as truncated
-			// and gives the operator no way forward.
-			throw new Error(
-				`Thinking effort ${effort} is not supported by ${model.provider}/${model.id}: the model exposes no controllable thinking efforts. Send no effort (the model manages reasoning internally) or turn thinking off.`,
-			);
-		}
 		throw new Error(
 			`Thinking effort ${effort} is not supported by ${model.provider}/${model.id}. Supported efforts: ${levels.join(", ")}`,
 		);
@@ -559,9 +91,10 @@ export function requireSupportedEffort<TApi extends Api>(model: ApiModel<TApi>, 
 }
 
 /** Maps a normalized thinking effort to Google's `thinkingLevel` enum values.
- *  When a collapsed family routes `minimal` onto the same wire id as `low`
- *  (Antigravity Gemini 3.6/3.7 Flash), emit `LOW` — Cloud Code Assist rejects
- *  `MINIMAL` on those `-low` SKUs. */
+ * When a collapsed family routes `minimal` onto the same wire id as `low`
+ * (Antigravity Gemini 3.6/3.7 Flash), emit `LOW` — Cloud Code Assist rejects
+ * `MINIMAL` on those `-low` SKUs.
+ */
 export function mapEffortToGoogleThinkingLevel<TApi extends Api>(
 	effort: Effort,
 	model?: ApiModel<TApi>,
@@ -586,32 +119,24 @@ export function mapEffortToGoogleThinkingLevel<TApi extends Api>(
 }
 
 /**
- * The `thinkingLevel` a thinking-off request sends to a `google-level` model. Gemini 3 cannot switch
- * thinking off, so the request names the lowest level the model declares: `MINIMAL` only where the
- * model accepts it, `LOW` on a model whose ladder starts there.
- */
-export function googleThinkingLevelWhenOff<TApi extends Api>(
-	model: ApiModel<TApi>,
-): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" {
-	return mapEffortToGoogleThinkingLevel(minimumSupportedEffort(model) ?? Effort.Minimal);
-}
-
-/**
  * Maps a normalized thinking effort to Anthropic adaptive effort values via
  * the model's baked `thinking.effortMap` (identity for unmapped efforts).
+ *
+ * The Anthropic adaptive wire vocabulary has no `minimal` tier (valid values:
+ * `low`, `medium`, `high`, `xhigh`, `max`); a model ladder that exposes
+ * `minimal` — custom `anthropic-messages` providers do, unlike the built-in
+ * Claude ladders — would otherwise serialize `output_config.effort: "minimal"`
+ * and 400 (`level "minimal" not supported`). Clamp it to the lowest real tier,
+ * mirroring {@link mapEffortToGoogleThinkingLevel}'s `minimal` handling.
  */
 export function mapEffortToAnthropicAdaptiveEffort<TApi extends Api>(
 	model: ApiModel<TApi>,
 	effort: Effort,
 ): "low" | "medium" | "high" | "xhigh" | "max" | "adaptive" {
 	const supported = requireSupportedEffort(model, effort);
-	return (model.thinking?.effortMap?.[supported] ?? supported) as
-		| "low"
-		| "medium"
-		| "high"
-		| "xhigh"
-		| "max"
-		| "adaptive";
+	const mapped = model.thinking?.effortMap?.[supported] ?? supported;
+	if (mapped === Effort.Minimal) return "low";
+	return mapped as "low" | "medium" | "high" | "xhigh" | "max" | "adaptive";
 }
 
 /**
@@ -631,9 +156,51 @@ export function resolveWireModelId<TApi extends Api>(model: ApiModel<TApi>, effo
 export function minimumSupportedEffort<TApi extends Api>(model: ApiModel<TApi>): Effort | undefined {
 	const efforts = model.thinking?.efforts;
 	if (!efforts || efforts.length === 0) return undefined;
-	// Canonical order regardless of how the ladder was authored: the lowest
-	// supported effort is the first entry of the canonicalized ladder.
-	return canonicalizeEfforts(efforts)[0];
+	for (const effort of THINKING_EFFORTS) {
+		if (efforts.includes(effort)) return effort;
+	}
+	return efforts[0];
+}
+
+/**
+ * Clamp target for effort-less requests on `thinking.requiresEffort` models:
+ * the effort whose wire route equals the model's default wire id
+ * (`requestModelId`), so a collapsed row clamps to the tier it already
+ * advertises as its default rather than the numerically lowest supported tier
+ * (e.g. Cursor Grok 4.5/4.6 default to `medium`, the only tier the Start plan
+ * serves). Falls back to {@link minimumSupportedEffort} when no route matches
+ * the default id — families whose default already is the minimum, or that
+ * expose no routing, are unaffected.
+ */
+export function defaultSupportedEffort<TApi extends Api>(model: ApiModel<TApi>): Effort | undefined {
+	const routing = model.thinking?.effortRouting;
+	const defaultWireId = model.requestModelId;
+	if (routing !== undefined && defaultWireId !== undefined) {
+		const efforts = model.thinking?.efforts;
+		for (const effort of THINKING_EFFORTS) {
+			if (efforts?.includes(effort) && routing[effort] === defaultWireId) return effort;
+		}
+	}
+	return minimumSupportedEffort(model);
+}
+
+/**
+ * The thinking surface a spec resolves to, read from the compat engine's single
+ * policy pass (`resolveModelPolicy`), the same pass `buildModel` materializes.
+ */
+export function resolveModelThinking<TApi extends Api>(spec: ModelSpec<TApi>): ThinkingConfig | undefined {
+	return resolveModelPolicy(spec).thinking;
+}
+
+/**
+ * The `thinkingLevel` a thinking-off request sends to a `google-level` model. Gemini 3 cannot switch
+ * thinking off, so the request names the lowest level the model declares: `MINIMAL` only where the
+ * model accepts it, `LOW` on a model whose ladder starts there.
+ */
+export function googleThinkingLevelWhenOff<TApi extends Api>(
+	model: ApiModel<TApi>,
+): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" {
+	return mapEffortToGoogleThinkingLevel(minimumSupportedEffort(model) ?? Effort.Minimal);
 }
 
 /** Canonical reasoning state after applying user intent to one model capability. */
@@ -685,7 +252,7 @@ function resolveSelectedEffort<TApi extends Api>(model: ApiModel<TApi>, requeste
 /**
  * Resolve reasoning once before provider serialization.
  *
- * `effort` and “thinking level” are the same user intent. Provider-specific
+ * `effort` and "thinking level" are the same user intent. Provider-specific
  * controls (enum, token budget, adaptive output effort, or a routed model id)
  * are facts on the returned plan, not separate settings.
  */

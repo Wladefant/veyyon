@@ -6,6 +6,8 @@ import { discoveryFetch, toArray, toFields } from "../utils";
 import type { DiscoveryHooks } from "./failure";
 
 const MODELS_PATH = "/models";
+/** Shared 10-second budget for bounded provider catalog discovery requests. */
+export const DEFAULT_OPENAI_COMPATIBLE_DISCOVERY_TIMEOUT_MS = 10_000;
 
 /**
  * Minimal OpenAI-style model entry shape consumed by discovery.

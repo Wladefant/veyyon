@@ -8,6 +8,7 @@
  */
 
 import { resolveDiscoveryApi, resolveModelPolicy } from "./compat/resolve";
+import { shareCompat } from "./compat/share";
 import type { ModelIdentity } from "./compat/types";
 import { resolveModelTokenizer } from "./model-tokenizer";
 import {
@@ -19,7 +20,15 @@ import {
 	NO_RECURRING_TARIFF,
 	parseDatedCostCards,
 } from "./pricing";
-import { type Api, type EffectiveTokenCost, MODEL_KINDS, type Model, type ModelCost, type ModelSpec } from "./types";
+import {
+	type Api,
+	type CompatOf,
+	type EffectiveTokenCost,
+	MODEL_KINDS,
+	type Model,
+	type ModelCost,
+	type ModelSpec,
+} from "./types";
 import { cleanModelName } from "./utils";
 
 function numberField(source: object, key: string): number | undefined {
@@ -440,7 +449,7 @@ export function buildModel<TApi extends Api>(spec: ModelSpec<TApi>): Model<TApi>
 		thinking: policy.thinking,
 		supportsComputerUse: supportsOpenAIGAComputerUse(spec, policy.identity, supportsComputerUseConfig),
 		supportsComputerUseConfig,
-		compat: policy.compat,
+		compat: shareCompat(policy.compat),
 		compatConfig: spec.compat,
 	};
 	applyCatalogAssignments(model, policy.catalog);
@@ -449,4 +458,12 @@ export function buildModel<TApi extends Api>(spec: ModelSpec<TApi>): Model<TApi>
 	if (spec.kindConfig !== undefined) model.kind = spec.kindConfig;
 	if (spec.promptCacheConfig !== undefined) model.promptCache = { ...spec.promptCacheConfig };
 	return model;
+}
+
+/**
+ * The compat record a spec resolves to, shared with every model whose record is equal, the same record
+ * `buildModel` attaches.
+ */
+export function buildCompat<TApi extends Api>(spec: ModelSpec<TApi>): CompatOf<TApi> {
+	return shareCompat(resolveModelPolicy(spec).compat);
 }

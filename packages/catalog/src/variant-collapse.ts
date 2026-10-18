@@ -31,7 +31,7 @@
  * entry. That makes it safe at every source — discovery, the catalog
  * generator, and the model-manager merge point.
  */
-import { buildCompat, buildModel } from "./build";
+import { buildModel } from "./build";
 import { Effort } from "./effort";
 import { stripThinkingVariantToken } from "./identity/family";
 import { resolveModelThinking } from "./model-thinking";
@@ -904,10 +904,11 @@ function derivePairThinkingSurface(
 		const { effortRouting: _routing, suppressWhenOff: _suppress, requiresEffort: _required, ...surface } = baked;
 		return surface;
 	}
-	const derived = resolveModelThinking(
-		{ ...(thinkingSpec as unknown as ModelSpec<Api>), reasoning: true, thinking: undefined },
-		buildCompat(thinkingSpec as unknown as ModelSpec<Api>),
-	);
+	const derived = resolveModelThinking({
+		...(thinkingSpec as unknown as ModelSpec<Api>),
+		reasoning: true,
+		thinking: undefined,
+	});
 	if (derived && derived.efforts.length > 0) {
 		const { effortRouting: _dRouting, suppressWhenOff: _dSuppress, requiresEffort: _dRequired, ...surface } = derived;
 		return surface;

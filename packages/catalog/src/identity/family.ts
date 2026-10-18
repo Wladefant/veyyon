@@ -8,8 +8,8 @@
  */
 
 import type { SemVer } from "./classify";
+import { bareModelId } from "./id";
 import {
-	bareModelId,
 	compareSemVer,
 	isAnthropicAdaptiveGenAtLeast,
 	isFableOrMythos,

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Exported Anthropic signing proxy predicates, xAI reasoning effort mapping, and discovery configuration constants ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added premium service tier request calculation and validation helpers for provider priority routing ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added ClinePass model descriptors, account-scoped catalog union, and credential-scoped model cache resolution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added model identity metrics indexing, scheduled dated pricing support, and model tokenizer resolution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -18,6 +19,7 @@
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.
+- Consolidated model identity classification and shared model compatibility records across catalog builders ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Catalog generation applies provider-specific model policies and preserves selective regeneration for named providers.
 
 ## [1.5.6] - 2026-10-10

@@ -9,7 +9,7 @@
  */
 import { isFireworksFastModelId } from "../fireworks-model-id";
 import { hasLocalLoopbackBaseUrl, hostMatchesUrl, modelMatchesHost } from "../hosts";
-import { bareModelId } from "../identity/classify";
+import { bareModelId } from "../identity/id";
 import {
 	isAnthropicNamespacedModelId,
 	isClaudeModelId,
@@ -35,6 +35,35 @@ import type {
 import { applyCompatOverrides } from "./apply";
 import { matchesKimiK27CodeFamily } from "./kimi";
 import { leakedToolCallGrammar } from "./markup-leaks";
+import { compareRevision, parseRevision } from "./revision";
+import { classifyModel } from "./taxonomy";
+
+/** Shared `minimal → low` clamp. xhigh-capable Grok keeps `xhigh` unmapped. */
+const XAI_RESPONSES_MINIMAL_EFFORT_MAP: NonNullable<OpenAICompat["reasoningEffortMap"]> = {
+	minimal: "low",
+};
+/** Grok 4.5 / 4.3 / 3-mini: leftover `xhigh`/`max` clamp to `high`. */
+const XAI_RESPONSES_CLAMPED_EFFORT_MAP: NonNullable<OpenAICompat["reasoningEffortMap"]> = {
+	minimal: "low",
+	xhigh: "high",
+	max: "high",
+};
+
+/** Wire effort remap for first-party xAI Responses. */
+export function xaiResponsesReasoningEffortMap(
+	modelId: string,
+): NonNullable<OpenAICompat["reasoningEffortMap"]> {
+	const identity = classifyModel("xai", modelId, { lenient: true });
+	const revision = identity.revision === undefined ? undefined : parseRevision(identity.revision);
+	const floor = parseRevision("4.6");
+	return identity.class === "xai" &&
+		identity.family === "grok" &&
+		revision !== undefined &&
+		floor !== undefined &&
+		compareRevision(revision, floor) >= 0
+		? XAI_RESPONSES_MINIMAL_EFFORT_MAP
+		: XAI_RESPONSES_CLAMPED_EFFORT_MAP;
+}
 
 /** GLM coding-plan SKUs idle for minutes mid-reasoning; see `streamIdleTimeoutMs`. */
 const GLM_CODING_PLAN_MODEL_PATTERN = /(^|\/)glm-5(?:[.-]|$)/i;

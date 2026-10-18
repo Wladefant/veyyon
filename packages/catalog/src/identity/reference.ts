@@ -11,9 +11,19 @@
 import { collapseVocabulary, discoveryVocabulary } from "../compat/taxonomy";
 import type { Api, Model, ThinkingConfig } from "../types";
 import { getBracketStrippedModelIdCandidates, getLongestModelLikeIdSegment, getModelLikeIdSegments } from "./id";
-export interface ModelReferenceIndex {
-	exact: Map<string, Model<Api>>;
-	suffixAlias: Map<string, Model<Api>>;
+export type ModelReferenceCandidate = Pick<Model<Api>, "id" | "provider"> &
+	Partial<Pick<Model<Api>, "contextWindow" | "maxTokens">> & {
+		/**
+		 * Bundled metadata carries per-token prices only where a provider
+		 * published them, so a reference is indexed with partial pricing or
+		 * none at all and every reader treats a missing field as unknown.
+		 */
+		cost?: Partial<Model<Api>["cost"]>;
+	};
+
+export interface ModelReferenceIndex<TCandidate extends ModelReferenceCandidate = Model<Api>> {
+	exact: Map<string, TCandidate>;
+	suffixAlias: Map<string, TCandidate>;
 }
 
 const REFERENCE_MARKER_SUFFIXES = (() => {
@@ -30,19 +40,22 @@ const REFERENCE_MARKER_SUFFIXES = (() => {
 
 // xai-oauth subscription entries carry zero public pricing and inflated maxTokens;
 // keep them provider-local so they cannot outrank paid/public Grok references.
-export function isZeroCostXaiOAuthReference(candidate: Model<Api>): boolean {
+export function isZeroCostXaiOAuthReference(candidate: ModelReferenceCandidate): boolean {
 	return (
 		candidate.provider === "xai-oauth" &&
-		candidate.cost.input === 0 &&
-		candidate.cost.output === 0 &&
-		candidate.cost.cacheRead === 0 &&
-		candidate.cost.cacheWrite === 0
+		(candidate.cost?.input ?? 0) === 0 &&
+		(candidate.cost?.output ?? 0) === 0 &&
+		(candidate.cost?.cacheRead ?? 0) === 0 &&
+		(candidate.cost?.cacheWrite ?? 0) === 0
 	);
 }
 
 // Prefer the reference with the largest limits and complete cache pricing, then
 // first-party OpenAI entries.
-function shouldReplaceReference(existing: Model<Api> | undefined, candidate: Model<Api>): boolean {
+function shouldReplaceReference<TCandidate extends ModelReferenceCandidate>(
+	existing: TCandidate | undefined,
+	candidate: TCandidate,
+): boolean {
 	if (!existing) return true;
 	if (candidate.contextWindow !== existing.contextWindow) {
 		return (candidate.contextWindow ?? 0) > (existing.contextWindow ?? 0);
@@ -50,8 +63,8 @@ function shouldReplaceReference(existing: Model<Api> | undefined, candidate: Mod
 	if (candidate.maxTokens !== existing.maxTokens) {
 		return (candidate.maxTokens ?? 0) > (existing.maxTokens ?? 0);
 	}
-	const existingHasCachePricing = existing.cost.cacheRead > 0 || existing.cost.cacheWrite > 0;
-	const candidateHasCachePricing = candidate.cost.cacheRead > 0 || candidate.cost.cacheWrite > 0;
+	const existingHasCachePricing = (existing.cost?.cacheRead ?? 0) > 0 || (existing.cost?.cacheWrite ?? 0) > 0;
+	const candidateHasCachePricing = (candidate.cost?.cacheRead ?? 0) > 0 || (candidate.cost?.cacheWrite ?? 0) > 0;
 	if (candidateHasCachePricing !== existingHasCachePricing) {
 		return candidateHasCachePricing;
 	}
@@ -66,8 +79,10 @@ function normalizeReferenceKey(value: string): string {
  * Build a reference index from a model catalog (typically the bundled models).
  * Pure: callers are responsible for memoizing the result.
  */
-export function buildModelReferenceIndex(models: Iterable<Model<Api>>): ModelReferenceIndex {
-	const exact = new Map<string, Model<Api>>();
+export function buildModelReferenceIndex<TCandidate extends ModelReferenceCandidate = Model<Api>>(
+	models: Iterable<TCandidate>,
+): ModelReferenceIndex<TCandidate> {
+	const exact = new Map<string, TCandidate>();
 	for (const candidate of models) {
 		if (isZeroCostXaiOAuthReference(candidate)) {
 			continue;
@@ -80,8 +95,10 @@ export function buildModelReferenceIndex(models: Iterable<Model<Api>>): ModelRef
 	return { exact, suffixAlias: buildSuffixAliasMap(exact) };
 }
 
-function buildSuffixAliasMap(exactReferences: ReadonlyMap<string, Model<Api>>): Map<string, Model<Api>> {
-	const aliases = new Map<string, Model<Api>>();
+function buildSuffixAliasMap<TCandidate extends ModelReferenceCandidate>(
+	exactReferences: ReadonlyMap<string, TCandidate>,
+): Map<string, TCandidate> {
+	const aliases = new Map<string, TCandidate>();
 	for (const reference of exactReferences.values()) {
 		const slashIndex = reference.id.lastIndexOf("/");
 		if (slashIndex === -1) {
@@ -186,7 +203,10 @@ export function inheritReferenceThinking(
 }
 
 /** Resolve a (possibly proxied/affixed) model id to its bundled upstream reference. */
-export function resolveModelReference(modelId: string, index: ModelReferenceIndex): Model<Api> | undefined {
+export function resolveModelReference<TCandidate extends ModelReferenceCandidate = Model<Api>>(
+	modelId: string,
+	index: ModelReferenceIndex<TCandidate>,
+): TCandidate | undefined {
 	// Portkey/gateway wire ids (`@provider/model`) are opaque; fuzzy matching would
 	// map them to unrelated bundled entries (e.g. `@modal/GLM-5-2-FP8` → devin/glm-5-2).
 	if (modelId.startsWith("@")) return undefined;

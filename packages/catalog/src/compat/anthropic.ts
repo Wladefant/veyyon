@@ -61,7 +61,7 @@ function isVertexAnthropicRoute(baseUrl?: string): boolean {
  * `models.yml`; the URL marker makes those signing by default without
  * requiring a provider-id list.
  */
-function isBedrockAnthropicRoute(baseUrl?: string): boolean {
+export function isBedrockAnthropicRoute(baseUrl?: string): boolean {
 	return baseUrl !== undefined && BEDROCK_ANTHROPIC_URL_MARKER.test(baseUrl);
 }
 
@@ -71,8 +71,24 @@ function isBedrockAnthropicRoute(baseUrl?: string): boolean {
  * Fronts Claude behind Azure identity and enforces Anthropic signatures on
  * replay.
  */
-function isAzureAnthropicRoute(baseUrl?: string): boolean {
+export function isAzureAnthropicRoute(baseUrl?: string): boolean {
 	return baseUrl !== undefined && AZURE_ANTHROPIC_URL_MARKER.test(baseUrl);
+}
+
+/**
+ * Known non-official URLs that enforce Anthropic thinking signatures on replay.
+ * Runtime routing uses the effective URL because model compat can be stale
+ * after a provider base-URL override reroutes the request.
+ */
+export function isAnthropicSigningProxyUrl(baseUrl?: string): boolean {
+	return (
+		hostMatchesUrl(baseUrl, "githubCopilot") ||
+		hostMatchesUrl(baseUrl, "zenmux") ||
+		isCloudflareAnthropicGateway(baseUrl) ||
+		isVertexAnthropicRoute(baseUrl) ||
+		isBedrockAnthropicRoute(baseUrl) ||
+		isAzureAnthropicRoute(baseUrl)
+	);
 }
 
 /** Build the resolved anthropic-messages compat record for a model spec. */
@@ -92,11 +108,8 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 	// (issue #4192).
 	const isZenmux = modelMatchesHost(spec, "zenmux");
 	const requiresThinkingEnabled = modelMatchesHost(spec, "moonshotNative") && matchesKimiK27CodeFamily(spec);
-	const isVertex = isVertexAnthropicRoute(baseUrl);
-	const isBedrock = isBedrockAnthropicRoute(baseUrl);
 	const isAzure = isAzureAnthropicRoute(baseUrl);
-	const signingEndpoint =
-		official || isCopilot || isZenmux || isCloudflareAnthropicGateway(baseUrl) || isVertex || isBedrock || isAzure;
+	const signingEndpoint = official || isCopilot || isZenmux || isAnthropicSigningProxyUrl(baseUrl);
 	const compat: ResolvedAnthropicCompat = {
 		officialEndpoint: official,
 		signingEndpoint,

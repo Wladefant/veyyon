@@ -11,6 +11,7 @@ import {
 import { getAntigravityUserAgent } from "../wire/gemini-headers";
 import { type DiscoveryFailure, type DiscoveryHooks, readDiscoveryJson } from "./failure";
 import { gatewayContextWindow, gatewayMaxTokens } from "./gateway-limits";
+export { ANTIGRAVITY_PRIMARY_ENDPOINT } from "../provider-endpoints";
 
 const DEFAULT_ANTIGRAVITY_DISCOVERY_ENDPOINTS = ANTIGRAVITY_ENDPOINTS;
 /**

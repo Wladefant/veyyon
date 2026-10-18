@@ -1025,7 +1025,7 @@ function omitsWireReasoningEffort(api: Api, compat: CompatOf<Api>): boolean {
 	return compat !== undefined && "supportsReasoningEffort" in compat && compat.supportsReasoningEffort === false;
 }
 
-function readCompatEffortMap(compat: CompatOf<Api>): Partial<Record<Effort, string>> | undefined {
+export function readCompatEffortMap(compat: CompatOf<Api>): Partial<Record<Effort, string>> | undefined {
 	if (compat === undefined || !("reasoningEffortMap" in compat)) return undefined;
 	const map = compat.reasoningEffortMap;
 	return map && Object.keys(map).length > 0 ? map : undefined;
