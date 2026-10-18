@@ -14,10 +14,10 @@ import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
  *
  * The class this closes: over generated entries, message and non-message, with fields in random
  * order and each value small, long, an object or null, the cooled fields are exactly the own large
- * fields in key order, each held behind an accessor and every other field held as a value, entries
- * with the same cooled fields share one list, the entry and its message stand-in keep their key
- * order, and every entry serializes back to its line. Fields an entry inherits are neither moved nor
- * copied onto the stand-in.
+ * fields in key order, each held behind an accessor and every other field held as a value, a
+ * message's `usage` stays a value whatever its size, entries with the same cooled fields share one
+ * list, the entry and its message stand-in keep their key order, and every entry serializes back to
+ * its line. Fields an entry inherits are neither moved nor copied onto the stand-in.
  *
  * What it does NOT catch: blob references, which the generator never writes, and the read-back of a
  * line whose bytes changed under the handle; the session manager suites cover both.
@@ -36,9 +36,12 @@ function mulberry32(seed: number): () => number {
 }
 
 const FIELD_NAMES = ["alpha", "beta", "gamma", "delta", "epsilon"];
+const MESSAGE_FIELD_NAMES = [...FIELD_NAMES, "usage"];
 const LONG = "x".repeat(MIN_COLD_STRING_LENGTH);
 const ENTRY_RESIDENT = new Set(["type", "id", "parentId", "timestamp"]);
 const MESSAGE_ENTRY_RESIDENT = new Set([...ENTRY_RESIDENT, "message"]);
+/** A message's fields its stand-in keeps as values whatever their size. */
+const MESSAGE_RESIDENT = new Set(["usage"]);
 
 function isLargeValue(value: unknown): boolean {
 	return typeof value === "string"
@@ -56,9 +59,9 @@ function accessorKeys(target: Record<string, unknown>): string[] {
 	return Object.keys(target).filter(key => Object.getOwnPropertyDescriptor(target, key)!.get !== undefined);
 }
 
-/** A random subset of the field names in random order, each with a small, long, object or null value. */
-function randomFields(random: () => number, target: Record<string, unknown>): void {
-	const names = [...FIELD_NAMES];
+/** A random subset of `fieldNames` in random order, each with a small, long, object or null value. */
+function randomFields(random: () => number, target: Record<string, unknown>, fieldNames = FIELD_NAMES): void {
+	const names = [...fieldNames];
 	for (let i = names.length - 1; i > 0; i--) {
 		const j = Math.floor(random() * (i + 1));
 		[names[i], names[j]] = [names[j]!, names[i]!];
@@ -90,7 +93,7 @@ function generate(seed: number, count: number): Record<string, unknown>[] {
 		};
 		if (random() < 0.5) {
 			const message: Record<string, unknown> = { role: "toolResult" };
-			randomFields(random, message);
+			randomFields(random, message, MESSAGE_FIELD_NAMES);
 			const entry: Record<string, unknown> = { type: "message", ...base, message };
 			if (random() < 0.3) randomFields(random, entry);
 			records.push(entry);
@@ -138,7 +141,7 @@ describe("a cold entry lists its own large fields in key order", () => {
 				const original = records[i]!;
 				const nested = original.type === "message" ? (original.message as Record<string, unknown>) : undefined;
 				const entryKeys = expectedLarge(original, nested === undefined ? ENTRY_RESIDENT : MESSAGE_ENTRY_RESIDENT);
-				const messageKeys = nested === undefined ? [] : expectedLarge(nested, new Set());
+				const messageKeys = nested === undefined ? [] : expectedLarge(nested, MESSAGE_RESIDENT);
 				const cooled = payloads.cool(entry as unknown as SessionEntry, i, 2048);
 				expect(cooled).toBe(entryKeys.length > 0 || messageKeys.length > 0);
 				if (!cooled) {

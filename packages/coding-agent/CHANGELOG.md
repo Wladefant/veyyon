@@ -98,6 +98,7 @@
 
 ### Fixed
 
+- The first session spend tally after a resume (`/session`, a goal charge) no longer reads every compacted assistant reply back from the session file, so on a resumed 34,575-entry session it takes 3 ms instead of 95 ms.
 - A saved session's eval kernels, in every language, follow it across a directory change instead of starting a new kernel in each directory and keeping every earlier one alive until the session ended, so a session that visited five directories holds one Python kernel (102 MB) instead of five (211 MB) and keeps its variables; a directory with its own Python venv still gets its own kernel.
 - `/new`, `/resume` of another session and a handoff shut down the eval kernels of the conversation being left instead of keeping them alive until the session ended, so five conversations in one session hold one Python kernel (86 MB) instead of five (427 MB).
 - An eval cell that prints many lines no longer freezes the terminal while it runs: it sends one live update per 50 ms instead of one per printed line, and its output buffer re-encodes its window once per window of output instead of once per line, so a cell printing 100,000 lines finishes in 0.33 s instead of 10 s and the longest event-loop stall falls from 10 s to 14 ms.

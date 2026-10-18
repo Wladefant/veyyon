@@ -40,12 +40,14 @@
  * every small field the fresh load holds, runs those scans, and pins the reads at zero.
  *
  * A turn reads the session's spend only when a goal is charged for it, and the spend of the
- * summarized history lives in the large fields of its assistant turns and `task` results. Read
- * through the accessors, the first tally on a resumed session moved that whole history back into
- * memory: the first turn after resuming a 154 MiB session cost 470 ms of CPU and 103 MiB of peak
- * RSS more than the turns after it. The turn sweep runs a whole turn with no goal and pins the
- * reads at zero, then charges a goal and pins the reads at one per such entry, the totals at those
- * of the same file held in memory, and every summarized entry still on disk afterwards.
+ * summarized history lives in the usage and tool calls of its assistant turns and the details of its
+ * `task` results. Read through the accessors, the first tally on a resumed session moved that whole
+ * history back into memory: the first turn after resuming a 154 MiB session cost 470 ms of CPU and
+ * 103 MiB of peak RSS more than the turns after it. A cold assistant message keeps its usage and the
+ * count of its tool calls in memory, so the tally reads only `task` results back. The turn sweep runs
+ * a whole turn with no goal and pins the reads at zero, then charges a goal and pins the reads at one
+ * per `task` result, the totals at those of the same file held in memory, and every summarized entry
+ * still on disk afterwards.
  *
  * A branch summary walks every message it sends the provider by property descriptor, and that walk
  * rejects accessors, which is what a cold message's large fields are. The size estimate the summary
@@ -132,6 +134,7 @@ import { collectPendingToolCalls } from "@veyyon/kernel/session/exit-diagnostics
 import { registerAgentMessageKinds } from "@veyyon/kernel/session/message-kinds";
 import {
 	coldFieldsOf,
+	coldToolCallCount,
 	MIN_COLD_STRING_LENGTH,
 	RECORD_ONLY_ENTRY_TYPES,
 	readColdEntry,
@@ -1420,6 +1423,17 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 			expect(manager.getUsageStatistics()).toEqual(warm.getUsageStatistics());
 			await warm.close();
 			expect(storage.reads).toBe(0);
+			// A cold assistant turn holds the count of its tool calls, read without its content; no other
+			// role holds one.
+			for (const entry of compacted) {
+				const loaded = JSON.parse(expected.get(entry.id)!) as SessionEntry;
+				const calls =
+					loaded.type === "message" && loaded.message.role === "assistant"
+						? loaded.message.content.filter(block => block.type === "toolCall").length
+						: undefined;
+				expect([entry.message.role, coldToolCallCount(entry)]).toEqual([entry.message.role, calls]);
+			}
+			expect(storage.reads).toBe(0);
 
 			// A large field reads its entry's line back once, into the message object the entry already held.
 			for (const entry of compacted) {
@@ -1428,6 +1442,7 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 				JSON.stringify(message);
 				expect([entry.message.role, storage.reads - before]).toEqual([entry.message.role, 1]);
 				expect(entry.message).toBe(message);
+				expect([entry.message.role, coldToolCallCount(entry)]).toEqual([entry.message.role, undefined]);
 			}
 			expect(serialized(manager)).toEqual(expected);
 			expect(storage.open.size).toBe(0);
@@ -1498,14 +1513,16 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
 			const compacted = fixture.compacted.map(id => manager.getEntry(id)!);
 			const inMemory = () => compacted.filter(entry => coldFieldsOf(entry) === undefined).map(entry => entry.id);
-			// The summarized entries whose spend sits in their large fields.
-			const spending = compacted.filter(
+			// The summarized assistant turns, whose spend the stand-in holds, and the `task` results, whose
+			// spend sits in details only a read-back restores.
+			const assistants = compacted.filter(entry => entry.type === "message" && entry.message.role === "assistant");
+			const taskResults = compacted.filter(
 				entry =>
-					entry.type === "message" &&
-					(entry.message.role === "assistant" ||
-						(entry.message.role === "toolResult" && entry.message.toolName === "task")),
+					entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "task",
 			);
-			expect(spending.map(entry => entry.id)).toEqual(["m00003", "m00099"]);
+			expect(assistants.map(entry => entry.id)).toEqual(["m00003"]);
+			expect(taskResults.map(entry => entry.id)).toEqual(["m00099"]);
+			expect(assistants.map(entry => coldToolCallCount(entry))).toEqual([1]);
 
 			const reference = await resumeSession(await openInMemoryCopy(fixture), root, RESUMED_REPLY);
 			const cold = await resumeSession(manager, root, RESUMED_REPLY);
@@ -1514,7 +1531,7 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 				// The summarized `task` result is the only cache write the file records.
 				expect(expected.tokens.cacheWrite).toBe(2);
 				expect(spendOf(cold.session.getSessionStats())).toEqual(expected);
-				expect(storage.reads).toBe(spending.length);
+				expect(storage.reads).toBe(taskResults.length);
 				expect(inMemory()).toEqual([]);
 
 				await cold.session.goalRuntime.createGoal({ objective: "Finish the resumed work" });
@@ -1522,7 +1539,7 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 				await cold.session.agent.waitForIdle();
 				expect(cold.session.getGoalModeState()?.goal).toMatchObject({ tokensUsed: 345, turnsCompleted: 1 });
 				// The tally of the summarized history is kept; the turn reads none of it again.
-				expect(storage.reads).toBe(spending.length);
+				expect(storage.reads).toBe(taskResults.length);
 				expect(inMemory()).toEqual([]);
 			} finally {
 				await cold.close();

@@ -8,9 +8,10 @@
  * by an accessor that reads the entry's line back from the session file on first use and restores
  * it through the same pipeline a load runs. A cold message entry keeps a message object holding the
  * message's small values (`role`, `toolName`, `toolCallId`, `isError`, `stopReason`, `provider`,
- * `model`), so a scan that picks entries by them reads none of them back; the message's large
- * fields are accessors on that object. A read-back entry stays in memory until the next pass cools
- * it again.
+ * `model`) and its `usage`, so a scan that picks entries by them or a spend tally reads none of them
+ * back; the message's large fields are accessors on that object, and an assistant message's
+ * stand-in records how many `toolCall` blocks its moved content held. A read-back entry stays in
+ * memory until the next pass cools it again.
  *
  * The line is read through a {@link PinnedSessionReader}, a handle on the file object the offsets
  * were recorded against. A republish by this process or another one, a relocation, or an unlink
@@ -45,7 +46,11 @@ const RESIDENT_KEYS: ReadonlySet<string> = new Set(["type", "id", "parentId", "t
 /** A message entry's resident fields: its message is replaced by a stand-in rather than an accessor. */
 const MESSAGE_ENTRY_RESIDENT_KEYS: ReadonlySet<string> = new Set([...RESIDENT_KEYS, "message"]);
 
-const NO_KEYS: ReadonlySet<string> = new Set();
+/**
+ * A message's fields its stand-in keeps whatever their size: the usage every spend tally reads off
+ * each message, a few numbers that a read-back would parse a whole line to return.
+ */
+const MESSAGE_RESIDENT_KEYS: ReadonlySet<string> = new Set(["usage"]);
 
 const NO_FIELDS: readonly string[] = [];
 
@@ -233,18 +238,38 @@ class ColdEntrySlot extends ReturnsTarget {
 	}
 }
 
-/** The cold entry a message stand-in belongs to, in a private field installed on the stand-in. */
+/**
+ * The cold entry a message stand-in belongs to, and how many `toolCall` blocks the content moved out
+ * of it held, in private fields installed on the stand-in.
+ */
 class StandInSlot extends ReturnsTarget {
 	#entry: object | undefined;
+	/** Undefined when the stand-in keeps its message's content or the message is not an assistant's. */
+	#toolCalls: number | undefined;
 
 	static entryOf(target: object): object | undefined {
 		return #entry in target ? (target as StandInSlot).#entry : undefined;
 	}
 
-	static set(standIn: object, entry: object | undefined): void {
-		if (#entry in standIn) (standIn as StandInSlot).#entry = entry;
-		else if (entry !== undefined) new StandInSlot(standIn).#entry = entry;
+	static toolCallsOf(target: object): number | undefined {
+		return #entry in target ? (target as StandInSlot).#toolCalls : undefined;
 	}
+
+	static set(standIn: object, entry: object | undefined, toolCalls?: number): void {
+		const slot =
+			#entry in standIn ? (standIn as StandInSlot) : entry === undefined ? undefined : new StandInSlot(standIn);
+		if (slot === undefined) return;
+		slot.#entry = entry;
+		slot.#toolCalls = toolCalls;
+	}
+}
+
+/** How many `toolCall` blocks the content of the assistant message `message` holds. */
+function toolCallCount(message: Record<string, unknown>): number | undefined {
+	if (message.role !== "assistant" || !Array.isArray(message.content)) return undefined;
+	let count = 0;
+	for (const block of message.content) if (isRecord(block) && block.type === "toolCall") count += 1;
+	return count;
 }
 
 /**
@@ -349,6 +374,16 @@ export function readColdEntry(entry: SessionEntry): SessionEntry | undefined {
 	return state === undefined ? undefined : (readBack(entry, state) as unknown as SessionEntry);
 }
 
+/**
+ * How many `toolCall` blocks the content moved out of the cold assistant message entry `entry` held,
+ * or undefined when `entry` is warm or its message's content is in memory. A tally of tool calls
+ * over compacted history reads this, and the stand-in's resident `usage`, instead of each line.
+ */
+export function coldToolCallCount(entry: SessionEntry): number | undefined {
+	const standIn = ColdEntrySlot.standInOf(entry);
+	return standIn === undefined ? undefined : StandInSlot.toolCallsOf(standIn);
+}
+
 export class ColdEntryPayloads {
 	/** One accessor pair per field name, shared by every entry cooled on that field. */
 	readonly #accessors = new Map<string, PropertyDescriptor>();
@@ -421,7 +456,7 @@ export class ColdEntryPayloads {
 		const original = entry.type === "message" ? record.message : undefined;
 		const nested = isRecord(original) ? original : undefined;
 		const entryNode = this.#largeKeys(record, nested === undefined ? RESIDENT_KEYS : MESSAGE_ENTRY_RESIDENT_KEYS);
-		const movedFromMessage = nested === undefined ? NO_FIELDS : this.#largeKeys(nested, NO_KEYS).keys;
+		const movedFromMessage = nested === undefined ? NO_FIELDS : this.#largeKeys(nested, MESSAGE_RESIDENT_KEYS).keys;
 		if (entryNode.keys.length === 0 && movedFromMessage.length === 0) return false;
 		let message: Record<string, unknown> | undefined;
 		if (nested !== undefined && movedFromMessage.length > 0) {
@@ -444,7 +479,9 @@ export class ColdEntryPayloads {
 		ColdEntrySlot.cool(entry, file, offset, length, layout, message);
 		if (message !== undefined) {
 			Object.defineProperty(record, "message", this.#messageAccessor());
-			StandInSlot.set(message, entry);
+			const toolCalls =
+				nested !== undefined && movedFromMessage.includes("content") ? toolCallCount(nested) : undefined;
+			StandInSlot.set(message, entry, toolCalls);
 		}
 		file.cold += 1;
 		return true;
