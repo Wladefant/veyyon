@@ -14,6 +14,15 @@ const RETRY_DELAY_FIELD_PATTERN = /"retryDelay":\s*"([0-9.]+)(ms|s)"/i;
 // "try again in 90 minutes" / "try again in 1 hour"
 const TRY_AGAIN_PATTERN = /try again in\s+~?\s*([0-9.]+)\s*(ms|sec|s|minutes?|mins?|m|hours?|hrs?|h)\b/i;
 
+// "Your limit will reset at 2026-09-01 09:44:51" / "reset at 2026-09-01T09:44:51Z"
+const WILL_RESET_AT_PATTERN =
+	/(?:will\s+)?reset at\s+([0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?)/i;
+// Both grammars carry a timezone-naive wall clock. The default reading is UTC;
+// a provider-specific offset (Z.AI/Zhipu Beijing time) is applied only through
+// `RetryHintOptions.naiveResetTimezoneOffset`, never inferred from the language.
+const CN_RESET_AT_PATTERN = /将在\s*([0-9]{4}-[0-9]{2}-[0-9]{2}\s+[0-9]{2}:[0-9]{2}:[0-9]{2})\s*重置/;
+const RESET_AT_PATTERNS: readonly RegExp[] = [WILL_RESET_AT_PATTERN, CN_RESET_AT_PATTERN];
+
 /**
  * A header value as it appears in prose: an ISO 8601 instant, an IMF-fixdate
  * (`Wed, 21 Oct 2015 07:28:00 GMT`), or a number. The number may not run into
@@ -218,10 +227,23 @@ export function resetHeaderTargetMs(value: number): { atMs: number } | { delta: 
  *  - `Please retry in 250ms` / `Please retry in 12s`
  *  - `"retryDelay": "34.074824224s"` (JSON error detail field)
  *  - `try again in 250ms` / `try again in 12s` / `try again in 5 min` / `try again in ~158 min`
+ *  - `Your limit will reset at 2026-09-01 09:44:51` / `将在 2026-09-01 09:44:51 重置`
+ *    (a provider offset makes a naive wall clock authoritative; otherwise it
+ *    resolves only when no relative signal is present)
  *
  * Returns `undefined` if no signal is found.
  */
-export function extractRetryHint(source: Response | Headers | null | undefined, body?: string): number | undefined {
+/** Provider-specific interpretation for timezone-naive retry timestamps. */
+export interface RetryHintOptions {
+	/** UTC offset appended to an absolute reset stamp that omits its timezone. */
+	naiveResetTimezoneOffset?: string;
+}
+
+export function extractRetryHint(
+	source: Response | Headers | null | undefined,
+	body?: string,
+	options?: RetryHintOptions,
+): number | undefined {
 	const headers = source instanceof Headers ? source : (source?.headers ?? undefined);
 	const nowMs = Date.now();
 	if (headers) {
@@ -229,7 +251,7 @@ export function extractRetryHint(source: Response | Headers | null | undefined, 
 		if (ms !== undefined) return ms;
 	}
 	if (!body) return undefined;
-	return headerTextRetryHint(body, nowMs) ?? quotaResetHint(body) ?? unitDelayHint(body);
+	return bodyRetryHint(body, nowMs, options);
 }
 
 /** The first window a response header states: {@link RETRY_HINT_HEADERS} in order, then the Anthropic reset clocks. */
@@ -282,6 +304,45 @@ function unitDelayHint(body: string): number | undefined {
 	return undefined;
 }
 
+
+interface ResetAtCandidates {
+	readonly unambiguousMs?: number;
+	readonly naiveMs?: number;
+}
+
+function resetAtHints(body: string, nowMs: number, options?: RetryHintOptions): ResetAtCandidates {
+	let unambiguousMs: number | undefined;
+	let naiveMs: number | undefined;
+
+	for (const pattern of RESET_AT_PATTERNS) {
+		const match = pattern.exec(body);
+		if (!match?.[1]) continue;
+		const normalized = match[1].replace(" ", "T");
+		const hasOffset = /(?:Z|[+-][0-9]{2}:?[0-9]{2})$/i.test(normalized);
+		const configuredOffset = options?.naiveResetTimezoneOffset;
+		const parsed = Date.parse(hasOffset ? normalized : `${normalized}${configuredOffset ?? "Z"}`);
+		if (!Number.isNaN(parsed) && parsed > nowMs) {
+			const delta = parsed - nowMs;
+			if (hasOffset || configuredOffset !== undefined) {
+				if (unambiguousMs === undefined || delta > unambiguousMs) unambiguousMs = delta;
+			} else {
+				if (naiveMs === undefined || delta > naiveMs) naiveMs = delta;
+			}
+		}
+	}
+
+	return { unambiguousMs, naiveMs };
+}
+
+function bodyRetryHint(body: string, nowMs: number, options?: RetryHintOptions): number | undefined {
+	const { unambiguousMs, naiveMs } = resetAtHints(body, nowMs, options);
+	const relativeMs = headerTextRetryHint(body, nowMs) ?? quotaResetHint(body) ?? unitDelayHint(body);
+
+	if (unambiguousMs !== undefined && relativeMs !== undefined) {
+		return Math.max(unambiguousMs, relativeMs);
+	}
+	return unambiguousMs ?? relativeMs ?? naiveMs;
+}
 function unitToMs(unit: string): number | undefined {
 	switch (unit.toLowerCase()) {
 		case "ms":

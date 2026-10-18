@@ -2466,7 +2466,7 @@ export class AuthStorage {
 			credentialId?: number;
 			signal?: AbortSignal;
 			/**
-			 * The provider refused `modelId` for this account's plan ({@link AIError.isModelNotInPlan}).
+			 * The provider refused `modelId` for this account's plan ({@link AIError.isCursorPlanAccountPolicyError}).
 			 * Recorded per model instead of as a quota window, and moved off whatever
 			 * `accounts.loadBalancing` says, because no wait lets this account serve the model.
 			 */
@@ -4028,7 +4028,7 @@ export class AuthStorage {
 					apiKey: options?.apiKey,
 					credentialId: options?.credentialId,
 					signal: options?.signal,
-					modelNotInPlan: AIError.isModelNotInPlan(error),
+					modelNotInPlan: AIError.isCursorPlanAccountPolicyError(error, provider),
 				})
 			).switched;
 		}

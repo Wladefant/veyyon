@@ -4,8 +4,8 @@
  * `details[].debug` (`ERROR_RATE_LIMITED_CHANGEABLE`, "Named models unavailable", "Free plans can
  * only use Auto"). The details were dropped and the failure read as an unexplained rate limit.
  *
- * Class closed: a plan refusal is its own classification (`ModelNotInPlan`, always beside
- * `UsageLimit`), the end stream keeps the provider's sentence, and the refusal is recorded for that
+ * Class closed: a plan refusal is its own classification (`AccountPolicy`, beside `UsageLimit` for
+ * Cursor), the end stream keeps the provider's sentence, and the refusal is recorded for that
  * model only. Moving to another account is governed by `accounts.loadBalancing` like every other
  * move that is not auth death: with the setting on the session moves and says so; with it off
  * nothing moves, in this process or a peer reading the same store, and a withheld notice names the
@@ -81,13 +81,13 @@ describe("the Cursor end stream keeps the refusal the provider wrote", () => {
 	test("the plan refusal classifies as a usage limit AND a model the plan lacks", () => {
 		const error = endStream(PLAN_REFUSAL_END_STREAM);
 		expect(AIError.isUsageLimit(error)).toBe(true);
-		expect(AIError.isModelNotInPlan(error)).toBe(true);
+		expect(AIError.isCursorPlanAccountPolicyError(error, "cursor")).toBe(true);
 	});
 
 	test("a spent allowance is a usage limit and nothing more", () => {
 		const error = endStream(QUOTA_END_STREAM);
 		expect(AIError.isUsageLimit(error)).toBe(true);
-		expect(AIError.isModelNotInPlan(error)).toBe(false);
+		expect(AIError.isCursorPlanAccountPolicyError(error, "cursor")).toBe(false);
 	});
 
 	test("a details entry with no debug falls back to the top-level message", () => {

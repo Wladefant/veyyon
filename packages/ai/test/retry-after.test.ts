@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+	extractProviderRetryHint,
 	formatErrorMessageWithRetryAfter,
 	getHeadersFromError,
 	getRetryAfterMsFromHeaders,
@@ -38,5 +39,29 @@ describe("retry-after parsing", () => {
 		expect(getHeadersFromError(first)).toEqual({ "retry-after-ms": "12" });
 		Object.defineProperty(second, "headers", { value: undefined, configurable: true });
 		expect(getHeadersFromError(first)).toBeUndefined();
+	});
+
+	it("extracts provider retry hint with catalog timezone offset", () => {
+		const targetMs = Date.parse("2099-09-01T09:44:51+08:00");
+		const expected = targetMs - Date.now();
+		const hint = extractProviderRetryHint("zai", "已达到使用上限。您的限额将在 2099-09-01 09:44:51 重置。");
+		expect(hint).toBeDefined();
+		expect(Math.abs(hint! - expected)).toBeLessThan(100);
+	});
+
+	it("reads naive reset stamp as UTC when provider has no timezone policy", () => {
+		const targetMs = Date.parse("2099-09-01T09:44:51Z");
+		const expected = targetMs - Date.now();
+		const hint = extractProviderRetryHint("unknown-provider", "已达到使用上限。您的限额将在 2099-09-01 09:44:51 重置。");
+		expect(hint).toBeDefined();
+		expect(Math.abs(hint! - expected)).toBeLessThan(100);
+	});
+
+	it("handles undefined provider gracefully", () => {
+		const targetMs = Date.parse("2099-09-01T09:44:51Z");
+		const expected = targetMs - Date.now();
+		const hint = extractProviderRetryHint(undefined, "已达到使用上限。您的限额将在 2099-09-01 09:44:51 重置。");
+		expect(hint).toBeDefined();
+		expect(Math.abs(hint! - expected)).toBeLessThan(100);
 	});
 });

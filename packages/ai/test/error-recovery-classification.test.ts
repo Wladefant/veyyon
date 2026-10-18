@@ -46,7 +46,7 @@ const RETRY_DECISION: Record<string, boolean> = {
 	// Rides beside UsageLimit for the same reason: the credential layer moves to an account whose
 	// plan includes the model (with load balancing on), and the retry runtime ends the turn with the
 	// refusal when nothing moved, rather than waiting on a window that does not exist.
-	ModelNotInPlan: true,
+	AccountPolicy: true,
 	// The call was never well-formed enough to run, so there is no tool effect
 	// to duplicate and re-sampling is the repair.
 	MalformedFunctionCall: true,
@@ -134,7 +134,7 @@ const FRAME_BAIT_TEXT: Record<keyof typeof AIError.Flag, string> = {
 	ProviderFinishError: "Provider finish_reason: error",
 	EmptyResponse: "thought-only response without final output",
 	UsageLimit: "You've reached your usage limit. Upgrade to increase your limit.",
-	ModelNotInPlan: "resource_exhausted: Named models unavailable (ERROR_RATE_LIMITED_CHANGEABLE)",
+	AccountPolicy: "resource_exhausted: Named models unavailable (ERROR_RATE_LIMITED_CHANGEABLE)",
 	MalformedFunctionCall: "MALFORMED_FUNCTION_CALL",
 	Timeout: "Request timed out after 60000ms",
 	ContentBlocked: "incomplete: content_filter",
@@ -333,12 +333,12 @@ describe("a stack trace is not evidence about the failure", () => {
 		// NEW text predicate go red here: it joins this set and arrives with an
 		// unproven bait. A bait that goes stale drops out and is equally red.
 		expect(reachable.sort()).toEqual([
+			"AccountPolicy",
 			"AuthFailed",
 			"ContentBlocked",
 			"ContextOverflow",
 			"EmptyResponse",
 			"MalformedFunctionCall",
-			"ModelNotInPlan",
 			"ProviderFinishError",
 			"Timeout",
 			"ToolChoiceRejected",

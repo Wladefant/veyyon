@@ -196,3 +196,34 @@ export function isOpaqueStatusBody(message: string): boolean {
 export function matchesUsageLimitText(errorMessage: string): boolean {
 	return USAGE_LIMIT_PATTERN.test(errorMessage) || ACCOUNT_RATE_LIMIT_PATTERN.test(errorMessage);
 }
+
+const ACCOUNT_SCOPED_403_PATTERN =
+	/\b(?:overall|account|organization|team|workspace)\b[^\n]{0,40}\b(?:message |request )?rate.?limit\b|\byour\b[^\n]{0,30}\b(?:limit )?will reset\b/i;
+
+const DASHSCOPE_TOKEN_LIMIT_DOC_PATTERN = /error-code[^()\s]*#token-limit/i;
+const DASHSCOPE_TOKEN_LIMIT_MESSAGE_PATTERN =
+	/\byou exceeded your current quota, please check your plan and billing details\b/i;
+
+/** True for DashScope/Bailian's documented OpenAI-compatible TPM/TPS throttle. */
+export function isDashScopeTokenLimitText(errorMessage: string): boolean {
+	return (
+		DASHSCOPE_TOKEN_LIMIT_DOC_PATTERN.test(errorMessage) && DASHSCOPE_TOKEN_LIMIT_MESSAGE_PATTERN.test(errorMessage)
+	);
+}
+
+/**
+ * HTTP status codes that, absent richer body classification, represent an
+ * account-local usage cap rather than a bad credential or a transient blip.
+ * Always combine with a message classifier when a message is available.
+ */
+export function isUsageLimitStatus(status: number | undefined): boolean {
+	return status === 429 || status === 402;
+}
+
+/**
+ * Account-scoped cap phrasing delivered on a 403 (or a statusless Connect
+ * trailer): "Reached overall message rate limit", "Your limit will reset in …".
+ */
+export function isAccountScopedCapText(message: string): boolean {
+	return ACCOUNT_SCOPED_403_PATTERN.test(message);
+}

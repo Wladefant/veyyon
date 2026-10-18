@@ -148,9 +148,9 @@ describe("the classification rule set", () => {
 			"MalformedFunctionCall",
 			"ProviderFinishError",
 			"UsageLimit",
-			// `model-not-in-plan`: Cursor's plan refusal, whose machine code reaches the classifier as
+			// `cursor-plan-refusal`: Cursor's plan refusal, whose machine code reaches the classifier as
 			// the end stream's detail text appended to the message, not as a structured field.
-			"UsageLimit|ModelNotInPlan",
+			"UsageLimit|AccountPolicy",
 		]);
 	});
 

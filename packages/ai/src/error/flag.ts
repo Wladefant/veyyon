@@ -30,12 +30,12 @@ export const Flag = {
 	/** The endpoint rejected the `tool_choice` the request named (400): a forced or `none` choice it does not take. */
 	ToolChoiceRejected: 0x0000_4000,
 	/**
-	 * The provider refused the requested model for this account's plan: Cursor answers a named model
-	 * on a Free plan with `ERROR_RATE_LIMITED_CHANGEABLE`. Always set beside {@link Flag.UsageLimit},
-	 * because the account cannot serve the request, but no quota window restores it, so the credential
-	 * layer moves the request to an account that can serve the model instead of waiting.
+	 * The provider refused the request for this account's plan or entitlement, so a credential that can
+	 * serve it is needed rather than a wait. Cursor answers a named model on a Free plan with
+	 * `ERROR_RATE_LIMITED_CHANGEABLE` and sets this beside {@link Flag.UsageLimit}; Codex answers a model
+	 * a ChatGPT account cannot use and sets it alone. It takes the top bit, clear of the low-bit allocations.
 	 */
-	ModelNotInPlan: 0x0000_2000,
+	AccountPolicy: 0x8000_0000,
 	/**
 	 * The peer named a transport failure a replay reproduces: an HTTP/2 code from
 	 * `NON_RETRYABLE_HTTP2_ERROR_CODES` (`NGHTTP2_CANCEL` — our own abort — `FLOW_CONTROL_ERROR`,
@@ -100,5 +100,5 @@ export function stringify(id: number | undefined): string {
 	if (!id) return "none";
 	if (!isClassified(id)) return `status:${id}`;
 	const labels = ERROR_KIND_LABELS.filter(([kind]) => is(id, kind)).map(([, label]) => label);
-	return labels.length > 0 ? labels.join("|") : `classified:0x${id.toString(16)}`;
+	return labels.length > 0 ? labels.join("|") : `classified:0x${(id >>> 0).toString(16)}`;
 }

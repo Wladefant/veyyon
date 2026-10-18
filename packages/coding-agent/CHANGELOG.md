@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Aligned advisor roster and retry runtime error classification with canonical AccountPolicy failure flag ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - Quota refusals block the failed request's credential, not a healthy account selected by a later resolver call ([PR](https://github.com/Wladefant/veyyon/pull/619)).
 - Automatic lane handoff reserves the summary model's full output limit, including reasoning, before selection. The request sends the same limit ([issue](https://github.com/Wladefant/veyyon/issues/552)).

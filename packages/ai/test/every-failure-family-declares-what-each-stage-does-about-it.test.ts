@@ -111,9 +111,9 @@ describe("the retry decision is derived from the registry", () => {
 	 */
 	it("retries at the turn exactly the families that say they do", () => {
 		expect(labels(TURN_RETRIABLE_MASK)).toEqual([
+			"AccountPolicy",
 			"EmptyResponse",
 			"MalformedFunctionCall",
-			"ModelNotInPlan",
 			"ProviderFinishError",
 			"StaleResponsesItem",
 			"ThinkingLoop",

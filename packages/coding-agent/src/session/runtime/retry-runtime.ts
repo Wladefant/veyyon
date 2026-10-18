@@ -492,7 +492,7 @@ export class RetryRuntime {
 			// configured chain.
 			budgetExhausted: this.#attempt > policy.maxRetries,
 			classifierRefusal: isClassifierRefusal(message),
-			modelNotInPlan: AIError.is(id, AIError.Flag.ModelNotInPlan),
+			modelNotInPlan: AIError.is(id, AIError.Flag.AccountPolicy),
 			options,
 			delayMs: staleReplay ? 0 : calculateRetryBackoffDelayMs(policy.baseDelayMs, this.#attempt),
 			switchedCredential: false,

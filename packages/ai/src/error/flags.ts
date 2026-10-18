@@ -295,11 +295,48 @@ export function isUsageLimit(error: unknown, api?: Api): boolean {
 }
 
 /**
- * Whether the provider refused the model for the account's plan, so a credential that can serve the
- * model is needed rather than a wait. Accessor for {@link Flag.ModelNotInPlan}.
+ * Whether the provider refused the request for the account's plan or entitlement, so a credential that
+ * can serve it is needed rather than a wait. Accessor for {@link Flag.AccountPolicy}; the provider-specific
+ * predicates below narrow it to the one refusal each provider actually sends.
  */
-export function isModelNotInPlan(error: unknown, api?: Api): boolean {
-	return is(classify(error, api), Flag.ModelNotInPlan);
+export function isAccountPolicyError(error: unknown, api?: Api): boolean {
+	return is(classify(error, api), Flag.AccountPolicy);
+}
+
+/**
+ * Whether Cursor refused a named model for this account's plan. Codex's ChatGPT-account refusal also sets
+ * {@link Flag.AccountPolicy}, so it is excluded here: the two providers' refusals are different sentences.
+ */
+export function isCursorPlanAccountPolicyError(error: unknown, provider: string): boolean {
+	return provider === "cursor" && is(classify(error), Flag.AccountPolicy) && codexDeniedModel(error) === undefined;
+}
+
+/**
+ * The model Codex's exact ChatGPT-account refusal names. Generic unsupported-model answers do not match,
+ * because the sentence names the account's entitlement, not the model's existence.
+ */
+const CODEX_CHATGPT_ACCOUNT_DENIAL_PATTERN =
+	/\bThe ['"]([^'"\r\n]+)['"] model is not supported when using Codex with a ChatGPT account\./i;
+
+function codexDeniedModel(error: unknown): string | undefined {
+	const text = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
+	return text === undefined ? undefined : CODEX_CHATGPT_ACCOUNT_DENIAL_PATTERN.exec(text)?.[1];
+}
+
+/** A model id compared by its bare name, so `openai/gpt-5` and `gpt-5` name the same model. */
+function bareModelId(modelId: string | undefined): string | undefined {
+	const bare = modelId?.slice(modelId.lastIndexOf("/") + 1).trim().toLowerCase();
+	return bare ? bare : undefined;
+}
+
+/**
+ * Whether Codex refused the requested model on this ChatGPT account. The refusal names the model, so it
+ * applies only when the name matches the request; a different model that Codex refused is not this one.
+ */
+export function isCodexChatGPTAccountPolicyError(error: unknown, provider: string, modelId: string | undefined): boolean {
+	if (provider !== "openai-codex" || !is(classify(error), Flag.AccountPolicy)) return false;
+	const denied = bareModelId(codexDeniedModel(error));
+	return denied !== undefined && denied === bareModelId(modelId);
 }
 
 /**
@@ -424,4 +461,51 @@ export function isEmptyStreamEnvelopeError(error: unknown): boolean {
 		error.message.includes(STREAM_ENVELOPE_ERROR_PREFIX) &&
 		STREAM_BEFORE_MESSAGE_START_PATTERN.test(error.message)
 	);
+}
+
+/** reqwest body-frame failures forwarded by the Codex HTTP proxy. */
+export const CODEX_HTTP_BODY_READ_ERROR_PATTERN = /\btransport error reading codex response body\b/i;
+
+// Definitive OAuth refresh failure — the stored grant/client is dead.
+const OAUTH_DEFINITIVE_FAILURE_PATTERN =
+	/invalid_grant|invalid_token|unauthorized_client|\brevoked\b|refresh[\s_]?token.*expired/i;
+const OAUTH_TRANSIENT_FAILURE_PATTERN =
+	/timeout|network|fetch failed|ECONN(?:REFUSED|RESET)|ETIMEDOUT|ETIMEOUT|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|FailedToOpenSocket|EAI_AGAIN|socket hang up|\b(?:408|425|429|5\d{2})\b|rate.?limit|too many requests|temporar|unavailable|forbidden|permission_denied|cloudflare|captcha/i;
+const OAUTH_HTTP_AUTH_PATTERN = /\b401\b/;
+
+/** Whether an OAuth refresh error message means the grant is definitively dead. */
+export function isOAuthExpiry(errorMessage: string): boolean {
+	if (OAUTH_DEFINITIVE_FAILURE_PATTERN.test(errorMessage)) return true;
+	return OAUTH_HTTP_AUTH_PATTERN.test(errorMessage) && !OAUTH_TRANSIENT_FAILURE_PATTERN.test(errorMessage);
+}
+
+const CLINE_PASS_SURFACE_GATE_PATTERN = /only available via cline product surfaces/i;
+
+/**
+ * Cline's gateway gates some roster entries (certain free-tier models) to its
+ * own product surfaces with a 403. The API key is valid — the restriction is
+ * per-model client policy — so it must neither rotate sibling credentials (they
+ * fail identically) nor surface as an auth failure.
+ */
+export function isClinePassSurfaceGateMessage(errorMessage: string | undefined): boolean {
+	return errorMessage !== undefined && CLINE_PASS_SURFACE_GATE_PATTERN.test(errorMessage);
+}
+
+const STREAM_DROP_PATTERN =
+	/stream disconnected before completion|(?:stream|websocket) closed before response\.completed|stream was interrupted|stream ended before terminal (?:chunk|completion event)|socket disconnected before secure tls connection/i;
+
+/**
+ * Transport stream-drop diagnostic (see {@link STREAM_DROP_PATTERN}). Unlike
+ * {@link isTransientStreamParseError}, one pattern serves both the live `Error`
+ * and the persisted-string forms: the phrasings are high-signal enough to trust
+ * detached from a transport `Error`.
+ */
+export function isTransientStreamDropError(error: unknown): boolean {
+	if (typeof error === "string") return STREAM_DROP_PATTERN.test(error);
+	return error instanceof Error && STREAM_DROP_PATTERN.test(error.message);
+}
+
+/** Stream-envelope errors safe to retry against the provider (event ordering only). */
+export function isRetryableStreamEnvelopeError(error: unknown): boolean {
+	return error instanceof Error && STREAM_EVENT_ORDER_PATTERN.test(error.message);
 }

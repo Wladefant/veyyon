@@ -1,6 +1,16 @@
-import { anthropicResetDelayMs, resetHeaderTargetMs } from "@veyyon/utils/fetch-retry";
+import { retryResetTimezoneOffsetFor } from "@veyyon/catalog/compat/behavior";
+import { anthropicResetDelayMs, extractRetryHint, resetHeaderTargetMs } from "@veyyon/utils/fetch-retry";
 
 export type HeadersLike = Headers | Record<string, string | undefined> | undefined | null;
+
+/** Extracts retry timing using the provider's catalog-declared timestamp timezone. */
+export function extractProviderRetryHint(
+	provider: string | undefined,
+	message: string | undefined,
+): number | undefined {
+	const naiveResetTimezoneOffset = provider === undefined ? undefined : retryResetTimezoneOffsetFor(provider);
+	return extractRetryHint(undefined, message, { naiveResetTimezoneOffset });
+}
 
 const RETRY_AFTER_HINT = "retry-after-ms=";
 

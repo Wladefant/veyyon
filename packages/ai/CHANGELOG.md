@@ -22,6 +22,7 @@
 - Added provider option types for Anthropic slow mode, fallback credit redemption, live steering and Cursor Pi tool handlers, from oh-my-pi 117ee8b209685463ecdf3b19c5e7bc89857a44ce.
 
 ### Fixed
+- Replaced ModelNotInPlan with canonical AccountPolicy failure flag and audited unique sign-bit representations ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - Mapped provider server and user profile schema imports to local schema adapters with no user-visible change ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Aligned SQLite credential store import subpath and converted UsageService to dynamic usage provider inventory ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
