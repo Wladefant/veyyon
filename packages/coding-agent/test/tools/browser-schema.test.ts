@@ -164,6 +164,20 @@ describe("browser tool schema", () => {
 		);
 	});
 
+	it("accepts relay inventory and exact tab IDs for an explicitly approved close", () => {
+		const tool = new BrowserTool(makeSession());
+		const schema = toolWireSchema(tool);
+
+		expect(validateJsonSchemaValue(schema, { action: "inventory" }).success).toBe(true);
+		expect(
+			validateJsonSchemaValue(schema, { action: "close", all: true, approved_tab_ids: [100, 101] }).success,
+		).toBe(true);
+		expect(tool.formatApprovalDetails({ action: "close", approved_tab_ids: [100, 101] })).toContain(
+			"Approved Tab IDs: 100, 101",
+		);
+
+	});
+
 	// Reproduces the regression the Codex review flagged on #3647: with default
 	// `tools.intentTracing`, normalizeTools must keep the closed action variants
 	// satisfiable for inputs that carry the injected `i` field. The earlier

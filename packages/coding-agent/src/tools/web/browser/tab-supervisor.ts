@@ -27,6 +27,8 @@ import {
 	releaseOrphanBrowsers,
 } from "./registry";
 import { applyStorageState, captureStorageState, type StorageState, type StorageStateLoaded } from "./storage-state";
+import { redactTabInventoryUrl } from "./extension-policy";
+import { applyStorageState, type StorageState, type StorageStateLoaded } from "./storage-state";
 import type {
 	BrowserRunError,
 	ReadyInfo,
@@ -184,6 +186,45 @@ export interface RunInTabOptions {
 
 export interface ReleaseTabOptions {
 	kill?: boolean;
+}
+
+export interface OwnerTabReleaseOptions extends ReleaseTabOptions {
+	/** Chrome tab IDs explicitly approved from this session's relay inventory. */
+	approvedTabIds?: readonly number[];
+}
+
+export interface ExtensionTabInventoryEntry {
+	name: string;
+	tabId: number;
+	windowId?: number;
+	url: string;
+	title: string;
+	ownership: "owned" | "attached";
+}
+
+/** List only live extension tabs present in the existing relay registry. */
+export function getExtensionTabInventory(ownerId?: string): ExtensionTabInventoryEntry[] {
+	const inventory: ExtensionTabInventoryEntry[] = [];
+	for (const tab of tabs.values()) {
+		if (tab.state !== "alive" || tab.backend !== "worker" || tab.kindTag !== "extension" || !tab.browser.relay)
+			continue;
+		const tracked = tab.browser.relay.getTrackedTabs().find(item => item.targetId === tab.targetId);
+		if (!tracked) continue;
+		inventory.push({
+			name: tab.name,
+			tabId: tracked.tabId,
+			windowId: tracked.windowId,
+			url: redactTabInventoryUrl(tracked.url),
+			title: tracked.title,
+			ownership: ownerId !== undefined && tab.ownerSessionId === ownerId ? "owned" : "attached",
+		});
+	}
+	return inventory;
+}
+
+function approvedExtensionTabId(tab: TabSession): number | undefined {
+	if (tab.backend !== "worker" || tab.kindTag !== "extension" || !tab.browser.relay) return undefined;
+	return tab.browser.relay.getTrackedTabs().find(item => item.targetId === tab.targetId)?.tabId;
 }
 
 const tabs = new Map<string, TabSession>();
@@ -952,23 +993,38 @@ export async function dropHeadlessTabs(): Promise<void> {
 	for (const name of names) await releaseTab(name);
 }
 
+/** Release a named tab only when this session owns it or approves its exact controlled Chrome tab ID. */
+export async function releaseTabForOwner(
+	name: string,
+	ownerId: string | undefined,
+	opts: OwnerTabReleaseOptions = {},
+): Promise<boolean> {
+	const tab = tabs.get(name);
+	if (!tab) return false;
+	if (ownerId !== undefined && tab.ownerSessionId === ownerId) return releaseTab(name, opts);
+	const tabId = approvedExtensionTabId(tab);
+	if (tabId !== undefined && opts.approvedTabIds?.includes(tabId)) return releaseTab(name, opts);
+	throw new ToolError(
+		`Cannot close tab ${JSON.stringify(name)} because this session does not own it. Include its exact relay-controlled Chrome tab ID in approved_tab_ids to close it.`,
+	);
+}
+
 /**
- * Release every tab created by the given session id. Invoked from
- * `AgentSession.dispose()` so headless/spawned Chromium and workers the
- * session opened do not leak into the long-lived process — the module-global
- * `tabs`/`browsers` maps that back this tool are not otherwise walked by
- * session teardown. (Issue #3963.)
- *
- * Ownership is recorded ONLY on tab creation (`acquireTab` with
- * `ownerSessionId`), never on reuse: an agent re-driving a tab another
- * session opened will not yank teardown responsibility away from the
- * creator. Tabs opened with no owner (e.g. from an SDK caller that doesn't
- * identify a session) are skipped and must be released explicitly.
+ * Release tabs created by a session when `AgentSession.dispose()` runs. Ownership is stamped only
+ * at creation and never changes on reuse. Explicit approved IDs can add only tabs in this relay's
+ * controlled registry; unrelated browser tabs are never adopted.
  */
-export async function releaseTabsForOwner(ownerId: string, opts: ReleaseTabOptions = {}): Promise<number> {
-	if (!ownerId) return 0;
+export async function releaseTabsForOwner(
+	ownerId: string | undefined,
+	opts: OwnerTabReleaseOptions = {},
+): Promise<number> {
+	if (ownerId === undefined) return 0;
 	const names = Array.from(tabs.values())
-		.filter(tab => tab.ownerSessionId === ownerId)
+		.filter(tab => {
+			if (ownerId !== undefined && tab.ownerSessionId === ownerId) return true;
+			const tabId = approvedExtensionTabId(tab);
+			return tabId !== undefined && approvedTabIds.has(tabId);
+		})
 		.map(tab => tab.name);
 	let count = 0;
 	for (const name of names) {
