@@ -20,6 +20,13 @@ export interface BlockContextSource {
 	text?: string;
 }
 
+/**
+ * A source's lines, or its text when the caller has not split it. A diff holds both sides of an edit
+ * as text, and the tree-sitter lookup reads only the few boundary lines it returns, so splitting a
+ * 3.5 MB pair into two whole-file arrays cost 5.5-9 ms of event loop per diff for nothing.
+ */
+export type SourceLines = readonly string[] | string;
+
 export type LineEntry = { kind: "line"; lineNumber: number; text: string; context: boolean } | { kind: "ellipsis" };
 
 /** An unmatched opening bracket: its own code unit, and the line it opened on. */
@@ -97,8 +104,29 @@ function visibleLineNumbers(spans: readonly LineSpan[]): Set<number> {
 	return visible;
 }
 
-function hasEveryLineVisible(visible: ReadonlySet<number>, totalLines: number): boolean {
-	return totalLines > 0 && visible.size >= totalLines;
+function hasEveryLineVisible(visible: ReadonlySet<number>, lines: SourceLines): boolean {
+	if (typeof lines !== "string") return lines.length > 0 && visible.size >= lines.length;
+	// A text has one more line than line breaks; counting stops once they outnumber the visible lines.
+	let count = 1;
+	for (let at = lines.indexOf("\n"); at !== -1 && count <= visible.size; at = lines.indexOf("\n", at + 1)) count++;
+	return visible.size >= count;
+}
+
+/**
+ * The text of each line in `lineNumbers`: lines of this source, 1-indexed and ascending, as the native
+ * lookup returns them, so a text is read in one forward pass.
+ */
+function linesAt(lines: SourceLines, lineNumbers: readonly number[]): string[] {
+	if (typeof lines !== "string") return lineNumbers.map(lineNumber => lines[lineNumber - 1] ?? "");
+	const found: string[] = [];
+	let line = 1;
+	let start = 0;
+	for (const lineNumber of lineNumbers) {
+		for (; line < lineNumber; line++) start = lines.indexOf("\n", start) + 1;
+		const end = lines.indexOf("\n", start);
+		found.push(lines.slice(start, end === -1 ? lines.length : end));
+	}
+	return found;
 }
 
 /**
@@ -116,40 +144,35 @@ function hasEveryLineVisible(visible: ReadonlySet<number>, totalLines: number): 
 const SCAN_CEILING_BYTES = 4 * 1024 * 1024;
 
 /**
- * Whether the source is too large for a boundary lookup to scan. Sizing is
- * exact against {@link SCAN_CEILING_BYTES} when the caller kept the source
- * string; without it, summing line lengths is a lower bound on the byte count
- * (one UTF-16 unit is at least one UTF-8 byte), so a source over the ceiling in
- * units is over it in bytes, and anything at or below falls through to the
- * lookup as before.
+ * Whether a source is too large for a boundary lookup to scan, measured exactly
+ * against {@link SCAN_CEILING_BYTES}. A diff asks before reading its rows, so
+ * a pair with either side over the ceiling shows no boundary rows for both.
  */
-function exceedsScanCeiling(fullLines: readonly string[], source: BlockContextSource): boolean {
-	const text = source.text;
-	if (text !== undefined) {
-		// A character count is checked first because it is free: it can only
-		// undercount bytes, so a source over the ceiling in characters needs no
-		// byte pass, and one well under it needs no byte pass either.
-		if (text.length > SCAN_CEILING_BYTES) return true;
-		if (text.length <= SCAN_CEILING_BYTES / 4) return false;
-		return Buffer.byteLength(text) > SCAN_CEILING_BYTES;
-	}
-	let units = fullLines.length > 0 ? fullLines.length - 1 : 0;
-	for (const line of fullLines) {
+export function exceedsBlockContextScanCeiling(text: string): boolean {
+	// A character count is checked first because it is free: it can only
+	// undercount bytes, so a source over the ceiling in characters needs no
+	// byte pass, and one well under it needs no byte pass either.
+	if (text.length > SCAN_CEILING_BYTES) return true;
+	if (text.length <= SCAN_CEILING_BYTES / 4) return false;
+	return Buffer.byteLength(text) > SCAN_CEILING_BYTES;
+}
+
+/**
+ * Whether the source is too large for a boundary lookup to scan. Sizing is
+ * exact when the caller kept the source string; without it, summing line
+ * lengths is a lower bound on the byte count (one UTF-16 unit is at least one
+ * UTF-8 byte), so a source over the ceiling in units is over it in bytes, and
+ * anything at or below falls through to the lookup as before.
+ */
+function exceedsScanCeiling(lines: SourceLines, source: BlockContextSource): boolean {
+	if (typeof lines === "string") return exceedsBlockContextScanCeiling(lines);
+	if (source.text !== undefined) return exceedsBlockContextScanCeiling(source.text);
+	let units = lines.length > 0 ? lines.length - 1 : 0;
+	for (const line of lines) {
 		units += line.length;
 		if (units > SCAN_CEILING_BYTES) return true;
 	}
 	return false;
-}
-
-/**
- * Whether a boundary lookup on this source would be refused for its size, for
- * a caller that would otherwise build the line arrays a lookup needs. A
- * unified diff splits both sides of the pair to map boundary rows onto line
- * numbers, which is two whole-file arrays per redraw for an answer the ceiling
- * already decided.
- */
-export function exceedsBlockContextScanCeiling(text: string): boolean {
-	return exceedsScanCeiling([], { text });
 }
 
 /** Collapse a set of visible line numbers into sorted, merged inclusive spans. */
@@ -176,7 +199,7 @@ function visibleSetToSpans(visible: ReadonlySet<number>): LineSpan[] {
  * parse runs on the native thread pool, never on the event loop.
  */
 async function nativeBlockContext(
-	fullLines: readonly string[],
+	fullLines: SourceLines,
 	visible: ReadonlySet<number>,
 	source: BlockContextSource,
 ): Promise<Map<number, string> | null> {
@@ -186,7 +209,7 @@ async function nativeBlockContext(
 	let boundaries: number[] | null | undefined;
 	try {
 		boundaries = await enclosingBlockBoundaries({
-			code: source.text ?? fullLines.join("\n"),
+			code: typeof fullLines === "string" ? fullLines : (source.text ?? fullLines.join("\n")),
 			path: source.path,
 			lang: source.lang,
 			ranges,
@@ -196,11 +219,10 @@ async function nativeBlockContext(
 		return null;
 	}
 	if (!boundaries) return null;
+	const hidden = boundaries.filter(lineNumber => !visible.has(lineNumber));
+	const texts = linesAt(fullLines, hidden);
 	const context = new Map<number, string>();
-	for (const lineNumber of boundaries) {
-		if (visible.has(lineNumber)) continue;
-		context.set(lineNumber, fullLines[lineNumber - 1] ?? "");
-	}
+	for (let index = 0; index < hidden.length; index++) context.set(hidden[index], texts[index]);
 	return context;
 }
 
@@ -340,19 +362,24 @@ function lexicalBracketContext(fullLines: readonly string[], visible: ReadonlySe
  * syntactic spans first (covers brace and indentation languages), falling back
  * to a lexical bracket scan when the grammar is unavailable. Returns a map of
  * `lineNumber → source text` for the lines to surface, never including a line
- * already visible. A source over {@link SCAN_CEILING_BYTES} resolves to no
- * boundary lines: both backends scan the whole source, and past that size
- * nothing retains the result, so the scan would be paid again on every redraw.
+ * already visible. `fullLines` may be the source text itself, which is split
+ * only when the lexical scan runs. A source over {@link SCAN_CEILING_BYTES}
+ * resolves to no boundary lines: both backends scan the whole source, and past
+ * that size nothing retains the result, so the scan would be paid again on
+ * every redraw.
  */
 export async function findBlockContextLines(
-	fullLines: readonly string[],
+	fullLines: SourceLines,
 	visibleInput: ReadonlySet<number> | readonly number[],
 	source: BlockContextSource = {},
 ): Promise<Map<number, string>> {
 	const visible = visibleInput instanceof Set ? visibleInput : new Set(visibleInput);
-	if (visible.size === 0 || hasEveryLineVisible(visible, fullLines.length)) return new Map();
+	if (visible.size === 0 || hasEveryLineVisible(visible, fullLines)) return new Map();
 	if (exceedsScanCeiling(fullLines, source)) return new Map();
-	return (await nativeBlockContext(fullLines, visible, source)) ?? lexicalBracketContext(fullLines, visible);
+	return (
+		(await nativeBlockContext(fullLines, visible, source)) ??
+		lexicalBracketContext(typeof fullLines === "string" ? fullLines.split("\n") : fullLines, visible)
+	);
 }
 
 /**

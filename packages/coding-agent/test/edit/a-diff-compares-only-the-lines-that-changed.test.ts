@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import * as diffModule from "@veyyon/coding-agent/edit/diff";
 import { generateDiffString, generateUnifiedDiffString } from "@veyyon/coding-agent/edit/diff";
+import type { BlockContextSource } from "@veyyon/coding-agent/utils/block-context";
 import * as Diff from "diff";
 
 /**
@@ -13,13 +14,22 @@ import * as Diff from "diff";
  * text, a diff that is no longer minimal, a first changed line that moved, short leading or trailing context,
  * or a missing or extra "No newline at end of file" row. The sweep runs every `*DiffString` export.
  *
+ * The boundary-row pass then split both whole files into line arrays to look up the block an off-window
+ * line belongs to, 5.5-9 ms of event loop at 3.5 MB, though the tree-sitter lookup reads only the few
+ * boundary lines it returns. It now hands the lookup each side's text; the hold contract below fails when
+ * a generator holds the event loop as long as one whole-file split.
+ *
  * Gaps: an edit placed inside a run of identical lines can sit at a different line than a whole-file diff
  * puts it (as GNU diff and git place it), so the rows are checked for validity, not for byte equality with
- * whole-file jsdiff. The cost contract skips the boundary-row pass, whose whole-file line splits are not part
- * of this defect.
+ * whole-file jsdiff. A source tree-sitter cannot parse still takes the lexical bracket scan, which splits it.
  */
 
-type DiffGenerator = (oldContent: string, newContent: string, contextLines?: number) => Promise<diffModule.DiffResult>;
+type DiffGenerator = (
+	oldContent: string,
+	newContent: string,
+	contextLines?: number,
+	source?: BlockContextSource,
+) => Promise<diffModule.DiffResult>;
 
 const GENERATORS: Record<string, DiffGenerator> = { generateDiffString, generateUnifiedDiffString };
 
@@ -48,6 +58,26 @@ function wholeFileDiff(oldContent: string, newContent: string): { first?: number
 		}
 	}
 	return { first, added, removed };
+}
+
+/** Run `work` and measure the longest stretch, in milliseconds, the event loop went without a turn. */
+async function longestHold<T>(work: () => Promise<T>): Promise<{ value: T; hold: number }> {
+	let last = performance.now();
+	let hold = 0;
+	let pending = true;
+	const tick = () => {
+		const now = performance.now();
+		hold = Math.max(hold, now - last);
+		last = now;
+		if (pending) setImmediate(tick);
+	};
+	setImmediate(tick);
+	try {
+		const value = await work();
+		return { value, hold: Math.max(hold, performance.now() - last) };
+	} finally {
+		pending = false;
+	}
 }
 
 /** Every way the rows of one generated diff fail to describe `oldContent` -> `newContent`. */
@@ -272,6 +302,45 @@ describe("a diff compares only the lines that changed", () => {
 			expect(result?.diff).toContain(`-${editedLine}|\tconst a = value + ${middle};`);
 			expect(result?.diff).toContain(`+${editedLine}|\tconst a = value - ${middle};`);
 			expect(generated).toBeLessThan(wholeFile / 4);
+		},
+	);
+
+	it.each(Object.keys(GENERATORS))(
+		"%s finds the block boundary of a 3.5 MB source without holding the event loop for a split of it",
+		async name => {
+			const generate = GENERATORS[name];
+			const units: string[] = [];
+			let size = 0;
+			for (let n = 0; size < 3.5 * 1024 * 1024; n++) {
+				const unit = `export function unit${n}(value: number): number {\n\tconst a = value + ${n};\n\tif (a > 3) {\n\t\treturn a * 2;\n\t}\n\treturn a;\n}\n`;
+				units.push(unit);
+				size += unit.length;
+			}
+			const oldContent = units.join("");
+			const middle = Math.floor(units.length / 2);
+			const newContent = oldContent.replace(`const a = value + ${middle};`, `const a = value - ${middle};`);
+			// The rows show the edited function's first four lines; the `if` closer and the function closer
+			// below them are the boundary rows the lookup adds.
+			const first = middle * 7 + 1;
+
+			let split = Number.POSITIVE_INFINITY;
+			let hold = Number.POSITIVE_INFINITY;
+			let lineCount = 0;
+			let result: diffModule.DiffResult | undefined;
+			// The first run parses the source cold, off the event loop; the rest edit the cached tree.
+			for (let run = 0; run < 4; run++) {
+				const start = performance.now();
+				lineCount = oldContent.split("\n").length;
+				split = Math.min(split, performance.now() - start);
+				const measured = await longestHold(() => generate(oldContent, newContent, undefined, { path: "large.ts" }));
+				result = measured.value;
+				if (run > 0) hold = Math.min(hold, measured.hold);
+			}
+
+			expect(lineCount).toBe(units.length * 7 + 1);
+			expect(result?.diff).toContain(` ${first + 4}|\t}`);
+			expect(result?.diff).toContain(` ${first + 6}|}`);
+			expect(hold).toBeLessThan(split);
 		},
 	);
 });

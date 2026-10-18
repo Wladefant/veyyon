@@ -170,12 +170,9 @@ async function addMatchingBracketContextRows(
 	newText: string,
 	source: BlockContextSource,
 ): Promise<void> {
-	// Ask before splitting: each side of a large pair is a whole-file array, and
-	// on a source over the boundary-scan ceiling the lookup below returns
-	// nothing regardless.
+	// On a source over the boundary-scan ceiling the lookup returns nothing,
+	// so a pair with either side over it skips reading the rows too.
 	if (exceedsBlockContextScanCeiling(oldText) || exceedsBlockContextScanCeiling(newText)) return;
-	const oldLines = oldText.split("\n");
-	const newLines = newText.split("\n");
 	const oldVisible: number[] = [];
 	const newVisible: number[] = [];
 	const seenRows = new Set(rows);
@@ -215,11 +212,11 @@ async function addMatchingBracketContextRows(
 		return newLineNumber - shift;
 	};
 
-	// Each side hands its own text down: the lookup joins the line array back
-	// into a source when it is not given one, which is a copy of the whole file
-	// per side per call, and this caller is holding both strings already.
-	const contextRows = await findBlockContextLines(oldLines, oldVisible, { ...source, text: oldText });
-	for (const [lineNumber, text] of await findBlockContextLines(newLines, newVisible, { ...source, text: newText })) {
+	// Each side hands down its text rather than its lines: the native lookup
+	// reads only the boundary lines it returns, so splitting a 3.5 MB pair into
+	// two whole-file arrays held the event loop 5.5-9 ms per diff for nothing.
+	const contextRows = await findBlockContextLines(oldText, oldVisible, source);
+	for (const [lineNumber, text] of await findBlockContextLines(newText, newVisible, source)) {
 		const oldLineNumber = toOldLineNumber(lineNumber);
 		if (!contextRows.has(oldLineNumber)) contextRows.set(oldLineNumber, text);
 	}
