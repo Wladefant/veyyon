@@ -9,7 +9,7 @@
 import * as logger from "@veyyon/utils/logger";
 import { isRecord } from "@veyyon/utils/type-guards";
 import * as AIError from "../../error";
-import { dereferenceJsonSchema } from "./dereference";
+import { dereferenceJsonSchema, parseLocalRefPointer } from "./dereference";
 import { upgradeJsonSchemaTo202012 } from "./draft";
 import { areJsonValuesEqual, mergeCompatibleEnumSchemas, mergePropertySchemas } from "./equality";
 import {
@@ -1253,7 +1253,7 @@ function copySchemaMapBefore(schemaMap: JsonObject, key: string, value: unknown)
  * subschema (Go accepts it), and llama.cpp's grammar sees a real value
  * union rather than a closed empty object.
  */
-const OLLAMA_OPEN_SUBSCHEMA_WIDENING = Object.freeze({
+const OPEN_SUBSCHEMA_WIDENING = Object.freeze({
 	anyOf: [
 		{ type: "string" },
 		{ type: "number" },
@@ -1272,9 +1272,92 @@ export function sanitizeSchemaForOllama(schema: JsonObject): JsonObject {
 	return ollamaSchemaNode(schema) as JsonObject;
 }
 
+/**
+ * Keywords whose bare boolean value a grammar-constrained backend cannot
+ * read. `additionalProperties` and `unevaluatedProperties` are excluded:
+ * llama.cpp's `_build_object_rule` reads their boolean form as meaningful
+ * closed/open-object semantics, and `additionalProperties: false` is what
+ * `toolWireSchema` emits to pin a strict object shape.
+ */
+const GRAMMAR_SCHEMA_VALUE_KEYS: Record<string, true> = {
+	items: true,
+	additionalItems: true,
+	contains: true,
+	contentSchema: true,
+	propertyNames: true,
+	if: true,
+	// biome-ignore lint/suspicious/noThenProperty: JSON Schema subschema keyword
+	then: true,
+	else: true,
+	not: true,
+	unevaluatedItems: true,
+};
+
+/**
+ * Widens every open subschema for a grammar-constrained sampler, leaving the
+ * object-form `additionalProperties` interior walkable. Map and array keywords
+ * are walked as schemas; literal payloads under `enum`, `const` and `default`
+ * stay untouched. Identity-preserving: unchanged subtrees keep their reference.
+ */
+export function sanitizeSchemaForGrammar(schema: JsonObject): JsonObject {
+	const normalizeNode = (value: unknown, isSubschema: boolean): unknown => {
+		if (value === true) return isSubschema ? OPEN_SUBSCHEMA_WIDENING : value;
+		if (value === false) return isSubschema ? { not: OPEN_SUBSCHEMA_WIDENING } : value;
+		if (Array.isArray(value)) {
+			let changed = false;
+			const output = value.map(item => {
+				const next = normalizeNode(item, isSubschema);
+				if (next !== item) changed = true;
+				return next;
+			});
+			return changed ? output : value;
+		}
+		if (!isRecord(value)) return value;
+
+		let changed = false;
+		const output: JsonObject = {};
+		for (const key in value) {
+			if (!Object.hasOwn(value, key)) continue;
+			const child = value[key];
+			let next = child;
+			if (SCHEMA_MAP_KEYWORDS.has(key) && isRecord(child)) {
+				let mapChanged = false;
+				const mapOutput: JsonObject = {};
+				for (const childKey in child) {
+					if (!Object.hasOwn(child, childKey)) continue;
+					const mapChild = child[childKey];
+					const normalizedChild = normalizeNode(mapChild, true);
+					if (normalizedChild !== mapChild) mapChanged = true;
+					mapOutput[childKey] = normalizedChild;
+				}
+				next = mapChanged ? mapOutput : child;
+			} else if (Object.hasOwn(SUBSCHEMA_ARRAY_KEYS, key) && Array.isArray(child)) {
+				let arrayChanged = false;
+				const arrayOutput = child.map(item => {
+					const normalizedItem = normalizeNode(item, true);
+					if (normalizedItem !== item) arrayChanged = true;
+					return normalizedItem;
+				});
+				next = arrayChanged ? arrayOutput : child;
+			} else if (Object.hasOwn(GRAMMAR_SCHEMA_VALUE_KEYS, key)) {
+				next = normalizeNode(child, true);
+			} else if ((key === "additionalProperties" || key === "unevaluatedProperties") && typeof child !== "boolean") {
+				// Boolean form is meaningful closed/open-object grammar semantics and
+				// stays intact; the object form is a genuine subschema whose interior
+				// may still hold bare booleans emitted by `toolWireSchema`.
+				next = normalizeNode(child, true);
+			}
+			if (next !== child) changed = true;
+			output[key] = next;
+		}
+		return changed ? output : value;
+	};
+	return normalizeNode(schema, true) as JsonObject;
+}
+
 function ollamaSchemaNode(value: unknown): unknown {
-	if (value === true) return OLLAMA_OPEN_SUBSCHEMA_WIDENING;
-	if (value === false) return { not: OLLAMA_OPEN_SUBSCHEMA_WIDENING };
+	if (value === true) return OPEN_SUBSCHEMA_WIDENING;
+	if (value === false) return { not: OPEN_SUBSCHEMA_WIDENING };
 	if (Array.isArray(value)) return mapSchemaArray(value, ollamaSchemaNode, undefined);
 	return isRecord(value) ? ollamaSchemaObject(value) : value;
 }
@@ -2126,19 +2209,16 @@ export function tryEnforceStrictSchema(schema: Record<string, unknown>): {
 }
 
 /**
- * Resolve a JSON-pointer-style `$ref` against the root schema. Mirrors the
- * OpenAI SDK's `resolve_ref` helper: only local refs starting with `#/` are
- * supported, and each segment must dereference to a dictionary.
+ * Resolve a URI-fragment JSON Pointer against the root schema. Each segment
+ * must dereference to a dictionary, as in the OpenAI SDK's `resolve_ref` helper.
  * Cite: openai-python/src/openai/lib/_pydantic.py:118-129
  */
 function resolveStrictRef(root: Record<string, unknown>, ref: string): Record<string, unknown> | undefined {
-	if (!ref.startsWith("#/")) return undefined;
-	const segments = ref.slice(2).split("/");
+	const pointer = parseLocalRefPointer(ref);
+	if (pointer === undefined || pointer.length === 0) return undefined;
 	let cursor: unknown = root;
-	for (const raw of segments) {
+	for (const segment of pointer) {
 		if (!isRecord(cursor)) return undefined;
-		// JSON Pointer unescape: ~1 → "/", ~0 → "~" (must run in that order).
-		const segment = raw.replace(/~1/g, "/").replace(/~0/g, "~");
 		cursor = cursor[segment];
 	}
 	return isRecord(cursor) ? cursor : undefined;

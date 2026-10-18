@@ -1,7 +1,7 @@
-import { isRecord } from "@veyyon/utils/type-guards";
 import { areJsonValuesEqual } from "./equality";
+import { formatLocalRefPointer, parseLocalRefPointer } from "./dereference";
 import { epochNext, once } from "./stamps";
-import type { JsonObject } from "./types";
+import { isJsonObject, type JsonObject } from "./types";
 
 export const JSON_SCHEMA_DRAFT_2020_12_URI = "https://json-schema.org/draft/2020-12/schema";
 
@@ -35,15 +35,22 @@ const NON_SCHEMA_VALUE_KEYS: Record<string, true> = {
 	type: true,
 };
 
-/** Rewrite draft-07's `#/definitions/Foo` ref form to draft 2020-12's `#/$defs/Foo`. External refs (`http://…`) pass through. */
+/**
+ * Rewrite draft-07's `#/definitions/Foo` ref form to draft 2020-12's
+ * `#/$defs/Foo`, decoding URI-fragment spellings such as
+ * `#%2Fdefinitions%2Ffoo` with the shared pointer parser first. External
+ * refs (`http://…`) pass through.
+ */
 function convertRef(value: string): string {
-	return value.startsWith("#/definitions/") ? `#/$defs/${value.slice("#/definitions/".length)}` : value;
+	const pointer = parseLocalRefPointer(value);
+	if (pointer === undefined || pointer[0] !== "definitions") return value;
+	return formatLocalRefPointer(["$defs", ...pointer.slice(1)]);
 }
 
 /** Get-or-create a child object map on `target[key]`. Used to lazily build up `$defs`/`dependentRequired`/`dependentSchemas` during conversion. */
 function getObjectMap(target: JsonObject, key: string): JsonObject {
 	const existing = target[key];
-	if (isRecord(existing)) return existing;
+	if (isJsonObject(existing)) return existing;
 	const next: JsonObject = {};
 	target[key] = next;
 	return next;
@@ -58,7 +65,7 @@ function mergeSchemaMap(target: JsonObject, key: string, value: JsonObject, cach
 }
 /** Copy a schema-map field with upgrade; non-object values are passed through verbatim. */
 function copySchemaMap(target: JsonObject, key: string, value: unknown, cache: WeakMap<object, unknown>): void {
-	if (!isRecord(value)) {
+	if (!isJsonObject(value)) {
 		target[key] = value;
 		return;
 	}
@@ -82,7 +89,7 @@ function combineSchemas(left: unknown, right: unknown): unknown {
 
 /** Union two arrays of JSON values, deduping by deep equality. Used to merge `dependentRequired` arrays. */
 function mergeArrayValues(left: unknown[], right: unknown[]): unknown[] {
-	const merged = left.slice();
+	const merged = [...left];
 	for (const value of right) {
 		if (!merged.some(existing => areJsonValuesEqual(existing, value))) {
 			merged.push(value);
@@ -98,7 +105,7 @@ function mergeArrayValues(left: unknown[], right: unknown[]): unknown[] {
  */
 function mergePrefixItems(existing: unknown, convertedItems: unknown[]): unknown[] {
 	if (!Array.isArray(existing)) return convertedItems;
-	const merged = existing.slice();
+	const merged = [...existing];
 	for (let index = 0; index < convertedItems.length; index += 1) {
 		merged[index] = index in merged ? combineSchemas(merged[index], convertedItems[index]) : convertedItems[index];
 	}
@@ -132,7 +139,7 @@ function mergeDependentSchema(target: JsonObject, key: string, schema: unknown):
  */
 function convertDependencies(source: JsonObject, target: JsonObject, cache: WeakMap<object, unknown>): void {
 	const dependencies = source.dependencies;
-	if (!isRecord(dependencies)) return;
+	if (!isJsonObject(dependencies)) return;
 	for (const key in dependencies) {
 		const dependency = dependencies[key];
 		const converted = upgradeJsonSchemaTo202012Impl(dependency, cache);
@@ -151,7 +158,7 @@ function hasNullType(type: unknown): boolean {
 
 /** True if any variant in `anyOf` declares (only) a null type. Used to avoid double-adding `{type:"null"}`. */
 function hasNullVariant(variants: unknown[]): boolean {
-	return variants.some(variant => isRecord(variant) && hasNullType(variant.type));
+	return variants.some(variant => isJsonObject(variant) && hasNullType(variant.type));
 }
 
 /**
@@ -169,11 +176,11 @@ function makeNullable(schema: JsonObject): JsonObject {
 		return schema;
 	}
 	if (Array.isArray(type)) {
-		if (!type.includes("null")) schema.type = type.concat(["null"]);
+		if (!type.includes("null")) schema.type = [...type, "null"];
 		return schema;
 	}
 	if (Array.isArray(schema.anyOf)) {
-		if (!hasNullVariant(schema.anyOf)) schema.anyOf = schema.anyOf.concat([{ type: "null" }]);
+		if (!hasNullVariant(schema.anyOf)) schema.anyOf = [...schema.anyOf, { type: "null" }];
 		return schema;
 	}
 	return { anyOf: [schema, { type: "null" }] };
@@ -181,7 +188,7 @@ function makeNullable(schema: JsonObject): JsonObject {
 
 /** True if any entry in a schema-map needs upgrading. Shortcut used during pre-check to skip the full clone when nothing has changed. */
 function schemaMapNeedsDraft202012Upgrade(value: unknown, epoch: number): boolean {
-	if (!isRecord(value)) return false;
+	if (!isJsonObject(value)) return false;
 	for (const k in value) {
 		if (schemaNeedsDraft202012UpgradeImpl(value[k], epoch)) return true;
 	}
@@ -200,22 +207,32 @@ function schemaNeedsDraft202012UpgradeImpl(value: unknown, epoch: number): boole
 		if (!once(value, epoch)) return false;
 		return value.some(entry => schemaNeedsDraft202012UpgradeImpl(entry, epoch));
 	}
-	if (!isRecord(value) || !once(value, epoch)) return false;
-	for (const key in value) {
-		if (keywordNeedsDraft202012Upgrade(key, value[key], epoch)) return true;
-	}
-	return false;
-}
+	if (!isJsonObject(value)) return false;
+	if (!once(value, epoch)) return false;
 
-/** True when keyword `key` with value `entry` is a draft-07 form, or holds a subschema that contains one. */
-function keywordNeedsDraft202012Upgrade(key: string, entry: unknown, epoch: number): boolean {
-	if (key === "$schema") return typeof entry === "string" && entry in DRAFT_07_SCHEMA_URIS;
-	if (key === "definitions" || key === "dependencies" || key === "additionalItems" || key === "nullable") return true;
-	if (key === "$ref") return typeof entry === "string" && entry.startsWith("#/definitions/");
-	if (key === "items" && Array.isArray(entry)) return true;
-	if (key === "$defs" || key in SCHEMA_MAP_KEYS) return schemaMapNeedsDraft202012Upgrade(entry, epoch);
-	if (key in NON_SCHEMA_VALUE_KEYS) return false;
-	return schemaNeedsDraft202012UpgradeImpl(entry, epoch);
+	for (const key in value) {
+		const entry = value[key];
+		if (key === "$schema") {
+			if (typeof entry === "string" && entry in DRAFT_07_SCHEMA_URIS) return true;
+			continue;
+		}
+		if (key === "definitions" || key === "dependencies" || key === "additionalItems" || key === "nullable") {
+			return true;
+		}
+		if (key === "$ref") {
+			if (typeof entry === "string" && entry.startsWith("#/definitions/")) return true;
+			continue;
+		}
+		if (key === "items" && Array.isArray(entry)) return true;
+		if (key === "$defs" || key in SCHEMA_MAP_KEYS) {
+			if (schemaMapNeedsDraft202012Upgrade(entry, epoch)) return true;
+			continue;
+		}
+		if (key in NON_SCHEMA_VALUE_KEYS) continue;
+		if (schemaNeedsDraft202012UpgradeImpl(entry, epoch)) return true;
+	}
+
+	return false;
 }
 
 /**
@@ -225,8 +242,17 @@ function keywordNeedsDraft202012Upgrade(key: string, entry: unknown, epoch: numb
  * resolve to a (later-populated) reference rather than infinite-looping.
  */
 function upgradeJsonSchemaTo202012Impl(value: unknown, cache: WeakMap<object, unknown>): unknown {
-	if (Array.isArray(value)) return upgradeSchemaArray(value, cache);
-	if (!isRecord(value)) return value;
+	if (Array.isArray(value)) {
+		const cached = cache.get(value);
+		if (cached !== undefined) return cached;
+		const result: unknown[] = [];
+		cache.set(value, result);
+		for (const entry of value) {
+			result.push(upgradeJsonSchemaTo202012Impl(entry, cache));
+		}
+		return result;
+	}
+	if (!isJsonObject(value)) return value;
 
 	const cached = cache.get(value);
 	if (cached !== undefined) return cached;
@@ -234,94 +260,72 @@ function upgradeJsonSchemaTo202012Impl(value: unknown, cache: WeakMap<object, un
 	const result: JsonObject = {};
 	// Seed cache before recursion so back-edges in cyclic graphs resolve.
 	cache.set(value, result);
-	for (const key in value) upgradeKeyword(result, key, value[key], cache);
-	if (Array.isArray(value.items)) convertTupleItems(value, value.items, result, cache);
+	for (const key in value) {
+		const entry = value[key];
+		// `definitions` is the draft-07 name; merge under the canonical `$defs`.
+		// `$defs` may appear pre-upgraded — still walk entries to upgrade their bodies.
+		if (key === "definitions" || key === "$defs") {
+			if (isJsonObject(entry)) mergeSchemaMap(result, "$defs", entry, cache);
+			continue;
+		}
+		// Recurse into each entry; the map shape itself is preserved.
+		if (key in SCHEMA_MAP_KEYS) {
+			copySchemaMap(result, key, entry, cache);
+			continue;
+		}
+		// JSON-Schema *value* keywords — copy verbatim.
+		if (key in NON_SCHEMA_VALUE_KEYS) {
+			result[key] = entry;
+			continue;
+		}
+		// Draft-07-only keywords with no draft 2020-12 spelling — drop entirely.
+		// `items` arrays are handled below via `prefixItems` conversion.
+		if (key === "dependencies" || key === "additionalItems" || key === "nullable") {
+			continue;
+		}
+		// Rewrite `$schema` URI to the 2020-12 form; non-draft-07 URIs pass through.
+		if (key === "$schema") {
+			result.$schema =
+				typeof entry === "string" && entry in DRAFT_07_SCHEMA_URIS ? JSON_SCHEMA_DRAFT_2020_12_URI : entry;
+			continue;
+		}
+		// `#/definitions/Foo` → `#/$defs/Foo`.
+		if (key === "$ref" && typeof entry === "string") {
+			result.$ref = convertRef(entry);
+			continue;
+		}
+		// Array-valued `items` is the draft-07 tuple form — handled after the loop.
+		if (key === "items" && Array.isArray(entry)) {
+			continue;
+		}
+		result[key] = upgradeJsonSchemaTo202012Impl(entry, cache);
+	}
+
+	// Draft-07 tuple form: `items: [a, b]` (+ optional `additionalItems`) becomes
+	// draft 2020-12 `prefixItems: [a, b]` (+ optional `items` for the rest).
+	if (Array.isArray(value.items)) {
+		const convertedItems = upgradeJsonSchemaTo202012Impl(value.items, cache) as unknown[];
+		result.prefixItems = mergePrefixItems(result.prefixItems, convertedItems);
+		if (value.additionalItems !== undefined && value.additionalItems !== true) {
+			result.items = upgradeJsonSchemaTo202012Impl(value.additionalItems, cache);
+		} else {
+			// `additionalItems: true` (or absent) in draft-07 == no `items` in 2020-12.
+			delete result.items;
+		}
+	}
+
 	convertDependencies(value, result, cache);
-	if (value.nullable !== true) return result;
 
 	// OpenAPI 3.0 `nullable: true` → 2020-12 nullability. `makeNullable` may
 	// return a fresh wrapper object, in which case update the cache so callers
 	// referring to the same input see the wrapper instead of the inner result.
-	const nullable = makeNullable(result);
-	if (nullable !== result) cache.set(value, nullable);
-	return nullable;
-}
-
-/** Upgrades each member of a schema array into a new array, seeded in `cache` before recursion like an object. */
-function upgradeSchemaArray(value: unknown[], cache: WeakMap<object, unknown>): unknown {
-	const cached = cache.get(value);
-	if (cached !== undefined) return cached;
-	const result: unknown[] = [];
-	cache.set(value, result);
-	for (const entry of value) {
-		result.push(upgradeJsonSchemaTo202012Impl(entry, cache));
+	if (value.nullable === true) {
+		const nullable = makeNullable(result);
+		if (nullable !== result) cache.set(value, nullable);
+		return nullable;
 	}
+
 	return result;
-}
-
-/**
- * Writes the draft 2020-12 form of keyword `key` with value `entry` into `result`. Tuple `items`,
- * `dependencies` and `nullable` are converted after every keyword is written, by
- * {@link convertTupleItems}, {@link convertDependencies} and {@link makeNullable}.
- */
-function upgradeKeyword(result: JsonObject, key: string, entry: unknown, cache: WeakMap<object, unknown>): void {
-	// `definitions` is the draft-07 name; merge under the canonical `$defs`.
-	// `$defs` may appear pre-upgraded — still walk entries to upgrade their bodies.
-	if (key === "definitions" || key === "$defs") {
-		if (isRecord(entry)) mergeSchemaMap(result, "$defs", entry, cache);
-		return;
-	}
-	// Recurse into each entry; the map shape itself is preserved.
-	if (key in SCHEMA_MAP_KEYS) {
-		copySchemaMap(result, key, entry, cache);
-		return;
-	}
-	// JSON-Schema *value* keywords — copy verbatim.
-	if (key in NON_SCHEMA_VALUE_KEYS) {
-		result[key] = entry;
-		return;
-	}
-	// Draft-07-only keywords with no draft 2020-12 spelling, and the draft-07 tuple
-	// form of `items` — converted after every keyword is written.
-	if (
-		key === "dependencies" ||
-		key === "additionalItems" ||
-		key === "nullable" ||
-		(key === "items" && Array.isArray(entry))
-	) {
-		return;
-	}
-	// Rewrite `$schema` URI to the 2020-12 form; non-draft-07 URIs pass through.
-	if (key === "$schema") {
-		result.$schema =
-			typeof entry === "string" && entry in DRAFT_07_SCHEMA_URIS ? JSON_SCHEMA_DRAFT_2020_12_URI : entry;
-		return;
-	}
-	// `#/definitions/Foo` → `#/$defs/Foo`.
-	if (key === "$ref" && typeof entry === "string") {
-		result.$ref = convertRef(entry);
-		return;
-	}
-	result[key] = upgradeJsonSchemaTo202012Impl(entry, cache);
-}
-
-/**
- * Rewrites the draft-07 tuple form `items: [a, b]` of `source` as draft 2020-12 `prefixItems: [a, b]`,
- * merged into any `prefixItems` already in `result`. A schema-valued `additionalItems` becomes `items`;
- * `additionalItems: true`, or none, adds no `items`. `result` holds no `items` on entry, since the
- * keyword pass skips an array-valued `items`.
- */
-function convertTupleItems(
-	source: JsonObject,
-	items: unknown[],
-	result: JsonObject,
-	cache: WeakMap<object, unknown>,
-): void {
-	const convertedItems = upgradeJsonSchemaTo202012Impl(items, cache) as unknown[];
-	result.prefixItems = mergePrefixItems(result.prefixItems, convertedItems);
-	if (source.additionalItems !== undefined && source.additionalItems !== true) {
-		result.items = upgradeJsonSchemaTo202012Impl(source.additionalItems, cache);
-	}
 }
 
 /** Pre-check entrypoint. Exposed so callers can decide whether to take the upgrade path at all. */

@@ -19,6 +19,7 @@
 import * as logger from "@veyyon/utils/logger";
 import { codePointLength } from "@veyyon/utils/string-length";
 import { isRecord } from "@veyyon/utils/type-guards";
+import { parseLocalRefPointer } from "./dereference";
 import { areJsonValuesEqual } from "./equality";
 import { isMultipleOf } from "./multiple-of";
 
@@ -172,18 +173,12 @@ function schemaTypes(schema: Record<string, unknown>): string[] {
 	return types;
 }
 
-/** RFC 6901 token decode: `~1` → `/`, `~0` → `~`. */
-function decodePointerToken(token: string): string {
-	return token.replace(/~1/g, "/").replace(/~0/g, "~");
-}
-
-/** Resolve a `#/path/to/node` pointer against the root schema. Returns `undefined` for external/unsupported refs. */
+/** Resolve a local `$ref` pointer against the root schema. Returns `undefined` for external/unsupported refs. */
 function resolveLocalRef(root: unknown, ref: string): unknown | undefined {
-	if (ref === "#") return root;
-	if (!ref.startsWith("#/")) return undefined;
+	const pointer = parseLocalRefPointer(ref);
+	if (pointer === undefined) return undefined;
 	let current: unknown = root;
-	for (const rawToken of ref.slice(2).split("/")) {
-		const token = decodePointerToken(rawToken);
+	for (const token of pointer) {
 		if (!isRecord(current) && !Array.isArray(current)) return undefined;
 		current = (current as Record<string, unknown>)[token];
 	}

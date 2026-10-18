@@ -540,6 +540,37 @@ function unrequireDefaultedProperties(obj: Record<string, unknown>): void {
 	else obj.required = filtered;
 }
 
+function isExclusiveRequiredBranch(branch: unknown): boolean {
+	if (!isRecord(branch)) return false;
+	if (Object.hasOwn(branch, "type")) return false;
+	if (!Array.isArray(branch.required) || branch.required.length === 0) return false;
+	if (!branch.required.every(name => typeof name === "string" && name.length > 0)) return false;
+	for (const key in branch) {
+		if (!Object.hasOwn(branch, key)) continue;
+		if (key === "required" || key === "description" || key === "title") continue;
+		return false;
+	}
+	return true;
+}
+
+/**
+ * Return an xAI-compatible copy of an object-root schema whose union consists
+ * only of typeless required-key fragments. Other providers must retain the
+ * union because it is a real model-facing constraint.
+ */
+export function flattenExclusiveRequiredRootUnion(schema: Record<string, unknown>): Record<string, unknown> {
+	const unionKey = Array.isArray(schema.anyOf) ? "anyOf" : Array.isArray(schema.oneOf) ? "oneOf" : undefined;
+	if (!unionKey) return schema;
+	const union = schema[unionKey];
+	if (!Array.isArray(union) || union.length === 0) return schema;
+	const typedObject = schema.type === "object" || (Array.isArray(schema.type) && schema.type.includes("object"));
+	if (!typedObject && !isRecord(schema.properties)) return schema;
+	if (!union.every(isExclusiveRequiredBranch)) return schema;
+	const flattened = { ...schema };
+	delete flattened[unionKey];
+	return flattened;
+}
+
 /**
  * Normalize `{}` (empty JSON Schema = `z.unknown()` / unconstrained value) to
  * boolean `true` in every schema-valued position. JSON Schema draft 2020-12

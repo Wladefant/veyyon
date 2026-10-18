@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added schema normalization for Factory Droid and Foundation Models, with shared RFC 6901 pointer resolution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added tool call id normalization, carried reasoning markers, and lazy stream idle budget resolution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added transportFetch utility and ported Anthropic wire compaction types and Google signature re-exports ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Enforced vision guard image format validation and payload boundary constraints ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
