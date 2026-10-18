@@ -1,6 +1,6 @@
-import { type } from "@oh-my-pi/omptype";
 import * as AIError from "../error";
 import type { RerankRequest, RerankResult } from "../rerank/types";
+import { type } from "./gateway-schema-type";
 
 export const MAX_RERANK_BODY_BYTES = 8 * 1024 * 1024;
 

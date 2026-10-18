@@ -1,4 +1,3 @@
-import { type } from "@oh-my-pi/omptype";
 import * as AIError from "../error";
 import type {
 	TranscriptionRequest,
@@ -6,6 +5,7 @@ import type {
 	TranscriptionResult,
 	TranscriptionTimestampGranularity,
 } from "../transcription/types";
+import { type } from "./gateway-schema-type";
 
 export const MAX_TRANSCRIPTION_BODY_BYTES = 25 * 1024 * 1024;
 

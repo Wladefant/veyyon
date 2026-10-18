@@ -1,6 +1,6 @@
-import { type } from "@oh-my-pi/omptype";
 import * as AIError from "../error";
 import type { SpeechRequest, SpeechResult } from "../speech/types";
+import { type } from "./gateway-schema-type";
 
 const speechRequestSchema = type({
 	model: "string > 0",

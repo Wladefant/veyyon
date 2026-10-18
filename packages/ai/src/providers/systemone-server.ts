@@ -8,12 +8,12 @@
  * maps — and otherwise forwarded to the selected native judgment wire.
  * Validation failures answer `422` like TypeSafe.
  */
-import { type } from "@oh-my-pi/omptype";
 import * as AIError from "../error";
 import { isEmbeddedImageContent } from "../images/shared";
 import type { JudgmentRequest, JudgmentResult } from "../judgment/types";
 import type { JudgmentImageAssets } from "../judgment/wire";
 import type { ImageContent } from "../types";
+import { type } from "./gateway-schema-type";
 
 /** Image shape only; the shared embedded-image guard validates data, MIME type, and detail. */
 const systemOneImageSchema = type({

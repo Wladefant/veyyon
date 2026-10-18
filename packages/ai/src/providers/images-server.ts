@@ -1,7 +1,7 @@
-import { type } from "@oh-my-pi/omptype";
 import * as AIError from "../error";
 import { isDataUrlMimeType } from "../images/shared";
 import type { ImageGenerationRequest, ImageGenerationResult } from "../images/types";
+import { type } from "./gateway-schema-type";
 
 const imageJsonRequestSchema = type({
 	model: "string > 0",

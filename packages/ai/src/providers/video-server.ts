@@ -1,4 +1,3 @@
-import { type } from "@oh-my-pi/omptype";
 import * as AIError from "../error";
 import type {
 	VideoAspectRatio,
@@ -8,6 +7,7 @@ import type {
 	VideoJob,
 	VideoResolution,
 } from "../video/types";
+import { type } from "./gateway-schema-type";
 
 const submitRequestSchema = type({
 	model: "string > 0",
