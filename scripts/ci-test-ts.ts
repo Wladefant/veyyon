@@ -1122,6 +1122,82 @@ export function parseCiTestShard(value: string | undefined): CiTestShard | undef
 	return { index, count };
 }
 
+export function resolveCiTestShard(
+	env: Record<string, string | undefined> = Bun.env,
+): CiTestShard | undefined {
+	const testShardVal = env.VEYYON_CI_TEST_SHARD;
+	const vShard = env.VEYYON_CI_SHARD;
+	const vShards = env.VEYYON_CI_SHARDS;
+	const cfIndex = env.CF_SHARD_INDEX;
+	const cfCount = env.CF_SHARD_COUNT;
+
+	const hasTestShard = testShardVal !== undefined && testShardVal.trim() !== "";
+	const hasVeyyonShard = vShard !== undefined && vShard.trim() !== "";
+	const hasVeyyonShards = vShards !== undefined && vShards.trim() !== "";
+	const hasCfIndex = cfIndex !== undefined && cfIndex.trim() !== "";
+	const hasCfCount = cfCount !== undefined && cfCount.trim() !== "";
+
+	const hasVeyyon = hasVeyyonShard || hasVeyyonShards;
+	const hasCf = hasCfIndex || hasCfCount;
+
+	if (!hasTestShard && !hasVeyyon && !hasCf) {
+		return undefined;
+	}
+
+	let parsedFromTestShard: CiTestShard | undefined;
+	if (hasTestShard) {
+		parsedFromTestShard = parseCiTestShard(testShardVal);
+	}
+
+	let normA: CiTestShard | undefined;
+	if (hasVeyyon) {
+		if (!hasVeyyonShard || !hasVeyyonShards) {
+			throw new Error("Both VEYYON_CI_SHARD and VEYYON_CI_SHARDS must be set together");
+		}
+		const countNum = Number(vShards);
+		const shardNum = Number(vShard);
+		if (!Number.isSafeInteger(countNum) || countNum <= 0) {
+			throw new Error(`Invalid VEYYON_CI_SHARDS ${JSON.stringify(vShards)}; expected positive integer`);
+		}
+		if (!Number.isSafeInteger(shardNum) || shardNum < 1 || shardNum > countNum) {
+			throw new Error(`Invalid VEYYON_CI_SHARD ${JSON.stringify(vShard)}; must be between 1 and ${countNum}`);
+		}
+		normA = { index: shardNum, count: countNum };
+	}
+
+	let normB: CiTestShard | undefined;
+	if (hasCf) {
+		if (!hasCfIndex || !hasCfCount) {
+			throw new Error("Both CF_SHARD_INDEX and CF_SHARD_COUNT must be set together");
+		}
+		const countNum = Number(cfCount);
+		const indexNum = Number(cfIndex);
+		if (!Number.isSafeInteger(countNum) || countNum <= 0) {
+			throw new Error(`Invalid CF_SHARD_COUNT ${JSON.stringify(cfCount)}; expected positive integer`);
+		}
+		if (!Number.isSafeInteger(indexNum) || indexNum < 0 || indexNum >= countNum) {
+			throw new Error(
+				`Invalid CF_SHARD_INDEX ${JSON.stringify(cfIndex)}; must be between 0 and ${countNum - 1}`,
+			);
+		}
+		normB = { index: indexNum + 1, count: countNum };
+	}
+
+	const candidates = [parsedFromTestShard, normA, normB].filter((c): c is CiTestShard => c !== undefined);
+	if (candidates.length > 1) {
+		const first = candidates[0];
+		for (let i = 1; i < candidates.length; i++) {
+			if (candidates[i].index !== first.index || candidates[i].count !== first.count) {
+				throw new Error(
+					`Conflicting shard configuration: shard ${first.index}/${first.count} conflicts with shard ${candidates[i].index}/${candidates[i].count}`,
+				);
+			}
+		}
+	}
+
+	return candidates[0];
+}
+
 export function partitionTestCommands<T>(commands: readonly T[], shard: CiTestShard): T[] {
 	return commands.filter((_, index) => index % shard.count === shard.index - 1);
 }
@@ -1897,11 +1973,9 @@ if (import.meta.main) {
 
 	await ensureToolViewsGenerated();
 	const availableTestCommands = await commandsForMode(requestedMode as Mode);
-	const testShard = parseCiTestShard(Bun.env.VEYYON_CI_TEST_SHARD);
+	const testShard = resolveCiTestShard(Bun.env);
 	const testCommands = testShard
-		? testShard.count === 3
-			? allocateCloudflareTestCommands(requestedMode, availableTestCommands, testShard)
-			: partitionTestCommands(availableTestCommands, testShard)
+		? allocateCloudflareTestCommands(requestedMode, availableTestCommands, testShard)
 		: availableTestCommands;
 	if (testShard && testCommands.length === 0) {
 		console.log(

@@ -54,7 +54,7 @@ if ! command -v bun >/dev/null 2>&1 || [[ "$(bun --version)" != "$expected_bun" 
 fi
 bun --version
 bun install --frozen-lockfile
-if [[ "$shard_spec" == "1/3" ]]; then
+if (( shard_index == 1 )); then
   bun run check:ts
 else
   echo "CLOUDFLARE_SHARD_DEFERRED gate=check:ts shard=$shard_spec"
@@ -356,11 +356,15 @@ run_bucket scripts
 # Require real test cases and matching test-runner totals; chunk completion is reported separately.
 test_total=$((test_passes + test_failures + test_skips + test_todos))
 skip_allowlist_status=0
-if python3 ci/cloudflare/check-test-skips.py check "$test_report_root" ci/cloudflare/expected-skips.txt --shard "$shard_spec" --expected-total "$junit_test_skips"; then
-  echo 'CLOUDFLARE_SKIP_ALLOWLIST=passed'
+if [[ "$shard_count" == "3" ]]; then
+  if python3 ci/cloudflare/check-test-skips.py check "$test_report_root" ci/cloudflare/expected-skips.txt --shard "$shard_spec" --expected-total "$junit_test_skips"; then
+    echo 'CLOUDFLARE_SKIP_ALLOWLIST=passed'
+  else
+    skip_allowlist_status=$?
+    echo "CLOUDFLARE_SKIP_ALLOWLIST=failed status=$skip_allowlist_status"
+  fi
 else
-  skip_allowlist_status=$?
-  echo "CLOUDFLARE_SKIP_ALLOWLIST=failed status=$skip_allowlist_status"
+  echo "CLOUDFLARE_SKIP_ALLOWLIST=deferred shard=$shard_spec"
 fi
 if (( test_total == 0 || test_passes == 0 || test_failures != 0 || \
       test_todos != 0 || test_reported != test_total || test_files == 0 || test_runs == 0 || \

@@ -8,6 +8,7 @@ import {
 	nativeAndIntegrationPackages,
 	parseCiTestShard,
 	partitionTestCommands,
+	resolveCiTestShard,
 	testConcurrency,
 } from "./ci-test-ts";
 
@@ -134,6 +135,66 @@ describe("Cloudflare test command sharding", () => {
 		expect(formatBunTestTotals(totals)).toBe(
 			"CLOUDFLARE_CI_TEST_COUNTS pass=2 fail=1 skip=1 todo=0 tests=4 reported=4 files=3 runs=2",
 		);
+	});
+
+	it("resolves shard specifications from both Veyyon and Cloudflare environment forms", () => {
+		expect(resolveCiTestShard({ VEYYON_CI_TEST_SHARD: "7/12" })).toEqual({ index: 7, count: 12 });
+		expect(resolveCiTestShard({ CF_SHARD_INDEX: "6", CF_SHARD_COUNT: "12" })).toEqual({ index: 7, count: 12 });
+		expect(resolveCiTestShard({ VEYYON_CI_SHARD: "7", VEYYON_CI_SHARDS: "12" })).toEqual({ index: 7, count: 12 });
+		expect(resolveCiTestShard({})).toBeUndefined();
+
+		// Bounds checks
+		expect(() => resolveCiTestShard({ CF_SHARD_INDEX: "12", CF_SHARD_COUNT: "12" })).toThrow();
+		expect(() => resolveCiTestShard({ CF_SHARD_INDEX: "-1", CF_SHARD_COUNT: "12" })).toThrow();
+		expect(() => resolveCiTestShard({ VEYYON_CI_SHARD: "13", VEYYON_CI_SHARDS: "12" })).toThrow();
+		expect(() => resolveCiTestShard({ VEYYON_CI_SHARD: "0", VEYYON_CI_SHARDS: "12" })).toThrow();
+
+		// Conflict detection
+		expect(() =>
+			resolveCiTestShard({ VEYYON_CI_SHARD: "1", VEYYON_CI_SHARDS: "12", CF_SHARD_INDEX: "1", CF_SHARD_COUNT: "12" }),
+		).toThrow();
+
+		// Agreement between forms
+		expect(
+			resolveCiTestShard({ VEYYON_CI_SHARD: "7", VEYYON_CI_SHARDS: "12", CF_SHARD_INDEX: "6", CF_SHARD_COUNT: "12" }),
+		).toEqual({ index: 7, count: 12 });
+	});
+
+	it("partitions every mode with 12-way disjointness and completeness", async () => {
+		const modes = [
+			"workspace-cloudflare",
+			"native",
+			"coding-agent-singleton",
+			"coding-agent-ui",
+			"coding-agent-runtime",
+			"coding-agent-native",
+			"scripts",
+		] as const;
+
+		for (const mode of modes) {
+			const allCommands = await commandsForMode(mode);
+			const shards = Array.from({ length: 12 }, (_, index) =>
+				allocateCloudflareTestCommands(mode, allCommands, { index: index + 1, count: 12 }),
+			);
+
+			// Disjointness: no command appears in more than one shard
+			const seenLabels = new Set<string>();
+			let duplicateCount = 0;
+			for (const shard of shards) {
+				for (const command of shard) {
+					if (seenLabels.has(command.label)) {
+						duplicateCount++;
+					}
+					seenLabels.add(command.label);
+				}
+			}
+			expect(duplicateCount).toBe(0);
+
+			// Completeness: all commands are present across the 12 shards exactly once
+			const partitionedLabels = shards.flat().map(command => command.label).sort();
+			const expectedLabels = allCommands.map(command => command.label).sort();
+			expect(partitionedLabels).toEqual(expectedLabels);
+		}
 	});
 
 });
