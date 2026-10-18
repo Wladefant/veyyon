@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { executeBash } from "@veyyon/coding-agent/exec/bash-executor";
 
 import {
@@ -294,45 +294,71 @@ describe("fetch timeout single-source regression", () => {
 });
 
 /**
- * The bash executor's RESOLVED deadline, in milliseconds, for every shape of the
- * `timeout` option.
+ * The bash executor's RESOLVED deadline, as milliseconds after the call's entry, for every
+ * shape of the `timeout` option.
  *
  * WHAT THIS LOCKS OUT, AND WHY IT IS WRITTEN THIS WAY. `exec/bash-executor.ts` used to
  * hardcode `?? 300_000` as the fallback deadline for callers that pass no timeout (the
  * RPC `executeBash(command)` path): a second copy of the bash tool default that could
  * diverge from `TOOL_TIMEOUTS.bash` the moment the table changed, which is exactly how
  * the `fetch` `default: 20` / hardcoded-`30` split happened. It now derives the value
- * from the single owner.
+ * from the single owner. The assertions are on the instant the executor's deadline fires,
+ * observed by capturing each `setTimeout` it schedules while running a command that
+ * finishes immediately. A changed multiplier, a changed table entry, a dropped floor or a
+ * re-hardcoded literal all move that instant.
  *
- * The FIRST attempt at locking that down read the executor's source and asserted three
- * substrings were present or absent. That test could not fail on the bug it names: the
- * arithmetic could be wrong (`* 100`), the floor could be dropped, `0` could stop
- * disabling the deadline, and every substring would still be exactly where it was. It
- * also failed on harmless renames. So the assertions below are on the NUMBER the
- * executor actually schedules its abort for, observed by capturing the delay it hands
- * to `setTimeout` while running a command that finishes immediately. That is the value
- * the operator experiences, and it is what a changed multiplier, a changed table entry,
- * a dropped floor or a re-hardcoded literal that no longer matches the table all move.
+ * THE CLOCK IS A SEAM, AND THE CONTRACT IS THE INSTANT, NOT THE RAW DELAY. The executor
+ * arms two deadline timers that expire at the same moment. The setup guard runs for the full
+ * budget from entry. The run timer runs for `budget - setupElapsedMs`, where `setupElapsedMs`
+ * is read from `performance.now()`. Asserting the raw delay ties the test to how long setup
+ * really took on the machine: the run timer came back as 299999.513733 instead of 300000 on
+ * the remote runner (`ci/cloudflare/shard5_full_logs_9753e0a4.txt`, lines 2316-2390). That is
+ * not a missed deadline; the two timers agree on the instant. So `performance.now` is replaced
+ * with a counter that advances 1ms per read. Each timer is recorded with the last clock read
+ * before it was scheduled, and the helper reports `that read + delay`, measured from the entry
+ * read. Setup reads the clock between entry and the run timer, so the elapsed subtraction is
+ * exercised, and the result is exact on every machine.
  *
  * IF IT REGRESSES: a bash command runs for a different length of time than the config
  * says, in either direction. Too long and a runaway shell holds the session past its
- * budget; too short and ordinary work is aborted mid-flight.
+ * budget; too short and ordinary work is aborted mid-flight. A run timer that stops
+ * subtracting setup time lands its deadline after the budget, and this helper reports that.
  */
-async function resolvedBashDeadlinesMs(options?: { timeout?: number }): Promise<number[]> {
-	const delays: number[] = [];
+async function deadlineOffsetsMs(options?: { timeout?: number }): Promise<number[]> {
+	let tick = 1_000;
+	let lastRead = tick;
+	let entry: number | undefined;
+	const nowSpy = spyOn(performance, "now").mockImplementation(() => {
+		lastRead = tick;
+		entry ??= tick;
+		return tick++;
+	});
+	const dueAt: number[] = [];
 	const realSetTimeout = globalThis.setTimeout;
 	globalThis.setTimeout = ((handler: () => void, delay?: number, ...rest: unknown[]) => {
-		if (typeof delay === "number") delays.push(delay);
+		if (typeof delay === "number") dueAt.push(lastRead + delay);
 		return realSetTimeout(handler, delay, ...rest);
 	}) as typeof globalThis.setTimeout;
 	try {
 		// `true` exits at once, so the deadline timer is scheduled and cleared without
-		// the test waiting for it. Only the SCHEDULED value is under test.
+		// the test waiting for it. Only the SCHEDULED instant is under test.
 		await executeBash("true", options);
 	} finally {
 		globalThis.setTimeout = realSetTimeout;
+		nowSpy.mockRestore();
 	}
-	return delays;
+	return dueAt.map(due => due - (entry ?? 0));
+}
+
+/**
+ * Asserts that at least one deadline timer is scheduled and that every one of them fires
+ * exactly `ms` after entry. The check is on the set of instants, so it does not pin how
+ * many timers the executor uses to enforce one deadline.
+ */
+async function expectDeadlineAt(ms: number, options?: { timeout?: number }): Promise<void> {
+	const offsets = await deadlineOffsetsMs(options);
+	expect(offsets.length).toBeGreaterThan(0);
+	expect(new Set(offsets)).toEqual(new Set([ms]));
 }
 
 /**
@@ -347,7 +373,7 @@ beforeAll(async () => {
 
 describe("the bash executor's resolved deadline", () => {
 	it("falls back to TOOL_TIMEOUTS.bash.default converted to milliseconds, and nothing else", async () => {
-		expect(await resolvedBashDeadlinesMs()).toEqual([TOOL_TIMEOUTS.bash.default * 1000]);
+		await expectDeadlineAt(TOOL_TIMEOUTS.bash.default * 1000);
 	});
 
 	/**
@@ -357,7 +383,7 @@ describe("the bash executor's resolved deadline", () => {
 	 */
 	it("puts that fallback at 300000ms, the value bash has always run with", async () => {
 		expect(TOOL_TIMEOUTS.bash.default).toBe(300);
-		expect(await resolvedBashDeadlinesMs()).toEqual([300_000]);
+		await expectDeadlineAt(300_000);
 	});
 
 	/**
@@ -366,17 +392,17 @@ describe("the bash executor's resolved deadline", () => {
 	 * two tests would be measuring nothing together.
 	 */
 	it("uses an explicitly requested timeout verbatim instead of the fallback", async () => {
-		expect(await resolvedBashDeadlinesMs({ timeout: 7000 })).toEqual([7000]);
+		await expectDeadlineAt(7000, { timeout: 7000 });
 	});
 
 	/** `0` DISABLES the deadline, which `describeTimeoutParam` advertises to the model. */
 	it("schedules no deadline at all for a timeout of 0", async () => {
-		expect(await resolvedBashDeadlinesMs({ timeout: 0 })).toEqual([]);
+		expect(await deadlineOffsetsMs({ timeout: 0 })).toEqual([]);
 	});
 
 	/** And the 1s floor holds, so a tiny positive timeout cannot abort the shell as it starts. */
 	it("raises a sub-second timeout to the 1000ms floor rather than honouring it", async () => {
-		expect(await resolvedBashDeadlinesMs({ timeout: 50 })).toEqual([1000]);
+		await expectDeadlineAt(1000, { timeout: 50 });
 	});
 });
 
