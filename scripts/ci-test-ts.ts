@@ -417,6 +417,7 @@ export const repoScriptTests = [
 	"scripts/record-conformance.test.ts",
 	"scripts/ci-test-real-data-guard.test.ts",
 	"scripts/ci-test-concurrency-default.test.ts",
+	"scripts/ci-test-scheduler-runs-all-chunks.test.ts",
 	"scripts/release-binaries-bytecode.test.ts",
 	"scripts/fix-changelogs.test.ts",
 	"scripts/require-changelog.test.ts",
@@ -1380,7 +1381,7 @@ export function printChunkDiagnostics(
 	console.log(`  free -m:\n${freeMem.split("\n").map(l => "    " + l).join("\n")}`);
 }
 
-async function runTestCommand(testCommand: TestCommand): Promise<ChunkOutcome> {
+export async function runTestCommand(testCommand: TestCommand): Promise<ChunkOutcome> {
 	const cwd = path.join(repoRoot, testCommand.cwd);
 	const renderedCommand = testCommand.command.map(shellQuote).join(" ");
 	console.log(`\n==> ${testCommand.label}`);
@@ -1433,10 +1434,13 @@ async function runTestCommand(testCommand: TestCommand): Promise<ChunkOutcome> {
 
 	const seconds = (performance.now() - startedAt) / 1000;
 	const fullOutput = `${stdout.text}${stderr.text}${timedOut ? `\n[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (VEYYON_TEST_CHUNK_TIMEOUT to change)\n` : ""}`;
+	const effectiveExitCode = timedOut
+		? (exitCode !== 0 && exitCode !== null ? exitCode : 1)
+		: (exitCode ?? (timedOut ? 1 : 0));
 	const outcome: ChunkOutcome = {
 		label: testCommand.label,
 		command: renderedCommand,
-		exitCode,
+		exitCode: effectiveExitCode,
 		seconds,
 		output: fullOutput,
 	};
@@ -1469,9 +1473,11 @@ async function runTestCommand(testCommand: TestCommand): Promise<ChunkOutcome> {
 		});
 	}
 
-	if (exitCode !== 0 || timedOut) {
+	if (effectiveExitCode !== 0 || timedOut) {
 		const composition = files.length > 1 ? `\n${files.length} files in this chunk:\n  ${files.join("\n  ")}` : "";
-		throw new Error(`${testCommand.label} failed with exit code ${exitCode}: ${renderedCommand}${composition}`);
+		process.stderr.write(
+			`\n[chunk-failure] ${testCommand.label} failed with exit code ${effectiveExitCode}: ${renderedCommand}${composition}\n`,
+		);
 	}
 
 	return outcome;
@@ -1879,7 +1885,68 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 	}
 	if (failures.length > 0) {
 		process.exitCode = 1;
+		process.stdout.write(formatFailureReport(failures, commands.length, false));
+		process.stdout.write("\n");
 	}
+}
+
+/**
+ * Run every command sequentially, preserving bounded memory in CI and
+ * fail-safe environments. All failures are collected and reported together
+ * after every chunk has executed, so one broken chunk never aborts subsequent
+ * chunks. Exits non-zero after all chunks complete if any chunk failed.
+ */
+export async function runTestCommandsSequentially(commands: TestCommand[]): Promise<{
+	outcomes: ChunkOutcome[];
+	failures: ChunkOutcome[];
+}> {
+	const outcomes: ChunkOutcome[] = [];
+	const failures: ChunkOutcome[] = [];
+	let totalPass = 0;
+	let totalFail = 0;
+	let totalSkip = 0;
+	let totalTodo = 0;
+	let totalTests = 0;
+
+	for (const testCommand of commands) {
+		let outcome: ChunkOutcome;
+		try {
+			outcome = await runTestCommand(testCommand);
+		} catch (err) {
+			const renderedCommand = testCommand.command.map(shellQuote).join(" ");
+			const errMsg = err instanceof Error ? err.stack ?? err.message : String(err);
+			outcome = {
+				label: testCommand.label,
+				command: renderedCommand,
+				exitCode: 1,
+				seconds: 0,
+				output: `${errMsg}\n`,
+			};
+			process.stderr.write(`\n[chunk-runner-error] ${testCommand.label}: ${errMsg}\n`);
+		}
+		outcomes.push(outcome);
+		const s = extractBunSummary(outcome.output);
+		totalPass += s.pass;
+		totalFail += s.fail;
+		totalSkip += s.skip;
+		totalTodo += s.todo;
+		totalTests += s.total;
+		if (outcome.exitCode !== 0) {
+			failures.push(outcome);
+		}
+	}
+
+	process.stdout.write(
+		`\nCLOUDFLARE_TEST_TOTALS pass=${totalPass} fail=${totalFail} skip=${totalSkip} todo=${totalTodo} total=${totalTests} chunks=${commands.length}\n`,
+	);
+
+	if (failures.length > 0) {
+		process.exitCode = 1;
+		process.stdout.write(formatFailureReport(failures, commands.length, false));
+		process.stdout.write("\n");
+	}
+
+	return { outcomes, failures };
 }
 
 /**
@@ -2154,23 +2221,7 @@ if (import.meta.main) {
 		if (!isDryRun && !isCI() && testCommands.length > 1) {
 			await runTestCommandsInParallel(testCommands, testConcurrency(testCommands.length));
 		} else {
-			let totalPass = 0;
-			let totalFail = 0;
-			let totalSkip = 0;
-			let totalTodo = 0;
-			let totalTests = 0;
-			for (const testCommand of testCommands) {
-				const outcome = await runTestCommand(testCommand);
-				const s = extractBunSummary(outcome.output);
-				totalPass += s.pass;
-				totalFail += s.fail;
-				totalSkip += s.skip;
-				totalTodo += s.todo;
-				totalTests += s.total;
-			}
-			process.stdout.write(
-				`\nCLOUDFLARE_TEST_TOTALS pass=${totalPass} fail=${totalFail} skip=${totalSkip} todo=${totalTodo} total=${totalTests} chunks=${testCommands.length}\n`,
-			);
+			await runTestCommandsSequentially(testCommands);
 		}
 	} finally {
 		if (runnerSampler !== null) {
