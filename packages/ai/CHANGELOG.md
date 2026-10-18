@@ -4,6 +4,7 @@
 
 ### Added
 
+- Enforced vision guard image format validation and payload boundary constraints ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Redacted credentials from GitLab Duo workflow goals and ported cache affinity contracts ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added Ollama in-band stream error recovery, prompt caching accounting, and thinking history controls ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added getProxyForUrl in proxy utilities to resolve proxy configuration per URL with bypass support ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
