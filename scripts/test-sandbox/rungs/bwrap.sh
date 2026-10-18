@@ -21,9 +21,26 @@ resolve_host_elf() {
 	if [ "${magic//[[:space:]]/}" = 7f454c46 ]; then printf '%s\n' "$resolved"; fi
 	return 0
 }
+# Node's process.execPath bypasses command lookup. mdbook and rg use command -v;
+# resolve asdf shims with `asdf which`, then canonicalize with readlink -f and validate ELF.
+resolve_host_tool() {
+	local name="$1" command_path asdf_shims
+	command_path="$(command -v "$name" 2>/dev/null || true)"
+	asdf_shims="${ASDF_DATA_DIR:-${HOME:-}/.asdf}/shims/"
+	if [[ -n "$command_path" && ( "$command_path" == "$asdf_shims"* || "$command_path" == */.asdf/shims/* ) ]]; then
+		if command -v asdf >/dev/null 2>&1; then
+			command_path="$(asdf which "$name" 2>/dev/null || true)"
+		else
+			command_path=""
+		fi
+	fi
+	resolve_host_elf "$command_path"
+}
 BWRAP_HOST_BUN_PATH="$(resolve_host_elf "$(bun -e 'process.stdout.write(process.execPath)' 2>/dev/null || true)")"
 BWRAP_HOST_NODE_PATH="$(resolve_host_elf "$(node -p process.execPath 2>/dev/null || true)")"
 BWRAP_HOST_GH_PATH="$(resolve_host_elf "${VEYYON_BWRAP_GH:-$(command -v gh 2>/dev/null || true)}")"
+BWRAP_HOST_MDBOOK_PATH="$(resolve_host_tool mdbook)"
+BWRAP_HOST_RG_PATH="$(resolve_host_tool rg)"
 
 probe_bwrap() {
 	command -v bwrap >/dev/null 2>&1 || { skip bwrap "bubblewrap not on PATH"; return 1; }
@@ -66,6 +83,20 @@ run_bwrap() {
 		return "${RUNG_SETUP_FAILED:-126}"
 	fi
 
+	if [ -n "${BWRAP_HOST_MDBOOK_PATH:-}" ] && [ -x "$BWRAP_HOST_MDBOOK_PATH" ]; then
+		log "mdbook executable resolved to ${BWRAP_HOST_MDBOOK_PATH}"
+		runtime_mounts+=(--ro-bind "$BWRAP_HOST_MDBOOK_PATH" /sandbox/runtime/bun/mdbook)
+	else
+		log "mdbook runtime resolution failed: expected an executable ELF binary from PATH or asdf which"
+		return "${RUNG_SETUP_FAILED:-126}"
+	fi
+	if [ -n "${BWRAP_HOST_RG_PATH:-}" ] && [ -x "$BWRAP_HOST_RG_PATH" ]; then
+		log "rg executable resolved to ${BWRAP_HOST_RG_PATH}"
+		runtime_mounts+=(--ro-bind "$BWRAP_HOST_RG_PATH" /sandbox/runtime/bun/rg)
+	else
+		log "rg runtime resolution failed: expected an executable ELF binary from PATH or asdf which"
+		return "${RUNG_SETUP_FAILED:-126}"
+	fi
 	[ -n "${SANDBOX_GITDIR:-}" ] && gitdir_args=(--ro-bind "${SANDBOX_GITDIR}" "${SANDBOX_GITDIR}")
 
 	local -a extra_mounts=()

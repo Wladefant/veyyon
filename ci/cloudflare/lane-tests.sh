@@ -208,6 +208,60 @@ if ! command -v bwrap >/dev/null 2>&1; then
   echo "FATAL: bubblewrap was not extracted to $bwrap_tools/root/usr/bin/bwrap" >&2
   exit 1
 fi
+# Share the bwrap rung's command lookup, asdf shim resolution, and ELF validation.
+source scripts/test-sandbox/rungs/bwrap.sh
+
+install_official_release_tool() {
+  local name="$1" version="$2" url="$3" sha256="$4"
+  local existing archive member destination
+  existing="$(resolve_host_tool "$name")"
+  if [[ -n "$existing" ]]; then
+    echo "$name binary available: $existing"
+    return 0
+  fi
+
+  echo "Installing $name $version from its official release archive..."
+  archive="$bwrap_tools/packages/${name}.tar.gz"
+  destination="$bwrap_tools/root/usr/bin/$name"
+  if ! curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 1 -fsSL "$url" -o "$archive"; then
+    echo "FATAL: could not download official $name release archive from $url" >&2
+    return 1
+  fi
+  if ! printf '%s  %s\n' "$sha256" "$archive" | sha256sum --check --status; then
+    echo "FATAL: SHA-256 verification failed for official $name release archive" >&2
+    return 1
+  fi
+  if ! member="$(tar -tzf "$archive" | awk -v binary="$name" '$0 == binary || $0 ~ ("/" binary "$") { print; exit }')"; then
+    echo "FATAL: could not list official $name release archive" >&2
+    return 1
+  fi
+  if [[ -z "$member" ]]; then
+    echo "FATAL: official $name release archive has no $name executable" >&2
+    return 1
+  fi
+  if ! tar -xOzf "$archive" "$member" > "$destination"; then
+    echo "FATAL: could not extract $name from its official release archive" >&2
+    return 1
+  fi
+  chmod 0755 "$destination"
+
+  existing="$(resolve_host_tool "$name")"
+  if [[ -z "$existing" ]]; then
+    echo "FATAL: official $name release did not produce an executable ELF binary" >&2
+    return 1
+  fi
+  echo "$name executable: $existing"
+}
+
+install_official_release_tool \
+  mdbook 0.5.4 \
+  https://github.com/rust-lang/mdBook/releases/download/v0.5.4/mdbook-v0.5.4-x86_64-unknown-linux-musl.tar.gz \
+  5222beabd3e37dc5be0d18ff99b79058469354db5c220153a1b92db5ba12be89
+install_official_release_tool \
+  rg 15.2.0 \
+  https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz \
+  33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c
+
 export VEYYON_SANDBOX_REMOTE=0
 export VEYYON_SANDBOX_RUNG=bwrap
 # The bwrap rung binds the requested repository path verbatim. Use an alias outside
@@ -232,7 +286,10 @@ echo "guest caps: $(grep "^CapEff" /proc/self/status)"
 node --version >/dev/null
 gh --version >/dev/null
 bun --version >/dev/null
+mdbook --version >/dev/null
+rg --version >/dev/null
 echo "guest runtimes: node $(node --version) gh $(gh --version | head -n1) bun $(bun --version)"
+echo "guest tools: mdbook $(mdbook --version) rg $(rg --version | head -n1)"
 bun -e "$1"'
 guest_probe_js='const fs = require("node:fs");
 const fail = (message) => { console.error("GUEST PROBE FAILED: " + message); process.exit(1); };
