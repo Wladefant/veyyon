@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+unset CLOUDFLARE_API_TOKEN
+
+if [[ "${1:-}" == "--test-token-boundary" ]]; then
+  shift
+  exec "$@"
+fi
+
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
@@ -309,7 +316,7 @@ run_bucket() {
 }
 if (( shard_index == 1 )); then
   echo "CLOUDFLARE_TEST_BUCKET_START health-worker"
-  worker_output="$(env -u CLOUDFLARE_API_TOKEN -u VEYYON_NATIVE_CACHE_CREDENTIALS -u VEYYON_NATIVE_CACHE_WRITE_CREDENTIALS node --test --test-reporter=tap ci/cloudflare/worker.test.mjs ci/cloudflare/lane-routing.test.mjs ci/cloudflare/native-cache.test.mjs 2>&1)" || {
+  worker_output="$(env -u VEYYON_NATIVE_CACHE_CREDENTIALS -u VEYYON_NATIVE_CACHE_WRITE_CREDENTIALS node --test --test-reporter=tap ci/cloudflare/worker.test.mjs ci/cloudflare/lane-routing.test.mjs ci/cloudflare/native-cache.test.mjs ci/cloudflare/token-boundary.test.mjs 2>&1)" || {
     worker_status=$?
     printf '%s\n' "$worker_output"
     exit "$worker_status"
@@ -331,9 +338,9 @@ if (( shard_index == 1 )); then
   test_skips=$((test_skips + worker_skips))
   test_todos=$((test_todos + worker_todos))
   test_reported=$((test_reported + worker_tests))
-  test_files=$((test_files + 3))
+  test_files=$((test_files + 4))
   test_runs=$((test_runs + 1))
-  echo "CLOUDFLARE_TEST_BUCKET_END health-worker tests=$worker_tests pass=$worker_passes fail=$worker_failures skip=$worker_skips todo=$worker_todos cancelled=$worker_cancelled files=3 runs=1"
+  echo "CLOUDFLARE_TEST_BUCKET_END health-worker tests=$worker_tests pass=$worker_passes fail=$worker_failures skip=$worker_skips todo=$worker_todos cancelled=$worker_cancelled files=4 runs=1"
   if (( worker_tests == 0 || worker_tests != worker_passes + worker_failures + worker_skips + worker_todos || \
         worker_passes == 0 || worker_failures != 0 || worker_skips != 0 || worker_todos != 0 || worker_cancelled != 0 )); then
     echo 'CLOUDFLARE_TEST_BUCKET_FAILED health-worker summary missing, empty, or non-green' >&2
