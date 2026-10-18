@@ -22,12 +22,12 @@ describe("renderHtmlToText: DeepSeek fetch backend", () => {
 		const settings = Settings.isolated({ "providers.fetch": "deepseek" });
 		let requestUrl = "";
 		let requestBody: unknown = null;
-		let authHeader: string | null = null;
+		let authHeader = "";
 
 		const fetchMock = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 			requestUrl = String(input);
 			requestBody = JSON.parse(String(init?.body ?? "null"));
-			authHeader = new Headers(init?.headers).get("Authorization");
+			authHeader = new Headers(init?.headers).get("Authorization") ?? "";
 			return new Response(
 				JSON.stringify({ title: "DeepSeek Page Title", content: `# Heading\n\n${"Body text. ".repeat(30)}` }),
 				{ status: 200, headers: { "Content-Type": "application/json" } },

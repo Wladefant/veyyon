@@ -43,13 +43,13 @@ describe("DeepSeek web search provider", () => {
 		let requestUrl = "";
 		let requestMethod = "";
 		let requestBody: Record<string, unknown> | null = null;
-		let authHeader: string | null = null;
+		let authHeader = "";
 
 		const fetchMock = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 			requestUrl = String(input);
 			requestMethod = init?.method ?? "";
 			requestBody = JSON.parse(String(init?.body ?? "null")) as Record<string, unknown>;
-			authHeader = new Headers(init?.headers).get("Authorization");
+			authHeader = new Headers(init?.headers).get("Authorization") ?? "";
 			return new Response(
 				JSON.stringify({
 					results: [
