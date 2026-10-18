@@ -805,10 +805,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	 * already resolved.
 	 *
 	 * A row disabled BEFORE a login that is still active for its provider was created
-	 * is left out. That login is the answer to the signed-out note, whichever account
-	 * it signed in: without the cut, a login to a different account left the provider
-	 * reported as signed out for good, naming a login months dead beside the one now
-	 * serving. `updated_at` of a disabled row is the moment of its disable, since a
+	 * is left out. `updated_at` of a disabled row is the moment of its disable, since a
 	 * disabled row is never written again; `created_at` of an active row is its login.
 	 */
 	listDisabledAuthCredentials(provider?: string): StoredAuthCredential[] {
