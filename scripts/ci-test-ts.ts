@@ -49,6 +49,8 @@ export interface TestCommand {
 	label: string;
 	cwd: string;
 	command: string[];
+	env?: Record<string, string>;
+	excludedTestFiles?: readonly string[];
 }
 
 export interface ShardConfig {
@@ -685,6 +687,15 @@ const workspacePackageParallelism: Readonly<Record<string, number>> = {
 	"tests/simulations": 1,
 };
 
+const cloudflareCatalogSerialTestFiles: readonly string[] = [
+	"./test/a-reference-lookup-parses-only-the-models-it-reaches.test.ts",
+	"./test/classifying-a-model-id-retains-nothing.test.ts",
+	"./test/a-resolved-model-keeps-the-compat-its-sources-declared.test.ts",
+];
+
+const cloudflareEngineSerialTestFiles: readonly string[] = ["./test/editor-wordwrap-fuzz.test.ts"];
+const cloudflareSerialTestEnv: Record<string, string> = { VEYYON_TEST_TIMEOUT_MS: "60000" };
+
 export function workspaceTestParallelism(pkg: string, requested: number): number {
 	return workspacePackageParallelism[pkg] ?? requested;
 }
@@ -692,9 +703,10 @@ export function workspaceTestParallelism(pkg: string, requested: number): number
 function workspaceTestCommand(
 	pkg: string,
 	parallel: number,
-	options: { extraArgs?: string[]; smol?: boolean } = {},
+	options: { env?: Record<string, string>; extraArgs?: string[]; smol?: boolean } = {},
 ): TestCommand {
-	const { extraArgs = [], smol = false } = options;
+	const { env, extraArgs = [], smol = false } = options;
+
 	// `--smol` runs the test process with a smaller heap. The native/TUI/integration
 	// bucket asks for it because those suites load the native addon and browser-ish
 	// modules; without it a fat single invocation can OOM-kill (reported as exit 137).
@@ -702,6 +714,7 @@ function workspaceTestCommand(
 	return {
 		label: pkg,
 		cwd: pkg,
+		env,
 		command: [
 			"bun",
 			"test",
@@ -921,7 +934,9 @@ export function calculateDiscoveryHash(files: readonly string[]): string {
 
 export async function expandWorkspaceCommand(baseCommand: TestCommand, chunkSize = 10): Promise<TestCommand[]> {
 	const pkgDir = path.join(repoRoot, baseCommand.cwd);
-	const testFiles = await collectTestFiles(pkgDir, pkgDir);
+	const testFiles = (await collectTestFiles(pkgDir, pkgDir)).filter(
+		file => !baseCommand.excludedTestFiles?.includes(file),
+	);
 	if (testFiles.length === 0) {
 		return [baseCommand];
 	}
@@ -1049,17 +1064,43 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 		// side effect of `workspace` carrying them, so pulling that copy out would have
 		// quietly emptied scripts from `all` as well. It names the bucket directly now.
 		case "all": {
+			const shardConfig = parseShardConfig(Bun.env);
 			const baseCommands = [
 				...(await commandsForMode("workspace")),
 				...(await commandsForMode("native")),
 				...(await commandsForMode("coding-agent-heavy")),
 				...(await commandsForMode("scripts")),
 			];
-			const shardConfig = parseShardConfig(Bun.env);
 			if (!shardConfig) {
 				return baseCommands;
 			}
-			const expandedCommands = await expandTestCommands(baseCommands);
+			const shardCommands = baseCommands.map(command => {
+				if (command.cwd === "packages/catalog") {
+					return { ...command, excludedTestFiles: cloudflareCatalogSerialTestFiles };
+				}
+				if (command.cwd === "hosts/terminal/engine") {
+					return { ...command, excludedTestFiles: cloudflareEngineSerialTestFiles };
+				}
+				return command;
+			});
+			const isolatedCommands = [
+				{
+					...workspaceTestCommand("packages/catalog", 1, {
+						env: cloudflareSerialTestEnv,
+						extraArgs: [...onlyFailuresArgs, ...cloudflareCatalogSerialTestFiles],
+					}),
+					label: "packages/catalog (isolated)",
+				},
+				{
+					...workspaceTestCommand("hosts/terminal/engine", 1, {
+						env: cloudflareSerialTestEnv,
+						extraArgs: [...onlyFailuresArgs, ...cloudflareEngineSerialTestFiles],
+						smol: true,
+					}),
+					label: "hosts/terminal/engine (isolated)",
+				},
+			];
+			const expandedCommands = await expandTestCommands([...shardCommands, ...isolatedCommands]);
 			return applySharding(expandedCommands, shardConfig);
 		}
 		// `local-ts` is the full local TypeScript run that root `bun run test:ts`
@@ -1172,7 +1213,7 @@ async function runTestCommand(testCommand: TestCommand): Promise<ChunkOutcome> {
 		return { label: testCommand.label, command: renderedCommand, exitCode: 0, seconds: 0, output: "" };
 	}
 
-	const env = buildChildEnv();
+	const env = { ...buildChildEnv(), ...testCommand.env };
 	const startedAt = performance.now();
 	const proc = Bun.spawn(testCommand.command, {
 		cwd,
@@ -1546,7 +1587,7 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 			const startedAt = performance.now();
 			const proc = Bun.spawn(testCommand.command, {
 				cwd: path.join(repoRoot, testCommand.cwd),
-				env,
+				env: testCommand.env ? { ...env, ...testCommand.env } : env,
 				stdout: "pipe",
 				stderr: "pipe",
 			});
