@@ -11,10 +11,14 @@
  * `scope`, tool `strict`/`eager_input_streaming`, mid-conversation `system`
  * role) are first-class here instead of being patched in via casts.
  */
-import type { StopDetails } from "@veyyon/model/message";
+import type { ProviderInputTransformation, StopDetails } from "@veyyon/model/message";
 import type { TokenTaskBudget } from "../types";
+import { isRecord } from "../utils";
 
 // ─── Cache control ──────────────────────────────────────────────────────────
+
+/** Beta enabling preserved-thinking block controls and transformation reports. */
+export const THINKING_BINDING_CONTROLS_BETA = "thinking-binding-controls-2026-08-01";
 
 /** Ephemeral prefix-cache breakpoint marker. */
 export type CacheControlEphemeral = {
@@ -275,6 +279,24 @@ export type AnthropicWireUsage = {
 };
 
 /** The `message` envelope carried by `message_start`. */
+export type InputTransformation = {
+	type: string;
+	path?: string;
+	reason?: string;
+	[key: string]: unknown;
+};
+
+/** Parse Anthropic's forward-compatible input transformation list. */
+export function parseAnthropicInputTransformations(value: unknown): ProviderInputTransformation[] {
+	if (!Array.isArray(value)) return [];
+	const transformations: ProviderInputTransformation[] = [];
+	for (const entry of value) {
+		if (!isRecord(entry) || typeof entry.type !== "string") continue;
+		transformations.push({ ...entry, type: entry.type });
+	}
+	return transformations;
+}
+
 export type ResponseMessage = {
 	id: string;
 	type?: "message";
@@ -283,6 +305,7 @@ export type ResponseMessage = {
 	content?: unknown[];
 	stop_reason?: AnthropicWireStopReason | null;
 	stop_sequence?: string | null;
+	input_transformations?: InputTransformation[];
 	usage: AnthropicWireUsage;
 };
 

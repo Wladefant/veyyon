@@ -8,6 +8,7 @@
 - Aligned OpenAI Codex responses imports with openai-responses-stream exports and restored the UsageCostHistoryEntry interface in usage types, with no user-visible change.
 - Bedrock resolves ambient AWS regions from `AWS_REGION`, `AWS_DEFAULT_REGION` or an enabled shared AWS config profile.
 - AnthropicConnectionError takes (error, url) and AnthropicApiError.fromResponse takes (response, callerSignal), at upstream parity.
+- Exported THINKING_BINDING_CONTROLS_BETA and parseAnthropicInputTransformations from Anthropic wire types, with no user-visible change.
 
 ## [1.5.6] - 2026-10-10
 ### Changed
