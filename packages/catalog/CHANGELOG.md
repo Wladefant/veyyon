@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added ClinePass model descriptors, account-scoped catalog union, and credential-scoped model cache resolution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added model identity metrics indexing, scheduled dated pricing support, and model tokenizer resolution ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - `@veyyon/catalog/hosts` exports `resolveVertexEndpointHost(location)`, the Vertex AI API host for `global`, the `eu`/`us` multi-regions, or a single region.
 - Added provider wire helpers for Alibaba Token Plan, Charm Hyper, Cline Pass, Cloudflare AI Gateway, Cursor, Devin, Factory Droid and SingularityAPI, and moved compatibility imports to shared utilities.

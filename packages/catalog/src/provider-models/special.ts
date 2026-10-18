@@ -1,11 +1,23 @@
-import { lazy } from "@veyyon/utils/abortable";
-import { trimTrailingSlashes } from "@veyyon/utils/url";
+import { logger, once } from "@veyyon/utils";
+import { buildModel } from "../build";
+import { apiRouteFor } from "../compat/behavior";
+import { providerEntry, seedModels } from "../compat/providers";
 import { type CodexModelDiscoveryResult, fetchCodexModels } from "../discovery/codex";
 import type { DevinModelDiscoveryOptions } from "../discovery/devin";
-import { buildGitLabDuoWorkflowFallbackModel, fetchGitLabDuoWorkflowModels } from "../discovery/gitlab-duo-workflow";
+import {
+	type FactoryDroidModelDiscoveryOptions,
+	factoryDroidSeedModels,
+	fetchFactoryDroidModels,
+} from "../discovery/factory-droid";
 import { fetchTypeSafeModels, TYPESAFE_DEFAULT_BASE_URL } from "../discovery/typesafe";
+import { buildGitLabDuoWorkflowFallbackModel, fetchGitLabDuoWorkflowModels } from "../discovery/gitlab-duo-workflow";
 import type { ModelManagerOptions } from "../model-manager";
-import type { FetchImpl, ModelSpec } from "../types";
+import { getBundledModel } from "../models";
+import type { Api, FetchImpl, Model, ModelSpec } from "../types";
+import { DEVIN_DEFAULT_BASE_URL } from "../wire/devin";
+import { unionAccountCatalogs } from "./account-access";
+import { toModelSpec } from "./bundled-references";
+import { resolveModelCacheProviderId } from "./cache-provider-id";
 
 // ---------------------------------------------------------------------------
 // OpenAI Codex
@@ -19,50 +31,56 @@ export interface OpenAICodexAccount {
 	accountId?: string;
 }
 
-export function openAICodexModelCacheProviderId(accountFingerprint?: string): string {
-	return accountFingerprint ? `openai-codex:union-v1:${accountFingerprint}` : "openai-codex:union-v1";
-}
-
 export interface OpenAICodexModelManagerConfig {
-	accessToken?: string;
-	accountId?: string;
-	clientVersion?: string;
-	fetch?: FetchImpl;
-	cacheProviderId?: string;
-	accountFingerprint?: string;
 	/**
-	 * Resolves configured Codex OAuth accounts. Fetches each account and
-	 * unions results by id. Returns null on failure to keep previous models.
+	 * Resolves every configured Codex OAuth account at discovery time. Codex
+	 * discovery is account-scoped — a model can be available to one account and
+	 * absent from another — so each account's `/models` endpoint is fetched
+	 * independently and the results unioned by id. Without this, discovery would
+	 * surface only the account it happened to resolve and, being authoritative,
+	 * prune every model the other accounts expose (#6265).
+	 *
+	 * Returns `null` to abort discovery entirely (e.g. an account's credential
+	 * failed to refresh): a partial account set would be cached as the complete
+	 * authoritative catalog and hide the missing account's models, so the caller
+	 * keeps the previous/bundled catalog instead.
 	 */
 	resolveAccounts?: () => Promise<readonly OpenAICodexAccount[] | null>;
+	/**
+	 * Codex backend base URL (e.g. a Codex-compatible gateway from `models.yml`).
+	 * Defaults to the official ChatGPT backend. Also scopes the discovery cache,
+	 * so a gateway roster never serves the official endpoint and vice versa.
+	 */
+	baseUrl?: string;
+	clientVersion?: string;
+	fetch?: FetchImpl;
 }
 
 export function openaiCodexModelManagerOptions(
 	config: OpenAICodexModelManagerConfig = {},
 ): ModelManagerOptions<"openai-codex-responses"> {
-	const { resolveAccounts, accessToken, accountId, clientVersion, fetch, cacheProviderId, accountFingerprint } =
-		config;
+	const { resolveAccounts, baseUrl, clientVersion, fetch } = config;
 	return {
 		providerId: "openai-codex",
-		cacheProviderId: cacheProviderId ?? openAICodexModelCacheProviderId(accountFingerprint),
-		dynamicModelsAuthoritative: true,
-		...(resolveAccounts || accessToken
+		cacheProviderId: resolveModelCacheProviderId("openai-codex", { baseUrl }),
+		dynamicModelsAuthoritative: providerEntry("openai-codex")?.dynamicModelsAuthoritative === true,
+		keepStaticNames: providerEntry("openai-codex")?.keepBundledNames === true,
+		...(resolveAccounts
 			? {
-					fetchDynamicModels: async hooks => {
-						const accounts = resolveAccounts
-							? await resolveAccounts()
-							: [{ accessToken: accessToken!, accountId }];
+					fetchDynamicModels: async () => {
+						const accounts = await resolveAccounts();
 						if (!accounts || accounts.length === 0) return null;
 						const results = await Promise.all(
-							accounts.map(account =>
-								fetchCodexModels({
+							accounts.map(async account => ({
+								accountId: account.accountId,
+								result: await fetchCodexModels({
 									accessToken: account.accessToken,
 									accountId: account.accountId,
+									baseUrl,
 									clientVersion,
 									fetchFn: fetch,
-									onFailure: hooks?.onFailure,
 								}),
-							),
+							})),
 						);
 						return unionCodexModels(results);
 					},
@@ -71,18 +89,33 @@ export function openaiCodexModelManagerOptions(
 	};
 }
 
-/** Unions per-account Codex catalogs by model id; returns null if any account failed. */
+/**
+ * Merge complete per-account Codex catalogs into one authoritative list via
+ * {@link unionAccountCatalogs}.
+ *
+ * Returns `null` when any account's fetch failed transiently, so a partial list
+ * cannot replace the previous or bundled authoritative catalog. An account
+ * whose credential the backend rejected outright (401/403 — revoked or
+ * deauthorized) contributes nothing and is skipped instead: it would otherwise
+ * veto every sibling account's models until the user removes it. If no account
+ * produced a catalog, discovery aborts the same way.
+ */
 function unionCodexModels(
-	results: readonly (CodexModelDiscoveryResult | null)[],
+	results: readonly { accountId: string | undefined; result: CodexModelDiscoveryResult | null }[],
 ): ModelSpec<"openai-codex-responses">[] | null {
-	const byId = new Map<string, ModelSpec<"openai-codex-responses">>();
-	for (const result of results) {
+	const catalogs: ModelSpec<"openai-codex-responses">[][] = [];
+	for (const { accountId, result } of results) {
 		if (!result) return null;
-		for (const model of result.models) {
-			if (!byId.has(model.id)) byId.set(model.id, model);
+		if (result.rejectedStatus !== undefined) {
+			logger.warn("Codex model discovery skipped an account whose credential was rejected", {
+				accountId,
+				status: result.rejectedStatus,
+			});
+			continue;
 		}
+		catalogs.push(result.models);
 	}
-	return [...byId.values()];
+	return catalogs.length > 0 ? unionAccountCatalogs(catalogs) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -95,33 +128,149 @@ export interface CursorModelManagerConfig {
 	clientVersion?: string;
 }
 
-// Bumped from `max-mode-v2` when the gateway-name prefix rewrite landed: every
-// `cursor-<vendor model>` row in an existing cache carries the 200k assumption for a
-// model whose real window is up to 1.05M, and a cached row is served for the full TTL.
-// A stale window is not cosmetic here, it decides when compaction fires.
-const CURSOR_CACHE_PROVIDER_ID = "cursor:max-mode-v3";
-
-export function resolveCursorCacheProviderId(_config?: CursorModelManagerConfig): string {
-	return CURSOR_CACHE_PROVIDER_ID;
-}
-
 export function cursorModelManagerOptions(config: CursorModelManagerConfig = {}): ModelManagerOptions<"cursor-agent"> {
 	const { apiKey, baseUrl, clientVersion } = config;
 	return {
 		providerId: "cursor",
-		cacheProviderId: CURSOR_CACHE_PROVIDER_ID,
+		dynamicModelsAuthoritative: true,
+		cacheProviderId: resolveModelCacheProviderId("cursor", { apiKey, baseUrl }),
 		...(apiKey
 			? {
-					fetchDynamicModels: async hooks => {
-						const { fetchCursorUsableModels } = await cursorDiscovery.value;
-						return fetchCursorUsableModels({ apiKey, baseUrl, clientVersion, onFailure: hooks?.onFailure });
+					fetchDynamicModels: async () => {
+						const { fetchCursorUsableModels } = await cursorDiscovery();
+						return fetchCursorUsableModels({ apiKey, baseUrl, clientVersion });
 					},
 				}
 			: undefined),
 	};
 }
 
-const cursorDiscovery = lazy(() => import("../discovery/cursor"));
+const cursorDiscovery = once(() => import("../discovery/cursor"));
+
+// ---------------------------------------------------------------------------
+// GitLab Duo Chat
+// ---------------------------------------------------------------------------
+
+const GITLAB_DUO_ANTHROPIC_BASE_URL = "https://cloud.gitlab.com/ai/v1/proxy/anthropic/";
+const GITLAB_DUO_OPENAI_BASE_URL = "https://cloud.gitlab.com/ai/v1/proxy/openai/v1";
+
+export type GitLabDuoModelIdentity = {
+	upstreamModelId: string;
+	referenceProvider: "anthropic" | "openai";
+	referenceModelId: string;
+};
+
+/**
+ * Duo's public aliases are deployment identity, not model metadata. The
+ * reference ids select bundled first-party rows; capabilities, prices, and
+ * limits are copied from those rows rather than repeated here.
+ */
+const GITLAB_DUO_MODEL_IDENTITIES: Readonly<Record<string, GitLabDuoModelIdentity>> = {
+	"duo-chat-opus-4-6": {
+		upstreamModelId: "claude-opus-4-6",
+		referenceProvider: "anthropic",
+		referenceModelId: "claude-opus-4-6",
+	},
+	"duo-chat-sonnet-4-6": {
+		upstreamModelId: "claude-sonnet-4-6",
+		referenceProvider: "anthropic",
+		referenceModelId: "claude-sonnet-4-6",
+	},
+	"duo-chat-opus-4-5": {
+		upstreamModelId: "claude-opus-4-5-20251101",
+		referenceProvider: "anthropic",
+		referenceModelId: "claude-opus-4-5-20251101",
+	},
+	"duo-chat-sonnet-4-5": {
+		upstreamModelId: "claude-sonnet-4-5-20250929",
+		referenceProvider: "anthropic",
+		referenceModelId: "claude-sonnet-4-5-20250929",
+	},
+	"duo-chat-haiku-4-5": {
+		upstreamModelId: "claude-haiku-4-5-20251001",
+		referenceProvider: "anthropic",
+		referenceModelId: "claude-haiku-4-5-20251001",
+	},
+	"duo-chat-gpt-5-1": {
+		upstreamModelId: "gpt-5.1-2025-11-13",
+		referenceProvider: "openai",
+		referenceModelId: "gpt-5.1",
+	},
+	"duo-chat-gpt-5-2": {
+		upstreamModelId: "gpt-5.2-2025-12-11",
+		referenceProvider: "openai",
+		referenceModelId: "gpt-5.2",
+	},
+	"duo-chat-gpt-5-mini": {
+		upstreamModelId: "gpt-5-mini-2025-08-07",
+		referenceProvider: "openai",
+		referenceModelId: "gpt-5-mini",
+	},
+	"duo-chat-gpt-5-codex": {
+		upstreamModelId: "gpt-5-codex",
+		referenceProvider: "openai",
+		referenceModelId: "gpt-5-codex",
+	},
+	"duo-chat-gpt-5-2-codex": {
+		upstreamModelId: "gpt-5.2-codex",
+		referenceProvider: "openai",
+		referenceModelId: "gpt-5.2-codex",
+	},
+};
+
+export function resolveGitLabDuoModelIdentity(modelId: string): GitLabDuoModelIdentity | undefined {
+	const direct = GITLAB_DUO_MODEL_IDENTITIES[modelId];
+	if (direct) return direct;
+	for (const alias in GITLAB_DUO_MODEL_IDENTITIES) {
+		const identity = GITLAB_DUO_MODEL_IDENTITIES[alias];
+		if (identity?.upstreamModelId === modelId) return identity;
+	}
+	return undefined;
+}
+
+function gitLabDuoDisplayName(alias: string): string {
+	const parts = alias.slice("duo-chat-".length).split("-");
+	const family = parts.shift();
+	if (!family) return alias;
+	const numeric: string[] = [];
+	while (parts[0] !== undefined && /^\d+$/.test(parts[0])) {
+		const part = parts.shift();
+		if (part !== undefined) numeric.push(part);
+	}
+	const familyName = family === "gpt" ? "GPT" : `${family[0]?.toUpperCase() ?? ""}${family.slice(1)}`;
+	const version = numeric.length > 0 ? `${family === "gpt" ? "-" : " "}${numeric.join(".")}` : "";
+	const suffix = parts.map(part => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`).join(" ");
+	return `Duo Chat ${familyName}${version}${suffix ? ` ${suffix}` : ""}`;
+}
+
+export function getGitLabDuoModels(): Model<Api>[] {
+	const models: Model<Api>[] = [];
+	for (const alias in GITLAB_DUO_MODEL_IDENTITIES) {
+		const identity = GITLAB_DUO_MODEL_IDENTITIES[alias];
+		if (!identity) continue;
+		const reference = getBundledModel(identity.referenceProvider, identity.referenceModelId);
+		if (!reference) {
+			throw new Error(
+				`Missing bundled ${identity.referenceProvider}/${identity.referenceModelId} reference for ${alias}`,
+			);
+		}
+		const route = apiRouteFor("gitlab-duo", alias)?.api;
+		if (route !== "anthropic-messages" && route !== "openai-completions" && route !== "openai-responses") {
+			throw new Error(`Missing GitLab Duo API route for ${alias}`);
+		}
+		models.push(
+			buildModel({
+				...toModelSpec(reference),
+				id: alias,
+				name: gitLabDuoDisplayName(alias),
+				api: route,
+				provider: "gitlab-duo",
+				baseUrl: route === "anthropic-messages" ? GITLAB_DUO_ANTHROPIC_BASE_URL : GITLAB_DUO_OPENAI_BASE_URL,
+			}),
+		);
+	}
+	return models;
+}
 
 // ---------------------------------------------------------------------------
 // GitLab Duo Workflow
@@ -155,12 +304,10 @@ export function gitLabDuoWorkflowModelManagerOptions(
 		// Falls back to the bare provider id when no credential is present.
 		...(apiKey ? { cacheProviderId: gitLabDuoWorkflowModelCacheProviderId(apiKey, config) } : undefined),
 		dynamicModelsAuthoritative: true,
-		staticModels: [
-			buildGitLabDuoWorkflowFallbackModel("claude_sonnet_4_6_vertex", "Claude Sonnet 4.6 - Vertex", config.baseUrl),
-		],
+		staticModels: [buildGitLabDuoWorkflowFallbackModel(config.baseUrl)],
 		...(apiKey
 			? {
-					fetchDynamicModels: async hooks =>
+					fetchDynamicModels: async () =>
 						fetchGitLabDuoWorkflowModels({
 							apiKey,
 							baseUrl: config.baseUrl,
@@ -168,7 +315,6 @@ export function gitLabDuoWorkflowModelManagerOptions(
 							namespaceId: config.namespaceId,
 							projectId: config.projectId,
 							cwd: config.cwd,
-							onFailure: hooks?.onFailure,
 						}),
 				}
 			: undefined),
@@ -187,11 +333,6 @@ function gitLabDuoWorkflowModelCacheProviderId(apiKey: string, config: GitLabDuo
 	return `gitlab-duo-agent:${Bun.hash(`${apiKey}\u0000${scope}`).toString(36)}`;
 }
 
-export function resolveGitLabDuoWorkflowCacheProviderId(config?: GitLabDuoWorkflowModelManagerConfig): string {
-	const apiKey = config?.apiKey;
-	return apiKey ? gitLabDuoWorkflowModelCacheProviderId(apiKey, config ?? {}) : "gitlab-duo-agent";
-}
-
 // Devin (Codeium Cascade)
 // ---------------------------------------------------------------------------
 
@@ -203,275 +344,76 @@ export interface DevinModelManagerConfig {
 
 export function devinModelManagerOptions(config: DevinModelManagerConfig = {}): ModelManagerOptions<"devin-agent"> {
 	const { apiKey, baseUrl, fetch } = config;
+	const staticModels = seedModels<"devin-agent">("devin");
 	return {
 		providerId: "devin",
+		cacheProviderId: resolveModelCacheProviderId("devin"),
+		// A configured host serves its own Cascade deployment; keep the seed on it.
+		staticModels:
+			baseUrl === undefined || baseUrl === DEVIN_DEFAULT_BASE_URL
+				? staticModels
+				: staticModels.map(model => ({ ...model, baseUrl })),
 		...(apiKey ? { dynamicModelsAuthoritative: true } : undefined),
 		...(apiKey
 			? {
-					fetchDynamicModels: async hooks => {
-						const { fetchDevinModels } = await devinDiscovery.value;
-						return fetchDevinModels({ apiKey, baseUrl, fetch, onFailure: hooks?.onFailure });
+					fetchDynamicModels: async () => {
+						const { fetchDevinModels } = await devinDiscovery();
+						return fetchDevinModels({ apiKey, baseUrl, fetch });
 					},
 				}
 			: undefined),
 	};
 }
 
-const devinDiscovery = lazy(() => import("../discovery/devin"));
+const devinDiscovery = once(() => import("../discovery/devin"));
+
 // ---------------------------------------------------------------------------
-// Zai
+// Factory Droid
 // ---------------------------------------------------------------------------
 
-export interface ZaiModelManagerConfig {}
-
-export function zaiModelManagerOptions(_config: ZaiModelManagerConfig = {}): ModelManagerOptions<"anthropic-messages"> {
-	return { providerId: "zai" };
+export function factoryDroidModelManagerOptions(
+	config: FactoryDroidModelDiscoveryOptions = {},
+): ModelManagerOptions<"factory-droid-agent"> {
+	return {
+		providerId: "factory-droid",
+		cacheProviderId: resolveModelCacheProviderId("factory-droid", config),
+		// No model-listing endpoint exists; the registry narrowed offline is the seed.
+		staticModels: factoryDroidSeedModels(config),
+		dynamicModelsAuthoritative: true,
+		fetchDynamicModels: () => fetchFactoryDroidModels(config),
+		// Refresh current policy online; cached eligibility is not current entitlement.
+		alwaysRefetchDynamicModels: true,
+	};
 }
 
 // ---------------------------------------------------------------------------
 // Synthetic role providers
 // ---------------------------------------------------------------------------
 
-export const LOCAL_STATIC_MODELS: readonly ModelSpec<"local-inference">[] = [
-	{
-		id: "kokoro",
-		name: "Kokoro-82M",
-		api: "local-inference",
-		provider: "local",
-		baseUrl: "local://inference",
-		kind: "tts",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: null,
-		maxTokens: null,
-	},
-	{
-		id: "parakeet-tdt-0.6b-v3",
-		name: "Parakeet TDT 0.6B v3",
-		api: "local-inference",
-		provider: "local",
-		baseUrl: "local://inference",
-		kind: "stt",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: null,
-		maxTokens: null,
-	},
-	{
-		id: "whisper-base",
-		name: "Whisper Base",
-		api: "local-inference",
-		provider: "local",
-		baseUrl: "local://inference",
-		kind: "stt",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: null,
-		maxTokens: null,
-	},
-	{
-		id: "whisper-small",
-		name: "Whisper Small",
-		api: "local-inference",
-		provider: "local",
-		baseUrl: "local://inference",
-		kind: "stt",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: null,
-		maxTokens: null,
-	},
-	{
-		id: "whisper-large-v3-turbo",
-		name: "Whisper Large v3 Turbo",
-		api: "local-inference",
-		provider: "local",
-		baseUrl: "local://inference",
-		kind: "stt",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: null,
-		maxTokens: null,
-	},
-	{
-		id: "lfm2.5-230m",
-		name: "LFM2.5 230M",
-		api: "local-inference",
-		provider: "local",
-		baseUrl: "local://inference",
-		kind: "tiny",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: null,
-		maxTokens: null,
-	},
-	{
-		id: "lfm2.5-350m",
-		name: "LFM2.5 350M",
-		api: "local-inference",
-		provider: "local",
-		baseUrl: "local://inference",
-		kind: "tiny",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: null,
-		maxTokens: null,
-	},
-	{
-		id: "falcon-h1-90m",
-		name: "Falcon H1 Tiny 90M",
-		api: "local-inference",
-		provider: "local",
-		baseUrl: "local://inference",
-		kind: "tiny",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: null,
-		maxTokens: null,
-	},
-	{
-		id: "qwen3-1.7b",
-		name: "Qwen3 1.7B",
-		api: "local-inference",
-		provider: "local",
-		baseUrl: "local://inference",
-		kind: "tiny",
-		reasoning: true,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: null,
-		maxTokens: null,
-	},
-	{
-		id: "llama3.2:3b",
-		name: "Llama 3.2 3B",
-		api: "local-inference",
-		provider: "local",
-		baseUrl: "local://inference",
-		kind: "tiny",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: null,
-		maxTokens: null,
-	},
-	{
-		id: "gemma-3-1b",
-		name: "Gemma 3 1B",
-		api: "local-inference",
-		provider: "local",
-		baseUrl: "local://inference",
-		kind: "tiny",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: null,
-		maxTokens: null,
-	},
-	{
-		id: "qwen2.5-1.5b",
-		name: "Qwen2.5 1.5B",
-		api: "local-inference",
-		provider: "local",
-		baseUrl: "local://inference",
-		kind: "tiny",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: null,
-		maxTokens: null,
-	},
-	{
-		id: "lfm2-1.2b",
-		name: "LFM2 1.2B",
-		api: "local-inference",
-		provider: "local",
-		baseUrl: "local://inference",
-		kind: "tiny",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: null,
-		maxTokens: null,
-	},
-];
-
 export function localModelManagerOptions(): ModelManagerOptions<"local-inference"> {
 	return {
 		providerId: "local",
-		staticModels: LOCAL_STATIC_MODELS,
+		cacheProviderId: resolveModelCacheProviderId("local"),
+		staticModels: seedModels<"local-inference">("local"),
 	};
 }
-
-export const WEB_STATIC_MODELS: readonly ModelSpec<"web-search">[] = [
-	"parallel",
-	"perplexity",
-	"zai",
-	"exa",
-	"tinyfish",
-	"jina",
-	"kagi",
-	"tavily",
-	"firecrawl",
-	"brave",
-	"kimi",
-	"synthetic",
-	"ollama",
-	"searxng",
-	"startpage",
-	"duckduckgo",
-	"ecosia",
-	"google",
-	"mojeek",
-	"public",
-].map(id => ({
-	id,
-	name: id === "public" ? "Public Web" : id === "zai" ? "Z.AI" : id.charAt(0).toUpperCase() + id.slice(1),
-	api: "web-search" as const,
-	provider: "web" as const,
-	baseUrl: "web://search",
-	kind: "search" as const,
-	reasoning: false,
-	input: ["text" as const],
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-	contextWindow: null,
-	maxTokens: null,
-}));
 
 export function webModelManagerOptions(): ModelManagerOptions<"web-search"> {
 	return {
 		providerId: "web",
-		staticModels: WEB_STATIC_MODELS,
+		cacheProviderId: resolveModelCacheProviderId("web"),
+		staticModels: seedModels<"web-search">("web"),
 	};
 }
 
-// ---------------------------------------------------------------------------
-// TypeSafe
-// ---------------------------------------------------------------------------
-
-export const TYPESAFE_STATIC_MODELS: readonly ModelSpec<"typesafe">[] = [
-	{
-		id: "jev-latest",
-		name: "TypeSafe jev",
-		api: "typesafe",
-		provider: "typesafe",
-		baseUrl: TYPESAFE_DEFAULT_BASE_URL,
-		kind: "judge",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: null,
-		maxTokens: null,
-	},
-];
+/** Cloudflare Workers AI judges: the authored Clef rows; the account id resolves per request. */
+export function cloudflareWorkersAiModelManagerOptions(): ModelManagerOptions<"workers-ai-systemone"> {
+	return {
+		providerId: "cloudflare-workers-ai",
+		cacheProviderId: resolveModelCacheProviderId("cloudflare-workers-ai"),
+		staticModels: seedModels<"workers-ai-systemone">("cloudflare-workers-ai"),
+	};
+}
 
 /** Credentials and endpoint overrides for the TypeSafe catalog manager. */
 export interface TypeSafeModelManagerConfig {
@@ -484,11 +426,12 @@ export interface TypeSafeModelManagerConfig {
 export function typesafeModelManagerOptions(config: TypeSafeModelManagerConfig = {}): ModelManagerOptions<"typesafe"> {
 	const { apiKey } = config;
 	const envBaseUrl = Bun.env.TYPESAFE_BASE_URL?.trim();
-	const baseUrl = trimTrailingSlashes(config.baseUrl ?? (envBaseUrl || TYPESAFE_DEFAULT_BASE_URL));
-	const staticModels = TYPESAFE_STATIC_MODELS.map(model => ({ ...model, baseUrl }));
+	const baseUrl = (config.baseUrl ?? (envBaseUrl || TYPESAFE_DEFAULT_BASE_URL)).replace(/\/+$/, "");
+	const staticModels = seedModels<"typesafe">("typesafe");
 	return {
 		providerId: "typesafe",
-		staticModels,
+		cacheProviderId: resolveModelCacheProviderId("typesafe"),
+		staticModels: staticModels.map(model => ({ ...model, baseUrl })),
 		...(apiKey ? { dynamicModelsAuthoritative: true } : undefined),
 		...(apiKey
 			? {
@@ -501,4 +444,16 @@ export function typesafeModelManagerOptions(config: TypeSafeModelManagerConfig =
 				}
 			: undefined),
 	};
+}
+// ---------------------------------------------------------------------------
+// Zai
+// ---------------------------------------------------------------------------
+
+export interface ZaiModelManagerConfig {}
+
+/** Creates model-manager options for Z.AI's mixed native and Anthropic transports. */
+export function zaiModelManagerOptions(
+	_config: ZaiModelManagerConfig = {},
+): ModelManagerOptions<"anthropic-messages" | "openai-completions"> {
+	return { providerId: "zai" };
 }
