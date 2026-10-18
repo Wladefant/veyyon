@@ -251,6 +251,7 @@
 - A sandboxed local-cli trial can no longer signal a process outside it or connect to an abstract Unix socket made outside it on a kernel with Landlock ABI 6 or later.
 - A sandboxed local-cli trial can no longer read files in `/run/user`, and `docs/backends.md` states that a trial still connects to every pathname Unix socket the runner's user can, the session bus and the Docker daemon among them.
 - A session no longer moves compacted history out of memory after another window appended to its file, which read entries back from shifted offsets and failed compaction with "could not be read back from bytes".
+- A compacted entry whose recorded offset no longer holds its line is read back from where one scan of the session file finds its line, and is checked to be the same entry, instead of failing every later compaction for the life of the process.
 - An append made while a write fault lasts no longer rewrites the whole session file on the caller's stack: the retry publishes on the disk chain and entries that arrive before it runs share it, so on a 146 MB session an append takes 0.1 ms instead of 570 ms and the longest event-loop stall falls from 1.3 s to 100 ms.
 - A write fault that lands while a recovery publish waits its turn no longer cancels that publish, which left every later entry in memory only and never written to a healthy disk.
 - Reading a session file back for another window's lines no longer parses the lines this session wrote, cutting the read from 304 ms to 107 ms on a 146 MB file.
