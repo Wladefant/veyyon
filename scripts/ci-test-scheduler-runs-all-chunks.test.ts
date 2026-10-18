@@ -20,6 +20,7 @@ import { $which } from "@veyyon/utils";
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import {
 	extractBunSummary,
+	RUNNER_NONCE,
 	runTestCommand,
 	runTestCommandsSequentially,
 	type TestCommand,
@@ -54,32 +55,41 @@ describe("scheduler run-all-chunks contract", () => {
 	});
 
 	it("runTestCommand returns non-zero outcome without throwing when a chunk fails", async () => {
-		const bun = $which("bun") ?? process.execPath;
-		const failureBytes = "\u001b[31merror: full failure bytes\u001b[0m\n";
-		const failingCommand: TestCommand = {
-			label: "failing-chunk-test",
-			cwd: ".",
-			command: [
-				bun,
-				"-e",
-				`process.stdout.write(${JSON.stringify(nativeBunSummary(0, 1))}); ` +
-					`process.stderr.write(${JSON.stringify(failureBytes)}); process.exitCode = 1`,
-			],
-		};
-
-		const outcome = await runTestCommand(failingCommand);
-		expect(outcome.exitCode).toBe(1);
-		expect(outcome.label).toBe("failing-chunk-test");
-		expect(outcome.output).toContain(failureBytes);
-		expect(extractBunSummary(outcome.output)).toEqual({
-			pass: 0,
-			fail: 1,
-			skip: 0,
-			todo: 0,
-			total: 1,
-			files: 1,
-			hasFinalCounts: true,
+		const writes: string[] = [];
+		const stdoutSpy = spyOn(process.stdout, "write").mockImplementation(chunk => {
+			writes.push(String(chunk));
+			return true;
 		});
+		try {
+			const bun = $which("bun") ?? process.execPath;
+			const failureBytes = "\u001b[31merror: full failure bytes\u001b[0m\n";
+			const failingCommand: TestCommand = {
+				label: "failing-chunk-test",
+				cwd: ".",
+				command: [
+					bun,
+					"-e",
+					`process.stdout.write(${JSON.stringify(nativeBunSummary(0, 1))}); ` +
+						`process.stderr.write(${JSON.stringify(failureBytes)}); process.exitCode = 1`,
+				],
+			};
+
+			const outcome = await runTestCommand(failingCommand);
+			expect(outcome.exitCode).toBe(1);
+			expect(outcome.label).toBe("failing-chunk-test");
+			expect(outcome.output).toContain(failureBytes);
+			expect(extractBunSummary(outcome.output)).toEqual({
+				pass: 0,
+				fail: 1,
+				skip: 0,
+				todo: 0,
+				total: 1,
+				files: 1,
+				hasFinalCounts: true,
+			});
+		} finally {
+			stdoutSpy.mockRestore();
+		}
 	});
 
 	it("keeps passing Bun output quiet while preserving native exact counts", async () => {
@@ -139,104 +149,178 @@ describe("scheduler run-all-chunks contract", () => {
 	});
 
 	it("executes all chunks and accumulates failures when an earlier chunk fails", async () => {
-		const bun = $which("bun") ?? process.execPath;
-		const commands: TestCommand[] = [
-			{
-				label: "chunk-1-passes",
-				cwd: ".",
-				command: [
-					bun,
-					"-e",
-					`process.stdout.write(${JSON.stringify(nativeBunSummary(5, 0, 2, 1))})`,
-				],
-			},
-			{
-				label: "chunk-2-fails",
-				cwd: ".",
-				command: [
-					bun,
-					"-e",
-					`process.stdout.write(${JSON.stringify(nativeBunSummary(1, 2))}); process.exitCode = 1`,
-				],
-			},
-			{
-				label: "chunk-3-passes",
-				cwd: ".",
-				command: [
-					bun,
-					"-e",
-					`process.stdout.write(${JSON.stringify(nativeBunSummary(10, 0))})`,
-				],
-			},
-		];
-
-		const result = await runTestCommandsSequentially(commands);
-
-		// All 3 chunks must have executed
-		expect(result.outcomes.length).toBe(3);
-		expect(result.outcomes[0].label).toBe("chunk-1-passes");
-		expect(result.outcomes[0].exitCode).toBe(0);
-		expect(extractBunSummary(result.outcomes[0].output)).toEqual({
-			pass: 5,
-			fail: 0,
-			skip: 2,
-			todo: 1,
-			total: 8,
-			files: 1,
-			hasFinalCounts: true,
+		const writes: string[] = [];
+		const stdoutSpy = spyOn(process.stdout, "write").mockImplementation(chunk => {
+			writes.push(String(chunk));
+			return true;
 		});
-		expect(result.outcomes[1].label).toBe("chunk-2-fails");
-		expect(result.outcomes[1].exitCode).toBe(1);
-		expect(extractBunSummary(result.outcomes[1].output)).toEqual({
-			pass: 1,
-			fail: 2,
-			skip: 0,
-			todo: 0,
-			total: 3,
-			files: 1,
-			hasFinalCounts: true,
-		});
-		expect(result.outcomes[2].label).toBe("chunk-3-passes");
-		expect(result.outcomes[2].exitCode).toBe(0);
-		expect(extractBunSummary(result.outcomes[2].output)).toEqual({
-			pass: 10,
-			fail: 0,
-			skip: 0,
-			todo: 0,
-			total: 10,
-			files: 1,
-			hasFinalCounts: true,
-		});
+		try {
+			const bun = $which("bun") ?? process.execPath;
+			const commands: TestCommand[] = [
+				{
+					label: "chunk-1-passes",
+					cwd: ".",
+					command: [
+						bun,
+						"-e",
+						`process.stdout.write(${JSON.stringify(nativeBunSummary(5, 0, 2, 1))})`,
+					],
+				},
+				{
+					label: "chunk-2-fails",
+					cwd: ".",
+					command: [
+						bun,
+						"-e",
+						`process.stdout.write(${JSON.stringify(nativeBunSummary(1, 2))}); process.exitCode = 1`,
+					],
+				},
+				{
+					label: "chunk-3-passes",
+					cwd: ".",
+					command: [
+						bun,
+						"-e",
+						`process.stdout.write(${JSON.stringify(nativeBunSummary(10, 0))})`,
+					],
+				},
+			];
 
-		// Failures must be accumulated
-		expect(result.failures.length).toBe(1);
-		expect(result.failures[0].label).toBe("chunk-2-fails");
+			const result = await runTestCommandsSequentially(commands);
 
-		// Non-zero exit code must be set
-		expect(process.exitCode).toBe(1);
+			// All 3 chunks must have executed
+			expect(result.outcomes.length).toBe(3);
+			expect(result.outcomes[0].label).toBe("chunk-1-passes");
+			expect(result.outcomes[0].exitCode).toBe(0);
+			expect(extractBunSummary(result.outcomes[0].output)).toEqual({
+				pass: 5,
+				fail: 0,
+				skip: 2,
+				todo: 1,
+				total: 8,
+				files: 1,
+				hasFinalCounts: true,
+			});
+			expect(result.outcomes[1].label).toBe("chunk-2-fails");
+			expect(result.outcomes[1].exitCode).toBe(1);
+			expect(extractBunSummary(result.outcomes[1].output)).toEqual({
+				pass: 1,
+				fail: 2,
+				skip: 0,
+				todo: 0,
+				total: 3,
+				files: 1,
+				hasFinalCounts: true,
+			});
+			expect(result.outcomes[2].label).toBe("chunk-3-passes");
+			expect(result.outcomes[2].exitCode).toBe(0);
+			expect(extractBunSummary(result.outcomes[2].output)).toEqual({
+				pass: 10,
+				fail: 0,
+				skip: 0,
+				todo: 0,
+				total: 10,
+				files: 1,
+				hasFinalCounts: true,
+			});
+
+			// Failures must be accumulated
+			expect(result.failures.length).toBe(1);
+			expect(result.failures[0].label).toBe("chunk-2-fails");
+
+			// Non-zero exit code must be set
+			expect(process.exitCode).toBe(1);
+		} finally {
+			stdoutSpy.mockRestore();
+		}
 	});
 
 	it("leaves exitCode 0 when all chunks succeed", async () => {
-		const bun = $which("bun") ?? process.execPath;
-		const commands: TestCommand[] = [
-			{
-				label: "chunk-pass-a",
-				cwd: ".",
-				command: [bun, "-e", `process.stdout.write(${JSON.stringify(nativeBunSummary(3, 0))})`],
-			},
-			{
-				label: "chunk-pass-b",
-				cwd: ".",
-				command: [bun, "-e", `process.stdout.write(${JSON.stringify(nativeBunSummary(7, 0))})`],
-			},
-		];
+		const writes: string[] = [];
+		const stdoutSpy = spyOn(process.stdout, "write").mockImplementation(chunk => {
+			writes.push(String(chunk));
+			return true;
+		});
+		try {
+			const bun = $which("bun") ?? process.execPath;
+			const commands: TestCommand[] = [
+				{
+					label: "chunk-pass-a",
+					cwd: ".",
+					command: [bun, "-e", `process.stdout.write(${JSON.stringify(nativeBunSummary(3, 0))})`],
+				},
+				{
+					label: "chunk-pass-b",
+					cwd: ".",
+					command: [bun, "-e", `process.stdout.write(${JSON.stringify(nativeBunSummary(7, 0))})`],
+				},
+			];
 
-		const result = await runTestCommandsSequentially(commands);
-		expect(result.outcomes.length).toBe(2);
-		expect(result.failures.length).toBe(0);
-		expect(extractBunSummary(result.outcomes[0].output).pass).toBe(3);
-		expect(extractBunSummary(result.outcomes[1].output).pass).toBe(7);
-		expect(process.exitCode).toBe(0);
+			const result = await runTestCommandsSequentially(commands);
+			expect(result.outcomes.length).toBe(2);
+			expect(result.failures.length).toBe(0);
+			expect(extractBunSummary(result.outcomes[0].output).pass).toBe(3);
+			expect(extractBunSummary(result.outcomes[1].output).pass).toBe(7);
+			expect(process.exitCode).toBe(0);
+		} finally {
+			stdoutSpy.mockRestore();
+		}
+	});
+
+	it("fixture fake skip and todo counts in earlier stdout cannot invalidate final Bun pass summary", () => {
+		const outputWithFakeCounts =
+			"=== mock test chunk started ===\n" +
+			nativeBunSummary(5, 0, 2, 1) +
+			"✓ some intermediate test passed [1.00ms]\n" +
+			"\n" +
+			" 160 pass\n" +
+			" 0 fail\n" +
+			" 1999 expect() calls\n" +
+			"Ran 160 tests across 1 file. [15.00ms]\n";
+
+		const summary = extractBunSummary(outputWithFakeCounts);
+		expect(summary).toEqual({
+			pass: 160,
+			fail: 0,
+			skip: 0,
+			todo: 0,
+			total: 160,
+			files: 1,
+			hasFinalCounts: true,
+		});
+		expect(summary.hasFinalCounts).toBe(true);
+		expect(summary.skip).toBe(0);
+		expect(summary.todo).toBe(0);
+	});
+
+	it("attaches per-run trusted nonce and planned chunk identity to summary and isolates child env", async () => {
+		expect(RUNNER_NONCE).toBeDefined();
+		expect(RUNNER_NONCE.length).toBe(32);
+
+		const writes: string[] = [];
+		const stdoutSpy = spyOn(process.stdout, "write").mockImplementation(chunk => {
+			writes.push(String(chunk));
+			return true;
+		});
+		try {
+			const bun = $which("bun") ?? process.execPath;
+			const outcome = await runTestCommand({
+				label: "nonce-authenticated-chunk",
+				cwd: ".",
+				command: [
+					bun,
+					"-e",
+					`if (process.env.VEYYON_RUNNER_TRUSTED_NONCE) { process.exit(2); } process.stdout.write(${JSON.stringify(nativeBunSummary(2, 0))});`,
+				],
+			});
+			expect(outcome.exitCode).toBe(0);
+			const written = writes.join("");
+			expect(written).toContain(`nonce=${RUNNER_NONCE}`);
+			expect(written).toContain('chunk="nonce-authenticated-chunk"');
+			expect(written).toContain("CLOUDFLARE_CHUNK_SUMMARY files=0 pass=2 fail=0 skip=0 todo=0");
+		} finally {
+			stdoutSpy.mockRestore();
+		}
 	});
 
 });
