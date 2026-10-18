@@ -2,6 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
 import { selectCloudflareLane } from "./lane-routing.mjs";
+const SHARD_ENV_KEYS = ["VEYYON_CI_SHARD", "VEYYON_CI_SHARDS", "CF_SHARD_INDEX", "CF_SHARD_COUNT"];
+
+function laneCliEnv(scenario) {
+	const env = { ...process.env };
+	for (const key of SHARD_ENV_KEYS) {
+		delete env[key];
+	}
+	return Object.assign(env, scenario);
+}
+
 
 test("normal shard 1 cannot publish a release when shard 2 fails", () => {
 	const shardOne = selectCloudflareLane("feature/ci", "1", "3");
@@ -39,24 +49,22 @@ test("ordinary branches require exactly the configured three test shards", () =>
 test("route CLI uses the Workers branch and shard variables", () => {
 	const ordinary = spawnSync(process.execPath, ["ci/cloudflare/lane-routing.mjs"], {
 		encoding: "utf8",
-		env: {
-			...process.env,
+		env: laneCliEnv({
 			WORKERS_CI_BRANCH: "feature/ci",
 			VEYYON_CI_SHARD: "1",
 			VEYYON_CI_SHARDS: "3",
-		},
+		}),
 	});
 	assert.equal(ordinary.status, 0, ordinary.stderr);
 	assert.equal(ordinary.stdout.trim(), "tests|1|3");
 
 	const release = spawnSync(process.execPath, ["ci/cloudflare/lane-routing.mjs"], {
 		encoding: "utf8",
-		env: {
-			...process.env,
+		env: laneCliEnv({
 			WORKERS_CI_BRANCH: "cf-release/part-linux-x64",
 			VEYYON_CI_SHARD: "1",
 			VEYYON_CI_SHARDS: "ignored",
-		},
+		}),
 	});
 	assert.equal(release.status, 0, release.stderr);
 	assert.equal(release.stdout.trim(), "release|part-linux-x64|1");
@@ -127,12 +135,11 @@ test("detects missing or incomplete shard configuration", () => {
 test("route CLI parses CF_SHARD_INDEX and CF_SHARD_COUNT correctly", () => {
 	const cfBuild = spawnSync(process.execPath, ["ci/cloudflare/lane-routing.mjs"], {
 		encoding: "utf8",
-		env: {
-			...process.env,
+		env: laneCliEnv({
 			WORKERS_CI_BRANCH: "feature/ci",
 			CF_SHARD_INDEX: "6",
 			CF_SHARD_COUNT: "12",
-		},
+		}),
 	});
 	assert.equal(cfBuild.status, 0, cfBuild.stderr);
 	assert.equal(cfBuild.stdout.trim(), "tests|7|12");
