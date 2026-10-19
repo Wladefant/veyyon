@@ -103,7 +103,8 @@
 
 ### Fixed
 
-- A resumed session echoes keystrokes while its transcript is rebuilt: the transcript is built off screen in 8 ms slices and replaces the startup frame in one step, so on a 150-prompt session the slowest keystroke echo after the composer appears falls from 112–141 ms to 43–45 ms.
+- Keys typed while a session named by `--resume`, `--continue` or `--fork` is loading show in the composer instead of being discarded: the launch card now paints for those launches and holds the keys, so "hello" typed 30 ms after launch appears 40–53 ms after launch; a bare `--resume` still opens the session picker without the card.
+- A resumed session echoes keystrokes while its transcript is rebuilt: the transcript is built off screen in 8 ms slices, the first in a turn after the startup work and each tool's argument schema in a turn of its own, and replaces the startup frame in one step, so on a 150-prompt session the slowest keystroke echo after the composer appears falls from 112–141 ms to 40–45 ms.
 - A foreground `bash` call that returns its result inline drops its background-job record when it finishes instead of keeping it, its output, its abort controller and an eviction timer for five minutes, so a session that ran 3,200 commands settles at 225 MB of anonymous memory instead of 242 MB and holds no dead job per command.
 - A `search` of type `structure` and `ast_edit` parse a PHP file that closes its `?>` tag and continues as HTML under the full PHP grammar instead of reporting it as a parse error and skipping it, so in a 556-file WordPress plugin 0 PHP files fail to parse instead of 139, `echo $X;` finds 3,238 matches instead of 2,636, and each structure search takes 454 ms instead of 979 ms.
 - A `search` of type `structure` prints a `$$$` binding as the source it spans instead of listing each separator as an element, so `foo($$$ARGS)` over `foo(a, b)` shows `ARGS=[a, b]` instead of `ARGS=[a, ,, b]`.

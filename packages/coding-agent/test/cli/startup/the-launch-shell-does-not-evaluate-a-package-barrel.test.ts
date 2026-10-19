@@ -98,8 +98,13 @@ const BARRELS = ["@veyyon/tui", "@veyyon/utils", "@veyyon/agent-core", "@veyyon/
  * of `core/renderer.ts`, `core/tui.ts` and `core/frame-plan.ts`, which the shell already evaluates,
  * so the graph runs no new code. Each imports only `node:` built-ins, utils leaves and
  * `core/component-types.ts`, all already evaluated. The ceiling keeps the one leaf of margin.
+ *
+ * RE-MEASURED 2026-10-19 at 366, from 365: `cli/launch-card-eligibility.ts`, whose
+ * `opensSessionPicker` the launch card reads to skip its paint for a bare `--resume`. It imports a
+ * type only, and `commands/launch.ts` evaluates it before it imports the card, so a launch evaluates
+ * nothing it did not before. The ceiling keeps the one leaf of margin.
  */
-const SHELL_GRAPH_MODULE_CEILING = 366;
+const SHELL_GRAPH_MODULE_CEILING = 367;
 
 async function probe(code: string): Promise<number> {
 	const { stdout } = await run("bun", ["-e", code], { cwd: repoRoot, maxBuffer: 1 << 24 });
