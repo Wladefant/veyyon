@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { Agent } from "@veyyon/agent-core";
-import type { ApiKeyResolveContext, AssistantMessage, Context, ToolCall } from "@veyyon/ai";
+import type { AssistantMessage, Context, ToolCall } from "@veyyon/ai";
 import { unregisterCustomApis } from "@veyyon/ai/api-registry";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, registerMockApi } from "@veyyon/ai/providers/mock";
@@ -27,16 +27,6 @@ function lastAssistant(session: AgentSession): AssistantMessage {
 		throw new Error("Expected trailing assistant message");
 	}
 	return message as AssistantMessage;
-}
-
-function resolveInitialApiKey(
-	apiKey: string | ((ctx: ApiKeyResolveContext) => string | Promise<string | undefined> | undefined) | undefined,
-): string {
-	const resolved = typeof apiKey === "function" ? apiKey({ lastChance: false, error: undefined }) : apiKey;
-	if (typeof resolved !== "string") {
-		throw new Error("Expected API key to be resolved before streaming");
-	}
-	return resolved;
 }
 
 /**
@@ -351,9 +341,23 @@ describe("AgentSession retry delay cap", () => {
 		]);
 
 		const usageLimitError = "Error: You have hit your ChatGPT usage limit (k12 plan). Try again in ~231 min.";
-		const mock = createMockModel();
+		registerMockApi(RETRY_CAP_MOCK_API_SOURCE);
 		const requestedModels: string[] = [];
 		const requestedKeys: string[] = [];
+		const mock = createMockModel({
+			id: primaryModel.id,
+			provider: primaryModel.provider,
+			handler: (_context, options) => {
+				const apiKey = typeof options?.apiKey === "string" ? options.apiKey : undefined;
+				if (!apiKey) {
+					throw new Error("Expected streamSimple to pass a resolved string API key");
+				}
+				requestedKeys.push(apiKey);
+				return requestedKeys.length === 1
+					? { throw: usageLimitError }
+					: { content: ["recovered after sibling account"] };
+			},
+		});
 		let agent!: Agent;
 		agent = new Agent({
 			getApiKey: model => modelRegistry.resolver(model, agent.sessionId),
@@ -365,14 +369,7 @@ describe("AgentSession retry delay cap", () => {
 			},
 			streamFn: (requestedModel, context, options) => {
 				requestedModels.push(`${requestedModel.provider}/${requestedModel.id}`);
-				const apiKey = resolveInitialApiKey(options?.apiKey);
-				requestedKeys.push(apiKey);
-				if (requestedKeys.length === 1) {
-					mock.push({ throw: usageLimitError });
-				} else {
-					mock.push({ content: ["recovered after sibling account"] });
-				}
-				return mock.stream(requestedModel, context, options);
+				return aiStream.streamSimple(mock.model, context, options);
 			},
 		});
 
@@ -436,7 +433,8 @@ describe("AgentSession retry delay cap", () => {
 
 		const rateLimitError =
 			'429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}} retry-after-ms=11180000';
-		const mock = createMockModel();
+		registerMockApi(RETRY_CAP_MOCK_API_SOURCE);
+		const mock = createMockModel({ id: model.id, provider: model.provider });
 		let attempts = 0;
 		let agent!: Agent;
 		agent = new Agent({
@@ -447,10 +445,10 @@ describe("AgentSession retry delay cap", () => {
 				tools: [],
 				messages: [],
 			},
-			streamFn: (requestedModel, context, options) => {
+			streamFn: (_requestedModel, context, options) => {
 				attempts += 1;
 				mock.push(attempts === 1 ? { throw: rateLimitError } : { content: ["recovered after sibling unblock"] });
-				return mock.stream(requestedModel, context, options);
+				return aiStream.streamSimple(mock.model, context, options);
 			},
 		});
 

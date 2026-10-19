@@ -1259,6 +1259,8 @@ export class CommandController {
 		} finally {
 			this.ctx.bashComponent = undefined;
 			this.ctx.ui.requestRender();
+			// A `!` command may have moved the tree, and an idle row has no other reason to look.
+			this.ctx.statusLine.refreshGitStatus();
 		}
 		return false;
 	}

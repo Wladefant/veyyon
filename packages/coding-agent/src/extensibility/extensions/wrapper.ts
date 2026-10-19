@@ -4,7 +4,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ImageContent, Static, TextContent, TSchema } from "@veyyon/ai";
 import { applyToolProxy } from "@veyyon/kernel/registry/tool-proxy";
-import { errorMessage, isCancellation, toError } from "@veyyon/utils";
+import { cancellationError, errorMessage, isCancellation, toError } from "@veyyon/utils";
 import type { ToolViewRenderer } from "@veyyon/view";
 import type { Settings } from "../../config/settings";
 import { AgentRegistry } from "../../registry/agent-registry";
@@ -78,7 +78,7 @@ export const APPROVAL_SELECT_OPTIONS: ExtensionUISelectOption[] = [
  * The presentation of the approval card. Every host draws it the same way, so
  * it is stated once.
  *
- * It carries no `signal`: the signal belongs to one call, and `execute` adds
+ * It carries no `signal`: the signal belongs to one call, and `ApprovalRequest` adds
  * the turn's own before it raises the card. Sharing one options object across
  * calls is why it cannot live here.
  */
@@ -331,6 +331,7 @@ class ApprovalRequest<TParameters extends TSchema, TDetails> {
 	readonly #approvals: SessionToolApprovals | undefined;
 	readonly #sessionId: string;
 	readonly #reported: boolean;
+	readonly #signal: AbortSignal | undefined;
 
 	constructor(
 		tool: AgentTool<TParameters, TDetails>,
@@ -338,11 +339,13 @@ class ApprovalRequest<TParameters extends TSchema, TDetails> {
 		toolCallId: string,
 		gate: ApprovalGate,
 		context: AgentToolContext | undefined,
+		signal: AbortSignal | undefined,
 	) {
 		this.#tool = tool;
 		this.#runner = runner;
 		this.#toolCallId = toolCallId;
 		this.#gate = gate;
+		this.#signal = signal;
 		this.#approvals = context?.sessionApprovals;
 		this.#reported = Boolean(
 			runner?.hasHandlers("tool_approval_requested") || runner?.hasHandlers("tool_approval_resolved"),
@@ -380,10 +383,8 @@ class ApprovalRequest<TParameters extends TSchema, TDetails> {
 		// host presents one at a time and queues the rest. The standing grant was
 		// read once, above, BEFORE this call queued, so an answer of "Approve for
 		// session" given at the first card could never dismiss the cards already
-		// waiting behind it. Those cards are also built without a signal, so
-		// neither an abort nor the end of the turn drops them: they surface
-		// whenever the surface frees up, which is how an operator who answered
-		// once gets asked again for the same tool after the work is finished.
+		// waiting behind it. Each card carries the turn's signal, so a stop withdraws the
+		// cards queued behind it too, and none surfaces after the work is finished.
 		//
 		// Waiting on the in-flight prompt instead of queueing a second card is
 		// what closes that window. The answer is re-read after the wait, so a
@@ -398,8 +399,13 @@ class ApprovalRequest<TParameters extends TSchema, TDetails> {
 			await this.#resolve(true);
 			return;
 		}
+		if (this.#signal?.aborted) {
+			release();
+			await this.#stopped();
+		}
 
 		const choice = await this.#ask(uiContext, params, requester, release);
+		if (this.#signal?.aborted) await this.#stopped();
 		const approved =
 			choice === APPROVAL_CHOICE.approveOnce ||
 			choice === APPROVAL_CHOICE.approveSession ||
@@ -420,6 +426,12 @@ class ApprovalRequest<TParameters extends TSchema, TDetails> {
 			approved,
 			...(reason ? { reason } : {}),
 		});
+	}
+
+	/** The turn was stopped while this call waited: a cancellation, never a refusal the model reasons about. */
+	async #stopped(): Promise<never> {
+		await this.#resolve(false, "turn stopped");
+		throw cancellationError("the turn was stopped before the approval was answered");
 	}
 
 	/**
@@ -506,7 +518,7 @@ class ApprovalRequest<TParameters extends TSchema, TDetails> {
 			choice = await uiContext.select(
 				formatApprovalCard(this.#tool, params, this.#gate.reason, requester),
 				approvalSelectOptions(this.#gate.pattern),
-				APPROVAL_DIALOG_OPTIONS,
+				{ ...APPROVAL_DIALOG_OPTIONS, ...(this.#signal ? { signal: this.#signal } : {}) },
 			);
 		} catch (err) {
 			await this.#resolve(false, err instanceof Error ? err.message : "approval aborted");
@@ -695,6 +707,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				toolCallId,
 				gate,
 				(context ?? policyFrame) as AgentToolContext,
+				signal,
 			).obtain(params);
 		}
 

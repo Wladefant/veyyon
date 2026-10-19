@@ -43,6 +43,7 @@ click_text_in_row "Scout:" "Scout"
 sleep 3
 
 if [ "${SCENE_ARM:-after}" = "after" ]; then
+	# needle-source: Viewing agent Scout -- printed by session-focus-controller.ts as `Viewing agent ${id}` once the click focuses the agent with id Scout
 	expect_screen "Viewing agent Scout" 20
 else
 	visible_text | grep -Fq "Viewing agent" && abandon_take focus "the before arm focused an agent on click"

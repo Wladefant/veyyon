@@ -36,9 +36,12 @@ export function registerToolResultCodecs(contributed: readonly ToolResultCodec[]
 function codedResult(entry: FileEntry): { message: ToolResultMessage; codec: ToolResultCodec } | undefined {
 	if (entry.type !== "message" || entry.message.role !== "toolResult") return undefined;
 	const message = entry.message;
-	if (message.details === undefined) return undefined;
 	const codec = codecs.get(message.toolName);
-	return codec === undefined ? undefined : { message, codec };
+	// A cold `details` is an accessor that reads its line back, and it is present by definition, so the
+	// descriptor answers the presence check without a read.
+	const cold = Object.getOwnPropertyDescriptor(message, "details")?.get !== undefined;
+	if (codec === undefined || (!cold && message.details === undefined)) return undefined;
+	return { message, codec };
 }
 
 /**

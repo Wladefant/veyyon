@@ -26,6 +26,7 @@
 - The CLI keeps its 24-hour startup keepalive interval local; the interval is unchanged.
 - Moved cloud checkpoint, native recovery, and synchronized-session modules under `session/`; behavior is unchanged.
 - Removed the unused `/new` background-retention setting predicate; user-facing behavior is unchanged.
+- The `irc` tool description is condensed to fit its recorded prompt budget; every operation, session-addressing rule and send guard it described is unchanged.
 
 ### Added
 - Optional encrypted cloud checkpoints preserve native journals, artifacts, blobs, dirty files and version pins. The default-off client supports restore and explicit forks. Durable Object epochs fence synchronized prompt and tool admission. The existing `sessions` command alias remains available ([issue](https://github.com/Wladefant/veyyon/issues/567)).

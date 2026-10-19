@@ -67,8 +67,8 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/image-gen": 110,
 	"tools/inspect-image": 255,
 	"tools/inspect-image-system": 192,
-	// 681 -> 865: cross-session notices (`to: "session:<id>"`, `to: "session:all"`) with expiry and receipts (54d456c22c, ee96d84e05, Refs #537, #539).
-	"tools/irc": 865,
+	// 865 -> 639: the irc prompt condensed to fit its prompt budget; cross-session notices (`to: "session:<id>"`, `to: "session:all"`) with expiry and receipts stay documented (54d456c22c, ee96d84e05, Refs #537, #539).
+	"tools/irc": 639,
 	// 0 -> 293: error prompt row for task isolation failure capture and recovery hints (dbf7fe97cd, 2b11abeafc, Refs #107).
 	"tools/isolation-error": 293,
 	"tools/isolation-recovery-hint": 83,
@@ -108,7 +108,7 @@ const RECORDED_TOKENS: Record<string, number> = {
 };
 
 /** The sum the recorded table claims, so the total is in the diff of any trim. */
-const RECORDED_TOTAL = 22646;
+const RECORDED_TOTAL = 22420;
 
 const measured = new Map<string, number>([
 	...Object.entries(toolsPrompts).map(([id, entry]) => [id, estimateTokensFromText(entry.text)] as const),

@@ -1,18 +1,21 @@
 import { createHash, randomUUID } from "node:crypto";
+import { lazy } from "@veyyon/utils/abortable";
 import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import type { NativeCheckpointBundle } from "./native-recovery";
 
 export type CheckpointBundle = NativeCheckpointBundle;
-const checkpointBundle = type({
-	version: "1",
-	native: { sessionId: "string", header: "Record<string, unknown>", sessionFile: "string", "forkedFrom?": "string" },
-	journal: { path: "string", bytes: "string" },
-	artifacts: "Record<string, string>",
-	blobs: "Record<string, string>",
-	workspace: { dirty: "string[]", files: [{ path: "string", bytes: "string" }, "[]"] },
-	pins: { bun: "string", commit: "string", runtime: "string" },
-});
+const checkpointBundle = lazy(() =>
+	type({
+		version: "1",
+		native: { sessionId: "string", header: "Record<string, unknown>", sessionFile: "string", "forkedFrom?": "string" },
+		journal: { path: "string", bytes: "string" },
+		artifacts: "Record<string, string>",
+		blobs: "Record<string, string>",
+		workspace: { dirty: "string[]", files: [{ path: "string", bytes: "string" }, "[]"] },
+		pins: { bun: "string", commit: "string", runtime: "string" },
+	}),
+);
 export interface CheckpointLease {
 	ownerNode: string;
 	epoch: number;
@@ -62,7 +65,7 @@ export async function decryptCheckpointBundle(
 		cryptoKey,
 		bytes.subarray(13),
 	);
-	return checkpointBundle.assert(JSON.parse(new TextDecoder().decode(plain)));
+	return checkpointBundle.value.assert(JSON.parse(new TextDecoder().decode(plain)));
 }
 export type CheckpointFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 export interface CheckpointClientOptions {

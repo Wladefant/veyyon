@@ -101,6 +101,11 @@ import {
 	redactDiagnosticHeaders,
 } from "../utils/request-debug";
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
+import {
+	redactJsonFunctionCallArguments,
+	redactSensitiveCredentials,
+	redactSensitiveInObject,
+} from "../utils/sensitive-redaction";
 import { notifyRawSseEvent } from "../utils/sse-debug";
 import { compactGrammarDefinition } from "./grammar";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
@@ -166,12 +171,7 @@ import {
 	type ToolCallArgumentsDeltaShape,
 } from "./openai-shared";
 import { normalizeOpenAIPromptCacheKey } from "./openai-stable-ids";
-import {
-	redactJsonFunctionCallArguments,
-	redactSensitiveCredentials,
-	redactSensitiveInObject,
-	transformMessages,
-} from "./transform-messages";
+import { transformMessages } from "./transform-messages";
 
 export interface OpenAICodexResponsesOptions extends StreamOptions {
 	reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";

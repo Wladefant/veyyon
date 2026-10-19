@@ -33,6 +33,7 @@ import * as jj from "@veyyon/coding-agent/utils/jj";
 import * as natives from "@veyyon/natives";
 import { getWorktreesDir, removeWithRetries, setWorktreesDir } from "@veyyon/utils";
 import { useIsolatedAgentDir, useIsolatedWorktreesDir } from "../helpers/isolated-agent-dir";
+import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 
 // Spawning a task writes a session (and, for worktree runs, a checkout) under the
 // ACTIVE PROFILE's agent dir, so without this the suite creates them inside the
@@ -203,7 +204,7 @@ describe("worktree isolation helpers", () => {
 			afterEach(() => {
 				if (previousRoot === undefined) delete process.env.VEYYON_WORKTREE_DIR;
 				else process.env.VEYYON_WORKTREE_DIR = previousRoot;
-				process.exitCode = previousExitCode;
+				process.exitCode = previousExitCode ?? 0;
 			});
 			it("keeps a slot claimed during native setup through an ordinary clear", async () => {
 				vi.spyOn(natives, "isoResolve").mockReturnValue({
@@ -272,8 +273,10 @@ describe("worktree isolation helpers", () => {
 			});
 
 			it("clears a claim whose process is gone", async () => {
-				const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+				const { env, cleanup } = hermeticSpawnEnv();
+				const gone = Bun.spawn([process.execPath, "-e", ""], { env, stdout: "ignore", stderr: "ignore" });
 				await gone.exited;
+				cleanup();
 				const slot = path.join(getWorktreesDir(), "tdeadca11a");
 				await fs.mkdir(slot, { recursive: true });
 				await fs.writeFile(path.join(slot, ISOLATION_CLAIM_FILE), JSON.stringify({ pid: gone.pid }));
@@ -319,8 +322,10 @@ describe("worktree isolation helpers", () => {
 				vi.spyOn(console, "log").mockImplementation(() => {});
 				const live = await ensureIsolation(repo, "crash-live-owner");
 				const crashed = await ensureIsolation(repo, "crash-dead-owner");
-				const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+				const { env, cleanup } = hermeticSpawnEnv();
+				const gone = Bun.spawn([process.execPath, "-e", ""], { env, stdout: "ignore", stderr: "ignore" });
 				await gone.exited;
+				cleanup();
 				const crashedBase = path.dirname(crashed.mergedDir);
 				const owner = JSON.parse(await fs.readFile(path.join(crashedBase, ISOLATION_OWNER_FILE), "utf8"));
 				await fs.writeFile(
@@ -348,8 +353,10 @@ describe("worktree isolation helpers", () => {
 				vi.spyOn(console, "log").mockImplementation(() => {});
 				const crashed = await ensureIsolation(repo, "crash-registered");
 				const base = path.dirname(crashed.mergedDir);
-				const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+				const { env, cleanup } = hermeticSpawnEnv();
+				const gone = Bun.spawn([process.execPath, "-e", ""], { env, stdout: "ignore", stderr: "ignore" });
 				await gone.exited;
+				cleanup();
 				const owner = JSON.parse(await fs.readFile(path.join(base, ISOLATION_OWNER_FILE), "utf8"));
 				await fs.writeFile(
 					path.join(base, ISOLATION_OWNER_FILE),
@@ -555,8 +562,10 @@ describe("worktree isolation helpers", () => {
 			const makeDir = (_source: string, mergedDir: string) =>
 				fs.mkdir(mergedDir, { recursive: true }).then(() => {});
 			async function deadPid(): Promise<number> {
-				const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+				const { env, cleanup } = hermeticSpawnEnv();
+				const gone = Bun.spawn([process.execPath, "-e", ""], { env, stdout: "ignore", stderr: "ignore" });
 				await gone.exited;
+				cleanup();
 				return gone.pid;
 			}
 			async function rewriteOwner(base: string, patch: Record<string, unknown>): Promise<void> {

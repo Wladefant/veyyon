@@ -1404,6 +1404,7 @@ class SessionStartup {
 		this.#preferWebsockets = openaiWebsocketPreference(settings.get("providers.openaiWebsockets"));
 		this.#serviceTierByFamily = this.#initialServiceTierByFamily();
 		this.#sideStreamFn = wrapStreamFnWithProviderConcurrency(settings, createSettingsAwareStreamFn(settings));
+		const intentTracingEnabled = () => resolveIntentField(settings) !== undefined;
 		const agent: Agent = new Agent({
 			initialState: {
 				systemPrompt: prompt.systemPrompt,
@@ -1458,7 +1459,7 @@ class SessionStartup {
 			// so the provider schemas follow the rebuilt prompt on a settings change or a model-family
 			// switch. A prompt explaining an intent field the schemas do not carry is worse than one that
 			// omits it.
-			intentTracing: () => resolveIntentField(settings) !== undefined,
+			intentTracing: intentTracingEnabled,
 			instrumentation: settings.get("session.instrumentation"),
 			pruneToolDescriptions: this.#inlineToolDescriptors,
 			dialect: createDialectResolver(settings, message =>
