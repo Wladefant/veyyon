@@ -160,7 +160,9 @@ describe("Pier ExecutionBackend", () => {
 		const { promise: exited, resolve } = Promise.withResolvers<number>();
 
 		const fakeProc = {
-			pid: 888888,
+			// Above any kernel's pid_max: `terminateProcessTree` also signals the pid and its group
+			// through `process.kill`, so a pid that can be live reaches whatever process holds it.
+			pid: 9999993,
 			kill(sig?: "SIGTERM" | "SIGKILL" | number) {
 				signals.push(String(sig));
 				if (sig === "SIGKILL") {
