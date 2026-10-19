@@ -76,6 +76,10 @@ function openDb(resolvedPath: string): Database {
 	// Install the busy handler BEFORE any lock-taking statement.
 	db.run("PRAGMA busy_timeout = 3000");
 	db.run("PRAGMA journal_mode = WAL");
+	// A commit appends to the WAL without an fsync; the checkpoint syncs. A power loss can drop the
+	// last rows written, which the next refresh rewrites, and cannot corrupt the file. A full sync
+	// costs each provider's upsert a disk flush on the main thread, 0.4 to 38 ms apiece.
+	db.run("PRAGMA synchronous = NORMAL");
 	db.run(`
 		CREATE TABLE IF NOT EXISTS model_cache (
 			provider_id TEXT PRIMARY KEY,

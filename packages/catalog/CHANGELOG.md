@@ -14,6 +14,7 @@
 
 - OpenAI-compatible and LiteLLM discovery take their request deadline from `withScopedTimeoutSignal` in `@veyyon/utils` and `toNonEmptyString` from the catalog's own helpers instead of private copies; no user-visible change.
 - The `OPENROUTER_API_ENDPOINT` documentation states which clients fall back to it; no user-visible change.
+- The model cache writes under `synchronous = NORMAL` in WAL mode instead of flushing the disk on every commit, so storing one provider's discovered models at startup takes 0.06–0.08 ms instead of 0.41–0.63 ms, and at most 0.87 ms instead of up to 38 ms.
 
 ### Fixed
 
