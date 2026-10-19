@@ -31,6 +31,7 @@ import {
 } from "./paths";
 import { hasLiveDaemonProjectPresence } from "./presence";
 import {
+	DAEMON_BROKER_RETIRING_ERROR,
 	DAEMON_CLEANUP_WAIT_ENV,
 	DAEMON_IDLE_GRACE_ENV,
 	DAEMON_PROJECT_DIR_ENV,
@@ -46,6 +47,7 @@ import {
 	type DaemonSpec,
 	type DaemonTerminationOwner,
 	DEFAULT_CLEANUP_WAIT_MS,
+	daemonBrokerRetiringNotice,
 	parseDaemonSnapshot,
 	parseDaemonSpec,
 	parseDaemonWireRequest,
@@ -144,6 +146,11 @@ function quoteShellArg(value: string): string {
 
 function terminalState(state: DaemonSnapshot["state"]): boolean {
 	return state === "exited" || state === "failed";
+}
+
+/** A detached process that has started keeps running when its broker exits; the next broker recovers it. */
+function outlivesBroker(record: ManagedDaemon): boolean {
+	return record.spec.detached && !record.stopRequested && record.snapshot.pid !== undefined;
 }
 
 /** Mirror per-condition readiness progress into the snapshot so clients can see which condition is unmet. */
@@ -308,6 +315,8 @@ class DaemonBroker {
 	#server: net.Server | undefined;
 	#idleTimer: NodeJS.Timeout | undefined;
 	#shuttingDown = false;
+	/** Requests being acted on. The broker does not retire under one. */
+	#inFlight = 0;
 
 	constructor(
 		projectDir: string,
@@ -349,13 +358,17 @@ class DaemonBroker {
 	): Promise<void> {
 		if (this.#shuttingDown) return this.#finished.promise;
 		this.#shuttingDown = true;
+		// From here no request is acted on. Every connection is told before anything awaits, so a
+		// client sends what it has pending to the next broker instead of losing it with this one.
+		const notice = daemonBrokerRetiringNotice(process.pid);
+		for (const socket of this.#sockets) socket.write(notice);
 		clearTimeout(this.#idleTimer);
 		this.#idleTimer = undefined;
 		for (const timer of this.#cleanupTimers.values()) clearTimeout(timer);
 		this.#cleanupTimers.clear();
 		for (const record of this.#records.values()) {
-			const detached = record.spec.detached && !record.stopRequested && record.snapshot.pid !== undefined;
-			if (!detached && !terminalState(record.snapshot.state)) await this.#stopRecord(record, 2_000, termination);
+			if (!outlivesBroker(record) && !terminalState(record.snapshot.state))
+				await this.#stopRecord(record, 2_000, termination);
 			clearTimeout(record.restartTimer);
 			await record.log?.close();
 			await record.persistQueue;
@@ -379,6 +392,7 @@ class DaemonBroker {
 
 	#accept(socket: net.Socket): void {
 		this.#sockets.add(socket);
+		if (this.#shuttingDown) socket.write(daemonBrokerRetiringNotice(process.pid));
 		let authenticated = false;
 		let buffer = "";
 		socket.setEncoding("utf8");
@@ -421,8 +435,16 @@ class DaemonBroker {
 			const request = parseDaemonWireRequest(decoded);
 			id = request.id;
 			if (request.token !== this.#token) throw new Error("Daemon broker authentication failed");
+			if (this.#shuttingDown) throw new Error(DAEMON_BROKER_RETIRING_ERROR);
 			onAuthenticated();
-			const result = await this.#dispatch(request.operation);
+			this.#inFlight++;
+			let result: DaemonRpcResult;
+			try {
+				result = await this.#dispatch(request.operation);
+			} finally {
+				this.#inFlight--;
+				this.#scheduleIdleShutdown();
+			}
 			socket.write(`${JSON.stringify({ id, ok: true, result })}\n`);
 			if (request.operation.op === "shutdown") {
 				setTimeout(
@@ -889,10 +911,10 @@ class DaemonBroker {
 		record.snapshot.state = failed && !record.stopRequested ? "failed" : "exited";
 		persist(record);
 		this.#scheduleCleanup(record);
-		// A persistent daemon is what held the broker up past the last client; once
-		// it ends there is nothing left to hold it, so the idle reaper is re-armed
-		// here rather than only on client close, which already happened.
-		if (record.spec.persist) this.#scheduleIdleShutdown();
+		// The process that ended may have been the last thing this broker supervised, or the persistent
+		// daemon that held it up past the last client, so the idle reaper is re-armed here rather than
+		// only on client close.
+		this.#scheduleIdleShutdown();
 	}
 
 	#cancelCleanup(name: string): void {
@@ -1273,48 +1295,75 @@ class DaemonBroker {
 		}
 	}
 
+	/** True while a process this broker started depends on it: one that is not over and does not outlive it. */
+	#supervising(): boolean {
+		for (const record of this.#records.values()) {
+			if (!terminalState(record.snapshot.state) && !outlivesBroker(record)) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Arm the idle reaper. A connected client holds the broker up only while it supervises a process; a
+	 * broker with nothing to supervise retires after the grace whoever is connected, and its clients
+	 * reach the next broker on their next request.
+	 */
 	#scheduleIdleShutdown(): void {
-		if (this.#shuttingDown || this.#clients.size > 0) return;
+		if (this.#shuttingDown) return;
 		clearTimeout(this.#idleTimer);
+		this.#idleTimer = undefined;
+		if (this.#clients.size > 0 && this.#supervising()) return;
 		this.#idleTimer = setTimeout(() => {
 			this.#idleTimer = undefined;
-			void (async () => {
-				if (this.#clients.size > 0 || this.#shuttingDown) return;
-				if (await hasLiveDaemonProjectPresence(this.#runtimeDir)) {
-					this.#scheduleIdleShutdown();
-					return;
-				}
-				if (this.#clients.size > 0 || this.#shuttingDown) return;
-				const livePersistent = Array.from(this.#records.values()).some(
-					record => record.spec.persist && !terminalState(record.snapshot.state),
-				);
-				if (!livePersistent) {
-					await this.shutdown({
-						owner: "idle-reaper",
-						reason:
-							"the last veyyon client disconnected and the idle grace elapsed with no persistent daemon or live project presence remaining",
-						at: Date.now(),
-					});
-					return;
-				}
-				// A persistent sibling keeps the broker alive, not the
-				// `last-client-exit` daemons beside it: those end with the last
-				// client, as their lifetime states. The reaper then re-arms so the
-				// broker exits once the persistent daemon is gone too.
-				const reapAt = Date.now();
-				for (const record of this.#records.values()) {
-					if (record.spec.persist || record.spec.detached || terminalState(record.snapshot.state)) continue;
-					await this.#stopRecord(record, 2_000, {
-						owner: "idle-reaper",
-						reason:
-							"the last veyyon client disconnected and the idle grace elapsed; its lifetime is last-client-exit, so it was stopped while a persistent daemon kept the broker alive",
-						signal: "SIGTERM",
-						at: reapAt,
-					});
-				}
-				this.#scheduleIdleShutdown();
-			})();
+			void this.#reapIdle();
 		}, this.#idleGraceMs);
+	}
+
+	async #reapIdle(): Promise<void> {
+		// A request being acted on re-arms the reaper when it completes.
+		if (this.#shuttingDown || this.#inFlight > 0) return;
+		if (!this.#supervising()) {
+			await this.shutdown({
+				owner: "idle-reaper",
+				reason: "the idle grace elapsed with no process left to supervise",
+				at: Date.now(),
+			});
+			return;
+		}
+		if (this.#clients.size > 0) return;
+		if (await hasLiveDaemonProjectPresence(this.#runtimeDir)) {
+			this.#scheduleIdleShutdown();
+			return;
+		}
+		if (this.#clients.size > 0 || this.#shuttingDown) return;
+		const livePersistent = Array.from(this.#records.values()).some(
+			record => record.spec.persist && !terminalState(record.snapshot.state),
+		);
+		if (!livePersistent) {
+			await this.shutdown({
+				owner: "idle-reaper",
+				reason:
+					"the last veyyon client disconnected and the idle grace elapsed with no persistent daemon or live project presence remaining",
+				at: Date.now(),
+			});
+			return;
+		}
+		// A persistent sibling keeps the broker alive, not the
+		// `last-client-exit` daemons beside it: those end with the last
+		// client, as their lifetime states. The reaper then re-arms so the
+		// broker exits once the persistent daemon is gone too.
+		const reapAt = Date.now();
+		for (const record of this.#records.values()) {
+			if (record.spec.persist || record.spec.detached || terminalState(record.snapshot.state)) continue;
+			await this.#stopRecord(record, 2_000, {
+				owner: "idle-reaper",
+				reason:
+					"the last veyyon client disconnected and the idle grace elapsed; its lifetime is last-client-exit, so it was stopped while a persistent daemon kept the broker alive",
+				signal: "SIGTERM",
+				at: reapAt,
+			});
+		}
+		this.#scheduleIdleShutdown();
 	}
 }
 
