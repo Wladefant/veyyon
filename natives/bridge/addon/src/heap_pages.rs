@@ -29,11 +29,22 @@
 //! the peak and 340 MiB after the release. With eight arenas the same burst
 //! peaks at 306 MiB, settles at 188 MiB and runs in the same wall time.
 //!
-//! The arena cap and the trim are glibc Linux only. Elsewhere the release drops
-//! expired scans and resolves true only when it dropped one: musl returns free
-//! pages to the kernel when a chunk is freed, the macOS allocator releases
-//! emptied regions on its own, and Windows heaps decommit free pages past a
-//! threshold.
+//! [`pin_mmap_threshold`] fixes glibc's mmap threshold at [`MMAP_THRESHOLD`]
+//! when the addon loads. glibc raises the threshold to the size of each mapped
+//! block a thread frees, up to 32 MiB, so after the first large free every
+//! later block of that size comes from an arena heap and stays resident once
+//! freed. Skimming a 148 MB session allocates two 4 MiB read blocks and up to
+//! 16 MiB of output per call: resuming it peaked at 298 MiB anonymous memory
+//! and held 248 MiB a second later, and with the threshold fixed it peaks at
+//! 274 MiB and holds 219 MiB, with the same load time and search throughput.
+//! A block of [`MMAP_THRESHOLD`] or more is mapped on its own and unmapped
+//! when freed.
+//!
+//! The arena cap, the threshold and the trim are glibc Linux only. Elsewhere
+//! the release drops expired scans and resolves true only when it dropped one:
+//! musl returns free pages to the kernel when a chunk is freed, the macOS
+//! allocator releases emptied regions on its own, and Windows heaps decommit
+//! free pages past a threshold.
 
 use napi_derive::napi;
 
@@ -58,6 +69,33 @@ pub fn cap_arenas() {
 	// allocator parameters under the main arena's lock.
 	unsafe {
 		libc::mallopt(libc::M_ARENA_MAX, ARENA_MAX);
+	}
+}
+
+/// Size from which glibc maps a block on its own and unmaps it when freed.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+const MMAP_THRESHOLD: libc::c_int = 1 << 20;
+
+/// Fixes glibc's mmap threshold at [`MMAP_THRESHOLD`].
+///
+/// Runs from the addon's module initializer. Setting the threshold turns off
+/// glibc's dynamic adjustment of it and of the trim threshold for the rest of
+/// the process. An explicit `MALLOC_MMAP_THRESHOLD_` or
+/// `glibc.malloc.mmap_threshold` setting stays in force.
+pub fn pin_mmap_threshold() {
+	#[cfg(all(target_os = "linux", target_env = "gnu"))]
+	{
+		let explicit = std::env::var_os("MALLOC_MMAP_THRESHOLD_").is_some()
+			|| std::env::var("GLIBC_TUNABLES")
+				.is_ok_and(|tunables| tunables.contains("glibc.malloc.mmap_threshold="));
+		if explicit {
+			return;
+		}
+		// SAFETY: `mallopt` takes no pointers and sets a field of glibc's
+		// allocator parameters under the main arena's lock.
+		unsafe {
+			libc::mallopt(libc::M_MMAP_THRESHOLD, MMAP_THRESHOLD);
+		}
 	}
 }
 
@@ -102,7 +140,8 @@ mod tests {
 	const BLOCK: usize = 64 * 1024;
 	const BLOCKS: usize = 512;
 
-	/// Resident and total whole pages inside each `(start, len)` range.
+	/// Resident and total whole pages inside each `(start, len)` range. A range
+	/// glibc has unmapped holds no resident page.
 	fn residency(ranges: &[(usize, usize)]) -> (usize, usize) {
 		// SAFETY: `sysconf` reads a constant.
 		let page = usize::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).unwrap();
@@ -119,15 +158,96 @@ mod tests {
 			}
 			vec.clear();
 			vec.resize((last - first) / page, 0u8);
-			// SAFETY: `first..last` is page-aligned and lies inside a heap
-			// mapping this process holds; `vec` has one byte per page.
+			// SAFETY: `first..last` is page-aligned; `mincore` reports ENOMEM
+			// for a range that is not mapped and writes nothing; `vec` has one
+			// byte per page.
 			let rc =
 				unsafe { libc::mincore(first as *mut libc::c_void, last - first, vec.as_mut_ptr()) };
-			assert_eq!(rc, 0, "mincore failed: {}", std::io::Error::last_os_error());
-			resident += vec.iter().filter(|&&flags| flags & 1 == 1).count();
 			total += vec.len();
+			if rc != 0 {
+				let error = std::io::Error::last_os_error();
+				assert_eq!(error.raw_os_error(), Some(libc::ENOMEM), "mincore failed: {error}");
+				continue;
+			}
+			resident += vec.iter().filter(|&&flags| flags & 1 == 1).count();
 		}
 		(resident, total)
+	}
+
+	/// Runs the test named `name` alone in a child process with `env` set and
+	/// returns true there, so the measurement sees only that test's
+	/// allocations; returns false in the parent after checking that the child
+	/// passed.
+	fn in_child(name: &str, env: &[(&str, &str)]) -> bool {
+		const CHILD: &str = "VEYYON_HEAP_PAGES_TEST_CHILD";
+		if std::env::var_os(CHILD).is_some() {
+			return true;
+		}
+		let module = module_path!()
+			.split_once("::")
+			.map_or(module_path!(), |(_, rest)| rest);
+		let name = format!("{module}::{name}");
+		let output = std::process::Command::new(std::env::current_exe().unwrap())
+			.args([name.as_str(), "--exact", "--test-threads=1"])
+			.env(CHILD, "1")
+			.envs(env.iter().copied())
+			.output()
+			.unwrap();
+		let stdout = String::from_utf8_lossy(&output.stdout);
+		assert!(
+			output.status.success() && stdout.contains("test result: ok. 1 passed"),
+			"{stdout}{}",
+			String::from_utf8_lossy(&output.stderr)
+		);
+		false
+	}
+
+	/// Resident and total pages of a 2 MiB block a worker thread frees after
+	/// freeing an 8 MiB one, with a later block keeping the arena's top in use.
+	fn freed_block_residency() -> (usize, usize) {
+		std::thread::spawn(|| {
+			drop(vec![1u8; 8 << 20]);
+			let block = vec![1u8; 2 << 20];
+			let pin = vec![1u8; BLOCK];
+			let range = (block.as_ptr() as usize, block.len());
+			drop(block);
+			let measured = residency(&[range]);
+			drop(pin);
+			measured
+		})
+		.join()
+		.unwrap()
+	}
+
+	/// glibc raises a dynamic mmap threshold to the size of each mapped block
+	/// freed, so a block allocated after a larger one was freed comes from the
+	/// arena heap and stays resident. The addon's initializer fixes the
+	/// threshold, so a freed block of a mebibyte or more leaves nothing
+	/// resident, whatever was freed before it.
+	#[test]
+	fn a_freed_block_of_a_mebibyte_leaves_no_page_resident() {
+		if !in_child("a_freed_block_of_a_mebibyte_leaves_no_page_resident", &[]) {
+			return;
+		}
+		let (resident, total) = freed_block_residency();
+		assert!(total >= 500, "measured {total} pages of a 2 MiB block");
+		assert_eq!(resident, 0, "a freed 2 MiB block kept {resident} of {total} pages resident");
+	}
+
+	/// A threshold the environment sets stays in force: under a 32 MiB
+	/// threshold the 2 MiB block comes from the arena heap and stays resident.
+	#[test]
+	fn an_explicit_mmap_threshold_stays_in_force() {
+		let env = [("MALLOC_MMAP_THRESHOLD_", "33554432")];
+		if !in_child("an_explicit_mmap_threshold_stays_in_force", &env) {
+			return;
+		}
+		let (resident, total) = freed_block_residency();
+		assert!(total >= 500, "measured {total} pages of a 2 MiB block");
+		assert!(
+			resident * 10 >= total * 9,
+			"a freed 2 MiB block under a 32 MiB threshold kept {resident} of {total} pages"
+		);
 	}
 
 	/// The addon's initializer caps the test binary at eight arenas too, so
@@ -137,23 +257,7 @@ mod tests {
 	/// that holds only this test.
 	#[test]
 	fn the_release_returns_the_pages_a_worker_thread_freed() {
-		const CHILD: &str = "VEYYON_HEAP_PAGES_TEST_CHILD";
-		if std::env::var_os(CHILD).is_none() {
-			let module = module_path!()
-				.split_once("::")
-				.map_or(module_path!(), |(_, rest)| rest);
-			let name = format!("{module}::the_release_returns_the_pages_a_worker_thread_freed");
-			let output = std::process::Command::new(std::env::current_exe().unwrap())
-				.args([name.as_str(), "--exact", "--test-threads=1"])
-				.env(CHILD, "1")
-				.output()
-				.unwrap();
-			let stdout = String::from_utf8_lossy(&output.stdout);
-			assert!(
-				output.status.success() && stdout.contains("test result: ok. 1 passed"),
-				"{stdout}{}",
-				String::from_utf8_lossy(&output.stderr)
-			);
+		if !in_child("the_release_returns_the_pages_a_worker_thread_freed", &[]) {
 			return;
 		}
 		std::thread::spawn(|| {

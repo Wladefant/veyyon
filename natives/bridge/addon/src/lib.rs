@@ -272,8 +272,9 @@ pub const fn veyyon_natives_version_sentinel() {}
 
 /// Native module entry point: install crash diagnostics before any tool can
 /// invoke a panicking or allocating native call, cap the C allocator's arenas
-/// before the addon's threads allocate, and bound Oniguruma's match
-/// and search retries before any highlight or `find` can start a match. This
+/// and fix its mmap threshold before the addon's threads allocate, and bound
+/// Oniguruma's match and search retries before any highlight or `find` can
+/// start a match. This
 /// runs during `.node` load, while the dynamic-loader lock is held, so it MUST
 /// NOT spawn threads — the Tokio runtime is installed afterwards by
 /// [`veyyon_install_tokio_runtime`], which the JS loader calls once `dlopen`
@@ -287,6 +288,7 @@ pub const fn veyyon_natives_version_sentinel() {}
 fn init_native_module() {
 	crash_handler::install();
 	heap_pages::cap_arenas();
+	heap_pages::pin_mmap_threshold();
 	highlight::bound_regex_retries();
 }
 
