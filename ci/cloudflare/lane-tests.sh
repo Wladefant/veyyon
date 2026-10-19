@@ -4,9 +4,6 @@ set -Eeuo pipefail
 # https://developers.cloudflare.com/workers/ci-cd/builds/configuration/#default-variables
 if [[ -z "${WORKERS_CI_BRANCH:-}" ]]; then
   echo "Cloudflare lane branch is unknown; running tests"
-elif [[ "$WORKERS_CI_BRANCH" == "main" ]]; then
-  echo "Skipping Cloudflare lane tests on direct main push"
-  exit 0
 fi
 
 # Fail-fast CI execution
@@ -59,9 +56,14 @@ fi
 
 selection_args=()
 is_nightly=0
-if [[ "${WORKERS_CI_BRANCH:-}" == *"nightly"* ]] || [[ "${CI_NIGHTLY:-0}" == "1" ]]; then
+if [[ "${WORKERS_CI_BRANCH:-}" == "main" ]] || [[ "${WORKERS_CI_BRANCH:-}" == *"nightly"* ]] || [[ "${CI_NIGHTLY:-0}" == "1" ]]; then
   is_nightly=1
   echo "CLOUDFLARE_NIGHTLY_RUN branch=${WORKERS_CI_BRANCH:-unset} mode=full"
+fi
+
+if [[ $is_nightly -eq 1 ]]; then
+  CF_SHARD_INDEX="${CF_SHARD_INDEX:-0}"
+  CF_SHARD_COUNT="${CF_SHARD_COUNT:-1}"
 fi
 
 if [[ $is_nightly -eq 1 ]]; then

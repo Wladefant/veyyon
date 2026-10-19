@@ -46,8 +46,26 @@ Ran 41 tests across 4 files. [179.00ms]
         self.assertEqual(counts["skip"], 3)
         self.assertEqual(counts["total"], 41)
 
+    def test_rejects_inconsistent_declared_total(self) -> None:
+        with self.assertRaisesRegex(ValueError, "inconsistent"):
+            parse_bun_summary(
+                "CLOUDFLARE_TEST_TOTALS pass=5 fail=0 skip=0 todo=0 total=9 chunks=1\n"
+            )
+
+    def test_rejects_multiple_or_truncated_aggregate_summaries(self) -> None:
+        line = "CLOUDFLARE_TEST_TOTALS pass=5 fail=0 skip=0 todo=0 total=5 chunks=1\n"
+        with self.assertRaisesRegex(ValueError, "ambiguous"):
+            parse_bun_summary(line + line)
+        with self.assertRaisesRegex(ValueError, "truncated|malformed"):
+            parse_bun_summary("CLOUDFLARE_TEST_TOTALS pass=5 fail=0")
+
+    def test_rejects_multiple_standard_run_summaries(self) -> None:
+        run = " 5 pass\n 0 fail\nRan 5 tests across 1 file.\n"
+        with self.assertRaisesRegex(ValueError, "ambiguous"):
+            parse_bun_summary(run + run)
+
     def test_parse_bun_summary_with_ansi_escapes(self) -> None:
-        log = "\x1b[32m 42 pass\x1b[0m\n\x1b[31m 0 fail\x1b[0m\n"
+        log = "\x1b[32m 42 pass\x1b[0m\n\x1b[31m 0 fail\x1b[0m\nRan 42 tests across 3 files.\n"
         counts = parse_bun_summary(log)
         self.assertEqual(counts["pass"], 42)
         self.assertEqual(counts["fail"], 0)

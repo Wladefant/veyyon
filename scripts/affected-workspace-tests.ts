@@ -442,20 +442,6 @@ function dynamicImportOwner(call: ts.CallExpression, sourceFile: ts.SourceFile):
 
 function moduleReferences(sourceFile: ts.SourceFile): ModuleScan {
 	const references: ModuleReference[] = [];
-	const constantStrings = new Map<string, string>();
-	for (const statement of sourceFile.statements) {
-		if (
-			!ts.isVariableStatement(statement) ||
-			(statement.declarationList.flags & ts.NodeFlags.Const) === 0
-		) {
-			continue;
-		}
-		for (const declaration of statement.declarationList.declarations) {
-			if (!ts.isIdentifier(declaration.name)) continue;
-			const literal = stringLiteralText(declaration.initializer);
-			if (literal !== undefined) constantStrings.set(declaration.name.text, literal);
-		}
-	}
 
 	let fallbackReason: string | undefined;
 	let unboundedLoader = false;
@@ -495,18 +481,12 @@ function moduleReferences(sourceFile: ts.SourceFile): ModuleScan {
 			if (literal !== undefined) references.push({ specifier: literal });
 			else fallbackReason ??= `non-literal import-equals require in ${sourceFile.fileName}`;
 		} else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-			const argument = node.arguments[0];
-			const literal = stringLiteralText(argument);
-			const constant = argument !== undefined && ts.isIdentifier(argument) ? constantStrings.get(argument.text) : undefined;
-			const specifier = literal ?? constant;
-			if (specifier !== undefined) references.push({ specifier });
+			const literal = stringLiteralText(node.arguments[0]);
+			if (literal !== undefined) references.push({ specifier: literal });
 			else unresolvedLoader(node, "dynamic import");
 		} else if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "require") {
-			const argument = node.arguments[0];
-			const literal = stringLiteralText(argument);
-			const constant = argument !== undefined && ts.isIdentifier(argument) ? constantStrings.get(argument.text) : undefined;
-			const specifier = literal ?? constant;
-			if (specifier !== undefined) references.push({ specifier });
+			const literal = stringLiteralText(node.arguments[0]);
+			if (literal !== undefined) references.push({ specifier: literal });
 			else unresolvedLoader(node, "require");
 		}
 		ts.forEachChild(node, visit);

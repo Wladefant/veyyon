@@ -159,6 +159,22 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 		expect(dynamic.fallbackReason).toContain("non-literal dynamic import");
 	});
 
+	it("falls back for a loader identifier shadowed by a function parameter", () => {
+		const result = buildWorkspaceGraphWithImports(
+			[member("packages/app", "@test/app"), member("packages/shared", "@test/shared")],
+			[{
+				path: "packages/app/src/load.ts",
+				contents: [
+					'const target = "@test/shared";',
+					"export const load = (target: string) => import(target);",
+				].join("\n"),
+			}],
+			["packages/app/package.json", "packages/app/src/load.ts", "packages/shared/package.json"],
+		);
+
+		expect(result.fallbackReason).toContain("non-literal dynamic import");
+	});
+
 	it("gives an audited non-literal loader an edge to every other member, not a silent exemption", () => {
 		const loaderPath = "packages/coding-agent/src/eval/js/shared/runtime.ts";
 		expect(AFFECTED_DYNAMIC_IMPORT_LOADER_FILES).toContain(loaderPath);

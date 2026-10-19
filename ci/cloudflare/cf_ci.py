@@ -21,7 +21,6 @@ import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
 API = "https://api.cloudflare.com/client/v4"
-ACCOUNT_DEFAULT = "a0d288d1c95470cd009cc6e0df7accb7"
 API_TIMEOUT = 25
 SHA40_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
@@ -42,28 +41,37 @@ def parse_bun_summary(log: str) -> Dict[str, int]:
     Looks for CLOUDFLARE_TEST_TOTALS first, then falls back to Bun's runner lines.
     Fails closed (raises ValueError) if neither format is found or numbers are missing.
     """
-    totals_match = re.search(
-        r"CLOUDFLARE_TEST_TOTALS\s+pass=(\d+)\s+fail=(\d+)\s+skip=(\d+)(?:\s+todo=(\d+))?(?:\s+total=(\d+))?",
+    totals = re.findall(
+        r"CLOUDFLARE_TEST_TOTALS\s+pass=(\d+)\s+fail=(\d+)\s+skip=(\d+)\s+todo=(\d+)\s+total=(\d+)\s+chunks=(\d+)",
         log,
     )
-    if totals_match:
-        p = int(totals_match.group(1))
-        f = int(totals_match.group(2))
-        s = int(totals_match.group(3))
-        todo = int(totals_match.group(4)) if totals_match.group(4) else 0
-        total = int(totals_match.group(5)) if totals_match.group(5) else (p + f + s + todo)
-        return {"pass": p, "fail": f, "skip": s, "todo": todo, "total": total}
+    if totals:
+        if len(totals) != 1:
+            raise ValueError("Bun test summary is ambiguous: expected exactly one aggregate summary")
+        p, f, s, todo, total, chunks = map(int, totals[0])
+        if chunks < 1 or p + f + s + todo != total:
+            raise ValueError("Bun test summary has inconsistent totals or chunk count")
+        return {"pass": p, "fail": f, "skip": s, "todo": todo, "total": total, "chunks": chunks}
+
+    if "CLOUDFLARE_TEST_TOTALS" in log:
+        raise ValueError("Bun test summary is malformed or truncated")
 
     clean = re.sub(r"\x1b\[[0-9;]*m", "", log)
-    p_m = re.findall(r"^\s*(\d+)\s+pass", clean, re.MULTILINE)
-    f_m = re.findall(r"^\s*(\d+)\s+fail", clean, re.MULTILINE)
-    s_m = re.findall(r"^\s*(\d+)\s+skip", clean, re.MULTILINE)
-
-    if p_m or f_m:
-        p = int(p_m[-1]) if p_m else 0
-        f = int(f_m[-1]) if f_m else 0
-        s = int(s_m[-1]) if s_m else 0
-        return {"pass": p, "fail": f, "skip": s, "todo": 0, "total": p + f + s}
+    summary_rows = re.findall(r"^\s*(\d+)\s+(pass|fail|skip)\s*$", clean, re.MULTILINE)
+    if summary_rows:
+        if len(summary_rows) < 2 or not any(kind == "pass" for _, kind in summary_rows) or not any(kind == "fail" for _, kind in summary_rows):
+            raise ValueError("Bun test summary is incomplete")
+        if "Ran " not in clean:
+            raise ValueError("Bun test summary is truncated: missing final Ran line")
+        ran = re.findall(r"^Ran\s+(\d+)\s+tests?\s+across\s+(\d+)\s+files?\.", clean, re.MULTILINE)
+        if len(ran) != 1:
+            raise ValueError("Bun test summary is ambiguous or missing its complete Ran line")
+        counts = {kind: int(value) for value, kind in summary_rows}
+        p, f, s = counts.get("pass", 0), counts.get("fail", 0), counts.get("skip", 0)
+        total = p + f + s
+        if total != int(ran[0][0]):
+            raise ValueError("Bun test summary totals do not match the Ran line")
+        return {"pass": p, "fail": f, "skip": s, "todo": 0, "total": total, "chunks": 1}
 
     raise ValueError("Bun test summary missing or malformed in log: expected CLOUDFLARE_TEST_TOTALS or standard pass/fail summary")
 
@@ -147,23 +155,13 @@ def publish_github_commit_status(
 
 
 def load_cloudflare_token() -> Optional[str]:
-    """Load Cloudflare token from standard shared-auth locations."""
-    candidates = [
-        Path.home() / ".veyyon/shared-auth/cloudflare_polysim_builds_user_token.txt",
-        Path.home() / ".veyyon/shared-auth/cloudflare_polysim_builds_token.txt",
-        Path.home() / ".veyyon/shared-auth/cloudflare_shared_builds_token.txt",
-    ]
-    for c in candidates:
-        if c.is_file():
-            val = c.read_text(encoding="utf-8").strip()
-            if val:
-                return val
+    """Load a caller-supplied token from the process environment only."""
     return os.environ.get("CLOUDFLARE_API_TOKEN")
 
 
 def query_cloudflare_build(
     build_id: str,
-    account_id: str = ACCOUNT_DEFAULT,
+    account_id: str,
     token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Query Cloudflare API for build status and metadata."""
@@ -174,12 +172,15 @@ def query_cloudflare_build(
     url = f"{API}/accounts/{account_id}/builds/builds/{build_id}"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {cf_token}", "Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8")).get("result", {})
+        payload = json.loads(resp.read().decode("utf-8"))
+        if payload.get("success") is not True:
+            raise BuildError(f"Cloudflare build metadata request failed: {payload.get('errors', 'unknown API error')}")
+        return payload.get("result") or {}
 
 
 def fetch_cloudflare_build_log(
     build_id: str,
-    account_id: str = ACCOUNT_DEFAULT,
+    account_id: str,
     token: Optional[str] = None,
 ) -> str:
     """Fetch Cloudflare build log lines and concatenate into full log string."""
@@ -191,8 +192,13 @@ def fetch_cloudflare_build_log(
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {cf_token}", "Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
         data = json.loads(resp.read().decode("utf-8"))
-        lines = data.get("result", {}).get("lines", [])
-        return "\n".join(l[1] if isinstance(l, list) and len(l) > 1 else str(l) for l in lines)
+        if data.get("success") is not True:
+            raise BuildError(f"Cloudflare build log request failed: {data.get('errors', 'unknown API error')}")
+        result = data.get("result") or {}
+        if result.get("truncated") is True or result.get("cursor"):
+            raise BuildError("Cloudflare build log is truncated; refusing to report counts")
+        lines = result.get("lines", [])
+        return "\n".join(line[1] if isinstance(line, list) and len(line) > 1 else str(line) for line in lines)
 
 
 def parse_cli_args(args: Optional[List[str]] = None) -> argparse.Namespace:
@@ -213,7 +219,7 @@ def parse_cli_args(args: Optional[List[str]] = None) -> argparse.Namespace:
     p_verify.add_argument("--build-id", required=True, help="Cloudflare build UUID")
     p_verify.add_argument("--expected-sha", required=True, help="Expected exact 40-char commit SHA")
     p_verify.add_argument("--repo", default="Wladefant/veyyon", help="GitHub owner/repo")
-    p_verify.add_argument("--account-id", default=ACCOUNT_DEFAULT, help="Cloudflare account ID")
+    p_verify.add_argument("--account-id", required=True, help="Cloudflare account ID")
 
     return parser.parse_args(args)
 
@@ -246,23 +252,25 @@ def main(args: Optional[List[str]] = None) -> int:
         )
         print(json.dumps(res, indent=2))
         return 0
-
     if ns.subcommand == "verify":
         owner, repo = ns.repo.split("/", 1)
         build = query_cloudflare_build(ns.build_id, account_id=ns.account_id)
         status = build.get("status")
-        outcome = build.get("outcome")
-
+        outcome = build.get("build_outcome")
         log = fetch_cloudflare_build_log(ns.build_id, account_id=ns.account_id)
-        actual_sha = extract_exact_head(log) or build.get("commit_hash", "")
-        validate_exact_head(ns.expected_sha, actual_sha)
+        log_sha = extract_exact_head(log)
+        metadata_sha = (build.get("build_trigger_metadata") or {}).get("commit_hash")
+        if not log_sha or not metadata_sha:
+            raise CheckoutError("Build metadata and full logs must both include an exact commit SHA")
+        validate_exact_head(ns.expected_sha, log_sha)
+        validate_exact_head(ns.expected_sha, metadata_sha)
 
         counts = parse_bun_summary(log)
         passed = counts.get("pass", 0)
         failed = counts.get("fail", 0)
         skipped = counts.get("skip", 0)
 
-        gate = "PASS" if status == "success" and outcome == "success" and failed == 0 and passed > 0 else "FAIL"
+        gate = "PASS" if status == "stopped" and outcome == "success" and failed == 0 and passed > 0 else "FAIL"
         logs_url = f"https://dash.cloudflare.com/{ns.account_id}/workers/services/view/{build.get('script_tag', 'ci')}/production/builds/{ns.build_id}"
 
         publish_github_commit_status(
