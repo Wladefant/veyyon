@@ -11,6 +11,9 @@ import type { StoredCredential } from "./credentials";
 import { toScopedBackoffKey } from "./credentials";
 import type { AuthCredentialStore } from "./types";
 
+/** How long a credential stays blocked when the provider names no reset time. */
+export const DEFAULT_CREDENTIAL_BACKOFF_MS = 60_000;
+
 /** One in-memory rate-limit block: its deadline plus the clock reading that set it. */
 interface InMemoryCredentialBlock {
 	/** Epoch milliseconds the credential becomes usable again. */
@@ -163,6 +166,38 @@ export class CredentialBlocks {
 		blockScope: string | undefined = undefined,
 	): boolean {
 		return this.getCredentialBlockedUntil(provider, providerKey, credentialIndex, blockScope) !== undefined;
+	}
+
+	/**
+	 * Block expiry for `blockScope` ALONE, in memory or persisted, ignoring credential-wide blocks.
+	 *
+	 * {@link getCredentialBlockedUntil} answers "may this credential serve right now", where a
+	 * credential-wide hold counts under every scope. A scope that records a different fact, such as a
+	 * model the account's plan does not include, has to be read without the hold, or a 60-second
+	 * quota block would read as the account being unable to serve the model.
+	 */
+	getScopedBlockedUntil(
+		provider: string,
+		providerKey: string,
+		credentialIndex: number,
+		blockScope: string,
+	): number | undefined {
+		let blockedUntil = this.#getCredentialBlockedUntilForKey(
+			toScopedBackoffKey(providerKey, blockScope),
+			credentialIndex,
+			Date.now(),
+		);
+		const credentialId = this.#rows(provider)[credentialIndex]?.id;
+		if (credentialId === undefined) return blockedUntil;
+		const persisted = this.#readPersistedCredentialBlock(credentialId, providerKey, blockScope);
+		if (
+			persisted !== undefined &&
+			persisted > Date.now() &&
+			(blockedUntil === undefined || persisted > blockedUntil)
+		) {
+			blockedUntil = persisted;
+		}
+		return blockedUntil;
 	}
 
 	/** Marks a credential as blocked until the specified time. */

@@ -299,6 +299,69 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * 1474 to 1475: `ai/src/dialect/bracket-walk.ts`, the zero-import bracket walk `gemini.ts` and
  * `gemma.ts` split call arguments with instead of each spelling it inline.
  *
+ * 1475 to 1476: `catalog/wire/kimi-code.ts`, the Kimi Code region table and the API-key envelope that
+ * holds a credential's deployment. `ai/src/registry/oauth/index.ts`, already here, builds a Kimi login's
+ * API key through it, and its one import, `utils/src/url.ts`, was already here.
+ *
+ * 1476 to 1477: `prompts/side-channel/composer-prediction.md`, the prompt the composer's next-message
+ * prediction sends. `prompts/side-channel/rows.ts`, already here through `session/agent-session.ts`,
+ * imports every prompt in its directory as text.
+ *
+ * 1477 to 1478: `session/runtime/turn-context-check.ts`, the end-of-turn context check that left
+ * `session/agent-session.ts`. It imports only what that code imported there, so no other module arrived.
+ *
+ * 1478 to 1479: `ai/src/registry/oauth/token-response.ts`, the one reader that requires a token
+ * endpoint's JSON to be an object. `ai/src/registry/oauth/nous-research.ts`, already here, reads its
+ * token responses through it; its imports, `utils/src/type-guards.ts` and `ai/src/error`, were
+ * already here.
+ *
+ * 1479 to 1480: `session/runtime/session-switch.ts`, session switching and its rollback, which left
+ * `session/agent-session.ts`. It imports only what that code imported there, so no other module arrived.
+ *
+ * 1480 to 1481: `ai/src/auth-storage/usage-reporting.ts`, the usage-report fetch, cache and header
+ * ingest, which left `ai/src/auth-storage.ts`. Its imports were already here through that file.
+ * Measured 2026-10-16 at 1481.
+ *
+ * 1481 to 1482: `session/runtime/session-branch.ts`, branching and tree navigation, which left
+ * `session/agent-session.ts`. It imports only what that code imported there, so no other module
+ * arrived. Measured 2026-10-16 at 1482.
+ *
+ * 1482 to 1483: `session/runtime/session-handoff.ts`, the handoff document and the new session it
+ * seeds, which left `session/agent-session.ts`. It imports only what that code imported there, so
+ * no other module arrived. Measured 2026-10-16 at 1483.
+ *
+ * 1483 to 1484: `session/runtime/tool-activation.ts`, the active tool set and the base system prompt
+ * it renders, which left `session/agent-session.ts`. It imports only what that code imported there,
+ * so no other module arrived. Measured 2026-10-16 at 1484.
+ *
+ * 1484 to 1485: `session/agent-session-ephemeral-turn.ts`, the side-channel turn behind `/btw` and
+ * `/omfg` with its history snapshot, which left `session/agent-session.ts`. It imports only what that
+ * code imported there, so no other module arrived. Measured 2026-10-16 at 1485.
+ *
+ * 1485 to 1486: `config/resolve-config-value-sync.ts`, the synchronous `!command` and environment
+ * resolver the model registry runs for API keys and headers, which left `config/model-registry.ts`.
+ * It imports only what that code imported there. Measured 2026-10-16 at 1486.
+ *
+ * 1486 to 1487: `session/agent-session-turn-notices.ts`, the goal todo context and the magic keyword
+ * notices, which left `session/agent-session.ts`. It imports only what that code imported there, so
+ * no other module arrived. Measured 2026-10-16 at 1487.
+ *
+ * 1487 to 1488: `config/resolved-model-stage.ts`, the codec for the registry's persisted
+ * `resolved-models.json` stage, which left `config/model-registry.ts`. It imports only what that code
+ * imported there. Measured 2026-10-16 at 1488.
+ *
+ * 1488 to 1489: `config/live-config-headers.ts`, the header object that resolves configured
+ * header references on every read, which left `config/model-registry.ts`. It imports only what that
+ * code imported there. Measured 2026-10-16 at 1489.
+ *
+ * 1489 to 1490: `config/model-patch.ts`, which applies model overrides, custom model definitions and
+ * provider compat to built models, and which left `config/model-registry.ts`. It imports only what
+ * that code imported there. Measured 2026-10-16 at 1490.
+ *
+ * 1490 to 1491: `goals/state.ts`, the goal types and `GOAL_STATUSES`, whose only import is
+ * type-only. `goals/goal-record.ts`, already here, checks a recorded goal's status against that
+ * tuple when a session resumes, so a status no build writes restores no goal.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.

@@ -4,13 +4,6 @@ import { $env, decodeJwtPayload } from "@veyyon/utils";
 
 export const PERPLEXITY_CHAT_BASE_URL = "https://api.perplexity.ai";
 export const PERPLEXITY_RESPONSES_BASE_URL = "https://api.perplexity.ai/v1";
-/**
- * OpenRouter's API base.
- *
- * Re-exported from the owner rather than declared. The name matches the environment variable that overrides it,
- * which is why the value now comes from one place: a reader cannot tell the default from the override by name.
- */
-export const OPENROUTER_BASE_URL = OPENROUTER_API_ENDPOINT;
 export const OAUTH_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
 
 export interface ApiConfig {
@@ -79,8 +72,8 @@ export async function getApiConfigs(
 			type: "api_key",
 			apiKey: openrouterKey,
 			provider: "openrouter",
-			chatBaseUrl: OPENROUTER_BASE_URL,
-			responsesBaseUrl: OPENROUTER_BASE_URL,
+			chatBaseUrl: OPENROUTER_API_ENDPOINT,
+			responsesBaseUrl: OPENROUTER_API_ENDPOINT,
 			modelPrefix: "perplexity/",
 			useResponses,
 		});

@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Sync upstream changes from santhreal/veyyon.
+
+## [1.5.6] - 2026-10-13
+
+### Changed
+
+- `generateDict`, the corpus walker, vocabulary merging and `[meta]` parsing are split into one function per step, and tied candidates keep first-seen order through the stable sort instead of a stored index; generated dictionaries are unchanged.
+
 ## [1.5.0] - 2026-09-18
 
 ### Changed

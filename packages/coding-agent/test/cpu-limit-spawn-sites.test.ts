@@ -146,7 +146,7 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 		wired: true,
 		reason: "language servers are the big one: rust-analyzer is a sustained multi-core load, adopted on spawn",
 	},
-	"packages/coding-agent/src/lsp/index.ts": {
+	"packages/coding-agent/src/lsp/workspace-diagnostics.ts": {
 		wired: true,
 		reason: "the go.work probe and the project diagnostics build (cargo check, tsc, go build) are adopted",
 	},
@@ -238,6 +238,7 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 		reason:
 			"`veyyon --smoke-test` runs `profile new --json` once in a throwaway profile to prove the worker entry boots; a CI probe, before any session exists",
 	},
+<<<<<<< HEAD
 	"packages/coding-agent/src/cli/supervisor/dumps.ts": {
 		wired: false,
 		reason:
@@ -247,14 +248,13 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 		wired: false,
 		reason: "out-of-process crash supervisor; spawns the main veyyon process itself, outside any session budget",
 	},
-	"packages/coding-agent/src/session/native-recovery.ts": {
+	"packages/coding-agent/src/config/model-registry.ts": {
+=======
+	"packages/coding-agent/src/config/resolve-config-value-sync.ts": {
+>>>>>>> santhreal/main
 		wired: false,
 		reason:
-			"standalone checkpoint export runs a bounded synchronous git comparison before a session exists, so no session budget can adopt it",
-	},
-	"packages/coding-agent/src/config/model-registry.ts": {
-		wired: false,
-		reason: "execSync provider probes at CLI/model discovery time, before the first session registers",
+			"execSync `!command` config values the model registry resolves at CLI/model discovery time, before the first session registers",
 	},
 	"packages/coding-agent/src/modes/terminal/interactive-mode.ts": {
 		wired: false,
@@ -270,10 +270,6 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 		reason:
 			"the task ledger's Python bridge and lock holder are harness bookkeeping; killing the holder on a budget breach would drop the ledger lock mid-claim",
 	},
-	"packages/coding-agent/src/task/provider-error-reporter.ts": {
-		wired: false,
-		reason: "a best-effort local model-routing notification of terminal provider errors, not agent compute",
-	},
 	"packages/coding-agent/src/tools/core/polysim-main-guard.ts": {
 		wired: false,
 		reason:
@@ -287,9 +283,9 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 		wired: false,
 		reason: "Bun Worker threads run inside the harness process; a cgroup holds processes, not threads of one",
 	},
-	"packages/coding-agent/src/tools/web/browser/extension-session.ts": {
+	"packages/coding-agent/src/tools/web/browser/browser-product.ts": {
 		wired: false,
-		reason: "opens the extension connection page in the operator's Chrome, an operator-owned app rather than agent compute",
+		reason: "chrome --version prints the product and exits before any browser starts; there is no load to cap",
 	},
 	"packages/coding-agent/src/eval/js/context-manager.ts": {
 		wired: false,

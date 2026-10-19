@@ -1,6 +1,6 @@
 /**
  * The shapes of a failed assistant turn the retry ladder reads before it re-sends the turn, switches
- * the model, or continues from the results already in context, and how a recovered turn is labelled.
+ * the model, or continues from the results already in context, and how a retried failure is recorded.
  */
 
 import { type AgentMessage, toolResultNeverRan } from "@veyyon/agent-core";
@@ -8,13 +8,12 @@ import type { AssistantMessage, AssistantRetryRecoveryKind } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
 import { type CursorExecResolvedCarrier, kCursorExecResolved } from "@veyyon/ai/utils/block-symbols";
 
-/** Whether the turn ended on a content-classifier refusal or sensitivity stop. */
-export function isClassifierRefusal(message: AssistantMessage): boolean {
-	if (message.stopReason !== "error") return false;
-	const stopType = message.stopDetails?.type;
-	return stopType === "refusal" || stopType === "sensitive";
+/** Whether the turn ended on the provider client's generic abort text rather than a reason of its own. */
+export function isGenericAbortSentinel(message: AssistantMessage): boolean {
+	return message.errorMessage === "Request was aborted" || message.errorMessage === "Request was aborted.";
 }
 
+/** What a retry switched to recover a failure classified as `id`. */
 export function retryRecoveryKind(
 	id: number,
 	switchedCredential: boolean,
@@ -27,6 +26,7 @@ export function retryRecoveryKind(
 	return "plain";
 }
 
+/** The note a retried failure is recorded with, such as `rate-limited; switched account; retried`. */
 export function retryRecoveryNote(recovery: AssistantRetryRecoveryKind, rateLimited: boolean): string {
 	const parts: string[] = [];
 	if (rateLimited) {
@@ -43,6 +43,13 @@ export function retryRecoveryNote(recovery: AssistantRetryRecoveryKind, rateLimi
 	}
 	parts.push("retried");
 	return parts.join("; ");
+}
+
+/** Whether the turn ended on a content-classifier refusal or sensitivity stop. */
+export function isClassifierRefusal(message: AssistantMessage): boolean {
+	if (message.stopReason !== "error") return false;
+	const stopType = message.stopDetails?.type;
+	return stopType === "refusal" || stopType === "sensitive";
 }
 
 /**
@@ -83,6 +90,23 @@ export function hasReplayUnsafeToolOutput(message: AssistantMessage, context: re
 	return false;
 }
 
+/**
+ * Retried turns remove the failed assistant message from active context.
+ * Thinking-only partials are safe to discard and replay: reasoning models
+ * routinely stall after long thinking with no visible output, and duplicated
+ * thinking display is materially lower harm than duplicated final text.
+ * Whitespace-only text is likewise safe since nothing meaningful reached the
+ * user. Completed visible text and retained tool calls are NOT safe: visible
+ * text already reached the user, so replaying the turn duplicates it; a
+ * completed tool call may already have emitted its tool result after this
+ * assistant message, so replaying can duplicate work.
+ */
+export function hasReplayUnsafeOutput(message: AssistantMessage, context: readonly AgentMessage[]): boolean {
+	if (message.content.some(block => block.type === "text" && block.text.trim().length > 0)) {
+		return true;
+	}
+	return hasReplayUnsafeToolOutput(message, context);
+}
 /**
  * Whether sending the turn now in context moves the work forward, asked per CALL.
  *

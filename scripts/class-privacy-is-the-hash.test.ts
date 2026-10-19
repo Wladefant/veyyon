@@ -241,7 +241,7 @@ describe("the check tells a parameter property from a field", () => {
 	/**
 	 * The exempt case spanning several lines, which is the one a line-shape rule
 	 * gets wrong: `private clipboard: {` opens an object type and the parameter
-	 * runs on for six more lines. `input-controller.ts` has exactly this.
+	 * runs on for six more lines.
 	 */
 	it("allows a parameter property whose type spans lines", () => {
 		const source = [

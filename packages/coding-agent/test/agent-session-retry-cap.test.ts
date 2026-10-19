@@ -5,6 +5,7 @@ import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage, Context, ToolCall } from "@veyyon/ai";
 import { unregisterCustomApis } from "@veyyon/ai/api-registry";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import * as envApiKeyModule from "@veyyon/ai/env-api-key";
 import { createMockModel, registerMockApi } from "@veyyon/ai/providers/mock";
 import * as aiStream from "@veyyon/ai/stream";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
@@ -51,7 +52,7 @@ describe("AgentSession retry delay cap", () => {
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		// A live env var now overrides a stored static api_key; these tests rotate stored Anthropic
 		// credentials, so neutralize env resolution (ignores every provider's ambient env key).
-		vi.spyOn(aiStream, "getEnvApiKey").mockReturnValue(undefined);
+		vi.spyOn(envApiKeyModule, "getEnvApiKey").mockReturnValue(undefined);
 		authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 	});
@@ -116,7 +117,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.baseDelayMs": 5,
 			"retry.maxDelayMs": 100,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -189,7 +190,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.maxRetries": 1,
 			"retry.modelFallback": false,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -283,7 +284,7 @@ describe("AgentSession retry delay cap", () => {
 				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
 			},
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -383,7 +384,7 @@ describe("AgentSession retry delay cap", () => {
 				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
 			},
 		});
-		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+		settings.setDefaultModel(`${primaryModel.provider}/${primaryModel.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -458,7 +459,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.maxDelayMs": 5_000,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -524,7 +525,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.baseDelayMs": 5,
 			"retry.maxDelayMs": 5_000,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -571,6 +572,7 @@ describe("AgentSession retry delay cap", () => {
 		}
 
 		let streamCalls = 0;
+		const requestContexts: Context[] = [];
 		const agent = new Agent({
 			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
@@ -579,8 +581,9 @@ describe("AgentSession retry delay cap", () => {
 				tools: [],
 				messages: [],
 			},
-			streamFn: requestedModel => {
+			streamFn: (requestedModel, context) => {
 				streamCalls += 1;
+				requestContexts.push(context);
 				const stream = new AssistantMessageEventStream();
 				queueMicrotask(() => {
 					const partial: AssistantMessage = {
@@ -637,7 +640,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.maxDelayMs": 5_000,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -660,6 +663,20 @@ describe("AgentSession retry delay cap", () => {
 		expect(streamCalls).toBe(2);
 		expect(retryStartEvents).toHaveLength(1);
 		expect(retryEndEvents).toHaveLength(1);
+		// The retry replays the prompt, not the dead turn. That turn sits behind
+		// the never-ran placeholder the loop pairs with its call, so it is found
+		// past the placeholder and both leave the replayed context together. The
+		// provider conversion renames call ids, so the replay is read by role and
+		// the agent's own context by id.
+		expect((requestContexts[1]?.messages ?? []).map(message => message.role)).toEqual(["user"]);
+		const deadCallIds = session.agent.state.messages.flatMap(message =>
+			message.role === "assistant"
+				? message.content.flatMap(block => (block.type === "toolCall" ? [block.id] : []))
+				: message.role === "toolResult"
+					? [message.toolCallId]
+					: [],
+		);
+		expect(deadCallIds).toEqual(["tc-write-2", "tc-write-2"]);
 		const lastError = [...session.agent.state.messages]
 			.reverse()
 			.find((message): message is AssistantMessage => message.role === "assistant");
@@ -760,7 +777,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.maxDelayMs": 5_000,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -894,7 +911,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.baseDelayMs": 5,
 			"retry.maxDelayMs": 5_000,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -958,7 +975,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.baseDelayMs": 5,
 			"retry.maxDelayMs": 5_000,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1013,7 +1030,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.maxDelayMs": 5_000,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1071,7 +1088,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.maxRetries": 1,
 			"retry.modelFallback": true,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1128,7 +1145,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.maxDelayMs": 5_000,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1185,7 +1202,7 @@ describe("AgentSession retry delay cap", () => {
 			"retry.maxDelayMs": 5_000,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1241,7 +1258,7 @@ describe("AgentSession retry delay cap", () => {
 		});
 
 		const settings = Settings.isolated({ "compaction.enabled": false });
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,

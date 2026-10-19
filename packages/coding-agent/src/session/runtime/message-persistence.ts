@@ -9,9 +9,10 @@
  *   the order their `message_end` events arrived, even when an earlier write is still awaiting its
  *   turn. {@link waitFor} lets a later pass wait until a message's entry exists.
  * - **The timestamp index** answers "is this message already on the branch?" in O(log n) for the
- *   common miss. It is memoized against a (session file, leaf id) anchor, so every branch mutation
- *   (rewind, branch switch, new session, custom-entry append) invalidates it without a call site
- *   having to remember to.
+ *   common miss. It is memoized against the session file and leaf id. A leaf that grew from the
+ *   indexed one (a message or custom-entry append) adds only the new entries; any other branch
+ *   mutation (rewind, branch switch, new session) rebuilds it, without a call site having to
+ *   remember to.
  * - **The write** ({@link persistIfMissing}) strips telemetry the instrumentation level does not
  *   allow, drops classifier refusals and empty error turns, stamps the assistant's context
  *   snapshot, and appends only when the branch does not already hold the same message.
@@ -97,38 +98,81 @@ export interface MessagePersistenceHost {
 const INDEX_SPARE = 64;
 
 /**
- * The message timestamps of one branch, sorted, valid while `anchor` matches. A persistence key
- * includes its message's timestamp, so a timestamp absent here proves the key absent and a present
- * one sends the caller to the branch to compare keys. A 600-turn branch holds 5,418 messages: as
- * numbers in a typed array they take 43 KiB, where a `Set` of their key strings took 1 MiB.
+ * The message timestamps of one branch, sorted, valid while the session file and leaf id match. A
+ * persistence key includes its message's timestamp, so a timestamp absent here proves the key absent
+ * and a present one sends the caller to the branch to compare keys. A 600-turn branch holds 5,418
+ * messages: as numbers in a typed array they take 43 KiB, where a `Set` of their key strings took
+ * 1 MiB.
  */
 class BranchTimestamps {
-	anchor: string;
-	/** Ascending in `[0, #length)`; the slots after it are spare. */
-	#sorted: Float64Array;
+	readonly file: string | undefined;
+	/** The leaf id the index answers for: the indexed branch is the path to it. */
+	leafId: string | null;
+	/** Entries of the indexed branch, and the id of its last one: a branch that holds that id there extends it. */
 	#length = 0;
+	#lastId: string | undefined;
+	/** Ascending in `[0, #count)`; the slots after it are spare. */
+	#sorted: Float64Array;
+	#count = 0;
 	/**
 	 * Set when a keyed message on the branch has a timestamp that is not a finite number, as a
 	 * hand-edited log can: its key cannot be found by number, so every lookup reads as a hit.
 	 */
 	#irregular = false;
 
-	constructor(anchor: string, branch: readonly SessionEntry[]) {
-		this.anchor = anchor;
+	constructor(file: string | undefined, leafId: string | null, branch: readonly SessionEntry[]) {
+		this.file = file;
+		this.leafId = leafId;
 		this.#sorted = new Float64Array(branch.length + INDEX_SPARE);
 		for (const entry of branch) {
 			if (entry.type !== "message") continue;
 			const timestamp = entry.message.timestamp;
-			if (Number.isFinite(timestamp)) this.#sorted[this.#length++] = timestamp;
+			if (Number.isFinite(timestamp)) this.#sorted[this.#count++] = timestamp;
 			else if (sessionMessagePersistenceKey(entry.message) !== undefined) this.#irregular = true;
 		}
-		this.#sorted.subarray(0, this.#length).sort();
+		this.#sorted.subarray(0, this.#count).sort();
+		this.#length = branch.length;
+		this.#lastId = branch.at(-1)?.id;
+	}
+
+	/**
+	 * Index the entries `branch` holds past the indexed branch and answer for `leafId`. Returns
+	 * false, and changes nothing, when `branch` does not start with the indexed branch.
+	 */
+	extend(leafId: string | null, branch: readonly SessionEntry[]): boolean {
+		const length = this.#length;
+		// The path to an entry is unique, so a branch holding the indexed last entry at the same
+		// position holds the whole indexed branch before it. A shorter branch holds nothing there,
+		// and every branch extends an empty one.
+		if (branch[length - 1]?.id !== this.#lastId) return false;
+		for (let index = length; index < branch.length; index++) {
+			const entry = branch[index];
+			if (entry.type !== "message") continue;
+			const timestamp = entry.message.timestamp;
+			if (Number.isFinite(timestamp)) this.#add(timestamp);
+			else if (sessionMessagePersistenceKey(entry.message) !== undefined) this.#irregular = true;
+		}
+		this.leafId = leafId;
+		this.#length = branch.length;
+		this.#lastId = branch.at(-1)?.id;
+		return true;
+	}
+
+	/**
+	 * Record that `entryId`, holding a message stamped `timestamp`, was appended at the leaf and is
+	 * the leaf now: the path to it is the indexed branch and one more entry.
+	 */
+	appended(entryId: string, timestamp: number): void {
+		this.#add(timestamp);
+		this.leafId = entryId;
+		this.#length++;
+		this.#lastId = entryId;
 	}
 
 	/** The position of the first timestamp after `timestamp`. */
 	#after(timestamp: number): number {
 		let low = 0;
-		let high = this.#length;
+		let high = this.#count;
 		while (low < high) {
 			const middle = (low + high) >>> 1;
 			if (this.#sorted[middle] <= timestamp) low = middle + 1;
@@ -143,20 +187,20 @@ class BranchTimestamps {
 		return at > 0 && this.#sorted[at - 1] === timestamp;
 	}
 
-	add(timestamp: number): void {
+	#add(timestamp: number): void {
 		if (!Number.isFinite(timestamp)) {
 			this.#irregular = true;
 			return;
 		}
-		if (this.#length === this.#sorted.length) {
-			const grown = new Float64Array(this.#length + (this.#length >>> 1) + INDEX_SPARE);
+		if (this.#count === this.#sorted.length) {
+			const grown = new Float64Array(this.#count + (this.#count >>> 1) + INDEX_SPARE);
 			grown.set(this.#sorted);
 			this.#sorted = grown;
 		}
 		const at = this.#after(timestamp);
-		this.#sorted.copyWithin(at + 1, at, this.#length);
+		this.#sorted.copyWithin(at + 1, at, this.#count);
 		this.#sorted[at] = timestamp;
-		this.#length++;
+		this.#count++;
 	}
 }
 
@@ -294,12 +338,9 @@ export class MessagePersistence {
 	/** Append a message entry, keeping a fresh timestamp index fresh instead of letting it rebuild. */
 	append(message: PersistableSessionMessage): string {
 		const index = this.#index;
-		const wasFresh = index !== undefined && index.anchor === this.#anchor();
+		const wasFresh = index !== undefined && this.#answers(index);
 		const entryId = this.#host.sessionStore.appendMessage(message);
-		if (wasFresh && index) {
-			index.add(message.timestamp);
-			index.anchor = this.#anchor();
-		}
+		if (wasFresh) index.appended(entryId, message.timestamp);
 		return entryId;
 	}
 
@@ -442,19 +483,23 @@ export class MessagePersistence {
 		}
 	}
 
-	#anchor(): string {
+	/** Whether {@link index} answers for the store's current session file and leaf. */
+	#answers(index: BranchTimestamps): boolean {
 		const store = this.#host.sessionStore;
-		return `${store.getSessionFile() ?? ""}\u0000${store.getLeafId() ?? ""}`;
+		return index.leafId === store.getLeafId() && index.file === store.getSessionFile();
 	}
 
 	#timestamps(): BranchTimestamps {
-		const anchor = this.#anchor();
-		let index = this.#index;
-		if (index === undefined || index.anchor !== anchor) {
-			index = new BranchTimestamps(anchor, this.#host.sessionStore.getBranch());
-			this.#index = index;
-		}
-		return index;
+		const index = this.#index;
+		if (index !== undefined && this.#answers(index)) return index;
+		const store = this.#host.sessionStore;
+		const file = store.getSessionFile();
+		const leafId = store.getLeafId();
+		const branch = store.getBranch();
+		if (index !== undefined && index.file === file && index.extend(leafId, branch)) return index;
+		const rebuilt = new BranchTimestamps(file, leafId, branch);
+		this.#index = rebuilt;
+		return rebuilt;
 	}
 
 	/**

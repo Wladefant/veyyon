@@ -12,32 +12,37 @@
  */
 
 import * as fs from "node:fs";
-import { atomicWriteFile, errorMessage } from "@veyyon/utils";
-import { bestEffort } from "@veyyon/utils/discarded-fault";
+import * as path from "node:path";
 import { type } from "@veyyon/ai/utils/schema/arktype";
+import { atomicWriteFile, errorMessage, lazy } from "@veyyon/utils";
+import { bestEffort } from "@veyyon/utils/discarded-fault";
 import type { BrowserContext, Cookie, CookieData, Frame, HTTPRequest } from "puppeteer-core";
 import { ToolError } from "../../core/tool-errors";
 
-const storageItemSchema = type({ name: "string", value: "string" });
+const storageItemSchema = lazy(() => type({ name: "string", value: "string" }));
 
-const storageCookieSchema = type({
-	name: "string",
-	value: "string",
-	domain: "string",
-	"path?": "string",
-	/** Seconds since the epoch; -1 marks a session cookie. */
-	"expires?": "number",
-	"httpOnly?": "boolean",
-	"secure?": "boolean",
-	"sameSite?": "'Strict' | 'Lax' | 'None'",
-});
+const storageCookieSchema = lazy(() =>
+	type({
+		name: "string",
+		value: "string",
+		domain: "string",
+		"path?": "string",
+		/** Seconds since the epoch; -1 marks a session cookie. */
+		"expires?": "number",
+		"httpOnly?": "boolean",
+		"secure?": "boolean",
+		"sameSite?": "'Strict' | 'Lax' | 'None'",
+	}),
+);
 
-const storageStateSchema = type({
-	"cookies?": storageCookieSchema.array(),
-	"origins?": type({ origin: "string", localStorage: storageItemSchema.array() }).array(),
-});
+const storageStateSchema = lazy(() =>
+	type({
+		"cookies?": storageCookieSchema.value.array(),
+		"origins?": type({ origin: "string", localStorage: storageItemSchema.value.array() }).array(),
+	}),
+);
 
-export type StorageCookie = typeof storageCookieSchema.infer;
+export type StorageCookie = typeof storageCookieSchema.value.infer;
 
 export interface StorageOrigin {
 	readonly origin: string;
@@ -76,7 +81,7 @@ function isWebOrigin(origin: string): boolean {
 
 /** Validate a parsed storage state; `source` names where it came from in the error. */
 export function parseStorageState(raw: unknown, source: string): StorageState {
-	const result = storageStateSchema(raw);
+	const result = storageStateSchema.value(raw);
 	if (result instanceof type.errors) {
 		throw new ToolError(`${source} is not a storage state: ${result.summary}`);
 	}
@@ -227,7 +232,9 @@ export async function applyStorageState(context: BrowserContext, state: StorageS
 	if (cookies.length > 0) await context.setCookie(...cookies.map(toCookieData));
 	const origins = state.origins.filter(entry => entry.localStorage.length > 0);
 	if (origins.length > 0) {
-		const page = await context.newPage();
+		// In the background: a page that comes to the front sends a tab's own page behind it, where
+		// Chromium runs no animation frames and every later click in that tab stalls.
+		const page = await context.newPage({ background: true });
 		try {
 			await page.setRequestInterception(true);
 			page.on("request", answerLocally);

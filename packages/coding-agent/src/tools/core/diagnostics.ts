@@ -4,9 +4,7 @@
  * Three cards show diagnostics — the write card, the edit card and the late-diagnostics message —
  * and each used to receive the same block as a pre-coloured string built against a `Theme`. The
  * parse and the ordering are the same work whatever draws it, so they are here, and the block is
- * stated once as view lines a host lays out. `formatDiagnostics` in `render-utils.ts` is the string
- * form the two unconverted cards still take, and it reads its parse from here rather than keeping a
- * second copy of the grammar.
+ * stated once as view lines a host lays out.
  */
 
 import { replaceTabs } from "@veyyon/utils/tab-width";

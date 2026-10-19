@@ -1,390 +1,391 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-# Cloudflare injects the branch name from the push event:
-# https://developers.cloudflare.com/workers/ci-cd/builds/configuration/#default-variables
-if [[ -z "${WORKERS_CI_BRANCH:-}" ]]; then
-  echo "Cloudflare lane branch is unknown; running tests"
-elif [[ "$WORKERS_CI_BRANCH" != cf-ci/* ]]; then
-  echo "Skipping Cloudflare lane tests: WORKERS_CI_BRANCH is not a cf-ci/ branch"
-  exit 0
-fi
-
-# Outer memory sampler & safe minimal bridge (every 30s, stops with runner)
-diag_dir=""
-OUTER_SAMPLER_PID=""
-
-write_cgroup_bridge() {
-  local cur="unavailable"
-  local peak="unavailable"
-  local oom="unavailable"
-  local oom_kill="unavailable"
-  local raw_events=""
-  local supported="false"
-  local cgroup_base="/sys/fs/cgroup"
-
-  if [[ -f "$cgroup_base/memory.current" ]]; then
-    cur="$(cat "$cgroup_base/memory.current" 2>/dev/null || echo "unavailable")"
-    supported="true"
-  fi
-  if [[ -f "$cgroup_base/memory.peak" ]]; then
-    peak="$(cat "$cgroup_base/memory.peak" 2>/dev/null || echo "unavailable")"
-    supported="true"
-  fi
-  if [[ -f "$cgroup_base/memory.events" ]]; then
-    raw_events="$(tr '\n' ' ' < "$cgroup_base/memory.events" 2>/dev/null || echo "")"
-    oom="$(awk '$1=="oom"{print $2}' "$cgroup_base/memory.events" 2>/dev/null || echo "unavailable")"
-    oom_kill="$(awk '$1=="oom_kill"{print $2}' "$cgroup_base/memory.events" 2>/dev/null || echo "unavailable")"
-    supported="true"
-  fi
-  if [[ "$cur" == "unavailable" && -f "$cgroup_base/memory/memory.usage_in_bytes" ]]; then
-    cur="$(cat "$cgroup_base/memory/memory.usage_in_bytes" 2>/dev/null || echo "unavailable")"
-    peak="$(cat "$cgroup_base/memory/memory.max_usage_in_bytes" 2>/dev/null || echo "unavailable")"
-    supported="true"
-    if [[ -f "$cgroup_base/memory/memory.oom_control" ]]; then
-      raw_events="$(tr '\n' ' ' < "$cgroup_base/memory/memory.oom_control" 2>/dev/null || echo "")"
-      oom_kill="$(awk '$1=="oom_kill"{print $2}' "$cgroup_base/memory/memory.oom_control" 2>/dev/null || echo "unavailable")"
-    fi
-  fi
-
-  cat > "$diag_dir/cgroup-latest.json.tmp" <<EOF
-{
-  "supported": $supported,
-  "current": "$cur",
-  "peak": "$peak",
-  "oom": "$oom",
-  "oom_kill": "$oom_kill",
-  "raw_events": "$raw_events"
-}
-EOF
-  mv "$diag_dir/cgroup-latest.json.tmp" "$diag_dir/cgroup-latest.json"
-}
-
-stop_outer_sampler() {
-  if [[ -n "${OUTER_SAMPLER_PID:-}" ]]; then
-    kill "$OUTER_SAMPLER_PID" 2>/dev/null || true
-    wait "$OUTER_SAMPLER_PID" 2>/dev/null || true
-  fi
-}
-on_lane_exit() {
-  local status=$?
-  stop_outer_sampler
-  echo "CLOUDFLARE_LANE_EXIT status=$status"
-}
-trap on_lane_exit EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-diag_dir="$(mktemp -d /var/tmp/veyyon-diag-XXXXXX)"
-write_cgroup_bridge
-
-(
-  while true; do
-    sleep 30
-    write_cgroup_bridge
-    free_summary="$(free -m 2>/dev/null | awk '/^Mem:/{printf "total=%sMB used=%sMB free=%sMB avail=%sMB", $2, $3, $4, $7}' || echo "unavailable")"
-    cur="$(sed -n 's/.*"current": "\([^"]*\)".*/\1/p' "$diag_dir/cgroup-latest.json" 2>/dev/null || echo "unavailable")"
-    peak="$(sed -n 's/.*"peak": "\([^"]*\)".*/\1/p' "$diag_dir/cgroup-latest.json" 2>/dev/null || echo "unavailable")"
-    oom="$(sed -n 's/.*"oom": "\([^"]*\)".*/\1/p' "$diag_dir/cgroup-latest.json" 2>/dev/null || echo "unavailable")"
-    oom_kill="$(sed -n 's/.*"oom_kill": "\([^"]*\)".*/\1/p' "$diag_dir/cgroup-latest.json" 2>/dev/null || echo "unavailable")"
-    echo "CLOUDFLARE_HEARTBEAT_30S current=$cur peak=$peak oom=$oom oom_kill=$oom_kill free=\"$free_summary\""
-  done
-) &
-OUTER_SAMPLER_PID=$!
-
-# Fail-fast CI execution
-export CI=1
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
-# Parse command-line shard arguments if provided
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --shard-index)
-      CF_SHARD_INDEX="$2"
-      shift 2
-      ;;
-    --shard-count)
-      CF_SHARD_COUNT="$2"
-      shift 2
-      ;;
-    --shard=*)
-      val="${1#*=}"
-      CF_SHARD_INDEX="${val%%[/:*]}"
-      CF_SHARD_COUNT="${val##*[/:*]}"
-      shift
-      ;;
-    *)
-      if [[ -z "${CF_SHARD_INDEX:-}" ]]; then
-        CF_SHARD_INDEX="$1"
-      elif [[ -z "${CF_SHARD_COUNT:-}" ]]; then
-        CF_SHARD_COUNT="$1"
-      fi
-      shift
-      ;;
-  esac
-done
+route_output="$(node ci/cloudflare/lane-routing.mjs)"
+IFS='|' read -r route_kind route_arg route_shard route_count <<< "$route_output"
+case "$route_kind" in
+  release-skip)
+    echo "release branch: shard $route_shard skipped"
+    exit 0
+    ;;
+  release)
+    route_mode="$route_arg"
+    shard_index="$route_shard"
+    echo "release branch: shard 1 runs unsplit release mode $route_mode"
+    if [[ -f ci/cloudflare/release-linux.sh ]]; then
+      exec bash ci/cloudflare/release-linux.sh "$route_mode"
+    fi
+    echo "release branch: shard 1 skipped; release path is unavailable in this checkout"
+    exit 0
+    ;;
+  tests)
+    shard_index="$route_arg"
+    shard_count="$route_shard"
+    shard_spec="$shard_index/$shard_count"
+    case "$shard_index" in
+      2)
+        native_variant=modern
+        ;;
+      *)
+        native_variant=baseline
+        ;;
+    esac
+    export VEYYON_NATIVE_VARIANT="$native_variant"
+    echo "CLOUDFLARE_CI_SHARD branch=${WORKERS_CI_BRANCH:-unset} shard=$shard_spec"
+    ;;
+  *)
+    echo "CLOUDFLARE_CI_ROUTE_INVALID route=$route_kind" >&2
+    exit 1
+    ;;
+esac
+unset VEYYON_RELEASE_TOKEN VEYYON_RELEASE_TAG VEYYON_RELEASE_SHA VEYYON_RELEASE_PRERELEASE \
+  VEYYON_RELEASE_PUBLISH VEYYON_RELEASE_REPO
 
-echo "=== Cloudflare Workers Builds CI ==="
-echo "Branch: ${WORKERS_CI_BRANCH:-unset}"
-echo "Commit: ${WORKERS_CI_COMMIT_SHA:-unset}"
-echo "Shard Index: ${CF_SHARD_INDEX:-unset}"
-echo "Shard Count: ${CF_SHARD_COUNT:-unset}"
 
-# Validate shard variables before installing dependencies
-if [[ -z "${CF_SHARD_INDEX:-}" || -z "${CF_SHARD_COUNT:-}" ]]; then
-  echo "FATAL: Shard configuration required: CF_SHARD_INDEX and CF_SHARD_COUNT must be set via env or arguments (e.g. --shard-index 0 --shard-count 12)." >&2
-  exit 1
-fi
-
-if ! [[ "$CF_SHARD_INDEX" =~ ^[0-9]+$ ]] || ! [[ "$CF_SHARD_COUNT" =~ ^[0-9]+$ ]] || (( CF_SHARD_COUNT < 1 )) || (( CF_SHARD_INDEX >= CF_SHARD_COUNT )); then
-  echo "FATAL: Invalid shard configuration: index=$CF_SHARD_INDEX, count=$CF_SHARD_COUNT (expected 0 <= index < count and count >= 1)." >&2
-  exit 1
-fi
-
-export CF_SHARD_INDEX
-export CF_SHARD_COUNT
-export VEYYON_SANDBOX_FORWARD="CF_SHARD_INDEX CF_SHARD_COUNT"
-
-# Pin Bun from packageManager
+setup_seconds=0
+SECONDS=0
 expected_bun="$(node -p "require('./package.json').packageManager.split('@')[1]")"
 if ! command -v bun >/dev/null 2>&1 || [[ "$(bun --version)" != "$expected_bun" ]]; then
-  echo "Installing repository-pinned Bun $expected_bun for Workers Builds..."
+  echo "Installing repository-pinned Bun $expected_bun for the Workers Builds container."
   npm install --global "bun@$expected_bun"
 fi
-echo "Bun version: $(bun --version)"
-echo "Build uid: $(id -u) ($(id -un))"
-echo "Node version: $(node --version)"
-
-# Frozen dependency install
-echo "Installing dependencies from frozen lockfile..."
+bun --version
 bun install --frozen-lockfile
+if (( shard_index == 1 )); then
+  bun run check:ts
+else
+  echo "CLOUDFLARE_SHARD_DEFERRED gate=check:ts shard=$shard_spec"
+fi
+phase_seconds=$SECONDS
+setup_seconds=$((setup_seconds + phase_seconds))
+echo "CLOUDFLARE_SETUP_PHASE name=dependencies-and-types seconds=$phase_seconds"
+SECONDS=0
 
-# Prepare the exact Git baseline needed by test suites without fetching unrelated history.
-echo "=== Preparing Git History ==="
-baseline_sha="81eee11283051f29967dbfc506b297d45fd375b1"
-if ! git cat-file -e "${baseline_sha}^{commit}" >/dev/null 2>&1; then
-  echo "Baseline commit $baseline_sha is missing. Fetching it from origin..."
-  fetch_started=$SECONDS
-  if git fetch --no-tags --depth=1 origin "$baseline_sha"; then
-    fetch_elapsed=$((SECONDS - fetch_started))
-    echo "Targeted baseline fetch completed in ${fetch_elapsed}s."
+if ! command -v fd >/dev/null 2>&1 || ! command -v rg >/dev/null 2>&1 || \
+  ! command -v magick >/dev/null 2>&1 || \
+  ! pkg-config --exists cairo pango fontconfig freetype2 wayland-client xkbcommon xkbcommon-x11 2>/dev/null || \
+  ! ldconfig -p 2>/dev/null | grep -q 'libvulkan\.so\.1' || \
+  [[ ! -f /usr/share/vulkan/icd.d/lvp_icd.json ]]; then
+  if ! command -v apt-get >/dev/null 2>&1; then
+    echo 'CLOUDFLARE_SYSTEM_DEPS=unavailable; apt-get is not installed.'
+  elif ! command -v sudo >/dev/null 2>&1 || ! sudo -n true >/dev/null 2>&1; then
+    echo 'CLOUDFLARE_SYSTEM_DEPS=unavailable; required packages are missing and passwordless sudo is not available.'
   else
-    fetch_status=$?
-    fetch_elapsed=$((SECONDS - fetch_started))
-    echo "ERROR: targeted baseline fetch failed after ${fetch_elapsed}s (exit status $fetch_status)." >&2
-    exit "$fetch_status"
+    sudo -n apt-get update
+    sudo -n apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev \
+      fd-find ripgrep imagemagick pkg-config libfontconfig-dev libfreetype-dev \
+      libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libvulkan1 libvulkan-dev mesa-vulkan-drivers
+    if command -v fdfind >/dev/null 2>&1 && ! command -v fd >/dev/null 2>&1; then
+      sudo -n ln -sf "$(command -v fdfind)" /usr/local/bin/fd
+    fi
+    if command -v convert >/dev/null 2>&1 && ! command -v magick >/dev/null 2>&1; then
+      sudo -n ln -sf "$(command -v convert)" /usr/local/bin/magick
+    fi
   fi
 fi
-if ! git cat-file -e "${baseline_sha}^{commit}" >/dev/null 2>&1; then
-  echo "ERROR: baseline commit $baseline_sha is unavailable after targeted fetch." >&2
-  exit 1
+phase_seconds=$SECONDS
+setup_seconds=$((setup_seconds + phase_seconds))
+echo "CLOUDFLARE_SETUP_PHASE name=system-dependencies seconds=$phase_seconds"
+SECONDS=0
+
+if ! command -v rustup >/dev/null 2>&1; then
+  command -v curl >/dev/null 2>&1 || {
+    echo 'CLOUDFLARE_RUST_SETUP=failed; rustup and curl are unavailable.' >&2
+    exit 1
+  }
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none --no-modify-path
+  export PATH="$HOME/.cargo/bin:$PATH"
 fi
-echo "Baseline commit $baseline_sha verified in object store."
-# Download bubblewrap from the distro without root, then expose its extracted binary.
-bwrap_tools="$(mktemp -d /var/tmp/veyyon-bwrap-tools-XXXXXX)"
-mkdir -p "$bwrap_tools/packages" "$bwrap_tools/root" \
-  "$bwrap_tools/lists/partial" "$bwrap_tools/cache/archives/partial"
+export PATH="$HOME/.cargo/bin:$PATH"
+export CARGO_BUILD_JOBS=4
+if ! rustup toolchain list | grep -Eq '^nightly-2026-04-29(-|$)'; then
+  rustup toolchain install nightly-2026-04-29 --profile minimal \
+    --target x86_64-unknown-linux-gnu
+fi
+# Match the release workflow's Linux x64 portability toolchain.
+zig_version=0.16.0
+zig_archive="$HOME/.cache/zig-x86_64-linux-${zig_version}.tar.xz"
+if ! command -v zig >/dev/null 2>&1 || [[ "$(zig version)" != "$zig_version" ]]; then
+  mkdir -p "$HOME/.cache" "$HOME/.local/bin"
+  curl --proto '=https' --tlsv1.2 -fsSL \
+    "https://ziglang.org/download/${zig_version}/zig-x86_64-linux-${zig_version}.tar.xz" \
+    -o "$zig_archive"
+  # SHA-256 from Zig's official download index.json for 0.16.0 x86_64-linux.
+  printf '%s  %s\n' '70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00' "$zig_archive" \
+    | sha256sum --check
+  tar -xJf "$zig_archive" -C "$HOME/.cache"
+  ln -sf "$HOME/.cache/zig-x86_64-linux-${zig_version}/zig" "$HOME/.local/bin/zig"
+fi
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+if ! command -v cargo-zigbuild >/dev/null 2>&1; then
+  cargo +nightly-2026-04-29 install --locked cargo-zigbuild
+fi
+zig version
+cargo-zigbuild --version
+phase_seconds=$SECONDS
+setup_seconds=$((setup_seconds + phase_seconds))
+echo "CLOUDFLARE_SETUP_PHASE name=rust-zig-toolchain seconds=$phase_seconds"
+SECONDS=0
+CARGO_BUILD_JOBS=4 CROSS_TARGET=x86_64-unknown-linux-gnu.2.17 TARGET_PLATFORM=linux TARGET_ARCH=x64 \
+  TARGET_VARIANTS="$native_variant" bun run ci:build:native
+unset VEYYON_NATIVE_CACHE_CREDENTIALS VEYYON_NATIVE_CACHE_WRITE_CREDENTIALS
+phase_seconds=$SECONDS
+setup_seconds=$((setup_seconds + phase_seconds))
+echo "CLOUDFLARE_SETUP_PHASE name=native-addon-build seconds=$phase_seconds"
+SECONDS=0
+# Workers Builds cannot start Docker containers. Install the existing bwrap
+# rung tools into a repo-local directory without requiring root or a host fallback.
+proof_tools="$repo_root/.cf-proof-tools"
+mkdir -p "$proof_tools/packages" "$proof_tools/root" "$proof_tools/bin" \
+  "$proof_tools/lists/partial" "$proof_tools/cache/archives/partial"
 (
-  cd "$bwrap_tools/packages"
-  apt_config="$bwrap_tools/apt.conf"
-  printf '%s\n' '#clear APT::Update::Post-Invoke;' > "$apt_config"
-  apt_options=(-c "$apt_config" -o "Dir::State::Lists=$bwrap_tools/lists" -o "Dir::Cache=$bwrap_tools/cache")
+  cd "$proof_tools/packages"
+  apt_options=(-o "Dir::State::Lists=$proof_tools/lists" -o "Dir::Cache=$proof_tools/cache")
   timeout 120 apt-get "${apt_options[@]}" update
-  timeout 120 apt-get "${apt_options[@]}" download bubblewrap
-  timeout 120 apt-get "${apt_options[@]}" download gh
-  for deb in ./*.deb; do
-    timeout 120 dpkg-deb -x "$deb" "$bwrap_tools/root"
+  timeout 120 apt-get "${apt_options[@]}" download bubblewrap fakeroot libfakeroot cpio
+  for package in ./*.deb; do
+    dpkg-deb -x "$package" "$proof_tools/root"
   done
 )
-export PATH="$bwrap_tools/root/usr/bin:$PATH"
-export VEYYON_BWRAP_GH="$bwrap_tools/root/usr/bin/gh"
-if [[ ! -x "$VEYYON_BWRAP_GH" ]]; then
-  echo "FATAL: gh was not extracted to $VEYYON_BWRAP_GH" >&2
-  exit 1
-fi
-echo "gh version: $("$VEYYON_BWRAP_GH" --version | head -n1)"
-if ! command -v bwrap >/dev/null 2>&1; then
-  echo "FATAL: bubblewrap was not extracted to $bwrap_tools/root/usr/bin/bwrap" >&2
-  exit 1
-fi
-# Share the bwrap rung's command lookup, asdf shim resolution, and ELF validation.
-source scripts/test-sandbox/rungs/bwrap.sh
-
-install_official_release_tool() {
-  local name="$1" version="$2" url="$3" sha256="$4"
-  local existing archive member destination
-  existing="$(resolve_host_tool "$name")"
-  if [[ -n "$existing" ]]; then
-    echo "$name binary available: $existing"
-    return 0
-  fi
-
-  echo "Installing $name $version from its official release archive..."
-  archive="$bwrap_tools/packages/${name}.tar.gz"
-  destination="$bwrap_tools/root/usr/bin/$name"
-  if ! curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 1 -fsSL "$url" -o "$archive"; then
-    echo "FATAL: could not download official $name release archive from $url" >&2
-    return 1
-  fi
-  if ! printf '%s  %s\n' "$sha256" "$archive" | sha256sum --check --status; then
-    echo "FATAL: SHA-256 verification failed for official $name release archive" >&2
-    return 1
-  fi
-  if ! member="$(tar -tzf "$archive" | awk -v binary="$name" '$0 == binary || $0 ~ ("/" binary "$") { print; exit }')"; then
-    echo "FATAL: could not list official $name release archive" >&2
-    return 1
-  fi
-  if [[ -z "$member" ]]; then
-    echo "FATAL: official $name release archive has no $name executable" >&2
-    return 1
-  fi
-  if ! tar -xOzf "$archive" "$member" > "$destination"; then
-    echo "FATAL: could not extract $name from its official release archive" >&2
-    return 1
-  fi
-  chmod 0755 "$destination"
-
-  existing="$(resolve_host_tool "$name")"
-  if [[ -z "$existing" ]]; then
-    echo "FATAL: official $name release did not produce an executable ELF binary" >&2
-    return 1
-  fi
-  echo "$name executable: $existing"
-}
-
-install_official_release_tool \
-  mdbook 0.5.4 \
-  https://github.com/rust-lang/mdBook/releases/download/v0.5.4/mdbook-v0.5.4-x86_64-unknown-linux-musl.tar.gz \
-  5222beabd3e37dc5be0d18ff99b79058469354db5c220153a1b92db5ba12be89
-install_official_release_tool \
-  rg 15.2.0 \
-  https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz \
-  33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c
-
+export PATH="$proof_tools/root/usr/bin:$PATH"
+real_bun="$(bun -p 'process.execPath')"
+cp -L "$real_bun" "$proof_tools/bin/bun"
 export VEYYON_SANDBOX_REMOTE=0
 export VEYYON_SANDBOX_RUNG=bwrap
+
+# Assert the exact initramfs device metadata required by the guest kernel.
+fakeroot -l "$proof_tools/root/usr/lib/x86_64-linux-gnu/libfakeroot/libfakeroot-sysv.so" \
+  -f "$proof_tools/root/usr/bin/faked-sysv" /bin/sh -ceu '
+    proof_dir="$(mktemp -d)"
+    mkdir -p "$proof_dir/dev"
+    cd "$proof_dir"
+    mknod -m 600 dev/console c 5 1
+    mknod -m 666 dev/null c 1 3
+    find . -print0 | cpio --null -o --format=newc > "${proof_dir}.cpio"
+    python3 "$1" "${proof_dir}.cpio"
+  ' _ "$repo_root/ci/cloudflare/device-node-check.py"
+
 # The bwrap rung binds the requested repository path verbatim. Use an alias outside
 # the hidden build user's home and TMPDIR: a /tmp alias is scanned as repository
 # data by the test temp-directory janitor, while the real checkout is under HOME.
 sandbox_root="$(mktemp -d /var/tmp/veyyon-workers-XXXXXX)"
 ln -s "$repo_root" "$sandbox_root/repo"
 export VEYYON_SANDBOX_REPO_ROOT="$sandbox_root/repo"
-
-# Pre-native regression gate: run pure shard helper regression suite inside sandbox
-# This proves sharding logic remotely even if native compilation encounters time or toolchain issues
-echo "Bun version inside bwrap:"
-bash scripts/test-sandbox/run.sh bun --version
-# Guest permission probe, run through the rung. It fails loud unless the guest is non-root, HOME and
-# TMPDIR accept a write, and a write to the root path is refused with EACCES. It removes only its own
-# probe file, and only when the root write was accepted.
-guest_probe_sh='set -eu
-uid="$(id -u)"
-if [ "$uid" = 0 ]; then echo "GUEST PROBE FAILED: id -u is 0" >&2; exit 1; fi
-echo "guest id: uid=$uid gid=$(id -g)"
-echo "guest caps: $(grep "^CapEff" /proc/self/status)"
-node --version >/dev/null
-gh --version >/dev/null
-bun --version >/dev/null
-mdbook --version >/dev/null
-rg --version >/dev/null
-echo "guest runtimes: node $(node --version) gh $(gh --version | head -n1) bun $(bun --version)"
-echo "guest tools: mdbook $(mdbook --version) rg $(rg --version | head -n1)"
-bun -e "$1"'
-guest_probe_js='const fs = require("node:fs");
-const fail = (message) => { console.error("GUEST PROBE FAILED: " + message); process.exit(1); };
-for (const dir of [process.env.HOME, process.env.TMPDIR]) {
-  const file = dir + "/.guest-probe-" + process.pid;
-  try { fs.writeFileSync(file, "ok"); fs.rmSync(file); } catch (error) { fail("cannot write " + dir + ": " + error.code); }
-}
-const rootFile = "/.guest-probe-root-" + process.pid;
-let rootWritten = false;
-try { fs.writeFileSync(rootFile, "x"); rootWritten = true; } catch (error) { if (error.code !== "EACCES") fail("root write expected EACCES, got " + error.code); }
-if (rootWritten) { fs.rmSync(rootFile, { force: true }); fail("root path accepted a write: " + rootFile); }
-console.log("GUEST PROBE OK: root write refused with EACCES");'
-echo "Guest permission probe inside bwrap..."
-bash scripts/test-sandbox/run.sh /bin/sh -c "$guest_probe_sh" _ "$guest_probe_js" || { echo "FATAL: guest permission probe failed" >&2; exit 1; }
-
-echo "Running pure sharding helper regression suite inside sandbox before native build..."
-bash scripts/test-sandbox/run.sh bun test ./scripts/cf-runtime-sharding.test.ts
-
-# Rust toolchain probe & dynamic pinned install
-echo "Deriving pinned Rust toolchain from rust-toolchain.toml..."
-pinned_channel="$(sed -n 's/^channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -n1)"
-if [[ -z "$pinned_channel" ]]; then
-  echo "FATAL: Could not resolve channel from rust-toolchain.toml" >&2
+sandbox_repo_root="$(bash scripts/test-sandbox/run.sh --rung=bwrap /bin/pwd)"
+if [[ -z "$sandbox_repo_root" || "$sandbox_repo_root" == /tmp || "$sandbox_repo_root" == /tmp/* ]]; then
+  echo "CLOUDFLARE_BWRAP_REPO_ROOT_INVALID path=${sandbox_repo_root:-empty}" >&2
   exit 1
 fi
-echo "Pinned Rust channel: $pinned_channel"
-
-if ! command -v rustup >/dev/null 2>&1; then
-  if command -v curl >/dev/null 2>&1; then
-    echo "rustup not present. Installing rustup via official route (https://sh.rustup.rs)..."
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none --no-modify-path
-    export PATH="$HOME/.cargo/bin:$PATH"
-  fi
-fi
-
-if ! command -v rustup >/dev/null 2>&1; then
-  echo "FATAL: rustup is required to install pinned toolchain $pinned_channel" >&2
+runtime_bin_dir="$sandbox_repo_root/.cf-proof-tools/bin"
+# Child commands resolve `bun` by name. Add only this checkout-mounted real binary
+# directory after bwrap has applied its fixed PATH, then exec the test runner.
+if ! bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c \
+  'export PATH="$1:$PATH"; shift; exec "$@"' _ "$runtime_bin_dir" \
+  "$runtime_bin_dir/bun" -e \
+  'const result = Bun.spawnSync(["bun", "--version"]); if (result.exitCode !== 0) process.exit(result.exitCode ?? 1); process.stdout.write(result.stdout);'; then
+  echo "CLOUDFLARE_BWRAP_BUN_CHILD_FAILED" >&2
   exit 1
 fi
-
-echo "Installing and selecting pinned toolchain $pinned_channel via rustup..."
-rustup toolchain install "$pinned_channel" --profile minimal --target x86_64-unknown-linux-gnu
-export RUSTUP_TOOLCHAIN="$pinned_channel"
-
-echo "Rust toolchain verified:"
-rustc --version
-cargo --version
-
-# Build host-only baseline native addon
-echo "Building host-only baseline native addon from source..."
-export VEYYON_NATIVE_HOST_ONLY=1
-export TARGET_VARIANTS=baseline
-export CARGO_BUILD_JOBS=4
-bun run ci:build:native
-
-# Native readiness proof: verify binary exists at canonical path (underscore) and report artifact digest
-node_addon_path="natives/bridge/bindings/native/veyyon_natives.linux-x64-baseline.node"
-if [[ ! -f "$node_addon_path" ]]; then
-  node_addon_path="natives/bridge/bindings/native/veyyon_natives.linux-x64.node"
-fi
-
-if [[ -f "$node_addon_path" ]]; then
-  addon_digest="$(sha256sum "$node_addon_path" | awk '{print $1}')"
-  echo "CLOUDFLARE_NATIVE_ARTIFACT path=$node_addon_path sha256=$addon_digest"
-else
-  echo "FATAL: Native addon binary not found at canonical path $node_addon_path" >&2
-  exit 1
-fi
-
-echo "Proving native addon execution readiness..."
-bun -e "import { visibleWidth } from './natives/bridge/bindings'; const w = visibleWidth('abc', 4); if (w !== 3) throw new Error('visibleWidth failed: expected 3, got ' + w); console.log('CLOUDFLARE_NATIVE_LOADED ok width=' + w);"
-
-# Explicit quota-refusals verification on shard 0
-if [[ "$CF_SHARD_INDEX" == "0" ]]; then
-  echo "Running explicit quota-refusals single-file verification on shard 0..."
-  bash scripts/test-sandbox/run.sh bun test ./packages/coding-agent/test/session/quota-refusals-belong-to-the-failed-request.test.ts
-fi
-# Remove only the gitignored evals cache left by an earlier step of this checkout.
-# A path git tracks is never deleted, so tracked fixtures survive.
-if [[ -d tests/evals/.cache ]] && git check-ignore -q tests/evals/.cache \
-  && ! git ls-files --error-unmatch -- tests/evals/.cache >/dev/null 2>&1; then
-  echo "Removing generated cache tests/evals/.cache before the test scan"
-  rm -rf -- tests/evals/.cache
-fi
-
-# Run test suite using existing sandbox runner invocation
+phase_seconds=$SECONDS
+setup_seconds=$((setup_seconds + phase_seconds))
+echo "CLOUDFLARE_SETUP_PHASE name=bwrap-bootstrap seconds=$phase_seconds"
+echo "CLOUDFLARE_SETUP_TOTAL seconds=$setup_seconds"
 echo "CLOUDFLARE_TEST_EXCLUSION file=packages/utils/test/slice-extract-fuzz.test.ts reason=bun-native-16GiB-allocation-aborts-in-workers-guest"
-
-echo "Running test suite in sandbox..."
-test_exit=0
-bash scripts/test-sandbox/run.sh bun scripts/ci-test-ts.ts all || test_exit=$?
-
-if [[ $test_exit -ne 0 ]]; then
-  echo "FATAL: Test suite failed with exit code $test_exit" >&2
-  exit "$test_exit"
+if ! bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c \
+  'export PATH="$1:$PATH"; export VEYYON_NATIVE_VARIANT="$2"; shift 2; exec "$@"' _ "$runtime_bin_dir" "$native_variant" \
+  "$runtime_bin_dir/bun" ci/cloudflare/native-variant-proof.mjs "$native_variant"; then
+  echo "CLOUDFLARE_NATIVE_VARIANT_PROOF_FAILED" >&2
+  exit 1
+fi
+# Existing runner buckets preserve the same shard lists, timeouts and bounded
+# process sizes as the repository's GitHub CI. Quiet mode emits real Bun case
+# counts separately from child-command chunk totals and replays details on failure.
+export CI=true
+report_run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+test_report_root="$proof_tools/test-reports/run-$report_run_id"
+sandbox_test_report_root="$sandbox_repo_root/.cf-proof-tools/test-reports/run-$report_run_id"
+mkdir -p "$test_report_root"
+test_passes=0
+test_failures=0
+test_skips=0
+junit_test_skips=0
+test_todos=0
+test_reported=0
+test_files=0
+test_runs=0
+chunk_passes=0
+chunk_failures=0
+run_bucket() {
+  local mode="$1"
+  local bucket_started_seconds=$SECONDS
+  echo "CLOUDFLARE_TEST_BUCKET_START $mode"
+  local bucket_report_dir="$test_report_root/$mode"
+  local sandbox_report_dir="$sandbox_test_report_root/$mode"
+  mkdir -p "$bucket_report_dir"
+  local bucket_log
+  bucket_log="$(mktemp)"
+  local bucket_status=0
+  if bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c \
+    'export PATH="$1:$PATH"; export VEYYON_TEST_CONCURRENCY=2; export VEYYON_CI_TEST_SHARD="$2"; export VEYYON_NATIVE_VARIANT="$3"; shift 3; exec "$@"' _ "$runtime_bin_dir" "$shard_spec" "$native_variant" \
+    "$runtime_bin_dir/bun" scripts/ci-test-ts.ts "$mode" "--junit-report-dir=$sandbox_report_dir" 2>&1 | tee "$bucket_log"; then
+    :
+  else
+    bucket_status=$?
+  fi
+  if awk '/^CLOUDFLARE_CI_TEST_SHARD_DEFERRED / { found = 1 } END { exit !found }' "$bucket_log"; then
+    if (( bucket_status != 0 )); then
+      echo "CLOUDFLARE_TEST_BUCKET_FAILED $mode status=$bucket_status despite deferred marker" >&2
+      rm -f "$bucket_log"
+      return "$bucket_status"
+    fi
+    awk '/^CLOUDFLARE_CI_TEST_SHARD_DEFERRED / { print }' "$bucket_log"
+    echo "CLOUDFLARE_TEST_BUCKET_DEFERRED mode=$mode shard=$shard_spec"
+    rm -f "$bucket_log"
+    return 0
+  fi
+  local report_status=0
+  python3 ci/cloudflare/check-test-skips.py report "$bucket_report_dir" || report_status=$?
+  if (( report_status != 0 && bucket_status == 0 )); then
+    bucket_status=$report_status
+  fi
+  local bucket_junit_reports
+  bucket_junit_reports="$(find "$bucket_report_dir" -type f -name '*.xml' | wc -l | tr -d '[:space:]')"
+  read -r bucket_chunk_passes bucket_chunk_failures bucket_passes bucket_failures \
+    bucket_skips bucket_todos bucket_reported bucket_files bucket_runs bucket_summaries < <(
+    awk '
+      /^[[:space:]]*[0-9]+ chunks passed$/ { chunks_passed += $1 }
+      /^[[:space:]]*[0-9]+ failed chunks$/ { chunks_failed += $1 }
+      /^CLOUDFLARE_CI_TEST_COUNTS / {
+        summaries += 1
+        for (i = 2; i <= NF; i++) {
+          split($i, field, "=")
+          if (field[1] == "pass") passes += field[2]
+          if (field[1] == "fail") failures += field[2]
+          if (field[1] == "skip") skips += field[2]
+          if (field[1] == "todo") todos += field[2]
+          if (field[1] == "reported") reported += field[2]
+          if (field[1] == "files") files += field[2]
+          if (field[1] == "runs") runs += field[2]
+        }
+      }
+      END {
+        printf "%d %d %d %d %d %d %d %d %d %d\n",
+          chunks_passed, chunks_failed, passes, failures, skips, todos,
+          reported, files, runs, summaries
+      }
+    ' "$bucket_log"
+  )
+  chunk_passes=$((chunk_passes + bucket_chunk_passes))
+  chunk_failures=$((chunk_failures + bucket_chunk_failures))
+  test_passes=$((test_passes + bucket_passes))
+  test_failures=$((test_failures + bucket_failures))
+  test_skips=$((test_skips + bucket_skips))
+  junit_test_skips=$((junit_test_skips + bucket_skips))
+  test_todos=$((test_todos + bucket_todos))
+  test_reported=$((test_reported + bucket_reported))
+  test_files=$((test_files + bucket_files))
+  test_runs=$((test_runs + bucket_runs))
+  local bucket_elapsed_seconds=$((SECONDS - bucket_started_seconds))
+  echo "CLOUDFLARE_TEST_BUCKET_DURATION mode=$mode seconds=$bucket_elapsed_seconds"
+  echo "CLOUDFLARE_TEST_BUCKET_END $mode chunks_pass=$bucket_chunk_passes chunks_fail=$bucket_chunk_failures pass=$bucket_passes fail=$bucket_failures skip=$bucket_skips todo=$bucket_todos reported=$bucket_reported files=$bucket_files runs=$bucket_runs junit_reports=$bucket_junit_reports"
+  rm -f "$bucket_log"
+  local bucket_tests=$((bucket_passes + bucket_failures + bucket_skips + bucket_todos))
+  if (( bucket_status == 0 )) && \
+    (( bucket_summaries > 0 && bucket_runs > 0 && bucket_files > 0 && bucket_tests > 0 && \
+       bucket_reported == bucket_tests && bucket_chunk_passes > 0 && bucket_chunk_failures == 0 && \
+       bucket_passes > 0 && bucket_failures == 0 && bucket_todos == 0 && \
+       bucket_junit_reports == bucket_runs )); then
+    return 0
+  fi
+  if (( bucket_status != 0 )); then
+    echo "CLOUDFLARE_TEST_BUCKET_FAILED $mode status=$bucket_status summaries=$bucket_summaries" >&2
+    return "$bucket_status"
+  fi
+  echo "CLOUDFLARE_TEST_BUCKET_FAILED $mode status=1 summaries=$bucket_summaries" >&2
+  return 1
+}
+if (( shard_index == 1 )); then
+  echo "CLOUDFLARE_TEST_BUCKET_START health-worker"
+  worker_output="$(env -u CLOUDFLARE_API_TOKEN -u VEYYON_NATIVE_CACHE_CREDENTIALS -u VEYYON_NATIVE_CACHE_WRITE_CREDENTIALS node --test --test-reporter=tap ci/cloudflare/worker.test.mjs ci/cloudflare/lane-routing.test.mjs ci/cloudflare/native-cache.test.mjs 2>&1)" || {
+    worker_status=$?
+    printf '%s\n' "$worker_output"
+    exit "$worker_status"
+  }
+  printf '%s\n' "$worker_output"
+  read -r worker_tests worker_passes worker_failures worker_skips worker_todos worker_cancelled < <(
+    awk '
+      /^# tests [0-9]+$/ { tests = $3 }
+      /^# pass [0-9]+$/ { passes = $3 }
+      /^# fail [0-9]+$/ { failures = $3 }
+      /^# skipped [0-9]+$/ { skips = $3 }
+      /^# todo [0-9]+$/ { todos = $3 }
+      /^# cancelled [0-9]+$/ { cancelled = $3 }
+      END { printf "%d %d %d %d %d %d\n", tests, passes, failures, skips, todos, cancelled }
+    ' <<< "$worker_output"
+  )
+  test_passes=$((test_passes + worker_passes))
+  test_failures=$((test_failures + worker_failures + worker_cancelled))
+  test_skips=$((test_skips + worker_skips))
+  test_todos=$((test_todos + worker_todos))
+  test_reported=$((test_reported + worker_tests))
+  test_files=$((test_files + 3))
+  test_runs=$((test_runs + 1))
+  echo "CLOUDFLARE_TEST_BUCKET_END health-worker tests=$worker_tests pass=$worker_passes fail=$worker_failures skip=$worker_skips todo=$worker_todos cancelled=$worker_cancelled files=3 runs=1"
+  if (( worker_tests == 0 || worker_tests != worker_passes + worker_failures + worker_skips + worker_todos || \
+        worker_passes == 0 || worker_failures != 0 || worker_skips != 0 || worker_todos != 0 || worker_cancelled != 0 )); then
+    echo 'CLOUDFLARE_TEST_BUCKET_FAILED health-worker summary missing, empty, or non-green' >&2
+    exit 1
+  fi
+else
+  echo "CLOUDFLARE_TEST_BUCKET_DEFERRED mode=health-worker shard=$shard_spec"
 fi
 
-echo "CLOUDFLARE_LANE_SUCCESS=1"
+# `coding-agent-heavy` aggregates the four following coding-agent buckets. Run
+# their named CI buckets once each instead of repeating the same assertions.
+run_bucket workspace-cloudflare
+run_bucket native
+run_bucket coding-agent-singleton
+run_bucket coding-agent-ui
+run_bucket coding-agent-runtime
+run_bucket coding-agent-native
+run_bucket scripts
+
+# Require real test cases and matching test-runner totals; chunk completion is reported separately.
+test_total=$((test_passes + test_failures + test_skips + test_todos))
+skip_allowlist_status=0
+if [[ "$shard_count" == "3" ]]; then
+  if python3 ci/cloudflare/check-test-skips.py check "$test_report_root" ci/cloudflare/expected-skips.txt --shard "$shard_spec" --expected-total "$junit_test_skips"; then
+    echo 'CLOUDFLARE_SKIP_ALLOWLIST=passed'
+  else
+    skip_allowlist_status=$?
+    echo "CLOUDFLARE_SKIP_ALLOWLIST=failed status=$skip_allowlist_status"
+  fi
+else
+  echo "CLOUDFLARE_SKIP_ALLOWLIST=deferred shard=$shard_spec"
+fi
+if (( test_total == 0 || test_passes == 0 || test_failures != 0 || \
+      test_todos != 0 || test_reported != test_total || test_files == 0 || test_runs == 0 || \
+      chunk_passes == 0 || chunk_failures != 0 )); then
+  echo "CLOUDFLARE_TEST_SUMMARY pass=$test_passes fail=$test_failures skip=$test_skips todo=$test_todos tests=$test_total reported=$test_reported files=$test_files runs=$test_runs chunks_pass=$chunk_passes chunks_fail=$chunk_failures"
+  echo 'Expected positive named test counts, zero failures, zero todos, and matching runner and JUnit reports.' >&2
+  exit 1
+fi
+echo "CLOUDFLARE_TEST_SUMMARY pass=$test_passes fail=$test_failures skip=$test_skips todo=$test_todos tests=$test_total reported=$test_reported files=$test_files runs=$test_runs chunks_pass=$chunk_passes chunks_fail=$chunk_failures"
+
+if (( skip_allowlist_status != 0 )); then
+  exit "$skip_allowlist_status"
+fi
+if (( shard_index == 1 )); then
+  # Run repository-wide release gates once across the three-shard proof set.
+  bun run check:rs
+  echo 'CLOUDFLARE_RUST_BUILD=passed'
+
+  RELEASE_TARGETS=linux-x64 bun run ci:release:build-binaries
+  echo 'CLOUDFLARE_CI_WORKER_VERSION_UPLOAD=deferred-to-Workers-Builds-deploy-command'
+else
+  echo "CLOUDFLARE_SHARD_DEFERRED gate=check:rs shard=$shard_spec"
+  echo "CLOUDFLARE_SHARD_DEFERRED gate=release-build-and-upload shard=$shard_spec"
+fi

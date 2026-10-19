@@ -32,6 +32,70 @@ describe("levenshteinDistance", () => {
 		expect(levenshteinDistance("😀", "ab")).toBe(2);
 		expect(levenshteinDistance("a😀b", "ab")).toBe(2);
 	});
+
+	/**
+	 * The distance is computed bit-parallel, 32 pattern rows per word, with a character table shared
+	 * across calls. The defects that shape admits are a wrong carry between words (a pattern of 33+
+	 * units), a wrong score row in the last partial word, a pattern character left in the shared table
+	 * for the next call, and a code unit above the ASCII range indexed wrong. Each case below is
+	 * checked against the cell-by-cell table, in one long sequence of calls so a stale table entry
+	 * from one pair reaches the next.
+	 */
+	it("agrees with the cell-by-cell table at every word boundary and over every code-unit range", () => {
+		const reference = (a: string, b: string): number => {
+			let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+			for (let i = 1; i <= a.length; i++) {
+				const curr = [i];
+				for (let j = 1; j <= b.length; j++) {
+					const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+					curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+				}
+				prev = curr;
+			}
+			return prev[b.length];
+		};
+		let seed = 0x9e3779b9;
+		const next = (bound: number): number => {
+			seed = (Math.imul(seed ^ (seed >>> 15), 0x2c1b3c6d) + 0x6d2b79f5) | 0;
+			return (seed >>> 0) % bound;
+		};
+		const word = (alphabet: string, length: number): string => {
+			let out = "";
+			while (out.length < length) out += alphabet[next(alphabet.length)];
+			return out;
+		};
+		const mutate = (source: string, length: number, alphabet: string): string => {
+			const units = source.split("");
+			for (let edits = next(4); edits >= 0; edits--) {
+				const at = next(units.length + 1);
+				const op = next(3);
+				if (op === 0) units.splice(at, 0, alphabet[next(alphabet.length)]);
+				else if (op === 1 && units.length > 0) units.splice(Math.min(at, units.length - 1), 1);
+				else if (units.length > 0) units[Math.min(at, units.length - 1)] = alphabet[next(alphabet.length)];
+			}
+			return units.join("").slice(0, length);
+		};
+		const alphabets = ["ab", "abcdefgh", "abcdefghijklmnopqrstuvwxyz {}();=", "aé€😀\uffff\u0000z"];
+		const lengths = [0, 1, 2, 7, 31, 32, 33, 63, 64, 65, 95, 96, 97, 128, 129, 200];
+		const mismatches: string[] = [];
+		let pairs = 0;
+		for (const alphabet of alphabets) {
+			for (const la of lengths) {
+				for (const lb of lengths) {
+					const a = word(alphabet, la);
+					// Half the pairs are edits of `a`, so the distance is small and long runs of rows match.
+					const b = next(2) === 0 ? word(alphabet, lb) : mutate(a, lb, alphabet);
+					const expected = reference(a, b);
+					pairs++;
+					if (levenshteinDistance(a, b) !== expected || levenshteinDistance(b, a) !== expected) {
+						mismatches.push(`${JSON.stringify(a)} vs ${JSON.stringify(b)}: expected ${expected}`);
+					}
+				}
+			}
+		}
+		expect(pairs).toBe(alphabets.length * lengths.length * lengths.length);
+		expect(mismatches).toEqual([]);
+	});
 });
 
 /**

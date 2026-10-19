@@ -6,7 +6,7 @@ import { getMemoriesDir, logger } from "@veyyon/utils";
 import type { Settings } from "../../config/settings";
 import { parseEmbedIdleUnloadMs } from "./embed-client";
 
-export type MnemopiLlmMode = "none" | "smol" | "remote";
+export type MnemopiLlmMode = "none" | "online" | "remote";
 
 /**
  * What the operator asked for, as the settings state it: the mode and the three remote fields.

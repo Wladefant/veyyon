@@ -168,7 +168,10 @@ describe("AgentSession plan-mode convergence", () => {
 				},
 			],
 		});
-		harness.session.settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
+		harness.session.settings.set("agent.helpers", {
+			...harness.session.settings.get("agent.helpers"),
+			advisor: { model: "anthropic/claude-sonnet-4-5" },
+		});
 		expect(harness.session.setAdvisorEnabled(true)).toBe(true);
 		const advisor = harness.session.getAdvisorAgent();
 		if (!advisor) throw new Error("Expected advisor agent to be live");
@@ -197,6 +200,11 @@ describe("AgentSession plan-mode convergence", () => {
 			m => m.role === "custom" && m.customType === "irc:incoming",
 		);
 		expect(sawIrc).toBe(true);
+		// Recorded in the session file too, so a resume still holds the message the model was shown.
+		const persisted = harness.session.sessionManager
+			.getBranch()
+			.filter(entry => entry.type === "custom_message" && entry.customType === "irc:incoming");
+		expect(persisted).toHaveLength(1);
 		expect(harness.mock.calls.length).toBe(0);
 	});
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { CompactionSettings } from "@veyyon/agent-core/compaction/compaction";
+import type { CompactionSettings } from "@veyyon/agent-core/compaction/threshold";
 import {
 	DEFAULT_COMPACTION_SETTINGS,
 	DEFAULT_RESERVE_TOKENS,
@@ -7,7 +7,7 @@ import {
 	resolveBudgetReserveTokens,
 	resolveThresholdTokens,
 	shouldCompact,
-} from "@veyyon/agent-core/compaction/compaction";
+} from "@veyyon/agent-core/compaction/threshold";
 
 describe("compaction reserve provenance", () => {
 	it("honors an explicit reserve equal to the default on a small window", () => {

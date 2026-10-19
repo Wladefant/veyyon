@@ -87,7 +87,7 @@ async function createHarness(responses: MockResponse[]): Promise<Harness> {
 		"todo.enabled": false,
 		"todo.reminders": false,
 	});
-	settings.setModelRole("default", `${mock.provider}/${mock.id}`);
+	settings.setDefaultModel(`${mock.provider}/${mock.id}`);
 
 	const tools = [bashTool as AgentTool];
 	const agent = new Agent({

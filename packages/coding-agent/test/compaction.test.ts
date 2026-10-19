@@ -1,19 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import {
-	type CompactionSettings,
 	calculateContextTokens,
 	compact,
 	compactionContextTokens,
-	DEFAULT_COMPACTION_SETTINGS,
-	estimateTokens,
 	findCutPoint,
 	getLastAssistantUsage,
-	isThresholdTokensClampedForWindow,
 	prepareCompaction,
+} from "@veyyon/agent-core/compaction/compaction";
+import {
+	type CompactionSettings,
+	DEFAULT_COMPACTION_SETTINGS,
+	isThresholdTokensClampedForWindow,
 	resolveThresholdTokens,
 	shouldCompact,
-} from "@veyyon/agent-core/compaction/compaction";
+} from "@veyyon/agent-core/compaction/threshold";
+import { estimateTokens } from "@veyyon/agent-core/compaction/token-estimate";
 import * as ai from "@veyyon/ai";
 import type { AssistantMessage, Model, Usage } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";

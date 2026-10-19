@@ -100,26 +100,14 @@ const ADMITTED_THIRD_PARTY = ["chalk", "lru-cache"];
  * 333 rather than 332 is `core/frame-pacing.ts`, the frame throttle and the terminal hosts' settle
  * windows split out of `core/tui.ts`, which the card already evaluates. It imports nothing.
  *
- * Three modules joined the path since the 2026-10-04 measurement. Each names its introducing commit
- * and the commit that added its edge:
- * - `@veyyon/ai/github-copilot-client-id`: introduced and edge added by
- *   `f8c1f379557dd61c60ecb17d563a84a1acee1a8d` via `config/settings.ts:22`. Required
- *   by the settings domain initialized in `runStartupPrologue` to register the
- *   `providers.githubCopilot.oauthClientId` setting change hook and reset handler.
- * - `hosts/terminal/engine/src/windows-altgr.ts`: introduced and edge added by
- *   `d8eec97e160c250f43730c27c4a20888d3880309` via `hosts/terminal/engine/src/terminal.ts:24`.
- *   Required by `ProcessTerminal` on the first-frame paint path to recover dropped AltGr
- *   characters under the Kitty keyboard protocol on Windows with ConPTY for the active composer.
- * - `hosts/terminal/engine/src/windows-input-mode.ts`: introduced and edge added by
- *   `754747769eec7a5c85a423d4fe454d511686aaa8` via `hosts/terminal/engine/src/terminal.ts:25`.
- *   Required by `ProcessTerminal` on the first-frame paint path to decode Win32 console
- *   input mode key records (`CSI ?9001h`) on native Windows consoles for Shift+Enter and
- *   Ctrl+Enter key handling in the active composer.
+ * 334 rather than 333 is `config/model-pattern-list.ts`, the splitter `config/launch-facts.ts` reads
+ * the first `defaultModel` selector through. It imports nothing.
  *
- * Avoidable reach to `packages/utils/src/time.ts` from `cli.ts` was eliminated by using a local
- * constant for `CLI_KEEPALIVE_INTERVAL_MS`.
+ * 338 rather than 334 is four more splits of modules the card already evaluates, each importing only
+ * what its source did: `core/committed-prefix.ts` from `core/renderer.ts`, and `core/render-scheduler.ts`,
+ * `core/frame-segments.ts` and `core/render-intent.ts` from `core/tui.ts` and `core/frame-plan.ts`.
  */
-const CARD_PATH_CEILING = 336;
+const CARD_PATH_CEILING = 338;
 const CARD_PATH_FLOOR = 250;
 
 describe("nothing joins the launch card path uncounted", () => {

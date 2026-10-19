@@ -120,25 +120,18 @@ const ADMITTED_ON_THE_FIRST_FRAME: readonly string[] = [];
  * statically. It replaced `winston`, `winston-daily-rotate-file` and 27 packages under them, which
  * the logger loaded through `require` on the first log line, an edge this walk does not follow.
  *
+ * 312 rather than 311 is `config/model-pattern-list.ts`, the splitter `launch-facts.ts` reads the
+ * first `defaultModel` selector through. It imports nothing.
+ *
+ * 316 rather than 312 is four modules the engine split out of files the card already evaluates, each
+ * importing only what its source did: `core/committed-prefix.ts` from `core/renderer.ts`, and
+ * `core/render-scheduler.ts`, `core/frame-segments.ts` and `core/render-intent.ts` from `core/tui.ts`
+ * and `core/frame-plan.ts`.
+ *
  * The floor is what stops a resolution table that stopped resolving from satisfying the ceiling with
  * a handful of modules while measuring nothing.
- *
- * 314 rather than 311 reflects three modules joining the launch card graph since the 2026-08-31
- * measurement. Each names its introducing commit and, where different, the commit that added its edge:
- * - `packages/utils/src/math.ts`: introduced by `08d1d835eabdda7e0c2ef127aa203943df13d03d` (canonical
- *   clamp01 owner; the same patch is also on HEAD as `3187d28a9323441de07174e6f055757e374d6118`). Edge
- *   added by `49ce86fade2186b99f36bb47983f8adbeb28e228` via `config/launch-facts.ts:40`, which
- *   clamps recorded context percentages through it. Required by the launch facts the card reads.
- * - `packages/utils/src/local-time.ts`: introduced and edge added by
- *   `dd058dd817406518965f2aaa7a679cd38e21f91f` via `packages/utils/src/logger.ts:17`.
- *   Required by `logger.ts` on the card path to read local time through libc localtime via FFI,
- *   avoiding JS `Date` evaluation that builds the ICU time zone cache during startup.
- * - `hosts/terminal/engine/src/core/frame-pacing.ts`: introduced and edge added by
- *   `1ee8a3e54928f6d690b0fb3eff6202008aa5960c` via `hosts/terminal/engine/src/core/tui.ts:68`.
- *   Required by `core/tui.ts` for frame throttle intervals and terminal host settle windows
- *   during launch card paint pacing.
  */
-const LAUNCH_CARD_CEILING = 314;
+const LAUNCH_CARD_CEILING = 316;
 const LAUNCH_CARD_FLOOR = 150;
 
 describe("the launch card opens no database", () => {

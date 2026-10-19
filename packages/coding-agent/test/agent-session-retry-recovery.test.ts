@@ -7,11 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { Agent } from "@veyyon/agent-core";
-import type { AssistantMessage, AssistantRetryRecovery, Usage } from "@veyyon/ai";
-import { unregisterCustomApis } from "@veyyon/ai/api-registry";
+import type { ApiKeyResolveContext, AssistantMessage, AssistantRetryRecovery, Usage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { createMockModel, registerMockApi } from "@veyyon/ai/providers/mock";
-import * as aiStream from "@veyyon/ai/stream";
+import * as envApiKeyModule from "@veyyon/ai/env-api-key";
+import { createMockModel } from "@veyyon/ai/providers/mock";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -35,7 +34,6 @@ type RecoveryRun = {
 const RATE_LIMIT_ERROR =
 	'429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}} retry-after-ms=11180000';
 const RETRIABLE_SERVER_ERROR = "503 service unavailable: overloaded_error";
-const RETRY_RECOVERY_MOCK_API_SOURCE = "agent-session-retry-recovery-test";
 
 function emptyUsage(): Usage {
 	return {
@@ -77,6 +75,16 @@ function retryRecovery(recovery: AssistantRetryRecovery["recovery"], note: strin
 		recovery,
 		note,
 	};
+}
+
+function resolveInitialApiKey(
+	apiKey: string | ((ctx: ApiKeyResolveContext) => string | Promise<string | undefined> | undefined) | undefined,
+): string {
+	const resolved = typeof apiKey === "function" ? apiKey({ lastChance: false, error: undefined }) : apiKey;
+	if (typeof resolved !== "string") {
+		throw new Error("Expected API key to be resolved before streaming");
+	}
+	return resolved;
 }
 
 interface AssistantEntry {
@@ -125,7 +133,7 @@ describe("AgentSession retry recovery", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-retry-recovery-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		vi.spyOn(aiStream, "getEnvApiKey").mockReturnValue(undefined);
+		vi.spyOn(envApiKeyModule, "getEnvApiKey").mockReturnValue(undefined);
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 		sessions = [];
 		managers = [];
@@ -138,7 +146,6 @@ describe("AgentSession retry recovery", () => {
 		for (const manager of managers.splice(0).reverse()) {
 			await manager.close();
 		}
-		unregisterCustomApis(RETRY_RECOVERY_MOCK_API_SOURCE);
 		authStorage.close();
 		tempDir.removeSync();
 		vi.restoreAllMocks();
@@ -164,22 +171,8 @@ describe("AgentSession retry recovery", () => {
 			{ type: "api_key", key: "anthropic-key-2" },
 		]);
 
-		registerMockApi(RETRY_RECOVERY_MOCK_API_SOURCE);
+		const mock = createMockModel();
 		const requestedKeys: string[] = [];
-		const mock = createMockModel({
-			id: model.id,
-			provider: model.provider,
-			handler: (_context, options) => {
-				const apiKey = typeof options?.apiKey === "string" ? options.apiKey : undefined;
-				if (!apiKey) {
-					throw new Error("Expected streamSimple to pass a resolved string API key");
-				}
-				requestedKeys.push(apiKey);
-				return requestedKeys.length === 1
-					? { throw: RATE_LIMIT_ERROR }
-					: { content: ["recovered after credential switch"], stopReason: "stop" };
-			},
-		});
 		let agent!: Agent;
 		agent = new Agent({
 			getApiKey: requestedModel => modelRegistry.resolver(requestedModel, agent.sessionId),
@@ -189,7 +182,16 @@ describe("AgentSession retry recovery", () => {
 				tools: [],
 				messages: [],
 			},
-			streamFn: (_requestedModel, context, options) => aiStream.streamSimple(mock.model, context, options),
+			streamFn: (requestedModel, context, options) => {
+				const apiKey = resolveInitialApiKey(options?.apiKey);
+				requestedKeys.push(apiKey);
+				if (requestedKeys.length === 1) {
+					mock.push({ throw: RATE_LIMIT_ERROR });
+				} else {
+					mock.push({ content: ["recovered after credential switch"], stopReason: "stop" });
+				}
+				return mock.stream(requestedModel, context, options);
+			},
 		});
 
 		const settings = Settings.isolated({
@@ -198,7 +200,7 @@ describe("AgentSession retry recovery", () => {
 			"retry.maxDelayMs": 100,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		const sessionManager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), "sessions"));
 		const session = new AgentSession({
@@ -311,7 +313,7 @@ describe("AgentSession retry recovery", () => {
 			"retry.maxRetries": 1,
 			"retry.modelFallback": false,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		const sessionManager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), "sessions"));
 		const session = new AgentSession({

@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { removeWithRetries } from "@veyyon/utils";
 import { ensureAutoresearchBranch } from "../src/autoresearch/git";
-import type { ExtensionAPI } from "../src/extensibility/extensions";
 import * as jj from "../src/utils/jj";
 
 const tempDirs: string[] = [];
@@ -34,12 +33,6 @@ async function initGitWithCommit(dir: string): Promise<void> {
 	await runGit(dir, ["commit", "-q", "-m", "init"]);
 }
 
-// `ensureAutoresearchBranch` never invokes the `api` it receives — its two
-// internal helpers (`readGitWorkDirPrefix`, `branchExists`) immediately
-// `void api`. The stub keeps the signature honest without spinning up the
-// real extension runtime.
-const stubApi = {} as unknown as ExtensionAPI;
-
 afterEach(async () => {
 	jj.repo.clearRootCache();
 	await Promise.all(tempDirs.splice(0).map(dir => removeWithRetries(dir)));
@@ -50,7 +43,7 @@ describe("ensureAutoresearchBranch jj guardrails", () => {
 		const dir = await mkTempDir("veyyon-ar-purejj-");
 		await fs.mkdir(path.join(dir, ".jj", "repo", "store"), { recursive: true });
 
-		const result = await ensureAutoresearchBranch(stubApi, dir, "demo");
+		const result = await ensureAutoresearchBranch(dir, "demo");
 
 		expect(result.ok).toBe(false);
 		if (result.ok) throw new Error("unreachable");
@@ -63,7 +56,7 @@ describe("ensureAutoresearchBranch jj guardrails", () => {
 		await initGitWithCommit(dir);
 		await fs.mkdir(path.join(dir, ".jj", "repo", "store"), { recursive: true });
 
-		const result = await ensureAutoresearchBranch(stubApi, dir, "demo goal");
+		const result = await ensureAutoresearchBranch(dir, "demo goal");
 
 		expect(result.ok).toBe(true);
 		if (!result.ok) throw new Error("unreachable");
@@ -75,7 +68,7 @@ describe("ensureAutoresearchBranch jj guardrails", () => {
 		const dir = await mkTempDir("veyyon-ar-plaingit-");
 		await initGitWithCommit(dir);
 
-		const result = await ensureAutoresearchBranch(stubApi, dir, "demo");
+		const result = await ensureAutoresearchBranch(dir, "demo");
 
 		expect(result.ok).toBe(true);
 		if (!result.ok) throw new Error("unreachable");
@@ -86,7 +79,7 @@ describe("ensureAutoresearchBranch jj guardrails", () => {
 	it("returns the soft no-git warning for directories backed by neither tool", async () => {
 		const dir = await mkTempDir("veyyon-ar-empty-");
 
-		const result = await ensureAutoresearchBranch(stubApi, dir, "demo");
+		const result = await ensureAutoresearchBranch(dir, "demo");
 
 		expect(result.ok).toBe(true);
 		if (!result.ok) throw new Error("unreachable");
@@ -104,7 +97,7 @@ describe("ensureAutoresearchBranch jj guardrails", () => {
 		const inner = path.join(outer, "nested-jj");
 		await fs.mkdir(path.join(inner, ".jj", "repo", "store"), { recursive: true });
 
-		const result = await ensureAutoresearchBranch(stubApi, inner, "demo");
+		const result = await ensureAutoresearchBranch(inner, "demo");
 
 		expect(result.ok).toBe(false);
 		if (result.ok) throw new Error("unreachable");
@@ -123,7 +116,7 @@ describe("ensureAutoresearchBranch jj guardrails", () => {
 		await fs.mkdir(inner, { recursive: true });
 		await initGitWithCommit(inner);
 
-		const result = await ensureAutoresearchBranch(stubApi, inner, "demo");
+		const result = await ensureAutoresearchBranch(inner, "demo");
 
 		expect(result.ok).toBe(true);
 		if (!result.ok) throw new Error("unreachable");

@@ -383,8 +383,9 @@ unless defined?($__veyyon_prelude_loaded) && $__veyyon_prelude_loaded
     $__veyyon_tool_proxy ||= VeyyonToolProxy.new
   end
 
-  def completion(prompt, model: "default", system: nil, schema: nil)
-    args = { "prompt" => prompt, "model" => model }
+  def completion(prompt, model: nil, system: nil, schema: nil)
+    args = { "prompt" => prompt }
+    args["model"] = model unless model.nil?
     args["system"] = system unless system.nil?
     args["schema"] = schema unless schema.nil?
     res = VeyyonBridge.call("__completion__", args)

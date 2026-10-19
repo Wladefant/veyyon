@@ -21,13 +21,15 @@ import {
 import type { Api, completeSimple, ImageContent, Model, TextContent } from "@veyyon/ai";
 import { logger, prompt, toError } from "@veyyon/utils";
 import { extractTextContent } from "../commit/utils";
+import { normalizeModelPatternList } from "../config/model-pattern-list";
 import type { ModelRegistry } from "../config/model-registry";
-import { expandRoleAlias, getModelMatchPreferences, resolveModelFromString } from "../config/model-resolver";
+import { getModelMatchPreferences, resolveModelFromString } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 // The owning module, not the `../internal-urls` barrel: the barrel re-exports every protocol
 // handler and reaches hundreds of modules, and both of these live in `local-protocol`.
 import { type LocalProtocolOptions, resolveLocalRoot } from "../internal-urls/local-protocol";
 import { toolsPrompts } from "../prompts/tools/rows";
+import { helperModelPatterns, helperSettingPath } from "../task/helper-settings";
 import { canonicalizeImageContent } from "./image-resize";
 
 /** Telemetry tag for the oneshot vision-description calls. */
@@ -35,7 +37,7 @@ const ONESHOT_KIND = "image_attachment_describe";
 
 const NO_VISION_MODEL_NOTE =
 	"[No vision-capable model is configured, so this image could not be described automatically. " +
-	"The image was saved; configure a vision model role (modelRoles.vision) and use the inspect_image tool to analyze it.]";
+	`The image was saved; set a vision model in ${helperSettingPath("vision", "model")} (Agents → Roster → Helpers) and use the inspect_image tool to analyze it.]`;
 
 const DESCRIPTION_UNAVAILABLE_NOTE =
 	"[Image description unavailable: the vision model returned no usable text. The image was saved for further analysis.]";
@@ -99,23 +101,24 @@ function formatImageBlock(localUrl: string, description: string): string {
 
 /**
  * Resolve a vision-capable model, mirroring the inspect_image priority
- * (`@vision` → `@default` → active → first image-capable available), but
- * never returning a text-only model.
+ * (the `vision` helper → `defaultModel` → active → first image-capable
+ * available), but never returning a text-only model.
  */
 function resolveVisionModel(deps: DescribeAttachedImagesDeps): Model<Api> | undefined {
 	const available = deps.modelRegistry.getAvailable();
 	if (available.length === 0) return undefined;
 	const preferences = getModelMatchPreferences(deps.settings);
-	const resolvePattern = (pattern: string | undefined): Model<Api> | undefined => {
-		if (!pattern) return undefined;
-		const expanded = expandRoleAlias(pattern, deps.settings);
-		const model = resolveModelFromString(expanded, available, preferences);
-		return model?.input.includes("image") ? model : undefined;
+	const resolveChain = (patterns: readonly string[]): Model<Api> | undefined => {
+		for (const pattern of patterns) {
+			const model = resolveModelFromString(pattern, available, preferences);
+			if (model?.input.includes("image")) return model;
+		}
+		return undefined;
 	};
 	return (
-		resolvePattern("@vision") ??
-		resolvePattern("@default") ??
-		resolvePattern(deps.activeModelString) ??
+		resolveChain(helperModelPatterns(deps.settings, "vision")) ??
+		resolveChain(normalizeModelPatternList(deps.settings.get("defaultModel"))) ??
+		resolveChain(normalizeModelPatternList(deps.activeModelString)) ??
 		available.find(model => model.input.includes("image"))
 	);
 }

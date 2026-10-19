@@ -27,14 +27,14 @@ states the dedicated tool to use instead.
 See [Approvals](../features/sandbox.md) and `/settings` -> Interaction ->
 Approvals.
 
-## Model slots and roles
+## Model slots and helpers
 
-Model configuration separates model selection from subsystem roles:
+Model configuration separates the session model from per-feature helpers:
 
-- **The interactive model** is set with `/model` or `--model` and persists as `modelRoles.default`.
-- **Roles** pin a model to specific workloads, such as `smol` for lightweight operations or `advisor` for review. Custom roles are defined in `modelRoles`. See [Models, roles, and profiles](../using/roles-and-profiles.md).
+- **The default model** is set with `/model` or `--model` and persists as `defaultModel`.
+- **Helpers** pin a model to one feature, such as `title` for session titles or `advisor` for review, under `agent.helpers`. Unset, a helper runs the session's model. See [Models, helpers, and profiles](../using/roles-and-profiles.md).
 - **Overrides** are explicit subsystem policies. `compaction.model` overrides the interactive model for compaction, otherwise compaction inherits it. Agent models are configured via agent policies in settings.
-- **Cycling** rotates through `cycleOrder` (defaulting to `smol` then `slow`), bound to `app.model.cycleForward`.
+- **Cycling** rotates through the scoped models (`--models`), else the available models, bound to `app.model.cycleForward`.
 
 ## Provider-neutral loop
 
@@ -51,5 +51,5 @@ Every profile, including `default`, is stored at `~/.veyyon/profiles/<name>/agen
 ## Related
 
 - [Design goals](../foundations/thesis.md)
-- [Roles and profiles](../using/roles-and-profiles.md)
+- [Models, helpers, and profiles](../using/roles-and-profiles.md)
 - [Repair](../repair/overview.md)

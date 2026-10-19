@@ -32,7 +32,6 @@
 use std::cell::RefCell;
 
 use anyhow::{Result, anyhow};
-use ast_grep_core::tree_sitter::LanguageExt;
 use tree_sitter::{InputEdit, Parser, Point, Tree};
 
 use crate::SupportLang;
@@ -171,7 +170,7 @@ pub fn with_parsed_tree<T>(
 		};
 		let mut parser = Parser::new();
 		parser
-			.set_language(&lang.get_ts_language())
+			.set_language(&lang.document_language())
 			.map_err(|err| anyhow!("Failed to load tree-sitter language: {err}"))?;
 		let Some(tree) = parser.parse(&code, reusable.as_ref()) else {
 			return Ok(None);

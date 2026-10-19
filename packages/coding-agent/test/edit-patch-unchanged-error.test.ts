@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { DEFAULT_FUZZY_THRESHOLD, executePatchSingle } from "@veyyon/coding-agent/edit";
-import type { FileDiagnosticsResult } from "@veyyon/coding-agent/lsp";
+import type { FileDiagnosticsResult } from "@veyyon/coding-agent/lsp/diagnostics";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { removeWithRetries } from "@veyyon/utils";
 import { makeToolSession } from "./helpers/tool-session";

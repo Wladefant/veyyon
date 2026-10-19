@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { moduleSpecifiersIn, namedImportsFrom } from "@veyyon/utils/module-reach";
+import { exportedDeclarationsIn } from "@veyyon/utils/source-declarations";
 
 /**
  * WHY: importing a string constant is enough to evaluate the module that holds it, and twice now a
@@ -268,8 +270,9 @@ describe("a startup root cannot reach an expensive third-party package through s
 		// `export * from "./registry"`. A walker that followed `import` but not
 		// `export * from` would call the barrel clean and miss the whole defect.
 		const barrel = readFileSync(join(SRC, "export", "markit", "index.ts"), "utf8");
-		expect(barrel).toContain('export * from "./registry"');
-		expect(barrel).not.toContain("import ");
+		expect(moduleSpecifiersIn(barrel)).toContain("./registry");
+		expect(namedImportsFrom(barrel, "./registry")).toEqual([]);
+		expect(exportedDeclarationsIn(barrel)).toEqual([]);
 		expect([...expensiveReachableFrom(join(SRC, "export", "markit", "index.ts")).keys()].sort()).toContain("mammoth");
 	});
 });

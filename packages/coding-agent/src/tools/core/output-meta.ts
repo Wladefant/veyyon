@@ -26,7 +26,6 @@ import {
 	truncateMiddle,
 	truncateTail,
 } from "../../session/streaming-output";
-import type { Theme } from "../../theme/theme";
 import { inlineBudgetFor } from "./output-artifact";
 import { wrapBrackets } from "./render-utils";
 import { renderError } from "./tool-errors";

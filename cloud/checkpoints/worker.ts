@@ -1,3 +1,4 @@
+import { isCheckpointNodeLabel } from "../../contracts/session/src/checkpoint-ownership";
 interface Storage {
  get<T>(key: string): Promise<T | undefined>;
  put(key: string, value: unknown): Promise<void>;
@@ -8,9 +9,11 @@ interface Namespace { idFromName(name: string): unknown; get(id: unknown): Stub 
 interface ObjectStore { get(key: string): Promise<{size:number;arrayBuffer():Promise<ArrayBuffer>} | null>; put(key:string,bytes:ArrayBuffer,options?:unknown):Promise<unknown> }
 interface Index { prepare(sql:string):{bind(...values:unknown[]):{run():Promise<unknown>;all():Promise<unknown>}} }
 interface Env { OBJECTS:ObjectStore; INDEX:Index; SESSIONS:Namespace; BUDGET:Namespace; API_TOKEN:string }
-interface Lease {ownerNode:string;epoch:number;expiresAt:string;headSequence:number;manifestHash:string}
+interface Lease {ownerNode:string;epoch:number;expiresAt:string;headSequence:number;manifestHash:string;targetNode?:string;claimHash?:string;claimEpoch?:number;transferId?:string}
 interface Manifest {version:1;sessionId:string;sequence:number;objects:{hash:string;size:number}[]}
 interface Head {sequence:number;manifestHash:string;manifest:Manifest}
+interface Transfer {sourceNode:string;sourceEpoch:number;targetNode:string;targetEpoch:number;claimHash:string;result:Lease}
+interface Claim {targetNode:string;transferEpoch:number;claimHash:string;spent:boolean;runtimeOwner?:string;runtimeEpoch?:number;resumeHash?:string;resumeToken?:string;pendingResumeHash?:string;pendingResumeToken?:string}
 const json=(value:unknown,status=200)=>Response.json(value,{status});
 const digest=async(bytes:BufferSource)=>Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes)),b=>b.toString(16).padStart(2,"0")).join("");
 const hashPattern=/^[a-f0-9]{64}$/;
@@ -31,7 +34,7 @@ export class SessionAuthority {
  const raw:unknown=await request.json();
  if (!raw || typeof raw!=="object" || Array.isArray(raw)) return json({error:"invalid request"},400);
  const body=raw as Record<string,unknown>;
- if(typeof body.ownerNode!=="string" || !body.ownerNode.length || body.ownerNode.length>128)return json({error:"owner required"},400);
+ if(!isCheckpointNodeLabel(body.ownerNode))return json({error:"valid owner required"},400);
  if(action==="commit"){
  const manifest=manifestOf(body.manifest);if(!manifest || manifest.sequence!==Number(body.expectedHead)+1 || typeof body.idempotencyKey!=="string" || body.idempotencyKey.length>128)return json({error:"invalid manifest"},400);
  if (manifest.sessionId !== new URL(request.url).pathname.split("/")[3]) return json({error:"session identity mismatch"},400);
@@ -45,16 +48,104 @@ export class SessionAuthority {
  });
  if(result.ok){const head=await this.state.storage.get<Head>("head");if(head){try{await this.repair(head);}catch{/* committed outbox is retried on head read */}}}return result;
  }
+ const rawTarget=body.targetNode;
+ const rawTransferId=body.transferId;
+ const rawClaimToken=body.claimToken;
+ const rawResumeToken=body.resumeToken;
+ const targetNode=isCheckpointNodeLabel(rawTarget)?rawTarget:undefined;
+ const transferId=typeof rawTransferId==="string" && /^[A-Za-z0-9_-]{1,128}$/.test(rawTransferId)?rawTransferId:undefined;
+ const claimHash=typeof rawClaimToken==="string" && rawClaimToken.length>=16 && rawClaimToken.length<=128
+  ? await digest(new TextEncoder().encode(rawClaimToken)) : undefined;
+ const resumeHash=typeof rawResumeToken==="string" && rawResumeToken.length>=16 && rawResumeToken.length<=128
+  ? await digest(new TextEncoder().encode(rawResumeToken)) : undefined;
+ const nextResumeToken=crypto.randomUUID();
+ const nextResumeHash=await digest(new TextEncoder().encode(nextResumeToken));
  return this.state.storage.transaction(async store=>{
- const current=await store.get<Lease>("lease");const live=current && Date.parse(current.expiresAt)>Date.now();const head=await store.get<Head>("head");
- if(action==="lease"){
- if(live && current.ownerNode!==body.ownerNode)return json({error:"owned"},409);
- const lease:Lease={ownerNode:body.ownerNode as string,epoch:live?current.epoch:(current?.epoch??0)+1,expiresAt:new Date(Date.now()+60000).toISOString(),headSequence:head?.sequence??0,manifestHash:head?.manifestHash??""};await store.put("lease",lease);return json(lease);
- }
- if(!live || current.ownerNode!==body.ownerNode || current.epoch!==body.epoch)return json({error:"stale writer"},409);
- if(action==="renew"){const next={...current,expiresAt:new Date(Date.now()+60000).toISOString()};await store.put("lease",next);return json(next);}
- if(action==="release"){await store.put("lease",{...current,epoch:current.epoch+1,expiresAt:new Date(0).toISOString()});return new Response(null,{status:204});}
- return json({error:"unknown operation"},404);
+  const current=await store.get<Lease>("lease");
+  const live=current && Date.parse(current.expiresAt)>Date.now();
+  const head=await store.get<Head>("head");
+  if(action==="lease"){
+   if(current?.claimHash)return json({error:"transferred sessions require their authority-issued resume capability"},409);
+   if(live && current.ownerNode!==body.ownerNode)return json({error:"owned"},409);
+   const lease:Lease={ownerNode:body.ownerNode as string,epoch:live?current.epoch:(current?.epoch??0)+1,expiresAt:new Date(Date.now()+60000).toISOString(),headSequence:head?.sequence??0,manifestHash:head?.manifestHash??""};
+   await store.put("lease",lease);return json(lease);
+  }
+  if(action==="transfer"){
+   if(!targetNode || !transferId || claimHash===undefined || !Number.isSafeInteger(body.epoch))return json({error:"invalid transfer"},400);
+   const prior=await store.get<Transfer>(`transfer:${transferId}`);
+   if(prior){
+    if(prior.sourceNode!==body.ownerNode || prior.sourceEpoch!==body.epoch || prior.targetNode!==targetNode || prior.claimHash!==claimHash)return json({error:"transfer replay mismatch"},409);
+    return json(prior.result);
+   }
+   if(!live || current.ownerNode!==body.ownerNode || current.epoch!==body.epoch || current.claimHash)return json({error:"stale writer"},409);
+   const next:Lease={...current,ownerNode:targetNode,targetNode,epoch:current.epoch+1,expiresAt:new Date(Date.now()+60000).toISOString(),claimHash,claimEpoch:current.epoch+1,transferId};
+   const result={...next};delete result.claimHash;delete result.claimEpoch;
+   await store.put("lease",next);
+   await store.put(`transfer:${transferId}`,{sourceNode:current.ownerNode,sourceEpoch:current.epoch,targetNode,targetEpoch:next.epoch,claimHash,result});
+   return json(result);
+  }
+  if(action==="claim"){
+   if(!targetNode || !transferId || !Number.isSafeInteger(body.epoch) || (claimHash===undefined)===(resumeHash===undefined))return json({error:"invalid claim"},400);
+   const transfer=await store.get<Transfer>(`transfer:${transferId}`);
+   const claim=await store.get<Claim>(`claim:${transferId}`);
+   if(!transfer || transfer.targetNode!==targetNode || transfer.targetEpoch!==body.epoch || !current || current.transferId!==transferId || current.targetNode!==targetNode)
+    return json({error:"invalid or stale transfer identity"},409);
+   if(claimHash!==undefined && claimHash!==transfer.claimHash)return json({error:"invalid or spent transfer claim"},409);
+   if(claim && (claim.targetNode!==targetNode || claim.transferEpoch!==body.epoch || claim.claimHash!==transfer.claimHash))
+    return json({error:"invalid transfer claim"},409);
+   if(claim?.spent && resumeHash!==undefined && resumeHash!==claim.resumeHash && resumeHash!==claim.pendingResumeHash)
+    return json({error:"stale resume capability"},409);
+   if(claim?.spent && claimHash===undefined && resumeHash===undefined)return json({error:"resume capability required"},409);
+   const pendingTransferReservation =
+    !claim?.spent &&
+    current.ownerNode===targetNode &&
+    current.epoch===transfer.targetEpoch &&
+    current.claimHash===transfer.claimHash;
+   if(live && current.ownerNode!==body.ownerNode && !pendingTransferReservation)return json({error:"another runtime holds the live checkpoint lease"},409);
+   if(claim?.spent && claimHash!==undefined && !claim.pendingResumeToken)return json({error:"transfer claim has already been spent"},409);
+   if(!claim?.spent && claimHash===undefined)return json({error:"resume capability required"},409);
+   if(!claim?.spent && (current.ownerNode!==targetNode || current.epoch!==transfer.targetEpoch || current.claimHash!==transfer.claimHash))
+    return json({error:"transfer claim is stale"},409);
+   const retrySameRuntime=live && current.ownerNode===body.ownerNode;
+   const epoch=retrySameRuntime?current.epoch:current.epoch+1;
+   const pendingToken=retrySameRuntime && claim?.pendingResumeToken
+    ? claim.pendingResumeToken
+    : claim?.pendingResumeToken ?? nextResumeToken;
+   const pendingHash=retrySameRuntime && claim?.pendingResumeHash
+    ? claim.pendingResumeHash
+    : claim?.pendingResumeHash ?? nextResumeHash;
+   const next:Lease={...current,ownerNode:body.ownerNode as string,epoch,expiresAt:new Date(Date.now()+60000).toISOString()};
+   const nextClaim:Claim={
+    targetNode,transferEpoch:transfer.targetEpoch,claimHash:transfer.claimHash,spent:true,
+    runtimeOwner:body.ownerNode as string,runtimeEpoch:epoch,
+    resumeHash:claim?.resumeHash,resumeToken:claim?.resumeToken,
+    pendingResumeHash:pendingHash,pendingResumeToken:pendingToken,
+   };
+   await store.put("lease",next);
+   await store.put(`claim:${transferId}`,nextClaim);
+   const visible={...next};delete visible.claimHash;delete visible.claimEpoch;
+   return json({...visible,resumeToken:pendingToken});
+  }
+  if(action==="finalize"){
+   if(!targetNode || !transferId || resumeHash===undefined || !Number.isSafeInteger(body.epoch))return json({error:"invalid resume finalization"},400);
+   const transfer=await store.get<Transfer>(`transfer:${transferId}`);
+   const claim=await store.get<Claim>(`claim:${transferId}`);
+   if(!transfer || !claim?.spent || transfer.targetNode!==targetNode || transfer.targetEpoch!==body.epoch ||
+    !live || current.ownerNode!==body.ownerNode || current.epoch!==body.leaseEpoch || current.transferId!==transferId ||
+    claim.runtimeOwner!==body.ownerNode || claim.runtimeEpoch!==body.leaseEpoch || claim.pendingResumeHash!==resumeHash)
+    return json({error:"resume capability finalization is stale"},409);
+   const {pendingResumeHash,pendingResumeToken,...rest}=claim;
+   const nextClaim:Claim={...rest,resumeHash:pendingResumeHash,resumeToken:pendingResumeToken};
+   await store.put(`claim:${transferId}`,nextClaim);
+   return json({ok:true});
+  }
+  if(!live || current.ownerNode!==body.ownerNode || current.epoch!==body.epoch)return json({error:"stale writer"},409);
+  if(action==="renew"){const next={...current,expiresAt:new Date(Date.now()+60000).toISOString()};await store.put("lease",next);return json(next);}
+  if(action==="release"){
+   const next={...current,epoch:current.epoch+1,expiresAt:new Date(0).toISOString()};
+   await store.put("lease",next);return json(next);
+  }
+  return json({error:"unknown operation"},404);
  });
  }
 }
@@ -84,10 +175,10 @@ export class BudgetAuthority {
 }
 export default {
  async fetch(request:Request,env:Env):Promise<Response>{
+  let bytes:ArrayBuffer|undefined;
  if(!env.API_TOKEN || request.headers.get("authorization")!==`Bearer ${env.API_TOKEN}`)return json({error:"unauthorized"},401);
  const url=new URL(request.url);const parts=url.pathname.split("/").filter(Boolean);
  if(parts[0]!=="v1")return json({error:"not found"},404);
- let bytes:ArrayBuffer|undefined;
  if(parts[1]==="objects" && request.method==="PUT") {const declared=Number(request.headers.get("content-length"));if(declared>8388608)return json({error:"object cap"},413);bytes=await request.arrayBuffer();if(bytes.byteLength>8388608 || !bytes.byteLength)return json({error:"object cap"},413);}
  const sessionId=parts[1]==="sessions" && /^[a-zA-Z0-9_-]{1,128}$/.test(parts[2]??"")?parts[2]:undefined;
  let units=1;
@@ -105,7 +196,7 @@ export default {
  if(bytes){if(await digest(bytes)!==hash)return json({error:"hash mismatch"},422);if(existing)return json({error:"immutable object exists"},409);await env.OBJECTS.put(hash,bytes,{onlyIf:{etagDoesNotMatch:"*"}});return new Response(null,{status:201});}
  }
  if(parts[1]==="catalog" && request.method==="GET")return json(await env.INDEX.prepare("SELECT id, sequence, manifest_hash FROM sessions LIMIT 100").bind().all());
- if(parts[1]==="sessions" && parts.length===4 && sessionId && ((parts[3]==="head" && request.method==="GET") || (["lease","renew","release","commit"].includes(parts[3]!) && request.method==="POST"))) return env.SESSIONS.get(env.SESSIONS.idFromName(sessionId)).fetch(request);
+ if(parts[1]==="sessions" && parts.length===4 && sessionId && ((parts[3]==="head" && request.method==="GET") || (["lease","renew","release","transfer","claim","finalize","commit"].includes(parts[3]!) && request.method==="POST"))) return env.SESSIONS.get(env.SESSIONS.idFromName(sessionId)).fetch(request);
  return json({error:"not found"},404);
  }
 };

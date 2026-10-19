@@ -215,18 +215,18 @@ Implemented under `packages/coding-agent/src/eval/rb` and `packages/coding-agent
 
 ### Oneshot completion helper (`completion`)
 
-The JS and Python runtimes expose `completion()`, a single stateless completion against a model tier. It is intentionally minimal: no conversation history, no agent-visible tools, pure text in / text (or object) out. Implemented host-side in `packages/coding-agent/src/eval/completion-bridge.ts` and routed through the existing tool bridge under the reserved name `__completion__`.
+The JS and Python runtimes expose `completion()`, a single stateless completion against one model. It is intentionally minimal: no conversation history, no agent-visible tools, pure text in / text (or object) out. Implemented host-side in `packages/coding-agent/src/eval/completion-bridge.ts` and routed through the existing tool bridge under the reserved name `__completion__`.
 
 - Signatures:
   - JS: `await completion(prompt, { model?, system?, schema? })`
-  - Python: `completion(prompt, *, model="default", system=None, schema=None)`
-- `model` selects a tier (default `"default"`):
-  - `"smol"` → `@smol` role (fast / cheap)
-  - `"default"` → the session's active model, falling back to the `@default` role
-  - `"slow"` → `@slow` role; requests high reasoning effort only on reasoning-capable models
+  - Python: `completion(prompt, *, model=None, system=None, schema=None)`
+- `model` selects the model:
+  - omitted → the `completion` helper (`agent.helpers.completion`), which runs the session's model and effort until one is configured
+  - `"default"` → the session's active model
+  - any other value → a model selector; a `:level` suffix sets the reasoning effort
 - `system` (optional) supplies a system prompt.
 - `schema` (optional) is a plain JSON-Schema object. When present, the model is forced to call a single synthetic `respond` tool with that schema (loose, non-strict), and the helper returns the parsed object. When absent, the helper returns the completion string.
-- Errors surface as exceptions: unresolved tier, missing API key, an `error`/`aborted` stop reason, or empty output each raise.
+- Errors surface as exceptions: unresolved model, missing API key, an `error`/`aborted` stop reason, or empty output each raise.
 
 ### Agent helper (`agent`)
 

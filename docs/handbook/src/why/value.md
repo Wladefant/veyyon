@@ -9,7 +9,7 @@ Veyyon is a local terminal coding agent. The loop, tools, and credentials run lo
 | Edits | Hashline `edit` and `write`, checked against file contents before writing to disk |
 | Tools | `read`, `search`, `bash`, LSP, DAP, browser, MCP, task agents, and extensions |
 | Approvals | `tools.approvalMode` sets which of the read, write, and exec tiers prompt before running |
-| Models | Separate slots for interactive, agent, and compaction models, with role mappings per profile |
+| Models | Separate slots for interactive, agent, compaction, and per-feature helper models per profile |
 | Sessions | Branchable session trees with resume and fork support |
 | Memory | Local SQLite memory backends, active when `memory.backend` is not `off` |
 | Config | `~/.veyyon` or profile-specific agent directories; repository trees contribute `AGENTS.md` instructions |

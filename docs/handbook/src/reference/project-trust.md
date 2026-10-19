@@ -1,9 +1,10 @@
 # Project trust
 
-A repository can contain code that veyyon loads at startup: a plugin registry at
-`.veyyon/plugins/installed_plugins.json`, and extension or hook files it lists.
-That code runs before tool approval applies. Opening a directory does not approve
-it. Until you decide, it is withheld.
+A repository can contain code Veyyon loads at startup, such as a plugin registry, and skills it can
+show to the model. The registry is `.veyyon/plugins/installed_plugins.json`; it can name
+extensions or hooks. Project skills live in the root `.agents/skills`, `.github/skills` or
+`.claude/skills` directory. Opening a directory does not approve its contents. Veyyon withholds
+untrusted project code and skills.
 
 ## What is withheld
 
@@ -11,41 +12,50 @@ it. Until you decide, it is withheld.
 | --- | --- |
 | `.veyyon/plugins/installed_plugins.json` | extensions, hooks, custom tools, slash commands and MCP servers, from the directories it names |
 | an extension or hook file inside the project | module top-level code and its factory, at import |
+| a project skill's `SKILL.md` | skill instructions and any sibling files those instructions use |
 
-A file outside the project root is not affected. Profile extensions, installed
-plugins and paths you set in `extensions:` load as before: a configured path is
-your own instruction and loads even when stored inside the project, which is
-where an extension is written while you are developing it. Settings come from
-your profile and your home directory, so a repository cannot add itself to that
-list.
+Veyyon approves a project skill by its `SKILL.md` path. The SHA-256 digest covers the entire skill
+directory: every relative path and file content, in sorted order. A change to `SKILL.md`, a script,
+an asset or path requires approval again. Scripts and assets are included in this single skill-folder approval. Veyyon does not approve them separately and does not sandbox them.
+A symlink inside a project skill that resolves outside the project root is refused.
+
+A file outside the project root is not affected. Profile extensions, installed plugins, profile
+skills and paths you set in `extensions:` load as before: a configured path is your own instruction
+and loads even when stored inside the project, which is where an extension is written while you are
+developing it. Settings come from your profile and your home directory, so a repository cannot add
+itself to that list.
+
 
 ## Deciding
 
 ```sh
-veyyon trust           # show the code the project would run, and approve it
-veyyon trust --list    # show it without deciding
+veyyon trust           # show project code and skill files, then approve the discovered candidates
+veyyon trust --list    # show candidates without deciding
 veyyon trust --deny    # refuse, and remember the refusal
 veyyon trust --forget  # drop the decision
-veyyon trust path/to/file.ts   # decide one named file
+veyyon trust path/to/skill/SKILL.md   # decide one named skill
 ```
 
-Inside a session, `/trust` reports, and `/trust approve`, `/trust deny` and
-`/trust forget` set the decision. `/trust approve <path>` approves one file by name, which
-is how you answer a rejection that states a file the discovery scan does not list.
+Inside a session, bare `/trust` lists the project files and reports their decisions. `/trust approve`,
+`/trust deny` and `/trust forget` set the decision. `/trust approve <path>` approves one named file.
+
+
 
 ## What a decision records
 
-One sha-256 per approved file, keyed by the symlink-resolved project root, in
-`<agent dir>/project-trust.json`. Consequences:
+The project trust store is `<agent dir>/project-trust.json`. It keys each decision by the canonical
+project root. Extension and hook candidates use a SHA-256 digest of each file. A skill candidate is
+identified by its `SKILL.md` path. Its digest covers every relative path and file content in the skill
+directory, in sorted order.
 
-- A file that changes after you approved it is withheld again.
-- A file that appears later was not approved by an earlier decision.
-- Approving the plugin registry approves the plugins it names. Their install
-  directories are usually outside the project, and their contents are not
-  digested.
+Consequences:
+
+- A changed file or path in a skill directory changes its digest. Veyyon withholds that skill until you approve it again.
+- A new skill was not approved by an earlier decision.
+- Approving a plugin registry approves the plugins it names. Their install directories are usually outside the project, and their contents are not digested.
 - A denial is stored, so the next launch neither loads the code nor prompts again.
-- A store written by another version of veyyon, or one whose records are
-  malformed, is discarded. Nothing is trusted and you are prompted again.
+- A store written by another version of Veyyon, or one whose records are malformed, is discarded. Nothing is trusted and you are prompted again.
+- A skill with a symlink that resolves outside the project root is refused and logged as a warning.
 
 ## Reading a refusal
 
@@ -55,6 +65,11 @@ trusted. Project code runs with your permissions; approve it with `/trust
 approve` in this session or `veyyon trust` in this directory, or leave it
 untrusted.
 ```
+
+The startup logger also warns when it refuses an unapproved, denied or changed project skill. The
+warning names the skill's `SKILL.md` path. Review the folder and approve that path again with
+`veyyon trust <path>` or `/trust approve <path>`.
+
 
 | Reason | Meaning |
 | --- | --- |

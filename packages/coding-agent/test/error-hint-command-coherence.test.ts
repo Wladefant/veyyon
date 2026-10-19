@@ -28,10 +28,8 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import {
-	BUILTIN_SLASH_COMMAND_DEFS,
-	BUILTIN_SLASH_COMMAND_RESERVED_NAMES,
-} from "@veyyon/coding-agent/slash-commands/builtin-registry";
+import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES } from "@veyyon/coding-agent/slash-commands/builtin-declarations";
+import { BUILTIN_SLASH_COMMAND_DEFS } from "@veyyon/coding-agent/slash-commands/builtin-registry";
 
 const SESSION_SRC_DIR = path.join(import.meta.dir, "..", "src", "session");
 

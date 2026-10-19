@@ -243,25 +243,26 @@ and change the setting again, and nothing further is reported.
 
 ## Pick models and providers
 
-Configure the interactive model, agent policy, compaction model, and optional roles separately:
+Configure the default model, agent policy, helper models, and compaction model separately:
 
 | Goal | What to set |
 | --- | --- |
-| Choose the model you talk to | `--model` / `/model` (persisted as `modelRoles.default`) |
+| Choose the model you talk to | `--model` / `/model` (persisted as `defaultModel`) |
 | Run every agent on one model and effort | `agent.sharedModel`, then `agent.model` and `agent.thinkingLevel` |
 | Customize one agent | `agent.agents.<name>` or Settings → Agents → Agents |
 | Choose the model for context compaction | `compaction.model` |
-| Add named model assignments | `modelRoles`, per profile (Settings → Model → Roles) |
+| Choose the model a feature runs (plan, advisor, titles, …) | `agent.helpers.<id>` or Settings → Agents → Roster → Helpers |
 | Add a local or BYOK provider | a `providers:` entry in `models.yml` (see [Models](../reference/models-yml.md)) |
 
 ```yaml
 # ~/.veyyon/profiles/default/agent/config.yml
-modelRoles:
-  default: openai/gpt-5           # interactive model (persisted default)
-  smol: openai/gpt-4.1-mini
+defaultModel: openai/gpt-5        # session model (persisted default)
 agent:
   model: deepseek/deepseek-chat
   thinkingLevel: high
+  helpers:
+    title:
+      model: openai/gpt-4.1-mini
   agents:
     reviewer:
       enabled: true
@@ -270,7 +271,7 @@ compaction:
   model: openai/gpt-5-mini        # optional; else inherit interactive
 ```
 
-`/model` changes the interactive model (persists to `modelRoles.default` when saved as default) and shows the current one. `/session info` shows session stats. Role list and Ctrl+P cycling: [Models, roles, and profiles](./roles-and-profiles.md).
+`/model` changes the session model (persists to `defaultModel` when saved as default) and shows the current one. `/session info` shows session stats. Helper list and Ctrl+P cycling: [Models, helpers, and profiles](./roles-and-profiles.md).
 
 ## Stay safe (approvals)
 
@@ -278,7 +279,7 @@ compaction:
 | --- | --- |
 | When Veyyon prompts before acting | `tools.approvalMode`: `plan`, `ask`, `ask-command`, `auto` (default), `yolo`; legacy `always-ask`/`write`/`auto-edit` accepted |
 | Per-tool policy | `tools.approval`: map a tool to `allow` / `deny` / `prompt` |
-| Advisor review pass | `advisor.enabled` + `modelRoles.advisor` |
+| Advisor review pass | `advisor.enabled` + `agent.helpers.advisor` |
 
 ```yaml
 tools:

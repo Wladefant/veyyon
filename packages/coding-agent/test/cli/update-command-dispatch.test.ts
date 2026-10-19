@@ -67,29 +67,29 @@ describe("runUpdateCommand reaches the installer", () => {
 			logs.push(args.map(String).join(" "));
 		});
 		stubLatestRelease("999.0.0");
-		const calls: { version: string; force: boolean }[] = [];
+		const calls: string[] = [];
 
 		await withSourceInstallOnPath(async () => {
-			await updateCli.runUpdateCommand({ force: false, check: false }, async (version, force) => {
-				calls.push({ version, force });
+			await updateCli.runUpdateCommand({ force: false, check: false }, async version => {
+				calls.push(version);
 			});
 		});
 
-		expect(calls).toEqual([{ version: "999.0.0", force: false }]);
+		expect(calls).toEqual(["999.0.0"]);
 		// And the dead-end advice must be gone from the success path entirely.
 		expect(logs.join("\n")).not.toContain("git pull && bun install");
 	});
 
-	it("passes --force through to the installer", async () => {
+	it("reinstalls the running version with --force", async () => {
 		spyOn(console, "log").mockImplementation(() => {});
-		stubLatestRelease("999.0.0");
-		const calls: { version: string; force: boolean }[] = [];
+		stubLatestRelease(VERSION);
+		const calls: string[] = [];
 
-		await updateCli.runUpdateCommand({ force: true, check: false }, async (version, force) => {
-			calls.push({ version, force });
+		await updateCli.runUpdateCommand({ force: true, check: false }, async version => {
+			calls.push(version);
 		});
 
-		expect(calls).toEqual([{ version: "999.0.0", force: true }]);
+		expect(calls).toEqual([VERSION]);
 	});
 
 	it("installs nothing in --check mode", async () => {
@@ -121,13 +121,13 @@ describe("runUpdateCommand reaches the installer", () => {
 	it("installs when the latest release is 0.0.1 over running VERSION", async () => {
 		spyOn(console, "log").mockImplementation(() => {});
 		stubLatestRelease("0.0.1");
-		const calls: { version: string; force: boolean }[] = [];
+		const calls: string[] = [];
 
-		await updateCli.runUpdateCommand({ force: false, check: false }, async (version, force) => {
-			calls.push({ version, force: Boolean(force) });
+		await updateCli.runUpdateCommand({ force: false, check: false }, async version => {
+			calls.push(version);
 		});
 
-		expect(calls).toEqual([{ version: "0.0.1", force: false }]);
+		expect(calls).toEqual(["0.0.1"]);
 	});
 });
 

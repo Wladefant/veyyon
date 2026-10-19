@@ -91,6 +91,8 @@ export const SETTING_CONDITIONS: Record<string, SettingCondition> = {
 		whenSettingsSay(() => settings.get("github.enabled") === true && settings.get("github.cache.enabled") === true),
 	secretsEnabled: settingFlag("secrets.enabled"),
 	prewalkEnabled: settingFlag("prewalk.enabled"),
+	newKeepsBackgroundEnabled: settingFlag("session.newKeepsBackground"),
+	composerPredictionsCustom: settingValue("composer.predictions.mode", v => v === "custom"),
 };
 
 /**

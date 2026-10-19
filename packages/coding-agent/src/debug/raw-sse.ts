@@ -5,7 +5,7 @@ import { parseSgrMouse } from "@veyyon/utils/mouse";
 import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth } from "@veyyon/utils/width";
 import { bottomBorder, divider, row, topBorder } from "../modes/terminal/components/chrome/overlay-box";
-import { theme } from "../theme/theme";
+import { theme } from "../theme/theme-binding";
 import { copyToClipboard } from "../utils/clipboard";
 import {
 	formatRawSseIsoTime,

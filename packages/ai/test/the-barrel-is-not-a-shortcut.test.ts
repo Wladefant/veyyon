@@ -276,17 +276,23 @@ describe("the modules that were repointed stay cut", () => {
 	 * from that owner. The leaf imports nothing, so no consumer gained an edge to a subsystem it did not
 	 * already reach.
 	 */
-		// Re-measured 2026-10-18: `apps/stats/src/db.ts` 128 -> 129 by the one module
-		// `packages/utils/src/interactive-host.ts`, extracted in
-		// `50bb33bcce5ef9dbf44d88a90bd89b3f8aa96e57`. The db reach already includes the utils barrel
-		// closure; `env.ts` re-exports this zero-import leaf, so the increase is one existing-path
-		// addition, not a new dependency subsystem. The extraction lets SQLite consumers read host
-		// configuration without pulling the full `env.ts` closure; the prompt-reach ledger records
-		// the same change.
+	/**
+	 * Re-measured 2026-10-13: `shared-llm.ts` 212 -> 213 by the one module `catalog/wire/kimi-code.ts`,
+	 * the Kimi Code region table. `catalog/compat/kimi.ts`, already on this reach, resolves a token's
+	 * deployment from it, and its only import is `@veyyon/utils/url`, already reached, so no consumer
+	 * gained an edge to a subsystem it did not already reach.
+	 */
+	/**
+	 * Re-measured 2026-10-15: `shared-llm.ts` 213 -> 214 by the one module
+	 * `ai/registry/oauth/token-response.ts`, the shared reader that requires a token endpoint's JSON to be
+	 * an object. `registry/oauth/nous-research.ts`, already on this reach, reads its token responses
+	 * through it; its imports are `@veyyon/utils/type-guards` and `ai/error`, both already reached, so no
+	 * consumer gained an edge to a subsystem it did not already reach.
+	 */
 	it.each([
 		// The ceilings below were raised by two to three on the santhreal/veyyon sync: `utils/src/log-file.ts`,
 		// `catalog/src/compat/share.ts` and the precompiled-prompt pair arrive with the upstream logger and prompt
-		["apps/stats/src/db.ts", 129],
+		// loader, on top of the fork's own graph. Growth from those named modules, not a new edge out of a cut.
 		// `agent/src/proxy.ts` 148 -> 150 on 2026-10-02, by exactly two modules: `catalog/src/types.ts` and
 		// `contracts/model/src/model.ts`. `catalog/models.ts` and `catalog/model-manager.ts`, both already on this
 		// reach, now import the value `modelKind` (chat versus runner rows) through `./types`, which was a type-only

@@ -1,9 +1,4 @@
 import { describe, expect, it } from "bun:test";
-import * as path from "node:path";
-import {
-	ANTIGRAVITY_PRIMARY_ENDPOINT as ANTIGRAVITY_PRIMARY_VIA_DISCOVERY,
-	ANTIGRAVITY_SANDBOX_ENDPOINT as ANTIGRAVITY_SANDBOX_VIA_DISCOVERY,
-} from "@veyyon/catalog/discovery/antigravity";
 import {
 	ANTHROPIC_API_ENDPOINT,
 	ANTIGRAVITY_ENDPOINTS,
@@ -18,23 +13,8 @@ import {
 	GITLAB_SAAS_URL,
 	OPENROUTER_API_ENDPOINT,
 } from "@veyyon/catalog/provider-endpoints";
-import { moduleSpecifiersIn, namedImportsFrom, withoutComments } from "@veyyon/utils/module-reach";
+import { moduleSpecifiersIn, withoutComments } from "@veyyon/utils/module-reach";
 import { collectPackageSourceFiles, memberFileOf, memberRelative } from "../../utils/test/support/package-sources";
-
-/**
- * The endpoint names a module takes from the owner, by either spelling of the specifier.
- *
- * Sources inside `@veyyon/catalog` reach it relatively; everything else reaches it by package
- * subpath, and a consumer is free to move between the two without changing what it depends on.
- */
-function importedEndpoints(source: string): string[] {
-	return [
-		...namedImportsFrom(source, "@veyyon/catalog/provider-endpoints"),
-		...namedImportsFrom(source, "../provider-endpoints"),
-		...namedImportsFrom(source, "../../provider-endpoints"),
-		...namedImportsFrom(source, "./provider-endpoints"),
-	];
-}
 
 /**
  * Google's Cloud Code Assist and Antigravity base URLs, and the one place they are written.
@@ -129,38 +109,6 @@ describe("the Antigravity fallback order", () => {
 	});
 });
 
-describe("catalog/discovery/antigravity re-exports rather than redeclaring", () => {
-	/**
-	 * `discovery/antigravity.ts` exported these two names before the owner existed, and a test and the
-	 * model-generation script import them from there. Turning those exports into re-exports keeps both
-	 * callers working while leaving one definition. `toBe` is the assertion that matters: an equal-looking
-	 * second literal would pass a `toEqual` and would be the duplicate this suite exists to prevent.
-	 */
-	it("hands back the owner's own values", () => {
-		expect(ANTIGRAVITY_PRIMARY_VIA_DISCOVERY).toBe(ANTIGRAVITY_PRIMARY_ENDPOINT);
-		expect(ANTIGRAVITY_SANDBOX_VIA_DISCOVERY).toBe(ANTIGRAVITY_SANDBOX_ENDPOINT);
-	});
-
-	/**
-	 * And the module really does re-export rather than assign, so there is nothing left to drift.
-	 *
-	 * Keyed on the DECLARATION form rather than on a formatted `export { ... } from "...";` line.
-	 * Both endpoints are strings, so a second identical literal is `===` the owner's and the
-	 * identity case above cannot see it; this is the half that can. Anchoring on the whole
-	 * re-export line instead would report the formatter's line wrapping rather than the code.
-	 */
-	it("declares neither endpoint, so both can only come from the owner", async () => {
-		const source = await Bun.file(path.resolve(import.meta.dir, "../src/discovery/antigravity.ts")).text();
-		const code = withoutComments(source);
-
-		for (const name of ["ANTIGRAVITY_PRIMARY_ENDPOINT", "ANTIGRAVITY_SANDBOX_ENDPOINT"]) {
-			expect(new RegExp(`(?:const|let|var)\\s+${name}\\b`).test(code), `${name} is declared here`).toBe(false);
-		}
-		expect(code).toMatch(/export\s*\{[^}]*ANTIGRAVITY_PRIMARY_ENDPOINT[^}]*\}\s*from\s*"\.\.\/provider-endpoints"/);
-		expect(code).toMatch(/export\s*\{[^}]*ANTIGRAVITY_SANDBOX_ENDPOINT[^}]*\}\s*from\s*"\.\.\/provider-endpoints"/);
-	});
-});
-
 describe("GitLab's SaaS instance", () => {
 	/**
 	 * The default when no self-managed instance URL is configured. GitLab is the provider most likely to be
@@ -179,29 +127,6 @@ describe("GitLab's SaaS instance", () => {
 		expect(new URL(GITLAB_SAAS_URL).pathname).toBe("/");
 		expect(GITLAB_SAAS_URL.endsWith("/")).toBeFalse();
 		expect(new URL(GITLAB_SAAS_URL).protocol).toBe("https:");
-	});
-
-	/**
-	 * Five modules across two packages each declared this under one of three names (`GITLAB_COM_URL` three
-	 * times, `GITLAB_DEFAULT_BASE_URL`, `DEFAULT_GITLAB_BASE_URL`). Three names for one value is worse than
-	 * three copies of one name: a grep for either of the others finds nothing, so a reader has no way to know
-	 * the value is shared at all.
-	 */
-	it("is the value all five former declarers now use", async () => {
-		const packagesDir = path.resolve(import.meta.dir, "../..");
-		for (const file of [
-			"catalog/src/discovery/gitlab-duo-workflow.ts",
-			"ai/src/providers/gitlab-duo.ts",
-			"ai/src/providers/gitlab-duo-workflow.ts",
-			"ai/src/registry/oauth/gitlab-duo.ts",
-			"ai/src/registry/oauth/gitlab-duo-workflow.ts",
-		]) {
-			const text = await Bun.file(path.join(packagesDir, file)).text();
-			expect(text).toContain("GITLAB_SAAS_URL");
-			expect(text).not.toContain("GITLAB_COM_URL");
-			expect(text).not.toContain("GITLAB_DEFAULT_BASE_URL");
-			expect(text).not.toContain("DEFAULT_GITLAB_BASE_URL");
-		}
 	});
 });
 
@@ -243,28 +168,6 @@ describe("Devin's three hosts", () => {
 			expect(new URL(host).pathname, host).toBe("/");
 			expect(host.endsWith("/"), host).toBeFalse();
 			expect(new URL(host).protocol, host).toBe("https:");
-		}
-	});
-
-	/**
-	 * The ratchet on the retired name, across all three former declarers. The chat host had a THIRD declaration
-	 * in `catalog/src/discovery/devin.ts` under yet another name, `DEVIN_DEFAULT_BASE_URL`, so that spelling is
-	 * checked too.
-	 */
-	it("has every former declarer using the named hosts", async () => {
-		const packagesDir = path.resolve(import.meta.dir, "../..");
-		const expectations: Array<[string, string]> = [
-			["catalog/src/discovery/devin.ts", "DEVIN_CASCADE_ENDPOINT"],
-			["ai/src/providers/devin.ts", "DEVIN_CASCADE_ENDPOINT"],
-			["ai/src/registry/oauth/devin.ts", "DEVIN_AUTH_ENDPOINT"],
-		];
-		for (const [file, expected] of expectations) {
-			const text = await Bun.file(path.join(packagesDir, file)).text();
-			// One assertion for both halves. TypeScript refuses a module that both imports a binding
-			// and declares it, so "imports DEVIN_CASCADE_ENDPOINT from the owner" IS "keeps no private
-			// copy under any name" -- including the two retired spellings this used to chase by regex,
-			// and the third one nobody thought to add.
-			expect(importedEndpoints(text), file).toContain(expected);
 		}
 	});
 });
@@ -316,39 +219,10 @@ describe("Gemini, Anthropic and Cursor", () => {
 		expect(new URL(CURSOR_API_ENDPOINT).pathname).toBe("/");
 	});
 
-	/**
-	 * `@veyyon/ai` publishes this host as `CURSOR_API_URL`, so the two names must be the same string. It is a
-	 * re-export of the owner rather than a second declaration, and this is what pins that.
-	 */
-	it("keeps the ai package's published Cursor name pointing here", async () => {
-		const { CURSOR_API_URL } = await import("@veyyon/ai/providers/cursor");
-		expect(CURSOR_API_URL).toBe(CURSOR_API_ENDPOINT);
-	});
-
 	/** All three are https, since a plaintext fallback would send a credential in the clear. */
 	it("serves every host over https", () => {
 		for (const endpoint of [GEMINI_DEVELOPER_API_ENDPOINT, ANTHROPIC_API_ENDPOINT, CURSOR_API_ENDPOINT]) {
 			expect(new URL(endpoint).protocol, endpoint).toBe("https:");
-		}
-	});
-
-	/** The positive half: each former declarer takes its host from the owner. */
-	it("has every former declarer importing its host", async () => {
-		const expected: ReadonlyArray<[string, string]> = [
-			["ai/src/providers/google.ts", "GEMINI_DEVELOPER_API_ENDPOINT"],
-			["catalog/src/discovery/gemini.ts", "GEMINI_DEVELOPER_API_ENDPOINT"],
-			["coding-agent/src/tools/web/search/providers/gemini.ts", "GEMINI_DEVELOPER_API_ENDPOINT"],
-			["ai/src/utils/anthropic-auth.ts", "ANTHROPIC_API_ENDPOINT"],
-			["ai/src/providers/anthropic.ts", "ANTHROPIC_API_ENDPOINT"],
-			["ai/src/providers/anthropic-client.ts", "ANTHROPIC_API_ENDPOINT"],
-			["catalog/src/compat/anthropic.ts", "ANTHROPIC_API_ENDPOINT"],
-			["catalog/src/discovery/cursor.ts", "CURSOR_API_ENDPOINT"],
-			["ai/src/usage/cursor.ts", "CURSOR_API_ENDPOINT"],
-			["ai/src/providers/cursor.ts", "CURSOR_API_ENDPOINT"],
-		];
-		for (const [file, symbol] of expected) {
-			const text = await Bun.file(memberFileOf(file)).text();
-			expect(importedEndpoints(text), file).toContain(symbol);
 		}
 	});
 });
@@ -360,29 +234,10 @@ describe("OpenRouter's API base", () => {
 		expect(OPENROUTER_API_ENDPOINT.endsWith("/v1")).toBeTrue();
 	});
 
-	/**
-	 * The name of the environment variable that OVERRIDES this value is `OPENROUTER_BASE_URL`, and two of the
-	 * four modules that used to spell the URL called their constant the same thing. That is why the default now
-	 * comes from one place: a reader could not tell the configured value from the fallback by name.
-	 */
-	it("is what @veyyon/mnemopi and the search provider fall back to", async () => {
-		for (const file of [
-			"plugins/mnemopi/src/config.ts",
-			"plugins/mnemopi/src/core/embeddings.ts",
-			"plugins/mnemopi/src/core/extraction/client.ts",
-			"coding-agent/src/tools/web/search/providers/perplexity-auth.ts",
-		]) {
-			const text = await Bun.file(memberFileOf(file)).text();
-			expect(importedEndpoints(text), file).toContain("OPENROUTER_API_ENDPOINT");
-		}
-	});
-
-	/** Both published names still resolve to the one value, since callers already import them. */
-	it("keeps both published aliases pointing here", async () => {
+	/** mnemopi publishes its embedding default under its own name, and that name resolves to this value. */
+	it("keeps mnemopi's published embedding default pointing here", async () => {
 		const { DEFAULT_EMBEDDING_API_URL } = await import("@veyyon/mnemopi/config");
-		const { OPENROUTER_BASE_URL } = await import("@veyyon/coding-agent/tools/web/search/providers/perplexity-auth");
 		expect(DEFAULT_EMBEDDING_API_URL).toBe(OPENROUTER_API_ENDPOINT);
-		expect(OPENROUTER_BASE_URL).toBe(OPENROUTER_API_ENDPOINT);
 	});
 });
 
@@ -417,8 +272,25 @@ describe("the hosts have one owner", () => {
 	const DATA_FILES = new Set([
 		"catalog/src/models.json",
 		"catalog/src/provider-models/openai-compat.ts",
+		// A site scraper addresses the public site it reads, not a provider API, and `@veyyon/web`
+		// imports nothing that owns provider hosts.
+		"plugins/web/src/scrapers/gitlab.ts",
 		"tests/simulations/src/cache-sim/harness.ts",
 	]);
+
+	/**
+	 * Every spelling of an owned endpoint in code: a quoted origin, an origin with a path appended in the
+	 * literal (`"https://api2.cursor.sh/auth/poll"`), and a template literal that interpolates the rest. A
+	 * host followed by another host character is a different host (`api.anthropic.com.evil.com`), and
+	 * `https://openrouter.ai/keys` is the provider's website rather than the API base, so neither counts.
+	 */
+	const OWNED_ENDPOINT = new RegExp(
+		`(?:${[...HOSTS.map(host => `https://${host}`), ...PATH_ENDPOINTS].map(url => url.replaceAll(".", "\\.")).join("|")})(?![\\w.-])`,
+	);
+
+	function namesAnOwnedEndpoint(source: string): boolean {
+		return OWNED_ENDPOINT.test(withoutComments(source));
+	}
 
 	/** Every member's shipped `src`, keyed the way an allow-list above is written. */
 	async function shippedSources(): Promise<Array<{ file: string; text: string }>> {
@@ -430,12 +302,28 @@ describe("the hosts have one owner", () => {
 	}
 
 	async function sourcesNamingAHost(): Promise<Array<{ file: string; text: string }>> {
-		return (await shippedSources()).filter(
-			entry =>
-				HOSTS.some(host => entry.text.includes(`"https://${host}"`)) ||
-				PATH_ENDPOINTS.some(endpoint => entry.text.includes(`"${endpoint}"`)),
-		);
+		return (await shippedSources()).filter(entry => namesAnOwnedEndpoint(entry.text));
 	}
+
+	/**
+	 * The spellings the ratchet below has to see. A module that wrote `https://openrouter.ai/api/v1/chat/completions`
+	 * or built a Gemini URL in a template literal held a second copy of the base while every quoted-origin
+	 * check passed; both forms shipped until this matcher replaced the quoted-origin one.
+	 */
+	it("recognises an owned endpoint however a module spells the URL", () => {
+		expect(namesAnOwnedEndpoint('const BASE = "https://api.anthropic.com";')).toBeTrue();
+		expect(namesAnOwnedEndpoint('const TOKEN_URL = "https://api.anthropic.com/v1/oauth/token";')).toBeTrue();
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: quoted TypeScript source whose template literal interpolates `id`
+		expect(namesAnOwnedEndpoint("fetch(`https://api2.cursor.sh/auth/poll?id=${id}`);")).toBeTrue();
+		expect(namesAnOwnedEndpoint('fetch("https://openrouter.ai/api/v1/chat/completions");')).toBeTrue();
+		expect(
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: quoted TypeScript source whose template literal interpolates `model`
+			namesAnOwnedEndpoint("`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`"),
+		).toBeTrue();
+		expect(namesAnOwnedEndpoint('const SITE = "https://openrouter.ai/keys";')).toBeFalse();
+		expect(namesAnOwnedEndpoint('const LOOKALIKE = "https://api.anthropic.com.evil.com";')).toBeFalse();
+		expect(namesAnOwnedEndpoint("// see https://api.anthropic.com/v1/messages\nconst x = 1;")).toBeFalse();
+	});
 
 	/**
 	 * The ratchet. Ten modules held a literal before the owner existed, and the reason they did was that the
@@ -462,34 +350,6 @@ describe("the hosts have one owner", () => {
 		const owner = await Bun.file(memberFileOf(OWNER)).text();
 		for (const host of HOSTS) expect(owner).toContain(`"https://${host}"`);
 		for (const endpoint of PATH_ENDPOINTS) expect(owner).toContain(`"${endpoint}"`);
-	});
-
-	/**
-	 * The modules that used to declare a host now import one. A module that had quietly gone back to a
-	 * literal would still pass the case above if the literal were spelled differently, so this asserts the
-	 * positive: each former declarer takes its host from the owner.
-	 */
-	it("has every former declarer importing from the owner", async () => {
-		const formerDeclarers = [
-			"catalog/src/provider-models/google.ts",
-			"ai/src/providers/google-gemini-cli.ts",
-			"ai/src/usage/gemini.ts",
-			"ai/src/usage/google-antigravity.ts",
-			"ai/src/registry/oauth/google-antigravity.ts",
-			"ai/src/registry/oauth/google-gemini-cli.ts",
-			"coding-agent/src/tools/web/search/providers/gemini.ts",
-			"coding-agent/src/tools/web/image-gen.ts",
-			"coding-agent/src/session/runtime/provider-usage.ts",
-			"catalog/src/discovery/gitlab-duo-workflow.ts",
-			"ai/src/providers/gitlab-duo.ts",
-			"ai/src/providers/gitlab-duo-workflow.ts",
-			"ai/src/registry/oauth/gitlab-duo.ts",
-			"ai/src/registry/oauth/gitlab-duo-workflow.ts",
-		];
-		for (const file of formerDeclarers) {
-			const text = await Bun.file(memberFileOf(file)).text();
-			expect(text).toMatch(/from "(?:@veyyon\/catalog|\.\.)\/provider-endpoints";/);
-		}
 	});
 
 	/**

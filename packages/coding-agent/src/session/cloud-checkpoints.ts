@@ -1,27 +1,32 @@
+import { isCheckpointNodeLabel } from "@veyyon/session/checkpoint-ownership";
 import { createHash, randomUUID } from "node:crypto";
-import { lazy } from "@veyyon/utils/abortable";
 import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import type { NativeCheckpointBundle } from "./native-recovery";
 
 export type CheckpointBundle = NativeCheckpointBundle;
-const checkpointBundle = lazy(() =>
-	type({
-		version: "1",
-		native: { sessionId: "string", header: "Record<string, unknown>", sessionFile: "string", "forkedFrom?": "string" },
-		journal: { path: "string", bytes: "string" },
-		artifacts: "Record<string, string>",
-		blobs: "Record<string, string>",
-		workspace: { dirty: "string[]", files: [{ path: "string", bytes: "string" }, "[]"] },
-		pins: { bun: "string", commit: "string", runtime: "string" },
-	}),
-);
+const checkpointBundle = type({
+	version: "1",
+	native: { sessionId: "string", header: "Record<string, unknown>", sessionFile: "string", "forkedFrom?": "string" },
+	journal: { path: "string", bytes: "string" },
+	artifacts: "Record<string, string>",
+	blobs: "Record<string, string>",
+	workspace: { dirty: "string[]", files: [{ path: "string", bytes: "string" }, "[]"] },
+	pins: { bun: "string", commit: "string", runtime: "string" },
+	"handoff?": { targetNode: "string", claimToken: "string", transferId: "string", epoch: "number" },
+});
 export interface CheckpointLease {
 	ownerNode: string;
 	epoch: number;
 	expiresAt: string;
 	headSequence: number;
 	manifestHash: string;
+	targetNode?: string;
+	transferId?: string;
+}
+export interface CheckpointClaim {
+	lease: CheckpointLease;
+	resumeToken: string;
 }
 export interface CheckpointFile {
 	path: string;
@@ -65,7 +70,7 @@ export async function decryptCheckpointBundle(
 		cryptoKey,
 		bytes.subarray(13),
 	);
-	return checkpointBundle.value.assert(JSON.parse(new TextDecoder().decode(plain)));
+	return checkpointBundle.assert(JSON.parse(new TextDecoder().decode(plain)));
 }
 export type CheckpointFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 export interface CheckpointClientOptions {
@@ -117,6 +122,7 @@ export class CheckpointClient {
 		return (await response.json()) as T;
 	}
 	async acquireLease(sessionId: string, ownerNode: string): Promise<CheckpointLease> {
+		if (!isCheckpointNodeLabel(ownerNode)) throw new Error("A valid checkpoint owner label is required");
 		const lease = await this.#request<CheckpointLease>(`/v1/sessions/${encodeURIComponent(sessionId)}/lease`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
@@ -125,6 +131,120 @@ export class CheckpointClient {
 		this.#leases.set(sessionId, lease);
 		this.#lost.delete(sessionId);
 		return lease;
+	}
+	async #redeemTransfer(
+		sessionId: string,
+		targetNode: string,
+		transferId: string,
+		credential: { claimToken: string } | { resumeToken: string },
+		transferEpoch: number,
+		runtimeOwner: string,
+	): Promise<CheckpointClaim> {
+		if (!isCheckpointNodeLabel(targetNode) || !isCheckpointNodeLabel(runtimeOwner))
+			throw new Error("A valid checkpoint node label is required");
+		const result = await this.#request<CheckpointLease & { resumeToken: string }>(
+			`/v1/sessions/${encodeURIComponent(sessionId)}/claim`,
+			{
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					targetNode,
+					transferId,
+					...credential,
+					epoch: transferEpoch,
+					ownerNode: runtimeOwner,
+				}),
+			},
+		);
+		if (typeof result.resumeToken !== "string" || result.resumeToken.length < 16)
+			throw new Error("Checkpoint authority did not issue a valid resume capability");
+		const { resumeToken, ...lease } = result;
+		this.#leases.set(sessionId, lease);
+		this.#lost.delete(sessionId);
+		return { lease, resumeToken };
+	}
+	async claimTransfer(
+		sessionId: string,
+		targetNode: string,
+		transferId: string,
+		claimToken: string,
+		transferEpoch: number,
+		runtimeOwner: string,
+	): Promise<CheckpointClaim> {
+		return this.#redeemTransfer(sessionId, targetNode, transferId, { claimToken }, transferEpoch, runtimeOwner);
+	}
+	async resumeTransfer(
+		sessionId: string,
+		targetNode: string,
+		transferId: string,
+		resumeToken: string,
+		transferEpoch: number,
+		runtimeOwner: string,
+	): Promise<CheckpointClaim> {
+		return this.#redeemTransfer(sessionId, targetNode, transferId, { resumeToken }, transferEpoch, runtimeOwner);
+	}
+	async finalizeTransfer(
+		sessionId: string,
+		targetNode: string,
+		transferId: string,
+		transferEpoch: number,
+		leaseEpoch: number,
+		resumeToken: string,
+	): Promise<void> {
+		const lease = this.#leases.get(sessionId);
+		if (!lease || this.#lost.has(sessionId) || lease.epoch !== leaseEpoch)
+			throw new Error("Checkpoint lease required to finalize resume capability");
+		await this.#request(`/v1/sessions/${encodeURIComponent(sessionId)}/finalize`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				ownerNode: lease.ownerNode,
+				targetNode,
+				transferId,
+				epoch: transferEpoch,
+				leaseEpoch,
+				resumeToken,
+			}),
+		});
+	}
+	async transferLease(
+		sessionId: string,
+		targetNode: string,
+		claimToken: string,
+		transferId: string,
+		source?: { ownerNode: string; epoch: number },
+	): Promise<CheckpointLease> {
+		const lease = this.#leases.get(sessionId);
+		if ((!lease || this.#lost.has(sessionId)) && !source) throw new Error("Checkpoint lease required for transfer");
+		const ownerNode = lease && !this.#lost.has(sessionId) ? lease.ownerNode : source!.ownerNode;
+		const epoch = lease && !this.#lost.has(sessionId) ? lease.epoch : source!.epoch;
+		if (!isCheckpointNodeLabel(targetNode)) throw new Error("A valid target node is required");
+		if (!claimToken || claimToken.length < 16 || claimToken.length > 128) throw new Error("A valid transfer claim token is required");
+		if (!isCheckpointNodeLabel(ownerNode)) throw new Error("A valid source node is required");
+		const path = `/v1/sessions/${encodeURIComponent(sessionId)}/transfer`;
+		const init: RequestInit = {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				ownerNode,
+				epoch,
+				targetNode,
+				claimToken,
+				transferId,
+			}),
+		};
+		let next: CheckpointLease;
+		try {
+			next = await this.#request<CheckpointLease>(path, init);
+		} catch (firstError) {
+			try {
+				next = await this.#request<CheckpointLease>(path, init);
+			} catch {
+				throw firstError;
+			}
+		}
+		this.loseLease(sessionId);
+		return next;
 	}
 	async head(sessionId: string): Promise<{
 		sequence: number;
@@ -149,16 +269,17 @@ export class CheckpointClient {
 			throw error;
 		}
 	}
-	async releaseLease(sessionId: string): Promise<void> {
+	async releaseLease(sessionId: string): Promise<CheckpointLease | undefined> {
 		const lease = this.#leases.get(sessionId);
-		if (!lease) return;
-		await this.#request(`/v1/sessions/${encodeURIComponent(sessionId)}/release`, {
+		if (!lease) return undefined;
+		const released = await this.#request<CheckpointLease>(`/v1/sessions/${encodeURIComponent(sessionId)}/release`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ ownerNode: lease.ownerNode, epoch: lease.epoch }),
 		});
 		this.#leases.delete(sessionId);
 		this.#lost.add(sessionId);
+		return released;
 	}
 	loseLease(sessionId: string): void {
 		this.#leases.delete(sessionId);

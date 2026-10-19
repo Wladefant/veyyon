@@ -202,7 +202,7 @@ export async function startSessionMCP(inputs: SessionMCPStartupInputs): Promise<
 		// Always filter Exa - we have native integration
 		filterExa: true,
 		// Filter browser MCP servers when builtin browser tool is active
-		filterBrowser: settings.get("browser.enabled") ?? false,
+		filterBrowser: settings.get("browser.enabled"),
 		agentDir: inputs.agentDir,
 	};
 	const cacheStorage = AgentStorage.forAgentDir(settings.getAgentDir());

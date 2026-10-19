@@ -14,6 +14,7 @@ import { isFireworksFastModelId, toFireworksBaseModelId } from "@veyyon/catalog/
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import { EPHEMERAL_MODEL_CHANGE_ROLE } from "@veyyon/kernel/session/session-entries";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { normalizeModelPatternList } from "../../config/model-pattern-list";
 import type { ModelRegistry } from "../../config/model-registry";
 import { formatModelStringWithRouting, resolveModelOverride } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
@@ -26,8 +27,8 @@ import {
 	type RetryFallbackChainSource,
 	type RetryFallbackRevertPolicy,
 	type RetryFallbackSelector,
-	resolveRetryFallbackRole,
-	retryFallbackChainsForRoles,
+	resolveRetryFallbackKey,
+	sanitizeRetryFallbackChains,
 } from "../agent-session-retry-fallback";
 import type { AgentSessionEvent } from "../agent-session-types";
 import { hasReplayUnsafeToolOutput, isClassifierRefusal } from "../failed-turn";
@@ -78,15 +79,12 @@ export class RetryFallback {
 		this.#activeFallback = undefined;
 	}
 
-	/** What chain resolution reads, as of this call: the sanitized chains, role assignments and active model. */
+	/** What chain resolution reads, as of this call: the sanitized chains, the default model and the active model. */
 	#source(): RetryFallbackChainSource {
 		const settings = this.#session.settings;
 		return {
-			chains: retryFallbackChainsForRoles(
-				settings.get("retry.fallbackChains"),
-				Object.keys(settings.getModelRoles()),
-			),
-			modelRole: role => settings.getModelRole(role),
+			chains: sanitizeRetryFallbackChains(settings.get("retry.fallbackChains")),
+			defaultModel: () => normalizeModelPatternList(settings.get("defaultModel"))[0],
 			models: this.#session.modelRegistry,
 			activeModel: this.#session.model,
 		};
@@ -166,7 +164,7 @@ export class RetryFallback {
 
 	async tryChain(currentSelector: string, options?: { pinFallback?: boolean }): Promise<boolean> {
 		const source = this.#source();
-		const role = this.#activeFallback?.role ?? resolveRetryFallbackRole(source, currentSelector);
+		const role = this.#activeFallback?.role ?? resolveRetryFallbackKey(source, currentSelector);
 		if (!role) return false;
 
 		for (const selector of findRetryFallbackCandidates(source, role, currentSelector)) {
@@ -235,7 +233,7 @@ export class RetryFallback {
 		if (hasReplayUnsafeToolOutput(message, this.#session.agent.state.messages)) return false;
 		const currentSelector = formatRetryFallbackSelector(model, this.#session.thinkingLevel);
 		const source = this.#source();
-		const role = this.#activeFallback?.role ?? resolveRetryFallbackRole(source, currentSelector);
+		const role = this.#activeFallback?.role ?? resolveRetryFallbackKey(source, currentSelector);
 		if (!role) return false;
 		return findRetryFallbackCandidates(source, role, currentSelector).length > 0;
 	}

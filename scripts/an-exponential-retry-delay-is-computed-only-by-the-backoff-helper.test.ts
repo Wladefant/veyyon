@@ -41,6 +41,9 @@ const NOT_A_DELAY: Readonly<Record<string, string>> = {
 	"plugins/mnemopi/src/core/binary-vectors.ts: 0xff << (BITS_PER_BYTE - remainingBits)":
 		"masks the valid high bits of a packed binary vector's last byte",
 	"plugins/mnemopi/src/core/binary-vectors.ts: 1 << (7 - (i & 7))": "sets one bit of a packed binary vector",
+	"packages/utils/src/levenshtein.ts: 1 << ((m - 1) & 31)":
+		"selects the last pattern row's bit in the bit-parallel edit distance",
+	"packages/utils/src/levenshtein.ts: 1 << (i & 31)": "sets a pattern row's bit in the bit-parallel edit distance",
 };
 
 /** A name that reads as a time to wait. Matched against the last segment of the doubled operand. */

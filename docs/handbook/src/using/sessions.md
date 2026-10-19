@@ -178,6 +178,47 @@ Recalling a queued follow-up is a TUI-local action (`Esc` or the dequeue chord);
 RPC protocol has no recall command. An empty follow-up is a no-op in the TUI, and `/queue` with no
 text shows a usage warning.
 
+## Composer predictions
+
+With composer predictions on, after each finished turn a prediction of the message you are likely
+to send next is shown as dim text in the empty composer, followed by `· tab to accept`, which shows
+the key bound to `tui.input.tab`. `Tab` inserts the prediction for editing; `Enter` then sends it.
+Typing dismisses the prediction and its hint, and a new turn, a session switch or compaction clears
+them. On a row too narrow for both, the prediction is shortened to keep the hint, and the hint is
+dropped when the prediction would get fewer cells than the hint. No prediction is requested after
+an aborted or failed turn, or while the composer holds text. A prediction reads the conversation
+and writes nothing to the session.
+
+`composer.predictions.mode` selects which model writes the prediction. The default is `off`, so no
+prediction request is sent until you choose another mode.
+
+- `off` (default) requests no predictions. A stored `off` is never changed by connecting an
+  account; the mode stays off until you choose another one.
+- `chatgpt-pro` uses the ChatGPT Codex prediction service, and only with a ChatGPT Pro
+  plan OpenAI Codex login, read from the login's access token. Any stored Codex account on the Pro
+  plan qualifies, the one the session is routed to first, then `OPENAI_CODEX_OAUTH_TOKEN`. The
+  request is sent with that login's own token, never with an account the session's routing would
+  move to. The service supplies the prompt and reasoning effort and lists the models it serves no
+  predictions for. The request goes to GPT-6 Astra or GPT-6.1 Sol, the models OpenAI supports for
+  predictions, preferring the session's model when it is one of them, and is sent as an ephemeral
+  fork of the session's thread. OpenAI states that predictions in its Codex app use no Codex usage
+  limits or credits during the beta. That statement does not cover Veyyon: each prediction is a
+  request on the Pro account and may count against its usage limits. Without a Pro-plan Codex
+  login, or when `--api-key` or a `models.yml` `apiKey` replaces the Codex logins, no request is
+  sent and no warning is shown. In `/settings` the row then reads `Off (no ChatGPT Pro account)`,
+  and the option is greyed out and cannot be chosen until a ChatGPT Pro account is connected.
+- `custom` sends a built-in prompt to the models in `composer.predictions.model`, chosen from every
+  provider in the settings model picker. The first one with credentials writes the prediction; a
+  `:level` suffix sets its thinking level. Unset, the session's model writes it. When no listed
+  model is usable, the reason is shown once as a warning.
+
+```yaml
+composer:
+  predictions:
+    mode: custom
+    model: [anthropic/claude-sonnet-4-5, openai/gpt-5.5:low]
+```
+
 ## Next
 
 Read [Examples](./examples.md) for concrete prompts and workflows.

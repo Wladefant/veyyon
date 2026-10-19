@@ -1,11 +1,13 @@
 import { instrumentedCompleteSimple, resolveTelemetry } from "@veyyon/agent-core";
-import type { ApiKey, Context, Tool } from "@veyyon/ai";
+import type { Context, Tool } from "@veyyon/ai";
 import { isRecord, prompt, Snowflake } from "@veyyon/utils";
 import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit/utils";
+import { refreshAfterEachApiKeyResolution } from "../config/api-key-resolver";
 import { missingCredentialsMessage } from "../config/missing-credentials";
 import { goalsPrompts } from "../prompts/goals/rows";
 import { mapJsonStrings } from "../secrets/obfuscator";
 import type { AgentSession } from "../session/agent-session";
+import { helperSettingPath } from "../task/helper-settings";
 import { concreteThinkingLevel, shouldDisableReasoning, toReasoningEffort } from "../thinking";
 
 const RESPOND_TOOL_NAME = "respond";
@@ -82,35 +84,17 @@ function parseToolArguments(value: unknown): unknown {
 	return typeof value === "string" ? parseJsonPayload(value) : value;
 }
 
-function refreshGuidedContextForApiKey(apiKey: ApiKey, refresh: () => void): ApiKey {
-	// Static credentials still use the same builder. Resolver-backed credentials rebuild after
-	// every awaited resolution, including the credential selected for an authentication retry.
-	refresh();
-	if (typeof apiKey === "string") return apiKey;
-	return async context => {
-		const resolved = await apiKey(context);
-		refresh();
-		return resolved;
-	};
-}
-
 export async function runGuidedGoalTurn(
 	session: AgentSession,
 	options: GuidedGoalTurnOptions,
 ): Promise<GuidedGoalTurnResult> {
-	const plan = session.resolveRoleModelWithThinking("plan");
-	const slow = plan.model ? plan : session.resolveRoleModelWithThinking("slow");
-	const resolved = slow.model
-		? slow
-		: {
-				model: session.model,
-				thinkingLevel: session.thinkingLevel,
-				explicitThinkingLevel: false,
-				warning: undefined,
-			};
-	if (!resolved.model) {
-		throw new Error("No plan, slow, or current session model is available for /guided-goal.");
+	const plan = session.resolveHelperModel("plan");
+	if (!plan) {
+		throw new Error(
+			`No model is available for /guided-goal: ${helperSettingPath("plan", "model")} matches no available model, or no session model is set.`,
+		);
 	}
+	const resolved = { model: plan.model, thinkingLevel: plan.thinkingLevel ?? session.thinkingLevel };
 
 	let apiKey: string | undefined;
 	try {
@@ -146,7 +130,7 @@ export async function runGuidedGoalTurn(
 		resolved.model,
 		providerContext,
 		{
-			apiKey: refreshGuidedContextForApiKey(
+			apiKey: refreshAfterEachApiKeyResolution(
 				session.modelRegistry.resolver(resolved.model, session.sessionId),
 				refreshProviderContext,
 			),

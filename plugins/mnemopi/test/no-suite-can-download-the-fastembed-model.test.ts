@@ -61,7 +61,7 @@ describe("the fastembed download door", () => {
 	// them. A bare "not allowed" sends them to git history, which is the failure
 	// mode this whole change is about.
 	test("says how to run a suite that genuinely needs the weights", () => {
-		expect(FASTEMBED_MODEL_TRIPWIRE_MESSAGE).toContain("setLocalModelInitializerForTests");
+		expect(FASTEMBED_MODEL_TRIPWIRE_MESSAGE).toContain("setLocalModelInitializer)");
 		expect(FASTEMBED_MODEL_TRIPWIRE_MESSAGE).toContain("MNEMOPI_ALLOW_FASTEMBED_MODEL=1");
 	});
 });
