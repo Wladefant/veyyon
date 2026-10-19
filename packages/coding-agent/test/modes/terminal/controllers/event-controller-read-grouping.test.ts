@@ -11,6 +11,8 @@
  * Regression: every completion used to reset the active group at `message_start`,
  * so consecutive single-read completions never grouped (each rendered as its own
  * one-entry block).
+ *
+ * Subject: `modes/terminal/controllers/tool-call-cards.ts`, driven through `EventController`.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@veyyon/ai";

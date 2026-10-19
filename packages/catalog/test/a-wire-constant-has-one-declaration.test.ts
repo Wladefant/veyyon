@@ -35,7 +35,7 @@ import { describe, expect, it } from "bun:test";
 import type { Dirent } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import * as path from "node:path";
-import { moduleSpecifiersIn } from "@veyyon/utils/module-reach";
+import { namedImportsFrom } from "@veyyon/utils/module-reach";
 import { FETCH_AVAILABLE_MODELS_PATH } from "../src/discovery/antigravity";
 import {
 	DEVIN_EXTENSION_NAME,
@@ -141,9 +141,9 @@ describe("Devin's client identity", () => {
 	it("is the same value the ai provider sends", async () => {
 		const provider = await readFile(path.join(PACKAGES, "ai", "src", "providers", "devin.ts"), "utf8");
 
-		expect(provider).toContain("DEVIN_IDE_NAME,");
-		expect(provider).toContain("DEVIN_IDE_VERSION,");
-		expect(moduleSpecifiersIn(provider)).toContain("@veyyon/catalog/discovery/devin");
+		const imported = namedImportsFrom(provider, "@veyyon/catalog/discovery/devin");
+		expect(imported).toContain("DEVIN_IDE_NAME");
+		expect(imported).toContain("DEVIN_IDE_VERSION");
 	});
 });
 
@@ -162,9 +162,7 @@ describe("Antigravity's fetchAvailableModels path", () => {
 	it("is imported by the ai usage reader", async () => {
 		const usage = await readFile(path.join(PACKAGES, "ai", "src", "usage", "google-antigravity.ts"), "utf8");
 
-		expect(usage).toMatch(
-			/import\s*\{[^}]*\bFETCH_AVAILABLE_MODELS_PATH\b[^}]*\}\s*from\s*["']@veyyon\/catalog\/discovery\/antigravity["']/,
-		);
+		expect(namedImportsFrom(usage, "@veyyon/catalog/discovery/antigravity")).toContain("FETCH_AVAILABLE_MODELS_PATH");
 	});
 });
 
@@ -189,8 +187,7 @@ describe("the Codex base URL", () => {
 			"utf8",
 		);
 
-		expect(provider).toContain("CODEX_BASE_URL,");
-		expect(moduleSpecifiersIn(provider)).toContain("@veyyon/catalog/wire/codex");
+		expect(namedImportsFrom(provider, "@veyyon/catalog/wire/codex")).toContain("CODEX_BASE_URL");
 	});
 
 	/**

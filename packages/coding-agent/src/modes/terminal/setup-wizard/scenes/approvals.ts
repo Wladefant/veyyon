@@ -1,7 +1,7 @@
 import type { SelectItem, SelectList } from "@veyyon/tui";
 import { routeSelectListMouse, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { normalizeApprovalMode } from "../../../../tools/core/approval";
 import { AUTONOMY_LABEL, type AutonomyLevel } from "../../../../tools/core/approval-modes";
 import type { SetupKeyHint, SetupScene, SetupSceneController, SetupSceneHost } from "./types";

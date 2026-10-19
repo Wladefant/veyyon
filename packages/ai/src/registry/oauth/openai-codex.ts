@@ -9,6 +9,7 @@ import type { FetchImpl } from "../../types";
 import { isRecord } from "@veyyon/utils/type-guards";
 import { OAuthCallbackFlow, type OAuthCallbackFlowOptions } from "./callback-server";
 import { generatePKCE } from "./pkce";
+import { requireTokenResponseObject } from "./token-response";
 import type { OAuthController, OAuthCredentials } from "./types";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -157,11 +158,11 @@ export async function exchangeCodeForToken(
 			);
 		}
 
-		return (await tokenResponse.json()) as {
+		return requireTokenResponseObject<{
 			access_token?: string;
 			refresh_token?: string;
 			expires_in?: number;
-		};
+		}>(await tokenResponse.json(), "openai-codex", "token exchange");
 	});
 
 	if (!tokenData.access_token || !tokenData.refresh_token || typeof tokenData.expires_in !== "number") {
@@ -308,12 +309,16 @@ export async function loginOpenAICodexDevice(ctrl: OAuthController): Promise<OAu
 }
 
 /**
- * Refresh OpenAI Codex OAuth token
+ * Refresh OpenAI Codex OAuth token. `signal` aborts the token request.
  */
-export async function refreshOpenAICodexToken(refreshToken: string): Promise<OAuthCredentials> {
+export async function refreshOpenAICodexToken(
+	refreshToken: string,
+	callerSignal?: AbortSignal,
+): Promise<OAuthCredentials> {
 	// The fence spans the body read and its timer is cleared on settle
 	// (a bare AbortSignal.timeout stays armed for the full timeout).
-	const tokenData = await withScopedTimeoutSignal(TOKEN_REQUEST_TIMEOUT_MS, async signal => {
+	const tokenData = await withScopedTimeoutSignal(TOKEN_REQUEST_TIMEOUT_MS, async scopedSignal => {
+		const signal = callerSignal ? AbortSignal.any([scopedSignal, callerSignal]) : scopedSignal;
 		const response = await fetch(TOKEN_URL, {
 			method: "POST",
 			headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -333,11 +338,11 @@ export async function refreshOpenAICodexToken(refreshToken: string): Promise<OAu
 			);
 		}
 
-		return (await response.json()) as {
+		return requireTokenResponseObject<{
 			access_token?: string;
 			refresh_token?: string;
 			expires_in?: number;
-		};
+		}>(await response.json(), "openai-codex", "token refresh");
 	});
 
 	if (!tokenData.access_token || !tokenData.refresh_token || typeof tokenData.expires_in !== "number") {

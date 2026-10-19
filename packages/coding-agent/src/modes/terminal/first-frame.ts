@@ -46,7 +46,7 @@ import { setTuiTight } from "@veyyon/utils/tight-mode";
 import { clearFirstFrameRecording, recordFirstFrame } from "../../cli/first-frame-recorder";
 import { takeReplayedFirstFrame } from "../../cli/first-frame-replay";
 import { KeybindingsManager } from "../../config/keybindings";
-import { onLaunchFactsRecorded, readLaunchFacts } from "../../config/launch-facts";
+import { defaultModelSelector, onLaunchFactsRecorded, readLaunchFacts } from "../../config/launch-facts";
 import { settings } from "../../config/settings-instance";
 import { applyGroundPaint, setDetectedTerminalGround } from "../../theme/ground-tints";
 import { getEditorTheme, theme } from "../../theme/theme";
@@ -161,7 +161,7 @@ export function paintFirstFrame(version: string, keybindings?: KeybindingsManage
 	// catalog, which this path may not load, and the empty strings this used to
 	// pass rendered as `no model yet · /login` -- an alarming thing to tell an
 	// operator who is logged in, and a row the session then rewrote 600ms later.
-	// Absent a recording the configured role's own tail is stated instead, so the
+	// Absent a recording the configured default model's own tail is stated instead, so the
 	// placeholder is reached only when no model is configured and it is true.
 	// The screen the replay left, if this launch replayed one. Taken here, before the card is built,
 	// because the card has to be built to MATCH it: same tip, or the three tip rows rewrite
@@ -175,16 +175,16 @@ export function paintFirstFrame(version: string, keybindings?: KeybindingsManage
 			: undefined;
 	if (adopted) setLaunchTip(adopted.tip);
 	const facts = readLaunchFacts();
-	const defaultRole = !facts.providerName || !facts.modelName ? settings.getModelRole("default") : undefined;
+	const defaultModel = !facts.providerName || !facts.modelName ? defaultModelSelector() : undefined;
 	// The provider the recording states, and on a cold launch — no recording
-	// yet — the one the configured role names, parsed from `provider/id`. The
+	// yet — the one the configured default model names, parsed from `provider/id`. The
 	// session records the same value, so warm and cold state the same fact; the
-	// role only stands in for the machine's first launch of the model, where
+	// selector only stands in for the machine's first launch of the model, where
 	// `· huggingface` used to grow onto the hero a second later.
-	const launchProvider = facts.providerName || launchProviderLabel(defaultRole);
+	const launchProvider = facts.providerName || launchProviderLabel(defaultModel);
 	// The ground every structural color is derived from is settled below, before the first paint,
 	// out of what this terminal last reported.
-	const hero = new WelcomeComponent(version, launchModelLabel(facts, defaultRole), launchProvider);
+	const hero = new WelcomeComponent(version, launchModelLabel(facts, defaultModel), launchProvider);
 	const layout = new HomeAnchorLayout({ ui, transcriptChildCount: () => 0, hasHero: () => true });
 	// The composer, live. Dressed through the one chrome owner and sized through
 	// the one height policy, so it is the same composer the mode goes on using

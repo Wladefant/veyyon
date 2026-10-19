@@ -57,20 +57,63 @@ describe("an interactive session's static import graph", () => {
 		// Every other controller in the directory opens with its command: `/mcp`, `/ssh`, `/tan`,
 		// `/todo`, the selector cards and the setting effects they apply.
 		expect(reachedIn(interactiveSession, "modes/terminal/controllers")).toEqual([
+			// Carved out of interactive-mode.ts, which loads with the session.
+			"anchored-blocks.ts",
 			"btw-controller.ts",
+			// Carved out of extension-ui-controller.ts, which loads with the session.
+			"collab-guest-dialogs.ts",
 			"command-controller-shared.ts",
 			"command-controller.ts",
+			// Carved out of input-controller.ts, which loads with the session.
+			"composer-escape.ts",
+			// Carved out of input-controller.ts, which loads with the session.
+			"composer-paste.ts",
+			// Asked for a composer prediction at the end of every turn, before any command runs.
+			"composer-prediction-controller.ts",
+			// Carved out of extension-ui-controller.ts, which loads with the session.
+			"dialog-queue.ts",
+			// Carved out of event-controller.ts, which loads with the session.
+			"displaceable-blocks.ts",
 			"event-controller.ts",
 			"extension-ui-controller.ts",
 			"goal-mode-controller.ts",
 			"home-anchor-layout.ts",
+			// Carved out of extension-ui-controller.ts, which loads with the session.
+			"hook-widgets.ts",
+			// Carved out of event-controller.ts, which loads with the session.
+			"idle-follow-ups.ts",
 			"input-controller.ts",
+			// Carved out of event-controller.ts, which loads with the session.
+			"irc-cards.ts",
+			// Carved out of command-controller.ts; the Hindsight helpers it calls still load on the first `/memory mm`.
+			"memory-command-controller.ts",
 			"omfg-controller.ts",
 			"omfg-rule.ts",
+			// Carved out of interactive-mode.ts, which loads with the session.
+			"plan-mode-controller.ts",
+			// Carved out of input-controller.ts, which loads with the session.
+			"prompt-submission.ts",
+			// Carved out of input-controller.ts, which loads with the session.
+			"queued-submissions.ts",
 			"session-focus-controller.ts",
+			// Carved out of command-controller.ts, which loads with the session.
+			"session-info-view.ts",
 			"streaming-reveal.ts",
+			// Carved out of input-controller.ts, which loads with the session.
+			"submitted-input.ts",
+			"tiny-title-download-row.ts",
 			"tool-args-reveal.ts",
+			// Carved out of event-controller.ts, which loads with the session.
+			"tool-call-cards.ts",
 			"transcript-composer.ts",
+			// Carved out of event-controller.ts, which loads with the session.
+			"turn-recovery.ts",
+			// Carved out of event-controller.ts, which loads with the session.
+			"turn-speech.ts",
+			// Carved out of command-controller.ts, which loads with the session.
+			"usage-report-view.ts",
+			// Carved out of interactive-mode.ts, which loads with the session.
+			"vibe-mode-controller.ts",
 			"voice-controller.ts",
 			"welcome-controller.ts",
 			"working-loader.ts",

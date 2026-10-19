@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { ThinkingLevel } from "@veyyon/agent-core";
 import { Effort } from "@veyyon/catalog/effort";
+import { Settings } from "@veyyon/coding-agent/config/settings";
+import { resolveAgentThinkingLevel } from "@veyyon/coding-agent/task/agent-settings";
 import { loadBundledAgents } from "@veyyon/coding-agent/task/agents";
 import { resolveEffectiveSubagentThinkingLevel } from "@veyyon/coding-agent/task/executor";
 import { AUTO_THINKING } from "@veyyon/coding-agent/thinking";
@@ -40,15 +42,21 @@ describe("resolveEffectiveSubagentThinkingLevel", () => {
 	});
 
 	/**
-	 * The built-in general worker advertises inheritance rather than auto, so a task
-	 * without an effort override cannot silently reclassify its own effort. The lane is
-	 * `deep`; the name `task` belonged to an earlier roster and matches no bundled agent,
-	 * so the lookup answered `undefined` and the case failed on a roster it was reading
-	 * by a retired name.
+	 * The built-in general worker runs at the session's effort rather than auto, so a task
+	 * without an effort override cannot silently reclassify its own effort. The definition
+	 * names no level; the resolver supplies `inherit` for an agent no row configures.
 	 */
-	it("configures the bundled general lane to inherit effort", () => {
+	it("runs the bundled general lane at the inherited effort", () => {
 		const deep = loadBundledAgents().find(agent => agent.name === "deep");
-		expect(deep?.thinkingLevel).toBe(ThinkingLevel.Inherit);
+		if (!deep) throw new Error("no bundled deep agent");
+		expect(
+			resolveAgentThinkingLevel({
+				settings: Settings.isolated(),
+				agentName: deep.name,
+				agentThinkingLevel: deep.thinkingLevel,
+				taskDepth: 1,
+			}),
+		).toBe(ThinkingLevel.Inherit);
 	});
 
 	/**

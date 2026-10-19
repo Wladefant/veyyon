@@ -1,5 +1,6 @@
 import * as AIError from "../../error";
 import { credentialExpiryFromExpiresIn } from "./expiry";
+import { requireTokenResponseObject } from "./token-response";
 import type { OAuthCredentials } from "./types";
 
 export interface GitLabTokenResponse {
@@ -9,10 +10,12 @@ export interface GitLabTokenResponse {
 	created_at?: number;
 }
 
+/** `body`, the parsed JSON of a GitLab token endpoint, as credentials. */
 export function mapGitLabTokenResponse(
-	payload: GitLabTokenResponse,
+	body: unknown,
 	provider: "gitlab-duo" | "gitlab-duo-workflow",
 ): OAuthCredentials {
+	const payload = requireTokenResponseObject<GitLabTokenResponse>(body, provider, "token response");
 	if (!payload.access_token || !payload.refresh_token || typeof payload.expires_in !== "number") {
 		const name = provider === "gitlab-duo-workflow" ? "GitLab Duo Workflow" : "GitLab";
 		throw new AIError.OAuthError(`${name} OAuth token response missing required fields`, {

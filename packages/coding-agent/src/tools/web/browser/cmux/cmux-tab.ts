@@ -2,15 +2,16 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { logger, postmortem, Snowflake, untilAborted } from "@veyyon/utils";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { JsRuntime, type RuntimeHooks } from "../../../../eval/js/shared/runtime";
 import { callSessionTool } from "../../../../eval/js/tool-bridge";
-import { scopedTimeoutSignal } from "../../../../utils/fetch-timeout";
 import { resizeImage } from "../../../../utils/image-resize";
 import { resolveToCwd } from "../../../core/path-utils";
 import { formatScreenshot } from "../../../core/render-utils";
 import { ToolAbortError, ToolError, throwIfAborted } from "../../../core/tool-errors";
 import type { ToolSession } from "../../../index";
-import { type AriaSnapshotOptions, buildAriaSnapshotScript } from "../aria-snapshot";
+import { type AriaSnapshotOptions, buildAriaSnapshotScript, compactSnapshot } from "../aria-snapshot";
+import { type ChainedHandle, chainHandle } from "../chained-handle";
 import { DEFAULT_VIEWPORT } from "../launch";
 import { extractReadableFromHtml, type ReadableFormat } from "../readable";
 import {
@@ -51,9 +52,12 @@ import type { CmuxSocketClient } from "./socket-client";
 // deadline is a different concept from the whole-tool timeout.
 const DEFAULT_OP_TIMEOUT_MS = 30_000;
 
-/** Why a cmux tab has no storage state: its surface shares the cmux app's session. */
+/**
+ * Why a cmux tab has no storage state: its surface shares the cmux app's session. A tab opens on cmux
+ * whenever cmux is on and no `app` is given, so the way out is turning cmux off.
+ */
 const CMUX_HAS_NO_STORAGE_STATE =
-	"Storage state needs the headless browser: a cmux tab runs in the cmux app's own session. Open the tab without app.cmux.";
+	"Storage state needs the headless browser: a cmux tab runs in the cmux app's own session. Tabs open in the headless browser with cmux off: the browser.cmux setting, or VEYYON_BROWSER_CMUX=0.";
 
 interface ScreenshotOptions {
 	selector?: string;
@@ -451,6 +455,11 @@ export class CmuxTab {
 		}
 	}
 
+	/** Load the current URL again, as `goto` loads one. */
+	async reload(opts?: { waitUntil?: WaitUntil; timeoutMs?: number }): Promise<void> {
+		await this.goto(this.#lastUrl, opts);
+	}
+
 	async observe(opts?: ObserveOptions): Promise<Observation> {
 		void opts?.viewportOnly;
 		const timeoutMs = Math.min(this.#runContext?.timeoutMs ?? DEFAULT_OP_TIMEOUT_MS, DEFAULT_OP_TIMEOUT_MS);
@@ -478,10 +487,15 @@ export class CmuxTab {
 			{ script: buildAriaSnapshotScript(selector, opts) },
 			timeoutMs,
 		)) as CmuxEvalResult;
-		return result.value as string;
+		const snapshot = result.value as string;
+		return typeof snapshot === "string" ? compactSnapshot(snapshot) : snapshot;
 	}
 
-	async ref(id: string): Promise<CmuxElementHandle> {
+	ref(id: string): ChainedHandle<CmuxElementHandle> {
+		return chainHandle(this.#resolveRef(id));
+	}
+
+	async #resolveRef(id: string): Promise<CmuxElementHandle> {
 		const refId = /^e\d+$/.test(id.trim()) ? id.trim() : id.trim().replace(/^(?:aria-ref=|aria-ref\/|ariaref\/)/, "");
 		const selector = `aria-ref=${refId}`;
 		const timeoutMs = this.#runContext?.timeoutMs ?? DEFAULT_OP_TIMEOUT_MS;
@@ -806,7 +820,11 @@ export class CmuxTab {
 		throw new ToolError(`tab.waitForResponse() timed out after ${timeoutMs}ms.${lostNote}`);
 	}
 
-	async id(id: number): Promise<CmuxElementHandle> {
+	id(id: number): ChainedHandle<CmuxElementHandle> {
+		return chainHandle(this.#resolveId(id));
+	}
+
+	async #resolveId(id: number): Promise<CmuxElementHandle> {
 		const ref = this.#elementRefs.get(id)?.ref ?? `@e${id}`;
 		await this.#waitForSelector(ref, this.#runContext?.timeoutMs ?? DEFAULT_OP_TIMEOUT_MS);
 		return new CmuxElementHandle(this, ref);

@@ -1,8 +1,8 @@
 import { errorMessage, logger, sanitizeText } from "@veyyon/utils";
+import { formatDuration } from "@veyyon/utils/format";
 import type { DaemonBrokerClient } from "../../launch/client";
 import type { DaemonSnapshot } from "../../launch/protocol";
 import type { ToolSession } from "..";
-import { formatDuration } from "../core/render-utils";
 
 /**
  * A supervised process that ends on its own reports that end the way an async

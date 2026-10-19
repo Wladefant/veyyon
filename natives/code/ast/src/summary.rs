@@ -3,7 +3,6 @@
 use std::{collections::BTreeSet, path::Path};
 
 use anyhow::{Result, anyhow};
-use ast_grep_core::tree_sitter::LanguageExt;
 use serde::{Deserialize, Serialize};
 use tree_sitter::{Node, Parser};
 
@@ -174,7 +173,7 @@ pub fn summarize_code(options: SummaryOptions) -> Result<SummaryResult> {
 
 	let mut parser = Parser::new();
 	parser
-		.set_language(&language.get_ts_language())
+		.set_language(&language.document_language())
 		.map_err(|err| anyhow!("Failed to load tree-sitter language: {err}"))?;
 	let Some(tree) = parser.parse(&source, None) else {
 		return Ok(unparsed_result(source, total_lines));
@@ -893,6 +892,30 @@ mod tests {
 				.unwrap_or_default()
 				.contains("return")
 		);
+	}
+
+	#[test]
+	fn summarizes_a_php_file_that_leaves_php_for_html() {
+		// The PHP-only grammar reads the HTML after `?>` as a syntax error, so
+		// such a file was never summarized. The document grammar parses it.
+		let result =
+			summarize(
+				"<?php\nfunction render($items) {\n    $count = count($items);\n    $label = \
+				 'items';\n    ?>\n    <p><?php echo $count; ?> <?php echo $label; ?></p>\n    \
+				 <?php\n    return $count;\n}\n",
+				"view.php",
+			);
+
+		assert!(result.parsed);
+		assert!(result.elided);
+		assert_eq!(result.language.as_deref(), Some("php"));
+		let rendered = result
+			.segments
+			.iter()
+			.map(|segment| segment.text.clone().unwrap_or_else(|| "...".to_string()))
+			.collect::<Vec<_>>()
+			.join("\n");
+		assert_eq!(rendered, "<?php\nfunction render($items) {\n...\n}");
 	}
 
 	#[test]

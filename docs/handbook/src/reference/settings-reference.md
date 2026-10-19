@@ -69,15 +69,9 @@ veyyon config get compaction.threshold
 | `compaction.strategy` | Compaction Type | enum | `summary` | Summary condenses history in place and continues the same session. Values: `summary`. |
 | `compaction.threshold` | Auto-Compaction Threshold | string | `auto` | When auto-compaction triggers. Auto uses the model's window minus the reserve; a percent scales with each model's window; a token amount is the same trigger on every model that can reach it, and a smaller model compacts at its own maximum. |
 | `compaction.model` | Compaction Model | modelChain | _(unset)_ | Models used to write the compaction summary, tried in order. Inherit: the main model. A later entry is used when an earlier one is unauthenticated or its context window is too small. |
-| `compaction.modelFallbackStrategy` | Compaction Fallback | enum | `auto` | What to try after the compaction models you configured. Auto stays on models you named: the main model, its same-provider compaction sibling, and your model roles. Any authenticated model also reaches the largest window available, on any provider you have credentials for. Configured only stops at the chain and fails loudly. Values: `auto`, `any-model`, `configured-only`. |
+| `compaction.modelFallbackStrategy` | Compaction Fallback | enum | `auto` | What to try after the compaction models you configured. Auto stays on models you named: the main model, its same-provider compaction sibling, and your default model. Any authenticated model also reaches the largest window available, on any provider you have credentials for. Configured only stops at the chain and fails loudly. Values: `auto`, `any-model`, `configured-only`. |
 | `compaction.modelContextWindow` | Compaction Model Context | number | _(unset)_ | Context window in tokens to assume for the compaction model. Unset uses the compaction model's own reported window. Candidates whose window cannot fit the summarization payload are skipped loudly. |
 | `compaction.laneHandoffThresholdTokens` | Expensive Agent Handoff Threshold | number | `150000` | Start a fresh transcript for expensive spawned agents at this context size. Set to 0 to disable. |
-
-### Roles
-
-| Key | Setting | Type | Default | What it does |
-|---|---|---|---|---|
-| `modelRoles` | Role Models | record | `{}` | Assign a model to each role (Fast, Thinking, Vision, Architect, Commit, Tiny). Opens a searchable picker with auth status. The advisor's model is set in the Advisor group and a spawned agent's in Agents → Roster. Stored in the active profile. |
 
 ### Thinking
 
@@ -92,9 +86,8 @@ veyyon config get compaction.threshold
 | `model.loopGuard.toolCallReminder` | Loop Guard Tool-Call Reminder | boolean | `true` | When a Gemini reasoning stream emits many consecutive planning headers without calling a tool, interrupt it and inject a reminder to issue a tool call (requires Loop Guard). |
 | `model.toolCallLoopGuard.enabled` | Tool-Call Loop Guard | boolean | `true` | Detect consecutive identical tool calls across turns and inject a corrective steer. |
 | `model.toolCallLoopGuard.threshold` | Tool-Call Loop Threshold | number | `5` | Consecutive identical tool calls required before the corrective steer is injected. |
-| `model.toolCallLoopGuard.readSubsumptionThreshold` | Read Subsumption Loop Threshold | number | `3` | Consecutive fully-subsumed or redundant read calls on unchanged files before the corrective steer is injected. |
 | `model.toolCallLoopGuard.exemptTools` | Tool-Call Loop Exempt Tools | array | `["job","irc"]` | Tool names that may repeat consecutively without triggering the cross-turn loop guard. |
-| `providers.autoThinkingModel` | Auto Thinking Model | enum | `online` | Model that rates task difficulty for the `auto` thinking level. Online: the Tiny role from /models, else @smol. Local: an on-device model. Values: `online`, `qwen3-1.7b`, `llama3.2:3b`, `gemma-3-1b`, `qwen2.5-1.5b`, `lfm2-1.2b`. |
+| `providers.autoThinkingModel` | Auto Thinking Model | enum | `online` | Model that rates task difficulty for the `auto` thinking level. Online: the auto-thinking helper (Roster > Helpers), else the session's model. Local: an on-device model. Values: `online`, `qwen3-1.7b`, `llama3.2:3b`, `gemma-3-1b`, `qwen2.5-1.5b`, `lfm2-1.2b`. |
 
 ### Sampling
 
@@ -129,7 +122,7 @@ veyyon config get compaction.threshold
 | `retry.maxRetries` | Retry Attempts | number | `10` | Maximum retry attempts on API errors. |
 | `retry.maxDelayMs` | Max Retry Delay | number | `300000` | Maximum wait between retries, in ms. When the provider response requires a wait longer than this and no credential or model fallback succeeds, the request fails fast instead of sleeping (e.g. 3-hour Anthropic rate-limit windows). |
 | `retry.modelFallback` | Retry Model Fallback | boolean | `true` | Allow retry recovery to switch to configured fallback models. |
-| `retry.fallbackChains` | Retry Fallback Chains | record | `{}` | JSON object mapping model roles, model selectors ("provider/model-id"), or provider wildcards ("provider/*") to ordered fallback selectors, e.g. {"default":["openai/gpt-4o-mini"],"google-antigravity/*":["google/*","google-vertex/*"]}. Model-oriented keys apply whenever that model/provider is active, regardless of role; a "provider/*" entry keeps the failing model's id and swaps the provider. |
+| `retry.fallbackChains` | Retry Fallback Chains | record | `{}` | JSON object mapping "default" (the default model), model selectors ("provider/model-id"), or provider wildcards ("provider/*") to ordered fallback selectors, e.g. {"default":["openai/gpt-4o-mini"],"google-antigravity/*":["google/*","google-vertex/*"]}. Model-oriented keys apply whenever that model/provider is active; a "provider/*" entry keeps the failing model's id and swaps the provider. |
 | `retry.perProvider` | Per-Provider Retry | record | `{}` | JSON object overriding retry limits for specific backends, keyed like Retry Fallback Chains: a model selector ("provider/model-id"), a provider wildcard ("provider/*"), or a bare provider name. Each value may set maxRetries, baseDelayMs, and maxDelayMs; anything omitted falls back to the global retry settings. Example: {"cursor":{"maxRetries":3,"baseDelayMs":2000}}. Backends whose retries are intrinsically expensive (cursor, devin) already ship with sensible limits; an entry here overrides those. |
 | `retry.fallbackRevertPolicy` | Fallback Revert Policy | enum | `cooldown-expiry` | When to return to the primary model after a fallback. Values: `cooldown-expiry`, `never`. |
 | `providers.anthropic.serverSideFallback` | Anthropic Server-Side Fallback (Fable 5) | boolean | `false` | Retry a Claude Fable 5 or Mythos 5 request that Anthropic's safety classifier blocks on Claude Opus 4.8, on the provider side (the `server-side-fallback-2026-06-01` beta). Off: the request fails. |
@@ -172,6 +165,13 @@ veyyon config get compaction.threshold
 | `autocompleteMaxVisible` | Autocomplete Items | number | `5` | Max visible items in autocomplete dropdown (3-20). |
 | `emojiAutocomplete` | Emoji Autocomplete | boolean | `true` | Suggest emojis from `:name:` shortcodes and expand text emoticons like `:D` or `:-)`. |
 | `paste.largeMenuThreshold` | Large Paste Menu | number | `100` | When a paste reaches this many lines, offer a menu to wrap it in a code block, wrap it in XML tags, or save it to a file. 0 disables the menu (large pastes still collapse to a [Paste] marker). |
+
+### Composer Predictions
+
+| Key | Setting | Type | Default | What it does |
+|---|---|---|---|---|
+| `composer.predictions.mode` | Suggest Next Message | enum | `off` | After each turn, suggest the message you are likely to send next as dim text in the empty composer. Tab inserts it; typing replaces it. Nothing is sent without Enter. Values: `off`, `chatgpt-pro`, `custom`. |
+| `composer.predictions.model` | Prediction Model | modelChain | _(unset)_ | Models that write predictions in Custom mode, from any provider, tried in order: the first one with credentials is used. A :level suffix sets its thinking level. Inherit: the session's model. |
 
 ### Session
 
@@ -349,7 +349,7 @@ veyyon config get compaction.threshold
 | Key | Setting | Type | Default | What it does |
 |---|---|---|---|---|
 | `memory.backend` | Memory Backend | enum | `off` | Off, local summary pipeline, Mnemopi SQLite, or Hindsight remote memory. Values: `off`, `local`, `hindsight`, `mnemopi`. |
-| `providers.memoryModel` | Memory Model | enum | `online` | Model Mnemopi uses to extract and consolidate facts. Online: the Tiny role from /models, else @smol. Local: an on-device model. Values: `online`, `qwen3-1.7b`, `llama3.2:3b`, `gemma-3-1b`, `qwen2.5-1.5b`, `lfm2-1.2b`. |
+| `providers.memoryModel` | Memory Model | enum | `online` | Model Mnemopi uses to extract and consolidate facts. Online: the memory helper (Roster > Helpers), else the session's model. Local: an on-device model. Values: `online`, `qwen3-1.7b`, `llama3.2:3b`, `gemma-3-1b`, `qwen2.5-1.5b`, `lfm2-1.2b`. |
 
 ### Mnemopi
 
@@ -369,7 +369,7 @@ veyyon config get compaction.threshold
 | `mnemopi.embeddingModel` | Mnemopi Embedding Model | string | _(unset)_ | Advanced: explicit embedding model id that overrides the variant. Leave empty to use mnemopi.embeddingVariant. |
 | `mnemopi.embeddingApiUrl` | Mnemopi Embedding API URL | string | _(unset)_ | Optional OpenAI-compatible embedding endpoint passed to Mnemopi. |
 | `mnemopi.embeddingApiKey` | Mnemopi Embedding API Key | string | _(unset)_ | Optional embedding API key passed to Mnemopi. |
-| `mnemopi.llmMode` | Mnemopi LLM Mode | enum | `smol` | Use no LLM, the online tiny model (the TINY role from /models, else @smol), or a remote OpenAI-compatible endpoint. Values: `none`, `smol`, `remote`. |
+| `mnemopi.llmMode` | Mnemopi LLM Mode | enum | `online` | Use no LLM, the Memory helper model (Agents → Roster → Helpers), or a remote OpenAI-compatible endpoint. Values: `none`, `online`, `remote`. |
 | `mnemopi.llmBaseUrl` | Mnemopi LLM Base URL | string | _(unset)_ | Optional OpenAI-compatible LLM endpoint for Mnemopi remote mode. |
 | `mnemopi.llmApiKey` | Mnemopi LLM API Key | string | _(unset)_ | Optional LLM API key for Mnemopi remote mode. |
 | `mnemopi.llmModel` | Mnemopi LLM Model | string | _(unset)_ | Optional LLM model name for Mnemopi remote mode. |
@@ -488,7 +488,7 @@ veyyon config get compaction.threshold
 | Key | Setting | Type | Default | What it does |
 |---|---|---|---|---|
 | `todo.reminders` | Todo Reminders | boolean | `true` | Prompt continued execution when unfinished todos remain. |
-| `todo.reminders.max` | Todo Reminder Limit | number | `3` | Maximum distinct todo-state reminders before reminders stay silent. |
+| `todo.reminderLimit` | Todo Reminder Limit | number | `3` | Maximum distinct todo-state reminders before reminders stay silent. |
 | `todo.eager` | Create Todos Automatically | enum | `default` | How strongly to push automatic todo-list creation after the first message. Values: `default`, `preferred`, `always`. |
 | `tasks.todoClearDelay` | Todo Auto-Clear Delay | number | `-1` | Delay before completed or abandoned todos are removed from the todo widget. |
 
@@ -512,6 +512,7 @@ veyyon config get compaction.threshold
 | `browser.headless` | Headless Browser | boolean | `true` | Launch browser in headless mode (disable to show browser UI). |
 | `browser.cmux` | cmux Browser | boolean | `true` | Use cmux WKWebView surfaces for browser automation when a cmux socket is available. Set VEYYON_BROWSER_CMUX=0 or VEYYON_BROWSER_CMUX=1 to override. |
 | `browser.screenshotDir` | Screenshot Directory | string | _(unset)_ | Directory to save screenshots. If unset, screenshots go to a temp file. Supports ~. Examples: ~/Downloads, ~/Desktop, /sdcard/Download (Android). |
+| `browser.naturalInput` | Natural Input | boolean | `false` | Move the pointer along a curved path and rest before each click, pause between typed keys, fill short values one key at a time, and scroll with the wheel. Off: instant clicks, keys without pauses, and every fill in one insertion. Applies from the next browser run. |
 
 ### GitHub
 
@@ -598,11 +599,11 @@ veyyon config get compaction.threshold
 
 | Key | Setting | Type | Default | What it does |
 |---|---|---|---|---|
-| `agent.agents` | Roster | record | `{}` | Which agent types the model may spawn and what each one runs. Enabled: the model may pick that agent. Disabled: it may not. With no rows, only the deep agent is enabled. Each agent's page sets its Model, its Effort and which agents it may spawn in turn; an unset value follows the level above, then the default model role. |
+| `agent.agents` | Roster | record | `{}` | What each helper and each agent type runs. Helpers are the model calls features make on their own: advisor, plan mode, vision, commit messages, titles, memory and the rest. Subagents are the agent types the model may spawn: Enabled lets the model pick one, Disabled does not, and with no rows only the deep agent is enabled. Each page sets a Model and an Effort; an agent's page also sets which agents it may spawn. An unset value follows the level above, then the session's model and effort. |
 | `agent.maxNestedSpawnDepth` | Max Nested Spawn Depth | number | `0` | How many levels deep spawned agents may spawn further agents, where an agent's own page does not set it. Parent only: agents this session spawns do not receive the task tool. |
 | `agent.sharedModel` | Same Model for All Agents | boolean | `false` | Run every spawned agent on one Model and one Effort. Off: each agent's page sets its own. On: Shared Model and Shared Effort below apply to every agent and the per-agent rows are hidden; their values are kept for when this is off again. |
-| `agent.model` | Shared Model | modelChain | _(unset)_ | The model chain every spawned agent runs while Same Model for All Agents is on. Unset: the default model role. |
-| `agent.thinkingLevel` | Shared Effort | string | _(unset)_ | The effort every spawned agent runs at while Same Model for All Agents is on. Limited to the levels the shared model supports; a `:level` suffix on the model chain takes precedence. Inherit: the model's default. |
+| `agent.model` | Shared Model | modelChain | _(unset)_ | The model chain every spawned agent runs while Same Model for All Agents is on. Unset: the session's model. |
+| `agent.thinkingLevel` | Shared Effort | string | _(unset)_ | The effort every spawned agent runs at while Same Model for All Agents is on. Limited to the levels the shared model supports; a `:level` suffix on the model chain takes precedence. Inherit: the session's effort. |
 | `agent.showResolvedModelBadge` | Show Resolved Model Badge | boolean | `true` | Show each spawned agent's resolved model, and the setting that selected it, in the task widget status line and on the agent surfaces. Shown under the tab's Advanced fold. |
 
 ### Limits
@@ -663,7 +664,7 @@ veyyon config get compaction.threshold
 | `tts.localVoice` | Local TTS Voice | enum | `af_heart` | Kokoro voice used by the local TTS backend (American/British, female/male). Values: `af_heart`, `af_bella`, `af_nicole`, `af_aoede`, `af_kore`, `af_sarah`, `am_michael`, `am_fenrir`, `am_puck`, `bf_emma`, `bm_george`, `bm_fable`. |
 | `speech.enabled` | Speech Vocalization | boolean | `false` | Speak the assistant's output aloud through the speakers as it streams. |
 | `speech.mode` | Speech Vocalization Mode | enum | `assistant` | What to speak: all = assistant messages + thinking; assistant = messages only; yield = only the final message at turn end. Values: `all`, `assistant`, `yield`. |
-| `speech.enhanced` | Enhanced Speech Rewriting | boolean | `false` | Rewrite assistant output into natural spoken prose with the tiny/smol model before synthesis (describes code, drops links and markdown). Falls back to mechanical cleanup on failure. |
+| `speech.enhanced` | Enhanced Speech Rewriting | boolean | `false` | Rewrite assistant output into natural spoken prose with the speech helper's model before synthesis (describes code, drops links and markdown). Falls back to mechanical cleanup on failure. |
 | `speech.voice` | Speech Vocalization Voice | enum | `af_heart` | Kokoro voice used when speaking the assistant's output aloud. Values: `af_heart`, `af_bella`, `af_nicole`, `af_aoede`, `af_kore`, `af_sarah`, `am_michael`, `am_fenrir`, `am_puck`, `bf_emma`, `bm_george`, `bm_fable`. |
 | `providers.fetch` | Fetch Provider | enum | `auto` | Reader backend priority for the fetch/read URL tool. Values: `auto`, `native`, `trafilatura`, `lynx`, `parallel`, `jina`, `firecrawl`, `deepseek`. |
 | `codexResets.autoRedeem` | Codex Auto-Redeem Saved Resets | enum | `unset` | When a turn is blocked by the Codex weekly limit on the active account and no other account is available, run the saved-reset check. Unset: prompt before spending the first eligible reset. Yes: spend eligible resets without prompting. No: skip the check. Requires retries enabled. Values: `unset`, `yes`, `no`. |
@@ -694,10 +695,10 @@ veyyon config get compaction.threshold
 
 | Key | Setting | Type | Default | What it does |
 |---|---|---|---|---|
-| `providers.tinyModel` | Session Title Model | enum | `online` | Model that writes session titles. Online: the Tiny role from /models, else @smol. Local: an on-device model. Values: `online`, `lfm2-350m`, `qwen3-0.6b`, `gemma-270m`, `qwen2.5-0.5b`, `lfm2-700m`. |
+| `providers.tinyModel` | Session Title Model | enum | `online` | Model that writes session titles. Online: the title helper (Roster > Helpers), else the session's model. Local: an on-device model. Values: `online`, `lfm2-350m`, `qwen3-0.6b`, `gemma-270m`, `qwen2.5-0.5b`, `lfm2-700m`. |
 | `providers.tinyModelDevice` | Tiny Model Device | enum | `default` | ONNX execution provider for local tiny models (titles + memory). Default uses CPU-only inference. The VEYYON_TINY_DEVICE env var overrides this. Values: `default`, `gpu`, `cpu`, `metal`, `webgpu`, `cuda`, `dml`, `coreml`, `auto`, `wasm`, `webnn`, `webnn-gpu`, `webnn-cpu`, `webnn-npu`. |
 | `providers.tinyModelDtype` | Tiny Model Precision | enum | `default` | ONNX quantization/precision for local tiny models. Default uses each model's shipped dtype (q4); lower precision is faster, higher is more faithful. The VEYYON_TINY_DTYPE env var overrides this. Values: `default`, `q4`, `q4f16`, `q8`, `fp16`, `fp32`, `int8`, `uint8`, `bnb4`, `q2`, `q2f16`, `q1`, `q1f16`, `auto`. |
-| `providers.unexpectedStopModel` | Unexpected Stop Model | enum | `online` | Model that classifies whether a turn stopped unexpectedly. Online: the Tiny role from /models, else @smol. Local: an on-device model. Values: `online`, `qwen3-1.7b`, `llama3.2:3b`, `gemma-3-1b`, `qwen2.5-1.5b`, `lfm2-1.2b`. |
+| `providers.unexpectedStopModel` | Unexpected Stop Model | enum | `online` | Model that classifies whether a turn stopped unexpectedly. Online: the unexpected-stop helper (Roster > Helpers), else the session's model. Local: an on-device model. Values: `online`, `qwen3-1.7b`, `llama3.2:3b`, `gemma-3-1b`, `qwen2.5-1.5b`, `lfm2-1.2b`. |
 
 ### Protocol
 
@@ -789,6 +790,7 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
+| `agent.helpers` | record | `{}` |  |
 | `agent.modelByDepth` | record | `{}` | Retired: use `agent.agents` instead. |
 | `async.maxJobs` | number | `100` |  |
 | `auth.broker.token` | string | _(unset)_ |  |
@@ -816,7 +818,7 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `compaction.supersedeReads` | boolean | `true` |  |
 | `compaction.thresholdPercent` | number | `-1` | Retired: use `compaction.threshold` instead. |
 | `compaction.thresholdTokens` | number | `-1` | Retired: use `compaction.threshold` instead. |
-| `cycleOrder` | array | `["smol","slow"]` |  |
+| `defaultModel` | modelChain | _(unset)_ |  |
 | `defaultThinkingLevel` | enum | `high` | Values: `off`, `auto`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Retired: use `defaultEffort` instead. |
 | `dev.autoqaPush.token` | string | _(unset)_ |  |
 | `disabledExtensions` | array | `[]` |  |
@@ -874,7 +876,6 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `mnemopi.recallMaxQueryChars` | number | `4000` |  |
 | `mnemopi.retainEveryNTurns` | number | `4` |  |
 | `modelProviderOrder` | array | `[]` |  |
-| `modelTags` | record | `{}` |  |
 | `retry.baseDelayMs` | number | `500` |  |
 | `retry.enabled` | boolean | `true` |  |
 | `searxng.basicPassword` | string | _(unset)_ |  |

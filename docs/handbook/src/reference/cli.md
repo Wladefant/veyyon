@@ -87,6 +87,18 @@ $ veyyon session stats 3f8a
 $ veyyon session stats --json
 ```
 
+Cloud checkpoint handoff moves a stopped native session between configured nodes.
+Set `VEYYON_CHECKPOINT_NODE` to the node identity on each device. On the source,
+run `veyyon session handoff <id> --file ./session.jsonl --to laptop-b --workspace src`
+after stopping the source runtime. The command commits an encrypted checkpoint,
+then atomically transfers the lease to `laptop-b`. On the destination, keep
+`VEYYON_CHECKPOINT_NODE=laptop-b` and run
+`veyyon session checkpoint-restore <id> --output ./restored-session`. The runtime
+must use the same node identity to admit prompts or tools. The lease expires if
+the destination stays offline; another node may then acquire it. Handoff preserves
+the source files. It does not move running tools, browser sessions, or eval kernels.
+Use `veyyon session checkpoint-fork --file ./session.jsonl` for an explicit local fork.
+
 It reports, in one pass:
 
 - **Totals**: wall clock, turn and tool-call counts, token usage, request time, tool execution time, queue wait, and tool-result weight.

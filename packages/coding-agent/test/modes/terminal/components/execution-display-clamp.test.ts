@@ -25,7 +25,6 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { KeybindingsManager } from "@veyyon/coding-agent/config/keybindings";
 import {
 	buildStatusFooter,
-	capExecutionOutputLines,
 	clampExecutionDisplayLine,
 	EXECUTION_MAX_DISPLAY_COLUMNS,
 	EXECUTION_PREVIEW_LINES,
@@ -156,59 +155,6 @@ describe("bounding the retained output", () => {
 	it("retains five screenfuls of output while streaming", () => {
 		expect(EXECUTION_STREAMING_LINE_CAP).toBe(EXECUTION_PREVIEW_LINES * 5);
 		expect(EXECUTION_STREAMING_LINE_CAP).toBe(100);
-	});
-
-	/** A buffer inside the bound is left exactly as it was, and nothing is reported dropped. */
-	it("leaves a buffer inside the bound untouched", () => {
-		const lines = Array.from({ length: EXECUTION_STREAMING_LINE_CAP }, (_, index) => `line ${index}`);
-		const before = [...lines];
-		expect(capExecutionOutputLines(lines)).toBe(0);
-		expect(lines).toEqual(before);
-	});
-
-	/**
-	 * Over the bound, the OLDEST lines go and the newest are kept, because a user watching a build wants the tail.
-	 * Asserted on identifiable content rather than on length alone, so a helper that trimmed the wrong end would
-	 * fail here instead of passing a length check.
-	 */
-	it("drops the oldest lines and keeps the newest", () => {
-		const total = EXECUTION_STREAMING_LINE_CAP + 37;
-		const lines = Array.from({ length: total }, (_, index) => `line ${index}`);
-		expect(capExecutionOutputLines(lines)).toBe(37);
-		expect(lines.length).toBe(EXECUTION_STREAMING_LINE_CAP);
-		expect(lines[0]).toBe("line 37");
-		expect(lines.at(-1)).toBe(`line ${total - 1}`);
-	});
-
-	/**
-	 * The dropped count is the whole reason this returns a number. The previous inline version dropped lines and
-	 * then computed its "… N more lines" hint from the ALREADY-TRIMMED buffer, so a five-thousand-line run
-	 * reported eighty hidden lines and expanding revealed a hundred. The caller now has the real figure.
-	 */
-	it("reports the true number dropped for a very long run", () => {
-		const lines = Array.from({ length: 5_000 }, (_, index) => `line ${index}`);
-		expect(capExecutionOutputLines(lines)).toBe(5_000 - EXECUTION_STREAMING_LINE_CAP);
-		expect(lines.length).toBe(EXECUTION_STREAMING_LINE_CAP);
-	});
-
-	/** Repeated calls accumulate correctly, which is how a streaming component actually uses it. */
-	it("stays correct across repeated appends", () => {
-		const lines: string[] = [];
-		let dropped = 0;
-		for (let batch = 0; batch < 30; batch++) {
-			for (let index = 0; index < 10; index++) lines.push(`batch ${batch} line ${index}`);
-			dropped += capExecutionOutputLines(lines);
-			expect(lines.length).toBeLessThanOrEqual(EXECUTION_STREAMING_LINE_CAP);
-		}
-		expect(dropped).toBe(300 - EXECUTION_STREAMING_LINE_CAP);
-		expect(lines.at(-1)).toBe("batch 29 line 9");
-	});
-
-	/** An empty buffer is a no-op rather than an error. */
-	it("handles an empty buffer", () => {
-		const lines: string[] = [];
-		expect(capExecutionOutputLines(lines)).toBe(0);
-		expect(lines).toEqual([]);
 	});
 
 	/**

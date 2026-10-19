@@ -16,7 +16,12 @@
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { isRecord } from "@veyyon/utils/type-guards";
-import type { Goal, GoalModeState } from "./state";
+import { GOAL_STATUSES, type Goal, type GoalModeState, type GoalStatus } from "./state";
+
+/** True when `value` is a status some build writes; any other string is not a goal this build can hold. */
+function isGoalStatus(value: unknown): value is GoalStatus {
+	return (GOAL_STATUSES as readonly unknown[]).includes(value);
+}
 
 export const GOAL_PROGRESS_CUSTOM_TYPE = "goal_progress";
 
@@ -47,7 +52,7 @@ function parseGoal(value: unknown): Goal | undefined {
 	if (
 		typeof value.id !== "string" ||
 		typeof value.objective !== "string" ||
-		typeof value.status !== "string" ||
+		!isGoalStatus(value.status) ||
 		typeof value.tokensUsed !== "number" ||
 		typeof value.timeUsedSeconds !== "number" ||
 		typeof value.createdAt !== "number" ||
@@ -58,7 +63,7 @@ function parseGoal(value: unknown): Goal | undefined {
 	return {
 		id: value.id,
 		objective: value.objective,
-		status: value.status as Goal["status"],
+		status: value.status,
 		tokenBudget: typeof value.tokenBudget === "number" ? value.tokenBudget : undefined,
 		tokensUsed: value.tokensUsed,
 		timeUsedSeconds: value.timeUsedSeconds,
@@ -75,7 +80,7 @@ function parseProgress(entry: SessionEntry): GoalProgressData | undefined {
 		!isRecord(data) ||
 		(data.mode !== "goal" && data.mode !== "goal_paused") ||
 		typeof data.goalId !== "string" ||
-		typeof data.status !== "string" ||
+		!isGoalStatus(data.status) ||
 		typeof data.tokensUsed !== "number" ||
 		typeof data.timeUsedSeconds !== "number" ||
 		typeof data.turnsCompleted !== "number" ||
@@ -83,7 +88,17 @@ function parseProgress(entry: SessionEntry): GoalProgressData | undefined {
 	) {
 		return undefined;
 	}
-	return data as unknown as GoalProgressData;
+	const progress: GoalProgressData = {
+		mode: data.mode,
+		goalId: data.goalId,
+		status: data.status,
+		tokensUsed: data.tokensUsed,
+		timeUsedSeconds: data.timeUsedSeconds,
+		turnsCompleted: data.turnsCompleted,
+		updatedAt: data.updatedAt,
+	};
+	if (typeof data.tokenBudget === "number") progress.tokenBudget = data.tokenBudget;
+	return progress;
 }
 
 /**

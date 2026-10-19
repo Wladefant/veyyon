@@ -1,7 +1,7 @@
 import { type Component, Container, type Input, type SelectList, type SettingsList, Spacer, Text } from "@veyyon/tui";
 import { matchesKey } from "@veyyon/utils/keys";
 import { routeSelectListMouse, type SgrMouseEvent } from "@veyyon/utils/mouse";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import {
 	matchesSelectCancel,
 	matchesSelectDown,

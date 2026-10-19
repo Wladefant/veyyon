@@ -1,5 +1,4 @@
 import { errorMessage, logger } from "@veyyon/utils";
-import type { BuiltinExtensionAPI } from "../extensibility/extensions";
 import * as git from "../utils/git";
 import * as jj from "../utils/jj";
 import { normalizePathSpec } from "./helpers";
@@ -21,7 +20,7 @@ export interface EnsureAutoresearchBranchSuccess {
 
 export type EnsureAutoresearchBranchResult = EnsureAutoresearchBranchFailure | EnsureAutoresearchBranchSuccess;
 
-export async function getCurrentAutoresearchBranch(_api: BuiltinExtensionAPI, workDir: string): Promise<string | null> {
+export async function getCurrentAutoresearchBranch(workDir: string): Promise<string | null> {
 	const currentBranch = (await git.branch.current(workDir)) ?? "";
 	return currentBranch.startsWith(AUTORESEARCH_BRANCH_PREFIX) ? currentBranch : null;
 }
@@ -35,7 +34,6 @@ export async function getCurrentAutoresearchBranch(_api: BuiltinExtensionAPI, wo
  * will revert only run-modified paths instead of resetting to baseline.
  */
 export async function ensureAutoresearchBranch(
-	api: BuiltinExtensionAPI,
 	workDir: string,
 	goal: string | null,
 ): Promise<EnsureAutoresearchBranchResult> {
@@ -71,9 +69,9 @@ export async function ensureAutoresearchBranch(
 		};
 	}
 
-	const workDirPrefix = await readGitWorkDirPrefix(api, workDir);
+	const workDirPrefix = await readGitWorkDirPrefix(workDir);
 	const dirtyPaths = collectRelativeDirtyPaths(dirtyPathsOutput, workDirPrefix);
-	const currentBranch = await getCurrentAutoresearchBranch(api, workDir);
+	const currentBranch = await getCurrentAutoresearchBranch(workDir);
 	if (currentBranch) {
 		return { ok: true, branchName: currentBranch, created: false };
 	}
@@ -85,7 +83,7 @@ export async function ensureAutoresearchBranch(
 		};
 	}
 
-	const branchName = await allocateBranchName(api, workDir, goal);
+	const branchName = await allocateBranchName(workDir, goal);
 	try {
 		await git.branch.checkoutNew(workDir, branchName);
 	} catch (err) {
@@ -130,8 +128,7 @@ export function relativizeGitPathToWorkDir(repoRelativePath: string, workDirPref
  * directory. Reported for that reason; the value is still returned, because the caller's path filtering
  * degrades to repository-relative paths rather than failing outright.
  */
-async function readGitWorkDirPrefix(api: BuiltinExtensionAPI, workDir: string): Promise<string> {
-	void api;
+async function readGitWorkDirPrefix(workDir: string): Promise<string> {
 	try {
 		return await git.show.prefix(workDir);
 	} catch (err) {
@@ -195,19 +192,18 @@ export function normalizeStatusPath(rawPath: string): string {
 	return normalizePathSpec(normalized);
 }
 
-async function allocateBranchName(api: BuiltinExtensionAPI, workDir: string, goal: string | null): Promise<string> {
+async function allocateBranchName(workDir: string, goal: string | null): Promise<string> {
 	const baseName = `${AUTORESEARCH_BRANCH_PREFIX}${slugifyGoal(goal)}-${currentDateStamp()}`;
 	let candidate = baseName;
 	let suffix = 2;
-	while (await branchExists(api, workDir, candidate)) {
+	while (await branchExists(workDir, candidate)) {
 		candidate = `${baseName}-${suffix}`;
 		suffix += 1;
 	}
 	return candidate;
 }
 
-async function branchExists(api: BuiltinExtensionAPI, workDir: string, branchName: string): Promise<boolean> {
-	void api;
+async function branchExists(workDir: string, branchName: string): Promise<boolean> {
 	return git.ref.exists(workDir, `refs/heads/${branchName}`);
 }
 

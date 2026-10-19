@@ -12,9 +12,9 @@ import type { AuthStorage } from "@veyyon/ai";
 import type { SearchProvider } from "./providers/base";
 import { getSearchProviderLabel, SEARCH_PROVIDER_ORDER, SearchProviderError, type SearchProviderId } from "./types";
 
-export type { SearchParams } from "./providers/base";
-export { SearchProvider } from "./providers/base";
-export { getSearchProviderLabel, SEARCH_PROVIDER_ORDER } from "./types";
+// The approved web-search renderer oracle is a historical blob that imports this name from here, and
+// its bytes are fixed by `ORACLE_SNAPSHOT_COMMIT`.
+export { getSearchProviderLabel };
 
 /** Lazy factories. Each one dynamic-imports its provider module on first call. */
 const PROVIDER_LOADERS: Record<SearchProviderId, () => Promise<SearchProvider>> = {

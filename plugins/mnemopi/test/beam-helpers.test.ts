@@ -2,12 +2,9 @@ import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import {
 	buildFtsQuery,
-	cjkFtsTerms,
-	containsSpacelessCjk,
 	decodeVector,
 	detectLanguage,
 	encodeVector,
-	ftsQueryTerms,
 	generateId,
 	generateStableId,
 	inMemoryVecSearch,
@@ -16,10 +13,10 @@ import {
 	metadataJson,
 	normalizeImportance,
 	normalizeMetadata,
-	recallTokens,
 	strictFactMatches,
 	workingMemoryVecSearch,
 } from "@veyyon/mnemopi/core/beam/helpers";
+import { cjkFtsTerms, ftsQueryTerms, hasCjk, recallTokens } from "../src/util/regex";
 import { useMnemopiTestEnv } from "./setup";
 
 useMnemopiTestEnv();
@@ -90,7 +87,7 @@ describe("beam lexical and FTS helpers", () => {
 		expect(
 			strictFactMatches("where is the unrelated thing", "Hermes profile URL is https://example.test/hermes"),
 		).toBe(false);
-		expect(containsSpacelessCjk("東京で会う")).toBe(true);
+		expect(hasCjk("東京で会う")).toBe(true);
 		expect(cjkFtsTerms("東京東京")).toEqual(["東", "京", '"東京"', '"京東"']);
 		expect(lexicalRelevance([], "明日は東京で会議", "東京")).toBe(1);
 	});

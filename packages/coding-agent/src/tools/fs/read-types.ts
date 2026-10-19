@@ -4,7 +4,7 @@
 
 import type { ToolSession } from "../../sdk";
 import type { TruncationSummary } from "../../session/streaming-output";
-import type { OutputMeta } from "../core/output-meta";
+import type { OutputMeta } from "../core/output-notice";
 import type { ReadDisplayContent } from "./read-display";
 
 /**

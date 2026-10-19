@@ -7,8 +7,8 @@
  * renderer, which is why it is here rather than beside a card.
  */
 
-import type { FileDiagnosticsResult } from "../lsp";
-import type { OutputMeta } from "../tools/core/output-meta";
+import type { FileDiagnosticsResult } from "../lsp/diagnostics";
+import type { OutputMeta } from "../tools/core/output-notice";
 import type { Operation } from "./modes/patch";
 
 export interface EditToolPerFileResult {

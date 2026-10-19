@@ -1,7 +1,7 @@
 import type { SelectItem, SelectList } from "@veyyon/tui";
 import { routeSelectListMouse, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { truncateToWidth } from "@veyyon/utils/width";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { getSearchProvider, setPreferredSearchProvider } from "../../../../tools/web/search/provider";
 import {
 	isSearchProviderPreference,

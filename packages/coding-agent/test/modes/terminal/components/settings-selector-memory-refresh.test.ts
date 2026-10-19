@@ -3,11 +3,9 @@ import { stripVTControlCharacters } from "node:util";
 import { buildModel } from "@veyyon/catalog/build";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/config/settings";
+import { ModelChainSubmenu } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-chain-submenu";
 import { ModelSelectorPanel } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-selector";
-import {
-	ModelChainSubmenu,
-	SettingsSelectorComponent,
-} from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
+import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { TERMINAL } from "@veyyon/tui";
 import { parseSgrMouse } from "@veyyon/utils/mouse";
@@ -209,13 +207,6 @@ describe("SettingsSelectorComponent memory tab", () => {
 		const after = strip(comp.render(120).join("\n"));
 		expect(after).not.toContain("Model catalog unavailable");
 		expect(after).toContain("Compaction Model");
-	});
-
-	it("formats model roles value correctly when unassigned or assigned", () => {
-		const comp = createSelector();
-		expect(comp.formatModelRolesValue()).toBe("All inherit");
-		settings.setModelRole("smol", "anthropic/claude-3-5-haiku");
-		expect(comp.formatModelRolesValue()).toBe("1 assigned");
 	});
 
 	it("formats rules value correctly for built-in, disabled, and experimental rules", () => {

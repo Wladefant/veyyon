@@ -7,6 +7,7 @@
  * indent and the sentence that says how to see the rest.
  */
 
+import { formatCount } from "@veyyon/utils/format";
 import { truncateToWidth } from "@veyyon/utils/width";
 import type {
 	FramedBlockView,
@@ -19,7 +20,6 @@ import type {
 } from "@veyyon/view";
 import { extractResultText } from "../core/output-notice";
 import {
-	formatCount,
 	heldBack,
 	replaceTabs,
 	shortenEmbeddedPaths,

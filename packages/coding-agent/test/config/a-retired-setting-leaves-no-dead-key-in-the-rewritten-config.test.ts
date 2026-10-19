@@ -18,8 +18,10 @@ import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } f
  * reads only the nested spelling, or forgets the parent it empties, or lets a
  * coarser legacy key override a finer one. Each case loads through
  * `Settings.init`, rewrites the file the way a session does, and reads the
- * persisted YAML back. It does not sweep every retired key in `migrate()`;
- * only the three shapes named here are pinned.
+ * persisted YAML back. `model.toolCallLoopGuard.readSubsumptionThreshold` is
+ * pinned in both spellings beside them: a key retired with no destination has
+ * to leave its siblings in place and no empty section behind. It does not sweep
+ * every retired key in `migrate()`; only the shapes named here are pinned.
  */
 describe("a retired setting leaves no dead key in the rewritten config", () => {
 	let settingsState: SettingsTestState | undefined;
@@ -96,5 +98,27 @@ describe("a retired setting leaves no dead key in the rewritten config", () => {
 	it("the retired enabled flag alone still selects auto", async () => {
 		const { settings } = await loadAndRewrite({ task: { isolation: { enabled: true } } });
 		expect(settings.get("agent.isolation.mode")).toBe("auto");
+	});
+
+	it.each([
+		[
+			"nested",
+			{ model: { toolCallLoopGuard: { readSubsumptionThreshold: 2, threshold: 7 } }, steeringMode: "all" },
+			{ model: { toolCallLoopGuard: { threshold: 7 } }, steeringMode: "all", ask: { notify: "on" } },
+		],
+		[
+			"flat",
+			{
+				"model.toolCallLoopGuard.readSubsumptionThreshold": 2,
+				model: { toolCallLoopGuard: { threshold: 7 } },
+				steeringMode: "all",
+			},
+			{ model: { toolCallLoopGuard: { threshold: 7 } }, steeringMode: "all", ask: { notify: "on" } },
+		],
+		["nested alone", { model: { toolCallLoopGuard: { readSubsumptionThreshold: 2 } } }, { ask: { notify: "on" } }],
+		["flat alone", { "model.toolCallLoopGuard.readSubsumptionThreshold": 2 }, { ask: { notify: "on" } }],
+	])("%s readSubsumptionThreshold is dropped and nothing else changes", async (_shape, raw, expected) => {
+		const { persisted } = await loadAndRewrite(raw);
+		expect(persisted).toEqual(expected);
 	});
 });

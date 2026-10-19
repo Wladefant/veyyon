@@ -1,5 +1,3 @@
-export { truncate } from "@veyyon/utils/format";
-
 import * as fs from "node:fs/promises";
 import path from "node:path";
 // Owners, not the `@veyyon/utils` barrel: 1 module against 74.
@@ -20,9 +18,6 @@ import type {
 	SymbolKind,
 	WorkspaceEdit,
 } from "./types";
-
-export { formatGroupedDiagnosticMessages } from "../tools/core/grouped-file-output";
-export { detectLanguageId } from "../utils/lang-from-path";
 
 // =============================================================================
 // URI Handling (Cross-Platform)

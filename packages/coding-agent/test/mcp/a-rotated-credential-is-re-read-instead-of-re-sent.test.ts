@@ -19,7 +19,7 @@
  * These drive the real `MCPManager` against a real HTTP MCP server that rejects the old token and
  * accepts the new one, with a real executable minting the token and counting its own executions.
  *
- * WHAT IT DOES NOT CATCH. The synchronous resolver in `model-registry.ts` caches provider API keys
+ * WHAT IT DOES NOT CATCH. The synchronous resolver in `config/resolve-config-value-sync.ts` caches provider API keys
  * through the same policy, and a provider 401 does not invalidate them: that is a separate row
  * with a separate owner. Nor is anything here a bound on how often a command may run — the cost
  * argument is made by the automatic-reconnect case, not by a rate limit.

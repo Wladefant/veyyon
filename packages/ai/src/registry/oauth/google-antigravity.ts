@@ -14,6 +14,7 @@ import { errorMessage } from "@veyyon/utils/type-guards";
 import * as AIError from "../../error";
 import { credentialExpiryFromExpiresIn } from "./expiry";
 import { runGoogleOAuthLogin, TIER_LEGACY } from "./google-oauth-shared";
+import { requireTokenResponseObject } from "./token-response";
 import type { OAuthController, OAuthCredentials } from "./types";
 
 const decode = (s: string) => atob(s);
@@ -182,9 +183,13 @@ export async function loginAntigravity(ctrl: OAuthController): Promise<OAuthCred
 }
 
 /**
- * Refresh Antigravity token
+ * Refresh Antigravity token. `signal` aborts the token request.
  */
-export async function refreshAntigravityToken(refreshToken: string, projectId: string): Promise<OAuthCredentials> {
+export async function refreshAntigravityToken(
+	refreshToken: string,
+	projectId: string,
+	signal?: AbortSignal,
+): Promise<OAuthCredentials> {
 	const response = await fetch(TOKEN_URL, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -194,20 +199,25 @@ export async function refreshAntigravityToken(refreshToken: string, projectId: s
 			refresh_token: refreshToken,
 			grant_type: "refresh_token",
 		}),
+		signal,
 	});
 
 	if (!response.ok) {
 		// A refresh endpoint's error body can echo the credential it refused, so it is read
 		// through the shared bounded reader and its redactor.
 		const error = await AIError.readProviderErrorDetail(response);
-		throw new AIError.OAuthError(`Antigravity token refresh failed: ${error}`, { kind: "token-refresh" });
+		throw new AIError.OAuthError(`Antigravity token refresh failed: ${response.status} ${error}`, {
+			kind: "token-refresh",
+			provider: "google-antigravity",
+			status: response.status,
+		});
 	}
 
-	const data = (await response.json()) as {
+	const data = requireTokenResponseObject<{
 		access_token: string;
 		expires_in: number;
 		refresh_token?: string;
-	};
+	}>(await response.json(), "google-antigravity", "token refresh");
 
 	return {
 		refresh: data.refresh_token || refreshToken,

@@ -1,7 +1,7 @@
 import { fetchWithRetry } from "@veyyon/utils/fetch-retry";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
-import { type DiscoveryFailure, type DiscoveryHooks, readDiscoveryJson } from "../discovery/failure";
+import type { DiscoveryFailure, DiscoveryHooks } from "../discovery/failure";
 import { Effort } from "../effort";
 import { isGlm52ModelId } from "../identity/family";
 import type { ModelManagerOptions } from "../model-manager";
@@ -106,6 +106,8 @@ async function fetchShowMetadata(
 		report("request", errorMessage(error));
 		return undefined;
 	}
+	// Deferred import: static import pulls discovery into @veyyon/catalog/provider-models and inflates the reach graph.
+	const { readDiscoveryJson } = await import("../discovery/failure");
 	const payload = await readDiscoveryJson(response, report);
 	return payload === undefined ? undefined : (payload as OllamaShowResponse);
 }

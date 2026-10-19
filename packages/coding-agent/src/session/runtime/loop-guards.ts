@@ -128,13 +128,12 @@ export class LoopGuards {
 			return undefined;
 		}
 		const threshold = settings.get("model.toolCallLoopGuard.threshold");
-		const readSubsumptionThreshold = settings.get("model.toolCallLoopGuard.readSubsumptionThreshold");
 		const exemptTools = settings
 			.get("model.toolCallLoopGuard.exemptTools")
 			.filter((tool): tool is string => typeof tool === "string" && tool.length > 0);
-		const key = `${threshold}:${readSubsumptionThreshold}:${JSON.stringify(exemptTools)}`;
+		const key = `${threshold}:${JSON.stringify(exemptTools)}`;
 		if (!this.#toolCallGuard || this.#toolCallGuardKey !== key) {
-			this.#toolCallGuard = new ToolCallLoopGuard({ threshold, exemptTools, readSubsumptionThreshold });
+			this.#toolCallGuard = new ToolCallLoopGuard({ threshold, exemptTools });
 			this.#toolCallGuardKey = key;
 		}
 		return this.#toolCallGuard;

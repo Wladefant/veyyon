@@ -33,7 +33,7 @@ import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
 import { formatProviderName } from "../../../../session/account-format";
 import type { AccountInventory, AccountRow } from "../../../../session/account-inventory";
 import { accountsForProvider, selectedButRotated } from "../../../../session/account-inventory";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
 import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
 import {
@@ -90,6 +90,7 @@ const SHORTCUT_KEYS: Record<string, string> = {
 	add: "a",
 	search: "\x13",
 	clearBlock: "c",
+	forget: "f",
 };
 
 export interface AccountManagerCallbacks {
@@ -122,6 +123,11 @@ export interface AccountManagerCallbacks {
 	 * served it, and routing preferred a sibling account over the choice they had made.
 	 */
 	onClearRateLimitBlock: (row: AccountRow) => void;
+	/**
+	 * Dismiss the signed-out login note this provider shows. The dead credential stays disabled;
+	 * the note stops being reported.
+	 */
+	onForgetSignedOut: (provider: string) => void;
 	onCancel: () => void;
 }
 
@@ -504,12 +510,20 @@ export class AccountManagerComponent implements Component {
 				if (blocked && rowIsBlocked(blocked)) this.#callbacks.onClearRateLimitBlock(blocked);
 				return;
 			}
+			case "f":
+				if (this.#activeDisabledCause()) this.#callbacks.onForgetSignedOut(this.#activeProviderId);
+				return;
 		}
 	}
 
 	#selectedRowIsBlocked(): boolean {
 		const row = this.#selectedRow();
 		return row !== undefined && rowIsBlocked(row);
+	}
+
+	/** The signed-out login note the active provider shows, if any. */
+	#activeDisabledCause(): string | undefined {
+		return this.#inventory.providers.find(candidate => candidate.provider === this.#activeProviderId)?.disabledCause;
 	}
 
 	/** Arrows move within the focused pane; either way an armed logout disarms. */
@@ -1008,6 +1022,8 @@ export class AccountManagerComponent implements Component {
 			// Only while the row under the cursor is actually holding a block. A chip offering to lift
 			// nothing is a chip that teaches the operator to distrust the footer.
 			...(this.#selectedRowIsBlocked() ? [{ label: "c clear limit", clickable: true, id: "clearBlock" }] : []),
+			// Only while the provider shows a signed-out note, for the same reason.
+			...(this.#activeDisabledCause() ? [{ label: "f forget signed-out", clickable: true, id: "forget" }] : []),
 			{ label: "a add", clickable: true, id: "add" },
 			{ label: "ctrl+s search", clickable: true, id: "search" },
 			{ label: "esc close", clickable: true, id: "close" },

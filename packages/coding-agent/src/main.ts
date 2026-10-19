@@ -57,21 +57,19 @@ import type { selectSession } from "./cli/session-picker";
 import { applySessionWorkdir, applyStartupCwd } from "./cli/startup-cwd";
 import { getLatestRelease, type ReleaseInfo, runAutoUpdate } from "./cli/update-cli";
 import { missingCredentialsMessage } from "./config/missing-credentials";
+import { normalizeModelPatternList } from "./config/model-pattern-list";
 import { ModelRegistry } from "./config/model-registry";
 import { modelResolutionFailureMessage } from "./config/model-resolution-failure";
 import {
-	expandRoleAlias,
 	fallbackForUnavailableDefault,
 	getModelMatchPreferences,
 	type ModelMatchPreferences,
-	normalizeModelPatternList,
 	type ResolveCliModelResult,
 	resolveCliModel,
-	resolveModelRoleValue,
 	resolveModelScope,
+	resolveModelSelectorValue,
 	type ScopedModel,
 } from "./config/model-resolver";
-import { DEFAULT_MODEL_SLOT } from "./config/model-roles";
 import { ModelsConfigFile } from "./config/models-config";
 import { getDefault, type SettingPath, Settings, settings } from "./config/settings";
 import { initializeWithSettings } from "./discovery";
@@ -1018,16 +1016,15 @@ export function applyResolvedSystemPromptInputs(
 
 /**
  * Resolve a model pattern a launch flag or setting named. A resolution warning is
- * printed; an unresolved pattern or missing credentials throws the failure `role` owns.
+ * printed; an unresolved pattern or missing credentials throws the failure `source` owns.
  */
 function resolveLaunchModel(
 	pattern: string,
-	role: string,
+	source: string,
 	modelRegistry: ModelRegistry,
 	preferences: ModelMatchPreferences,
-	settings?: Settings,
 ): ResolveCliModelResult & { model: Model } {
-	const resolved = resolveCliModel({ cliModel: pattern, modelRegistry, preferences, settings });
+	const resolved = resolveCliModel({ cliModel: pattern, modelRegistry, preferences });
 	if (resolved.warning) {
 		process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
 	}
@@ -1035,7 +1032,7 @@ function resolveLaunchModel(
 		throw new Error(resolved.error ?? modelResolutionFailureMessage([pattern], modelRegistry));
 	}
 	if (!modelRegistry.hasConfiguredAuth(resolved.model)) {
-		throw new Error(missingCredentialsMessage(resolved.model.provider, resolved.model.id, role));
+		throw new Error(missingCredentialsMessage(resolved.model.provider, resolved.model.id, source));
 	}
 	return { ...resolved, model: resolved.model };
 }
@@ -1107,17 +1104,16 @@ function applyExplicitModel(options: CreateAgentSessionOptions, ctx: LaunchModel
 		cliProvider: parsed.provider,
 		cliModel,
 		modelRegistry: ctx.modelRegistry,
-		settings: ctx.settings,
 		preferences: ctx.preferences,
 	});
 	if (resolved.warning) {
 		process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
 	}
 	if (resolved.error) {
-		// A role failure (`@smol` unset, `@nope` unknown) is a settings fact no
-		// extension can change, so it is reported here; an unknown id is deferred
-		// until extensions have registered their providers and models.
-		if (!resolved.roleFailure && !parsed.provider && !cliModel.includes(":")) {
+		// An unknown id is deferred until extensions have registered their
+		// providers and models; an explicit provider or a `:level` suffix is
+		// reported here.
+		if (!parsed.provider && !cliModel.includes(":")) {
 			options.modelPattern = cliModel;
 		} else {
 			process.stderr.write(`${chalk.red(resolved.error)}\n`);
@@ -1127,9 +1123,7 @@ function applyExplicitModel(options: CreateAgentSessionOptions, ctx: LaunchModel
 	}
 	if (!resolved.model) return;
 	options.model = resolved.model;
-	ctx.settings.overrideModelRoles({
-		default: resolved.selector ?? `${resolved.model.provider}/${resolved.model.id}`,
-	});
+	ctx.settings.override("defaultModel", resolved.selector ?? `${resolved.model.provider}/${resolved.model.id}`);
 	applySelectorThinking(options, parsed, resolved.thinkingLevel);
 }
 
@@ -1143,7 +1137,7 @@ function applyScopedStartModel(
 	ctx: LaunchModelContext,
 	scopedModels: readonly ScopedModel[],
 ): void {
-	const remembered = ctx.settings.getModelRole(DEFAULT_MODEL_SLOT);
+	const remembered = normalizeModelPatternList(ctx.settings.get("defaultModel"))[0];
 	if (remembered) {
 		applyRememberedScopedModel(options, ctx, scopedModels, remembered);
 	}
@@ -1165,14 +1159,14 @@ function applyScopedStartModel(
 	}
 }
 
-/** Start on the remembered default role's model when the scope contains it. */
+/** Start on the default model when the scope contains it. */
 function applyRememberedScopedModel(
 	options: CreateAgentSessionOptions,
 	ctx: LaunchModelContext,
 	scopedModels: readonly ScopedModel[],
 	remembered: string,
 ): void {
-	const rememberedSpec = resolveModelRoleValue(
+	const rememberedSpec = resolveModelSelectorValue(
 		remembered,
 		scopedModels.map(scopedModel => scopedModel.model),
 		{
@@ -1190,7 +1184,7 @@ function applyRememberedScopedModel(
 		: scopedModels.find(scopedModel => scopedModel.model.id.toLowerCase() === remembered.toLowerCase());
 	if (!rememberedModel) return;
 	options.model = rememberedModel.model;
-	// Apply explicit thinking level from remembered role value
+	// Apply an explicit thinking level from the default model selector
 	applySelectorThinking(
 		options,
 		ctx.parsed,
@@ -1214,10 +1208,8 @@ function applyPrewalk(options: CreateAgentSessionOptions, ctx: LaunchModelContex
 	if (!parsed.model && !parsed.continue && !parsed.resume) {
 		applyPrewalkStrongModel(options, ctx);
 	}
-	// The cheap target no longer falls back to a role alias. An unset role
-	// stopped resolving to a model (#980 fail-closed), so a target the
-	// operator did not name fails loud and points at the setting that fixes
-	// it, instead of dying inside role expansion with no corrective action.
+	// The cheap target has no fallback: a target the operator did not name
+	// fails loud and points at the setting that fixes it.
 	const cheapPattern =
 		normalizeModelPatternList(parsed.prewalkInto)[0] ||
 		normalizeModelPatternList(ctx.settings.get("prewalk.cheapModel"))[0];
@@ -1226,13 +1218,7 @@ function applyPrewalk(options: CreateAgentSessionOptions, ctx: LaunchModelContex
 			'Prewalk needs a cheap target model: set "prewalk.cheapModel" in settings or pass --prewalk-into <model>.',
 		);
 	}
-	const resolved = resolveLaunchModel(
-		cheapPattern,
-		"--prewalk target",
-		ctx.modelRegistry,
-		ctx.preferences,
-		ctx.settings,
-	);
+	const resolved = resolveLaunchModel(cheapPattern, "--prewalk target", ctx.modelRegistry, ctx.preferences);
 	options.prewalk = { target: resolved.model, thinkingLevel: resolved.thinkingLevel };
 }
 
@@ -1242,19 +1228,13 @@ function applyPrewalk(options: CreateAgentSessionOptions, ctx: LaunchModelContex
  * A resumed or continued session restores its own last model instead —
  * populating options.model here would make sdk.ts treat the session as
  * explicitly modeled and silently drop that restoration. Like the
- * remembered-default branch, this names no persisted default role: it is
+ * default-model branch, this persists no default model: it is
  * a per-launch start override, not a new owner of the default slot.
  */
 function applyPrewalkStrongModel(options: CreateAgentSessionOptions, ctx: LaunchModelContext): void {
 	const strongPattern = normalizeModelPatternList(ctx.settings.get("prewalk.strongModel"))[0];
 	if (!strongPattern) return;
-	const resolved = resolveLaunchModel(
-		strongPattern,
-		"prewalk.strongModel",
-		ctx.modelRegistry,
-		ctx.preferences,
-		ctx.settings,
-	);
+	const resolved = resolveLaunchModel(strongPattern, "prewalk.strongModel", ctx.modelRegistry, ctx.preferences);
 	options.model = resolved.model;
 	applySelectorThinking(options, ctx.parsed, resolved.thinkingLevel);
 }
@@ -1265,8 +1245,13 @@ function applyPlanYolo(options: CreateAgentSessionOptions, ctx: LaunchModelConte
 		throw new Error("--plan-yolo-into requires --plan-yolo");
 	}
 	if (!parsed.planYolo) return;
-	const rolePattern = expandRoleAlias(parsed.planYoloInto ?? "@smol", ctx.settings);
-	const resolved = resolveLaunchModel(rolePattern, "--plan-yolo target", ctx.modelRegistry, ctx.preferences);
+	// Unset, the implementation runs the session's model: `--model` when given,
+	// else the configured default model.
+	const targetPattern = parsed.planYoloInto ?? normalizeModelPatternList(ctx.settings.get("defaultModel"))[0];
+	if (!targetPattern) {
+		throw new Error("--plan-yolo needs a target model: pass --plan-yolo-into <model> or set a default model.");
+	}
+	const resolved = resolveLaunchModel(targetPattern, "--plan-yolo target", ctx.modelRegistry, ctx.preferences);
 	options.planYolo = { target: resolved.model, thinkingLevel: resolved.thinkingLevel };
 }
 
@@ -1391,7 +1376,7 @@ export async function buildSessionOptions(
 	applyResolvedSystemPromptInputs(options, resolvedSystemPrompt, resolvedAppendPrompt);
 	// Replan-driven title refresh resolves the override from this same field on
 	// `AgentSession`, so threading it through `CreateAgentSessionOptions` keeps
-	// both first-input titling (`input-controller.ts`) and replan refresh
+	// both first-input titling (`prompt-submission.ts`) and replan refresh
 	// (`AgentSession.#refreshTitleAfterReplan`) on one source of truth.
 	if (titleSystemPrompt) {
 		options.titleSystemPrompt = titleSystemPrompt;
@@ -1511,21 +1496,22 @@ function rejectRpcFileArguments(parsedArgs: Args): void {
  * `--no-extensions` turns off discovery of extensions the operator did not
  * name; a path named on the command line loads in full either way.
  */
-function startPluginPreload(parsedArgs: Args): Promise<void> {
+export function startPluginPreload(parsedArgs: Args): Promise<void> {
 	const home = os.homedir();
 	const pluginPreloadPromise =
 		parsedArgs.pluginDirs && parsedArgs.pluginDirs.length > 0
 			? logger.time("injectPluginDirRoots", injectPluginDirRoots, home, parsedArgs.pluginDirs, getProjectDir())
 			: logger.time("preloadPluginRoots", preloadPluginRoots, home, getProjectDir());
+	const adapted = pluginPreloadPromise.then(() => {});
 	// Mark the promise as handled so a synchronous failure does not surface as an unhandled-rejection
 	// warning before the caller reaches its await site.
-	pluginPreloadPromise.catch(() => {});
+	adapted.catch(() => {});
 
 	const cliExtensions = [...(parsedArgs.extensions ?? []), ...(parsedArgs.hooks ?? [])];
 	if (cliExtensions.length > 0) {
 		injectVeyyonExtensionCliRoots(cliExtensions, home, getProjectDir());
 	}
-	return pluginPreloadPromise;
+	return adapted;
 }
 
 /** The launch's settings, and whether the profile's `session.workdir` moved the project root. */
@@ -1652,18 +1638,12 @@ async function exitWithoutTerminal(parsedArgs: Args): Promise<void> {
 	process.exit(EXIT_USAGE);
 }
 
-/** Ephemeral (not persisted) model-role and thinking-display overrides from CLI flags and env vars. */
-function applyRoleAndDisplayOverrides(parsedArgs: Args, settings: Settings, launchMode: LaunchMode): void {
-	// Apply model role overrides from CLI args or env vars (ephemeral, not persisted)
-	const smolModel = parsedArgs.smol ?? $env.VEYYON_SMOL_MODEL;
-	const slowModel = parsedArgs.slow ?? $env.VEYYON_SLOW_MODEL;
-	const planModel = parsedArgs.plan ?? $env.VEYYON_PLAN_MODEL;
-	if (smolModel || slowModel || planModel) {
-		settings.overrideModelRoles({
-			smol: smolModel,
-			slow: slowModel,
-			plan: planModel,
-		});
+/** Ephemeral (not persisted) helper-model and thinking-display overrides from CLI flags. */
+function applyHelperAndDisplayOverrides(parsedArgs: Args, settings: Settings, launchMode: LaunchMode): void {
+	// --plan names the plan helper's model for this run only.
+	if (parsedArgs.plan) {
+		const helpers = settings.get("agent.helpers");
+		settings.override("agent.helpers", { ...helpers, plan: { ...helpers.plan, model: parsedArgs.plan } });
 	}
 	if (parsedArgs.compactionModel) {
 		settings.override("compaction.model", parsedArgs.compactionModel);
@@ -1772,7 +1752,6 @@ async function resolveLaunchScope(
 		modelPatterns,
 		modelRegistry,
 		getModelMatchPreferences(settings),
-		settings,
 	);
 }
 
@@ -2319,7 +2298,7 @@ async function runSessionLaunch(
 	// The TUI cannot render anything until its screen exists, and session startup is exactly
 	// when a degraded skill or an unprotectable secret is discovered. An interactive run
 	// therefore hands `createSession` a collector with NO sink, so those notices buffer and
-	// the TUI delivers them once it is up (see `InteractiveMode.start`). Every other mode
+	// the TUI delivers them once it is up (see the `setSink` call in `runInteractiveMode`). Every other mode
 	// keeps the default, which writes to stderr as they arrive.
 	const operatorNotices = launch.isInteractive ? new OperatorNotices() : new OperatorNotices(stderrNoticeSink);
 	const shared: LaunchSessionShared = { eventBus, operatorNotices, preloadedExtensions };
@@ -2400,7 +2379,7 @@ async function runRootCommandInner(parsed: Args, rawArgs: string[], deps: RunRoo
 
 	// Initialize discovery system with settings for provider persistence
 	logger.time("initializeWithSettings", initializeWithSettings, settings);
-	applyRoleAndDisplayOverrides(parsedArgs, settings, launchMode);
+	applyHelperAndDisplayOverrides(parsedArgs, settings, launchMode);
 	const showStartupSplash = await settleLaunchCard(parsedArgs, settings, prologue, launchMode, deps);
 
 	const authStorage = await discovery.authStorage;

@@ -13,7 +13,12 @@ import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import { getExaMcpTools } from "../exa/tools";
 import { discoverCustomToolPaths, loadCustomTools, type ToolPathWithSource } from "../extensibility/custom-tools";
-import type { CustomTool, CustomToolContext, CustomToolSessionEvent } from "../extensibility/custom-tools/types";
+import type {
+	CustomTool,
+	CustomToolContext,
+	CustomToolSessionEvent,
+	CustomToolUIContext,
+} from "../extensibility/custom-tools/types";
 import {
 	type BuiltinExtensionFactory,
 	type ExtensionContext,
@@ -235,6 +240,8 @@ export interface SessionCustomToolsInput {
 export interface SessionCustomTools {
 	tools: CustomTool[];
 	paths: ToolPathWithSource[];
+	/** Installs the host's UI as the discovered tools' factory-scoped `api.ui` and `api.hasUI`. */
+	setUIContext(uiContext: CustomToolUIContext, hasUI: boolean): void;
 }
 
 /**
@@ -260,10 +267,10 @@ export async function loadSessionCustomTools(input: SessionCustomToolsInput): Pr
 		const imageGenTools = await logger.time("getImageGenTools", () =>
 			getImageGenTools(input.modelRegistry, input.model),
 		);
-		tools.push(...(imageGenTools as unknown as CustomTool[]));
+		tools.push(...imageGenTools);
 	}
 	if (settings.get("speechgen.enabled") && requested(ttsTool.name)) {
-		tools.push(ttsTool as unknown as CustomTool);
+		tools.push(ttsTool);
 	}
 	if (whitelist?.includes(TOOL.web_search)) {
 		tools.push(...getSearchTools());
@@ -275,7 +282,7 @@ export async function loadSessionCustomTools(input: SessionCustomToolsInput): Pr
 				websets: settings.get("exa.enableWebsets"),
 			}),
 		);
-		tools.push(...(exaTools.filter(tool => requested(tool.name)) as unknown as CustomTool[]));
+		tools.push(...exaTools.filter(tool => requested(tool.name)));
 	}
 
 	const paths =
@@ -296,7 +303,7 @@ export async function loadSessionCustomTools(input: SessionCustomToolsInput): Pr
 		input.operatorNotices.error("tools", `${path}: ${error}`);
 	}
 	for (const { tool } of loaded.tools) tools.push(tool);
-	return { tools, paths };
+	return { tools, paths, setUIContext: loaded.setUIContext };
 }
 
 /** What {@link assembleToolRegistry} builds the registry from. */

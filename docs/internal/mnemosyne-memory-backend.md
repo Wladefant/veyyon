@@ -21,7 +21,7 @@ mnemopi:
 With this backend enabled, the coding agent:
 
 1. Opens one or more local Mnemopi SQLite databases according to the configured bank scoping.
-2. Recalls relevant memories into a `<memories>` block for the first model turn of a session and refreshes the base prompt if recall happens from the `agent_start` listener.
+2. Recalls relevant memories into a `<memories>` block for the first model turn of a session. A recall from the `agent_start` listener is published to the context tail as volatile memory context; the system prompt is not rewritten.
 3. Retains completed conversation turns into the retain bank after agent turns, no more often than `mnemopi.retainEveryNTurns`.
 4. Adds recalled memory as extra compaction context when compaction asks the memory backend for `preCompactionContext`.
 5. Uses the normal `/memory view`, `/memory stats`, `/memory diagnose`, `/memory clear`, and `/memory enqueue` commands through the shared memory backend interface.
@@ -52,7 +52,7 @@ Recalled memory is background context, not instructions. Current user messages a
 | `mnemopi.embeddingModel`      | variant default        | Explicit embedding model id; overrides `mnemopi.embeddingVariant`. Precedence: this setting > `MNEMOPI_EMBEDDING_MODEL` env > variant default.                          |
 | `mnemopi.embeddingApiUrl`     | env/default            | OpenAI-compatible embedding endpoint passed to `Mnemopi`.                                                                                                             |
 | `mnemopi.embeddingApiKey`     | env/default            | Embedding API key passed to `Mnemopi`.                                                                                                                                |
-| `mnemopi.llmMode`             | `smol`                 | `smol` uses the online tiny model (the TINY role from `/models`, else `@smol`), `remote` uses the settings below, and `none` disables LLM calls.                        |
+| `mnemopi.llmMode`             | `online`               | `online` uses the `memory` helper (`agent.helpers.memory.model`, else the session's model), `remote` uses the settings below, and `none` disables LLM calls. |
 | `mnemopi.llmBaseUrl`          | env/default            | OpenAI-compatible LLM endpoint for `llmMode: remote`.                                                                                                                   |
 | `mnemopi.llmApiKey`           | env/default            | LLM API key for `llmMode: remote`.                                                                                                                                      |
 | `mnemopi.llmModel`            | env/default            | LLM model id for `llmMode: remote`.                                                                                                                                     |
@@ -62,16 +62,16 @@ Recalled memory is background context, not instructions. Current user messages a
 The coding-agent wrapper applies scoping on top of the underlying `Mnemopi` package:
 
 - `global` uses one shared bank for recall and writes.
-- `per-project` writes to and recalls from a bank derived from the current working directory alone: its basename plus a stable hash of its absolute path, independent of the surrounding git layout.
+- `per-project` writes to and recalls from a bank derived from the current working directory alone: its basename plus a stable hash of its absolute path, independent of the surrounding git layout. Recall also reads legacy sibling banks under `banks/` whose rows all carry the current working directory (`extendRecallWithLegacyBanks`), which rescues memories written under an earlier bank derivation.
 - `per-project-tagged` writes to the project-local bank and recalls from both the project-local bank and the shared global bank, with duplicate recall results merged.
 
 The combined project-plus-global behavior lives in the wrapper. The `@veyyon/mnemopi` package itself still exposes banks and constructor options directly, including `bank` for selecting a bank name. Project-local banks other than the shared bank are stored as sibling bank databases managed by Mnemopi's `BankManager`.
 
-**Per-profile scoping:** `memory.backend`, every `mnemopi.*` setting, and the resulting SQLite database all resolve from the active profile (`VEYYON_PROFILE`). Profile `alpha` and profile `beta` get disjoint `mnemopi.dbPath` values under their own `~/.veyyon/profiles/<name>/agent/memories/mnemopi/` directory, so a memory saved under one profile is never recalled under another. Switching `VEYYON_PROFILE` mid-process is not supported, the active profile resolves once per process; restart to pick up a change.
+**Per-profile scoping:** `memory.backend`, every `mnemopi.*` setting, and the resulting SQLite database all resolve from the active profile (`VEYYON_PROFILE`). Profile `alpha` and profile `beta` get disjoint `mnemopi.dbPath` values under their own `~/.veyyon/profiles/<name>/agent/memories/mnemopi/` directory (the XDG state directory instead, for the default profile after `veyyon config init-xdg`), so a memory saved under one profile is never recalled under another. Switching `VEYYON_PROFILE` mid-process is not supported, the active profile resolves once per process; restart to pick up a change.
 
 ## LLM and embeddings
 
-The backend passes these settings to the `Mnemopi` constructor; if a setting is omitted, Mnemopi falls back to its `MNEMOPI_*` environment defaults. The backend does not download or run a local GGUF LLM. LLM-dependent paths use a configured pi-ai model, an opt-in local on-device memory model (`providers.memoryModel`, ONNX, overrides `smol`/`remote` when set to a local model), a dynamic completion function, a remote OpenAI-compatible endpoint, or deterministic no-LLM fallbacks.
+The backend passes these settings to the `Mnemopi` constructor; if a setting is omitted, Mnemopi falls back to its `MNEMOPI_*` environment defaults. The backend does not download or run a local GGUF LLM. LLM-dependent paths use a configured pi-ai model, an opt-in local on-device memory model (`providers.memoryModel`, ONNX, overrides `online`/`remote` when set to a local model), a dynamic completion function, a remote OpenAI-compatible endpoint, or deterministic no-LLM fallbacks.
 
 FTS-only:
 
@@ -121,7 +121,7 @@ mnemopi:
 the product uses: `${VAR}` or a bare `VAR` reads the environment, `literal:<text>` is verbatim, and
 `!command` runs a command and takes its stdout. A named variable that is unset resolves to nothing, so
 no credential is sent. Resolution happens where the client is built (`resolveMnemopiProviderOptions` in
-`src/mnemopi/backend.ts`); a config loaded without it carries the request text and no LLM.
+`src/memory/mnemopi/backend.ts`); a config loaded without it carries the request text and no LLM.
 
 Equivalent constructor shapes:
 
@@ -145,18 +145,18 @@ new Mnemopi({
 });
 ```
 
-pi-ai smol model LLM:
+Online model LLM:
 
 ```yaml
 mnemopi:
-  llmMode: smol
+  llmMode: online
 ```
 
-The coding agent resolves the tiny→smol role chain (`resolveRoleSelectionWithInherit(["tiny", "smol"], ...)`, the TINY role from `/models` when set, else `@smol`, else the default model) and passes a dynamic completion function so every Mnemopi LLM call can fetch the current provider credentials at call time; if no model resolves, it logs a warning and continues without an LLM:
+The coding agent resolves the `memory` helper (`resolveHelperModel(settings, "memory", ..., session.model)`: `agent.helpers.memory.model` when set, else the session's model, else `defaultModel`) and passes a dynamic completion function so every Mnemopi LLM call can fetch the current provider credentials at call time; if no model resolves, it logs a warning and continues without an LLM:
 
 ```ts
 new Mnemopi({
-  llm: async (prompt, opts) => completeSmolWithCurrentAuth(prompt, opts),
+  llm: async (prompt, opts) => completeWithCurrentAuth(prompt, opts),
 });
 ```
 
@@ -168,4 +168,4 @@ new Mnemopi({
 - `/memory stats` and `/memory diagnose` render backend-specific bank statistics/diagnostics when the Mnemopi backend is active.
 - Agents do not own separate Mnemopi retain loops; they alias the parent state when a parent Mnemopi state exists, and otherwise remain inert.
 
-*Verified against `63ffc8131ffb8d35ccbbb1c5de69531a7016eff4` on 2026-09-06.*
+*Verified against `577745ddc5` on 2026-10-14.*

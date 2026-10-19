@@ -408,6 +408,105 @@ describe("antigravity usage provider", () => {
 		expect(claude5h!.amount.remainingFraction).toBe(0);
 		expect(claude5h!.status).toBe("exhausted");
 	});
+
+	it("supplements a partial Claude/GPT summary with the omitted Gemini listing counter", async () => {
+		let calls = 0;
+		const fetch: FetchImpl = async () => {
+			calls++;
+			return new Response(JSON.stringify(
+				calls === 1
+					? {
+							groups: [{
+								displayName: "Claude and GPT models",
+								buckets: [{ bucketId: "3p-5h", window: "5h", remainingFraction: 0.8 }],
+							}],
+						}
+					: {
+							models: {
+								claude: makeApiModel("Claude", { remainingFraction: 0.2, modelProvider: "MODEL_PROVIDER_ANTHROPIC" }),
+								gemini: makeApiModel("Gemini", { remainingFraction: 0.6, modelProvider: "MODEL_PROVIDER_GOOGLE" }),
+							},
+						},
+			), { status: 200, headers: { "content-type": "application/json" } });
+		};
+		const report = await antigravityUsageProvider.fetchUsage!(
+			{ provider: "google-antigravity", credential: makeCredential(), signal: undefined },
+			makeCtx(fetch),
+		);
+		expect(report?.limits.some(limit => limit.id.includes(":google:"))).toBe(true);
+		expect(report?.limits.some(limit => limit.id.includes(":claude-gpt:"))).toBe(true);
+		expect(report?.limits[0]?.amount.remainingFraction).toBe(0.6);
+	});
+
+	it("keeps summary windows authoritative when supplementing a counter", async () => {
+		let calls = 0;
+		const fetch: FetchImpl = async () => {
+			calls++;
+			return new Response(JSON.stringify(calls === 1
+				? { groups: [{ displayName: "Claude and GPT models", buckets: [{ bucketId: "3p-5h", window: "5h", remainingFraction: 0.8 }] }] }
+				: { models: { claude: makeApiModel("Claude", { remainingFraction: 0.1, modelProvider: "MODEL_PROVIDER_ANTHROPIC" }), gemini: makeApiModel("Gemini", { remainingFraction: 0.4, modelProvider: "MODEL_PROVIDER_GOOGLE" }) } }),
+			{ status: 200, headers: { "content-type": "application/json" } });
+		};
+		const report = await antigravityUsageProvider.fetchUsage!(
+			{ provider: "google-antigravity", credential: makeCredential(), signal: undefined },
+			makeCtx(fetch),
+		);
+		const claude = report?.limits.find(limit => limit.id.includes(":claude-gpt:"));
+		expect(claude?.amount.remainingFraction).toBe(0.8);
+		expect(claude?.scope.windowId).toBe("5h");
+	});
+
+	it("does not fetch the model listing for a complete summary", async () => {
+		let calls = 0;
+		const fetch: FetchImpl = async () => {
+			calls++;
+			return new Response(JSON.stringify({ groups: [
+				{ displayName: "Gemini Models", buckets: [{ bucketId: "gemini-5h", window: "5h", remainingFraction: 0.7 }] },
+				{ displayName: "Claude and GPT models", buckets: [{ bucketId: "3p-5h", window: "5h", remainingFraction: 0.8 }] },
+			] }), { status: 200, headers: { "content-type": "application/json" } });
+		};
+		await antigravityUsageProvider.fetchUsage!(
+			{ provider: "google-antigravity", credential: makeCredential(), signal: undefined },
+			makeCtx(fetch),
+		);
+		expect(calls).toBe(1);
+	});
+
+	it("returns the partial summary when its supplementary listing fails", async () => {
+		let calls = 0;
+		const fetch: FetchImpl = async () => {
+			calls++;
+			return calls === 1
+				? new Response(JSON.stringify({ groups: [{ displayName: "Claude and GPT models", buckets: [{ bucketId: "3p-5h", window: "5h", remainingFraction: 0.8 }] }] }), { status: 200, headers: { "content-type": "application/json" } })
+				: new Response("unavailable", { status: 503 });
+		};
+		const report = await antigravityUsageProvider.fetchUsage!(
+			{ provider: "google-antigravity", credential: makeCredential(), signal: undefined },
+			makeCtx(fetch),
+		);
+		expect(report?.limits).toHaveLength(1);
+		expect(report?.limits[0]?.id).toContain(":claude-gpt:");
+	});
+
+	it("returns the partial summary when supplementary listing transport throws", async () => {
+		const fetch: FetchImpl = async input => {
+			if (String(input).includes("retrieveUserQuotaSummary")) {
+				return new Response(JSON.stringify({
+					groups: [{
+						displayName: "Claude and GPT models",
+						buckets: [{ bucketId: "3p-5h", window: "5h", remainingFraction: 0.8 }],
+					}],
+				}), { status: 200, headers: { "content-type": "application/json" } });
+			}
+			throw new Error("listing transport failed");
+		};
+		const report = await antigravityUsageProvider.fetchUsage!(
+			{ provider: "google-antigravity", credential: makeCredential(), signal: undefined },
+			makeCtx(fetch),
+		);
+		expect(report?.limits).toHaveLength(1);
+		expect(report?.limits[0]?.id).toContain(":claude-gpt:");
+	});
 });
 
 describe("antigravity ranking strategy", () => {

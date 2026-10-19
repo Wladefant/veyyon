@@ -80,6 +80,8 @@ const FRONTMATTER_MODEL = "google/gemini-2.5-pro";
 const SESSION_MODEL = "anthropic/claude-opus-4-5";
 const FALLBACK_MODEL = "openai/gpt-5";
 const DEPTH_MODEL = "openai/gpt-5-mini";
+/** The profile's default model role, set to a model no agent may land on: agents follow the session, not the role. */
+const DEFAULT_ROLE_MODEL = "openai/gpt-4.1";
 
 let geometryStub: { restore(): void } | undefined;
 
@@ -342,7 +344,7 @@ describe("exactly one setting decides what an agent runs, in each scope", () => 
 
 	/**
 	 * The scope is off, not empty. A shared scope whose chain names nothing runs every agent on the
-	 * default model role at the documented effort — it does NOT reach past the switch for a lane or
+	 * session's model at the session's effort — it does NOT reach past the switch for a lane or
 	 * a definition, which is the fall-through that reopens the ladder the switch replaced. Asserted
 	 * at every depth the lane chain can answer at, and against a definition too, because a
 	 * fall-through would show up as `lane` at one depth and `frontmatter` at another.
@@ -354,16 +356,18 @@ describe("exactly one setting decides what an agent runs, in each scope", () => 
 				[AGENT]: { model: BLANKET_MODEL, thinkingLevel: ThinkingLevel.High, agents: { model: DEPTH_MODEL } },
 			},
 		});
-		store.setModelRole("default", SESSION_MODEL);
+		store.setDefaultModel(DEFAULT_ROLE_MODEL);
 
 		for (const taskDepth of [undefined, 1, 2]) {
 			const resolved = resolveAgentModel({
 				settings: store,
 				agentName: AGENT,
 				agentModel: FRONTMATTER_MODEL,
+				sessionModelPattern: SESSION_MODEL,
 				taskDepth,
 			});
 			expect(resolved.source, `depth ${taskDepth}`).toBe("default");
+			expect(resolved.inherited, `depth ${taskDepth}`).toBe(true);
 			expect(resolved.patterns, `depth ${taskDepth}`).toEqual([SESSION_MODEL]);
 			expect(resolveAgentThinkingLevel({ settings: store, agentName: AGENT, taskDepth }), `depth ${taskDepth}`).toBe(
 				AGENT_DEFAULT_EFFORT,
@@ -390,11 +394,12 @@ describe("exactly one setting decides what an agent runs, in each scope", () => 
 	});
 
 	/**
-	 * The union a provider surface reads names every chain a spawn can land on WITHOUT anyone
-	 * editing a setting: the default model role, the shared chain, and each lane at every level.
-	 * Both scopes are in it deliberately — the switch is one keystroke, and re-annotating providers
-	 * on it would make the badges flicker — so a chain missing from the union is a provider
-	 * `/account status` never mentions. Pinned by equality, in both scope states.
+	 * The union a provider surface reads names every chain a setting points a spawn at: the shared
+	 * chain and each lane at every level. The default model role is not in it: an agent no setting
+	 * names a model for runs the session's model, whatever the role says. Both scopes are in it
+	 * deliberately — the switch is one keystroke, and re-annotating providers on it would make the
+	 * badges flicker — so a chain missing from the union is a provider `/account status` never
+	 * mentions. Pinned by equality, in both scope states.
 	 */
 	it("names every chain a spawn can land on, in both scopes", () => {
 		for (const sharedModel of [false, true]) {
@@ -403,10 +408,9 @@ describe("exactly one setting decides what an agent runs, in each scope", () => 
 				"agent.model": [FALLBACK_MODEL, FRONTMATTER_MODEL],
 				"agent.agents": { [AGENT]: { model: BLANKET_MODEL, agents: { model: DEPTH_MODEL } } },
 			});
-			store.setModelRole("default", SESSION_MODEL);
+			store.setDefaultModel(SESSION_MODEL);
 
 			expect(configuredAgentModelChains(store), `shared ${sharedModel}`).toEqual([
-				SESSION_MODEL,
 				[FALLBACK_MODEL, FRONTMATTER_MODEL],
 				BLANKET_MODEL,
 				DEPTH_MODEL,
@@ -440,18 +444,19 @@ describe("exactly one setting decides what an agent runs, in each scope", () => 
 	 * Precedence is total and stated once. Two layers being right in isolation says nothing about
 	 * which wins when both are set, which is the exact question the deleted table got wrong.
 	 */
-	it("orders the lane over frontmatter, and frontmatter over the default", () => {
+	it("orders the lane over frontmatter, and frontmatter over the session's model", () => {
 		const lane = Settings.isolated({ "agent.agents": { [AGENT]: { model: BLANKET_MODEL } } });
 		const nothing = Settings.isolated();
-		nothing.setModelRole("default", SESSION_MODEL);
+		nothing.setDefaultModel(DEFAULT_ROLE_MODEL);
+		const session = { sessionModelPattern: SESSION_MODEL };
 
-		expect(resolveAgentModel({ settings: lane, agentName: AGENT, agentModel: FRONTMATTER_MODEL }).patterns).toEqual([
-			BLANKET_MODEL,
-		]);
 		expect(
-			resolveAgentModel({ settings: nothing, agentName: AGENT, agentModel: FRONTMATTER_MODEL }).patterns,
+			resolveAgentModel({ settings: lane, agentName: AGENT, agentModel: FRONTMATTER_MODEL, ...session }).patterns,
+		).toEqual([BLANKET_MODEL]);
+		expect(
+			resolveAgentModel({ settings: nothing, agentName: AGENT, agentModel: FRONTMATTER_MODEL, ...session }).patterns,
 		).toEqual([FRONTMATTER_MODEL]);
-		expect(resolveAgentModel({ settings: nothing, agentName: AGENT }).patterns).toEqual([SESSION_MODEL]);
+		expect(resolveAgentModel({ settings: nothing, agentName: AGENT, ...session }).patterns).toEqual([SESSION_MODEL]);
 	});
 
 	/**
@@ -460,10 +465,12 @@ describe("exactly one setting decides what an agent runs, in each scope", () => 
 	 */
 	it("leaves every other agent where it was", () => {
 		const store = Settings.isolated({ "agent.agents": { [AGENT]: { model: BLANKET_MODEL } } });
-		store.setModelRole("default", SESSION_MODEL);
+		store.setDefaultModel(DEFAULT_ROLE_MODEL);
 
-		expect(resolveAgentModel({ settings: store, agentName: AGENT }).patterns).toEqual([BLANKET_MODEL]);
-		const other = resolveAgentModel({ settings: store, agentName: "reviewer" });
+		expect(
+			resolveAgentModel({ settings: store, agentName: AGENT, sessionModelPattern: SESSION_MODEL }).patterns,
+		).toEqual([BLANKET_MODEL]);
+		const other = resolveAgentModel({ settings: store, agentName: "reviewer", sessionModelPattern: SESSION_MODEL });
 		expect(other.patterns).toEqual([SESSION_MODEL]);
 		expect(other.source).toBe("default");
 	});
@@ -609,7 +616,7 @@ describe("the layer that chose an agent's model is one of exactly four", () => {
 											}
 										: {}),
 								});
-								if (defaultRole) store.setModelRole("default", defaultRole);
+								if (defaultRole) store.setDefaultModel(defaultRole);
 								produced.add(
 									resolveAgentModel({
 										settings: store,
@@ -638,9 +645,9 @@ describe("the layer that chose an agent's model is one of exactly four", () => {
 	 */
 	it("resolves the same with and without the depth-keyed chain set", () => {
 		const clean = Settings.isolated();
-		clean.setModelRole("default", SESSION_MODEL);
+		clean.setDefaultModel(SESSION_MODEL);
 		const stale = Settings.isolated({ "agent.modelByDepth": { "1": DEPTH_MODEL } });
-		stale.setModelRole("default", SESSION_MODEL);
+		stale.setDefaultModel(SESSION_MODEL);
 
 		for (const taskDepth of [undefined, 1, 2]) {
 			const a = resolveAgentModel({ settings: clean, agentName: AGENT, taskDepth });
@@ -671,7 +678,7 @@ describe("the layer that chose an agent's model is one of exactly four", () => {
 		expect(labels.lane).toBe(`agent.agents.${AGENT}`);
 		expect(agentModelSourceLabel("lane", AGENT, 2)).toBe(`agent.agents.${AGENT}.agents.agents`);
 		expect(labels.frontmatter).toContain("frontmatter");
-		expect(labels.default).toContain("default model role");
+		expect(labels.default).toBe("the session's model");
 		expect(new Set(Object.values(labels)).size).toBe(4);
 	});
 });
@@ -738,16 +745,17 @@ async function openAgentEditor(agentName: string): Promise<AgentEditor> {
 			.find(line => line.startsWith("›"))
 			?.slice(1)
 			.trim();
-	// Agent discovery is filesystem IO started in the submenu's constructor and it exposes no
-	// settled signal, so there is nothing to await and no clock to fake. Yielding the event loop
-	// lets the IO completion run without a wall-clock delay tuned to "long enough"; the bound is
-	// an iteration count, so a discovery that never completes fails fast instead of hanging.
-	for (let spin = 0; !content().some(line => line.includes(agentName)); spin++) {
-		if (spin > 20_000) throw new Error(`agent discovery never listed ${agentName}:\n${frame().join("\n")}`);
+	// Agent discovery is filesystem IO started in the submenu's constructor, and the page shows
+	// "Reading agents" until it lands. Yielding the event loop lets the IO completion run without a
+	// wall-clock delay tuned to "long enough"; the bound is an iteration count, so a discovery that
+	// never completes fails fast instead of hanging. The subagent rows sit below the helpers, past
+	// the list window, so the wait reads the loading line rather than the agent's own row.
+	for (let spin = 0; content().some(line => line.includes("Reading agents")); spin++) {
+		if (spin > 20_000) throw new Error(`agent discovery never finished:\n${frame().join("\n")}`);
 		await setImmediate();
 	}
-	// Walk to the row by name: the roster is alphabetical, so a fixed number of Down presses
-	// configures whichever agent happens to sort first.
+	// Walk to the row by name: the roster lists the helpers first and then the agents
+	// alphabetically, so a fixed number of Down presses configures whichever row sorts there.
 	for (let step = 0; ; step++) {
 		if (selectedRow()?.startsWith(agentName)) break;
 		if (step > 64) throw new Error(`never landed on the ${agentName} row`);
@@ -840,6 +848,26 @@ describe("every row the lane page shows is a row the lane page changes", () => {
 		const screen = editor.frame().join("\n");
 		expect(screen).toContain(`${AGENT} › agents`);
 		expect(screen).toContain("inherit · the level above");
+	});
+
+	/**
+	 * The line above the rows states what the lane runs. With nothing set it runs the session's model
+	 * and effort and says so in one phrase; once the lane sets one half, the line names that half and
+	 * leaves the other on the session.
+	 */
+	it("states the session's model and effort until the lane sets one of them", async () => {
+		const runs = async (): Promise<string | undefined> => {
+			const editor = await openAgentEditor(AGENT);
+			return editor
+				.frame()
+				.map(line => contentColumn(line).trim())
+				.find(line => line.startsWith("Runs "));
+		};
+		expect(await runs()).toBe("Runs the session's model and effort");
+		settings.set("agent.agents", { [AGENT]: { thinkingLevel: "high" } });
+		expect(await runs()).toBe("Runs session model · high effort");
+		settings.set("agent.agents", { [AGENT]: { model: "anthropic/claude-sonnet-4-5" } });
+		expect(await runs()).toMatch(/^Runs \S.* · session effort$/);
 	});
 });
 

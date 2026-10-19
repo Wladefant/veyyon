@@ -25,7 +25,7 @@ import type { Model } from "@veyyon/ai/types";
 import { Effort } from "@veyyon/catalog/effort";
 import { getBundledModel, getBundledModels } from "@veyyon/catalog/models";
 
-/** The efforts every row in this suite advertises. */
+/** The efforts the sentinel sweep tries on every row; a row refuses the ones it does not advertise. */
 const EFFORTS = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] as const;
 
 /** `it.each` widens its columns to `string`; the catalog wants the provider union. */
@@ -88,12 +88,11 @@ describe("Google thinking budgets reach the wire", () => {
 		const model = bundledRow(provider, id);
 		expect(model, `${provider}/${id} is missing from the bundled catalog`).toBeDefined();
 
-		for (const effort of EFFORTS) {
-			// Two refusal paths, one contract. An effort outside the row's declared
-			// ladder (gemini-flash-latest advertises low..high, so `minimal`) is
-			// refused by effort validation first; an effort on the ladder still
-			// reaches getGoogleBudget, which refuses rather than emit the dynamic
-			// sentinel. Both name why; neither lets an ignored effort through.
+		// Cover both validation paths across the row: advertised efforts reach the budget refusal;
+		// efforts outside its declared ladder are rejected before budget calculation.
+		const advertised = model.thinking?.efforts ?? [];
+		expect(advertised.length).toBeGreaterThan(0);
+		for (const effort of new Set([...EFFORTS, ...advertised])) {
 			expect(() => budgetFor(model, effort)).toThrow(/does not accept a thinking budget|is not supported by/);
 		}
 		// The message has to be actionable, not just loud: it names the row and a way forward.
