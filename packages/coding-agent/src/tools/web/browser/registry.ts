@@ -302,9 +302,9 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 		}
 	}
 
-	const puppeteer = await loadPuppeteer();
 	let browser: Browser;
 	try {
+		const puppeteer = await loadPuppeteer();
 		browser = await puppeteer.connect({
 			browserURL: cdpUrl,
 			defaultViewport: null,
@@ -357,8 +357,12 @@ export async function releaseOrphanBrowsers(opts: ReleaseOrphanBrowsersOptions):
 		if (opts.hasRemainingTabs && opts.hasRemainingTabs(handle)) continue;
 
 		if (browsers.get(handle.key) === handle) browsers.delete(handle.key);
-		await disposeBrowserHandle(handle, { kill: opts.kill });
-		count++;
+		try {
+			await disposeBrowserHandle(handle, { kill: opts.kill });
+			count++;
+		} catch (err) {
+			logger.warn("Failed to dispose orphan browser during sweep", { key: handle.key, error: errorMessage(err) });
+		}
 	}
 	return count;
 }
