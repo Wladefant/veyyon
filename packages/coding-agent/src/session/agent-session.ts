@@ -476,6 +476,8 @@ function getCustomMessageTextContent(message: Pick<CustomMessage, "content">): s
 const SESSION_NOTICE_SCAN_MS = 1000;
 /** Notice ids a session remembers to drop a re-offered claim; older ones have long left `claimed/`. */
 const MAX_SEEN_NOTICE_IDS = 512;
+/** Interval between session heartbeat log lines while the session is alive. */
+const SESSION_HEARTBEAT_INTERVAL_MS = 60_000;
 
 /**
  * Emit a warn-level log for a turn that ended in a provider error so recurring
@@ -783,6 +785,10 @@ export class AgentSession {
 	#exitRecorded = false;
 	/** Session ids can change on fork/compaction; cleanup must use the id recorded at start. */
 	#toolMarkerSessions = new Map<string, string>();
+	/** In-flight tool names keyed by toolCallId for heartbeat phase reporting. */
+	readonly #inFlightToolNames = new Map<string, string>();
+	/** 60-second periodic heartbeat log interval while the session is alive. */
+	#heartbeatLogInterval?: NodeJS.Timeout;
 	/** This session's share of the process heartbeat; left when the exit is recorded. */
 	#heartbeat?: HeartbeatHandle;
 	/** Unsubscribers for the process-wide and settings listeners, released at the end of dispose. */
@@ -1730,6 +1736,8 @@ export class AgentSession {
 		this.#cancelExitRecorder = postmortem.register(`agent-session:${this.sessionManager.getSessionId()}`, reason => {
 			this.#recordSessionExit(reason);
 		});
+		this.#heartbeatLogInterval = setInterval(() => this.#logHeartbeat(), SESSION_HEARTBEAT_INTERVAL_MS);
+		this.#heartbeatLogInterval.unref?.();
 
 		this.#advisorRoster = this.#createAdvisorRoster(config);
 		this.#advisorRoster.enableFromSettings();
@@ -2482,9 +2490,43 @@ export class AgentSession {
 		this.#emit({ type: "notice", level, message, source });
 	}
 
+	/** The current turn phase or tool name in flight for heartbeat logging, or empty string when none. */
+	get heartbeatPhase(): string {
+		if (this.#inFlightToolNames.size > 0) {
+			return Array.from(this.#inFlightToolNames.values()).join(",");
+		}
+		if (this.#toolMarkerSessions.size > 0) {
+			return "tool";
+		}
+		if (this.isCompacting) {
+			return "compaction";
+		}
+		if (this.isStreaming) {
+			return "provider";
+		}
+		return "";
+	}
+
+	#logHeartbeat(): void {
+		try {
+			logger.info("Session heartbeat", {
+				pid: process.pid,
+				sessionId: this.sessionManager.getSessionId(),
+				phase: this.heartbeatPhase,
+			});
+		} catch {
+			// Heartbeat logging must never break the session.
+		}
+	}
+
 	#recordSessionExit(reason: postmortem.Reason | "dispose"): void {
 		if (this.#exitRecorded) return;
 		this.#exitRecorded = true;
+		if (this.#heartbeatLogInterval !== undefined) {
+			clearInterval(this.#heartbeatLogInterval);
+			this.#heartbeatLogInterval = undefined;
+		}
+		this.#inFlightToolNames.clear();
 		// Same reason as the markers below: this exit reaches JavaScript, so the
 		// log accounts for it and the heartbeat must not report it as silent.
 		this.#heartbeat?.leave();
@@ -2670,6 +2712,7 @@ export class AgentSession {
 		// awaited subscribers below: a listener that throws would otherwise leave this
 		// process looking like it died inside a call that had already returned.
 		if (event.type === "tool_execution_end") {
+			this.#inFlightToolNames.delete(event.toolCallId);
 			const markerSessionId = this.#toolMarkerSessions.get(event.toolCallId);
 			if (markerSessionId !== undefined) {
 				clearToolCallInFlight(markerSessionId, event.toolCallId);
@@ -2723,6 +2766,7 @@ export class AgentSession {
 				recordToolExecutionStart(this, event);
 				const markerSessionId = this.sessionManager.getSessionId();
 				this.#toolMarkerSessions.set(event.toolCallId, markerSessionId);
+				this.#inFlightToolNames.set(event.toolCallId, event.toolName);
 				markToolCallInFlight({
 					toolCallId: event.toolCallId,
 					toolName: event.toolName,
@@ -3628,6 +3672,11 @@ export class AgentSession {
 	async #doDispose(options: AgentSessionDisposeOptions = {}): Promise<void> {
 		this.beginDispose();
 		this.#recordSessionExit(options.reason ?? "dispose");
+		if (this.#heartbeatLogInterval !== undefined) {
+			clearInterval(this.#heartbeatLogInterval);
+			this.#heartbeatLogInterval = undefined;
+		}
+		this.#inFlightToolNames.clear();
 		this.#cancelExitRecorder?.();
 		this.#cancelExitRecorder = undefined;
 		try {
