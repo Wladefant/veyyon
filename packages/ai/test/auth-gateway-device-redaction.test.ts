@@ -146,6 +146,7 @@ it("flushes held deltas before semantic errors and discards them on transport ab
 	const semantic = new GatewaySemanticRedactor(["provider-secret"]);
 	expect(semantic.push(prefix)).toBe("");
 	expect(semantic.push(error)).toBe(prefix + error);
+	expect(semantic.push('data: {"type":"text_delta","delta":"secret"}\n\n')).toBe('data: {"type":"text_delta","delta":"[REDACTED]"}\n\n');
 	expect(semantic.push("", true)).toBe("");
 	let source!: ReadableStreamDefaultController<Uint8Array>;
 	let requested!: () => void;

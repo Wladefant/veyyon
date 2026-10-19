@@ -14,7 +14,6 @@ export class GatewaySemanticRedactor {
 	constructor(private readonly secrets: readonly string[]) {}
 
 	push(raw: string, final = false): string {
-		let failed = false;
 		if (raw) {
 			const frame: Frame = { raw, slots: [], completed: [], changed: false };
 			const match = /^((?:[^\n]*\n)*data: )([^\n]*)\n\n$/.exec(raw);
@@ -25,8 +24,7 @@ export class GatewaySemanticRedactor {
 					if (value && typeof value === "object" && !Array.isArray(value)) {
 						frame.value = value as Record<string, unknown>;
 						if (value.type === "error" || value.type === "response.failed") {
-							// The stream ends on this frame: held deltas flush through the redaction pass before it.
-							failed = true;
+							// Held deltas flush through the redaction pass before this frame. Tails stay, so a later delta is still redacted.
 							final = true;
 						} else {
 							frame.prefix = match[1];
@@ -127,7 +125,6 @@ export class GatewaySemanticRedactor {
 			if (tail) this.#tails.set(channel, tail);
 			else this.#tails.delete(channel);
 		}
-		if (failed) this.#tails.clear();
 		return output;
 	}
 
