@@ -146,6 +146,7 @@
 - Built the Anthropic OAuth, Claude usage, Cursor auth, OpenRouter key-check and Gemini key-check URLs from the `@veyyon/catalog/provider-endpoints` constants instead of repeated host literals; no user-visible change.
 - OpenAI-compatible and LiteLLM discovery take their request deadline from `withScopedTimeoutSignal` in `@veyyon/utils` and `toNonEmptyString` from the catalog's own helpers instead of private copies; no user-visible change.
 - The `OPENROUTER_API_ENDPOINT` documentation states which clients fall back to it; no user-visible change.
+- The model cache writes under `synchronous = NORMAL` in WAL mode instead of flushing the disk on every commit, so storing one provider's discovered models at startup takes 0.06–0.08 ms instead of 0.41–0.63 ms, and at most 0.87 ms instead of up to 38 ms.
 - `engine/` is grouped by concern into `members`, `plan`, `run`, `trial`, `kit`, `compare`, `harness`, `auth`, `io`, `wire` and `corpus`, and the overlay loaders and paired statistics every suite shares moved into it from the in-process backend and the DeepSWE suite.
 - An enum setting whose configured value is not one of its members reads as the declaration's `invalid` member when one is declared, and as its default otherwise; `getInvalidValue` returns that member.
 - A setting whose configured value is not of its declared kind (a string for a boolean, `null` for an array, a non-finite number) reads as its default and is reported once; `hasDeclaredKind` states the rule.
@@ -194,7 +195,8 @@
 
 ### Fixed
 
-- A resumed session echoes keystrokes while its transcript is rebuilt: the transcript is built off screen in 8 ms slices and replaces the startup frame in one step, so on a 150-prompt session the slowest keystroke echo after the composer appears falls from 112–141 ms to 43–45 ms.
+- Keys typed while a session named by `--resume`, `--continue` or `--fork` is loading show in the composer instead of being discarded: the launch card now paints for those launches and holds the keys, so "hello" typed 30 ms after launch appears 40–53 ms after launch; a bare `--resume` still opens the session picker without the card.
+- A resumed session echoes keystrokes while its transcript is rebuilt: the transcript is built off screen in 8 ms slices, the first in a turn after the startup work and each tool's argument schema in a turn of its own, and replaces the startup frame in one step, so on a 150-prompt session the slowest keystroke echo after the composer appears falls from 112–141 ms to 40–45 ms.
 - A foreground `bash` call that returns its result inline drops its background-job record when it finishes instead of keeping it, its output, its abort controller and an eviction timer for five minutes, so a session that ran 3,200 commands settles at 225 MB of anonymous memory instead of 242 MB and holds no dead job per command.
 - A `search` of type `structure` and `ast_edit` parse a PHP file that closes its `?>` tag and continues as HTML under the full PHP grammar instead of reporting it as a parse error and skipping it, so in a 556-file WordPress plugin 0 PHP files fail to parse instead of 139, `echo $X;` finds 3,238 matches instead of 2,636, and each structure search takes 454 ms instead of 979 ms.
 - A `search` of type `structure` prints a `$$$` binding as the source it spans instead of listing each separator as an element, so `foo($$$ARGS)` over `foo(a, b)` shows `ARGS=[a, b]` instead of `ARGS=[a, ,, b]`.
