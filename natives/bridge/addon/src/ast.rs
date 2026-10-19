@@ -4,6 +4,10 @@ use std::{
 	cmp::Ordering,
 	collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap},
 	path::{Path, PathBuf},
+	sync::{
+		Arc,
+		atomic::{AtomicUsize, Ordering as AtomicOrdering},
+	},
 };
 
 use ast_grep_core::{
@@ -15,10 +19,11 @@ use ast_grep_core::{
 };
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-use rayon::prelude::*;
+use parking_lot::Mutex;
 use veyyon_ast::{
 	Grammar, SupportLang,
 	ops::{self as shared_ops},
+	required_text::RequiredText,
 };
 
 use crate::{
@@ -472,11 +477,14 @@ fn normalize_search_path(path: Option<String>) -> Result<PathBuf> {
 	Ok(std::fs::canonicalize(&absolute).unwrap_or(absolute))
 }
 
-fn collect_candidates(
-	path: Option<String>,
-	glob: Option<&str>,
-	ct: &task::CancelToken,
-) -> Result<Vec<FileCandidate>> {
+/// The files a search or a rewrite reads: one named file, or the files a walk
+/// of a directory accepts.
+enum SearchScope {
+	File(FileCandidate),
+	Tree { root: PathBuf, request: veyyon_walker::WalkRequest },
+}
+
+fn resolve_scope(path: Option<String>, glob: Option<&str>) -> Result<SearchScope> {
 	let search_path = normalize_search_path(path)?;
 	let metadata =
 		std::fs::metadata(&search_path).map_err(|err| to_napi_with("Path not found", err))?;
@@ -488,7 +496,7 @@ fn collect_candidates(
 				|| search_path.to_string_lossy().into_owned(),
 				std::string::ToString::to_string,
 			);
-		return Ok(vec![FileCandidate { absolute_path: search_path, display_path }]);
+		return Ok(SearchScope::File(FileCandidate { absolute_path: search_path, display_path }));
 	}
 	if !metadata.is_dir() {
 		return Err(Error::from_reason(format!(
@@ -509,6 +517,9 @@ fn collect_candidates(
 		depth_limit = compiled.depth_bound();
 		filter = filter.glob(compiled);
 	}
+	// Uncached: the scan cache keeps every entry under the root, accepted or
+	// not, which for a tree of millions of files is a gigabyte held by a search
+	// that reads each file once.
 	let request = veyyon_walker::WalkRequest::new(&search_path)
 		.hidden(true)
 		.gitignore(true)
@@ -519,15 +530,27 @@ fn collect_candidates(
 		.emit_root(false)
 		.depth(1, depth_limit)
 		.directory_errors(veyyon_walker::DirectoryErrorMode::SkipSkippable)
-		.cache(true)
-		.empty_recheck(veyyon_walker::EmptyRecheck::Configured)
+		.cache(false)
 		.filter(filter);
+	Ok(SearchScope::Tree { root: search_path, request })
+}
+
+/// Every file of the scope, sorted by display path.
+fn collect_candidates(
+	path: Option<String>,
+	glob: Option<&str>,
+	ct: &task::CancelToken,
+) -> Result<Vec<FileCandidate>> {
+	let (root, request) = match resolve_scope(path, glob)? {
+		SearchScope::File(file) => return Ok(vec![file]),
+		SearchScope::Tree { root, request } => (root, request),
+	};
 	let mut files: Vec<_> = request
 		.collect_files_with_heartbeat(|| ct.heartbeat())
 		.map_err(iofs::map_walker_error)?
 		.into_iter()
 		.map(|entry| FileCandidate {
-			absolute_path: entry.absolute_path(&search_path),
+			absolute_path: entry.absolute_path(&root),
 			display_path:  entry.path,
 		})
 		.collect();
@@ -594,86 +617,175 @@ fn normalize_rewrite_map(
 	normalized.sort_by(|left, right| left.0.cmp(&right.0));
 	Ok(normalized)
 }
-struct CompiledFindPattern {
-	pattern:                String,
-	compiled_by_lang:       HashMap<String, Pattern>,
-	compile_errors_by_lang: HashMap<String, String>,
+
+/// One pattern compiled for one language, with the text a source holds
+/// wherever the pattern can match in it.
+struct LanguagePattern {
+	pattern:  Pattern,
+	required: RequiredText,
 }
 
-struct ResolvedCandidate {
-	candidate:      FileCandidate,
-	language:       Option<SupportLang>,
-	language_error: Option<String>,
+/// Every pattern of a search compiled for one language, in pattern order: the
+/// compiled pattern, or why it does not compile for that language.
+type LanguagePatterns = Arc<[std::result::Result<LanguagePattern, String>]>;
+
+/// A structure search over files that arrive in any order, on any thread.
+///
+/// The patterns are compiled for a language when the first file in it
+/// arrives, and each file's tally is merged as soon as the file is searched,
+/// so a run holds its best `capacity` matches and its diagnostics, never a
+/// list of the files it searches.
+struct FindRun<'a> {
+	patterns:       &'a [String],
+	lang:           Option<&'a str>,
+	selector:       Option<&'a str>,
+	strictness:     &'a MatchStrictness,
+	capacity:       usize,
+	include_meta:   bool,
+	compiled:       Mutex<HashMap<SupportLang, LanguagePatterns>>,
+	files_searched: AtomicUsize,
+	tally:          Mutex<FindTally>,
 }
 
-fn resolve_candidates_for_find(
-	candidates: Vec<FileCandidate>,
-	lang: Option<&str>,
-	ct: &task::CancelToken,
-) -> Result<(Vec<ResolvedCandidate>, HashMap<String, SupportLang>)> {
-	let mut resolved = Vec::with_capacity(candidates.len());
-	let mut languages = HashMap::new();
+/// What a finished [`FindRun`] found, before paging.
+struct FindOutcome {
+	retained:           BinaryHeap<RetainedAstFindMatch>,
+	total_matches:      u32,
+	files_with_matches: BTreeSet<String>,
+	files_searched:     u32,
+	/// Pattern compile errors in pattern order, then file diagnostics by path.
+	diagnostics:        Vec<String>,
+}
 
-	for candidate in candidates {
-		ct.heartbeat()?;
-		match resolve_language(lang, &candidate.absolute_path) {
-			Ok(language) => {
-				let key = language.canonical_name().to_string();
-				languages.entry(key).or_insert(language);
-				resolved.push(ResolvedCandidate {
-					candidate,
-					language: Some(language),
-					language_error: None,
-				});
-			},
-			Err(err) => {
-				resolved.push(ResolvedCandidate {
-					candidate,
-					language: None,
-					language_error: Some(err.to_string()),
-				});
+impl<'a> FindRun<'a> {
+	fn new(
+		patterns: &'a [String],
+		lang: Option<&'a str>,
+		selector: Option<&'a str>,
+		strictness: &'a MatchStrictness,
+		capacity: usize,
+		include_meta: bool,
+	) -> Self {
+		Self {
+			patterns,
+			lang,
+			selector,
+			strictness,
+			capacity,
+			include_meta,
+			compiled: Mutex::new(HashMap::new()),
+			files_searched: AtomicUsize::new(0),
+			tally: Mutex::new(FindTally::default()),
+		}
+	}
+
+	/// Search every file of `scope`. A tree's files are searched on the walker
+	/// pool as the walk yields them.
+	fn search_scope(&self, scope: &SearchScope, ct: &task::CancelToken) -> Result<()> {
+		match scope {
+			SearchScope::File(file) => self.search_file(&file.absolute_path, &file.display_path, ct),
+			SearchScope::Tree { request, .. } => {
+				request
+					.for_each_file_candidate_parallel(
+						|file| {
+							self.search_file(&file.path, &file.relative, ct)?;
+							Ok(veyyon_walker::ParallelWalkControl::Continue)
+						},
+						|| ct.heartbeat(),
+					)
+					.map_err(iofs::map_walker_error)?;
+				Ok(())
 			},
 		}
 	}
 
-	Ok((resolved, languages))
-}
+	/// Search one file, when its name is one a search reads.
+	fn search_file(&self, path: &Path, display_path: &str, ct: &task::CancelToken) -> Result<()> {
+		if !is_supported_file(path, self.lang) {
+			return Ok(());
+		}
+		self.files_searched.fetch_add(1, AtomicOrdering::Relaxed);
+		let found = match resolve_language(self.lang, path) {
+			Ok(language) => {
+				let patterns = self.patterns_for(language, ct)?;
+				find_in_file(
+					path,
+					display_path,
+					language,
+					&patterns,
+					self.capacity,
+					self.include_meta,
+					ct,
+				)?
+			},
+			Err(err) => FindTally::diagnostic(display_path, err.to_string()),
+		};
+		if !found.is_empty() {
+			let mut tally = self.tally.lock();
+			let merged = std::mem::take(&mut *tally).absorb(found, self.capacity);
+			*tally = merged;
+		}
+		Ok(())
+	}
 
-fn compile_find_patterns(
-	patterns: &[String],
-	languages: &HashMap<String, SupportLang>,
-	selector: Option<&str>,
-	strictness: &MatchStrictness,
-	ct: &task::CancelToken,
-) -> Result<Vec<CompiledFindPattern>> {
-	let mut compiled = Vec::with_capacity(patterns.len());
-
-	for pattern in patterns {
-		ct.heartbeat()?;
-		let mut compiled_by_lang = HashMap::with_capacity(languages.len());
-		let mut compile_errors_by_lang = HashMap::new();
-
-		for (lang_key, &language) in languages {
+	/// The run's patterns compiled for `language`, compiled on first use.
+	fn patterns_for(
+		&self,
+		language: SupportLang,
+		ct: &task::CancelToken,
+	) -> Result<LanguagePatterns> {
+		let mut compiled = self.compiled.lock();
+		if let Some(patterns) = compiled.get(&language) {
+			return Ok(Arc::clone(patterns));
+		}
+		let mut patterns = Vec::with_capacity(self.patterns.len());
+		for pattern in self.patterns {
 			ct.heartbeat()?;
-			match compile_pattern(pattern, selector, strictness, language.document()) {
-				Ok(compiled_pattern) => {
-					compiled_by_lang.insert(lang_key.clone(), compiled_pattern);
-				},
-				Err(err) => {
-					compile_errors_by_lang.insert(lang_key.clone(), err.to_string());
-				},
+			patterns.push(
+				compile_pattern(pattern, self.selector, self.strictness, language.document())
+					.map(|pattern| LanguagePattern { required: RequiredText::of(&pattern), pattern })
+					.map_err(|err| err.to_string()),
+			);
+		}
+		let patterns: LanguagePatterns = patterns.into();
+		compiled.insert(language, Arc::clone(&patterns));
+		Ok(patterns)
+	}
+
+	fn finish(self) -> FindOutcome {
+		let FindTally { retained, total_matches, files_with_matches, mut parse_errors } =
+			self.tally.into_inner();
+		let mut compiled: Vec<_> = self.compiled.into_inner().into_iter().collect();
+		compiled.sort_unstable_by_key(|(language, _)| language.canonical_name());
+		// A pattern that compiles for none of the languages searched reports why
+		// for each of them; one that compiles for some of them is searched there.
+		let mut diagnostics = Vec::new();
+		for (index, pattern) in self.patterns.iter().enumerate() {
+			if compiled.iter().any(|(_, patterns)| patterns[index].is_ok()) {
+				continue;
+			}
+			for (language, patterns) in &compiled {
+				if let Err(error) = &patterns[index] {
+					diagnostics.push(format!("{pattern}: {}: {error}", language.canonical_name()));
+				}
 			}
 		}
-
-		compiled.push(CompiledFindPattern {
-			pattern: pattern.clone(),
-			compiled_by_lang,
-			compile_errors_by_lang,
-		});
+		parse_errors.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+		diagnostics.extend(
+			parse_errors
+				.into_iter()
+				.map(|(path, error)| format!("{path}: {error}")),
+		);
+		FindOutcome {
+			retained,
+			total_matches,
+			files_with_matches,
+			files_searched: to_u32(self.files_searched.into_inner()),
+			diagnostics,
+		}
 	}
-
-	Ok(compiled)
 }
+
 /// Search source files with ast-grep patterns; returns a promise resolved on a
 /// worker thread.
 #[napi]
@@ -700,39 +812,19 @@ pub fn ast_grep(options: AstFindOptions<'_>) -> task::Promise<AstFindResult> {
 	task::blocking("ast_grep", ct, move |ct| {
 		let patterns = normalize_pattern_list(patterns)?;
 		let strictness = resolve_strictness(strictness);
-		let include_meta = include_meta.unwrap_or(false);
-		let lang_str = lang.as_deref().map(str::trim).filter(|v| !v.is_empty());
-		let candidates: Vec<_> = collect_candidates(path, glob.as_deref(), &ct)?
-			.into_iter()
-			.filter(|candidate| is_supported_file(&candidate.absolute_path, lang_str))
-			.collect();
-
-		let (resolved_candidates, languages) =
-			resolve_candidates_for_find(candidates, lang_str, &ct)?;
-		let compiled_patterns =
-			compile_find_patterns(&patterns, &languages, selector.as_deref(), &strictness, &ct)?;
-		let files_searched = to_u32(resolved_candidates.len());
-
-		let capacity = retained_find_capacity(normalized_offset, normalized_limit);
-		let mut parse_errors = Vec::new();
-		for compiled in &compiled_patterns {
-			if compiled.compiled_by_lang.is_empty() && !languages.is_empty() {
-				for (lang_key, error) in &compiled.compile_errors_by_lang {
-					parse_errors.push(format!("{}: {lang_key}: {error}", compiled.pattern));
-				}
-			}
-		}
-
-		let FindTally { retained, total_matches, files_with_matches, parse_errors: file_errors } =
-			tally_files(
-				resolved_candidates,
-				&compiled_patterns,
-				capacity,
-				include_meta,
-				veyyon_walker::walk_workers() > 1,
-				&ct,
-			)?;
-		parse_errors.extend(file_errors);
+		let lang = lang.as_deref().map(str::trim).filter(|v| !v.is_empty());
+		let scope = resolve_scope(path, glob.as_deref())?;
+		let run = FindRun::new(
+			&patterns,
+			lang,
+			selector.as_deref(),
+			&strictness,
+			retained_find_capacity(normalized_offset, normalized_limit),
+			include_meta.unwrap_or(false),
+		);
+		run.search_scope(&scope, &ct)?;
+		let FindOutcome { retained, total_matches, files_with_matches, files_searched, diagnostics } =
+			run.finish();
 
 		let (matches, limit_reached) =
 			page_retained_matches(retained, normalized_offset, normalized_limit);
@@ -747,24 +839,32 @@ pub fn ast_grep(options: AstFindOptions<'_>) -> task::Promise<AstFindResult> {
 			files_with_matches: to_u32(files_with_matches.len()),
 			files_searched,
 			limit_reached,
-			parse_errors: (!parse_errors.is_empty()).then_some(parse_errors),
+			parse_errors: (!diagnostics.is_empty()).then_some(diagnostics),
 		})
 	})
 }
 
-/// What a run of files contributed to an [`ast_grep`]: its best `capacity`
-/// matches, its match count, the files that matched, and its diagnostics in
-/// file order.
+/// What a set of files contributed to an [`ast_grep`]: its best `capacity`
+/// matches, its match count, the files that matched, and each file's
+/// diagnostic as its display path and the error.
 #[derive(Default)]
 struct FindTally {
 	retained:           BinaryHeap<RetainedAstFindMatch>,
 	total_matches:      u32,
 	files_with_matches: BTreeSet<String>,
-	parse_errors:       Vec<String>,
+	parse_errors:       Vec<(String, String)>,
 }
 
 impl FindTally {
-	/// The tally of this run followed by `next`, the run that comes after it.
+	fn diagnostic(display_path: &str, error: String) -> Self {
+		Self { parse_errors: vec![(display_path.to_owned(), error)], ..Self::default() }
+	}
+
+	const fn is_empty(&self) -> bool {
+		self.total_matches == 0 && self.parse_errors.is_empty()
+	}
+
+	/// This tally and `next` together.
 	fn absorb(mut self, mut next: Self, capacity: usize) -> Self {
 		if next.retained.len() > self.retained.len() {
 			std::mem::swap(&mut self.retained, &mut next.retained);
@@ -777,42 +877,6 @@ impl FindTally {
 		self.parse_errors.append(&mut next.parse_errors);
 		self
 	}
-}
-
-/// Search every file for the patterns compiled for its language.
-///
-/// Each file is read, parsed and matched on its own, which is the whole cost
-/// of a search, so with `parallel` the files are searched on the walker pool,
-/// the same workers that walk and grep the tree. Rayon folds and reduces
-/// adjacent runs in order, so the diagnostics come out in file order either
-/// way, and a match's key orders it among all the others wherever it was
-/// found.
-fn tally_files(
-	resolved_candidates: Vec<ResolvedCandidate>,
-	compiled_patterns: &[CompiledFindPattern],
-	capacity: usize,
-	include_meta: bool,
-	parallel: bool,
-	ct: &task::CancelToken,
-) -> Result<FindTally> {
-	let search = |resolved: ResolvedCandidate| {
-		find_in_file(resolved, compiled_patterns, capacity, include_meta, ct)
-	};
-	if parallel {
-		return veyyon_walker::with_walk_pool(|| {
-			resolved_candidates
-				.into_par_iter()
-				.try_fold(FindTally::default, |tally, resolved| {
-					Ok(tally.absorb(search(resolved)?, capacity))
-				})
-				.try_reduce(FindTally::default, |left, right| Ok(left.absorb(right, capacity)))
-		});
-	}
-	let mut tally = FindTally::default();
-	for resolved in resolved_candidates {
-		tally = tally.absorb(search(resolved)?, capacity);
-	}
-	Ok(tally)
 }
 
 /// A match's bindings as the source they cover: a single capture is its
@@ -843,49 +907,42 @@ fn binding_texts<D: Doc>(env: &MetaVarEnv<'_, D>) -> HashMap<String, String> {
 
 /// Search one file for every pattern compiled for its language, keeping its
 /// best `capacity` matches.
+///
+/// A pattern whose required text the file lacks cannot match in it, and a file
+/// no pattern can match in is not parsed, so it reports no parse error either.
 fn find_in_file(
-	resolved: ResolvedCandidate,
-	compiled_patterns: &[CompiledFindPattern],
+	path: &Path,
+	display_path: &str,
+	language: SupportLang,
+	patterns: &[std::result::Result<LanguagePattern, String>],
 	capacity: usize,
 	include_meta: bool,
 	ct: &task::CancelToken,
 ) -> Result<FindTally> {
 	ct.heartbeat()?;
 	let mut tally = FindTally::default();
-	let ResolvedCandidate { candidate, language, language_error } = resolved;
-	if let Some(error) = language_error {
-		tally
-			.parse_errors
-			.push(format!("{}: {error}", candidate.display_path));
+	if !patterns.iter().any(std::result::Result::is_ok) {
 		return Ok(tally);
 	}
-	let Some(language) = language else {
-		return Ok(tally);
+	let source = match std::fs::read_to_string(path) {
+		Ok(source) => source,
+		Err(err) => return Ok(FindTally::diagnostic(display_path, err.to_string())),
 	};
-	let lang_key = language.canonical_name();
-	let runnable_patterns: Vec<&Pattern> = compiled_patterns
+	let runnable_patterns: Vec<&Pattern> = patterns
 		.iter()
-		.filter_map(|compiled| compiled.compiled_by_lang.get(lang_key))
+		.filter_map(|compiled| compiled.as_ref().ok())
+		.filter(|compiled| compiled.required.is_in(source.as_bytes()))
+		.map(|compiled| &compiled.pattern)
 		.collect();
 	if runnable_patterns.is_empty() {
 		return Ok(tally);
 	}
 
-	let source = match std::fs::read_to_string(&candidate.absolute_path) {
-		Ok(source) => source,
-		Err(err) => {
-			tally
-				.parse_errors
-				.push(format!("{}: {err}", candidate.display_path));
-			return Ok(tally);
-		},
-	};
-
 	let ast = language.document().ast_grep(source);
 	if ast.root().dfs().any(|node| node.is_error()) {
-		tally.parse_errors.push(format!(
-			"{}: parse error (syntax tree contains error nodes)",
-			candidate.display_path
+		tally.parse_errors.push((
+			display_path.to_owned(),
+			"parse error (syntax tree contains error nodes)".to_string(),
 		));
 	}
 	// Matches in different files differ in path, so a file numbers its own:
@@ -900,7 +957,7 @@ fn find_in_file(
 			let start = matched.start_pos();
 			let end = matched.end_pos();
 			let key = AstFindOrderKey {
-				path: candidate.display_path.clone(),
+				path: display_path.to_owned(),
 				start_line: to_u32(start.line().saturating_add(1)),
 				start_column: to_u32(start.column(matched.get_node()).saturating_add(1)),
 				end_line: to_u32(end.line().saturating_add(1)),
@@ -921,7 +978,7 @@ fn find_in_file(
 		}
 	}
 	if tally.total_matches > 0 {
-		tally.files_with_matches.insert(candidate.display_path);
+		tally.files_with_matches.insert(display_path.to_owned());
 	}
 	Ok(tally)
 }
@@ -1110,7 +1167,7 @@ fn ast_edit_blocking(
 	for (pattern, rewrite) in rewrite_rules {
 		ct.heartbeat()?;
 		match compile_pattern(&pattern, selector.as_deref(), &strictness, language) {
-			Ok(compiled) => compiled_rules.push((pattern, rewrite, compiled)),
+			Ok(compiled) => compiled_rules.push((rewrite, RequiredText::of(&compiled), compiled)),
 			Err(err) => {
 				if fail_on_parse_error {
 					return Err(err);
@@ -1153,6 +1210,16 @@ fn ast_edit_blocking(
 			},
 		};
 
+		// A rule whose required text the file lacks cannot match in it. A file
+		// no rule can match in is not parsed, unless every file must parse.
+		let runnable_rules: Vec<_> = compiled_rules
+			.iter()
+			.filter(|(_, required, _)| required.is_in(source.as_bytes()))
+			.collect();
+		if runnable_rules.is_empty() && !fail_on_parse_error {
+			continue;
+		}
+
 		let ast = language.ast_grep(&source);
 		if ast.root().dfs().any(|node| node.is_error()) {
 			let parse_issue =
@@ -1166,7 +1233,7 @@ fn ast_edit_blocking(
 
 		let mut file_changes = Vec::new();
 		let mut reached_max_replacements = false;
-		'patterns: for (_pattern, rewrite, compiled) in &compiled_rules {
+		'patterns: for (rewrite, _, compiled) in runnable_rules {
 			for matched in ast.root().find_all(compiled.clone()) {
 				ct.heartbeat()?;
 				let edit = matched.replace_by(rewrite.as_str());
@@ -1359,22 +1426,32 @@ mod tests {
 		)
 	}
 
-	/// WHY: `astGrep` searched its files one after another, and reading,
-	/// parsing and matching them is the whole cost of a structure search, so a
-	/// search over a plugin's sources ran for seconds on one core. The files
-	/// are now searched on Rayon's pool and their tallies merged.
+	/// Search `root` as `astGrep` does, keeping every match.
+	fn search_all(root: &Path, patterns: &[String]) -> FindOutcome {
+		let strictness = MatchStrictness::Smart;
+		let run = FindRun::new(patterns, None, None, &strictness, usize::MAX, true);
+		let scope = resolve_scope(Some(root.to_string_lossy().into_owned()), None)
+			.expect("the scope should resolve");
+		run.search_scope(&scope, &task::CancelToken::default())
+			.expect("the search should succeed");
+		run.finish()
+	}
+
+	/// WHY: a structure search walked its tree into a list and then searched
+	/// the list. It now searches each file as the parallel walk yields it, in
+	/// no fixed order, and merges each file's tally under a lock.
 	///
-	/// The class this closes is any difference the merge makes: a match kept
-	/// or dropped at the page boundary, the order of two patterns' matches of
-	/// one node, a count, a matched file, or a diagnostic out of file order. The
-	/// reference is one pass over the files with nothing bounded, sorted and
-	/// paged at the end; both the pool and the serial loop must give it for
-	/// every page window.
+	/// The class this closes is any difference the arrival order or the merge
+	/// makes: a match kept or dropped at the page boundary, the order of two
+	/// patterns' matches of one node, a count, a matched file, the file count,
+	/// or a diagnostic out of path order. The reference searches the files one
+	/// after another in path order with nothing bounded; the streamed search
+	/// must give its result for every page window.
 	///
 	/// What it does not catch: a cancellation that lands mid-search, which
 	/// fails the search either way and which the search-abort suite drives.
 	#[test]
-	fn a_parallel_search_returns_what_one_pass_over_the_files_returns() {
+	fn a_streamed_search_returns_what_one_pass_over_the_files_returns() {
 		assert!(
 			veyyon_walker::walk_workers() > 1,
 			"the walker pool must have workers to split the files"
@@ -1405,35 +1482,46 @@ mod tests {
 		}
 
 		let ct = task::CancelToken::default();
-		let resolved = || {
-			let candidates =
-				collect_candidates(Some(root.path().to_string_lossy().into_owned()), None, &ct)
-					.expect("candidate collection should succeed")
-					.into_iter()
-					.filter(|candidate| is_supported_file(&candidate.absolute_path, None))
-					.collect();
-			resolve_candidates_for_find(candidates, None, &ct).expect("languages should resolve")
-		};
-		let (_, languages) = resolved();
+		let strictness = MatchStrictness::Smart;
 		let patterns = ["foo($A)", "foo($$$ARGS)", "bar($$$)"].map(String::from);
-		let compiled =
-			compile_find_patterns(&patterns, &languages, None, &MatchStrictness::Smart, &ct)
-				.expect("patterns should compile");
+		let root_path = Some(root.path().to_string_lossy().into_owned());
 
-		let mut all = Vec::new();
-		let mut errors = Vec::new();
-		let mut total = 0_u32;
-		let mut files = BTreeSet::new();
-		for candidate in resolved().0 {
-			let tally = find_in_file(candidate, &compiled, usize::MAX, true, &ct)
+		let reference = FindRun::new(&patterns, None, None, &strictness, usize::MAX, true);
+		for candidate in collect_candidates(root_path.clone(), None, &ct)
+			.expect("candidate collection should succeed")
+		{
+			reference
+				.search_file(&candidate.absolute_path, &candidate.display_path, &ct)
 				.expect("a file search should succeed");
-			all.extend(tally.retained.into_vec());
-			errors.extend(tally.parse_errors);
-			total += tally.total_matches;
-			files.extend(tally.files_with_matches);
 		}
+		let FindOutcome {
+			retained,
+			total_matches: total,
+			files_with_matches: files,
+			files_searched,
+			diagnostics: errors,
+		} = reference.finish();
+		let mut all = retained.into_vec();
 		all.sort_by(|left, right| left.key.cmp(&right.key));
-		assert!(errors.len() >= 6, "the fixture must order several diagnostics: {errors:?}");
+		// Every unreadable file, and every broken file that holds `foo` or
+		// `bar`; `f091.ts` is broken and holds neither, so it is not parsed.
+		let mut diagnosed: Vec<String> = (0..4)
+			.map(|index| format!("d{index}/bad{index}.ts"))
+			.chain(
+				(0..96_usize)
+					.filter(|index| index % 11 == 3 && index * 5 % 13 > 0)
+					.map(|index| format!("d{}/f{index:03}.ts", index % 7)),
+			)
+			.collect();
+		diagnosed.sort();
+		assert_eq!(
+			errors
+				.iter()
+				.map(|error| error.split(": ").next().unwrap_or_default())
+				.collect::<Vec<_>>(),
+			diagnosed,
+			"{errors:?}"
+		);
 		assert!(
 			all.windows(2).any(|pair| {
 				pair[0].key.byte_start == pair[1].key.byte_start
@@ -1443,6 +1531,7 @@ mod tests {
 			"the fixture must hold two patterns' matches of one node"
 		);
 
+		let scope = resolve_scope(root_path, None).expect("the scope should resolve");
 		for (offset, limit) in [(0, 1), (0, 7), (3, 5), (40, 100), (0, 1000), (1500, 400), (0, 5000)]
 		{
 			let capacity = retained_find_capacity(offset, limit);
@@ -1452,21 +1541,18 @@ mod tests {
 				.take(limit as usize)
 				.map(view)
 				.collect();
-			for parallel in [true, false] {
-				let case = format!("offset {offset}, limit {limit}, parallel {parallel}");
-				let tally = tally_files(resolved().0, &compiled, capacity, true, parallel, &ct)
-					.expect("the search should succeed");
-				assert_eq!(tally.total_matches, total, "{case}: total");
-				assert_eq!(tally.files_with_matches, files, "{case}: files");
-				assert_eq!(tally.parse_errors, errors, "{case}: diagnostics");
-				let (page, limit_reached) = page_retained_matches(tally.retained, offset, limit);
-				assert_eq!(page.iter().map(view).collect::<Vec<_>>(), expected, "{case}: page");
-				assert_eq!(
-					limit_reached,
-					all.len() > (offset + limit) as usize,
-					"{case}: limit reached"
-				);
-			}
+			let case = format!("offset {offset}, limit {limit}");
+			let run = FindRun::new(&patterns, None, None, &strictness, capacity, true);
+			run.search_scope(&scope, &ct)
+				.expect("the search should succeed");
+			let outcome = run.finish();
+			assert_eq!(outcome.total_matches, total, "{case}: total");
+			assert_eq!(outcome.files_with_matches, files, "{case}: files");
+			assert_eq!(outcome.files_searched, files_searched, "{case}: files searched");
+			assert_eq!(outcome.diagnostics, errors, "{case}: diagnostics");
+			let (page, limit_reached) = page_retained_matches(outcome.retained, offset, limit);
+			assert_eq!(page.iter().map(view).collect::<Vec<_>>(), expected, "{case}: page");
+			assert_eq!(limit_reached, all.len() > (offset + limit) as usize, "{case}: limit reached");
 		}
 	}
 
@@ -1628,25 +1714,9 @@ mod tests {
 		              endforeach; ?></ul>\n    <?php\n    file_put_contents('b', $items);\n}\n";
 		fs::write(root.join("view.php"), source).expect("view.php should be written");
 		let pattern = "file_put_contents($$$ARGS);".to_string();
-		let ct = task::CancelToken::default();
-
-		let candidates =
-			collect_candidates(Some(root.path().to_string_lossy().into_owned()), None, &ct)
-				.expect("candidate collection should succeed");
-		let (resolved, languages) =
-			resolve_candidates_for_find(candidates, None, &ct).expect("languages should resolve");
-		let compiled = compile_find_patterns(
-			std::slice::from_ref(&pattern),
-			&languages,
-			None,
-			&MatchStrictness::Smart,
-			&ct,
-		)
-		.expect("the pattern should compile");
-		let tally = tally_files(resolved, &compiled, usize::MAX, false, false, &ct)
-			.expect("the search should succeed");
-		assert_eq!(tally.parse_errors, Vec::<String>::new());
-		let mut found: Vec<(u32, String)> = tally
+		let outcome = search_all(root.path(), std::slice::from_ref(&pattern));
+		assert_eq!(outcome.diagnostics, Vec::<String>::new());
+		let mut found: Vec<(u32, String)> = outcome
 			.retained
 			.into_vec()
 			.into_iter()
@@ -1660,7 +1730,7 @@ mod tests {
 
 		let rewrites = HashMap::from([(pattern, "safe_put($$$ARGS);".to_string())]);
 		let result = ast_edit_blocking(
-			ct,
+			task::CancelToken::default(),
 			Some(rewrites),
 			Some("php".to_string()),
 			Some(root.path().to_string_lossy().into_owned()),
@@ -1696,21 +1766,11 @@ mod tests {
 			.expect("c.rs should be written");
 		fs::write(root.join("d.php"), "<?php\nfoo($a, $b);\n").expect("d.php should be written");
 		let patterns = ["foo($$$A)".to_string(), "bar($X)".to_string()];
-		let ct = task::CancelToken::default();
 
-		let candidates =
-			collect_candidates(Some(root.path().to_string_lossy().into_owned()), None, &ct)
-				.expect("candidate collection should succeed");
-		let (resolved, languages) =
-			resolve_candidates_for_find(candidates, None, &ct).expect("languages should resolve");
-		let compiled =
-			compile_find_patterns(&patterns, &languages, None, &MatchStrictness::Smart, &ct)
-				.expect("the patterns should compile");
-		let tally = tally_files(resolved, &compiled, usize::MAX, true, false, &ct)
-			.expect("the search should succeed");
-		assert_eq!(tally.parse_errors, Vec::<String>::new());
+		let outcome = search_all(root.path(), &patterns);
+		assert_eq!(outcome.diagnostics, Vec::<String>::new());
 		type Found = (String, u32, Vec<(String, String)>);
-		let mut found: Vec<Found> = tally
+		let mut found: Vec<Found> = outcome
 			.retained
 			.into_vec()
 			.into_iter()
@@ -1735,6 +1795,70 @@ mod tests {
 			("c.rs".to_string(), 2, bound("A", "[a, b]")),
 			("d.php".to_string(), 2, bound("A", "[$a, $b]")),
 		]);
+	}
+
+	/// WHY: a structure search parsed every file in scope, so a search for a
+	/// rare call over millions of files parsed millions of files that could not
+	/// hold it. A file without a pattern's required text is now skipped before
+	/// the parse.
+	///
+	/// The class this closes is a skip that changes what a caller is told: a
+	/// file is parsed, and its parse error reported, when the required text of
+	/// at least one pattern is all in it, for a search and a rewrite alike, and
+	/// a rewrite that must parse every file still parses every file. That the
+	/// skip is sound, that a file it rules out holds no match, is the
+	/// `required_text` sweep in `veyyon_ast`.
+	#[test]
+	fn a_file_that_cannot_hold_a_match_is_not_parsed() {
+		let root = veyyon_test_scratch::scratch_dir("natives-ast-required-text");
+		for (name, source) in [
+			("holds.ts", "foo(bar);\nconst = ;\n"),
+			("half.ts", "foo(baz);\nconst = ;\n"),
+			("second.ts", "qux(1);\nconst = ;\n"),
+			("neither.ts", "const = ;\n"),
+		] {
+			fs::write(root.join(name), source).expect("fixture file should be written");
+		}
+		let parse_error =
+			|name: &str| format!("{name}: parse error (syntax tree contains error nodes)");
+
+		let outcome = search_all(root.path(), &["foo(bar)".to_string(), "qux($A)".to_string()]);
+		assert_eq!(outcome.files_searched, 4);
+		assert_eq!(outcome.diagnostics, [parse_error("holds.ts"), parse_error("second.ts")]);
+		let mut found: Vec<_> = outcome
+			.retained
+			.into_vec()
+			.into_iter()
+			.map(|found| (found.key.path, found.text))
+			.collect();
+		found.sort();
+		assert_eq!(found, [
+			("holds.ts".to_string(), "foo(bar)".to_string()),
+			("second.ts".to_string(), "qux(1)".to_string()),
+		]);
+
+		let rewrite = |fail_on_parse_error| {
+			ast_edit_blocking(
+				task::CancelToken::default(),
+				Some(HashMap::from([("foo(bar)".to_string(), "done(bar)".to_string())])),
+				Some("ts".to_string()),
+				Some(root.path().to_string_lossy().into_owned()),
+				None,
+				None,
+				None,
+				Some(true),
+				None,
+				None,
+				Some(fail_on_parse_error),
+			)
+		};
+		let lenient = rewrite(false).expect("a lenient rewrite should succeed");
+		assert_eq!(lenient.files_searched, 4);
+		assert_eq!(lenient.parse_errors, Some(vec![parse_error("holds.ts")]));
+		let strict = rewrite(true)
+			.err()
+			.expect("a strict rewrite parses every file");
+		assert_eq!(strict.reason, parse_error("half.ts"));
 	}
 
 	fn make_apply_failure_tree() -> TempTree {

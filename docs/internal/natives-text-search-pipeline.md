@@ -125,7 +125,7 @@ The loader tries install-specific addon candidates in priority order. Source and
 
 ## 2) File discovery (`glob`) and fuzzy path search (`fuzzyFind`)
 
-`glob`, `fuzzyFind`, and directory candidate discovery for `astGrep`/`astEdit` use the `veyyon-walker` TTL scan cache; their matching logic and cache controls differ.
+`glob` and `fuzzyFind` use the `veyyon-walker` TTL scan cache; their matching logic and cache controls differ. Directory candidate discovery for `astGrep`/`astEdit` walks uncached (section 3).
 
 ### `glob` flow
 
@@ -176,7 +176,7 @@ The walk depth is measured after that normalization, so the same `*.ts` is bound
 - `dryRun` defaults to true for edit options in the generated documentation.
 - Options include language override, path/glob/selector, strictness, limits, parse-error policy, `signal`, and `timeoutMs`.
 
-For a directory operand, `astGrep` and `astEdit` discover candidates through a walker request with caching always enabled and `EmptyRecheck::Configured`. A stale cached directory result that filters to no candidates can therefore trigger the configured fresh recheck. A single-file operand bypasses the walker and its cache. `astMatch` remains wholly in-memory and uncached.
+For a directory operand, `astGrep` streams an uncached walker request (`.cache(false)`) through `for_each_file_candidate_parallel` and searches each file on the walk's worker as it arrives, compiling its patterns per language on first use; `astEdit` collects the same request and sorts it by path. A file is parsed only when it contains the literal text of every named leaf of at least one pattern compiled for its language (`veyyon_ast::required_text::RequiredText`); metavariables, unnamed tokens and `Signature` strictness require nothing, so the filter never drops a file that could match. Parse errors are reported for parsed files only, one per file, sorted by path, after the compile errors of patterns no language compiled. `astEdit` applies the same filter per rule unless `failOnParseError` is set. A file that is not valid UTF-8 is still reported. A single-file operand bypasses the walker. `astMatch` remains wholly in-memory and uncached and parses its source unconditionally.
 
 The adjacent N-API adapters expose three in-memory tree-sitter helpers:
 
@@ -273,7 +273,7 @@ Text functions generally return deterministic transformed output; errors are lim
 | `countTokens`                             | No                | No                    | tokenization only                                      |
 | `astMatch`                                | No                | No                    | in-memory syntax-aware match (no disk)                 |
 | structural block/summary helpers          | No                | No                    | in-memory tree-sitter operations                       |
-| `astGrep` / `astEdit`, directory operand  | Yes               | Always                | cached directory candidate discovery                   |
+| `astGrep` / `astEdit`, directory operand  | Yes               | No (`.cache(false)`)  | streamed (`astGrep`) or collected (`astEdit`) walk     |
 | `astGrep` / `astEdit`, single-file operand | Yes              | No                    | direct file candidate, walker bypassed                 |
 | `glob`                                    | Yes               | Optional              | directory scans + glob filtering                       |
 | `fuzzyFind`                               | Yes               | Optional              | directory scans + fuzzy scoring                        |
@@ -288,4 +288,4 @@ Text functions generally return deterministic transformed output; errors are lim
 5. Rust shapes outputs into N-API objects (`lineNumber`, `matchCount`, `limitReached`, `patternTreatedAsLiteral`, etc.).
 6. The package's lazy binding returns typed JS objects and optional per-match callbacks for `grep`/`glob`.
 
-*Verified against `3100447712f0` on 2026-10-18.*
+*Verified against `e2ff92d2236a07e8f7c8bf6a12a09657bb7ebe86` on 2026-10-19.*

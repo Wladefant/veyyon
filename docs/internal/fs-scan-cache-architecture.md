@@ -4,7 +4,7 @@ This document defines the current contract for the shared filesystem scan cache 
 
 ## What this cache is
 
-The cache stores full directory-scan entry lists (`CollectedEntry` vectors) keyed by scan root plus the complete walk-option set. Higher-level operations (`glob` filtering, `fuzzyFind` scoring, and `astGrep`/`astEdit` file discovery) run against those cached entries.
+The cache stores full directory-scan entry lists (`CollectedEntry` vectors) keyed by scan root plus the complete walk-option set. Higher-level operations (`glob` filtering and `fuzzyFind` scoring) run against those cached entries.
 
 Primary goals:
 
@@ -19,7 +19,7 @@ Primary goals:
 - Native consumers (`natives/bridge/addon/src/`):
   - `glob.rs`: cache opt-in via config
   - `fd.rs` (`fuzzyFind`): cache opt-in via config; reads the scan in place through `collect_shared_with_heartbeat`
-  - `ast.rs` (`astGrep`/`astEdit` file discovery): always cached (`.cache(true)`)
+  - `ast.rs` (`astGrep`/`astEdit` file discovery): **not cached**: it builds its walk with `.cache(false)`, because a cached scan keeps every entry under the root, about 1 GB for a tree of 6 million files, and a structure search reads each file once; `astGrep` streams the walk through `for_each_file_candidate_parallel` instead of collecting it
   - `grep.rs`: **not cached**: it builds its walk with `.cache(false)`; there is no cached grep directory mode today
 - JS binding/export:
   - `natives/bridge/bindings/native/index.d.ts` (`invalidateFsScanCache`)
@@ -109,17 +109,17 @@ Empty-result fast recheck:
 - after filtering, if the surviving entry list is empty, the scan came from cache (`cache_age_ms > 0`), and the age is at or above the threshold (`empty_recheck_ms()` for `Configured`), the walker re-collects once with `options.cache = false`: a fresh, **uncached** scan that is not stored back
 - intended to reduce stale-negative results when files were added while the cache is still inside TTL
 
-Current consumers all pass `EmptyRecheck::Configured`: `glob`, `fuzzyFind` (`fd.rs`), and `astGrep`/`astEdit` (`ast.rs`).
+Current consumers all pass `EmptyRecheck::Configured`: `glob` and `fuzzyFind` (`fd.rs`).
 
 ## Consumer defaults and cache usage
 
-Cache is opt-in on `glob`/`fuzzyFind` (`cache?: boolean`, default `false`). `astGrep`/`astEdit` file discovery always uses the cache (`.cache(true)`, no opt-in flag). `grep` never uses it (`.cache(false)`).
+Cache is opt-in on `glob`/`fuzzyFind` (`cache?: boolean`, default `false`). `astGrep`/`astEdit` file discovery and `grep` never use it (`.cache(false)`).
 
 Current defaults in native APIs:
 
 - `glob`: `hidden` per config, `gitignore=true`, `skip_git=true`, `node_modules` skipped unless the pattern mentions `node_modules`, `follow_links=Never`, `WalkOrder::Path`, full detail only when mtime/size metadata is needed (e.g. `sortByMtime=true` or a max-file-size filter)
 - `fuzzyFind`: `hidden=false` by default, `gitignore=true`, `skip_git=true`, `node_modules` always skipped, `follow_links=Always`, minimal detail
-- `astGrep`/`astEdit` (file discovery): `hidden=true`, `gitignore=true`, `skip_git=true`, always cached, `follow_links=Never`, minimal detail
+- `astGrep`/`astEdit` (file discovery): `hidden=true`, `gitignore=true`, `skip_git=true`, uncached, `follow_links=Never`, minimal detail
 
 Current callers:
 
@@ -194,7 +194,7 @@ When introducing cache use in a new scanner/search path:
 
 - Cache scope is process-local in-memory (`DashMap`), not persisted across process restarts.
 - Cache stores scan entries, not final tool results.
-- `glob`/`fuzzyFind`/`astGrep` share scan entries only when the full `WalkOptions` key matches.
+- `glob`/`fuzzyFind` share scan entries only when the full `WalkOptions` key matches.
 - Every native consumer sets `skip_git=true`, so `.git` is excluded from all cached scans in practice; `should_skip_path` re-enforces it at the discovery-filter layer.
 
-*Verified against `5c1ec4a2f5d781499da70f223c2c3941fa4b49f8` on 2026-10-19.*
+*Verified against `e2ff92d2236a07e8f7c8bf6a12a09657bb7ebe86` on 2026-10-19.*
