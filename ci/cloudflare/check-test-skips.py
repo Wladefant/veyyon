@@ -32,6 +32,10 @@ class _Scan:
     suite_fallbacks: list[dict[str, str]]
     executed_files: set[str]
     unattributed_executed: list[str]
+    total_cases: int = 0
+    total_passes: int = 0
+    total_failures: int = 0
+    total_skips: int = 0
 
 
 def _report_files(report_root: Path) -> list[Path]:
@@ -71,7 +75,15 @@ def _read_skips(report_root: Path, repo_root: Path) -> _Scan:
         suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
         for suite in suites:
             for case in suite.findall("testcase"):
+                scan.total_cases += 1
                 skipped = case.find("skipped") is not None
+                failed = case.find("failure") is not None or case.find("error") is not None
+                if skipped:
+                    scan.total_skips += 1
+                elif failed:
+                    scan.total_failures += 1
+                else:
+                    scan.total_passes += 1
                 try:
                     file_name = _repo_relative_file(case, suite, report, repo_root)
                 except ValueError as error:
@@ -212,6 +224,10 @@ def main() -> int:
         print(
             f"CLOUDFLARE_JUNIT_REPORTS count={len(scan.reports)} skips={total} "
             f"named={named_total} unidentified={len(scan.unidentified)} suite_fallbacks={len(scan.suite_fallbacks)}"
+        )
+        print(
+            f"CLOUDFLARE_JUNIT_CASE_COUNTS cases={scan.total_cases} pass={scan.total_passes} "
+            f"fail={scan.total_failures} skip={scan.total_skips}"
         )
         for entry in scan.suite_fallbacks:
             print(

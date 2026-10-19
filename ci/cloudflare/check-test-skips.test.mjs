@@ -26,7 +26,7 @@ function allowEntry({ file, name, suite = "suite", shard = "2/3", cls = "E2E" })
 }
 
 // Writes one root JUnit report plus an allowlist into a fresh temp directory, runs the CLI there, and cleans up.
-function runCheck({ cases = [], allowlist = [], args = [], rawReport }) {
+function runCheck({ mode = "check", cases = [], allowlist = [], args = [], rawReport }) {
 	const dir = mkdtempSync(join(tmpdir(), "check-test-skips-"));
 	try {
 		const reports = join(dir, "reports");
@@ -36,7 +36,9 @@ function runCheck({ cases = [], allowlist = [], args = [], rawReport }) {
 		writeFileSync(join(reports, "root.xml"), xml);
 		const allowlistPath = join(dir, "expected-skips.txt");
 		writeFileSync(allowlistPath, allowlist.map((line) => `${line}\n`).join(""));
-		const result = spawnSync("python3", [SCRIPT, "check", reports, allowlistPath, ...args], {
+		const cliArgs =
+			mode === "report" ? [SCRIPT, "report", reports, ...args] : [SCRIPT, "check", reports, allowlistPath, ...args];
+		const result = spawnSync("python3", cliArgs, {
 			cwd: dir,
 			encoding: "utf8",
 			windowsHide: true,
@@ -174,4 +176,16 @@ test("shard selector rejects an index outside its partition count", () => {
 	const run = runCheck({ cases: [], allowlist: [], args: ["--shard", "13/12"] });
 	assert.equal(run.status, 2, run.output);
 	assert.match(run.output, /unsupported shard '13\/12'/);
+});
+
+test("report mode outputs parsed JUnit case totals", () => {
+	const run = runCheck({
+		mode: "report",
+		cases: [
+			{ file: "plugins/a.test.ts", name: "passes" },
+			{ file: "plugins/a.test.ts", name: "live", skipped: true },
+		],
+	});
+	assert.equal(run.status, 0, run.output);
+	assert.match(run.output, /CLOUDFLARE_JUNIT_CASE_COUNTS cases=2 pass=1 fail=0 skip=1/);
 });
