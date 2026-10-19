@@ -51,6 +51,32 @@ API = "https://api.cloudflare.com/client/v4"
 SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
+def ensure_nightly_branch_exists(branch: str, commit_hash: str, git_runner=None) -> bool:
+    """Create the nightly ref at the pinned commit when it is missing; never force-move it.
+
+    `git ls-remote --exit-code` exits 2 only when no matching head exists. Any other failure
+    raises, so a network error is never read as "missing" and never leads to a push.
+    """
+    run = git_runner or subprocess.run
+    check = run(
+        ["git", "ls-remote", "--exit-code", "--heads", "origin", branch],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if check.returncode == 0:
+        return False
+    if check.returncode != 2:
+        raise OSError(f"git ls-remote failed with exit {check.returncode}; nightly ref state is unknown")
+    run(
+        ["git", "push", "origin", f"{commit_hash}:refs/heads/{branch}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return True
+
+
 def main() -> int:
     account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
     trigger_id = os.environ.get("CLOUDFLARE_TRIGGER_ID", "")
@@ -73,6 +99,8 @@ def main() -> int:
     if not claim_once_per_utc_day(state_root_from_environment(), utc_day):
         print(f"dispatch=skipped reason=already-dispatched utc_date={utc_day}")
         return 0
+
+    ensure_nightly_branch_exists(NIGHTLY_BRANCH, commit_hash)
 
     payload = json.dumps({"branch": NIGHTLY_BRANCH, "commit_hash": commit_hash}).encode()
     request = urllib.request.Request(

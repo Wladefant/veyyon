@@ -350,9 +350,26 @@ run_bucket() {
   echo "CLOUDFLARE_TEST_BUCKET_FAILED $mode status=1 summaries=$bucket_summaries" >&2
   return 1
 }
+target_manifest=ci/cloudflare/lane-targets.txt
+if [[ -s "$target_manifest" ]]; then
+  # A non-empty manifest replaces every other test stage: only its listed files run. A listed
+  # file that is missing fails the runner, never a wider run. Shard 1 owns the run.
+  if (( shard_index != 1 )); then
+    echo "CLOUDFLARE_TEST_TARGETS_DEFERRED shard=$shard_spec"
+    exit 0
+  fi
+  target_list="$(node ci/cloudflare/lane-targets.mjs "$target_manifest")" || {
+    echo "CLOUDFLARE_TEST_TARGETS_INVALID manifest=$target_manifest" >&2
+    exit 1
+  }
+  mapfile -t selected_targets <<< "$target_list"
+  echo "CLOUDFLARE_TEST_TARGETS count=${#selected_targets[@]} manifest=$target_manifest"
+  run_bucket "$runner_mode" "${selected_targets[@]}"
+  exit $?
+fi
 if (( shard_index == 1 )); then
   echo "CLOUDFLARE_TEST_BUCKET_START health-worker"
-  worker_output="$(env -u CLOUDFLARE_API_TOKEN -u VEYYON_NATIVE_CACHE_CREDENTIALS -u VEYYON_NATIVE_CACHE_WRITE_CREDENTIALS node --test --test-reporter=tap ci/cloudflare/worker.test.mjs ci/cloudflare/lane-routing.test.mjs ci/cloudflare/native-cache.test.mjs 2>&1)" || {
+  worker_output="$(env -u CLOUDFLARE_API_TOKEN -u VEYYON_NATIVE_CACHE_CREDENTIALS -u VEYYON_NATIVE_CACHE_WRITE_CREDENTIALS node --test --test-reporter=tap ci/cloudflare/worker.test.mjs ci/cloudflare/lane-routing.test.mjs ci/cloudflare/lane-targets.test.mjs ci/cloudflare/native-cache.test.mjs 2>&1)" || {
     worker_status=$?
     printf '%s\n' "$worker_output"
     exit "$worker_status"

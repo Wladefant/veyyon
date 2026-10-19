@@ -4,7 +4,6 @@ import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import * as crypto from "node:crypto";
 // THE OTHER DOOR, closed on purpose rather than by luck. This script SPAWNS every `bun
 // test` chunk itself, so running it on the host runs the whole suite on the host. The gate
 // exits the process when isolation is not proven, once, here, instead of the per-chunk
@@ -27,14 +26,7 @@ import {
 	sweepStaleTempDirs,
 	TEST_TEMP_DIR_PREFIXES,
 } from "../packages/utils/test/helpers/temp-dir-janitor";
-import {
-	AFFECTED_SELECTOR_ID,
-	AFFECTED_DYNAMIC_IMPORT_LOADER_FILES,
-	AFFECTED_STATIC_DEPENDENCY_POLICY,
-	inspectAffectedWorkspaceSelection,
-	type AffectedWorkspaceInspection,
-	workingTreeDrift,
-} from "./affected-workspace-tests";
+import { inspectAffectedWorkspaceSelection, workingTreeDrift } from "./affected-workspace-tests";
 import { isCI } from "./ci-signal";
 import { ensureToolViewsGenerated } from "./ensure-tool-views";
 
@@ -52,117 +44,6 @@ type Mode =
 	| "coding-agent-native"
 	| "coding-agent-heavy";
 
-export interface RunnerArguments {
-	mode: Mode;
-	dryRun: boolean;
-	onlyFailures: boolean;
-	changedSince?: string;
-	planJson: boolean;
-}
-
-export const validModes: Record<Mode, true> = {
-	all: true,
-	local: true,
-	"local-ts": true,
-	workspace: true,
-	"workspace-cloudflare": true,
-	scripts: true,
-	native: true,
-	"coding-agent-singleton": true,
-	"coding-agent-ui": true,
-	"coding-agent-runtime": true,
-	"coding-agent-native": true,
-	"coding-agent-heavy": true,
-};
-
-export function parseRunnerArguments(input: readonly string[]): RunnerArguments {
-	let mode: string | undefined;
-	let changedSince: string | undefined;
-	let dryRun = false;
-	let fullOutput = false;
-	let onlyFailureOutput = false;
-	let planJson = false;
-
-	for (let index = 0; index < input.length; index++) {
-		const argument = input[index];
-		if (argument === undefined) continue;
-		if (argument === "--dry-run") {
-			dryRun = true;
-			continue;
-		}
-		if (argument === "--full") {
-			fullOutput = true;
-			continue;
-		}
-		if (argument === "--only-failures") {
-			onlyFailureOutput = true;
-			continue;
-		}
-		if (argument === "--plan-json") {
-			planJson = true;
-			continue;
-		}
-		if (argument === "--changed-since") {
-			const value = input[++index];
-			if (value === undefined || value.startsWith("--")) {
-				throw new Error("--changed-since requires a full commit SHA");
-			}
-			if (changedSince !== undefined) {
-				throw new Error("--changed-since may be supplied only once");
-			}
-			changedSince = value;
-			continue;
-		}
-		if (argument.startsWith("--changed-since=")) {
-			if (changedSince !== undefined) {
-				throw new Error("--changed-since may be supplied only once");
-			}
-			changedSince = argument.slice("--changed-since=".length);
-			continue;
-		}
-		if (argument.startsWith("--junit-report-dir=")) {
-			continue;
-		}
-		if (argument.startsWith("--")) {
-			throw new Error(`Unknown runner option: ${argument}`);
-		}
-		if (mode !== undefined) {
-			throw new Error(`Unexpected positional argument: ${argument}`);
-		}
-		mode = argument;
-	}
-
-	const requestedMode = mode ?? "all";
-	if (!Object.hasOwn(validModes, requestedMode)) {
-		throw new Error(
-			`Unknown mode ${shellQuote(requestedMode)}. Expected one of: ${Object.keys(validModes).join(", ")}`,
-		);
-	}
-	if (changedSince !== undefined && requestedMode !== "all") {
-		throw new Error("--changed-since is supported only with the all mode");
-	}
-	if (changedSince !== undefined && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(changedSince)) {
-		throw new Error("--changed-since requires a full 40- or 64-character commit SHA");
-	}
-	if (planJson && (!dryRun || changedSince === undefined)) {
-		throw new Error("--plan-json requires --dry-run and --changed-since <sha>");
-	}
-	return {
-		mode: requestedMode as Mode,
-		dryRun,
-		onlyFailures: onlyFailureOutput || !fullOutput,
-		changedSince,
-		planJson,
-	};
-}
-
-const runnerArguments = import.meta.main ? parseRunnerArguments(process.argv.slice(2)) : parseRunnerArguments([]);
-const isDryRun = runnerArguments.dryRun;
-const requestedMode = runnerArguments.mode;
-const onlyFailures = runnerArguments.onlyFailures;
-const onlyFailuresArgs = onlyFailures ? ["--only-failures"] : [];
-const quiet = onlyFailures;
-
 type CodingAgentBucket = "singleton" | "ui" | "runtime" | "native";
 
 export interface TestCommand {
@@ -170,7 +51,6 @@ export interface TestCommand {
 	cwd: string;
 	command: string[];
 	env?: Record<string, string>;
-
 }
 
 type CodingAgentTestPartition = Record<CodingAgentBucket, string[]>;
@@ -250,7 +130,59 @@ process.on("exit", () => {
 		);
 	}
 }
+
+// argv carries at most one mode, an optional `--changed-since <sha>` for related selection, and
+// any number of `*.test.ts(x)` paths for an explicit target run. Explicit paths take the place of
+// a mode: only the implicit `all` mode may accompany them, and they never combine with a SHA.
+export interface RunnerArguments {
+	mode: string;
+	changedSince: string | undefined;
+	explicitTestFiles: string[];
+}
+
+function isExplicitTestTarget(argument: string): boolean {
+	return /\.test\.tsx?$/.test(argument);
+}
+
+export function parseRunnerArguments(argv: readonly string[]): RunnerArguments {
+	let changedSince: string | undefined;
+	const positionals: string[] = [];
+	for (let index = 0; index < argv.length; index++) {
+		const argument = argv[index] ?? "";
+		if (argument === "--changed-since") {
+			const value = argv[++index];
+			if (value === undefined || value.startsWith("--")) {
+				throw new Error("--changed-since requires a full commit SHA");
+			}
+			changedSince = value;
+		} else if (argument.startsWith("--changed-since=")) {
+			changedSince = argument.slice("--changed-since=".length);
+		} else if (!argument.startsWith("--")) {
+			positionals.push(argument);
+		}
+	}
+	if (changedSince !== undefined && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(changedSince)) {
+		throw new Error("--changed-since requires a full 40- or 64-character commit SHA");
+	}
+	const explicitTestFiles = positionals.filter(isExplicitTestTarget);
+	const modes = positionals.filter(argument => !isExplicitTestTarget(argument));
+	if (modes.length > 1) throw new Error(`Unexpected positional argument: ${modes[1]}`);
+	const mode = modes[0] ?? "all";
+	if (explicitTestFiles.length > 0) {
+		if (mode !== "all") throw new Error("explicit test files cannot be combined with a mode other than all");
+		if (changedSince !== undefined) throw new Error("explicit test files cannot be combined with --changed-since");
+	} else if (changedSince !== undefined && mode !== "all") {
+		throw new Error("--changed-since is supported only with the all mode");
+	}
+	return { mode, changedSince, explicitTestFiles };
+}
+
 const args = process.argv.slice(2);
+const isDryRun = args.includes("--dry-run");
+const runnerArguments = import.meta.main ? parseRunnerArguments(args) : parseRunnerArguments([]);
+const requestedMode = runnerArguments.mode;
+const changedSince = runnerArguments.changedSince;
+const explicitTestFiles = runnerArguments.explicitTestFiles;
 const junitReportDirArg = args.find(arg => arg.startsWith("--junit-report-dir="));
 const junitReportDirValue = junitReportDirArg?.slice("--junit-report-dir=".length);
 if (junitReportDirValue === "") {
@@ -263,6 +195,29 @@ const junitReportDir = junitReportDirValue ? path.resolve(junitReportDirValue) :
 // cross-process cache, so chunks are safe to run concurrently. The package-level
 // `test` script passes `--full` for verbose output (every test line); an explicit
 // `--only-failures` still wins.
+const onlyFailures = args.includes("--only-failures") || !args.includes("--full");
+const onlyFailuresArgs = onlyFailures ? ["--only-failures"] : [];
+// Quiet mode (the default) collapses each parallel chunk to a one-line pass/fail
+// progress entry and replays full stdout/stderr only for chunks that failed, so
+// the failure is never buried under thousands of passing-chunk lines. `--full`
+// opts back into inline replay of every chunk. Tied to `onlyFailures` so the
+// quiet path is whatever the verbose filter is not.
+const quiet = onlyFailures;
+
+export const validModes: Record<Mode, true> = {
+	all: true,
+	local: true,
+	"local-ts": true,
+	workspace: true,
+	"workspace-cloudflare": true,
+	scripts: true,
+	native: true,
+	"coding-agent-singleton": true,
+	"coding-agent-ui": true,
+	"coding-agent-runtime": true,
+	"coding-agent-native": true,
+	"coding-agent-heavy": true,
+};
 
 // `chunkSize` splits a bucket's file list into that-many-file groups, each run as a
 // separate `bun test` child process. A fresh process per chunk resets Bun's
@@ -426,6 +381,7 @@ export const repoScriptTests = [
 	"scripts/a-package-module-loads-through-one-build.test.ts",
 	"scripts/arktype-values-load-through-the-deferred-module.test.ts",
 	"scripts/a-package-is-added-only-when-an-existing-one-cannot-serve.test.ts",
+	"scripts/a-package-module-loads-through-one-build.test.ts",
 	"scripts/a-shipped-module-arrives-with-a-test-that-names-it.test.ts",
 	"scripts/a-suite-is-named-for-the-behavior-it-defends.test.ts",
 	"scripts/a-test-proves-behavior-not-that-a-spy-was-called.test.ts",
@@ -621,8 +577,6 @@ export const repoScriptTests = [
 	// No source file the build reads is ignored, and no unanchored pattern names
 	// a directory that holds source.
 	"scripts/every-source-file-the-build-reads-is-in-the-repository.test.ts",
-	"scripts/affected-workspace-selection-keeps-safe-coverage.test.ts",
-	"scripts/cf-runtime-sharding.test.ts",
 ];
 
 /**
@@ -778,16 +732,6 @@ const workspacePackageParallelism: Readonly<Record<string, number>> = {
 	"tests/simulations": 1,
 };
 
-const cloudflareCatalogSerialTestFiles: readonly string[] = [
-	"./test/a-reference-lookup-parses-only-the-models-it-reaches.test.ts",
-	"./test/classifying-a-model-id-retains-nothing.test.ts",
-	"./test/a-resolved-model-keeps-the-compat-its-sources-declared.test.ts",
-];
-
-const cloudflareEngineSerialTestFiles: readonly string[] = ["./test/editor-wordwrap-fuzz.test.ts"];
-const cloudflareExcludedTestFiles: readonly string[] = ["./test/slice-extract-fuzz.test.ts"];
-const cloudflareSerialTestEnv: Record<string, string> = { VEYYON_TEST_TIMEOUT_MS: "60000" };
-
 export function workspaceTestParallelism(pkg: string, requested: number): number {
 	return workspacePackageParallelism[pkg] ?? requested;
 }
@@ -806,7 +750,6 @@ function workspaceTestCommand(
 	options: { env?: Record<string, string>; extraArgs?: string[]; smol?: boolean } = {},
 ): TestCommand {
 	const { env, extraArgs = [], smol = false } = options;
-
 	// `--smol` runs the test process with a smaller heap. The native/TUI/integration
 	// bucket asks for it because those suites load the native addon and browser-ish
 	// modules; without it a fat single invocation can OOM-kill (reported as exit 137).
@@ -839,48 +782,21 @@ function rustTestCommand(): TestCommand {
 	};
 }
 
-const BUN_TEST_FILE_RE = /(?:\.test|\.spec|_test|_spec)\.(?:[jt]sx?|[mc][jt]s)$/i;
-
-export function isBunTestFile(filename: string): boolean {
-	if (filename.endsWith(".d.ts")) return false;
-	return BUN_TEST_FILE_RE.test(filename);
-}
-
-const SKIP_SCAN_DIRS: Record<string, true> = {
-	node_modules: true,
-	".git": true,
-	dist: true,
-	target: true,
-	".next": true,
-	".cf-proof-tools": true,
-	".cache": true,
-	coverage: true,
-};
-
-export async function collectTestFiles(dir: string, baseDir: string = dir): Promise<string[]> {
-	let entries: nodeFs.Dirent[];
-	try {
-		entries = await fs.readdir(dir, { withFileTypes: true });
-	} catch {
-		return [];
-	}
+async function collectTestsUnder(root: string, baseDir: string): Promise<string[]> {
+	const entries = await fs.readdir(root, { withFileTypes: true });
 	const files: string[] = [];
 	for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+		const filePath = path.join(root, entry.name);
 		if (entry.isDirectory()) {
-			if (SKIP_SCAN_DIRS[entry.name]) continue;
-			const subFiles = await collectTestFiles(path.join(dir, entry.name), baseDir);
-			files.push(...subFiles);
-		} else if (entry.isFile() && isBunTestFile(entry.name)) {
-			const rel = path.relative(baseDir, path.join(dir, entry.name)).split(path.sep).join("/");
-			files.push(rel.startsWith("./") ? rel : `./${rel}`);
+			files.push(...(await collectTestsUnder(filePath, baseDir)));
+			continue;
 		}
+		if (!entry.isFile() || !entry.name.endsWith(".test.ts")) {
+			continue;
+		}
+		files.push(path.relative(baseDir, filePath).split(path.sep).join("/"));
 	}
 	return files;
-}
-
-async function collectTestsUnder(root: string, baseDir: string): Promise<string[]> {
-	const files = await collectTestFiles(root, baseDir);
-	return files.map(f => (f.startsWith("./") ? f.slice(2) : f));
 }
 
 function hasAnyMarker(content: string, markers: string[]): boolean {
@@ -949,14 +865,10 @@ async function getCodingAgentTestPartition(): Promise<CodingAgentTestPartition> 
 	return codingAgentTestPartitionPromise;
 }
 
-async function codingAgentTestCommands(
-	bucket: CodingAgentBucket,
-	includeTestFile?: (testFile: string) => boolean,
-): Promise<TestCommand[]> {
+async function codingAgentTestCommands(bucket: CodingAgentBucket): Promise<TestCommand[]> {
 	const partition = await getCodingAgentTestPartition();
-	const testFiles = partition[bucket].filter(testFile => includeTestFile?.(testFile) ?? true);
+	const testFiles = partition[bucket];
 	if (testFiles.length === 0) {
-		if (includeTestFile) return [];
 		throw new Error(`No coding-agent ${bucket} tests matched`);
 	}
 	const plan = codingAgentBucketPlans[bucket];
@@ -965,12 +877,11 @@ async function codingAgentTestCommands(
 	const commands: TestCommand[] = [];
 	for (let i = 0; i < testFiles.length; i += chunkSize) {
 		const chunk = testFiles.slice(i, i + chunkSize);
-		const chunkWithDotSlash = chunk.map(f => (f.startsWith("./") ? f : `./${f}`));
 		const chunkLabel = chunkCount > 1 ? ` chunk ${commands.length + 1}/${chunkCount}` : "";
 		commands.push({
 			label: `packages/coding-agent (${plan.label}; ${testFiles.length} files; parallel=${plan.parallel}${chunkLabel}; ${chunk.length} files)`,
 			cwd: "packages/coding-agent",
-			command: ["bun", "test", ...preloadArgs, `--parallel=${plan.parallel}`, ...onlyFailuresArgs, ...chunkWithDotSlash],
+			command: ["bun", "test", ...preloadArgs, `--parallel=${plan.parallel}`, ...onlyFailuresArgs, ...chunk],
 		});
 	}
 	return commands;
@@ -1070,11 +981,13 @@ export async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 		// `all` has to mean all. It previously reached the 15 script tests only as a
 		// side effect of `workspace` carrying them, so pulling that copy out would have
 		// quietly emptied scripts from `all` as well. It names the bucket directly now.
-		case "all": {
-			const plan = await buildAllModeCommandPlan();
-			if (!plan.shardConfig) return plan.commands;
-			return applySharding(plan.commands, plan.shardConfig);
-		}
+		case "all":
+			return [
+				...(await commandsForMode("workspace")),
+				...(await commandsForMode("native")),
+				...(await commandsForMode("coding-agent-heavy")),
+				...(await commandsForMode("scripts")),
+			];
 		// `local-ts` is the full local TypeScript run that root `bun run test:ts`
 		// drives: every package the old `--workspaces` fan-out covered (the CI
 		// `all` set PLUS veybot-web, which CI omits) and every repo
@@ -1154,40 +1067,15 @@ async function runTestCommand(testCommand: TestCommand): Promise<string | undefi
 	if (isDryRun) {
 		return undefined;
 	}
-	const files = extractCommandTestFiles(testCommand);
-	const isCloudflare = isCloudflareCI();
 
-	if (isCloudflare) {
-		const isEvals = testCommand.cwd === "tests/evals" || testCommand.label.includes("tests/evals");
-		if (isEvals) {
-			console.log(`CLOUDFLARE_EVALS_CHUNK_FILES count=${files.length}`);
-			for (const file of files) {
-				console.log(`  evals_file: ${file}`);
-			}
-		}
-		printChunkDiagnostics(testCommand.label, "BEFORE");
-	}
-	// files already extracted above
-
-	const env = { ...buildChildEnv(), ...testCommand.env };
-	const startedAt = performance.now();
+	const env = buildChildEnv();
 	const proc = Bun.spawn(testCommand.command, {
 		cwd,
 		env,
-		stdout: "pipe",
-		stderr: "pipe",
+		stdout: "inherit",
+		stderr: "inherit",
 	});
-
-	const stdout = { text: "" };
-	const stderr = { text: "" };
-	const stdoutDrain = drainInto(proc.stdout as ReadableStream<Uint8Array>, stdout);
-	const stderrDrain = drainInto(proc.stderr as ReadableStream<Uint8Array>, stderr);
-	const drains = Promise.all([stdoutDrain.done, stderrDrain.done]);
-	let timedOut = false;
-	const killTimer = setTimeout(() => {
-		timedOut = true;
-		proc.kill("SIGKILL");
-	}, chunkTimeoutMs());
+	const killTimer = setTimeout(() => proc.kill("SIGKILL"), chunkTimeoutMs());
 	const exitCode = await proc.exited;
 	clearTimeout(killTimer);
 	if (exitCode === 0) return undefined;
@@ -1659,41 +1547,8 @@ export function extractFailingTests(output: string): FailingTest[] {
 export function chunkTestFiles(command: string): string[] {
 	// Two alternatives because `shellQuote` wraps a path holding a shell character:
 	// quoted paths may contain spaces, bare ones may not.
-	const pattern = /(?:^|\s)(?:'([^']+(?:\.test|\.spec|_test|_spec)\.[cm]?[jt]sx?)'|([\w./@-]+(?:\.test|\.spec|_test|_spec)\.[cm]?[jt]sx?))(?=\s|$)/gi;
+	const pattern = /(?:^|\s)(?:'([^']+\.test\.tsx?)'|([\w./@-]+\.test\.tsx?))(?=\s|$)/g;
 	return [...command.matchAll(pattern)].map(match => match[1] ?? match[2]);
-}
-
-export function extractBunSummary(output: string): BunTestSummary {
-	const clean = output.replace(/\x1b\[[0-9;]*m/g, "");
-
-	let pass = 0;
-	let fail = 0;
-	let skip = 0;
-	let todo = 0;
-	let total = 0;
-	let files = 0;
-
-	const passMatch = /^\s*(\d+)\s+pass/m.exec(clean);
-	if (passMatch) pass = parseInt(passMatch[1], 10);
-
-	const failMatch = /^\s*(\d+)\s+fail/m.exec(clean);
-	if (failMatch) fail = parseInt(failMatch[1], 10);
-
-	const skipMatch = /^\s*(\d+)\s+skip/m.exec(clean);
-	if (skipMatch) skip = parseInt(skipMatch[1], 10);
-
-	const todoMatch = /^\s*(\d+)\s+todo/m.exec(clean);
-	if (todoMatch) todo = parseInt(todoMatch[1], 10);
-
-	const ranMatch = /Ran\s+(\d+)\s+tests?\s+across\s+(\d+)\s+files?/m.exec(clean);
-	if (ranMatch) {
-		total = parseInt(ranMatch[1], 10);
-		files = parseInt(ranMatch[2], 10);
-	} else {
-		total = pass + fail + skip + todo;
-	}
-	const valid = passMatch !== null || failMatch !== null || ranMatch !== null;
-	return { pass, fail, skip, todo, total, files, valid };
 }
 
 export function formatChunkFailure(failure: ChunkOutcome, replayOutput: boolean): string {
@@ -1756,6 +1611,44 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 	);
 
 	// Incremental, cancellable drain into a mutable sink, so a watchdog-killed
+	// chunk still reports whatever the child managed to print before it wedged.
+	function drainInto(
+		stream: ReadableStream<Uint8Array>,
+		sink: { text: string },
+	): { done: Promise<void>; cancel: () => void } {
+		const decoder = new TextDecoder();
+		const reader = stream.getReader();
+		const done = (async () => {
+			try {
+				for (;;) {
+					const { done: ended, value } = await reader.read();
+					if (ended) break;
+					sink.text += decoder.decode(value, { stream: true });
+				}
+			} catch {
+				// cancelled or broken pipe — keep what was captured
+			}
+			sink.text += decoder.decode();
+		})();
+		return { done, cancel: () => void reader.cancel().catch(() => {}) };
+	}
+
+	// Wait for `promise` at most `ms`; resolves `true` when it settled in time.
+	// Never rejects.
+	async function settleWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+		const { promise: expired, resolve } = Promise.withResolvers<boolean>();
+		const timer = setTimeout(() => resolve(false), ms);
+		const settled = await Promise.race([
+			promise.then(
+				() => true,
+				() => true,
+			),
+			expired,
+		]);
+		clearTimeout(timer);
+		return settled;
+	}
+
 	async function worker(): Promise<void> {
 		for (;;) {
 			const testCommand = queue.shift();
@@ -1768,7 +1661,7 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 			const startedAt = performance.now();
 			const proc = Bun.spawn(command, {
 				cwd: path.join(repoRoot, testCommand.cwd),
-				env: testCommand.env ? { ...env, ...testCommand.env } : env,
+				env,
 				stdout: "pipe",
 				stderr: "pipe",
 			});
@@ -1804,7 +1697,7 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 			};
 			addBunTestTotals(testTotals, outcome.output);
 			if (quiet) {
-				let msg = `${formatProgressLine(outcome)}\n${chunkSummaryLine}${fileSummaryLines}`;
+				let msg = `${formatProgressLine(outcome)}\n`;
 				if (exitCode !== 0 || timedOut) {
 					msg += `${formatChunkFailure(outcome, true)}\n`;
 				}
@@ -1812,7 +1705,7 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 			} else {
 				const status = exitCode === 0 ? "ok" : `FAILED exit ${exitCode}`;
 				process.stdout.write(
-					`\n==> [${completed}/${commands.length}] ${testCommand.label} (${status}, ${outcome.seconds.toFixed(1)}s)\n$ ${renderedCommand}\n${outcome.output}\n${chunkSummaryLine}${fileSummaryLines}`,
+					`\n==> [${completed}/${commands.length}] ${testCommand.label} (${status}, ${outcome.seconds.toFixed(1)}s)\n$ ${renderedCommand}\n${outcome.output}`,
 				);
 			}
 			if (exitCode !== 0 || timedOut) {
@@ -1824,36 +1717,6 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 	const runStartedAt = performance.now();
 	await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
-	let totalPass = 0;
-	let totalFail = 0;
-	let totalSkip = 0;
-	let totalTodo = 0;
-	let totalTests = 0;
-	for (const outcome of outcomes) {
-		const s = extractBunSummary(outcome.output);
-		if (outcome.exitCode !== 0 && s.fail === 0) {
-			s.fail = 1;
-			s.total = Math.max(s.total, s.pass + s.fail + s.skip + s.todo);
-		}
-		totalPass += s.pass;
-		totalFail += s.fail;
-		totalSkip += s.skip;
-		totalTodo += s.todo;
-		totalTests += s.total;
-	}
-	if (failures.length > 0 && totalFail === 0) {
-		totalFail = failures.length;
-		totalTests = Math.max(totalTests, totalPass + totalFail + totalSkip);
-	}
-	process.stdout.write(
-		`\nCLOUDFLARE_TEST_TOTALS pass=${totalPass} fail=${totalFail} skip=${totalSkip} todo=${totalTodo} total=${totalTests} chunks=${commands.length}\n`,
-	);
-
-	if (commands.length > 0 && totalTests === 0) {
-		process.exitCode = 1;
-		process.stderr.write("\n[runner-error] Fail closed: 0 total tests executed across non-empty command plan\n");
-	}
-
 	if (quiet) {
 		const totalSeconds = (performance.now() - runStartedAt) / 1000;
 		process.stdout.write(
@@ -1863,84 +1726,9 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 	} else if (failures.length > 0) {
 		process.stdout.write(style.bold(style.red(`\n${failures.length} of ${commands.length} test chunk(s) FAILED\n`)));
 	}
-	if (failures.length > 0 || totalFail > 0) {
+	if (failures.length > 0) {
 		process.exitCode = 1;
-		process.stdout.write(formatFailureReport(failures, commands.length, false));
-		process.stdout.write("\n");
 	}
-}
-
-/**
- * Run every command sequentially, preserving bounded memory in CI and
- * fail-safe environments. All failures are collected and reported together
- * after every chunk has executed, so one broken chunk never aborts subsequent
- * chunks. Exits non-zero after all chunks complete if any chunk failed.
- */
-export async function runTestCommandsSequentially(commands: TestCommand[]): Promise<{
-	outcomes: ChunkOutcome[];
-	failures: ChunkOutcome[];
-}> {
-	const outcomes: ChunkOutcome[] = [];
-	const failures: ChunkOutcome[] = [];
-	let totalPass = 0;
-	let totalFail = 0;
-	let totalSkip = 0;
-	let totalTodo = 0;
-	let totalTests = 0;
-
-	for (const testCommand of commands) {
-		let outcome: ChunkOutcome;
-		try {
-			outcome = await runTestCommand(testCommand);
-		} catch (err) {
-			const renderedCommand = testCommand.command.map(shellQuote).join(" ");
-			const errMsg = err instanceof Error ? err.stack ?? err.message : String(err);
-			outcome = {
-				label: testCommand.label,
-				command: renderedCommand,
-				exitCode: 1,
-				seconds: 0,
-				output: `${errMsg}\n`,
-			};
-			process.stderr.write(`\n[chunk-runner-error] ${testCommand.label}: ${errMsg}\n`);
-		}
-		outcomes.push(outcome);
-		const s = extractBunSummary(outcome.output);
-		if (outcome.exitCode !== 0 && s.fail === 0) {
-			s.fail = 1;
-			s.total = Math.max(s.total, s.pass + s.fail + s.skip + s.todo);
-		}
-		totalPass += s.pass;
-		totalFail += s.fail;
-		totalSkip += s.skip;
-		totalTodo += s.todo;
-		totalTests += s.total;
-		if (outcome.exitCode !== 0) {
-			failures.push(outcome);
-		}
-	}
-
-	if (failures.length > 0 && totalFail === 0) {
-		totalFail = failures.length;
-		totalTests = Math.max(totalTests, totalPass + totalFail + totalSkip);
-	}
-
-	process.stdout.write(
-		`\nCLOUDFLARE_TEST_TOTALS pass=${totalPass} fail=${totalFail} skip=${totalSkip} todo=${totalTodo} total=${totalTests} chunks=${commands.length}\n`,
-	);
-
-	if (commands.length > 0 && totalTests === 0) {
-		process.exitCode = 1;
-		process.stderr.write("\n[runner-error] Fail closed: 0 total tests executed across non-empty command plan\n");
-	}
-
-	if (failures.length > 0 || totalFail > 0) {
-		process.exitCode = 1;
-		process.stdout.write(formatFailureReport(failures, commands.length, false));
-		process.stdout.write("\n");
-	}
-
-	return { outcomes, failures };
 }
 
 /**
@@ -2245,9 +2033,70 @@ function reportTrackedFileCounts(junitDir: string | null): void {
 	}
 }
 
+// Explicit paths run as `bun test` commands grouped by their nearest package.json, so bun
+// resolves each file under the same root the matching bucket uses. A missing or escaping path
+// throws: a listed target that does not exist must fail the run, never fall back to a wider set.
+function explicitTestCommands(files: readonly string[]): TestCommand[] {
+	const targetsByCwd = new Map<string, string[]>();
+	for (const file of files) {
+		const normalized = path.posix.normalize(file.replaceAll("\\", "/")).replace(/^\.\//, "");
+		if (normalized.startsWith("../") || path.posix.isAbsolute(normalized)) {
+			throw new Error(`Explicit test target is outside the repository: ${file}`);
+		}
+		if (!nodeFs.existsSync(path.join(repoRoot, normalized))) {
+			throw new Error(`Explicit test target not found: ${file}`);
+		}
+		let cwd = path.posix.dirname(normalized);
+		while (cwd !== "." && !nodeFs.existsSync(path.join(repoRoot, cwd, "package.json"))) {
+			cwd = path.posix.dirname(cwd);
+		}
+		targetsByCwd.set(cwd, [...(targetsByCwd.get(cwd) ?? []), path.posix.relative(cwd, normalized)]);
+	}
+	return [...targetsByCwd].map(([cwd, targets]) => ({
+		label: `targets ${cwd}`,
+		cwd,
+		command: ["bun", "test", ...preloadArgs, ...onlyFailuresArgs, ...targets],
+	}));
+}
+
+// Related selection asks the affected-workspace selector which members a change reaches, then
+// runs each member only through the bucket that already owns it. Every doubt throws: a drifted
+// working tree, a full-mode answer, an unowned member, or an empty selection. The selector never
+// widens to a full run here; a full run is the nightly's job (CI_NIGHTLY=1 routes it).
+async function relatedTestCommands(baseSha: string): Promise<TestCommand[]> {
+	const failClosed = (reason: string): never => {
+		throw new Error(`CLOUDFLARE_RELATED_SELECTION_UNAVAILABLE fallback=${reason}`);
+	};
+	const inspection = await inspectAffectedWorkspaceSelection(baseSha);
+	const drift = await workingTreeDrift(["."], isExplicitTestTarget);
+	if (drift.length > 0) failClosed(`working tree differs from HEAD: ${drift.join(", ")}`);
+	if (inspection.mode !== "affected") {
+		failClosed(inspection.fallbackReason ?? "selector requested full coverage");
+	}
+	console.log(
+		`CLOUDFLARE_AFFECTED_SELECTION ${JSON.stringify({
+			selectorId: inspection.selectorId,
+			baseSha: inspection.baseSha,
+			headSha: inspection.headSha,
+			selectedMembers: inspection.selectedMembers,
+		})}`,
+	);
+	if (inspection.selectedMembers.length === 0) failClosed("selector selected no workspace member");
+	const owned = [
+		...(await commandsForMode("workspace")),
+		...(await commandsForMode("native")),
+		...(await commandsForMode("coding-agent-heavy")),
+	];
+	return inspection.selectedMembers.flatMap(member => {
+		const commands = owned.filter(command => command.cwd === member);
+		if (commands.length === 0) failClosed(`selected member has no owning test bucket: ${member}`);
+		return commands;
+	});
+}
+
 // Skipped when imported (e.g. by the runner's own unit tests), where
 // `process.argv` carries test-file paths rather than a mode/flags.
-if (import.meta.main && runnerArguments.changedSince === undefined) {
+if (import.meta.main) {
 	if (!(requestedMode in validModes)) {
 		throw new Error(
 			`Unknown mode ${shellQuote(requestedMode)}. Expected one of: ${Object.keys(validModes).join(", ")}`,
@@ -2255,11 +2104,20 @@ if (import.meta.main && runnerArguments.changedSince === undefined) {
 	}
 
 	await ensureToolViewsGenerated();
-	const availableTestCommands = await commandsForMode(requestedMode as Mode);
+	// Explicit targets and related selections are single selections, not shards of a mode, so
+	// the shard split does not apply to them. CI runs an explicit target list on one shard only.
+	const targeted = explicitTestFiles.length > 0 || changedSince !== undefined;
+	const availableTestCommands =
+		explicitTestFiles.length > 0
+			? explicitTestCommands(explicitTestFiles)
+			: changedSince !== undefined
+				? await relatedTestCommands(changedSince)
+				: await commandsForMode(requestedMode as Mode);
 	const testShard = resolveCiTestShard(Bun.env);
-	const testCommands = testShard
-		? allocateCloudflareTestCommands(requestedMode, availableTestCommands, testShard)
-		: availableTestCommands;
+	const testCommands =
+		testShard && !targeted
+			? allocateCloudflareTestCommands(requestedMode, availableTestCommands, testShard)
+			: availableTestCommands;
 	if (testShard && testCommands.length === 0) {
 		console.log(
 			`CLOUDFLARE_CI_TEST_SHARD_DEFERRED mode=${requestedMode} shard=${testShard.index}/${testShard.count} ` +
@@ -2290,11 +2148,7 @@ if (import.meta.main && runnerArguments.changedSince === undefined) {
 			await runTestCommandsInSequence(testCommands);
 		}
 	} finally {
-		if (runnerSampler !== null) {
-			clearInterval(runnerSampler);
-			runnerSampler = null;
-		}
-		// In `finally` on purpose: a failing or interrupted suite is exactly when a
+		// In `finally` on purpose: a failing or interrupted run is exactly when a
 		// half-finished suite is most likely to have left damage behind.
 		const bucketSeconds = (performance.now() - bucketStartedAt) / 1000;
 		reportTrackedFileCounts(junitReportDir);
@@ -2340,87 +2194,4 @@ if (import.meta.main && runnerArguments.changedSince === undefined) {
 			}
 		}
 	}
-}
-export function assertRelatedSelectionAvailable(
-	mode: "affected" | "full",
-	relatedOnly: boolean,
-	fallbackReason?: string,
-): void {
-	if (relatedOnly && mode === "full") {
-		throw new Error(
-			`CLOUDFLARE_RELATED_SELECTION_UNAVAILABLE fallback=${fallbackReason ?? "selector requested full coverage"}`,
-		);
-	}
-}
-
-if (import.meta.main) {
-	if (!runnerArguments.planJson) await ensureToolViewsGenerated();
-	let testCommands: TestCommand[] = [];
-	if (runnerArguments.changedSince !== undefined) {
-		const inspected = await inspectAffectedWorkspaceSelection(runnerArguments.changedSince);
-		// Selection reads HEAD objects; a tracked or relevant untracked change makes that snapshot a lie about what runs.
-		const drift = await workingTreeDrift(["."], isBunTestFile);
-		const inspection =
-			drift.length === 0
-				? inspected
-				: {
-						...inspected,
-						mode: "full" as const,
-						fallbackReason: `working tree differs from HEAD: ${drift.join(", ")}`,
-					};
-		const plan = await buildAffectedTestPlan(inspection);
-		const selectionMetadata = {
-			selectorId: plan.selectorId,
-			mode: plan.mode,
-			baseSha: plan.baseSha,
-			headSha: plan.headSha,
-			fallbackReason: plan.fallbackReason ?? null,
-			changedPaths: plan.changedPaths,
-			selectedMembers: plan.selectedMembers,
-			changeMembers: plan.changeMembers,
-			importEdgeCount: plan.importEdgeCount,
-			importEdgeCountsByRevision: plan.importEdgeCountsByRevision,
-			dynamicImportLoaderFiles: plan.dynamicImportLoaderFiles,
-			selectedInventory: plan.selectedInventory,
-			selectionHash: plan.selectionHash,
-			dependencyPolicy: plan.dependencyPolicy,
-		};
-		if (runnerArguments.planJson) {
-			process.stderr.write(`CLOUDFLARE_AFFECTED_SELECTION ${JSON.stringify(selectionMetadata)}\n`);
-			const assignedCommands = plan.shardConfig
-				? shardTestCommands(plan.commands, plan.shardConfig.index, plan.shardConfig.count)
-				: plan.commands;
-			if (plan.shardConfig && assignedCommands.length === 0) {
-				throw new Error(
-					`Empty shard ${plan.shardConfig.index}/${plan.shardConfig.count} assigned (0 chunks). Full inventory of ${plan.commands.length} chunks requires non-empty shards.`,
-				);
-			}
-			const assignedChunks: AffectedPlanChunk[] = [];
-			for (const command of assignedCommands) {
-				const chunk = plan.chunks[plan.commands.indexOf(command)];
-				if (chunk) assignedChunks.push(chunk);
-			}
-			process.stdout.write(
-				`${JSON.stringify({
-					...selectionMetadata,
-					chunkInventory: plan.chunks,
-					shardConfig: plan.shardConfig,
-					assignedChunks,
-				})}\n`,
-			);
-		} else {
-			process.stdout.write(`CLOUDFLARE_AFFECTED_SELECTION ${JSON.stringify(selectionMetadata)}\n`);
-			assertRelatedSelectionAvailable(
-				plan.mode,
-				process.env.VEYYON_CI_RELATED_ONLY === "1",
-				plan.fallbackReason,
-			);
-			testCommands = plan.shardConfig
-				? applySharding(plan.commands, plan.shardConfig)
-				: plan.commands;
-		}
-	} else {
-		testCommands = await commandsForMode(requestedMode);
-	}
-	if (!runnerArguments.planJson) await executePlannedCommands(testCommands);
 }

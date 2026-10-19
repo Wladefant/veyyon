@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
-import tempfile
+from unittest import mock
 
-from dispatch_nightly import claim_once_per_utc_day
-import sys
+from dispatch_nightly import claim_once_per_utc_day, ensure_nightly_branch_exists
+from dispatch_nightly import main as dispatch_nightly_main
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
@@ -29,6 +33,104 @@ class TestNightlyDispatchGuard(unittest.TestCase):
             self.assertTrue(claim_once_per_utc_day(root, "2026-10-19"))
             self.assertFalse(claim_once_per_utc_day(root, "2026-10-19"))
             self.assertTrue(claim_once_per_utc_day(root, "2026-10-20"))
+
+
+
+class TestNightlyBranchCreationAndDispatch(unittest.TestCase):
+    def test_missing_ref_creates_branch_and_dispatches_once(self) -> None:
+        calls = []
+
+        def mock_git_runner(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd[1] == "ls-remote":
+                return subprocess.CompletedProcess(cmd, returncode=2, stdout="", stderr="")
+            if cmd[1] == "push":
+                self.assertNotIn("--force", cmd)
+                self.assertNotIn("-f", cmd)
+                return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
+            return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
+
+        created = ensure_nightly_branch_exists(
+            "cf-nightly-main",
+            "1111222233334444555566667777888899990000",
+            git_runner=mock_git_runner,
+        )
+        self.assertTrue(created)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][1], "ls-remote")
+        self.assertEqual(
+            calls[1],
+            ["git", "push", "origin", "1111222233334444555566667777888899990000:refs/heads/cf-nightly-main"],
+        )
+
+    def test_existing_ref_does_not_push(self) -> None:
+        calls = []
+
+        def mock_git_runner(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd[1] == "ls-remote":
+                return subprocess.CompletedProcess(cmd, returncode=0, stdout="hash\trefs/heads/cf-nightly-main\n", stderr="")
+            return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
+
+        created = ensure_nightly_branch_exists(
+            "cf-nightly-main",
+            "1111222233334444555566667777888899990000",
+            git_runner=mock_git_runner,
+        )
+        self.assertFalse(created)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1], "ls-remote")
+
+class TestNightlyMainCreatesRefThenDispatchesOnce(unittest.TestCase):
+    SHA = "1111222233334444555566667777888899990000"
+
+    def _fake_git(self, commands: list[list[str]]):
+        def run(cmd, **kwargs):
+            commands.append(cmd)
+            if cmd[:3] == ["git", "branch", "--show-current"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout="main\n", stderr="")
+            if cmd[:2] == ["git", "rev-parse"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout=f"{self.SHA}\n", stderr="")
+            if cmd[:2] == ["git", "ls-remote"]:
+                return subprocess.CompletedProcess(cmd, 2, stdout="", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        return run
+
+    def test_missing_ref_is_created_and_one_build_is_posted_per_day(self) -> None:
+        commands: list[list[str]] = []
+        payloads: list[bytes] = []
+        response = mock.MagicMock()
+        response.read.return_value = b'{"success": true, "result": {"id": "build-1"}}'
+        opened = mock.MagicMock()
+        opened.__enter__.return_value = response
+
+        def capture(request, timeout):
+            payloads.append(request.data)
+            return opened
+
+        with tempfile.TemporaryDirectory() as state_dir, mock.patch.dict(
+            os.environ,
+            {
+                "CLOUDFLARE_ACCOUNT_ID": "account",
+                "CLOUDFLARE_TRIGGER_ID": "trigger",
+                "CLOUDFLARE_API_TOKEN": "token",
+                "CLOUDFLARE_NIGHTLY_STATE_DIR": state_dir,
+            },
+        ), mock.patch("subprocess.run", side_effect=self._fake_git(commands)), mock.patch(
+            "urllib.request.urlopen", side_effect=capture
+        ):
+            self.assertEqual(dispatch_nightly_main(), 0)
+            self.assertEqual(dispatch_nightly_main(), 0)
+
+        pushes = [cmd for cmd in commands if cmd[:2] == ["git", "push"]]
+        self.assertEqual(
+            pushes,
+            [["git", "push", "origin", f"{self.SHA}:refs/heads/cf-nightly-main"]],
+        )
+        self.assertEqual(len(payloads), 1)
+        self.assertIn(b'"branch": "cf-nightly-main"', payloads[0])
+        self.assertIn(f'"commit_hash": "{self.SHA}"'.encode(), payloads[0])
 
 
 class TestCfCiBunSummaryParser(unittest.TestCase):
