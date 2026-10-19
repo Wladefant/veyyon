@@ -13,6 +13,7 @@
  */
 
 import { formatCount } from "@veyyon/utils";
+import { formatDuration } from "@veyyon/utils/format";
 import type {
 	HeadedBlockView,
 	StatusRowView,
@@ -30,7 +31,6 @@ import { formatArtifactErrorNotice } from "../core/output-meta";
 import {
 	Ellipsis,
 	extractResultText,
-	formatDuration,
 	getPreviewLines,
 	PREVIEW_LIMITS,
 	replaceTabs,

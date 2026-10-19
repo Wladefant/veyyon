@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import * as path from "node:path";
+import { promisify } from "node:util";
 import { buildPayloadDefines } from "./generate-docs-index";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
 import { createPrecompiledPromptPlugin } from "./precompiled-prompts";
+
+const execFileAsync = promisify(execFile);
 
 /** Native runtime dependencies always resolved from the on-demand install instead of embedded into compiled binaries. */
 export const COMPILED_EXTERNAL_DEPENDENCIES: readonly string[] = Object.freeze(["fastembed", "onnxruntime-node"]);
@@ -128,18 +132,18 @@ export async function resolveBuildTag(repoRoot: string): Promise<string | undefi
 
 /** Resolve the full commit SHA embedded in a new executable, or undefined when Git cannot identify it. */
 export async function resolveBuildSha(repoRoot: string): Promise<string | undefined> {
-	if (Bun.env.VEYYON_BUILD_SHA && /^[0-9a-f]{40}$/i.test(Bun.env.VEYYON_BUILD_SHA)) {
-		return Bun.env.VEYYON_BUILD_SHA.toLowerCase();
-	}
+	const configured = process.env.VEYYON_BUILD_SHA;
+	if (configured && /^[0-9a-f]{40}$/i.test(configured)) return configured.toLowerCase();
 	try {
-		const proc = Bun.spawn(["git", "rev-parse", "--verify", "HEAD"], {
+		const { stdout } = await execFileAsync("git", ["rev-parse", "--verify", "HEAD"], {
 			cwd: repoRoot,
-			stdout: "pipe",
-			stderr: "pipe",
+			encoding: "utf8",
+			timeout: 3_000,
+			windowsHide: true,
+			maxBuffer: 4096,
 		});
-		const out = (await new Response(proc.stdout).text()).trim();
-		const exitCode = await proc.exited;
-		if (exitCode === 0 && /^[0-9a-f]{40}$/i.test(out)) return out.toLowerCase();
+		const out = stdout.trim();
+		if (/^[0-9a-f]{40}$/i.test(out)) return out.toLowerCase();
 	} catch {
 		// git unavailable
 	}

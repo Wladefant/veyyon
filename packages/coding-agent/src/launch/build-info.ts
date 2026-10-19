@@ -41,7 +41,7 @@ export function parseBuildIdentity(output: string): BuildIdentity | null {
 export function formatBuildIdentity(identity: BuildIdentity): string {
 	const buildTag = identity.buildTag ? `tag ${identity.buildTag}` : undefined;
 	const buildSha = identity.buildSha ? `build SHA ${identity.buildSha}` : "build SHA unavailable";
-	return `${APP_NAME}/${identity.version} (${[buildTag, buildSha].filter(Boolean).join("; ")})`;
+	return `${identity.version} (${[buildTag, buildSha].filter(Boolean).join("; ")})`;
 }
 
 /** Read the executable currently on disk, if one can be identified and queried safely. */

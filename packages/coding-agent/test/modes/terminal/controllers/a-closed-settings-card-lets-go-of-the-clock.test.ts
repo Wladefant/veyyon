@@ -15,7 +15,7 @@
 //
 // The second defect, same class one level down: a card the operator has NOT closed still throws
 // surfaces away. A settings submenu swaps screens by rebuilding its children, so stepping back out
-// of a role's model panel drops a live pointer band on the floor. Nothing at the dozens of
+// of a helper's model panel drops a live pointer band on the floor. Nothing at the dozens of
 // `this.clear()` sites could be trusted to remember, so the base class hands the children back.
 //
 // WHAT IT DOES NOT CATCH: whether the fade LOOKS right (the band-bytes suite), and a card closed by
@@ -23,6 +23,7 @@
 // here proves a future route will.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { setImmediate } from "node:timers/promises";
 import { stripVTControlCharacters } from "node:util";
 import type { Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
@@ -54,7 +55,7 @@ interface OpenedCard {
 }
 
 /**
- * Three models under two providers: enough for the role picker to paint a list with a hoverable
+ * Three models under two providers: enough for the helper's model picker to paint a list with a hoverable
  * row that is neither the first nor the last, which is what a band test needs.
  */
 const MODELS: ReadonlyArray<Model> = ["alpha/one", "alpha/two", "beta/three"].map(name => {
@@ -73,7 +74,7 @@ const MODELS: ReadonlyArray<Model> = ["alpha/one", "alpha/two", "beta/three"].ma
 	});
 });
 
-/** Only what the role picker reads: the catalog, and whether each row is already usable. */
+/** Only what the model picker reads: the catalog, and whether each row is already usable. */
 const MODEL_REGISTRY = {
 	getAvailable: () => MODELS,
 	getAll: () => MODELS,
@@ -154,9 +155,9 @@ function cellOf(card: SettingsSelectorComponent, text: string): { row: number; c
 	return { row: index + 1, col: (rows[index] as string).indexOf(text) + 1 };
 }
 
-/** Press and release over a row: how the operator picks one with the pointer. */
-function click(card: SettingsSelectorComponent, text: string): void {
-	const { row, col } = cellOf(card, text);
+/** Press and release over a sidebar category: how the operator picks one with the pointer. */
+function clickCategory(card: SettingsSelectorComponent, label: string): void {
+	const { row, col } = categoryCell(card, label);
 	card.handleInput(`\x1b[<0;${col};${row}M`);
 	card.handleInput(`\x1b[<0;${col};${row}m`);
 }
@@ -228,16 +229,23 @@ describe("a closed settings card lets go of the clock", () => {
 		expect(motionClock.liveCount).toBe(0);
 	});
 
-	it("hands the clock back when a role's model panel is stepped out of", async () => {
+	it("hands the clock back when a helper's model panel is stepped out of", async () => {
 		const { card } = await openSettings({ withModels: true });
 		drain(performance.now());
 
-		// Model → Role Models → the first role's picker, each step asserted by what the card
-		// paints: a navigation that silently landed somewhere else would test nothing at all.
-		click(card, "Model");
-		click(card, "Role Models");
+		// Agents → Roster → the first helper's page → its model picker, each step asserted by what
+		// the card paints: a navigation that silently landed somewhere else would test nothing at all.
+		clickCategory(card, "Agents");
+		expect(card.selectSetting("agent.agents")).toBe(true);
 		card.handleInput("\r");
-		expect(plain(card).some(line => line.includes("Enter to pick model"))).toBe(true);
+		// Agent discovery reads the agent directories off the event loop; the roster paints
+		// "Reading agents" until it lands. Bounded, so a discovery that never lands fails here.
+		for (let spin = 0; plain(card).some(line => line.includes("Reading agents")); spin++) {
+			expect(spin, "agent discovery landed").toBeLessThan(20_000);
+			await setImmediate();
+		}
+		card.handleInput("\r");
+		expect(plain(card).some(line => line.includes("Helper: Advisor"))).toBe(true);
 		card.handleInput("\r");
 		expect(plain(card).some(line => line.includes("alpha/two"))).toBe(true);
 
@@ -246,9 +254,9 @@ describe("a closed settings card lets go of the clock", () => {
 		expect(motionClock.liveCount, "the panel's band is travelling").toBeGreaterThan(0);
 
 		// Escape here does not close the card: the submenu rebuilds its children back into the
-		// role list, and the panel it drops is the thing that has to give the clock back.
+		// helper's page, and the panel it drops is the thing that has to give the clock back.
 		card.handleInput("\x1b");
-		expect(plain(card).some(line => line.includes("Enter to pick model"))).toBe(true);
+		expect(plain(card).some(line => line.includes("Helper: Advisor"))).toBe(true);
 
 		const now = performance.now();
 		for (let frame = 1; frame <= 2; frame++) motionClock.tick(now + frame * FRAME);

@@ -15,10 +15,34 @@
  * and a reason an operator can act on. It never falls back to a locally
  * declared model list.
  */
-import { fetchChatGptWebModels, normalizeChatGptWebBaseUrl } from "../discovery/chatgpt-web";
+import { normalizeBaseUrl } from "@veyyon/utils/url";
 import type { ModelManagerOptions } from "../model-manager";
+import { CHATGPT_WEB_LOCAL_ENDPOINT } from "../provider-endpoints";
 import type { FetchImpl } from "../types";
 
+/**
+ * Normalizes a base URL for the local `codex-chatgpt-web` Responses bridge.
+ *
+ * Ensures the returned URL names the `/v1` prefix under which the daemon serves
+ * `/v1/models` and `/v1/responses`. If the input points at the daemon root
+ * (e.g. `http://127.0.0.1:17841`), `/v1` is appended. If it already points at
+ * `/v1/responses`, the trailing route segment is stripped.
+ */
+export function normalizeChatGptWebBaseUrl(raw: string | undefined): string {
+	const normalized = normalizeBaseUrl(raw, CHATGPT_WEB_LOCAL_ENDPOINT);
+	if (normalized.endsWith("/responses")) {
+		return normalized.slice(0, -"/responses".length);
+	}
+	try {
+		const parsed = new URL(normalized);
+		if (parsed.pathname === "" || parsed.pathname === "/") {
+			return `${normalized}/v1`;
+		}
+	} catch {
+		// unparseable URL falls through as-is
+	}
+	return normalized;
+}
 export interface ChatGptWebModelManagerConfig {
 	/**
 	 * ChatGPT/Codex OAuth access token. Named `apiKey` because that is the field
@@ -43,6 +67,7 @@ export function chatGptWebModelManagerOptions(
 		staticModels: [],
 		dynamicModelsAuthoritative: true,
 		fetchDynamicModels: async hooks => {
+			const { fetchChatGptWebModels } = await import("../discovery/chatgpt-web");
 			const result = await fetchChatGptWebModels({
 				accessToken: config?.apiKey ?? "",
 				baseUrl,

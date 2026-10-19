@@ -16,31 +16,23 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
 const planModel = { provider: "test", id: "plan" } as unknown as Model<Api>;
-const slowModel = { provider: "test", id: "slow" } as unknown as Model<Api>;
 const currentModel = { provider: "test", id: "current" } as unknown as Model<Api>;
 
-function createSession(options?: {
-	plan?: boolean;
-	slow?: boolean;
-	current?: boolean;
-	thinkingLevel?: ThinkingLevel;
-}): AgentSession {
+function createSession(options?: { plan?: boolean; current?: boolean; thinkingLevel?: ThinkingLevel }): AgentSession {
 	const plan = options?.plan ?? true;
-	const slow = options?.slow ?? true;
 	const current = options?.current ?? false;
 	return {
-		resolveRoleModelWithThinking(role: string) {
-			if (role === "plan" && plan) return { model: planModel, explicitThinkingLevel: false };
-			if (role === "slow" && slow) return { model: slowModel, explicitThinkingLevel: false };
-			return { model: undefined, explicitThinkingLevel: false };
+		// An unset plan helper runs the session's model, and resolves to nothing without one.
+		resolveHelperModel(id: string) {
+			if (id !== "plan") return undefined;
+			if (plan) return { model: planModel, inherited: false };
+			if (current) return { model: currentModel, inherited: true };
+			return undefined;
 		},
 		modelRegistry: {
 			getAvailable: () => [currentModel],
 			getApiKey: async () => "test-key",
 			resolver: (model: typeof planModel) => `${model.provider}/${model.id}:key`,
-		},
-		settings: {
-			getModelRole: () => undefined,
 		},
 		model: current ? currentModel : undefined,
 		thinkingLevel: options?.thinkingLevel,
@@ -193,34 +185,21 @@ describe("guided goal setup", () => {
 		expect(complete.mock.calls[1]?.[2]?.sessionId).toBe(sideSessionId);
 	});
 
-	it("falls back to slow when plan is unavailable", async () => {
-		const complete = spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(
-			mockResponse({ kind: "ready", objective: "Deliver the confirmed feature." }) as never,
-		);
-
-		const result = await runGuidedGoalTurn(createSession({ plan: false, slow: true }), {
-			messages: [{ role: "user", content: "Ship it" }],
-		});
-
-		expect(result).toEqual({ kind: "ready", objective: "Deliver the confirmed feature." });
-		expect(complete.mock.calls[0]?.[0]).toBe(slowModel);
-	});
-
-	it("throws when no guided-goal fallback model resolves", async () => {
+	it("throws when the plan helper resolves no model", async () => {
 		await expect(
-			runGuidedGoalTurn(createSession({ plan: false, slow: false }), {
+			runGuidedGoalTurn(createSession({ plan: false }), {
 				messages: [{ role: "user", content: "Ship it" }],
 			}),
-		).rejects.toThrow("No plan, slow, or current session model is available for /guided-goal.");
+		).rejects.toThrow("No model is available for /guided-goal: agent.helpers.plan.model matches no available model");
 	});
 
-	it("falls back to the current session model when plan and slow roles are unresolved", async () => {
+	it("runs the current session model and effort when the plan helper is unset", async () => {
 		const complete = spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(
 			mockResponse({ kind: "ready", objective: "Deliver with the active model." }) as never,
 		);
 
 		const result = await runGuidedGoalTurn(
-			createSession({ plan: false, slow: false, current: true, thinkingLevel: ThinkingLevel.High }),
+			createSession({ plan: false, current: true, thinkingLevel: ThinkingLevel.High }),
 			{ messages: [{ role: "user", content: "Ship it" }] },
 		);
 
@@ -236,10 +215,9 @@ describe("guided goal setup", () => {
 			mockResponse({ kind: "ready", objective: "Deliver without reasoning." }) as never,
 		);
 
-		await runGuidedGoalTurn(
-			createSession({ plan: false, slow: false, current: true, thinkingLevel: ThinkingLevel.Off }),
-			{ messages: [{ role: "user", content: "Ship it" }] },
-		);
+		await runGuidedGoalTurn(createSession({ plan: false, current: true, thinkingLevel: ThinkingLevel.Off }), {
+			messages: [{ role: "user", content: "Ship it" }],
+		});
 
 		expect((complete.mock.calls[0]?.[2] as { disableReasoning?: boolean } | undefined)?.disableReasoning).toBe(true);
 	});
@@ -413,10 +391,7 @@ describe("guided goal setup", () => {
 		try {
 			const model = harness.session.model;
 			if (!model) throw new Error("expected session model");
-			spyOn(harness.session, "resolveRoleModelWithThinking").mockReturnValue({
-				model,
-				explicitThinkingLevel: false,
-			} as never);
+			spyOn(harness.session, "resolveHelperModel").mockReturnValue({ model, inherited: true });
 			spyOn(harness.modelRegistry, "getApiKey").mockResolvedValue("test-key");
 			const complete = spyOn(core, "instrumentedCompleteSimple");
 			complete
@@ -477,10 +452,7 @@ describe("guided goal setup", () => {
 		try {
 			const model = harness.session.model;
 			if (!model) throw new Error("expected session model");
-			spyOn(harness.session, "resolveRoleModelWithThinking").mockReturnValue({
-				model,
-				explicitThinkingLevel: false,
-			} as never);
+			spyOn(harness.session, "resolveHelperModel").mockReturnValue({ model, inherited: true });
 			spyOn(harness.modelRegistry, "getApiKey").mockResolvedValue("test-key");
 
 			const statusChildrenDuringTurn: number[] = [];

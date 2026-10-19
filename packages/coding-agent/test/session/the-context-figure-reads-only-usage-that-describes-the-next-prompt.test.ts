@@ -11,7 +11,8 @@
  * the session sends next. Each case drives the real collaborator against a real in-memory
  * `SessionManager` and a live message list, and reads the figure. The resting usage reads the same
  * figure with the non-message size the anchor stamped in place of a measurement, so it obeys the same
- * anchor rules and never asks the host to measure.
+ * anchor rules and never asks the host to measure. The status line draws the figure every frame, so
+ * finding the anchor reads only the branch entries after it, never the whole branch.
  *
  * What it does not catch: whether each history-rewriting pass calls `markHistoryRewritten`
  * (`nothing-to-compact-is-a-dead-end-only-without-headroom` and the compaction suites drive those
@@ -126,6 +127,86 @@ describe("the context figure", () => {
 
 		add(assistant("answer over the rewritten history", 3, 30_000));
 		expect(context.breakdown().usedTokens).toBe(30_000);
+	});
+
+	it("reads usage from before a rewrite once the session moves to a branch the rewrite never touched", () => {
+		const { store, messages, context, add } = harness();
+		add(user("question", 1));
+		add(assistant("answer", 2, 50_000));
+		const answerId = store.getLeafId() ?? "";
+		add(user("a later question the rewrite saw", 3));
+		context.markHistoryRewritten();
+		expect(context.breakdown().anchored).toBe(false);
+
+		store.branch(answerId);
+		messages.pop();
+		expect(context.breakdown()).toMatchObject({ anchored: true, usedTokens: 50_000 });
+	});
+
+	it("takes the later of the compaction and the rewrite as the floor, in either order", () => {
+		const rewriteFirst = harness();
+		rewriteFirst.add(user("question", 1));
+		rewriteFirst.add(assistant("answer", 2, 50_000));
+		rewriteFirst.context.markHistoryRewritten();
+		rewriteFirst.store.appendCompaction("summary", undefined, rewriteFirst.store.getLeafId() ?? "", 50_000);
+		rewriteFirst.add(assistant("after both", 3, 20_000));
+		expect(rewriteFirst.context.breakdown().usedTokens).toBe(20_000);
+
+		const compactionFirst = harness();
+		compactionFirst.add(user("question", 1));
+		compactionFirst.store.appendCompaction("summary", undefined, compactionFirst.store.getLeafId() ?? "", 50_000);
+		compactionFirst.add(assistant("between the two", 2, 40_000));
+		compactionFirst.context.markHistoryRewritten();
+		expect(compactionFirst.context.breakdown().anchored).toBe(false);
+		compactionFirst.add(assistant("after both", 3, 20_000));
+		expect(compactionFirst.context.breakdown().usedTokens).toBe(20_000);
+	});
+
+	it("reads only the branch entries after the newest anchor, however long the branch before it", () => {
+		const reads = new Set<number>();
+		const { store, add } = harness();
+		const countingStore = {
+			getBranch: () =>
+				new Proxy(store.getBranch(), {
+					get(target, key, receiver) {
+						if (typeof key === "string" && /^\d+$/.test(key)) reads.add(Number(key));
+						return Reflect.get(target, key, receiver);
+					},
+				}),
+		};
+		const counted = new ContextAccounting({
+			sessionStore: countingStore,
+			model: () => undefined,
+			messages: () => [],
+			instrumentationLevel: () => "off",
+			nonMessageTokens: () => NON_MESSAGE,
+			nonMessageBreakdown: () => ({
+				skillsTokens: 0,
+				toolsTokens: 0,
+				systemContextTokens: 0,
+				systemPromptTokens: 0,
+			}),
+			storedMessagesTokens: () => 0,
+		});
+		for (let turn = 0; turn < 500; turn++) {
+			add(user(`question ${turn}`, turn * 2));
+			add(assistant(`answer ${turn}`, turn * 2 + 1, 1_000));
+		}
+		store.appendCompaction("summary", undefined, store.getLeafId() ?? "", 50_000);
+		add(user("between the compaction and the rewrite", 1_000));
+		counted.markHistoryRewritten();
+		add(user("after the rewrite", 2_000));
+		add(user("still waiting", 2_001));
+		const length = store.getBranch().length;
+		reads.clear();
+
+		counted.breakdown();
+		expect([...reads].sort((a, b) => a - b)).toEqual([length - 3, length - 2, length - 1]);
+
+		reads.clear();
+		add(assistant("the newest answer", 2_002, 30_000));
+		counted.breakdown();
+		expect([...reads]).toEqual([length]);
 	});
 
 	it("never reads below the local estimate of the stored conversation", () => {

@@ -39,4 +39,50 @@ describe("scoped-timeout source lock", () => {
 		expect(offenders).toEqual([]);
 		expect(cleared).toEqual([]);
 	});
+
+	// A sleep raced against work cannot be cancelled when the work wins: `Bun.sleep(ms)` and the
+	// `node:timers/promises` `setTimeout(ms)` stay armed for the full window and keep the event
+	// loop alive until they fire, so a 5s lease-renewal sleep or a 300s auto-background threshold
+	// held the process open long after the command it guarded had finished. `settleWithin` is the
+	// replacement: it clears its timer when the work settles. The scan reads every `Promise.race(`
+	// argument list and every `Bun.sleep(…)` whose result is chained into a value.
+	//
+	// It does not see a sleep built in one function and raced in another under a neutral name.
+	it("no production source races work against a sleep it cannot cancel", async () => {
+		const offenders: string[] = [];
+		for (const { rel, text } of await collectPackageSources({ dirs: ["src"] })) {
+			if (rel === "utils/src/scoped-timeout.ts") continue;
+			const code = withoutComments(text);
+			for (const args of raceArgumentLists(code)) {
+				const arm = /\bBun\.sleep\(|\bsetTimeout\(|\bdelay\(/.exec(args);
+				if (arm) offenders.push(`${rel}: Promise.race arm ${arm[0]}`);
+			}
+			for (const match of code.matchAll(/\bBun\.sleep\(/g)) {
+				const close = closingParen(code, match.index + match[0].length - 1);
+				if (close !== -1 && /^\s*\.then\(/.test(code.slice(close + 1))) offenders.push(`${rel}: Bun.sleep(…).then`);
+			}
+		}
+		expect(offenders).toEqual([]);
+	});
 });
+
+/** The index of the parenthesis closing the one at `open`, or -1 when it never closes. */
+function closingParen(code: string, open: number): number {
+	let depth = 0;
+	for (let i = open; i < code.length; i++) {
+		if (code[i] === "(") depth++;
+		else if (code[i] === ")" && --depth === 0) return i;
+	}
+	return -1;
+}
+
+/** The text between the parentheses of every `Promise.race(` call in `code`. */
+function raceArgumentLists(code: string): string[] {
+	const lists: string[] = [];
+	for (const match of code.matchAll(/\bPromise\.race(?:<[^>]*>)?\(/g)) {
+		const open = match.index + match[0].length - 1;
+		const close = closingParen(code, open);
+		if (close !== -1) lists.push(code.slice(open + 1, close));
+	}
+	return lists;
+}

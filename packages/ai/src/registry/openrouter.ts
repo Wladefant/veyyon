@@ -1,3 +1,4 @@
+import { OPENROUTER_API_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { createApiKeyLogin } from "./api-key-login";
 import type { OAuthLoginCallbacks } from "./oauth/types";
 import type { ProviderDefinition } from "./types";
@@ -17,7 +18,7 @@ export const loginOpenRouter = createApiKeyLogin({
 	validation: {
 		kind: "models-endpoint",
 		provider: "OpenRouter",
-		modelsUrl: "https://openrouter.ai/api/v1/auth/key",
+		modelsUrl: `${OPENROUTER_API_ENDPOINT}/auth/key`,
 	},
 });
 

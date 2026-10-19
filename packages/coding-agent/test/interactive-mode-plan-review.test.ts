@@ -1,3 +1,7 @@
+/**
+ * Subject: `modes/terminal/controllers/plan-mode-controller.ts`, driven through `InteractiveMode`'s
+ * plan-review, plan-approval and `/plan` entry points.
+ */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -66,7 +70,7 @@ function compactNumber(value: number): string {
 }
 
 describe("InteractiveMode plan review rendering", () => {
-	// Per-test, mutated by tests (planMode flags, spies, model roles, dispose/recreate).
+	// Per-test, mutated by tests (planMode flags, spies, model settings, dispose/recreate).
 	let tempDir: TempDir;
 	let session: AgentSession;
 	let mode: InteractiveMode;
@@ -664,7 +668,7 @@ describe("InteractiveMode plan review rendering", () => {
 				},
 			}),
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated({ modelRoles: { plan: `anthropic/${planModel.id}` } }),
+			settings: Settings.isolated({ "agent.helpers": { plan: { model: `anthropic/${planModel.id}` } } }),
 			modelRegistry,
 		});
 		mode = new InteractiveMode(session, "test");
@@ -1001,34 +1005,36 @@ describe("InteractiveMode plan review rendering", () => {
 		});
 	});
 
-	it("executes on the slider-selected tier, surviving #exitPlanMode's model restore", async () => {
-		// Regression: the model-tier slider's choice used to be applied BEFORE
+	it("executes on the slider-selected model, surviving #exitPlanMode's model restore", async () => {
+		// Regression: the model slider's choice used to be applied BEFORE
 		// #approvePlan ran. #approvePlan → #exitPlanMode restores the model that
 		// was active before plan mode (#planModePreviousModelState), which silently
-		// reverted the operator's pick — sliding to "slow" still executed on the
+		// reverted the operator's pick — sliding to "plan" still executed on the
 		// default model. The fix defers application until after the plan-mode exit.
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const slow = session.modelRegistry.find("anthropic", "claude-opus-4-5");
+		const plan = session.modelRegistry.find("anthropic", "claude-opus-4-5");
 		const def = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
-		if (!slow || !def) throw new Error("Expected sonnet + opus to exist in registry");
+		if (!plan || !def) throw new Error("Expected sonnet + opus to exist in registry");
 
-		// plan === default === the session model: this is what makes plan-mode entry
-		// record a previous-model state for #exitPlanMode to restore. slow differs,
-		// so an early application would be clobbered by that restore.
-		session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
-		session.settings.setModelRole("slow", "anthropic/claude-opus-4-5");
-		session.settings.setModelRole("plan", "anthropic/claude-sonnet-4-5");
+		// Plan-mode entry switches to the plan helper's model and records the
+		// default model as the state #exitPlanMode restores, so an early
+		// application of the "plan" pick would be clobbered by that restore.
+		session.settings.setDefaultModel("anthropic/claude-sonnet-4-5");
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			plan: { model: "anthropic/claude-opus-4-5" },
+		});
 
 		const planFilePath = "local://PLAN.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
 			getSessionId: () => session.sessionManager.getSessionId(),
 		});
-		await Bun.write(resolvedPlanPath, "# Plan\n\nRun this on the slow tier.");
+		await Bun.write(resolvedPlanPath, "# Plan\n\nRun this on the plan model.");
 
 		await mode.handlePlanModeCommand();
 		expect(session.getPlanModeState()?.enabled).toBe(true);
-		expect(session.model?.id).toBe(def.id);
+		expect(session.model?.id).toBe(plan.id);
 
 		// Keep-context path avoids newSession() so the assertion isolates the
 		// exit-plan-mode restore from session-clear effects.
@@ -1041,10 +1047,10 @@ describe("InteractiveMode plan review rendering", () => {
 				const slider = extra?.slider;
 				expect(slider).toBeDefined();
 				observedSegments = slider!.segments.map(segment => segment.label);
-				const slowIndex = slider!.segments.findIndex(segment => segment.label === "slow");
-				expect(slowIndex).toBeGreaterThanOrEqual(0);
-				// Simulate the operator sliding the tier to "slow" before approving.
-				slider!.onChange?.(slowIndex);
+				const planIndex = slider!.segments.findIndex(segment => segment.label === "plan");
+				expect(planIndex).toBeGreaterThanOrEqual(0);
+				// Simulate the operator sliding to "plan" before approving.
+				slider!.onChange?.(planIndex);
 				return "Approve and keep context";
 			},
 		);
@@ -1055,52 +1061,10 @@ describe("InteractiveMode plan review rendering", () => {
 			title: "PLAN",
 		});
 
-		expect(observedSegments).toEqual(["default", "slow"]);
-		// The load-bearing assertion: the approved plan executes on the operator's
-		// selected tier, not the restored default.
-		expect(session.model?.id).toBe(slow.id);
-	});
-
-	it("retains the plan model when the slider selection matches the active plan tier", async () => {
-		const planModel = session.modelRegistry.find("anthropic", "claude-opus-4-5");
-		const prePlanModel = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
-		if (!planModel || !prePlanModel) throw new Error("Expected sonnet + opus to exist in registry");
-
-		session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
-		session.settings.setModelRole("slow", "anthropic/claude-opus-4-5");
-		session.settings.setModelRole("plan", "anthropic/claude-opus-4-5");
-
-		const planFilePath = "local://PLAN.md";
-		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
-			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
-			getSessionId: () => session.sessionManager.getSessionId(),
-		});
-		await Bun.write(resolvedPlanPath, "# Plan\n\nKeep executing on the planning tier.");
-
-		await mode.handlePlanModeCommand();
-		expect(session.model?.id).toBe(planModel.id);
-
-		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
-		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
-
-		vi.spyOn(mode, "showPlanReview").mockImplementation(
-			async (_planContent, _title, _options, _dialogOptions, extra?: { slider?: HookSelectorSlider }) => {
-				const slider = extra?.slider;
-				expect(slider).toBeDefined();
-				const slowIndex = slider!.segments.findIndex(segment => segment.label === "slow");
-				expect(slowIndex).toBeGreaterThanOrEqual(0);
-				slider!.onChange?.(slowIndex);
-				return "Approve and keep context";
-			},
-		);
-
-		await mode.handlePlanApproval({
-			planFilePath,
-			planExists: true,
-			title: "PLAN",
-		});
-
-		expect(session.model?.id).toBe(planModel.id);
+		expect(observedSegments).toEqual(["default", "plan"]);
+		// The approved plan executes on the operator's selected model, not the
+		// restored default.
+		expect(session.model?.id).toBe(plan.id);
 	});
 
 	it("treats matching-model slider tier as explicit when its thinking differs from the pre-plan thinking", async () => {
@@ -1112,11 +1076,12 @@ describe("InteractiveMode plan review rendering", () => {
 		// plan mode with thinking already bumped to high. A model-only match check
 		// treats the slider's "stay on default" pick as implicit, so #exitPlanMode
 		// restores thinking=high instead of the configured off override. The fix
-		// must compare thinking levels too and pass the default entry through
-		// applyRoleModel.
-		session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5:off");
-		session.settings.setModelRole("slow", "anthropic/claude-opus-4-5");
-		session.settings.setModelRole("plan", "anthropic/claude-opus-4-5");
+		// must compare thinking levels too and apply the default entry.
+		session.settings.setDefaultModel("anthropic/claude-sonnet-4-5:off");
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			plan: { model: "anthropic/claude-opus-4-5" },
+		});
 		session.setThinkingLevel(ThinkingLevel.High);
 
 		const planFilePath = "local://PLAN.md";
@@ -1131,7 +1096,7 @@ describe("InteractiveMode plan review rendering", () => {
 
 		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
 		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
-		const applyRoleSpy = vi.spyOn(session, "applyRoleModel");
+		const setModelSpy = vi.spyOn(session, "setModel");
 
 		vi.spyOn(mode, "showPlanReview").mockImplementation(
 			async (_planContent, _title, _options, _dialogOptions, extra?: { slider?: HookSelectorSlider }) => {
@@ -1146,11 +1111,10 @@ describe("InteractiveMode plan review rendering", () => {
 
 		await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
 
-		const defaultApply = applyRoleSpy.mock.calls.find(call => call[0]?.role === "default");
+		const defaultApply = setModelSpy.mock.calls.find(call => call[1] === "default");
 		expect(defaultApply).toBeDefined();
-		expect(defaultApply?.[0]?.model.id).toBe(sonnet.id);
-		expect(defaultApply?.[0]?.thinkingLevel).toBe(ThinkingLevel.Off);
-		expect(defaultApply?.[0]?.explicitThinkingLevel).toBe(true);
+		expect(defaultApply?.[0]?.id).toBe(sonnet.id);
+		expect(defaultApply?.[2]?.thinkingLevel).toBe(ThinkingLevel.Off);
 	});
 
 	it("preserves DEFAULT(auto) when plan approval restores the default tier", async () => {
@@ -1158,9 +1122,11 @@ describe("InteractiveMode plan review rendering", () => {
 		const opus = session.modelRegistry.find("anthropic", "claude-opus-4-5");
 		if (!sonnet || !opus) throw new Error("Expected sonnet + opus to exist in registry");
 
-		session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
-		session.settings.setModelRole("slow", "anthropic/claude-opus-4-5");
-		session.settings.setModelRole("plan", "anthropic/claude-opus-4-5");
+		session.settings.setDefaultModel("anthropic/claude-sonnet-4-5");
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			plan: { model: "anthropic/claude-opus-4-5" },
+		});
 		session.setThinkingLevel(AUTO_THINKING, true);
 
 		const planFilePath = "local://PLAN.md";
@@ -1193,25 +1159,25 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(session.configuredThinkingLevel()).toBe(AUTO_THINKING);
 	});
 
-	it("falls back to the pre-plan model when only plan is configured and the slider is hidden", async () => {
+	it("offers the pre-plan model as the default choice when only the plan helper is configured", async () => {
 		const sonnet = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
 		const opus = session.modelRegistry.find("anthropic", "claude-opus-4-5");
 		if (!sonnet || !opus) throw new Error("Expected sonnet + opus to exist in registry");
 		expect(session.model?.id).toBe(sonnet.id);
 
-		// Only the plan role is configured. getRoleModelCycle synthesizes a
-		// singleton `default` entry from the active plan model (opus), so the
-		// slider is hidden — the operator made no selection and approval must
-		// fall through to the pre-plan sonnet restore instead of pinning the
-		// lone plan tier.
-		session.settings.setModelRole("plan", "anthropic/claude-opus-4-5");
+		// No defaultModel: the default choice is the model plan mode was entered
+		// from, so leaving the slider alone restores it.
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			plan: { model: "anthropic/claude-opus-4-5" },
+		});
 
 		const planFilePath = "local://PLAN.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
 			getSessionId: () => session.sessionManager.getSessionId(),
 		});
-		await Bun.write(resolvedPlanPath, "# Plan\n\nNo slider, restore default.");
+		await Bun.write(resolvedPlanPath, "# Plan\n\nRestore the pre-plan model.");
 
 		await mode.handlePlanModeCommand();
 		expect(session.model?.id).toBe(opus.id);
@@ -1229,8 +1195,78 @@ describe("InteractiveMode plan review rendering", () => {
 
 		await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
 
+		expect(sliderShown?.segments.map(segment => segment.detail)).toEqual([sonnet.name, opus.name]);
+		expect(session.model?.id).toBe(sonnet.id);
+	});
+
+	it("hides the slider when the plan helper runs the session's model and effort", async () => {
+		const sonnet = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
+		if (!sonnet) throw new Error("Expected sonnet to exist in registry");
+		expect(session.model?.id).toBe(sonnet.id);
+		session.setThinkingLevel(ThinkingLevel.High);
+
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nNothing to choose between.");
+
+		await mode.handlePlanModeCommand();
+		expect(session.model?.id).toBe(sonnet.id);
+
+		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		let sliderShown: HookSelectorSlider | undefined;
+		vi.spyOn(mode, "showPlanReview").mockImplementation(
+			async (_planContent, _title, _options, _dialogOptions, extra?: { slider?: HookSelectorSlider }) => {
+				sliderShown = extra?.slider;
+				return "Approve and keep context";
+			},
+		);
+
+		await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+
 		expect(sliderShown).toBeUndefined();
 		expect(session.model?.id).toBe(sonnet.id);
+		expect(session.configuredThinkingLevel()).toBe(ThinkingLevel.High);
+	});
+
+	it("offers both choices when the plan helper names the default model at another effort", async () => {
+		const sonnet = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
+		if (!sonnet) throw new Error("Expected sonnet to exist in registry");
+		// One model, two efforts: the two entries run different turns, so neither is dropped.
+		session.settings.setDefaultModel("anthropic/claude-sonnet-4-5:off");
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			plan: { model: "anthropic/claude-sonnet-4-5:high" },
+		});
+
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nSame model, another effort.");
+
+		await mode.handlePlanModeCommand();
+
+		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		let sliderShown: HookSelectorSlider | undefined;
+		vi.spyOn(mode, "showPlanReview").mockImplementation(
+			async (_planContent, _title, _options, _dialogOptions, extra?: { slider?: HookSelectorSlider }) => {
+				sliderShown = extra?.slider;
+				return "Approve and keep context";
+			},
+		);
+
+		await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+
+		expect(sliderShown?.segments.map(segment => segment.label)).toEqual(["default", "plan"]);
+		expect(sliderShown?.segments.map(segment => segment.detail)).toEqual([sonnet.name, sonnet.name]);
 	});
 
 	it("compaction runs on the plan model and restores the pre-plan model after success", async () => {
@@ -1238,8 +1274,11 @@ describe("InteractiveMode plan review rendering", () => {
 		const prePlanModel = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
 		if (!planModel || !prePlanModel) throw new Error("Expected sonnet + opus to exist in registry");
 
-		session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
-		session.settings.setModelRole("plan", "anthropic/claude-opus-4-5");
+		session.settings.setDefaultModel("anthropic/claude-sonnet-4-5");
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			plan: { model: "anthropic/claude-opus-4-5" },
+		});
 
 		const planFilePath = "local://PLAN.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
@@ -1275,8 +1314,11 @@ describe("InteractiveMode plan review rendering", () => {
 		const planModel = session.modelRegistry.find("anthropic", "claude-opus-4-5");
 		if (!planModel) throw new Error("Expected opus to exist in registry");
 
-		session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
-		session.settings.setModelRole("plan", "anthropic/claude-opus-4-5");
+		session.settings.setDefaultModel("anthropic/claude-sonnet-4-5");
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			plan: { model: "anthropic/claude-opus-4-5" },
+		});
 
 		const planFilePath = "local://PLAN.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
@@ -1317,9 +1359,11 @@ describe("InteractiveMode plan review rendering", () => {
 		// Plan model (opus) differs from the execution tier the operator slides to
 		// (default = sonnet). Successful compaction must keep running on opus, then
 		// end on the slider-selected default tier.
-		session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
-		session.settings.setModelRole("slow", "anthropic/claude-opus-4-5");
-		session.settings.setModelRole("plan", "anthropic/claude-opus-4-5");
+		session.settings.setDefaultModel("anthropic/claude-sonnet-4-5");
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			plan: { model: "anthropic/claude-opus-4-5" },
+		});
 
 		const planFilePath = "local://PLAN.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
@@ -1373,8 +1417,11 @@ describe("InteractiveMode plan review rendering", () => {
 		const prePlanModel = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
 		if (!planModel || !prePlanModel) throw new Error("Expected sonnet + opus to exist in registry");
 
-		session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
-		session.settings.setModelRole("plan", "anthropic/claude-opus-4-5");
+		session.settings.setDefaultModel("anthropic/claude-sonnet-4-5");
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			plan: { model: "anthropic/claude-opus-4-5" },
+		});
 
 		const planFilePath = "local://PLAN.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
@@ -1420,8 +1467,11 @@ describe("InteractiveMode plan review rendering", () => {
 		const prePlanModel = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
 		if (!planModel || !prePlanModel) throw new Error("Expected sonnet + opus to exist in registry");
 
-		session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
-		session.settings.setModelRole("plan", "anthropic/claude-opus-4-5");
+		session.settings.setDefaultModel("anthropic/claude-sonnet-4-5");
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			plan: { model: "anthropic/claude-opus-4-5" },
+		});
 
 		const planFilePath = "local://PLAN.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {

@@ -44,11 +44,6 @@ export class KernelExecutionCancelledError extends Error {
 	}
 }
 
-// Managed-env patch values (`null` clears, `undefined` skips) are owned by kernel-base,
-// beside the execute options that carry them. Re-exported here because the language
-// executors import it alongside the rest of this module's surface.
-export type { KernelEnvPatch } from "./kernel-base";
-
 /**
  * Options every kernel-backed language executor shares. Per-language option
  * interfaces structurally extend this; the base executor only reads these.

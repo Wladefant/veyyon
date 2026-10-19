@@ -17,7 +17,8 @@ import {
 	resolveOutputSinkArtifactMaxBytes,
 	resolveOutputSinkHeadBytes,
 } from "../core/output-meta";
-import { formatStatusIcon, replaceTabs } from "../core/render-utils";
+import { replaceTabs } from "../core/render-utils";
+import { formatStatusIcon } from "../core/tool-ui-status";
 import { loadXtermTerminal, readTerminalRows } from "./terminal-output";
 
 export interface BashInteractiveResult extends OutputSummary {

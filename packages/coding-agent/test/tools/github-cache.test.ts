@@ -1,6 +1,6 @@
 /**
  * Cache-layer tests for `github-cache` (storage + TTL semantics) and for the
- * `getOrFetchIssue` / `getOrFetchPr` wrappers wired into `gh.ts`.
+ * `getOrFetchIssue` / `getOrFetchPr` wrappers in `gh-fetch.ts`.
  *
  * Each test isolates `VEYYON_GITHUB_CACHE_DB` to a temp file and clears
  * `git.github.json` / `git.github.text` mocks between cases.
@@ -11,7 +11,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { ToolAbortError, throwIfAborted } from "@veyyon/coding-agent/tools/core/tool-errors";
-import { getOrFetchIssue, getOrFetchPr } from "@veyyon/coding-agent/tools/web/gh";
+import { getOrFetchIssue, getOrFetchPr } from "@veyyon/coding-agent/tools/web/gh-fetch";
 import {
 	clearAll,
 	getCached,

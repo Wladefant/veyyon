@@ -42,6 +42,11 @@ export const SEARCH_PROVIDER_OPTIONS = [
 	{ value: "kimi", label: "Kimi", description: "Requires MOONSHOT_SEARCH_API_KEY or MOONSHOT_API_KEY" },
 	{ value: "parallel", label: "Parallel", description: "Requires PARALLEL_API_KEY" },
 	{ value: "synthetic", label: "Synthetic", description: "Requires SYNTHETIC_API_KEY" },
+	{
+		value: "deepseek",
+		label: "DeepSeek",
+		description: "Search API on the DEEPSEEK_API_KEY the DeepSeek model provider already uses",
+	},
 	{ value: "searxng", label: "SearXNG", description: "Requires SEARXNG_ENDPOINT or searxng.endpoint" },
 	{
 		value: "startpage",

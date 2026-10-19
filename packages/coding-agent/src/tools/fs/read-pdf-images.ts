@@ -7,7 +7,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult } from "@veyyon/agent-core";
-import { formatMoreLines } from "@veyyon/utils/format";
+import { formatBoundedList, formatBytes, formatMoreLines } from "@veyyon/utils/format";
 import { isMissingPath } from "@veyyon/utils/fs-error";
 import { readImageMetadata } from "@veyyon/utils/mime";
 import { isSessionFileName, sessionFileStem } from "@veyyon/utils/session-file";
@@ -16,7 +16,6 @@ import { truncateHead } from "../../session/streaming-output";
 import { loadImageInput, MAX_IMAGE_INPUT_BYTES, webpExclusionForModel } from "../../utils/image-loading";
 import { convertFileWithMarkit } from "../../utils/markit";
 import { inlineBudgetFor } from "../core/output-artifact";
-import { formatBytes } from "../core/render-utils";
 import { ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 import { prependSuffixResolutionNotice } from "./read-paths";
@@ -138,8 +137,7 @@ export async function readPdfImageMember(
 	}
 
 	if (!members.includes(member)) {
-		const available = members.length === 0 ? "(none)" : members.join(", ");
-		throw new ToolError(`PDF image member '${member}' not found. Available members: ${available}`);
+		throw new ToolError(`PDF image member '${member}' not found. Available members: ${formatBoundedList(members)}`);
 	}
 
 	const imagePath = path.join(imageDir, member);

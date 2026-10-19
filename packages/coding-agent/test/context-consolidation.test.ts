@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentMessage } from "@veyyon/agent-core";
-import { estimateTokens } from "@veyyon/agent-core/compaction/compaction";
+import { estimateTokens } from "@veyyon/agent-core/compaction/token-estimate";
 import type { AssistantMessage, Message, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";

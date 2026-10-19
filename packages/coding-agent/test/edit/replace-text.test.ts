@@ -35,8 +35,12 @@ describe("replaceText", () => {
 			});
 		});
 
-		it("leaves content untouched and reports count 0 when nothing matches", () => {
-			expect(replaceText("abc", "xyz", "q", options())).toEqual({ content: "abc", count: 0 });
+		it("leaves content untouched, reports count 0 and returns the search's closest candidate when nothing matches", () => {
+			const result = replaceText("abc", "xyz", "q", options());
+			expect(result.content).toBe("abc");
+			expect(result.count).toBe(0);
+			expect(result.unmatched?.match).toBeUndefined();
+			expect(result.unmatched?.closest).toEqual({ actualText: "abc", startIndex: 0, startLine: 1, confidence: 0.4 });
 		});
 
 		it("throws an ambiguity error naming the occurrence count when the target appears more than once", () => {
@@ -72,10 +76,12 @@ describe("replaceText", () => {
 		const oldText = "function f() {\n    return 1;\n}";
 
 		it("does not match a whitespace-only difference when fuzzy is disabled", () => {
-			expect(replaceText(content, oldText, "REPLACED", options({ fuzzy: false }))).toEqual({
-				content,
-				count: 0,
-			});
+			const result = replaceText(content, oldText, "REPLACED", options({ fuzzy: false }));
+			expect(result.content).toBe(content);
+			expect(result.count).toBe(0);
+			// The closest candidate is the whole function, which the error names; fuzzy off keeps it a candidate.
+			expect(result.unmatched?.match).toBeUndefined();
+			expect(result.unmatched?.closest?.actualText).toBe(content);
 		});
 
 		it("matches the same whitespace-only difference when fuzzy is enabled", () => {

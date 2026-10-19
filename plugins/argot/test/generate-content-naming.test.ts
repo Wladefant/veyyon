@@ -11,7 +11,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeExpander } from "../src/codec.js";
 import { HANDLE_NAME_RE } from "../src/constants.js";
-import { generateDict } from "../src/generate.js";
+import { type GeneratedDict, generateDict } from "../src/generate.js";
 import { parseDict } from "../src/parse.js";
 import type { Vocabulary } from "../src/types.js";
 
@@ -30,7 +30,7 @@ function corpus(repeats: number, ...lines: string[]): string[] {
 }
 
 /** The name a content-generated dictionary assigns to one expansion. */
-function nameFor(result: ReturnType<typeof generateDict>, expansion: string): string | undefined {
+function nameFor(result: GeneratedDict, expansion: string): string | undefined {
 	return result.handles.find(h => h.expansion === expansion)?.name;
 }
 

@@ -28,6 +28,7 @@ import { toolsPrompts } from "../../prompts/tools/rows";
 import type { AgentRegistry } from "../../registry/agent-registry";
 import { IrcBus, type IrcDeliveryReceipt, type IrcMessage } from "../../task/irc-bus";
 import type { ToolSession } from "..";
+import { isIrcEnabled } from "./irc-enabled";
 
 const DEFAULT_IRC_TIMEOUT_MS = 120_000;
 
@@ -40,12 +41,6 @@ const DEFAULT_IRC_NOTICE_RUNTIME: IrcNoticeRuntime = {
 	sendSessionNotice,
 	readInstalledBuildIdentity,
 };
-
-// Re-exported for back-compat: the definition lives in the light module so the
-// tool registry can gate irc without loading this implementation at boot.
-import { isIrcEnabled } from "./irc-enabled";
-
-export { isIrcEnabled };
 
 const ircSchema = lazy(() =>
 	type({

@@ -28,11 +28,9 @@ import {
 	AGENT_HUD_VISIBLE_LIMIT,
 	renderAgentHudLines,
 } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-hud";
+import { SUBAGENT_OBSERVER_UI_COALESCE_MS } from "@veyyon/coding-agent/modes/terminal/controllers/anchored-blocks";
 import { paintRailMotion, railIdleHeadAt } from "@veyyon/coding-agent/modes/terminal/draw/rail-motion";
-import {
-	InteractiveMode,
-	SUBAGENT_OBSERVER_UI_COALESCE_MS,
-} from "@veyyon/coding-agent/modes/terminal/interactive-mode";
+import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import {
 	type ObservableSession,
 	SessionObserverRegistry,

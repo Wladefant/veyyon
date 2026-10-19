@@ -207,7 +207,7 @@ describe("Model and effort surfaces drive all widths and states", () => {
 					settings,
 					reg,
 					[],
-					{ onAssign: vi.fn(), onUnassign: vi.fn(), onCancel: vi.fn() },
+					{ onSetDefault: vi.fn(), onClearDefault: vi.fn(), onCancel: vi.fn() },
 					{ initialProviderId: "ollama" },
 				);
 				for (const width of WIDTHS) {
@@ -238,8 +238,8 @@ describe("Model and effort surfaces drive all widths and states", () => {
 			});
 			const tui = makeTestTui(24);
 			const hub = new ModelHubComponent(tui, settings, reg, [], {
-				onAssign: vi.fn(),
-				onUnassign: vi.fn(),
+				onSetDefault: vi.fn(),
+				onClearDefault: vi.fn(),
 				onCancel: vi.fn(),
 			});
 
@@ -263,7 +263,6 @@ describe("Model and effort surfaces drive all widths and states", () => {
 				},
 			});
 			const panel = new ModelSelectorPanel(
-				settings,
 				reg,
 				testModels,
 				{ title: "Select Model" },
@@ -278,7 +277,7 @@ describe("Model and effort surfaces drive all widths and states", () => {
 
 	describe("5. Very long model ID and provider name at 60 columns", () => {
 		it("ModelBrowser truncates properly at 60 columns without line overflow", () => {
-			const browser = new ModelBrowser(settings);
+			const browser = new ModelBrowser();
 			browser.setItems(buildBrowserItems([longModel]));
 			const lines = browser.render(60);
 			expect(lines.length).toBeGreaterThan(0);
@@ -290,8 +289,8 @@ describe("Model and effort surfaces drive all widths and states", () => {
 		it("ModelHubComponent renders long provider and model names at 60 columns without overflow", () => {
 			const tui = makeTestTui(24);
 			const hub = new ModelHubComponent(tui, settings, registry, [], {
-				onAssign: vi.fn(),
-				onUnassign: vi.fn(),
+				onSetDefault: vi.fn(),
+				onClearDefault: vi.fn(),
 				onCancel: vi.fn(),
 			});
 			const lines = hub.render(60);
@@ -304,7 +303,6 @@ describe("Model and effort surfaces drive all widths and states", () => {
 
 		it("ModelSelectorPanel renders long titles/descriptions at 60 columns without overflow", () => {
 			const panel = new ModelSelectorPanel(
-				settings,
 				registry,
 				[longModel],
 				{
@@ -324,7 +322,7 @@ describe("Model and effort surfaces drive all widths and states", () => {
 
 	describe("6. Search and filter behavior", () => {
 		it("ModelBrowser filters, highlights, handles backspace and cancel ladder", () => {
-			const browser = new ModelBrowser(settings);
+			const browser = new ModelBrowser();
 			browser.setItems(buildBrowserItems(testModels));
 
 			for (const ch of "astra") browser.handleInput(ch);
@@ -348,7 +346,6 @@ describe("Model and effort surfaces drive all widths and states", () => {
 
 		it("ModelSelectorPanel shows 'No matching models' when search query has 0 matches", () => {
 			const panel = new ModelSelectorPanel(
-				settings,
 				registry,
 				testModels,
 				{ title: "Select Model" },
@@ -366,7 +363,6 @@ describe("Model and effort surfaces drive all widths and states", () => {
 
 		it("ModelSelectorPanel shows indented 'No models available' when models list is genuinely empty", () => {
 			const panel = new ModelSelectorPanel(
-				settings,
 				registry,
 				[],
 				{ title: "Select Model" },
@@ -381,7 +377,7 @@ describe("Model and effort surfaces drive all widths and states", () => {
 
 	describe("7. Keyboard and mouse selection", () => {
 		it("ModelBrowser keyboard navigation (arrows, home/end, pageUp/pageDown, enter)", () => {
-			const browser = new ModelBrowser(settings);
+			const browser = new ModelBrowser();
 			const items = buildBrowserItems(testModels);
 			browser.setItems(items);
 			const activated: unknown[] = [];
@@ -405,7 +401,7 @@ describe("Model and effort surfaces drive all widths and states", () => {
 		});
 
 		it("ModelBrowser mouse interaction (wheel, hover motion, click select, click activate)", () => {
-			const browser = new ModelBrowser(settings);
+			const browser = new ModelBrowser();
 			const items = buildBrowserItems(testModels);
 			browser.setItems(items);
 			const activated: unknown[] = [];

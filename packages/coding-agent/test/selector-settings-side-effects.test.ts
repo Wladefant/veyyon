@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { buildModel } from "@veyyon/catalog/build";
 import { getBundledModel } from "@veyyon/catalog/models";
-import { DEFAULT_MODEL_SLOT } from "@veyyon/coding-agent/config/model-roles";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { SelectorController } from "@veyyon/coding-agent/modes/terminal/controllers/selector-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
@@ -169,9 +168,8 @@ describe("selector setting side effects", () => {
 		picker.handleInput("\n");
 		await Promise.resolve();
 
-		// The slot is named once, by its storage key: the picker used to pass the
-		// `interactive` alias, which `setModel` then translated inline.
-		expect(setModel).toHaveBeenCalledWith(nextModel, DEFAULT_MODEL_SLOT, expect.objectContaining({ persist: true }));
+		// The /model picker persists the session's default model.
+		expect(setModel).toHaveBeenCalledWith(nextModel, "default", expect.objectContaining({ persist: true }));
 	});
 
 	it("temporary /switch picker updates the session model", async () => {

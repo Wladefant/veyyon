@@ -75,7 +75,7 @@ describe("the streamed env preview ends at the env object", () => {
 		// assertion made, so the set is pinned: a key added to the bash schema lands here by exact
 		// equality and the person adding it records that the preview never reads it as an entry.
 		expect(Object.keys(siblings).sort()).toEqual(
-			["backgroundAfter", "command", "cwd", INTENT_FIELD, "pty", "timeout"].sort(),
+			["async", "backgroundAfter", "command", "cwd", INTENT_FIELD, "pty", "timeout"].sort(),
 		);
 	});
 

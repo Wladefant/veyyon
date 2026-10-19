@@ -8,6 +8,11 @@
 - Key collaborators:
   - `packages/coding-agent/src/lsp/client.ts`: client process lifecycle and JSON-RPC
   - `packages/coding-agent/src/lsp/config.ts`: config loading, auto-detect, server selection
+  - `packages/coding-agent/src/lsp/servers.ts`: per-cwd config cache and the servers selected for a file
+  - `packages/coding-agent/src/lsp/diagnostics.ts`: wait for a fresh publish, filter orphan-project diagnostics, cap and format messages
+  - `packages/coding-agent/src/lsp/workspace-diagnostics.ts`: whole-project checks (`cargo check`, `tsc`, `go build`) for `diagnostics` without a file
+  - `packages/coding-agent/src/lsp/rename-file.ts`: `rename_file` edit collection, coalescing, application and `didRenameFiles`
+  - `packages/coding-agent/src/lsp/writethrough.ts`: the edit and write commit path: atomic write, format-on-write, sync, diagnostics
   - `packages/coding-agent/src/lsp/lspmux.ts`: optional `lspmux` command wrapping
   - `packages/coding-agent/src/lsp/edits.ts`: apply `WorkspaceEdit` and text edits
   - `packages/coding-agent/src/lsp/utils.ts`: URI conversion, symbol resolution, formatting, glob expansion
@@ -44,10 +49,10 @@
 
 ## Flow
 1. `packages/coding-agent/src/tools/index.ts` registers `lsp: LspTool.createIf`; session creation also gates it behind `session.enableLsp !== false`, `settings.get("lsp.enabled")`, and `settings.get("lsp.tool")`. Injected diagnostics after write/edit are `lsp.diagnosticsOnWrite` / `lsp.diagnosticsOnEdit` and do not require the agent tool.
-2. `LspTool.execute()` in `packages/coding-agent/src/lsp/index.ts` clamps `timeout` with `clampTimeout("lsp", ...)`, builds an `AbortSignal.timeout(...)`, and combines it with the caller signal.
+2. `LspTool.execute()` in `packages/coding-agent/src/lsp/index.ts` clamps `timeout` with `clampTimeout("lsp", ...)`, and builds a `scopedTimeoutSignal(...)` bound to the caller signal.
 3. `getConfig()` loads and caches `LspConfig` per cwd, applies idle-timeout config via `setIdleTimeout()`, and reuses the cached config on later calls.
 4. Config loading in `packages/coding-agent/src/lsp/config.ts` merges `defaults.json` with JSON/YAML overrides from project, project config dirs, user config dirs, plugin roots, and home; if there are no overrides it auto-detects servers from root markers plus executable discovery.
-5. Server routing uses `getServersForFile()` / `getServerForFile()` from `config.ts`: extension or basename match, then sort primary servers before linters. `index.ts` further filters custom linter clients out of navigation/refactor paths with `getLspServersForFile()` / `getLspServerForFile()`.
+5. Server routing uses `getServersForFile()` from `config.ts`: extension or basename match, then sort primary servers before linters. `index.ts` further filters custom linter clients out of navigation/refactor paths with `getLspServersForFile()` / `getLspServerForFile()`.
 6. `getOrCreateClient()` in `client.ts` creates one process per `command:cwd`, optionally wraps supported commands with `lspmux`, spawns the server, starts the background message reader, sends `initialize`, stores server capabilities, then sends `initialized`.
 7. The message reader in `client.ts` parses LSP frames, resolves pending requests, caches `publishDiagnostics`, tracks `$/progress` tokens for project-load completion, answers `workspace/configuration`, and applies `workspace/applyEdit` requests through `applyWorkspaceEdit()`.
 8. File-scoped actions call `ensureFileOpen()` before requests. Column resolution uses `resolveSymbolColumn()` from `utils.ts`: read the target file, pick first non-whitespace when `symbol` is omitted, otherwise find the exact or case-insensitive match on the target line and honor `#N` occurrence selectors.
@@ -292,7 +297,7 @@ Same as `incoming_calls`, but sends `callHierarchy/outgoingCalls`, lists the fun
 - Warmup initialize timeout default: `5_000ms`: `WARMUP_TIMEOUT_MS` in `packages/coding-agent/src/lsp/client.ts`.
 - Project-load wait fallback: `15_000ms`: `PROJECT_LOAD_TIMEOUT_MS` in `packages/coding-agent/src/lsp/client.ts`.
 - Idle-client sweep interval when enabled: `60_000ms`: `IDLE_CHECK_INTERVAL_MS` in `packages/coding-agent/src/lsp/client.ts`.
-- Diagnostic message output cap: first `50` messages: `DIAGNOSTIC_MESSAGE_LIMIT` in `packages/coding-agent/src/lsp/index.ts`.
+- Diagnostic message output cap: first `50` messages: `DIAGNOSTIC_MESSAGE_LIMIT` in `packages/coding-agent/src/lsp/diagnostics.ts`.
 - Single-file diagnostics wait: `3_000ms`: `SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS`.
 - Batch/glob diagnostics wait per file: `400ms`: `BATCH_DIAGNOSTICS_WAIT_TIMEOUT_MS`.
 - Glob diagnostic target cap: first `20` matches: `MAX_GLOB_DIAGNOSTIC_TARGETS`.

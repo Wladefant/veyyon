@@ -108,7 +108,7 @@ export function listLiveSessionOwners(root = getConfigRootDir(), exceptSessionId
 		} catch {
 			continue;
 		}
-		if ((owner.version !== 1 && owner.version !== 2) || typeof owner.sessionId !== "string" || !isValidSessionId(owner.sessionId)) continue;
+		if (owner.version !== 1 || typeof owner.sessionId !== "string" || !isValidSessionId(owner.sessionId)) continue;
 		if (typeof owner.pid !== "number" || !Number.isSafeInteger(owner.pid) || owner.pid <= 0) continue;
 		if (owner.sessionId === exceptSessionId || !isProcessAlive(owner.pid)) continue;
 		const capabilities =

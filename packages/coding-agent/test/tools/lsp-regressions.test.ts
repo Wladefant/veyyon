@@ -1,3 +1,10 @@
+/**
+ * Regressions of the `lsp` tool and its client, driven through `LspTool` against in-process servers.
+ *
+ * Subject: `lsp/index.ts` and the modules it dispatches to, driven through `LspTool`: the server
+ * selection in `lsp/servers.ts`, the go.work and go.mod project checks in
+ * `lsp/workspace-diagnostics.ts`, and the `rename_file` move and edit collection in `lsp/rename-file.ts`.
+ */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -32,7 +39,6 @@ import {
 	applyCodeAction,
 	collectGlobMatches,
 	dedupeWorkspaceSymbols,
-	detectLanguageId,
 	fileToUri,
 	filterWorkspaceSymbols,
 	hasGlobPattern,
@@ -44,6 +50,7 @@ import { lspToolView } from "@veyyon/coding-agent/lsp/view";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
 import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
+import { detectLanguageId } from "@veyyon/coding-agent/utils/lang-from-path";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**

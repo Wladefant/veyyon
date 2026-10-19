@@ -41,7 +41,10 @@ const TOOLS = path.join(SRC, "tools");
  * drawing helper hides next to an interactive surface.
  */
 const ALLOWED = new Map<string, string>([
-	["theme/theme", "The palette and symbol set. What every coloured tool block is coloured with."],
+	[
+		"theme/theme-binding",
+		"The active palette and symbol set. What every coloured tool block is coloured with; the binding only, so a tool reaches no theme loading, highlighting or mermaid.",
+	],
 	[
 		"modes/terminal/components/chrome/modal-geometry",
 		"Card geometry: `mediumModalContentWidth` and `HOOK_EDITOR_TEXT_PAD_COLS`, so the ask tool pre-wraps its title to the content width of the card the editor draws it in. Wrapping at the terminal width instead hands the card lines it wraps a second time. Arithmetic only; it imports no renderer, so a headless session that builds the ask tool loads no terminal engine.",
@@ -101,7 +104,7 @@ describe("tools reach the terminal UI only to draw", () => {
 		const targets = new Set(files.flatMap(uiImportsIn));
 
 		expect(targets.size).toBeGreaterThan(2);
-		expect(targets).toContain("theme/theme");
+		expect(targets).toContain("theme/theme-binding");
 	});
 
 	/**

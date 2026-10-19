@@ -41,14 +41,14 @@ import {
 	TRUNCATE_LENGTHS,
 	truncateToWidth,
 } from "../core/render-utils";
+import type { GhToolDetails } from "./gh";
+import { formatShortSha } from "./gh-format";
 import type {
 	GhRunWatchFailedLogDetails,
 	GhRunWatchJobDetails,
 	GhRunWatchRunDetails,
 	GhRunWatchViewDetails,
-	GhToolDetails,
-} from "./gh";
-import { formatShortSha } from "./gh-format";
+} from "./gh-run-watch";
 
 /** The tool's own mark, which a settled card is titled by instead of an outcome icon. */
 const GH_EMBLEM = "tool.gh";

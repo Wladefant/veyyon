@@ -7,7 +7,7 @@ import { getLoadedBuildIdentity } from "./build-info";
 
 /** Versioned, private discovery record. Only the owning terminal publishes this. */
 export interface TerminalOwner {
-	version: 1 | 2;
+	version: 1;
 	sessionId: string;
 	pid: number;
 	cwd: string;
@@ -300,7 +300,7 @@ export async function serveTerminalControl(
 		const identity = target.identity();
 		const build = getLoadedBuildIdentity();
 		const record: TerminalOwner = {
-			version: 2,
+			version: 1,
 			...identity,
 			pid: process.pid,
 			endpoint,

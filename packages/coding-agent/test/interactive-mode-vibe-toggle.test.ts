@@ -1,4 +1,6 @@
 /**
+ * Subject: `modes/terminal/controllers/vibe-mode-controller.ts`, driven through `InteractiveMode`.
+ *
  * Contracts: /vibe mode toggle on InteractiveMode.
  *
  * 1. Vibe tools do not exist in the session registry before the mode is entered.

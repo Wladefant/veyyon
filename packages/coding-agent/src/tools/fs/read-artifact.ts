@@ -3,7 +3,7 @@
  */
 
 import type { AgentToolResult } from "@veyyon/agent-core";
-import { formatMoreLines } from "@veyyon/utils/format";
+import { formatBytes, formatMoreLines } from "@veyyon/utils/format";
 import { SNAPSHOT_MAX_BYTES } from "../../edit/file-snapshot-store";
 import { type ResolvedArtifactFile, resolveArtifactFile } from "../../internal-urls/artifact-protocol";
 import type { InternalUrl } from "../../internal-urls/types";
@@ -11,7 +11,7 @@ import { DEFAULT_MAX_BYTES, type TruncationResult, truncationSummary } from "../
 import { resolveFileDisplayMode } from "../../utils/file-display-mode";
 import type { TruncationOptions } from "../core/output-meta";
 import { isRawSelector, type ParsedSelector } from "../core/path-utils";
-import { formatBytes, shortenPath } from "../core/render-utils";
+import { shortenPath } from "../core/render-utils";
 import { toolResult } from "../core/tool-result";
 import type { ReadDisplayContent } from "./read-display";
 import { isMultiRange, selToOffsetLimit } from "./read-in-memory";

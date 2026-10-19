@@ -11,7 +11,7 @@ import { matchesKey } from "@veyyon/utils/keys";
 import type { SgrMouseEvent } from "@veyyon/utils/mouse";
 import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
 import { formatProviderName } from "../../../../session/account-format";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { copyToClipboard } from "../../../../utils/clipboard";
 import { OAuthSelectorComponent } from "../../components/selectors/oauth-selector";
 import type { SetupKeyHint, SetupSceneHost, SetupTab } from "./types";

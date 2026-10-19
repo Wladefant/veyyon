@@ -5,9 +5,7 @@
  */
 
 import { describe, expect, it, spyOn } from "bun:test";
-import { emptyUsage } from "@veyyon/catalog/models";
 import { createInitialResponsesAssistantMessage } from "../src/providers/initial-message";
-import { createInitialResponsesAssistantMessage as createInitialFromOpenAIShared } from "../src/providers/openai-shared";
 import type { Api, AssistantMessage } from "../src/types";
 
 describe("initial assistant message constructor", () => {
@@ -91,25 +89,5 @@ describe("initial assistant message constructor", () => {
 		expect(msg2.usage.cost.cacheRead).toBe(0);
 		expect(msg2.usage.cost.cacheWrite).toBe(0);
 		expect(msg2.usage.cost.total).toBe(0);
-	});
-
-	it("re-exports functional helper from openai-shared with independent oracle assertions", () => {
-		const dateNowSpy = spyOn(Date, "now").mockReturnValue(FIXED_TIMESTAMP);
-		try {
-			const msg: AssistantMessage = createInitialFromOpenAIShared("openai-completions", "openai", "gpt-4o-mini");
-
-			expect(msg).toEqual({
-				role: "assistant",
-				content: [],
-				api: "openai-completions",
-				provider: "openai",
-				model: "gpt-4o-mini",
-				usage: emptyUsage(),
-				stopReason: "stop",
-				timestamp: FIXED_TIMESTAMP,
-			});
-		} finally {
-			dateNowSpy.mockRestore();
-		}
 	});
 });

@@ -14,7 +14,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import type { UsageReport } from "@veyyon/ai";
-import { renderUsageReports } from "@veyyon/coding-agent/modes/terminal/controllers/command-controller";
+import { renderUsageReports } from "@veyyon/coding-agent/modes/terminal/controllers/usage-report-view";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 
 const HOUR = 3_600_000;
