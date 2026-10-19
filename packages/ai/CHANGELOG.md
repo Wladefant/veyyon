@@ -11,6 +11,7 @@
 - Codex account ranking ignores usage windows of length 0, so one account no longer takes every new session.
 - Aligned OpenAI Codex responses imports with openai-responses-stream exports and restored the UsageCostHistoryEntry interface in usage types, with no user-visible change.
 - Merges supplementary model listing quotas into Google Antigravity quota summaries when the summary omits counters ([Refs #620](https://github.com/Wladefant/veyyon/pull/620)).
+- `/login together` validates a pasted key against `GET /v1/models` instead of a chat completion on `moonshotai/Kimi-K2.5`, which Together rejects with `model_not_available` for every valid key (oh-my-pi 62ccb64dbe3fa9d1cd99774e81ba0c976b27b223, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ## [1.5.6] - 2026-10-10
 ### Changed
