@@ -63,6 +63,11 @@ export interface SettledStartupOptions {
 	trace: string;
 	input?: { intervalMs: number; count: number };
 	memory?: SettledStartupMemoryOptions;
+	/**
+	 * Monotonic clock, in ms, behind every frame, input and memory sample timestamp; injectable for
+	 * tests. Default `performance.now`. The observation deadline stays a real `observationMs` timer.
+	 */
+	now?: () => number;
 }
 
 export interface RecordedStartup extends SettledStartupFrame {
@@ -228,7 +233,15 @@ export async function recordSettledStartup(options: SettledStartupOptions): Prom
 	let memoryObservation: MemoryObservation | undefined;
 	let samplingError: Error | null = null;
 	const sampleIntervalMs = options.memory?.intervalMs ?? 25;
-	const started = performance.now();
+	const now = options.now ?? (() => performance.now());
+	const started = now();
+	const stableStart = options.observationMs - options.stableMs;
+	// One error object, so the deadline verdict and the teardown pass report a missed window once.
+	let stableWindowMissed: Error | undefined;
+	const missedStableWindow = (): Error =>
+		(stableWindowMissed ??= new Error(
+			`Incomplete memory sampling: no samples recorded during stable window (${stableStart}ms to ${options.observationMs}ms)`,
+		));
 	const child = spawn(options.command, options.args, {
 		cwd: options.cwd,
 		env: options.env,
@@ -252,10 +265,10 @@ export async function recordSettledStartup(options: SettledStartupOptions): Prom
 	child.stdout.setEncoding("utf8");
 	child.stdout.on("data", (chunk: string) => {
 		if (!observing) return;
-		void observer.write(chunk, performance.now() - started).catch(completed.reject);
+		void observer.write(chunk, now() - started).catch(completed.reject);
 		if (!probed) {
 			probed = true;
-			if (options.input) observer.noteInput("qjq", performance.now() - started);
+			if (options.input) observer.noteInput("qjq", now() - started);
 			child.stdin.write("qjX\x7fq");
 			if (options.input) {
 				const { intervalMs, count } = options.input;
@@ -264,7 +277,7 @@ export async function recordSettledStartup(options: SettledStartupOptions): Prom
 				inputTimer = setInterval(() => {
 					if (!observing) return;
 					draft += "x";
-					observer.noteInput(draft, performance.now() - started);
+					observer.noteInput(draft, now() - started);
 					child.stdin.write("xY\x7f");
 					if (++sent === count) clearInterval(inputTimer);
 				}, intervalMs);
@@ -300,7 +313,7 @@ export async function recordSettledStartup(options: SettledStartupOptions): Prom
 					}
 					if (!targetCliProcess) return;
 
-					const atMs = performance.now() - started;
+					const atMs = now() - started;
 					const mainStatus = await readProcStatus(targetCliProcess.pid);
 					if (!mainStatus || mainStatus.vmRssBytes === undefined) return;
 
@@ -372,35 +385,27 @@ export async function recordSettledStartup(options: SettledStartupOptions): Prom
 
 	const timer = setTimeout(() => {
 		observing = false;
+		const endedAt = now() - started;
 		if (options.input && observer.inputProbes.length !== options.input.count + 1) {
 			completed.reject(new Error("Observation ended before every input probe was sent"));
 			return;
 		}
-		if (options.memory?.enabled) {
-			if (samplingError) {
-				completed.reject(new Error(`Memory sampling error during observation: ${samplingError.message}`));
-				return;
-			}
-			if (!targetCliProcess || memorySamples.length === 0) {
-				completed.reject(
-					new Error(
-						`Incomplete memory sampling: target CLI process was not found or had no samples (target: ${options.memory.targetExecutable ?? "unknown"})`,
-					),
-				);
-				return;
-			}
-			const stableStart = options.observationMs - options.stableMs;
-			const stableSamples = memorySamples.filter(s => s.timestampMs >= stableStart);
-			if (stableSamples.length === 0) {
-				completed.reject(
-					new Error(
-						`Incomplete memory sampling: no samples recorded during stable window (${stableStart}ms to ${options.observationMs}ms)`,
-					),
-				);
-				return;
-			}
-		}
-		void observer.finish(performance.now() - started, options.stableMs).then(completed.resolve, completed.reject);
+		// A sample read when the deadline fires is still in flight: judge memory once it has landed,
+		// or a slow read is reported as a target that was never found.
+		void Promise.resolve(processState.sampling)
+			.then(() => {
+				if (options.memory?.enabled) {
+					if (samplingError) throw new Error(`Memory sampling error during observation: ${samplingError.message}`);
+					if (!targetCliProcess || memorySamples.length === 0) {
+						throw new Error(
+							`Incomplete memory sampling: target CLI process was not found or had no samples (target: ${options.memory.targetExecutable ?? "unknown"})`,
+						);
+					}
+					if (!memorySamples.some(s => s.timestampMs >= stableStart)) throw missedStableWindow();
+				}
+				return observer.finish(endedAt, options.stableMs);
+			})
+			.then(completed.resolve, completed.reject);
 	}, options.observationMs);
 
 	const errors: unknown[] = [];
@@ -426,14 +431,10 @@ export async function recordSettledStartup(options: SettledStartupOptions): Prom
 		} finally {
 			await observer.flush().catch(() => {});
 			if (options.memory?.enabled && memorySamples.length > 0 && targetCliProcess) {
-				const stableStart = options.observationMs - options.stableMs;
 				const stableSamples = memorySamples.filter(s => s.timestampMs >= stableStart);
 				if (stableSamples.length === 0) {
-					errors.push(
-						new Error(
-							`Incomplete memory sampling: no samples recorded during stable window (${stableStart}ms to ${options.observationMs}ms)`,
-						),
-					);
+					const missed = missedStableWindow();
+					if (!errors.includes(missed)) errors.push(missed);
 				} else {
 					targetCliSha256 ??=
 						(await digestPromise) ??

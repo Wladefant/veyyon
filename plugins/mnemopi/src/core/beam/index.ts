@@ -264,7 +264,7 @@ export class BeamMemory implements BeamMemoryState {
 	}
 
 	formatContext(results: readonly RecallResult[], format = "bullet"): string {
-		return formatContext(this, results, format);
+		return formatContext(results, format);
 	}
 
 	factRecall(query: string, topK = 30): RecallResult[] {

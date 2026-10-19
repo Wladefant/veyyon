@@ -164,6 +164,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 		this.#requestsInFlight++;
 		try {
 			await this.#connect();
+			if (this.#closed) throw new Error("Daemon broker client is closed");
 			const socket = this.#socket;
 			if (!socket || socket.destroyed) throw new Error("Daemon broker socket is unavailable");
 
@@ -220,6 +221,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 			this.#bindSocket(await openSocket(this.#endpoint, 250));
 			return;
 		} catch {
+			if (this.#closed) throw new Error("Daemon broker client is closed");
 			// No live broker. Multiple clients may race to spawn; the broker's PID
 			// lease selects one winner before any candidate touches the socket.
 		}
@@ -227,10 +229,12 @@ class SocketDaemonClient implements DaemonBrokerClient {
 		const deadline = Date.now() + BROKER_CONNECT_TIMEOUT_MS;
 		let lastError: Error | undefined;
 		while (Date.now() < deadline) {
+			if (this.#closed) throw new Error("Daemon broker client is closed");
 			try {
 				this.#bindSocket(await openSocket(this.#endpoint, 250));
 				return;
 			} catch (error) {
+				if (this.#closed) throw new Error("Daemon broker client is closed");
 				lastError = error instanceof Error ? error : new Error(String(error));
 				await Bun.sleep(CONNECT_RETRY_MS);
 			}
@@ -259,6 +263,10 @@ class SocketDaemonClient implements DaemonBrokerClient {
 	}
 
 	#bindSocket(socket: net.Socket): void {
+		if (this.#closed) {
+			socket.destroy();
+			throw new Error("Daemon broker client is closed");
+		}
 		this.#socket = socket;
 		this.#buffer = "";
 		socket.setEncoding("utf8");

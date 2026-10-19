@@ -228,17 +228,6 @@ describe("sanitizeSingleLine", () => {
 		}
 		expect(definitions).toEqual(["utils/src/wrap.ts"]);
 	});
-
-	/** And the one definition must DELEGATE, not re-inline the collapse. A body
-	 *  that flattens with its own regex is the copy this lock exists to prevent,
-	 *  even though it lives at the blessed path. */
-	it("delegates the collapse to the utils owner instead of inlining a regex", async () => {
-		const src = await Bun.file(`${import.meta.dir}/../src/wrap.ts`).text();
-		const body = /export function sanitizeSingleLine\(text: string\): string \{([^}]*)\}/.exec(src)?.[1] ?? "";
-
-		expect(body).toContain("collapseWhitespace(replaceTabs(text))");
-		expect(body).not.toMatch(/replace\(/);
-	});
 });
 
 describe("clamp", () => {

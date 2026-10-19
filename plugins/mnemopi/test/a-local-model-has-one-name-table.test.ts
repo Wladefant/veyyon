@@ -33,6 +33,7 @@ import * as path from "node:path";
 import { DEFAULT_EMBEDDING_MODEL, embeddingModel } from "@veyyon/mnemopi/config";
 import { currentEmbeddingModel } from "@veyyon/mnemopi/core/embeddings";
 import { FASTEMBED_ID_BY_HF_REPO, HF_REPO_BY_FASTEMBED_ID } from "@veyyon/mnemopi/core/fastembed-model-cache";
+import { exportedDeclarationsIn } from "@veyyon/utils/source-declarations";
 
 const SRC = path.join(import.meta.dir, "..", "src");
 
@@ -170,7 +171,9 @@ describe("no second name table", () => {
 	it("and fastembed-model-cache.ts really still holds it", async () => {
 		const text = await readFile(path.join(SRC, "core", "fastembed-model-cache.ts"), "utf8");
 
-		expect(text).toMatch(/"BAAI\/bge-small-en-v1\.5"[^\n]*"fast-bge-small-en-v1\.5"/);
+		expect(exportedDeclarationsIn(text)).toEqual(
+			expect.arrayContaining(["FASTEMBED_ID_BY_HF_REPO", "HF_REPO_BY_FASTEMBED_ID"]),
+		);
 	});
 
 	/**

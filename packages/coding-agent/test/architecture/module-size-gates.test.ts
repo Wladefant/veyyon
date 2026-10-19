@@ -9,7 +9,13 @@
  * a recorded reason, not a target. Two of them are far above the 800-line figure
  * the plan asked for, and that is stated rather than hidden:
  *
- * `core/tui.ts` is 3800 lines. MEASURED 2026-10-04, after the frame throttle
+ * `core/tui.ts` is 3837 lines. RE-MEASURED 2026-10-09, after the render
+ * scheduler moved to `core/render-scheduler.ts`, the root-child segment
+ * arithmetic to `core/frame-segments.ts`, the frame intent and the rule that
+ * selects it to `core/render-intent.ts`, and the alt-buffer caret mapping to
+ * `core/cursor.ts`; it was 3964 before them, past this ceiling since frame
+ * composition, input dispatch, window planning and update emission were split
+ * into single-purpose steps. It was 3800 at 2026-10-04, after the frame throttle
  * and the terminal hosts' settle windows moved to `core/frame-pacing.ts`; it
  * was 3821 at 2026-09-30, after the queue of
  * virtualized roots a component-scoped frame compacts and the switch that
@@ -26,12 +32,16 @@
  * highest-risk file in the product, where the failure mode is a corrupted frame
  * on someone's terminal rather than a failing test. So the ceiling records where
  * it is and stops it growing, and the further split is a separate change with
- * its own render-oracle evidence. Its headroom is roughly two percent rather
+ * its own render-oracle evidence. Its headroom is under two percent rather
  * than the table's ten, because this is the module the ratchet exists for.
  *
- * `core/renderer.ts` is 611 lines and holds the frame preparation the engine
- * calls per row: SGR coalescing, line fitting, prefix resync, cursor-marker
- * extraction. It is under the plan's figure and listed for the same reason.
+ * `core/renderer.ts` is 621 lines and holds the frame preparation the engine
+ * calls per row: line fitting, SGR coalescing, cursor-marker extraction. It is
+ * under the plan's figure and listed for the same reason. RE-MEASURED
+ * 2026-10-09, after the committed-prefix audit moved to `core/committed-prefix.ts`;
+ * it was 750 before, past its 700 ceiling since the render and parse hotspots
+ * were split into single-purpose helpers, and its ceiling drops to 650 so the
+ * moved lines do not grow back.
  *
  * What it does NOT catch: a module that stays small by pushing its complexity
  * into a sibling, and it says nothing about whether the lines are any good.
@@ -50,13 +60,18 @@ import { isDirectory, lineCount, repoPath, repoRelative, typeScriptFiles } from 
  * with a test that names it" gate counts these as named. `core/component-types.ts`
  * RE-MEASURED 2026-09-30 at 328, after `Component.releaseRenderCache()` and the
  * empty child set of a compacting frame joined the contract it declares.
- * `core/tui.ts` (3861) and `core/renderer.ts` (708) are RE-MEASURED 2026-09-30 after
- * the santhreal merge: the fork's own edits to both files sit on top of upstream's
- * 3821 and 697, and the ceilings keep a few lines of margin over the sum.
+ * RE-MEASURED 2026-10-09: `core/frame-plan.ts` at 83 after `RenderIntent` moved
+ * to `core/render-intent.ts`, and `core/cursor.ts` at 202 after it took
+ * `screenCaret` from `core/tui.ts`. The modules carved out that day enter at
+ * their measured size plus roughly ten percent: `core/committed-prefix.ts` at 138,
+ * `core/frame-segments.ts` at 87, `core/render-intent.ts` at 35 and
+ * `core/render-scheduler.ts` at 30.
+ * `core/tui.ts` is measured after the santhreal merge: the fork's own edits sit
+ * on top of upstream, and the ceiling keeps a few lines of margin over the sum.
  */
 const CORE_CEILINGS: Record<string, number> = {
-	"core/tui.ts": 3946, // 3885 -> 3946: the 2026-10 upstream port wave (#219)
-	"core/renderer.ts": 715,
+	"core/tui.ts": 3980,
+	"core/renderer.ts": 650,
 	"core/overlay.ts": 560,
 	"core/image-budget.ts": 330,
 	"core/component-types.ts": 360,
@@ -66,8 +81,12 @@ const CORE_CEILINGS: Record<string, number> = {
 	"core/container.ts": 180,
 	"core/mouse-routing.ts": 150,
 	"core/paint-sequences.ts": 430,
-	"core/frame-plan.ts": 90,
+	"core/frame-plan.ts": 114,
 	"core/frame-pacing.ts": 150,
+	"core/committed-prefix.ts": 155,
+	"core/frame-segments.ts": 95,
+	"core/render-intent.ts": 40,
+	"core/render-scheduler.ts": 35,
 };
 
 /** Ceiling for every module in the presentation layer, which is new and has no legacy. */

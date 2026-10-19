@@ -8,7 +8,7 @@ import { loadCapability } from "../../../discovery";
 import { type SSHHost, sshCapability } from "../../../discovery/capability/ssh";
 import { removedOptionMessage } from "../../../slash-commands/helpers/parse";
 import { addSSHHost, readSSHConfigFile, removeSSHHost, type SSHHostConfig } from "../../../ssh/config-writer";
-import { theme } from "../../../theme/theme";
+import { theme } from "../../../theme/theme-binding";
 import { parseCommandArgs } from "../shared";
 import type { InteractiveModeContext } from "../types";
 import { dispatchSubcommand, groupBySource, showCommandMessage } from "./command-controller-shared";

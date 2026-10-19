@@ -37,7 +37,10 @@ afterAll(() => {
 const spawnCli = (
 	args: string[],
 	stdin: "ignore" | Blob,
-): { proc: ReturnType<typeof Bun.spawn>; done: Promise<{ stdout: string; stderr: string; exitCode: number }> } => {
+): {
+	proc: Bun.Subprocess<"ignore" | Blob, "pipe", "pipe">;
+	done: Promise<{ stdout: string; stderr: string; exitCode: number }>;
+} => {
 	const proc = Bun.spawn([process.execPath, cliEntry, ...args], {
 		cwd: projectDir,
 		stdin,

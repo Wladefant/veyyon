@@ -11,7 +11,9 @@
  * directory is read at run time and the subset `main.ts` and `sdk.ts` reach statically is pinned by
  * exact equality, so a new LSP module imported from anything a launch evaluates turns this red until it
  * is recorded below. The edit tool and the `lsp` tool reaching the client is asserted too, so the cut
- * cannot pass by the client going missing from the tools that use it.
+ * cannot pass by the client going missing from the tools that use it, and the edit and write tools
+ * reaching the writethrough without the `lsp` tool (`lsp/index.ts`) is pinned, so the commit path stays
+ * separate from the tool that queries servers.
  *
  * WHAT IT DOES NOT CATCH. The walk is static: a module loaded through `await import(...)` is outside it
  * by design. That an edit still publishes diagnostics through the writethrough is the edit suites'
@@ -59,11 +61,21 @@ describe("a launch loads no language-server client", () => {
 		});
 	}
 
-	for (const tool of ["edit/index.ts", "lsp/index.ts"]) {
-		it(`${tool} still reaches the client, the server table and the writethrough`, () => {
-			expect(reachedLsp(tool)).toEqual(
-				expect.arrayContaining(["client.ts", "config.ts", "defaults.json", "index.ts"]),
-			);
+	const toolReach: Record<string, string[]> = {
+		"edit/index.ts": ["client.ts", "config.ts", "defaults.json", "writethrough.ts"],
+		"lsp/index.ts": ["client.ts", "config.ts", "defaults.json", "index.ts"],
+	};
+	for (const [tool, expected] of Object.entries(toolReach)) {
+		it(`${tool} still reaches the client, the server table and its own entry`, () => {
+			expect(reachedLsp(tool)).toEqual(expect.arrayContaining(expected));
+		});
+	}
+
+	for (const tool of ["edit/index.ts", "tools/fs/write.ts"]) {
+		it(`${tool} commits through the writethrough without loading the lsp tool`, () => {
+			const reached = reachedLsp(tool);
+			expect(reached).toContain("writethrough.ts");
+			expect(reached).not.toContain("index.ts");
 		});
 	}
 

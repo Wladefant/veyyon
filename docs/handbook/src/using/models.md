@@ -96,20 +96,21 @@ $ veyyon --model openai/gpt-5
 
 | Piece | Purpose | Config |
 | --- | --- | --- |
-| **Interactive model** | Main conversation | `/model`, `--model`; persisted as `modelRoles.default` |
-| **Roles** | Named assignments (`smol`, `slow`, `plan`, `advisor`, …) | `modelRoles` / Settings → Model → Roles |
+| **Default model** | Main conversation | `/model`, `--model`; persisted as `defaultModel` |
+| **Helpers** | Feature model calls (`advisor`, `plan`, `vision`, `commit`, `title`, …) | `agent.helpers` / Settings → Agents → Roster |
 | **Agent policy** | Per-agent choices, or one pair for the whole roster | `agent.agents`, or `agent.sharedModel` with `agent.model` and `agent.thinkingLevel` |
 | **Compaction override** | Compaction / handoff | `compaction.model` (else inherit interactive) |
 
 ```yaml
 # ~/.veyyon/profiles/default/agent/config.yml
-modelRoles:
-  default: openai/gpt-5          # interactive (persisted default)
-  smol: openai/gpt-4.1-mini
-  slow: anthropic/claude-opus-4-5:high
-  plan: anthropic/claude-sonnet-5
+defaultModel: openai/gpt-5       # session model (persisted default)
 agent:
   model: deepseek/deepseek-chat:high
+  helpers:
+    title:
+      model: openai/gpt-4.1-mini
+    plan:
+      model: anthropic/claude-sonnet-5
   agents:
     reviewer:
       enabled: true
@@ -118,12 +119,11 @@ compaction:
   model: openai/gpt-5-mini
 ```
 
-Ctrl+P (default binding) cycles roles listed in `cycleOrder` (schema default `smol`, `slow`, not `default`). Full role list and aliases: [Models, roles, and profiles](./roles-and-profiles.md).
+Ctrl+P (default binding) cycles the scoped models when `--models` is set, and the available models otherwise. Helper list: [Models, helpers, and profiles](./roles-and-profiles.md).
 
 ## Per-model harness settings
 
-Prompt order, repair enablement, and tool exposure can be set per model id through **harness profiles**
-and model roles. See [Execution-order prompts](../models/prompts.md) and
+Prompt order, repair enablement, and tool exposure can be set per model id through **harness profiles**. See [Execution-order prompts](../models/prompts.md) and
 [Model contract](../concepts/model-contract.md).
 
 ### Harness profiles
@@ -170,7 +170,7 @@ $ veyyon --model openrouter/anthropic/claude-sonnet-4
 | Offline / private code | Ollama, LM Studio, llama.cpp |
 | CI | Pin exact `provider/id` with `--model` |
 
-Pin models in CI and shared profiles (`--model`, `modelRoles`). Floating “latest” aliases change under you.
+Pin models in CI and shared profiles (`--model`, `defaultModel`). Floating “latest” aliases change under you.
 
 ## Where to go next
 

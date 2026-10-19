@@ -37,10 +37,11 @@ const CONTROLLERS = `${TERMINAL}/controllers`;
 /**
  * MEASURED 2026-08-28 at 4495 lines, down from 5605, with headroom of roughly
  * ten percent so an ordinary edit does not fail the gate and a new subsystem
- * written inline does.
+ * written inline does. RE-MEASURED at 3694 lines after plan mode and vibe mode
+ * moved to `plan-mode-controller.ts` and `vibe-mode-controller.ts`, and at 3140
+ * after the todo board and agent HUD moved to `anchored-blocks.ts`.
  */
-// 4900 -> 5383: the 2026-10 upstream port wave (#219) re-measured.
-const INTERACTIVE_MODE_CEILING = 5383;
+const INTERACTIVE_MODE_CEILING = 3500;
 
 /**
  * Per-controller ceiling. MEASURED 2026-08-28: the largest controller carved out
@@ -54,15 +55,24 @@ const CONTROLLER_CEILING = 1000;
  * Controllers that predate this change and already exceed the ceiling. Each one
  * is a subsystem that was written inline and then moved wholesale, and slimming
  * it is its own change. The list is expected to shrink, never grow.
+ * `extension-ui-controller.ts` left on 2026-10-16 at 951 lines: the collab guest
+ * dialogs, the dialog queue and the hook widgets moved into their own modules.
+ * `selector-controller.ts` left on 2026-10-16 at 953 lines: the login, logout,
+ * account card and reset flows moved to `account-flows.ts`, and the session
+ * picker, resume and delete to `session-flows.ts`.
+ * `command-controller.ts` left on 2026-10-16 at 990 lines: the `/usage` and
+ * `/session` panels moved to `usage-report-view.ts` and `session-info-view.ts`,
+ * and `/memory` to `memory-command-controller.ts`.
+ * `event-controller.ts` left on 2026-10-16 at 890 lines: the tool-call cards,
+ * the compaction and retry loaders with the pinned turn error, the idle
+ * compaction and recap, the IRC cards, the displaceable blocks and the speech
+ * hooks moved into their own modules.
+ * `input-controller.ts` left on 2026-10-16 at 777 lines: paste intake moved to
+ * `composer-paste.ts`, the `/queue` batch and the dequeue to
+ * `queued-submissions.ts`, submission routing to `prompt-submission.ts`, and
+ * the Esc chain to `composer-escape.ts`.
  */
-const LEGACY_OVERSIZED_CONTROLLERS: readonly string[] = [
-	"command-controller.ts",
-	"event-controller.ts",
-	"extension-ui-controller.ts",
-	"input-controller.ts",
-	"mcp-command-controller.ts",
-	"selector-controller.ts",
-];
+const LEGACY_OVERSIZED_CONTROLLERS: readonly string[] = [];
 
 function controllers(): string[] {
 	return typeScriptFiles(CONTROLLERS).filter(file => !file.endsWith(".test.ts"));

@@ -30,6 +30,13 @@ export const Flag = {
 	/** The endpoint rejected the `tool_choice` the request named (400): a forced or `none` choice it does not take. */
 	ToolChoiceRejected: 0x0000_4000,
 	/**
+	 * The provider refused the requested model for this account's plan: Cursor answers a named model
+	 * on a Free plan with `ERROR_RATE_LIMITED_CHANGEABLE`. Always set beside {@link Flag.UsageLimit},
+	 * because the account cannot serve the request, but no quota window restores it, so the credential
+	 * layer moves the request to an account that can serve the model instead of waiting.
+	 */
+	ModelNotInPlan: 0x0000_2000,
+	/**
 	 * The peer named a transport failure a replay reproduces: an HTTP/2 code from
 	 * `NON_RETRYABLE_HTTP2_ERROR_CODES` (`NGHTTP2_CANCEL` — our own abort — `FLOW_CONTROL_ERROR`,
 	 * `FRAME_SIZE_ERROR`, `COMPRESSION_ERROR`, `INADEQUATE_SECURITY`, `HTTP_1_1_REQUIRED`).

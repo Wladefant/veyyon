@@ -13,7 +13,8 @@ import { Box, type Component, Container, Markdown, Spacer, TERMINAL, Text } from
 import type { CustomBlock, HookBlock } from "@veyyon/wire/presentation";
 import { groundHairlineHex, groundTintFgAnsi } from "../../../../theme/ground-tints";
 import { getMarkdownTheme, markdownTextStyle } from "../../../../theme/markdown-theme";
-import { type Theme, type ThemeColor, theme } from "../../../../theme/theme";
+import type { Theme, ThemeColor } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { reportRendererFailure } from "./renderer-failure";
 
 /**

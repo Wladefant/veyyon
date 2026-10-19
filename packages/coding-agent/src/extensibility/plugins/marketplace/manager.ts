@@ -9,30 +9,31 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { cachePlugin } from "@veyyon/kernel/loader/plugins/marketplace/cache";
 import {
 	addInstalledPlugin,
-	addMarketplaceEntry,
 	collectReferencedPaths,
 	getInstalledPlugin,
-	getMarketplaceEntry,
+	type InstalledPluginEntry,
+	type InstalledPluginsRegistry,
 	readInstalledPluginsRegistry,
-	readMarketplacesRegistry,
 	removeInstalledPlugin,
-	removeMarketplaceEntry,
 	writeInstalledPluginsRegistry,
+} from "@veyyon/kernel/loader/plugins/installed-registry";
+import { cachePlugin } from "@veyyon/kernel/loader/plugins/marketplace/cache";
+import {
+	addMarketplaceEntry,
+	getMarketplaceEntry,
+	readMarketplacesRegistry,
+	removeMarketplaceEntry,
 	writeMarketplacesRegistry,
 } from "@veyyon/kernel/loader/plugins/marketplace/registry";
-import {
-	buildPluginId,
-	type InstalledPluginEntry,
-	type InstalledPluginSummary,
-	type InstalledPluginsRegistry,
-	type MarketplaceCatalog,
-	type MarketplacePluginEntry,
-	type MarketplaceRegistryEntry,
-	parsePluginId,
+import type {
+	InstalledPluginSummary,
+	MarketplaceCatalog,
+	MarketplacePluginEntry,
+	MarketplaceRegistryEntry,
 } from "@veyyon/kernel/loader/plugins/marketplace/types";
+import { buildPluginId, parsePluginId } from "@veyyon/kernel/loader/plugins/plugin-id";
 import { normalizePluginRuntimeConfig } from "@veyyon/kernel/loader/plugins/runtime-config";
 import type { PluginRuntimeConfig } from "@veyyon/kernel/loader/plugins/types";
 import { DAY_MS, errorMessage, isEnoent, logger, pathIsWithin, removeTempPath } from "@veyyon/utils";

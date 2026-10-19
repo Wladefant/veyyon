@@ -12,19 +12,11 @@ import { applyEdits, collectEditAnchorLines } from "./apply";
 import { resolveBlockEdits } from "./block";
 import { HL_FILE_HASH_EXAMPLES, HL_FILE_HASH_LENGTH, HL_FILE_HASH_SEP, HL_FILE_PREFIX, HL_FILE_SUFFIX } from "./format";
 import { parsePatch, parsePatchStreaming } from "./parser";
-import { Tokenizer } from "./tokenizer";
+import { Tokenizer, unquotePath } from "./tokenizer";
 import type { ApplyResult, BlockResolver, Edit, FileOp, SplitOptions } from "./types";
 
 // Pure classification — single shared tokenizer is safe.
 const TOKENIZER = new Tokenizer();
-
-function unquoteHashlinePath(pathText: string): string {
-	if (pathText.length < 2) return pathText;
-	const first = pathText[0];
-	const last = pathText[pathText.length - 1];
-	if ((first === '"' || first === "'") && first === last) return pathText.slice(1, -1);
-	return pathText;
-}
 
 /**
  * Strip apply_patch-style noise that models reflexively prepend to the
@@ -85,7 +77,7 @@ function tryParseRecoveryHeader(line: string, cwd?: string): RawSection | null {
 }
 
 function normalizeHashlinePath(rawPath: string, cwd?: string): string {
-	const unquoted = stripApplyPatchPathNoise(unquoteHashlinePath(rawPath.trim()));
+	const unquoted = stripApplyPatchPathNoise(unquotePath(rawPath.trim()));
 	if (!cwd || !path.isAbsolute(unquoted)) return unquoted;
 	const relative = path.relative(path.resolve(cwd), path.resolve(unquoted));
 	const normalizedRelative = relative.split(path.sep).join("/");

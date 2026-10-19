@@ -14,7 +14,7 @@ import type { Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
 import { Container, Spacer, Text } from "@veyyon/tui";
 import type { ModelRegistry } from "../../packages/coding-agent/src/config/model-registry";
-import { ModelChainSubmenu } from "../../packages/coding-agent/src/modes/terminal/components/selectors/settings-selector";
+import { ModelChainSubmenu } from "../../packages/coding-agent/src/modes/terminal/components/selectors/model-chain-submenu";
 import { renderDemo } from "./render-args";
 
 const models: Model[] = ["alpha", "beta", "gamma"].map(id =>

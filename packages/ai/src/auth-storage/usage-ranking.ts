@@ -1,13 +1,18 @@
 /**
- * Candidate ordering by usage: window drain, plan eligibility, blocks, and the account the
- * caller chose.
+ * Candidate ordering by usage: the parallel usage fetch under one deadline, window drain, plan
+ * eligibility, blocks, and the account the caller chose.
  */
 
 import { clamp01 } from "@veyyon/utils/math";
 import type { CredentialRankingContext, CredentialRankingStrategy, UsageLimit, UsageReport } from "../usage";
-import type { CredentialSelection } from "./credentials";
+import type { CredentialBlocks } from "./credential-blocks";
+import { DEFAULT_CREDENTIAL_BACKOFF_MS } from "./credential-blocks";
+import type { ApiKeySelection, AuthApiKeyOptions, CredentialSelection, OAuthSelection } from "./credentials";
 import type { OpenAICodexPlanRequirement } from "./openai-codex-plan";
+import { getOpenAICodexPlanPriority } from "./openai-codex-plan";
 import type { ApiKeyCredential, AuthCredential, OAuthCredential } from "./types";
+import type { UsageReporting } from "./usage-reporting";
+import { getScopedUsageLimits, getUsageResetAtMs, isUsageLimitReached } from "./usage-reports";
 
 const USAGE_RANKING_METRIC_EPSILON = 1e-9;
 /**
@@ -207,4 +212,192 @@ export function isAllowanceSpent(
 	}
 	const isScoped = strategy?.scopeLimits !== undefined;
 	return !isScoped && report.metadata?.limitReached === true;
+
+}
+
+/** What one ranking pass ranks: the provider's credentials, in the order to consider them. */
+export interface CredentialRankingRequest<S> {
+	providerKey: string;
+	provider: string;
+	order: number[];
+	credentials: S[];
+	options?: AuthApiKeyOptions;
+	strategy: CredentialRankingStrategy;
+	rankingContext: CredentialRankingContext;
+	blockScope?: string;
+	sessionPreferredUsage?: { index: number; usage: UsageReport };
+}
+
+/** The block reads and writes a ranking pass makes. */
+export type RankingBlocks = Pick<CredentialBlocks, "getCredentialBlockedUntil" | "markCredentialBlocked">;
+
+/** The usage fetch a ranking pass makes, and the per-request deadline it is given. */
+export type RankingUsage = Pick<UsageReporting, "reportFor" | "requestTimeoutMs">;
+
+/**
+ * Resolves with `work`, or with `null` once `timeoutMs` passes first. The timer is cleared however
+ * the race ends, a rejected `work` included, and is unref'd so a pending one never holds the process.
+ */
+async function settleWithin<T>(work: Promise<T>, timeoutMs: number): Promise<T | null> {
+	const deadline = Promise.withResolvers<null>();
+	const timer = setTimeout(() => deadline.resolve(null), timeoutMs);
+	timer.unref?.();
+	try {
+		return await Promise.race([work, deadline.promise]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+export class CredentialRanking {
+	readonly #blocks: RankingBlocks;
+	readonly #usage: RankingUsage;
+
+	constructor(blocks: RankingBlocks, usage: RankingUsage) {
+		this.#blocks = blocks;
+		this.#usage = usage;
+	}
+
+	/** Ranks API keys by live usage. A blocked key is not fetched; it ranks by when its block ends. */
+	async rankApiKeySelections(request: CredentialRankingRequest<ApiKeySelection>): Promise<ApiKeyCandidate[]> {
+		const nowMs = Date.now();
+		const usageResults = await this.#fetchWithinDeadline(request, async selection => {
+			const blockedUntil = this.#blockedUntil(request, selection.index);
+			if (blockedUntil !== undefined) return { selection, usage: null, usageChecked: false, blockedUntil };
+			const usage = await this.#reportFor(request, selection.credential);
+			return { selection, usage, usageChecked: true, blockedUntil: undefined };
+		});
+		return this.#rankUsageResults(usageResults, request, "none", nowMs);
+	}
+
+	/**
+	 * Ranks OAuth accounts by live usage. A blocked `openai-codex` account is still fetched, since its
+	 * report may clear the block; any other blocked account ranks by when its block ends.
+	 */
+	async rankOAuthSelections(
+		request: CredentialRankingRequest<OAuthSelection> & { planRequirement: OpenAICodexPlanRequirement },
+	): Promise<OAuthCandidate[]> {
+		const nowMs = Date.now();
+		const usageResults = await this.#fetchWithinDeadline(request, async selection => {
+			let blockedUntil = this.#blockedUntil(request, selection.index);
+			let usage: UsageReport | null = null;
+			let usageChecked = false;
+			if (blockedUntil !== undefined && request.provider === "openai-codex") {
+				usage = await this.#reportFor(request, selection.credential);
+				usageChecked = true;
+				blockedUntil = this.#blockedUntil(request, selection.index);
+			}
+			if (blockedUntil !== undefined) return { selection, usage, usageChecked, blockedUntil };
+			if (!usageChecked && request.sessionPreferredUsage && selection.index === request.sessionPreferredUsage.index) {
+				usage = request.sessionPreferredUsage.usage;
+				usageChecked = true;
+			}
+			if (!usageChecked) {
+				usage = await this.#reportFor(request, selection.credential);
+				usageChecked = true;
+			}
+			return { selection, usage, usageChecked, blockedUntil: undefined };
+		});
+		return this.#rankUsageResults(usageResults, request, request.planRequirement, nowMs);
+	}
+
+	/**
+	 * Fetches usage for every credential in `request.order` in parallel under one deadline. A slow or
+	 * rate-limited usage endpoint must not hold credential selection: past the deadline every
+	 * credential ranks unmeasured, by its block alone.
+	 */
+	async #fetchWithinDeadline<T extends AuthCredential, S extends { credential: T; index: number }>(
+		request: CredentialRankingRequest<S>,
+		fetchOne: (selection: S) => Promise<UsageRankingResult<T>>,
+	): Promise<Array<UsageRankingResult<T> | null>> {
+		const usageTimeout = Math.max(5000, this.#usage.requestTimeoutMs * 1.5);
+		const fetched = await settleWithin(
+			Promise.all(
+				request.order.map(idx => {
+					const selection = request.credentials[idx];
+					return selection ? fetchOne(selection) : null;
+				}),
+			),
+			usageTimeout,
+		);
+		if (fetched) return fetched;
+		return request.order.map(idx => {
+			const selection = request.credentials[idx];
+			if (!selection) return null;
+			const blockedUntil = this.#blockedUntil(request, selection.index);
+			return { selection, usage: null, usageChecked: false, blockedUntil };
+		});
+	}
+
+	#blockedUntil(request: CredentialRankingRequest<unknown>, index: number): number | undefined {
+		return this.#blocks.getCredentialBlockedUntil(request.provider, request.providerKey, index, request.blockScope);
+	}
+
+	#reportFor(request: CredentialRankingRequest<unknown>, credential: AuthCredential): Promise<UsageReport | null> {
+		return this.#usage.reportFor(request.provider, credential, {
+			...request.options,
+			timeoutMs: this.#usage.requestTimeoutMs,
+		});
+	}
+
+	/**
+	 * Ranks fetched usage results in request order. A credential whose scoped limit is reached is
+	 * blocked, and recorded as blocked, before its windows are scored. The plan requirement is the one
+	 * axis on which API keys ("none") and OAuth accounts differ.
+	 */
+	#rankUsageResults<T extends AuthCredential>(
+		usageResults: ReadonlyArray<UsageRankingResult<T> | null>,
+		request: CredentialRankingRequest<unknown>,
+		planRequirement: OpenAICodexPlanRequirement,
+		nowMs: number,
+	): UsageCandidate<T>[] {
+		const { strategy } = request;
+		const ranked: UsageRankedCandidate<T>[] = [];
+		for (let orderPos = 0; orderPos < usageResults.length; orderPos += 1) {
+			const result = usageResults[orderPos];
+			if (!result) continue;
+			const { selection, usage, usageChecked } = result;
+			let { blockedUntil } = result;
+			let blocked = blockedUntil !== undefined;
+			const scopedLimits = usage ? getScopedUsageLimits(strategy, usage, request.rankingContext) : undefined;
+			const isCodexAllowedOverage = request.provider === "openai-codex" && usage?.metadata?.allowed === true;
+			if (!blocked && scopedLimits && !isCodexAllowedOverage && isUsageLimitReached(scopedLimits)) {
+				const resetAtMs = getUsageResetAtMs(scopedLimits, nowMs);
+				blockedUntil = resetAtMs ?? Date.now() + DEFAULT_CREDENTIAL_BACKOFF_MS;
+				this.#blocks.markCredentialBlocked(
+					request.provider,
+					request.providerKey,
+					selection.index,
+					blockedUntil,
+					request.blockScope,
+				);
+				blocked = true;
+			}
+			const windows = usage ? strategy.findWindowLimits(usage, request.rankingContext) : undefined;
+			const primary = windows?.primary;
+			const secondary = windows?.secondary;
+			const secondaryTarget = secondary ?? primary;
+			const allowanceSpent = isAllowanceSpent(strategy, usage, request.rankingContext, nowMs);
+			ranked.push({
+				selection,
+				usage,
+				usageChecked,
+				allowanceSpent,
+				blocked,
+				blockedUntil,
+				hasPriorityBoost: strategy.hasPriorityBoost?.(primary) ?? false,
+				planPriority: getOpenAICodexPlanPriority(usage, planRequirement),
+				secondaryUsed: normalizeUsageFraction(secondaryTarget),
+				secondaryRequiredDrain: computeWindowRequiredDrain(
+					secondaryTarget,
+					nowMs,
+					strategy.windowDefaults.secondaryMs,
+				),
+				primaryUsed: normalizeUsageFraction(primary),
+				primaryRequiredDrain: computeWindowRequiredDrain(primary, nowMs, strategy.windowDefaults.primaryMs),
+				orderPos,
+			});
+		}
+		return orderUsageRankedCandidates(ranked, planRequirement);
+	}
 }

@@ -12,13 +12,13 @@ import * as pluginCli from "@veyyon/coding-agent/cli/plugin-cli";
 import * as updateCli from "@veyyon/coding-agent/cli/update-cli";
 import {
 	formatBinaryDownloadFailure,
-	parseSha256Sidecar,
 	replaceBinaryForUpdate,
 	resolveUpdateMethod,
 	sweepStaleBackups,
 	verifyDownloadChecksum,
 } from "@veyyon/coding-agent/cli/update-cli";
 import Update from "@veyyon/coding-agent/commands/update";
+import { parseSha256Sidecar } from "@veyyon/natives/sha256-sidecar";
 import { removeWithRetries, VERSION } from "@veyyon/utils";
 import type { CliConfig } from "@veyyon/utils/cli";
 import { LATEST_RELEASE_URL, releaseRedirect } from "./helpers/release-redirect";
@@ -659,7 +659,7 @@ describe("runAutoUpdate", () => {
 		const outcome = await updateCli.runAutoUpdate("1.0.0", undefined, await statePath(), () => "binary");
 
 		expect(outcome).toEqual({ status: "updated", version: "9.9.9", warnings: [] });
-		expect(install).toHaveBeenCalledWith("9.9.9", false, updateCli.SILENT_UPDATE_REPORTER);
+		expect(install).toHaveBeenCalledWith("9.9.9", updateCli.SILENT_UPDATE_REPORTER);
 	});
 
 	it("skips a source install instead of clobbering its launcher with a binary", async () => {
@@ -685,7 +685,7 @@ describe("runAutoUpdate", () => {
 		const outcome = await updateCli.runAutoUpdate("1.0.0", undefined, await statePath(), () => "binary");
 
 		expect(outcome).toEqual({ status: "updated", version: "9.9.9", warnings: [] });
-		expect(install).toHaveBeenCalledWith("9.9.9", false, updateCli.SILENT_UPDATE_REPORTER);
+		expect(install).toHaveBeenCalledWith("9.9.9", updateCli.SILENT_UPDATE_REPORTER);
 	});
 
 	it("reports an install failure instead of claiming success", async () => {

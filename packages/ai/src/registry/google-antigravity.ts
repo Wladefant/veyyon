@@ -11,12 +11,12 @@ export const googleAntigravityProvider = {
 		return loginAntigravity(cb);
 	},
 	credential: "oauth",
-	refreshToken: async (credentials: OAuthCredentials) => {
+	refreshToken: async (credentials: OAuthCredentials, signal?: AbortSignal) => {
 		if (!credentials.projectId) {
 			throw new AIError.ConfigurationError("Antigravity credentials missing projectId");
 		}
 		const { refreshAntigravityToken } = await import("./oauth/google-antigravity");
-		return refreshAntigravityToken(credentials.refresh, credentials.projectId);
+		return refreshAntigravityToken(credentials.refresh, credentials.projectId, signal);
 	},
 	callbackPort: 51121,
 	pasteCodeFlow: true,

@@ -1,7 +1,26 @@
-import { describe, expect, it } from "bun:test";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { isRecoverableFastembedLoadError } from "../src/core/fastembed-runtime";
+import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as logger from "@veyyon/utils/logger";
+import type * as Fastembed from "fastembed";
+import { isRecoverableFastembedLoadError, loadFastembedOrInstall } from "../src/core/fastembed-runtime";
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
+
+/** Every warn and debug line the loader writes, in order, with its level. */
+function recordLogs(): Array<{ level: "warn" | "debug"; message: string }> {
+	const lines: Array<{ level: "warn" | "debug"; message: string }> = [];
+	vi.spyOn(logger, "warn").mockImplementation((message: string) => {
+		lines.push({ level: "warn", message });
+	});
+	vi.spyOn(logger, "debug").mockImplementation((message: string) => {
+		lines.push({ level: "debug", message });
+	});
+	return lines;
+}
+
+/** Stands in for a loaded module; the loader hands it back without reading it. */
+const RUNTIME_COPY = {} as typeof Fastembed;
 
 /**
  * The fastembed runtime-install fallback: when it is taken, and how loudly.
@@ -86,26 +105,44 @@ describe("the fastembed runtime-install fallback", () => {
 	});
 
 	/**
-	 * The loudness lock.
-	 *
-	 * The report cannot be reached from a test without actually failing the
-	 * import and then performing the network install it falls back to, so the
-	 * level is asserted at the source instead. This is narrow on purpose: it
-	 * fails if the fallback branch goes back to `logger.debug`, which is the
-	 * exact regression it exists to prevent, and it names why in the failure.
+	 * The loudness lock: the fallback names itself at warn level, once, before the
+	 * install runs, and it returns the runtime copy.
 	 */
-	it("reports the fallback at warn level, never debug", () => {
-		const source = fs.readFileSync(path.join(import.meta.dir, "../src/core/fastembed-runtime.ts"), "utf8");
-		const fallbackBranch = source.slice(
-			source.indexOf("if (!isRecoverableFastembedLoadError(error)) throw error;"),
-			source.indexOf("return loadFromRuntimeInstall();"),
+	it("reports the fallback at warn level, never debug", async () => {
+		const lines = recordLogs();
+		const missing = Object.assign(new Error("Cannot find package 'fastembed'"), { name: "ResolveMessage" });
+		let installs = 0;
+
+		const loaded = await loadFastembedOrInstall(
+			() => Promise.reject(missing),
+			async () => {
+				installs += 1;
+				return RUNTIME_COPY;
+			},
 		);
 
-		expect(fallbackBranch.length, "the fallback branch moved; update this lock").toBeGreaterThan(0);
-		expect(
-			fallbackBranch.includes("logger.warn("),
-			"the runtime-install fallback must report at warn: it downloads and installs a runtime, so a user whose first index takes minutes needs a line explaining why",
-		).toBe(true);
-		expect(fallbackBranch.includes("logger.debug(")).toBe(false);
+		expect(loaded).toBe(RUNTIME_COPY);
+		expect(installs).toBe(1);
+		expect(lines.map(line => line.level)).toEqual(["warn"]);
+		expect(lines[0]?.message).toContain("the first indexing run will be slow");
+	});
+
+	/** And a real error from an installed fastembed reaches the caller with no install and no line. */
+	it("rethrows a real load error without installing or reporting a fallback", async () => {
+		const lines = recordLogs();
+		const corrupt = new Error("model file is corrupt");
+		let installs = 0;
+
+		const load = loadFastembedOrInstall(
+			() => Promise.reject(corrupt),
+			async () => {
+				installs += 1;
+				return RUNTIME_COPY;
+			},
+		);
+
+		await expect(load).rejects.toBe(corrupt);
+		expect(installs).toBe(0);
+		expect(lines).toEqual([]);
 	});
 });

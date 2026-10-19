@@ -1,7 +1,7 @@
 /**
  * Regression: issue #6162.
  *
- * `modelRoles.default` set to a `models.yml` discovery provider model
+ * `defaultModel` set to a `models.yml` discovery provider model
  * (a custom OpenAI-compatible endpoint with `discovery.type: openai-models-list`)
  * was silently replaced on a cache-cold interactive launch by an unrelated
  * authenticated provider's default. The configured provider ships no static
@@ -27,7 +27,7 @@ import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Snowflake } from "@veyyon/utils";
 
-describe("issue #6162 fresh launch default role from models.yml discovery provider", () => {
+describe("issue #6162 fresh launch default model from models.yml discovery provider", () => {
 	let tempDir: string;
 	const authStoragesToClose: AuthStorage[] = [];
 
@@ -89,7 +89,7 @@ describe("issue #6162 fresh launch default role from models.yml discovery provid
 		});
 
 		const settings = Settings.isolated();
-		settings.setModelRole("default", "my-provider/some-model");
+		settings.setDefaultModel("my-provider/some-model");
 
 		const { session } = await createAgentSession({
 			cwd: tempDir,
@@ -117,7 +117,7 @@ describe("issue #6162 fresh launch default role from models.yml discovery provid
 	});
 	/**
 	 * The negative twin. The discovery pass is awaited inside startup, so it has
-	 * to stay off the path an ordinary launch takes. With no `modelRoles.default`
+	 * to stay off the path an ordinary launch takes. With no `defaultModel`
 	 * configured and an authed bundled provider, `pickDefaultAvailableModel`
 	 * already resolves, so the gate must not fire and no discovery request may go
 	 * out. Bundled providers are themselves discoverable, so the guard cannot

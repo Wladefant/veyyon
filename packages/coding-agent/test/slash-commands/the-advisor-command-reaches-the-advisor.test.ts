@@ -202,18 +202,18 @@ describe("the /advisor command reaches the advisor", () => {
 
 	/**
 	 * `/advisor on` reports the OUTCOME, not the request. Enabling the setting is half of it; a model
-	 * must also resolve for the `advisor` role, and `setAdvisorEnabled` returns whether the runtime
+	 * must also resolve for the `advisor` helper, and `setAdvisorEnabled` returns whether the runtime
 	 * actually came up. Echoing "Advisor started" from the argument would claim a thing that did not
 	 * happen and leave the user waiting for advice that cannot arrive.
 	 */
-	it("does not claim the advisor started when no model resolved for the role", async () => {
+	it("does not claim the advisor started when no model resolved for the helper", async () => {
 		const p = probe({ startsWhenEnabled: false });
 
 		await executeBuiltinSlashCommand("/advisor on", p.runtime);
 
 		expect(p.toggledWith).toEqual([true]);
 		expect(p.statuses).toEqual([
-			"Advisor enabled, but no model resolved for the advisor role — assign one with /model.",
+			"Advisor enabled, but no model resolved for the advisor helper: configure one in /settings under Agents -> Roster.",
 		]);
 	});
 
@@ -284,7 +284,7 @@ describe("the advisor handlers report the session, not a removal notice", () => 
 		await unresolved.controller.handleAdvisorStatusCommand();
 
 		expect(off.probe.statuses.join("\n")).toContain("/advisor on");
-		expect(unresolved.probe.statuses.join("\n")).toContain("/model");
+		expect(unresolved.probe.statuses.join("\n")).toContain("Agents -> Roster");
 		expect(unresolved.probe.statuses.join("\n")).not.toContain("/advisor on");
 	});
 
@@ -317,6 +317,7 @@ describe("the advisor configure overlay is mounted, not announced as gone", () =
 				scopedModels: [],
 				agent: { state: { model: undefined } },
 				getAdvisorAvailableToolNames: async () => ["read", "grep", "glob"],
+				resolveHelperModel: () => undefined,
 			},
 			ui: {
 				showOverlay: (component: unknown, options: Record<string, unknown>) => {

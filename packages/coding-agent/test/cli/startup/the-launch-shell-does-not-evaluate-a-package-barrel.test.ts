@@ -93,11 +93,21 @@ const BARRELS = ["@veyyon/tui", "@veyyon/utils", "@veyyon/agent-core", "@veyyon/
  * already evaluates, so the graph runs no new code. It imports nothing. The ceiling keeps the one
  * leaf of margin.
  *
+<<<<<<< HEAD
  * RE-MEASURED 2026-10-04 at 359, from 355: usage tracking additions for Antigravity account windows
  * and launch-facts reorganization. The ceiling keeps the one leaf of margin.
  */
 // 363 -> 365 (exclusive ceiling, measured 363): re-measured 2026-10-04 after PR #470 added github-copilot-client-id.ts to settings.ts (Refs #472).
 const SHELL_GRAPH_MODULE_CEILING = 365;
+=======
+ * RE-MEASURED 2026-10-09 at 364, from 360: `core/committed-prefix.ts`, `core/frame-segments.ts`,
+ * `core/render-intent.ts` and `core/render-scheduler.ts` under `hosts/terminal/engine/src`, split out
+ * of `core/renderer.ts`, `core/tui.ts` and `core/frame-plan.ts`, which the shell already evaluates,
+ * so the graph runs no new code. Each imports only `node:` built-ins, utils leaves and
+ * `core/component-types.ts`, all already evaluated. The ceiling keeps the one leaf of margin.
+ */
+const SHELL_GRAPH_MODULE_CEILING = 366;
+>>>>>>> santhreal/main
 
 async function probe(code: string): Promise<number> {
 	const { stdout } = await run("bun", ["-e", code], { cwd: repoRoot, maxBuffer: 1 << 24 });

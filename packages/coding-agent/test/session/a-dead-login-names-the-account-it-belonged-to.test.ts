@@ -27,7 +27,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import { providerDisabledNote } from "@veyyon/coding-agent/modes/terminal/components/account/account-manager-rows";
 import { buildAccountInventory } from "@veyyon/coding-agent/session/account-inventory";
 
@@ -106,7 +107,7 @@ describe("a dead login names the account it belonged to", () => {
 		expect(note[0]).toContain("invalid_grant");
 		// One account still answers every request, so the provider is not broken and the line
 		// says so instead of demanding a login.
-		expect(note[1]).toBe("1 other account still signed in; press a to sign this one back in");
+		expect(note[1]).toBe("1 other account still signed in; press a to sign this one back in, or f to forget it");
 	});
 
 	test("keeps the unattributed wording when the dead credential names no account", async () => {
@@ -153,7 +154,7 @@ describe("a dead login names the account it belonged to", () => {
 
 		expect(entry?.rows).toEqual([]);
 		expect(note[0]).toContain(DEAD);
-		expect(note[1]).toBe("press a to sign in again");
+		expect(note[1]).toBe("press a to sign in again, or f to forget it");
 	});
 
 	test("counts only the accounts that are actually serving", async () => {
@@ -168,7 +169,7 @@ describe("a dead login names the account it belonged to", () => {
 			] as never,
 		});
 
-		expect(note[1]).toBe("1 other account still signed in; press a to sign this one back in");
+		expect(note[1]).toBe("1 other account still signed in; press a to sign this one back in, or f to forget it");
 	});
 
 	test("says nothing at all when no refresh failure tore a login down", async () => {

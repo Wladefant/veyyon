@@ -14,12 +14,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { normalizeModelPatternList, resolveCompactionModelPatterns } from "@veyyon/coding-agent/config/model-resolver";
+import { resolveCompactionModelPatterns } from "@veyyon/coding-agent/config/model-resolver";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import type { AgentSettings } from "@veyyon/coding-agent/config/settings-domains/agents";
 import { resolveAgentModel } from "@veyyon/coding-agent/task/agent-settings";
 import { TempDir } from "@veyyon/utils";
 import { YAML } from "bun";
+import { normalizeModelPatternList } from "../src/config/model-pattern-list";
 
 describe("model chain encoding", () => {
 	/**

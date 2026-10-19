@@ -162,7 +162,9 @@ describe("the env-key leaf stays a leaf", () => {
 	it("keeps auth storage off the streaming engine for its key lookups", () => {
 		const source = fs.readFileSync(path.join(SRC, "auth-storage.ts"), "utf-8");
 
-		expect(source).toContain('import { getEnvApiKey, getEnvApiKeyName } from "./env-api-key";');
-		expect(moduleSpecifiersIn(source)).not.toContain("./stream");
+		const specifiers = moduleSpecifiersIn(source);
+
+		expect(specifiers).toContain("./env-api-key");
+		expect(specifiers).not.toContain("./stream");
 	});
 });

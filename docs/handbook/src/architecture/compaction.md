@@ -177,12 +177,12 @@ By default the live TUI collapses pre-compaction history: `display.collapseCompa
 
 ### Per-turn and pre-compaction pruning
 
-Two passes run from `AgentSession.#checkCompaction()`, after every completed turn, and both persist
+Two passes run from `TurnContextCheck.check()` (`session/runtime/turn-context-check.ts`), after every completed turn, and both persist
 through `rewriteEntries(prunedEntries)` so the session file matches the live context (`/fork`, `/tan`
 and resume read the file, and a divergent prefix cold-misses the provider prompt cache). The file is
 rewritten from the earliest pruned entry on; the lines before it are copied as they are:
 
-1. **Stale-result pass** (`#pruneStaleToolResults` → `pruneSupersededToolResults`) runs first, before
+1. **Stale-result pass** (`HistoryRewrites.pruneStale` → `pruneSupersededToolResults`) runs first, before
    any threshold check, so it fires even with `compaction.enabled` off. It is skipped entirely when
    both `compaction.supersedeReads` and `compaction.dropUseless` are false.
 2. **Threshold prune** (`#pruneToolOutputs` → `pruneToolOutputs`) runs only on the threshold path,

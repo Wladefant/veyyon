@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { formatHashlineHeader, HL_FILE_HASH_SEP, HL_FILE_PREFIX, HL_FILE_SUFFIX } from "../src/format";
-import { Tokenizer } from "../src/tokenizer";
+import { type Token, Tokenizer } from "../src/tokenizer";
 
 const tok = new Tokenizer();
 
@@ -96,7 +96,7 @@ describe("Tokenizer.feed streaming chunks", () => {
 		const body = "SWAP 1.=1:\n+X\nDEL 2\n";
 		const oneShot = [...new Tokenizer().feed(body), ...new Tokenizer().end()];
 		const stream = new Tokenizer();
-		const parts: ReturnType<Tokenizer["tokenize"]>[] = [];
+		const parts: Token[] = [];
 		for (const chunk of ["SWAP 1.=1:\n", "+X\n", "DEL 2\n"]) {
 			parts.push(...stream.feed(chunk));
 		}

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { afterEach, describe, expect, it, type Mock, mock, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -14,7 +14,7 @@ import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } f
 
 describe("getAgentDir pollution order-lock", () => {
 	let settingsState: SettingsTestState | undefined;
-	let spy: ReturnType<typeof spyOn> | undefined;
+	let spy: Mock<typeof utils.getAgentDir> | undefined;
 	const temps: string[] = [];
 
 	afterEach(() => {

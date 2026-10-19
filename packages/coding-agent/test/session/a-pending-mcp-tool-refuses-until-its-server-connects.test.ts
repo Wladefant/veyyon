@@ -130,10 +130,16 @@ describe("a pending MCP tool refuses until its server connects", () => {
 	});
 
 	it("adopts a discovered Exa key only when the environment has none", () => {
+		// `setProfileEnv` also records the key in `VEYYON_DOTENV_ORIGIN`, which every later spawn in
+		// this process inherits, so both variables go back as they were.
+		const restored = ["EXA_API_KEY", "VEYYON_DOTENV_ORIGIN"].map(key => [key, Bun.env[key]] as const);
 		const exaKey = (): string | undefined => Bun.env.EXA_API_KEY;
+<<<<<<< HEAD
 		const previous = exaKey();
 		// Adopting a key records it in `VEYYON_DOTENV_ORIGIN`; restoring the key alone leaves that record behind.
 		const previousOrigin = Bun.env.VEYYON_DOTENV_ORIGIN;
+=======
+>>>>>>> santhreal/main
 		try {
 			delete Bun.env.EXA_API_KEY;
 			applyMCPEnvironment({ exaApiKeys: ["from-mcp", "second"] });
@@ -146,10 +152,17 @@ describe("a pending MCP tool refuses until its server connects", () => {
 			applyMCPEnvironment({ exaApiKeys: [] });
 			expect(exaKey()).toBeUndefined();
 		} finally {
+<<<<<<< HEAD
 			if (previous === undefined) delete Bun.env.EXA_API_KEY;
 			else Bun.env.EXA_API_KEY = previous;
 			if (previousOrigin === undefined) delete Bun.env.VEYYON_DOTENV_ORIGIN;
 			else Bun.env.VEYYON_DOTENV_ORIGIN = previousOrigin;
+=======
+			for (const [key, value] of restored) {
+				if (value === undefined) delete Bun.env[key];
+				else Bun.env[key] = value;
+			}
+>>>>>>> santhreal/main
 		}
 	});
 });

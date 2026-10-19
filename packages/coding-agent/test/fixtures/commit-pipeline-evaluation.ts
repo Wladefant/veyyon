@@ -46,7 +46,7 @@ function probeMessage(): AssistantMessage {
 		content: [{ type: "text", text: PROBE_MESSAGE }],
 		api: PROBE_API,
 		provider: "probe",
-		model: "probe-smol",
+		model: "probe-helper",
 		usage: {
 			input: 0,
 			output: 0,
@@ -90,8 +90,8 @@ try {
 		return stream;
 	});
 	const model = buildModel({
-		id: "probe-smol",
-		name: "Probe Smol",
+		id: "probe-helper",
+		name: "Probe Helper",
 		api: PROBE_API,
 		provider: "probe",
 		baseUrl: "http://127.0.0.1:9",

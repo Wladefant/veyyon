@@ -492,9 +492,12 @@ export interface CacheLookupResult<T> {
  * setting had no effect (Law 10). Falling back to the default is still the right
  * behaviour, so the fallback stays; it is just no longer quiet.
  */
+/** The settings the GitHub cache reads. */
+type CacheSettingPath = "github.cache.softTtlSec" | "github.cache.hardTtlSec" | "github.cache.enabled";
+
 function readCacheSetting<T extends number | boolean>(
 	settings: Settings | undefined,
-	key: string,
+	key: CacheSettingPath,
 	fallback: T,
 	accept: (value: unknown) => value is T,
 	expected: string,
@@ -502,7 +505,7 @@ function readCacheSetting<T extends number | boolean>(
 	if (!settings) return fallback;
 	let value: unknown;
 	try {
-		value = (settings as unknown as { get(k: string): unknown }).get(key);
+		value = settings.get(key);
 	} catch (error) {
 		logger.warn("Could not read a GitHub cache setting; using its default", {
 			key,
@@ -528,11 +531,11 @@ const isUsableNumber = (value: unknown): value is number =>
 	typeof value === "number" && Number.isFinite(value) && value >= 0;
 const isBoolean = (value: unknown): value is boolean => typeof value === "boolean";
 
-function readNumberSetting(settings: Settings | undefined, key: string, fallback: number): number {
+function readNumberSetting(settings: Settings | undefined, key: CacheSettingPath, fallback: number): number {
 	return readCacheSetting(settings, key, fallback, isUsableNumber, "a number of zero or more");
 }
 
-function readBooleanSetting(settings: Settings | undefined, key: string, fallback: boolean): boolean {
+function readBooleanSetting(settings: Settings | undefined, key: CacheSettingPath, fallback: boolean): boolean {
 	return readCacheSetting(settings, key, fallback, isBoolean, "true or false");
 }
 
