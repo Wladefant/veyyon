@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import type { spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
@@ -638,6 +638,98 @@ describe("terminal-control-transport", () => {
 
 			client.write("posix payload\n");
 			expect(await received.promise).toBe("posix payload\n");
+
+			server.close();
+		});
+	}
+
+	if (process.platform === "win32") {
+		it("runs real Windows named pipe broker with owner and SYSTEM ACL and verifies same-user delivery", async () => {
+			const pipeName = `veyyon-test-pipe-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			const endpoint = `\\\\.\\pipe\\${pipeName}`;
+
+			let serverSocket: TerminalSocket | undefined;
+			const server = await createWindowsPipeTransport(endpoint, socket => {
+				serverSocket = socket;
+			});
+			cleanupActions.push(() => server.close());
+
+			const client = net.connect(endpoint);
+			cleanupActions.push(() => client.destroy());
+
+			const clientConnected = Promise.withResolvers<void>();
+			client.once("connect", () => clientConnected.resolve());
+			await clientConnected.promise;
+
+			expect(serverSocket).toBeDefined();
+			serverSocket?.setEncoding("utf8");
+
+			const received = Promise.withResolvers<string>();
+			serverSocket?.on("data", chunk => {
+				received.resolve(chunk as string);
+			});
+
+			client.write("pipe roundtrip test\n");
+			expect(await received.promise).toBe("pipe roundtrip test\n");
+
+			const psCommand = `
+$client = [System.IO.Pipes.NamedPipeClientStream]::new('.', '${pipeName}', [System.IO.Pipes.PipeDirection]::InOut)
+$client.Connect(2000)
+$sec = $client.GetAccessControl()
+$owner = $sec.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+$isProtected = $sec.AreAccessRulesProtected
+$rules = @($sec.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]) | ForEach-Object {
+    [PSCustomObject]@{
+        Identity = $_.IdentityReference.Value
+        Rights = $_.PipeAccessRights.ToString()
+        Type = $_.AccessControlType.ToString()
+    }
+})
+$client.Dispose()
+[PSCustomObject]@{
+    Owner = $owner
+    IsProtected = $isProtected
+    Rules = $rules
+} | ConvertTo-Json -Compress
+`.trim();
+
+			const powershell = path.win32.join(
+				process.env.SystemRoot ?? "C:\\Windows",
+				"System32",
+				"WindowsPowerShell",
+				"v1.0",
+				"powershell.exe",
+			);
+			const cp = await new Promise<{ stdout: string; stderr: string; exitCode: number }>(resolve => {
+				const proc = spawn(powershell, ["-NoProfile", "-NonInteractive", "-Command", psCommand], {
+					windowsHide: true,
+				});
+				let stdout = "";
+				let stderr = "";
+				proc.stdout.on("data", d => (stdout += d.toString()));
+				proc.stderr.on("data", d => (stderr += d.toString()));
+				proc.on("close", code => resolve({ stdout, stderr, exitCode: code ?? 0 }));
+			});
+
+			expect(cp.exitCode).toBe(0);
+			const aclResult = JSON.parse(cp.stdout.trim());
+			expect(aclResult.IsProtected).toBe(true);
+			expect(aclResult.Rules.length).toBe(2);
+			const currentUserSid = aclResult.Owner;
+			expect(aclResult.Rules).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						Identity: currentUserSid,
+						Rights: "FullControl",
+						Type: "Allow",
+					}),
+					expect.objectContaining({
+						Identity: "S-1-5-18",
+						Rights: "FullControl",
+						Type: "Allow",
+					}),
+				]),
+			);
 
 			server.close();
 		});
