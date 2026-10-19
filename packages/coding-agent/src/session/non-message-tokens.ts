@@ -114,6 +114,21 @@ function prunesToolDescriptions(session: AgentSession): boolean {
 }
 
 /**
+ * Build the wire-schema fragment of one active tool per step, in the form the tool half of
+ * `session`'s reading counts. Each tool's first `parameters` read constructs its ArkType schema, so
+ * a caller that runs each step in its own event-loop turn spreads the build of every schema across
+ * turns instead of holding one turn for all of them, and the reading taken after the last step
+ * finds each fragment memoized.
+ */
+export function* toolSchemaWarmSteps(session: AgentSession): Generator<void, void, undefined> {
+	const prune = prunesToolDescriptions(session);
+	for (const tool of session.agent?.state?.tools ?? EMPTY_TOOLS) {
+		wireSchemaJsonFragment(tool, prune);
+		yield;
+	}
+}
+
+/**
  * Compute just the NON-MESSAGE token total: system prompt (with its skills
  * section subtracted, since skills are tokenized separately) + system context
  * (the rest of the system-prompt array) + tools + skills.

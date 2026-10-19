@@ -82,7 +82,7 @@ import {
 	type SessionHostBindings,
 } from "../../session/background-sessions";
 import { setImageDisplayProbe } from "../../session/image-visibility";
-import { isAtRestReadingDeferred, takeHeldAtRestReading } from "../../session/non-message-tokens";
+import { isAtRestReadingDeferred, takeHeldAtRestReading, toolSchemaWarmSteps } from "../../session/non-message-tokens";
 import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES } from "../../slash-commands/builtin-declarations";
 import { buildTuiBuiltinSlashCommands } from "../../slash-commands/builtin-registry";
 import type { SubcommandDef } from "../../slash-commands/types";
@@ -2464,8 +2464,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	/**
 	 * Take the at-rest reading the launch held, after the frame that draws the current edit. The
 	 * reading builds every active tool's schema, which the prompt the edit begins needs anyway; taking
-	 * it after the frame keeps the build out of the keystroke's echo. A session that is never edited or
-	 * prompted builds no schema.
+	 * it after the frame keeps the build out of the keystroke's echo. The schemas are built one tool
+	 * per event-loop turn before the reading is taken, so a key typed while they build is read
+	 * between two tools rather than after all of them. A host stopped before the last tool leaves the
+	 * reading held for the session's own first turn. A session that is never edited or prompted builds
+	 * no schema.
 	 */
 	#takeAtRestReadingAfterNextFrame(): void {
 		if (this.#atRestReadingQueued || !isAtRestReadingDeferred(this.session)) return;
@@ -2477,10 +2480,20 @@ export class InteractiveMode implements InteractiveModeContext {
 			previous?.();
 			if (fired) return;
 			fired = true;
-			setImmediate(() => {
+			const steps = toolSchemaWarmSteps(this.session);
+			const step = (): void => {
+				if (!this.isInitialized) {
+					this.#atRestReadingQueued = false;
+					return;
+				}
+				if (isAtRestReadingDeferred(this.session) && !steps.next().done) {
+					setImmediate(step);
+					return;
+				}
 				this.#atRestReadingQueued = false;
 				this.takeAtRestReading();
-			});
+			};
+			setImmediate(step);
 		};
 		this.ui.onFrameComposed = hook;
 	}
