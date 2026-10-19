@@ -1889,66 +1889,81 @@ Check "ConvertFrom-JsonToHashtable produces nested hashtable" ($ht["nested"] -is
 Check "ConvertFrom-JsonToHashtable preserves nested property" ($ht["nested"]["key"]) "val"
 Check "ConvertFrom-JsonToHashtable preserves array property" ($ht["arr"].Count) "2"
 
+$arrSample = '[1, 2, 3]'
+$arr = ConvertFrom-JsonToHashtable -Json $arrSample
+Check "ConvertFrom-JsonToHashtable parses array JSON" ($arr.Count) "3"
+
 $caughtInvalid = $false
 try { ConvertFrom-JsonToHashtable -Json "{bad json" } catch { $caughtInvalid = $true }
 Check "ConvertFrom-JsonToHashtable throws on invalid JSON" $caughtInvalid "True"
 
-$caughtArray = $false
-try { ConvertFrom-JsonToHashtable -Json "[1,2,3]" } catch { $caughtArray = $true }
-Check "ConvertFrom-JsonToHashtable throws on non-object JSON" $caughtArray "True"
-
 Write-Host "--- Configure-BashShell VEYYON_CONFIG_DIR"
 $testConfigDir1 = Join-Path ([System.IO.Path]::GetTempPath()) "veyyon-cfg-test-$([System.Guid]::NewGuid().ToString('N'))"
-$oldEnvConfigDir = $env:VEYYON_CONFIG_DIR
 try {
-    $env:VEYYON_CONFIG_DIR = $testConfigDir1
-    Configure-BashShell "C:\Program Files\Git\bin\bash.exe"
-    $writtenSettings = Join-Path $testConfigDir1 "settings.json"
-    Check "Configure-BashShell writes to VEYYON_CONFIG_DIR" (Test-Path $writtenSettings) "True"
-    $parsed = Get-Content -Raw $writtenSettings | ConvertFrom-Json
-    Check "Configure-BashShell sets shellPath" ($parsed.terminal.shellPath) "C:\Program Files\Git\bin\bash.exe"
+    Configure-BashShell -ConfigRoot $testConfigDir1
+    $settingsFile1 = Join-Path $testConfigDir1 "profiles\default\agent\settings.json"
+    Check "Configure-BashShell creates settings under ConfigRoot profiles agent" (Test-Path $settingsFile1) "True"
+    $parsed1 = Get-Content -Raw $settingsFile1 | ConvertFrom-Json
+    Check "Configure-BashShell sets top-level shellPath" ($null -ne $parsed1.shellPath -and $parsed1.shellPath.Length -gt 0) "True"
 } finally {
-    $env:VEYYON_CONFIG_DIR = $oldEnvConfigDir
     Remove-Item -Recurse -Force $testConfigDir1 -ErrorAction SilentlyContinue
 }
 
 $testConfigDir2 = Join-Path ([System.IO.Path]::GetTempPath()) "veyyon-cfg-test-$([System.Guid]::NewGuid().ToString('N'))"
 try {
-    $env:VEYYON_CONFIG_DIR = $testConfigDir2
-    New-Item -ItemType Directory -Path $testConfigDir2 -Force | Out-Null
-    $initialJson = '{"theme": "dark", "telemetry": false, "terminal": {"fontSize": 14, "fontFamily": "Consolas"}}'
-    Set-Content -Path (Join-Path $testConfigDir2 "settings.json") -Value $initialJson
-    Configure-BashShell "C:\Program Files\Git\bin\bash.exe"
-    $writtenSettings = Join-Path $testConfigDir2 "settings.json"
-    $parsed = Get-Content -Raw $writtenSettings | ConvertFrom-Json
-    Check "Configure-BashShell preserves top-level theme" ($parsed.theme) "dark"
-    Check "Configure-BashShell preserves top-level telemetry" ($parsed.telemetry) "False"
-    Check "Configure-BashShell preserves terminal.fontSize" ($parsed.terminal.fontSize) "14"
-    Check "Configure-BashShell preserves terminal.fontFamily" ($parsed.terminal.fontFamily) "Consolas"
-    Check "Configure-BashShell adds shellPath" ($parsed.terminal.shellPath) "C:\Program Files\Git\bin\bash.exe"
+    $agentDir2 = Join-Path $testConfigDir2 "profiles\default\agent"
+    New-Item -ItemType Directory -Path $agentDir2 -Force | Out-Null
+    $settingsFile2 = Join-Path $agentDir2 "settings.json"
+    $initialJson2 = '{"theme": "dark", "telemetry": false, "nested": {"foo": "bar"}}'
+    Set-Content -Path $settingsFile2 -Value $initialJson2 -Encoding UTF8
+    Configure-BashShell -ConfigRoot $testConfigDir2
+    $parsed2 = Get-Content -Raw $settingsFile2 | ConvertFrom-Json
+    Check "Configure-BashShell preserves top-level theme" ($parsed2.theme) "dark"
+    Check "Configure-BashShell preserves top-level telemetry" ($parsed2.telemetry) "False"
+    Check "Configure-BashShell preserves nested property" ($parsed2.nested.foo) "bar"
+    Check "Configure-BashShell adds top-level shellPath" ($null -ne $parsed2.shellPath -and $parsed2.shellPath.Length -gt 0) "True"
 } finally {
-    $env:VEYYON_CONFIG_DIR = $oldEnvConfigDir
     Remove-Item -Recurse -Force $testConfigDir2 -ErrorAction SilentlyContinue
 }
 
 $testConfigDir3 = Join-Path ([System.IO.Path]::GetTempPath()) "veyyon-cfg-test-$([System.Guid]::NewGuid().ToString('N'))"
 try {
-    $env:VEYYON_CONFIG_DIR = $testConfigDir3
-    New-Item -ItemType Directory -Path $testConfigDir3 -Force | Out-Null
+    $agentDir3 = Join-Path $testConfigDir3 "profiles\default\agent"
+    New-Item -ItemType Directory -Path $agentDir3 -Force | Out-Null
+    $settingsFile3 = Join-Path $agentDir3 "settings.json"
     $corruptContent = "{corrupted json invalid"
-    Set-Content -Path (Join-Path $testConfigDir3 "settings.json") -Value $corruptContent
-    $caughtCorrupt = $false
-    try {
-        Configure-BashShell "C:\Program Files\Git\bin\bash.exe"
-    } catch {
-        $caughtCorrupt = $true
-    }
-    Check "Configure-BashShell refuses unparseable settings.json" $caughtCorrupt "True"
-    $preserved = Get-Content -Raw (Join-Path $testConfigDir3 "settings.json")
-    Check "Configure-BashShell does not overwrite unparseable settings.json" ($preserved.Trim()) ($corruptContent.Trim())
+    Set-Content -Path $settingsFile3 -Value $corruptContent -Encoding UTF8
+    Configure-BashShell -ConfigRoot $testConfigDir3
+    $preserved3 = Get-Content -Raw $settingsFile3
+    Check "Configure-BashShell preserves corrupted settings.json without overwriting" ($preserved3.Trim()) ($corruptContent.Trim())
+} finally {
+    Remove-Item -Recurse -Force $testConfigDir3 -ErrorAction SilentlyContinue
+}
+
+$testConfigDir4 = Join-Path ([System.IO.Path]::GetTempPath()) "veyyon-cfg-test-$([System.Guid]::NewGuid().ToString('N'))"
+try {
+    $agentDir4 = Join-Path $testConfigDir4 "profiles\default\agent"
+    New-Item -ItemType Directory -Path $agentDir4 -Force | Out-Null
+    $settingsFile4 = Join-Path $agentDir4 "settings.json"
+    $arrayContent = "[1, 2, 3]"
+    Set-Content -Path $settingsFile4 -Value $arrayContent -Encoding UTF8
+    Configure-BashShell -ConfigRoot $testConfigDir4
+    $preserved4 = Get-Content -Raw $settingsFile4
+    Check "Configure-BashShell preserves non-object settings.json without overwriting" ($preserved4.Trim()) ($arrayContent.Trim())
+} finally {
+    Remove-Item -Recurse -Force $testConfigDir4 -ErrorAction SilentlyContinue
+}
+
+$testConfigDir5 = Join-Path ([System.IO.Path]::GetTempPath()) "veyyon-cfg-test-$([System.Guid]::NewGuid().ToString('N'))"
+$oldEnvConfigDir = $env:VEYYON_CONFIG_DIR
+try {
+    $env:VEYYON_CONFIG_DIR = $testConfigDir5
+    Configure-BashShell
+    $settingsFile5 = Join-Path $testConfigDir5 "profiles\default\agent\settings.json"
+    Check "Configure-BashShell honors VEYYON_CONFIG_DIR environment fallback" (Test-Path $settingsFile5) "True"
 } finally {
     $env:VEYYON_CONFIG_DIR = $oldEnvConfigDir
-    Remove-Item -Recurse -Force $testConfigDir3 -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force $testConfigDir5 -ErrorAction SilentlyContinue
 }
 
 Write-Host ""

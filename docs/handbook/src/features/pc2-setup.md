@@ -109,7 +109,10 @@ It refuses unparseable or conflicting configuration rather than overwriting it.
 It never deletes sessions, databases, files or valid configuration.
 The wrapper writes an atomic start marker before binary placement.
 An interrupted installation may resume on rerun, while directories with unrelated files or mismatched markers are refused.
-On completion, both ownership receipts are committed atomically via temp files and rename, and the start marker is removed.
+On completion, each ownership receipt is committed individually atomically via temp file and rename.
+The two-file receipt pair is not one atomic operation.
+Retained start markers support recovery after partial receipt writes.
+The start markers are removed only after both receipts are committed.
 An install rerun accepts only matching ownership receipts and the original binary checksum.
 It skips reinstallation and preserves existing sessions. A changed release or binary requires explicit review.
 ## Update and conflict procedure

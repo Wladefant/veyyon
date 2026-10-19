@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 MARKER = ".veyyon-pc2-owner.json"
 START_MARKER = ".veyyon-pc2-start.json"
+TEMP_MARKER_PATTERN = re.compile(rf"^\.tmp-(?:{re.escape(START_MARKER)}|{re.escape(MARKER)})-\d+$")
 
 def assert_plain_path(target):
     for parent in (target, *target.parents):
@@ -111,6 +112,30 @@ def is_resumable_install(version, install_dir, config_dir):
 
     return True
 
+def clean_interrupted_temp_markers(version, install_dir, config_dir):
+    expected = {"version": version, "installDir": str(install_dir), "configDir": str(config_dir)}
+    for target in (install_dir, config_dir):
+        if not target.exists():
+            continue
+        assert_plain_path(target)
+        entries = list(target.iterdir())
+        for entry in entries:
+            assert_plain_path(entry)
+        temp_markers = [e for e in entries if e.is_file() and TEMP_MARKER_PATTERN.fullmatch(e.name)]
+        other_entries = [e for e in entries if not (e.is_file() and TEMP_MARKER_PATTERN.fullmatch(e.name))]
+        if temp_markers and not other_entries:
+            for temp_file in temp_markers:
+                temp_file.unlink()
+        elif temp_markers and other_entries:
+            start_file = target / START_MARKER
+            if start_file.exists():
+                try:
+                    if json.loads(start_file.read_text(encoding="utf-8")) == expected:
+                        for temp_file in temp_markers:
+                            temp_file.unlink()
+                except (json.JSONDecodeError, OSError):
+                    pass
+
 
 def record_install(version, install_dir, config_dir):
     install_dir = Path(install_dir).absolute()
@@ -140,6 +165,7 @@ def install_plan(version, install_dir, config_dir, script):
     overrides = {"VEYYON_INSTALL_DIR": str(install_dir), "VEYYON_CONFIG_DIR": str(config_dir)}
     if owned_install(version, install_dir, config_dir):
         return [], overrides
+    clean_interrupted_temp_markers(version, install_dir, config_dir)
     if not is_resumable_install(version, install_dir, config_dir):
         for target in (install_dir, config_dir):
             if target.exists() and any(target.iterdir()):

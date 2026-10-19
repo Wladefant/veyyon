@@ -825,7 +825,10 @@ function Configure-BashShell {
                 } catch {
                     throw "Failed to parse existing settings from $settingsFile ($($_.Exception.Message)). Refusing to overwrite existing settings."
                 }
-                if ($settings -is [System.Collections.IDictionary] -and $settings.ContainsKey("shellPath") -and $settings["shellPath"]) {
+                if ($settings -isnot [System.Collections.IDictionary]) {
+                    throw "Settings in $settingsFile is not a JSON object. Refusing to overwrite existing settings."
+                }
+                if ($settings.ContainsKey("shellPath") -and $settings["shellPath"]) {
                     Write-Host "Bash shell already configured: $($settings["shellPath"])" -ForegroundColor Cyan
                     return
                 }

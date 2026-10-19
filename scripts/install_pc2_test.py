@@ -172,6 +172,87 @@ class PC2InstallContract(unittest.TestCase):
 
             self.assertFalse(installer.owned_install("v1.2.3", binary_dir, config_dir))
 
+    def test_interrupted_first_start_marker_temp_file_resumes(self):
+        with tempfile.TemporaryDirectory() as root:
+            binary_dir = Path(root) / "bin"
+            config_dir = Path(root) / "config"
+            binary_dir.mkdir(parents=True)
+            temp_file = binary_dir / f".tmp-{installer.START_MARKER}-12345"
+            temp_file.write_text("interrupted start payload", encoding="utf-8")
+            command, env = installer.install_plan("v1.2.3", binary_dir, config_dir, "install.ps1")
+            self.assertTrue(len(command) > 0)
+            self.assertFalse(temp_file.exists())
+
+    def test_interrupted_second_start_marker_temp_file_resumes(self):
+        with tempfile.TemporaryDirectory() as root:
+            binary_dir = Path(root) / "bin"
+            config_dir = Path(root) / "config"
+            binary_dir.mkdir(parents=True)
+            config_dir.mkdir(parents=True)
+            start_payload = {"version": "v1.2.3", "installDir": str(binary_dir), "configDir": str(config_dir)}
+            (binary_dir / installer.START_MARKER).write_text(installer.json.dumps(start_payload), encoding="utf-8")
+            (binary_dir / "veyyon.partial").write_text("partial download", encoding="utf-8")
+            temp_file = config_dir / f".tmp-{installer.START_MARKER}-67890"
+            temp_file.write_text("interrupted start payload", encoding="utf-8")
+            command, env = installer.install_plan("v1.2.3", binary_dir, config_dir, "install.ps1")
+            self.assertTrue(len(command) > 0)
+            self.assertFalse(temp_file.exists())
+
+    def test_foreign_file_alongside_temp_marker_fails_closed(self):
+        with tempfile.TemporaryDirectory() as root:
+            binary_dir = Path(root) / "bin"
+            config_dir = Path(root) / "config"
+            binary_dir.mkdir(parents=True)
+            temp_file = binary_dir / f".tmp-{installer.START_MARKER}-12345"
+            temp_file.write_text("temp", encoding="utf-8")
+            foreign = binary_dir / "unrelated.txt"
+            foreign.write_text("foreign content", encoding="utf-8")
+            with self.assertRaises(ValueError) as ctx:
+                installer.install_plan("v1.2.3", binary_dir, config_dir, "install.ps1")
+            self.assertIn("Use empty directories or this installer's verified owned directories", str(ctx.exception))
+            self.assertTrue(temp_file.exists())
+            self.assertTrue(foreign.exists())
+
+    def test_arbitrary_temp_file_fails_closed(self):
+        with tempfile.TemporaryDirectory() as root:
+            binary_dir = Path(root) / "bin"
+            config_dir = Path(root) / "config"
+            binary_dir.mkdir(parents=True)
+            arbitrary_temp = binary_dir / ".tmp-random-file-12345"
+            arbitrary_temp.write_text("not our temp marker", encoding="utf-8")
+            with self.assertRaises(ValueError) as ctx:
+                installer.install_plan("v1.2.3", binary_dir, config_dir, "install.ps1")
+            self.assertIn("Use empty directories or this installer's verified owned directories", str(ctx.exception))
+            self.assertTrue(arbitrary_temp.exists())
+
+    def test_symlink_matching_temp_marker_pattern_fails_closed(self):
+        with tempfile.TemporaryDirectory() as root:
+            binary_dir = Path(root) / "bin"
+            config_dir = Path(root) / "config"
+            binary_dir.mkdir(parents=True)
+            temp_path = binary_dir / f".tmp-{installer.START_MARKER}-12345"
+            temp_path.write_text("data", encoding="utf-8")
+            orig_lstat = Path.lstat
+            def mock_lstat(path_obj):
+                if path_obj.name == temp_path.name:
+                    return SimpleNamespace(st_file_attributes=0x400, st_mode=0o120777)
+                return orig_lstat(path_obj)
+            with patch.object(Path, "lstat", side_effect=mock_lstat):
+                with self.assertRaisesRegex(ValueError, "Paths must not contain symlinks"):
+                    installer.install_plan("v1.2.3", binary_dir, config_dir, "install.ps1")
+            self.assertTrue(temp_path.exists())
+
+    def test_interrupted_owner_receipt_temp_file_with_valid_start_marker_resumes(self):
+        with tempfile.TemporaryDirectory() as root:
+            binary_dir = Path(root) / "bin"
+            config_dir = Path(root) / "config"
+            installer.record_start("v1.2.3", binary_dir, config_dir)
+            temp_owner = binary_dir / f".tmp-{installer.MARKER}-99999"
+            temp_owner.write_text("partial owner receipt", encoding="utf-8")
+            command, env = installer.install_plan("v1.2.3", binary_dir, config_dir, "install.ps1")
+            self.assertTrue(len(command) > 0)
+            self.assertFalse(temp_owner.exists())
+
     def test_windows_junction_attribute_refuses_before_writes(self):
         with patch.object(Path, "lstat", return_value=SimpleNamespace(st_file_attributes=0x400, st_mode=0o040755)):
             with self.assertRaises(ValueError):
