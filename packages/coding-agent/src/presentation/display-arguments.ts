@@ -13,7 +13,6 @@
  */
 
 import type { AnyAgentTool } from "@veyyon/agent-core";
-import type { Tool } from "@veyyon/ai";
 import { toolWireSchema } from "@veyyon/ai/utils/schema/wire";
 import { isRecord } from "@veyyon/utils/type-guards";
 
@@ -134,7 +133,7 @@ export function displayArguments(tool: AnyAgentTool | undefined, args: unknown):
 	if (!tool?.parameters || !isRecord(args)) return args;
 	let schema: Record<string, unknown>;
 	try {
-		schema = toolWireSchema(tool as unknown as Tool);
+		schema = toolWireSchema(tool);
 	} catch {
 		return args;
 	}

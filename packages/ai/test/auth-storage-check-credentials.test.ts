@@ -21,6 +21,11 @@
  *      bearer for every row, runs independently of the usage probe (i.e. it
  *      still runs for providers without a validating `UsageProvider`), but is
  *      skipped when OAuth refresh fails.
+ *   8. Every row's usage and completion deadlines are cancelled when the row
+ *      ends, a caller abort stops the check before the next row, and the
+ *      returned report omits the provider's raw response.
+ *
+ * Subject: `auth-storage/usage-reporting.ts`, driven through `AuthStorage.checkCredentials`.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import {
@@ -592,6 +597,98 @@ describe("AuthStorage.checkCredentials", () => {
 				expect(input.credential.refreshToken).toBe(REMOTE_REFRESH_SENTINEL);
 				expect(input.credential.accessToken).toBe("oat-13");
 			}
+		} finally {
+			storage.close();
+		}
+	});
+});
+
+/**
+ * Each row gets its own usage deadline and, with a completion probe, its own completion deadline.
+ * Both are timers that must end with the row: a check over many rows otherwise leaves one armed
+ * timer per row for the full timeout after it returns.
+ */
+describe("a credential health check's deadlines and abort", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+	});
+
+	function anthropicStorage(rows: StoredAuthCredential[], refresh?: AuthCredentialStore["refreshOAuthCredential"]) {
+		return new AuthStorage(makeStore(rows, refresh), {
+			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
+		});
+	}
+
+	it("leaves no row deadline armed after probing usage and completion", async () => {
+		vi.useFakeTimers();
+		const storage = anthropicStorage([oauthRow(1, "a@example.com"), oauthRow(2, "b@example.com")]);
+		await storage.reload();
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockResolvedValue({
+			provider: "anthropic",
+			fetchedAt: 0,
+			limits: [],
+		});
+		try {
+			const before = vi.getTimerCount();
+			const results = await storage.checkCredentials({ completionProbe: async () => ({ ok: true }) });
+			expect({ ok: results.map(result => result.ok), armed: vi.getTimerCount() - before }).toEqual({
+				ok: [true, true],
+				armed: 0,
+			});
+		} finally {
+			storage.close();
+		}
+	});
+
+	it("leaves no row deadline armed after a refresh the provider refused", async () => {
+		vi.useFakeTimers();
+		const storage = anthropicStorage([oauthRow(3, "c@example.com", { expired: true })], async () => {
+			throw new Error("invalid_grant: refresh token revoked");
+		});
+		await storage.reload();
+		try {
+			const before = vi.getTimerCount();
+			const [result] = await storage.checkCredentials();
+			expect({ ok: result.ok, armed: vi.getTimerCount() - before }).toEqual({ ok: false, armed: 0 });
+		} finally {
+			storage.close();
+		}
+	});
+
+	it("stops before the next row once the caller aborts", async () => {
+		const controller = new AbortController();
+		const probed: string[] = [];
+		const storage = anthropicStorage([oauthRow(1, "a@example.com"), oauthRow(2, "b@example.com")]);
+		await storage.reload();
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async params => {
+			probed.push(params.credential.type === "oauth" ? (params.credential.accessToken ?? "") : "");
+			controller.abort(new Error("caller went away"));
+			return { provider: "anthropic", fetchedAt: 0, limits: [] };
+		});
+		try {
+			const outcome = await storage.checkCredentials({ signal: controller.signal }).then(
+				() => "finished",
+				(error: Error) => error.message,
+			);
+			expect({ outcome, probed }).toEqual({ outcome: "caller went away", probed: ["oat-1"] });
+		} finally {
+			storage.close();
+		}
+	});
+
+	it("returns the usage report without the provider's raw response", async () => {
+		const storage = anthropicStorage([oauthRow(1, "a@example.com")]);
+		await storage.reload();
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockResolvedValue({
+			provider: "anthropic",
+			fetchedAt: 0,
+			limits: [],
+			raw: { body: "upstream bytes" },
+		});
+		try {
+			const [result] = await storage.checkCredentials();
+			expect(result.report).toEqual({ provider: "anthropic", fetchedAt: 0, limits: [] });
 		} finally {
 			storage.close();
 		}

@@ -1,6 +1,6 @@
 import type { Rule } from "../../../../discovery/capability/rule";
 import { withIcon } from "../../../../theme/icon-label";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { actionKeyHint } from "../../utils/key-hint";
 import { type TranscriptNote, TranscriptNoteComponent } from "./transcript-note";
 

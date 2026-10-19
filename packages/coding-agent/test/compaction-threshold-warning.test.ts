@@ -28,7 +28,7 @@ import { TempDir } from "@veyyon/utils";
  * because a model-independent amount is a legal choice that a larger model still
  * honors in full; and its numbers name the real trigger.
  *
- * These tests drive the real session path (agent_end -> #checkCompaction ->
+ * These tests drive the real session path (agent_end -> TurnContextCheck.check ->
  * #noticeCompactionThresholdClamp -> emitNotice) with a turn whose usage sits
  * below every threshold under test, so no compaction runs and the notices are the
  * only observable. The 200k window and the unset reserve put the auto point at
@@ -124,7 +124,7 @@ describe("compaction threshold clamp warning", () => {
 		const assistantMsg = modestUsageAssistant();
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
-		// #checkCompaction is a tracked async task; waitForIdle flushes it, which
+		// TurnContextCheck.check is a tracked async task; waitForIdle flushes it, which
 		// is what makes the "no warning" assertions below meaningful.
 		await session.waitForIdle();
 	}

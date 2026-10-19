@@ -4,6 +4,8 @@ import { removeWithRetries } from "@veyyon/utils";
  * the editor's `onLargePaste` hook routes through `InputController.handleLargePaste`, which offers
  * to attach the text as an `<attachment>` block, save it to a `local://` file, or paste it inline.
  * Below the threshold (or when disabled) the editor keeps its default collapse-to-`[Paste]`-marker behavior.
+ *
+ * Subject: `modes/terminal/controllers/composer-paste.ts`, driven through `InputController`.
  */
 
 import { afterEach, describe, expect, it, vi } from "bun:test";
@@ -53,27 +55,24 @@ afterEach(() => {
 
 describe("InputController.handleLargePaste gate", () => {
 	it("declines and skips the menu below the threshold", () => {
-		const { controller } = createContext({ threshold: 100 });
-		const menu = vi.spyOn(controller, "presentLargePasteMenu").mockResolvedValue();
+		const { controller, spies } = createContext({ threshold: 100 });
 
 		expect(controller.handleLargePaste("x", 50)).toBe(false);
-		expect(menu).not.toHaveBeenCalled();
+		expect(spies.showHookSelector.mock.calls).toEqual([]);
 	});
 
 	it("declines when disabled (threshold 0), even for a huge paste", () => {
-		const { controller } = createContext({ threshold: 0 });
-		const menu = vi.spyOn(controller, "presentLargePasteMenu").mockResolvedValue();
+		const { controller, spies } = createContext({ threshold: 0 });
 
 		expect(controller.handleLargePaste("x", 5000)).toBe(false);
-		expect(menu).not.toHaveBeenCalled();
+		expect(spies.showHookSelector.mock.calls).toEqual([]);
 	});
 
 	it("intercepts and presents the menu at the threshold", () => {
-		const { controller } = createContext({ threshold: 100 });
-		const menu = vi.spyOn(controller, "presentLargePasteMenu").mockResolvedValue();
+		const { controller, spies } = createContext({ threshold: 100 });
 
 		expect(controller.handleLargePaste("payload", 100)).toBe(true);
-		expect(menu).toHaveBeenCalledWith("payload", 100);
+		expect(spies.showHookSelector.mock.calls.map(call => call[0])).toEqual(["Pasted 100 lines"]);
 	});
 });
 

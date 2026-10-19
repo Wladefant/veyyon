@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { ImageContent } from "@veyyon/ai";
-import { InputController, shouldSkipHistory } from "@veyyon/coding-agent/modes/terminal/controllers/input-controller";
+import { InputController } from "@veyyon/coding-agent/modes/terminal/controllers/input-controller";
+import { shouldSkipHistory } from "@veyyon/coding-agent/modes/terminal/controllers/prompt-submission";
 import { isQueuedMessageList, splitQueuedMessages } from "@veyyon/coding-agent/modes/terminal/queue-input";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { normalizeSubmittedPrompt } from "@veyyon/coding-agent/slash-commands/helpers/parse";

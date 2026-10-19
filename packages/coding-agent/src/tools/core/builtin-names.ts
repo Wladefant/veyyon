@@ -88,7 +88,7 @@ export type BuiltinToolName = (typeof BUILTIN_TOOL_NAMES)[number];
  * agent is FOR, as declared by its file-editing grant. It is not a security boundary and must never be
  * used as one; that is what the sandbox is for.
  *
- * NOT the same question as `MID_RUN_TODO_NUDGE_MUTATING_TOOLS` in `session/agent-session.ts`, which
+ * NOT the same question as `MID_RUN_TODO_NUDGE_MUTATING_TOOLS` in `session/nudges.ts`, which
  * counts what has LANDED as work and therefore does include `bash`. Two lists because there are two
  * questions; each is named for its own, and neither is a copy of the other.
  *

@@ -16,7 +16,7 @@ import * as path from "node:path";
 
 import { isEnoent } from "@veyyon/utils";
 
-import { isValidNameSegment } from "./types";
+import { isValidNameSegment } from "../plugin-id";
 
 // Reject anything that could be used for path traversal or shell injection in
 // version strings. Only printable, unambiguous characters are allowed.

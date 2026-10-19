@@ -15,7 +15,7 @@ import { downloadSttModel, isSttModelCached } from "../speech/stt/downloader";
 import { isSttModelKey, STT_MODEL_OPTIONS } from "../speech/stt/models";
 import { detectRecorder, ensureRecorder } from "../speech/stt/recorder";
 import { downloadTtsModel, isTtsLocalModelKey, isTtsModelCached, TTS_LOCAL_MODEL_OPTIONS } from "../speech/tts";
-import { theme } from "../theme/theme";
+import { theme } from "../theme/theme-binding";
 import { runInstallHealthChecks } from "./install-health";
 import { makeCoarseStepPrinter } from "./progress-line";
 import { selectSetupModel } from "./setup-model-picker";

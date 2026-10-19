@@ -15,7 +15,7 @@ import { isProviderEnabled } from "../../../../discovery";
 import { applyFilter, getKindDisplayName } from "../../../../extensibility/extension-state/state-manager";
 import type { ExtensionKind, ExtensionRow, ExtensionState } from "../../../../extensibility/extension-state/types";
 import { withIcon } from "../../../../theme/icon-label";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
 import {
 	clampSelection,

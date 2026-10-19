@@ -19,7 +19,7 @@ import type {
 	MCPSseServerConfig,
 	MCPStdioServerConfig,
 } from "../../../../mcp/types";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { shortenPath } from "../../../../tools/core/render-utils";
 import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
 import { computeModalDims, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
@@ -253,6 +253,14 @@ export class MCPAddWizard implements Component {
 	 * cancels the OAuth wait instead of stepping back through the form.
 	 */
 	#oauthAbort: AbortController | null = null;
+	/**
+	 * Generation of the asynchronous step change in progress: a connection check, the OAuth flow, and
+	 * the pause before the review step. Stepping back and dismissal advance it, so a check that
+	 * settles afterwards, or a pause that ends afterwards, leaves the step the wizard is on.
+	 */
+	#transition = 0;
+	/** The pending switch to the review step, cleared when its transition is abandoned. */
+	#reviewTimer: NodeJS.Timeout | undefined;
 
 	constructor(
 		onComplete: (name: string, config: MCPServerConfig) => void,
@@ -299,9 +307,29 @@ export class MCPAddWizard implements Component {
 		this.#hover.setMotion({ requestRender: cb, enabled: pointerMotionEnabled() });
 	}
 
-	/** Settle the pointer band so no timer outlives a dismissed wizard. */
+	/** Settle the pointer band and drop any pending step change, so no timer outlives a dismissed wizard. */
 	dispose(): void {
+		this.#abandonTransition();
 		this.#hover.dispose();
+	}
+
+	/** End the asynchronous step change in progress; its later results and timers change nothing. */
+	#abandonTransition(): number {
+		clearTimeout(this.#reviewTimer);
+		this.#reviewTimer = undefined;
+		return ++this.#transition;
+	}
+
+	/** Open the review step after `delayMs`; abandoning the transition first clears the timer. */
+	#openReviewAfter(delayMs: number): void {
+		clearTimeout(this.#reviewTimer);
+		this.#reviewTimer = setTimeout(() => {
+			this.#reviewTimer = undefined;
+			this.#currentStep = "confirm";
+			this.#selectedIndex = 0;
+			this.#renderStep();
+			this.#requestRender();
+		}, delayMs);
 	}
 
 	/**
@@ -839,6 +867,7 @@ export class MCPAddWizard implements Component {
 	}
 
 	#goBack(): void {
+		this.#abandonTransition();
 		// Navigate to previous step
 		switch (this.#currentStep) {
 			case "transport":
@@ -954,6 +983,7 @@ export class MCPAddWizard implements Component {
 	 * Test connection and automatically detect if auth is needed.
 	 */
 	async #testConnectionAndDetectAuth(): Promise<void> {
+		const transition = this.#abandonTransition();
 		const testConfig = this.#buildServerConfig();
 
 		if (!this.#onTestConnectionCallback) {
@@ -967,21 +997,19 @@ export class MCPAddWizard implements Component {
 		try {
 			// Try to connect - timeout is handled by the transport layer (5 seconds)
 			await this.#onTestConnectionCallback(testConfig);
+			if (transition !== this.#transition) return;
 
 			// Success! No auth required
+			this.#state.authMethod = "none";
 			this.#clearContent();
 			this.#contentContainer.addChild(new Text(theme.fg("success", "ok Connection successful!"), 0, 0));
 			this.#contentContainer.addChild(new Spacer(1));
 			this.#contentContainer.addChild(new Text("No authentication required", 0, 0));
 			this.#contentContainer.addChild(new Spacer(1));
-
-			setTimeout(() => {
-				this.#state.authMethod = "none";
-				this.#currentStep = "confirm";
-				this.#selectedIndex = 0;
-				this.#renderStep();
-			}, 1000);
+			this.#requestRender();
+			this.#openReviewAfter(1000);
 		} catch (error) {
+			if (transition !== this.#transition) return;
 			// Connection failed - check if it's an auth error
 			const authResult = analyzeAuthError(error as Error, this.#state.url);
 
@@ -999,12 +1027,14 @@ export class MCPAddWizard implements Component {
 					} catch {
 						// Ignore discovery failures and fallback to manual auth.
 					}
+					if (transition !== this.#transition) return;
 				}
 				if (oauth && !oauth.explicitScopes && authResult.resourceMetadataUrl) {
 					// JSON-error-body path skips `discoverOAuthEndpoints` when the body
 					// already carries endpoints, so scopes advertised only in the
 					// protected-resource metadata document never reach the grant.
 					const scopes = await fetchResourceMetadataScopes(authResult.resourceMetadataUrl);
+					if (transition !== this.#transition) return;
 					if (scopes) oauth = { ...oauth, scopes };
 				}
 
@@ -1036,6 +1066,7 @@ export class MCPAddWizard implements Component {
 				this.#contentContainer.addChild(new Spacer(1));
 				this.#currentStep = "apikey";
 				this.#renderStep();
+				this.#requestRender();
 			} else {
 				// Not an auth error - just a connection failure
 				const errorMsg = sanitize(errorMessage(error));
@@ -1045,13 +1076,9 @@ export class MCPAddWizard implements Component {
 				this.#contentContainer.addChild(new Text(errorMsg, 0, 0));
 				this.#contentContainer.addChild(new Spacer(1));
 				this.#contentContainer.addChild(new Text(theme.fg("muted", "Adding server anyway..."), 0, 0));
-
-				setTimeout(() => {
-					this.#state.authMethod = "none";
-					this.#currentStep = "confirm";
-					this.#selectedIndex = 0;
-					this.#renderStep();
-				}, 2000);
+				this.#state.authMethod = "none";
+				this.#requestRender();
+				this.#openReviewAfter(2000);
 			}
 		}
 	}
@@ -1244,16 +1271,7 @@ export class MCPAddWizard implements Component {
 			}
 			this.#requestRender();
 
-			// Move to scope selection after short delay
-			setTimeout(
-				() => {
-					this.#currentStep = "confirm";
-					this.#selectedIndex = 0;
-					this.#renderStep();
-					this.#requestRender();
-				},
-				healthPassed ? 1000 : 2000,
-			);
+			this.#openReviewAfter(healthPassed ? 1000 : 2000);
 		} catch (error) {
 			// User cancellation has its own neutral heading + tip; everything else
 			// keeps the "OAuth authentication failed" framing so the existing tips

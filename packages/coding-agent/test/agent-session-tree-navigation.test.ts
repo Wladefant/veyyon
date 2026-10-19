@@ -7,6 +7,8 @@
  * - Branch summarization during navigation
  * - Summary attachment at correct position in tree
  * - Abort handling during summarization
+ *
+ * Subject: `session/runtime/session-branch.ts`, driven through `AgentSession.navigateTree`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";

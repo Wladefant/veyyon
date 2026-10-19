@@ -80,7 +80,7 @@ export interface TodoSettingsSnapshot {
 	enabled: boolean;
 	/** `todo.reminders` — the stop-time ladder and the mid-run nudge. */
 	reminders: boolean;
-	/** `todo.reminders.max` — the stop-time escalation budget. */
+	/** `todo.reminderLimit` — the stop-time escalation budget. */
 	remindersMax: number;
 	/** `todo.eager` — whether a first-turn list is suggested, forced, or neither. */
 	eager: "default" | "preferred" | "always";

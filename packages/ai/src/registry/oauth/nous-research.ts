@@ -5,6 +5,7 @@ import type { FetchImpl } from "../../types";
 import { pollOAuthDeviceCodeFlow } from "./device-code";
 import { credentialExpiryFromExpiresIn, credentialExpiryFromJwtExp } from "./expiry";
 import { emitOAuthSuccessPage } from "./success-page";
+import { requireTokenResponseObject } from "./token-response";
 import type { OAuthController, OAuthCredentials } from "./types";
 
 export const NOUS_PORTAL_URL = "https://portal.nousresearch.com";
@@ -88,19 +89,12 @@ function containsScope(value: unknown, expected: string): boolean {
  * request as malformed when the Portal was never reached. The status is what happened, so a failed
  * response says so and keeps the parse failure as its cause.
  */
-async function responseJson<T>(response: Response, operation: string): Promise<T> {
+async function responseJson<T extends object>(response: Response, operation: string): Promise<T> {
+	let body: unknown;
 	try {
-		return (await response.json()) as T;
+		body = await response.json();
 	} catch (cause) {
-		if (!response.ok) {
-			const reason = response.statusText ? ` ${response.statusText}` : "";
-			throw new AIError.OAuthError(`Nous Portal ${operation} failed: ${response.status}${reason}`, {
-				kind: "http",
-				provider: PROVIDER_ID,
-				status: response.status,
-				cause,
-			});
-		}
+		if (!response.ok) throw failedResponse(response, operation, cause);
 		throw new AIError.OAuthError(`Nous Portal ${operation} returned invalid JSON`, {
 			kind: "validation",
 			provider: PROVIDER_ID,
@@ -108,6 +102,20 @@ async function responseJson<T>(response: Response, operation: string): Promise<T
 			cause,
 		});
 	}
+	// A failed response whose JSON is not an object carries no `error` field to read: the status is
+	// the whole fact, as with an unparsable body.
+	if (!response.ok && !isRecord(body)) throw failedResponse(response, operation);
+	return requireTokenResponseObject<T>(body, PROVIDER_ID, operation);
+}
+
+function failedResponse(response: Response, operation: string, cause?: unknown): AIError.OAuthError {
+	const reason = response.statusText ? ` ${response.statusText}` : "";
+	return new AIError.OAuthError(`Nous Portal ${operation} failed: ${response.status}${reason}`, {
+		kind: "http",
+		provider: PROVIDER_ID,
+		status: response.status,
+		cause,
+	});
 }
 
 function parseTokenResponse(payload: TokenResponse, refreshTokenFallback?: string): OAuthCredentials {
@@ -290,9 +298,11 @@ export async function loginNousResearch(options: OAuthController): Promise<OAuth
 	return credentials;
 }
 
+/** Refresh a Nous Portal token. `signal` aborts the token request. */
 export async function refreshNousResearchToken(
 	credentials: OAuthCredentials,
 	fetchImpl: FetchImpl = fetch,
+	signal?: AbortSignal,
 ): Promise<OAuthCredentials> {
 	const refreshToken = credentials.refresh.trim();
 	if (!refreshToken) {
@@ -312,6 +322,7 @@ export async function refreshNousResearchToken(
 				"x-nous-refresh-token": refreshToken,
 			},
 			body: new URLSearchParams({ grant_type: "refresh_token", client_id: NOUS_CLIENT_ID }),
+			signal,
 		});
 	} catch (cause) {
 		throw new AIError.OAuthError("Nous Portal token refresh request failed", {

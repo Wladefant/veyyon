@@ -1,6 +1,8 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
+import { getEnvApiKey } from "@veyyon/ai/env-api-key";
 import { PASTE_CODE_LOGIN_PROVIDERS } from "@veyyon/ai/registry";
 import {
 	getOAuthProviders,
@@ -10,7 +12,6 @@ import {
 } from "@veyyon/ai/registry/oauth";
 import * as anthropicOauth from "@veyyon/ai/registry/oauth/anthropic";
 import type { OAuthCredentials, OAuthProvider } from "@veyyon/ai/registry/oauth/types";
-import { getEnvApiKey } from "@veyyon/ai/stream";
 
 const FIXTURE_SOURCE = "provider-registry-test";
 const ENV_KEYS = [
@@ -96,7 +97,7 @@ describe("provider registry auth surface", () => {
 		const refreshed: OAuthCredentials = { refresh: "r2", access: "a2", expires: Date.now() + 120_000 };
 		const spy = vi.spyOn(anthropicOauth, "refreshAnthropicToken").mockResolvedValue(refreshed);
 		expect(await refreshOAuthToken("anthropic", creds)).toBe(refreshed);
-		expect(spy).toHaveBeenCalledWith("r");
+		expect(spy).toHaveBeenCalledWith("r", undefined, undefined);
 
 		await expect(refreshOAuthToken("nonexistent-provider" as OAuthProvider, creds)).rejects.toThrow(
 			"Unknown OAuth provider",

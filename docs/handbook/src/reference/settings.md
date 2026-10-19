@@ -1,6 +1,6 @@
 # Settings
 
-`veyyon` resolves settings from built-in defaults, a persistent profile config file, a small machine-global file, one-shot CLI overlays, and in-memory runtime overrides. When one repository needs a different provider set, model role, tool policy, or UI behavior than your profile defaults, use a `--config` overlay or a path-scoped array (see [Path-scoped arrays](#path-scoped-arrays)); both are covered below.
+`veyyon` resolves settings from built-in defaults, a persistent profile config file, a small machine-global file, one-shot CLI overlays, and in-memory runtime overrides. When one repository needs a different provider set, model, tool policy, or UI behavior than your profile defaults, use a `--config` overlay or a path-scoped array (see [Path-scoped arrays](#path-scoped-arrays)); both are covered below.
 
 A repository never configures the agent. A checked-in `.veyyon/config.yml` or `.veyyon/settings.json` in a working tree is not read, because a repository is content you may not have written. The only files a project contributes are context files (`AGENTS.md` / `CLAUDE.md`), which are prose the model reads, not settings; see [Context files](../context/context-files.md).
 
@@ -48,12 +48,16 @@ The nested form is the one this documentation uses and the one every write from
 `/settings` and `veyyon config set` produces. A flat key is expanded into the nested
 form when the file is read, so you can type it either way.
 
-Two rules cover the corners:
+These rules cover the corners:
 
 - If a setting is written **both** ways, the nested value wins, the flat key is
   dropped from the file the next time it is written, and a warning states both values.
 - A key this build does not recognize is left as written, whether or not it has
   dots in it. That keeps a config usable across versions and alongside other tools.
+- A value whose type does not match the setting's declaration is named in a startup
+  warning with the file to edit. An enum value outside its list reads as the setting's
+  default, except `tools.approvalMode`, which reads as `ask`; the warning states the
+  value in force.
 
 ## Reading and writing settings
 
@@ -140,7 +144,7 @@ built-in defaults  <-  profile config  <-  CLI overlays  <-  runtime overrides
 
 From highest to lowest:
 
-1. **Runtime overrides**: dedicated CLI flags and feature env vars applied in memory for the current process: `--model`, `--smol`, `--slow`, `--plan`, `--approval-mode`, `--auto-approve`/`--yolo`, `--hide-thinking`, `--advisor`, `--no-pty`, `--api-key`, and protocol-mode defaults. Never persisted.
+1. **Runtime overrides**: dedicated CLI flags and feature env vars applied in memory for the current process: `--model`, `--plan`, `--approval-mode`, `--auto-approve`/`--yolo`, `--hide-thinking`, `--advisor`, `--no-pty`, `--api-key`, and protocol-mode defaults. Never persisted.
 2. **CLI config overlays**: each `--config <file>`; later overlay files override earlier ones.
 3. **Profile settings**: `~/.veyyon/profiles/<name>/agent/config.yml`.
 4. **Built-in defaults**: from the settings schema.
@@ -153,9 +157,6 @@ Environment variables are **not** a single settings layer. Each is read by the f
 
 | Env var | Overrides setting | Notes |
 |---|---|---|
-| `VEYYON_SMOL_MODEL` | `modelRoles.smol` | Also exposed as `--smol`. |
-| `VEYYON_SLOW_MODEL` | `modelRoles.slow` | Also exposed as `--slow`. |
-| `VEYYON_PLAN_MODEL` | `modelRoles.plan` | Also exposed as `--plan`. |
 | `VEYYON_NO_PTY=1` | (disables PTY bash) | Equivalent to `--no-pty` for the process. |
 | `VEYYON_PY` | `eval.py` | `VEYYON_PY=0` disables the Python eval backend. |
 | `VEYYON_JS` | `eval.js` | `VEYYON_JS=0` disables the JavaScript eval backend. |
@@ -222,7 +223,7 @@ disabledProviders:
   - groq                # the overlay array REPLACES the profile array
 ```
 
-Array replacement is the most common surprise: the overlay's `disabledProviders` does not extend the profile list, it becomes the entire list for that process. The same applies to `enabledModels`, `cycleOrder`, `extensions`, and every other array-typed setting.
+Array replacement is the most common surprise: the overlay's `disabledProviders` does not extend the profile list, it becomes the entire list for that process. The same applies to `enabledModels`, `extensions`, and every other array-typed setting.
 
 ## Per-repository settings
 
@@ -303,31 +304,26 @@ Every key below is defined in the settings schema; `veyyon config list` shows th
 
 ### Models
 
-`modelRoles`, `modelTags`, and `cycleOrder` work together. Role values may include a thinking suffix (`:off`, `:auto`, `:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:max`). The same suffix works on `agent.model` and `compaction.model`, so any model slot can run at a chosen effort.
+`defaultModel` is the model a new session starts on. It is an ordered chain, written as a comma-separated string or a YAML list: the first entry that matches an available model is used, and later entries are its retry fallbacks. `/model` writes it when a choice is persisted; `--model` overrides it for one run and is never written back. Unset, a new session starts on an available model that has credentials.
 
-A suffix on a role use overrides the role's stored suffix. For example, if `modelRoles.slow` is `anthropic/claude-opus-5:low`, then `@slow:high` resolves to `anthropic/claude-opus-5:high`, not a double-suffixed model id.
+A model value may include a thinking suffix (`:off`, `:auto`, `:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:max`). The same suffix works on `agent.model`, `agent.helpers`, and `compaction.model`, so any model setting can run at a chosen effort.
 
-When you pick a role, agent, or compaction model in `/settings`, Veyyon opens a separate effort step only if that model exposes configurable effort. The first row, **Model default**, stores no suffix. The remaining rows contain `auto`, `off` when the model permits it, and only the model's catalog-defined effort variants. For example, a low/high Gemini model does not show medium or xhigh. A fixed-reasoning model skips the effort step. The **Default Model** picker is model-only: it stores a bare selector, and **Default Effort** is the one UI surface for its saved effort. Providers sometimes publish effort tiers as separate upstream model IDs. Veyyon collapses effort-only siblings into one logical model and routes the selected effort to the correct upstream ID.
+When you pick a helper, agent, or compaction model in `/settings`, Veyyon opens a separate effort step only if that model exposes configurable effort. The first row, **Model default**, stores no suffix. The remaining rows contain `auto`, `off` when the model permits it, and only the model's catalog-defined effort variants. For example, a low/high Gemini model does not show medium or xhigh. A fixed-reasoning model skips the effort step. The **Default Model** picker is model-only: it stores a bare selector, and **Default Effort** is the one UI surface for its saved effort. Providers sometimes publish effort tiers as separate upstream model IDs. Veyyon collapses effort-only siblings into one logical model and routes the selected effort to the correct upstream ID.
 
-`compaction.model` and `agent.model` are ordered chains. The first entry is the primary model and later entries are fallbacks. Enter edits the highlighted position, **Add fallback** appends a position, and Delete removes only the highlighted position. The settings rows show a stored effort as ` · high` instead of the raw `:high` suffix.
+`defaultModel`, `compaction.model`, and `agent.model` are ordered chains. The first entry is the primary model and later entries are fallbacks. Enter edits the highlighted position, **Add fallback** appends a position, and Delete removes only the highlighted position. The settings rows show a stored effort as ` · high` instead of the raw `:high` suffix.
 
-The model you are working with (the main conversation) is persisted as **`modelRoles.default`**. That slot is not a selectable role: it is hidden from role pickers and stripped from `cycleOrder` on load. In the code it has one name, `DEFAULT_MODEL_SLOT`, and `interactive` is accepted as an alias for it wherever a role is passed. Selectable built-ins: `smol`, `slow`, `vision`, `plan`, `designer`, `commit`, `tiny`, `advisor`. There is no `task` role: the model your agents run is configured in [Agents](#agents).
+Features that make model calls of their own (advisor, plan mode, image description, commit messages, session titles, memory, and others) read their model from `agent.helpers`; see [Agents](#agents). `app.model.cycleForward` (Ctrl+P) cycles the scoped models when `--models` is set, and the available models otherwise.
 
 ```yaml
-modelRoles:
-  default: anthropic/claude-sonnet-4-5   # interactive model (persisted default)
-  smol: openai/gpt-4.1-mini
-  slow: anthropic/claude-opus-4-5:high
-  vision: gemini/gemini-3-pro-preview
-  plan: anthropic/claude-opus-4-5
-  advisor: anthropic/claude-sonnet-4-5:medium
-
-cycleOrder:
-  - smol
-  - slow
+defaultModel: anthropic/claude-sonnet-4-5,openai/gpt-5   # session model, then its fallback
 
 agent:
   model: deepseek/deepseek-chat:high     # optional; unset means agents inherit your model; :effort optional
+  helpers:
+    vision:
+      model: gemini/gemini-3-pro-preview
+    plan:
+      model: anthropic/claude-opus-4-5
 
 compaction:
   model: openai/gpt-5-mini               # optional; else inherits your current model; may carry :effort
@@ -342,25 +338,23 @@ enabledModels:
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `modelRoles` | record | `{}` | Role name → model id. Interactive model uses key `default` (hidden in UI). Selectable built-ins: `smol`, `slow`, `vision`, `plan`, `designer`, `commit`, `tiny`, `advisor`. `tiny` is used for lightweight background tasks when set, else `@smol`. Launch: `--model` (interactive), `--smol`, `--slow`, `--plan`; advisor via `modelRoles.advisor` + `advisor.enabled` / `--advisor`. |
-| `modelTags` | record | `{}` | Custom role/tag metadata; can introduce additional roles. |
+| `defaultModel` | modelChain | unset | Model a new session starts on; later entries are its retry fallbacks. Written by `/model` and the Default Model row; `--model` overrides it for one run. |
 | `modelProviderOrder` | array | `[]` | Preferred provider order when a model id is ambiguous. |
-| `cycleOrder` | array | `["smol","slow"]` | Roles cycled by the model switcher (`app.model.cycleForward`, often Ctrl+P). The entry `default` is dropped on load. |
 | `enabledModels` | array | `[]` | Allow-list of models; supports [path-scoped entries](#path-scoped-arrays). Empty means all available models. |
 | `disabledProviders` | array | `[]` | Disabled model/discovery providers; supports path-scoped entries. See [above](#provider-and-source-disabling). |
 | `includeModelInPrompt` | boolean | `false` | Include the active model name in the system prompt. Off by default: the name sits in the cached prefix, so switching models re-prefills the whole block. |
 
-See [Models](./models-yml.md) for the `models.yml` schema and custom-provider definitions. Handbook: [Models, roles, and profiles](../using/roles-and-profiles.md) (under `docs/handbook/src/using/`).
+See [Models](./models-yml.md) for the `models.yml` schema and custom-provider definitions. Handbook: [Models, helpers, and profiles](../using/roles-and-profiles.md) (under `docs/handbook/src/using/`).
 
 ### Advisor
 
-The advisor is a second model that reviews each completed turn and can inject advice into the primary session. Assign a model with `modelRoles.advisor`, then enable it with `advisor.enabled` or by launching with the `--advisor` flag.
+The advisor is a second model that reviews each completed turn and can inject advice into the primary session. It runs the `advisor` helper (`agent.helpers.advisor`), which runs the session's model unless one is set in Agents → Roster → Helpers. Enable it with `advisor.enabled` or by launching with the `--advisor` flag.
 
 See [Advisor and WATCHDOG.md](../features/advisor.md) for runtime behavior, `WATCHDOG.md` discovery, and bounded catch-up semantics.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `advisor.enabled` | boolean | `false` | Enable the advisor runtime when `modelRoles.advisor` resolves to an available model. |
+| `advisor.enabled` | boolean | `false` | Enable the advisor runtime when the `advisor` helper resolves to an available model. |
 | `advisor.agents` | boolean | `false` | Also enable advisor runtimes for spawned task/eval agents. |
 | `advisor.syncBacklog` | enum | `off` | Bounded advisor catch-up delay: `off`, `1`, `3`, or `5`. The primary waits up to 30 seconds only while advisor backlog is at or above the threshold. |
 | `advisor.immuneTurns` | number | `3` | After a `concern`/`blocker` interrupts, route further concerns/blockers as non-interrupting asides for this many completed primary turns. |
@@ -384,7 +378,7 @@ remains in force until you clear it.
 Effort is resolved in this order, highest first:
 
 1. the current session's choice, from `/effort`, `/thinking`, or the cycle keybinding
-2. an explicit `:level` on the selector a role resolved through, e.g. `modelRoles.plan: anthropic/claude-opus-5:xhigh`
+2. an explicit `:level` on the selector the model resolved through, e.g. `agent.helpers.plan.model: anthropic/claude-opus-5:xhigh`
 3. the `defaultEffort` row for the model about to run
 4. the `defaultEffort` `*` row
 5. the model's own default, when nothing above is set
@@ -454,20 +448,15 @@ retry:
   modelFallback: true
   fallbackRevertPolicy: cooldown-expiry
   fallbackChains:
-    # Any role without an explicit chain inherits the "default" chain.
+    # The "default" chain follows the defaultModel primary. Selectors
+    # accept an optional thinking suffix, e.g. openai/gpt-5.5:low.
     default:
       - anthropic/claude-opus-4-5
       - openai/gpt-5.5
       - google/gemini-3-pro
-    # Per-role chains override the default (roles from `modelRoles`,
-    # including custom roles). Selectors accept an optional thinking
-    # suffix, e.g. openai/gpt-5.5:low.
-    smol:
-      - openai/gpt-5.5-mini
-      - anthropic/claude-haiku-4-5
     # Model-selector keys (any key containing "/") attach the chain to the
-    # model itself: it applies whenever that model is active, no matter
-    # which role it is assigned to, and survives role reassignment.
+    # model itself: it applies whenever that model is active, however it
+    # was selected.
     google/gemini-3-pro:
       - google-vertex/gemini-3-pro
     # A `provider/*` KEY covers every model of a provider: current or
@@ -487,10 +476,10 @@ retry:
 | `retry.baseDelayMs` | number | `500` | Initial backoff. |
 | `retry.maxDelayMs` | number | `300000` | Backoff ceiling (5 min). |
 | `retry.modelFallback` | boolean | `true` | Fall back to another model when one is unavailable. |
-| `retry.fallbackChains` | record | `{}` | Maps roles, model selectors, or `provider/*` wildcards to ordered fallback selectors. Keys containing `/` are model-oriented and win over roles: `provider/model-id` matches that exact model, `provider/*` matches every model of the provider. A `provider/*` *entry* keeps the failing model's id and swaps the provider. The `default` chain covers every assigned role without its own chain. Unknown models/providers or malformed chains are reported as config warnings at startup. |
+| `retry.fallbackChains` | record | `{}` | Maps `default`, model selectors, or `provider/*` wildcards to ordered fallback selectors. `provider/model-id` matches that exact model, and `provider/*` matches every model of the provider. A `provider/*` *entry* keeps the failing model's id and swaps the provider. The `default` chain applies while the `defaultModel` primary is active, or to any model when `defaultModel` is unset. Unknown models/providers or malformed chains are reported as config warnings at startup. |
 | `retry.fallbackRevertPolicy` | enum | `cooldown-expiry` | `cooldown-expiry` returns to the primary model once its suppression window ends; `never` stays on the fallback until switched manually. |
 
-When the active model keeps failing (429s, quota walls, provider outages) and `retry.modelFallback` is on, the session picks the chain that includes the failing model, by specificity: an exact `provider/model-id` key, then a `provider/*` wildcard, then the current role's chain, then `default`. It skips models whose selectors are still cooling down and switches for the rest of the turn. Agents get their own per-spawn chains when their agent definition lists multiple model patterns, the first resolvable pattern is primary and the rest become its fallbacks; there is no `agent:<name>` key in `fallbackChains`.
+When the active model keeps failing (429s, quota walls, provider outages) and `retry.modelFallback` is on, the session picks the chain that includes the failing model, by specificity: an exact `provider/model-id` key, then a `provider/*` wildcard, then `default`. It skips models whose selectors are still cooling down and switches for the rest of the turn. Agents get their own per-spawn chains when their agent definition lists multiple model patterns, the first resolvable pattern is primary and the rest become its fallbacks; there is no `agent:<name>` key in `fallbackChains`.
 
 ### Tools and approvals
 
@@ -507,7 +496,7 @@ tools:
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `tools.approvalMode` | enum | `auto` | Canonical: `plan` (read auto; write prompts with an active plan-mode session, otherwise write/exec denied), `ask` (nothing auto; every tier prompts, reads included), `ask-command` (read+write auto; exec prompt), `auto` (all tiers auto, with the per-tool, working-directory, credential and critical-call checks still prompting), `yolo` (all tiers auto). Legacy aliases still accepted: `always-ask` → `ask`, `write` and `auto-edit` → `ask-command`. Override per run with `--approval-mode` / `--auto-approve` / `--yolo`. |
+| `tools.approvalMode` | enum | `auto` | Canonical: `plan` (read auto; write prompts with an active plan-mode session, otherwise write/exec denied), `ask` (nothing auto; every tier prompts, reads included), `ask-command` (read+write auto; exec prompt), `auto` (all tiers auto, with the per-tool, working-directory, credential and critical-call checks still prompting), `yolo` (all tiers auto). Legacy aliases still accepted: `always-ask` → `ask`, `write` and `auto-edit` → `ask-command`. Any other value reads as `ask` and is named in a startup warning. Override per run with `--approval-mode` / `--auto-approve` / `--yolo`. |
 | `tools.approval` | record | `{}` | Per-tool policy keyed by tool name; each value is `allow`, `deny`, or `prompt`. Any other value denies that tool and is named in a startup warning. e.g. `veyyon config set tools.approval '{"bash":"prompt"}'`. |
 | `tools.discoveryMode` | enum | `auto` | `auto`, `off`, `mcp-only`, `all`. `all` hides non-essential built-ins and first-party heavyweight tools such as `generate_image` until the discovery search activates them. |
 | `tools.essentialOverride` | array | `[]` | Tool names kept available even when tools are narrowed. |
@@ -732,6 +721,7 @@ what each one runs on, is configured in the Agents row of this tab.
 | `agent.enabled` | boolean | `true` | The master switch. `false` removes agents entirely: no `task` tool, no delegation guidance. See above. |
 | `agent.delegation` | enum | `preferred` | `allowed`, `preferred`, `required`. How hard the prompt pushes; it never removes the ability to delegate. See above. |
 | `agent.agents` | record | `{}` | One row per agent: `enabled`, `model`, `thinkingLevel`, `maxNestedSpawnDepth`, and a nested `agents` row per level below. Edit in the Roster row of the Agents tab. Ignored while `agent.sharedModel` is on. |
+| `agent.helpers` | record | `{}` | One row per helper id (`advisor`, `plan`, `vision`, `commit`, `title`, `memory`, `autoThinking`, `unexpectedStop`, `speech`, `completion`): `model` (a chain) and `thinkingLevel`. Unset runs the session's model and effort. A chain that matches no available model leaves the feature without a model. Edit in the Helpers section of the Roster page. See [Models, helpers, and profiles](../using/roles-and-profiles.md#helpers). |
 | `agent.sharedModel` | boolean | `false` | Whether one model and effort apply to every agent. On, `agent.model` and `agent.thinkingLevel` apply and nothing per-agent is read. Off, each agent runs what its own Roster page sets. The first row of Roster; it has no row of its own on the tab. |
 | `agent.model` | modelChain | unset | The shared model chain, live only while `agent.sharedModel` is on. Tried in order, written as a comma-separated string or as a YAML list: the later entries are used when a run errors on the one in use. Unset means inherit: agents follow the model you are working with. May include a `:effort` suffix, and an explicit suffix wins over the agent's own default. A pattern that matches no model rejects the spawn rather than falling through to the next entry. Edit inside Roster. |
 | `agent.modelByDepth` | record | `{}` | One row per spawn depth (`"1"` is a direct child, `"2"` a grandchild), each a chain in the same shape as `agent.model`. Applies only while `agent.sharedModel` is off, and outranks the agent's own frontmatter for a spawn at that depth; other depths are unaffected. A row whose chain matches no model rejects the spawn and states the row. Edit in the Models by Depth row of the Agents tab. |
@@ -887,8 +877,8 @@ memory:
 | `compaction.enabled` | boolean | `true` | Automatic conversation compaction. |
 | `compaction.laneHandoffThresholdTokens` | number | `150000` | Context-token threshold for automatic assignment handoff on eligible expensive spawned agents. It is independent of automatic compaction; `0` disables it. |
 | `compaction.strategy` | enum | `summary` | The sole strategy. It rewrites old history into an in-place LLM summary. Stored legacy values migrate to `summary`; use `/handoff` for an explicit new-session transfer. |
-| `compaction.model` | modelChain | unset | Models for LLM compaction, tried in order, written as a comma-separated string or as a YAML list; unset inherits the model you are working with (`modelRoles.default`). Each may include a `:effort` suffix, applied on every compaction pass. A candidate that is unauthenticated, or whose window cannot hold the summary, is skipped and the next one runs. |
-| `compaction.modelFallbackStrategy` | enum | `auto` | What to try after `compaction.model` runs out. `auto` stays on models you named: the main model, its same-provider compaction sibling, then each model role. `any-model` goes further, to the largest-window model on any provider you hold credentials for, which can bill an account you were not using for this session. `configured-only` stops at the models you listed and fails with the reason. Compacting on anything but your first choice is reported in the session, once per reason. |
+| `compaction.model` | modelChain | unset | Models for LLM compaction, tried in order, written as a comma-separated string or as a YAML list; unset inherits the model you are working with. Each may include a `:effort` suffix, applied on every compaction pass. A candidate that is unauthenticated, or whose window cannot hold the summary, is skipped and the next one runs. |
+| `compaction.modelFallbackStrategy` | enum | `auto` | What to try after `compaction.model` runs out. `auto` stays on models you named: the main model, its same-provider compaction sibling, then `defaultModel`. `any-model` goes further, to the largest-window model on any provider you hold credentials for, which can bill an account you were not using for this session. `configured-only` stops at the models you listed and fails with the reason. Compacting on anything but your first choice is reported in the session, once per reason. |
 | `compaction.threshold` | string | `auto` | When auto-compaction triggers, with the unit in the value: `auto` uses `contextWindow - max(15% of contextWindow, reserveTokens)`; `85%` is a percent of the current model's window, so the trigger moves with the model; `170000` is an absolute token amount, the same trigger on every model. An absolute amount larger than the current model's window is honored up to `contextWindow - 1` and you get a one-time warning. Set it in `/settings` -> Model -> Auto-Compaction Threshold. |
 | `compaction.thresholdTokens` | number | `-1` | Retired, replaced by `compaction.threshold`. A value `> 0` in your global config is rewritten to `threshold: <amount>` on load and this key is dropped, so your trigger point does not change. Write an absolute amount as `threshold: 170000`. |
 | `compaction.thresholdPercent` | number | `-1` | Retired, replaced by `compaction.threshold`. A value `> 0` is rewritten to `threshold: <percent>%` on load (the token amount above wins when both are set) and this key is dropped. Write a percent as `threshold: 85%`. |
@@ -1064,6 +1054,12 @@ Applied whenever raw settings are loaded (profile config, `--config` overlays, a
 | `task.disabledAgents` | one row per agent in `agent.agents` |
 | `task.agentModelOverrides` | Dropped and reported; configure per-agent `model` and `thinkingLevel` under `agent.agents.<name>` with `agent.sharedModel: false`, or set `model:` in agent frontmatter. |
 | `modelRoles.task` | `agent.model` (the `task` role is retired) |
+| `modelRoles.default` (or `modelRoles.interactive`) | `defaultModel` |
+| `modelRoles.advisor`, `modelRoles.plan`, `modelRoles.vision` | `agent.helpers.<id>.model` of the same name |
+| `modelRoles.commit`, `modelRoles.tiny`, `modelRoles.smol` | `agent.helpers.<id>.model` for `commit` (`commit`, then `smol`), `title` (`tiny`, then `commit`, then `smol`), and `memory`, `autoThinking`, `unexpectedStop`, `speech` (`tiny`, then `smol`); an existing helper model wins |
+| `@role`, `pi/role` and `*` references in a model chain | the referenced role's models; an unset or self-referencing role is dropped and reported |
+| `modelRoles.slow`, custom roles, `cycleOrder`, `modelTags`, role-keyed `retry.fallbackChains` entries | dropped and reported |
+| `mnemopi.llmMode: smol` | `mnemopi.llmMode: online`, which runs the `memory` helper |
 | `hindsight.dynamicBankId: true` (nested or flat spelling) | `hindsight.scoping: per-project` when no scoping is set; `false` sets nothing; the old key is dropped |
 | `hindsight.agentName` (nested or flat spelling) | `hindsight.bankId` when no bankId is set and the name is not the product default; the old key is dropped |
 | `providers.parallelFetch` | removed; an emptied `providers:` section is removed with it |
@@ -1078,7 +1074,7 @@ That is the rule, not a malfunction: a working tree never configures the agent, 
 
 ### An array from my profile disappeared under an overlay
 
-Arrays replace; they do not append. If an overlay sets `disabledProviders`, `enabledModels`, `cycleOrder`, `extensions`, or any other array, include the **complete** desired value in the overlay, the profile array is fully replaced.
+Arrays replace; they do not append. If an overlay sets `disabledProviders`, `enabledModels`, `extensions`, or any other array, include the **complete** desired value in the overlay, the profile array is fully replaced.
 
 ### A provider is still available after editing config
 
@@ -1101,7 +1097,7 @@ That is what reset does: it deletes the key from the profile `config.yml` so the
 
 ### An environment variable beats my config
 
-Some settings (model roles, eval backends, tiny-model device/precision, auth broker, PTY) are overridable by env vars or CLI flags for per-machine convenience, and those take precedence over `config.yml`. Unset the variable or drop the flag to let the persisted value win. See [Environment overrides](#environment-overrides) and [Environment variables](./environment-complete.md).
+Some settings (the session model, eval backends, tiny-model device/precision, auth broker, PTY) are overridable by env vars or CLI flags for per-machine convenience, and those take precedence over `config.yml`. Unset the variable or drop the flag to let the persisted value win. See [Environment overrides](#environment-overrides) and [Environment variables](./environment-complete.md).
 
 ### `veyyon config set <key>` prints "Unknown setting"
 

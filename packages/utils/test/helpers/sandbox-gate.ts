@@ -122,7 +122,7 @@ export const SANDBOX_ENTRYPOINT = "bash scripts/test-sandbox/run.sh";
  * A four-character literal is the cheaper of the two couplings, and
  * `sandbox-gate-contracts.test.ts` asserts the two spellings agree.
  */
-const CONFIG_ROOT_PREFIX = ".veyyon";
+export const CONFIG_ROOT_PREFIX = ".veyyon";
 
 /** The conventional roots under which a human home sits, on the two platforms CI runs. */
 const HOME_ROOTS = ["/home", "/Users"] as const;

@@ -254,8 +254,11 @@ export interface AgentSessionConfig {
 	advisorStreamFn?: StreamFn;
 	/** Hint that OpenAI Codex requests should prefer websocket transport when supported. */
 	preferWebsockets?: boolean;
-	/** Provider payload hook used by the active session request path */
-	onPayload?: SimpleStreamOptions["onPayload"];
+	/**
+	 * The session's provider payload hook for the active request path, resolved per request;
+	 * `undefined` from it means no hook runs and the provider serializes the request once.
+	 */
+	payloadHook?: () => SimpleStreamOptions["onPayload"];
 	/** Provider response hook used by the active session request path */
 	onResponse?: SimpleStreamOptions["onResponse"];
 	/** Raw SSE hook used by the active session request path */
@@ -468,29 +471,6 @@ export interface ModelCycleResult {
 	thinkingLevel: ThinkingLevel | undefined;
 	/** Whether cycling through scoped models (--models flag) or all available */
 	isScoped: boolean;
-}
-
-/** Result from cycleRoleModels() */
-export interface RoleModelCycleResult {
-	model: Model;
-	thinkingLevel: ThinkingLevel | undefined;
-	role: string;
-}
-
-/** A configured role resolved to a concrete model, used by role cycling and
- *  the plan-approval model slider. */
-export interface ResolvedRoleModel {
-	role: string;
-	model: Model;
-	thinkingLevel?: ConfiguredThinkingLevel;
-	explicitThinkingLevel: boolean;
-}
-
-/** The set of resolvable role models plus the index of the currently active
- *  one within {@link ResolvedRoleModel.role} order. */
-export interface RoleModelCycle {
-	models: ResolvedRoleModel[];
-	currentIndex: number;
 }
 
 export interface ContextUsageBreakdown {

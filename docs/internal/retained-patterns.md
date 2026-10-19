@@ -3,7 +3,7 @@
 Product decision. Do not "clean up" the coordination + prompt keepers below. Do not confuse them with
 settings UX that was cut (model-selection matrix, role-based routing popups, replaced by the shipped
 model-slots-plus-3-knob-compaction design, see [Compaction & project memory](../handbook/src/context/compaction-memory.md)
-and [Models, roles, and profiles](../handbook/src/using/roles-and-profiles.md)).
+and [Models, helpers, and profiles](../handbook/src/using/roles-and-profiles.md)).
 
 This page is a keep/cut ledger carried forward from the pre-fork planning notes. The keep/cut
 *decisions* are sound; the module pointers below have been re-grounded on the real TypeScript tree,
@@ -21,9 +21,10 @@ These are genuinely good patterns. Refactors must preserve behavior.
    new session. Engineering detail:
    [`docs/internal/handoff-generation-pipeline.md`](./handoff-generation-pipeline.md).
 2. **Agent spawn model**: `packages/coding-agent/src/task/executor.ts` (spawn, soft
-   request-budget steering notice, background output capture) plus the session-wide spawn
-   concurrency semaphore in `packages/coding-agent/src/task/index.ts` (`agent.maxConcurrency`,
-   resized in place before every acquire), `packages/coding-agent/src/task/agents.ts` (bundled
+   request-budget steering notice, background output capture) plus the spawn concurrency
+   semaphore shared by a session tree in `packages/coding-agent/src/task/spawn-semaphore.ts`
+   (`agent.maxConcurrency`, resized on every acquire and release by
+   `packages/coding-agent/src/task/spawn-scheduler.ts`), `packages/coding-agent/src/task/agents.ts` (bundled
    agent definitions) and the `task` tool registered in
    `packages/coding-agent/src/tools/index.ts`.
 3. **Addressed inter-agent messaging**: the `irc` tool (`packages/coding-agent/src/tools/agent/irc.ts`,
@@ -52,11 +53,11 @@ These are **not** keepers. Do not preserve them when condensing settings; they w
 the shipped model-slots-plus-3-knob-compaction design (see [Compaction & project memory](../handbook/src/context/compaction-memory.md)).
 
 1. **Role-based model-selection matrix and per-role popups.** Superseded by the shipped design: the
-   interactive model via `/model`, plain `agent.model` and `compaction.model` fields in settings.
-   `default` is not a model or a role, see `packages/coding-agent/src/config/model-roles.ts` and
-   `packages/coding-agent/src/config/model-resolver.ts`.
+   interactive model via `/model` (`defaultModel`), plain `agent.model` and `compaction.model` fields,
+   and one row per feature under `agent.helpers`, see `packages/coding-agent/src/task/helper-settings.ts`
+   and `packages/coding-agent/src/config/model-resolver.ts`.
 2. **Silent per-role heuristic routing.** The primary model drives everything unless the plain
-   agent/compaction fields say otherwise; there is no hidden per-role auto-pick behind the scenes.
+   agent/compaction/helper fields say otherwise; there is no hidden per-role auto-pick behind the scenes.
 3. **Overlapping compaction settings UX.** Condensed to threshold, the fixed
    `summary` strategy, and an ordered model chain. See
    `packages/coding-agent/src/config/compaction-strategy.ts` and the `compaction.*`
@@ -81,4 +82,4 @@ the shipped model-slots-plus-3-knob-compaction design (see [Compaction & project
 handoff prompt, preserve behavior. If it touches model-routing *settings knobs*, follow the shipped
 model-slots design above, do not resurrect a role→model matrix because an old fork had one.
 
-*Verified against `63ffc8131ffb8d35ccbbb1c5de69531a7016eff4` on 2026-09-06.*
+*Verified against `577745ddc5` on 2026-10-14.*

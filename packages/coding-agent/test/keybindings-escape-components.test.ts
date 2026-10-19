@@ -71,11 +71,7 @@ describe("component escape bindings", () => {
 			throw new Error("Expected bundled model anthropic/claude-sonnet-4-5");
 		}
 
-		const settings = Settings.isolated({
-			modelRoles: {
-				default: `${model.provider}/${model.id}`,
-			},
-		});
+		const settings = Settings.isolated({ defaultModel: `${model.provider}/${model.id}` });
 		const modelRegistry = {
 			getAll: () => [model],
 			getAvailable: () => [model],
@@ -93,8 +89,8 @@ describe("component escape bindings", () => {
 		const onCancel = vi.fn();
 
 		const hub = new ModelHubComponent(ui, settings, modelRegistry, [{ model, thinkingLevel: "off" }], {
-			onAssign: () => {},
-			onUnassign: () => {},
+			onSetDefault: () => {},
+			onClearDefault: () => {},
 			onCancel,
 		});
 

@@ -3,7 +3,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { buildMemoryToolDeveloperInstructions, getMemoryRoot } from "@veyyon/coding-agent/memory/local";
+import { buildMemoryToolDeveloperInstructions } from "@veyyon/coding-agent/memory/local";
+import { getMemoryRoot } from "@veyyon/coding-agent/memory/paths";
 import { removeWithRetries } from "@veyyon/utils";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {

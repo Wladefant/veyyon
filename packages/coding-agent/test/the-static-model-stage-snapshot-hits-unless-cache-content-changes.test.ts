@@ -19,6 +19,10 @@
  * previous version, rebuilds instead of restoring models with a wrong or
  * missing compat.
  *
+ * The codec is `config/resolved-model-stage.ts`; every damaged field it validates (a future
+ * timestamp, a model record missing its identity, a discovery state with an unknown status, a
+ * non-string authoritative provider) rebuilds rather than restoring.
+ *
  * What it does not catch: a new fingerprint input that remains stable across
  * these launches while changing in production (none known).
  */
@@ -48,6 +52,7 @@ interface SnapshotStage {
 	compats: Record<string, unknown>[];
 	cachedStandard: { models: Array<Record<string, unknown>>; authoritativeFreshProviders: string[] };
 	cachedDiscoveries: Array<Record<string, unknown>>;
+	discoveryStates: Array<Record<string, unknown>>;
 }
 
 describe("static model stage snapshot", () => {
@@ -227,6 +232,57 @@ describe("static model stage snapshot", () => {
 
 		expect(mtime()).not.toBe(before);
 		expect(readSnapshot().stage.cachedStandard.models[0]!.compat).toBe(expected);
+	});
+
+	const discoveryState = (status: string): Record<string, unknown> => ({
+		provider: "scratch",
+		status,
+		optional: true,
+		stale: false,
+		models: ["scratch-model"],
+	});
+	/** A positive control first: a stage edited to a value the reader accepts restores without a rewrite. */
+	it("a stage edited to a discovery state the reader accepts restores without a rewrite", async () => {
+		await seededColdLaunch();
+		const { header, stage } = readSnapshot();
+		writeJsonSnapshotSync(snapshotPath, header.fingerprint, { ...stage, discoveryStates: [discoveryState("ok")] });
+		const before = mtime();
+
+		launch();
+
+		expect(mtime()).toBe(before);
+	});
+
+	const damagedRecords: Array<[string, (stage: SnapshotStage) => unknown]> = [
+		["a timestamp from the future", stage => ({ ...stage, createdAt: Date.now() + DAY_MS })],
+		[
+			"a model record without its api",
+			stage => {
+				delete stage.cachedStandard.models[0]!.api;
+				return stage;
+			},
+		],
+		["a discovery state with an unknown status", stage => ({ ...stage, discoveryStates: [discoveryState("bogus")] })],
+		[
+			"an authoritative provider that is not a string",
+			stage => ({
+				...stage,
+				cachedStandard: {
+					...stage.cachedStandard,
+					authoritativeFreshProviders: [...stage.cachedStandard.authoritativeFreshProviders, 7],
+				},
+			}),
+		],
+	];
+	it.each(damagedRecords)("a stage with %s rebuilds rather than restoring", async (_label, damage) => {
+		await seededColdLaunch();
+		const { header, stage } = readSnapshot();
+		writeJsonSnapshotSync(snapshotPath, header.fingerprint, damage(stage));
+		const before = mtime();
+
+		launch();
+
+		expect(mtime()).not.toBe(before);
 	});
 
 	const damagedTables: Array<[string, (stage: SnapshotStage) => unknown]> = [

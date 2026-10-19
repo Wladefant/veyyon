@@ -12,7 +12,7 @@ import { shareSession } from "../export/share";
 import { urlHyperlinkAlways } from "../modes/terminal/draw/hyperlink";
 import type { InteractiveModeContext } from "../modes/terminal/types";
 import { extractLastCodeBlock, extractLastCommand } from "../modes/terminal/utils/copy-targets";
-import { theme } from "../theme/theme";
+import { theme } from "../theme/theme-binding";
 import { copyToClipboard } from "../utils/clipboard";
 import type { BuiltinSlashCommandHandlers } from "./handler-types";
 import { CollabQrCodeComponent } from "./helpers/collab-qrcode";

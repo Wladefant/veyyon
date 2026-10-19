@@ -83,6 +83,7 @@ function harness(rows: AccountRow[]) {
 		onShowUsage: () => {},
 		onAddAccount: () => {},
 		onClearRateLimitBlock: row => cleared.push(row),
+		onForgetSignedOut: () => {},
 		onCancel: () => {},
 	};
 	const component = new AccountManagerComponent(inventory(rows), callbacks, { terminalHeight: 40 });

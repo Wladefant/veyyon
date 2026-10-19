@@ -59,7 +59,10 @@ describe("the advisor reads the project context files", () => {
 			modelRegistry,
 			advisorContextFiles: [FIRST],
 		});
-		session.settings.setModelRole("advisor", `${model.provider}/${model.id}`);
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			advisor: { model: `${model.provider}/${model.id}` },
+		});
 	});
 
 	afterEach(async () => {

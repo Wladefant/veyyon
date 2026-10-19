@@ -46,7 +46,7 @@ import type {
 } from "../shared-events";
 import type { HookTerminalCapability } from "../terminal-capability";
 
-// Re-export for backward compatibility
+// The argument and result types of `HookAPI.exec`, exported with the rest of the hook API.
 export type { ExecOptions, ExecResult } from "../../exec/exec";
 
 /**

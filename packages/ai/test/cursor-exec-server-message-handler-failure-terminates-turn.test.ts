@@ -26,7 +26,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import * as http2 from "node:http2";
 import { create, toBinary } from "@bufbuild/protobuf";
-import { buildGrepResultFromToolResult, streamCursor } from "@veyyon/ai/providers/cursor";
+import { streamCursor } from "@veyyon/ai/providers/cursor";
+import { buildGrepResultFromToolResult } from "@veyyon/ai/providers/cursor-exec-results";
 import { setProviderModuleOverrideForTest } from "@veyyon/ai/providers/register-builtins";
 import type {
 	AssistantMessage,

@@ -3,7 +3,7 @@ import { Container, Spacer, Text } from "@veyyon/tui";
 import { formatDuration, formatNumber } from "@veyyon/utils";
 import { tokensPerSecond } from "../../../../presentation/token-rate";
 import { withIcon } from "../../../../theme/icon-label";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { COMPOSER_INSET_COLS } from "../composer/composer-chrome";
 
 /**

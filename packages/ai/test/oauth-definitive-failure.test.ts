@@ -155,4 +155,43 @@ describe("isDefinitiveOAuthFailure", () => {
 			expect(isDefinitiveOAuthFailure(msg), msg).toBe(true);
 		}
 	});
+
+	/**
+	 * A 403 is access denial to the request until the token endpoint itself says otherwise. Cursor and
+	 * Google answer a dead grant with `403` and a JSON body `{"error":"invalid_grant"}`; when the status
+	 * text "Forbidden" rode along, the access-denial words outranked the code and the dead grant was
+	 * retried on every request instead of disabled once. The endpoint's own `error` member outranks the
+	 * prose; a transport fact still outranks both, and prose that merely mentions a code does not count.
+	 */
+	it("disables on a 403 whose JSON body states the grant is dead", () => {
+		for (const msg of [
+			'Cursor token refresh failed: 403 Forbidden {"error":"invalid_grant"}',
+			'Google Cloud token refresh failed: 403 Forbidden {"error": "invalid_token", "error_description": "x"}',
+			'xAI token refresh failed: 403 forbidden {"error":"unauthorized_client"}',
+			'details=403 Forbidden; body="{\\"error\\":\\"invalid_grant\\"}"',
+		]) {
+			expect(isDefinitiveOAuthFailure(msg), msg).toBe(true);
+		}
+	});
+
+	it("keeps a 403 transient when nothing but prose names a code", () => {
+		for (const msg of [
+			"403 Forbidden: upstream said invalid_grant",
+			'blocked by cloudflare (403): error="invalid_token"',
+			"403 PERMISSION_DENIED: refresh token revoked",
+			'403 Forbidden {"error":"access_denied"}',
+		]) {
+			expect(isDefinitiveOAuthFailure(msg), msg).toBe(false);
+		}
+	});
+
+	it("keeps a transport failure transient even when its body carries a JSON error code", () => {
+		for (const msg of [
+			'429 too many requests {"error":"invalid_grant"}',
+			'502 Bad Gateway {"error":"invalid_token"}',
+			'request timeout {"error":"unauthorized_client"}',
+		]) {
+			expect(isDefinitiveOAuthFailure(msg), msg).toBe(false);
+		}
+	});
 });

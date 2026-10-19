@@ -13,8 +13,8 @@
  * architecture gate there asserted the opposite and passed, because its resolution table did not know
  * this package's name (see `packages/utils/src/module-reach-workspace.ts`).
  *
- * Everything here is arithmetic over primitives and imports two clamps. `./compaction.ts` re-exports all
- * of it, so no caller changed.
+ * Everything here is arithmetic over primitives and imports two clamps. `@veyyon/agent-core/compaction`
+ * exports all of it.
  *
  * There used to be TWO settings on this single axis — `compaction.thresholdTokens`
  * (absolute) and `compaction.thresholdPercent` (percent of window) — both labelled
