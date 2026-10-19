@@ -51,12 +51,15 @@ function createFakeChild(): FakeChildProcess {
 }
 
 interface ParsedBrokerPipeSecurity {
+	constructorSecurityAssignment: string;
 	pipeCreationSecurityArg: string;
 	owner: string;
+	ownerSource: string;
 	isProtected: boolean;
 	preserveInheritance: boolean;
 	rules: Array<{
-		identity: string;
+		identityVar: string;
+		sidType: string;
 		rights: string;
 		type: string;
 	}>;
@@ -64,6 +67,16 @@ interface ParsedBrokerPipeSecurity {
 }
 
 function parseBrokerPipeSecurity(brokerScript: string): ParsedBrokerPipeSecurity {
+	const ctorMatch = brokerScript.match(
+		/public\s+VeyyonTerminalPipeBroker\s*\([^)]*\)\s*\{([\s\S]*?)\}/,
+	);
+	if (!ctorMatch) {
+		throw new Error("VeyyonTerminalPipeBroker constructor not found in broker script");
+	}
+	const ctorBody = ctorMatch[1];
+	const ctorSecAssign = ctorBody.match(/_pipeSecurity\s*=\s*([^;]+?);/);
+	const constructorSecurityAssignment = ctorSecAssign ? ctorSecAssign[1].trim() : "";
+
 	const instanceMatch = brokerScript.match(/new\s+NamedPipeServerStream\s*\(([\s\S]*?)\);/);
 	if (!instanceMatch) {
 		throw new Error("NamedPipeServerStream instantiation not found in broker script");
@@ -81,6 +94,15 @@ function parseBrokerPipeSecurity(brokerScript: string): ParsedBrokerPipeSecurity
 	}
 	const secBody = createSecurityMatch[1];
 
+	const identMatch = secBody.match(/var\s+identity\s*=\s*([^;]+?);/);
+	const ownerSource = identMatch ? identMatch[1].trim() : "";
+
+	const sidVarMap: Record<string, string> = {};
+	const sidDefRegex = /var\s+(\w+)\s*=\s*new\s+SecurityIdentifier\s*\(\s*([^,\s]+)\s*,\s*[^)]+\s*\);/g;
+	let sidMatch: RegExpExecArray | null;
+	while ((sidMatch = sidDefRegex.exec(secBody)) !== null) {
+		sidVarMap[sidMatch[1]] = sidMatch[2];
+	}
 	const ownerMatch = secBody.match(/security\.SetOwner\s*\(\s*([^)]+?)\s*\);/);
 	const owner = ownerMatch ? ownerMatch[1].trim() : "";
 
@@ -89,12 +111,20 @@ function parseBrokerPipeSecurity(brokerScript: string): ParsedBrokerPipeSecurity
 	const preserveInheritance = protMatch ? protMatch[2] === "true" : true;
 
 	const ruleRegex = /security\.AddAccessRule\s*\(\s*new\s+PipeAccessRule\s*\(([\s\S]*?)\)\s*\);/g;
-	const rules: Array<{ identity: string; rights: string; type: string }> = [];
+	const rules: Array<{ identityVar: string; sidType: string; rights: string; type: string }> = [];
 	let match: RegExpExecArray | null;
 	while ((match = ruleRegex.exec(secBody)) !== null) {
 		const ruleArgs = match[1].split(",").map(a => a.trim());
+		const identityVar = ruleArgs[0] ?? "";
+		let sidType = "unknown";
+		if (identityVar === "identity") {
+			sidType = ownerSource;
+		} else if (identityVar in sidVarMap) {
+			sidType = sidVarMap[identityVar];
+		}
 		rules.push({
-			identity: ruleArgs[0] ?? "",
+			identityVar,
+			sidType,
 			rights: ruleArgs[1] ?? "",
 			type: ruleArgs[2] ?? "",
 		});
@@ -105,15 +135,28 @@ function parseBrokerPipeSecurity(brokerScript: string): ParsedBrokerPipeSecurity
 		.map(r => {
 			const typeCode = r.type === "AccessControlType.Allow" ? "A" : "D";
 			const rightsCode = r.rights === "PipeAccessRights.FullControl" ? "GA" : "UNKNOWN";
-			const sidCode = r.identity === "systemSid" ? "SY" : r.identity;
+			let sidCode = "UNKNOWN";
+			if (r.identityVar === "identity" && r.sidType.includes("WindowsIdentity.GetCurrent().User")) {
+				sidCode = "identity";
+			} else if (r.sidType.includes("LocalSystemSid")) {
+				sidCode = "SY";
+			} else if (r.sidType.includes("WorldSid")) {
+				sidCode = "WD";
+			} else if (r.sidType.includes("AnonymousSid")) {
+				sidCode = "AN";
+			} else if (r.sidType.includes("AuthenticatedUserSid")) {
+				sidCode = "AU";
+			}
 			return `(${typeCode};;${rightsCode};;;${sidCode})`;
 		})
 		.join("");
 	const sddl = `D:${sddlProtection}${sddlAces}`;
 
 	return {
+		constructorSecurityAssignment,
 		pipeCreationSecurityArg,
 		owner,
+		ownerSource,
 		isProtected,
 		preserveInheritance,
 		rules,
@@ -122,11 +165,16 @@ function parseBrokerPipeSecurity(brokerScript: string): ParsedBrokerPipeSecurity
 }
 
 function validateBrokerPipeSecurity(parsed: ParsedBrokerPipeSecurity): void {
+	if (parsed.constructorSecurityAssignment !== "CreateSecurity()") {
+		throw new Error(
+			`Broker constructor must assign _pipeSecurity = CreateSecurity(), got: ${parsed.constructorSecurityAssignment}`,
+		);
+	}
 	if (parsed.pipeCreationSecurityArg !== "_pipeSecurity") {
 		throw new Error(`NamedPipeServerStream must receive _pipeSecurity, got: ${parsed.pipeCreationSecurityArg}`);
 	}
-	if (parsed.owner !== "identity") {
-		throw new Error(`PipeSecurity owner must be identity, got: ${parsed.owner}`);
+	if (parsed.owner !== "identity" || !parsed.ownerSource.includes("WindowsIdentity.GetCurrent().User")) {
+		throw new Error(`PipeSecurity owner must resolve to WindowsIdentity.GetCurrent().User, got: ${parsed.ownerSource}`);
 	}
 	if (!parsed.isProtected || parsed.preserveInheritance) {
 		throw new Error(
@@ -138,18 +186,23 @@ function validateBrokerPipeSecurity(parsed: ParsedBrokerPipeSecurity): void {
 	}
 	const [ownerRule, systemRule] = parsed.rules;
 	if (
-		ownerRule.identity !== "identity" ||
+		ownerRule.identityVar !== "identity" ||
+		!ownerRule.sidType.includes("WindowsIdentity.GetCurrent().User") ||
 		ownerRule.rights !== "PipeAccessRights.FullControl" ||
 		ownerRule.type !== "AccessControlType.Allow"
 	) {
 		throw new Error(`Invalid owner rule: ${JSON.stringify(ownerRule)}`);
 	}
 	if (
-		systemRule.identity !== "systemSid" ||
+		systemRule.identityVar !== "systemSid" ||
+		!systemRule.sidType.includes("WellKnownSidType.LocalSystemSid") ||
 		systemRule.rights !== "PipeAccessRights.FullControl" ||
 		systemRule.type !== "AccessControlType.Allow"
 	) {
-		throw new Error(`Invalid system rule: ${JSON.stringify(systemRule)}`);
+		throw new Error(`Invalid system rule (must be LocalSystemSid): ${JSON.stringify(systemRule)}`);
+	}
+	if (parsed.sddl !== "D:P(A;;GA;;;identity)(A;;GA;;;SY)") {
+		throw new Error(`SDDL does not match expected DACL: ${parsed.sddl}`);
 	}
 }
 
@@ -473,18 +526,22 @@ describe("terminal-control-transport", () => {
 		expect(brokerScript).toBeDefined();
 
 		const parsed = parseBrokerPipeSecurity(brokerScript);
+		expect(parsed.constructorSecurityAssignment).toBe("CreateSecurity()");
 		expect(parsed.pipeCreationSecurityArg).toBe("_pipeSecurity");
 		expect(parsed.owner).toBe("identity");
+		expect(parsed.ownerSource).toContain("WindowsIdentity.GetCurrent().User");
 		expect(parsed.isProtected).toBe(true);
 		expect(parsed.preserveInheritance).toBe(false);
 		expect(parsed.rules).toEqual([
 			{
-				identity: "identity",
+				identityVar: "identity",
+				sidType: parsed.ownerSource,
 				rights: "PipeAccessRights.FullControl",
 				type: "AccessControlType.Allow",
 			},
 			{
-				identity: "systemSid",
+				identityVar: "systemSid",
+				sidType: "WellKnownSidType.LocalSystemSid",
 				rights: "PipeAccessRights.FullControl",
 				type: "AccessControlType.Allow",
 			},
@@ -493,7 +550,7 @@ describe("terminal-control-transport", () => {
 
 		expect(() => validateBrokerPipeSecurity(parsed)).not.toThrow();
 
-		// Mutation 1: removing CreateSecurity and using default pipe descriptor must fail
+		// Mutation 1: removing CreateSecurity and using default pipe descriptor in CreateInstance must fail
 		const defaultDescriptorScript = brokerScript.replace("_pipeSecurity,", "null,");
 		const parsedDefault = parseBrokerPipeSecurity(defaultDescriptorScript);
 		expect(() => validateBrokerPipeSecurity(parsedDefault)).toThrow(
@@ -528,6 +585,27 @@ describe("terminal-control-transport", () => {
 		const parsedNoSystem = parseBrokerPipeSecurity(noSystemScript);
 		expect(() => validateBrokerPipeSecurity(parsedNoSystem)).toThrow(
 			/Expected exactly 2 access rules/,
+		);
+
+		// Mutation 5: bypassing constructor assignment (_pipeSecurity = null) must fail
+		const nullCtorScript = brokerScript.replace(
+			"_pipeSecurity = CreateSecurity();",
+			"_pipeSecurity = null;",
+		);
+		const parsedNullCtor = parseBrokerPipeSecurity(nullCtorScript);
+		expect(() => validateBrokerPipeSecurity(parsedNullCtor)).toThrow(
+			/Broker constructor must assign _pipeSecurity = CreateSecurity\(\)/,
+		);
+
+		// Mutation 6: replacing LocalSystemSid with WorldSid must alter SDDL and fail validation
+		const worldSidScript = brokerScript.replace(
+			"WellKnownSidType.LocalSystemSid",
+			"WellKnownSidType.WorldSid",
+		);
+		const parsedWorldSid = parseBrokerPipeSecurity(worldSidScript);
+		expect(parsedWorldSid.sddl).toBe("D:P(A;;GA;;;identity)(A;;GA;;;WD)");
+		expect(() => validateBrokerPipeSecurity(parsedWorldSid)).toThrow(
+			/Invalid system rule \(must be LocalSystemSid\)/,
 		);
 	});
 
