@@ -11,6 +11,7 @@
 - Quota refusals block the failed request's credential, not a healthy account selected by a later resolver call ([PR](https://github.com/Wladefant/veyyon/pull/619)).
 - Automatic lane handoff reserves the summary model's full output limit, including reasoning, before selection. The request sends the same limit ([issue](https://github.com/Wladefant/veyyon/issues/552)).
 - Extension browser sessions reuse their exact connect tab and remove pages created by failed opens. Closing a tab removes it before the extension can disconnect ([issue](https://github.com/Wladefant/veyyon/issues/548)).
+- A browser returned by `acquireBrowser` carries a lease its caller releases, so one session's release can no longer close a browser another session has just reused.
 - Session factory callback typing and mixed native actor rosters now pass the workspace type check ([Refs](https://github.com/Wladefant/veyyon/issues/569)).
 - Background jobs whose owning lane was disposed reach Main as one batched note listing each result once. A lane's jobs still reach only that lane while it lives, and an absent owner keeps its completions until it returns ([Refs #564](https://github.com/Wladefant/veyyon/issues/564)).
 

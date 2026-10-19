@@ -20,7 +20,11 @@ import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import { ToolAbortError } from "@veyyon/coding-agent/tools/core/tool-errors";
 import type { CmuxKind } from "@veyyon/coding-agent/tools/web/browser/cmux/rpc";
 import { CmuxSocketClient } from "@veyyon/coding-agent/tools/web/browser/cmux/socket-client";
-import { acquireBrowser, getBrowsersMapForTest } from "@veyyon/coding-agent/tools/web/browser/registry";
+import {
+	acquireBrowser,
+	getBrowsersMapForTest,
+	releaseBrowser,
+} from "@veyyon/coding-agent/tools/web/browser/registry";
 import {
 	acquireTab,
 	getTabsMapForTest,
@@ -129,7 +133,9 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 		const browserB = await acquireBrowser(kindB, { cwd: "/tmp" });
 
 		const tabA = await acquireTab("tab-a", browserA, { timeoutMs: 1_000, ownerSessionId: "session-A" });
+		await releaseBrowser(browserA, { kill: false });
 		const tabB = await acquireTab("tab-b", browserB, { timeoutMs: 1_000, ownerSessionId: "session-B" });
+		await releaseBrowser(browserB, { kill: false });
 
 		expect(tabA.tab.ownerSessionId).toBe("session-A");
 		expect(tabB.tab.ownerSessionId).toBe("session-B");
@@ -162,6 +168,7 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 
 		const first = await acquireTab("reuse-tab", browser, { timeoutMs: 1_000, ownerSessionId: "session-A" });
 		const second = await acquireTab("reuse-tab", browser, { timeoutMs: 1_000, ownerSessionId: "session-B" });
+		await releaseBrowser(browser, { kill: false });
 
 		expect(first.tab).toBe(second.tab);
 		expect(second.created).toBe(false);
