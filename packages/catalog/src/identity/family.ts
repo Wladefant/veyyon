@@ -316,6 +316,19 @@ export const isAnthropicFableOrMythosModel = (modelId: string): boolean => {
 	return parsed !== null && isFableOrMythos(parsed.kind);
 };
 
+/**
+ * Claude Opus 5.5, Sonnet 5.5 and the Fable/Mythos models answer a `tool_choice`
+ * of type `any` or `tool` with `400 tool_choice: type "tool" and "any" are not
+ * supported for this model.`, on the messages and token-counting endpoints
+ * alike; `auto` and `none` are accepted. Later Opus and Sonnet generations
+ * inherit the restriction, so the Opus/Sonnet floor is a version compare.
+ * @see https://platform.claude.com/docs/en/api/errors
+ */
+export const rejectsForcedToolChoice = (modelId: string): boolean => {
+	const parsed = parseAnthropicModel(bareModelId(modelId));
+	return parsed !== null && (isFableOrMythos(parsed.kind) || semverGte(parsed.version, "5.5"));
+};
+
 /** Thinking-variant token location inside a model id. */
 export interface ThinkingVariantToken {
 	index: number;

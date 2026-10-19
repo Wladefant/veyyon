@@ -8,6 +8,7 @@
  */
 
 import type { Effort } from "@veyyon/catalog/effort";
+import { rejectsForcedToolChoice } from "@veyyon/catalog/identity";
 import { mapEffortToAnthropicAdaptiveEffort, requireSupportedEffort } from "@veyyon/catalog/model-thinking";
 import { calculateCost } from "@veyyon/catalog/models";
 import { $env, $flag } from "@veyyon/utils/env";
@@ -448,7 +449,11 @@ class BedrockTurn {
 		const options = this.#options;
 		const cacheRetention = resolveCacheRetention(options.cacheRetention);
 		const messages = convertMessages(context, model, cacheRetention);
-		const { toolConfig, sentinelInjected } = planToolConfig(context.tools, options.toolChoice, messages);
+		const { toolConfig, sentinelInjected } = planToolConfig(
+			context.tools,
+			resolveBedrockToolChoice(options.toolChoice, model.id),
+			messages,
+		);
 		this.#sentinelInjected = sentinelInjected;
 		const additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
 		// Bedrock rejects thinking + forced tool_choice ("any" or specific tool),
@@ -996,6 +1001,18 @@ function convertToolSpec(tool: Tool): WireToolSpec {
 			inputSchema: { json: toolWireSchema(tool) },
 		},
 	};
+}
+
+/**
+ * A Claude model that rejects forced tool use rejects Bedrock's `any` and `tool` choices the same as
+ * the messages API's, so a forced choice goes out as `auto` and the tool stays available.
+ */
+function resolveBedrockToolChoice(
+	toolChoice: BedrockOptions["toolChoice"],
+	modelId: string,
+): BedrockOptions["toolChoice"] {
+	const forced = toolChoice === "any" || (typeof toolChoice === "object" && toolChoice.type === "tool");
+	return forced && rejectsForcedToolChoice(modelId) ? "auto" : toolChoice;
 }
 
 function planToolConfig(

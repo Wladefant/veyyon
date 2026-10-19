@@ -18,6 +18,8 @@
 
 ### Fixed
 
+- An Anthropic-messages endpoint that answers a forced `tool_choice` with a 400 naming the field (`tool_choice: type "tool" and "any" are not supported for this model.`, or Kimi's `tool_choice 'specified' is incompatible with thinking enabled`) is retried once with `tool_choice: auto` and sent `auto` for that model for the rest of the session, instead of failing the turn.
+- Claude Opus and Sonnet 5.5 and later, Fable and Mythos on Bedrock are sent `auto` in place of a forced tool choice they reject.
 - A Bedrock, Codex, Ollama or Gemini CLI endpoint that never answers ends the turn with `Timed out after N ms waiting for the first event`, classified as a retryable timeout, instead of `Request was aborted` or `The operation timed out.`, which read as a cancellation or named no phase.
 - An OAuth account ranking whose usage fetch misses its deadline tries unblocked accounts first and blocked ones by the soonest reset, as API-key ranking already did, instead of storage order.
 - A credential ranking whose usage fetch fails clears its 5–15 s deadline timer instead of leaving it armed.
