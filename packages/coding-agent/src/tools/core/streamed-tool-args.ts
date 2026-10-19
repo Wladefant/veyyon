@@ -41,8 +41,6 @@ export function streamingStringKeysForTool(toolName: string, rawInput: boolean):
 export type StreamingJsonStringExtractorResult = {
 	values: Record<string, string>;
 	changed: boolean;
-	isTargetOpen: boolean;
-	targetStart?: number;
 };
 
 function decodeJsonStringEscape(ch: string): string {
@@ -90,7 +88,6 @@ export class StreamingJsonStringExtractor {
 	#targetUnicode = "";
 	#values: Record<string, string> = {};
 	#changed = false;
-	#targetStart: number | undefined;
 
 	constructor(keys: readonly string[]) {
 		this.#keys = new Set(keys);
@@ -110,7 +107,6 @@ export class StreamingJsonStringExtractor {
 		this.#targetUnicode = "";
 		this.#values = {};
 		this.#changed = false;
-		this.#targetStart = undefined;
 	}
 
 	update(prefix: string): StreamingJsonStringExtractorResult {
@@ -139,12 +135,7 @@ export class StreamingJsonStringExtractor {
 					break;
 			}
 		}
-		return {
-			values: { ...this.#values },
-			changed: this.#changed,
-			isTargetOpen: this.#state === "target",
-			targetStart: this.#targetStart,
-		};
+		return { values: { ...this.#values }, changed: this.#changed };
 	}
 
 	#scan(ch: string): void {
@@ -236,7 +227,6 @@ export class StreamingJsonStringExtractor {
 			this.#targetEscaped = false;
 			this.#targetUnicode = "";
 			this.#state = "target";
-			this.#targetStart = this.#offset;
 			this.#offset++;
 			return;
 		}
@@ -473,44 +463,21 @@ export function displayArgsForPrefix(
 		return { args, changed: true };
 	}
 
-	const extracted = state.stringExtractor?.update(prefix);
-
-	// While inside a target string argument decoded by the extractor, any bytes
-	// arriving since the last parse belong to that string. If the last parse
-	// ran after the string opened, arguments ahead of the string have already
-	// been parsed and arguments behind it cannot arrive until the string closes.
-	// Re-parsing the growing buffer recovers nothing new and turns long string
-	// streaming quadratic in call length.
-	const skipThrottledParse = Boolean(
-		!forceParse &&
-			extracted?.isTargetOpen &&
-			state.parsedLen > (extracted.targetStart ?? 0),
-	);
-
 	let parsedChanged = false;
-	if (!skipThrottledParse) {
-		if (forceParse || (prefix.length > 0 && prefix.length < STREAMING_JSON_PARSE_MIN_GROWTH)) {
-			state.parsedArgs = expandStreamedValues(state.argot, parseStreamingJson<Record<string, unknown>>(prefix));
-			state.parsedLen = prefix.length;
+	if (forceParse || (prefix.length > 0 && prefix.length < STREAMING_JSON_PARSE_MIN_GROWTH)) {
+		state.parsedArgs = expandStreamedValues(state.argot, parseStreamingJson<Record<string, unknown>>(prefix));
+		state.parsedLen = prefix.length;
+		parsedChanged = true;
+	} else {
+		const throttled = parseStreamingJsonThrottled<Record<string, unknown>>(prefix, state.parsedLen);
+		if (throttled) {
+			state.parsedArgs = expandStreamedValues(state.argot, throttled.value);
+			state.parsedLen = throttled.parsedLen;
 			parsedChanged = true;
-		} else {
-			const throttled = parseStreamingJsonThrottled<Record<string, unknown>>(prefix, state.parsedLen);
-			if (throttled) {
-				state.parsedArgs = expandStreamedValues(state.argot, throttled.value);
-				state.parsedLen = throttled.parsedLen;
-				parsedChanged = true;
-			}
 		}
 	}
-
-	if (parsedChanged) {
-		if (extracted) {
-			for (const _ in extracted.values) {
-				state.parsedArgs = { ...state.parsedArgs, ...expandStreamedValues(state.argot, extracted.values) };
-				break;
-			}
-		}
-	} else if (extracted?.changed) {
+	const extracted = state.stringExtractor?.update(prefix);
+	if (extracted?.changed) {
 		state.parsedArgs = { ...state.parsedArgs, ...expandStreamedValues(state.argot, extracted.values) };
 		parsedChanged = true;
 	}

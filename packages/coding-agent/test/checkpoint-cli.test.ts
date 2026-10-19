@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CheckpointFetch } from "../src/session/cloud-checkpoints";
+import type { CheckpointFetch } from "../src/checkpoints/cloud-checkpoints";
 import { runCheckpointCommand } from "../src/cli/checkpoint-cli";
 import { Settings } from "../src/config/settings";
 

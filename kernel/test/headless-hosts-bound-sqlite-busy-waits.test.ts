@@ -1,8 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { HistoryStorage } from "@veyyon/kernel/session/history-storage";
-import { TempDir } from "@veyyon/utils";
-import { getDbBusyTimeoutMs, setInteractiveHost } from "@veyyon/utils/interactive-host";
+import { getDbBusyTimeoutMs, setInteractiveHost, TempDir } from "@veyyon/utils";
 
 // WHY: Headless hosts (print/RPC/ACP/eval/SDK, including subagents) share a thread with
 // bun:sqlite. A 5-second busy_timeout on SQLite lock contention freezes the event loop

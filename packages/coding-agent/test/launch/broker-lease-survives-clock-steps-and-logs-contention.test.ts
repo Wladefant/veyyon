@@ -8,7 +8,6 @@ import { withFileLock } from "@veyyon/utils/file-lock";
 import { getProcessStartTime } from "@veyyon/utils/process-liveness";
 import { acquireBrokerLease, type BrokerLeaseClock, releaseBrokerLease } from "../../src/launch/broker-lease";
 import { daemonBrokerEndpoint, daemonBrokerLeasePath, daemonBrokerTokenPath } from "../../src/launch/paths";
-import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -61,26 +60,13 @@ function brokerPing(pid: number | undefined): Handlers {
 
 /** A real live process the lease can name; resolves once it is running. */
 async function liveChild(): Promise<{ pid: number; startedAt: number; kill: () => void }> {
-	const { env, cleanup } = hermeticSpawnEnv();
 	const child = Bun.spawn([process.execPath, "-e", 'console.log("up"); setInterval(() => {}, 1000)'], {
 		stdio: ["ignore", "pipe", "ignore"],
-		env,
 	});
 	await child.stdout.getReader().read();
 	const startedAt = getProcessStartTime(child.pid);
-	if (startedAt === null) {
-		child.kill();
-		cleanup();
-		throw new Error("child start time unavailable");
-	}
-	return {
-		pid: child.pid,
-		startedAt,
-		kill: () => {
-			child.kill();
-			cleanup();
-		},
-	};
+	if (startedAt === null) throw new Error("child start time unavailable");
+	return { pid: child.pid, startedAt, kill: () => child.kill() };
 }
 
 /** Writes a legacy PID-only record whose mtime is `mtimeMs`, plus the runtime token the ping needs. */

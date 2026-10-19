@@ -82,7 +82,7 @@ beforeAll(async () => {
 		toolNames: ["read", "write", "edit", "bash", "set_cwd"],
 	});
 	session = created.session;
-}, 30_000);
+});
 
 afterAll(async () => {
 	await session.dispose();

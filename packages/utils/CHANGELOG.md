@@ -6,11 +6,6 @@
 
 ### Changed
 
-- SQLite initialization now reads its busy-timeout setting from `@veyyon/utils/interactive-host` without importing the env module closure; timeout values are unchanged.
-
-### Fixed
-
-- Deeply nested display-math parsing avoids repeated text copying.
 - Sync upstream changes from santhreal/veyyon.
 
 ## [1.5.6] - 2026-10-10

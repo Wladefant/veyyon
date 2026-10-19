@@ -5,7 +5,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Args, Command, Flags } from "@veyyon/utils/cli";
-import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import {
 	extensionStateDir,
@@ -40,14 +39,12 @@ async function readTokenFromStdin(): Promise<string> {
 }
 
 async function control(state: RelayState, verb: "status" | "disconnect"): Promise<unknown> {
-	return await withScopedTimeoutSignal(10_000, async signal => {
-		const response = await fetch(`http://127.0.0.1:${state.port}/control/${state.control}/${verb}`, {
-			method: verb === "status" ? "GET" : "POST",
-			signal,
-		});
-		if (!response.ok) throw new Error(`The relay answered HTTP ${response.status}.`);
-		return await response.json();
+	const response = await fetch(`http://127.0.0.1:${state.port}/control/${state.control}/${verb}`, {
+		method: verb === "status" ? "GET" : "POST",
+		signal: AbortSignal.timeout(10_000),
 	});
+	if (!response.ok) throw new Error(`The relay answered HTTP ${response.status}.`);
+	return await response.json();
 }
 
 export default class BrowserExtension extends Command {

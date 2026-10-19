@@ -75,7 +75,7 @@ function harness(options: HarnessOptions = {}) {
 		instrumentationLevel: () => options.level ?? "off",
 		pendingContextSnapshot: () => options.pending,
 		nonMessageTokens: () => 100,
-		hasRewoundResult: toolCallId => rewound.has(toolCallId),
+		consumeRewoundResult: toolCallId => rewound.delete(toolCallId),
 		onTtsrInjectionPersisted: details => ttsrDetails.push(details),
 	});
 	return { store, persistence, rewound, ttsrDetails };
@@ -286,9 +286,7 @@ describe("a message offered for the log", () => {
 		persistence.persistIfMissing(toolResult("call-1", 2, "rewind"));
 		persistence.persistIfMissing(toolResult("call-2", 3, "rewind"));
 		expect(labels(store)).toEqual(["tool:call-1", "tool:call-2"]);
-		expect(rewound.has("call-1")).toBe(true);
-		persistence.persistIfMissing(toolResult("call-1", 4, "rewind"));
-		expect(labels(store)).toEqual(["tool:call-1", "tool:call-2"]);
+		expect(rewound.size).toBe(0);
 	});
 
 	it("keeps tool metrics only at a level that allows them, and never edits the live message", () => {

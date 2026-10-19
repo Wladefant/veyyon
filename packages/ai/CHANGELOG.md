@@ -9,7 +9,6 @@
   Completed channels release safe frames before EOF. A 64-frame or 64-KiB hold limit redacts unresolved prefixes; errors discard held frames.
 
 - Codex account ranking ignores usage windows of length 0, so one account no longer takes every new session.
-- OpenAI transcription schemas now use the deferred ArkType loader; transcription behavior is unchanged.
 - Aligned OpenAI Codex responses imports with openai-responses-stream exports and restored the UsageCostHistoryEntry interface in usage types, with no user-visible change.
 - Merges supplementary model listing quotas into Google Antigravity quota summaries when the summary omits counters ([Refs #620](https://github.com/Wladefant/veyyon/pull/620)).
 

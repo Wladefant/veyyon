@@ -137,7 +137,6 @@ describe("the compiled legacy module table", () => {
 		expect(tableOnly.loaded.BUNDLED_PI_MODULES!["fixture/side-effect-only.ts"]!()).toEqual({});
 	});
 
-	// This full module-graph build outlasts Bun's 5s default; preserve its 120s child bound below.
 	it("serves every real retained entry what a namespace import of it serves", async () => {
 		const run = spawnSync(process.execPath, [FIXTURE, path.join(scratch.path(), "real")], {
 			cwd: REPO_ROOT,
@@ -150,5 +149,5 @@ describe("the compiled legacy module table", () => {
 		expect(report.entries).toEqual(entries);
 		expect([...report.keys].sort()).toEqual([...entries].sort());
 		expect(report.differing).toEqual([]);
-	}, 125_000);
+	});
 });

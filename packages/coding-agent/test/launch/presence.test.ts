@@ -1,4 +1,4 @@
-import { describe, expect, it, spyOn } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -423,26 +423,62 @@ describe("hasLiveDaemonProjectPresence", () => {
 			JSON.stringify({ pid: process.pid, id: "replacement-token-1234", projectDir }),
 		);
 
-		const originalChmod = fs.chmod;
-		const chmodSpy = spyOn(fs, "chmod").mockImplementation(async (filePath, mode) => {
-			if (typeof filePath === "string" && filePath.startsWith(`${clientsDir}${path.sep}`)) {
-				throw Object.assign(new Error("simulated chmod fault after write"), { code: "EPERM" });
-			}
-			return originalChmod(filePath, mode);
-		});
-		try {
-			await expect(registerDaemonProjectPresence(projectDir, runtimeDir)).rejects.toThrow(
-				"simulated chmod fault after write",
-			);
-		} finally {
-			chmodSpy.mockRestore();
-		}
+		const { env, cleanup } = hermeticSpawnEnv();
+		const childScript = `
+import { mock } from "bun:test";
+import * as realFs from "node:fs/promises";
 
-		expect((await fs.readdir(clientsDir)).sort()).toEqual(["replacement-record.json", "sibling-alive.json"]);
-		expect(JSON.parse(await fs.readFile(siblingFile, "utf8"))).toMatchObject({ id: "sibling-alive" });
-		expect(JSON.parse(await fs.readFile(replacementFile, "utf8"))).toMatchObject({
-			id: "replacement-token-1234",
+mock.module("node:fs/promises", () => ({
+	...realFs,
+	chmod: async (filePath, mode) => {
+		if (typeof filePath === "string" && filePath.includes("clients")) {
+			throw new Error("EPERM: simulated chmod fault after write");
+		}
+		return realFs.chmod(filePath, mode);
+	},
+}));
+
+// Dynamic import required after mock.module to bind mocked fs/promises dependency
+const { registerDaemonProjectPresence } = await import("./packages/coding-agent/src/launch/presence");
+const runtimeDir = process.env.TEST_RUNTIME_DIR;
+const projectDir = process.env.TEST_PROJECT_DIR;
+
+try {
+	await registerDaemonProjectPresence(projectDir, runtimeDir);
+	process.exit(1);
+} catch (err) {
+	if (err && String(err).includes("simulated chmod fault after write")) {
+		process.exit(0);
+	}
+	process.exit(2);
+}
+`;
+		const child = Bun.spawn([process.execPath, "-e", childScript], {
+			env: {
+				...env,
+				TEST_RUNTIME_DIR: runtimeDir,
+				TEST_PROJECT_DIR: projectDir,
+			},
+			stdin: "ignore",
+			stdout: "ignore",
+			stderr: "ignore",
 		});
+
+		const exitCode = await child.exited;
+		cleanup();
+		expect(exitCode).toBe(0);
+
+		const remaining = await fs.readdir(clientsDir);
+		const ownRecord = remaining.find(f => f.startsWith(`${child.pid}-`));
+		expect(ownRecord).toBeUndefined();
+
+		expect(await Bun.file(siblingFile).exists()).toBe(true);
+		const siblingContent = JSON.parse(await fs.readFile(siblingFile, "utf8"));
+		expect(siblingContent.id).toBe("sibling-alive");
+
+		expect(await Bun.file(replacementFile).exists()).toBe(true);
+		const replacementContent = JSON.parse(await fs.readFile(replacementFile, "utf8"));
+		expect(replacementContent.id).toBe("replacement-token-1234");
 	});
 
 	it("closing presence removes own file but preserves replaced token record", async () => {
@@ -489,17 +525,16 @@ import { registerDaemonProjectPresence } from "./packages/coding-agent/src/launc
 try {
 	await registerDaemonProjectPresence(process.env.TEST_PROJECT_DIR!, process.env.TEST_RUNTIME_DIR!);
 	process.stdout.write("RESOLVED_UNEXPECTEDLY\\n");
-	process.exitCode = 1;
+	process.exit(1);
 } catch (err: unknown) {
 	const code = (err && typeof err === "object" && "code" in err && typeof err.code === "string") ? err.code : undefined;
 	const message = err instanceof Error ? err.message : String(err);
 	if (code === "ENOENT" || message.includes("ENOENT")) {
 		process.stdout.write("REJECTED_ENOENT\\n");
-		process.exitCode = 0;
-	} else {
-		process.stderr.write("UNEXPECTED_ERROR:" + code + ":" + message + "\\n");
-		process.exitCode = 2;
+		process.exit(0);
 	}
+	process.stderr.write("UNEXPECTED_ERROR:" + code + ":" + message + "\\n");
+	process.exit(2);
 }
 `;
 		const child = Bun.spawn([process.execPath, "-e", childScript], {

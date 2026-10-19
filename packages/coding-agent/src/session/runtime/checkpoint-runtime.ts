@@ -140,13 +140,9 @@ export class CheckpointRuntime {
 		this.#pendingReport = undefined;
 	}
 
-	/**
-	 * Whether `toolCallId` is a `rewind` result whose rewind already rewrote the branch. Answers the
-	 * same for every caller: the rewind turn's messages can be written by more than one path, and
-	 * each must see the rewind result as already handled.
-	 */
-	hasRewoundResult(toolCallId: string): boolean {
-		return this.#rewoundToolResultIds.has(toolCallId);
+	/** Whether `toolCallId` is a `rewind` result the rewind already accounted for; answers once. */
+	consumeRewoundResult(toolCallId: string): boolean {
+		return this.#rewoundToolResultIds.delete(toolCallId);
 	}
 
 	clear(): void {

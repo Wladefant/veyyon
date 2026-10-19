@@ -35,11 +35,11 @@ import {
 	logger,
 	normalizePathForComparison,
 	postmortem,
+	setInteractiveHost,
 	setProjectDir,
 	VERSION,
 } from "@veyyon/utils";
 import { IdleTrim } from "@veyyon/utils/idle-trim";
-import { setInteractiveHost } from "@veyyon/utils/interactive-host";
 import chalk from "chalk";
 import {
 	type Args,

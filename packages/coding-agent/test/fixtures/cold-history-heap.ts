@@ -47,7 +47,6 @@ class CountingStorage extends FileSessionStorage {
 				this.reads += 1;
 				return inner.read(offset, length);
 			},
-			size: () => inner.size(),
 			close: () => inner.close(),
 		};
 	}

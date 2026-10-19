@@ -125,15 +125,7 @@ function runtimeImportsOf(relative: string): string[] {
  * RAISED FROM 244 TO 246 for the santhreal sync (2026-10): `@veyyon/utils/local-time` and the `bun:ffi`-free
  * leaves it brings into the logger closure. Each is a leaf with no subtree of its own.
  */
-/**
- * RAISED BY ONE, from 246, for `packages/utils/src/interactive-host.ts`, extracted in
- * `50bb33bcce5ef9dbf44d88a90bd89b3f8aa96e57`. The auth-storage reach already includes the utils
- * barrel closure; the new leaf is present in the measured graph and adds one module without adding
- * a new subsystem. Its extraction keeps interactive-host consumers independent of the broader env
- * closure; see the prompt-reach ledger in
- * `packages/coding-agent/test/cli/startup/a-launch-does-not-build-every-prompt-registry.test.ts`.
- */
-const AUTH_STORAGE_CEILING = 247;
+const AUTH_STORAGE_CEILING = 246;
 
 /**
  * Measured 2026-07-26 at 158, down from 204/212. This module is four functions over a table and its doc

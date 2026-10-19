@@ -135,7 +135,7 @@ describe("the load balancing gate reads the operator's setting", () => {
 
 		const result = await exhaust(targetId);
 
-		expect(result.switched).toBe(true);
+		expect(result).toEqual({ switched: true });
 	});
 
 	/**

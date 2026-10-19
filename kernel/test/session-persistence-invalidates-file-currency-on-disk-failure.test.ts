@@ -10,11 +10,9 @@
  */
 
 import { afterEach, describe, expect, it } from "bun:test";
-import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { coldFieldsOf } from "@veyyon/kernel/session/session-cold-payloads";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import {
 	FileSessionStorage,
@@ -24,8 +22,6 @@ import {
 
 class FlakyFileStorage extends FileSessionStorage {
 	failure: string | undefined;
-	/** Runs in place of a failing append's write, as a peer appending at the same offset would. */
-	onFailedAppend: ((line: string) => void) | undefined;
 
 	openWriter(filePath: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }): SessionStorageWriter {
 		const inner = super.openWriter(filePath, options);
@@ -33,7 +29,6 @@ class FlakyFileStorage extends FileSessionStorage {
 		return {
 			append(line: string): Promise<void> {
 				if (owner.failure) {
-					owner.onFailedAppend?.(line);
 					const p = Promise.reject(new Error(owner.failure));
 					p.catch(() => {});
 					return p;
@@ -128,43 +123,5 @@ describe("session persistence invalidates file currency on disk failure", () => 
 		expect(sm.captureState().onDisk).toBe(true);
 		const content = await fsp.readFile(sessionFile!, "utf-8");
 		expect(content).toContain("Message during failure");
-	});
-
-	it("does not cool a record whose own write failed when a peer's same-length line lands at its offset", async () => {
-		const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "sess-cold-failed-append-"));
-		tempDirs.push(tempDir);
-
-		const storage = new FlakyFileStorage();
-		const sm = SessionManager.create(tempDir, tempDir, storage);
-		sm.appendMessage({ role: "user", content: [{ type: "text", text: "Hello" }], timestamp: 1 });
-		await sm.flush();
-		const sessionFile = sm.getSessionFile();
-		expect(sessionFile).toBeDefined();
-
-		// The failed write leaves the file unchanged; a peer's line of the same length lands at its offset.
-		storage.onFailedAppend = line => {
-			fs.appendFileSync(sessionFile!, `${"p".repeat(Buffer.byteLength(line, "utf-8") - 1)}\n`);
-		};
-		storage.failure = "disk write error (simulated ENOSPC)";
-		const id = sm.appendSessionInit({ systemPrompt: "s".repeat(2048), task: "task", tools: [] });
-		await sm.flush().catch(() => undefined);
-
-		const entry = sm.getEntry(id);
-		expect(entry).toBeDefined();
-		expect(coldFieldsOf(entry!)).toBeUndefined();
-	});
-
-	it("cools a record entry once its own append has landed", async () => {
-		const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "sess-cold-landed-append-"));
-		tempDirs.push(tempDir);
-
-		const sm = SessionManager.create(tempDir, tempDir, new FlakyFileStorage());
-		sm.appendMessage({ role: "user", content: [{ type: "text", text: "Hello" }], timestamp: 1 });
-		await sm.flush();
-
-		const id = sm.appendSessionInit({ systemPrompt: "s".repeat(2048), task: "task", tools: [] });
-		await sm.flush();
-
-		expect(coldFieldsOf(sm.getEntry(id)!)).toContain("systemPrompt");
 	});
 });

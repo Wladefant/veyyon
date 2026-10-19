@@ -203,20 +203,11 @@ let scratchClassCache: { pwd: string; key: string; result: ProjectDirClass } | n
 
 export function classifyProjectDir(pwd: string): ProjectDirClass {
 	const roots = scratchRoots();
-	const home = os.homedir();
-	const key = `${home}\u0000${roots.join("\u0000")}`;
+	const key = roots.join("\u0000");
 	if (scratchClassCache?.pwd === pwd && scratchClassCache.key === key) return scratchClassCache.result;
 	let result: ProjectDirClass = { scratch: false, relative: null };
 	for (const root of roots) {
 		if (pathIsWithin(root, pwd)) {
-			// When a scratch root is an ancestor of the user's home directory (e.g. CI running
-			// in /tmp or a test sandbox with HOME under os.tmpdir()), a path inside the home
-			// directory is not scratch merely because the home directory sits inside that root.
-			// Only scratch roots nested inside the home directory (such as ~/tmp) classify a
-			// path within home as scratch.
-			if (home && pathIsWithin(root, home) && pathIsWithin(home, pwd)) {
-				continue;
-			}
 			result = { scratch: true, relative: relativePathWithinRoot(root, pwd) };
 			break;
 		}

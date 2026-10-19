@@ -6,11 +6,6 @@
 
 ### Changed
 
-- Agent storage and history storage import SQLite busy-timeout helpers directly from `@veyyon/utils/interactive-host`; storage behavior is unchanged.
-
-### Fixed
-
-- A record-only entry appended to a live session leaves memory once its own write succeeds, checked by the file's size with no extra storage read; a failed write never cools it.
 - Sync upstream changes from santhreal/veyyon.
 
 ## [1.5.6] - 2026-10-10

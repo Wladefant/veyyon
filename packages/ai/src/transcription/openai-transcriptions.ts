@@ -1,7 +1,7 @@
 import { calculateCost } from "@veyyon/catalog/models";
 import type { Api, FetchImpl, Model, Usage } from "@veyyon/catalog/types";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
-import { type } from "../utils/schema/arktype";
+import { type } from "arktype";
 import { type ApiKey, withAuth } from "../auth-retry";
 import * as AIError from "../error";
 import type { TranscriptionRequest, TranscriptionResult, TranscriptionSegment, TranscriptionWord } from "./types";

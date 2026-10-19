@@ -1,8 +1,8 @@
 import { $env } from "@veyyon/utils/env";
 import { isRecord } from "@veyyon/utils/type-guards";
 import type { ResponseInput, ResponseInputItem } from "./providers/openai-responses-wire";
+import { redactSensitiveCredentials } from "./providers/transform-messages";
 import type { CacheRetention, OpenAIResponsesHistoryPayload, ProviderPayload } from "./types";
-import { redactSensitiveCredentials } from "./utils/sensitive-redaction";
 
 type OpenAIResponsesReplayItem = ResponseInput[number];
 const NON_WHITESPACE_RE = /\S/;

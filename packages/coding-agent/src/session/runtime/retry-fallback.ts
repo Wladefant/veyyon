@@ -31,7 +31,7 @@ import {
 	sanitizeRetryFallbackChains,
 } from "../agent-session-retry-fallback";
 import type { AgentSessionEvent } from "../agent-session-types";
-import { hasReplayUnsafeToolOutput, isClassifierRefusal } from "../failed-turn";
+import { hasReplayUnsafeOutput, isClassifierRefusal } from "../failed-turn";
 
 /** What {@link RetryFallback} reads from the session's public surface. */
 export interface RetryFallbackSession {
@@ -187,18 +187,20 @@ export class RetryFallback {
 	/**
 	 * True when the current turn failed on a Fireworks Fast (`-fast`) model in a
 	 * way that should degrade to the reliable base (Standard) model. Fast is a
-	 * speed-optimized router with no SLA, so any failure — a transient overload/5xx or a hard
-	 * "router/model not found / unsupported" — is worth retrying on the base id. Skips failures the base model shares:
+	 * speed-optimized router with no SLA, so any *pre-content* failure — a
+	 * transient overload/5xx or a hard "router/model not found / unsupported" —
+	 * is worth retrying on the base id. Skips failures the base model shares:
 	 * context overflow (compaction's job), usage limits and auth errors (same
 	 * account/key), and turns that already emitted a tool call (replaying would
-	 * duplicate work). Requires the base model to exist in the registry.
+	 * duplicate work), and turns that already streamed visible text. Requires the
+	 * base model to exist in the registry.
 	 */
 	fireworksFastEligible(message: AssistantMessage): boolean {
 		const model = this.#activeFireworksFastModel();
 		if (!model) return false;
 		if (message.stopReason !== "error") return false;
 		if (message.content.some(block => block.type === "toolCall")) return false;
-		if (hasReplayUnsafeToolOutput(message, this.#session.agent.state.messages)) return false;
+		if (hasReplayUnsafeOutput(message, this.#session.agent.state.messages)) return false;
 		// A content refusal/sensitivity stop is the model's decision, not a route
 		// failure — switching to the base model would just re-trigger it.
 		if (isClassifierRefusal(message)) return false;
@@ -230,7 +232,7 @@ export class RetryFallback {
 		const id = this.#host.classify(message);
 		if (AIError.is(id, AIError.Flag.Abort) || AIError.is(id, AIError.Flag.UserInterrupt)) return false;
 		if (AIError.isContextOverflow(message, model.contextWindow ?? 0)) return false;
-		if (hasReplayUnsafeToolOutput(message, this.#session.agent.state.messages)) return false;
+		if (hasReplayUnsafeOutput(message, this.#session.agent.state.messages)) return false;
 		const currentSelector = formatRetryFallbackSelector(model, this.#session.thinkingLevel);
 		const source = this.#source();
 		const role = this.#activeFallback?.role ?? resolveRetryFallbackKey(source, currentSelector);

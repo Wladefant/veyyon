@@ -361,26 +361,27 @@ export class ColdEntryPayloads {
 	}
 
 	/**
-	 * Size of the pinned object now, or undefined when nothing is pinned or it cannot be measured.
-	 * Read straight after an append's write, the size says where that line ended, so the caller can
-	 * tell whether another writer's line landed before it. No payload is read.
+	 * {@link cool} for an entry whose `line`, `length` bytes, was just appended at `offset`: the
+	 * pinned object is read there first, and the entry is cooled only when it holds `line`. An
+	 * append of another writer's that landed first, or a write that did not complete, leaves the
+	 * entry in memory, and closes the handle when no cold entry reads through it.
 	 */
-	pinnedSize(): number | undefined {
+	coolWritten(entry: SessionEntry, line: string, offset: number, length: number): boolean {
 		const file = this.#current;
-		if (file === undefined) return undefined;
+		if (file === undefined || length < MIN_COLD_LINE_BYTES || ColdEntrySlot.layoutOf(entry) !== undefined)
+			return false;
+		let written: string | undefined;
 		try {
-			return file.reader.size();
+			written = file.reader.read(offset, length);
 		} catch {
-			return undefined;
+			written = undefined;
 		}
-	}
-
-	/** Drop the pinned object when no cold entry reads through it. */
-	releaseUnused(): void {
-		const file = this.#current;
-		if (file === undefined || file.cold > 0) return;
-		this.#current = undefined;
-		file.reader.close();
+		if (written === line && this.cool(entry, offset, length)) return true;
+		if (file.cold === 0) {
+			this.#current = undefined;
+			file.reader.close();
+		}
+		return false;
 	}
 
 	/**

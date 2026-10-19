@@ -73,11 +73,16 @@ and playback helpers.
 Six kinds of process stay outside the budget. Each is outside for a reason rather than by
 oversight:
 
-- **Anything that starts before a session exists.** Host capability probes, the shell environment snapshot, model provider probes, and the ssh bootstrap for a remote auth broker run before a session exists. A standalone checkpoint export also runs its bounded synchronous `git` comparison before any session exists.
+- **Anything that starts before a session exists.** Host capability probes, the shell environment
+  snapshot, model provider probes, and the ssh bootstrap for a remote auth broker all run when
+  there is no budget to join.
 - **The harness itself.** Agent turns, the TUI, the relaunch that replaces the veyyon process, the
   task ledger's lock and bookkeeping helpers, whose lock a budget kill would drop mid-claim, and the
-  `gh pr view` lookup the `github` tool's push and merge guard runs before it lets a call through; the best-effort local model-routing report of terminal provider errors is harness reporting, not session compute.
-- **Programs that are yours rather than the agent's.** The editor Veyyon opens a file in, the clipboard helper, the desktop notifier, `veyyon shell`, the self-updater, and the operator's Chrome opened for the extension connection are the operator's programs, not agent compute. Capping the self-updater could leave a half-written install, and killing the editor on a budget breach would discard unsaved text.
+  `gh pr view` lookup the `github` tool's push and merge guard runs before it lets a call through.
+- **Programs that are yours rather than the agent's.** The editor veyyon opens a file in, the
+  clipboard helper, the desktop notifier, `veyyon shell`, and the self-updater. Capping the
+  updater could leave a half-written install, and killing your editor on a budget breach would
+  discard unsaved text.
 - **Threads rather than processes.** The browser tab supervisor and the JavaScript eval context
   run as Bun Workers inside the harness process, and a cgroup holds processes, not threads of one.
 - **Processes the session did not start.** Attaching to a browser that is already running adopts

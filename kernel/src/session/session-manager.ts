@@ -1200,9 +1200,10 @@ export class SessionManager {
 		// opens a fresh append handle and the entry still lands.
 		const line = this.#lineFor(entry);
 		try {
-			const written = this.#appendWriter().append(line);
-			void written.catch(err => this.#noteDiskFailure(err));
-			this.#notePublishedAppend(entry, line, written);
+			void this.#appendWriter()
+				.append(line)
+				.catch(err => this.#noteDiskFailure(err));
+			this.#notePublishedAppend(entry, line);
 		} catch (err) {
 			this.#noteDiskFailure(err);
 		}
@@ -1213,7 +1214,7 @@ export class SessionManager {
 	 * the same synchronous step as `append`: file and memory writers write in-body and indexed writers
 	 * queue in call order, so the line starts where the file ended when `append` was called.
 	 */
-	#notePublishedAppend(entry: SessionEntry, line: string, written: Promise<void>): void {
+	#notePublishedAppend(entry: SessionEntry, line: string): void {
 		const state = this.#publishedFileState;
 		if (state === null) return;
 		const offset = state.size;
@@ -1221,45 +1222,7 @@ export class SessionManager {
 		state.lines?.appended.push(entry);
 		state.lines?.entryOffsets.push(offset);
 		state.size += length;
-		if (!RECORD_ONLY_ENTRY_TYPES.has(entry.type)) return;
-		// The file writer writes before `append` returns, so the pinned object ends where this line ends
-		// unless another writer's line landed before it. That is read now: once the write resolves, later
-		// lines have landed and the size no longer says where this one ended.
-		if (!this.#appendLanded(state.identity, offset, length)) return;
-		// Cooled only once this write resolves. A rejected write leaves its line unwritten, and a peer's
-		// line of the same length at that offset would pass the size check for it.
-		void written.then(
-			() => {
-				if (this.#publishedFileState !== state) return;
-				this.#cold.cool(entry, offset, length);
-				this.#cold.releaseUnused();
-			},
-			() => this.#cold.releaseUnused(),
-		);
-	}
-
-	/**
-	 * Whether the line `length` bytes at `offset` ends the pinned file object, read straight after its
-	 * append's write. A mismatch releases the pin at once, so nothing is held for a line that cannot cool.
-	 */
-	#appendLanded(identity: string | undefined, offset: number, length: number): boolean {
-		if (!this.#persist || identity === undefined || length < MIN_COLD_LINE_BYTES) return false;
-		if (!this.#pinPublishedFile(identity)) return false;
-		if (this.#cold.pinnedSize() === offset + length) return true;
-		this.#cold.releaseUnused();
-		return false;
-	}
-
-	/** Pin the published file object `identity` for cold entries to read through, or report it cannot be. */
-	#pinPublishedFile(identity: string): boolean {
-		const sessionFile = this.#sessionFile;
-		if (sessionFile === undefined || this.#storage.openPinnedReaderSync === undefined) return false;
-		const blobs = this.#blobs;
-		return this.#cold.pin(
-			identity,
-			() => this.#openPinnedReader(sessionFile),
-			line => restoreColdLine(line, blobs),
-		);
+		if (RECORD_ONLY_ENTRY_TYPES.has(entry.type)) this.#coolAppendedRecord(entry, line, offset, length);
 	}
 
 	/**
@@ -1382,6 +1345,7 @@ export class SessionManager {
 			}
 		}
 		const identity = state.identity;
+		const blobs = this.#blobs;
 		let pinned = false;
 		for (let i = 0; i < entryOffsets.length; i++) {
 			const entry = i < baseLength ? base[i]! : appended[i - baseLength]!;
@@ -1392,11 +1356,36 @@ export class SessionManager {
 			const offset = entryOffsets[i]!;
 			const end = i + 1 < entryOffsets.length ? entryOffsets[i + 1]! : state.size;
 			if (!pinned) {
-				pinned = this.#pinPublishedFile(identity);
+				pinned = this.#cold.pin(
+					identity,
+					() => this.#openPinnedReader(sessionFile),
+					line => restoreColdLine(line, blobs),
+				);
 				if (!pinned) return;
 			}
 			this.#cold.cool(entry, offset, end - offset);
 		}
+	}
+
+	/**
+	 * Move a {@link RECORD_ONLY_ENTRY_TYPES} entry the append path just wrote out of memory. The
+	 * write completes inside `append`, so the line is in the file object the last publish recorded;
+	 * {@link ColdEntryPayloads.coolWritten} reads it back before cooling. Without this, a spawned
+	 * agent's `session_init` appended after its file was created, and every `subagent_spawn`, stays
+	 * in memory until the next whole-file publish.
+	 */
+	#coolAppendedRecord(entry: SessionEntry, line: string, offset: number, length: number): void {
+		const sessionFile = this.#sessionFile;
+		const identity = this.#publishedFileState?.identity;
+		if (!this.#persist || sessionFile === undefined || identity === undefined) return;
+		if (length < MIN_COLD_LINE_BYTES || this.#storage.openPinnedReaderSync === undefined) return;
+		const blobs = this.#blobs;
+		const pinned = this.#cold.pin(
+			identity,
+			() => this.#openPinnedReader(sessionFile),
+			restored => restoreColdLine(restored, blobs),
+		);
+		if (pinned) this.#cold.coolWritten(entry, line, offset, length);
 	}
 
 	/**
@@ -1460,12 +1449,12 @@ export class SessionManager {
 				const sessionFile = this.#sessionFile;
 				if (!sessionFile || this.#publishedFileState !== published) return;
 				try {
-					const written = this.#appendWriter().append(line);
+					const appended = this.#appendWriter().append(line);
 					// A synchronous append that ran since the entry joined `#entries` is ahead of it in
 					// the file, so the file order differs from the log's there and a rewrite plan ends
 					// its kept run at that entry.
-					this.#notePublishedAppend(entry, line, written);
-					await written;
+					this.#notePublishedAppend(entry, line);
+					await appended;
 					await this.#storage.updateSessionTitle(sessionFile, update);
 					if (this.#diskEpoch === epoch) this.#fileIsCurrent = true;
 				} catch {

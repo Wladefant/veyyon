@@ -411,14 +411,8 @@ const LAUNCH_REACH_CEILING = 1668;
  * 536 to 540, re-measured 2026-10-06 on the santhreal sync (+4 upstream additions:
  * `ai/src/utils/schema/arktype.ts`, `utils/src/local-time.ts`, `ai/src/dialect/json-tool-call-scanner.ts`,
  * and `ai/src/dialect/bracket-walk.ts`).
- *
- * 540 to 541, re-measured 2026-10-18: commit 50bb33bcce extracted `@veyyon/utils/interactive-host`
- * as a standalone zero-import leaf from `env.ts` so SQLite opening in `packages/utils/sqlite.ts`
- * and `kernel/session/agent-storage.ts` can read `getDbBusyTimeoutMs` without pulling the full
- * `env.ts` closure. `env.ts` remains reached through other prompt paths, so the extracted leaf
- * adds one module to the assembler reach.
  */
-const ASSEMBLER_REACH_CEILING = 541;
+const ASSEMBLER_REACH_CEILING = 540;
 
 function reached(entry: string): string[] {
 	return [...moduleReach(entry, RESOLUTION, CACHE)].map(file => path.relative(REPO_ROOT, file)).sort();

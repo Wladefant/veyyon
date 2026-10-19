@@ -345,7 +345,7 @@ describe("a pattern grant ends with the session", () => {
 			});
 			sessions.push(session);
 		}
-	}, 60_000);
+	});
 
 	afterAll(async () => {
 		for (const session of sessions) await session.dispose();

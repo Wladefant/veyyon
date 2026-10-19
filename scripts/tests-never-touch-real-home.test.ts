@@ -354,53 +354,11 @@ const SPAWN_HEADS = "spawnSync|spawn|execFileSync|execFile|execSync|exec";
 /** Cheap pre-test: no spawn-shaped token at all means none of the passes below are worth running. */
 const SPAWNS_SOMETHING = new RegExp(`(?:${SPAWN_HEADS})\\s*\\(`);
 /** `function spawn(` defines a helper; only a call runs anything. */
-const DECLARATION_KEYWORD = /\bfunction\s*\*?\s*$/;
-/** Method declaration modifiers in a class, interface, type, or object literal. */
-const METHOD_MODIFIERS =
-	/^(?:(?:export|default|declare|public|private|protected|static|abstract|override|readonly|async)\b\s*)*\*?$/;
+const DECLARATION_KEYWORD = /\bfunction\s+$/;
 /** `args: {`, `path?: string`: a typed parameter list, which no argument list ever is. */
 const TYPED_PARAMETER = /^[A-Za-z_$][\w$]*\s*\??\s*:/;
 const CHILD_PROCESS_NAMESPACE =
 	/import\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s+["'`](?:node:)?child_process["'`]|(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*["'`](?:node:)?child_process["'`]\s*\)/g;
-
-/**
- * Bare `spawn()` calls inside a block that declares its own function named `spawn` call
- * that helper, not `node:child_process`. Keep the block boundary so a helper in one scope
- * cannot hide an imported process spawn in another.
- */
-function localSpawnScopes(source: string, quoted: Uint8Array): Array<readonly [number, number]> {
-	const declarations = /(?:^|[\n;{}])\s*(?:(?:export|declare|default)\s+)*(?:async\s+)?function\s+\*?\s*spawn\s*\(/g;
-	const scopes: Array<readonly [number, number]> = [];
-	for (let match = declarations.exec(source); match; match = declarations.exec(source)) {
-		const declarationAt = match.index + match[0].lastIndexOf("function");
-		if (quoted[declarationAt]) continue;
-
-		const opens: number[] = [];
-		for (let i = 0; i < declarationAt; i++) {
-			if (quoted[i]) continue;
-			if (source[i] === "{") opens.push(i);
-			else if (source[i] === "}") opens.pop();
-		}
-		const start = opens[opens.length - 1];
-		if (start === undefined) {
-			scopes.push([0, source.length]);
-			continue;
-		}
-
-		let depth = 0;
-		let end = source.length;
-		for (let i = start; i < source.length; i++) {
-			if (quoted[i]) continue;
-			if (source[i] === "{") depth++;
-			else if (source[i] === "}" && --depth === 0) {
-				end = i + 1;
-				break;
-			}
-		}
-		scopes.push([start, end]);
-	}
-	return scopes;
-}
 
 function spawnCallRegex(source: string): RegExp {
 	const objects = ["Bun"];
@@ -865,38 +823,17 @@ function spawnViolations(file: string, source: string): Violation[] {
 
 	const bindings = stringBindings(source);
 	const quoted = stringMask(source);
-	const localSpawns = localSpawnScopes(source, quoted);
 	const spawnCall = spawnCallRegex(source);
 	for (let match = spawnCall.exec(source); match; match = spawnCall.exec(source)) {
 		if (quoted[match.index]) continue;
 		const open = source.indexOf("(", match.index);
 		if (open < 0) continue;
 		const text = callText(source, open);
-		const name = source.slice(match.index, open).trim();
-		const previous = source.slice(0, match.index).trimEnd();
-		if (
-			name === "spawn" &&
-			!previous.endsWith(".") &&
-			localSpawns.some(([start, end]) => match.index >= start && match.index < end)
-		) {
-			continue;
-		}
-		// A declaration is not a call. Typed parameter and method signatures are not command
-		// arguments either, and a method body starts with `{` after its parameter list.
-		// Restrict the colon and brace skip to actual declarations and method signatures so
-		// real ternary calls like `const p = cond ? spawn("veyyon", ["x"]) : null;` remain checked.
+		// A DECLARATION is not a call. `async function spawn(args: { ... })` is a helper this
+		// tree really does define, and a typed parameter list is the one thing an argument list
+		// never looks like, so the two together separate the definition from every invocation.
 		if (DECLARATION_KEYWORD.test(source.slice(Math.max(0, match.index - 24), match.index))) continue;
-		let after = open + text.length;
-		while (after < source.length && /\s/.test(source[after] as string)) after++;
 		if (TYPED_PARAMETER.test(commandTargetOf(text))) continue;
-		if ((source[after] === ":" || source[after] === "{") && !previous.endsWith(".")) {
-			let boundary = match.index - 1;
-			while (boundary >= 0 && !/[;{},(]/.test(source[boundary] as string)) {
-				boundary--;
-			}
-			const prefix = source.slice(boundary + 1, match.index).trim();
-			if (!prefix.includes("?") && METHOD_MODIFIERS.test(prefix)) continue;
-		}
 		const line = lineAt(source, match.index);
 		if (INSTALLED_BINARY_PATH.test(text) || VEYYON_IN_COMMAND_POSITION.test(text)) {
 			found.push({ file, line, rule: "installed-binary-spawn", evidence: evidenceOf(text) });
@@ -1524,42 +1461,6 @@ describe("the detectors", () => {
 	it("catches the installed binary through a child_process namespace alias", () => {
 		const source = [`import * as cp from "node:child_process";`, `cp.spawnSync("veyyon", ["auth"]);`].join("\n");
 		expect(rulesFor(source)).toEqual(["installed-binary-spawn"]);
-	});
-
-	it("keeps child_process calls with bound or unreadable commands in scope", () => {
-		const imported = [
-			`import { spawn } from "node:child_process";`,
-			`const command = "veyyon";`,
-			`spawn(command);`,
-		].join("\n");
-		expect(rulesFor(imported)).toEqual(["installed-binary-spawn"]);
-
-		const namespaced = [
-			`import * as childProcess from "node:child_process";`,
-			`childProcess.spawn(command);`,
-		].join("\n");
-		expect(rulesFor(namespaced)).toEqual(["unresolved-spawn-target"]);
-	});
-
-	it("catches an unsafe ternary spawn call and imported child_process spawn", () => {
-		expect(rulesFor("const p = cond ? spawn('veyyon', ['x']) : null;")).toEqual(["installed-binary-spawn"]);
-		const imported = [
-			`import { spawn } from "node:child_process";`,
-			`const p = cond ? spawn('veyyon', ['x']) : null;`,
-		].join("\n");
-		expect(rulesFor(imported)).toEqual(["installed-binary-spawn"]);
-		const namespaced = [
-			`import * as childProcess from "node:child_process";`,
-			`const p = cond ? childProcess.spawn('veyyon', ['x']) : null;`,
-		].join("\n");
-		expect(rulesFor(namespaced)).toEqual(["installed-binary-spawn"]);
-	});
-
-	it("does NOT report calls to a local helper named spawn or method declarations", () => {
-		const helper = [`async function spawn(count: number) { return count; }`, `await spawn(count);`].join("\n");
-		expect(rulesFor(helper)).toEqual([]);
-		expect(rulesFor(`class Runner { spawn(count) { return count; } }`)).toEqual([]);
-		expect(rulesFor(`interface Runner { spawn(count): void; }`)).toEqual([]);
 	});
 
 	/** A call head QUOTED inside an embedded source string is text, not a call. */
