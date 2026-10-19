@@ -12,6 +12,7 @@
 - Aligned OpenAI Codex responses imports with openai-responses-stream exports and restored the UsageCostHistoryEntry interface in usage types, with no user-visible change.
 - Merges supplementary model listing quotas into Google Antigravity quota summaries when the summary omits counters ([Refs #620](https://github.com/Wladefant/veyyon/pull/620)).
 - `/login together` validates a pasted key against `GET /v1/models` instead of a chat completion on `moonshotai/Kimi-K2.5`, which Together rejects with `model_not_available` for every valid key (oh-my-pi 62ccb64dbe3fa9d1cd99774e81ba0c976b27b223, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Bedrock requests leave out the `description` key of a tool whose description was pruned into the system prompt, instead of sending `""`, which AWS rejects with HTTP 400 (oh-my-pi 8039fa8da5839366739d2ffc908301e013e30ca5, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ## [1.5.6] - 2026-10-10
 ### Changed
