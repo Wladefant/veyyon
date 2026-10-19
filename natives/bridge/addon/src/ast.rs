@@ -11,7 +11,7 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use rayon::prelude::*;
 use veyyon_ast::{
-	SupportLang,
+	Grammar, SupportLang,
 	ops::{self as shared_ops},
 };
 
@@ -529,11 +529,11 @@ fn collect_candidates(
 	Ok(files)
 }
 
-fn compile_pattern(
+fn compile_pattern<L: Grammar>(
 	pattern: &str,
 	selector: Option<&str>,
 	strictness: &MatchStrictness,
-	lang: SupportLang,
+	lang: L,
 ) -> Result<Pattern> {
 	shared_ops::compile_pattern(pattern, selector, strictness, lang).map_err(to_napi)
 }
@@ -648,7 +648,7 @@ fn compile_find_patterns(
 
 		for (lang_key, &language) in languages {
 			ct.heartbeat()?;
-			match compile_pattern(pattern, selector, strictness, language) {
+			match compile_pattern(pattern, selector, strictness, language.document()) {
 				Ok(compiled_pattern) => {
 					compiled_by_lang.insert(lang_key.clone(), compiled_pattern);
 				},
@@ -848,7 +848,7 @@ fn find_in_file(
 		},
 	};
 
-	let ast = language.ast_grep(source);
+	let ast = language.document().ast_grep(source);
 	if ast.root().dfs().any(|node| node.is_error()) {
 		tally.parse_errors.push(format!(
 			"{}: parse error (syntax tree contains error nodes)",
@@ -1076,7 +1076,7 @@ fn ast_edit_blocking(
 		infer_single_replace_lang(&candidates, &ct)?
 	};
 
-	let language = resolve_supported_lang(&effective_lang)?;
+	let language = resolve_supported_lang(&effective_lang)?.document();
 	let mut parse_errors = Vec::new();
 	let mut compiled_rules = Vec::new();
 	for (pattern, rewrite) in rewrite_rules {
@@ -1581,6 +1581,74 @@ mod tests {
 		assert_eq!(
 			fs::read_to_string(&file_path).expect("a.ts should be readable"),
 			"const b = qux(bar);\n",
+		);
+	}
+
+	/// A PHP file that closes PHP with `?>` and goes on as HTML is searched and
+	/// rewritten whole.
+	///
+	/// Such a file parsed under the PHP-only grammar, which reads the HTML as
+	/// an error: the search missed the call after it and reported a parse
+	/// error, and the rewrite skipped the file. `veyyon_ast`'s
+	/// `document_grammar` suite pins the patterns to the grammar files parse
+	/// with; this drives both tools through their own paths.
+	#[test]
+	fn a_php_file_that_goes_on_as_html_is_searched_and_rewritten_whole() {
+		let root = veyyon_test_scratch::scratch_dir("natives-ast-php-html");
+		let source = "<?php\nfunction render($items) {\n    file_put_contents('a', $items);\n    \
+		              ?>\n    <ul><?php foreach ($items as $item): ?><li><?= $item ?></li><?php \
+		              endforeach; ?></ul>\n    <?php\n    file_put_contents('b', $items);\n}\n";
+		fs::write(root.join("view.php"), source).expect("view.php should be written");
+		let pattern = "file_put_contents($$$ARGS);".to_string();
+		let ct = task::CancelToken::default();
+
+		let candidates =
+			collect_candidates(Some(root.path().to_string_lossy().into_owned()), None, &ct)
+				.expect("candidate collection should succeed");
+		let (resolved, languages) =
+			resolve_candidates_for_find(candidates, None, &ct).expect("languages should resolve");
+		let compiled = compile_find_patterns(
+			std::slice::from_ref(&pattern),
+			&languages,
+			None,
+			&MatchStrictness::Smart,
+			&ct,
+		)
+		.expect("the pattern should compile");
+		let tally = tally_files(resolved, &compiled, usize::MAX, false, false, &ct)
+			.expect("the search should succeed");
+		assert_eq!(tally.parse_errors, Vec::<String>::new());
+		let mut found: Vec<(u32, String)> = tally
+			.retained
+			.into_vec()
+			.into_iter()
+			.map(|found| (found.key.start_line, found.text))
+			.collect();
+		found.sort();
+		assert_eq!(found, [
+			(3, "file_put_contents('a', $items);".to_string()),
+			(7, "file_put_contents('b', $items);".to_string()),
+		]);
+
+		let rewrites = HashMap::from([(pattern, "safe_put($$$ARGS);".to_string())]);
+		let result = ast_edit_blocking(
+			ct,
+			Some(rewrites),
+			Some("php".to_string()),
+			Some(root.path().to_string_lossy().into_owned()),
+			None,
+			None,
+			None,
+			Some(false),
+			None,
+			None,
+			Some(true),
+		)
+		.expect("the rewrite should succeed");
+		assert_eq!(result.total_replacements, 2);
+		assert_eq!(
+			fs::read_to_string(root.join("view.php")).expect("view.php should be readable"),
+			source.replace("file_put_contents(", "safe_put("),
 		);
 	}
 
