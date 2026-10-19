@@ -180,6 +180,7 @@ export interface BunTestSummary {
 	todo: number;
 	total: number;
 	files: number;
+	valid?: boolean;
 }
 
 type CodingAgentTestPartition = Record<CodingAgentBucket, string[]>;
@@ -1973,8 +1974,8 @@ export function extractBunSummary(output: string): BunTestSummary {
 	} else {
 		total = pass + fail + skip + todo;
 	}
-
-	return { pass, fail, skip, todo, total, files };
+	const valid = passMatch !== null || failMatch !== null || ranMatch !== null;
+	return { pass, fail, skip, todo, total, files, valid };
 }
 
 export function formatChunkFailure(failure: ChunkOutcome, replayOutput: boolean): string {
@@ -2120,25 +2121,38 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 	let totalTests = 0;
 	for (const outcome of outcomes) {
 		const s = extractBunSummary(outcome.output);
+		if (outcome.exitCode !== 0 && s.fail === 0) {
+			s.fail = 1;
+			s.total = Math.max(s.total, s.pass + s.fail + s.skip + s.todo);
+		}
 		totalPass += s.pass;
 		totalFail += s.fail;
 		totalSkip += s.skip;
 		totalTodo += s.todo;
 		totalTests += s.total;
 	}
+	if (failures.length > 0 && totalFail === 0) {
+		totalFail = failures.length;
+		totalTests = Math.max(totalTests, totalPass + totalFail + totalSkip);
+	}
 	process.stdout.write(
 		`\nCLOUDFLARE_TEST_TOTALS pass=${totalPass} fail=${totalFail} skip=${totalSkip} todo=${totalTodo} total=${totalTests} chunks=${commands.length}\n`,
 	);
+
+	if (commands.length > 0 && totalTests === 0) {
+		process.exitCode = 1;
+		process.stderr.write("\n[runner-error] Fail closed: 0 total tests executed across non-empty command plan\n");
+	}
 
 	if (quiet) {
 		const totalSeconds = (performance.now() - runStartedAt) / 1000;
 		process.stdout.write(
 			`${formatSummaryFooter(commands.length - failures.length, failures.length, totalSeconds)}\n`,
 		);
-	} else if (failures.length > 0) {
+	} else if (failures.length > 0 || totalFail > 0) {
 		process.stdout.write(style.bold(style.red(`\n${failures.length} of ${commands.length} test chunk(s) FAILED\n`)));
 	}
-	if (failures.length > 0) {
+	if (failures.length > 0 || totalFail > 0) {
 		process.exitCode = 1;
 		process.stdout.write(formatFailureReport(failures, commands.length, false));
 		process.stdout.write("\n");
@@ -2181,6 +2195,10 @@ export async function runTestCommandsSequentially(commands: TestCommand[]): Prom
 		}
 		outcomes.push(outcome);
 		const s = extractBunSummary(outcome.output);
+		if (outcome.exitCode !== 0 && s.fail === 0) {
+			s.fail = 1;
+			s.total = Math.max(s.total, s.pass + s.fail + s.skip + s.todo);
+		}
 		totalPass += s.pass;
 		totalFail += s.fail;
 		totalSkip += s.skip;
@@ -2191,11 +2209,21 @@ export async function runTestCommandsSequentially(commands: TestCommand[]): Prom
 		}
 	}
 
+	if (failures.length > 0 && totalFail === 0) {
+		totalFail = failures.length;
+		totalTests = Math.max(totalTests, totalPass + totalFail + totalSkip);
+	}
+
 	process.stdout.write(
 		`\nCLOUDFLARE_TEST_TOTALS pass=${totalPass} fail=${totalFail} skip=${totalSkip} todo=${totalTodo} total=${totalTests} chunks=${commands.length}\n`,
 	);
 
-	if (failures.length > 0) {
+	if (commands.length > 0 && totalTests === 0) {
+		process.exitCode = 1;
+		process.stderr.write("\n[runner-error] Fail closed: 0 total tests executed across non-empty command plan\n");
+	}
+
+	if (failures.length > 0 || totalFail > 0) {
 		process.exitCode = 1;
 		process.stdout.write(formatFailureReport(failures, commands.length, false));
 		process.stdout.write("\n");

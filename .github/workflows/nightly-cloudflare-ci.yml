@@ -1,0 +1,32 @@
+name: Cloudflare Nightly Full CI
+
+on:
+  schedule:
+    # Nightly at 02:00 UTC on main (matching soak and sweep conventions off peak release hours)
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: "nightly-cloudflare-ci-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  dispatch-nightly:
+    name: Dispatch nightly full suite to Cloudflare Workers Builds
+    runs-on: ubuntu-latest
+    if: github.repository == 'Wladefant/veyyon'
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Trigger Cloudflare Workers Builds full suite
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git rev-parse HEAD)"
+          echo "Dispatching nightly full suite for main at exact SHA $HEAD_SHA..."
+          git push origin "HEAD:refs/heads/cf-ci/nightly-main" --force

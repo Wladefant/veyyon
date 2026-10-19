@@ -4,8 +4,8 @@ set -Eeuo pipefail
 # https://developers.cloudflare.com/workers/ci-cd/builds/configuration/#default-variables
 if [[ -z "${WORKERS_CI_BRANCH:-}" ]]; then
   echo "Cloudflare lane branch is unknown; running tests"
-elif [[ "$WORKERS_CI_BRANCH" != cf-ci/* ]]; then
-  echo "Skipping Cloudflare lane tests: WORKERS_CI_BRANCH is not a cf-ci/ branch"
+elif [[ "$WORKERS_CI_BRANCH" == "main" ]]; then
+  echo "Skipping Cloudflare lane tests on direct main push"
   exit 0
 fi
 
@@ -58,7 +58,15 @@ if [[ -n "${WORKERS_CI_COMMIT_SHA:-}" ]] && [[ "$(git rev-parse HEAD)" != "$WORK
 fi
 
 selection_args=()
-if [[ -n "$changed_since" ]]; then
+is_nightly=0
+if [[ "${WORKERS_CI_BRANCH:-}" == *"nightly"* ]] || [[ "${CI_NIGHTLY:-0}" == "1" ]]; then
+  is_nightly=1
+  echo "CLOUDFLARE_NIGHTLY_RUN branch=${WORKERS_CI_BRANCH:-unset} mode=full"
+fi
+
+if [[ $is_nightly -eq 1 ]]; then
+  echo "CLOUDFLARE_SELECTION_MODE mode=full reason=nightly-main"
+elif [[ -n "$changed_since" ]]; then
   selection_args=(--changed-since "$changed_since")
   if [[ "$changed_since" =~ ^[0-9a-fA-F]{40}$ ]]; then
     if ! git cat-file -e "${changed_since}^{commit}" >/dev/null 2>&1; then
@@ -68,6 +76,17 @@ if [[ -n "$changed_since" ]]; then
     fi
   else
     echo "CLOUDFLARE_SELECTION_FALLBACK reason=invalid-base-sha"
+  fi
+else
+  base_sha=""
+  if git rev-parse --verify origin/main >/dev/null 2>&1 || git fetch --no-tags --depth=20 origin main >/dev/null 2>&1; then
+    base_sha="$(git merge-base HEAD origin/main 2>/dev/null || echo "")"
+  fi
+  if [[ -n "$base_sha" && "$base_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    echo "Resolved comparison base SHA against main: $base_sha"
+    selection_args=(--changed-since "$base_sha")
+  else
+    echo "CLOUDFLARE_SELECTION_FALLBACK reason=unable-to-resolve-merge-base"
   fi
 fi
 
@@ -317,6 +336,23 @@ bash scripts/test-sandbox/run.sh bun scripts/ci-test-ts.ts all "${selection_args
 
 stop_outer_sampler
 trap - EXIT INT TERM
+
+HEAD_SHA="$(git rev-parse HEAD)"
+echo "CLOUDFLARE_EXACT_HEAD sha=$HEAD_SHA"
+
+if [[ -n "${GITHUB_TOKEN:-}" && -n "$HEAD_SHA" ]]; then
+  status_state="success"
+  if [[ $test_exit -ne 0 ]]; then
+    status_state="failure"
+  fi
+  status_desc="Cloudflare CI ${status_state} on shard ${CF_SHARD_INDEX}/${CF_SHARD_COUNT} (exact head ${HEAD_SHA:0:8})"
+  echo "Reporting GitHub commit status on exact SHA $HEAD_SHA ($status_state)..."
+  curl -s -X POST \
+    -H "Authorization: Bearer $GITHUB_TOKEN" \
+    -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/Wladefant/veyyon/statuses/$HEAD_SHA" \
+    -d "{\"state\":\"$status_state\",\"context\":\"Workers Builds: veyyon-ci-${CF_SHARD_INDEX}\",\"description\":\"$status_desc\"}" >/dev/null || true
+fi
 
 if [[ $test_exit -ne 0 ]]; then
   echo "FATAL: Test suite failed with exit code $test_exit" >&2

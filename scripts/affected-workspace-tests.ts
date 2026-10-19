@@ -145,6 +145,10 @@ export const AFFECTED_DYNAMIC_IMPORT_SITES: readonly AffectedDynamicImportSite[]
 	},
 ];
 
+export const AFFECTED_DYNAMIC_IMPORT_LOADER_FILES: readonly string[] = Array.from(
+	new Set(AFFECTED_DYNAMIC_IMPORT_SITES.map(site => site.file)),
+).sort();
+
 const MAX_GIT_OUTPUT_BYTES = 128 * 1024 * 1024;
 const FULL_COMMIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 

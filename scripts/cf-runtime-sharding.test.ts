@@ -294,11 +294,19 @@ Ran 24 tests across 4 files. [120.00ms]
 			expect(summary.total).toBe(42);
 		});
 
-		it("returns zeroes when output has no parseable test summary", () => {
+		it("returns zeroes and valid=false when output has no parseable test summary", () => {
 			const summary = extractBunSummary("compilation error: module not found");
 			expect(summary.pass).toBe(0);
 			expect(summary.fail).toBe(0);
 			expect(summary.total).toBe(0);
+			expect(summary.valid).toBe(false);
+		});
+
+		it("marks valid=true when standard test counts are present", () => {
+			const summary = extractBunSummary(" 5 pass\n 0 fail\nRan 5 tests across 1 files.");
+			expect(summary.pass).toBe(5);
+			expect(summary.fail).toBe(0);
+			expect(summary.valid).toBe(true);
 		});
 	});
 });
