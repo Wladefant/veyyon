@@ -53,11 +53,9 @@ GitHub Releases publishes these application binaries:
 | --- | --- | --- |
 | Linux (glibc) | x64 | `veyyon-linux-x64` |
 | Linux (glibc) | arm64 | `veyyon-linux-arm64` |
-| macOS | x64 (Intel) | `veyyon-darwin-x64` |
-| macOS | arm64 (Apple silicon) | `veyyon-darwin-arm64` |
 | Windows | x64 | `veyyon-windows-x64.exe` |
 
-There is no native Windows arm64 release. On Windows arm64, run the Windows x64 binary under emulation. Linux release binaries require glibc. On a musl system such as Alpine, the installer stops before downloading and reports to clone the repository and build it yourself.
+There is no native Windows arm64 release. On Windows arm64, run the Windows x64 binary under emulation. Linux release binaries require glibc. On a musl system such as Alpine or on macOS, clone the repository and build it locally.
 
 ## After install
 

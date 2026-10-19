@@ -89,14 +89,10 @@ export function releaseTagRefusal(facts: ReleaseTagFacts): string | undefined {
 const RELEASE_ARTIFACTS = [
 	"veyyon-linux-x64",
 	"veyyon-linux-arm64",
-	"veyyon-darwin-x64",
-	"veyyon-darwin-arm64",
 	"veyyon-windows-x64.exe",
 	"veyyon_natives.linux-x64-baseline.node",
 	"veyyon_natives.linux-x64-modern.node",
 	"veyyon_natives.linux-arm64.node",
-	"veyyon_natives.darwin-x64-baseline.node",
-	"veyyon_natives.darwin-arm64.node",
 	"veyyon_natives.win32-x64-baseline.node",
 ] as const;
 

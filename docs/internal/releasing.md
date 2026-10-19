@@ -236,18 +236,32 @@ Release order is publication order. A version string such as `0.0.1` or `1.4.0` 
 
 Three surfaces, and all three are required.
 
-**The GitHub release.** Five platform binaries, six native addons, and a
-`.sha256` sidecar for every one of them. `scripts/release-policy.ts` holds the
-exact manifest, and a release with a missing or an extra distribution asset stays
-red.
+**The GitHub release.** Three platform binaries, four native addons, and a
+`.sha256` sidecar for every one of them (seven artifacts, fourteen assets total).
+`scripts/release-policy.ts` holds the exact manifest, and a release with a missing
+or an extra distribution asset stays red.
 
 | Platform and arch | Binary |
 | --- | --- |
 | linux x64 | `veyyon-linux-x64` |
 | linux arm64 | `veyyon-linux-arm64` |
-| macOS x64 | `veyyon-darwin-x64` |
-| macOS arm64 | `veyyon-darwin-arm64` |
 | Windows x64 | `veyyon-windows-x64.exe` |
+
+**Built on Cloudflare Workers Builds.** One Workers Build cannot hold all seven
+artifacts (20 minute limit, small disk), so the release is assembled by four builds
+that share one draft GitHub release. Push the same commit to each branch:
+
+| Branch | Mode | Does |
+| --- | --- | --- |
+| `cf-release/part-windows` | `part-windows` | Windows binary and addon, focused release tests, uploads to the draft |
+| `cf-release/part-linux-x64` | `part-linux-x64` | `veyyon-linux-x64` and the baseline and modern addons, uploads to the draft |
+| `cf-release/part-linux-arm64` | `part-linux-arm64` | `veyyon-linux-arm64` and its addon, uploads to the draft |
+| `cf-release/finalize` | `finalize` | Checks the draft holds exactly the manifest and each GitHub digest matches its `.sha256` sidecar, publishes, then runs `bun scripts/release.ts verify-assets <tag>`; a failure returns the release to draft |
+
+`ci/cloudflare/publish-release.ts` talks to GitHub over REST only. The trigger
+holds `VEYYON_RELEASE_TOKEN` (a fine-grained token with Contents: Read and write
+on this repository only) and `VEYYON_RELEASE_TAG`, `VEYYON_RELEASE_PRERELEASE`,
+`VEYYON_RELEASE_PUBLISH`. Run `finalize` only after the three parts are green.
 
 The native addons ship as `veyyon_natives.<platform>-<arch>[-variant].node` so a
 source install stays toolchain-free: `ensure-native.ts` fetches the addon for its

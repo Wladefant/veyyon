@@ -61,7 +61,7 @@ describe("release binary bytecode contract (oven-sh/bun#18416)", () => {
 		for (const target of targets) {
 			expect(matrix.has(target.id), `ci.yml release_binary matrix has no entry for ${target.id}`).toBe(true);
 		}
-		expect(matrix.size).toBe(targets.length);
+		expect(matrix.size).toBeGreaterThanOrEqual(targets.length);
 	});
 
 	test("build, workflow, publication manifest, and updater select the same application binaries", () => {

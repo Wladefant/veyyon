@@ -18,6 +18,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+	assertPublishedReleaseAssets,
 	type MainComparison,
 	REQUIRED_RELEASE_ASSET_NAMES,
 	type ReleaseTagFacts,
@@ -109,23 +110,25 @@ describe("a tag may publish only from main", () => {
 });
 
 describe("published asset manifest", () => {
-	it("accepts exactly the complete five-platform binary and native-addon set with sidecars", () => {
+	it("accepts exactly the complete seven-artifact distribution platform set with sidecars", () => {
 		const result = verifyPublishedReleaseAssets(REQUIRED_RELEASE_ASSET_NAMES);
 		expect(result).toEqual({ ok: true, missing: [], unexpected: [] });
+		expect(REQUIRED_RELEASE_ASSET_NAMES.length).toBe(14);
 	});
 
-	it("fails when either binary platform previously omitted from verification is absent", () => {
-		for (const missing of ["veyyon-darwin-x64", "veyyon-linux-arm64"]) {
+	it("fails when any required binary platform is absent", () => {
+		for (const missing of ["veyyon-windows-x64.exe", "veyyon-linux-arm64", "veyyon-linux-x64"]) {
 			const result = verifyPublishedReleaseAssets(REQUIRED_RELEASE_ASSET_NAMES.filter(name => name !== missing));
 			expect(result.ok).toBe(false);
 			expect(result.missing).toContain(missing);
 		}
 	});
 
-	it("fails when any checksum sidecar or required native addon is absent", () => {
+	it("fails when any checksum sidecar or required native addon is absent, specifically rejecting missing Windows addon", () => {
 		for (const missing of [
 			"veyyon-linux-arm64.sha256",
-			"veyyon_natives.darwin-arm64.node",
+			"veyyon_natives.linux-x64-modern.node",
+			"veyyon_natives.win32-x64-baseline.node",
 			"veyyon_natives.win32-x64-baseline.node.sha256",
 		]) {
 			const result = verifyPublishedReleaseAssets(REQUIRED_RELEASE_ASSET_NAMES.filter(name => name !== missing));
@@ -134,10 +137,26 @@ describe("published asset manifest", () => {
 		}
 	});
 
-	it("rejects distribution assets outside the exact manifest", () => {
-		const result = verifyPublishedReleaseAssets([...REQUIRED_RELEASE_ASSET_NAMES, "veyyon-linux-riscv64"]);
-		expect(result.ok).toBe(false);
-		expect(result.unexpected).toEqual(["veyyon-linux-riscv64"]);
+	it("assertPublishedReleaseAssets throws when Windows native addon or any asset is missing", () => {
+		expect(() =>
+			assertPublishedReleaseAssets(
+				REQUIRED_RELEASE_ASSET_NAMES.filter(name => name !== "veyyon_natives.win32-x64-baseline.node"),
+			),
+		).toThrow(/missing:.*veyyon_natives\.win32-x64-baseline\.node/);
+	});
+
+	it("rejects distribution assets outside the exact manifest, including omitted macOS artifacts", () => {
+		for (const unexpectedAsset of [
+			"veyyon-linux-riscv64",
+			"veyyon-darwin-x64",
+			"veyyon-darwin-arm64",
+			"veyyon_natives.darwin-x64-baseline.node",
+			"veyyon_natives.darwin-arm64.node",
+		]) {
+			const result = verifyPublishedReleaseAssets([...REQUIRED_RELEASE_ASSET_NAMES, unexpectedAsset]);
+			expect(result.ok).toBe(false);
+			expect(result.unexpected).toEqual([unexpectedAsset]);
+		}
 	});
 
 	it("fails closed when GitHub publication state cannot be queried", async () => {
