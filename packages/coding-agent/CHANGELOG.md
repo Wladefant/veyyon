@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Reviewer prompts now enforce exact-head, gate-safe, verdict-only reviews and declare `task`, `qa-verifier`, and `haiku` as child roles ([#566](https://github.com/Wladefant/veyyon/issues/566)).
+
 - Session cwd changes leave the shared process directory unchanged and load plugin configuration from each session's destination project ([issue](https://github.com/Wladefant/veyyon/issues/529)).
 - Quota refusals block the failed request's credential, not a healthy account selected by a later resolver call ([PR](https://github.com/Wladefant/veyyon/pull/619)).
 - Automatic lane handoff reserves the summary model's full output limit, including reasoning, before selection. The request sends the same limit ([issue](https://github.com/Wladefant/veyyon/issues/552)).
