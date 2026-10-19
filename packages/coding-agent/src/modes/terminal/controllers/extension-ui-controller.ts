@@ -870,9 +870,9 @@ export class ExtensionUiController {
 		// For non-streaming cases with display=true, update UI
 		// (streaming cases update via message_end event).
 		// Gate on initialChatRendered (#1955): an extension's session_start
-		// sendMessage({display:true}) runs before renderInitialMessages, which would
-		// re-render from session entries AND re-append via preserveExistingChat,
-		// duplicating the message. After the initial render the rebuild must run.
+		// sendMessage({display:true}) runs before the cold-launch replay, which would
+		// re-render it from session entries AND keep the rebuilt copy with the startup
+		// chat, duplicating the message. After the initial render the rebuild must run.
 		if (!wasStreaming && shouldDisplay && this.ctx.initialChatRendered) {
 			this.ctx.rebuildChatFromMessages();
 		}

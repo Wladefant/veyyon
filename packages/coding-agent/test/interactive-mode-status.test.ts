@@ -143,11 +143,11 @@ describe("InteractiveMode.showStatus", () => {
 		expect(renderLastLine(ctx.chatContainer)).toContain("STATUS_TWO");
 	});
 
-	test("preserves startup notifications while rendering the initial transcript", () => {
+	test("preserves startup notifications while rendering the initial transcript", async () => {
 		const { ctx, helpers } = createInitialRenderHarness();
 
 		helpers.showWarning("startup notification probe");
-		helpers.renderInitialMessages({ preserveExistingChat: true });
+		await helpers.replayInitialMessages();
 
 		expect(renderContainer(ctx.chatContainer)).toContain("startup notification probe");
 	});

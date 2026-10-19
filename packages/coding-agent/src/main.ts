@@ -736,14 +736,14 @@ async function runInteractiveMode(
 		});
 
 	// Cold-launch cleanup: this replay replaces the welcome/startup frame with the
-	// resumed/new transcript. It does NOT erase native history unless the operator
-	// asked for it. `clearTerminalHistory` here means ED 3, which is not selective:
+	// resumed/new transcript, built in slices so keystrokes echo while it replays. It
+	// does NOT erase native history unless the operator asked for it.
+	// `clearTerminalHistory` here means ED 3, which is not selective:
 	// it takes the terminal's whole saved scrollback, including everything on screen
 	// before veyyon started. The in-process session loads that share this flag are
 	// mid-session acts the operator just requested; a cold launch is not, and
 	// deleting the history they launched from was never part of starting up.
-	mode.renderInitialMessages({
-		preserveExistingChat: true,
+	await mode.replayInitialMessages({
 		clearTerminalHistory: settings.get("startup.clearScrollback"),
 	});
 

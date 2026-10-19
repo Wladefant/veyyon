@@ -2264,6 +2264,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	resetTranscript(): void {
+		this.#uiHelpers.transcript.settle();
 		this.chatContainer.dispose();
 		this.chatContainer.clear();
 	}
@@ -2540,8 +2541,19 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#uiHelpers.renderSessionContext(sessionContext, options);
 	}
 
-	renderInitialMessages(options?: { preserveExistingChat?: boolean; clearTerminalHistory?: boolean }): void {
+	renderInitialMessages(options?: { clearTerminalHistory?: boolean }): void {
 		this.#uiHelpers.renderInitialMessages(options);
+	}
+
+	/**
+	 * Replace the startup frame with the session transcript without blocking input (see
+	 * {@link UiHelpers.replayInitialMessages}). Session events wait for it, so a turn that starts
+	 * while it builds routes against the finished transcript.
+	 */
+	async replayInitialMessages(options: { clearTerminalHistory?: boolean }): Promise<void> {
+		const replay = this.#uiHelpers.replayInitialMessages(options);
+		this.#eventController.deferEventsUntil(replay);
+		await replay;
 	}
 
 	getUserMessageText(message: Message): string {

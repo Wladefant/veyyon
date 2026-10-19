@@ -169,14 +169,14 @@ export interface InteractiveModeContext {
 	// State
 	isInitialized: boolean;
 	/**
-	 * `true` once `renderInitialMessages` has rendered the session transcript
-	 * into `chatContainer` at least once.
+	 * `true` once `renderInitialMessages` or the cold-launch replay has rendered
+	 * the session transcript into `chatContainer` at least once.
 	 *
 	 * Extension chat-rebuilds (`ExtensionUiController.#applyCustomMessageDisplay`)
 	 * are gated on this: rebuilding before the initial render would plant a
-	 * session-derived component into the chat that `renderInitialMessages` then
-	 * both re-renders from session entries AND re-appends via
-	 * `preserveExistingChat`, duplicating the message (issue #1955).
+	 * session-derived component into the chat that the cold-launch replay then
+	 * both re-renders from session entries AND keeps with the startup chat,
+	 * duplicating the message (issue #1955).
 	 */
 	initialChatRendered: boolean;
 	isBashMode: boolean;
@@ -380,7 +380,7 @@ export interface InteractiveModeContext {
 		sessionContext: SessionContext,
 		options?: { updateFooter?: boolean; populateHistory?: boolean },
 	): void;
-	renderInitialMessages(options?: { preserveExistingChat?: boolean; clearTerminalHistory?: boolean }): void;
+	renderInitialMessages(options?: { clearTerminalHistory?: boolean }): void;
 	getUserMessageText(message: Message): string;
 	findLastAssistantMessage(): AssistantMessage | undefined;
 	extractAssistantText(message: AssistantMessage): string;

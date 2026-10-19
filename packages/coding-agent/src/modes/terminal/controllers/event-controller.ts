@@ -150,6 +150,8 @@ export class EventController {
 	// past this index are the ones that happened since the last marker and are the
 	// only ones that can explain the turn now finishing.
 	#namedCacheInvalidations = 0;
+	// A transcript replay events wait for (see deferEventsUntil); cleared by the first event after it.
+	#transcriptReplay: Promise<unknown> | undefined;
 
 	constructor(private ctx: EventControllerContext) {
 		this.#composerPrediction = new ComposerPredictionController(ctx);
@@ -343,11 +345,25 @@ export class EventController {
 		this.#projection.releaseSettledToolCalls();
 	}
 
+	/**
+	 * Hold session events until `replay` settles. A transcript rebuilt in slices shares the pending
+	 * and settled tool-call ledgers with live routing, so an event handled mid-rebuild would route
+	 * against a half-built ledger, and the rebuild would seal the card that event opened as history.
+	 */
+	deferEventsUntil(replay: Promise<void>): void {
+		this.#transcriptReplay = replay.catch(() => undefined);
+	}
+
 	async handleEvent(event: AgentSessionEvent): Promise<void> {
 		if (!this.ctx.isInitialized) {
 			await this.ctx.init();
 		}
-
+		const replay = this.#transcriptReplay;
+		if (replay) {
+			// Events that arrive while it builds queue on it in order; the first to resume releases it.
+			await replay;
+			if (this.#transcriptReplay === replay) this.#transcriptReplay = undefined;
+		}
 		// Each handler explicitly requests a render (or leaves it out, when it
 		// changed nothing visible). A blanket pre-render fired on every event —
 		// including the ~hundreds of `message_update` deltas per streaming turn —
