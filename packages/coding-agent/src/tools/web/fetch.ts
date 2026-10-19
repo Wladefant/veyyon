@@ -7,14 +7,18 @@ import type { FetchImpl, ImageContent, TextContent } from "@veyyon/ai";
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import { htmlToMarkdown } from "@veyyon/natives";
 import { isCancellation } from "@veyyon/utils/abortable";
-import { truncate } from "@veyyon/utils/format";
+import { formatBytes, truncate } from "@veyyon/utils/format";
 import { isEnoent } from "@veyyon/utils/fs-error";
 // Owners, not the `@veyyon/utils` barrel: 8 modules against 74.
 import * as logger from "@veyyon/utils/logger";
 import * as ptree from "@veyyon/utils/ptree";
+// Each from its owner, not the `../tui` barrel: the barrel is 768 modules because it re-exports the
+// hyperlink module, and `read.ts` imports this file.
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { $which } from "@veyyon/utils/which";
+import { fetchWithDeepSeek, findDeepSeekApiKey } from "@veyyon/web/deepseek";
 import { findFirecrawlApiKey, scrapeWithFirecrawl } from "@veyyon/web/firecrawl";
 import { extractWithParallel, findParallelApiKey, getParallelExtractContent } from "@veyyon/web/parallel";
 import {
@@ -39,17 +43,13 @@ import { type ProviderTextTransformResolver, resolveProviderTextTransform } from
 import type { ToolSession } from "../../sdk";
 import { primarySessionCpuAdoption } from "../../session/cpu-limit";
 import { truncateHead } from "../../session/streaming-output";
-// Each from its owner, not the `../tui` barrel: the barrel is 768 modules because it re-exports the
-// hyperlink module, and `read.ts` imports this file.
-import { scopedTimeoutSignal } from "../../utils/fetch-timeout";
 import { webpExclusionForModel } from "../../utils/image-loading";
 import { formatDimensionNote, type ResizedImage, resizeImage } from "../../utils/image-resize";
 import { ensureTool } from "../../utils/tools-manager";
 import { type ArchiveFormat, listArchiveRoot, sniffArchiveFormat } from "../../utils/zip";
 import { applyListLimit } from "../core/list-limit";
 import { inlineBudgetFor } from "../core/output-artifact";
-import type { OutputMeta } from "../core/output-meta";
-import { formatBytes } from "../core/render-utils";
+import type { OutputMeta } from "../core/output-notice";
 import { listTables, looksLikeSqlite, renderTableList } from "../core/sqlite-reader";
 import { ToolError, throwIfAborted } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
@@ -739,7 +739,7 @@ async function parseFeedToMarkdown(content: string, maxItems = 10): Promise<stri
 const REMOTE_READER_MAX_MS = 10_000;
 
 /** Reader backends for {@link renderHtmlToText}, in default priority order. */
-export type FetchProvider = "native" | "trafilatura" | "lynx" | "parallel" | "jina" | "firecrawl";
+export type FetchProvider = "native" | "trafilatura" | "lynx" | "parallel" | "jina" | "firecrawl" | "deepseek";
 
 const FETCH_PROVIDER_ORDER: readonly FetchProvider[] = [
 	"native",
@@ -748,6 +748,7 @@ const FETCH_PROVIDER_ORDER: readonly FetchProvider[] = [
 	"parallel",
 	"jina",
 	"firecrawl",
+	"deepseek",
 ];
 
 /**
@@ -876,6 +877,28 @@ export async function renderHtmlToText(
 						storage,
 					);
 					return result.success && result.markdown ? result.markdown : null;
+				} finally {
+					remoteTimeout.cancel();
+				}
+			},
+			deepseek: async () => {
+				if (!allowSecondaryReaders) return null;
+				const apiKey = findDeepSeekApiKey(storage);
+				if (!apiKey) return null;
+				const transform = resolveProviderTextTransform(resolveTextTransform, "DeepSeek remote reader");
+				if (transform(url) !== url) return null;
+				const remoteTimeout = scopedTimeoutSignal(remoteBudgetMs, userSignal);
+				try {
+					const page = await fetchWithDeepSeek(url, apiKey, {
+						signal: remoteTimeout.signal,
+						fetch: fetchImpl,
+					});
+					const content = page.content.trim();
+					if (!content) return null;
+					// DeepSeek returns the page's Markdown body without the title line, so the
+					// heading is added here for a reader that only ever sees the text.
+					const title = page.title.trim();
+					return title ? `# ${title}\n\n${content}` : content;
 				} finally {
 					remoteTimeout.cancel();
 				}

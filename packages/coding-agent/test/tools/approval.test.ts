@@ -15,7 +15,6 @@ import {
 	resolveEffectiveApprovalMode,
 	type ToolTier,
 	truncateForPrompt,
-	validateApprovalModeSetting,
 } from "@veyyon/coding-agent/tools/core/approval";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { DEBUG_READONLY_ACTIONS } from "@veyyon/coding-agent/tools/shell/debug";
@@ -716,24 +715,5 @@ describe("approval mode value set is the one source of truth", () => {
 		expect([...APPROVAL_MODE_VALUES].sort()).toEqual<string[]>(
 			["plan", "ask", "ask-command", "auto", "yolo", "always-ask", "write", "auto-edit"].sort(),
 		);
-	});
-});
-
-describe("validateApprovalModeSetting surfaces a config typo loudly", () => {
-	it("returns no warning for an absent or valid value", () => {
-		expect(validateApprovalModeSetting(undefined)).toBeUndefined();
-		expect(validateApprovalModeSetting(null)).toBeUndefined();
-		for (const mode of APPROVAL_MODE_VALUES) {
-			expect(validateApprovalModeSetting(mode)).toBeUndefined();
-		}
-	});
-
-	it("returns an actionable warning naming the bad value, the safe fallback, and valid options", () => {
-		const warning = validateApprovalModeSetting("askk");
-		expect(warning).toBeDefined();
-		expect(warning).toContain("askk");
-		expect(warning).toContain("ask");
-		expect(warning).toContain("yolo"); // listed among valid values
-		expect(warning).toContain("plan");
 	});
 });

@@ -1,7 +1,7 @@
 import { $env } from "@veyyon/utils/env";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
+import { getEnvApiKey } from "../env-api-key";
 import * as AIError from "../error";
-import { getEnvApiKey } from "../stream";
 import type {
 	AssistantMessage,
 	Context,
@@ -35,6 +35,7 @@ import {
 	type OpenAIReasoningEffortFallback,
 	resolveOpenAIReasoningEffortFallback,
 } from "./openai-reasoning-fallback";
+import { processResponsesStream } from "./openai-responses-stream";
 import type { ResponseCreateParamsStreaming, ResponseStreamEvent } from "./openai-responses-wire";
 import {
 	applyCommonResponsesSamplingParams,
@@ -42,7 +43,6 @@ import {
 	buildResponsesInput,
 	getOpenAIPromptCacheKey,
 	isOpenAIResponsesProgressEvent,
-	processResponsesStream,
 } from "./openai-shared";
 
 export { parseAzureDeploymentNameMap } from "./azure-deployment-names";
@@ -367,6 +367,8 @@ function buildParams(
 		context,
 		strictResponsesPairing: true,
 		supportsImageDetailOriginal: model.compat.supportsImageDetailOriginal,
+		// The tools below are all `function` tools, so a custom tool call replays as a function call.
+		supportsCustomToolCalls: false,
 		supportsDeveloperRole: model.compat.supportsDeveloperRole,
 		// replay stays off (Azure assistant payloads are not spliced today), but
 		// declaring the policy opens the compaction-window seam: a stored

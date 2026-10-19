@@ -15,6 +15,37 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+NIGHTLY_BRANCH = Path(__file__).with_name("nightly-branch.txt").read_text(encoding="utf-8").strip()
+if not NIGHTLY_BRANCH:
+    raise ValueError("nightly-branch.txt must name a branch")
+
+
+def claim_once_per_utc_day(state_root: Path, utc_day: str) -> bool:
+    state_root.mkdir(parents=True, exist_ok=True)
+    claim = state_root / f"nightly-{utc_day}.claimed"
+    try:
+        descriptor = os.open(claim, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        return False
+    with os.fdopen(descriptor, "w", encoding="utf-8") as state:
+        state.write(f"claimed_at_utc={datetime.now(timezone.utc).isoformat()}\n")
+    return True
+
+
+def state_root_from_environment() -> Path:
+    configured = os.environ.get("CLOUDFLARE_NIGHTLY_STATE_DIR")
+    if configured:
+        return Path(configured)
+    return Path.home() / ".veyyon" / "run" / "nightly-cloudflare-ci"
+
+
+def current_utc_day() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
 
 API = "https://api.cloudflare.com/client/v4"
 SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -38,7 +69,12 @@ def main() -> int:
     if not SHA40_RE.fullmatch(commit_hash):
         raise ValueError("git returned an invalid commit hash")
 
-    payload = json.dumps({"branch": branch, "commit_hash": commit_hash}).encode()
+    utc_day = current_utc_day()
+    if not claim_once_per_utc_day(state_root_from_environment(), utc_day):
+        print(f"dispatch=skipped reason=already-dispatched utc_date={utc_day}")
+        return 0
+
+    payload = json.dumps({"branch": NIGHTLY_BRANCH, "commit_hash": commit_hash}).encode()
     request = urllib.request.Request(
         f"{API}/accounts/{account_id}/builds/triggers/{trigger_id}/builds",
         data=payload,
@@ -63,13 +99,28 @@ def main() -> int:
     if not build_id:
         print("Cloudflare accepted no build identifier in the response", file=sys.stderr)
         return 1
-    print(f"dispatch=accepted branch={branch} commit_hash={commit_hash} build_id={build_id}")
-    return 0
+    print(f"dispatch=accepted branch={NIGHTLY_BRANCH} commit_hash={commit_hash} build_id={build_id}")
+    verification = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).with_name("cf_ci.py")),
+            "verify",
+            "--build-id",
+            str(build_id),
+            "--expected-sha",
+            commit_hash,
+            "--account-id",
+            account_id,
+        ],
+        check=False,
+        timeout=23 * 60,
+    )
+    return verification.returncode
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         raise SystemExit(1)

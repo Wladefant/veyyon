@@ -11,6 +11,8 @@ import {
 	ANTIGRAVITY_ENDPOINTS,
 	ANTIGRAVITY_PRIMARY_ENDPOINT,
 	ANTIGRAVITY_SANDBOX_ENDPOINT,
+	GEMINI_DEVELOPER_API_ENDPOINT,
+	OPENROUTER_API_ENDPOINT,
 } from "@veyyon/catalog/provider-endpoints";
 import {
 	CODEX_BASE_URL,
@@ -31,6 +33,7 @@ import {
 	trimTrailingSlashes,
 	untilAborted,
 } from "@veyyon/utils";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import packageJson from "../../../package.json" with { type: "json" };
 import { isAuthenticated } from "../../config/auth-state";
 import type { ModelRegistry } from "../../config/model-registry";
@@ -38,7 +41,6 @@ import type { ModelRegistry } from "../../config/model-registry";
 import { settings } from "../../config/settings-instance";
 import type { CustomTool } from "../../extensibility/custom-tools/types";
 import { toolsPrompts } from "../../prompts/tools/rows";
-import { scopedTimeoutSignal } from "../../utils/fetch-timeout";
 import { canonicalizeImageContent } from "../../utils/image-resize";
 import { resolveReadPath } from "../core/path-utils";
 import { missingXAICredentialsMessage, resolveXAIHttpCredentials, veyyonXAIUserAgent } from "./xai-http";
@@ -1555,7 +1557,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema.value, ImageGenToolD
 								model: resolvedModel,
 								messages: [{ role: "user" as const, content: contentParts }],
 							};
-							const resp = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
+							const resp = await fetchImpl(`${OPENROUTER_API_ENDPOINT}/chat/completions`, {
 								method: "POST",
 								headers: {
 									"Content-Type": "application/json",
@@ -1644,7 +1646,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema.value, ImageGenToolD
 							generationConfig,
 						};
 						const resp = await fetchImpl(
-							`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+							`${GEMINI_DEVELOPER_API_ENDPOINT}/models/${encodeURIComponent(model)}:generateContent`,
 							{
 								method: "POST",
 								headers: {

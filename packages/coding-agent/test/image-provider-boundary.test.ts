@@ -246,7 +246,10 @@ describe("image provider confidentiality boundary", () => {
 			}) as typeof completeSimple;
 			const resolver: ApiKeyResolver = async context => (context.error ? "refreshed-key" : "first-key");
 			const settings = Settings.isolated({ "images.autoResize": false });
-			settings.setModelRole("vision", `${visionModel.provider}/${visionModel.id}`);
+			settings.set("agent.helpers", {
+				...settings.get("agent.helpers"),
+				vision: { model: `${visionModel.provider}/${visionModel.id}` },
+			});
 			const session = {
 				cwd: testDir,
 				hasUI: false,

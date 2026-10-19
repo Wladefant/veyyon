@@ -5,7 +5,7 @@ import {
 	getEmbeddingQueryCacheKeysForTests,
 	resetEmbeddingProviderForTests,
 	setEmbeddingProviderForTests,
-	setLocalModelInitializerForTests,
+	setLocalModelInitializer,
 } from "@veyyon/mnemopi/core/embeddings";
 import {
 	type MnemopiProviderTextSanitizer,
@@ -55,7 +55,7 @@ describe("embedding runtime identity isolation", () => {
 			const calls = new Map<string, number>();
 			const gate = Promise.withResolvers<void>();
 			let rejectSmallOnce = true;
-			setLocalModelInitializerForTests(async options => {
+			setLocalModelInitializer(async options => {
 				const model = String(options.model);
 				started.push(model);
 				calls.set(model, (calls.get(model) ?? 0) + 1);
@@ -394,7 +394,7 @@ describe("embedding runtime identity isolation", () => {
 			delete process.env.MNEMOPI_NO_EMBEDDINGS;
 			delete process.env.MNEMOPI_EMBEDDING_API_URL;
 			delete process.env.MNEMOPI_EMBEDDINGS_VIA_API;
-			setLocalModelInitializerForTests(() => {
+			setLocalModelInitializer(() => {
 				throw new Error("initializer failed before returning");
 			});
 

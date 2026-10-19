@@ -1,9 +1,10 @@
 import * as path from "node:path";
-import { errorMessage, isEnoent, logger, postmortem, ptree, untilAborted } from "@veyyon/utils";
+import { errorMessage, isEnoent, logger, postmortem, ptree, settleWithin, untilAborted } from "@veyyon/utils";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { primarySessionCpuAdoption } from "../session/cpu-limit";
 import { ToolAbortError, throwIfAborted } from "../tools/core/tool-errors";
-import { scopedTimeoutSignal } from "../utils/fetch-timeout";
 import { MessageFramer } from "../utils/jsonrpc-framing";
+import { detectLanguageId } from "../utils/lang-from-path";
 import { applyWorkspaceEdit } from "./edits";
 import { getLspmuxCommand, isLspmuxSupported } from "./lspmux";
 import type {
@@ -16,7 +17,7 @@ import type {
 	ServerConfig,
 	WorkspaceEdit,
 } from "./types";
-import { detectLanguageId, fileToUri } from "./utils";
+import { fileToUri } from "./utils";
 
 // =============================================================================
 // Client State
@@ -1126,13 +1127,14 @@ export async function refreshFile(client: LspClient, filePath: string, signal?: 
 }
 
 async function waitForExit(client: LspClient, timeoutMs: number): Promise<boolean> {
-	return await Promise.race([
+	return await settleWithin(
 		client.proc.exited.then(
 			() => true,
 			() => true,
 		),
-		Bun.sleep(timeoutMs).then(() => false),
-	]);
+		timeoutMs,
+		false,
+	);
 }
 
 /**

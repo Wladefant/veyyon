@@ -1,10 +1,9 @@
 import type { Database } from "bun:sqlite";
 import * as logger from "@veyyon/utils/logger";
 import { clamp01 } from "@veyyon/utils/math";
-import { generateId as generateTimedId, sha256Hex16, stableMemoryId } from "../../util/ids";
+import { tableExists } from "@veyyon/utils/sqlite";
+import { generateId as generateTimedId, stableMemoryId } from "../../util/ids";
 import {
-	cjkFtsTerms,
-	containsSpacelessCjk,
 	FACT_MATCH_STOPWORDS,
 	factMatchTokens,
 	ftsQueryTerms,
@@ -13,15 +12,11 @@ import {
 	recallTokens,
 	unicodeWordTokens,
 } from "../../util/regex";
-import { tableExists } from "../../util/sqlite";
 import { currentEmbeddingModel, embed } from "../embeddings";
 import { getMnemopiRuntimeOptions, mnemopiDebugEnabled, withMnemopiRuntimeOptions } from "../runtime-options";
 import { buildExactVectorIndex, searchExactVectorIndex } from "../vector-index";
 import { decodeEmbeddingJson, encodeEmbeddingJson } from "../vector-math";
 import type { BeamMemoryState, JsonValue, Metadata } from "./types";
-
-// `HybridWeights` is declared in `../../config`, next to the weights it describes.
-export type { HybridWeights } from "../../config";
 
 export interface VectorDistanceResult {
 	rowid: number;
@@ -56,49 +51,55 @@ export function normalizeImportance(importance: number | null | undefined, fallb
 // temporalBoost, and the timestamp cache) lives in util/datetime.ts, the single
 // owner. Recall scoring reaches it through recall.ts; this module keeps no fork.
 
+/** Content tokens plus the parts of each compound token (`foo_bar.baz`), minus stopwords, numbers and parts under 3 chars. */
+function expandedContentTokens(contentLower: string): Set<string> {
+	const tokens = recallTokens(contentLower);
+	const expanded = new Set(tokens);
+	for (const token of tokens) {
+		for (const part of token.split(SPLIT_TOKEN_RE)) {
+			if (part.length >= 3 && !FACT_MATCH_STOPWORDS.has(part) && !/^\d+$/.test(part)) expanded.add(part);
+		}
+	}
+	return expanded;
+}
+
+/** 1 for an exact token, 0.75 for a synonym, 0.4 for a containment overlap of 4+ chars, else 0. */
+function tokenMatchWeight(token: string, contentTokens: ReadonlySet<string>): number {
+	if (contentTokens.has(token)) return 1;
+	if ((RECALL_SYNONYMS[token] ?? []).some(syn => contentTokens.has(syn))) return 0.75;
+	if (token.length < 4) return 0;
+	for (const contentToken of contentTokens) {
+		if (contentToken.length >= 4 && (token.includes(contentToken) || contentToken.includes(token))) return 0.4;
+	}
+	return 0;
+}
+
+function cjkOverlap(queryCjk: ReadonlySet<string>, contentLower: string): number {
+	const contentCjk = new Set(Array.from(contentLower).filter(isCjkChar));
+	let overlap = 0;
+	for (const ch of queryCjk) if (contentCjk.has(ch)) overlap += 1;
+	return overlap / queryCjk.size;
+}
+
 export function lexicalRelevance(queryTokens: readonly string[], content: string, queryLower = ""): number {
 	const contentLower = content.toLowerCase();
 	const queryCjk = new Set(Array.from(queryLower).filter(isCjkChar));
 	if (queryTokens.length === 0 && queryCjk.size === 0) return 0;
 
-	const contentTokens = new Set(recallTokens(contentLower));
-	for (const token of Array.from(contentTokens)) {
-		for (const part of token.split(SPLIT_TOKEN_RE)) {
-			if (part.length >= 3 && !FACT_MATCH_STOPWORDS.has(part) && !/^\d+$/.test(part)) contentTokens.add(part);
-		}
-	}
+	const contentTokens = expandedContentTokens(contentLower);
 	if (contentTokens.size === 0 && queryCjk.size === 0) return 0;
 
+	// Exact and partial weights sum separately, in this order, so scores stay bit-identical for ranking ties.
 	let exact = 0;
 	let partial = 0;
 	for (const token of queryTokens) {
-		if (contentTokens.has(token)) {
-			exact += 1;
-			continue;
-		}
-		const synonyms = RECALL_SYNONYMS[token] ?? [];
-		if (synonyms.some(syn => contentTokens.has(syn))) {
-			partial += 0.75;
-			continue;
-		}
-		if (
-			token.length >= 4 &&
-			Array.from(contentTokens).some(
-				contentToken => contentToken.length >= 4 && (token.includes(contentToken) || contentToken.includes(token)),
-			)
-		) {
-			partial += 0.4;
-		}
+		const weight = tokenMatchWeight(token, contentTokens);
+		if (weight === 1) exact += 1;
+		else partial += weight;
 	}
-
 	const fullMatch = queryLower !== "" && contentLower.includes(queryLower) ? 1 : 0;
 	let score = (exact + partial + fullMatch) / Math.max(queryTokens.length, 1);
-	if (score === 0 && queryCjk.size > 0) {
-		const contentCjk = new Set(Array.from(contentLower).filter(isCjkChar));
-		let overlap = 0;
-		for (const ch of queryCjk) if (contentCjk.has(ch)) overlap += 1;
-		score = overlap / queryCjk.size;
-	}
+	if (score === 0 && queryCjk.size > 0) score = cjkOverlap(queryCjk, contentLower);
 	return Math.min(score, 1);
 }
 
@@ -169,32 +170,6 @@ export function vecInsert(db: Database, rowid: number, embedding: readonly numbe
 	}
 }
 
-export function vecSearch(db: Database, embedding: readonly number[], k = 20): VectorDistanceResult[] {
-	if (!vecAvailable(db)) return [];
-	const vecType = effectiveVecType(db);
-	const embJson = encodeVector(embedding);
-	const limit = Math.max(0, Math.trunc(k));
-	let rows: Record<string, unknown>[];
-	if (vecType === "bit") {
-		rows = db
-			.query(
-				`SELECT rowid, distance FROM vec_episodes WHERE embedding MATCH vec_quantize_binary(?) ORDER BY distance LIMIT ${limit}`,
-			)
-			.all(embJson) as Record<string, unknown>[];
-	} else if (vecType === "int8") {
-		rows = db
-			.query(
-				`SELECT rowid, distance FROM vec_episodes WHERE embedding MATCH vec_quantize_int8(?, "unit") AND k=${limit} ORDER BY distance`,
-			)
-			.all(embJson) as Record<string, unknown>[];
-	} else {
-		rows = db
-			.query(`SELECT rowid, distance FROM vec_episodes WHERE embedding MATCH ? ORDER BY distance LIMIT ${limit}`)
-			.all(embJson) as Record<string, unknown>[];
-	}
-	return rows.map(row => ({ rowid: Number(row.rowid), distance: Number(row.distance) }));
-}
-
 export function inMemoryVecSearch(db: Database, queryEmbedding: readonly number[], k = 20): VectorDistanceResult[] {
 	if (queryEmbedding.length === 0 || !tableExists(db, "memory_embeddings")) return [];
 	const rows = db
@@ -247,12 +222,20 @@ export function normalizeMetadata(input: unknown): Metadata {
 		}
 	}
 	if (typeof input !== "object" || Array.isArray(input)) return {};
-	const out: Metadata = {};
-	for (const key in input) {
-		const normalized = normalizeJsonValue((input as Record<string, unknown>)[key]);
-		if (normalized !== undefined) out[key] = normalized;
+	return normalizeJsonRecord(input);
+}
+
+/**
+ * Built through `Object.fromEntries`, so a `__proto__` key stays an own field rather than
+ * replacing the record's prototype and vanishing from the serialized metadata.
+ */
+function normalizeJsonRecord(value: object): Record<string, JsonValue> {
+	const entries: Array<[string, JsonValue]> = [];
+	for (const key in value) {
+		const normalized = normalizeJsonValue((value as Record<string, unknown>)[key]);
+		if (normalized !== undefined) entries.push([key, normalized]);
 	}
-	return out;
+	return Object.fromEntries(entries);
 }
 
 function normalizeJsonValue(value: unknown): JsonValue | undefined {
@@ -266,14 +249,7 @@ function normalizeJsonValue(value: unknown): JsonValue | undefined {
 		}
 		return out;
 	}
-	if (typeof value === "object") {
-		const out: Record<string, JsonValue> = {};
-		for (const key in value) {
-			const normalized = normalizeJsonValue((value as Record<string, unknown>)[key]);
-			if (normalized !== undefined) out[key] = normalized;
-		}
-		return out;
-	}
+	if (typeof value === "object") return normalizeJsonRecord(value);
 	return undefined;
 }
 
@@ -335,14 +311,6 @@ function intersectionCount(left: ReadonlySet<string>, right: ReadonlySet<string>
 export function memoryRowMetadata(row: unknown): Metadata {
 	return normalizeMetadata(rowValue<unknown>(row, "metadata_json") ?? rowValue<unknown>(row, "metadata"));
 }
-export {
-	cosineSimilarity,
-	hammingDistance,
-	informationTheoreticScore,
-	maximallyInformativeBinarization,
-	quantizeInt8,
-} from "../binary-vectors";
-export { cjkFtsTerms, containsSpacelessCjk, ftsQueryTerms, recallTokens, sha256Hex16 };
 
 /** Identifies one freshly stored memory whose embedding still needs to be derived. */
 export interface EmbedItem {

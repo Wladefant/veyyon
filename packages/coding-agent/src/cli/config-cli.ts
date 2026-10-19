@@ -20,7 +20,7 @@ import {
 	type SettingPath,
 	type SettingValue,
 } from "../config/settings-schema";
-import { theme } from "../theme/theme";
+import { theme } from "../theme/theme-binding";
 import { EXIT_USAGE } from "./exit-codes";
 import { initXdg } from "./init-xdg";
 

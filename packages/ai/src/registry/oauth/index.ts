@@ -2,6 +2,7 @@
 // High-level API
 // ============================================================================
 
+import { kimiCodeApiKey } from "@veyyon/catalog/wire/kimi-code";
 import { decodeJwtPayload } from "@veyyon/utils/jwt";
 import * as AIError from "../../error";
 import { getProviderDefinition, PROVIDER_REGISTRY } from "../registry";
@@ -56,11 +57,12 @@ export function unregisterOAuthProviders(sourceId: string): void {
 
 /**
  * Refresh token for any OAuth provider.
- * Saves the new credentials and returns the new access token.
+ * Saves the new credentials and returns the new access token. `signal` aborts the token request.
  */
 export async function refreshOAuthToken(
 	provider: OAuthProvider,
 	credentials: OAuthCredentials,
+	signal?: AbortSignal,
 ): Promise<OAuthCredentials> {
 	if (!credentials) {
 		throw new AIError.OAuthError(`No OAuth credentials found for ${provider}`, {
@@ -77,7 +79,7 @@ export async function refreshOAuthToken(
 	}
 	// Providers without a real refresher (static bearer tokens / API keys that
 	// don't expire) return the credentials unchanged.
-	return def.refreshToken ? def.refreshToken(credentials) : credentials;
+	return def.refreshToken ? def.refreshToken(credentials, signal) : credentials;
 }
 function getPerplexityJwtExpiryMs(token: string): number | undefined {
 	const decoded = decodeJwtPayload<{ exp?: unknown }>(token);
@@ -145,18 +147,24 @@ export async function getOAuthApiKey(
 		provider === "google-gemini-cli" ||
 		provider === "google-antigravity" ||
 		provider === "alibaba-coding-plan";
-	const apiKey = needsStructuredApiKey
-		? JSON.stringify({
-				apiEndpoint: creds.apiEndpoint,
-				token: creds.access,
-				enterpriseUrl: creds.enterpriseUrl,
-				projectId: creds.projectId,
-				refreshToken: creds.refresh,
-				expiresAt: creds.expires,
-				email: creds.email,
-				accountId: creds.accountId,
-			})
-		: creds.access;
+	let apiKey: string;
+	if (provider === "kimi-code") {
+		// The deployment that issued the token rides in the key, so the request goes to its API host.
+		apiKey = kimiCodeApiKey(creds.access, creds.apiEndpoint);
+	} else if (needsStructuredApiKey) {
+		apiKey = JSON.stringify({
+			apiEndpoint: creds.apiEndpoint,
+			token: creds.access,
+			enterpriseUrl: creds.enterpriseUrl,
+			projectId: creds.projectId,
+			refreshToken: creds.refresh,
+			expiresAt: creds.expires,
+			email: creds.email,
+			accountId: creds.accountId,
+		});
+	} else {
+		apiKey = creds.access;
+	}
 	return { newCredentials: creds, apiKey };
 }
 

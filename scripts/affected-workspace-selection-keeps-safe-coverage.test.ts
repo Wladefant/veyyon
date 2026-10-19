@@ -17,6 +17,7 @@ import {
 } from "./workspace-layout";
 import {
 	buildAffectedTestPlan,
+	assertRelatedSelectionAvailable,
 	buildAllModeCommandPlan,
 	fastWorkspacePackages,
 	nativeAndIntegrationPackages,
@@ -360,6 +361,14 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 		});
 		expect(() => parseRunnerArguments(["--changed-since", "main"])).toThrow(/full 40- or 64-character/);
 		expect(() => parseRunnerArguments(["scripts", "--changed-since", sha])).toThrow(/only with the all mode/);
+	});
+
+	it("refuses a full selector fallback for related-only runs but allows full nightly mode", () => {
+		expect(() =>
+			assertRelatedSelectionAvailable("full", true, "working tree differs from HEAD"),
+		).toThrow(/CLOUDFLARE_RELATED_SELECTION_UNAVAILABLE/);
+		expect(() => assertRelatedSelectionAvailable("affected", true)).not.toThrow();
+		expect(() => assertRelatedSelectionAvailable("full", false)).not.toThrow();
 	});
 
 	it("preserves the exact unfiltered all-mode command plan", async () => {

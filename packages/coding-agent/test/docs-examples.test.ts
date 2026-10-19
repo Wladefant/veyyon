@@ -4,7 +4,7 @@
  * the real CLI parser, MCP config validator, and keybinding registry, so doc
  * examples cannot drift from shipped behavior (BACKLOG DOCS-CODE-EXAMPLES-TESTED).
  */
-import { describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -13,11 +13,16 @@ import { parseArgs } from "@veyyon/coding-agent/cli/args";
 import { isSubcommand } from "@veyyon/coding-agent/cli-commands";
 import { KEYBINDINGS } from "@veyyon/coding-agent/config/keybindings";
 import { SETTINGS_SCHEMA } from "@veyyon/coding-agent/config/settings-schema";
+import { loadCustomCommands } from "@veyyon/coding-agent/extensibility/custom-commands/loader";
 import type { ExtensionAPI, ExtensionFactory } from "@veyyon/coding-agent/extensibility/extensions";
 import { validateServerConfig } from "@veyyon/coding-agent/mcp/config";
 import { MCP_CONFIG_SCHEMA_URL } from "@veyyon/coding-agent/mcp/types";
 import { BUILTIN_SLASH_COMMAND_DEFS } from "@veyyon/coding-agent/slash-commands/builtin-registry";
 import { BUILTIN_TOOLS, HIDDEN_TOOLS } from "@veyyon/coding-agent/tools";
+import { imageGenTool } from "@veyyon/coding-agent/tools/web/image-gen";
+import { ttsTool } from "@veyyon/coding-agent/tools/web/tts";
+import { EDIT_MODES } from "@veyyon/coding-agent/utils/edit-mode";
+import { TempDir } from "@veyyon/utils";
 import { YAML } from "bun";
 import { workspaceMembers } from "../../../scripts/workspace-layout";
 
@@ -494,15 +499,22 @@ describe("docs examples — a documented command exists in the surface whose pag
 		for (const alias of command.aliases ?? []) registered.add(alias);
 	}
 	// Bundled custom commands (`/review`, `/green`) are shipped alongside the
-	// builtins and typed the same way. Source their names from the loader's
-	// single bundled-command list so this stays in sync as new ones are added.
-	{
-		const loaderSrc = fs.readFileSync(
-			path.join(REPO_ROOT, "packages/coding-agent/src/extensibility/custom-commands/loader.ts"),
-			"utf-8",
-		);
-		for (const m of loaderSrc.matchAll(/path: "bundled:([a-z][a-z0-9_-]*)"/g)) registered.add(m[1]);
-	}
+	// builtins and typed the same way. Load them through the loader against an
+	// empty project, so a bundled command added there is covered here.
+	const fromBundledCommands = new Set<string>();
+	beforeAll(async () => {
+		const dir = TempDir.createSync("@docs-examples-commands-");
+		try {
+			const { commands } = await loadCustomCommands({ cwd: dir.path(), agentDir: dir.join("agent") });
+			for (const loaded of commands) {
+				if (loaded.source !== "bundled") continue;
+				registered.add(loaded.command.name);
+				fromBundledCommands.add(loaded.command.name);
+			}
+		} finally {
+			dir.removeSync();
+		}
+	});
 	// Commands a bundled extension registers (`/autoresearch`, `/autoswarm`) are
 	// as reachable as a builtin, and the handbook documents them the same way.
 	// Collect them by running each bundled factory against a recording API, so a
@@ -553,8 +565,12 @@ describe("docs examples — a documented command exists in the surface whose pag
 	it("the registry is alive", () => {
 		expect(registered.size).toBeGreaterThan(30);
 		expect(fromBundledFactory.size).toBeGreaterThan(0);
+<<<<<<< HEAD
 		expect(paletteCommands.size).toBeGreaterThan(10);
 		expect([...paletteCommands].sort()).toContain("terminal");
+=======
+		expect(fromBundledCommands.size).toBeGreaterThan(0);
+>>>>>>> santhreal/main
 	});
 
 	it("every backticked /command in the handbook is one the surface that page documents offers", () => {
@@ -586,33 +602,24 @@ describe("docs examples — a documented command exists in the surface whose pag
 
 describe("docs examples — tools reference names real tools", () => {
 	// Every backticked snake_case token in the tools reference must be a real
-	// tool: a BUILTIN_TOOLS / HIDDEN_TOOLS key, a sdk-registered custom tool
-	// (scanned from `name: "…"` in src/tools), or `apply_patch` (the edit
-	// tool's advertised name in that mode, edit/index.ts).
+	// tool: a BUILTIN_TOOLS / HIDDEN_TOOLS key, a tool the session factory
+	// registers outside those tables (`generate_image`, `tts`), or `apply_patch`
+	// (the edit tool's advertised name in that mode, edit/index.ts).
 	const TOOLS_DOC = "docs/handbook/src/reference/tools.md";
 	const TOKEN_RE = /`([a-z][a-z0-9_]*)`/g;
 	// The Edit/write table legitimately backticks the `edit` tool's mode names
 	// (`hashline`, `apply_patch`, `patch`, `replace`) — those are modes, not
-	// tools. Source them from their single owner so this stays in sync.
-	function collectEditModeNames(): string[] {
-		const src = fs.readFileSync(path.join(REPO_ROOT, "packages/coding-agent/src/utils/edit-mode.ts"), "utf-8");
-		const union = src.match(/export type EditMode\s*=\s*([^;]+);/);
-		if (!union) throw new Error("could not find EditMode union in utils/edit-mode.ts");
-		return [...union[1].matchAll(/"([a-z][a-z0-9_]*)"/g)].map(m => m[1]);
-	}
-	// Argument/field names the page legitimately shows that are not tools.
-	const NON_TOOL_TOKENS = new Set(["input", ...collectEditModeNames()]);
+	// tools. Argument/field names the page shows are not tools either.
+	const NON_TOOL_TOKENS = new Set<string>(["input", ...EDIT_MODES]);
 
 	function collectToolNames(): Set<string> {
-		const names = new Set<string>([...Object.keys(BUILTIN_TOOLS), ...Object.keys(HIDDEN_TOOLS), "apply_patch"]);
-		const toolsRoot = path.join(REPO_ROOT, "packages/coding-agent/src/tools");
-		for (const rel of new Bun.Glob("**/*.ts").scanSync({ cwd: toolsRoot })) {
-			const text = fs.readFileSync(path.join(toolsRoot, rel), "utf-8");
-			for (const match of text.matchAll(/\bname: "([a-z][a-z0-9_]*)"/g)) {
-				names.add(match[1]);
-			}
-		}
-		return names;
+		return new Set<string>([
+			...Object.keys(BUILTIN_TOOLS),
+			...Object.keys(HIDDEN_TOOLS),
+			imageGenTool.name,
+			ttsTool.name,
+			"apply_patch",
+		]);
 	}
 
 	it("every backticked tool token in the tools reference exists", () => {
@@ -708,7 +715,7 @@ describe("docs examples — inline dotted settings mentions are registered paths
 
 	/**
 	 * A dotted token is valid when it is a registered leaf, a group prefix, a
-	 * child of a map-valued leaf (`modelRoles.task` under the `modelRoles`
+	 * child of a map-valued leaf (`agent.helpers.plan` under the `agent.helpers`
 	 * setting), or a keybinding action ID (`tui.select.pageUp` — the `tui.*`
 	 * action namespace overlaps the `tui.*` settings root).
 	 */

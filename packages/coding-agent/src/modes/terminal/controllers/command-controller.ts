@@ -2,51 +2,36 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { CompactionCancelledError, type CompactionOutcome } from "@veyyon/agent-core/compaction";
-import type { UsageLimit, UsageReport } from "@veyyon/ai";
-import type { AuthStorage, OAuthAccountIdentity } from "@veyyon/ai/auth-storage";
-import { getEnvApiKey } from "@veyyon/ai/env-api-key";
-import { getProviderDetails, type ProviderDetails } from "@veyyon/ai/provider-details";
-import { resolveDisplayFraction, resolveUsedFraction } from "@veyyon/ai/usage";
+import type { UsageReport } from "@veyyon/ai";
 import type { CompactMode } from "@veyyon/kernel/session/compact-modes";
 import type { NewSessionOptions } from "@veyyon/kernel/session/session-entries";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { formatShakeSummary, type ShakeMode, type ShakeResult } from "@veyyon/kernel/session/shake-types";
-
 type SessionManagerStateSnapshot = Parameters<SessionManager["restoreState"]>[0];
 
-import { Loader, Markdown, type OverlayHandle, Spacer, Text } from "@veyyon/tui";
+import { Loader, type OverlayHandle, Spacer, Text } from "@veyyon/tui";
 import {
 	APP_NAME,
 	CHANGELOG_URL,
+	directoryExists,
 	errorMessage,
 	formatDuration,
 	isAbortError,
 	logger,
 	Snowflake,
-	sanitizeText,
 	stripAnsi,
 } from "@veyyon/utils";
-import { subCellBar } from "@veyyon/utils/bar";
-import { padding } from "@veyyon/utils/padding";
-import { visibleWidth } from "@veyyon/utils/width";
 import { advisorStatusNextStep } from "../../../advisor/messages";
-import { shouldEnableAppendOnlyContext } from "../../../config/append-only-context-mode";
-import { openaiWebsocketPreference } from "../../../config/openai-websockets-mode";
 import { type BashResult, isPersistentShellCdCommand } from "../../../exec/bash-executor";
-import { type LoadedCustomShare, loadCustomShare } from "../../../export/custom-share";
+import { type CustomShareResult, type LoadedCustomShare, loadCustomShare } from "../../../export/custom-share";
 import { shareSession } from "../../../export/share";
 import type { CompactOptions } from "../../../extensibility/extensions/types";
-import { buildMemoryPayloadForDisplay, resolveMemoryBackend } from "../../../memory/backend";
 import type * as hindsightModule from "../../../memory/hindsight";
-import type { HindsightApi, HindsightSessionState } from "../../../memory/hindsight";
 import { compactionActionLabel, resolveCompactionKind } from "../../../presentation/summary-builder";
-import { formatProviderName } from "../../../session/account-format";
 import type { AsyncJobSnapshotItem } from "../../../session/agent-session-types";
 import { type AttachableSession, backgroundHandoff } from "../../../session/background-sessions";
 import { computeContextBreakdown } from "../../../session/context-usage";
 import type { OutputSummary } from "../../../session/streaming-output";
-import { limitMatchesActiveAccount } from "../../../slash-commands/helpers/active-oauth-account";
-import { getMarkdownTheme } from "../../../theme/markdown-theme";
 import { getSymbolTheme, theme } from "../../../theme/theme";
 import { outputMeta } from "../../../tools/core/output-meta";
 import { resolveToCwd, stripOuterDoubleQuotes } from "../../../tools/core/path-utils";
@@ -54,7 +39,6 @@ import { replaceTabs, truncateToWidth } from "../../../tools/core/render-utils";
 import { copyToClipboard } from "../../../utils/clipboard";
 import { openPath } from "../../../utils/open";
 import { setSessionTerminalTitle } from "../../../utils/title-generator";
-import { COMPOSER_INSET_COLS } from "../components/composer/composer-chrome";
 import { ComposerLoader } from "../components/composer/composer-loader";
 import { MoveOverlay, type MoveOverlayResult } from "../components/selectors/move-overlay";
 import { BashExecutionComponent } from "../components/transcript/bash-execution";
@@ -66,6 +50,9 @@ import { renderContextUsage } from "../utils/context-usage";
 import { buildHotkeysMarkdown } from "../utils/hotkeys-markdown";
 import { buildToolsMarkdown } from "../utils/tools-markdown";
 import { showMarkdownPanel } from "./command-controller-shared";
+import { MemoryCommandController } from "./memory-command-controller";
+import { renderSessionInfo } from "./session-info-view";
+import { renderUsageReports } from "./usage-report-view";
 /**
  * The slice of the interactive context this controller uses: 37 members of the
  * 215 `InteractiveModeContext` requires. See `CollabHostContext` for why the
@@ -121,8 +108,29 @@ function loadHindsight(): Promise<typeof hindsightModule> {
 	return hindsight;
 }
 
+/**
+ * The instructions and options one compaction runs with. The slash path passes `mode` positionally; the extension
+ * path carries it inside the options object, which a positional mode overrides on a copy.
+ */
+function compactionRequest(
+	customInstructionsOrOptions: string | CompactOptions | undefined,
+	mode: CompactMode | undefined,
+): { instructions: string | undefined; options: CompactOptions | undefined } {
+	const instructions = typeof customInstructionsOrOptions === "string" ? customInstructionsOrOptions : undefined;
+	const baseOptions =
+		customInstructionsOrOptions && typeof customInstructionsOrOptions === "object"
+			? customInstructionsOrOptions
+			: undefined;
+	if (!baseOptions) return { instructions, options: mode ? { mode } : undefined };
+	return { instructions, options: mode ? { ...baseOptions, mode } : baseOptions };
+}
+
 export class CommandController {
-	constructor(private readonly ctx: CommandControllerContext) {}
+	readonly #memory: MemoryCommandController;
+
+	constructor(private readonly ctx: CommandControllerContext) {
+		this.#memory = new MemoryCommandController(ctx, loadHindsight);
+	}
 
 	openInBrowser(urlOrPath: string): void {
 		openPath(urlOrPath);
@@ -221,58 +229,78 @@ export class CommandController {
 			return;
 		}
 
+		const loader = this.#mountShareLoader();
+		// Custom share scripts keep their legacy contract: they receive a path
+		// to a standalone HTML export. No fallback to the default flow on error.
+		if (customShare) await this.#runCustomShare(customShare, loader);
+		else await this.#runDefaultShare(loader);
+	}
+
+	/** Swaps the editor for the cancellable "Sharing session..." loader; cancelling puts the editor back. */
+	#mountShareLoader(): ComposerLoader {
 		const loader = new ComposerLoader(this.ctx.ui, theme, "Sharing session...");
 		this.ctx.editorContainer.clear();
 		this.ctx.editorContainer.addChild(loader);
 		this.ctx.ui.setFocus(loader);
 		this.ctx.ui.requestRender();
-
-		const restoreEditor = () => {
-			loader.dispose();
-			this.ctx.editorContainer.clear();
-			this.ctx.editorContainer.addChild(this.ctx.editor);
-			this.ctx.ui.setFocus(this.ctx.editor);
-		};
 		loader.onAbort = () => {
-			restoreEditor();
+			this.#restoreEditor(loader);
 			this.ctx.showStatus("Share cancelled");
 		};
+		return loader;
+	}
 
-		// Custom share scripts keep their legacy contract: they receive a path
-		// to a standalone HTML export. No fallback to the default flow on error.
-		if (customShare) {
-			const tmpFile = path.join(os.tmpdir(), `${Snowflake.next()}.html`);
-			try {
-				await this.ctx.session.exportToHtml(tmpFile);
-				const result = await customShare.fn(tmpFile);
-				if (loader.signal.aborted) return;
-				restoreEditor();
+	#restoreEditor(loader: ComposerLoader): void {
+		loader.dispose();
+		this.ctx.editorContainer.clear();
+		this.ctx.editorContainer.addChild(this.ctx.editor);
+		this.ctx.ui.setFocus(this.ctx.editor);
+	}
 
-				if (typeof result === "string") {
-					this.ctx.showStatus(`Share URL: ${result}`);
-					this.openInBrowser(result);
-				} else if (result) {
-					const parts: string[] = [];
-					if (result.url) parts.push(`Share URL: ${result.url}`);
-					if (result.message) parts.push(result.message);
-					if (parts.length > 0) this.ctx.showStatus(parts.join("\n"));
-					if (result.url) this.openInBrowser(result.url);
-				} else {
-					this.ctx.showStatus("Session shared");
-				}
-			} catch (err) {
-				if (!loader.signal.aborted) {
-					restoreEditor();
-					this.ctx.showError(`Custom share failed: ${errorMessage(err)}`);
-				}
-			} finally {
-				await fs.rm(tmpFile, { force: true }).catch(() => {});
-			}
+	/**
+	 * Hands a standalone HTML export to the custom share script and shows what it returned. A share cancelled while
+	 * the script runs shows nothing, since cancelling already restored the editor; the export is deleted either way.
+	 */
+	async #runCustomShare(customShare: LoadedCustomShare, loader: ComposerLoader): Promise<void> {
+		const tmpFile = path.join(os.tmpdir(), `${Snowflake.next()}.html`);
+		try {
+			await this.ctx.session.exportToHtml(tmpFile);
+			const result = await customShare.fn(tmpFile);
+			if (loader.signal.aborted) return;
+			this.#restoreEditor(loader);
+			this.#showCustomShareResult(result);
+		} catch (err) {
+			if (loader.signal.aborted) return;
+			this.#restoreEditor(loader);
+			this.ctx.showError(`Custom share failed: ${errorMessage(err)}`);
+		} finally {
+			await fs.rm(tmpFile, { force: true }).catch(() => {});
+		}
+	}
+
+	/** A bare string is the share URL; an object states a URL, a message, or both; nothing means the share went through. */
+	#showCustomShareResult(result: CustomShareResult | string | undefined): void {
+		if (typeof result === "string") {
+			this.ctx.showStatus(`Share URL: ${result}`);
+			this.openInBrowser(result);
 			return;
 		}
+		if (!result) {
+			this.ctx.showStatus("Session shared");
+			return;
+		}
+		const parts: string[] = [];
+		if (result.url) parts.push(`Share URL: ${result.url}`);
+		if (result.message) parts.push(result.message);
+		if (parts.length > 0) this.ctx.showStatus(parts.join("\n"));
+		if (result.url) this.openInBrowser(result.url);
+	}
 
-		// Default: encrypted snapshot to a secret gist (preferred) or the share
-		// server; the key rides in the link fragment and never leaves the client.
+	/**
+	 * Default share: an encrypted snapshot to a secret gist (preferred) or the share server. The key rides in the link
+	 * fragment and never leaves the client.
+	 */
+	async #runDefaultShare(loader: ComposerLoader): Promise<void> {
 		try {
 			const result = await shareSession(this.ctx.session.sessionManager, {
 				serverUrl: this.ctx.settings.get("share.serverUrl"),
@@ -281,124 +309,21 @@ export class CommandController {
 				obfuscator: this.ctx.settings.get("share.redactSecrets") ? this.ctx.session.providerRedactor : undefined,
 			});
 			if (loader.signal.aborted) return;
-			restoreEditor();
-
+			this.#restoreEditor(loader);
 			const lines = [`Share URL: ${result.url}`];
 			if (result.gistUrl) lines.push(`Gist: ${result.gistUrl}`);
 			if (result.truncated) lines.push("Note: large content was trimmed to fit the share size limit.");
 			this.ctx.showStatus(lines.join("\n"));
 			this.openInBrowser(result.url);
 		} catch (error: unknown) {
-			if (!loader.signal.aborted) {
-				restoreEditor();
-				this.ctx.showError(`Failed to share session: ${error instanceof Error ? error.message : "Unknown error"}`);
-			}
+			if (loader.signal.aborted) return;
+			this.#restoreEditor(loader);
+			this.ctx.showError(`Failed to share session: ${error instanceof Error ? error.message : "Unknown error"}`);
 		}
 	}
 
 	async handleSessionCommand(): Promise<void> {
-		const stats = this.ctx.session.getSessionStats();
-		const premiumRequests =
-			"premiumRequests" in stats && typeof stats.premiumRequests === "number"
-				? stats.premiumRequests
-				: this.ctx.session.sessionManager.getUsageStatistics().premiumRequests;
-		const normalizedPremiumRequests = Math.round((premiumRequests + Number.EPSILON) * 100) / 100;
-
-		let info = `${theme.bold("Session Info")}\n\n`;
-		info += `${theme.fg("dim", "File:")} ${stats.sessionFile ?? "In-memory"}\n`;
-		info += `${theme.fg("dim", "ID:")} ${stats.sessionId}\n\n`;
-		info += `\n${theme.bold("Provider")}\n`;
-		const model = this.ctx.session.model;
-		if (!model) {
-			info += `${theme.fg("dim", "No model selected")}\n`;
-		} else {
-			const authMode = resolveProviderAuthMode(this.ctx.session.modelRegistry.authStorage, model.provider);
-			const preferOpenAICodexWebsockets = openaiWebsocketPreference(
-				this.ctx.settings.get("providers.openaiWebsockets"),
-			);
-			const credentialSource = this.ctx.session.modelRegistry.authStorage.describeCredentialSource(
-				model.provider,
-				stats.sessionId,
-			);
-			const providerDetails = getProviderDetails({
-				model,
-				sessionId: stats.sessionId,
-				authMode,
-				credentialSource,
-				preferWebsockets: preferOpenAICodexWebsockets,
-				providerSessionState: this.ctx.session.providerSessionState,
-			});
-			info += renderProviderSection(providerDetails, theme);
-		}
-		info += `\n`;
-		info += `${theme.bold("Messages")}\n`;
-		info += `${theme.fg("dim", "User:")} ${stats.userMessages}\n`;
-		info += `${theme.fg("dim", "Assistant:")} ${stats.assistantMessages}\n`;
-		info += `${theme.fg("dim", "Tool Calls:")} ${stats.toolCalls}\n`;
-		info += `${theme.fg("dim", "Tool Results:")} ${stats.toolResults}\n`;
-		info += `${theme.fg("dim", "Total:")} ${stats.totalMessages}\n\n`;
-		// Append-only context
-		{
-			const setting = this.ctx.settings.get("provider.appendOnlyContext") ?? "auto";
-			const model = this.ctx.session.model;
-			const mode = shouldEnableAppendOnlyContext(setting, model);
-			const activeLabel = mode ? theme.fg("success", "active") : theme.fg("dim", "inactive");
-			const settingLabel = setting === "auto" ? `${setting} (${model?.provider ?? "?"})` : setting;
-			info += `${theme.fg("dim", "Append-Only:")} ${activeLabel} (setting: ${settingLabel})\n`;
-		}
-		info += `${theme.bold("Tokens")}\n`;
-		info += `${theme.fg("dim", "Input:")} ${stats.tokens.input.toLocaleString()}\n`;
-		info += `${theme.fg("dim", "Output:")} ${stats.tokens.output.toLocaleString()}\n`;
-		if (stats.tokens.cacheRead > 0) {
-			info += `${theme.fg("dim", "Cache Read:")} ${stats.tokens.cacheRead.toLocaleString()}\n`;
-		}
-		if (stats.tokens.cacheWrite > 0) {
-			info += `${theme.fg("dim", "Cache Write:")} ${stats.tokens.cacheWrite.toLocaleString()}\n`;
-		}
-		info += `${theme.fg("dim", "Total:")} ${stats.tokens.total.toLocaleString()}\n`;
-
-		if (stats.cost > 0 || normalizedPremiumRequests > 0) {
-			info += `\n${theme.bold("Cost")}\n`;
-			if (stats.cost > 0) {
-				info += `${theme.fg("dim", "Total:")} ${stats.cost.toFixed(4)}\n`;
-			}
-			if (normalizedPremiumRequests > 0) {
-				info += `${theme.fg("dim", "Premium Requests:")} ${normalizedPremiumRequests.toLocaleString()}\n`;
-			}
-		}
-
-		if (this.ctx.lspServers && this.ctx.lspServers.length > 0) {
-			info += `\n${theme.bold("LSP Servers")}\n`;
-			for (const server of this.ctx.lspServers) {
-				const statusColor =
-					server.status === "ready"
-						? "success"
-						: server.status === "available"
-							? "dim"
-							: server.status === "connecting"
-								? "warning"
-								: "error";
-				const statusText =
-					server.status === "error" && server.error ? `${server.status}: ${server.error}` : server.status;
-				info += `${theme.fg("dim", `${server.name}:`)} ${theme.fg(statusColor, statusText)} ${theme.fg("dim", `(${server.fileTypes.join(", ")})`)}\n`;
-			}
-		}
-
-		if (this.ctx.mcpManager) {
-			const mcpServers = this.ctx.mcpManager.getConnectedServers();
-			info += `\n${theme.bold("MCP Servers")}\n`;
-			if (mcpServers.length === 0) {
-				info += `${theme.fg("dim", "None connected")}\n`;
-			} else {
-				for (const name of mcpServers) {
-					const conn = this.ctx.mcpManager.getConnection(name);
-					const toolCount = conn?.tools?.length ?? 0;
-					info += `${theme.fg("dim", `${name}:`)} ${theme.fg("success", "connected")} ${theme.fg("dim", `(${toolCount} tools)`)}\n`;
-				}
-			}
-		}
-
-		this.ctx.present([new Spacer(1), new Text(info, 1, 0)]);
+		this.ctx.present([new Spacer(1), new Text(renderSessionInfo(this.ctx), 1, 0)]);
 	}
 
 	/**
@@ -555,316 +480,8 @@ export class CommandController {
 			.catch(error => this.ctx.showWarning(errorMessage(error)));
 	}
 
-	async handleMemoryCommand(text: string): Promise<void> {
-		const argumentText = text.slice(7).trim();
-		const action = argumentText.split(/\s+/, 1)[0]?.toLowerCase() || "view";
-		const agentDir = this.ctx.settings.getAgentDir();
-		const backend = await resolveMemoryBackend(this.ctx.settings);
-
-		if (action === "view") {
-			const payload = await buildMemoryPayloadForDisplay(backend, agentDir, this.ctx.settings, this.ctx.session);
-			if (!payload) {
-				this.ctx.showWarning("Memory payload is empty (memory backend off, disabled, or no memory available).");
-				return;
-			}
-			const block = new TranscriptBlock();
-			mountTranscriptBlock(block, {
-				header: theme.bold(theme.fg("accent", "Memory Injection Payload")),
-				body: new Markdown(payload, COMPOSER_INSET_COLS, 0, getMarkdownTheme()),
-			});
-			this.ctx.present(block);
-			return;
-		}
-
-		if (action === "reset" || action === "clear") {
-			try {
-				await backend.clear(agentDir, this.ctx.sessionManager.getCwd(), this.ctx.session);
-				await this.ctx.session.refreshBaseSystemPrompt("memory-clear");
-				this.ctx.showStatus("Memory data cleared and system prompt refreshed.");
-			} catch (error) {
-				this.ctx.showError(`Memory clear failed: ${errorMessage(error)}`);
-			}
-			return;
-		}
-
-		if (action === "enqueue" || action === "rebuild") {
-			try {
-				await backend.enqueue(agentDir, this.ctx.sessionManager.getCwd(), this.ctx.session);
-				this.ctx.showStatus("Memory consolidation enqueued.");
-			} catch (error) {
-				this.ctx.showError(`Memory enqueue failed: ${errorMessage(error)}`);
-			}
-			return;
-		}
-
-		if (action === "stats" || action === "diagnose") {
-			const hook = action === "stats" ? backend.stats : backend.diagnose;
-			try {
-				const payload = await hook?.(agentDir, this.ctx.sessionManager.getCwd(), this.ctx.session);
-				if (!payload) {
-					this.ctx.showWarning(`Memory ${action} is not available for the ${backend.id} backend.`);
-					return;
-				}
-				showMarkdownPanel(this.ctx, `Memory ${action === "stats" ? "Stats" : "Diagnostics"}`, payload);
-			} catch (error) {
-				this.ctx.showError(`Memory ${action} failed: ${errorMessage(error)}`);
-			}
-			return;
-		}
-
-		if (action === "mm") {
-			await this.#handleMentalModelsSubcommand(argumentText);
-			return;
-		}
-
-		this.ctx.showError("Usage: /memory <view|stats|diagnose|clear|reset|enqueue|rebuild|mm ...>");
-	}
-
-	async #handleMentalModelsSubcommand(argumentText: string): Promise<void> {
-		// Parse: "mm <verb> [arg]"
-		const parts = argumentText.split(/\s+/).slice(1);
-		const verb = parts[0]?.toLowerCase() ?? "list";
-		const arg = parts[1];
-
-		const state = this.ctx.session.getHindsightSessionState();
-		const primary = state && !state.aliasOf ? state : undefined;
-		if (!primary) {
-			this.ctx.showError("Hindsight backend is not active for this session.");
-			return;
-		}
-		if (!primary.config.mentalModelsEnabled) {
-			this.ctx.showError("Mental models are disabled (hindsight.mentalModelsEnabled = false).");
-			return;
-		}
-
-		switch (verb) {
-			case "list":
-				await this.#mmList(primary);
-				return;
-			case "show":
-				if (!arg) return this.ctx.showError("Usage: /memory mm show <id>");
-				await this.#mmShow(primary, arg);
-				return;
-			case "refresh":
-				await this.#mmRefresh(primary, arg);
-				return;
-			case "history":
-				if (!arg) return this.ctx.showError("Usage: /memory mm history <id>");
-				await this.#mmHistory(primary, arg);
-				return;
-			case "seed":
-				await this.#mmSeed(primary);
-				return;
-			case "reload":
-				await this.#mmReload(primary);
-				return;
-			case "delete":
-			case "remove":
-				if (!arg) return this.ctx.showError("Usage: /memory mm delete <id>");
-				await this.#mmDelete(primary, arg);
-				return;
-			default:
-				this.ctx.showError("Usage: /memory mm <list|show|refresh|history|seed|reload|delete>");
-		}
-	}
-
-	async #mmList(state: HindsightSessionState): Promise<void> {
-		const client: HindsightApi = state.client;
-		try {
-			const { summarizeMentalModel } = await loadHindsight();
-			const response = await client.listMentalModels(state.bankId, { detail: "metadata" });
-			const items = response.items ?? [];
-			if (items.length === 0) {
-				this.ctx.showStatus(`No mental models on bank ${state.bankId}.`);
-				return;
-			}
-			const lines = items
-				.slice()
-				.sort((a, b) => a.id.localeCompare(b.id))
-				.map(summarizeMentalModel);
-			showMarkdownPanel(this.ctx, `Mental Models — ${state.bankId}`, lines.join("\n"));
-		} catch (error) {
-			this.ctx.showError(`mm list failed: ${errorMessage(error)}`);
-		}
-	}
-
-	async #mmShow(state: HindsightSessionState, id: string): Promise<void> {
-		try {
-			const model = await state.client.getMentalModel(state.bankId, id, { detail: "content" });
-			if (!model) {
-				this.ctx.showError(`Mental model not found: ${id}`);
-				return;
-			}
-			const tags = model.tags && model.tags.length > 0 ? `\n_tags: ${model.tags.join(", ")}_` : "";
-			const refreshed = model.last_refreshed_at ? `\n_last refreshed: ${model.last_refreshed_at}_` : "";
-			const sourceQuery = model.source_query ? `\n\n**Source query:** ${model.source_query}` : "";
-			const content = (model.content ?? "_(empty — background reflect may still be running)_").trim();
-			showMarkdownPanel(
-				this.ctx,
-				model.name,
-				`**id:** \`${model.id}\`${tags}${refreshed}${sourceQuery}\n\n${content}`,
-			);
-		} catch (error) {
-			this.ctx.showError(`mm show failed: ${errorMessage(error)}`);
-		}
-	}
-
-	async #mmRefresh(state: HindsightSessionState, id: string | undefined): Promise<void> {
-		try {
-			const { reloadMentalModelsForSession } = await loadHindsight();
-			if (id) {
-				// Single-model refresh is explicit operator intent: bypass the
-				// auto-refresh filter so curated/manual models can still be
-				// refreshed on demand.
-				await state.client.refreshMentalModel(state.bankId, id);
-				this.ctx.showStatus(`Refresh queued for mental model ${id}.`);
-			} else {
-				// Bulk refresh: only touch models that opted into automatic
-				// refresh via `trigger.refresh_after_consolidation`. Curated
-				// models are reviewed before publishing and must not be
-				// silently regenerated by a bank-wide refresh sweep. Reading
-				// `detail: "content"` here is required because the trigger
-				// field is excluded from `detail: "metadata"`.
-				const list = await state.client.listMentalModels(state.bankId, { detail: "content" });
-				const items = list.items ?? [];
-				if (items.length === 0) {
-					this.ctx.showStatus(`No mental models on bank ${state.bankId}.`);
-					return;
-				}
-				const targets = items.filter(m => m.trigger?.refresh_after_consolidation === true);
-				const skipped = items.length - targets.length;
-				if (targets.length === 0) {
-					this.ctx.showStatus(
-						`No mental models opted into auto-refresh; ${skipped} curated model(s) left untouched. Pass an explicit id to refresh one of them.`,
-					);
-					return;
-				}
-				let queued = 0;
-				for (const item of targets) {
-					try {
-						await state.client.refreshMentalModel(state.bankId, item.id);
-						queued++;
-					} catch (error) {
-						this.ctx.showWarning(`Refresh failed for ${item.id}: ${errorMessage(error)}`);
-					}
-				}
-				const skippedSuffix = skipped > 0 ? `; skipped ${skipped} curated model(s)` : "";
-				this.ctx.showStatus(
-					`Refresh queued for ${queued}/${targets.length} auto-refresh model(s)${skippedSuffix}.`,
-				);
-			}
-			// Reload the cache after a brief grace so the new content (if the refresh
-			// completes synchronously on the server) flows into the system prompt.
-			await Bun.sleep(500);
-			await reloadMentalModelsForSession(state.session);
-		} catch (error) {
-			this.ctx.showError(`mm refresh failed: ${errorMessage(error)}`);
-		}
-	}
-
-	async #mmHistory(state: HindsightSessionState, id: string): Promise<void> {
-		try {
-			const { diffMentalModelContent } = await loadHindsight();
-			const [model, history] = await Promise.all([
-				state.client.getMentalModel(state.bankId, id, { detail: "content" }),
-				state.client.getMentalModelHistory(state.bankId, id),
-			]);
-			if (!model) {
-				this.ctx.showError(`Mental model not found: ${id}`);
-				return;
-			}
-			if (history.length === 0) {
-				this.ctx.showStatus(`No history recorded for ${id}.`);
-				return;
-			}
-			// History is most-recent first. Each entry stores the content BEFORE that
-			// change. To diff "what changed at entry N", compare entry N's
-			// previous_content (= state before that change) with entry N-1's
-			// previous_content (= state after that change, which was state before
-			// the next change). For the most recent change, compare against the
-			// model's CURRENT content.
-			const sections: string[] = [];
-			for (let i = 0; i < history.length; i++) {
-				const before = history[i].previous_content ?? "";
-				const after = i === 0 ? (model.content ?? "") : (history[i - 1].previous_content ?? "");
-				const diff = diffMentalModelContent(before, after);
-				sections.push(`### ${history[i].changed_at}\n\n\`\`\`diff\n${diff}\n\`\`\``);
-			}
-			showMarkdownPanel(this.ctx, `History — ${model.name}`, sections.join("\n\n"));
-		} catch (error) {
-			this.ctx.showError(`mm history failed: ${errorMessage(error)}`);
-		}
-	}
-
-	async #mmSeed(state: HindsightSessionState): Promise<void> {
-		try {
-			const { loadHindsightConfig, resolveSeedsForScope, seedAlreadyExists } = await loadHindsight();
-			const config = loadHindsightConfig(this.ctx.settings);
-			const seeds = resolveSeedsForScope(
-				{
-					bankId: state.bankId,
-					retainTags: state.retainTags,
-					recallTags: state.recallTags,
-					recallTagsMatch: state.recallTagsMatch,
-				},
-				config.scoping,
-			);
-			if (seeds.length === 0) {
-				this.ctx.showStatus(`No built-in seeds apply to scoping=${config.scoping}.`);
-				return;
-			}
-			const list = await state.client.listMentalModels(state.bankId, { detail: "metadata" });
-			const existing = list.items ?? [];
-			let created = 0;
-			let skipped = 0;
-			for (const seed of seeds) {
-				if (seedAlreadyExists(seed, existing)) {
-					skipped++;
-					continue;
-				}
-				try {
-					await state.client.createMentalModel(state.bankId, seed.name, seed.sourceQuery, {
-						id: seed.id,
-						tags: seed.tags.length > 0 ? seed.tags : undefined,
-						maxTokens: seed.maxTokens,
-						trigger: seed.trigger,
-					});
-					created++;
-				} catch (error) {
-					this.ctx.showWarning(`Seed failed for ${seed.id}: ${errorMessage(error)}`);
-				}
-			}
-			this.ctx.showStatus(`Seeded ${created} new mental model(s); ${skipped} already present.`);
-		} catch (error) {
-			this.ctx.showError(`mm seed failed: ${errorMessage(error)}`);
-		}
-	}
-
-	async #mmReload(state: HindsightSessionState): Promise<void> {
-		const { reloadMentalModelsForSession } = await loadHindsight();
-		const ok = await reloadMentalModelsForSession(state.session);
-		if (ok) {
-			this.ctx.showStatus("Mental-model cache reloaded.");
-		} else {
-			this.ctx.showError("Reload failed (Hindsight backend not active or mental models disabled).");
-		}
-	}
-
-	async #mmDelete(state: HindsightSessionState, id: string): Promise<void> {
-		try {
-			const { reloadMentalModelsForSession } = await loadHindsight();
-			const removed = await state.client.deleteMentalModel(state.bankId, id);
-			if (!removed) {
-				this.ctx.showError(`Mental model not found: ${id}`);
-				return;
-			}
-			// Drop the cached snippet so the closing tag does not silently keep
-			// stale content in the system prompt until the next agent_end TTL.
-			await reloadMentalModelsForSession(state.session);
-			this.ctx.showStatus(`Deleted mental model ${id} from bank ${state.bankId}.`);
-		} catch (error) {
-			this.ctx.showError(`mm delete failed: ${errorMessage(error)}`);
-		}
+	handleMemoryCommand(text: string): Promise<void> {
+		return this.#memory.handle(text);
 	}
 
 	/**
@@ -1065,42 +682,9 @@ export class CommandController {
 		const cwd = this.ctx.sessionManager.getCwd();
 		const resolvedPath = resolveToCwd(unquoted, cwd);
 
-		// If the directory doesn't exist, offer to create it.
-		let isDirectory: boolean;
-		try {
-			isDirectory = (await fs.stat(resolvedPath)).isDirectory();
-		} catch {
-			isDirectory = false;
-		}
-
-		if (!isDirectory) {
-			const parentDir = path.dirname(resolvedPath);
-			let parentExists = false;
-			try {
-				parentExists = (await fs.stat(parentDir)).isDirectory();
-			} catch {
-				parentExists = false;
-			}
-			if (!parentExists) {
-				this.ctx.showError(`Cannot create "${path.basename(resolvedPath)}": parent directory does not exist`);
-				return;
-			}
-		}
+		if (!(await this.#ensureMoveTarget(resolvedPath))) return;
 
 		const moved = await this.#withSessionMove(async () => {
-			if (!isDirectory) {
-				const confirmed = await this.ctx.showHookConfirm(
-					"Create directory?",
-					`"${path.basename(resolvedPath)}" does not exist. Create it?`,
-				);
-				if (!confirmed) return false;
-				try {
-					await fs.mkdir(resolvedPath, { recursive: true });
-				} catch (err) {
-					this.ctx.showError(`Failed to create directory: ${errorMessage(err)}`);
-					return false;
-				}
-			}
 			return this.#relocateSession(resolvedPath);
 		});
 
@@ -1175,6 +759,28 @@ export class CommandController {
 		}
 		if (error !== undefined) {
 			this.ctx.showError(`Move failed while applying directory change: ${errorMessage(error)}`);
+		}
+	}
+
+	/**
+	 * Whether `resolvedPath` is a directory the session can move into. A missing directory is created once the
+	 * "Create directory?" prompt is confirmed, and only when its parent exists; a `false` result has already been
+	 * reported, except a declined prompt.
+	 */
+	async #ensureMoveTarget(resolvedPath: string): Promise<boolean> {
+		if (await directoryExists(resolvedPath)) return true;
+		const name = path.basename(resolvedPath);
+		if (!(await directoryExists(path.dirname(resolvedPath)))) {
+			this.ctx.showError(`Cannot create "${name}": parent directory does not exist`);
+			return false;
+		}
+		if (!(await this.ctx.showHookConfirm("Create directory?", `"${name}" does not exist. Create it?`))) return false;
+		try {
+			await fs.mkdir(resolvedPath, { recursive: true });
+			return true;
+		} catch (err) {
+			this.ctx.showError(`Failed to create directory: ${errorMessage(err)}`);
+			return false;
 		}
 	}
 
@@ -1405,18 +1011,7 @@ export class CommandController {
 
 		let outcome: CompactionOutcome = "ok";
 		try {
-			const instructions = typeof customInstructionsOrOptions === "string" ? customInstructionsOrOptions : undefined;
-			const baseOptions =
-				customInstructionsOrOptions && typeof customInstructionsOrOptions === "object"
-					? customInstructionsOrOptions
-					: undefined;
-			// The slash path passes `mode` positionally; the extension path carries
-			// it inside the options object. Either source wins over no mode.
-			const effectiveMode = mode ?? baseOptions?.mode;
-			const options =
-				baseOptions || effectiveMode
-					? { ...baseOptions, ...(effectiveMode ? { mode: effectiveMode } : {}) }
-					: undefined;
+			const { instructions, options } = compactionRequest(customInstructionsOrOptions, mode);
 			await this.ctx.session.compact(instructions, options);
 
 			compactingLoader.stop();
@@ -1520,9 +1115,6 @@ export class CommandController {
 	}
 }
 
-const BAR_WIDTH_MAX = 24;
-const BAR_WIDTH_MIN = 4;
-
 function renderJobLine(job: AsyncJobSnapshotItem, now: number): string {
 	const duration = formatDuration(Math.max(0, now - job.startTime));
 	const status = formatJobStatus(job.status);
@@ -1535,444 +1127,5 @@ function formatJobStatus(status: AsyncJobSnapshotItem["status"]): string {
 	if (status === "cancelled") return theme.fg("dim", "cancelled");
 	return theme.fg("error", "failed");
 }
-
-function formatDecimal(value: number, maxFractionDigits = 1): string {
-	return new Intl.NumberFormat("en-US", { maximumFractionDigits: maxFractionDigits }).format(value);
-}
-
-function resolveProviderAuthMode(authStorage: AuthStorage, provider: string): string {
-	if (authStorage.hasOAuth(provider)) {
-		return "oauth";
-	}
-	if (authStorage.has(provider)) {
-		return "api key";
-	}
-	if (getEnvApiKey(provider)) {
-		return "env api key";
-	}
-	if (authStorage.hasAuth(provider)) {
-		return "runtime/fallback";
-	}
-	return "unknown";
-}
-
-export function renderProviderSection(details: ProviderDetails, uiTheme: Pick<typeof theme, "fg">): string {
-	const lines: string[] = [];
-	lines.push(`${uiTheme.fg("dim", "Name:")} ${details.provider}`);
-	for (const field of details.fields) {
-		lines.push(`${uiTheme.fg("dim", `${field.label}:`)} ${field.value}`);
-	}
-	return `${lines.join("\n")}\n`;
-}
-
-function resolveProviderUsageTotal(reports: UsageReport[]): number {
-	return reports
-		.flatMap(report => report.limits)
-		.map(limit => resolveUsedFraction(limit) ?? 0)
-		.reduce((sum, value) => sum + value, 0);
-}
-
-function formatLimitTitle(limit: UsageLimit): string {
-	const tier = limit.scope.tier;
-	if (tier && !limit.label.toLowerCase().includes(tier.toLowerCase())) {
-		return `${limit.label} (${tier})`;
-	}
-	return limit.label;
-}
-
-function formatWindowSuffix(label: string, windowLabel: string, uiTheme: typeof theme): string {
-	const normalizedLabel = label.toLowerCase();
-	const normalizedWindow = windowLabel.toLowerCase();
-	if (normalizedWindow === "quota window") return "";
-	if (normalizedLabel.includes(normalizedWindow)) return "";
-	return uiTheme.fg("dim", `(${windowLabel})`);
-}
-
-/** ` (org)` suffix when the report is org-attributed — two subscriptions can share one email. */
-function orgSuffix(report: UsageReport): string {
-	const orgName = report.metadata?.orgName;
-	const orgId = report.metadata?.orgId;
-	const org = typeof orgName === "string" && orgName ? orgName : typeof orgId === "string" ? orgId : undefined;
-	return org ? ` (${org})` : "";
-}
-
-function formatAccountLabel(limit: UsageLimit, report: UsageReport, index: number): string {
-	const email = report.metadata?.email;
-	if (typeof email === "string" && email) return `${email}${orgSuffix(report)}`;
-	const accountId =
-		typeof report.metadata?.accountId === "string" && report.metadata.accountId
-			? report.metadata.accountId
-			: limit.scope.accountId || undefined;
-	if (accountId) return `${accountId}${orgSuffix(report)}`;
-	const projectId =
-		typeof report.metadata?.projectId === "string" && report.metadata.projectId
-			? report.metadata.projectId
-			: limit.scope.projectId || undefined;
-	if (projectId) return projectId;
-	return `account ${index + 1}`;
-}
-
-function formatUnlimitedReportLabel(report: UsageReport, index: number): string {
-	const email = report.metadata?.email;
-	if (typeof email === "string" && email) return `${email}${orgSuffix(report)}`;
-	const accountId = report.metadata?.accountId;
-	if (typeof accountId === "string" && accountId) return `${accountId}${orgSuffix(report)}`;
-	const projectId = report.metadata?.projectId;
-	if (typeof projectId === "string" && projectId) return projectId;
-	return `account ${index + 1}`;
-}
-
-function formatResetShort(limit: UsageLimit, nowMs: number): string | undefined {
-	const resetsAt = limit.window?.resetsAt;
-	if (resetsAt === undefined) return undefined;
-	// Codex returns the prior window's reset_at until a new request opens a fresh window —
-	// rendering a negative delta is meaningless, so drop the suffix in that case.
-	if (resetsAt <= nowMs) return undefined;
-	return formatDuration(resetsAt - nowMs);
-}
-
-function formatAccountHeaderRow(
-	limits: UsageLimit[],
-	reports: UsageReport[],
-	nowMs: number,
-	columnWidth: number,
-	uiTheme: typeof theme,
-	activeAccount?: OAuthAccountIdentity,
-): string[] {
-	const parts = limits.map((limit, index) => {
-		const reset = formatResetShort(limit, nowMs);
-		const report = reports[index];
-		const active = report !== undefined && limitMatchesActiveAccount(report, limit, activeAccount);
-		const label = formatAccountLabel(limit, report, index);
-		return {
-			label: active ? `${theme.status.active} ${label}` : label,
-			suffix: reset ? `(${reset})` : "",
-			active,
-		};
-	});
-	const maxSuffixWidth = parts.reduce((max, p) => Math.max(max, visibleWidth(p.suffix)), 0);
-	const gap = maxSuffixWidth > 0 ? 1 : 0;
-	const prefixBudget = columnWidth - maxSuffixWidth - gap;
-
-	// If suffix can't share the cell with at least `x…`, fall back to whole-label truncation.
-	if (prefixBudget < 2) {
-		return parts.map(p => {
-			const full = p.suffix ? `${p.label} ${p.suffix}` : p.label;
-			const cell = padColumn(truncateToWidth(full, columnWidth), columnWidth);
-			return p.active ? uiTheme.fg("accent", cell) : cell;
-		});
-	}
-
-	return parts.map(p => {
-		const prefix = truncateToWidth(p.label, prefixBudget);
-		const prefixCell = prefix + " ".repeat(prefixBudget - visibleWidth(prefix));
-		const styledPrefix = p.active ? uiTheme.fg("accent", prefixCell) : prefixCell;
-		if (!p.suffix) return styledPrefix + " ".repeat(maxSuffixWidth + gap);
-		const suffixPad = " ".repeat(maxSuffixWidth - visibleWidth(p.suffix));
-		return `${styledPrefix} ${suffixPad}${uiTheme.fg("dim", p.suffix)}`;
-	});
-}
-
-function padColumn(text: string, width: number): string {
-	const visible = visibleWidth(text);
-	if (visible >= width) return text;
-	return `${text}${padding(width - visible)}`;
-}
-
-function resolveAggregateStatus(limits: UsageLimit[]): UsageLimit["status"] {
-	const hasOk = limits.some(limit => limit.status === "ok");
-	const hasWarning = limits.some(limit => limit.status === "warning");
-	const hasExhausted = limits.some(limit => limit.status === "exhausted");
-	if (!hasOk && !hasWarning && !hasExhausted) return "unknown";
-	if (hasOk) {
-		return hasWarning || hasExhausted ? "warning" : "ok";
-	}
-	if (hasWarning) return "warning";
-	return "exhausted";
-}
-
-function formatAggregateAmount(limits: UsageLimit[]): string {
-	const fractions = limits
-		.map(limit => resolveUsedFraction(limit))
-		.filter((value): value is number => value !== undefined);
-	if (fractions.length === limits.length && fractions.length > 0) {
-		const sum = fractions.reduce((total, value) => total + value, 0);
-		const avgRemaining = Math.max(0, ((limits.length - sum) / limits.length) * 100);
-		return `${formatDecimal(avgRemaining)}% free`;
-	}
-
-	const amounts = limits
-		.map(limit => limit.amount)
-		.filter(amount => amount.used !== undefined && amount.limit !== undefined && amount.limit > 0);
-	if (amounts.length === limits.length && amounts.length > 0) {
-		const totalUsed = amounts.reduce((sum, amount) => sum + (amount.used ?? 0), 0);
-		const totalLimit = amounts.reduce((sum, amount) => sum + (amount.limit ?? 0), 0);
-		const remainingPct = totalLimit > 0 ? Math.max(0, 100 - (totalUsed / totalLimit) * 100) : 0;
-		return `${formatDecimal(remainingPct)}% free`;
-	}
-
-	// Count unique accounts from limit scopes — not limits.length.
-	const uniqueAccountIds = new Set(
-		limits.map(limit => limit.scope.accountId).filter((id): id is string => typeof id === "string" && id.length > 0),
-	);
-	if (uniqueAccountIds.size > 0) return `${uniqueAccountIds.size} ${uniqueAccountIds.size === 1 ? "acct" : "accts"}`;
-	// No account IDs available — keep the pre-existing fallback so providers
-	// that don't populate scope.accountId still show a summary.
-	return `${limits.length} accts`;
-}
-
-function resolveResetRange(limits: UsageLimit[], nowMs: number): string | null {
-	const absolute = limits
-		.map(limit => limit.window?.resetsAt)
-		.filter((value): value is number => value !== undefined && Number.isFinite(value) && value > nowMs);
-	if (absolute.length === 0) return null;
-	const offsets = absolute.map(value => value - nowMs);
-	const minReset = Math.min(...offsets);
-	const maxReset = Math.max(...offsets);
-	if (maxReset - minReset > 60_000) {
-		return `resets in ${formatDuration(minReset)}–${formatDuration(maxReset)}`;
-	}
-	return `resets in ${formatDuration(minReset)}`;
-}
-
-function resolveStatusIcon(status: UsageLimit["status"], uiTheme: typeof theme): string {
-	if (status === "exhausted") return uiTheme.fg("error", uiTheme.status.error);
-	if (status === "warning") return uiTheme.fg("warning", uiTheme.status.warning);
-	if (status === "ok") return uiTheme.fg("success", uiTheme.status.success);
-	return uiTheme.fg("dim", uiTheme.status.pending);
-}
-
-function resolveStatusColor(status: UsageLimit["status"]): "success" | "warning" | "error" | "dim" {
-	if (status === "exhausted") return "error";
-	if (status === "warning") return "warning";
-	if (status === "ok") return "success";
-	return "dim";
-}
-
-/**
- * One usage bar: the fill in the limit's status colour, the track dimmed.
- *
- * Eight steps per column through the shared owner, which replaces a local
- * three-state approximation (`▒` at a third of a cell, `▓` at two thirds).
- * That approximation was the only sub-cell precision in the product and it read
- * as a shading artifact rather than as a position; the partial blocks read as
- * the bar ending part way through a column, because that is what they are.
- *
- * STATIC, deliberately. `renderUsageReports` returns one string that `/usage`
- * presents as a `Text` in the transcript: there is no component holding this
- * bar and no repaint after the first, so a spring here would have nothing to
- * drive it. See `tiny-title-download-progress.ts` for the animated case.
- */
-function renderUsageBar(limit: UsageLimit, uiTheme: typeof theme, barWidth: number): string {
-	const fraction = resolveDisplayFraction(limit);
-	if (fraction === undefined) {
-		return uiTheme.fg("dim", "·".repeat(barWidth));
-	}
-	const ramp = uiTheme.getBarRamp();
-	const bar = subCellBar(fraction, barWidth, { ramp });
-	// The first track cell is where the fill ends: every glyph before it is fill,
-	// whole or partial. One slice, so the two tones cannot disagree about the
-	// boundary the way two independently counted `repeat`s could.
-	const trackAt = bar.indexOf(ramp.track);
-	const color = resolveStatusColor(limit.status);
-	return trackAt < 0
-		? uiTheme.fg(color, bar)
-		: `${uiTheme.fg(color, bar.slice(0, trackAt))}${uiTheme.fg("dim", bar.slice(trackAt))}`;
-}
-
-/**
- * Pick a per-column width so n bars + a trailing amount string fit in `available` columns.
- * Falls back to the minimum when the terminal is too narrow rather than wrapping.
- */
-function resolveColumnWidth(count: number, available: number, trailing: number): number {
-	if (count <= 0) return BAR_WIDTH_MAX;
-	const indent = 2;
-	const gaps = count - 1;
-	const spaceForBars = available - indent - gaps - (trailing > 0 ? trailing + 1 : 0);
-	const ideal = Math.floor(spaceForBars / count);
-	const min = BAR_WIDTH_MIN;
-	const max = BAR_WIDTH_MAX;
-	if (ideal < min) return min;
-	if (ideal > max) return max;
-	return ideal;
-}
-
-export function renderUsageReports(
-	reports: UsageReport[],
-	uiTheme: typeof theme,
-	nowMs: number,
-	availableWidth: number,
-	resolveActiveAccount?: (provider: string) => OAuthAccountIdentity | undefined,
-): string {
-	const lines: string[] = [];
-	const latestFetchedAt = Math.max(...reports.map(report => report.fetchedAt ?? 0));
-	const headerSuffix = latestFetchedAt ? ` (${formatDuration(nowMs - latestFetchedAt)} ago)` : "";
-	lines.push(uiTheme.bold(uiTheme.fg("accent", `Usage${headerSuffix}`)));
-	const grouped = new Map<string, UsageReport[]>();
-	for (const report of reports) {
-		const list = grouped.get(report.provider) ?? [];
-		list.push(report);
-		grouped.set(report.provider, list);
-	}
-	const providerEntries = Array.from(grouped.entries())
-		.map(([provider, providerReports]) => ({
-			provider,
-			providerReports,
-			totalUsage: resolveProviderUsageTotal(providerReports),
-		}))
-		.sort((a, b) => {
-			if (a.totalUsage !== b.totalUsage) return a.totalUsage - b.totalUsage;
-			return a.provider.localeCompare(b.provider);
-		});
-
-	for (const { provider, providerReports } of providerEntries) {
-		lines.push("");
-		const providerName = formatProviderName(provider);
-		const activeAccount = resolveActiveAccount?.(provider);
-
-		const limitGroups = new Map<
-			string,
-			{ label: string; windowLabel: string; limits: UsageLimit[]; reports: UsageReport[] }
-		>();
-		for (const report of providerReports) {
-			for (const limit of report.limits) {
-				const windowId = limit.window?.id ?? limit.scope.windowId ?? "default";
-				const key = `${formatLimitTitle(limit)}|${windowId}`;
-				const windowLabel = limit.window?.label ?? windowId;
-				const entry = limitGroups.get(key) ?? {
-					label: formatLimitTitle(limit),
-					windowLabel,
-					limits: [],
-					reports: [],
-				};
-				entry.limits.push(limit);
-				entry.reports.push(report);
-				limitGroups.set(key, entry);
-			}
-		}
-
-		lines.push(uiTheme.bold(uiTheme.fg("accent", providerName)));
-		const activeAccountLabel = activeAccount?.email ?? activeAccount?.accountId ?? activeAccount?.projectId;
-		if (activeAccountLabel) {
-			lines.push(`  ${uiTheme.fg("accent", "in use by this session:")} ${activeAccountLabel}`);
-		}
-
-		// Provider-wide disclaimers (e.g. "Veyyon-observed spend only") render once
-		// above the per-account sections instead of duplicating onto every limit.
-		const providerNotes = [...new Set(providerReports.flatMap(report => report.notes ?? []))];
-		if (providerNotes.length > 0) {
-			lines.push(
-				`  ${uiTheme.fg("dim", replaceTabs(truncateToWidth(sanitizeText(providerNotes.map(n => n.replace(/[\r\n]+/g, " ")).join(" • ")), 110)))}`.trimEnd(),
-			);
-		}
-
-		const resetAccountLines: string[] = [];
-		for (const report of providerReports) {
-			const count = report.resetCredits?.availableCount ?? 0;
-			if (count <= 0) continue;
-			const label =
-				typeof report.metadata?.email === "string" && report.metadata.email
-					? report.metadata.email
-					: typeof report.metadata?.accountId === "string" && report.metadata.accountId
-						? report.metadata.accountId
-						: "account";
-			const isActive =
-				!!activeAccount &&
-				((!!activeAccount.accountId && activeAccount.accountId === report.metadata?.accountId) ||
-					(!!activeAccount.email && activeAccount.email === report.metadata?.email));
-			resetAccountLines.push(
-				`    • ${label}: ${count} saved reset${count === 1 ? "" : "s"}${isActive ? " (active)" : ""}`,
-			);
-			const credits = report.resetCredits?.credits;
-			if (credits) {
-				for (const credit of credits) {
-					if (credit.expiresAt) {
-						const expiryMs = Date.parse(credit.expiresAt);
-						if (!Number.isNaN(expiryMs)) {
-							const remaining = expiryMs - nowMs;
-							const expiryDate = credit.expiresAt.slice(0, 10);
-							if (remaining > 0) {
-								resetAccountLines.push(`        expires in ${formatDuration(remaining)} (${expiryDate})`);
-							} else {
-								resetAccountLines.push(`        expired (${expiryDate})`);
-							}
-						}
-					}
-				}
-			}
-		}
-		if (resetAccountLines.length > 0) {
-			lines.push(
-				`  ${uiTheme.fg("accent", "Saved rate-limit resets")} ${uiTheme.fg("dim", "(/usage reset to spend)")}`,
-			);
-			for (const line of resetAccountLines) lines.push(uiTheme.fg("dim", line));
-		}
-
-		const renderableGroups = Array.from(limitGroups.values()).map(group => {
-			const entries = group.limits.map((limit, index) => ({
-				limit,
-				report: group.reports[index],
-				fraction: resolveUsedFraction(limit),
-				index,
-			}));
-			entries.sort((a, b) => {
-				const aFraction = a.fraction ?? -1;
-				const bFraction = b.fraction ?? -1;
-				if (aFraction !== bFraction) return bFraction - aFraction;
-				return a.index - b.index;
-			});
-			const sortedLimits = entries.map(entry => entry.limit);
-			const sortedReports = entries.map(entry => entry.report);
-			return { group, sortedLimits, sortedReports, amountText: formatAggregateAmount(sortedLimits) };
-		});
-
-		const sectionCount = renderableGroups.reduce((max, g) => Math.max(max, g.sortedLimits.length), 0);
-		const sectionTrailing = renderableGroups.reduce((max, g) => Math.max(max, visibleWidth(g.amountText)), 0);
-		const sectionColumnWidth = resolveColumnWidth(sectionCount, availableWidth, sectionTrailing);
-
-		for (const { group, sortedLimits, sortedReports, amountText } of renderableGroups) {
-			const status = resolveAggregateStatus(sortedLimits);
-			const statusIcon = resolveStatusIcon(status, uiTheme);
-
-			const windowSuffix = formatWindowSuffix(group.label, group.windowLabel, uiTheme);
-			lines.push(`${statusIcon} ${uiTheme.bold(group.label)} ${windowSuffix}`.trim());
-			const accountLabels = formatAccountHeaderRow(
-				sortedLimits,
-				sortedReports,
-				nowMs,
-				sectionColumnWidth,
-				uiTheme,
-				activeAccount,
-			);
-			lines.push(`  ${accountLabels.join(" ")}`.trimEnd());
-			const bars = sortedLimits.map(limit =>
-				padColumn(renderUsageBar(limit, uiTheme, sectionColumnWidth), sectionColumnWidth),
-			);
-			lines.push(`  ${bars.join(" ")} ${amountText}`.trimEnd());
-			const resetText = sortedLimits.length <= 1 ? resolveResetRange(sortedLimits, nowMs) : null;
-			if (resetText) {
-				lines.push(`  ${uiTheme.fg("dim", resetText)}`.trimEnd());
-			}
-			const notes = [...new Set(sortedLimits.flatMap(limit => limit.notes ?? []))];
-			if (notes.length > 0) {
-				lines.push(
-					`  ${uiTheme.fg("dim", replaceTabs(truncateToWidth(sanitizeText(notes.map(n => n.replace(/[\r\n]+/g, " ")).join(" • ")), 110)))}`.trimEnd(),
-				);
-			}
-		}
-
-		// Render accounts with no rate limits (e.g. business/enterprise plans).
-		const unlimitedReports = providerReports.filter(report => report.limits.length === 0);
-		for (const report of unlimitedReports) {
-			const label = formatUnlimitedReportLabel(report, 0);
-			const tier = report.metadata?.planType;
-			const tierSuffix = typeof tier === "string" && tier ? ` ${uiTheme.fg("dim", `(${tier})`)}` : "";
-			lines.push(
-				`${uiTheme.fg("success", uiTheme.status.success)} ${label}${tierSuffix} ${uiTheme.fg("dim", "-- no limits")}`,
-			);
-		}
-		// No per-provider footer; global header shows last check.
-	}
-
-	return lines.join("\n");
-}
+export { renderProviderSection } from "./session-info-view";
+export { renderUsageReports } from "./usage-report-view";

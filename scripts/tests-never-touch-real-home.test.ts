@@ -232,6 +232,12 @@ export const ALLOWLIST: ReadonlyArray<AllowlistEntry> = [
 			"Six targets, all discovery rather than execution of anything installed: `gitCmd` is the literal `git`/`git.exe` chosen by platform for one `rev-parse HEAD`; `lookupCmd` is the literal `which`/`where` chosen the same way; `override`, `resolved` and `detectedPython` are the interpreter that lookup returned, probed with `--version` only to decide whether to skip; and `python` runs the ledger bridge script that ships in `src/task/` against a lock file the test made. A python contract cannot be asserted without asking a python, and which python exists is exactly what the host has to answer.",
 	},
 	{
+		file: "tests/evals/test/backends/local-cli/a-finished-local-trial-leaves-no-process-running.test.ts",
+		rule: "unresolved-spawn-target",
+		reason:
+			"`launch.command` is what `sandboxedLaunch` returns for a host without Landlock: the `python3` that `$which` resolved, running the backend's own `landlock-exec.py --no-rules` launcher over `process.execPath` and an agent script the test wrote into its temp directory. The suite's subject is that launch line, so the spawn runs what `sandboxedLaunch` built rather than a literal; the child runs in the temp cwd, writes only its own child's pid there, and reads no config root.",
+	},
+	{
 		file: "packages/coding-agent/test/cli/startup/an-exiting-timing-run-prints-its-tree-on-the-terminal.test.ts",
 		rule: "unresolved-spawn-target",
 		reason:

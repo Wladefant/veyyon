@@ -46,7 +46,7 @@ export const ORACLE_SOURCE_DIRECTORY = "packages/coding-agent/test/oracles";
 export const ORACLE_CACHE_DIRECTORY = path.join(
 	import.meta.dirname,
 	".cache",
-	`historical-v7-${ORACLE_SNAPSHOT_COMMIT}`,
+	`historical-v9-${ORACLE_SNAPSHOT_COMMIT}`,
 );
 export const ADAPTER_FILENAME = "historical-render-utils-adapter.ts";
 export const ADAPTER_SPECIFIER = "historical-render-utils-adapter";
@@ -134,6 +134,8 @@ function getPinnedExportSources(sourcePath: string, names: readonly string[]): s
 			for (const declarator of declaration.declarations) {
 				if (declarator.id.type === "Identifier") exportedNames.push(declarator.id.name);
 			}
+		} else if (declaration.type === "TSInterfaceDeclaration" || declaration.type === "TSTypeAliasDeclaration") {
+			exportedNames.push(declaration.id.name);
 		}
 		if (!exportedNames.some(name => missing.has(name))) continue;
 		sources.push(sourceText.slice(node.start, node.end));
@@ -147,7 +149,25 @@ function getPinnedExportSources(sourcePath: string, names: readonly string[]): s
 
 function getHistoricalRenderUtilsAdapterBuffer(): Buffer {
 	if (cachedAdapterBuffer !== null) return cachedAdapterBuffer;
-	const formatDiagnosticsSource = getPinnedExportSources(PINNED_RENDER_UTILS_SOURCE_PATH, ["formatDiagnostics"]);
+	// Helpers the frozen renderers import that the live modules no longer export: each is pinned from the
+	// snapshot so the oracle runs against the code it was approved with, not against a re-creation.
+	const renderUtilsSources = getPinnedExportSources(PINNED_RENDER_UTILS_SOURCE_PATH, [
+		"formatDiagnostics",
+		"renderCollapsedOutputLines",
+		"formatMeta",
+		"formatEmptyMessage",
+		"ToolUITitleOptions",
+		"formatTitle",
+		"RenderedStringCache",
+		"createRenderedStringCache",
+		"invalidateRenderedStringCache",
+		"cachedRenderedString",
+		"appendParseErrorsBulletList",
+	]);
+	const outputMetaSources = getPinnedExportSources("packages/coding-agent/src/tools/core/output-meta.ts", [
+		"formatStyledArtifactReference",
+		"formatStyledTruncationWarning",
+	]);
 	const diagnosticSources = getPinnedExportSources("packages/coding-agent/src/tools/core/diagnostics.ts", [
 		"sanitizeDiagnosticDisplayText",
 		"getSeverityRank",
@@ -162,16 +182,33 @@ function getHistoricalRenderUtilsAdapterBuffer(): Buffer {
 	const adapterSource = `import type { Theme } from "@veyyon/coding-agent/theme/theme";
 import type { ParsedDiagnostic } from "@veyyon/coding-agent/tools/core/diagnostics";
 import { replaceTabs } from "@veyyon/utils/tab-width";
-import { formatExpandHint } from "@veyyon/coding-agent/tools/core/render-utils";
+import {
+	collapseProgressRuns,
+	formatExpandHint,
+	PARSE_ERRORS_LIMIT,
+	shortenEmbeddedPaths,
+	wrapBrackets,
+} from "@veyyon/coding-agent/tools/core/render-utils";
+import {
+	formatFullOutputReference,
+	formatTruncationMetaNotice,
+	type OutputMeta,
+} from "@veyyon/coding-agent/tools/core/output-notice";
 import type { ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
 
 export * from "@veyyon/coding-agent/tools/core/render-utils";
 export * from "@veyyon/coding-agent/tools/core/path-utils";
+export * from "@veyyon/coding-agent/tools/core/output-meta";
+export * from "@veyyon/coding-agent/tools/core/output-notice";
+export * from "@veyyon/coding-agent/tools/core/tool-ui-status";
+export { formatAge, formatBytes, formatCount, formatDuration, pluralize } from "@veyyon/utils/format";
 export type * from "@veyyon/coding-agent/tools/fs/read";
 
 ${diagnosticSources}
 
-${formatDiagnosticsSource}
+${renderUtilsSources}
+
+${outputMetaSources}
 
 ${writeDisplaySource}
 
@@ -195,6 +232,7 @@ function deriveExecutableSource(originalSource: string): string {
 				node.type === "ExportAllDeclaration") &&
 			node.source &&
 			(node.source.value === "@veyyon/coding-agent/tools/core/render-utils" ||
+				node.source.value === "@veyyon/coding-agent/tools/core/output-meta" ||
 				node.source.value === "@veyyon/coding-agent/tools/fs/write" ||
 				node.source.value === "@veyyon/coding-agent/tools/fs/read") &&
 			typeof node.source.start === "number" &&

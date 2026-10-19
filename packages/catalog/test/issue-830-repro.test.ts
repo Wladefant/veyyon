@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { getEnvApiKey } from "@veyyon/ai/env-api-key";
 import { getOAuthProviders } from "@veyyon/ai/registry/oauth";
-import { getEnvApiKey } from "@veyyon/ai/stream";
 import { DEFAULT_MODEL_PER_PROVIDER, PROVIDER_DESCRIPTORS } from "@veyyon/catalog/provider-models/descriptors";
 import { MODELS_DEV_PROVIDER_DESCRIPTORS } from "@veyyon/catalog/provider-models/openai-compat";
 import type { OpenAICompat } from "@veyyon/catalog/types";

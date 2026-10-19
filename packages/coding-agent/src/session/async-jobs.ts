@@ -34,31 +34,62 @@ export interface OwnedAsyncJobsInput {
 	target: (ownerId?: string) => AsyncFollowUpTarget | undefined;
 }
 
+interface OrphanCompletion {
+	jobId: string;
+	ownerId?: string;
+	text: string;
+}
+
 /**
  * A new AsyncJobManager when this session owns one, else undefined.
  *
  * Every top-level session owns one. Its callback resolves each job's owner in the live registry.
  * Spawned agents share the manager for inspection, but receive only their own completions.
- * Jobs without an owner use the creating session. A missing owner never falls back to Main.
- * A missing or disposed owner retains its completion for the manager's delivery retry.
+ * Jobs without an owner use the creating session. A missing owner never falls back to Main, and
+ * retains its completion for the manager's delivery retry.
+ * An owner the manager marks disposed (torn down without parking) is an orphan instead: its completions
+ * queue and reach Main as one note per burst, each job's result once.
  * Formatting can await artifact I/O, so delivery resolves the live owner again afterward.
- * The manager retains the original job identity while delivery waits, even after inspection expires.
  * Suppressed delivery never reaches any owner.
  */
 export function createOwnedAsyncJobManager(input: OwnedAsyncJobsInput): AsyncJobManager | undefined {
 	if (isInProcessChildSession(input.options)) return undefined;
+	const orphans: OrphanCompletion[] = [];
+	let orphanFlush: NodeJS.Timeout | undefined;
+	const flushOrphans = (): void => {
+		orphanFlush = undefined;
+		const batch = orphans.splice(0).filter(orphan => !manager.isDeliverySuppressed(orphan.jobId));
+		if (batch.length === 0) return;
+		const main = input.target(undefined);
+		if (!main || main.isDisposed) {
+			orphans.unshift(...batch);
+			return;
+		}
+		const note = [
+			`${batch.length} background job(s) finished after their owner was disposed:`,
+			...batch.map(orphan => `Owner ${orphan.ownerId ?? "session"}, job ${orphan.jobId}:\n${orphan.text}`),
+		].join("\n\n");
+		main.deliverAsyncJobResult(batch[0].jobId, note, undefined);
+	};
 	const manager: AsyncJobManager = new AsyncJobManager({
-		maxRunningJobs: Math.min(100, Math.max(1, input.settings.get("async.maxJobs") ?? 100)),
+		maxRunningJobs: Math.min(100, Math.max(1, input.settings.get("async.maxJobs"))),
 		onJobComplete: async (jobId, result, job) => {
 			if (manager.isDeliverySuppressed(jobId)) return;
-			const initialTarget = input.target(job?.ownerId);
-			if (!initialTarget || initialTarget.isDisposed)
-				throw new Error(`Async job owner unavailable: ${job?.ownerId ?? "session"}`);
+			const ownerId = job?.ownerId;
+			const initialTarget = input.target(ownerId);
+			if ((!initialTarget || initialTarget.isDisposed) && !manager.isOwnerDisposed(ownerId))
+				throw new Error(`Async job owner unavailable: ${ownerId ?? "session"}`);
 			const followUp = await formatAsyncResultForFollowUp(result, jobOutputMeta(job), input.sessionManager);
 			if (manager.isDeliverySuppressed(jobId)) return;
-			const target = input.target(job?.ownerId);
-			if (!target || target.isDisposed) throw new Error(`Async job owner unavailable: ${job?.ownerId ?? "session"}`);
-			await target.deliverAsyncJobResult(jobId, followUp, job);
+			const target = input.target(ownerId);
+			if (target && !target.isDisposed) {
+				await target.deliverAsyncJobResult(jobId, followUp, job);
+				return;
+			}
+			if (!manager.isOwnerDisposed(ownerId))
+				throw new Error(`Async job owner unavailable: ${ownerId ?? "session"}`);
+			orphans.push({ jobId, ownerId, text: followUp });
+			orphanFlush ??= setTimeout(flushOrphans, 0);
 		},
 	});
 	return manager;

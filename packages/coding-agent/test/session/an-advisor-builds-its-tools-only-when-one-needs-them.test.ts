@@ -194,7 +194,7 @@ describe("an advisor receives its tools before its first request", () => {
 			// after the advisor's review of that turn.
 			"advisor.syncBacklog": "1",
 		});
-		settings.setModelRole("advisor", ADVISOR_MODEL);
+		settings.set("agent.helpers", { ...settings.get("agent.helpers"), advisor: { model: ADVISOR_MODEL } });
 		const session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(scratchDir()),

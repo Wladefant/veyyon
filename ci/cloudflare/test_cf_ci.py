@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+import tempfile
+
+from dispatch_nightly import claim_once_per_utc_day
 import sys
 
 _HERE = Path(__file__).resolve().parent
@@ -17,6 +20,15 @@ from cf_ci import (
     publish_github_commit_status,
     validate_exact_head,
 )
+
+
+class TestNightlyDispatchGuard(unittest.TestCase):
+    def test_claim_is_atomic_and_limited_to_one_dispatch_per_utc_day(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.assertTrue(claim_once_per_utc_day(root, "2026-10-19"))
+            self.assertFalse(claim_once_per_utc_day(root, "2026-10-19"))
+            self.assertTrue(claim_once_per_utc_day(root, "2026-10-20"))
 
 
 class TestCfCiBunSummaryParser(unittest.TestCase):

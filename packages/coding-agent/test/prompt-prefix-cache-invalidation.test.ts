@@ -183,7 +183,7 @@ describe("system prompt prefix invalidation", () => {
 	 * COST THIS PREVENTS: a recorder that compared array identity instead of
 	 * content would mark every rebuild as an invalidation. Every skip
 	 * optimization downstream — the tool-signature skip in
-	 * `#applyActiveToolsByName`, the reference memo in `context-usage.ts` — is
+	 * `ToolActivation.apply`, the reference memo in `context-usage.ts` — is
 	 * built on this being a content comparison, and a reference comparison here
 	 * would report a full re-prefill on turns that actually cost nothing, making
 	 * the evidence useless in the opposite direction from the bug above.

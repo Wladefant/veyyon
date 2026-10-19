@@ -43,6 +43,7 @@ type Mode =
 	| "local"
 	| "local-ts"
 	| "workspace"
+	| "workspace-cloudflare"
 	| "scripts"
 	| "native"
 	| "coding-agent-singleton"
@@ -59,11 +60,12 @@ export interface RunnerArguments {
 	planJson: boolean;
 }
 
-const validModes: Record<Mode, true> = {
+export const validModes: Record<Mode, true> = {
 	all: true,
 	local: true,
 	"local-ts": true,
 	workspace: true,
+	"workspace-cloudflare": true,
 	scripts: true,
 	native: true,
 	"coding-agent-singleton": true,
@@ -118,6 +120,9 @@ export function parseRunnerArguments(input: readonly string[]): RunnerArguments 
 			changedSince = argument.slice("--changed-since=".length);
 			continue;
 		}
+		if (argument.startsWith("--junit-report-dir=")) {
+			continue;
+		}
 		if (argument.startsWith("--")) {
 			throw new Error(`Unknown runner option: ${argument}`);
 		}
@@ -165,22 +170,7 @@ export interface TestCommand {
 	cwd: string;
 	command: string[];
 	env?: Record<string, string>;
-	excludedTestFiles?: readonly string[];
-}
 
-export interface ShardConfig {
-	index: number;
-	count: number;
-}
-
-export interface BunTestSummary {
-	pass: number;
-	fail: number;
-	skip: number;
-	todo: number;
-	total: number;
-	files: number;
-	valid?: boolean;
 }
 
 type CodingAgentTestPartition = Record<CodingAgentBucket, string[]>;
@@ -260,6 +250,20 @@ process.on("exit", () => {
 		);
 	}
 }
+const args = process.argv.slice(2);
+const junitReportDirArg = args.find(arg => arg.startsWith("--junit-report-dir="));
+const junitReportDirValue = junitReportDirArg?.slice("--junit-report-dir=".length);
+if (junitReportDirValue === "") {
+	throw new Error("--junit-report-dir requires a path");
+}
+const junitReportDir = junitReportDirValue ? path.resolve(junitReportDirValue) : null;
+// `--only-failures` is Bun's output filter — it hides passing tests within each
+// chunk, keeping the log terse, and is the default here (CI and the root
+// `test:ts` aggregate append it). It does NOT skip tests or share any
+// cross-process cache, so chunks are safe to run concurrently. The package-level
+// `test` script passes `--full` for verbose output (every test line); an explicit
+// `--only-failures` still wins.
+
 // `chunkSize` splits a bucket's file list into that-many-file groups, each run as a
 // separate `bun test` child process. A fresh process per chunk resets Bun's
 // heap and reaps any dangling spawned children between groups, keeping peak RSS
@@ -501,7 +505,8 @@ export const repoScriptTests = [
 	"scripts/record-conformance.test.ts",
 	"scripts/ci-test-real-data-guard.test.ts",
 	"scripts/ci-test-concurrency-default.test.ts",
-	"scripts/ci-test-scheduler-runs-all-chunks.test.ts",
+	"scripts/a-cloudflare-bucket-selection-preserves-test-files.test.ts",
+	"scripts/a-failing-test-chunk-does-not-stop-the-sequential-run.test.ts",
 	"scripts/release-binaries-bytecode.test.ts",
 	"scripts/fix-changelogs.test.ts",
 	"scripts/require-changelog.test.ts",
@@ -787,6 +792,14 @@ export function workspaceTestParallelism(pkg: string, requested: number): number
 	return workspacePackageParallelism[pkg] ?? requested;
 }
 
+const catalogExpensiveTestFiles: readonly string[] = [
+	"test/a-reference-lookup-parses-only-the-models-it-reaches.test.ts",
+	"test/classifying-a-model-id-retains-nothing.test.ts",
+	"test/a-resolved-model-keeps-the-compat-its-sources-declared.test.ts",
+];
+
+const engineExpensiveTestFiles: readonly string[] = ["test/editor-wordwrap-fuzz.test.ts"];
+
 function workspaceTestCommand(
 	pkg: string,
 	parallel: number,
@@ -963,375 +976,47 @@ async function codingAgentTestCommands(
 	return commands;
 }
 
-export function validateShardBounds(index: number, count: number): void {
-	if (!Number.isInteger(count) || count < 1) {
-		throw new Error(`Invalid CF_SHARD_COUNT: ${count}. Expected an integer >= 1.`);
-	}
-	if (!Number.isInteger(index) || index < 0 || index >= count) {
-		throw new Error(
-			`Invalid CF_SHARD_INDEX: ${index}. Expected a zero-based integer in range [0, ${count - 1}].`,
-		);
-	}
-}
-
-export function parseShardConfig(
-	env: Record<string, string | undefined> = Bun.env,
-): ShardConfig | null {
-	const rawIndex = env.CF_SHARD_INDEX?.trim();
-	const rawCount = env.CF_SHARD_COUNT?.trim();
-
-	if (rawIndex === undefined && rawCount === undefined) {
-		return null;
-	}
-	if (rawIndex === undefined || rawCount === undefined) {
-		throw new Error(
-			`Incomplete shard configuration: both CF_SHARD_INDEX and CF_SHARD_COUNT must be set if either is defined (received CF_SHARD_INDEX=${rawIndex}, CF_SHARD_COUNT=${rawCount}).`,
-		);
-	}
-
-	const index = Number(rawIndex);
-	const count = Number(rawCount);
-
-	if (!Number.isFinite(index) || !Number.isInteger(index)) {
-		throw new Error(`Invalid CF_SHARD_INDEX: "${rawIndex}". Expected an integer.`);
-	}
-	if (!Number.isFinite(count) || !Number.isInteger(count)) {
-		throw new Error(`Invalid CF_SHARD_COUNT: "${rawCount}". Expected an integer.`);
-	}
-
-	validateShardBounds(index, count);
-	return { index, count };
-}
-
-export function shardTestCommands<T>(
-	items: readonly T[],
-	shardIndex: number,
-	shardCount: number,
-): T[] {
-	validateShardBounds(shardIndex, shardCount);
-	const sharded: T[] = [];
-	for (let i = 0; i < items.length; i++) {
-		if (i % shardCount === shardIndex) {
-			sharded.push(items[i]);
-		}
-	}
-	return sharded;
-}
-
-export function calculateDiscoveryHash(files: readonly string[]): string {
-	const sorted = [...files].sort();
-	return crypto.createHash("sha256").update(sorted.join("\n")).digest("hex").slice(0, 16);
-}
-
-export async function expandWorkspaceCommand(baseCommand: TestCommand, chunkSize = 10): Promise<TestCommand[]> {
-	const pkgDir = path.join(repoRoot, baseCommand.cwd);
-	const testFiles = (await collectTestFiles(pkgDir, pkgDir)).filter(
-		file => !baseCommand.excludedTestFiles?.includes(file),
-	);
-	if (testFiles.length === 0) {
-		return [baseCommand];
-	}
-	const chunkCount = Math.ceil(testFiles.length / chunkSize);
-	const commands: TestCommand[] = [];
-	for (let i = 0; i < testFiles.length; i += chunkSize) {
-		const chunk = testFiles.slice(i, i + chunkSize);
-		const chunkLabel = chunkCount > 1 ? ` (chunk ${commands.length + 1}/${chunkCount}; ${chunk.length} files)` : ` (${testFiles.length} files)`;
-		commands.push({
-			label: `${baseCommand.label}${chunkLabel}`,
-			cwd: baseCommand.cwd,
-			command: [...baseCommand.command, ...chunk],
-		});
-	}
-	return commands;
-}
-
-export function expandScriptCommand(baseCommand: TestCommand, chunkSize = 10): TestCommand[] {
-	const files = [...new Set(repoScriptTests)].map(f => (f.startsWith("./") ? f : `./${f}`)).sort();
-	const chunkCount = Math.ceil(files.length / chunkSize);
-	const baseArgs = baseCommand.command.filter(arg => !repoScriptTests.includes(arg) && !files.includes(arg));
-	const commands: TestCommand[] = [];
-	for (let i = 0; i < files.length; i += chunkSize) {
-		const chunk = files.slice(i, i + chunkSize);
-		const chunkLabel = chunkCount > 1 ? ` (chunk ${commands.length + 1}/${chunkCount}; ${chunk.length} files)` : ` (${files.length} files)`;
-		commands.push({
-			label: `scripts${chunkLabel}`,
-			cwd: baseCommand.cwd,
-			command: [...baseArgs, ...chunk],
-		});
-	}
-	return commands;
-}
-
-export async function expandTestCommands(commands: readonly TestCommand[]): Promise<TestCommand[]> {
-	const expanded: TestCommand[] = [];
-	for (const cmd of commands) {
-		if (cmd.cwd === "." && (cmd.label === "scripts" || cmd.label.startsWith("scripts"))) {
-			expanded.push(...expandScriptCommand(cmd));
-		} else if (cmd.cwd === "packages/coding-agent") {
-			expanded.push(cmd);
-		} else {
-			const hasExplicitTestFiles = cmd.command.some(arg => isBunTestFile(path.basename(arg)));
-			if (hasExplicitTestFiles) {
-				expanded.push(cmd);
-			} else {
-				expanded.push(...(await expandWorkspaceCommand(cmd)));
-			}
-		}
-	}
-	return expanded;
-}
-
-export function extractCommandTestFiles(cmd: TestCommand): string[] {
-	const directFiles = cmd.command.filter(arg => isBunTestFile(path.basename(arg)));
-	const files = directFiles.length > 0 ? directFiles : chunkTestFiles(cmd.command.map(shellQuote).join(" "));
-	return files.map(file => {
-		const clean = file.startsWith("./") ? file.slice(2) : file;
-		return cmd.cwd === "." ? clean : `${cmd.cwd}/${clean}`;
-	});
-}
-
-export function applySharding(
-	commands: readonly TestCommand[],
-	config: ShardConfig,
-): TestCommand[] {
-	validateShardBounds(config.index, config.count);
-	if (commands.length === 0) {
-		throw new Error("Cannot shard empty test commands inventory.");
-	}
-
-	const allFiles = commands.flatMap(cmd => extractCommandTestFiles(cmd));
-	const discoveryHash = calculateDiscoveryHash(allFiles);
-
-	const sharded = shardTestCommands(commands, config.index, config.count);
-	if (sharded.length === 0) {
-		throw new Error(
-			`Empty shard ${config.index}/${config.count} assigned (0 chunks). Full inventory of ${commands.length} chunks requires non-empty shards.`,
-		);
-	}
-
-	console.log(
-		`CLOUDFLARE_SHARD_DISCOVERY hash=${discoveryHash} total_files=${allFiles.length} total_chunks=${commands.length} shard=${config.index}/${config.count} assigned_chunks=${sharded.length}`,
-	);
-
-	console.log(`\n--- Selected Shard Chunks (${sharded.length} chunks) ---`);
-	for (const cmd of sharded) {
-		const files = extractCommandTestFiles(cmd);
-		console.log(`  - ${cmd.label} [cwd: ${cmd.cwd}] (${files.length} files)`);
-		for (const f of files) {
-			console.log(`      ${f}`);
-		}
-	}
-
-	return sharded;
-}
-
-export interface AllModeCommandPlan {
-	commands: TestCommand[];
-	shardConfig: ShardConfig | null;
-}
-
-export async function buildAllModeCommandPlan(
-	selectedMembers?: readonly string[],
-	shardConfig: ShardConfig | null = parseShardConfig(Bun.env),
-): Promise<AllModeCommandPlan> {
-	const selectedMemberSet = selectedMembers === undefined ? undefined : new Set(selectedMembers);
-	const includeMember = (directory: string): boolean =>
-		selectedMemberSet === undefined || selectedMemberSet.has(directory);
-	const codingAgentCommands =
-		selectedMemberSet === undefined || selectedMemberSet.has("packages/coding-agent")
-			? await commandsForCodingAgentHeavy()
-			: await commandsForCodingAgentArchitectureOnly();
-	const baseCommands = [
-		...fastWorkspacePackages.filter(includeMember).map(pkg => workspaceTestCommand(pkg, 8)),
-		...nativeAndIntegrationPackages.filter(includeMember).map(pkg => workspaceTestCommand(pkg, 4, { smol: true })),
-		...codingAgentCommands,
-		scriptTestCommand(),
-	];
-	if (!shardConfig) return { commands: baseCommands, shardConfig: null };
-
-	const shardCommands = baseCommands.map(command => {
-		if (command.cwd === "packages/catalog") {
-			return { ...command, excludedTestFiles: cloudflareCatalogSerialTestFiles };
-		}
-		if (command.cwd === "hosts/terminal/engine") {
-			return { ...command, excludedTestFiles: cloudflareEngineSerialTestFiles };
-		}
-		if (command.cwd === "packages/utils") {
-			return { ...command, excludedTestFiles: cloudflareExcludedTestFiles };
-		}
-		return command;
-	});
-	const isolatedCommands: TestCommand[] = [];
-	if (includeMember("packages/catalog")) {
-		isolatedCommands.push({
-			...workspaceTestCommand("packages/catalog", 1, {
-				env: cloudflareSerialTestEnv,
-				extraArgs: [...onlyFailuresArgs, ...cloudflareCatalogSerialTestFiles],
-			}),
-			label: "packages/catalog (isolated)",
-		});
-	}
-	if (includeMember("hosts/terminal/engine")) {
-		isolatedCommands.push({
-			...workspaceTestCommand("hosts/terminal/engine", 1, {
-				env: cloudflareSerialTestEnv,
-				extraArgs: [...onlyFailuresArgs, ...cloudflareEngineSerialTestFiles],
-				smol: true,
-			}),
-			label: "hosts/terminal/engine (isolated)",
-		});
-	}
-	return {
-		commands: await expandTestCommands([...shardCommands, ...isolatedCommands]),
-		shardConfig,
-	};
-}
-
-
-async function commandsForCodingAgentHeavy(): Promise<TestCommand[]> {
-	return [
-		...(await codingAgentTestCommands("singleton")),
-		...(await codingAgentTestCommands("ui")),
-		...(await codingAgentTestCommands("runtime")),
-		...(await codingAgentTestCommands("native")),
-	];
-}
-
-async function commandsForCodingAgentArchitectureOnly(): Promise<TestCommand[]> {
-	return [
-		...(await codingAgentTestCommands("singleton", testFile => testFile.startsWith("test/architecture/"))),
-		...(await codingAgentTestCommands("ui", testFile => testFile.startsWith("test/architecture/"))),
-		...(await codingAgentTestCommands("runtime", testFile => testFile.startsWith("test/architecture/"))),
-		...(await codingAgentTestCommands("native", testFile => testFile.startsWith("test/architecture/"))),
-	];
-}
-
-export interface AffectedPlanChunk {
-	label: string;
-	cwd: string;
-	files: string[];
-}
-
-export interface AffectedTestPlan {
-	selectorId: string;
-	mode: "affected" | "full";
-	baseSha: string;
-	headSha: string | null;
-	fallbackReason?: string;
-	changedPaths: string[];
-	selectedMembers: string[];
-	changeMembers: AffectedWorkspaceInspection["changeMembers"];
-	importEdgeCount: number;
-	importEdgeCountsByRevision: AffectedWorkspaceInspection["importEdgeCountsByRevision"];
-	dynamicImportLoaderFiles: string[];
-	selectedInventory: string[];
-	selectionHash: string;
-	dependencyPolicy: string;
-	shardConfig: ShardConfig | null;
-	commands: TestCommand[];
-	chunks: AffectedPlanChunk[];
-}
-
-async function filesForPlanCommand(command: TestCommand): Promise<string[]> {
-	const directFiles = command.command.filter(argument => isBunTestFile(path.basename(argument)));
-	if (directFiles.length > 0) return extractCommandTestFiles(command);
-	if (command.cwd === ".") return [];
-	const packageRoot = path.join(repoRoot, command.cwd);
-	return (await collectTestFiles(packageRoot, packageRoot))
-		.filter(file => !command.excludedTestFiles?.includes(file))
-		.map(file => `${command.cwd}/${file.startsWith("./") ? file.slice(2) : file}`);
-}
-
-export async function buildAffectedTestPlan(
-	inspection: AffectedWorkspaceInspection,
-	shardConfig: ShardConfig | null = parseShardConfig(Bun.env),
-): Promise<AffectedTestPlan> {
-	const excludedLocalOnlyMembers =
-		inspection.mode === "affected"
-			? inspection.selectedMembers.filter(member => localOnlyWorkspacePackages.includes(member))
-			: [];
-	const unsupportedMemberReason =
-		excludedLocalOnlyMembers.length > 0
-			? `selected member is excluded from existing all-mode buckets: ${excludedLocalOnlyMembers.join(", ")}`
-			: undefined;
-	const mode = unsupportedMemberReason === undefined ? inspection.mode : "full";
-	const fullModeMembers = [
-		...fastWorkspacePackages,
-		...nativeAndIntegrationPackages,
-		"packages/coding-agent",
-	].sort();
-	const selectedMembers =
-		mode === "full" ? fullModeMembers : [...inspection.selectedMembers].sort();
-	const fallbackReason = unsupportedMemberReason ?? inspection.fallbackReason;
-	const commandPlan = await buildAllModeCommandPlan(mode === "full" ? undefined : selectedMembers, shardConfig);
-	const chunks = await Promise.all(
-		commandPlan.commands.map(async command => ({
-			label: command.label,
-			cwd: command.cwd,
-			files: await filesForPlanCommand(command),
-		})),
-	);
-	const selectedInventory = [...new Set(chunks.flatMap(chunk => chunk.files))].sort();
-	// A selected member that ships tests but that no bucket runs is reported, never counted as covered.
-	const bucketCovered = new Set<string>([...workspaceTestPackages, "packages/coding-agent"]);
-	const unrunnableMembers: string[] = [];
-	for (const member of selectedMembers) {
-		if (bucketCovered.has(member)) continue;
-		const memberRoot = path.join(repoRoot, member);
-		if ((await collectTestFiles(memberRoot, memberRoot)).length > 0) unrunnableMembers.push(member);
-	}
-	// Every input that changes what runs is bound here, so one selection hash names one command plan.
-	// The shard index stays out (every Worker shares the hash); the shard count stays in.
-	const selectionHash = crypto
-		.createHash("sha256")
-		.update(
-			JSON.stringify({
-				selectorId: AFFECTED_SELECTOR_ID,
-				mode,
-				headSha: inspection.headSha,
-				baseSha: inspection.baseSha,
-				fallbackReason: fallbackReason ?? null,
-				changedPaths: inspection.changedPaths,
-				selectedMembers,
-				excludedLocalOnlyMembers,
-				unrunnableMembers,
-				shardCount: shardConfig?.count ?? null,
-				commands: commandPlan.commands.map(command => ({
-					label: command.label,
-					cwd: command.cwd,
-					command: command.command,
-					env: command.env ?? null,
-					excludedTestFiles: command.excludedTestFiles ?? null,
-				})),
-				selectedInventory,
-			}),
-		)
-		.digest("hex");
-	return {
-		selectorId: AFFECTED_SELECTOR_ID,
-		mode,
-		baseSha: inspection.baseSha,
-		headSha: inspection.headSha,
-		fallbackReason,
-		changedPaths: [...inspection.changedPaths],
-		selectedMembers,
-		excludedLocalOnlyMembers,
-		unrunnableMembers,
-		changeMembers: inspection.changeMembers,
-		importEdgeCount: inspection.importEdgeCount,
-		importEdgeCountsByRevision: inspection.importEdgeCountsByRevision,
-		dynamicImportLoaderFiles: [...AFFECTED_DYNAMIC_IMPORT_LOADER_FILES],
-		selectedInventory,
-		selectionHash,
-		dependencyPolicy: AFFECTED_STATIC_DEPENDENCY_POLICY,
-		shardConfig: commandPlan.shardConfig,
-		commands: commandPlan.commands,
-		chunks,
-	};
-}
-
-async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
+export async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 	switch (mode) {
+		// Only the Cloudflare bwrap lane uses this mode. Keep the source test in
+		// every other workspace mode; Bun aborts in this guest while that one test
+		// requests a native allocation of 16 GiB.
+		case "workspace-cloudflare":
+			return fastWorkspacePackages.flatMap(pkg => {
+				if (pkg === "packages/catalog") {
+					return [
+						workspaceTestCommand(pkg, 8, {
+							extraArgs: [
+								...onlyFailuresArgs,
+								...catalogExpensiveTestFiles.flatMap(file => ["--path-ignore-patterns", file]),
+							],
+						}),
+						{
+							label: `${pkg} (isolated)`,
+							cwd: pkg,
+							command: [
+								"bun",
+								"test",
+								...preloadArgs,
+								"--parallel=1",
+								...onlyFailuresArgs,
+								...catalogExpensiveTestFiles,
+							],
+						},
+					];
+				}
+				return [
+					workspaceTestCommand(pkg, 8, {
+						env: pkg === "plugins/hashline" ? { HASHLINE_SEED_SOAK: "1" } : undefined,
+						extraArgs: [
+							...onlyFailuresArgs,
+							...(pkg === "packages/utils"
+								? ["--path-ignore-patterns", "test/slice-extract-fuzz.test.ts"]
+								: []),
+						],
+					}),
+				];
+			});
 		// `workspace` is packages only. It used to append its own hardcoded list of 15
 		// script tests, which made it the only bucket CI ran that touched scripts at all,
 		// and left the other 69 in `repoScriptTests` running nowhere. The dedicated
@@ -1340,7 +1025,33 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 		case "workspace":
 			return fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8));
 		case "native":
-			return nativeAndIntegrationPackages.map(pkg => workspaceTestCommand(pkg, 4, { smol: true }));
+			return nativeAndIntegrationPackages.flatMap(pkg => {
+				if (pkg === "hosts/terminal/engine") {
+					return [
+						workspaceTestCommand(pkg, 4, {
+							smol: true,
+							extraArgs: [
+								...onlyFailuresArgs,
+								...engineExpensiveTestFiles.flatMap(file => ["--path-ignore-patterns", file]),
+							],
+						}),
+						{
+							label: `${pkg} (isolated)`,
+							cwd: pkg,
+							command: [
+								"bun",
+								"test",
+								...preloadArgs,
+								"--smol",
+								"--parallel=1",
+								...onlyFailuresArgs,
+								...engineExpensiveTestFiles,
+							],
+						},
+					];
+				}
+				return [workspaceTestCommand(pkg, 4, { smol: true })];
+			});
 		case "coding-agent-singleton":
 			return await codingAgentTestCommands("singleton");
 		case "coding-agent-ui":
@@ -1422,229 +1133,26 @@ function isScrubbedEnvVar(key: string): boolean {
 	return /_(API_KEY|OAUTH_TOKEN)$/.test(key) || key.includes("BEARER_TOKEN");
 }
 
-function drainInto(
-	stream: ReadableStream<Uint8Array>,
-	sink: { text: string },
-): { done: Promise<void>; cancel: () => void } {
-	const reader = stream.getReader();
-	const decoder = new TextDecoder();
-	let cancelled = false;
-	const done = (async () => {
-		try {
-			for (;;) {
-				const { done, value } = await reader.read();
-				if (done || cancelled) {
-					break;
-				}
-				sink.text += decoder.decode(value, { stream: true });
-			}
-		} catch {
-			// EPIPE or stream closed from the other end.
-		} finally {
-			reader.releaseLock();
-		}
-	})();
-	return {
-		done,
-		cancel() {
-			cancelled = true;
-			reader.cancel().catch(() => {});
-		},
-	};
-}
-
-async function settleWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
-	const { promise: expired, resolve } = Promise.withResolvers<boolean>();
-	const timer = setTimeout(() => resolve(false), ms);
-	const settled = await Promise.race([
-		promise.then(() => true, () => true),
-		expired,
-	]);
-	clearTimeout(timer);
-	return settled;
-}
-
-export function isCloudflareCI(): boolean {
-	return Boolean(
-		Bun.env.WORKERS_CI ||
-		Bun.env.WORKERS_CI_BRANCH ||
-		Bun.env.CF_SHARD_INDEX !== undefined ||
-		Bun.env.CF_SHARD_COUNT !== undefined,
-	);
-}
-
-interface CgroupSample {
-	supported: boolean;
-	source: "sys_cgroup_v2" | "sys_cgroup_v1" | "bridge_file" | "unavailable";
-	current: string;
-	peak: string;
-	oom: string;
-	oom_kill: string;
-	raw_events: string;
-}
-
-export function readCgroupDiagnostics(): CgroupSample {
-	// 1. Try /sys/fs/cgroup (cgroup v2 or v1 inside sandbox if mounted)
-	try {
-		const cgroupDir = "/sys/fs/cgroup";
-		if (nodeFs.existsSync(cgroupDir)) {
-			let current = "unavailable";
-			let peak = "unavailable";
-			let oom = "unavailable";
-			let oom_kill = "unavailable";
-			let raw_events = "";
-
-			const curPath = path.join(cgroupDir, "memory.current");
-			if (nodeFs.existsSync(curPath)) {
-				current = nodeFs.readFileSync(curPath, "utf8").trim();
-			}
-			const peakPath = path.join(cgroupDir, "memory.peak");
-			if (nodeFs.existsSync(peakPath)) {
-				peak = nodeFs.readFileSync(peakPath, "utf8").trim();
-			}
-			const eventsPath = path.join(cgroupDir, "memory.events");
-			if (nodeFs.existsSync(eventsPath)) {
-				raw_events = nodeFs.readFileSync(eventsPath, "utf8").trim();
-				for (const line of raw_events.split("\n")) {
-					const [key, val] = line.trim().split(/\s+/);
-					if (key === "oom") oom = val;
-					if (key === "oom_kill") oom_kill = val;
-				}
-			}
-
-			// Also check cgroup v1 if current is still unavailable
-			if (current === "unavailable") {
-				const v1CurPath = path.join(cgroupDir, "memory", "memory.usage_in_bytes");
-				if (nodeFs.existsSync(v1CurPath)) {
-					current = nodeFs.readFileSync(v1CurPath, "utf8").trim();
-					const v1PeakPath = path.join(cgroupDir, "memory", "memory.max_usage_in_bytes");
-					if (nodeFs.existsSync(v1PeakPath)) {
-						peak = nodeFs.readFileSync(v1PeakPath, "utf8").trim();
-					}
-					const v1OomPath = path.join(cgroupDir, "memory", "memory.oom_control");
-					if (nodeFs.existsSync(v1OomPath)) {
-						raw_events = nodeFs.readFileSync(v1OomPath, "utf8").trim();
-						for (const line of raw_events.split("\n")) {
-							const [key, val] = line.trim().split(/\s+/);
-							if (key === "oom_kill") oom_kill = val;
-						}
-					}
-					return {
-						supported: true,
-						source: "sys_cgroup_v1",
-						current,
-						peak,
-						oom,
-						oom_kill,
-						raw_events,
-					};
-				}
-			}
-
-			if (current !== "unavailable" || peak !== "unavailable" || oom !== "unavailable") {
-				return {
-					supported: true,
-					source: "sys_cgroup_v2",
-					current,
-					peak,
-					oom,
-					oom_kill,
-					raw_events,
-				};
-			}
-		}
-	} catch {
-		// ignore filesystem errors reading /sys/fs/cgroup
+function commandWithJUnitReport(testCommand: TestCommand): string[] {
+	if (!junitReportDir || testCommand.command[1] !== "test") {
+		return testCommand.command;
 	}
-
-	// 2. Try bridge file from outer lane-tests sampler
-	try {
-		const bridgePath = path.join(repoRoot, ".cf-diagnostics", "cgroup-latest.json");
-		if (nodeFs.existsSync(bridgePath)) {
-			const data = JSON.parse(nodeFs.readFileSync(bridgePath, "utf8"));
-			return {
-				supported: Boolean(data.supported),
-				source: "bridge_file",
-				current: String(data.current ?? "unavailable"),
-				peak: String(data.peak ?? "unavailable"),
-				oom: String(data.oom ?? "unavailable"),
-				oom_kill: String(data.oom_kill ?? "unavailable"),
-				raw_events: String(data.raw_events ?? ""),
-			};
-		}
-	} catch {
-		// ignore bridge read errors
-	}
-
-	return {
-		supported: false,
-		source: "unavailable",
-		current: "unavailable",
-		peak: "unavailable",
-		oom: "unavailable",
-		oom_kill: "unavailable",
-		raw_events: "unavailable",
-	};
+	nodeFs.mkdirSync(junitReportDir, { recursive: true });
+	const scope = testCommand.cwd === "." ? "root" : testCommand.cwd.replaceAll("/", "__");
+	const label = testCommand.label.replaceAll(/[^A-Za-z0-9_.-]/g, "_");
+	const reportPath = path.join(junitReportDir, `${scope}--${label}.xml`);
+	return [...testCommand.command, "--reporter=junit", `--reporter-outfile=${reportPath}`];
 }
 
-export function readFreeMemDiagnostics(): string {
-	try {
-		const res = Bun.spawnSync(["free", "-m"]);
-		if (res.exitCode === 0 && res.stdout) {
-			const txt = res.stdout.toString().trim();
-			if (txt.length > 0) return txt;
-		}
-	} catch {
-		// free command failed or not found
-	}
-
-	// Fallback to /proc/meminfo
-	try {
-		if (nodeFs.existsSync("/proc/meminfo")) {
-			const meminfo = nodeFs.readFileSync("/proc/meminfo", "utf8");
-			const fields: Record<string, string> = {};
-			for (const line of meminfo.split("\n")) {
-				const parts = line.split(":");
-				if (parts.length >= 2) {
-					fields[parts[0].trim()] = parts[1].trim();
-				}
-			}
-			return `[meminfo fallback] MemTotal: ${fields["MemTotal"] ?? "unknown"}, MemFree: ${fields["MemFree"] ?? "unknown"}, MemAvailable: ${fields["MemAvailable"] ?? "unknown"}, SwapTotal: ${fields["SwapTotal"] ?? "unknown"}, SwapFree: ${fields["SwapFree"] ?? "unknown"}`;
-		}
-	} catch {
-		// proc meminfo failed
-	}
-
-	return "free -m: unavailable";
-}
-
-export function printChunkDiagnostics(
-	chunkLabel: string,
-	phase: "BEFORE" | "AFTER",
-	procInfo?: { exitCode?: number | null; signalCode?: string | number | null; killed?: boolean },
-): void {
-	const cgroup = readCgroupDiagnostics();
-	const freeMem = readFreeMemDiagnostics();
-	const exitStr = procInfo ? ` exitCode=${procInfo.exitCode ?? "none"} signal=${procInfo.signalCode ?? "none"} killed=${procInfo.killed ?? false}` : "";
-
-	console.log(`\nCLOUDFLARE_CHUNK_DIAG phase=${phase} chunk="${chunkLabel}"${exitStr}`);
-	console.log(
-		`  cgroup: source=${cgroup.source} supported=${cgroup.supported} memory.current=${cgroup.current} memory.peak=${cgroup.peak} oom=${cgroup.oom} oom_kill=${cgroup.oom_kill}`,
-	);
-	if (cgroup.raw_events && cgroup.raw_events !== "unavailable") {
-		console.log(`  cgroup.events: ${cgroup.raw_events.replace(/\n/g, ", ")}`);
-	}
-	console.log(`  free -m:\n${freeMem.split("\n").map(l => "    " + l).join("\n")}`);
-}
-
-export async function runTestCommand(testCommand: TestCommand): Promise<ChunkOutcome> {
+/** Run one command with inherited output; returns the failure message, or `undefined` when it passed. */
+async function runTestCommand(testCommand: TestCommand): Promise<string | undefined> {
 	const cwd = path.join(repoRoot, testCommand.cwd);
 	const renderedCommand = testCommand.command.map(shellQuote).join(" ");
 	console.log(`\n==> ${testCommand.label}`);
 	console.log(`$ ${renderedCommand}`);
 
 	if (isDryRun) {
-		return { label: testCommand.label, command: renderedCommand, exitCode: 0, seconds: 0, output: "" };
+		return undefined;
 	}
 	const files = extractCommandTestFiles(testCommand);
 	const isCloudflare = isCloudflareCI();
@@ -1682,61 +1190,29 @@ export async function runTestCommand(testCommand: TestCommand): Promise<ChunkOut
 	}, chunkTimeoutMs());
 	const exitCode = await proc.exited;
 	clearTimeout(killTimer);
-	if (!(await settleWithin(drains, 5000))) {
-		stdoutDrain.cancel();
-		stderrDrain.cancel();
-		await drains;
+	if (exitCode === 0) return undefined;
+	const files = chunkTestFiles(renderedCommand);
+	const composition = files.length > 1 ? `\n${files.length} files in this chunk:\n  ${files.join("\n  ")}` : "";
+	return `${testCommand.label} failed with exit code ${exitCode}: ${renderedCommand}${composition}`;
+}
+
+/**
+ * Run every command in order, one at a time, then fail the process when any of them failed. A failing
+ * chunk does not stop the run, so one CI job reports every broken chunk in its bucket instead of the
+ * first. One process at a time keeps a memory-capped runner bounded.
+ */
+export async function runTestCommandsInSequence(commands: TestCommand[]): Promise<void> {
+	const failures: string[] = [];
+	for (const testCommand of commands) {
+		const failure = await runTestCommand(testCommand);
+		if (failure !== undefined) failures.push(failure);
 	}
-
-	const seconds = (performance.now() - startedAt) / 1000;
-	const fullOutput = `${stdout.text}${stderr.text}${timedOut ? `\n[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (VEYYON_TEST_CHUNK_TIMEOUT to change)\n` : ""}`;
-	const effectiveExitCode = timedOut
-		? (exitCode !== 0 && exitCode !== null ? exitCode : 1)
-		: (exitCode ?? (timedOut ? 1 : 0));
-	const outcome: ChunkOutcome = {
-		label: testCommand.label,
-		command: renderedCommand,
-		exitCode: effectiveExitCode,
-		seconds,
-		output: fullOutput,
-	};
-
-	const summary = extractBunSummary(fullOutput);
-
-	if (fullOutput.trim()) {
-		process.stdout.write(`${fullOutput}\n`);
-	}
-
-	process.stdout.write(
-		`CLOUDFLARE_CHUNK_SUMMARY files=${files.length} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo}\n`,
-	);
-
-	for (const file of files) {
-		if (file.includes("quota-refusals-belong-to-the-failed-request.test.ts")) {
-			process.stdout.write(
-				`CLOUDFLARE_FILE_SUMMARY file=${file} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo}\n`,
-			);
-		}
-	}
-	if (isCloudflare) {
-		console.log(
-			`CLOUDFLARE_CHUNK_EXIT chunk="${testCommand.label}" exitCode=${proc.exitCode ?? exitCode} signal=${proc.signalCode ?? "none"} killed=${proc.killed}`,
-		);
-		printChunkDiagnostics(testCommand.label, "AFTER", {
-			exitCode: proc.exitCode ?? exitCode,
-			signalCode: proc.signalCode,
-			killed: proc.killed,
-		});
-	}
-
-	if (effectiveExitCode !== 0 || timedOut) {
-		const composition = files.length > 1 ? `\n${files.length} files in this chunk:\n  ${files.join("\n  ")}` : "";
-		process.stderr.write(
-			`\n[chunk-failure] ${testCommand.label} failed with exit code ${effectiveExitCode}: ${renderedCommand}${composition}\n`,
-		);
-	}
-
-	return outcome;
+	if (failures.length === 0) return;
+	process.exitCode = 1;
+	const header = `${failures.length} of ${commands.length} test chunk(s) FAILED`;
+	console.log(`\n${style.bold(style.red(`━━━ ${header} ━━━`))}`);
+	for (const failure of failures) console.log(`\n${style.red("✗")} ${failure}`);
+	console.log(`\n${style.red(header)}`);
 }
 
 // Child env shared by every spawned test process: the parent env with all CI
@@ -1754,9 +1230,10 @@ export async function runTestCommand(testCommand: TestCommand): Promise<ChunkOut
 //   bucket chunk crashed ~25% of runs with `BUN_JSC_forceRAMSize=256MB`,
 //   0/10 with markers=1, at zero measured wall-time cost. useConcurrentGC=0
 //   alone did not prevent it — the crash predates this knob.
-function buildChildEnv(): Record<string, string | undefined> {
+function buildChildEnv(overrides: Record<string, string> = {}): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {
-		...Bun.env,
+		...process.env,
+		...overrides,
 		GITHUB_ACTIONS: "",
 		BUN_JSC_useConcurrentGC: "0",
 		BUN_JSC_numberOfGCMarkers: "1",
@@ -1811,6 +1288,199 @@ export function testConcurrency(total: number): number {
 	return 1;
 }
 
+export interface CiTestShard {
+	index: number;
+	count: number;
+}
+
+export function parseCiTestShard(value: string | undefined): CiTestShard | undefined {
+	if (value === undefined) return undefined;
+	const match = /^([1-9]\d*)\/([1-9]\d*)$/.exec(value.trim());
+	if (!match) throw new Error(`Invalid VEYYON_CI_TEST_SHARD ${JSON.stringify(value)}; expected <index>/<count>`);
+	const index = Number(match[1]);
+	const count = Number(match[2]);
+	if (!Number.isSafeInteger(index) || !Number.isSafeInteger(count) || index > count) {
+		throw new Error(`Invalid VEYYON_CI_TEST_SHARD ${JSON.stringify(value)}; shard index must be within its count`);
+	}
+	return { index, count };
+}
+
+export function resolveCiTestShard(
+	env: Record<string, string | undefined> = Bun.env,
+): CiTestShard | undefined {
+	const testShardVal = env.VEYYON_CI_TEST_SHARD;
+	const vShard = env.VEYYON_CI_SHARD;
+	const vShards = env.VEYYON_CI_SHARDS;
+	const cfIndex = env.CF_SHARD_INDEX;
+	const cfCount = env.CF_SHARD_COUNT;
+
+	const hasTestShard = testShardVal !== undefined && testShardVal.trim() !== "";
+	const hasVeyyonShard = vShard !== undefined && vShard.trim() !== "";
+	const hasVeyyonShards = vShards !== undefined && vShards.trim() !== "";
+	const hasCfIndex = cfIndex !== undefined && cfIndex.trim() !== "";
+	const hasCfCount = cfCount !== undefined && cfCount.trim() !== "";
+
+	const hasVeyyon = hasVeyyonShard || hasVeyyonShards;
+	const hasCf = hasCfIndex || hasCfCount;
+
+	if (!hasTestShard && !hasVeyyon && !hasCf) {
+		return undefined;
+	}
+
+	let parsedFromTestShard: CiTestShard | undefined;
+	if (hasTestShard) {
+		parsedFromTestShard = parseCiTestShard(testShardVal);
+	}
+
+	let normA: CiTestShard | undefined;
+	if (hasVeyyon) {
+		if (!hasVeyyonShard || !hasVeyyonShards) {
+			throw new Error("Both VEYYON_CI_SHARD and VEYYON_CI_SHARDS must be set together");
+		}
+		const countNum = Number(vShards);
+		const shardNum = Number(vShard);
+		if (!Number.isSafeInteger(countNum) || countNum <= 0) {
+			throw new Error(`Invalid VEYYON_CI_SHARDS ${JSON.stringify(vShards)}; expected positive integer`);
+		}
+		if (!Number.isSafeInteger(shardNum) || shardNum < 1 || shardNum > countNum) {
+			throw new Error(`Invalid VEYYON_CI_SHARD ${JSON.stringify(vShard)}; must be between 1 and ${countNum}`);
+		}
+		normA = { index: shardNum, count: countNum };
+	}
+
+	let normB: CiTestShard | undefined;
+	if (hasCf) {
+		if (!hasCfIndex || !hasCfCount) {
+			throw new Error("Both CF_SHARD_INDEX and CF_SHARD_COUNT must be set together");
+		}
+		const countNum = Number(cfCount);
+		const indexNum = Number(cfIndex);
+		if (!Number.isSafeInteger(countNum) || countNum <= 0) {
+			throw new Error(`Invalid CF_SHARD_COUNT ${JSON.stringify(cfCount)}; expected positive integer`);
+		}
+		if (!Number.isSafeInteger(indexNum) || indexNum < 0 || indexNum >= countNum) {
+			throw new Error(
+				`Invalid CF_SHARD_INDEX ${JSON.stringify(cfIndex)}; must be between 0 and ${countNum - 1}`,
+			);
+		}
+		normB = { index: indexNum + 1, count: countNum };
+	}
+
+	const candidates = [parsedFromTestShard, normA, normB].filter((c): c is CiTestShard => c !== undefined);
+	if (candidates.length > 1) {
+		const first = candidates[0];
+		for (let i = 1; i < candidates.length; i++) {
+			if (candidates[i].index !== first.index || candidates[i].count !== first.count) {
+				throw new Error(
+					`Conflicting shard configuration: shard ${first.index}/${first.count} conflicts with shard ${candidates[i].index}/${candidates[i].count}`,
+				);
+			}
+		}
+	}
+
+	return candidates[0];
+}
+
+export function partitionTestCommands<T>(commands: readonly T[], shard: CiTestShard): T[] {
+	return commands.filter((_, index) => index % shard.count === shard.index - 1);
+}
+
+const WORKSPACE_CLOUDFLARE_SHARD_OVERRIDES: Readonly<Record<string, number>> = {
+	"plugins/hashline": 1,
+	"tests/simulations": 3,
+	"packages/ai": 1,
+	"packages/agent": 1,
+	"packages/catalog": 1,
+	"plugins/argot": 2,
+	"apps/stats": 3,
+	"packages/tool-render": 1,
+	"plugins/mode-swarm": 2,
+	"plugins/mnemopi": 3,
+	"plugins/web": 2,
+	"packages/utils": 1,
+};
+
+function extractCommandLabel(command: unknown): string {
+	if (typeof command === "string") {
+		return command;
+	}
+	if (command && typeof command === "object") {
+		if ("label" in command && typeof command.label === "string") {
+			return command.label;
+		}
+		if ("cwd" in command && typeof command.cwd === "string") {
+			return command.cwd;
+		}
+	}
+	return "";
+}
+
+function resolveWorkspaceCloudflareOverride(label: string): number | undefined {
+	if (label in WORKSPACE_CLOUDFLARE_SHARD_OVERRIDES) {
+		return WORKSPACE_CLOUDFLARE_SHARD_OVERRIDES[label];
+	}
+	for (const [key, shardNumber] of Object.entries(WORKSPACE_CLOUDFLARE_SHARD_OVERRIDES)) {
+		if (label.startsWith(`${key} `) || label.startsWith(`${key}/`)) {
+			return shardNumber;
+		}
+	}
+	return undefined;
+}
+
+export function allocateCloudflareTestCommands<T>(
+	mode: string,
+	commands: readonly T[],
+	shard: CiTestShard,
+): T[] {
+	if (shard.count !== 3) {
+		return partitionTestCommands(commands, shard);
+	}
+
+	if (mode === "workspace-cloudflare") {
+		return commands.filter((command, index) => {
+			const label = extractCommandLabel(command);
+			const override = resolveWorkspaceCloudflareOverride(label);
+			if (override !== undefined) {
+				return override === shard.index;
+			}
+			return index % shard.count === shard.index - 1;
+		});
+	}
+
+	if (mode === "native") {
+		return commands.filter((command, index) => {
+			const label = extractCommandLabel(command);
+			const isBinding =
+				label === "natives/bridge/bindings" ||
+				label.startsWith("natives/bridge/bindings ") ||
+				label.startsWith("natives/bridge/bindings/");
+			if (isBinding) {
+				return shard.index === 1 || shard.index === 2;
+			}
+			if (label.startsWith("hosts/terminal/engine")) {
+				return shard.index === 2;
+			}
+			if (label.startsWith("tests/evals")) {
+				return shard.index === 2;
+			}
+			if (label.startsWith("tests/simulations")) {
+				return false;
+			}
+			return shard.index === 1 ? index % shard.count === 0 : shard.index === 2 && index % shard.count !== 0;
+		});
+	}
+
+	if (mode.startsWith("coding-agent-")) {
+		return commands.filter((_, index) =>
+			shard.index === 1 ? index % shard.count === 0 : shard.index === 2 && index % shard.count !== 0,
+		);
+	}
+	if (mode === "scripts") {
+		return shard.index === 1 ? [...commands] : [];
+	}
+	return partitionTestCommands(commands, shard);
+}
+
 // ANSI styling for interactive runs only; disabled when stdout is not a TTY or
 // NO_COLOR is set, so CI logs and piped/aggregated output stay plain text.
 const useColor = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
@@ -1831,6 +1501,48 @@ interface ChunkOutcome {
 	seconds: number;
 	output: string;
 }
+
+export interface BunTestTotals {
+	pass: number;
+	fail: number;
+	skip: number;
+	todo: number;
+	reportedTests: number;
+	files: number;
+	runs: number;
+}
+
+export function addBunTestTotals(totals: BunTestTotals, output: string): void {
+	const runPattern = /^Ran (\d+) tests? across (\d+) files?\./gm;
+	let summary: RegExpMatchArray | undefined;
+	for (const match of output.matchAll(runPattern)) summary = match;
+	if (!summary || summary.index === undefined) return;
+	const current: BunTestTotals = {
+		pass: 0,
+		fail: 0,
+		skip: 0,
+		todo: 0,
+		reportedTests: Number(summary[1]),
+		files: Number(summary[2]),
+		runs: 1,
+	};
+	for (const count of output.slice(0, summary.index).matchAll(/^\s*(\d+) (pass|fail|skip|todo)\s*$/gm)) {
+		current[count[2] as "pass" | "fail" | "skip" | "todo"] = Number(count[1]);
+	}
+	totals.pass += current.pass;
+	totals.fail += current.fail;
+	totals.skip += current.skip;
+	totals.todo += current.todo;
+	totals.reportedTests += current.reportedTests;
+	totals.files += current.files;
+	totals.runs += current.runs;
+}
+
+export function formatBunTestTotals(totals: BunTestTotals): string {
+	const tests = totals.pass + totals.fail + totals.skip + totals.todo;
+	return `CLOUDFLARE_CI_TEST_COUNTS pass=${totals.pass} fail=${totals.fail} skip=${totals.skip} todo=${totals.todo} tests=${tests} reported=${totals.reportedTests} files=${totals.files} runs=${totals.runs}`;
+}
+
 
 // Human duration in bun's bracket style: `[264ms]` under a second, `[3.3s]`
 // above. Used by the progress line and footer so timings read like `bun test`.
@@ -1861,12 +1573,18 @@ export function formatProgressLine(outcome: ChunkOutcome): string {
 // `N chunks passed` line, a `N failed` line (red when non-zero, dim when clean),
 // then the total wall time. Printed after the failure report so a run always
 // ends on an at-a-glance verdict.
-export function formatSummaryFooter(passed: number, failed: number, totalSeconds: number): string {
-	const failLine = failed > 0 ? style.red(`${failed} failed`) : style.dim("0 failed");
+export function formatSummaryFooter(
+	passed: number,
+	failed: number,
+	totalSeconds: number,
+	testTotals: BunTestTotals,
+): string {
+	const failLine = failed > 0 ? style.red(`${failed} failed chunks`) : style.dim("0 failed chunks");
 	return [
 		"",
 		` ${style.green(`${passed} chunks passed`)}`,
 		` ${failLine}`,
+		formatBunTestTotals(testTotals),
 		style.dim(`Ran ${passed + failed} test command(s) in ${formatDuration(totalSeconds)}.`),
 	].join("\n");
 }
@@ -2028,10 +1746,9 @@ export function formatFailureReport(failures: ChunkOutcome[], total: number, rep
 // failures are collected and reported together instead of failing fast, so one
 // run surfaces every broken chunk and exits non-zero without a runner stack trace.
 export async function runTestCommandsInParallel(commands: TestCommand[], concurrency: number): Promise<void> {
-	const env = buildChildEnv();
 	const queue = [...commands];
 	const failures: ChunkOutcome[] = [];
-	const outcomes: ChunkOutcome[] = [];
+	const testTotals: BunTestTotals = { pass: 0, fail: 0, skip: 0, todo: 0, reportedTests: 0, files: 0, runs: 0 };
 	let completed = 0;
 	console.log(
 		`Running ${commands.length} test command(s), up to ${concurrency} in parallel ` +
@@ -2045,9 +1762,11 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 			if (!testCommand) {
 				return;
 			}
-			const renderedCommand = testCommand.command.map(shellQuote).join(" ");
+			const env = buildChildEnv(testCommand.env);
+			const command = commandWithJUnitReport(testCommand);
+			const renderedCommand = command.map(shellQuote).join(" ");
 			const startedAt = performance.now();
-			const proc = Bun.spawn(testCommand.command, {
+			const proc = Bun.spawn(command, {
 				cwd: path.join(repoRoot, testCommand.cwd),
 				env: testCommand.env ? { ...env, ...testCommand.env } : env,
 				stdout: "pipe",
@@ -2083,16 +1802,7 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 				seconds: (performance.now() - startedAt) / 1000,
 				output: `${stdout.text}${stderr.text}${timedOut ? `\n[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (VEYYON_TEST_CHUNK_TIMEOUT to change)\n` : ""}`,
 			};
-			outcomes.push(outcome);
-			const summary = extractBunSummary(outcome.output);
-			const files = extractCommandTestFiles(testCommand);
-			const chunkSummaryLine = `CLOUDFLARE_CHUNK_SUMMARY files=${files.length} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo}\n`;
-			let fileSummaryLines = "";
-			for (const file of files) {
-				if (file.includes("quota-refusals-belong-to-the-failed-request.test.ts")) {
-					fileSummaryLines += `CLOUDFLARE_FILE_SUMMARY file=${file} pass=${summary.pass} fail=${summary.fail} skip=${summary.skip} todo=${summary.todo}\n`;
-				}
-			}
+			addBunTestTotals(testTotals, outcome.output);
 			if (quiet) {
 				let msg = `${formatProgressLine(outcome)}\n${chunkSummaryLine}${fileSummaryLines}`;
 				if (exitCode !== 0 || timedOut) {
@@ -2147,9 +1857,10 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 	if (quiet) {
 		const totalSeconds = (performance.now() - runStartedAt) / 1000;
 		process.stdout.write(
-			`${formatSummaryFooter(commands.length - failures.length, failures.length, totalSeconds)}\n`,
+			`${formatSummaryFooter(commands.length - failures.length, failures.length, totalSeconds, testTotals)}\n`,
 		);
-	} else if (failures.length > 0 || totalFail > 0) {
+
+	} else if (failures.length > 0) {
 		process.stdout.write(style.bold(style.red(`\n${failures.length} of ${commands.length} test chunk(s) FAILED\n`)));
 	}
 	if (failures.length > 0 || totalFail > 0) {
@@ -2463,9 +2174,98 @@ export function diffRealConfigRoot(
 	return collectRealConfigChanges(before, after, options).map(formatRealConfigChange);
 }
 
+const TARGET_TRACKED_TEST_FILES: readonly string[] = [
+	"packages/utils/test/math.test.ts",
+	"hosts/terminal/engine/test/editor-wordwrap-fuzz.test.ts",
+	"packages/utils/test/an-idle-process-samples-its-stack-ten-times-less-often.test.ts",
+	"scripts/ci-test-concurrency-default.test.ts",
+	"scripts/a-cloudflare-bucket-selection-preserves-test-files.test.ts",
+];
+
+interface FileTestReceipt {
+	file: string;
+	tests: number;
+	pass: number;
+	fail: number;
+	skip: number;
+	time: number;
+}
+
+function reportTrackedFileCounts(junitDir: string | null): void {
+	if (!junitDir) return;
+	let entries: string[];
+	try {
+		entries = nodeFs.readdirSync(junitDir);
+	} catch {
+		return;
+	}
+	const results = new Map<string, FileTestReceipt>();
+	const testsuiteRegex = /<testsuite\b([^>]*)>/gi;
+	for (const entry of entries) {
+		if (!entry.endsWith(".xml")) continue;
+		const full = path.join(junitDir, entry);
+		let content: string;
+		try {
+			content = nodeFs.readFileSync(full, "utf8");
+		} catch {
+			continue;
+		}
+		for (const match of content.matchAll(testsuiteRegex)) {
+			const attrs = match[1];
+			const nameMatch = /\b(?:name|file)="([^"]*)"/.exec(attrs);
+			if (!nameMatch) continue;
+			const suiteName = nameMatch[1];
+			const testsMatch = /\btests="(\d+)"/.exec(attrs);
+			const failuresMatch = /\bfailures="(\d+)"/.exec(attrs);
+			const errorsMatch = /\berrors="(\d+)"/.exec(attrs);
+			const skippedMatch = /\bskipped="(\d+)"/.exec(attrs);
+			const timeMatch = /\btime="([^"]*)"/.exec(attrs);
+
+			const tests = testsMatch ? Number.parseInt(testsMatch[1], 10) : 0;
+			const failures = failuresMatch ? Number.parseInt(failuresMatch[1], 10) : 0;
+			const errors = errorsMatch ? Number.parseInt(errorsMatch[1], 10) : 0;
+			const skipped = skippedMatch ? Number.parseInt(skippedMatch[1], 10) : 0;
+			const time = timeMatch ? Number.parseFloat(timeMatch[1]) : 0;
+			const fail = failures + errors;
+			const pass = Math.max(0, tests - fail - skipped);
+
+			for (const tracked of TARGET_TRACKED_TEST_FILES) {
+				const baseName = path.basename(tracked);
+				if (suiteName === tracked || suiteName.endsWith(`/${baseName}`) || suiteName === baseName) {
+					results.set(tracked, { file: tracked, tests, pass, fail, skip: skipped, time });
+				}
+			}
+		}
+	}
+	for (const [file, receipt] of results) {
+		console.log(
+			`CLOUDFLARE_TEST_FILE_COUNTS file="${file}" pass=${receipt.pass} fail=${receipt.fail} ` +
+				`skip=${receipt.skip} todo=0 tests=${receipt.tests} duration=${receipt.time.toFixed(3)}s`,
+		);
+	}
+}
+
 // Skipped when imported (e.g. by the runner's own unit tests), where
 // `process.argv` carries test-file paths rather than a mode/flags.
-async function executePlannedCommands(testCommands: TestCommand[]): Promise<void> {
+if (import.meta.main && runnerArguments.changedSince === undefined) {
+	if (!(requestedMode in validModes)) {
+		throw new Error(
+			`Unknown mode ${shellQuote(requestedMode)}. Expected one of: ${Object.keys(validModes).join(", ")}`,
+		);
+	}
+
+	await ensureToolViewsGenerated();
+	const availableTestCommands = await commandsForMode(requestedMode as Mode);
+	const testShard = resolveCiTestShard(Bun.env);
+	const testCommands = testShard
+		? allocateCloudflareTestCommands(requestedMode, availableTestCommands, testShard)
+		: availableTestCommands;
+	if (testShard && testCommands.length === 0) {
+		console.log(
+			`CLOUDFLARE_CI_TEST_SHARD_DEFERRED mode=${requestedMode} shard=${testShard.index}/${testShard.count} ` +
+				`available_commands=${availableTestCommands.length}`,
+		);
+	}
 	// Outside CI, fan the independent chunk processes out across cores; CI keeps the
 	// sequential, fail-fast path so each memory-capped runner job stays bounded.
 	// Third protection layer: PROOF. Layers one and two (a sandboxed HOME for every
@@ -2478,25 +2278,16 @@ async function executePlannedCommands(testCommands: TestCommand[]): Promise<void
 	const ownershipBefore = scanLiveVeyyonOwnership();
 	const before = snapshotRealConfigRoot();
 
-	const isCloudflare = isCloudflareCI();
-	let runnerSampler: Timer | null = null;
-	if (isCloudflare) {
-		runnerSampler = setInterval(() => {
-			try {
-				const cgroup = readCgroupDiagnostics();
-				console.log(
-					`CLOUDFLARE_RUNNER_SAMPLER_5S memory.current=${cgroup.current} memory.peak=${cgroup.peak} oom=${cgroup.oom} oom_kill=${cgroup.oom_kill} source=${cgroup.source}`,
-				);
-			} catch {
-				// avoid error in timer
-			}
-		}, 5000);
-	}
+	const bucketStartedAt = performance.now();
 	try {
-		if (!isDryRun && !isCI() && testCommands.length > 1) {
+		if (
+			!isDryRun &&
+			testCommands.length > 0 &&
+			(junitReportDir !== null || (!isCI() && testCommands.length > 1))
+		) {
 			await runTestCommandsInParallel(testCommands, testConcurrency(testCommands.length));
 		} else {
-			await runTestCommandsSequentially(testCommands);
+			await runTestCommandsInSequence(testCommands);
 		}
 	} finally {
 		if (runnerSampler !== null) {
@@ -2505,6 +2296,12 @@ async function executePlannedCommands(testCommands: TestCommand[]): Promise<void
 		}
 		// In `finally` on purpose: a failing or interrupted suite is exactly when a
 		// half-finished suite is most likely to have left damage behind.
+		const bucketSeconds = (performance.now() - bucketStartedAt) / 1000;
+		reportTrackedFileCounts(junitReportDir);
+		console.log(
+			`CLOUDFLARE_TEST_BUCKET_TIMING mode=${requestedMode} duration=${formatDuration(bucketSeconds)} ` +
+				`seconds=${bucketSeconds.toFixed(3)}`,
+		);
 		const ownershipAfter = scanLiveVeyyonOwnership();
 		const ownershipEvidenceAvailable = ownershipBefore.supported && ownershipAfter.supported;
 		const liveProcessCount = Math.max(
@@ -2544,6 +2341,18 @@ async function executePlannedCommands(testCommands: TestCommand[]): Promise<void
 		}
 	}
 }
+export function assertRelatedSelectionAvailable(
+	mode: "affected" | "full",
+	relatedOnly: boolean,
+	fallbackReason?: string,
+): void {
+	if (relatedOnly && mode === "full") {
+		throw new Error(
+			`CLOUDFLARE_RELATED_SELECTION_UNAVAILABLE fallback=${fallbackReason ?? "selector requested full coverage"}`,
+		);
+	}
+}
+
 if (import.meta.main) {
 	if (!runnerArguments.planJson) await ensureToolViewsGenerated();
 	let testCommands: TestCommand[] = [];
@@ -2601,6 +2410,11 @@ if (import.meta.main) {
 			);
 		} else {
 			process.stdout.write(`CLOUDFLARE_AFFECTED_SELECTION ${JSON.stringify(selectionMetadata)}\n`);
+			assertRelatedSelectionAvailable(
+				plan.mode,
+				process.env.VEYYON_CI_RELATED_ONLY === "1",
+				plan.fallbackReason,
+			);
 			testCommands = plan.shardConfig
 				? applySharding(plan.commands, plan.shardConfig)
 				: plan.commands;

@@ -89,7 +89,7 @@ export async function resolveAwsCredentials(opts: CredentialResolveOptions = {})
 		// staying armed like a bare AbortSignal.timeout.
 		const resolveTimeout = scopedTimeoutSignal(SHARED_RESOLVE_TIMEOUT_MS);
 		try {
-			const creds = await resolveFresh(profile, region, resolveTimeout.signal, fetchImpl);
+			const creds = await resolveFresh(profile, resolveTimeout.signal, fetchImpl);
 			cache.set(cacheKey, { creds, expiresAt: creds.expiresAt ?? Number.POSITIVE_INFINITY });
 			return creds;
 		} finally {
@@ -103,7 +103,6 @@ export async function resolveAwsCredentials(opts: CredentialResolveOptions = {})
 
 async function resolveFresh(
 	profile: string,
-	region: string,
 	signal?: AbortSignal,
 	fetchImpl: FetchImpl = globalThis.fetch as FetchImpl,
 ): Promise<ResolvedCredentials> {
@@ -112,7 +111,7 @@ async function resolveFresh(
 	if (envCreds) return envCreds;
 
 	// 2. Profile (static or SSO).
-	const profileCreds = await readProfileCredentials(profile, region, signal, fetchImpl);
+	const profileCreds = await readProfileCredentials(profile, signal, fetchImpl);
 	if (profileCreds) return profileCreds;
 
 	// 3. EC2 IMDSv2.
@@ -184,7 +183,6 @@ async function readIniFile(p: string): Promise<IniFile | undefined> {
 
 async function readProfileCredentials(
 	profile: string,
-	region: string,
 	signal: AbortSignal | undefined,
 	fetchImpl: FetchImpl,
 ): Promise<ResolvedCredentials | undefined> {
@@ -215,7 +213,7 @@ async function readProfileCredentials(
 	}
 
 	if (merged.sso_account_id && merged.sso_role_name) {
-		return readSsoCredentials(merged, configIni, region, signal, fetchImpl);
+		return readSsoCredentials(merged, configIni, signal, fetchImpl);
 	}
 
 	if (merged.credential_process) {
@@ -250,7 +248,6 @@ const SSO_TOKEN_REFRESH_SKEW_MS = 60_000;
 async function readSsoCredentials(
 	profileCfg: Record<string, string>,
 	configIni: IniFile | undefined,
-	defaultRegion: string,
 	signal: AbortSignal | undefined,
 	fetchImpl: FetchImpl,
 ): Promise<ResolvedCredentials | undefined> {
@@ -322,10 +319,6 @@ async function readSsoCredentials(
 			"AWS SSO GetRoleCredentials: missing roleCredentials in response",
 			"sso-role",
 		);
-
-	// region is honored at the caller; we only consume defaultRegion to keep the
-	// param wired for symmetry with other resolution paths.
-	void defaultRegion;
 
 	return {
 		accessKeyId: role.accessKeyId,

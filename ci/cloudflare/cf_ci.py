@@ -178,6 +178,25 @@ def query_cloudflare_build(
         return payload.get("result") or {}
 
 
+def wait_for_cloudflare_build(
+    build_id: str,
+    account_id: str,
+    token: Optional[str] = None,
+    timeout_seconds: int = 22 * 60,
+    poll_seconds: int = 15,
+) -> Dict[str, Any]:
+    """Wait for the documented terminal build state before checking its log."""
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        build = query_cloudflare_build(build_id, account_id, token)
+        if build.get("status") == "stopped":
+            return build
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise BuildError(f"Cloudflare build did not stop within {timeout_seconds} seconds")
+        time.sleep(min(poll_seconds, remaining))
+
+
 def fetch_cloudflare_build_log(
     build_id: str,
     account_id: str,
@@ -254,37 +273,51 @@ def main(args: Optional[List[str]] = None) -> int:
         return 0
     if ns.subcommand == "verify":
         owner, repo = ns.repo.split("/", 1)
-        build = query_cloudflare_build(ns.build_id, account_id=ns.account_id)
-        status = build.get("status")
-        outcome = build.get("build_outcome")
-        log = fetch_cloudflare_build_log(ns.build_id, account_id=ns.account_id)
-        log_sha = extract_exact_head(log)
-        metadata_sha = (build.get("build_trigger_metadata") or {}).get("commit_hash")
-        if not log_sha or not metadata_sha:
-            raise CheckoutError("Build metadata and full logs must both include an exact commit SHA")
-        validate_exact_head(ns.expected_sha, log_sha)
-        validate_exact_head(ns.expected_sha, metadata_sha)
+        try:
+            build = wait_for_cloudflare_build(ns.build_id, account_id=ns.account_id)
+            status = build.get("status")
+            outcome = build.get("build_outcome")
+            log = fetch_cloudflare_build_log(ns.build_id, account_id=ns.account_id)
+            log_sha = extract_exact_head(log)
+            metadata_sha = (build.get("build_trigger_metadata") or {}).get("commit_hash")
+            if not log_sha or not metadata_sha:
+                raise CheckoutError("Build metadata and full logs must both include an exact commit SHA")
+            validate_exact_head(ns.expected_sha, log_sha)
+            validate_exact_head(ns.expected_sha, metadata_sha)
 
-        counts = parse_bun_summary(log)
-        passed = counts.get("pass", 0)
-        failed = counts.get("fail", 0)
-        skipped = counts.get("skip", 0)
+            counts = parse_bun_summary(log)
+            passed = counts.get("pass", 0)
+            failed = counts.get("fail", 0)
+            skipped = counts.get("skip", 0)
 
-        gate = "PASS" if status == "stopped" and outcome == "success" and failed == 0 and passed > 0 else "FAIL"
-        logs_url = f"https://dash.cloudflare.com/{ns.account_id}/workers/services/view/{build.get('script_tag', 'ci')}/production/builds/{ns.build_id}"
+            gate = "PASS" if status == "stopped" and outcome == "success" and failed == 0 and passed > 0 else "FAIL"
+            logs_url = f"https://dash.cloudflare.com/{ns.account_id}/workers/services/view/{build.get('script_tag', 'ci')}/production/builds/{ns.build_id}"
 
-        publish_github_commit_status(
-            owner=owner,
-            repo=repo,
-            sha=ns.expected_sha,
-            state="success" if gate == "PASS" else "failure",
-            description=f"Bun test {gate}: pass={passed} fail={failed} skip={skipped} (exact head {ns.expected_sha[:8]})",
-            target_url=logs_url,
-        )
+            publish_github_commit_status(
+                owner=owner,
+                repo=repo,
+                sha=ns.expected_sha,
+                state="success" if gate == "PASS" else "failure",
+                description=f"Bun test {gate}: pass={passed} fail={failed} skip={skipped} (exact head {ns.expected_sha[:8]})",
+                target_url=logs_url,
+            )
 
-        print(f"gate={gate} build_id={ns.build_id} head={ns.expected_sha} outcome={outcome} logs={logs_url}")
-        print(f"bun_passed={passed} bun_failed={failed} bun_skipped={skipped}")
-        return 0 if gate == "PASS" else 1
+            print(f"gate={gate} build_id={ns.build_id} head={ns.expected_sha} outcome={outcome} logs={logs_url}")
+            print(f"bun_passed={passed} bun_failed={failed} bun_skipped={skipped}")
+            return 0 if gate == "PASS" else 1
+        except Exception as error:
+            try:
+                publish_github_commit_status(
+                    owner=owner,
+                    repo=repo,
+                    sha=ns.expected_sha,
+                    state="failure",
+                    description=f"Cloudflare CI verification failed: {str(error)[:100]}",
+                )
+            except Exception as report_error:
+                sys.stderr.write(f"Could not publish failure status: {report_error}\n")
+            sys.stderr.write(f"gate=FAIL build_id={ns.build_id} head={ns.expected_sha} reason={error}\n")
+            return 1
 
     return 0
 

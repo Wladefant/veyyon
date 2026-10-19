@@ -68,20 +68,7 @@ export const STRUCTURAL_REPLACEMENTS: readonly (readonly [pattern: string, repla
 	[" from ", "<-"],
 ];
 
-function reverseMap<const T extends Readonly<Record<string, string>>>(source: T): Record<T[keyof T], keyof T & string> {
-	const reversed = Object.create(null) as Record<T[keyof T], keyof T & string>;
-	for (const rawKey in source) {
-		const key = rawKey as keyof T & string;
-		const value = source[key];
-		reversed[value] = key;
-	}
-	return reversed;
-}
-
-export const REV_CATEGORY = reverseMap(CATEGORY_MAP);
-
 const SORTED_PHRASES = Object.entries(PHRASE_MAP).sort(([left], [right]) => right.length - left.length);
-export const REV_PHRASE = reverseMap(PHRASE_MAP);
 
 /** Replace every literal `pattern` in `text` with its `replacement`, in table order. */
 function replaceAllLiteral(text: string, table: Iterable<readonly [pattern: string, replacement: string]>): string {
@@ -129,11 +116,23 @@ export function encode(text: string): string {
 	result = applyPhrases(result);
 	result = applyStructural(result);
 	result = compactParens(result);
-	result = result.replaceAll("working correctly", "OK");
-	result = result.replaceAll("working", "OK");
-	result = result.replaceAll("complete", "DONE");
-	result = result.replaceAll("completed", "DONE");
-	return result.trim();
+	return applyStatusWords(result).trim();
 }
 
-export const aaakEncode = encode;
+/**
+ * Status words compacted to a token. Each matches a whole word, so "incomplete" and "networking" keep their
+ * meaning and "completed" compacts to DONE rather than leaving a stray suffix.
+ */
+const STATUS_WORDS: readonly (readonly [pattern: RegExp, replacement: string])[] = [
+	[/\bworking correctly\b/g, "OK"],
+	[/\bworking\b/g, "OK"],
+	[/\bcompleted?\b/g, "DONE"],
+];
+
+function applyStatusWords(text: string): string {
+	let result = text;
+	for (const [pattern, replacement] of STATUS_WORDS) {
+		result = result.replace(pattern, replacement);
+	}
+	return result;
+}

@@ -145,12 +145,11 @@ Behavior in interactive mode (`extension-ui-controller.ts`):
 - On `done(result)`: calls `component.dispose?.()`, hides the overlay if present, restores editor + text for non-overlay flows, focuses editor, resolves promise.
   So `done(...)` is mandatory for completion.
 
-## 2) Hook/custom-tool UI context (legacy typing)
+## 2) Hook/custom-tool UI context
 
-`HookUIContext.terminal.custom` is typed as `(tui, theme, done)` in `extensibility/terminal-capability.ts`.
-Underlying interactive implementation calls factories with `(tui, theme, keybindings, done)`. JS consumers can use the extra arg; type-level compatibility still reflects the 3-arg legacy signature.
+`HookUIContext.terminal.custom` has the same signature as the extension form: the factory receives `(tui, theme, keybindings, done)` and `options.overlay` is accepted. Hooks and custom commands receive the extension runner's UI, so a factory written as `(tui, theme, done)` receives the keybindings manager as `done`.
 
-Custom tools typically use the same UI entrypoint via the factory-scoped `pi.ui` object, then return the selected value in normal tool content:
+Custom tools use the same entrypoint through the factory-scoped `pi.ui` object. The session installs the host's UI on `pi.ui` and sets `pi.hasUI` when the host installs its tool UI; before that, and in hosts without one, `pi.ui` is a no-op context and `pi.hasUI` is `false`. Return the selected value in normal tool content:
 
 ```ts
 async execute(toolCallId, params, onUpdate, ctx, signal) {

@@ -8,7 +8,7 @@
  *
  * That is not where it stopped. `tui/index.ts` re-exports the status line, `tools/web/fetch.ts` takes two
  * names from that barrel, and `tools/fs/read.ts` imports `fetch`, so reading a local file reached the
- * settings through a status glyph. `render-utils.ts` re-exports both names, so no caller changed.
+ * settings through a status glyph.
  */
 
 import type { Theme } from "../../theme/theme";

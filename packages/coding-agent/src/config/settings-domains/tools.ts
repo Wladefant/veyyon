@@ -57,6 +57,9 @@ export const TOOLS_SETTINGS = {
 		// onboarding, in `/settings`, or per session with `/permissions`, and the
 		// status line then says which of those is in force.
 		default: DEFAULT_APPROVAL_MODE,
+		// A value outside `values` (a hand-edited typo) reads as the strictest rung, not the
+		// default: a misspelled `ask` must not grant `auto`.
+		invalid: "ask",
 		ui: {
 			tab: "interaction",
 			group: "Approvals",
@@ -120,7 +123,7 @@ export const TOOLS_SETTINGS = {
 		},
 	},
 
-	"todo.reminders.max": {
+	"todo.reminderLimit": {
 		type: "number",
 		default: 3,
 		ui: {
@@ -485,6 +488,18 @@ export const TOOLS_SETTINGS = {
 			condition: "browserEnabled",
 			description:
 				"Directory to save screenshots. If unset, screenshots go to a temp file. Supports ~. Examples: ~/Downloads, ~/Desktop, /sdcard/Download (Android)",
+		},
+	},
+	"browser.naturalInput": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			group: "Browser",
+			label: "Natural Input",
+			condition: "browserEnabled",
+			description:
+				"Move the pointer along a curved path and rest before each click, pause between typed keys, fill short values one key at a time, and scroll with the wheel. Off: instant clicks, keys without pauses, and every fill in one insertion. Applies from the next browser run.",
 		},
 	},
 

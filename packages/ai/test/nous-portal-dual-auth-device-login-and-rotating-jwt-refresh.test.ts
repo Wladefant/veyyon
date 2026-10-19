@@ -24,7 +24,8 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import * as AIError from "@veyyon/ai/error";
 import {
 	loginNousResearch,
@@ -560,7 +561,7 @@ describe("Nous Research dual authentication and rotating JWT refresh lifecycle",
 			expect(oauthEntry).toBeDefined();
 			expect(oauthEntry?.name).toBe("Nous Research");
 			expect(oauthEntry?.login).toBe(nousResearchProvider.login);
-			expect(oauthEntry?.refreshToken).toBe(refreshNousResearchToken);
+			expect(oauthEntry?.refreshToken).toBe(nousResearchProvider.refreshToken);
 			expect(oauthEntry?.storeCredentialsAs).toBeUndefined();
 
 			const apiKeyEntry = PROVIDER_REGISTRY.find(p => p.id === "nous-research-api-key");
