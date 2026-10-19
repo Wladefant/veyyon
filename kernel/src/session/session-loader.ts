@@ -3,8 +3,9 @@ import * as path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { AgentMessage } from "@veyyon/agent-core";
 import { type SessionSkim, type SessionSkimRules, skimSessionFile } from "@veyyon/natives";
+import { TimeSlice } from "@veyyon/utils/async";
 import { isEnoent } from "@veyyon/utils/fs-error";
-// Owners, not the `@veyyon/utils` barrel: 3 modules against 74.
+// Owners, not the `@veyyon/utils` barrel: 5 modules against 74.
 import * as logger from "@veyyon/utils/logger";
 import { StreamFrameLimitError, streamFrameCeiling } from "@veyyon/utils/stream";
 import { errorMessage } from "@veyyon/utils/type-guards";
@@ -1205,11 +1206,11 @@ export interface BlobResolutionOptions {
  * A field of a cold entry (see {@link coldFieldsOf}) is left on disk: its payloads are restored
  * when the entry reads its line back, and a missing one is logged then.
  *
- * Two phases for the blobs: collect every reference in the session synchronously, then read them
- * through one bounded pool. The cap is session-wide rather than per-entry, so a transcript of a
- * thousand entries each holding one payload reads eight files at a time and not a thousand. Each
- * distinct reference is read once per decoding (see {@link BlobReads}), and every site of it
- * receives that one string.
+ * Two phases for the blobs: collect every reference in the session, in slices that let input and
+ * rendering run between them (see {@link TimeSlice}), then read them through one bounded pool. The
+ * cap is session-wide rather than per-entry, so a transcript of a thousand entries each holding one
+ * payload reads eight files at a time and not a thousand. Each distinct reference is read once per
+ * decoding (see {@link BlobReads}), and every site of it receives that one string.
  */
 export async function resolveBlobRefsInEntries(
 	entries: FileEntry[],
@@ -1218,9 +1219,11 @@ export async function resolveBlobRefsInEntries(
 ): Promise<number> {
 	const lost: LostPayloads = { count: 0 };
 	const scan: EntryScan = { sites: [], strings: new StringPool(true) };
+	const slice = new TimeSlice();
 	let hasCold = false;
 	try {
 		for (const entry of entries) {
+			if (slice.due) await slice.yield();
 			if (entry.type === "session") continue;
 			const cold = coldFieldsOf(entry);
 			if (cold === undefined) {
