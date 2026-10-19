@@ -28,7 +28,7 @@ import { normalizeToolNames, TOOL } from "../tools/core/builtin-names";
 import { isForeignConfigImportEnabled, registerProvider } from "./capability";
 import type { ContextFile } from "./capability/context-file";
 import type { ExtensionModule } from "./capability/extension-module";
-import { invalidate as invalidateFsCache, readDirEntries, readFile } from "./capability/fs";
+import { findRepoRoot, invalidate as invalidateFsCache, readDirEntries, readFile } from "./capability/fs";
 import type { Hook } from "./capability/hook";
 import type { Prompt } from "./capability/prompt";
 import { parseRuleConditionAndScope, type Rule, type RuleFrontmatter } from "./capability/rule";
@@ -1328,19 +1328,37 @@ export function pluginsRootFor(agentDir: string): string | undefined {
 }
 
 /**
+ * The directory whose trust record governs the project registry that `cwd` resolves to.
+ *
+ * The registry is resolved first, and its owner is the directory three levels above the file,
+ * because that is the directory the registry belongs to. The owner's git root, or the owner
+ * itself outside a repository, is the key `runTrustCommand` records under. Keying on `cwd`
+ * instead sent a registry above a nested `.git` to a root that does not contain it: the describer
+ * returned null for it, and the gate allowed it. With no registry there is nothing to gate, and
+ * the repository root of `cwd` is the key.
+ */
+async function projectTrustRoot(cwd: string): Promise<string> {
+	const registry = await resolveActiveProjectRegistryPath(cwd);
+	if (!registry) return canonicalProjectRoot((await findRepoRoot(cwd)) ?? cwd);
+	// `<owner>/.veyyon/plugins/installed_plugins.json`: three levels up is the owner.
+	const owner = path.dirname(path.dirname(path.dirname(registry)));
+	return canonicalProjectRoot((await findRepoRoot(owner)) ?? owner);
+}
+
+/**
  * Whether the project-scoped plugin registry at `registryPath` may be read at all.
  *
  * The registry itself is the trusted unit, not the plugins it names: its `installPath` entries
  * are arbitrary absolute paths, so filtering by location would let a project point at a payload
- * anywhere on disk. A registry that lives outside the canonical project root is not
- * project-controlled and is left alone, which is what keeps a profile-level registry working.
+ * anywhere on disk. A registry that lives outside the trust root is not project-controlled and
+ * is left alone, which is what keeps a profile-level registry working.
  */
 export async function projectRegistryIsTrusted(
 	registryPath: string,
 	cwd: string,
 	agentDir?: string,
 ): Promise<{ allowed: true } | { allowed: false; reason: string }> {
-	const canonicalRoot = await canonicalProjectRoot(cwd);
+	const canonicalRoot = await projectTrustRoot(cwd);
 	const executable = await describeProjectExecutable(registryPath, canonicalRoot);
 	if (!executable) return { allowed: true };
 	const trust = await ProjectTrust.load(agentDir ?? getAgentDir());
