@@ -197,4 +197,4 @@ When introducing cache use in a new scanner/search path:
 - `glob`/`fuzzyFind`/`astGrep` share scan entries only when the full `WalkOptions` key matches.
 - Every native consumer sets `skip_git=true`, so `.git` is excluded from all cached scans in practice; `should_skip_path` re-enforces it at the discovery-filter layer.
 
-*Verified against `ab0a97f9285dbf82914fcb1af5580f717271ae7d` on 2026-10-18.*
+*Verified against `5c1ec4a2f5d781499da70f223c2c3941fa4b49f8` on 2026-10-19.*
