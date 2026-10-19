@@ -10,12 +10,13 @@ import { CmuxSocketClient } from "./cmux/socket-client";
 import type { ExtensionRelay } from "./extension-relay";
 import { type ExtensionKind, openExtensionSession } from "./extension-session";
 import type { HostIdentity } from "./host-identity";
+import * as launch from "./launch";
 import {
 	BROWSER_PROTOCOL_TIMEOUT_MS,
-	 type LaunchedBrowser,
+	type LaunchedBrowser,
 	launchHeadlessBrowser,
 	loadPuppeteer,
-	 type UserAgentOverride,
+	type UserAgentOverride,
 } from "./launch";
 import { preparePersistentProfile, profileLock, profileLockedError, removeProfile } from "./profiles";
 
@@ -41,6 +42,7 @@ interface BrowserHandleCommon {
 	key: string;
 	kind: BrowserKind;
 	refCount: number;
+	ownerSessionId?: string;
 }
 
 export interface PuppeteerBrowserHandle extends BrowserHandleCommon {
@@ -110,6 +112,7 @@ export interface AcquireBrowserOptions {
 	viewport?: { width: number; height: number; deviceScaleFactor?: number };
 	appArgs?: string[];
 	signal?: AbortSignal;
+	ownerSessionId?: string;
 }
 
 export async function acquireBrowser(kind: BrowserKind, opts: AcquireBrowserOptions): Promise<BrowserHandle> {
@@ -167,6 +170,7 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 			client,
 			surface: kind.surface,
 			refCount: 0,
+			ownerSessionId: opts.ownerSessionId,
 		};
 	}
 	if (kind.kind === "headless") {
@@ -191,7 +195,7 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 		}
 		let launched: LaunchedBrowser;
 		try {
-			launched = await launchHeadlessBrowser({ headless, viewport: opts.viewport, userDataDir });
+			launched = await launch.launchHeadlessBrowser({ headless, viewport: opts.viewport, userDataDir });
 		} catch (error) {
 			// Two processes starting one profile at once: the one that lost finds the lock only now.
 			const lock = userDataDir === undefined ? undefined : await profileLock(userDataDir);
@@ -210,6 +214,7 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 			profileDir,
 			refCount: 0,
 			identity,
+			ownerSessionId: opts.ownerSessionId,
 		};
 	}
 	if (kind.kind === "extension") {
@@ -228,6 +233,7 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 				relay,
 				refCount: 0,
 				stealth: { browserSession: null, override: null },
+				ownerSessionId: opts.ownerSessionId,
 			};
 		} catch (err) {
 			await relay.close();
@@ -249,6 +255,7 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 			browser,
 			cdpUrl,
 			refCount: 0,
+			ownerSessionId: opts.ownerSessionId,
 		};
 	}
 
@@ -315,6 +322,7 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 		pid,
 		subprocess,
 		refCount: 0,
+		ownerSessionId: opts.ownerSessionId,
 	};
 }
 
@@ -331,6 +339,28 @@ export async function releaseBrowser(handle: BrowserHandle, opts: { kill: boolea
 		if (browsers.get(handle.key) === handle) browsers.delete(handle.key);
 		await disposeBrowserHandle(handle, opts);
 	}
+}
+
+export interface ReleaseOrphanBrowsersOptions {
+	kill: boolean;
+	ownerSessionId?: string;
+	hasRemainingTabs?: (browser: BrowserHandle) => boolean;
+}
+
+export async function releaseOrphanBrowsers(opts: ReleaseOrphanBrowsersOptions): Promise<number> {
+	let count = 0;
+	for (const handle of Array.from(browsers.values())) {
+		if (opts.ownerSessionId !== undefined && handle.ownerSessionId !== opts.ownerSessionId) {
+			continue;
+		}
+		if (handle.refCount > 0) continue;
+		if (opts.hasRemainingTabs && opts.hasRemainingTabs(handle)) continue;
+
+		if (browsers.get(handle.key) === handle) browsers.delete(handle.key);
+		await disposeBrowserHandle(handle, { kill: opts.kill });
+		count++;
+	}
+	return count;
 }
 
 async function disposeBrowserHandle(handle: BrowserHandle, opts: { kill: boolean }): Promise<void> {
