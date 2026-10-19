@@ -83,7 +83,8 @@ function stubResponse(opts: {
  * `fetch` and `XMLHttpRequest` are replaced by stubs before the script runs, so
  * the script wraps the stubs exactly as it wraps the real ones in a browser.
  */
-function installedPage(): {
+/** A page with the response observer installed, and the handles a test drives it through. */
+interface InstalledPage {
 	context: vm.Context;
 	fetch(response: unknown): Promise<void>;
 	xhr(opts: {
@@ -96,7 +97,9 @@ function installedPage(): {
 	loss(): RecordedLoss;
 	recordCount(): number;
 	eval<T>(script: string): T;
-} {
+}
+
+function installedPage(): InstalledPage {
 	const sandbox: Record<string, unknown> = {};
 	// The stub fetch resolves whatever the caller hands it; the script's wrapper
 	// is what decides whether the response is recorded.
@@ -300,7 +303,7 @@ async function waitWhile(tab: CmuxTab, pattern: string, fire: () => Promise<void
 	return await waiting;
 }
 
-function tabOverPage(page: ReturnType<typeof installedPage>): CmuxTab {
+function tabOverPage(page: InstalledPage): CmuxTab {
 	const client: CmuxTabClient = {
 		async request(method, params) {
 			if (method !== "browser.eval") throw new Error(`unexpected method: ${method}`);

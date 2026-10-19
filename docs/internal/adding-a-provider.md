@@ -101,7 +101,7 @@ and answering "which variable holds the key" must not.
 |---|---|
 | `id`, `name` | Required. `name` shows in the `/login` list. |
 | `login` | Interactive login. Present ⇒ member of `OAuthProvider`, shown in `/login`, dispatchable via `AuthStorage.login`. Returns an api-key `string` or `OAuthCredentials`. |
-| `refreshToken` | OAuth refresher; omit for static-token providers (the dispatch returns credentials unchanged). |
+| `refreshToken` | OAuth refresher `(credentials, signal?)`; omit for static-token providers (the dispatch returns credentials unchanged). Pass `signal` to the token request's `fetch` and read the body with `requireTokenResponseObject` (`registry/oauth/token-response.ts`); `a-token-refresh-failure-never-costs-a-working-login.test.ts` sweeps every refresher for both. |
 | `storeCredentialsAs` | Store credentials under a different provider id (e.g. `openai-codex-device` ⇒ `openai-codex`). |
 | `callbackPort` | Present ⇒ entry in the auth-broker `CALLBACK_PORTS` map. |
 | `pasteCodeFlow` | OAuth flow needs a pasted code/redirect URL ⇒ member of `PASTE_CODE_LOGIN_PROVIDERS`. |
@@ -130,4 +130,4 @@ and answering "which variable holds the key" must not.
   `registerOAuthProvider` (the `AuthStorage.login` dispatcher handles built-ins
   and extensions through the same path).
 
-*Verified against `ad7ede4a` on 2026-07-28.*
+*Verified against `10d91f75bd` on 2026-10-15.*

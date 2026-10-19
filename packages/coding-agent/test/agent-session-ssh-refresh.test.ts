@@ -253,7 +253,9 @@ describe("AgentSession SSH tool refresh", () => {
 		};
 
 		await addSSHHost(configPath, "hidden", { host: "203.0.113.12" });
-		const session = createSession(cwd, [], [blockedTool], {
+		// No ssh tool is registered before the refresh, so `activateIfAvailable` would activate the
+		// reloaded one; only the allowlist keeps it out.
+		const session = createSession(cwd, [], [], {
 			reloadSshTool: async () => blockedTool,
 			requestedToolNames: new Set(["read"]),
 		});

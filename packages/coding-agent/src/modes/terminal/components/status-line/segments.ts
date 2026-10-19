@@ -66,7 +66,7 @@ function thinkingGlyph(display: string): string {
  * "clear the line". That is how people got stuck in a view whose edge they could not see.
  *
  * `esc` is spelled literally, unlike every other chord in the TUI, because it is not a remappable
- * action: `input-controller.ts` handles the raw Esc key for focus exit, so there is no `KeyId` for
+ * action: `composer-escape.ts` handles the raw Esc key for focus exit, so there is no `KeyId` for
  * `keyHint` to resolve and nothing a user can rebind. If it ever becomes a binding, this must go
  * through `actionKeyHint`.
  */
@@ -100,30 +100,10 @@ const piSegment: StatusLineSegment = {
 const modelSegment: StatusLineSegment = {
 	id: "model",
 	render(ctx) {
-		const { model, thinkingLevel, autoThinking, advisorActive } = ctx.facts;
+		const { model, advisorActive } = ctx.facts;
 		const opts = ctx.options.model ?? {};
-
-		// A model name is provider text: it arrives from a `/models` listing or from a custom
-		// endpoint's config, so it is no more trusted than a directory name.
-		let modelName = sanitizeStatusText(model?.name || model?.id || "") || "no-model";
-		if (modelName.startsWith("Claude ")) {
-			modelName = modelName.slice(7);
-		}
-
-		// Resolve the current thinking-level display ("◉ xhigh", "◐ auto", …)
-		// when the model supports thinking and the segment isn't hiding it.
-		let thinkingDisplay = "";
-		if (opts.showThinkingLevel !== false && model?.supportsThinking) {
-			if (autoThinking) {
-				// Pending (no turn classified yet / classifying) shows a symbol-theme
-				// question-box marker; once resolved it shows `<level>`.
-				thinkingDisplay = autoThinking.resolved
-					? (theme.thinking[autoThinking.resolved as keyof typeof theme.thinking] ?? autoThinking.resolved)
-					: `${theme.thinking.autoPending} auto`;
-			} else if (thinkingLevel !== "off") {
-				thinkingDisplay = theme.thinking[thinkingLevel as keyof typeof theme.thinking] ?? "";
-			}
-		}
+		const modelName = modelDisplayName(model);
+		const thinkingDisplay = opts.showThinkingLevel !== false ? thinkingLevelDisplay(ctx.facts) : "";
 
 		// Compact mode swaps the model icon for the thinking-level glyph and drops
 		// the " · <level>" tail, keeping the level visible as a single icon.
@@ -165,6 +145,31 @@ const modelSegment: StatusLineSegment = {
 		return { content, visible: true };
 	},
 };
+
+/**
+ * The model's name as the segment prints it, `no-model` when there is none. A model name is
+ * provider text: it arrives from a `/models` listing or from a custom endpoint's config, so it
+ * is no more trusted than a directory name.
+ */
+function modelDisplayName(model: SegmentContext["facts"]["model"]): string {
+	const name = sanitizeStatusText(model?.name || model?.id || "") || "no-model";
+	return name.startsWith("Claude ") ? name.slice(7) : name;
+}
+
+/** The current thinking-level display ("◉ xhigh", "◐ auto", …), or "" when the model does not think. */
+function thinkingLevelDisplay(facts: SegmentContext["facts"]): string {
+	if (!facts.model?.supportsThinking) return "";
+	const { autoThinking, thinkingLevel } = facts;
+	if (autoThinking) {
+		// Pending (no turn classified yet / classifying) shows a symbol-theme
+		// question-box marker; once resolved it shows `<level>`.
+		return autoThinking.resolved
+			? (theme.thinking[autoThinking.resolved as keyof typeof theme.thinking] ?? autoThinking.resolved)
+			: `${theme.thinking.autoPending} auto`;
+	}
+	if (thinkingLevel === "off") return "";
+	return theme.thinking[thinkingLevel as keyof typeof theme.thinking] ?? "";
+}
 
 /**
  * The priority-tier chip: icon plus the word, or the word alone when the symbol
@@ -430,7 +435,8 @@ const pathSegment: StatusLineSegment = {
 		const { content, pin } = renderLocation({
 			projectDir,
 			worktree: ctx.worktree,
-			branch: ctx.git.branch,
+			// The worktree directory is dropped only when the git zone prints a branch it duplicates.
+			branch: ctx.options.git?.showBranch === false ? null : ctx.git.branch,
 			activeRepoRelativeRoot: ctx.activeRepo?.relativeRepoRoot ?? null,
 			options: ctx.options.path,
 		});

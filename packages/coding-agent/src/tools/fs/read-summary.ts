@@ -6,6 +6,7 @@
 import type { ImageContent, TextContent } from "@veyyon/ai";
 import { type SummaryResult, summarizeCode } from "@veyyon/natives";
 import { isAbortError, isCancellation, isTimeoutError } from "@veyyon/utils/abortable";
+import { formatBytes } from "@veyyon/utils/format";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { LRUCache } from "lru-cache/raw";
@@ -16,7 +17,6 @@ import { resolveFileDisplayMode } from "../../utils/file-display-mode";
 import { inlineBudgetFor } from "../core/output-artifact";
 import { resolveOutputMaxColumns } from "../core/output-meta";
 import type { ParsedSelector } from "../core/path-utils";
-import { formatBytes } from "../core/render-utils";
 import { throwIfAborted } from "../core/tool-errors";
 import { routeReadThroughBridge } from "./read-in-memory";
 import {

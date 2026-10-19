@@ -26,7 +26,7 @@ import { MAIN_CALL_SIGN } from "@veyyon/coding-agent/modes/terminal/components/d
 import { DEFAULT_PLAN_FILE_URL } from "@veyyon/coding-agent/plan-mode/plan-file-url";
 import { MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import { LEGACY_TOOL_DEFINITION_MARKER } from "@veyyon/kernel/registry/legacy-tool-marker";
-import { moduleSpecifiersIn } from "@veyyon/utils/module-reach";
+import { moduleSpecifiersIn, namedImportsFrom } from "@veyyon/utils/module-reach";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "../../../..");
 const SRC = path.join(REPO_ROOT, "packages/coding-agent/src");
@@ -131,15 +131,19 @@ describe("Anthropic's web-search tool name", () => {
 		expect(ANTHROPIC_WEB_SEARCH_TOOL).toBe("web_search");
 	});
 
-	/** The asker and the matcher read one declaration, across two packages. */
+	/**
+	 * The asker and the matcher read one declaration, across two packages. The tree-wide literal scan
+	 * below forbids either one spelling the name itself, and an import nothing uses fails
+	 * `check:tools`, so each module that imports the owner's name compares or sends with it.
+	 */
 	it("is read by the provider that asks and the one that matches", async () => {
-		const search = await Bun.file(path.join(SRC, "tools/web/search/providers/anthropic.ts")).text();
-		const provider = await Bun.file(path.join(AI_SRC, "providers/anthropic.ts")).text();
-		expect(search).toContain("name: ANTHROPIC_WEB_SEARCH_TOOL,");
-		expect(search).toContain("stripClaudeToolPrefix(block.name) === ANTHROPIC_WEB_SEARCH_TOOL");
-		expect(provider).toContain("name.toLowerCase() === ANTHROPIC_WEB_SEARCH_TOOL");
-		for (const text of [search, provider])
-			expect(moduleSpecifiersIn(text)).toContain("@veyyon/catalog/wire/anthropic");
+		for (const file of [
+			path.join(SRC, "tools/web/search/providers/anthropic.ts"),
+			path.join(AI_SRC, "providers/anthropic.ts"),
+		]) {
+			const imported = namedImportsFrom(await Bun.file(file).text(), "@veyyon/catalog/wire/anthropic");
+			expect(imported, path.relative(REPO_ROOT, file)).toContain("ANTHROPIC_WEB_SEARCH_TOOL");
+		}
 	});
 });
 

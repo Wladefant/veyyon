@@ -244,7 +244,7 @@ function turnContext(statusLine: StatusLineComponent): InteractiveModeContext {
 		sessionManager: { getSessionName: () => "dirty marker" },
 		ensureLoadingAnimation: vi.fn(),
 		ui: { requestRender: vi.fn() },
-		viewSession: { isCompacting: false, getLastAssistantMessage: () => undefined },
+		viewSession: { isCompacting: false, getLastAssistantMessage: () => undefined, settings: Settings.isolated() },
 		session: { isStreaming: false, getToolByName: () => undefined },
 		refreshComposerShortcuts: vi.fn(),
 		dismissWelcome: vi.fn(),

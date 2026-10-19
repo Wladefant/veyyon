@@ -4,7 +4,7 @@ import { collapseWhitespace } from "@veyyon/utils";
 import type { SkillPromptCustomDisplay } from "@veyyon/wire/presentation";
 import { withIcon } from "../../../../theme/icon-label";
 import { getMarkdownTheme, markdownTextStyle } from "../../../../theme/markdown-theme";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { shortenPath } from "../../../../tools/core/render-utils";
 import { fileHyperlink } from "../../draw/hyperlink";
 import { cardOutlineColor } from "./message-frame";

@@ -261,7 +261,7 @@ sleep 1
 			const directory = await mkdtemp(join(root, "settled-memory-stable-test-"));
 			scratchDirectories.push(directory);
 			const trace = join(directory, "trace.json");
-			const script = join(directory, "slow-sample-app.sh");
+			const script = join(directory, "early-sample-app.sh");
 			await writeFile(
 				script,
 				`#!/bin/sh
@@ -271,40 +271,44 @@ sleep 2
 				{ mode: 0o755 },
 			);
 
+			// Every timestamp reads launch time, so each sample lands before the stable window opens
+			// however late the host schedules the sampler or the deadline.
+			const launchTime = (): number => 0;
 			const started = performance.now();
+			const recording = recordSettledStartup({
+				command: "/bin/sh",
+				args: [script],
+				cwd: directory,
+				env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+				columns: 100,
+				rows: 10,
+				expectedModel: "Study Model",
+				observationMs: 200,
+				stableMs: 100,
+				trace,
+				now: launchTime,
+				memory: {
+					enabled: true,
+					intervalMs: 20,
+					targetExecutable: "/bin/sh",
+					targetArgs: [script],
+				},
+			});
+			// Hold the event loop past the deadline, as a loaded runner does: the first sample is still
+			// reading /proc when the deadline fires, and that read must be judged rather than reported
+			// as a target that was never found.
+			Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
 			let thrown: unknown;
 			try {
-				await recordSettledStartup({
-					command: "/bin/sh",
-					args: [script],
-					cwd: directory,
-					env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
-					columns: 100,
-					rows: 10,
-					expectedModel: "Study Model",
-					observationMs: 200,
-					stableMs: 100,
-					trace,
-					memory: {
-						enabled: true,
-						intervalMs: 250,
-						targetExecutable: "/bin/sh",
-						targetArgs: [script],
-					},
-				});
+				await recording;
 			} catch (err) {
 				thrown = err;
 			}
 			expect(performance.now() - started).toBeLessThan(4000);
 			expect(thrown).toBeInstanceOf(AggregateError);
-			const agg = thrown as AggregateError;
-			expect(
-				agg.errors.some(
-					e =>
-						e instanceof Error &&
-						/Incomplete memory sampling: no samples recorded during stable window/.test(e.message),
-				),
-			).toBe(true);
+			expect((thrown as AggregateError).errors.map(e => (e as Error).message)).toEqual([
+				expect.stringMatching(/^Incomplete memory sampling: no samples recorded during stable window/),
+			]);
 		},
 	);
 });

@@ -17,6 +17,7 @@ import type { OAuthProvider } from "@veyyon/ai/oauth/types";
 import { getGitLabDuoModels } from "@veyyon/ai/providers/gitlab-duo";
 import { $env, getSharedAuthDir } from "@veyyon/utils";
 import { ANTIGRAVITY_PRIMARY_ENDPOINT, fetchAntigravityDiscoveryModels } from "../src/discovery/antigravity";
+import { fetchCodexModels } from "../src/discovery/codex";
 import { buildGitLabDuoWorkflowFallbackModel } from "../src/discovery/gitlab-duo-workflow";
 import { isOpenAIOSeriesModelId } from "../src/identity/family";
 import { createModelManager } from "../src/model-manager";
@@ -514,8 +515,6 @@ function normalizeAntigravityEndpoint(models: readonly ModelSpec[]): ModelSpec[]
 	});
 }
 
-const ANTIGRAVITY_ENDPOINT = ANTIGRAVITY_PRIMARY_ENDPOINT;
-
 async function getOAuthAccessFromStorage(provider: OAuthProvider): Promise<OAuthAccess | null> {
 	try {
 		const authStorage = await discoverAuthStorage();
@@ -549,8 +548,8 @@ async function getOAuthAccessFromStorage(provider: OAuthProvider): Promise<OAuth
 }
 
 /**
- * Direct read of the shared-auth store's `auth_credentials` rows. Returns the
- * access token only when the stored expiry is still in the future; refresh
+ * Direct read of the shared-auth store's newest live `auth_credentials` row; a row a failed refresh
+ * disabled is skipped. Returns the access token only when the stored expiry is still in the future; refresh
  * stays with the app (a regen machine is a logged-in machine by definition).
  */
 function readSharedStoreOAuthAccess(provider: OAuthProvider): OAuthAccess | null {
@@ -605,7 +604,7 @@ async function fetchAntigravityModels(): Promise<ModelSpec<"google-gemini-cli">[
 		console.log("Fetching models from Antigravity API...");
 		const discovered = await fetchAntigravityDiscoveryModels({
 			token: access.accessToken,
-			endpoint: ANTIGRAVITY_ENDPOINT,
+			endpoint: ANTIGRAVITY_PRIMARY_ENDPOINT,
 		});
 		if (discovered === null) {
 			console.warn("Antigravity API fetch failed, will use previous models");
@@ -719,7 +718,7 @@ async function generateModels() {
 	// below). Always push the curated seed so a regen without credentials, or
 	// with a failed fetch, still bundles XAI_OAUTH_CURATED_MODELS verbatim:
 	// ModelRegistry.#loadModels() picks them up synchronously at boot, so a
-	// persisted `modelRoles.default = "xai-oauth/<id>"` is honored before the
+	// persisted `defaultModel = "xai-oauth/<id>"` is honored before the
 	// async refresh fires (interactive boot does not await refresh).
 	allModels.push(...buildXaiOAuthStaticSeed());
 	// Seed Anthropic models that are live on the first-party API or in limited

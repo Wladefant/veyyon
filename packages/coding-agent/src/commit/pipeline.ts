@@ -23,7 +23,7 @@ import {
 import { runChangelogFlow } from "./changelog";
 import { runMapReduceAnalysis, shouldUseMapReduce } from "./map-reduce";
 import { formatCommitMessage } from "./message";
-import { resolvePrimaryModel, resolveSmolModel } from "./model-selection";
+import { resolveCommitHelperModel, resolvePrimaryModel } from "./model-selection";
 import type { ResolveObfuscateProviderText } from "./shared-llm";
 import type { CommitCommandArgs, ConventionalAnalysis } from "./types";
 
@@ -72,10 +72,10 @@ async function runLegacyCommitCommand(args: CommitCommandArgs): Promise<void> {
 		thinkingLevel: primaryThinkingLevel,
 	} = await resolvePrimaryModel(args.model, settings, modelRegistry);
 	const {
-		model: smolModel,
-		apiKey: smolApiKey,
-		thinkingLevel: smolThinkingLevel,
-	} = await resolveSmolModel(settings, modelRegistry, primaryModel, primaryApiKey);
+		model: helperModel,
+		apiKey: helperApiKey,
+		thinkingLevel: helperThinkingLevel,
+	} = await resolveCommitHelperModel(settings, modelRegistry, primaryModel, primaryApiKey);
 
 	let stagedFiles = await git.diff.changedFiles(cwd, { cached: true });
 	if (stagedFiles.length === 0) {
@@ -125,9 +125,9 @@ async function runLegacyCommitCommand(args: CommitCommandArgs): Promise<void> {
 		primaryModel,
 		primaryApiKey,
 		primaryThinkingLevel,
-		smolModel,
-		smolApiKey,
-		smolThinkingLevel,
+		helperModel,
+		helperApiKey,
+		helperThinkingLevel,
 		commitSettings,
 		resolveObfuscateProviderText,
 	});
@@ -173,9 +173,9 @@ async function generateAnalysis(input: {
 	primaryModel: Model<Api>;
 	primaryApiKey: ApiKey;
 	primaryThinkingLevel?: ThinkingLevel;
-	smolModel: Model<Api>;
-	smolApiKey: ApiKey;
-	smolThinkingLevel?: ThinkingLevel;
+	helperModel: Model<Api>;
+	helperApiKey: ApiKey;
+	helperThinkingLevel?: ThinkingLevel;
 	commitSettings: {
 		mapReduceEnabled: boolean;
 		mapReduceMinFiles: number;
@@ -198,9 +198,9 @@ async function generateAnalysis(input: {
 			model: input.primaryModel,
 			apiKey: input.primaryApiKey,
 			thinkingLevel: input.primaryThinkingLevel,
-			smolModel: input.smolModel,
-			smolApiKey: input.smolApiKey,
-			smolThinkingLevel: input.smolThinkingLevel,
+			helperModel: input.helperModel,
+			helperApiKey: input.helperApiKey,
+			helperThinkingLevel: input.helperThinkingLevel,
 			diff: input.diff,
 			stat: input.stat,
 			scopeCandidates: input.scopeCandidates,

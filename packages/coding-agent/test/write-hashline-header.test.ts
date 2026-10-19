@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { canonicalSnapshotKey, getFileSnapshotStore } from "@veyyon/coding-agent/edit/file-snapshot-store";
 import { HashlineFilesystem } from "@veyyon/coding-agent/edit/hashline/filesystem";
-import { writethroughNoop } from "@veyyon/coding-agent/lsp";
+import { writethroughNoop } from "@veyyon/coding-agent/lsp/writethrough";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { Patch, Patcher } from "@veyyon/hashline";

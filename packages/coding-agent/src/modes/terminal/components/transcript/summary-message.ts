@@ -2,7 +2,7 @@ import { Box, type Component, Markdown } from "@veyyon/tui";
 import type { SummaryMessageView } from "@veyyon/wire/presentation";
 import { withIcon } from "../../../../theme/icon-label";
 import { getMarkdownTheme, markdownTextStyle } from "../../../../theme/markdown-theme";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { actionKeyHint } from "../../utils/key-hint";
 import { renderTranscriptDivider } from "./transcript-divider";
 

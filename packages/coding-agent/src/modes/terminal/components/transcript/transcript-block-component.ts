@@ -10,7 +10,7 @@ import { type Component, Container, Text, type TUI } from "@veyyon/tui";
 import { sanitizeText } from "@veyyon/utils";
 import type { CustomBlock, ErrorBlock, HookBlock, TranscriptBlock, UserMessageBlock } from "@veyyon/wire/presentation";
 import type { AssistantThinkingRenderer } from "../../../../extensibility/extensions/types";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { shortenEmbeddedPaths } from "../../../../tools/core/render-utils";
 import { buildFileMentionBlock, renderAttachmentRow } from "../../utils/transcript-render-helpers";
 import { COMPOSER_INSET_COLS } from "../composer/composer-chrome";

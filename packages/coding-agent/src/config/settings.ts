@@ -27,7 +27,6 @@ import {
 	type GlobalSettingBinding,
 	groupSettingPaths,
 	type RawSettings,
-	type SettingSource,
 	type SettingsOptions,
 	SettingsStore,
 	type SettingsStoreHooks,
@@ -49,7 +48,6 @@ import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
 import { JSONC } from "bun";
 import { type EditMode, normalizeEditMode } from "../utils/edit-mode";
 import { readLegacyAgentDbSettings } from "./legacy-agent-db-settings";
-import type { ModelRole } from "./model-roles";
 import { GLOBAL_SETTING_BINDINGS } from "./settings-domains/global";
 // The slot, not a second copy of it: this module FILLS the slot that `./settings-instance.ts` owns, and
 // that leaf is what a caller reads when it wants a value rather than the store. See its doc for the split.
@@ -66,8 +64,8 @@ import {
 	appendOnlyModeSignal,
 	autoThemeMappingSignal,
 	colorBlindModeSignal,
+	helperModelsSignal,
 	hindsightScopeSignal,
-	modelRolesSignal,
 	statusLineSessionAccentSignal,
 	symbolPresetSignal,
 } from "./settings-signals";
@@ -138,27 +136,6 @@ function stringArrayFromUnknown(value: unknown): string[] {
 	if (typeof value === "string") return [value];
 	if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string");
 	return [];
-}
-
-function modelRoleValueFromUnknown(value: unknown): string | undefined {
-	if (typeof value === "string") return value;
-	if (!Array.isArray(value)) return undefined;
-
-	const entries = stringArrayFromUnknown(value);
-	return entries.length === value.length ? entries.join(",") : undefined;
-}
-
-function normalizeModelRoles(value: unknown): Record<string, string> {
-	if (!isRecord(value)) return {};
-	const roles: Record<string, string> = {};
-	for (const role in value) {
-		if (!Object.hasOwn(value, role)) continue;
-		const modelId = modelRoleValueFromUnknown(value[role]);
-		if (modelId !== undefined) {
-			roles[role] = modelId;
-		}
-	}
-	return roles;
 }
 
 type EditVariantEntry = {
@@ -252,8 +229,8 @@ class CodingAgentSettingsHooks implements SettingsStoreHooks {
 		if (path === "statusLine.sessionAccent") {
 			statusLineSessionAccentSignal.fire();
 		}
-		if (path === "modelRoles") {
-			modelRolesSignal.fire();
+		if (path === "agent.helpers") {
+			helperModelsSignal.fire();
 		}
 	}
 
@@ -608,100 +585,20 @@ export class Settings extends SettingsStore {
 		return this.get("bashInterceptor.patterns");
 	}
 
-	#modelRoleFromLayer(layer: "profile" | "config-file" | "runtime", role: ModelRole | string): string | undefined {
-		const value = this.layerValue(layer, ["modelRoles"]);
-		if (!isRecord(value)) return undefined;
-		return modelRoleValueFromUnknown(value[role]);
-	}
-
-	#modelRolesFromLayer(layer: "profile" | "config-file" | "runtime"): Record<string, string> {
-		return normalizeModelRoles(this.layerValue(layer, ["modelRoles"]));
-	}
-
-	/** Return one role from the profile layer, excluding project and runtime overrides. */
-	getPersistedModelRole(role: ModelRole | string): string | undefined {
-		return this.#modelRoleFromLayer("profile", role);
-	}
-
-	/** Identify the layer that supplies one effective model-role slot. */
-	getModelRoleSource(role: ModelRole | string): SettingSource {
-		if (this.#modelRoleFromLayer("runtime", role) !== undefined) return "runtime";
-		if (this.#modelRoleFromLayer("config-file", role) !== undefined) return "config-file";
-		if (this.#modelRoleFromLayer("profile", role) !== undefined) return "profile";
-		return "default";
-	}
-
 	/**
-	 * Persist one profile role without rewriting a higher-precedence override.
-	 *
-	 * This is the storage contract for profile-default controls. Interactive
-	 * session model switches continue to use {@link setModelRole}.
+	 * Persist the session's default model. A runtime override of `defaultModel`
+	 * (a `--model` launch) is rewritten too, so an in-session `/model` switch is
+	 * the effective value for the rest of the run as well as the next launch.
+	 * `undefined` removes the persisted key and, through `unset`, the override.
 	 */
-	setPersistedModelRole(role: ModelRole | string, modelId: string | undefined): void {
-		const current = this.#modelRolesFromLayer("profile");
-		if (modelId === undefined) delete current[role];
-		else current[role] = modelId;
-		this.set("modelRoles", current);
-	}
-
-	/**
-	 * Set a model role (helper for modelRoles record). Passing `undefined`
-	 * clears the role from the persisted record and any runtime override.
-	 */
-	setModelRole(role: ModelRole | string, modelId: string | undefined): void {
-		const current = this.#modelRolesFromLayer("profile");
-		const runtimeOverrides = this.layerValue("runtime", ["modelRoles"]);
-		const updateRuntimeOverride =
-			!!runtimeOverrides &&
-			typeof runtimeOverrides === "object" &&
-			!Array.isArray(runtimeOverrides) &&
-			Object.hasOwn(runtimeOverrides, role);
-
-		if (modelId === undefined) {
-			delete current[role];
-		} else {
-			current[role] = modelId;
+	setDefaultModel(selector: string | undefined): void {
+		if (selector === undefined) {
+			this.unset("defaultModel");
+			return;
 		}
-		this.set("modelRoles", current);
-
-		if (updateRuntimeOverride) {
-			const nextRuntimeOverride = this.#modelRolesFromLayer("runtime");
-			if (modelId === undefined) {
-				delete nextRuntimeOverride[role];
-			} else {
-				nextRuntimeOverride[role] = modelId;
-			}
-			this.override("modelRoles", nextRuntimeOverride);
-		}
-	}
-
-	/**
-	 * Get a model role (helper for modelRoles record).
-	 */
-	getModelRole(role: ModelRole | string): string | undefined {
-		const roles: unknown = this.get("modelRoles");
-		if (!isRecord(roles)) return undefined;
-		return modelRoleValueFromUnknown(roles[role]);
-	}
-
-	/**
-	 * Get all model roles (helper for modelRoles record).
-	 */
-	getModelRoles(): ReadOnlyDict<string> {
-		return normalizeModelRoles(this.get("modelRoles"));
-	}
-
-	/*
-	 * Override model roles (helper for modelRoles record).
-	 */
-	overrideModelRoles(roles: ReadOnlyDict<string>): void {
-		const next = this.#modelRolesFromLayer("runtime");
-		for (const [role, modelId] of Object.entries(roles)) {
-			if (modelId) {
-				next[role] = modelId;
-			}
-		}
-		this.override("modelRoles", next);
+		const overridden = this.layerValue("runtime", ["defaultModel"]) !== undefined;
+		this.set("defaultModel", selector);
+		if (overridden) this.override("defaultModel", selector);
 	}
 
 	/**

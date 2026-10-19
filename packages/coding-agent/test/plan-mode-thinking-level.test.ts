@@ -1,9 +1,9 @@
 /**
- * A role's thinking suffix must reach the caller.
+ * A helper's thinking suffix must reach the caller.
  *
- * `modelRoles.plan: "anthropic/claude-sonnet-4-5:xhigh"` used to resolve through
- * `resolveModelRoleValue` and then have only `.model` returned, so plan mode had no
- * level to apply and the operator's suffix did nothing.
+ * `agent.helpers.plan.model: "anthropic/claude-sonnet-4-5:xhigh"` must resolve to
+ * the model AND its level, or plan mode has no level to apply and the suffix
+ * does nothing.
  *
  * Every level here is DERIVED from what the model declares rather than written in.
  * A hardcoded `:xhigh` says nothing once the catalog declares `high` and `max` for
@@ -21,6 +21,7 @@ import { getSupportedEfforts } from "@veyyon/catalog/model-thinking";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import type { SettingPath } from "@veyyon/coding-agent/config/settings-schema";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
@@ -56,7 +57,7 @@ describe("plan mode thinking level", () => {
 		tempDir.removeSync();
 	});
 
-	function createSessionWithRoles(modelRoles: Record<string, string>): AgentSession {
+	function createSession(overrides: Partial<Record<SettingPath, unknown>>): AgentSession {
 		const model = modelRegistry.find("anthropic", MODEL_ID);
 		if (!model) throw new Error(`Expected ${MODEL_ID} to exist in registry`);
 
@@ -65,79 +66,71 @@ describe("plan mode thinking level", () => {
 				initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
 			}),
 			sessionManager: SessionManager.inMemory(),
-			settings: Settings.isolated({ modelRoles }),
+			settings: Settings.isolated(overrides),
 			modelRegistry,
 		});
 		return session;
 	}
 
-	describe("resolveRoleModelWithThinking", () => {
+	function withPlanModel(selector: string): AgentSession {
+		return createSession({ "agent.helpers": { plan: { model: selector } } });
+	}
+
+	describe("resolveHelperModel", () => {
 		// One case per level the catalog declares for this model, generated from the
 		// declaration. A level added to or removed from the model shows up here as a
 		// case appearing or disappearing rather than as a stale literal.
 		for (const effort of DECLARED_EFFORTS) {
-			it(`carries the plan role's ${effort} suffix through to the caller`, () => {
-				createSessionWithRoles({ plan: `anthropic/${MODEL_ID}:${effort}` });
+			it(`carries the plan helper's ${effort} suffix through to the caller`, () => {
+				withPlanModel(`anthropic/${MODEL_ID}:${effort}`);
 
-				const result = session.resolveRoleModelWithThinking("plan");
+				const result = session.resolveHelperModel("plan");
 
-				expect(result.model).toBeDefined();
-				expect(result.model!.provider).toBe("anthropic");
-				expect(result.model!.id).toBe(MODEL_ID);
-				expect(result.thinkingLevel).toBe(effort);
-				expect(result.explicitThinkingLevel).toBe(true);
+				expect(result?.model.provider).toBe("anthropic");
+				expect(result?.model.id).toBe(MODEL_ID);
+				expect(result?.thinkingLevel).toBe(effort);
+				expect(result?.inherited).toBe(false);
 			});
 		}
 
-		it("returns no explicit thinking level when plan role has no thinking suffix", () => {
-			createSessionWithRoles({ plan: `anthropic/${MODEL_ID}` });
+		it("returns no thinking level when the plan helper's model has no suffix", () => {
+			withPlanModel(`anthropic/${MODEL_ID}`);
 
-			const result = session.resolveRoleModelWithThinking("plan");
+			const result = session.resolveHelperModel("plan");
 
-			expect(result.model).toBeDefined();
-			expect(result.model!.id).toBe(MODEL_ID);
-			expect(result.explicitThinkingLevel).toBe(false);
+			expect(result?.model.id).toBe(MODEL_ID);
+			expect(result?.thinkingLevel).toBeUndefined();
 		});
 
-		it("returns no model when no plan role is configured", () => {
-			createSessionWithRoles({});
+		it("runs the session's model when no plan helper is configured", () => {
+			createSession({});
 
-			const result = session.resolveRoleModelWithThinking("plan");
+			const result = session.resolveHelperModel("plan");
 
-			expect(result.model).toBeUndefined();
+			expect(result?.model).toBe(session.model!);
+			expect(result?.inherited).toBe(true);
 		});
 
-		// A suffix the model cannot take is still the operator asking for a level, so it
-		// stays explicit and resolves to one the model declares. Silently reporting no
-		// level at all would put plan mode back on the model's own default.
-		it("resolves a level the model does not declare to one it does, still as explicit", () => {
+		// A suffix the model cannot take is still a request for a level, so it
+		// resolves to one the model declares. Silently reporting no level at all
+		// would put plan mode back on the model's own default.
+		it("resolves a level the model does not declare to one it does", () => {
 			if (!UNDECLARED_EFFORT) throw new Error("Expected a level outside the model's declared set");
-			createSessionWithRoles({ plan: `anthropic/${MODEL_ID}:${UNDECLARED_EFFORT}` });
+			withPlanModel(`anthropic/${MODEL_ID}:${UNDECLARED_EFFORT}`);
 
-			const result = session.resolveRoleModelWithThinking("plan");
+			const result = session.resolveHelperModel("plan");
 
-			expect(result.explicitThinkingLevel).toBe(true);
-			expect(result.thinkingLevel).not.toBe(UNDECLARED_EFFORT);
-			expect(DECLARED_EFFORTS).toContain(result.thinkingLevel as Effort);
+			expect(result?.thinkingLevel).not.toBe(UNDECLARED_EFFORT);
+			expect(DECLARED_EFFORTS).toContain(result?.thinkingLevel as Effort);
 		});
+	});
 
-		it("works with the default role", () => {
-			const effort = DECLARED_EFFORTS[0];
-			createSessionWithRoles({ default: `anthropic/${MODEL_ID}:${effort}` });
+	it("resolveDefaultModel carries the defaultModel suffix", () => {
+		const effort = DECLARED_EFFORTS[0];
+		createSession({ defaultModel: `anthropic/${MODEL_ID}:${effort}` });
 
-			const result = session.resolveRoleModelWithThinking("default");
-			expect(result.model!.id).toBe(MODEL_ID);
-			expect(result.thinkingLevel).toBe(effort);
-			expect(result.explicitThinkingLevel).toBe(true);
-		});
-
-		it("resolveRoleModel still returns just the model", () => {
-			createSessionWithRoles({ plan: `anthropic/${MODEL_ID}:${DECLARED_EFFORTS[0]}` });
-
-			const model = session.resolveRoleModel("plan");
-			expect(model).toBeDefined();
-			expect(model!.provider).toBe("anthropic");
-			expect(model!.id).toBe(MODEL_ID);
-		});
+		const result = session.resolveDefaultModel();
+		expect(result?.model.id).toBe(MODEL_ID);
+		expect(result?.thinkingLevel).toBe(effort);
 	});
 });

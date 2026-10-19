@@ -16,7 +16,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { moduleSpecifiersIn } from "@veyyon/utils/module-reach";
+import { namedImportsFrom } from "@veyyon/utils/module-reach";
 import {
 	generateRoomKey,
 	generateWriteToken,
@@ -231,6 +231,9 @@ describe("one owner", () => {
 	 * The lock. Both sides bind the frame type and nothing else: a private IV length, algorithm name
 	 * or layout reappearing in either module is the drift this move exists to prevent, and it would
 	 * present as every frame failing to authenticate rather than as anything that names the cause.
+	 * Each side seals and opens through the two functions it imports from here; an import nothing
+	 * uses fails `check:tools`, so a side that imports them seals with them. Not caught: a side that
+	 * keeps the imports for one path and seals by hand on another.
 	 */
 	it("neither side implements the layout again", async () => {
 		const sources = [
@@ -239,12 +242,10 @@ describe("one owner", () => {
 		];
 
 		for (const url of sources) {
-			const source = await Bun.file(url).text();
+			const imported = namedImportsFrom(await Bun.file(url).text(), "@veyyon/wire");
 
-			expect(source).not.toContain("AES-GCM");
-			expect(source).not.toContain("getRandomValues");
-			expect(source).not.toContain("crypto.subtle");
-			expect(moduleSpecifiersIn(source)).toContain("@veyyon/wire");
+			expect(imported).toContain("sealFrame");
+			expect(imported).toContain("openFrame");
 		}
 	});
 
@@ -257,16 +258,16 @@ describe("one owner", () => {
 	 *
 	 * The rule here is narrower than the one above, because share legitimately mints its own key: the
 	 * link fragment carries a per-share key that has nothing to do with a room. What it must not do
-	 * is seal, so `crypto.subtle.encrypt` and a private IV length are what this forbids.
+	 * is seal, so it imports the envelope writer from here. The bytes it uploads are opened by a
+	 * mirror of `share-loader.js` in `packages/coding-agent/test/share.test.ts`, which is where a
+	 * layout drift between the writer and the reader goes red.
 	 */
 	it("session sharing seals through wire rather than rebuilding the envelope", async () => {
 		const source = await Bun.file(
 			new URL("../../../packages/coding-agent/src/export/share.ts", import.meta.url),
 		).text();
 
-		expect(source).not.toContain("crypto.subtle.encrypt");
-		expect(source).not.toContain("IV_LENGTH");
-		expect(moduleSpecifiersIn(source)).toContain("@veyyon/wire");
+		expect(namedImportsFrom(source, "@veyyon/wire")).toContain("sealBytes");
 	});
 
 	/**

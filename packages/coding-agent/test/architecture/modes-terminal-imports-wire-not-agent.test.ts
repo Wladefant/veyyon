@@ -51,14 +51,18 @@ const LEGACY_RUNTIME_READERS: readonly string[] = [
 	"components/dialogs/advisor-config.ts",
 	"components/dialogs/pause-screen.ts",
 	"components/extensions/inspector-panel.ts",
+	// Carved out of settings-selector.ts, keeping the imports they already used.
+	"components/selectors/agents-submenu.ts",
 	"components/selectors/effort-picker.ts",
 	"components/selectors/model-browser.ts",
+	"components/selectors/model-chain-submenu.ts",
 	"components/selectors/model-hub.ts",
 	"components/selectors/model-picker.ts",
 	"components/selectors/model-selector.ts",
 	"components/selectors/oauth-selector.ts",
 	"components/selectors/session-selector.ts",
 	"components/selectors/settings-selector.ts",
+	"components/selectors/settings-submenus.ts",
 	"components/selectors/thinking-selector.ts",
 	"components/selectors/tree-selector.ts",
 	"components/transcript/cache-invalidation-marker.ts",
@@ -66,17 +70,47 @@ const LEGACY_RUNTIME_READERS: readonly string[] = [
 	"components/transcript/compaction-summary-message.ts",
 	"components/transcript/tool-execution.ts",
 	"components/transcript/usage-row.ts",
+	// Carved out of selector-controller.ts, keeping the imports it already used.
+	"controllers/account-flows.ts",
 	"controllers/btw-controller.ts",
 	"controllers/command-controller.ts",
+	// Carved out of input-controller.ts, keeping the imports it already used.
+	"controllers/composer-escape.ts",
+	// Carved out of input-controller.ts, keeping the imports it already used.
+	"controllers/composer-paste.ts",
+	// Drives the session's composer prediction side request at each turn end, as btw-controller drives /btw.
+	"controllers/composer-prediction-controller.ts",
 	"controllers/event-controller.ts",
 	"controllers/extension-ui-controller.ts",
 	"controllers/goal-mode-controller.ts",
 	"controllers/input-controller.ts",
 	"controllers/omfg-rule.ts",
+	// Carved out of interactive-mode.ts, keeping the imports it already used.
+	"controllers/plan-mode-controller.ts",
+	// Carved out of input-controller.ts, keeping the imports it already used.
+	"controllers/prompt-submission.ts",
+	// Carved out of input-controller.ts, keeping the imports it already used.
+	"controllers/queued-submissions.ts",
 	"controllers/selector-controller.ts",
+	// Carved out of selector-controller.ts, keeping the imports it already used.
+	"controllers/session-flows.ts",
 	"controllers/session-focus-controller.ts",
+	// Carved out of command-controller.ts, keeping the imports it already used.
+	"controllers/session-info-view.ts",
+	// Carved out of input-controller.ts, keeping the imports it already used.
+	"controllers/submitted-input.ts",
 	"controllers/tan-command-controller.ts",
+	// Carved out of event-controller.ts, keeping the imports it already used.
+	"controllers/tool-call-cards.ts",
 	"controllers/transcript-composer.ts",
+	// Carved out of event-controller.ts, keeping the imports it already used.
+	"controllers/turn-recovery.ts",
+	// Carved out of event-controller.ts, keeping the imports it already used.
+	"controllers/turn-speech.ts",
+	// Carved out of command-controller.ts, keeping the imports it already used.
+	"controllers/usage-report-view.ts",
+	// Carved out of interactive-mode.ts, keeping the imports it already used.
+	"controllers/vibe-mode-controller.ts",
 	"herdr-reporter.ts",
 	"image-references.ts",
 	"interactive-mode.ts",

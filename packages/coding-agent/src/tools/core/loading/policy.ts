@@ -14,15 +14,15 @@ import { type BuiltinToolName, normalizeToolName, normalizeToolNames, TOOL } fro
  * registry. Callers gather inputs and apply the returned decision. That is the property that
  * makes these rules readable in one sitting and testable without booting an agent — and it is
  * why the adapters that DO read settings (`computeEssentialBuiltinNames` in `tools/index.ts`,
- * `resolveEffectiveToolDiscoveryMode` in `tool-discovery/mode.ts`,
- * `filterToolsByHarnessProfile` in `harness/model-profile.ts`) are one-line wrappers that
+ * `resolveEffectiveToolDiscoveryMode` in `discovery/mode.ts`,
+ * `filterToolsByHarnessProfile` in `registry/model-profile.ts`) are one-line wrappers that
  * gather and delegate rather than deciding anything themselves.
  *
  * WHAT DELIBERATELY STAYED OUTSIDE. Per-tool `createIf` factories keep their own last-line
  * refusals, several of which duplicate a branch of {@link isBuiltinToolAllowed}. That
  * duplication is intentional: `BUILTIN_TOOLS.debug(session)` is public API, so the factory has
  * to refuse on its own or a caller that bypasses `createTools` gets a tool the policy forbids.
- * Registry mutation (`AgentSession.#applyActiveToolsByName`, `refreshMCPTools`,
+ * Registry mutation (`ToolActivation.apply`, `refreshMCPTools`,
  * `refreshSshTool`, vibe/RPC tools, plan-mode swaps) stays with the session for the obvious
  * reason: it mutates private session state, which no pure function can own. The full decision
  * map, including every overlap and every site that resisted, is in `local://tool-load-map.md`.

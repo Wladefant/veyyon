@@ -1,6 +1,6 @@
 import type { Component } from "@veyyon/tui";
 import type { CustomBlock, CustomBlockDisplay } from "@veyyon/wire/presentation";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { buildAsyncResultBlock, buildIrcMessageCard } from "../../utils/transcript-render-helpers";
 import { createAdvisorMessageCard } from "./advisor-message";
 import { createBackgroundTanDispatchBlock } from "./background-tan-message";

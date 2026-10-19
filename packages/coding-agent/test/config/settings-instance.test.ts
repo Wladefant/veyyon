@@ -24,6 +24,7 @@
 
 import { afterEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
+import { moduleSpecifiersIn, namedImportsFrom, typeOnlyModuleSpecifiersIn } from "@veyyon/utils/module-reach";
 import { resetSettingsForTest, Settings } from "../../src/config/settings";
 import {
 	isSettingsInitialized,
@@ -228,8 +229,7 @@ describe("the slot module is a leaf", () => {
 	 */
 	it("imports nothing at runtime", async () => {
 		const source = await Bun.file(LEAF).text();
-		const runtimeImports = [...source.matchAll(/^import\s+(?!type\b)[^;]*from\s+"([^"]+)"/gm)].map(m => m[1]);
-		expect(runtimeImports).toEqual([]);
+		expect(moduleSpecifiersIn(source)).toEqual([]);
 	});
 
 	/**
@@ -240,8 +240,8 @@ describe("the slot module is a leaf", () => {
 	 */
 	it("names the store type-only", async () => {
 		const source = await Bun.file(LEAF).text();
-		expect(source).toContain('import type { Settings } from "./settings";');
-		expect(source).not.toMatch(/^import \{[^}]*\} from "\.\/settings";/m);
+		expect(typeOnlyModuleSpecifiersIn(source)).toEqual(["./settings"]);
+		expect(namedImportsFrom(source, "./settings")).toEqual(["Settings"]);
 	});
 
 	/**

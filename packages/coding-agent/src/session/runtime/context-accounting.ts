@@ -170,15 +170,15 @@ export class ContextAccounting {
 	 * prompt tokens over bytes the rewrite has since removed, so an anchor at or before the rewrite
 	 * reads high by exactly what was freed. Only a response received after the rewrite describes the
 	 * current shape.
+	 *
+	 * One walk back from the leaf finds it and stops at the first floor it reaches, so a gauge drawn
+	 * every frame reads only the entries after the newest anchor, never the whole branch.
 	 */
 	#anchor(branchEntries: SessionEntry[]): AssistantMessage | undefined {
-		const latestCompaction = getLatestCompactionEntry(branchEntries);
-		const compactionIndex = latestCompaction ? branchEntries.lastIndexOf(latestCompaction) : -1;
 		const rewriteBoundaryId = this.#rewriteBoundaryEntryId;
-		const rewriteIndex = rewriteBoundaryId ? branchEntries.findIndex(entry => entry.id === rewriteBoundaryId) : -1;
-		const anchorFloorIndex = Math.max(compactionIndex, rewriteIndex);
-		for (let i = branchEntries.length - 1; i > anchorFloorIndex; i--) {
+		for (let i = branchEntries.length - 1; i >= 0; i--) {
 			const entry = branchEntries[i];
+			if (entry.type === "compaction" || entry.id === rewriteBoundaryId) return undefined;
 			if (entry.type === "message" && usableAnchor(entry.message)) return entry.message;
 		}
 		return undefined;

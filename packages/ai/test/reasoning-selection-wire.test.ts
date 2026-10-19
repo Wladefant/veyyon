@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { streamGoogle } from "@veyyon/ai/providers/google";
+import type { GoogleGeminiCliOptions } from "@veyyon/ai/providers/google-gemini-cli";
 import { mapOptionsForApi } from "@veyyon/ai/stream";
 import type { AssistantMessageEvent, Context, FetchImpl, Model } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
@@ -73,6 +74,36 @@ describe("canonical reasoning selection reaches provider wire requests", () => {
 			includeThoughts: true,
 			thinkingLevel: "MINIMAL",
 		});
+	});
+
+	/**
+	 * A `google-level` model that can be switched off at the request level (no `requiresEffort`) still
+	 * receives a level, and it must be one the model declares: `MINIMAL` on a ladder that starts at
+	 * `low` is a level the endpoint rejects. Swept over every ladder shape, on the direct API and on
+	 * the Cloud Code Assist suppress path.
+	 */
+	it.each([
+		[[Effort.Minimal, Effort.Low, Effort.Medium, Effort.High], "MINIMAL"],
+		[[Effort.Low, Effort.High], "LOW"],
+		[[Effort.Low, Effort.Medium, Effort.High], "LOW"],
+		[[Effort.High, Effort.Low], "LOW"],
+	] as const)("sends the lowest declared level when thinking is off on %j", async (efforts, level) => {
+		const base = googleModel("gemini-3-pro");
+		if (!base.thinking) throw new Error("fixture declares no thinking surface");
+		const direct: Model<"google-generative-ai"> = {
+			...base,
+			thinking: { ...base.thinking, mode: "google-level", requiresEffort: false, efforts: [...efforts] },
+		};
+		expect(await captureGoogleThinkingConfig(direct)).toEqual({ includeThoughts: false, thinkingLevel: level });
+
+		const cca = {
+			...direct,
+			api: "google-gemini-cli",
+			provider: "google-antigravity",
+			thinking: { ...direct.thinking, suppressWhenOff: true },
+		} as Model<"google-gemini-cli">;
+		const options: GoogleGeminiCliOptions = mapOptionsForApi(cca, { apiKey: "test", disableReasoning: true });
+		expect(options.thinking).toEqual({ enabled: false, suppress: { level } });
 	});
 
 	/** Regression: Bedrock option mapping and direct serialization must use the same extra-high token budget. */

@@ -251,35 +251,16 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
-	test("resolves deferred role-alias modelPattern after extension providers register", async () => {
-		const settings = Settings.isolated();
-		settings.setModelRole("smol", "runtime-provider/runtime-model");
-
-		const { session, modelFallbackMessage } = await createAgentSession({
-			...(await buildSessionOptions("@smol")),
-			settings,
-		});
-
-		try {
-			expect(session.model?.provider).toBe("runtime-provider");
-			expect(session.model?.id).toBe("runtime-model");
-			expect(modelFallbackMessage).toBeUndefined();
-		} finally {
-			await session.dispose();
-		}
-	});
-
 	test("installs fallback chain for remaining deferred agent modelPattern candidates", async () => {
 		const { session } = await createAgentSession({
 			...(await buildSessionOptions(["runtime-provider/runtime-model", "runtime-provider/runtime-reasoning-model"])),
-			modelPatternFallbackRole: "agent:deferred",
+			modelPatternFallbackChain: true,
 		});
 
 		try {
 			expect(session.model?.provider).toBe("runtime-provider");
 			expect(session.model?.id).toBe("runtime-model");
-			expect(session.settings.getModelRole("agent:deferred")).toBe("runtime-provider/runtime-model");
-			expect(session.settings.get("retry.fallbackChains")["agent:deferred"]).toEqual([
+			expect(session.settings.get("retry.fallbackChains")["runtime-provider/runtime-model"]).toEqual([
 				"runtime-provider/runtime-reasoning-model",
 			]);
 		} finally {
@@ -290,14 +271,13 @@ describe("createAgentSession deferred model pattern resolution", () => {
 	test("splits deferred comma-delimited modelPattern and installs fallback chain", async () => {
 		const { session } = await createAgentSession({
 			...(await buildSessionOptions("runtime-provider/runtime-model,runtime-provider/runtime-reasoning-model")),
-			modelPatternFallbackRole: "agent:deferred",
+			modelPatternFallbackChain: true,
 		});
 
 		try {
 			expect(session.model?.provider).toBe("runtime-provider");
 			expect(session.model?.id).toBe("runtime-model");
-			expect(session.settings.getModelRole("agent:deferred")).toBe("runtime-provider/runtime-model");
-			expect(session.settings.get("retry.fallbackChains")["agent:deferred"]).toEqual([
+			expect(session.settings.get("retry.fallbackChains")["runtime-provider/runtime-model"]).toEqual([
 				"runtime-provider/runtime-reasoning-model",
 			]);
 		} finally {
@@ -305,10 +285,9 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
-	test("does not apply default role thinking override when modelPattern is explicit", async () => {
+	test("does not apply the default model's thinking override when modelPattern is explicit", async () => {
 		const settings = Settings.isolated({ defaultThinkingLevel: "off" });
-		settings.setModelRole("smol", "runtime-provider/runtime-reasoning-model");
-		settings.setModelRole("default", "@smol:high");
+		settings.setDefaultModel("runtime-provider/runtime-reasoning-model:high");
 
 		const { session } = await createAgentSession({
 			...(await buildSessionOptions("runtime-provider/runtime-reasoning-model")),
@@ -398,7 +377,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		authStorage.setRuntimeApiKey(defaultModel.provider, "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
 		const settings = Settings.isolated();
-		settings.setModelRole("default", `${defaultModel.provider}/${defaultModel.id}`);
+		settings.setDefaultModel(`${defaultModel.provider}/${defaultModel.id}`);
 
 		const getApiKeySpy = vi
 			.spyOn(modelRegistry, "getApiKey")
@@ -481,7 +460,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			fetch: fetchMock,
 		});
 		const settings = Settings.isolated();
-		settings.setModelRole("default", "llama.cpp/vision-model");
+		settings.setDefaultModel("llama.cpp/vision-model");
 
 		expect(modelRegistry.find("llama.cpp", "vision-model")?.input).toEqual(["text"]);
 		const { session } = await createAgentSession({
@@ -838,7 +817,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		const sessionManager = await SessionManager.open(targetSessionFile, path.join(tempDir, "sessions-no-default"));
 
 		const settings = Settings.isolated();
-		settings.setModelRole("default", `${settingsDefaultModel.provider}/${settingsDefaultModel.id}`);
+		settings.setDefaultModel(`${settingsDefaultModel.provider}/${settingsDefaultModel.id}`);
 
 		const { session } = await createAgentSession({
 			cwd: tempDir,

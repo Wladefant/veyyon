@@ -9,6 +9,7 @@ import type {
 import type { ImageContent, TextContent } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy } from "@veyyon/utils/abortable";
+import { clampLow } from "@veyyon/utils/math";
 import { readImageMetadata } from "@veyyon/utils/mime";
 import * as prompt from "@veyyon/utils/prompt";
 import { errorMessage } from "@veyyon/utils/type-guards";
@@ -19,7 +20,7 @@ import { parseInternalUrl } from "../../internal-urls/parse";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "../../sdk";
 import { DEFAULT_MAX_LINES } from "../../session/streaming-output";
-import { resolveFileDisplayMode } from "../../utils/file-display-mode";
+import { type FileDisplayMode, resolveFileDisplayMode } from "../../utils/file-display-mode";
 import {
 	type DelimitedPathSplitOptions,
 	expandDelimitedPathEntriesSync,
@@ -44,6 +45,7 @@ import { parseConflictUri } from "./conflict-detect";
 import { readConflictRegion, readFileConflicts } from "./read-conflicts";
 import { readArchive, readSqlite } from "./read-containers";
 import { readDirectory } from "./read-directory";
+import { refuseReadStillInContext } from "./read-in-context";
 import {
 	buildInMemoryMultiRangeResult,
 	buildInMemoryTextResult,
@@ -124,28 +126,30 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 	// Every path this call can reach is a declared target or lives under one.
 	readonly label = "Read";
 	readonly loadMode = "essential";
-	readonly description: string;
 	get parameters(): typeof readSchema.value {
 		return readSchema.value;
 	}
 	readonly strict = true;
 
 	readonly #ctx: ReadContext;
+	readonly #displayMode: FileDisplayMode;
 
 	constructor(private readonly session: ToolSession) {
-		const displayMode = resolveFileDisplayMode(session);
+		this.#displayMode = resolveFileDisplayMode(session);
 		const autoResizeImages = session.settings.get("images.autoResize");
-		const defaultLimit = Math.max(
-			1,
-			Math.min(session.settings.get("read.defaultLimit") ?? DEFAULT_MAX_LINES, DEFAULT_MAX_LINES),
-		);
+		const defaultLimit = clampLow(session.settings.get("read.defaultLimit"), 1, DEFAULT_MAX_LINES);
 		const inspectImageEnabled = session.settings.get("inspect_image.enabled");
 		this.#ctx = { session, defaultLimit, autoResizeImages, inspectImageEnabled };
-		this.description = prompt.render(toolsPrompts["tools/read"].text, {
-			DEFAULT_LIMIT: String(defaultLimit),
-			IS_HL_MODE: displayMode.hashLines,
-			IS_LINE_NUMBER_MODE: !displayMode.hashLines && displayMode.lineNumbers,
-			INSPECT_IMAGE_ENABLED: inspectImageEnabled,
+	}
+
+	/** Rendered on each read so the text follows the session's active tools, as bash's does. */
+	get description(): string {
+		return prompt.render(toolsPrompts["tools/read"].text, {
+			DEFAULT_LIMIT: String(this.#ctx.defaultLimit),
+			IS_HL_MODE: this.#displayMode.hashLines,
+			IS_LINE_NUMBER_MODE: !this.#displayMode.hashLines && this.#displayMode.lineNumbers,
+			INSPECT_IMAGE_ENABLED: this.#ctx.inspectImageEnabled,
+			hasBrowser: this.session.isToolActive?.("browser") ?? this.session.settings.get("browser.enabled"),
 		});
 	}
 
@@ -175,12 +179,15 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 
 		for (const part of parts) {
 			try {
-				// Directory params apply per entry: every delimited part re-enters
-				// execute with the same `depth`/`limit` the caller asked for.
-				const result = await this.execute(
-					"read-delimited-part",
+				// Directory params apply per entry: every delimited part re-enters the
+				// read with the same `depth`/`limit` the caller asked for. A part is
+				// never refused as still in context: the combined result is one read of
+				// every part to supersede pruning, which would then blank the earlier
+				// result a refused part pointed back to.
+				const result = await this.#read(
 					{ path: part, depth: directory.depth, limit: directory.limit },
 					signal,
+					false,
 				);
 				displayReadTargets.push(result.details?.suffixResolution?.to ?? part);
 				for (const block of result.content) {
@@ -321,12 +328,21 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 		return executeReadUrl(this.session, cacheKey, signal);
 	}
 
-	async execute(
+	execute(
 		_toolCallId: string,
 		params: ReadParams,
 		signal?: AbortSignal,
 		_onUpdate?: AgentToolUpdateCallback<ReadToolDetails>,
 		_toolContext?: AgentToolContext,
+	): Promise<AgentToolResult<ReadToolDetails>> {
+		return this.#read(params, signal, true);
+	}
+
+	/** `refuseInContext` is false only for a part of a delimited list; see `#tryReadDelimitedPaths`. */
+	async #read(
+		params: ReadParams,
+		signal: AbortSignal | undefined,
+		refuseInContext: boolean,
 	): Promise<AgentToolResult<ReadToolDetails>> {
 		const readPath = params.path.startsWith("file://") ? expandPath(params.path) : params.path;
 		const conflictUri = parseConflictUri(readPath);
@@ -346,8 +362,10 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 
 		const routed = await this.#routeInternalUrl(readPath, params, signal);
 		if (routed.kind === "handled") return routed.result;
-		if (routed.kind === "promoted") return this.#readFilesystemPath(routed.readPath, routed.selector, params, signal);
-		return this.#readFilesystemPath(readPath, undefined, params, signal);
+		if (routed.kind === "promoted") {
+			return this.#readFilesystemPath(routed.readPath, routed.selector, params, signal, refuseInContext);
+		}
+		return this.#readFilesystemPath(readPath, undefined, params, signal, refuseInContext);
 	}
 
 	/**
@@ -361,6 +379,7 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 		promotedSelector: string | undefined,
 		params: ReadParams,
 		signal: AbortSignal | undefined,
+		refuseInContext: boolean,
 	): Promise<AgentToolResult<ReadToolDetails>> {
 		// One suffix-glob memo per read call — archive, sqlite, and plain-path
 		// resolution share misses instead of re-globbing the workspace.
@@ -406,7 +425,10 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 			return readFileConflicts(this.session, resolved.absolutePath, resolved.suffixResolution, signal);
 		}
 		const outcome = await this.#readFileContent(readPath, target.path, resolved, parsed, signal);
-		return outcome.kind === "result" ? outcome.result : finishLocalRead(outcome.read, resolved.suffixResolution);
+		const result =
+			outcome.kind === "result" ? outcome.result : finishLocalRead(outcome.read, resolved.suffixResolution);
+		if (refuseInContext) refuseReadStillInContext(this.session, result, resolved.absolutePath, readPath);
+		return result;
 	}
 
 	/** Read a member of an archive, a SQLite database or a PDF's extracted images, when the path names one. */

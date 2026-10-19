@@ -1,4 +1,5 @@
 import { getInstallId } from "@veyyon/utils/dirs";
+import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import type { DiscoveryFailure, DiscoveryHooks, DiscoveryReport } from "../discovery/failure";
@@ -34,7 +35,15 @@ import type {
 	Provider,
 	ThinkingConfig,
 } from "../types";
-import { discoveryFetch, isAnthropicOAuthToken, isRecord, toBoolean, toNumber, toPositiveNumber } from "../utils";
+import {
+	discoveryFetch,
+	isAnthropicOAuthToken,
+	isRecord,
+	toBoolean,
+	toNonEmptyString,
+	toNumber,
+	toPositiveNumber,
+} from "../utils";
 import { CODEX_BASE_URL } from "../wire/codex";
 import { coreWeaveProjectHeaders } from "../wire/coreweave";
 import {
@@ -46,6 +55,7 @@ import {
 	parseGitHubCopilotApiKey,
 } from "../wire/github-copilot";
 import { getOpenCodeUserAgent, openCodeSessionHeaderValue } from "../wire/opencode-headers";
+import { resolveKimiCodeEndpoint } from "../wire/kimi-code";
 import { basetenRouteReasoning } from "./baseten-reasoning";
 import { createBundledReferenceMap, createReferenceResolver, toModelSpec } from "./bundled-references";
 import { filterModelsDevCatalogRows } from "./models-dev-policies";
@@ -65,24 +75,6 @@ async function readDiscoveryJson(response: Response, report: DiscoveryReport): P
 }
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
-
-/**
- * Uses a cancellable timer rather than the native abort-timeout helper so
- * successful fast discovery requests do not leave armed timeout signals for
- * concurrent GC to trip over later.
- */
-async function withCatalogDiscoveryTimeout<T>(timeoutMs: number, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
-	const controller = new AbortController();
-	const timer = setTimeout(
-		() => controller.abort(new DOMException("The operation timed out.", "TimeoutError")),
-		timeoutMs,
-	);
-	try {
-		return await run(controller.signal);
-	} finally {
-		clearTimeout(timer);
-	}
-}
 
 const ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1";
 const ANTHROPIC_OAUTH_BETA =
@@ -1942,7 +1934,7 @@ function applyXAIOAuthCuration(dynamic: readonly ModelSpec<"openai-responses">[]
  * - \`packages/catalog/scripts/generate-models.ts\` (bundles the same entries into
  *   `models.json`, so the synchronous `ModelRegistry.#loadModels()` boot path
  *   sees `xai-oauth` without waiting for a refresh — fixes the boot-time
- *   default-model reset when `modelRoles.default = "xai-oauth/<id>"`).
+ *   default-model reset when `defaultModel = "xai-oauth/<id>"`).
  *
  * `reasoning` defaults to `true` for the Grok-4.x family; the explicit
  * `grok-4.20-0309-non-reasoning` entry opts out via `XAICuratedModel.reasoning`.
@@ -1990,7 +1982,7 @@ export function xaiOAuthModelManagerOptions(
 	// `config.apiKey` at construction time, and OAuth tokens resolve later via
 	// AuthStorage). \`generate-models.ts\` calls the same builder so \`models.json\`
 	// carries these entries too — making the synchronous `#loadModels()` boot
-	// path honor `modelRoles.default = "xai-oauth/<id>"` without `await refresh()`.
+	// path honor `defaultModel = "xai-oauth/<id>"` without `await refresh()`.
 	const staticModels = buildXaiOAuthStaticSeed(resolvedBaseUrl);
 	if (!base.fetchDynamicModels) {
 		return { ...base, staticModels };
@@ -3368,8 +3360,9 @@ export interface KimiCodeModelManagerConfig {
 export function kimiCodeModelManagerOptions(
 	config?: KimiCodeModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
-	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "https://api.kimi.com/coding/v1";
+	// A global credential's key names kimi.ai, and its token lists models only there. An empty key
+	// resolves to the configured deployment and skips discovery below.
+	const { apiKey, baseUrl } = resolveKimiCodeEndpoint(config?.apiKey ?? "", config?.baseUrl);
 	const references = createBundledReferenceMap<"openai-completions">("kimi-code");
 	return {
 		providerId: "kimi-code",
@@ -3519,7 +3512,7 @@ export async function fetchLmStudioNativeModelMetadata(
 	if (options?.signal !== undefined) {
 		return fetchMetadata(options.signal);
 	}
-	return withCatalogDiscoveryTimeout(LM_STUDIO_NATIVE_METADATA_TIMEOUT_MS, fetchMetadata);
+	return withScopedTimeoutSignal(LM_STUDIO_NATIVE_METADATA_TIMEOUT_MS, fetchMetadata);
 }
 
 export interface LmStudioModelManagerConfig {
@@ -4614,14 +4607,6 @@ function mapLiteLLMOpenAICompatibleModel<TApi extends Api>(
 	};
 }
 
-function toNonEmptyString(value: unknown): string | undefined {
-	if (typeof value !== "string") {
-		return undefined;
-	}
-	const trimmed = value.trim();
-	return trimmed.length > 0 ? trimmed : undefined;
-}
-
 function extractLiteLLMRichEntries(payload: unknown): LiteLLMRichModelEntry[] | null {
 	if (Array.isArray(payload)) {
 		return payload.flatMap(entry => (isRecord(entry) ? [entry] : []));
@@ -4944,7 +4929,7 @@ export async function fetchLiteLLMRichModels<TApi extends Api>(
 	if (options.signal !== undefined) {
 		return fetchModels(options.signal);
 	}
-	return options.timeoutMs !== undefined ? withCatalogDiscoveryTimeout(options.timeoutMs, fetchModels) : fetchModels();
+	return options.timeoutMs !== undefined ? withScopedTimeoutSignal(options.timeoutMs, fetchModels) : fetchModels();
 }
 
 function resolveLiteLLMBaseUrl(baseUrl?: string): string {

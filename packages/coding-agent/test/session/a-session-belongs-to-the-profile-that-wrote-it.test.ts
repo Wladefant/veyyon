@@ -97,6 +97,10 @@ for (const layout of LAYOUTS) {
 		beforeEach(async () => {
 			originalProjectDir = getProjectDir();
 			snapshot = captureDirOverrides();
+			// Switching a primary session to a seeded transcript moves the process into that
+			// transcript's directory, which lives under the isolated root. The process is put
+			// back before the root is deleted, or every later file runs in a removed cwd.
+			originalProjectDir = getProjectDir();
 			isolated = enterIsolatedConfigRoot("session-profile-ownership", { defaultProfile: true });
 			launchCwd = path.join(isolated.root, "launch");
 			fs.mkdirSync(launchCwd, { recursive: true });

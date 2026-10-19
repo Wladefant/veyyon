@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { normalizeAnthropicToolSchema } from "@veyyon/ai/providers/anthropic";
+import { normalizeAnthropicToolSchema } from "@veyyon/ai/providers/anthropic-tool-schema";
 import type { Tool } from "@veyyon/ai/types";
 import {
 	adaptSchemaForStrict,

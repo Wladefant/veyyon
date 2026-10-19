@@ -380,7 +380,7 @@ export class ThinkingRuntime {
 
 	/**
 	 * Classify the current user turn and set the effective thinking level for it.
-	 * Bounded by a timeout + abort; on any failure (no smol model, timeout, parse
+	 * Bounded by a timeout + abort; on any failure (no helper model, timeout, parse
 	 * error) it falls back to the provisional concrete level and continues. Never
 	 * throws into the turn, and never clears {@link isAuto} (auto stays active).
 	 */

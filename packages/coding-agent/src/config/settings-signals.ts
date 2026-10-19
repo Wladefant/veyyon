@@ -37,11 +37,11 @@ export const appendOnlyModeSignal = new SettingSignal<[value: string]>("provider
  */
 export const onAppendOnlyModeChanged = (cb: (value: string) => void) => appendOnlyModeSignal.on(cb);
 
-/** Fires when any model role changes at runtime. */
-export const modelRolesSignal = new SettingSignal("modelRoles");
+/** Fires when `agent.helpers` changes at runtime. */
+export const helperModelsSignal = new SettingSignal("agent.helpers");
 
-/** Subscribe to model role changes. Returns an unsubscribe function. */
-export const onModelRolesChanged: (cb: () => void) => () => void = modelRolesSignal.on.bind(modelRolesSignal);
+/** Subscribe to helper model and effort changes. Returns an unsubscribe function. */
+export const onHelperModelsChanged: (cb: () => void) => () => void = helperModelsSignal.on.bind(helperModelsSignal);
 
 /** Fires when `statusLine.sessionAccent` changes at runtime. */
 export const statusLineSessionAccentSignal = new SettingSignal("statusLine.sessionAccent");

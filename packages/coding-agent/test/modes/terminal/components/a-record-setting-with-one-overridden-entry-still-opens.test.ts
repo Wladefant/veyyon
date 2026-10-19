@@ -2,8 +2,8 @@
  * WHY: a record setting holds independent entries, and the store deep-merges its
  * layers entry by entry. `/settings` used to mark the whole row read-only as soon
  * as ANY entry came from a runtime override or a `--config` file, and dropped its
- * submenu, so Enter opened nothing. One role the app assigned at runtime made every
- * other role in Role Models unreachable.
+ * submenu, so Enter opened nothing. One entry the app set at runtime made every
+ * other entry in the record unreachable.
  *
  * Class closed: every record-typed row the settings screen draws, enumerated from
  * the schema at run time, opens its editor under an override from either layer.
@@ -34,6 +34,7 @@ import { isRecordSetting } from "@veyyon/coding-agent/modes/terminal/components/
 import { getAllSettingDefs } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-defs";
 import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
 import { discoverAgents } from "@veyyon/coding-agent/task/discovery";
+import { HELPER_IDS } from "@veyyon/coding-agent/task/helper-settings";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { SettingTab } from "@veyyon/settings";
 import * as YAML from "yaml";
@@ -205,22 +206,6 @@ function textRecord(overrideValue: unknown, profileValue: unknown): Scenario {
 
 /** One scenario per record-typed row, built fresh for each case. */
 const SCENARIOS: Record<string, () => Scenario | Promise<Scenario>> = {
-	modelRoles: () => ({
-		override: { smol: "test/reasoning-model" },
-		profile: {},
-		async exercise({ component }, label) {
-			expect(lineWith(component, "Fast")).toContain(`${label} · read-only`);
-			expect(lineWith(component, "Thinking")).not.toContain("read-only");
-
-			// The overridden role is the first row: Enter on it opens no picker.
-			component.handleInput(ENTER);
-			expect(frameOf(component)).not.toContain("Fast model");
-			// A sibling role still opens its picker.
-			component.handleInput(DOWN);
-			component.handleInput(ENTER);
-			expect(frameOf(component)).toContain("Thinking model");
-		},
-	}),
 	defaultEffort: () => ({
 		override: { "test/reasoning-model": "high" },
 		profile: { "*": "low" },
@@ -290,7 +275,10 @@ async function agentScenario(): Promise<Scenario> {
 		override: { [overridden!]: { enabled: false } },
 		profile: { [free!]: { thinkingLevel: "low" } },
 		async exercise({ component, changes }, label, setting) {
-			await until(() => agentRow(component, free!) !== undefined);
+			// Discovery reports, then the Helpers section leads the roster: step past it so the
+			// list scrolls to the first agent, the overridden one.
+			await until(() => frameOf(component).includes("Session Title"));
+			for (let i = 0; i < HELPER_IDS.length; i++) component.handleInput(DOWN);
 			expect(agentRow(component, overridden!)).toContain(`${label} · read-only`);
 			expect(agentRow(component, free!)).not.toContain("read-only");
 

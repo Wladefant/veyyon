@@ -157,7 +157,6 @@ describe("agent.agents settings surface", () => {
 	 * a test timeout instead of a flaky sleep.
 	 */
 	async function openRoster(
-		present: string,
 		/** Every settings path the surface reports having written, in order. */
 		changed: string[] = [],
 	): Promise<{
@@ -186,7 +185,7 @@ describe("agent.agents settings surface", () => {
 		component.openTab("agents");
 		expect(component.selectSetting("agent.agents")).toBe(true);
 		component.handleInput("\n");
-		while (!paneLines(component).some(line => line.includes(present))) {
+		while (paneLines(component).some(line => line.includes("Reading agents"))) {
 			await rendered.promise;
 			rendered = Promise.withResolvers<void>();
 		}
@@ -214,16 +213,15 @@ describe("agent.agents settings surface", () => {
 	}
 
 	/**
-	 * The screen is named for what it configures. "Agents" over a list of agents,
-	 * inside a tab called Agents, is two names for one thing, and a heading is the
-	 * string a reader cannot skip. The schema sweep above cannot see these: both
-	 * headings are drawn by the submenu, not by a `ui.label`.
+	 * The screen is named for what it configures. The roster lists helpers and agents, so it is the
+	 * Roster, and the page for one agent is headed with that agent's name. A heading is the string a
+	 * reader cannot skip. The schema sweep above cannot see these: both headings are drawn by the
+	 * submenu, not by a `ui.label`.
 	 */
-	it("heads the roster and the per-agent editor with the word agent", async () => {
-		const { component, selectRow } = await openRoster("designer");
+	it("heads the roster as the Roster and the per-agent editor with the word agent", async () => {
+		const { component, selectRow } = await openRoster();
 		const roster = paneLines(component).map(line => line.trim());
-		expect(roster).toContain("Agents");
-		expect(roster).not.toContain("Subagents");
+		expect(roster).toContain("Roster");
 
 		selectRow("designer");
 		component.handleInput("\n");
@@ -239,7 +237,7 @@ describe("agent.agents settings surface", () => {
 	 */
 	it("opens a lane's effort picker on the level that lane stores, not on Inherit", async () => {
 		settings.set("agent.agents", { designer: { thinkingLevel: "medium" } });
-		const { component, selectRow } = await openRoster("designer");
+		const { component, selectRow } = await openRoster();
 
 		selectRow("designer");
 		component.handleInput("\n");
@@ -276,7 +274,7 @@ describe("agent.agents settings surface", () => {
 				.split(/\s{2,}/)[0]
 				?.trim() ?? "";
 		const nestingRow = async (): Promise<string> => {
-			const { component, selectRow } = await openRoster("designer");
+			const { component, selectRow } = await openRoster();
 			selectRow("designer");
 			component.handleInput("\n");
 			const row = paneLines(component).find(line => labelOf(line) === "Agents");
@@ -309,7 +307,9 @@ describe("agent.agents settings surface", () => {
 	it("lists agents and offers no row that reaches more than one", async () => {
 		settings.set("agent.model", ["anthropic/claude-sonnet-4"]);
 		settings.set("agent.thinkingLevel", "high");
-		const { component } = await openRoster("designer");
+		const { component, selectRow } = await openRoster();
+		// The helpers lead the list; the agents scroll into the window below them.
+		selectRow("designer");
 		const lines = paneLines(component);
 
 		expect(lines.some(line => line.includes("designer"))).toBe(true);
@@ -330,7 +330,7 @@ describe("agent.agents settings surface", () => {
 	it("replaces an agent's Model and Effort rows with a signpost while the switch is on", async () => {
 		settings.set("agent.sharedModel", true);
 		settings.set("agent.agents", { designer: { model: "anthropic/claude-sonnet-4" } });
-		const { component, selectRow } = await openRoster("designer");
+		const { component, selectRow } = await openRoster();
 		selectRow("designer");
 		component.handleInput("\n");
 		const labels = paneLines(component).map(
@@ -351,7 +351,7 @@ describe("agent.agents settings surface", () => {
 	it("draws an agent's Model and Effort rows while the switch is off", async () => {
 		settings.set("agent.sharedModel", false);
 		settings.set("agent.agents", { designer: { model: "anthropic/claude-sonnet-4" } });
-		const { component, selectRow } = await openRoster("designer");
+		const { component, selectRow } = await openRoster();
 		selectRow("designer");
 		component.handleInput("\n");
 		const labels = paneLines(component).map(
@@ -376,7 +376,7 @@ describe("agent.agents settings surface", () => {
 	 * a hint whose second half is off-screen names nothing.
 	 */
 	it("says an operator may write an agent, and names where the instructions are", async () => {
-		const { component } = await openRoster("designer");
+		const { component } = await openRoster();
 		const pane = paneLines(component).join(" ").replace(/\s+/g, " ");
 
 		expect(pane).toContain("Write your own");
@@ -394,7 +394,7 @@ describe("agent.agents settings surface", () => {
 		settings.unset("agent.thinkingLevel");
 		settings.unset("agent.agents");
 		const changed: string[] = [];
-		const { component, selectRow } = await openRoster("designer", changed);
+		const { component, selectRow } = await openRoster(changed);
 		selectRow("designer");
 		component.handleInput("\n");
 		expect(paneLines(component).some(line => line.includes("Change it in"))).toBe(false);

@@ -4,6 +4,7 @@
 
 import type { AgentToolResult } from "@veyyon/agent-core";
 import type { ImageContent, TextContent } from "@veyyon/ai";
+import { formatBytes } from "@veyyon/utils/format";
 import type { ImageMetadata } from "@veyyon/utils/mime";
 import { readEditableNotebookText } from "../../edit/notebook";
 import type { ToolSession } from "../../sdk";
@@ -15,7 +16,6 @@ import {
 } from "../../utils/image-loading";
 import { convertFileWithMarkit } from "../../utils/markit";
 import { formatPathRelativeToCwd, type ParsedSelector } from "../core/path-utils";
-import { formatBytes } from "../core/render-utils";
 import { ToolError } from "../core/tool-errors";
 import { buildInMemoryResult } from "./read-in-memory";
 import { rewritePdfImagePlaceholders } from "./read-pdf-images";

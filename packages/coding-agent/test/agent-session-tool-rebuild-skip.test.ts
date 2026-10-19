@@ -8,6 +8,8 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { type } from "arktype";
 
+// Subject: `session/runtime/tool-activation.ts`, driven through `AgentSession`.
+//
 // Cache-stability invariant: when MCP servers reconnect with byte-identical tool
 // definitions, `refreshMCPTools` must not rebuild the system prompt. A rebuild
 // invalidates the Anthropic prompt-cache breakpoint placed on the system block
@@ -183,7 +185,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 	// addressed by name so their order carries no meaning for the model, and
 	// several call sites rebuild the active list in a different order than the one
 	// already on the wire (`refreshSshTool` re-pushes `ssh` at the tail,
-	// `#restoreMCPSelectionsForSessionContext` emits every non-MCP tool ahead of
+	// `ToolActivation.restoreMCPSelections` emits every non-MCP tool ahead of
 	// every MCP tool, plan/goal-mode exit replays a saved list). A permutation
 	// changes the serialized prefix without changing its token count, which is
 	// exactly the signature measured on 547 mid-session collapses: the provider
@@ -470,7 +472,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		// SearchToolBm25Tool reads the discoverable MCP tool count, EditTool resolves
 		// through the current edit-mode definition). The signature reads `tool.description`
 		// live each call, so a settings flip that mutates the rendered string MUST differ
-		// the signature on the next `#applyActiveToolsByName`. Defending this contract
+		// the signature on the next `ToolActivation.apply`. Defending this contract
 		// against a future refactor that caches per-tool description strings.
 		let rebuildCount = 0;
 		const { session } = newSession(

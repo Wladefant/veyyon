@@ -1,24 +1,9 @@
 /**
- * Shared HTTP helpers for the auth-gateway routes.
- *
- * Centralized so we share the same JSON shape, auth check,
- * and peer-resolution logic.
+ * HTTP helpers for the auth-gateway routes: response diagnostic headers,
+ * passthrough header capture, prompt-cache identity, and CORS.
  */
-import { timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
 import type { Api, AssistantMessage, Model } from "../types";
 import { GatewaySemanticRedactor } from "./semantic-redaction";
-
-const JSON_HEADERS = {
-	"Content-Type": "application/json",
-	"X-Content-Type-Options": "nosniff",
-} as const;
-
-export function json(status: number, body: unknown, headers?: Record<string, string>): Response {
-	return new Response(JSON.stringify(body) ?? "null", {
-		status,
-		headers: headers ? { ...JSON_HEADERS, ...headers } : JSON_HEADERS,
-	});
-}
 
 /**
  * Diagnostic response headers for translated inference requests, mirroring the
@@ -93,7 +78,6 @@ export function isAuthorized(req: Request, tokens: ReadonlySet<string>): boolean
 	}
 	return ok;
 }
-
 /**
  * Allow-list of inbound request headers that the gateway captures and forwards
  * to the underlying parsers (which decide whether to surface them to the
@@ -123,8 +107,8 @@ const PASSTHROUGH_HEADER_NAMES: Record<string, true> = {
 
 /**
  * Extract allow-listed passthrough headers from an inbound request. Keys are
- * lowercased; empty values are dropped. Called once per request in
- * `handleFormatEndpoint`; parsers then read `options.headers`.
+ * lowercased; empty values are dropped. Every completion route merges the
+ * result under the headers its parser or client already set.
  */
 export function captureRequestHeaders(headers: Headers): Record<string, string> {
 	const out: Record<string, string> = {};

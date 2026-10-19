@@ -1,5 +1,11 @@
 // (Refresh is the sole responsibility of AuthStorage; no provider-direct refresh here.)
+
 import { toNumber } from "@veyyon/catalog/utils";
+import {
+	KIMI_CODE_REGIONS,
+	kimiCodeRegionOfApiEndpoint,
+	kimiCodeRegionOfBaseUrl,
+} from "@veyyon/catalog/wire/kimi-code";
 import { $env } from "@veyyon/utils/env";
 import { clamp01 } from "@veyyon/utils/math";
 import { DAY_MS, HOUR_MS, MINUTE_MS, SECOND_MS } from "@veyyon/utils/time";
@@ -17,7 +23,6 @@ import type {
 import { isRecord } from "../utils";
 import { usageStatusFromUsedFraction } from "./shared";
 
-const DEFAULT_BASE_URL = "https://api.kimi.com/coding/v1";
 const USAGE_PATH = "usages";
 
 interface KimiUsagePayload {
@@ -34,12 +39,15 @@ type KimiUsageRow = {
 	window?: UsageWindow;
 };
 
-// Kimi's own env/default resolution: prefer the explicit arg, then the
-// KIMI_CODE_BASE_URL override, then the built-in default. Slash/whitespace
-// normalization is delegated to the shared @veyyon/utils owner.
-function resolveKimiBaseUrl(baseUrl?: string): string {
-	const candidate = baseUrl?.trim() || $env.KIMI_CODE_BASE_URL?.trim() || DEFAULT_BASE_URL;
-	return normalizeBaseUrl(candidate, DEFAULT_BASE_URL);
+// Kimi's own env/default resolution: prefer the explicit arg, then the KIMI_CODE_BASE_URL override,
+// then the base of the deployment that issued the credential. An explicit official base of either
+// deployment is the catalog default and resolves to the credential's deployment; a custom one is
+// kept. Slash/whitespace normalization is delegated to the shared @veyyon/utils owner.
+function resolveKimiBaseUrl(baseUrl: string | undefined, apiEndpoint: string | undefined): string {
+	const deployment = KIMI_CODE_REGIONS[kimiCodeRegionOfApiEndpoint(apiEndpoint)].baseUrl;
+	let explicit = baseUrl?.trim();
+	if (explicit && kimiCodeRegionOfBaseUrl(explicit) !== undefined) explicit = deployment;
+	return normalizeBaseUrl(explicit || $env.KIMI_CODE_BASE_URL?.trim() || deployment, deployment);
 }
 
 function buildUsageUrl(baseUrl: string): string {
@@ -47,59 +55,76 @@ function buildUsageUrl(baseUrl: string): string {
 	return `${normalized}${USAGE_PATH}`;
 }
 
-function parseResetTime(data: Record<string, unknown>, nowMs: number): number | undefined {
-	const timeKeys = ["reset_at", "resetAt", "reset_time", "resetTime"] as const;
-	for (const key of timeKeys) {
-		const value = data[key];
-		if (typeof value === "string" && value.trim()) {
-			const parsed = Date.parse(value);
-			if (Number.isFinite(parsed)) return parsed;
-		}
-		if (typeof value === "number" && Number.isFinite(value)) {
-			return value > 1_000_000_000_000 ? value : value * 1000;
-		}
-	}
+interface KimiTimeUnit {
+	readonly name: string;
+	readonly ms: number;
+	readonly suffix: string;
+}
 
-	const secondsKeys = ["reset_in", "resetIn", "ttl", "window"] as const;
-	for (const key of secondsKeys) {
-		const seconds = toNumber(data[key]);
-		if (seconds !== undefined) return nowMs + seconds * 1000;
-	}
+// Matched by substring; the first unit whose name the time unit contains wins.
+const KIMI_TIME_UNITS: readonly KimiTimeUnit[] = [
+	{ name: "MINUTE", ms: MINUTE_MS, suffix: "m" },
+	{ name: "HOUR", ms: HOUR_MS, suffix: "h" },
+	{ name: "DAY", ms: DAY_MS, suffix: "d" },
+	{ name: "SECOND", ms: SECOND_MS, suffix: "s" },
+];
 
+const RESET_AT_KEYS = ["reset_at", "resetAt", "reset_time", "resetTime"] as const;
+const RESET_IN_SECONDS_KEYS = ["reset_in", "resetIn", "ttl", "window"] as const;
+
+function findTimeUnit(timeUnit: string): KimiTimeUnit | undefined {
+	const upper = timeUnit.toUpperCase();
+	return KIMI_TIME_UNITS.find(unit => upper.includes(unit.name));
+}
+
+function firstNonEmptyString(candidates: readonly unknown[]): string | undefined {
+	for (const candidate of candidates) {
+		if (typeof candidate === "string" && candidate) return candidate;
+	}
 	return undefined;
 }
 
-function formatDurationLabel(duration: number, timeUnit: string): string | undefined {
-	const upper = timeUnit.toUpperCase();
-	if (upper.includes("MINUTE")) {
-		if (duration >= 60 && duration % 60 === 0) return `${duration / 60}h limit`;
-		return `${duration}m limit`;
+// A date string, epoch milliseconds, or epoch seconds (anything at or below 10^12).
+function parseTimestamp(value: unknown): number | undefined {
+	if (typeof value === "number") {
+		if (!Number.isFinite(value)) return undefined;
+		return value > 1_000_000_000_000 ? value : value * 1000;
 	}
-	if (upper.includes("HOUR")) return `${duration}h limit`;
-	if (upper.includes("DAY")) return `${duration}d limit`;
-	if (upper.includes("SECOND")) return `${duration}s limit`;
+	if (typeof value !== "string") return undefined;
+	const parsed = Date.parse(value);
+	return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseResetTime(data: Record<string, unknown>, nowMs: number): number | undefined {
+	for (const key of RESET_AT_KEYS) {
+		const resetsAt = parseTimestamp(data[key]);
+		if (resetsAt !== undefined) return resetsAt;
+	}
+	for (const key of RESET_IN_SECONDS_KEYS) {
+		const seconds = toNumber(data[key]);
+		if (seconds !== undefined) return nowMs + seconds * 1000;
+	}
 	return undefined;
+}
+
+function formatDurationLabel(duration: number, unit: KimiTimeUnit | undefined): string | undefined {
+	if (!unit) return undefined;
+	if (unit.ms === MINUTE_MS && duration >= 60 && duration % 60 === 0) return `${duration / 60}h limit`;
+	return `${duration}${unit.suffix} limit`;
 }
 
 function buildWindow(windowData: Record<string, unknown>, nowMs: number): UsageWindow | undefined {
 	const duration = toNumber(windowData.duration);
-	const timeUnit = typeof windowData.timeUnit === "string" ? windowData.timeUnit : "";
-	const label = duration !== undefined && timeUnit ? formatDurationLabel(duration, timeUnit) : undefined;
 	const resetsAt = parseResetTime(windowData, nowMs);
-
-	if (duration === undefined && !label && !resetsAt) return undefined;
-	let durationMs: number | undefined;
-	if (duration !== undefined) {
-		if (timeUnit.toUpperCase().includes("MINUTE")) durationMs = duration * MINUTE_MS;
-		else if (timeUnit.toUpperCase().includes("HOUR")) durationMs = duration * HOUR_MS;
-		else if (timeUnit.toUpperCase().includes("DAY")) durationMs = duration * DAY_MS;
-		else if (timeUnit.toUpperCase().includes("SECOND")) durationMs = duration * SECOND_MS;
+	if (duration === undefined) {
+		return resetsAt ? { id: "default", label: "Usage window", durationMs: undefined, resetsAt } : undefined;
 	}
-
+	const timeUnit = typeof windowData.timeUnit === "string" ? windowData.timeUnit : "";
+	const unit = findTimeUnit(timeUnit);
 	return {
-		id: duration !== undefined && timeUnit ? `${duration}${timeUnit.toLowerCase()}` : "default",
-		label: label ?? "Usage window",
-		durationMs,
+		id: timeUnit ? `${duration}${timeUnit.toLowerCase()}` : "default",
+		label: formatDurationLabel(duration, unit) ?? "Usage window",
+		durationMs: unit ? duration * unit.ms : undefined,
 		resetsAt,
 	};
 }
@@ -115,12 +140,7 @@ function buildUsageRow(data: Record<string, unknown>, defaultLabel: string, nowM
 	if (used === undefined && limit === undefined) return null;
 	const resetsAt = parseResetTime(data, nowMs);
 	return {
-		label:
-			typeof data.name === "string" && data.name
-				? data.name
-				: typeof data.title === "string" && data.title
-					? data.title
-					: defaultLabel,
+		label: firstNonEmptyString([data.name, data.title]) ?? defaultLabel,
 		used,
 		limit,
 		remaining,
@@ -168,6 +188,19 @@ function toUsageLimit(row: KimiUsageRow, provider: string, index: number, accoun
 	};
 }
 
+function buildLimitRow(item: unknown, index: number, nowMs: number): KimiUsageRow | null {
+	if (!isRecord(item)) return null;
+	const detail = isRecord(item.detail) ? item.detail : item;
+	const windowData = isRecord(item.window) ? item.window : {};
+	const label =
+		firstNonEmptyString([item.name, item.title, item.scope, detail.name, detail.title]) ??
+		formatDurationLabel(toNumber(windowData.duration) ?? 0, findTimeUnit(String(windowData.timeUnit || ""))) ??
+		`Limit #${index + 1}`;
+	const row = buildUsageRow(detail, label, nowMs);
+	if (row) row.window = buildWindow(windowData, nowMs);
+	return row;
+}
+
 function parseUsagePayload(payload: unknown, nowMs: number): { rows: KimiUsageRow[]; raw: KimiUsagePayload } | null {
 	if (!isRecord(payload)) return null;
 	const data = payload as KimiUsagePayload;
@@ -179,24 +212,10 @@ function parseUsagePayload(payload: unknown, nowMs: number): { rows: KimiUsageRo
 	}
 
 	if (Array.isArray(data.limits)) {
-		data.limits.forEach((item, idx) => {
-			if (!isRecord(item)) return;
-			const detail = isRecord(item.detail) ? item.detail : item;
-			const windowData = isRecord(item.window) ? item.window : {};
-			const label =
-				(typeof item.name === "string" && item.name) ||
-				(typeof item.title === "string" && item.title) ||
-				(typeof item.scope === "string" && item.scope) ||
-				(typeof detail.name === "string" && detail.name) ||
-				(typeof detail.title === "string" && detail.title) ||
-				formatDurationLabel(toNumber(windowData.duration) ?? 0, String(windowData.timeUnit || "")) ||
-				`Limit #${idx + 1}`;
-			const row = buildUsageRow(detail, label, nowMs);
-			if (row) {
-				row.window = buildWindow(windowData, nowMs);
-				rows.push(row);
-			}
-		});
+		for (let index = 0; index < data.limits.length; index++) {
+			const row = buildLimitRow(data.limits[index], index, nowMs);
+			if (row) rows.push(row);
+		}
 	}
 
 	return { rows, raw: data };
@@ -225,7 +244,7 @@ export const kimiUsageProvider: UsageProvider = {
 			return null;
 		}
 
-		const baseUrl = resolveKimiBaseUrl(params.baseUrl);
+		const baseUrl = resolveKimiBaseUrl(params.baseUrl, credential.apiEndpoint);
 		const url = buildUsageUrl(baseUrl);
 		// Build the request headers OUTSIDE the network try. Header construction
 		// is deterministic and non-network; if it ever fails it is a real local

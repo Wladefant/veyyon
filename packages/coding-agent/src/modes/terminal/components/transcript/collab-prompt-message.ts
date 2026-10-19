@@ -1,7 +1,7 @@
 import { Container, Markdown, Text } from "@veyyon/tui";
 import type { CollabPromptCustomDisplay } from "@veyyon/wire/presentation";
 import { getMarkdownTheme, markdownTextStyle } from "../../../../theme/markdown-theme";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 
 /**
  * Renders a collab guest prompt on every participant's transcript: a

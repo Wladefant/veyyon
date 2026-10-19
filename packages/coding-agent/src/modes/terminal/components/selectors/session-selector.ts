@@ -11,7 +11,7 @@ import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
 import type { RunningConversations } from "../../../../session/background-sessions";
 import { withIcon } from "../../../../theme/icon-label";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { shortenPath } from "../../../../tools/core/render-utils";
 import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
 import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";

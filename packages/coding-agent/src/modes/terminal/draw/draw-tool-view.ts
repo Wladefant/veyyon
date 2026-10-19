@@ -48,13 +48,13 @@ import {
 	capPreviewLines,
 	formatBadge,
 	formatExpandHint,
-	formatStatusIcon,
 	previewWindowRows,
 	replaceTabs,
 	shortenEmbeddedPaths,
 	showResolvedModelDefault,
 } from "../../../tools/core/render-utils";
 import type { ToolUIStatus } from "../../../tools/core/tool-ui-status";
+import { formatStatusIcon } from "../../../tools/core/tool-ui-status";
 import type { ToolRenderer } from "../../../tools/renderers";
 import { sanitizeWithOptionalSixelPassthrough } from "../../../utils/sixel";
 import { paintHotTail, shimmerPhase } from "../components/chrome/follow";
@@ -669,9 +669,8 @@ const CODE_GUTTER_MIN_WIDTH = 3;
  * A streaming write recomposes on every spinner frame — twelve times a second — and highlighting a
  * file is the most expensive thing a card does, so a memo is the difference between colouring the
  * window once and colouring it on every tick. One slot: the live cards are drawn one after another
- * and the one being repainted is the one that just drew, which is the same reasoning the
- * single-slot `RenderedStringCache` the hand-written previews used was built on. The theme is
- * compared by reference because a theme switch replaces the instance wholesale.
+ * and the one being repainted is the one that just drew. The theme is compared by reference because
+ * a theme switch replaces the instance wholesale.
  *
  * A card whose source grew keeps the row of every line whose highlighted text and gutter cell are
  * unchanged. The highlighter hands back the same string for a line it already settled, so the check

@@ -20,7 +20,9 @@ import * as path from "node:path";
  * for a single process. `processHandle` / `processHandlesByPath`
  * (`packages/utils/src/native-process.ts`) are the one place that decides this,
  * and every `Process.fromPid` / `Process.fromPath` call site routes through
- * them.
+ * them. The runtime fallback also keeps the native `terminate()` contract of a
+ * hard kill after the grace, so a child that ignores SIGTERM cannot hold a
+ * timeout or an abort open.
  *
  * What it does NOT catch: a host where the addon loads but a native call
  * throws mid-operation, and any degradation quality question — a killed direct
@@ -96,6 +98,44 @@ describe("a host without the native addon", () => {
 		);
 		expect(run.status).toBe(0);
 		expect(parseStdout(run.stdout)).toEqual({ threw: null, code: 143, signal: "SIGTERM", alive: false });
+	});
+
+	it("hard-kills a direct child that ignores the polite signal, after the grace", () => {
+		// The native `terminate()` escalates to a hard kill after its grace. The
+		// runtime fallback sent one SIGTERM and stopped, so a child that ignored it
+		// held every `kill(); await exited` open: a timeout or an abort that kills
+		// through ptree never ended the wait it was meant to bound.
+		const run = runWithoutAddon(
+			`const { spawn } = await import(${JSON.stringify(PTREE_URL)});
+			const { setTimeout: sleep } = await import("node:timers/promises");
+			const child = spawn(["sh", "-c", 'trap "" TERM; echo ready; exec sleep 30']).nothrow();
+			const pid = child.proc.pid;
+			const reader = child.stdout.getReader();
+			await reader.read();
+			reader.releaseLock();
+			const started = performance.now();
+			child.kill();
+			const outcome = await Promise.race([child.exited.then(code => ({ code })), sleep(3_000, "hung", { ref: false })]);
+			const elapsedMs = performance.now() - started;
+			let alive = false;
+			try { process.kill(pid, 0); alive = true; } catch {}
+			if (alive) process.kill(pid, "SIGKILL");
+			process.stdout.write(JSON.stringify({
+				outcome,
+				signal: child.proc.signalCode,
+				alive,
+				waitedForGrace: elapsedMs >= 900,
+				boundedMs: elapsedMs < 2_500,
+			}));`,
+		);
+		expect(run.status).toBe(0);
+		expect(parseStdout(run.stdout)).toEqual({
+			outcome: { code: 137 },
+			signal: "SIGKILL",
+			alive: false,
+			waitedForGrace: true,
+			boundedMs: true,
+		});
 	});
 
 	it("answers liveness and exit for a bare pid without the addon", () => {

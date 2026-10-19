@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Sync upstream changes from santhreal/veyyon.
+
 ## [1.5.6] - 2026-10-10
 
 ### Added
@@ -29,6 +33,12 @@
 - Workspace startup scans skip excluded build directories and retain a bounded set of entries and directory rules ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - Merged upstream v1.5.0.
+### Fixed
+
+- Block-boundary lookups and code summaries parse a PHP file that leaves PHP for HTML with `?>` instead of failing it as a syntax error, which cuts a 191KB plugin source from 767ms to 18ms and gives such a file tree-sitter block context and a structural summary.
+
+## [1.5.6] - 2026-10-13
+
 ### Added
 
 - `CodeHighlighter` highlights a source that grows at its end once per line: `advance(text)` colours whole lines and moves the parser past them, `peek(text)` colours the unfinished last line without moving it, and their output joined is byte-identical to `highlightCode` over the whole source.

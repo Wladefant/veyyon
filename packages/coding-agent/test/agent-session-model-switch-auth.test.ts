@@ -50,11 +50,8 @@ describe("AgentSession model switch auth pre-flight", () => {
 		return model;
 	}
 
-	function makeSession(initialModel: Model<Api>, roles?: Record<string, string>): AgentSession {
+	function makeSession(initialModel: Model<Api>): AgentSession {
 		const settings = Settings.isolated();
-		if (roles) {
-			for (const role in roles) settings.setModelRole(role, roles[role]);
-		}
 		const agent = new Agent({
 			initialState: {
 				model: initialModel,
@@ -86,25 +83,6 @@ describe("AgentSession model switch auth pre-flight", () => {
 
 		expect(s.model?.id).toBe(to.id);
 		expect(hasAuthSpy).toHaveBeenCalled();
-		expect(getApiKeySpy).not.toHaveBeenCalled();
-	});
-
-	it("cycles role models without invoking the resolver", async () => {
-		const from = modelOrThrow("claude-sonnet-4-5");
-		const slow = modelOrThrow("claude-sonnet-4-6");
-		const s = makeSession(from, {
-			default: `${from.provider}/${from.id}`,
-			slow: `${slow.provider}/${slow.id}`,
-		});
-
-		const getApiKeySpy = spyOn(registry, "getApiKey");
-		spies.push(getApiKeySpy);
-
-		const result = await s.cycleRoleModels(["default", "slow"]);
-
-		expect(result?.role).toBe("slow");
-		expect(result?.model.id).toBe(slow.id);
-		expect(s.model?.id).toBe(slow.id);
 		expect(getApiKeySpy).not.toHaveBeenCalled();
 	});
 

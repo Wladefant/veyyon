@@ -24,9 +24,9 @@ import {
 	type AuthCredentialStore,
 	AuthStorage,
 	REMOTE_REFRESH_SENTINEL,
-	SqliteAuthCredentialStore,
 	type StoredAuthCredential,
 } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import type { UsageReport } from "@veyyon/ai/usage";
 import * as claudeUsage from "@veyyon/ai/usage/claude";
 import { removeWithRetries } from "../../utils/src/temp";

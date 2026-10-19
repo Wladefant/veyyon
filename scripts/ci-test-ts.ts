@@ -44,7 +44,7 @@ type Mode =
 
 type CodingAgentBucket = "singleton" | "ui" | "runtime" | "native";
 
-interface TestCommand {
+export interface TestCommand {
 	label: string;
 	cwd: string;
 	command: string[];
@@ -401,6 +401,7 @@ export const repoScriptTests = [
 	"scripts/record-conformance.test.ts",
 	"scripts/ci-test-real-data-guard.test.ts",
 	"scripts/ci-test-concurrency-default.test.ts",
+	"scripts/a-failing-test-chunk-does-not-stop-the-sequential-run.test.ts",
 	"scripts/release-binaries-bytecode.test.ts",
 	"scripts/fix-changelogs.test.ts",
 	"scripts/require-changelog.test.ts",
@@ -910,14 +911,15 @@ function isScrubbedEnvVar(key: string): boolean {
 	return /_(API_KEY|OAUTH_TOKEN)$/.test(key) || key.includes("BEARER_TOKEN");
 }
 
-async function runTestCommand(testCommand: TestCommand): Promise<void> {
+/** Run one command with inherited output; returns the failure message, or `undefined` when it passed. */
+async function runTestCommand(testCommand: TestCommand): Promise<string | undefined> {
 	const cwd = path.join(repoRoot, testCommand.cwd);
 	const renderedCommand = testCommand.command.map(shellQuote).join(" ");
 	console.log(`\n==> ${testCommand.label}`);
 	console.log(`$ ${renderedCommand}`);
 
 	if (isDryRun) {
-		return;
+		return undefined;
 	}
 
 	const env = buildChildEnv();
@@ -930,11 +932,29 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 	const killTimer = setTimeout(() => proc.kill("SIGKILL"), chunkTimeoutMs());
 	const exitCode = await proc.exited;
 	clearTimeout(killTimer);
-	if (exitCode !== 0) {
-		const files = chunkTestFiles(renderedCommand);
-		const composition = files.length > 1 ? `\n${files.length} files in this chunk:\n  ${files.join("\n  ")}` : "";
-		throw new Error(`${testCommand.label} failed with exit code ${exitCode}: ${renderedCommand}${composition}`);
+	if (exitCode === 0) return undefined;
+	const files = chunkTestFiles(renderedCommand);
+	const composition = files.length > 1 ? `\n${files.length} files in this chunk:\n  ${files.join("\n  ")}` : "";
+	return `${testCommand.label} failed with exit code ${exitCode}: ${renderedCommand}${composition}`;
+}
+
+/**
+ * Run every command in order, one at a time, then fail the process when any of them failed. A failing
+ * chunk does not stop the run, so one CI job reports every broken chunk in its bucket instead of the
+ * first. One process at a time keeps a memory-capped runner bounded.
+ */
+export async function runTestCommandsInSequence(commands: TestCommand[]): Promise<void> {
+	const failures: string[] = [];
+	for (const testCommand of commands) {
+		const failure = await runTestCommand(testCommand);
+		if (failure !== undefined) failures.push(failure);
 	}
+	if (failures.length === 0) return;
+	process.exitCode = 1;
+	const header = `${failures.length} of ${commands.length} test chunk(s) FAILED`;
+	console.log(`\n${style.bold(style.red(`━━━ ${header} ━━━`))}`);
+	for (const failure of failures) console.log(`\n${style.red("✗")} ${failure}`);
+	console.log(`\n${style.red(header)}`);
 }
 
 // Child env shared by every spawned test process: the parent env with all CI
@@ -1561,8 +1581,8 @@ if (import.meta.main) {
 
 	await ensureToolViewsGenerated();
 	const testCommands = await commandsForMode(requestedMode as Mode);
-	// Outside CI, fan the independent chunk processes out across cores; CI keeps the
-	// sequential, fail-fast path so each memory-capped runner job stays bounded.
+	// Outside CI, fan the independent chunk processes out across cores; CI runs them one
+	// at a time so each memory-capped runner job stays bounded. Both run every chunk.
 	// Third protection layer: PROOF. Layers one and two (a sandboxed HOME for every
 	// child, and the tripwire preload) are meant to make real-data writes
 	// impossible, but a safety mechanism believed to work and never checked is how
@@ -1577,9 +1597,7 @@ if (import.meta.main) {
 		if (!isDryRun && !isCI() && testCommands.length > 1) {
 			await runTestCommandsInParallel(testCommands, testConcurrency(testCommands.length));
 		} else {
-			for (const testCommand of testCommands) {
-				await runTestCommand(testCommand);
-			}
+			await runTestCommandsInSequence(testCommands);
 		}
 	} finally {
 		// In `finally` on purpose: a failing or interrupted run is exactly when a

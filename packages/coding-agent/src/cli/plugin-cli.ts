@@ -8,7 +8,7 @@ import { APP_NAME, attachFaultSink, errorMessage, getProjectDir } from "@veyyon/
 import chalk from "chalk";
 import { PluginManager, parseSettingValue, validateSetting } from "../extensibility/plugins";
 import { createMarketplaceManager, type MarketplaceManager } from "../extensibility/plugins/marketplace";
-import { theme } from "../theme/theme";
+import { theme } from "../theme/theme-binding";
 
 // =============================================================================
 // Types
