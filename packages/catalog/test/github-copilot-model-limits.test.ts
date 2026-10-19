@@ -351,6 +351,8 @@ function tieredCopilotEntry(overrides: {
 	longPrices?: { input: number; output: number; cache: number };
 	vision?: boolean;
 	type?: string;
+	maxPromptTokens?: number;
+	defaultTierMaxPromptTokens?: number;
 }) {
 	return {
 		id: overrides.id,
@@ -360,6 +362,7 @@ function tieredCopilotEntry(overrides: {
 			limits: {
 				max_context_window_tokens: overrides.window,
 				max_output_tokens: overrides.maxOutput,
+				...(overrides.maxPromptTokens !== undefined && { max_prompt_tokens: overrides.maxPromptTokens }),
 			},
 			...(overrides.vision !== undefined && { supports: { vision: overrides.vision } }),
 		},
@@ -367,6 +370,9 @@ function tieredCopilotEntry(overrides: {
 			token_prices: {
 				default: {
 					...(overrides.defaultContextMax !== undefined && { context_max: overrides.defaultContextMax }),
+					...(overrides.defaultTierMaxPromptTokens !== undefined && {
+						max_prompt_tokens: overrides.defaultTierMaxPromptTokens,
+					}),
 					...(overrides.defaultPrices && {
 						input_price: overrides.defaultPrices.input,
 						output_price: overrides.defaultPrices.output,
@@ -542,6 +548,82 @@ describe("github copilot tiered context windows", () => {
 		expect(served).toHaveLength(1);
 		expect(served[0]?.contextWindow).toBe(999_000);
 		expect(served[0]?.requestModelId).toBeUndefined();
+	});
+
+	// The billed default ceiling can overlap the long lane; on a tiered row the model-wide
+	// max_prompt_tokens is the default lane's prompt budget, so the tighter bound caps the base row
+	// (oh-my-pi 508e263c0c2b8979e8bd3f0c404db044463d7cad).
+	it("caps a tiered base row by max_prompt_tokens when the billed default ceiling overlaps the long lane", async () => {
+		const { models } = await discoverCopilotModels({
+			data: [
+				tieredCopilotEntry({
+					id: "gpt-9.9-sol",
+					name: "GPT-9.9 Sol",
+					window: 1_050_000,
+					maxOutput: 128_000,
+					maxPromptTokens: 272_000,
+					defaultContextMax: 922_000,
+					longContextMax: 922_000,
+				}),
+			],
+		});
+
+		expect(models.find(candidate => candidate.id === "gpt-9.9-sol")?.contextWindow).toBe(400_000);
+		expect(models.find(candidate => candidate.id === "gpt-9.9-sol-1m")?.contextWindow).toBe(1_050_000);
+	});
+
+	it("keeps the billed default ceiling when it is tighter than max_prompt_tokens", async () => {
+		const { models } = await discoverCopilotModels({
+			data: [
+				tieredCopilotEntry({
+					id: "gpt-9.9-sol",
+					name: "GPT-9.9 Sol",
+					window: 1_050_000,
+					maxOutput: 128_000,
+					maxPromptTokens: 922_000,
+					defaultContextMax: 272_000,
+					longContextMax: 922_000,
+				}),
+			],
+		});
+
+		expect(models.find(candidate => candidate.id === "gpt-9.9-sol")?.contextWindow).toBe(400_000);
+	});
+
+	it("keeps max_context_window_tokens on an untiered row that reports max_prompt_tokens", async () => {
+		const { models } = await discoverCopilotModels({
+			data: [
+				tieredCopilotEntry({
+					id: "gpt-9.9-luna",
+					name: "GPT-9.9 Luna",
+					window: 400_000,
+					maxOutput: 128_000,
+					maxPromptTokens: 272_000,
+				}),
+			],
+		});
+
+		expect(models.find(candidate => candidate.id === "gpt-9.9-luna")?.contextWindow).toBe(400_000);
+	});
+
+	// Current responses report the tier boundary as max_prompt_tokens; legacy ones as context_max
+	// (oh-my-pi c668ce4e1c3b47abc96dabf33a6b9cdab7abf8ec).
+	it("reads the default tier boundary from the tier's max_prompt_tokens before context_max", async () => {
+		const { models } = await discoverCopilotModels({
+			data: [
+				tieredCopilotEntry({
+					id: "gpt-9.9-sol",
+					name: "GPT-9.9 Sol",
+					window: 1_050_000,
+					maxOutput: 128_000,
+					defaultTierMaxPromptTokens: 272_000,
+					defaultContextMax: 922_000,
+					longContextMax: 922_000,
+				}),
+			],
+		});
+
+		expect(models.find(candidate => candidate.id === "gpt-9.9-sol")?.contextWindow).toBe(400_000);
 	});
 });
 

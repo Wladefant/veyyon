@@ -6,6 +6,10 @@
 
 - Sync upstream changes from santhreal/veyyon.
 
+### Fixed
+
+- GitHub Copilot discovery caps a tiered base model at the tighter of the billed default tier and max_prompt_tokens, and reads the tier boundary from max_prompt_tokens before context_max, so the base row no longer gets the ~1M window of its -1m sibling (oh-my-pi 508e263c0c2b8979e8bd3f0c404db044463d7cad, c668ce4e1c3b47abc96dabf33a6b9cdab7abf8ec, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+
 ## [1.5.6] - 2026-10-10
 ### Removed
 
