@@ -5,6 +5,7 @@
 ### Changed
 
 - `normalizeTools` moved from `@veyyon/agent-core/agent-loop` to `@veyyon/agent-core/tool-normalization`, so building the provider-bound tool list no longer loads the agent loop; the package root still exports it.
+- `prepareCompaction` validates only the server-side windows it uses, the newest valid window of each provider and api and the furthest kept boundary's window, instead of every window on the branch, so a pass over a session whose summarized windows were moved to disk reads none of them back.
 
 ### Fixed
 

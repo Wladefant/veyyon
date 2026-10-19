@@ -32,7 +32,7 @@ import { createOpenAICodexCompactionRequestContext } from "@veyyon/ai/providers/
 import { detectDegenerateRepetition } from "@veyyon/ai/utils/thinking-loop";
 import { Effort } from "@veyyon/catalog/effort";
 import { preferredDialect } from "@veyyon/catalog/identity";
-import { errorMessage, logger, prompt, TimeSlice } from "@veyyon/utils";
+import { errorMessage, isRecord, logger, prompt, TimeSlice } from "@veyyon/utils";
 import { stripReadSelector } from "@veyyon/utils/read-selector";
 import { clampPassEffort } from "../effort-clamp";
 import { instrumentedCompleteSimple, type OneshotKind } from "../instrumented-complete";
@@ -2277,6 +2277,10 @@ function keptEntriesStart(pathEntries: SessionEntry[], compactionIndex: number):
  * and api, and the messages the context sends behind them up to `cutIndex`,
  * which lies at or past every window's kept boundary. Undefined when no window
  * can be chained.
+ *
+ * An older window of a provider and api a newer valid window already chains is
+ * passed over before it is validated: validation reads the window, which a
+ * session holds on disk once a newer compaction summarized it.
  */
 function remoteCompactionChain(
 	pathEntries: SessionEntry[],
@@ -2290,11 +2294,12 @@ function remoteCompactionChain(
 	let chainStart = cutIndex;
 	for (let w = 0; w < windowIndices.length; w++) {
 		const preserveData = (pathEntries[windowIndices[w]] as CompactionEntry).preserveData;
+		if (!preserveData) continue;
+		const record = preserveData[REMOTE_COMPACTION_PRESERVE_KEY];
+		if (isRecord(record) && hosts.has(`${record.provider}\u0000${record.api}`)) continue;
 		const data = getRemoteCompactionPreserveData(preserveData);
-		if (!data || !preserveData) continue;
-		const host = `${data.provider}\u0000${data.api}`;
-		if (hosts.has(host)) continue;
-		hosts.add(host);
+		if (!data) continue;
+		hosts.add(`${data.provider}\u0000${data.api}`);
 		const from = windowStarts[w];
 		links.push({ previousPreserveData: preserveData, from });
 		if (from < chainStart) chainStart = from;
@@ -2324,9 +2329,11 @@ function remoteCompactionChain(
 interface CompactionBase {
 	prevCompactionIndex: number;
 	/**
-	 * Server-side entries ahead of that boundary, newest first. The scan walks past them because a local
-	 * pass cannot build on them, and they are exactly the entries a REMOTE pass has to chain rather than
-	 * re-read, so they are picked up on the same walk instead of a second one.
+	 * Entries ahead of that boundary holding a server-side window record, newest first. The scan walks
+	 * past them because a local pass cannot build on them, and they are exactly the entries a REMOTE
+	 * pass has to chain rather than re-read, so they are picked up on the same walk instead of a
+	 * second one. A record is not validated here: validation reads the window, which a session holds
+	 * on disk once a newer compaction summarized it, so each reader validates the ones it uses.
 	 */
 	windowIndices: number[];
 }
@@ -2341,9 +2348,31 @@ function findCompactionBase(pathEntries: SessionEntry[]): CompactionBase {
 		// behind it and summarize them locally rather than stranding that span.
 		const entry = pathEntries[i] as CompactionEntry;
 		if (hasReusableSummary(entry.preserveData)) return { prevCompactionIndex: i, windowIndices };
-		if (getRemoteCompactionPreserveData(entry.preserveData)) windowIndices.push(i);
+		if (isRecord(entry.preserveData?.[REMOTE_COMPACTION_PRESERVE_KEY])) windowIndices.push(i);
 	}
 	return { prevCompactionIndex: -1, windowIndices };
+}
+
+/**
+ * The furthest kept boundary among the valid windows at `windowIndices`, each
+ * keeping from its position on `windowStarts`, or `floor` when none keeps past
+ * it. Windows are validated furthest first and the search stops at the first
+ * valid one, so the windows behind it stay unread.
+ */
+function furthestWindowStart(
+	pathEntries: SessionEntry[],
+	windowIndices: readonly number[],
+	windowStarts: readonly number[],
+	floor: number,
+): number {
+	const order = windowStarts.map((_, w) => w).sort((a, b) => windowStarts[b] - windowStarts[a]);
+	for (const w of order) {
+		if (windowStarts[w] <= floor) break;
+		if (getRemoteCompactionPreserveData((pathEntries[windowIndices[w]] as CompactionEntry).preserveData)) {
+			return windowStarts[w];
+		}
+	}
+	return floor;
 }
 
 /**
@@ -2467,7 +2496,7 @@ export function prepareCompaction(
 	// whole span the window holds. A newer window's boundary sits at or past an
 	// older one's on a branch this pass wrote; an older pass could keep behind it.
 	const windowStarts = windowIndices.map(index => keptEntriesStart(pathEntries, index));
-	const boundaryStart = Math.max(summaryStart, ...windowStarts);
+	const boundaryStart = furthestWindowStart(pathEntries, windowIndices, windowStarts, summaryStart);
 	const boundaryEnd = pathEntries.length;
 
 	const lastUsage = getLastAssistantUsage(pathEntries);
