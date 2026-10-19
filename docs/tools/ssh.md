@@ -70,6 +70,7 @@ Failure behavior:
 - **Windows native shell**: cwd wrapper uses PowerShell `Set-Location` or cmd `cd /d`; command otherwise runs in the remote default Windows shell.
 - **Windows compat shell**: if host probing finds `bash` or `sh` on Windows, `executeSSH()` wraps the remote command as `bash -c '...'` or `sh -c '...'`. Host config can force compat on/off with `compat`.
 - **Cached vs probed host info**: shell/OS detection comes from in-memory cache, persisted JSON under the remote-host dir, or a fresh probe over SSH.
+- **Tool refresh**: a cwd change or a tool-set change reloads the host list. A host whose destination (`host`, `username`, `port`, `keyPath`, `compat`) is unchanged keeps its cached and persisted shell/OS info and its control master, so the tool description, and the prompt prefix after it, stay byte-identical. A host that the refresh removes, changes, or adds has its persisted record and its master dropped and is probed again on next use.
 - **Truncated vs untruncated output**: small output stays in memory; large output keeps only the last 50 KiB in memory and may spill full output to an artifact file.
 
 ## Side Effects
