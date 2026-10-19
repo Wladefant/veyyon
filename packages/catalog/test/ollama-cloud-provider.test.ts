@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import { completeSimple, getEnvApiKey, stream, streamSimple } from "@veyyon/ai/stream";
+import { getEnvApiKey } from "@veyyon/ai/env-api-key";
+import { completeSimple, stream, streamSimple } from "@veyyon/ai/stream";
 import type { Context, Tool } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";

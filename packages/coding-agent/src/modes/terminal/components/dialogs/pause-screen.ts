@@ -18,7 +18,7 @@ import { matchesKey } from "@veyyon/utils/keys";
 import { parseSgrMouse } from "@veyyon/utils/mouse";
 import { centerLine } from "@veyyon/utils/padding";
 import { formatDurationCoarse } from "../../../../session/account-format";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { matchesAppInterrupt } from "../../utils/keybinding-matchers";
 import { renderEmberField } from "../chrome/sun";
 

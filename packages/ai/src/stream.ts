@@ -8,6 +8,7 @@ import { isOfficialOpenAIEndpoint } from "@veyyon/catalog/compat/openai";
 import type { Effort } from "@veyyon/catalog/effort";
 import { isVertexExpressOpenAIUrl, isVertexRawPredictUrl } from "@veyyon/catalog/hosts";
 import {
+	googleThinkingLevelWhenOff,
 	mapEffortToAnthropicAdaptiveEffort,
 	mapEffortToGoogleThinkingLevel,
 	type ReasoningSelection,
@@ -203,16 +204,6 @@ const PROVIDER_INFLIGHT_HEARTBEAT_FAILURES_BEFORE_STALE = Math.ceil(
 );
 
 let providerInFlightRootOverride: string | undefined;
-
-/**
- * The caps and their resolver live in `./provider-inflight-limits`, which imports nothing.
- *
- * The WRITER of this state is the harness's settings layer, and reaching a setter that lived here meant
- * importing this module's 285: every provider transport, the model registry, the error taxonomy. The
- * re-export keeps `@veyyon/ai/stream` a working import path for it, so nothing that already calls it
- * changes, while a caller that only configures caps can name the owner instead.
- */
-export { configureProviderMaxInFlightRequests } from "./provider-inflight-limits";
 
 function providerInFlightRoot(): string {
 	if (providerInFlightRootOverride) return providerInFlightRootOverride;
@@ -1578,6 +1569,7 @@ function optionsForApi(mapping: OptionsMapping): OptionsForApi<Api> {
 				serviceTier: options.serviceTier,
 				preferWebsockets: options.preferWebsockets,
 				codexCompaction: options.codexCompaction,
+				codexFork: options.codexFork,
 				reasoningSummary: options.hideThinkingSummary ? null : "detailed",
 				textVerbosity: options.textVerbosity,
 			} satisfies OptionsForApi<"openai-codex-responses">;
@@ -1916,7 +1908,8 @@ function googleGeminiCliOptions(mapping: OptionsMapping): OptionsForApi<"google-
 	}
 	const thinking: GoogleGeminiCliOptions["thinking"] = { enabled: false };
 	if (model.reasoning && model.thinking?.suppressWhenOff) {
-		thinking.suppress = model.thinking.mode === "google-level" ? { level: "MINIMAL" } : { budget: 0 };
+		thinking.suppress =
+			model.thinking.mode === "google-level" ? { level: googleThinkingLevelWhenOff(model) } : { budget: 0 };
 	}
 	return {
 		...base,

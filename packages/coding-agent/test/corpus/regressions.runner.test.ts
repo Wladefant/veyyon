@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { parseGalleryStates } from "@veyyon/coding-agent/cli/gallery-cli";
+import { type GalleryState, parseGalleryStates } from "@veyyon/coding-agent/cli/gallery-cli";
 import { parseUnreleasedSection } from "@veyyon/coding-agent/commit/changelog/parse";
 import { extractPathFromRename, parseFileDiffs, parseNumstat } from "@veyyon/coding-agent/commit/git-diff";
 import { parseJsonPayload } from "@veyyon/coding-agent/commit/utils/analysis";
@@ -14,12 +14,14 @@ import {
 } from "@veyyon/coding-agent/config/settings-schema";
 import { createMCPToolName, parseMCPToolName } from "@veyyon/coding-agent/mcp/tool-bridge";
 import {
-	dispatchRpcInputFrame,
-	RpcInputDispatcher,
-	type RpcInputFrameDeps,
 	rpcErrorResponse,
 	rpcSuccessResponse,
 	rpcUnknownCommandResponse,
+} from "@veyyon/coding-agent/modes/rpc/rpc-commands";
+import {
+	dispatchRpcInputFrame,
+	RpcInputDispatcher,
+	type RpcInputFrameDeps,
 } from "@veyyon/coding-agent/modes/rpc/rpc-mode";
 import type { RpcCommand, RpcResponse } from "@veyyon/coding-agent/modes/rpc/rpc-types";
 import {
@@ -48,13 +50,14 @@ import {
 	stripGeneratedOutputNotice,
 	stripRawOutputArtifactNotice,
 	type TruncationMeta,
-} from "@veyyon/coding-agent/tools/core/output-meta";
+} from "@veyyon/coding-agent/tools/core/output-notice";
 import {
 	combineSearchGlobs,
 	expandPath,
 	formatPathRelativeToCwd,
 	globSearchBase,
 	isPathWithinCwd,
+	type LineRange,
 	normalizeLocalScheme,
 	normalizeWindowsDriveAliasPath,
 	parseFindPattern,
@@ -75,13 +78,9 @@ import { writeFilesystemTargets } from "@veyyon/coding-agent/tools/fs/write";
 import { astEditFilesystemTargets } from "@veyyon/coding-agent/tools/search/ast-edit";
 import { formatMatchLine } from "@veyyon/coding-agent/tools/search/match-line-format";
 import { isWaitingPollDetails } from "@veyyon/coding-agent/tools/shell/job";
-import {
-	buildSearchDateQualifier,
-	parsePositiveDecimalInt,
-	parseSearchDateBound,
-	resolveTailLimit,
-} from "@veyyon/coding-agent/tools/web/gh";
-import { formatShortSha } from "@veyyon/coding-agent/tools/web/gh-format";
+import { buildSearchDateQualifier, parseSearchDateBound } from "@veyyon/coding-agent/tools/web/gh";
+import { formatShortSha, parsePositiveDecimalInt } from "@veyyon/coding-agent/tools/web/gh-format";
+import { resolveTailLimit } from "@veyyon/coding-agent/tools/web/gh-run-watch";
 import { parseIssueUrl, parsePrUrl } from "@veyyon/coding-agent/tools/web/gh-url";
 import { detectLanguageId } from "@veyyon/coding-agent/utils/lang-from-path";
 import { InMemoryFilesystem, InMemorySnapshotStore, Patch, Patcher, parsePatch, Recovery } from "@veyyon/hashline";
@@ -543,7 +542,7 @@ function runParseLineRangeChunk(c: CorpusCase): void {
 		range?: { startLine: number; endLine?: number } | null;
 	};
 	let threw: Error | null = null;
-	let range: ReturnType<typeof parseLineRangeChunk> | undefined;
+	let range: LineRange | null | undefined;
 	try {
 		range = parseLineRangeChunk(input.sel);
 	} catch (e) {
@@ -892,7 +891,7 @@ function runParseGalleryStates(c: CorpusCase): void {
 	const input = c.input as { states?: string[] };
 	const exp = c.expect as { throws: boolean; errorContains?: string; states?: string[] | null };
 	let threw: Error | null = null;
-	let states: ReturnType<typeof parseGalleryStates>;
+	let states: GalleryState[] | undefined;
 	try {
 		states = parseGalleryStates(input.states);
 	} catch (e) {

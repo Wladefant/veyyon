@@ -148,6 +148,9 @@ describe("the classification rule set", () => {
 			"MalformedFunctionCall",
 			"ProviderFinishError",
 			"UsageLimit",
+			// `model-not-in-plan`: Cursor's plan refusal, whose machine code reaches the classifier as
+			// the end stream's detail text appended to the message, not as a structured field.
+			"UsageLimit|ModelNotInPlan",
 		]);
 	});
 
@@ -219,6 +222,7 @@ describe("a classification names the rules that produced it", () => {
 			"fast-mode-entitlement-wall",
 			"fast-mode-parameter-rejected",
 			"malformed-function-call",
+			"model-not-in-plan",
 			"named-auth-refusal-code",
 			"named-http2-refused-code",
 			"named-http2-retryable-code",

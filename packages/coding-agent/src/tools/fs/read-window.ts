@@ -5,12 +5,11 @@
  */
 
 import * as fs from "node:fs/promises";
-import { formatCount, formatMoreLines } from "@veyyon/utils/format";
+import { formatBytes, formatCount, formatMoreLines } from "@veyyon/utils/format";
 import { SNAPSHOT_MAX_BYTES } from "../../edit/file-snapshot-store";
 import { normalizeToLF } from "../../edit/normalize";
 import { DEFAULT_MAX_LINES, type TruncationResult, truncateHeadBytes } from "../../session/streaming-output";
 import { type InlinePricingSource, inlineBudgetFor } from "../core/output-artifact";
-import { formatBytes } from "../core/render-utils";
 import { throwIfAborted } from "../core/tool-errors";
 
 /**

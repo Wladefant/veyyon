@@ -14,11 +14,11 @@
  * case, and a provider from models.yml or registered at run time. Every model of the catalog is
  * swept from the registry at run time, so a provider added to the catalog is covered when it
  * lands. Every miss form (unknown provider, unknown id, empty id, `*`, a thinking suffix, an
- * OpenRouter route or date suffix, a `@role`, a bare id) is compared against the whole-catalog
- * answer, both before the registry has built its catalog and after. A catalog model the named
- * path hands to the whole catalog (a role-shaped reference, a `--provider` id equal to the default
- * role alias) is pinned by exact equality, so a new one fails the suite; a reference two models
- * share once case is folded is derived from the catalog. `getAll` is the only method that builds a
+ * OpenRouter route or date suffix, an `@`-prefixed name, a bare id) is compared against the
+ * whole-catalog answer, both before the registry has built its catalog and after. A catalog model
+ * the named path hands to the whole catalog (a `--provider` id of `*`) is pinned by exact equality,
+ * so a new one fails the suite; a reference two models share once case is folded is derived from
+ * the catalog. `getAll` is the only method that builds a
  * registry's catalog, so a named hit that builds it fails the count of `getAll` calls, and a
  * registry that builds every provider to answer one fails the retained-heap bound measured in a
  * fresh process.
@@ -37,12 +37,6 @@ import { getBundledModels } from "@veyyon/catalog/models";
 import { getVariantAliasSources } from "@veyyon/catalog/variant-collapse";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { type ResolveCliModelResult, resolveCliModel } from "@veyyon/coding-agent/config/model-resolver";
-import {
-	DEFAULT_MODEL_ROLE_ALIAS,
-	LEGACY_MODEL_ROLE_ALIAS_PREFIX,
-	MODEL_ROLE_ALIAS_PREFIX,
-} from "@veyyon/coding-agent/config/model-roles";
-import { Settings } from "@veyyon/coding-agent/config/settings";
 import { TempDir } from "@veyyon/utils";
 import type { SelectorRetention } from "../fixtures/named-selector-retention";
 
@@ -61,13 +55,13 @@ function configProvider(host: string, ids: string[]) {
 }
 
 /**
- * models.yml providers: one with a model whose id is the default role alias, one named like the
- * legacy role prefix, and two whose names differ only in case.
+ * models.yml providers: one with a model whose id is `*`, one named `pi` with a model `smol` (a
+ * plain reference the named path answers), and two whose names differ only in case.
  */
 const MODELS_CONFIG = {
 	providers: {
-		"yard-gw": configProvider("yard", ["yard-model", DEFAULT_MODEL_ROLE_ALIAS]),
-		[LEGACY_MODEL_ROLE_ALIAS_PREFIX.slice(0, -1)]: configProvider("pi", ["smol"]),
+		"yard-gw": configProvider("yard", ["yard-model", "*"]),
+		pi: configProvider("pi", ["smol"]),
 		"Acme-Gw": configProvider("acme", ["alpha"]),
 		"acme-gw": configProvider("acme", ["beta"]),
 	},
@@ -93,7 +87,6 @@ interface Registries {
 }
 
 let tmp: TempDir;
-const settings = Settings.isolated({});
 
 async function openRegistry(name: string, runtime: boolean): Promise<ModelRegistry> {
 	const dir = tmp.join(name);
@@ -141,8 +134,8 @@ async function openRegistries(name: string, runtime = false): Promise<Registries
 		reference,
 		lazy,
 		listings: () => listing.mock.calls.length,
-		resolveReference: selector => resolveCliModel({ ...selector, modelRegistry: referenceView, settings }),
-		resolveLazy: selector => resolveCliModel({ ...selector, modelRegistry: lazy, settings }),
+		resolveReference: selector => resolveCliModel({ ...selector, modelRegistry: referenceView }),
+		resolveLazy: selector => resolveCliModel({ ...selector, modelRegistry: lazy }),
 	};
 }
 
@@ -158,7 +151,6 @@ function outcome(result: ResolveCliModelResult) {
 		thinkingLevel: result.thinkingLevel,
 		warning: result.warning,
 		error: result.error,
-		roleFailure: result.roleFailure,
 	};
 }
 
@@ -178,22 +170,12 @@ function byProvider(models: readonly Model<Api>[]): Map<string, Model<Api>[]> {
 	return out;
 }
 
-/** Whether a `--model` value is a role selector, which only the whole catalog resolves. */
-function roleShaped(cliModel: string): boolean {
-	return (
-		cliModel === DEFAULT_MODEL_ROLE_ALIAS ||
-		cliModel.startsWith(`${DEFAULT_MODEL_ROLE_ALIAS}:`) ||
-		cliModel.startsWith(MODEL_ROLE_ALIAS_PREFIX) ||
-		cliModel.startsWith(LEGACY_MODEL_ROLE_ALIAS_PREFIX)
-	);
-}
-
 interface CatalogSelectors {
 	/** Spellings the named path answers. */
 	named: Selector[];
 	/** References two models share once case is folded, which the named path leaves to the whole catalog. */
 	ambiguous: Selector[];
-	/** Unique references the named path leaves to the whole catalog: role selectors and a `--provider` id of `*`. */
+	/** Unique references the named path leaves to the whole catalog: a `--provider` id of `*`. */
 	deferred: Selector[];
 }
 
@@ -209,9 +191,9 @@ function catalogSelectors(catalog: readonly Model<Api>[]): CatalogSelectors {
 		if (keyCounts.get(key(model).toLowerCase()) !== 1) out.ambiguous.push(selector);
 		else (answered ? out.named : out.deferred).push(selector);
 	};
-	const idAnswered = (model: Model<Api>) => model.id !== DEFAULT_MODEL_ROLE_ALIAS;
+	const idAnswered = (model: Model<Api>) => model.id !== "*";
 	for (const model of catalog) {
-		add(model, { cliModel: key(model) }, !roleShaped(key(model)));
+		add(model, { cliModel: key(model) }, true);
 		// A `--provider` id that repeats the provider prefix is stripped to another id.
 		if (!model.id.toLowerCase().startsWith(`${model.provider.toLowerCase()}/`)) {
 			add(model, { cliProvider: model.provider, cliModel: model.id }, idAnswered(model));
@@ -222,7 +204,7 @@ function catalogSelectors(catalog: readonly Model<Api>[]): CatalogSelectors {
 	}
 	for (const [provider, models] of byProvider(catalog)) {
 		for (const model of [models[0], models.at(-1)!]) {
-			add(model, { cliModel: key(model).toUpperCase() }, !roleShaped(key(model).toUpperCase()));
+			add(model, { cliModel: key(model).toUpperCase() }, true);
 			add(model, { cliProvider: provider.toUpperCase(), cliModel: key(model) }, idAnswered(model));
 			add(model, { cliProvider: provider.toLowerCase(), cliModel: ` ${model.id} ` }, idAnswered(model));
 		}
@@ -251,8 +233,8 @@ function missSelectors(catalog: readonly Model<Api>[]): Selector[] {
 			{ cliProvider: provider, cliModel: "no-such-model" },
 			{ cliModel: `${provider}/` },
 			{ cliProvider: provider, cliModel: `${provider}/` },
-			{ cliModel: `${provider}/${DEFAULT_MODEL_ROLE_ALIAS}` },
-			{ cliProvider: provider, cliModel: DEFAULT_MODEL_ROLE_ALIAS },
+			{ cliModel: `${provider}/*` },
+			{ cliProvider: provider, cliModel: "*" },
 			{ cliModel: `${key(first)}:high` },
 			{ cliProvider: provider, cliModel: `${first.id}:high` },
 			{ cliModel: `${key(first)}:nitro` },
@@ -295,7 +277,7 @@ afterAll(async () => {
 	await tmp.remove();
 });
 
-const RESOLVED = { error: undefined, thinkingLevel: undefined, warning: undefined, roleFailure: undefined };
+const RESOLVED = { error: undefined, thinkingLevel: undefined, warning: undefined };
 
 describe("a provider-qualified CLI selector", () => {
 	it("resolves every catalog model as the whole catalog does, without listing the catalog", async () => {
@@ -307,7 +289,6 @@ describe("a provider-qualified CLI selector", () => {
 		// A catalog model the named path does not answer is a decision recorded here, not a silent skip.
 		expect(deferred.map(label)).toEqual([
 			"--provider yard-gw --model *",
-			"--model pi/smol",
 			"--provider YARD-GW --model yard-gw/*",
 			"--provider yard-gw --model  * ",
 		]);

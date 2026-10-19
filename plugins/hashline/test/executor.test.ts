@@ -2,9 +2,10 @@ import { describe, expect, it } from "bun:test";
 import { ABORT_MARKER, END_PATCH_MARKER } from "../src/messages";
 import { Executor } from "../src/parser";
 import { Tokenizer } from "../src/tokenizer";
+import type { Edit, FileOp } from "../src/types";
 
 /** Drive a whole hashline body through a fresh tokenizer into `ex`, then end. */
-function feedAll(ex: Executor, text: string): ReturnType<Executor["end"]> {
+function feedAll(ex: Executor, text: string): { edits: Edit[]; fileOp?: FileOp; warnings: string[] } {
 	const tok = new Tokenizer();
 	for (const token of tok.tokenizeAll(text)) ex.feed(token);
 	return ex.end();

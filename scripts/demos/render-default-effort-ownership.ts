@@ -1,7 +1,7 @@
 /**
  * Render the settings selector model tab with configured default effort overrides.
  *
- * Initializes in-memory settings with a model role requiring high effort and a default
+ * Initializes in-memory settings with a default model requiring high effort and a default
  * effort setting requiring low effort. Opens the model settings tab, selects the default
  * model entry, navigates into the effort picker, and prints the rendered selector lines
  * as ANSI text.
@@ -43,7 +43,7 @@ await renderDemo(async ({ width }) => {
 	await Settings.init({
 		inMemory: true,
 		overrides: {
-			modelRoles: { default: "test/reasoning-model:high" },
+			defaultModel: "test/reasoning-model:high",
 			defaultEffort: { "test/reasoning-model": Effort.Low },
 		},
 	});

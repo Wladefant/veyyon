@@ -29,7 +29,7 @@
  * oracle, the shared defect class and the styling policy every cell here runs under.
  */
 
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, setSystemTime } from "bun:test";
 import type { RenderResultOptions } from "@veyyon/agent-core";
 import { settings } from "@veyyon/coding-agent/config/settings";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
@@ -55,8 +55,18 @@ const WIDTHS = [200, WIDTH, 40];
 /** The frames a comparison is taken on: no frame at all, an even one and an odd one. */
 const FRAMES = [undefined, 0, 3] as const;
 
-/** A turn that began half a second off a boundary, so both arms format the same elapsed seconds. */
+/** How long ago the on-air worker's turn began; both arms read it against a held clock. */
 const TURN_AGE_MS = 5500;
+
+/**
+ * Hold `Date.now()` still for the scope. Each arm formats a turn's elapsed time from the clock it
+ * draws at, and the sweep draws both arms dozens of times, so a running clock crossed a tenth of a
+ * second between the view and the oracle on a slow runner and the two rows differed by `5.5s`/`5.6s`.
+ */
+function heldClock(): Disposable {
+	setSystemTime(new Date());
+	return { [Symbol.dispose]: () => setSystemTime() };
+}
 
 /** The escape a theme colour closes with. */
 const CLOSE = "\x1b[39m";
@@ -343,6 +353,7 @@ describe("vibe tool differential", () => {
 	});
 
 	it("stacks the wall the same way, on air and settled", () => {
+		using _clock = heldClock();
 		const screens = [
 			screen({
 				id: "Anna",

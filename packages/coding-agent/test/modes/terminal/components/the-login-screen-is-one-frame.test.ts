@@ -20,7 +20,7 @@
  * hand-built prompt, which is a separate surface that shares only the `secret` flag.
  */
 
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { getLoginCredential } from "@veyyon/ai/oauth";
 import { LoginDialogComponent } from "@veyyon/coding-agent/modes/terminal/components/dialogs/login-dialog";
@@ -41,7 +41,7 @@ function makeDialog(providerId = "groq"): {
 	dialog: LoginDialogComponent;
 	frame: () => string;
 	rows: () => string[];
-	completed: ReturnType<typeof vi.fn>;
+	completed: Mock<() => void>;
 	opened: string[];
 } {
 	// The dialog opens the authorize URL best-effort. A test must not spawn the operator's browser.

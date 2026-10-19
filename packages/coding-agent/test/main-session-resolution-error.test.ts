@@ -11,7 +11,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Args } from "@veyyon/coding-agent/cli/args";
 import type { Settings } from "@veyyon/coding-agent/config/settings";
-import { createSessionManager, SessionResolutionError, writeStartupNotice } from "@veyyon/coding-agent/main";
+import * as pluginDiscovery from "@veyyon/coding-agent/discovery/helpers";
+import { createSessionManager, SessionResolutionError, startPluginPreload, writeStartupNotice } from "@veyyon/coding-agent/main";
 import * as sessionListingModule from "@veyyon/kernel/session/session-listing";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 
@@ -195,5 +196,28 @@ describe("createSessionManager — missing session (#2084)", () => {
 			message: "--fork requires session persistence",
 			hint: undefined,
 		});
+	});
+});
+
+describe("plugin preload early rejection", () => {
+	it("handles rejection before startup awaits it and preserves the failure for that await", async () => {
+		const failure = new Error("Plugin discovery failed before startup finished");
+		const unhandled: unknown[] = [];
+		const recordUnhandled = (reason: unknown) => unhandled.push(reason);
+		process.on("unhandledRejection", recordUnhandled);
+		const preload = vi.spyOn(pluginDiscovery, "preloadPluginRoots").mockRejectedValue(failure);
+		const pending = startPluginPreload(buildResumeArgs("unused"));
+		try {
+			// Startup can await settings and credentials before it observes the preload result.
+			await new Promise<void>(resolve => setImmediate(resolve));
+			expect(unhandled).toEqual([]);
+			await expect(pending).rejects.toBe(failure);
+			await new Promise<void>(resolve => setImmediate(resolve));
+			expect(unhandled).toEqual([]);
+		} finally {
+			await pending.catch(() => {});
+			preload.mockRestore();
+			process.off("unhandledRejection", recordUnhandled);
+		}
 	});
 });

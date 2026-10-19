@@ -166,7 +166,7 @@ describe("AgentSession retry fallback", () => {
 				],
 			},
 		});
-		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+		settings.setDefaultModel(`${primaryModel.provider}/${primaryModel.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -297,7 +297,7 @@ describe("AgentSession retry fallback", () => {
 				[`${primaryModel.provider}/${primaryModel.id}`]: [`${modelKeyFallback.provider}/${modelKeyFallback.id}`],
 			},
 		});
-		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+		settings.setDefaultModel(`${primaryModel.provider}/${primaryModel.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -722,11 +722,11 @@ describe("AgentSession retry fallback", () => {
 		]);
 	});
 
-	it("uses the active initial model as the default fallback primary when other role fallback chains are configured", async () => {
+	it("uses the active initial model as the default fallback primary when other model fallback chains are configured", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
-		const otherRoleFallbackModel = getBundledModel("openai", "gpt-4o");
-		if (!primaryModel || !fallbackModel || !otherRoleFallbackModel) {
+		const otherChainModel = getBundledModel("openai", "gpt-4o");
+		if (!primaryModel || !fallbackModel || !otherChainModel) {
 			throw new Error("Expected bundled test models to exist");
 		}
 
@@ -739,7 +739,7 @@ describe("AgentSession retry fallback", () => {
 			"retry.maxRetries": 1,
 			"retry.fallbackChains": {
 				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
-				smol: [`${otherRoleFallbackModel.provider}/${otherRoleFallbackModel.id}`],
+				"openai/gpt-5": [`${otherChainModel.provider}/${otherChainModel.id}`],
 			},
 		});
 
@@ -830,7 +830,7 @@ describe("AgentSession retry fallback", () => {
 			},
 			"retry.fallbackRevertPolicy": "cooldown-expiry",
 		});
-		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+		settings.setDefaultModel(`${primaryModel.provider}/${primaryModel.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -933,7 +933,7 @@ describe("AgentSession retry fallback", () => {
 			"retry.maxRetries": 1,
 			"retry.modelFallback": false,
 		});
-		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+		settings.setDefaultModel(`${primaryModel.provider}/${primaryModel.id}`);
 
 		const sessionStopCalls: number[] = [];
 		const sessionStopLastAssistantMessages: Array<AssistantMessage | undefined> = [];
@@ -1037,7 +1037,7 @@ describe("AgentSession retry fallback", () => {
 				],
 			},
 		});
-		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+		settings.setDefaultModel(`${primaryModel.provider}/${primaryModel.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1110,7 +1110,7 @@ describe("AgentSession retry fallback", () => {
 			"retry.baseDelayMs": 5,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1176,7 +1176,7 @@ describe("AgentSession retry fallback", () => {
 				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
 			},
 		});
-		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+		settings.setDefaultModel(`${primaryModel.provider}/${primaryModel.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1252,7 +1252,7 @@ describe("AgentSession retry fallback", () => {
 			"retry.baseDelayMs": 5,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1310,7 +1310,7 @@ describe("AgentSession retry fallback", () => {
 			"retry.baseDelayMs": 5,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1369,7 +1369,7 @@ describe("AgentSession retry fallback", () => {
 			"retry.baseDelayMs": 5,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1434,7 +1434,7 @@ describe("AgentSession retry fallback", () => {
 				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
 			},
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1515,7 +1515,7 @@ describe("AgentSession retry fallback", () => {
 				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
 			},
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1585,7 +1585,7 @@ describe("AgentSession retry fallback", () => {
 			"retry.baseDelayMs": 5,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1650,7 +1650,7 @@ describe("AgentSession retry fallback", () => {
 				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
 			},
 		});
-		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+		settings.setDefaultModel(`${primaryModel.provider}/${primaryModel.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1724,7 +1724,7 @@ describe("AgentSession retry fallback", () => {
 			"retry.baseDelayMs": 5,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1807,7 +1807,7 @@ describe("AgentSession retry fallback", () => {
 				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
 			},
 		});
-		settings.setModelRole("default", "openrouter/z-ai/glm-4.7");
+		settings.setDefaultModel("openrouter/z-ai/glm-4.7");
 
 		session = new AgentSession({
 			agent,
@@ -1863,7 +1863,7 @@ describe("AgentSession retry fallback", () => {
 				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
 			},
 		});
-		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+		settings.setDefaultModel(`${primaryModel.provider}/${primaryModel.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1899,7 +1899,7 @@ describe("AgentSession retry fallback", () => {
 			},
 			"retry.fallbackRevertPolicy": "cooldown-expiry",
 		});
-		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+		settings.setDefaultModel(`${primaryModel.provider}/${primaryModel.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -1993,7 +1993,7 @@ describe("AgentSession retry fallback", () => {
 			},
 			"retry.fallbackRevertPolicy": "cooldown-expiry",
 		});
-		settings.setModelRole("default", "openrouter/z-ai/glm-4.7@cerebras");
+		settings.setDefaultModel("openrouter/z-ai/glm-4.7@cerebras");
 
 		session = new AgentSession({
 			agent,
@@ -2043,7 +2043,7 @@ describe("AgentSession retry fallback", () => {
 			},
 			"retry.fallbackRevertPolicy": "cooldown-expiry",
 		});
-		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}:high`);
+		settings.setDefaultModel(`${primaryModel.provider}/${primaryModel.id}:high`);
 
 		session = new AgentSession({
 			agent,
@@ -2103,7 +2103,7 @@ describe("AgentSession retry fallback", () => {
 			"compaction.enabled": false,
 			"retry.fallbackChains": { default: ["ollama-cloud/deepseek-v4-pro"] },
 		});
-		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+		settings.setDefaultModel(`${primaryModel.provider}/${primaryModel.id}`);
 		const agent = new Agent({
 			getApiKey: model => `${model.provider}-test-key`,
 			initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
@@ -2215,7 +2215,7 @@ describe("AgentSession retry fallback", () => {
 			"retry.baseDelayMs": 5,
 			"retry.maxRetries": 1,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -2277,7 +2277,7 @@ describe("AgentSession retry fallback", () => {
 			"retry.maxRetries": 1,
 			"retry.modelFallback": false,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -2349,7 +2349,7 @@ describe("AgentSession retry fallback", () => {
 			},
 			"retry.fallbackRevertPolicy": "cooldown-expiry",
 		});
-		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+		settings.setDefaultModel(`${primaryModel.provider}/${primaryModel.id}`);
 
 		session = new AgentSession({
 			agent,

@@ -8,13 +8,13 @@
 import * as fs from "node:fs";
 import type { AgentToolResult } from "@veyyon/agent-core";
 import { isEnoent } from "@veyyon/utils";
+import { FileChangeType, notifyWorkspaceWatchedFiles } from "../../lsp/client";
+import type { FileDiagnosticsResult } from "../../lsp/diagnostics";
 import {
-	type FileDiagnosticsResult,
 	flushLspWritethroughBatch,
 	type WritethroughCallback,
 	type WritethroughDeferredHandle,
-} from "../../lsp";
-import { FileChangeType, notifyWorkspaceWatchedFiles } from "../../lsp/client";
+} from "../../lsp/writethrough";
 import type { ToolSession } from "../../tools";
 import { routeWriteThroughBridge } from "../../tools/core/acp-bridge";
 import {

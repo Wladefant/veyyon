@@ -155,10 +155,18 @@ describe("AAAK encoding", () => {
 		expect(encode("User email is alice@example.com, GitHub: alice")).toBe("@alice@example.com | GH:alice");
 	});
 
-	it("leaves compact AAAK text unchanged and uses Python completion compaction order", () => {
+	it("leaves compact AAAK text unchanged", () => {
 		// Empty input short-circuits before any transform and returns the empty string.
 		expect(encode("")).toBe("");
 		expect(encode("PREF|dark-mode")).toBe("PREF|dark-mode");
-		expect(encode("TASK: backup working correctly, migration completed")).toBe("TASK: backup OK | migration DONEd");
+	});
+
+	it("compacts status words only where they stand as whole words", () => {
+		expect(encode("TASK: backup working correctly, migration completed")).toBe("TASK: backup OK | migration DONE");
+		expect(encode("TASK: export complete, import working")).toBe("TASK: export DONE | import OK");
+		// A substring match would invert the first ("inDONE") and mangle the second ("netOK").
+		expect(encode("TASK: migration incomplete, networking down")).toBe(
+			"TASK: migration incomplete | networking down",
+		);
 	});
 });

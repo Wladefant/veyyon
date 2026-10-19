@@ -16,6 +16,7 @@
  * rather than recorded, because a decision about `~/.veyyon` would be a decision about their own
  * configuration.
  */
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { pathExists } from "@veyyon/utils";
 import {
@@ -25,7 +26,10 @@ import {
 	ProjectTrust,
 	type ProjectTrustVerdict,
 } from "../config/project-trust";
+import { describeProjectSkill } from "../config/project-skill-trust";
+import { findRepoRoot } from "../discovery/capability/fs";
 import { clearClaudePluginRootsCache, resolveActiveProjectRegistryPath } from "../discovery/helpers";
+import { discoverProjectSkillPaths } from "../discovery/project-skills";
 
 export type TrustAction = "approve" | "deny" | "forget" | "list";
 
@@ -65,39 +69,58 @@ export interface TrustCommandResult {
  * to the plugins it names — so listing them here would ask the operator to approve files the
  * project does not control.
  */
-async function discoverCandidatePaths(cwd: string): Promise<string[]> {
-	const registry = await resolveActiveProjectRegistryPath(cwd);
-	return registry ? [registry] : [];
+async function discoverCandidatePaths(projectRoot: string): Promise<string[]> {
+	const registry = await resolveActiveProjectRegistryPath(projectRoot);
+	const skillPaths = await discoverProjectSkillPaths(projectRoot);
+	return registry ? [registry, ...skillPaths] : skillPaths;
 }
 
 function grantsFor(relativePath: string): string {
-	return relativePath.endsWith("installed_plugins.json")
-		? "plugins: extensions, hooks, custom tools, slash commands and MCP servers"
-		: "code loaded at startup";
+	if (relativePath.endsWith("installed_plugins.json")) {
+		return "plugins: extensions, hooks, custom tools, slash commands and MCP servers";
+	}
+	if (path.basename(relativePath).toLowerCase() === "skill.md") {
+		return "skill: specialized instructions, scripts and assets";
+	}
+	return "code loaded at startup";
 }
 
 export async function runTrustCommand(args: TrustCommandArgs): Promise<TrustCommandResult> {
-	const projectRoot = await canonicalProjectRoot(args.cwd);
+	const repoRoot = await findRepoRoot(args.cwd);
+	const effectiveRoot = repoRoot ?? args.cwd;
+	const projectRoot = await canonicalProjectRoot(effectiveRoot);
 	const trust = await ProjectTrust.load(args.agentDir);
 
 	const named = args.paths.map(p => path.resolve(args.cwd, p));
-	const discovered = named.length > 0 ? named : await discoverCandidatePaths(args.cwd);
+	const discovered = named.length > 0 ? named : await discoverCandidatePaths(effectiveRoot);
 
 	const outOfScope: string[] = [];
 	const unreadable: string[] = [];
 	const executables: ProjectExecutable[] = [];
 	for (const absolutePath of discovered) {
-		const executable = await describeProjectExecutable(absolutePath, projectRoot);
+		const isSkill =
+			path.basename(absolutePath).toLowerCase() === "skill.md" ||
+			(await pathExists(path.join(absolutePath, "SKILL.md"), "a skill directory containing SKILL.md"));
+		const executable = isSkill
+			? await describeProjectSkill(absolutePath, projectRoot)
+			: await describeProjectExecutable(absolutePath, projectRoot);
 		if (executable) {
 			executables.push(executable);
 			continue;
 		}
-		// describeProjectExecutable folds "outside the project" and "cannot be read" into one
-		// null, and the operator's next move differs: one is the wrong directory, the other is a
-		// typo. Distinguishing costs one stat and is the difference between an actionable message
-		// and a shrug.
-		if (await pathExists(absolutePath, "a path named for a trust decision")) outOfScope.push(absolutePath);
-		else unreadable.push(absolutePath);
+		// Describers return null for both an invalid/unreadable candidate and one that resolves
+		// outside its root. Use the real target to keep those operator actions distinct.
+		try {
+			const realPath = await fs.realpath(absolutePath);
+			const relative = path.relative(projectRoot, realPath);
+			if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+				outOfScope.push(absolutePath);
+			} else {
+				unreadable.push(absolutePath);
+			}
+		} catch {
+			unreadable.push(absolutePath);
+		}
 	}
 
 	if (args.action === "approve" && executables.length > 0) await trust.trust(projectRoot, executables);

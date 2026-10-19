@@ -31,7 +31,8 @@ import {
 	ST,
 	sgrSequence,
 } from "@veyyon/utils/ansi";
-import { moduleSpecifiersIn } from "@veyyon/utils/module-reach";
+import { moduleSpecifiersIn, namedImportsFrom } from "@veyyon/utils/module-reach";
+import { exportedDeclarationsIn, stringConstantsIn } from "@veyyon/utils/source-declarations";
 import { memberSrcNamed } from "./support/package-sources";
 
 const UTILS_SRC = path.join(import.meta.dir, "..", "src");
@@ -229,11 +230,11 @@ describe("the primitives added after the first cut", () => {
 	 * absent here on purpose.
 	 */
 	it("does not own one-off inline attributes", async () => {
-		const owner = await Bun.file(path.join(UTILS_SRC, "ansi.ts")).text();
-		expect(owner).not.toContain("SGR_BOLD");
-		expect(owner).not.toContain("SGR_DIM");
+		const exported = exportedDeclarationsIn(await Bun.file(path.join(UTILS_SRC, "ansi.ts")).text());
+		expect(exported).not.toContain("SGR_BOLD");
+		expect(exported).not.toContain("SGR_DIM");
 		// The intensity RESET is here, though, precisely because two modules had to agree on it.
-		expect(owner).toContain("export const SGR_INTENSITY_RESET");
+		expect(exported).toContain("SGR_INTENSITY_RESET");
 	});
 
 	/**
@@ -245,9 +246,10 @@ describe("the primitives added after the first cut", () => {
 	 */
 	it("leaves no second declaration of the escape byte in the lower layer", async () => {
 		const sanitize = await Bun.file(path.join(UTILS_SRC, "sanitize-text.ts")).text();
-		expect(sanitize).toContain('import { ESC as ESC_CHAR } from "./ansi";');
-		expect(sanitize).not.toMatch(/^\s*(?:export )?const ESC_CHAR\b/m);
-		expect(sanitize).not.toContain("@veyyon/tui");
+		// Importing the binding is also the proof there is no local `ESC_CHAR`: the compiler refuses both.
+		expect(namedImportsFrom(sanitize, "./ansi")).toContain("ESC_CHAR");
+		expect(stringConstantsIn(sanitize).map(constant => constant.value)).not.toContain(ESC);
+		expect(moduleSpecifiersIn(sanitize).filter(specifier => specifier.startsWith("@veyyon/tui"))).toEqual([]);
 	});
 });
 

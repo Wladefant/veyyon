@@ -139,7 +139,7 @@ async function makeHarness(responses: Record<string, Response | (() => Response)
 		targetPath,
 		reported,
 		fetched,
-		run: version => installRelease(version, false, line => reported.push(line)),
+		run: version => installRelease(version, line => reported.push(line)),
 	};
 }
 
@@ -291,7 +291,7 @@ describe.skipIf(isWindows)("installRelease end to end (binary self-update pipeli
 		// The temp dir is not a git checkout, so the first source step (git
 		// fetch) fails — proving the dispatch went to the source path and that
 		// its failure carries the manual recovery, not a binary-swap error.
-		await expect(installRelease("9.9.9", false, () => {})).rejects.toThrow(/git pull && bun install/);
+		await expect(installRelease("9.9.9", () => {})).rejects.toThrow(/git pull && bun install/);
 		expect(fetchSpy).not.toHaveBeenCalled();
 		expect(await fs.readFile(launcherPath, "utf8")).toBe(fakeBinaryScript("1.0.0"));
 	});

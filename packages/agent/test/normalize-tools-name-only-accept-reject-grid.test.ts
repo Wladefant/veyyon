@@ -3,7 +3,7 @@
  * Why: tool list sent to providers must not include nameless or schema-less junk.
  */
 import { describe, expect, it } from "bun:test";
-import { normalizeTools } from "@veyyon/agent-core/agent-loop";
+import { normalizeTools } from "@veyyon/agent-core/tool-normalization";
 
 describe("normalizeTools name-only accept reject grid", () => {
 	it("empty list stays empty", () => {

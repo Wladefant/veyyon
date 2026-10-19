@@ -23,7 +23,8 @@ import {
 	type PreparedSection,
 } from "@veyyon/hashline";
 import { formatCount } from "@veyyon/utils";
-import type { FileDiagnosticsResult, WritethroughCallback, WritethroughDeferredHandle } from "../../lsp";
+import type { FileDiagnosticsResult } from "../../lsp/diagnostics";
+import type { WritethroughCallback, WritethroughDeferredHandle } from "../../lsp/writethrough";
 import type { ToolSession } from "../../tools";
 import { outputMeta } from "../../tools/core/output-meta";
 import type { LspBatchRequest } from "../../tools/core/render-utils";

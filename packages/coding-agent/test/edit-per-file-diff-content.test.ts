@@ -10,7 +10,7 @@ import {
 	executePatchSingle,
 	executeReplaceSingle,
 } from "@veyyon/coding-agent/edit";
-import { writethroughNoop } from "@veyyon/coding-agent/lsp";
+import { writethroughNoop } from "@veyyon/coding-agent/lsp/writethrough";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { removeWithRetries } from "@veyyon/utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";

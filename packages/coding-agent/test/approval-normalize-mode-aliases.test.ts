@@ -7,7 +7,7 @@
  * default.
  */
 import { describe, expect, it } from "bun:test";
-import { normalizeApprovalMode, validateApprovalModeSetting } from "../src/tools/core/approval";
+import { normalizeApprovalMode } from "../src/tools/core/approval";
 import { APPROVAL_MODE_VALUES, AUTONOMY_LABEL } from "../src/tools/core/approval-modes";
 
 describe("normalizeApprovalMode alias matrix", () => {
@@ -66,18 +66,4 @@ describe("normalizeApprovalMode alias matrix", () => {
 			expect(normalizeApprovalMode(bad)).toBe("ask");
 		});
 	}
-});
-
-describe("validateApprovalModeSetting matrix", () => {
-	it("known modes no warning", () => {
-		for (const m of APPROVAL_MODE_VALUES) {
-			expect(validateApprovalModeSetting(m)).toBeUndefined();
-		}
-	});
-
-	it("typos warn with ask fallback", () => {
-		const w = validateApprovalModeSetting("askk");
-		expect(w).toContain("askk");
-		expect(w).toContain('"ask"');
-	});
 });

@@ -213,7 +213,7 @@ beforeEach(async () => {
 	resetSettingsForTest();
 	resetLaunchFactsForTest();
 	await Settings.init({ cwd: isolated.root });
-	settings.setModelRole("default", `${PROVIDER}/${MODEL_ID}`);
+	settings.setDefaultModel(`${PROVIDER}/${MODEL_ID}`);
 	// The previous launch's reading, filed under the model only: this project was never measured.
 	await recordLaunchFacts({ modelContextPercent: RECORDED_PERCENT });
 });

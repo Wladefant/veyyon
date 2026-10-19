@@ -746,6 +746,38 @@ describe("InputController escape behavior", () => {
 			tui.stop();
 		}
 	});
+
+	it("opens nothing on a double Esc when doubleEscapeAction is none", () => {
+		Settings.instance.override("doubleEscapeAction", "none");
+		const { ctx, editor, spies } = createContext();
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onEscape?.();
+		editor.onEscape?.();
+
+		const opened = [
+			(ctx.showTreeSelector as unknown as Spy).mock.calls.length,
+			(ctx.showUserMessageSelector as unknown as Spy).mock.calls.length,
+		];
+		expect({ opened, resets: spies.resetDisplay.mock.calls.length }).toEqual({ opened: [0, 0], resets: 0 });
+	});
+
+	it("needs two fresh presses after a double-Esc action before the action runs again", () => {
+		const { ctx, editor } = createContext();
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onEscape?.();
+		editor.onEscape?.();
+		editor.onEscape?.();
+		const treeOpens = (): number => (ctx.showTreeSelector as unknown as Spy).mock.calls.length;
+		const afterThree = treeOpens();
+		editor.onEscape?.();
+
+		expect([afterThree, treeOpens()]).toEqual([1, 2]);
+	});
+
 	it("preserves typed editor text on Esc without opening selectors or aborting", () => {
 		const { ctx, editor, spies } = createContext();
 		const controller = new InputController(ctx);

@@ -14,8 +14,7 @@
  * is erased. So there is no runtime edge back to the OAuth side at all: this module and the row helpers
  * are a closed pair.
  *
- * `auth-storage.ts` re-exports this class, so every existing importer of `@veyyon/ai/auth-storage` or of
- * the package barrel is unaffected.
+ * The package root exports this class; a caller that needs only the store imports this module.
  */
 import { constants, type Database, type Statement } from "bun:sqlite";
 import * as fs from "node:fs/promises";
@@ -31,6 +30,7 @@ import {
 	deserializeCredential,
 	matchesReplacementCredential,
 	normalizeDisabledCause,
+	personalAccountId,
 	resolveCredentialIdentityKey,
 	resolveRowCredentialIdentityKey,
 	serializeCredential,
@@ -721,13 +721,15 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 
 	/**
 	 * Hard-deletes disabled rows for a provider when an active replacement exists.
-	 * OAuth credentials match by identity key; API keys match by provider and type.
+	 * OAuth credentials match by identity key, or by a shared personal account id (a Google
+	 * account whose email changed keeps its id); API keys match by provider and type.
 	 * Disabled rows without an active same-type replacement remain recoverable.
 	 */
 	#purgeSupersededDisabledRows(provider: string, activeRows: StoredAuthCredential[]): void {
 		try {
 			let hasActiveApiKey = false;
 			const activeIdentityKeys = new Set<string>();
+			const activeAccountIds = new Set<string>();
 			for (const row of activeRows) {
 				if (row.credential.type === "api_key") {
 					hasActiveApiKey = true;
@@ -735,6 +737,8 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				}
 				const identityKey = resolveCredentialIdentityKey(provider, row.credential);
 				if (identityKey) activeIdentityKeys.add(identityKey);
+				const accountId = personalAccountId(provider, row.credential);
+				if (accountId) activeAccountIds.add(accountId);
 			}
 			if (!hasActiveApiKey && activeIdentityKeys.size === 0) return;
 
@@ -746,6 +750,12 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				}
 				const identityKey = resolveRowCredentialIdentityKey(provider, row);
 				if (identityKey && activeIdentityKeys.has(identityKey)) {
+					this.#hardDeleteStmt.run(row.id);
+					continue;
+				}
+				if (activeAccountIds.size === 0) continue;
+				const accountId = personalAccountId(provider, deserializeCredential(row));
+				if (accountId && activeAccountIds.has(accountId)) {
 					this.#hardDeleteStmt.run(row.id);
 				}
 			}
@@ -786,18 +796,31 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	/**
-	 * List disabled rows, newest first. See
+	 * List disabled rows no later login has answered, newest first. See
 	 * {@link AuthCredentialStore.listDisabledAuthCredentials}.
 	 *
 	 * Ordered by id descending because the row that matters is the one disabled
 	 * most recently: an account that was replaced and then re-added leaves older
 	 * disabled rows behind, and reporting one of those would name a cause the user
 	 * already resolved.
+	 *
+	 * A row disabled BEFORE a login that is still active for its provider was created
+	 * is left out. That login is the answer to the signed-out note, whichever account
+	 * it signed in: without the cut, a login to a different account left the provider
+	 * reported as signed out for good, naming a login months dead beside the one now
+	 * serving. `updated_at` of a disabled row is the moment of its disable, since a
+	 * disabled row is never written again; `created_at` of an active row is its login.
 	 */
 	listDisabledAuthCredentials(provider?: string): StoredAuthCredential[] {
+		const unanswered = `NOT EXISTS (
+				SELECT 1 FROM auth_credentials AS later
+				WHERE later.provider = auth_credentials.provider
+					AND later.disabled_cause IS NULL
+					AND later.created_at > auth_credentials.updated_at
+			)`;
 		const sql = provider
-			? "SELECT * FROM auth_credentials WHERE disabled_cause IS NOT NULL AND provider = ? ORDER BY id DESC"
-			: "SELECT * FROM auth_credentials WHERE disabled_cause IS NOT NULL ORDER BY id DESC";
+			? `SELECT * FROM auth_credentials WHERE disabled_cause IS NOT NULL AND provider = ? AND ${unanswered} ORDER BY id DESC`
+			: `SELECT * FROM auth_credentials WHERE disabled_cause IS NOT NULL AND ${unanswered} ORDER BY id DESC`;
 		const stmt = this.#db.prepare(sql);
 		try {
 			const rows = (provider ? stmt.all(provider) : stmt.all()) as AuthRow[];

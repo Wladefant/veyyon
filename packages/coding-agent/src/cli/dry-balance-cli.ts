@@ -2,7 +2,6 @@ import type {
 	Api,
 	ApiKeyResolver,
 	AssistantMessage,
-	AssistantMessageEvent,
 	AssistantMessageEventStream,
 	AuthCredentialSnapshotEntry,
 	Context,
@@ -22,11 +21,11 @@ import {
 	getModelMatchPreferences,
 	resolveAllowedModels,
 	resolveCliModel,
-	resolveModelRoleValue,
+	resolveModelSelectorValue,
 } from "../config/model-resolver";
-import { DEFAULT_MODEL_SLOT } from "../config/model-roles";
 import type { Settings } from "../config/settings";
 import { benchPrompts } from "../prompts/bench/rows";
+import { isFirstTokenEvent } from "./first-token";
 import { createCliModelRuntime } from "./model-runtime";
 
 const DEFAULT_SAMPLE_COUNT = 100;
@@ -272,20 +271,6 @@ function isBenchSuccess(result: DryBalanceBenchResult): result is DryBalanceBenc
 	return result.ok;
 }
 
-function isBenchFirstTokenEvent(event: AssistantMessageEvent): boolean {
-	switch (event.type) {
-		case "text_delta":
-		case "thinking_delta":
-		case "toolcall_delta":
-			return event.delta.length > 0;
-		case "text_end":
-		case "thinking_end":
-			return event.content.length > 0;
-		default:
-			return false;
-	}
-}
-
 function resolveBenchMaxTokens(model: Model<Api>): number {
 	return model.maxTokens !== null && Number.isFinite(model.maxTokens) && model.maxTokens > 0
 		? Math.min(BENCH_MAX_TOKENS, model.maxTokens)
@@ -436,7 +421,7 @@ async function runBenchRequest(
 		});
 		let message: AssistantMessage | undefined;
 		for await (const event of stream) {
-			if (firstTokenAt === undefined && isBenchFirstTokenEvent(event)) {
+			if (firstTokenAt === undefined && isFirstTokenEvent(event)) {
 				firstTokenAt = now();
 			}
 			if (event.type === "error") {
@@ -540,7 +525,6 @@ async function resolveDryBalanceModel(
 			cliModel: modelSelector,
 			modelRegistry,
 			preferences,
-			settings,
 		});
 		if (resolved.error) throw new Error(resolved.error);
 		if (!resolved.model) throw new Error(modelResolutionFailureMessage([modelSelector], modelRegistry));
@@ -554,12 +538,12 @@ async function resolveDryBalanceModel(
 		);
 	}
 
-	const defaultRoleSpec = resolveModelRoleValue(settings?.getModelRole(DEFAULT_MODEL_SLOT), allowedModels, {
+	const defaultModelSpec = resolveModelSelectorValue(settings?.get("defaultModel"), allowedModels, {
 		settings,
 		matchPreferences: preferences,
 	});
-	if (defaultRoleSpec.model) {
-		return { model: defaultRoleSpec.model, warning: defaultRoleSpec.warning };
+	if (defaultModelSpec.model) {
+		return { model: defaultModelSpec.model, warning: defaultModelSpec.warning };
 	}
 
 	for (const candidate of allowedModels) {

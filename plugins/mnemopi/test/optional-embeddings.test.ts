@@ -7,7 +7,7 @@ import {
 	getEmbeddingApiCallCountForTests,
 	resetEmbeddingProviderForTests,
 	setEmbeddingProviderForTests,
-	setLocalModelInitializerForTests,
+	setLocalModelInitializer,
 } from "@veyyon/mnemopi/core/embeddings";
 import { Mnemopi } from "@veyyon/mnemopi/core/memory";
 import { withMnemopiRuntimeOptions } from "@veyyon/mnemopi/core/runtime-options";
@@ -316,7 +316,7 @@ describe("optional embeddings", () => {
 			async () => {
 				let initCalls = 0;
 				const observedCacheDirs: Array<string | undefined> = [];
-				setLocalModelInitializerForTests(async options => {
+				setLocalModelInitializer(async options => {
 					initCalls += 1;
 					observedCacheDirs.push(options.cacheDir);
 					if (initCalls === 1) throw new Error("transient init failure");
@@ -560,7 +560,7 @@ describe("embedding cache-scope and local-model paths", () => {
 			},
 			async () => {
 				let embedCalls = 0;
-				setLocalModelInitializerForTests(async () => ({
+				setLocalModelInitializer(async () => ({
 					embed: streamRows(texts => {
 						embedCalls += 1;
 						return texts.map(text => [text.length]);
@@ -611,7 +611,7 @@ describe("embedding cache-scope and local-model paths", () => {
 				OPENAI_API_KEY: undefined,
 			},
 			async () => {
-				setLocalModelInitializerForTests(async () => ({
+				setLocalModelInitializer(async () => ({
 					embed: () => {
 						throw new Error("inference blew up");
 					},

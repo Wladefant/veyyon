@@ -1,4 +1,4 @@
-import { withTimeoutSignal } from "../utils/fetch-timeout";
+import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 
 /**
  * How long any single Smithery HTTP request may take.
@@ -16,15 +16,17 @@ import { withTimeoutSignal } from "../utils/fetch-timeout";
 export const SMITHERY_HTTP_TIMEOUT_MS = 10_000;
 
 /**
- * An abort signal that fires at the Smithery deadline, optionally combined with
- * the caller's own.
+ * Run one Smithery request under the Smithery deadline, optionally combined with
+ * the caller's own signal.
  *
- * Use this rather than `withTimeoutSignal(SMITHERY_HTTP_TIMEOUT_MS, signal)` at
- * the call site: there were nineteen such call sites, and a helper that owns the
- * pairing means a request cannot quietly get a different deadline from its
- * siblings. Pass the caller's signal when there is one so a cancelled command
- * stops the request instead of waiting out the deadline.
+ * Read the response body inside `request`: the deadline covers the body too, and
+ * its timer is cleared the moment `request` settles, so no armed timer outlives a
+ * finished request. Pass the caller's signal when there is one so a cancelled
+ * command stops the request instead of waiting out the deadline.
  */
-export function smitheryTimeoutSignal(signal?: AbortSignal): AbortSignal {
-	return withTimeoutSignal(SMITHERY_HTTP_TIMEOUT_MS, signal);
+export function withSmitheryDeadline<T>(
+	request: (signal: AbortSignal) => Promise<T>,
+	signal?: AbortSignal,
+): Promise<T> {
+	return withScopedTimeoutSignal(SMITHERY_HTTP_TIMEOUT_MS, request, signal);
 }

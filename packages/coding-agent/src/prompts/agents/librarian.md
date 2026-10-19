@@ -2,7 +2,6 @@
 name: librarian
 description: Read-only answers about code you did not write: an external library, an API, a dependency's real behavior. Reads the actual source rather than recalling it, and returns a definitive answer.
 tools: read, search, bash, lsp, web_search
-thinking-level: minimal
 read-summarize: false
 output:
   properties:

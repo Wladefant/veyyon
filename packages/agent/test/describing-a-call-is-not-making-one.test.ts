@@ -160,9 +160,7 @@ describe("the helper that makes a call owns the engine", () => {
 	 * instead, which is where every consumer outside this package already took it from.
 	 */
 	it("telemetry does not re-export it, because that would be a cycle", () => {
-		const source = fs.readFileSync(path.join(SRC, "telemetry.ts"), "utf-8");
-
-		expect(source).not.toContain("instrumented-complete");
+		expect(runtimeImportsOf("telemetry.ts")).not.toContain("./instrumented-complete");
 		expect(runtimeImportsOf("instrumented-complete.ts")).toContain("./telemetry");
 	});
 });
