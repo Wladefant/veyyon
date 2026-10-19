@@ -14,6 +14,7 @@ export class GatewaySemanticRedactor {
 	constructor(private readonly secrets: readonly string[]) {}
 
 	push(raw: string, final = false): string {
+		let failed = false;
 		if (raw) {
 			const frame: Frame = { raw, slots: [], completed: [], changed: false };
 			const match = /^((?:[^\n]*\n)*data: )([^\n]*)\n\n$/.exec(raw);
@@ -24,15 +25,15 @@ export class GatewaySemanticRedactor {
 					if (value && typeof value === "object" && !Array.isArray(value)) {
 						frame.value = value as Record<string, unknown>;
 						if (value.type === "error" || value.type === "response.failed") {
-							this.#pending.length = 0;
-							this.#heldBytes = 0;
-							this.#tails.clear();
-							return raw;
+							// The stream ends on this frame: held deltas flush through the redaction pass before it.
+							failed = true;
+							final = true;
+						} else {
+							frame.prefix = match[1];
+							this.#slots(frame.value, frame.slots);
+							frame.completed = this.#completed(frame.value);
+							if (value.type === "done" || value.type === "response.completed") final = true;
 						}
-						frame.prefix = match[1];
-						this.#slots(frame.value, frame.slots);
-						frame.completed = this.#completed(frame.value);
-						if (value.type === "done" || value.type === "response.completed") final = true;
 					}
 				} catch { /* Non-JSON SSE data still passes through the byte redactor. */ }
 			}
@@ -126,6 +127,7 @@ export class GatewaySemanticRedactor {
 			if (tail) this.#tails.set(channel, tail);
 			else this.#tails.delete(channel);
 		}
+		if (failed) this.#tails.clear();
 		return output;
 	}
 

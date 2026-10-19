@@ -130,12 +130,22 @@ it("bounds held semantic frames and bytes without waiting for EOF", () => {
 	expect(byBytes.push(safe)).toBe(safe);
 });
 
-it("discards held raw prefixes on semantic errors and transport aborts", async () => {
+it("flushes a held frame with an already-redacted credential before a semantic error", () => {
+	const semantic = new GatewaySemanticRedactor(["provider-secret"]);
+	const held = 'data: {"type":"text_delta","contentIndex":0,"delta":"provider-secret pro"}\n\n';
+	const error = 'data: {"type":"error","message":"upstream failed"}\n\n';
+	expect(semantic.push(held)).toBe("");
+	const output = semantic.push(error);
+	expect(output).toBe('data: {"type":"text_delta","contentIndex":0,"delta":"[REDACTED] pro"}\n\n' + error);
+	expect(output).not.toContain("provider-secret");
+});
+
+it("flushes held deltas before semantic errors and discards them on transport aborts", async () => {
 	const prefix = 'data: {"type":"text_delta","delta":"provider-"}\n\n';
 	const error = 'data: {"type":"error","message":"upstream failed"}\n\n';
 	const semantic = new GatewaySemanticRedactor(["provider-secret"]);
 	expect(semantic.push(prefix)).toBe("");
-	expect(semantic.push(error)).toBe(error);
+	expect(semantic.push(error)).toBe(prefix + error);
 	expect(semantic.push("", true)).toBe("");
 	let source!: ReadableStreamDefaultController<Uint8Array>;
 	let requested!: () => void;
