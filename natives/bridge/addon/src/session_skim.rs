@@ -82,7 +82,7 @@ pub fn skim_session_file(
 fn duplicate(fd: i32) -> Result<std::fs::File> {
 	use std::os::fd::BorrowedFd;
 	if fd < 0 {
-		return Err(Error::from_reason(format!("session skim: {fd} is not a file descriptor")));
+		return Err(Error::from_reason(format!("session skim: descriptor {fd} is negative")));
 	}
 	// SAFETY: the caller holds `fd` open for the duration of this call, which
 	// duplicates it before returning; the duplicate is what the thread pool reads.
