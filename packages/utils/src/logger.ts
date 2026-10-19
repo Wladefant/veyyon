@@ -253,13 +253,31 @@ export function setTransports(opts: { console?: boolean; file?: boolean | string
 	sinks = buildSinks(opts);
 }
 
+const logRedaction = new AsyncLocalStorage<(line: string) => string>();
+
+/** Apply a request-scoped privacy policy to all logger output, including provider modules. */
+export function withLogRedaction<T>(redact: (line: string) => string, run: () => T): T {
+	return logRedaction.run(redact, run);
+}
+
+/** Request debug capture must not start inside a private gateway request. */
+export function isLogRedactionActive(): boolean {
+	return logRedaction.getStore() !== undefined;
+}
+
+/** Apply the active privacy scope to provider diagnostics that write directly to a sink. */
+export function redactDiagnosticLine(line: string): string {
+	return logRedaction.getStore()?.(line) ?? line;
+}
+
 function emit(level: LogLevel, message: string, context: Record<string, unknown> | undefined): void {
 	try {
 		sinks ??= buildSinks(transportOpts);
 		const active = rebindFileSinkIfMoved(sinks);
 		if (active.length === 0) return;
 		const now = new Date();
-		const line = formatLine(level, message, context, now);
+		const raw = formatLine(level, message, context, now);
+		const line = redactDiagnosticLine(raw);
 		for (const sink of active) sink.write(line, now);
 	} catch {
 		// Silently ignore logging failures
@@ -283,7 +301,8 @@ export function error(message: string, context?: Record<string, unknown>): void 
  */
 export function errorSync(message: string, context?: Record<string, unknown>): void {
 	const now = new Date();
-	const line = formatLine("error", message, context, now);
+	const raw = formatLine("error", message, context, now);
+	const line = redactDiagnosticLine(raw);
 	const dir = typeof transportOpts.file === "string" ? transportOpts.file : getLogsDir();
 	fs.mkdirSync(dir, { recursive: true });
 	fs.appendFileSync(path.join(dir, logFileName(now)), line, { encoding: "utf8", flush: true });
