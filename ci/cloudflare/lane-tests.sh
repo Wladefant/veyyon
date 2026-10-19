@@ -391,9 +391,9 @@ if (( shard_index == 1 )); then
   test_skips=$((test_skips + worker_skips))
   test_todos=$((test_todos + worker_todos))
   test_reported=$((test_reported + worker_tests))
-  test_files=$((test_files + 3))
+  test_files=$((test_files + 4))
   test_runs=$((test_runs + 1))
-  echo "CLOUDFLARE_TEST_BUCKET_END health-worker tests=$worker_tests pass=$worker_passes fail=$worker_failures skip=$worker_skips todo=$worker_todos cancelled=$worker_cancelled files=3 runs=1"
+  echo "CLOUDFLARE_TEST_BUCKET_END health-worker tests=$worker_tests pass=$worker_passes fail=$worker_failures skip=$worker_skips todo=$worker_todos cancelled=$worker_cancelled files=4 runs=1"
   if (( worker_tests == 0 || worker_tests != worker_passes + worker_failures + worker_skips + worker_todos || \
         worker_passes == 0 || worker_failures != 0 || worker_skips != 0 || worker_todos != 0 || worker_cancelled != 0 )); then
     echo 'CLOUDFLARE_TEST_BUCKET_FAILED health-worker summary missing, empty, or non-green' >&2

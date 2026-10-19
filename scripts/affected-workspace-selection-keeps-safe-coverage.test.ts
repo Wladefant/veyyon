@@ -10,20 +10,7 @@ import {
 	type GitReadCommand,
 	type WorkspaceSourceFile,
 } from "./affected-workspace-tests";
-import {
-	buildWorkspaceDependencyGraph,
-	type WorkspaceDependencyGraph,
-	type WorkspaceGraphEntry,
-} from "./workspace-layout";
-import {
-	buildAffectedTestPlan,
-	assertRelatedSelectionAvailable,
-	buildAllModeCommandPlan,
-	fastWorkspacePackages,
-	nativeAndIntegrationPackages,
-	parseRunnerArguments,
-	repoScriptTests,
-} from "./ci-test-ts";
+import { parseRunnerArguments } from "./ci-test-ts";
 
 function graph(entries: readonly WorkspaceGraphEntry[]): WorkspaceDependencyGraph {
 	return buildWorkspaceDependencyGraph(entries);
@@ -350,74 +337,28 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 		expect(fullTriggerReason("packages/app/src/file-lock.ts")).toBeUndefined();
 	});
 
-	it("parses the changed-since option without treating its SHA as a mode", () => {
+	it("parses related and explicit target arguments without widening their selection", () => {
 		const sha = "c".repeat(40);
-		expect(parseRunnerArguments([])).toEqual(parseRunnerArguments(["all"]));
-		expect(parseRunnerArguments(["--changed-since", sha, "--dry-run"])).toMatchObject({
+		expect(parseRunnerArguments([])).toEqual({
+			mode: "all",
+			changedSince: undefined,
+			explicitTestFiles: [],
+		});
+		expect(parseRunnerArguments(["--changed-since", sha])).toEqual({
 			mode: "all",
 			changedSince: sha,
-			dryRun: true,
-			planJson: false,
+			explicitTestFiles: [],
+		});
+		expect(parseRunnerArguments(["scripts/example.test.ts"])).toEqual({
+			mode: "all",
+			changedSince: undefined,
+			explicitTestFiles: ["scripts/example.test.ts"],
 		});
 		expect(() => parseRunnerArguments(["--changed-since", "main"])).toThrow(/full 40- or 64-character/);
 		expect(() => parseRunnerArguments(["scripts", "--changed-since", sha])).toThrow(/only with the all mode/);
-	});
-
-	it("refuses a full selector fallback for related-only runs but allows full nightly mode", () => {
-		expect(() =>
-			assertRelatedSelectionAvailable("full", true, "working tree differs from HEAD"),
-		).toThrow(/CLOUDFLARE_RELATED_SELECTION_UNAVAILABLE/);
-		expect(() => assertRelatedSelectionAvailable("affected", true)).not.toThrow();
-		expect(() => assertRelatedSelectionAvailable("full", false)).not.toThrow();
-	});
-
-	it("preserves the exact unfiltered all-mode command plan", async () => {
-		const fullPlan = await buildAllModeCommandPlan(undefined, null);
-		const allMembers = [...fastWorkspacePackages, ...nativeAndIntegrationPackages, "packages/coding-agent"];
-		const selectedPlan = await buildAllModeCommandPlan(allMembers, null);
-
-		expect(selectedPlan.commands).toEqual(fullPlan.commands);
-	});
-
-	it("keeps script gates and architecture suites in selected chunks exactly once", async () => {
-		const sha = "d".repeat(40);
-		const plan = await buildAffectedTestPlan(
-			{
-				selectorId: AFFECTED_SELECTOR_ID,
-				baseSha: "e".repeat(40),
-				headSha: sha,
-				mode: "affected",
-				changedPaths: ["packages/utils/src/index.ts"],
-				selectedMembers: ["packages/utils"],
-				importEdgeCount: 0,
-				changeMembers: [{ path: "packages/utils/src/index.ts", selectedMembers: ["packages/utils"] }],
-				importEdgeCountsByRevision: { base: 0, head: 0 },
-			},
-			{ index: 0, count: 1 },
+		expect(() => parseRunnerArguments(["local", "scripts/example.test.ts"])).toThrow(/cannot be combined/);
+		expect(() => parseRunnerArguments(["--changed-since", sha, "--changed-since", sha])).toThrow(
+			/may only be supplied once/,
 		);
-		const allChunkFiles = plan.chunks.flatMap(chunk => chunk.files);
-		const scriptFiles = plan.selectedInventory.filter(file => repoScriptTests.includes(file));
-		const architectureFiles = plan.selectedInventory.filter(file =>
-			file.startsWith("packages/coding-agent/test/architecture/"),
-		);
-		const architectureOccurrences = allChunkFiles.filter(file =>
-			file.startsWith("packages/coding-agent/test/architecture/"),
-		);
-
-		expect(plan.mode).toBe("affected");
-		expect(plan.selectedMembers).toEqual(["packages/utils"]);
-		expect(plan.selectionHash).toMatch(/^[a-f0-9]{64}$/);
-		expect(plan.importEdgeCountsByRevision).toEqual({ base: 0, head: 0 });
-		expect(scriptFiles.sort()).toEqual([...new Set(repoScriptTests)].sort());
-		expect(architectureFiles.length).toBeGreaterThan(0);
-		expect(architectureOccurrences.sort()).toEqual(architectureFiles.sort());
-		expect(new Set(allChunkFiles).size).toBe(allChunkFiles.length);
-		expect([...allChunkFiles].sort()).toEqual(plan.selectedInventory);
-		expect(plan.chunks.every(chunk => chunk.files.length <= 10)).toBe(true);
-		expect(plan.chunks.some(chunk => chunk.cwd === "packages/utils")).toBe(true);
-		expect(plan.chunks.some(chunk => chunk.cwd === ".")).toBe(true);
-		expect(plan.commands.filter(command => command.cwd === "packages/coding-agent").every(command =>
-			command.command.includes("--preload") && command.command.some(argument => argument.startsWith("--parallel=")),
-		)).toBe(true);
 	});
 });

@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from datetime import datetime, timedelta, timezone
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
-from dispatch_nightly import claim_once_per_utc_day, ensure_nightly_branch_exists
+from dispatch_nightly import claim_once_per_utc_day
 from dispatch_nightly import main as dispatch_nightly_main
 
 _HERE = Path(__file__).resolve().parent
@@ -36,104 +40,144 @@ class TestNightlyDispatchGuard(unittest.TestCase):
 
 
 
-class TestNightlyBranchCreationAndDispatch(unittest.TestCase):
-    def test_missing_ref_creates_branch_and_dispatches_once(self) -> None:
-        calls = []
-
-        def mock_git_runner(cmd, **kwargs):
-            calls.append(cmd)
-            if cmd[1] == "ls-remote":
-                return subprocess.CompletedProcess(cmd, returncode=2, stdout="", stderr="")
-            if cmd[1] == "push":
-                self.assertNotIn("--force", cmd)
-                self.assertNotIn("-f", cmd)
-                return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
-            return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
-
-        created = ensure_nightly_branch_exists(
-            "cf-nightly-main",
-            "1111222233334444555566667777888899990000",
-            git_runner=mock_git_runner,
-        )
-        self.assertTrue(created)
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(calls[0][1], "ls-remote")
-        self.assertEqual(
-            calls[1],
-            ["git", "push", "origin", "1111222233334444555566667777888899990000:refs/heads/cf-nightly-main"],
-        )
-
-    def test_existing_ref_does_not_push(self) -> None:
-        calls = []
-
-        def mock_git_runner(cmd, **kwargs):
-            calls.append(cmd)
-            if cmd[1] == "ls-remote":
-                return subprocess.CompletedProcess(cmd, returncode=0, stdout="hash\trefs/heads/cf-nightly-main\n", stderr="")
-            return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
-
-        created = ensure_nightly_branch_exists(
-            "cf-nightly-main",
-            "1111222233334444555566667777888899990000",
-            git_runner=mock_git_runner,
-        )
-        self.assertFalse(created)
-        self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0][1], "ls-remote")
-
-class TestNightlyMainCreatesRefThenDispatchesOnce(unittest.TestCase):
+class TestNightlyBuildReceiptDeduplication(unittest.TestCase):
     SHA = "1111222233334444555566667777888899990000"
+    OLD_SHA = "0000000000000000000000000000000000000000"
 
-    def _fake_git(self, commands: list[list[str]]):
-        def run(cmd, **kwargs):
-            commands.append(cmd)
-            if cmd[:3] == ["git", "branch", "--show-current"]:
-                return subprocess.CompletedProcess(cmd, 0, stdout="main\n", stderr="")
-            if cmd[:2] == ["git", "rev-parse"]:
-                return subprocess.CompletedProcess(cmd, 0, stdout=f"{self.SHA}\n", stderr="")
-            if cmd[:2] == ["git", "ls-remote"]:
-                return subprocess.CompletedProcess(cmd, 2, stdout="", stderr="")
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    def run_dispatch(
+        self,
+        remote_ref: str | None,
+        receipt_age: str | None,
+    ) -> tuple[list[list[str]], list[bytes], str]:
 
-        return run
-
-    def test_missing_ref_is_created_and_one_build_is_posted_per_day(self) -> None:
         commands: list[list[str]] = []
         payloads: list[bytes] = []
-        response = mock.MagicMock()
-        response.read.return_value = b'{"success": true, "result": {"id": "build-1"}}'
-        opened = mock.MagicMock()
-        opened.__enter__.return_value = response
+        clock = {"now": 0.0}
+        stdout = StringIO()
+
+        def fake_git(cmd, **kwargs):
+            commands.append(cmd)
+            if cmd[1:3] == ["branch", "--show-current"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout="main\n", stderr="")
+            if cmd[1] == "rev-parse":
+                return subprocess.CompletedProcess(cmd, 0, stdout=f"{self.SHA}\n", stderr="")
+            if cmd[1] == "ls-remote":
+                return subprocess.CompletedProcess(
+                    cmd,
+                    2 if remote_ref is None else 0,
+                    stdout="" if remote_ref is None else f"{remote_ref}\trefs/heads/cf-nightly-main\n",
+                    stderr="",
+                )
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
         def capture(request, timeout):
-            payloads.append(request.data)
+            if request.get_method() == "GET":
+                created_on = (
+                    (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+                    if receipt_age == "stale"
+                    else datetime.now(timezone.utc).isoformat()
+                )
+                builds = (
+                    []
+                    if receipt_age is None
+                    else [
+                        {
+                            "build_uuid": "auto-build-1",
+                            "created_on": created_on,
+                            "build_trigger_metadata": {
+                                "branch": "cf-nightly-main",
+                                "commit_hash": self.SHA,
+                            },
+                        }
+                    ]
+                )
+                body = {
+                    "success": True,
+                    "result": builds,
+                    "result_info": {
+                        "page": 1,
+                        "per_page": 200,
+                        "count": len(builds),
+                        "total_count": len(builds),
+                        "total_pages": 1,
+                    },
+                }
+            else:
+                payloads.append(request.data)
+                body = {
+                    "success": True,
+                    "result": {
+                        "build_uuid": "api-build-1",
+                        "created_on": datetime.now(timezone.utc).isoformat(),
+                    },
+                }
+            response = mock.MagicMock()
+            response.read.return_value = json.dumps(body).encode()
+            opened = mock.MagicMock()
+            opened.__enter__.return_value = response
             return opened
+
+        def sleep(seconds):
+            clock["now"] += seconds
 
         with tempfile.TemporaryDirectory() as state_dir, mock.patch.dict(
             os.environ,
             {
                 "CLOUDFLARE_ACCOUNT_ID": "account",
                 "CLOUDFLARE_TRIGGER_ID": "trigger",
+                "CLOUDFLARE_WORKER_TAG": "worker-tag",
                 "CLOUDFLARE_API_TOKEN": "token",
                 "CLOUDFLARE_NIGHTLY_STATE_DIR": state_dir,
             },
-        ), mock.patch("subprocess.run", side_effect=self._fake_git(commands)), mock.patch(
+        ), mock.patch("subprocess.run", side_effect=fake_git), mock.patch(
             "urllib.request.urlopen", side_effect=capture
-        ):
+        ), mock.patch("dispatch_nightly.time.monotonic", side_effect=lambda: clock["now"]), mock.patch(
+            "dispatch_nightly.time.sleep", side_effect=sleep
+        ), redirect_stdout(stdout):
             self.assertEqual(dispatch_nightly_main(), 0)
-            self.assertEqual(dispatch_nightly_main(), 0)
+        return commands, payloads, stdout.getvalue()
 
-        pushes = [cmd for cmd in commands if cmd[:2] == ["git", "push"]]
+    def test_new_ref_with_matching_build_receipt_does_not_post_twice(self) -> None:
+        commands, payloads, output = self.run_dispatch(None, "new")
+        self.assertTrue(any(command[1] == "push" for command in commands))
+        self.assertEqual(payloads, [])
+        self.assertIn("build_uuid=auto-build-1", output)
+        self.assertIn("created_on=", output)
+
+    def test_no_matching_build_receipt_posts_once(self) -> None:
+        commands, payloads, output = self.run_dispatch(None, None)
+        self.assertTrue(any(command[1] == "push" for command in commands))
+        self.assertEqual(len(payloads), 1)
+        self.assertIn(b'"branch": "cf-nightly-main"', payloads[0])
+        self.assertIn(f'"commit_hash": "{self.SHA}"'.encode(), payloads[0])
+        self.assertIn("build_uuid=api-build-1", output)
+        self.assertIn("created_on=", output)
+
+    def test_existing_ref_with_matching_receipt_does_not_post(self) -> None:
+        commands, payloads, output = self.run_dispatch(self.SHA, "new")
+        self.assertFalse(any(command[1] == "push" for command in commands))
+        self.assertEqual(payloads, [])
+        self.assertIn("created_on=", output)
+
+    def test_outdated_ref_fast_forwards_and_matches_its_build_receipt(self) -> None:
+        commands, payloads, output = self.run_dispatch(self.OLD_SHA, "new")
+        pushes = [command for command in commands if command[1] == "push"]
         self.assertEqual(
             pushes,
             [["git", "push", "origin", f"{self.SHA}:refs/heads/cf-nightly-main"]],
         )
-        self.assertEqual(len(payloads), 1)
-        self.assertIn(b'"branch": "cf-nightly-main"', payloads[0])
-        self.assertIn(f'"commit_hash": "{self.SHA}"'.encode(), payloads[0])
+        self.assertEqual(payloads, [])
+        self.assertIn("build_uuid=auto-build-1", output)
 
+    def test_stale_same_sha_receipt_does_not_suppress_current_post(self) -> None:
+        commands, payloads, output = self.run_dispatch(self.SHA, "stale")
+        self.assertFalse(any(command[1] == "push" for command in commands))
+        self.assertEqual(len(payloads), 1)
+        self.assertIn("build_uuid=api-build-1", output)
 
 class TestCfCiBunSummaryParser(unittest.TestCase):
+
+
     def test_parse_cloudflare_totals_line(self) -> None:
         log = """
 bun test v1.4.0 (34cbb9a40)

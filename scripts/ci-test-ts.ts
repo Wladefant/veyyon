@@ -150,12 +150,14 @@ export function parseRunnerArguments(argv: readonly string[]): RunnerArguments {
 	for (let index = 0; index < argv.length; index++) {
 		const argument = argv[index] ?? "";
 		if (argument === "--changed-since") {
+			if (changedSince !== undefined) throw new Error("--changed-since may only be supplied once");
 			const value = argv[++index];
 			if (value === undefined || value.startsWith("--")) {
 				throw new Error("--changed-since requires a full commit SHA");
 			}
 			changedSince = value;
 		} else if (argument.startsWith("--changed-since=")) {
+			if (changedSince !== undefined) throw new Error("--changed-since may only be supplied once");
 			changedSince = argument.slice("--changed-since=".length);
 		} else if (!argument.startsWith("--")) {
 			positionals.push(argument);
