@@ -24,8 +24,8 @@ use std::{
 	io::{self, BufRead},
 	path::{Path, PathBuf},
 	sync::{
-		Arc, Mutex,
-		atomic::{AtomicBool, Ordering as AtomicOrdering},
+		Arc, Mutex, PoisonError,
+		atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering},
 	},
 };
 
@@ -1570,6 +1570,12 @@ impl WalkRequest {
 		H: Fn() -> std::result::Result<(), E> + Sync,
 		E: fmt::Display,
 	{
+		// An uncached walk keeps nothing the filter rejects, so it need not read the
+		// tree on one thread and sort every entry before filtering.
+		let uncached = self.overrides.is_some() || !options.cache || cache_ttl_ms() == 0;
+		if uncached && parallel_collect_applies(options) {
+			return collect_filtered_parallel(self, options, heartbeat);
+		}
 		let accept = |entry: &CollectedEntry| self.filter.accepts_collected(entry);
 		match self.overrides.clone() {
 			// A cache entry is keyed by `WalkOptions`, which says nothing about globs,
@@ -1701,22 +1707,44 @@ where
 }
 
 struct ParallelWalkContext {
-	root:    PathBuf,
-	options: WalkOptions,
-	filter:  WalkFilter,
-	matcher: FastIgnore,
+	root:              PathBuf,
+	options:           WalkOptions,
+	filter:            WalkFilter,
+	matcher:           FastIgnore,
+	/// Emit every entry kind the filter includes, and descend every admitted
+	/// directory whatever the filter decided, as the serial collector does. Off,
+	/// the walk emits regular files and prunes where the filter says to.
+	collect:           bool,
+	/// Fail on a directory error the serial walk fails on under
+	/// [`DirectoryErrorMode::SkipSkippable`], instead of skipping every one.
+	strict_dir_errors: bool,
+	/// List without metadata and read it for each entry the walk emits, by name
+	/// in the directory it was listed from. Linux reads an entry's kind from the
+	/// listing, so a walk that emits few of the entries it lists skips most of
+	/// the stats.
+	stat_emitted:      bool,
 }
 
 struct ParallelWalkShared<'a, E, S, H> {
-	stop:      AtomicBool,
-	error:     Mutex<Option<E>>,
-	sink:      &'a S,
-	heartbeat: &'a H,
+	stop:        AtomicBool,
+	error:       Mutex<Option<E>>,
+	dir_failure: Mutex<Option<(PathBuf, String)>>,
+	/// Entries admitted at or below the minimum depth, accepted or not.
+	scanned:     AtomicUsize,
+	sink:        &'a S,
+	heartbeat:   &'a H,
 }
 
 impl<'a, E, S, H> ParallelWalkShared<'a, E, S, H> {
 	const fn new(sink: &'a S, heartbeat: &'a H) -> Self {
-		Self { stop: AtomicBool::new(false), error: Mutex::new(None), sink, heartbeat }
+		Self {
+			stop: AtomicBool::new(false),
+			error: Mutex::new(None),
+			dir_failure: Mutex::new(None),
+			scanned: AtomicUsize::new(0),
+			sink,
+			heartbeat,
+		}
 	}
 
 	fn request_stop(&self) {
@@ -1740,6 +1768,24 @@ impl<'a, E, S, H> ParallelWalkShared<'a, E, S, H> {
 
 	fn take_error(&self) -> Option<E> {
 		match self.error.lock() {
+			Ok(mut slot) => slot.take(),
+			Err(poisoned) => poisoned.into_inner().take(),
+		}
+	}
+
+	fn record_dir_failure(&self, path: PathBuf, message: String) {
+		let mut slot = match self.dir_failure.lock() {
+			Ok(slot) => slot,
+			Err(poisoned) => poisoned.into_inner(),
+		};
+		if slot.is_none() {
+			*slot = Some((path, message));
+		}
+		self.request_stop();
+	}
+
+	fn take_dir_failure(&self) -> Option<(PathBuf, String)> {
+		match self.dir_failure.lock() {
 			Ok(mut slot) => slot.take(),
 			Err(poisoned) => poisoned.into_inner().take(),
 		}
@@ -1783,31 +1829,25 @@ where
 		options,
 		filter: request.filter.clone(),
 		matcher: FastIgnore::new(options, request.overrides.clone()),
+		collect: false,
+		strict_dir_errors: false,
+		stat_emitted: false,
 	};
-	let root_ignore = context.matcher.root_state(&context.root);
-	let shared = ParallelWalkShared::new(sink, heartbeat);
+	let entry_sink = |entry: &Entry<'_>| {
+		sink(&FileCandidate {
+			path:     entry.path.to_path_buf(),
+			relative: entry.relative.to_owned(),
+			mtime:    entry.mtime,
+			size:     entry.size,
+		})
+	};
+	let shared = ParallelWalkShared::new(&entry_sink, heartbeat);
 
 	if root_entry.file_type == FileType::File && options.min_depth == 0 {
 		emit_parallel_root_file(&context, &shared, &root_entry);
 	}
 	if root_entry.file_type == FileType::Dir && options.max_depth > 0 && !shared.should_stop() {
-		let root_dir = context.root.clone();
-		cache::with_walk_pool(|| {
-			rayon::scope(|scope| {
-				scope.spawn(|scope| {
-					walk_parallel_dir(
-						scope,
-						&context,
-						&shared,
-						root_dir,
-						String::new(),
-						0,
-						root_ignore,
-						false,
-					);
-				});
-			});
-		});
+		walk_parallel_root(&context, &shared);
 	}
 
 	if let Some(error) = shared.take_error() {
@@ -1817,6 +1857,145 @@ where
 	} else {
 		Ok(WalkStatus::Complete)
 	}
+}
+
+/// Whether [`WalkRequest::collect`] may walk in parallel and return what the
+/// serial collector returns.
+///
+/// The parallel walk reads the same directories under the same ignore rules,
+/// and the collector sorts what it keeps by path, so the traversal order does
+/// not show. It never emits the root, keeps no symlink-ancestor stack and
+/// checks no device, so a request that needs any of those stays serial.
+fn parallel_collect_applies(options: WalkOptions) -> bool {
+	should_use_parallel_file_candidate_walk(options)
+		&& !options.contents_first
+		&& !(options.emit_root && options.min_depth == 0)
+}
+
+/// Collect the entries `request`'s filter accepts with an unordered parallel
+/// walk, sorted by path.
+///
+/// Only an accepted entry is allocated. The serial collector materializes and
+/// sorts every entry of the tree before the filter runs, on one thread.
+fn collect_filtered_parallel<E, H>(
+	request: &WalkRequest,
+	mut options: WalkOptions,
+	heartbeat: &H,
+) -> std::result::Result<FilteredEntries, WalkError<String>>
+where
+	H: Fn() -> std::result::Result<(), E> + Sync,
+	E: fmt::Display,
+{
+	options.cache = false;
+	let empty = || FilteredEntries { entries: Vec::new(), cache_age_ms: 0, scanned: 0 };
+	if options.min_depth > options.max_depth {
+		return Ok(empty());
+	}
+	let beat = || heartbeat().map_err(|err| err.to_string());
+	beat().map_err(WalkError::Interrupted)?;
+	let Some(root_entry) = root_entry(&request.root, options.detail, options.follow_links)? else {
+		return Ok(empty());
+	};
+	if root_entry.file_type != FileType::Dir || options.max_depth == 0 {
+		return Ok(empty());
+	}
+	// `WalkDetail::Full` costs one statx per entry, and a search ranked by
+	// mtime rejects nearly every entry it lists, so the walk reads metadata
+	// for the entries it keeps only. A size bound filters on the size, so it
+	// needs the size of every entry and lists with it.
+	let stat_emitted = cfg!(target_os = "linux")
+		&& options.detail == WalkDetail::Full
+		&& request.filter.max_file_size.is_none();
+	let walk_options = if stat_emitted {
+		WalkOptions { detail: WalkDetail::Minimal, ..options }
+	} else {
+		options
+	};
+	let strict_dir_errors = options.directory_errors == DirectoryErrorMode::SkipSkippable;
+	let context = ParallelWalkContext {
+		root: request.root.clone(),
+		options: walk_options,
+		filter: request.filter.clone(),
+		matcher: FastIgnore::new(walk_options, request.overrides.clone()),
+		collect: true,
+		strict_dir_errors,
+		stat_emitted,
+	};
+	let kept = Mutex::new(Vec::new());
+	let sink = |entry: &Entry<'_>| {
+		let collected = CollectedEntry {
+			path:      entry.relative.to_owned(),
+			file_type: entry.file_type,
+			mtime:     entry.mtime,
+			size:      entry.size,
+		};
+		kept
+			.lock()
+			.unwrap_or_else(PoisonError::into_inner)
+			.push(collected);
+		Ok::<_, String>(ParallelWalkControl::Continue)
+	};
+	let shared = ParallelWalkShared::new(&sink, &beat);
+	walk_parallel_root(&context, &shared);
+
+	if let Some((path, message)) = shared.take_dir_failure() {
+		return Err(WalkError::InvalidData { path, message });
+	}
+	if let Some(error) = shared.take_error() {
+		return Err(WalkError::Interrupted(error));
+	}
+	let scanned = shared.scanned.load(AtomicOrdering::Relaxed);
+	let mut entries = kept.into_inner().unwrap_or_else(PoisonError::into_inner);
+	entries.sort_unstable_by(|a, b| a.path.cmp(&b.path));
+	Ok(FilteredEntries { entries, cache_age_ms: 0, scanned })
+}
+
+/// Read the metadata of `path`, an entry named `name` that the walk listed
+/// without it, by name in its directory. The directory is opened on the first
+/// entry read there. `None` covers what a listing that read metadata skips: an
+/// entry or a directory that is gone or unreadable.
+#[cfg(target_os = "linux")]
+fn stat_listed_entry(
+	dir: &mut Option<platform::StatDir>,
+	path: &Path,
+	name: &OsStr,
+) -> io::Result<Option<platform::EntryStat>> {
+	if let Some(open) = dir {
+		return open.stat(name);
+	}
+	match platform::StatDir::open(path.parent().unwrap_or(path)) {
+		Ok(open) => dir.insert(open).stat(name),
+		Err(err) if is_skippable_directory_error(&err) => Ok(None),
+		Err(err) => Err(err),
+	}
+}
+
+/// Walk `context.root`, a directory, on the walker pool.
+fn walk_parallel_root<E, S, H>(
+	context: &ParallelWalkContext,
+	shared: &ParallelWalkShared<'_, E, S, H>,
+) where
+	E: Send,
+	S: Fn(&Entry<'_>) -> std::result::Result<ParallelWalkControl, E> + Sync,
+	H: Fn() -> std::result::Result<(), E> + Sync,
+{
+	let root_ignore = context.matcher.root_state(&context.root);
+	cache::with_walk_pool(|| {
+		rayon::scope(|scope| {
+			scope.spawn(|scope| {
+				walk_parallel_dir(
+					scope,
+					context,
+					shared,
+					context.root.clone(),
+					String::new(),
+					0,
+					root_ignore,
+					false,
+				);
+			});
+		});
+	});
 }
 
 fn run_file_candidate_serial<E, S, H>(
@@ -1850,7 +2029,7 @@ fn emit_parallel_root_file<E, S, H>(
 	root_entry: &RootEntry,
 ) where
 	E: Send,
-	S: Fn(&FileCandidate) -> std::result::Result<ParallelWalkControl, E> + Sync,
+	S: Fn(&Entry<'_>) -> std::result::Result<ParallelWalkControl, E> + Sync,
 	H: Fn() -> std::result::Result<(), E> + Sync,
 {
 	let meta = EntryMeta {
@@ -1864,13 +2043,15 @@ fn emit_parallel_root_file<E, S, H>(
 	};
 	match context.filter.stream_decision(&meta) {
 		WalkDecision::Include => {
-			let candidate = FileCandidate {
-				path:     context.root.clone(),
-				relative: String::new(),
-				mtime:    root_entry.mtime,
-				size:     root_entry.size,
-			};
-			let _ = emit_parallel_candidate(shared, &candidate);
+			let _ = emit_parallel_entry(shared, &Entry {
+				path:      &context.root,
+				relative:  "",
+				name:      context.root.file_name().unwrap_or(context.root.as_os_str()),
+				file_type: FileType::File,
+				mtime:     root_entry.mtime,
+				size:      root_entry.size,
+				depth:     0,
+			});
 		},
 		WalkDecision::Stop => shared.request_stop(),
 		WalkDecision::Skip | WalkDecision::SkipDescend => {},
@@ -1920,15 +2101,12 @@ where
 	}
 }
 
-fn emit_parallel_candidate<E, S, H>(
-	shared: &ParallelWalkShared<'_, E, S, H>,
-	candidate: &FileCandidate,
-) -> bool
+fn emit_parallel_entry<E, S, H>(shared: &ParallelWalkShared<'_, E, S, H>, entry: &Entry<'_>) -> bool
 where
 	E: Send,
-	S: Fn(&FileCandidate) -> std::result::Result<ParallelWalkControl, E> + Sync,
+	S: Fn(&Entry<'_>) -> std::result::Result<ParallelWalkControl, E> + Sync,
 {
-	match (shared.sink)(candidate) {
+	match (shared.sink)(entry) {
 		Ok(ParallelWalkControl::Continue) => true,
 		Ok(ParallelWalkControl::Stop) => {
 			shared.request_stop();
@@ -1952,7 +2130,7 @@ fn walk_parallel_dir<'scope, E, S, H>(
 	derive_ignore_from_entries: bool,
 ) where
 	E: Send + 'scope,
-	S: Fn(&FileCandidate) -> std::result::Result<ParallelWalkControl, E> + Sync + 'scope,
+	S: Fn(&Entry<'_>) -> std::result::Result<ParallelWalkControl, E> + Sync + 'scope,
 	H: Fn() -> std::result::Result<(), E> + Sync + 'scope,
 {
 	if shared.should_stop() {
@@ -1967,7 +2145,17 @@ fn walk_parallel_dir<'scope, E, S, H>(
 		derive_ignore_from_entries,
 	) {
 		Ok(ignore_entries) => ignore_entries,
-		Err(ReadDirError::Io(_) | ReadDirError::Walk(WalkError::InvalidData { .. })) => {
+		Err(ReadDirError::Io(err)) => {
+			if context.strict_dir_errors && !is_skippable_directory_error(&err) {
+				shared.record_dir_failure(dir, err.to_string());
+			}
+			recycle_parallel_scratch(scratch);
+			return;
+		},
+		Err(ReadDirError::Walk(WalkError::InvalidData { path, message })) => {
+			if context.collect {
+				shared.record_dir_failure(path, message);
+			}
 			recycle_parallel_scratch(scratch);
 			return;
 		},
@@ -1985,6 +2173,9 @@ fn walk_parallel_dir<'scope, E, S, H>(
 	);
 	let mut absolute = dir;
 	let mut relative = relative_dir;
+	let mut scanned = 0_usize;
+	#[cfg(target_os = "linux")]
+	let mut stat_dir = None;
 
 	for index in 0..scratch.entries.len() {
 		if !parallel_heartbeat(shared) {
@@ -2013,6 +2204,10 @@ fn walk_parallel_dir<'scope, E, S, H>(
 			.matcher
 			.admits(&dir_ignore, &absolute, name, is_dir, context.options)
 		{
+			let in_depth = next_depth >= context.options.min_depth;
+			if in_depth {
+				scanned += 1;
+			}
 			let decision = {
 				let meta = EntryMeta {
 					root:          &context.root,
@@ -2025,70 +2220,87 @@ fn walk_parallel_dir<'scope, E, S, H>(
 				};
 				context.filter.stream_decision(&meta)
 			};
-			match decision {
-				WalkDecision::Include => {
-					if entry.file_type == FileType::File && next_depth >= context.options.min_depth {
-						let candidate = FileCandidate {
-							path:     absolute.clone(),
-							relative: relative.clone(),
-							mtime:    entry.mtime,
-							size:     entry.size,
-						};
-						if !emit_parallel_candidate(shared, &candidate) {
-							absolute.pop();
-							relative.truncate(relative_len);
-							break;
-						}
-					}
-					if is_dir && next_depth < context.options.max_depth && !shared.should_stop() {
-						let child_dir = absolute.clone();
-						let child_relative = relative.clone();
-						let child_ignore = Arc::clone(&dir_ignore);
-						scope.spawn(move |scope| {
-							walk_parallel_dir(
-								scope,
-								context,
-								shared,
-								child_dir,
-								child_relative,
-								next_depth,
-								child_ignore,
-								true,
-							);
-						});
-					}
-				},
-				WalkDecision::Skip => {
-					if is_dir && next_depth < context.options.max_depth && !shared.should_stop() {
-						let child_dir = absolute.clone();
-						let child_relative = relative.clone();
-						let child_ignore = Arc::clone(&dir_ignore);
-						scope.spawn(move |scope| {
-							walk_parallel_dir(
-								scope,
-								context,
-								shared,
-								child_dir,
-								child_relative,
-								next_depth,
-								child_ignore,
-								true,
-							);
-						});
-					}
-				},
-				WalkDecision::SkipDescend => {},
+			let (emit, descend) = match decision {
+				WalkDecision::Include => (context.collect || entry.file_type == FileType::File, is_dir),
+				WalkDecision::Skip => (false, is_dir),
+				// The collector keeps no entry below a pruned directory, but it still
+				// counts them, as the serial walk it stands in for does.
+				WalkDecision::SkipDescend => (false, context.collect && is_dir),
 				WalkDecision::Stop => {
 					shared.request_stop();
 					absolute.pop();
 					relative.truncate(relative_len);
 					break;
 				},
+			};
+			if emit && in_depth {
+				let listed = (entry.file_type, entry.mtime, entry.size);
+				#[cfg(target_os = "linux")]
+				let listed = if context.stat_emitted {
+					match stat_listed_entry(&mut stat_dir, &absolute, name) {
+						Ok(Some(stat)) if stat.file_type == entry.file_type => {
+							(stat.file_type, stat.mtime, stat.size)
+						},
+						// Gone, unreadable, or replaced by another kind since the listing:
+						// the entry the filter judged is not there any more.
+						Ok(_) => {
+							absolute.pop();
+							relative.truncate(relative_len);
+							continue;
+						},
+						// A listing that reads metadata fails its directory on this error,
+						// which `SkipSkippable` reports and `Visit` skips.
+						Err(err) => {
+							absolute.pop();
+							relative.truncate(relative_len);
+							if context.strict_dir_errors {
+								shared.record_dir_failure(absolute.clone(), err.to_string());
+								break;
+							}
+							continue;
+						},
+					}
+				} else {
+					listed
+				};
+				let (file_type, mtime, size) = listed;
+				let emitted = emit_parallel_entry(shared, &Entry {
+					path: &absolute,
+					relative: &relative,
+					name,
+					file_type,
+					mtime,
+					size,
+					depth: next_depth,
+				});
+				if !emitted {
+					absolute.pop();
+					relative.truncate(relative_len);
+					break;
+				}
+			}
+			if descend && next_depth < context.options.max_depth && !shared.should_stop() {
+				let child_dir = absolute.clone();
+				let child_relative = relative.clone();
+				let child_ignore = Arc::clone(&dir_ignore);
+				scope.spawn(move |scope| {
+					walk_parallel_dir(
+						scope,
+						context,
+						shared,
+						child_dir,
+						child_relative,
+						next_depth,
+						child_ignore,
+						true,
+					);
+				});
 			}
 		}
 		absolute.pop();
 		relative.truncate(relative_len);
 	}
+	shared.scanned.fetch_add(scanned, AtomicOrdering::Relaxed);
 	recycle_parallel_scratch(scratch);
 }
 
@@ -4331,10 +4543,10 @@ mod platform {
 		}
 	}
 
-	struct EntryStat {
-		file_type: FileType,
-		mtime:     Option<f64>,
-		size:      Option<f64>,
+	pub struct EntryStat {
+		pub file_type: FileType,
+		pub mtime:     Option<f64>,
+		pub size:      Option<f64>,
 	}
 
 	pub fn read_dir_entries<F, E>(
@@ -4447,6 +4659,25 @@ mod platform {
 				fstatat_entry(dirfd, &name, detail)
 			},
 			Err(err) => Err(err),
+		}
+	}
+
+	/// A directory held open to read its entries' metadata by name.
+	pub struct StatDir(FdGuard);
+
+	impl StatDir {
+		pub fn open(path: &Path) -> io::Result<Self> {
+			open_dir(path).map(Self)
+		}
+
+		/// Read what [`read_dir_entries`] reads for [`WalkDetail::Full`], for the
+		/// entry `name`. `None` covers what a listing skips: an entry that is
+		/// gone or unreadable, or of a kind the walker does not report.
+		pub fn stat(&self, name: &OsStr) -> io::Result<Option<EntryStat>> {
+			match stat_entry(self.0.0, name.as_bytes(), WalkDetail::Full) {
+				Err(err) if is_skippable_entry_error(&err) => Ok(None),
+				result => result,
+			}
 		}
 	}
 
@@ -4852,14 +5083,26 @@ mod tests {
 		veyyon_test_scratch::scratch_dir(&format!("walker-{name}"))
 	}
 
+	/// Holds the scan cache for one test.
+	///
+	/// `invalidate_path` bumps a process-wide generation, and a cached walk in
+	/// flight when it lands is not stored. Two cache tests running at once
+	/// would drop each other's priming walk, so a guard also holds a lock that
+	/// lets one cache test run at a time.
 	struct CachePathGuard {
-		root: PathBuf,
+		root:    PathBuf,
+		_serial: std::sync::MutexGuard<'static, ()>,
 	}
+
+	static CACHE_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 	impl CachePathGuard {
 		fn new(root: &Path) -> Self {
+			let serial = CACHE_TESTS
+				.lock()
+				.unwrap_or_else(std::sync::PoisonError::into_inner);
 			invalidate_path(root);
-			Self { root: root.to_path_buf() }
+			Self { root: root.to_path_buf(), _serial: serial }
 		}
 	}
 

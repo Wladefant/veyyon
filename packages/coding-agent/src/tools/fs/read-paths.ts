@@ -66,7 +66,7 @@ async function findUniqueSuffixMatch(
 				path: cwd,
 				// No fileType filter: matches both files and directories
 				hidden: true,
-				// Two matches already make the suffix ambiguous; the walk stops there.
+				// Two matches already make the suffix ambiguous, so no more are returned.
 				maxResults: 2,
 				signal: combinedSignal,
 			}),

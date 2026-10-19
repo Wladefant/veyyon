@@ -93,7 +93,9 @@ Behavior (`get_or_scan`, `collect_entries_filtered` and `collect_entries_shared`
 - max entry enforcement is oldest-first eviction by `stored_at` after insert (`evict_oldest`)
 - the addon's `releaseFreeHeapPages()`, which the idle trim calls, drops every expired entry before `malloc_trim`, so a quiet process holds no scan past its TTL
 
-There is no public `force_rescan` API anymore; an uncached request (`.cache(false)`) simply walks fresh without touching the shared cache.
+There is no public `force_rescan` API anymore; an uncached request (`.cache(false)`) walks fresh without touching the shared cache.
+
+An uncached filtered request (`WalkRequest::collect` and `collect_ranked` with `.cache(false)`, caller-supplied overrides, or `FS_SCAN_CACHE_TTL_MS=0`) walks on the same pool and allocates only the entries its filter accepts, then sorts those by path (`collect_filtered_parallel`). It falls back to the serial collector when `walk_workers()` is 1, links are followed, the walk stays on one file system, `contents_first` is set, or the root itself is emitted. On Linux a `WalkDetail::Full` request with no `max_file_size` bound lists without metadata and reads mtime and size for each accepted entry by name in its directory; a size bound needs every entry's size, so it lists with `Full`. `scanned_entries` counts every admitted entry inside the depth bounds, as the serial collector does, and a directory error under `DirectoryErrorMode::SkipSkippable` fails the walk with the same `InvalidData` error.
 
 ## Empty-result fast recheck (separate from normal hits)
 

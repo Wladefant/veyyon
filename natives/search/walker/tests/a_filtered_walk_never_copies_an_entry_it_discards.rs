@@ -254,6 +254,40 @@ fn a_narrow_filter_on_a_cold_scan_pays_for_the_survivors_only() {
 }
 
 #[test]
+fn a_narrow_filter_on_an_uncached_walk_pays_for_the_survivors_only() {
+	let _serial = ready();
+	// An uncached walk keeps nothing for later, so an entry it copies and then
+	// drops is pure waste. The serial collector copied and sorted all 5,051
+	// entries before the filter ran; the parallel one copies the ten it keeps.
+	let tree = temp_tree("uncached-allocation");
+	write_tree(tree.path(), 5_000);
+
+	let narrow = WalkRequest::from_options(tree.path(), options(false))
+		.filter(WalkFilter::files_only().glob(glob("**/f0000*.txt")));
+	let unfiltered = WalkRequest::from_options(tree.path(), options(false));
+
+	// Warm the page cache and the walker's thread pool and scratch buffers, so
+	// the two measured walks differ in the filter and not in first-run setup.
+	unfiltered.collect().expect("warmup");
+	narrow.collect().expect("warmup");
+	let (wide, wide_bytes) = allocated_during(|| unfiltered.collect().expect("wide uncached walk"));
+	let (kept, narrow_bytes) = allocated_during(|| narrow.collect().expect("narrow uncached walk"));
+
+	assert_eq!(kept.entries.len(), 10, "the glob matches f00000..f00009");
+	assert_eq!(kept.backend, WalkBackend::Fresh, "an uncached walk is fresh");
+	assert_eq!(kept.stats.scanned_entries, wide.entries.len());
+	// The wide walk copies all 5,051 entries, 1.2MiB measured with its buffer
+	// growth, and the narrow one 88KiB. Copying before filtering puts the wide
+	// walk's copy back into the narrow one.
+	assert!(
+		narrow_bytes * 4 < wide_bytes,
+		"an uncached walk keeping 10 of {} entries allocated {narrow_bytes} bytes against the wide \
+		 walk's {wide_bytes}, so it copied what it discarded",
+		wide.entries.len()
+	);
+}
+
+#[test]
 fn a_shared_read_copies_no_entry() {
 	let _serial = ready();
 	let tree = temp_tree("shared-allocation");

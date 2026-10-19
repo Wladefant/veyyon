@@ -23,6 +23,7 @@
 
 ### Changed
 
+- A `search` of type `files` and a `read` of a path that does not exist walk the tree on the walker's worker threads and, on Linux, read metadata only for the entries the pattern matches, so a files search for a name that matches nothing in a 400,000-file tree takes 84 ms instead of 715 ms and a missing-path read 89 ms instead of 317 ms.
 - The first edit of a session builds the tool schemas its context reading needs one tool per event-loop turn instead of all in one, so a key typed 10 ms after the first echoes in 29 ms instead of 35 ms, and a resumed draft no longer holds the loop for the whole build right after the first frame.
 - On Linux, a Python eval kernel returns the memory a cell freed to the system before it reports the cell done, so a kernel that built and dropped a 400 MB working set idles at 26 MB resident instead of 113 MB.
 - A replace-mode edit whose old text is not in the file finds its closest candidate about 18 times faster (1.6 s to 90 ms on a 7,400-line file), and its streamed preview no longer repeats the search on every argument chunk, which held the terminal for seconds while a near-miss edit streamed.
