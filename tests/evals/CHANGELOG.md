@@ -3,6 +3,7 @@
 All notable changes to `@veyyon/evals` will be documented in this file.
 
 ## [Unreleased]
+- `engine/task-splits.ts` deterministically separates a 100-task eval corpus into 20 feedback, 20 score and 60 final tasks. It refuses incomplete corpora and duplicate ids.
 
 ## [1.5.6] - 2026-10-10
 

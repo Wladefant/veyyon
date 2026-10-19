@@ -164,3 +164,6 @@ export const OPENROUTER_API_ENDPOINT = "https://openrouter.ai/api/v1";
  * a route (`/models`, `/responses`) to it.
  */
 export const CHATGPT_WEB_LOCAL_ENDPOINT = "http://127.0.0.1:17841/v1";
+/** Public TypeSafe API root shared by discovery and judgment requests. */
+export const TYPESAFE_DEFAULT_BASE_URL = "https://api.typesafe.ai";
+

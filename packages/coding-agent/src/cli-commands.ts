@@ -115,6 +115,14 @@ export const commands: CommandEntry[] = [
 		summary: { description: "Join a shared collab session (same as /join)" },
 	},
 	{
+		name: "knowledge",
+		load: () => import("./commands/knowledge").then(m => m.default),
+		aliases: ["shared-knowledge"],
+		summary: {
+			description: "Manage and synchronize shared text knowledge (skills, rules, workflows, lessons, config)",
+		},
+	},
+	{
 		name: "licenses",
 		load: () => import("./commands/licenses").then(m => m.default),
 		summary: { description: "Print Veyyon and third-party license notices" },

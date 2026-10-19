@@ -3,6 +3,7 @@
  * passthrough header capture, prompt-cache identity, and CORS.
  */
 import type { Api, AssistantMessage, Model } from "../types";
+import { GatewaySemanticRedactor } from "./semantic-redaction";
 
 /**
  * Diagnostic response headers for translated inference requests, mirroring the
@@ -34,6 +35,49 @@ export function gatewayResponseHeaders(
 	return headers;
 }
 
+export function resolvePeer(req: Request): string {
+	const fwd = req.headers.get("x-forwarded-for");
+	if (fwd) return fwd.split(",")[0].trim();
+	return req.headers.get("x-real-ip") ?? "unknown";
+}
+
+/**
+ * Constant-time byte comparison. Falls back to a manual XOR accumulator if
+ * `node:crypto.timingSafeEqual` isn't available. Always processes every byte
+ * of the longer input so length itself doesn't leak via timing.
+ */
+export function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
+	if (a.length === b.length && typeof nodeTimingSafeEqual === "function") {
+		return nodeTimingSafeEqual(a, b);
+	}
+	const len = Math.max(a.length, b.length);
+	let diff = a.length ^ b.length;
+	for (let i = 0; i < len; i++) {
+		// Out-of-range reads return undefined → coerce to 0 via `| 0`.
+		const av = (i < a.length ? a[i] : 0) | 0;
+		const bv = (i < b.length ? b[i] : 0) | 0;
+		diff |= av ^ bv;
+	}
+	return diff === 0;
+}
+
+const TOKEN_ENCODER = new TextEncoder();
+
+export function isAuthorized(req: Request, tokens: ReadonlySet<string>): boolean {
+	const header = req.headers.get("authorization");
+	if (!header) return false;
+	const match = header.match(/^Bearer ([^\s,]+)$/);
+	if (!match) return false;
+	const presented = TOKEN_ENCODER.encode(match[1]);
+	// Process every allowed token. Empty configured values never authorize.
+	let ok = false;
+	for (const tok of tokens) {
+		if (tok.length === 0) continue;
+		const expected = TOKEN_ENCODER.encode(tok);
+		if (timingSafeEqual(presented, expected)) ok = true;
+	}
+	return ok;
+}
 /**
  * Allow-list of inbound request headers that the gateway captures and forwards
  * to the underlying parsers (which decide whether to surface them to the
@@ -164,4 +208,56 @@ export function withCors(response: Response, req: Request): Response {
 		statusText: response.statusText,
 		headers,
 	});
+}
+
+/** Guard reassembled semantic deltas, then redact credentials in full JSON/SSE frames and headers. */
+export function redactResponse(response: Response, secrets: readonly string[]): Response {
+	const scrub = (text: string): string => {
+		for (const secret of [...new Set(secrets)].sort((a, b) => b.length - a.length)) {
+			if (secret) text = text.replaceAll(secret, "[REDACTED]");
+		}
+		return text;
+	};
+	const headers = new Headers(response.headers);
+	for (const [name, value] of headers) headers.set(name, scrub(value));
+	headers.delete("content-length");
+	if (!response.body) return new Response(null, { status: response.status, headers });
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	const encoder = new TextEncoder();
+	const streaming = headers.get("content-type")?.includes("text/event-stream");
+	const semantic = new GatewaySemanticRedactor(secrets);
+	let carry = "";
+	const body = new ReadableStream<Uint8Array>({
+		async pull(controller) {
+			try {
+				for (;;) {
+					const { value, done } = await reader.read();
+					carry += decoder.decode(value, { stream: !done });
+					if (done) {
+						controller.enqueue(encoder.encode(scrub(streaming ? semantic.push(carry, true) : carry)));
+						controller.close();
+						return;
+					}
+					if (streaming) {
+						let output = "";
+						let boundary = carry.indexOf("\n\n");
+						while (boundary >= 0) {
+							output += semantic.push(carry.slice(0, boundary + 2));
+							carry = carry.slice(boundary + 2);
+							boundary = carry.indexOf("\n\n");
+						}
+						if (output) {
+							controller.enqueue(encoder.encode(scrub(output)));
+							return;
+						}
+					}
+				}
+			} catch {
+				controller.error(new Error("Gateway response stream failed"));
+			}
+		},
+		cancel(reason) { return reader.cancel(reason); },
+	});
+	return new Response(body, { status: response.status, headers });
 }

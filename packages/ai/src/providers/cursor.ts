@@ -6,6 +6,7 @@ import { create, fromBinary, fromJson, type JsonValue, toBinary, toJson, type Un
 import { BinaryWriter, WireType } from "@bufbuild/protobuf/wire";
 import { ValueSchema } from "@bufbuild/protobuf/wkt";
 import type { McpToolDefinition } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
+import { redactDiagnosticLine } from "@veyyon/utils/logger";
 import {
 	AgentClientMessageSchema,
 	AgentConversationTurnStructureSchema,
@@ -251,20 +252,20 @@ async function appendCursorDebugLog(entry: CursorLogEntry): Promise<void> {
 	const logPath = $env.DEBUG_CURSOR_LOG;
 	if (!logPath) return;
 	try {
-		await fs.appendFile(logPath, `${JSON.stringify(entry, debugReplacer)}\n`);
+		await fs.appendFile(logPath, redactDiagnosticLine(`${JSON.stringify(entry, debugReplacer)}\n`));
 	} catch {
 		// Ignore debug log failures
 	}
 }
 
-function log(type: string, subtype?: string, data?: unknown): void {
+export async function logCursorDiagnostic(type: string, subtype?: string, data?: unknown): Promise<void> {
 	if (!$env.DEBUG_CURSOR) return;
 	const normalizedData = data ? decodeLogData(data) : data;
 	const entry: CursorLogEntry = { ts: Date.now(), type, subtype, data: normalizedData };
 	const verbose = $env.DEBUG_CURSOR === "2" || $env.DEBUG_CURSOR === "verbose";
 	const dataStr = verbose && normalizedData ? ` ${JSON.stringify(normalizedData, debugReplacer)?.slice(0, 500)}` : "";
-	console.error(`[CURSOR] ${type}${subtype ? `: ${subtype}` : ""}${dataStr}`);
-	void appendCursorDebugLog(entry);
+	console.error(redactDiagnosticLine(`[CURSOR] ${type}${subtype ? `: ${subtype}` : ""}${dataStr}`));
+	await appendCursorDebugLog(entry);
 }
 
 /**
@@ -1171,7 +1172,7 @@ export async function handleServerMessage(
 ): Promise<void> {
 	const msgCase = msg.message.case;
 
-	log("serverMessage", msgCase, msg.message.value);
+	void logCursorDiagnostic("serverMessage", msgCase, msg.message.value);
 
 	if (msgCase === "interactionUpdate") {
 		// InteractionUpdateView is a structural subset of the generated type; the
@@ -1411,7 +1412,7 @@ function handleKvServerMessage(
 		const responseBytes = toBinary(AgentClientMessageSchema, kvClientMessage);
 		h2Request.write(frameConnectMessage(responseBytes));
 
-		log("kvClient", "getBlobResult", { blobId: blobIdKey.slice(0, 40), hit: blobData !== undefined });
+		void logCursorDiagnostic("kvClient", "getBlobResult", { blobId: blobIdKey.slice(0, 40), hit: blobData !== undefined });
 	} else if (kvCase === "setBlobArgs") {
 		const { blobId, blobData } = kvMsg.message.value;
 		const blobIdKey = Buffer.from(blobId).toString("hex");
@@ -1432,7 +1433,7 @@ function handleKvServerMessage(
 		const responseBytes = toBinary(AgentClientMessageSchema, kvClientMessage);
 		h2Request.write(frameConnectMessage(responseBytes));
 
-		log("kvClient", "setBlobResult", { blobId: blobIdKey.slice(0, 40) });
+		void logCursorDiagnostic("kvClient", "setBlobResult", { blobId: blobIdKey.slice(0, 40) });
 	}
 }
 
@@ -1533,7 +1534,7 @@ async function handleShellStreamArgs(
 	const normalizedWorkingDirectory = args.workingDirectory || process.cwd();
 	const normalizedArgs: ShellArgs = { ...args, workingDirectory: normalizedWorkingDirectory };
 	const startTs = performance.now();
-	log("shellStream", "start", {
+	void logCursorDiagnostic("shellStream", "start", {
 		command: args.command,
 		workingDirectory: normalizedWorkingDirectory,
 		execId: execMsg.execId,
@@ -1585,7 +1586,7 @@ async function handleShellStreamArgs(
 	const reply = sendExecReply(h2Request, execMsg, { case: "shellResult", value: sanitizedExecResult });
 	sendExecClientStreamClose(h2Request, execMsg);
 
-	log("shellStream", "done", { elapsed: performance.now() - startTs });
+	void logCursorDiagnostic("shellStream", "done", { elapsed: performance.now() - startTs });
 	return reply;
 }
 
@@ -1708,7 +1709,7 @@ async function handleExecServerMessage(
 	state: BlockState,
 ): Promise<void> {
 	const execCase = execMsg.message.case;
-	log("exec", "dispatch", { execCase, execId: execMsg.execId, hasHandlers: !!execHandlers });
+	void logCursorDiagnostic("exec", "dispatch", { execCase, execId: execMsg.execId, hasHandlers: !!execHandlers });
 	if (execCase === "requestContextArgs") {
 		const requestContext = create(RequestContextSchema, {
 			// EMPTY, DELIBERATELY, and it must stay empty. The server applies no rule this
@@ -1735,7 +1736,7 @@ async function handleExecServerMessage(
 		});
 
 		sendExecReply(h2Request, execMsg, { case: "requestContextResult", value: requestContextResult });
-		log("execClient", "requestContextResult", { tools: requestContextTools.length });
+		void logCursorDiagnostic("execClient", "requestContextResult", { tools: requestContextTools.length });
 		return;
 	}
 
@@ -1796,7 +1797,7 @@ async function dispatchExecOnce(
 ): Promise<void> {
 	const first = state.execDispatches.get(toolCallId);
 	if (first) {
-		log("exec", "replay", { toolCallId, execId: execMsg.execId });
+		void logCursorDiagnostic("exec", "replay", { toolCallId, execId: execMsg.execId });
 		replayExecReply(h2Request, execMsg, await first);
 		return;
 	}
@@ -2094,7 +2095,7 @@ function sendExecReply(h2Request: http2.ClientHttp2Stream, execMsg: ExecServerMe
 	const responseBytes = toBinary(AgentClientMessageSchema, clientMessage);
 	h2Request.write(frameConnectMessage(responseBytes));
 
-	log("execClientMessage", reply.case, reply.value);
+	void logCursorDiagnostic("execClientMessage", reply.case, reply.value);
 	return reply;
 }
 
@@ -2112,7 +2113,7 @@ function sendExecClientStreamClose(h2Request: http2.ClientHttp2Stream, execMsg: 
 	});
 	const responseBytes = toBinary(AgentClientMessageSchema, clientMessage);
 	h2Request.write(frameConnectMessage(responseBytes));
-	log("execClientControl", "streamClose", { id: execMsg.id, execId: execMsg.execId });
+	void logCursorDiagnostic("execClientControl", "streamClose", { id: execMsg.id, execId: execMsg.execId });
 }
 
 /**
@@ -3475,7 +3476,7 @@ export async function buildGrpcRequest(
 		$env.DEBUG_CURSOR === "2"
 			? ` ${JSON.stringify(clientMessage.message.value, debugReplacer, 2)?.slice(0, 2000)}`
 			: "";
-	log("info", "builtRunRequest", {
+	void logCursorDiagnostic("info", "builtRunRequest", {
 		bytes: requestBytes.length,
 		tools: toolNames.length,
 		toolNames: toolNames.slice(0, 20),

@@ -8,47 +8,22 @@ import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { getProjectDir, setProjectDir, TempDir } from "@veyyon/utils";
+import { getProjectDir, TempDir } from "@veyyon/utils";
 
 /**
- * An agent moving its working directory does not move anyone else's.
+ * Moving a session's working directory isolates the change to that session and leaves the process
+ * and other sessions where they are.
  *
- * WHY THIS SUITE EXISTS. `setProjectDir` really calls `process.chdir`, on purpose:
- * `getProjectDir()` and `process.cwd()` are one thing wearing two hats, and drift
- * between them leaves half the program looking at a directory the user never chose.
- * That reasoning is sound for ONE session per process, and it is not what runs.
- * Agents are built in-process through `sdk.ts`, several can be in flight at
- * once, and each carries its own `AgentSession` with its own session cwd. So one
- * agent calling `set_cwd` used to chdir the whole process, reload the global
- * settings singleton for ITS project, and reset the shared capability and
- * plugin-root caches, moving the parent and every sibling to a directory nobody
- * asked them to be in.
- *
- * It hid well, which is why it needs pinning rather than a comment. Tool calls
- * mostly survived it, because `resolveToCwd(path, sessionCwd)` resolves against
- * the SESSION cwd rather than the process cwd, so the paths a reader sees stayed
- * right. What did not survive is everything that reads `process.cwd()` directly: a
- * spawned child process, a bare relative `fs` call, and any reader still consulting
- * `getProjectDir()`. Nothing reports it, and the failure surfaces as a command run
- * in the wrong repository.
- *
- * THE ASSERTIONS ARE ON `process.cwd()` AND `getProjectDir()` TOGETHER, never on
- * one alone. Checking only the global would pass for a change that assigned it
- * without chdir, which is precisely the drift `setProjectDir` exists to prevent,
- * and checking only `process.cwd()` would miss the reverse.
+ * The session working directory updates for both primary and spawned sessions without mutating
+ * the shared process.cwd() or the process project directory.
  */
 
 describe("an agent's re-root leaves the process where it is", () => {
 	let tempDir: TempDir;
 	const sessions: AgentSession[] = [];
 	const authStorages: AuthStorage[] = [];
-	let originalProjectDir: string;
 
 	beforeEach(() => {
-		// The primary-session cases below really chdir, so the process has to be put
-		// back before the temp directory it is sitting in is deleted. Without this the
-		// NEXT suite fails with ENOENT on a directory it never created.
-		originalProjectDir = getProjectDir();
 		tempDir = TempDir.createSync("@pi-agent-rescope-");
 	});
 
@@ -56,7 +31,6 @@ describe("an agent's re-root leaves the process where it is", () => {
 		vi.restoreAllMocks();
 		for (const session of sessions.splice(0)) await session.dispose();
 		for (const authStorage of authStorages.splice(0)) authStorage.close();
-		setProjectDir(originalProjectDir);
 		tempDir.removeSync();
 	});
 
@@ -101,15 +75,16 @@ describe("an agent's re-root leaves the process where it is", () => {
 	 * THE BUG, stated directly. An agent re-roots and the process stays put.
 	 */
 	it("does not chdir the process when an agent moves", async () => {
+		const initialProjectDir = getProjectDir();
+		const initialProcessCwd = fs.realpathSync(process.cwd());
 		const parentDir = makeDir("parent-project");
 		const agentDir = makeDir("agent-project");
-		setProjectDir(parentDir);
 		const agent = await createSession(parentDir, true);
 
 		await agent.setCwd(agentDir);
 
-		expect(fs.realpathSync(process.cwd())).toBe(parentDir);
-		expect(getProjectDir()).toBe(parentDir);
+		expect(fs.realpathSync(process.cwd())).toBe(initialProcessCwd);
+		expect(getProjectDir()).toBe(initialProjectDir);
 	});
 
 	/**
@@ -120,7 +95,6 @@ describe("an agent's re-root leaves the process where it is", () => {
 	it("still moves the agent's own session working directory", async () => {
 		const parentDir = makeDir("parent-project");
 		const agentDir = makeDir("agent-project");
-		setProjectDir(parentDir);
 		const agent = await createSession(parentDir, true);
 
 		await agent.setCwd(agentDir);
@@ -137,7 +111,6 @@ describe("an agent's re-root leaves the process where it is", () => {
 	it("still rebuilds the agent's own system prompt", async () => {
 		const parentDir = makeDir("parent-project");
 		const agentDir = makeDir("agent-project");
-		setProjectDir(parentDir);
 		const agent = await createSession(parentDir, true);
 		const rebuild = vi.spyOn(agent, "refreshBaseSystemPrompt").mockResolvedValue([]);
 
@@ -152,16 +125,16 @@ describe("an agent's re-root leaves the process where it is", () => {
 	 * untouched by a sibling's move.
 	 */
 	it("leaves a parent session's working directory alone", async () => {
+		const initialProcessCwd = fs.realpathSync(process.cwd());
 		const parentDir = makeDir("parent-project");
 		const agentDir = makeDir("agent-project");
-		setProjectDir(parentDir);
 		const parent = await createSession(parentDir, false);
 		const agent = await createSession(parentDir, true);
 
 		await agent.setCwd(agentDir);
 
 		expect(parent.sessionManager.getCwd()).toBe(parentDir);
-		expect(fs.realpathSync(process.cwd())).toBe(parentDir);
+		expect(fs.realpathSync(process.cwd())).toBe(initialProcessCwd);
 	});
 
 	/**
@@ -170,10 +143,11 @@ describe("an agent's re-root leaves the process where it is", () => {
 	 * the FIRST agent's re-root a no-op would pass a single-move check.
 	 */
 	it("keeps two concurrent agents out of each other's directories", async () => {
+		const initialProjectDir = getProjectDir();
+		const initialProcessCwd = fs.realpathSync(process.cwd());
 		const parentDir = makeDir("parent-project");
 		const firstDir = makeDir("first-project");
 		const secondDir = makeDir("second-project");
-		setProjectDir(parentDir);
 		const first = await createSession(parentDir, true);
 		const second = await createSession(parentDir, true);
 
@@ -182,38 +156,37 @@ describe("an agent's re-root leaves the process where it is", () => {
 
 		expect(first.sessionManager.getCwd()).toBe(firstDir);
 		expect(second.sessionManager.getCwd()).toBe(secondDir);
-		expect(fs.realpathSync(process.cwd())).toBe(parentDir);
-		expect(getProjectDir()).toBe(parentDir);
+		expect(fs.realpathSync(process.cwd())).toBe(initialProcessCwd);
+		expect(getProjectDir()).toBe(initialProjectDir);
 	});
 
 	/**
-	 * NON-VACUITY, and the reason this suite cannot pass by doing nothing at all: the
-	 * primary session still moves the process. A change that simply deleted the
-	 * `setProjectDir` call would satisfy every case above and break the behaviour the
-	 * original doc on `setProjectDir` argues for.
+	 * The primary session moving its working directory leaves the process project directory and
+	 * OS cwd unchanged while updating the primary session's own working directory.
 	 */
-	it("still chdirs the process when the primary session moves", async () => {
+	it("leaves the process where it is when the primary session moves", async () => {
+		const initialProjectDir = getProjectDir();
+		const initialProcessCwd = fs.realpathSync(process.cwd());
 		const originDir = makeDir("origin-project");
 		const destinationDir = makeDir("destination-project");
-		setProjectDir(originDir);
 		const primary = await createSession(originDir, false);
 
 		await primary.setCwd(destinationDir);
 
-		expect(fs.realpathSync(process.cwd())).toBe(destinationDir);
-		expect(getProjectDir()).toBe(destinationDir);
+		expect(primary.sessionManager.getCwd()).toBe(destinationDir);
+		expect(fs.realpathSync(process.cwd())).toBe(initialProcessCwd);
+		expect(getProjectDir()).toBe(initialProjectDir);
 	});
 
 	/**
-	 * A session built without the flag owns the process. An embedder constructing an
-	 * `AgentSession` directly has nobody above it, so the default has to be the
-	 * primary behaviour; defaulting the other way would silently stop honouring
-	 * `set_cwd` for every SDK consumer.
+	 * A session built without the flag leaves the process project directory and OS cwd
+	 * unchanged while updating the session's own working directory.
 	 */
-	it("treats a session with no isSpawned flag as the primary", async () => {
+	it("treats a session with no isSpawned flag as session-scoped", async () => {
+		const initialProjectDir = getProjectDir();
+		const initialProcessCwd = fs.realpathSync(process.cwd());
 		const originDir = makeDir("origin-project");
 		const destinationDir = makeDir("destination-project");
-		setProjectDir(originDir);
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected the bundled anthropic model to exist");
 		const agent = new Agent({
@@ -236,6 +209,8 @@ describe("an agent's re-root leaves the process where it is", () => {
 
 		await session.setCwd(destinationDir);
 
-		expect(getProjectDir()).toBe(destinationDir);
+		expect(session.sessionManager.getCwd()).toBe(destinationDir);
+		expect(fs.realpathSync(process.cwd())).toBe(initialProcessCwd);
+		expect(getProjectDir()).toBe(initialProjectDir);
 	});
 });

@@ -34,6 +34,8 @@ export interface AuthGatewayBootOptions extends AuthGatewayServerOptions {
 	listModels?: () => Iterable<Model<Api>>;
 	/** Upstream transport for every provider call; defaults to global fetch. */
 	fetch?: FetchImpl;
+	/** Request-local privacy sink for resolved and refreshed credential material. */
+	rememberCredential?: (credential: string) => void;
 }
 
 export function normalizeClientSessionKey(clientKey: string | undefined): string | undefined {
@@ -134,6 +136,7 @@ export function buildGatewayApiKeyResolver(
 	requestSignal: AbortSignal,
 	format: string,
 	peer: string,
+	rememberCredential?: (credential: string) => void,
 ): ApiKeyResolver {
 	let lastKey = initialKey;
 	return async ({ lastChance, error, signal }) => {
@@ -149,6 +152,7 @@ export function buildGatewayApiKeyResolver(
 				forceRefresh: true,
 			});
 			lastKey = refreshed ?? lastKey;
+			if (refreshed) rememberCredential?.(refreshed);
 			return refreshed;
 		}
 		const next = await refreshGatewayApiKeyAfterAuthError(
@@ -163,6 +167,7 @@ export function buildGatewayApiKeyResolver(
 			peer,
 		);
 		lastKey = next ?? lastKey;
+		if (next) rememberCredential?.(next);
 		return next;
 	};
 }

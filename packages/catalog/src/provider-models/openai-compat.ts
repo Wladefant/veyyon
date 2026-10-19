@@ -2,12 +2,13 @@ import { getInstallId } from "@veyyon/utils/dirs";
 import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
-import { type DiscoveryFailure, type DiscoveryHooks, readDiscoveryJson } from "../discovery/failure";
-import {
-	fetchOpenAICompatibleModels,
-	type OpenAICompatibleModelMapperContext,
-	type OpenAICompatibleModelRecord,
+import type { DiscoveryFailure, DiscoveryHooks, DiscoveryReport } from "../discovery/failure";
+import type {
+	FetchOpenAICompatibleModelsOptions,
+	OpenAICompatibleModelMapperContext,
+	OpenAICompatibleModelRecord,
 } from "../discovery/openai-compatible";
+
 import { canonicalizeEfforts, Effort, isEffort } from "../effort";
 import {
 	FIREPASS_WIRE_PREFIX,
@@ -58,6 +59,20 @@ import { resolveKimiCodeEndpoint } from "../wire/kimi-code";
 import { basetenRouteReasoning } from "./baseten-reasoning";
 import { createBundledReferenceMap, createReferenceResolver, toModelSpec } from "./bundled-references";
 import { filterModelsDevCatalogRows } from "./models-dev-policies";
+
+async function fetchOpenAICompatibleModels<TApi extends Api = "openai-completions">(
+	options: FetchOpenAICompatibleModelsOptions<TApi>,
+): Promise<ModelSpec<TApi>[] | null> {
+	// Deferred import: static import pulls discovery into @veyyon/catalog/provider-models and inflates the reach graph.
+	const mod = await import("../discovery/openai-compatible");
+	return mod.fetchOpenAICompatibleModels<TApi>(options);
+}
+
+async function readDiscoveryJson(response: Response, report: DiscoveryReport): Promise<unknown> {
+	// Deferred import: static import pulls discovery into @veyyon/catalog/provider-models and inflates the reach graph.
+	const mod = await import("../discovery/failure");
+	return mod.readDiscoveryJson(response, report);
+}
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
 
