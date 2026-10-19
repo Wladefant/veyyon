@@ -74,32 +74,7 @@ export class JuliaKernel extends BaseKernel<KernelExecuteOptions> {
 			exitPayload: "exit",
 			interruptEscalationMs: KERNEL_INTERRUPT_ESCALATION_MS,
 			shutdownGraceMs: KERNEL_SHUTDOWN_GRACE_MS,
-			buildPayload: (code, msgId, opts) => {
-				// Convert arguments into a TSV / Base64 payload.
-				const cwdB64 = Buffer.from(opts?.cwd ?? "").toString("base64");
-				const silentVal = opts?.silent ? "1" : "0";
-				const storeHistVal = opts?.storeHistory !== false && !opts?.silent ? "1" : "0";
-
-				// Format environment variables as key1_b64:val1_b64 key2_b64:val2_b64.
-				// A `null` in the patch CLEARS the variable, and the wire needs a way to say
-				// that: the key is prefixed with `!` and the value left empty. `!` is not in
-				// the base64 alphabet, so it cannot collide with an encoded key, and a runner
-				// that predates the marker simply fails to decode that one pair rather than
-				// setting the variable to something wrong.
-				const envPairs: string[] = [];
-				if (opts?.env) {
-					for (const key in opts.env) {
-						const val = opts.env[key];
-						if (val === undefined) continue;
-						const k_b64 = Buffer.from(key).toString("base64");
-						envPairs.push(val === null ? `!${k_b64}:` : `${k_b64}:${Buffer.from(val).toString("base64")}`);
-					}
-				}
-				const envPairsStr = envPairs.join(" ");
-				const codeB64 = Buffer.from(code).toString("base64");
-
-				return `run\t${msgId}\t${cwdB64}\t${silentVal}\t${storeHistVal}\t${envPairsStr}\t${codeB64}`;
-			},
+			buildPayload: buildExecutePayload,
 		});
 	}
 
@@ -161,4 +136,33 @@ export function buildInitScript(cwd: string, env?: KernelEnvPatch): string {
 	// Avoid modifying LOAD_PATH if not necessary, but if needed, prepend cwd
 	lines.push("if !(__veyyon_init_cwd in LOAD_PATH); pushfirst!(LOAD_PATH, __veyyon_init_cwd); end");
 	return lines.join("\n");
+}
+
+/**
+ * One execution request on the runner's TSV wire: `run`, the message id, the
+ * base64 cwd, the silent and store-history flags, the environment pairs and the
+ * base64 code.
+ *
+ * Environment pairs are `key_b64:value_b64`, space-separated. A `null` in the
+ * patch CLEARS the variable, and the wire needs a way to say that: the key is
+ * prefixed with `!` and the value left empty. `!` is not in the base64 alphabet,
+ * so it cannot collide with an encoded key, and a runner that predates the marker
+ * fails to decode that one pair rather than setting the variable to something
+ * wrong. `undefined` emits no pair.
+ */
+export function buildExecutePayload(code: string, msgId: string, opts?: KernelExecuteOptions): string {
+	const cwdB64 = Buffer.from(opts?.cwd ?? "").toString("base64");
+	const silentVal = opts?.silent ? "1" : "0";
+	const storeHistVal = opts?.storeHistory !== false && !opts?.silent ? "1" : "0";
+	const envPairs: string[] = [];
+	if (opts?.env) {
+		for (const key in opts.env) {
+			const val = opts.env[key];
+			if (val === undefined) continue;
+			const k_b64 = Buffer.from(key).toString("base64");
+			envPairs.push(val === null ? `!${k_b64}:` : `${k_b64}:${Buffer.from(val).toString("base64")}`);
+		}
+	}
+	const codeB64 = Buffer.from(code).toString("base64");
+	return `run\t${msgId}\t${cwdB64}\t${silentVal}\t${storeHistVal}\t${envPairs.join(" ")}\t${codeB64}`;
 }

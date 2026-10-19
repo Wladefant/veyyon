@@ -14,6 +14,7 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { ACTIVITY_PROFILES, livingIntensity, type ShimmerActivity } from "@veyyon/coding-agent/theme/shimmer";
 
 const PKG_ROOT = path.resolve(import.meta.dir, "../..");
 const SRC_ROOT = path.join(PKG_ROOT, "src");
@@ -71,19 +72,30 @@ describe("shimmer.ts utilization — no orphaned machinery", () => {
 		expect(orphans).toEqual([]);
 	});
 
-	/** The regression DS-8 exists for: motionForActivity was exported but its
-	 *  lookup was duplicated inline in livingIntensity — production-dead with a
-	 *  same-logic copy (ONE PLACE violation). Lock the wiring. */
-	it("livingIntensity routes through motionForActivity (one owner for the motion lookup)", () => {
-		expect(shimmerSource).toContain("switch (motionForActivity(state))");
-		const inlineLookups = [...shimmerSource.matchAll(/switch \(ACTIVITY_PROFILES\[/g)];
-		expect(inlineLookups).toEqual([]);
-	});
-
-	it("allowlisted test-visibility exports still have internal production logic behind them", () => {
-		// getShimmerActivity is the read pair of setShimmerActivity's module
-		// state; LAVA_TUNING freezes the constants lavaAnsi computes from.
-		expect(shimmerSource).toContain("let currentActivity");
-		expect(shimmerSource).toContain("LAVA_PERIOD_MS");
+	/**
+	 * The regression DS-8 exists for: motionForActivity was exported but its
+	 * lookup was duplicated inline in livingIntensity, production-dead with a
+	 * same-logic copy. Proven by moving a state onto another state's motion in
+	 * the table: a livingIntensity that reads the table follows, one with its own
+	 * copy of the mapping does not. The allowlisted exports are driven by
+	 * `shimmer-living.test.ts` (getShimmerActivity) and `shimmer-lava.test.ts`
+	 * (LAVA_TUNING's period and depth).
+	 */
+	it("livingIntensity takes each state's motion from ACTIVITY_PROFILES", () => {
+		const states = Object.keys(ACTIVITY_PROFILES) as ShimmerActivity[];
+		const samples = (state: ShimmerActivity) =>
+			[0, 137, 900, 2_400].flatMap(time => [0, 3, 7].map(index => livingIntensity(state, time, 0, index, 12)));
+		for (const moved of states) {
+			for (const target of states) {
+				if (ACTIVITY_PROFILES[moved].motion === ACTIVITY_PROFILES[target].motion) continue;
+				const original = ACTIVITY_PROFILES[moved].motion;
+				ACTIVITY_PROFILES[moved].motion = ACTIVITY_PROFILES[target].motion;
+				try {
+					expect(samples(moved), `${moved} on ${target}'s motion`).toEqual(samples(target));
+				} finally {
+					ACTIVITY_PROFILES[moved].motion = original;
+				}
+			}
+		}
 	});
 });

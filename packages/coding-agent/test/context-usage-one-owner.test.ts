@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { resolveThresholdTokens, shouldCompact } from "@veyyon/agent-core/compaction";
+import type { AssistantMessage, UserMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
@@ -78,7 +79,7 @@ describe("the context total has one owner", () => {
 	});
 
 	/** Append to both the runtime state and the branch, the way a real turn does. */
-	function appendTurn(user: ReturnType<typeof userMsg>, assistant: ReturnType<typeof anchorWithPromptTokens>) {
+	function appendTurn(user: UserMessage, assistant: AssistantMessage) {
 		session.agent.appendMessage(user);
 		session.sessionManager.appendMessage(user);
 		session.agent.appendMessage(assistant);

@@ -35,10 +35,8 @@ function createSettings(model: Model<Api>, tinyModel: string) {
 	return {
 		get(path: string) {
 			if (path === "providers.tinyModel") return tinyModel;
+			if (path === "agent.helpers") return { title: { model: `${model.provider}/${model.id}` } };
 			return undefined;
-		},
-		getModelRole(role: string) {
-			return role === "smol" ? `${model.provider}/${model.id}` : undefined;
 		},
 	} as never;
 }

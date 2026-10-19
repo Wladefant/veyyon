@@ -30,12 +30,13 @@ import {
 	VERSION,
 	withFileLock,
 } from "@veyyon/utils";
+import { isTimeoutError } from "@veyyon/utils/abortable";
+import { scopedTimeoutSignal, withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { $ } from "bun";
 import chalk from "chalk";
 import { settingsOrNull } from "../config/settings-instance";
 import type { SettingPath } from "../config/settings-schema";
-import { theme } from "../theme/theme";
-import { isTimeoutError, withTimeoutSignal } from "../utils/fetch-timeout";
+import { theme } from "../theme/theme-binding";
 import {
 	AUTO_UPDATE_FAILURE_COOLDOWN_MS,
 	AUTO_UPDATE_LOCK_STALE_MS,
@@ -415,6 +416,8 @@ function defaultInstalledMethod(): UpdateMethod | undefined {
 export async function getLatestRelease(timeoutMs: number = RELEASE_METADATA_TIMEOUT_MS): Promise<ReleaseInfo> {
 	const url = `${GITHUB_LATEST_RELEASE_URL}`;
 	let response: Response;
+	// A HEAD answer has no body to read, so the deadline ends when the headers do.
+	const deadline = scopedTimeoutSignal(timeoutMs);
 	try {
 		// `redirect: "manual"` so the 302 itself is the answer. Following it would
 		// download the release page, which is a few hundred kilobytes of HTML this
@@ -423,19 +426,17 @@ export async function getLatestRelease(timeoutMs: number = RELEASE_METADATA_TIME
 			method: "HEAD",
 			redirect: "manual",
 			headers: { "User-Agent": GITHUB_USER_AGENT },
-			// The deadline the caller asked for. This was `new AbortController().signal`: a
-			// signal nothing ever aborts, so `timeoutMs` reached the error message and nothing
-			// else, and a connection that accepts and then stalls hung this call forever. That
-			// is the one thing this function documents it must never do, and it is on the
-			// startup path, so a captive portal or a black-holed route froze the launch rather
-			// than falling back to "could not check".
-			signal: withTimeoutSignal(timeoutMs),
+			// The deadline the caller asked for, so a connection that accepts and then
+			// stalls cannot hang this startup check.
+			signal: deadline.signal,
 		});
 	} catch (err) {
 		if (isTimeoutError(err)) {
 			throw new Error(`Timed out fetching release info after ${Math.round(timeoutMs / 1000)}s`, { cause: err });
 		}
 		throw err;
+	} finally {
+		deadline.cancel();
 	}
 	// A redirect is the expected answer, so `response.ok` is false on the happy
 	// path and cannot be the check. 404 means the repository has no published
@@ -579,34 +580,37 @@ async function fetchReleasePage(
 	url: string,
 	timeoutMs: number,
 ): Promise<{ releases: ReleaseListing[]; rawCount: number }> {
-	let response: Response;
-	try {
-		response = await fetch(url, {
-			headers: { "User-Agent": GITHUB_USER_AGENT, Accept: "application/vnd.github+json" },
-			signal: withTimeoutSignal(timeoutMs),
-		});
-	} catch (err) {
-		if (isTimeoutError(err)) {
-			throw new Error(`Timed out fetching the release list after ${Math.round(timeoutMs / 1000)}s`, { cause: err });
+	const data: unknown = await withScopedTimeoutSignal(timeoutMs, async signal => {
+		let response: Response;
+		try {
+			response = await fetch(url, {
+				headers: { "User-Agent": GITHUB_USER_AGENT, Accept: "application/vnd.github+json" },
+				signal,
+			});
+		} catch (err) {
+			if (isTimeoutError(err)) {
+				throw new Error(`Timed out fetching the release list after ${Math.round(timeoutMs / 1000)}s`, {
+					cause: err,
+				});
+			}
+			throw err;
 		}
-		throw err;
-	}
-	if (!response.ok) {
-		// The version LIST is the only thing left that spends the API budget, and
-		// that budget belongs to the address rather than to this machine, so a
-		// rate limit here is usually somebody else's traffic. Updating forward
-		// does not go through the API at all, which is worth saying: otherwise
-		// this reads as "veyyon cannot reach GitHub" and the user stops trying.
-		const hint =
-			response.status === 403 || response.status === 429
-				? " — GitHub is rate-limiting this address (the limit is per address and shared, so another machine behind it may have spent it); retry in a few minutes, or run `veyyon update`, which does not use the API. `veyyon rollback <version>` needs this list to confirm the version exists."
-				: "";
-		throw new Error(
-			`Failed to fetch the release list from ${url}: HTTP ${response.status} ${response.statusText}${hint}`,
-		);
-	}
-
-	const data: unknown = await response.json();
+		if (!response.ok) {
+			// The version LIST is the only thing left that spends the API budget, and
+			// that budget belongs to the address rather than to this machine, so a
+			// rate limit here is usually somebody else's traffic. Updating forward
+			// does not go through the API at all, which is worth saying: otherwise
+			// this reads as "veyyon cannot reach GitHub" and the user stops trying.
+			const hint =
+				response.status === 403 || response.status === 429
+					? " — GitHub is rate-limiting this address (the limit is per address and shared, so another machine behind it may have spent it); retry in a few minutes, or run `veyyon update`, which does not use the API. `veyyon rollback <version>` needs this list to confirm the version exists."
+					: "";
+			throw new Error(
+				`Failed to fetch the release list from ${url}: HTTP ${response.status} ${response.statusText}${hint}`,
+			);
+		}
+		return response.json();
+	});
 	if (!Array.isArray(data)) {
 		throw new Error(`Expected a list of releases from ${url}, got ${typeof data}`);
 	}
@@ -707,13 +711,6 @@ export function formatBinaryDownloadFailure(
 }
 
 /**
- * Re-exported so the self-updater's callers and tests have one import site.
- * The definition lives in `@veyyon/natives`, the lowest layer shared with the
- * native-addon provisioning that reads the same sidecar format.
- */
-export { parseSha256Sidecar };
-
-/**
  * Verify a downloaded release binary against its published `.sha256` sidecar,
  * failing closed on any problem.
  *
@@ -731,21 +728,24 @@ export { parseSha256Sidecar };
  * than installing without verification, which is the correct refusal.
  */
 export async function verifyDownloadChecksum(filePath: string, sidecarUrl: string): Promise<void> {
-	let response: Response;
-	try {
-		response = await fetch(sidecarUrl, { redirect: "follow", signal: withTimeoutSignal(CHECKSUM_TIMEOUT_MS) });
-	} catch (err) {
-		if (isTimeoutError(err)) {
-			throw new Error(`Timed out fetching the published checksum from ${sidecarUrl}`, { cause: err });
+	const sidecar = await withScopedTimeoutSignal(CHECKSUM_TIMEOUT_MS, async signal => {
+		let response: Response;
+		try {
+			response = await fetch(sidecarUrl, { redirect: "follow", signal });
+		} catch (err) {
+			if (isTimeoutError(err)) {
+				throw new Error(`Timed out fetching the published checksum from ${sidecarUrl}`, { cause: err });
+			}
+			throw err;
 		}
-		throw err;
-	}
-	if (!response.ok) {
-		throw new Error(
-			`No published checksum at ${sidecarUrl} (HTTP ${response.status}) — refusing to install an unverified binary`,
-		);
-	}
-	const expected = parseSha256Sidecar(await response.text());
+		if (!response.ok) {
+			throw new Error(
+				`No published checksum at ${sidecarUrl} (HTTP ${response.status}) — refusing to install an unverified binary`,
+			);
+		}
+		return response.text();
+	});
+	const expected = parseSha256Sidecar(sidecar);
 	if (!expected) {
 		throw new Error(
 			`Published checksum at ${sidecarUrl} is empty or unparseable — refusing to install an unverified binary`,
@@ -1403,40 +1403,39 @@ export async function updateViaBinaryAt(
 	const backupPath = `${targetPath}.${attemptId}.bak`;
 	report(chalk.dim(`Downloading ${binaryName}…`));
 
-	let response: Response;
-	try {
-		response = await fetch(url, {
-			redirect: "follow",
-			signal: withTimeoutSignal(BINARY_DOWNLOAD_TIMEOUT_MS),
-		});
-	} catch (err) {
-		if (isTimeoutError(err)) {
-			throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
+	await withScopedTimeoutSignal(BINARY_DOWNLOAD_TIMEOUT_MS, async signal => {
+		let response: Response;
+		try {
+			response = await fetch(url, { redirect: "follow", signal });
+		} catch (err) {
+			if (isTimeoutError(err)) {
+				throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
+			}
+			throw err;
 		}
-		throw err;
-	}
-	if (!response.ok) {
-		throw new Error(
-			formatBinaryDownloadFailure(response.status, response.statusText, url, expectedVersion, binaryName),
-		);
-	}
-	if (!response.body) {
-		throw new Error(`Release binary download from ${url} returned HTTP ${response.status} with an empty body`);
-	}
-	const fileStream = fs.createWriteStream(tempPath, { mode: 0o755 });
-	try {
-		await pipeline(response.body, fileStream);
-	} catch (err) {
-		// A mid-download failure (network drop) leaves a partial attempt file
-		// behind before reaching replaceBinaryForUpdate, whose catch
-		// would otherwise clean it up. Remove it so a failed update never litters
-		// the install dir, matching install.sh's EXIT/INT/TERM trap on its tmpbin.
-		// Best-effort: a directory this process cannot write is the likeliest reason
-		// the download failed in the first place, and it would fail the cleanup too.
-		// The download error is the one worth reporting.
-		await removeFileBestEffort(tempPath);
-		throw err;
-	}
+		if (!response.ok) {
+			throw new Error(
+				formatBinaryDownloadFailure(response.status, response.statusText, url, expectedVersion, binaryName),
+			);
+		}
+		if (!response.body) {
+			throw new Error(`Release binary download from ${url} returned HTTP ${response.status} with an empty body`);
+		}
+		const fileStream = fs.createWriteStream(tempPath, { mode: 0o755 });
+		try {
+			await pipeline(response.body, fileStream);
+		} catch (err) {
+			// A mid-download failure (network drop) leaves a partial attempt file
+			// behind before reaching replaceBinaryForUpdate, whose catch
+			// would otherwise clean it up. Remove it so a failed update never litters
+			// the install dir, matching install.sh's EXIT/INT/TERM trap on its tmpbin.
+			// Best-effort: a directory this process cannot write is the likeliest reason
+			// the download failed in the first place, and it would fail the cleanup too.
+			// The download error is the one worth reporting.
+			await removeFileBestEffort(tempPath);
+			throw err;
+		}
+	});
 
 	// Fail-closed integrity gate, matching install.sh / install.ps1: verify the
 	// download against its published .sha256 sidecar BEFORE swapping it in. A
@@ -1854,9 +1853,6 @@ export async function updateViaSourceAt(
  * startup update go through it, so they can never drift into updating by
  * different rules.
  *
- * `force` is accepted for API symmetry with callers (the rollback path passes
- * it); a binary swap is unconditional, so it does not change binary behavior.
- *
  * A successful move is recorded here, which is the only place that sees every
  * one of them. It used to be recorded by `rollbackToVersion` alone, so the
  * history held rollbacks and nothing else: an update that took you from 1.0.30
@@ -1872,7 +1868,6 @@ export async function updateViaSourceAt(
  */
 export async function installRelease(
 	version: string,
-	force: boolean,
 	report: UpdateReporter = CONSOLE_UPDATE_REPORTER,
 	currentVersion: string = VERSION,
 	historyPath: string = getUpdateHistoryPath(),
@@ -2043,7 +2038,7 @@ export async function rollbackToVersion(
 	report(`Moving from ${currentVersion} to ${version}...`);
 	// installRelease records the move: it is the one function every version change
 	// goes through, so recording here as well would file each rollback twice.
-	await installRelease(version, true, report, currentVersion, historyPath);
+	await installRelease(version, report, currentVersion, historyPath);
 	report(`Now on ${version}. Restart ${APP_NAME} to run it.`);
 }
 
@@ -2109,7 +2104,7 @@ export async function runAutoUpdate(
 	install: (
 		version: string,
 		reporter: typeof SILENT_UPDATE_REPORTER,
-	) => Promise<void> | Promise<InstallReleaseResult> = (version, reporter) => installRelease(version, false, reporter),
+	) => Promise<void> | Promise<InstallReleaseResult> = (version, reporter) => installRelease(version, reporter),
 	historyPath: string = getUpdateHistoryPath(),
 	settingsOverride?: { get: (path: SettingPath) => unknown },
 	isCustomBuildOverride?: () => boolean | Promise<boolean>,
@@ -2223,7 +2218,7 @@ export async function runAutoUpdate(
  * running git against a real checkout; production always uses
  * {@link installRelease}, which owns the binary-vs-source decision.
  */
-export type ReleaseInstaller = (version: string, force: boolean) => Promise<void> | Promise<InstallReleaseResult>;
+export type ReleaseInstaller = (version: string) => Promise<void> | Promise<InstallReleaseResult>;
 
 /**
  * Run the update command.
@@ -2280,7 +2275,7 @@ export async function runUpdateCommand(
 	// here made that code unreachable from the only command a user runs, so the
 	// fix shipped and nobody could get at it.
 	try {
-		await install(release.version, opts.force);
+		await install(release.version);
 	} catch (err) {
 		// errorMessage(err), not `${err}`: the latter stringifies as "Error: …"
 		// and doubles the prefix into "Update failed: Error: …".

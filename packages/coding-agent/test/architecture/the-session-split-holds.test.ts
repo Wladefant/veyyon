@@ -36,7 +36,7 @@ const RUNTIME = `${SESSION_DIR}/agent-session.ts`;
 const FACADE = `${SESSION_DIR}/facade.ts`;
 
 /**
- * MEASURED at 9643 lines. Model target selection left earlier — the role resolver, the
+ * MEASURED at 9456 lines. Model target selection left earlier — the role resolver, the
  * configured-target reader, the compaction candidate walk and its effort map — and provider request
  * shaping (payload redaction, the Anthropic metadata block, the tool-order permutation check) left
  * after it, because not one of those members read or wrote a field of the runtime: every input was
@@ -55,17 +55,36 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * auto-approve flag, the `/yolo` bypass, the kept per-tool decisions and the ACP permission proxy)
  * and the provider wire shaping (the tool-call id map, the relativization root and the bytes each
  * request left out), the extension event forwarding with its turn index, the session title refresh
- * on a re-plan, the serialized scope transitions with the cwd re-scoping they run, and the in-flight
- * prompt count with the macOS power assertion left as collaborators under `runtime/`.
+ * on a re-plan, the serialized scope transitions with the cwd re-scoping they run, the in-flight
+ * prompt count with the macOS power assertion, and the end-of-turn context check with its overflow,
+ * incomplete-output, promoted-model retry and threshold cases left as collaborators under `runtime/`.
  * The number falls again when the next one leaves. It ratchets: slack is what it takes to not fail
  * on the next honest edit, and a ceiling left far above a shrinking file stops being a bound.
- *
- * RE-MEASURED 2026-09-30 at 10412 after the santhreal merge: upstream's 10173 plus the fork's own
- * additions (the `agent.maxConcurrency` resize wiring, the unsupported-input guard, the session
- * liveness records and the terminal-ownership checks), which the collaborators above do not yet carry.
+ * RE-MEASURED 2026-10-09 at 9811: the session-switch rollback record and its single-purpose
+ * adoption steps (+92), the end-of-turn context check split into its recovery cases (+32), the
+ * agent-event reattachment after a part-way failed transition (+24), the composer prediction hook
+ * (+11) and the verification reminder's active-tool-name source (+1) grew the class in place.
+ * RE-MEASURED 2026-10-16 at 9015: session-switch adoption and rollback left as the
+ * `session-switch.ts` collaborator (-371).
+ * RE-MEASURED 2026-10-16 at 8654: branching, the `/btw` branch and tree navigation with its
+ * branch summary left as the `session-branch.ts` collaborator (-361).
+ * RE-MEASURED 2026-10-16 at 8446: the handoff document and the new session it seeds left as the
+ * `session-handoff.ts` collaborator (-208).
+ * RE-MEASURED 2026-10-16 at 7992: the active tool set, the base system prompt with its
+ * invalidation record and rebuild digest, and the MCP, RPC host, SSH and vibe registry refreshes
+ * left as the `tool-activation.ts` collaborator (-454).
+ * RE-MEASURED 2026-10-16 at 7834: the ephemeral side-channel turn and its history snapshot left
+ * as the `agent-session-ephemeral-turn.ts` sibling (-160); it holds no instance state and reads
+ * the session through a host interface.
+ * RE-MEASURED 2026-10-16 at 7733: the goal todo context and the magic keyword notices left as the
+ * `agent-session-turn-notices.ts` sibling (-101); it reads the session through a host interface
+ * the session satisfies structurally.
+ * RE-MEASURED 2026-10-17 at 7423: extension and custom slash-command resolution, and the command
+ * context a session builds when no extension runner does, left as the `agent-session-commands.ts`
+ * sibling (-228); it reads the session through a host interface the session satisfies structurally.
+ * RE-MEASURED 2026-10-17: fork additions sit on top of upstream extractions; measured at 7897.
  */
-// 10_430 -> 10_451: the 2026-10 upstream port wave (advisor roster and retry-runtime work, #219).
-const RUNTIME_CEILING = 10_451;
+const RUNTIME_CEILING = 7_950;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -100,14 +119,19 @@ const COLLABORATORS = [
 	"retry-fallback.ts",
 	"retry-runtime.ts",
 	"session-approvals.ts",
+	"session-branch.ts",
+	"session-handoff.ts",
 	"session-scope.ts",
 	"session-secrets.ts",
+	"session-switch.ts",
 	"stop-retries.ts",
 	"streaming-edit-guard.ts",
 	"thinking-runtime.ts",
 	"todo-runtime.ts",
+	"tool-activation.ts",
 	"tool-discovery.ts",
 	"ttsr-runtime.ts",
+	"turn-context-check.ts",
 	"turns-in-flight.ts",
 	"user-executions.ts",
 	"yield-tracker.ts",
@@ -125,18 +149,21 @@ const FACADE_CEILING = 500;
 
 /**
  * The concerns that left the runtime and still sit beside it, pinned by exact
- * equality. An eighth sibling, or one renamed, fails here before it fails anywhere
+ * equality. An eleventh sibling, or one renamed, fails here before it fails anywhere
  * useful. The compaction policy was one of them and is no longer here: it moved to
  * `@veyyon/kernel/session/agent-session-compaction-policy` with the session spine,
  * so a copy reappearing under `src/session/` is a drift this cell reports.
  */
 const SIBLINGS = [
+	"agent-session-commands.ts",
+	"agent-session-ephemeral-turn.ts",
 	"agent-session-message-shapes.ts",
 	"agent-session-model-targets.ts",
 	"agent-session-permissions.ts",
 	"agent-session-provider-request.ts",
 	"agent-session-queue.ts",
 	"agent-session-retry-fallback.ts",
+	"agent-session-turn-notices.ts",
 	"agent-session-types.ts",
 ] as const;
 

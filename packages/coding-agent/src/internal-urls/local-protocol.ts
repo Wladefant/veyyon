@@ -283,6 +283,47 @@ export async function listLocalPlanFileUrls(localRoot: string): Promise<string[]
 	return plans.sort((left, right) => right.mtime - left.mtime).map(plan => plan.url);
 }
 
+/**
+ * Copies one session's `local://` root into another's, so a plan approved into a fresh session keeps
+ * the files the planning session wrote. Directories and regular files are copied; symbolic links and
+ * other entry kinds are not. A source root that is missing or is not a directory copies nothing.
+ */
+export async function copyLocalRoot(sourceRoot: string, destinationRoot: string): Promise<void> {
+	if (sourceRoot === destinationRoot) return;
+
+	let sourceRootStat: { isDirectory(): boolean };
+	try {
+		sourceRootStat = await fs.lstat(sourceRoot);
+	} catch (error) {
+		if (isEnoent(error)) return;
+		throw error;
+	}
+
+	if (!sourceRootStat.isDirectory()) return;
+
+	await fs.mkdir(destinationRoot, { recursive: true });
+	await copyLocalEntries(sourceRoot, destinationRoot);
+}
+
+async function copyLocalEntries(sourceDir: string, destinationDir: string): Promise<void> {
+	const entries = await fs.readdir(sourceDir, { withFileTypes: true });
+	for (const entry of entries) {
+		const sourcePath = path.join(sourceDir, entry.name);
+		const destinationPath = path.join(destinationDir, entry.name);
+
+		if (entry.isDirectory()) {
+			await fs.mkdir(destinationPath, { recursive: true });
+			await copyLocalEntries(sourcePath, destinationPath);
+			continue;
+		}
+
+		if (entry.isFile()) {
+			await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+			await fs.copyFile(sourcePath, destinationPath);
+		}
+	}
+}
+
 export function resolveLocalUrlToPath(
 	input: string | InternalUrl,
 	options: LocalProtocolOptions,

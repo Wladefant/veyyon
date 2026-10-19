@@ -100,7 +100,7 @@ describe("auto-compaction candidate admission", () => {
 		}
 	}
 
-	/** The threshold-tripping turn that drives `#checkCompaction` into auto-compaction. */
+	/** The threshold-tripping turn that drives `TurnContextCheck.check` into auto-compaction. */
 	function thresholdTurn() {
 		return {
 			role: "assistant" as const,

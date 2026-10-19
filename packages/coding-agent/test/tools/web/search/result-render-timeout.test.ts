@@ -15,9 +15,13 @@
  * inline: an explicit `0` has to keep meaning "do not wait".
  */
 
-import { describe, expect, it } from "bun:test";
-import { readdir, readFile } from "node:fs/promises";
+import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
+import type { AuthStorage } from "@veyyon/ai";
+import * as launch from "@veyyon/coding-agent/tools/web/browser/launch";
+import * as registry from "@veyyon/coding-agent/tools/web/browser/registry";
+import { getSearchProvider } from "@veyyon/coding-agent/tools/web/search/provider";
 import { RESULT_RENDER_TIMEOUT_MS, readyTimeoutMs } from "@veyyon/coding-agent/tools/web/search/providers/browser-page";
+import { SEARCH_PROVIDER_ORDER } from "@veyyon/coding-agent/tools/web/search/types";
 
 describe("RESULT_RENDER_TIMEOUT_MS", () => {
 	/**
@@ -57,66 +61,82 @@ describe("readyTimeoutMs", () => {
 	});
 });
 
+/** The rendered pages one provider search opened, and the selector waits on them. */
+interface RenderedRead {
+	pages: number;
+	waits: Array<{ selector: string; timeout?: number }>;
+}
+
 describe("the render wait has one owner", () => {
-	const providerDir = new URL("../../../../src/tools/web/search/providers/", import.meta.url);
+	/**
+	 * Every search provider, run to the point where it reads a rendered page, with the network
+	 * refused so a provider that has a browser fallback takes it. The fake browser records each
+	 * page opened and each selector wait. Swept from the provider registry, so a provider added tomorrow is run here
+	 * without anyone naming it.
+	 */
+	async function renderedReadsByProvider(): Promise<Record<string, RenderedRead>> {
+		spyOn(globalThis, "fetch").mockRejectedValue(new Error("network refused in this suite"));
+		spyOn(launch, "applyViewport").mockResolvedValue(undefined);
+		spyOn(launch, "applyStealthPatches").mockResolvedValue(undefined);
+		let read: RenderedRead = { pages: 0, waits: [] };
+		const page = {
+			goto: async () => null,
+			waitForSelector: async (selector: string, options?: { timeout?: number }) => {
+				read.waits.push({ selector, timeout: options?.timeout });
+				return null;
+			},
+			content: async () => "<html><body></body></html>",
+			url: () => "https://search.invalid/",
+			close: async () => undefined,
+		};
+		const handle = {
+			key: "headless:render-wait-suite",
+			kind: { kind: "headless", headless: true },
+			browser: {
+				connected: false,
+				newPage: async () => {
+					read.pages++;
+					return page;
+				},
+			},
+			refCount: 0,
+			identity: undefined,
+		} as unknown as registry.BrowserHandle;
+		spyOn(registry, "acquireBrowser").mockResolvedValue(handle);
 
-	async function read(name: string): Promise<string> {
-		return await readFile(new URL(name, providerDir), "utf8");
+		const byProvider: Record<string, RenderedRead> = {};
+		for (const id of SEARCH_PROVIDER_ORDER) {
+			if (id === "public") continue; // the aggregate runs the engines swept here by their own ids
+			read = { pages: 0, waits: [] };
+			const provider = await getSearchProvider(id);
+			await provider
+				.search({ query: "render wait", authStorage: noCredentials, systemPrompt: "render wait suite" })
+				.catch(() => undefined);
+			if (read.pages > 0) byProvider[id] = read;
+		}
+		return byProvider;
 	}
 
-	/**
-	 * The browser-rendered providers, discovered rather than listed. A hardcoded pair
-	 * went stale the moment an engine was dropped, and would go stale again in the
-	 * direction that matters: a new browser provider added to the directory has to be
-	 * swept by this suite without anyone remembering to name it here.
-	 */
-	async function browserProviders(): Promise<Array<{ name: string; source: string }>> {
-		const names = (await readdir(providerDir)).filter(name => name.endsWith(".ts")).sort();
-		const found: Array<{ name: string; source: string }> = [];
-		for (const name of names) {
-			const source = await read(name);
-			if (source.includes("browser: {")) found.push({ name, source });
-		}
-		return found;
-	}
+	const noCredentials = {
+		getApiKey: async () => undefined,
+		resolver: () => undefined,
+		hasAuth: () => false,
+	} as unknown as AuthStorage;
 
-	/**
-	 * No browser-rendered provider declares the number again.
-	 *
-	 * A source scan because a provider copying the pair (selector plus its own ten
-	 * seconds) compiles and passes, which is exactly how the first two copies happened.
-	 *
-	 * The selector is not swept the same way: a provider only names `ready` when its
-	 * results arrive after the document does, and one that reads a server-rendered page
-	 * through the browser legitimately names none.
-	 */
-	it("is declared in browser-page and in no provider", async () => {
-		expect(await read("browser-page.ts")).toContain("export const RESULT_RENDER_TIMEOUT_MS = 10_000;");
-
-		for (const { name, source } of await browserProviders()) {
-			expect(source, `${name} should not declare its own render timeout`).not.toContain("RESULT_RENDER_TIMEOUT_MS");
-		}
+	afterEach(() => {
+		vi.restoreAllMocks();
 	});
 
 	/**
-	 * NON-VACUITY for the selector half: a provider does still own its own `ready`
-	 * selector, so the split above is real and not an empty sweep.
+	 * A provider names the selector its results render under; the patience is the mechanism's. A
+	 * provider that passed its own `timeoutMs` beside the selector, which is how the first two
+	 * copies of the number happened, waits a different time and fails here. Pinned by provider, so
+	 * a provider that starts or stops reading rendered pages turns this red and someone records it.
 	 */
-	it("leaves the selector with the provider that knows it", async () => {
-		const withSelector = (await browserProviders()).filter(entry => entry.source.includes("ready: {"));
-		expect(withSelector.map(entry => entry.name)).toEqual(["google.ts"]);
-	});
-
-	/**
-	 * NON-VACUITY: the sweep really found providers and really read them, so the
-	 * absence above means something. Pinned by name as well as by count, so dropping
-	 * an engine or adding one turns this red and someone records the decision.
-	 */
-	it("reads the real providers, which do use the browser path", async () => {
-		const found = await browserProviders();
-		expect(found.map(entry => entry.name)).toEqual(["google.ts", "mojeek.ts"]);
-		for (const { name, source } of found) {
-			expect(source.length, `${name} should be a real provider`).toBeGreaterThan(1_000);
-		}
+	it("waits for each provider's own selector for the mechanism's default time", async () => {
+		expect(await renderedReadsByProvider()).toEqual({
+			google: { pages: 1, waits: [{ selector: "a h3", timeout: RESULT_RENDER_TIMEOUT_MS }] },
+			mojeek: { pages: 1, waits: [] },
+		});
 	});
 });

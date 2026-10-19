@@ -19,7 +19,7 @@
 
 import { Text } from "@veyyon/tui";
 import { collapseWhitespace, errorMessage, logger } from "@veyyon/utils";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import {
 	replaceTabs,
 	shortenEmbeddedPaths,

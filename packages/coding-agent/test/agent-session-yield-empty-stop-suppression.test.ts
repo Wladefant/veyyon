@@ -90,7 +90,7 @@ async function createHarness(responses: MockResponse[]): Promise<Harness & { moc
 		"todo.eager": "default",
 		"todo.reminders": false,
 	});
-	settings.setModelRole("default", `${mock.provider}/${mock.id}`);
+	settings.setDefaultModel(`${mock.provider}/${mock.id}`);
 
 	const sessionManager = SessionManager.inMemory(tempDir.path());
 	const tools = [yieldTool, recordTool] as AgentTool[];

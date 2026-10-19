@@ -143,7 +143,7 @@ describe("the settle reads the turn that just ended", () => {
 			settings: Settings.isolated({
 				"compaction.enabled": false,
 				"todo.enabled": true,
-				"todo.reminders.max": 3,
+				"todo.reminderLimit": 3,
 			}),
 			modelRegistry,
 		});

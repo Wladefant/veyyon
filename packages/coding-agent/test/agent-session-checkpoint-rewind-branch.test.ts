@@ -82,7 +82,7 @@ async function createHarness(responses: MockResponse[]): Promise<Harness & { moc
 		"todo.eager": "default",
 		"todo.reminders": false,
 	});
-	settings.setModelRole("default", `${mock.provider}/${mock.id}`);
+	settings.setDefaultModel(`${mock.provider}/${mock.id}`);
 
 	const tools = [checkpointTool as AgentTool, rewindTool as AgentTool];
 	const agent = new Agent({
@@ -251,7 +251,7 @@ describe("AgentSession checkpoint rewind branch context", () => {
 			"todo.eager": "default",
 			"todo.reminders": false,
 		});
-		reloadedSettings.setModelRole("default", `${reloadedMock.provider}/${reloadedMock.id}`);
+		reloadedSettings.setDefaultModel(`${reloadedMock.provider}/${reloadedMock.id}`);
 		const reloadedTools = [checkpointTool as AgentTool, rewindTool as AgentTool];
 		const reloadedAgent = new Agent({
 			getApiKey: () => "test-key",
@@ -399,7 +399,7 @@ describe("AgentSession checkpoint rewind branch context", () => {
 			"todo.eager": "default",
 			"todo.reminders": false,
 		});
-		reloadedSettings.setModelRole("default", `${reloadedMock.provider}/${reloadedMock.id}`);
+		reloadedSettings.setDefaultModel(`${reloadedMock.provider}/${reloadedMock.id}`);
 		const reloadedTools = [checkpointTool as AgentTool, rewindTool as AgentTool];
 		const reloadedAgent = new Agent({
 			getApiKey: () => "test-key",

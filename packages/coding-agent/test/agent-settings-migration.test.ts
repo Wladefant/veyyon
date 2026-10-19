@@ -311,9 +311,8 @@ describe("agent settings migration", () => {
 		const settings = await load();
 
 		expect(settings.get("agent.model")).toBe("openai/gpt-5:high");
-		expect(settings.getModelRole("task")).toBeUndefined();
-		// The unrelated roles in the same table are untouched.
-		expect(settings.getModelRole("default")).toBe("anthropic/claude-opus-4-5");
+		// The default role in the same table becomes the session model.
+		expect(settings.get("defaultModel")).toBe("anthropic/claude-opus-4-5");
 	});
 
 	/**
@@ -432,7 +431,7 @@ describe("agent settings migration", () => {
 		expect(onDisk.task).toBeUndefined();
 		expect(onDisk.subagent).toBeUndefined();
 		expect((onDisk.agent as Record<string, unknown> | undefined)?.maxRecursionDepth).toBeUndefined();
-		expect((onDisk.modelRoles as Record<string, unknown> | undefined)?.task).toBeUndefined();
+		expect(onDisk.modelRoles).toBeUndefined();
 	});
 
 	/**
@@ -710,8 +709,7 @@ describe("agent settings migration", () => {
 
 			const settings = await load();
 			expect(settings.get("agent.model")).toBe("openai/gpt-5:high");
-			expect(settings.getModelRole("task")).toBeUndefined();
-			expect(settings.getModelRole("default")).toBe("anthropic/claude-opus-4-5");
+			expect(settings.get("defaultModel")).toBe("anthropic/claude-opus-4-5");
 		});
 
 		test("migrates flat tier.subagent, advisor.subagents, and argot.subagents", async () => {
@@ -848,6 +846,7 @@ describe("agent settings migration", () => {
 			"agent.idleTtlMs": { task: { agentIdleTtlMs: 900_000 } },
 			"agent.maxNestedSpawnDepth": { task: { maxRecursionDepth: 3 } },
 			"agent.model": { modelRoles: { task: "openai/gpt-5" } },
+			"agent.helpers": { modelRoles: { smol: "openai/gpt-5" } },
 		};
 
 		/** Settings that never existed before this section, so there is nothing to carry. */

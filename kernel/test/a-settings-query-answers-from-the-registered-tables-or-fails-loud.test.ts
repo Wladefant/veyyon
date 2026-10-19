@@ -150,6 +150,30 @@ describe("a settings query answers from the registered tables or fails loud", ()
 		expect(getDefault("example.flag")).toBe(true);
 	});
 
+	for (const [name, first, second] of [
+		["a child of a declared path", {}, { "example.flag.limit": { type: "number", default: 3 } }],
+		[
+			"a parent of a declared path",
+			{ "example.group.limit": { type: "number", default: 3 } },
+			{ "example.group": { type: "boolean", default: true } },
+		],
+		[
+			"a parent and its child in one table",
+			{},
+			{ "example.pair": { type: "boolean", default: true }, "example.pair.limit": { type: "number", default: 3 } },
+		],
+	] as const) {
+		it(`rejects ${name}, since one config key holds a value or a group, not both`, () => {
+			declareSettings(EXAMPLE_SETTINGS);
+			declareSettings(first as SettingsTable);
+			const before = settingsSchemaPaths();
+			expect(() =>
+				declareSettings({ "example.unrelated": { type: "boolean", default: false }, ...second } as SettingsTable),
+			).toThrow(/is the parent of setting "example\.(flag|group|pair)\.limit"/);
+			expect(settingsSchemaPaths()).toEqual(before);
+		});
+	}
+
 	it("keeps a key snapshot stable until registration without changing an earlier snapshot", () => {
 		declareSettings(EXAMPLE_SETTINGS);
 		// Store indexes use this snapshot's identity to avoid enumerating on every read.

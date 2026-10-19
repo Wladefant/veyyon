@@ -158,7 +158,7 @@ describe("AgentSession mid-run todo reconciliation nudge", () => {
 			"compaction.enabled": false,
 			"todo.enabled": true,
 			"todo.reminders": true,
-			"todo.reminders.max": 3,
+			"todo.reminderLimit": 3,
 		});
 		const toolSession: ToolSession = {
 			cwd: tempDir.path(),

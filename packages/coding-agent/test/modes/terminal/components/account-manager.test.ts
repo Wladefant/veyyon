@@ -91,6 +91,7 @@ function harness(
 		onShowUsage: row => recorded.usage.push(row.credentialId),
 		onAddAccount: provider => recorded.added.push(provider),
 		onClearRateLimitBlock: () => {},
+		onForgetSignedOut: () => {},
 		onCancel: () => {
 			recorded.cancels += 1;
 		},

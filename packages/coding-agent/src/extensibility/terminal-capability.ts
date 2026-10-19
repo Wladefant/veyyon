@@ -50,35 +50,21 @@ export interface HookTerminalCapability {
 	/**
 	 * Show a custom component with keyboard focus.
 	 *
-	 * The factory receives the TUI, the theme, and a `done()` callback that
-	 * closes the component and resolves the promise. It may be async so a
-	 * fire-and-forget component can start work without the host awaiting it.
+	 * The factory receives the TUI, the theme, the keybindings manager, and a
+	 * `done()` callback that closes the component and resolves the promise. It
+	 * may be async so a fire-and-forget component can start work without the
+	 * host awaiting it. With `overlay`, the component is drawn over the
+	 * transcript instead of replacing the editor.
+	 *
+	 * Hooks and extensions are loaded by the same runner and receive the same
+	 * terminal, so this is the one signature both are called with.
 	 *
 	 * @example
-	 * const result = await ctx.ui.terminal?.custom((tui, theme, done) => {
+	 * const result = await ctx.ui.terminal?.custom((tui, theme, _keybindings, done) => {
 	 *   const component = new MyComponent(tui, theme);
 	 *   component.onFinish = value => done(value);
 	 *   return component;
 	 * });
-	 */
-	custom<T>(
-		factory: (
-			tui: TUI,
-			theme: Theme,
-			done: (result: T) => void,
-		) => ExtensionUiComponent | Promise<ExtensionUiComponent>,
-	): Promise<T>;
-}
-
-/**
- * Everything a terminal host lets an extension take over: the hook capability
- * plus the chrome an extension may replace outright.
- */
-export interface ExtensionTerminalCapability {
-	/**
-	 * Show a custom component with keyboard focus. Unlike the hook form, the
-	 * factory also receives the keybindings manager, and the component may be
-	 * drawn as an overlay rather than replacing the transcript.
 	 */
 	custom<T>(
 		factory: (
@@ -89,7 +75,13 @@ export interface ExtensionTerminalCapability {
 		) => ExtensionUiComponent | Promise<ExtensionUiComponent>,
 		options?: { overlay?: boolean | OverlayOptions },
 	): Promise<T>;
+}
 
+/**
+ * Everything a terminal host lets an extension take over: the hook capability
+ * plus the chrome an extension may replace outright.
+ */
+export interface ExtensionTerminalCapability extends HookTerminalCapability {
 	/** Set a widget drawn from a component, above or below the editor. */
 	setWidgetComponent(
 		key: string,

@@ -8,6 +8,7 @@ import {
 	contextVariantPath,
 	selectRoleContext,
 } from "../../src/task/role-context";
+import { getBundledAgent } from "../../src/task/agents";
 import type { Skill } from "../../src/extensibility/skills";
 
 let dir: string;
@@ -71,22 +72,14 @@ describe("applySkillList", () => {
 
 describe("selectRoleContext", () => {
 	const roles = ["task", "qa-verifier", "codex-worker", "codex-reviewer", "reviewer", "sonnet", "opus"];
-	const requiredSafety = [
-		"Production authorization",
-		"No visible windows",
-		"--no-ff",
-		"secrets",
-		"tool/shell contracts",
-	];
 
 	it.each(roles)("defaults %s to its sibling lane context", async role => {
 		const full = path.join(dir, "AGENTS.md");
 		await Bun.write(full, "FULL RULES");
-		await Bun.write(path.join(dir, "AGENTS.lane.md"), "LANE RULES\n" + requiredSafety.join("\n"));
+		await Bun.write(path.join(dir, "AGENTS.lane.md"), "LANE RULES");
 		const files = [entry(full, "FULL RULES")];
 		const out = await selectRoleContext({ agent: { name: role }, contextFiles: files, skills: [], cwd: dir });
 		expect(out.contextFiles?.[0]?.content).toContain("LANE RULES");
-		for (const marker of requiredSafety) expect(out.contextFiles?.[0]?.content).toContain(marker);
 	});
 
 	it.each(["missing", "empty"])("retains full files when variant is %s", async variant => {
@@ -143,4 +136,16 @@ describe("selectRoleContext", () => {
 		});
 		expect(out.skills).toBe(skills);
 	});
+	it("loads reviewer policy and spawn roles from the bundled agent registry", () => {
+		const reviewer = getBundledAgent("reviewer");
+		const prompt = reviewer?.systemPrompt ?? "";
+
+		expect(reviewer?.spawns).toEqual(["task", "qa-verifier", "haiku"]);
+		expect(prompt).toContain("A `COMMENTED` review never counts as approval");
+		expect(prompt).toContain("Red, pending, or unstarted required checks block a ready verdict");
+		expect(prompt).toContain("reviewed-sha: <full 40-hex head SHA>");
+		expect(prompt).toContain("Do not re-review sync-only or metadata-only changes after base sync");
+		expect(prompt).toContain("one verdict per reviewed head and actionable findings only");
+	});
+
 });

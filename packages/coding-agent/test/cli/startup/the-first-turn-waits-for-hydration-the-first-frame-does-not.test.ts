@@ -51,7 +51,7 @@ async function harness(): Promise<AgentSession> {
 		"todo.enabled": false,
 		"todo.reminders": false,
 	});
-	settings.setModelRole("default", `${mock.provider}/${mock.id}`);
+	settings.setDefaultModel(`${mock.provider}/${mock.id}`);
 	const tools: AgentTool[] = [];
 	const agent = new Agent({
 		getApiKey: () => "test-key",

@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { TtsrSettings } from "@veyyon/coding-agent/config/settings";
 import type { Rule } from "@veyyon/coding-agent/discovery/capability/rule";
 import { TtsrManager } from "@veyyon/coding-agent/export/ttsr";
+import { BUILTIN_TOOL_NAMES, HIDDEN_TOOL_NAMES } from "@veyyon/coding-agent/tools/core/builtin-names";
 import { logger } from "@veyyon/utils";
 
 function rule(overrides: Partial<Rule> = {}): Rule {
@@ -49,10 +50,12 @@ function manager(overrides: Partial<TtsrSettings> = {}): TtsrManager {
  * The whole point of these branches is that a rule which cannot work says so. A test that only checks
  * the return value would pass for a silent refusal, which is the defect.
  */
-function captureWarnings(): {
+interface CapturedWarnings {
 	entries: Array<{ message: string; fields?: Record<string, unknown> }>;
 	restore: () => void;
-} {
+}
+
+function captureWarnings(): CapturedWarnings {
 	const entries: Array<{ message: string; fields?: Record<string, unknown> }> = [];
 	const spy = vi.spyOn(logger, "warn").mockImplementation(((message: string, fields?: Record<string, unknown>) => {
 		entries.push({ message, fields });
@@ -60,7 +63,7 @@ function captureWarnings(): {
 	return { entries, restore: () => spy.mockRestore() };
 }
 
-let warnings: ReturnType<typeof captureWarnings> | undefined;
+let warnings: CapturedWarnings | undefined;
 
 afterEach(() => {
 	warnings?.restore();
@@ -229,6 +232,23 @@ describe("a scope naming a tool that does not exist", () => {
 		m.addRule(rule({ scope: ["tool:read", "tool:edit"] }));
 
 		m.reportUnknownToolScopes(["read", "edit"]);
+
+		expect(warnings.entries).toEqual([]);
+	});
+
+	/**
+	 * `--tools read` and a spawned agent's tool list build only the tools they name, so the registry a
+	 * restricted session reports against lacks most built-ins. A built-in rule scoped to `search` is
+	 * not a typo there, and reporting it logged one false warning per rule per scope on every launch.
+	 * Swept from the name lists, so a tool added later is covered.
+	 */
+	it("reports nothing for a built-in tool the session did not build", () => {
+		warnings = captureWarnings();
+		const m = manager();
+		const builtIns = [...BUILTIN_TOOL_NAMES, ...HIDDEN_TOOL_NAMES];
+		m.addRule(rule({ scope: builtIns.map(name => `tool:${name}`) }));
+
+		m.reportUnknownToolScopes(["read"]);
 
 		expect(warnings.entries).toEqual([]);
 	});

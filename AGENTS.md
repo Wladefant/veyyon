@@ -490,6 +490,18 @@ Commit conventions:
 - The release commit's subject is exactly `chore: bump version to vX.Y.Z`. `checks.yml` keys its
   changelog exemption off that prefix. `scripts/release-cut.ts` writes it; never hand-craft it.
 
+## Harness tuning
+
+When a task changes an agent harness, keep the solver model fixed and change only the harness under evaluation. Use `tests/evals/engine/task-splits.ts` to create the strict 20-feedback, 20-score, 60-final split from exactly 100 unique task IDs when a verified corpus exists. The seed and task manifest must be recorded. Never use final-set outcomes to draft, rank, or revise candidates. Run the final set once, after candidate selection.
+
+Build failure reports from the feedback set. Keep task IDs, failing assertions, runtime/interface errors, and relevant trace paths; do not include final-set outcomes. Validate each candidate's tool and data interfaces before scoring it. Score candidates on the score set. Keep the incumbent when no candidate improves the score. Allow up to five sequential improvement rounds, using the prior round's feedback report. This is a harness-tuning policy only; do not serialize independent implementation lanes.
+
+Do not invent evaluation cases. A historical case needs a real lane transcript and a provable outcome, such as a merged PR with passing checks or a `REQUEST-CHANGES` result. The split helper does not build this corpus or enforce the tuning lifecycle. If the corpus is unavailable, state that blocker and do not claim an evaluation.
+
+Never change solver weights or deploy harness edits automatically. Review every proposed edit and use the repository's required verification gates before integration. Paper results do not predict gains on this repository.
+
+Source: Zhang et al., [Harness Learning Enables Generalizable Test-Time Adaptation](https://arxiv.org/abs/2609.35738), Sections 4.1 and 5.3. The paper permits feedback and score overlap in some protocols and uses different candidate counts across tasks. This stricter split, incumbent retention, and five-round cap are local safety choices, not universal findings.
+
 ## Testing Guidance
 
 The enforced rules live here; `docs/internal/testing.md` is the expanded reference (suites, buckets,

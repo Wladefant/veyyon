@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import type { PlayerCommand } from "@veyyon/coding-agent/speech/tts/player";
 import {
 	type StreamingPlayerLookup,
 	streamingPlayerCommandsFor,
@@ -98,8 +99,7 @@ describe("streamingPlayerCommandsFor win32", () => {
 
 describe("streamingPlayerCommandsFor sample rate", () => {
 	it("falls back to the 24 kHz default for a non-positive rate", () => {
-		const rateOf = (cmds: ReturnType<typeof streamingPlayerCommandsFor>): string =>
-			cmds[0]!.args[cmds[0]!.args.indexOf("-ar") + 1]!;
+		const rateOf = (cmds: PlayerCommand[]): string => cmds[0]!.args[cmds[0]!.args.indexOf("-ar") + 1]!;
 		expect(rateOf(streamingPlayerCommandsFor("linux", 0, ffmpegOnly("/ff")))).toBe("24000");
 		expect(rateOf(streamingPlayerCommandsFor("linux", -5, ffmpegOnly("/ff")))).toBe("24000");
 		expect(rateOf(streamingPlayerCommandsFor("linux", 48_000, ffmpegOnly("/ff")))).toBe("48000");

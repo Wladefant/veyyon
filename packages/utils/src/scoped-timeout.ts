@@ -1,9 +1,3 @@
-/** Create an abort signal that fires after a timeout and preserves caller cancellation. */
-export function withTimeoutSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
-	const timeoutSignal = AbortSignal.timeout(timeoutMs);
-	return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-}
-
 // `isTimeoutError` used to live here as a second definition of the same predicate that
 // `abortable.ts` now owns. That one reads the error NAME without an `instanceof Error`
 // gate, which is what keeps it working in a browser bundle where `DOMException` does not
@@ -29,8 +23,8 @@ export function scopedTimeoutSignal(timeoutMs: number, parent?: AbortSignal): { 
 }
 
 /**
- * Run `fn` with an abort signal that fires after `timeoutMs`, clearing the
- * backing timer the instant the operation settles.
+ * Run `fn` with an abort signal that fires after `timeoutMs` (or when `parent`
+ * aborts), clearing the backing timer the instant the operation settles.
  *
  * Unlike the built-in abort-signal timeout API, the timer never outlives the
  * request: on the success path it is cancelled before `fn` resolves, so the
@@ -39,20 +33,20 @@ export function scopedTimeoutSignal(timeoutMs: number, parent?: AbortSignal): { 
  * instantly) fires seconds later and sets its abort `reason` — which crashed
  * Bun's concurrent GC while it marked the signal's wrapped reason during an
  * unrelated allocation (`JSAbortSignal::visitAdditionalChildren`).
+ *
+ * A fetch whose body `fn` reads stays inside `fn`, so the deadline covers the
+ * body as well as the headers.
  */
 export async function withScopedTimeoutSignal<T>(
 	timeoutMs: number,
 	fn: (signal: AbortSignal) => Promise<T>,
+	parent?: AbortSignal,
 ): Promise<T> {
-	const controller = new AbortController();
-	const timer = setTimeout(
-		() => controller.abort(new DOMException("The operation timed out.", "TimeoutError")),
-		timeoutMs,
-	);
+	const timeout = scopedTimeoutSignal(timeoutMs, parent);
 	try {
-		return await fn(controller.signal);
+		return await fn(timeout.signal);
 	} finally {
-		clearTimeout(timer);
+		timeout.cancel();
 	}
 }
 
@@ -63,8 +57,9 @@ export async function withScopedTimeoutSignal<T>(
  * `options.signal` aborts first the race rejects with the signal's reason
  * instead. The backing timer is cleared as soon as any side settles.
  *
- * This is the one promise-vs-deadline racer; `withTimeout` in ./async is a
- * message-string convenience wrapper over it.
+ * This is the one promise-vs-deadline racer that rejects; `withTimeout` in ./async
+ * is a message-string convenience wrapper over it. {@link settleWithin} is its
+ * sibling for a deadline that resolves to a fallback value instead.
  */
 export async function raceWithTimeout<T>(
 	promise: Promise<T>,
@@ -96,5 +91,24 @@ export async function raceWithTimeout<T>(
 	} finally {
 		timeout.cancel();
 		timeout.signal.removeEventListener("abort", onAbort);
+	}
+}
+
+/**
+ * Resolve with `promise`'s value, or with `fallback` once `timeoutMs` elapses
+ * first. A rejection from `promise` before the deadline propagates. The backing
+ * timer is cleared as soon as `promise` settles.
+ *
+ * Racing work against `Bun.sleep(ms)` instead leaves the sleep's timer armed for
+ * the full window after the work wins: it cannot be cancelled, and it keeps the
+ * event loop alive until it fires, which delays process exit by up to `ms`.
+ */
+export async function settleWithin<T, F>(promise: Promise<T>, timeoutMs: number, fallback: F): Promise<T | F> {
+	const { promise: deadline, resolve } = Promise.withResolvers<F>();
+	const timer = setTimeout(() => resolve(fallback), timeoutMs);
+	try {
+		return await Promise.race([promise, deadline]);
+	} finally {
+		clearTimeout(timer);
 	}
 }

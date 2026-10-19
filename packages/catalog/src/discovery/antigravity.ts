@@ -1,5 +1,6 @@
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
+import { ANTIGRAVITY_ENDPOINTS } from "../provider-endpoints";
 import type { FetchImpl, ModelSpec } from "../types";
 import { discoveryFetch, toArray, toBoolean, toFields, toFiniteNumber, toStringArray, toStringValue } from "../utils";
 import {
@@ -10,12 +11,6 @@ import {
 import { getAntigravityUserAgent } from "../wire/gemini-headers";
 import { type DiscoveryFailure, type DiscoveryHooks, readDiscoveryJson } from "./failure";
 import { gatewayContextWindow, gatewayMaxTokens } from "./gateway-limits";
-
-// Re-exported, not redeclared: `@veyyon/catalog/provider-endpoints` owns the hosts, and this module's
-// existing importers keep the names they already use.
-export { ANTIGRAVITY_PRIMARY_ENDPOINT, ANTIGRAVITY_SANDBOX_ENDPOINT } from "../provider-endpoints";
-
-import { ANTIGRAVITY_ENDPOINTS } from "../provider-endpoints";
 
 const DEFAULT_ANTIGRAVITY_DISCOVERY_ENDPOINTS = ANTIGRAVITY_ENDPOINTS;
 /**

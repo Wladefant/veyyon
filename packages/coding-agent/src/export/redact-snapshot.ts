@@ -11,7 +11,7 @@ import type { AssistantMessage, ImageContent, TextContent, VideoContent } from "
 import type { SessionEntry, SessionHeader } from "@veyyon/kernel/session/session-entries";
 import { mapJsonStrings } from "../json-transform";
 import { obfuscateToolArguments, type SecretObfuscator } from "../secrets/obfuscator";
-import type { OutputMeta } from "../tools/core/output-meta";
+import type { OutputMeta } from "../tools/core/output-notice";
 import type { SessionData, SubSession } from "./session-data";
 
 /** Serialized display metadata is separate from provider message fields. */

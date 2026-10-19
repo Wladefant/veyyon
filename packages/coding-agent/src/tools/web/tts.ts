@@ -9,6 +9,7 @@ import { withAuth } from "@veyyon/ai/auth-retry";
 import { ProviderHttpError } from "@veyyon/ai/error";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy } from "@veyyon/utils/abortable";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 // The slot leaf, not the 95-module store: this file reads settings, it does not fill them.
 import { settings } from "../../config/settings-instance";
 import type { CustomTool, CustomToolContext } from "../../extensibility/custom-tools/types";
@@ -20,7 +21,6 @@ import {
 } from "../../speech/tts/models";
 import { ttsClient } from "../../speech/tts/tts-client";
 import { encodeWav } from "../../speech/tts/wav";
-import { scopedTimeoutSignal } from "../../utils/fetch-timeout";
 import { formatPathRelativeToCwd, resolveToCwd } from "../core/path-utils";
 import { missingXAICredentialsMessage, resolveXAIHttpCredentials, veyyonXAIUserAgent } from "./xai-http";
 

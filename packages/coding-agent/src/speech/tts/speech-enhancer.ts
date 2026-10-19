@@ -1,6 +1,6 @@
 /**
  * Enhanced speech rewriting (`speech.enhanced`): turn assistant markdown into
- * natural spoken prose with the tiny/smol model before synthesis.
+ * natural spoken prose with the `speech` helper model before synthesis.
  *
  * Two pieces:
  * - {@link BlockAccumulator} — fence-aware paragraph splitter over the raw
@@ -9,22 +9,22 @@
  *   inside a fence stays silent so half a code block is never sent to the
  *   rewriter.
  * - {@link SpeechEnhancer} — the per-session rewrite service the event
- *   controller hands to the vocalizer. Resolves the tiny/smol role (same chain
- *   as the auto-thinking classifier), sends one bounded completion per block,
+ *   controller hands to the vocalizer. Resolves the `speech` helper, sends one
+ *   bounded completion per block,
  *   and returns null on any failure or timeout so the caller falls back to the
  *   mechanical {@link SpeakableStream} cleanup — speech never blocks on the
  *   model.
  */
-import type { ApiKeyResolver, AssistantMessage, Context } from "@veyyon/ai";
+import type { ApiKeyResolver, AssistantMessage, Context, Model } from "@veyyon/ai";
 import { completeSimple } from "@veyyon/ai/stream";
 import { assistantText } from "@veyyon/ai/utils/message-text";
 import { logger, prompt } from "@veyyon/utils";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import type { ModelRegistry } from "../../config/model-registry";
-import { getModelMatchPreferences, resolveModelRoleValue } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
 import { sideChannelPrompts } from "../../prompts/side-channel/rows";
 import { withAtomicSecretPlaceholders } from "../../secrets/placeholder";
-import { scopedTimeoutSignal } from "../../utils/fetch-timeout";
+import { resolveHelperModel } from "../../task/helper-settings";
 
 const SYSTEM_PROMPT = prompt.render(sideChannelPrompts["side-channel/speech-rewrite"].text);
 // Rewrite budget: a paragraph in, a spoken paragraph (usually shorter) out.
@@ -43,13 +43,15 @@ export interface SpeechEnhancerDeps {
 	settings: Settings;
 	registry: ModelRegistry;
 	sessionId: string;
+	/** The session's live model, which the `speech` helper runs when it names none. */
+	currentModel?: () => Model | undefined;
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
 	/** Final outbound confidentiality boundary for provider-bound session text. */
 	obfuscateProviderText?: (text: string) => string;
 }
 
 /**
- * Rewrites one markdown block into spoken prose via the tiny/smol role.
+ * Rewrites one markdown block into spoken prose with the `speech` helper model.
  * Constructed per session by the event controller and handed to the vocalizer.
  */
 export class SpeechEnhancer {
@@ -68,13 +70,12 @@ export class SpeechEnhancer {
 	async rewrite(block: string, signal?: AbortSignal): Promise<string | null> {
 		try {
 			const { settings, registry, sessionId } = this.#deps;
-			// `@tiny` expands a configured `modelRoles.tiny` and otherwise falls
-			// through tiny's alias to the smol priority chain — unlike bare role
-			// lookup, this resolves even with no roles configured.
-			const model = resolveModelRoleValue("@tiny", registry.getAvailable(), {
+			const model = resolveHelperModel(
 				settings,
-				matchPreferences: getModelMatchPreferences(settings),
-			}).model;
+				"speech",
+				registry.getAvailable(),
+				this.#deps.currentModel?.(),
+			)?.model;
 			if (!model) return null;
 			const apiKey = await registry.getApiKey(model, sessionId);
 			if (!apiKey) return null;
