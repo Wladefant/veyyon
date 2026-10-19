@@ -1056,7 +1056,9 @@ async fn run_shell_command_single(
 		// `too-large` result with empty `text`/`original_text` was emitted, which a
 		// consumer keying off `minimized` presence could mistake for a real rewrite
 		// that produced empty output.
-		if !buffered.exceeded {
+		// An incomplete capture is a prefix of the output. Minimizing it would present a
+		// partial result as the whole.
+		if !buffered.exceeded && !buffered.incomplete {
 			let minimized = match minimizer_mode {
 				minimizer::engine::MinimizerMode::WholeCommand => minimizer::apply(
 					&options.command,
@@ -1180,10 +1182,10 @@ async fn run_shell_command_segmented_chain(
 		previous_succeeded = exit == 0;
 
 		if let Some(buffered) = command_run.buffered {
-			if buffered.exceeded {
-				// Cap exceeded mid-chain: output streamed raw, drop the buffered
-				// aggregate so the remaining segments stream too. No minimization
-				// happened, so we emit no `minimized` telemetry (see below).
+			if buffered.exceeded || buffered.incomplete {
+				// Cap exceeded, or the reader was aborted: the output was streamed raw or is
+				// a prefix, so drop the buffered aggregate so the remaining segments stream
+				// too. No minimization happened, so we emit no `minimized` telemetry (see below).
 				aggregate = None;
 			} else if let Some(capture) = aggregate.as_mut() {
 				let next_input_bytes = capture.input_bytes.saturating_add(buffered.input_bytes);
@@ -1323,6 +1325,7 @@ async fn run_shell_command_once(
 	const POST_EXIT_IDLE: Duration = Duration::from_millis(250);
 	const POST_EXIT_MAX: Duration = Duration::from_secs(2);
 	const READER_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
+	const READER_ABORT_JOIN_TIMEOUT: Duration = Duration::from_secs(1);
 
 	let mut reader_finished = false;
 	let mut reader_output = None;
@@ -1356,7 +1359,9 @@ async fn run_shell_command_once(
 			Ok(_) => {},
 			Err(_) => {
 				reader_handle.abort();
-				let _ = reader_handle.await;
+				// Abort cannot interrupt a reader blocked in a synchronous read, so bound
+				// the join. A reader that never finishes yields no capture.
+				let _ = time::timeout(READER_ABORT_JOIN_TIMEOUT, &mut reader_handle).await;
 			},
 		}
 	}
@@ -1366,7 +1371,12 @@ async fn run_shell_command_once(
 			.unwrap_or_else(std::sync::PoisonError::into_inner)
 			.take();
 		if let Some(partial) = partial {
-			reader_output = Some(OutputRead::Buffered(partial.into_output()));
+			// The reader stopped while the pipe could still hold unread bytes, so this
+			// capture is a prefix of the output.
+			reader_output = Some(OutputRead::Buffered(BufferedOutput {
+				incomplete: true,
+				..partial.into_output()
+			}));
 		}
 	}
 	cancel_bridge.abort();
@@ -1656,11 +1666,18 @@ async fn read_output_pipe_chunk_windows(
 				}
 			},
 			PipeReadiness::Empty | PipeReadiness::Eof => return Ok(None),
-			PipeReadiness::NotAPipe => match reader.read(buf) {
-				Ok(0) => return Ok(None),
-				Ok(n) => return Ok(Some(n)),
-				Err(error) if error.kind() == io::ErrorKind::Interrupted => {},
-				Err(error) => return Err(error),
+			PipeReadiness::NotAPipe => {
+				// Only a regular file has a read that cannot block past abort. Any other
+				// handle yields no bytes here, as before this change.
+				if !reader.metadata().is_ok_and(|meta| meta.is_file()) {
+					return Ok(None);
+				}
+				match reader.read(buf) {
+					Ok(0) => return Ok(None),
+					Ok(n) => return Ok(Some(n)),
+					Err(error) if error.kind() == io::ErrorKind::Interrupted => {},
+					Err(error) => return Err(error),
+				}
 			},
 		}
 	}
@@ -2000,6 +2017,7 @@ struct BufferedOutput {
 	text:        String,
 	input_bytes: usize,
 	exceeded:    bool,
+	incomplete:  bool,
 }
 
 async fn read_output(
@@ -2100,6 +2118,7 @@ impl BufferedCapture {
 			text: decode_bytes(&self.bytes),
 			input_bytes: self.input_bytes,
 			exceeded: self.exceeded,
+			incomplete: false,
 		}
 	}
 }
@@ -2150,7 +2169,12 @@ async fn read_output_buffered_with_capture(
 
 	#[cfg(unix)]
 	let Ok(reader) = register_nonblocking_pipe(reader) else {
-		return BufferedOutput { text: String::new(), input_bytes: 0, exceeded: true };
+		return BufferedOutput {
+			text:        String::new(),
+			input_bytes: 0,
+			exceeded:    true,
+			incomplete:  false,
+		};
 	};
 	#[cfg(windows)]
 	let mut reader = reader;
@@ -2598,6 +2622,40 @@ mod tests {
 		assert!(captured.text.is_empty(), "capture must not exceed its byte limit");
 	}
 
+	/// A consumer that stops receiving after the first chunk parks the reader while
+	/// later bytes stay unread in the pipe. The abort must not report that prefix as
+	/// a complete capture.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn stalled_consumer_marks_an_aborted_capture_incomplete() {
+		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create session");
+		let params = session.shell.default_exec_params();
+		let (sender, _receiver) = flume::bounded::<String>(0);
+		let output = time::timeout(
+			Duration::from_secs(10),
+			run_shell_command_once(
+				&mut session,
+				"printf a; sleep 1; printf b".to_owned(),
+				params,
+				Some(sender),
+				CancellationToken::new(),
+				Arc::new(process::SpawnRegistry::new()),
+				None,
+				CommandCaptureMode::Buffered { max_capture_bytes: 1024 },
+			),
+		)
+		.await
+		.expect("reader shutdown must remain bounded")
+		.expect("command should succeed");
+		let captured = output.buffered.expect("aborted reader must return its partial capture");
+		assert_eq!(captured.text, "a");
+		assert_eq!(captured.input_bytes, 1);
+		assert!(captured.incomplete, "bytes left unread in the pipe must mark the capture incomplete");
+	}
+
+	/// Drives the helper directly, not the abort path. It proves the cancelled
+	/// NotAPipe contract for a regular file and nothing about shutdown.
 	#[cfg(windows)]
 	#[tokio::test]
 	async fn cancelled_not_a_pipe_reader_reads_available_bytes_and_eof() {
