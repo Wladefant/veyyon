@@ -11,6 +11,7 @@
 - Codex account ranking ignores usage windows of length 0, so one account no longer takes every new session.
 - Aligned OpenAI Codex responses imports with openai-responses-stream exports and restored the UsageCostHistoryEntry interface in usage types, with no user-visible change.
 - Merges supplementary model listing quotas into Google Antigravity quota summaries when the summary omits counters ([Refs #620](https://github.com/Wladefant/veyyon/pull/620)).
+- Google Antigravity usage lists the Gemini 5-hour and weekly windows again: the quota summary names the Gemini group only to an `antigravity/hub` 3.0.0 or later client, which the usage probe now reports ([Refs #620](https://github.com/Wladefant/veyyon/pull/620)).
 
 ## [1.5.6] - 2026-10-10
 ### Changed
