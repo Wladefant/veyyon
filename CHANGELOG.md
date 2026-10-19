@@ -200,6 +200,7 @@
 
 ### Fixed
 
+- Changing the working directory keeps the probed shell and OS of every SSH host whose destination is unchanged instead of deleting every host's record and closing its master connection, so the `ssh` tool description and the prompt-cache prefix stay byte-identical across a same-project re-root (8 configured hosts: 8 records kept instead of 0, tool definitions unchanged instead of rewritten to "detecting...").
 - Exiting on SIGTERM after a tmp cleaner removed a shell snapshot no longer logs "Cleanup callback failed" with ENOENT, and removes every other snapshot instead of leaving them in the tmp directory.
 - The embedded shell sizes each command's environment from the variables in scope instead of a count that grew with every `bash` call and never shrank, so 12,000 calls retain 13.5 MB of memory instead of 81.4 MB.
 - Keys typed while a session named by `--resume`, `--continue` or `--fork` is loading show in the composer instead of being discarded: the launch card now paints for those launches and holds the keys, so "hello" typed 30 ms after launch appears 40–53 ms after launch; a bare `--resume` still opens the session picker without the card.
