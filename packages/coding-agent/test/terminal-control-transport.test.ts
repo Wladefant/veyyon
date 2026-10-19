@@ -50,6 +50,109 @@ function createFakeChild(): FakeChildProcess {
 	return child;
 }
 
+interface ParsedBrokerPipeSecurity {
+	pipeCreationSecurityArg: string;
+	owner: string;
+	isProtected: boolean;
+	preserveInheritance: boolean;
+	rules: Array<{
+		identity: string;
+		rights: string;
+		type: string;
+	}>;
+	sddl: string;
+}
+
+function parseBrokerPipeSecurity(brokerScript: string): ParsedBrokerPipeSecurity {
+	const instanceMatch = brokerScript.match(/new\s+NamedPipeServerStream\s*\(([\s\S]*?)\);/);
+	if (!instanceMatch) {
+		throw new Error("NamedPipeServerStream instantiation not found in broker script");
+	}
+	const instanceArgs = instanceMatch[1]
+		.split(",")
+		.map(arg => arg.trim());
+	const pipeCreationSecurityArg = instanceArgs[7] ?? "";
+
+	const createSecurityMatch = brokerScript.match(
+		/private\s+static\s+PipeSecurity\s+CreateSecurity\s*\(\)\s*\{([\s\S]*?)\n\s*return\s+security;\s*\}/,
+	);
+	if (!createSecurityMatch) {
+		throw new Error("CreateSecurity method body not found in broker script");
+	}
+	const secBody = createSecurityMatch[1];
+
+	const ownerMatch = secBody.match(/security\.SetOwner\s*\(\s*([^)]+?)\s*\);/);
+	const owner = ownerMatch ? ownerMatch[1].trim() : "";
+
+	const protMatch = secBody.match(/security\.SetAccessRuleProtection\s*\(\s*([^,\s]+)\s*,\s*([^)\s]+)\s*\);/);
+	const isProtected = protMatch ? protMatch[1] === "true" : false;
+	const preserveInheritance = protMatch ? protMatch[2] === "true" : true;
+
+	const ruleRegex = /security\.AddAccessRule\s*\(\s*new\s+PipeAccessRule\s*\(([\s\S]*?)\)\s*\);/g;
+	const rules: Array<{ identity: string; rights: string; type: string }> = [];
+	let match: RegExpExecArray | null;
+	while ((match = ruleRegex.exec(secBody)) !== null) {
+		const ruleArgs = match[1].split(",").map(a => a.trim());
+		rules.push({
+			identity: ruleArgs[0] ?? "",
+			rights: ruleArgs[1] ?? "",
+			type: ruleArgs[2] ?? "",
+		});
+	}
+
+	const sddlProtection = isProtected && !preserveInheritance ? "P" : "";
+	const sddlAces = rules
+		.map(r => {
+			const typeCode = r.type === "AccessControlType.Allow" ? "A" : "D";
+			const rightsCode = r.rights === "PipeAccessRights.FullControl" ? "GA" : "UNKNOWN";
+			const sidCode = r.identity === "systemSid" ? "SY" : r.identity;
+			return `(${typeCode};;${rightsCode};;;${sidCode})`;
+		})
+		.join("");
+	const sddl = `D:${sddlProtection}${sddlAces}`;
+
+	return {
+		pipeCreationSecurityArg,
+		owner,
+		isProtected,
+		preserveInheritance,
+		rules,
+		sddl,
+	};
+}
+
+function validateBrokerPipeSecurity(parsed: ParsedBrokerPipeSecurity): void {
+	if (parsed.pipeCreationSecurityArg !== "_pipeSecurity") {
+		throw new Error(`NamedPipeServerStream must receive _pipeSecurity, got: ${parsed.pipeCreationSecurityArg}`);
+	}
+	if (parsed.owner !== "identity") {
+		throw new Error(`PipeSecurity owner must be identity, got: ${parsed.owner}`);
+	}
+	if (!parsed.isProtected || parsed.preserveInheritance) {
+		throw new Error(
+			`PipeSecurity must enforce protected DACL without inheritance, got isProtected=${parsed.isProtected}, preserveInheritance=${parsed.preserveInheritance}`,
+		);
+	}
+	if (parsed.rules.length !== 2) {
+		throw new Error(`Expected exactly 2 access rules (owner and SYSTEM), got ${parsed.rules.length}`);
+	}
+	const [ownerRule, systemRule] = parsed.rules;
+	if (
+		ownerRule.identity !== "identity" ||
+		ownerRule.rights !== "PipeAccessRights.FullControl" ||
+		ownerRule.type !== "AccessControlType.Allow"
+	) {
+		throw new Error(`Invalid owner rule: ${JSON.stringify(ownerRule)}`);
+	}
+	if (
+		systemRule.identity !== "systemSid" ||
+		systemRule.rights !== "PipeAccessRights.FullControl" ||
+		systemRule.type !== "AccessControlType.Allow"
+	) {
+		throw new Error(`Invalid system rule: ${JSON.stringify(systemRule)}`);
+	}
+}
+
 const cleanupActions: Array<() => void | Promise<void>> = [];
 
 afterEach(async () => {
@@ -341,6 +444,91 @@ describe("terminal-control-transport", () => {
 			lateCloseCalled = true;
 		});
 		expect(lateCloseCalled).toBe(true);
+	});
+
+	it("verifies real Windows broker creates pipe with protected owner-only and SYSTEM FullControl ACL", async () => {
+		const fakeChild = createFakeChild();
+		const spawnCalls: FakeSpawnCall[] = [];
+		const mockSpawn = ((command: string, args: string[], options: FakeSpawnCall["options"]) => {
+			spawnCalls.push({ command, args, options });
+			return fakeChild;
+		}) as unknown as typeof spawn;
+
+		const serverPromise = createWindowsPipeTransport(
+			"\\\\.\\pipe\\veyyon-pipe-acl-verification",
+			() => {},
+			{
+				spawnProcess: mockSpawn,
+				systemRoot: "C:\\Windows",
+				readinessTimeoutMs: 1000,
+			},
+		);
+
+		fakeChild.stdout.write("READY veyyon-pipe-acl-verification\n");
+		const server = await serverPromise;
+		cleanupActions.push(() => server.close());
+
+		expect(spawnCalls.length).toBe(1);
+		const brokerScript = spawnCalls[0].args[6];
+		expect(brokerScript).toBeDefined();
+
+		const parsed = parseBrokerPipeSecurity(brokerScript);
+		expect(parsed.pipeCreationSecurityArg).toBe("_pipeSecurity");
+		expect(parsed.owner).toBe("identity");
+		expect(parsed.isProtected).toBe(true);
+		expect(parsed.preserveInheritance).toBe(false);
+		expect(parsed.rules).toEqual([
+			{
+				identity: "identity",
+				rights: "PipeAccessRights.FullControl",
+				type: "AccessControlType.Allow",
+			},
+			{
+				identity: "systemSid",
+				rights: "PipeAccessRights.FullControl",
+				type: "AccessControlType.Allow",
+			},
+		]);
+		expect(parsed.sddl).toBe("D:P(A;;GA;;;identity)(A;;GA;;;SY)");
+
+		expect(() => validateBrokerPipeSecurity(parsed)).not.toThrow();
+
+		// Mutation 1: removing CreateSecurity and using default pipe descriptor must fail
+		const defaultDescriptorScript = brokerScript.replace("_pipeSecurity,", "null,");
+		const parsedDefault = parseBrokerPipeSecurity(defaultDescriptorScript);
+		expect(() => validateBrokerPipeSecurity(parsedDefault)).toThrow(
+			/NamedPipeServerStream must receive _pipeSecurity/,
+		);
+
+		// Mutation 2: widening ACL with an extra ACE (e.g. Everyone) must fail
+		const widenedScript = brokerScript.replace(
+			"return security;",
+			'security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.WorldSid, null), PipeAccessRights.Read, AccessControlType.Allow));\n        return security;',
+		);
+		const parsedWidened = parseBrokerPipeSecurity(widenedScript);
+		expect(() => validateBrokerPipeSecurity(parsedWidened)).toThrow(
+			/Expected exactly 2 access rules/,
+		);
+
+		// Mutation 3: unprotecting DACL or allowing inheritance must fail
+		const unprotectScript = brokerScript.replace(
+			"security.SetAccessRuleProtection(true, false);",
+			"security.SetAccessRuleProtection(false, true);",
+		);
+		const parsedUnprotected = parseBrokerPipeSecurity(unprotectScript);
+		expect(() => validateBrokerPipeSecurity(parsedUnprotected)).toThrow(
+			/PipeSecurity must enforce protected DACL without inheritance/,
+		);
+
+		// Mutation 4: removing SYSTEM rule must fail
+		const noSystemScript = brokerScript.replace(
+			/security\.AddAccessRule\(new PipeAccessRule\(\s*systemSid[\s\S]*?\)\);/,
+			"",
+		);
+		const parsedNoSystem = parseBrokerPipeSecurity(noSystemScript);
+		expect(() => validateBrokerPipeSecurity(parsedNoSystem)).toThrow(
+			/Expected exactly 2 access rules/,
+		);
 	});
 
 	if (process.platform !== "win32") {
