@@ -444,7 +444,6 @@ describe("a restart waits for the port-owning process tree", () => {
 		TEST_TIMEOUT_MS,
 	);
 
-
 	it.each(["exit-inherit", "exit-detached"] as const)(
 		"automatic restart after a %s wrapper never spawns while the old holder is alive",
 		async mode => {
