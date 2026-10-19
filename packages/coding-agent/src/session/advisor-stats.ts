@@ -147,7 +147,7 @@ function estimateAdvisorContextTokens(messages: readonly AgentMessage[]): number
 export function formatAdvisorStatus(stats: AdvisorStats): string {
 	if (!stats.active) {
 		return stats.configured
-			? "Advisor setting is enabled, but no model is assigned to the 'advisor' role."
+			? "Advisor setting is enabled, but agent.helpers.advisor.model matches no available model."
 			: "Advisor is disabled.";
 	}
 	if (stats.advisors.length <= 1) {

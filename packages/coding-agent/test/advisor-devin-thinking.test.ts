@@ -98,7 +98,10 @@ describe("AgentSession advisor descriptor thinking level", () => {
 		expect(devinModel.reasoning).toBe(true);
 		expect(devinModel.thinking).toBeUndefined();
 
-		session.settings.setModelRole("advisor", `${devinModel.provider}/${devinModel.id}`);
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			advisor: { model: `${devinModel.provider}/${devinModel.id}` },
+		});
 
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 		expect(session.isAdvisorActive()).toBe(true);
@@ -124,7 +127,10 @@ describe("AgentSession advisor descriptor thinking level", () => {
 		// integer, so the catalog gives it minimal..xhigh: medium is selectable and
 		// nothing clamps. The Devin test above guards the no-surface direction, and
 		// the next one guards a ladder that genuinely lacks the default.
-		session.settings.setModelRole("advisor", `${anthropicModel.provider}/${anthropicModel.id}`);
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			advisor: { model: `${anthropicModel.provider}/${anthropicModel.id}` },
+		});
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 
 		const advisor = session.getAdvisorAgent();
@@ -153,7 +159,10 @@ describe("AgentSession advisor descriptor thinking level", () => {
 		// claude-opus-4-5 declares [low, medium, high]: no clamp may fire.
 		const opus = getBundledModel("anthropic", "claude-opus-4-5");
 		if (!opus) throw new Error("Expected bundled anthropic/claude-opus-4-5 to exist");
-		session.settings.setModelRole("advisor", `${opus.provider}/${opus.id}`);
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			advisor: { model: `${opus.provider}/${opus.id}` },
+		});
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 
 		const advisor = session.getAdvisorAgent();
@@ -167,7 +176,10 @@ describe("AgentSession advisor descriptor thinking level", () => {
 		// clamp helper preserves `off`; verifying that here so a future change
 		// to the descriptor doesn't route `off` through the Devin
 		// no-controllable-effort fallback and silently re-enable reasoning.
-		session.settings.setModelRole("advisor", `${devinModel.provider}/${devinModel.id}:off`);
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			advisor: { model: `${devinModel.provider}/${devinModel.id}:off` },
+		});
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 
 		const advisor = session.getAdvisorAgent();

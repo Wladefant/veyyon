@@ -43,6 +43,10 @@ const RETRY_DECISION: Record<string, boolean> = {
 	// account. Retriable at the session level for that reason, and deliberately
 	// not retriable at the provider level (asserted in the corpus block below).
 	UsageLimit: true,
+	// Rides beside UsageLimit for the same reason: the credential layer moves to an account whose
+	// plan includes the model (with load balancing on), and the retry runtime ends the turn with the
+	// refusal when nothing moved, rather than waiting on a window that does not exist.
+	ModelNotInPlan: true,
 	// The call was never well-formed enough to run, so there is no tool effect
 	// to duplicate and re-sampling is the repair.
 	MalformedFunctionCall: true,
@@ -130,6 +134,7 @@ const FRAME_BAIT_TEXT: Record<keyof typeof AIError.Flag, string> = {
 	ProviderFinishError: "Provider finish_reason: error",
 	EmptyResponse: "thought-only response without final output",
 	UsageLimit: "You've reached your usage limit. Upgrade to increase your limit.",
+	ModelNotInPlan: "resource_exhausted: Named models unavailable (ERROR_RATE_LIMITED_CHANGEABLE)",
 	MalformedFunctionCall: "MALFORMED_FUNCTION_CALL",
 	Timeout: "Request timed out after 60000ms",
 	ContentBlocked: "incomplete: content_filter",
@@ -333,6 +338,7 @@ describe("a stack trace is not evidence about the failure", () => {
 			"ContextOverflow",
 			"EmptyResponse",
 			"MalformedFunctionCall",
+			"ModelNotInPlan",
 			"ProviderFinishError",
 			"Timeout",
 			"ToolChoiceRejected",

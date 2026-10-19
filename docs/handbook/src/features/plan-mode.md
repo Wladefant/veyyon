@@ -20,7 +20,7 @@ Read-focused exploration that drafts a **plan file** before implementation.
 4. Finalization uses the **`resolve`** tool with plan-approval semantics (`plan_approval`).
 5. Exit: `/plan` again (confirmation if a draft exists). Session records `mode` entries in the session file.
 
-When configured, plan mode uses the **`plan` model role**.
+Plan mode runs the **`plan` helper** (`agent.helpers.plan`) when one is configured, and the session model otherwise. `--plan <model>` sets it for one run.
 
 ## Goal mode
 

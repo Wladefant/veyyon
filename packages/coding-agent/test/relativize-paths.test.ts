@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { AssistantMessage, Message, ToolResultMessage, Usage } from "@veyyon/ai";
-import { normalizeRoots, relativizePathsUnderRoots } from "@veyyon/coding-agent/session/relativize-paths";
+import {
+	normalizeRoots,
+	type RelativizeResult,
+	relativizePathsUnderRoots,
+} from "@veyyon/coding-agent/session/relativize-paths";
 import { escapeRegExp } from "@veyyon/utils";
 
 const ROOT = "/tmp/veyyon-fixture";
@@ -311,7 +315,7 @@ describe("relativizePathsUnderRoots treats regex metacharacters in roots literal
 		// a literal, so relativization both survives and works.
 		const root = "/tmp/data[unclosed";
 		const messages: Message[] = [toolResult(`${root}/deep/file.ts here`)];
-		let result: ReturnType<typeof relativizePathsUnderRoots> | undefined;
+		let result: RelativizeResult | undefined;
 		expect(() => {
 			result = relativizePathsUnderRoots(messages, normalizeRoots(root));
 		}).not.toThrow();

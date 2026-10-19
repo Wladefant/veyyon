@@ -56,17 +56,33 @@ export function loadFastembed(): Promise<FastembedModule> {
 	return fastembedLoad;
 }
 
-async function loadFastembedOnce(): Promise<FastembedModule> {
+function loadFastembedOnce(): Promise<FastembedModule> {
+	return loadFastembedOrInstall(importInstalledFastembed, loadFromRuntimeInstall);
+}
+
+async function importInstalledFastembed(): Promise<FastembedModule> {
 	// Dynamic imports: both packages are optional peers that eagerly load
 	// native addons and may be absent at runtime — a static import would load
 	// the addon at module-init and crash every consumer without the peers.
+	// Preload the pinned ORT before fastembed's nested ORT — only on Windows,
+	// where loading the older binding first triggers a DLL-reuse crash.
+	if (process.platform === "win32") {
+		await import("onnxruntime-node");
+	}
+	return await import("fastembed");
+}
+
+/**
+ * Load the installed fastembed, or install a runtime copy when the installed one
+ * cannot be loaded. Both loaders are parameters so the fallback can be driven
+ * while the peer is installed.
+ */
+export async function loadFastembedOrInstall(
+	importInstalled: () => Promise<FastembedModule>,
+	installRuntime: () => Promise<FastembedModule>,
+): Promise<FastembedModule> {
 	try {
-		// Preload the pinned ORT before fastembed's nested ORT — only on Windows,
-		// where loading the older binding first triggers a DLL-reuse crash.
-		if (process.platform === "win32") {
-			await import("onnxruntime-node");
-		}
-		return await import("fastembed");
+		return await importInstalled();
 	} catch (error) {
 		if (!isRecoverableFastembedLoadError(error)) throw error;
 		// Loud, not debug. This fallback is not a cheap alternative path: it
@@ -79,7 +95,7 @@ async function loadFastembedOnce(): Promise<FastembedModule> {
 			"mnemopi: the installed fastembed could not be loaded, so a runtime copy is being downloaded and installed on demand; the first indexing run will be slow",
 			{ error: String(error) },
 		);
-		return loadFromRuntimeInstall();
+		return installRuntime();
 	}
 }
 

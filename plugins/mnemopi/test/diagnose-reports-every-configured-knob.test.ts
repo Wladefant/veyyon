@@ -29,10 +29,10 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 
-import { inspectDatabase } from "@veyyon/mnemopi/diagnose";
+import { type DiagnosticSummary, inspectDatabase } from "@veyyon/mnemopi/diagnose";
 
 /** Diagnose against an in-memory database, with a controlled environment. */
-function diagnoseWith(env: Record<string, string | undefined>): ReturnType<typeof inspectDatabase> {
+function diagnoseWith(env: Record<string, string | undefined>): DiagnosticSummary {
 	const db = new Database(":memory:");
 	try {
 		return inspectDatabase({ db, env, dbPath: ":memory:" });

@@ -177,12 +177,15 @@ export interface MCPServerCapabilities {
 	experimental?: Record<string, unknown>;
 }
 
-/** Initialize request params */
-export interface MCPInitializeParams {
+/**
+ * Initialize request params. A type alias, not an interface, so it is assignable to the
+ * `Record<string, unknown>` a transport request takes.
+ */
+export type MCPInitializeParams = {
 	protocolVersion: string;
 	capabilities: MCPClientCapabilities;
 	clientInfo: MCPImplementation;
-}
+};
 
 /** Initialize response result */
 export interface MCPInitializeResult {
@@ -210,11 +213,11 @@ export interface MCPToolsListResult {
 	nextCursor?: string;
 }
 
-/** tools/call params */
-export interface MCPToolCallParams {
+/** tools/call params; a type alias for the same reason as {@link MCPInitializeParams}. */
+export type MCPToolCallParams = {
 	name: string;
 	arguments?: Record<string, unknown>;
-}
+};
 
 /** Content types in tool results */
 export interface MCPTextContent {
@@ -373,10 +376,10 @@ export interface MCPResourceReadResult {
 	contents: MCPResourceContentItem[];
 }
 
-/** Params for resources/read */
-export interface MCPResourceReadParams {
+/** Params for resources/read; a type alias for the same reason as {@link MCPInitializeParams}. */
+export type MCPResourceReadParams = {
 	uri: string;
-}
+};
 
 /** Params for resources/subscribe and resources/unsubscribe */
 export interface MCPResourceSubscribeParams {
@@ -424,11 +427,11 @@ export interface MCPPromptMessage {
 	content: MCPPromptContent | MCPPromptContent[];
 }
 
-/** Params for prompts/get */
-export interface MCPGetPromptParams {
+/** Params for prompts/get; a type alias for the same reason as {@link MCPInitializeParams}. */
+export type MCPGetPromptParams = {
 	name: string;
 	arguments?: Record<string, string>;
-}
+};
 
 /** Result of prompts/get */
 export interface MCPGetPromptResult {

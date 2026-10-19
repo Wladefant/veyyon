@@ -43,29 +43,28 @@ describe("config CLI schema coverage", () => {
 
 		const lines = logSpy.mock.calls.map(call => String(call[0] ?? ""));
 		const plainLines = lines.map(line => Bun.stripANSI(line));
-		const modelRolesLine = plainLines.find(line => line.includes("modelRoles ="));
-		expect(modelRolesLine).toBeDefined();
-		const plainModelRolesLine = String(modelRolesLine);
-		expect(plainModelRolesLine).toContain("modelRoles =");
-		expect(plainModelRolesLine).toContain("(record)");
-		expect(plainModelRolesLine).toContain("{");
-		expect(plainModelRolesLine).toContain("}");
-		expect(plainModelRolesLine).not.toContain("[object Object]");
+		const helpersLine = plainLines.find(line => line.includes("agent.helpers ="));
+		expect(helpersLine).toBeDefined();
+		const plainHelpersLine = String(helpersLine);
+		expect(plainHelpersLine).toContain("(record)");
+		expect(plainHelpersLine).toContain("{");
+		expect(plainHelpersLine).toContain("}");
+		expect(plainHelpersLine).not.toContain("[object Object]");
 	});
 
 	it("sets and gets record settings as JSON objects", async () => {
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-		const recordValue = '{"default":"claude-opus-4-6"}';
+		const recordValue = '{"plan":{"model":"claude-opus-4-6"}}';
 
-		await runConfigCommand({ action: "set", key: "modelRoles", value: recordValue, flags: { json: true } });
-		await runConfigCommand({ action: "get", key: "modelRoles", flags: { json: true } });
+		await runConfigCommand({ action: "set", key: "agent.helpers", value: recordValue, flags: { json: true } });
+		await runConfigCommand({ action: "get", key: "agent.helpers", flags: { json: true } });
 
 		const payload = logSpy.mock.calls.at(-1)?.[0];
 		expect(typeof payload).toBe("string");
 		const parsed = JSON.parse(String(payload)) as { key: string; value: unknown; type: string };
-		expect(parsed.key).toBe("modelRoles");
+		expect(parsed.key).toBe("agent.helpers");
 		expect(parsed.type).toBe("record");
-		expect(parsed.value).toEqual({ default: "claude-opus-4-6" });
+		expect(parsed.value).toEqual({ plan: { model: "claude-opus-4-6" } });
 	});
 
 	it("normalizes valid provider in-flight request limits from JSON objects", async () => {
@@ -194,7 +193,7 @@ describe("config CLI schema coverage", () => {
 		expect(error).toBe("");
 		expect(Buffer.byteLength(output)).toBeGreaterThan(65_536);
 		const parsed: unknown = JSON.parse(output);
-		expect(parsed).toMatchObject({ modelRoles: { type: "record" } });
+		expect(parsed).toMatchObject({ "agent.helpers": { type: "record" } });
 	});
 });
 

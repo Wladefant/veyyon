@@ -675,7 +675,7 @@ describe("Settings", () => {
 			// Seed initial settings in config.yml
 			await writeSettings({
 				theme: "dark",
-				modelRoles: { default: "claude-sonnet" },
+				defaultModel: "claude-sonnet",
 			});
 
 			// Settings loads the initial state
@@ -684,7 +684,7 @@ describe("Settings", () => {
 			// Simulate external edit (e.g., user modifying DB directly or another process)
 			await writeSettings({
 				theme: { dark: "anthracite" },
-				modelRoles: { default: "claude-sonnet" },
+				defaultModel: "claude-sonnet",
 				enabledModels: ["claude-opus-4-5", "gpt-5.2-codex"],
 			});
 
@@ -696,7 +696,7 @@ describe("Settings", () => {
 			expect(savedSettings.enabledModels).toEqual(["claude-opus-4-5", "gpt-5.2-codex"]);
 			expect(savedSettings.defaultThinkingLevel).toBe(Effort.High);
 			expect(savedSettings.theme).toEqual({ dark: "anthracite" });
-			expect((savedSettings.modelRoles as { default?: string } | undefined)?.default).toBe("claude-sonnet");
+			expect(savedSettings.defaultModel).toBe("claude-sonnet");
 		});
 
 		it("persists native terminal progress only after the user changes it", async () => {
@@ -741,13 +741,13 @@ describe("Settings", () => {
 
 		it("should preserve custom settings when changing theme", async () => {
 			await writeSettings({
-				modelRoles: { default: "claude-sonnet" },
+				defaultModel: "claude-sonnet",
 			});
 
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
 
 			await writeSettings({
-				modelRoles: { default: "claude-sonnet" },
+				defaultModel: "claude-sonnet",
 				shellPath: "/bin/zsh",
 				extensions: ["/path/to/extension.ts"],
 			});
@@ -781,82 +781,59 @@ describe("Settings", () => {
 		});
 	});
 
-	describe("model role overrides", () => {
-		it("does not persist temporary default model overrides when another role is saved", async () => {
-			await writeSettings({
-				modelRoles: { default: "anthropic/claude-sonnet-4-5" },
-			});
+	describe("default model overrides", () => {
+		it("does not persist a --model runtime override when another setting is saved", async () => {
+			await writeSettings({ defaultModel: "anthropic/claude-sonnet-4-5" });
 
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
 
-			settings.overrideModelRoles({ default: "openai/gpt-5.2-codex" });
-			expect(settings.getModelRole("default")).toBe("openai/gpt-5.2-codex");
+			settings.override("defaultModel", "openai/gpt-5.2-codex");
+			expect(settings.get("defaultModel")).toBe("openai/gpt-5.2-codex");
 
-			settings.setModelRole("smol", "anthropic/claude-haiku-4-5");
+			settings.set("theme.dark", "anthracite");
 			await settings.flush();
 
 			const savedSettings = await readSettings();
-			expect(savedSettings.modelRoles).toEqual({
-				default: "anthropic/claude-sonnet-4-5",
-				smol: "anthropic/claude-haiku-4-5",
-			});
-			expect(settings.getModelRole("default")).toBe("openai/gpt-5.2-codex");
-			expect(settings.getModelRole("smol")).toBe("anthropic/claude-haiku-4-5");
+			expect(savedSettings.defaultModel).toBe("anthropic/claude-sonnet-4-5");
+			expect(settings.get("defaultModel")).toBe("openai/gpt-5.2-codex");
 		});
 
-		it("restores persisted model roles after clearing runtime overrides", async () => {
-			await writeSettings({
-				modelRoles: { default: "anthropic/claude-sonnet-4-5" },
-			});
+		it("restores the persisted default model after clearing the runtime override", async () => {
+			await writeSettings({ defaultModel: "anthropic/claude-sonnet-4-5" });
 
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
 
-			settings.overrideModelRoles({ default: "openai/gpt-5.2-codex" });
-			expect(settings.getModelRole("default")).toBe("openai/gpt-5.2-codex");
+			settings.override("defaultModel", "openai/gpt-5.2-codex");
+			settings.clearOverride("defaultModel");
 
-			settings.clearOverride("modelRoles");
-
-			expect(settings.getModelRole("default")).toBe("anthropic/claude-sonnet-4-5");
+			expect(settings.get("defaultModel")).toBe("anthropic/claude-sonnet-4-5");
 		});
 
-		it("keeps the live role value aligned when saving over a runtime override", () => {
-			const settings = Settings.isolated({
-				modelRoles: { default: "anthropic/claude-sonnet-4-5" },
-			});
+		it("setDefaultModel over a runtime override persists the value and keeps it live", async () => {
+			await writeSettings({ defaultModel: "anthropic/claude-sonnet-4-5" });
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
 
-			settings.overrideModelRoles({ default: "openai/gpt-5.2-codex" });
-			settings.setModelRole("default", "anthropic/claude-opus-4-5");
+			settings.override("defaultModel", "openai/gpt-5.2-codex");
+			settings.setDefaultModel("anthropic/claude-opus-4-5");
+			expect(settings.get("defaultModel")).toBe("anthropic/claude-opus-4-5");
 
-			expect(settings.getModelRole("default")).toBe("anthropic/claude-opus-4-5");
+			await settings.flush();
+			expect((await readSettings()).defaultModel).toBe("anthropic/claude-opus-4-5");
 
-			settings.clearOverride("modelRoles");
-
-			expect(settings.getModelRole("default")).toBe("anthropic/claude-opus-4-5");
-		});
-		it("clears a role when setModelRole receives undefined", () => {
-			const settings = Settings.isolated();
-
-			settings.setModelRole("smol", "x/y");
-			expect(settings.getModelRole("smol")).toBe("x/y");
-
-			settings.setModelRole("smol", undefined);
-
-			expect(settings.getModelRole("smol")).toBeUndefined();
-			expect(Object.hasOwn(settings.getModelRoles(), "smol")).toBe(false);
+			settings.clearOverride("defaultModel");
+			expect(settings.get("defaultModel")).toBe("anthropic/claude-opus-4-5");
 		});
 
-		it("clears a role from the runtime override layer so the effective view updates immediately", () => {
-			const settings = Settings.isolated({
-				modelRoles: { smol: "anthropic/claude-haiku-4-5" },
-			});
+		it("setDefaultModel(undefined) removes the persisted value and the runtime override", async () => {
+			await writeSettings({ defaultModel: "anthropic/claude-sonnet-4-5" });
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
 
-			settings.overrideModelRoles({ smol: "openai/gpt-5.2-codex" });
-			expect(settings.getModelRole("smol")).toBe("openai/gpt-5.2-codex");
+			settings.override("defaultModel", "openai/gpt-5.2-codex");
+			settings.setDefaultModel(undefined);
+			expect(settings.get("defaultModel")).toBeUndefined();
 
-			settings.setModelRole("smol", undefined);
-
-			expect(settings.getModelRole("smol")).toBeUndefined();
-			expect(Object.hasOwn(settings.getModelRoles(), "smol")).toBe(false);
+			await settings.flush();
+			expect(Object.hasOwn(await readSettings(), "defaultModel")).toBe(false);
 		});
 	});
 

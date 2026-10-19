@@ -25,7 +25,7 @@ Primary compaction knobs (settings → Models → Compaction, or `config.yml`):
   history into an in-place LLM summary on the current branch.
 - **Model** (`compaction.model`): the models that perform LLM compaction, tried
   in order. Unset uses your interactive model. See [Fallback models](#fallback-models)
-  and [Models, roles, and profiles](../using/roles-and-profiles.md).
+  and [Models, helpers, and profiles](../using/roles-and-profiles.md).
 
 `/compact <focus>` steers a run with an "Additional focus:" directive. The most
 recent user, assistant, and tool messages stay verbatim up to
@@ -69,7 +69,7 @@ You see that once per distinct reason, not once per compaction.
 `compaction.modelFallbackStrategy` sets what happens after your list runs out:
 
 - `auto` (the default) stays on models you named: your main model, the same-provider compaction
-  sibling its catalog row recommends, then each of your model roles.
+  sibling its catalog row recommends, then your `defaultModel`.
 - `any-model` keeps going past those to the largest context window you have credentials for,
   whichever provider that is. Compaction almost never fails, at the cost of summarizing on a
   provider you did not choose for this session and being billed for it there.

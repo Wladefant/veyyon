@@ -16,9 +16,6 @@ import { PROVIDER_ID as VEYYON_PLUGINS_SKILL_PROVIDER } from "../discovery/veyyo
 import { skillsPrompts } from "../prompts/skills/rows";
 import type { SkillPromptDetails } from "../session/messages";
 
-// The active-skill snapshot lives in its own leaf so a reader does not have to import the loader.
-export { getActiveSkills, resetActiveSkillsForTests, setActiveSkills } from "./active-skills";
-
 /**
  * Skills load ONLY from these Veyyon-native providers, every one rooted under
  * the active profile's agent dir (`~/.veyyon/profiles/<name>/agent`):
@@ -391,7 +388,7 @@ export function parseSkillInvocation(text: string): ParsedSkillInvocation | unde
  * Whether the (already left-trimmed) draft begins with a TUI local-execution
  * sigil that downstream branches will consume verbatim — `!`/`!!` for the bash
  * tool and `$`/`$$` followed by ASCII whitespace for the python tool. Mirrors
- * `pythonCommandPrefixLength` in `modes/terminal/controllers/input-controller` so the
+ * `pythonCommandPrefixLength` in `modes/terminal/controllers/prompt-submission` so the
  * two checks agree without forcing a circular import.
  */
 function startsWithLocalExecutionPrefix(trimmedStart: string): boolean {

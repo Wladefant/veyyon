@@ -116,7 +116,7 @@ export const PLAN_DECISION_TOOLS: ReadonlySet<string> = new Set<string>([TOOL.as
 export const MID_RUN_TODO_NUDGE_MUTATION_THRESHOLD = 12;
 
 /**
- * Mid-run nudges per prompt cycle. Tighter than `todo.reminders.max`, the
+ * Mid-run nudges per prompt cycle. Tighter than `todo.reminderLimit`, the
  * stop-time budget: this is a hidden hint, not an escalation ladder.
  */
 export const MID_RUN_TODO_NUDGE_MAX_PER_CYCLE = 2;

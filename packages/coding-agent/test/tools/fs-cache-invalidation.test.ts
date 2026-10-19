@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, type Mock, mock, spyOn } from "bun:test";
 import {
 	invalidateFsScanAfterDelete,
 	invalidateFsScanAfterRename,
@@ -14,7 +14,7 @@ import * as natives from "@veyyon/natives";
  */
 
 const calls: string[] = [];
-let invalidateSpy: ReturnType<typeof spyOn> | undefined;
+let invalidateSpy: Mock<typeof natives.invalidateFsScanCache> | undefined;
 
 beforeAll(() => {
 	invalidateSpy = spyOn(natives, "invalidateFsScanCache").mockImplementation((path?: string | null) => {

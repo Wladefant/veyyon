@@ -66,7 +66,10 @@ describe("status.connecting / status.active symbols", () => {
 	it("keeps the routed callsites literal-free", () => {
 		for (const rel of [
 			"modes/terminal/controllers/mcp-command-controller.ts",
+			"modes/terminal/controllers/mcp-command-output.ts",
+			"modes/terminal/controllers/mcp-server-reports.ts",
 			"modes/terminal/controllers/command-controller.ts",
+			"modes/terminal/controllers/usage-report-view.ts",
 			"modes/terminal/components/dialogs/advisor-config.ts",
 		]) {
 			const src = fs.readFileSync(path.join(SRC, rel), "utf8");

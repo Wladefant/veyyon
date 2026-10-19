@@ -19,7 +19,7 @@ import chalk from "chalk";
 import type { AssistantThinkingRenderer } from "../../../../extensibility/extensions/types";
 import { TOOL_OUTPUT_IMAGE_THEME } from "../../../../theme/image-theme";
 import { getMarkdownTheme, markdownTextStyle } from "../../../../theme/markdown-theme";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { getPreviewLines, resolveImageOptions, TRUNCATE_LENGTHS } from "../../../../tools/core/render-utils";
 import {
 	canonicalizeMessage,

@@ -13,7 +13,7 @@ import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth } from "@veyyon/utils/width";
 import type { ModelRegistry } from "../../../../config/model-registry";
 import type { Settings } from "../../../../config/settings";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { computeModalDims, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
@@ -25,7 +25,7 @@ import {
 	buildBrowserItems,
 	ModelBrowser,
 	type ModelBrowserItem,
-	resolveRoleAssignments,
+	resolveDefaultModelAssignment,
 	sortModelItems,
 } from "./model-browser";
 import type { ScopedModelItem } from "./model-hub";
@@ -101,7 +101,7 @@ export class ModelPickerComponent implements Component {
 		this.#currentSelector = options.currentSelector;
 		this.#onCancel = callbacks.onCancel;
 
-		this.#browser = new ModelBrowser(settings, {
+		this.#browser = new ModelBrowser({
 			currentContextTokens: options.currentContextTokens,
 			disableOverContext: true,
 		});
@@ -157,12 +157,12 @@ export class ModelPickerComponent implements Component {
 		}
 
 		const allModels = this.#scopedModels.length > 0 ? models : this.#registry.getAll();
-		const roles = resolveRoleAssignments(this.#settings, allModels);
+		const defaultModel = resolveDefaultModelAssignment(this.#settings, allModels);
 		const storage = AgentStorage.forAgentDir(this.#settings.getAgentDir());
 		const mruOrder = storage?.getModelUsageOrder() ?? [];
 		this.#modelItems = buildBrowserItems(models);
-		sortModelItems(this.#modelItems, { roles, mruOrder });
-		this.#browser.setRoles(roles);
+		sortModelItems(this.#modelItems, { defaultModel, mruOrder });
+		this.#browser.setDefaultModel(defaultModel);
 		this.#browser.setMruOrder(mruOrder);
 		this.#browser.setPerfStats(storage?.getModelPerf() ?? new Map());
 		this.#browser.setCurrentSelector(this.#currentSelector);

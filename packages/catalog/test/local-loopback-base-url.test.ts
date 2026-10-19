@@ -21,6 +21,7 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { hasLocalLoopbackBaseUrl } from "@veyyon/catalog/hosts";
+import { namedImportsFrom } from "@veyyon/utils/module-reach";
 
 describe("hasLocalLoopbackBaseUrl", () => {
 	describe("loopback addresses", () => {
@@ -137,26 +138,30 @@ describe("hasLocalLoopbackBaseUrl", () => {
  * importing it.
  */
 describe("the local-host predicate has exactly one definition", () => {
-	const CONSUMERS = [
-		path.resolve(import.meta.dir, "../src/compat/openai.ts"),
-		path.resolve(import.meta.dir, "../../coding-agent/src/config/append-only-context-mode.ts"),
+	/** Each consumer and the specifier it takes the predicate from. */
+	const IMPORTERS: ReadonlyArray<readonly [string, string]> = [
+		[path.resolve(import.meta.dir, "../src/compat/openai.ts"), "../hosts"],
+		[
+			path.resolve(import.meta.dir, "../../coding-agent/src/config/append-only-context-mode.ts"),
+			"@veyyon/catalog/hosts",
+		],
 	];
+	const CONSUMERS = IMPORTERS.map(([file]) => file);
 
-	it.each(CONSUMERS)("%s imports the predicate rather than declaring its own", file => {
-		const source = fs.readFileSync(file, "utf8");
-
-		expect(source).not.toContain("function hasLocalLoopbackBaseUrl");
-		expect(source).toContain("hasLocalLoopbackBaseUrl");
+	/** TypeScript rejects a module that imports a name and declares it too, so the import is the whole claim. */
+	it.each(IMPORTERS)("%s imports the predicate rather than declaring its own", (file, specifier) => {
+		expect(namedImportsFrom(fs.readFileSync(file, "utf8"), specifier)).toContain("hasLocalLoopbackBaseUrl");
 	});
 
 	it("keeps the RFC1918 range checks in one file only", () => {
 		// The dotted-octet regexes are the substance of the predicate. A copy of
 		// them anywhere else is a copy of the predicate under a different name.
-		const owner = fs.readFileSync(path.resolve(import.meta.dir, "../src/hosts.ts"), "utf8");
-		expect(owner).toContain("192\\.168\\.");
+		const RANGE_NEEDLE = "192\\.168\\.";
+		// Non-vacuity: the needle is how a regex literal for the range is spelled in source.
+		expect(/^192\.168\.\d+\.\d+$/.source).toContain(RANGE_NEEDLE);
 
 		for (const file of CONSUMERS) {
-			expect(fs.readFileSync(file, "utf8")).not.toContain("192\\.168\\.");
+			expect(fs.readFileSync(file, "utf8")).not.toContain(RANGE_NEEDLE);
 		}
 	});
 

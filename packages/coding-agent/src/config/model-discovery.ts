@@ -20,7 +20,7 @@ import {
 } from "@veyyon/catalog/provider-models/openai-compat";
 import type { ModelSpec, OpenAICompat } from "@veyyon/catalog/types";
 import { isRecord, trimTrailingSlashes } from "@veyyon/utils";
-import { withScopedTimeoutSignal } from "../utils/fetch-timeout";
+import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import type { ProviderDiscovery } from "./models-config-schema";
 
 // Default cap on `max_tokens` for auto-discovered models that do not advertise

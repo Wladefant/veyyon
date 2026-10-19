@@ -23,9 +23,9 @@ export interface MapReduceInput {
 	model: Model<Api>;
 	apiKey: ApiKey;
 	thinkingLevel?: ThinkingLevel;
-	smolModel: Model<Api>;
-	smolApiKey: ApiKey;
-	smolThinkingLevel?: ThinkingLevel;
+	helperModel: Model<Api>;
+	helperApiKey: ApiKey;
+	helperThinkingLevel?: ThinkingLevel;
 	diff: string;
 	stat: string;
 	scopeCandidates: string;
@@ -46,15 +46,15 @@ export function shouldUseMapReduce(diff: string, settings?: MapReduceSettings): 
 }
 
 /**
- * Run map-reduce analysis for large diffs using smol + primary models.
+ * Run map-reduce analysis for large diffs using the commit helper and primary models.
  */
 
 export async function runMapReduceAnalysis(input: MapReduceInput): Promise<ConventionalAnalysis> {
 	const fileDiffs = parseFileDiffs(input.diff).filter(file => !isExcludedFile(file.filename));
 	const observations = await runMapPhase({
-		model: input.smolModel,
-		apiKey: input.smolApiKey,
-		thinkingLevel: input.smolThinkingLevel,
+		model: input.helperModel,
+		apiKey: input.helperApiKey,
+		thinkingLevel: input.helperThinkingLevel,
 		files: fileDiffs,
 		config: input.settings,
 		resolveObfuscateProviderText: input.resolveObfuscateProviderText,

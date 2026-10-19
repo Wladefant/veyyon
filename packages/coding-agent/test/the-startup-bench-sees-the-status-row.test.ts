@@ -71,7 +71,7 @@ let profileSpy: Mock<() => string> | null = null;
 beforeAll(async () => {
 	await Settings.init({ inMemory: true, cwd: process.cwd() });
 	await initTheme(false);
-	settings.setModelRole("default", CONFIGURED_MODEL);
+	settings.setDefaultModel(CONFIGURED_MODEL);
 });
 
 afterAll(() => {

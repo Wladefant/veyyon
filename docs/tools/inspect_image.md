@@ -40,7 +40,7 @@ Presentation-only truncation comes from the view in `packages/coding-agent/src/t
 ## Flow
 1. `InspectImageTool.execute(...)` rejects immediately if `images.blockImages` is enabled in session settings.
 2. It reads `session.modelRegistry`; missing registry, empty registry, missing API key, or unresolved model each raise `ToolError` from `packages/coding-agent/src/tools/fs/inspect-image.ts`.
-3. Model selection tries, in order, `@vision`, `@default`, the active model string from the session, then `availableModels[0]`. `expandRoleAlias(...)` and `resolveModelFromString(...)` handle each lookup.
+3. Model selection tries, in order, the `agent.helpers.vision.model` chain, the `defaultModel` chain, the active model string from the session, then `availableModels[0]`. `resolveModelFromString(...)` handles each lookup.
 4. The chosen model must advertise `input.includes("image")`; otherwise execution fails before reading the file.
 5. `loadImageInput(...)` in `packages/coding-agent/src/utils/image-loading.ts` resolves the path with `resolveReadPath(...)`, detects MIME type with `readImageMetadata(...)`, and rejects files larger than `MAX_IMAGE_INPUT_BYTES` (`20 * 1024 * 1024`, 20 MiB) using `ImageInputTooLargeError`.
 6. `readImageMetadata(...)` in `packages/utils/src/mime.ts` inspects file headers only. Supported detected MIME types are `image/png`, `image/jpeg`, `image/gif`, and `image/webp`.
@@ -99,7 +99,7 @@ Presentation-only truncation comes from the view in `packages/coding-agent/src/t
   - `Model registry is unavailable for inspect_image.`
   - `No models available for inspect_image.`
   - `Unable to resolve a model for inspect_image.`
-  - `Resolved model <provider>/<id> does not support image input. Configure a vision-capable model for modelRoles.vision.`
+  - `Resolved model <provider>/<id> does not support image input. Configure a vision-capable model for agent.helpers.vision.model (Agents → Roster → Helpers).`
   - `No API key available for <provider>/<id>. Configure credentials for this provider or choose another vision-capable model.`
 - Input file:
   - `Image file too large: <size> exceeds <limit> limit.` from `ImageInputTooLargeError`, remapped to `ToolError`.

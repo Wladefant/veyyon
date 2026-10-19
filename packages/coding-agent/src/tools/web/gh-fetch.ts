@@ -17,8 +17,6 @@
  * `github` tool and the protocol handlers therefore share a single `gh` invocation for the same item:
  * open `pr://7`, then ask the tool for PR 7, and the second read is free and identical. Splitting the
  * fetchers per caller would have quietly given each surface its own row.
- *
- * `tools/web/gh.ts` re-exports every name here, so no existing caller changed.
  */
 
 import * as path from "node:path";

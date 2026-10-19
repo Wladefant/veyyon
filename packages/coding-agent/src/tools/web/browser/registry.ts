@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { errorMessage, isCancellation, logger, trimTrailingSlashes, withTimeout } from "@veyyon/utils";
 import type { Subprocess } from "bun";
-import type { Browser, CDPSession } from "puppeteer-core";
+import type { Browser } from "puppeteer-core";
 import { adoptIntoPrimarySessionCpuBudget } from "../../../session/cpu-limit";
 import { ToolAbortError, ToolError } from "../../core/tool-errors";
 import { findFreeCdpPort, findReusableCdp, gracefulKillTreeOnce, killExistingByPath, waitForCdp } from "./attach";
@@ -9,10 +9,19 @@ import type { CmuxKind } from "./cmux/rpc";
 import { CmuxSocketClient } from "./cmux/socket-client";
 import type { ExtensionRelay } from "./extension-relay";
 import { type ExtensionKind, openExtensionSession } from "./extension-session";
-import { BROWSER_PROTOCOL_TIMEOUT_MS, launchHeadlessBrowser, loadPuppeteer, type UserAgentOverride } from "./launch";
+import type { HostIdentity } from "./host-identity";
+import {
+	BROWSER_PROTOCOL_TIMEOUT_MS,
+	 type LaunchedBrowser,
+	launchHeadlessBrowser,
+	loadPuppeteer,
+	 type UserAgentOverride,
+} from "./launch";
+import { preparePersistentProfile, profileLock, profileLockedError, removeProfile } from "./profiles";
 
 export type PuppeteerBrowserKind =
-	| { kind: "headless"; headless: boolean }
+	/** `profile` names a persistent profile directory the browser runs on; absent, it runs on a temporary one. */
+	| { kind: "headless"; headless: boolean; profile?: string }
 	| { kind: "spawned"; path: string }
 	| { kind: "connected"; cdpUrl: string }
 	| ExtensionKind;
@@ -42,7 +51,10 @@ export interface PuppeteerBrowserHandle extends BrowserHandleCommon {
 	relay?: ExtensionRelay;
 	pid?: number;
 	subprocess?: Subprocess;
-	stealth: { browserSession: CDPSession | null; override: UserAgentOverride | null };
+	/** The temporary profile directory a headless launch created, removed when the handle is disposed. */
+	profileDir?: string;
+	/** The host-true identity a launched headless browser presents; each tab applies it to its own page. */
+	identity?: HostIdentity;
 }
 
 export interface CmuxBrowserHandle extends BrowserHandleCommon {
@@ -55,10 +67,33 @@ export type BrowserHandle = PuppeteerBrowserHandle | CmuxBrowserHandle;
 
 const browsers = new Map<string, BrowserHandle>();
 
+/**
+ * Test seam: launch the visible kind without a window. It keeps its own registry key, so a hand-off
+ * between hidden and visible still moves a tab between two Chromium processes on a host with no display.
+ */
+let visibleLaunchesHeadless = false;
+
+export function setVisibleLaunchesHeadlessForTest(value: boolean): void {
+	visibleLaunchesHeadless = value;
+}
+
+/**
+ * Fail when `kind` cannot start on this host: a visible browser on a Linux host with no display. Checked
+ * before a tab is moved to a window, so a move that cannot happen leaves the tab where it is.
+ */
+export function assertBrowserCanStart(kind: BrowserKind): void {
+	if (kind.kind !== "headless" || kind.headless || visibleLaunchesHeadless) return;
+	if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+		throw new ToolError(
+			"A visible browser needs a display, and this Linux host has none: DISPLAY and WAYLAND_DISPLAY are unset. Run veyyon in a desktop session, or under a virtual display such as Xvfb with DISPLAY set.",
+		);
+	}
+}
+
 function browserKey(kind: BrowserKind): string {
 	switch (kind.kind) {
 		case "headless":
-			return `headless:${kind.headless ? "1" : "0"}`;
+			return `headless:${kind.headless ? "1" : "0"}${kind.profile === undefined ? "" : `:profile:${kind.profile}`}`;
 		case "spawned":
 			return `spawned:${kind.path}`;
 		case "connected":
@@ -135,7 +170,35 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 		};
 	}
 	if (kind.kind === "headless") {
-		const browser = await launchHeadlessBrowser({ headless: kind.headless, viewport: opts.viewport });
+		assertBrowserCanStart(kind);
+		const headless = kind.headless || visibleLaunchesHeadless;
+		let userDataDir: string | undefined;
+		if (kind.profile !== undefined) {
+			// One Chromium per profile directory: the same profile open at the other visibility in this process holds it.
+			for (const other of browsers.values()) {
+				if (
+					"browser" in other &&
+					other.kind.kind === "headless" &&
+					other.kind.profile === kind.profile &&
+					other.browser.connected
+				) {
+					throw new ToolError(
+						`Browser profile ${JSON.stringify(kind.profile)} is already open in the ${other.kind.headless ? "hidden" : "visible"} browser; close its tabs first.`,
+					);
+				}
+			}
+			userDataDir = await preparePersistentProfile(kind.profile);
+		}
+		let launched: LaunchedBrowser;
+		try {
+			launched = await launchHeadlessBrowser({ headless, viewport: opts.viewport, userDataDir });
+		} catch (error) {
+			// Two processes starting one profile at once: the one that lost finds the lock only now.
+			const lock = userDataDir === undefined ? undefined : await profileLock(userDataDir);
+			if (lock && kind.profile !== undefined) throw profileLockedError(kind.profile, lock);
+			throw error;
+		}
+		const { browser, profileDir, identity } = launched;
 		// Chromium is a real multi-process CPU load and puppeteer spawns it for us,
 		// so the pid comes back off the handle rather than from a spawn hook.
 		const chromiumPid = browser.process()?.pid;
@@ -144,8 +207,9 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 			key: browserKey(kind),
 			kind,
 			browser,
+			profileDir,
 			refCount: 0,
-			stealth: { browserSession: null, override: null },
+			identity,
 		};
 	}
 	if (kind.kind === "extension") {
@@ -185,7 +249,6 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 			browser,
 			cdpUrl,
 			refCount: 0,
-			stealth: { browserSession: null, override: null },
 		};
 	}
 
@@ -252,7 +315,6 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 		pid,
 		subprocess,
 		refCount: 0,
-		stealth: { browserSession: null, override: null },
 	};
 }
 
@@ -291,6 +353,8 @@ async function disposeBrowserHandle(handle: BrowserHandle, opts: { kill: boolean
 				if (proc?.pid !== undefined) await gracefulKillTreeOnce(proc.pid).catch(() => undefined);
 			}
 		}
+		// After the process is gone, whether it closed, was killed or had already crashed.
+		if (handle.profileDir !== undefined) await removeProfile(handle.profileDir);
 		return;
 	}
 	if (handle.kind.kind === "extension") {

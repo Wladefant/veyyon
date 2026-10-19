@@ -8,12 +8,8 @@
  * provider re-inlines the idiom instead of importing the owner.
  */
 import { describe, expect, it } from "bun:test";
-import {
-	clampNumResults,
-	collapseWhitespace,
-	dateToAgeSeconds,
-	sanitizeResultLimit,
-} from "../../../../src/tools/web/search/utils";
+import { collapseWhitespace } from "@veyyon/utils/collapse-whitespace";
+import { clampNumResults, dateToAgeSeconds, sanitizeResultLimit } from "../../../../src/tools/web/search/utils";
 
 describe("collapseWhitespace", () => {
 	it("collapses runs of mixed whitespace to single spaces and trims the ends", () => {

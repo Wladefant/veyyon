@@ -37,8 +37,7 @@
  * decision has to be recorded.
  */
 
-import { afterAll, beforeAll, describe, expect, it, setDefaultTimeout } from "bun:test";
-import * as fs from "node:fs/promises";
+import { afterAll, describe, expect, it, setDefaultTimeout } from "bun:test";
 import * as path from "node:path";
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
 import type { TSchema } from "@veyyon/ai/types";
@@ -53,17 +52,15 @@ import {
 	ensureKernelToolBridge,
 	registerKernelToolBridge,
 } from "@veyyon/coding-agent/eval/kernel-tool-bridge";
-import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { AskTool } from "@veyyon/coding-agent/tools/agent/ask";
-import { BUILTIN_TOOLS, HIDDEN_TOOLS } from "@veyyon/coding-agent/tools/index";
 import { evalSchema } from "@veyyon/coding-agent/tools/shell/eval";
 import { type CmuxTab, runCmuxCode } from "@veyyon/coding-agent/tools/web/browser/cmux/cmux-tab";
 import type { SessionSnapshot } from "@veyyon/coding-agent/tools/web/browser/tab-protocol";
 import { TempDir } from "@veyyon/utils";
 import { INTENT_FIELD } from "@veyyon/wire";
-import { ArgotSession } from "argot";
 import { type } from "arktype";
+import { constructEveryTool } from "../helpers/every-tool";
 import { makeToolSession } from "../helpers/tool-session";
 
 // The JS worker cold-starts a Bun worker, and three of the transport cases pay
@@ -349,43 +346,9 @@ const NO_REQUIRED_ARGUMENTS: string[] = ["job", "todo"];
  */
 const NOT_REGISTERED_FOR_THIS_SESSION: string[] = [];
 
-/**
- * Settings the sweep session answers, so a tool gated behind a feature flag is
- * swept rather than skipped. Everything else falls to its own default.
- */
-const SWEEP_SETTINGS: Record<string, unknown> = {
-	"argot.enabled": true,
-	"autolearn.enabled": true,
-	"debug.enabled": true,
-	"memory.backend": "mnemopi",
-	// Off by default: starting servers is expensive. The sweep still has to
-	// construct `lsp`, so it turns the gate on rather than dropping the tool.
-	"lsp.enabled": true,
-	"lsp.tool": true,
-	// "auto" resolves to "off" below the tool-count threshold, which would drop
-	// `search_tool_bm25` out of the sweep.
-	"tools.discoveryMode": "all",
-};
-
-const argotSession = new ArgotSession();
 const sweepAgentDir = TempDir.createSync("@eval-arg-validation-profile-");
 
 describe("an eval cell cannot run a tool with arguments its schema rejects", () => {
-	beforeAll(async () => {
-		// One host is all `loadSshTool` needs to register the tool; without it the
-		// factory returns null and `ssh` drops out of the sweep unswept.
-		await fs.writeFile(
-			path.join(sweepAgentDir.path(), "ssh.json"),
-			JSON.stringify({ hosts: { probe: { host: "127.0.0.1" } } }),
-		);
-		// `debug` is gated the same way on a resolvable adapter command, so a host with no
-		// debugger installed would drop it out of the sweep. This binary is the adapter.
-		await fs.writeFile(
-			path.join(sweepAgentDir.path(), "dap.json"),
-			JSON.stringify({ adapters: { probe: { command: process.execPath, languages: ["javascript"] } } }),
-		);
-	});
-
 	afterAll(async () => {
 		await disposeAllVmContexts();
 		workerTemp.removeSync();
@@ -409,48 +372,15 @@ describe("an eval cell cannot run a tool with arguments its schema rejects", () 
 	});
 
 	it("sorts every registered tool into a pinned bucket, so a new tool is a decision", async () => {
-		// A tool the sweep cannot construct is a hole, not a pass, so the session
-		// below turns on every feature that gates a factory: `ask` needs a UI,
-		// `debug`, the four memory tools, `learn`, `manage_skill` and the two
-		// Argot tools read settings, `irc` needs a registry and an agent id,
-		// `search_tool_bm25` needs the three discovery callbacks, `ssh`
-		// resolves its hosts from `ssh.json` and `debug` its adapters from
-		// `dap.json`, both in the profile dir `sweepAgentDir` supplies.
-		const session = makeToolSession({
-			// `dap.json` sits here, and `getAdapterConfigs` reads it from the session cwd.
-			cwd: sweepAgentDir.path(),
-			hasUI: true,
-			agentRegistry: new AgentRegistry(),
-			getAgentId: () => "Main",
-			getArgotSession: () => argotSession,
-			isToolDiscoveryEnabled: () => true,
-			getSelectedDiscoveredToolNames: () => [],
-			activateDiscoveredTools: async () => [],
-			settings: {
-				get: (key: string) => SWEEP_SETTINGS[key],
-				getAgentDir: () => sweepAgentDir.path(),
-			},
-		});
-		const factories = Object.entries({ ...BUILTIN_TOOLS, ...HIDDEN_TOOLS });
+		// `constructEveryTool` turns on every feature that gates a factory, so a tool
+		// it cannot construct is a hole in the sweep rather than a tool that is safe.
+		const { tools, unconstructable, notRegistered } = await constructEveryTool(sweepAgentDir.path());
 		const checked: string[] = [];
-		const unconstructable: string[] = [];
 		const accepted: string[] = [];
 		const optedOut: string[] = [];
 		const noRequiredArguments: string[] = [];
-		const notRegistered: string[] = [];
 
-		for (const [name, factory] of factories) {
-			let real: AgentTool | null = null;
-			try {
-				real = await factory(session);
-			} catch {
-				unconstructable.push(name);
-				continue;
-			}
-			if (!real) {
-				notRegistered.push(name);
-				continue;
-			}
+		for (const real of tools) {
 			if (requiredArguments(real).length === 0) {
 				noRequiredArguments.push(real.name);
 				continue;

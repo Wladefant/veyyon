@@ -99,20 +99,8 @@ describe("agent roster and unset settings visibility contracts", () => {
 	});
 
 	it("renders navigation footer and custom agent hint in agent roster without clipping", async () => {
-		const { promise, resolve } = Promise.withResolvers<void>();
-		let resolved = false;
-		let component: SettingsSelectorComponent | undefined;
-		component = createSelector({
-			requestRender: () => {
-				if (component && !resolved) {
-					const frame = strippedFrame(component, 131);
-					if (frame.some(line => line.includes("scout") || line.includes("task"))) {
-						resolved = true;
-						resolve();
-					}
-				}
-			},
-		});
+		let rendered = Promise.withResolvers<void>();
+		const component = createSelector({ requestRender: () => rendered.resolve() });
 
 		// Type search query to filter for Roster
 		component.handleInput("Roster");
@@ -122,18 +110,27 @@ describe("agent roster and unset settings visibility contracts", () => {
 		component.handleInput("\r");
 		component.render(131);
 
-		// Wait deterministically for discoverAgents async loading to render discovered roster rows
-		await promise;
+		// Wait on discovery's re-render request, not on the clock, until the roster replaces its loading frame.
+		while (strippedFrame(component, 131).some(line => line.includes("Reading agents"))) {
+			await rendered.promise;
+			rendered = Promise.withResolvers<void>();
+		}
+
+		// The helpers lead the list, so walk down past them until a discovered agent is in the window.
+		const isAgentRow = (line: string): boolean => line.includes("scout") || line.includes("task");
+		for (let step = 0; step < 40 && !strippedFrame(component, 131).some(isAgentRow); step++) {
+			component.handleInput("\u001b[B");
+		}
 
 		const frame = strippedFrame(component, 131);
 
 		// Discovered agent rows, CUSTOM_AGENT_HINT and navigation controls must be present
-		const agentRow = frame.find(line => line.includes("scout") || line.includes("task"));
+		const agentRow = frame.find(isAgentRow);
 		const hintLine = frame.find(line => line.includes("~/.veyyon/subagents/"));
 		const navLine = frame.find(line => line.includes("Enter to configure") && line.includes("Esc to go back"));
 
-		expect(agentRow).toBeDefined();
-		expect(hintLine).toBeDefined();
-		expect(navLine).toBeDefined();
+		expect(agentRow, frame.join("\n")).toBeDefined();
+		expect(hintLine, frame.join("\n")).toBeDefined();
+		expect(navLine, frame.join("\n")).toBeDefined();
 	});
 });

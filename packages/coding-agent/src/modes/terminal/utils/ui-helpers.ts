@@ -6,7 +6,7 @@ import { APP_NAME, errorMessage } from "@veyyon/utils";
 import { type SettingsSaveFailure, settings } from "../../../config/settings";
 import { getFileSnapshotStore } from "../../../edit/file-snapshot-store";
 import { userMessageText } from "../../../presentation/transcript-builder";
-import { theme } from "../../../theme/theme";
+import { theme } from "../../../theme/theme-binding";
 import { replaceTabs } from "../../../tools/core/render-utils";
 import { ChatTranscriptBuilder } from "../components/transcript/chat-transcript-builder";
 import { TranscriptBlock } from "../components/transcript/transcript-container";

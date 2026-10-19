@@ -188,4 +188,44 @@ describe("task renderer: malformed yield slot (#1987)", () => {
 		expect(text).toContain("Findings:");
 		expect(text).toContain("Handle null response");
 	});
+
+	// A verdict the model wrote by hand reaches the renderer unvalidated when it is not one of the
+	// assembled reviewer sections. Each field the verdict row draws has to have the type it is drawn
+	// as, or the row is not a verdict.
+	for (const [label, verdict] of [
+		["an explanation that is not text", { overall_correctness: "correct", confidence: 0.9, explanation: 42 }],
+		[
+			"a confidence that is not a number",
+			{ overall_correctness: "correct", confidence: "high", explanation: "Fine." },
+		],
+		["a verdict outside correct and incorrect", { overall_correctness: 7, confidence: 0.9, explanation: "Fine." }],
+	] as const) {
+		it(`renders a yield with ${label} without a verdict row, in both branches`, async () => {
+			const result = await renderResultText({ yield: [{ data: verdict, status: "success" }] });
+			const progress = await renderProgressText({ yield: [{ data: verdict, status: "success" }] });
+			for (const text of [result, progress]) {
+				expect(text).not.toContain("Patch is");
+				expect(text).not.toContain("NaN");
+			}
+		});
+	}
+
+	it("draws the last well-formed verdict, past a later malformed one", async () => {
+		const yieldSlot = [
+			{ data: { overall_correctness: "incorrect", confidence: 0.4, explanation: "First pass." }, status: "success" },
+			{ data: { overall_correctness: "correct", confidence: 0.9, explanation: "Second pass." }, status: "success" },
+			{
+				data: { overall_correctness: "correct", confidence: "high", explanation: "Third pass." },
+				status: "success",
+			},
+		];
+		for (const text of [
+			await renderResultText({ yield: yieldSlot }),
+			await renderProgressText({ yield: yieldSlot }),
+		]) {
+			expect(text).toContain("Second pass");
+			expect(text).toContain("90% confidence");
+			expect(text).not.toContain("First pass");
+		}
+	});
 });

@@ -10,7 +10,7 @@ Model quality depends on the agent harness: tool schemas, edit format, context h
 ## Design consequences
 
 - Hashline-aware `edit` / `write` with native verification (see [The hashline edit engine](../edit/engine.md)).
-- Explicit model slots and optional roles (`modelRoles`, catalog selectors, thinking levels).
+- Explicit model slots and per-feature helpers (`defaultModel`, `agent.helpers`, catalog selectors, thinking levels).
 - Engine-enforced modes: plan file + resolve path, goal continuation, approval tiers.
 - Schema-based tool-call repair before argument validation (see [Repair](../repair/overview.md)).
 

@@ -20,7 +20,7 @@
  * and text input) are reachable only from a plugin that declares settings; the
  * chip set they hand the card is asserted, their own rows are not.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, spyOn } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { PluginManager } from "@veyyon/coding-agent/extensibility/plugins";
@@ -108,8 +108,8 @@ const configurablePlugin: InstalledPlugin = {
 
 function openPluginsTab(plugins: readonly InstalledPlugin[] = [npmPlugin]): {
 	component: SettingsSelectorComponent;
-	setEnabled: ReturnType<typeof spyOn<PluginManager, "setEnabled">>;
-	setPluginSetting: ReturnType<typeof spyOn<PluginManager, "setPluginSetting">>;
+	setEnabled: Mock<PluginManager["setEnabled"]>;
+	setPluginSetting: Mock<PluginManager["setPluginSetting"]>;
 	restore: () => void;
 } {
 	const listSpy = spyOn(PluginManager.prototype, "list").mockResolvedValue([...plugins]);

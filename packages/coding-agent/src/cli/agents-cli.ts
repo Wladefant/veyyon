@@ -19,7 +19,7 @@ import { YAML } from "bun";
 import chalk from "chalk";
 import { loadBundledAgents } from "../task/agents";
 import type { AgentDefinition } from "../task/types";
-import { theme } from "../theme/theme";
+import { theme } from "../theme/theme-binding";
 
 export type AgentsAction = "unpack";
 

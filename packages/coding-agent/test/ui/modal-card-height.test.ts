@@ -29,6 +29,7 @@ import {
 } from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-geometry";
 import {
 	type ModalShellInput,
+	type ModalShellResult,
 	minModalChromeRows,
 	renderModalShell,
 	SELECT_LIST_SHORTCUTS,
@@ -59,7 +60,7 @@ function shell(overrides: Partial<ModalShellInput> = {}) {
  * the border. Cropping matters: without it every row starts with twenty spaces
  * and a test for "this row is blank" quietly matches nothing.
  */
-function cardRows(result: ReturnType<typeof renderModalShell>): string[] {
+function cardRows(result: ModalShellResult): string[] {
 	const geo = result.geometry;
 	if (!geo) throw new Error("expected geometry");
 	return result.lines

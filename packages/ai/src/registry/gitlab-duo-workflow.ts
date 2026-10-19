@@ -10,10 +10,10 @@ export const gitLabDuoWorkflowProvider = {
 		return loginGitLabDuoWorkflow(cb);
 	},
 	credential: "oauth",
-	refreshToken: async (credentials: OAuthCredentials) => {
+	refreshToken: async (credentials: OAuthCredentials, signal?: AbortSignal) => {
 		// Lazy import: keep heavy OAuth flow modules out of the eager registry graph.
 		const { refreshGitLabDuoWorkflowToken } = await import("./oauth/gitlab-duo-workflow");
-		return refreshGitLabDuoWorkflowToken(credentials);
+		return refreshGitLabDuoWorkflowToken(credentials, undefined, signal);
 	},
 	callbackPort: 8080,
 	pasteCodeFlow: true,

@@ -72,7 +72,7 @@ export function createOwnedAsyncJobManager(input: OwnedAsyncJobsInput): AsyncJob
 		main.deliverAsyncJobResult(batch[0].jobId, note, undefined);
 	};
 	const manager: AsyncJobManager = new AsyncJobManager({
-		maxRunningJobs: Math.min(100, Math.max(1, input.settings.get("async.maxJobs") ?? 100)),
+		maxRunningJobs: Math.min(100, Math.max(1, input.settings.get("async.maxJobs"))),
 		onJobComplete: async (jobId, result, job) => {
 			if (manager.isDeliverySuppressed(jobId)) return;
 			const ownerId = job?.ownerId;

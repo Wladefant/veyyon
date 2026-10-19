@@ -1,3 +1,9 @@
+/**
+ * The follow-ups a turn arms when it ends and the prompt stays idle: the idle compaction and the idle recap line,
+ * and their cancellation when the controller is disposed.
+ *
+ * Subject: `modes/terminal/controllers/idle-follow-ups.ts`, driven through `EventController`.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@veyyon/ai";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
@@ -31,22 +37,23 @@ function createAssistantMessage(): AssistantMessage {
 	};
 }
 
-function createContext(
-	options: {
-		editorText?: string;
-		goalObjective?: string;
-		isCompacting?: boolean;
-		isStreaming?: boolean;
-		runIdleCompaction?: () => void;
-		runEphemeralTurn?: (args: {
-			promptText: string;
-			signal?: AbortSignal;
-		}) => Promise<{ replyText: string; assistantMessage: AssistantMessage }>;
-		sessionName?: string;
-		showStatus?: (message: string, options?: { dim?: boolean }) => void;
-		todoPhases?: InteractiveModeContext["todoPhases"];
-	} = {},
-): InteractiveModeContext {
+type ContextOptions = {
+	contextTokens?: number;
+	editorText?: string;
+	goalObjective?: string;
+	isCompacting?: boolean;
+	isStreaming?: boolean;
+	runIdleCompaction?: () => void;
+	runEphemeralTurn?: (args: {
+		promptText: string;
+		signal?: AbortSignal;
+	}) => Promise<{ replyText: string; assistantMessage: AssistantMessage }>;
+	sessionName?: string;
+	showStatus?: (message: string, options?: { dim?: boolean }) => void;
+	todoPhases?: InteractiveModeContext["todoPhases"];
+};
+
+function createContext(options: ContextOptions = {}): InteractiveModeContext {
 	const runIdleCompaction = options.runIdleCompaction ?? (() => {});
 	const runEphemeralTurn =
 		options.runEphemeralTurn ?? (async () => ({ replyText: "", assistantMessage: createAssistantMessage() }));
@@ -96,11 +103,13 @@ function createContext(
 		session: {
 			isCompacting: options.isCompacting ?? false,
 			isStreaming: options.isStreaming ?? false,
+			// Predictions off, so a finished turn does not reach the composer predictor.
+			settings: { get: (key: string) => (key === "composer.predictions.mode" ? "off" : false) },
 			runIdleCompaction,
 			runEphemeralTurn,
 			model: { provider: "anthropic", id: "claude-sonnet-4-5" },
 			messages: [createAssistantMessage()],
-			getContextUsage: () => ({ tokens: 210 }),
+			getContextUsage: () => ({ tokens: options.contextTokens ?? 210 }),
 			getGoalModeState: () => goalState,
 			agent: { state: { messages: [createAssistantMessage()] } },
 		},
@@ -113,6 +122,8 @@ function createContext(
 		// the composer refresh and the welcome dismissal whenever either was
 		// missing. The calls are unconditional now, so the stub supplies them.
 		refreshComposerShortcuts: vi.fn(),
+		clearPinnedError: () => {},
+		ensureLoadingAnimation: () => {},
 		dismissWelcome: vi.fn(),
 	} as unknown as InteractiveModeContext;
 	return context;
@@ -149,6 +160,76 @@ describe("EventController idle compaction teardown", () => {
 		vi.advanceTimersByTime(60_000);
 
 		expect(runIdleCompaction).not.toHaveBeenCalled();
+	});
+
+	/** Plays a finished turn and lets `ms` pass, returning how many idle compactions ran. */
+	async function idleCompactionsAfter(
+		ms: number,
+		options: ContextOptions = {},
+		between?: (context: InteractiveModeContext, controller: EventController) => Promise<void>,
+	): Promise<number> {
+		let runs = 0;
+		const context = createContext({ ...options, runIdleCompaction: () => void runs++ });
+		const controller = new EventController(context);
+		await controller.handleEvent({ type: "agent_end", messages: [createAssistantMessage()] });
+		await between?.(context, controller);
+		vi.advanceTimersByTime(ms);
+		controller.dispose();
+		return runs;
+	}
+
+	it("runs the idle compaction once its timeout passes with the context over the threshold", async () => {
+		expect(await idleCompactionsAfter(59_999)).toBe(0);
+		expect(await idleCompactionsAfter(60_000)).toBe(1);
+	});
+
+	it("arms no idle compaction while the context is under the threshold", async () => {
+		expect(await idleCompactionsAfter(60_000, { contextTokens: 99 })).toBe(0);
+		expect(await idleCompactionsAfter(60_000, { contextTokens: 100 })).toBe(1);
+	});
+
+	it("arms no idle compaction while the editor holds a draft", async () => {
+		expect(await idleCompactionsAfter(60_000, { editorText: "draft" })).toBe(0);
+	});
+
+	it("drops an armed idle compaction when a turn is streaming by the time it fires", async () => {
+		const runs = await idleCompactionsAfter(60_000, {}, async context => {
+			(context.session as { isStreaming: boolean }).isStreaming = true;
+		});
+		expect(runs).toBe(0);
+	});
+
+	it("cancels the armed idle compaction when the next turn starts", async () => {
+		const runs = await idleCompactionsAfter(60_000, {}, async (_context, controller) => {
+			await controller.handleEvent({ type: "agent_start" });
+		});
+		expect(runs).toBe(0);
+	});
+
+	it("anchors the recap on the goal before the session name", async () => {
+		resetSettingsForTest();
+		await Settings.init({
+			inMemory: true,
+			overrides: { "compaction.idleEnabled": false, "completion.notify": "off", "recap.idleSeconds": 1 },
+		});
+		const prompts: string[] = [];
+		const context = createContext({
+			goalObjective: "Ship the parser",
+			sessionName: "Fix login flow",
+			runEphemeralTurn: async args => {
+				prompts.push(args.promptText);
+				return { replyText: "", assistantMessage: createAssistantMessage() };
+			},
+		});
+		const controller = new EventController(context);
+		await controller.handleEvent({ type: "agent_end", messages: [createAssistantMessage()] });
+		vi.advanceTimersByTime(1_000);
+		await flushMicrotasks();
+		controller.dispose();
+
+		expect(prompts).toHaveLength(1);
+		expect(prompts[0]).toContain("Ship the parser");
+		expect(prompts[0]).not.toContain("Fix login flow");
 	});
 
 	it("emits an LLM-generated recap after the default four-minute delay", async () => {
@@ -210,16 +291,24 @@ describe("EventController idle compaction teardown", () => {
 			},
 		});
 		const showStatus = vi.fn((_: string, _options?: { dim?: boolean }) => {});
+		const prompts: string[] = [];
 		const context = createContext({
 			sessionName: "Fix login flow",
 			showStatus,
+			// A reply that would paint a recap, so silence comes from the setting and not from an empty reply.
+			runEphemeralTurn: async args => {
+				prompts.push(args.promptText);
+				return { replyText: "Reworking the login flow.", assistantMessage: createAssistantMessage() };
+			},
 			todoPhases: [{ name: "Work", tasks: [{ content: "Wire focused tests", status: "pending" }] }],
 		});
 
 		const controller = new EventController(context);
 		await controller.handleEvent({ type: "agent_end", messages: [createAssistantMessage()] });
 		vi.advanceTimersByTime(1_000);
+		await flushMicrotasks();
 
+		expect(prompts).toEqual([]);
 		expect(showStatus).not.toHaveBeenCalled();
 		controller.dispose();
 	});

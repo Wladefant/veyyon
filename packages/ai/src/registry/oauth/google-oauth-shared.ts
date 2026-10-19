@@ -40,15 +40,25 @@ export interface GoogleOAuthFlowConfig {
 	discoverProject: (accessToken: string, onProgress?: (message: string) => void) => Promise<string>;
 }
 
-async function getUserEmail(accessToken: string): Promise<string | undefined> {
+/**
+ * The signed-in Google account: its email, and `id`, the account's stable numeric identifier.
+ *
+ * The id is stored as the credential's `accountId` because a Google account keeps it across an
+ * email change, and the email alone made the same account read as two: a login under the new
+ * address left the login under the old one behind as a separate, signed-out account.
+ */
+async function getUserInfo(accessToken: string): Promise<{ email?: string; id?: string }> {
 	try {
 		const response = await fetch("https://www.googleapis.com/oauth2/v1/userinfo?alt=json", {
 			headers: { Authorization: `Bearer ${accessToken}` },
 		});
 
 		if (response.ok) {
-			const data = (await response.json()) as { email?: string };
-			return data.email;
+			const data = (await response.json()) as { email?: unknown; id?: unknown };
+			return {
+				email: typeof data.email === "string" ? data.email : undefined,
+				id: typeof data.id === "string" && data.id.length > 0 ? data.id : undefined,
+			};
 		}
 		logger.warn("Google account email lookup was refused; the credential will be stored without an account label", {
 			status: response.status,
@@ -62,7 +72,7 @@ async function getUserEmail(accessToken: string): Promise<string | undefined> {
 			error: errorMessage(error),
 		});
 	}
-	return undefined;
+	return {};
 }
 
 export class GoogleOAuthFlow extends OAuthCallbackFlow {
@@ -123,7 +133,7 @@ export class GoogleOAuthFlow extends OAuthCallbackFlow {
 		}
 
 		this.ctrl.onProgress?.("Getting user info...");
-		const email = await getUserEmail(tokenData.access_token);
+		const { email, id: accountId } = await getUserInfo(tokenData.access_token);
 		let projectId: string;
 		try {
 			projectId = await this.#config.discoverProject(tokenData.access_token, this.ctrl.onProgress);
@@ -141,6 +151,7 @@ export class GoogleOAuthFlow extends OAuthCallbackFlow {
 			expires: credentialExpiryFromExpiresIn(tokenData.expires_in, { provider: "google" }),
 			projectId,
 			email,
+			...(accountId ? { accountId } : {}),
 		};
 	}
 }
