@@ -248,7 +248,6 @@ export class ExtensionRelay {
 	readonly #unguardedWorlds = new Set<string>();
 	readonly #pending = new Map<number, PendingCall>();
 	#bootstrapUrl: string | undefined;
-	#bootstrapTabId: number | undefined;
 	/** The tab id of the connect page this relay's own consent URL opened. Only this tab is ever closed by `closeConnectTab`. */
 	#connectTabId: number | undefined;
 	#bootstrapReady: Promise<void> | undefined;
@@ -341,15 +340,16 @@ export class ExtensionRelay {
 
 	/**
 	 * Close the connect tab this relay adopted, by its exact tab id. Never touches another tab or the browser.
-	 * Returns false when no connect tab is held: it was never seen, already closed, or is now a working tab.
+	 * Returns false when no connect tab is held, or when it is the only attached tab: closing that one drops the socket.
 	 */
 	async closeConnectTab(): Promise<boolean> {
 		const tabId = this.#connectTabId;
 		if (tabId === undefined) return false;
 		await this.#bootstrapReady?.catch(() => undefined);
 		if (this.#connectTabId !== tabId) return false;
+		// Chrome closes the extension socket when its last attached tab goes, so a working tab must stay attached.
+		if (![...this.#tabs.keys()].some(id => id !== tabId)) return false;
 		this.#connectTabId = undefined;
-		if (this.#bootstrapTabId === tabId) this.#bootstrapTabId = undefined;
 		this.#pendingBootstrapTabs.delete(tabId);
 		this.#fireAndForget("chrome.tabs.remove", [tabId]);
 		this.#dropTab(tabId);
@@ -576,7 +576,6 @@ export class ExtensionRelay {
 					this.#connectTabId = tab.id;
 					this.#bootstrapReady = this.#registerTab(tab.id, true)
 						.then(() => {
-							this.#bootstrapTabId = tab.id;
 							this.#markReady();
 						})
 						.catch(error => {
@@ -1080,14 +1079,11 @@ export class ExtensionRelay {
 			throw new Error(decision.reason);
 		}
 		await this.#bootstrapReady;
-		let tab = this.#bootstrapTabId === undefined ? undefined : this.#tabs.get(this.#bootstrapTabId);
-		this.#bootstrapTabId = undefined;
-		if (tab && this.#connectTabId === tab.tabId) this.#connectTabId = undefined;
-		if (!tab) {
-			const created = tabSchema(await this.#call("chrome.tabs.create", [{ url: "about:blank", active: true }]));
-			if (created instanceof type.errors) throw new Error("The extension returned no tab.");
-			tab = await this.#registerTab(created.id);
-		}
+		// The connect tab stays attached until its replacement is attached. Chrome drops the socket when the last tab goes.
+		const created = tabSchema(await this.#call("chrome.tabs.create", [{ url: "about:blank", active: true }]));
+		if (created instanceof type.errors) throw new Error("The extension returned no tab.");
+		const tab = await this.#registerTab(created.id);
+		await this.closeConnectTab();
 		if (url !== "about:blank") {
 			this.#audit(tab.tabId, url, decision);
 			await this.#call("chrome.debugger.sendCommand", [{ tabId: tab.tabId }, "Page.navigate", { url }]);

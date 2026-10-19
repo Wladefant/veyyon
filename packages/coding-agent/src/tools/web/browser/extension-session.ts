@@ -51,7 +51,7 @@ function findChrome(): string {
 /**
  * Hand the connect URL to Chrome. A running Chrome opens it in a tab of the same profile and the launcher
  * exits. Chrome is never stopped from here: the operator's browser outlives the session, and the connect
- * tab it opened is closed by id through the relay (`closeConnectTab`), never by closing the browser.
+ * tab it opened is closed by id once the first browser tab is attached (`closeConnectTab`), never by closing the browser.
  */
 async function launchChrome(connectUrl: string, kind: ExtensionKind): Promise<void> {
 	const args = kind.profile ? [`--profile-directory=${kind.profile}`, connectUrl] : [connectUrl];
@@ -86,8 +86,6 @@ export async function openExtensionSession(
 		const connectUrl = buildConnectUrl({ ...bootstrap, relayUrl: relay.extensionUrl });
 		await (opts.launchConnect ?? launchChrome)(connectUrl, kind);
 		await relay.waitForExtension(opts.timeoutMs ?? CONNECT_TIMEOUT_MS, opts.signal);
-		// The relay holds the exact id of the tab the consent URL opened. Close that tab and no other.
-		await relay.closeConnectTab();
 		return relay;
 	} catch (error) {
 		await relay.close();
