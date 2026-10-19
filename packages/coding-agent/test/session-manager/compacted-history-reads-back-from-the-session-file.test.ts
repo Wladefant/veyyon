@@ -883,9 +883,35 @@ async function resumeSession(
 	};
 }
 
-/** {@link everyRoleHistory} and a `task` result whose details hold the usage of the agents it ran. */
+/**
+ * {@link everyRoleHistory}, a tool start marker and a tool result whose lines are under a kilobyte,
+ * which leave memory with the rest of the summarized history, and a `task` result whose details hold
+ * the usage of the agents it ran.
+ */
 function spendHistory(): SessionEntry[] {
 	const entries = everyRoleHistory();
+	entries.push({
+		type: "custom",
+		id: "m00097",
+		parentId: entries.at(-1)!.id,
+		timestamp: new Date(Date.UTC(2024, 0, 2)).toISOString(),
+		customType: "tool_execution_start",
+		data: { toolCallId: "call-short", toolName: "read", intent: "Reading a short file" },
+	});
+	entries.push({
+		type: "message",
+		id: "m00098",
+		parentId: entries.at(-1)!.id,
+		timestamp: new Date(Date.UTC(2024, 0, 2)).toISOString(),
+		message: {
+			role: "toolResult",
+			toolCallId: "call-short",
+			toolName: "read",
+			content: [{ type: "text", text: "short output" }],
+			isError: false,
+			timestamp: 1,
+		},
+	});
 	entries.push({
 		type: "message",
 		id: "m00099",
@@ -1190,7 +1216,9 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		const file = manager.getSessionFile();
 		if (file === undefined) throw new Error("the session wrote no file");
 		expect(serialized(manager)).toEqual(await freshLoad({ dir, file }));
-		expect(storage.reads).toBe(35);
+		// One read per summarized entry: 35 prompts, and the 35 answers between them, whose lines are
+		// short but leave memory with the rest of the history the compaction summarized.
+		expect(storage.reads).toBe(70);
 		expect(storage.open.size).toBe(0);
 		await manager.close();
 	});

@@ -37,8 +37,11 @@ import type { SessionEntry } from "./session-entries";
 import type { PinnedSessionReader } from "./session-storage";
 
 /**
- * Lines shorter than this stay in memory. A cold entry costs the fields recording where its line
- * is and the handle that reads it; below a kilobyte the saving does not cover a read-back's parse.
+ * A line shorter than this is parsed whole by a skimmed load rather than projected, and stays in
+ * memory when an append writes it: cooling an appended line reads it back from the file first. A
+ * line any compaction or branch leaves behind moves whatever its size: the 34,912 custom entries and
+ * 11,273 message entries under a kilobyte that a resumed 148 MB session kept held 14.8 MB of heap
+ * and 30 MB of resident memory, and a turn reads none of them back.
  */
 export const MIN_COLD_LINE_BYTES = 1024;
 
@@ -564,13 +567,12 @@ export class ColdEntryPayloads {
 	 * Move `entry`'s large fields out of memory, to be read back from `length` bytes at `offset` of
 	 * the pinned object. A message entry's message, and a compaction's server-side window record, is
 	 * replaced by a stand-in holding its small values and an accessor for each large field; a
-	 * compaction moves nothing else. Returns false when nothing is pinned, the entry is already cold,
-	 * or no field is large enough to move.
+	 * compaction moves nothing else. The line moves whatever its length. Returns false when nothing
+	 * is pinned, the entry is already cold, or no field is large enough to move.
 	 */
 	cool(entry: SessionEntry, offset: number, length: number): boolean {
 		const file = this.#current;
-		if (file === undefined || length < MIN_COLD_LINE_BYTES || ColdEntrySlot.layoutOf(entry) !== undefined)
-			return false;
+		if (file === undefined || ColdEntrySlot.layoutOf(entry) !== undefined) return false;
 		const record = entry as unknown as Record<string, unknown>;
 		const rule = standInRuleOf(entry);
 		const standIn = rule === undefined ? undefined : recordAt(record, rule.path);
