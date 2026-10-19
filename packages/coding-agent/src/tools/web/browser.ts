@@ -38,6 +38,7 @@ import {
 	type BrowserHandle,
 	type BrowserKind,
 	type BrowserKindTag,
+	releaseBrowser,
 } from "./browser/registry";
 import { safeJsonStringify } from "./browser/run-output";
 import { readStorageStateFile, type StorageState, type StorageStateLoaded } from "./browser/storage-state";
@@ -448,8 +449,8 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 		// worker-init time against this same budget via `deadlineStartMs`
 		// instead of restarting the clock after acquisition.
 		const deadlineStart = performance.now();
-		let browser: BrowserHandle;
-		let result: AcquireTabResult;
+		let browser: BrowserHandle | undefined;
+		let result: AcquireTabResult | undefined;
 		try {
 			browser = await untilAborted(signal, () =>
 				acquireBrowser(kind, {
@@ -463,11 +464,12 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 						: undefined,
 					appArgs: params.app?.args,
 					signal,
+					ownerSessionId: this.session.getSessionId?.() ?? undefined,
 				}),
 			);
 
 			result = await untilAborted(signal, () =>
-				acquireTab(name, browser, {
+				acquireTab(name, browser!, {
 					url,
 					waitUntil: params.wait_until,
 					viewport: params.viewport
@@ -490,6 +492,12 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 		} catch (error) {
 			if (moved) await this.#returnTab(name, moved, timeoutMs, error);
 			throw error;
+		} finally {
+			if (!result && browser && browser.refCount === 0) {
+				await releaseBrowser(browser, { kill: true }).catch(err => {
+					logger.debug("Failed to release browser after failed acquisition", { error: errorMessage(err) });
+				});
+			}
 		}
 		// An interstitial check is waited out before the page is described, so the rows below show where it led.
 		const challenge = url === undefined ? undefined : await this.#challengeNotice(name, timeoutMs, signal);
@@ -575,7 +583,10 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 	async #returnTab(name: string, moved: MovedTab, timeoutMs: number, error: unknown): Promise<void> {
 		const stated = error instanceof Error && !isCancellation(error);
 		try {
-			const browser = await acquireBrowser(moved.from, { cwd: this.session.cwd });
+			const browser = await acquireBrowser(moved.from, {
+				cwd: this.session.cwd,
+				ownerSessionId: this.session.getSessionId?.() ?? undefined,
+			});
 			await acquireTab(name, browser, {
 				url: moved.url,
 				timeoutMs,

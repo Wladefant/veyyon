@@ -24,6 +24,7 @@ import {
 	holdBrowser,
 	type PuppeteerBrowserHandle,
 	releaseBrowser,
+	releaseOrphanBrowsers,
 } from "./registry";
 import { applyStorageState, captureStorageState, type StorageState, type StorageStateLoaded } from "./storage-state";
 import type {
@@ -924,12 +925,23 @@ async function tearDownTab(name: string, tab: TabSession, opts: ReleaseTabOption
 	tabs.delete(name);
 }
 
+function hasRemainingTabs(browser: BrowserHandle): boolean {
+	for (const tab of tabs.values()) {
+		if (tab.browser === browser) return true;
+	}
+	return false;
+}
+
 export async function releaseAllTabs(opts: ReleaseTabOptions = {}): Promise<number> {
 	const names = Array.from(tabs.keys());
 	let count = 0;
 	for (const name of names) {
 		if (await releaseTab(name, opts)) count++;
 	}
+	await releaseOrphanBrowsers({
+		kill: opts.kill ?? false,
+		hasRemainingTabs,
+	});
 	return count;
 }
 
@@ -962,6 +974,11 @@ export async function releaseTabsForOwner(ownerId: string, opts: ReleaseTabOptio
 	for (const name of names) {
 		if (await releaseTab(name, opts)) count++;
 	}
+	await releaseOrphanBrowsers({
+		kill: opts.kill ?? false,
+		ownerSessionId: ownerId,
+		hasRemainingTabs,
+	});
 	return count;
 }
 
