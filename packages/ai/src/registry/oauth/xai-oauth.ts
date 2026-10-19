@@ -390,9 +390,13 @@ export async function loginXAIOAuth(ctrl: OAuthController): Promise<OAuthCredent
  * Refresh an xAI OAuth access token using a stored refresh_token.
  *
  * Re-runs OIDC discovery and re-validates the token endpoint before sending
- * the stored refresh token.
+ * the stored refresh token. `signal` aborts the token request.
  */
-export async function refreshXAIOAuthToken(refreshToken: string, fetchOverride?: FetchImpl): Promise<OAuthCredentials> {
+export async function refreshXAIOAuthToken(
+	refreshToken: string,
+	fetchOverride?: FetchImpl,
+	signal?: AbortSignal,
+): Promise<OAuthCredentials> {
 	const fetchImpl = fetchOverride ?? fetch;
 	if (typeof refreshToken !== "string" || !refreshToken.trim()) {
 		throw new AIError.OAuthError("missing refresh_token", { kind: "validation", provider: "xai" });
@@ -419,7 +423,7 @@ export async function refreshXAIOAuthToken(refreshToken: string, fetchOverride?:
 				Accept: "application/json",
 			},
 			body,
-			signal: requestTimeout.signal,
+			signal: signal ? AbortSignal.any([requestTimeout.signal, signal]) : requestTimeout.signal,
 		});
 
 		if (!response.ok) {

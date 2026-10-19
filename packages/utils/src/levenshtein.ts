@@ -1,7 +1,16 @@
 import { clampLow } from "./math";
 
+/** Pattern character to its slot in the match-mask table, plus one; 0 for a character the pattern lacks. Cleared after each call. */
+const patternSlot = new Int32Array(0x10000);
+/** Match masks followed by the vertical delta words, reused across calls and grown on demand. */
+let scratch = new Int32Array(1024);
+
 /**
- * Levenshtein edit distance over UTF-16 code units (two-row DP, O(min) memory).
+ * Levenshtein edit distance over UTF-16 code units.
+ *
+ * Bit-parallel (Myers 1999, Hyyrö's block form): the shorter string is the pattern, held as
+ * 32-row words, and each character of the longer string advances every word in one step, so the
+ * cost is O(n * ceil(m / 32)) rather than the O(n * m) of the cell-by-cell table.
  *
  * Code-unit granularity means an astral character (emoji, surrogate pair)
  * counts as two units; for typo detection and fuzzy text matching this is the
@@ -10,33 +19,70 @@ import { clampLow } from "./math";
  */
 export function levenshteinDistance(a: string, b: string): number {
 	if (a === b) return 0;
-	const aLen = a.length;
-	const bLen = b.length;
-	if (aLen === 0) return bLen;
-	if (bLen === 0) return aLen;
-
-	let prev = new Array<number>(bLen + 1);
-	let curr = new Array<number>(bLen + 1);
-	for (let j = 0; j <= bLen; j++) {
-		prev[j] = j;
+	let pattern = a;
+	let text = b;
+	if (pattern.length > text.length) {
+		pattern = b;
+		text = a;
 	}
+	const m = pattern.length;
+	const n = text.length;
+	if (m === 0) return n;
 
-	for (let i = 1; i <= aLen; i++) {
-		curr[0] = i;
-		const aCode = a.charCodeAt(i - 1);
-		for (let j = 1; j <= bLen; j++) {
-			const cost = aCode === b.charCodeAt(j - 1) ? 0 : 1;
-			const deletion = prev[j] + 1;
-			const insertion = curr[j - 1] + 1;
-			const substitution = prev[j - 1] + cost;
-			curr[j] = Math.min(deletion, insertion, substitution);
+	let alphabet = 0;
+	for (let i = 0; i < m; i++) {
+		const code = pattern.charCodeAt(i);
+		if (patternSlot[code] === 0) patternSlot[code] = ++alphabet;
+	}
+	const words = (m + 31) >>> 5;
+	const masks = alphabet * words;
+	const needed = masks + 2 * words;
+	if (scratch.length < needed) scratch = new Int32Array(Math.max(needed, scratch.length * 2));
+	const table = scratch;
+	table.fill(0, 0, masks);
+	for (let i = 0; i < m; i++) {
+		table[(patternSlot[pattern.charCodeAt(i)] - 1) * words + (i >>> 5)] |= 1 << (i & 31);
+	}
+	// Vertical deltas of each word: +1 rows in `pv`, -1 rows in `mv`. Column 0 is 0..m, all +1.
+	const pvAt = masks;
+	const mvAt = masks + words;
+	table.fill(-1, pvAt, mvAt);
+	table.fill(0, mvAt, mvAt + words);
+	const lastHigh = 1 << ((m - 1) & 31);
+
+	let score = m;
+	for (let j = 0; j < n; j++) {
+		const slot = patternSlot[text.charCodeAt(j)] - 1;
+		const eqAt = slot * words;
+		// Row 0 is 0..n, so the horizontal delta entering the first word is always +1.
+		let hin = 1;
+		for (let w = 0; w < words; w++) {
+			const pv = table[pvAt + w];
+			const mv = table[mvAt + w];
+			let eq = slot < 0 ? 0 : table[eqAt + w];
+			const xv = eq | mv;
+			if (hin < 0) eq |= 1;
+			const xh = (((eq & pv) + pv) ^ pv) | eq;
+			let ph = mv | ~(xh | pv);
+			let mh = pv & xh;
+			// The row whose horizontal delta leaves the word: its top bit, or row m-1 in the last word.
+			// Bits above row m-1 hold no pattern row; every operation here carries only upward, so
+			// they never reach it.
+			const high = w === words - 1 ? lastHigh : -0x80000000;
+			const hout = (ph & high) !== 0 ? 1 : (mh & high) !== 0 ? -1 : 0;
+			ph <<= 1;
+			mh <<= 1;
+			if (hin < 0) mh |= 1;
+			else if (hin > 0) ph |= 1;
+			table[pvAt + w] = mh | ~(xv | ph);
+			table[mvAt + w] = ph & xv;
+			hin = hout;
 		}
-		const tmp = prev;
-		prev = curr;
-		curr = tmp;
+		score += hin;
 	}
 
-	return prev[bLen];
+	for (let i = 0; i < m; i++) patternSlot[pattern.charCodeAt(i)] = 0;
+	return score;
 }
 
 /**
@@ -51,7 +97,7 @@ export function levenshteinDistance(a: string, b: string): number {
  *
  * The two metrics are both kept on purpose. {@link levenshteinDistance} is the
  * edit tool's fuzzy-match hot path, where the number feeds an acceptance
- * threshold rather than a message, and it uses two-row DP for O(min) memory.
+ * threshold rather than a message, and it runs bit-parallel in O(n * ceil(m / 32)).
  * This one allocates a full matrix, because the adjacent-transposition rule
  * needs to look two rows back. Do not merge them: one is a matching decision,
  * the other is a suggestion.

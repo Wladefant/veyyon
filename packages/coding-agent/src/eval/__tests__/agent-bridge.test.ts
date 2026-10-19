@@ -13,7 +13,6 @@ import type { MCPManager } from "../../mcp";
 import type { PlanModeState } from "../../plan-mode/state";
 import { AgentRegistry } from "../../registry/agent-registry";
 import type { AgentSession } from "../../session/agent-session";
-import { AGENT_DEFAULT_EFFORT } from "../../task/agent-settings";
 import * as taskDiscovery from "../../task/discovery";
 import type { ExecutorOptions } from "../../task/executor";
 import * as taskExecutor from "../../task/executor";
@@ -44,11 +43,9 @@ const taskAgent = {
 	spawns: "*",
 } satisfies AgentDefinition;
 
-// No `model:` here. It used to pin `["@smol"]`, a role alias, which stopped resolving when
-// role expansion lost its built-in chain: an unset role now reports that it names no model
-// instead of silently reaching for a small one. Nothing in this suite is about model
-// resolution — the fixture exists to be a SECOND agent to spawn by name — so pinning a
-// model only coupled it to a subsystem it does not test.
+// No `model:` here. Nothing in this suite is about model resolution — the fixture exists
+// to be a SECOND agent to spawn by name — so pinning a model would only couple it to a
+// subsystem it does not test.
 const reviewerAgent = {
 	name: "reviewer",
 	description: "Reviewer agent",
@@ -556,11 +553,10 @@ describe("runEvalAgent", () => {
 		expect(applied.parentThinkingLevel).toBeUndefined();
 		// Shared off: the shared value is not a layer of the per-agent chain at all, so it reaches no
 		// spawn. Nothing else decides here either — no lane row, no frontmatter level — so the spawn
-		// runs at the documented default, which is what a resolver that returns a level rather than an
-		// absence states. The regression this pins is the shared "high" arriving anyway.
+		// states `inherit` and runs at the session's effort. The regression this pins is the shared
+		// "high" arriving anyway.
 		expect(inert.modelOverride).toEqual(["p/call"]);
-		expect(inert.thinkingLevel).toBe(AGENT_DEFAULT_EFFORT);
-		expect(inert.thinkingLevel).not.toBe(ThinkingLevel.High);
+		expect(inert.thinkingLevel).toBe(ThinkingLevel.Inherit);
 	});
 
 	it("forwards session-scoped MCP, local protocol options, and the parent agent id", async () => {

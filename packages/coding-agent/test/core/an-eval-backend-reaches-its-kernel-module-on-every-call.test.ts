@@ -32,6 +32,7 @@ import * as pythonExecutor from "@veyyon/coding-agent/eval/py/executor";
 import * as pythonKernel from "@veyyon/coding-agent/eval/py/kernel";
 import * as rubyExecutor from "@veyyon/coding-agent/eval/rb/executor";
 import * as rubyKernel from "@veyyon/coding-agent/eval/rb/kernel";
+import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { TempDir } from "@veyyon/utils";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 import { makeToolSession } from "../helpers/tool-session";
@@ -88,7 +89,7 @@ function isBackend(value: unknown): value is ExecutorBackend {
 /** Every backend the barrel exports, taken from the barrel rather than from a list here. */
 const BACKENDS: ExecutorBackend[] = Object.values(evalBarrel).filter(isBackend);
 
-function execOptions(cwd: string, session: ReturnType<typeof makeToolSession>): ExecutorBackendExecOptions {
+function execOptions(cwd: string, session: ToolSession): ExecutorBackendExecOptions {
 	return {
 		cwd,
 		sessionId: "kernel-module-seam",

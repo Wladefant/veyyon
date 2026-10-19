@@ -1,3 +1,4 @@
+import { GEMINI_DEVELOPER_API_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { createApiKeyLogin } from "./api-key-login";
 import type { OAuthLoginCallbacks } from "./oauth/types";
 import type { ProviderDefinition } from "./types";
@@ -17,7 +18,7 @@ const login = createApiKeyLogin({
 		// validator does not send. The OpenAI-compatibility route takes `Authorization: Bearer` and is
 		// the documented way to list models with a Gemini key.
 		// https://ai.google.dev/gemini-api/docs/openai
-		modelsUrl: "https://generativelanguage.googleapis.com/v1beta/openai/models",
+		modelsUrl: `${GEMINI_DEVELOPER_API_ENDPOINT}/openai/models`,
 	},
 });
 

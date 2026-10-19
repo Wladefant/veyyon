@@ -20,9 +20,6 @@ export type OpenAIResponsesToolChoice =
 	| { type: "custom"; name: string }
 	| undefined;
 
-/** Anthropic-compatible tool choice format */
-export type AnthropicToolChoice = "auto" | "none" | "any" | { type: "tool"; name: string } | undefined;
-
 /**
  * Extract function name from unified ToolChoice.
  */
@@ -80,20 +77,4 @@ export function mapToOpenAIResponsesToolChoice(choice?: ToolChoice): OpenAIRespo
 	}
 	const name = extractFunctionName(choice);
 	return name ? { type: "function", name } : undefined;
-}
-
-/**
- * Map unified ToolChoice to Anthropic-compatible format.
- * - "required" → "any"
- * - { type: "function", ... } → { type: "tool", name }
- */
-export function mapToAnthropicToolChoice(choice?: ToolChoice): AnthropicToolChoice {
-	if (!choice) return undefined;
-	if (typeof choice === "string") {
-		if (choice === "required") return "any";
-		if (choice === "auto" || choice === "none" || choice === "any") return choice;
-		return undefined;
-	}
-	const name = extractFunctionName(choice);
-	return name ? { type: "tool", name } : undefined;
 }

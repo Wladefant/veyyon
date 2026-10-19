@@ -78,7 +78,7 @@ export default function (pi: HookAPI) {
 			}
 
 			// Run extraction with loader UI
-			const result = await terminal.custom<string | null>((tui, theme, done) => {
+			const result = await terminal.custom<string | null>((tui, theme, _keybindings, done) => {
 				const loader = new ComposerLoader(tui, theme, `Extracting questions using ${ctx.model!.id}…`);
 				loader.onAbort = () => done(null);
 

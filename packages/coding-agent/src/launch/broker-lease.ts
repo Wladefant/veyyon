@@ -5,7 +5,6 @@ import { atomicWriteFile, isEnoent, logger } from "@veyyon/utils";
 import { tryWithFileLock, withFileLock } from "@veyyon/utils/file-lock";
 import { getProcessStartIdentity, getProcessStartTime, isProcessInstanceAlive } from "@veyyon/utils/process-liveness";
 import { daemonBrokerEndpoint, daemonBrokerLeasePath, daemonBrokerTokenPath } from "./paths";
-
 export interface BrokerLease {
 	path: string;
 	instanceId: string;
@@ -183,7 +182,12 @@ export async function acquireBrokerLease(
 export async function releaseBrokerLease(lease: BrokerLease): Promise<void> {
 	await withFileLock(lease.path, async () => {
 		try {
-			const raw: unknown = JSON.parse(await fs.readFile(lease.path, "utf8"));
+			let raw: unknown;
+			try {
+				raw = JSON.parse(await fs.readFile(lease.path, "utf8"));
+			} catch {
+				return;
+			}
 			if (typeof raw === "object" && raw !== null && "instanceId" in raw && raw.instanceId === lease.instanceId) {
 				await fs.rm(lease.path, { force: true });
 			}

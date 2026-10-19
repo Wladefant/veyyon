@@ -25,7 +25,7 @@
  */
 
 import { visibleWidth } from "@veyyon/utils/width";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import type { TodoItem, TodoPhase } from "../../../../tools/agent/todo";
 import { boundedTodoPreviewText, formatPhaseDisplayName } from "../../../../tools/agent/todo";
 import { renderTreeList } from "../../draw/tree-list";

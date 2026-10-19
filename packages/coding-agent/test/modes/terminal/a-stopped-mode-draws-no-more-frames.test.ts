@@ -20,7 +20,7 @@
  * this suite is about the one that was not, and about the property that makes the omission
  * observable rather than about the list.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
@@ -94,7 +94,7 @@ describe("a stopped interactive mode", () => {
 	 * spy that counts frames. Asserts the arm worked, because every claim below is "and then it
 	 * stopped" — which a frame that never started would satisfy for the wrong reason.
 	 */
-	const armMotion = (): ReturnType<typeof vi.fn> => {
+	const armMotion = (): Mock<InteractiveMode["ui"]["requestRender"]> => {
 		const target = mode;
 		if (!target) throw new Error("Expected a booted mode");
 		const requestRender = vi.spyOn(target.ui, "requestRender").mockImplementation(() => {});

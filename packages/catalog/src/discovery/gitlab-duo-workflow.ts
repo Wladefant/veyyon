@@ -222,13 +222,8 @@ export function buildGitLabDuoWorkflowModelSpec(
 	};
 }
 
-export function buildGitLabDuoWorkflowFallbackModel(
-	id = FALLBACK_MODEL_ID,
-	name = FALLBACK_MODEL_NAME,
-	baseUrl = GITLAB_SAAS_URL,
-): ModelSpec<"gitlab-duo-agent"> {
-	return buildGitLabDuoWorkflowModelSpec({ name, ref: id }, baseUrl);
-}
+export { buildGitLabDuoWorkflowFallbackModel } from "../provider-models/special";
+
 
 async function selectGitLabDuoWorkflowNamespace(
 	config: GitLabDuoWorkflowDiscoveryConfig,

@@ -26,14 +26,8 @@ export default class Index extends Command {
 		model: Flags.string({
 			description: 'Model to use (fuzzy match: "opus", "gpt-5.2", or "openai/gpt-5.2")',
 		}),
-		smol: Flags.string({
-			description: "Smol/fast model for lightweight tasks (or VEYYON_SMOL_MODEL env)",
-		}),
-		slow: Flags.string({
-			description: "Slow/reasoning model for thorough analysis (or VEYYON_SLOW_MODEL env)",
-		}),
 		plan: Flags.string({
-			description: "Plan model for architectural planning (or VEYYON_PLAN_MODEL env)",
+			description: "Plan helper model for this run",
 		}),
 		"compaction-model": Flags.string({
 			description: "Model that summarizes the conversation when it is compacted (overrides compaction.model)",
@@ -53,7 +47,7 @@ export default class Index extends Command {
 				"Force read-only plan mode at start, auto-approve the plan on the model's first resolve call, then switch to --plan-yolo-into to implement it",
 		}),
 		"plan-yolo-into": Flags.string({
-			description: 'Target model for plan-yolo execution (default the "smol" role)',
+			description: "Target model for plan-yolo execution (default the first defaultModel entry)",
 		}),
 		provider: Flags.string({
 			description: "Provider to use (legacy; prefer --model)",

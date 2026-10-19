@@ -232,7 +232,7 @@ describe("an interrupted todo call is not a payload refusal", () => {
 			settings: Settings.isolated({
 				"compaction.enabled": false,
 				"todo.enabled": true,
-				"todo.reminders.max": 3,
+				"todo.reminderLimit": 3,
 			}),
 			modelRegistry,
 		});

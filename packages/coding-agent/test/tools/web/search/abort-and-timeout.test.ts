@@ -18,7 +18,7 @@ import { ToolAbortError } from "@veyyon/coding-agent/tools/core/tool-errors";
 import { WebSearchTool } from "@veyyon/coding-agent/tools/web/search";
 import * as provider from "@veyyon/coding-agent/tools/web/search/provider";
 import { searchAnthropic } from "@veyyon/coding-agent/tools/web/search/providers/anthropic";
-import type { SearchParams } from "@veyyon/coding-agent/tools/web/search/providers/base";
+import type { SearchParams, SearchProvider } from "@veyyon/coding-agent/tools/web/search/providers/base";
 import { searchBrave } from "@veyyon/coding-agent/tools/web/search/providers/brave";
 import type { SearchProviderId, SearchResponse } from "@veyyon/coding-agent/tools/web/search/types";
 import type { AgentStorage } from "@veyyon/kernel/session/agent-storage";
@@ -219,7 +219,7 @@ describe("executeSearch abort propagation", () => {
 	function fakeProvider(
 		id: SearchProviderId,
 		behaviour: (params: SearchParams) => Promise<SearchResponse>,
-	): provider.SearchProvider {
+	): SearchProvider {
 		return {
 			id,
 			label: id,
@@ -229,7 +229,7 @@ describe("executeSearch abort propagation", () => {
 		};
 	}
 
-	function mockProviderChain(providers: provider.SearchProvider[]) {
+	function mockProviderChain(providers: SearchProvider[]) {
 		vi.spyOn(provider, "resolveProviderCandidates").mockReturnValue(
 			providers.map(({ id }) => ({ id, explicit: false })),
 		);

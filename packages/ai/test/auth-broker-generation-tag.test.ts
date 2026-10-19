@@ -21,7 +21,8 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { moduleSpecifiersIn } from "@veyyon/utils/module-reach";
+import { namedImportsFrom } from "@veyyon/utils/module-reach";
+import { exportedDeclarationsIn } from "@veyyon/utils/source-declarations";
 import { formatGenerationTag, parseGenerationTag } from "../src/auth-broker/generation-tag";
 
 describe("writing the tag", () => {
@@ -142,25 +143,24 @@ describe("the two ends of the exchange", () => {
 	/**
 	 * The lock. The client and the server each had a private parser and their own inline
 	 * quoting, and both sides both write and read this header, so a copy is a chance for
-	 * the two to disagree about the same string.
+	 * the two to disagree about the same string. Each side imports both functions from the
+	 * owner, and TypeScript rejects a module that imports a name and declares it too. An
+	 * inline quoting that agrees with the owner today is not caught here; one that disagrees
+	 * fails the client-server round trip in auth-broker-wire.test.ts.
 	 */
 	it("share one module rather than restating the format", async () => {
 		const owner = await Bun.file(new URL("../src/auth-broker/generation-tag.ts", import.meta.url)).text();
-		expect(owner.match(/export function parseGenerationTag/g)).toHaveLength(1);
-		expect(owner.match(/export function formatGenerationTag/g)).toHaveLength(1);
+		expect(exportedDeclarationsIn(owner)).toEqual(
+			expect.arrayContaining(["formatGenerationTag", "parseGenerationTag"]),
+		);
 
 		for (const name of ["client.ts", "server.ts"]) {
 			const source = await Bun.file(new URL(`../src/auth-broker/${name}`, import.meta.url)).text();
 
-			expect(source).not.toContain("function parseGenerationTag(");
-			expect(moduleSpecifiersIn(source)).toContain("./generation-tag");
-			// And neither side spells the quoting inline any more. The searched text contains a
-			// template interpolation, so it is built with an escaped brace: a PLAIN string holding
-			// `${...}` is what `noTemplateCurlyInString` exists to catch, since a string that looks
-			// interpolated and is not is almost always a bug, and this is the rare case where the
-			// un-interpolated form is the point.
-			expect(source).not.toContain(`= \`"$\{opts.ifGenerationGt}"\``);
-			expect(source).not.toContain(`ETag: \`"$\{generation}"\``);
+			expect(namedImportsFrom(source, "./generation-tag").sort(), name).toEqual([
+				"formatGenerationTag",
+				"parseGenerationTag",
+			]);
 		}
 	});
 });

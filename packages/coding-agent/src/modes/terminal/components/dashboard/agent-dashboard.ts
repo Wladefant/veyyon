@@ -77,7 +77,7 @@ import { registerPersistedAgents } from "../../../../registry/persisted-agents";
 import { USER_INTERRUPT_LABEL } from "../../../../session/messages";
 import { IrcBus, type IrcLogEntry } from "../../../../task/irc-bus";
 import { withIcon } from "../../../../theme/icon-label";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import type { ObservableSession, SessionObserverRegistry } from "../../session-observer-registry";
 import { getTabBarTheme } from "../../shared";
 import { keyHint } from "../../utils/key-hint";

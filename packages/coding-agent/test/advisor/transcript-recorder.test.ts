@@ -16,11 +16,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@veyyon/agent-core";
-import {
-	ADVISOR_TRANSCRIPT_FILENAME,
-	AdvisorTranscriptRecorder,
-} from "@veyyon/coding-agent/advisor/transcript-recorder";
+import { AdvisorTranscriptRecorder } from "@veyyon/coding-agent/advisor/transcript-recorder";
 import { removeWithRetries } from "@veyyon/utils";
+import { ADVISOR_TRANSCRIPT_FILENAME } from "@veyyon/utils/session-file";
 
 interface AdvisorEntry {
 	type?: string;

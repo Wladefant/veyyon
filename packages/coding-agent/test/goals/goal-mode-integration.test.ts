@@ -465,6 +465,27 @@ describe("InteractiveMode goal mode integration", () => {
 		expect(content).not.toContain("do not claim todo updates unless a later turn exposes the tool");
 	});
 
+	it("omits persisted todo state when todos are turned off, even with the todo tool active", async () => {
+		await harness.session.setActiveToolsByName(["read", "todo"]);
+		await harness.mode.handleGoalModeCommand("Ship the release");
+		harness.session.setTodoPhases([
+			{
+				name: "Verification",
+				tasks: [{ content: "Run focused checks", status: "pending" }],
+			},
+		]);
+		harness.session.settings.set("todo.enabled", false);
+		const sendCustomMessage = vi.spyOn(harness.session, "sendCustomMessage").mockResolvedValue(false);
+
+		await harness.session.sendGoalModeContext({ deliverAs: "steer" });
+
+		const message = normalizeCustomMessagePayload(sendCustomMessage.mock.calls[0]?.[0]);
+		const content = typeof message.content === "string" ? message.content : "";
+		expect(message?.customType).toBe("goal-mode-context");
+		expect(content).not.toContain("<todo_context>");
+		expect(content).not.toContain("Run focused checks");
+	});
+
 	it("omits persisted todo state when todo tool is inactive", async () => {
 		await harness.mode.handleGoalModeCommand("Ship the release");
 		harness.session.setTodoPhases([

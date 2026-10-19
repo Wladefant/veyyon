@@ -8,6 +8,7 @@ import type {
 import type { ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { clampLow, lazy, prompt, sanitizeText } from "@veyyon/utils";
+import { formatDuration } from "@veyyon/utils/format";
 import { daemonClientForProject } from "../../launch/client";
 import { DAEMON_COMPLETIONS_LIMIT } from "../../launch/completions";
 import type {
@@ -26,7 +27,7 @@ import type { ToolSession } from "..";
 import { foldToolOutputBookkeeping } from "../core/output-fold";
 import { resolveToCwd } from "../core/path-utils";
 import { checkPolysimMainArgv, checkPolysimMainDenial, type PolysimDenialResult } from "../core/polysim-main-guard";
-import { formatDuration, previewLine, replaceTabs, shortenPath, TRUNCATE_LENGTHS } from "../core/render-utils";
+import { previewLine, replaceTabs, shortenPath, TRUNCATE_LENGTHS } from "../core/render-utils";
 import { ToolError } from "../core/tool-errors";
 import { releaseLaunchExitWatch, watchLaunchedProcessExit } from "./launch-exit-watch";
 import { readyPendingSummary } from "./launch-view";

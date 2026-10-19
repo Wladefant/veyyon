@@ -32,7 +32,7 @@ import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool
 import type { TruncationSummary } from "@veyyon/coding-agent/session/streaming-output";
 import type { ThemeColor } from "@veyyon/coding-agent/theme/color";
 import { theme } from "@veyyon/coding-agent/theme/theme";
-import { formatFullOutputReference } from "@veyyon/coding-agent/tools/core/output-meta";
+import { formatFullOutputReference } from "@veyyon/coding-agent/tools/core/output-notice";
 import { formatExpandHint, PREVIEW_LIMITS } from "@veyyon/coding-agent/tools/core/render-utils";
 import type { FileSearchDetails, FileSearchRenderArgs } from "@veyyon/coding-agent/tools/search/file-search";
 import { type FileSearchViewResult, fileSearchToolView } from "@veyyon/coding-agent/tools/search/file-search-view";

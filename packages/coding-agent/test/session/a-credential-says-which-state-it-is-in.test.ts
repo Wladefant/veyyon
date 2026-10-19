@@ -23,7 +23,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type AuthCredential, AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { type AuthCredential, AuthStorage } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import {
 	accountGlyphKind,
 	accountHeadLine,

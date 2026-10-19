@@ -29,7 +29,10 @@
  * so a behavioural test here would just be skipped on the machines that most need it.
  */
 import { describe, expect, it } from "bun:test";
-import { buildInitScript as buildJuliaInitScript } from "@veyyon/coding-agent/eval/jl/kernel";
+import {
+	buildExecutePayload as buildJuliaExecutePayload,
+	buildInitScript as buildJuliaInitScript,
+} from "@veyyon/coding-agent/eval/jl/kernel";
 import type { KernelEnvPatch } from "@veyyon/coding-agent/eval/kernel-base";
 import { buildInitScript as buildRubyInitScript } from "@veyyon/coding-agent/eval/rb/kernel";
 
@@ -155,22 +158,44 @@ describe("the Julia kernel start-up preamble", () => {
 });
 
 describe("the Julia execute-request wire format", () => {
+	const b64 = (text: string) => Buffer.from(text).toString("base64");
+	/** The environment field of a request row, split into its pairs. */
+	const envPairs = (payload: string) => payload.split("\t")[5]!.split(" ").filter(Boolean);
+
+	it("lays out one request row with the cwd, flags, environment and code", () => {
+		const payload = buildJuliaExecutePayload("println(1)", "m1", { cwd: "/proj", env: { A: "1" } });
+
+		expect(payload).toBe(`run\tm1\t${b64("/proj")}\t0\t1\t${b64("A")}:${b64("1")}\t${b64("println(1)")}`);
+	});
+
+	it("drops history for a silent request and for one that opts out", () => {
+		expect(buildJuliaExecutePayload("x", "m", { silent: true }).split("\t").slice(3, 5)).toEqual(["1", "0"]);
+		expect(buildJuliaExecutePayload("x", "m", { storeHistory: false }).split("\t").slice(3, 5)).toEqual(["0", "0"]);
+	});
+
 	/**
 	 * A per-execution patch travels as `key_b64:value_b64` pairs, and a CLEAR needs a
 	 * representation the old format had none for. The key is prefixed with `!`, which
 	 * is outside the base64 alphabet and so can never be part of an encoded key.
-	 *
-	 * Asserted against `runner.jl` as well as the encoder, because a wire format with
-	 * only one end implemented is the failure this pair is meant to prevent: Ruby's
-	 * `runner.rb` already honoured `nil` while its own preamble builder did not, and
-	 * nothing noticed for exactly that reason.
 	 */
-	it("marks a cleared key with a base64-illegal prefix that the runner decodes", async () => {
+	it("marks a cleared key with a `!` prefix and an empty value, and emits nothing for undefined", () => {
+		const payload = buildJuliaExecutePayload("x", "m", {
+			env: { SET_ME: "yes", CLEAR_ME: null, SKIP_ME: undefined },
+		});
+
+		expect(envPairs(payload)).toEqual([`${b64("SET_ME")}:${b64("yes")}`, `!${b64("CLEAR_ME")}:`]);
+	});
+
+	/**
+	 * The other end of the wire. Julia is not installed where this suite runs, so the
+	 * runner is read as text: a wire format with only one end implemented is the
+	 * failure this pair is meant to prevent, since Ruby's `runner.rb` already honoured
+	 * `nil` while its own preamble builder did not, and nothing noticed.
+	 */
+	it("is decoded by the runner, which strips the `!` and deletes the variable", async () => {
 		const runner = await Bun.file(new URL("../../src/eval/jl/runner.jl", import.meta.url).pathname).text();
 
 		expect(runner).toContain('clear = startswith(k_b64, "!")');
 		expect(runner).toContain("delete!(ENV, k)");
-		// `!` is not one of A-Z a-z 0-9 + / =, so no encoded key can begin with it.
-		expect("!").not.toMatch(/[A-Za-z0-9+/=]/);
 	});
 });

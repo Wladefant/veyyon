@@ -59,7 +59,7 @@ export const FASTEMBED_MODEL_TRIPWIRE_MESSAGE =
 	"FASTEMBED MODEL TRIPWIRE: this suite reached FlagEmbedding.init, which downloads the ~270MB fastembed " +
 	"weights. mnemopi's suites run in CI's workspace bucket, which has no model cache and no budget for that " +
 	"download, so every suite must inject its own embeddings (setEmbeddingProviderForTests or " +
-	"setLocalModelInitializerForTests). If this suite genuinely needs the real model, it cannot run in that " +
+	"setLocalModelInitializer). If this suite genuinely needs the real model, it cannot run in that " +
 	`bucket: exclude it by name with the reason, and run it locally with ${ALLOW_ENV_VAR}=1.`;
 
 /**
