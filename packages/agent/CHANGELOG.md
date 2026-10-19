@@ -14,6 +14,7 @@
 - Summarization requests that do not replay the session prefix (the turn-prefix summary of a split turn, a history summary without cache alignment, staged segment and merge summaries, and branch summaries) are sent with `cacheRetention: "none"`, so Anthropic no longer bills a cache write that is never read and no longer warns "prompt cache prefix changed" after each split-turn compaction.
 - A compaction no longer cuts between a tool call and its result when a message sits between them, such as the `cwd_changed` and `prompt_cache_invalidated` messages `set_cwd` appends while it runs, so the kept history no longer starts with a result whose call was summarized and every later request no longer folds that result into a note.
 - A compaction on a model that does not accept the requested effort logs "Compaction effort is not accepted by the model" once per model and effort instead of once per request, so a staged compaction of a 146 MB session logs it once instead of 133 times; `clampPassEffort` in `@veyyon/agent-core/effort-clamp` is the shared clamp.
+- The agent loop's cooperative yield hands the event loop one turn instead of sleeping 20 ms (`YieldGateOptions.sleep` and `sleepMs` are replaced by `yieldTurn`), so with a 300 ms provider the gap between a tool-call response and the next request falls from 26.8 ms to 6.9 ms and a response's first streamed event is no longer held 20 ms.
 
 ### Removed
 

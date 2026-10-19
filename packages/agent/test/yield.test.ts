@@ -8,59 +8,74 @@ afterEach(() => {
 });
 
 /**
- * Build a gate over an injected clock and a counting sleep so the test drives
- * the gate logic without spying on process-global `Date.now`/`scheduler.wait`.
- * Those globals are shared across files, so under concurrent `bun test` a
- * sibling file's `vi.restoreAllMocks()` could wipe the spies mid-run — the
- * exact race that made the previous singleton-based test flake.
+ * Build a gate over an injected clock and a counting yield so the test drives
+ * the gate logic without spying on process-global `Date.now`. That global is
+ * shared across files, so under concurrent `bun test` a sibling file's
+ * `vi.restoreAllMocks()` could wipe a spy mid-run — the exact race that made
+ * the previous singleton-based test flake.
  */
-function makeGate(): { gate: YieldGate; advanceBy: (ms: number) => void; sleeps: () => number } {
+function makeGate(): { gate: YieldGate; advanceBy: (ms: number) => void; yields: () => number } {
 	let now = 1_000_000;
-	const sleep = vi.fn(async () => {});
-	const gate = new YieldGate({ now: () => now, sleep });
+	const yieldTurn = vi.fn(async () => {});
+	const gate = new YieldGate({ now: () => now, yieldTurn });
 	return {
 		gate,
 		advanceBy: (ms: number) => {
 			now += ms;
 		},
-		sleeps: () => sleep.mock.calls.length,
+		yields: () => yieldTurn.mock.calls.length,
 	};
 }
 
 describe("YieldGate.yieldIfDue", () => {
-	it("sleeps on the first call and gates immediate callers", async () => {
-		const { gate, advanceBy, sleeps } = makeGate();
+	it("yields on the first call and gates immediate callers", async () => {
+		const { gate, advanceBy, yields } = makeGate();
 
 		await gate.yieldIfDue();
-		expect(sleeps()).toBe(1);
+		expect(yields()).toBe(1);
 
 		advanceBy(YIELD_INTERVAL_MS - 1);
 		await gate.yieldIfDue();
-		expect(sleeps()).toBe(1);
+		expect(yields()).toBe(1);
 	});
 
-	it("sleeps again once the gate window elapses", async () => {
-		const { gate, advanceBy, sleeps } = makeGate();
+	it("yields again once the gate window elapses", async () => {
+		const { gate, advanceBy, yields } = makeGate();
 
 		await gate.yieldIfDue();
-		expect(sleeps()).toBe(1);
+		expect(yields()).toBe(1);
 
 		advanceBy(YIELD_INTERVAL_MS);
 		await gate.yieldIfDue();
-		expect(sleeps()).toBe(2);
+		expect(yields()).toBe(2);
 	});
 
 	it("treats a backward clock jump as due instead of gating forever", async () => {
-		const { gate, advanceBy, sleeps } = makeGate();
+		const { gate, advanceBy, yields } = makeGate();
 
 		await gate.yieldIfDue();
-		expect(sleeps()).toBe(1);
+		expect(yields()).toBe(1);
 
 		// NTP correction / fake timers can move the wall clock backward; the next
 		// call must still yield rather than wait for an interval that never comes.
 		advanceBy(-YIELD_INTERVAL_MS * 4);
 		await gate.yieldIfDue();
-		expect(sleeps()).toBe(2);
+		expect(yields()).toBe(2);
+	});
+
+	// The agent loop yields on every streamed event, after every tool batch and at the top of every
+	// turn, so a due yield that sleeps adds its sleep to every tool round and to every response's
+	// first token. Twenty due yields cost twenty event-loop turns: a sleep of even 1 ms per yield
+	// takes them past the bound.
+	it("hands the event loop a turn rather than sleeping", async () => {
+		let now = 0;
+		const gate = new YieldGate({ now: () => now });
+		const started = performance.now();
+		for (let i = 0; i < 20; i++) {
+			now += YIELD_INTERVAL_MS;
+			await gate.yieldIfDue();
+		}
+		expect(performance.now() - started).toBeLessThan(20);
 	});
 });
 

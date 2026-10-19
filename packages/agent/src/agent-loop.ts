@@ -883,8 +883,7 @@ async function driveLoop(run: LoopRun): Promise<void> {
 /** One turn: inject pending messages, sample the model, settle its tool calls. True when the run ended. */
 async function runTurn(run: LoopRun, state: LoopState): Promise<boolean> {
 	if (endIfDeadlinePassed(run)) return true;
-	// Yield at the top of each iteration to prevent busy-wait when
-	// the agent loop is executing tool calls back-to-back.
+	// Hand the event loop a turn so back-to-back tool batches cannot hold off timers, input and rendering.
 	await yieldIfDue();
 	if (await parkWhilePaused(run)) return true;
 	if (!state.firstTurn) {
@@ -1608,8 +1607,8 @@ class AssistantTurnStream {
 				this.#absorbDeliveredEvents(event);
 				return await this.#endAborted(iterator);
 			}
-			// Yield to the event loop periodically to prevent busy-wait when the LLM is streaming chunks faster than the
-			// loop can rest.
+			// Hand the event loop a turn periodically so a buffered run of stream events cannot hold off timers, input and
+			// rendering.
 			await yieldIfDue();
 			this.#apply(event);
 		}
@@ -2951,8 +2950,7 @@ async function executeToolCalls(run: LoopRun, assistantMessage: AssistantMessage
 	} finally {
 		clearInterval(steeringWatch);
 	}
-	// Yield after batch tool execution to let GC and I/O catch up, especially when tool results are large (e.g. bash
-	// output).
+	// Hand the event loop a turn after the batch so I/O the tools queued, such as large results, is serviced first.
 	await yieldIfDue();
 	return batch.answerUnresolved();
 }
