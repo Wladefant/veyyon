@@ -20,6 +20,8 @@
 
 ### Fixed
 
+- `astGrep` and `astEdit` parse a PHP file under the full PHP grammar, so a file that closes `?>` and continues as HTML is searched and rewritten instead of reported as a parse error and skipped; `astMatch` still reads its source as PHP code without an opening tag.
+- A `$$$NAME` binding in `metaVariables` is the source the capture spans, in brackets, instead of each node joined with `, `, so `foo($$$A)` over `foo(a, b)` binds `[a, b]` instead of `[a, ,, b]`.
 - Loading the addon caps glibc's malloc arenas at eight unless `MALLOC_ARENA_MAX` or `glibc.malloc.arena_max` sets a limit, so 48 shell commands, 32 searches and 16 globs at once peak at 311 MiB RSS instead of 488 MiB and settle at 187 MiB instead of 335 MiB after the idle trim.
 - The scan cache drops every scan past its TTL on the next cached walk and on `releaseFreeHeapPages()`, instead of keeping it until a scan of the same root replaced it, so a session that completed one `@` file mention over a 510,000-entry tree settles at 123 MB of anonymous memory after the idle trim instead of 201 MB.
 - A cached scan's TTL counts from when its walk finished instead of when it began, so a tree whose walk outlasts the TTL is served from the cache, and a repeated lookup answers in 19 ms instead of walking again for 500 ms.
