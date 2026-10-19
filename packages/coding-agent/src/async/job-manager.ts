@@ -155,6 +155,8 @@ export class AsyncJobManager {
 	readonly #retentionMs: number;
 	#deliveryLoop: Promise<void> | undefined;
 	#disposed = false;
+	/** Owners whose session was torn down and not parked; their completions are orphans, not retries. */
+	readonly #disposedOwners = new Set<string>();
 
 	constructor(options: AsyncJobManagerOptions) {
 		this.#onJobComplete = options.onJobComplete;
@@ -667,6 +669,18 @@ export class AsyncJobManager {
 
 	isDeliverySuppressed(jobId: string): boolean {
 		return this.#suppressedDeliveries.has(jobId) || this.#watchedJobs.has(jobId);
+	}
+
+	/**
+	 * Record that an owner's session was disposed without parking. Its completions route to Main as one
+	 * batched orphan note; an owner that is merely absent keeps retrying its retained completion.
+	 */
+	markOwnerDisposed(ownerId: string): void {
+		this.#disposedOwners.add(ownerId);
+	}
+
+	isOwnerDisposed(ownerId: string | undefined): boolean {
+		return ownerId !== undefined && this.#disposedOwners.has(ownerId);
 	}
 
 	#enqueueDelivery(jobId: string, text: string): void {
