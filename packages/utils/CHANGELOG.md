@@ -23,6 +23,7 @@
 
 ### Fixed
 
+- `stallSampler` replaces its profile on every busy watchdog tick, so the functions JSC's sampling profiler caught, and every provider request context and body their closures captured, are released within one tick instead of held up to 10 s: the heap left after a full collection over a 40-prompt mixed-tool session peaks at 69 to 71 MB instead of 173 to 177 MB.
 - `RotatingLogFile` keeps a full log file under one generation when two processes rotate it at once, instead of leaving a second generation that repeats every line of it.
 - `RotatingLogFile` no longer deletes a fresh live log file another process starts while a rotation releases the full one, which lost every line written to it.
 - `fetchWithRetry` ends with the signal's `TimeoutError` when a deadline aborts it, instead of a generic `AbortError: Request was aborted` that reported the timeout as a cancellation.
