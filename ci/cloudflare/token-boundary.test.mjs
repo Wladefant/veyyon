@@ -1,16 +1,16 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
-const lane = new URL("./lane-tests.sh", import.meta.url);
-
+const lanePath = fileURLToPath(new URL("./lane-tests.sh", import.meta.url));
 test("repository child boundary strips Cloudflare token and preserves other env", () => {
 	const sentinel = "fake-cloudflare-token-for-boundary-test";
 	const parentBefore = process.env.CLOUDFLARE_API_TOKEN;
 	const child = spawnSync(
 		"bash",
 		[
-			lane.pathname,
+			lanePath,
 			"--test-token-boundary",
 			"node",
 			"-e",

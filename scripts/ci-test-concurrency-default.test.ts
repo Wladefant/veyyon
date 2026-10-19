@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "bun:test";
 import {
 	addBunTestTotals,
-	childJUnitCountMismatch,
 	allocateCloudflareTestCommands,
+	buildChildEnv,
+	childJUnitCountMismatch,
 	commandsForMode,
 	fastWorkspacePackages,
 	formatBunTestTotals,
@@ -221,8 +222,20 @@ describe("Cloudflare child JUnit totals", () => {
 			writeFileSync(report, '<testsuite><testcase name="pass"/></testsuite>');
 			expect(childJUnitCountMismatch("no summary", report)).toContain("missing Bun test summary");
 			expect(childJUnitCountMismatch("2 pass\nRan 2 tests across 1 file.", report)).toContain("JUnit");
+			expect(childJUnitCountMismatch("0 pass\nRan 0 tests across 1 file.", report)).toContain("empty Bun test summary");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+
+	it("strips CLOUDFLARE_API_TOKEN and provider credentials from child test environments", () => {
+		const env = buildChildEnv({
+			CLOUDFLARE_API_TOKEN: "secret-token",
+			ANTHROPIC_API_KEY: "secret-key",
+			TEST_KEEP: "kept",
+		});
+		expect(env.CLOUDFLARE_API_TOKEN).toBeUndefined();
+		expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+		expect(env.TEST_KEEP).toBe("kept");
 	});
 });

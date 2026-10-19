@@ -981,17 +981,18 @@ const SCRUBBED_ENV_NAMES = new Set([
 	"GOOGLE_APPLICATION_CREDENTIALS",
 	"ANTHROPIC_OAUTH_TOKEN",
 	"XAI_OAUTH_TOKEN",
+	"CLOUDFLARE_API_TOKEN",
 ]);
 
-function isScrubbedEnvVar(key: string): boolean {
+export function isScrubbedEnvVar(key: string): boolean {
 	if (SCRUBBED_ENV_NAMES.has(key)) {
 		return true;
 	}
 	if (SCRUBBED_ENV_PREFIXES.some(prefix => key.startsWith(prefix))) {
 		return true;
 	}
-	// Any provider credential, e.g. ANTHROPIC_API_KEY / XAI_OAUTH_TOKEN / bedrock bearer.
-	return /_(API_KEY|OAUTH_TOKEN)$/.test(key) || key.includes("BEARER_TOKEN");
+	// Any provider credential, e.g. ANTHROPIC_API_KEY / XAI_OAUTH_TOKEN / bedrock bearer / cloudflare api token.
+	return /_(API_KEY|API_TOKEN|OAUTH_TOKEN)$/.test(key) || key.includes("BEARER_TOKEN");
 }
 
 export function childJUnitCountMismatch(output: string, junitPath: string): string | undefined {
@@ -1004,8 +1005,17 @@ export function childJUnitCountMismatch(output: string, junitPath: string): stri
 		counts[match[2] as keyof typeof counts] = Number(match[1]);
 	}
 	const reported = Number(summary[1]);
+	if (reported === 0) {
+		return "empty Bun test summary (0 tests reported)";
+	}
 	if (reported !== counts.pass + counts.fail + counts.skip + counts.todo) {
 		return `Bun summary cases=${reported} but statuses=${counts.pass + counts.fail + counts.skip + counts.todo}`;
+	}
+	if (counts.fail > 0) {
+		return `Bun reported ${counts.fail} failed test(s)`;
+	}
+	if (counts.todo > 0) {
+		return `Bun reported ${counts.todo} todo test(s)`;
 	}
 	let xml: string;
 	try {
@@ -1022,7 +1032,13 @@ export function childJUnitCountMismatch(output: string, junitPath: string): stri
 		if (/<(?:failure|error)\b/.test(body)) failures += 1;
 		if (/<skipped\b/.test(body)) skips += 1;
 	}
+	if (cases === 0) {
+		return `empty JUnit report ${junitPath} (0 testcases)`;
+	}
 	const junitPasses = cases - failures - skips;
+	if (failures > 0) {
+		return `JUnit reported ${failures} failed testcase(s)`;
+	}
 	if (cases !== reported || failures !== counts.fail || skips !== counts.skip || junitPasses !== counts.pass) {
 		return `Bun pass=${counts.pass} fail=${counts.fail} skip=${counts.skip} tests=${reported}; ` +
 			`JUnit pass=${junitPasses} fail=${failures} skip=${skips} tests=${cases}`;
@@ -1083,7 +1099,7 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 //   bucket chunk crashed ~25% of runs with `BUN_JSC_forceRAMSize=256MB`,
 //   0/10 with markers=1, at zero measured wall-time cost. useConcurrentGC=0
 //   alone did not prevent it — the crash predates this knob.
-function buildChildEnv(overrides: Record<string, string> = {}): Record<string, string | undefined> {
+export function buildChildEnv(overrides: Record<string, string> = {}): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {
 		...process.env,
 		...overrides,
@@ -1098,6 +1114,7 @@ function buildChildEnv(overrides: Record<string, string> = {}): Record<string, s
 			delete env[key];
 		}
 	}
+	delete env.CLOUDFLARE_API_TOKEN;
 	return env;
 }
 
