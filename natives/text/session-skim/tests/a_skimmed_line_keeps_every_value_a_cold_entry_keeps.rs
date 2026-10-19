@@ -277,6 +277,147 @@ mod stand_in {
 	}
 }
 
+mod remote_window {
+	use super::*;
+
+	/// The rules a load uses: a compaction is projected rather than whole.
+	fn window_rules() -> SkimRules {
+		SkimRules { whole_entry_types: vec![b"session".to_vec()], ..rules() }
+	}
+
+	fn window_report(line: &str) -> Value {
+		report_with(line.as_bytes(), &window_rules())
+	}
+
+	fn compaction(preserve: &str) -> String {
+		format!(
+			r#"{{"type":"compaction","id":"c","summary":"{}","details":{{"readFiles":["a"]}},"firstKeptEntryId":"k","preserveData":{preserve}}}"#,
+			letters(40)
+		)
+	}
+
+	const REMOTE: &str = r#"{"version":1,"provider":"p","api":"a","model":"m","window":[{"type":"compaction","encrypted_content":"e"}],"compactedAt":"t"}"#;
+
+	#[test]
+	fn the_window_moves_and_every_other_value_of_the_compaction_is_copied() {
+		let line = compaction(&format!(r#"{{"other":{{"x":[1]}},"remoteCompaction":{REMOTE}}}"#));
+		assert_eq!(
+			window_report(&line),
+			json!([
+				line.len(),
+				{
+					"type":"compaction",
+					"id":"c",
+					"summary":letters(40),
+					"details":{"readFiles":["a"]},
+					"firstKeptEntryId":"k",
+					"preserveData":{
+						"other":{"x":[1]},
+						"remoteCompaction":{"version":1,"provider":"p","api":"a","model":"m","window":[],"compactedAt":"t"}
+					}
+				},
+				0,
+				0b10000,
+				-1,
+				0
+			])
+		);
+	}
+
+	#[test]
+	fn every_large_member_of_the_remote_compaction_moves() {
+		let remote = format!(r#"{{"model":"{}","window":"short","extra":{{"a":1}}}}"#, letters(16));
+		let value = window_report(&compaction(&format!(r#"{{"remoteCompaction":{remote}}}"#)));
+		assert_eq!(
+			value[1]["preserveData"],
+			json!({"remoteCompaction":{"model":"_","window":"short","extra":{}}})
+		);
+		assert_eq!(value[2], json!(0));
+		assert_eq!(value[3], json!(0b101));
+	}
+
+	#[test]
+	fn a_compaction_without_a_remote_compaction_object_moves_nothing_and_is_handed_back() {
+		let summary_only = format!(
+			r#"{{"type":"compaction","id":"c","summary":"{}","details":{{"a":[1]}}}}"#,
+			letters(60)
+		);
+		for line in [
+			summary_only,
+			compaction(r#"{"other":{"x":[1]}}"#),
+			compaction(r#"{"remoteCompaction":[{"window":[1]}]}"#),
+			compaction(r#"{"remoteCompaction":"window"}"#),
+			compaction(r#"{"remoteCompaction":{"version":1,"api":"a"}}"#),
+			compaction(r#"[{"remoteCompaction":{"window":[1]}}]"#),
+		] {
+			assert_eq!(window_report(&line), json!(line.len()), "{line}");
+		}
+	}
+
+	#[test]
+	fn a_short_compaction_is_reported_whole() {
+		let line = r#"{"type":"compaction","preserveData":{"remoteCompaction":{"window":[1]}}}"#;
+		let rules = SkimRules { min_line_bytes: line.len() + 1, ..window_rules() };
+		assert_eq!(
+			report_with(line.as_bytes(), &rules),
+			json!([line.len(), {"type":"compaction","preserveData":{"remoteCompaction":{"window":[1]}}}])
+		);
+	}
+
+	#[test]
+	fn the_preserve_data_of_another_entry_type_moves_as_any_other_member() {
+		let preserve = format!(r#"{{"\u0061":1,"remoteCompaction":{REMOTE}}}"#);
+		let custom = format!(
+			r#"{{"type":"custom","id":"a","pad":"{}","preserveData":{preserve}}}"#,
+			letters(40)
+		);
+		let value = window_report(&custom);
+		assert_eq!(value[1], json!({"type":"custom","id":"a","pad":"_","preserveData":{}}));
+		assert_eq!(value[2], json!(0b1100));
+		assert_eq!(value[3], json!(0));
+		let message = format!(
+			r#"{{"type":"message","id":"a","message":{{"role":"user","content":"{}"}},"preserveData":{preserve}}}"#,
+			letters(40)
+		);
+		let value = window_report(&message);
+		assert_eq!(value[1]["preserveData"], json!({}));
+		assert_eq!(value[2], json!(0b1000));
+		assert_eq!(value[3], json!(0b10));
+	}
+
+	#[test]
+	fn a_remote_compaction_key_a_parse_reads_otherwise_hands_the_compaction_back() {
+		for preserve in [
+			format!(r#"{{"remote\u0043ompaction":{REMOTE}}}"#),
+			format!(r#"{{"remoteCompaction":{REMOTE},"remoteCompaction":{{"window":"x"}}}}"#),
+			format!(r#"{{"remoteCompaction":{{"window":"x"}},"remoteCompaction":{REMOTE}}}"#),
+			format!(r#"{{"remoteCompaction":{REMOTE},"remote\u0043ompaction":{{"window":"x"}}}}"#),
+			r#"{"remoteCompaction":{"wind\u006fw":[1]}}"#.to_owned(),
+			r#"{"remoteCompaction":{"window":[1],"window":[2]}}"#.to_owned(),
+			r#"{"remoteCompaction":{"0":[1],"window":[2]}}"#.to_owned(),
+			format!(r#"{{"1":2,"remoteCompaction":{REMOTE}}}"#),
+		] {
+			let line = compaction(&preserve);
+			assert_eq!(window_report(&line), json!(line.len()), "{line}");
+		}
+	}
+
+	#[test]
+	fn an_escaped_or_repeated_preserve_data_key_hands_the_compaction_back() {
+		for line in [
+			format!(
+				r#"{{"type":"compaction","id":"c","pad":"{}","preserve\u0044ata":{{"remoteCompaction":{REMOTE}}}}}"#,
+				letters(40)
+			),
+			format!(
+				r#"{{"type":"compaction","id":"c","preserveData":{{"remoteCompaction":{REMOTE}}},"preserveData":{{}}}}"#
+			),
+		] {
+			assert_eq!(window_report(&line), json!(line.len()), "{line}");
+		}
+	}
+}
+
 mod handed_back {
 	use super::*;
 

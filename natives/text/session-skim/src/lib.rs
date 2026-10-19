@@ -10,9 +10,15 @@
 //!
 //! [`SkimRules`] holds the caller's rules for what moves; this crate applies
 //! them and holds none of its own. The field names the projection reads are the
-//! session format's: an entry's `type` and `message`, a message's `role`,
-//! `toolName`, `content` and `details`, a content block's `type`, and a details
-//! object's `usage`.
+//! session format's: an entry's `type`, `message` and `preserveData`, a
+//! message's `role`, `toolName`, `content` and `details`, a content block's
+//! `type`, a details object's `usage`, and the `remoteCompaction` object of a
+//! compaction's `preserveData`.
+//!
+//! An entry's stand-in is the object of it whose members move one by one while
+//! the object itself stays: a message entry's `message`, and a compaction's
+//! `preserveData.remoteCompaction`, which holds the server-side window. A
+//! compaction moves nothing else: every context build reads its members.
 //!
 //! # Output
 //!
@@ -26,9 +32,9 @@
 //!   [`MAX_DEPTH`], or has an analyzed key that is escaped, repeated, starts
 //!   with a digit, or is past the 31st.
 //! - `[n, record]`: a line shorter than [`SkimRules::min_line_bytes`], itself.
-//! - `[n, record, keys, messageKeys, toolCalls, taskUsage]`: the projection.
+//! - `[n, record, keys, standInKeys, toolCalls, taskUsage]`: the projection.
 //!   Bit `i` of `keys` is set when the `i`th member of `record` moved, and bit
-//!   `i` of `messageKeys` when the `i`th member of `record.message` did.
+//!   `i` of `standInKeys` when the `i`th member of the entry's stand-in did.
 //!   `toolCalls` is the number of `toolCall` blocks in the moved content of an
 //!   assistant message, or -1. `taskUsage` is `0` unless the entry is a `task`
 //!   tool result whose details moved; then it is the `usage` member of the
@@ -249,8 +255,10 @@ struct Task {
 /// The member lists [`analyze`] fills, kept between lines.
 #[derive(Default)]
 struct Scratch {
-	entry:   Vec<Member>,
-	message: Vec<Member>,
+	entry:     Vec<Member>,
+	message:   Vec<Member>,
+	preserved: Vec<Member>,
+	remote:    Vec<Member>,
 }
 
 /// Report the lines of `block` up to the first longer than
@@ -344,37 +352,53 @@ fn project_into(line: &[u8], rules: &SkimRules, scratch: &mut Scratch, out: &mut
 		return;
 	};
 	let entry_type = text_member(line, entry.members, b"type");
+	let is_type =
+		|name: &[u8]| entry_type.is_some_and(|text| decodes_to(text_bytes(line, text), name, true));
 	let whole = line.len() < rules.min_line_bytes
-		|| entry_type.is_none_or(|text| {
-			rules
-				.whole_entry_types
-				.iter()
-				.any(|name| decodes_to(text_bytes(line, text), name, true))
-		});
-	let message = entry.message.as_ref().filter(|_| {
-		entry_type.is_some_and(|text| decodes_to(text_bytes(line, text), b"message", true))
-	});
+		|| entry_type.is_none()
+		|| rules.whole_entry_types.iter().any(|name| is_type(name));
+	let compaction = is_type(b"compaction");
+	let stand_in = if compaction {
+		entry.preserved.as_ref().and_then(|(at, preserved)| {
+			let (inner, members) = preserved.remote?;
+			// A mask names the window's members by position, and a parse keeps the
+			// last of two `remoteCompaction` members.
+			(check_keys(line, preserved.members).is_ok() && check_keys(line, members).is_ok())
+				.then_some(StandIn::Window { at: *at, preserved: preserved.members, inner, members })
+		})
+	} else if is_type(b"message") {
+		entry
+			.message
+			.as_ref()
+			.map(|(at, message)| StandIn::Message { at: *at, message })
+	} else {
+		None
+	};
+	// Every context build reads a compaction's members: only its window moves.
 	let mut keys = 0_u32;
-	for (index, member) in entry.members.iter().enumerate() {
-		let key = text_bytes(line, member.key);
-		let resident = rules.resident_keys.iter().any(|name| name == key)
-			|| message.is_some_and(|(at, _)| *at == index);
-		if !resident && is_large(line, member.kind, rules) {
-			keys |= 1 << index;
-		}
-	}
-	let mut message_keys = 0_u32;
-	if let Some((_, nested)) = message {
-		for (index, member) in nested.members.iter().enumerate() {
+	if !compaction {
+		for (index, member) in entry.members.iter().enumerate() {
 			let key = text_bytes(line, member.key);
-			if !rules.message_resident_keys.iter().any(|name| name == key)
-				&& is_large(line, member.kind, rules)
-			{
-				message_keys |= 1 << index;
+			let resident = rules.resident_keys.iter().any(|name| name == key)
+				|| matches!(stand_in, Some(StandIn::Message { at, .. }) if at == index);
+			if !resident && is_large(line, member.kind, rules) {
+				keys |= 1 << index;
 			}
 		}
 	}
-	if whole || (keys == 0 && message_keys == 0) {
+	let mut stand_in_keys = 0_u32;
+	let (members, resident): (&[Member], &[Vec<u8>]) = match stand_in {
+		Some(StandIn::Message { message, .. }) => (message.members, &rules.message_resident_keys),
+		Some(StandIn::Window { members, .. }) => (members, &[]),
+		None => (&[], &[]),
+	};
+	for (index, member) in members.iter().enumerate() {
+		let key = text_bytes(line, member.key);
+		if !resident.iter().any(|name| name == key) && is_large(line, member.kind, rules) {
+			stand_in_keys |= 1 << index;
+		}
+	}
+	if whole || (keys == 0 && stand_in_keys == 0) {
 		if line.len() >= rules.min_line_bytes {
 			write_number(out, line.len());
 			return;
@@ -388,49 +412,78 @@ fn project_into(line: &[u8], rules: &SkimRules, scratch: &mut Scratch, out: &mut
 	}
 	out.push(b'[');
 	write_number(out, line.len());
-	out.extend_from_slice(b",{");
-	for (index, member) in entry.members.iter().enumerate() {
+	out.push(b',');
+	match stand_in.filter(|_| stand_in_keys != 0) {
+		Some(StandIn::Message { at, message }) => {
+			let message =
+				|out: &mut Vec<u8>| write_members(out, line, message.members, stand_in_keys, None);
+			write_members(out, line, entry.members, keys, Some((at, &message)));
+		},
+		Some(StandIn::Window { at, preserved, inner, members }) => {
+			let window = |out: &mut Vec<u8>| write_members(out, line, members, stand_in_keys, None);
+			let preserved =
+				|out: &mut Vec<u8>| write_members(out, line, preserved, 0, Some((inner, &window)));
+			write_members(out, line, entry.members, keys, Some((at, &preserved)));
+		},
+		None => write_members(out, line, entry.members, keys, None),
+	}
+	out.push(b',');
+	write_number(out, keys as usize);
+	out.push(b',');
+	write_number(out, stand_in_keys as usize);
+	out.push(b',');
+	match stand_in {
+		Some(StandIn::Message { message, .. }) => {
+			write_tool_calls(out, line, message, stand_in_keys);
+			out.push(b',');
+			write_task_usage(out, line, message, stand_in_keys);
+		},
+		_ => out.extend_from_slice(b"-1,0"),
+	}
+	out.push(b']');
+}
+
+/// The object of an entry whose members move one by one while the object
+/// itself stays.
+#[derive(Clone, Copy)]
+enum StandIn<'e, 'a> {
+	/// A message entry's `message`, member `at` of the entry.
+	Message { at: usize, message: &'e Message<'a> },
+	/// The `remoteCompaction` object of a compaction, member `inner` of the
+	/// `preserveData` object that is member `at` of the entry.
+	Window { at: usize, preserved: &'a [Member], inner: usize, members: &'a [Member] },
+}
+
+/// A member index and the writer of that member's value in place of the
+/// value's bytes.
+type NestedWriter<'w> = (usize, &'w dyn Fn(&mut Vec<u8>));
+
+/// Write the object whose members are `members`, each member `mask` states
+/// moved replaced by an empty value of its kind, and the member at the index of
+/// `nested`, when there is one, written by it.
+fn write_members(
+	out: &mut Vec<u8>,
+	line: &[u8],
+	members: &[Member],
+	mask: u32,
+	nested: Option<NestedWriter<'_>>,
+) {
+	out.push(b'{');
+	for (index, member) in members.iter().enumerate() {
 		if index > 0 {
 			out.push(b',');
 		}
 		out.extend_from_slice(&line[member.key.start - 1..=member.key.end]);
 		out.push(b':');
-		if keys & (1 << index) != 0 {
+		if mask & (1 << index) != 0 {
 			write_placeholder(out, member.kind);
-		} else if let Some((_, nested)) = message.filter(|(at, _)| *at == index && message_keys != 0)
-		{
-			out.push(b'{');
-			for (inner, field) in nested.members.iter().enumerate() {
-				if inner > 0 {
-					out.push(b',');
-				}
-				out.extend_from_slice(&line[field.key.start - 1..=field.key.end]);
-				out.push(b':');
-				if message_keys & (1 << inner) != 0 {
-					write_placeholder(out, field.kind);
-				} else {
-					out.extend_from_slice(&line[field.value.clone()]);
-				}
-			}
-			out.push(b'}');
+		} else if let Some((_, write)) = nested.filter(|(at, _)| *at == index) {
+			write(out);
 		} else {
 			out.extend_from_slice(&line[member.value.clone()]);
 		}
 	}
-	out.extend_from_slice(b"},");
-	write_number(out, keys as usize);
-	out.push(b',');
-	write_number(out, message_keys as usize);
-	out.push(b',');
-	match message {
-		Some((_, nested)) => {
-			write_tool_calls(out, line, nested, message_keys);
-			out.push(b',');
-			write_task_usage(out, line, nested, message_keys);
-		},
-		None => out.extend_from_slice(b"-1,0"),
-	}
-	out.push(b']');
+	out.push(b'}');
 }
 
 /// The number of `toolCall` blocks in the moved content of an assistant
@@ -642,10 +695,22 @@ struct Message<'a> {
 
 #[derive(Debug)]
 struct Entry<'a> {
-	members: &'a [Member],
+	members:   &'a [Member],
 	/// The index of the `message` member when its value is an object, and that
 	/// object.
-	message: Option<(usize, Message<'a>)>,
+	message:   Option<(usize, Message<'a>)>,
+	/// The index of the `preserveData` member when its value is an object, and
+	/// that object.
+	preserved: Option<(usize, Preserved<'a>)>,
+}
+
+/// A `preserveData` object, whose keys no check has read.
+#[derive(Debug)]
+struct Preserved<'a> {
+	members: &'a [Member],
+	/// The index of the `remoteCompaction` member when its value is an object,
+	/// and the members of that object, whose keys no check has read.
+	remote:  Option<(usize, &'a [Member])>,
 }
 
 fn text_bytes(line: &[u8], text: Text) -> &[u8] {
@@ -693,20 +758,34 @@ fn check_keys(line: &[u8], members: &[Member]) -> Scan<()> {
 type MessageFacts = (Option<u32>, Option<Range<usize>>);
 
 fn analyze<'s>(line: &[u8], scratch: &'s mut Scratch) -> Scan<Entry<'s>> {
-	let Scratch { entry: members, message: message_members } = scratch;
+	let Scratch {
+		entry: members,
+		message: message_members,
+		preserved: preserved_members,
+		remote: remote_members,
+	} = scratch;
 	members.clear();
 	let mut parser = Parser { bytes: line, at: 0 };
 	parser.space();
 	let mut message: Option<(usize, MessageFacts)> = None;
+	let mut preserved: Option<(usize, Option<usize>)> = None;
 	parser.object(1, |parser, key, depth| {
 		let start = parser.at;
-		let kind =
-			if !key.escaped && text_bytes(line, key) == b"message" && parser.peek() == Some(b'{') {
-				message = Some((members.len(), parse_message(parser, depth, message_members)?));
-				Kind::Object
-			} else {
-				parser.value(depth)?
-			};
+		let name = if key.escaped {
+			&[][..]
+		} else {
+			text_bytes(line, key)
+		};
+		let kind = if name == b"message" && parser.peek() == Some(b'{') {
+			message = Some((members.len(), parse_message(parser, depth, message_members)?));
+			Kind::Object
+		} else if name == b"preserveData" && parser.peek() == Some(b'{') {
+			let remote = parse_preserved(parser, depth, preserved_members, remote_members)?;
+			preserved = Some((members.len(), remote));
+			Kind::Object
+		} else {
+			parser.value(depth)?
+		};
 		members.push(Member { key, value: start..parser.at, kind });
 		Ok(())
 	})?;
@@ -715,12 +794,57 @@ fn analyze<'s>(line: &[u8], scratch: &'s mut Scratch) -> Scan<Entry<'s>> {
 		return Err(Rejected);
 	}
 	check_keys(line, members)?;
+	let remote_members: &'s [Member] = remote_members;
 	Ok(Entry {
 		members,
 		message: message.map(|(at, (tool_calls, task_usage))| {
 			(at, Message { members: message_members, tool_calls, task_usage })
 		}),
+		preserved: preserved.map(|(at, remote)| {
+			(at, Preserved {
+				members: preserved_members,
+				remote:  remote.map(|inner| (inner, remote_members)),
+			})
+		}),
 	})
+}
+
+/// Read a `preserveData` object into `members`, and the members of its
+/// `remoteCompaction` member into `remote`; return the index of that member
+/// when its value is an object. The keys are checked only when the window
+/// moves, so an entry that keeps its `preserveData` is projected whatever they
+/// are.
+fn parse_preserved(
+	parser: &mut Parser<'_>,
+	depth: u32,
+	members: &mut Vec<Member>,
+	remote: &mut Vec<Member>,
+) -> Scan<Option<usize>> {
+	let line = parser.bytes;
+	members.clear();
+	let mut at = None;
+	parser.object(depth + 1, |parser, key, depth| {
+		let start = parser.at;
+		let kind = if !key.escaped
+			&& text_bytes(line, key) == b"remoteCompaction"
+			&& parser.peek() == Some(b'{')
+		{
+			at = Some(members.len());
+			remote.clear();
+			parser.object(depth + 1, |parser, key, depth| {
+				let start = parser.at;
+				let kind = parser.value(depth)?;
+				remote.push(Member { key, value: start..parser.at, kind });
+				Ok(())
+			})?;
+			Kind::Object
+		} else {
+			parser.value(depth)?
+		};
+		members.push(Member { key, value: start..parser.at, kind });
+		Ok(())
+	})?;
+	Ok(at)
 }
 
 /// Read a message object into `members`, and return its tool calls and task
