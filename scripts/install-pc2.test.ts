@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { resolveConfigEnvReference } from "../packages/coding-agent/src/config/config-value-resolution";
 
 test("PC2 installer preserves existing data and configures credential-free references", () => {
-	const result = spawnSync("python3", [join(import.meta.dir, "install_pc2_test.py"), "-v"], {
+	const py = process.platform === "win32" ? "python" : "python3";
+	const result = spawnSync(py, [join(import.meta.dir, "install_pc2_test.py"), "-v"], {
 		timeout: 30000,
 		encoding: "utf8",
 		windowsHide: true,

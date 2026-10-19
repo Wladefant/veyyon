@@ -14,6 +14,14 @@ class PC2InstallContract(unittest.TestCase):
     def test_pinned_fork_release_uses_existing_verified_installer(self):
         with tempfile.TemporaryDirectory() as root:
             command, env = installer.install_plan("v1.2.3", Path(root) / "bin", Path(root) / "config", "install.ps1")
+            file_index = command.index("-File")
+            self.assertEqual(command[0], "powershell.exe")
+            self.assertIn("-ExecutionPolicy", command[:file_index])
+            self.assertEqual(command[command.index("-ExecutionPolicy") + 1], "Bypass")
+            self.assertIn("-NoProfile", command[:file_index])
+            self.assertIn("-NonInteractive", command[:file_index])
+            self.assertIn("-WindowStyle", command[:file_index])
+            self.assertEqual(command[command.index("-WindowStyle") + 1], "Hidden")
             self.assertEqual(command[-4:], ["-Repository", "Wladefant/veyyon", "-Ref", "v1.2.3"])
             self.assertNotIn("-NoVerify", command)
             self.assertNotIn("-Force", command)
@@ -84,6 +92,85 @@ class PC2InstallContract(unittest.TestCase):
             (binary_dir / "veyyon.exe").write_bytes(b"changed binary")
             with self.assertRaises(ValueError):
                 installer.install_plan("v1.2.3", binary_dir, config_dir, "install.ps1")
+
+    def test_interrupted_install_with_start_marker_resumes(self):
+        with tempfile.TemporaryDirectory() as root:
+            binary_dir = Path(root) / "bin"
+            config_dir = Path(root) / "config"
+            installer.record_start("v1.2.3", binary_dir, config_dir)
+            self.assertTrue((binary_dir / installer.START_MARKER).exists())
+            self.assertTrue((config_dir / installer.START_MARKER).exists())
+            (binary_dir / "veyyon.partial").write_text("partial download", encoding="utf-8")
+            command, env = installer.install_plan("v1.2.3", binary_dir, config_dir, "install.ps1")
+            self.assertTrue(len(command) > 0)
+            self.assertEqual(env["VEYYON_INSTALL_DIR"], str(binary_dir))
+            self.assertEqual(env["VEYYON_CONFIG_DIR"], str(config_dir))
+
+    def test_unrelated_binary_without_start_marker_refuses_overwrite(self):
+        with tempfile.TemporaryDirectory() as root:
+            binary_dir = Path(root) / "bin"
+            binary_dir.mkdir(parents=True)
+            (binary_dir / "veyyon.exe").write_text("unrelated binary", encoding="utf-8")
+            config_dir = Path(root) / "config"
+            with self.assertRaises(ValueError) as ctx:
+                installer.install_plan("v1.2.3", binary_dir, config_dir, "install.ps1")
+            self.assertIn("Use empty directories or this installer's verified owned directories", str(ctx.exception))
+
+    def test_mismatched_start_marker_refuses_resume(self):
+        with tempfile.TemporaryDirectory() as root:
+            binary_dir = Path(root) / "bin"
+            config_dir = Path(root) / "config"
+            installer.record_start("v1.2.0", binary_dir, config_dir)
+            (binary_dir / "veyyon.exe").write_text("staged binary", encoding="utf-8")
+            with self.assertRaises(ValueError) as ctx:
+                installer.install_plan("v1.2.3", binary_dir, config_dir, "install.ps1")
+            self.assertIn("Use empty directories or this installer's verified owned directories", str(ctx.exception))
+
+            other_config = Path(root) / "other-config"
+            with self.assertRaises(ValueError) as ctx2:
+                installer.install_plan("v1.2.0", binary_dir, other_config, "install.ps1")
+            self.assertIn("Use empty directories or this installer's verified owned directories", str(ctx2.exception))
+
+    def test_record_start_and_atomic_record_install_transaction(self):
+        with tempfile.TemporaryDirectory() as root:
+            binary_dir = Path(root) / "bin"
+            config_dir = Path(root) / "config"
+            installer.record_start("v1.2.3", binary_dir, config_dir)
+            self.assertTrue((binary_dir / installer.START_MARKER).exists())
+            self.assertTrue((config_dir / installer.START_MARKER).exists())
+
+            binary = binary_dir / "veyyon.exe"
+            binary.write_bytes(b"dummy binary contents")
+
+            replaced_targets = []
+            orig_replace = installer.os.replace
+            def spy_replace(src, dst):
+                replaced_targets.append(Path(dst).name)
+                return orig_replace(src, dst)
+
+            with patch.object(installer.os, "replace", side_effect=spy_replace):
+                installer.record_install("v1.2.3", binary_dir, config_dir)
+
+            self.assertIn(installer.MARKER, replaced_targets)
+            self.assertTrue((binary_dir / installer.MARKER).exists())
+            self.assertTrue((config_dir / installer.MARKER).exists())
+            self.assertFalse((binary_dir / installer.START_MARKER).exists())
+            self.assertFalse((config_dir / installer.START_MARKER).exists())
+            self.assertTrue(installer.owned_install("v1.2.3", binary_dir, config_dir))
+
+    def test_owned_install_handles_partial_receipt_without_raising_filenotfound(self):
+        with tempfile.TemporaryDirectory() as root:
+            binary_dir = Path(root) / "bin"
+            binary_dir.mkdir(parents=True)
+            binary = binary_dir / "veyyon.exe"
+            binary.write_bytes(b"dummy binary")
+            config_dir = Path(root) / "config"
+            config_dir.mkdir(parents=True)
+
+            receipt = {"version": "v1.2.3", "configDir": str(config_dir), "sha256": installer.binary_digest(binary_dir)}
+            installer.atomic_write_json(binary_dir / installer.MARKER, receipt)
+
+            self.assertFalse(installer.owned_install("v1.2.3", binary_dir, config_dir))
 
     def test_windows_junction_attribute_refuses_before_writes(self):
         with patch.object(Path, "lstat", return_value=SimpleNamespace(st_file_attributes=0x400, st_mode=0o040755)):

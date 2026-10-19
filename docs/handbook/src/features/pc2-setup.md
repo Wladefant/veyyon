@@ -9,6 +9,9 @@ Installation: https://github.com/Wladefant/veyyon/issues/604
 ## Prerequisites
 
 Use Windows on PC2. Install Python 3.11 or newer, Git, Tailscale and Bitwarden US through their supported installers.
+The installer wrapper invokes PowerShell with process-scoped `-ExecutionPolicy Bypass -NoProfile -NonInteractive`.
+This allows the installer to run under the Windows client default `Restricted` execution policy.
+It does not alter machine or user registry policies and does not bypass Group Policy.
 The operator must sign in to GitHub, the same tailnet and Bitwarden US on PC2.
 Authorize each external tool separately. Do not copy PC1 browser profiles or live databases.
 
@@ -39,6 +42,9 @@ A release with those changes does not exist yet. Stop before installation until 
 3. Run `python scripts/install-pc2.py --version <release-tag> --install-dir C:\VeyyonPC2\bin --config-dir C:\VeyyonPC2\state`.
 4. Read the plan. Confirm both paths are empty and belong to PC2.
 5. Repeat step 3 with `--apply`. The existing installer verifies the release checksum and never builds locally.
+The wrapper writes a start marker before binary placement.
+An interrupted installation can safely resume when rerun with the same release tag and directory parameters.
+Directories containing unrelated binaries without this installer's start marker remain protected against overwrite.
 6. Set the process variable `VEYYON_CONFIG_DIR` to `C:\VeyyonPC2\state` before each Veyyon command.
 7. Clone the reviewed private knowledge catalog into `C:\VeyyonPC2\knowledge`.
 8. Run `veyyon knowledge verify --from C:\VeyyonPC2\knowledge`.
@@ -96,10 +102,16 @@ checkpoints:
 Keep the existing Hindsight scope, mission and project tags when merging reviewed configuration.
 The setup script refuses different existing settings. An identical configuration rerun changes nothing.
 It refuses credential-bearing service URLs, symlinks and Windows junctions.
-It never deletes sessions, databases, files or configuration.
+The installer isolates configuration to the specified root directory (`VEYYON_CONFIG_DIR`) and preserves unrelated settings.
+Existing settings in the target root are parsed with PowerShell 5.1 compatibility.
+The installer adds `shellPath` while preserving all existing properties.
+It refuses unparseable or conflicting configuration rather than overwriting it.
+It never deletes sessions, databases, files or valid configuration.
+The wrapper writes an atomic start marker before binary placement.
+An interrupted installation may resume on rerun, while directories with unrelated files or mismatched markers are refused.
+On completion, both ownership receipts are committed atomically via temp files and rename, and the start marker is removed.
 An install rerun accepts only matching ownership receipts and the original binary checksum.
 It skips reinstallation and preserves existing sessions. A changed release or binary requires explicit review.
-
 ## Update and conflict procedure
 
 1. Run `veyyon knowledge export --plan ./review-plan.json`.
@@ -130,6 +142,8 @@ This known limit does not permit two active runtimes. Do not copy ownership mark
 - https://tailscale.com/docs/reference/tailscale-cli/serve: private tailnet sharing, loopback HTTP proxy, background restart behavior.
 - https://hindsight.vectorize.io/llms.txt: memory bank isolation and document-ID replacement.
 - https://hindsight.vectorize.io/developer/api/quickstart: existing API/client operations and worker lifecycle guidance.
+- https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies?view=powershell-5.1: Windows client default `Restricted` policy and process-scoped execution policy.
+- https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/convertfrom-json?view=powershell-5.1: PowerShell 5.1 `ConvertFrom-Json` without `-AsHashtable`.
 
 Not verified: PC2 installation, provider calls, service reachability, release containing all four parts, and two-PC handoff.
 Deleted: none

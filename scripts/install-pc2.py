@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 
 MARKER = ".veyyon-pc2-owner.json"
-
+START_MARKER = ".veyyon-pc2-start.json"
 
 def assert_plain_path(target):
     for parent in (target, *target.parents):
@@ -23,6 +23,24 @@ def assert_plain_path(target):
             raise ValueError("Paths must not contain symlinks, junctions or reparse points")
 
 
+def atomic_write_json(target_path, data):
+    assert_plain_path(target_path)
+    parent = target_path.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    temp_path = parent / f".tmp-{target_path.name}-{os.getpid()}"
+    try:
+        with temp_path.open("w", encoding="utf-8") as output:
+            json.dump(data, output)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temp_path, target_path)
+    finally:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+
 def binary_digest(install_dir):
     binary = install_dir / "veyyon.exe"
     assert_plain_path(binary)
@@ -32,25 +50,82 @@ def binary_digest(install_dir):
 
 def owned_install(version, install_dir, config_dir):
     marker = install_dir / MARKER
-    if not marker.exists():
+    config_marker = config_dir / MARKER
+    if not marker.exists() or not config_marker.exists():
         return False
     assert_plain_path(marker)
-    config_marker = config_dir / MARKER
     assert_plain_path(config_marker)
-    receipt = json.loads(marker.read_text(encoding="utf-8"))
+    try:
+        receipt = json.loads(marker.read_text(encoding="utf-8"))
+        config_receipt = json.loads(config_marker.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
     expected = {"version": version, "configDir": str(config_dir), "sha256": binary_digest(install_dir)}
-    if receipt != expected or json.loads(config_marker.read_text(encoding="utf-8")) != expected:
+    if receipt != expected or config_receipt != expected:
         raise ValueError("PC2 ownership receipt does not match this release and binary")
     return True
 
 
+def record_start(version, install_dir, config_dir):
+    install_dir = Path(install_dir).absolute()
+    config_dir = Path(config_dir).absolute()
+    for target in (install_dir, config_dir):
+        target.mkdir(parents=True, exist_ok=True)
+        assert_plain_path(target)
+    start_payload = {
+        "version": version,
+        "installDir": str(install_dir),
+        "configDir": str(config_dir),
+    }
+    for marker in (install_dir / START_MARKER, config_dir / START_MARKER):
+        atomic_write_json(marker, start_payload)
+
+
+def is_resumable_install(version, install_dir, config_dir):
+    expected = {"version": version, "installDir": str(install_dir), "configDir": str(config_dir)}
+    install_start = install_dir / START_MARKER
+    config_start = config_dir / START_MARKER
+
+    if not install_start.exists() and not config_start.exists():
+        return False
+
+    if install_dir.exists() and any(install_dir.iterdir()):
+        if not install_start.exists():
+            return False
+        assert_plain_path(install_start)
+        try:
+            if json.loads(install_start.read_text(encoding="utf-8")) != expected:
+                return False
+        except (json.JSONDecodeError, OSError):
+            return False
+
+    if config_dir.exists() and any(config_dir.iterdir()):
+        if not config_start.exists():
+            return False
+        assert_plain_path(config_start)
+        try:
+            if json.loads(config_start.read_text(encoding="utf-8")) != expected:
+                return False
+        except (json.JSONDecodeError, OSError):
+            return False
+
+    return True
+
+
 def record_install(version, install_dir, config_dir):
+    install_dir = Path(install_dir).absolute()
+    config_dir = Path(config_dir).absolute()
     config_dir.mkdir(parents=True, exist_ok=True)
     receipt = {"version": version, "configDir": str(config_dir), "sha256": binary_digest(install_dir)}
     for marker in (install_dir / MARKER, config_dir / MARKER):
-        assert_plain_path(marker)
-        with marker.open("x", encoding="utf-8") as output:
-            json.dump(receipt, output)
+        atomic_write_json(marker, receipt)
+    for start_marker in (install_dir / START_MARKER, config_dir / START_MARKER):
+        try:
+            if start_marker.exists():
+                assert_plain_path(start_marker)
+                start_marker.unlink()
+        except OSError:
+            pass
 
 
 def install_plan(version, install_dir, config_dir, script):
@@ -65,12 +140,13 @@ def install_plan(version, install_dir, config_dir, script):
     overrides = {"VEYYON_INSTALL_DIR": str(install_dir), "VEYYON_CONFIG_DIR": str(config_dir)}
     if owned_install(version, install_dir, config_dir):
         return [], overrides
-    for target in (install_dir, config_dir):
-        if target.exists() and any(target.iterdir()):
-            raise ValueError("Use empty directories or this installer's verified owned directories")
-    command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+    if not is_resumable_install(version, install_dir, config_dir):
+        for target in (install_dir, config_dir):
+            if target.exists() and any(target.iterdir()):
+                raise ValueError("Use empty directories or this installer's verified owned directories")
+    command = ["powershell.exe", "-ExecutionPolicy", "Bypass", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
                "-File", str(Path(script).resolve()), "-Repository", "Wladefant/veyyon", "-Ref", version]
-    return command, {"VEYYON_INSTALL_DIR": str(install_dir), "VEYYON_CONFIG_DIR": str(config_dir)}
+    return command, overrides
 
 
 def configure_pc2(config_dir, providers, gateway_url, memory_url, bank_id):
@@ -146,6 +222,7 @@ def main():
         return
     if sys.platform != "win32":
         raise ValueError("This installer targets PC2 Windows; run it on PC2")
+    record_start(args.version, Path(overrides["VEYYON_INSTALL_DIR"]), Path(overrides["VEYYON_CONFIG_DIR"]))
     subprocess.run(command, env={**os.environ, **overrides}, timeout=600, check=True,
                    creationflags=subprocess.CREATE_NO_WINDOW)
     record_install(args.version, Path(overrides["VEYYON_INSTALL_DIR"]), Path(overrides["VEYYON_CONFIG_DIR"]))

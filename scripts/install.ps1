@@ -55,6 +55,7 @@ try {
 $Repo = $Repository
 $RepoUrl = "https://github.com/$Repo.git"
 $InstallDir = if ($env:VEYYON_INSTALL_DIR) { $env:VEYYON_INSTALL_DIR } else { "$env:LOCALAPPDATA\veyyon" }
+$ConfigDir = if ($env:VEYYON_CONFIG_DIR) { $env:VEYYON_CONFIG_DIR } else { "$env:USERPROFILE\.veyyon" }
 $SrcDir = if ($env:VEYYON_SRC_DIR) { $env:VEYYON_SRC_DIR } else { "$env:USERPROFILE\.veyyon\src" }
 $BinName = "veyyon"
 $AliasName = "vey"
@@ -760,29 +761,74 @@ function Find-BashShell {
     }
 }
 
+function Convert-JsonObjectToHashtable {
+    param($InputObject)
+    if ($null -eq $InputObject) { return $null }
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        return $InputObject
+    }
+    if ($InputObject -is [System.Collections.IEnumerable] -and $InputObject -isnot [string]) {
+        $result = @()
+        foreach ($item in $InputObject) {
+            $result += ,(Convert-JsonObjectToHashtable $item)
+        }
+        return ,$result
+    }
+    if ($InputObject -is [psobject]) {
+        $hash = @{}
+        foreach ($prop in $InputObject.psobject.Properties) {
+            $hash[$prop.Name] = Convert-JsonObjectToHashtable $prop.Value
+        }
+        return $hash
+    }
+    return $InputObject
+}
+
+function ConvertFrom-JsonToHashtable {
+    param([string]$Json)
+    if ([string]::IsNullOrWhiteSpace($Json)) {
+        return @{}
+    }
+    $cmd = Get-Command ConvertFrom-Json -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Parameters.ContainsKey('AsHashtable')) {
+        return (ConvertFrom-Json -InputObject $Json -AsHashtable)
+    }
+    $parsed = ConvertFrom-Json -InputObject $Json
+    if ($null -eq $parsed) {
+        return @{}
+    }
+    return (Convert-JsonObjectToHashtable $parsed)
+}
+
 function Configure-BashShell {
+    param([string]$ConfigRoot = $ConfigDir)
     try {
+        $baseConfigDir = if ($ConfigRoot) { $ConfigRoot } elseif ($env:VEYYON_CONFIG_DIR) { $env:VEYYON_CONFIG_DIR } else { (Join-Path $env:USERPROFILE ".veyyon") }
         # Default profile agent dir. A legacy bare-root agent dir wins so we never
         # create both layouts at once (launch fails closed on that ambiguity);
         # veyyon migrates the legacy tree into profiles\default on next launch.
-        $legacyAgentDir = Join-Path $env:USERPROFILE ".veyyon\agent"
+        $legacyAgentDir = Join-Path $baseConfigDir "agent"
         if (Test-Path $legacyAgentDir) {
             $settingsDir = $legacyAgentDir
         } else {
-            $settingsDir = Join-Path $env:USERPROFILE ".veyyon\profiles\default\agent"
+            $settingsDir = Join-Path $baseConfigDir "profiles\default\agent"
         }
         $settingsFile = Join-Path $settingsDir "settings.json"
 
         # Check if settings.json already has a shellPath configured
+        $settings = @{}
         if (Test-Path $settingsFile) {
-            try {
-                $existingSettings = Get-Content $settingsFile -Raw | ConvertFrom-Json
-                if ($existingSettings.shellPath) {
-                    Write-Host "Bash shell already configured: $($existingSettings.shellPath)" -ForegroundColor Cyan
+            $rawContent = Get-Content -LiteralPath $settingsFile -Raw
+            if (-not [string]::IsNullOrWhiteSpace($rawContent)) {
+                try {
+                    $settings = ConvertFrom-JsonToHashtable -Json $rawContent
+                } catch {
+                    throw "Failed to parse existing settings from $settingsFile ($($_.Exception.Message)). Refusing to overwrite existing settings."
+                }
+                if ($settings -is [System.Collections.IDictionary] -and $settings.ContainsKey("shellPath") -and $settings["shellPath"]) {
+                    Write-Host "Bash shell already configured: $($settings["shellPath"])" -ForegroundColor Cyan
                     return
                 }
-            } catch {
-                # Invalid JSON, we'll overwrite it
             }
         }
 
@@ -794,16 +840,6 @@ function Configure-BashShell {
             # Create settings directory if needed
             if (-not (Test-Path $settingsDir)) {
                 New-Item -ItemType Directory -Force -Path $settingsDir | Out-Null
-            }
-
-            # Read existing settings or create new
-            $settings = @{}
-            if (Test-Path $settingsFile) {
-                try {
-                    $settings = Get-Content $settingsFile -Raw | ConvertFrom-Json -AsHashtable
-                } catch {
-                    $settings = @{}
-                }
             }
 
             # Set shellPath

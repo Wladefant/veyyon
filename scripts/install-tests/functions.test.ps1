@@ -1877,6 +1877,80 @@ try {
     Remove-Item -Recurse -Force $doctorDir -ErrorAction SilentlyContinue
 }
 
+# -----------------------------------------------------------------------------
+# ConvertFrom-JsonToHashtable & Configure-BashShell (PC2 / VEYYON_CONFIG_DIR)
+# -----------------------------------------------------------------------------
+Write-Host "--- ConvertFrom-JsonToHashtable"
+$jsonSample = '{"name": "test", "nested": {"key": "val", "num": 42}, "arr": [1, 2]}'
+$ht = ConvertFrom-JsonToHashtable -Json $jsonSample
+Check "ConvertFrom-JsonToHashtable produces hashtable" ($ht -is [System.Collections.IDictionary]) "True"
+Check "ConvertFrom-JsonToHashtable preserves top-level property" ($ht["name"]) "test"
+Check "ConvertFrom-JsonToHashtable produces nested hashtable" ($ht["nested"] -is [System.Collections.IDictionary]) "True"
+Check "ConvertFrom-JsonToHashtable preserves nested property" ($ht["nested"]["key"]) "val"
+Check "ConvertFrom-JsonToHashtable preserves array property" ($ht["arr"].Count) "2"
+
+$caughtInvalid = $false
+try { ConvertFrom-JsonToHashtable -Json "{bad json" } catch { $caughtInvalid = $true }
+Check "ConvertFrom-JsonToHashtable throws on invalid JSON" $caughtInvalid "True"
+
+$caughtArray = $false
+try { ConvertFrom-JsonToHashtable -Json "[1,2,3]" } catch { $caughtArray = $true }
+Check "ConvertFrom-JsonToHashtable throws on non-object JSON" $caughtArray "True"
+
+Write-Host "--- Configure-BashShell VEYYON_CONFIG_DIR"
+$testConfigDir1 = Join-Path ([System.IO.Path]::GetTempPath()) "veyyon-cfg-test-$([System.Guid]::NewGuid().ToString('N'))"
+$oldEnvConfigDir = $env:VEYYON_CONFIG_DIR
+try {
+    $env:VEYYON_CONFIG_DIR = $testConfigDir1
+    Configure-BashShell "C:\Program Files\Git\bin\bash.exe"
+    $writtenSettings = Join-Path $testConfigDir1 "settings.json"
+    Check "Configure-BashShell writes to VEYYON_CONFIG_DIR" (Test-Path $writtenSettings) "True"
+    $parsed = Get-Content -Raw $writtenSettings | ConvertFrom-Json
+    Check "Configure-BashShell sets shellPath" ($parsed.terminal.shellPath) "C:\Program Files\Git\bin\bash.exe"
+} finally {
+    $env:VEYYON_CONFIG_DIR = $oldEnvConfigDir
+    Remove-Item -Recurse -Force $testConfigDir1 -ErrorAction SilentlyContinue
+}
+
+$testConfigDir2 = Join-Path ([System.IO.Path]::GetTempPath()) "veyyon-cfg-test-$([System.Guid]::NewGuid().ToString('N'))"
+try {
+    $env:VEYYON_CONFIG_DIR = $testConfigDir2
+    New-Item -ItemType Directory -Path $testConfigDir2 -Force | Out-Null
+    $initialJson = '{"theme": "dark", "telemetry": false, "terminal": {"fontSize": 14, "fontFamily": "Consolas"}}'
+    Set-Content -Path (Join-Path $testConfigDir2 "settings.json") -Value $initialJson
+    Configure-BashShell "C:\Program Files\Git\bin\bash.exe"
+    $writtenSettings = Join-Path $testConfigDir2 "settings.json"
+    $parsed = Get-Content -Raw $writtenSettings | ConvertFrom-Json
+    Check "Configure-BashShell preserves top-level theme" ($parsed.theme) "dark"
+    Check "Configure-BashShell preserves top-level telemetry" ($parsed.telemetry) "False"
+    Check "Configure-BashShell preserves terminal.fontSize" ($parsed.terminal.fontSize) "14"
+    Check "Configure-BashShell preserves terminal.fontFamily" ($parsed.terminal.fontFamily) "Consolas"
+    Check "Configure-BashShell adds shellPath" ($parsed.terminal.shellPath) "C:\Program Files\Git\bin\bash.exe"
+} finally {
+    $env:VEYYON_CONFIG_DIR = $oldEnvConfigDir
+    Remove-Item -Recurse -Force $testConfigDir2 -ErrorAction SilentlyContinue
+}
+
+$testConfigDir3 = Join-Path ([System.IO.Path]::GetTempPath()) "veyyon-cfg-test-$([System.Guid]::NewGuid().ToString('N'))"
+try {
+    $env:VEYYON_CONFIG_DIR = $testConfigDir3
+    New-Item -ItemType Directory -Path $testConfigDir3 -Force | Out-Null
+    $corruptContent = "{corrupted json invalid"
+    Set-Content -Path (Join-Path $testConfigDir3 "settings.json") -Value $corruptContent
+    $caughtCorrupt = $false
+    try {
+        Configure-BashShell "C:\Program Files\Git\bin\bash.exe"
+    } catch {
+        $caughtCorrupt = $true
+    }
+    Check "Configure-BashShell refuses unparseable settings.json" $caughtCorrupt "True"
+    $preserved = Get-Content -Raw (Join-Path $testConfigDir3 "settings.json")
+    Check "Configure-BashShell does not overwrite unparseable settings.json" ($preserved.Trim()) ($corruptContent.Trim())
+} finally {
+    $env:VEYYON_CONFIG_DIR = $oldEnvConfigDir
+    Remove-Item -Recurse -Force $testConfigDir3 -ErrorAction SilentlyContinue
+}
+
 Write-Host ""
 # A run that recorded nothing is a broken harness, not a pass: fail closed rather
 # than report "0 passed, 0 failed" and exit 0 (mirrors functions.test.sh).
