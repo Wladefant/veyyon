@@ -148,6 +148,7 @@
 - The `OPENROUTER_API_ENDPOINT` documentation states which clients fall back to it; no user-visible change.
 - The model cache writes under `synchronous = NORMAL` in WAL mode instead of flushing the disk on every commit, so storing one provider's discovered models at startup takes 0.06–0.08 ms instead of 0.41–0.63 ms, and at most 0.87 ms instead of up to 38 ms.
 - `engine/` is grouped by concern into `members`, `plan`, `run`, `trial`, `kit`, `compare`, `harness`, `auth`, `io`, `wire` and `corpus`, and the overlay loaders and paired statistics every suite shares moved into it from the in-process backend and the DeepSWE suite.
+- Compacted history moves out of memory whatever the length of each entry's line, where entries under 1 KiB used to stay, so a resumed 148 MB session settles at 205 MB resident instead of 215 MB and peaks at 302 MB instead of 318 MB.
 - An enum setting whose configured value is not one of its members reads as the declaration's `invalid` member when one is declared, and as its default otherwise; `getInvalidValue` returns that member.
 - A setting whose configured value is not of its declared kind (a string for a boolean, `null` for an array, a non-finite number) reads as its default and is reported once; `hasDeclaredKind` states the rule.
 - `declareSettings` rejects a table in which one setting path is the parent of another, since one config key holds a value or a group of settings, not both.
