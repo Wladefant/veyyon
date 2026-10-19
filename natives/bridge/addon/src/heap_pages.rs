@@ -130,8 +130,32 @@ mod tests {
 		(resident, total)
 	}
 
+	/// The addon's initializer caps the test binary at eight arenas too, so
+	/// once the harness runs more threads than that, another test shares this
+	/// test's arena and its allocations reuse the freed blocks, faulting their
+	/// pages back in after the release. The measurement runs in a child process
+	/// that holds only this test.
 	#[test]
 	fn the_release_returns_the_pages_a_worker_thread_freed() {
+		const CHILD: &str = "VEYYON_HEAP_PAGES_TEST_CHILD";
+		if std::env::var_os(CHILD).is_none() {
+			let module = module_path!()
+				.split_once("::")
+				.map_or(module_path!(), |(_, rest)| rest);
+			let name = format!("{module}::the_release_returns_the_pages_a_worker_thread_freed");
+			let output = std::process::Command::new(std::env::current_exe().unwrap())
+				.args([name.as_str(), "--exact", "--test-threads=1"])
+				.env(CHILD, "1")
+				.output()
+				.unwrap();
+			let stdout = String::from_utf8_lossy(&output.stdout);
+			assert!(
+				output.status.success() && stdout.contains("test result: ok. 1 passed"),
+				"{stdout}{}",
+				String::from_utf8_lossy(&output.stderr)
+			);
+			return;
+		}
 		std::thread::spawn(|| {
 			let blocks: Vec<Vec<u8>> = (0..BLOCKS).map(|_| vec![1u8; BLOCK]).collect();
 			let pin = vec![1u8; BLOCK];
