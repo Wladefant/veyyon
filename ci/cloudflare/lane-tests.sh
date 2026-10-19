@@ -278,6 +278,58 @@ run_bucket() {
   else
     bucket_status=$?
   fi
+  local python_targets
+  python_targets="$(awk '
+    $1 == "CLOUDFLARE_CI_CONTRACT_TEST" {
+      runner = ""
+      path = ""
+      for (i = 2; i <= NF; i++) {
+        split($i, field, "=")
+        if (field[1] == "runner") runner = field[2]
+        if (field[1] == "path") path = field[2]
+      }
+      if (runner == "python-unittest") print path
+    }
+  ' "$bucket_log")"
+  if [[ -n "$python_targets" ]]; then
+    if (( shard_index != 1 )); then
+      echo "CLOUDFLARE_TEST_RUNNER_DEFERRED name=python-unittest shard=$shard_spec"
+    elif [[ "$python_targets" != "ci/cloudflare/test_cf_ci.py" ]]; then
+      echo "CLOUDFLARE_TEST_RUNNER_FAILED name=python-unittest reason=unmapped-target" >&2
+      bucket_status=1
+    elif ! command -v python3 >/dev/null 2>&1; then
+      echo "CLOUDFLARE_TEST_RUNNER_FAILED name=python-unittest reason=python3-unavailable" >&2
+      bucket_status=1
+    else
+      local python_log
+      python_log="$(mktemp)"
+      local python_status=0
+      if env -u CLOUDFLARE_API_TOKEN -u GITHUB_TOKEN -u VEYYON_NATIVE_CACHE_CREDENTIALS \
+        -u VEYYON_NATIVE_CACHE_WRITE_CREDENTIALS python3 -m unittest -v "$python_targets" \
+        >"$python_log" 2>&1; then
+        :
+      else
+        python_status=$?
+      fi
+      cat "$python_log" | tee -a "$bucket_log"
+      local python_counts
+      local python_parse_status=0
+      python_counts="$(python3 ci/cloudflare/cf_ci.py parse-python-summary --file "$python_log")" || python_parse_status=$?
+      if (( python_parse_status == 0 )); then
+        printf '%s\n' "$python_counts" | tee -a "$bucket_log"
+      else
+        echo "CLOUDFLARE_TEST_RUNNER_FAILED name=python-unittest reason=unparseable-output" >&2
+        python_status=1
+      fi
+      if (( python_status == 0 )); then
+        echo "1 chunks passed" | tee -a "$bucket_log"
+      else
+        echo "1 failed chunks" | tee -a "$bucket_log"
+        if (( bucket_status == 0 )); then bucket_status=$python_status; fi
+      fi
+      rm -f "$python_log"
+    fi
+  fi
   if awk '/^CLOUDFLARE_CI_TEST_SHARD_DEFERRED / { found = 1 } END { exit !found }' "$bucket_log"; then
     if (( bucket_status != 0 )); then
       echo "CLOUDFLARE_TEST_BUCKET_FAILED $mode status=$bucket_status despite deferred marker" >&2
@@ -296,28 +348,40 @@ run_bucket() {
   fi
   local bucket_junit_reports
   bucket_junit_reports="$(find "$bucket_report_dir" -type f -name '*.xml' | wc -l | tr -d '[:space:]')"
+  local bucket_junit_runs bucket_junit_skips
   read -r bucket_chunk_passes bucket_chunk_failures bucket_passes bucket_failures \
-    bucket_skips bucket_todos bucket_reported bucket_files bucket_runs bucket_summaries < <(
+    bucket_skips bucket_junit_skips bucket_todos bucket_reported bucket_files bucket_runs bucket_junit_runs bucket_summaries < <(
     awk '
       /^[[:space:]]*[0-9]+ chunks passed$/ { chunks_passed += $1 }
       /^[[:space:]]*[0-9]+ failed chunks$/ { chunks_failed += $1 }
       /^CLOUDFLARE_CI_TEST_COUNTS / {
         summaries += 1
+        runner = ""
+        for (i = 2; i <= NF; i++) {
+          split($i, field, "=")
+          if (field[1] == "runner") runner = field[2]
+        }
         for (i = 2; i <= NF; i++) {
           split($i, field, "=")
           if (field[1] == "pass") passes += field[2]
           if (field[1] == "fail") failures += field[2]
-          if (field[1] == "skip") skips += field[2]
+          if (field[1] == "skip") {
+            skips += field[2]
+            if (runner != "python-unittest") junit_skips += field[2]
+          }
           if (field[1] == "todo") todos += field[2]
           if (field[1] == "reported") reported += field[2]
           if (field[1] == "files") files += field[2]
-          if (field[1] == "runs") runs += field[2]
+          if (field[1] == "runs") {
+            runs += field[2]
+            if (runner != "python-unittest") junit_runs += field[2]
+          }
         }
       }
       END {
-        printf "%d %d %d %d %d %d %d %d %d %d\n",
-          chunks_passed, chunks_failed, passes, failures, skips, todos,
-          reported, files, runs, summaries
+        printf "%d %d %d %d %d %d %d %d %d %d %d %d\n",
+          chunks_passed, chunks_failed, passes, failures, skips, junit_skips, todos,
+          reported, files, runs, junit_runs, summaries
       }
     ' "$bucket_log"
   )
@@ -326,7 +390,7 @@ run_bucket() {
   test_passes=$((test_passes + bucket_passes))
   test_failures=$((test_failures + bucket_failures))
   test_skips=$((test_skips + bucket_skips))
-  junit_test_skips=$((junit_test_skips + bucket_skips))
+  junit_test_skips=$((junit_test_skips + bucket_junit_skips))
   test_todos=$((test_todos + bucket_todos))
   test_reported=$((test_reported + bucket_reported))
   test_files=$((test_files + bucket_files))
@@ -340,7 +404,7 @@ run_bucket() {
     (( bucket_summaries > 0 && bucket_runs > 0 && bucket_files > 0 && bucket_tests > 0 && \
        bucket_reported == bucket_tests && bucket_chunk_passes > 0 && bucket_chunk_failures == 0 && \
        bucket_passes > 0 && bucket_failures == 0 && bucket_todos == 0 && \
-       bucket_junit_reports == bucket_runs )); then
+       bucket_junit_reports == bucket_junit_runs )); then
     return 0
   fi
   if (( bucket_status != 0 )); then
@@ -350,26 +414,9 @@ run_bucket() {
   echo "CLOUDFLARE_TEST_BUCKET_FAILED $mode status=1 summaries=$bucket_summaries" >&2
   return 1
 }
-target_manifest=ci/cloudflare/lane-targets.txt
-if [[ -s "$target_manifest" ]]; then
-  # A non-empty manifest replaces every other test stage: only its listed files run. A listed
-  # file that is missing fails the runner, never a wider run. Shard 1 owns the run.
-  if (( shard_index != 1 )); then
-    echo "CLOUDFLARE_TEST_TARGETS_DEFERRED shard=$shard_spec"
-    exit 0
-  fi
-  target_list="$(node ci/cloudflare/lane-targets.mjs "$target_manifest")" || {
-    echo "CLOUDFLARE_TEST_TARGETS_INVALID manifest=$target_manifest" >&2
-    exit 1
-  }
-  mapfile -t selected_targets <<< "$target_list"
-  echo "CLOUDFLARE_TEST_TARGETS count=${#selected_targets[@]} manifest=$target_manifest"
-  run_bucket "$runner_mode" "${selected_targets[@]}"
-  exit $?
-fi
 if (( shard_index == 1 )); then
   echo "CLOUDFLARE_TEST_BUCKET_START health-worker"
-  worker_output="$(env -u CLOUDFLARE_API_TOKEN -u VEYYON_NATIVE_CACHE_CREDENTIALS -u VEYYON_NATIVE_CACHE_WRITE_CREDENTIALS node --test --test-reporter=tap ci/cloudflare/worker.test.mjs ci/cloudflare/lane-routing.test.mjs ci/cloudflare/lane-targets.test.mjs ci/cloudflare/native-cache.test.mjs 2>&1)" || {
+  worker_output="$(env -u CLOUDFLARE_API_TOKEN -u VEYYON_NATIVE_CACHE_CREDENTIALS -u VEYYON_NATIVE_CACHE_WRITE_CREDENTIALS node --test --test-reporter=tap ci/cloudflare/worker.test.mjs ci/cloudflare/lane-routing.test.mjs ci/cloudflare/native-cache.test.mjs 2>&1)" || {
     worker_status=$?
     printf '%s\n' "$worker_output"
     exit "$worker_status"
@@ -391,9 +438,9 @@ if (( shard_index == 1 )); then
   test_skips=$((test_skips + worker_skips))
   test_todos=$((test_todos + worker_todos))
   test_reported=$((test_reported + worker_tests))
-  test_files=$((test_files + 4))
+  test_files=$((test_files + 3))
   test_runs=$((test_runs + 1))
-  echo "CLOUDFLARE_TEST_BUCKET_END health-worker tests=$worker_tests pass=$worker_passes fail=$worker_failures skip=$worker_skips todo=$worker_todos cancelled=$worker_cancelled files=4 runs=1"
+  echo "CLOUDFLARE_TEST_BUCKET_END health-worker tests=$worker_tests pass=$worker_passes fail=$worker_failures skip=$worker_skips todo=$worker_todos cancelled=$worker_cancelled files=3 runs=1"
   if (( worker_tests == 0 || worker_tests != worker_passes + worker_failures + worker_skips + worker_todos || \
         worker_passes == 0 || worker_failures != 0 || worker_skips != 0 || worker_todos != 0 || worker_cancelled != 0 )); then
     echo 'CLOUDFLARE_TEST_BUCKET_FAILED health-worker summary missing, empty, or non-green' >&2

@@ -26,7 +26,11 @@ import {
 	sweepStaleTempDirs,
 	TEST_TEMP_DIR_PREFIXES,
 } from "../packages/utils/test/helpers/temp-dir-janitor";
-import { inspectAffectedWorkspaceSelection, workingTreeDrift } from "./affected-workspace-tests";
+import {
+	ciContractTestsForPaths,
+	inspectAffectedWorkspaceSelection,
+	workingTreeDrift,
+} from "./affected-workspace-tests";
 import { isCI } from "./ci-signal";
 import { ensureToolViewsGenerated } from "./ensure-tool-views";
 
@@ -2083,17 +2087,27 @@ async function relatedTestCommands(baseSha: string): Promise<TestCommand[]> {
 			selectedMembers: inspection.selectedMembers,
 		})}`,
 	);
-	if (inspection.selectedMembers.length === 0) failClosed("selector selected no workspace member");
+	const contractTargets = ciContractTestsForPaths(inspection.changedPaths);
+	for (const target of contractTargets) {
+		console.log(`CLOUDFLARE_CI_CONTRACT_TEST runner=${target.runner} path=${target.path}`);
+	}
 	const owned = [
 		...(await commandsForMode("workspace")),
 		...(await commandsForMode("native")),
 		...(await commandsForMode("coding-agent-heavy")),
 	];
-	return inspection.selectedMembers.flatMap(member => {
+	const workspaceCommands = inspection.selectedMembers.flatMap(member => {
 		const commands = owned.filter(command => command.cwd === member);
 		if (commands.length === 0) failClosed(`selected member has no owning test bucket: ${member}`);
 		return commands;
 	});
+	const bunContractTargets = contractTargets
+		.filter(target => target.runner === "bun")
+		.map(target => target.path);
+	if (inspection.selectedMembers.length === 0 && bunContractTargets.length === 0) {
+		failClosed("selector selected no workspace member or Bun contract test");
+	}
+	return [...workspaceCommands, ...explicitTestCommands(bunContractTargets)];
 }
 
 // Skipped when imported (e.g. by the runner's own unit tests), where

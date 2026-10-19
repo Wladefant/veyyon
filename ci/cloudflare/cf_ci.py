@@ -13,7 +13,6 @@ import json
 import os
 from pathlib import Path
 import re
-import subprocess
 import sys
 import time
 import urllib.error
@@ -35,45 +34,161 @@ class BuildError(RuntimeError):
     pass
 
 
+def _parse_count_line(line: str, marker: str, required: tuple[str, ...]) -> Dict[str, int]:
+    prefix = f"{marker} "
+    if not line.startswith(prefix):
+        raise ValueError(f"Malformed {marker} record")
+    counts: Dict[str, int] = {}
+    runner_seen = False
+    for token in line[len(prefix) :].split():
+        name, separator, value = token.partition("=")
+        if not separator:
+            raise ValueError(f"Malformed {marker} record")
+        if name == "runner":
+            if runner_seen or value not in ("bun", "python-unittest"):
+                raise ValueError(f"Malformed {marker} runner")
+            runner_seen = True
+            continue
+        if (
+            name not in required
+            or name in counts
+            or not value.isascii()
+            or not value.isdigit()
+        ):
+            raise ValueError(f"Malformed {marker} record")
+        counts[name] = int(value)
+    if set(counts) != set(required):
+        raise ValueError(f"Malformed {marker} record: required fields are missing")
+    return counts
+
+
+def _validated_counts(counts: Dict[str, int], chunks: int) -> Dict[str, int]:
+    if counts["tests"] != counts["pass"] + counts["fail"] + counts["skip"] + counts["todo"]:
+        raise ValueError("Test summary has inconsistent totals")
+    if counts["reported"] != counts["tests"]:
+        raise ValueError("Test summary reported count does not match tests")
+    if counts["files"] < 1 or counts["runs"] < 1 or chunks < 1:
+        raise ValueError("Test summary has invalid file, run, or chunk count")
+    return {
+        "pass": counts["pass"],
+        "fail": counts["fail"],
+        "skip": counts["skip"],
+        "todo": counts["todo"],
+        "total": counts["tests"],
+        "chunks": chunks,
+    }
+
+
 def parse_bun_summary(log: str) -> Dict[str, int]:
-    """Parse Bun test totals from build log, failing closed on missing or malformed counts.
+    """Parse the Cloudflare lane's final summary or its targeted-runner records."""
+    summary_lines = [line for line in log.splitlines() if line.startswith("CLOUDFLARE_TEST_SUMMARY ")]
+    run_lines = [line for line in log.splitlines() if line.startswith("CLOUDFLARE_CI_TEST_COUNTS ")]
+    if len(summary_lines) > 1:
+        raise ValueError("Bun test summary is ambiguous: expected one lane summary")
 
-    Looks for CLOUDFLARE_TEST_TOTALS first, then falls back to Bun's runner lines.
-    Fails closed (raises ValueError) if neither format is found or numbers are missing.
-    """
-    totals = re.findall(
-        r"CLOUDFLARE_TEST_TOTALS\s+pass=(\d+)\s+fail=(\d+)\s+skip=(\d+)\s+todo=(\d+)\s+total=(\d+)\s+chunks=(\d+)",
-        log,
+    run_counts = [
+        _parse_count_line(
+            line,
+            "CLOUDFLARE_CI_TEST_COUNTS",
+            ("pass", "fail", "skip", "todo", "tests", "reported", "files", "runs"),
+        )
+        for line in run_lines
+    ]
+    for counts in run_counts:
+        _validated_counts(counts, counts["runs"])
+
+    if summary_lines:
+        counts = _parse_count_line(
+            summary_lines[0],
+            "CLOUDFLARE_TEST_SUMMARY",
+            (
+                "pass",
+                "fail",
+                "skip",
+                "todo",
+                "tests",
+                "reported",
+                "files",
+                "runs",
+                "chunks_pass",
+                "chunks_fail",
+            ),
+        )
+        return _validated_counts(counts, counts["chunks_pass"] + counts["chunks_fail"])
+
+    if run_counts:
+        total_counts = {
+            name: sum(counts[name] for counts in run_counts)
+            for name in ("pass", "fail", "skip", "todo", "tests", "reported", "files", "runs")
+        }
+        return _validated_counts(total_counts, total_counts["runs"])
+
+    raise ValueError(
+        "Bun test summary missing or malformed: expected CLOUDFLARE_TEST_SUMMARY "
+        "or CLOUDFLARE_CI_TEST_COUNTS"
     )
-    if totals:
-        if len(totals) != 1:
-            raise ValueError("Bun test summary is ambiguous: expected exactly one aggregate summary")
-        p, f, s, todo, total, chunks = map(int, totals[0])
-        if chunks < 1 or p + f + s + todo != total:
-            raise ValueError("Bun test summary has inconsistent totals or chunk count")
-        return {"pass": p, "fail": f, "skip": s, "todo": todo, "total": total, "chunks": chunks}
 
-    if "CLOUDFLARE_TEST_TOTALS" in log:
-        raise ValueError("Bun test summary is malformed or truncated")
 
-    clean = re.sub(r"\x1b\[[0-9;]*m", "", log)
-    summary_rows = re.findall(r"^\s*(\d+)\s+(pass|fail|skip)\s*$", clean, re.MULTILINE)
-    if summary_rows:
-        if len(summary_rows) < 2 or not any(kind == "pass" for _, kind in summary_rows) or not any(kind == "fail" for _, kind in summary_rows):
-            raise ValueError("Bun test summary is incomplete")
-        if "Ran " not in clean:
-            raise ValueError("Bun test summary is truncated: missing final Ran line")
-        ran = re.findall(r"^Ran\s+(\d+)\s+tests?\s+across\s+(\d+)\s+files?\.", clean, re.MULTILINE)
-        if len(ran) != 1:
-            raise ValueError("Bun test summary is ambiguous or missing its complete Ran line")
-        counts = {kind: int(value) for value, kind in summary_rows}
-        p, f, s = counts.get("pass", 0), counts.get("fail", 0), counts.get("skip", 0)
-        total = p + f + s
-        if total != int(ran[0][0]):
-            raise ValueError("Bun test summary totals do not match the Ran line")
-        return {"pass": p, "fail": f, "skip": s, "todo": 0, "total": total, "chunks": 1}
+def parse_python_unittest_summary(log: str) -> Dict[str, int]:
+    """Parse unittest's Ran/OK/FAILED output, including skipped test cases."""
+    ran = re.findall(r"^Ran ([0-9]+) tests? in [0-9.]+s$", log, flags=re.MULTILINE)
+    if len(ran) != 1 or int(ran[0]) == 0:
+        raise ValueError("Python unittest output has no positive, unique Ran count")
 
-    raise ValueError("Bun test summary missing or malformed in log: expected CLOUDFLARE_TEST_TOTALS or standard pass/fail summary")
+    status_lines = [
+        line.strip()
+        for line in log.splitlines()
+        if line.strip() == "OK"
+        or line.strip().startswith("OK (")
+        or line.strip() == "FAILED"
+        or line.strip().startswith("FAILED (")
+    ]
+    if len(status_lines) != 1:
+        raise ValueError("Python unittest output has no unique OK or FAILED summary")
+
+    total = int(ran[0])
+    status = status_lines[0]
+    failures = errors = skipped = 0
+    if status == "OK":
+        pass
+    elif status.startswith("OK ("):
+        match = re.fullmatch(r"OK \(skipped=([0-9]+)\)", status)
+        if not match:
+            raise ValueError("Python unittest OK summary is malformed")
+        skipped = int(match.group(1))
+    elif status.startswith("FAILED ("):
+        match = re.fullmatch(
+            r"FAILED \((?:failures=([0-9]+)(?:, )?)?(?:errors=([0-9]+)(?:, )?)?(?:skipped=([0-9]+))?\)",
+            status,
+        )
+        if not match or not any(value is not None for value in match.groups()):
+            raise ValueError("Python unittest FAILED summary is malformed")
+        failures, errors, skipped = (int(value or 0) for value in match.groups())
+    else:
+        raise ValueError("Python unittest output is not a recognized success or failure")
+
+    failed = failures + errors
+    passed = total - failed - skipped
+    if passed < 0 or (status.startswith("OK") and failed != 0) or (status.startswith("FAILED") and failed == 0):
+        raise ValueError("Python unittest summary counts are inconsistent")
+    return {
+        "pass": passed,
+        "fail": failed,
+        "skip": skipped,
+        "todo": 0,
+        "tests": total,
+        "reported": total,
+        "files": 1,
+        "runs": 1,
+    }
+
+
+def format_python_unittest_counts(counts: Dict[str, int]) -> str:
+    return (
+        "CLOUDFLARE_CI_TEST_COUNTS runner=python-unittest "
+        f"pass={counts['pass']} fail={counts['fail']} skip={counts['skip']} todo={counts['todo']} "
+        f"tests={counts['tests']} reported={counts['reported']} files={counts['files']} runs={counts['runs']}"
+    )
 
 
 def extract_exact_head(log: str) -> Optional[str]:
@@ -226,6 +341,8 @@ def parse_cli_args(args: Optional[List[str]] = None) -> argparse.Namespace:
 
     p_parse = sub.add_parser("parse-summary", help="Parse Bun test totals from log text or file")
     p_parse.add_argument("--file", help="Path to log file (reads stdin if omitted)")
+    p_parse_python = sub.add_parser("parse-python-summary", help="Parse Python unittest output to lane counts")
+    p_parse_python.add_argument("--file", help="Path to unittest log (reads stdin if omitted)")
 
     p_status = sub.add_parser("report-status", help="Publish GitHub commit status bound to exact SHA")
     p_status.add_argument("--sha", required=True, help="Exact 40-char commit SHA")
@@ -257,6 +374,14 @@ def main(args: Optional[List[str]] = None) -> int:
             return 0 if counts.get("fail", 0) == 0 and counts.get("pass", 0) > 0 else 1
         except Exception as e:
             sys.stderr.write(f"ERROR: {e}\n")
+            return 1
+    if ns.subcommand == "parse-python-summary":
+        content = Path(ns.file).read_text(encoding="utf-8") if ns.file else sys.stdin.read()
+        try:
+            print(format_python_unittest_counts(parse_python_unittest_summary(content)))
+            return 0
+        except Exception as error:
+            sys.stderr.write(f"ERROR: {error}\n")
             return 1
 
     if ns.subcommand == "report-status":

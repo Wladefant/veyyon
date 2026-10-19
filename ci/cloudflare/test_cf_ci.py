@@ -25,6 +25,7 @@ from cf_ci import (
     CheckoutError,
     extract_exact_head,
     parse_bun_summary,
+    parse_python_unittest_summary,
     publish_github_commit_status,
     validate_exact_head,
 )
@@ -176,69 +177,94 @@ class TestNightlyBuildReceiptDeduplication(unittest.TestCase):
         self.assertIn("build_uuid=api-build-1", output)
 
 class TestCfCiBunSummaryParser(unittest.TestCase):
+    def test_parses_the_actual_lane_summary(self) -> None:
+        log = (
+            "CLOUDFLARE_TEST_SUMMARY pass=31759 fail=0 skip=16 todo=2 tests=31777 "
+            "reported=31777 files=4 runs=12 chunks_pass=12 chunks_fail=0\n"
+        )
+        self.assertEqual(
+            parse_bun_summary(log),
+            {"pass": 31759, "fail": 0, "skip": 16, "todo": 2, "total": 31777, "chunks": 12},
+        )
 
-
-    def test_parse_cloudflare_totals_line(self) -> None:
-        log = """
-bun test v1.4.0 (34cbb9a40)
-CLOUDFLARE_TEST_TOTALS pass=31759 fail=0 skip=16 todo=2 total=31777 chunks=12
-CLOUDFLARE_LANE_SUCCESS=1
-"""
-        counts = parse_bun_summary(log)
-        self.assertEqual(counts["pass"], 31759)
-        self.assertEqual(counts["fail"], 0)
-        self.assertEqual(counts["skip"], 16)
-        self.assertEqual(counts["todo"], 2)
-        self.assertEqual(counts["total"], 31777)
-
-    def test_parse_standard_bun_summary_lines(self) -> None:
-        log = """
- 36 pass
- 2 fail
- 3 skip
-Ran 41 tests across 4 files. [179.00ms]
-"""
-        counts = parse_bun_summary(log)
-        self.assertEqual(counts["pass"], 36)
-        self.assertEqual(counts["fail"], 2)
-        self.assertEqual(counts["skip"], 3)
-        self.assertEqual(counts["total"], 41)
+    def test_aggregates_actual_targeted_runner_records(self) -> None:
+        log = (
+            "CLOUDFLARE_CI_TEST_COUNTS pass=2 fail=0 skip=1 todo=0 tests=3 reported=3 files=1 runs=1\n"
+            "CLOUDFLARE_CI_TEST_COUNTS pass=4 fail=0 skip=0 todo=0 tests=4 reported=4 files=2 runs=1\n"
+            "CLOUDFLARE_CI_TEST_COUNTS runner=python-unittest pass=1 fail=0 skip=1 todo=0 "
+            "tests=2 reported=2 files=1 runs=1\n"
+        )
+        self.assertEqual(
+            parse_bun_summary(log),
+            {"pass": 7, "fail": 0, "skip": 2, "todo": 0, "total": 9, "chunks": 3},
+        )
 
     def test_rejects_inconsistent_declared_total(self) -> None:
         with self.assertRaisesRegex(ValueError, "inconsistent"):
             parse_bun_summary(
-                "CLOUDFLARE_TEST_TOTALS pass=5 fail=0 skip=0 todo=0 total=9 chunks=1\n"
+                "CLOUDFLARE_TEST_SUMMARY pass=5 fail=0 skip=0 todo=0 tests=9 reported=9 "
+                "files=1 runs=1 chunks_pass=1 chunks_fail=0\n"
             )
 
-    def test_rejects_multiple_or_truncated_aggregate_summaries(self) -> None:
-        line = "CLOUDFLARE_TEST_TOTALS pass=5 fail=0 skip=0 todo=0 total=5 chunks=1\n"
+    def test_rejects_multiple_or_truncated_lane_summaries(self) -> None:
+        line = (
+            "CLOUDFLARE_TEST_SUMMARY pass=5 fail=0 skip=0 todo=0 tests=5 reported=5 "
+            "files=1 runs=1 chunks_pass=1 chunks_fail=0\n"
+        )
         with self.assertRaisesRegex(ValueError, "ambiguous"):
             parse_bun_summary(line + line)
-        with self.assertRaisesRegex(ValueError, "truncated|malformed"):
-            parse_bun_summary("CLOUDFLARE_TEST_TOTALS pass=5 fail=0")
+        with self.assertRaisesRegex(ValueError, "Malformed"):
+            parse_bun_summary("CLOUDFLARE_TEST_SUMMARY pass=5 fail=0")
 
-    def test_rejects_multiple_standard_run_summaries(self) -> None:
-        run = " 5 pass\n 0 fail\nRan 5 tests across 1 file.\n"
-        with self.assertRaisesRegex(ValueError, "ambiguous"):
-            parse_bun_summary(run + run)
+    def test_rejects_malformed_targeted_runner_records(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Malformed"):
+            parse_bun_summary(
+                "CLOUDFLARE_CI_TEST_COUNTS pass=5 fail=0 skip=0 todo=0 tests=5 reported=5\n"
+            )
 
-    def test_parse_bun_summary_with_ansi_escapes(self) -> None:
-        log = "\x1b[32m 42 pass\x1b[0m\n\x1b[31m 0 fail\x1b[0m\nRan 42 tests across 3 files.\n"
-        counts = parse_bun_summary(log)
-        self.assertEqual(counts["pass"], 42)
-        self.assertEqual(counts["fail"], 0)
-        self.assertEqual(counts["skip"], 0)
-        self.assertEqual(counts["total"], 42)
-
-    def test_fails_closed_on_missing_summary(self) -> None:
-        log = "Compilation error occurred before tests started\nexit code 1"
-        with self.assertRaises(ValueError) as ctx:
-            parse_bun_summary(log)
-        self.assertIn("missing or malformed", str(ctx.exception).lower())
+    def test_fails_closed_when_actual_lane_summary_is_missing(self) -> None:
+        with self.assertRaisesRegex(ValueError, "missing or malformed"):
+            parse_bun_summary("Compilation error occurred before tests started\nexit code 1")
 
     def test_fails_closed_on_empty_log(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "missing or malformed"):
             parse_bun_summary("")
+class TestPythonUnittestSummaryParser(unittest.TestCase):
+    def test_parses_success_and_counts_skips(self) -> None:
+        log = "Ran 3 tests in 0.004s\n\nOK (skipped=1)\n"
+        self.assertEqual(
+            parse_python_unittest_summary(log),
+            {
+                "pass": 2,
+                "fail": 0,
+                "skip": 1,
+                "todo": 0,
+                "tests": 3,
+                "reported": 3,
+                "files": 1,
+                "runs": 1,
+            },
+        )
+
+    def test_parses_failed_tests_and_skips(self) -> None:
+        log = "Ran 4 tests in 0.010s\n\nFAILED (failures=1, errors=1, skipped=1)\n"
+        self.assertEqual(
+            parse_python_unittest_summary(log),
+            {
+                "pass": 1,
+                "fail": 2,
+                "skip": 1,
+                "todo": 0,
+                "tests": 4,
+                "reported": 4,
+                "files": 1,
+                "runs": 1,
+            },
+        )
+
+    def test_rejects_unparsable_output(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Ran count"):
+            parse_python_unittest_summary("Compilation error; tests did not start\n")
 
 
 class TestCfCiExactHeadValidation(unittest.TestCase):

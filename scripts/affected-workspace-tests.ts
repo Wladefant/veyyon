@@ -330,10 +330,92 @@ const LOCKFILE_BASENAMES: Record<string, true> = {
 	"go.sum": true,
 };
 
+export type CiContractTestRunner = "bun" | "node" | "python-unittest";
+
+export interface CiContractTestTarget {
+	runner: CiContractTestRunner;
+	path: string;
+}
+
+interface CiContractTestRule {
+	matches: (file: string) => boolean;
+	targets: (file: string) => readonly CiContractTestTarget[];
+}
+
+const ciContractTargets = (
+	runner: CiContractTestRunner,
+	paths: readonly string[],
+): CiContractTestTarget[] => paths.map(path => ({ runner, path }));
+
+/** Contract tests for host/runner control files that have no workspace import owner. */
+const CI_CONTRACT_TEST_MAP: readonly CiContractTestRule[] = [
+	{
+		matches: file => file === "scripts/ci-test-ts.ts" || file === "scripts/affected-workspace-tests.ts",
+		targets: () =>
+			ciContractTargets("bun", [
+				"scripts/affected-workspace-selection-keeps-safe-coverage.test.ts",
+				"scripts/ci-test-concurrency-default.test.ts",
+			]),
+	},
+	{
+		matches: file => file === "scripts/workspace-layout.ts",
+		targets: () => ciContractTargets("bun", ["scripts/workspace-dependency-graph.test.ts"]),
+	},
+	{
+		matches: file => file === "scripts/gen-root-help-summaries.ts",
+		targets: () =>
+			ciContractTargets("bun", [
+				"packages/coding-agent/test/root-help-summaries-mirror-command-statics.test.ts",
+			]),
+	},
+	{
+		matches: file => file.startsWith("scripts/test-sandbox/"),
+		targets: () => ciContractTargets("bun", ["scripts/test-sandbox/rung-contract.test.ts"]),
+	},
+	{
+		matches: file => file.startsWith("scripts/") && /\.test\.[cm]?[jt]sx?$/i.test(file),
+		targets: file => ciContractTargets("bun", [file]),
+	},
+	{
+		matches: file => file.startsWith("ci/cloudflare/"),
+		targets: file => [
+			...ciContractTargets("bun", ["scripts/affected-workspace-selection-keeps-safe-coverage.test.ts"]),
+			...ciContractTargets("node", [
+				"ci/cloudflare/worker.test.mjs",
+				"ci/cloudflare/lane-routing.test.mjs",
+				"ci/cloudflare/native-cache.test.mjs",
+			]),
+			...(["ci/cloudflare/cf_ci.py", "ci/cloudflare/dispatch_nightly.py", "ci/cloudflare/test_cf_ci.py"].includes(file)
+				? ciContractTargets("python-unittest", ["ci/cloudflare/test_cf_ci.py"])
+				: []),
+		],
+	},
+];
+
+export function ciContractTestsForPaths(paths: readonly string[]): CiContractTestTarget[] {
+	const targets = new Map<string, CiContractTestTarget>();
+	for (const rawPath of paths) {
+		const file = normalizedGitPath(rawPath);
+		if (!file) continue;
+		for (const rule of CI_CONTRACT_TEST_MAP) {
+			if (!rule.matches(file)) continue;
+			for (const target of rule.targets(file)) {
+				targets.set(`${target.runner}:${target.path}`, target);
+			}
+		}
+	}
+	return [...targets.values()];
+}
+
+function isCiContractOwnedPath(file: string): boolean {
+	return CI_CONTRACT_TEST_MAP.some(rule => rule.matches(file));
+}
+
 /** Return the conservative all-mode reason for a changed path, if one applies. */
 export function fullTriggerReason(file: string): string | undefined {
 	const normalized = normalizedGitPath(file);
 	if (!normalized) return "changed path is not a safe repository-relative path";
+	if (isCiContractOwnedPath(normalized)) return undefined;
 	if (normalized === "package.json") return "root package.json can change workspace membership or shared dependencies";
 	if (Object.hasOwn(LOCKFILE_BASENAMES, nodePath.posix.basename(normalized))) {
 		return "lockfile changes affect dependency resolution across the workspace";
@@ -841,7 +923,7 @@ function isAlwaysCoveredPath(file: string): boolean {
 	return (
 		file.startsWith("docs/") ||
 		/^\w[^/]*\.(?:md|mdx)$/i.test(file) ||
-		(file.startsWith("scripts/") && /\.test\.[cm]?[jt]sx?$/i.test(file))
+		isCiContractOwnedPath(file)
 	);
 }
 

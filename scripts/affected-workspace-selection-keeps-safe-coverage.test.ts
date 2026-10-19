@@ -3,6 +3,7 @@ import {
 	AFFECTED_DYNAMIC_IMPORT_LOADER_FILES,
 	AFFECTED_SELECTOR_ID,
 	buildWorkspaceGraphWithImports,
+	ciContractTestsForPaths,
 	fullTriggerReason,
 	inspectAffectedWorkspaceSelection,
 	parseGitNameStatus,
@@ -305,8 +306,6 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 			"bun.lock",
 			"packages/shared/tsconfig.json",
 			"contracts/model/src/model.ts",
-			"scripts/ci-test-ts.ts",
-			"ci/cloudflare/lane-tests.sh",
 			".github/workflows/ci.yml",
 			"natives/text/keys/src/lib.rs",
 		]) {
@@ -314,6 +313,13 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 			expect(
 				selectAffectedWorkspaceMembers([{ status: "M", paths: [file] }], knownGraph, knownGraph).mode,
 			).toBe("full");
+		}
+		for (const file of ["scripts/ci-test-ts.ts", "ci/cloudflare/lane-tests.sh"]) {
+			expect(fullTriggerReason(file)).toBeUndefined();
+			expect(
+				selectAffectedWorkspaceMembers([{ status: "M", paths: [file] }], knownGraph, knownGraph),
+			).toMatchObject({ mode: "affected", selectedMembers: [] });
+			expect(ciContractTestsForPaths([file]).length).toBeGreaterThan(0);
 		}
 		expect(
 			selectAffectedWorkspaceMembers(
@@ -330,6 +336,47 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 		expect(documentation).toMatchObject({ mode: "affected", selectedMembers: [] });
 	});
 
+	it("keeps changed script tests in a mixed workspace selection", () => {
+		const knownGraph = basicGraph();
+		const scriptTest = "scripts/ci-test-concurrency-default.test.ts";
+		const selection = selectAffectedWorkspaceMembers(
+			[{ status: "M", paths: ["packages/app/src/app.ts", scriptTest] }],
+			knownGraph,
+			knownGraph,
+		);
+
+		expect(selection).toMatchObject({ mode: "affected", selectedMembers: ["packages/app"] });
+		expect(ciContractTestsForPaths(selection.changedPaths)).toContainEqual({
+			runner: "bun",
+			path: scriptTest,
+		});
+	});
+
+	it("maps runner changes to exact contract tests, not the scripts suite", () => {
+		expect(ciContractTestsForPaths(["scripts/ci-test-ts.ts"])).toEqual([
+			{ runner: "bun", path: "scripts/affected-workspace-selection-keeps-safe-coverage.test.ts" },
+			{ runner: "bun", path: "scripts/ci-test-concurrency-default.test.ts" },
+		]);
+	});
+
+	it("maps Cloudflare source paths to lane tests and Python adapter changes to unittest", () => {
+		const targets = ciContractTestsForPaths([
+			"ci/cloudflare/cf_ci.py",
+			"ci/cloudflare/lane-routing.mjs",
+		]);
+		expect(targets).toContainEqual({
+			runner: "python-unittest",
+			path: "ci/cloudflare/test_cf_ci.py",
+		});
+		expect(targets).toContainEqual({
+			runner: "node",
+			path: "ci/cloudflare/lane-routing.test.mjs",
+		});
+		expect(targets).toContainEqual({
+			runner: "bun",
+			path: "scripts/affected-workspace-selection-keeps-safe-coverage.test.ts",
+		});
+	});
 	it("treats exact lockfile names as full triggers and does not match names that only contain lock", () => {
 		for (const file of ["bun.lock", "packages/app/yarn.lock", "Cargo.lock", "go.sum"]) {
 			expect(fullTriggerReason(file)).toContain("lockfile");
