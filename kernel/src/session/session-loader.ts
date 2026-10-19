@@ -525,10 +525,10 @@ class FileLineWindow {
  * What the skim of a load that moves compacted history to disk reports whole and what it projects
  * (see `skimSessionFile`): the header and every entry kind the load keeps in memory are whole, and
  * the title slot and the header line are read as a streamed load reads its first lines. A
- * compaction is projected with its server-side window moved, which the load reads back in full
- * when no later compaction summarized it. One skim returns about `outputBytes` of output, and the
- * load parses it before it reads the next, so it holds that much of the skim at a time rather than
- * the skim of the whole file.
+ * compaction is projected with its summary and its server-side window moved, which the load reads
+ * back in full when no later compaction summarized it. One skim returns about `outputBytes` of
+ * output, and the load parses it before it reads the next, so it holds that much of the skim at a
+ * time rather than the skim of the whole file.
  */
 const SKIM_RULES: Omit<SessionSkimRules, "maxLineBytes"> = {
 	...COLD_FIELD_RULES,

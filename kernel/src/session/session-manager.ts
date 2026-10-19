@@ -1321,8 +1321,8 @@ export class SessionManager {
 	 * The live context is the active branch from the keep boundary of the compaction the context
 	 * applies on ({@link compactedHistoryEnd}), that compaction, and every entry on the branch whose
 	 * kind the settings walk of each context build reads ({@link RESIDENT_SETTINGS_ENTRY_TYPES}).
-	 * Every other compaction moves its server-side window alone. Everything else, including other
-	 * branches and every {@link RECORD_ONLY_ENTRY_TYPES} entry, reads back on use.
+	 * Every other compaction moves its summary and its server-side window alone. Everything else,
+	 * including other branches and every {@link RECORD_ONLY_ENTRY_TYPES} entry, reads back on use.
 	 */
 	#coolUnreachablePayloads(): void {
 		const sessionFile = this.#sessionFile;

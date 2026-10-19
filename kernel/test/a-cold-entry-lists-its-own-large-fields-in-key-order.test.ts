@@ -17,13 +17,13 @@ import { isRecord } from "@veyyon/utils/type-guards";
  * The class this closes: over generated entries, message, compaction and other, with fields in
  * random order and each value small, long, an object or null, the cooled fields are exactly the own
  * large fields in key order, each held behind an accessor and every other field held as a value, a
- * message's `usage` stays a value whatever its size, a compaction moves only the large members of
- * its server-side window record and keeps every other field, entries with the same cooled fields
- * share one list and no list is shared between a message and a window, the entry, its stand-in and
- * each copy on the way to it keep their key order, the objects the entry held before it cooled are
- * never altered, and every entry serializes back to its line. Fields an entry inherits are neither
- * moved nor copied onto the stand-in. An assignment anywhere on the way to a stand-in reads the
- * entry back first.
+ * message's `usage` stays a value whatever its size, a compaction moves its summary when large and
+ * the large members of its server-side window record and keeps every other field, entries with the
+ * same cooled fields share one list and no list is shared between a message and a window, the entry,
+ * its stand-in and each copy on the way to it keep their key order, the objects the entry held
+ * before it cooled are never altered, and every entry serializes back to its line. Fields an entry
+ * inherits are neither moved nor copied onto the stand-in. An assignment anywhere on the way to a
+ * stand-in reads the entry back first.
  *
  * What it does NOT catch: blob references, which the generator never writes, and the read-back of a
  * line whose bytes changed under the handle; the session manager suites cover both.
@@ -44,6 +44,9 @@ function mulberry32(seed: number): () => number {
 const FIELD_NAMES = ["alpha", "beta", "gamma", "delta", "epsilon"];
 const MESSAGE_FIELD_NAMES = [...FIELD_NAMES, "usage"];
 const WINDOW_FIELD_NAMES = [...FIELD_NAMES, "window"];
+/** A compaction's fields: the ones every entry may have, and the summary, the one that moves. */
+const COMPACTION_FIELD_NAMES = [...FIELD_NAMES, "summary"];
+const COMPACTION_MOVED = new Set(["summary"]);
 const LONG = "x".repeat(MIN_COLD_STRING_LENGTH);
 const ENTRY_RESIDENT = new Set(["type", "id", "parentId", "timestamp"]);
 const MESSAGE_ENTRY_RESIDENT = new Set([...ENTRY_RESIDENT, "message"]);
@@ -60,6 +63,11 @@ function isLargeValue(value: unknown): boolean {
 /** The own fields of `record` outside `resident` that cooling moves, in key order. */
 function expectedLarge(record: Record<string, unknown>, resident: ReadonlySet<string>): string[] {
 	return Object.keys(record).filter(key => !resident.has(key) && isLargeValue(record[key]));
+}
+
+/** The own fields of `record` in `moved` that cooling moves, in key order. */
+function expectedMoved(record: Record<string, unknown>, moved: ReadonlySet<string>): string[] {
+	return Object.keys(record).filter(key => moved.has(key) && isLargeValue(record[key]));
 }
 
 /** The own keys of `target` held behind an accessor rather than as a value, in key order. */
@@ -135,14 +143,16 @@ function generate(seed: number, count: number): Record<string, unknown>[] {
 				withField(random, preserveData, REMOTE_COMPACTION_PRESERVE_KEY, remote, () =>
 					randomFields(random, preserveData),
 				);
-				withField(random, entry, "preserveData", preserveData, () => randomFields(random, entry));
+				withField(random, entry, "preserveData", preserveData, () =>
+					randomFields(random, entry, COMPACTION_FIELD_NAMES),
+				);
 			} else if (kind < 0.8) {
 				withField(random, entry, "preserveData", { [REMOTE_COMPACTION_PRESERVE_KEY]: LONG }, () =>
-					randomFields(random, entry),
+					randomFields(random, entry, COMPACTION_FIELD_NAMES),
 				);
 			} else if (kind < 0.9) {
-				withField(random, entry, "preserveData", LONG, () => randomFields(random, entry));
-			} else randomFields(random, entry);
+				withField(random, entry, "preserveData", LONG, () => randomFields(random, entry, COMPACTION_FIELD_NAMES));
+			} else randomFields(random, entry, COMPACTION_FIELD_NAMES);
 			records.push(entry);
 		} else {
 			const entry: Record<string, unknown> = { type: "custom", ...base };
@@ -195,6 +205,7 @@ describe("a cold entry lists its own large fields in key order", () => {
 			const shared = new Map<string, readonly string[]>();
 			const listsOf = { message: new Set<readonly string[]>(), window: new Set<readonly string[]>() };
 			const cooledBy = { message: 0, window: 0 };
+			let summaries = 0;
 			// The copies on the way to each stand-in, for the checks after every entry reads back.
 			const standIns: {
 				entry: Record<string, unknown>;
@@ -210,8 +221,9 @@ describe("a cold entry lists its own large fields in key order", () => {
 				const standInKeys =
 					nested === undefined ? [] : expectedLarge(nested, compaction ? new Set() : MESSAGE_RESIDENT);
 				const entryKeys = compaction
-					? []
+					? expectedMoved(original, COMPACTION_MOVED)
 					: expectedLarge(original, nested === undefined ? ENTRY_RESIDENT : MESSAGE_ENTRY_RESIDENT);
+				if (compaction && entryKeys.length > 0) summaries += 1;
 				// The objects the entry holds before it cools, which a caller may hold too.
 				const held = path.map((_, depth) => objectAt(entry, path.slice(0, depth + 1)));
 				const heldLines = held.map(object => JSON.stringify(object));
@@ -269,6 +281,7 @@ describe("a cold entry lists its own large fields in key order", () => {
 			}
 			expect(cooledBy.message).toBeGreaterThan(0);
 			expect(cooledBy.window).toBeGreaterThan(0);
+			expect(summaries).toBeGreaterThan(0);
 			// A list of a window's fields is never the list of a message's same fields: the list states
 			// which path the entry's stand-in sits at.
 			const sameNames = [...listsOf.window].flatMap(list =>

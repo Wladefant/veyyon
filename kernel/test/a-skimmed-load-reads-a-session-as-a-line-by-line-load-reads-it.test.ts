@@ -26,8 +26,8 @@ import { isRecord } from "@veyyon/utils/type-guards";
  *
  * The class this closes: over generated sessions holding every entry kind the load treats apart
  * (message roles, task results with and without usage, record-only and branch-settings entries,
- * compactions with and without a server-side window record and with one the skim hands back,
- * strings around the move threshold in every UTF-16 width, escapes, blob references,
+ * compactions with and without a large summary and a server-side window record and with one the
+ * skim hands back, strings around the move threshold in every UTF-16 width, escapes, blob references,
  * lines the skim hands back, malformed and wrong-shape lines, a blank line, an unterminated last
  * line, an older header, a title slot), the skimmed load holds the same cold layouts, resident
  * values, tool-call counts, usage totals, title slot and record layout as the line-by-line load, and
@@ -228,9 +228,12 @@ function record(
 		`{"type":"compactionx","id":"${id}","parentId":${parent},"timestamp":"${TIMESTAMP}","data":"${big}"}`,
 		// A compaction with its type escaped.
 		`{"type":"compacti\\u006fn","id":"${id}","parentId":${parent},"timestamp":"${TIMESTAMP}","summary":"${big}","firstKeptEntryId":${JSON.stringify(ids[0] ?? KEEP_NOTHING_ENTRY_ID)},"tokensBefore":1}`,
-		// A compaction whose window record has an escaped key, and one with its preserveData repeated.
-		`{"type":"compaction","id":"${id}","parentId":${parent},"timestamp":"${TIMESTAMP}","summary":"s","firstKeptEntryId":${JSON.stringify(ids[0] ?? KEEP_NOTHING_ENTRY_ID)},"tokensBefore":1,"preserveData":{"${REMOTE_COMPACTION_PRESERVE_KEY}":{"provider":"p","w\\u0069ndow":"${big}"}}}`,
-		`{"type":"compaction","id":"${id}","parentId":${parent},"timestamp":"${TIMESTAMP}","summary":"s","firstKeptEntryId":${JSON.stringify(ids[0] ?? KEEP_NOTHING_ENTRY_ID)},"tokensBefore":1,"preserveData":{"notes":1},"preserveData":{"${REMOTE_COMPACTION_PRESERVE_KEY}":{"provider":"p","window":"${big}"}}}`,
+		// A compaction whose window record has an escaped key, one that names its window record with an
+		// escaped key, and one with its preserveData repeated, each with a summary the load moves: a
+		// parse finds the window a projection could not name.
+		`{"type":"compaction","id":"${id}","parentId":${parent},"timestamp":"${TIMESTAMP}","summary":"${big}","firstKeptEntryId":${JSON.stringify(ids[0] ?? KEEP_NOTHING_ENTRY_ID)},"tokensBefore":1,"preserveData":{"${REMOTE_COMPACTION_PRESERVE_KEY}":{"provider":"p","w\\u0069ndow":"${big}"}}}`,
+		`{"type":"compaction","id":"${id}","parentId":${parent},"timestamp":"${TIMESTAMP}","summary":"${big}","firstKeptEntryId":${JSON.stringify(ids[0] ?? KEEP_NOTHING_ENTRY_ID)},"tokensBefore":1,"preserveData":{"${REMOTE_COMPACTION_PRESERVE_KEY.replace("C", "\\u0043")}":{"provider":"p","window":"${big}"}}}`,
+		`{"type":"compaction","id":"${id}","parentId":${parent},"timestamp":"${TIMESTAMP}","summary":"${big}","firstKeptEntryId":${JSON.stringify(ids[0] ?? KEEP_NOTHING_ENTRY_ID)},"tokensBefore":1,"preserveData":{"notes":1},"preserveData":{"${REMOTE_COMPACTION_PRESERVE_KEY}":{"provider":"p","window":"${big}"}}}`,
 	];
 	if (damaged) {
 		// An assistant message with no usage: the shape check drops it, from its skim or its line.
@@ -358,8 +361,8 @@ interface Observed {
 	titleSlot: unknown;
 	layout: unknown;
 	moved: number;
-	/** Compactions that moved their server-side window. */
-	windows: number;
+	/** Compactions that moved their summary or their server-side window. */
+	compactions: number;
 	fallbacks: string[];
 }
 
@@ -377,7 +380,7 @@ async function observe(file: string): Promise<Observed> {
 	}
 	const held = heldBeforeReadBack(loaded.entries);
 	const moved = loaded.entries.filter(entry => coldFieldsOf(entry) !== undefined).length;
-	const windows = loaded.entries.filter(
+	const compactions = loaded.entries.filter(
 		entry => entry.type === "compaction" && coldFieldsOf(entry) !== undefined,
 	).length;
 	return {
@@ -387,7 +390,7 @@ async function observe(file: string): Promise<Observed> {
 		titleSlot: loaded.titleSlot,
 		layout: loaded.layout,
 		moved,
-		windows,
+		compactions,
 		fallbacks,
 	};
 }
@@ -476,7 +479,7 @@ async function readsPerTurn(file: string): Promise<{ largest: number; total: num
 /** Sessions whose skimmed load reads megabytes from the file, by what it reads. */
 const READ_HEAVY: { reads: string; lines: (cwd: string) => string[] }[] = [
 	{
-		reads: "compactions the skim hands back",
+		reads: "settings entries the skim hands back",
 		lines: cwd => {
 			const lines = [headerLine(cwd)];
 			let parentId: string | null = null;
@@ -484,13 +487,12 @@ const READ_HEAVY: { reads: string; lines: (cwd: string) => string[] }[] = [
 				lines.push(resultLine(`r${i}`, parentId, "r".repeat(2000)));
 				lines.push(
 					JSON.stringify({
-						type: "compaction",
+						type: "mode_change",
 						id: `k${i}`,
 						parentId: `r${i}`,
 						timestamp: TIMESTAMP,
-						summary: "s".repeat(600_000),
-						firstKeptEntryId: KEEP_NOTHING_ENTRY_ID,
-						tokensBefore: 1,
+						mode: "plan",
+						data: { plan: "s".repeat(600_000) },
 					}),
 				);
 				parentId = `k${i}`;
@@ -513,7 +515,7 @@ describe.skipIf(process.platform === "win32")("a skimmed load reads a session as
 	it("holds and reads back the same entries over generated sessions", async () => {
 		using temp = TempDir.createSync("@kernel-skimmed-load-");
 		let moved = 0;
-		let windows = 0;
+		let compactions = 0;
 		let laidOut = 0;
 		let aged = 0;
 		for (let seed = 1; seed <= 40; seed++) {
@@ -532,11 +534,11 @@ describe.skipIf(process.platform === "win32")("a skimmed load reads a session as
 			}
 			if (!generated.current) aged += 1;
 			moved += skimmed.moved;
-			windows += skimmed.windows;
+			compactions += skimmed.compactions;
 		}
 		// The sweep moves history, keeps layouts, and reads a file an older version wrote.
 		expect(moved).toBeGreaterThan(40 * 5);
-		expect(windows).toBeGreaterThan(0);
+		expect(compactions).toBeGreaterThan(0);
 		expect(laidOut).toBeGreaterThan(5);
 		expect(aged).toBeGreaterThan(0);
 	});

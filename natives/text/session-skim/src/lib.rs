@@ -18,7 +18,8 @@
 //! An entry's stand-in is the object of it whose members move one by one while
 //! the object itself stays: a message entry's `message`, and a compaction's
 //! `preserveData.remoteCompaction`, which holds the server-side window. A
-//! compaction moves nothing else: every context build reads its members.
+//! compaction moves its members [`SkimRules::compaction_moved_keys`] names and
+//! nothing else: every context build reads the others.
 //!
 //! # Output
 //!
@@ -75,6 +76,8 @@ pub struct SkimRules {
 	pub resident_keys:         Vec<Vec<u8>>,
 	/// A message's members that never move.
 	pub message_resident_keys: Vec<Vec<u8>>,
+	/// A compaction's members that move; every other member of it stays.
+	pub compaction_moved_keys: Vec<Vec<u8>>,
 	/// A string that decodes to a value starting with one of these moves
 	/// whatever its length.
 	pub large_string_prefixes: Vec<Vec<u8>>,
@@ -358,14 +361,25 @@ fn project_into(line: &[u8], rules: &SkimRules, scratch: &mut Scratch, out: &mut
 		|| entry_type.is_none()
 		|| rules.whole_entry_types.iter().any(|name| is_type(name));
 	let compaction = is_type(b"compaction");
+	// A mask names a member by its position, and a parse reads an escaped,
+	// repeated or digit key of a compaction's `preserveData`, or of the window
+	// under it, otherwise: such a compaction moves nothing, and is handed back.
+	let named = !compaction
+		|| entry.preserved.as_ref().is_none_or(|(_, preserved)| {
+			check_keys(line, preserved.members).is_ok()
+				&& preserved
+					.remote
+					.is_none_or(|(_, members)| check_keys(line, members).is_ok())
+		});
 	let stand_in = if compaction {
-		entry.preserved.as_ref().and_then(|(at, preserved)| {
-			let (inner, members) = preserved.remote?;
-			// A mask names the window's members by position, and a parse keeps the
-			// last of two `remoteCompaction` members.
-			(check_keys(line, preserved.members).is_ok() && check_keys(line, members).is_ok())
-				.then_some(StandIn::Window { at: *at, preserved: preserved.members, inner, members })
-		})
+		entry
+			.preserved
+			.as_ref()
+			.filter(|_| named)
+			.and_then(|(at, preserved)| {
+				let (inner, members) = preserved.remote?;
+				Some(StandIn::Window { at: *at, preserved: preserved.members, inner, members })
+			})
 	} else if is_type(b"message") {
 		entry
 			.message
@@ -374,14 +388,17 @@ fn project_into(line: &[u8], rules: &SkimRules, scratch: &mut Scratch, out: &mut
 	} else {
 		None
 	};
-	// Every context build reads a compaction's members: only its window moves.
 	let mut keys = 0_u32;
-	if !compaction {
+	if named {
 		for (index, member) in entry.members.iter().enumerate() {
 			let key = text_bytes(line, member.key);
-			let resident = rules.resident_keys.iter().any(|name| name == key)
-				|| matches!(stand_in, Some(StandIn::Message { at, .. }) if at == index);
-			if !resident && is_large(line, member.kind, rules) {
+			let moves = if compaction {
+				rules.compaction_moved_keys.iter().any(|name| name == key)
+			} else {
+				!rules.resident_keys.iter().any(|name| name == key)
+					&& !matches!(stand_in, Some(StandIn::Message { at, .. }) if at == index)
+			};
+			if moves && is_large(line, member.kind, rules) {
 				keys |= 1 << index;
 			}
 		}

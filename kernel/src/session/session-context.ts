@@ -284,7 +284,7 @@ export const BRANCH_SETTINGS_ENTRY_TYPES: ReadonlySet<SessionEntry["type"]> = ne
 /**
  * {@link BRANCH_SETTINGS_ENTRY_TYPES} whose payloads a session keeps in memory when it moves
  * compacted history to disk. A compaction is not one: the walk reads its fields and never its
- * server-side window, so a compaction a later one summarized moves its window alone (see
+ * summary or its server-side window, so a compaction a later one summarized moves those two (see
  * `ColdEntryPayloads`).
  */
 export const RESIDENT_SETTINGS_ENTRY_TYPES: ReadonlySet<SessionEntry["type"]> = new Set(

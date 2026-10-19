@@ -1559,6 +1559,8 @@ export interface SessionSkimRules {
   residentKeys: Array<string>
   /** A message's members that never move. */
   messageResidentKeys: Array<string>
+  /** A compaction's members that move; every other member of it stays. */
+  compactionMovedKeys: Array<string>
   /** A string starting with one of these moves whatever its length. */
   largeStringPrefixes: Array<string>
   /** Entry types reported whole. */

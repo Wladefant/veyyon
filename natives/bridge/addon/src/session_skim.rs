@@ -18,6 +18,8 @@ pub struct SessionSkimRules {
 	pub resident_keys:         Vec<String>,
 	/// A message's members that never move.
 	pub message_resident_keys: Vec<String>,
+	/// A compaction's members that move; every other member of it stays.
+	pub compaction_moved_keys: Vec<String>,
 	/// A string starting with one of these moves whatever its length.
 	pub large_string_prefixes: Vec<String>,
 	/// Entry types reported whole.
@@ -64,6 +66,7 @@ pub fn skim_session_file(
 		min_string_units:      rules.min_string_length as usize,
 		resident_keys:         names(rules.resident_keys),
 		message_resident_keys: names(rules.message_resident_keys),
+		compaction_moved_keys: names(rules.compaction_moved_keys),
 		large_string_prefixes: names(rules.large_string_prefixes),
 		whole_entry_types:     names(rules.whole_entry_types),
 		raw_lines:             rules.raw_lines as usize,

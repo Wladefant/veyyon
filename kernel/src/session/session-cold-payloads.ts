@@ -10,11 +10,12 @@
  * message's small values (`role`, `toolName`, `toolCallId`, `isError`, `stopReason`, `provider`,
  * `model`) and its `usage`, so a scan that picks entries by them or a spend tally reads none of them
  * back; the message's large fields are accessors on that object, and an assistant message's
- * stand-in records how many `toolCall` blocks its moved content held. A cold compaction keeps every
- * field a context build reads and a `preserveData` whose server-side window record holds the
- * window's provider, api and model, so a compaction pass picks the window it chains without reading
- * the windows it passes over; only the window is an accessor. A read-back entry stays in memory
- * until the next pass cools it again.
+ * stand-in records how many `toolCall` blocks its moved content held. A cold compaction moves its
+ * summary, which a context build reads off the compaction it applies alone, and keeps every other
+ * field a context build or a compaction pass reads, with a `preserveData` whose server-side window
+ * record holds the window's provider, api and model, so a compaction pass picks the window it chains
+ * without reading the windows it passes over; the window is an accessor. A read-back entry stays in
+ * memory until the next pass cools it again.
  *
  * The line is read through a {@link PinnedSessionReader}, a handle on the file object the offsets
  * were recorded against. A republish by this process or another one, a relocation, or an unlink
@@ -59,6 +60,14 @@ const MESSAGE_ENTRY_RESIDENT_KEYS: ReadonlySet<string> = new Set([...RESIDENT_KE
  * each message, a few numbers that a read-back would parse a whole line to return.
  */
 const MESSAGE_RESIDENT_KEYS: ReadonlySet<string> = new Set(["usage"]);
+
+/**
+ * A compaction's fields that move when large. A context build reads the summary of the compaction
+ * it applies, which stays in memory, and stops there; every other field is read by each context
+ * build or each compaction pass, such as `details`, whose file lists a pass follows back through
+ * each `base`.
+ */
+const COMPACTION_MOVED_KEYS: ReadonlySet<string> = new Set(["summary"]);
 
 /**
  * An object of an entry whose large fields move one by one while the object stays in memory, so a
@@ -108,12 +117,18 @@ function recordAt(
  */
 export const COLD_FIELD_RULES: Pick<
 	SessionSkimRules,
-	"minLineBytes" | "minStringLength" | "residentKeys" | "messageResidentKeys" | "largeStringPrefixes"
+	| "minLineBytes"
+	| "minStringLength"
+	| "residentKeys"
+	| "messageResidentKeys"
+	| "compactionMovedKeys"
+	| "largeStringPrefixes"
 > = {
 	minLineBytes: MIN_COLD_LINE_BYTES,
 	minStringLength: MIN_COLD_STRING_LENGTH,
 	residentKeys: [...RESIDENT_KEYS],
 	messageResidentKeys: [...MESSAGE_RESIDENT_KEYS],
+	compactionMovedKeys: [...COMPACTION_MOVED_KEYS],
 	largeStringPrefixes: [...BLOB_REF_PREFIXES],
 };
 
@@ -567,8 +582,9 @@ export class ColdEntryPayloads {
 	 * Move `entry`'s large fields out of memory, to be read back from `length` bytes at `offset` of
 	 * the pinned object. A message entry's message, and a compaction's server-side window record, is
 	 * replaced by a stand-in holding its small values and an accessor for each large field; a
-	 * compaction moves nothing else. The line moves whatever its length. Returns false when nothing
-	 * is pinned, the entry is already cold, or no field is large enough to move.
+	 * compaction moves its summary beside it and nothing else. The line moves whatever its length.
+	 * Returns false when nothing is pinned, the entry is already cold, or no field is large enough to
+	 * move.
 	 */
 	cool(entry: SessionEntry, offset: number, length: number): boolean {
 		const file = this.#current;
@@ -576,10 +592,10 @@ export class ColdEntryPayloads {
 		const record = entry as unknown as Record<string, unknown>;
 		const rule = standInRuleOf(entry);
 		const standIn = rule === undefined ? undefined : recordAt(record, rule.path);
-		// Every context build reads a compaction's fields: only its window moves.
+		// Every context build reads a compaction's other fields: only its summary and its window move.
 		const entryNode =
 			entry.type === "compaction"
-				? this.#keyLists
+				? this.#namedLargeKeys(record, COMPACTION_MOVED_KEYS, this.#keyLists)
 				: this.#largeKeys(
 						record,
 						standIn === undefined ? RESIDENT_KEYS : MESSAGE_ENTRY_RESIDENT_KEYS,
@@ -777,6 +793,16 @@ export class ColdEntryPayloads {
 		let node = root;
 		for (const key in record) {
 			if (resident.has(key) || !isLarge(record[key]) || !Object.hasOwn(record, key)) continue;
+			node = this.#nextKeyList(node, key);
+		}
+		return node;
+	}
+
+	/** {@link #largeKeys} for a record whose fields outside `moved` all stay, whatever their size. */
+	#namedLargeKeys(record: Record<string, unknown>, moved: ReadonlySet<string>, root: KeyListNode): KeyListNode {
+		let node = root;
+		for (const key in record) {
+			if (!moved.has(key) || !isLarge(record[key]) || !Object.hasOwn(record, key)) continue;
 			node = this.#nextKeyList(node, key);
 		}
 		return node;

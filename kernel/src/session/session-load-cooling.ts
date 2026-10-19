@@ -9,8 +9,8 @@
  * boundary. When the load reads one, it moves those entries out of memory, so the load holds the
  * entries read since the last compaction and the stubs of the ones before it. Entry kinds every
  * context build reads ({@link RESIDENT_SETTINGS_ENTRY_TYPES}) stay in memory, a summarized
- * compaction moves its server-side window alone, and every {@link RECORD_ONLY_ENTRY_TYPES} entry
- * moves as it is read.
+ * compaction moves its summary and its server-side window alone, and every
+ * {@link RECORD_ONLY_ENTRY_TYPES} entry moves as it is read.
  *
  * Which branch the session resumes on is known only after the last line. An entry moved here that
  * the resumed branch still sends reads its line back on first use, as every cold entry does, so a

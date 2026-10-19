@@ -27,6 +27,7 @@ fn rules() -> SkimRules {
 		min_string_units:      16,
 		resident_keys:         names(&["type", "id", "parentId", "timestamp"]),
 		message_resident_keys: names(&["usage"]),
+		compaction_moved_keys: names(&["summary"]),
 		large_string_prefixes: names(&["blob:sha256:", "blobtext:sha256:"]),
 		whole_entry_types:     names(&["session", "compaction"]),
 		raw_lines:             0,
@@ -289,10 +290,15 @@ mod remote_window {
 		report_with(line.as_bytes(), &window_rules())
 	}
 
+	/// A compaction with a short summary, which stays, and `preserve` as its
+	/// `preserveData`.
 	fn compaction(preserve: &str) -> String {
+		compaction_with("s", preserve)
+	}
+
+	fn compaction_with(summary: &str, preserve: &str) -> String {
 		format!(
-			r#"{{"type":"compaction","id":"c","summary":"{}","details":{{"readFiles":["a"]}},"firstKeptEntryId":"k","preserveData":{preserve}}}"#,
-			letters(40)
+			r#"{{"type":"compaction","id":"c","summary":"{summary}","details":{{"readFiles":["a"]}},"firstKeptEntryId":"k","preserveData":{preserve}}}"#
 		)
 	}
 
@@ -308,7 +314,7 @@ mod remote_window {
 				{
 					"type":"compaction",
 					"id":"c",
-					"summary":letters(40),
+					"summary":"s",
 					"details":{"readFiles":["a"]},
 					"firstKeptEntryId":"k",
 					"preserveData":{
@@ -337,13 +343,63 @@ mod remote_window {
 	}
 
 	#[test]
-	fn a_compaction_without_a_remote_compaction_object_moves_nothing_and_is_handed_back() {
+	fn a_large_summary_moves_and_every_other_member_of_the_compaction_is_copied() {
+		let line = compaction_with(&letters(40), r#"{"notes":{"x":[1]}}"#);
+		assert_eq!(
+			window_report(&line),
+			json!([
+				line.len(),
+				{
+					"type":"compaction",
+					"id":"c",
+					"summary":"_",
+					"details":{"readFiles":["a"]},
+					"firstKeptEntryId":"k",
+					"preserveData":{"notes":{"x":[1]}}
+				},
+				0b100,
+				0,
+				-1,
+				0
+			])
+		);
 		let summary_only = format!(
 			r#"{{"type":"compaction","id":"c","summary":"{}","details":{{"a":[1]}}}}"#,
 			letters(60)
 		);
+		assert_eq!(
+			window_report(&summary_only),
+			json!([
+				summary_only.len(),
+				{"type":"compaction","id":"c","summary":"_","details":{"a":[1]}},
+				0b100,
+				0,
+				-1,
+				0
+			])
+		);
+	}
+
+	#[test]
+	fn a_large_summary_moves_beside_the_window() {
+		let line = compaction_with(&letters(40), &format!(r#"{{"remoteCompaction":{REMOTE}}}"#));
+		let value = window_report(&line);
+		assert_eq!(value[1]["summary"], json!("_"));
+		assert_eq!(value[1]["preserveData"]["remoteCompaction"]["window"], json!([]));
+		assert_eq!(value[2], json!(0b100));
+		assert_eq!(value[3], json!(0b10000));
+	}
+
+	#[test]
+	fn a_compaction_moves_no_member_the_rules_leave_out() {
+		let rules = SkimRules { compaction_moved_keys: Vec::new(), ..window_rules() };
+		let line = compaction_with(&letters(40), r#"{"notes":{"x":[1]}}"#);
+		assert_eq!(report_with(line.as_bytes(), &rules), json!(line.len()));
+	}
+
+	#[test]
+	fn a_compaction_without_a_remote_compaction_object_moves_nothing_and_is_handed_back() {
 		for line in [
-			summary_only,
 			compaction(r#"{"other":{"x":[1]}}"#),
 			compaction(r#"{"remoteCompaction":[{"window":[1]}]}"#),
 			compaction(r#"{"remoteCompaction":"window"}"#),
@@ -397,8 +453,11 @@ mod remote_window {
 			r#"{"remoteCompaction":{"0":[1],"window":[2]}}"#.to_owned(),
 			format!(r#"{{"1":2,"remoteCompaction":{REMOTE}}}"#),
 		] {
-			let line = compaction(&preserve);
-			assert_eq!(window_report(&line), json!(line.len()), "{line}");
+			// A large summary does not project it either: a load that took the
+			// projection would keep the window a parse of the line finds.
+			for line in [compaction(&preserve), compaction_with(&letters(40), &preserve)] {
+				assert_eq!(window_report(&line), json!(line.len()), "{line}");
+			}
 		}
 	}
 
