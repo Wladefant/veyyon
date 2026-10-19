@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
+import type { Subprocess } from "bun";
 import type { Browser } from "puppeteer-core";
 import { Settings } from "@veyyon/contracts/settings";
 import type { ToolSession } from "@veyyon/coding-agent/sdk";
 import { BrowserTool } from "@veyyon/coding-agent/tools/web/browser";
 import * as launch from "@veyyon/coding-agent/tools/web/browser/launch";
+import * as attach from "@veyyon/coding-agent/tools/web/browser/attach";
+import * as cpuLimit from "@veyyon/coding-agent/session/cpu-limit";
 import {
 	acquireBrowser,
 	getBrowsersMapForTest,
@@ -211,5 +214,31 @@ describe("browser registry sweep — one failed release never stops the sweep", 
 		expect(getBrowsersMapForTest().size).toBe(2);
 		expect(closeSpy).not.toHaveBeenCalled();
 		expect(requestSpy).not.toHaveBeenCalledWith("surface.close", expect.anything(), expect.anything());
+	});
+
+	it.each([false, true])("cleans only its spawned process when puppeteer loading fails (reused=%s)", async reused => {
+		const pid = 54321;
+		spyOn(attach, "findReusableCdp").mockResolvedValue(
+			reused ? { pid, cdpUrl: "http://127.0.0.1:9222" } : null,
+		);
+		spyOn(attach, "killExistingByPath").mockResolvedValue(0);
+		spyOn(attach, "findFreeCdpPort").mockResolvedValue(9222);
+		spyOn(attach, "waitForCdp").mockResolvedValue(undefined);
+		spyOn(cpuLimit, "adoptIntoPrimarySessionCpuBudget").mockImplementation(() => undefined);
+		const killSpy = spyOn(attach, "gracefulKillTreeOnce").mockResolvedValue(undefined);
+		const spawnSpy = spyOn(Bun, "spawn").mockReturnValue({
+			pid,
+			unref: vi.fn(),
+		} as unknown as Subprocess);
+		spyOn(launch, "loadPuppeteer").mockRejectedValue(new Error("puppeteer import failed"));
+
+		await expect(
+			acquireBrowser({ kind: "spawned", path: process.execPath }, { cwd: process.cwd() }),
+		).rejects.toThrow("puppeteer import failed");
+
+		expect(spawnSpy).toHaveBeenCalledTimes(reused ? 0 : 1);
+		expect(killSpy).toHaveBeenCalledTimes(reused ? 0 : 1);
+		if (!reused) expect(killSpy).toHaveBeenCalledWith(pid);
+		expect(getBrowsersMapForTest().size).toBe(0);
 	});
 });
