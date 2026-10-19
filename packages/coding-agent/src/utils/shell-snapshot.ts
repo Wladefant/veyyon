@@ -308,9 +308,12 @@ export async function getOrCreateSnapshot(
 	return null;
 }
 
+// A snapshot can be gone before the process exits: a tmp cleaner (systemd-tmpfiles, an hourly wipe)
+// removes it, and the next `getOrCreateSnapshot` replaces it. `force` lets the loop reach every other
+// snapshot instead of stopping at the first that is missing.
 postmortem.register("shell-snapshot", () => {
 	for (const snapshotPath of cachedSnapshotPaths.values()) {
-		fs.unlinkSync(snapshotPath);
+		fs.rmSync(snapshotPath, { force: true });
 	}
 	cachedSnapshotPaths.clear();
 });
