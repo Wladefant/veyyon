@@ -366,11 +366,16 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * type-only. `goals/goal-record.ts`, already here, checks a recorded goal's status against that
  * tuple when a session resumes, so a status no build writes restores no goal.
  *
+ * 1491 to 1492: `cli/launch-card-eligibility.ts`, the argv-only launch decisions, which `main.ts`
+ * imports to tell a bare `--resume` (the session picker, no launch card) from a resume that names its
+ * session. Its only import is type-only, and the shipped launch already evaluates it through
+ * `commands/launch.ts`. Measured 2026-10-19 at 1492.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1491;
+const LAUNCH_REACH_CEILING = 1492;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
