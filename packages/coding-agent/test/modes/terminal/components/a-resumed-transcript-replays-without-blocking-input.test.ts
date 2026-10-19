@@ -412,7 +412,10 @@ describe("UiHelpers.replayInitialMessages", () => {
 });
 
 function eventCtx() {
-	const addMessageToChat = vi.fn();
+	const chat: AgentMessage[] = [];
+	const addMessageToChat = (message: AgentMessage): void => {
+		chat.push(message);
+	};
 	const ctx = {
 		isInitialized: true,
 		statusLine: { invalidate: vi.fn() },
@@ -431,7 +434,7 @@ function eventCtx() {
 		refreshComposerShortcuts: vi.fn(),
 		dismissWelcome: vi.fn(),
 	} as unknown as InteractiveModeContext;
-	return { controller: new EventController(ctx), addMessageToChat };
+	return { controller: new EventController(ctx), chat };
 }
 
 function userMessage(text: string): UserMessage {
@@ -441,7 +444,7 @@ function userMessage(text: string): UserMessage {
 describe("EventController.deferEventsUntil", () => {
 	for (const outcome of ["resolves", "rejects"] as const) {
 		it(`holds session events, in order, until the replay ${outcome === "resolves" ? "mounts" : "fails"}`, async () => {
-			const { controller, addMessageToChat } = eventCtx();
+			const { controller, chat } = eventCtx();
 			const replay = Promise.withResolvers<void>();
 			controller.deferEventsUntil(replay.promise);
 			const first = userMessage("first");
@@ -452,17 +455,17 @@ describe("EventController.deferEventsUntil", () => {
 			];
 			await nextTurn();
 			await nextTurn();
-			expect(addMessageToChat).not.toHaveBeenCalled();
+			expect(chat).toEqual([]);
 
 			if (outcome === "resolves") replay.resolve();
 			else replay.reject(new Error("replay failed"));
 			await Promise.all(handled);
-			expect(addMessageToChat.mock.calls.map(call => call[0])).toEqual([first, second]);
+			expect(chat).toEqual([first, second]);
 
 			// Released for good: a later event is handled without waiting on anything.
 			const third = userMessage("third");
 			await controller.handleEvent({ type: "message_start", message: third });
-			expect(addMessageToChat.mock.calls.at(-1)?.[0]).toBe(third);
+			expect(chat.at(-1)).toBe(third);
 		});
 	}
 });
