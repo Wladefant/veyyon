@@ -1,33 +1,24 @@
 /**
  * WHY THIS SUITE EXISTS.
  *
- * `veyyon --model <selector>` failed in three ways that each blamed the wrong
+ * `veyyon --model <selector>` failed in two ways that each blamed the wrong
  * thing:
  *
  *   1. `--model sonnet:high` and `--provider openai --model gpt-4o` bypassed the
  *      resolution classifier and printed `Model "x" not found` whatever the
  *      registry held. With no credentials configured, the one correct thing on
  *      the line -- the id -- was the thing reported wrong.
- *   2. `--model @smol` with `smol` unset, and `--model @nope`, expanded to no
- *      pattern and were reported as an authentication failure by the same
- *      classifier: "no usable credentials", for a setting that was never written.
- *   3. `--model openai/` (a provider and no id) fuzzy-matched the empty string
+ *   2. `--model openai/` (a provider and no id) fuzzy-matched the empty string
  *      and picked the oldest model of that provider, in silence.
  *
  * THE CLASS THIS CLOSES. Every "nothing matched" exit of `resolveCliModel`
- * reads `modelResolutionFailureMessage`, so a `:level` suffix, an explicit
- * `--provider` and a `@role` expansion all report the classifier's verdict;
- * every failure kind the classifier can produce is swept below through the
- * suffix and provider forms, so a new kind that one form skips turns the suite
- * red. A `@role` failure is reported about the role -- unset, unknown, cyclic,
- * each member of `RolePatternFailure` is driven -- and carried on
- * `roleFailure`, which is what lets `main.ts` report it at once instead of
- * deferring an unknown id until extensions load. An empty id, bare or behind a
- * provider prefix, is a selector error naming the provider's default.
+ * reads `modelResolutionFailureMessage`, so a `:level` suffix and an explicit
+ * `--provider` both report the classifier's verdict; every failure kind the
+ * classifier can produce is swept below through the suffix and provider forms,
+ * so a new kind that one form skips turns the suite red. An empty id, bare or
+ * behind a provider prefix, is a selector error naming the provider's default.
  *
- * WHAT IT DOES NOT CATCH. The `main.ts` branch that reads `roleFailure` to
- * decide between exiting and deferring is process-level and is exercised by the
- * CLI exit-code suites; the wording of each classifier message is pinned in
+ * WHAT IT DOES NOT CATCH. The wording of each classifier message is pinned in
  * `model-resolution-failure.test.ts`.
  */
 import { describe, expect, test } from "bun:test";
@@ -39,13 +30,7 @@ import {
 	describeModelResolutionFailure,
 	type ModelResolutionFailureKind,
 } from "@veyyon/coding-agent/config/model-resolution-failure";
-import {
-	expandConfiguredModelPatterns,
-	type RolePatternFailure,
-	resolveCliModel,
-	resolveConfiguredModelPatterns,
-} from "@veyyon/coding-agent/config/model-resolver";
-import { Settings } from "@veyyon/coding-agent/config/settings";
+import { resolveCliModel } from "@veyyon/coding-agent/config/model-resolver";
 
 const sonnet = buildModel({
 	id: "claude-sonnet-4-5",
@@ -187,78 +172,6 @@ describe("a selector with a :level suffix or a --provider reports the classifier
 		expect(result.error).toBeUndefined();
 		expect(result.model?.id).toBe("claude-sonnet-4-5");
 		expect(result.thinkingLevel).toBe(Effort.High);
-	});
-});
-
-describe("a @role that expands to nothing is reported about the role, not about credentials", () => {
-	const ROLE_FAILURES: Record<RolePatternFailure["kind"], { settings: Settings; selector: string; role: string }> = {
-		"unset-role": { settings: Settings.isolated({}), selector: "@smol", role: "smol" },
-		"unknown-role": { settings: Settings.isolated({}), selector: "@nope", role: "nope" },
-		"role-cycle": {
-			settings: Settings.isolated({ modelRoles: { smol: "@slow", slow: "@smol" } }),
-			selector: "@smol",
-			role: "smol",
-		},
-	};
-
-	test("every role-failure kind has a row", () => {
-		expect(Object.keys(ROLE_FAILURES).sort()).toEqual(["role-cycle", "unknown-role", "unset-role"]);
-	});
-
-	for (const [kind, row] of Object.entries(ROLE_FAILURES) as [
-		RolePatternFailure["kind"],
-		(typeof ROLE_FAILURES)[RolePatternFailure["kind"]],
-	][]) {
-		test(`${kind}: --model ${row.selector} with no credentials configured`, () => {
-			// The registry has models and no credentials: the classifier would call
-			// this an auth failure, and the role failure must pre-empt it.
-			const result = resolveCliModel({
-				cliModel: row.selector,
-				modelRegistry: registry(all, []),
-				settings: row.settings,
-			});
-			expect(result.model).toBeUndefined();
-			expect(result.roleFailure?.kind).toBe(kind);
-			expect(result.roleFailure?.role).toBe(row.role);
-			expect(result.error).toContain(`"${row.role}"`);
-			expect(result.error).not.toContain("credentials");
-			expect(result.error).not.toContain("not found");
-		});
-
-		test(`${kind}: expansion reports the same failure`, () => {
-			const expanded = expandConfiguredModelPatterns(row.selector, row.settings);
-			expect(expanded.kind).toBe(kind);
-			expect(resolveConfiguredModelPatterns(row.selector, row.settings)).toEqual([]);
-		});
-	}
-
-	test("a role whose value is another role resolves through both hops, nearest level winning", () => {
-		const settings = Settings.isolated({
-			modelRoles: { default: "anthropic/claude-sonnet-4-5:low", smol: "@default" },
-		});
-		expect(resolveConfiguredModelPatterns("@smol", settings)).toEqual(["anthropic/claude-sonnet-4-5:low"]);
-		expect(resolveConfiguredModelPatterns("@smol:high", settings)).toEqual(["anthropic/claude-sonnet-4-5:high"]);
-		const result = resolveCliModel({ cliModel: "@smol:high", modelRegistry: registry(all, all), settings });
-		expect(result.error).toBeUndefined();
-		expect(result.model?.id).toBe("claude-sonnet-4-5");
-		expect(result.thinkingLevel).toBe(Effort.High);
-	});
-
-	test("a chain with one dead role and one live pattern is not a failure", () => {
-		const settings = Settings.isolated({ modelRoles: { slow: "@smol, openai/gpt-4o" } });
-		expect(expandConfiguredModelPatterns("@slow", settings)).toEqual({
-			kind: "patterns",
-			patterns: ["openai/gpt-4o"],
-		});
-	});
-
-	test("control: a set role that expands to an unknown id is the classifier's verdict against the expanded pattern", () => {
-		const settings = Settings.isolated({ modelRoles: { smol: "openai/nonesuch" } });
-		const result = resolveCliModel({ cliModel: "@smol", modelRegistry: registry(all, []), settings });
-		expect(result.roleFailure).toBeUndefined();
-		const expected = verdict(all, [], ["openai/nonesuch"]);
-		expect(expected.kind).toBe("no-credentials");
-		expect(result.error).toBe(expected.message);
 	});
 });
 

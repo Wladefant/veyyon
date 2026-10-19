@@ -18,10 +18,7 @@ type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ?
 type OptionalKeys<T> = { [K in keyof T]-?: Record<never, never> extends Pick<T, K> ? K : never }[keyof T];
 type RequiredKeys<T> = Exclude<keyof T, OptionalKeys<T>>;
 
-type DerivedGroups = Exclude<
-	keyof GroupTypeMap,
-	"compaction" | "retry" | "memories" | "skills" | "ttsr" | "stt" | "modelRoles" | "modelTags" | "cycleOrder"
->;
+type DerivedGroups = Exclude<keyof GroupTypeMap, "compaction" | "retry" | "memories" | "skills" | "ttsr" | "stt">;
 type DerivedChecks = { [K in DerivedGroups]: Equal<GroupTypeMap[K], GroupSettings<K>> };
 type _DerivedGroupsMatchSchema = Assert<Equal<DerivedChecks[DerivedGroups], true>>;
 
@@ -55,5 +52,3 @@ type _SkillsRequired = Assert<Equal<RequiredKeys<SkillsSettings>, never>>;
 type _SttKeys = Assert<Equal<RequiredKeys<SttSettings>, "enabled" | "language" | "modelName" | "streaming">>;
 type _SttModelName = Assert<Equal<SttSettings["modelName"], string>>;
 type _SttStreaming = Assert<Equal<SttSettings["streaming"], boolean>>;
-type _ModelRoles = Assert<Equal<GroupTypeMap["modelRoles"], Record<string, string>>>;
-type _CycleOrder = Assert<Equal<GroupTypeMap["cycleOrder"], string[]>>;

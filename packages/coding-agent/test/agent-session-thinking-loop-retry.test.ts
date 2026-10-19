@@ -161,7 +161,7 @@ describe("AgentSession thinking-loop retry", () => {
 			"retry.modelFallback": false,
 			"todo.enabled": false,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
@@ -220,7 +220,7 @@ describe("AgentSession thinking-loop retry", () => {
 			"retry.modelFallback": false,
 			"todo.enabled": false,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
@@ -276,7 +276,7 @@ describe("AgentSession thinking-loop retry", () => {
 			"todo.enabled": false,
 			"model.loopGuard.enabled": true,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
@@ -344,7 +344,7 @@ describe("AgentSession thinking-loop retry", () => {
 			"todo.enabled": false,
 			"model.loopGuard.enabled": true,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),

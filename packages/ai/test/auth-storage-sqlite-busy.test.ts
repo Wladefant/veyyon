@@ -15,7 +15,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
-import { isSqliteBusyError, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { isSqliteBusyError } from "@veyyon/ai/auth-credential-rows";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import { removeWithRetries } from "../../utils/src/temp";
 
 interface SqliteBusyShape extends Error {

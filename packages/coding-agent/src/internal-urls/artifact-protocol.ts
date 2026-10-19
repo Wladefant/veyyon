@@ -11,7 +11,8 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-// Owners, not the `@veyyon/utils` barrel: 1 module against 74.
+// Owners, not the `@veyyon/utils` barrel: 2 modules against 74.
+import { formatBoundedList } from "@veyyon/utils/format";
 import { isEnoent } from "@veyyon/utils/fs-error";
 import { artifactsDirsFromRegistry } from "./registry-helpers";
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, UrlCompletion } from "./types";
@@ -119,9 +120,8 @@ export async function resolveArtifactFile(url: InternalUrl, context?: ResolveCon
 
 	const foundPath = matches[0];
 	if (!foundPath) {
-		const sorted = Array.from(availableIds).sort((a, b) => Number(a) - Number(b));
-		const availableStr = sorted.length > 0 ? sorted.join(", ") : "none";
-		throw new Error(`Artifact ${id} not found. Available: ${availableStr}`);
+		const newestFirst = Array.from(availableIds).sort((a, b) => Number(b) - Number(a));
+		throw new Error(`Artifact ${id} not found. Available: ${formatBoundedList(newestFirst)}`);
 	}
 
 	const stat = await Bun.file(foundPath).stat();

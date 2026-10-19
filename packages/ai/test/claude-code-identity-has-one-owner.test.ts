@@ -24,7 +24,7 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { CLAUDE_CODE_VERSION } from "@veyyon/catalog/wire/anthropic";
-import { moduleSpecifiersIn } from "@veyyon/utils/module-reach";
+import { moduleSpecifiersIn, namedImportsFrom } from "@veyyon/utils/module-reach";
 
 const PACKAGES = path.join(import.meta.dir, "..", "..");
 const OWNER = path.join("catalog", "src", "wire", "anthropic.ts");
@@ -130,57 +130,28 @@ describe("the two cheap consumers name the leaf, not the provider", () => {
 	 */
 	it("the owner imports nothing at runtime", () => {
 		const source = fs.readFileSync(path.join(PACKAGES, OWNER), "utf-8");
-		const runtimeImports = [...source.matchAll(/^import\s+(?!type\b)[^;]*?from\s*["']([^"']+)["']/gm)];
 
-		expect(runtimeImports.map(match => match[1])).toEqual([]);
+		expect(moduleSpecifiersIn(source)).toEqual([]);
 	});
 });
 
-/**
- * The interpolation this suite looks for, spelled once.
- *
- * A template literal with an escaped brace, which produces the identical text without being an
- * interpolation itself. The plain-string spelling is what `noTemplateCurlyInString` exists to catch:
- * a string that LOOKS interpolated and is not is almost always a bug, and this file is the rare place
- * where the un-interpolated form is the point, since it is searching source text for it.
- */
-const VERSION_INTERPOLATION = `$\{claudeCodeVersion}`;
-
-/** The three user-agent shapes, each built from the one version. Deliberately different from each other. */
-const USER_AGENT_SHAPES: ReadonlyArray<readonly [string, string]> = [
-	["ai/src/providers/anthropic.ts", `claude-cli/${VERSION_INTERPOLATION} (external, local-agent`],
-	["ai/src/usage/claude-oauth-endpoint.ts", `claude-cli/${VERSION_INTERPOLATION} (external, cli)`],
-	["ai/src/registry/oauth/anthropic.ts", `claude-code/${VERSION_INTERPOLATION}`],
+/** The three modules that build a Claude user-agent, each a different shape from the one version. */
+const USER_AGENT_MODULES: readonly string[] = [
+	"ai/src/providers/anthropic.ts",
+	"ai/src/usage/claude-oauth-endpoint.ts",
+	"ai/src/registry/oauth/anthropic.ts",
 ];
 
 describe("the three user-agents are built from the one version", () => {
 	/**
-	 * Each of the three is a DIFFERENT shape on purpose, so the contract is not that the strings match: it is
-	 * that each interpolates the shared version rather than restating it. Asserted against source text
-	 * because two of the three are module-private constants with no exported form to read.
+	 * Each module binds the owner's version. The three shapes are pinned at the request level against the
+	 * owner's value: anthropic-alignment.test.ts (provider), claude-usage-headers.test.ts (account endpoints)
+	 * and anthropic-oauth.test.ts (OAuth bootstrap). A module that restated the version as a literal would
+	 * pass those while the two agree; "nobody spells the version as a literal" above catches it.
 	 */
-	it.each(USER_AGENT_SHAPES)("%s interpolates the version", (relative, expected) => {
+	it.each([...USER_AGENT_MODULES])("%s binds the owner's version", (relative: string) => {
 		const source = fs.readFileSync(path.join(PACKAGES, relative), "utf-8");
 
-		expect(source).toContain(expected);
-	});
-
-	/**
-	 * The three shapes are distinct, which is what makes the version the only shared part. If two of them
-	 * ever became identical, one of the modules would be sending the wrong client's fingerprint, and the
-	 * case above would still pass because both would still interpolate the version.
-	 */
-	it("the three shapes differ from each other", () => {
-		expect(new Set(USER_AGENT_SHAPES.map(([, shape]) => shape)).size).toBe(3);
-	});
-
-	/**
-	 * NON-VACUITY for the escaped spelling above: it really produces the text it stands for. A template
-	 * literal that lost its escape would interpolate to nothing, every `toContain` would search for
-	 * `claude-cli/ (external, cli)`, and the whole block would go quietly green on nothing.
-	 */
-	it("the placeholder is the literal text, not an interpolation", () => {
-		expect(VERSION_INTERPOLATION).toBe("$" + "{claudeCodeVersion}");
-		expect(VERSION_INTERPOLATION.length).toBe(20);
+		expect(namedImportsFrom(source, "@veyyon/catalog/wire/anthropic")).toContain("claudeCodeVersion");
 	});
 });

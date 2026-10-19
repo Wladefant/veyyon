@@ -50,28 +50,26 @@ export function collectStringPaths(value: unknown): string[] {
  */
 export function getEditDestructiveIntent(args: unknown): { kind: "delete" | "move"; paths: string[] } | undefined {
 	if (!isRecord(args)) return undefined;
-	const a = args as Record<string, unknown>;
 
-	const edits = Array.isArray(a.edits) ? a.edits : undefined;
+	const edits = Array.isArray(args.edits) ? args.edits : undefined;
 	if (edits) {
-		const path = getStringProperty(a, "path");
+		const path = getStringProperty(args, "path");
 		if (path) {
 			for (const edit of edits) {
 				if (!isRecord(edit)) continue;
-				const op = getStringProperty(edit as Record<string, unknown>, "op");
+				const op = getStringProperty(edit, "op");
 				if (op === "delete") return { kind: "delete", paths: [path] };
 			}
 		}
 		for (const edit of edits) {
 			if (!isRecord(edit)) continue;
-			const entry = edit as Record<string, unknown>;
-			const op = getStringProperty(entry, "op");
-			const rename = getStringProperty(entry, "rename");
+			const op = getStringProperty(edit, "op");
+			const rename = getStringProperty(edit, "rename");
 			if (op !== "create" && rename) return { kind: "move", paths: path ? [path, rename] : [rename] };
 		}
 	}
 
-	const input = getStringProperty(a, "input");
+	const input = getStringProperty(args, "input");
 	if (input) {
 		try {
 			const patch = Patch.parse(input);
@@ -104,7 +102,7 @@ export function getEditDestructiveIntent(args: unknown): { kind: "delete" | "mov
  * that moves.
  */
 export function getPermissionIntent(toolName: string, args: unknown): PermissionIntent | undefined {
-	const a = isRecord(args) ? (args as Record<string, unknown>) : {};
+	const a: Record<string, unknown> = isRecord(args) ? args : {};
 	if (toolName === TOOL.bash) {
 		const cmd = getStringProperty(a, "command")?.slice(0, 80);
 		return { toolName, title: cmd || toolName, cacheKey: toolName };
@@ -159,8 +157,7 @@ export function extractPermissionLocations(
 	cwd: string,
 	explicitPaths?: string[],
 ): { path: string; line?: number }[] {
-	if (!args || typeof args !== "object") return [];
-	const a = args as Record<string, unknown>;
+	if (!isRecord(args)) return [];
 	const out: { path: string; line?: number }[] = [];
 	const pushPath = (value: unknown) => {
 		if (typeof value !== "string" || value.length === 0) return;
@@ -179,16 +176,16 @@ export function extractPermissionLocations(
 		}
 		return out;
 	}
-	pushPath(a.path);
-	pushPath(a.file);
-	for (const p of collectStringPaths(a.paths)) {
+	pushPath(args.path);
+	pushPath(args.file);
+	for (const p of collectStringPaths(args.paths)) {
 		pushPath(p);
 	}
-	pushPath(a.oldPath);
-	pushPath(a.newPath);
-	pushPath(a.from);
-	pushPath(a.to);
-	pushPath(a.source);
-	pushPath(a.destination);
+	pushPath(args.oldPath);
+	pushPath(args.newPath);
+	pushPath(args.from);
+	pushPath(args.to);
+	pushPath(args.source);
+	pushPath(args.destination);
 	return out;
 }

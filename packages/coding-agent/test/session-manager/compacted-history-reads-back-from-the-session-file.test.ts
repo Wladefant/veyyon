@@ -65,6 +65,13 @@
  * the heap at every turn of the event loop while a file with a compaction every eight results
  * streams in.
  *
+ * A compaction behind server-side windows records no summary, so the span it prepares reaches
+ * back to the start of the session, all of it compacted. Extracting that span's file operations
+ * read every message back on every compaction: 250 to 500 ms of blocked event loop per pass on a
+ * resumed session, though a server-side pass never reads them. The preparation sweep stacks
+ * server-side windows, pins the reads of a preparation at zero, and checks that its file
+ * operations still read the span back when a local pass asks for them.
+ *
  * NOT CAUGHT: the heap bounds have a 2x and 4x margin, so a regression that keeps a quarter of the
  * cold payloads resident passes. Windows holds no pinned reader, so there every entry stays in
  * memory and the fd assertions are skipped. A branch scan this suite does not run that reads a
@@ -73,7 +80,8 @@
  * A record-only entry a streamed load leaves in memory is moved once the load returns, so only the
  * load's peak, which no sweep here bounds for that kind, shows it. Every migration today changes
  * only fields a moved entry keeps in memory, so the migration sweep sees the older file load whole
- * through `cold` and not through a wrong value.
+ * through `cold` and not through a wrong value. A server-side pass that reads `fileOps`, or a
+ * memory backend that walks the summarized span, still reads the history back.
  */
 
 import { afterEach, describe, expect, it, vi } from "bun:test";
@@ -83,6 +91,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { Agent, type AgentMessage } from "@veyyon/agent-core";
+import { DEFAULT_COMPACTION_SETTINGS, prepareCompaction } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as ai from "@veyyon/ai/stream";
@@ -1570,4 +1579,79 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 			expect(storage.reads).toBeGreaterThan(readsWhenCooled!);
 		},
 	);
+
+	it("prepares a compaction behind server-side windows without reading compacted history back until its file operations are read", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-cold-windows-"));
+		tempDirs.push(root);
+		const dir = path.join(root, "sessions");
+		fs.mkdirSync(dir);
+		fs.mkdirSync(path.join(root, "blobs"));
+		const storage = new ObservedStorage();
+		const manager = SessionManager.create(root, dir, storage);
+		const appendTurns = (round: number, turns: number): string[] => {
+			const prompts: string[] = [];
+			for (let turn = 0; turn < turns; turn++) {
+				const at = round * 100 + turn;
+				const callId = `read-${round}-${turn}`;
+				prompts.push(
+					manager.appendMessage({ role: "user", content: big(`round-${round}-prompt-${turn}`), timestamp: at }),
+				);
+				manager.appendMessage({
+					...assistantTurn("", at),
+					content: [
+						{ type: "text", text: big(`round-${round}-answer-${turn}`) },
+						{
+							type: "toolCall",
+							id: callId,
+							name: "read",
+							arguments: { path: `src/round-${round}/file-${turn}.ts` },
+						},
+					],
+				});
+				manager.appendMessage({
+					role: "toolResult",
+					toolCallId: callId,
+					toolName: "read",
+					content: [{ type: "text", text: big(`round-${round}-body-${turn}`, 4096) }],
+					isError: false,
+					timestamp: at,
+				});
+			}
+			return prompts;
+		};
+		// Each round ends in a server-side window, as a session compacting through the OpenAI Responses
+		// compaction endpoint records one: an empty summary, the window under `preserveData`, and the
+		// last two turns kept. A local pass cannot build on such an entry, so the span it summarizes
+		// reaches back to the start of the session.
+		const rounds = 3;
+		for (let round = 0; round < rounds; round++) {
+			const prompts = appendTurns(round, 6);
+			manager.appendCompaction("", undefined, prompts.at(-2)!, 50_000, undefined, false, {
+				remoteCompaction: {
+					version: 1,
+					provider: "openai-codex",
+					api: "openai-codex-responses",
+					model: "gpt-5.5",
+					window: [{ type: "compaction", encrypted_content: `window-${round}` }],
+					compactedAt: new Date(Date.UTC(2025, 0, 1, round)).toISOString(),
+				},
+			});
+			manager.coolCompactedHistory();
+		}
+		appendTurns(rounds, 6);
+		const branch = manager.getBranch();
+		// The first round is compacted history, so a zero below is a preparation that left it on disk.
+		expect(coldFieldsOf(branch[0]!)).toBeDefined();
+
+		const before = storage.reads;
+		const preparation = prepareCompaction(branch, DEFAULT_COMPACTION_SETTINGS, { contextWindow: 200_000 });
+		if (preparation === undefined) throw new Error("the branch had nothing to compact");
+		expect(preparation.remoteChain?.links).toHaveLength(1);
+		expect(storage.reads - before).toBe(0);
+
+		// A local pass reads the file operations of the whole span, which reaches the first round.
+		expect([...preparation.fileOps.read]).toContain("src/round-0/file-0.ts");
+		expect(storage.reads - before).toBeGreaterThan(0);
+		await manager.close();
+	});
 });

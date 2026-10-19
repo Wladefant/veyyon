@@ -24,7 +24,7 @@ import { getProjectAgentDir, TempDir } from "@veyyon/utils";
  * The summary strategy makes this visible: it projects over budget, falls
  * back to a context-full summary ("could not bring the context under the
  * limit"), and the success tail used to schedule the auto-continue regardless —
- * the next agent_end re-entered #checkCompaction over the same oversized tail and
+ * the next agent_end re-entered TurnContextCheck.check over the same oversized tail and
  * re-fired forever.
  *
  * The fix gates the auto-continue (and the overflow/incomplete retry) on a

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, describe, expect, it, type Mock, spyOn } from "bun:test";
 import { parseCommitArgs } from "../../src/commit/cli";
 
 /**
@@ -67,8 +67,8 @@ describe("parseCommitArgs parsing", () => {
 });
 
 describe("parseCommitArgs error handling", () => {
-	let exitSpy: ReturnType<typeof spyOn>;
-	let stderrSpy: ReturnType<typeof spyOn>;
+	let exitSpy: Mock<typeof process.exit>;
+	let stderrSpy: Mock<typeof process.stderr.write>;
 
 	afterEach(() => {
 		exitSpy?.mockRestore();

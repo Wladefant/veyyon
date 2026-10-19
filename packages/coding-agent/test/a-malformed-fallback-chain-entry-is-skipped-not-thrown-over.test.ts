@@ -5,10 +5,11 @@
  * so a typo in config turned one rate limit into a prompt that never settled.
  *
  * Class closed: every non-string JSON value (number, boolean, null, object, array) as a chain
- * entry, under every chain key kind (role, exact model, `provider/*` wildcard), plus a chain
+ * entry, under every chain key kind (`default`, exact model, `provider/*` wildcard), plus a chain
  * that is not an array and a value that is not a mapping. In each case the turn settles within
  * a stated bound, the well-formed entries still apply, and the configured shape is reported as a
- * warning.
+ * warning. A value that is not a mapping is written to a config file, the way it reaches a user:
+ * it reads as the empty default and the settings type report states it.
  *
  * Gap: this drives the session's retry path only. The model hub reads the same sanitizer and is
  * covered by its own suite; a new reader of the raw setting that bypasses
@@ -16,6 +17,7 @@
  * other than chain resolution.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
@@ -27,6 +29,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import * as YAML from "yaml";
 
 function bundled(provider: string, id: string): Model {
 	const model = getBundledModel(provider, id);
@@ -55,10 +58,10 @@ const NON_STRING_ENTRIES: Record<string, unknown> = {
 };
 
 /** Every chain key kind that resolves to the failing primary model. */
-const CHAIN_KEYS: Record<string, { key: string; kind: "role" | "model" }> = {
-	role: { key: "default", kind: "role" },
-	model: { key: primarySelector, kind: "model" },
-	wildcard: { key: `${primary.provider}/*`, kind: "model" },
+const CHAIN_KEYS: Record<string, string> = {
+	default: "default",
+	model: primarySelector,
+	wildcard: `${primary.provider}/*`,
 };
 
 interface TurnOutcome {
@@ -85,8 +88,31 @@ afterAll(() => {
 	tempDir.removeSync();
 });
 
+let configDirs = 0;
+
+/** Settings holding `fallbackChains`, as a runtime override or written to a profile config file. */
+async function chainSettings(fallbackChains: unknown, written: "override" | "file"): Promise<Settings> {
+	if (written === "override") {
+		return Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.fallbackChains": fallbackChains,
+		});
+	}
+	const agentDir = path.join(tempDir.path(), `config-${++configDirs}`);
+	fs.mkdirSync(agentDir);
+	fs.writeFileSync(
+		path.join(agentDir, "config.yml"),
+		YAML.stringify({ compaction: { enabled: false }, retry: { baseDelayMs: 5, fallbackChains } }),
+	);
+	return await Settings.loadIsolated({ agentDir, cwd: agentDir });
+}
+
 /** One prompt whose first request to the primary fails with a rate limit; every later request succeeds. */
-async function runFailingTurn(fallbackChains: unknown): Promise<TurnOutcome> {
+async function runFailingTurn(
+	fallbackChains: unknown,
+	written: "override" | "file" = "override",
+): Promise<TurnOutcome> {
 	const requested: string[] = [];
 	const mock = createMockModel();
 	let failed = false;
@@ -104,12 +130,8 @@ async function runFailingTurn(fallbackChains: unknown): Promise<TurnOutcome> {
 			return mock.stream(model, context, options);
 		},
 	});
-	const settings = Settings.isolated({
-		"compaction.enabled": false,
-		"retry.baseDelayMs": 5,
-		"retry.fallbackChains": fallbackChains,
-	});
-	settings.setModelRole("default", primarySelector);
+	const settings = await chainSettings(fallbackChains, written);
+	settings.setDefaultModel(primarySelector);
 	const session = new AgentSession({
 		agent,
 		sessionManager: SessionManager.inMemory(),
@@ -148,7 +170,7 @@ async function runFailingTurn(fallbackChains: unknown): Promise<TurnOutcome> {
 }
 
 describe("a non-string fallback chain entry is skipped and the next entry is tried", () => {
-	for (const [keyName, { key, kind }] of Object.entries(CHAIN_KEYS)) {
+	for (const [keyName, key] of Object.entries(CHAIN_KEYS)) {
 		for (const [entryName, entry] of Object.entries(NON_STRING_ENTRIES)) {
 			it(`${entryName} entry in a ${keyName}-keyed chain`, async () => {
 				const outcome = await runFailingTurn({ [key]: [entry, fallbackSelector] });
@@ -156,7 +178,7 @@ describe("a non-string fallback chain entry is skipped and the next entry is tri
 				expect(outcome.thrown).toBeUndefined();
 				expect(outcome.requested).toEqual([primarySelector, fallbackSelector]);
 				expect(outcome.stopReason).toBe("stop");
-				expect(outcome.warnings).toEqual([`Fallback chain for ${kind} '${key}' contains a non-string selector.`]);
+				expect(outcome.warnings).toEqual([`Fallback chain '${key}' contains a non-string selector.`]);
 			});
 		}
 	}
@@ -170,19 +192,19 @@ describe("a chain or chains value of the wrong shape is reported and ignored", (
 		// No usable chain, so the failed primary is retried in place.
 		expect(outcome.requested).toEqual([primarySelector, primarySelector]);
 		expect(outcome.stopReason).toBe("stop");
-		expect(outcome.warnings).toEqual(["Fallback chain for role 'default' must be an array of selector strings."]);
+		expect(outcome.warnings).toEqual(["Fallback chain 'default' must be an array of selector strings."]);
 	});
 
 	for (const [name, value] of Object.entries({ array: [fallbackSelector], string: fallbackSelector, number: 1 })) {
 		it(`a chains value that is a ${name}, not a mapping`, async () => {
-			const outcome = await runFailingTurn(value);
+			const outcome = await runFailingTurn(value, "file");
 
 			expect(outcome.thrown).toBeUndefined();
 			expect(outcome.requested).toEqual([primarySelector, primarySelector]);
 			expect(outcome.stopReason).toBe("stop");
-			expect(outcome.warnings).toEqual([
-				"retry.fallbackChains must be a mapping of role names or model selectors to selector arrays.",
-			]);
+			expect(outcome.warnings).toHaveLength(1);
+			expect(outcome.warnings[0]).toStartWith(`retry.fallbackChains: expected an object, found ${name} `);
+			expect(outcome.warnings[0]).toEndWith("config.yml; it reads as {}");
 		});
 	}
 });

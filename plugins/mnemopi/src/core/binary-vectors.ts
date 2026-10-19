@@ -4,8 +4,6 @@ import { clampLow } from "@veyyon/utils/math";
 import { embeddingDim, type VecType } from "../config";
 import { closeQuietly, type DatabasePath, openDatabase } from "../db";
 
-export { cosineSimilarity } from "./vector-math";
-
 export const BITS_PER_BYTE = 8;
 
 /**
@@ -125,8 +123,6 @@ export function getVecType(env: NodeJS.ProcessEnv = process.env): VecType {
 	}
 	return "float32";
 }
-
-export const VEC_TYPE: VecType = getVecType();
 
 export function quantizeInt8(embedding: readonly number[]): Int8Array {
 	const out = new Int8Array(embedding.length);

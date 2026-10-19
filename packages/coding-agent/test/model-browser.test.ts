@@ -6,7 +6,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import {
 	buildBrowserItems,
 	ModelBrowser,
-	resolveRoleAssignments,
+	resolveDefaultModelAssignment,
 	sortModelItems,
 } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-browser";
 import { getThemeByName, initTheme, setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
@@ -31,7 +31,7 @@ function makeModel(provider: string, id: string): Model {
 
 /** Browser preloaded with `models`, MRU-sorted like the hub does on sync. */
 function makeBrowser(models: Model[], mruOrder: string[]): ModelBrowser {
-	const browser = new ModelBrowser(Settings.isolated({}));
+	const browser = new ModelBrowser();
 	const items = buildBrowserItems(models);
 	sortModelItems(items, { mruOrder });
 	browser.setMruOrder(mruOrder);
@@ -39,17 +39,17 @@ function makeBrowser(models: Model[], mruOrder: string[]): ModelBrowser {
 	return browser;
 }
 
-describe("default-role effort display", () => {
-	test("shows the assigned model's own Default Effort row", () => {
+describe("default model effort display", () => {
+	test("shows the default model's own Default Effort row", () => {
 		// Runtime resolves Default Effort with a concrete provider/id. The browser
 		// must pass the same selector or it skips this row and falsely shows Inherit.
 		const model = makeModel("openai", "gpt-5");
 		const settings = Settings.isolated({
-			modelRoles: { default: "openai/gpt-5" },
+			defaultModel: "openai/gpt-5",
 			defaultEffort: { "openai/gpt-5": ThinkingLevel.High },
 		});
 
-		expect(resolveRoleAssignments(settings, [model]).default).toMatchObject({
+		expect(resolveDefaultModelAssignment(settings, [model])).toMatchObject({
 			model,
 			thinkingLevel: ThinkingLevel.High,
 		});
@@ -93,7 +93,7 @@ describe("ModelBrowser perf display", () => {
 	});
 
 	function makePerfBrowser(): ModelBrowser {
-		const browser = new ModelBrowser(Settings.isolated({}));
+		const browser = new ModelBrowser();
 		browser.setItems(buildBrowserItems([makeModel("openai", "gpt-5")]));
 		browser.setPerfStats(new Map([["openai/gpt-5", { samples: 12, tps: 118.4, ttftMs: 930 }]]));
 		return browser;
@@ -120,7 +120,7 @@ describe("ModelBrowser perf display", () => {
 	});
 
 	test("models without measurements render no perf cell", () => {
-		const browser = new ModelBrowser(Settings.isolated({}));
+		const browser = new ModelBrowser();
 		browser.setItems(buildBrowserItems([makeModel("openai", "gpt-5")]));
 
 		expect(renderPlain(browser, 120)[2]).not.toContain("t/s");

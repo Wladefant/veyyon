@@ -33,7 +33,7 @@
  * is stubbed: it is a browser round trip.
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -91,8 +91,8 @@ interface Harness {
 	/** The card currently on screen, which is the one a key press goes to. */
 	readonly card: () => AccountManagerComponent;
 	readonly text: (card?: AccountManagerComponent) => string;
-	readonly login: ReturnType<typeof vi.fn>;
-	readonly showError: ReturnType<typeof vi.fn>;
+	readonly login: Mock<(provider: OAuthProvider, options?: { signal?: AbortSignal }) => Promise<unknown>>;
+	readonly showError: Mock<(message: string) => void>;
 	/**
 	 * The login dialog the controller focused, so a test can cancel it the way Esc
 	 * does. Cancelling has to run the real dialog path: its abort signal is what

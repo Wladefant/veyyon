@@ -1,23 +1,8 @@
 /**
  * The records one frame's render phases pass between them. `TUI#doRender` captures the
  * transition, reconciles the committed prefix, plans the window, assembles its rows and selects
- * an intent; each record is the output of one phase and the input of the next.
+ * an intent (`render-intent.ts`); each record is the output of one phase and the input of the next.
  */
-
-/**
- * Render intent. `#doRender` classifies each frame, and the matching `#emit*`
- * method owns the bytes written and the state update.
- *
- * - `fullPaint`: gesture-driven replay — initial paint, session replacement,
- *   resize, resetDisplay. Rewrites the frame from home; destructive replaces
- *   clear native scrollback via ED3 without first blanking the viewport. The
- *   only ED3 callsite in the engine.
- * - `update`: ordinary frame. Commits the newly settled chunk at the
- *   scrollback seam (if any) and repaints the window with relative moves.
- */
-export type RenderIntent =
-	| { kind: "fullPaint"; clearScrollback: boolean }
-	| { kind: "update"; chunkTo: number; windowTop: number };
 
 /**
  * Window and cursor state `#doRender` captures before any emitter runs, and
@@ -75,4 +60,24 @@ export interface AssembledWindow {
 	readonly cursorTrackingLineCount: number;
 	/** The window is an overlay composite or the frozen scroll-isolation view, so an update rewrites it in place. */
 	readonly repaintInPlace: boolean;
+}
+
+/** The positions one incremental update writes relative to, derived from the plan and the previous frame. */
+export interface UpdateGeometry {
+	/** First frame row of the commit chunk: `#committedRows` before the update. */
+	readonly chunkFrom: number;
+	/** End of the commit chunk, `[chunkFrom, chunkTo)`. */
+	readonly chunkTo: number;
+	/** Frame row the window starts at. */
+	readonly windowTop: number;
+	/** Rows the window moved down since the previous frame. */
+	readonly scroll: number;
+	/** Screen row the hardware cursor is on before the update, clamped to the viewport. */
+	readonly currentScreenRow: number;
+	/** Frame row of the last content row inside the window. */
+	readonly contentBottomRow: number;
+	/** Bytes every update opens with: the paint-begin sequence, then the image purge. */
+	readonly lead: string;
+	readonly width: number;
+	readonly height: number;
 }

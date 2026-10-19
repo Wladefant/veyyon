@@ -8,7 +8,8 @@
 import type { AgentToolResult } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy } from "@veyyon/utils/abortable";
-import type { FileDiagnosticsResult, WritethroughCallback, WritethroughDeferredHandle } from "../../lsp";
+import type { FileDiagnosticsResult } from "../../lsp/diagnostics";
+import type { WritethroughCallback, WritethroughDeferredHandle } from "../../lsp/writethrough";
 import type { ToolSession } from "../../tools";
 import { routeWriteThroughBridge } from "../../tools/core/acp-bridge";
 import { invalidateFsScanAfterWrite } from "../../tools/core/fs-cache-invalidation";
@@ -17,7 +18,7 @@ import { enforcePlanModeWrite, resolvePlanPath } from "../../tools/core/plan-mod
 import type { LspBatchRequest } from "../../tools/core/render-utils";
 import type { EditToolDetails } from "../details";
 import { generateDiffString, replaceText } from "../diff";
-import { EditMatchError, findMatch, formatOccurrenceError } from "../match";
+import { EditMatchError, formatOccurrenceError } from "../match";
 import { detectLineEnding, normalizeToLF, restoreLineEndings } from "../normalize";
 import { readEditFileTextWithBom, serializeEditFileText } from "../read-file";
 import { pruneOversizedEditSnapshots } from "../snapshot-details";
@@ -127,11 +128,8 @@ export async function executeReplaceSingle(
 		threshold: fuzzyThreshold,
 	});
 
-	if (result.count === 0) {
-		const matchOutcome = findMatch(normalizedContent, normalizedOldText, {
-			allowFuzzy,
-			threshold: fuzzyThreshold,
-		});
+	if (result.unmatched) {
+		const matchOutcome = result.unmatched;
 
 		if (matchOutcome.occurrences && matchOutcome.occurrences > 1) {
 			throw new Error(formatOccurrenceError(path, matchOutcome));

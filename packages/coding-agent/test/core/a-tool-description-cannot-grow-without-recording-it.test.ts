@@ -53,6 +53,7 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/ast-edit": 375,
 	"tools/async-result": 105,
 	"tools/bash": 1564,
+<<<<<<< HEAD
 	// 1440 -> 1575: the `context` and `storage_state` parameters, the `save_state` action and the signed-in-session example.
 	"tools/browser": 1575,
 	"tools/checkpoint": 166,
@@ -60,12 +61,19 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/eval": 2007,
 	// 410 -> 469: image and binary file support for github file-read.
 	"tools/github": 469,
+=======
+	"tools/browser": 1815,
+	"tools/checkpoint": 166,
+	"tools/debug": 414,
+	"tools/eval": 2023,
+	"tools/github": 410,
+>>>>>>> santhreal/main
 	"tools/goal": 162,
 	"tools/search": 703,
 	"tools/image-attachment-describe": 142,
 	"tools/image-attachment-describe-system": 196,
 	"tools/image-gen": 110,
-	"tools/inspect-image": 255,
+	"tools/inspect-image": 260,
 	"tools/inspect-image-system": 192,
 	"tools/irc": 681,
 	"tools/isolation-recovery-hint": 83,
@@ -78,7 +86,7 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/manage-skill": 217,
 	"tools/memory-edit": 243,
 	"tools/patch": 692,
-	"tools/read": 1288,
+	"tools/read": 1295,
 	"tools/recall": 164,
 	"tools/reflect": 98,
 	// 318 -> 323: the single-replace parameters beside the internal batch contract.
@@ -105,7 +113,11 @@ const RECORDED_TOKENS: Record<string, number> = {
 };
 
 /** The sum the recorded table claims, so the total is in the diff of any trim. */
+<<<<<<< HEAD
 const RECORDED_TOTAL = 21992;
+=======
+const RECORDED_TOTAL = 22072;
+>>>>>>> santhreal/main
 
 const measured = new Map<string, number>([
 	...Object.entries(toolsPrompts).map(([id, entry]) => [id, estimateTokensFromText(entry.text)] as const),

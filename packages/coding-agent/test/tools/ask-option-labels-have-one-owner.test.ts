@@ -15,11 +15,13 @@
  * The reserved-label contract made the split sharper rather than harmless: `tools/agent/ask.ts` REJECTS a question
  * whose own options collide with one of these labels, so the validator and the renderer had to agree about the
  * same three strings while reading two different declarations of them. Two of ask.ts's three copies existed
- * only to populate that record, while the module that actually renders and compares them is the controller.
+ * only to populate that record, while the module that actually renders and compares them is the controller. The
+ * controller's copy moved with the collab guest dialogs into `modes/terminal/controllers/collab-guest-dialogs.ts`.
  */
 
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
+import { AskTool } from "@veyyon/coding-agent/tools/agent/ask";
 import {
 	ASK_CHAT_OPTION_LABEL,
 	ASK_NEXT_OPTION_LABEL,
@@ -29,6 +31,8 @@ import {
 } from "@veyyon/coding-agent/tools/agent/ask-option-labels";
 import { moduleSpecifiersIn } from "@veyyon/utils/module-reach";
 import { RECOMMENDED_SUFFIX, stripRecommendedSuffix, withRecommendedSuffix } from "@veyyon/wire";
+import { type } from "arktype";
+import { makeToolSession } from "../helpers/tool-session";
 
 const SRC = path.resolve(import.meta.dir, "../../src");
 const OWNER_REL = "tools/agent/ask-option-labels.ts";
@@ -37,7 +41,7 @@ const OWNER_REL = "tools/agent/ask-option-labels.ts";
 const FORMER_DECLARERS: readonly string[] = [
 	"tools/agent/ask.ts",
 	"modes/terminal/components/dialogs/ask-dialog.ts",
-	"modes/terminal/controllers/extension-ui-controller.ts",
+	"modes/terminal/controllers/collab-guest-dialogs.ts",
 ];
 
 const RETIRED_NAMES: readonly string[] = [
@@ -193,14 +197,22 @@ describe("the ask option labels have one owner", () => {
 	});
 
 	/**
-	 * The validator and the renderers now read one declaration. Asserted structurally because the consequence is
-	 * invisible at runtime: `tools/agent/ask.ts` rejects a question whose options collide with a reserved label, and
-	 * while that check read its own copy it could have been rejecting a string no UI ever rendered.
+	 * The validator and the renderers read one declaration: the ask schema rejects a question whose option collides
+	 * with each label the owner reserves, and accepts an ordinary one. While the check read its own copy it could
+	 * have been rejecting a string no UI ever rendered. A private copy equal to the owner's today is not caught; it
+	 * fails here the moment the owner's list changes without it.
 	 */
-	it("has the question validator using the shared predicate", async () => {
-		const ask = await Bun.file(path.join(SRC, "tools/agent/ask.ts")).text();
-		expect(ask).toContain("isReservedAskOptionLabel(option.label)");
-		expect(ask).not.toContain("RESERVED_OPTION_LABELS[option.label]");
+	it("has the question validator rejecting every reserved label, and only those", () => {
+		const parameters = new AskTool(makeToolSession()).parameters;
+		const askWithOption = (label: string) =>
+			parameters({ questions: [{ id: "pick", question: "Which one?", options: [{ label }] }] });
+
+		for (const label of RESERVED_ASK_OPTION_LABELS) {
+			const parsed = askWithOption(label);
+			expect(parsed instanceof type.errors, label).toBe(true);
+			if (parsed instanceof type.errors) expect(parsed.summary).toContain(label);
+		}
+		expect(askWithOption("Keep the current layout") instanceof type.errors).toBe(false);
 	});
 
 	/**

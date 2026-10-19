@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { executeHashlineSingle } from "@veyyon/coding-agent/edit";
+import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { removeWithRetries } from "@veyyon/utils";
@@ -43,7 +44,7 @@ describe("write→read→edit→read chain adversarial", () => {
 		await removeWithRetries(tmpDir);
 	});
 
-	function session() {
+	function session(): ToolSession {
 		return makeToolSession({
 			cwd: tmpDir,
 			hasUI: false,
@@ -61,7 +62,7 @@ describe("write→read→edit→read chain adversarial", () => {
 		});
 	}
 
-	function editOpts(sess: ReturnType<typeof session>, input: string) {
+	function editOpts(sess: ToolSession, input: string) {
 		return {
 			session: sess,
 			input,

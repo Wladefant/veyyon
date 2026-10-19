@@ -4,6 +4,7 @@
  */
 
 import type { AgentToolResult } from "@veyyon/agent-core";
+import { formatBytes } from "@veyyon/utils/format";
 import { readImageMetadata } from "@veyyon/utils/mime";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { InternalUrlRouter, resolveLocalUrlToFile } from "../../internal-urls";
@@ -12,7 +13,6 @@ import type { InternalUrl } from "../../internal-urls/types";
 import { truncateHeadBytes } from "../../session/streaming-output";
 import { inlineBudgetFor } from "../core/output-artifact";
 import type { ParsedSelector } from "../core/path-utils";
-import { formatBytes } from "../core/render-utils";
 import { ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 import { readArtifactFile } from "./read-artifact";

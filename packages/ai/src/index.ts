@@ -11,17 +11,26 @@ export type { Type } from "arktype";
 export { type ZodType, z } from "zod/v4";
 export * from "./api-registry";
 export type * from "./auth-broker";
+export {
+	isRefreshFailureDisableCause,
+	isSqliteBusyError,
+	OAUTH_REFRESH_FAILURE_DISABLE_PREFIX,
+} from "./auth-credential-rows";
 export type * from "./auth-gateway/dispatch";
+export type { AuthGatewayBootOptions, ModelResolver } from "./auth-gateway/server";
 export * from "./auth-gateway/types";
 export * from "./auth-retry";
 export * from "./auth-storage";
+export * from "./auth-storage-sqlite";
 export * from "./env-api-key";
 export * from "./error/rate-limit";
 export * from "./instrumentation";
 export * from "./provider-details";
+export { configureProviderMaxInFlightRequests } from "./provider-inflight-limits";
 export * from "./providers/anthropic";
 export * from "./providers/anthropic-client";
 export * from "./providers/anthropic-session-state";
+export * from "./providers/anthropic-tool-schema";
 export * from "./providers/azure-openai-responses";
 export * from "./providers/claude-device-id";
 export type * from "./providers/cursor";
@@ -52,6 +61,7 @@ export * from "./usage/kimi";
 export * from "./usage/minimax-code";
 export * from "./usage/ollama";
 export * from "./usage/openai-codex";
+export * from "./usage/openai-codex-predictions";
 export * from "./usage/openai-codex-reset";
 export * from "./usage/opencode-go";
 export * from "./usage/zai";

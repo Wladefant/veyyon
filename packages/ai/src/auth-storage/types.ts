@@ -348,7 +348,9 @@ export interface AuthCredentialStore {
 	 */
 	readAuthCredentialById?(id: number): StoredAuthCredential | undefined;
 	/**
-	 * List the DISABLED rows for a provider, newest disable first.
+	 * List the DISABLED rows for a provider that no later login has answered, newest
+	 * disable first. A row disabled before a login of the same provider that is still
+	 * active is left out: that login answered it, whichever account it signed in.
 	 *
 	 * `listAuthCredentials` hides them, which is right for resolution: a disabled
 	 * credential must never be handed out. It is wrong for reporting. A user whose
@@ -468,7 +470,7 @@ export interface AuthCredentialStore {
 	/**
 	 * Optional store-supplied per-credential usage report lookup. When present,
 	 * `AuthStorage` consults this before its own per-credential upstream fetch
-	 * (`#getUsageReport`). `RemoteAuthCredentialStore` implements this against
+	 * (`UsageReporting.reportFor`). `RemoteAuthCredentialStore` implements this against
 	 * the broker's aggregate `/v1/usage` (one coalesced round-trip shared across
 	 * all callers) so multi-credential ranking on the client never hits the
 	 * upstream provider's rate-limited usage endpoint from the laptop IP.
@@ -547,10 +549,11 @@ export interface CredentialDisabledEvent {
 /**
  * Event payload describing an automatic move from one account to another.
  *
- * Emitted only for AUTH DEATH — a credential a request cannot be served with at all (revoked
- * token, `invalid_grant`, a row disabled underneath us). Quota and rate-limit movement never
- * emits this, because that movement is gated by the load-balancing setting and, when it is on,
- * is the routine thing the operator asked for rather than news.
+ * Emitted only for a credential that cannot serve the request at all, whatever the load-balancing
+ * setting says: AUTH DEATH (revoked token, `invalid_grant`, a row disabled underneath us), or a plan
+ * that does not include the requested model. Quota and rate-limit movement never emits this,
+ * because that movement is gated by the load-balancing setting and, when it is on, is the routine
+ * thing the operator asked for rather than news.
  *
  * Both accounts are named: a notice that says only "switched account" leaves the operator unable
  * to tell which credential died or which one is now spending, which is the whole content of the
@@ -562,33 +565,46 @@ export interface CredentialFailoverEvent {
 	from: { credentialId: number; label: string };
 	/** The account routing moved to. */
 	to: { credentialId: number; label: string };
+	/** `auth`: the grant was refused. `model-not-in-plan`: the account's plan does not include the model. */
+	reason: CredentialFailoverReason;
 	cause: string;
 }
 
+/** Why a {@link CredentialFailoverEvent} moved off an account. */
+export type CredentialFailoverReason = "auth" | "model-not-in-plan";
+
 /**
- * Event payload for the move that did NOT happen: this account's quota window is exhausted and
- * sibling accounts are sitting unblocked, but `accounts.loadBalancing` is off so nothing moved.
+ * Event payload for the move that did NOT happen: this account cannot serve the request, sibling
+ * accounts are sitting unblocked, and `accounts.loadBalancing` is off so nothing moved.
  *
- * The exact counterpart of {@link CredentialFailoverEvent}. Auth death moves without asking and
- * says so; quota exhaustion respects the setting and, until now, said nothing at all: the turn
- * simply waited out a window that can be hours long, next to accounts that could have served it.
- * That silence is what makes the setting undiscoverable, because the one moment it is worth
- * knowing about is the moment it costs something.
+ * The counterpart of {@link CredentialFailoverEvent}. Auth death moves without asking and says so;
+ * a spent quota window or a plan that does not include the model respects the setting, and
+ * announces itself here because the one moment the setting is worth knowing about is the moment it
+ * costs something.
  *
- * Emitted at most once per exhausted window per account, so a turn that retries does not repeat
- * itself. Never emitted when the setting is ON (the move is the routine thing the operator asked
- * for) and never when no sibling could have served (then the wait is the provider's, not a
- * choice anyone made).
+ * Emitted at most once per exhausted window, or per refused model, per account, so a turn that
+ * retries does not repeat itself. Never emitted when the setting is ON and never when no sibling
+ * could have served.
  */
-export interface UsageLimitWithheldEvent {
+export type UsageLimitWithheldEvent = {
 	provider: string;
-	/** The account whose window is exhausted. */
+	/** The account that cannot serve the request. */
 	account: { credentialId: number; label: string };
-	/** Stored, same-type, unblocked accounts that would have served this request. Always >= 1. */
+	/** Stored, same-type accounts that would have served this request. Always >= 1. */
 	idleSiblings: number;
-	/** Epoch ms when this account's own window is expected back. */
-	retryAtMs: number;
-}
+} & (
+	| {
+			/** The account's quota window is exhausted. */
+			reason: "quota";
+			/** Epoch ms when this account's own window is expected back. */
+			retryAtMs: number;
+	  }
+	| {
+			/** The account's plan does not include the model, so no wait lets it serve. */
+			reason: "model-not-in-plan";
+			modelId: string;
+	  }
+);
 
 export type AuthStorageOptions = {
 	usageProviderResolver?: (provider: Provider) => UsageProvider | undefined;

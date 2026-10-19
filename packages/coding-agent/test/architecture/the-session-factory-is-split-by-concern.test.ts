@@ -54,7 +54,10 @@ const SDK = repoPath("packages/coding-agent/src/sdk.ts");
  * MEASURED at 1646 lines after `createAgentSession` became the `SessionStartup` steps and the
  * request hooks, the agent identity, the provider prompt cache key, the credential-disabled relay,
  * the tool discovery mode, the command input discovery and the memory hydration moved into
- * `src/session/` modules. This falls when `SessionStartup` is split again.
+ * `src/session/` modules. 1646 to 1626: the provider preferences moved to the one
+ * `config/provider-globals.ts` reader the session scope already ran. 1626 to 1627: the active-skill
+ * setter is imported from its own leaf, `extensibility/active-skills.ts`, rather than through the loader.
+ * This falls when `SessionStartup` is split again.
  */
 const SDK_CEILING = 1840;
 

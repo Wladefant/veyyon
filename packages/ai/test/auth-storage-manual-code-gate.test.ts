@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import { registerOAuthProvider, unregisterOAuthProviders } from "@veyyon/ai/registry/oauth";
 import * as gitlabDuoWorkflowOAuth from "@veyyon/ai/registry/oauth/gitlab-duo-workflow";
 import type { OAuthLoginCallbacks, OAuthProviderInterface } from "@veyyon/ai/registry/oauth/types";

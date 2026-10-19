@@ -29,6 +29,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
 	createModuleReachCache,
+	dynamicImportSpecifiersIn,
 	type ModuleReachResolution,
 	moduleReach,
 	moduleReachCount,
@@ -150,9 +151,21 @@ describe("asking whether a model is configured is not calling one", () => {
 		expect(reach(relative)).toBeLessThanOrEqual(ceiling);
 	});
 
-	/** The calling half keeps the engine, because calling a model requires the streaming engine. Measured at 203. */
-	it("local-llm reaches at most 215 modules", () => {
-		expect(reach("core/local-llm.ts")).toBeLessThanOrEqual(215);
+	/**
+	 * The calling half keeps the engine, because calling a model requires the streaming engine. Measured at 203.
+	 *
+	 * RE-MEASURED 2026-10-13 at 216. The streaming engine's graph grew by leaves reached through files
+	 * already in it; the ones added since 2026-09-20 are `utils/log-file.ts`, `catalog/compat/share.ts`,
+	 * `catalog/catalog-spans.ts`, `utils/local-time.ts`, `ai/dialect/json-tool-call-scanner.ts`,
+	 * `ai/dialect/bracket-walk.ts` and `catalog/wire/kimi-code.ts`. None is a mnemopi edge, so the cut this
+	 * file holds did not move.
+	 *
+	 * RE-MEASURED 2026-10-15 at 217: `ai/registry/oauth/token-response.ts`, the shared reader that requires
+	 * a token endpoint's JSON to be an object, reached through `ai/registry/oauth/nous-research.ts`. Not a
+	 * mnemopi edge.
+	 */
+	it("local-llm reaches at most 217 modules", () => {
+		expect(reach("core/local-llm.ts")).toBeLessThanOrEqual(217);
 	});
 
 	/**
@@ -184,8 +197,7 @@ describe("asking whether a model is configured is not calling one", () => {
 		const source = fs.readFileSync(path.join(SRC, "core", "extraction.ts"), "utf-8");
 
 		expect(runtimeImportsOf("core/extraction.ts")).not.toContain("./local-llm");
-		expect(source).toContain('import("./local-llm")');
-		expect(source).toContain("llmClient()");
+		expect(dynamicImportSpecifiersIn(source)).toContain("./local-llm");
 	});
 
 	/**

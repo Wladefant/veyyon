@@ -44,7 +44,7 @@ import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
 import type { Message, ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { createMockModel, type MockResponse } from "@veyyon/ai/providers/mock";
+import { createMockModel, type MockModel, type MockResponse } from "@veyyon/ai/providers/mock";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
@@ -102,7 +102,7 @@ describe("a tool call the harness cannot run never executes and errors to the mo
 	let tempDir: string;
 	let authStorage: AuthStorage | undefined;
 	let session: AgentSession;
-	let mock: ReturnType<typeof createMockModel>;
+	let mock: MockModel;
 	let scriptedResponses: MockResponse[];
 	let executedArgs: Record<string, unknown>[];
 

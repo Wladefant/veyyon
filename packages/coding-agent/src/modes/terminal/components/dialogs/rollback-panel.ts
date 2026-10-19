@@ -19,7 +19,7 @@ import { errorMessage } from "@veyyon/utils";
 import type { MouseRoutable, SgrMouseEvent } from "@veyyon/utils/mouse";
 import { buildRollbackRows, type RollbackRow, type UrlOpener } from "../../../../cli/rollback-cli";
 import { getAllReleases, readVersionMoves } from "../../../../cli/update-cli";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { RollbackPickerComponent } from "../selectors/rollback-picker";
 
 /** What the panel needs from its host, so none of it is reached for globally. */

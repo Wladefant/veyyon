@@ -38,6 +38,7 @@ export interface RegisteredSettingDef {
 	type: SettingType;
 	default: unknown;
 	values?: readonly string[];
+	invalid?: string;
 	retiredBy?: string;
 	ui?: AnyUiMetadata;
 	validateEntry?: (key: string, value: unknown) => string | undefined;
@@ -96,11 +97,28 @@ let schemaPaths: readonly SettingPath[] = [];
  * A path already registered fails loud. Two packages declaring one key is a defect in whichever
  * arrived second, and resolving it by overwrite would let the panel show one declaration while
  * the store read another.
+ *
+ * A path that is the parent of another path fails loud too. One config key holds a value or a
+ * group of settings, not both: writing `a.b.c` replaces a stored `a.b: false` with `{ c: … }`,
+ * and writing `a.b` drops `a.b.c`.
+ *
+ * A rejected table registers none of its paths.
  */
 export function declareSettings<T extends SettingsTable>(table: T): T {
 	for (const path of Object.keys(table)) {
 		if (Object.hasOwn(schema, path)) {
 			throw new Error(`Setting "${path}" is declared twice; a setting has one owner.`);
+		}
+	}
+	const paths = new Set([...schemaPaths, ...Object.keys(table)]);
+	for (const path of paths) {
+		for (let dot = path.indexOf("."); dot !== -1; dot = path.indexOf(".", dot + 1)) {
+			const parent = path.slice(0, dot);
+			if (paths.has(parent)) {
+				throw new Error(
+					`Setting "${parent}" is the parent of setting "${path}"; a config key holds a value or a group of settings, not both.`,
+				);
+			}
 		}
 	}
 	try {
@@ -170,6 +188,12 @@ export function settingsSchemaPaths(): readonly SettingPath[] {
 /** Get the default value for a setting path */
 export function getDefault<P extends SettingPath>(path: P): SettingValue<P> {
 	return declared(path).default as SettingValue<P>;
+}
+
+/** The value an enum setting reads as when its configured value is not one of `values`: `invalid`, else `default`. */
+export function getInvalidValue<P extends SettingPath>(path: P): SettingValue<P> {
+	const def = declared(path);
+	return (def.invalid ?? def.default) as SettingValue<P>;
 }
 
 /** Check if a path has UI metadata (should appear in settings panel) */
@@ -253,52 +277,51 @@ export function describeSettingTypeMismatch(path: string, value: unknown): strin
 	const mismatch = (expected: string): string =>
 		`${path}: expected ${expected}, found ${found} (${JSON.stringify(value)})`;
 
-	switch (def.type) {
-		case "boolean":
-			return typeof value === "boolean" ? undefined : mismatch("a boolean (true or false)");
-		case "number": {
-			// NaN and the infinities are numbers to `typeof` and poison every
-			// comparison they reach, so they are rejected with the non-numbers.
-			if (typeof value !== "number" || !Number.isFinite(value)) {
+	if (!hasDeclaredKind(path, value)) {
+		switch (def.type) {
+			case "boolean":
+				return mismatch("a boolean (true or false)");
+			case "number":
 				return mismatch("a finite number");
-			}
+			case "string":
+				return mismatch("a string");
+			case "modelChain":
+				return mismatch("a model pattern, or a list of them");
+			case "array":
+				return mismatch("an array");
+			case "record":
+				return mismatch("an object");
+		}
+	}
+
+	switch (def.type) {
+		case "number": {
 			if (value === UNSET_NUMBER && isUnsetNumberPath(path as SettingPath)) {
 				return undefined;
 			}
 			const ui = def.ui as { min?: number } | undefined;
-			if (ui?.min !== undefined && value < ui.min) {
+			if (ui?.min !== undefined && (value as number) < ui.min) {
 				return `${path}: expected a number >= ${ui.min}, found ${value}`;
 			}
 			return undefined;
 		}
-		case "string":
-			return typeof value === "string" ? undefined : mismatch("a string");
-		case "modelChain":
-			// Both encodings of one chain. A list of models is the readable way to
-			// write one and the way the handbook shows it, and a comma string is what
-			// a CLI flag and the settings text box produce, so refusing either would
-			// refuse a config the runtime reads correctly. An array with a non-string
-			// in it is still wrong, and saying so names the element.
-			if (typeof value === "string") return undefined;
-			if (Array.isArray(value)) {
-				const bad = value.findIndex(entry => typeof entry !== "string");
-				return bad === -1
-					? undefined
-					: `${path}: expected model patterns, found ${describeValueType(value[bad])} at index ${bad} (${JSON.stringify(value)})`;
-			}
-			return mismatch("a model pattern, or a list of them");
+		case "modelChain": {
+			// An array with a non-string in it is still wrong, and saying so names the element.
+			if (!Array.isArray(value)) return undefined;
+			const bad = value.findIndex(entry => typeof entry !== "string");
+			return bad === -1
+				? undefined
+				: `${path}: expected model patterns, found ${describeValueType(value[bad])} at index ${bad} (${JSON.stringify(value)})`;
+		}
 		case "enum": {
 			if (enumMember(path, value) !== undefined) return undefined;
 			return `${path}: expected one of ${(def.values ?? []).join(", ")}, found ${JSON.stringify(value)}`;
 		}
-		case "array":
-			return Array.isArray(value) ? undefined : mismatch("an array");
 		case "record": {
-			if (!isRecord(value)) return mismatch("an object");
 			// A map whose entries carry a shape of their own (e.g. the
 			// depth-keyed model chains of `agent.modelByDepth`) names the
 			// offending entry; the entries that are fine keep working.
-			if (def.validateEntry === undefined) return undefined;
+			if (def.validateEntry === undefined || !isRecord(value)) return undefined;
 			for (const [key, entry] of Object.entries(value)) {
 				const reason = def.validateEntry(key, entry);
 				if (reason !== undefined) return reason;
@@ -307,6 +330,37 @@ export function describeSettingTypeMismatch(path: string, value: unknown): strin
 		}
 		default:
 			return undefined;
+	}
+}
+
+/**
+ * True when `value` has the kind setting `path` declares, so a reader typed by the declaration can
+ * use it: a boolean, a finite number, a string, an array, an object, or for a model chain a string
+ * or an array. An enum's membership is {@link enumMember}'s question and answers true here, as does
+ * an unregistered path. A wrong entry inside a record or a model chain is not a wrong kind: the
+ * entries that are fine keep working.
+ */
+export function hasDeclaredKind(path: string, value: unknown): boolean {
+	switch (registered()[path]?.type) {
+		case "boolean":
+			return typeof value === "boolean";
+		case "number":
+			// NaN and the infinities are numbers to `typeof` and poison every
+			// comparison they reach, so they are rejected with the non-numbers.
+			return typeof value === "number" && Number.isFinite(value);
+		case "string":
+			return typeof value === "string";
+		case "modelChain":
+			// Both encodings of one chain. A list of models is the readable way to
+			// write one and the way the handbook shows it, and a comma string is what
+			// a CLI flag and the settings text box produce.
+			return typeof value === "string" || Array.isArray(value);
+		case "array":
+			return Array.isArray(value);
+		case "record":
+			return isRecord(value);
+		default:
+			return true;
 	}
 }
 

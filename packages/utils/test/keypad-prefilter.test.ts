@@ -30,8 +30,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import * as path from "node:path";
-import { matchesKey, parseKey, setKittyProtocolActive } from "@veyyon/utils/keys";
+import { KITTY_CSI_U_PATTERN, matchesKey, parseKey, setKittyProtocolActive } from "@veyyon/utils/keys";
 
 /** Every numpad codepoint the fast path decodes, with the digit it must produce. */
 const NUMPAD: readonly [number, string][] = [
@@ -205,17 +204,15 @@ describe("sequences the guard rejects, and must still parse", () => {
 
 describe("the invariant the guard assumes", () => {
 	/**
-	 * The coupling, asserted on the source because it cannot be expressed at the guard. If the
+	 * The coupling, asserted on the pattern itself because it cannot be expressed at the guard. If the
 	 * pattern stops requiring `^\x1b\[` or stops ending in `u$`, the guard becomes a filter that
 	 * drops valid input, and the symptom is a numpad key silently acting as a navigation key rather
 	 * than anything that throws. Widening the pattern must widen the guard in the same change.
 	 */
-	it("keeps KITTY_CSI_U_PATTERN anchored on the two characters the guard checks", async () => {
-		const source = await Bun.file(path.join(import.meta.dir, "../src/keys.ts")).text();
-		const line = source.split("\n").find(text => text.includes("const KITTY_CSI_U_PATTERN"));
-
-		expect(line).toBeDefined();
-		expect(line).toContain("/^\\x1b\\[");
-		expect(line?.trimEnd().endsWith("u$/;")).toBe(true);
+	it("keeps KITTY_CSI_U_PATTERN anchored on the two characters the guard checks", () => {
+		expect(KITTY_CSI_U_PATTERN.source.startsWith("^\\x1b\\[")).toBe(true);
+		expect(KITTY_CSI_U_PATTERN.source.endsWith("u$")).toBe(true);
+		// A multiline flag would let `^` and `$` match inside the input, past the guard's three characters.
+		expect(KITTY_CSI_U_PATTERN.flags).toBe("");
 	});
 });

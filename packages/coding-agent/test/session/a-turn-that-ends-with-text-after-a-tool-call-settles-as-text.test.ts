@@ -57,7 +57,7 @@ describe("a turn that ends with text after a tool call settles as text", () => {
 			settings: Settings.isolated({
 				"compaction.enabled": false,
 				"todo.enabled": true,
-				"todo.reminders.max": 3,
+				"todo.reminderLimit": 3,
 			}),
 			modelRegistry: new ModelRegistry(authStorage),
 		});

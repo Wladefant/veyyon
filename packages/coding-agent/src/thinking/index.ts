@@ -115,12 +115,6 @@ export function resolveThinkingLevelForModel(
 	return clampThinkingLevelForModel(model, level);
 }
 
-/**
- * Sentinel selector for the coding-agent "auto" thinking mode. Kept entirely
- * inside the coding-agent layer: it is never an {@link Effort} or
- * {@link ThinkingLevel}, so provider mapping/clamping keeps seeing concrete
- * efforts. The session resolves `auto` to a concrete effort each turn.
- */
 export { AUTO_THINKING, CONFIGURED_THINKING_LEVELS, type ConfiguredThinkingLevel };
 
 /** Maps the session-level `auto` sentinel to `undefined`; concrete levels pass through. */

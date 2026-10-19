@@ -1,6 +1,6 @@
 import { Container, Text } from "@veyyon/tui";
 import type { LateDiagnosticsFileDisplay } from "@veyyon/wire/presentation";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { diagnosticsSection } from "../../../../tools/core/diagnostics";
 import { drawHiddenNote, drawSpans } from "../../draw/draw-tool-view";
 

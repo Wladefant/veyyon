@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { createLspWritethrough } from "@veyyon/coding-agent/lsp";
 import * as lspConfig from "@veyyon/coding-agent/lsp/config";
+import { createLspWritethrough } from "@veyyon/coding-agent/lsp/writethrough";
 import { TempDir } from "@veyyon/utils";
 
 describe("createLspWritethrough batching", () => {

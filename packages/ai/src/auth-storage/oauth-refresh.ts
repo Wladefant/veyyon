@@ -6,6 +6,7 @@
 
 import * as logger from "@veyyon/utils/logger";
 import { clamp } from "@veyyon/utils/math";
+import { settleWithin } from "@veyyon/utils/scoped-timeout";
 import * as AIError from "../error";
 import { getOAuthProvider, refreshOAuthToken } from "../registry/oauth";
 import type { OAuthCredentials, OAuthProvider } from "../registry/oauth/types";
@@ -13,7 +14,21 @@ import type { Provider } from "../types";
 import { raceWithSignal } from "../utils/abort";
 import type { AuthCredential, AuthCredentialStore, AuthStorageOptions, OAuthCredential } from "./types";
 
-const DEFAULT_OAUTH_REFRESH_TIMEOUT_MS = 10_000;
+/**
+ * How long a CALLER waits for a refresh before it gives up on it. A slow token endpoint must not
+ * stall credential selection or an MCP connection; the refresh itself runs on behind the caller.
+ */
+export const OAUTH_REFRESH_CALLER_WAIT_MS = 10_000;
+/**
+ * How long a lease-fenced refresh FLIGHT may run, which is longer than any caller waits for it.
+ *
+ * The flight spends a single-use refresh token. Ending it when the first caller gives up released
+ * the lease and the in-flight entry while the provider was still minting the rotation, so the next
+ * request refreshed again with the old token (which providers with reuse detection answer by
+ * revoking the whole grant), and the rotation that arrived a moment later was dropped on the floor.
+ * The flight runs to this ceiling and persists whatever it gets; only the callers stop waiting.
+ */
+export const OAUTH_REFRESH_FLIGHT_CEILING_MS = 120_000;
 /**
  * Refresh OAuth access tokens this many ms before their stated expiry. The
  * skew exists so callers downstream of {@link AuthStorage} (stream providers,
@@ -31,11 +46,17 @@ export const OAUTH_REFRESH_LEASE_TTL_MS = 15_000;
 export const OAUTH_REFRESH_LEASE_POLL_MS = 50;
 const OAUTH_REFRESH_LEASE_RENEW_MS = 5_000;
 
+/** One credential's in-process refresh, and how many callers are still waiting on its result. */
+interface RefreshFlight {
+	promise: Promise<OAuthCredentials>;
+	waiting: number;
+}
+
 export class OAuthRefresher {
 	readonly #store: AuthCredentialStore;
 	readonly #override: AuthStorageOptions["refreshOAuthCredential"];
 	readonly #persistRefreshedCredentialById: (provider: string, id: number, credential: AuthCredential) => void;
-	#oauthCredentialRefreshInFlight: Map<number, Promise<OAuthCredentials>> = new Map();
+	#oauthCredentialRefreshInFlight: Map<number, RefreshFlight> = new Map();
 
 	/**
 	 * `override` replaces the store hook and the local provider refresh when set.
@@ -94,7 +115,7 @@ export class OAuthRefresher {
 		const stopped = Promise.withResolvers<void>();
 		const renewal = (async () => {
 			while (!stop) {
-				await Promise.race([Bun.sleep(OAUTH_REFRESH_LEASE_RENEW_MS), stopped.promise]);
+				await settleWithin(stopped.promise, OAUTH_REFRESH_LEASE_RENEW_MS, undefined);
 				if (stop) return;
 				const renewed = this.#store.renewCredentialRefreshLease?.(
 					credentialId,
@@ -230,24 +251,33 @@ export class OAuthRefresher {
 	 * That converts the rotation race from something to be healed after the fact into
 	 * something that cannot happen.
 	 *
-	 * Note carefully what `signal` gates: ONLY the wait for ownership. Once the
-	 * refresh is under way it must run to completion and persist, because aborting
-	 * after the provider has rotated the token would strand it — the same loss this
-	 * whole path exists to prevent.
+	 * No caller signal reaches this function. The ownership wait and the refresh both
+	 * run under {@link OAUTH_REFRESH_FLIGHT_CEILING_MS}, because aborting after the
+	 * provider has rotated the token would strand it — the same loss this whole path
+	 * exists to prevent. At the ceiling the token request is aborted, and the lease and the
+	 * in-flight entry are held until that request settles: while it is open the provider may
+	 * still rotate the grant, so no second flight in this process or a peer spends the same
+	 * refresh token. Callers stay bounded by their own wait.
 	 */
 	async #leaseFencedRefresh(
 		provider: Provider,
 		credential: OAuthCredential,
 		credentialId: number,
-		signal?: AbortSignal,
 	): Promise<OAuthCredentials> {
 		if (!this.storeSupportsDurableLease()) {
-			return this.#refreshOAuthCredentialUnshared(provider, credential, credentialId);
+			return this.#refreshOAuthCredentialUnshared(
+				provider,
+				credential,
+				credentialId,
+				undefined,
+				OAUTH_REFRESH_FLIGHT_CEILING_MS,
+				true,
+			);
 		}
 
 		const owner = crypto.randomUUID();
+		const ownershipDeadline = Date.now() + OAUTH_REFRESH_FLIGHT_CEILING_MS;
 		for (;;) {
-			if (signal?.aborted) throw new AIError.RequestAbortError("OAuth refresh ownership aborted by caller");
 			// A peer may have finished while we waited; prefer its token over spending ours.
 			const peerFresh = this.#freshRotatedCredential(provider, credentialId, credential);
 			if (peerFresh) return peerFresh;
@@ -256,12 +286,18 @@ export class OAuthRefresher {
 			) {
 				break;
 			}
+			if (Date.now() >= ownershipDeadline) {
+				throw new AIError.OAuthError(`OAuth token refresh timed out waiting for a peer: ${provider}`, {
+					kind: "timeout",
+					provider,
+				});
+			}
 			const leaseExpiresAt = this.#store.getCredentialRefreshLeaseExpiresAt?.(credentialId);
 			const waitMs =
 				leaseExpiresAt === undefined
 					? OAUTH_REFRESH_LEASE_POLL_MS
 					: clamp(leaseExpiresAt - Date.now(), OAUTH_REFRESH_LEASE_POLL_MS, 250);
-			await raceWithSignal(Bun.sleep(waitMs), signal, "OAuth refresh ownership wait aborted by caller");
+			await Bun.sleep(waitMs);
 		}
 
 		try {
@@ -271,7 +307,14 @@ export class OAuthRefresher {
 			if (peerFresh) return peerFresh;
 
 			const { result: refreshed, ownershipLost } = await this.withRefreshLeaseRenewal(credentialId, owner, () =>
-				this.#refreshOAuthCredentialUnshared(provider, credential, credentialId),
+				this.#refreshOAuthCredentialUnshared(
+					provider,
+					credential,
+					credentialId,
+					undefined,
+					OAUTH_REFRESH_FLIGHT_CEILING_MS,
+					true,
+				),
 			);
 
 			if (ownershipLost !== undefined) {
@@ -295,6 +338,12 @@ export class OAuthRefresher {
 	/**
 	 * The credential with a usable access token: `credential` itself while it is outside the
 	 * refresh skew, else a refreshed one. Concurrent refreshes of one row share one flight.
+	 *
+	 * The flight belongs to the row, not to the caller that started it. It takes no caller signal
+	 * and runs under {@link OAUTH_REFRESH_FLIGHT_CEILING_MS}, so a caller that aborts or stops
+	 * waiting after {@link OAUTH_REFRESH_CALLER_WAIT_MS} neither fails the other callers waiting on
+	 * the same flight nor strands the rotated token: a caller that receives the rotation MUST
+	 * persist it, and the flight commits it itself when no caller is left to receive it.
 	 */
 	async refreshOAuthCredential(
 		provider: Provider,
@@ -304,52 +353,88 @@ export class OAuthRefresher {
 	): Promise<OAuthCredentials> {
 		if (credentialId !== undefined) {
 			const existing = this.#oauthCredentialRefreshInFlight.get(credentialId);
-			if (existing) return raceWithSignal(existing, signal, "credential refresh aborted");
+			if (existing) return this.#awaitFlight(existing, provider, signal);
 		}
 		if (Date.now() + OAUTH_REFRESH_SKEW_MS < credential.expires) return credential;
 		if (credentialId === undefined) {
-			return this.#refreshOAuthCredentialUnshared(provider, credential, undefined, signal);
+			// No row to persist onto and no lease to hold, so nothing outlives the caller.
+			return this.#refreshOAuthCredentialUnshared(
+				provider,
+				credential,
+				undefined,
+				signal,
+				OAUTH_REFRESH_CALLER_WAIT_MS,
+			);
 		}
 		const id = credentialId;
-		const promise = this.#leaseFencedRefresh(provider, credential, id, signal)
+		const flight: RefreshFlight = { promise: Promise.resolve(credential), waiting: 0 };
+		flight.promise = this.#leaseFencedRefresh(provider, credential, id)
 			.then(refreshed => {
-				// Commit as a SAFETY NET for the one case the caller cannot cover: its own
-				// abort. Normally the caller that awaited this refresh persists the
-				// credential itself, and it often knows more than we do here (the usage path
-				// adds the provider's resolved `apiEndpoint`), so writing again would be
-				// both redundant and less complete.
-				//
-				// When the caller aborted, though, nobody persists. The refresh still
-				// completed and the provider has already invalidated the old token, so
-				// leaving it on disk is exactly the "logged out after a rebuild" failure:
-				// the next run refreshes with a dead token, gets `invalid_grant`, and
-				// disables a perfectly good login. So commit precisely then.
-				if (signal?.aborted) {
-					this.#commitRotatedOAuthCredential(provider, id, credential, refreshed);
-				}
+				// Every caller that receives the rotation persists it, often with more than this flight
+				// knows (the usage path adds the provider's `apiEndpoint`). When every caller has already
+				// aborted or stopped waiting, nobody would, and the provider has invalidated the old
+				// refresh token, so the flight commits the rotation itself.
+				if (flight.waiting === 0) this.#commitRotatedOAuthCredential(provider, id, credential, refreshed);
 				return refreshed;
 			})
 			.finally(() => {
 				this.#oauthCredentialRefreshInFlight.delete(id);
 			});
-		this.#oauthCredentialRefreshInFlight.set(id, promise);
-		return raceWithSignal(promise, signal, "credential refresh aborted");
+		this.#oauthCredentialRefreshInFlight.set(id, flight);
+		return this.#awaitFlight(flight, provider, signal);
+	}
+
+	/** One caller's bounded wait on a shared flight. The flight itself keeps running. */
+	async #awaitFlight(
+		flight: RefreshFlight,
+		provider: Provider,
+		signal: AbortSignal | undefined,
+	): Promise<OAuthCredentials> {
+		const expired = Promise.withResolvers<never>();
+		const timer = setTimeout(
+			() =>
+				expired.reject(
+					new AIError.OAuthError(`OAuth token refresh timed out for provider: ${provider}`, {
+						kind: "timeout",
+						provider,
+					}),
+				),
+			OAUTH_REFRESH_CALLER_WAIT_MS,
+		);
+		flight.waiting += 1;
+		try {
+			return await raceWithSignal(
+				Promise.race([flight.promise, expired.promise]),
+				signal,
+				"credential refresh aborted",
+			);
+		} finally {
+			// Settled either way: a caller that received the rotation persists it on return, and one that
+			// gave up will not, so neither counts as waiting by the time the flight decides to commit.
+			flight.waiting -= 1;
+			clearTimeout(timer);
+		}
 	}
 
 	async #refreshOAuthCredentialUnshared(
 		provider: Provider,
 		credential: OAuthCredential,
 		credentialId: number | undefined,
-		signal?: AbortSignal,
+		signal: AbortSignal | undefined,
+		timeoutMs: number,
+		holdUntilSettled = false,
 	): Promise<OAuthCredentials> {
-		let refreshPromise: Promise<OAuthCredentials>;
+		let providerRefresh: Promise<OAuthCredentials>;
+		// Aborts the token request when the caller aborts or the bound fires, so an abandoned request
+		// does not stay open beside the next flight.
+		const request = new AbortController();
 		// Caller override > store-level hook > local per-provider refresh.
 		// `RemoteAuthCredentialStore` exposes the hook so a broker-backed gateway
 		// routes refresh through the broker without explicit wiring.
 		const storeRefresh = this.#store.refreshOAuthCredential?.bind(this.#store);
 		const overrideRefresh = this.#override ?? storeRefresh;
 		if (overrideRefresh && credentialId !== undefined) {
-			refreshPromise = overrideRefresh(provider, credentialId, credential, signal);
+			providerRefresh = overrideRefresh(provider, credentialId, credential, request.signal);
 		} else {
 			const customProvider = getOAuthProvider(provider);
 			if (customProvider) {
@@ -359,12 +444,13 @@ export class OAuthRefresher {
 						provider,
 					});
 				}
-				refreshPromise = customProvider.refreshToken(credential);
+				providerRefresh = customProvider.refreshToken(credential, request.signal);
 			} else {
-				refreshPromise = refreshOAuthToken(provider as OAuthProvider, credential);
+				providerRefresh = refreshOAuthToken(provider as OAuthProvider, credential, request.signal);
 			}
 		}
-		// Bound the refresh so a slow/hanging token endpoint cannot stall credential selection.
+		const refreshPromise = providerRefresh.then(refreshed => requireUsableRefresh(provider, refreshed));
+		// Bound the refresh so a hanging token endpoint cannot hold the flight forever.
 		// Caller-driven abort jumps the gun on the timeout — the agent's ESC must
 		// take priority over the floor timeout.
 		let timeout: NodeJS.Timeout | undefined;
@@ -378,7 +464,7 @@ export class OAuthRefresher {
 						provider,
 					}),
 				),
-			DEFAULT_OAUTH_REFRESH_TIMEOUT_MS,
+			timeoutMs,
 		);
 		if (signal) {
 			if (signal.aborted) {
@@ -388,11 +474,52 @@ export class OAuthRefresher {
 				signal.addEventListener("abort", onAbort, { once: true });
 			}
 		}
+		let providerSettled = false;
+		const observed = refreshPromise.finally(() => {
+			providerSettled = true;
+		});
 		try {
-			return await Promise.race([refreshPromise, cancellation.promise]);
+			return await Promise.race([observed, cancellation.promise]);
+		} catch (error) {
+			if (providerSettled) throw error;
+			request.abort(error);
+			if (!holdUntilSettled) throw error;
+			// Lease-fenced: the provider may already have rotated the grant. The flight holds the lease
+			// and the in-flight entry until the aborted request settles, so no second flight spends the
+			// same refresh token beside it. A refresher that honours its signal settles at once; one
+			// that ignores it holds its row for as long as its request stays open. A rotation it returns
+			// is the only valid token for the grant and is handed back to be persisted; a rejection
+			// after the abort reports the ceiling, never an account fact.
+			const settled = await observed.then(
+				refreshed => refreshed,
+				() => undefined,
+			);
+			if (settled) {
+				logger.warn("OAuth refresh answered after its ceiling; persisting the late rotation", { provider });
+				return settled;
+			}
+			throw error;
 		} finally {
 			clearTimeout(timeout);
 			if (signal && onAbort) signal.removeEventListener("abort", onAbort);
 		}
 	}
+}
+
+/**
+ * `refreshed` when it holds an access token a request can send, else a validation error.
+ *
+ * Every refresh path lands here, so a token endpoint answering 200 with an empty or missing access
+ * token never reaches the row: storing it sent an empty bearer on every request, which the provider
+ * answered 401, which disabled a login whose refresh token still worked. The error is not a
+ * definitive refusal, so the row stays and the next request refreshes again.
+ */
+function requireUsableRefresh(provider: Provider, refreshed: OAuthCredentials): OAuthCredentials {
+	if (typeof refreshed.access === "string" && refreshed.access.length > 0 && Number.isFinite(refreshed.expires)) {
+		return refreshed;
+	}
+	throw new AIError.OAuthError(`OAuth token refresh for ${provider} returned no usable access token`, {
+		kind: "validation",
+		provider,
+	});
 }
