@@ -10,6 +10,7 @@ import { setAgentDir } from "@veyyon/utils";
 const INSTANCE = "connect-tab";
 const CONNECT_TAB = 42;
 const OPERATOR_TAB = 7;
+const POPUP_TAB = 77;
 
 interface Call {
 	method: string;
@@ -76,10 +77,11 @@ class FakeExtension {
 		this.#ws.send(JSON.stringify({ id: message.id, result }));
 	}
 
-	/** Chrome closes the extension socket when the last attached tab leaves the connection. */
+	/** Chrome reports the detach to the relay, then closes the socket once the last attached tab leaves. */
 	#detach(tabId: number | undefined): void {
-		if (tabId === undefined || !this.#attached.delete(tabId) || this.#attached.size > 0) return;
-		this.#ws.close(1000, "All controlled tabs detached");
+		if (tabId === undefined || !this.#attached.delete(tabId)) return;
+		this.emit("chrome.debugger.onDetach", [{ tabId }, "target_closed"]);
+		if (this.#attached.size === 0) this.#ws.close(1000, "All controlled tabs detached");
 	}
 }
 
@@ -91,9 +93,10 @@ async function until(check: () => boolean, label: string): Promise<void> {
 	}
 }
 
-/** The tab id a `chrome.*` call names in its first argument, when it names one. */
+/** The tab id a `chrome.*` call names: a bare id for `chrome.tabs.*`, or `{ tabId }` for `chrome.debugger.*`. */
 function tabOf(params: unknown[]): number | undefined {
 	const first = params[0];
+	if (typeof first === "number") return first;
 	if (first && typeof first === "object" && "tabId" in first && typeof first.tabId === "number") return first.tabId;
 	return undefined;
 }
@@ -233,14 +236,14 @@ test("the control endpoint closes the adopted connect tab by id, and only once a
 	expect(await (await fetch(closeUrl, { method: "POST" })).json()).toEqual({ closed: false });
 	expect(ext.removedTabs()).toEqual([]);
 	expect(ext.open).toBe(true);
-	// Once a working tab is attached, the endpoint closes the connect tab by id.
-	const cdp = await openCdp(relay.cdpUrl);
-	expect((await createTarget(cdp)).result?.targetId).toBe("ext-900");
+	// A popup the connect tab opened is a working tab. Once it is attached, the endpoint closes the connect tab.
+	ext.emit("chrome.tabs.onCreated", [{ id: POPUP_TAB, openerTabId: CONNECT_TAB, url: "https://example.com/" }]);
+	await until(() => relay?.tabCount === 2, "the popup adoption");
 	expect(await (await fetch(closeUrl, { method: "POST" })).json()).toEqual({ closed: true });
 	await until(() => ext.removedTabs().length === 1, "the connect tab removal");
 	expect(ext.removedTabs()).toEqual([[CONNECT_TAB]]);
 	expect(ext.open).toBe(true);
 	// A second call finds nothing left, so no other tab is ever removed.
 	expect(await (await fetch(closeUrl, { method: "POST" })).json()).toEqual({ closed: false });
-	cdp.close();
+	expect(ext.removedTabs()).toEqual([[CONNECT_TAB]]);
 });
