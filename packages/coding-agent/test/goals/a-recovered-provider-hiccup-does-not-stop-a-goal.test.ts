@@ -104,7 +104,7 @@ describe("a goal keeps driving across a provider hiccup it recovered from", () =
 			"todo.reminders": false,
 			...overrides,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		const noteTool: AgentTool = {
 			name: "note",

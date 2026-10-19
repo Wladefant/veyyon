@@ -16,7 +16,7 @@
  */
 
 import * as path from "node:path";
-import { formatCount } from "@veyyon/utils/format";
+import { formatBytes, formatCount } from "@veyyon/utils/format";
 import { parseReadArgs, parseReadDetails } from "@veyyon/utils/fs-tool-args";
 import { hasUrlScheme } from "@veyyon/utils/url";
 import type {
@@ -45,7 +45,6 @@ import {
 	splitPathAndSel,
 } from "../core/path-utils";
 import {
-	formatBytes,
 	heldBack,
 	LINE_NOUN,
 	replaceTabs,

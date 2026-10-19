@@ -4,7 +4,8 @@ import { listRegisteredUsageProviders, resolveRegisteredRankingStrategy } from "
 import { postmortem } from "@veyyon/utils";
 import { Settings } from "../../src/config/settings";
 import { createTools } from "../../src/tools";
-import { getSearchProvider, SEARCH_PROVIDER_ORDER } from "../../src/tools/web/search/provider";
+import { getSearchProvider } from "../../src/tools/web/search/provider";
+import { SEARCH_PROVIDER_ORDER } from "../../src/tools/web/search/types";
 
 try {
 	const tools = await createTools({

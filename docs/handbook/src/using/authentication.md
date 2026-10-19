@@ -97,16 +97,19 @@ available account before returning the error. Claude quota exhaustion does not b
 
 ## When a login is signed out for you
 
-A stored login can stop working without you doing anything: the provider revokes the grant, or a
-token refresh fails and the credential is set aside. Veyyon does not hide that. The account manager
-marks the provider and prints the provider's own reason, so you can tell a revoked grant from a
-temporary outage:
+A stored login can stop working without you doing anything: the provider revokes the grant, or
+refuses a token refresh, and the credential is set aside. A refusal is a 401, an OAuth error code such
+as `invalid_grant`, or a 403 whose JSON body states one. A refresh that times out, fails on the
+network, meets a provider outage, is answered with a bare 403, or receives a token response that is
+not a JSON object does not set the login aside: the account stays in place and the
+next request refreshes again. The account manager marks a signed-out provider and prints the
+provider's own reason:
 
 ```text
 Kimi Code · 1 account
   a previous login was signed out: oauth refresh failed:
   invalid_grant: The provided authorization grant is invalid
-  press a to sign in again
+  press a to sign in again, or f to forget it
 ```
 
 If that provider had only one login, it now has none, and the card states that rather than showing the
@@ -114,10 +117,19 @@ provider as one you never signed into. `/account` shows it too, so you do not ha
 to find out:
 
 ```text
-1 provider has a signed-out login (Kimi Code) · /providers to sign in again
+1 provider has a signed-out login (Kimi Code) · /providers to sign in again or forget it
 ```
 
-A logout you performed yourself is not reported this way. You already know about it.
+A logout you performed yourself is not reported this way.
+
+Press `f` on the card to forget a signed-out login you do not intend to sign back in. The note and the
+`/account` line stop reporting it; the credential stays disabled in the auth database and a later
+refresh does not bring it back.
+
+A Google login (Google Antigravity, Gemini CLI) records the Google account id. A login under a new
+address of the same Google account replaces the login under the old address and clears its
+signed-out note. A login stored before the account id was recorded carries none and is not linked;
+forget its note with `f`.
 
 ## Headless and remote hosts
 

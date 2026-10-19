@@ -6,6 +6,6 @@ export const nousResearchProvider = {
 	name: "Nous Research",
 	login: loginNousResearch,
 	credential: "oauth",
-	refreshToken: refreshNousResearchToken,
+	refreshToken: (credentials, signal) => refreshNousResearchToken(credentials, undefined, signal),
 	getApiKey: getNousResearchApiKey,
 } as const satisfies ProviderDefinition;

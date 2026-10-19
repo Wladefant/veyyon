@@ -2,7 +2,6 @@
 name: scout
 description: "Read-only reconnaissance of ground you have not walked yet. Not just where something lives: which call sites a change touches, where the seams and boundaries are, what would collide with work already in flight, and where a plan is likely to break. Returns compressed findings for you to act on. Cheap, and it cannot change anything."
 tools: read, search, web_search
-thinking-level: medium
 read-summarize: false
 output:
   properties:

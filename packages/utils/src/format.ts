@@ -193,6 +193,17 @@ export function formatMoreLines(count: number): string {
 }
 
 /**
+ * Join `items` for an error or notice that lists what exists, keeping at most `limit` of them:
+ * `a, b, c, … 97 more`. A collection that grows with the session (artifact ids, agent outputs,
+ * document members) otherwise prints every member. The caller orders `items` most useful first.
+ */
+export function formatBoundedList(items: readonly string[], limit = 20): string {
+	if (items.length === 0) return "none";
+	if (items.length <= limit) return items.join(", ");
+	return `${items.slice(0, limit).join(", ")}, … ${items.length - limit} more`;
+}
+
+/**
  * Format a ratio as a percentage.
  */
 export function formatPercent(ratio: number): string {

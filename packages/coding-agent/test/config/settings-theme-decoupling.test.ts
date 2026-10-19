@@ -19,7 +19,7 @@
  * is terminal UI, and this repo's standard is that domain logic does not import
  * UI. So settings now fires a `SettingSignal` and `theme/theme` subscribes
  * at its own import, which is the pattern settings already used for
- * `provider.appendOnlyContext`, `modelRoles`, `statusLine.sessionAccent` and the
+ * `provider.appendOnlyContext`, `agent.helpers`, `statusLine.sessionAccent` and the
  * hindsight scope.
  *
  * THEN THE COST MOVED ONE STEP OUT. Breaking the cycle left settings importing

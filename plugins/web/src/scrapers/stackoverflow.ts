@@ -1,8 +1,8 @@
-import { stackoverflowDeclaration } from "./declarations/discussions";
+import { stackOverflowDeclaration } from "./declarations/discussions";
 import { createDiscussionHandler } from "./engine/discussion";
 import type { SpecialHandler } from "./types";
 
 export const handleStackOverflow: SpecialHandler = createDiscussionHandler(
-	stackoverflowDeclaration,
+	stackOverflowDeclaration,
 	"handleStackOverflow",
 );

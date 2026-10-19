@@ -48,7 +48,7 @@ describe("AgentSession compaction confidentiality wiring", () => {
 			"compaction.keepRecentTokens": 1,
 			"compaction.strategy": "summary",
 		});
-		settings.setModelRole("smol", `${fallbackModel.provider}/${fallbackModel.id}`);
+		settings.setDefaultModel(`${fallbackModel.provider}/${fallbackModel.id}`);
 
 		const sessionManager = SessionManager.inMemory(tempDir.path());
 		const firstKeptEntryId = sessionManager.appendMessage({

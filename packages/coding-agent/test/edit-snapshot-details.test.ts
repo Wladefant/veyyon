@@ -15,7 +15,7 @@ import {
 	MAX_EDIT_SNAPSHOT_TEXT_CHARS,
 	pruneOversizedEditSnapshots,
 } from "@veyyon/coding-agent/edit";
-import { writethroughNoop } from "@veyyon/coding-agent/lsp";
+import { writethroughNoop } from "@veyyon/coding-agent/lsp/writethrough";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { formatHashlineHeader } from "@veyyon/hashline";
 import { removeWithRetries } from "@veyyon/utils";

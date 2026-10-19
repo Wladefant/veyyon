@@ -9,7 +9,8 @@
  * views. ONE-PLACE: the mapping lives here and nowhere else.
  */
 import type { AgentStatus } from "../../../../registry/agent-registry";
-import { type ThemeColor, theme } from "../../../../theme/theme";
+import type { ThemeColor } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 
 /**
  * The state a surface NAMES, which is finer than {@link AgentStatus}.

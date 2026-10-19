@@ -193,7 +193,6 @@ describe("beam recall free functions", () => {
 	});
 
 	it("formats context in bullet and JSON sandwich sections", () => {
-		const beam = makeBeam();
 		const results = [
 			{
 				id: "a",
@@ -211,8 +210,8 @@ describe("beam recall free functions", () => {
 			},
 		];
 
-		const bullet = formatContext(beam, results);
-		const json = JSON.parse(formatContext(beam, results, "json")) as {
+		const bullet = formatContext(results);
+		const json = JSON.parse(formatContext(results, "json")) as {
 			top_facts: string[];
 			supporting_context: string[];
 		};

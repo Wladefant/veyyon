@@ -22,7 +22,7 @@ import type { Component } from "@veyyon/tui";
 import type { MouseRoutable, SgrMouseEvent } from "@veyyon/utils/mouse";
 import { visibleWidth } from "@veyyon/utils/width";
 import { formatTaskId } from "../../../../task/task-id";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../../../tools/core/render-utils";
 import type { ObservableSession } from "../../session-observer-registry";
 import { modelBadgeFromSelector } from "./agent-model-badge";

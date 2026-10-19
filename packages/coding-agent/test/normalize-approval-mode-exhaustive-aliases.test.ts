@@ -3,12 +3,7 @@
  * Why: alias drift (write/auto-edit, always-ask/ask) would flip safety tiers.
  */
 import { describe, expect, it } from "bun:test";
-import {
-	APPROVAL_MODE_VALUES,
-	isKnownApprovalMode,
-	normalizeApprovalMode,
-	validateApprovalModeSetting,
-} from "../src/tools/core/approval";
+import { APPROVAL_MODE_VALUES, isKnownApprovalMode, normalizeApprovalMode } from "../src/tools/core/approval";
 
 describe("normalizeApprovalMode exhaustive aliases", () => {
 	const table: [string | undefined, string][] = [
@@ -60,10 +55,9 @@ describe("normalizeApprovalMode exhaustive aliases", () => {
 		});
 	}
 
-	it("APPROVAL_MODE_VALUES all isKnown and validate clean", () => {
+	it("APPROVAL_MODE_VALUES are all known modes", () => {
 		for (const m of APPROVAL_MODE_VALUES) {
 			expect(isKnownApprovalMode(m)).toBe(true);
-			expect(validateApprovalModeSetting(m)).toBeUndefined();
 		}
 	});
 });

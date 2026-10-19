@@ -328,7 +328,7 @@ export function renderAccountStatus(
 				),
 				style.muted(" · "),
 				style.command("/providers"),
-				style.muted(" to sign in again"),
+				style.muted(" to sign in again or forget it"),
 			),
 			"",
 		);

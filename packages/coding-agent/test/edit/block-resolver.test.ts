@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, mock, spyOn } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it, type Mock, mock, spyOn } from "bun:test";
 import { nativeBlockResolver } from "@veyyon/coding-agent/edit/hashline/block-resolver";
 import * as natives from "@veyyon/natives";
 
@@ -11,7 +11,7 @@ import * as natives from "@veyyon/natives";
  */
 
 let calls = 0;
-let blockRangeSpy: ReturnType<typeof spyOn> | undefined;
+let blockRangeSpy: Mock<typeof natives.blockRangeAt> | undefined;
 
 beforeAll(() => {
 	blockRangeSpy = spyOn(natives, "blockRangeAt").mockImplementation(

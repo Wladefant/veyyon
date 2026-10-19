@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import * as path from "node:path";
-import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import { __tripwire } from "../../utils/test/helpers/real-data-tripwire";
 
 /**

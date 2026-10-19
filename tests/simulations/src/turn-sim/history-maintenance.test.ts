@@ -12,7 +12,7 @@
  * live turn, in the real order, with the real settings, did not.
  *
  * The rewrite is also the one maintenance pass that runs with compaction
- * disabled (it sits before the threshold gate in `checkCompaction`), which is
+ * disabled (it sits before the threshold gate in `TurnContextCheck.check`), which is
  * exactly the configuration most simulations use, so an operator can hit it
  * without ever crossing a context threshold.
  *

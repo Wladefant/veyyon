@@ -30,7 +30,7 @@ describe("issue #986 compaction auth fallback", () => {
 		tempDir.removeSync();
 	});
 
-	async function createSession(options?: { fallbackModelRole?: string; configureFallbackAuth?: boolean }) {
+	async function createSession(options?: { defaultIsFallback?: boolean; configureFallbackAuth?: boolean }) {
 		const currentModel = getBundledModel("openai-codex", "gpt-5.4-mini");
 		const fallbackModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!currentModel || !fallbackModel) {
@@ -38,8 +38,8 @@ describe("issue #986 compaction auth fallback", () => {
 		}
 
 		const settings = Settings.isolated({ "compaction.keepRecentTokens": 1, "compaction.strategy": "context-full" });
-		if (options?.fallbackModelRole) {
-			settings.setModelRole(options.fallbackModelRole, `${fallbackModel.provider}/${fallbackModel.id}`);
+		if (options?.defaultIsFallback) {
+			settings.setDefaultModel(`${fallbackModel.provider}/${fallbackModel.id}`);
 		}
 
 		const agent = new Agent({
@@ -81,8 +81,8 @@ describe("issue #986 compaction auth fallback", () => {
 		return { currentModel, fallbackModel };
 	}
 
-	it("falls back to an authenticated role model when the current provider returns auth_unavailable", async () => {
-		const { currentModel, fallbackModel } = await createSession({ fallbackModelRole: "smol" });
+	it("falls back to the authenticated default model when the current provider returns auth_unavailable", async () => {
+		const { currentModel, fallbackModel } = await createSession({ defaultIsFallback: true });
 		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async (preparation, model) => {
 			if (model.provider === currentModel.provider && model.id === currentModel.id) {
 				throw new Error(
@@ -147,7 +147,7 @@ describe("issue #986 compaction auth fallback", () => {
 		// status-aware detector landed, only the synthetic was caught — a real
 		// 401 from the provider bypassed the fallback and dumped the raw HTTP
 		// body into the UI as "Compaction failed: 401 {...}".
-		const { currentModel, fallbackModel } = await createSession({ fallbackModelRole: "smol" });
+		const { currentModel, fallbackModel } = await createSession({ defaultIsFallback: true });
 		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async (preparation, model) => {
 			if (model.provider === currentModel.provider && model.id === currentModel.id) {
 				throw Object.assign(

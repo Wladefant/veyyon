@@ -2,7 +2,7 @@
  * A turn the provider refuses because the context is too long, and the turn a
  * provider truncates because the output budget ran out.
  *
- * Both are handled by one owner, `AgentSession.#checkCompaction`, and both take
+ * Both are handled by one owner, `TurnContextCheck.check`, and both take
  * the same ladder: promote to a larger model, else compact in place and retry,
  * else stop. The ladder pulls the failed assistant turn out of active context
  * before it climbs, so a retry cannot replay it, and that is where the class of

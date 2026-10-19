@@ -15,6 +15,9 @@
  * a text field. Shell chrome (close, chips, breadcrumb) is hit-tested by the
  * host and covered elsewhere. The model-picker panel's own row hover needs a
  * populated registry and is asserted separately.
+ *
+ * Subject: `selectors/settings-submenus.ts` (`SelectSubmenu` and the shared select list), driven
+ * through `SettingsSelectorComponent`.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
@@ -23,7 +26,6 @@ import { Effort } from "@veyyon/catalog/effort";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ANY_MODEL_EFFORT_KEY } from "@veyyon/coding-agent/config/effort-resolver";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
-import { getRoleInfo, SELECTABLE_MODEL_ROLE_IDS } from "@veyyon/coding-agent/config/model-roles";
 import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/config/settings";
 import {
 	hasUi,
@@ -34,6 +36,7 @@ import {
 	type SettingPath,
 } from "@veyyon/coding-agent/config/settings-schema";
 import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
+import { HELPER_IDS } from "@veyyon/coding-agent/task/helper-settings";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
 
@@ -192,20 +195,23 @@ describe("settings submenus answer the pointer", () => {
 		expect(frameText(component)).toContain("Max In-Flight Requests: beta");
 	});
 
-	it("model roles: hover lights a role row, click opens its picker", () => {
-		const { component } = createSelector();
-		component.openTab("model");
-		expect(component.selectSetting("modelRoles")).toBe(true);
-		component.handleInput("\n");
+	it(
+		"roster helpers: hover lights a helper row, click opens its editor",
+		async () => {
+			const { component, awaitRenderRequest } = createSelector();
+			component.openTab("agents");
+			expect(component.selectSetting("agent.agents")).toBe(true);
+			component.handleInput("\n");
+			await awaitRow(component, awaitRenderRequest, "Session Title");
 
-		const roles = SELECTABLE_MODEL_ROLE_IDS.map(role => getRoleInfo(role, settings).name);
-		// Row 0 is the selected one; hover the second role, which the band owns.
-		const secondRole = roles[1]!;
-		expectHoverBand(component, secondRole);
+			// Row 0 (Advisor) is the selected one; hover another helper, which the band owns.
+			expectHoverBand(component, "Session Title");
 
-		component.handleInput(clickAt(rowIndex(component, roles[0]!) + 1));
-		expect(frameText(component)).toContain(`${roles[0]} model`);
-	});
+			component.handleInput(clickAt(rowIndex(component, "Advisor") + 1));
+			expect(frameText(component)).toContain("Helper: Advisor");
+		},
+		{ timeout: 30_000 },
+	);
 
 	it(
 		"agent roster: hover lights an agent row once discovery reports, click opens its editor",
@@ -214,14 +220,17 @@ describe("settings submenus answer the pointer", () => {
 			component.openTab("agents");
 			expect(component.selectSetting("agent.agents")).toBe(true);
 			component.handleInput("\n");
-			await awaitRow(component, awaitRenderRequest, "scout");
+			await awaitRow(component, awaitRenderRequest, "Session Title");
+			// The Helpers section leads the roster; step past it so the list scrolls to the agents.
+			// The first agent is then selected, and the second is the row the band can own.
+			for (let i = 0; i < HELPER_IDS.length; i++) component.handleInput("\x1b[B");
 
-			expectHoverBand(component, "scout");
+			expectHoverBand(component, "designer");
 
-			component.handleInput(clickAt(rowIndex(component, "scout") + 1));
+			component.handleInput(clickAt(rowIndex(component, "designer") + 1));
 			// The lane page, headed with the agent it configures. The row it opens on used to be a
 			// numeric `Nested spawn depth`; the nested `Agents` chain replaced it.
-			expect(frameText(component)).toContain("Agent: scout");
+			expect(frameText(component)).toContain("Agent: designer");
 		},
 		{ timeout: 30_000 },
 	);

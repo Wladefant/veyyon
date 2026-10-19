@@ -13,10 +13,10 @@ export const anthropicProvider = {
 		return loginAnthropic(cb);
 	},
 	credential: "oauth",
-	refreshToken: async (credentials: OAuthCredentials) => {
+	refreshToken: async (credentials: OAuthCredentials, signal?: AbortSignal) => {
 		// Lazy import: keep heavy OAuth flow modules out of the eager registry graph.
 		const { refreshAnthropicToken } = await import("./oauth/anthropic");
-		return refreshAnthropicToken(credentials.refresh);
+		return refreshAnthropicToken(credentials.refresh, undefined, signal);
 	},
 	callbackPort: 54545,
 	pasteCodeFlow: true,

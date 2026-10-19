@@ -9,12 +9,6 @@
  * it uses `version: 2` (numeric) and `plugins: Record<string, ...[]>`.
  */
 
-// ── Plugin ID helpers ────────────────────────────────────────────────
-// Re-exported from the single owner so `./types` importers (cache, fetcher,
-// marketplace/manager) keep their import paths while the validation grammar
-// lives in exactly one place shared with the installed registry.
-export { buildPluginId, isValidNameSegment, parsePluginId } from "../plugin-id";
-
 // ── Marketplace catalog (from marketplace.json in a marketplace repo) ─
 
 export interface MarketplaceCatalogOwner {
@@ -120,12 +114,8 @@ export interface MarketplaceRegistryEntry {
 
 // ── Installed plugins registry ───────────────────────────────────────
 // The installed-plugins registry (Claude Code-compatible shape) is owned by
-// `../installed-registry`. Imported for use in InstalledPluginSummary below and
-// re-exported so marketplace consumers that already import from `./types` keep
-// their import path while the type lives in exactly one place.
-import type { InstalledPluginEntry, InstalledPluginsRegistry } from "../installed-registry";
-
-export type { InstalledPluginEntry, InstalledPluginsRegistry };
+// `../installed-registry`.
+import type { InstalledPluginEntry } from "../installed-registry";
 
 /**
  * A merged view of an installed plugin, combining entries from both the user and

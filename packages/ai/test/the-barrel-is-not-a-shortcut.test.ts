@@ -276,6 +276,19 @@ describe("the modules that were repointed stay cut", () => {
 	 * from that owner. The leaf imports nothing, so no consumer gained an edge to a subsystem it did not
 	 * already reach.
 	 */
+	/**
+	 * Re-measured 2026-10-13: `shared-llm.ts` 212 -> 213 by the one module `catalog/wire/kimi-code.ts`,
+	 * the Kimi Code region table. `catalog/compat/kimi.ts`, already on this reach, resolves a token's
+	 * deployment from it, and its only import is `@veyyon/utils/url`, already reached, so no consumer
+	 * gained an edge to a subsystem it did not already reach.
+	 */
+	/**
+	 * Re-measured 2026-10-15: `shared-llm.ts` 213 -> 214 by the one module
+	 * `ai/registry/oauth/token-response.ts`, the shared reader that requires a token endpoint's JSON to be
+	 * an object. `registry/oauth/nous-research.ts`, already on this reach, reads its token responses
+	 * through it; its imports are `@veyyon/utils/type-guards` and `ai/error`, both already reached, so no
+	 * consumer gained an edge to a subsystem it did not already reach.
+	 */
 	it.each([
 		// The ceilings below were raised by two to three on the santhreal/veyyon sync: `utils/src/log-file.ts`,
 		// `catalog/src/compat/share.ts` and the precompiled-prompt pair arrive with the upstream logger and prompt

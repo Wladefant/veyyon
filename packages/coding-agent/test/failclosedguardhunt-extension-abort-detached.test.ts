@@ -37,7 +37,7 @@
  * the one that happens to call `abortDetached`.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import { Agent } from "@veyyon/agent-core";
 import { getBundledModel } from "@veyyon/catalog/models";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
@@ -61,7 +61,7 @@ interface WarnEntry {
 type AbortBehaviour = () => Promise<unknown> | undefined;
 
 let warnEntries: WarnEntry[];
-let warnSpy: ReturnType<typeof vi.spyOn>;
+let warnSpy: Mock<typeof logger.warn>;
 
 /**
  * Build the controller against a fake context and return the `abort` it

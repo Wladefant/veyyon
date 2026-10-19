@@ -6,8 +6,8 @@
  * This is a session collaborator. It holds the abort controllers `isCompacting` reads and the
  * threshold notice already announced, and reaches the session through {@link CompactionSession} and
  * {@link CompactionHost}. The summary request is `CompactionSummarizer`'s and what follows a pass
- * (the bar, the dead-end rescue tiers, the next turn) is `CompactionRecovery`'s. What triggers a pass
- * (the post-turn check, the pre-prompt and mid-run checks, context promotion) stays with the session.
+ * (the bar, the dead-end rescue tiers, the next turn) is `CompactionRecovery`'s. The post-turn check
+ * that triggers a pass is `TurnContextCheck`'s; the pre-prompt and mid-run checks stay with the session.
  */
 import { resolveTelemetry } from "@veyyon/agent-core";
 import {
@@ -38,7 +38,7 @@ import {
 	declaredContextWindow,
 	mergeLlmCompactionPreserveData,
 } from "@veyyon/kernel/session/agent-session-compaction-policy";
-import { findCompactMode } from "@veyyon/kernel/session/compact-modes";
+import { type CompactModeDef, findCompactMode } from "@veyyon/kernel/session/compact-modes";
 import { getLatestCompactionEntry, type SessionContext } from "@veyyon/kernel/session/session-context";
 import type { CompactionEntry, SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { errorMessage, isAbortError, logger } from "@veyyon/utils";
@@ -83,9 +83,8 @@ export interface CompactionHost extends CompactionSummarizerHost, CompactionReco
 	/** Rebuild what was read from the replaced history: the plan reference, the advisors and the todo list. */
 	afterHistoryCompacted(): void;
 	closeCodexProviderSessionsForHistoryRewrite(): void;
-	/** Stop routing agent events to the session for the length of a manual compaction. */
-	disconnectFromAgent(): void;
-	reconnectToAgent(): void;
+	/** Run `run` with agent events detached from the session, reattaching them when it settles. */
+	whileDisconnectedFromAgent<T>(run: () => Promise<T>): Promise<T>;
 	/** A compaction phase began or ended; the process heartbeat names the phase it was in at a silent death. */
 	phaseChanged(): void;
 }
@@ -161,13 +160,22 @@ export class CompactionRuntime {
 		const compactionAbortController = new AbortController();
 		this.#compactionAbortController = compactionAbortController;
 		this.#host.phaseChanged();
+		return this.#host.whileDisconnectedFromAgent(() =>
+			this.#compactDetached(customInstructions, options, compactMode, compactionAbortController),
+		);
+	}
 
+	async #compactDetached(
+		customInstructions: string | undefined,
+		options: CompactOptions | undefined,
+		compactMode: CompactModeDef | undefined,
+		compactionAbortController: AbortController,
+	): Promise<CompactionResult> {
 		// Hoisted so the catch can roll the preparation's tail elisions back:
 		// prepareCompaction applies them to the live branch as a side effect.
 		let preparation: CompactionPreparation | undefined;
 
 		try {
-			this.#host.disconnectFromAgent();
 			await this.#session.abort({ goalReason: "internal", preserveCompaction: true });
 			if (!this.#session.model) {
 				throw new Error(
@@ -282,7 +290,6 @@ export class CompactionRuntime {
 				this.#compactionAbortController = undefined;
 			}
 			this.#host.phaseChanged();
-			this.#host.reconnectToAgent();
 		}
 	}
 

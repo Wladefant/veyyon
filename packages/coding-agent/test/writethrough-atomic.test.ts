@@ -2,13 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { writethroughNoop } from "@veyyon/coding-agent/lsp";
+import { writethroughNoop } from "@veyyon/coding-agent/lsp/writethrough";
 
 /**
  * The edit/write commit path must be crash-atomic AND permission-preserving.
  *
  * WHY THIS SUITE EXISTS. The production writethrough (`runLspWritethrough` and
- * `writethroughNoop` in `src/lsp/index.ts`) used to persist the user's source
+ * `writethroughNoop` in `src/lsp/writethrough.ts`) used to persist the user's source
  * with a raw `Bun.write(dst, content)` — a truncate-then-stream. If the process
  * died mid-write (SIGINT, OOM-kill, a full disk) the file was left truncated:
  * silent corruption of the exact file the agent was editing. The fix routes both

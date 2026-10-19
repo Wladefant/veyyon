@@ -1,4 +1,4 @@
-import type { LimitsMeta } from "./output-meta";
+import type { LimitsMeta } from "./output-notice";
 
 export interface ListLimitResult<T> {
 	items: T[];

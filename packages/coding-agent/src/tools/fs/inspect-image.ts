@@ -7,9 +7,10 @@ import "@veyyon/ai/usage/defaults";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy, prompt } from "@veyyon/utils";
 import { extractTextContent } from "../../commit/utils";
-
-import { expandRoleAlias, getModelMatchPreferences, resolveModelFromString } from "../../config/model-resolver";
+import { normalizeModelPatternList } from "../../config/model-pattern-list";
+import { getModelMatchPreferences, resolveModelFromString } from "../../config/model-resolver";
 import { toolsPrompts } from "../../prompts/tools/rows";
+import { helperModelPatterns, helperSettingPath } from "../../task/helper-settings";
 import {
 	ImageInputTooLargeError,
 	type LoadedImageInput,
@@ -176,18 +177,21 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema.val
 			throw new ToolError("No models available for inspect_image.");
 		}
 
-		const matchPreferences = getModelMatchPreferences(this.session.settings);
-		const resolvePattern = (pattern: string | undefined): Model<Api> | undefined => {
-			if (!pattern) return undefined;
-			const expanded = expandRoleAlias(pattern, this.session.settings);
-			return resolveModelFromString(expanded, availableModels, matchPreferences);
+		const settings = this.session.settings;
+		const matchPreferences = getModelMatchPreferences(settings);
+		const resolveChain = (patterns: readonly string[]): Model<Api> | undefined => {
+			for (const pattern of patterns) {
+				const model = resolveModelFromString(pattern, availableModels, matchPreferences);
+				if (model) return model;
+			}
+			return undefined;
 		};
 
 		const activeModelPattern = this.session.getActiveModelString?.() ?? this.session.getModelString?.();
 		const model =
-			resolvePattern("@vision") ??
-			resolvePattern("@default") ??
-			resolvePattern(activeModelPattern) ??
+			resolveChain(helperModelPatterns(settings, "vision")) ??
+			resolveChain(normalizeModelPatternList(settings.get("defaultModel"))) ??
+			resolveChain(normalizeModelPatternList(activeModelPattern)) ??
 			availableModels[0];
 		if (!model) {
 			throw new ToolError("Unable to resolve a model for inspect_image.");
@@ -195,7 +199,7 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema.val
 
 		if (!model.input.includes("image")) {
 			throw new ToolError(
-				`Resolved model ${model.provider}/${model.id} does not support image input. Configure a vision-capable model for modelRoles.vision.`,
+				`Resolved model ${model.provider}/${model.id} does not support image input. Configure a vision-capable model for ${helperSettingPath("vision", "model")} (Agents → Roster → Helpers).`,
 			);
 		}
 

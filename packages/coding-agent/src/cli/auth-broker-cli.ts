@@ -29,7 +29,8 @@ import {
 	type OAuthProviderInfo,
 } from "@veyyon/ai";
 import { AuthBrokerClient, DEFAULT_AUTH_BROKER_BIND, startAuthBroker } from "@veyyon/ai/auth-broker";
-import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import { PROVIDER_REGISTRY } from "@veyyon/ai/registry";
 import { PASTE_CODE_LOGIN_PROVIDERS } from "@veyyon/ai/registry/derived";
 import { $which, APP_NAME, errorMessage, getActiveAuthDbPath, logger, VERSION } from "@veyyon/utils";

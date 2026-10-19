@@ -5,6 +5,7 @@ import type { AgentToolResult, ToolTier } from "@veyyon/agent-core";
 import { formatHashlineHeader } from "@veyyon/hashline";
 import { type GrepMatch, type GrepOptions, GrepOutputMode, type GrepResult, grep } from "@veyyon/natives";
 import { errorMessage, isRecord, logger, trimTrailingSlashes, untilAborted } from "@veyyon/utils";
+import { formatCount } from "@veyyon/utils/format";
 import { recordFileSnapshot, recordSeenLinesFromBody } from "../../edit/file-snapshot-store";
 import type { LocalProtocolOptions } from "../../internal-urls/local-protocol";
 import { InternalUrlRouter } from "../../internal-urls/router";
@@ -29,7 +30,7 @@ import type { ToolSession } from "..";
 import { formatResultPath } from "../core/file-recorder";
 import { classifyGroupedLines, formatGroupedFiles } from "../core/grouped-file-output";
 import { inlineBudgetFor, saveOutputArtifact } from "../core/output-artifact";
-import type { OutputMeta } from "../core/output-meta";
+import type { OutputMeta } from "../core/output-notice";
 import {
 	expandDelimitedPathEntries,
 	hasGlobPathChars,
@@ -45,7 +46,7 @@ import {
 	splitPathAndSelPreferringLiteral,
 	toPathList,
 } from "../core/path-utils";
-import { formatCodeFrameLine, formatCount } from "../core/render-utils";
+import { formatCodeFrameLine } from "../core/render-utils";
 import { ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 import { loadUrlReader } from "../web/manifest";
