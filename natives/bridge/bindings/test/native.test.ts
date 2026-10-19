@@ -840,6 +840,16 @@ describe("veyyon-natives", () => {
 			expect(result.matches[0]?.metaVariables?.MSG).toBe('"hi"');
 		});
 
+		it("binds a multi capture to the source it spans", async () => {
+			const result = await astMatch({
+				source: "foo(a, b);",
+				lang: "ts",
+				patterns: ["foo($$$ARGS)"],
+				includeMeta: true,
+			});
+			expect(result.matches[0]?.metaVariables?.ARGS).toBe("[a, b]");
+		});
+
 		it("enforces metavariable equality within a pattern", async () => {
 			const same = await astMatch({
 				source: "if (x) clearTimeout(x);",

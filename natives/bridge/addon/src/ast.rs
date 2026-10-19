@@ -6,7 +6,13 @@ use std::{
 	path::{Path, PathBuf},
 };
 
-use ast_grep_core::{MatchStrictness, matcher::Pattern, source::Edit, tree_sitter::LanguageExt};
+use ast_grep_core::{
+	Doc, MatchStrictness,
+	matcher::Pattern,
+	meta_var::{MetaVarEnv, MetaVariable},
+	source::{Content, Edit},
+	tree_sitter::LanguageExt,
+};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use rayon::prelude::*;
@@ -113,7 +119,8 @@ pub struct AstFindMatch {
 	pub end_line:       u32,
 	/// 1-based end column.
 	pub end_column:     u32,
-	/// Meta-variable name to captured text, when `includeMeta` was enabled.
+	/// Meta-variable name to captured text, when `includeMeta` was enabled. A
+	/// `$$$NAME` capture is the source it spans, in brackets.
 	pub meta_variables: Option<HashMap<String, String>>,
 }
 
@@ -808,6 +815,32 @@ fn tally_files(
 	Ok(tally)
 }
 
+/// A match's bindings as the source they cover: a single capture is its
+/// node's text, and a multi capture (`$$$NAME`) the source from its first node
+/// to its last, in brackets. Listing a multi capture node by node, as
+/// ast-grep's own conversion does, prints the comma between two arguments as an
+/// element of its own: `foo($$$A)` over `foo(a, b)` bound `[a, ,, b]`.
+fn binding_texts<D: Doc>(env: &MetaVarEnv<'_, D>) -> HashMap<String, String> {
+	let mut texts = HashMap::new();
+	for var in env.get_matched_variables() {
+		let source = env
+			.get_var_bytes(&var)
+			.map(<D::Source as Content>::encode_bytes);
+		match var {
+			MetaVariable::Capture(name, _) => {
+				if let Some(source) = source {
+					texts.insert(name, source.into_owned());
+				}
+			},
+			MetaVariable::MultiCapture(name) => {
+				texts.insert(name, format!("[{}]", source.unwrap_or_default()));
+			},
+			MetaVariable::Dropped(_) | MetaVariable::Multiple => {},
+		}
+	}
+	texts
+}
+
 /// Search one file for every pattern compiled for its language, keeping its
 /// best `capacity` matches.
 fn find_in_file(
@@ -878,8 +911,7 @@ fn find_in_file(
 			};
 			sequence = sequence.saturating_add(1);
 			if should_retain_match(&tally.retained, capacity, &key) {
-				let meta_variables =
-					include_meta.then(|| HashMap::<String, String>::from(matched.get_env().clone()));
+				let meta_variables = include_meta.then(|| binding_texts(matched.get_env()));
 				retain_bounded_match(&mut tally.retained, capacity, RetainedAstFindMatch {
 					key,
 					text: matched.text().into_owned(),
@@ -969,11 +1001,7 @@ pub fn ast_match(options: AstMatchOptions<'_>) -> task::Promise<AstMatchResult> 
 					};
 					match_sequence = match_sequence.saturating_add(1);
 					if should_retain_match(&retained_matches, retained_capacity, &key) {
-						let meta_variables = if include_meta {
-							Some(HashMap::<String, String>::from(matched.get_env().clone()))
-						} else {
-							None
-						};
+						let meta_variables = include_meta.then(|| binding_texts(matched.get_env()));
 						retain_bounded_match(
 							&mut retained_matches,
 							retained_capacity,
@@ -1650,6 +1678,63 @@ mod tests {
 			fs::read_to_string(root.join("view.php")).expect("view.php should be readable"),
 			source.replace("file_put_contents(", "safe_put("),
 		);
+	}
+
+	/// A `$$$` binding is the source its nodes span. ast-grep's own conversion
+	/// lists the nodes one by one, so the comma between two arguments became an
+	/// element of its own (`[a, ,, b]`) that appears nowhere in the file. Every
+	/// language whose argument list separates with a token produced it; this
+	/// covers four, the empty capture, a capture written without spaces and a
+	/// single capture beside them.
+	#[test]
+	fn a_multi_capture_binds_the_source_it_spans() {
+		let root = veyyon_test_scratch::scratch_dir("natives-ast-multi-capture");
+		fs::write(root.join("a.ts"), "foo(a, b);\nfoo();\nfoo(x,y);\nbar(z);\n")
+			.expect("a.ts should be written");
+		fs::write(root.join("b.py"), "foo(a, b)\n").expect("b.py should be written");
+		fs::write(root.join("c.rs"), "fn main() {\n    foo(a, b);\n}\n")
+			.expect("c.rs should be written");
+		fs::write(root.join("d.php"), "<?php\nfoo($a, $b);\n").expect("d.php should be written");
+		let patterns = ["foo($$$A)".to_string(), "bar($X)".to_string()];
+		let ct = task::CancelToken::default();
+
+		let candidates =
+			collect_candidates(Some(root.path().to_string_lossy().into_owned()), None, &ct)
+				.expect("candidate collection should succeed");
+		let (resolved, languages) =
+			resolve_candidates_for_find(candidates, None, &ct).expect("languages should resolve");
+		let compiled =
+			compile_find_patterns(&patterns, &languages, None, &MatchStrictness::Smart, &ct)
+				.expect("the patterns should compile");
+		let tally = tally_files(resolved, &compiled, usize::MAX, true, false, &ct)
+			.expect("the search should succeed");
+		assert_eq!(tally.parse_errors, Vec::<String>::new());
+		type Found = (String, u32, Vec<(String, String)>);
+		let mut found: Vec<Found> = tally
+			.retained
+			.into_vec()
+			.into_iter()
+			.map(|found| {
+				let mut bindings: Vec<_> = found
+					.meta_variables
+					.unwrap_or_default()
+					.into_iter()
+					.collect();
+				bindings.sort();
+				(found.key.path, found.key.start_line, bindings)
+			})
+			.collect();
+		found.sort();
+		let bound = |name: &str, value: &str| vec![(name.to_string(), value.to_string())];
+		assert_eq!(found, [
+			("a.ts".to_string(), 1, bound("A", "[a, b]")),
+			("a.ts".to_string(), 2, bound("A", "[]")),
+			("a.ts".to_string(), 3, bound("A", "[x,y]")),
+			("a.ts".to_string(), 4, bound("X", "z")),
+			("b.py".to_string(), 1, bound("A", "[a, b]")),
+			("c.rs".to_string(), 2, bound("A", "[a, b]")),
+			("d.php".to_string(), 2, bound("A", "[$a, $b]")),
+		]);
 	}
 
 	fn make_apply_failure_tree() -> TempTree {

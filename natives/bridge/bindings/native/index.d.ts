@@ -267,7 +267,10 @@ export interface AstFindMatch {
   endLine: number
   /** 1-based end column. */
   endColumn: number
-  /** Meta-variable name to captured text, when `includeMeta` was enabled. */
+  /**
+   * Meta-variable name to captured text, when `includeMeta` was enabled. A
+   * `$$$NAME` capture is the source it spans, in brackets.
+   */
   metaVariables?: Record<string, string>
 }
 
