@@ -272,6 +272,12 @@ export interface AgentSessionConfig {
 	convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	/** System prompt builder that can consider tool availability. Returns ordered provider-facing blocks. */
 	rebuildSystemPrompt?: (toolNames: string[], tools: Map<string, AgentTool>) => Promise<{ systemPrompt: string[] }>;
+	/**
+	 * Whether a prompt built for `model` teaches Argot shorthand. Two models in one prompt cohort
+	 * render different prompts when only one of them is on the encode allowlist, so a model switch
+	 * compares this alongside the cohort to decide whether the prompt in force is stale.
+	 */
+	argotTeaches?: (model: Model) => boolean;
 	/** Re-discover the current project's rule files and skills from disk. Returns path-only change notices. */
 	reloadProjectInputs?: () => Promise<string[]>;
 	/** Local calendar date provider used by prompt-cache invalidation. Defaults to the host local date. */
