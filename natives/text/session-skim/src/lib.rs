@@ -32,7 +32,8 @@
 //!   object, holds a byte below U+0020 or invalid UTF-8, nests deeper than
 //!   [`MAX_DEPTH`], or has an analyzed key that is escaped, repeated, starts
 //!   with a digit, or is past the 31st.
-//! - `[n, record]`: a line shorter than [`SkimRules::min_line_bytes`], itself.
+//! - `[n, record]`: a line shorter than [`SkimRules::min_line_bytes`] that
+//!   moves nothing, itself.
 //! - `[n, record, keys, standInKeys, toolCalls, taskUsage]`: the projection.
 //!   Bit `i` of `keys` is set when the `i`th member of `record` moved, and bit
 //!   `i` of `standInKeys` when the `i`th member of the entry's stand-in did.
@@ -67,8 +68,9 @@ const TASKS_PER_THREAD: usize = 4;
 /// What moves out of an entry, as the caller's load decides it.
 #[derive(Clone, Debug)]
 pub struct SkimRules {
-	/// A line shorter than this is reported whole, and a longer one that moves
-	/// nothing is left to the caller: the load keeps such an entry in memory.
+	/// A line that moves nothing is reported whole when it is shorter than
+	/// this, and left to the caller otherwise. A line that moves a value is
+	/// projected whatever its length.
 	pub min_line_bytes:        usize,
 	/// A string of at least this many UTF-16 code units moves.
 	pub min_string_units:      usize,
@@ -357,9 +359,7 @@ fn project_into(line: &[u8], rules: &SkimRules, scratch: &mut Scratch, out: &mut
 	let entry_type = text_member(line, entry.members, b"type");
 	let is_type =
 		|name: &[u8]| entry_type.is_some_and(|text| decodes_to(text_bytes(line, text), name, true));
-	let whole = line.len() < rules.min_line_bytes
-		|| entry_type.is_none()
-		|| rules.whole_entry_types.iter().any(|name| is_type(name));
+	let whole = entry_type.is_none() || rules.whole_entry_types.iter().any(|name| is_type(name));
 	let compaction = is_type(b"compaction");
 	// A mask names a member by its position, and a parse reads an escaped,
 	// repeated or digit key of a compaction's `preserveData`, or of the window

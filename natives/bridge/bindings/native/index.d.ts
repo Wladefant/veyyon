@@ -1551,7 +1551,10 @@ export interface SessionSkim {
  * it.
  */
 export interface SessionSkimRules {
-  /** A line shorter than this many bytes is reported whole. */
+  /**
+   * A line shorter than this many bytes that moves nothing is reported
+   * whole; a line that moves a value is projected whatever its length.
+   */
   minLineBytes: number
   /** A string of at least this many UTF-16 code units moves. */
   minStringLength: number

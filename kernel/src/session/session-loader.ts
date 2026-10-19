@@ -529,9 +529,16 @@ class FileLineWindow {
  * back in full when no later compaction summarized it. One skim returns about `outputBytes` of
  * output, and the load parses it before it reads the next, so it holds that much of the skim at a
  * time rather than the skim of the whole file.
+ *
+ * A line that moves nothing is copied into the skim when it is under a kilobyte and read again from
+ * the file otherwise, where a copy would hold as many bytes as the line. A line that moves a value
+ * is projected whatever its length: projecting the 46,000 lines under a kilobyte of a 148 MB session
+ * instead of parsing them whole loads it in 210 ms instead of 277 ms, and its resume peaks at 262 MB
+ * resident instead of 276 MB.
  */
 const SKIM_RULES: Omit<SessionSkimRules, "maxLineBytes"> = {
 	...COLD_FIELD_RULES,
+	minLineBytes: 1024,
 	wholeEntryTypes: ["session", ...RESIDENT_SETTINGS_ENTRY_TYPES],
 	rawLines: 2,
 	outputBytes: 8 << 20,

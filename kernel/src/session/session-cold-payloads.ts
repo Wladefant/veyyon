@@ -38,11 +38,9 @@ import type { SessionEntry } from "./session-entries";
 import type { PinnedSessionReader } from "./session-storage";
 
 /**
- * A line shorter than this is parsed whole by a skimmed load rather than projected, and stays in
- * memory when an append writes it: cooling an appended line reads it back from the file first. A
- * line any compaction or branch leaves behind moves whatever its size: the 34,912 custom entries and
- * 11,273 message entries under a kilobyte that a resumed 148 MB session kept held 14.8 MB of heap
- * and 30 MB of resident memory, and a turn reads none of them back.
+ * A line shorter than this stays in memory when an append writes it, because cooling an appended
+ * line reads it back from the file first. A line a compaction or a branch leaves behind moves
+ * whatever its size, live and on load (see `SKIM_RULES` in `session-loader.ts`).
  */
 export const MIN_COLD_LINE_BYTES = 1024;
 
@@ -117,14 +115,8 @@ function recordAt(
  */
 export const COLD_FIELD_RULES: Pick<
 	SessionSkimRules,
-	| "minLineBytes"
-	| "minStringLength"
-	| "residentKeys"
-	| "messageResidentKeys"
-	| "compactionMovedKeys"
-	| "largeStringPrefixes"
+	"minStringLength" | "residentKeys" | "messageResidentKeys" | "compactionMovedKeys" | "largeStringPrefixes"
 > = {
-	minLineBytes: MIN_COLD_LINE_BYTES,
 	minStringLength: MIN_COLD_STRING_LENGTH,
 	residentKeys: [...RESIDENT_KEYS],
 	messageResidentKeys: [...MESSAGE_RESIDENT_KEYS],

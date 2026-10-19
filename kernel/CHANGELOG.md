@@ -10,6 +10,7 @@
 
 ### Changed
 
+- A streamed load reads the projection of a compacted entry under 1 KiB instead of parsing its whole line, so opening a 148 MB session takes 227 ms instead of 277 ms and holds 40.7 MB of JavaScript heap instead of 43.1 MB, and resuming it settles at 171 MB resident instead of 178 MB.
 - A compaction that a later compaction summarized moves its summary out of memory, live and on load, so a resumed 148 MB session with 162 compactions peaks at 261 MB resident instead of 292 MB.
 - Compacted history moves out of memory whatever the length of each entry's line, where entries under 1 KiB used to stay, so a resumed 148 MB session settles at 205 MB resident instead of 215 MB and peaks at 302 MB instead of 318 MB.
 - An enum setting whose configured value is not one of its members reads as the declaration's `invalid` member when one is declared, and as its default otherwise; `getInvalidValue` returns that member.

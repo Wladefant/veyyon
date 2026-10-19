@@ -10,7 +10,8 @@ use crate::{napi_error::to_napi_with, task};
 /// it.
 #[napi(object)]
 pub struct SessionSkimRules {
-	/// A line shorter than this many bytes is reported whole.
+	/// A line shorter than this many bytes that moves nothing is reported
+	/// whole; a line that moves a value is projected whatever its length.
 	pub min_line_bytes:        u32,
 	/// A string of at least this many UTF-16 code units moves.
 	pub min_string_length:     u32,

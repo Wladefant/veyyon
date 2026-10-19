@@ -128,14 +128,21 @@ mod what_moves {
 	}
 
 	#[test]
-	fn a_short_line_is_reported_whole() {
-		let short = r#"{"type":"custom","data":{"a":1}}"#;
-		assert_eq!(report(short), json!([short.len(), {"type":"custom","data":{"a":1}}]));
+	fn a_short_line_that_moves_nothing_is_reported_whole() {
+		let short = r#"{"type":"custom","s":"hi","n":1}"#;
+		assert_eq!(report(short), json!([short.len(), {"type":"custom","s":"hi","n":1}]));
 		let compaction = r#"{"type":"compaction","data":{"a":1}}"#;
 		assert_eq!(
 			report(compaction),
 			json!([compaction.len(), {"type":"compaction","data":{"a":1}}])
 		);
+	}
+
+	#[test]
+	fn a_short_line_that_moves_a_value_is_projected() {
+		let short = r#"{"type":"custom","data":{"a":1}}"#;
+		assert!(short.len() < rules().min_line_bytes);
+		assert_eq!(report(short), json!([short.len(), {"type":"custom","data":{}}, 0b10, 0, -1, 0]));
 	}
 
 	#[test]
@@ -411,12 +418,12 @@ mod remote_window {
 	}
 
 	#[test]
-	fn a_short_compaction_is_reported_whole() {
+	fn a_short_compaction_moves_its_window() {
 		let line = r#"{"type":"compaction","preserveData":{"remoteCompaction":{"window":[1]}}}"#;
 		let rules = SkimRules { min_line_bytes: line.len() + 1, ..window_rules() };
 		assert_eq!(
 			report_with(line.as_bytes(), &rules),
-			json!([line.len(), {"type":"compaction","preserveData":{"remoteCompaction":{"window":[1]}}}])
+			json!([line.len(), {"type":"compaction","preserveData":{"remoteCompaction":{"window":[]}}}, 0, 1, -1, 0])
 		);
 	}
 

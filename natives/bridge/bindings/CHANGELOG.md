@@ -9,7 +9,7 @@
 
 ### Added
 
-- `skimSessionFile(fd, start, rules)` reads a session JSONL file on the thread pool and reports each line as the record a load keeps for a cold entry, with each moved value replaced by an empty value of its kind, ending at the block that brings the report to `rules.outputBytes`.
+- `skimSessionFile(fd, start, rules)` reads a session JSONL file on the thread pool and reports each line as the record a load keeps for a cold entry, with each moved value replaced by an empty value of its kind whatever the line's length, ending at the block that brings the report to `rules.outputBytes`; a line under `rules.minLineBytes` that moves nothing is copied whole.
 - `skimSessionFile` reports a compaction with every value copied except the large members `rules.compactionMovedKeys` names and the large members of its server-side window record (`preserveData.remoteCompaction`), unless `rules.wholeEntryTypes` names `compaction`.
 
 ### Changed
