@@ -190,6 +190,7 @@
 
 ### Fixed
 
+- A `read` of a semicolon-delimited path list reads its entries without first searching the whole working directory for a file named by the joined string, so in a 300,000-file directory each such read takes 4.5 ms instead of 168 ms (larger trees waited out the 5 s search deadline on every call), and a suffix search that reaches its deadline stops walking the tree instead of finishing the walk in the background.
 - A memory pass on a model that does not accept its effort logs "Memory pass effort is not accepted by the model" once per model and effort instead of once per request.
 - A partial read of a large source file and an edit preview of one no longer freeze the terminal while tree-sitter finds the enclosing block: the parse runs off the event loop, so on a 3.5 MB TypeScript file the longest event-loop stall falls from 153 ms to 1 ms (0.5 MB: 51 ms to under 4 ms).
 - An eval cell whose output arrives as one large frame no longer freezes the terminal while the kernel's output is read: each pipe chunk is scanned once instead of rescanning everything received so far, so a 32 MB frame takes 33 ms instead of 541 ms; a frame over the 64 MiB stream frame ceiling (`VEYYON_STREAM_FRAME_MAX_BYTES`) ends the cell with the reason and restarts the kernel instead of hanging it.
