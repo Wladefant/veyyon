@@ -13,6 +13,7 @@
 - Extension browser sessions reuse their exact connect tab and remove pages created by failed opens. Closing a tab removes it before the extension can disconnect ([issue](https://github.com/Wladefant/veyyon/issues/548)).
 - Session factory callback typing and mixed native actor rosters now pass the workspace type check ([Refs](https://github.com/Wladefant/veyyon/issues/569)).
 - Background jobs whose owning lane was disposed reach Main as one batched note listing each result once. A lane's jobs still reach only that lane while it lives, and an absent owner keeps its completions until it returns ([Refs #564](https://github.com/Wladefant/veyyon/issues/564)).
+- Session dispose closes only the browser tabs that session created. Another lane's tabs and the operator's tabs stay open ([Refs #538](https://github.com/Wladefant/veyyon/issues/538)).
 
 ### Changed
 

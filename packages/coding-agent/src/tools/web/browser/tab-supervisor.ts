@@ -28,7 +28,6 @@ import {
 } from "./registry";
 import { applyStorageState, captureStorageState, type StorageState, type StorageStateLoaded } from "./storage-state";
 import { redactTabInventoryUrl } from "./extension-policy";
-import { applyStorageState, type StorageState, type StorageStateLoaded } from "./storage-state";
 import type {
 	BrowserRunError,
 	ReadyInfo,
@@ -1001,7 +1000,7 @@ export async function releaseTabForOwner(
 ): Promise<boolean> {
 	const tab = tabs.get(name);
 	if (!tab) return false;
-	if (ownerId !== undefined && tab.ownerSessionId === ownerId) return releaseTab(name, opts);
+	if (ownerId && tab.ownerSessionId === ownerId) return releaseTab(name, opts);
 	const tabId = approvedExtensionTabId(tab);
 	if (tabId !== undefined && opts.approvedTabIds?.includes(tabId)) return releaseTab(name, opts);
 	throw new ToolError(
@@ -1018,12 +1017,12 @@ export async function releaseTabsForOwner(
 	ownerId: string | undefined,
 	opts: OwnerTabReleaseOptions = {},
 ): Promise<number> {
-	if (ownerId === undefined) return 0;
+	if (!ownerId) return 0;
 	const names = Array.from(tabs.values())
 		.filter(tab => {
 			if (ownerId !== undefined && tab.ownerSessionId === ownerId) return true;
 			const tabId = approvedExtensionTabId(tab);
-			return tabId !== undefined && approvedTabIds.has(tabId);
+			return tabId !== undefined && opts.approvedTabIds?.includes(tabId) === true;
 		})
 		.map(tab => tab.name);
 	let count = 0;
