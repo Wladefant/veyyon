@@ -200,6 +200,7 @@
 
 ### Fixed
 
+- Exiting on SIGTERM after a tmp cleaner removed a shell snapshot no longer logs "Cleanup callback failed" with ENOENT, and removes every other snapshot instead of leaving them in the tmp directory.
 - The embedded shell sizes each command's environment from the variables in scope instead of a count that grew with every `bash` call and never shrank, so 12,000 calls retain 13.5 MB of memory instead of 81.4 MB.
 - Keys typed while a session named by `--resume`, `--continue` or `--fork` is loading show in the composer instead of being discarded: the launch card now paints for those launches and holds the keys, so "hello" typed 30 ms after launch appears 40–53 ms after launch; a bare `--resume` still opens the session picker without the card.
 - A resumed session echoes keystrokes while its transcript is rebuilt: the transcript is built off screen in 8 ms slices, the first in a turn after the startup work and each tool's argument schema in a turn of its own, and replaces the startup frame in one step, so on a 150-prompt session the slowest keystroke echo after the composer appears falls from 112–141 ms to 40–45 ms.
