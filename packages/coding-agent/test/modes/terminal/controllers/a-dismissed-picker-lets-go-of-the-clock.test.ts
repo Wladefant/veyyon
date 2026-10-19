@@ -45,6 +45,7 @@ import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { SessionEntry, SessionTreeNode } from "@veyyon/kernel/session/session-entries";
 import { TERMINAL } from "@veyyon/tui";
 import { motionClock } from "@veyyon/utils/motion";
+import { useHandTickedMotion } from "../../../helpers/hand-ticked-motion";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const FRAME = 1000 / 60;
@@ -226,19 +227,16 @@ function motionAt(row1: number, col1 = 30): string {
 	return `\x1b[<35;${col1};${row1}M`;
 }
 
+const { advance } = useHandTickedMotion();
+
 /**
- * Run the shared clock forward from `from` until nothing is registered, or throw. A bounded loop
- * rather than a wait: the clock is ticked by hand, so an animation that never ends is a hang here
- * and a hang in the product.
+ * Run the shared clock forward until nothing is registered, or fail. A bounded loop rather than a
+ * wait: the clock is ticked by hand, so an animation that never ends is a hang here and a hang in the
+ * product.
  */
-function drain(from: number): number {
-	let now = from;
-	for (let frame = 0; frame < 120 && motionClock.liveCount > 0; frame++) {
-		now += FRAME;
-		motionClock.tick(now);
-	}
+function drain(): void {
+	for (let frame = 0; frame < 120 && motionClock.liveCount > 0; frame++) advance(FRAME);
 	expect(motionClock.liveCount, "the card's open unfold ended").toBe(0);
-	return now;
 }
 
 beforeEach(async () => {
@@ -268,7 +266,7 @@ describe("a dismissed picker lets go of the clock", () => {
 			// The open unfold rides the same clock and clips the frame while it runs, so the row is
 			// located after it lands.
 			card.render(WIDTH);
-			drain(performance.now());
+			drain();
 
 			// A pointer report over a row registers the band's fade. It is left un-ticked on
 			// purpose: the point is that a fade STILL TRAVELLING when the card is dismissed goes
@@ -283,15 +281,14 @@ describe("a dismissed picker lets go of the clock", () => {
 			// tick, so two frames is both "the clock let go" and "it is not still travelling": the
 			// 90ms fade is barely a third done by here, and an undisposed one would still be
 			// registered.
-			const now = performance.now();
-			for (let frame = 1; frame <= 2; frame++) motionClock.tick(now + frame * FRAME);
+			for (let frame = 1; frame <= 2; frame++) advance(FRAME);
 			expect(motionClock.liveCount, "the dismissed picker left nothing on the clock").toBe(0);
 		});
 
 		it(`leaves the clock idle when ${picker.name} is opened and closed untouched`, async () => {
 			const { card } = await picker.open();
 			card.render(WIDTH);
-			drain(performance.now());
+			drain();
 			card.handleInput("\x1b");
 			expect(motionClock.liveCount).toBe(0);
 		});
@@ -369,14 +366,9 @@ describe("a dismissed picker lets go of the clock", () => {
 		void controller.handle("/mcp add a-server");
 		const card = await opened.promise;
 		card.render(WIDTH);
-		drain(performance.now());
-
-		let now = performance.now();
+		drain();
 		const tickFrames = (count: number) => {
-			for (let frame = 0; frame < count; frame++) {
-				now += FRAME;
-				motionClock.tick(now);
-			}
+			for (let frame = 0; frame < count; frame++) advance(FRAME);
 		};
 
 		card.handleInput(motionAt(rowOf(card, "http (HTTP server)")));
