@@ -200,6 +200,7 @@
 
 ### Fixed
 
+- A `search` of type `structure` and `ast_edit` skip parsing a file that lacks the literal text every pattern needs and walk the tree without first listing every file, so a structure search over 833,000 PHP files takes 2.4 s and peaks at 54 MB instead of 248 s and 598 MB, and over 99,960 files the tool returns in 0.31 s instead of 30 s; a malformed file that cannot hold a match is no longer reported as a parse issue.
 - Changing the working directory keeps the probed shell and OS of every SSH host whose destination is unchanged instead of deleting every host's record and closing its master connection, so the `ssh` tool description and the prompt-cache prefix stay byte-identical across a same-project re-root (8 configured hosts: 8 records kept instead of 0, tool definitions unchanged instead of rewritten to "detecting...").
 - Exiting on SIGTERM after a tmp cleaner removed a shell snapshot no longer logs "Cleanup callback failed" with ENOENT, and removes every other snapshot instead of leaving them in the tmp directory.
 - The embedded shell sizes each command's environment from the variables in scope instead of a count that grew with every `bash` call and never shrank, so 12,000 calls retain 13.5 MB of memory instead of 81.4 MB.
