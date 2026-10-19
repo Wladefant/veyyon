@@ -34,6 +34,7 @@ pub use cache::{
 	empty_recheck_ms, ensure_readable_dir, invalidate_all, invalidate_path, invalidate_path_string,
 	max_cache_entries, normalize_relative_path, parallel_for_each, parallel_for_each_init,
 	release_expired_scans, resolve_search_path, should_parallelize, should_skip_path, walk_workers,
+	with_walk_pool,
 };
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 

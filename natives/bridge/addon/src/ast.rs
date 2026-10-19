@@ -9,6 +9,7 @@ use std::{
 use ast_grep_core::{MatchStrictness, matcher::Pattern, source::Edit, tree_sitter::LanguageExt};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+use rayon::prelude::*;
 use veyyon_ast::{
 	SupportLang,
 	ops::{self as shared_ops},
@@ -705,13 +706,8 @@ pub fn ast_grep(options: AstFindOptions<'_>) -> task::Promise<AstFindResult> {
 			compile_find_patterns(&patterns, &languages, selector.as_deref(), &strictness, &ct)?;
 		let files_searched = to_u32(resolved_candidates.len());
 
-		let retained_capacity = retained_find_capacity(normalized_offset, normalized_limit);
-		let mut retained_matches = BinaryHeap::new();
+		let capacity = retained_find_capacity(normalized_offset, normalized_limit);
 		let mut parse_errors = Vec::new();
-		let mut total_matches = 0u32;
-		let mut match_sequence = 0u64;
-		let mut files_with_matches = BTreeSet::new();
-
 		for compiled in &compiled_patterns {
 			if compiled.compiled_by_lang.is_empty() && !languages.is_empty() {
 				for (lang_key, error) in &compiled.compile_errors_by_lang {
@@ -720,92 +716,19 @@ pub fn ast_grep(options: AstFindOptions<'_>) -> task::Promise<AstFindResult> {
 			}
 		}
 
-		for resolved in resolved_candidates {
-			ct.heartbeat()?;
-			let ResolvedCandidate { candidate, language, language_error } = resolved;
-
-			if let Some(error) = language_error.as_deref() {
-				parse_errors.push(format!("{}: {error}", candidate.display_path));
-				continue;
-			}
-
-			let Some(language) = language else {
-				continue;
-			};
-			let lang_key = language.canonical_name();
-
-			let mut runnable_patterns: Vec<(&str, &Pattern)> = Vec::new();
-			for compiled in &compiled_patterns {
-				ct.heartbeat()?;
-				if let Some(pattern) = compiled.compiled_by_lang.get(lang_key) {
-					runnable_patterns.push((compiled.pattern.as_str(), pattern));
-				}
-			}
-			if runnable_patterns.is_empty() {
-				continue;
-			}
-
-			let source = match std::fs::read_to_string(&candidate.absolute_path) {
-				Ok(source) => source,
-				Err(err) => {
-					parse_errors.push(format!("{}: {err}", candidate.display_path));
-					continue;
-				},
-			};
-
-			let ast = language.ast_grep(source);
-			if ast.root().dfs().any(|node| node.is_error()) {
-				parse_errors.push(format!(
-					"{}: parse error (syntax tree contains error nodes)",
-					candidate.display_path
-				));
-			}
-			let mut file_had_match = false;
-			for (_, pattern) in runnable_patterns {
-				ct.heartbeat()?;
-				for matched in ast.root().find_all(pattern.clone()) {
-					ct.heartbeat()?;
-					total_matches = total_matches.saturating_add(1);
-					if !file_had_match {
-						files_with_matches.insert(candidate.display_path.clone());
-						file_had_match = true;
-					}
-					let range = matched.range();
-					let start = matched.start_pos();
-					let end = matched.end_pos();
-					let key = AstFindOrderKey {
-						path:         candidate.display_path.clone(),
-						start_line:   to_u32(start.line().saturating_add(1)),
-						start_column: to_u32(start.column(matched.get_node()).saturating_add(1)),
-						end_line:     to_u32(end.line().saturating_add(1)),
-						end_column:   to_u32(end.column(matched.get_node()).saturating_add(1)),
-						byte_start:   to_u32(range.start),
-						byte_end:     to_u32(range.end),
-						sequence:     match_sequence,
-					};
-					match_sequence = match_sequence.saturating_add(1);
-					if should_retain_match(&retained_matches, retained_capacity, &key) {
-						let meta_variables = if include_meta {
-							Some(HashMap::<String, String>::from(matched.get_env().clone()))
-						} else {
-							None
-						};
-						retain_bounded_match(
-							&mut retained_matches,
-							retained_capacity,
-							RetainedAstFindMatch {
-								key,
-								text: matched.text().into_owned(),
-								meta_variables,
-							},
-						);
-					}
-				}
-			}
-		}
+		let FindTally { retained, total_matches, files_with_matches, parse_errors: file_errors } =
+			tally_files(
+				resolved_candidates,
+				&compiled_patterns,
+				capacity,
+				include_meta,
+				veyyon_walker::walk_workers() > 1,
+				&ct,
+			)?;
+		parse_errors.extend(file_errors);
 
 		let (matches, limit_reached) =
-			page_retained_matches(retained_matches, normalized_offset, normalized_limit);
+			page_retained_matches(retained, normalized_offset, normalized_limit);
 		let matches = matches
 			.into_iter()
 			.map(retained_to_find_match)
@@ -820,6 +743,155 @@ pub fn ast_grep(options: AstFindOptions<'_>) -> task::Promise<AstFindResult> {
 			parse_errors: (!parse_errors.is_empty()).then_some(parse_errors),
 		})
 	})
+}
+
+/// What a run of files contributed to an [`ast_grep`]: its best `capacity`
+/// matches, its match count, the files that matched, and its diagnostics in
+/// file order.
+#[derive(Default)]
+struct FindTally {
+	retained:           BinaryHeap<RetainedAstFindMatch>,
+	total_matches:      u32,
+	files_with_matches: BTreeSet<String>,
+	parse_errors:       Vec<String>,
+}
+
+impl FindTally {
+	/// The tally of this run followed by `next`, the run that comes after it.
+	fn absorb(mut self, mut next: Self, capacity: usize) -> Self {
+		if next.retained.len() > self.retained.len() {
+			std::mem::swap(&mut self.retained, &mut next.retained);
+		}
+		for candidate in next.retained {
+			retain_bounded_match(&mut self.retained, capacity, candidate);
+		}
+		self.total_matches = self.total_matches.saturating_add(next.total_matches);
+		self.files_with_matches.append(&mut next.files_with_matches);
+		self.parse_errors.append(&mut next.parse_errors);
+		self
+	}
+}
+
+/// Search every file for the patterns compiled for its language.
+///
+/// Each file is read, parsed and matched on its own, which is the whole cost
+/// of a search, so with `parallel` the files are searched on the walker pool,
+/// the same workers that walk and grep the tree. Rayon folds and reduces
+/// adjacent runs in order, so the diagnostics come out in file order either
+/// way, and a match's key orders it among all the others wherever it was
+/// found.
+fn tally_files(
+	resolved_candidates: Vec<ResolvedCandidate>,
+	compiled_patterns: &[CompiledFindPattern],
+	capacity: usize,
+	include_meta: bool,
+	parallel: bool,
+	ct: &task::CancelToken,
+) -> Result<FindTally> {
+	let search = |resolved: ResolvedCandidate| {
+		find_in_file(resolved, compiled_patterns, capacity, include_meta, ct)
+	};
+	if parallel {
+		return veyyon_walker::with_walk_pool(|| {
+			resolved_candidates
+				.into_par_iter()
+				.try_fold(FindTally::default, |tally, resolved| {
+					Ok(tally.absorb(search(resolved)?, capacity))
+				})
+				.try_reduce(FindTally::default, |left, right| Ok(left.absorb(right, capacity)))
+		});
+	}
+	let mut tally = FindTally::default();
+	for resolved in resolved_candidates {
+		tally = tally.absorb(search(resolved)?, capacity);
+	}
+	Ok(tally)
+}
+
+/// Search one file for every pattern compiled for its language, keeping its
+/// best `capacity` matches.
+fn find_in_file(
+	resolved: ResolvedCandidate,
+	compiled_patterns: &[CompiledFindPattern],
+	capacity: usize,
+	include_meta: bool,
+	ct: &task::CancelToken,
+) -> Result<FindTally> {
+	ct.heartbeat()?;
+	let mut tally = FindTally::default();
+	let ResolvedCandidate { candidate, language, language_error } = resolved;
+	if let Some(error) = language_error {
+		tally
+			.parse_errors
+			.push(format!("{}: {error}", candidate.display_path));
+		return Ok(tally);
+	}
+	let Some(language) = language else {
+		return Ok(tally);
+	};
+	let lang_key = language.canonical_name();
+	let runnable_patterns: Vec<&Pattern> = compiled_patterns
+		.iter()
+		.filter_map(|compiled| compiled.compiled_by_lang.get(lang_key))
+		.collect();
+	if runnable_patterns.is_empty() {
+		return Ok(tally);
+	}
+
+	let source = match std::fs::read_to_string(&candidate.absolute_path) {
+		Ok(source) => source,
+		Err(err) => {
+			tally
+				.parse_errors
+				.push(format!("{}: {err}", candidate.display_path));
+			return Ok(tally);
+		},
+	};
+
+	let ast = language.ast_grep(source);
+	if ast.root().dfs().any(|node| node.is_error()) {
+		tally.parse_errors.push(format!(
+			"{}: parse error (syntax tree contains error nodes)",
+			candidate.display_path
+		));
+	}
+	// Matches in different files differ in path, so a file numbers its own:
+	// the sequence orders two patterns' matches of one node as one pass did.
+	let mut sequence = 0u64;
+	for pattern in runnable_patterns {
+		ct.heartbeat()?;
+		for matched in ast.root().find_all(pattern.clone()) {
+			ct.heartbeat()?;
+			tally.total_matches = tally.total_matches.saturating_add(1);
+			let range = matched.range();
+			let start = matched.start_pos();
+			let end = matched.end_pos();
+			let key = AstFindOrderKey {
+				path: candidate.display_path.clone(),
+				start_line: to_u32(start.line().saturating_add(1)),
+				start_column: to_u32(start.column(matched.get_node()).saturating_add(1)),
+				end_line: to_u32(end.line().saturating_add(1)),
+				end_column: to_u32(end.column(matched.get_node()).saturating_add(1)),
+				byte_start: to_u32(range.start),
+				byte_end: to_u32(range.end),
+				sequence,
+			};
+			sequence = sequence.saturating_add(1);
+			if should_retain_match(&tally.retained, capacity, &key) {
+				let meta_variables =
+					include_meta.then(|| HashMap::<String, String>::from(matched.get_env().clone()));
+				retain_bounded_match(&mut tally.retained, capacity, RetainedAstFindMatch {
+					key,
+					text: matched.text().into_owned(),
+					meta_variables,
+				});
+			}
+		}
+	}
+	if tally.total_matches > 0 {
+		tally.files_with_matches.insert(candidate.display_path);
+	}
+	Ok(tally)
 }
 
 /// Match ast-grep patterns against an in-memory source string; returns a
@@ -1176,7 +1248,7 @@ fn ast_edit_blocking(
 
 #[cfg(test)]
 mod tests {
-	use std::fs;
+	use std::{fmt::Write as _, fs};
 
 	use veyyon_test_scratch::TempTree;
 
@@ -1230,6 +1302,144 @@ mod tests {
 		assert_eq!(materialized_payloads, capacity);
 		assert!(limit_reached);
 		assert_eq!(lines, vec![2, 3]);
+	}
+
+	type FoundView = (String, [u32; 6], u64, String, Vec<(String, String)>);
+
+	fn view(found: &RetainedAstFindMatch) -> FoundView {
+		let key = &found.key;
+		let mut meta: Vec<_> = found
+			.meta_variables
+			.clone()
+			.unwrap_or_default()
+			.into_iter()
+			.collect();
+		meta.sort();
+		(
+			key.path.clone(),
+			[
+				key.start_line,
+				key.start_column,
+				key.end_line,
+				key.end_column,
+				key.byte_start,
+				key.byte_end,
+			],
+			key.sequence,
+			found.text.clone(),
+			meta,
+		)
+	}
+
+	/// WHY: `astGrep` searched its files one after another, and reading,
+	/// parsing and matching them is the whole cost of a structure search, so a
+	/// search over a plugin's sources ran for seconds on one core. The files
+	/// are now searched on Rayon's pool and their tallies merged.
+	///
+	/// The class this closes is any difference the merge makes: a match kept
+	/// or dropped at the page boundary, the order of two patterns' matches of
+	/// one node, a count, a matched file, or a diagnostic out of file order. The
+	/// reference is one pass over the files with nothing bounded, sorted and
+	/// paged at the end; both the pool and the serial loop must give it for
+	/// every page window.
+	///
+	/// What it does not catch: a cancellation that lands mid-search, which
+	/// fails the search either way and which the search-abort suite drives.
+	#[test]
+	fn a_parallel_search_returns_what_one_pass_over_the_files_returns() {
+		assert!(
+			veyyon_walker::walk_workers() > 1,
+			"the walker pool must have workers to split the files"
+		);
+		let root = veyyon_test_scratch::scratch_dir("natives-ast-parallel-find");
+		for index in 0..96_usize {
+			let dir = root.join(format!("d{}", index % 7));
+			fs::create_dir_all(&dir).expect("fixture dir should be created");
+			let mut source = String::new();
+			for call in 0..(index * 5 % 13) {
+				write!(source, "foo({call});\nbar({index}, {call});\n")
+					.expect("writing to a String cannot fail");
+			}
+			if index % 11 == 3 {
+				source.push_str("const = ;\n");
+			}
+			fs::write(dir.join(format!("f{index:03}.ts")), source)
+				.expect("fixture file should be written");
+		}
+		for index in 0..4 {
+			fs::write(
+				root
+					.join(format!("d{index}"))
+					.join(format!("bad{index}.ts")),
+				[0xff, 0xfe, 0xfd],
+			)
+			.expect("unreadable fixture should be written");
+		}
+
+		let ct = task::CancelToken::default();
+		let resolved = || {
+			let candidates =
+				collect_candidates(Some(root.path().to_string_lossy().into_owned()), None, &ct)
+					.expect("candidate collection should succeed")
+					.into_iter()
+					.filter(|candidate| is_supported_file(&candidate.absolute_path, None))
+					.collect();
+			resolve_candidates_for_find(candidates, None, &ct).expect("languages should resolve")
+		};
+		let (_, languages) = resolved();
+		let patterns = ["foo($A)", "foo($$$ARGS)", "bar($$$)"].map(String::from);
+		let compiled =
+			compile_find_patterns(&patterns, &languages, None, &MatchStrictness::Smart, &ct)
+				.expect("patterns should compile");
+
+		let mut all = Vec::new();
+		let mut errors = Vec::new();
+		let mut total = 0_u32;
+		let mut files = BTreeSet::new();
+		for candidate in resolved().0 {
+			let tally = find_in_file(candidate, &compiled, usize::MAX, true, &ct)
+				.expect("a file search should succeed");
+			all.extend(tally.retained.into_vec());
+			errors.extend(tally.parse_errors);
+			total += tally.total_matches;
+			files.extend(tally.files_with_matches);
+		}
+		all.sort_by(|left, right| left.key.cmp(&right.key));
+		assert!(errors.len() >= 6, "the fixture must order several diagnostics: {errors:?}");
+		assert!(
+			all.windows(2).any(|pair| {
+				pair[0].key.byte_start == pair[1].key.byte_start
+					&& pair[0].key.byte_end == pair[1].key.byte_end
+					&& pair[0].key.path == pair[1].key.path
+			}),
+			"the fixture must hold two patterns' matches of one node"
+		);
+
+		for (offset, limit) in [(0, 1), (0, 7), (3, 5), (40, 100), (0, 1000), (1500, 400), (0, 5000)]
+		{
+			let capacity = retained_find_capacity(offset, limit);
+			let expected: Vec<FoundView> = all
+				.iter()
+				.skip(offset as usize)
+				.take(limit as usize)
+				.map(view)
+				.collect();
+			for parallel in [true, false] {
+				let case = format!("offset {offset}, limit {limit}, parallel {parallel}");
+				let tally = tally_files(resolved().0, &compiled, capacity, true, parallel, &ct)
+					.expect("the search should succeed");
+				assert_eq!(tally.total_matches, total, "{case}: total");
+				assert_eq!(tally.files_with_matches, files, "{case}: files");
+				assert_eq!(tally.parse_errors, errors, "{case}: diagnostics");
+				let (page, limit_reached) = page_retained_matches(tally.retained, offset, limit);
+				assert_eq!(page.iter().map(view).collect::<Vec<_>>(), expected, "{case}: page");
+				assert_eq!(
+					limit_reached,
+					all.len() > (offset + limit) as usize,
+					"{case}: limit reached"
+				);
+			}
+		}
 	}
 
 	#[test]
