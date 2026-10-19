@@ -8,7 +8,8 @@
  * `.agent/` and `.agents/` at every ancestor, which made a cloned repository a
  * second directory vocabulary alongside `.veyyon` for installing rules,
  * commands, prompts and skills. A working tree contributes context files and
- * nothing else.
+ * nothing else to this provider. A separate trusted project skill provider
+ * handles repository skills, while native `.veyyon/skills` remains unscanned.
  */
 import * as path from "node:path";
 import { registerProvider } from "./capability";
