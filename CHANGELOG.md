@@ -312,6 +312,7 @@
 - `Loader.start()` replaces a running animation timer instead of arming a second one that `stop()` could not clear.
 - An SGR mouse or kitty escape that starts while an expired partial is being held is no longer merged into that partial and delivered as typed characters; the stale partial is delivered on its own and the new sequence gets its own hold window.
 - A terminal started again while running no longer leaves its first keyboard-probe fallback armed, which enabled modifyOtherKeys on the restored terminal after `stop()`.
+- `stallSampler` replaces its profile on every busy watchdog tick, so the functions JSC's sampling profiler caught, and every provider request context and body their closures captured, are released within one tick instead of held up to 10 s: the heap left after a full collection over a 40-prompt mixed-tool session peaks at 69 to 71 MB instead of 173 to 177 MB.
 - `RotatingLogFile` keeps a full log file under one generation when two processes rotate it at once, instead of leaving a second generation that repeats every line of it.
 - `RotatingLogFile` no longer deletes a fresh live log file another process starts while a rotation releases the full one, which lost every line written to it.
 - `fetchWithRetry` ends with the signal's `TimeoutError` when a deadline aborts it, instead of a generic `AbortError: Request was aborted` that reported the timeout as a cancellation.
