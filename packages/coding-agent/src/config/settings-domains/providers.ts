@@ -603,7 +603,7 @@ export const PROVIDERS_SETTINGS = {
 	},
 	"providers.fetch": {
 		type: "enum",
-		values: ["auto", "native", "trafilatura", "lynx", "parallel", "jina", "firecrawl"] as const,
+		values: ["auto", "native", "trafilatura", "lynx", "parallel", "jina", "firecrawl", "deepseek"] as const,
 		default: "auto",
 		ui: {
 			tab: "providers",
@@ -614,7 +614,7 @@ export const PROVIDERS_SETTINGS = {
 				{
 					value: "auto",
 					label: "Auto",
-					description: "Priority: native > trafilatura > lynx > parallel > jina > firecrawl",
+					description: "Priority: native > trafilatura > lynx > parallel > jina > firecrawl > deepseek",
 				},
 				{ value: "native", label: "Native", description: "In-process HTML→Markdown converter (always available)" },
 				{ value: "trafilatura", label: "Trafilatura", description: "Auto-installs via uv/pip" },
@@ -622,6 +622,11 @@ export const PROVIDERS_SETTINGS = {
 				{ value: "parallel", label: "Parallel", description: "Requires PARALLEL_API_KEY" },
 				{ value: "jina", label: "Jina", description: "Uses r.jina.ai reader (JINA_API_KEY optional)" },
 				{ value: "firecrawl", label: "Firecrawl", description: "Uses Firecrawl scrape API (cloud or self-hosted)" },
+				{
+					value: "deepseek",
+					label: "DeepSeek",
+					description: "Uses the DeepSeek Fetch API (requires DEEPSEEK_API_KEY)",
+				},
 			],
 		},
 	},

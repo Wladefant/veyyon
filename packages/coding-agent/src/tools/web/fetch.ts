@@ -18,6 +18,7 @@ import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { $which } from "@veyyon/utils/which";
+import { fetchWithDeepSeek, findDeepSeekApiKey } from "@veyyon/web/deepseek";
 import { findFirecrawlApiKey, scrapeWithFirecrawl } from "@veyyon/web/firecrawl";
 import { extractWithParallel, findParallelApiKey, getParallelExtractContent } from "@veyyon/web/parallel";
 import {
@@ -738,7 +739,7 @@ async function parseFeedToMarkdown(content: string, maxItems = 10): Promise<stri
 const REMOTE_READER_MAX_MS = 10_000;
 
 /** Reader backends for {@link renderHtmlToText}, in default priority order. */
-export type FetchProvider = "native" | "trafilatura" | "lynx" | "parallel" | "jina" | "firecrawl";
+export type FetchProvider = "native" | "trafilatura" | "lynx" | "parallel" | "jina" | "firecrawl" | "deepseek";
 
 const FETCH_PROVIDER_ORDER: readonly FetchProvider[] = [
 	"native",
@@ -747,6 +748,7 @@ const FETCH_PROVIDER_ORDER: readonly FetchProvider[] = [
 	"parallel",
 	"jina",
 	"firecrawl",
+	"deepseek",
 ];
 
 /**
@@ -875,6 +877,28 @@ export async function renderHtmlToText(
 						storage,
 					);
 					return result.success && result.markdown ? result.markdown : null;
+				} finally {
+					remoteTimeout.cancel();
+				}
+			},
+			deepseek: async () => {
+				if (!allowSecondaryReaders) return null;
+				const apiKey = findDeepSeekApiKey(storage);
+				if (!apiKey) return null;
+				const transform = resolveProviderTextTransform(resolveTextTransform, "DeepSeek remote reader");
+				if (transform(url) !== url) return null;
+				const remoteTimeout = scopedTimeoutSignal(remoteBudgetMs, userSignal);
+				try {
+					const page = await fetchWithDeepSeek(url, apiKey, {
+						signal: remoteTimeout.signal,
+						fetch: fetchImpl,
+					});
+					const content = page.content.trim();
+					if (!content) return null;
+					// DeepSeek returns the page's Markdown body without the title line, so the
+					// heading is added here for a reader that only ever sees the text.
+					const title = page.title.trim();
+					return title ? `# ${title}\n\n${content}` : content;
 				} finally {
 					remoteTimeout.cancel();
 				}

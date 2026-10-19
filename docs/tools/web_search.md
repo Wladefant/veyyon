@@ -16,6 +16,7 @@
   - `packages/coding-agent/src/tools/web/search/providers/anthropic.ts`: Claude web-search provider.
   - `packages/coding-agent/src/tools/web/search/providers/brave.ts`: Brave Search API adapter.
   - `packages/coding-agent/src/tools/web/search/providers/codex.ts`: OpenAI Codex SSE adapter.
+  - `packages/coding-agent/src/tools/web/search/providers/deepseek.ts`: DeepSeek Search API adapter.
   - `packages/coding-agent/src/tools/web/search/providers/duckduckgo.ts`: DuckDuckGo HTML frontend scraper.
   - `packages/coding-agent/src/tools/web/search/providers/exa.ts`: Exa API or MCP adapter.
   - `packages/coding-agent/src/tools/web/search/providers/firecrawl.ts`: Firecrawl search adapter.
@@ -36,6 +37,7 @@
   - `packages/coding-agent/src/tools/web/search/providers/xai.ts`: xAI Responses web-search adapter.
   - `packages/coding-agent/src/tools/web/search/providers/zai.ts`: Z.AI remote MCP adapter.
   - `plugins/web/src/parallel.ts`: Parallel search/extract HTTP client.
+  - `plugins/web/src/deepseek.ts`: DeepSeek Fetch HTTP client.
   - `packages/coding-agent/src/tools/web/kagi.ts`: Kagi HTTP client.
   - `packages/coding-agent/src/tools/index.ts`: built-in tool registration and enable flag.
 
@@ -101,7 +103,7 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
   - **Forced provider**: internal callers may pass `provider`; unavailable forced providers fall back to the auto chain instead of hard-failing (`packages/coding-agent/src/tools/web/search/index.ts`). This field is not in the model-facing schema.
   - **Preferred provider**: `setPreferredSearchProvider()` sets a module-global default used by `resolveProviderCandidates()`. `packages/coding-agent/src/sdk.ts` and `packages/coding-agent/src/modes/terminal/controllers/setting-effects.ts` wire this from settings.
   - **Excluded providers**: `setExcludedSearchProviders()` records providers `resolveProviderCandidates()` must skip, including as fallbacks. Wired from the `providers.webSearchExclude` setting (`providers.webSearch` drives the preferred provider) in `packages/coding-agent/src/sdk.ts`, `packages/coding-agent/src/modes/terminal/interactive-mode.ts`, and `packages/coding-agent/src/modes/terminal/controllers/setting-effects.ts`.
-  - **Auto chain order** (22 providers): `perplexity`, `gemini`, `anthropic`, `codex`, `xai`, `zai`, `exa`, `tinyfish`, `jina`, `kagi`, `tavily`, `firecrawl`, `brave`, `kimi`, `parallel`, `synthetic`, `searxng`, `startpage`, `duckduckgo`, `google`, `mojeek`, `public` (`SEARCH_PROVIDER_ORDER` in `packages/coding-agent/src/tools/web/search/types.ts`). `public` is explicit-only: its `isAvailable()` returns `false` so the auto chain never fans out implicitly.
+  - **Auto chain order** (23 providers): `perplexity`, `gemini`, `anthropic`, `codex`, `xai`, `zai`, `exa`, `tinyfish`, `jina`, `kagi`, `tavily`, `firecrawl`, `brave`, `kimi`, `parallel`, `synthetic`, `deepseek`, `searxng`, `startpage`, `duckduckgo`, `google`, `mojeek`, `public` (`SEARCH_PROVIDER_ORDER` in `packages/coding-agent/src/tools/web/search/types.ts`). `deepseek` closes the key-backed group, so it outranks only the credential-free engines. `public` is explicit-only: its `isAvailable()` returns `false` so the auto chain never fans out implicitly.
 - **Provider adapters**
   - **Perplexity**: `packages/coding-agent/src/tools/web/search/providers/perplexity.ts`
     - Availability: auth precedence is `PERPLEXITY_COOKIES` -> OAuth token in `agent.db` -> `PERPLEXITY_API_KEY` / `PPLX_API_KEY` -> anonymous ask-endpoint fallback. `isAvailable()` gates the auto chain on credentials, but `isExplicitlyAvailable()` is always true, so explicit selection works unauthenticated.
@@ -169,6 +171,12 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
     - `recency` maps to Tavily `time_range`; code explicitly keeps `topic` at default general scope instead of narrowing to news.
     - `limit` / `num_search_results`: adapter uses `params.numSearchResults ?? params.limit`, clamped to `5..20` with default `5`.
     - Output: `answer`, `sources`, `requestId`, `authMode: "api_key"`.
+  - **DeepSeek**: `packages/coding-agent/src/tools/web/search/providers/deepseek.ts`
+    - Availability: `DEEPSEEK_API_KEY` or an `agent.db` credential for `deepseek`, the same key the DeepSeek model provider uses.
+    - Querying: POST `https://api.deepseek.com/v1/tools/search` with `Authorization: Bearer <key>` and JSON body `{ query, count, need_content: false }`. The query is cut to DeepSeek's documented 128-character limit before it is sent, counted in code points so a cut never splits a character.
+    - `limit` / `num_search_results`: collapsed to `params.numSearchResults ?? params.limit`, clamped to `1..50`, default `10`.
+    - `recency` is not sent: the endpoint has no temporal filter, so a recency request still returns DeepSeek's own ranking.
+    - Output: `sources` (each `summary` first, then `snippet`, with `date` as `publishedDate`/`ageSeconds`), `authMode: "api_key"`. No synthesized answer is requested or returned.
   - **Firecrawl**: `packages/coding-agent/src/tools/web/search/providers/firecrawl.ts`
     - Availability: `FIRECRAWL_API_KEY` or `agent.db` credential for `firecrawl`.
     - Querying: POST `https://api.firecrawl.dev/v2/search` with `sources: [{ type: "web" }]`; `recency` maps to Google-style `tbs`.
@@ -244,6 +252,7 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
 - Startpage / DuckDuckGo / Google / Mojeek result count: default `10`, max `20` (their `providers/*.ts` modules).
 - Public Web result count: default `15`, max `30`; fan-out soft deadline `5s`, hard cap `30s` (`packages/coding-agent/src/tools/web/search/providers/public.ts`).
 - Tavily result count: default `5`, max `20` (`packages/coding-agent/src/tools/web/search/providers/tavily.ts`).
+- DeepSeek result count: default `10`, max `50` (`packages/coding-agent/src/tools/web/search/providers/deepseek.ts`).
 - Firecrawl result count: default `10`, max `100` (`packages/coding-agent/src/tools/web/search/providers/firecrawl.ts`).
 - Kimi result count: default `10`, max `20`; request timeout field fixed to `30` seconds (`packages/coding-agent/src/tools/web/search/providers/kimi.ts`).
 - Parallel result count: default `10`, max `40`; per-result excerpt cap `10_000` chars (`packages/coding-agent/src/tools/web/search/providers/parallel.ts`, `plugins/web/src/parallel.ts`).

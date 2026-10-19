@@ -29,6 +29,7 @@ const PROVIDER_LOADERS: Record<SearchProviderId, () => Promise<SearchProvider>> 
 	jina: async () => new (await import("./providers/jina")).JinaProvider(),
 	kagi: async () => new (await import("./providers/kagi")).KagiProvider(),
 	tavily: async () => new (await import("./providers/tavily")).TavilyProvider(),
+	deepseek: async () => new (await import("./providers/deepseek")).DeepSeekProvider(),
 	firecrawl: async () => new (await import("./providers/firecrawl")).FirecrawlProvider(),
 	brave: async () => new (await import("./providers/brave")).BraveProvider(),
 	kimi: async () => new (await import("./providers/kimi")).KimiProvider(),

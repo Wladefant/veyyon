@@ -99,7 +99,7 @@ The provider-first projection of this map is documented in [Providers](./provide
 | `AI_GATEWAY_API_KEY`            | Vercel AI Gateway auth                           | Using `vercel-ai-gateway` provider                             |                                                                                                     |
 | `CLOUDFLARE_AI_GATEWAY_API_KEY` | Cloudflare AI Gateway auth                       | Using `cloudflare-ai-gateway` provider                         | Base URL must be configured as `https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic` |
 | `ALIBABA_CODING_PLAN_API_KEY`   | Alibaba Coding Plan auth                         | Using `alibaba-coding-plan` provider                           |                                                                                                     |
-| `DEEPSEEK_API_KEY`              | DeepSeek auth                                    | Using DeepSeek models                                          |                                                                                                     |
+| `DEEPSEEK_API_KEY`              | DeepSeek auth                                    | Using DeepSeek models, search or fetch                         | One key serves the model provider, the `deepseek` search provider and the `deepseek` fetch backend |
 | `KILO_API_KEY`                  | Kilo auth                                        | Using Kilo models                                              |                                                                                                     |
 | `OLLAMA_CLOUD_API_KEY`          | Ollama Cloud auth                                | Using `ollama-cloud` provider                                  |                                                                                                     |
 | `WAFER_SERVERLESS_API_KEY`      | Wafer Serverless auth                            | Using `wafer-serverless` provider                              | Pay-as-you-go Wafer SKU; validated against `https://pass.wafer.ai/v1/models`                        |
@@ -282,6 +282,7 @@ Both providers can be reached over two different HTTP APIs, and these pick which
 | `PERPLEXITY_API_KEY`                                | Perplexity search provider API-key mode                       |
 | `PERPLEXITY_COOKIES`                                | Perplexity cookie-auth search mode                            |
 | `TAVILY_API_KEY`                                    | Tavily search provider                                        |
+| `DEEPSEEK_API_KEY`                                  | DeepSeek search provider and DeepSeek fetch backend           |
 | `ZAI_API_KEY`                                       | z.ai search provider (also checks stored OAuth in `agent.db`) |
 | `OPENAI_API_KEY` / Codex OAuth in DB                | Codex search provider availability/auth                       |
 | `VEYYON_CODEX_WEB_SEARCH_MODEL`                         | Codex search provider model override                          |
