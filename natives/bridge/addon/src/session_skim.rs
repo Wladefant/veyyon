@@ -4,7 +4,7 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
-use crate::task;
+use crate::{napi_error::to_napi_with, task};
 
 /// What moves out of a session entry, as the load that parses the skim decides
 /// it.
@@ -72,9 +72,8 @@ pub fn skim_session_file(
 	};
 	let start = start.max(0.0) as u64;
 	Ok(task::blocking("session_skim", (), move |_| {
-		let skimmed = veyyon_session_skim::skim_file(&file, start, &rules).map_err(|error| {
-			Error::from_reason(format!("session skim: reading the session file failed: {error}"))
-		})?;
+		let skimmed = veyyon_session_skim::skim_file(&file, start, &rules)
+			.map_err(|error| to_napi_with("session skim: reading the session file failed", error))?;
 		Ok(SessionSkim { lines: skimmed.lines.into(), end: skimmed.end as f64 })
 	}))
 }
@@ -92,7 +91,7 @@ fn duplicate(fd: i32) -> Result<std::fs::File> {
 		.try_clone_to_owned()
 		.map(std::fs::File::from)
 		.map_err(|error| {
-			Error::from_reason(format!("session skim: duplicating descriptor {fd} failed: {error}"))
+			to_napi_with(format_args!("session skim: duplicating descriptor {fd} failed"), error)
 		})
 }
 
