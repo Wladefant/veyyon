@@ -911,4 +911,4 @@ Every listing reads a 4KB prefix per file through `readTextSlices(...)`, escalat
 
 Use session files for conversation graph/state replay; use `HistoryStorage` for prompt history UX.
 
-*Verified against `ae701dffe4e5bd862c653ada88edc7120c3fccd9` on 2026-10-18.*
+*Verified against `5f902126f2f0356874cf929d5b4f86f8975b4f65` on 2026-10-19.*
