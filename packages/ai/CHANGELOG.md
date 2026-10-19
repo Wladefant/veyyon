@@ -5,6 +5,7 @@
 ### Fixed
 
 - Auth gateway refuses missing, malformed, wrong and revoked device bearers before provider dispatch. Device tokens can refresh per request ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
+- OpenAI-compatible Gemini tool continuations keep a message-level `reasoning_signature` through streaming, session restore and replay, instead of dropping it and failing the next request (oh-my-pi 40310272c2cec24f50a9f7ef822f6ebfdeaca6cc, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Gateway privacy guards credentials split across semantic SSE deltas and withholds Cursor diagnostics and raw request-debug dumps inside private requests ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
   Completed channels release safe frames before EOF. A 64-frame or 64-KiB hold limit redacts unresolved prefixes; errors discard held frames.
 

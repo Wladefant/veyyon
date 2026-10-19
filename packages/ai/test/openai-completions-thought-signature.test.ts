@@ -20,7 +20,7 @@ const userMessage: Message = { role: "user", content: "Read README.md", timestam
 
 type SignatureShape =
 	| { type: "tool"; namespace: "google" | "vertex" }
-	| { type: "message"; field: "thinking_signature" | "thought_signature" };
+	| { type: "message"; field: "thinking_signature" | "thought_signature" | "reasoning_signature" };
 
 function sseResponse(delta: Record<string, unknown>, finishReason: "stop" | "tool_calls"): Response {
 	const chunks = [
@@ -87,9 +87,11 @@ async function expectThoughtSignatureRoundTrip(signature: SignatureShape): Promi
 		isError: false,
 		timestamp: 2,
 	};
+	// Replay from a JSON round-trip, the shape a restored session hands back.
+	const restoredMessages: Message[] = JSON.parse(JSON.stringify([userMessage, assistant, toolResult]));
 	await streamOpenAICompletions(
 		model,
-		{ messages: [userMessage, assistant, toolResult] },
+		{ messages: restoredMessages },
 		{ apiKey: "k", fetch: fetchMock },
 	).result();
 
@@ -116,6 +118,12 @@ describe("OpenAI-compatible Gemini thought signatures", () => {
 	it("round-trips thinking_signature and thought_signature message fields", async () => {
 		await expectThoughtSignatureRoundTrip({ type: "message", field: "thinking_signature" });
 		await expectThoughtSignatureRoundTrip({ type: "message", field: "thought_signature" });
+	});
+
+	// Some OpenAI-compatible gateways return the Gemini signature as `reasoning_signature`; dropping it
+	// fails the tool continuation (oh-my-pi 40310272c2cec24f50a9f7ef822f6ebfdeaca6cc).
+	it("round-trips a reasoning_signature message field", async () => {
+		await expectThoughtSignatureRoundTrip({ type: "message", field: "reasoning_signature" });
 	});
 
 	it("preserves both extra_content and message-level signature together", async () => {
