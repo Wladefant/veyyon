@@ -1722,6 +1722,7 @@ struct ParallelWalkContext {
 	/// in the directory it was listed from. Linux reads an entry's kind from the
 	/// listing, so a walk that emits few of the entries it lists skips most of
 	/// the stats.
+	#[cfg(target_os = "linux")]
 	stat_emitted:      bool,
 }
 
@@ -1831,6 +1832,7 @@ where
 		matcher: FastIgnore::new(options, request.overrides.clone()),
 		collect: false,
 		strict_dir_errors: false,
+		#[cfg(target_os = "linux")]
 		stat_emitted: false,
 	};
 	let entry_sink = |entry: &Entry<'_>| {
@@ -1919,6 +1921,7 @@ where
 		matcher: FastIgnore::new(walk_options, request.overrides.clone()),
 		collect: true,
 		strict_dir_errors,
+		#[cfg(target_os = "linux")]
 		stat_emitted,
 	};
 	let kept = Mutex::new(Vec::new());
