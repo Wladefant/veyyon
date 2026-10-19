@@ -1,0 +1,217 @@
+/**
+ * Regression for extension lane exit. When a lane's relay is torn down, Chrome must receive
+ * `chrome.tabs.remove` and `chrome.debugger.detach` for exactly the tabs that relay created or
+ * adopted. No command may ever address a tab the relay does not track: a tab of another lane,
+ * a popup of that tab, or a tab the operator opened. A foreign lane's relay keeps its socket and
+ * its tab when this lane's relay closes.
+ *
+ * Driven through the production ExtensionRelay over loopback sockets. Only the Chrome extension
+ * is a fake (FakeExtension, same wire shape as browser-extension-relay.test.ts). The teardown is
+ * `relay.close()`, the call the browser registry makes for an extension handle.
+ *
+ * GAP, not closed here: the session path `disposeOwnedResources("session")` -> the
+ * "browser-tabs" disposer -> `releaseTabsForOwner` in tools/web/browser/tab-supervisor.ts. Every
+ * tab there needs a tab worker driving puppeteer, and that module does not load at ebd66e31
+ * (duplicate `./storage-state` import). Its foreign-tab branch also reads an unbound
+ * `approvedTabIds`. A test of that path would need a fabricated subject, so it is not written.
+ */
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { ExtensionRelay } from "@veyyon/coding-agent/tools/web/browser/extension-relay";
+import { setAgentDir } from "@veyyon/utils";
+
+const UNTRACKED_TABS = [900, 901, 902];
+
+interface Recorded {
+	method: string;
+	params: unknown[];
+}
+
+interface Closable {
+	close(): void;
+}
+
+/** Speaks the extension side of the wire: records every command and answers like Chrome would. */
+class FakeExtension implements Closable {
+	readonly calls: Recorded[] = [];
+	readonly #ws: WebSocket;
+	#nextTab: number;
+
+	private constructor(ws: WebSocket, firstTabId: number) {
+		this.#ws = ws;
+		this.#nextTab = firstTabId;
+		ws.onmessage = event => this.#onMessage(String(event.data));
+	}
+
+	static async connect(url: string, firstTabId: number): Promise<FakeExtension> {
+		const ws = new WebSocket(url);
+		const opened = Promise.withResolvers<void>();
+		ws.onopen = () => opened.resolve();
+		ws.onerror = () => opened.reject(new Error("extension socket failed"));
+		await opened.promise;
+		return new FakeExtension(ws, firstTabId);
+	}
+
+	get open(): boolean {
+		return this.#ws.readyState === WebSocket.OPEN;
+	}
+
+	/** A `chrome.tabs.*` event the real extension sends when the operator or a page opens a tab. */
+	emit(method: string, params: unknown[]): void {
+		this.#ws.send(JSON.stringify({ method, params }));
+	}
+
+	#onMessage(text: string): void {
+		const message: { id: number; method: string; params: unknown[] } = JSON.parse(text);
+		this.calls.push({ method: message.method, params: message.params });
+		// chrome.tabs.remove never answers on the real extension.
+		if (message.method === "chrome.tabs.remove") return;
+		let result: unknown = {};
+		if (message.method === "chrome.tabs.create") result = { id: this.#nextTab++, windowId: 7 };
+		if (message.params[1] === "Target.getTargetInfo")
+			result = { targetInfo: { targetId: "main-frame", title: "", url: "about:blank" } };
+		this.#ws.send(JSON.stringify({ id: message.id, result }));
+	}
+
+	close(): void {
+		this.#ws.close();
+	}
+}
+
+/** The CDP side a puppeteer client uses to ask the relay for tabs. */
+class CdpClient implements Closable {
+	readonly #ws: WebSocket;
+	readonly #pending = new Map<number, (message: CdpReply) => void>();
+	#nextId = 1;
+
+	private constructor(ws: WebSocket) {
+		this.#ws = ws;
+		ws.onmessage = event => {
+			const message: CdpReply = JSON.parse(String(event.data));
+			const resolve = message.id === undefined ? undefined : this.#pending.get(message.id);
+			if (message.id !== undefined) this.#pending.delete(message.id);
+			resolve?.(message);
+		};
+	}
+
+	static async connect(url: string): Promise<CdpClient> {
+		const ws = new WebSocket(url);
+		const opened = Promise.withResolvers<void>();
+		ws.onopen = () => opened.resolve();
+		ws.onerror = () => opened.reject(new Error("cdp socket failed"));
+		await opened.promise;
+		return new CdpClient(ws);
+	}
+
+	send(method: string, params: Record<string, unknown> = {}): Promise<CdpReply> {
+		const id = this.#nextId++;
+		const { promise, resolve } = Promise.withResolvers<CdpReply>();
+		this.#pending.set(id, resolve);
+		this.#ws.send(JSON.stringify({ id, method, params }));
+		return promise;
+	}
+
+	close(): void {
+		this.#ws.close();
+	}
+}
+
+interface CdpReply {
+	id?: number;
+	result?: { targetId?: string };
+}
+
+let dir: string;
+const relays: ExtensionRelay[] = [];
+const clients: Closable[] = [];
+
+beforeEach(() => {
+	dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-lane-exit-"));
+	setAgentDir(dir);
+});
+
+afterEach(async () => {
+	for (const client of clients.splice(0)) client.close();
+	for (const relay of relays.splice(0)) await relay.close();
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
+async function until(check: () => boolean, label: string): Promise<void> {
+	const deadline = Date.now() + 3000;
+	while (!check()) {
+		if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
+		await new Promise<void>(resolve => setImmediate(resolve));
+	}
+}
+
+/** A relay for one lane, with its extension connected and its CDP client ready. */
+async function laneRelay(instance: string, firstTabId: number) {
+	const relay = ExtensionRelay.start({ instance });
+	relays.push(relay);
+	const ext = await FakeExtension.connect(relay.extensionUrl, firstTabId);
+	clients.push(ext);
+	await relay.waitForExtension(2000);
+	const cdp = await CdpClient.connect(relay.cdpUrl);
+	clients.push(cdp);
+	return { relay, ext, cdp };
+}
+
+/** Every tab id a recorded command addresses: a bare id (`chrome.tabs.remove`) or `{ tabId }`. */
+function tabIdsIn(call: Recorded): number[] {
+	const [target] = call.params;
+	if (typeof target === "number") return [target];
+	if (target !== null && typeof target === "object" && "tabId" in target && typeof target.tabId === "number") {
+		return [target.tabId];
+	}
+	return [];
+}
+
+
+describe("a lane's exit releases its own tabs and nothing else", () => {
+	test("closing the relay removes exactly the tabs it created or adopted and never addresses an untracked tab", async () => {
+		const { relay, ext, cdp } = await laneRelay("lane-a", 100);
+		const first = await cdp.send("Target.createTarget", { url: "about:blank" });
+		const second = await cdp.send("Target.createTarget", { url: "about:blank" });
+		expect(first.result?.targetId).toBe("ext-100");
+		expect(second.result?.targetId).toBe("ext-101");
+
+		// A popup of an owned tab is adopted; the others have no owned opener and stay untracked.
+		ext.emit("chrome.tabs.onCreated", [{ id: 102, openerTabId: 100 }]);
+		ext.emit("chrome.tabs.onCreated", [{ id: 900, url: "https://lane-b.example/" }]);
+		ext.emit("chrome.tabs.onCreated", [{ id: 901, openerTabId: 900 }]);
+		ext.emit("chrome.tabs.onCreated", [{ id: 902, url: "https://operator.example/" }]);
+		await until(() => relay.tabCount === 3, "owned popup adoption");
+
+		expect(relay.getTrackedTabs().map(tab => tab.tabId).sort((a, b) => a - b)).toEqual([100, 101, 102]);
+
+		await relay.close();
+		await until(() => !ext.open, "extension socket closed by the relay");
+
+		expect(relay.tabCount).toBe(0);
+		expect(ext.calls.filter(call => call.method === "chrome.tabs.remove").flatMap(tabIdsIn).sort((a, b) => a - b)).toEqual([100, 101, 102]);
+		expect(ext.calls.filter(call => call.method === "chrome.debugger.detach").flatMap(tabIdsIn).sort((a, b) => a - b)).toEqual([100, 101, 102]);
+		// Every command the relay ever sent addresses an owned tab, so no untracked tab was touched.
+		const touched = new Set(ext.calls.flatMap(tabIdsIn));
+		expect([...touched].sort((a, b) => a - b)).toEqual([100, 101, 102]);
+		for (const untracked of UNTRACKED_TABS) expect(touched.has(untracked)).toBe(false);
+	});
+
+	test("a foreign lane's relay keeps its extension socket and its tab when this lane's relay closes", async () => {
+		const lane = await laneRelay("lane-a", 100);
+		const foreign = await laneRelay("lane-b", 200);
+		const foreignTab = await foreign.cdp.send("Target.createTarget", { url: "about:blank" });
+		expect(foreignTab.result?.targetId).toBe("ext-200");
+		await lane.cdp.send("Target.createTarget", { url: "about:blank" });
+
+		await lane.relay.close();
+		await until(() => !lane.ext.open, "lane extension socket closed");
+
+		expect(foreign.ext.open).toBe(true);
+		expect(foreign.relay.tabCount).toBe(1);
+		expect(foreign.relay.getTrackedTabs().map(tab => tab.tabId)).toEqual([200]);
+		expect(foreign.ext.calls.filter(call => call.method === "chrome.tabs.remove")).toEqual([]);
+		expect(foreign.ext.calls.filter(call => call.method === "chrome.debugger.detach")).toEqual([]);
+	});
+});
