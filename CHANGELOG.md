@@ -41,6 +41,7 @@
 - `benches/natural-input.ts` times `tab.click`, `tab.type`, `tab.fill` on a text field, a date input and a range, and `tab.select` on a drop-down with `browser.naturalInput` off and on, and `benches/bot-detection.ts` opens public bot-detector pages through the browser tool and prints each verdict and the signals it flags.
 - `@veyyon/hashline` exports `unquotePath`, which strips one matching pair of surrounding quotes from a path; the section-header parser uses it instead of a private copy.
 - `skimSessionFile(fd, start, rules)` reads a session JSONL file on the thread pool and reports each line as the record a load keeps for a cold entry, with each moved value replaced by an empty value of its kind, ending at the block that brings the report to `rules.outputBytes`.
+- `skimSessionFile` reports a compaction with every value copied except the large members of its server-side window record (`preserveData.remoteCompaction`), unless `rules.wholeEntryTypes` names `compaction`.
 - An enum `SettingDef` may declare `invalid`, the member a configured value outside `values` reads as.
 - `TextChunk`, the element type `wordWrapLine` returns, is exported from `components/editor`.
 - `getBrowserProfilesDir()` returns the persistent browser profiles directory under the agent directory.
@@ -126,6 +127,7 @@
 - The status line's context gauge finds its usage anchor by walking back from the newest entry instead of scanning the whole branch, so drawing it on a 97,000-entry resumed session takes 0.19 ms instead of 2.1 ms per frame.
 - Writing a message after a custom entry adds only the new entries to the session's message-timestamp index instead of re-reading the whole branch, so each such write on a 97,000-entry session takes 0.49 ms instead of 5.4 ms.
 - `normalizeTools` moved from `@veyyon/agent-core/agent-loop` to `@veyyon/agent-core/tool-normalization`, so building the provider-bound tool list no longer loads the agent loop; the package root still exports it.
+- `prepareCompaction` validates only the server-side windows it uses, the newest valid window of each provider and api and the furthest kept boundary's window, instead of every window on the branch, so a pass over a session whose summarized windows were moved to disk reads none of them back.
 - Moved the usage-report fetch, cache, header ingest and fan-out out of `auth-storage.ts` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - Moved usage-backed credential ranking out of `auth-storage.ts` into `auth-storage/usage-ranking.ts`, with no user-visible change beyond the fixes below.
 - Moved the credential health check behind `AuthStorage.checkCredentials` into `auth-storage/usage-reporting.ts`, with no user-visible change.
@@ -147,6 +149,7 @@
 - Opening a session reads each distinct blob once instead of once per reference, and a missing blob logs one warning per open instead of one per reference.
 - A cold message entry keeps its message's `usage` in memory and records how many `toolCall` blocks its moved content held, which `coldToolCallCount` returns, so a spend tally over compacted history reads no assistant line back.
 - A streamed load that moves compacted history to disk parses the native skim of each line instead of the line and re-reads from the file only the entries that stay in memory, so a 146 MB session resumes to an editable prompt in 490 ms instead of 710 ms and peaks at 421 MB instead of 472 MB, and a 284 MB session opens in 440 ms instead of 720 ms.
+- A session moves the server-side window of every compaction a newer compaction summarized out of memory, live and on load, and keeps the compaction's other fields in memory, so a 393 MB session with 305 windows opens in 424 ms instead of 645 ms and settles at 254 MiB instead of 462 MiB, and a 146 MB session with 126 windows resumes to an editable prompt in 596 ms instead of 714 ms.
 - `readColdMessage(message)` returns a cold message stand-in's full message read back from the session file without keeping it in memory, and returns any other message as it is.
 - `session-cold-payloads` imports the logger from `@veyyon/utils/logger` instead of the `@veyyon/utils` barrel, so the read tool's module graph again loads no module through the barrel; no user-visible change.
 - The fastembed load-or-install fallback is the exported `loadFastembedOrInstall(importInstalled, installRuntime)`; no user-visible change.
