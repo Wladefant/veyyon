@@ -8,8 +8,9 @@
  * A compaction entry states what it summarized: every entry on its branch before its keep
  * boundary. When the load reads one, it moves those entries out of memory, so the load holds the
  * entries read since the last compaction and the stubs of the ones before it. Entry kinds every
- * context build reads ({@link BRANCH_SETTINGS_ENTRY_TYPES}) stay in memory, and every
- * {@link RECORD_ONLY_ENTRY_TYPES} entry moves as it is read.
+ * context build reads ({@link RESIDENT_SETTINGS_ENTRY_TYPES}) stay in memory, a summarized
+ * compaction moves its server-side window alone, and every {@link RECORD_ONLY_ENTRY_TYPES} entry
+ * moves as it is read.
  *
  * Which branch the session resumes on is known only after the last line. An entry moved here that
  * the resumed branch still sends reads its line back on first use, as every cold entry does, so a
@@ -22,7 +23,7 @@
 import { KEEP_NOTHING_ENTRY_ID } from "@veyyon/agent-core/compaction/entries";
 import { hasLegacyProviderNativeCompaction } from "@veyyon/agent-core/compaction/legacy-provider-native";
 import { ColdEntryPayloads, type ColdLineRestore, RECORD_ONLY_ENTRY_TYPES } from "./session-cold-payloads";
-import { BRANCH_SETTINGS_ENTRY_TYPES } from "./session-context";
+import { RESIDENT_SETTINGS_ENTRY_TYPES } from "./session-context";
 import { CURRENT_SESSION_VERSION, type FileEntry, type SessionEntry, type UsageStatistics } from "./session-entries";
 import { addEntryUsage, addTaskResultUsage, emptyUsageStatistics } from "./session-entry-index";
 import type { PinnedSessionReader } from "./session-storage";
@@ -30,14 +31,14 @@ import type { PinnedSessionReader } from "./session-storage";
 /**
  * One line of `skimSessionFile` that projects its record: the line's length, the record with each
  * value {@link ColdEntryPayloads.cool} moves replaced by an empty placeholder, the masks of the
- * entry's and its message's moved members, the `toolCall` blocks of moved assistant content or -1,
+ * entry's and its stand-in's moved members, the `toolCall` blocks of moved assistant content or -1,
  * and the `usage` member of a `task` result's moved details, or 0 when no such details moved.
  */
 export type SkimmedProjection = readonly [
 	byteLength: number,
 	record: FileEntry,
 	keys: number,
-	messageKeys: number,
+	standInKeys: number,
 	toolCalls: number,
 	taskUsage: unknown,
 ];
@@ -152,7 +153,7 @@ export class LoadCooling {
 		}
 		for (; at >= 0 && this.#walked[at] !== 1; at = this.#parentIndex(at)) {
 			this.#walked[at] = 1;
-			if (BRANCH_SETTINGS_ENTRY_TYPES.has(this.#entries[at]!.type)) continue;
+			if (RESIDENT_SETTINGS_ENTRY_TYPES.has(this.#entries[at]!.type)) continue;
 			this.#cool(at);
 			if (this.#state === "off") return;
 		}

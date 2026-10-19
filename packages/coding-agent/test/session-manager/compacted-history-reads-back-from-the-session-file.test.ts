@@ -118,7 +118,7 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
-import { DEFAULT_COMPACTION_SETTINGS, prepareCompaction } from "@veyyon/agent-core/compaction";
+import { DEFAULT_COMPACTION_SETTINGS, KEEP_NOTHING_ENTRY_ID, prepareCompaction } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as ai from "@veyyon/ai/stream";
@@ -957,14 +957,27 @@ const HISTORY_SHAPES = [
 ];
 
 /**
- * Three rounds of six read turns, each ending in a server-side window, then a fourth round, with
- * the history behind each window moved out of memory. The model that minted the windows is the
- * branch's default, so its context replays the newest window and the rounds before it are
- * compacted history. A local pass cannot build on a window, so the span it summarizes reaches
- * back to the first round. Returns the first round's first prompt.
+ * The history around {@link appendWindowedRounds}' windows: a side branch off the model change that
+ * the live branch does not walk, and a newest window that keeps no turn instead of the last two.
  */
-function appendWindowedRounds(manager: SessionManager): SessionEntry {
-	manager.appendModelChange("openai-codex/gpt-5.5");
+interface WindowedShape {
+	sideBranch?: boolean;
+	newestKeepsNothing?: boolean;
+}
+
+/**
+ * Three rounds of six read turns, each ending in a server-side window, then a fourth round, with
+ * the history behind each window and every window but the newest moved out of memory. The model
+ * that minted the windows is the branch's default, so its context replays the newest window and the
+ * rounds before it are compacted history. A local pass cannot build on a window, so the span it
+ * summarizes reaches back to the first round. Returns the first round's first prompt.
+ */
+function appendWindowedRounds(manager: SessionManager, shape: WindowedShape = {}): SessionEntry {
+	const modelChange = manager.appendModelChange("openai-codex/gpt-5.5");
+	if (shape.sideBranch) {
+		manager.appendMessage({ role: "user", content: big("side-branch"), timestamp: 0 });
+		manager.branch(modelChange);
+	}
 	const appendTurns = (round: number, turns: number): string[] => {
 		const prompts: string[] = [];
 		for (let turn = 0; turn < turns; turn++) {
@@ -1002,13 +1015,14 @@ function appendWindowedRounds(manager: SessionManager): SessionEntry {
 	const rounds = 3;
 	for (let round = 0; round < rounds; round++) {
 		const prompts = appendTurns(round, 6);
-		manager.appendCompaction("", undefined, prompts.at(-2)!, 50_000, undefined, false, {
+		const keep = shape.newestKeepsNothing && round === rounds - 1 ? KEEP_NOTHING_ENTRY_ID : prompts.at(-2)!;
+		manager.appendCompaction("", undefined, keep, 50_000, undefined, false, {
 			remoteCompaction: {
 				version: 1,
 				provider: "openai-codex",
 				api: "openai-codex-responses",
 				model: "gpt-5.5",
-				window: [{ type: "compaction", encrypted_content: `window-${round}` }],
+				window: [{ type: "compaction", encrypted_content: big(`window-${round}`) }],
 				compactedAt: new Date(Date.UTC(2025, 0, 1, round)).toISOString(),
 			},
 		});
@@ -1180,6 +1194,58 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		expect(storage.open.size).toBe(0);
 		await manager.close();
 	});
+
+	it.each(
+		HISTORY_SHAPES.flatMap(({ shape, sideBranch }) =>
+			[false, true].map(newestKeepsNothing => ({
+				shape,
+				sideBranch,
+				newestKeepsNothing,
+				newest: newestKeepsNothing ? "keeps nothing" : "keeps two turns",
+			})),
+		),
+	)(
+		"moves the window of every compaction a newer one summarized out of memory, live and on load, and keeps the one the context replays ($shape, the newest window $newest)",
+		async arm => {
+			const root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-cold-windows-load-"));
+			tempDirs.push(root);
+			const dir = path.join(root, "sessions");
+			fs.mkdirSync(dir);
+			fs.mkdirSync(path.join(root, "blobs"));
+			const coldWindows = (manager: SessionManager): boolean[] =>
+				manager
+					.getBranch()
+					.filter(entry => entry.type === "compaction")
+					.map(entry => coldFieldsOf(entry) !== undefined);
+			const manager = SessionManager.create(root, dir, new ObservedStorage());
+			appendWindowedRounds(manager, arm);
+			expect(coldWindows(manager)).toEqual([true, true, false]);
+			await manager.flush();
+			const file = manager.getSessionFile();
+			if (file === undefined) throw new Error("the session wrote no file");
+			await manager.close();
+
+			const expected = await freshLoad({ dir, file });
+			const storage = new ObservedStorage();
+			const resumed = await SessionManager.open(file, dir, storage, { suppressBreadcrumb: true });
+			expect(coldWindows(resumed)).toEqual([true, true, false]);
+			const compactions = resumed.getBranch().filter(entry => entry.type === "compaction");
+			// A cold window's provider and api stay in memory beside the window.
+			const records = compactions.map(
+				entry => (entry.preserveData as Record<string, Record<string, unknown>>).remoteCompaction,
+			);
+			expect(records.map(record => `${record.provider}/${record.api}`)).toEqual(
+				Array(3).fill("openai-codex/openai-codex-responses"),
+			);
+			resumed.buildSessionContext();
+			expect(storage.reads).toBe(0);
+
+			// Each moved window reads back as a fresh load holds it.
+			const readBack = readBackEntries(resumed, storage, expected).filter(entry => entry.type === "compaction");
+			expect(readBack.map(entry => entry.id)).toEqual(compactions.slice(0, 2).map(entry => entry.id));
+			await resumed.close();
+		},
+	);
 
 	it("keeps a compacted history in memory when another writer appended to the file since this session published", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-cold-shared-"));
@@ -1949,14 +2015,18 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		const manager = SessionManager.create(root, dir, storage);
 		const firstPrompt = appendWindowedRounds(manager);
 		const branch = manager.getBranch();
-		// The first round is compacted history, so a zero below is a preparation that left it on disk.
+		const compactions = branch.filter(entry => entry.type === "compaction");
+		// The first round is compacted history, and so is every window but the newest, so a zero below
+		// is a preparation that left them on disk.
 		expect(coldFieldsOf(firstPrompt)).toBeDefined();
+		expect(compactions.map(entry => coldFieldsOf(entry) !== undefined)).toEqual([true, true, false]);
 
 		const before = storage.reads;
 		const preparation = prepareCompaction(branch, DEFAULT_COMPACTION_SETTINGS, { contextWindow: 200_000 });
 		if (preparation === undefined) throw new Error("the branch had nothing to compact");
 		expect(preparation.remoteChain?.links).toHaveLength(1);
 		expect(storage.reads - before).toBe(0);
+		expect(compactions.map(entry => coldFieldsOf(entry) !== undefined)).toEqual([true, true, false]);
 
 		// A local pass reads the file operations of the whole span, which reaches the first round.
 		expect([...preparation.fileOps.read]).toContain("src/round-0/file-0.ts");

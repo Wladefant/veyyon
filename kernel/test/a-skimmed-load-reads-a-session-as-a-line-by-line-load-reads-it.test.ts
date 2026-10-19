@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { KEEP_NOTHING_ENTRY_ID } from "@veyyon/agent-core/compaction/entries";
+import { REMOTE_COMPACTION_PRESERVE_KEY } from "@veyyon/agent-core/compaction/remote-compaction-entry";
 import { coldFieldsOf, coldToolCallCount } from "@veyyon/kernel/session/session-cold-payloads";
 import { CURRENT_SESSION_VERSION, type FileEntry } from "@veyyon/kernel/session/session-entries";
 import { loadEntriesFromFileStream, type ParsedSessionContent } from "@veyyon/kernel/session/session-loader";
@@ -25,7 +26,8 @@ import { isRecord } from "@veyyon/utils/type-guards";
  *
  * The class this closes: over generated sessions holding every entry kind the load treats apart
  * (message roles, task results with and without usage, record-only and branch-settings entries,
- * compactions, strings around the move threshold in every UTF-16 width, escapes, blob references,
+ * compactions with and without a server-side window record and with one the skim hands back,
+ * strings around the move threshold in every UTF-16 width, escapes, blob references,
  * lines the skim hands back, malformed and wrong-shape lines, a blank line, an unterminated last
  * line, an older header, a title slot), the skimmed load holds the same cold layouts, resident
  * values, tool-call counts, usage totals, title slot and record layout as the line-by-line load, and
@@ -226,6 +228,9 @@ function record(
 		`{"type":"compactionx","id":"${id}","parentId":${parent},"timestamp":"${TIMESTAMP}","data":"${big}"}`,
 		// A compaction with its type escaped.
 		`{"type":"compacti\\u006fn","id":"${id}","parentId":${parent},"timestamp":"${TIMESTAMP}","summary":"${big}","firstKeptEntryId":${JSON.stringify(ids[0] ?? KEEP_NOTHING_ENTRY_ID)},"tokensBefore":1}`,
+		// A compaction whose window record has an escaped key, and one with its preserveData repeated.
+		`{"type":"compaction","id":"${id}","parentId":${parent},"timestamp":"${TIMESTAMP}","summary":"s","firstKeptEntryId":${JSON.stringify(ids[0] ?? KEEP_NOTHING_ENTRY_ID)},"tokensBefore":1,"preserveData":{"${REMOTE_COMPACTION_PRESERVE_KEY}":{"provider":"p","w\\u0069ndow":"${big}"}}}`,
+		`{"type":"compaction","id":"${id}","parentId":${parent},"timestamp":"${TIMESTAMP}","summary":"s","firstKeptEntryId":${JSON.stringify(ids[0] ?? KEEP_NOTHING_ENTRY_ID)},"tokensBefore":1,"preserveData":{"notes":1},"preserveData":{"${REMOTE_COMPACTION_PRESERVE_KEY}":{"provider":"p","window":"${big}"}}}`,
 	];
 	if (damaged) {
 		// An assistant message with no usage: the shape check drops it, from its skim or its line.
@@ -287,7 +292,21 @@ function generate(seed: number, count: number, cwd: string, current = false): Ge
 				firstKeptEntryId,
 				tokensBefore: 1,
 			};
-			if (random() < 0.5) compaction.preserveData = { notes: text(random, "keep") };
+			const preserve = random();
+			if (preserve < 0.25) compaction.preserveData = { notes: text(random, "keep") };
+			else if (preserve < 0.75) {
+				const remote: Record<string, unknown> = {
+					provider: "openai",
+					api: "openai-responses",
+					model: "m",
+					window: [{ type: "compaction", encrypted_content: text(random, "window") }],
+				};
+				if (random() < 0.5) remote.instructions = text(random, "instructions");
+				compaction.preserveData =
+					random() < 0.5
+						? { [REMOTE_COMPACTION_PRESERVE_KEY]: remote, notes: text(random, "keep") }
+						: { [REMOTE_COMPACTION_PRESERVE_KEY]: remote };
+			}
 			lines.push(JSON.stringify(compaction));
 			continue;
 		}
@@ -300,30 +319,35 @@ function generate(seed: number, count: number, cwd: string, current = false): Ge
 	return { text: slot + body, titled, current: version === CURRENT_SESSION_VERSION, damaged };
 }
 
-/** The resident fields of `target`, skipping the ones a cold entry keeps behind accessors. */
-function residentView(target: Record<string, unknown>, cold: readonly string[] | undefined): Record<string, unknown> {
+/**
+ * The resident values of `target` in key order, skipping the ones a cold entry keeps behind
+ * accessors, with the moved fields and resident values of its stand-in and each copy on the way to
+ * it. A cold entry's getter on the way to its stand-in returns the copy below without reading the
+ * line.
+ */
+function residentTree(target: Record<string, unknown>): Record<string, unknown> {
+	const cold = coldFieldsOf(target);
 	const view: Record<string, unknown> = {};
-	for (const key of Object.keys(target)) if (cold === undefined || !cold.includes(key)) view[key] = target[key];
+	for (const key of Object.keys(target)) {
+		if (cold?.includes(key)) continue;
+		const value = target[key];
+		const below = cold !== undefined && isRecord(value) ? coldFieldsOf(value) : undefined;
+		view[key] =
+			below === undefined ? value : { cold: below, resident: residentTree(value as Record<string, unknown>) };
+	}
 	return view;
 }
 
 /**
- * What the load holds for each entry before any is read back: the moved fields of the entry and
- * of its message, the moved content's tool calls, and every resident value in key order.
+ * What the load holds for each entry before any is read back: the moved fields of the entry and of
+ * each object on the way to its stand-in, the moved content's tool calls, and every resident value
+ * in key order.
  */
 function heldBeforeReadBack(entries: readonly FileEntry[]): string[] {
 	return entries.map(entry => {
 		const record = entry as unknown as Record<string, unknown>;
-		const cold = coldFieldsOf(record);
-		const resident = residentView(record, cold);
-		let messageCold: readonly string[] | undefined;
-		// A cold entry's message getter returns the stand-in without reading the line.
-		if (cold !== undefined && isRecord(resident.message)) {
-			messageCold = coldFieldsOf(resident.message);
-			resident.message = residentView(resident.message, messageCold);
-		}
 		const toolCalls = entry.type === "session" ? undefined : coldToolCallCount(entry);
-		return JSON.stringify({ cold, messageCold, toolCalls, resident });
+		return JSON.stringify({ cold: coldFieldsOf(record), toolCalls, resident: residentTree(record) });
 	});
 }
 
@@ -334,6 +358,8 @@ interface Observed {
 	titleSlot: unknown;
 	layout: unknown;
 	moved: number;
+	/** Compactions that moved their server-side window. */
+	windows: number;
 	fallbacks: string[];
 }
 
@@ -351,6 +377,9 @@ async function observe(file: string): Promise<Observed> {
 	}
 	const held = heldBeforeReadBack(loaded.entries);
 	const moved = loaded.entries.filter(entry => coldFieldsOf(entry) !== undefined).length;
+	const windows = loaded.entries.filter(
+		entry => entry.type === "compaction" && coldFieldsOf(entry) !== undefined,
+	).length;
 	return {
 		held,
 		readBack: loaded.entries.map(entry => JSON.stringify(entry)),
@@ -358,6 +387,7 @@ async function observe(file: string): Promise<Observed> {
 		titleSlot: loaded.titleSlot,
 		layout: loaded.layout,
 		moved,
+		windows,
 		fallbacks,
 	};
 }
@@ -483,6 +513,7 @@ describe.skipIf(process.platform === "win32")("a skimmed load reads a session as
 	it("holds and reads back the same entries over generated sessions", async () => {
 		using temp = TempDir.createSync("@kernel-skimmed-load-");
 		let moved = 0;
+		let windows = 0;
 		let laidOut = 0;
 		let aged = 0;
 		for (let seed = 1; seed <= 40; seed++) {
@@ -501,9 +532,11 @@ describe.skipIf(process.platform === "win32")("a skimmed load reads a session as
 			}
 			if (!generated.current) aged += 1;
 			moved += skimmed.moved;
+			windows += skimmed.windows;
 		}
 		// The sweep moves history, keeps layouts, and reads a file an older version wrote.
 		expect(moved).toBeGreaterThan(40 * 5);
+		expect(windows).toBeGreaterThan(0);
 		expect(laidOut).toBeGreaterThan(5);
 		expect(aged).toBeGreaterThan(0);
 	});

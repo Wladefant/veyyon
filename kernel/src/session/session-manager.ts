@@ -32,11 +32,12 @@ import {
 	RECORD_ONLY_ENTRY_TYPES,
 } from "./session-cold-payloads";
 import {
-	BRANCH_SETTINGS_ENTRY_TYPES,
 	type BuildSessionContextOptions,
 	buildSessionContext,
 	buildSessionContextFromPath,
 	compactedHistoryEnd,
+	contextCompaction,
+	RESIDENT_SETTINGS_ENTRY_TYPES,
 	resolveContextLeaf,
 	type SessionContext,
 	walkBranchPath,
@@ -1318,10 +1319,10 @@ export class SessionManager {
 	 * name another entry's bytes.
 	 *
 	 * The live context is the active branch from the keep boundary of the compaction the context
-	 * applies on ({@link compactedHistoryEnd}), plus
-	 * every entry on the branch whose kind the settings walk of each context build reads. Everything
-	 * else, including other branches and every {@link RECORD_ONLY_ENTRY_TYPES} entry, reads back on
-	 * use.
+	 * applies on ({@link compactedHistoryEnd}), that compaction, and every entry on the branch whose
+	 * kind the settings walk of each context build reads ({@link RESIDENT_SETTINGS_ENTRY_TYPES}).
+	 * Every other compaction moves its server-side window alone. Everything else, including other
+	 * branches and every {@link RECORD_ONLY_ENTRY_TYPES} entry, reads back on use.
 	 */
 	#coolUnreachablePayloads(): void {
 		const sessionFile = this.#sessionFile;
@@ -1340,7 +1341,8 @@ export class SessionManager {
 			return;
 		}
 		const path = this.#activePath();
-		const liveFrom = compactedHistoryEnd(path);
+		const applied = contextCompaction(path);
+		const liveFrom = compactedHistoryEnd(path, applied);
 		const { base, baseLength, appended, entryOffsets } = lines;
 		// A session that never branched has the whole file as its branch, in file order: an entry's
 		// index in the file is its index on the branch, and no set of the live entries is needed.
@@ -1355,7 +1357,7 @@ export class SessionManager {
 			live = new Set<SessionEntry>();
 			for (let i = 0; i < path.length; i++) {
 				const entry = path[i]!;
-				if (i >= liveFrom || BRANCH_SETTINGS_ENTRY_TYPES.has(entry.type)) live.add(entry);
+				if (i >= liveFrom || entry === applied || RESIDENT_SETTINGS_ENTRY_TYPES.has(entry.type)) live.add(entry);
 			}
 		}
 		const identity = state.identity;
@@ -1364,7 +1366,11 @@ export class SessionManager {
 		for (let i = 0; i < entryOffsets.length; i++) {
 			const entry = i < baseLength ? base[i]! : appended[i - baseLength]!;
 			if (!RECORD_ONLY_ENTRY_TYPES.has(entry.type)) {
-				if (live !== undefined ? live.has(entry) : i >= liveFrom || BRANCH_SETTINGS_ENTRY_TYPES.has(entry.type))
+				if (
+					live !== undefined
+						? live.has(entry)
+						: i >= liveFrom || entry === applied || RESIDENT_SETTINGS_ENTRY_TYPES.has(entry.type)
+				)
 					continue;
 			}
 			const offset = entryOffsets[i]!;

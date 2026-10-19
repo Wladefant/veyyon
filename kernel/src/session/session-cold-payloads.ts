@@ -10,8 +10,11 @@
  * message's small values (`role`, `toolName`, `toolCallId`, `isError`, `stopReason`, `provider`,
  * `model`) and its `usage`, so a scan that picks entries by them or a spend tally reads none of them
  * back; the message's large fields are accessors on that object, and an assistant message's
- * stand-in records how many `toolCall` blocks its moved content held. A read-back entry stays in
- * memory until the next pass cools it again.
+ * stand-in records how many `toolCall` blocks its moved content held. A cold compaction keeps every
+ * field a context build reads and a `preserveData` whose server-side window record holds the
+ * window's provider, api and model, so a compaction pass picks the window it chains without reading
+ * the windows it passes over; only the window is an accessor. A read-back entry stays in memory
+ * until the next pass cools it again.
  *
  * The line is read through a {@link PinnedSessionReader}, a handle on the file object the offsets
  * were recorded against. A republish by this process or another one, a relocation, or an unlink
@@ -25,6 +28,7 @@
  * or externalizes comes back truncated or restored from the blob store, and a replayed reasoning
  * signature persistence drops does not come back.
  */
+import { REMOTE_COMPACTION_PRESERVE_KEY } from "@veyyon/agent-core/compaction/remote-compaction-entry";
 import type { SessionSkimRules } from "@veyyon/natives";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
@@ -52,6 +56,48 @@ const MESSAGE_ENTRY_RESIDENT_KEYS: ReadonlySet<string> = new Set([...RESIDENT_KE
  * each message, a few numbers that a read-back would parse a whole line to return.
  */
 const MESSAGE_RESIDENT_KEYS: ReadonlySet<string> = new Set(["usage"]);
+
+/**
+ * An object of an entry whose large fields move one by one while the object stays in memory, so a
+ * reader of its small values reads none of the entry's line back.
+ */
+interface StandInRule {
+	/** The fields from the entry down to the stand-in. */
+	readonly path: readonly string[];
+	/** The stand-in's fields that stay in memory whatever their size. */
+	readonly resident: ReadonlySet<string>;
+}
+
+/** A message entry's message. */
+const MESSAGE_STAND_IN: StandInRule = { path: ["message"], resident: MESSAGE_RESIDENT_KEYS };
+
+/**
+ * A compaction's server-side window record: the provider and api a compaction pass picks the window
+ * it chains by stay, and the window moves.
+ */
+const COMPACTION_STAND_IN: StandInRule = {
+	path: ["preserveData", REMOTE_COMPACTION_PRESERVE_KEY],
+	resident: new Set(),
+};
+
+function standInRuleOf(entry: SessionEntry): StandInRule | undefined {
+	return entry.type === "message" ? MESSAGE_STAND_IN : entry.type === "compaction" ? COMPACTION_STAND_IN : undefined;
+}
+
+/** The object at the first `depth` fields of `path` below `record`, when each step is a record. */
+function recordAt(
+	record: Record<string, unknown>,
+	path: readonly string[],
+	depth = path.length,
+): Record<string, unknown> | undefined {
+	let node = record;
+	for (let i = 0; i < depth; i++) {
+		const next = node[path[i]!];
+		if (!isRecord(next)) return undefined;
+		node = next;
+	}
+	return node;
+}
 
 /**
  * What {@link ColdEntryPayloads.cool} moves out of an entry, as `skimSessionFile` takes it: the skim
@@ -121,14 +167,16 @@ interface ColdFile {
 }
 
 /**
- * Which fields were moved out of a cold entry and out of its message stand-in, as lists shared by
- * every entry with the same moved fields, so a cold entry holds one reference for both.
+ * Which fields were moved out of a cold entry and out of its stand-in, as lists shared by every
+ * entry with the same moved fields, so a cold entry holds one reference for both.
  */
 interface ColdLayout {
 	/** The entry's fields replaced by accessors. */
 	readonly keys: readonly string[];
 	/** The stand-in's fields replaced by accessors; empty when the entry has no stand-in. */
-	readonly messageKeys: readonly string[];
+	readonly standInKeys: readonly string[];
+	/** The fields from the entry down to its stand-in; empty when it has none. */
+	readonly path: readonly string[];
 }
 
 /** What {@link ColdEntrySlot.state} reads off a cold entry for a read-back. */
@@ -190,8 +238,9 @@ class ColdEntrySlot extends ReturnsTarget {
 	#length = 0;
 	#layout: ColdLayout | undefined;
 	/**
-	 * A message entry's stand-in for its message: the message's small values, and an accessor for
-	 * each field in `messageKeys`. `entry.message` returns it without reading the line back.
+	 * What the first field of the entry's stand-in path returns: the stand-in, which holds the small
+	 * values of its object and an accessor for each field in `standInKeys`, or a copy of the object
+	 * holding it. The entry returns it without reading the line back.
 	 */
 	#standIn: Record<string, unknown> | undefined;
 
@@ -200,7 +249,7 @@ class ColdEntrySlot extends ReturnsTarget {
 		return #file in target ? (target as ColdEntrySlot).#layout : undefined;
 	}
 
-	/** The stand-in a cold message entry's `message` returns, or undefined. */
+	/** What the first field of a cold entry's stand-in path returns, or undefined. */
 	static standInOf(target: object): Record<string, unknown> | undefined {
 		return #file in target ? (target as ColdEntrySlot).#standIn : undefined;
 	}
@@ -255,8 +304,8 @@ class ColdEntrySlot extends ReturnsTarget {
 }
 
 /**
- * The cold entry a message stand-in belongs to, and how many `toolCall` blocks the content moved out
- * of it held, in private fields installed on the stand-in.
+ * The cold entry a stand-in belongs to, and how many `toolCall` blocks the content moved out of a
+ * message stand-in held, in private fields installed on the stand-in.
  */
 class StandInSlot extends ReturnsTarget {
 	#entry: object | undefined;
@@ -280,6 +329,39 @@ class StandInSlot extends ReturnsTarget {
 	}
 }
 
+/**
+ * The cold entry a copy on the way down to a stand-in belongs to, and the copy one field below it,
+ * in private fields installed on the copy.
+ */
+class PathSlot extends ReturnsTarget {
+	#entry: object | undefined;
+	#below: Record<string, unknown> | undefined;
+
+	static entryOf(target: object): object | undefined {
+		return #entry in target ? (target as PathSlot).#entry : undefined;
+	}
+
+	static belowOf(target: object): Record<string, unknown> | undefined {
+		return #entry in target ? (target as PathSlot).#below : undefined;
+	}
+
+	static set(target: object, entry: object, below: Record<string, unknown>): void {
+		const slot = #entry in target ? (target as PathSlot) : new PathSlot(target);
+		slot.#entry = entry;
+		slot.#below = below;
+	}
+
+	/** Clear the slot of `target` and return the copy below it. */
+	static release(target: object): Record<string, unknown> {
+		const below = PathSlot.belowOf(target);
+		if (below === undefined) throw new Error("A cold session entry lost the copy on the way to its stand-in");
+		const slot = target as PathSlot;
+		slot.#entry = undefined;
+		slot.#below = undefined;
+		return below;
+	}
+}
+
 /** How many `toolCall` blocks the content of the assistant message `message` holds. */
 function toolCallCount(message: Record<string, unknown>): number | undefined {
 	if (message.role !== "assistant" || !Array.isArray(message.content)) return undefined;
@@ -289,16 +371,18 @@ function toolCallCount(message: Record<string, unknown>): number | undefined {
 }
 
 /**
- * The fields of `target` held behind accessors when it is a cold entry or a cold entry's message
- * stand-in, or `undefined` when it is neither. A walk that skips them reads the resident values
- * without reading the entry's line back; a cold entry's `message` is resident in this sense, since
- * its getter returns the stand-in.
+ * The fields of `target` held behind accessors when it is a cold entry or a cold entry's stand-in,
+ * no fields when it is a copy on the way from a cold entry to its stand-in, or `undefined` when it
+ * is none of them. A walk that skips them reads the resident values without reading the entry's
+ * line back; the first field of a cold entry's stand-in path is resident in this sense, since its
+ * getter returns the stand-in or the copy above it.
  */
 export function coldFieldsOf(target: object): readonly string[] | undefined {
 	const layout = ColdEntrySlot.layoutOf(target);
 	if (layout !== undefined) return layout.keys;
 	const entry = StandInSlot.entryOf(target);
-	return entry === undefined ? undefined : ColdEntrySlot.layoutOf(entry)?.messageKeys;
+	if (entry !== undefined) return ColdEntrySlot.layoutOf(entry)?.standInKeys;
+	return PathSlot.entryOf(target) === undefined ? undefined : NO_FIELDS;
 }
 
 /** `entry` restored from `length` bytes at `offset` of its object, or why those bytes are not it. */
@@ -308,7 +392,7 @@ function restoreAt(
 	offset: number,
 	length: number,
 ): Record<string, unknown> | Error {
-	const { file, standIn } = state;
+	const { file, standIn, layout } = state;
 	let restored: Record<string, unknown>;
 	try {
 		restored = file.restore(file.reader.read(offset, length)) as unknown as Record<string, unknown>;
@@ -320,7 +404,7 @@ function restoreAt(
 	if (
 		restored.id !== entry.id ||
 		restored.type !== entry.type ||
-		(standIn !== undefined && !isRecord(restored.message))
+		(standIn !== undefined && recordAt(restored, layout.path) === undefined)
 	) {
 		return new Error(
 			`Session entry ${entry.id} read back as ${String(restored.type)} ${String(restored.id)} from bytes ${offset}-${offset + length} of session object ${file.reader.identity}`,
@@ -421,8 +505,12 @@ export class ColdEntryPayloads {
 	readonly #keyLists: KeyListNode = { keys: NO_FIELDS, next: undefined, layouts: undefined };
 	/** The file object new cold entries are recorded against. */
 	#current: ColdFile | undefined;
-	/** The accessor pair every cold message entry's `message` is replaced by, built on first use. */
-	#messageDescriptor: PropertyDescriptor | undefined;
+	/** Key lists of each stand-in rule's moved fields, apart from every other rule's, so a layout states one path. */
+	readonly #standInKeyLists = new Map<StandInRule, KeyListNode>();
+	/** One accessor pair per field name for the first field of a stand-in path. */
+	readonly #rootAccessors = new Map<string, PropertyDescriptor>();
+	/** One accessor pair per field name for a field of a copy on the way down to a stand-in. */
+	readonly #pathAccessors = new Map<string, PropertyDescriptor>();
 
 	/** Identity of the file object new cold entries are recorded against, if one is open. */
 	get pinnedIdentity(): string | undefined {
@@ -474,29 +562,43 @@ export class ColdEntryPayloads {
 
 	/**
 	 * Move `entry`'s large fields out of memory, to be read back from `length` bytes at `offset` of
-	 * the pinned object. A message entry's message is replaced by a stand-in holding its small values
-	 * and an accessor for each large field. Returns false when nothing is pinned, the entry is already
-	 * cold, or no field is large enough to move.
+	 * the pinned object. A message entry's message, and a compaction's server-side window record, is
+	 * replaced by a stand-in holding its small values and an accessor for each large field; a
+	 * compaction moves nothing else. Returns false when nothing is pinned, the entry is already cold,
+	 * or no field is large enough to move.
 	 */
 	cool(entry: SessionEntry, offset: number, length: number): boolean {
 		const file = this.#current;
 		if (file === undefined || length < MIN_COLD_LINE_BYTES || ColdEntrySlot.layoutOf(entry) !== undefined)
 			return false;
 		const record = entry as unknown as Record<string, unknown>;
-		const original = entry.type === "message" ? record.message : undefined;
-		const nested = isRecord(original) ? original : undefined;
-		const entryNode = this.#largeKeys(record, nested === undefined ? RESIDENT_KEYS : MESSAGE_ENTRY_RESIDENT_KEYS);
-		const movedFromMessage = nested === undefined ? NO_FIELDS : this.#largeKeys(nested, MESSAGE_RESIDENT_KEYS).keys;
+		const rule = standInRuleOf(entry);
+		const standIn = rule === undefined ? undefined : recordAt(record, rule.path);
+		// Every context build reads a compaction's fields: only its window moves.
+		const entryNode =
+			entry.type === "compaction"
+				? this.#keyLists
+				: this.#largeKeys(
+						record,
+						standIn === undefined ? RESIDENT_KEYS : MESSAGE_ENTRY_RESIDENT_KEYS,
+						this.#keyLists,
+					);
+		const standInKeys =
+			rule === undefined || standIn === undefined
+				? NO_FIELDS
+				: this.#largeKeys(standIn, rule.resident, this.#standInKeyListsOf(rule)).keys;
 		const toolCalls =
-			nested !== undefined && movedFromMessage.includes("content") ? toolCallCount(nested) : undefined;
-		return this.#install(entry, file, offset, length, entryNode, nested, movedFromMessage, toolCalls);
+			rule === MESSAGE_STAND_IN && standIn !== undefined && standInKeys.includes("content")
+				? toolCallCount(standIn)
+				: undefined;
+		return this.#install(entry, file, offset, length, entryNode, rule, standIn, standInKeys, toolCalls);
 	}
 
 	/**
 	 * {@link cool} for an entry parsed from the skim of its line, `length` bytes at `offset`: each
 	 * value {@link cool} would move is an empty placeholder of its kind. Bit `i` of `keys` is set when
-	 * the `i`th member of the entry moved, and bit `i` of `messageKeys` when the `i`th member of its
-	 * message did; `toolCalls` counts the `toolCall` blocks of the moved content of an assistant
+	 * the `i`th member of the entry moved, and bit `i` of `standInKeys` when the `i`th member of its
+	 * stand-in did; `toolCalls` counts the `toolCall` blocks of the moved content of an assistant
 	 * message, or is -1. The placeholders are dropped, so the entry holds what {@link cool} leaves.
 	 */
 	adopt(
@@ -504,31 +606,36 @@ export class ColdEntryPayloads {
 		offset: number,
 		length: number,
 		keys: number,
-		messageKeys: number,
+		standInKeys: number,
 		toolCalls: number,
 	): boolean {
 		const file = this.#current;
 		if (file === undefined || ColdEntrySlot.layoutOf(entry) !== undefined) return false;
 		const record = entry as unknown as Record<string, unknown>;
-		const original = entry.type === "message" ? record.message : undefined;
-		const nested = isRecord(original) ? original : undefined;
-		const entryNode = this.#maskedKeys(record, keys);
-		const movedFromMessage = nested === undefined ? NO_FIELDS : this.#maskedKeys(nested, messageKeys).keys;
+		const rule = standInRuleOf(entry);
+		const standIn = rule === undefined ? undefined : recordAt(record, rule.path);
+		const entryNode = this.#maskedKeys(record, keys, this.#keyLists);
+		const moved =
+			rule === undefined || standIn === undefined
+				? NO_FIELDS
+				: this.#maskedKeys(standIn, standInKeys, this.#standInKeyListsOf(rule)).keys;
 		return this.#install(
 			entry,
 			file,
 			offset,
 			length,
 			entryNode,
-			nested,
-			movedFromMessage,
+			rule,
+			standIn,
+			moved,
 			toolCalls < 0 ? undefined : toolCalls,
 		);
 	}
 
 	/**
-	 * Replace the `entryNode` fields of `entry` and the `movedFromMessage` fields of its message
-	 * `nested` by accessors reading `length` bytes at `offset` of `file`. False when neither moves.
+	 * Replace the `entryNode` fields of `entry` and the `standInKeys` fields of `standIn`, the object
+	 * at `rule`'s path, by accessors reading `length` bytes at `offset` of `file`. False when neither
+	 * moves.
 	 */
 	#install(
 		entry: SessionEntry,
@@ -536,35 +643,55 @@ export class ColdEntryPayloads {
 		offset: number,
 		length: number,
 		entryNode: KeyListNode,
-		nested: Record<string, unknown> | undefined,
-		movedFromMessage: readonly string[],
+		rule: StandInRule | undefined,
+		standIn: Record<string, unknown> | undefined,
+		standInKeys: readonly string[],
 		toolCalls: number | undefined,
 	): boolean {
-		if (entryNode.keys.length === 0 && movedFromMessage.length === 0) return false;
+		if (entryNode.keys.length === 0 && standInKeys.length === 0) return false;
 		const record = entry as unknown as Record<string, unknown>;
-		let message: Record<string, unknown> | undefined;
-		if (nested !== undefined && movedFromMessage.length > 0) {
-			// Built in the original's key order, so the entry serializes as it did. `movedFromMessage`
-			// lists its keys in that order, so one cursor marks each moved key as the walk reaches it.
-			// `for...in` reads the key list cached on the object's structure instead of copying one;
-			// `Object.hasOwn` drops a key an enumerable prototype property adds to that walk.
-			message = {};
+		let root: Record<string, unknown> | undefined;
+		if (rule !== undefined && standIn !== undefined && standInKeys.length > 0) {
+			// Copies, built in each original's key order so the entry serializes as it did, and never
+			// the originals, which a caller of the entry may hold. `standInKeys` lists its keys in that
+			// order, so one cursor marks each moved key as the walk reaches it. `for...in` reads the key
+			// list cached on the object's structure instead of copying one; `Object.hasOwn` drops a key
+			// an enumerable prototype property adds to that walk.
+			root = {};
 			let moved = 0;
-			for (const key in nested) {
-				if (!Object.hasOwn(nested, key)) continue;
-				if (key === movedFromMessage[moved]) {
-					Object.defineProperty(message, key, this.#accessor(key));
+			for (const key in standIn) {
+				if (!Object.hasOwn(standIn, key)) continue;
+				if (key === standInKeys[moved]) {
+					Object.defineProperty(root, key, this.#accessor(key));
 					moved += 1;
-				} else message[key] = nested[key];
+				} else root[key] = standIn[key];
+			}
+			StandInSlot.set(root, entry, toolCalls);
+			// Each object above the stand-in is copied with the field below it replaced by an accessor
+			// returning the copy below, so a walk of the resident values reaches the stand-in without
+			// reading the line back, and an assignment on the way reads it back first.
+			const { path } = rule;
+			for (let depth = path.length - 1; depth > 0; depth--) {
+				const original = recordAt(record, path, depth)!;
+				const below = path[depth]!;
+				const copy: Record<string, unknown> = {};
+				for (const key in original) {
+					if (!Object.hasOwn(original, key)) continue;
+					if (key === below) Object.defineProperty(copy, key, this.#pathAccessor(key));
+					else copy[key] = original[key];
+				}
+				PathSlot.set(copy, entry, root);
+				root = copy;
 			}
 		}
-		const layout = this.#layout(entryNode, message === undefined ? NO_FIELDS : movedFromMessage);
+		const layout = this.#layout(
+			entryNode,
+			root === undefined ? NO_FIELDS : standInKeys,
+			root === undefined || rule === undefined ? NO_FIELDS : rule.path,
+		);
 		for (const key of layout.keys) Object.defineProperty(record, key, this.#accessor(key));
-		ColdEntrySlot.cool(entry, file, offset, length, layout, message);
-		if (message !== undefined) {
-			Object.defineProperty(record, "message", this.#messageAccessor());
-			StandInSlot.set(message, entry, toolCalls);
-		}
+		ColdEntrySlot.cool(entry, file, offset, length, layout, root);
+		if (root !== undefined) Object.defineProperty(record, layout.path[0]!, this.#rootAccessor(layout.path[0]!));
 		file.cold += 1;
 		return true;
 	}
@@ -594,11 +721,11 @@ export class ColdEntryPayloads {
 	}
 
 	/**
-	 * Read the large fields of the cold entry `receiver` is, or is the message stand-in of, back
-	 * into memory. A warm entry is left as it is.
+	 * Read the large fields of the cold entry `receiver` is, or is the stand-in of or a copy on the
+	 * way to it, back into memory. A warm entry is left as it is.
 	 */
 	warm(receiver: object): void {
-		const entry = (StandInSlot.entryOf(receiver) ?? receiver) as SessionEntry;
+		const entry = (StandInSlot.entryOf(receiver) ?? PathSlot.entryOf(receiver) ?? receiver) as SessionEntry;
 		const state = ColdEntrySlot.state(entry);
 		if (state === undefined) return;
 		const { file, layout, standIn } = state;
@@ -608,10 +735,18 @@ export class ColdEntryPayloads {
 		const record = entry as unknown as Record<string, unknown>;
 		for (const key of layout.keys) defineValue(record, key, restored[key]);
 		if (standIn !== undefined) {
-			StandInSlot.set(standIn, undefined);
-			const from = restored.message as Record<string, unknown>;
-			for (const key of layout.messageKeys) defineValue(standIn, key, from[key]);
-			defineValue(record, "message", standIn);
+			const { path } = layout;
+			let node = standIn;
+			for (let depth = 1; depth < path.length; depth++) {
+				const below = PathSlot.release(node);
+				defineValue(node, path[depth]!, below);
+				node = below;
+			}
+			StandInSlot.set(node, undefined);
+			// `restoreAt` checked that the line holds an object there.
+			const from = recordAt(restored, path)!;
+			for (const key of layout.standInKeys) defineValue(node, key, from[key]);
+			defineValue(record, path[0]!, standIn);
 		}
 		this.#release(file);
 	}
@@ -630,13 +765,14 @@ export class ColdEntryPayloads {
 	}
 
 	/**
-	 * The fields of `record` outside `resident` that {@link isLarge} moves, as the trie node whose
-	 * list every record with those fields shares. The walk follows the trie as it finds each field,
-	 * so a record whose list exists allocates no list and builds no lookup key; `for...in` with
-	 * `Object.hasOwn` reads the own keys in `Object.keys` order without copying them into an array.
+	 * The fields of `record` outside `resident` that {@link isLarge} moves, as the node below `root`
+	 * whose list every record with those fields shares. The walk follows the trie as it finds each
+	 * field, so a record whose list exists allocates no list and builds no lookup key; `for...in`
+	 * with `Object.hasOwn` reads the own keys in `Object.keys` order without copying them into an
+	 * array.
 	 */
-	#largeKeys(record: Record<string, unknown>, resident: ReadonlySet<string>): KeyListNode {
-		let node = this.#keyLists;
+	#largeKeys(record: Record<string, unknown>, resident: ReadonlySet<string>, root: KeyListNode): KeyListNode {
+		let node = root;
 		for (const key in record) {
 			if (resident.has(key) || !isLarge(record[key]) || !Object.hasOwn(record, key)) continue;
 			node = this.#nextKeyList(node, key);
@@ -649,8 +785,8 @@ export class ColdEntryPayloads {
 	 * own key moved. A skimmed record has no integer-like key, so `for...in` visits its keys in the
 	 * order its line holds them.
 	 */
-	#maskedKeys(record: Record<string, unknown>, mask: number): KeyListNode {
-		let node = this.#keyLists;
+	#maskedKeys(record: Record<string, unknown>, mask: number, root: KeyListNode): KeyListNode {
+		let node = root;
 		let bit = 1;
 		for (const key in record) {
 			if (!Object.hasOwn(record, key)) continue;
@@ -658,6 +794,16 @@ export class ColdEntryPayloads {
 			bit <<= 1;
 		}
 		return node;
+	}
+
+	/** The root of the key lists of `rule`'s stand-ins. */
+	#standInKeyListsOf(rule: StandInRule): KeyListNode {
+		let root = this.#standInKeyLists.get(rule);
+		if (root === undefined) {
+			root = { keys: NO_FIELDS, next: undefined, layouts: undefined };
+			this.#standInKeyLists.set(rule, root);
+		}
+		return root;
 	}
 
 	/** The trie node below `node` whose list adds `key`. */
@@ -671,13 +817,16 @@ export class ColdEntryPayloads {
 		return next;
 	}
 
-	/** The layout every entry shares whose moved fields are `keys` and whose stand-in's are `messageKeys`. */
-	#layout(keys: KeyListNode, messageKeys: readonly string[]): ColdLayout {
+	/**
+	 * The layout every entry shares whose moved fields are `keys` and whose stand-in at `path` moved
+	 * `standInKeys`. A list of a stand-in's fields belongs to one rule's trie, so it states the path.
+	 */
+	#layout(keys: KeyListNode, standInKeys: readonly string[], path: readonly string[]): ColdLayout {
 		keys.layouts ??= new Map();
-		let layout = keys.layouts.get(messageKeys);
+		let layout = keys.layouts.get(standInKeys);
 		if (layout === undefined) {
-			layout = { keys: keys.keys, messageKeys };
-			keys.layouts.set(messageKeys, layout);
+			layout = { keys: keys.keys, standInKeys, path };
+			keys.layouts.set(standInKeys, layout);
 		}
 		return layout;
 	}
@@ -707,26 +856,53 @@ export class ColdEntryPayloads {
 	}
 
 	/**
-	 * The accessor pair a cold message entry's `message` is replaced by: the getter returns the
-	 * stand-in without reading the line back, and the setter reads it back first, so an assignment
-	 * leaves no cold state behind it.
+	 * The accessor pair the first field of a cold entry's stand-in path is replaced by: the getter
+	 * returns the stand-in, or the copy above it, without reading the line back, and the setter reads
+	 * it back first, so an assignment leaves no cold state behind it.
 	 */
-	#messageAccessor(): PropertyDescriptor {
-		if (this.#messageDescriptor !== undefined) return this.#messageDescriptor;
+	#rootAccessor(key: string): PropertyDescriptor {
+		const known = this.#rootAccessors.get(key);
+		if (known !== undefined) return known;
 		const payloads = this;
-		this.#messageDescriptor = {
+		const descriptor: PropertyDescriptor = {
 			configurable: true,
 			enumerable: true,
 			get(this: SessionEntry): unknown {
-				const message = ColdEntrySlot.standInOf(this);
-				if (message === undefined) throw new Error(`Cold session entry ${this.id} lost its message stand-in`);
-				return message;
+				const standIn = ColdEntrySlot.standInOf(this);
+				if (standIn === undefined) throw new Error(`Cold session entry ${this.id} lost its ${key} stand-in`);
+				return standIn;
 			},
 			set(this: SessionEntry, value: unknown): void {
 				payloads.warm(this);
-				(this as unknown as Record<string, unknown>).message = value;
+				(this as unknown as Record<string, unknown>)[key] = value;
 			},
 		};
-		return this.#messageDescriptor;
+		this.#rootAccessors.set(key, descriptor);
+		return descriptor;
+	}
+
+	/**
+	 * The accessor pair the field of a copy on the way to a stand-in is replaced by: the getter
+	 * returns the copy below without reading the line back, and the setter reads it back first.
+	 */
+	#pathAccessor(key: string): PropertyDescriptor {
+		const known = this.#pathAccessors.get(key);
+		if (known !== undefined) return known;
+		const payloads = this;
+		const descriptor: PropertyDescriptor = {
+			configurable: true,
+			enumerable: true,
+			get(this: object): unknown {
+				const below = PathSlot.belowOf(this);
+				if (below === undefined) throw new Error(`A cold session entry lost its ${key} stand-in`);
+				return below;
+			},
+			set(this: object, value: unknown): void {
+				payloads.warm(this);
+				(this as Record<string, unknown>)[key] = value;
+			},
+		};
+		this.#pathAccessors.set(key, descriptor);
+		return descriptor;
 	}
 }

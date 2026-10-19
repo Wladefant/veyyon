@@ -22,7 +22,7 @@ import {
 } from "./blob-store";
 import type { OperatorNotices } from "./operator-notices";
 import { COLD_FIELD_RULES, coldFieldsOf } from "./session-cold-payloads";
-import { BRANCH_SETTINGS_ENTRY_TYPES, buildSessionContext } from "./session-context";
+import { buildSessionContext, RESIDENT_SETTINGS_ENTRY_TYPES } from "./session-context";
 import {
 	type FileEntry,
 	SESSION_TITLE_SLOT_BYTES,
@@ -524,13 +524,15 @@ class FileLineWindow {
 /**
  * What the skim of a load that moves compacted history to disk reports whole and what it projects
  * (see `skimSessionFile`): the header and every entry kind the load keeps in memory are whole, and
- * the title slot and the header line are read as a streamed load reads its first lines. One skim
- * returns about `outputBytes` of output, and the load parses it before it reads the next, so it
- * holds that much of the skim at a time rather than the skim of the whole file.
+ * the title slot and the header line are read as a streamed load reads its first lines. A
+ * compaction is projected with its server-side window moved, which the load reads back in full
+ * when no later compaction summarized it. One skim returns about `outputBytes` of output, and the
+ * load parses it before it reads the next, so it holds that much of the skim at a time rather than
+ * the skim of the whole file.
  */
 const SKIM_RULES: Omit<SessionSkimRules, "maxLineBytes"> = {
 	...COLD_FIELD_RULES,
-	wholeEntryTypes: ["session", ...BRANCH_SETTINGS_ENTRY_TYPES],
+	wholeEntryTypes: ["session", ...RESIDENT_SETTINGS_ENTRY_TYPES],
 	rawLines: 2,
 	outputBytes: 8 << 20,
 };
@@ -1008,10 +1010,10 @@ function scanEntryValue(value: unknown, scan: EntryScan, key?: string): void {
 }
 
 /**
- * {@link scanEntryValue} over a cold entry or a cold message stand-in: every resident string is
- * pooled, and the fields in `cold` stay on disk. A cold field is restored when its entry reads the
- * line back, through {@link restoreColdLine}. `cold` lists its keys in the target's key order, so
- * one cursor marks each cold key as the walk reaches it.
+ * {@link scanEntryValue} over a cold entry, a stand-in, or a copy on the way to one: every resident
+ * string is pooled, and the fields in `cold` stay on disk. A cold field is restored when its entry
+ * reads the line back, through {@link restoreColdLine}. `cold` lists its keys in the target's key
+ * order, so one cursor marks each cold key as the walk reaches it.
  */
 function scanResidentValues(target: Record<string, unknown>, cold: readonly string[], scan: EntryScan): void {
 	let moved = 0;

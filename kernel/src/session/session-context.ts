@@ -270,10 +270,7 @@ interface BranchSettings {
 	modeData: Record<string, unknown> | undefined;
 }
 
-/**
- * Entry kinds {@link readBranchSettings} reads on every context build, wherever they sit on the
- * branch. A session keeps their payloads in memory when it moves compacted history to disk.
- */
+/** Entry kinds {@link readBranchSettings} reads on every context build, wherever they sit on the branch. */
 export const BRANCH_SETTINGS_ENTRY_TYPES: ReadonlySet<SessionEntry["type"]> = new Set<SessionEntry["type"]>([
 	"thinking_level_change",
 	"model_change",
@@ -283,6 +280,16 @@ export const BRANCH_SETTINGS_ENTRY_TYPES: ReadonlySet<SessionEntry["type"]> = ne
 	"mcp_tool_selection",
 	"mode_change",
 ]);
+
+/**
+ * {@link BRANCH_SETTINGS_ENTRY_TYPES} whose payloads a session keeps in memory when it moves
+ * compacted history to disk. A compaction is not one: the walk reads its fields and never its
+ * server-side window, so a compaction a later one summarized moves its window alone (see
+ * `ColdEntryPayloads`).
+ */
+export const RESIDENT_SETTINGS_ENTRY_TYPES: ReadonlySet<SessionEntry["type"]> = new Set(
+	[...BRANCH_SETTINGS_ENTRY_TYPES].filter(type => type !== "compaction"),
+);
 
 function readBranchSettings(path: readonly SessionEntry[]): BranchSettings {
 	const settings: BranchSettings = {
@@ -385,11 +392,14 @@ export function contextCompaction(path: readonly SessionEntry[]): CompactionEntr
 
 /**
  * Index on `path` of the first entry a context built from it sends: the keep boundary of
- * {@link contextCompaction}, or 0 when none applies. Entries before it are read by the
- * whole-history transcript, a tree view or an export.
+ * `compaction`, {@link contextCompaction} unless a caller that already has it passes it, or 0 when
+ * none applies. Entries before it are read by the whole-history transcript, a tree view or an
+ * export.
  */
-export function compactedHistoryEnd(path: readonly SessionEntry[]): number {
-	const compaction = contextCompaction(path);
+export function compactedHistoryEnd(
+	path: readonly SessionEntry[],
+	compaction: CompactionEntry | null = contextCompaction(path),
+): number {
 	if (compaction === null) return 0;
 	// The keep-nothing marker names no entry, and the shared reader resolves it past the NEWEST
 	// compaction. The context starts past the one it applies, which an unreadable newer one follows.
