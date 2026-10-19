@@ -648,29 +648,46 @@ describe("terminal-control-transport", () => {
 			const pipeName = `veyyon-test-pipe-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 			const endpoint = `\\\\.\\pipe\\${pipeName}`;
 
-			let serverSocket: TerminalSocket | undefined;
+			const connection = Promise.withResolvers<TerminalSocket>();
+			const clientFailure = Promise.withResolvers<never>();
+			void clientFailure.promise.catch(() => undefined);
 			const server = await createWindowsPipeTransport(endpoint, socket => {
-				serverSocket = socket;
+				connection.resolve(socket);
 			});
 			cleanupActions.push(() => server.close());
 
 			const client = net.connect(endpoint);
 			cleanupActions.push(() => client.destroy());
+			client.once("error", error => {
+				clientFailure.reject(new Error("Windows named-pipe client failed", { cause: error }));
+			});
+
+			// Real OS and process events cannot use fake timers, so bound each wait with a platform timer.
+			const withClientBound = async <T>(promise: Promise<T>, label: string): Promise<T> => {
+				const timeout = Promise.withResolvers<never>();
+				const timer = setTimeout(() => timeout.reject(new Error(`${label} timed out after 5000ms`)), 5000);
+				try {
+					return await Promise.race([promise, clientFailure.promise, timeout.promise]);
+				} finally {
+					clearTimeout(timer);
+				}
+			};
 
 			const clientConnected = Promise.withResolvers<void>();
 			client.once("connect", () => clientConnected.resolve());
-			await clientConnected.promise;
-
-			expect(serverSocket).toBeDefined();
-			serverSocket?.setEncoding("utf8");
+			await withClientBound(clientConnected.promise, "Windows named-pipe client connection");
+			const serverSocket = await withClientBound(connection.promise, "Windows transport connection callback");
+			serverSocket.setEncoding("utf8");
 
 			const received = Promise.withResolvers<string>();
-			serverSocket?.on("data", chunk => {
+			serverSocket.on("data", chunk => {
 				received.resolve(chunk as string);
 			});
 
 			client.write("pipe roundtrip test\n");
-			expect(await received.promise).toBe("pipe roundtrip test\n");
+			expect(await withClientBound(received.promise, "Windows named-pipe payload delivery")).toBe(
+				"pipe roundtrip test\n",
+			);
 
 			const psCommand = `
 $client = [System.IO.Pipes.NamedPipeClientStream]::new('.', '${pipeName}', [System.IO.Pipes.PipeDirection]::InOut)
@@ -700,22 +717,72 @@ $client.Dispose()
 				"v1.0",
 				"powershell.exe",
 			);
-			const cp = await new Promise<{ stdout: string; stderr: string; exitCode: number }>(resolve => {
-				const proc = spawn(powershell, ["-NoProfile", "-NonInteractive", "-Command", psCommand], {
-					windowsHide: true,
-				});
+			type ProcessResult = { stdout: string; stderr: string; exitCode: number };
+			const runBoundedProcess = (
+				command: string,
+				args: string[],
+				label: string,
+			): Promise<ProcessResult> => {
+				const result = Promise.withResolvers<ProcessResult>();
+				const proc = spawn(command, args, { windowsHide: true });
 				let stdout = "";
 				let stderr = "";
-				proc.stdout.on("data", d => (stdout += d.toString()));
-				proc.stderr.on("data", d => (stderr += d.toString()));
-				proc.on("close", code => resolve({ stdout, stderr, exitCode: code ?? 0 }));
-			});
+				let settled = false;
+				const timer = setTimeout(() => {
+					if (settled) return;
+					settled = true;
+					try {
+						proc.kill();
+					} catch {}
+					result.reject(new Error(`${label} timed out after 5000ms`));
+				}, 5000);
+				void clientFailure.promise.catch(() => {
+					if (!settled) {
+						try {
+							proc.kill();
+						} catch {}
+					}
+				});
+				const fail = (error: Error): void => {
+					if (settled) return;
+					settled = true;
+					clearTimeout(timer);
+					result.reject(new Error(`${label} failed: ${error.message}`, { cause: error }));
+				};
+				proc.stdout.on("data", data => (stdout += data.toString()));
+				proc.stderr.on("data", data => (stderr += data.toString()));
+				proc.once("error", fail);
+				proc.once("close", code => {
+					if (settled) return;
+					settled = true;
+					clearTimeout(timer);
+					result.resolve({ stdout, stderr, exitCode: code ?? -1 });
+				});
+				return result.promise;
+			};
+			const cp = await withClientBound(
+				runBoundedProcess(
+					powershell,
+					["-NoProfile", "-NonInteractive", "-Command", psCommand],
+					"Pipe ACL query",
+				),
+				"Pipe ACL query",
+			);
+			const whoami = path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "whoami.exe");
+			const identity = await withClientBound(
+				runBoundedProcess(whoami, ["/user", "/fo", "csv", "/nh"], "Current-user SID query"),
+				"Current-user SID query",
+			);
 
-			expect(cp.exitCode).toBe(0);
+			expect(cp.exitCode, cp.stderr).toBe(0);
 			const aclResult = JSON.parse(cp.stdout.trim());
 			expect(aclResult.IsProtected).toBe(true);
 			expect(aclResult.Rules.length).toBe(2);
-			const currentUserSid = aclResult.Owner;
+			expect(identity.exitCode, identity.stderr).toBe(0);
+			const identityMatch = identity.stdout.match(/"[^"]+","(S-1-[^"]+)"/);
+			expect(identityMatch, identity.stdout).not.toBeNull();
+			const currentUserSid = identityMatch?.[1];
+			expect(aclResult.Owner).toBe(currentUserSid);
 			expect(aclResult.Rules).toEqual(
 				expect.arrayContaining([
 					expect.objectContaining({
