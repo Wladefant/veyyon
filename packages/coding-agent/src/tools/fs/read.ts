@@ -401,22 +401,25 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 		}
 
 		const parsed = parseSel(target.sel);
+		// A delimited list is split before the suffix match below runs: a list
+		// names several targets, so no file is named by the joint string, and
+		// matching it walked the whole working directory to the glob deadline on
+		// every multi-path read. A literal path holding a delimiter still wins,
+		// since the split refuses a path that exists.
+		const delimitedResult = await this.#tryReadDelimitedPaths(
+			readPath,
+			signal,
+			{},
+			{
+				depth: params.depth,
+				limit: params.limit,
+			},
+		);
+		if (delimitedResult) return delimitedResult;
 		const resolved = await statCandidateWithSuffix(this.session.cwd, target.path, suffixCache, signal, {
 			throwNonMissing: true,
 		});
-		if (!resolved) {
-			const delimitedResult = await this.#tryReadDelimitedPaths(
-				readPath,
-				signal,
-				{},
-				{
-					depth: params.depth,
-					limit: params.limit,
-				},
-			);
-			if (delimitedResult) return delimitedResult;
-			throw new ToolError(`Path '${target.path}' not found`);
-		}
+		if (!resolved) throw new ToolError(`Path '${target.path}' not found`);
 		if (resolved.stat.isDirectory()) {
 			return this.#readResolvedDirectory(resolved, parsed, params);
 		}

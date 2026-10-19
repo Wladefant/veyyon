@@ -52,7 +52,10 @@ async function findUniqueSuffixMatch(
 
 	// scopedTimeoutSignal cancels the backing timer on settle, so the glob
 	// timeout never outlives the walk (a bare AbortSignal.timeout would keep its
-	// timer armed for the full window and accumulate under load).
+	// timer armed for the full window and accumulate under load). The native
+	// walk takes the signal too: racing the promise alone returned at the
+	// deadline and left the walk running to the end of the tree, so every miss
+	// in a large working directory kept a walker busy in the background.
 	const { signal: combinedSignal, cancel } = scopedTimeoutSignal(GLOB_TIMEOUT_MS, signal);
 
 	let matches: string[];
@@ -63,6 +66,9 @@ async function findUniqueSuffixMatch(
 				path: cwd,
 				// No fileType filter: matches both files and directories
 				hidden: true,
+				// Two matches already make the suffix ambiguous; the walk stops there.
+				maxResults: 2,
+				signal: combinedSignal,
 			}),
 		);
 		matches = result.matches.map(m => m.path);
