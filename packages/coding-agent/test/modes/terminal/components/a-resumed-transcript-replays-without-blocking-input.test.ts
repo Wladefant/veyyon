@@ -18,6 +18,9 @@
  *     prototype, so a method added without a recipe fails until someone records what it does;
  *   - the screen showing a half-built transcript, the startup chat above the transcript, or the
  *     replay never yielding;
+ *   - the first slice running in the caller's turn, where it lengthens the startup work that turn
+ *     already holds, and a message that calls several tools building every tool's schema in the
+ *     one turn that draws its cards;
  *   - a session event routed against the half-built ledger instead of waiting for the replay, and
  *     `resetTranscript` leaving a replay to mount into the chat it cleared.
  *
@@ -29,7 +32,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { Agent, type AgentMessage } from "@veyyon/agent-core";
+import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
 import type { AssistantMessage, UserMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
@@ -193,7 +196,7 @@ interface Subject {
 	mount: (rows: readonly Component[]) => void;
 }
 
-function subject(streaming = false): Subject {
+function subject(streaming = false, getTool?: (name: string) => AgentTool | undefined): Subject {
 	const target = new TranscriptContainer();
 	built.push(target);
 	const pendingTools = new Map<string, ToolExecutionHandle>();
@@ -206,6 +209,7 @@ function subject(streaming = false): Subject {
 		pendingTools,
 		settledToolCalls,
 		isStreaming: () => streaming,
+		getTool,
 	});
 	const self: Subject = {
 		builder,
@@ -308,6 +312,62 @@ describe("a resumed transcript replays without blocking input", () => {
 		for (const rows of seen) expect(rows).toEqual([startup]);
 		expect(sliced.target.children[0]).toBe(startup);
 		expect(sliced.target.children.length).toBeGreaterThan(50);
+	});
+
+	it("builds nothing in the caller's turn", async () => {
+		// A frozen clock: no slice falls due, so the turn that builds the first slice builds it all.
+		vi.spyOn(performance, "now").mockReturnValue(0);
+		const sliced = subject();
+		const replay = sliced.builder.rebuildInSlices(session(2), {}, sliced.mount);
+		expect(sliced.mounts).toBe(0);
+		await replay;
+		expect(sliced.mounts).toBe(1);
+		expect(sliced.target.children.length).toBeGreaterThan(10);
+	});
+
+	it("builds each tool schema a message reads in a turn of its own", async () => {
+		// The clock moves only while a schema builds, by more than a slice, as an ArkType build does.
+		let now = 0;
+		vi.spyOn(performance, "now").mockImplementation(() => now);
+		let turn = 0;
+		const builds: { tool: string; turn: number }[] = [];
+		const tools = new Map(
+			["alpha", "beta", "gamma"].map((name): [string, AgentTool] => {
+				let schema: Record<string, unknown> | undefined;
+				const tool = {
+					name,
+					get parameters() {
+						if (!schema) {
+							builds.push({ tool: name, turn });
+							now += 20;
+							schema = { type: "object", properties: { path: { type: "string" } } };
+						}
+						return schema;
+					},
+				};
+				return [name, tool as unknown as AgentTool];
+			}),
+		);
+		const sliced = subject(false, name => tools.get(name));
+		const calls = [...tools.keys()].map(name => ({
+			type: "toolCall" as const,
+			id: `call-${name}`,
+			name,
+			arguments: { path: `src/${name}.ts` },
+		}));
+		const replay = sliced.builder.rebuildInSlices(
+			context([{ role: "user", content: "inspect", timestamp: 1 }, assistant(calls, "toolUse")]),
+			{},
+			sliced.mount,
+		);
+		while (sliced.mounts === 0) {
+			await nextTurn();
+			turn++;
+		}
+		await replay;
+
+		expect(builds.map(build => build.tool)).toEqual(["alpha", "beta", "gamma"]);
+		expect(new Set(builds.map(build => build.turn)).size).toBe(3);
 	});
 
 	it("finishes the replay before any builder call that reads or changes the transcript", async () => {

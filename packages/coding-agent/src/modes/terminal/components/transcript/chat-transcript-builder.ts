@@ -17,6 +17,7 @@ import type { ArgotSession } from "argot/session";
 import type { Settings } from "../../../../config/settings";
 import { settings } from "../../../../config/settings-instance";
 import type { AssistantThinkingRenderer, MessageRenderer } from "../../../../extensibility/extensions/types";
+import { warmDisplaySchema } from "../../../../presentation/display-arguments";
 import {
 	resolveAssistantErrorPresentation,
 	toAssistantMessageView,
@@ -125,6 +126,8 @@ interface SlicedRebuild {
 	finalized: boolean;
 	/** Next built row to highlight and draw. */
 	warmed: number;
+	/** Tools whose display schema this rebuild has built, so each is built once and alone. */
+	readonly warmedTools: Set<string>;
 }
 
 export class ChatTranscriptBuilder {
@@ -222,10 +225,12 @@ export class ChatTranscriptBuilder {
 	/**
 	 * {@link rebuild} without blocking input. Rows are built in a detached container, one
 	 * {@link TimeSlice} at a time with input and frames running between slices, then highlighted and
-	 * drawn at the terminal width so the frame that shows them reuses every row. `mount` receives
-	 * them once, in order; until then {@link container} keeps what it showed. Every other call that
-	 * reads or changes the transcript first finishes the remaining work synchronously
-	 * ({@link settle}), so it observes the transcript {@link rebuild} would have left.
+	 * drawn at the terminal width so the frame that shows them reuses every row. The first slice runs
+	 * in an event-loop turn of its own, never in the caller's, so it does not extend whatever work the
+	 * caller's turn already holds. `mount` receives the rows once, in order; until then
+	 * {@link container} keeps what it showed. Every other call that reads or changes the transcript
+	 * first finishes the remaining work synchronously ({@link settle}), so it observes the transcript
+	 * {@link rebuild} would have left.
 	 */
 	async rebuildInSlices(
 		input: SessionContext,
@@ -245,12 +250,15 @@ export class ChatTranscriptBuilder {
 			next: 0,
 			finalized: false,
 			warmed: 0,
+			warmedTools: new Set(),
 		};
 		this.#clearState();
 		this.#settledToolCalls.clear();
 		this.#sliced = job;
 		const slice = new TimeSlice();
-		while (this.#sliced === job && !this.#advance(job, slice)) await slice.yield();
+		do {
+			await slice.yield();
+		} while (this.#sliced === job && !this.#advance(job, slice));
 	}
 
 	/** Finish a {@link rebuildInSlices} still in progress, synchronously, and mount its rows. */
@@ -263,6 +271,10 @@ export class ChatTranscriptBuilder {
 	#advance(job: SlicedRebuild, slice: TimeSlice | undefined): boolean {
 		while (job.next < job.end) {
 			if (slice?.due) return false;
+			// A tool's first card builds its ArkType schema, several milliseconds each. Build each tool
+			// the next message calls ahead of it with the slice checked after every one, so a message
+			// that introduces several tools does not hold one turn for all of them.
+			if (slice && this.#warmNextToolSchema(job)) continue;
 			const index = job.next++;
 			this.#appendPersistedMessage(job.messages[index]!, {
 				populateHistory: job.populateHistory,
@@ -287,6 +299,22 @@ export class ChatTranscriptBuilder {
 		job.staging.clear();
 		job.mount(rows);
 		return true;
+	}
+
+	/**
+	 * Build the display schema of one tool the next message calls that `job` has not built yet.
+	 * Returns whether it took a tool, so the caller checks its slice before the next one.
+	 */
+	#warmNextToolSchema(job: SlicedRebuild): boolean {
+		const message = job.messages[job.next]!;
+		if (message.role !== "assistant") return false;
+		for (const content of message.content) {
+			if (content.type !== "toolCall" || job.warmedTools.has(content.name)) continue;
+			job.warmedTools.add(content.name);
+			warmDisplaySchema(this.deps.getTool?.(content.name));
+			return true;
+		}
+		return false;
 	}
 
 	/**
