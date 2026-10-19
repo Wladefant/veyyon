@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `@veyyon/catalog/discovery/cursor-gen/agent_pb` defines Cursor's `McpStateExecArgs` and `McpStateExecResult` exec messages (field 36) and the `McpStateSuccess`, `McpStateServer`, `McpStateError` and `McpStateRejected` messages they carry.
+
 ### Removed
 
 - Removed the `ANTIGRAVITY_PRIMARY_ENDPOINT` and `ANTIGRAVITY_SANDBOX_ENDPOINT` re-exports from `@veyyon/catalog/discovery/antigravity`; import them from `@veyyon/catalog/provider-endpoints` or `@veyyon/catalog/discovery`.
