@@ -1,7 +1,12 @@
 import * as nodeChildProcess from "node:child_process";
 import * as nodeModule from "node:module";
 import * as nodePath from "node:path";
-import * as ts from "typescript";
+import * as tsNamespace from "typescript";
+const ts = "createSourceFile" in tsNamespace
+	? tsNamespace
+	: ("default" in tsNamespace && tsNamespace.default && typeof tsNamespace.default === "object"
+		? (tsNamespace.default as typeof tsNamespace)
+		: tsNamespace);
 import {
 	buildWorkspaceDependencyGraph,
 	resolveWorkspaceMemberDirectories,
@@ -720,16 +725,16 @@ export function buildWorkspaceGraphWithImports(
 		}
 		contents.set(sourcePath, source.contents);
 		const scriptKind = /\.tsx$/i.test(sourcePath)
-			? ts.ScriptKind.TSX
+			? (ts.ScriptKind?.TSX ?? 4)
 			: /\.jsx$/i.test(sourcePath)
-				? ts.ScriptKind.JSX
+				? (ts.ScriptKind?.JSX ?? 2)
 				: /\.(?:[cm]?js)$/i.test(sourcePath)
-					? ts.ScriptKind.JS
-					: ts.ScriptKind.TS;
+					? (ts.ScriptKind?.JS ?? 1)
+					: (ts.ScriptKind?.TS ?? 3);
 		const parsedSource = ts.createSourceFile(
 			sourcePath,
 			source.contents,
-			ts.ScriptTarget.Latest,
+			ts.ScriptTarget?.Latest ?? 99,
 			true,
 			scriptKind,
 		);
