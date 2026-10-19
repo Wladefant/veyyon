@@ -249,6 +249,8 @@ export class ExtensionRelay {
 	readonly #pending = new Map<number, PendingCall>();
 	#bootstrapUrl: string | undefined;
 	#bootstrapTabId: number | undefined;
+	/** The tab id of the connect page this relay's own consent URL opened. Only this tab is ever closed by `closeConnectTab`. */
+	#connectTabId: number | undefined;
 	#bootstrapReady: Promise<void> | undefined;
 	#ready = false;
 	#extension: ServerWebSocket<SocketData> | undefined;
@@ -338,12 +340,30 @@ export class ExtensionRelay {
 	}
 
 	/**
+	 * Close the connect tab this relay adopted, by its exact tab id. Never touches another tab or the browser.
+	 * Returns false when no connect tab is held: it was never seen, already closed, or is now a working tab.
+	 */
+	async closeConnectTab(): Promise<boolean> {
+		const tabId = this.#connectTabId;
+		if (tabId === undefined) return false;
+		await this.#bootstrapReady?.catch(() => undefined);
+		if (this.#connectTabId !== tabId) return false;
+		this.#connectTabId = undefined;
+		if (this.#bootstrapTabId === tabId) this.#bootstrapTabId = undefined;
+		this.#pendingBootstrapTabs.delete(tabId);
+		this.#fireAndForget("chrome.tabs.remove", [tabId]);
+		this.#dropTab(tabId);
+		return true;
+	}
+
+	/**
 	 * Detach every debugger session and drop the extension. Never waits for `chrome.tabs.remove`:
 	 * it does not reply. Returns how many tabs were detached.
 	 */
 	async disconnect(): Promise<number> {
 		const tabs = [...this.#tabs.values()];
 		const pendingBootstrapTabs = [...this.#pendingBootstrapTabs];
+		this.#connectTabId = undefined;
 		this.#pendingBootstrapTabs.clear();
 		this.#tabs.clear();
 		this.#childSessions.clear();
@@ -430,6 +450,9 @@ export class ExtensionRelay {
 			if (parts[2] === "disconnect" && req.method === "POST") {
 				const detached = await this.disconnect();
 				return Response.json({ detached });
+			}
+			if (parts[2] === "close-connect-tab" && req.method === "POST") {
+				return Response.json({ closed: await this.closeConnectTab() });
 			}
 		}
 		return new Response("not found", { status: 404 });
@@ -550,6 +573,7 @@ export class ExtensionRelay {
 				if (this.#bootstrapUrl !== undefined && landing === this.#bootstrapUrl) {
 					this.#bootstrapUrl = undefined;
 					this.#pendingBootstrapTabs.add(tab.id);
+					this.#connectTabId = tab.id;
 					this.#bootstrapReady = this.#registerTab(tab.id, true)
 						.then(() => {
 							this.#bootstrapTabId = tab.id;
@@ -557,6 +581,7 @@ export class ExtensionRelay {
 						})
 						.catch(error => {
 							this.#log("could not adopt connect tab", { error: errorText(error) });
+							if (this.#connectTabId === tab.id) this.#connectTabId = undefined;
 							throw error;
 						});
 					// The session awaits this promise. An event can arrive before that await is installed.
@@ -1057,6 +1082,7 @@ export class ExtensionRelay {
 		await this.#bootstrapReady;
 		let tab = this.#bootstrapTabId === undefined ? undefined : this.#tabs.get(this.#bootstrapTabId);
 		this.#bootstrapTabId = undefined;
+		if (tab && this.#connectTabId === tab.tabId) this.#connectTabId = undefined;
 		if (!tab) {
 			const created = tabSchema(await this.#call("chrome.tabs.create", [{ url: "about:blank", active: true }]));
 			if (created instanceof type.errors) throw new Error("The extension returned no tab.");

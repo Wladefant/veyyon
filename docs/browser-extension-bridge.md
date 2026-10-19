@@ -32,8 +32,11 @@ The `tab.*` helpers, `observe`, `screenshot` and the rest of the `browser` tool 
 
 The connect page is a handshake tab, not first-run onboarding.
 The relay owns only the exact connect URL that it generated for this session.
-It gates that tab, navigates it to `about:blank`, and reuses it for the first browser tab.
-Closing the browser tab removes it. A failed open removes the tab that the session created.
+It gates that tab and navigates it to `about:blank`.
+Once the extension has connected, `openExtensionSession` closes that tab by its tab id, and the first browser tab is a fresh tab.
+A failed open also removes the tab. Closing a browser tab removes it.
+A relay that another process owns closes its connect tab with `POST /control/<secret>/close-connect-tab`; the reply is `{"closed": true}` once the tab is removed and `{"closed": false}` when none is held.
+The relay never stops Chrome. Reusing the operator's running Chrome leaves the browser and its other tabs untouched.
 The relay records ownership before registration starts. Cancellation or timeout removes that pending tab before the relay closes its transport.
 Existing Chrome tabs remain untouched.
 
