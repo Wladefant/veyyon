@@ -6,15 +6,25 @@ import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { resolveAgentModel } from "../../src/task/agent-settings";
 
-describe("task workers share Flash and GPT-6 Luna", () => {
+describe("task workers share Flash and GPT-6 Luna deterministically", () => {
 	const flash = "google/gemini-3.8-flash";
 	const luna = "openai-codex/gpt-6-luna";
 	const fallback = "anthropic/claude-sonnet-4";
 
-	it("balances stable task spawn identities and preserves fallback candidates", () => {
+	it("always picks configured Luna-first for task workers across spawn IDs including ProbeTaskD1", () => {
 		const settings = Settings.isolated({
-			"agent.agents": { task: { model: [flash, luna, fallback] } },
+			"agent.agents": { task: { model: [luna, flash, fallback] } },
 		});
+		const probeResolved = resolveAgentModel({
+			settings,
+			agentName: "task",
+			taskDepth: 1,
+			spawnId: "ProbeTaskD1",
+		});
+		expect(probeResolved.patterns[0]).toBe(luna);
+		expect(probeResolved.patterns[1]).toBe(flash);
+		expect(probeResolved.patterns.slice(2)).toEqual([fallback]);
+
 		const counts: Record<string, number> = {};
 		for (let index = 0; index < 100; index++) {
 			const spawnId = `spawn-${index}`;
@@ -24,49 +34,43 @@ describe("task workers share Flash and GPT-6 Luna", () => {
 			expect(resolveAgentModel({ settings, agentName: "task", taskDepth: 1, spawnId }).patterns).toEqual(
 				resolved.patterns,
 			);
+			expect(resolved.patterns[0]).toBe(luna);
+			expect(resolved.patterns[1]).toBe(flash);
 			expect(resolved.patterns.slice(2)).toEqual([fallback]);
 		}
-		expect(counts[flash]).toBeGreaterThanOrEqual(40);
-		expect(counts[flash]).toBeLessThanOrEqual(60);
-		expect(counts[luna]).toBeGreaterThanOrEqual(40);
-		expect(counts[luna]).toBeLessThanOrEqual(60);
+		expect(counts[luna]).toBe(100);
+		expect(counts[flash] ?? 0).toBe(0);
 	});
 
-	it("splits nested task and qa-verifier chains while leaving other types and incomplete pairs alone", () => {
-		const nested = Settings.isolated({
-			"agent.agents": { task: { agents: { model: [flash, luna, fallback] } } },
-		});
-		const qaSettings = Settings.isolated({
+	it("always picks configured Flash-first for qa-verifier across spawn IDs including ProbeTaskD1", () => {
+		const settings = Settings.isolated({
 			"agent.agents": { "qa-verifier": { model: [flash, luna, fallback] } },
 		});
-		const countsByLane: Record<string, Record<string, number>> = {
-			task: {},
-			"qa-verifier": {},
-		};
-		for (let index = 0; index < 100; index++) {
-			for (const [agentName, settings, taskDepth] of [
-				["task", nested, 2],
-				["qa-verifier", qaSettings, 1],
-			] as const) {
-				const resolved = resolveAgentModel({
-					settings,
-					agentName,
-					taskDepth,
-					spawnId: `variant-${index}`,
-				});
-				const counts = countsByLane[agentName]!;
-				counts[resolved.patterns[0]] = (counts[resolved.patterns[0]] ?? 0) + 1;
-				expect(resolved.patterns.slice(2)).toEqual([fallback]);
-			}
-		}
-		for (const agentName of ["task", "qa-verifier"]) {
-			const counts = countsByLane[agentName]!;
-			expect(counts[flash]).toBeGreaterThanOrEqual(40);
-			expect(counts[flash]).toBeLessThanOrEqual(60);
-			expect(counts[luna]).toBeGreaterThanOrEqual(40);
-			expect(counts[luna]).toBeLessThanOrEqual(60);
-		}
+		const probeResolved = resolveAgentModel({
+			settings,
+			agentName: "qa-verifier",
+			taskDepth: 1,
+			spawnId: "ProbeTaskD1",
+		});
+		expect(probeResolved.patterns[0]).toBe(flash);
+		expect(probeResolved.patterns[1]).toBe(luna);
+		expect(probeResolved.patterns.slice(2)).toEqual([fallback]);
 
+		const counts: Record<string, number> = {};
+		for (let index = 0; index < 100; index++) {
+			const spawnId = `variant-${index}`;
+			const resolved = resolveAgentModel({ settings, agentName: "qa-verifier", taskDepth: 1, spawnId });
+			const first = resolved.patterns[0];
+			counts[first] = (counts[first] ?? 0) + 1;
+			expect(resolved.patterns[0]).toBe(flash);
+			expect(resolved.patterns[1]).toBe(luna);
+			expect(resolved.patterns.slice(2)).toEqual([fallback]);
+		}
+		expect(counts[flash]).toBe(100);
+		expect(counts[luna] ?? 0).toBe(0);
+	});
+
+	it("leaves other agent types and incomplete pairs alone", () => {
 		const incomplete = Settings.isolated({ "agent.agents": { task: { model: [flash, fallback] } } });
 		expect(resolveAgentModel({ settings: incomplete, agentName: "task", spawnId: "incomplete" }).patterns).toEqual([
 			flash,
@@ -80,32 +84,33 @@ describe("task workers share Flash and GPT-6 Luna", () => {
 		]);
 	});
 
-	it("keeps the split at deeper configured depths and starts a fresh split for new spawns", () => {
+	it("preserves configured model order at deeper configured depths", () => {
 		const deepTask = Settings.isolated({
-			"agent.agents": { task: { agents: { agents: { model: [flash, luna, fallback] } } } },
+			"agent.agents": { task: { agents: { agents: { model: [luna, flash, fallback] } } } },
 		});
 		const deepQa = Settings.isolated({
 			"agent.agents": { "qa-verifier": { agents: { agents: { model: [flash, luna, fallback] } } } },
 		});
-		for (const [agentName, settings] of [
-			["task", deepTask],
-			["qa-verifier", deepQa],
-		] as const) {
-			const counts: Record<string, number> = {};
-			for (let index = 0; index < 100; index++) {
-				const resolved = resolveAgentModel({
-					settings,
-					agentName,
-					taskDepth: 3,
-					spawnId: `reset-${index}`,
-				});
-				counts[resolved.patterns[0]] = (counts[resolved.patterns[0]] ?? 0) + 1;
-				expect(resolved.patterns.slice(2)).toEqual([fallback]);
-			}
-			expect(counts[flash]).toBeGreaterThanOrEqual(40);
-			expect(counts[flash]).toBeLessThanOrEqual(60);
-			expect(counts[luna]).toBeGreaterThanOrEqual(40);
-			expect(counts[luna]).toBeLessThanOrEqual(60);
+		for (let index = 0; index < 100; index++) {
+			const taskResolved = resolveAgentModel({
+				settings: deepTask,
+				agentName: "task",
+				taskDepth: 3,
+				spawnId: `reset-${index}`,
+			});
+			expect(taskResolved.patterns[0]).toBe(luna);
+			expect(taskResolved.patterns[1]).toBe(flash);
+			expect(taskResolved.patterns.slice(2)).toEqual([fallback]);
+
+			const qaResolved = resolveAgentModel({
+				settings: deepQa,
+				agentName: "qa-verifier",
+				taskDepth: 3,
+				spawnId: `reset-${index}`,
+			});
+			expect(qaResolved.patterns[0]).toBe(flash);
+			expect(qaResolved.patterns[1]).toBe(luna);
+			expect(qaResolved.patterns.slice(2)).toEqual([fallback]);
 		}
 	});
 });
@@ -148,16 +153,14 @@ describe("the Flash and Luna share follows quota suppression and the live provid
 		return counts;
 	}
 
-	it("splits the live google-antigravity provider name against Luna", () => {
+	it("respects configured first choice for live google-antigravity provider name", () => {
 		registry.clearSuppressedSelectors();
 		const counts = firstChoices();
-		expect(counts[antigravityFlash]).toBeGreaterThanOrEqual(40);
-		expect(counts[antigravityFlash]).toBeLessThanOrEqual(60);
-		expect(counts[luna]).toBeGreaterThanOrEqual(40);
-		expect(counts[luna]).toBeLessThanOrEqual(60);
+		expect(counts[antigravityFlash]).toBe(100);
+		expect(counts[luna] ?? 0).toBe(0);
 	});
 
-	it("starts new spawns on the other pool while one is suppressed, and restores the split after reset", () => {
+	it("starts new spawns on the other pool while one is suppressed, and restores configured order after reset", () => {
 		registry.clearSuppressedSelectors();
 		registry.suppressSelector(luna, Date.now() + 60_000);
 		const lunaDown = firstChoices();
@@ -169,19 +172,19 @@ describe("the Flash and Luna share follows quota suppression and the live provid
 		expect(flashDown[luna]).toBe(100);
 
 		registry.clearSuppressedSelectors();
-		registry.suppressSelector(luna, Date.now() - 1);
+		registry.suppressSelector(antigravityFlash, Date.now() - 1);
 		const afterReset = firstChoices();
-		expect(afterReset[antigravityFlash]).toBeGreaterThanOrEqual(40);
-		expect(afterReset[antigravityFlash]).toBeLessThanOrEqual(60);
+		expect(afterReset[antigravityFlash]).toBe(100);
+		expect(afterReset[luna] ?? 0).toBe(0);
 	});
 
-	it("keeps the hash split when both pools are suppressed", () => {
+	it("keeps configured order when both pools are suppressed", () => {
 		registry.clearSuppressedSelectors();
 		registry.suppressSelector(luna, Date.now() + 60_000);
 		registry.suppressSelector(antigravityFlash, Date.now() + 60_000);
 		const counts = firstChoices();
-		expect(counts[antigravityFlash]).toBeGreaterThanOrEqual(40);
-		expect(counts[luna]).toBeGreaterThanOrEqual(40);
+		expect(counts[antigravityFlash]).toBe(100);
+		expect(counts[luna] ?? 0).toBe(0);
 		registry.clearSuppressedSelectors();
 	});
 

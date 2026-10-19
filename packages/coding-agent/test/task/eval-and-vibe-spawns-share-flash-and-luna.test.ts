@@ -40,7 +40,7 @@ const idleWorker = {
 	dispose: async () => {},
 } as unknown as AgentSession;
 
-describe("eval agent() and vibe workers share Flash and Luna", () => {
+describe("eval agent() and vibe workers deterministically use configured first choice", () => {
 	let tempDir: TempDir;
 	let chains: string[][];
 	const managers: AsyncJobManager[] = [];
@@ -120,30 +120,28 @@ describe("eval agent() and vibe workers share Flash and Luna", () => {
 		});
 	}
 
-	function expectSplit(): void {
+	function expectDeterministicFirst(): void {
 		const counts: Record<string, number> = {};
 		for (const chain of chains) counts[chain[0]] = (counts[chain[0]] ?? 0) + 1;
 		for (const chain of chains) expect(chain.slice(2)).toEqual([FALLBACK]);
-		expect(counts[FLASH]).toBeGreaterThanOrEqual(30);
-		expect(counts[FLASH]).toBeLessThanOrEqual(70);
-		expect(counts[LUNA]).toBeGreaterThanOrEqual(30);
-		expect(counts[LUNA]).toBeLessThanOrEqual(70);
+		expect(counts[FLASH]).toBe(100);
+		expect(counts[LUNA] ?? 0).toBe(0);
 	}
 
 	for (const agent of ["task", "qa-verifier"]) {
 		for (const taskDepth of [0, 1]) {
-			it(`eval agent(${agent}) at session depth ${taskDepth} splits first choice`, async () => {
+			it(`eval agent(${agent}) at session depth ${taskDepth} deterministically uses configured first choice`, async () => {
 				const session = openSession(`eval-${agent}-${taskDepth}`, taskDepth);
 				for (let index = 0; index < 100; index++) {
 					await runEvalAgent({ agent, prompt: "Inspect the requested behavior." }, { session });
 				}
 				expect(chains).toHaveLength(100);
-				expectSplit();
+				expectDeterministicFirst();
 			}, 60000);
 		}
 	}
 
-	it("a vibe worker on the deep agent splits first choice", async () => {
+	it("a vibe worker on the deep agent deterministically uses configured first choice", async () => {
 		const session = openSession("vibe-good");
 		for (let index = 0; index < 100; index++) {
 			const { jobId } = await VibeSessionRegistry.global().spawn(session, {
@@ -154,6 +152,6 @@ describe("eval agent() and vibe workers share Flash and Luna", () => {
 			await session.asyncJobManager?.getJob(jobId)?.promise;
 		}
 		expect(chains).toHaveLength(100);
-		expectSplit();
+		expectDeterministicFirst();
 	}, 120000);
 });
