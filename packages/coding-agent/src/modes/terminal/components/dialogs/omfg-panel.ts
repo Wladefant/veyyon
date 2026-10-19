@@ -1,6 +1,6 @@
 import { type Component, Container, Markdown, Spacer, Text, type TUI } from "@veyyon/tui";
 import { getMarkdownTheme } from "../../../../theme/markdown-theme";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import {
 	replaceTabs,
 	shortenEmbeddedPaths,

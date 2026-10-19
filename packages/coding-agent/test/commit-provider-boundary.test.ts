@@ -25,7 +25,6 @@ function conventionalResponse(): AssistantMessage {
 function commitSettings() {
 	return {
 		get: () => undefined,
-		getModelRole: () => undefined,
 		getStorage: () => undefined,
 	} as never;
 }

@@ -15,9 +15,10 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import * as path from "node:path";
-import { moduleSpecifiersIn } from "@veyyon/utils/module-reach";
+import { buildAnthropicCompat } from "../src/compat/anthropic";
 import { matchesKimiK27CodeFamily } from "../src/compat/kimi";
+import { buildOpenAICompat } from "../src/compat/openai";
+import type { ModelSpec } from "../src/types";
 
 describe("ids the family publishes", () => {
 	/** The dotted spelling, which is what the model card uses. */
@@ -109,20 +110,70 @@ describe("models that are not the family", () => {
 	});
 });
 
-describe("one owner", () => {
+describe("both compat layers", () => {
 	/**
 	 * The lock. Both compat layers carried the pattern AND the match, one of them documenting
 	 * itself as a mirror of the other, which is what let a rule about one model live in four
-	 * places. A copy reappearing here is the drift this suite exists to prevent, so it fails the
-	 * build rather than waiting to be noticed as inconsistent thinking behaviour in production.
+	 * places. Asserted on what each layer resolves rather than on its source: for every identity
+	 * above, a Moonshot-hosted request forces thinking on through the Anthropic-compatible path
+	 * exactly when it does through the OpenAI-compatible one, and exactly when the owner says the
+	 * model is the family. A private copy that disagrees with the owner on any spelling fails here.
 	 */
-	it("is defined once, and both compat layers import it", async () => {
-		for (const name of ["openai.ts", "anthropic.ts"]) {
-			const source = await Bun.file(path.join(import.meta.dir, "../src/compat", name)).text();
+	const IDENTITIES: Array<{ id: string; name?: string }> = [
+		{ id: "kimi-k2.7-code" },
+		{ id: "kimi-k2p7-code" },
+		{ id: "kimi_k2_7_code" },
+		{ id: "kimi-k2-7-code" },
+		{ id: "kimi-k2.7-code-highspeed" },
+		{ id: "kimi-k2p7-code-highspeed" },
+		{ id: "moonshotai/kimi-k2.7-code" },
+		{ id: "Kimi-K2.7-Code" },
+		{ id: "kimi-for-coding", name: "Kimi K2.7 Code" },
+		{ id: "kimi-for-coding", name: "kimi k27 code" },
+		{ id: "kimi-for-coding" },
+		{ id: "kimi-for-coding", name: "Kimi K2 Instruct" },
+		{ id: "kimi-for-coding", name: "Kimi K3 Code" },
+		{ id: "some-proxy-model", name: "Kimi K2.7 Code" },
+		{ id: "kimi-k2-instruct" },
+		{ id: "kimi-k2.7-instruct" },
+		{ id: "kimi-k2.5-code" },
+		{ id: "kimi-k3-code" },
+		{ id: "kimi-k2.7-code-preview" },
+		{ id: "kimi-k2.7-code-highspeed-v2" },
+		{ id: "notkimi-k2.7-code" },
+		{ id: "gpt-5" },
+	];
 
-			expect(source).not.toContain("function matchesKimiK27CodeFamily");
-			expect(source).not.toContain("KIMI_K27_CODE_MODEL_PATTERN");
-			expect(moduleSpecifiersIn(source)).toContain("./kimi");
-		}
+	function moonshotSpec<TApi extends "anthropic-messages" | "openai-completions">(
+		api: TApi,
+		identity: { id: string; name?: string },
+	): ModelSpec<TApi> {
+		return {
+			api,
+			id: identity.id,
+			name: identity.name,
+			provider: "moonshot",
+			baseUrl: api === "anthropic-messages" ? "https://api.moonshot.ai/anthropic" : "https://api.moonshot.ai/v1",
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			maxTokens: 32_000,
+			contextWindow: 256_000,
+			reasoning: true,
+		} as ModelSpec<TApi>;
+	}
+
+	it.each(IDENTITIES)("force thinking on together for %j", identity => {
+		const family = matchesKimiK27CodeFamily(identity);
+		const anthropic = buildAnthropicCompat(moonshotSpec("anthropic-messages", identity));
+		const openai = buildOpenAICompat(moonshotSpec("openai-completions", identity));
+
+		expect(anthropic.requiresThinkingEnabled).toBe(family);
+		expect(openai.supportsForcedToolChoice).toBe(!family);
+	});
+
+	/** Non-vacuity: the sweep holds both answers, so agreement is not two layers that never fire. */
+	it("covers family members and non-members", () => {
+		const answers = new Set(IDENTITIES.map(identity => matchesKimiK27CodeFamily(identity)));
+		expect([...answers].sort()).toEqual([false, true]);
 	});
 });

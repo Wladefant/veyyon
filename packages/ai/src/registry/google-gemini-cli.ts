@@ -11,12 +11,12 @@ export const googleGeminiCliProvider = {
 		return loginGeminiCli(cb);
 	},
 	credential: "oauth",
-	refreshToken: async (credentials: OAuthCredentials) => {
+	refreshToken: async (credentials: OAuthCredentials, signal?: AbortSignal) => {
 		if (!credentials.projectId) {
 			throw new AIError.ConfigurationError("Google Cloud credentials missing projectId");
 		}
 		const { refreshGoogleCloudToken } = await import("./oauth/google-gemini-cli");
-		return refreshGoogleCloudToken(credentials.refresh, credentials.projectId);
+		return refreshGoogleCloudToken(credentials.refresh, credentials.projectId, signal);
 	},
 	callbackPort: 8085,
 	pasteCodeFlow: true,

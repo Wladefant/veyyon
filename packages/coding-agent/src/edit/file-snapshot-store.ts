@@ -151,7 +151,7 @@ export async function recordFileSnapshot(
  * `search`/`ast-grep`. Anchored at line start, so source content after the
  * colon never matches.
  */
-const HASHLINE_LINE_PREFIX = /^[ *]?(\d+)(?:-(\d+))?:/;
+export const HASHLINE_LINE_PREFIX = /^[ *]?(\d+)(?:-(\d+))?:/;
 
 /**
  * The 1-indexed file lines a hashline-formatted body actually displayed.

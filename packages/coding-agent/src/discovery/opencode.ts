@@ -237,7 +237,7 @@ async function loadExtensionModules(ctx: LoadContext): Promise<LoadResult<Extens
  */
 function readOpencodeCommandsEnabled(): boolean {
 	try {
-		return settings.get("commands.enableOpencodeUser") ?? true;
+		return settings.get("commands.enableOpencodeUser");
 	} catch {
 		return true;
 	}

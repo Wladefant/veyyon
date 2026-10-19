@@ -1,5 +1,5 @@
 /**
- * Generate commit messages from diffs using a smol, fast model.
+ * Generate commit messages from diffs using the commit helper's model.
  * Follows the same pattern as title-generator.ts.
  */
 import type { ThinkingLevel } from "@veyyon/agent-core";
@@ -7,10 +7,9 @@ import type { Api, Model } from "@veyyon/ai";
 import { errorMessage, logger, prompt } from "@veyyon/utils";
 import { completeCommitSimple, type ResolveObfuscateProviderText } from "../commit/shared-llm";
 import type { ModelRegistry } from "../config/model-registry";
-import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
-import MODEL_PRIO from "../priority.json" with { type: "json" };
 import { commitPrompts } from "../prompts/commit/rows";
+import { resolveHelperModel } from "../task/helper-settings";
 import { concreteThinkingLevel, toReasoningEffort } from "../thinking";
 
 const COMMIT_SYSTEM_PROMPT = prompt.render(commitPrompts["commit/message-system"].text);
@@ -40,7 +39,7 @@ function filterDiffNoise(diff: string): string {
 	return filtered.join("\n");
 }
 
-function getSmolModelCandidates(
+function commitModelCandidates(
 	registry: ModelRegistry,
 	settings: Settings,
 ): Array<{ model: Model<Api>; thinkingLevel?: ThinkingLevel }> {
@@ -54,17 +53,9 @@ function getSmolModelCandidates(
 		candidates.push({ model, thinkingLevel });
 	};
 
-	const matchPreferences = getModelMatchPreferences(settings);
-	const configuredSmol = resolveModelRoleValue(settings.getModelRole("smol"), availableModels, {
-		settings,
-		matchPreferences,
-	});
-	addCandidate(configuredSmol.model, concreteThinkingLevel(configuredSmol.thinkingLevel));
-
-	for (const pattern of MODEL_PRIO.smol) {
-		const needle = pattern.toLowerCase();
-		addCandidate(availableModels.find(m => m.id.toLowerCase() === needle));
-		addCandidate(availableModels.find(m => m.id.toLowerCase().includes(needle)));
+	const resolved = resolveHelperModel(settings, "commit", availableModels);
+	if (resolved?.model) {
+		addCandidate(resolved.model, concreteThinkingLevel(resolved.thinkingLevel));
 	}
 
 	for (const model of availableModels) {
@@ -85,9 +76,9 @@ export async function generateCommitMessage(
 	resolveObfuscateProviderText: ResolveObfuscateProviderText,
 	sessionId?: string,
 ): Promise<string | null> {
-	const candidates = getSmolModelCandidates(registry, settings);
+	const candidates = commitModelCandidates(registry, settings);
 	if (candidates.length === 0) {
-		logger.debug("commit-msg-generator: no smol model found");
+		logger.debug("commit-msg-generator: no available model");
 		return null;
 	}
 

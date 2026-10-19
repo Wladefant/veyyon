@@ -83,7 +83,7 @@ export async function loadStartupExtensions(
 	const namedPaths = [
 		...(options.additionalExtensionPaths ?? []),
 		...(options.preloadedNamedExtensionPaths ?? []),
-		...(input.settings.get("extensions") ?? []),
+		...input.settings.get("extensions"),
 	];
 	let result: LoadExtensionsResult;
 	let paths: string[];

@@ -176,7 +176,7 @@ bun scripts/bench-startup.ts --only settled --cold --runs 5 \
 `--seed` copies an isolated config root containing `config.yml` and
 `profiles/default/agent/` into the benchmark scratch directory. Use synthetic
 credentials and a local model definition for offline measurements. Set
-`onboardingVersion: 1` in the root config and the default model role in the profile
+`onboardingVersion: 1` in the root config and `defaultModel` in the profile
 config. Do not seed launch-fact, replay or model-discovery caches for a cold run.
 `--bin` selects a compiled executable instead of `--source`.
 
@@ -418,4 +418,3 @@ The split binary measures a 37ms first byte and a 42ms composer row, medians of 
 with an AMD Ryzen 9 9950X. The ceiling runs where the bench runs, not in CI: a first-frame median
 moves by more than 50% between repetitions, and by more than that when a type check shares the
 machine.
-*Verified against `0946265f23` on 2026-10-04.*

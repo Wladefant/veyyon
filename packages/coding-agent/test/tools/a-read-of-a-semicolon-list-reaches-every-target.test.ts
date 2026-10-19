@@ -21,7 +21,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { resetActiveSkillsForTests, setActiveSkills } from "@veyyon/coding-agent/extensibility/skills";
+import { resetActiveSkillsForTests, setActiveSkills } from "@veyyon/coding-agent/extensibility/active-skills";
 import { InternalUrlRouter, LocalProtocolHandler } from "@veyyon/coding-agent/internal-urls";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import type { ToolSession } from "@veyyon/coding-agent/tools";

@@ -29,7 +29,7 @@
  *      process REPLACED the first session's sink and the first operator went silent from then on,
  *      which is the exact failure the module was written to remove.
  */
-import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, type Mock, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -47,7 +47,7 @@ import {
 
 let root: string;
 let collected: Fault[];
-let warnSpy: ReturnType<typeof spyOn>;
+let warnSpy: Mock<typeof logger.warn>;
 /** Every sink a test attached, detached in `afterEach` so none of them sees the next test's faults. */
 let detachers: DetachFaultSink[];
 

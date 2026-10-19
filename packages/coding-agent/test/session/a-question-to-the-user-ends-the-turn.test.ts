@@ -439,7 +439,7 @@ describe("a reply that asks the user something ends the turn", () => {
 
 		/**
 		 * Both held routes climb a bounded ladder (plan mode reminds three times then
-		 * yields, the todo nudge escalates to `todo.reminders.max`), so a hold that
+		 * yields, the todo nudge escalates to `todo.reminderLimit`), so a hold that
 		 * spent a rung would be invisible in a single-question test and would strand
 		 * a session one question short of its budget. Repeated questions must cost
 		 * nothing: the ladder starts at rung one whenever the user stops being asked.

@@ -1305,10 +1305,10 @@ export async function resolveOrDefaultProjectRegistryPath(cwd: string): Promise<
 
 const pluginRootsCache = new Map<string, { roots: ClaudePluginRoot[]; warnings: string[] }>();
 
-const pluginCacheInvalidators = new Set<() => void>();
+const pluginCacheInvalidators = new Set<(cwd?: string) => void>();
 
 /** Register a process-global plugin cache invalidator called whenever plugin roots are cleared. */
-export function registerPluginCacheInvalidator(invalidator: () => void): void {
+export function registerPluginCacheInvalidator(invalidator: (cwd?: string) => void): void {
 	pluginCacheInvalidators.add(invalidator);
 }
 
@@ -1488,15 +1488,24 @@ export async function listClaudePluginRoots(
 }
 
 /**
- * Clear the plugin roots cache (useful for testing or when plugins change).
+ * Clear discovery caches; a scoped caller must await preloadPluginRoots for that cwd.
  */
-export function clearClaudePluginRootsCache(): void {
+export function clearClaudePluginRootsCache(cwd?: string): void {
 	pluginRootsCache.clear();
-	for (const invalidate of pluginCacheInvalidators) invalidate();
-	preloadedPluginRoots = injectedPluginDirRoots.slice();
-	// Re-warm preloaded roots asynchronously so sync LSP config reads stay valid
-	if (lastPreloadHome) {
-		void preloadPluginRoots(lastPreloadHome, getProjectDir());
+	for (const invalidate of pluginCacheInvalidators) invalidate(cwd);
+	if (cwd !== undefined) {
+		const scope = path.resolve(cwd);
+		preloadedPluginRoots.delete(scope);
+		preloadGenerations.set(scope, (preloadGenerations.get(scope) ?? 0) + 1);
+		return;
+	}
+	preloadedPluginRoots.clear();
+	// Registry mutations affect every known scope; re-rooting affects only its destination.
+	for (const scope of preloadHomes.keys()) {
+		preloadGenerations.set(scope, (preloadGenerations.get(scope) ?? 0) + 1);
+	}
+	for (const [scope, home] of preloadHomes) {
+		void preloadPluginRoots(home, scope);
 	}
 }
 
@@ -1516,27 +1525,51 @@ export function clearPluginRootsAndCaches(extraPaths?: readonly string[]): void 
 // Populated at startup by preloadPluginRoots(). Read synchronously by
 // getPreloadedPluginRoots(). Safe degradation: empty array if not warmed.
 
-let preloadedPluginRoots: ClaudePluginRoot[] = [];
+const preloadedPluginRoots = new Map<string, ClaudePluginRoot[]>();
 let injectedPluginDirRoots: ClaudePluginRoot[] = [];
-let lastPreloadHome: string | undefined;
+const preloadHomes = new Map<string, string>();
+const preloadGenerations = new Map<string, number>();
 
 /**
  * Populate the module-level plugin roots cache for sync consumers.
  * Call during session initialization, after dir resolution completes
  * but before any LSP config is read.
  */
-export async function preloadPluginRoots(home: string, cwd?: string): Promise<void> {
-	lastPreloadHome = home;
-	const { roots } = await listClaudePluginRoots(home, cwd);
-	preloadedPluginRoots = roots;
+export async function preloadPluginRoots(home: string, cwd: string): Promise<readonly ClaudePluginRoot[]> {
+	const scope = path.resolve(cwd);
+	preloadHomes.set(scope, home);
+	for (let attempt = 1; attempt <= 3; attempt++) {
+		const generation = preloadGenerations.get(scope) ?? 0;
+		const { roots } = await listClaudePluginRoots(home, scope);
+		if (generation !== (preloadGenerations.get(scope) ?? 0)) {
+			// Discovery may have filled the shared cache after its invalidation.
+			pluginRootsCache.clear();
+			if (attempt < 3) continue;
+			logger.debug("Plugin preload reached invalidation retry limit; publishing completed snapshot", {
+				cwd: scope,
+				attempts: attempt,
+			});
+		}
+		preloadedPluginRoots.set(scope, roots);
+		return roots;
+	}
+	throw new Error("Plugin discovery exhausted without a completed snapshot");
+}
+
+/** Warm a cold sync view using the scope's original home, before loading LSP configuration. */
+export async function ensurePreloadedPluginRoots(cwd: string): Promise<readonly ClaudePluginRoot[]> {
+	const scope = path.resolve(cwd);
+	const warmed = preloadedPluginRoots.get(scope);
+	if (warmed) return warmed;
+	return preloadPluginRoots(preloadHomes.get(scope) ?? os.homedir(), scope);
 }
 
 /**
  * Get pre-loaded plugin roots synchronously.
  * Returns empty array if preloadPluginRoots() hasn't been called.
  */
-export function getPreloadedPluginRoots(): readonly ClaudePluginRoot[] {
-	return preloadedPluginRoots;
+export function getPreloadedPluginRoots(cwd: string): readonly ClaudePluginRoot[] {
+	return preloadedPluginRoots.get(path.resolve(cwd)) ?? injectedPluginDirRoots;
 }
 
 // ── --plugin-dir injection ──────────────────────────────────────────────────
@@ -1577,11 +1610,9 @@ export async function injectPluginDirRoots(home: string, dirs: string[], cwd?: s
 
 	// Set injected roots BEFORE populating cache so listClaudePluginRoots merges them.
 	injectedPluginDirRoots = injected;
-	lastPreloadHome = home; // ensure cache-clear re-warm fires even when injectPluginDirRoots was the startup path
 	// Clear any stale cache entries (populated before injected roots were set).
 	pluginRootsCache.clear();
 	// Rebuild — cache miss triggers fresh load that includes both user+project registries
 	// and prepends injectedPluginDirRoots at highest precedence.
-	const { roots } = await listClaudePluginRoots(home, cwd);
-	preloadedPluginRoots = roots;
+	await preloadPluginRoots(home, cwd ?? getProjectDir());
 }

@@ -126,7 +126,7 @@ function rowLevel(raw: string | undefined, setting?: string): ConfiguredThinking
  *
  * Order, highest first:
  *  1. the session override — you asked for it just now, in this session
- *  2. an explicit `:level` on the role's selector — a deliberate per-role pin
+ *  2. an explicit `:level` on the model selector — a deliberate per-model pin
  *  3. the `defaultEffort` row for this model
  *  4. the `*` row (the profile-wide default)
  *  5. nothing set: the model's own default

@@ -4,18 +4,12 @@
 
 import { Markdown } from "@veyyon/tui";
 // Owners, not the `@veyyon/utils` barrel: 1 module against 74.
-import { formatCount } from "@veyyon/utils/format";
+import { formatCount, formatDuration } from "@veyyon/utils/format";
 import { highlightCode } from "../../../theme/highlight";
 import { getMarkdownTheme } from "../../../theme/markdown-theme";
 import type { Theme } from "../../../theme/theme-class";
-import {
-	formatDuration,
-	formatExpandHint,
-	formatMoreItems,
-	formatStatusIcon,
-	replaceTabs,
-	screenRows,
-} from "../../../tools/core/render-utils";
+import { formatExpandHint, formatMoreItems, replaceTabs, screenRows } from "../../../tools/core/render-utils";
+import { formatStatusIcon } from "../../../tools/core/tool-ui-status";
 import { renderOutputBlock } from "./output-block";
 import type { State } from "./types";
 

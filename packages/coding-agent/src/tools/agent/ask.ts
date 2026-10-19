@@ -38,7 +38,8 @@ import {
 } from "../../modes/terminal/components/chrome/modal-geometry";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import { vocalizer } from "../../speech/tts/vocalizer";
-import { type Theme, theme } from "../../theme/theme";
+import type { Theme } from "../../theme/theme";
+import { theme } from "../../theme/theme-binding";
 import type { ToolSession } from "..";
 import { ToolAbortError } from "../core/tool-errors";
 // Only the free-text label and the reserved-label predicate: the other two labels were declared here purely to

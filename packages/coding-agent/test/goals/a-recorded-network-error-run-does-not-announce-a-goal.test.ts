@@ -88,7 +88,7 @@ describe("the run that was reported: consecutive network_error turns, no goal", 
 			"todo.enabled": false,
 			"todo.reminders": false,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		const noteTool: AgentTool = {
 			name: "note",

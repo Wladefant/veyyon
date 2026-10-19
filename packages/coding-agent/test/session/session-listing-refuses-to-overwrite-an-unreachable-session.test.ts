@@ -36,7 +36,11 @@ import {
 	getUnreadableSessions,
 	recoverOrphanedBackups,
 } from "@veyyon/kernel/session/session-listing";
-import { FileSessionStorage, MemorySessionStorage } from "@veyyon/kernel/session/session-storage";
+import {
+	FileSessionStorage,
+	MemorySessionStorage,
+	type SessionStorageStat,
+} from "@veyyon/kernel/session/session-storage";
 import { type PathState, TempDir } from "@veyyon/utils";
 
 const LIVE = '{"type":"session","id":"live","keep":true}\n';
@@ -59,7 +63,7 @@ class ReachabilityStubStorage extends MemorySessionStorage {
 		return this.states.get(p) ?? super.existsStateSync(p);
 	}
 
-	override statSync(p: string): ReturnType<MemorySessionStorage["statSync"]> {
+	override statSync(p: string): SessionStorageStat {
 		const code = this.statFailures.get(p);
 		if (code !== undefined) {
 			const error = new Error(`${code}: forced stat failure for ${p}`) as Error & { code: string };

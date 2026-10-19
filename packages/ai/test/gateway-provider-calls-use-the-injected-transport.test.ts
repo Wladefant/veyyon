@@ -41,7 +41,7 @@ it("uses injected transport for native and translated, streaming and completed c
 	let injectedCalls = 0;
 	const gateway = startAuthGateway({
 		bind: "127.0.0.1:0",
-		bearerTokens: [],
+		bearerTokens: ["test-device"],
 		resolveModel: () => model,
 		storage: {
 			getApiKey: async () => "fake-key",
@@ -64,7 +64,7 @@ it("uses injected transport for native and translated, streaming and completed c
 					: { model: model.id, messages: [{ role: "user", content: "hello" }], stream };
 				const response = await fetch(`${gateway.url}${native ? "/v1/pi/stream" : "/v1/chat/completions"}`, {
 					method: "POST",
-					headers: { "content-type": "application/json" },
+					headers: { "content-type": "application/json", authorization: "Bearer test-device" },
 					body: JSON.stringify(body),
 					signal: AbortSignal.timeout(10000),
 				});

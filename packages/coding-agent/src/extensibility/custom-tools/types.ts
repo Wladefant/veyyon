@@ -38,7 +38,7 @@ import type { RecoveredRetryError } from "../shared-events";
 /** Alias for clarity */
 export type CustomToolUIContext = HookUIContext;
 
-// Re-export for backward compatibility
+// The argument and result types of `CustomToolAPI.exec`, exported with the rest of the custom-tool API.
 export type { ExecOptions, ExecResult } from "../../exec/exec";
 /** Re-export for custom tools to use in execute signature */
 export type { AgentToolResult, AgentToolUpdateCallback, ToolApproval, ToolApprovalDecision, ToolTier };
@@ -63,9 +63,12 @@ export interface CustomToolAPI {
 	cwd: string;
 	/** Execute a command */
 	exec(command: string, args: string[], options?: ExecOptions): Promise<ExecResult>;
-	/** UI methods for user interaction (select, confirm, input, notify, custom) */
+	/**
+	 * UI methods for user interaction (select, confirm, input, notify, terminal). The session replaces
+	 * this with the host's UI when the host installs its tool UI, so read it at call time.
+	 */
 	ui: CustomToolUIContext;
-	/** Whether UI is available (false in print/RPC mode) */
+	/** Whether a host UI is installed (false in print mode and in an RPC session without a UI client) */
 	hasUI: boolean;
 	/** File logger for error/warning/debug messages */
 	logger: typeof PiLogger;

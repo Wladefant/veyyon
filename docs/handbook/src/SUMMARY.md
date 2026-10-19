@@ -77,7 +77,7 @@
 - [Session branching](./features/branching.md)
 - [Memory](./features/memory.md)
 - [Profiles](./features/profiles.md)
-  - [Roles and profiles](./using/roles-and-profiles.md)
+  - [Models, helpers, and profiles](./using/roles-and-profiles.md)
   - [Personalities](./features/personalities.md)
 - [Speech](./features/speech.md)
 - [Export and import](./features/export-import.md)
@@ -140,7 +140,7 @@
   - [Context files](./context/context-files.md)
   - [Goal state and long sessions](./context/goal-state.md)
   - [Compaction and project memory](./context/compaction-memory.md)
-- [Role policy](./router/role-routing.md)
+- [Model policy](./router/role-routing.md)
 - [Observability](./observability/overview.md)
 
 # Troubleshooting

@@ -332,6 +332,11 @@ describe("settings migrations are fixed points", () => {
 			serviceTier: "flex",
 			serviceTierSubagent: "openai-only",
 			cycleOrder: ["default", "plan"],
+			modelTags: { fast: { name: "Fast" } },
+			modelRoles: { default: "@smol:high", smol: "p/small", slow: "p/large", custom: "p/other" },
+			agent: { model: "@slow", agents: { scout: { model: ["@smol", "p/backup"] } } },
+			enabledModels: ["@custom", "p/*"],
+			retry: { fallbackChains: { smol: ["p/x"], default: ["@slow"] } },
 			inlineToolDescriptors: true,
 			snapcompact: { archive: true },
 			ask: { timeout: 120_000 },
@@ -353,5 +358,8 @@ describe("settings migrations are fixed points", () => {
 		expect(once.steeringMode).toBe("steer");
 		expect((once.memory as Record<string, unknown>).backend).toBe("local");
 		expect(once.somethingFromTheFuture).toEqual({ nested: [1, 2, 3] });
+		expect(once.defaultModel).toBe("p/small:high");
+		expect(once.modelRoles).toBeUndefined();
+		expect(once.cycleOrder).toBeUndefined();
 	});
 });

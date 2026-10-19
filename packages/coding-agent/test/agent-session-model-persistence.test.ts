@@ -97,7 +97,7 @@ describe("AgentSession model persistence", () => {
 	async function createSession(options?: {
 		initialModel?: Model<Api>;
 		selectInitialModel?: (availableModels: Model<Api>[]) => Model<Api>;
-		modelRoles?: Record<string, string>;
+		defaultModel?: string;
 		persist?: boolean;
 	}): Promise<{ modelRegistry: ModelRegistry; settings: Settings; session: AgentSession }> {
 		const modelRegistry = sharedModelRegistry;
@@ -116,15 +116,7 @@ describe("AgentSession model persistence", () => {
 		});
 
 		sessionSettings = Settings.isolated();
-		const modelRoles = options?.modelRoles;
-		if (modelRoles) {
-			for (const role in modelRoles) {
-				const modelRoleValue = modelRoles[role];
-				if (modelRoleValue !== undefined) {
-					sessionSettings.setModelRole(role, modelRoleValue);
-				}
-			}
-		}
+		if (options?.defaultModel) sessionSettings.setDefaultModel(options.defaultModel);
 		session = new AgentSession({
 			agent,
 			sessionManager: options?.persist
@@ -168,28 +160,46 @@ describe("AgentSession model persistence", () => {
 
 		const created = await createSession({
 			initialModel: defaultModel,
-			modelRoles: { default: defaultRoleValue },
+			defaultModel: defaultRoleValue,
 		});
 
 		await created.session.setModel(nextModel);
 
 		expect(created.session.model?.id).toBe(nextModel.id);
-		expect(created.settings.getModelRole("default")).toBe(defaultRoleValue);
+		expect(created.settings.get("defaultModel")).toBe(defaultRoleValue);
 	});
 
-	it("persists the default role when explicitly requested", async () => {
+	it("persists the default model when explicitly requested", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
 		const nextModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
 
 		const created = await createSession({
 			initialModel: defaultModel,
-			modelRoles: { default: modelValue(defaultModel) },
+			defaultModel: modelValue(defaultModel),
 		});
 
 		await created.session.setModel(nextModel, "default", { persist: true });
 
 		expect(created.session.model?.id).toBe(nextModel.id);
-		expect(created.settings.getModelRole("default")).toBe(modelValue(nextModel));
+		expect(created.settings.get("defaultModel")).toBe(modelValue(nextModel));
+	});
+
+	it("a persisted switch under a --model launch is the effective default for the rest of the run", async () => {
+		const launchModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const nextModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const created = await createSession({ initialModel: launchModel });
+		// `--model` is a runtime override, which outranks the profile value.
+		created.settings.override("defaultModel", modelValue(launchModel));
+
+		await created.session.setModel(nextModel, "default", { persist: true });
+
+		expect(created.settings.get("defaultModel")).toBe(modelValue(nextModel));
+		expect(created.settings.layerValue("runtime", ["defaultModel"])).toBe(modelValue(nextModel));
+
+		// Clearing the default drops the launch override with the profile value.
+		created.settings.setDefaultModel(undefined);
+		expect(created.settings.layerValue("runtime", ["defaultModel"])).toBeUndefined();
+		expect(created.settings.get("defaultModel")).not.toBe(modelValue(nextModel));
 	});
 
 	it("switches the active model even when the live context is over the target window", async () => {
@@ -198,7 +208,7 @@ describe("AgentSession model persistence", () => {
 
 		const created = await createSession({
 			initialModel: defaultModel,
-			modelRoles: { default: modelValue(defaultModel) },
+			defaultModel: modelValue(defaultModel),
 		});
 
 		const targetWindow = nextModel.contextWindow ?? 0;
@@ -212,57 +222,10 @@ describe("AgentSession model persistence", () => {
 
 		expect(result).toEqual({ switched: true });
 		expect(created.session.model?.id).toBe(nextModel.id);
-		expect(created.settings.getModelRole("default")).toBe(modelValue(nextModel));
+		expect(created.settings.get("defaultModel")).toBe(modelValue(nextModel));
 	});
 
-	it("cycles role models without rewriting configured roles", async () => {
-		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
-		const slowModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
-		const defaultRoleValue = modelValue(defaultModel);
-		const slowRoleValue = `${modelValue(slowModel)}:high`;
-
-		const created = await createSession({
-			initialModel: defaultModel,
-			modelRoles: {
-				default: defaultRoleValue,
-				slow: slowRoleValue,
-			},
-		});
-
-		const result = await created.session.cycleRoleModels(["default", "slow"]);
-
-		expect(result?.role).toBe("slow");
-		expect(result?.model.id).toBe(slowModel.id);
-		expect(created.session.model?.id).toBe(slowModel.id);
-		expect(created.settings.getModelRole("default")).toBe(defaultRoleValue);
-		expect(created.settings.getModelRole("slow")).toBe(slowRoleValue);
-	});
-
-	it("cycles role models backward from the current role", async () => {
-		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
-		const slowModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
-		const defaultRoleValue = modelValue(defaultModel);
-		const slowRoleValue = modelValue(slowModel);
-
-		const created = await createSession({
-			initialModel: defaultModel,
-			modelRoles: {
-				default: defaultRoleValue,
-				slow: slowRoleValue,
-			},
-		});
-
-		const forward = await created.session.cycleRoleModels(["default", "slow"], "forward");
-		const backward = await created.session.cycleRoleModels(["default", "slow"], "backward");
-
-		expect(forward?.role).toBe("slow");
-		expect(backward?.role).toBe("default");
-		expect(created.session.model?.id).toBe(defaultModel.id);
-		expect(created.settings.getModelRole("default")).toBe(defaultRoleValue);
-		expect(created.settings.getModelRole("slow")).toBe(slowRoleValue);
-	});
-
-	it("cycles available models without persisting the default role", async () => {
+	it("cycles available models without persisting the default model", async () => {
 		const created = await createSession({
 			selectInitialModel: availableModels => {
 				if (availableModels.length <= 1 || !availableModels[0]) {
@@ -274,7 +237,7 @@ describe("AgentSession model persistence", () => {
 		const initialModel = created.session.model;
 		if (!initialModel) throw new Error("Expected initial model to be set");
 		const defaultRoleValue = modelValue(initialModel);
-		created.settings.setModelRole("default", defaultRoleValue);
+		created.settings.setDefaultModel(defaultRoleValue);
 
 		const result = await created.session.cycleModel();
 
@@ -283,7 +246,7 @@ describe("AgentSession model persistence", () => {
 		const activeModel = created.session.model;
 		if (!activeModel) throw new Error("Expected active model after cycleModel");
 		expect(modelValue(activeModel)).toBe(modelValue(result.model));
-		expect(created.settings.getModelRole("default")).toBe(defaultRoleValue);
+		expect(created.settings.get("defaultModel")).toBe(defaultRoleValue);
 	});
 
 	it("restores the last active role model when switching sessions", async () => {
@@ -296,7 +259,7 @@ describe("AgentSession model persistence", () => {
 
 		const created = await createSession({
 			initialModel: defaultModel,
-			modelRoles: { default: defaultRoleValue, smol: smolRoleValue },
+			defaultModel: defaultRoleValue,
 			persist: true,
 		});
 
@@ -324,7 +287,7 @@ describe("AgentSession model persistence", () => {
 
 		const created = await createSession({
 			initialModel: previousModel,
-			modelRoles: { default: defaultRoleValue },
+			defaultModel: defaultRoleValue,
 			persist: true,
 		});
 
@@ -344,7 +307,7 @@ describe("AgentSession model persistence", () => {
 
 		const created = await createSession({
 			initialModel: fallbackModel,
-			modelRoles: { default: defaultRoleValue },
+			defaultModel: defaultRoleValue,
 			persist: true,
 		});
 
@@ -358,7 +321,7 @@ describe("AgentSession model persistence", () => {
 		const defaultRoleValue = modelValue(defaultModel);
 		const targetSessionFile = await writeRoleModelSession(defaultRoleValue, "anthropic/not-loaded-anymore");
 		const settings = Settings.isolated();
-		settings.setModelRole("default", modelValue(settingsFallbackModel));
+		settings.setDefaultModel(modelValue(settingsFallbackModel));
 
 		const result = await createStartupResumeSession(targetSessionFile, settings);
 
@@ -375,7 +338,7 @@ describe("AgentSession model persistence", () => {
 			EPHEMERAL_MODEL_CHANGE_ROLE,
 		);
 		const settings = Settings.isolated();
-		settings.setModelRole("default", modelValue(fallbackModel));
+		settings.setDefaultModel(modelValue(fallbackModel));
 
 		const result = await createStartupResumeSession(targetSessionFile, settings);
 
@@ -390,7 +353,7 @@ describe("AgentSession model persistence", () => {
 
 		const created = await createSession({
 			initialModel: defaultModel,
-			modelRoles: { default: defaultRoleValue },
+			defaultModel: defaultRoleValue,
 			persist: true,
 		});
 
@@ -404,14 +367,14 @@ describe("AgentSession model persistence", () => {
 		const defaultRoleValue = modelValue(defaultModel);
 		const targetSessionFile = await writeRoleModelSession(defaultRoleValue, modelValue(temporaryModel), "temporary");
 		const settings = Settings.isolated();
-		settings.setModelRole("default", defaultRoleValue);
+		settings.setDefaultModel(defaultRoleValue);
 
 		const result = await createStartupResumeSession(targetSessionFile, settings);
 
 		expect(result.session.model?.id).toBe(temporaryModel.id);
 	});
 
-	it("activates auto thinking on startup resume when modelRoles.default carries an explicit :auto suffix", async () => {
+	it("activates auto thinking on startup resume when defaultModel carries an explicit :auto suffix", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
 		const targetSessionFile = await writeRoleModelSession(
 			modelValue(defaultModel),
@@ -419,7 +382,7 @@ describe("AgentSession model persistence", () => {
 			"default",
 		);
 		const settings = Settings.isolated();
-		settings.setModelRole("default", `${modelValue(defaultModel)}:auto`);
+		settings.setDefaultModel(`${modelValue(defaultModel)}:auto`);
 
 		const result = await createStartupResumeSession(targetSessionFile, settings);
 
@@ -488,7 +451,7 @@ describe("AgentSession model persistence", () => {
 	it("marks a first user-message process-exit tail aborted with the selected model", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
 		const settings = Settings.isolated();
-		settings.setModelRole("default", modelValue(defaultModel));
+		settings.setDefaultModel(modelValue(defaultModel));
 		const sessionManager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), "interrupted-user"));
 		sessionManager.appendModelChange(modelValue(defaultModel));
 		sessionManager.appendMessage({ role: "user", content: "inspect state", timestamp: Date.now() });
@@ -602,7 +565,7 @@ describe("AgentSession model persistence", () => {
 		).toEqual(["anthropic/claude-sonnet-4-5"]);
 	});
 
-	it("lists a named role model before the default fallback", () => {
+	it("lists a model recorded under a non-default slot before the default fallback", () => {
 		expect(
 			getRestorableSessionModels(
 				{

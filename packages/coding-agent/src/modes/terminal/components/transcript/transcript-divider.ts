@@ -1,4 +1,4 @@
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { COMPOSER_INSET_COLS } from "../composer/composer-chrome";
 
 /**

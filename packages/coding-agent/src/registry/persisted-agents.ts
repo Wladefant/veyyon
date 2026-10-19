@@ -15,8 +15,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { logger } from "@veyyon/utils";
-import { advisorTranscriptSlug, isSessionFileName, SESSION_BACKUP_EXTENSION } from "@veyyon/utils/session-file";
-import { isAdvisorTranscriptName } from "../advisor";
+import {
+	advisorTranscriptSlug,
+	isAdvisorTranscriptName,
+	isSessionFileName,
+	SESSION_BACKUP_EXTENSION,
+} from "@veyyon/utils/session-file";
 import { type AgentRegistry, MAIN_AGENT_ID } from "./agent-registry";
 
 /**

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "bun:test";
+import { describe, expect, it, type Mock, vi } from "bun:test";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { executeBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/builtin-registry";
 import { TempDir } from "@veyyon/utils";
@@ -37,7 +37,7 @@ function createRuntime(current: string) {
 	};
 }
 
-function lastStatus(showStatus: ReturnType<typeof vi.fn>): string {
+function lastStatus(showStatus: Mock<(message: string) => void>): string {
 	const calls = showStatus.mock.calls;
 	expect(calls.length).toBeGreaterThan(0);
 	return String(calls[calls.length - 1][0]);

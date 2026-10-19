@@ -2,7 +2,7 @@ import { GITLAB_SAAS_URL } from "@veyyon/catalog/provider-endpoints";
 import * as AIError from "../../error";
 import type { FetchImpl } from "../../types";
 import { OAuthCallbackFlow } from "./callback-server";
-import { type GitLabTokenResponse, mapGitLabTokenResponse } from "./gitlab-token";
+import { mapGitLabTokenResponse } from "./gitlab-token";
 import { generatePKCE, type PKCEPair } from "./pkce";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "./types";
 
@@ -63,7 +63,7 @@ class GitLabDuoWorkflowOAuthFlow extends OAuthCallbackFlow {
 			);
 		}
 
-		return mapGitLabTokenResponse((await response.json()) as GitLabTokenResponse, "gitlab-duo-workflow");
+		return mapGitLabTokenResponse(await response.json(), "gitlab-duo-workflow");
 	}
 }
 
@@ -76,6 +76,7 @@ export async function loginGitLabDuoWorkflow(callbacks: OAuthLoginCallbacks): Pr
 export async function refreshGitLabDuoWorkflowToken(
 	credentials: OAuthCredentials,
 	fetchImpl: FetchImpl = fetch,
+	signal?: AbortSignal,
 ): Promise<OAuthCredentials> {
 	const response = await fetchImpl(`${GITLAB_SAAS_URL}/oauth/token`, {
 		method: "POST",
@@ -86,6 +87,7 @@ export async function refreshGitLabDuoWorkflowToken(
 			grant_type: "refresh_token",
 			refresh_token: credentials.refresh,
 		}).toString(),
+		signal,
 	});
 
 	if (!response.ok) {
@@ -99,5 +101,5 @@ export async function refreshGitLabDuoWorkflowToken(
 		);
 	}
 
-	return mapGitLabTokenResponse((await response.json()) as GitLabTokenResponse, "gitlab-duo-workflow");
+	return mapGitLabTokenResponse(await response.json(), "gitlab-duo-workflow");
 }

@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, logger } from "@veyyon/utils";
 import { getAgentDir } from "@veyyon/utils/dirs";
-import { smitheryTimeoutSignal } from "./smithery-http";
+import { withSmitheryDeadline } from "./smithery-http";
 
 const SMITHERY_AUTH_FILENAME = "smithery.json";
 const SMITHERY_URL = process.env.SMITHERY_URL || "https://smithery.ai";
@@ -12,7 +12,7 @@ type SmitheryCliAuthSession = {
 	authUrl: string;
 };
 
-type SmitheryCliPollResponse = {
+export type SmitheryCliPollResponse = {
 	status: "pending" | "success" | "error";
 	apiKey?: string;
 	message?: string;
@@ -36,17 +36,16 @@ export function getSmitheryLoginUrl(): string {
 	return SMITHERY_URL;
 }
 
-export async function createSmitheryCliAuthSession(): Promise<SmitheryCliAuthSession> {
-	const response = await fetch(`${SMITHERY_URL}/api/auth/cli/session`, {
-		method: "POST",
-		signal: smitheryTimeoutSignal(),
+export function createSmitheryCliAuthSession(): Promise<SmitheryCliAuthSession> {
+	return withSmitheryDeadline(async signal => {
+		const response = await fetch(`${SMITHERY_URL}/api/auth/cli/session`, { method: "POST", signal });
+		if (!response.ok) {
+			throw new Error(
+				`Smithery would not start a login session: HTTP ${response.status} ${response.statusText} from ${SMITHERY_URL}/api/auth/cli/session. Fix: check that ${SMITHERY_URL} is reachable from this network, then run \`/mcp smithery-login\` again. If you already hold a key, set \`SMITHERY_API_KEY\` in the environment instead and skip the login.`,
+			);
+		}
+		return (await response.json()) as SmitheryCliAuthSession;
 	});
-	if (!response.ok) {
-		throw new Error(
-			`Smithery would not start a login session: HTTP ${response.status} ${response.statusText} from ${SMITHERY_URL}/api/auth/cli/session. Fix: check that ${SMITHERY_URL} is reachable from this network, then run \`/mcp smithery-login\` again. If you already hold a key, set \`SMITHERY_API_KEY\` in the environment instead and skip the login.`,
-		);
-	}
-	return (await response.json()) as SmitheryCliAuthSession;
 }
 
 export async function pollSmitheryCliAuthSession(
