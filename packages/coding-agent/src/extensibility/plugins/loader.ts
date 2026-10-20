@@ -276,9 +276,8 @@ async function loadEnabledPlugins(
 
 /**
  * The project plugins a trusted project registry names: one per enabled `installPath` entry. The approval hashes the
- * registry file, so it fixes which directories load. It does not hash the files inside those directories, which are
- * read as before. Project scope never reads the project directory's own `package.json`, lockfile or `node_modules`:
- * those files are outside the registry the approval covers.
+ * registry file, so it fixes which directories load. It does not hash plugin content inside those directories.
+ * Project overrides are read separately from `.veyyon/plugin-overrides.json`; their bytes are not part of approval.
  */
 async function collectRegistryNamedPlugins(
 	registry: { path: string; content: string },

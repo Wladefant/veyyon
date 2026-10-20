@@ -1339,10 +1339,14 @@ export function pluginsRootFor(agentDir: string): string | undefined {
  */
 export async function projectTrustKey(cwd: string): Promise<string> {
 	const registry = await resolveActiveProjectRegistryPath(cwd);
-	if (!registry) return canonicalProjectRoot((await findRepoRoot(cwd)) ?? cwd);
+	return projectTrustKeyForRegistry(cwd, registry);
+}
+
+function projectTrustKeyForRegistry(cwd: string, registry: string | null): Promise<string> {
+	if (!registry) return findRepoRoot(cwd).then(root => canonicalProjectRoot(root ?? cwd));
 	// `<owner>/.veyyon/plugins/installed_plugins.json`: three levels up is the owner.
 	const owner = path.dirname(path.dirname(path.dirname(registry)));
-	return canonicalProjectRoot((await findRepoRoot(owner)) ?? owner);
+	return findRepoRoot(owner).then(root => canonicalProjectRoot(root ?? owner));
 }
 
 /** What the project plugin gate decided for one `cwd`. `state` names the outcome, so a cache keyed on it cannot outlive the decision. */
@@ -1357,8 +1361,8 @@ const NO_PROJECT_PLUGIN_GATE: ProjectPluginGate = { allowed: true, registry: nul
  * Gate the project plugin directory `cwd` resolves to. Every consumer of that directory calls this before reading
  * anything from it: the Claude-plugin roots below, and the plugin loader's project route. One decision governs both,
  * keyed by the registry owner's trust root. The approval covers the registry file's exact bytes, and through them the
- * `installPath` entries it names. Nothing else in the project directory (its `package.json`, lockfile or
- * `node_modules`) is hashed, so project scope reads none of it.
+ * `installPath` entries it names. Plugin content in those directories is not hashed. The loader reads
+ * `.veyyon/plugin-overrides.json` separately; those bytes are not part of approval.
  *
  * `userPluginsRoot` is the operator's own profile directory. A project that resolves to it has no project registry,
  * and that file is not gated.
@@ -1378,7 +1382,7 @@ export async function gateProjectPluginRegistry(
 	const pluginDir = path.dirname(registryPath);
 	if (path.resolve(pluginDir) === path.resolve(userPluginsRoot)) return NO_PROJECT_PLUGIN_GATE;
 
-	const canonicalRoot = await projectTrustKey(cwd);
+	const canonicalRoot = await projectTrustKeyForRegistry(cwd, registryPath);
 	const refusalPrefix = `plugins: ${getConfigDirName()}/plugins/installed_plugins.json was not loaded because`;
 
 	let realDir: string;
