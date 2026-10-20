@@ -15,6 +15,7 @@ import {
 	isMissingPath,
 	logger,
 	parseFrontmatter,
+	readFileText,
 	tryParseJson,
 } from "@veyyon/utils";
 import {
@@ -1531,7 +1532,7 @@ export async function injectPluginDirRoots(home: string, dirs: string[], cwd?: s
 		let pluginName = path.basename(resolved);
 		const manifestPath = path.join(resolved, ".claude-plugin", "plugin.json");
 		try {
-			const content = await Bun.file(manifestPath).text();
+			const content = await readFileText(manifestPath);
 			const manifest = JSON.parse(content);
 			if (typeof manifest.name === "string" && manifest.name) {
 				pluginName = manifest.name;

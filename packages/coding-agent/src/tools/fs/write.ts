@@ -16,6 +16,7 @@ import {
 	isRecord,
 	lazy,
 	prompt,
+	readFileText,
 	untilAborted,
 	urlScheme,
 } from "@veyyon/utils";
@@ -581,7 +582,7 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 		const entries = new Map<string, ArchiveMemberContent>();
 		if (resolvedArchivePath.exists) {
 			try {
-				const existing = await readArchiveEntries({ bytes: await Bun.file(finalPath).bytes(), format });
+				const existing = await readArchiveEntries({ bytes: await fs.readFile(finalPath), format });
 				for (const [entryPath, data] of existing) {
 					entries.set(entryPath, data);
 				}
@@ -650,7 +651,7 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 		}
 
 		const expanded = expandContentTokens(replacementContent, entry);
-		const originalText = await Bun.file(absolutePath).text();
+		const originalText = await readFileText(absolutePath);
 		const splice = spliceConflict(originalText, entry, expanded);
 		const newContent = splice.text;
 
@@ -790,7 +791,7 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 			const staleEntries: ConflictEntry[] = [];
 			let failure: string | undefined;
 			try {
-				text = await Bun.file(absolutePath).text();
+				text = await readFileText(absolutePath);
 			} catch (error) {
 				failedFiles.push({
 					displayPath: sample.displayPath,
@@ -1015,7 +1016,7 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 				};
 			}
 
-			const diagnostics = await this.#writethrough(absolutePath, content, signal, undefined, batchRequest, dst =>
+			const diagnostics = await this.#writethrough(absolutePath, content, signal, batchRequest, dst =>
 				this.#deferredDiagnostics?.begin(dst),
 			);
 			invalidateFsScanAfterWrite(absolutePath);

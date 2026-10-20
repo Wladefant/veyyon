@@ -13,7 +13,9 @@ Bun appears in 5023 files: `bun:test` in 4564, `Bun.env` in 1289, `Bun.file` in 
 - A drive-by rewrite of working code is churn and a merge conflict against whoever is editing that
   file.
 - The test runner stays on `bun:test`. Moving off it is its own project with its own decision.
-- Nothing here is a deprecation. Existing `Bun.file`, `Bun.write` and `Bun.env` calls are correct.
+- Nothing here is a deprecation. Existing `Bun.file`, `Bun.write` and `Bun.env` calls are correct,
+  except an open of a file another process may hold a lease on; see
+  [Files another process may hold open](#files-another-process-may-hold-open).
 
 Two things the rule does not license:
 
@@ -58,6 +60,24 @@ try {
 ```
 
 An existence check followed by a read is two syscalls and a race between them.
+
+## Files another process may hold open
+
+`Bun.file().text()`, `.bytes()`, `.json()`, `.arrayBuffer()`, `.slice()` reads and `Bun.write` open
+with `O_NONBLOCK`. An open of a file under a conflicting lease fails at once with
+`EAGAIN: resource temporarily unavailable`; a `node:fs` open waits until the holder releases the
+lease. The kernel NFS server holds a lease on every file it has delegated to a client, so on an
+exported tree a Bun read fails while another machine writes the file.
+
+Read and write a workspace file through `node:fs` or `@veyyon/utils/fs-io`: `readFileText` decodes
+like `Bun.file().text()`, `readFileRange` slices like `Bun.file().slice().bytes()`, and
+`writeFileCreatingParents` creates parents like `Bun.write`. `Bun.file(path)` stays correct for
+`.exists()`, `.stat()`, `.size`, `.type`, `.lastModified`, `.name`, `.delete()` and `.unlink()`,
+which do not open the file.
+
+`scripts/a-file-open-waits-out-a-lease.test.ts` freezes the remaining Bun opens in shipped source at
+`scripts/bun-nonblocking-open-baseline.json`, and fails on a new one or on a removed one the baseline
+still counts.
 
 ## Streams
 

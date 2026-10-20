@@ -120,7 +120,7 @@ export async function executeReplaceSingle(
 	if (await routeWriteThroughBridge(session, path, absolutePath, finalContent, signal)) {
 		// bridge handled the write; diagnostics not available via writethrough
 	} else {
-		diagnostics = await writethrough(absolutePath, finalContent, signal, Bun.file(absolutePath), batchRequest, dst =>
+		diagnostics = await writethrough(absolutePath, finalContent, signal, batchRequest, dst =>
 			dst === absolutePath ? beginDeferredDiagnosticsForPath(absolutePath) : undefined,
 		);
 		invalidateFsScanAfterWrite(absolutePath);

@@ -10,7 +10,14 @@ import path from "node:path";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { ImageContent } from "@veyyon/ai";
 import { formatHashlineHeader, formatNumberedLines, type SnapshotStore } from "@veyyon/hashline";
-import { formatAge, formatBytes, isProbablyBinary, pathExistsQuietly, readImageMetadata } from "@veyyon/utils";
+import {
+	formatAge,
+	formatBytes,
+	isProbablyBinary,
+	pathExistsQuietly,
+	readFileText,
+	readImageMetadata,
+} from "@veyyon/utils";
 import { canonicalSnapshotKey } from "../edit/file-snapshot-store";
 import { normalizeToLF } from "../edit/normalize";
 import type { FileMentionMessage } from "../session/messages";
@@ -283,7 +290,7 @@ export async function generateFileMentionMessages(
 				continue;
 			}
 
-			const content = await Bun.file(absolutePath).text();
+			const content = await readFileText(absolutePath);
 			const snapshotStore = options?.useHashLines ? options.snapshotStore : undefined;
 			const normalized = snapshotStore ? normalizeToLF(content) : content;
 			let { output, lineCount } = buildTextOutput(normalized, maxBytes);

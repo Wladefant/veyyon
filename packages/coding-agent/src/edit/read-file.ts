@@ -1,17 +1,18 @@
 /**
  * Shared file-read helper for edit-mode utilities.
  *
- * Reads a file via Bun and rethrows ENOENT as a user-facing "File not found"
- * error referencing the display path.
+ * Reads a file through `node:fs`, which waits out a lease another process holds on it, and rethrows ENOENT
+ * as a user-facing "File not found" error referencing the display path.
  */
+import * as fs from "node:fs/promises";
 import { hasUtf8Bom } from "@veyyon/hashline";
-import { isEnoent } from "@veyyon/utils";
+import { isEnoent, readFileText } from "@veyyon/utils";
 import { isNotebookPath, readEditableNotebookText, serializeEditedNotebookText } from "./notebook";
 
 export async function readEditFileText(absolutePath: string, path: string): Promise<string> {
 	try {
 		if (isNotebookPath(absolutePath)) return await readEditableNotebookText(absolutePath, path);
-		return await Bun.file(absolutePath).text();
+		return await readFileText(absolutePath);
 	} catch (error) {
 		if (isEnoent(error)) {
 			throw new Error(`File not found: ${path}`);
@@ -23,7 +24,7 @@ export async function readEditFileText(absolutePath: string, path: string): Prom
 /**
  * Read an editable file, separating any leading UTF-8 BOM from the content.
  *
- * `readEditFileText` decodes through a text reader (`Bun.file().text()`), which
+ * `readEditFileText` decodes through a text reader (`readFileText`), which
  * silently drops a leading UTF-8 BOM, so a plain `stripBom` on its result never
  * sees the BOM and an edit would rewrite the file without it. This reads the raw
  * bytes, detects the BOM there, and returns the BOM plus BOM-free content so an
@@ -39,8 +40,8 @@ export async function readEditFileTextWithBom(
 		return { bom: "", content: await readEditFileText(absolutePath, path) };
 	}
 	try {
-		const bytes = await Bun.file(absolutePath).bytes();
-		// TextDecoder (default) consumes a leading BOM, matching Bun.file().text();
+		const bytes = await fs.readFile(absolutePath);
+		// TextDecoder (default) consumes a leading BOM, matching readFileText;
 		// hasUtf8Bom sniffs the raw bytes so the dropped BOM is recovered.
 		return { bom: hasUtf8Bom(bytes) ? "﻿" : "", content: new TextDecoder("utf-8").decode(bytes) };
 	} catch (error) {

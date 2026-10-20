@@ -2,8 +2,9 @@
  * Biome CLI-based linter client.
  * Uses Biome's CLI with JSON output instead of LSP (which has stale diagnostics issues).
  */
+import * as fs from "node:fs/promises";
 import path from "node:path";
-import { errorMessage, logger, readPipeText } from "@veyyon/utils";
+import { errorMessage, logger, readFileText, readPipeText } from "@veyyon/utils";
 import { adoptIntoPrimarySessionCpuBudget } from "../../session/cpu-limit";
 import type { Diagnostic, DiagnosticSeverity, LinterClient, ServerConfig } from "../types";
 
@@ -144,14 +145,14 @@ export class BiomeClient implements LinterClient {
 
 	async format(filePath: string, content: string): Promise<string> {
 		// Write content to file first
-		await Bun.write(filePath, content);
+		await fs.writeFile(filePath, content);
 
 		// Run biome format --write
 		const result = await runBiome(["format", "--write", filePath], this.cwd, this.config.resolvedCommand);
 
 		if (result.success) {
 			// Read back formatted content
-			return await Bun.file(filePath).text();
+			return await readFileText(filePath);
 		}
 
 		// Format failed, return original

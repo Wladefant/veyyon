@@ -400,6 +400,7 @@ export const repoScriptTests = [
 	"scripts/ci-test-real-data-guard.test.ts",
 	"scripts/ci-test-concurrency-default.test.ts",
 	"scripts/a-failing-test-chunk-does-not-stop-the-sequential-run.test.ts",
+	"scripts/a-file-open-waits-out-a-lease.test.ts",
 	"scripts/release-binaries-bytecode.test.ts",
 	"scripts/fix-changelogs.test.ts",
 	"scripts/require-changelog.test.ts",

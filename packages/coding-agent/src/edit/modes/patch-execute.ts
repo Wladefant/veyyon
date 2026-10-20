@@ -57,7 +57,6 @@ export interface ExecutePatchSingleOptions {
 
 class LspFileSystem implements FileSystem {
 	#lastDiagnostics: FileDiagnosticsResult | undefined;
-	#fileCache: Record<string, Bun.BunFile> = {};
 
 	constructor(
 		private readonly session: ToolSession,
@@ -68,17 +67,8 @@ class LspFileSystem implements FileSystem {
 		private readonly deferredForPath?: (path: string) => WritethroughDeferredHandle,
 	) {}
 
-	#getFile(path: string): Bun.BunFile {
-		if (this.#fileCache[path]) {
-			return this.#fileCache[path];
-		}
-		const file = Bun.file(path);
-		this.#fileCache[path] = file;
-		return file;
-	}
-
 	async exists(path: string): Promise<boolean> {
-		return this.#getFile(path).exists();
+		return Bun.file(path).exists();
 	}
 
 	async read(path: string): Promise<string> {
@@ -98,13 +88,11 @@ class LspFileSystem implements FileSystem {
 			return;
 		}
 
-		const file = this.#getFile(path);
 		const deferredForPath = this.deferredForPath;
 		const result = await this.writethrough(
 			path,
 			finalContent,
 			this.signal,
-			file,
 			this.batchRequest,
 			deferredForPath ? (dst: string) => deferredForPath(dst) : undefined,
 		);
@@ -114,7 +102,7 @@ class LspFileSystem implements FileSystem {
 	}
 
 	async delete(path: string): Promise<void> {
-		await this.#getFile(path).unlink();
+		await fs.promises.unlink(path);
 		if ((this.session.enableLsp ?? true) && this.session.settings.get("lsp.enabled")) {
 			await notifyWorkspaceWatchedFiles(
 				this.session.cwd,

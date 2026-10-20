@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult } from "@veyyon/agent-core";
@@ -643,7 +644,7 @@ async function findImageApiKey(
 async function loadImageFromPath(imagePath: string, cwd: string): Promise<InlineImageData> {
 	const resolved = resolveReadPath(imagePath, cwd);
 	try {
-		const buffer = await Bun.file(resolved).bytes();
+		const buffer = await fs.readFile(resolved);
 		if (buffer.length > MAX_IMAGE_SIZE) {
 			throw new Error(`Image file too large: ${imagePath}`);
 		}

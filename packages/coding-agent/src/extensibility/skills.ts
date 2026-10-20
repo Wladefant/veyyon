@@ -1,5 +1,5 @@
 import * as fs from "node:fs/promises";
-import { getProjectDir, prompt } from "@veyyon/utils";
+import { getProjectDir, prompt, readFileText } from "@veyyon/utils";
 import {
 	isValidManagedSkillName,
 	MANAGED_SKILLS_PROVIDER_ID,
@@ -408,7 +408,7 @@ export async function buildSkillPromptMessage(
 	args: string,
 	invocation: SkillInvocationKind = "user",
 ): Promise<BuiltSkillPromptMessage> {
-	const content = await Bun.file(skill.filePath).text();
+	const content = await readFileText(skill.filePath);
 	const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
 	const trimmedArgs = args.trim();
 	let message: string;

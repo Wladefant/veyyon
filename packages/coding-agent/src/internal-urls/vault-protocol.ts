@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { formatCount } from "@veyyon/utils/format";
 import { isEnoent } from "@veyyon/utils/fs-error";
+import { readFileText, writeFileCreatingParents } from "@veyyon/utils/fs-io";
 import { readPipeText } from "@veyyon/utils/stream";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
@@ -886,7 +887,7 @@ export class VaultProtocolHandler implements ProtocolHandler {
 			throw new Error(`vault:// URL must resolve to a file or directory: ${parsed.url}`);
 		}
 
-		const content = await Bun.file(realTargetPath).text();
+		const content = await readFileText(realTargetPath);
 		return {
 			url: parsed.url,
 			content,
@@ -918,7 +919,7 @@ export class VaultProtocolHandler implements ProtocolHandler {
 			const realParent = await fs.promises.realpath(parentDir);
 			ensureWithinRoot(realParent, root);
 		}
-		await Bun.write(targetPath, content);
+		await writeFileCreatingParents(targetPath, content);
 	}
 
 	async #runCli(

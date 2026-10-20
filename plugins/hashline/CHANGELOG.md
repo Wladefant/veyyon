@@ -8,6 +8,10 @@
 
 - `@veyyon/hashline` exports `unquotePath`, which strips one matching pair of surrounding quotes from a path; the section-header parser uses it instead of a private copy.
 
+### Fixed
+
+- `NodeFilesystem.readText` reads through `node:fs`, so a file another process holds a lease on is read once the lease breaks instead of failing with `EAGAIN`.
+
 ## [1.5.6] - 2026-10-13
 
 ### Changed

@@ -17,6 +17,7 @@ import {
 	logger,
 	looksLikeFilePath,
 	prompt,
+	readFileText,
 } from "@veyyon/utils";
 import { findConfigFile } from "./config";
 import {
@@ -252,7 +253,7 @@ export async function resolvePromptInput(input: string | undefined, description:
 	if (input.includes("\n")) return input;
 
 	try {
-		return await Bun.file(input).text();
+		return await readFileText(input);
 	} catch (error) {
 		if (/\s/.test(input) || !looksLikeFilePath(input, PROMPT_FILE_EXTENSIONS)) return input;
 		throw new Error(
