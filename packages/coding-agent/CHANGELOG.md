@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Mixed-build IRC sends distinguish unknown sessions from receivers without notice support and report loaded build identities ([#551](https://github.com/Wladefant/veyyon/issues/551)).
 
 - Argot teaches its handle table to a model named in `argot.encode.models` with a thinking selector (`provider/id:high`), drops or restores the table when a model switch crosses the allowlist, and records a deliberately untaught model as decode-only instead of logging an `ABSENT` handle table ([#648](https://github.com/Wladefant/veyyon/issues/648))
 - Closing a launch client during broker connection now rejects pending requests and destroys late sockets, so an empty broker can exit after its configured grace when all clients close ([Refs #517](https://github.com/Wladefant/veyyon/issues/517)).
