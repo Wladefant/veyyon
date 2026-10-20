@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import * as path from "node:path";
+import { promisify } from "node:util";
 import { buildPayloadDefines } from "./generate-docs-index";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
 import { createPrecompiledPromptPlugin } from "./precompiled-prompts";
+
+const execFileAsync = promisify(execFile);
 
 /** Native runtime dependencies always resolved from the on-demand install instead of embedded into compiled binaries. */
 export const COMPILED_EXTERNAL_DEPENDENCIES: readonly string[] = Object.freeze(["fastembed", "onnxruntime-node"]);
@@ -34,6 +38,8 @@ export interface CodingAgentCompileOptions {
 	readonly bytecode?: boolean;
 	/** Optional build metadata tag (e.g. "a19ab2a13-local"). Defaults to resolveBuildTag(). */
 	readonly buildTag?: string;
+	/** Optional full source commit SHA; defaults to resolveBuildSha(). */
+	readonly buildSha?: string;
 }
 
 /**
@@ -124,6 +130,26 @@ export async function resolveBuildTag(repoRoot: string): Promise<string | undefi
 	return "local";
 }
 
+/** Resolve the full commit SHA embedded in a new executable, or undefined when Git cannot identify it. */
+export async function resolveBuildSha(repoRoot: string): Promise<string | undefined> {
+	const configured = process.env.VEYYON_BUILD_SHA;
+	if (configured && /^[0-9a-f]{40}$/i.test(configured)) return configured.toLowerCase();
+	try {
+		const { stdout } = await execFileAsync("git", ["rev-parse", "--verify", "HEAD"], {
+			cwd: repoRoot,
+			encoding: "utf8",
+			timeout: 3_000,
+			windowsHide: true,
+			maxBuffer: 4096,
+		});
+		const out = stdout.trim();
+		if (/^[0-9a-f]{40}$/i.test(out)) return out.toLowerCase();
+	} catch {
+		// git unavailable
+	}
+	return undefined;
+}
+
 /**
  * Compile the coding-agent executable with its legacy Pi compatibility module
  * graph supplied by an in-memory build plugin rather than generated files.
@@ -144,6 +170,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 		Bun.env.BUN_NO_CODESIGN_MACHO_BINARY = "1";
 	}
 	const buildTag = options.buildTag ?? (await resolveBuildTag(options.repoRoot));
+	const buildSha = options.buildSha ?? (await resolveBuildSha(options.repoRoot));
 	try {
 		const output = await Bun.build({
 			entrypoints: [options.entrypoint],
@@ -154,6 +181,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 				"process.env.VEYYON_TINY_TRANSFORMERS_VERSION": JSON.stringify(options.transformersVersion),
 				...(await buildPayloadDefines()),
 				"process.env.VEYYON_BUILD_TAG": JSON.stringify(buildTag ?? ""),
+				"process.env.VEYYON_BUILD_SHA": JSON.stringify(buildSha ?? ""),
 				"process.env.VEYYON_BUILD_LOCAL": JSON.stringify(buildTag ? "true" : "false"),
 			},
 			// Whitespace and syntax minification are startup latency, not disk
