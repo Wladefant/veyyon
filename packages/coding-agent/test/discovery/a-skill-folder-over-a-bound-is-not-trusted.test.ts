@@ -1,30 +1,24 @@
 /**
  * WHY THIS SUITE EXISTS.
  *
- * Every discovery pass and every `veyyon trust` hashes each project skill folder. Before
- * the bounds, a folder with a large asset or a `node_modules` tree was read whole into
- * memory, so one skill could stall or exhaust memory on each pass. This suite pins the
- * contract that replaced it: a folder over any bound is not trusted, and the scan skips
- * `node_modules` and `.git` directories.
+ * A skill approval must cover every readable file, including dependency and metadata
+ * directories. This suite checks that all contents affect the digest and its bounds.
+ * It also checks exact depth acceptance and rejects files that grow or shrink between
+ * scanning and reading. Restoring a directory exclusion or ignoring changed sizes
+ * must break these tests.
  *
- * Mutations this suite is designed to catch:
- * - Remove any one of the four bounds: its over-limit fixture then describes as trusted.
- * - Off-by-one on a bound (`>=` vs `>`): the at-limit fixture then becomes untrusted.
- * - Scan `node_modules` or `.git` directories: the oversized file inside them then
- *   refuses the folder, and the digest moves when their content changes.
- *
- * Gaps: this drives the production describer on real temp folders. It does not drive
- * `veyyon trust` or discovery, and it does not measure scan cost at the bounds.
- * Skipped directories are not hashed, so a change inside `node_modules` does not revoke
- * trust. That is the documented trade-off, and the last test pins it.
+ * Gaps: this drives the production describer, not the trust CLI or protocol reader.
+ * It does not measure scan cost or detect same-size edits during a read.
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { describeProjectSkill, PROJECT_SKILL_LIMITS } from "@veyyon/coding-agent/config/project-skill-trust";
 import { useTrackedTempDirFactory } from "../helpers/tracked-temp-dir";
 
 const makeTempDir = useTrackedTempDirFactory();
+afterEach(() => { mockOpen?.mockRestore(); });
+let mockOpen: { mockRestore(): void } | undefined;
 
 interface Fixture {
 	root: string;
@@ -90,16 +84,51 @@ describe("a skill folder over a bound is not trusted", () => {
 		expect(await describeProjectSkill(fixture.skillDir, fixture.root)).toBeNull();
 	});
 
-	test("node_modules and .git directories are not scanned, so their content does not count or revoke trust", async () => {
+	test("a directory exactly at the depth bound still describes the folder", async () => {
 		const fixture = await makeFixture();
-		await writeFiles(path.join(fixture.skillDir, "node_modules", "pkg"), PROJECT_SKILL_LIMITS.maxFiles + 8);
-		await writeFiles(path.join(fixture.skillDir, ".git"), 1, PROJECT_SKILL_LIMITS.maxFileBytes + 1);
-
-		const before = await describeProjectSkill(fixture.skillDir, fixture.root);
-		expect(before).not.toBeNull();
-
-		await fs.writeFile(path.join(fixture.skillDir, "node_modules", "pkg", "asset-0.bin"), "changed");
-		const after = await describeProjectSkill(fixture.skillDir, fixture.root);
-		expect(after?.hash).toBe(before?.hash);
+		const deepest = path.join(fixture.skillDir, ...Array<string>(PROJECT_SKILL_LIMITS.maxDepth).fill("d"));
+		await fs.mkdir(deepest, { recursive: true });
+		await fs.writeFile(path.join(deepest, "leaf.txt"), "leaf");
+		expect(await describeProjectSkill(fixture.skillDir, fixture.root)).not.toBeNull();
 	});
+
+	for (const directory of ["node_modules", ".git"]) {
+		test(`${directory} content changes revoke the folder digest`, async () => {
+			const fixture = await makeFixture();
+			const nested = path.join(fixture.skillDir, directory);
+			await writeFiles(nested, 1);
+			const before = await describeProjectSkill(fixture.skillDir, fixture.root);
+			expect(before).not.toBeNull();
+			await fs.writeFile(path.join(nested, "asset-0.bin"), "changed");
+			const after = await describeProjectSkill(fixture.skillDir, fixture.root);
+			expect(after).not.toBeNull();
+			expect(after?.hash).not.toBe(before?.hash);
+		});
+
+		test(`${directory} files count toward the size bound`, async () => {
+			const fixture = await makeFixture();
+			await writeFiles(path.join(fixture.skillDir, directory), 1, PROJECT_SKILL_LIMITS.maxFileBytes + 1);
+			expect(await describeProjectSkill(fixture.skillDir, fixture.root)).toBeNull();
+		});
+	}
+
+	for (const [change, content] of [["shrinks", ""], ["grows", "longer content"]] as const) {
+		test(`a file that ${change} after scanning refuses the folder`, async () => {
+			const fixture = await makeFixture();
+			const target = path.join(fixture.skillDir, "asset.txt");
+			await fs.writeFile(target, "original");
+			const canonicalTarget = await fs.realpath(target);
+			const originalOpen = fs.open;
+			let changed = false;
+			mockOpen = spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+				if (file === canonicalTarget) {
+					await fs.writeFile(target, content);
+					changed = true;
+				}
+				return originalOpen(file, flags, mode);
+			});
+			expect(await describeProjectSkill(fixture.skillDir, fixture.root)).toBeNull();
+			expect(changed).toBe(true);
+		});
+	}
 });

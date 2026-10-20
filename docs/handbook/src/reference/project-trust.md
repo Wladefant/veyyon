@@ -19,7 +19,7 @@ directory: every relative path and file content, in sorted order. A change to `S
 an asset or path requires approval again. Scripts and assets are included in this single skill-folder approval. Veyyon does not approve them separately and does not sandbox them.
 A symlink inside a project skill that resolves outside the project root is refused.
 
-A skill folder is bounded so that one large folder cannot stall discovery. It is refused, and not trusted, when it has more than 8 levels of nested directories, more than 256 files, a file over 1 MiB, or more than 16 MiB in total. Directories named `node_modules` and `.git` are not scanned: they are not counted against the bounds, and a change inside them does not change the digest. A file named `.git` or `node_modules` is still hashed. A refused folder is logged as a warning, and `veyyon trust` lists it as unreadable.
+A skill folder is bounded so that one large folder cannot stall discovery. It is refused, and not trusted, when it has more than 8 levels of nested directories, more than 256 files, a file over 1 MiB, or more than 16 MiB in total. Every directory is scanned, including `node_modules` and `.git`; their files count against these bounds and affect the digest. A file named `.git` or `node_modules` is also hashed. A refused folder is logged as a warning, and `veyyon trust` lists it as unreadable.
 
 A file outside the project root is not affected. Profile extensions, installed plugins, profile
 skills and paths you set in `extensions:` load as before: a configured path is your own instruction

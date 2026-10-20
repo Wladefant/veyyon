@@ -9,8 +9,7 @@
  * Folder hashing:
  * - The entire containing skill folder is scanned recursively.
  * - Every nested file is included with its relative path and content.
- * - Directories named `node_modules` or `.git` are not scanned. A file with
- *   either name is still hashed.
+ *   No directory names are excluded from the scan.
  * - Files are deterministically sorted by their relative path.
  * - Framed domain-separated hashing (`veyyon:project-skill:v1\0`) ensures
  *   the digest is unambiguous and never collides with raw single-file hashes.
@@ -38,16 +37,13 @@ export const PROJECT_SKILL_HASH_DOMAIN = "veyyon:project-skill:v1";
 export const PROJECT_SKILL_LIMITS = {
 	/** Nested directory levels below the skill folder. */
 	maxDepth: 8,
-	/** Files in the skill folder, excluding skipped directories. */
+	/** Files in the skill folder, including files in every directory. */
 	maxFiles: 256,
 	/** Size of any one file. */
 	maxFileBytes: 1024 * 1024,
 	/** Sum of every file's size. */
 	maxTotalBytes: 16 * 1024 * 1024,
 } as const;
-
-/** Directories that are never scanned: dependency trees and VCS metadata. */
-const SKIPPED_DIRECTORY_NAMES: Record<string, true> = { ".git": true, node_modules: true };
 
 const HASH_READ_CHUNK_BYTES = 64 * 1024;
 
@@ -243,7 +239,6 @@ export async function describeProjectSkill(
 			}
 
 			if (stat.isDirectory()) {
-				if (SKIPPED_DIRECTORY_NAMES[entry.name] === true) continue;
 				const success = await collectFiles(entryPath, entryRel, depth + 1);
 				if (!success) return false;
 			} else if (stat.isFile()) {

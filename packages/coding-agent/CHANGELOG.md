@@ -8,7 +8,7 @@
 - Argot teaches its handle table to a model named in `argot.encode.models` with a thinking selector (`provider/id:high`), drops or restores the table when a model switch crosses the allowlist, and records a deliberately untaught model as decode-only instead of logging an `ABSENT` handle table ([#648](https://github.com/Wladefant/veyyon/issues/648))
 - Closing a launch client during broker connection now rejects pending requests and destroys late sockets, so an empty broker can exit after its configured grace when all clients close ([Refs #517](https://github.com/Wladefant/veyyon/issues/517)).
 - Reviewer prompts now enforce exact-head, gate-safe, verdict-only reviews and declare `task`, `qa-verifier`, and `haiku` as child roles ([#566](https://github.com/Wladefant/veyyon/issues/566)).
-- Project skill folders over 256 files, 8 directory levels, 1 MiB per file or 16 MiB in total are no longer trusted, and `node_modules` and `.git` directories are no longer scanned, so discovery and `veyyon trust` stay bounded in time and memory.
+- Project skill folders over 256 files, 8 directory levels, 1 MiB per file or 16 MiB in total are no longer trusted; every directory, including `node_modules` and `.git`, counts toward these bounds and its files affect the digest.
 
 - Session cwd changes leave the shared process directory unchanged and load plugin configuration from each session's destination project ([issue](https://github.com/Wladefant/veyyon/issues/529)).
 - Quota refusals block the failed request's credential, not a healthy account selected by a later resolver call ([PR](https://github.com/Wladefant/veyyon/pull/619)).
