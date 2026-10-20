@@ -9,6 +9,7 @@ import { executeAcpBuiltinSlashCommand } from "@veyyon/coding-agent/slash-comman
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake, setAgentDir } from "@veyyon/utils";
 import { isolatedAuthStorage } from "./helpers/isolated-auth-storage";
+import { trustProjectRegistry } from "./helpers/project-registry-trust";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 function textContent(result: { content?: Array<{ type: string; text?: string }> }): string {
@@ -218,7 +219,7 @@ describe("createAgentSession cwd after /move", () => {
 		const cwdB = path.join(tempDir, "cwd-b");
 		const agentDir = path.join(tempDir, "agent");
 
-		const installProjectSkill = (project: string, packageName: string, skillName: string): void => {
+		const installProjectSkill = async (project: string, packageName: string, skillName: string): Promise<void> => {
 			const pluginsDir = path.join(project, ".veyyon", "plugins");
 			const packageDir = path.join(pluginsDir, "node_modules", packageName);
 			const skillDir = path.join(packageDir, "skills", skillName);
@@ -233,17 +234,11 @@ describe("createAgentSession cwd after /move", () => {
 				path.join(skillDir, "SKILL.md"),
 				`---\nname: ${skillName}\ndescription: ${skillName} description\n---\n${skillName} body\n`,
 			);
-			fs.writeFileSync(
-				path.join(pluginsDir, "veyyon-plugins.lock.json"),
-				JSON.stringify({
-					plugins: { [packageName]: { version: "1.0.0", enabled: true, enabledFeatures: null } },
-					settings: {},
-				}),
-			);
+			await trustProjectRegistry({ cwd: project, agentDir, pluginsRoot: pluginsDir, installPaths: [packageDir] });
 		};
 
-		installProjectSkill(cwdA, "project-a-skills", "only-a");
-		installProjectSkill(cwdB, "project-b-skills", "only-b");
+		await installProjectSkill(cwdA, "project-a-skills", "only-a");
+		await installProjectSkill(cwdB, "project-b-skills", "only-b");
 		fs.mkdirSync(agentDir, { recursive: true });
 
 		globals = beginSettingsTest();
@@ -299,7 +294,7 @@ describe("createAgentSession cwd after /move", () => {
 		const cwdB = path.join(tempDir, "cwd-b");
 		const agentDir = path.join(tempDir, "agent");
 
-		const installProjectRule = (project: string, packageName: string, name: string, condition: string): void => {
+		const installProjectRule = async (project: string, packageName: string, name: string, condition: string): Promise<void> => {
 			const pluginsDir = path.join(project, ".veyyon", "plugins");
 			const packageDir = path.join(pluginsDir, "node_modules", packageName);
 			fs.mkdirSync(path.join(packageDir, "src"), { recursive: true });
@@ -313,16 +308,10 @@ describe("createAgentSession cwd after /move", () => {
 				path.join(packageDir, "rules", `${name}.md`),
 				`---\ndescription: ${name}\ncondition: ${condition}\nscope: [text]\n---\n${name} body\n`,
 			);
-			fs.writeFileSync(
-				path.join(pluginsDir, "veyyon-plugins.lock.json"),
-				JSON.stringify({
-					plugins: { [packageName]: { version: "1.0.0", enabled: true, enabledFeatures: null } },
-					settings: {},
-				}),
-			);
+			await trustProjectRegistry({ cwd: project, agentDir, pluginsRoot: pluginsDir, installPaths: [packageDir] });
 		};
-		installProjectRule(cwdA, "project-a-rules", "source-only", "SOURCE_TRIGGER");
-		installProjectRule(cwdB, "project-b-rules", "destination-only", "DESTINATION_TRIGGER");
+		await installProjectRule(cwdA, "project-a-rules", "source-only", "SOURCE_TRIGGER");
+		await installProjectRule(cwdB, "project-b-rules", "destination-only", "DESTINATION_TRIGGER");
 		fs.mkdirSync(agentDir, { recursive: true });
 
 		globals = beginSettingsTest();

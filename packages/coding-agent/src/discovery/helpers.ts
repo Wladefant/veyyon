@@ -1355,8 +1355,10 @@ const NO_PROJECT_PLUGIN_GATE: ProjectPluginGate = { allowed: true, registry: nul
 
 /**
  * Gate the project plugin directory `cwd` resolves to. Every consumer of that directory calls this before reading
- * or executing anything from it: the Claude-plugin roots below, and the plugin loader's project route. One decision
- * governs both, keyed by the registry owner's trust root.
+ * anything from it: the Claude-plugin roots below, and the plugin loader's project route. One decision governs both,
+ * keyed by the registry owner's trust root. The approval covers the registry file's exact bytes, and through them the
+ * `installPath` entries it names. Nothing else in the project directory (its `package.json`, lockfile or
+ * `node_modules`) is hashed, so project scope reads none of it.
  *
  * `userPluginsRoot` is the operator's own profile directory. A project that resolves to it has no project registry,
  * and that file is not gated.

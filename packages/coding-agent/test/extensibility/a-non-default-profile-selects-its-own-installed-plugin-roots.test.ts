@@ -44,6 +44,7 @@ import {
 } from "@veyyon/coding-agent/extensibility/plugins/loader";
 import { discoverExtensions } from "@veyyon/coding-agent/session/factory-extensions";
 import { useContextScopeFixture } from "../helpers/context-scope-fixture";
+import { trustProjectRegistry } from "../helpers/project-registry-trust";
 
 const fixture = useContextScopeFixture("two-profile-plugins-");
 
@@ -281,6 +282,13 @@ describe("Non-default profiles consistently isolate installed plugin roots", () 
 			name: "shared-pkg",
 			extensions: ["project-shared.ts"],
 		});
+		// Project plugins load only through a registry the operator has trusted.
+		await trustProjectRegistry({
+			cwd: f.cwd,
+			agentDir: f.agentDir,
+			pluginsRoot: projectPluginsRoot,
+			installPaths: [projectPlugin.dir],
+		});
 
 		// Project plugin must shadow user plugin for both active and named profiles
 		const defaultedExts = await getAllPluginExtensionPaths(f.cwd);
@@ -288,6 +296,20 @@ describe("Non-default profiles consistently isolate installed plugin roots", () 
 
 		const namedExts = await getAllPluginExtensionPaths(f.cwd, pluginsRootFor(namedAgentDir));
 		expect(namedExts).toEqual(projectPlugin.files.extensions);
+	});
+
+	test("project node_modules plugins never load, even under a trusted registry that names none of them", async () => {
+		const f = fixture("project-unnamed-active");
+		const projectPluginsRoot = path.join(f.repoRoot, ".veyyon", "plugins");
+		installSyntheticPlugin(f, projectPluginsRoot, { name: "unnamed-pkg", extensions: ["unnamed.ts"] });
+		await trustProjectRegistry({
+			cwd: f.cwd,
+			agentDir: f.agentDir,
+			pluginsRoot: projectPluginsRoot,
+			installPaths: [],
+		});
+
+		expect(await getAllPluginExtensionPaths(f.cwd)).toEqual([]);
 	});
 
 	test("disabled plugin in lockfile or project overrides is excluded in named profile", async () => {

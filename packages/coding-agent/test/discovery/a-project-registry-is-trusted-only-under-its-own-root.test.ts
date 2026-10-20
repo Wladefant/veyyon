@@ -37,9 +37,9 @@
  * Gaps: the Windows drive-letter and case variants run only on Windows, and whether they resolve to one
  * trust key depends on how the runtime's `realpath.native` treats case, which this suite does not normalise.
  * The suite does not run plugin code, and it does not cover `--plugin-dir` roots or the Claude Code registry.
- * The gate decides the registry file only. The plugin loader also reads `package.json`,
- * `veyyon-plugins.lock.json` and `node_modules` under the same directory, and those bytes are not hashed.
- * This suite does not claim to cover them.
+ * The gate decides the registry file only. Project scope reads no other file in the project directory: its
+ * `package.json`, lockfile and `node_modules` are not read. The files inside each `installPath` directory the
+ * registry names are read as before, and they are not hashed. This suite does not claim to cover them.
  */
 import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
@@ -458,4 +458,77 @@ test("a warm load is not served after the registry bytes change under an approva
 	expect(pluginIds(afterChange.roots)).not.toContain(PROJECT_PLUGIN);
 	expect(pluginIds(afterChange.roots)).not.toContain(OTHER_PLUGIN);
 	expect(refusals(afterChange.warnings).join("\n")).toContain("its contents changed since it was trusted");
+});
+test("the approved project registry alone loads plugins, without falling back to project dependencies", async () => {
+	const fixture = await makeFixture();
+	const explicitPluginPath = fixture.projectInstallPath;
+	const unlistedPackagePath = path.join(fixture.tempRoot, "packages", "other-tool");
+	const unlistedDependencyPath = path.join(fixture.repoRoot, "node_modules", "other-tool");
+	await fs.mkdir(explicitPluginPath, { recursive: true });
+	await fs.mkdir(unlistedPackagePath, { recursive: true });
+	await fs.mkdir(path.dirname(unlistedDependencyPath), { recursive: true });
+	await fs.writeFile(
+		path.join(fixture.repoRoot, "package.json"),
+		JSON.stringify({ private: true, dependencies: { "other-tool": "file:packages/other-tool" } }, null, 2),
+	);
+	await fs.writeFile(
+		path.join(fixture.repoRoot, "package-lock.json"),
+		JSON.stringify(
+			{
+				name: "project",
+				lockfileVersion: 3,
+				packages: {
+					"": { dependencies: { "other-tool": "file:packages/other-tool" } },
+					"node_modules/other-tool": { resolved: "packages/other-tool", link: true },
+					"packages/other-tool": { name: "other-tool", version: "1.0.0" },
+				},
+			},
+			null,
+			2,
+		),
+	);
+	await fs.writeFile(
+		path.join(unlistedPackagePath, "package.json"),
+		JSON.stringify({ name: "other-tool", version: "1.0.0" }),
+	);
+	await fs.writeFile(path.join(unlistedPackagePath, "package-marker.txt"), "dependency-only");
+	await fs.symlink(unlistedPackagePath, unlistedDependencyPath, "junction");
+	await writeProjectRegistry(
+		fixture.repoRoot,
+		JSON.stringify({
+			version: 2,
+			plugins: {
+				[PROJECT_PLUGIN]: [
+					{
+						scope: "project",
+						installPath: explicitPluginPath,
+						version: "1.0.0",
+						installedAt: "2026-10-20T00:00:00.000Z",
+						lastUpdated: "2026-10-20T00:00:00.000Z",
+					},
+				],
+				[OTHER_PLUGIN]: [
+					{
+						scope: "project",
+						version: "1.0.0",
+						installedAt: "2026-10-20T00:00:00.000Z",
+						lastUpdated: "2026-10-20T00:00:00.000Z",
+					},
+				],
+			},
+		}),
+	);
+	const approval = await decide("approve", fixture.nestedCwd, fixture.agentDir);
+	const loaded = await loadRoots(fixture, fixture.nestedCwd);
+	const projectRoots = loaded.roots.filter(root => root.scope === "project");
+
+	expect(approval.decision).toBe("trusted");
+	expect(projectRoots).toEqual(
+		expect.arrayContaining([expect.objectContaining({ id: PROJECT_PLUGIN, path: explicitPluginPath })]),
+	);
+	expect(pluginIds(projectRoots)).toEqual([PROJECT_PLUGIN]);
+	expect(pluginIds(loaded.roots)).toContain(PROFILE_PLUGIN);
+	expect(pluginIds(loaded.roots)).not.toContain(OTHER_PLUGIN);
+	expect(projectRoots.some(root => root.path === unlistedDependencyPath || root.path === unlistedPackagePath)).toBe(false);
+	expect(loaded.warnings.join("\n")).toContain(`${OTHER_PLUGIN} entry has no installPath`);
 });

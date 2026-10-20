@@ -13,7 +13,12 @@ import type { InstalledPlugin, PluginRuntimeConfig, ProjectPluginOverrides } fro
 import type { PluginManifest } from "@veyyon/plugin";
 import { errorMessage, getPluginsDir, getPluginsLockfile, isEnoent, logger, reportFault } from "@veyyon/utils";
 import { getConfigDirPaths } from "../../config";
-import { gateProjectPluginRegistry, type ProjectPluginGate, registerPluginCacheInvalidator } from "../../discovery/helpers";
+import {
+	gateProjectPluginRegistry,
+	parseClaudePluginsRegistry,
+	type ProjectPluginGate,
+	registerPluginCacheInvalidator,
+} from "../../discovery/helpers";
 import { installLegacyPiSpecifierShim } from "./legacy-pi-compat";
 
 /** Installed plugin plus the root scope that supplied its runtime metadata. */
@@ -210,12 +215,12 @@ export interface GetEnabledPluginsOptions {
 /**
  * Get list of enabled plugins with their resolved configurations.
  *
- * Enumerates two plugin roots in order: the user root (`options.pluginsRoot`, else `getPluginsDir(home)`) and, when
- * a project registry (`.veyyon/plugins/installed_plugins.json`) resolves from `cwd`, the project root beside it. The
- * project root is read only when the project trust gate allows it, because its plugins are project code: it takes
- * the same owner-root decision as every other consumer of that registry. Each root contributes the union of its
- * `package.json#dependencies` and `veyyon-plugins.lock.json#plugins`. Project entries shadow user entries with the
- * same package name, matching the shadow semantics of `MarketplaceManager.listInstalledPlugins`.
+ * Enumerates two plugin sources in order: the user root (`options.pluginsRoot`, else `getPluginsDir(home)`), which
+ * contributes the union of its `package.json#dependencies` and `veyyon-plugins.lock.json#plugins`; and, when a project
+ * registry (`.veyyon/plugins/installed_plugins.json`) resolves from `cwd` and the project trust gate allows it, the
+ * plugins that registry names by `installPath`. Project scope reads nothing else from its directory: the trust decision
+ * hashes the registry file only. Project entries shadow user entries with the same package name, matching the shadow
+ * semantics of `MarketplaceManager.listInstalledPlugins`.
  */
 export async function getEnabledPlugins(
 	cwd: string,
@@ -256,8 +261,7 @@ async function loadEnabledPlugins(
 		// Reported once per gate outcome: the result is cached under that outcome, so this runs on a cache miss only.
 		reportFault({ source: "plugins", text: gate.reason, context: { cwd } });
 	} else if (gate.registry) {
-		const projectRoot = path.dirname(gate.registry.path);
-		if (projectRoot !== userRoot) projectPlugins = await collectPluginsAtRoot(projectRoot, projectOverrides, "project");
+		projectPlugins = await collectRegistryNamedPlugins(gate.registry, projectOverrides);
 	}
 
 	if (projectPlugins.length === 0) return userPlugins;
@@ -268,6 +272,54 @@ async function loadEnabledPlugins(
 	for (const plugin of userPlugins) merged.set(plugin.name, plugin);
 	for (const plugin of projectPlugins) merged.set(plugin.name, plugin);
 	return Array.from(merged.values());
+}
+
+/**
+ * The project plugins a trusted project registry names: one per enabled `installPath` entry. The approval hashes the
+ * registry file, so it fixes which directories load. It does not hash the files inside those directories, which are
+ * read as before. Project scope never reads the project directory's own `package.json`, lockfile or `node_modules`:
+ * those files are outside the registry the approval covers.
+ */
+async function collectRegistryNamedPlugins(
+	registry: { path: string; content: string },
+	projectOverrides: ProjectPluginOverrides,
+): Promise<ScopedInstalledPlugin[]> {
+	const parsed = parseClaudePluginsRegistry(registry.content);
+	if (!parsed) return [];
+	const registryDir = path.dirname(registry.path);
+	const plugins: ScopedInstalledPlugin[] = [];
+	for (const [pluginId, entries] of Object.entries(parsed.plugins)) {
+		const atIndex = pluginId.lastIndexOf("@");
+		if (atIndex === -1) continue;
+		const name = pluginId.slice(0, atIndex);
+		if (projectOverrides.disabled?.includes(name)) continue;
+		for (const entry of entries) {
+			if (!entry.installPath || typeof entry.installPath !== "string" || entry.enabled === false) continue;
+			const pluginRoot = path.resolve(registryDir, entry.installPath);
+			const pluginPkgPath = path.join(pluginRoot, "package.json");
+			let pluginPkg: { version: string } & ManifestHolder<PluginManifest>;
+			try {
+				pluginPkg = await Bun.file(pluginPkgPath).json();
+			} catch (err) {
+				if (isEnoent(err)) continue;
+				reportUnreadablePluginFile(pluginPkgPath, err, `the plugin "${name}"`);
+				continue;
+			}
+			const manifest: PluginManifest | undefined = manifestFromPackageJson(pluginPkg);
+			if (!manifest) continue;
+			manifest.version = pluginPkg.version;
+			plugins.push({
+				name,
+				version: pluginPkg.version,
+				path: pluginRoot,
+				scope: "project",
+				manifest,
+				enabledFeatures: projectOverrides.features?.[name] ?? null,
+				enabled: true,
+			});
+		}
+	}
+	return plugins;
 }
 
 // =============================================================================
