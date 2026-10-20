@@ -18,6 +18,7 @@
 - `fuzzyFind` reads the scan cache in place and copies a path only while it ranks among the best `maxResults`, so a cached lookup over a 612,000-entry tree answers in 17 ms instead of 1.4 s for an empty query and in 67 ms instead of 104 ms for `zq`, and peaks at 85 MB instead of 380 MB.
 - `fuzzyFind` scores a name without copying it and rejects an ASCII name that lacks the query's characters in one byte scan, so a cached lookup over a 612,000-entry tree answers in 17 ms instead of 68 ms for `zq` and in 31 ms instead of 190 ms for `lib/zq`.
 - `fuzzyFind`, `glob` and AST file discovery share one walk per root and walk options while it runs instead of each starting its own, so the three lookups `@` completion issues while `@zqx` is typed over a 612,000-entry tree peak at 86 MB instead of 254 MB and finish in 500 ms instead of 630 ms.
+- `grep` given `timeoutMs` returns the matches it found when the limit passes, with `timedOut` set on its result, instead of failing with "Aborted: Timeout".
 
 ### Fixed
 
