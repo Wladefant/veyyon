@@ -157,7 +157,7 @@ export const commands: CommandEntry[] = [
 		name: "session",
 		load: () => import("./commands/session").then(m => m.default),
 		aliases: ["sessions"],
-		summary: { description: "Study a stored session (timing, tool cost, turn cadence)" },
+		summary: { description: "Study and recover a stored session" },
 	},
 	{
 		name: "setup",
@@ -202,7 +202,7 @@ export const commands: CommandEntry[] = [
 	{
 		name: "browser-extension",
 		load: () => import("./commands/browser-extension").then(m => m.default),
-		summary: { description: "Set up and control the Chrome extension bridge for the browser tool" },
+		summary: { description: "Set up and control the Chrome extension bridge used by the browser tool (app.extension)" },
 	},
 	{
 		name: "tiny-models",

@@ -93,21 +93,20 @@ const BARRELS = ["@veyyon/tui", "@veyyon/utils", "@veyyon/agent-core", "@veyyon/
  * already evaluates, so the graph runs no new code. It imports nothing. The ceiling keeps the one
  * leaf of margin.
  *
-<<<<<<< HEAD
  * RE-MEASURED 2026-10-04 at 359, from 355: usage tracking additions for Antigravity account windows
  * and launch-facts reorganization. The ceiling keeps the one leaf of margin.
- */
-// 363 -> 365 (exclusive ceiling, measured 363): re-measured 2026-10-04 after PR #470 added github-copilot-client-id.ts to settings.ts (Refs #472).
-const SHELL_GRAPH_MODULE_CEILING = 365;
-=======
+ *
  * RE-MEASURED 2026-10-09 at 364, from 360: `core/committed-prefix.ts`, `core/frame-segments.ts`,
  * `core/render-intent.ts` and `core/render-scheduler.ts` under `hosts/terminal/engine/src`, split out
  * of `core/renderer.ts`, `core/tui.ts` and `core/frame-plan.ts`, which the shell already evaluates,
  * so the graph runs no new code. Each imports only `node:` built-ins, utils leaves and
  * `core/component-types.ts`, all already evaluated. The ceiling keeps the one leaf of margin.
+ *
+ * RE-MEASURED 2026-10-18 at 365, from 363: `hosts/terminal/engine/src/core/frame-pacing.ts`, split out of `core/tui.ts` by 1ee8a3e549, and `@veyyon/utils/local-time`, which `logger.ts` reads by dd058dd817, both landed after the 363 measure and both are reached on the first-frame and log path. Neither edge is avoidable: `tui.ts` builds `new FramePacer()` as a field initializer, `logger.ts` formats local time on every log line, and `module-size-gates.test.ts` and `nothing-joins-the-launch-card-path-uncounted.test.ts` pin both modules by name. The ceiling keeps the one leaf of margin.
  */
+// 363 -> 365 (exclusive ceiling, measured 363): re-measured 2026-10-04 after PR #470 added github-copilot-client-id.ts to settings.ts (Refs #472).
+// 365 -> 366 (exclusive ceiling, measured 365): re-measured 2026-10-18, see the note above.
 const SHELL_GRAPH_MODULE_CEILING = 366;
->>>>>>> santhreal/main
 
 async function probe(code: string): Promise<number> {
 	const { stdout } = await run("bun", ["-e", code], { cwd: repoRoot, maxBuffer: 1 << 24 });
