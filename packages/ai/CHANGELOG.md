@@ -12,6 +12,10 @@
 - Aligned OpenAI Codex responses imports with openai-responses-stream exports and restored the UsageCostHistoryEntry interface in usage types, with no user-visible change.
 - Merges supplementary model listing quotas into Google Antigravity quota summaries when the summary omits counters ([Refs #620](https://github.com/Wladefant/veyyon/pull/620)).
 - Google Antigravity usage lists the Gemini 5-hour and weekly windows again: the quota summary names the Gemini group only to an `antigravity/hub` 3.0.0 or later client, which the usage probe now reports ([Refs #620](https://github.com/Wladefant/veyyon/pull/620)).
+- `/login together` validates a pasted key against `GET /v1/models` instead of a chat completion on `moonshotai/Kimi-K2.5`, which Together rejects with `model_not_available` for every valid key (oh-my-pi 62ccb64dbe3fa9d1cd99774e81ba0c976b27b223, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Bedrock requests leave out the `description` key of a tool whose description was pruned into the system prompt, instead of sending `""`, which AWS rejects with HTTP 400 (oh-my-pi 8039fa8da5839366739d2ffc908301e013e30ca5, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Anthropic-compatible requests encode an empty tool result as `content: ""` instead of `content: []` on image-capable models, which strict endpoints such as Z.AI GLM reject with HTTP 400 code 1213 (oh-my-pi 4025b27c156d90dbda6fd1312e60e4895d6af3b1, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- `/login alibaba-coding-plan` with the China endpoint opens the Bailian API-key page instead of the retired DashScope console (oh-my-pi d71ff70c3d9010c5231cb9ffd181c4c866b0be1b, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ## [1.5.6] - 2026-10-10
 ### Changed

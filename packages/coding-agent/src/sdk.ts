@@ -34,6 +34,7 @@ import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode
 import { resolveDialect } from "./config/dialect-format";
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
 import { ModelRegistry } from "./config/model-registry";
+import { formatModelString } from "./config/model-resolver";
 import { openaiWebsocketPreference } from "./config/openai-websockets-mode";
 import type { PromptTemplate } from "./config/prompt-templates";
 import { applyProviderGlobalsFromSettings } from "./config/provider-globals";
@@ -1266,21 +1267,29 @@ class SessionStartup {
 	}
 
 	/**
-	 * The shorthand sections a rebuild teaches. Teaching follows the encode policy: the active model is
-	 * on the allowlist and the context is under the cutoff. While encoding is on, the prompt carries the
-	 * notation preamble, which also instructs the model to load its project through `argot_load`; the
-	 * handle table joins once a project is loaded. Handles already in history expand at the seams
-	 * whatever this returns.
+	 * The shorthand sections a rebuild teaches. While {@link #argotTeaches} holds for the active model,
+	 * the prompt carries the notation preamble, which also instructs the model to load its project
+	 * through `argot_load`; the handle table joins once a project is loaded. Handles already in history
+	 * expand at the seams whatever this returns.
 	 */
 	#argotPromptSections(): { argotPreamble?: string; argotHandles?: string } {
 		const argot = this.#argot;
-		const model = this.#tools.activeModelString();
-		if (!this.#argotEnabled || !argot || model === undefined) return {};
-		if (!shouldEncode(this.#argotGate, { model, contextTokens: this.#argotContextTokens })) return {};
+		if (!argot || !this.#argotTeaches(this.#tools.activeModelString())) return {};
 		return {
 			argotPreamble: renderPreamble({ tools: true }),
 			argotHandles: argot.loaded ? argot.promptFragment() : undefined,
 		};
+	}
+
+	/**
+	 * Whether a prompt built for `model` teaches the shorthand: the feature is on, the model is on the
+	 * encode allowlist and the context is under the cutoff. The prompt build, the model-switch rebuild
+	 * check and the launch arm's taught-handles probe all ask this one predicate, so the three cannot
+	 * disagree about which models are taught.
+	 */
+	#argotTeaches(model: string | undefined): boolean {
+		if (!this.#argotEnabled || model === undefined) return false;
+		return shouldEncode(this.#argotGate, { model, contextTokens: this.#argotContextTokens });
 	}
 
 	/**
@@ -1538,6 +1547,7 @@ class SessionStartup {
 			preferWebsockets: this.#preferWebsockets,
 			convertToLlm: hooks.convertToLlm,
 			rebuildSystemPrompt: (toolNames, tools) => this.#rebuildSystemPrompt(toolNames, tools),
+			argotTeaches: model => this.#argotTeaches(formatModelString(model)),
 			reloadProjectInputs: () => this.#promptInputs.reload(),
 			reloadSshTool: () => this.#reloadSshTool(),
 			requestedToolNames: this.#requestedToolNames,
@@ -1586,6 +1596,7 @@ class SessionStartup {
 			cwd: this.#cwd,
 			sessionManager: this.#sessionManager,
 			refreshPrompt: () => session.refreshBaseSystemPrompt("argot-arm"),
+			teaches: () => this.#argotTeaches(this.#tools.activeModelString()),
 		});
 		if (!this.#hasExistingSession) {
 			recordNewSessionStart({
