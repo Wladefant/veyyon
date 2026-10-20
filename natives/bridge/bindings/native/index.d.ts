@@ -824,6 +824,9 @@ export interface GlobResult {
  *
  * # Returns
  * Aggregated results across matching files.
+ *
+ * Reaching `timeoutMs` is not an error: the result holds the matches found by
+ * then and sets `timedOut`.
  */
 export declare function grep(options: GrepOptions, onMatch?: ((error: Error | null, match: GrepMatch) => void) | undefined | null): Promise<GrepResult>
 
@@ -885,7 +888,10 @@ export interface GrepOptions {
   maxCountPerFile?: number
   /** Abort signal for cancelling the operation. */
   signal?: unknown
-  /** Timeout in milliseconds for the operation. */
+  /**
+   * Stop searching after this many milliseconds and return the matches
+   * found by then, with `timedOut` set.
+   */
   timeoutMs?: number
 }
 
@@ -923,6 +929,12 @@ export interface GrepResult {
    * loses regex recall otherwise. `None` on a normal regex compile.
    */
   patternTreatedAsLiteral?: string
+  /**
+   * The search stopped at `timeoutMs` before it searched every file, so
+   * `matches` and the counts cover only the files searched by then. `None`
+   * on a search that finished.
+   */
+  timedOut?: boolean
 }
 
 /**

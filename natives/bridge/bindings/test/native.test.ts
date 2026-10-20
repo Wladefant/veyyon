@@ -403,6 +403,20 @@ describe("veyyon-natives", () => {
 			expect(hiddenIncluded.matches.some(match => match.path.endsWith(".hidden-ignored.ts"))).toBe(true);
 		});
 
+		it("returns what it found with timedOut set when timeoutMs passes, instead of failing", async () => {
+			const passed = await grep({ pattern: "TODO", path: testDir, timeoutMs: 0 });
+			expect(passed.timedOut).toBe(true);
+			expect(passed.matches).toEqual([]);
+			expect(passed.filesSearched).toBe(0);
+
+			const beaten = await grep({ pattern: "TODO", path: testDir, timeoutMs: 60_000 });
+			const unbounded = await grep({ pattern: "TODO", path: testDir });
+			expect(beaten.timedOut).toBeUndefined();
+			expect(unbounded.timedOut).toBeUndefined();
+			expect(beaten.matches).toEqual(unbounded.matches);
+			expect(beaten.matches).toHaveLength(1);
+		});
+
 		it("should skip FIFOs when searching a directory", async () => {
 			if (!canCreateFifo()) {
 				return;
