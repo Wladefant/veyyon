@@ -19,6 +19,7 @@
  * 4. Project plugin precedence over profile plugins.
  * 5. Disabled states (lockfile, project overrides, and item-level disabledExtensionIds).
  * 6. Default/missing root behavior and alternating profile switches without stale cache bleed.
+ * 7. Project-registry trust on the command and custom-tool routes follows the session profile's own trust record.
  *
  * WHAT IT DOES NOT CATCH:
  * Hook and custom-tool execution, or external network package installation.
@@ -34,6 +35,7 @@ import { type Rule, ruleCapability } from "@veyyon/coding-agent/discovery/capabi
 import { type DiscoveredSkill, skillCapability } from "@veyyon/coding-agent/discovery/capability/skill";
 import { type SlashCommand, slashCommandCapability } from "@veyyon/coding-agent/discovery/capability/slash-command";
 import { pluginsRootFor } from "@veyyon/coding-agent/discovery/helpers";
+import { discoverCustomCommands } from "@veyyon/coding-agent/extensibility/custom-commands";
 import { discoverCustomToolPaths } from "@veyyon/coding-agent/extensibility/custom-tools";
 import { discoverAndLoadExtensions, discoverExtensionPaths } from "@veyyon/coding-agent/extensibility/extensions";
 import {
@@ -44,6 +46,7 @@ import {
 } from "@veyyon/coding-agent/extensibility/plugins/loader";
 import { discoverExtensions } from "@veyyon/coding-agent/session/factory-extensions";
 import { useContextScopeFixture } from "../helpers/context-scope-fixture";
+import { trustProjectRegistry } from "../helpers/project-registry-trust";
 
 const fixture = useContextScopeFixture("two-profile-plugins-");
 
@@ -281,6 +284,13 @@ describe("Non-default profiles consistently isolate installed plugin roots", () 
 			name: "shared-pkg",
 			extensions: ["project-shared.ts"],
 		});
+		// Project plugins load only through a registry the operator has trusted.
+		await trustProjectRegistry({
+			cwd: f.cwd,
+			agentDir: f.agentDir,
+			pluginsRoot: projectPluginsRoot,
+			installPaths: [projectPlugin.dir],
+		});
 
 		// Project plugin must shadow user plugin for both active and named profiles
 		const defaultedExts = await getAllPluginExtensionPaths(f.cwd);
@@ -288,6 +298,86 @@ describe("Non-default profiles consistently isolate installed plugin roots", () 
 
 		const namedExts = await getAllPluginExtensionPaths(f.cwd, pluginsRootFor(namedAgentDir));
 		expect(namedExts).toEqual(projectPlugin.files.extensions);
+	});
+
+	test("project node_modules plugins never load, even under a trusted registry that names none of them", async () => {
+		const f = fixture("project-unnamed-active");
+		const projectPluginsRoot = path.join(f.repoRoot, ".veyyon", "plugins");
+		installSyntheticPlugin(f, projectPluginsRoot, { name: "unnamed-pkg", extensions: ["unnamed.ts"] });
+		await trustProjectRegistry({
+			cwd: f.cwd,
+			agentDir: f.agentDir,
+			pluginsRoot: projectPluginsRoot,
+			installPaths: [],
+		});
+
+		expect(await getAllPluginExtensionPaths(f.cwd)).toEqual([]);
+	});
+
+	test("an unapproved session profile keeps its project plugin denied while the active profile approves it", async () => {
+		const f = fixture("trust-denied-active");
+		const namedAgentDir = f.agentDirFor("trust-denied-named");
+		const projectPluginsRoot = path.join(f.repoRoot, ".veyyon", "plugins");
+		const projectPlugin = installSyntheticPlugin(f, projectPluginsRoot, {
+			name: "trust-denied-pkg",
+			commands: ["denied-command.ts"],
+			tools: ["denied-tool.ts"],
+		});
+		// Only the active profile records an approval. The session profile never approves this registry.
+		await trustProjectRegistry({
+			cwd: f.cwd,
+			agentDir: f.agentDir,
+			pluginsRoot: projectPluginsRoot,
+			installPaths: [projectPlugin.dir],
+		});
+
+		// Positive control: the active profile's own routes load the approved project plugin.
+		const activeCommands = await discoverCustomCommands({ cwd: f.cwd, agentDir: f.agentDir });
+		expect(activeCommands.paths.map(entry => entry.path)).toContain(projectPlugin.files.commands[0]!);
+		f.resetCaches();
+		const activeTools = await discoverCustomToolPaths([], f.cwd, f.agentDir);
+		expect(activeTools.map(tool => tool.path)).toContain(projectPlugin.files.tools[0]!);
+		f.resetCaches();
+
+		// The session profile has no approval of its own, so neither route may load the project plugin.
+		const namedCommands = await discoverCustomCommands({ cwd: f.cwd, agentDir: namedAgentDir });
+		expect(namedCommands.paths.map(entry => entry.path)).not.toContain(projectPlugin.files.commands[0]!);
+		f.resetCaches();
+		const namedTools = await discoverCustomToolPaths([], f.cwd, namedAgentDir);
+		expect(namedTools.map(tool => tool.path)).not.toContain(projectPlugin.files.tools[0]!);
+	});
+
+	test("an approved session profile loads its project plugin while the active profile lacks that approval", async () => {
+		const f = fixture("trust-approved-active");
+		const namedAgentDir = f.agentDirFor("trust-approved-named");
+		const projectPluginsRoot = path.join(f.repoRoot, ".veyyon", "plugins");
+		const projectPlugin = installSyntheticPlugin(f, projectPluginsRoot, {
+			name: "trust-approved-pkg",
+			commands: ["approved-command.ts"],
+			tools: ["approved-tool.ts"],
+		});
+		// Only the session profile records an approval. The active profile never approves this registry.
+		await trustProjectRegistry({
+			cwd: f.cwd,
+			agentDir: namedAgentDir,
+			pluginsRoot: projectPluginsRoot,
+			installPaths: [projectPlugin.dir],
+		});
+
+		// The active profile has no approval, so its routes must not load the project plugin.
+		const activeCommands = await discoverCustomCommands({ cwd: f.cwd, agentDir: f.agentDir });
+		expect(activeCommands.paths.map(entry => entry.path)).not.toContain(projectPlugin.files.commands[0]!);
+		f.resetCaches();
+		const activeTools = await discoverCustomToolPaths([], f.cwd, f.agentDir);
+		expect(activeTools.map(tool => tool.path)).not.toContain(projectPlugin.files.tools[0]!);
+		f.resetCaches();
+
+		// The session profile holds the approval, so both of its routes load the project plugin.
+		const namedCommands = await discoverCustomCommands({ cwd: f.cwd, agentDir: namedAgentDir });
+		expect(namedCommands.paths.map(entry => entry.path)).toContain(projectPlugin.files.commands[0]!);
+		f.resetCaches();
+		const namedTools = await discoverCustomToolPaths([], f.cwd, namedAgentDir);
+		expect(namedTools.map(tool => tool.path)).toContain(projectPlugin.files.tools[0]!);
 	});
 
 	test("disabled plugin in lockfile or project overrides is excluded in named profile", async () => {

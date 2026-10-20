@@ -16,7 +16,6 @@
  * rather than recorded, because a decision about `~/.veyyon` would be a decision about their own
  * configuration.
  */
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { pathExists } from "@veyyon/utils";
 import {
@@ -25,10 +24,11 @@ import {
 	type ProjectExecutable,
 	ProjectTrust,
 	type ProjectTrustVerdict,
+	realProjectPath,
 } from "../config/project-trust";
 import { describeProjectSkill } from "../config/project-skill-trust";
 import { findRepoRoot } from "../discovery/capability/fs";
-import { clearClaudePluginRootsCache, resolveActiveProjectRegistryPath } from "../discovery/helpers";
+import { clearClaudePluginRootsCache, projectTrustKey, resolveActiveProjectRegistryPath } from "../discovery/helpers";
 import { discoverProjectSkillPaths } from "../discovery/project-skills";
 
 export type TrustAction = "approve" | "deny" | "forget" | "list";
@@ -69,9 +69,9 @@ export interface TrustCommandResult {
  * to the plugins it names — so listing them here would ask the operator to approve files the
  * project does not control.
  */
-async function discoverCandidatePaths(projectRoot: string): Promise<string[]> {
-	const registry = await resolveActiveProjectRegistryPath(projectRoot);
-	const skillPaths = await discoverProjectSkillPaths(projectRoot);
+async function discoverCandidatePaths(cwd: string, repoOrCwd: string): Promise<string[]> {
+	const registry = await resolveActiveProjectRegistryPath(cwd);
+	const skillPaths = await discoverProjectSkillPaths(repoOrCwd);
 	return registry ? [registry, ...skillPaths] : skillPaths;
 }
 
@@ -86,33 +86,39 @@ function grantsFor(relativePath: string): string {
 }
 
 export async function runTrustCommand(args: TrustCommandArgs): Promise<TrustCommandResult> {
-	const repoRoot = await findRepoRoot(args.cwd);
-	const effectiveRoot = repoRoot ?? args.cwd;
-	const projectRoot = await canonicalProjectRoot(effectiveRoot);
+	// Two keys, one per surface, each the key its reader consults. The plugin registry is keyed by its owner's trust
+	// root, which is the key the plugin gate reads, so an approval from a nested cwd lands where the gate looks.
+	// Project skills keep the `repoRoot ?? cwd` key their loader reads.
+	const repoOrCwd = (await findRepoRoot(args.cwd)) ?? args.cwd;
+	const registryKey = await projectTrustKey(args.cwd);
+	const skillKey = await canonicalProjectRoot(repoOrCwd);
+	const registryPath = await resolveActiveProjectRegistryPath(args.cwd);
 	const trust = await ProjectTrust.load(args.agentDir);
 
 	const named = args.paths.map(p => path.resolve(args.cwd, p));
-	const discovered = named.length > 0 ? named : await discoverCandidatePaths(effectiveRoot);
+	const discovered = named.length > 0 ? named : await discoverCandidatePaths(args.cwd, repoOrCwd);
 
 	const outOfScope: string[] = [];
 	const unreadable: string[] = [];
-	const executables: ProjectExecutable[] = [];
+	const described: Array<{ root: string; executable: ProjectExecutable }> = [];
 	for (const absolutePath of discovered) {
+		const isRegistry = registryPath !== null && path.resolve(absolutePath) === path.resolve(registryPath);
+		const root = isRegistry ? registryKey : skillKey;
 		const isSkill =
 			path.basename(absolutePath).toLowerCase() === "skill.md" ||
 			(await pathExists(path.join(absolutePath, "SKILL.md"), "a skill directory containing SKILL.md"));
 		const executable = isSkill
-			? await describeProjectSkill(absolutePath, projectRoot)
-			: await describeProjectExecutable(absolutePath, projectRoot);
+			? await describeProjectSkill(absolutePath, root)
+			: await describeProjectExecutable(absolutePath, root);
 		if (executable) {
-			executables.push(executable);
+			described.push({ root, executable });
 			continue;
 		}
-		// Describers return null for both an invalid/unreadable candidate and one that resolves
-		// outside its root. Use the real target to keep those operator actions distinct.
+		// Describers return null for both an invalid/unreadable candidate and one that resolves outside its root.
+		// Use the real target to keep those operator actions distinct.
 		try {
-			const realPath = await fs.realpath(absolutePath);
-			const relative = path.relative(projectRoot, realPath);
+			const realPath = await realProjectPath(absolutePath);
+			const relative = path.relative(root, realPath);
 			if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
 				outOfScope.push(absolutePath);
 			} else {
@@ -123,21 +129,33 @@ export async function runTrustCommand(args: TrustCommandArgs): Promise<TrustComm
 		}
 	}
 
-	if (args.action === "approve" && executables.length > 0) await trust.trust(projectRoot, executables);
-	if (args.action === "deny") await trust.deny(projectRoot);
-	if (args.action === "forget") await trust.forget(projectRoot);
+	if (args.action === "approve") {
+		const byRoot = new Map<string, ProjectExecutable[]>();
+		for (const { root, executable } of described) {
+			byRoot.set(root, [...(byRoot.get(root) ?? []), executable]);
+		}
+		for (const [root, executables] of byRoot) await trust.trust(root, executables);
+	}
+	// Deny and forget cover the project as the operator sees it: both keys, each once.
+	const roots = new Set([registryKey, skillKey]);
+	if (args.action === "deny") {
+		for (const root of roots) await trust.deny(root);
+	}
+	if (args.action === "forget") {
+		for (const root of roots) await trust.forget(root);
+	}
 
-	const record = trust.recordFor(projectRoot);
-	const candidates = executables.map(executable => ({
+	const candidates = described.map(({ root, executable }) => ({
 		relativePath: executable.relativePath,
 		absolutePath: executable.absolutePath,
-		verdict: trust.evaluate(projectRoot, executable),
+		verdict: trust.evaluate(root, executable),
 		grants: grantsFor(executable.relativePath),
 	}));
 
+	const record = trust.recordFor(registryKey);
 	return {
 		action: args.action,
-		projectRoot,
+		projectRoot: registryKey,
 		storePath: trust.filePath,
 		decision: record?.decision ?? "undecided",
 		candidates,
