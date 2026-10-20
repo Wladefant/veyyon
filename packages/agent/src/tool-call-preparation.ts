@@ -83,12 +83,12 @@ export function prepareToolCall(
 		args = extracted.strippedArgs;
 		intent = extracted.intent ?? derivedIntent(tool, toolCall.name, args);
 	}
-	const rejected = (error: string): RejectedToolCall => ({
-		ok: false,
-		intent,
-		args: "__parseError" in args ? { __parseError: args.__parseError } : args,
-		error,
-	});
+	// The one constructor of a rejection. Its text is the cause's own message, so two rejections are byte-identical
+	// only when the same thing happened twice.
+	const rejected = (
+		error: string,
+		recorded: Record<string, unknown> = "__parseError" in args ? { __parseError: args.__parseError } : args,
+	): RejectedToolCall => ({ ok: false, intent, args: recorded, error });
 	if (!tool) {
 		return rejected(
 			new AIError.ToolNotFoundError(
@@ -103,7 +103,7 @@ export function prepareToolCall(
 		if (repair) {
 			const outcome = repair(tool, { ...toolCall, arguments: args });
 			if (outcome.status === "unrepairable") {
-				return { ok: false, intent, args, error: unrepairableArgumentsText(outcome) };
+				return rejected(unrepairableArgumentsText(outcome), args);
 			}
 			args = outcome.arguments;
 			if (config.intentTracing) {
@@ -125,6 +125,6 @@ export function prepareToolCall(
 		const transformed = transform(execution, toolCall.name);
 		return { ok: true, tool, intent, execution: transformed.execution, display: transformed.display };
 	} catch (transformError) {
-		return { ok: false, intent, args: execution, error: errorMessage(transformError) };
+		return rejected(errorMessage(transformError), execution);
 	}
 }

@@ -20,6 +20,7 @@
 - The `browser` tool waits up to 20 seconds, or the call's timeout when shorter, for an interstitial bot check such as Cloudflare's to clear, and states where the page led or that it did not clear.
 - The `browser` tool's `open` takes `visible: true | false`, which moves a tab between headless Chromium and a browser window with its page, cookies and localStorage, so a person can solve a challenge and the run continues.
 - The `browser` tool's `open` takes `profile: "<name>"`, a persistent Chromium profile under the agent directory whose cookies, storage, cache and history survive sessions; a profile another process holds is refused, naming its lock.
+- `cursorExecHandlersForAgent` in `@veyyon/coding-agent/cursor` builds the Cursor exec bridge for an agent constructed after it, and throws for a call that arrives before the agent exists instead of running it unprepared.
 
 ### Changed
 

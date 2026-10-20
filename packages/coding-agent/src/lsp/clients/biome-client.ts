@@ -4,7 +4,8 @@
  */
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import { errorMessage, logger, readFileText, readPipeText } from "@veyyon/utils";
+import { errorMessage, logger, readPipeText } from "@veyyon/utils";
+import { readFileText } from "@veyyon/utils/fs-io";
 import { adoptIntoPrimarySessionCpuBudget } from "../../session/cpu-limit";
 import type { Diagnostic, DiagnosticSeverity, LinterClient, ServerConfig } from "../types";
 

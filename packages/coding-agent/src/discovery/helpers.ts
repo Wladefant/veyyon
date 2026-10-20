@@ -15,9 +15,9 @@ import {
 	isMissingPath,
 	logger,
 	parseFrontmatter,
-	readFileText,
 	tryParseJson,
 } from "@veyyon/utils";
+import { readFileText } from "@veyyon/utils/fs-io";
 import {
 	canonicalProjectRoot,
 	describeProjectExecutable,

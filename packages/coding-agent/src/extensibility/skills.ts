@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
-import { getProjectDir, prompt, readFileText } from "@veyyon/utils";
+import { getProjectDir, prompt } from "@veyyon/utils";
+import { readFileText } from "@veyyon/utils/fs-io";
 import {
 	isValidManagedSkillName,
 	MANAGED_SKILLS_PROVIDER_ID,

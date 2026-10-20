@@ -20,7 +20,6 @@ export * from "./file-lock";
 export * from "./format";
 export * from "./frontmatter";
 export * from "./fs-error";
-export * from "./fs-io";
 export * from "./fs-optional";
 export * from "./glob";
 export * from "./json";

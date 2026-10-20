@@ -16,10 +16,10 @@ import {
 	isRecord,
 	lazy,
 	prompt,
-	readFileText,
 	untilAborted,
 	urlScheme,
 } from "@veyyon/utils";
+import { readFileText } from "@veyyon/utils/fs-io";
 
 import { allLineNumbers, canonicalSnapshotKey, getFileSnapshotStore } from "../../edit/file-snapshot-store";
 import { normalizeToLF } from "../../edit/normalize";

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import type {
+	Agent,
 	AgentEvent,
 	AgentToolCall,
 	AgentToolContext,
@@ -373,4 +374,24 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 		const toolResultMessage = await executeTool(this.options, toolName, toolCallId, args);
 		return toolResultMessage;
 	}
+}
+
+/**
+ * The bridge for an agent constructed after it: the agent's stream is handed the bridge, so the bridge reaches the
+ * agent through `agent` once it exists. A call prepares through `prepareExternalToolCall`, and its events reach the
+ * agent's subscribers through `emitExternalEvent`.
+ */
+export function cursorExecHandlersForAgent(
+	options: Omit<CursorExecBridgeOptions, "prepareToolCall" | "emitEvent"> & { agent: () => Agent | undefined },
+): CursorExecHandlers {
+	const { agent, ...bridge } = options;
+	return new CursorExecHandlers({
+		...bridge,
+		prepareToolCall: (tool, toolCall) => {
+			const current = agent();
+			if (!current) throw new Error("A Cursor tool call arrived before the agent was constructed.");
+			return current.prepareExternalToolCall(tool, toolCall);
+		},
+		emitEvent: event => agent()?.emitExternalEvent(event),
+	});
 }

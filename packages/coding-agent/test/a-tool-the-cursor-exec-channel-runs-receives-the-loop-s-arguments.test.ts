@@ -34,7 +34,7 @@ import {
 	WriteArgsSchema,
 } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { CursorExecHandlers } from "@veyyon/coding-agent/cursor";
+import { CursorExecHandlers, cursorExecHandlersForAgent } from "@veyyon/coding-agent/cursor";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { isRecord, removeWithRetries } from "@veyyon/utils";
 import { INTENT_FIELD } from "@veyyon/wire";
@@ -114,12 +114,13 @@ function markingAgent(overrides: Partial<ToolCallPreparation> = {}): Agent {
 	});
 }
 
+/** The bridge the session builds, bound to `agent`, with every event the agent's subscribers receive in `events`. */
 function bridge(agent: Agent, tools: AnyAgentTool[], events: AgentEvent[], cwd = "."): CursorExecHandlers {
-	return new CursorExecHandlers({
+	agent.subscribe(event => events.push(event));
+	return cursorExecHandlersForAgent({
 		cwd,
 		tools: new Map(tools.map(tool => [tool.name, tool])),
-		prepareToolCall: (tool, toolCall) => agent.prepareExternalToolCall(tool, toolCall),
-		emitEvent: event => events.push(event),
+		agent: () => agent,
 	});
 }
 
@@ -231,6 +232,20 @@ describe("a Cursor call the preparation rejects never reaches the tool", () => {
 			},
 		]);
 		expect(events.map(event => event.type)).toEqual(["tool_execution_start", "tool_execution_end"]);
+	});
+
+	it("throws for a call that arrives before the agent exists, rather than running it unprepared", async () => {
+		const received: Received = new Map();
+		const handlers = cursorExecHandlersForAgent({
+			cwd: ".",
+			tools: new Map([["read", recordingTool("read", received)]]),
+			agent: () => undefined,
+		});
+
+		await expect(handlers.read(create(ReadArgsSchema, { toolCallId: "call-early", path: "a.txt" }))).rejects.toThrow(
+			"A Cursor tool call arrived before the agent was constructed.",
+		);
+		expect(received.size).toBe(0);
 	});
 });
 

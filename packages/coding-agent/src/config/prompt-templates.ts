@@ -8,8 +8,8 @@ import {
 	logger,
 	parseFrontmatter,
 	prompt,
-	readFileText,
 } from "@veyyon/utils";
+import { readFileText } from "@veyyon/utils/fs-io";
 import { jtdToTypeScript, jtdToTypeScriptParts } from "../tools/core/jtd-to-typescript";
 import { parseCommandArgs, substituteArgs } from "../utils/command-args";
 

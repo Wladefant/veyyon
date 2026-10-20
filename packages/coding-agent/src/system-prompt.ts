@@ -17,8 +17,8 @@ import {
 	logger,
 	looksLikeFilePath,
 	prompt,
-	readFileText,
 } from "@veyyon/utils";
+import { readFileText } from "@veyyon/utils/fs-io";
 import { findConfigFile } from "./config";
 import {
 	BUILTIN_PERSONALITIES,

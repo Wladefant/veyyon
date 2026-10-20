@@ -371,11 +371,22 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * session. Its only import is type-only, and the shipped launch already evaluates it through
  * `commands/launch.ts`. Measured 2026-10-19 at 1492.
  *
+ * 1492 to 1493: `agent/src/tool-call-preparation.ts`, which strips the intent field, repairs,
+ * validates and transforms a tool call's arguments, and which left `agent/src/agent-loop.ts` so the
+ * Cursor exec channel prepares the calls it runs itself exactly as the loop does. It imports only
+ * what that code imported there.
+ *
+ * 1493 to 1494: `utils/src/fs-io.ts`, the reads and writes that open a workspace file through
+ * `node:fs` so an open under an NFS lease waits for the lease to break instead of failing with
+ * `EAGAIN`. It replaced `Bun.file` and `Bun.write` calls on the launch path, its only imports are
+ * `node:fs/promises` and `node:path`, and its callers name it by subpath, so the `@veyyon/utils`
+ * barrel does not carry it. Measured 2026-10-20 at 1494.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1492;
+const LAUNCH_REACH_CEILING = 1494;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

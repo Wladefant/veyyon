@@ -1,14 +1,6 @@
 import * as path from "node:path";
-import {
-	errorMessage,
-	isEnoent,
-	logger,
-	postmortem,
-	ptree,
-	readFileText,
-	settleWithin,
-	untilAborted,
-} from "@veyyon/utils";
+import { errorMessage, isEnoent, logger, postmortem, ptree, settleWithin, untilAborted } from "@veyyon/utils";
+import { readFileText } from "@veyyon/utils/fs-io";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { primarySessionCpuAdoption } from "../session/cpu-limit";
 import { ToolAbortError, throwIfAborted } from "../tools/core/tool-errors";

@@ -6,7 +6,8 @@
  */
 import * as fs from "node:fs/promises";
 import { hasUtf8Bom } from "@veyyon/hashline";
-import { isEnoent, readFileText } from "@veyyon/utils";
+import { isEnoent } from "@veyyon/utils";
+import { readFileText } from "@veyyon/utils/fs-io";
 import { isNotebookPath, readEditableNotebookText, serializeEditedNotebookText } from "./notebook";
 
 export async function readEditFileText(absolutePath: string, path: string): Promise<string> {
