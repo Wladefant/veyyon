@@ -26,10 +26,12 @@ import * as path from "node:path";
 import { truncate } from "@veyyon/utils/format";
 import { applyEdits, collectRewrittenAnchorLines } from "./apply";
 import { hasAnchorScopedEdit, hasBlockEdit, resolveBlockEdits } from "./block";
+import { parsePreviewRow } from "./diff-preview";
 import { computeFileHash, formatHashlineHeader } from "./format";
 import type { Filesystem, WriteResult } from "./fs";
 import { isNotFound } from "./fs";
 import type { Patch, PatchSection } from "./input";
+import { LineMap, lineCount } from "./line-map";
 import {
 	HEADTAIL_DRIFT_WARNING,
 	missingSnapshotTagMessage,
@@ -461,12 +463,14 @@ export class Patcher {
 		}
 
 		const persisted = bom + restoreLineEndings(after, lineEnding);
+		// Taken before `relocate` moves the history: the version the edit was applied to.
+		const previous = this.snapshots.byContent(canonicalPath, normalized);
 
 		if (moveDest !== undefined) {
 			const destCanonical = this.fs.canonicalPath(moveDest);
 			this.snapshots.relocate(canonicalPath, destCanonical);
 			await this.fs.move(section.path, moveDest, persisted);
-			const fileHash = this.#recordFullSnapshot(destCanonical, after);
+			const fileHash = this.#recordEditedSnapshot(destCanonical, previous, normalized, after);
 			return {
 				path: resultPath,
 				canonicalPath: destCanonical,
@@ -485,7 +489,7 @@ export class Patcher {
 		}
 
 		const write: WriteResult = await this.fs.writeText(section.path, persisted);
-		const fileHash = this.#recordFullSnapshot(canonicalPath, after);
+		const fileHash = this.#recordEditedSnapshot(canonicalPath, previous, normalized, after);
 		const op = exists ? "update" : "create";
 
 		return {
@@ -502,6 +506,42 @@ export class Patcher {
 			blockResolutions: applyResult.blockResolutions,
 			warnings,
 		};
+	}
+
+	/**
+	 * Mark displayed the lines of the version `result` recorded that `preview`,
+	 * the {@link buildCompactDiffPreview} body returned with the result, showed:
+	 * each `N:text` row whose `text` is line `N` of the edited text verbatim.
+	 * Lines the edit wrote are already marked by {@link commit}; this adds the
+	 * unchanged context rows around them. A version whose edits are not checked
+	 * against displayed lines is left alone, since marking a subset would
+	 * narrow it.
+	 */
+	recordPreviewLines(result: PatchSectionResult, preview: string): void {
+		const seen = enforcedSeenLines(this.snapshots.byContent(result.canonicalPath, result.after));
+		if (!seen) return;
+		const text = result.after;
+		let line = 1;
+		let offset = 0;
+		for (const row of preview.split("\n")) {
+			const parsed = parsePreviewRow(row);
+			if (!parsed) continue;
+			if (parsed.line < line) {
+				line = 1;
+				offset = 0;
+			}
+			while (line < parsed.line) {
+				const newline = text.indexOf("\n", offset);
+				if (newline === -1) break;
+				offset = newline + 1;
+				line++;
+			}
+			if (line !== parsed.line) continue;
+			const end = offset + parsed.content.length;
+			if (text.startsWith(parsed.content, offset) && (end === text.length || text[end] === "\n")) {
+				seen.add(parsed.line);
+			}
+		}
 	}
 
 	async #readBinaryBom(path: string): Promise<string> {
@@ -522,6 +562,46 @@ export class Patcher {
 
 	#recordFullSnapshot(canonicalPath: string, normalized: string): string {
 		return this.snapshots.record(canonicalPath, normalized);
+	}
+
+	/**
+	 * Record the edited text and carry onto it what the model saw of the version
+	 * the edit was applied to, so a later partial read under the new tag cannot
+	 * narrow its displayed lines to that read's range:
+	 *   - a pre-edit version with a displayed-line record contributes the lines
+	 *     the edit wrote, and each displayed or clipped line the edit left
+	 *     unchanged, at its new position;
+	 *   - a pre-edit version without one accepted an edit at any line, and the
+	 *     edited text keeps that: every one of its lines is recorded displayed.
+	 * Nothing is carried when the pre-edit text is not retained (the drift path,
+	 * which checks no displayed lines), or when the edited text is already a
+	 * retained version without a record, which stays unrestricted.
+	 */
+	#recordEditedSnapshot(canonicalPath: string, previous: Snapshot | null, before: string, after: string): string {
+		const retained = this.snapshots.byContent(canonicalPath, after);
+		const hash = this.snapshots.record(canonicalPath, after);
+		if (!previous || (retained && !enforcedSeenLines(retained))) return hash;
+		const previousSeen = enforcedSeenLines(previous);
+		if (!previousSeen) {
+			this.snapshots.recordSeenLines(canonicalPath, hash, lineNumbers(after));
+			return hash;
+		}
+		const lineMap = new LineMap(before, after);
+		const seen = [...lineMap.written()];
+		for (const line of previousSeen) {
+			const mapped = lineMap.get(line);
+			if (mapped !== undefined) seen.push(mapped);
+		}
+		this.snapshots.recordSeenLines(canonicalPath, hash, seen);
+		if (previous.clippedLines && previous.clippedLines.size > 0) {
+			const clipped: number[] = [];
+			for (const line of previous.clippedLines) {
+				const mapped = lineMap.get(line);
+				if (mapped !== undefined) clipped.push(mapped);
+			}
+			this.snapshots.recordClippedLines(canonicalPath, hash, clipped);
+		}
+		return hash;
 	}
 
 	#mismatchError(
@@ -667,8 +747,8 @@ export class Patcher {
  * prefix there is nothing to identify.
  */
 function assertSeenLines(section: PatchSection, expected: string, matchedSnapshot: Snapshot | null): void {
-	const seen = matchedSnapshot?.seenLines;
-	if (!seen || seen.size === 0) return;
+	const seen = enforcedSeenLines(matchedSnapshot);
+	if (!seen) return;
 	const clipped = matchedSnapshot?.clippedLines;
 	const rewritten = collectRewrittenAnchorLines(section.edits);
 	const unseen = section
@@ -706,6 +786,21 @@ function assertSeenLines(section: PatchSection, expected: string, matchedSnapsho
 			columnClipped: anyUnseenTooWide,
 		}),
 	);
+}
+
+/**
+ * The displayed lines an edit under `snapshot`'s tag is checked against, or
+ * `undefined` when none were recorded and an edit at any line applies.
+ */
+function enforcedSeenLines(snapshot: Snapshot | null): Set<number> | undefined {
+	const seen = snapshot?.seenLines;
+	return seen && seen.size > 0 ? seen : undefined;
+}
+
+/** Every 1-indexed line of `text`, one per `split("\n")` segment. */
+function* lineNumbers(text: string): Generator<number> {
+	const count = lineCount(text);
+	for (let line = 1; line <= count; line++) yield line;
 }
 
 /**

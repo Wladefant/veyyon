@@ -103,6 +103,7 @@ async function renderSection(
 	result: PatchSectionResult,
 	diagnostics: FileDiagnosticsResult | undefined,
 	sourcePath: string,
+	patcher: Patcher,
 ): Promise<RenderedSection> {
 	if (result.op === "delete") {
 		const toolResult: AgentToolResult<EditToolDetails, typeof hashlineEditParamsSchema.value> = {
@@ -139,6 +140,7 @@ async function renderSection(
 
 	const diff = await generateDiffString(result.before, result.after, undefined, { path: result.path });
 	const preview = buildCompactDiffPreview(diff.diff);
+	patcher.recordPreviewLines(result, preview.preview);
 	const meta = outputMeta()
 		.diagnostics(diagnostics?.summary ?? "", diagnostics?.messages ?? [])
 		.get();
@@ -215,11 +217,12 @@ export async function executeHashlineSingle(
 			if (escalate) {
 				throw new ToolError(noChangeLoopDiagnostic(sectionResult.path, count));
 			}
-			return (await renderSection(sectionResult, undefined, prepared.section.path)).toolResult;
+			return (await renderSection(sectionResult, undefined, prepared.section.path, patcher)).toolResult;
 		}
 		resetNoopEdit(options.session, sectionResult.canonicalPath);
-		return (await renderSection(sectionResult, fs.consumeDiagnostics(sectionResult.path), prepared.section.path))
-			.toolResult;
+		return (
+			await renderSection(sectionResult, fs.consumeDiagnostics(sectionResult.path), prepared.section.path, patcher)
+		).toolResult;
 	}
 
 	// Multi-section: prepare every section up front so we fail fast before
@@ -251,7 +254,12 @@ export async function executeHashlineSingle(
 		}
 		resetNoopEdit(options.session, sectionResult.canonicalPath);
 		rendered.push(
-			await renderSection(sectionResult, fs.consumeDiagnostics(sectionResult.path), prepared[i].section.path),
+			await renderSection(
+				sectionResult,
+				fs.consumeDiagnostics(sectionResult.path),
+				prepared[i].section.path,
+				patcher,
+			),
 		);
 	}
 

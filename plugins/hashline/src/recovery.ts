@@ -6,15 +6,11 @@
  * Recovery fails closed when the target changed or became ambiguous. The
  * patcher then returns a mismatch with fresh context instead of guessing.
  */
-import { lazy } from "@veyyon/utils/abortable";
-import type * as Diff from "diff";
 import { applyEdits, collectEditAnchorLines } from "./apply";
+import { LineMap } from "./line-map";
 import { RECOVERY_EXTERNAL_WARNING, RECOVERY_LINE_REMAP_WARNING, RECOVERY_SESSION_CHAIN_WARNING } from "./messages";
 import type { SnapshotStore } from "./snapshots";
 import type { ApplyResult, Edit } from "./types";
-
-/** The `diff` package, evaluated on the first recovery rather than when the patcher loads. */
-const diffPackage = lazy(() => require("diff") as typeof Diff);
 
 export interface RecoveryArgs {
 	path: string;
@@ -30,34 +26,6 @@ export interface RecoveryResult {
 	firstChangedLine: number | undefined;
 	/** Warnings collected during recovery, including the user-facing recovery banner. */
 	warnings: string[];
-}
-
-function buildLineMap(previousText: string, currentText: string): Map<number, number> {
-	const previousLines = previousText.split("\n");
-	const currentLines = currentText.split("\n");
-	const changes = diffPackage.value.diffArrays(previousLines, currentLines);
-	const map = new Map<number, number>();
-	let previousLine = 1;
-	let currentLine = 1;
-
-	for (const change of changes) {
-		const count = change.value.length;
-		if (change.added) {
-			currentLine += count;
-			continue;
-		}
-		if (change.removed) {
-			previousLine += count;
-			continue;
-		}
-		for (let offset = 0; offset < count; offset++) {
-			map.set(previousLine + offset, currentLine + offset);
-		}
-		previousLine += count;
-		currentLine += count;
-	}
-
-	return map;
 }
 
 /** Values appearing two or more times in `lines`, for O(1) duplicate checks. */
@@ -105,7 +73,7 @@ function validateDuplicateAnchorContext(
 	line: number,
 	mapped: number,
 	neighbors: AnchorNeighbors,
-	lineMap: ReadonlyMap<number, number>,
+	lineMap: LineMap,
 ): boolean {
 	let checked = false;
 	const { before, after } = neighbors;
@@ -124,7 +92,7 @@ function validateUniqueAnchorContext(
 	line: number,
 	mapped: number,
 	neighbors: AnchorNeighbors,
-	lineMap: ReadonlyMap<number, number>,
+	lineMap: LineMap,
 ): boolean {
 	const offset = mapped - line;
 	const { before, after } = neighbors;
@@ -135,7 +103,7 @@ function validateUniqueAnchorContext(
 function validateRemappedAnchorContext(
 	previousText: string,
 	currentText: string,
-	lineMap: ReadonlyMap<number, number>,
+	lineMap: LineMap,
 	edits: readonly Edit[],
 ): boolean {
 	const previousLines = previousText.split("\n");
@@ -173,7 +141,7 @@ interface RemappedEdits {
 }
 
 function remapEditsToCurrent(previousText: string, currentText: string, edits: readonly Edit[]): RemappedEdits | null {
-	const lineMap = buildLineMap(previousText, currentText);
+	const lineMap = new LineMap(previousText, currentText);
 	if (!validateRemappedAnchorContext(previousText, currentText, lineMap, edits)) return null;
 	const remap = new AnchorRemap(lineMap);
 	const remapped: Edit[] = [];
@@ -192,11 +160,11 @@ function remapEditsToCurrent(previousText: string, currentText: string, edits: r
  * by a different offset than the first, fails the edit that names it.
  */
 class AnchorRemap {
-	readonly #lineMap: Map<number, number>;
+	readonly #lineMap: LineMap;
 	/** The shift every mapped line moved by, or `undefined` before the first mapping. */
 	offset: number | undefined;
 
-	constructor(lineMap: Map<number, number>) {
+	constructor(lineMap: LineMap) {
 		this.#lineMap = lineMap;
 	}
 

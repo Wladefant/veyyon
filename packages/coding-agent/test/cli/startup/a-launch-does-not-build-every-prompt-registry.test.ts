@@ -382,11 +382,17 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * `node:fs/promises` and `node:path`, and its callers name it by subpath, so the `@veyyon/utils`
  * barrel does not carry it. Measured 2026-10-20 at 1494.
  *
+ * 1494 to 1495: `hashline/src/line-map.ts`, which pairs the unchanged lines of two versions of a
+ * file. It left `hashline/src/recovery.ts`, and `hashline/src/patcher.ts`, already here, uses it to
+ * keep the lines an edit's text was displayed with under the edited version's tag. Its only runtime
+ * import is `@veyyon/utils/abortable`, already here; `diff` stays a lazy `require`. Measured
+ * 2026-10-20 at 1495.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1494;
+const LAUNCH_REACH_CEILING = 1495;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
