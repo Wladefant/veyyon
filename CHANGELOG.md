@@ -55,6 +55,7 @@
 ### Changed
 
 - A `search` of type `structure` parses and matches files on the walker's worker threads instead of one at a time, so a structure search over 400 PHP files takes 78 ms instead of 275 ms with the same CPU time.
+- A `search` of type `structure` asks the disk for 32 files per walk thread at once and walks a parsed tree for error nodes only when tree-sitter marks it as holding one, so over 282,743 uncached PHP files the tool returns in 2.5 s instead of 4.7 s, and in 2.2 s instead of 2.3 s when they are cached.
 - A `search` of type `files` and a `read` of a path that does not exist walk the tree on the walker's worker threads and, on Linux, read metadata only for the entries the pattern matches, so a files search for a name that matches nothing in a 400,000-file tree takes 84 ms instead of 715 ms and a missing-path read 89 ms instead of 317 ms.
 - The first edit of a session builds the tool schemas its context reading needs one tool per event-loop turn instead of all in one, so a key typed 10 ms after the first echoes in 29 ms instead of 35 ms, and a resumed draft no longer holds the loop for the whole build right after the first frame.
 - On Linux, a Python eval kernel returns the memory a cell freed to the system before it reports the cell done, so a kernel that built and dropped a 400 MB working set idles at 26 MB resident instead of 113 MB.
