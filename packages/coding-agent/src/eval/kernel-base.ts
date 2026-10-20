@@ -806,21 +806,20 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 			return { confirmed: true };
 		}
 
-		try {
-			await this.#writeLine(this.#options.exitPayload).catch(() => {});
-		} catch {
-			/* writer may already be closed */
-		}
-
-		try {
-			// FileSink.end() may flush asynchronously. Observing its result is
-			// required: a dead runner can reject that flush with EPIPE after this
-			// stack returns, turning an ordinary kernel replacement into a global
-			// unhandled rejection that terminates the whole veyyon session.
-			await this.#stdin?.end();
-		} catch {
-			/* writer may already be closed */
-		}
+		// A runner blocked in user code may never drain stdin. Request graceful
+		// exit without letting a pending pipe flush prevent signal escalation.
+		void (async () => {
+			try {
+				await this.#writeLine(this.#options.exitPayload);
+			} catch {
+				/* writer may already be closed */
+			}
+			try {
+				await this.#stdin?.end();
+			} catch {
+				/* writer may already be closed */
+			}
+		})();
 
 		// `result === null` means the wait TIMED OUT (process still running) and we
 		// escalate. A truthy result means the process actually exited — including a
@@ -883,7 +882,11 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 			logger.debug(`${this.#options.languageName}Kernel send`, { preview: line.slice(0, 120) });
 		}
 		this.#stdin.write(`${line}\n`);
-		this.#stdin.flush();
+		// Execution cancellation must not wait for pipe backpressure to clear.
+		// The process exit reader settles pending runs when the pipe breaks.
+		void Promise.resolve(this.#stdin.flush()).catch(error => {
+			logger.debug(`${this.#options.languageName} kernel stdin flush failed`, { error: errorMessage(error) });
+		});
 	}
 
 	#startReader(stream: ReadableStream<Uint8Array>): void {
