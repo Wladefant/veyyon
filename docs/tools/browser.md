@@ -71,7 +71,7 @@
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `all` | `boolean` | No | Close every known tab. Omitted closes only `name`. |
+| `all` | `boolean` | No | Close this session's owned tabs. Omitted closes only `name`, subject to the same ownership check. Exact approved Chrome IDs can include ownerless relay-controlled tabs, never another session's tabs. |
 | `kill` | `boolean` | No | When a tab release drops a spawned-app browser handle to refcount 0, also terminate its process tree. Has no effect on headless shutdown and only disconnects connected CDP browsers. |
 
 ### `action: "save_state"`
@@ -215,7 +215,7 @@ A page's challenge is reported once: a later run on the same document adds no li
 18c. For an element inside a frame, a clear `probePress()` point is then checked in each frame above it by `coverInParentFrames()`: `probeFrameHit()` moves the point into the parent's viewport by the iframe element's content box (border and padding) and requires `elementFromPoint` there, followed into open shadow roots, to be the iframe element or an element holding it. Anything else is a cover and is handled as a cover in the element's own frame, named with `over its frame`. A point outside the parent's viewport is left to the press, and CSS transforms on the iframe are not accounted for.
 19. `tab.screenshot()` captures either the whole page or a selector PNG, downsizes a copy for model output, chooses a persistence path, writes the image to disk, records metadata, and optionally emits text + image display entries.
 20. `display()` calls accumulate in an array. After code finishes, the worker posts `{ displays, returnValue, screenshots }`; `BrowserTool.#run()` appends the return value as trailing text content when not `undefined`. In a headless browser, a run first brings its own page to the front (`page.bringToFront()`): Chromium runs no animation frames in a background page, and the locator's click, hover and drag wait on two of them.
-21. `close` releases one tab or all tabs via `releaseTab()` / `releaseAllTabs()`. Each tab aborts pending runs, asks the worker to close, waits up to `750` ms for a `closed` ack, terminates the worker, decrements browser refcount, and disposes the browser handle when refcount reaches zero. A tab is released once: a close, a kill or an open of the same name that finds the tab's release or kill under way waits for it and releases nothing, and a second close reports `No tab named ...`.
+21. `close` releases one tab or this session's tabs via `releaseTabForOwner()` / `releaseTabsForOwner()`. Each tab aborts pending runs, asks the worker to close, waits up to `750` ms for a `closed` ack, terminates the worker, decrements browser refcount, and disposes the browser handle when refcount reaches zero. A tab is released once: a close, a kill or an open of the same name that finds the tab's release or kill under way waits for it and releases nothing, and a second close reports `No tab named ...`. Raw Puppeteer/CDP commands do not have this tool-action ownership guard.
 
 ## Modes / Variants
 - **Action dispatch**

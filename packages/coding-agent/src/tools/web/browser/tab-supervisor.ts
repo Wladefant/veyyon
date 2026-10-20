@@ -27,6 +27,7 @@ import {
 	releaseOrphanBrowsers,
 } from "./registry";
 import { applyStorageState, captureStorageState, type StorageState, type StorageStateLoaded } from "./storage-state";
+import { redactTabInventoryUrl } from "./extension-policy";
 import type {
 	BrowserRunError,
 	ReadyInfo,
@@ -186,6 +187,49 @@ export interface ReleaseTabOptions {
 	kill?: boolean;
 }
 
+export interface OwnerTabReleaseOptions extends ReleaseTabOptions {
+	/** Chrome tab IDs explicitly approved from this session's relay inventory. */
+	approvedTabIds?: readonly number[];
+}
+
+export interface ExtensionTabInventoryEntry {
+	name: string;
+	tabId: number;
+	windowId?: number;
+	url: string;
+	title: string;
+	ownership: "owned" | "attached";
+}
+
+/**
+ * List live extension tabs in the relay registry this caller may see: its own as "owned", ownerless as
+ * "attached". A tab another session owns is left out before its name, title or URL is read.
+ */
+export function getExtensionTabInventory(ownerId?: string): ExtensionTabInventoryEntry[] {
+	const inventory: ExtensionTabInventoryEntry[] = [];
+	for (const tab of tabs.values()) {
+		if (tab.state !== "alive" || tab.backend !== "worker" || tab.kindTag !== "extension" || !tab.browser.relay)
+			continue;
+		if (tab.ownerSessionId !== undefined && tab.ownerSessionId !== ownerId) continue;
+		const tracked = tab.browser.relay.getTrackedTabs().find(item => item.targetId === tab.targetId);
+		if (!tracked) continue;
+		inventory.push({
+			name: tab.name,
+			tabId: tracked.tabId,
+			windowId: tracked.windowId,
+			url: redactTabInventoryUrl(tracked.url),
+			title: tracked.title,
+			ownership: tab.ownerSessionId === undefined ? "attached" : "owned",
+		});
+	}
+	return inventory;
+}
+
+function approvedExtensionTabId(tab: TabSession): number | undefined {
+	if (tab.backend !== "worker" || tab.kindTag !== "extension" || !tab.browser.relay) return undefined;
+	return tab.browser.relay.getTrackedTabs().find(item => item.targetId === tab.targetId)?.tabId;
+}
+
 const tabs = new Map<string, TabSession>();
 // Per-name acquisition chain: serializes concurrent `acquireTab` calls for the
 // same tab name so the existence check and `tabs.set` (separated by several
@@ -227,6 +271,17 @@ function isReportedInitFailure(error: unknown): boolean {
 
 export function getTab(name: string): TabSession | undefined {
 	return tabs.get(name);
+}
+
+/**
+ * Refuse a caller that does not own `tab`. An ownerless tab is open to any caller. An owned tab is open
+ * only to its owner, so a caller with no identity is refused too. The refusal names no other owner.
+ */
+function assertTabAccess(name: string, tab: TabSession, ownerId: string | undefined): void {
+	if (tab.ownerSessionId === undefined || tab.ownerSessionId === ownerId) return;
+	throw new ToolError(
+		`Tab ${JSON.stringify(name)} belongs to another session, so this session cannot use it. Open a tab under another name.`,
+	);
 }
 
 /** The names of the tabs open on `browser`. */
@@ -349,12 +404,14 @@ async function acquireTabImpl(
 	// browser hold nobody is waiting for.
 	// The browser lease is the caller's to release; this path takes no hold of its own to drop.
 	if (opts.signal?.aborted) throw new ToolAbortError("Browser tab open aborted");
+	// Refused before any side effect below: a tab another session owns is never released, reopened or reused.
+	const existing = tabs.get(name);
+	if (existing) assertTabAccess(name, existing, opts.ownerSessionId);
 	killedTabs.delete(name);
 	// Temporary refCount hold so releasing an existing tab on the SAME browser
 	// below cannot drop it to refCount 0 and dispose the instance we are about
 	// to reuse (e.g. reopening the sole tab with a different dialogs policy).
 	let tempHold = false;
-	const existing = tabs.get(name);
 	// A tab opened again with no context keeps the one it is in, including when a changed dialog policy
 	// reopens it; one that names a different context is refused rather than moved out from under its page.
 	const reopenedContext =
@@ -689,6 +746,9 @@ async function acquireCmuxTab(
 }
 
 export async function runInTab(name: string, opts: RunInTabOptions): Promise<RunResultOk> {
+	// Refused before the snapshot and the run send anything, so a foreign session's code never touches the tab.
+	const tab = tabs.get(name);
+	if (tab) assertTabAccess(name, tab, opts.session.getSessionId?.() ?? undefined);
 	return await runInTabWithSnapshot(
 		name,
 		{ code: opts.code, timeoutMs: opts.timeoutMs, signal: opts.signal, session: opts.session },
@@ -921,19 +981,6 @@ function hasRemainingTabs(browser: BrowserHandle): boolean {
 	return false;
 }
 
-export async function releaseAllTabs(opts: ReleaseTabOptions = {}): Promise<number> {
-	const names = Array.from(tabs.keys());
-	let count = 0;
-	for (const name of names) {
-		if (await releaseTab(name, opts)) count++;
-	}
-	await releaseOrphanBrowsers({
-		kill: opts.kill ?? false,
-		hasRemainingTabs,
-	});
-	return count;
-}
-
 export async function dropHeadlessTabs(): Promise<void> {
 	const names = Array.from(tabs.values())
 		.filter(tab => tab.kindTag === "headless")
@@ -941,23 +988,38 @@ export async function dropHeadlessTabs(): Promise<void> {
 	for (const name of names) await releaseTab(name);
 }
 
+/** Release a named tab only when this session owns it or approves its exact controlled Chrome tab ID. */
+export async function releaseTabForOwner(
+	name: string,
+	ownerId: string | undefined,
+	opts: OwnerTabReleaseOptions = {},
+): Promise<boolean> {
+	const tab = tabs.get(name);
+	if (!tab) return false;
+	if (ownerId && tab.ownerSessionId === ownerId) return releaseTab(name, opts);
+	const tabId = approvedExtensionTabId(tab);
+	if (!tab.ownerSessionId && tabId !== undefined && opts.approvedTabIds?.includes(tabId)) return releaseTab(name, opts);
+	throw new ToolError(
+		`Cannot close tab ${JSON.stringify(name)} because this session does not own it. Include its exact Chrome tab ID in approved_tab_ids only for an ownerless relay-controlled tab.`,
+	);
+}
+
 /**
- * Release every tab created by the given session id. Invoked from
- * `AgentSession.dispose()` so headless/spawned Chromium and workers the
- * session opened do not leak into the long-lived process — the module-global
- * `tabs`/`browsers` maps that back this tool are not otherwise walked by
- * session teardown. (Issue #3963.)
- *
- * Ownership is recorded ONLY on tab creation (`acquireTab` with
- * `ownerSessionId`), never on reuse: an agent re-driving a tab another
- * session opened will not yank teardown responsibility away from the
- * creator. Tabs opened with no owner (e.g. from an SDK caller that doesn't
- * identify a session) are skipped and must be released explicitly.
+ * Release tabs created by a session when `AgentSession.dispose()` runs. Ownership is stamped only
+ * at creation and never changes on reuse. Explicit approved IDs can add only ownerless tabs in this relay's
+ * controlled registry; another lane's tabs and unrelated browser tabs are never adopted.
  */
-export async function releaseTabsForOwner(ownerId: string, opts: ReleaseTabOptions = {}): Promise<number> {
+export async function releaseTabsForOwner(
+	ownerId: string | undefined,
+	opts: OwnerTabReleaseOptions = {},
+): Promise<number> {
 	if (!ownerId) return 0;
 	const names = Array.from(tabs.values())
-		.filter(tab => tab.ownerSessionId === ownerId)
+		.filter(tab => {
+			if (ownerId !== undefined && tab.ownerSessionId === ownerId) return true;
+			const tabId = approvedExtensionTabId(tab);
+			return !tab.ownerSessionId && tabId !== undefined && opts.approvedTabIds?.includes(tabId) === true;
+		})
 		.map(tab => tab.name);
 	let count = 0;
 	for (const name of names) {
