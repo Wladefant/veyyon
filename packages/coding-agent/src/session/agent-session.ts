@@ -799,7 +799,11 @@ export class AgentSession {
 		emitSessionEvent: event => this.#emitSessionEvent(event),
 		promptGeneration: () => this.#promptGeneration,
 		scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
-		abortIsDeliberate: () => this.#abortInProgress || this.#isDisposed || this.#streamingEdit.abortTriggered,
+		abortIsDeliberate: message =>
+			this.#deliberateAborts.has(message) ||
+			this.#abortInProgress ||
+			this.#isDisposed ||
+			this.#streamingEdit.abortTriggered,
 		setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
 		resetCurrentResponsesProviderSession: reason => this.#providerSessions.resetResponses(this.model, reason),
 		maybeAutoRedeemCodexReset: () => this.#usage.maybeAutoRedeemCodexReset(),
@@ -946,6 +950,11 @@ export class AgentSession {
 	/** Prompts in flight and the power assertion held while any runs. */
 	readonly #inFlight: TurnsInFlight;
 	#abortInProgress = false;
+	/**
+	 * Turns that ended while `abort()` was running. `abort()` clears `#abortInProgress` once the agent
+	 * loop is idle, which is before the turn's settle reads it, so the settle reads this instead.
+	 */
+	readonly #deliberateAborts = new WeakSet<AssistantMessage>();
 	/** The empty-stop and unexpected-stop retry cycles, their reminders and the terminal empty-stop flag. */
 	readonly #stopRetries: StopRetries;
 	/** Usage headers and turn cost recording, usage reports, saved-reset redeems and Codex auto-redeem. */
@@ -2646,6 +2655,7 @@ export class AgentSession {
 			// settles as if it still carried tool calls.
 			this.#lastAssistantMessage = message;
 			if (message.stopReason === "aborted") this.#stampAbortedAssistant(message);
+			if (this.#abortInProgress) this.#deliberateAborts.add(message);
 			interruptedThinkingMessage = demoteInterruptedThinkingOnUserInterrupt(message);
 			// Make the hidden continuity turn visible to the next prompt before any awaited
 			// extension delivery or persistence can stall this handler.

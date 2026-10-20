@@ -88,10 +88,11 @@ export interface RetryHost {
 	promptGeneration(): number;
 	scheduleAgentContinue(options?: ScheduledAgentContinueOptions): void;
 	/**
-	 * Whether the turn was stopped on purpose: a user or lifecycle abort, a dispose, or the
-	 * streaming-edit guard. Such a turn settles and is never retried or continued.
+	 * Whether `message` was stopped on purpose: a user or lifecycle abort, a dispose, or the
+	 * streaming-edit guard. Such a turn settles and is never retried or continued. Answered for the
+	 * message rather than for the session, because the settle runs after `abort()` has returned.
 	 */
-	abortIsDeliberate(): boolean;
+	abortIsDeliberate(message: AssistantMessage): boolean;
 	/** Switch the active model and reset the provider sessions the switch invalidates. */
 	setModelWithProviderSessionReset(model: Model): void;
 	resetCurrentResponsesProviderSession(reason: string): void;
@@ -194,8 +195,10 @@ export class RetryRuntime {
 	 * carries the generic sentinel (bare `abort()`), whether the provider
 	 * finalized it as `stopReason: "aborted"` or leaked it as `stopReason:
 	 * "error"` (a stalled/dropped stream reported as an error rather than an
-	 * abort — issue #5375). Only fires while the session is neither aborting nor
-	 * tearing down. A user/lifecycle abort, a dispose-driven abort, or a
+	 * abort — issue #5375). Only fires for a turn that did not end during a
+	 * session abort and while the session is not tearing down. A user/lifecycle
+	 * abort (including the subagent soft request budget's stop), a dispose-driven
+	 * abort, or a
 	 * session-induced streaming-edit guard abort (auto-generated-file guard or
 	 * failed-patch preview) is deliberate and MUST settle the turn instead:
 	 * routing it through retry would orphan the retry gate on a continuation the
@@ -208,7 +211,7 @@ export class RetryRuntime {
 		if (
 			(message.stopReason !== "aborted" && message.stopReason !== "error") ||
 			message.content.length !== 0 ||
-			this.#host.abortIsDeliberate()
+			this.#host.abortIsDeliberate(message)
 		) {
 			return false;
 		}
@@ -270,7 +273,7 @@ export class RetryRuntime {
 	 */
 	async #continueAfterUnreplayableBatch(message: AssistantMessage): Promise<boolean> {
 		if (message.stopReason !== "error") return false;
-		if (this.#host.abortIsDeliberate()) return false;
+		if (this.#host.abortIsDeliberate(message)) return false;
 		const retrySettings = this.#session.settings.getGroup("retry");
 		if (!retrySettings.enabled) return false;
 		const id = this.#classify(message);
