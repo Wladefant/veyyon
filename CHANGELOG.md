@@ -52,6 +52,7 @@
 - `settleWithin(promise, timeoutMs, fallback)` resolves with the promise's value, or with `fallback` once the deadline passes, and clears its timer when the promise settles.
 - `@veyyon/utils/keys` exports `KITTY_CSI_U_PATTERN`, the Kitty CSI-u key-sequence pattern its keypad fast path matches.
 - `estimateTokensFromBytes(bytes)` returns the token estimate `estimateTokensFromText` gives a text of that many UTF-8 bytes.
+- `@veyyon/utils/fs-io` exports `readFileText`, `readFileRange` and `writeFileCreatingParents`, which read and write like `Bun.file().text()`, `Bun.file().slice().bytes()` and `Bun.write` but open through `node:fs`, so the open waits out a lease another process holds instead of failing with `EAGAIN`.
 - `TimeSlice` and `TIME_SLICE_MS` let a long synchronous loop yield to the event loop once every 8 ms.
 
 ### Changed
@@ -210,6 +211,8 @@
 
 ### Fixed
 
+- `edit`, `read`, LSP workspace edits, `ast_edit`, `write` conflict resolution, archive, document, vault, skill and `local://` reads, and context discovery open a workspace file through `node:fs`, so a file another process holds a lease on (an NFS-exported file a client has open) is read or written once the lease breaks instead of failing with `EAGAIN: resource temporarily unavailable`, and an `AGENTS.md` that hit that error is no longer cached as absent.
+- A ranged `read` of a file up to the snapshot cap decodes it in one `readFile` pass, so a 4 MiB file is materialized in 327 µs instead of 571 µs.
 - A tool Cursor runs through its exec channel receives the arguments the agent loop would give it, with the `i` intent field stripped, repairs applied, the schema checked and codec handles and secret placeholders expanded, so a Cursor `search` call no longer fails with `Search type "text" does not accept: i` and an invalid argument is answered with the validation error instead of reaching the tool.
 - A `read` whose delimited `path` names several paths that do not exist waits for the 5 s suffix-search limit once per call instead of once per missing path, and searches a repeated path once, so a four-path read with two missing paths over a busy 6-million-entry tree returns in 5.0 s instead of 7.5–7.7 s, and in 5 s where it took 10 s when each search reached the limit.
 - A `search` of type `text` that reaches its 30 s limit returns the matches found by then with a notice that the result is incomplete instead of failing with "Text search timed out" and no matches, and the targets of a delimited `path` share the limit instead of each taking 30 s; over a 6.1-million-entry tree, `integrity=` under a 2 s limit returns 104 matches in 82 files instead of an error.
@@ -317,6 +320,7 @@
 - A plan whose variant names reduce to one directory name is refused, naming both variants.
 - A sandboxed local-cli trial can no longer signal a process outside it or connect to an abstract Unix socket made outside it on a kernel with Landlock ABI 6 or later.
 - A sandboxed local-cli trial can no longer read files in `/run/user`, and `docs/backends.md` states that a trial still connects to every pathname Unix socket the runner's user can, the session bus and the Docker daemon among them.
+- `NodeFilesystem.readText` reads through `node:fs`, so a file another process holds a lease on is read once the lease breaks instead of failing with `EAGAIN`.
 - A session no longer moves compacted history out of memory after another window appended to its file, which read entries back from shifted offsets and failed compaction with "could not be read back from bytes".
 - A compacted entry whose recorded offset no longer holds its line is read back from where one scan of the session file finds its line, and is checked to be the same entry, instead of failing every later compaction for the life of the process.
 - A missing blob is logged once per process instead of once per reference on every open and every read-back of an entry, which logged one lost blob store as tens of thousands of warnings.
