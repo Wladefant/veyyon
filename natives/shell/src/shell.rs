@@ -126,22 +126,22 @@ pub struct MinimizerResult {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ShellRunResult {
-	pub exit_code:        Option<i32>,
+	pub exit_code:         Option<i32>,
 	/// The signal that killed the command, when it died from one.
 	///
 	/// `exit_code` keeps bash's `128 + signal` form, which cannot be told apart
 	/// from a command that called `exit(137)` itself. This reports the raw
 	/// signal so callers can distinguish an out-of-memory kill from an ordinary
 	/// failure.
-	pub signal:           Option<i32>,
-	pub cancelled:        bool,
-	pub timed_out:        bool,
+	pub signal:            Option<i32>,
+	pub cancelled:         bool,
+	pub timed_out:         bool,
 	/// Whether output capture stopped before EOF.
 	pub output_incomplete: bool,
 	/// Retained raw output prefix, present only for incomplete buffered capture.
-	pub captured_output:  Option<String>,
-	pub minimized:        Option<MinimizerResult>,
-	pub working_dir:      Option<String>,
+	pub captured_output:   Option<String>,
+	pub minimized:         Option<MinimizerResult>,
+	pub working_dir:       Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -404,20 +404,22 @@ async fn run_shell_session(
 	let _ = process_cancel_bridge.await;
 	abort_state.clear().await;
 
-	let keepalive = res.as_ref().is_ok_and(|output| session_keepalive(&output.result));
+	let keepalive = res
+		.as_ref()
+		.is_ok_and(|output| session_keepalive(&output.result));
 	if !keepalive {
 		*session.lock().await = None;
 	}
 	let output = res?;
 	Ok(ShellRunResult {
-		exit_code: Some(exit_code(&output.result)),
-		signal: output.result.signal,
-		cancelled: false,
-		timed_out: false,
+		exit_code:         Some(exit_code(&output.result)),
+		signal:            output.result.signal,
+		cancelled:         false,
+		timed_out:         false,
 		output_incomplete: output.output_incomplete,
-		captured_output: output.captured_output,
-		working_dir: output.working_dir,
-		minimized: output.minimized,
+		captured_output:   output.captured_output,
+		working_dir:       output.working_dir,
+		minimized:         output.minimized,
 	})
 }
 
@@ -496,14 +498,14 @@ async fn run_shell_oneshot(
 	let output = run_result
 		.unwrap_or_else(|err| Err(Error::msg(format!("Shell execution task failed: {err}"))))?;
 	Ok(ShellExecuteResult {
-		exit_code: Some(exit_code(&output.result)),
-		signal: output.result.signal,
-		cancelled: false,
-		timed_out: false,
+		exit_code:         Some(exit_code(&output.result)),
+		signal:            output.result.signal,
+		cancelled:         false,
+		timed_out:         false,
 		output_incomplete: output.output_incomplete,
-		captured_output: output.captured_output,
-		working_dir: output.working_dir,
-		minimized: output.minimized,
+		captured_output:   output.captured_output,
+		working_dir:       output.working_dir,
+		minimized:         output.minimized,
 	})
 }
 
@@ -946,8 +948,9 @@ enum CommandCaptureMode {
 	Buffered { max_capture_bytes: usize },
 }
 
-/// What one command run hands the session and oneshot paths: the execution result plus
-/// the capture metadata. A stalled capture keeps its status and reports its raw prefix.
+/// What one command run hands the session and oneshot paths: the execution
+/// result plus the capture metadata. A stalled capture keeps its status and
+/// reports its raw prefix.
 struct ShellCommandOutput {
 	result:            ExecutionResult,
 	minimized:         Option<MinimizerResult>,
@@ -1084,12 +1087,16 @@ async fn run_shell_command_single(
 		capture_mode,
 	)
 	.await?;
-	let output_incomplete = command_run.buffered.as_ref().is_some_and(|buffered| buffered.incomplete);
+	let output_incomplete = command_run
+		.buffered
+		.as_ref()
+		.is_some_and(|buffered| buffered.incomplete);
 	let mut minimized_out = None;
 	let mut captured_output = None;
 	if let Some(buffered) = command_run.buffered {
 		if buffered.incomplete {
-			// Minimizing needs the whole transcript, so an incomplete capture keeps only its raw prefix.
+			// Minimizing needs the whole transcript, so an incomplete capture keeps only
+			// its raw prefix.
 			captured_output = Some(bounded_prefix(buffered.text, capture_limit));
 		} else if let Some(config) = options.minimizer.as_ref()
 			&& !buffered.exceeded
@@ -1111,9 +1118,10 @@ async fn run_shell_command_single(
 					minimizer::MinimizerOutput::passthrough(&buffered.text)
 				},
 			};
-			// Surface telemetry only when the filter actually rewrote the output and kept the
-			// original buffer. A supported filter that leaves the output unchanged reports
-			// `changed: false` with no `original_text` and must NOT set `minimized`.
+			// Surface telemetry only when the filter actually rewrote the output and kept
+			// the original buffer. A supported filter that leaves the output unchanged
+			// reports `changed: false` with no `original_text` and must NOT set
+			// `minimized`.
 			if minimized.changed
 				&& let Some(original_text) = minimized.original_text
 			{
@@ -1232,7 +1240,9 @@ async fn run_shell_command_segmented_chain(
 			} else if buffered.incomplete {
 				// Keep execution order and exit status. Only minimization stops when a
 				// segment's output is incomplete.
-				let mut prefix = aggregate.take().map_or_else(String::new, |capture| capture.original_text);
+				let mut prefix = aggregate
+					.take()
+					.map_or_else(String::new, |capture| capture.original_text);
 				prefix.push_str(&buffered.text);
 				captured_output = Some(bounded_prefix(prefix, max_capture_bytes));
 				output_incomplete = true;
@@ -1688,7 +1698,10 @@ async fn read_output_pipe_chunk_windows(
 	poll_count: &mut u32,
 	drain_remaining: &mut Option<usize>,
 ) -> io::Result<Option<usize>> {
-	use std::{io::{Read as _, Seek as _}, os::windows::io::AsRawHandle};
+	use std::{
+		io::{Read as _, Seek as _},
+		os::windows::io::AsRawHandle,
+	};
 
 	let chunk = read_pipe_chunk_windows(reader, buf, cancel_token, poll_count).await?;
 	if chunk.is_some() || !cancel_token.is_cancelled() {
@@ -2175,18 +2188,18 @@ async fn read_output(
 // capture outside the task, without copying it on each callback.
 #[derive(Default)]
 struct BufferedCapture {
-	bytes: Vec<u8>,
+	bytes:       Vec<u8>,
 	input_bytes: usize,
-	exceeded: bool,
+	exceeded:    bool,
 }
 
 impl BufferedCapture {
 	fn into_output(self) -> BufferedOutput {
 		BufferedOutput {
-			text: decode_bytes(&self.bytes),
+			text:        decode_bytes(&self.bytes),
 			input_bytes: self.input_bytes,
-			exceeded: self.exceeded,
-			incomplete: false,
+			exceeded:    self.exceeded,
+			incomplete:  false,
 		}
 	}
 }
@@ -2199,14 +2212,16 @@ struct BufferedCaptureGuard {
 impl Drop for BufferedCaptureGuard {
 	fn drop(&mut self) {
 		if let Some(partial) = &self.partial {
-			*partial.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
-				Some(std::mem::take(&mut self.capture));
+			*partial
+				.lock()
+				.unwrap_or_else(std::sync::PoisonError::into_inner) = Some(std::mem::take(&mut self.capture));
 		}
 	}
 }
 
-/// The capture an aborted reader left in its partial slot. The reader stopped before EOF, so
-/// the pipe may still hold unread bytes and the prefix is incomplete.
+/// The capture an aborted reader left in its partial slot. The reader stopped
+/// before EOF, so the pipe may still hold unread bytes and the prefix is
+/// incomplete.
 fn take_partial_capture(
 	partial: &std::sync::Mutex<Option<BufferedCapture>>,
 ) -> Option<BufferedOutput> {
@@ -2226,7 +2241,12 @@ async fn read_output_buffered(
 	max_capture_bytes: usize,
 ) -> BufferedOutput {
 	read_output_buffered_with_capture(
-		reader, on_chunk, cancel_token, activity, max_capture_bytes, None,
+		reader,
+		on_chunk,
+		cancel_token,
+		activity,
+		max_capture_bytes,
+		None,
 	)
 	.await
 }
@@ -2241,10 +2261,8 @@ async fn read_output_buffered_with_capture(
 ) -> BufferedOutput {
 	const BUF: usize = 65536;
 	let mut buf = vec![0u8; BUF];
-	let mut capture = BufferedCaptureGuard {
-		capture: BufferedCapture::default(),
-		partial: partial_capture,
-	};
+	let mut capture =
+		BufferedCaptureGuard { capture: BufferedCapture::default(), partial: partial_capture };
 	let mut decoder = OutputDecoder::new();
 
 	#[cfg(unix)]
@@ -2267,8 +2285,8 @@ async fn read_output_buffered_with_capture(
 	#[cfg(not(any(unix, windows)))]
 	tokio::pin!(reader);
 
-	// Set only when the pipe reports EOF. A read error or a cancel leaves it false, so the
-	// capture stays incomplete.
+	// Set only when the pipe reports EOF. A read error or a cancel leaves it false,
+	// so the capture stays incomplete.
 	let mut reached_eof = false;
 	loop {
 		#[cfg(unix)]
@@ -2349,8 +2367,8 @@ async fn read_output_buffered_with_capture(
 		emit_chunk(&rest, on_chunk.as_ref()).await;
 	}
 
-	// Only EOF proves the pipe holds no unread bytes. A cancel that lands during the final
-	// flush callback comes after EOF, so the capture stays complete.
+	// Only EOF proves the pipe holds no unread bytes. A cancel that lands during
+	// the final flush callback comes after EOF, so the capture stays complete.
 	let incomplete = !reached_eof;
 	BufferedOutput { incomplete, ..std::mem::take(&mut capture.capture).into_output() }
 }
@@ -2408,7 +2426,8 @@ async fn emit_chunk(text: &str, callback: Option<&Sender<String>>) {
 	}
 }
 
-/// The raw prefix of a capture that stopped before EOF, cut back to `max_bytes` on a character boundary.
+/// The raw prefix of a capture that stopped before EOF, cut back to `max_bytes`
+/// on a character boundary.
 fn bounded_prefix(mut text: String, max_bytes: usize) -> String {
 	if text.len() > max_bytes {
 		let mut end = max_bytes;
@@ -2674,8 +2693,9 @@ fn uutils_env_disabled(config: &ShellConfig, key: &str) -> bool {
 mod tests {
 	use super::*;
 
-	/// Drives the buffered reader into a callback that never receives, then aborts it the way
-	/// the post-exit path aborts a parked reader. Returns the partial capture from the slot.
+	/// Drives the buffered reader into a callback that never receives, then
+	/// aborts it the way the post-exit path aborts a parked reader. Returns the
+	/// partial capture from the slot.
 	async fn abort_reader_parked_on_callback(
 		bytes: &[u8],
 		max_capture_bytes: usize,
@@ -2697,8 +2717,9 @@ mod tests {
 			max_capture_bytes,
 			Some(partial.clone()),
 		));
-		// The reader sends activity before it extends the capture, and it parks in the callback
-		// within the same poll. An abort after this signal therefore lands after both.
+		// The reader sends activity before it extends the capture, and it parks in the
+		// callback within the same poll. An abort after this signal therefore lands
+		// after both.
 		time::timeout(Duration::from_secs(5), activity_rx.recv_async())
 			.await
 			.expect("reader must report the bytes it read")
@@ -2712,8 +2733,9 @@ mod tests {
 		take_partial_capture(&partial).expect("aborted reader must leave its partial capture")
 	}
 
-	/// A reader parked in its callback has already read and captured its bytes. An abort keeps
-	/// that text and count. The recovered capture is incomplete because the pipe never hit EOF.
+	/// A reader parked in its callback has already read and captured its bytes.
+	/// An abort keeps that text and count. The recovered capture is incomplete
+	/// because the pipe never hit EOF.
 	#[tokio::test(flavor = "multi_thread")]
 	async fn aborted_reader_keeps_bytes_it_captured_before_parking() {
 		let captured = abort_reader_parked_on_callback(b"retained-output", 1024).await;
@@ -2723,7 +2745,8 @@ mod tests {
 		assert!(captured.incomplete, "an aborted reader that never saw EOF must be incomplete");
 	}
 
-	/// The same abort past the capture limit keeps the byte count and drops the text.
+	/// The same abort past the capture limit keeps the byte count and drops the
+	/// text.
 	#[tokio::test(flavor = "multi_thread")]
 	async fn aborted_reader_over_capture_limit_keeps_count_without_text() {
 		let captured = abort_reader_parked_on_callback(b"retained-output", 1).await;
@@ -2733,9 +2756,9 @@ mod tests {
 		assert!(captured.incomplete);
 	}
 
-	/// A consumer that stops receiving after the first chunk parks the reader while
-	/// later bytes stay unread in the pipe. The abort must not report that prefix as
-	/// a complete capture.
+	/// A consumer that stops receiving after the first chunk parks the reader
+	/// while later bytes stay unread in the pipe. The abort must not report
+	/// that prefix as a complete capture.
 	#[cfg(unix)]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn stalled_consumer_marks_an_aborted_capture_incomplete() {
@@ -2759,16 +2782,21 @@ mod tests {
 		.await
 		.expect("reader shutdown must remain bounded")
 		.expect("command should succeed");
-		let captured = output.buffered.expect("aborted reader must return its partial capture");
+		let captured = output
+			.buffered
+			.expect("aborted reader must return its partial capture");
 		assert_eq!(captured.text, "a");
 		assert_eq!(captured.input_bytes, 1);
-		assert!(captured.incomplete, "bytes left unread in the pipe must mark the capture incomplete");
+		assert!(
+			captured.incomplete,
+			"bytes left unread in the pipe must mark the capture incomplete"
+		);
 	}
 
-	/// A cooperative cancel stops the reader while the pipe is still open, so the
-	/// bytes read so far are a prefix. The cancelled token makes the reader exit on
-	/// its next wait whether or not the pending bytes were read first, so this holds
-	/// without any timing assumption.
+	/// A cooperative cancel stops the reader while the pipe is still open, so
+	/// the bytes read so far are a prefix. The cancelled token makes the reader
+	/// exit on its next wait whether or not the pending bytes were read first,
+	/// so this holds without any timing assumption.
 	#[tokio::test(flavor = "multi_thread")]
 	async fn cancelled_open_pipe_capture_is_incomplete() {
 		use std::io::Write as _;
@@ -2786,7 +2814,10 @@ mod tests {
 		.await
 		.expect("cancelled reader must return while the pipe is still open");
 		drop(writer);
-		assert!(output.incomplete, "a cancelled reader that never saw EOF must mark the capture incomplete");
+		assert!(
+			output.incomplete,
+			"a cancelled reader that never saw EOF must mark the capture incomplete"
+		);
 	}
 
 	/// A reader that reaches EOF holds the whole output. The capture must stay
@@ -2799,15 +2830,17 @@ mod tests {
 		assert!(!output.incomplete, "a capture that reached EOF is complete");
 	}
 
-	/// The reader reaches EOF and parks in the final `decoder.finish` callback, which flushes
-	/// the trailing invalid UTF-8 byte. A cancel that lands while that callback is parked comes
-	/// after EOF, so the complete output must stay complete.
+	/// The reader reaches EOF and parks in the final `decoder.finish` callback,
+	/// which flushes the trailing invalid UTF-8 byte. A cancel that lands while
+	/// that callback is parked comes after EOF, so the complete output must
+	/// stay complete.
 	#[tokio::test(flavor = "multi_thread")]
 	async fn cancel_during_final_flush_callback_after_eof_stays_complete() {
 		use std::io::Write as _;
 
 		let (reader, mut writer) = pipe_to_files("test").expect("test pipe should be created");
-		// "ok" decodes at once. The trailing incomplete sequence waits for EOF to flush it.
+		// "ok" decodes at once. The trailing incomplete sequence waits for EOF to flush
+		// it.
 		writer.write_all(b"ok\xE2\x82").expect("write to test pipe");
 		writer.flush().expect("flush test pipe");
 		drop(writer);
@@ -2827,8 +2860,9 @@ mod tests {
 			.expect("reader must deliver the decoded prefix")
 			.expect("callback channel must stay open");
 		assert_eq!(first, "ok");
-		// Receiving the replacement proves EOF reached the final decoder flush. The zero-capacity
-		// callback rendezvous keeps the reader there until this receive, so cancellation is late.
+		// Receiving the replacement proves EOF reached the final decoder flush. The
+		// zero-capacity callback rendezvous keeps the reader there until this
+		// receive, so cancellation is late.
 		let flushed = time::timeout(Duration::from_secs(5), callback_rx.recv_async())
 			.await
 			.expect("final flush callback must deliver the replacement")
@@ -2843,7 +2877,8 @@ mod tests {
 		assert!(!output.incomplete, "a capture that reached EOF stays complete after a late cancel");
 	}
 
-	/// Minimizer config that sends the stalled-capture commands below down the buffered path.
+	/// Minimizer config that sends the stalled-capture commands below down the
+	/// buffered path.
 	#[cfg(unix)]
 	fn printf_minimizer_config(root: &std::path::Path) -> minimizer::MinimizerConfig {
 		minimizer::MinimizerConfig::from_options(&printf_minimizer(
@@ -2855,10 +2890,10 @@ mod tests {
 	#[cfg(unix)]
 	fn shell_run_config(command: &str, minimizer: minimizer::MinimizerConfig) -> ShellRunConfig {
 		ShellRunConfig {
-			command: command.to_owned(),
-			cwd: None,
-			env: None,
-			minimizer: Some(minimizer),
+			command:       command.to_owned(),
+			cwd:           None,
+			env:           None,
+			minimizer:     Some(minimizer),
 			cpu_budget_id: None,
 		}
 	}
@@ -2905,8 +2940,15 @@ mod tests {
 		.expect("execution must stay bounded")
 		.expect("a stalled capture must return the command's result");
 		assert_eq!(exit_code(&output.result), 0, "the command succeeded");
-		assert!(output.output_incomplete, "bytes left unread in the pipe must mark the capture incomplete");
-		assert_eq!(output.captured_output.as_deref(), Some("a"), "the raw prefix read so far is retained");
+		assert!(
+			output.output_incomplete,
+			"bytes left unread in the pipe must mark the capture incomplete"
+		);
+		assert_eq!(
+			output.captured_output.as_deref(),
+			Some("a"),
+			"the raw prefix read so far is retained"
+		);
 		assert!(output.minimized.is_none(), "an incomplete capture is never minimized");
 	}
 
@@ -2971,7 +3013,11 @@ mod tests {
 		.expect("a stalled capture must return the command's result");
 		assert_eq!(output.exit_code, Some(0));
 		assert!(output.output_incomplete, "the stalled capture must be reported incomplete");
-		assert_eq!(output.captured_output.as_deref(), Some("a"), "the raw prefix read so far is retained");
+		assert_eq!(
+			output.captured_output.as_deref(),
+			Some("a"),
+			"the raw prefix read so far is retained"
+		);
 		assert!(output.minimized.is_none(), "an incomplete capture is never minimized");
 	}
 
@@ -2990,7 +3036,10 @@ mod tests {
 		assert!(output.timed_out, "the deadline must report timed_out");
 		assert!(!output.cancelled, "a timeout is not a user cancel");
 		assert_eq!(output.exit_code, None, "a stopped run has no exit code");
-		assert!(output.captured_output.is_none(), "a stopped run keeps no raw prefix unless it was incomplete");
+		assert!(
+			output.captured_output.is_none(),
+			"a stopped run keeps no raw prefix unless it was incomplete"
+		);
 	}
 
 	#[cfg(unix)]
@@ -3012,7 +3061,10 @@ mod tests {
 		assert!(output.cancelled, "a user cancel must report cancelled");
 		assert!(!output.timed_out, "a user cancel is not a timeout");
 		assert_eq!(output.exit_code, None, "a cancelled run has no exit code");
-		assert!(output.captured_output.is_none(), "a cancelled run keeps no raw prefix unless it was incomplete");
+		assert!(
+			output.captured_output.is_none(),
+			"a cancelled run keeps no raw prefix unless it was incomplete"
+		);
 	}
 
 	#[cfg(unix)]
@@ -3021,7 +3073,8 @@ mod tests {
 		let _guard = shell_test_lock().lock().await;
 		let root = unique_temp_dir("background-pipe-holder");
 		let minimizer = printf_minimizer_config(&root);
-		// The background `sleep` inherits the output pipe and outlives the foreground `printf`.
+		// The background `sleep` inherits the output pipe and outlives the foreground
+		// `printf`.
 		let command = "sleep 30 & printf a";
 		let mut session = stalled_shell_session(&minimizer).await;
 		let run = shell_run_config(command, minimizer);
@@ -3043,13 +3096,21 @@ mod tests {
 			.expect("execution must stay bounded")
 			.expect("a successful foreground command must return its result");
 		assert_eq!(exit_code(&output.result), 0, "the foreground command succeeded");
-		assert!(output.output_incomplete, "a pipe still held by a background job must mark the capture incomplete");
-		assert_eq!(output.captured_output.as_deref(), Some("a"), "the foreground output read so far is retained");
+		assert!(
+			output.output_incomplete,
+			"a pipe still held by a background job must mark the capture incomplete"
+		);
+		assert_eq!(
+			output.captured_output.as_deref(),
+			Some("a"),
+			"the foreground output read so far is retained"
+		);
 		assert!(output.minimized.is_none(), "an incomplete capture is never minimized");
 	}
 
-	/// The cancelled drain of a regular file is bounded by the bytes left when the
-	/// drain starts. Bytes appended after that snapshot must not extend the drain.
+	/// The cancelled drain of a regular file is bounded by the bytes left when
+	/// the drain starts. Bytes appended after that snapshot must not extend the
+	/// drain.
 	#[cfg(windows)]
 	#[tokio::test]
 	async fn cancelled_regular_file_drain_stops_at_snapshot_length() {
@@ -3065,20 +3126,22 @@ mod tests {
 		let mut remaining = None;
 		let mut buf = [0u8; 4];
 		let mut output = Vec::new();
-		let first = read_output_pipe_chunk_windows(
-			&mut reader, &mut buf, &cancel, &mut polls, &mut remaining,
-		)
-		.await
-		.expect("first drain read");
+		let first =
+			read_output_pipe_chunk_windows(&mut reader, &mut buf, &cancel, &mut polls, &mut remaining)
+				.await
+				.expect("first drain read");
 		output.extend_from_slice(&buf[..first.expect("first drain read yields bytes")]);
-		let mut appender =
-			fs::OpenOptions::new().append(true).open(&path).expect("open fixture for append");
-		appender.write_all(b"-late-bytes").expect("append after snapshot");
-		while let Some(n) = read_output_pipe_chunk_windows(
-			&mut reader, &mut buf, &cancel, &mut polls, &mut remaining,
-		)
-		.await
-		.expect("drain read")
+		let mut appender = fs::OpenOptions::new()
+			.append(true)
+			.open(&path)
+			.expect("open fixture for append");
+		appender
+			.write_all(b"-late-bytes")
+			.expect("append after snapshot");
+		while let Some(n) =
+			read_output_pipe_chunk_windows(&mut reader, &mut buf, &cancel, &mut polls, &mut remaining)
+				.await
+				.expect("drain read")
 		{
 			output.extend_from_slice(&buf[..n]);
 		}
@@ -3100,11 +3163,10 @@ mod tests {
 		let mut remaining = None;
 		let mut buf = [0u8; 4];
 		let mut output = Vec::new();
-		while let Some(n) = read_output_pipe_chunk_windows(
-			&mut reader, &mut buf, &cancel, &mut polls, &mut remaining,
-		)
-		.await
-		.expect("read cancelled regular file")
+		while let Some(n) =
+			read_output_pipe_chunk_windows(&mut reader, &mut buf, &cancel, &mut polls, &mut remaining)
+				.await
+				.expect("read cancelled regular file")
 		{
 			output.extend_from_slice(&buf[..n]);
 		}
