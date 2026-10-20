@@ -6,6 +6,7 @@
 
 ### Breaking Changes
 
+- `SessionStorage.rewriteTailAtomic(path, headBytes, keepBytes, head, tail, options)` takes `headBytes`, the length of the file's first bytes `head` replaces, so a head of another length moves the kept bytes; it fails when `headBytes` exceeds `keepBytes`.
 - `releaseFreeHeapPages()` returns a `Promise<boolean>` and walks the C allocator's arenas on libuv's thread pool instead of on the calling thread, where the walk held a 6 GiB session's event loop 250 to 1127 ms per call.
 - `enclosingBlockBoundaries()` returns a `Promise` and parses on libuv's thread pool instead of on the calling thread, where a 3.5 MB TypeScript source held the event loop 153 ms; every call shares one retained parse tree, so a second window of the same source answers in 4 ms on any pool thread.
 - `withTimeoutSignal` is removed; use `withScopedTimeoutSignal(timeoutMs, fn, parent?)` or `scopedTimeoutSignal`, whose timer is cleared when the operation settles.
@@ -54,6 +55,7 @@
 
 ### Changed
 
+- `set_cwd` and a session moved to another project rewrite only the session file's header and keep every entry line on disk, so changing directory on a 321 MB session takes 117–147 ms instead of 1.9–2.2 s and holds 230–244 MB resident instead of 1.3–1.8 GB.
 - A `search` of type `structure` over a tree parses files on one thread per core beside the walk, so the tool returns in 1.1 s instead of 2.2 s over 282,743 cached PHP files and in 5.8 s instead of 18.8 s over 64 PHP files of 2 MB each.
 - A `search` of type `structure` holds at most 8 MiB of source in parse at once across every search in the process and returns its syntax trees' pages to the system when it ends instead of at the next idle trim, so after a search over 64 PHP files of 2 MB each the process holds 14 MB of anonymous memory instead of 139 MB; it peaks at 850 MB there, against 445 MB when those files parsed one at a time, and three such searches at once peak at 650 MB against 433 MB.
 - A `search` of type `structure` parses and matches files on the walker's worker threads instead of one at a time, so a structure search over 400 PHP files takes 78 ms instead of 275 ms with the same CPU time.
@@ -153,6 +155,7 @@
 - The `OPENROUTER_API_ENDPOINT` documentation states which clients fall back to it; no user-visible change.
 - The model cache writes under `synchronous = NORMAL` in WAL mode instead of flushing the disk on every commit, so storing one provider's discovered models at startup takes 0.06–0.08 ms instead of 0.41–0.63 ms, and at most 0.87 ms instead of up to 38 ms.
 - `engine/` is grouped by concern into `members`, `plan`, `run`, `trial`, `kit`, `compare`, `harness`, `auth`, `io`, `wire` and `corpus`, and the overlay loaders and paired statistics every suite shares moved into it from the in-process backend and the DeepSWE suite.
+- `SessionManager.setCwd` and `moveTo` rewrite only the title slot and the header and keep every entry line on disk, and every tail rewrite writes the header again instead of falling back to a whole-file write when it changed, so a cwd change on a 321 MB session takes 117–147 ms instead of 1.9–2.2 s and holds 230–244 MB resident instead of 1.3–1.8 GB.
 - Restoring a loaded session's payloads scans its entries in 8 ms slices that let input and rendering run between them, so resuming a 148 MB session blocks the event loop for at most 34-41 ms instead of 58-61 ms.
 - A streamed load reads the projection of a compacted entry under 1 KiB instead of parsing its whole line, so opening a 148 MB session takes 227 ms instead of 277 ms and holds 40.7 MB of JavaScript heap instead of 43.1 MB, and resuming it settles at 171 MB resident instead of 178 MB.
 - A compaction that a later compaction summarized moves its summary out of memory, live and on load, so a resumed 148 MB session with 162 compactions peaks at 261 MB resident instead of 292 MB.
