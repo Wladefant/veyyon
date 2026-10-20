@@ -8,8 +8,11 @@
  * The class closed here: an edit carries onto the edited version every line it
  * wrote and every displayed or clipped line it left unchanged, at its new
  * position; `recordPreviewLines` adds the rows the edit result showed. A
- * version that had no displayed-line record before the edit stays editable at
- * every line. Each hunk keyword of the patch language is swept in
+ * version that had no displayed-line record before the edit, or that the store
+ * no longer holds, stays editable at every line. When the file changed since
+ * the tagged read, the read's displayed lines map onto the changed text first,
+ * so a line the change rewrote or added is not displayed. Each hunk keyword of
+ * the patch language is swept in
  * `packages/coding-agent/test/edit/a-line-shown-by-an-edit-stays-editable-after-a-later-read.test.ts`
  * through the production read and edit tools.
  *
@@ -17,7 +20,14 @@
  * the pairing is covered in `a-line-map-pairs-unchanged-lines-like-a-full-diff.test.ts`.
  */
 import { describe, expect, it } from "bun:test";
-import { InMemoryFilesystem, InMemorySnapshotStore, Patch, Patcher, type PatchSectionResult } from "@veyyon/hashline";
+import {
+	computeFileHash,
+	InMemoryFilesystem,
+	InMemorySnapshotStore,
+	Patch,
+	Patcher,
+	type PatchSectionResult,
+} from "@veyyon/hashline";
 
 const PATH = "a.ts";
 const TEN = `${Array.from({ length: 10 }, (_, i) => `l${i + 1}`).join("\n")}\n`;
@@ -137,5 +147,93 @@ describe("the rows an edit result showed become displayed lines", () => {
 		await expect(edit(fixture, PATH, result.fileHash, swaps([4]))).rejects.toThrow(/never displayed/);
 		await expect(edit(fixture, PATH, result.fileHash, swaps([5]))).rejects.toThrow(/never displayed/);
 		await expect(edit(fixture, PATH, result.fileHash, swaps([6]))).rejects.toThrow(/never displayed/);
+	});
+});
+
+/** `TEN` changed outside the session: a line above every line, and `l9` rewritten. */
+const DRIFTED = `ext0\n${TEN.replace("l9\n", "ext9\n")}`;
+
+/** A fixture whose file no read was recorded for, under the tag of `TEN`. */
+function untracked(): Fixture {
+	const fs = new InMemoryFilesystem([[PATH, TEN]]);
+	const snapshots = new InMemorySnapshotStore();
+	return { fs, snapshots, patcher: new Patcher({ fs, snapshots }), tag: computeFileHash(TEN) };
+}
+
+describe("an edit applied without a retained pre-edit version", () => {
+	it("leaves every line editable after an edit under a tag the store does not hold", async () => {
+		const fixture = untracked();
+		const result = await editThenRead(fixture, swaps([2]), [11]);
+		await edit(fixture, PATH, result.fileHash, swaps([2, 7]));
+		expect(fixture.fs.get(PATH)).toContain("changed 7\n");
+	});
+
+	it("takes nothing from a retained text that only shares the tag of the file the edit applied to", async () => {
+		const fixture = untracked();
+		let other = "";
+		for (let i = 0; computeFileHash(other) !== fixture.tag; i++) other = `${TEN}collide ${i}\n`;
+		fixture.snapshots.record(PATH, other, [1]);
+		const result = await editThenRead(fixture, swaps([2]), [11]);
+		await edit(fixture, PATH, result.fileHash, swaps([2, 7]));
+		expect(fixture.fs.get(PATH)).toContain("changed 7\n");
+	});
+
+	it("leaves every line editable after a head insertion onto a changed file whose tag the store does not hold", async () => {
+		const fixture = untracked();
+		fixture.fs.set(PATH, DRIFTED);
+		const result = await editThenRead(fixture, "INS.HEAD:\n+top", [13]);
+		expect(result.warnings?.join("\n")).toContain("INS.HEAD");
+		await edit(fixture, PATH, result.fileHash, swaps([1, 2, 11]));
+		expect(fixture.fs.get(PATH)).toContain("changed 11\n");
+	});
+
+	it("maps the tagged read's lines through the change, then through the edit", async () => {
+		const fixture = readOf([1, 2, 3, 8]);
+		fixture.fs.set(PATH, DRIFTED);
+		const result = await editThenRead(fixture, swaps([2]), [11]);
+		// ext0 l1 changed2 l3 l4 l5 l6 l7 l8 ext9 l10: l1 is at 2, l3 at 4, l8 at 9.
+		expect(result.after).toBe(`ext0\nl1\nchanged 2\n${TEN.slice(6).replace("l9\n", "ext9\n")}`);
+		await edit(fixture, PATH, result.fileHash, swaps([2, 3, 4, 9, 11]));
+		expect(fixture.fs.get(PATH)).toContain("changed 9\next9\n");
+	});
+
+	it("refuses a line the change rewrote or added, and a line the tagged read never displayed", async () => {
+		const fixture = readOf([1, 2, 3, 8]);
+		fixture.fs.set(PATH, DRIFTED);
+		const result = await edit(fixture, PATH, fixture.tag, swaps([2]));
+		const before = fixture.fs.get(PATH);
+		for (const line of [1, 6, 10]) {
+			await expect(edit(fixture, PATH, result.fileHash, swaps([line]))).rejects.toThrow(/never displayed/);
+		}
+		expect(fixture.fs.get(PATH)).toBe(before);
+	});
+
+	it("maps every line of a tagged read without a record, and refuses the lines the change rewrote or added", async () => {
+		const fixture = readOf();
+		fixture.fs.set(PATH, DRIFTED);
+		const result = await editThenRead(fixture, swaps([2]), [11]);
+		await expect(edit(fixture, PATH, result.fileHash, swaps([1]))).rejects.toThrow(/never displayed/);
+		await expect(edit(fixture, PATH, result.fileHash, swaps([10]))).rejects.toThrow(/never displayed/);
+		await edit(fixture, PATH, result.fileHash, swaps([6]));
+		expect(fixture.fs.get(PATH)).toContain("changed 6\n");
+	});
+
+	it("maps the tagged read's clipped lines through the change", async () => {
+		const fixture = readOf([1, 2], [5]);
+		fixture.fs.set(PATH, DRIFTED);
+		const result = await editThenRead(fixture, swaps([2]), [11]);
+		// A refusal reveals the line it names and marks it displayed, so the insertion goes first.
+		const inserted = await edit(fixture, PATH, result.fileHash, "INS.POST 6:\n+beside");
+		expect(fixture.fs.get(PATH)).toContain("l5\nbeside\n");
+		await expect(edit(fixture, PATH, inserted.fileHash, swaps([6]))).rejects.toThrow(/never displayed/);
+	});
+
+	it("maps the tagged read's lines through the change after a tail insertion", async () => {
+		const fixture = readOf([1, 2, 3]);
+		fixture.fs.set(PATH, DRIFTED);
+		const result = await editThenRead(fixture, "INS.TAIL:\n+bottom", [11]);
+		await expect(edit(fixture, PATH, result.fileHash, swaps([1]))).rejects.toThrow(/never displayed/);
+		await edit(fixture, PATH, result.fileHash, swaps([2, 4, 12]));
+		expect(fixture.fs.get(PATH)).toContain("changed 12\n");
 	});
 });

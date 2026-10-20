@@ -196,8 +196,11 @@ DEL 20
   - A tag minted by `write` carries every line as displayed, because the model produced the whole file, so a post-write edit can
     anchor anywhere without an intervening read.
   - A tag minted by `edit` carries the lines displayed under the tag the edit applied to, at their new positions, every line
-    the edit wrote, and every line of the edited file its diff preview shows; when that tag displayed every line, so does the
-    new one. A later ranged read of the edited file adds its range to these lines rather than replacing them.
+    the edit wrote, and every line of the edited file its diff preview shows; when that tag displayed every line, or the
+    snapshot store no longer holds the edited version, so does the new one. When the file changed outside the session after
+    the tagged read and the edit was recovered onto the changed file, the lines the read displayed map through that change
+    first: a line the change rewrote or added is not displayed under the new tag. A later ranged read of the edited file adds
+    its range to these lines rather than replacing them.
   - The displayed lines belong to the file's content, not to one retained copy of it: when the snapshot store evicts a file's
     version and a later read or search records the same content, the lines displayed before the eviction count as displayed
     under the tag again.

@@ -8,8 +8,11 @@
  * one hunk keyword of the patch language, a ranged read of other lines under the
  * edited tag, then one edit that rewrites every line shown so far. The keywords
  * are read from `@veyyon/hashline/format` at run time, so a new keyword fails
- * the sweep until it has a hunk here. The patcher-level cases (clipped lines,
- * versions without a record, preview rows that do not match) are in
+ * the sweep until it has a hunk here. A last case changes the file outside the
+ * session between the first read and the edit, which recovery applies onto the
+ * changed file: the read's lines stay editable, the changed line does not. The
+ * patcher-level cases (clipped lines, versions without a record, preview rows
+ * that do not match) are in
  * `plugins/hashline/test/a-line-displayed-before-an-edit-stays-displayed-under-its-tag.test.ts`.
  *
  * Not caught: an edit result cut by the tool-result byte cap, whose preview
@@ -207,4 +210,36 @@ describe("a line shown by an edit stays editable after a later read", () => {
 			for (const line of shown) expect(after[line - 1]).toBe(`${lines[line - 1]} // kept`);
 		});
 	}
+
+	it("keeps the read's lines editable, and not a line changed outside the session, after a recovered edit", async () => {
+		const source = path.join(tmpDir, "source.ts");
+		const first = await new ReadTool(session).execute("r1", {
+			path: `${source}:${FIRST_READ.start}-${FIRST_READ.end}`,
+		});
+		const tag = tagFromOutput(resultText(first), "source.ts");
+		await fs.writeFile(source, `// external\n${CONTENT.replace("const v20 = 20;", "const v20 = 200;")}`);
+
+		const edited = resultText(
+			await executeHashlineSingle(execOptions(`[source.ts#${tag}]\n${HUNKS.SWAP.body}`, session)),
+		);
+		expect(edited).toContain("Recovered");
+		const editedTag = tagFromOutput(edited, "source.ts");
+		const lines = (await fs.readFile(source, "utf8")).split("\n");
+		const later = await new ReadTool(session).execute("r2", {
+			path: `${source}:${LATER_READ.start}-${LATER_READ.end}`,
+		});
+		expect(tagFromOutput(resultText(later), "source.ts")).toBe(editedTag);
+
+		const shown = new Set([...shownRows(edited, lines), ...firstReadLines(lines)]);
+		for (let line = LATER_READ.start; line <= LATER_READ.end; line++) shown.add(line);
+		const changed = lines.indexOf("const v20 = 200;") + 1;
+		expect(shown.has(changed)).toBe(false);
+		await expect(
+			executeHashlineSingle(execOptions(`[source.ts#${editedTag}]\n${swaps([changed], lines)}`, session)),
+		).rejects.toThrow(/never displayed \(it showed/);
+
+		await executeHashlineSingle(execOptions(`[source.ts#${editedTag}]\n${swaps([...shown], lines)}`, session));
+		const after = (await fs.readFile(source, "utf8")).split("\n");
+		for (const line of shown) expect(after[line - 1]).toBe(`${lines[line - 1]} // kept`);
+	});
 });

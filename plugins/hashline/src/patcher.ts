@@ -464,13 +464,13 @@ export class Patcher {
 
 		const persisted = bom + restoreLineEndings(after, lineEnding);
 		// Taken before `relocate` moves the history: the version the edit was applied to.
-		const previous = this.snapshots.byContent(canonicalPath, normalized);
+		const base = this.#editBase(canonicalPath, section, normalized);
 
 		if (moveDest !== undefined) {
 			const destCanonical = this.fs.canonicalPath(moveDest);
 			this.snapshots.relocate(canonicalPath, destCanonical);
 			await this.fs.move(section.path, moveDest, persisted);
-			const fileHash = this.#recordEditedSnapshot(destCanonical, previous, normalized, after);
+			const fileHash = this.#recordEditedSnapshot(destCanonical, base, normalized, after);
 			return {
 				path: resultPath,
 				canonicalPath: destCanonical,
@@ -489,7 +489,7 @@ export class Patcher {
 		}
 
 		const write: WriteResult = await this.fs.writeText(section.path, persisted);
-		const fileHash = this.#recordEditedSnapshot(canonicalPath, previous, normalized, after);
+		const fileHash = this.#recordEditedSnapshot(canonicalPath, base, normalized, after);
 		const op = exists ? "update" : "create";
 
 		return {
@@ -565,42 +565,50 @@ export class Patcher {
 	}
 
 	/**
-	 * Record the edited text and carry onto it what the model saw of the version
-	 * the edit was applied to, so a later partial read under the new tag cannot
-	 * narrow its displayed lines to that read's range:
-	 *   - a pre-edit version with a displayed-line record contributes the lines
-	 *     the edit wrote, and each displayed or clipped line the edit left
-	 *     unchanged, at its new position;
-	 *   - a pre-edit version without one accepted an edit at any line, and the
-	 *     edited text keeps that: every one of its lines is recorded displayed.
-	 * Nothing is carried when the pre-edit text is not retained (the drift path,
-	 * which checks no displayed lines), or when the edited text is already a
-	 * retained version without a record, which stays unrestricted.
+	 * The version whose displayed lines the edited text inherits: the retained
+	 * pre-edit text, else, when the file changed since the tagged read, the
+	 * snapshot the tag names, which the edit's anchors were written against.
+	 * Null when neither is retained.
 	 */
-	#recordEditedSnapshot(canonicalPath: string, previous: Snapshot | null, before: string, after: string): string {
+	#editBase(canonicalPath: string, section: PatchSection, before: string): Snapshot | null {
+		const previous = this.snapshots.byContent(canonicalPath, before);
+		if (previous || section.fileHash === undefined || computeFileHash(before) === section.fileHash) return previous;
+		return this.snapshots.byHash(canonicalPath, section.fileHash);
+	}
+
+	/**
+	 * Record the edited text and carry onto it what the model saw of `base`
+	 * (see {@link #editBase}), so a later partial read under the new tag cannot
+	 * narrow its displayed lines to that read's range:
+	 *   - a `base` with a displayed-line record contributes the lines the edit
+	 *     wrote, and each displayed or clipped line the edit left unchanged, at
+	 *     its new position;
+	 *   - a `base` that is the tagged read of a file changed since first maps its
+	 *     displayed lines, every line when it has no record, onto the pre-edit
+	 *     text, so a line the change rewrote or added is not displayed;
+	 *   - no `base`, or one without a record, accepted an edit at any line, and
+	 *     the edited text keeps that: every one of its lines is recorded displayed.
+	 * The edited text stays unrestricted when it is already a retained version
+	 * without a record.
+	 */
+	#recordEditedSnapshot(canonicalPath: string, base: Snapshot | null, before: string, after: string): string {
 		const retained = this.snapshots.byContent(canonicalPath, after);
 		const hash = this.snapshots.record(canonicalPath, after);
-		if (!previous || (retained && !enforcedSeenLines(retained))) return hash;
-		const previousSeen = enforcedSeenLines(previous);
-		if (!previousSeen) {
+		if (retained && !enforcedSeenLines(retained)) return hash;
+		let seen: Iterable<number> | undefined = enforcedSeenLines(base);
+		let clipped: Iterable<number> | undefined = base?.clippedLines;
+		if (base && base.text !== before) {
+			const change = new LineMap(base.text, before);
+			seen = mapLines(change, seen ?? lineNumbers(base.text));
+			clipped = clipped && mapLines(change, clipped);
+		}
+		if (!seen) {
 			this.snapshots.recordSeenLines(canonicalPath, hash, lineNumbers(after));
 			return hash;
 		}
 		const lineMap = new LineMap(before, after);
-		const seen = [...lineMap.written()];
-		for (const line of previousSeen) {
-			const mapped = lineMap.get(line);
-			if (mapped !== undefined) seen.push(mapped);
-		}
-		this.snapshots.recordSeenLines(canonicalPath, hash, seen);
-		if (previous.clippedLines && previous.clippedLines.size > 0) {
-			const clipped: number[] = [];
-			for (const line of previous.clippedLines) {
-				const mapped = lineMap.get(line);
-				if (mapped !== undefined) clipped.push(mapped);
-			}
-			this.snapshots.recordClippedLines(canonicalPath, hash, clipped);
-		}
+		this.snapshots.recordSeenLines(canonicalPath, hash, [...lineMap.written(), ...mapLines(lineMap, seen)]);
+		if (clipped) this.snapshots.recordClippedLines(canonicalPath, hash, mapLines(lineMap, clipped));
 		return hash;
 	}
 
@@ -813,6 +821,16 @@ function enforcedSeenLines(snapshot: Snapshot | null): Set<number> | undefined {
 function* lineNumbers(text: string): Generator<number> {
 	const count = lineCount(text);
 	for (let line = 1; line <= count; line++) yield line;
+}
+
+/** The positions `lineMap` gives each of `lines`, skipping the lines it did not keep. */
+function mapLines(lineMap: LineMap, lines: Iterable<number>): number[] {
+	const mapped: number[] = [];
+	for (const line of lines) {
+		const target = lineMap.get(line);
+		if (target !== undefined) mapped.push(target);
+	}
+	return mapped;
 }
 
 /**

@@ -7,8 +7,10 @@
  * while the read dedup refused to show that read again.
  *
  * This drives the production read, search and edit tools through that
- * sequence. The store-level class (path count, text budget, version ring,
- * relocate, invalidate) is covered in
+ * sequence, and through an edit applied to the evicted version, whose edited
+ * version keeps every line editable after a later ranged read. The store-level
+ * class (path count, text budget, version ring, relocate, invalidate) is
+ * covered in
  * `plugins/hashline/test/a-line-displayed-before-its-version-was-dropped-stays-displayed.test.ts`.
  *
  * Not caught: a read that never records seen lines at all.
@@ -150,5 +152,26 @@ describe("a line read before its snapshot was evicted stays editable", () => {
 			executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 18.=18:\n+EDITED`, session)),
 		).rejects.toThrow(/never displayed \(it showed/);
 		expect(await fs.readFile(file, "utf8")).toBe(CONTENT);
+	});
+
+	it("keeps the lines read before an edit to its evicted version editable after a later ranged read", async () => {
+		const tag = await readFirstLines();
+		for (let i = 0; i < OTHER_FILES; i++) {
+			await new ReadTool(session).execute(`o${i}`, { path: path.join(tmpDir, otherFile(i)) });
+		}
+		expectEvicted();
+		const edited = resultText(
+			await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 2.=2:\n+EDITED`, session)),
+		);
+		const editedTag = tagFromOutput(edited, file);
+		const reread = await new ReadTool(session).execute("r2", { path: `${file}:34-36` });
+		expect(tagFromOutput(resultText(reread), file)).toBe(editedTag);
+
+		await executeHashlineSingle(
+			execOptions(`[notes.txt#${editedTag}]\nSWAP 1.=3:\n+ONE\n+TWO\n+THREE\nSWAP 35.=35:\n+LATER`, session),
+		);
+		expect(await fs.readFile(file, "utf8")).toBe(
+			CONTENT.replace("line 1\nline 2\nline 3\n", "ONE\nTWO\nTHREE\n").replace("line 35\n", "LATER\n"),
+		);
 	});
 });
