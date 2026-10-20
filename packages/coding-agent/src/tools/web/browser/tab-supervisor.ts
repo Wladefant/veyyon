@@ -201,12 +201,16 @@ export interface ExtensionTabInventoryEntry {
 	ownership: "owned" | "attached";
 }
 
-/** List only live extension tabs present in the existing relay registry. */
+/**
+ * List live extension tabs in the relay registry this caller may see: its own as "owned", ownerless as
+ * "attached". A tab another session owns is left out before its name, title or URL is read.
+ */
 export function getExtensionTabInventory(ownerId?: string): ExtensionTabInventoryEntry[] {
 	const inventory: ExtensionTabInventoryEntry[] = [];
 	for (const tab of tabs.values()) {
 		if (tab.state !== "alive" || tab.backend !== "worker" || tab.kindTag !== "extension" || !tab.browser.relay)
 			continue;
+		if (tab.ownerSessionId !== undefined && tab.ownerSessionId !== ownerId) continue;
 		const tracked = tab.browser.relay.getTrackedTabs().find(item => item.targetId === tab.targetId);
 		if (!tracked) continue;
 		inventory.push({
@@ -215,7 +219,7 @@ export function getExtensionTabInventory(ownerId?: string): ExtensionTabInventor
 			windowId: tracked.windowId,
 			url: redactTabInventoryUrl(tracked.url),
 			title: tracked.title,
-			ownership: ownerId !== undefined && tab.ownerSessionId === ownerId ? "owned" : "attached",
+			ownership: tab.ownerSessionId === undefined ? "attached" : "owned",
 		});
 	}
 	return inventory;
@@ -267,6 +271,17 @@ function isReportedInitFailure(error: unknown): boolean {
 
 export function getTab(name: string): TabSession | undefined {
 	return tabs.get(name);
+}
+
+/**
+ * Refuse a caller that does not own `tab`. An ownerless tab is open to any caller. An owned tab is open
+ * only to its owner, so a caller with no identity is refused too. The refusal names no other owner.
+ */
+function assertTabAccess(name: string, tab: TabSession, ownerId: string | undefined): void {
+	if (tab.ownerSessionId === undefined || tab.ownerSessionId === ownerId) return;
+	throw new ToolError(
+		`Tab ${JSON.stringify(name)} belongs to another session, so this session cannot use it. Open a tab under another name.`,
+	);
 }
 
 /** The names of the tabs open on `browser`. */
@@ -389,12 +404,14 @@ async function acquireTabImpl(
 	// browser hold nobody is waiting for.
 	// The browser lease is the caller's to release; this path takes no hold of its own to drop.
 	if (opts.signal?.aborted) throw new ToolAbortError("Browser tab open aborted");
+	// Refused before any side effect below: a tab another session owns is never released, reopened or reused.
+	const existing = tabs.get(name);
+	if (existing) assertTabAccess(name, existing, opts.ownerSessionId);
 	killedTabs.delete(name);
 	// Temporary refCount hold so releasing an existing tab on the SAME browser
 	// below cannot drop it to refCount 0 and dispose the instance we are about
 	// to reuse (e.g. reopening the sole tab with a different dialogs policy).
 	let tempHold = false;
-	const existing = tabs.get(name);
 	// A tab opened again with no context keeps the one it is in, including when a changed dialog policy
 	// reopens it; one that names a different context is refused rather than moved out from under its page.
 	const reopenedContext =
@@ -729,6 +746,9 @@ async function acquireCmuxTab(
 }
 
 export async function runInTab(name: string, opts: RunInTabOptions): Promise<RunResultOk> {
+	// Refused before the snapshot and the run send anything, so a foreign session's code never touches the tab.
+	const tab = tabs.get(name);
+	if (tab) assertTabAccess(name, tab, opts.session.getSessionId?.() ?? undefined);
 	return await runInTabWithSnapshot(
 		name,
 		{ code: opts.code, timeoutMs: opts.timeoutMs, signal: opts.signal, session: opts.session },
@@ -959,19 +979,6 @@ function hasRemainingTabs(browser: BrowserHandle): boolean {
 		if (tab.browser === browser) return true;
 	}
 	return false;
-}
-
-export async function releaseAllTabs(opts: ReleaseTabOptions = {}): Promise<number> {
-	const names = Array.from(tabs.keys());
-	let count = 0;
-	for (const name of names) {
-		if (await releaseTab(name, opts)) count++;
-	}
-	await releaseOrphanBrowsers({
-		kill: opts.kill ?? false,
-		hasRemainingTabs,
-	});
-	return count;
 }
 
 export async function dropHeadlessTabs(): Promise<void> {
