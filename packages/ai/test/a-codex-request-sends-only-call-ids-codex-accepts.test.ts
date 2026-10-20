@@ -81,4 +81,13 @@ describe("Codex call_id on the wire", () => {
 	it("maps both halves of a composite id to the same call_id", () => {
 		expect(sanitizeCodexCallId("call.a|fc_1")).toBe(sanitizeCodexCallId("call.a\nfc_2"));
 	});
+
+	it.each([
+		["a valid call half", "call_abc"],
+		["an invalid call half", "call.abc"],
+	])("pairs a composite call with an output that carries only %s", (_shape, callHalf) => {
+		// A call stored as `call\nitem` and its output stored as the bare call id must still pair.
+		expect(sanitizeCodexCallId(`${callHalf}\nitem_def`)).toBe(sanitizeCodexCallId(callHalf));
+		expect(sanitizeCodexCallId(`${callHalf}|item_def`)).toBe(sanitizeCodexCallId(callHalf));
+	});
 });
