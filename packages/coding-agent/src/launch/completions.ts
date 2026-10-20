@@ -17,19 +17,46 @@
  * {@link DAEMON_COMPLETIONS_MAX_AGE_MS}, whichever bites first, applied on every append. The
  * read side filters too, so a quiet project cannot serve expired records merely
  * because no later completion triggered an append.
+ *
+ * A NAME OUTLIVES ITS LIVE RECORD. The broker purges an exited daemon's live record after the
+ * cleanup wait, and a broker restart drops the records of non-detached daemons. Each stored record
+ * holds the final state and the launch spec, so `stop`, `describe`, `logs`, `wait`, `send` and
+ * `restart` answer for the name from here until the record leaves the store.
  */
 import { readFile } from "node:fs/promises";
 
 import { atomicWriteFile, errorMessage, isEnoent, isRecord, logger } from "@veyyon/utils";
 import { daemonCompletionsPath } from "./paths";
-import { type DaemonCompletionRecord, parseDaemonCompletionRecord } from "./protocol";
+import { type DaemonCompletionRecord, type DaemonSpec, parseDaemonCompletionRecord, parseDaemonSpec } from "./protocol";
 
-/** Schema version of the completions file. Bump when the record or envelope shape changes. */
-export const DAEMON_COMPLETIONS_SCHEMA_VERSION = 1;
+/**
+ * Schema version of the completions file. Bump when the record or envelope shape changes.
+ * Version 2 added `state` and `spec` to every record.
+ */
+export const DAEMON_COMPLETIONS_SCHEMA_VERSION = 2;
 /** How many completed records are retained. */
 export const DAEMON_COMPLETIONS_LIMIT = 100;
 /** How long a completed record is retained, in milliseconds (24h). */
 export const DAEMON_COMPLETIONS_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * A completion record as the store holds it: the record `list` returns, plus the state the
+ * generation ended in and the spec it ran. `list` drops both before a record leaves the broker;
+ * no list line renders them, and 100 specs would grow every list result.
+ */
+export interface RetainedDaemonCompletion extends DaemonCompletionRecord {
+	state: "exited" | "failed";
+	spec: DaemonSpec;
+}
+
+function parseRetainedDaemonCompletion(value: unknown): RetainedDaemonCompletion {
+	if (!isRecord(value)) throw new Error("daemon completion must be an object");
+	const { state } = value;
+	if (state !== "exited" && state !== "failed") {
+		throw new Error(`completion.state must be exited or failed, got ${String(state)}`);
+	}
+	return { ...parseDaemonCompletionRecord(value), state, spec: parseDaemonSpec(value.spec) };
+}
 
 /**
  * Decode the completions envelope, rejecting any other schema version.
@@ -38,7 +65,7 @@ export const DAEMON_COMPLETIONS_MAX_AGE_MS = 24 * 60 * 60 * 1000;
  * fails validation: a store this cannot read in full is not served at all, because serving the
  * prefix that parses would present a truncated history as complete.
  */
-export function parseDaemonCompletionsFile(value: unknown): DaemonCompletionRecord[] {
+export function parseDaemonCompletionsFile(value: unknown): RetainedDaemonCompletion[] {
 	if (!isRecord(value)) {
 		throw new Error("daemon completions file must be an object");
 	}
@@ -51,14 +78,14 @@ export function parseDaemonCompletionsFile(value: unknown): DaemonCompletionReco
 	if (!("records" in value) || !Array.isArray(value.records)) {
 		throw new Error("daemon completions records must be an array");
 	}
-	return value.records.map(parseDaemonCompletionRecord);
+	return value.records.map(parseRetainedDaemonCompletion);
 }
 
 /** Read the retained completion records, oldest first. Throws on an unreadable or stale store. */
 export async function readDaemonCompletions(
 	runtimeDir: string,
 	now: number = Date.now(),
-): Promise<DaemonCompletionRecord[]> {
+): Promise<RetainedDaemonCompletion[]> {
 	let decoded: unknown;
 	try {
 		decoded = JSON.parse(await readFile(daemonCompletionsPath(runtimeDir), "utf8"));
@@ -79,10 +106,10 @@ export async function readDaemonCompletions(
  */
 export async function appendDaemonCompletion(
 	runtimeDir: string,
-	record: DaemonCompletionRecord,
+	record: RetainedDaemonCompletion,
 	now: number = Date.now(),
-): Promise<DaemonCompletionRecord[]> {
-	let existing: DaemonCompletionRecord[] = [];
+): Promise<RetainedDaemonCompletion[]> {
+	let existing: RetainedDaemonCompletion[] = [];
 	try {
 		existing = await readDaemonCompletions(runtimeDir, now);
 	} catch (error) {
