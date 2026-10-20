@@ -23,6 +23,7 @@
 
 ### Changed
 
+- `set_cwd` and a session moved to another project rewrite only the session file's header and keep every entry line on disk, so changing directory on a 321 MB session takes 117–147 ms instead of 1.9–2.2 s and holds 230–244 MB resident instead of 1.3–1.8 GB.
 - A `search` of type `structure` over a tree parses files on one thread per core beside the walk, so the tool returns in 1.1 s instead of 2.2 s over 282,743 cached PHP files and in 5.8 s instead of 18.8 s over 64 PHP files of 2 MB each.
 - A `search` of type `structure` holds at most 8 MiB of source in parse at once across every search in the process and returns its syntax trees' pages to the system when it ends instead of at the next idle trim, so after a search over 64 PHP files of 2 MB each the process holds 14 MB of anonymous memory instead of 139 MB; it peaks at 850 MB there, against 445 MB when those files parsed one at a time, and three such searches at once peak at 650 MB against 433 MB.
 - A `search` of type `structure` parses and matches files on the walker's worker threads instead of one at a time, so a structure search over 400 PHP files takes 78 ms instead of 275 ms with the same CPU time.

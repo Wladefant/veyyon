@@ -87,8 +87,6 @@ export class CorruptSessionFileError extends Error {
  * its size.
  */
 export interface SessionRecordLayout {
-	/** The header line as read, newline included. */
-	header: string;
 	/** Byte offset of each record line after the header, parallel to `entries.slice(1)`. */
 	entryOffsets: number[];
 	/** Byte offset just past the last record's newline. */
@@ -222,7 +220,6 @@ class SessionRecordLoop {
 	#titleSlotBytes = 0;
 	/** 0-based byte offset of each record line after the header, parallel to `entries.slice(1)`. */
 	readonly #offsets: number[] = [];
-	#headerLine: string | undefined;
 	/** The title slot a streamed load found on the file's first line. */
 	titleSlot: SessionTitleUpdate | undefined;
 	/** 0-based byte offset just past the last record's newline. */
@@ -273,7 +270,7 @@ class SessionRecordLoop {
 			this.skip(byteLength);
 			return;
 		}
-		this.#take(value, text, byteLength);
+		this.#take(value, byteLength);
 	}
 
 	/**
@@ -281,16 +278,15 @@ class SessionRecordLoop {
 	 * to a string first is a copy of the line that stays allocated until the next collection: opening
 	 * a 312 MB, 108,163-entry session peaked at a median 318 MiB resident in 667 ms that way, and at
 	 * 256 MiB in 598 ms parsing the bytes.
-	 * A line the byte parse does not take as exactly one JSON value, and the header record, whose
-	 * text the layout keeps, go through {@link push}, which skips a blank line and records and logs a
-	 * malformed one.
+	 * A line the byte parse does not take as exactly one JSON value, and the header record, go through
+	 * {@link push}, which skips a blank line and records and logs a malformed one.
 	 */
 	pushBytes(bytes: Buffer, start: number, end: number): void {
 		if (this.entries.length > 0) {
 			// `JSON.parse` takes only a string; `Bun.JSONL` is the one parser of UTF-8 bytes.
 			const parsed = Bun.JSONL.parseChunk(bytes, start, end);
 			if (parsed.done && parsed.values.length === 1) {
-				this.#take(parsed.values[0], undefined, end - start);
+				this.#take(parsed.values[0], end - start);
 				return;
 			}
 		}
@@ -322,7 +318,7 @@ class SessionRecordLoop {
 	 * {@link pushBytes} keeps a line it parsed.
 	 */
 	takeRecord(value: unknown, byteLength: number): void {
-		this.#take(value, undefined, byteLength);
+		this.#take(value, byteLength);
 	}
 
 	/**
@@ -333,15 +329,15 @@ class SessionRecordLoop {
 	takeProjected(projection: SkimmedProjection): boolean {
 		const record = projection[1];
 		if (!checkSessionEntryShape(record).ok) return false;
-		this.#keep(record, undefined, projection[0], projection);
+		this.#keep(record, projection[0], projection);
 		return true;
 	}
 
-	/** Keep the parsed `value` of a line when it has an entry's shape. `text` is the line, for the header. */
-	#take(value: unknown, text: string | undefined, byteLength: number): void {
+	/** Keep the parsed `value` of a line when it has an entry's shape. */
+	#take(value: unknown, byteLength: number): void {
 		const shape = checkSessionEntryShape(value);
 		if (shape.ok) {
-			this.#keep(value as FileEntry, text, byteLength, undefined);
+			this.#keep(value as FileEntry, byteLength, undefined);
 			return;
 		}
 		this.#issues.push({ line: this.#line, byteOffset: this.#byteOffset, problem: shape.problem });
@@ -353,14 +349,8 @@ class SessionRecordLoop {
 		this.skip(byteLength);
 	}
 
-	#keep(
-		record: FileEntry,
-		text: string | undefined,
-		byteLength: number,
-		projection: SkimmedProjection | undefined,
-	): void {
-		if (this.entries.length === 0) this.#headerLine = text;
-		else this.#offsets.push(this.#byteOffset - 1);
+	#keep(record: FileEntry, byteLength: number, projection: SkimmedProjection | undefined): void {
+		if (this.entries.length > 0) this.#offsets.push(this.#byteOffset - 1);
 		this.entries.push(record);
 		this.#cooling?.add(record, this.#byteOffset - 1, byteLength, projection);
 		this.#end = this.#byteOffset + byteLength;
@@ -392,13 +382,9 @@ class SessionRecordLoop {
 	 * {@link SessionRecordLayout}). Read after {@link finish}.
 	 */
 	layout(): SessionRecordLayout | undefined {
-		if (this.#titleSlotBytes !== SESSION_TITLE_SLOT_BYTES || this.#headerLine === undefined) return undefined;
+		if (this.#titleSlotBytes !== SESSION_TITLE_SLOT_BYTES || this.entries.length === 0) return undefined;
 		if (this.#issues.length > 0 || this.#stitched > 0) return undefined;
-		// The header line is a slice of the file text read to find it, and a slice shares that text's
-		// buffer: holding it for the session's life would hold every byte of the file with it. The copy
-		// holds the header's bytes alone.
-		const header = Buffer.from(`${this.#headerLine}\n`, "utf-8").toString("utf-8");
-		return { header, entryOffsets: this.#offsets, end: this.#end };
+		return { entryOffsets: this.#offsets, end: this.#end };
 	}
 }
 
@@ -760,8 +746,6 @@ export interface SessionFileLayout {
 	size: number;
 	/** The storage's identity for the object read (see {@link SessionStorageStat.identity}). */
 	identity: string;
-	/** The header line as read, newline included. */
-	header: string;
 	/** Byte offset of each record line after the header, parallel to `entries.slice(1)`. */
 	entryOffsets: number[];
 }
@@ -833,7 +817,7 @@ function verifiedLayout(
 		return undefined;
 	}
 	if (after.identity !== before.identity || after.size !== before.size) return undefined;
-	return { size: before.size, identity: before.identity, header: layout.header, entryOffsets: layout.entryOffsets };
+	return { size: before.size, identity: before.identity, entryOffsets: layout.entryOffsets };
 }
 
 /**

@@ -4,12 +4,17 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `SessionStorage.rewriteTailAtomic(path, headBytes, keepBytes, head, tail, options)` takes `headBytes`, the length of the file's first bytes `head` replaces, so a head of another length moves the kept bytes; it fails when `headBytes` exceeds `keepBytes`.
+
 ### Removed
 
 - Removed the plugin-id helpers and installed-registry re-exports from `@veyyon/kernel/loader/plugins/marketplace/types` and `marketplace/registry`; import them from `@veyyon/kernel/loader/plugins/plugin-id` and `installed-registry`.
 
 ### Changed
 
+- `SessionManager.setCwd` and `moveTo` rewrite only the title slot and the header and keep every entry line on disk, and every tail rewrite writes the header again instead of falling back to a whole-file write when it changed, so a cwd change on a 321 MB session takes 117–147 ms instead of 1.9–2.2 s and holds 230–244 MB resident instead of 1.3–1.8 GB.
 - Restoring a loaded session's payloads scans its entries in 8 ms slices that let input and rendering run between them, so resuming a 148 MB session blocks the event loop for at most 34-41 ms instead of 58-61 ms.
 - A streamed load reads the projection of a compacted entry under 1 KiB instead of parsing its whole line, so opening a 148 MB session takes 227 ms instead of 277 ms and holds 40.7 MB of JavaScript heap instead of 43.1 MB, and resuming it settles at 171 MB resident instead of 178 MB.
 - A compaction that a later compaction summarized moves its summary out of memory, live and on load, so a resumed 148 MB session with 162 compactions peaks at 261 MB resident instead of 292 MB.

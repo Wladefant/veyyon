@@ -66,13 +66,14 @@ class RecordingStorage extends FileSessionStorage {
 
 	override async rewriteTailAtomic(
 		p: string,
+		headBytes: number,
 		keepBytes: number,
 		head: string,
 		tail: SessionFileBody,
 		options?: WriteTextAtomicOptions,
 	): Promise<void> {
 		this.kept.push(keepBytes);
-		await super.rewriteTailAtomic(p, keepBytes, head, tail, options);
+		await super.rewriteTailAtomic(p, headBytes, keepBytes, head, tail, options);
 	}
 }
 

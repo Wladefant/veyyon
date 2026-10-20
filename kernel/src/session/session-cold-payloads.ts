@@ -305,10 +305,11 @@ class ColdEntrySlot extends ReturnsTarget {
 		(entry as ColdEntrySlot).#length = length;
 	}
 
-	/** Point `entry` at `to` when it reads through `from`; false when it does not. */
-	static moveFile(entry: object, from: ColdFile, to: ColdFile): boolean {
+	/** Point `entry` at `to`, its line `shift` bytes on, when it reads through `from`; false when it does not. */
+	static moveFile(entry: object, from: ColdFile, to: ColdFile, shift: number): boolean {
 		if (!(#file in entry) || (entry as ColdEntrySlot).#file !== from) return false;
 		(entry as ColdEntrySlot).#file = to;
+		(entry as ColdEntrySlot).#offset += shift;
 		return true;
 	}
 }
@@ -547,11 +548,17 @@ export class ColdEntryPayloads {
 
 	/**
 	 * Move every cold entry in `entries` read through the current handle onto a handle on the
-	 * object with `identity`. The caller guarantees that object holds the same bytes at every cold
-	 * entry's offset: it is a republish that kept the file's prefix. Entries outside `entries` keep
-	 * the old handle. Returns false, and moves nothing, when no handle on that object can be opened.
+	 * object with `identity`, each line `shift` bytes further on. The caller guarantees that object
+	 * holds the same bytes at every cold entry's moved offset: it is a republish that kept the
+	 * file's lines and wrote a head `shift` bytes longer. Entries outside `entries` keep the old
+	 * handle. Returns false, and moves nothing, when no handle on that object can be opened.
 	 */
-	rebase(entries: readonly SessionEntry[], identity: string, open: () => PinnedSessionReader | undefined): boolean {
+	rebase(
+		entries: readonly SessionEntry[],
+		identity: string,
+		open: () => PinnedSessionReader | undefined,
+		shift: number,
+	): boolean {
 		const previous = this.#current;
 		if (previous === undefined || previous.reader.identity === identity) return true;
 		const reader = open();
@@ -562,7 +569,7 @@ export class ColdEntryPayloads {
 		}
 		const next: ColdFile = { reader, restore: previous.restore, cold: 0 };
 		for (const entry of entries) {
-			if (!ColdEntrySlot.moveFile(entry, previous, next)) continue;
+			if (!ColdEntrySlot.moveFile(entry, previous, next, shift)) continue;
 			previous.cold -= 1;
 			next.cold += 1;
 		}

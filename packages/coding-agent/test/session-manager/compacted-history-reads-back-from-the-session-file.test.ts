@@ -16,7 +16,8 @@
  * table is typed against the union, so a new entry kind fails the type check until it has a row),
  * every externalization site persistence writes (image block, image data URL, oversized text, tool
  * result codec), and every event that changes the file under a cold entry (this manager's tail
- * republish, another writer's republish, the manager being dropped).
+ * republish, a cwd change that rewrites the header and moves every line after it, another writer's
+ * republish, the manager being dropped).
  *
  * The record-only sweep places every entry kind on the live branch and pins, by exact equality,
  * which kinds read the disk there, so a new kind fails until it is classified. A second sweep
@@ -1180,6 +1181,38 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 			expect(JSON.parse(expected.get(custom.id)!).data.note).toBe("edited in place");
 			expect(JSON.parse(expected.get(summary.id)!).summary).toBe("replaced summary");
 			expect(serialized(manager)).toEqual(expected);
+			expect(storage.open.size).toBe(0);
+			await manager.close();
+		},
+	);
+
+	it.each(LOAD_PATHS)(
+		"reads every cold entry from where its line moved when a cwd change rewrites only the header ($load)",
+		async arm => {
+			const fixture = await writeSession(everyKindHistory(), arm.padding);
+			useLoadPath(fixture.file, arm);
+			const storage = new ObservedStorage();
+			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
+			const root = path.dirname(fixture.dir);
+
+			// A longer header moves every kept line forward, a shorter one back.
+			for (const name of [`moved-${"x".repeat(64)}`, "m"]) {
+				const cwd = path.join(root, name);
+				fs.mkdirSync(cwd);
+				const before = storage.statSync(fixture.file).identity!;
+
+				await manager.setCwd(cwd);
+
+				const republished = storage.statSync(fixture.file).identity!;
+				expect(republished).not.toBe(before);
+				expect(storage.openIdentities()).toEqual([republished]);
+			}
+			expect(storage.reads).toBe(0);
+
+			expect(serialized(manager)).toEqual(await freshLoad(fixture));
+			expect(storage.reads).toBeGreaterThan(0);
+			// Each entry read back from its recorded offset: no read-back had to scan the file for its line.
+			expect(storage.scans).toBe(0);
 			expect(storage.open.size).toBe(0);
 			await manager.close();
 		},
