@@ -58,7 +58,7 @@
 
 ### Changed
 
-- The `bash` tool starts an external program with `posix_spawn` instead of fork, so the cost no longer grows with the agent's memory: one `/usr/bin/true` takes 0.24 ms instead of 12.6 ms in a 544 MB process and instead of 58 ms in a 2 GB one; a program given a descriptor above 2 and `nohup cmd &` still fork.
+- The `bash` tool starts an external program with `posix_spawn` instead of fork, so the cost no longer grows with the agent's memory: one `/usr/bin/true` takes 0.24 ms instead of 12.6 ms in a 544 MB process and instead of 58 ms in a 2 GB one; a program given a descriptor above 2, `nohup cmd &`, and every program on glibc before 2.26 still fork.
 - `set_cwd` and a session moved to another project rewrite only the session file's header and keep every entry line on disk, so changing directory on a 321 MB session takes 117–147 ms instead of 1.9–2.2 s and holds 230–244 MB resident instead of 1.3–1.8 GB.
 - A `search` of type `structure` over a tree parses files on one thread per core beside the walk, so the tool returns in 1.1 s instead of 2.2 s over 282,743 cached PHP files and in 5.8 s instead of 18.8 s over 64 PHP files of 2 MB each.
 - A `search` of type `structure` holds at most 8 MiB of source in parse at once across every search in the process and returns its syntax trees' pages to the system when it ends instead of at the next idle trim, so after a search over 64 PHP files of 2 MB each the process holds 14 MB of anonymous memory instead of 139 MB; it peaks at 850 MB there, against 445 MB when those files parsed one at a time, and three such searches at once peak at 650 MB against 433 MB.
