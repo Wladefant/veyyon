@@ -297,7 +297,9 @@ export async function executeSSH(
 	let finished = false;
 	try {
 		const exitEvent = child.exited.then(sshExitEvent, sshErrorEvent);
-		const settledEvent = exitEvent.then(event => (event.kind === "exit" ? streamsSettled.then(() => event) : event));
+		const settledEvent = exitEvent.then<SSHExitEvent>(event =>
+			event.kind === "exit" ? streamsSettled.then(() => event) : event,
+		);
 		const events: Promise<SSHEvent>[] = [settledEvent];
 		const abortEvent = abortWaiter.promise?.then(sshErrorEvent);
 		if (abortEvent) events.push(abortEvent);
