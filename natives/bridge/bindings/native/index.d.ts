@@ -744,10 +744,12 @@ export declare function getWorkProfile(lastSeconds: number): WorkProfile
  * native layer applies final symlink-aware file-type filtering and callback
  * emission.
  *
+ * Reaching `timeoutMs` is not an error: the result holds the matches found by
+ * then and sets `timedOut`.
+ *
  * # Errors
  * Returns an error when the search path cannot be resolved, the path is not a
- * directory, the glob pattern is invalid, or cancellation/timeout is
- * triggered.
+ * directory, the glob pattern is invalid, or the abort signal fires.
  */
 export declare function glob(options: GlobOptions, onMatch?: ((error: Error | null, match: GlobMatch) => void) | undefined | null): Promise<GlobResult>
 
@@ -793,7 +795,10 @@ export interface GlobOptions {
   includeNodeModules?: boolean
   /** Abort signal for cancelling the operation. */
   signal?: unknown
-  /** Timeout in milliseconds for the operation. */
+  /**
+   * Stop walking after this many milliseconds and return the matches found
+   * by then, with `timedOut` set.
+   */
   timeoutMs?: number
 }
 
@@ -803,6 +808,11 @@ export interface GlobResult {
   matches: Array<GlobMatch>
   /** Number of returned matches (`matches.len()`), clamped to `u32::MAX`. */
   totalMatches: number
+  /**
+   * The walk stopped at `timeoutMs` before it read the whole tree, so
+   * `matches` holds only what it found by then.
+   */
+  timedOut: boolean
 }
 
 /**

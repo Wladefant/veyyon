@@ -41,6 +41,10 @@ export interface FileSearchInput {
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 200;
 const DEFAULT_GLOB_TIMEOUT_MS = 5000;
+// The native walk stops itself at the deadline and returns what it found. This
+// backstop ends the call when the walk cannot reach its next deadline check,
+// such as a directory read blocked on an unresponsive network mount.
+const GLOB_BACKSTOP_GRACE_MS = 1000;
 
 // File paths are far denser than match lines (no content per result), and
 // results are mtime-sorted with the most recently modified file on top, so a
@@ -228,7 +232,8 @@ export async function executeFileSearch(
 		const includeHidden = hidden ?? true;
 		const useGitignore = gitignore ?? true;
 		const timeoutMs = DEFAULT_GLOB_TIMEOUT_MS;
-		const scopedTimeout = scopedTimeoutSignal(timeoutMs, signal);
+		const deadlineAt = Date.now() + timeoutMs;
+		const scopedTimeout = scopedTimeoutSignal(timeoutMs + GLOB_BACKSTOP_GRACE_MS, signal);
 		const combinedSignal = scopedTimeout.signal;
 		const formatMatchPath = (matchPath: string, base: string, fileType?: natives.FileType): string => {
 			const hadTrailingSlash = matchPath.endsWith("/") || matchPath.endsWith("\\");
@@ -350,7 +355,6 @@ export async function executeFileSearch(
 		}
 
 		const onUpdateMatches: string[] = [];
-		const onUpdateMtimes: number[] = [];
 		const updateIntervalMs = 200;
 		let lastUpdate = 0;
 		const emitUpdate = () => {
@@ -378,7 +382,6 @@ export async function executeFileSearch(
 				if (streamed.has(relativePath)) return;
 				streamed.add(relativePath);
 				onUpdateMatches.push(relativePath);
-				onUpdateMtimes.push(match.mtime ?? 0);
 				emitUpdate();
 			};
 
@@ -419,12 +422,14 @@ export async function executeFileSearch(
 							// native auto-recursion so `dir/*` does not silently match
 							// `dir/sub/nested.ts`.
 							recursive: false,
+							timeoutMs: Math.max(0, deadlineAt - Date.now()),
 							signal: combinedSignal,
 						},
 						makeOnMatch(target.searchPath),
 					),
 				);
 				throwIfAborted(signal);
+				if (result.timedOut) timedOut = true;
 				const out: Array<{ path: string; mtime: number }> = [];
 				for (const match of result.matches) {
 					if (!match.path) continue;
@@ -435,16 +440,12 @@ export async function executeFileSearch(
 				}
 				return out;
 			} catch (error) {
-				// A deadline yields the partial matches gathered so far; a real
-				// cancellation propagates with its reason.
+				// The backstop yields the matches of the targets that finished; a
+				// real cancellation propagates with its reason.
 				//
-				// The deadline test used to read `combinedSignal.reason` rather
-				// than the error, because `AbortError` stamped its own name over
-				// the `TimeoutError` and the error could not be asked. It carries
-				// its own name now, so the question goes to the thing that was
-				// thrown. `!signal?.aborted` is still required: an operator
-				// interrupt that lands in the same window is a cancellation even
-				// though the scoped signal also shows a timeout reason.
+				// `!signal?.aborted` is required: an operator interrupt that lands
+				// in the same window is a cancellation even though the scoped
+				// signal also shows a timeout reason.
 				if (isTimeoutError(error) && !signal?.aborted) {
 					timedOut = true;
 					return [];
@@ -464,31 +465,10 @@ export async function executeFileSearch(
 			scopedTimeout.cancel();
 		}
 
-		if (timedOut) {
-			// Drain the partial matches accumulated during streaming and return them
-			// instead of throwing — empty results after a multi-second wait force the
-			// caller to retry blind, which is the worst possible outcome.
-			const partial: FileSearchResultEntry[] = onUpdateMatches.map((entry, index) => ({
-				path: entry,
-				mtime: onUpdateMtimes[index] ?? 0,
-			}));
-			partial.sort(compareFileSearchResults);
-			const sortedPaths = partial.map(entry => entry.path);
-			const seconds = timeoutMs % 1000 === 0 ? `${timeoutMs / 1000}` : (timeoutMs / 1000).toFixed(1);
-			// Walk cost tracks directory-tree size, not pattern specificity: a
-			// mtime-ranked scan cannot early-exit, so a "narrow" pattern over a
-			// huge tree still times out. Say so instead of implying the pattern
-			// was too broad.
-			const notice =
-				sortedPaths.length > 0
-					? `File search timed out after ${seconds}s; returning ${sortedPaths.length} partial matches — results are incomplete, scope to a deeper directory instead of retrying blindly`
-					: `File search timed out after ${seconds}s before finding any matches — the scan is incomplete, NOT proof of absence. The walk is bounded by directory size, not pattern width; scope the search to a deeper directory (e.g. \`sub/dir/*.ext\` instead of \`*.ext\` at a huge root).`;
-			return await buildResult(sortedPaths, { notice, forceTruncated: true, timedOut: true });
-		}
-
 		// Merge per-target results: native glob already ranks each target's own
 		// matches by mtime and caps them at the limit, so a global mtime re-sort
-		// plus dedup yields the correct top-N across all roots.
+		// plus dedup yields the correct top-N across all roots. A target that
+		// reached the deadline contributes the matches it found by then.
 		const seen = new Set<string>();
 		const merged: FileSearchResultEntry[] = [];
 		for (const group of perTarget) {
@@ -499,7 +479,19 @@ export async function executeFileSearch(
 			}
 		}
 		merged.sort(compareFileSearchResults);
-		return await buildResult(merged.map(entry => entry.path));
+		const sortedPaths = merged.map(entry => entry.path);
+		if (!timedOut) return await buildResult(sortedPaths);
+
+		const seconds = timeoutMs % 1000 === 0 ? `${timeoutMs / 1000}` : (timeoutMs / 1000).toFixed(1);
+		// Walk cost tracks directory-tree size, not pattern specificity: a
+		// mtime-ranked scan cannot early-exit, so a "narrow" pattern over a
+		// huge tree still times out. Say so instead of implying the pattern
+		// was too broad.
+		const notice =
+			sortedPaths.length > 0
+				? `File search timed out after ${seconds}s; returning ${sortedPaths.length} partial matches — results are incomplete, scope to a deeper directory instead of retrying blindly`
+				: `File search timed out after ${seconds}s before finding any matches — the scan is incomplete, NOT proof of absence. The walk is bounded by directory size, not pattern width; scope the search to a deeper directory (e.g. \`sub/dir/*.ext\` instead of \`*.ext\` at a huge root).`;
+		return await buildResult(sortedPaths, { notice, forceTruncated: true, timedOut: true });
 	});
 }
 

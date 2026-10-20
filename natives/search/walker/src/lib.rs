@@ -27,6 +27,7 @@ use std::{
 		Arc, Mutex, PoisonError,
 		atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering},
 	},
+	time::Instant,
 };
 
 pub use cache::{
@@ -732,11 +733,17 @@ pub struct WalkStats {
 #[derive(Clone, Debug, PartialEq)]
 pub struct WalkOutcome {
 	/// Entries after high-level filtering and limits.
-	pub entries: Vec<CollectedEntry>,
+	pub entries:          Vec<CollectedEntry>,
 	/// Collection backend classification.
-	pub backend: WalkBackend,
+	pub backend:          WalkBackend,
 	/// Collection statistics.
-	pub stats:   WalkStats,
+	pub stats:            WalkStats,
+	/// The walk reached the deadline passed to
+	/// [`WalkRequest::collect_with_deadline`] or
+	/// [`WalkRequest::collect_ranked_with_deadline`] and stopped. `entries`
+	/// holds what it accepted by then, ranked and limited as a complete walk's
+	/// would be.
+	pub deadline_reached: bool,
 }
 
 /// Entries a [`WalkRequest`] accepts, read in place from the scan cache or the
@@ -1107,7 +1114,31 @@ impl WalkRequest {
 		H: Fn() -> std::result::Result<(), E> + Sync,
 		E: fmt::Display,
 	{
-		self.collect_with_rank_and_limit(None, self.limit, heartbeat)
+		self.collect_with_rank_and_limit(None, self.limit, None, heartbeat)
+	}
+
+	/// Collect owned entries as [`WalkRequest::collect_with_heartbeat`] does,
+	/// stopping at `deadline` when one is given.
+	///
+	/// A walk that reaches the deadline returns the entries it accepted by then
+	/// and sets [`WalkOutcome::deadline_reached`] instead of failing. A
+	/// heartbeat error fails the walk as it does without a deadline. A request
+	/// with a deadline neither reads nor writes the scan cache, because a scan
+	/// cut short is not the tree.
+	///
+	/// The walk reads the clock where it calls the heartbeat, once per 128
+	/// entries a thread visits, so it overruns the deadline by the time a
+	/// thread takes to list and filter that many entries.
+	pub fn collect_with_deadline<E, H>(
+		&self,
+		deadline: Option<Instant>,
+		heartbeat: H,
+	) -> std::result::Result<WalkOutcome, WalkError<String>>
+	where
+		H: Fn() -> std::result::Result<(), E> + Sync,
+		E: fmt::Display,
+	{
+		self.collect_with_rank_and_limit(None, self.limit, deadline, heartbeat)
 	}
 
 	/// Collect owned entries, apply high-level filters, rank, then truncate to
@@ -1139,7 +1170,25 @@ impl WalkRequest {
 		H: Fn() -> std::result::Result<(), E> + Sync,
 		E: fmt::Display,
 	{
-		self.collect_with_rank_and_limit(Some(rank), Some(limit), heartbeat)
+		self.collect_with_rank_and_limit(Some(rank), Some(limit), None, heartbeat)
+	}
+
+	/// Collect as [`WalkRequest::collect_ranked_with_heartbeat`] does, stopping
+	/// at `deadline` as [`WalkRequest::collect_with_deadline`] does. The entries
+	/// found by the deadline are ranked and truncated to `limit` like a complete
+	/// walk's.
+	pub fn collect_ranked_with_deadline<E, H>(
+		&self,
+		rank: WalkRank,
+		limit: usize,
+		deadline: Option<Instant>,
+		heartbeat: H,
+	) -> std::result::Result<WalkOutcome, WalkError<String>>
+	where
+		H: Fn() -> std::result::Result<(), E> + Sync,
+		E: fmt::Display,
+	{
+		self.collect_with_rank_and_limit(Some(rank), Some(limit), deadline, heartbeat)
 	}
 
 	/// Read the entries this request accepts without copying them.
@@ -1192,10 +1241,13 @@ impl WalkRequest {
 			Some(overrides) => {
 				let mut options = options;
 				options.cache = false;
-				let scan =
-					collect_entries_native_with_overrides(&self.root, options, Some(overrides), || {
-						heartbeat().map_err(|err| err.to_string())
-					})?;
+				let scan = collect_entries_native_with_overrides(
+					&self.root,
+					options,
+					Some(overrides),
+					None,
+					|| heartbeat().map_err(|err| err.to_string()),
+				)?;
 				Ok(cache::SharedEntries { entries: Arc::new(scan.entries), cache_age_ms: 0 })
 			},
 			None => cache::collect_entries_shared(&self.root, options, heartbeat),
@@ -1475,6 +1527,7 @@ impl WalkRequest {
 		&self,
 		rank: Option<WalkRank>,
 		limit: Option<usize>,
+		deadline: Option<Instant>,
 		heartbeat: H,
 	) -> std::result::Result<WalkOutcome, WalkError<String>>
 	where
@@ -1485,10 +1538,10 @@ impl WalkRequest {
 		if matches!(rank, Some(WalkRank::MtimeDescPathAsc)) {
 			options.detail = WalkDetail::Full;
 		}
-		let mut scan = self.collect_filtered_with_options(options, &heartbeat)?;
+		let mut scan = self.collect_filtered_with_options(options, deadline, &heartbeat)?;
 		if scan.entries.is_empty() && self.should_recheck_empty(scan.cache_age_ms) {
 			options.cache = false;
-			scan = self.collect_filtered_with_options(options, &heartbeat)?;
+			scan = self.collect_filtered_with_options(options, deadline, &heartbeat)?;
 		}
 		// An uncached scan reports age zero, so the recheck above lands on `Fresh`
 		// without a second variable tracking it.
@@ -1515,7 +1568,12 @@ impl WalkRequest {
 			filtered_entries,
 			limited_entries,
 		};
-		Ok(WalkOutcome { entries: scan.entries, backend, stats })
+		Ok(WalkOutcome {
+			entries: scan.entries,
+			backend,
+			stats,
+			deadline_reached: scan.deadline_reached,
+		})
 	}
 
 	fn rank_entries(entries: &mut [CollectedEntry], rank: WalkRank) {
@@ -1565,35 +1623,44 @@ impl WalkRequest {
 	fn collect_filtered_with_options<E, H>(
 		&self,
 		options: WalkOptions,
+		deadline: Option<Instant>,
 		heartbeat: &H,
 	) -> std::result::Result<FilteredEntries, WalkError<String>>
 	where
 		H: Fn() -> std::result::Result<(), E> + Sync,
 		E: fmt::Display,
 	{
+		// A cache entry is keyed by `WalkOptions`, which says nothing about globs,
+		// so a request with globs never reads or writes the cache, and a scan cut
+		// short by a deadline is not the tree.
+		let uncached =
+			self.overrides.is_some() || deadline.is_some() || !options.cache || cache_ttl_ms() == 0;
 		// An uncached walk keeps nothing the filter rejects, so it need not read the
 		// tree on one thread and sort every entry before filtering.
-		let uncached = self.overrides.is_some() || !options.cache || cache_ttl_ms() == 0;
 		if uncached && parallel_collect_applies(options) {
-			return collect_filtered_parallel(self, options, heartbeat);
+			return collect_filtered_parallel(self, options, deadline, heartbeat);
 		}
 		let accept = |entry: &CollectedEntry| self.filter.accepts_collected(entry);
-		match self.overrides.clone() {
-			// A cache entry is keyed by `WalkOptions`, which says nothing about globs,
-			// so a request with globs never reads or writes the cache.
-			Some(overrides) => {
-				let mut options = options;
-				options.cache = false;
-				let mut scan =
-					collect_entries_native_with_overrides(&self.root, options, Some(overrides), || {
-						heartbeat().map_err(|err| err.to_string())
-					})?;
-				let scanned = scan.entries.len();
-				scan.entries.retain(&accept);
-				Ok(FilteredEntries { entries: scan.entries, cache_age_ms: 0, scanned })
-			},
-			None => collect_entries_filtered(&self.root, options, heartbeat, &accept),
+		if !uncached {
+			return collect_entries_filtered(&self.root, options, heartbeat, &accept);
 		}
+		let mut options = options;
+		options.cache = false;
+		let mut scan = collect_entries_native_with_overrides(
+			&self.root,
+			options,
+			self.overrides.clone(),
+			deadline,
+			|| heartbeat().map_err(|err| err.to_string()),
+		)?;
+		let scanned = scan.entries.len();
+		scan.entries.retain(&accept);
+		Ok(FilteredEntries {
+			entries: scan.entries,
+			cache_age_ms: 0,
+			scanned,
+			deadline_reached: scan.deadline_reached,
+		})
 	}
 
 	fn should_recheck_empty(&self, cache_age_ms: u64) -> bool {
@@ -1875,14 +1942,49 @@ fn parallel_collect_applies(options: WalkOptions) -> bool {
 		&& !(options.emit_root && options.min_depth == 0)
 }
 
+/// Why a collection given a deadline stopped before it walked the whole tree.
+enum Halt<E> {
+	/// The caller's heartbeat failed.
+	Heartbeat(E),
+	/// The deadline passed.
+	Deadline,
+}
+
+impl<E> Halt<E> {
+	/// Call `heartbeat`, then read the clock against `deadline`, so a
+	/// cancellation that lands on the same beat as the deadline fails the walk
+	/// instead of returning it as a partial result.
+	fn beat(
+		heartbeat: impl FnOnce() -> std::result::Result<(), E>,
+		deadline: Option<Instant>,
+	) -> std::result::Result<(), Self> {
+		heartbeat().map_err(Self::Heartbeat)?;
+		match deadline {
+			Some(deadline) if Instant::now() >= deadline => Err(Self::Deadline),
+			_ => Ok(()),
+		}
+	}
+
+	/// Whether a walk that stopped on `halt` reached its deadline. A heartbeat
+	/// failure is the walk's error.
+	fn deadline_reached(halt: Option<Self>) -> std::result::Result<bool, WalkError<E>> {
+		match halt {
+			None => Ok(false),
+			Some(Self::Deadline) => Ok(true),
+			Some(Self::Heartbeat(error)) => Err(WalkError::Interrupted(error)),
+		}
+	}
+}
+
 /// Collect the entries `request`'s filter accepts with an unordered parallel
-/// walk, sorted by path.
+/// walk, sorted by path, stopping at `deadline`.
 ///
 /// Only an accepted entry is allocated. The serial collector materializes and
 /// sorts every entry of the tree before the filter runs, on one thread.
 fn collect_filtered_parallel<E, H>(
 	request: &WalkRequest,
 	mut options: WalkOptions,
+	deadline: Option<Instant>,
 	heartbeat: &H,
 ) -> std::result::Result<FilteredEntries, WalkError<String>>
 where
@@ -1890,12 +1992,19 @@ where
 	E: fmt::Display,
 {
 	options.cache = false;
-	let empty = || FilteredEntries { entries: Vec::new(), cache_age_ms: 0, scanned: 0 };
+	let empty = || FilteredEntries {
+		entries:          Vec::new(),
+		cache_age_ms:     0,
+		scanned:          0,
+		deadline_reached: false,
+	};
 	if options.min_depth > options.max_depth {
 		return Ok(empty());
 	}
-	let beat = || heartbeat().map_err(|err| err.to_string());
-	beat().map_err(WalkError::Interrupted)?;
+	let beat = || Halt::beat(|| heartbeat().map_err(|err| err.to_string()), deadline);
+	if Halt::deadline_reached(beat().err())? {
+		return Ok(FilteredEntries { deadline_reached: true, ..empty() });
+	}
 	let Some(root_entry) = root_entry(&request.root, options.detail, options.follow_links)? else {
 		return Ok(empty());
 	};
@@ -1937,7 +2046,7 @@ where
 			.lock()
 			.unwrap_or_else(PoisonError::into_inner)
 			.push(collected);
-		Ok::<_, String>(ParallelWalkControl::Continue)
+		Ok::<_, Halt<String>>(ParallelWalkControl::Continue)
 	};
 	let shared = ParallelWalkShared::new(&sink, &beat);
 	walk_parallel_root(&context, &shared);
@@ -1945,13 +2054,11 @@ where
 	if let Some((path, message)) = shared.take_dir_failure() {
 		return Err(WalkError::InvalidData { path, message });
 	}
-	if let Some(error) = shared.take_error() {
-		return Err(WalkError::Interrupted(error));
-	}
+	let deadline_reached = Halt::deadline_reached(shared.take_error())?;
 	let scanned = shared.scanned.load(AtomicOrdering::Relaxed);
 	let mut entries = kept.into_inner().unwrap_or_else(PoisonError::into_inner);
 	entries.sort_unstable_by(|a, b| a.path.cmp(&b.path));
-	Ok(FilteredEntries { entries, cache_age_ms: 0, scanned })
+	Ok(FilteredEntries { entries, cache_age_ms: 0, scanned, deadline_reached })
 }
 
 /// Read the metadata of `path`, an entry named `name` that the walk listed
@@ -3123,22 +3230,39 @@ fn collect_entries_native<E, H>(
 where
 	H: FnMut() -> std::result::Result<(), E>,
 {
-	collect_entries_native_with_overrides(root, options, None, heartbeat)
+	let scan = collect_entries_native_with_overrides(root, options, None, None, heartbeat)?;
+	Ok(CollectedEntries { entries: scan.entries, cache_age_ms: 0 })
+}
+
+/// Entries a serial walk collected, sorted as the walk order requires, and
+/// whether it stopped at its deadline.
+struct SerialScan {
+	entries:          Vec<CollectedEntry>,
+	deadline_reached: bool,
 }
 
 /// Collects entries with caller-named globs that outrank the hidden and ignore
-/// rules. Never cached: see [`WalkRequest::overrides`].
+/// rules, stopping at `deadline`. Never cached: see [`WalkRequest::overrides`].
 fn collect_entries_native_with_overrides<E, H>(
 	root: &Path,
 	options: WalkOptions,
 	overrides: Option<WalkOverrides>,
-	heartbeat: H,
-) -> std::result::Result<CollectedEntries, WalkError<E>>
+	deadline: Option<Instant>,
+	mut heartbeat: H,
+) -> std::result::Result<SerialScan, WalkError<E>>
 where
 	H: FnMut() -> std::result::Result<(), E>,
 {
 	let mut collector = CollectVisitor::new();
-	let _status = walk_entries_with_overrides(root, options, overrides, &mut collector, heartbeat)?;
+	let beat = || Halt::beat(&mut heartbeat, deadline);
+	let deadline_reached =
+		match walk_entries_with_overrides(root, options, overrides, &mut collector, beat) {
+			Ok(_) => false,
+			Err(WalkError::Interrupted(halt)) => Halt::deadline_reached(Some(halt))?,
+			Err(WalkError::InvalidData { path, message }) => {
+				return Err(WalkError::InvalidData { path, message });
+			},
+		};
 	if options.contents_first {
 		sort_collected_depth_first(&mut collector.entries);
 	} else {
@@ -3146,7 +3270,7 @@ where
 			.entries
 			.sort_unstable_by(|a, b| a.path.cmp(&b.path));
 	}
-	Ok(CollectedEntries { entries: collector.entries, cache_age_ms: 0 })
+	Ok(SerialScan { entries: collector.entries, deadline_reached })
 }
 
 /// Scans entries without cancellation using platform syscalls when supported.

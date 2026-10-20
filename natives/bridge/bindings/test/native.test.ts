@@ -532,6 +532,20 @@ describe("veyyon-natives", () => {
 			expect(result.matches).toHaveLength(0);
 		});
 
+		it("returns what it found with timedOut set when timeoutMs passes, instead of failing", async () => {
+			const passed = await glob({ pattern: "**/*", path: testDir, timeoutMs: 0 });
+			expect(passed.timedOut).toBe(true);
+			expect(passed.matches).toEqual([]);
+
+			const beaten = await glob({ pattern: "*.ts", path: testDir, timeoutMs: 60_000 });
+			const unbounded = await glob({ pattern: "*.ts", path: testDir });
+			expect(beaten.timedOut).toBe(false);
+			expect(unbounded.timedOut).toBe(false);
+			expect(beaten.matches.map(match => match.path).sort()).toEqual(
+				unbounded.matches.map(match => match.path).sort(),
+			);
+		});
+
 		it("should stream sorted callbacks for entries admitted to the bounded top-n heap", async () => {
 			const scopedDir = await fs.mkdtemp(path.join(os.tmpdir(), "natives-glob-limit-"));
 			try {

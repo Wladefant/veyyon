@@ -533,11 +533,13 @@ where
 /// Entries a filter accepted, plus what the walk or the cache actually held.
 pub struct FilteredEntries {
 	/// Accepted entries, in the order the walk or the cache held them.
-	pub entries:      Vec<CollectedEntry>,
+	pub entries:          Vec<CollectedEntry>,
 	/// Age of the cache entry in milliseconds; zero means freshly scanned.
-	pub cache_age_ms: u64,
+	pub cache_age_ms:     u64,
 	/// Entries considered, accepted or not.
-	pub scanned:      usize,
+	pub scanned:          usize,
+	/// The walk stopped at its deadline before it read the whole tree.
+	pub deadline_reached: bool,
 }
 
 /// Clone the entries `accept` keeps, and only those.
@@ -598,13 +600,23 @@ where
 		let mut scan = collect_entries_uncached(root, options, heartbeat)?;
 		let scanned = scan.entries.len();
 		scan.entries.retain(|entry| accept(entry));
-		return Ok(FilteredEntries { entries: scan.entries, cache_age_ms: 0, scanned });
+		return Ok(FilteredEntries {
+			entries: scan.entries,
+			cache_age_ms: 0,
+			scanned,
+			deadline_reached: false,
+		});
 	}
 
 	let scan = cached_entries(root, options, heartbeat)?;
 	let scanned = scan.entries.len();
 	let entries = clone_accepted(&scan.entries, accept);
-	Ok(FilteredEntries { entries, cache_age_ms: scan.cache_age_ms, scanned })
+	Ok(FilteredEntries {
+		entries,
+		cache_age_ms: scan.cache_age_ms,
+		scanned,
+		deadline_reached: false,
+	})
 }
 
 /// Every entry a walk or a cache entry holds, shared rather than copied.
