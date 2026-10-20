@@ -148,6 +148,7 @@ A page's challenge is reported once: a later run on the same document adds no li
    - `connected` waits for `${cdpUrl}/json/version`, then `puppeteer.connect()`;
    - `spawned` first tries `findReusableCdp()`, else kills same-path processes, allocates a free loopback port, spawns the executable with `--remote-debugging-port=<port>`, waits for CDP, then connects.
    - `cmux` connects a `CmuxSocketClient` to the cmux unix socket; existing cmux handles are reused unconditionally (no connection-liveness recheck).
+   - every returned handle carries one lease (`refCount` +1) taken in the same synchronous step as the return; the caller releases it with `releaseBrowser()` after its tab holds the browser (or on failure), so no session's release can dispose a handle before its caller holds it.
 5. `open` acquires a tab through `acquireTab()` (`packages/coding-agent/src/tools/web/browser/tab-supervisor.ts`):
    - same-name + same-browser + alive tab is reused unless `dialogs` changed; a `context` other than the tab's is refused;
    - same-name but different browser handle, dead state, or changed dialog policy forces release and recreation, in the same context;
