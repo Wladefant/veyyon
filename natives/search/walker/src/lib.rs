@@ -381,8 +381,8 @@ impl CompiledWalkGlob {
 	/// traversing a subtree it can never match into. It is safe to prune there
 	/// because `literal_separator(true)` stops `*`, `?`, and `[...]` from
 	/// crossing a `/`, so a pattern with N segments cannot match anything
-	/// deeper than N. `**` and `{...}` disable the bound, as does a character
-	/// class that can match a `/`.
+	/// deeper than N. A `{...}` group counts as its deepest alternative. `**`
+	/// disables the bound, as does a character class that can match a `/`.
 	pub const fn depth_bound(&self) -> usize {
 		self.depth_bound
 	}

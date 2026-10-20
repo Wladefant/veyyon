@@ -139,19 +139,36 @@ fn the_bound_is_measured_after_normalization() {
 	);
 }
 
-/// `**` and `{...}` disable the bound, because neither has a segment count.
+/// `**` and a class that can match `/` disable the bound, because neither has a
+/// segment count.
 ///
 /// This is the case where being wrong loses results rather than time, so the
 /// unbounded answer is the safe one and it has to survive the new entry point.
 #[test]
-fn a_recursive_or_alternating_pattern_is_unbounded() {
-	for pattern in ["**/*.ts", "src/**/*.ts", "{a/b,c}/d.ts", "src/[!x]/a.ts"] {
+fn a_recursive_or_separator_crossing_pattern_is_unbounded() {
+	for pattern in ["**/*.ts", "src/**/*.ts", "{**/a,b}/d.ts", "src/[!x]/a.ts"] {
 		assert_eq!(
 			CompiledWalkGlob::compile(pattern, false)
 				.expect("valid")
 				.depth_bound(),
 			usize::MAX,
 			"{pattern} should not bound the walk"
+		);
+	}
+}
+
+/// A `{...}` group reaches as deep as its deepest alternative.
+#[test]
+fn an_alternating_pattern_is_bounded_by_its_deepest_alternative() {
+	for (pattern, bound) in
+		[("{a/b,c}/d.ts", 3), ("{one.ts,src/deep/three.ts}", 3), ("src/{a,b}.ts", 2)]
+	{
+		assert_eq!(
+			CompiledWalkGlob::compile(pattern, true)
+				.expect("valid")
+				.depth_bound(),
+			bound,
+			"{pattern}"
 		);
 	}
 }
@@ -247,6 +264,8 @@ fn a_bounded_walk_returns_what_an_unbounded_one_returns() {
 		("*.ts", false, paths(&["one.ts"])),
 		("src/*.ts", true, paths(&["src/two.ts"])),
 		("src/deep/*.ts", true, paths(&["src/deep/three.ts"])),
+		("{one.ts,src/deep/three.ts}", true, paths(&["one.ts", "src/deep/three.ts"])),
+		("{src/two.ts,src/deep/*/four.ts}", false, paths(&["src/deep/deeper/four.ts", "src/two.ts"])),
 		(
 			"*.ts",
 			true,
