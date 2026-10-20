@@ -107,4 +107,4 @@ package (`@veyyon/natives`) and the architecture pages above. Promote a
 crate to a dedicated user-facing doc only when it grows a standalone CLI or
 public API consumed outside `natives/bridge/bindings`.
 
-*Verified against `ae701dffe4e5bd862c653ada88edc7120c3fccd9` on 2026-10-18.*
+*Verified against `3d5e2150c8848a0b9435b3737b7f84198310bb35` on 2026-10-20.*
