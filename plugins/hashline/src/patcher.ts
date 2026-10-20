@@ -583,9 +583,10 @@ export class Patcher {
 	 *   - a `base` with a displayed-line record contributes the lines the edit
 	 *     wrote, and each displayed or clipped line the edit left unchanged, at
 	 *     its new position;
-	 *   - a `base` that is the tagged read of a file changed since first maps its
-	 *     displayed lines, every line when it has no record, onto the pre-edit
-	 *     text, so a line the change rewrote or added is not displayed;
+	 *   - a `base` that is the tagged read of a file changed since contributes
+	 *     only the lines the change left in place, every such line when it has
+	 *     no record: the model cannot know where the change moved a line, so a
+	 *     line the change rewrote, added or moved is not displayed;
 	 *   - no `base`, or one without a record, accepted an edit at any line, and
 	 *     the edited text keeps that: every one of its lines is recorded displayed.
 	 * The edited text stays unrestricted when it is already a retained version
@@ -599,8 +600,8 @@ export class Patcher {
 		let clipped: Iterable<number> | undefined = base?.clippedLines;
 		if (base && base.text !== before) {
 			const change = new LineMap(base.text, before);
-			seen = mapLines(change, seen ?? lineNumbers(base.text));
-			clipped = clipped && mapLines(change, clipped);
+			seen = unmovedLines(change, seen ?? lineNumbers(base.text));
+			clipped = clipped && unmovedLines(change, clipped);
 		}
 		if (!seen) {
 			this.snapshots.recordSeenLines(canonicalPath, hash, lineNumbers(after));
@@ -831,6 +832,15 @@ function mapLines(lineMap: LineMap, lines: Iterable<number>): number[] {
 		if (target !== undefined) mapped.push(target);
 	}
 	return mapped;
+}
+
+/** The lines of `lines` that `lineMap` pairs with the same line number. */
+function unmovedLines(lineMap: LineMap, lines: Iterable<number>): number[] {
+	const unmoved: number[] = [];
+	for (const line of lines) {
+		if (lineMap.get(line) === line) unmoved.push(line);
+	}
+	return unmoved;
 }
 
 /**

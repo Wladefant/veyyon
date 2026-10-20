@@ -217,7 +217,7 @@ describe("a line shown by an edit stays editable after a later read", () => {
 			path: `${source}:${FIRST_READ.start}-${FIRST_READ.end}`,
 		});
 		const tag = tagFromOutput(resultText(first), "source.ts");
-		await fs.writeFile(source, `// external\n${CONTENT.replace("const v20 = 20;", "const v20 = 200;")}`);
+		await fs.writeFile(source, CONTENT.replace("const v20 = 20;", "const v20 = 200;"));
 
 		const edited = resultText(
 			await executeHashlineSingle(execOptions(`[source.ts#${tag}]\n${HUNKS.SWAP.body}`, session)),
