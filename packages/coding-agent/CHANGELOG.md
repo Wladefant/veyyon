@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Fixed
+- Recovered daemons whose process tree cannot be proven gone now settle as `failed` with `ownershipUncertain`, are never restarted automatically, and allow manual replacement only when the configured ready port is free.
+- Launch retains stable handles for tracked descendants after a wrapper exits and waits for their teardown before restarting ([issue](https://github.com/Wladefant/veyyon/issues/530)).
+- Launch holds a daemon whose native process handle is unavailable in `stopping` instead of settling it as exited: its tree's death is unobservable, so no restart starts and a stop reports failure ([issue](https://github.com/Wladefant/veyyon/issues/530)).
 - Mixed-build IRC sends distinguish unknown sessions from receivers without notice support and report loaded build identities ([#551](https://github.com/Wladefant/veyyon/issues/551)).
 - Browser tabs owned by another session can no longer be reopened, reused, or run, and the tab inventory omits their names, titles, and URLs ([Refs #538](https://github.com/Wladefant/veyyon/issues/538)).
 

@@ -295,4 +295,53 @@ describe("launch lifecycle backoff, name reuse, and recovery", () => {
 			await shutdown(client);
 		}
 	}, 20_000);
+
+	// A PTY child that exits within milliseconds of spawn. Before the fix its root was adopted only from a pidfile read
+	// that lost the race, so the exit settled an unknown tree and the record stayed "stopping" with no recheck.
+	// POSIX only: the shell-exec spawn path is what this case drives. Windows uses startArgv with the same handle adoption.
+	it.skipIf(process.platform === "win32")(
+		"settles a PTY child that exits before the broker polls for its handle",
+		async () => {
+			const projectDir = await tempDir("project-pty-fast-exit-");
+			const runtimeDir = await tempDir("runtime-pty-fast-exit-");
+			const client = await connect(projectDir, runtimeDir);
+
+			try {
+				const startRes = await client.request({
+					op: "start",
+					spec: {
+						name: "pty-fast-exit",
+						application: process.execPath,
+						args: ["-e", "process.exit(3)"],
+						env: {},
+						cwd: projectDir,
+						pty: true,
+						restart: "no",
+						persist: false,
+						detached: false,
+					},
+				});
+				expect(startRes.op).toBe("start");
+
+				const settled = await waitUntil(async () => {
+					const listed = await client.request({ op: "list" });
+					if (listed.op !== "list") return false;
+					const daemon = listed.daemons.find(d => d.name === "pty-fast-exit");
+					return daemon?.state === "failed" || daemon?.state === "exited";
+				}, 10_000);
+				expect(settled).toBeTrue();
+
+				const listed = await client.request({ op: "list" });
+				if (listed.op === "list") {
+					const daemon = listed.daemons.find(d => d.name === "pty-fast-exit");
+					expect(daemon?.state).toBe("failed");
+					expect(daemon?.exitCode).toBe(3);
+					expect(daemon?.terminatedBy).toBe("process-exit");
+				}
+			} finally {
+				await shutdown(client);
+			}
+		},
+		20_000,
+	);
 });

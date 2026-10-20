@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `PtySession.process` exposes the spawned child's stable process handle after a run starts.
+
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.

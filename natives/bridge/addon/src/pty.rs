@@ -185,6 +185,9 @@ struct PtySessionCore {
 #[napi]
 pub struct PtySession {
 	core: Arc<Mutex<Option<PtySessionCore>>>,
+	/// Stable handle for the child spawned by the latest accepted run. Kept after the run ends and reset only
+	/// when the next run is accepted.
+	child_process: Arc<Mutex<Option<ps::Process>>>,
 }
 
 impl Default for PtySession {
@@ -197,7 +200,10 @@ impl Default for PtySession {
 impl PtySession {
 	#[napi(constructor)]
 	pub fn new() -> Self {
-		Self { core: Arc::new(Mutex::new(None)) }
+		Self {
+			core:          Arc::new(Mutex::new(None)),
+			child_process: Arc::new(Mutex::new(None)),
+		}
 	}
 
 	/// Start a shell command and stream output chunks via callback.
@@ -264,6 +270,12 @@ impl PtySession {
 	pub fn kill(&self) -> Result<()> {
 		self.send_control(ControlMessage::Kill)
 	}
+
+	/// Stable process handle for the child spawned by the latest accepted run.
+	#[napi(getter)]
+	pub fn process(&self) -> Option<ps::Process> {
+		self.child_process.lock().clone()
+	}
 }
 
 impl PtySession {
@@ -285,11 +297,15 @@ impl PtySession {
 			if guard.is_some() {
 				return Err(Error::from_reason("PTY session already running"));
 			}
+			*self.child_process.lock() = None;
 			*guard = Some(PtySessionCore { control_tx });
 		}
+		let child_process_slot = Arc::clone(&self.child_process);
 		task::future(env, "pty.start", async move {
 			let run_result =
-				tokio::task::spawn_blocking(move || run_pty_sync(run_config, on_chunk, control_rx, ct))
+				tokio::task::spawn_blocking(move || {
+					run_pty_sync(run_config, on_chunk, control_rx, ct, &child_process_slot)
+				})
 					.await;
 
 			let mut guard = core.lock();
@@ -337,6 +353,7 @@ fn run_pty_sync(
 	on_chunk: Option<ThreadsafeFunction<String>>,
 	control_rx: flume::Receiver<ControlMessage>,
 	ct: task::CancelToken,
+	child_process_slot: &Mutex<Option<ps::Process>>,
 ) -> Result<PtyRunResult> {
 	let pty_system = native_pty_system();
 	ct.heartbeat()
@@ -415,6 +432,16 @@ fn run_pty_sync(
 		.slave
 		.spawn_command(cmd)
 		.map_err(|err| to_napi_with("Failed to spawn PTY command", err))?;
+	// Reopen the reported PID once, then verify the child is still running before retaining the candidate. A PID
+	// captured after exit is never published, even if the operating system already reused its number.
+	let child_pid = child.process_id().and_then(|value| i32::try_from(value).ok());
+	let candidate_process = child_pid.and_then(ps::Process::from_pid);
+	let captured_status = child
+		.try_wait()
+		.map_err(|err| to_napi_with("Failed checking PTY status", err))?;
+	if captured_status.is_none() {
+		*child_process_slot.lock() = candidate_process;
+	}
 	drop(pair.slave);
 	// Adopt the child into the session CPU budget group before it can
 	// accumulate unsampled runtime. Best-effort inside the backend: the write
@@ -468,9 +495,6 @@ fn run_pty_sync(
 		let _ = reader_tx.send(ReaderEvent::Done);
 	});
 
-	let child_pid = child
-		.process_id()
-		.and_then(|value| i32::try_from(value).ok());
 	#[cfg(unix)]
 	let process_group_id = master.process_group_leader().filter(|pgid| *pgid > 0);
 	#[cfg(not(unix))]
@@ -478,7 +502,7 @@ fn run_pty_sync(
 	let mut timed_out = false;
 	let mut cancelled = false;
 	let mut reader_done = false;
-	let mut exit_status: Option<(i32, Option<String>)> = None;
+	let mut exit_status: Option<(i32, Option<String>)> = captured_status.as_ref().map(exit_status_parts);
 	let mut terminate_requested = false;
 	let mut reader_drain_deadline: Option<Instant> = None;
 	while exit_status.is_none() || !reader_done {
