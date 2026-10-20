@@ -6,7 +6,7 @@
 
 - Auth gateway refuses missing, malformed, wrong and revoked device bearers before provider dispatch. Device tokens can refresh per request ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
 - Gateway privacy guards credentials split across semantic SSE deltas and withholds Cursor diagnostics and raw request-debug dumps inside private requests ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
-  Completed channels release safe frames before EOF. A 64-frame or 64-KiB hold limit redacts unresolved prefixes; errors flush held frames through redaction before the error frame.
+  Completed channels release safe frames before EOF. A 64-frame or 64-KiB hold limit redacts unresolved prefixes. At an `error` or `response.failed` frame, held deltas flush with every trailing credential prefix masked as `[REDACTED]`, the error frame follows once, and later deltas are still redacted.
 
 - Codex account ranking ignores usage windows of length 0, so one account no longer takes every new session.
 - Aligned OpenAI Codex responses imports with openai-responses-stream exports and restored the UsageCostHistoryEntry interface in usage types, with no user-visible change.
