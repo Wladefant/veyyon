@@ -1,0 +1,139 @@
+/**
+ * Reads of discovery records: small JSON files a process publishes under the config root so a peer can
+ * find a live session or terminal. A record counts as evidence only when the current user wrote it.
+ * A reader refuses any record another user could have written or can read, before it parses one.
+ *
+ * WHY: a record that is broadly readable or writable is not proof of ownership. Another local user can
+ * plant one (a live pid, a socket path that answers), and a reader that trusts it refuses a session it
+ * should open or routes a notice to a terminal that is not the user's.
+ *
+ * POSIX: the record is opened with `O_NOFOLLOW`, so a symlink is refused rather than followed, and with
+ * `O_NONBLOCK`, so a FIFO is refused on its descriptor instead of blocking the open. Every check runs on
+ * the open descriptor that is then read, so the file cannot change between check and read.
+ * Refused: a non-regular file, a file owned by another uid, any group or other permission bit, and a
+ * process with no user id, because the owner then cannot be checked.
+ *
+ * Windows: the path must not be a symbolic link. The file is opened, its handle is checked for type and
+ * size, and {@link verifyOwnerOnlyWindowsAcl} must pass on the path (protected DACL, one full-control allow
+ * ACE for the current user, no reparse point). The path is then compared to the opened handle, so a file
+ * replaced in between is refused before any byte is read, unless it is swapped back (see below).
+ *
+ * WHAT IT DOES NOT CATCH: a process running as the same user, which may edit its own record; a record
+ * another user deletes or renames over (the reader sees ENOENT or refuses the foreign file).
+ *
+ * WINDOWS RESIDUAL WINDOW: the handle is opened before the ACL check, and the ACL is checked by path. A writer
+ * that can rename within the record's directory can swap a file with a passing ACL in at the path during the
+ * check, then swap the opened file back before the identity comparison. The comparison then passes for a file
+ * whose ACL was never checked. The reader narrows that window and does not close it, and it claims no atomic
+ * protection against that writer. The caller's owner-only discovery directory is what keeps a foreign user from
+ * replacing the record at all.
+ */
+
+import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
+import { isFsError } from "./fs-error";
+import { verifyOwnerOnlyWindowsAcl, verifyOwnerOnlyWindowsAclSync, type WindowsAclOptions } from "./windows-acl";
+
+/** A discovery record is a few hundred bytes. A larger file is not one this build published. */
+const MAX_DISCOVERY_RECORD_BYTES = 64 * 1024;
+
+/**
+ * POSIX open flags. `O_NOFOLLOW` refuses a symlink; `O_NONBLOCK` stops an open of a FIFO with no writer
+ * from blocking, so the descriptor reaches the fstat check, which refuses it as not a regular file.
+ */
+const POSIX_READ_FLAGS = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK;
+
+export interface OwnerOnlyReadOptions {
+	/** Defaults to `process.platform`. Injectable so the Windows branch runs on any host under test. */
+	platform?: NodeJS.Platform;
+	/** Forwarded to the Windows ACL check. `run` and `runSync` keep that check hermetic in tests. */
+	windowsAcl?: WindowsAclOptions;
+}
+
+function refuse(filePath: string, reason: string): Error {
+	return new Error(`Refusing discovery record ${filePath}: ${reason}`);
+}
+
+/** The rules both readers apply to the stats of the file they are about to parse. */
+function assertRecordStats(filePath: string, stats: fs.Stats, platform: NodeJS.Platform): void {
+	if (!stats.isFile()) throw refuse(filePath, "not a regular file");
+	if (stats.size > MAX_DISCOVERY_RECORD_BYTES) throw refuse(filePath, "larger than a discovery record");
+	// Windows ownership and ACL are decided by verifyOwnerOnlyWindowsAcl, not by POSIX mode bits.
+	if (platform === "win32") return;
+	// Fail closed: without a user id the owner cannot be checked, so the record is refused.
+	const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+	if (uid === undefined) throw refuse(filePath, "cannot check the owner: process.getuid is unavailable");
+	if (stats.uid !== uid) throw refuse(filePath, "owned by another user");
+	if ((stats.mode & 0o077) !== 0) throw refuse(filePath, "readable or writable by other users");
+}
+
+/** The descriptor opened after the Windows check must name the file that was checked. */
+function assertSameFile(filePath: string, checked: fs.Stats, opened: fs.Stats): void {
+	if (opened.dev !== checked.dev || opened.ino !== checked.ino) {
+		throw refuse(filePath, "replaced while it was checked");
+	}
+}
+
+/**
+ * Read a discovery record that only the current user can have written. Rejects, and returns no content,
+ * when the record is refused. A missing file rejects with its `ENOENT` error, as a plain read does.
+ */
+export async function readOwnerOnlyFile(filePath: string, options: OwnerOnlyReadOptions = {}): Promise<string> {
+	const platform = options.platform ?? process.platform;
+	if (platform === "win32") {
+		// A symbolic link is refused before it is opened, so the open never follows one.
+		if ((await fsp.lstat(filePath)).isSymbolicLink()) throw refuse(filePath, "is a symbolic link");
+		const handle = await fsp.open(filePath, "r");
+		try {
+			const opened = await handle.stat();
+			assertRecordStats(filePath, opened, platform);
+			await verifyOwnerOnlyWindowsAcl(filePath, { ...options.windowsAcl, platform });
+			assertSameFile(filePath, await fsp.lstat(filePath), opened);
+			return await handle.readFile({ encoding: "utf8" });
+		} finally {
+			await handle.close();
+		}
+	}
+	// O_NOFOLLOW reports a symlink as ELOOP; name that refusal instead of the raw errno.
+	const handle = await fsp.open(filePath, POSIX_READ_FLAGS).catch(error => {
+		throw isFsError(error) && error.code === "ELOOP" ? refuse(filePath, "is a symbolic link") : error;
+	});
+	try {
+		assertRecordStats(filePath, await handle.stat(), platform);
+		return await handle.readFile({ encoding: "utf8" });
+	} finally {
+		await handle.close();
+	}
+}
+
+/** Synchronous {@link readOwnerOnlyFile}, with the same refusals and the same missing-file error. */
+export function readOwnerOnlyFileSync(filePath: string, options: OwnerOnlyReadOptions = {}): string {
+	const platform = options.platform ?? process.platform;
+	if (platform === "win32") {
+		// A symbolic link is refused before it is opened, so the open never follows one.
+		if (fs.lstatSync(filePath).isSymbolicLink()) throw refuse(filePath, "is a symbolic link");
+		const fd = fs.openSync(filePath, "r");
+		try {
+			const opened = fs.fstatSync(fd);
+			assertRecordStats(filePath, opened, platform);
+			verifyOwnerOnlyWindowsAclSync(filePath, { ...options.windowsAcl, platform });
+			assertSameFile(filePath, fs.lstatSync(filePath), opened);
+			return fs.readFileSync(fd, "utf8");
+		} finally {
+			fs.closeSync(fd);
+		}
+	}
+	let fd: number;
+	try {
+		fd = fs.openSync(filePath, POSIX_READ_FLAGS);
+	} catch (error) {
+		// O_NOFOLLOW reports a symlink as ELOOP; name that refusal instead of the raw errno.
+		throw isFsError(error) && error.code === "ELOOP" ? refuse(filePath, "is a symbolic link") : error;
+	}
+	try {
+		assertRecordStats(filePath, fs.fstatSync(fd), platform);
+		return fs.readFileSync(fd, "utf8");
+	} finally {
+		fs.closeSync(fd);
+	}
+}

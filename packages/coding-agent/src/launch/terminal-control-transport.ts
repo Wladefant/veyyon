@@ -197,20 +197,15 @@ public class VeyyonTerminalPipeBroker {
         if (identity == null) {
             throw new InvalidOperationException("Failed to resolve current Windows user SID.");
         }
-        var systemSid = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
 
+        // WHY: issue 580. A SYSTEM FullControl ACE lets any SYSTEM-level process reach the
+        // terminal control channel. The owner SID is the only ACE, so the pipe stays owner-only.
         var security = new PipeSecurity();
         security.SetOwner(identity);
         security.SetAccessRuleProtection(true, false);
 
         security.AddAccessRule(new PipeAccessRule(
             identity,
-            PipeAccessRights.FullControl,
-            AccessControlType.Allow
-        ));
-
-        security.AddAccessRule(new PipeAccessRule(
-            systemSid,
             PipeAccessRights.FullControl,
             AccessControlType.Allow
         ));
@@ -670,6 +665,16 @@ export async function createWindowsPipeTransport(
 	return server;
 }
 
+// WHY: issue 580. chmod follows symlinks and would change the mode of a socket another uid
+// created. lstat does not follow links, so a symlink or a foreign-owned path is refused here.
+async function assertOwnedPosixSocket(endpoint: string): Promise<void> {
+	const processUid = process.getuid?.();
+	const stat = await fs.lstat(endpoint);
+	if (processUid === undefined || !stat.isSocket() || stat.uid !== processUid) {
+		throw new Error(`Control socket ${endpoint} is not a socket owned by the current user`);
+	}
+}
+
 export async function createPosixSocketServer(
 	endpoint: string,
 	onConnection: (socket: TerminalSocket) => void,
@@ -685,6 +690,7 @@ export async function createPosixSocketServer(
 	await readyPromise;
 
 	try {
+		await assertOwnedPosixSocket(endpoint);
 		await fs.chmod(endpoint, 0o600);
 	} catch (err) {
 		server.close();

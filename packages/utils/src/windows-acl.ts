@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import * as path from "node:path";
 import { escapeTerminalText } from "./terminal-safe";
 import { errorMessage } from "./type-guards";
@@ -15,9 +15,14 @@ export interface WindowsAclCommandResult {
 /** Injectable only so ACL behavior can be exercised on non-Windows test hosts. */
 export type WindowsAclCommandRunner = (script: string, filePath: string) => Promise<WindowsAclCommandResult>;
 
+/** Synchronous counterpart of {@link WindowsAclCommandRunner} for readers that cannot await. */
+export type WindowsAclSyncCommandRunner = (script: string, filePath: string) => WindowsAclCommandResult;
+
 export interface WindowsAclOptions {
 	platform?: NodeJS.Platform;
 	run?: WindowsAclCommandRunner;
+	/** Used only by {@link verifyOwnerOnlyWindowsAclSync}. */
+	runSync?: WindowsAclSyncCommandRunner;
 	/** Low-level injection for exercising process lifecycle behavior without PowerShell. */
 	spawn?: typeof spawn;
 }
@@ -76,8 +81,9 @@ ${VERIFY_ACL}
 const VERIFY_SCRIPT = `
 $ErrorActionPreference = 'Stop'
 $target = [Environment]::GetEnvironmentVariable('VEYYON_OWNER_ONLY_ACL_PATH', 'Process')
-$item = Get-Item -LiteralPath $target -Force -ErrorAction Stop
 if ([string]::IsNullOrEmpty($target)) { throw 'ACL target is missing' }
+$item = Get-Item -LiteralPath $target -Force -ErrorAction Stop
+if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'ACL target is a reparse point' }
 ${VERIFY_ACL}
 [Console]::Out.Write('OK')
 `;
@@ -92,10 +98,31 @@ export async function verifyOwnerOnlyWindowsAcl(filePath: string, options: Windo
 	await runOwnerOnlyAcl(VERIFY_SCRIPT, filePath, options);
 }
 
+/**
+ * Synchronous {@link verifyOwnerOnlyWindowsAcl} for a reader that cannot await. It runs the same
+ * VERIFY_SCRIPT with the same environment, deadline and output bound, and rejects the same way.
+ */
+export function verifyOwnerOnlyWindowsAclSync(filePath: string, options: WindowsAclOptions = {}): void {
+	const platform = options.platform ?? process.platform;
+	if (platform !== "win32") return;
+	assertOwnerOnlyPath(filePath);
+
+	let result: WindowsAclCommandResult;
+	try {
+		result =
+			options.runSync === undefined
+				? defaultWindowsAclSyncRunner(VERIFY_SCRIPT, filePath)
+				: options.runSync(VERIFY_SCRIPT, filePath);
+	} catch (error) {
+		throw ownerOnlyAclFailure(error);
+	}
+	assertOwnerOnlyResult(result);
+}
+
 async function runOwnerOnlyAcl(script: string, filePath: string, options: WindowsAclOptions): Promise<void> {
 	const platform = options.platform ?? process.platform;
 	if (platform !== "win32") return;
-	if (filePath.length === 0 || filePath.includes("\0")) throw new Error("The Windows ACL path is invalid.");
+	assertOwnerOnlyPath(filePath);
 
 	let result: WindowsAclCommandResult;
 	try {
@@ -104,10 +131,22 @@ async function runOwnerOnlyAcl(script: string, filePath: string, options: Window
 				? await defaultWindowsAclRunner(script, filePath, options.spawn)
 				: await options.run(script, filePath);
 	} catch (error) {
-		const message = errorMessage(error);
-		const detail = boundedDiagnostic(message.length === 0 ? "unknown command error" : message);
-		throw new Error(`The owner-only Windows ACL operation failed (${detail}).`, { cause: error });
+		throw ownerOnlyAclFailure(error);
 	}
+	assertOwnerOnlyResult(result);
+}
+
+function assertOwnerOnlyPath(filePath: string): void {
+	if (filePath.length === 0 || filePath.includes("\0")) throw new Error("The Windows ACL path is invalid.");
+}
+
+function ownerOnlyAclFailure(error: unknown): Error {
+	const message = errorMessage(error);
+	const detail = boundedDiagnostic(message.length === 0 ? "unknown command error" : message);
+	return new Error(`The owner-only Windows ACL operation failed (${detail}).`, { cause: error });
+}
+
+function assertOwnerOnlyResult(result: WindowsAclCommandResult): void {
 	if (result.exitCode !== 0 || result.stdout !== "OK" || result.stderr !== "") {
 		const status = result.exitCode === 0 ? "unexpected success output" : `exit code ${result.exitCode}`;
 		const output = result.stderr || result.stdout;
@@ -116,24 +155,35 @@ async function runOwnerOnlyAcl(script: string, filePath: string, options: Window
 	}
 }
 
-async function defaultWindowsAclRunner(
-	script: string,
-	filePath: string,
-	spawnProcess: typeof spawn = spawn,
-): Promise<WindowsAclCommandResult> {
+/**
+ * The PowerShell both runners start: the one under the trusted system root, with only the ACL path and
+ * that root in its environment. One resolver keeps the async and sync runners on the same trust rule.
+ */
+function trustedPowerShell(filePath: string): { executable: string; env: Record<string, string> } {
 	const configuredSystemRoot = process.env.SystemRoot;
 	const driveRoot = configuredSystemRoot === undefined ? "" : path.win32.parse(configuredSystemRoot).root;
 	if (configuredSystemRoot === undefined || !/^[A-Za-z]:[\\/]$/.test(driveRoot)) {
 		throw new Error("A trusted drive-qualified Windows system root is unavailable.");
 	}
 	const systemRoot = path.win32.normalize(configuredSystemRoot);
-	const powershell = path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+	return {
+		executable: path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+		env: { SystemRoot: systemRoot, VEYYON_OWNER_ONLY_ACL_PATH: filePath },
+	};
+}
+
+async function defaultWindowsAclRunner(
+	script: string,
+	filePath: string,
+	spawnProcess: typeof spawn = spawn,
+): Promise<WindowsAclCommandResult> {
+	const { executable, env } = trustedPowerShell(filePath);
 	const { promise, resolve, reject } = Promise.withResolvers<WindowsAclCommandResult>();
 	const child = spawnProcess(
-		powershell,
+		executable,
 		["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
 		{
-			env: { SystemRoot: systemRoot, VEYYON_OWNER_ONLY_ACL_PATH: filePath },
+			env,
 			stdio: ["ignore", "pipe", "pipe"],
 			windowsHide: true,
 		},
@@ -199,6 +249,28 @@ async function defaultWindowsAclRunner(
 		fail(new Error("The Windows ACL command timed out."), true);
 	}, WINDOWS_ACL_TIMEOUT_MS);
 	return await promise;
+}
+
+/**
+ * Runs a verification synchronously with the async runner's bounds: a fixed deadline, a per-stream
+ * output cap and no console window. A node-level failure (timeout, oversized output) throws.
+ */
+function defaultWindowsAclSyncRunner(script: string, filePath: string): WindowsAclCommandResult {
+	const { executable, env } = trustedPowerShell(filePath);
+	const result = spawnSync(
+		executable,
+		["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+		{
+			encoding: "utf8",
+			env,
+			maxBuffer: MAX_COMMAND_OUTPUT_BYTES,
+			stdio: ["ignore", "pipe", "pipe"],
+			timeout: WINDOWS_ACL_TIMEOUT_MS,
+			windowsHide: true,
+		},
+	);
+	if (result.error) throw result.error;
+	return { exitCode: result.status ?? -1, stdout: result.stdout.trim(), stderr: result.stderr.trim() };
 }
 
 function boundedDiagnostic(value: string): string {
