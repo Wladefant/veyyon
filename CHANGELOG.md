@@ -207,6 +207,7 @@
 - Removed the `setEmbeddingProvider`, `resetEmbeddingStateForTests`, `setLocalModelInitializerForTests`, `aaakEncode` and `containsSpacelessCjk` aliases, the duplicate `resetModuleStateForTests`, and the `beam/helpers` re-exports of the binary-vector, regex and id helpers; use `setEmbeddingProviderForTests`, `resetEmbeddingProviderForTests`, `setLocalModelInitializer`, `encode`, `hasCjk` and `resetMemoryForTests`.
 - Removed the `cosineSimilarity` re-export from `core/binary-vectors` and the `parseQueryTime`/`temporalBoost` re-exports from `core/beam/recall`; import them from `core/vector-math` and `util/datetime`, or `cosineSimilarity` from the package root.
 - Removed the `local-llm-config` re-exports from `@veyyon/mnemopi/core/local-llm`; import the configuration and prompt helpers from `@veyyon/mnemopi/core/local-llm-config`.
+- Removed the three backfill-completion setters of the database module, which nothing called; no user-visible change.
 - Removed the `ImageBudget` and `DEFAULT_MAX_INLINE_IMAGES` re-exports from `@veyyon/tui/components/image`; import them from `@veyyon/tui` or `@veyyon/tui/core/image-budget`.
 - Removed the unused `easeInCubic` easing and `getHangulCompatibilityJamoWidth` getter.
 - Removed the `stackoverflowDeclaration` alias; import `stackOverflowDeclaration`.
