@@ -526,6 +526,11 @@ export const repoScriptTests = [
 	// No source file the build reads is ignored, and no unanchored pattern names
 	// a directory that holds source.
 	"scripts/every-source-file-the-build-reads-is-in-the-repository.test.ts",
+	// Shared tool budget and admission for the cloud worker. No package bucket
+	// reaches cloud/, so these three suites run only through this list.
+	"cloud/shared-tools/a-tool-budget-survives-restart.test.ts",
+	"cloud/shared-tools/admission-stops-unauthorized-tool-dispatch.test.ts",
+	"cloud/shared-tools/only-admitted-users-can-use-their-own-secrets.test.ts",
 ];
 
 /**
