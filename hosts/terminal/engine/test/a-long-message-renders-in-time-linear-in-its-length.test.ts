@@ -8,10 +8,10 @@
  * The class this closes: any block extension hook whose work grows with the text after the block it is
  * called at. No document below holds a math block or a bare environment, so every hook that searches
  * ahead for one searches to the end. The bound is on the ratio of render times for a message sixteen
- * times longer: 15 to 21 with every hook bounded, 132 to 155 with every hook scanning ahead, and 107 to
- * 149 with the bare-environment tokenizer alone scanning ahead.
+ * times longer: 15 to 21 with every hook bounded, 132 to 171 with every hook scanning ahead, and 107 to
+ * 157 with the bare-environment tokenizer alone scanning ahead.
  *
- * Not caught for certain: one `start` hook alone scanning ahead lands near the bound (39 to 53 by shape),
+ * Not caught for certain: one `start` hook alone scanning ahead lands near the bound (40 to 59 by shape),
  * so `a-block-after-a-blank-line-leaves-the-paragraph-before-it-alone.test.ts` holds the `start` hooks to
  * the paragraph they are called for. Super-linear work inside marked's own tokenizers passes up to the
  * bound.
@@ -44,12 +44,23 @@ function threadCpuMs(): number {
 	return (user + system) / 1000;
 }
 
-/** Thread CPU time of one cold full render of `doc`, the mean of `renders` renders timed as one window. */
+/**
+ * Thread CPU time of one cold full render of `doc`, the mean of `renders` renders timed as one window.
+ *
+ * The heap is collected before the window starts. CI runs every test process with a collector that
+ * marks on the allocating thread alone (`BUN_JSC_useConcurrentGC=0`, `BUN_JSC_numberOfGCMarkers=1` in
+ * `scripts/ci-test-ts.ts`), so a collection is charged to the thread CPU time of whichever window
+ * crosses the allocation threshold. In a process whose heap earlier test files had grown, one full
+ * collection cost about 110 ms and landed in the long window of most pairs, which read 56 to 69 with
+ * nothing super-linear in the renderer. Collecting first pays what earlier allocation owes outside the
+ * window; `Bun.gc` is used because Node exposes a collection only behind `--expose-gc`.
+ */
 function renderCpuMs(doc: string, renders: number): number {
 	const messages = Array.from(
 		{ length: renders },
 		() => new Markdown(`${doc}\n\nsample ${unique++}`, 0, 0, defaultMarkdownTheme),
 	);
+	Bun.gc(true);
 	const start = threadCpuMs();
 	for (const md of messages) {
 		clearRenderCache();
