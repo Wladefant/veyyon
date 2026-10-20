@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- Embedded shell capture that a stalled output consumer cuts short is marked incomplete and is not minimized, so a truncated prefix no longer reads as the whole output. Shutdown waits at most one second for an aborted reader, and a cancelled read on a non-file pipe handle no longer blocks it.
+- Embedded shell capture that a stalled output consumer or a cooperative cancel cuts short is now an explicit error, "Shell output capture is incomplete", from single commands with whole-command minimization and from segmented commands, instead of a success with a truncated, unminimized prefix. Shutdown waits at most one second for an aborted reader, a cancelled read on a non-file pipe handle no longer blocks it, and a cancelled Windows regular-file drain stops at the bytes left when the drain starts.
 
 ## [1.5.6] - 2026-10-10
 
