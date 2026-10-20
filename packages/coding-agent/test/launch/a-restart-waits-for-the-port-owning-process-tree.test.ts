@@ -12,7 +12,7 @@
  * The grandchild writes a ready file only after it is listening. The wrapper stays alive for
  * 500ms after that, so the broker's descendant sampler can observe it. Each test asserts
  * observable effects only: port release, pid death, the logged restart delay, and spawn
- * timestamps and serialized state. It proves five things:
+ * timestamps and serialized state. It proves six things:
  *   1. Stop with a live root frees the port and kills the grandchild.
  *   2. Restart with a live root kills the old holder before the new generation spawns.
  *   3. Concurrent explicit restarts serialize, leave one live holder, preserve port access,
@@ -21,6 +21,8 @@
  *      while the old holder is live.
  *   5. A daemon that cannot bind an occupied port backs off on the logged exponential
  *      schedule (2000ms, then 4000ms) and never hot-loops.
+ *   6. A root with no native handle, whose inherited-stdio holder keeps the port, stays stopping: no
+ *      replacement starts and a stop reports failure while the holder lives.
  *
  * WHAT IT DOES NOT CATCH:
  * - Escaping descendants observed before sampling. A descendant that detaches and re-parents
@@ -39,17 +41,23 @@
  *   asserts only that every logged delay stays at or below the cap and that the first two
  *   match the schedule. The exponential formula itself is covered by the utils backoff tests.
  * - Windows-specific tree termination beyond observable port release and pid death.
+ * - The unknown-tree case runs through an in-process broker with the native boundary spied to null. No
+ *   operator action resolves it inside this suite, so the held record is observed, never recovered. Windows
+ *   PTY daemons, which have no PID and no handle, take the same unknown path and are not covered here.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { getProcessStartIdentity, isToolCallProcessAlive } from "@veyyon/utils";
+import * as nativeProcess from "@veyyon/utils/native-process";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
+import { DaemonBroker } from "../../src/launch/broker";
 import { createDaemonBrokerClient, type DaemonBrokerClient } from "../../src/launch/client";
+import { daemonBrokerTokenPath } from "../../src/launch/paths";
 import type { DaemonSpec } from "../../src/launch/protocol";
 
 const TEST_PARENT = path.join(os.tmpdir(), "veyyon-launch-port-tree-tests");
@@ -323,6 +331,25 @@ async function stopQuietly(client: DaemonBrokerClient, name: string): Promise<vo
 	}
 }
 
+/** The broker's record for `name`, or undefined when it is not listed. */
+async function listedDaemon(client: DaemonBrokerClient, name: string) {
+	const listed = await client.request({ op: "list" });
+	if (listed.op !== "list") throw new Error(`expected list result, got ${listed.op}`);
+	return listed.daemons.find(daemon => daemon.name === name);
+}
+
+/**
+ * Start a broker in this test process, so a spy on the native boundary it calls applies to it. A client
+ * reads the token and endpoint from the runtime directory the broker writes.
+ */
+async function startInProcessBroker(projectDir: string, runtimeDir: string): Promise<DaemonBrokerClient> {
+	const token = `token${crypto.randomUUID().replaceAll("-", "")}`;
+	await fs.mkdir(runtimeDir, { recursive: true, mode: 0o700 });
+	await fs.writeFile(daemonBrokerTokenPath(runtimeDir), token, { encoding: "utf8", mode: 0o600 });
+	void new DaemonBroker(projectDir, runtimeDir, token, 10_000).run();
+	return connect(projectDir, runtimeDir);
+}
+
 describe("a restart waits for the port-owning process tree", () => {
 	it(
 		"stop with a live root frees the port held by the grandchild and kills it",
@@ -513,6 +540,57 @@ describe("a restart waits for the port-owning process tree", () => {
 				expect(stamps[2]! - stamps[1]!).toBeGreaterThanOrEqual(delays[1] as number);
 			} finally {
 				await stopQuietly(client, name);
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+});
+
+describe("a root with no native handle is never proven dead", () => {
+	it(
+		"holds the record stopping, starts no replacement, and refuses a stop while the holder keeps the port",
+		async () => {
+			const projectDir = await tempDir("project-no-handle-");
+			const runtimeDir = await tempDir("runtime-no-handle-");
+			const pidFile = path.join(projectDir, "holder-pids.txt");
+			const readyFile = path.join(projectDir, "holder-ready.txt");
+			const port = await freePort();
+			const name = "holder-no-handle";
+			// The native boundary is unavailable: the broker cannot obtain a handle for any process.
+			const handleSpy = spyOn(nativeProcess, "processHandle").mockReturnValue(null);
+			try {
+				const client = await startInProcessBroker(projectDir, runtimeDir);
+				// The root exits 500ms after its holder listens, and the holder keeps the port on inherited stdio.
+				await startWrapper(
+					client,
+					name,
+					projectDir,
+					[rootScript, holderScript, String(port), pidFile, "exit-inherit", readyFile],
+					"always",
+				);
+				expect(await waitUntil(() => acceptsConnection(port), WAIT_MS)).toBeTrue();
+				const [holderPid] = await readNumbers(pidFile);
+				expect(holderPid).toBeDefined();
+
+				// Without a handle the root's exit proves nothing about its tree, so the record holds in stopping.
+				expect(await waitUntil(async () => (await listedDaemon(client, name))?.state === "stopping", WAIT_MS)).toBeTrue();
+				const held = await listedDaemon(client, name);
+				expect(held?.exitedAt).toBeUndefined();
+				expect(held?.exitReason).toContain("no native handle");
+
+				// `restart: "always"` would replace the root within about a second. It must not while the holder lives.
+				await delay(3_000);
+				expect(await readNumbers(pidFile)).toHaveLength(1);
+				expect((await listedDaemon(client, name))?.state).toBe("stopping");
+				expect(await acceptsConnection(port)).toBeTrue();
+				expect(isAlive(holderPid as number)).toBeTrue();
+
+				// A stop cannot report success while the tree is not proven dead.
+				await expect(client.request({ op: "stop", name, timeoutMs: 1_000 })).rejects.toThrow("left unsettled");
+				expect((await listedDaemon(client, name))?.state).toBe("stopping");
+				expect(await acceptsConnection(port)).toBeTrue();
+			} finally {
+				handleSpy.mockRestore();
 			}
 		},
 		TEST_TIMEOUT_MS,

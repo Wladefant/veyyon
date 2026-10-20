@@ -5,6 +5,7 @@
 ### Fixed
 
 - Launch retains stable handles for tracked descendants after a wrapper exits and waits for their teardown before restarting ([issue](https://github.com/Wladefant/veyyon/issues/530)).
+- Launch holds a daemon whose native process handle is unavailable in `stopping` instead of settling it as exited: its tree's death is unobservable, so no restart starts and a stop reports failure ([issue](https://github.com/Wladefant/veyyon/issues/530)).
 - Closing a launch client during broker connection now rejects pending requests and destroys late sockets, so an empty broker can exit after its configured grace when all clients close ([Refs #517](https://github.com/Wladefant/veyyon/issues/517)).
 - Reviewer prompts now enforce exact-head, gate-safe, verdict-only reviews and declare `task`, `qa-verifier`, and `haiku` as child roles ([#566](https://github.com/Wladefant/veyyon/issues/566)).
 

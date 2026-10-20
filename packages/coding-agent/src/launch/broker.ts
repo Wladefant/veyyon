@@ -2,7 +2,8 @@ import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type PtyRunResult, type Process, PtySession } from "@veyyon/natives";
+import { setTimeout as sleep } from "node:timers/promises";
+import { type PtyRunResult, Process, PtySession } from "@veyyon/natives";
 import {
 	atomicWriteFile,
 	clamp,
@@ -143,10 +144,12 @@ interface ManagedDaemon {
 	drained?: Promise<void>;
 	/** Sampler that refreshes tracked descendants while the generation runs. */
 	sampler?: NodeJS.Timeout;
-	/** Re-check of a held settle: the root exited but its tree is not yet proven dead. */
+	/** Re-check of a held settle of a live tree. An unknown tree has no re-check: it has no handle to observe. */
 	holdTimer?: NodeJS.Timeout;
 	/** The settle in flight for one generation; a second observer joins it instead of settling again. */
 	settling?: { generation: number; promise: Promise<void> };
+	/** Generation whose completion record is already queued. A second settle of it queues none. */
+	completedGeneration?: number;
 }
 
 interface DaemonLogRead {
@@ -321,18 +324,15 @@ class ProcessTree {
 	readonly root: Process | null;
 	/** Root PID, probed for liveness when no handle exists. */
 	readonly pid: number | undefined;
-	/** A PTY session reports its child's exit; with no root handle that report is the authoritative death. */
-	readonly ptyExit: boolean;
-	/** Set when process.exited reported the root's exit: a positive fact, never inferred from a null handle. */
-	rootExited = false;
 	readonly #members = new Map<number, Process>();
 	/** Process group captured at spawn. It is signalled but never probed, so a zombie member cannot hold a record. */
 	readonly #group: number | undefined;
+	/** When the tree was last walked by sampleThrottled. */
+	#sampledAt = 0;
 
-	constructor(pid: number | undefined, root: Process | null, ptyExit = false) {
+	constructor(pid: number | undefined, root: Process | null) {
 		this.pid = pid;
 		this.root = root;
-		this.ptyExit = ptyExit;
 		this.#group = root !== null && root.groupId() === root.pid ? root.pid : undefined;
 	}
 
@@ -356,6 +356,14 @@ class ProcessTree {
 		}
 	}
 
+	/** Walk the tree at most once per TREE_SAMPLE_MS, so an output burst does not walk it once per chunk. */
+	sampleThrottled(): void {
+		const now = Date.now();
+		if (now - this.#sampledAt < TREE_SAMPLE_MS) return;
+		this.#sampledAt = now;
+		this.sample();
+	}
+
 	/** Tracked processes still running. Each is checked through its own handle, so an escaped member counts. */
 	live(): Process[] {
 		const running: Process[] = [];
@@ -366,14 +374,14 @@ class ProcessTree {
 	}
 
 	/**
-	 * `dead` is proven by an exited handle, a PTY exit, a positive process.exited fact, or an absent PID. A root
-	 * with no handle and a PID that still probes alive is `alive`; with no PID at all, `unknown`.
+	 * `dead` when every tracked handle has exited, a claim about tracked processes only. Without a root handle only
+	 * the PID answers: `alive` while it probes alive, otherwise `unknown`. A root exit or a PTY exit never answers
+	 * `dead` here, because neither proves the descendants gone.
 	 */
 	state(): TreeState {
 		if (this.root === null) {
-			if (this.ptyExit || this.rootExited) return "dead";
 			if (this.pid === undefined) return "unknown";
-			return isProcessAlive(this.pid) ? "alive" : "dead";
+			return isProcessAlive(this.pid) ? "alive" : "unknown";
 		}
 		return this.live().length > 0 ? "alive" : "dead";
 	}
@@ -408,7 +416,7 @@ class ProcessTree {
 
 	async #waitDead(ms: number): Promise<void> {
 		const deadline = Date.now() + ms;
-		while (this.state() === "alive" && Date.now() < deadline) await Bun.sleep(50);
+		while (this.state() === "alive" && Date.now() < deadline) await sleep(50);
 	}
 }
 
@@ -628,6 +636,7 @@ export class DaemonBroker {
 	}
 
 	async #start(spec: DaemonSpec, owner?: string): Promise<DaemonRpcResult> {
+		if (this.#shuttingDown) throw new Error("Daemon broker is shutting down; no daemon can start");
 		if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$/.test(spec.name)) {
 			throw new Error("Daemon name must be 1-48 letters, numbers, dots, underscores, or hyphens");
 		}
@@ -697,6 +706,9 @@ export class DaemonBroker {
 	}
 
 	async #launch(record: ManagedDaemon): Promise<void> {
+		// A launch never starts a process during shutdown or while a stop is pending. Initial starts and restarts
+		// clear stopRequested before they get here, so only a stale launch is refused.
+		if (this.#shuttingDown || record.stopRequested) return;
 		record.generation++;
 		const generation = record.generation;
 		record.stopRequested = false;
@@ -770,12 +782,29 @@ export class DaemonBroker {
 			].join("; ");
 			run = session.start({ command, shell: process.env.SHELL, ...options }, onChunk);
 		}
-		record.tree = new ProcessTree(undefined, null, true);
+		record.tree = new ProcessTree(undefined, null);
 		void run
 			.then(result => this.#onPtyExit(record, generation, result))
 			.catch(error => this.#settle(record, generation, undefined, errorMessage(error)));
 
-		if (process.platform === "win32") return;
+		if (process.platform === "win32") {
+			// ConPTY has no lease file. The native session publishes the child PID right after spawn, so wait for it
+			// (bounded, and only while this generation is still live), then capture the root handle as POSIX does.
+			const deadline = Date.now() + 5_000;
+			while (generation === record.generation && !terminalState(record.snapshot.state)) {
+				const root = "process" in session ? session.process : undefined;
+				if (root instanceof Process) {
+					record.snapshot.pid = root.pid;
+					record.tree = new ProcessTree(root.pid, root);
+					this.#startSampler(record, generation);
+					persist(record);
+					return;
+				}
+				if (Date.now() >= deadline) return;
+				await sleep(20);
+			}
+			return;
+		}
 		const pidPath = managedDaemonProcessLeasePath(record.dir);
 		const deadline = Date.now() + 5_000;
 		while (Date.now() < deadline && generation === record.generation) {
@@ -873,7 +902,7 @@ export class DaemonBroker {
 		const output = raw.toWellFormed();
 		const text = record.log?.append(output) ?? output;
 		record.snapshot.outputBytes += Buffer.byteLength(text, "utf8");
-		if (record.tree?.root?.status() === "running") record.tree.sample();
+		if (record.tree?.root?.status() === "running") record.tree.sampleThrottled();
 		this.#trackOutput(record, generation, sanitizeText(text));
 	}
 
@@ -989,10 +1018,8 @@ export class DaemonBroker {
 		error?: string,
 		ptySignal?: string,
 	): Promise<void> {
-		// Prove the whole tree dead before the verdict. A root that exited while a descendant lives is
-		// not a settled death: the reap either proves the tree dead or holds the record with its handles.
-		// process.exited reported the root's exit: a positive fact that proves it dead.
-		if (exitCode !== undefined && record.tree) record.tree.rootExited = true;
+		// Prove the whole tree dead before the verdict. A root that exited while a descendant lives, or whose
+		// handle is unavailable, is not a settled death: the reap either proves the tree dead or holds the record.
 		// A missing exit code or a rejected observer is not a death. A tree still alive is held and never
 		// signalled, unless a stop asked for termination.
 		if (!record.stopRequested && (exitCode === undefined || error !== undefined) && record.tree?.state() === "alive") {
@@ -1081,7 +1108,7 @@ export class DaemonBroker {
 		}
 		// Close the log and queue the completion record BEFORE the terminal state becomes visible.
 		// Bounded final drain: bytes the child already wrote reach the log. An inherited pipe cannot block settle.
-		await Promise.race([record.drained, Bun.sleep(250)]);
+		await Promise.race([record.drained, sleep(250)]);
 		await record.log?.close();
 		record.log = undefined;
 		this.#queueCompletion(record);
@@ -1105,15 +1132,18 @@ export class DaemonBroker {
 		return state;
 	}
 
-	/** Keep the root and its handles, mark the record non-terminal, and re-check the tree later. */
+	/** Keep the root and its handles and mark the record non-terminal. A live tree is re-checked later; an unknown one is not. */
 	#hold(record: ManagedDaemon, generation: number, state: TreeState, exitCode?: number, error?: string, ptySignal?: string): void {
 		record.snapshot.state = "stopping";
 		record.snapshot.exitReason =
 			state === "alive"
 				? "the process tree is still running; restart is held until its death is proven"
-				: "the process tree cannot be observed on this host; restart is held";
+				: "the process tree has no native handle, so its death cannot be observed; it stays stopping and is not restarted";
 		persist(record);
 		clearTimeout(record.holdTimer);
+		record.holdTimer = undefined;
+		// Only a live tree can change under a re-check. An unknown tree has no handle to observe, so it gets no timer.
+		if (state !== "alive") return;
 		record.holdTimer = setTimeout(() => {
 			record.holdTimer = undefined;
 			this.#settle(record, generation, exitCode, error, ptySignal).catch(recheckError =>
@@ -1311,20 +1341,15 @@ export class DaemonBroker {
 		record.snapshot.state = "stopping";
 		persist(record);
 		const tree = record.tree;
-		if (tree !== undefined && tree.root === null && tree.ptyExit) {
-			// A PTY with no root handle: the PTY session's own exit is the proof, and it settles the record.
+		// No native root handle: neither a PTY exit nor a root exit proves the tree dead. The kills are still sent;
+		// the verdict comes from the tree alone, and a tree not proven dead is held and refused below.
+		if (tree !== undefined && tree.root === null) {
+			record.process?.kill();
 			record.pty?.kill();
-			const settled = await this.#waitUntil(record, () => terminalState(record.snapshot.state), timeoutMs + 1_000);
-			if (!settled && generation === record.generation && !terminalState(record.snapshot.state)) {
-				record.pty?.kill();
-				await this.#settle(record, generation);
-			}
-			return;
 		}
-		if (tree !== undefined && tree.root === null) record.process?.kill();
 		const state = await this.#reapTree(record, generation, timeoutMs, timeoutMs + 1_000);
 		if (generation !== record.generation || terminalState(record.snapshot.state)) return;
-		// A tree still alive is never force-settled: the record stays unsettled and no restart may follow.
+		// A tree that is alive or not observable is never force-settled: the record stays unsettled and no restart may follow.
 		if (state !== "dead") {
 			this.#hold(record, generation, state);
 			throw new Error(
@@ -1335,6 +1360,7 @@ export class DaemonBroker {
 	}
 
 	async #restart(name: string): Promise<DaemonRpcResult> {
+		if (this.#shuttingDown) throw new Error("Daemon broker is shutting down; restart is refused");
 		const record = this.#record(name);
 		await this.#stopRecord(record, 2_000, {
 			owner: "operator-restart",
@@ -1380,6 +1406,10 @@ export class DaemonBroker {
 	 * cannot interleave a read-modify-write of the store.
 	 */
 	#queueCompletion(record: ManagedDaemon): void {
+		// One completion per generation. A restart armed by a settle may have queued it, and a stop that settles
+		// the same generation must not queue it again.
+		if (record.completedGeneration === record.generation) return;
+		record.completedGeneration = record.generation;
 		const snapshot = record.snapshot;
 		const completion: DaemonCompletionRecord = {
 			name: snapshot.name,
@@ -1457,7 +1487,14 @@ export class DaemonBroker {
 					!wasTerminal &&
 					snapshot.state !== "stopping" &&
 					(processRef ? processRef.status() === "running" : snapshot.pid !== undefined && isProcessAlive(snapshot.pid));
-				if (!detached && !wasTerminal) {
+				// The tree may still run and has no native handle, so its death is unobservable. Recovery neither kills
+				// nor settles it: the record stays stopping, and a replacement is refused.
+				const held = !detached && !wasTerminal && processRef === null && snapshot.pid !== undefined;
+				if (held) {
+					snapshot.state = "stopping";
+					snapshot.exitReason =
+						"the previous broker exited and the process tree has no native handle; its death cannot be observed, so it stays stopping and is not restarted";
+				} else if (!detached && !wasTerminal) {
 					if (processRef) {
 						try {
 							await processRef.terminate({ group: true, gracefulMs: 500, timeoutMs: 2_000 });
@@ -1499,7 +1536,7 @@ export class DaemonBroker {
 				const record: ManagedDaemon = {
 					spec,
 					snapshot,
-					tree: detached ? new ProcessTree(snapshot.pid, processRef) : undefined,
+					tree: detached || held ? new ProcessTree(snapshot.pid, processRef) : undefined,
 					dir,
 					generation: 0,
 					stopRequested: !detached || snapshot.state === "stopping",
@@ -1521,7 +1558,7 @@ export class DaemonBroker {
 				// record; the recovery kill above IS its terminal transition, so
 				// retain it here. One already terminal on disk was recorded by the
 				// broker that settled it.
-				if (!detached && !wasTerminal) this.#queueCompletion(record);
+				if (!detached && !wasTerminal && !held) this.#queueCompletion(record);
 				if (terminalState(snapshot.state)) {
 					this.#scheduleCleanup(record);
 				}
