@@ -11,6 +11,7 @@
 ### Fixed
 
 - `NodeFilesystem.readText` reads through `node:fs`, so a file another process holds a lease on is read once the lease breaks instead of failing with `EAGAIN`.
+- `InMemorySnapshotStore` keeps the seen and clipped lines of a version it evicts or pushes off the per-path ring and restores them when the same text is recorded again, so an edit on a line a read displayed is no longer rejected as never displayed after enough other files were read; `maxDroppedPaths` bounds the retained provenance.
 
 ## [1.5.6] - 2026-10-13
 

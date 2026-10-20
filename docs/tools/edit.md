@@ -195,6 +195,9 @@ DEL 20
     fresh tag; a plain re-read just folds the same lines again.
   - A tag minted by `write` carries every line as displayed, because the model produced the whole file, so a post-write edit can
     anchor anywhere without an intervening read.
+  - The displayed lines belong to the file's content, not to one retained copy of it: when the snapshot store evicts a file's
+    version and a later read or search records the same content, the lines displayed before the eviction count as displayed
+    under the tag again.
 - Stale snapshot tag: the `Patcher` first attempts snapshot-based recovery. When recovery cannot prove a valid result it throws `MismatchError`, which distinguishes recognized-but-drifted hashes from never-recorded hashes. The error includes the current file hash plus context around each anchor.
 - No-op edit:
   - `Edits to <path> parsed and applied cleanly, but produced no change: your body row(s) are byte-identical to the file at the targeted lines. The bug is somewhere else — re-read the file before issuing another edit. Do NOT widen the payload or add lines; verify the anchor first.`
