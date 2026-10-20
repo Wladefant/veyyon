@@ -126,18 +126,22 @@ pub struct MinimizerResult {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ShellRunResult {
-	pub exit_code:   Option<i32>,
+	pub exit_code:        Option<i32>,
 	/// The signal that killed the command, when it died from one.
 	///
 	/// `exit_code` keeps bash's `128 + signal` form, which cannot be told apart
 	/// from a command that called `exit(137)` itself. This reports the raw
 	/// signal so callers can distinguish an out-of-memory kill from an ordinary
 	/// failure.
-	pub signal:      Option<i32>,
-	pub cancelled:   bool,
-	pub timed_out:   bool,
-	pub minimized:   Option<MinimizerResult>,
-	pub working_dir: Option<String>,
+	pub signal:           Option<i32>,
+	pub cancelled:        bool,
+	pub timed_out:        bool,
+	/// Whether output capture stopped before EOF.
+	pub output_incomplete: bool,
+	/// Retained raw output prefix, present only for incomplete buffered capture.
+	pub captured_output:  Option<String>,
+	pub minimized:        Option<MinimizerResult>,
+	pub working_dir:      Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -365,10 +369,15 @@ async fn run_shell_session(
 		reason = ct.wait() => {
 			tokio_cancel.cancel();
 			let graceful = time::timeout(Duration::from_secs(2), &mut run_task).await;
-			if graceful.is_err() {
-				run_task.abort();
-				let _ = run_task.await;
-			}
+			let (output_incomplete, captured_output) = match graceful {
+				Ok(Ok(Ok(output))) => (output.output_incomplete, output.captured_output),
+				Ok(_) => (true, None),
+				Err(_) => {
+					run_task.abort();
+					let _ = run_task.await;
+					(true, None)
+				},
+			};
 			abort_state.clear().await;
 			// Use try_lock to avoid deadlocking if another task holds the session.
 			// If we can't acquire the lock, the session will be cleaned up when the
@@ -378,11 +387,13 @@ async fn run_shell_session(
 			}
 			let _ = process_cancel_bridge.await;
 			return Ok(ShellRunResult {
-				exit_code:   None,
-				signal:      None,
-				cancelled:   matches!(reason, AbortReason::Signal),
-				timed_out:   matches!(reason, AbortReason::Timeout),
-				minimized:   None,
+				exit_code: None,
+				signal: None,
+				cancelled: matches!(reason, AbortReason::Signal),
+				timed_out: matches!(reason, AbortReason::Timeout),
+				output_incomplete,
+				captured_output,
+				minimized: None,
 				working_dir: None,
 			});
 		}
@@ -393,18 +404,20 @@ async fn run_shell_session(
 	let _ = process_cancel_bridge.await;
 	abort_state.clear().await;
 
-	let keepalive = res.as_ref().is_ok_and(|(exec, ..)| session_keepalive(exec));
+	let keepalive = res.as_ref().is_ok_and(|output| session_keepalive(&output.result));
 	if !keepalive {
 		*session.lock().await = None;
 	}
-	let (exec, minimized, working_dir) = res?;
+	let output = res?;
 	Ok(ShellRunResult {
-		exit_code: Some(exit_code(&exec)),
-		signal: exec.signal,
+		exit_code: Some(exit_code(&output.result)),
+		signal: output.result.signal,
 		cancelled: false,
 		timed_out: false,
-		working_dir,
-		minimized,
+		output_incomplete: output.output_incomplete,
+		captured_output: output.captured_output,
+		working_dir: output.working_dir,
+		minimized: output.minimized,
 	})
 }
 
@@ -455,34 +468,42 @@ async fn run_shell_oneshot(
 		reason = ct.wait() => {
 			tokio_cancel.cancel();
 			let graceful = time::timeout(Duration::from_secs(2), &mut task).await;
-			if graceful.is_err() {
-				task.abort();
-				let _ = task.await;
-			}
+			let (output_incomplete, captured_output) = match graceful {
+				Ok(Ok(Ok(output))) => (output.output_incomplete, output.captured_output),
+				Ok(_) => (true, None),
+				Err(_) => {
+					task.abort();
+					let _ = task.await;
+					(true, None)
+				},
+			};
 			let _ = process_cancel_bridge.await;
 			return Ok(ShellExecuteResult {
-				exit_code:   None,
-				signal:      None,
-				cancelled:   matches!(reason, AbortReason::Signal),
-				timed_out:   matches!(reason, AbortReason::Timeout),
-				minimized:   None,
-				working_dir: None,
+				exit_code:         None,
+				signal:            None,
+				cancelled:         matches!(reason, AbortReason::Signal),
+				timed_out:         matches!(reason, AbortReason::Timeout),
+				output_incomplete,
+				captured_output,
+				minimized:         None,
+				working_dir:       None,
 			});
 		},
 	};
 
 	process_cancel_bridge.abort();
 	let _ = process_cancel_bridge.await;
-	let res = run_result
-		.unwrap_or_else(|err| Err(Error::msg(format!("Shell execution task failed: {err}"))));
-	let (exec, minimized, working_dir) = res?;
+	let output = run_result
+		.unwrap_or_else(|err| Err(Error::msg(format!("Shell execution task failed: {err}"))))?;
 	Ok(ShellExecuteResult {
-		exit_code: Some(exit_code(&exec)),
-		signal: exec.signal,
+		exit_code: Some(exit_code(&output.result)),
+		signal: output.result.signal,
 		cancelled: false,
 		timed_out: false,
-		working_dir,
-		minimized,
+		output_incomplete: output.output_incomplete,
+		captured_output: output.captured_output,
+		working_dir: output.working_dir,
+		minimized: output.minimized,
 	})
 }
 
@@ -543,6 +564,8 @@ async fn run_shell_oneshot_streams(
 				signal: None,
 				cancelled: matches!(reason, AbortReason::Signal),
 				timed_out: matches!(reason, AbortReason::Timeout),
+				output_incomplete: false,
+				captured_output:   None,
 				minimized: None,
 				working_dir: None,
 			});
@@ -559,6 +582,8 @@ async fn run_shell_oneshot_streams(
 		signal: exec.signal,
 		cancelled: false,
 		timed_out: false,
+		output_incomplete: false,
+		captured_output: None,
 		working_dir,
 		minimized: None,
 	})
@@ -921,6 +946,16 @@ enum CommandCaptureMode {
 	Buffered { max_capture_bytes: usize },
 }
 
+/// What one command run hands the session and oneshot paths: the execution result plus
+/// the capture metadata. A stalled capture keeps its status and reports its raw prefix.
+struct ShellCommandOutput {
+	result:            ExecutionResult,
+	minimized:         Option<MinimizerResult>,
+	working_dir:       Option<String>,
+	output_incomplete: bool,
+	captured_output:   Option<String>,
+}
+
 struct CommandRunOutput {
 	result:   ExecutionResult,
 	buffered: Option<BufferedOutput>,
@@ -958,7 +993,7 @@ async fn run_shell_command(
 	cancel_token: CancellationToken,
 	spawn_registry: Arc<process::SpawnRegistry>,
 	spawn_budget: Option<Arc<BudgetGroup>>,
-) -> Result<(ExecutionResult, Option<MinimizerResult>, Option<String>)> {
+) -> Result<ShellCommandOutput> {
 	if let Some(cwd) = options.cwd.as_deref() {
 		set_shell_working_dir_if_changed(&mut session.shell, cwd)?;
 	}
@@ -1005,9 +1040,9 @@ async fn run_shell_command(
 			.map_err(|err| Error::msg(format!("Failed to pop env scope: {err}")))?;
 	}
 
-	result.map(|(exec, minimized)| {
-		let working_dir = Some(session.shell.working_dir().to_string_lossy().into_owned());
-		(exec, minimized, working_dir)
+	result.map(|output| ShellCommandOutput {
+		working_dir: Some(session.shell.working_dir().to_string_lossy().into_owned()),
+		..output
 	})
 }
 
@@ -1019,7 +1054,7 @@ async fn run_shell_command_single(
 	spawn_registry: Arc<process::SpawnRegistry>,
 	spawn_budget: Option<Arc<BudgetGroup>>,
 	minimizer_mode: minimizer::engine::MinimizerMode,
-) -> Result<(ExecutionResult, Option<MinimizerResult>)> {
+) -> Result<ShellCommandOutput> {
 	debug_assert!(!matches!(minimizer_mode, minimizer::engine::MinimizerMode::SegmentedChain));
 
 	let params = session.shell.default_exec_params();
@@ -1033,6 +1068,10 @@ async fn run_shell_command_single(
 		minimizer::engine::MinimizerMode::None => CommandCaptureMode::Streaming,
 		minimizer::engine::MinimizerMode::SegmentedChain => CommandCaptureMode::Streaming,
 	};
+	let capture_limit = match capture_mode {
+		CommandCaptureMode::Buffered { max_capture_bytes } => max_capture_bytes,
+		CommandCaptureMode::Streaming => usize::MAX,
+	};
 
 	let command_run = run_shell_command_once(
 		session,
@@ -1045,21 +1084,19 @@ async fn run_shell_command_single(
 		capture_mode,
 	)
 	.await?;
-	if command_run.buffered.as_ref().is_some_and(|buffered| buffered.incomplete) {
-		return Err(incomplete_capture_error());
-	}
-
+	let output_incomplete = command_run.buffered.as_ref().is_some_and(|buffered| buffered.incomplete);
 	let mut minimized_out = None;
-	if let Some(buffered) = command_run.buffered
-		&& let Some(config) = options.minimizer.as_ref()
-	{
-		// When the capture cap is exceeded the output was streamed raw and never
-		// buffered, so nothing was minimized — leave `minimized` absent, matching
-		// every other passthrough path and `apply_shell_minimizer`. Previously a
-		// `too-large` result with empty `text`/`original_text` was emitted, which a
-		// consumer keying off `minimized` presence could mistake for a real rewrite
-		// that produced empty output.
-		if !buffered.exceeded {
+	let mut captured_output = None;
+	if let Some(buffered) = command_run.buffered {
+		if buffered.incomplete {
+			// Minimizing needs the whole transcript, so an incomplete capture keeps only its raw prefix.
+			captured_output = Some(bounded_prefix(buffered.text, capture_limit));
+		} else if let Some(config) = options.minimizer.as_ref()
+			&& !buffered.exceeded
+		{
+			// When the capture cap is exceeded the output was streamed raw and never
+			// buffered, so nothing was minimized: `minimized` stays absent, matching
+			// every other passthrough path and `apply_shell_minimizer`.
 			let minimized = match minimizer_mode {
 				minimizer::engine::MinimizerMode::WholeCommand => minimizer::apply(
 					&options.command,
@@ -1074,13 +1111,9 @@ async fn run_shell_command_single(
 					minimizer::MinimizerOutput::passthrough(&buffered.text)
 				},
 			};
-			// Surface telemetry only when the filter actually rewrote the output
-			// and kept the original buffer — same contract as `apply_shell_minimizer`
-			// in `veyyon-natives`. A supported filter that runs but leaves the output
-			// unchanged (e.g. a short `git diff --name-only`) reports `changed:
-			// false` with no `original_text` and must NOT set `minimized`, or API
-			// consumers keying off `result.minimized` are misled. The separate
-			// `too-large` reason path above is unaffected.
+			// Surface telemetry only when the filter actually rewrote the output and kept the
+			// original buffer. A supported filter that leaves the output unchanged reports
+			// `changed: false` with no `original_text` and must NOT set `minimized`.
 			if minimized.changed
 				&& let Some(original_text) = minimized.original_text
 			{
@@ -1096,7 +1129,13 @@ async fn run_shell_command_single(
 		}
 	}
 
-	Ok((command_run.result, minimized_out))
+	Ok(ShellCommandOutput {
+		result: command_run.result,
+		minimized: minimized_out,
+		working_dir: None,
+		output_incomplete,
+		captured_output,
+	})
 }
 
 async fn run_shell_command_segmented_chain(
@@ -1106,7 +1145,7 @@ async fn run_shell_command_segmented_chain(
 	cancel_token: CancellationToken,
 	spawn_registry: Arc<process::SpawnRegistry>,
 	spawn_budget: Option<Arc<BudgetGroup>>,
-) -> Result<(ExecutionResult, Option<MinimizerResult>)> {
+) -> Result<ShellCommandOutput> {
 	let Some(config) = options.minimizer.as_ref() else {
 		return run_shell_command_single(
 			session,
@@ -1153,6 +1192,8 @@ async fn run_shell_command_segmented_chain(
 	let mut aggregate = Some(ChainCapture::new());
 	let mut previous_succeeded = true;
 	let mut last_result = None;
+	let mut output_incomplete = false;
+	let mut captured_output: Option<String> = None;
 	let max_capture_bytes = config.max_capture_bytes as usize;
 	for segment in segments {
 		if segment.run_if_previous_succeeded && !previous_succeeded {
@@ -1161,7 +1202,7 @@ async fn run_shell_command_segmented_chain(
 
 		let mut segment_params = params.clone();
 		segment_params.suppress_errexit = segment.suppress_errexit;
-		let capture_mode = if aggregate.is_some() {
+		let capture_mode = if aggregate.is_some() || output_incomplete {
 			CommandCaptureMode::Buffered { max_capture_bytes }
 		} else {
 			CommandCaptureMode::Streaming
@@ -1183,10 +1224,19 @@ async fn run_shell_command_segmented_chain(
 		previous_succeeded = exit == 0;
 
 		if let Some(buffered) = command_run.buffered {
-			if buffered.incomplete {
-				return Err(incomplete_capture_error());
-			}
-			if buffered.exceeded {
+			if output_incomplete {
+				if let Some(prefix) = captured_output.as_mut() {
+					prefix.push_str(&buffered.text);
+					*prefix = bounded_prefix(std::mem::take(prefix), max_capture_bytes);
+				}
+			} else if buffered.incomplete {
+				// Keep execution order and exit status. Only minimization stops when a
+				// segment's output is incomplete.
+				let mut prefix = aggregate.take().map_or_else(String::new, |capture| capture.original_text);
+				prefix.push_str(&buffered.text);
+				captured_output = Some(bounded_prefix(prefix, max_capture_bytes));
+				output_incomplete = true;
+			} else if buffered.exceeded {
 				// Cap exceeded: the output was streamed raw, so drop the buffered aggregate
 				// so the remaining segments stream too. No minimization happened, so we
 				// emit no `minimized` telemetry (see below).
@@ -1245,7 +1295,13 @@ async fn run_shell_command_segmented_chain(
 	// path and `apply_shell_minimizer`. (Previously a `too-large` result with
 	// empty `text` was emitted, a footgun for consumers keying off presence.)
 
-	Ok((result, minimized_out))
+	Ok(ShellCommandOutput {
+		result,
+		minimized: minimized_out,
+		working_dir: None,
+		output_incomplete,
+		captured_output,
+	})
 }
 
 async fn run_shell_command_once(
@@ -2352,11 +2408,16 @@ async fn emit_chunk(text: &str, callback: Option<&Sender<String>>) {
 	}
 }
 
-/// The error for a capture that stopped before the command's output reached EOF.
-fn incomplete_capture_error() -> Error {
-	Error::msg(
-		"Shell output capture is incomplete: the output reader stopped before all output was read",
-	)
+/// The raw prefix of a capture that stopped before EOF, cut back to `max_bytes` on a character boundary.
+fn bounded_prefix(mut text: String, max_bytes: usize) -> String {
+	if text.len() > max_bytes {
+		let mut end = max_bytes;
+		while !text.is_char_boundary(end) {
+			end -= 1;
+		}
+		text.truncate(end);
+	}
+	text
 }
 
 fn pipe_to_files(label: &str) -> Result<(fs::File, fs::File)> {
@@ -2782,9 +2843,7 @@ mod tests {
 		assert!(!output.incomplete, "a capture that reached EOF stays complete after a late cancel");
 	}
 
-	/// Each buffered path reports an aborted capture as an error. The callback never receives,
-	/// so the reader parks on its first chunk and the post-exit abort leaves an incomplete
-	/// prefix. No background job is involved, so no sleeper outlives the test.
+	/// Minimizer config that sends the stalled-capture commands below down the buffered path.
 	#[cfg(unix)]
 	fn printf_minimizer_config(root: &std::path::Path) -> minimizer::MinimizerConfig {
 		minimizer::MinimizerConfig::from_options(&printf_minimizer(
@@ -2814,106 +2873,180 @@ mod tests {
 		create_session(&config).await.expect("create session")
 	}
 
-	#[cfg(unix)]
-	fn assert_incomplete_capture_message(message: &str) {
-		assert!(
-			message.contains("Shell output capture is incomplete")
-				&& message.contains("output reader stopped before all output was read"),
-			"error must name the stopped output reader: {message}"
-		);
-	}
-
-	#[cfg(unix)]
-	#[tokio::test(flavor = "multi_thread")]
-	async fn single_command_reports_incomplete_capture_as_error() {
-		let _guard = shell_test_lock().lock().await;
-		let root = unique_temp_dir("incomplete-single");
-		let minimizer = printf_minimizer_config(&root);
-		let command = "printf a";
-		assert_eq!(
-			minimizer::engine::mode_for(command, &minimizer),
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn single_stalled_capture_keeps_result_and_raw_prefix() {
+	let _guard = shell_test_lock().lock().await;
+	let root = unique_temp_dir("stalled-single");
+	let minimizer = printf_minimizer_config(&root);
+	let command = "printf a";
+	assert_eq!(
+		minimizer::engine::mode_for(command, &minimizer),
+		minimizer::engine::MinimizerMode::WholeCommand,
+		"a filtered simple command must take the buffered whole-command path"
+	);
+	let mut session = stalled_shell_session(&minimizer).await;
+	let run = shell_run_config(command, minimizer);
+	// A zero-capacity channel with no receiver parks the reader on its first chunk.
+	let (sender, _receiver) = flume::bounded::<String>(0);
+	let output = time::timeout(
+		Duration::from_secs(10),
+		run_shell_command_single(
+			&mut session,
+			&run,
+			Some(sender),
+			CancellationToken::new(),
+			Arc::new(process::SpawnRegistry::new()),
+			None,
 			minimizer::engine::MinimizerMode::WholeCommand,
-			"a filtered simple command must take the buffered whole-command path"
-		);
-		let mut session = stalled_shell_session(&minimizer).await;
-		let run = shell_run_config(command, minimizer);
-		let (sender, _receiver) = flume::bounded::<String>(0);
-		let result = time::timeout(
-			Duration::from_secs(10),
-			run_shell_command_single(
-				&mut session,
-				&run,
-				Some(sender),
-				CancellationToken::new(),
-				Arc::new(process::SpawnRegistry::new()),
-				None,
-				minimizer::engine::MinimizerMode::WholeCommand,
-			),
-		)
-		.await
-		.expect("execution must stay bounded");
-		let Err(error) = result else {
-			panic!("an incomplete capture must surface as an error, not success");
-		};
-		assert_incomplete_capture_message(&error.to_string());
-	}
+		),
+	)
+	.await
+	.expect("execution must stay bounded")
+	.expect("a stalled capture must return the command's result");
+	assert_eq!(exit_code(&output.result), 0, "the command succeeded");
+	assert!(output.output_incomplete, "bytes left unread in the pipe must mark the capture incomplete");
+	assert_eq!(output.captured_output.as_deref(), Some("a"), "the raw prefix read so far is retained");
+	assert!(output.minimized.is_none(), "an incomplete capture is never minimized");
+}
 
-	#[cfg(unix)]
-	#[tokio::test(flavor = "multi_thread")]
-	async fn segmented_chain_reports_incomplete_capture_as_error() {
-		let _guard = shell_test_lock().lock().await;
-		let root = unique_temp_dir("incomplete-segmented");
-		let minimizer = printf_minimizer_config(&root);
-		let command = "printf a && printf b";
-		assert_eq!(
-			minimizer::engine::mode_for(command, &minimizer),
-			minimizer::engine::MinimizerMode::SegmentedChain,
-			"a chain of filterable simple commands must take the segmented path"
-		);
-		let mut session = stalled_shell_session(&minimizer).await;
-		let run = shell_run_config(command, minimizer);
-		let (sender, _receiver) = flume::bounded::<String>(0);
-		let result = time::timeout(
-			Duration::from_secs(10),
-			run_shell_command_segmented_chain(
-				&mut session,
-				&run,
-				Some(sender),
-				CancellationToken::new(),
-				Arc::new(process::SpawnRegistry::new()),
-				None,
-			),
-		)
-		.await
-		.expect("execution must stay bounded");
-		let Err(error) = result else {
-			panic!("an incomplete capture must surface as an error, not success");
-		};
-		assert_incomplete_capture_message(&error.to_string());
-	}
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn segmented_stalled_capture_keeps_retained_segments_in_prefix() {
+	let _guard = shell_test_lock().lock().await;
+	let root = unique_temp_dir("stalled-segmented");
+	let minimizer = printf_minimizer_config(&root);
+	let command = "printf a && printf b && printf c";
+	assert_eq!(
+		minimizer::engine::mode_for(command, &minimizer),
+		minimizer::engine::MinimizerMode::SegmentedChain,
+		"a chain of filterable simple commands must take the segmented path"
+	);
+	let mut session = stalled_shell_session(&minimizer).await;
+	let run = shell_run_config(command, minimizer);
+	// The first segment's chunk fills the single slot and is never received, so the
+	// second segment's chunk parks its reader.
+	let (sender, _receiver) = flume::bounded::<String>(1);
+	let output = time::timeout(
+		Duration::from_secs(10),
+		run_shell_command_segmented_chain(
+			&mut session,
+			&run,
+			Some(sender),
+			CancellationToken::new(),
+			Arc::new(process::SpawnRegistry::new()),
+			None,
+		),
+	)
+	.await
+	.expect("execution must stay bounded")
+	.expect("a stalled chain must return the last segment's result");
+	assert_eq!(exit_code(&output.result), 0, "the last segment succeeded");
+	assert!(output.output_incomplete, "the stalled segment must mark the capture incomplete");
+	assert_eq!(
+		output.captured_output.as_deref(),
+		Some("abc"),
+		"capture shutdown must not skip later segments"
+	);
+	assert!(output.minimized.is_none(), "an incomplete chain is never minimized");
+}
 
-	#[cfg(unix)]
-	#[tokio::test(flavor = "multi_thread")]
-	async fn public_execute_shell_reports_incomplete_capture_as_error() {
-		let _guard = shell_test_lock().lock().await;
-		let root = unique_temp_dir("incomplete-public");
-		let options = ShellExecuteOptions {
-			command: "printf a".to_owned(),
-			minimizer: Some(printf_minimizer(&root.join("minimizer.toml"), None)),
-			..Default::default()
-		};
-		let (sender, _receiver) = flume::bounded::<String>(0);
-		let result = time::timeout(
-			Duration::from_secs(10),
-			execute_shell(options, Some(sender), CancelToken::default()),
-		)
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn public_stalled_capture_returns_result_with_raw_prefix() {
+	let _guard = shell_test_lock().lock().await;
+	let root = unique_temp_dir("stalled-public");
+	let options = ShellExecuteOptions {
+		command: "printf a".to_owned(),
+		minimizer: Some(printf_minimizer(&root.join("minimizer.toml"), None)),
+		..Default::default()
+	};
+	let (sender, _receiver) = flume::bounded::<String>(0);
+	let output = time::timeout(
+		Duration::from_secs(10),
+		execute_shell(options, Some(sender), CancelToken::default()),
+	)
+	.await
+	.expect("execution must stay bounded")
+	.expect("a stalled capture must return the command's result");
+	assert_eq!(output.exit_code, Some(0));
+	assert!(output.output_incomplete, "the stalled capture must be reported incomplete");
+	assert_eq!(output.captured_output.as_deref(), Some("a"), "the raw prefix read so far is retained");
+	assert!(output.minimized.is_none(), "an incomplete capture is never minimized");
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn public_timeout_reports_timed_out_metadata() {
+	let _guard = shell_test_lock().lock().await;
+	let options = ShellExecuteOptions { command: "sleep 30".to_owned(), ..Default::default() };
+	let output = time::timeout(
+		Duration::from_secs(20),
+		execute_shell(options, None, CancelToken::new(Some(200))),
+	)
+	.await
+	.expect("a timed-out run must return within its bound")
+	.expect("a timed-out run must return metadata, not an error");
+	assert!(output.timed_out, "the deadline must report timed_out");
+	assert!(!output.cancelled, "a timeout is not a user cancel");
+	assert_eq!(output.exit_code, None, "a stopped run has no exit code");
+	assert!(output.captured_output.is_none(), "a stopped run keeps no raw prefix unless it was incomplete");
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn user_cancel_reports_cancelled_metadata() {
+	let _guard = shell_test_lock().lock().await;
+	let options = ShellExecuteOptions { command: "sleep 30".to_owned(), ..Default::default() };
+	let mut cancel = CancelToken::default();
+	let abort = cancel.emplace_abort_token();
+	let aborter = tokio::spawn(async move {
+		time::sleep(Duration::from_millis(200)).await;
+		abort.abort(AbortReason::Signal);
+	});
+	let output = time::timeout(Duration::from_secs(20), execute_shell(options, None, cancel))
 		.await
-		.expect("execution must stay bounded");
-		let Err(error) = result else {
-			panic!("an incomplete capture must surface as an error, not success");
-		};
-		assert_incomplete_capture_message(&error.to_string());
-	}
+		.expect("a cancelled run must return within its bound")
+		.expect("a cancelled run must return metadata, not an error");
+	aborter.await.expect("the abort task must finish");
+	assert!(output.cancelled, "a user cancel must report cancelled");
+	assert!(!output.timed_out, "a user cancel is not a timeout");
+	assert_eq!(output.exit_code, None, "a cancelled run has no exit code");
+	assert!(output.captured_output.is_none(), "a cancelled run keeps no raw prefix unless it was incomplete");
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn foreground_success_with_background_pipe_holder_keeps_result() {
+	let _guard = shell_test_lock().lock().await;
+	let root = unique_temp_dir("background-pipe-holder");
+	let minimizer = printf_minimizer_config(&root);
+	// The background `sleep` inherits the output pipe and outlives the foreground `printf`.
+	let command = "sleep 30 & printf a";
+	let mut session = stalled_shell_session(&minimizer).await;
+	let run = shell_run_config(command, minimizer);
+	let result = time::timeout(
+		Duration::from_secs(20),
+		run_shell_command_single(
+			&mut session,
+			&run,
+			None,
+			CancellationToken::new(),
+			Arc::new(process::SpawnRegistry::new()),
+			None,
+			minimizer::engine::MinimizerMode::WholeCommand,
+		),
+	)
+	.await;
+	terminate_background_jobs(&mut session.shell);
+	let output = result
+		.expect("execution must stay bounded")
+		.expect("a successful foreground command must return its result");
+	assert_eq!(exit_code(&output.result), 0, "the foreground command succeeded");
+	assert!(output.output_incomplete, "a pipe still held by a background job must mark the capture incomplete");
+	assert_eq!(output.captured_output.as_deref(), Some("a"), "the foreground output read so far is retained");
+	assert!(output.minimized.is_none(), "an incomplete capture is never minimized");
+}
 
 	/// The cancelled drain of a regular file is bounded by the bytes left when the
 	/// drain starts. Bytes appended after that snapshot must not extend the drain.
