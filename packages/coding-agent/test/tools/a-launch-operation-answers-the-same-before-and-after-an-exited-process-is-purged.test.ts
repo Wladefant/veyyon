@@ -234,7 +234,9 @@ describe("a launch operation answers the same before and after an exited process
 
 		// What the comparison stands on: the purged answers state the outcome, not an unknown name.
 		expect(await answer(tool, { op: "stop", name: "stop-3" })).toEqual({
-			text: expect.stringMatching(/^Stopped stop-3: failed exit=3 .* lifetime=broker-shutdown terminated-by=process-exit/),
+			text: expect.stringMatching(
+				/^Stopped stop-3: failed exit=3 .* lifetime=broker-shutdown terminated-by=process-exit/,
+			),
 		});
 		expect(await answer(tool, { op: "send", name: "send-0", text: "input" })).toEqual({
 			error: "Daemon send-0 is exited",
