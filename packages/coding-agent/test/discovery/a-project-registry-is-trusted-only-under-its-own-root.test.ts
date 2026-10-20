@@ -30,14 +30,16 @@
  * - Let an approval for one repository trust another: the unrelated-project control loads.
  * - Ignore the recorded denial or the registry bytes: the denial and changed-bytes cases load.
  * - Gate the profile registry, which sits outside the project: the profile root disappears.
+ * - Key the writer on `findRepoRoot(cwd) ?? cwd` again: a nested non-git approval never reaches the gate.
+ * - Let a junction that resolves outside the repository load after approval: the escape case loads.
+ * - Serve a warm cache entry after a denial or a byte change: the warm cases load.
  *
- * Gaps: the Windows drive-letter and case variants run only on Windows, and whether they resolve
- * to one trust key depends on how the runtime's `realpath` treats case, which this suite does not
- * normalise. The symlink cases skip where the platform refuses to create a link. The suite does not
- * run plugin code, and it does not cover `--plugin-dir` roots or the Claude Code registry. The
- * writer does not record an approval made from inside a nested `.git`: `runTrustCommand` reports the
- * owner's registry as out of scope there, so the operator approves at the owner. That is a
- * usability gap, not a loading gap; the gate stays fail-closed for it, and no test here pins it.
+ * Gaps: the Windows drive-letter and case variants run only on Windows, and whether they resolve to one
+ * trust key depends on how the runtime's `realpath.native` treats case, which this suite does not normalise.
+ * The suite does not run plugin code, and it does not cover `--plugin-dir` roots or the Claude Code registry.
+ * The gate decides the registry file only. The plugin loader also reads `package.json`,
+ * `veyyon-plugins.lock.json` and `node_modules` under the same directory, and those bytes are not hashed.
+ * This suite does not claim to cover them.
  */
 import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
@@ -379,4 +381,81 @@ test("a registry under a non-git owner directory is refused before approval and 
 	expect(approval.projectRoot).toBe(await fs.realpath(owner));
 	expect(pluginIds(loaded.roots)).toContain(PROJECT_PLUGIN);
 	expect(refusals(loaded.warnings)).toEqual([]);
+});
+
+async function loadWarm(fixture: Fixture, cwd: string) {
+	return listClaudePluginRoots(fixture.home, cwd, fixture.pluginsRoot, fixture.agentDir);
+}
+
+test("a nested non-git approval is recorded under the key the gate reads, so the same cwd loads the registry", async () => {
+	const fixture = await makeFixture();
+	const owner = path.join(fixture.tempRoot, "loose-owner");
+	const nestedCwd = path.join(owner, "a", "b");
+	await fs.mkdir(nestedCwd, { recursive: true });
+	await writeProjectRegistry(owner, registryJson({ [PROJECT_PLUGIN]: fixture.projectInstallPath }));
+
+	const approval = await decide("approve", nestedCwd, fixture.agentDir);
+	const loaded = await loadRoots(fixture, nestedCwd);
+
+	expect(approval.decision).toBe("trusted");
+	expect(approval.projectRoot).toBe(await fs.realpath(owner));
+	expect(pluginIds(loaded.roots)).toContain(PROJECT_PLUGIN);
+	expect(refusals(loaded.warnings)).toEqual([]);
+});
+
+test("a project plugin directory that links outside the repository is refused even after approval", async () => {
+	const fixture = await makeFixture();
+	const outside = path.join(fixture.tempRoot, "outside-plugins");
+	await fs.mkdir(outside, { recursive: true });
+	await fs.writeFile(
+		path.join(outside, "installed_plugins.json"),
+		registryJson({ [PROJECT_PLUGIN]: fixture.projectInstallPath }),
+	);
+	const linkDir = path.join(fixture.repoRoot, getConfigDirName(), "plugins");
+	await fs.mkdir(path.dirname(linkDir), { recursive: true });
+	// A junction needs no privilege on Windows; the type argument is ignored on other platforms.
+	await fs.symlink(outside, linkDir, "junction");
+
+	const approval = await decide("approve", fixture.repoRoot, fixture.agentDir);
+	const loaded = await loadRoots(fixture, fixture.nestedCwd);
+
+	expect(approval.candidates).toEqual([]);
+	expect(approval.outOfScope).toHaveLength(1);
+	expect(pluginIds(loaded.roots)).not.toContain(PROJECT_PLUGIN);
+	expect(refusals(loaded.warnings).join("\n")).toContain("resolves outside the project root");
+});
+
+test("a warm load is not served after the operator denies the registry it had loaded", async () => {
+	const fixture = await makeFixture();
+	await writeProjectRegistry(fixture.repoRoot, registryJson({ [PROJECT_PLUGIN]: fixture.projectInstallPath }));
+	await decide("approve", fixture.nestedCwd, fixture.agentDir);
+	const warm = await loadWarm(fixture, fixture.nestedCwd);
+	expect(pluginIds(warm.roots)).toContain(PROJECT_PLUGIN);
+
+	await decide("deny", fixture.nestedCwd, fixture.agentDir);
+	const afterDeny = await loadWarm(fixture, fixture.nestedCwd);
+
+	expect(pluginIds(afterDeny.roots)).not.toContain(PROJECT_PLUGIN);
+	expect(refusals(afterDeny.warnings).join("\n")).toContain("this project is marked untrusted");
+});
+
+test("a warm load is not served after the registry bytes change under an approval", async () => {
+	const fixture = await makeFixture();
+	await writeProjectRegistry(fixture.repoRoot, registryJson({ [PROJECT_PLUGIN]: fixture.projectInstallPath }));
+	await decide("approve", fixture.nestedCwd, fixture.agentDir);
+	const warm = await loadWarm(fixture, fixture.nestedCwd);
+	expect(pluginIds(warm.roots)).toContain(PROJECT_PLUGIN);
+
+	await writeProjectRegistry(
+		fixture.repoRoot,
+		registryJson({
+			[PROJECT_PLUGIN]: fixture.projectInstallPath,
+			[OTHER_PLUGIN]: path.join(fixture.tempRoot, "payloads", "other-tool"),
+		}),
+	);
+	const afterChange = await loadWarm(fixture, fixture.nestedCwd);
+
+	expect(pluginIds(afterChange.roots)).not.toContain(PROJECT_PLUGIN);
+	expect(pluginIds(afterChange.roots)).not.toContain(OTHER_PLUGIN);
+	expect(refusals(afterChange.warnings).join("\n")).toContain("its contents changed since it was trusted");
 });

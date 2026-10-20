@@ -21,7 +21,9 @@ import {
 	canonicalProjectRoot,
 	describeProjectExecutable,
 	describeRefusal,
+	isInsideRoot,
 	ProjectTrust,
+	realProjectPath,
 } from "../config/project-trust";
 import { type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "../thinking";
 import { normalizeToolNames, TOOL } from "../tools/core/builtin-names";
@@ -1328,16 +1330,14 @@ export function pluginsRootFor(agentDir: string): string | undefined {
 }
 
 /**
- * The directory whose trust record governs the project registry that `cwd` resolves to.
+ * The trust root that governs the project registry `cwd` resolves to, and that `runTrustCommand` records under.
  *
- * The registry is resolved first, and its owner is the directory three levels above the file,
- * because that is the directory the registry belongs to. The owner's git root, or the owner
- * itself outside a repository, is the key `runTrustCommand` records under. Keying on `cwd`
- * instead sent a registry above a nested `.git` to a root that does not contain it: the describer
- * returned null for it, and the gate allowed it. With no registry there is nothing to gate, and
- * the repository root of `cwd` is the key.
+ * The registry is resolved first, and its owner is the directory three levels above the file, because that is
+ * the directory the registry belongs to. The owner's git root, or the owner itself outside a repository, is the
+ * key. Keying on `cwd` instead sent a registry above a nested `.git` to a root that does not contain it. With no
+ * registry there is nothing to gate, and the repository root of `cwd` is the key.
  */
-async function projectTrustRoot(cwd: string): Promise<string> {
+export async function projectTrustKey(cwd: string): Promise<string> {
 	const registry = await resolveActiveProjectRegistryPath(cwd);
 	if (!registry) return canonicalProjectRoot((await findRepoRoot(cwd)) ?? cwd);
 	// `<owner>/.veyyon/plugins/installed_plugins.json`: three levels up is the owner.
@@ -1345,26 +1345,81 @@ async function projectTrustRoot(cwd: string): Promise<string> {
 	return canonicalProjectRoot((await findRepoRoot(owner)) ?? owner);
 }
 
+/** What the project plugin gate decided for one `cwd`. `state` names the outcome, so a cache keyed on it cannot outlive the decision. */
+export type ProjectPluginGate =
+	| { allowed: true; registry: { path: string; content: string } | null; state: string }
+	| { allowed: false; reason: string; state: string };
+
+/** The gate's answer when no project plugin directory is in play. */
+const NO_PROJECT_PLUGIN_GATE: ProjectPluginGate = { allowed: true, registry: null, state: "" };
+
 /**
- * Whether the project-scoped plugin registry at `registryPath` may be read at all.
+ * Gate the project plugin directory `cwd` resolves to. Every consumer of that directory calls this before reading
+ * or executing anything from it: the Claude-plugin roots below, and the plugin loader's project route. One decision
+ * governs both, keyed by the registry owner's trust root.
  *
- * The registry itself is the trusted unit, not the plugins it names: its `installPath` entries
- * are arbitrary absolute paths, so filtering by location would let a project point at a payload
- * anywhere on disk. A registry that lives outside the trust root is not project-controlled and
- * is left alone, which is what keeps a profile-level registry working.
+ * `userPluginsRoot` is the operator's own profile directory. A project that resolves to it has no project registry,
+ * and that file is not gated.
+ *
+ * Fails closed. A project directory that cannot be resolved, lies outside the owner's root (a symlink or junction),
+ * or holds a registry that is missing, unreadable, or unapproved is refused. A project directory that does not
+ * exist has nothing to load and is allowed. A registry read here is the one the verdict covers: the caller parses
+ * `registry.content` and never reads the file again.
  */
-export async function projectRegistryIsTrusted(
-	registryPath: string,
+export async function gateProjectPluginRegistry(
 	cwd: string,
+	userPluginsRoot: string,
 	agentDir?: string,
-): Promise<{ allowed: true } | { allowed: false; reason: string }> {
-	const canonicalRoot = await projectTrustRoot(cwd);
+): Promise<ProjectPluginGate> {
+	const registryPath = await resolveActiveProjectRegistryPath(cwd);
+	if (!registryPath) return NO_PROJECT_PLUGIN_GATE;
+	const pluginDir = path.dirname(registryPath);
+	if (path.resolve(pluginDir) === path.resolve(userPluginsRoot)) return NO_PROJECT_PLUGIN_GATE;
+
+	const canonicalRoot = await projectTrustKey(cwd);
+	const refusalPrefix = `plugins: ${getConfigDirName()}/plugins/installed_plugins.json was not loaded because`;
+
+	let realDir: string;
+	try {
+		realDir = await realProjectPath(pluginDir);
+	} catch (err) {
+		if (isEnoent(err)) return { allowed: true, registry: null, state: `${registryPath}\0none` };
+		return {
+			allowed: false,
+			reason: `${refusalPrefix} its directory could not be resolved.`,
+			state: `${registryPath}\0unresolvable`,
+		};
+	}
+	if (!isInsideRoot(canonicalRoot, realDir)) {
+		return {
+			allowed: false,
+			reason: `${refusalPrefix} its directory resolves outside the project root.`,
+			state: `${registryPath}\0escape`,
+		};
+	}
+
 	const executable = await describeProjectExecutable(registryPath, canonicalRoot);
-	if (!executable) return { allowed: true };
+	if (!executable) {
+		return {
+			allowed: false,
+			reason: `${refusalPrefix} its registry is missing, unreadable, or resolves outside the project root.`,
+			state: `${registryPath}\0unreadable`,
+		};
+	}
 	const trust = await ProjectTrust.load(agentDir ?? getAgentDir());
 	const verdict = trust.evaluate(canonicalRoot, executable);
-	if (verdict === "trusted") return { allowed: true };
-	return { allowed: false, reason: describeRefusal("plugins", executable.relativePath, verdict) };
+	if (verdict !== "trusted") {
+		return {
+			allowed: false,
+			reason: describeRefusal("plugins", executable.relativePath, verdict),
+			state: `${registryPath}\0${verdict}`,
+		};
+	}
+	return {
+		allowed: true,
+		registry: { path: registryPath, content: executable.content },
+		state: `${registryPath}\0trusted:${executable.hash}`,
+	};
 }
 
 /**
@@ -1388,16 +1443,20 @@ export async function listClaudePluginRoots(
 	pluginsRoot?: string,
 	agentDir?: string,
 ): Promise<{ roots: ClaudePluginRoot[]; warnings: string[] }> {
-	const resolvedProjectPath = cwd ? await resolveActiveProjectRegistryPath(cwd) : null;
 	const resolvedPluginsRoot = pluginsRoot ?? getPluginsDir(home);
 	const resolvedAgentDir = agentDir ?? getAgentDir();
+	// The gate runs before the cache lookup, and its outcome is part of the key: a load taken under an approval is never
+	// served after that approval is denied, or after the registry bytes change.
+	const projectGate = cwd
+		? await gateProjectPluginRegistry(cwd, resolvedPluginsRoot, resolvedAgentDir)
+		: NO_PROJECT_PLUGIN_GATE;
 	// The agent dir is part of the key because the project-trust decision is per profile: without
 	// it, one profile's refusal would be served to a profile that had approved the same repository.
 	// The foreign-config gate is part of the key because it selects whether the Claude Code
 	// registry below contributes roots: without it a load taken while the gate was off would be
 	// served, without those roots, after the operator turned it on.
 	const importForeign = isForeignConfigImportEnabled();
-	const cacheKey = `${home}:${resolvedProjectPath ?? ""}:${resolvedPluginsRoot}:${resolvedAgentDir}:${importForeign}`;
+	const cacheKey = `${home}:${projectGate.state}:${resolvedPluginsRoot}:${resolvedAgentDir}:${importForeign}`;
 	const cached = pluginRootsCache.get(cacheKey);
 	if (cached) return cached;
 
@@ -1467,20 +1526,14 @@ export async function listClaudePluginRoots(
 	// Failing closed here is silent by design at this layer — this is a cached discovery helper
 	// with no operator channel — so the refusal is reported as a warning, which every capability
 	// load already surfaces.
-	if (resolvedProjectPath && cwd) {
-		const trusted = await projectRegistryIsTrusted(resolvedProjectPath, cwd, resolvedAgentDir);
-		if (!trusted.allowed) {
-			warnings.push(trusted.reason);
+	if (!projectGate.allowed) {
+		warnings.push(projectGate.reason);
+	} else if (projectGate.registry) {
+		const projectRegistry = parseClaudePluginsRegistry(projectGate.registry.content);
+		if (projectRegistry) {
+			collectRegistryRoots(projectRegistry, warnings, "project", projectRoots);
 		} else {
-			const projectContent = await readFile(resolvedProjectPath);
-			if (projectContent) {
-				const projectRegistry = parseClaudePluginsRegistry(projectContent);
-				if (projectRegistry) {
-					collectRegistryRoots(projectRegistry, warnings, "project", projectRoots);
-				} else {
-					warnings.push(`Failed to parse project plugin registry: ${resolvedProjectPath}`);
-				}
-			}
+			warnings.push(`Failed to parse project plugin registry: ${projectGate.registry.path}`);
 		}
 	}
 

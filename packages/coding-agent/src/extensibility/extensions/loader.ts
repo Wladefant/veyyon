@@ -774,9 +774,9 @@ async function discoverExtensionPathsInner(
 	// 3. Discover extension and hook entry points from installed plugins. A
 	// manifest `hooks` entry is a hook factory exactly like a discovered
 	// `hooks/*.ts` file above, and binds through the same runner.
-	const pluginsRoot = agentDir ? pluginsRootFor(agentDir) : undefined;
-	addPaths(await getAllPluginExtensionPaths(cwd, pluginsRoot));
-	addPaths(await getAllPluginHookPaths(cwd, pluginsRoot));
+	const pluginOptions = { pluginsRoot: agentDir ? pluginsRootFor(agentDir) : undefined, agentDir };
+	addPaths(await getAllPluginExtensionPaths(cwd, pluginOptions));
+	addPaths(await getAllPluginHookPaths(cwd, pluginOptions));
 	// 4. Explicitly configured paths
 	for (const configuredPath of configuredPaths) {
 		const resolved = resolvePath(configuredPath, cwd);
