@@ -65,13 +65,7 @@ else
       exit 1
     }
   elif [[ -z "$selection_base" ]]; then
-    if ! git rev-parse --verify origin/main >/dev/null 2>&1; then
-      git fetch --no-tags --depth=20 origin main >/dev/null
-    fi
-    selection_base="$(git merge-base HEAD origin/main 2>/dev/null)" || {
-      echo "ERROR: cannot resolve the related-test base against origin/main" >&2
-      exit 1
-    }
+    selection_base="$(bash ci/cloudflare/resolve-related-base.sh)" || exit 1
   fi
   if ! [[ "$selection_base" =~ ^[0-9a-fA-F]{40}$ ]]; then
     echo "ERROR: related-test base is not a full commit SHA" >&2

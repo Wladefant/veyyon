@@ -445,5 +445,84 @@ class TestCfCiGithubCommitStatus(unittest.TestCase):
         self.assertEqual(res["payload"]["target_url"], "https://dash.cloudflare.com/build/123")
 
 
+class ResolveRelatedBaseTests(unittest.TestCase):
+    def git(self, cwd: Path, *args: str) -> str:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+
+    def create_origin(self, root: Path, orphan_pr: bool = False) -> tuple[Path, str]:
+        origin = root / "origin"
+        origin.mkdir()
+        self.git(origin, "init", "-b", "main")
+        config = ["-c", "user.name=CI Test", "-c", "user.email=ci@example.test"]
+        main_shas = []
+        for index in range(1, 31):
+            (origin / "history.txt").write_text(f"main {index}\n", encoding="utf-8")
+            self.git(origin, *config, "add", "history.txt")
+            self.git(origin, *config, "commit", "-m", f"main {index}")
+            main_shas.append(self.git(origin, "rev-parse", "HEAD"))
+            if index == 10 and not orphan_pr:
+                self.git(origin, "switch", "-c", "pr")
+                for pr_index in range(1, 4):
+                    (origin / "pr.txt").write_text(f"pr {pr_index}\n", encoding="utf-8")
+                    self.git(origin, *config, "add", "pr.txt")
+                    self.git(origin, *config, "commit", "-m", f"pr {pr_index}")
+                self.git(origin, "switch", "main")
+        if orphan_pr:
+            self.git(origin, "checkout", "--orphan", "pr")
+            self.git(origin, "rm", "-rf", ".")
+            (origin / "orphan.txt").write_text("unrelated history\n", encoding="utf-8")
+            self.git(origin, *config, "add", "orphan.txt")
+            self.git(origin, *config, "commit", "-m", "orphan pr")
+        return origin, main_shas[9]
+
+    def clone_pr(self, origin: Path, clone: Path) -> None:
+        subprocess.run(
+            ["git", "clone", "--depth=1", "--single-branch", "--branch", "pr", origin.as_uri(), str(clone)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_finds_base_in_shallow_single_branch_clone(self) -> None:
+        script = _HERE / "resolve-related-base.sh"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            origin, expected = self.create_origin(root)
+            clone = root / "clone"
+            self.clone_pr(origin, clone)
+            result = subprocess.run(
+                ["bash", str(script)],
+                cwd=clone,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), expected)
+
+    def test_fails_when_pr_has_no_history_in_common(self) -> None:
+        script = _HERE / "resolve-related-base.sh"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            origin, _ = self.create_origin(root, orphan_pr=True)
+            clone = root / "clone"
+            self.clone_pr(origin, clone)
+            result = subprocess.run(
+                ["bash", str(script)],
+                cwd=clone,
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("cannot resolve the related-test base against origin/main", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
