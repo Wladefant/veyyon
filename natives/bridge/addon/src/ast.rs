@@ -3,6 +3,8 @@
 use std::{
 	cmp::Ordering,
 	collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap},
+	fs::File,
+	io::Read,
 	path::{Path, PathBuf},
 	sync::{
 		Arc,
@@ -11,11 +13,11 @@ use std::{
 };
 
 use ast_grep_core::{
-	Doc, MatchStrictness,
+	Doc, MatchStrictness, Node,
 	matcher::Pattern,
 	meta_var::{MetaVarEnv, MetaVariable},
 	source::{Content, Edit},
-	tree_sitter::LanguageExt,
+	tree_sitter::{LanguageExt, StrDoc},
 };
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -33,6 +35,12 @@ use crate::{
 };
 
 const DEFAULT_FIND_LIMIT: u32 = 50;
+
+/// Files a walk thread opens before reading the first of them. A tree search is
+/// bound by disk latency when its files are not cached, and the walk pool is
+/// small, so each thread asks for a batch's reads together: the disk serves 32
+/// requests per thread at once instead of one.
+const PREFETCH_BATCH: usize = 32;
 
 /// ast-grep pattern strictness (controls how patterns match syntax).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -645,6 +653,9 @@ struct FindRun<'a> {
 	compiled:       Mutex<HashMap<SupportLang, LanguagePatterns>>,
 	files_searched: AtomicUsize,
 	tally:          Mutex<FindTally>,
+	/// Files the walk accepted that no thread has opened yet: absolute path,
+	/// then display path.
+	pending:        Mutex<Vec<(PathBuf, String)>>,
 }
 
 /// What a finished [`FindRun`] found, before paging.
@@ -676,11 +687,12 @@ impl<'a> FindRun<'a> {
 			compiled: Mutex::new(HashMap::new()),
 			files_searched: AtomicUsize::new(0),
 			tally: Mutex::new(FindTally::default()),
+			pending: Mutex::new(Vec::with_capacity(PREFETCH_BATCH)),
 		}
 	}
 
 	/// Search every file of `scope`. A tree's files are searched on the walker
-	/// pool as the walk yields them.
+	/// pool as the walk yields them, a batch at a time.
 	fn search_scope(&self, scope: &SearchScope, ct: &task::CancelToken) -> Result<()> {
 		match scope {
 			SearchScope::File(file) => self.search_file(&file.absolute_path, &file.display_path, ct),
@@ -688,15 +700,47 @@ impl<'a> FindRun<'a> {
 				request
 					.for_each_file_candidate_parallel(
 						|file| {
-							self.search_file(&file.path, &file.relative, ct)?;
+							if is_supported_file(&file.path, self.lang) {
+								let full = {
+									let mut pending = self.pending.lock();
+									pending.push((file.path.clone(), file.relative.clone()));
+									(pending.len() >= PREFETCH_BATCH).then(|| {
+										std::mem::replace(&mut *pending, Vec::with_capacity(PREFETCH_BATCH))
+									})
+								};
+								if let Some(batch) = full {
+									self.search_batch(batch, ct)?;
+								}
+							}
 							Ok(veyyon_walker::ParallelWalkControl::Continue)
 						},
 						|| ct.heartbeat(),
 					)
 					.map_err(iofs::map_walker_error)?;
-				Ok(())
+				let rest = std::mem::take(&mut *self.pending.lock());
+				self.search_batch(rest, ct)
 			},
 		}
+	}
+
+	/// Open every file of `batch`, asking the system to read each ahead, then
+	/// search them in order: the first read waits for one file, not the batch.
+	fn search_batch(&self, batch: Vec<(PathBuf, String)>, ct: &task::CancelToken) -> Result<()> {
+		let opened: Vec<_> = batch
+			.into_iter()
+			.map(|(path, display_path)| {
+				let file = File::open(&path).ok();
+				#[cfg(target_os = "linux")]
+				if let Some(file) = &file {
+					advise_will_read(file);
+				}
+				(path, display_path, file)
+			})
+			.collect();
+		for (path, display_path, file) in opened {
+			self.search_opened(&path, &display_path, file, ct)?;
+		}
+		Ok(())
 	}
 
 	/// Search one file, when its name is one a search reads.
@@ -704,12 +748,33 @@ impl<'a> FindRun<'a> {
 		if !is_supported_file(path, self.lang) {
 			return Ok(());
 		}
+		self.search_opened(path, display_path, None, ct)
+	}
+
+	/// Search one supported file, reading it from `file` when it is already
+	/// open and opening it by path otherwise.
+	fn search_opened(
+		&self,
+		path: &Path,
+		display_path: &str,
+		file: Option<File>,
+		ct: &task::CancelToken,
+	) -> Result<()> {
 		self.files_searched.fetch_add(1, AtomicOrdering::Relaxed);
 		let found = match resolve_language(self.lang, path) {
 			Ok(language) => {
 				let patterns = self.patterns_for(language, ct)?;
+				// A file the batch could not open is opened again by path, so it
+				// reports the error a read by path reports.
+				let read = || match file {
+					Some(mut file) => {
+						let mut source = String::new();
+						file.read_to_string(&mut source).map(|_| source)
+					},
+					None => std::fs::read_to_string(path),
+				};
 				find_in_file(
-					path,
+					read,
 					display_path,
 					language,
 					&patterns,
@@ -905,13 +970,35 @@ fn binding_texts<D: Doc>(env: &MetaVarEnv<'_, D>) -> HashMap<String, String> {
 	texts
 }
 
+/// Whether the tree under `root` holds an ERROR node. tree-sitter records on
+/// every node whether its subtree holds an error or a missing node, so a clean
+/// tree is answered without visiting a node, and only a tree marked with one
+/// is walked to tell an ERROR node from a missing one.
+fn holds_error_node<L: LanguageExt>(root: &Node<'_, StrDoc<L>>) -> bool {
+	root.get_inner_node().has_error() && root.dfs().any(|node| node.is_error())
+}
+
+/// Ask the kernel to start reading `file` into the page cache without waiting
+/// for it. The advice changes no result: when it fails, the read that follows
+/// waits for the disk as it would have.
+#[cfg(target_os = "linux")]
+fn advise_will_read(file: &File) {
+	use std::os::fd::AsRawFd;
+	// SAFETY: `file` holds the descriptor open for the call, and the advice reads
+	// and writes no memory of this process.
+	unsafe {
+		libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_WILLNEED);
+	}
+}
+
 /// Search one file for every pattern compiled for its language, keeping its
-/// best `capacity` matches.
+/// best `capacity` matches. `read` returns the file's source, and is not called
+/// when no pattern compiled for the language.
 ///
 /// A pattern whose required text the file lacks cannot match in it, and a file
 /// no pattern can match in is not parsed, so it reports no parse error either.
 fn find_in_file(
-	path: &Path,
+	read: impl FnOnce() -> std::io::Result<String>,
 	display_path: &str,
 	language: SupportLang,
 	patterns: &[std::result::Result<LanguagePattern, String>],
@@ -924,7 +1011,7 @@ fn find_in_file(
 	if !patterns.iter().any(std::result::Result::is_ok) {
 		return Ok(tally);
 	}
-	let source = match std::fs::read_to_string(path) {
+	let source = match read() {
 		Ok(source) => source,
 		Err(err) => return Ok(FindTally::diagnostic(display_path, err.to_string())),
 	};
@@ -939,7 +1026,7 @@ fn find_in_file(
 	}
 
 	let ast = language.document().ast_grep(source);
-	if ast.root().dfs().any(|node| node.is_error()) {
+	if holds_error_node(&ast.root()) {
 		tally.parse_errors.push((
 			display_path.to_owned(),
 			"parse error (syntax tree contains error nodes)".to_string(),
@@ -1035,7 +1122,7 @@ pub fn ast_match(options: AstMatchOptions<'_>) -> task::Promise<AstMatchResult> 
 		let mut match_sequence = 0u64;
 		if !compiled_patterns.is_empty() {
 			let ast = language.ast_grep(&source);
-			if ast.root().dfs().any(|node| node.is_error()) {
+			if holds_error_node(&ast.root()) {
 				parse_errors.push("parse error (syntax tree contains error nodes)".to_string());
 			}
 			for pattern in &compiled_patterns {
@@ -1221,7 +1308,7 @@ fn ast_edit_blocking(
 		}
 
 		let ast = language.ast_grep(&source);
-		if ast.root().dfs().any(|node| node.is_error()) {
+		if holds_error_node(&ast.root()) {
 			let parse_issue =
 				format!("{}: parse error (syntax tree contains error nodes)", candidate.display_path);
 			if fail_on_parse_error {
@@ -1480,6 +1567,19 @@ mod tests {
 			)
 			.expect("unreadable fixture should be written");
 		}
+		// A file the batch cannot open reports what a read by path reports. It
+		// holds no call, so where it opens (as root) it reports nothing.
+		let locked = root.join("d5").join("locked.ts");
+		fs::write(&locked, "const locked = 1;\n").expect("locked fixture should be written");
+		#[cfg(unix)]
+		let locked_fails = {
+			use std::os::unix::fs::PermissionsExt;
+			fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))
+				.expect("locked fixture should lose its permissions");
+			File::open(&locked).is_err()
+		};
+		#[cfg(not(unix))]
+		let locked_fails = false;
 
 		let ct = task::CancelToken::default();
 		let strictness = MatchStrictness::Smart;
@@ -1512,6 +1612,7 @@ mod tests {
 					.filter(|index| index % 11 == 3 && index * 5 % 13 > 0)
 					.map(|index| format!("d{}/f{index:03}.ts", index % 7)),
 			)
+			.chain(locked_fails.then(|| "d5/locked.ts".to_owned()))
 			.collect();
 		diagnosed.sort();
 		assert_eq!(
@@ -1795,6 +1896,59 @@ mod tests {
 			("c.rs".to_string(), 2, bound("A", "[a, b]")),
 			("d.php".to_string(), 2, bound("A", "[$a, $b]")),
 		]);
+	}
+
+	/// WHY: every parsed file was walked node by node to look for an ERROR
+	/// node. tree-sitter marks each node whose subtree holds an error or a
+	/// missing node, so `holds_error_node` walks only a marked tree.
+	///
+	/// The class this closes is a tree reported clean or broken by the mark
+	/// alone: a grammar whose ERROR node left the root unmarked, or a missing
+	/// node taken for an error. Every language is swept over broken and clean
+	/// sources and compared with the full walk, and the sweep must hold trees
+	/// of both kinds. It does not catch a grammar none of these sources breaks.
+	#[test]
+	fn an_error_node_is_found_whether_or_not_the_tree_is_walked() {
+		const SOURCES: &[&str] = &[
+			"",
+			"x",
+			"x = 1",
+			"foo(",
+			"foo(bar",
+			"a = ;",
+			"}",
+			"{",
+			"if (",
+			"(((",
+			"\"",
+			"<?php foo(",
+			"def f(:",
+			"fn f( {",
+			"<div",
+			"1 +",
+			"SELECT FROM",
+		];
+		let (mut with_error, mut missing_only) = (0_usize, 0_usize);
+		let mut disagreements = Vec::new();
+		for &lang in SupportLang::all_langs() {
+			let document = lang.document();
+			for source in SOURCES {
+				let ast = document.ast_grep(*source);
+				let root = ast.root();
+				let walked = root.dfs().any(|node| node.is_error());
+				if walked {
+					with_error += 1;
+				} else if root.get_inner_node().has_error() {
+					missing_only += 1;
+				}
+				if holds_error_node(&root) != walked {
+					disagreements.push(format!("{} {source:?}", lang.canonical_name()));
+				}
+			}
+		}
+		assert_eq!(disagreements, Vec::<String>::new());
+		assert!(with_error > 100, "the sweep must hold trees with an ERROR node, held {with_error}");
+		assert!(missing_only > 0, "the sweep must hold a tree marked only by a missing node");
 	}
 
 	/// WHY: a structure search parsed every file in scope, so a search for a

@@ -178,6 +178,8 @@ The walk depth is measured after that normalization, so the same `*.ts` is bound
 
 For a directory operand, `astGrep` streams an uncached walker request (`.cache(false)`) through `for_each_file_candidate_parallel` and searches each file on the walk's worker as it arrives, compiling its patterns per language on first use; `astEdit` collects the same request and sorts it by path. A file is parsed only when it contains the literal text of every named leaf of at least one pattern compiled for its language (`veyyon_ast::required_text::RequiredText`); metavariables, unnamed tokens and `Signature` strictness require nothing, so the filter never drops a file that could match. Parse errors are reported for parsed files only, one per file, sorted by path, after the compile errors of patterns no language compiled. `astEdit` applies the same filter per rule unless `failOnParseError` is set. A file that is not valid UTF-8 is still reported. A single-file operand bypasses the walker. `astMatch` remains wholly in-memory and uncached and parses its source unconditionally.
 
+A walk thread takes the files it accepts 32 at a time (`PREFETCH_BATCH`), opens every file of the batch and, on Linux, advises the kernel to read each ahead (`POSIX_FADV_WILLNEED`) before reading the first, so each thread of the walk pool has up to 32 reads in flight instead of one. A file the batch cannot open is opened again by path and reports that error. A parsed tree is walked for ERROR nodes only when tree-sitter marks its root as holding an error or a missing node (`holds_error_node`), for `astGrep`, `astMatch` and `astEdit` alike.
+
 The adjacent N-API adapters expose three in-memory tree-sitter helpers:
 
 - `blockRangeAt({ code, line, lang?, path? })` returns the 1-indexed inclusive range of the outermost named node beginning on `line`. It returns `null` for an unknown language, an out-of-range or blank line, no node beginning on the line, or a resolved subtree containing a syntax error.
@@ -199,7 +201,7 @@ Tunables are env-configured: `FS_SCAN_CACHE_TTL_MS` (default 1000ms; `0` disable
 2. **Hit**
    - Entry age is within TTL -> return cached entries + `cache_age_ms`.
 3. **Stale-empty recheck**
-   - Requests that opt in via `EmptyRecheck::Configured` (`glob`, `fuzzyFind`, and AST directory discovery): if the query yields zero matches and cache age exceeds the empty-result threshold, force one rescan.
+   - Requests that opt in via `EmptyRecheck::Configured` (`glob` and `fuzzyFind`): if the query yields zero matches and cache age exceeds the empty-result threshold, force one rescan.
 4. **Invalidation**
    - `invalidateFsScanCache(path?)` (exported from `iofs.rs`, backed by `veyyon_walker::cache::invalidate_all` / `invalidate_path_string`):
      - no arg: clear all keys;
@@ -288,4 +290,4 @@ Text functions generally return deterministic transformed output; errors are lim
 5. Rust shapes outputs into N-API objects (`lineNumber`, `matchCount`, `limitReached`, `patternTreatedAsLiteral`, etc.).
 6. The package's lazy binding returns typed JS objects and optional per-match callbacks for `grep`/`glob`.
 
-*Verified against `e2ff92d2236a07e8f7c8bf6a12a09657bb7ebe86` on 2026-10-19.*
+*Verified against `34162445051fd9ea1076901153c67a697849a0e9` on 2026-10-19.*
