@@ -375,7 +375,7 @@ export const CONTEXT_SETTINGS = {
 			condition: "argotEnabled",
 			label: "Argot Models",
 			description:
-				"Models allowed to write Argot shorthand, by model id. Empty (the default) means no model does, so turning Argot on alone stays inert until you add one here. A model left off this list is never taught the shorthand; handles already in history still expand.",
+				"Models allowed to write Argot shorthand, by model id: provider/id, or a bare id for any provider. A trailing thinking selector such as :high also admits the bare model, so anthropic/claude-opus-5-5:high covers that model at every level. Empty (the default) means no model does, so turning Argot on alone stays inert until you add one here. A model left off this list is never taught the shorthand; handles already in history still expand.",
 		},
 	},
 

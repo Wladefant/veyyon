@@ -115,12 +115,22 @@ export interface AcquireBrowserOptions {
 	ownerSessionId?: string;
 }
 
+/**
+ * Return a browser with one reference leased to the caller. The lease is taken in the same synchronous
+ * step that returns the handle, so no release by another session can dispose it before the caller holds
+ * it. The caller owns the lease and releases it with `releaseBrowser` on every path, after any tab has
+ * taken its own hold through `holdBrowser`.
+ */
 export async function acquireBrowser(kind: BrowserKind, opts: AcquireBrowserOptions): Promise<BrowserHandle> {
 	const key = browserKey(kind);
 	const existing = browsers.get(key);
+	if (existing && ("client" in existing || existing.browser.connected)) {
+		// Refuse before leasing: a caller that already aborted must not leave a reference nothing will release.
+		if (opts.signal?.aborted) throw new ToolAbortError("Browser open aborted");
+		existing.refCount++;
+		return existing;
+	}
 	if (existing) {
-		if ("client" in existing) return existing;
-		if (existing.browser.connected) return existing;
 		browsers.delete(key);
 		await disposeBrowserHandle(existing, { kill: false });
 	}
@@ -133,11 +143,8 @@ export async function acquireBrowser(kind: BrowserKind, opts: AcquireBrowserOpti
 	// The launch may resolve AFTER the caller has already aborted (the outer
 	// `untilAborted` rejects immediately on abort but does not cancel the
 	// inner promise, and `launchHeadlessBrowser` does not accept a signal).
-	// Without this branch the completed handle sits in `browsers` at
-	// refCount:0 forever — no tab ever takes a hold, `releaseBrowser` never
-	// fires, and `releaseAllTabs` walks `tabs`, not `browsers`, so the
-	// orphaned Chromium/app process / puppeteer handle survives to process
-	// exit. (Issue #3963.)
+	// Nobody would hold the completed handle, so dispose it rather than publish it.
+	// (Issue #3963.)
 	if (opts.signal?.aborted) {
 		await disposeBrowserHandle(handle, { kill: kind.kind === "spawned" }).catch(err => {
 			logger.debug("Failed to dispose orphan browser after abort", {
@@ -147,6 +154,7 @@ export async function acquireBrowser(kind: BrowserKind, opts: AcquireBrowserOpti
 		throw new ToolAbortError("Browser open aborted");
 	}
 	browsers.set(key, handle);
+	handle.refCount++;
 	return handle;
 }
 
