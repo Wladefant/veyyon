@@ -22,6 +22,7 @@
 
 ### Fixed
 
+- `gen:native` writes the embedded addon archives and metadata module through `node:fs`, so it waits for a lease on an archive to break instead of failing with `EAGAIN` when an NFS client that built the addon still holds the file.
 - `astGrep` and `astEdit` parse a PHP file under the full PHP grammar, so a file that closes `?>` and continues as HTML is searched and rewritten instead of reported as a parse error and skipped; `astMatch` still reads its source as PHP code without an opening tag.
 - A `$$$NAME` binding in `metaVariables` is the source the capture spans, in brackets, instead of each node joined with `, `, so `foo($$$A)` over `foo(a, b)` binds `[a, b]` instead of `[a, ,, b]`.
 - Loading the addon caps glibc's malloc arenas at eight unless `MALLOC_ARENA_MAX` or `glibc.malloc.arena_max` sets a limit, so 48 shell commands, 32 searches and 16 globs at once peak at 311 MiB RSS instead of 488 MiB and settle at 187 MiB instead of 335 MiB after the idle trim.

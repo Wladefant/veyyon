@@ -31,7 +31,7 @@ const archivePrefix = "embedded-addons.";
 const archiveSuffix = ".tar.gz";
 
 if (reset) {
-	await Bun.write(outputPath, STUB_METADATA_MODULE);
+	await fs.writeFile(outputPath, STUB_METADATA_MODULE);
 	try {
 		const entries = await fs.readdir(nativeDir);
 		await Promise.all(
@@ -81,7 +81,7 @@ if (available.length === 0) {
 	const expected = candidates.map(candidate => `  - ${candidate.filename}`).join("\n");
 	throw new Error(`No native addons found for ${platformTag}. Expected one of:\n${expected}`);
 }
-const packageJson = (await Bun.file(packageJsonPath).json()) as { version: string };
+const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf8")) as { version: string };
 
 const addonBytes = await Promise.all(
 	available.map(async addon => ({ filename: addon.filename, bytes: await fs.readFile(addon.path) })),
@@ -113,13 +113,15 @@ await Promise.all(
 		const bytes = bytesByFilename.get(addon.filename);
 		if (!bytes) throw new Error(`No bytes read for ${addon.filename}`);
 		const archive = new Bun.Archive({ [addon.filename]: bytes }, { compress: "gzip", level: 9 });
-		await Bun.write(path.join(nativeDir, archiveNameFor(addon)), await archive.bytes());
+		// node:fs, not Bun.write: Bun opens with O_NONBLOCK, which fails with EAGAIN while an NFS
+		// client that built the addon holds a lease on the archive; node:fs waits for the lease to break.
+		await fs.writeFile(path.join(nativeDir, archiveNameFor(addon)), await archive.bytes());
 	}),
 );
 
 // The archives above are written unconditionally; only the metadata module is a choice, and the
 // choice lives in one importable place so a test can exercise it without running this script.
-await Bun.write(
+await fs.writeFile(
 	outputPath,
 	metadataModuleFor(process.argv, {
 		platformTag,
