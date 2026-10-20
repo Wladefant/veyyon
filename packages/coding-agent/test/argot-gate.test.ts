@@ -82,6 +82,33 @@ describe("the settings -> gate -> encode contract", () => {
 		expect(shouldEncode(gate, { model: "google-antigravity/gemini-2.5-flash", contextTokens: 0 })).toBe(false);
 	});
 
+	// Every other veyyon model setting takes `provider/id:level`, so the operator writes the allowlist
+	// the same way. The active id never carries the selector, so without this the entry matched nothing
+	// and the model was taught no handle.
+	it.each(["low", "medium", "high", "xhigh", "max", "auto"])(
+		"admits the model named by an entry spelled with a :%s thinking selector",
+		level => {
+			const qualified = buildArgotGate(true, [`${MODEL}:${level}`], NO_CUTOFF);
+			expect(shouldEncode(qualified, { model: MODEL, contextTokens: 0 })).toBe(true);
+			expect(shouldEncode(qualified, { model: OTHER, contextTokens: 0 })).toBe(false);
+			const bare = buildArgotGate(true, [`gemini-2.5-flash:${level}`], NO_CUTOFF);
+			const antigravity = "google-antigravity/gemini-2.5-flash";
+			expect(shouldEncode(bare, { model: antigravity, contextTokens: 0 })).toBe(true);
+		},
+	);
+
+	it("keeps a suffix that is not a thinking level as part of the model id", () => {
+		const gate = buildArgotGate(true, ["openrouter/qwen3-coder:free"], NO_CUTOFF);
+		expect(shouldEncode(gate, { model: "openrouter/qwen3-coder:free", contextTokens: 0 })).toBe(true);
+		expect(shouldEncode(gate, { model: "openrouter/qwen3-coder", contextTokens: 0 })).toBe(false);
+	});
+
+	it("still admits a catalog id whose own id ends in a level-shaped suffix", () => {
+		const literal = "nanogpt/nanogpt/coding-router:high";
+		const gate = buildArgotGate(true, [literal], NO_CUTOFF);
+		expect(shouldEncode(gate, { model: literal, contextTokens: 0 })).toBe(true);
+	});
+
 	it("with the default -1 cutoff, a listed model encodes at any context size", () => {
 		// -1 is the "Off" sentinel: shouldEncode treats a non-positive cutoff as no
 		// cutoff, so gating is model-only. sdk.ts also skips the turn_end usage

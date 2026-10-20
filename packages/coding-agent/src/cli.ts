@@ -545,9 +545,15 @@ export async function runCli(argv: string[]): Promise<void> {
 			return;
 		}
 	}
+	const buildMetadata = [
+		BUILD_TAG,
+		process.env.VEYYON_BUILD_SHA ? `build SHA ${process.env.VEYYON_BUILD_SHA}` : undefined,
+	]
+		.filter((part): part is string => Boolean(part))
+		.join("; ");
 	return logger.time("cliRun", run, {
 		bin: APP_NAME,
-		version: BUILD_TAG ? `${VERSION} (${BUILD_TAG})` : VERSION,
+		version: buildMetadata ? `${VERSION} (${buildMetadata})` : VERSION,
 		argv: resolved.argv,
 		commands,
 		help: showHelp,

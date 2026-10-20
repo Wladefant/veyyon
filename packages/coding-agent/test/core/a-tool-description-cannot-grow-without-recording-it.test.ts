@@ -53,7 +53,6 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/ast-edit": 375,
 	"tools/async-result": 105,
 	"tools/bash": 1564,
-<<<<<<< HEAD
 	// 1440 -> 1575: the `context` and `storage_state` parameters, the `save_state` action and the signed-in-session example.
 	"tools/browser": 1575,
 	"tools/checkpoint": 166,
@@ -61,13 +60,6 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/eval": 2007,
 	// 410 -> 469: image and binary file support for github file-read.
 	"tools/github": 469,
-=======
-	"tools/browser": 1815,
-	"tools/checkpoint": 166,
-	"tools/debug": 414,
-	"tools/eval": 2023,
-	"tools/github": 410,
->>>>>>> santhreal/main
 	"tools/goal": 162,
 	"tools/search": 703,
 	"tools/image-attachment-describe": 142,
@@ -113,11 +105,7 @@ const RECORDED_TOKENS: Record<string, number> = {
 };
 
 /** The sum the recorded table claims, so the total is in the diff of any trim. */
-<<<<<<< HEAD
 const RECORDED_TOTAL = 21992;
-=======
-const RECORDED_TOTAL = 22072;
->>>>>>> santhreal/main
 
 const measured = new Map<string, number>([
 	...Object.entries(toolsPrompts).map(([id, entry]) => [id, estimateTokensFromText(entry.text)] as const),
