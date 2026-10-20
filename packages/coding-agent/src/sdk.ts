@@ -996,6 +996,11 @@ class SessionStartup {
 		this.#cursorExecHandlers = new CursorExecHandlers({
 			cwd: this.#cwd,
 			tools,
+			prepareToolCall: (tool, toolCall) => {
+				const agent = this.#agent;
+				if (!agent) throw new Error("A Cursor tool call arrived before the agent was constructed.");
+				return agent.prepareExternalToolCall(tool, toolCall);
+			},
 			getToolContext: () => this.#toolContextStore.getContext(),
 			emitEvent: event => this.#agent?.emitExternalEvent(event),
 		});
