@@ -660,7 +660,7 @@ export class Patcher {
 			// The line numbers in `edits` index the exact content the tag names.
 			// Reject any anchor the read never displayed: editing lines the model
 			// has not seen is the off-by-memory mistake that mangles files.
-			if (expected !== undefined) assertSeenLines(section, expected, matchedSnapshot);
+			if (expected !== undefined) assertSeenLines(section, expected, matchedSnapshot, this.snapshots);
 			const result = applyEdits(normalized, resolved);
 			return withResolveWarnings(blockResolutions.length > 0 ? { ...result, blockResolutions } : result);
 		}
@@ -746,16 +746,28 @@ export class Patcher {
  * stays refused for every form including an insertion, since without even a
  * prefix there is nothing to identify.
  */
-function assertSeenLines(section: PatchSection, expected: string, matchedSnapshot: Snapshot | null): void {
+function assertSeenLines(
+	section: PatchSection,
+	expected: string,
+	matchedSnapshot: Snapshot | null,
+	snapshots: SnapshotStore,
+): void {
+	if (!matchedSnapshot) return;
 	const seen = enforcedSeenLines(matchedSnapshot);
 	if (!seen) return;
-	const clipped = matchedSnapshot?.clippedLines;
 	const rewritten = collectRewrittenAnchorLines(section.edits);
-	const unseen = section
-		.collectAnchorLines()
-		.filter(line => !seen.has(line) && !(clipped?.has(line) === true && !rewritten.has(line)));
+	const unseenOf = (lines: readonly number[]): number[] =>
+		lines.filter(
+			line => !seen.has(line) && !(matchedSnapshot.clippedLines?.has(line) === true && !rewritten.has(line)),
+		);
+	let unseen = unseenOf(section.collectAnchorLines());
 	if (unseen.length === 0) return;
-	const sourceLines = matchedSnapshot?.text.split("\n") ?? [];
+	// A line displayed in another copy of this text, such as the file it was
+	// copied from, was displayed for this one.
+	snapshots.mergeDisplayedCopies(matchedSnapshot);
+	unseen = unseenOf(unseen);
+	if (unseen.length === 0) return;
+	const sourceLines = matchedSnapshot.text.split("\n");
 	const { revealed, columnTruncated } = revealUnseenLines(unseen, sourceLines);
 	const overCap = unseen.length > revealed.length;
 	// Whether ANY unseen line is too wide, not just one inside the reveal.

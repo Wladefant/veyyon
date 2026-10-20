@@ -14,6 +14,7 @@
 - `InMemorySnapshotStore` keeps the seen and clipped lines of a version it evicts or pushes off the per-path ring and restores them when the same text is recorded again, so an edit on a line a read displayed is no longer rejected as never displayed after enough other files were read; `maxDroppedPaths` bounds the retained provenance.
 - `Patcher` records the edited version with the lines displayed of the version the edit applied to, moved to their new positions, plus every line the edit wrote, and `Patcher.recordPreviewLines` marks the rows of an edit's diff preview, so an edit under the post-edit tag is no longer rejected as never displayed on lines shown before the edit or in its response after a later partial read.
 - Recovery of a drifted file pairs unchanged lines by comparing the head and tail of the two texts in blocks and diffing only the changed middle, so moving an anchor onto a 5,000-line file with one changed line takes 770 µs instead of 1,004 µs.
+- `Patcher` merges the displayed and clipped lines of every other path holding byte-identical text, held or dropped, through the new `SnapshotStore.mergeDisplayedCopies` before refusing an anchor, so an edit of a copied file on a line read in the original is no longer rejected as never displayed.
 
 ## [1.5.6] - 2026-10-13
 

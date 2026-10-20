@@ -205,6 +205,7 @@ describe("every mutating method of the store is classified", () => {
 		byHash: "read only",
 		byContent: "read only",
 		findByHash: "read only",
+		mergeDisplayedCopies: "merges another path's provenance into a held version; drops nothing and keeps the source",
 	};
 
 	it("matches the prototype exactly", () => {

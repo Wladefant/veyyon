@@ -201,6 +201,9 @@ DEL 20
   - The displayed lines belong to the file's content, not to one retained copy of it: when the snapshot store evicts a file's
     version and a later read or search records the same content, the lines displayed before the eviction count as displayed
     under the tag again.
+  - A line displayed in one file counts as displayed in every other file with byte-identical content, such as a copy made
+    after the read, whether or not the snapshot store still holds the original. A file with different content that shares
+    the 4-hex tag contributes nothing.
 - Stale snapshot tag: the `Patcher` first attempts snapshot-based recovery. When recovery cannot prove a valid result it throws `MismatchError`, which distinguishes recognized-but-drifted hashes from never-recorded hashes. The error includes the current file hash plus context around each anchor.
 - No-op edit:
   - `Edits to <path> parsed and applied cleanly, but produced no change: your body row(s) are byte-identical to the file at the targeted lines. The bug is somewhere else — re-read the file before issuing another edit. Do NOT widen the payload or add lines; verify the anchor first.`

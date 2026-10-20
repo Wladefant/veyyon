@@ -98,6 +98,21 @@ export abstract class SnapshotStore {
 	}
 
 	/**
+	 * Merge into `snapshot` the displayed and clipped lines of every other
+	 * retained version, under any path, whose text equals `snapshot.text`. The
+	 * tag is a hash of the content, so a line displayed in one copy of a text
+	 * was displayed for every copy. A copy with no displayed-line record adds
+	 * nothing.
+	 */
+	mergeDisplayedCopies(snapshot: Snapshot): void {
+		for (const copy of this.findByHash(snapshot.hash)) {
+			if (copy === snapshot || copy.text !== snapshot.text) continue;
+			mergeLines(snapshot, "seenLines", copy.seenLines);
+			mergeLines(snapshot, "clippedLines", copy.clippedLines);
+		}
+	}
+
+	/**
 	 * Record the full normalized text of `path` and return its content tag.
 	 * `seenLines` (optional) are the 1-indexed lines the producer displayed;
 	 * they merge into {@link Snapshot.seenLines} across reads of identical text.
@@ -325,6 +340,27 @@ export class InMemorySnapshotStore extends SnapshotStore {
 			}
 		}
 		return matches;
+	}
+
+	/**
+	 * Also merges the provenance kept for a dropped version of the same text
+	 * under another path. The entry stays, since that path may record the text
+	 * again.
+	 */
+	mergeDisplayedCopies(snapshot: Snapshot): void {
+		super.mergeDisplayedCopies(snapshot);
+		const { length } = snapshot.text;
+		let digest: bigint | undefined;
+		for (const [path, dropped] of this.#dropped.entries()) {
+			if (path === snapshot.path) continue;
+			for (const version of dropped) {
+				if (version.length !== length) continue;
+				digest ??= textDigest(snapshot.text);
+				if (version.digest !== digest) continue;
+				if (version.seen) mergeLines(snapshot, "seenLines", fromRanges(version.seen));
+				if (version.clipped) mergeLines(snapshot, "clippedLines", fromRanges(version.clipped));
+			}
+		}
 	}
 
 	record(path: string, fullText: string, seenLines?: Iterable<number>): string {
