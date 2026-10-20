@@ -510,6 +510,39 @@ describe("admission stops unauthorized tool dispatch", () => {
 		expect(rig.dispatches).toHaveLength(0);
 	}, 15_000);
 
+	// WHY: a declared oversize body is refused from the header alone, so the 413 must not wait for the
+	// stream's cancel. A cancel that never settles would hang the caller if the worker awaited it. The
+	// runner's test timeout bounds that hang, so no wall-clock timer is needed. This closes the class
+	// "a refusal waits on the caller's stream". It does not cover a cancel that rejects.
+	test("a declared oversize body is refused with 413 even when the stream's cancel never settles", async () => {
+		const rig = await buildRig();
+		let cancelled = false;
+		const stalled = new ReadableStream<Uint8Array>({
+			pull() {
+				return new Promise<void>(() => {});
+			},
+			cancel() {
+				cancelled = true;
+				return new Promise<void>(() => {});
+			},
+		});
+		const request = new Request("https://tools.example.test/tools/search", {
+			method: "POST",
+			headers: {
+				...(await authFor(rig.signer, "a")),
+				"content-type": "application/json",
+				"content-length": String(BODY_LIMIT + 1),
+			},
+			body: stalled,
+		});
+		const response = await rig.worker.fetch(request);
+		expect(response.status).toBe(413);
+		expect(await response.json()).toEqual({ error: "payload_too_large" });
+		expect(cancelled).toBe(true);
+		expect(rig.hooks.reserves).toBe(0);
+		expect(rig.dispatches).toHaveLength(0);
+	});
+
 	test("the global switch flipped during reservation blocks dispatch, and the charge stands", async () => {
 		const rig = await buildRig();
 		rig.hooks.afterReserve = () => {

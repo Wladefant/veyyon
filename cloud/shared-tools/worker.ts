@@ -25,7 +25,7 @@ const BODY_DEADLINE_MS = 2_000;
 async function readBoundedBody(request: Request): Promise<Uint8Array | Response> {
 	const declared = Number(request.headers.get("content-length"));
 	if (Number.isSafeInteger(declared) && declared > MAX_BODY_BYTES) {
-		await request.body?.cancel().catch(() => {});
+		void request.body?.cancel().catch(() => {});
 		return Response.json({ error: "payload_too_large" }, { status: 413 });
 	}
 	const stream = request.body;
