@@ -4,7 +4,7 @@ import { untilAborted } from "@veyyon/utils";
 import { SEARCH_HARD_TIMEOUT_MS } from "@veyyon/web/hard-timeout";
 import type { Page } from "puppeteer-core";
 import { applyStealthPatches, applyViewport } from "../../browser/launch";
-import { acquireBrowser, holdBrowser, releaseBrowser } from "../../browser/registry";
+import { acquireBrowser, releaseBrowser } from "../../browser/registry";
 import { buildBrowserNavigationHeaders } from "./browser-headers";
 
 /**
@@ -116,7 +116,6 @@ async function browseHtmlPage(
 		throw new Error("Headless browser acquisition returned a non-Puppeteer browser");
 	}
 
-	holdBrowser(handle);
 	let page: Page | undefined;
 	try {
 		// A page that opens after the abort is never assigned to `page`, so the `finally` below does not
