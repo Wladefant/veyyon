@@ -16,6 +16,7 @@
 - Recovery of a drifted file pairs unchanged lines by comparing the head and tail of the two texts in blocks and diffing only the changed middle, so moving an anchor onto a 5,000-line file with one changed line takes 770 µs instead of 1,004 µs.
 - `Patcher` merges the displayed and clipped lines of every other path holding byte-identical text, held or dropped, through the new `SnapshotStore.mergeDisplayedCopies` before refusing an anchor, so an edit of a copied file on a line read in the original is no longer rejected as never displayed.
 - `Patcher` records the version an edit wrote with every line displayed when the store holds neither the pre-edit text nor the tagged read, and carries the tagged read's displayed and clipped lines that an outside change left in place when it recovers an edit onto a changed file, so a later partial read under the new tag no longer narrows that version to the read's range.
+- `Patcher` merges the displayed and clipped lines of every other retained version of a path that the change between the two left at the same line, enumerated through the new `SnapshotStore.versions` and paired by a `LineMap` under its new `diffBudget` bound, before refusing an anchor, so an edit under the tag of a partial read of a file changed since an earlier read is no longer rejected on a line that read displayed.
 
 ## [1.5.6] - 2026-10-13
 

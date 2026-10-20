@@ -71,6 +71,21 @@ function middleLines(text: string, start: number, end: number, endsAtLineStart: 
 	return lines;
 }
 
+/**
+ * The line diff of two non-empty middles, or `undefined` when it needs more
+ * edits than `budget` allows for their length. The diff's work grows with its
+ * edit count times the lines it compares, so the bound caps it.
+ */
+function diffMiddle(
+	previous: string[],
+	current: string[],
+	budget: number | undefined,
+): Diff.ChangeObject<string[]>[] | undefined {
+	if (budget === undefined) return diffPackage.value.diffArrays(previous, current);
+	const maxEditLength = Math.floor(budget / (previous.length + current.length));
+	return diffPackage.value.diffArrays(previous, current, { maxEditLength });
+}
+
 export class LineMap {
 	readonly #previousText: string;
 	/** Offset of the unchanged tail in the previous text, or -1 when the change runs to its end. */
@@ -83,7 +98,13 @@ export class LineMap {
 	readonly #middle: Map<number, number>;
 	readonly #written: number[];
 
-	constructor(previousText: string, currentText: string) {
+	/**
+	 * `diffBudget` bounds the diff of the changed middle: it runs only while
+	 * its edit count times the middle's line count stays within the budget,
+	 * and a middle past it is read as rewritten, pairing none of its lines and
+	 * reporting each of its current lines written. Unbounded when omitted.
+	 */
+	constructor(previousText: string, currentText: string, diffBudget?: number) {
 		this.#previousText = previousText;
 		const previousLength = previousText.length;
 		const currentLength = currentText.length;
@@ -138,10 +159,14 @@ export class LineMap {
 		const written: number[] = [];
 		let previousLine = prefix + 1;
 		let currentLine = prefix + 1;
-		if (previousMiddle.length === 0 || currentMiddle.length === 0) {
+		const changes =
+			previousMiddle.length === 0 || currentMiddle.length === 0
+				? undefined
+				: diffMiddle(previousMiddle, currentMiddle, diffBudget);
+		if (changes === undefined) {
 			for (let i = 0; i < currentMiddle.length; i++) written.push(currentLine + i);
 		} else {
-			for (const change of diffPackage.value.diffArrays(previousMiddle, currentMiddle)) {
+			for (const change of changes) {
 				const count = change.value.length;
 				if (change.added) {
 					for (let i = 0; i < count; i++) written.push(currentLine + i);
@@ -170,6 +195,15 @@ export class LineMap {
 		if (previousLine <= this.#prefix) return previousLine;
 		if (previousLine < this.#suffixStart) return this.#middle.get(previousLine);
 		return previousLine <= this.#lineCount() ? previousLine + this.#shift : undefined;
+	}
+
+	/** The lines of `previousLines` this map pairs with the same line number of the current text. */
+	unmoved(previousLines: Iterable<number>): number[] {
+		const unmoved: number[] = [];
+		for (const line of previousLines) {
+			if (this.get(line) === line) unmoved.push(line);
+		}
+		return unmoved;
 	}
 
 	/** Lines of the current text with no counterpart in the previous one, ascending. */

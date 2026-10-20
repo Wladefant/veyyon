@@ -117,6 +117,45 @@ describe("a line map pairs unchanged lines like a full diff", () => {
 		);
 	});
 
+	it("pairs only equal lines in order and accounts for every current line under any diff budget", () => {
+		fc.assert(
+			fc.property(textArb, textArb, fc.nat({ max: 60 }), (previous, current, budget) => {
+				const previousLines = previous.split("\n");
+				const currentLines = current.split("\n");
+				const map = new LineMap(previous, current, budget);
+				const found = pairs(map, previous);
+				let last = 0;
+				for (const [from, to] of found) {
+					expect(currentLines[to - 1]).toBe(previousLines[from - 1]);
+					expect(to).toBeGreaterThan(last);
+					last = to;
+				}
+				expect([...found.map(([, to]) => to), ...map.written()].sort((x, y) => x - y)).toEqual(
+					Array.from({ length: currentLines.length }, (_, i) => i + 1),
+				);
+			}),
+			{ numRuns: 2000 },
+		);
+	});
+
+	it("matches the unbounded map within its diff budget and reads a middle past it as rewritten", () => {
+		const lines = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`);
+		const previous = `${lines.join("\n")}\n`;
+		// Lines 10 to 90 change every tenth line: a middle of 81 lines on each side and 18 edits.
+		const current = `${lines.map((line, i) => (i >= 9 && i < 90 && i % 10 === 9 ? `${line}!` : line)).join("\n")}\n`;
+		const unbounded = new LineMap(previous, current);
+		const within = new LineMap(previous, current, 18 * 162);
+		expect(pairs(within, previous)).toEqual(pairs(unbounded, previous));
+		expect(within.written()).toEqual(unbounded.written());
+
+		const past = new LineMap(previous, current, 17 * 162);
+		expect(pairs(past, previous)).toEqual([
+			...Array.from({ length: 9 }, (_, i): [number, number] => [i + 1, i + 1]),
+			...Array.from({ length: 11 }, (_, i): [number, number] => [i + 91, i + 91]),
+		]);
+		expect(past.written()).toEqual(Array.from({ length: 81 }, (_, i) => i + 10));
+	});
+
 	it("matches a full diff on long texts compared in blocks", () => {
 		fc.assert(
 			fc.property(editedLongArb, ([previous, current]) => expectMatchesFullDiff(previous, current)),

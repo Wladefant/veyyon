@@ -600,8 +600,8 @@ export class Patcher {
 		let clipped: Iterable<number> | undefined = base?.clippedLines;
 		if (base && base.text !== before) {
 			const change = new LineMap(base.text, before);
-			seen = unmovedLines(change, seen ?? lineNumbers(base.text));
-			clipped = clipped && unmovedLines(change, clipped);
+			seen = change.unmoved(seen ?? lineNumbers(base.text));
+			clipped = clipped && change.unmoved(clipped);
 		}
 		if (!seen) {
 			this.snapshots.recordSeenLines(canonicalPath, hash, lineNumbers(after));
@@ -776,6 +776,11 @@ function assertSeenLines(
 	snapshots.mergeDisplayedCopies(matchedSnapshot);
 	unseen = unseenOf(unseen);
 	if (unseen.length === 0) return;
+	// A line displayed in another version of this file, which the change
+	// between the two left at the same line, was displayed for this one.
+	snapshots.mergeUnmovedLines(matchedSnapshot);
+	unseen = unseenOf(unseen);
+	if (unseen.length === 0) return;
 	const sourceLines = matchedSnapshot.text.split("\n");
 	const { revealed, columnTruncated } = revealUnseenLines(unseen, sourceLines);
 	const overCap = unseen.length > revealed.length;
@@ -832,15 +837,6 @@ function mapLines(lineMap: LineMap, lines: Iterable<number>): number[] {
 		if (target !== undefined) mapped.push(target);
 	}
 	return mapped;
-}
-
-/** The lines of `lines` that `lineMap` pairs with the same line number. */
-function unmovedLines(lineMap: LineMap, lines: Iterable<number>): number[] {
-	const unmoved: number[] = [];
-	for (const line of lines) {
-		if (lineMap.get(line) === line) unmoved.push(line);
-	}
-	return unmoved;
 }
 
 /**

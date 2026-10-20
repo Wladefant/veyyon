@@ -204,6 +204,11 @@ DEL 20
   - The displayed lines belong to the file's content, not to one retained copy of it: when the snapshot store evicts a file's
     version and a later read or search records the same content, the lines displayed before the eviction count as displayed
     under the tag again.
+  - A line displayed in one version of a file counts as displayed in another version the snapshot store still holds when
+    the change between the two left the line at the same line number, such as a version a formatter or a shell command
+    wrote after the read. A line the change rewrote, added or moved is not displayed under the other version's tag. When
+    the change rewrote too much of a large file to compare in about 12 ms, only the lines before its first and after its
+    last rewritten line count.
   - A line displayed in one file counts as displayed in every other file with byte-identical content, such as a copy made
     after the read, whether or not the snapshot store still holds the original. A file with different content that shares
     the 4-hex tag contributes nothing.

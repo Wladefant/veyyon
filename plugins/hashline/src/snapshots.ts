@@ -21,6 +21,7 @@
  */
 import { LRUCache } from "lru-cache/raw";
 import { computeFileHash } from "./format";
+import { LineMap } from "./line-map";
 
 /**
  * One full-file version observed at a point in time. The tag the model sees is
@@ -62,6 +63,15 @@ export interface Snapshot {
 }
 
 /**
+ * Bound on the diff {@link SnapshotStore.mergeUnmovedLines} runs between two
+ * versions, in edit count times compared lines (see {@link LineMap}). A full
+ * diff of a 5,000-line file reindented throughout takes 3 s; under this bound
+ * a diff takes at most about 12 ms, and a change past it carries only the
+ * lines outside its changed middle.
+ */
+const UNMOVED_DIFF_BUDGET = 500_000;
+
+/**
  * Storage seam for full-file version snapshots. The patcher calls {@link head}
  * for the latest version of a path and {@link byHash} when it needs the
  * historical version a section's stale tag names.
@@ -98,6 +108,15 @@ export abstract class SnapshotStore {
 	}
 
 	/**
+	 * Every retained version of `path`, most recently recorded first. The base
+	 * returns the head alone; stores that retain a history override it.
+	 */
+	versions(path: string): readonly Snapshot[] {
+		const head = this.head(path);
+		return head ? [head] : [];
+	}
+
+	/**
 	 * Merge into `snapshot` the displayed and clipped lines of every other
 	 * retained version, under any path, whose text equals `snapshot.text`. The
 	 * tag is a hash of the content, so a line displayed in one copy of a text
@@ -109,6 +128,25 @@ export abstract class SnapshotStore {
 			if (copy === snapshot || copy.text !== snapshot.text) continue;
 			mergeLines(snapshot, "seenLines", copy.seenLines);
 			mergeLines(snapshot, "clippedLines", copy.clippedLines);
+		}
+	}
+
+	/**
+	 * Merge into `snapshot` the displayed and clipped lines of every other
+	 * retained version of its path that the change between the two left at the
+	 * same line: the bytes displayed there are the bytes there now. A line the
+	 * change rewrote, added or moved is not merged, and a version with no
+	 * displayed-line record adds nothing. Past {@link UNMOVED_DIFF_BUDGET}, no
+	 * line between the first and the last line the change rewrote is merged.
+	 */
+	mergeUnmovedLines(snapshot: Snapshot): void {
+		for (const version of this.versions(snapshot.path)) {
+			if (version === snapshot) continue;
+			const { seenLines, clippedLines } = version;
+			if (!seenLines?.size && !clippedLines?.size) continue;
+			const change = new LineMap(version.text, snapshot.text, UNMOVED_DIFF_BUDGET);
+			if (seenLines?.size) mergeLines(snapshot, "seenLines", change.unmoved(seenLines));
+			if (clippedLines?.size) mergeLines(snapshot, "clippedLines", change.unmoved(clippedLines));
 		}
 	}
 
@@ -340,6 +378,10 @@ export class InMemorySnapshotStore extends SnapshotStore {
 			}
 		}
 		return matches;
+	}
+
+	versions(path: string): readonly Snapshot[] {
+		return this.#versions.get(path) ?? [];
 	}
 
 	/**
