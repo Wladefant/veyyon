@@ -17,6 +17,7 @@ import type {
 import type { AsyncJobManager } from "../../async/job-manager";
 import { type BashResult, executeBash } from "../../exec/bash-executor";
 import { formatExitCodeNotice } from "../../exec/exit-notice";
+import { buildNonInteractiveEnv } from "../../exec/non-interactive-env";
 import type { ExtensionTerminalCapability } from "../../extensibility/terminal-capability";
 import { InternalUrlRouter } from "../../internal-urls";
 import { toolsPrompts } from "../../prompts/tools/rows";
@@ -86,12 +87,19 @@ const BRIDGE_POLL_INTERVAL_MS = 250;
  * `-l`) instead of dropping to `cmd.exe` on Windows. The agent host's shell
  * path is used as a proxy for the client's, matching the near-universal
  * ACP deployment shape of an editor spawning veyyon as a co-hosted subprocess.
+ *
+ * The command runs in a brace group whose stdin is `/dev/null`. ACP `terminal/create` has no
+ * stdin control, so the client's open pipe would otherwise reach the command, and a `read`,
+ * `cat` or stdin-reading child would wait forever. A pipe, a heredoc or a `< file` inside the
+ * command overrides the group's stdin, so explicit input still arrives. The newline before the
+ * closing brace ends a trailing `# comment`.
  */
 export function wrapShellLineForClientTerminal(
 	line: string,
 	shellConfig: { shell: string; args: string[]; prefix?: string | undefined },
 ): { command: string; args: string[] } {
-	const finalLine = shellConfig.prefix ? `${shellConfig.prefix} ${line}` : line;
+	const prefixed = shellConfig.prefix ? `${shellConfig.prefix} ${line}` : line;
+	const finalLine = `{\n${prefixed}\n} </dev/null`;
 	return { command: shellConfig.shell, args: shellConfig.args.concat([finalLine]) };
 }
 
@@ -982,9 +990,7 @@ export class BashTool
 				command: shellSpawn.command,
 				args: shellSpawn.args,
 				cwd: call.commandCwd,
-				env: call.resolvedEnv
-					? Object.entries(call.resolvedEnv).map(([name, value]) => ({ name, value }))
-					: undefined,
+				env: Object.entries(buildNonInteractiveEnv(call.resolvedEnv)).map(([name, value]) => ({ name, value })),
 				outputByteLimit: DEFAULT_MAX_BYTES,
 			});
 			return this.#runOnClientTerminal(call, handle, wallTimeStart, signal, onUpdate);

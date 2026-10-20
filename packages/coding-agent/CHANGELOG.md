@@ -16,6 +16,7 @@
 - A browser returned by `acquireBrowser` carries a lease its caller releases, so one session's release can no longer close a browser another session has just reused.
 - Session factory callback typing and mixed native actor rosters now pass the workspace type check ([Refs](https://github.com/Wladefant/veyyon/issues/569)).
 - Background jobs whose owning lane was disposed reach Main as one batched note listing each result once. A lane's jobs still reach only that lane while it lives, and an absent owner keeps its completions until it returns ([Refs #564](https://github.com/Wladefant/veyyon/issues/564)).
+- ACP client-terminal commands receive closed stdin and non-interactive defaults while explicit input redirects and environment overrides still work ([#565](https://github.com/Wladefant/veyyon/issues/565)).
 - Disposing a session's owner during kernel startup returns at once and releases the runner when startup completes, and a kernel whose stdin pipe stalls at shutdown is still signalled and reaches SIGKILL, so eval interpreters no longer outlive their session ([Refs #639](https://github.com/Wladefant/veyyon/issues/639)).
 - A JS eval context stays alive for an owner that attaches after another owner ends, so disposing the first owner no longer kills the second owner's in-flight cell ([Refs #639](https://github.com/Wladefant/veyyon/issues/639)).
 
