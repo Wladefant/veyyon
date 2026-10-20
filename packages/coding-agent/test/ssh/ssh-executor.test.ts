@@ -13,6 +13,8 @@ useIsolatedAgentDir({ globalSettings: true });
 
 type TestStdin = "pipe" | "ignore" | Buffer | Uint8Array | null;
 
+const LINUX_BASH: connectionManager.SSHHostInfo = { version: 4, os: "linux", shell: "bash", compatEnabled: false };
+
 function createNeverClosingStream(): ReadableStream<Uint8Array> {
 	return new ReadableStream<Uint8Array>({
 		start(controller) {
@@ -45,6 +47,7 @@ describe("executeSSH", () => {
 
 	function mockOpenStreamChild(exited?: Promise<number>) {
 		vi.spyOn(connectionManager, "ensureConnection").mockResolvedValue();
+		vi.spyOn(connectionManager, "ensureHostInfo").mockResolvedValue(LINUX_BASH);
 		vi.spyOn(connectionManager, "buildRemoteCommand").mockResolvedValue(["remote", "sleep 60"]);
 		vi.spyOn(sshfsMount, "hasSshfs").mockReturnValue(false);
 		vi.spyOn(ptree, "spawn").mockImplementation(<In extends TestStdin>() => createBlockedChild<In>(exited));
@@ -105,6 +108,7 @@ describe("executeSSH", () => {
 	it("sends a burst of printed lines at most once per live-output interval and loses none of them", async () => {
 		const printed = Array.from({ length: 2000 }, (_, i) => `line ${i}\n`);
 		vi.spyOn(connectionManager, "ensureConnection").mockResolvedValue();
+		vi.spyOn(connectionManager, "ensureHostInfo").mockResolvedValue(LINUX_BASH);
 		vi.spyOn(connectionManager, "buildRemoteCommand").mockResolvedValue(["remote", "seq 2000"]);
 		vi.spyOn(sshfsMount, "hasSshfs").mockReturnValue(false);
 		vi.spyOn(ptree, "spawn").mockImplementation(
