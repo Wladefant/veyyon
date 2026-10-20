@@ -214,6 +214,7 @@
 ### Fixed
 
 - `launch` `stop`, `describe`, `logs`, `wait`, `send` and `restart` answer for a process whose record the broker purged after the cleanup wait, from its retained completion record, instead of failing with `Unknown daemon <name>` while `list` still shows the name under "Recently completed".
+- An `edit` anchored on a line an earlier `read` or `search` displayed applies after reads or searches of 30 other files and a later read of the same unchanged file, instead of failing with "never displayed" while the re-read of the first range is refused as still in context.
 - `edit`, `read`, LSP workspace edits, `ast_edit`, `write` conflict resolution, archive, document, vault, skill and `local://` reads, and context discovery open a workspace file through `node:fs`, so a file another process holds a lease on (an NFS-exported file a client has open) is read or written once the lease breaks instead of failing with `EAGAIN: resource temporarily unavailable`, and an `AGENTS.md` that hit that error is no longer cached as absent.
 - A ranged `read` of a file up to the snapshot cap decodes it in one `readFile` pass, so a 4 MiB file is materialized in 327 µs instead of 571 µs.
 - A tool Cursor runs through its exec channel receives the arguments the agent loop would give it, with the `i` intent field stripped, repairs applied, the schema checked and codec handles and secret placeholders expanded, so a Cursor `search` call no longer fails with `Search type "text" does not accept: i` and an invalid argument is answered with the validation error instead of reaching the tool.
@@ -324,6 +325,7 @@
 - A sandboxed local-cli trial can no longer signal a process outside it or connect to an abstract Unix socket made outside it on a kernel with Landlock ABI 6 or later.
 - A sandboxed local-cli trial can no longer read files in `/run/user`, and `docs/backends.md` states that a trial still connects to every pathname Unix socket the runner's user can, the session bus and the Docker daemon among them.
 - `NodeFilesystem.readText` reads through `node:fs`, so a file another process holds a lease on is read once the lease breaks instead of failing with `EAGAIN`.
+- `InMemorySnapshotStore` keeps the seen and clipped lines of a version it evicts or pushes off the per-path ring and restores them when the same text is recorded again, so an edit on a line a read displayed is no longer rejected as never displayed after enough other files were read; `maxDroppedPaths` bounds the retained provenance.
 - A session no longer moves compacted history out of memory after another window appended to its file, which read entries back from shifted offsets and failed compaction with "could not be read back from bytes".
 - A compacted entry whose recorded offset no longer holds its line is read back from where one scan of the session file finds its line, and is checked to be the same entry, instead of failing every later compaction for the life of the process.
 - A missing blob is logged once per process instead of once per reference on every open and every read-back of an entry, which logged one lost blob store as tens of thousands of warnings.
