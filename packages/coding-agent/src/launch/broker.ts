@@ -309,39 +309,6 @@ function connectPort(host: string, port: number): Promise<boolean> {
 	return promise;
 }
 
-/**
- * Terminate the POSIX process group whose id is `pid`, the group a non-detached root leads. Resolves true only when
- * the group is proven empty. Windows has no group to signal, and a PID is never signalled alone without a handle,
- * so Windows resolves false. No persisted creation identity exists, so a reused PID is not detected here.
- */
-async function reapOwnedGroup(pid: number): Promise<boolean> {
-	if (process.platform === "win32") return false;
-	const alive = (): boolean => {
-		try {
-			process.kill(-pid, 0);
-			return true;
-		} catch (error) {
-			return (error as NodeJS.ErrnoException).code === "EPERM";
-		}
-	};
-	const signal = (name: NodeJS.Signals): void => {
-		try {
-			process.kill(-pid, name);
-		} catch (error) {
-			logger.debug("Owned process group signal failed", { pid, signal: name, error: errorMessage(error) });
-		}
-	};
-	const waitGone = async (ms: number): Promise<boolean> => {
-		const deadline = Date.now() + ms;
-		while (alive() && Date.now() < deadline) await sleep(50);
-		return !alive();
-	};
-	if (!alive()) return true;
-	signal("SIGTERM");
-	if (await waitGone(TREE_GRACE_MS)) return true;
-	signal("SIGKILL");
-	return waitGone(TREE_BOUND_MS);
-}
 
 type TreeState = "alive" | "dead" | "unknown";
 
@@ -757,6 +724,7 @@ export class DaemonBroker {
 		record.termination = undefined;
 		record.tree = undefined;
 		record.snapshot.state = record.spec.ready ? "starting" : "running";
+		record.snapshot.ownershipUncertain = undefined;
 		record.snapshot.startedAt = Date.now();
 		record.snapshot.readyAt = undefined;
 		record.snapshot.exitedAt = undefined;
@@ -776,10 +744,8 @@ export class DaemonBroker {
 			if (record.spec.detached) await this.#launchDetached(record, generation);
 			else if (record.spec.pty) await this.#launchPty(record, generation);
 			else this.#launchPipe(record, generation);
-			if (record.snapshot.ownershipUncertain) {
-				record.snapshot.ownershipUncertain = undefined;
-				persist(record);
-			}
+			if (record.snapshot.ownershipUncertain) return;
+			if (terminalState(record.snapshot.state)) return;
 			if (record.spec.ready?.port !== undefined) void this.#pollPort(record, generation, record.spec.ready);
 			this.#markReady(record);
 		} catch (error) {
@@ -838,12 +804,23 @@ export class DaemonBroker {
 		const deadline = Date.now() + 5_000;
 		while (!this.#attachPtyRoot(record, generation, session)) {
 			if (
-				Date.now() >= deadline ||
 				generation !== record.generation ||
 				record.stopRequested ||
 				this.#shuttingDown ||
 				terminalState(record.snapshot.state)
 			) {
+				return;
+			}
+			if (Date.now() >= deadline) {
+				const reason =
+					"PTY root process handle was not captured within 5 seconds; process-tree ownership is unknown, so the broker will not signal the PID or claim the process tree is gone";
+				record.snapshot.ownershipUncertain = true;
+				record.snapshot.state = "failed";
+				record.snapshot.terminatedBy = "broker-recovery";
+				record.snapshot.exitReason = reason;
+				record.snapshot.exitedAt = Date.now();
+				persist(record);
+				record.log?.append(`${reason}\n`);
 				return;
 			}
 			await sleep(20);
@@ -1013,7 +990,7 @@ export class DaemonBroker {
 				this.#markReady(record);
 				return;
 			}
-			await Bun.sleep(100);
+			await sleep(100);
 		}
 	}
 
@@ -1558,46 +1535,16 @@ export class DaemonBroker {
 					!wasTerminal &&
 					snapshot.state !== "stopping" &&
 					(processRef ? processRef.status() === "running" : snapshot.pid !== undefined && isProcessAlive(snapshot.pid));
-				let ownershipUncertain = false;
+				const ownershipUncertain = true;
 				if (!detached && !wasTerminal) {
-					if (processRef) {
-						try {
-							await processRef.terminate({ group: true, gracefulMs: 500, timeoutMs: 2_000 });
-						} catch (error) {
-							logger.debug("Failed to terminate unmanaged daemon process during recovery", {
-								name: snapshot.name,
-								pid: snapshot.pid,
-								error: errorMessage(error),
-							});
-						}
-					} else {
-						// Without a native handle, recovery cannot observe descendants. A detached daemon
-						// outlives its broker by design; a missing PID also gives no safe group to reap.
-						ownershipUncertain = spec.detached || snapshot.pid === undefined || !(await reapOwnedGroup(snapshot.pid));
-					}
-					snapshot.pid = ownershipUncertain ? snapshot.pid : undefined;
+					// A persisted PID is not a process identity. Recovery cannot establish that a
+					// process group or any escaped descendants still belong to it.
 					snapshot.exitedAt = Date.now();
-					if (ownershipUncertain) {
-						snapshot.state = "failed";
-						snapshot.terminatedBy = "broker-recovery";
-						snapshot.exitReason =
-							"the previous broker exited and its process tree could not be proven gone; it is not restarted, and a replacement needs its ready port free";
-					} else {
-						snapshot.state = "exited";
-						if (spec.detached) {
-							// A detached daemon outlives its broker by design, so one that is
-							// already gone was not terminated by this replacement. Recording
-							// `broker-recovery` here asserted both that the replacement killed
-							// it and that it was non-detached, and neither is true.
-							snapshot.terminatedBy = "process-exit";
-							snapshot.exitReason = "exited while no broker was supervising it";
-						} else {
-							snapshot.terminatedBy = "broker-recovery";
-							snapshot.exitReason =
-								"the previous broker exited; its replacement terminated this non-detached daemon";
-						}
-					}
-					snapshot.ownershipUncertain = ownershipUncertain || undefined;
+					snapshot.state = "failed";
+					snapshot.terminatedBy = "broker-recovery";
+					snapshot.exitReason =
+						"the previous broker exited and the recovered process tree may still have descendants; no persisted process identity exists to prove ownership or that holders are gone, so it is not restarted and a replacement needs its ready port free";
+					snapshot.ownershipUncertain = ownershipUncertain;
 				} else if (wasTerminal) {
 					snapshot.pid = undefined;
 				}
