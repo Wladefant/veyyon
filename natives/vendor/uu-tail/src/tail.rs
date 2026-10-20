@@ -698,7 +698,7 @@ mod tests {
 		let stderr_buf = Arc::new(Mutex::new(Vec::new()));
 		let io = veyyon_uutils_ctx::ScopeIo {
 			stdin: Box::new(io::empty()),
-			stdin_fd: None,
+			fds: Vec::new(),
 			stdin_is_search_input: false,
 			stdout: Box::new(SharedWriter { buf: stdout_buf.clone() }),
 			// A capture buffer is not a terminal.
@@ -842,7 +842,7 @@ mod tests {
 
 		let io = veyyon_uutils_ctx::ScopeIo {
 			stdin:                 Box::new(io::empty()),
-			stdin_fd:              None,
+			fds:                   Vec::new(),
 			stdin_is_search_input: false,
 			stdout:                Box::new(BrokenPipeWriter),
 			// The writer under test is a pipe that breaks, which is never a terminal.

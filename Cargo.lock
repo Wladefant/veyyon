@@ -421,6 +421,7 @@ dependencies = [
  "tracing",
  "uuid",
  "uzers",
+ "veyyon-uutils-ctx",
  "whoami",
  "windows-sys 0.59.0",
 ]

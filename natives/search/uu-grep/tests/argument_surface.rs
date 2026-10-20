@@ -58,7 +58,7 @@ fn capture(stderr: &mut Vec<u8>, f: impl FnOnce() -> i32) -> i32 {
 	let sink = Arc::new(Mutex::new(Vec::new()));
 	let io = ScopeIo {
 		stdin:                 Box::new(io::empty()),
-		stdin_fd:              None,
+		fds:                   Vec::new(),
 		stdin_is_search_input: false,
 		stdout:                Box::new(io::sink()),
 		stdout_is_terminal:    false,
