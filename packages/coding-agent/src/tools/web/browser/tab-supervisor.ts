@@ -1002,16 +1002,16 @@ export async function releaseTabForOwner(
 	if (!tab) return false;
 	if (ownerId && tab.ownerSessionId === ownerId) return releaseTab(name, opts);
 	const tabId = approvedExtensionTabId(tab);
-	if (tabId !== undefined && opts.approvedTabIds?.includes(tabId)) return releaseTab(name, opts);
+	if (!tab.ownerSessionId && tabId !== undefined && opts.approvedTabIds?.includes(tabId)) return releaseTab(name, opts);
 	throw new ToolError(
-		`Cannot close tab ${JSON.stringify(name)} because this session does not own it. Include its exact relay-controlled Chrome tab ID in approved_tab_ids to close it.`,
+		`Cannot close tab ${JSON.stringify(name)} because this session does not own it. Include its exact Chrome tab ID in approved_tab_ids only for an ownerless relay-controlled tab.`,
 	);
 }
 
 /**
  * Release tabs created by a session when `AgentSession.dispose()` runs. Ownership is stamped only
- * at creation and never changes on reuse. Explicit approved IDs can add only tabs in this relay's
- * controlled registry; unrelated browser tabs are never adopted.
+ * at creation and never changes on reuse. Explicit approved IDs can add only ownerless tabs in this relay's
+ * controlled registry; another lane's tabs and unrelated browser tabs are never adopted.
  */
 export async function releaseTabsForOwner(
 	ownerId: string | undefined,
@@ -1022,7 +1022,7 @@ export async function releaseTabsForOwner(
 		.filter(tab => {
 			if (ownerId !== undefined && tab.ownerSessionId === ownerId) return true;
 			const tabId = approvedExtensionTabId(tab);
-			return tabId !== undefined && opts.approvedTabIds?.includes(tabId) === true;
+			return !tab.ownerSessionId && tabId !== undefined && opts.approvedTabIds?.includes(tabId) === true;
 		})
 		.map(tab => tab.name);
 	let count = 0;

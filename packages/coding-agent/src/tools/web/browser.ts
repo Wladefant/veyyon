@@ -135,7 +135,7 @@ const browserSchema = lazy(() =>
 		"timeout?": type("number").describe(describeTimeoutParam("browser")),
 		"all?": type("boolean").describe("close every tab owned by this session"),
 		"approved_tab_ids?": type("number[]").describe(
-			"exact Chrome tab IDs from inventory that authorize closing other relay-controlled tabs",
+			"exact Chrome tab IDs from inventory that authorize closing only ownerless relay-controlled tabs",
 		),
 		"kill?": type("boolean").describe("also kill spawned-app browsers"),
 	}),

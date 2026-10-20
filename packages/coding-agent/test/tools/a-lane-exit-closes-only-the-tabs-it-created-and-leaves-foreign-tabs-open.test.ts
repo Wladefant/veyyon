@@ -31,7 +31,13 @@ import * as path from "node:path";
 import { ExtensionRelay } from "@veyyon/coding-agent/tools/web/browser/extension-relay";
 import type { PuppeteerBrowserHandle } from "@veyyon/coding-agent/tools/web/browser/registry";
 import type { TabWorkerInbound, TabWorkerOutbound } from "@veyyon/coding-agent/tools/web/browser/tab-protocol";
-import { getTabsMapForTest, type TabSession, type WorkerTabSession } from "@veyyon/coding-agent/tools/web/browser/tab-supervisor";
+import {
+	getTabsMapForTest,
+	releaseTabForOwner,
+	releaseTabsForOwner,
+	type TabSession,
+	type WorkerTabSession,
+} from "@veyyon/coding-agent/tools/web/browser/tab-supervisor";
 import { disposeOwnedResources } from "@veyyon/kernel/session/owned-resources";
 import { setAgentDir } from "@veyyon/utils";
 import type { Browser } from "puppeteer-core";
@@ -323,6 +329,30 @@ describe("a lane's exit releases its own tabs and nothing else", () => {
 		expect(foreign.ext.calls.filter(call => call.method === "chrome.debugger.detach")).toEqual([]);
 	});
 
+	test("approved IDs do not let bulk release close another lane's owned tab", async () => {
+		const lane = await laneRelay("lane-a", 100);
+		const foreign = await laneRelay("lane-b", 200);
+		const first = await lane.cdp.send("Target.createTarget", { url: "about:blank" });
+		const second = await lane.cdp.send("Target.createTarget", { url: "about:blank" });
+		const foreignTab = await foreign.cdp.send("Target.createTarget", { url: "about:blank" });
+		expect(first.result?.targetId).toBe("ext-100");
+		expect(second.result?.targetId).toBe("ext-101");
+		expect(foreignTab.result?.targetId).toBe("ext-200");
+
+		const ownedBrowser = extensionHandle("lane-a", lane, "lane-A", 2);
+		seedTab("lane-a-approved-first", ownedBrowser, "ext-100", "lane-A");
+		seedTab("lane-a-approved-second", ownedBrowser, "ext-101", "lane-A");
+		seedTab("lane-b-approved-tab", extensionHandle("lane-b", foreign, "lane-B", 1), "ext-200", "lane-B");
+
+		expect(await releaseTabsForOwner("lane-A", { approvedTabIds: [200] })).toBe(2);
+		await until(() => removedTabIds(lane.ext).length === 2, "approved bulk owned tab removals");
+
+		expect(removedTabIds(lane.ext)).toEqual([100, 101]);
+		expect(tabMap.get("lane-b-approved-tab")?.state).toBe("alive");
+		expect(removedTabIds(foreign.ext)).toEqual([]);
+		expect(foreign.ext.calls.filter(call => call.method === "chrome.debugger.detach")).toEqual([]);
+	});
+
 	test("disposing the session closes exactly the tabs it owns and leaves another lane's tab and the operator's tab open", async () => {
 		const lane = await laneRelay("lane-a", 100);
 		const foreign = await laneRelay("lane-b", 200);
@@ -336,9 +366,15 @@ describe("a lane's exit releases its own tabs and nothing else", () => {
 		lane.ext.emit("chrome.tabs.onCreated", [{ id: 900, url: "https://operator.example/" }]);
 
 		// One lane browser holds both owned tabs, so releasing each tab drops one hold.
-		seedTab("lane-a-first", extensionHandle("lane-a", lane, "lane-A", 2), "ext-100", "lane-A");
-		seedTab("lane-a-second", extensionHandle("lane-a", lane, "lane-A", 2), "ext-101", "lane-A");
+		const ownedBrowser = extensionHandle("lane-a", lane, "lane-A", 2);
+		seedTab("lane-a-first", ownedBrowser, "ext-100", "lane-A");
+		seedTab("lane-a-second", ownedBrowser, "ext-101", "lane-A");
 		seedTab("lane-b-tab", extensionHandle("lane-b", foreign, "lane-B", 1), "ext-200", "lane-B");
+
+		await expect(releaseTabForOwner("lane-b-tab", "lane-A", { approvedTabIds: [200] })).rejects.toThrow(
+			"only for an ownerless relay-controlled tab",
+		);
+		expect(removedTabIds(foreign.ext)).toEqual([]);
 
 		await disposeOwnedResources("session", "lane-A");
 

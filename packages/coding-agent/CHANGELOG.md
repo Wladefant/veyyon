@@ -26,7 +26,7 @@
 - Auth gateway accepts a server-only live device token map with `--device-tokens-file`. PC2 uses existing `pi-native` transport with a device bearer instead of provider credentials ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
 - Task and qa-verifier spawns share configured Gemini 3.8 Flash and GPT-6 Luna models evenly by spawn identity.
 - `deepseek` is a `web_search` provider and a `fetch` reader backend. Both use the `DEEPSEEK_API_KEY` that the DeepSeek model provider already reads, so a machine with a DeepSeek key searches and reads pages with no second credential.
-- Browser tab inventory lists only relay-controlled tabs, and close actions respect lane ownership or exact approved tab IDs ([Refs](https://github.com/Wladefant/veyyon/issues/538)).
+- Browser tab inventory lists only relay-controlled tabs, and approved close IDs apply only to ownerless relay-controlled tabs; lane-owned tabs remain protected ([Refs](https://github.com/Wladefant/veyyon/issues/538)).
 
 - Terminal provider HTTP 429 and 402 lane errors notify `model_routing.py record-error` without waiting. The reporter uses a hidden child, a 10-second timeout and payload-free failure logs ([Refs](https://github.com/Wladefant/superboard/issues/451)).
 - `irc` sends a durable notice to another session with `to: "session:<id>"` or `to: "session:all"`. A session reads its notices at the start of each prompt and at step boundaries, shows them to the model and forwards them to its running lanes, so a warning survives a dropped terminal pipe and reaches the lanes ([Refs](https://github.com/Wladefant/veyyon/issues/537)).
