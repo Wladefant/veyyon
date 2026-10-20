@@ -29,6 +29,7 @@
 - The `browser` tool waits up to 20 seconds, or the call's timeout when shorter, for an interstitial bot check such as Cloudflare's to clear, and states where the page led or that it did not clear.
 - The `browser` tool's `open` takes `visible: true | false`, which moves a tab between headless Chromium and a browser window with its page, cookies and localStorage, so a person can solve a challenge and the run continues.
 - The `browser` tool's `open` takes `profile: "<name>"`, a persistent Chromium profile under the agent directory whose cookies, storage, cache and history survive sessions; a profile another process holds is refused, naming its lock.
+- `cursorExecHandlersForAgent` in `@veyyon/coding-agent/cursor` builds the Cursor exec bridge for an agent constructed after it, and throws for a call that arrives before the agent exists instead of running it unprepared.
 - `prepareToolCall` in `@veyyon/agent-core/tool-call-preparation` and `Agent.prepareExternalToolCall` strip the intent field from a tool call's arguments, repair, validate and transform them as the agent loop does, for a provider that runs tool calls itself during the stream.
 - `@veyyon/catalog/discovery/cursor-gen/agent_pb` defines Cursor's `McpStateExecArgs` and `McpStateExecResult` exec messages (field 36) and the `McpStateSuccess`, `McpStateServer`, `McpStateError` and `McpStateRejected` messages they carry.
 - `suites/browser` runs hard web tasks on seeded local applications (a shop, webmail, a bank with a second-factor phone, a kanban board, a spreadsheet, flight booking with a cross-origin payment frame, a helpdesk seeded with prompt injections, an analytics dashboard drawn on canvas), five workflow tasks that carry one job across two or three of them, and four recovery tasks in which the application fails once, visibly (a declined charge, an expired session, a stale save, a dropped connection), and grades each by the state the applications recorded and the agent's answer.
@@ -52,7 +53,7 @@
 - `settleWithin(promise, timeoutMs, fallback)` resolves with the promise's value, or with `fallback` once the deadline passes, and clears its timer when the promise settles.
 - `@veyyon/utils/keys` exports `KITTY_CSI_U_PATTERN`, the Kitty CSI-u key-sequence pattern its keypad fast path matches.
 - `estimateTokensFromBytes(bytes)` returns the token estimate `estimateTokensFromText` gives a text of that many UTF-8 bytes.
-- `@veyyon/utils/fs-io` exports `readFileText`, `readFileRange` and `writeFileCreatingParents`, which read and write like `Bun.file().text()`, `Bun.file().slice().bytes()` and `Bun.write` but open through `node:fs`, so the open waits out a lease another process holds instead of failing with `EAGAIN`.
+- `@veyyon/utils/fs-io` exports `readFileText`, `readFileRange` and `writeFileCreatingParents`, which read and write like `Bun.file().text()`, `Bun.file().slice().bytes()` and `Bun.write` but open through `node:fs`, so the open waits out a lease another process holds instead of failing with `EAGAIN`; the package root does not re-export them.
 - `TimeSlice` and `TIME_SLICE_MS` let a long synchronous loop yield to the event loop once every 8 ms.
 
 ### Changed
@@ -142,6 +143,7 @@
 - Writing a message after a custom entry adds only the new entries to the session's message-timestamp index instead of re-reading the whole branch, so each such write on a 97,000-entry session takes 0.49 ms instead of 5.4 ms.
 - `normalizeTools` moved from `@veyyon/agent-core/agent-loop` to `@veyyon/agent-core/tool-normalization`, so building the provider-bound tool list no longer loads the agent loop; the package root still exports it.
 - `prepareCompaction` validates only the server-side windows it uses, the newest valid window of each provider and api and the furthest kept boundary's window, instead of every window on the branch, so a pass over a session whose summarized windows were moved to disk reads none of them back.
+- `prepareToolCall` builds every rejection through one constructor; the rejections it returns are unchanged.
 - Moved the usage-report fetch, cache, header ingest and fan-out out of `auth-storage.ts` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - Moved usage-backed credential ranking out of `auth-storage.ts` into `auth-storage/usage-ranking.ts`, with no user-visible change beyond the fixes below.
 - Moved the credential health check behind `AuthStorage.checkCredentials` into `auth-storage/usage-reporting.ts`, with no user-visible change.
