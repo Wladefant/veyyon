@@ -9,6 +9,10 @@
 
 - Sync upstream changes from santhreal/veyyon.
 
+### Fixed
+
+- The web plugin exports `createPublicFetchHandler`, a Worker-compatible HTTP handler for public fetch. It takes the caller's identity only from an injected `authorize` function, refuses other methods and malformed URLs before any upstream call, and returns fixed error messages.
+
 ## [1.5.6] - 2026-10-10
 ### Removed
 
