@@ -23,6 +23,8 @@ export interface EmbeddedAddonEntry {
 	variant: "modern" | "baseline" | "default";
 	filename: string;
 	size: number;
+	/** SHA-256 of the `.node` bytes, hex: the loader reuses an extracted copy only when it matches. */
+	sha256: string;
 	archiveFilename: string;
 }
 
@@ -47,7 +49,7 @@ const TYPEDEFS = `/** @typedef {"modern" | "baseline" | "default"} EmbeddedAddon
  * @property {EmbeddedAddonVariant} variant
  * @property {string} filename
  * @property {number} size
- * @property {string=} filePath
+ * @property {string} sha256
  * @property {EmbeddedAddonArchive=} archive
  */
 
@@ -86,6 +88,7 @@ export function populatedMetadataModule(input: EmbeddedMetadataInput): string {
 				`\t\t\tvariant: ${JSON.stringify(addon.variant)},`,
 				`\t\t\tfilename: ${JSON.stringify(addon.filename)},`,
 				`\t\t\tsize: ${addon.size},`,
+				`\t\t\tsha256: ${JSON.stringify(addon.sha256)},`,
 				"\t\t\tarchive: {",
 				'\t\t\t\tformat: "tar.gz",',
 				`\t\t\t\tfilename: ${JSON.stringify(addon.archiveFilename)},`,

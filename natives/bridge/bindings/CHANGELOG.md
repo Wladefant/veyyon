@@ -22,6 +22,7 @@
 
 ### Fixed
 
+- A compiled binary reuses the addon it extracted into `natives/<version>/` only when the `.stamp` file beside it records that build's `sha256` and the file's inode and modification time, so a rebuild of the same version whose addon has the same size loads its own addon instead of the previous build's, and a same-size damaged file there is extracted again instead of failing every launch with "Failed to load veyyon_natives native addon".
 - `gen:native` writes the embedded addon archives and metadata module through `node:fs`, so it waits for a lease on an archive to break instead of failing with `EAGAIN` when an NFS client that built the addon still holds the file.
 - `astGrep` and `astEdit` parse a PHP file under the full PHP grammar, so a file that closes `?>` and continues as HTML is searched and rewritten instead of reported as a parse error and skipped; `astMatch` still reads its source as PHP code without an opening tag.
 - A `$$$NAME` binding in `metaVariables` is the source the capture spans, in brackets, instead of each node joined with `, `, so `foo($$$A)` over `foo(a, b)` binds `[a, b]` instead of `[a, ,, b]`.

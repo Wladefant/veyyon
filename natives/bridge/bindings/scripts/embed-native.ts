@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { findStaleAddon, staleAddonMessage } from "../native/loader-state.js";
@@ -106,12 +107,16 @@ if (stale) {
 // loader had to inflate all of them to reach the one it loads; splitting them means a cold launch
 // decompresses only the variant this host runs.
 const bytesByFilename = new Map(addonBytes.map(addon => [addon.filename, addon.bytes]));
+const bytesFor = (addon: AvailableAddon): Buffer => {
+	const bytes = bytesByFilename.get(addon.filename);
+	if (!bytes) throw new Error(`No bytes read for ${addon.filename}`);
+	return bytes;
+};
 const archiveNameFor = (addon: AvailableAddon): string =>
 	`${archivePrefix}${platformTag}-${addon.variant}${archiveSuffix}`;
 await Promise.all(
 	available.map(async addon => {
-		const bytes = bytesByFilename.get(addon.filename);
-		if (!bytes) throw new Error(`No bytes read for ${addon.filename}`);
+		const bytes = bytesFor(addon);
 		const archive = new Bun.Archive({ [addon.filename]: bytes }, { compress: "gzip", level: 9 });
 		// node:fs, not Bun.write: Bun opens with O_NONBLOCK, which fails with EAGAIN while an NFS
 		// client that built the addon holds a lease on the archive; node:fs waits for the lease to break.
@@ -130,6 +135,7 @@ await fs.writeFile(
 			variant: addon.variant,
 			filename: addon.filename,
 			size: addon.size,
+			sha256: createHash("sha256").update(bytesFor(addon)).digest("hex"),
 			archiveFilename: archiveNameFor(addon),
 		})),
 	}),
