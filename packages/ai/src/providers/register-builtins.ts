@@ -117,16 +117,22 @@ export interface LazyStreamLimits {
 	providerHandlesIdleTimeout?: boolean;
 }
 /**
- * Cloud Code Assist (google-gemini-cli / google-antigravity) routinely takes
- * longer than the global 100s default to emit its first SSE event when serving
- * the heavier Gemini 3.x Pro tiers at high thinking levels. Bump the first-event
- * floor to five minutes so callers stop seeing spurious "stream timed out while
- * waiting for the first event" aborts on legitimate cold reasoning starts.
- * The steady-state idle watchdog stays on the global default since the upstream
- * emits thinking tokens frequently once it gets going.
+ * Every Gemini wire (`google-generative-ai`, `google-vertex`, and Cloud Code Assist as
+ * `google-gemini-cli` / `google-antigravity`) delivers a function call as one part holding the
+ * whole `args` object, after the model has finished decoding it. Nothing reaches the stream while
+ * a large call decodes, so the idle budget has to cover that decode, and the generic 120s does not:
+ * a `write` or `edit` call over about 45 KB of arguments was cut at 120s every attempt, after the
+ * thinking that announced it, and each retry decoded the same call into the same deadline.
+ *
+ * The budget covers one request's whole output: 65,536 tokens, the largest cap those requests are
+ * sent with, at 100 tokens/s, under the slowest tenth of measured Gemini 4 Argon tool-call
+ * decodes. The first event gets the same budget through `max(first event, idle)`, because a call
+ * decoded with no thinking first is the same silence before the first event. The 300s first-event
+ * floor holds when `VEYYON_STREAM_IDLE_TIMEOUT_MS` lowers idle.
  */
-const GOOGLE_GEMINI_CLI_LAZY_STREAM_LIMITS: LazyStreamLimits = {
+export const GEMINI_LAZY_STREAM_LIMITS: LazyStreamLimits = {
 	defaultFirstEventTimeoutMs: 300_000,
+	defaultIdleTimeoutMs: 660_000,
 };
 
 const PROVIDER_HANDLED_STREAM_TIMEOUTS: LazyStreamLimits = {
@@ -340,16 +346,20 @@ export const streamAzureOpenAIResponses = createLazyStream(
 	() => import("./azure-openai-responses").then(module => ({ stream: module.streamAzureOpenAIResponses })),
 	PROVIDER_HANDLED_STREAM_TIMEOUTS,
 );
-export const streamGoogle = createLazyStream("google-generative-ai", () =>
-	import("./google").then(module => ({ stream: module.streamGoogle })),
+export const streamGoogle = createLazyStream(
+	"google-generative-ai",
+	() => import("./google").then(module => ({ stream: module.streamGoogle })),
+	GEMINI_LAZY_STREAM_LIMITS,
 );
 export const streamGoogleGeminiCli = createLazyStream(
 	"google-gemini-cli",
 	() => import("./google-gemini-cli").then(module => ({ stream: module.streamGoogleGeminiCli })),
-	GOOGLE_GEMINI_CLI_LAZY_STREAM_LIMITS,
+	GEMINI_LAZY_STREAM_LIMITS,
 );
-export const streamGoogleVertex = createLazyStream("google-vertex", () =>
-	import("./google-vertex").then(module => ({ stream: module.streamGoogleVertex })),
+export const streamGoogleVertex = createLazyStream(
+	"google-vertex",
+	() => import("./google-vertex").then(module => ({ stream: module.streamGoogleVertex })),
+	GEMINI_LAZY_STREAM_LIMITS,
 );
 /**
  * The ChatGPT Codex client, loaded on its first use. The lazy stream below and the session's background

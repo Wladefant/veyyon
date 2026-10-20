@@ -18,6 +18,7 @@
 
 ### Fixed
 
+- A Gemini, Vertex, Gemini CLI or Antigravity turn that decodes a large function call, such as a `write` of more than about 45 KB, waits up to 660 s for the call instead of ending at 120 s with `Provider stream stalled while waiting for the next event` and decoding the same call again on every retry.
 - Cursor's MCP state request (`mcp_state_exec_args`, exec field 36), sent before a call to a tool reached over MCP, is answered with the `pi-agent` server and the tools the turn advertised, instead of failed with `This client does not run Cursor exec field 36.` and a logged warning.
 - An OpenCode request sent without a session id, such as a session title or a task label, carries a process-stable `x-opencode-session` header instead of none, so the gateway no longer rejects it with `400 Request is missing x-opencode-session (type=MissingSessionID)`.
 - An Anthropic-messages endpoint that answers a forced `tool_choice` with a 400 naming the field (`tool_choice: type "tool" and "any" are not supported for this model.`, or Kimi's `tool_choice 'specified' is incompatible with thinking enabled`) is retried once with `tool_choice: auto` and sent `auto` for that model for the rest of the session, instead of failing the turn.
