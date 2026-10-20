@@ -2,7 +2,7 @@ import { errorMessage } from "@veyyon/utils/type-guards";
 import { normalizeBaseUrl } from "@veyyon/utils/url";
 import { canonicalizeEfforts, type Effort, isEffort } from "../effort";
 import { parseKnownModel, semverEqual } from "../identity/classify";
-import type { ModelReasoningOptions, ModelSpec } from "../types";
+import type { CyberAccessProgram, ModelAccessPrograms, ModelReasoningOptions, ModelSpec } from "../types";
 import { discoveryFetch, toArray, toBoolean, toFields, toFiniteNumber, toNonEmptyString } from "../utils";
 import { CODEX_BASE_URL, CODEX_CLIENT_VERSION, OPENAI_HEADER_VALUES, OPENAI_HEADERS } from "../wire/codex";
 import { type DiscoveryFailure, type DiscoveryHooks, readDiscoveryJson } from "./failure";
@@ -46,6 +46,7 @@ interface CodexModelEntry {
 	prefer_websockets?: unknown;
 	use_responses_lite?: unknown;
 	apply_patch_tool_type?: unknown;
+	available_access_programs?: unknown;
 }
 
 interface NormalizedCodexModel {
@@ -253,6 +254,7 @@ function normalizeCodexModelEntry(entry: unknown, baseUrl: string): NormalizedCo
 	const useResponsesLite = toBoolean(payload.use_responses_lite) === true;
 	const applyPatchToolType = toNonEmptyString(payload.apply_patch_tool_type)?.toLowerCase();
 	const priority = toFiniteNumber(payload.priority) ?? Number.MAX_SAFE_INTEGER;
+	const accessPrograms = readAccessPrograms(payload.available_access_programs);
 
 	return {
 		priority,
@@ -274,7 +276,31 @@ function normalizeCodexModelEntry(entry: unknown, baseUrl: string): NormalizedCo
 			...(reasoningOptions !== undefined ? { reasoningOptions } : {}),
 			...(applyPatchToolType === "freeform" || applyPatchToolType === "function" ? { applyPatchToolType } : {}),
 			...(priority !== Number.MAX_SAFE_INTEGER ? { priority } : {}),
+			...(accessPrograms !== undefined ? { accessPrograms } : {}),
 		},
+	};
+}
+
+const CYBER_ACCESS_PROGRAMS: Record<CyberAccessProgram, true> = {
+	standard: true,
+	daybreak_blue: true,
+	daybreak_red: true,
+};
+
+/**
+ * `available_access_programs`, or undefined when the entry states none. A `cyber` value that is not a
+ * list makes the whole field unreadable rather than empty, because an empty list is a statement that
+ * the caller may select nothing. Program names this reader does not know are dropped, as codex-rs
+ * drops them, so a new server program cannot hide the ones it does know.
+ */
+function readAccessPrograms(value: unknown): ModelAccessPrograms | undefined {
+	const cyber = toArray(toFields(value)?.cyber);
+	if (cyber === undefined) return undefined;
+	return {
+		cyber: cyber.filter(
+			(program): program is CyberAccessProgram =>
+				typeof program === "string" && Object.hasOwn(CYBER_ACCESS_PROGRAMS, program),
+		),
 	};
 }
 

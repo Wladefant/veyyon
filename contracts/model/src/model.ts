@@ -153,6 +153,23 @@ export interface ModelReasoningOptions {
 	noEffortControl?: boolean;
 }
 
+/**
+ * A cyber access program the ChatGPT Codex backend accepts as `access_programs.cyber` (codex-rs
+ * `CyberAccessProgram`, wire values in snake case). `standard` is the default treatment; the two
+ * Daybreak programs are the tiers for security work.
+ */
+export type CyberAccessProgram = "standard" | "daybreak_blue" | "daybreak_red";
+
+/**
+ * Access programs the endpoint offers the signed-in caller for one model, read from Codex discovery
+ * (`available_access_programs`). Discovery grants nothing: the inference endpoint still enforces
+ * authorization on every request.
+ */
+export interface ModelAccessPrograms {
+	/** Accepted explicit selections, unknown program names dropped. An empty list is distinct from absent metadata. */
+	cyber: readonly CyberAccessProgram[];
+}
+
 // `Provider` is any provider-id string; `KnownProvider` (re-exported above) enumerates
 // the built-in model providers from the catalog descriptor table.
 export type Provider = string;
@@ -964,6 +981,12 @@ export interface Model<TApi extends Api = Api> {
 	 * - `"function"` or undefined: JSON function-tool with `{input: string}` (spec §1.2).
 	 */
 	applyPatchToolType?: "freeform" | "function";
+	/**
+	 * Access programs the endpoint offers the signed-in caller for this model. Caller-specific: it
+	 * states what one account may select, so only runtime discovery sets it and the bundled catalog
+	 * never carries it. Absent means discovery stated nothing.
+	 */
+	accessPrograms?: ModelAccessPrograms;
 	/**
 	 * Force OAuth-style request shaping for providers whose API key prefix doesn't
 	 * match an OAuth token (e.g. routing Anthropic traffic through a proxy that

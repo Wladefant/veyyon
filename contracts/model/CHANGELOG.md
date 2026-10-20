@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `Model.accessPrograms` lists the cyber access programs (`standard`, `daybreak_blue`, `daybreak_red`) model discovery offers the signed-in account for a model.
+
 ## [1.5.6] - 2026-10-13
 
 ### Changed

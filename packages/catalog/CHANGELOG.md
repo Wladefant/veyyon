@@ -5,6 +5,7 @@
 ### Added
 
 - `@veyyon/catalog/discovery/cursor-gen/agent_pb` defines Cursor's `McpStateExecArgs` and `McpStateExecResult` exec messages (field 36) and the `McpStateSuccess`, `McpStateServer`, `McpStateError` and `McpStateRejected` messages they carry.
+- Codex discovery reads `available_access_programs` into `Model.accessPrograms`, which the bundled catalog never contains, and the model cache schema moves to v14 so a Codex row cached without it is fetched again.
 
 ### Removed
 

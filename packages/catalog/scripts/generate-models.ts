@@ -612,7 +612,8 @@ async function fetchCodexDiscoveryModels(): Promise<ModelSpec<"openai-codex-resp
 		}
 		if (codexDiscovery.models.length > 0) {
 			console.log(`Fetched ${codexDiscovery.models.length} models from Codex API`);
-			return codexDiscovery.models;
+			// Access programs state what the generating account may select, not what a model offers.
+			return codexDiscovery.models.map(({ accessPrograms: _accessPrograms, ...spec }) => spec);
 		}
 		return [];
 	} catch (error) {

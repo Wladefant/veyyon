@@ -18,6 +18,7 @@
 
 ### Fixed
 
+- A ChatGPT Codex turn, each of its websocket frames and its server-side compaction send `access_programs.cyber` set to the Daybreak program discovery offers for the model, `daybreak_blue` before `daybreak_red`, so security work is no longer refused with `cyber_policy` for lack of the field.
 - A Gemini, Vertex, Gemini CLI or Antigravity turn that decodes a large function call, such as a `write` of more than about 45 KB, waits up to 660 s for the call instead of ending at 120 s with `Provider stream stalled while waiting for the next event` and decoding the same call again on every retry.
 - Cursor's MCP state request (`mcp_state_exec_args`, exec field 36), sent before a call to a tool reached over MCP, is answered with the `pi-agent` server and the tools the turn advertised, instead of failed with `This client does not run Cursor exec field 36.` and a logged warning.
 - An OpenCode request sent without a session id, such as a session title or a task label, carries a process-stable `x-opencode-session` header instead of none, so the gateway no longer rejects it with `400 Request is missing x-opencode-session (type=MissingSessionID)`.
