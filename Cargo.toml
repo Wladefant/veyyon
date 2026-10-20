@@ -302,6 +302,7 @@ http = "1"
 # System & Platform
 # ──────────────────────────────────────────────────────────────────────────────
 libc = "0.2"
+libmimalloc-sys = { version = "0.1.49", default-features = false, features = ["extended", "local_dynamic_tls"] }
 os_pipe = "1"
 windows-sys = { version = "0.61", features = [
    "Win32_Foundation",

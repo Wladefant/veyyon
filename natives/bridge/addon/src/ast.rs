@@ -2,7 +2,7 @@
 
 use std::{
 	cmp::Ordering,
-	collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap},
+	collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, VecDeque},
 	fs::File,
 	io::Read,
 	path::{Path, PathBuf},
@@ -21,7 +21,7 @@ use ast_grep_core::{
 };
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 use veyyon_ast::{
 	Grammar, SupportLang,
 	ops::{self as shared_ops},
@@ -29,7 +29,7 @@ use veyyon_ast::{
 };
 
 use crate::{
-	iofs,
+	cores, heap_pages, iofs,
 	napi_error::{to_napi, to_napi_with},
 	task,
 };
@@ -41,6 +41,16 @@ const DEFAULT_FIND_LIMIT: u32 = 50;
 /// small, so each thread asks for a batch's reads together: the disk serves 32
 /// requests per thread at once instead of one.
 const PREFETCH_BATCH: usize = 32;
+
+/// Parse threads a tree search starts: one per core the walker pool leaves.
+fn parse_thread_count() -> usize {
+	cores::cores().saturating_sub(veyyon_walker::walk_workers())
+}
+
+/// Source bytes the parses of one search hold at once. A syntax tree takes
+/// about sixty times its source: four 2 MiB PHP files parse into 480 MiB of
+/// trees. A file larger than the budget parses alone.
+const PARSE_SOURCE_BUDGET: usize = 8 << 20;
 
 /// ast-grep pattern strictness (controls how patterns match syntax).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -656,6 +666,136 @@ struct FindRun<'a> {
 	/// Files the walk accepted that no thread has opened yet: absolute path,
 	/// then display path.
 	pending:        Mutex<Vec<(PathBuf, String)>>,
+	budget:         ParseBudget,
+}
+
+/// The source bytes a search's parses may hold at once: a walk thread holds a
+/// file's share from its read until its parse ends, waiting while the rest is
+/// held.
+struct ParseBudget {
+	free:      Mutex<usize>,
+	released:  Condvar,
+	total:     usize,
+	/// The most held at once.
+	#[cfg(test)]
+	most_held: AtomicUsize,
+}
+
+impl ParseBudget {
+	const fn new(total: usize) -> Self {
+		Self {
+			free: Mutex::new(total),
+			released: Condvar::new(),
+			total,
+			#[cfg(test)]
+			most_held: AtomicUsize::new(0),
+		}
+	}
+
+	/// Hold `bytes` of the budget, waiting until that much is free. A request
+	/// larger than the whole budget holds all of it.
+	fn hold(&self, bytes: usize) -> BudgetHold<'_> {
+		let bytes = bytes.min(self.total);
+		let mut free = self.free.lock();
+		while *free < bytes {
+			self.released.wait(&mut free);
+		}
+		*free -= bytes;
+		#[cfg(test)]
+		self
+			.most_held
+			.fetch_max(self.total - *free, AtomicOrdering::Relaxed);
+		BudgetHold { budget: self, bytes }
+	}
+}
+
+/// A share of a [`ParseBudget`], returned when dropped.
+struct BudgetHold<'b> {
+	budget: &'b ParseBudget,
+	bytes:  usize,
+}
+
+impl Drop for BudgetHold<'_> {
+	fn drop(&mut self) {
+		*self.budget.free.lock() += self.bytes;
+		self.budget.released.notify_all();
+	}
+}
+
+/// One file a walk thread read and screened, waiting for a parse.
+struct ParseJob<'b> {
+	source:       String,
+	display_path: String,
+	language:     SupportLang,
+	patterns:     LanguagePatterns,
+	/// Indices of the patterns whose required text `source` holds.
+	runnable:     Vec<usize>,
+	/// The source's share of the search's parse budget.
+	held:         BudgetHold<'b>,
+}
+
+struct ParseQueueState<'b> {
+	jobs:   VecDeque<ParseJob<'b>>,
+	closed: bool,
+}
+
+/// Files waiting for a parse thread of a tree search. A walk thread queues a
+/// file while fewer than `capacity` wait and parses it itself otherwise.
+struct ParseQueue<'b> {
+	state:    Mutex<ParseQueueState<'b>>,
+	ready:    Condvar,
+	capacity: usize,
+}
+
+impl<'b> ParseQueue<'b> {
+	const fn new(capacity: usize) -> Self {
+		Self {
+			state: Mutex::new(ParseQueueState { jobs: VecDeque::new(), closed: false }),
+			ready: Condvar::new(),
+			capacity,
+		}
+	}
+
+	/// Queue `job`, or return it when the queue is full or closed.
+	fn push(&self, job: ParseJob<'b>) -> std::result::Result<(), ParseJob<'b>> {
+		let mut state = self.state.lock();
+		if state.closed || state.jobs.len() >= self.capacity {
+			return Err(job);
+		}
+		state.jobs.push_back(job);
+		drop(state);
+		self.ready.notify_one();
+		Ok(())
+	}
+
+	/// The next queued job, waiting for one until the queue is closed.
+	fn pop(&self) -> Option<ParseJob<'b>> {
+		let mut state = self.state.lock();
+		loop {
+			if let Some(job) = state.jobs.pop_front() {
+				return Some(job);
+			}
+			if state.closed {
+				return None;
+			}
+			self.ready.wait(&mut state);
+		}
+	}
+
+	/// Accept no more jobs, and wake every thread waiting for one.
+	fn close(&self) {
+		self.state.lock().closed = true;
+		self.ready.notify_all();
+	}
+}
+
+/// Closes a [`ParseQueue`] when dropped.
+struct CloseOnDrop<'q, 'b>(&'q ParseQueue<'b>);
+
+impl Drop for CloseOnDrop<'_, '_> {
+	fn drop(&mut self) {
+		self.0.close();
+	}
 }
 
 /// What a finished [`FindRun`] found, before paging.
@@ -688,44 +828,105 @@ impl<'a> FindRun<'a> {
 			files_searched: AtomicUsize::new(0),
 			tally: Mutex::new(FindTally::default()),
 			pending: Mutex::new(Vec::with_capacity(PREFETCH_BATCH)),
+			budget: ParseBudget::new(PARSE_SOURCE_BUDGET),
 		}
 	}
 
-	/// Search every file of `scope`. A tree's files are searched on the walker
-	/// pool as the walk yields them, a batch at a time.
-	fn search_scope(&self, scope: &SearchScope, ct: &task::CancelToken) -> Result<()> {
-		match scope {
-			SearchScope::File(file) => self.search_file(&file.absolute_path, &file.display_path, ct),
-			SearchScope::Tree { request, .. } => {
-				request
-					.for_each_file_candidate_parallel(
-						|file| {
-							if is_supported_file(&file.path, self.lang) {
-								let full = {
-									let mut pending = self.pending.lock();
-									pending.push((file.path.clone(), file.relative.clone()));
-									(pending.len() >= PREFETCH_BATCH).then(|| {
-										std::mem::replace(&mut *pending, Vec::with_capacity(PREFETCH_BATCH))
-									})
-								};
-								if let Some(batch) = full {
-									self.search_batch(batch, ct)?;
-								}
-							}
-							Ok(veyyon_walker::ParallelWalkControl::Continue)
-						},
-						|| ct.heartbeat(),
-					)
-					.map_err(iofs::map_walker_error)?;
-				let rest = std::mem::take(&mut *self.pending.lock());
-				self.search_batch(rest, ct)
+	/// The same run with a parse budget of `bytes`.
+	#[cfg(test)]
+	const fn with_parse_budget(mut self, bytes: usize) -> Self {
+		self.budget = ParseBudget::new(bytes);
+		self
+	}
+
+	/// Search every file of `scope`. A tree's files are read on the walker pool
+	/// as the walk yields them, a batch at a time, and parsed on up to
+	/// `parse_threads` threads of the search's own, so a search parses on more
+	/// CPUs than the few the walker pool has, while the files being parsed hold
+	/// no more source than the run's [`ParseBudget`].
+	fn search_scope(
+		&self,
+		scope: &SearchScope,
+		parse_threads: usize,
+		ct: &task::CancelToken,
+	) -> Result<()> {
+		let request = match scope {
+			SearchScope::File(file) => {
+				return self.search_file(&file.absolute_path, &file.display_path, ct);
 			},
-		}
+			SearchScope::Tree { request, .. } => request,
+		};
+		let queue = ParseQueue::new(parse_threads);
+		let searched = std::thread::scope(|threads| {
+			let mut started = 0;
+			for _ in 0..parse_threads {
+				let spawned = std::thread::Builder::new()
+					.name("veyyon-ast-parse".to_owned())
+					.spawn_scoped(threads, || self.parse_queued(&queue, ct));
+				if spawned.is_err() {
+					break;
+				}
+				started += 1;
+			}
+			let walked = {
+				// Closed however the walk ends, so a walk that panics still lets the
+				// parse threads finish and the scope join them.
+				let _close = CloseOnDrop(&queue);
+				self.search_tree(request, (started > 0).then_some(&queue), ct)
+			};
+			// The parse threads take what the queue holds, and this thread with them.
+			self.parse_queued(&queue, ct);
+			walked
+		});
+		// The search's trees are freed and its parse threads gone: their pages
+		// go back to the kernel now rather than at the next idle release.
+		heap_pages::release_tree_sitter_pages();
+		searched?;
+		// A queued parse fails only when `ct` is cancelled, which stays cancelled:
+		// a search a parse stopped fails here.
+		ct.heartbeat()
+	}
+
+	/// Search every file the walk of `request` accepts, queueing a file that
+	/// needs a parse on `parses` while it has room.
+	fn search_tree<'s>(
+		&'s self,
+		request: &veyyon_walker::WalkRequest,
+		parses: Option<&ParseQueue<'s>>,
+		ct: &task::CancelToken,
+	) -> Result<()> {
+		request
+			.for_each_file_candidate_parallel(
+				|file| {
+					if is_supported_file(&file.path, self.lang) {
+						let full = {
+							let mut pending = self.pending.lock();
+							pending.push((file.path.clone(), file.relative.clone()));
+							(pending.len() >= PREFETCH_BATCH).then(|| {
+								std::mem::replace(&mut *pending, Vec::with_capacity(PREFETCH_BATCH))
+							})
+						};
+						if let Some(batch) = full {
+							self.search_batch(batch, parses, ct)?;
+						}
+					}
+					Ok(veyyon_walker::ParallelWalkControl::Continue)
+				},
+				|| ct.heartbeat(),
+			)
+			.map_err(iofs::map_walker_error)?;
+		let rest = std::mem::take(&mut *self.pending.lock());
+		self.search_batch(rest, parses, ct)
 	}
 
 	/// Open every file of `batch`, asking the system to read each ahead, then
 	/// search them in order: the first read waits for one file, not the batch.
-	fn search_batch(&self, batch: Vec<(PathBuf, String)>, ct: &task::CancelToken) -> Result<()> {
+	fn search_batch<'s>(
+		&'s self,
+		batch: Vec<(PathBuf, String)>,
+		parses: Option<&ParseQueue<'s>>,
+		ct: &task::CancelToken,
+	) -> Result<()> {
 		let opened: Vec<_> = batch
 			.into_iter()
 			.map(|(path, display_path)| {
@@ -738,7 +939,7 @@ impl<'a> FindRun<'a> {
 			})
 			.collect();
 		for (path, display_path, file) in opened {
-			self.search_opened(&path, &display_path, file, ct)?;
+			self.search_opened(&path, &display_path, file, parses, ct)?;
 		}
 		Ok(())
 	}
@@ -748,49 +949,142 @@ impl<'a> FindRun<'a> {
 		if !is_supported_file(path, self.lang) {
 			return Ok(());
 		}
-		self.search_opened(path, display_path, None, ct)
+		self.search_opened(path, display_path, None, None, ct)
 	}
 
 	/// Search one supported file, reading it from `file` when it is already
-	/// open and opening it by path otherwise.
-	fn search_opened(
-		&self,
+	/// open and opening it by path otherwise. A file that needs a parse holds
+	/// its share of the parse budget, then is queued on `parses` when it has
+	/// room and parsed here otherwise.
+	fn search_opened<'s>(
+		&'s self,
 		path: &Path,
 		display_path: &str,
 		file: Option<File>,
+		parses: Option<&ParseQueue<'s>>,
 		ct: &task::CancelToken,
 	) -> Result<()> {
 		self.files_searched.fetch_add(1, AtomicOrdering::Relaxed);
-		let found = match resolve_language(self.lang, path) {
-			Ok(language) => {
-				let patterns = self.patterns_for(language, ct)?;
-				// A file the batch could not open is opened again by path, so it
-				// reports the error a read by path reports.
-				let read = || match file {
-					Some(mut file) => {
-						let mut source = String::new();
-						file.read_to_string(&mut source).map(|_| source)
-					},
-					None => std::fs::read_to_string(path),
-				};
-				find_in_file(
-					read,
-					display_path,
-					language,
-					&patterns,
-					self.capacity,
-					self.include_meta,
-					ct,
-				)?
+		ct.heartbeat()?;
+		let language = match resolve_language(self.lang, path) {
+			Ok(language) => language,
+			Err(err) => {
+				self.merge(FindTally::diagnostic(display_path, err.to_string()));
+				return Ok(());
 			},
-			Err(err) => FindTally::diagnostic(display_path, err.to_string()),
 		};
+		let patterns = self.patterns_for(language, ct)?;
+		// A file the batch could not open is opened again by path, so it reports
+		// the error a read by path reports.
+		let read = || match file {
+			Some(mut file) => {
+				let mut source = String::new();
+				file.read_to_string(&mut source).map(|_| source)
+			},
+			None => std::fs::read_to_string(path),
+		};
+		let (source, runnable) = match screen_file(read, display_path, &patterns) {
+			Screened::Done(tally) => {
+				self.merge(tally);
+				return Ok(());
+			},
+			Screened::Parse { source, runnable } => (source, runnable),
+		};
+		let held = self.budget.hold(source.len());
+		let job = ParseJob {
+			source,
+			display_path: display_path.to_owned(),
+			language,
+			patterns,
+			runnable,
+			held,
+		};
+		let job = match parses {
+			Some(queue) => match queue.push(job) {
+				Ok(()) => return Ok(()),
+				Err(job) => job,
+			},
+			None => job,
+		};
+		let found = self.parse_and_find(job, ct)?;
+		self.merge(found);
+		Ok(())
+	}
+
+	/// Parse what `queue` holds until it is closed and empty.
+	fn parse_queued(&self, queue: &ParseQueue<'_>, ct: &task::CancelToken) {
+		while let Some(job) = queue.pop() {
+			// A parse fails only when `ct` is cancelled, and a cancelled `ct`
+			// stays cancelled, so the heartbeat after the search reports it.
+			if let Ok(found) = self.parse_and_find(job, ct) {
+				self.merge(found);
+			}
+		}
+	}
+
+	/// Add one file's tally to the run's.
+	fn merge(&self, found: FindTally) {
 		if !found.is_empty() {
 			let mut tally = self.tally.lock();
 			let merged = std::mem::take(&mut *tally).absorb(found, self.capacity);
 			*tally = merged;
 		}
-		Ok(())
+	}
+
+	/// Parse a screened file and search it for the patterns its source admits,
+	/// keeping the file's best `capacity` matches. The file's share of the
+	/// parse budget returns once its tree is freed.
+	fn parse_and_find(&self, job: ParseJob<'_>, ct: &task::CancelToken) -> Result<FindTally> {
+		let ParseJob { source, display_path, language, patterns, runnable, held: _held } = job;
+		let display_path = display_path.as_str();
+		ct.heartbeat()?;
+		let mut tally = FindTally::default();
+		let ast = language.document().ast_grep(source);
+		if holds_error_node(&ast.root()) {
+			tally.parse_errors.push((
+				display_path.to_owned(),
+				"parse error (syntax tree contains error nodes)".to_string(),
+			));
+		}
+		// Matches in different files differ in path, so a file numbers its own:
+		// the sequence orders two patterns' matches of one node as one pass did.
+		let mut sequence = 0u64;
+		let runnable_patterns = runnable
+			.iter()
+			.filter_map(|&index| patterns.get(index)?.as_ref().ok());
+		for compiled in runnable_patterns {
+			ct.heartbeat()?;
+			for matched in ast.root().find_all(compiled.pattern.clone()) {
+				ct.heartbeat()?;
+				tally.total_matches = tally.total_matches.saturating_add(1);
+				let range = matched.range();
+				let start = matched.start_pos();
+				let end = matched.end_pos();
+				let key = AstFindOrderKey {
+					path: display_path.to_owned(),
+					start_line: to_u32(start.line().saturating_add(1)),
+					start_column: to_u32(start.column(matched.get_node()).saturating_add(1)),
+					end_line: to_u32(end.line().saturating_add(1)),
+					end_column: to_u32(end.column(matched.get_node()).saturating_add(1)),
+					byte_start: to_u32(range.start),
+					byte_end: to_u32(range.end),
+					sequence,
+				};
+				sequence = sequence.saturating_add(1);
+				if should_retain_match(&tally.retained, self.capacity, &key) {
+					let meta_variables = self.include_meta.then(|| binding_texts(matched.get_env()));
+					retain_bounded_match(&mut tally.retained, self.capacity, RetainedAstFindMatch {
+						key,
+						text: matched.text().into_owned(),
+						meta_variables,
+					});
+				}
+			}
+		}
+		if tally.total_matches > 0 {
+			tally.files_with_matches.insert(display_path.to_owned());
+		}
+		Ok(tally)
 	}
 
 	/// The run's patterns compiled for `language`, compiled on first use.
@@ -887,7 +1181,7 @@ pub fn ast_grep(options: AstFindOptions<'_>) -> task::Promise<AstFindResult> {
 			retained_find_capacity(normalized_offset, normalized_limit),
 			include_meta.unwrap_or(false),
 		);
-		run.search_scope(&scope, &ct)?;
+		run.search_scope(&scope, parse_thread_count(), &ct)?;
 		let FindOutcome { retained, total_matches, files_with_matches, files_searched, diagnostics } =
 			run.finish();
 
@@ -991,83 +1285,49 @@ fn advise_will_read(file: &File) {
 	}
 }
 
-/// Search one file for every pattern compiled for its language, keeping its
-/// best `capacity` matches. `read` returns the file's source, and is not called
-/// when no pattern compiled for the language.
+/// What reading one file decided before any parse.
+enum Screened {
+	/// What the file reports without a parse: its read error, or nothing when
+	/// no pattern can match in it.
+	Done(FindTally),
+	/// The file's source, and the indices of the patterns whose required text
+	/// it holds.
+	Parse { source: String, runnable: Vec<usize> },
+}
+
+/// Read one file for `patterns`, the patterns compiled for its language.
+/// `read` returns the file's source, and is not called when no pattern
+/// compiled for the language.
 ///
 /// A pattern whose required text the file lacks cannot match in it, and a file
 /// no pattern can match in is not parsed, so it reports no parse error either.
-fn find_in_file(
+fn screen_file(
 	read: impl FnOnce() -> std::io::Result<String>,
 	display_path: &str,
-	language: SupportLang,
 	patterns: &[std::result::Result<LanguagePattern, String>],
-	capacity: usize,
-	include_meta: bool,
-	ct: &task::CancelToken,
-) -> Result<FindTally> {
-	ct.heartbeat()?;
-	let mut tally = FindTally::default();
+) -> Screened {
 	if !patterns.iter().any(std::result::Result::is_ok) {
-		return Ok(tally);
+		return Screened::Done(FindTally::default());
 	}
 	let source = match read() {
 		Ok(source) => source,
-		Err(err) => return Ok(FindTally::diagnostic(display_path, err.to_string())),
+		Err(err) => return Screened::Done(FindTally::diagnostic(display_path, err.to_string())),
 	};
-	let runnable_patterns: Vec<&Pattern> = patterns
+	let runnable: Vec<usize> = patterns
 		.iter()
-		.filter_map(|compiled| compiled.as_ref().ok())
-		.filter(|compiled| compiled.required.is_in(source.as_bytes()))
-		.map(|compiled| &compiled.pattern)
+		.enumerate()
+		.filter(|(_, compiled)| {
+			compiled
+				.as_ref()
+				.is_ok_and(|compiled| compiled.required.is_in(source.as_bytes()))
+		})
+		.map(|(index, _)| index)
 		.collect();
-	if runnable_patterns.is_empty() {
-		return Ok(tally);
+	if runnable.is_empty() {
+		Screened::Done(FindTally::default())
+	} else {
+		Screened::Parse { source, runnable }
 	}
-
-	let ast = language.document().ast_grep(source);
-	if holds_error_node(&ast.root()) {
-		tally.parse_errors.push((
-			display_path.to_owned(),
-			"parse error (syntax tree contains error nodes)".to_string(),
-		));
-	}
-	// Matches in different files differ in path, so a file numbers its own:
-	// the sequence orders two patterns' matches of one node as one pass did.
-	let mut sequence = 0u64;
-	for pattern in runnable_patterns {
-		ct.heartbeat()?;
-		for matched in ast.root().find_all(pattern.clone()) {
-			ct.heartbeat()?;
-			tally.total_matches = tally.total_matches.saturating_add(1);
-			let range = matched.range();
-			let start = matched.start_pos();
-			let end = matched.end_pos();
-			let key = AstFindOrderKey {
-				path: display_path.to_owned(),
-				start_line: to_u32(start.line().saturating_add(1)),
-				start_column: to_u32(start.column(matched.get_node()).saturating_add(1)),
-				end_line: to_u32(end.line().saturating_add(1)),
-				end_column: to_u32(end.column(matched.get_node()).saturating_add(1)),
-				byte_start: to_u32(range.start),
-				byte_end: to_u32(range.end),
-				sequence,
-			};
-			sequence = sequence.saturating_add(1);
-			if should_retain_match(&tally.retained, capacity, &key) {
-				let meta_variables = include_meta.then(|| binding_texts(matched.get_env()));
-				retain_bounded_match(&mut tally.retained, capacity, RetainedAstFindMatch {
-					key,
-					text: matched.text().into_owned(),
-					meta_variables,
-				});
-			}
-		}
-	}
-	if tally.total_matches > 0 {
-		tally.files_with_matches.insert(display_path.to_owned());
-	}
-	Ok(tally)
 }
 
 /// Match ast-grep patterns against an in-memory source string; returns a
@@ -1519,21 +1779,26 @@ mod tests {
 		let run = FindRun::new(patterns, None, None, &strictness, usize::MAX, true);
 		let scope = resolve_scope(Some(root.to_string_lossy().into_owned()), None)
 			.expect("the scope should resolve");
-		run.search_scope(&scope, &task::CancelToken::default())
+		run.search_scope(&scope, 2, &task::CancelToken::default())
 			.expect("the search should succeed");
 		run.finish()
 	}
 
 	/// WHY: a structure search walked its tree into a list and then searched
 	/// the list. It now searches each file as the parallel walk yields it, in
-	/// no fixed order, and merges each file's tally under a lock.
+	/// no fixed order, parses it on a parse thread or on the walk thread that
+	/// read it, whichever has room, and merges each file's tally under a lock.
 	///
-	/// The class this closes is any difference the arrival order or the merge
-	/// makes: a match kept or dropped at the page boundary, the order of two
-	/// patterns' matches of one node, a count, a matched file, the file count,
-	/// or a diagnostic out of path order. The reference searches the files one
-	/// after another in path order with nothing bounded; the streamed search
-	/// must give its result for every page window.
+	/// The class this closes is any difference the arrival order, the thread
+	/// that parses or the merge makes: a match kept or dropped at the page
+	/// boundary, the order of two patterns' matches of one node, a count, a
+	/// matched file, the file count, or a diagnostic out of path order. The
+	/// reference searches the files one after another in path order with
+	/// nothing bounded; the streamed search must give its result for every page
+	/// window with no parse thread, with one, whose one-file queue leaves most
+	/// parses to the walk threads, and with several, under a parse budget that
+	/// admits every file, one that admits a few, and one that admits one parse
+	/// at a time; and it must return every share of its budget it held.
 	///
 	/// What it does not catch: a cancellation that lands mid-search, which
 	/// fails the search either way and which the search-abort suite drives.
@@ -1633,28 +1898,200 @@ mod tests {
 		);
 
 		let scope = resolve_scope(root_path, None).expect("the scope should resolve");
-		for (offset, limit) in [(0, 1), (0, 7), (3, 5), (40, 100), (0, 1000), (1500, 400), (0, 5000)]
+		for (parse_threads, budget) in [0, 1, 3]
+			.into_iter()
+			.flat_map(|threads| [PARSE_SOURCE_BUDGET, 256, 1].map(|budget| (threads, budget)))
 		{
-			let capacity = retained_find_capacity(offset, limit);
-			let expected: Vec<FoundView> = all
-				.iter()
-				.skip(offset as usize)
-				.take(limit as usize)
-				.map(view)
-				.collect();
-			let case = format!("offset {offset}, limit {limit}");
-			let run = FindRun::new(&patterns, None, None, &strictness, capacity, true);
-			run.search_scope(&scope, &ct)
-				.expect("the search should succeed");
-			let outcome = run.finish();
-			assert_eq!(outcome.total_matches, total, "{case}: total");
-			assert_eq!(outcome.files_with_matches, files, "{case}: files");
-			assert_eq!(outcome.files_searched, files_searched, "{case}: files searched");
-			assert_eq!(outcome.diagnostics, errors, "{case}: diagnostics");
-			let (page, limit_reached) = page_retained_matches(outcome.retained, offset, limit);
-			assert_eq!(page.iter().map(view).collect::<Vec<_>>(), expected, "{case}: page");
-			assert_eq!(limit_reached, all.len() > (offset + limit) as usize, "{case}: limit reached");
+			for (offset, limit) in
+				[(0, 1), (0, 7), (3, 5), (40, 100), (0, 1000), (1500, 400), (0, 5000)]
+			{
+				let capacity = retained_find_capacity(offset, limit);
+				let expected: Vec<FoundView> = all
+					.iter()
+					.skip(offset as usize)
+					.take(limit as usize)
+					.map(view)
+					.collect();
+				let case = format!(
+					"{parse_threads} parse threads, budget {budget}, offset {offset}, limit {limit}"
+				);
+				let run = FindRun::new(&patterns, None, None, &strictness, capacity, true)
+					.with_parse_budget(budget);
+				run.search_scope(&scope, parse_threads, &ct)
+					.expect("the search should succeed");
+				assert_eq!(*run.budget.free.lock(), budget, "{case}: every share returned");
+				let most_held = run.budget.most_held.load(AtomicOrdering::Relaxed);
+				assert!(most_held > 0 && most_held <= budget, "{case}: held {most_held} at most");
+				let outcome = run.finish();
+				assert_eq!(outcome.total_matches, total, "{case}: total");
+				assert_eq!(outcome.files_with_matches, files, "{case}: files");
+				assert_eq!(outcome.files_searched, files_searched, "{case}: files searched");
+				assert_eq!(outcome.diagnostics, errors, "{case}: diagnostics");
+				let (page, limit_reached) = page_retained_matches(outcome.retained, offset, limit);
+				assert_eq!(page.iter().map(view).collect::<Vec<_>>(), expected, "{case}: page");
+				assert_eq!(
+					limit_reached,
+					all.len() > (offset + limit) as usize,
+					"{case}: limit reached"
+				);
+			}
 		}
+	}
+
+	fn parse_job<'b>(budget: &'b ParseBudget, display_path: &str) -> ParseJob<'b> {
+		ParseJob {
+			source:       String::new(),
+			display_path: display_path.to_owned(),
+			language:     SupportLang::TypeScript,
+			patterns:     Arc::from(Vec::new()),
+			runnable:     Vec::new(),
+			held:         budget.hold(0),
+		}
+	}
+
+	/// Whether a share of `bytes` is taken within `wait`, on a thread of its own
+	/// that keeps it until the returned sender sends or drops. The thread is
+	/// detached, so a share that never comes fails the test instead of hanging
+	/// it.
+	fn holds_within(
+		budget: &Arc<ParseBudget>,
+		bytes: usize,
+		wait: std::time::Duration,
+	) -> (bool, std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>) {
+		let (held_tx, held_rx) = std::sync::mpsc::channel();
+		let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+		let budget = Arc::clone(budget);
+		std::thread::spawn(move || {
+			let _hold = budget.hold(bytes);
+			let _ = held_tx.send(());
+			let _ = release_rx.recv();
+		});
+		(held_rx.recv_timeout(wait).is_ok(), release_tx, held_rx)
+	}
+
+	/// WHY: a search's parse threads and walk threads parse at once, and each
+	/// syntax tree takes tens of times its source, so the files being parsed
+	/// hold no more source than the search's budget. A share waits while the
+	/// rest is held and is taken once a holder returns its own; a file larger
+	/// than the whole budget takes all of it and parses alone instead of
+	/// waiting forever; and a returned share is free again.
+	///
+	/// What it does not catch: that a search holds a share for each parse,
+	/// which the streamed-search suite checks.
+	#[test]
+	fn a_parse_budget_admits_what_it_holds_and_an_oversized_parse_alone() {
+		let short = std::time::Duration::from_millis(50);
+		let long = std::time::Duration::from_secs(10);
+		let budget = Arc::new(ParseBudget::new(10));
+
+		let first = budget.hold(6);
+		let (held, release_second, second_held) = holds_within(&budget, 6, short);
+		assert!(!held, "a share larger than what is free waits");
+		drop(first);
+		assert!(second_held.recv_timeout(long).is_ok(), "a returned share admits it");
+		drop(release_second);
+
+		let (held, release_oversized, _) = holds_within(&budget, 25, long);
+		assert!(held, "a file larger than the budget parses once the budget is free");
+		let (held, release_small, small_held) = holds_within(&budget, 1, short);
+		assert!(!held, "nothing else parses beside it");
+		drop(release_oversized);
+		assert!(small_held.recv_timeout(long).is_ok(), "its return admits the rest");
+		drop(release_small);
+
+		let (held, _release_all, _) = holds_within(&budget, 10, long);
+		assert!(held, "every returned share is free again");
+	}
+
+	/// WHY: a search's trees come from mimalloc, which keeps the pages of a
+	/// freed tree mapped until a thread that allocates checks again. Once a
+	/// tree search ends no thread parses, so a session would hold the pages of
+	/// every tree the search built until its idle release. The child holds
+	/// freed pages for a minute, so nothing but the search's own release
+	/// returns them within the test.
+	///
+	/// What it does not catch: a single-file search, which builds one tree on
+	/// the calling thread and leaves its pages to the idle release.
+	#[cfg(all(target_os = "linux", target_env = "gnu"))]
+	#[test]
+	fn a_finished_tree_search_keeps_none_of_its_trees_resident() {
+		use crate::heap_pages::measure::{anon_resident, in_child};
+		let name = "a_finished_tree_search_keeps_none_of_its_trees_resident";
+		if !in_child(module_path!(), name, &[("MIMALLOC_PURGE_DELAY", "60000")]) {
+			return;
+		}
+		let root = veyyon_test_scratch::scratch_dir("natives-ast-search-release");
+		for index in 0..8 {
+			fs::write(root.join(format!("f{index}.ts")), "foo(1);\n".repeat(50_000))
+				.expect("fixture file should be written");
+		}
+		let scope = resolve_scope(Some(root.path().to_string_lossy().into_owned()), None)
+			.expect("the scope should resolve");
+		let strictness = MatchStrictness::Smart;
+		let patterns = ["foo($A)".to_owned()];
+		let run = FindRun::new(&patterns, None, None, &strictness, 1, false);
+		let (before, peak_before) = anon_resident();
+		run.search_scope(&scope, 3, &task::CancelToken::default())
+			.expect("the search should succeed");
+		let (after, peak_after) = anon_resident();
+		assert_eq!(run.finish().total_matches, 400_000);
+		let peak = peak_after.saturating_sub(peak_before);
+		let left = after.saturating_sub(before);
+		assert!(peak >= 32 << 20, "the search's trees took {peak} bytes at most");
+		assert!(left * 8 <= peak, "the search left {left} of {peak} bytes resident");
+	}
+
+	/// WHY: a tree search queues the files its walk read for its parse threads,
+	/// and the walk can read far faster than they parse. The queue holds at most
+	/// its capacity, handing a file back to the walk thread that read it beyond
+	/// that, so the sources held at once stay bounded; and closing it releases
+	/// every thread waiting on it once what it holds is taken, or the search's
+	/// thread scope never joins.
+	///
+	/// What it does not catch: which thread parses a file, which changes no
+	/// result and which the streamed-search suite sweeps.
+	#[test]
+	fn a_parse_queue_holds_its_capacity_and_a_close_releases_its_threads() {
+		let budget = ParseBudget::new(PARSE_SOURCE_BUDGET);
+		let queue = ParseQueue::new(2);
+		assert!(queue.push(parse_job(&budget, "a.ts")).is_ok());
+		assert!(queue.push(parse_job(&budget, "b.ts")).is_ok());
+		let refused = queue
+			.push(parse_job(&budget, "c.ts"))
+			.expect_err("a full queue hands the file back");
+		assert_eq!(refused.display_path, "c.ts");
+		assert_eq!(queue.pop().map(|job| job.display_path).as_deref(), Some("a.ts"));
+		assert!(queue.push(parse_job(&budget, "c.ts")).is_ok(), "a taken file makes room");
+
+		let (taken, waiting) = std::thread::scope(|threads| {
+			let waiters: Vec<_> = (0..3)
+				.map(|_| {
+					threads.spawn(|| {
+						let mut taken = Vec::new();
+						while let Some(job) = queue.pop() {
+							taken.push(job.display_path);
+						}
+						taken
+					})
+				})
+				.collect();
+			std::thread::sleep(std::time::Duration::from_millis(50));
+			let waiting = waiters
+				.iter()
+				.filter(|waiter| !waiter.is_finished())
+				.count();
+			queue.close();
+			let mut taken: Vec<String> = waiters
+				.into_iter()
+				.flat_map(|waiter| waiter.join().expect("a parse thread should not panic"))
+				.collect();
+			taken.sort();
+			(taken, waiting)
+		});
+		assert_eq!(waiting, 3, "an open queue keeps its threads waiting for files");
+		assert_eq!(taken, ["b.ts", "c.ts"]);
+		assert!(queue.push(parse_job(&budget, "d.ts")).is_err(), "a closed queue takes no file");
+		assert!(queue.pop().is_none());
 	}
 
 	#[test]

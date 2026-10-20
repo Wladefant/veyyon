@@ -64,6 +64,10 @@ xxhash-rust.workspace = true
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+libmimalloc-sys.workspace = true
+tree-sitter.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Wdk_Storage_FileSystem", "Win32_Security"] }
 clipboard-win.workspace = true

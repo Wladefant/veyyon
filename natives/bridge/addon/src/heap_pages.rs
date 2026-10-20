@@ -40,11 +40,20 @@
 //! A block of [`MMAP_THRESHOLD`] or more is mapped on its own and unmapped
 //! when freed.
 //!
-//! The arena cap, the threshold and the trim are glibc Linux only. Elsewhere
-//! the release drops expired scans and resolves true only when it dropped one:
-//! musl returns free pages to the kernel when a chunk is freed, the macOS
-//! allocator releases emptied regions on its own, and Windows heaps decommit
-//! free pages past a threshold.
+//! [`route_tree_sitter_allocations`] sends tree-sitter's allocations to
+//! mimalloc when the addon loads. A tree search parses on a thread per core,
+//! and under the arena cap those threads wait on each other's arena locks: 16
+//! parse threads searching 282 000 PHP files switched context 1 045 000 times.
+//! mimalloc gives each thread a heap of its own and keeps a freed page mapped
+//! for a second, for the next parse to reuse. [`release_tree_sitter_pages`]
+//! returns every freed page at once: a tree search calls it when it ends, and
+//! the release calls it too.
+//!
+//! The arena cap, the threshold, mimalloc and the trim are glibc Linux only.
+//! Elsewhere the release drops expired scans and resolves true only when it
+//! dropped one: musl returns free pages to the kernel when a chunk is freed,
+//! the macOS allocator releases emptied regions on its own, and Windows heaps
+//! decommit free pages past a threshold.
 
 use napi_derive::napi;
 
@@ -99,6 +108,43 @@ pub fn pin_mmap_threshold() {
 	}
 }
 
+/// Routes tree-sitter's allocations to mimalloc.
+///
+/// Runs from the addon's module initializer, before any tree-sitter object
+/// exists, so every tree-sitter allocation is freed by the allocator that made
+/// it.
+pub fn route_tree_sitter_allocations() {
+	#[cfg(all(target_os = "linux", target_env = "gnu"))]
+	// SAFETY: no tree-sitter object exists yet: the initializer runs before any
+	// export can parse, so no block glibc allocated reaches `mi_free`.
+	unsafe {
+		tree_sitter::set_allocator(
+			Some(libmimalloc_sys::mi_malloc),
+			Some(libmimalloc_sys::mi_calloc),
+			Some(libmimalloc_sys::mi_realloc),
+			Some(libmimalloc_sys::mi_free),
+		);
+	}
+}
+
+/// Returns the pages tree-sitter freed to the kernel.
+///
+/// mimalloc keeps a freed page mapped for a second in case the next parse
+/// reuses it, and drops it only when a thread that allocates checks again, so
+/// the trees of a finished search stay resident while no thread parses.
+/// `mi_collect` drops every freed page of the process at once, but returns at
+/// once on a thread mimalloc has not set up, which a thread pool thread that
+/// never parsed is; `mi_thread_init` sets the calling thread up first.
+pub fn release_tree_sitter_pages() {
+	#[cfg(all(target_os = "linux", target_env = "gnu"))]
+	// SAFETY: `mi_thread_init` and `mi_collect` take no pointers and lock what
+	// they walk, so both are sound to call from any thread at any time.
+	unsafe {
+		libmimalloc_sys::mi_thread_init();
+		libmimalloc_sys::mi_collect(true);
+	}
+}
+
 /// Drops expired cached scans and returns free heap pages to the kernel.
 ///
 /// Runs on libuv's thread pool: drops the walker's expired cached scans, then
@@ -116,15 +162,62 @@ fn release_heap() -> bool {
 }
 
 fn trim_arenas() -> bool {
+	release_tree_sitter_pages();
 	#[cfg(all(target_os = "linux", target_env = "gnu"))]
 	{
-		// SAFETY: `malloc_trim` takes no pointers and locks each arena while it
-		// walks it, so it is sound to call from any thread at any time.
+		// SAFETY: `malloc_trim` takes no pointers and locks each arena it
+		// walks, so it is sound to call from any thread at any time.
 		unsafe { libc::malloc_trim(0) != 0 }
 	}
 	#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 	{
 		false
+	}
+}
+
+/// What a test that measures the process's memory needs.
+#[cfg(all(test, target_os = "linux", target_env = "gnu"))]
+pub mod measure {
+	/// Runs the test `name` of `module` alone in a child process with `env` set.
+	///
+	/// Returns true in the child, so the measurement sees only that test's
+	/// allocations, and false in the parent after checking that the child
+	/// passed.
+	pub fn in_child(module: &str, name: &str, env: &[(&str, &str)]) -> bool {
+		const CHILD: &str = "VEYYON_HEAP_PAGES_TEST_CHILD";
+		if std::env::var_os(CHILD).is_some() {
+			return true;
+		}
+		let module = module.split_once("::").map_or(module, |(_, rest)| rest);
+		let name = format!("{module}::{name}");
+		let output = std::process::Command::new(std::env::current_exe().unwrap())
+			.args([name.as_str(), "--exact", "--test-threads=1"])
+			.env(CHILD, "1")
+			.envs(env.iter().copied())
+			.output()
+			.unwrap();
+		let stdout = String::from_utf8_lossy(&output.stdout);
+		assert!(
+			output.status.success() && stdout.contains("test result: ok. 1 passed"),
+			"{stdout}{}",
+			String::from_utf8_lossy(&output.stderr)
+		);
+		false
+	}
+
+	/// The process's resident anonymous memory now and its peak resident
+	/// memory so far, in bytes.
+	pub fn anon_resident() -> (usize, usize) {
+		let status = std::fs::read_to_string("/proc/self/status").unwrap();
+		let field = |name: &str| {
+			let line = status
+				.lines()
+				.find_map(|line| line.strip_prefix(name))
+				.unwrap_or_else(|| panic!("/proc/self/status has no {name}"));
+			let kib: usize = line.trim().trim_end_matches(" kB").parse().unwrap();
+			kib << 10
+		};
+		(field("RssAnon:"), field("VmHWM:"))
 	}
 }
 
@@ -135,7 +228,13 @@ fn trim_arenas() -> bool {
 /// pages directly, so allocation elsewhere in the process does not move it.
 #[cfg(all(test, target_os = "linux", target_env = "gnu"))]
 mod tests {
-	use super::trim_arenas;
+	use ast_grep_core::tree_sitter::LanguageExt;
+	use veyyon_ast::SupportLang;
+
+	use super::{
+		measure::{anon_resident, in_child},
+		trim_arenas,
+	};
 
 	const BLOCK: usize = 64 * 1024;
 	const BLOCKS: usize = 512;
@@ -174,34 +273,6 @@ mod tests {
 		(resident, total)
 	}
 
-	/// Runs the test named `name` alone in a child process with `env` set and
-	/// returns true there, so the measurement sees only that test's
-	/// allocations; returns false in the parent after checking that the child
-	/// passed.
-	fn in_child(name: &str, env: &[(&str, &str)]) -> bool {
-		const CHILD: &str = "VEYYON_HEAP_PAGES_TEST_CHILD";
-		if std::env::var_os(CHILD).is_some() {
-			return true;
-		}
-		let module = module_path!()
-			.split_once("::")
-			.map_or(module_path!(), |(_, rest)| rest);
-		let name = format!("{module}::{name}");
-		let output = std::process::Command::new(std::env::current_exe().unwrap())
-			.args([name.as_str(), "--exact", "--test-threads=1"])
-			.env(CHILD, "1")
-			.envs(env.iter().copied())
-			.output()
-			.unwrap();
-		let stdout = String::from_utf8_lossy(&output.stdout);
-		assert!(
-			output.status.success() && stdout.contains("test result: ok. 1 passed"),
-			"{stdout}{}",
-			String::from_utf8_lossy(&output.stderr)
-		);
-		false
-	}
-
 	/// Resident and total pages of a 2 MiB block a worker thread frees after
 	/// freeing an 8 MiB one, with a later block keeping the arena's top in use.
 	fn freed_block_residency() -> (usize, usize) {
@@ -226,7 +297,7 @@ mod tests {
 	/// resident, whatever was freed before it.
 	#[test]
 	fn a_freed_block_of_a_mebibyte_leaves_no_page_resident() {
-		if !in_child("a_freed_block_of_a_mebibyte_leaves_no_page_resident", &[]) {
+		if !in_child(module_path!(), "a_freed_block_of_a_mebibyte_leaves_no_page_resident", &[]) {
 			return;
 		}
 		let (resident, total) = freed_block_residency();
@@ -239,7 +310,7 @@ mod tests {
 	#[test]
 	fn an_explicit_mmap_threshold_stays_in_force() {
 		let env = [("MALLOC_MMAP_THRESHOLD_", "33554432")];
-		if !in_child("an_explicit_mmap_threshold_stays_in_force", &env) {
+		if !in_child(module_path!(), "an_explicit_mmap_threshold_stays_in_force", &env) {
 			return;
 		}
 		let (resident, total) = freed_block_residency();
@@ -257,7 +328,7 @@ mod tests {
 	/// that holds only this test.
 	#[test]
 	fn the_release_returns_the_pages_a_worker_thread_freed() {
-		if !in_child("the_release_returns_the_pages_a_worker_thread_freed", &[]) {
+		if !in_child(module_path!(), "the_release_returns_the_pages_a_worker_thread_freed", &[]) {
 			return;
 		}
 		std::thread::spawn(|| {
@@ -286,6 +357,38 @@ mod tests {
 		})
 		.join()
 		.unwrap();
+	}
+
+	/// WHY: tree-sitter allocates from mimalloc, which keeps the pages of a
+	/// freed tree mapped until a thread that allocates checks again, and whose
+	/// `mi_collect` does nothing on a thread it has not set up. The idle
+	/// release runs on a thread pool thread that may never have parsed, and
+	/// must still return the pages of every tree a finished parse freed. The
+	/// child holds freed pages for a minute, so nothing but the release
+	/// returns them within the test.
+	///
+	/// What it does not catch: a tree a search keeps alive, which no release
+	/// can return.
+	#[test]
+	fn the_release_returns_tree_sitter_pages_from_a_thread_that_never_parsed() {
+		let name = "the_release_returns_tree_sitter_pages_from_a_thread_that_never_parsed";
+		if !in_child(module_path!(), name, &[("MIMALLOC_PURGE_DELAY", "60000")]) {
+			return;
+		}
+		let (before, _) = anon_resident();
+		let source = "foo(1);\n".repeat(200_000);
+		std::thread::spawn(move || drop(SupportLang::TypeScript.document().ast_grep(source)))
+			.join()
+			.unwrap();
+		let freed = anon_resident().0.saturating_sub(before);
+		assert!(freed >= 32 << 20, "a freed tree stays resident until the release: {freed} bytes");
+		let released = std::thread::spawn(move || {
+			trim_arenas();
+			anon_resident().0.saturating_sub(before)
+		})
+		.join()
+		.unwrap();
+		assert!(released * 8 <= freed, "the release left {released} of {freed} bytes resident");
 	}
 }
 

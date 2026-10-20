@@ -26,6 +26,7 @@ pub mod appearance;
 pub mod ast;
 pub mod block;
 pub mod clipboard;
+mod cores;
 pub mod cpu_budget;
 pub mod crash_handler;
 pub mod embedded_pages;
@@ -289,6 +290,7 @@ fn init_native_module() {
 	crash_handler::install();
 	heap_pages::cap_arenas();
 	heap_pages::pin_mmap_threshold();
+	heap_pages::route_tree_sitter_allocations();
 	highlight::bound_regex_retries();
 }
 
