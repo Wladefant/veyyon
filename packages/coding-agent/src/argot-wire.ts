@@ -17,6 +17,7 @@ import { type ArgotGate, makeGate } from "argot/policy";
 import type { ArgotSession } from "argot/session";
 import { makeStreamDecoder, type StreamDecoder } from "argot/stream";
 import type { Vocabulary } from "argot/types";
+import { stripThinkingSelector } from "./config/model-resolver";
 import { type JsonWithOptionalFields, mapJsonStrings } from "./json-transform";
 import { mapAgentMessageStrings, mapAssistantContentStrings } from "./secrets/obfuscator";
 
@@ -24,12 +25,25 @@ import { mapAgentMessageStrings, mapAssistantContentStrings } from "./secrets/ob
  * Adapt veyyon's three settings fields to an argot gate. The gate SHAPE and its
  * on/off + defaulting rules live in argot's {@link makeGate} (the one home for
  * that construction, so a future gate field is added once, in argot, not
- * re-derived here); this wrapper only reshapes the harness's positional settings
- * into argot's options object. When the feature is off the gate is argot's shared
+ * re-derived here); this wrapper reshapes the harness's positional settings into
+ * argot's options object. When the feature is off the gate is argot's shared
  * inert gate. Decoding never consults the gate.
+ *
+ * An allowlist entry may carry a thinking selector (`anthropic/claude-opus-5-5:high`),
+ * the same `provider/id:level` spelling every other veyyon model setting takes, but
+ * the gate compares against the active model's bare `provider/id`. So each entry that
+ * ends in a thinking level also admits its base id. The entry itself stays on the list,
+ * because a few catalog ids end in a level-shaped suffix as part of the id
+ * (`nanogpt/nanogpt/coding-router:high`). Without the base id, a selector-spelled entry
+ * never matched and the model was never taught a handle.
  */
 export function buildArgotGate(enabled: boolean, models: readonly string[], disableAboveTokens: number): ArgotGate {
-	return makeGate(enabled, { models, disableAboveTokens });
+	const allowed = new Set<string>();
+	for (const entry of models) {
+		allowed.add(entry);
+		allowed.add(stripThinkingSelector(entry));
+	}
+	return makeGate(enabled, { models: [...allowed], disableAboveTokens });
 }
 
 /** Expand handles in a tool call's arguments before the tool runs. Identity until a dict loads. */

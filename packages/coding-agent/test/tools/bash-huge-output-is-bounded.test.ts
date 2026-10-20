@@ -36,11 +36,7 @@ import { DEFAULT_MAX_BYTES } from "@veyyon/coding-agent/session/streaming-output
 // The real shape the tool emits. A local all-optional copy used to stand here,
 // which let every assertion in this file read a field the type said might not
 // exist, so nothing could prove one was actually populated.
-<<<<<<< HEAD
 import type { OutputMeta, TruncationMeta } from "@veyyon/coding-agent/tools/core/output-meta";
-=======
-import type { TruncationMeta } from "@veyyon/coding-agent/tools/core/output-notice";
->>>>>>> santhreal/main
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { removeWithRetries } from "@veyyon/utils";
 import { useIsolatedGlobalSettings } from "../helpers/isolated-global-settings";

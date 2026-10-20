@@ -493,9 +493,11 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 			if (moved) await this.#returnTab(name, moved, timeoutMs, error);
 			throw error;
 		} finally {
-			if (!result && browser && browser.refCount === 0) {
+			// The lease `acquireBrowser` took ends here. A tab that opened holds the browser itself, so only a
+			// failed open can drop the last reference, and then the browser is disposed.
+			if (browser) {
 				await releaseBrowser(browser, { kill: true }).catch(err => {
-					logger.debug("Failed to release browser after failed acquisition", { error: errorMessage(err) });
+					logger.debug("Failed to release browser lease", { error: errorMessage(err) });
 				});
 			}
 		}
@@ -587,14 +589,21 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 				cwd: this.session.cwd,
 				ownerSessionId: this.session.getSessionId?.() ?? undefined,
 			});
-			await acquireTab(name, browser, {
-				url: moved.url,
-				timeoutMs,
-				dialogs: moved.dialogs,
-				context: moved.context,
-				storageState: moved.state,
-				ownerSessionId: this.session.getSessionId?.() ?? undefined,
-			});
+			try {
+				await acquireTab(name, browser, {
+					url: moved.url,
+					timeoutMs,
+					dialogs: moved.dialogs,
+					context: moved.context,
+					storageState: moved.state,
+					ownerSessionId: this.session.getSessionId?.() ?? undefined,
+				});
+			} finally {
+				// The lease `acquireBrowser` took; a tab that opened holds the browser, so this drops only the lease.
+				await releaseBrowser(browser, { kill: true }).catch(err => {
+					logger.debug("Failed to release browser lease after returning a tab", { error: errorMessage(err) });
+				});
+			}
 			if (stated) {
 				error.message += `\nTab ${JSON.stringify(name)} is back on ${describeKind(moved.from)} with its session.`;
 			}
