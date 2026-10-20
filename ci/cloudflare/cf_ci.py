@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 import time
 import urllib.error
@@ -80,7 +81,7 @@ def _validated_counts(counts: Dict[str, int], chunks: int) -> Dict[str, int]:
 
 
 def parse_bun_summary(log: str) -> Dict[str, int]:
-    """Parse the Cloudflare lane's final summary or its targeted-runner records."""
+    """Parse the Cloudflare lane's final CLOUDFLARE_TEST_SUMMARY; targeted-runner records are validated only."""
     summary_lines = [line for line in log.splitlines() if line.startswith("CLOUDFLARE_TEST_SUMMARY ")]
     run_lines = [line for line in log.splitlines() if line.startswith("CLOUDFLARE_CI_TEST_COUNTS ")]
     if len(summary_lines) > 1:
@@ -116,16 +117,8 @@ def parse_bun_summary(log: str) -> Dict[str, int]:
         )
         return _validated_counts(counts, counts["chunks_pass"] + counts["chunks_fail"])
 
-    if run_counts:
-        total_counts = {
-            name: sum(counts[name] for counts in run_counts)
-            for name in ("pass", "fail", "skip", "todo", "tests", "reported", "files", "runs")
-        }
-        return _validated_counts(total_counts, total_counts["runs"])
-
     raise ValueError(
-        "Bun test summary missing or malformed: expected CLOUDFLARE_TEST_SUMMARY "
-        "or CLOUDFLARE_CI_TEST_COUNTS"
+        "Bun test summary missing or malformed: expected one CLOUDFLARE_TEST_SUMMARY lane summary"
     )
 
 
@@ -418,7 +411,7 @@ def main(args: Optional[List[str]] = None) -> int:
             gate = "PASS" if status == "stopped" and outcome == "success" and failed == 0 and passed > 0 else "FAIL"
             logs_url = f"https://dash.cloudflare.com/{ns.account_id}/workers/services/view/{build.get('script_tag', 'ci')}/production/builds/{ns.build_id}"
 
-            publish_github_commit_status(
+            published = publish_github_commit_status(
                 owner=owner,
                 repo=repo,
                 sha=ns.expected_sha,
@@ -426,9 +419,11 @@ def main(args: Optional[List[str]] = None) -> int:
                 description=f"Bun test {gate}: pass={passed} fail={failed} skip={skipped} (exact head {ns.expected_sha[:8]})",
                 target_url=logs_url,
             )
+            if published.get("status") == "skipped":
+                raise BuildError("GitHub commit status was not published (no GitHub token available); refusing to exit PASS")
 
             print(f"gate={gate} build_id={ns.build_id} head={ns.expected_sha} outcome={outcome} logs={logs_url}")
-            print(f"bun_passed={passed} bun_failed={failed} bun_skipped={skipped}")
+            print(f"tests_passed={passed} tests_failed={failed} tests_skipped={skipped}")
             return 0 if gate == "PASS" else 1
         except Exception as error:
             try:

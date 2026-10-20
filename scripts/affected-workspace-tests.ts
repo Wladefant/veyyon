@@ -339,7 +339,7 @@ export interface CiContractTestTarget {
 
 interface CiContractTestRule {
 	matches: (file: string) => boolean;
-	targets: (file: string) => readonly CiContractTestTarget[];
+	targets: (file: string, headTrackedPaths: ReadonlySet<string>) => readonly CiContractTestTarget[];
 }
 
 const ciContractTargets = (
@@ -374,7 +374,8 @@ const CI_CONTRACT_TEST_MAP: readonly CiContractTestRule[] = [
 	},
 	{
 		matches: file => file.startsWith("scripts/") && /\.test\.[cm]?[jt]sx?$/i.test(file),
-		targets: file => ciContractTargets("bun", [file]),
+		// A deleted or renamed-away test has no copy at HEAD, so only a tracked file becomes a target.
+		targets: (file, headTrackedPaths) => (headTrackedPaths.has(file) ? ciContractTargets("bun", [file]) : []),
 	},
 	{
 		matches: file => file.startsWith("ci/cloudflare/"),
@@ -392,14 +393,22 @@ const CI_CONTRACT_TEST_MAP: readonly CiContractTestRule[] = [
 	},
 ];
 
-export function ciContractTestsForPaths(paths: readonly string[]): CiContractTestTarget[] {
+/**
+ * Contract targets implied by changed paths. A changed `scripts/*.test.*` path maps to a target only
+ * when `headTrackedPaths` (files tracked at HEAD) still holds it, so explicit targets never name a
+ * file that the run cannot find.
+ */
+export function ciContractTestsForPaths(
+	paths: readonly string[],
+	headTrackedPaths: ReadonlySet<string>,
+): CiContractTestTarget[] {
 	const targets = new Map<string, CiContractTestTarget>();
 	for (const rawPath of paths) {
 		const file = normalizedGitPath(rawPath);
 		if (!file) continue;
 		for (const rule of CI_CONTRACT_TEST_MAP) {
 			if (!rule.matches(file)) continue;
-			for (const target of rule.targets(file)) {
+			for (const target of rule.targets(file, headTrackedPaths)) {
 				targets.set(`${target.runner}:${target.path}`, target);
 			}
 		}
@@ -411,7 +420,15 @@ function isCiContractOwnedPath(file: string): boolean {
 	return CI_CONTRACT_TEST_MAP.some(rule => rule.matches(file));
 }
 
-/** Return the conservative all-mode reason for a changed path, if one applies. */
+/**
+ * Return the conservative all-mode reason for a changed path, if one applies.
+ *
+ * Contract rule: a path owned by `CI_CONTRACT_TEST_MAP` (runner, selector, sandbox, `ci/cloudflare/`
+ * and `scripts/` test files) returns no full-mode reason. Its contract tests run instead, so the
+ * related selection stays narrow. Only paths with no contract owner reach the branches below, and
+ * GitHub workflow files are the one runner-side surface left without a contract rule, so they keep
+ * the full-coverage fallback here.
+ */
 export function fullTriggerReason(file: string): string | undefined {
 	const normalized = normalizedGitPath(file);
 	if (!normalized) return "changed path is not a safe repository-relative path";
@@ -425,15 +442,8 @@ export function fullTriggerReason(file: string): string | undefined {
 		return "Rust manifest changes can affect cross-language consumers";
 	}
 	if (normalized.startsWith("contracts/")) return "contract changes affect shared boundaries";
-	if (
-		normalized === "scripts/ci-test-ts.ts" ||
-		normalized === "scripts/affected-workspace-tests.ts" ||
-		normalized === "scripts/workspace-layout.ts" ||
-		normalized.startsWith("scripts/test-sandbox/") ||
-		normalized.startsWith("ci/cloudflare/") ||
-		normalized.startsWith(".github/workflows/")
-	) {
-		return "runner, selector, sandbox, or workflow changes require full coverage";
+	if (normalized.startsWith(".github/workflows/")) {
+		return "workflow changes require full coverage";
 	}
 	if (
 		normalized.startsWith("natives/") ||
@@ -1097,6 +1107,25 @@ export async function workingTreeDrift(
 		await git(["ls-files", "--others", "--exclude-standard", "-z", "--", ...directories], commandOptions),
 	);
 	return [...new Set([...tracked, ...untracked.filter(isTestFile)])].sort();
+}
+
+/**
+ * Paths tracked at HEAD under the given directories. A changed path is a contract target only when
+ * this set holds it, because a deleted or renamed-away file has no copy at HEAD to run.
+ */
+export async function headTrackedFiles(
+	directories: readonly string[],
+	options: { repoRoot?: string; gitRead?: GitReadCommand } = {},
+): Promise<Set<string>> {
+	const repoRoot = options.repoRoot ?? nodePath.resolve(import.meta.dirname, "..");
+	const git = options.gitRead ?? readGit;
+	const tracked = await git(["ls-tree", "-r", "-z", "--name-only", "HEAD", ...directories], {
+		cwd: repoRoot,
+		shell: false,
+		encoding: null,
+		maxBuffer: MAX_GIT_OUTPUT_BYTES,
+	});
+	return new Set(nulDelimitedFields(tracked));
 }
 
 /**

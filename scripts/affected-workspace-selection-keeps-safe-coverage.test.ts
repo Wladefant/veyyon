@@ -2,16 +2,33 @@ import { describe, expect, it } from "bun:test";
 import {
 	AFFECTED_DYNAMIC_IMPORT_LOADER_FILES,
 	AFFECTED_SELECTOR_ID,
+	type AffectedWorkspaceInspection,
+	type AffectedWorkspaceSelection,
 	buildWorkspaceGraphWithImports,
 	ciContractTestsForPaths,
 	fullTriggerReason,
+	type GitReadCommand,
+	headTrackedFiles,
 	inspectAffectedWorkspaceSelection,
 	parseGitNameStatus,
 	selectAffectedWorkspaceMembers,
-	type GitReadCommand,
 	type WorkspaceSourceFile,
 } from "./affected-workspace-tests";
-import { parseRunnerArguments } from "./ci-test-ts";
+import {
+	composeRelatedSelection,
+	explicitTestCommands,
+	NODE_TEST_PREFIX,
+	type NodeTestTotals,
+	parseNodeTapSummary,
+	parseRunnerArguments,
+	recordNodeRun,
+	type TestCommand,
+} from "./ci-test-ts";
+import {
+	buildWorkspaceDependencyGraph,
+	type WorkspaceDependencyGraph,
+	type WorkspaceGraphEntry,
+} from "./workspace-layout";
 
 function graph(entries: readonly WorkspaceGraphEntry[]): WorkspaceDependencyGraph {
 	return buildWorkspaceDependencyGraph(entries);
@@ -34,6 +51,20 @@ function basicGraph(): WorkspaceDependencyGraph {
 
 function manifest(name: string, dependencies: Record<string, string> = {}): string {
 	return JSON.stringify({ name, ...(Object.keys(dependencies).length > 0 ? { dependencies } : {}) });
+}
+
+function inspectionFor(selection: AffectedWorkspaceSelection): AffectedWorkspaceInspection {
+	return {
+		...selection,
+		selectorId: AFFECTED_SELECTOR_ID,
+		baseSha: "a".repeat(40),
+		headSha: "b".repeat(40),
+		importEdgeCountsByRevision: { base: 0, head: 0 },
+	};
+}
+
+function ownedCommand(cwd: string): TestCommand {
+	return { label: `workspace ${cwd}`, cwd, command: ["bun", "test", cwd] };
 }
 
 describe("affected workspace selection preserves complete safe coverage", () => {
@@ -319,7 +350,7 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 			expect(
 				selectAffectedWorkspaceMembers([{ status: "M", paths: [file] }], knownGraph, knownGraph),
 			).toMatchObject({ mode: "affected", selectedMembers: [] });
-			expect(ciContractTestsForPaths([file]).length).toBeGreaterThan(0);
+			expect(ciContractTestsForPaths([file], new Set()).length).toBeGreaterThan(0);
 		}
 		expect(
 			selectAffectedWorkspaceMembers(
@@ -346,24 +377,21 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 		);
 
 		expect(selection).toMatchObject({ mode: "affected", selectedMembers: ["packages/app"] });
-		expect(ciContractTestsForPaths(selection.changedPaths)).toContainEqual({
+		expect(ciContractTestsForPaths(selection.changedPaths, new Set([scriptTest]))).toContainEqual({
 			runner: "bun",
 			path: scriptTest,
 		});
 	});
 
 	it("maps runner changes to exact contract tests, not the scripts suite", () => {
-		expect(ciContractTestsForPaths(["scripts/ci-test-ts.ts"])).toEqual([
+		expect(ciContractTestsForPaths(["scripts/ci-test-ts.ts"], new Set())).toEqual([
 			{ runner: "bun", path: "scripts/affected-workspace-selection-keeps-safe-coverage.test.ts" },
 			{ runner: "bun", path: "scripts/ci-test-concurrency-default.test.ts" },
 		]);
 	});
 
 	it("maps Cloudflare source paths to lane tests and Python adapter changes to unittest", () => {
-		const targets = ciContractTestsForPaths([
-			"ci/cloudflare/cf_ci.py",
-			"ci/cloudflare/lane-routing.mjs",
-		]);
+		const targets = ciContractTestsForPaths(["ci/cloudflare/cf_ci.py", "ci/cloudflare/lane-routing.mjs"], new Set());
 		expect(targets).toContainEqual({
 			runner: "python-unittest",
 			path: "ci/cloudflare/test_cf_ci.py",
@@ -407,5 +435,199 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 		expect(() => parseRunnerArguments(["--changed-since", sha, "--changed-since", sha])).toThrow(
 			/may only be supplied once/,
 		);
+	});
+
+	it("maps a changed script test only while HEAD still tracks it, so deleted and renamed-away tests are not targets", () => {
+		const headTracked = new Set(["scripts/ci-test-concurrency-default.test.ts"]);
+		expect(ciContractTestsForPaths(["scripts/ci-test-deleted-away.test.ts"], headTracked)).toEqual([]);
+		expect(
+			ciContractTestsForPaths(
+				["scripts/ci-test-renamed-away.test.ts", "scripts/ci-test-concurrency-default.test.ts"],
+				headTracked,
+			),
+		).toEqual([{ runner: "bun", path: "scripts/ci-test-concurrency-default.test.ts" }]);
+	});
+
+	it("keeps a deleted script test affected without selecting any member", () => {
+		const knownGraph = basicGraph();
+		expect(
+			selectAffectedWorkspaceMembers(
+				[{ status: "D", paths: ["scripts/ci-test-deleted-away.test.ts"] }],
+				knownGraph,
+				knownGraph,
+			),
+		).toMatchObject({ mode: "affected", selectedMembers: [] });
+	});
+
+	it("runs a renamed-to script test and drops the renamed-away path", () => {
+		const knownGraph = basicGraph();
+		const selection = selectAffectedWorkspaceMembers(
+			[
+				{
+					status: "R100",
+					paths: ["scripts/ci-test-renamed-away.test.ts", "scripts/ci-test-concurrency-default.test.ts"],
+				},
+			],
+			knownGraph,
+			knownGraph,
+		);
+		const result = composeRelatedSelection({
+			inspection: inspectionFor(selection),
+			drift: [],
+			headTrackedPaths: new Set(["scripts/ci-test-concurrency-default.test.ts"]),
+			ownedCommands: [],
+		});
+		expect(result.commands).toHaveLength(1);
+		expect(result.commands[0]?.command).toContain("scripts/ci-test-concurrency-default.test.ts");
+		expect(result.commands[0]?.command).not.toContain("scripts/ci-test-renamed-away.test.ts");
+	});
+
+	it("composes owned member buckets with Bun contract and script targets in a mixed workspace selection", () => {
+		const knownGraph = basicGraph();
+		const selection = selectAffectedWorkspaceMembers(
+			[
+				{
+					status: "M",
+					paths: [
+						"packages/app/src/app.ts",
+						"scripts/ci-test-ts.ts",
+						"scripts/ci-test-concurrency-default.test.ts",
+					],
+				},
+			],
+			knownGraph,
+			knownGraph,
+		);
+		const result = composeRelatedSelection({
+			inspection: inspectionFor(selection),
+			drift: [],
+			headTrackedPaths: new Set(["scripts/ci-test-concurrency-default.test.ts"]),
+			ownedCommands: [ownedCommand("packages/app"), ownedCommand("packages/shared")],
+		});
+		expect(result.selectedMembers).toEqual(["packages/app"]);
+		expect(result.commands).toHaveLength(2);
+		expect(result.commands[0]).toEqual(ownedCommand("packages/app"));
+		expect(result.commands[1]).toMatchObject({ label: "targets .", cwd: "." });
+		const targets = (result.commands[1]?.command ?? []).filter(argument => argument.startsWith("scripts/")).sort();
+		expect(targets).toEqual([
+			"scripts/affected-workspace-selection-keeps-safe-coverage.test.ts",
+			"scripts/ci-test-concurrency-default.test.ts",
+		]);
+		expect(result.contractTargets).toContainEqual({
+			runner: "bun",
+			path: "scripts/ci-test-concurrency-default.test.ts",
+		});
+	});
+
+	it("runs node contract targets through node --test and leaves python ones unrun", () => {
+		const knownGraph = basicGraph();
+		const selection = selectAffectedWorkspaceMembers(
+			[{ status: "M", paths: ["ci/cloudflare/cf_ci.py"] }],
+			knownGraph,
+			knownGraph,
+		);
+		const result = composeRelatedSelection({
+			inspection: inspectionFor(selection),
+			drift: [],
+			headTrackedPaths: new Set(),
+			ownedCommands: [],
+		});
+		expect(result.contractTargets).toContainEqual({ runner: "python-unittest", path: "ci/cloudflare/test_cf_ci.py" });
+		expect(result.contractTargets).toContainEqual({ runner: "node", path: "ci/cloudflare/lane-routing.test.mjs" });
+		expect(result.commands).toHaveLength(1);
+		expect(result.commands[0]).toMatchObject({ label: "node contract tests", cwd: "." });
+		expect(result.commands[0]?.command).toEqual([...NODE_TEST_PREFIX, "ci/cloudflare/lane-routing.test.mjs"]);
+		expect(result.commands[0]?.command).not.toContain("ci/cloudflare/test_cf_ci.py");
+	});
+
+	it("counts node TAP totals only from a complete, consistent summary", () => {
+		const green =
+			"ok 1 - a\n1..2\n# tests 2\n# suites 0\n# pass 2\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 5\n";
+		expect(parseNodeTapSummary(green)).toEqual({ tests: 2, pass: 2, fail: 0, skipped: 0, todo: 0, cancelled: 0 });
+		expect(parseNodeTapSummary(green.replace("# cancelled 0\n", ""))).toBeUndefined();
+		expect(parseNodeTapSummary(green.replace("# pass 2", "# pass 1"))).toBeUndefined();
+		expect(parseNodeTapSummary("ok 1 - output without a summary")).toBeUndefined();
+	});
+
+	it("fails a red or summary-less node run while keeping the totals truthful", () => {
+		const totals: NodeTestTotals = { pass: 0, fail: 0, skip: 0, todo: 0, files: 0, runs: 0 };
+		const command = [...NODE_TEST_PREFIX, "ci/cloudflare/a.test.mjs", "ci/cloudflare/b.test.mjs"];
+		const red = "# tests 3\n# suites 0\n# pass 2\n# fail 1\n# cancelled 0\n# skipped 0\n# todo 0\n";
+		expect(recordNodeRun(totals, command, red)).toBe(false);
+		expect(recordNodeRun(totals, command, "not tap output")).toBe(false);
+		expect(totals).toEqual({ pass: 2, fail: 1, skip: 0, todo: 0, files: 4, runs: 2 });
+	});
+
+	it("treats docs-only and deleted-only selections as an explicit no-op", () => {
+		const knownGraph = basicGraph();
+		for (const paths of [["docs/internal/testing.md"], ["scripts/ci-test-deleted-away.test.ts"]]) {
+			const selection = selectAffectedWorkspaceMembers([{ status: "M", paths }], knownGraph, knownGraph);
+			expect(
+				composeRelatedSelection({
+					inspection: inspectionFor(selection),
+					drift: [],
+					headTrackedPaths: new Set(),
+					ownedCommands: [ownedCommand("packages/app")],
+				}),
+			).toMatchObject({ selectedMembers: [], commands: [] });
+		}
+	});
+
+	it("still rejects full selections, unowned members and a drifted working tree", () => {
+		const knownGraph = basicGraph();
+		const full = selectAffectedWorkspaceMembers(
+			[{ status: "M", paths: ["tools/shared-policy.json"] }],
+			knownGraph,
+			knownGraph,
+		);
+		expect(() =>
+			composeRelatedSelection({
+				inspection: inspectionFor(full),
+				drift: [],
+				headTrackedPaths: new Set(),
+				ownedCommands: [],
+			}),
+		).toThrow(/CLOUDFLARE_RELATED_SELECTION_UNAVAILABLE fallback=/);
+		const unowned = inspectionFor({
+			mode: "affected",
+			changedPaths: ["packages/ghost/src/x.ts"],
+			selectedMembers: ["packages/ghost"],
+			importEdgeCount: 0,
+			changeMembers: [],
+		});
+		expect(() =>
+			composeRelatedSelection({
+				inspection: unowned,
+				drift: [],
+				headTrackedPaths: new Set(),
+				ownedCommands: [ownedCommand("packages/app")],
+			}),
+		).toThrow(/no owning test bucket: packages\/ghost/);
+		const docs = selectAffectedWorkspaceMembers([{ status: "M", paths: ["docs/a.md"] }], knownGraph, knownGraph);
+		expect(() =>
+			composeRelatedSelection({
+				inspection: inspectionFor(docs),
+				drift: ["scripts/x.ts"],
+				headTrackedPaths: new Set(),
+				ownedCommands: [],
+			}),
+		).toThrow(/working tree differs from HEAD/);
+	});
+
+	it("keeps explicit missing targets fail-closed", () => {
+		expect(() => explicitTestCommands(["scripts/ci-test-missing-target.test.ts"])).toThrow(
+			/Explicit test target not found/,
+		);
+	});
+
+	it("reads HEAD tracked paths under a directory through the read-only Git reader", async () => {
+		const calls: (readonly string[])[] = [];
+		const gitRead: GitReadCommand = async args => {
+			calls.push(args);
+			return Buffer.from("scripts/ci-test-concurrency-default.test.ts\0scripts/ci-test-ts.ts\0");
+		};
+		const tracked = await headTrackedFiles(["scripts"], { repoRoot: "/repo", gitRead });
+		expect([...tracked]).toEqual(["scripts/ci-test-concurrency-default.test.ts", "scripts/ci-test-ts.ts"]);
+		expect(calls).toEqual([["ls-tree", "-r", "-z", "--name-only", "HEAD", "scripts"]]);
 	});
 });

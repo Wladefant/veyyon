@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
@@ -24,6 +24,7 @@ if str(_HERE) not in sys.path:
 from cf_ci import (
     CheckoutError,
     extract_exact_head,
+    main as cf_ci_main,
     parse_bun_summary,
     parse_python_unittest_summary,
     publish_github_commit_status,
@@ -187,17 +188,13 @@ class TestCfCiBunSummaryParser(unittest.TestCase):
             {"pass": 31759, "fail": 0, "skip": 16, "todo": 2, "total": 31777, "chunks": 12},
         )
 
-    def test_aggregates_actual_targeted_runner_records(self) -> None:
+    def test_rejects_targeted_runner_records_without_lane_summary(self) -> None:
         log = (
             "CLOUDFLARE_CI_TEST_COUNTS pass=2 fail=0 skip=1 todo=0 tests=3 reported=3 files=1 runs=1\n"
             "CLOUDFLARE_CI_TEST_COUNTS pass=4 fail=0 skip=0 todo=0 tests=4 reported=4 files=2 runs=1\n"
-            "CLOUDFLARE_CI_TEST_COUNTS runner=python-unittest pass=1 fail=0 skip=1 todo=0 "
-            "tests=2 reported=2 files=1 runs=1\n"
         )
-        self.assertEqual(
-            parse_bun_summary(log),
-            {"pass": 7, "fail": 0, "skip": 2, "todo": 0, "total": 9, "chunks": 3},
-        )
+        with self.assertRaisesRegex(ValueError, "missing or malformed"):
+            parse_bun_summary(log)
 
     def test_rejects_inconsistent_declared_total(self) -> None:
         with self.assertRaisesRegex(ValueError, "inconsistent"):
@@ -220,6 +217,8 @@ class TestCfCiBunSummaryParser(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Malformed"):
             parse_bun_summary(
                 "CLOUDFLARE_CI_TEST_COUNTS pass=5 fail=0 skip=0 todo=0 tests=5 reported=5\n"
+                "CLOUDFLARE_TEST_SUMMARY pass=5 fail=0 skip=0 todo=0 tests=5 reported=5 "
+                "files=1 runs=1 chunks_pass=1 chunks_fail=0\n"
             )
 
     def test_fails_closed_when_actual_lane_summary_is_missing(self) -> None:
@@ -266,6 +265,17 @@ class TestPythonUnittestSummaryParser(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Ran count"):
             parse_python_unittest_summary("Compilation error; tests did not start\n")
 
+    def test_parses_plain_ok_summary(self) -> None:
+        log = "Ran 2 tests in 0.001s\n\nOK\n"
+        self.assertEqual(
+            parse_python_unittest_summary(log),
+            {"pass": 2, "fail": 0, "skip": 0, "todo": 0, "tests": 2, "reported": 2, "files": 1, "runs": 1},
+        )
+
+    def test_fails_closed_when_zero_tests_ran(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Ran count"):
+            parse_python_unittest_summary("Ran 0 tests in 0.000s\n\nOK\n")
+
 
 class TestCfCiExactHeadValidation(unittest.TestCase):
     def test_accepts_matching_40_hex_sha(self) -> None:
@@ -296,6 +306,99 @@ class TestCfCiExactHeadValidation(unittest.TestCase):
         self.assertEqual(sha, "5646799e6ea503953b5029f414ff85cd39fb8e4b")
 
 
+class TestCfCiGithubTokenFallback(unittest.TestCase):
+    def test_reads_gh_cli_token_when_no_env_token_is_set(self) -> None:
+        sha = "5646799e6ea503953b5029f414ff85cd39fb8e4b"
+        gh_token = subprocess.CompletedProcess(["gh", "auth", "token"], 0, stdout="gh-cli-token\n", stderr="")
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"id": 7}'
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch(
+            "cf_ci.subprocess.run", return_value=gh_token
+        ) as run, mock.patch("cf_ci.urllib.request.urlopen", return_value=response) as urlopen:
+            res = publish_github_commit_status(
+                owner="Wladefant",
+                repo="veyyon",
+                sha=sha,
+                state="success",
+                description="ok",
+            )
+        run.assert_called_once()
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), "Bearer gh-cli-token")
+        self.assertEqual(res, {"id": 7})
+
+
+class TestCfCiVerifyOutputLabels(unittest.TestCase):
+    SHA = "5646799e6ea503953b5029f414ff85cd39fb8e4b"
+
+    def test_verify_prints_aggregate_test_labels(self) -> None:
+        build = {
+            "status": "stopped",
+            "build_outcome": "success",
+            "script_tag": "ci",
+            "build_trigger_metadata": {"commit_hash": self.SHA},
+        }
+        log = (
+            f"CLOUDFLARE_EXACT_HEAD sha={self.SHA}\n"
+            "CLOUDFLARE_TEST_SUMMARY pass=3 fail=0 skip=1 todo=0 tests=4 reported=4 "
+            "files=1 runs=1 chunks_pass=1 chunks_fail=0\n"
+        )
+        stdout = StringIO()
+        with mock.patch("cf_ci.wait_for_cloudflare_build", return_value=build), mock.patch(
+            "cf_ci.fetch_cloudflare_build_log", return_value=log
+        ), mock.patch("cf_ci.publish_github_commit_status", return_value={}), redirect_stdout(stdout):
+            exit_code = cf_ci_main(
+                ["verify", "--build-id", "build-1", "--expected-sha", self.SHA, "--account-id", "acc-1"]
+            )
+        self.assertEqual(exit_code, 0)
+        lines = stdout.getvalue().splitlines()
+        self.assertIn("tests_passed=3 tests_failed=0 tests_skipped=1", lines)
+        self.assertFalse(any(line.startswith("bun_") for line in lines))
+
+class TestCfCiVerifyRefusesPassWithoutStatusPublication(unittest.TestCase):
+    SHA = "5646799e6ea503953b5029f414ff85cd39fb8e4b"
+    VERIFY_ARGS = ["verify", "--build-id", "build-1", "--expected-sha", SHA, "--account-id", "acc-1"]
+
+    def test_missing_cloudflare_token_fails_before_any_request(self) -> None:
+        stdout, stderr = StringIO(), StringIO()
+        no_gh_token = subprocess.CompletedProcess(["gh", "auth", "token"], 1, stdout="", stderr="")
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch(
+            "cf_ci.subprocess.run", return_value=no_gh_token
+        ), mock.patch("cf_ci.urllib.request.urlopen") as urlopen, redirect_stdout(stdout), redirect_stderr(stderr):
+            exit_code = cf_ci_main(self.VERIFY_ARGS)
+        urlopen.assert_not_called()
+        self.assertEqual(exit_code, 1)
+        self.assertNotIn("gate=PASS", stdout.getvalue())
+        self.assertIn("No Cloudflare API token", stderr.getvalue())
+
+    def test_passing_build_with_skipped_status_publication_exits_nonzero(self) -> None:
+        build = {
+            "status": "stopped",
+            "build_outcome": "success",
+            "script_tag": "ci",
+            "build_trigger_metadata": {"commit_hash": self.SHA},
+        }
+        log = (
+            f"CLOUDFLARE_EXACT_HEAD sha={self.SHA}\n"
+            "CLOUDFLARE_TEST_SUMMARY pass=3 fail=0 skip=0 todo=0 tests=3 reported=3 "
+            "files=1 runs=1 chunks_pass=1 chunks_fail=0\n"
+        )
+        no_gh_token = subprocess.CompletedProcess(["gh", "auth", "token"], 1, stdout="", stderr="")
+        stdout, stderr = StringIO(), StringIO()
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch(
+            "cf_ci.wait_for_cloudflare_build", return_value=build
+        ), mock.patch("cf_ci.fetch_cloudflare_build_log", return_value=log), mock.patch(
+            "cf_ci.subprocess.run", return_value=no_gh_token
+        ), mock.patch("cf_ci.urllib.request.urlopen") as urlopen, redirect_stdout(stdout), redirect_stderr(stderr):
+            exit_code = cf_ci_main(self.VERIFY_ARGS)
+        urlopen.assert_not_called()
+        self.assertEqual(exit_code, 1)
+        self.assertNotIn("gate=PASS", stdout.getvalue())
+        self.assertIn("gate=FAIL", stderr.getvalue())
+        self.assertIn("not published", stderr.getvalue())
+
+
+
 class TestCfCiGithubCommitStatus(unittest.TestCase):
     def test_refuses_branch_tip_or_symbolic_ref(self) -> None:
         for invalid_ref in ["main", "origin/main", "HEAD", "refs/heads/main", "feat/ci"]:
@@ -322,20 +425,24 @@ class TestCfCiGithubCommitStatus(unittest.TestCase):
 
     def test_formats_status_payload_correctly_when_token_skipped(self) -> None:
         sha = "5646799e6ea503953b5029f414ff85cd39fb8e4b"
-        res = publish_github_commit_status(
-            owner="Wladefant",
-            repo="veyyon",
-            sha=sha,
-            state="success",
-            description="pass=31759 fail=0 skip=16",
-            target_url="https://dash.cloudflare.com/build/123",
-            token="dummy-test-skip-token" if False else None,
-        )
-        if res.get("status") == "skipped":
-            self.assertEqual(res["payload"]["state"], "success")
-            self.assertEqual(res["payload"]["context"], "Workers Builds: veyyon-ci")
-            self.assertEqual(res["payload"]["description"], "pass=31759 fail=0 skip=16")
-            self.assertEqual(res["payload"]["target_url"], "https://dash.cloudflare.com/build/123")
+        no_gh_token = subprocess.CompletedProcess(["gh", "auth", "token"], 1, stdout="", stderr="")
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch(
+            "cf_ci.subprocess.run", return_value=no_gh_token
+        ), mock.patch("cf_ci.urllib.request.urlopen") as urlopen:
+            res = publish_github_commit_status(
+                owner="Wladefant",
+                repo="veyyon",
+                sha=sha,
+                state="success",
+                description="pass=31759 fail=0 skip=16",
+                target_url="https://dash.cloudflare.com/build/123",
+            )
+        urlopen.assert_not_called()
+        self.assertEqual(res["status"], "skipped")
+        self.assertEqual(res["payload"]["state"], "success")
+        self.assertEqual(res["payload"]["context"], "Workers Builds: veyyon-ci")
+        self.assertEqual(res["payload"]["description"], "pass=31759 fail=0 skip=16")
+        self.assertEqual(res["payload"]["target_url"], "https://dash.cloudflare.com/build/123")
 
 
 if __name__ == "__main__":
