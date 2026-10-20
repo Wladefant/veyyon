@@ -130,24 +130,56 @@ it("bounds held semantic frames and bytes without waiting for EOF", () => {
 	expect(byBytes.push(safe)).toBe(safe);
 });
 
-it("discards held raw prefixes on semantic errors and transport aborts", async () => {
-	const prefix = 'data: {"type":"text_delta","delta":"provider-"}\n\n';
-	const error = 'data: {"type":"error","message":"upstream failed"}\n\n';
-	const semantic = new GatewaySemanticRedactor(["provider-secret"]);
-	expect(semantic.push(prefix)).toBe("");
-	expect(semantic.push(error)).toBe(error);
-	expect(semantic.push("", true)).toBe("");
+const semanticErrorFrames = [
+	'data: {"type":"error","message":"upstream failed"}\n\n',
+	'data: {"type":"response.failed","response":{"error":{"message":"upstream failed"}}}\n\n',
+];
+
+it("masks a complete credential and a trailing prefix held before each semantic error frame", () => {
+	const held = 'data: {"type":"text_delta","contentIndex":0,"delta":"provider-secret pro"}\n\n';
+	for (const error of semanticErrorFrames) {
+		const semantic = new GatewaySemanticRedactor(["provider-secret"]);
+		expect(semantic.push(held)).toBe("");
+		expect(semantic.push(error)).toBe('data: {"type":"text_delta","contentIndex":0,"delta":"[REDACTED] [REDACTED]"}\n\n' + error);
+	}
+});
+
+it("keeps held safe text before a masked prefix and emits each semantic error frame once", () => {
+	const prefix = 'data: {"type":"text_delta","contentIndex":0,"delta":"ok provider-"}\n\n';
+	for (const error of semanticErrorFrames) {
+		const semantic = new GatewaySemanticRedactor(["provider-secret"]);
+		expect(semantic.push(prefix)).toBe("");
+		const output = semantic.push(error);
+		expect(output).toBe('data: {"type":"text_delta","contentIndex":0,"delta":"ok [REDACTED]"}\n\n' + error);
+		expect(output.split(error).length - 1).toBe(1);
+		expect(output).not.toContain("provider-");
+	}
+});
+
+it("does not reconstruct a credential from a continuation after a masked error prefix", () => {
+	const prefix = 'data: {"type":"text_delta","contentIndex":0,"delta":"provider-"}\n\n';
+	const continuation = 'data: {"type":"text_delta","contentIndex":0,"delta":"secret"}\n\n';
+	for (const error of semanticErrorFrames) {
+		const semantic = new GatewaySemanticRedactor(["provider-secret"]);
+		expect(semantic.push(prefix)).toBe("");
+		expect(semantic.push(error)).toBe('data: {"type":"text_delta","contentIndex":0,"delta":"[REDACTED]"}\n\n' + error);
+		expect(semantic.push(continuation)).toBe('data: {"type":"text_delta","contentIndex":0,"delta":"[REDACTED]"}\n\n');
+	}
+});
+
+it("discards held credential prefix bytes when the upstream aborts before EOF", async () => {
+	const { promise: awaitingContinuation, resolve: requested } = Promise.withResolvers<void>();
 	let source!: ReadableStreamDefaultController<Uint8Array>;
-	let requested!: () => void;
-	const awaitingContinuation = new Promise<void>(resolve => { requested = resolve; });
+	const prefix = 'data: {"type":"text_delta","contentIndex":0,"delta":"provider-"}\n\n';
 	const response = redactResponse(new Response(new ReadableStream<Uint8Array>({
 		start(controller) { source = controller; controller.enqueue(new TextEncoder().encode(prefix)); },
 		pull() { requested(); },
 	}, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } }), ["provider-secret"]);
-	const result = response.text();
+	const reader = response.body!.getReader();
+	const read = reader.read();
 	await awaitingContinuation;
 	source.error(new Error("abort provider-secret"));
-	await expect(result).rejects.toThrow("Gateway response stream failed");
+	await expect(read).rejects.toThrow("Gateway response stream failed");
 });
 
 it("redacts credentials in three or more semantic fragments and after a completed prefix", () => {
