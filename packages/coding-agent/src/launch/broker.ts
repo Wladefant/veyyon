@@ -29,7 +29,6 @@ import {
 	managedDaemonLogPath,
 	managedDaemonMetaPath,
 	managedDaemonPreviousLogPath,
-	managedDaemonProcessLeasePath,
 	managedDaemonsRoot,
 } from "./paths";
 import { hasLiveDaemonProjectPresence, pruneDeadDaemonRuntimeDirs } from "./presence";
@@ -308,6 +307,40 @@ function connectPort(host: string, port: number): Promise<boolean> {
 	socket.once("error", () => finish(false));
 	socket.setTimeout(250, () => finish(false));
 	return promise;
+}
+
+/**
+ * Terminate the POSIX process group whose id is `pid`, the group a non-detached root leads. Resolves true only when
+ * the group is proven empty. Windows has no group to signal, and a PID is never signalled alone without a handle,
+ * so Windows resolves false. No persisted creation identity exists, so a reused PID is not detected here.
+ */
+async function reapOwnedGroup(pid: number): Promise<boolean> {
+	if (process.platform === "win32") return false;
+	const alive = (): boolean => {
+		try {
+			process.kill(-pid, 0);
+			return true;
+		} catch (error) {
+			return (error as NodeJS.ErrnoException).code === "EPERM";
+		}
+	};
+	const signal = (name: NodeJS.Signals): void => {
+		try {
+			process.kill(-pid, name);
+		} catch (error) {
+			logger.debug("Owned process group signal failed", { pid, signal: name, error: errorMessage(error) });
+		}
+	};
+	const waitGone = async (ms: number): Promise<boolean> => {
+		const deadline = Date.now() + ms;
+		while (alive() && Date.now() < deadline) await sleep(50);
+		return !alive();
+	};
+	if (!alive()) return true;
+	signal("SIGTERM");
+	if (await waitGone(TREE_GRACE_MS)) return true;
+	signal("SIGKILL");
+	return waitGone(TREE_BOUND_MS);
 }
 
 type TreeState = "alive" | "dead" | "unknown";
@@ -680,6 +713,7 @@ export class DaemonBroker {
 				owner,
 				persist: spec.persist,
 				detached: spec.detached,
+				ownershipUncertain: existing?.snapshot.ownershipUncertain,
 			},
 			dir,
 			log: await DaemonLog.open(dir),
@@ -693,6 +727,14 @@ export class DaemonBroker {
 			consecutiveFailures: 0,
 			persistQueue: Promise.resolve(),
 		};
+		if (record.snapshot.ownershipUncertain) {
+			try {
+				await this.#assertOwnershipFree(spec);
+			} catch (error) {
+				await record.log?.close();
+				throw error;
+			}
+		}
 		syncReadyPending(record);
 		this.#records.set(spec.name, record);
 		await this.#launch(record);
@@ -734,6 +776,10 @@ export class DaemonBroker {
 			if (record.spec.detached) await this.#launchDetached(record, generation);
 			else if (record.spec.pty) await this.#launchPty(record, generation);
 			else this.#launchPipe(record, generation);
+			if (record.snapshot.ownershipUncertain) {
+				record.snapshot.ownershipUncertain = undefined;
+				persist(record);
+			}
 			if (record.spec.ready?.port !== undefined) void this.#pollPort(record, generation, record.spec.ready);
 			this.#markReady(record);
 		} catch (error) {
@@ -773,56 +819,52 @@ export class DaemonBroker {
 				onChunk,
 			);
 		} else {
-			const pidPath = managedDaemonProcessLeasePath(record.dir);
-			await fs.rm(pidPath, { force: true });
 			const argv = [record.spec.application, ...record.spec.args];
-			const command = [
-				`printf '%s' "$$" > ${quoteShellArg(pidPath)}`,
-				`exec ${argv.map(quoteShellArg).join(" ")}`,
-			].join("; ");
+			const command = `exec ${argv.map(quoteShellArg).join(" ")}`;
 			run = session.start({ command, shell: process.env.SHELL, ...options }, onChunk);
 		}
 		record.tree = new ProcessTree(undefined, null);
+		// The native session keeps the child's handle after the run ends. Adopting it before the exit is settled
+		// proves a child that exited before the poll below saw its handle, instead of holding it as unknown.
 		void run
-			.then(result => this.#onPtyExit(record, generation, result))
+			.then(result => {
+				this.#attachPtyRoot(record, generation, session);
+				return this.#onPtyExit(record, generation, result);
+			})
 			.catch(error => this.#settle(record, generation, undefined, errorMessage(error)));
 
-		if (process.platform === "win32") {
-			// ConPTY has no lease file. The native session publishes the child PID right after spawn, so wait for it
-			// (bounded, and only while this generation is still live), then capture the root handle as POSIX does.
-			const deadline = Date.now() + 5_000;
-			while (generation === record.generation && !terminalState(record.snapshot.state)) {
-				const root = "process" in session ? session.process : undefined;
-				if (root instanceof Process) {
-					record.snapshot.pid = root.pid;
-					record.tree = new ProcessTree(root.pid, root);
-					this.#startSampler(record, generation);
-					persist(record);
-					return;
-				}
-				if (Date.now() >= deadline) return;
-				await sleep(20);
-			}
-			return;
-		}
-		const pidPath = managedDaemonProcessLeasePath(record.dir);
+		// The native session publishes the child's handle right after spawn. Poll it, bounded, only while this
+		// generation is live and no stop or shutdown is pending. A stop that wins the race leaves the exit path to adopt it.
 		const deadline = Date.now() + 5_000;
-		while (Date.now() < deadline && generation === record.generation) {
-			try {
-				const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
-				if (Number.isSafeInteger(pid) && pid > 0) {
-					record.snapshot.pid = pid;
-					record.tree = new ProcessTree(pid, processHandle(pid));
-					this.#startSampler(record, generation);
-					persist(record);
-					return;
-				}
-			} catch (error) {
-				if (!isEnoent(error)) throw error;
+		while (!this.#attachPtyRoot(record, generation, session)) {
+			if (
+				Date.now() >= deadline ||
+				generation !== record.generation ||
+				record.stopRequested ||
+				this.#shuttingDown ||
+				terminalState(record.snapshot.state)
+			) {
+				return;
 			}
-			if (terminalState(record.snapshot.state)) return;
-			await Bun.sleep(20);
+			await sleep(20);
 		}
+		if (generation !== record.generation || terminalState(record.snapshot.state)) return;
+		this.#startSampler(record, generation);
+		persist(record);
+	}
+
+	/**
+	 * Adopt the native root handle of this PTY child. A handle is kept after its run ends, so this succeeds whether it
+	 * is read while the child runs or after it exited. Returns false while no handle is published for this generation.
+	 */
+	#attachPtyRoot(record: ManagedDaemon, generation: number, session: PtySession): boolean {
+		if (generation !== record.generation) return false;
+		if (record.tree?.root) return true;
+		const root = "process" in session ? session.process : undefined;
+		if (!(root instanceof Process)) return false;
+		record.snapshot.pid = root.pid;
+		record.tree = new ProcessTree(root.pid, root);
+		return true;
 	}
 
 	#launchPipe(record: ManagedDaemon, generation: number): void {
@@ -1374,10 +1416,39 @@ export class DaemonBroker {
 		this.#cancelCleanup(name);
 		await record.log?.close();
 		record.log = await DaemonLog.open(record.dir);
+		if (record.snapshot.ownershipUncertain) {
+			try {
+				await this.#assertOwnershipFree(record.spec);
+			} catch (error) {
+				await record.log?.close();
+				record.log = undefined;
+				throw error;
+			}
+		}
 		record.stopRequested = false;
 		await this.#launch(record);
 		await record.persistQueue;
 		return { op: "restart", daemon: record.snapshot };
+	}
+
+	/**
+	 * Gate the replacement of a record whose process tree is unaccounted for. Its configured ready port must be named
+	 * and must be free by a local probe, run here immediately before the spawn. Without a port nothing proves the old
+	 * tree gone, so the replacement is refused.
+	 */
+	async #assertOwnershipFree(spec: DaemonSpec): Promise<void> {
+		const port = spec.ready?.port;
+		const host = spec.ready?.host ?? "127.0.0.1";
+		if (port === undefined) {
+			throw new Error(
+				`Daemon ${spec.name}'s previous process tree is unaccounted for and names no ready port to prove free; refusing to replace it. Stop the old process by hand first.`,
+			);
+		}
+		if (await connectPort(host, port)) {
+			throw new Error(
+				`Daemon ${spec.name}'s previous process tree is unaccounted for and ${host}:${port} is in use; refusing to start a second process on it.`,
+			);
+		}
 	}
 
 	async #waitUntil(record: ManagedDaemon, condition: () => boolean, timeoutMs: number): Promise<boolean> {
@@ -1386,7 +1457,7 @@ export class DaemonBroker {
 			await this.#refreshDetached(record);
 			if (condition()) return true;
 			if (this.#shuttingDown && terminalState(record.snapshot.state)) return condition();
-			await Bun.sleep(50);
+			await sleep(50);
 		}
 		await this.#refreshDetached(record);
 		return condition();
@@ -1487,14 +1558,8 @@ export class DaemonBroker {
 					!wasTerminal &&
 					snapshot.state !== "stopping" &&
 					(processRef ? processRef.status() === "running" : snapshot.pid !== undefined && isProcessAlive(snapshot.pid));
-				// The tree may still run and has no native handle, so its death is unobservable. Recovery neither kills
-				// nor settles it: the record stays stopping, and a replacement is refused.
-				const held = !detached && !wasTerminal && processRef === null && snapshot.pid !== undefined;
-				if (held) {
-					snapshot.state = "stopping";
-					snapshot.exitReason =
-						"the previous broker exited and the process tree has no native handle; its death cannot be observed, so it stays stopping and is not restarted";
-				} else if (!detached && !wasTerminal) {
+				let ownershipUncertain = false;
+				if (!detached && !wasTerminal) {
 					if (processRef) {
 						try {
 							await processRef.terminate({ group: true, gracefulMs: 500, timeoutMs: 2_000 });
@@ -1505,28 +1570,40 @@ export class DaemonBroker {
 								error: errorMessage(error),
 							});
 						}
-					}
-					snapshot.pid = undefined;
-					snapshot.state = "exited";
-					snapshot.exitedAt = Date.now();
-					if (spec.detached) {
-						// A detached daemon outlives its broker by design, so one that is
-						// already gone was not terminated by this replacement. Recording
-						// `broker-recovery` here asserted both that the replacement killed
-						// it and that it was non-detached, and neither is true.
-						snapshot.terminatedBy = "process-exit";
-						snapshot.exitReason = "exited while no broker was supervising it";
 					} else {
+						// Without a native handle, recovery cannot observe descendants. A detached daemon
+						// outlives its broker by design; a missing PID also gives no safe group to reap.
+						ownershipUncertain = spec.detached || snapshot.pid === undefined || !(await reapOwnedGroup(snapshot.pid));
+					}
+					snapshot.pid = ownershipUncertain ? snapshot.pid : undefined;
+					snapshot.exitedAt = Date.now();
+					if (ownershipUncertain) {
+						snapshot.state = "failed";
 						snapshot.terminatedBy = "broker-recovery";
 						snapshot.exitReason =
-							"the previous broker exited; its replacement terminated this non-detached daemon";
+							"the previous broker exited and its process tree could not be proven gone; it is not restarted, and a replacement needs its ready port free";
+					} else {
+						snapshot.state = "exited";
+						if (spec.detached) {
+							// A detached daemon outlives its broker by design, so one that is
+							// already gone was not terminated by this replacement. Recording
+							// `broker-recovery` here asserted both that the replacement killed
+							// it and that it was non-detached, and neither is true.
+							snapshot.terminatedBy = "process-exit";
+							snapshot.exitReason = "exited while no broker was supervising it";
+						} else {
+							snapshot.terminatedBy = "broker-recovery";
+							snapshot.exitReason =
+								"the previous broker exited; its replacement terminated this non-detached daemon";
+						}
 					}
+					snapshot.ownershipUncertain = ownershipUncertain || undefined;
 				} else if (wasTerminal) {
 					snapshot.pid = undefined;
 				}
 				snapshot.persist = spec.persist;
 				snapshot.detached = spec.detached;
-				if (this.#cleanupWaitMs > 0 && terminalState(snapshot.state)) {
+				if (this.#cleanupWaitMs > 0 && terminalState(snapshot.state) && !snapshot.ownershipUncertain) {
 					const exitedAt = snapshot.exitedAt ?? Date.now();
 					if (Date.now() - exitedAt >= this.#cleanupWaitMs) {
 						await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -1536,7 +1613,7 @@ export class DaemonBroker {
 				const record: ManagedDaemon = {
 					spec,
 					snapshot,
-					tree: detached || held ? new ProcessTree(snapshot.pid, processRef) : undefined,
+					tree: detached ? new ProcessTree(snapshot.pid, processRef) : undefined,
 					dir,
 					generation: 0,
 					stopRequested: !detached || snapshot.state === "stopping",
@@ -1558,8 +1635,8 @@ export class DaemonBroker {
 				// record; the recovery kill above IS its terminal transition, so
 				// retain it here. One already terminal on disk was recorded by the
 				// broker that settled it.
-				if (!detached && !wasTerminal && !held) this.#queueCompletion(record);
-				if (terminalState(snapshot.state)) {
+				if (!detached && !wasTerminal) this.#queueCompletion(record);
+				if (terminalState(snapshot.state) && !snapshot.ownershipUncertain) {
 					this.#scheduleCleanup(record);
 				}
 				persist(record);

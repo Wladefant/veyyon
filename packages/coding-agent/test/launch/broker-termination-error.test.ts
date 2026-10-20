@@ -242,4 +242,45 @@ describe("daemon termination error resilience", () => {
 			expect(c2?.terminatedBy).toBe("broker-recovery");
 		}
 	}, 20_000);
+	it("keeps a recovered no-PID record visibly uncertain and refuses replacement without a ready port", async () => {
+		const projectDir = await tempDir("project-recovery-no-pid-");
+		const runtimeDir = await tempDir("runtime-recovery-no-pid-");
+		const name = "unknown-tree";
+		const daemonDir = managedDaemonDir(runtimeDir, name);
+		await fs.mkdir(daemonDir, { recursive: true });
+		const spec: DaemonSpec = {
+			name,
+			application: process.execPath,
+			args: ["-e", "process.stdin.resume();"],
+			env: {},
+			cwd: projectDir,
+			pty: false,
+			restart: "always",
+			persist: true,
+			detached: false,
+		};
+		const snapshot: DaemonSnapshot = {
+			name,
+			id: `seed-id-${name}`,
+			state: "running",
+			createdAt: Date.now() - 5_000,
+			startedAt: Date.now() - 4_000,
+			restartCount: 0,
+			outputBytes: 0,
+			persist: true,
+			detached: false,
+		};
+		await fs.writeFile(managedDaemonMetaPath(daemonDir), JSON.stringify({ daemon: snapshot, spec }), "utf8");
+		processHandleSpy?.mockReturnValue(null);
+
+		const { client } = await startInProcessBroker(projectDir, runtimeDir);
+		const described = await client.request({ op: "describe", name });
+		expect(described.op).toBe("describe");
+		if (described.op !== "describe") throw new Error("unexpected describe result");
+		expect(described.daemon.state).toBe("failed");
+		expect(described.daemon.ownershipUncertain).toBeTrue();
+		expect(described.daemon.terminatedBy).toBe("broker-recovery");
+		await expect(client.request({ op: "start", spec })).rejects.toThrow("names no ready port");
+	});
+
 });

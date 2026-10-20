@@ -159,6 +159,8 @@ afterAll(async () => {
 const cleanupDirs: string[] = [];
 const cleanupClients: DaemonBrokerClient[] = [];
 const cleanupServers: net.Server[] = [];
+const cleanupBrokers: { broker: DaemonBroker; run: Promise<void> }[] = [];
+const cleanupPidFiles = new Set<string>();
 // Pids read from our own fixture pid files, mapped to their start identity at first sight.
 // The identity guards against signalling a reused pid. Only these pids are ever signalled.
 const spawnedPids = new Map<number, string | null>();
@@ -168,12 +170,27 @@ afterEach(async () => {
 		const client = cleanupClients.pop();
 		if (!client) continue;
 		try {
-			await client.request({ op: "shutdown" });
+			await Promise.race([client.request({ op: "shutdown" }), delay(WAIT_MS)]);
 		} catch {
 			// broker may already be gone
 		}
 		client.close();
 	}
+	while (cleanupBrokers.length > 0) {
+		const tracked = cleanupBrokers.pop();
+		if (!tracked) continue;
+		try {
+			await Promise.race([tracked.broker.shutdown(), delay(WAIT_MS)]);
+		} catch {
+			// continue teardown if shutdown fails
+		}
+		try {
+			await Promise.race([tracked.run, delay(WAIT_MS)]);
+		} catch {
+			// the run rejection is observed here, after shutdown
+		}
+	}
+	for (const filePath of cleanupPidFiles) await readNumbers(filePath);
 	for (const pid of spawnedPids.keys()) {
 		if (!isAlive(pid)) continue;
 		try {
@@ -181,9 +198,15 @@ afterEach(async () => {
 		} catch {
 			// exited between the liveness check and the kill
 		}
+		await waitUntil(() => !isAlive(pid), WAIT_MS);
 	}
 	spawnedPids.clear();
-	while (cleanupServers.length > 0) cleanupServers.pop()?.close();
+	cleanupPidFiles.clear();
+	while (cleanupServers.length > 0) {
+		const server = cleanupServers.pop();
+		if (!server?.listening) continue;
+		await Promise.race([new Promise<void>(resolve => server.close(() => resolve())), delay(WAIT_MS)]);
+	}
 	while (cleanupDirs.length > 0) {
 		const dir = cleanupDirs.pop();
 		if (dir) await fs.rm(dir, { recursive: true, force: true });
@@ -319,6 +342,7 @@ async function startWrapper(
 	args: string[],
 	restart: DaemonSpec["restart"],
 ): Promise<void> {
+	if (args[0] === rootScript && args[3]) cleanupPidFiles.add(args[3]);
 	const started = await client.request({ op: "start", spec: wrapperSpec(name, projectDir, args, restart) });
 	expect(started.op).toBe("start");
 }
@@ -337,7 +361,6 @@ async function listedDaemon(client: DaemonBrokerClient, name: string) {
 	if (listed.op !== "list") throw new Error(`expected list result, got ${listed.op}`);
 	return listed.daemons.find(daemon => daemon.name === name);
 }
-
 /**
  * Start a broker in this test process, so a spy on the native boundary it calls applies to it. A client
  * reads the token and endpoint from the runtime directory the broker writes.
@@ -346,7 +369,10 @@ async function startInProcessBroker(projectDir: string, runtimeDir: string): Pro
 	const token = `token${crypto.randomUUID().replaceAll("-", "")}`;
 	await fs.mkdir(runtimeDir, { recursive: true, mode: 0o700 });
 	await fs.writeFile(daemonBrokerTokenPath(runtimeDir), token, { encoding: "utf8", mode: 0o600 });
-	void new DaemonBroker(projectDir, runtimeDir, token, 10_000).run();
+	const broker = new DaemonBroker(projectDir, runtimeDir, token, 10_000);
+	const run = broker.run();
+	void run.catch(() => {});
+	cleanupBrokers.push({ broker, run });
 	return connect(projectDir, runtimeDir);
 }
 
@@ -578,7 +604,7 @@ describe("a root with no native handle is never proven dead", () => {
 				expect(held?.exitedAt).toBeUndefined();
 				expect(held?.exitReason).toContain("no native handle");
 
-				// `restart: "always"` would replace the root within about a second. It must not while the holder lives.
+				// `restart: "always"` would replace the root after the first 2-second delay. It must not while the holder lives.
 				await delay(3_000);
 				expect(await readNumbers(pidFile)).toHaveLength(1);
 				expect((await listedDaemon(client, name))?.state).toBe("stopping");
