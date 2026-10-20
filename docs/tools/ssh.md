@@ -55,7 +55,7 @@ Failure behavior:
 7. On execute, `SshTool.execute()` rejects any `host` not in the discovered host-name set.
 8. `ensureHostInfo()` in `packages/coding-agent/src/ssh/connection-manager.ts` ensures an SSH master connection exists, loads cached host info from disk if present, and probes remote OS/shell when cache is missing or stale.
 9. `buildRemoteCommand()` in `packages/coding-agent/src/tools/shell/ssh.ts` prepends a cwd change when `cwd` is provided:
-   - Unix-like or Windows compat shells: `cd -- '<cwd>' && <command>`
+   - Unix-like or Windows compat shells: `cd -- '<cwd>' || exit; <command>`, so every part of the command runs in `<cwd>`, and none runs when the `cd` fails
    - Windows PowerShell: `Set-Location -Path '<cwd>'; <command>`
    - Windows cmd: `cd /d "<cwd>" && <command>`
 10. `clampTimeout("ssh", rawTimeout)` applies the `1..3600` second clamp from `packages/coding-agent/src/tools/core/tool-timeouts.ts`.
@@ -66,7 +66,7 @@ Failure behavior:
 
 ## Modes / Variants
 - **Tool unavailable**: `loadSshTool()` returns `null` when discovery finds no hosts, so the tool is not registered for that session.
-- **Unix-like target**: the command runs as `( <command>\n)` followed by `printf '\036__veyyon_exit_<token>:%s\n' "$?"`, with optional `cd -- ... &&` prefix inside the subshell. The token is random per call. A command such as `cd dir && nohup job > log 2>&1 & echo started` returns when `echo started` finishes, not when `job` does; `job` keeps running unless it writes to the command's output, which ends it with `SIGPIPE`.
+- **Unix-like target**: the command runs as `( <command>\n)` followed by `printf '\036__veyyon_exit_<token>:%s\n' "$?"`, with optional `cd -- ... || exit;` prefix inside the subshell. The token is random per call. A command such as `cd dir && nohup job > log 2>&1 & echo started` returns when `echo started` finishes, not when `job` does; `job` keeps running unless it writes to the command's output, which ends it with `SIGPIPE`.
 - **Exit marker not used**: Windows hosts and login shells other than `bash`, `zsh` and `sh` receive the command unchanged, and the call returns when the session closes.
 - **Windows native shell**: cwd wrapper uses PowerShell `Set-Location` or cmd `cd /d`; command otherwise runs in the remote default Windows shell.
 - **Windows compat shell**: if host probing finds `bash` or `sh` on Windows, `executeSSH()` wraps the remote command as `bash -c '...'` or `sh -c '...'`. Host config can force compat on/off with `compat`.

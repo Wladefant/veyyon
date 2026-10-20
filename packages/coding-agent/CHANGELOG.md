@@ -111,6 +111,7 @@
 ### Fixed
 
 - An `ssh` command that starts a background job, such as `cd dir && nohup job > log 2>&1 & echo started`, returns its own output and exit status when the command exits (469–529 ms on a LAN host) instead of waiting until the job ends or the call times out as cancelled, with a notice that the session closed without the job; on `bash`, `zsh` and `sh` hosts other than Windows.
+- An `ssh` call with a `cwd` runs every part of its command in that directory and none of it when the directory is missing, instead of running whatever followed a `;`, `&` or newline in the remote home directory and reporting exit 0 after a failed `cd`; on hosts other than native Windows `cmd` and PowerShell.
 - `launch` `stop`, `describe`, `logs`, `wait`, `send` and `restart` answer for a process whose record the broker purged after the cleanup wait, from its retained completion record, instead of failing with `Unknown daemon <name>` while `list` still shows the name under "Recently completed".
 - An `edit` anchored on a line an earlier `read` or `search` displayed applies after reads or searches of 30 other files and a later read of the same unchanged file, instead of failing with "never displayed" while the re-read of the first range is refused as still in context.
 - An `edit` anchored on a line shown in an earlier `edit`'s response, or displayed by a `read` before that edit, applies under the tag that edit returned after a later partial `read` of the file, instead of failing with "never displayed".

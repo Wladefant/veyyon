@@ -105,7 +105,9 @@ function buildRemoteCommand(command: string, cwd: string | undefined, info: SSHH
 		return `cd /d ${quoteCmdPath(cwd)} && ${command}`;
 	}
 
-	return `cd -- ${quoteRemotePath(cwd)} && ${command}`;
+	// `&&` would bind the cwd to the first and-or list only: a `;`, `&` or newline later in the
+	// command would run the rest outside `cwd`, and after a failed `cd`, in the login directory.
+	return `cd -- ${quoteRemotePath(cwd)} || exit; ${command}`;
 }
 
 async function loadHosts(session: ToolSession): Promise<{
