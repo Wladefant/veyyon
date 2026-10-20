@@ -130,4 +130,4 @@ exits. It is wired into `ci:test:smoke` and `scripts/install-tests/run-ci.sh`, s
 and tarball installs all exercise it, and it is the live validation of this contract. A worker on a
 different module graph gets a sibling smoke.
 
-*Verified against `d26b915d1` on 2026-08-22.*
+*Verified against `7faf9806c2b9c79ae0b287095f06962a260eaaa2` on 2026-10-20.*
