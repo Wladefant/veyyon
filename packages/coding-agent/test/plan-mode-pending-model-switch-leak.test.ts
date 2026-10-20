@@ -67,7 +67,6 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		// Stream is active throughout entry: #applyPlanModeModel snapshots the
 		// previous (default) model and queues a pending switch to the plan model
 		// instead of applying it immediately.
-<<<<<<< HEAD
 		Object.defineProperty(session, "isStreaming", {
 			configurable: true,
 			get: () => true,
@@ -78,10 +77,6 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 			explicitThinkingLevel: false,
 			warning: undefined,
 		});
-=======
-		Object.defineProperty(session, "isStreaming", { configurable: true, get: () => true });
-		vi.spyOn(session, "resolveHelperModel").mockReturnValue({ model: planModel, inherited: false });
->>>>>>> santhreal/main
 		// Avoid kicking off real session work during plan mode entry.
 		vi.spyOn(session, "sendPlanModeContext").mockResolvedValue(undefined);
 

@@ -450,6 +450,70 @@ describe("github copilot tiered context windows", () => {
 		expect(variant?.cost).toEqual({ input: 4, output: 18, cacheRead: 0.4, cacheWrite: 0 });
 	});
 
+	// Copilot reports live default-tier prices; the base row bills at them, not at a bundled or
+	// default rate (oh-my-pi 27c1d6e8d4eceafd85b33c3294d88bd6cffd6dc3).
+	it("prices the base model from its default tier", async () => {
+		const { models } = await discoverCopilotModels({
+			data: [
+				tieredCopilotEntry({
+					id: "gpt-9.9-luna",
+					name: "GPT-9.9 Luna",
+					window: 1_050_000,
+					maxOutput: 50_000,
+					defaultContextMax: 200_000,
+					longContextMax: 1_000_000,
+					defaultPrices: { input: 20, output: 120, cache: 2 },
+					longPrices: { input: 40, output: 180, cache: 4 },
+				}),
+			],
+		});
+
+		const base = models.find(candidate => candidate.id === "gpt-9.9-luna");
+		expect(base?.cost).toMatchObject({ input: 0.2, output: 1.2, cacheRead: 0.02 });
+		const variant = models.find(candidate => candidate.id === "gpt-9.9-luna-1m");
+		expect(variant?.cost).toMatchObject({ input: 0.4, output: 1.8, cacheRead: 0.04 });
+	});
+
+	it("keeps the provider rate when the default tier reports no prices", async () => {
+		const withoutPrices = await discoverCopilotModels({
+			data: [
+				tieredCopilotEntry({
+					id: "gpt-9.9-luna",
+					name: "GPT-9.9 Luna",
+					window: 1_050_000,
+					maxOutput: 50_000,
+					defaultContextMax: 200_000,
+					longContextMax: 1_000_000,
+				}),
+			],
+		});
+		const withPrices = await discoverCopilotModels({
+			data: [
+				tieredCopilotEntry({
+					id: "gpt-9.9-luna",
+					name: "GPT-9.9 Luna",
+					window: 1_050_000,
+					maxOutput: 50_000,
+					defaultContextMax: 200_000,
+					longContextMax: 1_000_000,
+					defaultPrices: { input: 20, output: 120, cache: 2 },
+				}),
+			],
+		});
+
+		const unpriced = withoutPrices.models.find(candidate => candidate.id === "gpt-9.9-luna");
+		const priced = withPrices.models.find(candidate => candidate.id === "gpt-9.9-luna");
+		// Without tier prices the row keeps the provider rate; with them only cacheWrite (never reported per
+		// tier) survives from that rate.
+		expect(unpriced?.cost?.input).not.toBe(0.2);
+		expect(priced?.cost).toEqual({
+			input: 0.2,
+			output: 1.2,
+			cacheRead: 0.02,
+			cacheWrite: unpriced?.cost?.cacheWrite,
+		});
+	});
+
 	it("keeps legacy tier-capped responses unchanged and synthesizes no variant", async () => {
 		const { models } = await discoverCopilotModels({
 			data: [
