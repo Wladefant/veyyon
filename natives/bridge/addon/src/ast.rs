@@ -47,10 +47,14 @@ fn parse_thread_count() -> usize {
 	cores::cores().saturating_sub(veyyon_walker::walk_workers())
 }
 
-/// Source bytes the parses of one search hold at once. A syntax tree takes
-/// about sixty times its source: four 2 MiB PHP files parse into 480 MiB of
-/// trees. A file larger than the budget parses alone.
+/// Source bytes the parses of every search in the process hold at once. A
+/// syntax tree takes about sixty times its source: four 2 MiB PHP files parse
+/// into 480 MiB of trees. A file larger than the budget parses alone.
 const PARSE_SOURCE_BUDGET: usize = 8 << 20;
+
+/// The budget every search holds its parses' source against, so searches that
+/// run at once hold no more trees together than one search may.
+static PARSE_BUDGET: ParseBudget = ParseBudget::new(PARSE_SOURCE_BUDGET);
 
 /// ast-grep pattern strictness (controls how patterns match syntax).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -666,12 +670,11 @@ struct FindRun<'a> {
 	/// Files the walk accepted that no thread has opened yet: absolute path,
 	/// then display path.
 	pending:        Mutex<Vec<(PathBuf, String)>>,
-	budget:         ParseBudget,
+	budget:         &'a ParseBudget,
 }
 
-/// The source bytes a search's parses may hold at once: a walk thread holds a
-/// file's share from its read until its parse ends, waiting while the rest is
-/// held.
+/// The source bytes parses may hold at once: a walk thread holds a file's
+/// share from its read until its parse ends, waiting while the rest is held.
 struct ParseBudget {
 	free:      Mutex<usize>,
 	released:  Condvar,
@@ -828,14 +831,14 @@ impl<'a> FindRun<'a> {
 			files_searched: AtomicUsize::new(0),
 			tally: Mutex::new(FindTally::default()),
 			pending: Mutex::new(Vec::with_capacity(PREFETCH_BATCH)),
-			budget: ParseBudget::new(PARSE_SOURCE_BUDGET),
+			budget: &PARSE_BUDGET,
 		}
 	}
 
-	/// The same run with a parse budget of `bytes`.
+	/// The same run holding its parses against `budget`.
 	#[cfg(test)]
-	const fn with_parse_budget(mut self, bytes: usize) -> Self {
-		self.budget = ParseBudget::new(bytes);
+	const fn with_parse_budget(mut self, budget: &'a ParseBudget) -> Self {
+		self.budget = budget;
 		self
 	}
 
@@ -1794,11 +1797,12 @@ mod tests {
 	/// boundary, the order of two patterns' matches of one node, a count, a
 	/// matched file, the file count, or a diagnostic out of path order. The
 	/// reference searches the files one after another in path order with
-	/// nothing bounded; the streamed search must give its result for every page
-	/// window with no parse thread, with one, whose one-file queue leaves most
-	/// parses to the walk threads, and with several, under a parse budget that
-	/// admits every file, one that admits a few, and one that admits one parse
-	/// at a time; and it must return every share of its budget it held.
+	/// nothing bounded; two streamed searches running at once must each give
+	/// its result for every page window with no parse thread, with one, whose
+	/// one-file queue leaves most parses to the walk threads, and with
+	/// several, under one parse budget that admits every file, one that admits
+	/// a few, and one that admits one parse at a time; and together they must
+	/// return every share of the budget they held.
 	///
 	/// What it does not catch: a cancellation that lands mid-search, which
 	/// fails the search either way and which the search-abort suite drives.
@@ -1915,27 +1919,52 @@ mod tests {
 				let case = format!(
 					"{parse_threads} parse threads, budget {budget}, offset {offset}, limit {limit}"
 				);
-				let run = FindRun::new(&patterns, None, None, &strictness, capacity, true)
-					.with_parse_budget(budget);
-				run.search_scope(&scope, parse_threads, &ct)
-					.expect("the search should succeed");
-				assert_eq!(*run.budget.free.lock(), budget, "{case}: every share returned");
-				let most_held = run.budget.most_held.load(AtomicOrdering::Relaxed);
+				// Two searches at once, holding their parses against one budget.
+				let shared = ParseBudget::new(budget);
+				let runs = [(); 2].map(|()| {
+					FindRun::new(&patterns, None, None, &strictness, capacity, true)
+						.with_parse_budget(&shared)
+				});
+				std::thread::scope(|threads| {
+					for run in &runs {
+						threads.spawn(|| {
+							run.search_scope(&scope, parse_threads, &ct)
+								.expect("the search should succeed");
+						});
+					}
+				});
+				assert_eq!(*shared.free.lock(), budget, "{case}: every share returned");
+				let most_held = shared.most_held.load(AtomicOrdering::Relaxed);
 				assert!(most_held > 0 && most_held <= budget, "{case}: held {most_held} at most");
-				let outcome = run.finish();
-				assert_eq!(outcome.total_matches, total, "{case}: total");
-				assert_eq!(outcome.files_with_matches, files, "{case}: files");
-				assert_eq!(outcome.files_searched, files_searched, "{case}: files searched");
-				assert_eq!(outcome.diagnostics, errors, "{case}: diagnostics");
-				let (page, limit_reached) = page_retained_matches(outcome.retained, offset, limit);
-				assert_eq!(page.iter().map(view).collect::<Vec<_>>(), expected, "{case}: page");
-				assert_eq!(
-					limit_reached,
-					all.len() > (offset + limit) as usize,
-					"{case}: limit reached"
-				);
+				for run in runs {
+					let outcome = run.finish();
+					assert_eq!(outcome.total_matches, total, "{case}: total");
+					assert_eq!(outcome.files_with_matches, files, "{case}: files");
+					assert_eq!(outcome.files_searched, files_searched, "{case}: files searched");
+					assert_eq!(outcome.diagnostics, errors, "{case}: diagnostics");
+					let (page, limit_reached) = page_retained_matches(outcome.retained, offset, limit);
+					assert_eq!(page.iter().map(view).collect::<Vec<_>>(), expected, "{case}: page");
+					assert_eq!(
+						limit_reached,
+						all.len() > (offset + limit) as usize,
+						"{case}: limit reached"
+					);
+				}
 			}
 		}
+	}
+
+	/// WHY: searches that run at once, as parallel tool calls do, must hold
+	/// their parses against one budget, or N searches hold N budgets' trees.
+	#[test]
+	fn every_search_holds_its_parses_against_the_process_budget() {
+		let strictness = MatchStrictness::Smart;
+		let patterns = ["foo($A)".to_owned()];
+		let first = FindRun::new(&patterns, None, None, &strictness, 1, false);
+		let second = FindRun::new(&patterns, None, None, &strictness, 1, false);
+		assert!(std::ptr::eq(first.budget, &PARSE_BUDGET));
+		assert!(std::ptr::eq(second.budget, &PARSE_BUDGET));
+		assert_eq!(PARSE_BUDGET.total, PARSE_SOURCE_BUDGET);
 	}
 
 	fn parse_job<'b>(budget: &'b ParseBudget, display_path: &str) -> ParseJob<'b> {
