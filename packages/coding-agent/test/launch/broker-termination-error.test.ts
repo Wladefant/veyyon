@@ -301,7 +301,7 @@ describe("daemon termination error resilience", () => {
 		const replacement = await client.request({ op: "start", spec });
 		expect(replacement.op).toBe("start");
 		if (replacement.op !== "start") throw new Error("unexpected start result");
-		expect(replacement.daemon.state).toBe("ready");
+		expect(replacement.daemon.state).toBe("starting");
 		expect(replacement.daemon.ownershipUncertain).toBeUndefined();
 		expect(replacement.daemon.restartCount).toBe(0);
 	});
