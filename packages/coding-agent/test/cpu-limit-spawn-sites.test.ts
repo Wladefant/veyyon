@@ -238,7 +238,6 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 		reason:
 			"`veyyon --smoke-test` runs `profile new --json` once in a throwaway profile to prove the worker entry boots; a CI probe, before any session exists",
 	},
-<<<<<<< HEAD
 	"packages/coding-agent/src/cli/supervisor/dumps.ts": {
 		wired: false,
 		reason:
@@ -249,9 +248,6 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 		reason: "out-of-process crash supervisor; spawns the main veyyon process itself, outside any session budget",
 	},
 	"packages/coding-agent/src/config/model-registry.ts": {
-=======
-	"packages/coding-agent/src/config/resolve-config-value-sync.ts": {
->>>>>>> santhreal/main
 		wired: false,
 		reason:
 			"execSync `!command` config values the model registry resolves at CLI/model discovery time, before the first session registers",
