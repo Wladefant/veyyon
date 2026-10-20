@@ -387,15 +387,8 @@ async function acquireTabImpl(
 	// Serialized opens can sit behind a slow predecessor in the per-name
 	// chain; honor an abort at dequeue instead of spawning a worker and
 	// browser hold nobody is waiting for.
-	if (opts.signal?.aborted) {
-		// The caller acquired (and published) the browser handle before queueing this
-		// open, so an abort at dequeue must drop it too — otherwise a live Chromium
-		// sits in `browsers` at refCount 0 with no tab pointing at it.
-		if (browser.refCount === 0) {
-			await bestEffort(releaseBrowser(browser, { kill: false }), "the abort is what the caller gets, not this");
-		}
-		throw new ToolAbortError("Browser tab open aborted");
-	}
+	// The browser lease is the caller's to release; this path takes no hold of its own to drop.
+	if (opts.signal?.aborted) throw new ToolAbortError("Browser tab open aborted");
 	killedTabs.delete(name);
 	// Temporary refCount hold so releasing an existing tab on the SAME browser
 	// below cannot drop it to refCount 0 and dispose the instance we are about
@@ -492,7 +485,7 @@ async function acquireTabImpl(
 			if (tempHold) await releaseBrowser(browser, { kill: false });
 			return result;
 		} catch (error) {
-			if (tempHold || browser.refCount === 0) await releaseBrowser(browser, { kill: false });
+			if (tempHold) await releaseBrowser(browser, { kill: false });
 			throw error;
 		}
 	}
@@ -550,9 +543,8 @@ async function openWorkerTab(
 			});
 			worker = await spawnTabWorker();
 		} catch (error) {
-			// Failing before the worker took its own hold must release the
-			// temporary one, or the browser's refCount never reaches 0 again.
-			if (tempHold || browser.refCount === 0) await releaseBrowser(browser, { kill: false });
+			// Failing before the worker took its own hold must release the temporary one, or it stays held forever.
+			if (tempHold) await releaseBrowser(browser, { kill: false });
 			throw error;
 		}
 		// Init budget: the caller's timeout plus the supervisor grace — never a
@@ -575,14 +567,14 @@ async function openWorkerTab(
 			// reported (no-op when it never got that far).
 			closeAbandonedWorkerPage(browser, worker);
 			if (worker.mode === "inline" || isReportedInitFailure(error)) {
-				if (tempHold || browser.refCount === 0) await releaseBrowser(browser, { kill: false });
+				if (tempHold) await releaseBrowser(browser, { kill: false });
 				throw error;
 			}
 			// Fail fast once the caller's init budget is exhausted: its timeout has already
 			// fired, so a retried result would only be discarded by the post-init abort check —
 			// don't spend the phase floors' excess on a cold start nobody is waiting for.
 			if (initBudgetExhausted(initBudgetMs, startedAt)) {
-				if (tempHold || browser.refCount === 0) await releaseBrowser(browser, { kill: false });
+				if (tempHold) await releaseBrowser(browser, { kill: false });
 				throw error;
 			}
 			logger.warn("Tab worker init failed; retrying with inline tab worker (no sync-loop guard)", {
@@ -594,7 +586,7 @@ async function openWorkerTab(
 			} catch (inlineError) {
 				await terminateWorker(worker, "open-inline-failed");
 				closeAbandonedWorkerPage(browser, worker);
-				if (tempHold || browser.refCount === 0) await releaseBrowser(browser, { kill: false });
+				if (tempHold) await releaseBrowser(browser, { kill: false });
 				const finalError = new ToolError(
 					`Failed to start browser tab worker (inline fallback also failed): ${errorMessage(inlineError)}`,
 				);
@@ -612,11 +604,8 @@ async function openWorkerTab(
 			await terminateWorker(worker, "open-aborted");
 			closeAbandonedWorkerPage(browser, worker);
 			// The browser release runs while an abort is already being raised; its own failure must not
-			// replace `ToolAbortError`, and the refCount it adjusts is dropped with the browser anyway.
-			// `|| browser.refCount === 0` matches every sibling error path above. Without it, an abort
-			// here strands the handle `acquireBrowser` already published at refCount 0 — and nothing
-			// walks `browsers`, only `tabs`.
-			if (tempHold || browser.refCount === 0) {
+			// replace `ToolAbortError`. The caller's lease is released by the caller.
+			if (tempHold) {
 				await bestEffort(releaseBrowser(browser, { kill: false }), "the abort is what the caller gets, not this");
 			}
 			throw new ToolAbortError("Browser tab open aborted");

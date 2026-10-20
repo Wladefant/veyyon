@@ -175,7 +175,6 @@ describe("browser tool schema", () => {
 		expect(tool.formatApprovalDetails({ action: "close", approved_tab_ids: [100, 101] })).toContain(
 			"Approved Tab IDs: 100, 101",
 		);
-
 	});
 
 	// Reproduces the regression the Codex review flagged on #3647: with default

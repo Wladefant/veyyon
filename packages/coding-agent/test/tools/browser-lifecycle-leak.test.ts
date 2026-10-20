@@ -5,7 +5,7 @@
  * 1. An aborted `open` observes abort only in its `untilAborted` wrapper — the
  *    inner launch resolves in the background and `acquireBrowser` publishes
  *    the handle unconditionally, leaving a live browser at refCount:0 with no
- *    tab holding it. `releaseAllTabs` walks tabs, not browsers, so nothing
+ *    tab holding it. `releaseTabsForOwner` walks tabs, not browsers, so nothing
  *    ever reaps it.
  * 2. Browser + tab state lives in module-global maps. `AgentSession.dispose()`
  *    walks jobs, eval kernels, provider sessions, and MCP, but has no browser
@@ -24,7 +24,12 @@ import type { ToolSession } from "@veyyon/coding-agent/sdk";
 import type { CmuxKind } from "@veyyon/coding-agent/tools/web/browser/cmux/rpc";
 import { CmuxSocketClient } from "@veyyon/coding-agent/tools/web/browser/cmux/socket-client";
 import { BrowserTool } from "@veyyon/coding-agent/tools/web/browser";
-import { acquireBrowser, getBrowsersMapForTest, type PuppeteerBrowserHandle } from "@veyyon/coding-agent/tools/web/browser/registry";
+import {
+	acquireBrowser,
+	getBrowsersMapForTest,
+	type PuppeteerBrowserHandle,
+	releaseBrowser,
+} from "@veyyon/coding-agent/tools/web/browser/registry";
 import {
 	acquireTab,
 	getTabsMapForTest,
@@ -79,7 +84,7 @@ describe("browser lifecycle — aborted open must not leak a browser handle", ()
 			expect(connectSpy).toHaveBeenCalledTimes(1);
 			// The freshly-launched browser MUST be torn down before publication so it
 			// does not sit at refCount:0 in the global map, leaking a live cmux socket
-			// (or, for headless, a live Chromium process) that no `releaseAllTabs`
+			// (or, for headless, a live Chromium process) that no `releaseTabsForOwner`
 			// / `dropHeadlessTabs` walk would ever reap.
 			expect(closeSpy).toHaveBeenCalledTimes(1);
 			expect(getBrowsersMapForTest().size).toBe(0);
@@ -145,7 +150,9 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 		const browserB = await acquireBrowser(kindB, { cwd: "/tmp" });
 
 		const tabA = await acquireTab("tab-a", browserA, { timeoutMs: 1_000, ownerSessionId: "session-A" });
+		await releaseBrowser(browserA, { kill: false });
 		const tabB = await acquireTab("tab-b", browserB, { timeoutMs: 1_000, ownerSessionId: "session-B" });
+		await releaseBrowser(browserB, { kill: false });
 
 		expect(tabA.tab.ownerSessionId).toBe("session-A");
 		expect(tabB.tab.ownerSessionId).toBe("session-B");
@@ -224,7 +231,7 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 		expect(getTabsMapForTest().has("lane-b-tab")).toBe(false);
 	});
 
-	it("inventory distinguishes owned from attached relay tabs without exposing URL secrets", async () => {
+	it("inventory lists only this session's and ownerless relay tabs, never another session's name, title or URL", async () => {
 		const relay = {
 			getTrackedTabs: () => [
 				{
@@ -238,15 +245,15 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 					tabId: 101,
 					windowId: 7,
 					targetId: "ext-101",
-					url: "https://example.com/parent",
-					title: "Parent page",
+					url: "https://example.com/foreign-path?token=foreign-secret",
+					title: "Foreign page",
 				},
 				{
-					tabId: 102,
-					windowId: 8,
-					targetId: "ext-102",
-					url: "https://example.com/operator-only",
-					title: "Untracked operator page",
+					tabId: 103,
+					windowId: 9,
+					targetId: "ext-103",
+					url: "https://example.com/ownerless",
+					title: "Ownerless page",
 				},
 			],
 		};
@@ -268,9 +275,9 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 			} as unknown as TabSession,
 		);
 		tabs.set(
-			"attached-extension-tab",
+			"foreign-extension-tab",
 			{
-				name: "attached-extension-tab",
+				name: "foreign-extension-tab",
 				browser,
 				targetId: "ext-101",
 				state: "alive",
@@ -282,6 +289,20 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 				worker: {},
 			} as unknown as TabSession,
 		);
+		tabs.set(
+			"ownerless-extension-tab",
+			{
+				name: "ownerless-extension-tab",
+				browser,
+				targetId: "ext-103",
+				state: "alive",
+				info: {},
+				pending: new Map(),
+				kindTag: "extension",
+				backend: "worker",
+				worker: {},
+			} as unknown as TabSession,
+		);
 
 		try {
 			const tool = new BrowserTool(makeToolSession("session-A"));
@@ -289,18 +310,28 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 			const content = result.content[0];
 			expect(content?.type).toBe("text");
 			if (content?.type !== "text") throw new Error("Inventory did not return text.");
-			const rows = JSON.parse(content.text);
-			expect(rows).toHaveLength(2);
-
-			expect(rows).toMatchObject([
-				{ tab_id: 100, window_id: 7, ownership: "owned", title: "Owned page" },
-				{ tab_id: 101, window_id: 7, ownership: "attached", title: "Parent page" },
+			expect(JSON.parse(content.text)).toMatchObject([
+				{ tab_id: 100, window_id: 7, name: "owned-extension-tab", ownership: "owned", title: "Owned page" },
+				{ tab_id: 103, window_id: 9, name: "ownerless-extension-tab", ownership: "attached", title: "Ownerless page" },
 			]);
+			for (const leaked of ["foreign-extension-tab", "Foreign page", "foreign-secret", "foreign-path", "ext-101"]) {
+				expect(content.text).not.toContain(leaked);
+			}
 			expect(content.text).not.toContain("inventory-secret");
+
+			// A caller with no identity sees only the ownerless tab, never the owned ones.
+			const anonymous = await new BrowserTool(makeToolSession()).execute("inventory", { action: "inventory" });
+			const anonymousContent = anonymous.content[0];
+			if (anonymousContent?.type !== "text") throw new Error("Inventory did not return text.");
+			expect(JSON.parse(anonymousContent.text)).toMatchObject([
+				{ tab_id: 103, ownership: "attached", name: "ownerless-extension-tab" },
+			]);
+			expect(anonymousContent.text).not.toContain("Owned page");
 			expect(getBrowsersMapForTest().size).toBe(0);
 		} finally {
 			tabs.delete("owned-extension-tab");
-			tabs.delete("attached-extension-tab");
+			tabs.delete("foreign-extension-tab");
+			tabs.delete("ownerless-extension-tab");
 		}
 	});
 
@@ -313,7 +344,70 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 		expect(getBrowsersMapForTest().size).toBe(0);
 	});
 
-	it("acquireTab reusing an existing tab preserves the original owner", async () => {
+	// WHY: one tab name is shared, so a second session that opens, reuses, runs or lists it could drive or
+	// read another lane's page. These tests pin the refusal before any side effect, and that the owner and
+	// ownerless callers keep working. GAPS, unproven here: raw CDP and relay direct target commands, which
+	// bypass this tab table entirely, and whether ownership survives a relay reconnect.
+	it("refuses another session's tab on open, dialog replacement, or no identity, leaving it untouched", async () => {
+		spyOn(CmuxSocketClient.prototype, "connect").mockResolvedValue(undefined);
+		spyOn(CmuxSocketClient.prototype, "close").mockImplementation(() => undefined);
+		const request = spyOn(CmuxSocketClient.prototype, "request").mockImplementation(
+			async (method: string): Promise<Record<string, unknown>> => {
+				if (method === "browser.open_split") return { surface_id: "surface-deny", url: "about:blank" };
+				return {};
+			},
+		);
+
+		const browser = await acquireBrowser(makeKind("deny-open"), { cwd: "/tmp" });
+		const owned = await acquireTab("deny-tab", browser, { timeoutMs: 1_000, ownerSessionId: "session-A" });
+		const callsBefore = request.mock.calls.length;
+
+		await expect(
+			acquireTab("deny-tab", browser, { timeoutMs: 1_000, ownerSessionId: "session-B" }),
+		).rejects.toThrow(/another session/);
+		// A changed dialog policy takes the replacement path, which releases the tab; it must be refused first.
+		await expect(
+			acquireTab("deny-tab", browser, { timeoutMs: 1_000, dialogs: "accept", ownerSessionId: "session-B" }),
+		).rejects.toThrow(/another session/);
+		await expect(acquireTab("deny-tab", browser, { timeoutMs: 1_000 })).rejects.toThrow(/another session/);
+		await releaseBrowser(browser, { kill: false });
+
+		expect(getTabsMapForTest().get("deny-tab")).toBe(owned.tab);
+		expect(owned.tab.state).toBe("alive");
+		expect(owned.tab.ownerSessionId).toBe("session-A");
+		expect(request.mock.calls.length).toBe(callsBefore);
+	});
+
+	it("refuses another session's run on its tab before any code reaches the page", async () => {
+		spyOn(CmuxSocketClient.prototype, "connect").mockResolvedValue(undefined);
+		spyOn(CmuxSocketClient.prototype, "close").mockImplementation(() => undefined);
+		const request = spyOn(CmuxSocketClient.prototype, "request").mockImplementation(
+			async (method: string): Promise<Record<string, unknown>> => {
+				if (method === "browser.open_split") return { surface_id: "surface-run-deny", url: "about:blank" };
+				return {};
+			},
+		);
+
+		const browser = await acquireBrowser(makeKind("deny-run"), { cwd: "/tmp" });
+		const owned = await acquireTab("deny-run-tab", browser, { timeoutMs: 1_000, ownerSessionId: "session-A" });
+		await releaseBrowser(browser, { kill: false });
+		const callsBefore = request.mock.calls.length;
+		const foreign = new BrowserTool(makeToolSession("session-B"));
+		const anonymous = new BrowserTool(makeToolSession());
+
+		await expect(
+			foreign.execute("run-foreign", { action: "run", name: "deny-run-tab", code: "return 1;" }),
+		).rejects.toThrow(/another session/);
+		await expect(
+			anonymous.execute("run-anonymous", { action: "run", name: "deny-run-tab", code: "return 1;" }),
+		).rejects.toThrow(/another session/);
+
+		expect(request.mock.calls.length).toBe(callsBefore);
+		expect(owned.tab.pending.size).toBe(0);
+		expect(getTabsMapForTest().get("deny-run-tab")).toBe(owned.tab);
+	});
+
+	it("lets the owner reuse its tab and keeps the owner; another session's owner release touches nothing", async () => {
 		spyOn(CmuxSocketClient.prototype, "connect").mockResolvedValue(undefined);
 		spyOn(CmuxSocketClient.prototype, "close").mockImplementation(() => undefined);
 		spyOn(CmuxSocketClient.prototype, "request").mockImplementation(
@@ -323,25 +417,38 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 			},
 		);
 
-		const kind = makeKind("reuse");
-		const browser = await acquireBrowser(kind, { cwd: "/tmp" });
-
+		const browser = await acquireBrowser(makeKind("reuse"), { cwd: "/tmp" });
 		const first = await acquireTab("reuse-tab", browser, { timeoutMs: 1_000, ownerSessionId: "session-A" });
-		const second = await acquireTab("reuse-tab", browser, { timeoutMs: 1_000, ownerSessionId: "session-B" });
+		const second = await acquireTab("reuse-tab", browser, { timeoutMs: 1_000, ownerSessionId: "session-A" });
+		await releaseBrowser(browser, { kill: false });
 
-		expect(first.tab).toBe(second.tab);
+		expect(second.tab).toBe(first.tab);
 		expect(second.created).toBe(false);
-		// Reuse must NOT reassign ownership — an agent re-driving an existing
-		// tab shouldn't yank teardown responsibility from the session that opened it.
 		expect(second.tab.ownerSessionId).toBe("session-A");
 
-		// releaseTabsForOwner("session-B") is a no-op here — the tab belongs to A.
-		const releasedB = await releaseTabsForOwner("session-B", { kill: false });
-		expect(releasedB).toBe(0);
+		expect(await releaseTabsForOwner("session-B", { kill: false })).toBe(0);
 		expect(getTabsMapForTest().has("reuse-tab")).toBe(true);
-
-		const releasedA = await releaseTabsForOwner("session-A", { kill: false });
-		expect(releasedA).toBe(1);
+		expect(await releaseTabsForOwner("session-A", { kill: false })).toBe(1);
 		expect(getTabsMapForTest().has("reuse-tab")).toBe(false);
+	});
+
+	it("lets any caller reuse an ownerless tab without taking ownership of it", async () => {
+		spyOn(CmuxSocketClient.prototype, "connect").mockResolvedValue(undefined);
+		spyOn(CmuxSocketClient.prototype, "close").mockImplementation(() => undefined);
+		spyOn(CmuxSocketClient.prototype, "request").mockImplementation(
+			async (method: string): Promise<Record<string, unknown>> => {
+				if (method === "browser.open_split") return { surface_id: "surface-ownerless", url: "about:blank" };
+				return {};
+			},
+		);
+
+		const browser = await acquireBrowser(makeKind("ownerless-reuse"), { cwd: "/tmp" });
+		const first = await acquireTab("ownerless-tab", browser, { timeoutMs: 1_000 });
+		const second = await acquireTab("ownerless-tab", browser, { timeoutMs: 1_000, ownerSessionId: "session-B" });
+		await releaseBrowser(browser, { kill: false });
+
+		expect(second.tab).toBe(first.tab);
+		expect(second.created).toBe(false);
+		expect(second.tab.ownerSessionId).toBeUndefined();
 	});
 });
