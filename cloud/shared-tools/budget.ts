@@ -324,19 +324,28 @@ function parseReservation(value: unknown): Reservation {
 }
 
 /**
- * Server-side `ToolBudget` for one scope. The userId must come from the verified admission
- * identity, never from request input. A transport failure, a non-200 status or a malformed
- * body throws, and the call is never retried: the reservation may already be charged.
+ * Server-side `ToolBudget` for one scope and caller request. The request ID is opaque and
+ * stable across retries; the authority derives a private reservation ID from user, scope and ID.
+ * A transport failure, non-200 status or malformed body throws, and the call is never retried.
  */
-export function createToolBudget(namespace: BudgetNamespace, scope: ToolScope): ToolBudget {
+export function createToolBudget(
+	namespace: BudgetNamespace,
+	scope: ToolScope,
+	clientRequestId: string,
+): ToolBudget {
+	if (!OPAQUE_ID.test(clientRequestId)) throw new BudgetUnavailableError();
 	const id = namespace.idFromName(INSTANCE_NAME);
 	return {
 		async reserve(userId: string, _clientNowMs: number, costMicrousd: number): Promise<Reservation> {
 			if (!OPAQUE_ID.test(userId) || !isNonNegativeSafeInteger(costMicrousd)) throw new BudgetUnavailableError();
+			const requestId = await crypto.subtle.digest(
+				"SHA-256",
+				new TextEncoder().encode(JSON.stringify([userId, scope, clientRequestId])),
+			);
 			const body: ReservationRequest = {
 				userId,
 				scope,
-				requestId: crypto.randomUUID(),
+				requestId: [...new Uint8Array(requestId)].map((byte) => byte.toString(16).padStart(2, "0")).join(""),
 				nowMs: Date.now(),
 				costMicrousd,
 			};

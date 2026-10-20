@@ -68,10 +68,7 @@ async function readBoundedBody(request: Request): Promise<Uint8Array | Response>
 /** The only HTTP surface is scoped discovery and the two public tool calls. */
 export function createSharedToolsWorker(config: SharedToolsConfig): { fetch(request: Request): Promise<Response> } {
 	const admission = createAdmission(config.policy, config.authentication);
-	const budgets = {
-		"fetch:public": createToolBudget(config.budget, "fetch:public"),
-		"search:public": createToolBudget(config.budget, "search:public"),
-	};
+	const budgets = config.budget;
 	return {
 		async fetch(request: Request): Promise<Response> {
 			try {
@@ -83,6 +80,10 @@ export function createSharedToolsWorker(config: SharedToolsConfig): { fetch(requ
 				const scope = ROUTES[path as keyof typeof ROUTES];
 				if (!scope) return Response.json({ error: "not_found" }, { status: 404 });
 				if (request.method !== "POST") return Response.json({ error: "method_not_allowed" }, { status: 405 });
+				const clientRequestId = request.headers.get("x-request-id");
+				if (clientRequestId === null || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(clientRequestId)) {
+					return Response.json({ error: "bad_request" }, { status: 400 });
+				}
 				const identity = await admission.authorize(request, scope);
 				if (!identity) return Response.json({ error: "forbidden" }, { status: 403 });
 				const body = await readBoundedBody(request);
@@ -90,7 +91,8 @@ export function createSharedToolsWorker(config: SharedToolsConfig): { fetch(requ
 				const braveKey = scope === "search:public" ? await admission.resolveBraveKey(identity) : null;
 				if (scope === "search:public" && !braveKey) return Response.json({ error: "unavailable" }, { status: 503 });
 				const cost = scope === "fetch:public" ? 0 : braveKey!.costMicrousdPerRequest;
-				const reserved = await budgets[scope].reserve(identity.userId, Date.now(), cost);
+				const budget = createToolBudget(budgets, scope, clientRequestId);
+				const reserved = await budget.reserve(identity.userId, Date.now(), cost);
 				if (!reserved.allowed) return Response.json({ error: "budget_refused", reason: reserved.reason }, { status: 429 });
 				// The reservation awaited a network hop. Admission can change during it: the global switch,
 				// the device, the user, the scope or the key binding. Re-admit the same device and user, and

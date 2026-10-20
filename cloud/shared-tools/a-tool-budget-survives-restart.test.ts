@@ -318,13 +318,21 @@ describe("SharedToolBudgetAuthority survives restart and enforces quotas", () =>
 				},
 			}),
 		};
-		const budget = createToolBudget(namespace, "fetch:public");
+		const budget = createToolBudget(namespace, "fetch:public", "lost-response");
 
 		await expect(budget.reserve("user-a", 0, 1000)).rejects.toBeInstanceOf(BudgetUnavailableError);
 		expect(calls).toBe(1);
 		expect(names).toEqual(["pilot"]);
-		for (let i = 0; i < 9; i++) expect(await budget.reserve("user-a", 0, 1000)).toEqual({ allowed: true });
-		expect(await budget.reserve("user-a", 0, 1000)).toEqual({ allowed: false, reason: "minute_limit" });
+		await expect(budget.reserve("user-a", 0, 1000)).rejects.toBeInstanceOf(BudgetUnavailableError);
+		for (let i = 0; i < 9; i++) {
+			expect(await createToolBudget(namespace, "fetch:public", `fresh-request-${i}`).reserve("user-a", 0, 1000)).toEqual({
+				allowed: true,
+			});
+		}
+		expect(await createToolBudget(namespace, "fetch:public", "over-limit").reserve("user-a", 0, 1000)).toEqual({
+			allowed: false,
+			reason: "minute_limit",
+		});
 	});
 
 	test("malformed requests get generic errors and charge nothing", async () => {

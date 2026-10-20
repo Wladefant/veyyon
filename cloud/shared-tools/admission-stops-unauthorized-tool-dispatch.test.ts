@@ -55,6 +55,7 @@ const WIDE: BudgetLimits = {
 
 
 const tempRoot = mkdtempSync(join(tmpdir(), "admission-dispatch-"));
+let requestCount = 0;
 let fileCount = 0;
 afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
 
@@ -181,6 +182,7 @@ interface Hooks {
 	// Counts every reservation the worker sends to the durable authority.
 	reserves: number;
 	failReserve: boolean;
+	dropReserveResponse: boolean;
 	// Runs once, after the authority has committed the reservation and before the response returns.
 	afterReserve: (() => void) | null;
 	toolThrows: boolean;
@@ -266,7 +268,7 @@ async function buildRig(search: Partial<BudgetLimits> = {}): Promise<Rig> {
 		{ limits: { "fetch:public": WIDE, "search:public": { ...WIDE, ...search } }, now: () => NOW },
 	);
 
-	const hooks: Hooks = { reserves: 0, failReserve: false, afterReserve: null, toolThrows: false };
+	const hooks: Hooks = { reserves: 0, failReserve: false, dropReserveResponse: false, afterReserve: null, toolThrows: false };
 	const budget: BudgetNamespace = {
 		idFromName: () => "pilot",
 		get: () => ({
@@ -277,6 +279,10 @@ async function buildRig(search: Partial<BudgetLimits> = {}): Promise<Rig> {
 				const after = hooks.afterReserve;
 				hooks.afterReserve = null;
 				after?.();
+				if (hooks.dropReserveResponse) {
+					hooks.dropReserveResponse = false;
+					throw new Error("connection reset after reservation");
+				}
 				return response;
 			},
 		}),
@@ -321,11 +327,17 @@ async function authFor(signer: Signer, who: Who): Promise<Record<string, string>
 	return accessHeaders(await tokenFor(signer, CREDENTIALS[who].clientId), who);
 }
 
-function post(rig: Rig, path: string, headers: Record<string, string>, body: BodyInit = "{}"): Promise<Response> {
+function post(
+	rig: Rig,
+	path: string,
+	headers: Record<string, string>,
+	body: BodyInit = "{}",
+	requestId = `test-request-${requestCount++}`,
+): Promise<Response> {
 	return rig.worker.fetch(
 		new Request(`https://tools.example.test${path}`, {
 			method: "POST",
-			headers: { ...headers, "content-type": "application/json" },
+			headers: { ...headers, "content-type": "application/json", "x-request-id": requestId },
 			body,
 		}),
 	);
@@ -439,12 +451,71 @@ describe("admission stops unauthorized tool dispatch", () => {
 	test("an exhausted minute quota refuses the second call and never reaches the tool", async () => {
 		const rig = await buildRig({ minute: 1 });
 		const headers = await authFor(rig.signer, "a");
+
 		expect((await post(rig, "/tools/search", headers)).status).toBe(200);
 		const refused = await post(rig, "/tools/search", headers);
 		expect(refused.status).toBe(429);
 		expect(await refused.json()).toEqual({ error: "budget_refused", reason: "minute_limit" });
 		expect(rig.hooks.reserves).toBe(2);
 		expect(rig.dispatches).toHaveLength(1);
+	});
+
+	test("a request ID admits one dispatch and refuses identical or changed-body replays", async () => {
+		const rig = await buildRig();
+		const headers = await authFor(rig.signer, "a");
+		const body = '{"query":"first"}';
+		expect((await post(rig, "/tools/search", headers, body, "replay-1")).status).toBe(200);
+		const replay = await post(rig, "/tools/search", headers, body, "replay-1");
+		expect(replay.status).toBe(503);
+		expect(await replay.json()).toEqual({ error: "unavailable" });
+		const changedBody = await post(rig, "/tools/search", headers, '{"query":"different"}', "replay-1");
+		expect(changedBody.status).toBe(503);
+		expect(rig.hooks.reserves).toBe(3);
+		expect(rig.dispatches).toHaveLength(1);
+	});
+
+	test("a tool failure cannot be dispatched again when the caller retries its request ID", async () => {
+		const rig = await buildRig();
+		rig.hooks.toolThrows = true;
+		const headers = await authFor(rig.signer, "a");
+		expect((await post(rig, "/tools/search", headers, "{}", "retry-after-error")).status).toBe(503);
+		rig.hooks.toolThrows = false;
+		expect((await post(rig, "/tools/search", headers, "{}", "retry-after-error")).status).toBe(503);
+		expect(rig.dispatches).toHaveLength(1);
+	});
+
+	test("a lost reservation response cannot dispatch on retry with the same request ID", async () => {
+		const rig = await buildRig();
+		rig.hooks.dropReserveResponse = true;
+		const headers = await authFor(rig.signer, "a");
+		expect((await post(rig, "/tools/search", headers, "{}", "lost-reserve-response")).status).toBe(503);
+		expect((await post(rig, "/tools/search", headers, "{}", "lost-reserve-response")).status).toBe(503);
+		expect(rig.dispatches).toHaveLength(0);
+	});
+
+	test("the same request ID is independent across users and scopes", async () => {
+		const rig = await buildRig();
+		const id = "independent-request";
+		expect((await post(rig, "/tools/search", await authFor(rig.signer, "a"), "{}", id)).status).toBe(200);
+		expect((await post(rig, "/tools/search", await authFor(rig.signer, "b"), "{}", id)).status).toBe(200);
+		expect((await post(rig, "/tools/fetch", await authFor(rig.signer, "a"), "{}", id)).status).toBe(200);
+		expect(rig.dispatches).toHaveLength(3);
+	});
+
+	test("missing and malformed request IDs are refused before admission or reservation", async () => {
+		const rig = await buildRig();
+		const headers = await authFor(rig.signer, "a");
+		for (const requestId of [null, "", "bad request", "a".repeat(129)]) {
+			const requestHeaders: Record<string, string> = { ...headers, "content-type": "application/json" };
+			if (requestId !== null) requestHeaders["x-request-id"] = requestId;
+			const response = await rig.worker.fetch(
+				new Request("https://tools.example.test/tools/search", { method: "POST", headers: requestHeaders, body: "{}" }),
+			);
+			expect(response.status).toBe(400);
+			expect(await response.json()).toEqual({ error: "bad_request" });
+		}
+		expect(rig.hooks.reserves).toBe(0);
+		expect(rig.dispatches).toHaveLength(0);
 	});
 
 	test("an exhausted cost quota refuses before dispatch", async () => {

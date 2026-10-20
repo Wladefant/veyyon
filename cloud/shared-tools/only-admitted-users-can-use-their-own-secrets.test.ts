@@ -556,6 +556,11 @@ describe("only admitted users can use their own secrets", () => {
 			() => createAdmission(base.policy, config("https://team.cloudflareaccess.com/")),
 			() => createAdmission(base.policy, config(ISSUER, [base.secretA, { ...base.secretA }])),
 			() => createAdmission(base.policy, config(ISSUER, [{ ...base.secretA, sha256: "XYZ" }])),
+			() =>
+				createAdmission(
+					{ ...base.policy, devices: [{ ...base.deviceA, secretSha256: "a".repeat(128) }, base.deviceB] },
+					config(),
+				),
 			() => createAdmission(base.policy, config(ISSUER, [{ ...base.secretA, costMicrousdPerRequest: -1 }])),
 		];
 		for (const build of builds) {
