@@ -504,6 +504,7 @@ export const repoScriptTests = [
 	"scripts/there-is-only-one-capture-path.test.ts",
 	"scripts/a-recorder-container-can-reach-a-model-served-by-its-host.test.ts",
 	"scripts/a-capture-runs-on-the-bun-the-product-requires.test.ts",
+	"scripts/check-doc-paths.test.ts",
 	"scripts/check-doc-links.test.ts",
 	"scripts/first-party-docs-are-indexed.test.ts",
 	"scripts/script-tests-coverage.test.ts",

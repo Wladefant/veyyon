@@ -369,10 +369,15 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 		expect(documentation).toMatchObject({ mode: "affected", selectedMembers: [] });
 	});
 
-	it("sweeps runtime workspace manifests for owner and reverse closure on non-code member assets", () => {
+	it("sweeps runtime workspace manifests for owner closure and Markdown reader targets", () => {
 		const currentGraph = workspaceDependencyGraph();
+		const trackedReaders = new Set([
+			"scripts/check-doc-links.test.ts",
+			"scripts/check-doc-paths.test.ts",
+			"scripts/first-party-docs-are-indexed.test.ts",
+		]);
 		for (const directory of currentGraph.nodes.keys()) {
-			const asset = `${directory}/README.asset`;
+			const asset = `${directory}/README.md`;
 			const expected = reverseDependencyClosure(currentGraph, [directory]);
 			const selection = selectAffectedWorkspaceMembers(
 				[{ status: "M", paths: [asset] }],
@@ -384,29 +389,44 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 				selectedMembers: expected,
 				changeMembers: [{ path: asset, selectedMembers: expected }],
 			});
+			expect(ciContractTestsForPaths([asset], trackedReaders).map(target => target.path)).toEqual([
+				"scripts/check-doc-links.test.ts",
+				"scripts/check-doc-paths.test.ts",
+				"scripts/first-party-docs-are-indexed.test.ts",
+			]);
 		}
 	});
 
 	it("maps root and handbook Markdown to explicit real readers, including cross-member inputs", () => {
-		const rootTargets = ciContractTestsForPaths(["README.md"]);
-		expect(rootTargets.map(target => target.path)).toEqual(["scripts/check-doc-links.test.ts"]);
-
-		const docsIndexTargets = ciContractTestsForPaths(["docs/README.md"]);
-		expect(docsIndexTargets.map(target => target.path)).toEqual([
+		const trackedReaders = new Set([
 			"scripts/check-doc-links.test.ts",
+			"scripts/check-doc-paths.test.ts",
+			"scripts/first-party-docs-are-indexed.test.ts",
+			"scripts/a-generated-doc-says-so-on-its-first-line.test.ts",
+			"scripts/settings-doc-coherence.test.ts",
+			"scripts/a-documented-provider-default-is-the-descriptor-default.test.ts",
+			"scripts/internal-docs-are-tracked.test.ts",
+		]);
+		const targets = (file: string) => ciContractTestsForPaths([file], trackedReaders).map(target => target.path);
+		expect(targets("README.md")).toEqual(["scripts/check-doc-links.test.ts", "scripts/check-doc-paths.test.ts"]);
+		expect(targets("docs/README.md")).toEqual([
+			"scripts/check-doc-links.test.ts",
+			"scripts/check-doc-paths.test.ts",
 			"scripts/first-party-docs-are-indexed.test.ts",
 		]);
-
-		const settingsTargets = ciContractTestsForPaths(["docs/handbook/src/reference/settings.md"]);
-		expect(settingsTargets.map(target => target.path)).toEqual([
+		expect(targets("docs/handbook/src/reference/settings.md")).toEqual([
 			"scripts/check-doc-links.test.ts",
+			"scripts/check-doc-paths.test.ts",
 			"scripts/a-generated-doc-says-so-on-its-first-line.test.ts",
 			"scripts/settings-doc-coherence.test.ts",
 		]);
-		const providerTargets = ciContractTestsForPaths(["docs/handbook/src/reference/providers.md"]);
-		expect(providerTargets.map(target => target.path)).toContain(
+		expect(targets("docs/handbook/src/reference/providers.md")).toContain(
 			"scripts/a-documented-provider-default-is-the-descriptor-default.test.ts",
 		);
+		expect(targets("packages/ai/README.md")).toContain(
+			"scripts/a-documented-provider-default-is-the-descriptor-default.test.ts",
+		);
+		expect(targets("packages/ai/NOTES.md")).toContain("scripts/first-party-docs-are-indexed.test.ts");
 
 		const providerReadme = "packages/ai/README.md";
 		const realGraph = workspaceDependencyGraph();
@@ -416,33 +436,71 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 			realGraph,
 		);
 		expect(realSelection.selectedMembers).toEqual(reverseDependencyClosure(realGraph, ["packages/ai"]));
-		expect(ciContractTestsForPaths([providerReadme]).map(target => target.path)).toEqual([
-			"scripts/a-documented-provider-default-is-the-descriptor-default.test.ts",
-		]);
 	});
 
-	it("maps Markdown additions, deletions, and both rename sides without dropping reader targets", () => {
+	it("routes nested Markdown reader contracts for additions, deletions, renames, and path failures", () => {
+		const trackedReaders = new Set([
+			"scripts/check-doc-links.test.ts",
+			"scripts/check-doc-paths.test.ts",
+			"scripts/a-generated-doc-says-so-on-its-first-line.test.ts",
+		]);
 		const targets = ciContractTestsForPaths(
 			[
-				{ status: "A", paths: ["docs/handbook/src/new-page.md"] },
-				{ status: "D", paths: ["docs/handbook/src/old-page.md"] },
-				{ status: "R100", paths: ["docs/handbook/src/old-name.md", "docs/handbook/src/new-name.md"] },
-			].flatMap(change => change.paths),
+				"packages/ai/new.md",
+				"plugins/sample/old.md",
+				"plugins/sample/renamed.md",
+				"docs/handbook/src/models/system-prompt.md",
+			],
+			trackedReaders,
 		);
 		expect(targets.map(target => target.path)).toEqual([
 			"scripts/check-doc-links.test.ts",
+			"scripts/check-doc-paths.test.ts",
+			"scripts/first-party-docs-are-indexed.test.ts",
 			"scripts/a-generated-doc-says-so-on-its-first-line.test.ts",
 		]);
 	});
 
-	it("fails closed for unsupported non-code paths and stale reader targets", () => {
-		const knownGraph = basicGraph();
-		for (const file of [
-			"docs/assets/diagram.svg",
+	it("maps excluded Markdown to no readers and fails closed when a reader target is absent", () => {
+		const trackedReaders = new Set(["scripts/check-doc-links.test.ts", "scripts/check-doc-paths.test.ts"]);
+		for (const excluded of [
 			"docs/handbook/book/index.md",
-			"README.txt",
-			"assets/image.png",
+			"packages/foo/CHANGELOG.md",
+			"plugins/foo/vendor/notes.md",
+			"plugins/foo/discovery/builtin-rules/example.md",
 		]) {
+			expect(ciContractTestsForPaths([excluded], trackedReaders)).toEqual([]);
+		}
+		expect(() => ciContractTestsForPaths(["packages/ai/README.md"], new Set())).toThrow(
+			/non-code reader target is not tracked at HEAD/,
+		);
+	});
+
+	it("maps Markdown additions, deletions, and both rename sides without dropping reader targets", () => {
+		const trackedReaders = new Set([
+			"scripts/check-doc-links.test.ts",
+			"scripts/check-doc-paths.test.ts",
+			"scripts/a-generated-doc-says-so-on-its-first-line.test.ts",
+		]);
+		const targets = ciContractTestsForPaths(
+			[
+				"docs/handbook/src/new-page.md",
+				"docs/handbook/src/old-page.md",
+				"docs/handbook/src/old-name.md",
+				"docs/handbook/src/new-name.md",
+			],
+			trackedReaders,
+		);
+		expect(targets.map(target => target.path)).toEqual([
+			"scripts/check-doc-links.test.ts",
+			"scripts/check-doc-paths.test.ts",
+			"scripts/a-generated-doc-says-so-on-its-first-line.test.ts",
+		]);
+	});
+
+	it("fails closed for unsupported non-Markdown paths and stale reader targets", () => {
+		const knownGraph = basicGraph();
+		for (const file of ["docs/assets/diagram.svg", "README.txt", "assets/image.png"]) {
 			expect(
 				selectAffectedWorkspaceMembers([{ status: "M", paths: [file] }], knownGraph, knownGraph),
 			).toMatchObject({ mode: "full" });
@@ -452,12 +510,12 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 				["docs/handbook/src/reference/settings.md"],
 				new Set([
 					"scripts/check-doc-links.test.ts",
+					"scripts/check-doc-paths.test.ts",
 					"scripts/settings-doc-coherence.test.ts",
 				]),
 			),
 		).toThrow(/non-code reader target is not tracked at HEAD/);
 	});
-
 	it("keeps changed script tests in a mixed workspace selection", () => {
 		const knownGraph = basicGraph();
 		const scriptTest = "scripts/ci-test-concurrency-default.test.ts";

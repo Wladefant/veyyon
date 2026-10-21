@@ -348,19 +348,24 @@ const ciContractTargets = (
 	paths: readonly string[],
 ): CiContractTestTarget[] => paths.map(path => ({ runner, path }));
 
-/** Explicitly maintained readers for non-code inputs that are not owned by a workspace member. */
+/** Explicit readers for tracked Markdown inputs, excluding paths the real link reader excludes. */
+const isTrackedMarkdownReaderInput = (file: string): boolean =>
+	/\.md$/i.test(file) &&
+	!file.startsWith("docs/handbook/book/") &&
+	!file.includes("/vendor/") &&
+	!file.includes("node_modules/") &&
+	!file.endsWith("CHANGELOG.md") &&
+	!file.includes("/discovery/builtin-rules/");
+
 const CI_CONTRACT_TEST_MAP: readonly CiContractTestRule[] = [
 	{
-		matches: file =>
-			file.startsWith("docs/") &&
-			!file.startsWith("docs/handbook/book/") &&
-			/\.md$/i.test(file),
+		matches: isTrackedMarkdownReaderInput,
 		targets: file => {
-			const readers = ["scripts/check-doc-links.test.ts"];
+			const readers = ["scripts/check-doc-links.test.ts", "scripts/check-doc-paths.test.ts"];
 			if (file.startsWith("docs/handbook/src/")) {
 				readers.push("scripts/a-generated-doc-says-so-on-its-first-line.test.ts");
 			}
-			if (file === "docs/README.md") {
+			if (file === "docs/README.md" || (!file.startsWith("docs/") && !file.startsWith("README."))) {
 				readers.push("scripts/first-party-docs-are-indexed.test.ts");
 			}
 			if (file === "docs/handbook/src/reference/settings.md") {
@@ -368,7 +373,8 @@ const CI_CONTRACT_TEST_MAP: readonly CiContractTestRule[] = [
 			}
 			if (
 				file === "docs/handbook/src/reference/providers.md" ||
-				file === "docs/handbook/src/reference/environment-complete.md"
+				file === "docs/handbook/src/reference/environment-complete.md" ||
+				file === "packages/ai/README.md"
 			) {
 				readers.push("scripts/a-documented-provider-default-is-the-descriptor-default.test.ts");
 			}
@@ -377,11 +383,6 @@ const CI_CONTRACT_TEST_MAP: readonly CiContractTestRule[] = [
 			}
 			return ciContractTargets("bun", readers);
 		},
-		requireTrackedTargets: true,
-	},
-	{
-		matches: file => /^\w[^/]*\.md$/i.test(file),
-		targets: () => ciContractTargets("bun", ["scripts/check-doc-links.test.ts"]),
 		requireTrackedTargets: true,
 	},
 	{
@@ -429,23 +430,21 @@ const CI_CONTRACT_TEST_MAP: readonly CiContractTestRule[] = [
 ];
 
 /**
- * Contract targets implied by changed paths. A changed `scripts/*.test.*` path maps to a target only
- * when `headTrackedPaths` (files tracked at HEAD) still holds it, so explicit targets never name a
- * file that the run cannot find.
+ * Contract targets implied by changed paths. HEAD paths are required because reader targets must
+ * exist, and deleted/renamed-away script tests must not be selected.
  */
 export function ciContractTestsForPaths(
 	paths: readonly string[],
-	headTrackedPaths?: ReadonlySet<string>,
+	headTrackedPaths: ReadonlySet<string>,
 ): CiContractTestTarget[] {
 	const targets = new Map<string, CiContractTestTarget>();
-	const trackedPaths = headTrackedPaths ?? new Set<string>();
 	for (const rawPath of paths) {
 		const file = normalizedGitPath(rawPath);
 		if (!file) continue;
 		for (const rule of CI_CONTRACT_TEST_MAP) {
 			if (!rule.matches(file)) continue;
-			const ruleTargets = rule.targets(file, trackedPaths);
-			if (rule.requireTrackedTargets && headTrackedPaths !== undefined) {
+			const ruleTargets = rule.targets(file, headTrackedPaths);
+			if (rule.requireTrackedTargets) {
 				const missing = ruleTargets.find(target => !headTrackedPaths.has(target.path));
 				if (missing) throw new Error(`non-code reader target is not tracked at HEAD: ${missing.path}`);
 			}
