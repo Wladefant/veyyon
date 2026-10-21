@@ -20,7 +20,7 @@
  * without the notice an operator has no way to distinguish an applied change from one that did
  * nothing at all. Nothing outside a UI can say that, so nothing outside a UI can test it.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { SelectorController } from "@veyyon/coding-agent/modes/terminal/controllers/selector-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
@@ -49,9 +49,9 @@ afterEach(() => {
 
 interface Harness {
 	readonly controller: SelectorController;
-	readonly refreshBaseSystemPrompt: ReturnType<typeof vi.fn>;
-	readonly showWarning: ReturnType<typeof vi.fn>;
-	readonly showError: ReturnType<typeof vi.fn>;
+	readonly refreshBaseSystemPrompt: Mock<() => Promise<unknown[]>>;
+	readonly showWarning: Mock<(message: string) => void>;
+	readonly showError: Mock<(message: string) => void>;
 }
 
 /**

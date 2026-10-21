@@ -258,7 +258,9 @@ function detectChatCompatTraits(spec: ModelSpec<"openai-completions">): ChatComp
 		isKimiModel,
 		isMoonshotNative,
 		isMoonshotKimi,
-		requiresEnabledThinking: isMoonshotKimi && matchesKimiK27CodeFamily(spec),
+		// Host and family, as the Anthropic-compatible layer gates it: `isKimiModelId` does not read
+		// the underscore spelling the family matcher accepts, so gating on it too split the layers.
+		requiresEnabledThinking: isMoonshotNative && matchesKimiK27CodeFamily(spec),
 		usesMoonshotKimiPreservedThinking: isMoonshotKimi && isKimiK26ModelId(spec.id),
 		isAnthropicModel:
 			modelMatchesHost(hostModel, "anthropic") || isClaudeModelId(spec.id) || isAnthropicNamespacedModelId(spec.id),

@@ -187,7 +187,7 @@ Adjacent but related lifecycle hooks:
 
 ## Plan approval session naming
 
-When a user approves a plan from plan mode (`InteractiveMode.#approvePlan`), the approval handler seeds the session name from the plan's title so the resulting (fresh or compacted) session does not stay unnamed.
+When a user approves a plan from plan mode (`PlanModeController.#approvePlan` in `packages/coding-agent/src/modes/terminal/controllers/plan-mode-controller.ts`), the approval handler seeds the session name from the plan's title so the resulting (fresh or compacted) session does not stay unnamed.
 
 Trigger:
 
@@ -202,7 +202,7 @@ Naming source:
   - capitalizes the first character
   - returns `""` for whitespace-only / separator-only input
 - The humanized name is applied only when the current session has no name (`!sessionManager.getSessionName()`). It then calls `sessionManager.setSessionName(name, "auto")`, which also refuses to overwrite user-named sessions.
-- On successful apply, the terminal title (`setSessionTerminalTitle`) and the editor border color are refreshed to reflect the new name.
+- On successful apply, the `onSessionNameChanged` listener registered in `InteractiveMode.init()` refreshes the terminal title (`setSessionTerminalTitle`) and the editor accent.
 
 Examples (from `humanizePlanTitle`):
 
@@ -221,4 +221,4 @@ Session migrations still run on load:
 
 Current runtime behavior is version-3 tree semantics after migration.
 
-*Verified against `262ce91243` on 2026-10-04.*
+*Verified against `8a8b2465c6` on 2026-10-16.*

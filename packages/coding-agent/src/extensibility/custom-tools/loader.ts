@@ -323,7 +323,7 @@ export async function discoverCustomToolPaths(
 	}
 
 	// 2. Plugin tools: profile plugins/node_modules/*/
-	for (const pluginPath of await getAllPluginToolPaths(cwd, agentDir ? pluginsRootFor(agentDir) : undefined)) {
+	for (const pluginPath of await getAllPluginToolPaths(cwd, { pluginsRoot: agentDir ? pluginsRootFor(agentDir) : undefined, agentDir })) {
 		addPath(pluginPath, { provider: "plugin", providerName: "Plugin", level: "user" });
 	}
 

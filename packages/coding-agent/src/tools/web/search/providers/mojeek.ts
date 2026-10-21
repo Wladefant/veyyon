@@ -1,11 +1,12 @@
 import { errorMessage, untilAborted } from "@veyyon/utils";
+import { collapseWhitespace } from "@veyyon/utils/collapse-whitespace";
 import { withHardTimeout } from "@veyyon/web/hard-timeout";
 import { parseHTML } from "linkedom";
 import type { Page } from "puppeteer-core";
 import { resolveProviderTextTransform, transformProviderPayload } from "../../../../provider-boundary";
 import type { SearchResponse } from "../types";
 import { SearchProviderError } from "../types";
-import { clampNumResults, collapseWhitespace, SEARCH_DEFAULT_NUM_RESULTS } from "../utils";
+import { clampNumResults, SEARCH_DEFAULT_NUM_RESULTS } from "../utils";
 import type { SearchParams } from "./base";
 import { OpenSearchProvider } from "./base";
 import type { LoadedHtmlPage } from "./browser-page";

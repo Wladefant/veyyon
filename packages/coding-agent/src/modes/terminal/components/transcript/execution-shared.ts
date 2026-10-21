@@ -17,7 +17,7 @@ import {
 	formatColumnTruncatedNotice,
 	formatTruncationMetaNotice,
 	type OutputMeta,
-} from "../../../../tools/core/output-meta";
+} from "../../../../tools/core/output-notice";
 import { expandHintSuffix } from "../../utils/key-hint";
 import { truncateToVisualLines } from "./visual-truncate";
 
@@ -63,20 +63,117 @@ export const EXECUTION_MAX_DISPLAY_COLUMNS = 4_000;
 export const EXECUTION_STREAMING_LINE_CAP = EXECUTION_PREVIEW_LINES * 5;
 
 /**
- * Trim a retained-output buffer in place to {@link EXECUTION_STREAMING_LINE_CAP}, returning how many lines were
- * dropped from the front.
- *
- * The RETURN VALUE is the reason this is a function rather than two lines inline. Dropping output silently is
- * indistinguishable to a user from a program that produced less output, and the previous inline version dropped
- * lines and then computed its "… N more lines" hint from the already-trimmed buffer, so a five-thousand-line run
- * reported eighty hidden lines and expanding revealed a hundred. The caller now has the number it needs to say
- * what actually happened.
+ * Streamed text an execution block holds before folding it, in UTF-16 units. A fold runs when the lines are
+ * read; a stream that outpaces the reads folds once it holds this much, so held text stays bounded.
  */
-export function capExecutionOutputLines(lines: string[]): number {
-	if (lines.length <= EXECUTION_STREAMING_LINE_CAP) return 0;
-	const dropped = lines.length - EXECUTION_STREAMING_LINE_CAP;
-	lines.splice(0, dropped);
-	return dropped;
+const PENDING_FOLD_LENGTH = 1 << 20;
+
+/**
+ * The streamed output an execution block keeps: the last {@link EXECUTION_STREAMING_LINE_CAP} lines, and a
+ * count of every line before them.
+ *
+ * Chunks are held as they arrive and folded when the lines are read, so a burst costs one fold and no chunk is
+ * skipped. A fold splits and clamps only the lines the cap keeps and counts the newlines of the rest, so its
+ * cost does not grow with lines that are about to be dropped. The count is reported separately from the
+ * hidden-line hint: hidden lines are still held, dropped lines are gone.
+ */
+export class StreamedOutputLines {
+	#lines: string[] = [];
+	#dropped = 0;
+	/** Chunks not yet folded into `#lines`, oldest first. */
+	#pending: string[] = [];
+	#pendingLength = 0;
+	readonly #clampLines: (lines: string[]) => string[];
+
+	/** `clampLines` clamps freshly split lines for display, returning one line for each it receives. */
+	constructor(clampLines: (lines: string[]) => string[]) {
+		this.#clampLines = clampLines;
+	}
+
+	push(chunk: string): void {
+		if (!chunk) return;
+		this.#pending.push(chunk);
+		this.#pendingLength += chunk.length;
+		if (this.#pendingLength > PENDING_FOLD_LENGTH) this.#fold();
+	}
+
+	/** The kept lines, oldest first. */
+	lines(): readonly string[] {
+		this.#fold();
+		return this.#lines;
+	}
+
+	/** Lines streamed before the kept ones. */
+	dropped(): number {
+		this.#fold();
+		return this.#dropped;
+	}
+
+	/** Replace the stream with the authoritative output: held chunks are discarded and nothing is dropped. */
+	replace(lines: string[]): void {
+		this.#pending = [];
+		this.#pendingLength = 0;
+		this.#lines = lines;
+		this.#dropped = 0;
+	}
+
+	#fold(): void {
+		const chunks = this.#pending;
+		if (chunks.length === 0) return;
+		this.#pending = [];
+		this.#pendingLength = 0;
+
+		// Find the newline that opens the last EXECUTION_STREAMING_LINE_CAP lines, walking back from the end.
+		let need = EXECUTION_STREAMING_LINE_CAP;
+		let chunkIndex = chunks.length;
+		let cut = -1;
+		while (need > 0 && chunkIndex > 0) {
+			const chunk = chunks[--chunkIndex];
+			let from = chunk.length - 1;
+			while (need > 0 && from >= 0) {
+				const at = chunk.lastIndexOf("\n", from);
+				if (at === -1) break;
+				if (--need === 0) cut = at;
+				from = at - 1;
+			}
+		}
+
+		if (cut === -1) {
+			this.#appendLines(chunks.join("").split("\n"));
+			return;
+		}
+
+		// Every line before the cut, and every line already kept, falls to the cap: count them, never split them.
+		let newlinesBefore = countNewlines(chunks[chunkIndex], cut);
+		for (let index = 0; index < chunkIndex; index++) {
+			const chunk = chunks[index];
+			newlinesBefore += countNewlines(chunk, chunk.length);
+		}
+		// The kept partial line merges with the first streamed line, so it falls with the lines before the cut.
+		const linesBefore = this.#lines.length === 0 ? 0 : this.#lines.length - 1;
+		this.#dropped += linesBefore + newlinesBefore + 1;
+		const kept = chunks[chunkIndex].slice(cut + 1) + chunks.slice(chunkIndex + 1).join("");
+		this.#lines = this.#clampLines(kept.split("\n"));
+	}
+
+	/** Append fewer than EXECUTION_STREAMING_LINE_CAP + 1 lines, the first continuing the kept partial line. */
+	#appendLines(incoming: string[]): void {
+		const lines = this.#lines;
+		const merged = lines.length > 0 ? [lines.pop() + incoming[0], ...incoming.slice(1)] : incoming;
+		for (const line of this.#clampLines(merged)) lines.push(line);
+		if (lines.length > EXECUTION_STREAMING_LINE_CAP) {
+			const dropped = lines.length - EXECUTION_STREAMING_LINE_CAP;
+			lines.splice(0, dropped);
+			this.#dropped += dropped;
+		}
+	}
+}
+
+/** Newlines in `text` before `end`. */
+function countNewlines(text: string, end: number): number {
+	let count = 0;
+	for (let at = text.indexOf("\n"); at !== -1 && at < end; at = text.indexOf("\n", at + 1)) count++;
+	return count;
 }
 
 /**

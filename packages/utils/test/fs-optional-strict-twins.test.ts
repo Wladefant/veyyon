@@ -27,7 +27,7 @@
  *   5. A source lock fails when any production file defines a private copy again, because three files
  *      had already done it and the fourth would too.
  */
-import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, type Mock, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -50,7 +50,7 @@ let root: string;
 let lockedDir: string;
 let lockedTarget: string;
 let collected: Fault[];
-let warnSpy: ReturnType<typeof spyOn>;
+let warnSpy: Mock<typeof logger.warn>;
 /** Whether `chmod 0o000` actually denied us, which it does not when the test runs as root. */
 let denied = false;
 /** Detach for the collecting sink, so it cannot survive into the next test's faults. */

@@ -4,6 +4,7 @@ import * as fetchRetry from "@veyyon/utils/fetch-retry";
 import {
 	extractHttpStatusFromError,
 	extractRetryHint,
+	type FetchWithRetryOptions,
 	fetchWithRetry,
 	isRetryableStatus,
 	isUnexpectedSocketCloseMessage,
@@ -265,6 +266,83 @@ describe("fetchWithRetry", () => {
 			}),
 		).rejects.toThrow("Request was aborted");
 		expect(fetched).toBe(false);
+	});
+
+	/**
+	 * A DEADLINE IS NOT A CANCELLATION. A provider's pre-response fence and `AbortSignal.timeout()`
+	 * abort with a `TimeoutError`; every exit by which an aborted signal leaves the loop minted a
+	 * generic `AbortError: Request was aborted` instead, so a Bedrock endpoint that never answered
+	 * read as a request the caller had cancelled, and was classified as one: no retry, no model
+	 * switch. Each row reaches one exit: the check before an attempt, the check after a transport
+	 * failure, and the backoff wait after a failed response and after a transport failure. A reason
+	 * that is not a deadline stays a named cancellation on every exit.
+	 *
+	 * Not caught: an exit added later that reads `signal.aborted` and throws without the shared
+	 * helper, unless it is reached through one of these rows.
+	 */
+	const DEADLINE = new DOMException("Timed out after 5 ms", "TimeoutError");
+	const abortExits: ReadonlyArray<[string, (controller: AbortController, reason: unknown) => FetchWithRetryOptions]> =
+		[
+			[
+				"before an attempt",
+				(controller, reason) => {
+					controller.abort(reason);
+					return { fetch: async () => new Response("") };
+				},
+			],
+			[
+				"after a transport failure",
+				(controller, reason) => ({
+					fetch: async () => {
+						controller.abort(reason);
+						throw new Error("socket closed");
+					},
+				}),
+			],
+			[
+				"in the backoff after a failed response",
+				(controller, reason) => ({
+					fetch: async () => {
+						controller.abort(reason);
+						return new Response("", { status: 503 });
+					},
+					defaultDelayMs: 60_000,
+				}),
+			],
+			[
+				"in the backoff after a transport failure",
+				(controller, reason) => ({
+					fetch: async () => {
+						throw new Error("socket closed");
+					},
+					shouldRetryError: () => {
+						controller.abort(reason);
+						return true;
+					},
+					defaultDelayMs: 60_000,
+				}),
+			],
+		];
+
+	it.each(abortExits)("throws the signal's deadline %s", async (_label, arrange) => {
+		const controller = new AbortController();
+		const thrown = await fetchWithRetry("https://example.invalid/deadline", {
+			maxAttempts: 3,
+			...arrange(controller, DEADLINE),
+			signal: controller.signal,
+		}).catch((error: unknown) => error);
+		expect(thrown).toBe(DEADLINE);
+	});
+
+	it.each(abortExits)("throws a named cancellation for any other reason %s", async (_label, arrange) => {
+		const controller = new AbortController();
+		const thrown = await fetchWithRetry("https://example.invalid/cancelled", {
+			maxAttempts: 3,
+			...arrange(controller, new Error("caller cancelled")),
+			signal: controller.signal,
+		}).catch((error: unknown) => error);
+		expect(isAbortError(thrown)).toBe(true);
+		expect((thrown as Error).message).toBe("Request was aborted");
 	});
 });
 

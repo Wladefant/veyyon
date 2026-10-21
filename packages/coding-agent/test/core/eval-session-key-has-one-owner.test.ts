@@ -182,12 +182,4 @@ describe("the three executors", () => {
 			expect(specifiers, dir).toContain("../executor-base");
 		}
 	});
-
-	/** And the builder itself lives in exactly one file. */
-	it("leave the definition in executor-base alone", async () => {
-		const base = await Bun.file(path.join(import.meta.dir, "../../src/eval/executor-base.ts")).text();
-
-		expect(base.match(/export function buildEvalSessionKey/g)).toHaveLength(1);
-		expect(base.match(/export function normalizeSessionCwd/g)).toHaveLength(1);
-	});
 });

@@ -1,29 +1,19 @@
-import * as imageGen from "../tools/web/image-gen";
+import { setPreferredImageProvider } from "../tools/web/image-gen";
 // The LEAVES that own these, not the `../tools/web/search` barrel. The barrel is the
 // search tool: it reaches 426 modules, including the theme engine, and this file
 // applies three settings. `./provider` and `./types` reach four between them.
 import { setExcludedSearchProviders, setPreferredSearchProvider } from "../tools/web/search/provider";
-import { isSearchProviderId, isSearchProviderPreference } from "../tools/web/search/types";
+import { isSearchProviderId } from "../tools/web/search/types";
+import type { Settings } from "./settings";
 
-interface ProviderGlobalSettings {
-	get(path: "providers.webSearchExclude"): unknown;
-	get(path: "providers.webSearch"): unknown;
-	get(path: "providers.image"): unknown;
-}
-
-export function applyProviderGlobalsFromSettings(settings: ProviderGlobalSettings): void {
-	const excludedWebSearchProviders = settings.get("providers.webSearchExclude");
-	if (Array.isArray(excludedWebSearchProviders)) {
-		setExcludedSearchProviders(excludedWebSearchProviders.filter(isSearchProviderId));
-	}
-
-	const webSearchProvider = settings.get("providers.webSearch");
-	if (typeof webSearchProvider === "string" && isSearchProviderPreference(webSearchProvider)) {
-		setPreferredSearchProvider(webSearchProvider);
-	}
-
-	const imageProvider = settings.get("providers.image");
-	if (imageGen.isImageProviderPreference(imageProvider)) {
-		imageGen.setPreferredImageProvider(imageProvider);
-	}
+/**
+ * Apply the web search, excluded web search and image provider preferences in `settings`. The two
+ * preferences are enums, which the settings read serves as their default when the stored value is
+ * not a member; the exclusion list is an array whose entries the read does not check, so unknown
+ * provider ids are dropped here.
+ */
+export function applyProviderGlobalsFromSettings(settings: Settings): void {
+	setExcludedSearchProviders(settings.get("providers.webSearchExclude").filter(isSearchProviderId));
+	setPreferredSearchProvider(settings.get("providers.webSearch"));
+	setPreferredImageProvider(settings.get("providers.image"));
 }

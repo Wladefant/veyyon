@@ -15,11 +15,8 @@ describe("SpeechEnhancer rewriting", () => {
 		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.5 model");
 		const model = { ...baseModel, reasoning: false };
 		const settings = {
-			get() {
-				return undefined;
-			},
-			getModelRole(role: string) {
-				return role === "tiny" ? `${model.provider}/${model.id}` : undefined;
+			get(path: string) {
+				return path === "agent.helpers" ? { speech: { model: `${model.provider}/${model.id}` } } : undefined;
 			},
 		} as never;
 		const registry = {
@@ -48,11 +45,8 @@ describe("SpeechEnhancer rewriting", () => {
 		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.5 model");
 		const model = { ...baseModel, reasoning: false };
 		const settings = {
-			get() {
-				return undefined;
-			},
-			getModelRole(role: string) {
-				return role === "tiny" ? `${model.provider}/${model.id}` : undefined;
+			get(path: string) {
+				return path === "agent.helpers" ? { speech: { model: `${model.provider}/${model.id}` } } : undefined;
 			},
 		} as never;
 		const registry = {
@@ -88,8 +82,8 @@ describe("SpeechEnhancer rewriting", () => {
 		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.5 model");
 		const model = { ...baseModel, reasoning: false };
 		const settings = {
-			get: () => undefined,
-			getModelRole: (role: string) => (role === "tiny" ? `${model.provider}/${model.id}` : undefined),
+			get: (path: string) =>
+				path === "agent.helpers" ? { speech: { model: `${model.provider}/${model.id}` } } : undefined,
 			getStorage: () => undefined,
 		} as never;
 		const registry = {
@@ -124,8 +118,8 @@ describe("SpeechEnhancer rewriting", () => {
 		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.5 model");
 		const model = { ...baseModel, reasoning: false };
 		const settings = {
-			get: () => undefined,
-			getModelRole: (role: string) => (role === "tiny" ? `${model.provider}/${model.id}` : undefined),
+			get: (path: string) =>
+				path === "agent.helpers" ? { speech: { model: `${model.provider}/${model.id}` } } : undefined,
 			getStorage: () => undefined,
 		} as never;
 		const secret = "SPEECH_NEW_RUNTIME_SECRET_812";
@@ -163,8 +157,8 @@ describe("SpeechEnhancer rewriting", () => {
 		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.5 model");
 		const model = { ...baseModel, reasoning: false };
 		const settings = {
-			get: () => undefined,
-			getModelRole: (role: string) => (role === "tiny" ? `${model.provider}/${model.id}` : undefined),
+			get: (path: string) =>
+				path === "agent.helpers" ? { speech: { model: `${model.provider}/${model.id}` } } : undefined,
 			getStorage: () => undefined,
 		} as never;
 		const secret = "SPEECH_RETRY_SECRET_662";

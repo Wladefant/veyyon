@@ -18,11 +18,18 @@
  * client hint and in the User-Agent, and `perplexity.ts` retyped the User-Agent for its anonymous path, making a
  * third statement. A fingerprint whose version claims disagree with each other is precisely what a bot check
  * looks for.
+ *
+ * What each consumer SENDS is asserted where the request is made, through a recording `fetch`:
+ * `packages/ai/test/a-perplexity-login-claims-the-app-identity-on-every-request.test.ts` for the login,
+ * `packages/coding-agent/test/tools/web/search/perplexity.test.ts` for the signed-in and anonymous asks, and
+ * `plugins/web/test/scrapers/load-page-attempt-loop.test.ts` for the scraper's Windows rung. This file holds
+ * the values and the single-owner census.
  */
 
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { moduleSpecifiersIn } from "@veyyon/utils/module-reach";
+import { stringConstantsIn } from "@veyyon/utils/source-declarations";
 import {
 	PERPLEXITY_HEADERS,
 	PERPLEXITY_NATIVE_APP_API_VERSION,
@@ -132,14 +139,18 @@ describe("the Perplexity client identity has one owner", () => {
 
 	/** Nor declares one of the names the copies used. */
 	it("declares none of the retired names", async () => {
-		const retired = ["API_VERSION", "APP_USER_AGENT", "OAUTH_API_VERSION", "OAUTH_USER_AGENT", "NATIVE_APP_BUNDLE"];
+		const retired = new Set([
+			"API_VERSION",
+			"APP_USER_AGENT",
+			"OAUTH_API_VERSION",
+			"OAUTH_USER_AGENT",
+			"NATIVE_APP_BUNDLE",
+			"ANONYMOUS_USER_AGENT",
+		]);
 		const offenders: string[] = [];
 		for (const file of [LOGIN, SEARCH]) {
-			const text = await Bun.file(file).text();
-			for (const name of retired) {
-				if (new RegExp(`^\\s*(?:export )?const ${name}\\b`, "m").test(text)) {
-					offenders.push(`${path.basename(file)}: ${name}`);
-				}
+			for (const constant of stringConstantsIn(await Bun.file(file).text())) {
+				if (retired.has(constant.name)) offenders.push(`${path.basename(file)}: ${constant.name}`);
 			}
 		}
 		expect(offenders).toEqual([]);
@@ -157,30 +168,6 @@ describe("the Perplexity client identity has one owner", () => {
 		}
 	});
 
-	/**
-	 * The positive half for the login flow: all three of its requests send the shared header pair, and the origin
-	 * is built from the shared constant rather than spelled per request.
-	 */
-	it("has the login flow sending the shared header pair on every request", async () => {
-		const login = await Bun.file(LOGIN).text();
-		expect(moduleSpecifiersIn(login)).toContain("@veyyon/catalog/wire/perplexity");
-		// One spread per request in the OTP flow: csrf, signin-email, signin-otp.
-		expect(login.match(/PERPLEXITY_NATIVE_APP_HEADERS/g)?.length).toBe(4);
-		expect(login.match(/\$\{PERPLEXITY_WEB_ORIGIN\}\/api\/auth\//g)?.length).toBe(3);
-	});
-
-	/**
-	 * The positive half for the search path, including the request BODY. The version is sent twice per ask, and
-	 * the body field was the copy furthest from the header it has to agree with.
-	 */
-	it("has the search path reading the version for both the header and the body", async () => {
-		const search = await Bun.file(SEARCH).text();
-		expect(moduleSpecifiersIn(search)).toContain("@veyyon/catalog/wire/perplexity");
-		expect(search).toContain("headers[PERPLEXITY_HEADERS.API_VERSION] = PERPLEXITY_NATIVE_APP_API_VERSION;");
-		expect(search).toContain("version: PERPLEXITY_NATIVE_APP_API_VERSION,");
-		expect(search).toContain("PERPLEXITY_NATIVE_APP_USER_AGENT");
-	});
-
 	/** The owner is a leaf, so either package pays one module for the identity. */
 	it("imports nothing", async () => {
 		const owner = await Bun.file(path.resolve(import.meta.dir, "../src/wire/perplexity.ts")).text();
@@ -192,52 +179,30 @@ describe("the Perplexity client identity has one owner", () => {
 
 describe("the browser fingerprint states its version once", () => {
 	/**
-	 * The exported User-Agent and the client hint have to name the same Chrome major version, because a request
-	 * whose `Sec-Ch-Ua` and User-Agent disagree is a combination no browser sends. They were two independent
-	 * literals; this reads the shipped module and checks the version it interpolates appears in both.
+	 * The exported User-Agents and the fallback client hint have to name the same Chrome major version, because a
+	 * request whose `Sec-Ch-Ua` and User-Agent disagree is a combination no browser sends. They were independent
+	 * literals; the values the module exports are what a request carries, so they are what is compared.
 	 */
-	it("uses one Chrome version in the User-Agent and the client hint", async () => {
-		const { CHROME_DESKTOP_USER_AGENT } = await import("@veyyon/web/browser-fingerprint-constants");
+	it("uses one Chrome version in the User-Agents and the client hint", async () => {
+		const { CHROME_DESKTOP_USER_AGENT, CHROME_FALLBACK_HEADERS, CHROME_WINDOWS_USER_AGENT } = await import(
+			"@veyyon/web/browser-fingerprint-constants"
+		);
 		const version = /Chrome\/(\d+)\./.exec(CHROME_DESKTOP_USER_AGENT)?.[1];
 		expect(version, "no Chrome version in the User-Agent").toBeDefined();
-		const source = await Bun.file(BROWSER_HEADERS).text();
-		expect(source).toContain(`const CHROME_FALLBACK_MAJOR_VERSION = "${version}";`);
-		// Both statements now interpolate that one constant rather than spelling a number. Matched as a pattern
-		// because the text under test contains a template placeholder, which a plain string would flag as a
-		// mistake rather than as the thing being asserted.
-		expect(source).toMatch(/"Sec-Ch-Ua": `"Google Chrome";v="\$\{CHROME_FALLBACK_MAJOR_VERSION\}"/);
-		expect(source).toContain('"User-Agent": CHROME_DESKTOP_USER_AGENT,');
+		expect(/Chrome\/(\d+)\./.exec(CHROME_WINDOWS_USER_AGENT)?.[1]).toBe(version);
+		const hint = CHROME_FALLBACK_HEADERS["Sec-Ch-Ua"];
+		expect(hint).toContain(`"Google Chrome";v="${version}"`);
+		expect(hint).toContain(`"Chromium";v="${version}"`);
+		expect(CHROME_FALLBACK_HEADERS["User-Agent"]).toBe(CHROME_DESKTOP_USER_AGENT);
 	});
 
-	/**
-	 * And the anonymous search path sends that exact User-Agent rather than its own copy. Anonymous requests have
-	 * no app session to match, so they look like an ordinary browser, and the copy they used to hold had to agree
-	 * with a fingerprint declared in a different module.
-	 */
-	it("has the anonymous search path reading the shared browser User-Agent", async () => {
-		const search = await Bun.file(SEARCH).text();
-		expect(search).toContain("CHROME_DESKTOP_USER_AGENT");
-		expect(moduleSpecifiersIn(search)).toContain("@veyyon/web/browser-fingerprint-constants");
-		expect(search).not.toContain("ANONYMOUS_USER_AGENT");
-	});
-
-	/**
-	 * The Windows rung of the scraper's bot-block ladder reads the same version. It had said Chrome 131 while this
-	 * module said 149, so the attempt that has to get through announced the stalest browser of the three.
-	 */
-	it("has the scraper ladder reading the shared Windows User-Agent", async () => {
+	/** The two User-Agents describe one browser on two platforms. */
+	it("names the platform each User-Agent claims", async () => {
 		const { CHROME_DESKTOP_USER_AGENT, CHROME_WINDOWS_USER_AGENT } = await import(
 			"@veyyon/web/browser-fingerprint-constants"
 		);
-		const version = (agent: string) => /Chrome\/(\d+)\./.exec(agent)?.[1];
-		expect(version(CHROME_WINDOWS_USER_AGENT)).toBe(version(CHROME_DESKTOP_USER_AGENT));
 		expect(CHROME_WINDOWS_USER_AGENT).toContain("Windows NT 10.0");
 		expect(CHROME_DESKTOP_USER_AGENT).toContain("Macintosh");
-		const scraper = await Bun.file(path.join(WEB_SRC, "scrapers/types.ts")).text();
-		expect(scraper).toContain("CHROME_WINDOWS_USER_AGENT");
-		expect(scraper).toContain(
-			'const USER_AGENTS = ["curl/8.0", "Mozilla/5.0 (compatible; TextBot/1.0)", CHROME_WINDOWS_USER_AGENT];',
-		);
 	});
 
 	/** No module outside the owner spells a Chrome User-Agent literal. */

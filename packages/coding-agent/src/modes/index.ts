@@ -8,4 +8,5 @@
 
 export * from "./rpc/rpc-client";
 export * from "./rpc/rpc-types";
+export * from "./terminal/controllers/anchored-blocks";
 export * from "./terminal/interactive-mode";

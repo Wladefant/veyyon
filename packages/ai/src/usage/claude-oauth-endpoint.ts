@@ -2,11 +2,12 @@
  * Base URL and request headers shared by the Claude OAuth account endpoints: the usage report
  * (`./claude`) and the usage-limit reset client (`./anthropic-reset`).
  */
+import { ANTHROPIC_API_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { CLAUDE_CODE_VERSION as claudeCodeVersion } from "@veyyon/catalog/wire/anthropic";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 
-const DEFAULT_OAUTH_ENDPOINT = "https://api.anthropic.com/api/oauth";
 const OAUTH_PATH_SUFFIX = "/api/oauth";
+const DEFAULT_OAUTH_ENDPOINT = `${ANTHROPIC_API_ENDPOINT}${OAUTH_PATH_SUFFIX}`;
 
 const CLAUDE_OAUTH_HEADERS = {
 	accept: "application/json, text/plain, */*",

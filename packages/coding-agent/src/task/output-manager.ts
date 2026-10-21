@@ -11,7 +11,7 @@
  * collisions across repeated or nested task invocations.
  */
 import * as fs from "node:fs/promises";
-import { ADVISOR_TRANSCRIPT_STEM } from "../advisor/transcript-recorder";
+import { ADVISOR_TRANSCRIPT_STEM } from "@veyyon/utils/session-file";
 
 /**
  * Manages agent output ID allocation to ensure uniqueness.

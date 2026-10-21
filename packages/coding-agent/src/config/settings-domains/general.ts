@@ -1,10 +1,4 @@
-import {
-	DEFAULT_CYCLE_ORDER,
-	EMPTY_MODEL_TAGS_RECORD,
-	EMPTY_NUMBER_RECORD,
-	EMPTY_STRING_ARRAY,
-	EMPTY_STRING_RECORD,
-} from "./shared";
+import { EMPTY_NUMBER_RECORD, EMPTY_STRING_ARRAY } from "./shared";
 
 /** General domain slice of SETTINGS_SCHEMA — composed in ../settings-schema.ts. */
 export const GENERAL_SETTINGS = {
@@ -214,21 +208,12 @@ export const GENERAL_SETTINGS = {
 
 	disabledExtensions: { type: "array", default: EMPTY_STRING_ARRAY },
 
-	modelRoles: {
-		type: "record",
-		default: EMPTY_STRING_RECORD,
-		ui: {
-			tab: "model",
-			group: "Roles",
-			label: "Role Models",
-			description:
-				"Assign a model to each role (Fast, Thinking, Vision, Architect, Commit, Tiny). Opens a searchable picker with auth status. The advisor's model is set in the Advisor group and a spawned agent's in Agents → Roster. Stored in the active profile.",
-		},
-	},
-
-	modelTags: { type: "record", default: EMPTY_MODEL_TAGS_RECORD },
+	/**
+	 * The model a new session starts on: what `/model` and the settings Default
+	 * Model picker write. A comma chain or a list; later entries are the retry
+	 * fallbacks for the first. Drawn by the Default Model row of the Model tab.
+	 */
+	defaultModel: { type: "modelChain", default: undefined },
 
 	modelProviderOrder: { type: "array", default: EMPTY_STRING_ARRAY },
-
-	cycleOrder: { type: "array", default: DEFAULT_CYCLE_ORDER },
 } as const;

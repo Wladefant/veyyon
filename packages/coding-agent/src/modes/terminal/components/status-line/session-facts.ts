@@ -21,7 +21,7 @@
  * cannot grow a second one.
  */
 import type { ModelFact, SessionFacts, StatusModelFact } from "@veyyon/wire/presentation";
-import { readLaunchFacts } from "../../../../config/launch-facts";
+import { defaultModelSelector, readLaunchFacts } from "../../../../config/launch-facts";
 import { settings } from "../../../../config/settings-instance";
 import { AUTO_THINKING } from "../../../../thinking/constants";
 import { isKnownApprovalMode } from "../../../../tools/core/approval-modes";
@@ -72,10 +72,10 @@ export const NO_SESSION_FACTS: SessionFacts = {
  * and the secrets chip are silent, the gauge says it does not know yet — until
  * `factsFromSession` replaces the block with the measured answer.
  *
- * The model is the persisted default ROLE, which is the id the session itself
+ * The model is the persisted `defaultModel`, which is the id the session itself
  * starts from, so the row does not guess: it reads the same value the session
  * will resolve. What it PRINTS for that id is {@link launchModelLabel}: the
- * display name the last launch recorded, or the role's final path segment,
+ * display name the last launch recorded, or the selector's final path segment,
  * because config stores no display name and resolving one needs the catalog
  * this path may not touch.
  *
@@ -92,7 +92,7 @@ export const NO_SESSION_FACTS: SessionFacts = {
  * never be understated is not.
  */
 export function factsAtLaunch(): SessionFacts {
-	const configuredMode = settings.getModelRole("default");
+	const configuredMode = defaultModelSelector();
 	const approvalMode = settings.get("tools.approvalMode");
 	const modelName = launchModelLabel();
 	const { thinking } = readLaunchFacts();

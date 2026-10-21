@@ -2,7 +2,7 @@
  * normalizeTools: descriptions of length 0..50 preserved when prune false.
  */
 import { describe, expect, it } from "bun:test";
-import { normalizeTools } from "@veyyon/agent-core/agent-loop";
+import { normalizeTools } from "@veyyon/agent-core/tool-normalization";
 
 describe("normalizeTools description preservation 1 to 50", () => {
 	for (let n = 0; n <= 50; n++) {

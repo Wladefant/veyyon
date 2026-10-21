@@ -4,7 +4,7 @@ import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
 import { isAgentEnabled } from "../../../../task/agent-settings";
 import { discoverAgents } from "../../../../task/discovery";
 import type { AgentDefinition } from "../../../../task/types";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import type { SetupKeyHint, SetupScene, SetupSceneController, SetupSceneHost, SetupWizardContext } from "./types";
 import { createWizardList, filterEscapeHint } from "./wizard-list";
 
@@ -93,7 +93,7 @@ export class AgentsSceneController implements SetupSceneController {
 	async #commit(): Promise<void> {
 		if (this.#committing) return;
 		this.#committing = true;
-		const current = this.host.ctx.settings.get("agent.agents") ?? {};
+		const current = this.host.ctx.settings.get("agent.agents");
 		const next = { ...current };
 		for (const agent of this.agents) {
 			next[agent.name] = { ...next[agent.name], enabled: this.#selected.has(agent.name) };

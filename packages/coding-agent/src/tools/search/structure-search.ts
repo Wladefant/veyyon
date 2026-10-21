@@ -12,7 +12,7 @@ import type { ToolSession } from "..";
 import { formatResultPath } from "../core/file-recorder";
 import { formatGroupedFiles } from "../core/grouped-file-output";
 import { inlineBudgetFor, saveOutputArtifact } from "../core/output-artifact";
-import type { OutputMeta } from "../core/output-meta";
+import type { OutputMeta } from "../core/output-notice";
 import { toPathList } from "../core/path-utils";
 import { capParseErrors, formatCodeFrameLine, formatParseErrors } from "../core/render-utils";
 import { ToolError, throwIfAborted } from "../core/tool-errors";

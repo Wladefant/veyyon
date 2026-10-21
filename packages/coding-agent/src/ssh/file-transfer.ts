@@ -8,8 +8,8 @@
  */
 // Owners, not the `@veyyon/utils` barrel: 1 module against 74.
 import * as ptree from "@veyyon/utils/ptree";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { primarySessionCpuAdoption } from "../session/cpu-limit";
-import { scopedTimeoutSignal } from "../utils/fetch-timeout";
 import { buildRemoteCommand, ensureConnection, ensureHostInfo, type SSHConnectionTarget } from "./connection-manager";
 import { quotePosixPath, wrapInPosixShell } from "./utils";
 

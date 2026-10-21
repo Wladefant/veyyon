@@ -1,8 +1,8 @@
 import { errorMessage, logger, sanitizeText } from "@veyyon/utils";
+import { formatDuration } from "@veyyon/utils/format";
 import type { DaemonBrokerClient } from "../../launch/client";
 import type { DaemonSnapshot } from "../../launch/protocol";
 import type { ToolSession } from "..";
-import { formatDuration } from "../core/render-utils";
 
 /**
  * A supervised process that ends on its own reports that end the way an async
@@ -59,6 +59,9 @@ async function exitNotice(client: DaemonBrokerClient, daemon: DaemonSnapshot, si
 		lines.push(`Terminated by: ${daemon.terminatedBy}${daemon.exitReason ? ` — ${daemon.exitReason}` : ""}`);
 	} else if (daemon.exitReason) {
 		lines.push(`Reason: ${daemon.exitReason}`);
+	}
+	if (daemon.ownershipUncertain) {
+		lines.push("Ownership: uncertain; its process tree was not proven gone, so a replacement needs its ready port free.");
 	}
 	let output = "";
 	try {

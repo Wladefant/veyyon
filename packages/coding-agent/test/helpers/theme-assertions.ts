@@ -78,7 +78,7 @@ export function useTruecolorTheme(name: string): void {
  * which is correct either way.
  */
 export function useFullColor(): void {
-	let previous: ReturnType<typeof getAnsiPolicy>;
+	let previous: AnsiPolicy;
 	beforeAll(() => {
 		previous = getAnsiPolicy();
 		setAnsiPolicy("full");

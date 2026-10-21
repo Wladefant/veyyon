@@ -11,12 +11,7 @@ import type { AgentTool, ToolApprovalDecision, ToolTier } from "@veyyon/agent-co
 import { truncate } from "@veyyon/utils/format";
 import { isRecord } from "@veyyon/utils/type-guards";
 import type { ApprovalMode, AutonomyLevel } from "./approval-modes";
-import {
-	APPROVAL_MODE_VALUES,
-	DEFAULT_APPROVAL_MODE,
-	isKnownApprovalMode,
-	normalizeApprovalMode,
-} from "./approval-modes";
+import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode } from "./approval-modes";
 
 export type { ToolApproval, ToolApprovalDecision, ToolTier } from "@veyyon/agent-core";
 // Re-export the zero-dependency mode set so tool code keeps one import site.
@@ -108,22 +103,6 @@ const AUTONOMY_MAX_TIER: Record<AutonomyLevel, ToolTier | "none"> = {
 const DEFAULT_PROMPT_TRUNCATE_CHARS = 2000;
 
 /**
- * Validate a stored `tools.approvalMode` value. Returns a loud warning string
- * when the value is a non-empty string that is not a recognized mode (so the
- * caller can surface it at startup); `undefined` when the value is absent or
- * valid. Keeps the "fail closed on a typo" decision (see `normalizeApprovalMode`)
- * visible to the operator instead of silently applying `ask`.
- */
-export function validateApprovalModeSetting(configured: unknown): string | undefined {
-	if (configured === undefined || configured === null) return undefined;
-	if (isKnownApprovalMode(configured)) return undefined;
-	return (
-		`tools.approvalMode is set to an unrecognized value (${JSON.stringify(configured)}); ` +
-		`falling back to "ask" (safe). Valid values: ${APPROVAL_MODE_VALUES.join(", ")}.`
-	);
-}
-
-/**
  * Convert a stored `tools.approval.<tool>` value to a policy.
  *
  * An ABSENT key is unconfigured and returns `undefined`, which is what lets the rung decide.
@@ -154,17 +133,11 @@ function normalizePolicy(value: unknown): ApprovalPolicy | undefined {
  * Returns the warnings the caller surfaces at startup (`configWarnings`, and the log), so a
  * typo is visible rather than merely safe. Each names the full setting path, the value found
  * and the values accepted, because "bash is blocked and I did not block it" is otherwise a
- * silent config bug. A record that is not a record at all gets one diagnostic for the record.
+ * silent config bug. A `tools.approval` that is not a record reads as the empty default, and the
+ * settings type report names it.
  */
-export function validateApprovalPolicySettings(configured: unknown): string[] {
-	if (configured === undefined || configured === null) return [];
+export function validateApprovalPolicySettings(configured: Record<string, unknown>): string[] {
 	const allowed = `Valid values: ${[...POLICY_VALUES].join(", ")}.`;
-	if (!isRecord(configured)) {
-		return [
-			`tools.approval is set to ${JSON.stringify(configured)}, which is not a per-tool record; ` +
-				`every tool policy in it is ignored. Expected { "<tool>": "allow" | "deny" | "prompt" }.`,
-		];
-	}
 	const warnings: string[] = [];
 	for (const [tool, value] of Object.entries(configured)) {
 		if (value === undefined) continue;

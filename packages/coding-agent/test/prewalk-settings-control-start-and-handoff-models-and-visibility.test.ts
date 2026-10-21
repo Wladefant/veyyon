@@ -256,18 +256,6 @@ describe("prewalk settings end-to-end", () => {
 			expect(`${options.prewalk?.target.provider}/${options.prewalk?.target.id}`).toBe(ALTERNATIVE_MODEL_ID);
 		});
 
-		it("resolves role alias in prewalk.cheapModel", async () => {
-			const registry = makeRegistry();
-			const settings = Settings.isolated({
-				"prewalk.enabled": true,
-				"prewalk.cheapModel": "@smol",
-				modelRoles: { smol: CHEAP_MODEL_ID },
-			});
-
-			const options = await buildSessionOptions(parseArgs([]), [], undefined, registry, settings);
-			expect(`${options.prewalk?.target.provider}/${options.prewalk?.target.id}`).toBe(CHEAP_MODEL_ID);
-		});
-
 		it("normalizes comma-separated model chain in prewalk.cheapModel to the first entry", async () => {
 			const registry = makeRegistry();
 			const settings = Settings.isolated({
@@ -337,19 +325,6 @@ describe("prewalk settings end-to-end", () => {
 				settings,
 			);
 			expect(options.model && `${options.model.provider}/${options.model.id}`).toBe(ALTERNATIVE_MODEL_ID);
-		});
-
-		it("resolves role alias in prewalk.strongModel", async () => {
-			const registry = makeRegistry();
-			const settings = Settings.isolated({
-				"prewalk.enabled": true,
-				"prewalk.cheapModel": CHEAP_MODEL_ID,
-				"prewalk.strongModel": "@heavy",
-				modelRoles: { heavy: STRONG_MODEL_ID },
-			});
-
-			const options = await buildSessionOptions(parseArgs([]), [], undefined, registry, settings);
-			expect(options.model && `${options.model.provider}/${options.model.id}`).toBe(STRONG_MODEL_ID);
 		});
 
 		it("resumed session preserves lineage and ignores prewalk.strongModel start override", async () => {

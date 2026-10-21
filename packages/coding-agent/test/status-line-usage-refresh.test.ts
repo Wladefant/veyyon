@@ -151,49 +151,53 @@ describe("StatusLineComponent usage refresh", () => {
 		expect(plain(component.renderQuietLine(80) ?? "")).toContain("5h 42%");
 	});
 
-	it("re-fetches usage immediately when the session rotates to another org under the same email", async () => {
-		let calls = 0;
-		let orgId = "org-team";
-		const base = {
-			...statusLineSessionParts({ contextWindow: 200_000, contextUsage: undefined, sessionName: "test" }),
-			fetchUsageReports: async () => {
-				calls++;
-				return usageReport(10);
-			},
-			state: {
-				messages: [],
-				model: { contextWindow: 200_000, provider: "anthropic" },
-			},
-			modelRegistry: {
-				authStorage: {
-					getOAuthAccountIdentity: () => ({
-						email: "shared@example.com",
-						accountId: "account-shared",
-						orgId,
-					}),
+	// Each field of the OAuth identity names a different usage pool, so rotating any one of them
+	// while the others hold must invalidate the cached reading.
+	for (const field of ["accountId", "email", "projectId", "orgId"] as const) {
+		it(`re-fetches usage immediately when the session's ${field} rotates and the rest of the account holds`, async () => {
+			let calls = 0;
+			const identity = {
+				email: "shared@example.com",
+				accountId: "account-shared",
+				projectId: "project-shared",
+				orgId: "org-shared",
+			};
+			const base = {
+				...statusLineSessionParts({ contextWindow: 200_000, contextUsage: undefined, sessionName: "test" }),
+				fetchUsageReports: async () => {
+					calls++;
+					return usageReport(10);
 				},
-			},
-		} as unknown as AgentSession;
-		const component = new StatusLineComponent(new StatusPresentationProducer(base));
+				state: {
+					messages: [],
+					model: { contextWindow: 200_000, provider: "anthropic" },
+				},
+				modelRegistry: {
+					authStorage: {
+						getOAuthAccountIdentity: () => ({ ...identity }),
+					},
+				},
+			} as unknown as AgentSession;
+			const component = new StatusLineComponent(new StatusPresentationProducer(base));
 
-		component.refreshUsageInBackground();
-		vi.advanceTimersByTime(0);
-		await flushMicrotasks();
-		expect(calls).toBe(1);
+			component.refreshUsageInBackground();
+			vi.advanceTimersByTime(0);
+			await flushMicrotasks();
+			expect(calls).toBe(1);
 
-		// Same org within the cache TTL: served from cache, no refetch.
-		component.refreshUsageInBackground();
-		vi.advanceTimersByTime(0);
-		await flushMicrotasks();
-		expect(calls).toBe(1);
+			// Same account within the cache TTL: served from cache, no refetch.
+			component.refreshUsageInBackground();
+			vi.advanceTimersByTime(0);
+			await flushMicrotasks();
+			expect(calls).toBe(1);
 
-		// Org rotation under the same email/account must invalidate the cache.
-		orgId = "org-max";
-		component.refreshUsageInBackground();
-		vi.advanceTimersByTime(0);
-		await flushMicrotasks();
-		expect(calls).toBe(2);
-	});
+			identity[field] = `${identity[field]}-rotated`;
+			component.refreshUsageInBackground();
+			vi.advanceTimersByTime(0);
+			await flushMicrotasks();
+			expect(calls).toBe(2);
+		});
+	}
 
 	it("does not allow a late response from a prior session to overwrite the new session when retargeting the same producer", async () => {
 		const oldDeferred = Promise.withResolvers<unknown>();

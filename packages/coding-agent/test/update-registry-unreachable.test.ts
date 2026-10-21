@@ -231,10 +231,9 @@ describe("an unreachable release source fails loudly and never answers from stal
 	 * positive control that a request actually went out (a function that stopped fetching would
 	 * otherwise satisfy every assertion here by doing nothing).
 	 *
-	 * What this does NOT catch: the two call sites whose deadline is a fixed constant rather than
-	 * a parameter, the checksum sidecar and the binary download. Proving those the same way means
-	 * waiting out 30 seconds and 15 minutes of real time, which costs more than the guard is
-	 * worth; they are covered only by using the same `withTimeoutSignal` owner.
+	 * The checksum sidecar and the binary download, whose deadlines are fixed constants, are
+	 * proved under fake timers in
+	 * `an-http-deadline-ends-a-stalled-request-and-leaves-no-timer-armed.test.ts`.
 	 */
 	describe("a stalled connection is ended by the module's own deadline", () => {
 		/** Fetch that answers only when its signal aborts, recording every signal it is handed. */

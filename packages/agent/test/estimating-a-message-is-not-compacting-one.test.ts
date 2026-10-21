@@ -12,8 +12,8 @@
  *   - `pruning.ts` reached 398, of which 197 were this edge.
  *   - `branch-summarization.ts` took the same edge, though it needs the rest of that graph anyway.
  *
- * The estimator now lives in `compaction/token-estimate.ts`, whose whole graph is the tokenizer, and
- * `compaction.ts` re-exports the name so no caller outside the directory changed.
+ * The estimator is defined in `compaction/token-estimate.ts`, whose whole graph is the tokenizer, and
+ * `@veyyon/agent-core/compaction` exports it from there.
  *
  * WHY A RATCHET AND NOT A BEHAVIOUR TEST. Nothing fails when this is undone. Every function keeps working,
  * every test keeps passing, and one import restores the mesh. What degrades is the cold start of everything
@@ -158,6 +158,16 @@ const PRUNING_CEILING = 197;
  * RE-MEASURED 2026-10-06 again: engine 306, remote summarizer 101. The one new module is
  * `ai/dialect/bracket-walk.ts`, the bracket walk `gemini.ts` and `gemma.ts` split call arguments with.
  * It imports nothing, so the growth is that one file and no subtree.
+ *
+ * RE-MEASURED 2026-10-13: engine 307. The one new module is
+ * `catalog/wire/kimi-code.ts`, the Kimi Code region table the Kimi provider resolves a token's deployment
+ * from. It imports only `@veyyon/utils/url`, already on the engine's reach, so the growth is that one file
+ * and no subtree.
+ *
+ * RE-MEASURED 2026-10-15: engine 308. The one new module is `ai/registry/oauth/token-response.ts`, the
+ * shared reader that requires a token endpoint's JSON to be an object, which `registry/oauth/nous-research.ts`
+ * reads its token responses through. It imports only `@veyyon/utils/type-guards` and `ai/error`, both
+ * already on the engine's reach, so the growth is that one file and no subtree.
  */
 // RE-MEASURED 2026-10-01 after the santhreal sync: +1 for `utils/schema/zod-core.ts` (imported by the `@veyyon/ai` barrel) and `catalog/catalog-spans.ts` (imported by `catalog/models.ts`); each is a leaf, so no subtree arrives.
 // RE-MEASURED 2026-10-04 after the upstream port wave (#219): 327 -> 333 and 225 -> 227, provider definitions the `@veyyon/ai` barrel reaches.
@@ -283,22 +293,20 @@ describe("one error class does not cost an error barrel", () => {
 	);
 });
 
-describe("the engine keeps the name its callers already import", () => {
+describe("the compaction entry point exports the leaf's estimator", () => {
 	/**
-	 * COMPATIBILITY. `estimateTokens` was a public name on `compaction.ts` before it moved, and modules
-	 * outside this directory import it from there. The re-export is what makes the move invisible to them.
+	 * `estimateTokens` is public through `@veyyon/agent-core/compaction`, and its one definition is in
+	 * `token-estimate.ts`.
 	 *
-	 * Asserted by CALLING both spellings rather than by reading `compaction.ts` for an
-	 * `export { estimateTokens } from "./token-estimate"` line. A re-export pointing at a second
-	 * implementation reads identically in source and gives two callers different numbers, which is the
-	 * failure this whole extraction was supposed to make impossible; function identity separates them.
+	 * Asserted as function identity. A barrel that reached a second implementation would give two callers
+	 * different numbers for the same message, which is the failure the extraction exists to prevent.
 	 */
-	it("both spellings are the same function", async () => {
-		const [fromEngine, fromLeaf] = await Promise.all([
-			import("../src/compaction/compaction"),
+	it("the entry point and the leaf export the same function", async () => {
+		const [fromEntryPoint, fromLeaf] = await Promise.all([
+			import("../src/compaction"),
 			import("../src/compaction/token-estimate"),
 		]);
 
-		expect(fromEngine.estimateTokens).toBe(fromLeaf.estimateTokens);
+		expect(fromEntryPoint.estimateTokens).toBe(fromLeaf.estimateTokens);
 	});
 });

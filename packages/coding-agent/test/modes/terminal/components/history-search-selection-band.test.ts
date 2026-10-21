@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { HistorySearchComponent } from "@veyyon/coding-agent/modes/terminal/components/composer/history-search";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { HistoryEntry, HistoryStorage } from "@veyyon/kernel/session/history-storage";
-import { getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
+import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
 import { visibleWidth } from "@veyyon/utils/width";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
@@ -33,7 +33,7 @@ const DOWN = "\x1b[B";
 /** The scrollbar track and thumb glyphs `renderScrollableList` draws. */
 const BAR_GLYPHS = /[│█]/;
 
-let policy: ReturnType<typeof getAnsiPolicy>;
+let policy: AnsiPolicy;
 let geometry: StubbedStdoutGeometry;
 
 beforeEach(async () => {

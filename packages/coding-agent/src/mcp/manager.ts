@@ -11,7 +11,7 @@ import { type AuthStorage, REMOTE_REFRESH_SENTINEL } from "@veyyon/ai/auth-stora
 // The owner, not the barrel: classifying an OAuth failure is a string test that
 // belongs to the flag it decides, and `error/flags.ts` is where that flag lives.
 import { isDefinitiveOAuthFailure } from "@veyyon/ai/error/flags";
-import { errorMessage, logger, reportFault } from "@veyyon/utils";
+import { errorMessage, logger, reportFault, settleWithin } from "@veyyon/utils";
 import { describeConfigEnvReference } from "../config/config-value-resolution";
 import { invalidateConfigValue, resolveConfigValue } from "../config/resolve-config-value";
 import { FOREIGN_PROVIDER_IDS } from "../discovery/capability";
@@ -1330,10 +1330,11 @@ export class MCPManager {
 		}
 
 		if (connectionTasks.length > 0) {
-			await Promise.race([
+			await settleWithin(
 				Promise.allSettled(connectionTasks.map(task => task.tracked.promise)),
-				Bun.sleep(STARTUP_TOOL_WAIT_MS),
-			]);
+				STARTUP_TOOL_WAIT_MS,
+				undefined,
+			);
 
 			const cachedTools = new Map<string, MCPToolDefinition[]>();
 			const pendingTasks = connectionTasks.filter(task => task.tracked.status === "pending");

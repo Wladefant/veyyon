@@ -23,6 +23,7 @@
 
 import { heapStats } from "bun:jsc";
 import { describe, expect, it } from "bun:test";
+import { setImmediate as nextMacrotask } from "node:timers/promises";
 import { type Component, TUI } from "@veyyon/tui";
 import type { Terminal, TerminalAppearance } from "@veyyon/tui/terminal";
 import { settleFrames } from "./helpers/settle-frames";
@@ -84,6 +85,22 @@ function grownCells(before: Record<string, number>, after: Record<string, number
 }
 
 /**
+ * The fewest cells grown across three counts, a macrotask apart. JSC scans the stack conservatively,
+ * so one count can include dead cells a stale stack word still points at, or allocations of another
+ * suite's in-flight work in the same worker. One CI run counted 50,040 grown cells, two and a half per
+ * row, once, against a few hundred in every other run. A transient survivor is gone by a later count;
+ * a cell the engine keeps per row is alive in every count, so the least of them still sees it.
+ */
+async function settledGrownCells(before: Record<string, number>): Promise<number> {
+	let least = Number.POSITIVE_INFINITY;
+	for (let count = 0; count < 3; count++) {
+		if (count > 0) await nextMacrotask();
+		least = Math.min(least, grownCells(before, liveCells()));
+	}
+	return least;
+}
+
+/**
  * Flat rows, built in a frame of their own. A template literal is a rope whose number fiber dies
  * when a paint flattens it, and an intermediate array left in the test's own frame is held by a
  * bytecode temporary until the frame moves on; either dies after the baseline and would cancel a
@@ -111,7 +128,7 @@ describe("a painted frame", () => {
 			block.lines = rows;
 			tui.requestRender();
 			await settleFrames(term, tui);
-			const grown = grownCells(before, liveCells());
+			const grown = await settledGrownCells(before);
 
 			expect(tui.composedFrameRows).toBe(ROWS);
 			expect(term.bytes).toBeGreaterThan(ROWS * 20);

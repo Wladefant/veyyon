@@ -10,7 +10,8 @@
  */
 
 import { SGR_BG_RESET, SGR_FG_RESET, SGR_INTENSITY_RESET } from "@veyyon/utils/ansi";
-import { type ThemeColor, theme } from "../../../../theme/theme";
+import type { ThemeColor } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 
 export interface TrackSegment {
 	label: string;

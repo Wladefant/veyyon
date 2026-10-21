@@ -17,7 +17,15 @@
  * already doing from inside the prompt builder.
  */
 import * as os from "node:os";
-import { detachedString, errorMessage, firstNonEmpty, getGpuCachePath, isEnoent, logger } from "@veyyon/utils";
+import {
+	detachedString,
+	errorMessage,
+	firstNonEmpty,
+	getGpuCachePath,
+	isEnoent,
+	logger,
+	settleWithin,
+} from "@veyyon/utils";
 
 function parseWmicTable(output: string, header: string): string | null {
 	const lines = output
@@ -70,10 +78,11 @@ async function runGpuProbe(cmd: string[], budgetMs: number): Promise<string | nu
 		// Even on exit 0, a probe wrapper can leave a descendant holding stdout open.
 		// Bound the EOF wait so getCachedGpu cannot outlive the probe in either path;
 		// keep whatever bytes the reader already captured before cancelling.
-		const drained = await Promise.race([
+		const drained = await settleWithin(
 			stdoutDone.then(() => "ok" as const).catch(() => "err" as const),
-			Bun.sleep(GPU_PROBE_STDOUT_DRAIN_MS).then(() => "timeout" as const),
-		]);
+			GPU_PROBE_STDOUT_DRAIN_MS,
+			"timeout" as const,
+		);
 		if (drained !== "ok") {
 			await stdoutReader.cancel().catch(() => undefined);
 			await stdoutDone.catch(() => undefined);

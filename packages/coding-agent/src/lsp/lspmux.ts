@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import { $flag, $which, errorMessage, logger } from "@veyyon/utils";
+import { $flag, $which, errorMessage, logger, settleWithin } from "@veyyon/utils";
 import { TOML } from "bun";
 import { adoptIntoPrimarySessionCpuBudget } from "../session/cpu-limit";
 
@@ -117,17 +117,7 @@ async function checkServerRunning(binaryPath: string): Promise<boolean> {
 		});
 		adoptIntoPrimarySessionCpuBudget(proc.pid);
 
-		// The timer has to be cancelled when the process wins the race. Left
-		// pending it holds its resolve closure and keeps the loop scheduled for the
-		// rest of the timeout on every probe of an already-dead server.
-		const { promise: timeoutPromise, resolve: resolveTimeout } = Promise.withResolvers<null>();
-		const timer = setTimeout(() => resolveTimeout(null), LIVENESS_TIMEOUT_MS);
-		let exited: number | null;
-		try {
-			exited = await Promise.race([proc.exited, timeoutPromise]);
-		} finally {
-			clearTimeout(timer);
-		}
+		const exited = await settleWithin(proc.exited, LIVENESS_TIMEOUT_MS, null);
 
 		if (exited === null) {
 			proc.kill();

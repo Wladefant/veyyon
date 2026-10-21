@@ -123,11 +123,7 @@ async function initializeConnection(
 		clientInfo: CLIENT_INFO,
 	};
 
-	const result = await transport.request<MCPInitializeResult>(
-		"initialize",
-		params as unknown as Record<string, unknown>,
-		{ signal: options?.signal },
-	);
+	const result = await transport.request<MCPInitializeResult>("initialize", params, { signal: options?.signal });
 
 	if (options?.signal?.aborted) {
 		throw options.signal.reason instanceof Error ? options.signal.reason : new Error("Aborted");
@@ -460,11 +456,7 @@ export async function callTool(
 		arguments: args,
 	};
 
-	return connection.transport.request<MCPToolCallResult>(
-		"tools/call",
-		params as unknown as Record<string, unknown>,
-		options,
-	);
+	return connection.transport.request<MCPToolCallResult>("tools/call", params, options);
 }
 
 /**
@@ -600,11 +592,7 @@ export async function readResource(
 	options?: MCPRequestOptions,
 ): Promise<MCPResourceReadResult> {
 	const params: MCPResourceReadParams = { uri };
-	return connection.transport.request<MCPResourceReadResult>(
-		"resources/read",
-		params as unknown as Record<string, unknown>,
-		options,
-	);
+	return connection.transport.request<MCPResourceReadResult>("resources/read", params, options);
 }
 
 /**
@@ -709,11 +697,7 @@ export async function getPrompt(
 		params.arguments = args;
 	}
 
-	return connection.transport.request<MCPGetPromptResult>(
-		"prompts/get",
-		params as unknown as Record<string, unknown>,
-		options,
-	);
+	return connection.transport.request<MCPGetPromptResult>("prompts/get", params, options);
 }
 
 /**

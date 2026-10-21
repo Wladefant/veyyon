@@ -260,10 +260,8 @@ export class TinyTitleClient extends WorkerRequestClient<
 	}
 }
 
+/** The shared tiny-model worker client: session titles, memory completions, and the auto-thinking and unexpected-stop classifiers. */
 export const tinyTitleClient = new TinyTitleClient();
-
-/** Alias for the shared tiny-model worker client (titles + memory completions). */
-export const tinyModelClient = tinyTitleClient;
 
 export async function shutdownTinyTitleClient(): Promise<void> {
 	await tinyTitleClient.terminate();

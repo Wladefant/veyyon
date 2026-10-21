@@ -7,13 +7,13 @@ import { Database } from "bun:sqlite";
 import type { AgentToolResult } from "@veyyon/agent-core";
 import type { TextContent } from "@veyyon/ai";
 import { isProbablyBinaryHeader } from "@veyyon/utils/binary";
+import { formatBytes } from "@veyyon/utils/format";
 import type { ToolSession } from "../../sdk";
 import { DEFAULT_MAX_LINES, truncateHead, truncationSummary } from "../../session/streaming-output";
 import { type ArchiveReader, formatArchiveEntryLines, openArchive } from "../../utils/zip";
 import { applyListLimit } from "../core/list-limit";
 import { inlineBudgetFor } from "../core/output-artifact";
 import { isRawSelector, type ParsedSelector, parseSel } from "../core/path-utils";
-import { formatBytes } from "../core/render-utils";
 import {
 	executeReadQuery,
 	getRowByKey,

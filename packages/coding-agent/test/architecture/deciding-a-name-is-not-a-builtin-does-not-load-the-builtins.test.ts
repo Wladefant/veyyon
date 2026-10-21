@@ -73,13 +73,14 @@ describe("deciding a name is not a builtin does not load the builtins", () => {
 	 * would make every absence true for the wrong reason.
 	 *
 	 * The registry reached 866 modules once the heavy handlers (`/secret`, `/mcp`, `/ssh`, the plugin
-	 * manager) moved behind first use, down from over 1000. The floor sits below that and far above
+	 * manager) moved behind first use, down from over 1000, and 743 once the modules that read only
+	 * the active theme took it from `theme/theme-binding`. The floor sits below that and far above
 	 * what a walk that stops at the first package boundary reaches.
 	 */
 	it("walks a graph that really contains the builtins", () => {
 		const fromRegistry = reachedNames("slash-commands/builtin-registry.ts");
 
-		expect(fromRegistry.length).toBeGreaterThan(800);
+		expect(fromRegistry.length).toBeGreaterThan(700);
 		for (const domain of domainModules()) {
 			expect(fromRegistry, `the registry no longer reaches ${domain}`).toContain(domain);
 		}

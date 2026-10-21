@@ -15,9 +15,9 @@
  *    rather than back-slicing arrays from the end.
  *
  * WHAT THIS CLOSES:
- * - Registry-driven verification across all 22 members of `SEARCH_PROVIDER_ORDER`.
+ * - Registry-driven verification across all 23 members of `SEARCH_PROVIDER_ORDER`.
  * - Explicit fail-on-new-member coverage verifying every provider is accounted for in either the drivable
- *   fixture table (18 providers) or the model-grounded `NOT_DRIVABLE` set (4 providers).
+ *   fixture table (19 providers) or the model-grounded `NOT_DRIVABLE` set (4 providers).
  * - Enforces that extra aliases remain completely unread when limit is unset (verifying alias-fallback mutation fails).
  * - Verifies exact default, max clamp, adapter projection, and fractional/negative limit behavior per provider.
  *
@@ -32,6 +32,11 @@ import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import { settings } from "../../../../src/config/settings-instance";
 import type { SearchParams, SearchProvider } from "../../../../src/tools/web/search/providers/base";
 import { BraveProvider, searchBrave } from "../../../../src/tools/web/search/providers/brave";
+import {
+	buildRequestBody as buildDeepSeekRequestBody,
+	DeepSeekProvider,
+	searchDeepSeek,
+} from "../../../../src/tools/web/search/providers/deepseek";
 import { DuckDuckGoProvider, searchDuckDuckGo } from "../../../../src/tools/web/search/providers/duckduckgo";
 import { ExaProvider, resetExaSearchThrottleForTest, searchExa } from "../../../../src/tools/web/search/providers/exa";
 import {
@@ -83,6 +88,7 @@ beforeEach(async () => {
 		"jina",
 		"synthetic",
 		"tavily",
+		"deepseek",
 		"tinyfish",
 		"xai",
 		"zai",
@@ -630,6 +636,40 @@ const PROVIDER_SPECS: Record<string, DrivableProviderSpec> = {
 
 			const aliasOnlyBody = buildTavilyRequestBody({ query: "test", limit: 2, numSearchResults: 8 } as any);
 			expect(aliasOnlyBody.max_results).toBe(5);
+		},
+	},
+	deepseek: {
+		id: "deepseek",
+		limitField: "searchParams",
+		defaultLimit: 10,
+		maxLimit: 50,
+		executeDirect: (params, fetchImpl) =>
+			searchDeepSeek(
+				makeSearchParams({
+					fetch: fetchImpl,
+					...params,
+				}),
+			),
+		adapter: DeepSeekProvider,
+		createFetch: () => async () =>
+			new Response(
+				JSON.stringify({
+					results: Array.from({ length: 60 }, (_, i) => ({
+						url: `https://example.com/${i + 1}`,
+						title: `Title ${i + 1}`,
+						summary: `Summary ${i + 1}`,
+					})),
+				}),
+				{ status: 200, headers: { "content-type": "application/json" } },
+			),
+		testInternalRequestLimits: () => {
+			expect(buildDeepSeekRequestBody({ query: "test" }).count).toBe(10);
+			expect(buildDeepSeekRequestBody({ query: "test", num_results: 3 }).count).toBe(3);
+			expect(buildDeepSeekRequestBody({ query: "test", num_results: 500 }).count).toBe(50);
+			// Alias-only limits are not part of DeepSeekSearchParams, and the spread keeps the
+			// excess-property check out of the way: the point is that they are never read.
+			const aliasOnly = { limit: 2, numSearchResults: 8 };
+			expect(buildDeepSeekRequestBody({ query: "test", ...aliasOnly }).count).toBe(10);
 		},
 	},
 	tinyfish: {
