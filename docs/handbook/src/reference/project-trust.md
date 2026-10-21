@@ -21,6 +21,8 @@ A symlink inside a project skill that resolves outside the project root is refus
 
 A skill folder is bounded so that one large folder cannot stall discovery. It is refused, and not trusted, when it has more than 8 levels of nested directories, more than 256 files, a file over 1 MiB, or more than 16 MiB in total. Every directory is scanned, including `node_modules` and `.git`; their files count against these bounds and affect the digest. A file named `.git` or `node_modules` is also hashed. A refused folder is logged as a warning, and `veyyon trust` lists it as unreadable.
 
+Project plugin folders use the same conservative bounds: 8 nested directory levels, 256 files, 1 MiB per file and 16 MiB total. Every directory is scanned and every file counts; no names are excluded. The gate refuses an unreadable, unsupported, cyclic, overbound or symlink-escaping folder. Install paths must resolve inside the canonical project, and every child must resolve inside its own install folder. A changed registry or payload appears changed and needs approval again.
+
 A file outside the project root is not affected. Profile extensions, installed plugins, profile
 skills and paths you set in `extensions:` load as before: a configured path is your own instruction
 and loads even when stored inside the project, which is where an extension is written while you are
@@ -54,7 +56,7 @@ Consequences:
 
 - A changed file or path in a skill directory changes its digest. Veyyon withholds that skill until you approve it again.
 - A new skill was not approved by an earlier decision.
-- Approving a plugin registry approves the plugins it names. Their install directories are usually outside the project, and their contents are not digested.
+- Approving a plugin registry approves its exact bytes and every named install directory, including disabled entries. Each folder digest covers every path and file, plus its resolved path identity. Changes require approval again.
 - A denial is stored, so the next launch neither loads the code nor prompts again.
 - A store written by another version of Veyyon, or one whose records are malformed, is discarded. Nothing is trusted and you are prompted again.
 - A skill with a symlink that resolves outside the project root is refused and logged as a warning.
