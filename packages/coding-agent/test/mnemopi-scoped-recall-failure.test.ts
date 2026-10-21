@@ -121,11 +121,7 @@ describe("scoped memory recall when a bank cannot be read", () => {
 		const empty = {
 			bank: "project",
 			memory: { recallEnhanced: async () => [] },
-<<<<<<< HEAD
 		} satisfies RecallTarget;
-=======
-		} as unknown as RecallTarget;
->>>>>>> santhreal/main
 		const state = stateWith(empty);
 
 		await expect(state.collectScopedRecallResults("q")).resolves.toEqual([]);

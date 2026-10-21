@@ -40,6 +40,14 @@ The relay never stops Chrome. Reusing the operator's running Chrome leaves the b
 The relay records ownership before registration starts. Cancellation or timeout removes that pending tab before the relay closes its transport.
 Existing Chrome tabs remain untouched.
 
+## Lane inventory and cleanup
+
+`browser` with `action: "inventory"` reports only tabs already tracked by the relay. Each row includes its Chrome tab ID, its window ID when known, last-known URL and title, Veyyon tab name, and whether the current session owns or merely attaches to it. The inventory does not query Chrome or open another browser connection, and it never lists unrelated operator tabs.
+
+`close` releases only tabs created by the current session. `all: true` keeps that owner boundary. `approved_tab_ids` may additionally authorize exact Chrome tab IDs from the inventory only for ownerless tabs in the relay's controlled registry; tabs owned by other lanes stay protected. A lane's session disposer closes only tabs recorded under that owner; it does not use approved IDs or take another lane's tab.
+
+Inventory URLs redact credentials and sensitive query-parameter values before the tool displays them. The pinned protocol does not expose `tabs.query`, `tabs.onAttached`, or `tabs.onUpdated`. Therefore the relay cannot enumerate pre-existing Chrome tabs or verify a tab's current window after it moves. The reported window ID is the last one observed at creation, and this inventory cannot prove that cleanup leaves a tab in every live window. A protocol update is required for that guarantee; the relay does not request broader permissions or infer ownership of untracked tabs.
+
 ## Security
 
 1. The relay listens on `127.0.0.1` only. Any other host is refused.

@@ -5416,6 +5416,12 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 											}
 										: {}),
 								};
+						const defaultCost = copilotTierCost(tokenPrices.defaultTier);
+						if (defaultCost) {
+							// Copilot reports live per-tier prices; cache writes are not reported per tier, so the
+							// bundled provider rate stays.
+							base.cost = { ...defaultCost, cacheWrite: base.cost?.cacheWrite ?? 0 };
+						}
 						const variant = createCopilotLongContextVariant(
 							base,
 							contextWindow,
