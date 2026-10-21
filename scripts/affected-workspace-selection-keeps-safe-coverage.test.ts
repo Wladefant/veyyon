@@ -427,6 +427,22 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 			"scripts/a-documented-provider-default-is-the-descriptor-default.test.ts",
 		);
 		expect(targets("packages/ai/NOTES.md")).toContain("scripts/first-party-docs-are-indexed.test.ts");
+		expect(targets("README.zh.md")).toContain("scripts/first-party-docs-are-indexed.test.ts");
+		for (const file of [
+			".github/workflows/ci-notes.md",
+			"contracts/model/README.md",
+			"natives/text/keys/README.md",
+			"crates/example/README.md",
+			".cargo/README.md",
+			"rust-toolchain.md",
+			"docs/internal/testing.md",
+			"packages/ai/NOTES.md",
+		]) {
+			expect(ciContractTestsForPaths([file], new Set(trackedReaders)).length).toBeGreaterThan(0);
+			expect(fullTriggerReason(file)).toBeDefined();
+		}
+		expect(fullTriggerReason("docs/internal/testing.md")).toBeUndefined();
+		expect(fullTriggerReason("packages/ai/NOTES.md")).toBeUndefined();
 
 		const providerReadme = "packages/ai/README.md";
 		const realGraph = workspaceDependencyGraph();

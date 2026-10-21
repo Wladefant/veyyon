@@ -365,7 +365,7 @@ const CI_CONTRACT_TEST_MAP: readonly CiContractTestRule[] = [
 			if (file.startsWith("docs/handbook/src/")) {
 				readers.push("scripts/a-generated-doc-says-so-on-its-first-line.test.ts");
 			}
-			if (file === "docs/README.md" || (!file.startsWith("docs/") && !file.startsWith("README."))) {
+			if (file === "docs/README.md" || (!file.startsWith("docs/") && file !== "README.md")) {
 				readers.push("scripts/first-party-docs-are-indexed.test.ts");
 			}
 			if (file === "docs/handbook/src/reference/settings.md") {
@@ -463,16 +463,13 @@ function isCiContractOwnedPath(file: string): boolean {
 /**
  * Return the conservative all-mode reason for a changed path, if one applies.
  *
- * Contract rule: a path owned by `CI_CONTRACT_TEST_MAP` (runner, selector, sandbox, `ci/cloudflare/`
- * and `scripts/` test files) returns no full-mode reason. Its contract tests run instead, so the
- * related selection stays narrow. Only paths with no contract owner reach the branches below, and
- * GitHub workflow files are the one runner-side surface left without a contract rule, so they keep
- * the full-coverage fallback here.
+ * Contract rule: a path owned by `CI_CONTRACT_TEST_MAP` returns no full-mode reason only after
+ * the conservative shared-boundary checks below. GitHub workflow files and other protected
+ * shared surfaces keep their full-coverage fallback even when Markdown readers also own them.
  */
 export function fullTriggerReason(file: string): string | undefined {
 	const normalized = normalizedGitPath(file);
 	if (!normalized) return "changed path is not a safe repository-relative path";
-	if (isCiContractOwnedPath(normalized)) return undefined;
 	if (normalized === "package.json") return "root package.json can change workspace membership or shared dependencies";
 	if (Object.hasOwn(LOCKFILE_BASENAMES, nodePath.posix.basename(normalized))) {
 		return "lockfile changes affect dependency resolution across the workspace";
@@ -506,6 +503,7 @@ export function fullTriggerReason(file: string): string | undefined {
 	if (normalized.startsWith("tests/fixtures/") || normalized.startsWith("tests/fuzz/")) {
 		return "shared fixtures or fuzz inputs are outside one workspace member";
 	}
+	if (isCiContractOwnedPath(normalized)) return undefined;
 	return undefined;
 }
 export interface WorkspaceImportGraph {
