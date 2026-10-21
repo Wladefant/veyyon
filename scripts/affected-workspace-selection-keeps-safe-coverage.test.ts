@@ -26,8 +26,10 @@ import {
 } from "./ci-test-ts";
 import {
 	buildWorkspaceDependencyGraph,
+	reverseDependencyClosure,
 	type WorkspaceDependencyGraph,
 	type WorkspaceGraphEntry,
+	workspaceDependencyGraph,
 } from "./workspace-layout";
 
 function graph(entries: readonly WorkspaceGraphEntry[]): WorkspaceDependencyGraph {
@@ -365,6 +367,95 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 			knownGraph,
 		);
 		expect(documentation).toMatchObject({ mode: "affected", selectedMembers: [] });
+	});
+
+	it("sweeps runtime workspace manifests for owner and reverse closure on non-code member assets", () => {
+		const currentGraph = workspaceDependencyGraph();
+		for (const directory of currentGraph.nodes.keys()) {
+			const asset = `${directory}/README.asset`;
+			const expected = reverseDependencyClosure(currentGraph, [directory]);
+			const selection = selectAffectedWorkspaceMembers(
+				[{ status: "M", paths: [asset] }],
+				currentGraph,
+				currentGraph,
+			);
+			expect(selection).toMatchObject({
+				mode: "affected",
+				selectedMembers: expected,
+				changeMembers: [{ path: asset, selectedMembers: expected }],
+			});
+		}
+	});
+
+	it("maps root and handbook Markdown to explicit real readers, including cross-member inputs", () => {
+		const rootTargets = ciContractTestsForPaths(["README.md"]);
+		expect(rootTargets.map(target => target.path)).toEqual(["scripts/check-doc-links.test.ts"]);
+
+		const docsIndexTargets = ciContractTestsForPaths(["docs/README.md"]);
+		expect(docsIndexTargets.map(target => target.path)).toEqual([
+			"scripts/check-doc-links.test.ts",
+			"scripts/first-party-docs-are-indexed.test.ts",
+		]);
+
+		const settingsTargets = ciContractTestsForPaths(["docs/handbook/src/reference/settings.md"]);
+		expect(settingsTargets.map(target => target.path)).toEqual([
+			"scripts/check-doc-links.test.ts",
+			"scripts/a-generated-doc-says-so-on-its-first-line.test.ts",
+			"scripts/settings-doc-coherence.test.ts",
+		]);
+		const providerTargets = ciContractTestsForPaths(["docs/handbook/src/reference/providers.md"]);
+		expect(providerTargets.map(target => target.path)).toContain(
+			"scripts/a-documented-provider-default-is-the-descriptor-default.test.ts",
+		);
+
+		const providerReadme = "packages/ai/README.md";
+		const realGraph = workspaceDependencyGraph();
+		const realSelection = selectAffectedWorkspaceMembers(
+			[{ status: "M", paths: [providerReadme] }],
+			realGraph,
+			realGraph,
+		);
+		expect(realSelection.selectedMembers).toEqual(reverseDependencyClosure(realGraph, ["packages/ai"]));
+		expect(ciContractTestsForPaths([providerReadme]).map(target => target.path)).toEqual([
+			"scripts/a-documented-provider-default-is-the-descriptor-default.test.ts",
+		]);
+	});
+
+	it("maps Markdown additions, deletions, and both rename sides without dropping reader targets", () => {
+		const targets = ciContractTestsForPaths(
+			[
+				{ status: "A", paths: ["docs/handbook/src/new-page.md"] },
+				{ status: "D", paths: ["docs/handbook/src/old-page.md"] },
+				{ status: "R100", paths: ["docs/handbook/src/old-name.md", "docs/handbook/src/new-name.md"] },
+			].flatMap(change => change.paths),
+		);
+		expect(targets.map(target => target.path)).toEqual([
+			"scripts/check-doc-links.test.ts",
+			"scripts/a-generated-doc-says-so-on-its-first-line.test.ts",
+		]);
+	});
+
+	it("fails closed for unsupported non-code paths and stale reader targets", () => {
+		const knownGraph = basicGraph();
+		for (const file of [
+			"docs/assets/diagram.svg",
+			"docs/handbook/book/index.md",
+			"README.txt",
+			"assets/image.png",
+		]) {
+			expect(
+				selectAffectedWorkspaceMembers([{ status: "M", paths: [file] }], knownGraph, knownGraph),
+			).toMatchObject({ mode: "full" });
+		}
+		expect(() =>
+			ciContractTestsForPaths(
+				["docs/handbook/src/reference/settings.md"],
+				new Set([
+					"scripts/check-doc-links.test.ts",
+					"scripts/settings-doc-coherence.test.ts",
+				]),
+			),
+		).toThrow(/non-code reader target is not tracked at HEAD/);
 	});
 
 	it("keeps changed script tests in a mixed workspace selection", () => {

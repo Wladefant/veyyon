@@ -18,7 +18,7 @@ import {
 
 export const AFFECTED_SELECTOR_ID = "affected-workspace-tests-v1";
 export const AFFECTED_STATIC_DEPENDENCY_POLICY =
-	"Workspace graphs combine manifest dependencies with parser-resolved TypeScript/JavaScript imports. Counts are unique cross-member import edges per revision. Unresolved or undeclared targets force full coverage. Non-literal loaders in audited files add potential edges to every workspace member; any other non-literal loader forces full coverage.";
+	"Workspace graphs combine manifest dependencies with parser-resolved TypeScript/JavaScript imports. Counts are unique cross-member import edges per revision. Unresolved or undeclared targets force full coverage. Non-literal loaders in audited files add potential edges to every workspace member; any other non-literal loader forces full coverage. Non-code reader dependencies are explicit CI contract mappings, not statically discovered filesystem calls; unowned or unmapped paths force full coverage, and mapped reader targets must exist at HEAD.";
 export interface AffectedDynamicImportSite {
 	file: string;
 	owner: string;
@@ -340,6 +340,7 @@ export interface CiContractTestTarget {
 interface CiContractTestRule {
 	matches: (file: string) => boolean;
 	targets: (file: string, headTrackedPaths: ReadonlySet<string>) => readonly CiContractTestTarget[];
+	requireTrackedTargets?: boolean;
 }
 
 const ciContractTargets = (
@@ -347,8 +348,42 @@ const ciContractTargets = (
 	paths: readonly string[],
 ): CiContractTestTarget[] => paths.map(path => ({ runner, path }));
 
-/** Contract tests for host/runner control files that have no workspace import owner. */
+/** Explicitly maintained readers for non-code inputs that are not owned by a workspace member. */
 const CI_CONTRACT_TEST_MAP: readonly CiContractTestRule[] = [
+	{
+		matches: file =>
+			file.startsWith("docs/") &&
+			!file.startsWith("docs/handbook/book/") &&
+			/\.md$/i.test(file),
+		targets: file => {
+			const readers = ["scripts/check-doc-links.test.ts"];
+			if (file.startsWith("docs/handbook/src/")) {
+				readers.push("scripts/a-generated-doc-says-so-on-its-first-line.test.ts");
+			}
+			if (file === "docs/README.md") {
+				readers.push("scripts/first-party-docs-are-indexed.test.ts");
+			}
+			if (file === "docs/handbook/src/reference/settings.md") {
+				readers.push("scripts/settings-doc-coherence.test.ts");
+			}
+			if (
+				file === "docs/handbook/src/reference/providers.md" ||
+				file === "docs/handbook/src/reference/environment-complete.md"
+			) {
+				readers.push("scripts/a-documented-provider-default-is-the-descriptor-default.test.ts");
+			}
+			if (file.startsWith("docs/internal/")) {
+				readers.push("scripts/internal-docs-are-tracked.test.ts");
+			}
+			return ciContractTargets("bun", readers);
+		},
+		requireTrackedTargets: true,
+	},
+	{
+		matches: file => /^\w[^/]*\.md$/i.test(file),
+		targets: () => ciContractTargets("bun", ["scripts/check-doc-links.test.ts"]),
+		requireTrackedTargets: true,
+	},
 	{
 		matches: file => file === "scripts/ci-test-ts.ts" || file === "scripts/affected-workspace-tests.ts",
 		targets: () =>
@@ -400,15 +435,21 @@ const CI_CONTRACT_TEST_MAP: readonly CiContractTestRule[] = [
  */
 export function ciContractTestsForPaths(
 	paths: readonly string[],
-	headTrackedPaths: ReadonlySet<string>,
+	headTrackedPaths?: ReadonlySet<string>,
 ): CiContractTestTarget[] {
 	const targets = new Map<string, CiContractTestTarget>();
+	const trackedPaths = headTrackedPaths ?? new Set<string>();
 	for (const rawPath of paths) {
 		const file = normalizedGitPath(rawPath);
 		if (!file) continue;
 		for (const rule of CI_CONTRACT_TEST_MAP) {
 			if (!rule.matches(file)) continue;
-			for (const target of rule.targets(file, headTrackedPaths)) {
+			const ruleTargets = rule.targets(file, trackedPaths);
+			if (rule.requireTrackedTargets && headTrackedPaths !== undefined) {
+				const missing = ruleTargets.find(target => !headTrackedPaths.has(target.path));
+				if (missing) throw new Error(`non-code reader target is not tracked at HEAD: ${missing.path}`);
+			}
+			for (const target of ruleTargets) {
 				targets.set(`${target.runner}:${target.path}`, target);
 			}
 		}
@@ -930,11 +971,7 @@ function longestOwner(graph: WorkspaceDependencyGraph, file: string): string | u
 }
 
 function isAlwaysCoveredPath(file: string): boolean {
-	return (
-		file.startsWith("docs/") ||
-		/^\w[^/]*\.(?:md|mdx)$/i.test(file) ||
-		isCiContractOwnedPath(file)
-	);
+	return isCiContractOwnedPath(file);
 }
 
 /** Select changed owners and both revisions' transitive reverse dependency closures. */

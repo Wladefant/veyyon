@@ -385,6 +385,7 @@ export const workspaceTestPackages = [
 export const repoScriptTests = [
 	"scripts/a-documented-provider-default-is-the-descriptor-default.test.ts",
 	"scripts/a-generated-doc-says-so-on-its-first-line.test.ts",
+	"scripts/settings-doc-coherence.test.ts",
 	"scripts/a-local-action-is-called-with-everything-it-requires.test.ts",
 	"scripts/a-module-is-imported-at-the-top-of-its-file.test.ts",
 	"scripts/a-package-exports-its-public-surface.test.ts",
@@ -472,6 +473,7 @@ export const repoScriptTests = [
 	"scripts/record-conformance.test.ts",
 	"scripts/ci-test-real-data-guard.test.ts",
 	"scripts/ci-test-concurrency-default.test.ts",
+	"scripts/affected-workspace-selection-keeps-safe-coverage.test.ts",
 	"scripts/a-cloudflare-bucket-selection-preserves-test-files.test.ts",
 	"scripts/a-failing-test-chunk-does-not-stop-the-sequential-run.test.ts",
 	"scripts/release-binaries-bytecode.test.ts",
@@ -502,6 +504,7 @@ export const repoScriptTests = [
 	"scripts/there-is-only-one-capture-path.test.ts",
 	"scripts/a-recorder-container-can-reach-a-model-served-by-its-host.test.ts",
 	"scripts/a-capture-runs-on-the-bun-the-product-requires.test.ts",
+	"scripts/check-doc-links.test.ts",
 	"scripts/first-party-docs-are-indexed.test.ts",
 	"scripts/script-tests-coverage.test.ts",
 	// The startup benchmark suites (`startup-is-measured-after-the-screen-settles`,
