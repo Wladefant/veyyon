@@ -17,6 +17,10 @@
  */
 
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
+import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
+import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { finalizeSubagentLifecycle } from "@veyyon/coding-agent/task/executor";
 import { disposeOwnedResources } from "@veyyon/kernel/session/owned-resources";
 import { ToolAbortError } from "@veyyon/coding-agent/tools/core/tool-errors";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -181,11 +185,11 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 		const tool = new BrowserTool(makeToolSession("session-B"));
 
 		await expect(tool.execute("close-foreign", { action: "close", name: "foreign-tab" })).rejects.toThrow(
-			/own|approved/i,
+			/own/i,
 		);
 		await expect(
-			tool.execute("close-untracked", { action: "close", name: "foreign-tab", approved_tab_ids: [100] }),
-		).rejects.toThrow(/own|approved/i);
+			tool.execute("close-untracked", { action: "close", name: "foreign-tab" }),
+		).rejects.toThrow(/own/i);
 		expect(getTabsMapForTest().has("foreign-tab")).toBe(true);
 	});
 
@@ -237,13 +241,14 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 				{
 					tabId: 100,
 					windowId: 7,
+					ownerSessionId: "session-A",
 					targetId: "ext-100",
 					url: "https://example.com/docs?access_token=inventory-secret&view=full",
 					title: "Owned page",
 				},
 				{
 					tabId: 101,
-					windowId: 7,
+					ownerSessionId: "session-B",
 					targetId: "ext-101",
 					url: "https://example.com/foreign-path?token=foreign-secret",
 					title: "Foreign page",
@@ -254,6 +259,13 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 					targetId: "ext-103",
 					url: "https://example.com/ownerless",
 					title: "Ownerless page",
+				},
+				{
+					tabId: 104,
+					ownerSessionId: "session-A",
+					targetId: "ext-104",
+					url: "https://example.com/popup",
+					title: "Owned popup",
 				},
 			],
 		};
@@ -313,6 +325,7 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 			expect(JSON.parse(content.text)).toMatchObject([
 				{ tab_id: 100, window_id: 7, name: "owned-extension-tab", ownership: "owned", title: "Owned page" },
 				{ tab_id: 103, window_id: 9, name: "ownerless-extension-tab", ownership: "attached", title: "Ownerless page" },
+				{ tab_id: 104, ownership: "owned", title: "Owned popup" },
 			]);
 			for (const leaked of ["foreign-extension-tab", "Foreign page", "foreign-secret", "foreign-path", "ext-101"]) {
 				expect(content.text).not.toContain(leaked);
@@ -430,6 +443,8 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 		expect(getTabsMapForTest().has("reuse-tab")).toBe(true);
 		expect(await releaseTabsForOwner("session-A", { kill: false })).toBe(1);
 		expect(getTabsMapForTest().has("reuse-tab")).toBe(false);
+		expect(await releaseTabsForOwner("session-A", { kill: false })).toBe(0);
+		expect(await releaseTab("reuse-tab", { kill: false })).toBe(false);
 	});
 
 	it("lets any caller reuse an ownerless tab without taking ownership of it", async () => {
@@ -450,5 +465,74 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 		expect(second.tab).toBe(first.tab);
 		expect(second.created).toBe(false);
 		expect(second.tab.ownerSessionId).toBeUndefined();
+	});
+});
+
+describe("browser lifecycle — subagent finalization releases run-owned tabs", () => {
+	afterEach(async () => {
+		AgentLifecycleManager.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		try {
+			await drainAllTabs();
+		} finally {
+			vi.restoreAllMocks();
+		}
+	});
+
+	it.each([
+		{ name: "kept-alive completion or failure", aborted: false, keepAlive: true, isolated: false, abortKind: undefined, revive: true },
+		{ name: "hard cancellation", aborted: true, keepAlive: true, isolated: false, abortKind: "signal" as const, revive: true },
+		{ name: "one-shot completion", aborted: false, keepAlive: false, isolated: false, abortKind: undefined, revive: false },
+		{ name: "isolated completion", aborted: false, keepAlive: true, isolated: true, abortKind: undefined, revive: false },
+		{ name: "resumable budget abort", aborted: true, keepAlive: true, isolated: false, abortKind: "budget" as const, revive: true },
+	])("$name removes only tabs owned by the finalized lane, including on repetition", async (scenario) => {
+		spyOn(CmuxSocketClient.prototype, "connect").mockResolvedValue(undefined);
+		spyOn(CmuxSocketClient.prototype, "close").mockImplementation(() => undefined);
+		let openCount = 0;
+		spyOn(CmuxSocketClient.prototype, "request").mockImplementation(async (method: string) => {
+			if (method === "browser.open_split") {
+				openCount++;
+				return { surface_id: `finalize-${openCount}`, url: "about:blank" };
+			}
+			return {};
+		});
+
+		const owner = "finalized-session";
+		const ownedBrowser = await acquireBrowser(makeKind("finalized-owner"), { cwd: "/tmp" });
+		const otherBrowser = await acquireBrowser(makeKind("finalized-other"), { cwd: "/tmp" });
+		const anonymousBrowser = await acquireBrowser(makeKind("finalized-anonymous"), { cwd: "/tmp" });
+		await acquireTab("finalized-owned-tab", ownedBrowser, { timeoutMs: 1_000, ownerSessionId: owner });
+		await acquireTab("other-owned-tab", otherBrowser, { timeoutMs: 1_000, ownerSessionId: "other-session" });
+		await acquireTab("ownerless-tab", anonymousBrowser, { timeoutMs: 1_000 });
+		await releaseBrowser(ownedBrowser, { kill: false });
+		await releaseBrowser(otherBrowser, { kill: false });
+		await releaseBrowser(anonymousBrowser, { kill: false });
+
+		const session = { dispose: async () => undefined } as unknown as AgentSession;
+		AgentRegistry.global().register({
+			id: "finalized-agent",
+			displayName: "finalized-agent",
+			kind: "sub",
+			session,
+			sessionFile: "/tmp/finalized-agent.jsonl",
+		});
+		const finalize = () =>
+			finalizeSubagentLifecycle({
+				id: "finalized-agent",
+				session,
+				ownerSessionId: owner,
+				aborted: scenario.aborted,
+				abortKind: scenario.abortKind,
+				keepAlive: scenario.keepAlive,
+				isolated: scenario.isolated,
+				agentIdleTtlMs: 60_000,
+				reviveSession: scenario.revive ? async () => session : null,
+			});
+
+		await finalize();
+		await finalize();
+		expect(getTabsMapForTest().has("finalized-owned-tab")).toBe(false);
+		expect(getTabsMapForTest().has("other-owned-tab")).toBe(true);
+		expect(getTabsMapForTest().has("ownerless-tab")).toBe(true);
 	});
 });

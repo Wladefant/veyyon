@@ -164,17 +164,13 @@ describe("browser tool schema", () => {
 		);
 	});
 
-	it("accepts relay inventory and exact tab IDs for an explicitly approved close", () => {
+	it("accepts relay inventory and owner-scoped close", () => {
 		const tool = new BrowserTool(makeSession());
 		const schema = toolWireSchema(tool);
 
 		expect(validateJsonSchemaValue(schema, { action: "inventory" }).success).toBe(true);
-		expect(
-			validateJsonSchemaValue(schema, { action: "close", all: true, approved_tab_ids: [100, 101] }).success,
-		).toBe(true);
-		expect(tool.formatApprovalDetails({ action: "close", approved_tab_ids: [100, 101] })).toContain(
-			"Approved Tab IDs: 100, 101",
-		);
+		expect(validateJsonSchemaValue(schema, { action: "close", all: true }).success).toBe(true);
+		expect(validateJsonSchemaValue(schema, { action: "close", approved_tab_ids: [100] }).success).toBe(false);
 	});
 
 	// Reproduces the regression the Codex review flagged on #3647: with default

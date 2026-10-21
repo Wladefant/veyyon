@@ -395,9 +395,11 @@ describe("CDP over the extension RPC", () => {
 		expect(ext.open).toBe(true);
 	});
 
-	test("inventory exposes only relay-created or adopted tabs with their known metadata", async () => {
+	test("inventory exposes tracked ownership while leaving unrelated tabs out", async () => {
 		const { r, ext, cdp } = await connected();
 		await cdp.send("Target.createTarget", { url: "about:blank" });
+		r.claimTarget("ext-100", "lane-A");
+		r.claimTarget("ext-100", "lane-B");
 		ext.emit("chrome.tabs.onCreated", [{ id: 555, windowId: 8, openerTabId: 12345 }]);
 		ext.emit("chrome.tabs.onCreated", [{ id: 556, windowId: 7, openerTabId: 100 }]);
 		await until(() => ext.callsOf("chrome.debugger.attach").length === 2, "the popup attach");
@@ -410,6 +412,7 @@ describe("CDP over the extension RPC", () => {
 				targetId: "ext-100",
 				url: "https://example.com/",
 				title: "Example title",
+				ownerSessionId: "lane-A",
 			},
 			{
 				tabId: 556,
@@ -417,6 +420,7 @@ describe("CDP over the extension RPC", () => {
 				targetId: "ext-556",
 				url: "https://example.com/",
 				title: "Example title",
+				ownerSessionId: "lane-A",
 			},
 		]);
 	});
@@ -432,6 +436,21 @@ describe("CDP over the extension RPC", () => {
 			() => cdp.events.filter(event => event.method === "Target.attachedToTarget").length === 2,
 			"the popup session",
 		);
+	});
+
+	test("owner cleanup closes its targets and adopted popups once, leaving other owners untouched", async () => {
+		const { r, ext, cdp } = await connected();
+		const first = await cdp.send("Target.createTarget", { url: "about:blank" });
+		r.claimTarget(String(first.result?.targetId), "lane-A");
+		const second = await cdp.send("Target.createTarget", { url: "about:blank" });
+		r.claimTarget(String(second.result?.targetId), "lane-B");
+		ext.emit("chrome.tabs.onCreated", [{ id: 555, openerTabId: 100 }]);
+		await until(() => r.tabCount === 3, "the owned popup");
+
+		expect(r.closeTabsForOwner("lane-A")).toBe(2);
+		expect(r.closeTabsForOwner("lane-A")).toBe(0);
+		expect(ext.callsOf("chrome.tabs.remove").map(call => call.params)).toEqual([[100], [555]]);
+		expect(r.getTrackedTabs().map(tab => tab.ownerSessionId)).toEqual(["lane-B"]);
 	});
 });
 

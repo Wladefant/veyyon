@@ -16,6 +16,7 @@ import { pickElectronTarget } from "./attach";
 import { CmuxTab, runCmuxCode } from "./cmux/cmux-tab";
 import { mapWaitUntil } from "./cmux/rpc";
 import { type ConnectionRelay, openConnectionRelay } from "./connection-relay";
+import type { ExtensionRelay } from "./extension-relay";
 import { DEFAULT_VIEWPORT } from "./launch";
 import {
 	type BrowserHandle,
@@ -187,13 +188,9 @@ export interface ReleaseTabOptions {
 	kill?: boolean;
 }
 
-export interface OwnerTabReleaseOptions extends ReleaseTabOptions {
-	/** Chrome tab IDs explicitly approved from this session's relay inventory. */
-	approvedTabIds?: readonly number[];
-}
 
 export interface ExtensionTabInventoryEntry {
-	name: string;
+	name?: string;
 	tabId: number;
 	windowId?: number;
 	url: string;
@@ -206,28 +203,32 @@ export interface ExtensionTabInventoryEntry {
  * "attached". A tab another session owns is left out before its name, title or URL is read.
  */
 export function getExtensionTabInventory(ownerId?: string): ExtensionTabInventoryEntry[] {
-	const inventory: ExtensionTabInventoryEntry[] = [];
+	const relays = new Map<ExtensionRelay, Map<string, string>>();
 	for (const tab of tabs.values()) {
 		if (tab.state !== "alive" || tab.backend !== "worker" || tab.kindTag !== "extension" || !tab.browser.relay)
 			continue;
-		if (tab.ownerSessionId !== undefined && tab.ownerSessionId !== ownerId) continue;
-		const tracked = tab.browser.relay.getTrackedTabs().find(item => item.targetId === tab.targetId);
-		if (!tracked) continue;
-		inventory.push({
-			name: tab.name,
-			tabId: tracked.tabId,
-			windowId: tracked.windowId,
-			url: redactTabInventoryUrl(tracked.url),
-			title: tracked.title,
-			ownership: tab.ownerSessionId === undefined ? "attached" : "owned",
-		});
+		let names = relays.get(tab.browser.relay);
+		if (!names) {
+			names = new Map();
+			relays.set(tab.browser.relay, names);
+		}
+		names.set(tab.targetId, tab.name);
+	}
+	const inventory: ExtensionTabInventoryEntry[] = [];
+	for (const [relay, names] of relays) {
+		for (const tracked of relay.getTrackedTabs()) {
+			if (tracked.ownerSessionId !== undefined && tracked.ownerSessionId !== ownerId) continue;
+			inventory.push({
+				name: names.get(tracked.targetId),
+				tabId: tracked.tabId,
+				windowId: tracked.windowId,
+				url: redactTabInventoryUrl(tracked.url),
+				title: tracked.title,
+				ownership: tracked.ownerSessionId === undefined ? "attached" : "owned",
+			});
+		}
 	}
 	return inventory;
-}
-
-function approvedExtensionTabId(tab: TabSession): number | undefined {
-	if (tab.backend !== "worker" || tab.kindTag !== "extension" || !tab.browser.relay) return undefined;
-	return tab.browser.relay.getTrackedTabs().find(item => item.targetId === tab.targetId)?.tabId;
 }
 
 const tabs = new Map<string, TabSession>();
@@ -644,6 +645,7 @@ async function openWorkerTab(
 			ownerSessionId: opts.ownerSessionId,
 			...(contextName === undefined ? {} : { contextName }),
 		};
+		if (browser.kind.kind === "extension") browser.relay?.claimTarget(info.targetId, opts.ownerSessionId);
 		worker.onMessage(msg => handleTabMessage(tab, msg));
 		tabs.set(name, tab);
 		published = true;
@@ -988,42 +990,39 @@ export async function dropHeadlessTabs(): Promise<void> {
 	for (const name of names) await releaseTab(name);
 }
 
-/** Release a named tab only when this session owns it or approves its exact controlled Chrome tab ID. */
+/** Release a named tab only when this session owns it. */
 export async function releaseTabForOwner(
 	name: string,
 	ownerId: string | undefined,
-	opts: OwnerTabReleaseOptions = {},
+	opts: ReleaseTabOptions = {},
 ): Promise<boolean> {
 	const tab = tabs.get(name);
 	if (!tab) return false;
 	if (ownerId && tab.ownerSessionId === ownerId) return releaseTab(name, opts);
-	const tabId = approvedExtensionTabId(tab);
-	if (!tab.ownerSessionId && tabId !== undefined && opts.approvedTabIds?.includes(tabId)) return releaseTab(name, opts);
-	throw new ToolError(
-		`Cannot close tab ${JSON.stringify(name)} because this session does not own it. Include its exact Chrome tab ID in approved_tab_ids only for an ownerless relay-controlled tab.`,
-	);
+	throw new ToolError(`Cannot close tab ${JSON.stringify(name)} because this session does not own it.`);
 }
 
-/**
- * Release tabs created by a session when `AgentSession.dispose()` runs. Ownership is stamped only
- * at creation and never changes on reuse. Explicit approved IDs can add only ownerless tabs in this relay's
- * controlled registry; another lane's tabs and unrelated browser tabs are never adopted.
- */
+/** Release tabs created by a session when its agent session is disposed. */
 export async function releaseTabsForOwner(
 	ownerId: string | undefined,
-	opts: OwnerTabReleaseOptions = {},
+	opts: ReleaseTabOptions = {},
 ): Promise<number> {
 	if (!ownerId) return 0;
+	const relays = new Set<ExtensionRelay>();
+	for (const tab of tabs.values()) {
+		if (tab.backend === "worker" && tab.browser.relay) relays.add(tab.browser.relay);
+	}
 	const names = Array.from(tabs.values())
-		.filter(tab => {
-			if (ownerId !== undefined && tab.ownerSessionId === ownerId) return true;
-			const tabId = approvedExtensionTabId(tab);
-			return !tab.ownerSessionId && tabId !== undefined && opts.approvedTabIds?.includes(tabId) === true;
-		})
+		.filter(tab => tab.ownerSessionId === ownerId)
 		.map(tab => tab.name);
 	let count = 0;
 	for (const name of names) {
 		if (await releaseTab(name, opts)) count++;
+	}
+	// Popups and targets created before a worker failed can lack a named supervisor entry.
+	// Their relay records still carry the creator, so sweep only that owner's remaining records.
+	for (const relay of relays) {
+		if (!relay.closed) await relay.closeTabsForOwner(ownerId);
 	}
 	await releaseOrphanBrowsers({
 		kill: opts.kill ?? false,

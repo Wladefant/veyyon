@@ -11,6 +11,7 @@ import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import type { Api, Model, ServiceTierByFamily, ToolChoice } from "@veyyon/ai";
 import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import type { ArtifactManager } from "@veyyon/kernel/session/artifacts";
+import { disposeOwnedResources } from "@veyyon/kernel/session/owned-resources";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import {
@@ -1485,6 +1486,8 @@ function agentSignOffText(monitor: AgentRunMonitor): string | undefined {
 export async function finalizeSubagentLifecycle(args: {
 	id: string;
 	session: AgentSession;
+	/** Session that created this run's tabs, even when its conversation remains available for revival. */
+	ownerSessionId?: string;
 	aborted: boolean;
 	/** Which watchdog (if any) requested the abort; decides revivability. */
 	abortKind?: AbortReason;
@@ -1501,6 +1504,15 @@ export async function finalizeSubagentLifecycle(args: {
 	reviveSession: (() => Promise<AgentSession>) | null;
 }): Promise<void> {
 	const registry = AgentRegistry.global();
+	// A finished lane can remain idle for revival without retaining its browser tabs. This runs before
+	// every terminal/idle branch, including failure and cancellation, in the live parent process.
+	if (args.ownerSessionId) {
+		try {
+			await disposeOwnedResources("session", args.ownerSessionId);
+		} catch (error) {
+			logger.warn("Some lane-owned resources failed to release after the run", { error: errorMessage(error) });
+		}
+	}
 	const disposeSession = async (): Promise<void> => {
 		// scopedTimeoutSignal clears the 5s cleanup deadline the moment dispose()
 		// settles, so a bare AbortSignal.timeout timer never outlives disposal and
@@ -2413,6 +2425,7 @@ async function releaseRunSession(release: RunRelease): Promise<void> {
 	await finalizeSubagentLifecycle({
 		id: options.id,
 		session,
+		ownerSessionId: session.sessionManager.getSessionId(),
 		aborted: release.turnAborted,
 		abortKind: monitor.abortKind(),
 		keepAlive: options.keepAlive !== false,

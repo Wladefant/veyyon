@@ -134,9 +134,6 @@ const browserSchema = lazy(() =>
 		"code?": type("string").describe("js body to run in tab"),
 		"timeout?": type("number").describe(describeTimeoutParam("browser")),
 		"all?": type("boolean").describe("close every tab owned by this session"),
-		"approved_tab_ids?": type("number[]").describe(
-			"exact Chrome tab IDs from inventory that authorize closing only ownerless relay-controlled tabs",
-		),
 		"kill?": type("boolean").describe("also kill spawned-app browsers"),
 	}),
 );
@@ -242,9 +239,6 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 		}
 		if (typeof params.url === "string" && params.url.length > 0) {
 			lines.push(`URL: ${truncateForPrompt(params.url)}`);
-		}
-		if (Array.isArray(params.approved_tab_ids) && params.approved_tab_ids.length > 0) {
-			lines.push(`Approved Tab IDs: ${params.approved_tab_ids.join(", ")}`);
 		}
 		if (typeof params.code === "string" && params.code.length > 0) {
 			lines.push(`Code:\n${truncateForPrompt(params.code)}`);
@@ -361,15 +355,6 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 				action: params.action,
 				name: params.action === "inventory" ? undefined : name,
 			};
-			if (params.approved_tab_ids !== undefined) {
-				if (params.action !== "close") throw new ToolError("approved_tab_ids applies only to close.");
-				if (
-					params.approved_tab_ids.some(id => !Number.isSafeInteger(id) || id <= 0) ||
-					new Set(params.approved_tab_ids).size !== params.approved_tab_ids.length
-				) {
-					throw new ToolError("approved_tab_ids must contain unique positive Chrome tab IDs.");
-				}
-			}
 			// Ignored silently, either would read as done: a context on a run, or a state file on a close.
 			if (typeof params.context === "string" && params.action !== "open") {
 				throw new ToolError(`context applies to open, which puts a tab in it; ${params.action} takes none.`);
@@ -874,7 +859,7 @@ async function close(
 	ownerId: string | undefined,
 	signal?: AbortSignal,
 ): Promise<AgentToolResult<BrowserToolDetails>> {
-	const options = { kill: !!params.kill, approvedTabIds: params.approved_tab_ids };
+	const options = { kill: !!params.kill };
 	if (params.all) {
 		const count = await untilAborted(signal, () => releaseTabsForOwner(ownerId, options));
 		details.result = `Closed ${count} tab(s)`;
@@ -897,7 +882,8 @@ function inventory(
 	const rows = tabs.map(tab => ({
 		tab_id: tab.tabId,
 		window_id: tab.windowId,
-		name: truncateForPrompt(tab.name),
+		window_identity: "observed-not-current",
+		name: tab.name === undefined ? undefined : truncateForPrompt(tab.name),
 		url: truncateForPrompt(tab.url),
 		title: truncateForPrompt(tab.title),
 		ownership: tab.ownership,

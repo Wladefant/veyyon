@@ -132,6 +132,8 @@ interface OwnedTab {
 	tabId: number;
 	windowId?: number;
 	targetId: string;
+	/** Owner of the relay-created target; undefined for connect or operator tabs. */
+	ownerSessionId?: string;
 	/** Chrome's id of the tab's main frame (its page target id). */
 	mainFrameId: string;
 	url: string;
@@ -318,16 +320,42 @@ export class ExtensionRelay {
 	}
 
 	/** Snapshot only tabs this relay already created or adopted; never queries Chrome's other tabs. */
-	getTrackedTabs(): Array<{ tabId: number; windowId?: number; targetId: string; url: string; title: string }> {
-		return [...this.#tabs.values()].map(({ tabId, windowId, targetId, url, title }) => ({
+	getTrackedTabs(): Array<{
+		tabId: number;
+		windowId?: number;
+		targetId: string;
+		url: string;
+		title: string;
+		ownerSessionId?: string;
+	}> {
+		return [...this.#tabs.values()].map(({ tabId, windowId, targetId, url, title, ownerSessionId }) => ({
 			tabId,
 			windowId,
 			targetId,
 			url,
 			title,
+			ownerSessionId,
 		}));
 	}
 
+	/** Stamp ownership only once after the supervisor accepts this exact target. */
+	claimTarget(targetId: string, ownerSessionId: string | undefined): void {
+		if (!ownerSessionId) return;
+		const tab = this.#tabByTargetId(targetId);
+		if (tab && tab.ownerSessionId === undefined) tab.ownerSessionId = ownerSessionId;
+	}
+
+
+	/** Close every relay-created tab owned by a lane; unrelated and ownerless targets stay untouched. */
+	closeTabsForOwner(ownerSessionId: string | undefined): number {
+		if (!ownerSessionId) return 0;
+		const tabs = [...this.#tabs.values()].filter(tab => tab.ownerSessionId === ownerSessionId);
+		for (const tab of tabs) {
+			this.#fireAndForget("chrome.tabs.remove", [tab.tabId]);
+			this.#dropTab(tab.tabId);
+		}
+		return tabs.length;
+	}
 	get closed(): boolean {
 		return this.#closed;
 	}
@@ -617,7 +645,8 @@ export class ExtensionRelay {
 						return;
 					}
 				}
-				void this.#registerTab(tab.id, false, tab.windowId).catch(error =>
+				const ownerSessionId = this.#tabs.get(tab.openerTabId)?.ownerSessionId;
+				void this.#registerTab(tab.id, false, tab.windowId, ownerSessionId).catch(error =>
 					this.#log("could not adopt a popup", { error: errorText(error) }),
 				);
 				return;
@@ -843,7 +872,12 @@ export class ExtensionRelay {
 
 	// ----- Tabs and sessions ---------------------------------------------------------------
 
-	async #registerTab(tabId: number, bootstrap = false, windowId?: number): Promise<OwnedTab> {
+	async #registerTab(
+		tabId: number,
+		bootstrap = false,
+		windowId?: number,
+		ownerSessionId?: string,
+	): Promise<OwnedTab> {
 		let mainFrameId: string;
 		let url = "about:blank";
 		let title = "";
@@ -875,7 +909,15 @@ export class ExtensionRelay {
 			throw error;
 		}
 		if (bootstrap) this.#pendingBootstrapTabs.delete(tabId);
-		const tab: OwnedTab = { tabId, windowId, targetId: `ext-${tabId}`, mainFrameId, url, title };
+		const tab: OwnedTab = {
+			tabId,
+			windowId,
+			targetId: `ext-${tabId}`,
+			...(bootstrap ? {} : ownerSessionId === undefined ? {} : { ownerSessionId }),
+			mainFrameId,
+			url,
+			title,
+		};
 		this.#tabs.set(tabId, tab);
 		for (const client of this.#clients.values()) {
 			if (client.discover)
