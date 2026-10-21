@@ -6,7 +6,7 @@
 
 ### Added
 
-- Added `readOwnerOnlyFile` and `readOwnerOnlyFileSync`, which refuse a discovery record another user can read or write, follow no symlink, and check the Windows owner-only ACL before parsing, plus `verifyOwnerOnlyWindowsAclSync`.
+- Added `readOwnerOnlyFile` and `readOwnerOnlyFileSync`, which reject unsafe parent directories and discovery-record paths, verify owner-only file and parent ACLs plus the required SYSTEM ACE on Windows, and refuse insecure records before parsing; `verifyOwnerOnlyWindowsAclSync` provides synchronous Windows ACL checks.
 
 ### Changed
 

@@ -9,27 +9,29 @@
  *
  * POSIX: the record is opened with `O_NOFOLLOW`, so a symlink is refused rather than followed, and with
  * `O_NONBLOCK`, so a FIFO is refused on its descriptor instead of blocking the open. Every check runs on
- * the open descriptor that is then read, so the file cannot change between check and read.
- * Refused: a non-regular file, a file owned by another uid, any group or other permission bit, and a
- * process with no user id, because the owner then cannot be checked.
- *
- * Windows: the path must not be a symbolic link. The file is opened, its handle is checked for type and
- * size, and {@link verifyOwnerOnlyWindowsAcl} must pass on the path (protected DACL, one full-control allow
- * ACE for the current user, no reparse point). The path is then compared to the opened handle, so a file
- * replaced in between is refused before any byte is read, unless it is swapped back (see below).
- *
+ * the open descriptor that is then read, so the file cannot change between check and read. Its containing
+ * directory is separately lstat-checked as a real, owner-owned directory with no group or other access.
+ * Refused: a non-regular file, a file owned by another uid, any group or other permission bit on the file
+ * or its parent, and a process with no user id, because the owner then cannot be checked.
+ * Windows: DOS device namespaces and reserved device basenames are refused before any file access. The
+ * containing directory must be a real directory and pass the same protected owner-only DACL check as the
+ * record. The file must not be a symbolic link. It is opened, its handle is checked for type and size, and
+ * {@link verifyOwnerOnlyWindowsAcl} must pass on the path (protected DACL, one full-control allow ACE for
+ * the current user, no reparse point). The path is then compared to the opened handle, so a file replaced
+ * in between is refused before any byte is read, unless it is swapped back (see below).
  * WHAT IT DOES NOT CATCH: a process running as the same user, which may edit its own record; a record
  * another user deletes or renames over (the reader sees ENOENT or refuses the foreign file).
  *
- * WINDOWS RESIDUAL WINDOW: the handle is opened before the ACL check, and the ACL is checked by path. A writer
+ * WINDOWS RESIDUAL WINDOW: the handle is opened before the file ACL check, and the ACL is checked by path. A writer
  * that can rename within the record's directory can swap a file with a passing ACL in at the path during the
  * check, then swap the opened file back before the identity comparison. The comparison then passes for a file
  * whose ACL was never checked. The reader narrows that window and does not close it, and it claims no atomic
- * protection against that writer. The caller's owner-only discovery directory is what keeps a foreign user from
- * replacing the record at all.
+ * protection against that writer. The containing directory's owner-only DACL check helps keep a foreign user
+ * from replacing the record at all.
  */
 
 import * as fs from "node:fs";
+import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import { isFsError } from "./fs-error";
 import { verifyOwnerOnlyWindowsAcl, verifyOwnerOnlyWindowsAclSync, type WindowsAclOptions } from "./windows-acl";
@@ -52,6 +54,55 @@ export interface OwnerOnlyReadOptions {
 
 function refuse(filePath: string, reason: string): Error {
 	return new Error(`Refusing discovery record ${filePath}: ${reason}`);
+}
+
+/** Windows interprets device namespaces, ADS, and reserved DOS names as non-file targets. */
+function assertWindowsFilePath(filePath: string): void {
+	const normalized = filePath.replace(/\//g, "\\");
+	if (
+		normalized.startsWith("\\\\?\\") ||
+		normalized.startsWith("\\\\.\\") ||
+		normalized.startsWith("\\??\\") ||
+		normalized.startsWith("\\\\??\\")
+	) {
+		throw refuse(filePath, "Windows device path");
+	}
+	for (const segment of normalized.split("\\").filter(Boolean)) {
+		if (segment.includes(":") && !/^[a-z]:$/i.test(segment)) {
+			throw refuse(filePath, "Windows device path");
+		}
+		const name = segment.replace(/[ .]+$/g, "");
+		const stem = name.split(".", 1)[0].replace(/[ .]+$/g, "");
+		if (/^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])$/i.test(stem)) {
+			throw refuse(filePath, "Windows device path");
+		}
+	}
+}
+
+function assertParentStats(filePath: string, stats: fs.Stats, platform: NodeJS.Platform): void {
+	if (stats.isSymbolicLink()) throw refuse(filePath, "parent directory is a symbolic link");
+	if (!stats.isDirectory()) throw refuse(filePath, "parent path is not a directory");
+	if (platform === "win32") return;
+	const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+	if (uid === undefined) throw refuse(filePath, "cannot check the owner: process.getuid is unavailable");
+	if (stats.uid !== uid) throw refuse(filePath, "parent directory is owned by another user");
+	if ((stats.mode & 0o077) !== 0) throw refuse(filePath, "parent directory is accessible by other users");
+}
+
+async function checkParent(filePath: string, platform: NodeJS.Platform, options: OwnerOnlyReadOptions): Promise<void> {
+	const parentPath = path.dirname(filePath);
+	assertParentStats(filePath, await fsp.lstat(parentPath), platform);
+	if (platform === "win32") {
+		await verifyOwnerOnlyWindowsAcl(parentPath, { ...options.windowsAcl, platform });
+	}
+}
+
+function checkParentSync(filePath: string, platform: NodeJS.Platform, options: OwnerOnlyReadOptions): void {
+	const parentPath = path.dirname(filePath);
+	assertParentStats(filePath, fs.lstatSync(parentPath), platform);
+	if (platform === "win32") {
+		verifyOwnerOnlyWindowsAclSync(parentPath, { ...options.windowsAcl, platform });
+	}
 }
 
 /** The rules both readers apply to the stats of the file they are about to parse. */
@@ -80,6 +131,8 @@ function assertSameFile(filePath: string, checked: fs.Stats, opened: fs.Stats): 
  */
 export async function readOwnerOnlyFile(filePath: string, options: OwnerOnlyReadOptions = {}): Promise<string> {
 	const platform = options.platform ?? process.platform;
+	if (platform === "win32") assertWindowsFilePath(filePath);
+	await checkParent(filePath, platform, options);
 	if (platform === "win32") {
 		// A symbolic link is refused before it is opened, so the open never follows one.
 		if ((await fsp.lstat(filePath)).isSymbolicLink()) throw refuse(filePath, "is a symbolic link");
@@ -109,6 +162,8 @@ export async function readOwnerOnlyFile(filePath: string, options: OwnerOnlyRead
 /** Synchronous {@link readOwnerOnlyFile}, with the same refusals and the same missing-file error. */
 export function readOwnerOnlyFileSync(filePath: string, options: OwnerOnlyReadOptions = {}): string {
 	const platform = options.platform ?? process.platform;
+	if (platform === "win32") assertWindowsFilePath(filePath);
+	checkParentSync(filePath, platform, options);
 	if (platform === "win32") {
 		// A symbolic link is refused before it is opened, so the open never follows one.
 		if (fs.lstatSync(filePath).isSymbolicLink()) throw refuse(filePath, "is a symbolic link");

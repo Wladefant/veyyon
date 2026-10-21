@@ -35,18 +35,35 @@ $owner = $actual.GetOwner([Security.Principal.SecurityIdentifier])
 if (-not $owner.Equals($identity)) { throw 'ACL owner is not the current user' }
 if (-not $actual.AreAccessRulesProtected) { throw 'ACL inheritance is enabled' }
 $rules = @($actual.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
-if ($rules.Count -ne 1) { throw 'ACL does not contain exactly one access rule' }
-$rule = $rules[0]
-if ($rule.IsInherited) { throw 'ACL contains an inherited access rule' }
-if (-not $rule.IdentityReference.Equals($identity)) { throw 'ACL grants another identity access' }
-if ($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { throw 'ACL owner rule is not an allow rule' }
-if ($rule.FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl) { throw 'ACL owner rule is not exactly full control' }
-if ($rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::None) { throw 'ACL owner rule has unexpected propagation flags' }
+if ($rules.Count -ne 2) { throw 'ACL does not contain exactly two access rules' }
+$system = New-Object Security.Principal.SecurityIdentifier('S-1-5-18')
+$expectedIdentities = @($identity, $system)
+$expectedInheritance = [Security.AccessControl.InheritanceFlags]::None
 if ($item.PSIsContainer) {
   $expectedInheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
-  if ($rule.InheritanceFlags -ne $expectedInheritance) { throw 'ACL directory owner rule does not protect descendants' }
-} elseif ($rule.InheritanceFlags -ne [Security.AccessControl.InheritanceFlags]::None) {
-  throw 'ACL file owner rule has unexpected inheritance flags'
+}
+foreach ($rule in $rules) {
+  if ($rule.IsInherited) { throw 'ACL contains an inherited access rule' }
+  $principalAllowed = $false
+  foreach ($expectedIdentity in $expectedIdentities) {
+    if ($rule.IdentityReference.Equals($expectedIdentity)) { $principalAllowed = $true }
+  }
+  if (-not $principalAllowed) { throw 'ACL grants another identity access' }
+  if ($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { throw 'ACL principal rule is not an allow rule' }
+  if ($rule.FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl) { throw 'ACL principal rule is not exactly full control' }
+  if ($rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::None) { throw 'ACL principal rule has unexpected propagation flags' }
+  if ($rule.InheritanceFlags -ne $expectedInheritance) { throw 'ACL principal rule has unexpected inheritance flags' }
+}
+foreach ($expectedIdentity in $expectedIdentities) {
+  $principalRules = @($rules | Where-Object { $_.IdentityReference.Equals($expectedIdentity) })
+  if ($principalRules.Count -ne 1) { throw 'ACL is missing an expected principal rule' }
+}
+if ($item.PSIsContainer) {
+  foreach ($rule in $rules) {
+    if ($rule.InheritanceFlags -ne $expectedInheritance) { throw 'ACL directory principal rule does not protect descendants' }
+  }
+} elseif ($rules | Where-Object { $_.InheritanceFlags -ne [Security.AccessControl.InheritanceFlags]::None }) {
+  throw 'ACL file principal rule has unexpected inheritance flags'
 }
 `;
 
@@ -65,14 +82,17 @@ if ($item.PSIsContainer) {
 }
 $acl.SetOwner($identity)
 $acl.SetAccessRuleProtection($true, $false)
-$rule = New-Object Security.AccessControl.FileSystemAccessRule(
-  $identity,
-  [Security.AccessControl.FileSystemRights]::FullControl,
-  $inheritance,
-  [Security.AccessControl.PropagationFlags]::None,
-  [Security.AccessControl.AccessControlType]::Allow
-)
-[void]$acl.AddAccessRule($rule)
+$system = New-Object Security.Principal.SecurityIdentifier('S-1-5-18')
+foreach ($principal in @($identity, $system)) {
+  $rule = New-Object Security.AccessControl.FileSystemAccessRule(
+    $principal,
+    [Security.AccessControl.FileSystemRights]::FullControl,
+    $inheritance,
+    [Security.AccessControl.PropagationFlags]::None,
+    [Security.AccessControl.AccessControlType]::Allow
+  )
+  [void]$acl.AddAccessRule($rule)
+}
 Set-Acl -LiteralPath $target -AclObject $acl -ErrorAction Stop
 ${VERIFY_ACL}
 [Console]::Out.Write('OK')
@@ -88,7 +108,8 @@ ${VERIFY_ACL}
 [Console]::Out.Write('OK')
 `;
 
-/** Apply a protected DACL granting access exclusively to the current Windows user. */
+
+/** Apply a protected DACL granting full control only to the current user and LocalSystem. */
 export async function applyOwnerOnlyWindowsAcl(filePath: string, options: WindowsAclOptions = {}): Promise<void> {
 	await runOwnerOnlyAcl(APPLY_SCRIPT, filePath, options);
 }

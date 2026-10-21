@@ -104,6 +104,51 @@ describe.skipIf(!posix)("owner-only discovery reads on POSIX", () => {
 		await expect(readOwnerOnlyFile(link)).rejects.toThrow("is a symbolic link");
 		expect(() => readOwnerOnlyFileSync(link)).toThrow("is a symbolic link");
 	});
+	// WHY: a private file inside a replaceable parent can be redirected after its file-level check. Both
+	// readers must reject the parent symlink before opening the record.
+	it("refuses a symlinked parent directory through both readers", async () => {
+		const root = await fsp.mkdtemp(path.join(os.tmpdir(), "owner-only-read-"));
+		tempDirs.push(root);
+		const target = path.join(root, "target");
+		await fsp.mkdir(target);
+		const file = path.join(target, "record.json");
+		await fsp.writeFile(file, '{"version":1}');
+		await fsp.chmod(file, 0o600);
+		const link = path.join(root, "linked");
+		await fsp.symlink(target, link, "dir");
+		const linkedFile = path.join(link, "record.json");
+		await expect(readOwnerOnlyFile(linkedFile)).rejects.toThrow("parent directory is a symbolic link");
+		expect(() => readOwnerOnlyFileSync(linkedFile)).toThrow("parent directory is a symbolic link");
+	});
+
+	// WHY: a private file in a broadly accessible parent can be replaced or redirected by another user.
+	// Parent and file permissions must both pass the same owner-only rule.
+	it("refuses a POSIX parent directory with group or other access", async () => {
+		const root = await fsp.mkdtemp(path.join(os.tmpdir(), "owner-only-read-"));
+		tempDirs.push(root);
+		const dir = path.join(root, "shared");
+		await fsp.mkdir(dir, { mode: 0o700 });
+		await fsp.chmod(dir, 0o750);
+		const file = path.join(dir, "record.json");
+		await fsp.writeFile(file, '{"version":1}', { mode: 0o600 });
+		await expect(readOwnerOnlyFile(file)).rejects.toThrow("parent directory is accessible by other users");
+		expect(() => readOwnerOnlyFileSync(file)).toThrow("parent directory is accessible by other users");
+	});
+
+	// WHY: the containing directory is also part of the trust boundary and must be owned by this process user.
+	it("refuses a parent directory owned by another user", async () => {
+		const file = await tempRecord(0o600);
+		const uid = process.getuid();
+		const getuid = spyOn(process, "getuid").mockReturnValue(uid + 1);
+		try {
+			await expect(readOwnerOnlyFile(file)).rejects.toThrow("parent directory is owned by another user");
+			expect(() => readOwnerOnlyFileSync(file)).toThrow("parent directory is owned by another user");
+		} finally {
+			getuid.mockRestore();
+		}
+	});
+
+
 
 	// WHY: a directory named like a record is not a claim. The reader must refuse it, not throw a raw EISDIR
 	// that a caller could mistake for an ordinary unreadable file.
@@ -156,7 +201,9 @@ describe.skipIf(!posix)("owner-only discovery reads on POSIX", () => {
 	// WHY: a missing record must still surface as ENOENT, because the production readers treat ENOENT as
 	// "no owner" and any other error as a refusal to open.
 	it("keeps the missing-file error code for a record that does not exist", async () => {
-		const file = path.join(os.tmpdir(), `absent-${crypto.randomUUID()}.json`);
+		const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "owner-only-read-"));
+		tempDirs.push(dir);
+		const file = path.join(dir, `absent-${crypto.randomUUID()}.json`);
 		await expect(readOwnerOnlyFile(file)).rejects.toMatchObject({ code: "ENOENT" });
 		let syncCode: unknown;
 		try {
@@ -176,12 +223,28 @@ describe.skipIf(posix)("owner-only discovery reads on Windows", () => {
 		tempDirs.push(dir);
 		const file = path.join(dir, "record.json");
 		await fsp.writeFile(file, '{"version":1}');
+		await applyOwnerOnlyWindowsAcl(dir);
 		await applyOwnerOnlyWindowsAcl(file);
 		const granted = spawnSync("icacls", [file, "/grant", "*S-1-1-0:(R)"], { windowsHide: true });
 		expect(granted.status).toBe(0);
 		await expect(readOwnerOnlyFile(file)).rejects.toThrow("Refusing discovery record");
 		expect(() => readOwnerOnlyFileSync(file)).toThrow("Refusing discovery record");
 	});
+	// WHY: a private record in a broadly accessible directory can be replaced or redirected by another user.
+	// The directory itself must pass owner-plus-SYSTEM verification before the record can be opened.
+	it("refuses a discovery directory with an Everyone read ACE", async () => {
+		const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "owner-only-read-"));
+		tempDirs.push(dir);
+		const file = path.join(dir, "record.json");
+		await fsp.writeFile(file, '{"version":1}');
+		await applyOwnerOnlyWindowsAcl(dir);
+		await applyOwnerOnlyWindowsAcl(file);
+		const granted = spawnSync("icacls", [dir, "/grant", "*S-1-1-0:(RX)"], { windowsHide: true });
+		expect(granted.status).toBe(0);
+		await expect(readOwnerOnlyFile(file)).rejects.toThrow("Refusing discovery record");
+		expect(() => readOwnerOnlyFileSync(file)).toThrow("Refusing discovery record");
+	});
+
 
 	// WHY: the Windows control. A record written through the owner-only writer must read back, so the refusal
 	// above is the ACL and not a reader that refuses everything.
@@ -190,8 +253,117 @@ describe.skipIf(posix)("owner-only discovery reads on Windows", () => {
 		tempDirs.push(dir);
 		const file = path.join(dir, "record.json");
 		await fsp.writeFile(file, '{"version":1}');
+		await applyOwnerOnlyWindowsAcl(dir);
 		await applyOwnerOnlyWindowsAcl(file);
 		await expect(readOwnerOnlyFile(file)).resolves.toBe('{"version":1}');
 		expect(readOwnerOnlyFileSync(file)).toBe('{"version":1}');
+	});
+});
+describe("Windows owner-only discovery path policy", () => {
+	// WHY: DOS device paths can address devices rather than discovery records. Reject them before opening.
+	it.each([
+		"\\\\.\\NUL",
+		"\\\\?\\C:\\temp\\record.json",
+		"C:\\temp\\CON.txt",
+		"C:\\temp\\CON .txt",
+		"C:\\CON\\record.json",
+		"C:\\temp\\record.json:secret",
+	] as const)(
+		"refuses Windows DOS device path %s before opening it",
+		async file => {
+			const openAsync = spyOn(fsp, "open");
+			const openSync = spyOn(fs, "openSync");
+			try {
+				await expect(readOwnerOnlyFile(file, { platform: "win32" })).rejects.toThrow("Windows device path");
+				expect(() => readOwnerOnlyFileSync(file, { platform: "win32" })).toThrow("Windows device path");
+				expect(openAsync).not.toHaveBeenCalled();
+				expect(openSync).not.toHaveBeenCalled();
+
+				const allowed = await tempRecord(0o600, '{"version":1}');
+				const options = {
+					platform: "win32" as const,
+					windowsAcl: {
+						run: async () => ({ exitCode: 0, stdout: "OK", stderr: "" }),
+						runSync: () => ({ exitCode: 0, stdout: "OK", stderr: "" }),
+					},
+				};
+				await expect(readOwnerOnlyFile(allowed, options)).resolves.toBe('{"version":1}');
+				expect(readOwnerOnlyFileSync(allowed, options)).toBe('{"version":1}');
+				expect(openAsync).toHaveBeenCalledTimes(1);
+				expect(openSync).toHaveBeenCalledTimes(1);
+			} finally {
+				openAsync.mockRestore();
+				openSync.mockRestore();
+			}
+		},
+	);
+
+	// WHY: a record ACL cannot protect a record in an unsafe parent. Readers must check it before opening.
+	it("checks the containing directory ACL before parsing", async () => {
+		const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "owner-only-read-"));
+		tempDirs.push(dir);
+		const file = path.join(dir, "record.json");
+		await fsp.writeFile(file, '{"version":1}');
+		const asyncOpen = spyOn(fsp, "open");
+		const syncOpen = spyOn(fs, "openSync");
+		const denied = {
+			platform: "win32" as const,
+			windowsAcl: {
+				run: async (_script: string, checkedPath: string) => {
+					if (checkedPath === dir) throw new Error("parent ACL refused");
+					return { exitCode: 0, stdout: "OK", stderr: "" };
+				},
+				runSync: (_script: string, checkedPath: string) => {
+					if (checkedPath === dir) throw new Error("parent ACL refused");
+					return { exitCode: 0, stdout: "OK", stderr: "" };
+				},
+			},
+		};
+		const checked: string[] = [];
+		const options = {
+			platform: "win32" as const,
+			windowsAcl: {
+				run: async (_script: string, checkedPath: string) => {
+					checked.push(checkedPath);
+					return { exitCode: 0, stdout: "OK", stderr: "" };
+				},
+				runSync: (_script: string, checkedPath: string) => {
+					checked.push(checkedPath);
+					return { exitCode: 0, stdout: "OK", stderr: "" };
+				},
+			},
+		};
+		try {
+			await expect(readOwnerOnlyFile(file, denied)).rejects.toThrow("parent ACL refused");
+			expect(() => readOwnerOnlyFileSync(file, denied)).toThrow("parent ACL refused");
+			expect(asyncOpen).not.toHaveBeenCalled();
+			expect(syncOpen).not.toHaveBeenCalled();
+
+			await expect(readOwnerOnlyFile(file, options)).resolves.toBe('{"version":1}');
+			expect(checked).toEqual([dir, file]);
+			expect(asyncOpen).toHaveBeenCalledTimes(1);
+			checked.length = 0;
+			asyncOpen.mockClear();
+			expect(readOwnerOnlyFileSync(file, options)).toBe('{"version":1}');
+			expect(checked).toEqual([dir, file]);
+			expect(syncOpen).toHaveBeenCalledTimes(1);
+		} finally {
+			asyncOpen.mockRestore();
+			syncOpen.mockRestore();
+		}
+	});
+
+	// WHY: parent-directory ACLs are part of the trust boundary, not only the record's ACL.
+	it("refuses a discovery directory with an Everyone read ACE", async () => {
+		const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "owner-only-read-"));
+		tempDirs.push(dir);
+		const file = path.join(dir, "record.json");
+		await fsp.writeFile(file, '{"version":1}');
+		await applyOwnerOnlyWindowsAcl(dir);
+		await applyOwnerOnlyWindowsAcl(file);
+		const granted = spawnSync("icacls", [dir, "/grant", "*S-1-1-0:(RX)"], { windowsHide: true });
+		expect(granted.status).toBe(0);
+		await expect(readOwnerOnlyFile(file)).rejects.toThrow("Refusing discovery record");
+		expect(() => readOwnerOnlyFileSync(file)).toThrow("Refusing discovery record");
 	});
 });

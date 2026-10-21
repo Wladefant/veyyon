@@ -396,7 +396,7 @@ describe("terminal-control-transport", () => {
 	}
 
 	if (process.platform === "win32") {
-		it("runs real Windows named pipe broker with owner-only ACL and verifies same-user delivery", async () => {
+		it("runs the real Windows pipe broker with owner-and-SYSTEM ACL and verifies same-user delivery", async () => {
 			const pipeName = `veyyon-test-pipe-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 			const endpoint = `\\\\.\\pipe\\${pipeName}`;
 
@@ -534,9 +534,18 @@ $client.Dispose()
 			expect(identityMatch, identity.stdout).not.toBeNull();
 			const currentUserSid = identityMatch?.[1];
 			expect(aclResult.Owner).toBe(currentUserSid);
-			// WHY: issue 580. The owner SID must be the only ACE. A SYSTEM ACE or any second identity
-			// widens the pipe past the owner-only contract, so an exact match catches both.
-			expect(aclResult.Rules).toEqual([{ Identity: currentUserSid, Rights: "FullControl", Type: "Allow" }]);
+			// The broker grants only the owner and LocalSystem; exact count and values reject extra or missing principals.
+			expect(aclResult.Rules).toHaveLength(2);
+			expect(aclResult.Rules).toContainEqual({
+				Identity: currentUserSid,
+				Rights: "FullControl",
+				Type: "Allow",
+			});
+			expect(aclResult.Rules).toContainEqual({
+				Identity: "S-1-5-18",
+				Rights: "FullControl",
+				Type: "Allow",
+			});
 
 			server.close();
 		});

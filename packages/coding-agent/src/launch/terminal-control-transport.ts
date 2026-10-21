@@ -198,18 +198,19 @@ public class VeyyonTerminalPipeBroker {
             throw new InvalidOperationException("Failed to resolve current Windows user SID.");
         }
 
-        // WHY: issue 580. A SYSTEM FullControl ACE lets any SYSTEM-level process reach the
-        // terminal control channel. The owner SID is the only ACE, so the pipe stays owner-only.
+        // WHY: issue 580. The owner and LocalSystem are the only identities allowed to reach the control channel.
         var security = new PipeSecurity();
         security.SetOwner(identity);
         security.SetAccessRuleProtection(true, false);
 
-        security.AddAccessRule(new PipeAccessRule(
-            identity,
-            PipeAccessRights.FullControl,
-            AccessControlType.Allow
-        ));
-
+        var system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+        foreach (var principal in new[] { identity, system }) {
+            security.AddAccessRule(new PipeAccessRule(
+                principal,
+                PipeAccessRights.FullControl,
+                AccessControlType.Allow
+            ));
+        }
         return security;
     }
 

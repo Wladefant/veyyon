@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Live terminal discovery now skips a terminal record other local users can read or write, so a planted record cannot route a session notice to another session.
+- Terminal-control pipes and discovery records restrict Windows access to the owner and SYSTEM; readers refuse records in unsafe directories or at device paths before parsing ([Refs #580](https://github.com/Wladefant/veyyon/issues/580)).
 
 - Closing a launch client during broker connection now rejects pending requests and destroys late sockets, so an empty broker can exit after its configured grace when all clients close ([Refs #517](https://github.com/Wladefant/veyyon/issues/517)).
 - Reviewer prompts now enforce exact-head, gate-safe, verdict-only reviews and declare `task`, `qa-verifier`, and `haiku` as child roles ([#566](https://github.com/Wladefant/veyyon/issues/566)).
