@@ -272,6 +272,7 @@ describe("searchCodex model selection", () => {
 		expect(capturedRequest).not.toBeNull();
 		expect(capturedRequest?.url).toBe("https://chatgpt.com/backend-api/codex/responses");
 		expect(capturedRequest?.body?.model).toBe("gpt-5.6-luna");
+		expect(new Headers(capturedRequest?.headers).get("x-codex-routing-hint")).toBe("model=gpt-5.6-luna");
 		expect(result.model).toBe("gpt-5.6-luna");
 		expect(result.sources).toEqual([{ title: "Example Article", url: "https://example.com/article" }]);
 	});

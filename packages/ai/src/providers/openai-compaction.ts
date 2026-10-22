@@ -52,6 +52,7 @@
  */
 
 import type { ResolvedOpenAIResponsesCompat } from "@veyyon/catalog/types";
+import { codexRoutingHint, OPENAI_HEADERS } from "@veyyon/catalog/wire/codex";
 import { $env, logger, scopedTimeoutSignal, stringifyJson } from "@veyyon/utils";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { boundProviderErrorDetail, ProviderHttpError, readProviderErrorDetail } from "../error";
@@ -400,6 +401,9 @@ export const openAIResponsesServerCompaction: ServerCompactionTransport = {
 					]),
 				);
 			}
+			// codex-rs sends the routing hint on the compaction request as on a turn.
+			const routingHint = codexRoutingHint(body);
+			if (routingHint) headers[OPENAI_HEADERS.ROUTING_HINT] = routingHint;
 		}
 		const applyCallerSanitizer = (text: string): string => {
 			if (!request.sanitizeErrorText) return text;

@@ -372,9 +372,70 @@ describe("imageGenTool", () => {
 
 		expect(requestHeaders?.get("authorization")).toBe(`Bearer ${codexJwt}`);
 		expect(requestHeaders?.get("chatgpt-account-id")).toBe("acc_test");
+		expect(requestHeaders?.get("x-codex-routing-hint")).toBe("model=gpt-5.5-codex");
 		expect(requestBody?.access_programs).toEqual({ cyber: "daybreak_red" });
 		expect(listingAccounts).toEqual(["acc_test"]);
 		expect(result.details?.imageCount).toBe(1);
+	});
+
+	it("sends no Codex routing hint, and drops the model's own, when the model is not a valid header value", async () => {
+		let requestHeaders: Headers | undefined;
+		let requestBody: Record<string, unknown> | undefined;
+		const tokenPayload = Buffer.from(
+			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
+		).toString("base64");
+		const codexJwt = `header.${tokenPayload}.signature`;
+		const fetchMock: typeof fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			if (new URL(input.toString()).pathname.endsWith("/codex/models")) {
+				return new Response(JSON.stringify({ models: [] }));
+			}
+			requestHeaders = new Headers(init?.headers);
+			requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+			const done = {
+				type: "response.output_item.done",
+				item: {
+					type: "image_generation_call",
+					result: Buffer.from("webp").toString("base64"),
+					status: "completed",
+				},
+			};
+			const completed = { type: "response.completed", response: { output: [], status: "completed", error: null } };
+			return new Response(`data: ${JSON.stringify(done)}\n\ndata: ${JSON.stringify(completed)}\n\n`, {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		}) as unknown as typeof fetch;
+		const model = {
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			id: "gpt-5.5-codex-é",
+			name: "GPT Codex",
+			baseUrl: "https://example-proxy.invalid/backend-api",
+			headers: { "x-codex-routing-hint": "model=caller-stated" },
+		} as Model;
+		const ctx: CustomToolContext = {
+			fetch: fetchMock,
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => codexJwt,
+				getApiKeyForProvider: async () => undefined,
+				authStorage: { rotateSessionCredential: async () => false },
+				resolver: () => async () => codexJwt,
+			} as unknown as ModelRegistry,
+			model,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute("call-codex-invalid-hint", { subject: "a cat" }, undefined, ctx);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestBody?.model).toBe("gpt-5.5-codex-é");
+		expect(requestHeaders?.has("x-codex-routing-hint")).toBe(false);
 	});
 
 	it("routes xAI image generation with xAI-only aspect ratios", async () => {

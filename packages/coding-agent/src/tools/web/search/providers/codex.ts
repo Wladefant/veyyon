@@ -18,6 +18,8 @@ import {
 	// web search alone would have kept posting to the old endpoint.
 	CODEX_BASE_URL,
 	CODEX_CLIENT_VERSION,
+	type CodexRoutedBody,
+	codexRoutingHint,
 	getCodexAccountId,
 	OPENAI_HEADER_VALUES,
 	OPENAI_HEADERS,
@@ -204,9 +206,11 @@ async function callCodexSearch(
 		);
 		if (accessPrograms) body.access_programs = accessPrograms;
 		const requestBody = transformProviderPayload(body, transform, "Codex search request");
+		// The hint states the model of the body as sent, as a turn's does.
+		const routingHint = codexRoutingHint(requestBody as CodexRoutedBody);
 		const response = await fetchImpl(url, {
 			method: "POST",
-			headers,
+			headers: routingHint ? { ...headers, [OPENAI_HEADERS.ROUTING_HINT]: routingHint } : headers,
 			body: JSON.stringify(requestBody),
 			signal: hardSignal,
 		});
