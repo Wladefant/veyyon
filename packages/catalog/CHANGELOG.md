@@ -19,6 +19,11 @@
 - The Google, Vertex and Gemini CLI transports send `thinkingLevel` to every Gemini model from 3.0 up, including Gemini 4 and the `argon` tier, instead of a `thinkingBudget` that Gemini 4 rejects with HTTP 400.
 
 ## [1.5.6] - 2026-10-10
+### Added
+
+- `codexRoutingHint` in `@veyyon/catalog/wire/codex` builds the `x-codex-routing-hint` value (`model=<model>;tier=<tier>`, or `model=<model>` without a tier) from a Codex Responses request body.
+
+## [1.5.9] - 2026-10-22
 
 ### Added
 

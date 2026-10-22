@@ -5,14 +5,19 @@
 ## [Unreleased]
 
 ## [1.6.4] - 2026-10-28
+### Added
+
+- `codexRoutingHint` in `@veyyon/catalog/wire/codex` builds the `x-codex-routing-hint` value (`model=<model>;tier=<tier>`, or `model=<model>` without a tier) from a Codex Responses request body.
 
 ### Fixed
 
 - Fixed the Windows binary exiting a few seconds after startup with `The owner-only Windows ACL operation failed (... SeSecurityPrivilege ...)` once its terminal ownership directory had been protected by an earlier launch.
 - Fixed `applyOwnerOnlyWindowsAcl` failing with `SeSecurityPrivilege` when it re-applied the owner-only ACL to an already protected path, which ended every Windows launch after the first.
 - A resumed or switched-to session whose model exists only in a provider's discovery listing runs on that model instead of the settings default when the discovery cache cannot supply it, as on the first launch after an upgrade that changes the cache format.
+- Codex web search and image generation requests send `x-codex-routing-hint`, and the startup websocket prewarm states the session's configured service tier, which the first turn on that socket sends.
 - Cursor's "You're out of usage" answer parks the account for the quota window instead of a 45 to 75 second capacity backoff, so a turn on a spent plan ends on the first failure instead of retrying it every minute.
 - The notice that an account is out of quota while load balancing leaves other accounts idle appears once per exhausted window instead of once for every request layer and retry that re-entered it.
+- Codex requests send `x-codex-routing-hint` stating the wire model and service tier of the body sent, on HTTP turns, the websocket upgrade, the startup prewarm and remote compaction, as codex-rs does.
 
 ## [1.6.3] - 2026-10-28
 

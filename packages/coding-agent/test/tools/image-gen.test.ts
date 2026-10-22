@@ -372,6 +372,7 @@ describe("imageGenTool", () => {
 
 		expect(requestHeaders?.get("authorization")).toBe(`Bearer ${codexJwt}`);
 		expect(requestHeaders?.get("chatgpt-account-id")).toBe("acc_test");
+		expect(requestHeaders?.get("x-codex-routing-hint")).toBe("model=gpt-5.5-codex");
 		expect(requestBody?.access_programs).toEqual({ cyber: "daybreak_red" });
 		expect(listingAccounts).toEqual(["acc_test"]);
 		expect(result.details?.imageCount).toBe(1);
