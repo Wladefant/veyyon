@@ -9,6 +9,8 @@ import { prompt } from "@veyyon/utils";
 import type { AsyncJobType } from "../async";
 import { toolsPrompts } from "../prompts/tools/rows";
 import { vaultKeyPath } from "../secrets/vault-crypto";
+import type { MCPEventOccurrence } from "../mcp/types";
+import type { MCPWebhookControl } from "../mcp/events-webhook";
 import type { DeferredDiagnosticsEntry } from "../tools";
 import type { OutputMeta } from "../tools/core/output-meta";
 import type { AsyncResultEntry } from "./agent-session-types";
@@ -30,6 +32,28 @@ export type AsyncResultDetails = {
 export type McpNotificationEntry = {
 	serverName: string;
 	uri: string;
+};
+
+export type McpEventEntry =
+	| {
+			serverName: string;
+			subscriptionKey: string;
+			event: MCPEventOccurrence;
+	  }
+	| {
+			serverName: string;
+			subscriptionKey: string;
+			control: MCPWebhookControl;
+	  };
+
+export type McpEventReceipt = {
+	serverName: string;
+	subscriptionKey: string;
+	id: string;
+};
+
+export type McpEventBatchDetails = {
+	receipts: McpEventReceipt[];
 };
 
 /**
@@ -145,6 +169,68 @@ export function buildMcpNotificationBatchMessage(entries: McpNotificationEntry[]
 		role: "user",
 		content: [{ type: "text", text: lines.join("\n") }],
 		attribution: "agent",
+		timestamp: Date.now(),
+	};
+}
+
+/**
+ * Format MCP event occurrences into an AgentMessage delivered through the session yield queue.
+ *
+ * Event payloads are strictly untrusted data from external MCP servers. They are formatted
+ * as structured data blocks, never as prose instructions or trusted agent directives.
+ */
+export function buildMcpEventBatchMessage(entries: McpEventEntry[]): CustomMessage<McpEventBatchDetails> | null {
+	if (entries.length === 0) return null;
+	const uniqueEvents: McpEventEntry[] = [];
+	const seen = new Set<string>();
+	for (const entry of entries) {
+		const id = "event" in entry ? entry.event.eventId : entry.control.messageId;
+		const key = `${entry.serverName}\0${entry.subscriptionKey}\0${id}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		uniqueEvents.push(entry);
+	}
+	if (uniqueEvents.length === 0) return null;
+
+	const lines = [
+		`[MCP event] ${uniqueEvents.length} external event/control message(s) received (untrusted data):`,
+	];
+	const receipts: McpEventReceipt[] = [];
+	for (const item of uniqueEvents) {
+		const id = "event" in item ? item.event.eventId : item.control.messageId;
+		const payload = "event" in item ? item.event : item.control;
+		const label = "event" in item
+			? `event name=${JSON.stringify(item.event.name)} id=${JSON.stringify(item.event.eventId)} time=${JSON.stringify(item.event.timestamp)}`
+			: `control type=${JSON.stringify(item.control.type)} id=${JSON.stringify(item.control.messageId)}`;
+		let serialized: string;
+		try {
+			serialized = JSON.stringify(payload, null, 2) ?? "null";
+		} catch {
+			serialized = '{"unavailable":true}';
+		}
+		serialized = serialized
+			.replaceAll("`", "\\u0060")
+			.replaceAll("<", "\\u003c")
+			.replaceAll("BEGIN_MCP_UNTRUSTED_EVENT_DATA", "\\u0042EGIN_MCP_UNTRUSTED_EVENT_DATA")
+			.replaceAll("END_MCP_UNTRUSTED_EVENT_DATA", "\\u0045ND_MCP_UNTRUSTED_EVENT_DATA");
+		const escapedLabel = label
+			.replaceAll("`", "\\u0060")
+			.replaceAll("<", "\\u003c")
+			.replaceAll("BEGIN_MCP_UNTRUSTED_EVENT_DATA", "\\u0042EGIN_MCP_UNTRUSTED_EVENT_DATA")
+			.replaceAll("END_MCP_UNTRUSTED_EVENT_DATA", "\\u0045ND_MCP_UNTRUSTED_EVENT_DATA");
+		lines.push(`- server=${JSON.stringify(item.serverName)} ${escapedLabel}`);
+		lines.push("BEGIN_MCP_UNTRUSTED_EVENT_DATA");
+		lines.push(serialized);
+		lines.push("END_MCP_UNTRUSTED_EVENT_DATA");
+		receipts.push({ serverName: item.serverName, subscriptionKey: item.subscriptionKey, id });
+	}
+	return {
+		role: "custom",
+		customType: "mcp-event",
+		content: lines.join("\n"),
+		display: true,
+		attribution: "agent",
+		details: { receipts },
 		timestamp: Date.now(),
 	};
 }

@@ -8,6 +8,7 @@
 - Launch holds a daemon whose native process handle is unavailable in `stopping` instead of settling it as exited: its tree's death is unobservable, so no restart starts and a stop reports failure ([issue](https://github.com/Wladefant/veyyon/issues/530)).
 - Mixed-build IRC sends distinguish unknown sessions from receivers without notice support and report loaded build identities ([#551](https://github.com/Wladefant/veyyon/issues/551)).
 - Browser tabs owned by another session can no longer be reopened, reused, or run, and the tab inventory omits their names, titles, and URLs ([Refs #538](https://github.com/Wladefant/veyyon/issues/538)).
+- Fixed the coding-agent failing to parse after a merge left stray braces, a duplicated property block and a call to a removed private method in the session and task modules.
 
 - Project plugins load only from the `installPath` entries of a project registry the operator has approved, through both the plugin loader and the Claude-plugin roots. The project directory's `package.json`, lockfile and `node_modules` are no longer read for project plugins. A registry whose directory resolves outside the project is refused, and an approval from a nested directory reaches the gate ([Refs #633](https://github.com/Wladefant/veyyon/issues/633)).
 - Argot teaches its handle table to a model named in `argot.encode.models` with a thinking selector (`provider/id:high`), drops or restores the table when a model switch crosses the allowlist, and records a deliberately untaught model as decode-only instead of logging an `ABSENT` handle table ([#648](https://github.com/Wladefant/veyyon/issues/648))
@@ -22,6 +23,7 @@
 - Extension browser sessions reuse their exact connect tab and remove pages created by failed opens. Closing a tab removes it before the extension can disconnect ([issue](https://github.com/Wladefant/veyyon/issues/548)).
 - A browser returned by `acquireBrowser` carries a lease its caller releases, so one session's release can no longer close a browser another session has just reused.
 - Session factory callback typing and mixed native actor rosters now pass the workspace type check ([Refs](https://github.com/Wladefant/veyyon/issues/569)).
+- MCP event notices remain queued after prompt rejection and are fsynced with their durable prompt receipt before delivery is acknowledged ([Refs Wladefant/veyyon#592](https://github.com/Wladefant/veyyon/issues/592)).
 - Background jobs whose owning lane was disposed reach Main as one batched note listing each result once. A lane's jobs still reach only that lane while it lives, and an absent owner keeps its completions until it returns ([Refs #564](https://github.com/Wladefant/veyyon/issues/564)).
 - Session dispose closes only the browser tabs that session created. Another lane's tabs and the operator's tabs stay open ([Refs #538](https://github.com/Wladefant/veyyon/issues/538)).
 - ACP client-terminal commands receive closed stdin and non-interactive defaults while explicit input redirects and environment overrides still work ([#565](https://github.com/Wladefant/veyyon/issues/565)).
@@ -34,6 +36,8 @@
 - Extension navigation no longer uses an origin allowlist. HTTP and HTTPS origins pass without configuration. The separate production-host refusal remains.
 
 ### Added
+- Complete opt-in draft MCP Events polling, push streams, and verified webhook subscription lifecycles ([Refs Wladefant/veyyon#592](https://github.com/Wladefant/veyyon/issues/592)).
+- Route configured per-server MCP Events notices as untrusted data to the owning session ([Refs Wladefant/veyyon#592](https://github.com/Wladefant/veyyon/issues/592)).
 - Discover project skills from repository directories (.agents/skills, .github/skills, .claude/skills) with whole-folder trust verification ([Refs #469](https://github.com/Wladefant/veyyon/issues/469)).
 - Optional encrypted cloud checkpoints preserve native journals, artifacts, blobs, dirty files and version pins. The default-off client supports restore and explicit forks. Durable Object epochs fence synchronized prompt and tool admission. The existing `sessions` command alias remains available ([issue](https://github.com/Wladefant/veyyon/issues/567)).
 - Auth gateway accepts a server-only live device token map with `--device-tokens-file`. PC2 uses existing `pi-native` transport with a device bearer instead of provider credentials ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).

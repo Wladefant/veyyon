@@ -131,7 +131,13 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 		}
 		if (!data.mcpServers) return result;
 
-		const expanded = expandEnvVarsDeep(data.mcpServers, warnUnresolved(warnings, path));
+		// Keep credential locators intact; secrets are resolved only when subscribing.
+		const expanded = expandEnvVarsDeep(
+			data.mcpServers,
+			warnUnresolved(warnings, path),
+			undefined,
+			field => /(?:^|\.)events\.subscriptions\[\d+\]\.webhook\.secretRef$/.test(field),
+		);
 		for (const [serverName, config] of Object.entries(expanded)) {
 			const serverConfig = config as Record<string, unknown>;
 
@@ -181,6 +187,7 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 			result.push({
 				name: serverName,
 				enabled,
+				events: serverConfig.events as MCPServer["events"],
 				timeout,
 				command: serverConfig.command as string | undefined,
 				args: serverConfig.args as string[] | undefined,

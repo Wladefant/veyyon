@@ -99,6 +99,7 @@ class FlakyFileStorage extends FileSessionStorage {
 				return inner.append(line);
 			},
 			flush: () => inner.flush(),
+			sync: () => inner.sync(),
 			isOpen: () => inner.isOpen(),
 			close: () => inner.close(),
 			getError: () => inner.getError(),

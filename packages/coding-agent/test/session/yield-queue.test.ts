@@ -152,6 +152,28 @@ describe("YieldQueue", () => {
 		expect(harness.streamingMessages.map(messageText)).toEqual(["second", "first"]);
 	});
 
+	test("idle injection failure preserves notices for a later prompt attempt", async () => {
+		let attempts = 0;
+		const queue = new YieldQueue({
+			isStreaming: () => false,
+			injectIdle: async () => {
+				attempts++;
+				if (attempts === 1) throw new Error("prompt rejected");
+			},
+			scheduleIdleFlush: () => {},
+		});
+		queue.register<Entry>("events", {
+			build: entries => userMessage(entries.map(entry => entry.id).join(",")),
+		});
+
+		queue.enqueue("events", { id: "event-1" });
+		await queue.flush("idle");
+		expect(queue.has("events")).toBe(true);
+		await queue.flush("idle");
+		expect(attempts).toBe(2);
+		expect(queue.has("events")).toBe(false);
+	});
+
 	test("drainLazy snapshots+clears immediately but defers build+staleness to the thunk", () => {
 		const harness = createHarness(true);
 		const staleIds = new Set<string>();

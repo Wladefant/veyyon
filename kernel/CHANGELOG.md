@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Added
+
+- `SessionManager.sync()` fsyncs file-backed session writes before callers acknowledge durable receipts, and `YieldQueue` retains notices when prompt injection fails ([#592](https://github.com/Wladefant/veyyon/issues/592)).
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.
