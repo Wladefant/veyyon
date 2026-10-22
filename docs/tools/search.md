@@ -60,6 +60,7 @@ The tool returns a single text block in `content[0].text` plus structured detail
 1. **Files search (`type: "files"`)**
    - Match workspace file paths and directory layout via globs or directory names.
    - A glob that ends in `/`, such as `src/*/`, lists only the directories it matches.
+   - Entries of a `;`-separated input that share a root are matched in one walk of that root.
    - Example: `{ type: "files", input: "src/**/*.ts" }`
 2. **Text search (`type: "text"`)**
    - Regex or literal content search across files, directories, globs, or internal URLs (`veyyon://`, `skill://`).
