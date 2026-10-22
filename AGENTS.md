@@ -386,8 +386,7 @@ generation pass regenerates in full instead, because the carried-over rows never
 
 ## Logging
 
-Never use `console.log`/`error`/`warn` in the coding-agent package; it corrupts TUI rendering. Use
-the logger:
+Never use `console.log`/`error`/`warn` in the coding-agent package outside `src/cli/` and `src/commands/`. The architecture test `only-the-cli-writes-to-the-console.test.ts` allows console writes only in those two directories, because they run as the whole process with no TUI on screen. Anywhere else a console write corrupts TUI rendering. Use the logger:
 
 ```typescript
 import { logger } from "@veyyon/utils";

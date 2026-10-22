@@ -197,7 +197,7 @@ async function realpathOrResolved(p: string): Promise<string> {
 async function listInstalledPluginRoots(ctx: LoadContext, pluginsRoot: string | undefined): Promise<InjectedRoot[]> {
 	try {
 		const [plugins, marketplaceRoots] = await Promise.all([
-			getEnabledPlugins(ctx.cwd, { home: ctx.home, pluginsRoot }),
+			getEnabledPlugins(ctx.cwd, { home: ctx.home, pluginsRoot, agentDir: ctx.agentDir }),
 			// Same profile on both sides: the exclusion set has to be THIS profile's
 			// marketplace installs, or a package the named profile installed by hand
 			// gets dropped because the ACTIVE profile happens to have it from a

@@ -32,11 +32,25 @@ import { isToolOrderPermutation } from "../agent-session-provider-request";
 import type { AgentSessionConfig } from "../agent-session-types";
 import type { ToolDiscovery } from "./tool-discovery";
 
-/** Cache key for model-dependent prompt content: displayed id or hidden-policy cohort. */
-function promptModelKeyFor(settings: Settings, model: Model | undefined): string | undefined {
-	const id = model ? formatModelString(model) : undefined;
-	if (!id || settings.get("includeModelInPrompt")) return id;
-	return usesCodexTaskPrompt(id) ? "task-policy:gpt-5.6" : "task-policy:default";
+/**
+ * Cache key for model-dependent prompt content: the displayed id or the hidden-policy cohort, marked
+ * when the prompt teaches Argot shorthand. The cohort alone is not enough: two models in one cohort,
+ * one on the encode allowlist and one off it, render different prompts, and a switch between them
+ * must rebuild or the handle table stays with the model it was not meant for.
+ */
+function promptModelKeyFor(
+	settings: Settings,
+	model: Model | undefined,
+	argotTeaches: ((model: Model) => boolean) | undefined,
+): string | undefined {
+	if (!model) return undefined;
+	const id = formatModelString(model);
+	const key = settings.get("includeModelInPrompt")
+		? id
+		: usesCodexTaskPrompt(id)
+			? "task-policy:gpt-5.6"
+			: "task-policy:default";
+	return argotTeaches?.(model) ? `${key}+argot` : key;
 }
 
 /** What {@link ToolActivation} reads from the session's public surface. */
@@ -63,6 +77,7 @@ export interface ToolActivationHost {
 		| "extensionRunner"
 		| "getLocalCalendarDate"
 		| "getMcpServerInstructions"
+		| "argotTeaches"
 		| "rebuildSystemPrompt"
 		| "reloadSshTool"
 		| "requestedToolNames"
@@ -105,7 +120,7 @@ export class ToolActivation {
 		this.#session = session;
 		this.#host = host;
 		this.#baseSystemPrompt = session.agent.state.systemPrompt;
-		this.#promptModelKey = promptModelKeyFor(session.settings, session.model);
+		this.#promptModelKey = this.#livePromptModelKey();
 	}
 
 	/** The base system prompt, without any per-turn `before_agent_start` override. */
@@ -120,7 +135,11 @@ export class ToolActivation {
 
 	/** Whether the live model renders a different prompt from the one in force. */
 	promptModelMoved(): boolean {
-		return promptModelKeyFor(this.#session.settings, this.#session.model) !== this.#promptModelKey;
+		return this.#livePromptModelKey() !== this.#promptModelKey;
+	}
+
+	#livePromptModelKey(): string | undefined {
+		return promptModelKeyFor(this.#session.settings, this.#session.model, this.#host.config.argotTeaches);
 	}
 
 	#wrapRuntimeTool(tool: AgentTool): AgentTool {
@@ -261,7 +280,7 @@ export class ToolActivation {
 				this.#baseSystemPrompt = built.systemPrompt;
 				this.#session.agent.setSystemPrompt(this.#baseSystemPrompt);
 				this.#lastAppliedToolSignature = signature;
-				this.#promptModelKey = promptModelKeyFor(this.#session.settings, this.#session.model);
+				this.#promptModelKey = this.#livePromptModelKey();
 			}
 		}
 		if (options?.persistMCPSelection !== false) {
@@ -415,7 +434,7 @@ export class ToolActivation {
 			);
 		}
 		this.#session.agent.setSystemPrompt(this.#baseSystemPrompt);
-		this.#promptModelKey = promptModelKeyFor(this.#session.settings, this.#session.model);
+		this.#promptModelKey = this.#livePromptModelKey();
 		// Refresh the cached signature so a subsequent `apply` with
 		// the same tool set does not re-rebuild on top of the explicit refresh we
 		// just performed (and conversely, a different set forces a fresh rebuild).

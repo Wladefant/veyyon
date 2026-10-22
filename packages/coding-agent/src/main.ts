@@ -27,7 +27,6 @@ import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
 import { releaseEmbeddedModulePages } from "@veyyon/natives";
 import {
 	$env,
-	BUILD_TAG,
 	errorMessage,
 	getActiveProfileOrDefault,
 	getLogPath,
@@ -37,7 +36,6 @@ import {
 	postmortem,
 	setInteractiveHost,
 	setProjectDir,
-	VERSION,
 } from "@veyyon/utils";
 import { IdleTrim } from "@veyyon/utils/idle-trim";
 import chalk from "chalk";
@@ -84,6 +82,7 @@ import { injectVeyyonExtensionCliRoots } from "./discovery/veyyon-extension-root
 import { ExtensionRunner } from "./extensibility/extensions/runner";
 import type { LoadExtensionsResult } from "./extensibility/extensions/types";
 import { scheduleMarketplaceAutoUpdate } from "./extensibility/plugins/marketplace-auto-update";
+import { formatBuildIdentity, getLoadedBuildIdentity } from "./launch/build-info";
 import { registerDaemonProjectPresence } from "./launch/presence";
 import type { MCPManager } from "./mcp";
 import type { PrintModeOptions } from "./modes/print-mode";
@@ -2348,13 +2347,13 @@ async function runRootCommandInner(parsed: Args, rawArgs: string[], deps: RunRoo
 	// discovery is cwd-relative).
 	if (!prologue) await logger.time("applyStartupCwd", applyStartupCwd, parsedArgs);
 
-	const notifs: (InteractiveModeNotify | null)[] = [];
-	const discovery = startCredentialDiscovery(deps);
 	if (parsedArgs.version) {
-		const displayVersion = BUILD_TAG ? `${VERSION} (${BUILD_TAG})` : VERSION;
+		const displayVersion = formatBuildIdentity(getLoadedBuildIdentity());
 		writeStartupNotice(parsedArgs, `${displayVersion}\n`);
 		process.exit(EXIT_OK);
 	}
+	const notifs: (InteractiveModeNotify | null)[] = [];
+	const discovery = startCredentialDiscovery(deps);
 	if (parsedArgs.export) {
 		await exportSessionAndExit(parsedArgs, parsedArgs.export);
 	}

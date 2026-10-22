@@ -2,23 +2,12 @@
 # The bwrap rung: bubblewrap with a mount and user namespace.
 #
 # Usage: sourced by scripts/test-sandbox/run.sh; not run directly. It defines
-# probe_bwrap, run_bwrap and binprobe_bwrap and reads REPO_ROOT, GUEST_REPO and
-# HOST_HOME from the driver.
+# probe_bwrap, run_bwrap and binprobe_bwrap and reads REPO_ROOT and HOST_HOME from
+# the driver.
 #
 # It is last on the ladder. Some hosts deny the uid_map write through AppArmor
 # despite enabling unprivileged user namespaces, so the probe runs bwrap rather
 # than merely checking PATH.
-
-# Resolve Bun while the host PATH is still intact. The PATH proof narrows PATH
-# after sourcing this rung, but the sandbox still needs the same host executable.
-BWRAP_HOST_BUN_PATH=""
-if bun_executable="$(bun -e 'process.stdout.write(process.execPath)' 2>/dev/null)"; then
-	BWRAP_HOST_BUN_PATH="$(readlink -f -- "$bun_executable" 2>/dev/null || true)"
-	bun_magic="$(od -An -tx1 -N4 -- "$BWRAP_HOST_BUN_PATH" 2>/dev/null || true)"
-	if [ ! -x "$BWRAP_HOST_BUN_PATH" ] || [ "${bun_magic//[[:space:]]/}" != "7f454c46" ]; then
-		BWRAP_HOST_BUN_PATH=""
-	fi
-fi
 
 probe_bwrap() {
 	command -v bwrap >/dev/null 2>&1 || { skip bwrap "bubblewrap not on PATH"; return 1; }
@@ -38,15 +27,6 @@ run_bwrap() {
 	# not a repository. The driver leaves SANDBOX_GITDIR empty for a checkout that owns
 	# its own `.git`, and for one whose git directory is inside the home being hidden.
 	local -a gitdir_args=()
-	local -a bun_mounts=()
-	if [ -n "${BWRAP_HOST_BUN_PATH:-}" ] && [ -x "$BWRAP_HOST_BUN_PATH" ]; then
-		log "Bun executable resolved to ${BWRAP_HOST_BUN_PATH}"
-		bun_mounts=(--ro-bind "$BWRAP_HOST_BUN_PATH" /sandbox/runtime/bun/bun)
-	else
-		log "Bun runtime resolution failed: expected an executable ELF binary from process.execPath"
-		return "${RUNG_SETUP_FAILED:-126}"
-	fi
-
 	[ -n "${SANDBOX_GITDIR:-}" ] && gitdir_args=(--ro-bind "${SANDBOX_GITDIR}" "${SANDBOX_GITDIR}")
 
 	local -a extra_mounts=()
@@ -55,7 +35,7 @@ run_bwrap() {
 			log "Linux node_modules directory does not exist: ${VEYYON_SANDBOX_NODE_MODULES}"
 			return "${RUNG_SETUP_FAILED:-126}"
 		fi
-		extra_mounts+=(--ro-bind "${VEYYON_SANDBOX_NODE_MODULES}" "${GUEST_REPO}/node_modules")
+		extra_mounts+=(--ro-bind "${VEYYON_SANDBOX_NODE_MODULES}" "${REPO_ROOT}/node_modules")
 	elif [ -L "${REPO_ROOT}/node_modules" ]; then
 		local nm_target
 		nm_target="$(readlink "${REPO_ROOT}/node_modules" 2>/dev/null || true)"
@@ -68,10 +48,6 @@ run_bwrap() {
 			fi
 		fi
 	fi
-	local -a cgroup_mounts=()
-	if [ -d "/sys/fs/cgroup" ]; then
-		cgroup_mounts=(--dir /sys --dir /sys/fs --ro-bind-try /sys/fs/cgroup /sys/fs/cgroup)
-	fi
 
 	bwrap \
 		--unshare-user --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup \
@@ -79,15 +55,12 @@ run_bwrap() {
 		--ro-bind /usr /usr --ro-bind /etc /etc \
 		--symlink usr/lib /lib --symlink usr/lib64 /lib64 --symlink usr/bin /bin --symlink usr/sbin /sbin \
 		--proc /proc --dev /dev \
-		--tmpfs /sandbox --tmpfs /run \
-		"${cgroup_mounts[@]}" \
-		"${bun_mounts[@]}" \
-		--tmpfs /home --tmpfs /tmp \
-		--bind "${REPO_ROOT}" "${GUEST_REPO}" \
+		--tmpfs /home --tmpfs /tmp --tmpfs /sandbox --tmpfs /run \
+		--bind "${REPO_ROOT}" "${REPO_ROOT}" \
 		"${gitdir_args[@]+"${gitdir_args[@]}"}" \
 		"${extra_mounts[@]}" \
-		--chdir "${GUEST_REPO}" \
-		--setenv PATH /sandbox/runtime/bun:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin \
+		--chdir "${REPO_ROOT}" \
+		--setenv PATH /usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin \
 		--setenv VEYYON_TEST_SANDBOX bwrap-userns \
 		--setenv VEYYON_TEST_HOST_HOME "${HOST_HOME}" \
 		--setenv HOME /sandbox/home \

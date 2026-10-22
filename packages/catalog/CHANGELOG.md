@@ -6,6 +6,10 @@
 
 - Sync upstream changes from santhreal/veyyon.
 
+### Fixed
+
+- GitHub Copilot discovery prices a base model from the default tier Copilot reports, keeping the provider cache-write rate, instead of the bundled or default rate (oh-my-pi 27c1d6e8d4eceafd85b33c3294d88bd6cffd6dc3, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+
 ## [1.5.6] - 2026-10-10
 ### Removed
 

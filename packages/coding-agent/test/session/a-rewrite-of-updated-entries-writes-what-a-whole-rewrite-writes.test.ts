@@ -1,11 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import {
-	CURRENT_SESSION_VERSION,
-	type SessionEntry,
-	TITLE_CHANGE_ENTRY_TYPE,
-} from "@veyyon/kernel/session/session-entries";
+import { type SessionEntry, TITLE_CHANGE_ENTRY_TYPE } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import {
 	FileSessionStorage,
@@ -461,14 +457,7 @@ describe("a resumed session's first rewrite keeps the lines before its earliest 
 			name: "holds an entry whose parent is missing",
 			alter: (raw: string, ids: string[]) => insertBefore(raw, ids[5]!, foreignLine("orphan", "re-linked", "gone")),
 		},
-		{
-			name: "was written by an older version",
-			alter: (raw: string) => {
-				const current = `"version":${CURRENT_SESSION_VERSION}`;
-				if (!raw.includes(current)) throw new Error(`header does not carry ${current}`);
-				return raw.replace(current, `"version":${CURRENT_SESSION_VERSION - 1}`);
-			},
-		},
+		{ name: "was written by an older version", alter: (raw: string) => raw.replace('"version":3', '"version":2') },
 		{
 			name: "has a header line that carries a title",
 			alter: (raw: string) =>

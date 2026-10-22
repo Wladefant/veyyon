@@ -78,9 +78,10 @@ class FakeExtension {
 			return;
 		}
 		let result: unknown = {};
-		if (message.method === "chrome.tabs.create") result = { id: this.#nextTab++ };
+		if (message.method === "chrome.tabs.create") result = { id: this.#nextTab++, windowId: 7 };
 		if (target === "Fetch.getResponseBody") result = { body: "<h1>hi</h1>", base64Encoded: false };
-		if (target === "Target.getTargetInfo") result = { targetInfo: { targetId: MAIN_FRAME_ID } };
+		if (target === "Target.getTargetInfo")
+			result = { targetInfo: { targetId: MAIN_FRAME_ID, title: "Example title", url: "https://example.com/" } };
 		if (target === "Page.createIsolatedWorld") result = { executionContextId: 77 };
 		this.#ws.send(JSON.stringify({ id: message.id, result }));
 	}
@@ -392,6 +393,32 @@ describe("CDP over the extension RPC", () => {
 		await until(() => cdp.closed, "the client socket to close");
 		expect(ext.callsOf("chrome.tabs.remove")).toHaveLength(0);
 		expect(ext.open).toBe(true);
+	});
+
+	test("inventory exposes only relay-created or adopted tabs with their known metadata", async () => {
+		const { r, ext, cdp } = await connected();
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		ext.emit("chrome.tabs.onCreated", [{ id: 555, windowId: 8, openerTabId: 12345 }]);
+		ext.emit("chrome.tabs.onCreated", [{ id: 556, windowId: 7, openerTabId: 100 }]);
+		await until(() => ext.callsOf("chrome.debugger.attach").length === 2, "the popup attach");
+		await until(() => r.tabCount === 2, "both relay tabs");
+
+		expect(r.getTrackedTabs()).toEqual([
+			{
+				tabId: 100,
+				windowId: 7,
+				targetId: "ext-100",
+				url: "https://example.com/",
+				title: "Example title",
+			},
+			{
+				tabId: 556,
+				windowId: 7,
+				targetId: "ext-556",
+				url: "https://example.com/",
+				title: "Example title",
+			},
+		]);
 	});
 
 	test("a popup opened by an owned tab is adopted; a tab the user opened is not", async () => {

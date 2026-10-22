@@ -15,7 +15,6 @@ import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 
 const STALE = new Date(Date.now() - 30 * 60_000);
 let deadPid = 0;
-const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 
 async function scope(
 	root: string,
@@ -310,7 +309,6 @@ process.stdout.write("ready\\n");
 `;
 
 	const child = Bun.spawn([process.execPath, "-e", childScript], {
-		cwd: REPO_ROOT,
 		env: {
 			...env,
 			CHILD_PROJECT_DIR: projectDir,
@@ -318,7 +316,7 @@ process.stdout.write("ready\\n");
 		},
 		stdin: "pipe",
 		stdout: "pipe",
-		stderr: "inherit",
+		stderr: "ignore",
 	});
 
 	const reader = child.stdout.getReader();

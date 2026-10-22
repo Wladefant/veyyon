@@ -14,6 +14,7 @@ export class GatewaySemanticRedactor {
 	constructor(private readonly secrets: readonly string[]) {}
 
 	push(raw: string, final = false): string {
+		let errorBoundary = false;
 		if (raw) {
 			const frame: Frame = { raw, slots: [], completed: [], changed: false };
 			const match = /^((?:[^\n]*\n)*data: )([^\n]*)\n\n$/.exec(raw);
@@ -24,15 +25,15 @@ export class GatewaySemanticRedactor {
 					if (value && typeof value === "object" && !Array.isArray(value)) {
 						frame.value = value as Record<string, unknown>;
 						if (value.type === "error" || value.type === "response.failed") {
-							this.#pending.length = 0;
-							this.#heldBytes = 0;
-							this.#tails.clear();
-							return raw;
+							// Held deltas flush through the redaction pass with trailing prefixes masked. The unmasked prefix stays in tails, so a later continuation is still redacted.
+							errorBoundary = true;
+							final = true;
+						} else {
+							frame.prefix = match[1];
+							this.#slots(frame.value, frame.slots);
+							frame.completed = this.#completed(frame.value);
+							if (value.type === "done" || value.type === "response.completed") final = true;
 						}
-						frame.prefix = match[1];
-						this.#slots(frame.value, frame.slots);
-						frame.completed = this.#completed(frame.value);
-						if (value.type === "done" || value.type === "response.completed") final = true;
 					}
 				} catch { /* Non-JSON SSE data still passes through the byte redactor. */ }
 			}
@@ -77,7 +78,7 @@ export class GatewaySemanticRedactor {
 			const candidateBytes = Buffer.byteLength(text.slice(text.length - longestPrefix), "utf8");
 			const historyFull = historyCount + (!history && longestPrefix ? 1 : 0) > GATEWAY_SEMANTIC_MAX_HELD_FRAMES
 				|| historyBytes - Buffer.byteLength(history, "utf8") + candidateBytes > GATEWAY_SEMANTIC_MAX_HELD_BYTES;
-			if (longestPrefix && (capped || historyFull)) ranges.push({ start: text.length - longestPrefix, end: text.length });
+			if (longestPrefix && (capped || historyFull || errorBoundary)) ranges.push({ start: text.length - longestPrefix, end: text.length });
 			ranges.sort((a, b) => a.start - b.start || b.end - a.end);
 			const merged: typeof ranges = [];
 			for (const range of ranges) {
@@ -103,11 +104,12 @@ export class GatewaySemanticRedactor {
 				offset += original.length;
 			}
 			const pendingText = parts.map(({ slot }) => String(slot.owner[slot.key])).join("");
-			const safe = history + pendingText;
+			// After an error the held prefix was masked in the output, so history keeps the unmasked text to match a continuation.
+			const retained = errorBoundary ? text : history + pendingText;
 			let tail = "";
 			for (const secret of this.secrets) {
-				for (let length = 1; length < secret.length && length <= safe.length; length++) {
-					if (safe.endsWith(secret.slice(0, length)) && length > tail.length) tail = secret.slice(0, length);
+				for (let length = 1; length < secret.length && length <= retained.length; length++) {
+					if (retained.endsWith(secret.slice(0, length)) && length > tail.length) tail = secret.slice(0, length);
 				}
 			}
 			historyCount += (tail ? 1 : 0) - (history ? 1 : 0);

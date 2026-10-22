@@ -565,12 +565,8 @@ describe("docs examples — a documented command exists in the surface whose pag
 	it("the registry is alive", () => {
 		expect(registered.size).toBeGreaterThan(30);
 		expect(fromBundledFactory.size).toBeGreaterThan(0);
-<<<<<<< HEAD
 		expect(paletteCommands.size).toBeGreaterThan(10);
 		expect([...paletteCommands].sort()).toContain("terminal");
-=======
-		expect(fromBundledCommands.size).toBeGreaterThan(0);
->>>>>>> santhreal/main
 	});
 
 	it("every backticked /command in the handbook is one the surface that page documents offers", () => {

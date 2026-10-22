@@ -686,6 +686,8 @@ export interface StartingManagedKernelSession<TKernel extends SessionKernel = Se
 	promise: Promise<ManagedKernelSession<TKernel>>;
 	/** Callers currently awaiting this startup, by owner key. An owner leaves only with its last waiter. */
 	waiters: Map<string, number>;
+	/** Owners explicitly released during startup, distinct from fallback-owner adoption. */
+	disposedOwnerIds: Set<string>;
 }
 
 export interface KernelSessionPoolOptions<
@@ -761,7 +763,7 @@ export class KernelSessionPool<
 				ownerIds: startingSession.ownerIds,
 				hasFallbackOwner: startingSession.hasFallbackOwner,
 			};
-			if (startingSession.ownerIds.size === 0 && startingSession.waiters.size === 0) {
+			if (startingSession.ownerIds.size === 0) {
 				// Every owner left while the kernel was starting. Leave the starting map first so a
 				// caller arriving during the release starts a fresh kernel instead of joining this one.
 				if (this.#startingSessions.get(sessionKey) === startingSession) {
@@ -781,6 +783,7 @@ export class KernelSessionPool<
 			hasFallbackOwner: false,
 			promise: startPromise,
 			waiters: new Map(),
+			disposedOwnerIds: new Set(),
 		};
 		attachSessionOwner(startingSession, sessionId, options.kernelOwnerId);
 		this.#startingSessions.set(sessionKey, startingSession);
@@ -810,7 +813,9 @@ export class KernelSessionPool<
 			return remaining;
 		};
 		try {
-			return await waitForPromiseWithCancellation(starting.promise, options, this.#cancelledErrorClass);
+			const session = await waitForPromiseWithCancellation(starting.promise, options, this.#cancelledErrorClass);
+			if (starting.disposedOwnerIds.has(ownerKey)) throw new this.#cancelledErrorClass(false);
+			return session;
 		} catch (error) {
 			// Another caller with the same owner may still be waiting; the owner stays until the last one leaves.
 			if (leave() === 0) starting.ownerIds.delete(ownerKey);
@@ -892,7 +897,6 @@ export class KernelSessionPool<
 
 	async disposeByOwner(ownerId: string): Promise<void> {
 		const toShutdown: ManagedKernelSession<TKernel>[] = [];
-		const startingToShutdown: StartingManagedKernelSession<TKernel>[] = [];
 		for (const session of [...this.#sessions.values()]) {
 			if (!session.ownerIds.has(ownerId)) continue;
 			if (session.ownerIds.size === 1) {
@@ -903,22 +907,16 @@ export class KernelSessionPool<
 		}
 		for (const [sessionKey, starting] of [...this.#startingSessions.entries()]) {
 			if (this.#sessions.has(sessionKey) || !starting.ownerIds.has(ownerId)) continue;
-			if (starting.ownerIds.size === 1) {
-				this.#startingSessions.delete(sessionKey);
-				startingToShutdown.push(starting);
-				continue;
-			}
 			starting.ownerIds.delete(ownerId);
+			starting.disposedOwnerIds.add(ownerId);
+			if (starting.ownerIds.size === 0) {
+				// Startup owns its eventual shutdown. Do not hold session disposal open
+				// on an interpreter that has not completed its startup handshake.
+				this.#startingSessions.delete(sessionKey);
+			}
 		}
 		for (const session of toShutdown) {
 			if (this.#sessions.get(session.sessionKey) === session) this.#sessions.delete(session.sessionKey);
-		}
-		const started = await Promise.allSettled(startingToShutdown.map(starting => starting.promise));
-		for (const result of started) {
-			if (result.status !== "fulfilled") continue;
-			const session = result.value;
-			if (this.#sessions.get(session.sessionKey) === session) this.#sessions.delete(session.sessionKey);
-			toShutdown.push(session);
 		}
 		const results = await Promise.allSettled(toShutdown.map(session => session.kernel.shutdown()));
 		for (let i = 0; i < toShutdown.length; i += 1) {

@@ -21,6 +21,7 @@ import {
 	listWorkspace,
 	MacOSPowerAssertion,
 	matchesKey,
+	Process,
 	PtySession,
 	parseKey,
 	summarizeCode,
@@ -766,6 +767,59 @@ describe("veyyon-natives", () => {
 			expect(result.exitCode).toBe(0);
 			expect(result.timedOut).toBeFalse();
 			expect(JSON.parse(output.trim())).toEqual(expected);
+		});
+
+		it("publishes a stable handle for the spawned child while it runs and retains it after the run ends", async () => {
+			const scriptPath = path.join(testDir, "pty-pid.ts");
+			await Bun.write(scriptPath, "process.stdout.write(`PID:${process.pid}\\n`);\nsetInterval(() => {}, 1000);\n");
+			const session = new PtySession();
+			expect("process" in session).toBeTrue();
+			const initialProcess = "process" in session ? session.process : undefined;
+			expect(initialProcess).toBeNull();
+
+			const announced = Promise.withResolvers<number>();
+			let output = "";
+			const run = session.startArgv(
+				{
+					application: process.execPath,
+					args: [scriptPath],
+					cwd: testDir,
+					timeoutMs: 10_000,
+					cols: 80,
+					rows: 24,
+				},
+				(error, chunk) => {
+					if (error) {
+						announced.reject(error);
+						return;
+					}
+					output += chunk;
+					const match = /PID:(\d+)\r?\n/.exec(output);
+					if (match) announced.resolve(Number(match[1]));
+				},
+			);
+			run.then(
+				() => announced.reject(new Error(`PTY run ended before the child announced its PID: ${output}`)),
+				error => announced.reject(error),
+			);
+
+			const childPid = await announced.promise;
+			const root = "process" in session ? session.process : undefined;
+			expect(root).toBeInstanceOf(Process);
+			if (!(root instanceof Process)) throw new Error("PTY session did not publish a stable process handle");
+			expect(root.pid).toBe(childPid);
+			expect(root.status()).toBe("running");
+
+			session.kill();
+			const result = await run;
+			expect(result.cancelled).toBeTrue();
+			const retainedProcess = "process" in session ? session.process : undefined;
+			expect(retainedProcess).toBe(root);
+
+			// Process handles settle asynchronously after PTY completion; wait on the handle, not a reused PID.
+			const exitDeadline = Date.now() + 5_000;
+			while (root.status() === "running" && Date.now() < exitDeadline) await Bun.sleep(25);
+			expect(root.status()).toBe("exited");
 		});
 
 		it("should time out detached background workloads without hanging", async () => {

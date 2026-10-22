@@ -1623,6 +1623,8 @@ export interface ShellRunResult {
   cancelled: boolean
   /** Whether the command timed out before completion. */
   timedOut: boolean
+  outputIncomplete: boolean
+  capturedOutput?: string
   /**
    * When the minimizer rewrote the captured output, this carries the
    * original buffer + telemetry so the session layer can persist it as
