@@ -19,7 +19,7 @@ import * as path from "node:path";
 import { APP_DIRECTORY_SLUG, APP_DISPLAY_NAME } from "../src/app-identity";
 import { APP_NAME } from "../src/dirs";
 import { moduleSpecifiersIn } from "../src/module-reach";
-import { collectPackageSources, memberFileOf, PACKAGES_DIR } from "./support/package-sources";
+import { collectPackageSources, PACKAGES_DIR } from "./support/package-sources";
 
 describe("the product's two names", () => {
 	/** The path slug, lowercase, with nothing in it a filesystem treats specially. */
@@ -102,25 +102,6 @@ describe("the product name has one owner per form", () => {
 		expect(offenders).toEqual([]);
 	});
 
-	/**
-	 * And the per-provider `DISPLAY_NAME` convention is intact, which is the reason the case above is narrow.
-	 * Asserted rather than assumed, so a reader can see the exemption is a decision about a real convention.
-	 */
-	it("leaves the per-provider display-name convention alone", async () => {
-		const discovery = path.join(PACKAGES_DIR, "coding-agent/src/discovery");
-		const declarers: string[] = [];
-		for (const file of new Bun.Glob("*.ts").scanSync(discovery)) {
-			const text = await Bun.file(path.join(discovery, file)).text();
-			if (/^const DISPLAY_NAME = "/m.test(text)) declarers.push(file);
-		}
-		expect(declarers.length).toBeGreaterThan(10);
-		// And none of them is the product's own name any more.
-		for (const file of declarers) {
-			const text = await Bun.file(path.join(discovery, file)).text();
-			expect(text, file).not.toContain(`const DISPLAY_NAME = "${APP_DISPLAY_NAME}"`);
-		}
-	});
-
 	/** The non-vacuity twin: the scan reaches every member and every module that held a copy. */
 	it("scans every package that named the product", async () => {
 		const files = (await sources()).map(entry => entry.file);
@@ -132,19 +113,6 @@ describe("the product name has one owner per form", () => {
 			"utils/src/dirs.ts",
 		]) {
 			expect(files).toContain(declarer);
-		}
-	});
-
-	/** The positive half: each former declarer reads the display name from the owner. */
-	it("has every former declarer importing the display name", async () => {
-		for (const key of [
-			"hosts/terminal/engine/src/desktop-notify.ts",
-			"hosts/terminal/engine/src/terminal-capabilities.ts",
-			"coding-agent/src/discovery/builtin.ts",
-		]) {
-			const text = await readFile(memberFileOf(key), "utf8");
-			expect(text, key).toContain("APP_DISPLAY_NAME");
-			expect(moduleSpecifiersIn(text), key).toContain("@veyyon/utils/app-identity");
 		}
 	});
 

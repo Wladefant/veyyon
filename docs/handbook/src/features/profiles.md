@@ -2,7 +2,7 @@
 
 A **profile** is a directory under `~/.veyyon/profiles/<name>/` holding that identity’s settings, sessions, MCP, skills, hooks, logs, plugins, and caches. One binary; multiple profile trees.
 
-Roles and profile layout: [Roles and profiles](../using/roles-and-profiles.md).
+Model settings per profile: [Models, helpers, and profiles](../using/roles-and-profiles.md).
 
 ## Layout
 
@@ -143,18 +143,20 @@ On the first interactive run of a profile that has not completed setup, the setu
 
 Settings are read from `config.yml` under the active agent dir. Inline `[profiles.<name>]` tables and standalone `<name>.config.yml` files are not read.
 
-## Model policies and roles (per profile)
+## Model policies (per profile)
 
-Each profile's `config.yml` defines its interactive default, optional roles, agent policy, and compaction policy:
+Each profile's `config.yml` defines its default model, helper models, agent policy, and compaction policy:
 
 ```yaml
-modelRoles:
-  default: openai/gpt-5             # interactive (also set live with /model)
-  plan: openai/o3
-  smol: deepseek/deepseek-chat
+defaultModel: openai/gpt-5          # session model (also set live with /model)
 agent:
   model: deepseek/deepseek-chat     # blanket model chain for agents
   thinkingLevel: high
+  helpers:
+    plan:
+      model: openai/o3
+    title:
+      model: deepseek/deepseek-chat
   agents:
     scout:
       enabled: false
@@ -166,10 +168,10 @@ compaction:
   threshold: "80%"
 ```
 
-Unset roles and model chains inherit the live main model at use time, so switching with `/model` changes them immediately. Per-agent settings override the blanket agent model and effort; an unset per-agent value falls back to that blanket policy. Only an explicit assignment pins a different model. Switching profiles switches all of these assignments with the profile.
+Unset helpers and model chains inherit the live main model at use time, so switching with `/model` changes them immediately. Per-agent settings override the blanket agent model and effort; an unset per-agent value falls back to that blanket policy. Only an explicit assignment pins a different model. Switching profiles switches all of these assignments with the profile.
 
 ## See also
 
-- [Models, roles, and profiles](../using/roles-and-profiles.md)
+- [Models, helpers, and profiles](../using/roles-and-profiles.md)
 - [Configuration](../using/configuration.md)
 - [File locations](../reference/file-locations.md)

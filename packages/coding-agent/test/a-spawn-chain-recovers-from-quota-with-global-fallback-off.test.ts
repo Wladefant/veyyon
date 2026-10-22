@@ -41,9 +41,8 @@ function fixture(explicit = true, global = false) {
 		"retry.maxDelayMs": 1,
 		"retry.maxRetries": 1,
 		"retry.baseDelayMs": 1,
-		"retry.fallbackChains": { "agent:test": selectors.slice(1), default: ["unrelated/model"] },
+		"retry.fallbackChains": { [selectors[0]]: selectors.slice(1), default: ["unrelated/model"] },
 	});
-	settings.setModelRole("agent:test", selectors[0]);
 	const cooldowns = new Map<string, number>();
 	const events: AgentSessionEvent[] = [];
 	const session = {
@@ -64,12 +63,12 @@ function fixture(explicit = true, global = false) {
 		} as unknown as ModelRegistry,
 		model: models[0],
 		thinkingLevel: undefined,
-		modelPatternFallbackRole: explicit ? "agent:test" : undefined,
+		modelPatternFallbackKey: explicit ? selectors[0] : undefined,
 		sessionId: "fake-session",
 		configuredThinkingLevel: () => undefined,
 		setThinkingLevel: () => {},
 		operatorNotices: { warn: () => {} },
-	} as unknown as RetrySession & { modelPatternFallbackRole?: string };
+	} as unknown as RetrySession;
 	const runtime = new RetryRuntime(session, {
 		emitSessionEvent: async event => {
 			events.push(event);
@@ -182,8 +181,8 @@ describe("spawn quota fallback", () => {
 	it("backtests the recorded Cloud Code Assist quota response without global fallback", async () => {
 		const { runtime, session, settings } = fixture();
 		Object.assign(session, { model: models[1] });
-		settings.setModelRole("agent:test", selectors[1]);
-		settings.override("retry.fallbackChains", { "agent:test": [selectors[2]] });
+		Object.assign(session, { modelPatternFallbackKey: selectors[1] });
+		settings.override("retry.fallbackChains", { [selectors[1]]: [selectors[2]] });
 		const message = quota();
 		message.api = "google-gemini-cli";
 		message.errorId = 659456;

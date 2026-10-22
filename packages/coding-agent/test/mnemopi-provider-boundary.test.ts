@@ -14,26 +14,26 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-describe("coding-agent Mnemopi online smol boundary", () => {
-	/** Why: the real smol adapter must keep raw context behind the post-credential physical-attempt hook. */
+describe("coding-agent Mnemopi online memory-helper boundary", () => {
+	/** Why: the real online adapter must keep raw context behind the post-credential physical-attempt hook. */
 	it("reads the current session obfuscator after key lookup and at final payload dispatch", async () => {
-		const afterKeySecret = "MNEMOPI_SMOL_AFTER_KEY_SECRET_771";
-		const retrySecret = "MNEMOPI_SMOL_RETRY_SECRET_771";
+		const afterKeySecret = "MNEMOPI_ONLINE_AFTER_KEY_SECRET_771";
+		const retrySecret = "MNEMOPI_ONLINE_RETRY_SECRET_771";
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5") as Model<Api> | undefined;
-		if (!model) throw new Error("Expected bundled smol test model");
-		const root = TempDir.createSync("mnemopi-smol-boundary-");
+		if (!model) throw new Error("Expected bundled memory helper test model");
+		const root = TempDir.createSync("mnemopi-online-boundary-");
 		const settings = Settings.isolated({
 			"mnemopi.dbPath": root.join("mnemopi.db"),
-			"mnemopi.llmMode": "smol",
+			"mnemopi.llmMode": "online",
 			"mnemopi.noEmbeddings": true,
 			"mnemopi.autoRecall": false,
 			"mnemopi.autoRetain": false,
 			"providers.memoryModel": "online",
+			"agent.helpers": { memory: { model: `${model.provider}/${model.id}` } },
 		});
-		settings.setModelRole("smol", `${model.provider}/${model.id}`);
 		let obfuscator = new SecretObfuscator([]);
 		const session = {
-			sessionId: "mnemopi-smol-boundary-session",
+			sessionId: "mnemopi-online-boundary-session",
 			settings,
 			get obfuscator() {
 				return obfuscator;
@@ -76,7 +76,7 @@ describe("coding-agent Mnemopi online smol boundary", () => {
 			});
 			return {
 				stopReason: "stop",
-				content: [{ type: "text", text: "smol result" }],
+				content: [{ type: "text", text: "online result" }],
 			} as never;
 		});
 
@@ -96,12 +96,79 @@ describe("coding-agent Mnemopi online smol boundary", () => {
 
 			// Why: the backend awaits a registry preflight before completeSimple,
 			// and provider auth retries happen after that context was first built.
-			expect(result).toBe("smol result");
+			expect(result).toBe("online result");
 			expect(providerContext).not.toContain(afterKeySecret);
 			expect(providerContext).not.toContain(retrySecret);
 			expect(finalPayload).not.toContain(afterKeySecret);
 			expect(finalPayload).not.toContain(retrySecret);
 			expect(finalPayload).toContain("harmless");
+			await state.dispose({ consolidate: false });
+			setMnemopiSessionState(session, undefined);
+		} finally {
+			await root.remove();
+		}
+	});
+
+	/**
+	 * Why: an unset memory helper runs the session's model like every other helper. The Mnemopi
+	 * backend has a session but once resolved the helper without it, so a `--model` launch sent
+	 * memory extraction to the persisted `defaultModel` instead of the model the session runs.
+	 */
+	it("runs the session's model when the memory helper names none", async () => {
+		const sessionModel = getBundledModel("anthropic", "claude-sonnet-4-5") as Model<Api> | undefined;
+		const persistedDefault = getBundledModel("anthropic", "claude-opus-4-1") as Model<Api> | undefined;
+		if (!sessionModel || !persistedDefault) throw new Error("Expected bundled memory helper test models");
+		const root = TempDir.createSync("mnemopi-online-session-model-");
+		const settings = Settings.isolated({
+			"mnemopi.dbPath": root.join("mnemopi.db"),
+			"mnemopi.llmMode": "online",
+			"mnemopi.noEmbeddings": true,
+			"mnemopi.autoRecall": false,
+			"mnemopi.autoRetain": false,
+			"providers.memoryModel": "online",
+			defaultModel: `${persistedDefault.provider}/${persistedDefault.id}`,
+		});
+		const obfuscator = new SecretObfuscator([]);
+		const session = {
+			sessionId: "mnemopi-online-session-model",
+			settings,
+			model: sessionModel,
+			obfuscator,
+			obfuscateProviderText: (text: string) => obfuscator.obfuscate(text),
+			sessionManager: { getCwd: () => "/tmp", getEntries: () => [] },
+			subscribe: () => () => {},
+			emitNotice: () => {},
+		} as never;
+		const registry = {
+			getAvailable: () => [persistedDefault, sessionModel],
+			getApiKeyForProvider: async () => undefined,
+			getApiKey: async () => "test-key",
+			resolver: () => async () => "test-key",
+		} as never;
+		let ranModel: string | undefined;
+		vi.spyOn(ai, "completeSimple").mockImplementation(async (model, _context, options?: SimpleStreamOptions) => {
+			ranModel = `${model.provider}/${model.id}`;
+			await options?.fetch?.("http://provider.test/v1/messages", { method: "POST", body: "{}" });
+			return { stopReason: "stop", content: [{ type: "text", text: "online result" }] } as never;
+		});
+
+		try {
+			await mnemopiBackend.start({
+				session,
+				settings,
+				modelRegistry: registry,
+				agentDir: root.path(),
+				taskDepth: 0,
+			});
+			const state = getMnemopiSessionState(session);
+			if (!state) throw new Error("Mnemopi state did not start");
+			const physicalFetch: FetchImpl = async () => new Response("", { status: 200 });
+			const result = await withMnemopiRuntimeOptions(state.memory.runtimeOptions, () =>
+				complete("extract harmless", 0, { fetch: physicalFetch }),
+			);
+
+			expect(result).toBe("online result");
+			expect(ranModel).toBe(`${sessionModel.provider}/${sessionModel.id}`);
 			await state.dispose({ consolidate: false });
 			setMnemopiSessionState(session, undefined);
 		} finally {

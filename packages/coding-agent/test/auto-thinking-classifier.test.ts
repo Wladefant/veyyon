@@ -25,7 +25,7 @@ import {
 	parseDifficultyLevel,
 } from "@veyyon/coding-agent/thinking/auto-classifier";
 import type { TinyMemoryLocalModelKey } from "@veyyon/coding-agent/tiny/models";
-import { tinyModelClient } from "@veyyon/coding-agent/tiny/title-client";
+import { tinyTitleClient } from "@veyyon/coding-agent/tiny/title-client";
 import { TempDir } from "@veyyon/utils";
 
 describe("auto thinking classifier helpers", () => {
@@ -97,7 +97,7 @@ describe("auto thinking classifier helpers", () => {
 	it("expands the local reasoning classifier budget", async () => {
 		let maxTokens: number | undefined;
 		const fixture = await createLocalClassifierFixture("qwen3-1.7b");
-		vi.spyOn(tinyModelClient, "complete").mockImplementation(async (_modelKey, _prompt, options) => {
+		vi.spyOn(tinyTitleClient, "complete").mockImplementation(async (_modelKey, _prompt, options) => {
 			maxTokens = options?.maxTokens;
 			return "moderate";
 		});
@@ -119,7 +119,7 @@ describe("auto thinking classifier helpers", () => {
 	it("uses a larger local non-reasoning classifier floor", async () => {
 		let maxTokens: number | undefined;
 		const fixture = await createLocalClassifierFixture("qwen2.5-1.5b");
-		vi.spyOn(tinyModelClient, "complete").mockImplementation(async (_modelKey, _prompt, options) => {
+		vi.spyOn(tinyTitleClient, "complete").mockImplementation(async (_modelKey, _prompt, options) => {
 			maxTokens = options?.maxTokens;
 			return "moderate";
 		});
@@ -141,7 +141,7 @@ describe("auto thinking classifier helpers", () => {
 	it("uses shared tiny-message preprocessing before local classification", async () => {
 		let classifierPrompt = "";
 		const fixture = await createLocalClassifierFixture("qwen2.5-1.5b");
-		vi.spyOn(tinyModelClient, "complete").mockImplementation(async (_modelKey, promptText) => {
+		vi.spyOn(tinyTitleClient, "complete").mockImplementation(async (_modelKey, promptText) => {
 			classifierPrompt = promptText;
 			return "moderate";
 		});
@@ -171,10 +171,9 @@ describe("auto thinking classifier helpers", () => {
 		const settings = {
 			get(path: string) {
 				if (path === "providers.autoThinkingModel") return "online";
+				if (path === "agent.helpers")
+					return { autoThinking: { model: `${classifierModel.provider}/${classifierModel.id}` } };
 				return undefined;
-			},
-			getModelRole(role: string) {
-				return role === "smol" ? `${classifierModel.provider}/${classifierModel.id}` : undefined;
 			},
 		} as never;
 		const registry = {
@@ -207,10 +206,9 @@ describe("auto thinking classifier helpers", () => {
 		const settings = {
 			get(path: string) {
 				if (path === "providers.autoThinkingModel") return "online";
+				if (path === "agent.helpers")
+					return { autoThinking: { model: `${classifierModel.provider}/${classifierModel.id}` } };
 				return undefined;
-			},
-			getModelRole(role: string) {
-				return role === "smol" ? `${classifierModel.provider}/${classifierModel.id}` : undefined;
 			},
 		} as never;
 		const registry = {
@@ -244,9 +242,12 @@ describe("auto thinking classifier helpers", () => {
 		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.6 model");
 		const classifierModel = { ...baseModel, reasoning: false };
 		const settings = {
-			get: (path: string) => (path === "providers.autoThinkingModel" ? "online" : undefined),
-			getModelRole: (role: string) =>
-				role === "smol" ? `${classifierModel.provider}/${classifierModel.id}` : undefined,
+			get: (path: string) => {
+				if (path === "providers.autoThinkingModel") return "online";
+				if (path === "agent.helpers")
+					return { autoThinking: { model: `${classifierModel.provider}/${classifierModel.id}` } };
+				return undefined;
+			},
 			getStorage: () => undefined,
 		} as never;
 		const registry = {
@@ -281,9 +282,12 @@ describe("auto thinking classifier helpers", () => {
 		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.6 model");
 		const classifierModel = { ...baseModel, reasoning: false };
 		const settings = {
-			get: (path: string) => (path === "providers.autoThinkingModel" ? "online" : undefined),
-			getModelRole: (role: string) =>
-				role === "smol" ? `${classifierModel.provider}/${classifierModel.id}` : undefined,
+			get: (path: string) => {
+				if (path === "providers.autoThinkingModel") return "online";
+				if (path === "agent.helpers")
+					return { autoThinking: { model: `${classifierModel.provider}/${classifierModel.id}` } };
+				return undefined;
+			},
 			getStorage: () => undefined,
 		} as never;
 		const secret = "AUTO_NEW_RUNTIME_SECRET_119";
@@ -321,9 +325,12 @@ describe("auto thinking classifier helpers", () => {
 		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.6 model");
 		const classifierModel = { ...baseModel, reasoning: false };
 		const settings = {
-			get: (path: string) => (path === "providers.autoThinkingModel" ? "online" : undefined),
-			getModelRole: (role: string) =>
-				role === "smol" ? `${classifierModel.provider}/${classifierModel.id}` : undefined,
+			get: (path: string) => {
+				if (path === "providers.autoThinkingModel") return "online";
+				if (path === "agent.helpers")
+					return { autoThinking: { model: `${classifierModel.provider}/${classifierModel.id}` } };
+				return undefined;
+			},
 			getStorage: () => undefined,
 		} as never;
 		const secret = "AUTO_RETRY_SECRET_883";

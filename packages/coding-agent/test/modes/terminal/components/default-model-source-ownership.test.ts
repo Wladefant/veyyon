@@ -1,6 +1,7 @@
 /**
  * The Default Model settings row owns the saved profile default, while a
- * runtime model-role override owns only the active session. These regressions
+ * runtime `defaultModel` override (a `--model` launch) owns only the active
+ * session. These regressions
  * keep the two sources visible and independently editable.
  */
 
@@ -9,7 +10,6 @@ import { stripVTControlCharacters } from "node:util";
 import type { Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
-import { DEFAULT_MODEL_SLOT } from "@veyyon/coding-agent/config/model-roles";
 import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/config/settings";
 import { DEFAULT_MODEL_SETTING_ID } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-defs";
 import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
@@ -101,25 +101,25 @@ function openDefaultModel(component = createSelector()): SettingsSelectorCompone
 }
 
 function setSavedAWithRuntimeB(): void {
-	settings.setPersistedModelRole(DEFAULT_MODEL_SLOT, SAVED_A);
-	settings.override("modelRoles", { [DEFAULT_MODEL_SLOT]: RUNTIME_B });
+	settings.set("defaultModel", SAVED_A);
+	settings.override("defaultModel", RUNTIME_B);
+}
+
+function savedDefault(store: Settings = settings): unknown {
+	return store.layerValue("profile", ["defaultModel"]);
 }
 
 describe("default model source ownership", () => {
-	/** A runtime override must change the effective role without obscuring which exact selector is saved. */
+	/** A runtime override must change the effective default without obscuring which exact selector is saved. */
 	it("keeps persisted and effective default-model selectors independently observable", () => {
 		setSavedAWithRuntimeB();
 
-		expect(settings.getPersistedModelRole(DEFAULT_MODEL_SLOT)).toBe(SAVED_A);
-		expect(settings.getModelRole(DEFAULT_MODEL_SLOT)).toBe(RUNTIME_B);
+		expect(savedDefault()).toBe(SAVED_A);
+		expect(settings.get("defaultModel")).toBe(RUNTIME_B);
 
-		settings.setPersistedModelRole(DEFAULT_MODEL_SLOT, CANDIDATE_C);
-		expect(settings.getPersistedModelRole(DEFAULT_MODEL_SLOT)).toBe(CANDIDATE_C);
-		expect(settings.getModelRole(DEFAULT_MODEL_SLOT)).toBe(RUNTIME_B);
-
-		settings.setPersistedModelRole(DEFAULT_MODEL_SLOT, undefined);
-		expect(settings.getPersistedModelRole(DEFAULT_MODEL_SLOT)).toBeUndefined();
-		expect(settings.getModelRole(DEFAULT_MODEL_SLOT)).toBe(RUNTIME_B);
+		settings.set("defaultModel", CANDIDATE_C);
+		expect(savedDefault()).toBe(CANDIDATE_C);
+		expect(settings.get("defaultModel")).toBe(RUNTIME_B);
 	});
 
 	/** /settings must name both owners so the saved launch selector is not presented as the active session selector. */
@@ -143,27 +143,27 @@ describe("default model source ownership", () => {
 
 		const preselected = openDefaultModel();
 		preselected.handleInput("\n");
-		expect(settings.getPersistedModelRole(DEFAULT_MODEL_SLOT)).toBe(SAVED_A);
-		expect(settings.getModelRole(DEFAULT_MODEL_SLOT)).toBe(RUNTIME_B);
+		expect(savedDefault()).toBe(SAVED_A);
+		expect(settings.get("defaultModel")).toBe(RUNTIME_B);
 
 		const chooseCandidate = openDefaultModel();
 		for (const char of "candidate-model-c") chooseCandidate.handleInput(char);
 		chooseCandidate.handleInput("\n");
-		expect(settings.getPersistedModelRole(DEFAULT_MODEL_SLOT)).toBe(CANDIDATE_C);
-		expect(settings.getModelRole(DEFAULT_MODEL_SLOT)).toBe(RUNTIME_B);
+		expect(savedDefault()).toBe(CANDIDATE_C);
+		expect(settings.get("defaultModel")).toBe(RUNTIME_B);
 
 		const clearSaved = openDefaultModel();
 		clearSaved.handleInput("\x7f");
-		expect(settings.getPersistedModelRole(DEFAULT_MODEL_SLOT)).toBeUndefined();
-		expect(settings.getModelRole(DEFAULT_MODEL_SLOT)).toBe(RUNTIME_B);
+		expect(savedDefault()).toBeUndefined();
+		expect(settings.get("defaultModel")).toBe(RUNTIME_B);
 	});
 
 	/** Without a higher-precedence override, the saved selector is also effective and needs no active-session qualifier. */
 	it("shows the saved selector alone when it is also active", () => {
-		settings.setPersistedModelRole(DEFAULT_MODEL_SLOT, SAVED_A);
+		settings.set("defaultModel", SAVED_A);
 
-		expect(settings.getPersistedModelRole(DEFAULT_MODEL_SLOT)).toBe(SAVED_A);
-		expect(settings.getModelRole(DEFAULT_MODEL_SLOT)).toBe(SAVED_A);
+		expect(savedDefault()).toBe(SAVED_A);
+		expect(settings.get("defaultModel")).toBe(SAVED_A);
 		const row = defaultModelRow(createSelector());
 		expect(row).not.toBe("");
 		expect(row).toContain(SAVED_A);
@@ -175,14 +175,14 @@ describe("default model source ownership", () => {
 	it("restores the newly saved selector after a no-override reload", async () => {
 		using tempDir = TempDir.createSync("@veyyon-default-model-source-");
 		const first = await Settings.loadIsolated({ agentDir: tempDir.path(), cwd: tempDir.path() });
-		first.override("modelRoles", { [DEFAULT_MODEL_SLOT]: RUNTIME_B });
-		first.setPersistedModelRole(DEFAULT_MODEL_SLOT, CANDIDATE_C);
+		first.override("defaultModel", RUNTIME_B);
+		first.set("defaultModel", CANDIDATE_C);
 		await first.flush();
 
-		expect(first.getModelRole(DEFAULT_MODEL_SLOT)).toBe(RUNTIME_B);
+		expect(first.get("defaultModel")).toBe(RUNTIME_B);
 		const reloaded = await Settings.loadIsolated({ agentDir: tempDir.path(), cwd: tempDir.path() });
-		expect(reloaded.getPersistedModelRole(DEFAULT_MODEL_SLOT)).toBe(CANDIDATE_C);
-		expect(reloaded.getModelRole(DEFAULT_MODEL_SLOT)).toBe(CANDIDATE_C);
-		expect(reloaded.getModelRoleSource(DEFAULT_MODEL_SLOT)).toBe("profile");
+		expect(savedDefault(reloaded)).toBe(CANDIDATE_C);
+		expect(reloaded.get("defaultModel")).toBe(CANDIDATE_C);
+		expect(reloaded.getSource("defaultModel")).toBe("profile");
 	});
 });

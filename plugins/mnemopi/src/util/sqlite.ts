@@ -1,12 +1,5 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 
-// tableExists is a generic sqlite helper with one home in the shared lib. It is
-// re-exported here so mnemopi's own modules keep their existing import path.
-// The previous local copy filtered on `type IN ('table','virtual table')`, but
-// SQLite registers FTS5/vec virtual tables with `type = 'table'`, so the extra
-// literal never matched; the shared owner uses the correct set.
-export { escapeLike, sqlPlaceholders, tableExists } from "@veyyon/utils/sqlite";
-
 /**
  * Batch size for building `... IN (?, ?, …)` clauses over a list of ids. SQLite
  * caps the number of bound parameters per statement (SQLITE_MAX_VARIABLE_NUMBER,
@@ -57,6 +50,55 @@ export interface EntityImportAdapter<TItem, TExisting> {
 	insertWithoutId(db: Database, item: TItem): void;
 }
 
+function assertUniqueIds<TItem>(items: readonly TItem[], getId: (item: TItem) => number | null): void {
+	const seenIds = new Set<number>();
+	for (const item of items) {
+		const id = getId(item);
+		if (id === null) continue;
+		if (seenIds.has(id)) {
+			throw new Error(`import_all: duplicate id ${id} in the imported batch. Deduplicate the input before calling.`);
+		}
+		seenIds.add(id);
+	}
+}
+
+/**
+ * Import one item and return the counter it lands in. An item without an id, or whose id is free,
+ * is inserted; a taken id is overwritten under `force`, skipped when the content matches, and
+ * otherwise inserted under a fresh id (or skipped when that insert hits a constraint).
+ */
+function importEntity<TItem, TExisting>(
+	db: Database,
+	item: TItem,
+	existing: ReadonlyMap<number, TExisting>,
+	adapter: EntityImportAdapter<TItem, TExisting>,
+	force: boolean,
+): keyof EntityImportStats {
+	const id = adapter.getId(item);
+	if (id === null) {
+		adapter.insertWithoutId(db, item);
+		return "inserted";
+	}
+	const current = existing.get(id);
+	if (current === undefined) {
+		adapter.insertWithId(db, item, id);
+		return "inserted";
+	}
+	if (force) {
+		db.run(`DELETE FROM ${adapter.tableName} WHERE id = ?`, [id]);
+		adapter.insertWithId(db, item, id);
+		return "overwritten";
+	}
+	if (adapter.isSameContent(item, current)) return "skipped";
+	try {
+		adapter.insertWithoutId(db, item);
+		return "imported_renumbered";
+	} catch (error) {
+		if (isSqliteConstraint(error)) return "skipped";
+		throw error;
+	}
+}
+
 export function importEntityBatch<TItem, TExisting>(
 	db: Database,
 	items: readonly TItem[],
@@ -69,50 +111,12 @@ export function importEntityBatch<TItem, TExisting>(
 		overwritten: 0,
 		imported_renumbered: 0,
 	};
-	const seenIds = new Set<number>();
-	for (const item of items) {
-		const id = adapter.getId(item);
-		if (id === null) continue;
-		if (seenIds.has(id)) {
-			throw new Error(`import_all: duplicate id ${id} in the imported batch. Deduplicate the input before calling.`);
-		}
-		seenIds.add(id);
-	}
+	assertUniqueIds(items, item => adapter.getId(item));
 
 	db.run("BEGIN IMMEDIATE");
 	try {
 		const existing = adapter.fetchExisting(db);
-		for (const item of items) {
-			const id = adapter.getId(item);
-			const current = id === null ? undefined : existing.get(id);
-			if (id === null) {
-				adapter.insertWithoutId(db, item);
-				stats.inserted++;
-				continue;
-			}
-			if (current === undefined) {
-				adapter.insertWithId(db, item, id);
-				stats.inserted++;
-				continue;
-			}
-			if (force) {
-				db.run(`DELETE FROM ${adapter.tableName} WHERE id = ?`, [id]);
-				adapter.insertWithId(db, item, id);
-				stats.overwritten++;
-				continue;
-			}
-			if (adapter.isSameContent(item, current)) {
-				stats.skipped++;
-				continue;
-			}
-			try {
-				adapter.insertWithoutId(db, item);
-				stats.imported_renumbered++;
-			} catch (error) {
-				if (isSqliteConstraint(error)) stats.skipped++;
-				else throw error;
-			}
-		}
+		for (const item of items) stats[importEntity(db, item, existing, adapter, force)]++;
 		db.run("COMMIT");
 		return stats;
 	} catch (error) {

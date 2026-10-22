@@ -64,8 +64,10 @@ export interface CreateAgentSessionOptions {
 	modelPattern?: string | string[];
 	/** Authenticated fallback selector for deferred agent model patterns. */
 	modelPatternAuthFallback?: string;
-	/** Explicit spawn fallback role, also used to install deferred pattern chains. */
-	modelPatternFallbackRole?: string;
+	/** Explicit spawn fallback key, independent of the global fallback switch. */
+	modelPatternFallbackKey?: string;
+	/** Whether the later deferred patterns become the primary's retry fallback chain once one resolves. */
+	modelPatternFallbackChain?: boolean;
 	/** Thinking selector. Default: from settings, else unset */
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Internal precedence source for the initial effort selection. */

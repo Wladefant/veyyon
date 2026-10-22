@@ -29,8 +29,11 @@ function model(): Model<Api> {
 
 function settings(m: Model<Api>) {
 	return {
-		get: (path: string) => (path === "providers.tinyModel" ? "online" : undefined),
-		getModelRole: (role: string) => (role === "smol" ? `${m.provider}/${m.id}` : undefined),
+		get: (path: string) => {
+			if (path === "providers.tinyModel") return "online";
+			if (path === "agent.helpers") return { title: { model: `${m.provider}/${m.id}` } };
+			return undefined;
+		},
 		getStorage: () => undefined,
 	} as never;
 }

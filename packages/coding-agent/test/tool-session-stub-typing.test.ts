@@ -20,10 +20,11 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { Settings } from "@veyyon/coding-agent/config/settings";
 import { makeToolSession } from "./helpers/tool-session";
 
 const testRoot = path.resolve(import.meta.dir);
-/** The helper is the one place the un-constructible `Settings` is bridged. */
+/** The helper is the one place a settings stub is bridged to `Settings`. */
 const HELPER = path.join(testRoot, "helpers", "tool-session.ts");
 
 function testFiles(dir: string): string[] {
@@ -95,7 +96,7 @@ describe("makeToolSession", () => {
 		expect(session.hasUI).toBe(false);
 		expect(session.getSessionFile()).toBeNull();
 		expect(session.getSessionSpawns()).toBeNull();
-		expect(session.settings.get("tools.approvalMode")).toBeUndefined();
+		expect(session.settings.get("tools.approvalMode")).toBe(Settings.isolated().get("tools.approvalMode"));
 	});
 
 	it("lets an override replace a default rather than merge with it", () => {
@@ -106,22 +107,34 @@ describe("makeToolSession", () => {
 		expect(session.getSessionFile()).toBe("/tmp/s.jsonl");
 	});
 
-	it("answers undefined for every setting by default, so each setting falls to its own default", () => {
-		// A stub that returned a value for unknown keys would silently steer
-		// settings the test never meant to touch.
+	it("reads every setting as its declared default by default", () => {
+		// Code under test reads settings through their declared types, so a stub
+		// that answered undefined would reach branches no real session reaches.
 		const session = makeToolSession();
+		const store = Settings.isolated();
 
-		for (const key of ["argot.enabled", "goal.enabled", "bash.timeout", "ask.notify"]) {
-			expect(session.settings.get(key as never)).toBeUndefined();
+		for (const key of ["argot.enabled", "goal.enabled", "agent.batch", "agent.maxConcurrency"] as const) {
+			expect(session.settings.get(key)).toEqual(store.get(key));
 		}
 	});
 
-	it("routes a settings stub's lookups through unchanged", () => {
+	it("leaves a key no setting declares unanswered", () => {
+		expect(makeToolSession().settings.get("no.such.setting" as never)).toBeUndefined();
+	});
+
+	it("routes a settings stub's answers through and reads what it leaves unanswered as the declared default", () => {
 		const session = makeToolSession({
-			settings: { get: (path: string) => (path === "bash.timeout" ? 60_000 : undefined) },
+			settings: {
+				get: (path: string) => {
+					if (path === "agent.maxConcurrency") return 3;
+					if (path === "memory.backend") return null;
+					return undefined;
+				},
+			},
 		});
 
-		expect(session.settings.get("bash.timeout" as never) as unknown).toBe(60_000);
-		expect(session.settings.get("argot.enabled")).toBeUndefined();
+		expect(session.settings.get("agent.maxConcurrency")).toBe(3);
+		expect(session.settings.get("memory.backend") as unknown).toBeNull();
+		expect(session.settings.get("argot.enabled")).toBe(Settings.isolated().get("argot.enabled"));
 	});
 });

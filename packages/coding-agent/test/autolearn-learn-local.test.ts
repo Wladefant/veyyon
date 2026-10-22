@@ -5,11 +5,11 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import {
 	buildMemoryToolDeveloperInstructions,
-	getMemoryRoot,
 	refreshMemoryToolDeveloperInstructionsCacheAfterStartup,
 	saveLearnedLesson,
 } from "@veyyon/coding-agent/memory/local";
 import { localBackend } from "@veyyon/coding-agent/memory/local-backend";
+import { getMemoryRoot } from "@veyyon/coding-agent/memory/paths";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { LearnTool } from "@veyyon/coding-agent/tools/agent/learn";

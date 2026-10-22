@@ -4,7 +4,31 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Sync upstream changes from santhreal/veyyon.
+
 ## [1.5.6] - 2026-10-10
+
+### Changed
+
+- The fastembed load-or-install fallback is the exported `loadFastembedOrInstall(importInstalled, installRuntime)`; no user-visible change.
+- Removed the unread `commit` parameter of veracity conflict recording and the unread `beam` parameter of recall context formatting; no user-visible change.
+- Backup checksums use the shared `sha256Hex16` helper instead of a private copy; no user-visible change.
+
+### Fixed
+
+- Sleep consolidation compacts "complete", "completed" and "working" only as whole words, so "incomplete" no longer becomes "inDONE" and "completed" no longer becomes "DONEd".
+
+### Removed
+
+- Removed the `escapeLike`, `sqlPlaceholders` and `tableExists` re-exports from `util/sqlite`; import them from `@veyyon/utils/sqlite`.
+- Removed the unused `deferredTransaction`, `REV_CATEGORY`, `REV_PHRASE`, `VEC_TYPE`, `vecSearch`, `fastembedCacheDir`, `modelCacheDir`, `HOST_LLM_TIMEOUT_SECONDS` and no-op `resetRecoveryForTests` exports; loading `core/binary-vectors` no longer reads `MNEMOPI_VEC_TYPE` at import time.
+- Removed the `setEmbeddingProvider`, `resetEmbeddingStateForTests`, `setLocalModelInitializerForTests`, `aaakEncode` and `containsSpacelessCjk` aliases, the duplicate `resetModuleStateForTests`, and the `beam/helpers` re-exports of the binary-vector, regex and id helpers; use `setEmbeddingProviderForTests`, `resetEmbeddingProviderForTests`, `setLocalModelInitializer`, `encode`, `hasCjk` and `resetMemoryForTests`.
+- Removed the `cosineSimilarity` re-export from `core/binary-vectors` and the `parseQueryTime`/`temporalBoost` re-exports from `core/beam/recall`; import them from `core/vector-math` and `util/datetime`, or `cosineSimilarity` from the package root.
+- Removed the `local-llm-config` re-exports from `@veyyon/mnemopi/core/local-llm`; import the configuration and prompt helpers from `@veyyon/mnemopi/core/local-llm-config`.
+
+## [1.5.6] - 2026-10-13
 
 ### Changed
 
@@ -12,6 +36,14 @@
 - Embedding and extraction retries take their exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
 - The extraction client waits between fallback models through `scheduler.wait` from `node:timers/promises`, the wait its rate-limit retries use; the delay is unchanged.
 - The binary vector store and in-memory binary index hold their connection flag, table initializer and backing arrays in `#private` fields; behavior is unchanged.
+- Split memory import and remember, date parsing, entity extraction, the query cache, delta sync, fact extraction and consolidation, database diagnosis, runtime option resolution, pattern detection, harmonization, lexical relevance, MMR reranking, entity import, configured completion, embedding, the episodic graph, the extraction client, veracity aggregation, the MCP server and validate tool, polyphonic recall voices, the triplestore migration, the `bank` command and beam recall into one function per step; no user-visible change.
+- Coverage diversification in recall tokenizes each result once instead of once per pick, and fact recall's LIKE fallback reads the facts table's columns once instead of once per query token.
+
+### Fixed
+
+- `llm: { enabled: false }` disables the LLM instead of leaving `MNEMOPI_LLM_ENABLED` in charge; the flat `llmEnabled` still takes precedence over it.
+- Memory metadata keeps a `__proto__`, `constructor` or other `Object.prototype` key as its own field at every depth instead of dropping it or replacing the record's prototype.
+- An online host backend sends a `__proto__` key of its request payload instead of dropping it.
 
 ## [1.5.0] - 2026-09-18
 

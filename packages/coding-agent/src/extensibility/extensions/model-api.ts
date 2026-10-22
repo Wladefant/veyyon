@@ -2,14 +2,14 @@
  * Model query facade exposed to extensions as `ctx.models`.
  *
  * Read-only: lets an extension select a model the same way core does — list
- * authenticated models, read the session model, resolve a model string or role
- * alias, and compare model families — without touching the mutable registry or
+ * authenticated models, read the session model, resolve a model selector or chain,
+ * and compare model families — without touching the mutable registry or
  * duplicating resolution/family heuristics.
  */
 import type { Api, Model } from "@veyyon/ai";
 import { modelFamilyToken } from "@veyyon/catalog/identity";
 import type { ModelRegistry } from "../../config/model-registry";
-import { getModelMatchPreferences, resolveModelRoleValue } from "../../config/model-resolver";
+import { getModelMatchPreferences, resolveModelSelectorValue } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
 import type { ExtensionModelQuery } from "./types";
 
@@ -25,12 +25,11 @@ export function createExtensionModelQuery(
 	return {
 		list: () => modelRegistry.getAvailable(),
 		current: () => getModel(),
-		// resolveModelRoleValue expands a role alias (`@slow`) to its full configured
-		// priority list and tries each pattern — the same path core selection uses — so a
-		// fallback model lower in the list still resolves. Plain model strings pass through
-		// as a single pattern.
+		// resolveModelSelectorValue splits a chain (`a,b`) and tries each pattern — the
+		// same path core selection uses — so a fallback model later in the chain still
+		// resolves. A plain model string is a one-entry chain.
 		resolve: (spec: string): Model<Api> | undefined =>
-			resolveModelRoleValue(spec, modelRegistry.getAvailable(), {
+			resolveModelSelectorValue(spec, modelRegistry.getAvailable(), {
 				settings,
 				matchPreferences: getModelMatchPreferences(settings),
 			}).model,

@@ -32,7 +32,7 @@ import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import type { ToolSession } from "@veyyon/coding-agent/tools/index";
 import type { CmuxKind } from "@veyyon/coding-agent/tools/web/browser/cmux/rpc";
 import { CmuxSocketClient } from "@veyyon/coding-agent/tools/web/browser/cmux/socket-client";
-import { acquireBrowser } from "@veyyon/coding-agent/tools/web/browser/registry";
+import { acquireBrowser, releaseBrowser } from "@veyyon/coding-agent/tools/web/browser/registry";
 import {
 	acquireTab,
 	getTabsMapForTest,
@@ -130,6 +130,7 @@ describe("browser tab-supervisor — cmux tab close mid-run (#4499)", () => {
 				timeoutMs: 5_000,
 				ownerSessionId: "session-mid-run",
 			});
+			await releaseBrowser(browser, { kill: false });
 			expect(acquired.tab.backend).toBe("cmux");
 
 			const session = makeSession("/tmp");
@@ -213,6 +214,7 @@ describe("browser tab-supervisor — cmux tab close mid-run (#4499)", () => {
 				timeoutMs: 5_000,
 				ownerSessionId: "session-wait-mid-run",
 			});
+			await releaseBrowser(browser, { kill: false });
 			expect(acquired.tab.backend).toBe("cmux");
 
 			const session = makeSession("/tmp");

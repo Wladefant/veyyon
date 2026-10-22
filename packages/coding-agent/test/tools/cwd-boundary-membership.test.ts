@@ -17,10 +17,12 @@
  * that lives in prose drifts from the code silently and a reader has no way to
  * tell. If the doc is wrong about which tools are gated, it is worse than absent.
  */
-import { describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { hasFilesystemTargets } from "@veyyon/coding-agent/tools/core/cwd-boundary";
+import { TempDir } from "@veyyon/utils";
+import { constructEveryTool } from "../helpers/every-tool";
 
 /**
  * Every tool that declares filesystem targets, by the `name` its class exposes.
@@ -38,61 +40,36 @@ import { hasFilesystemTargets } from "@veyyon/coding-agent/tools/core/cwd-bounda
  */
 const BOUND_TOOLS = ["ast_edit", "bash", "edit", "inspect_image", "read", "search", "set_cwd", "write"].sort();
 
-/** Source files that implement a tool class, keyed by the tool's `name`. */
-const TOOL_SOURCES: ReadonlyArray<readonly [name: string, file: string]> = [
-	["ast_edit", "search/ast-edit.ts"],
-	["bash", "shell/bash.ts"],
-	["edit", "../edit/index.ts"],
-	["inspect_image", "fs/inspect-image.ts"],
-	["read", "fs/read.ts"],
-	["search", "search/search.ts"],
-	["set_cwd", "fs/set-cwd.ts"],
-	["write", "fs/write.ts"],
-];
-
-const SRC_TOOLS = path.join(import.meta.dir, "..", "..", "src", "tools");
 const REPO_ROOT = path.join(import.meta.dir, "..", "..", "..", "..");
 
 describe("boundary membership", () => {
-	/**
-	 * THE regression this file exists for. Each listed source must actually
-	 * declare `filesystemTargets`; a tool that lost the declaration would silently
-	 * stop being gated while continuing to read and write files.
-	 */
-	it.each(TOOL_SOURCES)("%s declares filesystemTargets in its source", (_name, file) => {
-		const source = fs.readFileSync(path.join(SRC_TOOLS, file), "utf8");
-		expect(source).toContain("filesystemTargets");
+	let profile: TempDir;
+
+	beforeAll(() => {
+		profile = TempDir.createSync("@cwd-boundary-membership-");
+	});
+
+	afterAll(() => {
+		profile.removeSync();
 	});
 
 	/**
-	 * No filesystem tool may join without a decision recorded here. The scan is on
-	 * shipped source rather than a registry because the declaration IS the
-	 * registration: there is no other list to consult.
+	 * THE regression this file exists for. A tool that lost its `filesystemTargets` declaration would
+	 * silently stop being gated while continuing to read and write files, and a filesystem tool that
+	 * joins without a decision recorded here is not gated either. Read from every constructed tool, so
+	 * an addition fails as loudly as a removal and no tool can be missed by a scan that never opened
+	 * its file.
 	 */
-	it("finds no tool source declaring filesystemTargets outside the pinned set", () => {
-		const known = new Set(TOOL_SOURCES.map(([, file]) => path.basename(file)));
-		const stray: string[] = [];
-		// Recursive, because the tools live in domain directories. A flat read of the tools directory
-		// finds `index.ts` and `renderers.ts`, neither of which declares a target, so it reported an
-		// empty stray set for a tree it never opened.
-		const walk = (dir: string, prefix: string): void => {
-			for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-				const rel = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
-				if (entry.isDirectory()) {
-					if (entry.name !== "__tests__") walk(path.join(dir, entry.name), rel);
-					continue;
-				}
-				if (!entry.name.endsWith(".ts") || entry.name.endsWith(".test.ts")) continue;
-				// `core/cwd-boundary.ts` DEFINES the interface and the shared search helper,
-				// so it names the symbol without being a tool.
-				if (entry.name === "cwd-boundary.ts") continue;
-				if (known.has(entry.name)) continue;
-				const source = fs.readFileSync(path.join(dir, entry.name), "utf8");
-				if (source.includes("readonly filesystemTargets")) stray.push(rel);
-			}
-		};
-		walk(SRC_TOOLS, "");
-		expect(stray).toEqual([]);
+	it("is declared by exactly the pinned tools among every tool a session can construct", async () => {
+		const { tools, unconstructable } = await constructEveryTool(profile.path());
+
+		expect(unconstructable).toEqual([]);
+		expect(
+			tools
+				.filter(tool => hasFilesystemTargets(tool))
+				.map(tool => tool.name)
+				.sort(),
+		).toEqual(BOUND_TOOLS);
 	});
 
 	/** The predicate the wrapper actually calls, exercised on both answers so the
@@ -117,7 +94,7 @@ describe("docs/handbook/src/reference/approval-mode.md agrees with the code", ()
 	 *
 	 * This one stays as a doc check ON PURPOSE, under the security-boundary carve-out: the subject is
 	 * whether the documented membership matches `BOUND_TOOLS`, and `BOUND_TOOLS` is itself pinned
-	 * against the code by the source scan above. So the chain is code -> pinned set -> doc, and a tool
+	 * against the constructed tools by the sweep above. So the chain is code -> pinned set -> doc, and a tool
 	 * that joins the boundary without being documented fails here. It is a completeness check over a
 	 * derived list, not a scan for a hand-picked phrase.
 	 */

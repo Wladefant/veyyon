@@ -23,6 +23,8 @@ interface FakeWorkerBehavior {
 	exitOnClose: boolean;
 	settleRuns: boolean;
 	errorOnStart?: boolean;
+	/** When set, the fake worker reports ready only after this promise resolves; the test controls the release. */
+	readyGate?: Promise<void>;
 }
 
 function makeSession(cwd: string): ToolSession {
@@ -133,10 +135,12 @@ function installFakeWorker(stats: FakeWorkerStats, behavior: FakeWorkerBehavior)
 			this.#messageListeners.add(listener as (event: MessageEvent) => void);
 			if (!this.#readyQueued) {
 				this.#readyQueued = true;
-				queueMicrotask(() => {
+				const emitReady = (): void => {
 					if (behavior.errorOnStart) this.#emitError();
 					else this.#emitMessage({ type: "ready" });
-				});
+				};
+				if (behavior.readyGate) void behavior.readyGate.then(emitReady);
+				else queueMicrotask(emitReady);
 			}
 		}
 
@@ -528,6 +532,145 @@ describe("JS eval context owner-scoped disposal (GRAN-11)", () => {
 		expect(stats.closeRequests).toBe(0);
 
 		// The last owner leaving closes it.
+		await disposeVmContextsByOwner("owner-B");
+		expect(stats.closeRequests).toBe(1);
+	});
+
+	// WHY: before owners were leased before startup, an owner that ended while its worker was still
+	// starting was attached to a context that no disposal would ever reap. Negative control: without
+	// the lease-ended check after startup, the context is published and the worker is never closed.
+	it("reaps a context whose only owner ends while its worker is still starting", async () => {
+		using tempDir = TempDir.createSync("@veyyon-js-owner-ended-startup-");
+		const stats: FakeWorkerStats = { closeRequests: 0, terminateCalls: 0 };
+		installFakeWorker(stats, { exitOnClose: true, settleRuns: true });
+		const session = makeSession(tempDir.path());
+
+		const started = executeJs("undefined;", {
+			cwd: tempDir.path(),
+			sessionId: "ended-startup",
+			kernelOwnerId: "owner-A",
+			session,
+		});
+		await disposeVmContextsByOwner("owner-A");
+		const result = await started;
+
+		expect(result.exitCode).not.toBe(0);
+		expect(result.output).toContain("JS context disposed");
+		expect(stats.closeRequests + stats.terminateCalls).toBeGreaterThan(0);
+	});
+
+	// WHY: reaping on an ended owner must not kill a worker that a live owner still needs. Negative
+	// control: an unconditional kill when any owner ends closes the shared worker here, and owner B
+	// fails with a disposed context.
+	it("keeps a starting context alive for a live owner when another owner ends mid-startup", async () => {
+		using tempDir = TempDir.createSync("@veyyon-js-owner-shared-startup-");
+		const stats: FakeWorkerStats = { closeRequests: 0, terminateCalls: 0 };
+		installFakeWorker(stats, { exitOnClose: true, settleRuns: true });
+		const session = makeSession(tempDir.path());
+
+		const ownerA = executeJs("undefined;", {
+			cwd: tempDir.path(),
+			sessionId: "shared-startup",
+			kernelOwnerId: "owner-A",
+			session,
+		});
+		const ownerB = executeJs("undefined;", {
+			cwd: tempDir.path(),
+			sessionId: "shared-startup",
+			kernelOwnerId: "owner-B",
+			session,
+		});
+		await disposeVmContextsByOwner("owner-A");
+		const [resultA, resultB] = await Promise.all([ownerA, ownerB]);
+
+		expect(resultA.exitCode).not.toBe(0);
+		expect(resultB.exitCode).toBe(0);
+		expect(stats.closeRequests).toBe(0);
+		expect(stats.terminateCalls).toBe(0);
+
+		await disposeVmContextsByOwner("owner-B");
+		expect(stats.closeRequests).toBe(1);
+	});
+
+	// WHY: reaping must clear the session key, so the next owner starts a fresh context instead of
+	// joining a dead startup. Negative control: a reaped context left in `sessions` or `startingSessions`
+	// makes the later cell fail.
+	it("runs a later owner's cell on a fresh context after an ended owner's startup was reaped", async () => {
+		using tempDir = TempDir.createSync("@veyyon-js-owner-ended-then-live-");
+		const stats: FakeWorkerStats = { closeRequests: 0, terminateCalls: 0 };
+		installFakeWorker(stats, { exitOnClose: true, settleRuns: true });
+		const session = makeSession(tempDir.path());
+
+		const started = executeJs("undefined;", {
+			cwd: tempDir.path(),
+			sessionId: "ended-then-live",
+			kernelOwnerId: "owner-A",
+			session,
+		});
+		await disposeVmContextsByOwner("owner-A");
+		expect((await started).exitCode).not.toBe(0);
+
+		const next = await executeJs("return String(6 * 7);", {
+			cwd: tempDir.path(),
+			sessionId: "ended-then-live",
+			kernelOwnerId: "owner-B",
+			session,
+		});
+		expect(next.exitCode).toBe(0);
+	});
+
+	// WHY: a slow startup must not stall session teardown. Negative control: if disposal awaited
+	// `startingSessions`, this test would hang on the gate below until the runner's timeout fails it,
+	// because the worker only reports ready after the test releases the gate.
+	it("returns from owner disposal without waiting for a context that is still starting", async () => {
+		using tempDir = TempDir.createSync("@veyyon-js-owner-bounded-dispose-");
+		const stats: FakeWorkerStats = { closeRequests: 0, terminateCalls: 0 };
+		const ready = Promise.withResolvers<void>();
+		installFakeWorker(stats, { exitOnClose: true, settleRuns: true, readyGate: ready.promise });
+		const session = makeSession(tempDir.path());
+
+		const started = executeJs("undefined;", {
+			cwd: tempDir.path(),
+			sessionId: "bounded-dispose",
+			kernelOwnerId: "owner-A",
+			session,
+		});
+		await disposeVmContextsByOwner("owner-A");
+		ready.resolve();
+		expect((await started).exitCode).not.toBe(0);
+	});
+
+	// WHY: owner B reached an attached context and yielded at acquireSession; owner A then ended before B
+	// attached. Disposal saw only A and killed the context under B's live lease, so B ran on a dead worker.
+	// Negative control: without the live-lease check in disposeVmContextsByOwner, the close below fires
+	// during A's disposal (closeRequests 1 before B's cell) and B fails. The final close also proves A
+	// was dropped from the owner set and not retained.
+	it("keeps an attached context alive for a live owner whose attach follows the last attached owner's end", async () => {
+		using tempDir = TempDir.createSync("@veyyon-js-owner-attach-race-");
+		const stats: FakeWorkerStats = { closeRequests: 0, terminateCalls: 0 };
+		installFakeWorker(stats, { exitOnClose: true, settleRuns: true });
+		const session = makeSession(tempDir.path());
+
+		await executeJs("undefined;", {
+			cwd: tempDir.path(),
+			sessionId: "attach-race",
+			kernelOwnerId: "owner-A",
+			session,
+		});
+		expect(stats.closeRequests).toBe(0);
+
+		const ownerB = executeJs("return String(6 * 7);", {
+			cwd: tempDir.path(),
+			sessionId: "attach-race",
+			kernelOwnerId: "owner-B",
+			session,
+		});
+		await disposeVmContextsByOwner("owner-A");
+		expect(stats.closeRequests + stats.terminateCalls).toBe(0);
+
+		const resultB = await ownerB;
+		expect(resultB.exitCode).toBe(0);
+
 		await disposeVmContextsByOwner("owner-B");
 		expect(stats.closeRequests).toBe(1);
 	});

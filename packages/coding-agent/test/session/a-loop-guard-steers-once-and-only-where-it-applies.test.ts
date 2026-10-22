@@ -117,7 +117,6 @@ function harness(overrides: Record<string, unknown> = {}): Harness {
 		"model.loopGuard.toolCallReminder": true,
 		"model.toolCallLoopGuard.enabled": true,
 		"model.toolCallLoopGuard.threshold": 3,
-		"model.toolCallLoopGuard.readSubsumptionThreshold": 3,
 		"model.toolCallLoopGuard.exemptTools": ["job"],
 		...overrides,
 	});
@@ -268,10 +267,6 @@ const TUNING_CHANGES: Record<string, { threshold: number; apply(settings: Settin
 	"model.toolCallLoopGuard.threshold": {
 		threshold: 4,
 		apply: settings => settings.override("model.toolCallLoopGuard.threshold", 4),
-	},
-	"model.toolCallLoopGuard.readSubsumptionThreshold": {
-		threshold: 3,
-		apply: settings => settings.override("model.toolCallLoopGuard.readSubsumptionThreshold", 5),
 	},
 	"model.toolCallLoopGuard.exemptTools": {
 		threshold: 3,

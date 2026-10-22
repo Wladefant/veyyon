@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { FileDiagnosticsResult } from "@veyyon/coding-agent/lsp";
+import type { FileDiagnosticsResult } from "@veyyon/coding-agent/lsp/diagnostics";
 import { DiagnosticsLedger, diagnosticIdentity } from "@veyyon/coding-agent/lsp/diagnostics-ledger";
 
 const FILE_A = "/repo/src/a.ts";

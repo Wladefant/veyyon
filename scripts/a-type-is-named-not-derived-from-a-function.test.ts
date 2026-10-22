@@ -1,6 +1,8 @@
 /**
  * Deriving types with ReturnType<typeof fn> couples callers to implementation details and hides return contracts.
- * This gate checks that no TypeScript source file under packages/ or scripts/ uses ReturnType in a type position.
+ * This gate checks that no TypeScript file in a workspace member's `src/` or `test/`, or under `scripts/`, uses
+ * ReturnType in a type position. Tests are in scope because a test helper's type is read the same way a module's
+ * is: a `ReturnType<typeof session>` parameter states nothing about what the helper returns.
  * It does not parse multi-line type structures across AST boundaries or enforce contracts in external fixtures.
  */
 
@@ -84,20 +86,25 @@ function findSourceFiles(dir: string): string[] {
 }
 
 describe("a type is named not derived from a function", () => {
-	it("finds zero ReturnType< sites in tracked TypeScript source and scripts", () => {
+	it("finds zero ReturnType< sites in tracked TypeScript source, tests and scripts", () => {
 		// The workspace members are read, not named. `packages/` was hardcoded, so a module under any
 		// other root could derive a type from a function and this gate reported zero sites. The root
 		// view was in turn blind to literal paths (`natives/bridge/bindings`, `clients/python/veybot/web`), which
 		// `typeScriptMembers()` now reaches.
 		const files = [
-			...typeScriptMembers().flatMap(member => {
-				const srcDir = path.join(REPO_ROOT, member, "src");
-				return fs.existsSync(srcDir) ? findSourceFiles(srcDir) : [];
-			}),
+			...typeScriptMembers().flatMap(member =>
+				["src", "test"].flatMap(dir => {
+					const root = path.join(REPO_ROOT, member, dir);
+					return fs.existsSync(root) ? findSourceFiles(root) : [];
+				}),
+			),
 			...findSourceFiles(path.join(REPO_ROOT, "scripts")),
 		].sort();
 
 		expect(files.length).toBeGreaterThan(50);
+		// The test directories are walked too: a helper type derived from a function in a test was out of
+		// reach while only `src/` was read, and 79 such sites had accumulated there.
+		expect(files).toContain("packages/coding-agent/test/helpers/tool-session.ts");
 
 		// And the corpus reaches every declared root. A root the walk never opened contributes no
 		// file, so its modules are exempt by absence and the empty list below still reads green.

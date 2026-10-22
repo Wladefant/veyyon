@@ -8,6 +8,7 @@ import { describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { $which } from "@veyyon/utils/which";
 import { existingOnly } from "./workspace-layout";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..");
@@ -25,7 +26,7 @@ export const ALLOWLIST: Readonly<Record<string, string>> = {
 	"natives/bridge/bindings/scripts/native-portability.ts": "bootstraps native addon before @veyyon/utils is available",
 	"natives/bridge/bindings/test/native.test.ts": "native addon test suite running without @veyyon/utils dependency",
 	"clients/python/veybot/web/scripts/resolve-chrome.ts": "standalone python extension verification script",
-	"scripts/one-owner-answers-a-command-lookup.test.ts": "quotes the owner call to assert the owner implements it",
+	"scripts/one-owner-answers-a-command-lookup.test.ts": "compares the owner's answer with Bun.which",
 	"scripts/tests-never-touch-real-home.test.ts": "quotes Bun.which in static test fixture string",
 };
 
@@ -44,9 +45,10 @@ function trackedTsFiles(): string[] {
 }
 
 describe("one owner answers a command lookup", () => {
-	it("has the owner file implementing Bun.which", () => {
-		const ownerContent = fs.readFileSync(path.join(REPO_ROOT, OWNER_FILE), "utf8");
-		expect(ownerContent).toContain("Bun.which(");
+	it("has the owner answering a lookup the way Bun.which does", () => {
+		expect($which("sh")).toBe(Bun.which("sh"));
+		expect($which("sh")).not.toBeNull();
+		expect($which("veyyon-no-such-command-for-a-lookup")).toBeNull();
 	});
 
 	it("restricts Bun.which( calls to the single owner and pinned allowlist", () => {

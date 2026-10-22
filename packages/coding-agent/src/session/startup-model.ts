@@ -1,5 +1,5 @@
 /**
- * The model and thinking level a session starts on.
+ * The model, thinking level and service tier a session starts on.
  *
  * Selection runs in two passes because extension providers register between them. The first
  * pass restores the session's last model or the settings default, so model-dependent setup
@@ -10,12 +10,13 @@
  */
 
 import type { ThinkingLevel } from "@veyyon/agent-core";
-import type { Model } from "@veyyon/ai";
+import type { Model, ServiceTierByFamily } from "@veyyon/ai";
 import { getRestorableSessionModels, type SessionContext } from "@veyyon/kernel/session/session-context";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { logger } from "@veyyon/utils";
 import { isAuthenticated, kNoAuth } from "../config/auth-state";
 import { type EffortSource, resolveEffort, withLegacyDefaultEffort } from "../config/effort-resolver";
+import { normalizeModelPatternList } from "../config/model-pattern-list";
 import type { ModelRegistry } from "../config/model-registry";
 import { modelResolutionFailureMessage } from "../config/model-resolution-failure";
 import {
@@ -27,12 +28,11 @@ import {
 	parseModelPattern,
 	parseModelString,
 	pickDefaultAvailableModel,
-	type ResolvedModelRoleValue,
+	type ResolvedModelSelectorValue,
 	resolveAllowedModels,
-	resolveConfiguredModelPatterns,
-	resolveModelRoleValue,
+	resolveModelSelectorValue,
 } from "../config/model-resolver";
-import { DEFAULT_MODEL_SLOT } from "../config/model-roles";
+import { buildServiceTierByFamily } from "../config/service-tier";
 import type { Settings } from "../config/settings";
 import {
 	AUTO_THINKING,
@@ -45,14 +45,14 @@ import {
 } from "../thinking";
 import type { CreateAgentSessionOptions } from "./factory-options";
 
-/** What selection reads. Every field is read, never written, except the settings overrides a fallback role installs. */
+/** What selection reads. Every field is read, never written, except the settings override a fallback chain installs. */
 export interface StartupModelInputs {
 	options: Pick<
 		CreateAgentSessionOptions,
 		| "model"
 		| "modelPattern"
 		| "modelPatternAuthFallback"
-		| "modelPatternFallbackRole"
+		| "modelPatternFallbackChain"
 		| "thinkingLevel"
 		| "thinkingSource"
 	>;
@@ -97,19 +97,18 @@ function preconnectModelHost(baseUrl: string | undefined): void {
 }
 
 /**
- * Make `primary` the `role` model and the later distinct matches its retry fallback chain.
+ * Make the later distinct matches the retry fallback chain of `primary`, keyed by its selector.
  *
- * Only settings overrides are written, so the chain lives for this process and never reaches
+ * Only a settings override is written, so the chain lives for this process and never reaches
  * the config file.
  */
 function installPatternFallbackChain(
 	settings: Settings,
-	role: string,
 	primary: MatchedModel,
 	laterPatterns: readonly string[],
 	availableModels: readonly Model[],
 	matchPreferences: ModelMatchPreferences,
-): void {
+): string | undefined {
 	const primarySelector = formatModelSelectorValue(formatModelStringWithRouting(primary.model), primary.thinkingLevel);
 	const seenSelectors = new Set<string>([primarySelector]);
 	const fallbackSelectors: string[] = [];
@@ -126,34 +125,40 @@ function installPatternFallbackChain(
 	}
 	if (fallbackSelectors.length === 0) return;
 
-	const modelRoles: Record<string, string> = {};
-	const existingRoles = settings.getModelRoles();
-	for (const existingRole in existingRoles) {
-		const selector = existingRoles[existingRole];
-		if (selector) modelRoles[existingRole] = selector;
-	}
-	modelRoles[role] = primarySelector;
-	settings.override("modelRoles", modelRoles);
-
-	const fallbackChains: Record<string, string[]> = {
-		[role]: fallbackSelectors,
-	};
+	const fallbackChains: Record<string, string[]> = { [primarySelector]: fallbackSelectors };
 	const existingFallbackChains = settings.get("retry.fallbackChains");
-	for (const chainRole in existingFallbackChains) {
-		if (chainRole !== role) fallbackChains[chainRole] = existingFallbackChains[chainRole];
+	for (const key in existingFallbackChains) {
+		if (key !== primarySelector) fallbackChains[key] = existingFallbackChains[key];
 	}
 	settings.override("retry.fallbackChains", fallbackChains);
+	return primarySelector;
+}
+
+/** The service tier a session starts on: the tiers a resumed branch recorded, else the settings tiers. */
+export function startingServiceTierByFamily(
+	hasServiceTierEntry: boolean,
+	restoredContext: SessionContext,
+	settings: Settings,
+): ServiceTierByFamily {
+	if (hasServiceTierEntry) return restoredContext.serviceTier ?? {};
+	return buildServiceTierByFamily(
+		settings.get("tier.openai"),
+		settings.get("tier.anthropic"),
+		settings.get("tier.google"),
+	);
 }
 
 export class StartupModelSelection {
 	/** Whether the caller named a model, directly or through `--model` patterns. */
 	readonly hasExplicitModel: boolean;
+	/** The deferred spawn chain installed during selection, if one was requested. */
+	modelPatternFallbackKey: string | undefined;
 	readonly #inputs: StartupModelInputs;
 	readonly #deferredPatterns: string[];
 	readonly #matchPreferences: ModelMatchPreferences;
 	/** The session's model strings, in the order a resume tries them. */
 	readonly #sessionModelStrings: string[];
-	#defaultRoleSpec: ResolvedModelRoleValue;
+	#defaultModelSpec: ResolvedModelSelectorValue;
 	#model: Model | undefined;
 	#fallbackMessage: string | undefined;
 	#restoredIndex = -1;
@@ -169,13 +174,13 @@ export class StartupModelSelection {
 		const allowedModels = await logger.time("resolveAllowedModels", () =>
 			resolveAllowedModels(modelRegistry, settings, matchPreferences),
 		);
-		const defaultRoleSpec = logger.time("resolveDefaultModelRole", () =>
-			resolveModelRoleValue(settings.getModelRole(DEFAULT_MODEL_SLOT), allowedModels, {
+		const defaultModelSpec = logger.time("resolveDefaultModel", () =>
+			resolveModelSelectorValue(settings.get("defaultModel"), allowedModels, {
 				settings,
 				matchPreferences,
 			}),
 		);
-		const selection = new StartupModelSelection(inputs, matchPreferences, defaultRoleSpec);
+		const selection = new StartupModelSelection(inputs, matchPreferences, defaultModelSpec);
 		selection.#restoreSessionModel();
 		selection.#useSettingsDefault();
 		const model = selection.#model;
@@ -192,14 +197,14 @@ export class StartupModelSelection {
 	private constructor(
 		inputs: StartupModelInputs,
 		matchPreferences: ModelMatchPreferences,
-		defaultRoleSpec: ResolvedModelRoleValue,
+		defaultModelSpec: ResolvedModelSelectorValue,
 	) {
 		const { options, sessionManager, existingSession, hasExistingSession } = inputs;
 		this.#inputs = inputs;
 		this.#deferredPatterns = deferredModelPatterns(options.modelPattern);
 		this.hasExplicitModel = options.model !== undefined || this.#deferredPatterns.length > 0;
 		this.#matchPreferences = matchPreferences;
-		this.#defaultRoleSpec = defaultRoleSpec;
+		this.#defaultModelSpec = defaultModelSpec;
 		this.#model = options.model;
 		this.#sessionModelStrings =
 			!this.hasExplicitModel && hasExistingSession
@@ -302,11 +307,11 @@ export class StartupModelSelection {
 
 	/** With no model yet and none requested, take the settings default. */
 	#useSettingsDefault(): void {
-		const settingsDefaultModel = this.#defaultRoleSpec.model;
+		const settingsDefaultModel = this.#defaultModelSpec.model;
 		if (this.hasExplicitModel || this.#model || !settingsDefaultModel) return;
 		logger.time("resolveSettingsDefaultModel", () => {
-			// defaultRoleSpec.model already comes from modelRegistry.getAvailable(), so
-			// re-validating auth here just repeats the expensive lookup path.
+			// defaultModelSpec.model already comes from modelRegistry.getAvailable(), so
+			// re-validating auth here repeats the expensive lookup path.
 			this.#model = settingsDefaultModel;
 		});
 	}
@@ -329,9 +334,9 @@ export class StartupModelSelection {
 			this.#thinkingSource = "session";
 			return this.#restoredThinkingLevel;
 		}
-		if (!this.hasExplicitModel && !hasThinkingEntry && this.#defaultRoleSpec.explicitThinkingLevel) {
+		if (!this.hasExplicitModel && !hasThinkingEntry && this.#defaultModelSpec.explicitThinkingLevel) {
 			this.#thinkingSource = "selector";
-			return this.#defaultRoleSpec.thinkingLevel;
+			return this.#defaultModelSpec.thinkingLevel;
 		}
 		const saved = resolveEffort({
 			modelSelector: selectedModel ? `${selectedModel.provider}/${selectedModel.id}` : undefined,
@@ -373,10 +378,10 @@ export class StartupModelSelection {
 
 	/**
 	 * Retry the session's model candidates now that extension providers are registered. The
-	 * first pass ran before extensions loaded, so a role model an extension supplies either fell
+	 * first pass ran before extensions loaded, so a model an extension supplies either fell
 	 * back to the saved default (`#restoredIndex > 0`) or failed entirely (`#restoredIndex ===
 	 * -1`, with the settings default or a later fallback filling the model). Reclaiming it here
-	 * makes resume honor the last active role in either case.
+	 * makes resume honor the last active model in either case.
 	 */
 	#reclaimSessionModel(): void {
 		const retryLimit = this.#restoredIndex >= 0 ? this.#restoredIndex : this.#sessionModelStrings.length;
@@ -392,14 +397,13 @@ export class StartupModelSelection {
 	}
 
 	/**
-	 * Resolve deferred `--model`/agent patterns now that extension models are registered. Role
-	 * aliases (`@smol`) and comma chains expand to concrete selectors first, so the deferred path
-	 * accepts everything the immediate path (resolveModelOverride → resolveModelRoleValue)
-	 * accepts.
+	 * Resolve deferred `--model`/agent patterns now that extension models are registered. Comma
+	 * chains split into their entries first, so the deferred path accepts everything the
+	 * immediate path (resolveModelOverride → resolveModelSelectorValue) accepts.
 	 */
 	async #resolveDeferredPatterns(): Promise<void> {
 		const { options, settings, modelRegistry } = this.#inputs;
-		const expandedModelPatterns = resolveConfiguredModelPatterns(this.#deferredPatterns, settings);
+		const expandedModelPatterns = normalizeModelPatternList(this.#deferredPatterns);
 		let availableModels = modelRegistry.getAll();
 		const matchPreferences = getModelMatchPreferences(settings);
 		// The background refresh (refreshInBackground at startup) may not have completed yet.
@@ -417,10 +421,9 @@ export class StartupModelSelection {
 			if (!isMatched(primary)) continue;
 			const authFallback = await this.#authFallback(primary, availableModels, matchPreferences);
 			const selected = authFallback ?? primary;
-			if (authFallback === undefined && options.modelPatternFallbackRole) {
-				installPatternFallbackChain(
+			if (authFallback === undefined && options.modelPatternFallbackChain) {
+				this.modelPatternFallbackKey = installPatternFallbackChain(
 					settings,
-					options.modelPatternFallbackRole,
 					primary,
 					expandedModelPatterns.slice(patternIndex + 1),
 					availableModels,
@@ -467,7 +470,7 @@ export class StartupModelSelection {
 	 */
 	async #resolveFallbackModel(): Promise<void> {
 		const { settings, modelRegistry } = this.#inputs;
-		await this.#tryResolveDefaultRole();
+		await this.#tryResolveDefaultModel();
 
 		if (!this.#model) {
 			const fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, this.#matchPreferences);
@@ -483,17 +486,17 @@ export class StartupModelSelection {
 			// boot the configured default stays unresolved and `pick` silently degrades to an
 			// unrelated authed provider's default (#6162) or "No models available" (#6114) — even
 			// though `veyyon models` (which awaits discovery) lists the model. Await one cache-aware
-			// discovery pass and retry when a default role is configured (must win over `pick`) or
-			// nothing resolved at all. The common path — role already resolved, or a `pick` with no
-			// configured default — never pays for it.
-			const defaultRoleConfigured = Boolean(settings.getModelRole(DEFAULT_MODEL_SLOT));
+			// discovery pass and retry when a default model is configured (must win over `pick`) or
+			// nothing resolved at all. The common path — default model already resolved, or a `pick`
+			// with no configured default — never pays for it.
+			const defaultModelConfigured = normalizeModelPatternList(settings.get("defaultModel")).length > 0;
 			if (
 				!this.hasExplicitModel &&
-				(defaultRoleConfigured || !pick) &&
+				(defaultModelConfigured || !pick) &&
 				modelRegistry.getDiscoverableProviders().length > 0
 			) {
 				await logger.time("resolveModelDiscoveryFallback", () => modelRegistry.refresh("online-if-uncached"));
-				if (!(await this.#tryResolveDefaultRole()) && !this.#model) {
+				if (!(await this.#tryResolveDefaultModel()) && !this.#model) {
 					const refreshedCandidates = await resolveAllowedModels(modelRegistry, settings, this.#matchPreferences);
 					pick = pickDefaultAvailableModel(
 						refreshedCandidates.filter(candidate => this.#hasAuth(candidate)),
@@ -526,29 +529,29 @@ export class StartupModelSelection {
 	}
 
 	/**
-	 * Retry the default-role lookup against the post-extension allowed set, adopting the model
+	 * Retry the `defaultModel` lookup against the post-extension allowed set, adopting the model
 	 * when it resolves. Extension factories register providers AFTER the first pass resolved
-	 * `#defaultRoleSpec`, and configured discovery providers may still be mid-discovery, so a
-	 * role pointing at such a model (an openai-compat plugin's `posthog/claude-opus-4-8`, a
+	 * `#defaultModelSpec`, and configured discovery providers may still be mid-discovery, so a
+	 * value pointing at such a model (an openai-compat plugin's `posthog/claude-opus-4-8`, a
 	 * models.yml `openai-models-list` endpoint) returned `undefined` there. Without this retry
 	 * the `pickDefaultAvailableModel` fallback replaces the configured default with a bundled
 	 * provider's default whenever a stray `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` is in the
 	 * environment. (issues #3569, #6162)
 	 */
-	async #tryResolveDefaultRole(): Promise<boolean> {
+	async #tryResolveDefaultModel(): Promise<boolean> {
 		if (this.hasExplicitModel) return false;
 		const { settings, modelRegistry } = this.#inputs;
 		// Re-resolve the allowed set: extension factories and discovery refreshes may have
 		// registered models not visible earlier.
 		const fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, this.#matchPreferences);
-		const reResolvedRoleSpec = resolveModelRoleValue(settings.getModelRole(DEFAULT_MODEL_SLOT), fallbackCandidates, {
+		const reResolvedSpec = resolveModelSelectorValue(settings.get("defaultModel"), fallbackCandidates, {
 			settings,
 			matchPreferences: this.#matchPreferences,
 		});
-		const resolvedDefaultModel = reResolvedRoleSpec.model;
+		const resolvedDefaultModel = reResolvedSpec.model;
 		if (!resolvedDefaultModel) return false;
-		// Set before adopting: the thinking pick reads the role's explicit selector (e.g. `:max`).
-		this.#defaultRoleSpec = reResolvedRoleSpec;
+		// Set before adopting: the thinking pick reads the value's explicit selector (e.g. `:max`).
+		this.#defaultModelSpec = reResolvedSpec;
 		this.#adopt(resolvedDefaultModel);
 		return true;
 	}

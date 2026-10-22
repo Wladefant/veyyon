@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import * as timers from "node:timers/promises";
-import { errorMessage, logger, ptree, untilAborted } from "@veyyon/utils";
+import { errorMessage, logger, ptree, settleWithin, untilAborted } from "@veyyon/utils";
 import { NON_INTERACTIVE_ENV } from "../../exec/non-interactive-env";
 import { primarySessionCpuAdoption } from "../../session/cpu-limit";
 import { DapClient } from "./client";
@@ -153,7 +153,7 @@ async function throwPreferredDapStartError(
 	startFailure: DapStartRequestFailure,
 	configurationError: unknown,
 ): Promise<never> {
-	await Promise.race([startFailure.settled ?? Promise.resolve(), timers.setTimeout(50)]);
+	await settleWithin(startFailure.settled ?? Promise.resolve(), 50, undefined);
 	if (startFailure.rejected) {
 		throw combineDapStartErrors(command, startFailure.error, configurationError);
 	}

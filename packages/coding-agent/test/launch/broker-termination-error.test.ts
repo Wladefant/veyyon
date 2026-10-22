@@ -25,6 +25,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
+import * as net from "node:net";
 import * as path from "node:path";
 import type { Process } from "@veyyon/natives";
 import * as nativeProcess from "@veyyon/utils/native-process";
@@ -88,13 +89,15 @@ afterAll(async () => {
 
 const cleanupDirs: string[] = [];
 const cleanupClients: DaemonBrokerClient[] = [];
-const cleanupBrokers: DaemonBroker[] = [];
+const cleanupBrokers: { broker: DaemonBroker; run: Promise<void> }[] = [];
 
 afterEach(async () => {
 	while (cleanupClients.length > 0) cleanupClients.pop()?.close();
 	while (cleanupBrokers.length > 0) {
-		const broker = cleanupBrokers.pop();
-		if (broker) await broker.shutdown().catch(() => {});
+		const tracked = cleanupBrokers.pop();
+		if (!tracked) continue;
+		await tracked.broker.shutdown().catch(() => {});
+		await tracked.run.catch(() => {});
 	}
 	while (cleanupDirs.length > 0) {
 		const dir = cleanupDirs.pop();
@@ -120,8 +123,8 @@ async function startInProcessBroker(
 	await fs.mkdir(runtimeDir, { recursive: true, mode: 0o700 });
 	await fs.writeFile(daemonBrokerTokenPath(runtimeDir), token, { encoding: "utf8", mode: 0o600 });
 	const broker = new DaemonBroker(projectDir, runtimeDir, token, 10_000);
-	cleanupBrokers.push(broker);
-	void broker.run();
+	const run = broker.run();
+	cleanupBrokers.push({ broker, run });
 	const client = await createDaemonBrokerClient(projectDir, { runtimeDir });
 	cleanupClients.push(client);
 	return { broker, client };
@@ -242,4 +245,65 @@ describe("daemon termination error resilience", () => {
 			expect(c2?.terminatedBy).toBe("broker-recovery");
 		}
 	}, 20_000);
+	it("keeps a recovered absent-root record uncertain and refuses replacement on an occupied port", async () => {
+		const projectDir = await tempDir("project-recovery-no-pid-");
+		const runtimeDir = await tempDir("runtime-recovery-no-pid-");
+		const occupied = net.createServer();
+		await new Promise<void>(resolve => occupied.listen(0, "127.0.0.1", resolve));
+		const address = occupied.address();
+		if (!address || typeof address === "string") throw new Error("expected an occupied TCP port");
+		const name = "unknown-tree";
+		const daemonDir = managedDaemonDir(runtimeDir, name);
+		await fs.mkdir(daemonDir, { recursive: true });
+		const spec: DaemonSpec = {
+			name,
+			application: process.execPath,
+			args: ["-e", "process.stdin.resume();"],
+			env: {},
+			cwd: projectDir,
+			pty: false,
+			restart: "always",
+			persist: true,
+			detached: false,
+			ready: { port: address.port, timeoutMs: 1_000 },
+		};
+		const snapshot: DaemonSnapshot = {
+			name,
+			id: `seed-id-${name}`,
+			state: "running",
+			createdAt: Date.now() - 5_000,
+			startedAt: Date.now() - 4_000,
+			restartCount: 0,
+			outputBytes: 0,
+			persist: true,
+			detached: false,
+			pid: 2_147_483_647,
+		};
+		await fs.writeFile(managedDaemonMetaPath(daemonDir), JSON.stringify({ daemon: snapshot, spec }), "utf8");
+		processHandleSpy?.mockReturnValue(null);
+
+		const { client } = await startInProcessBroker(projectDir, runtimeDir);
+		const described = await client.request({ op: "describe", name });
+		expect(described.op).toBe("describe");
+		if (described.op !== "describe") throw new Error("unexpected describe result");
+		expect(described.daemon.state).toBe("failed");
+		expect(described.daemon.ownershipUncertain).toBeTrue();
+		expect(described.daemon.restartCount).toBe(0);
+		await expect(client.request({ op: "start", spec })).rejects.toThrow("is in use");
+		await expect(client.request({ op: "restart", name })).rejects.toThrow("is in use");
+		const stillUncertain = await client.request({ op: "describe", name });
+		expect(stillUncertain.op).toBe("describe");
+		if (stillUncertain.op !== "describe") throw new Error("unexpected describe result");
+		expect(stillUncertain.daemon.state).toBe("failed");
+		expect(stillUncertain.daemon.ownershipUncertain).toBeTrue();
+		expect(stillUncertain.daemon.restartCount).toBe(0);
+		await new Promise<void>((resolve, reject) => occupied.close(error => (error ? reject(error) : resolve())));
+		const replacement = await client.request({ op: "start", spec });
+		expect(replacement.op).toBe("start");
+		if (replacement.op !== "start") throw new Error("unexpected start result");
+		expect(replacement.daemon.state).toBe("starting");
+		expect(replacement.daemon.ownershipUncertain).toBeUndefined();
+		expect(replacement.daemon.restartCount).toBe(0);
+	});
+
 });

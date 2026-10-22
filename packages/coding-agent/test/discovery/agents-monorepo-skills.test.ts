@@ -1,21 +1,13 @@
 /**
- * A monorepo's .agent/.agents directories DO NOT configure the agent.
- *
- * This suite used to assert the opposite: the agents provider walked up from a
- * package cwd to the repository root, collecting `.agents/skills`,
- * `.agents/rules`, `.agents/prompts`, `.agents/commands` and
- * `.agents/AGENTS.md` at PROJECT level, so a cloned repository injected skills
- * and instructions the operator never wrote and never read. That walk-up is
- * gone (the operator rule: nothing loads from the repository except
- * AGENTS.md/CLAUDE.md context files), and every case here is the inversion of
- * one that asserted it.
+ * The `agents` provider reads user-level skills, rules, prompts, and commands.
+ * It does not discover those capabilities from a repository. Project skills have
+ * a separate provider and trust gate; this suite pins that `.agents` does not
+ * become a second, untrusted route into the user-scoped `agents` provider.
  *
  * The cases drive the REAL provider registry through `loadCapability` with an
  * explicit provider allowlist, against a monorepo fixture (a repo root with a
- * `.git` marker and one package under `packages/`). "Did the repository reach
- * the session" is answered by the same path a session uses, and re-injecting
- * the project walk-up turns each first case red. The user level
- * (`~/.agent`, `~/.agents`) is the positive control: it must keep loading.
+ * `.git` marker and one package under `packages/`). The user level
+ * (`~/.agent`, `~/.agents`) remains the positive control: it must keep loading.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
@@ -31,9 +23,9 @@ import type { SourceMeta } from "@veyyon/coding-agent/discovery/capability/types
 import "@veyyon/coding-agent/discovery";
 import { removeSyncWithRetries } from "@veyyon/utils";
 
-/** The provider whose project walk-up was removed. */
+/** The provider whose capabilities are scoped to user directories only. */
 const AGENTS = "agents";
-/** The provider that owns the one repository contribution still allowed. */
+/** The provider for standalone AGENTS.md / CLAUDE.md context files. */
 const AGENTS_MD = "agents-md";
 
 function writeSkill(dir: string, name: string, description: string): void {
@@ -54,7 +46,7 @@ function projectPaths(items: Array<{ _source?: SourceMeta }>): string[] {
 	return items.flatMap(item => (item._source?.level === "project" ? [item._source.path] : []));
 }
 
-describe("a monorepo's .agents directories are invisible to the agents provider", () => {
+describe("the agents provider keeps its capabilities at user scope", () => {
 	let tempDir: string;
 	let userHome: string;
 	let repoRoot: string;
@@ -94,7 +86,7 @@ describe("a monorepo's .agents directories are invisible to the agents provider"
 	// =========================================================================
 
 	describe("skills", () => {
-		test("finds no skill in the repo root's .agents/skills from a sub-project cwd", async () => {
+		test("the agents provider ignores repo-root .agents/skills from a sub-project cwd", async () => {
 			writeSkill(path.join(repoRoot, ".agents", "skills"), "root-skill", "From repo root");
 
 			const result = await loadFromAgents<DiscoveredSkill>("skills");
@@ -103,7 +95,7 @@ describe("a monorepo's .agents directories are invisible to the agents provider"
 			expect(projectPaths(result.all)).toEqual([]);
 		});
 
-		test("finds no skill in the sub-project's own .agents/skills either", async () => {
+		test("the agents provider ignores sub-project-local .agents/skills", async () => {
 			writeSkill(path.join(subProject, ".agents", "skills"), "local-skill", "From sub-project");
 
 			const result = await loadFromAgents<DiscoveredSkill>("skills");

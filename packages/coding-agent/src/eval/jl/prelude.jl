@@ -503,8 +503,11 @@ const tool = VeyyonToolProxy()
 # Agent calls
 # -------------------------------------------------------------------------
 
-function completion(prompt::String; model="default", system=nothing, schema=nothing, kwargs...)
-    args_dict = Dict{String, Any}("prompt" => prompt, "model" => model)
+function completion(prompt::String; model=nothing, system=nothing, schema=nothing, kwargs...)
+    args_dict = Dict{String, Any}("prompt" => prompt)
+    if model !== nothing
+        args_dict["model"] = model
+    end
     if system !== nothing
         args_dict["system"] = system
     end

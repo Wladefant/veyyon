@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import { Agent, type AgentTool, AppendOnlyContextManager, type StreamFn } from "@veyyon/agent-core";
+import { Agent, type AgentTool, type AnyAgentTool, AppendOnlyContextManager, type StreamFn } from "@veyyon/agent-core";
 import type { Model, ServiceTierByFamily } from "@veyyon/ai";
 import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import type { Dialect } from "@veyyon/ai/dialect";
@@ -34,9 +34,10 @@ import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode
 import { resolveDialect } from "./config/dialect-format";
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
 import { ModelRegistry } from "./config/model-registry";
+import { formatModelString } from "./config/model-resolver";
 import { openaiWebsocketPreference } from "./config/openai-websockets-mode";
 import type { PromptTemplate } from "./config/prompt-templates";
-import { buildServiceTierByFamily } from "./config/service-tier";
+import { applyProviderGlobalsFromSettings } from "./config/provider-globals";
 import { Settings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
 import { createBridgeEditToolProvider } from "./cursor-bridge-tools";
@@ -44,6 +45,7 @@ import { initializeWithSettings } from "./discovery";
 import { type Rule, setActiveRules } from "./discovery/capability/rule";
 import { bucketRules, type RuleBuckets } from "./discovery/capability/rule-buckets";
 import { TtsrManager } from "./export/ttsr";
+import { setActiveSkills } from "./extensibility/active-skills";
 import type { LoadedCustomCommand } from "./extensibility/custom-commands/types";
 import type { CustomTool, CustomToolContext } from "./extensibility/custom-tools/types";
 import {
@@ -55,7 +57,7 @@ import {
 	type RegisteredTool,
 	wrapRegisteredTools,
 } from "./extensibility/extensions";
-import { type Skill, setActiveSkills } from "./extensibility/skills";
+import type { Skill } from "./extensibility/skills";
 import type { FileSlashCommand } from "./extensibility/slash-commands";
 import { LocalProtocolHandler, type LocalProtocolOptions } from "./internal-urls";
 import { describeLegacyPromptFile, findLegacyPromptFiles } from "./legacy-system-prompt-files";
@@ -72,7 +74,7 @@ import { discoverAuthStorage } from "./session/auth-broker-config";
 import { type SessionCpuExecHooks, sessionCpuExecHooks } from "./session/cpu-limit";
 import { LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "./session/messages";
 import { createSettingsAwareStreamFn } from "./session/settings-stream-fn";
-import { StartupModelSelection } from "./session/startup-model";
+import { StartupModelSelection, startingServiceTierByFamily } from "./session/startup-model";
 import { orderSessionDisposal } from "./session/top-level-sessions";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
@@ -110,13 +112,6 @@ import {
 import { wrapToolWithMetaNotice } from "./tools/core/output-meta";
 import { createRepairToolCallArgumentsHook } from "./tools/core/repair/agent-hook";
 import { renderSearchToolBm25Description } from "./tools/search/search-tool-bm25";
-import { isImageProviderPreference, setPreferredImageProvider } from "./tools/web/image-gen";
-import {
-	isSearchProviderId,
-	isSearchProviderPreference,
-	setExcludedSearchProviders,
-	setPreferredSearchProvider,
-} from "./tools/web/search";
 import type { ActiveRepoContext } from "./utils/active-repo-context";
 import { EventBus } from "./utils/event-bus";
 import type { WorkspaceTree } from "./workspace-tree";
@@ -204,6 +199,7 @@ import {
 	createCustomToolsExtension,
 	loadSessionCustomTools,
 	registerSdkCustomTools,
+	type SessionCustomTools,
 } from "./session/factory-tools";
 import { deferAtRestReading } from "./session/non-message-tokens";
 import {
@@ -261,20 +257,6 @@ function registerSshCleanup(): void {
 	if (sshCleanupRegistered) return;
 	sshCleanupRegistered = true;
 	postmortem.register("ssh-cleanup", cleanupSshResources);
-}
-
-/** Apply the web search, excluded web search and image provider preferences in `settings`. */
-function applyProviderPreferences(settings: Settings): void {
-	const excludedWebSearchProviders = settings.get("providers.webSearchExclude");
-	if (Array.isArray(excludedWebSearchProviders)) {
-		setExcludedSearchProviders(excludedWebSearchProviders.filter(isSearchProviderId));
-	}
-	const webSearchProvider = settings.get("providers.webSearch");
-	if (typeof webSearchProvider === "string" && isSearchProviderPreference(webSearchProvider)) {
-		setPreferredSearchProvider(webSearchProvider);
-	}
-	const imageProvider = settings.get("providers.image");
-	if (isImageProviderPreference(imageProvider)) setPreferredImageProvider(imageProvider);
 }
 
 /**
@@ -390,6 +372,7 @@ class SessionStartup {
 	#customCommands!: LoadedCustomCommand[];
 	#extensionRunner!: ExtensionRunner;
 	#toolContextStore!: ToolContextStore;
+	#setCustomToolUIContext!: SessionCustomTools["setUIContext"];
 	#registeredTools!: RegisteredTool[];
 	#sdkTools!: RegisteredTool[];
 	#toolRegistry!: Map<string, Tool>;
@@ -492,6 +475,7 @@ class SessionStartup {
 			extensionsResult: this.#extensionsResult,
 			setToolUIContext: (uiContext: ExtensionUIContext, hasUI: boolean) => {
 				this.#toolContextStore.setUIContext(uiContext, hasUI);
+				this.#setCustomToolUIContext(uiContext, hasUI);
 			},
 			setToolNotifier: this.#tools.setNotifier,
 			mcpManager: this.#mcp.manager,
@@ -604,6 +588,7 @@ class SessionStartup {
 		if (this.#agentRegistry.get(id)?.status === "parked") return;
 		if (AgentLifecycleManager.global().isParking(id)) return;
 		this.#agentRegistry.unregister(id);
+		if (this.#isSpawned) this.#scopedAsyncJobManager?.markOwnerDisposed(id);
 	}
 
 	/**
@@ -632,7 +617,7 @@ class SessionStartup {
 		}
 		this.#projectInputs = discoverProjectInputs(cwd, agentDir, settings, options);
 		this.#commandInputs = discoverCommandInputs(cwd, agentDir, options);
-		applyProviderPreferences(settings);
+		applyProviderGlobalsFromSettings(settings);
 		// The operator-visible channel for non-fatal startup and runtime problems. It exists before the
 		// session manager, so load-time recovery notices use the same surface as secrets and filesystem
 		// faults. The default is stderr rather than dropping warnings.
@@ -729,7 +714,7 @@ class SessionStartup {
 		});
 		this.#argotGate = buildArgotGate(
 			this.#argotEnabled,
-			settings.get("argot.encode.models") ?? [],
+			settings.get("argot.encode.models"),
 			settings.get("argot.encode.disableAboveTokens"),
 		);
 	}
@@ -973,6 +958,7 @@ class SessionStartup {
 		// A spawned agent receives the path list, not the loaded tools, and binds them under its own
 		// `CustomToolAPI` without the filesystem scan.
 		toolSession.customToolPaths = sessionCustomTools.paths;
+		this.#setCustomToolUIContext = sessionCustomTools.setUIContext;
 		await this.#loadExtensions(mcp.tools.concat(sessionCustomTools.tools));
 	}
 
@@ -1145,10 +1131,10 @@ class SessionStartup {
 	async #reloadSshTool(): Promise<AgentTool | null> {
 		if (!this.#requestedToolNames.has(TOOL.ssh)) return null;
 		const { loadSshTool } = await import("./tools/shell/ssh");
-		const sshTool = (await loadSshTool({
+		const sshTool: AnyAgentTool | null = await loadSshTool({
 			...this.#tools.toolSession,
 			cwd: this.#sessionManager.getCwd(),
-		})) as unknown as AgentTool | null;
+		});
 		if (!sshTool) return null;
 		return new ExtensionToolWrapper(
 			wrapToolWithMetaNotice(sshTool),
@@ -1254,7 +1240,7 @@ class SessionStartup {
 			...this.#promptInputs.promptOptions(),
 			// The tree is scanned when the project is discovered, so this flag hides a scanned tree but
 			// cannot scan one; `gate-registry.ts` records that placement.
-			includeWorkspaceTree: settings.get("includeWorkspaceTree") ?? false,
+			includeWorkspaceTree: settings.get("includeWorkspaceTree"),
 			// A spawned agent gets no personality whatever the setting: a fact about this caller, not
 			// about the configuration.
 			personality: this.#identity.kind === "sub" ? "none" : gateInputs.personality,
@@ -1281,21 +1267,29 @@ class SessionStartup {
 	}
 
 	/**
-	 * The shorthand sections a rebuild teaches. Teaching follows the encode policy: the active model is
-	 * on the allowlist and the context is under the cutoff. While encoding is on, the prompt carries the
-	 * notation preamble, which also instructs the model to load its project through `argot_load`; the
-	 * handle table joins once a project is loaded. Handles already in history expand at the seams
-	 * whatever this returns.
+	 * The shorthand sections a rebuild teaches. While {@link #argotTeaches} holds for the active model,
+	 * the prompt carries the notation preamble, which also instructs the model to load its project
+	 * through `argot_load`; the handle table joins once a project is loaded. Handles already in history
+	 * expand at the seams whatever this returns.
 	 */
 	#argotPromptSections(): { argotPreamble?: string; argotHandles?: string } {
 		const argot = this.#argot;
-		const model = this.#tools.activeModelString();
-		if (!this.#argotEnabled || !argot || model === undefined) return {};
-		if (!shouldEncode(this.#argotGate, { model, contextTokens: this.#argotContextTokens })) return {};
+		if (!argot || !this.#argotTeaches(this.#tools.activeModelString())) return {};
 		return {
 			argotPreamble: renderPreamble({ tools: true }),
 			argotHandles: argot.loaded ? argot.promptFragment() : undefined,
 		};
+	}
+
+	/**
+	 * Whether a prompt built for `model` teaches the shorthand: the feature is on, the model is on the
+	 * encode allowlist and the context is under the cutoff. The prompt build, the model-switch rebuild
+	 * check and the launch arm's taught-handles probe all ask this one predicate, so the three cannot
+	 * disagree about which models are taught.
+	 */
+	#argotTeaches(model: string | undefined): boolean {
+		if (!this.#argotEnabled || model === undefined) return false;
+		return shouldEncode(this.#argotGate, { model, contextTokens: this.#argotContextTokens });
 	}
 
 	/**
@@ -1326,7 +1320,7 @@ class SessionStartup {
 		this.#requestedToolNames = new Set(requestedToolNames);
 		this.#ttsrManager.reportUnknownToolScopes(toolRegistry.keys());
 		this.#discoveryDefaultServers = new Set(
-			(settings.get("mcp.discoveryDefaultServers") ?? []).map(serverName => serverName.trim()).filter(Boolean),
+			settings.get("mcp.discoveryDefaultServers").flatMap(serverName => serverName.trim() || []),
 		);
 		const registered = this.#registeredTools.map(tool => tool.definition);
 		this.#initialTools = resolveInitialActiveToolNames({
@@ -1402,7 +1396,11 @@ class SessionStartup {
 		const { model, effectiveThinkingLevel } = this.#modelSelection;
 		const toolRegistry = this.#toolRegistry;
 		this.#preferWebsockets = openaiWebsocketPreference(settings.get("providers.openaiWebsockets"));
-		this.#serviceTierByFamily = this.#initialServiceTierByFamily();
+		this.#serviceTierByFamily = startingServiceTierByFamily(
+			this.#hasServiceTierEntry,
+			this.#restoredContext,
+			settings,
+		);
 		this.#sideStreamFn = wrapStreamFnWithProviderConcurrency(settings, createSettingsAwareStreamFn(settings));
 		const agent: Agent = new Agent({
 			initialState: {
@@ -1420,16 +1418,15 @@ class SessionStartup {
 			// the original repository's git remote.
 			cwdResolver: () => sessionManager.getCwd(),
 			convertToLlm: hooks.convertToLlm,
-			onPayload: hooks.onPayload,
 			onResponse: hooks.onResponse,
 			sessionId: this.#providerSessionId,
 			promptCacheKey: this.#providerPromptCache.key,
 			deadline: options.deadline,
 			transformContext: hooks.transformContext,
 			transformProviderContext: hooks.transformProviderContext,
-			steeringMode: settings.get("steeringMode") ?? "one-at-a-time",
-			followUpMode: settings.get("followUpMode") ?? "one-at-a-time",
-			interruptMode: settings.get("interruptMode") ?? "immediate",
+			steeringMode: settings.get("steeringMode"),
+			followUpMode: settings.get("followUpMode"),
+			interruptMode: settings.get("interruptMode"),
 			thinkingBudgets: settings.getGroup("thinkingBudgets"),
 			// Unset is exactly UNSET_NUMBER, read through its one owner, so a configured negative presence
 			// or repetition penalty (both providers accept them) reaches the request.
@@ -1440,11 +1437,16 @@ class SessionStartup {
 			presencePenalty: optionalNumber(settings.get("presencePenalty")),
 			repetitionPenalty: optionalNumber(settings.get("repetitionPenalty")),
 			hideThinkingSummary: settings.get("omitThinking"),
-			kimiApiFormat: settings.get("providers.kimiApiFormat") ?? "anthropic",
+			kimiApiFormat: settings.get("providers.kimiApiFormat"),
 			preferWebsockets: this.#preferWebsockets,
 			getToolContext: toolCall => this.#toolContextStore.getContext(toolCall),
 			getApiKey: requestModel => this.#modelRegistry.resolver(requestModel, agent.sessionId),
-			streamFn: createLeasedStreamFn(hooks.requestLeases, this.#sideStreamFn, options.onFirstChatDispatch),
+			streamFn: createLeasedStreamFn(
+				hooks.requestLeases,
+				hooks.payloadHook,
+				this.#sideStreamFn,
+				options.onFirstChatDispatch,
+			),
 			cursorExecHandlers: this.#cursorExecHandlers,
 			transformToolCallArguments: createToolArgumentTransform({
 				settings,
@@ -1487,17 +1489,6 @@ class SessionStartup {
 		return agent;
 	}
 
-	/** The service tier a resumed session recorded, else the settings tiers. */
-	#initialServiceTierByFamily(): ServiceTierByFamily {
-		if (this.#hasServiceTierEntry) return this.#restoredContext.serviceTier ?? {};
-		const settings = this.#settings;
-		return buildServiceTierByFamily(
-			settings.get("tier.openai"),
-			settings.get("tier.anthropic"),
-			settings.get("tier.google"),
-		);
-	}
-
 	#createSession(
 		agent: Agent,
 		hooks: SessionRequestHooks,
@@ -1522,7 +1513,7 @@ class SessionStartup {
 			serviceTierByFamily: this.#serviceTierByFamily,
 			sessionManager: this.#sessionManager,
 			settings,
-			modelPatternFallbackRole: options.modelPatternFallbackRole,
+			modelPatternFallbackKey: options.modelPatternFallbackKey ?? this.#modelSelection.modelPatternFallbackKey,
 			autoApprove: options.autoApprove,
 			bypassAllApprovals: options.bypassAllApprovals,
 			parentApprovalBypassed: options.parentApprovalBypassed,
@@ -1551,12 +1542,13 @@ class SessionStartup {
 			builtInToolNames: this.#builtInRegistryToolNames,
 			transformContext: hooks.transformContext,
 			transformProviderContext: hooks.transformProviderContext,
-			onPayload: hooks.onPayload,
+			payloadHook: hooks.payloadHook,
 			onResponse: hooks.onResponse,
 			sideStreamFn: this.#sideStreamFn,
 			preferWebsockets: this.#preferWebsockets,
 			convertToLlm: hooks.convertToLlm,
 			rebuildSystemPrompt: (toolNames, tools) => this.#rebuildSystemPrompt(toolNames, tools),
+			argotTeaches: model => this.#argotTeaches(formatModelString(model)),
 			reloadProjectInputs: () => this.#promptInputs.reload(),
 			reloadSshTool: () => this.#reloadSshTool(),
 			requestedToolNames: this.#requestedToolNames,
@@ -1605,6 +1597,7 @@ class SessionStartup {
 			cwd: this.#cwd,
 			sessionManager: this.#sessionManager,
 			refreshPrompt: () => session.refreshBaseSystemPrompt("argot-arm"),
+			teaches: () => this.#argotTeaches(this.#tools.activeModelString()),
 		});
 		if (!this.#hasExistingSession) {
 			recordNewSessionStart({

@@ -117,6 +117,12 @@ export interface AuthGatewayStreamControl {
 	onCancel?: (reason?: unknown) => void;
 }
 
+/** Where a stream encoder's SSE frames go. `cancelled` silences every frame but the terminal one. */
+export interface FrameSink {
+	readonly cancelled: boolean;
+	enqueue(frame: string): void;
+}
+
 export interface AuthGatewayFormatModule {
 	parseRequest(body: unknown, headers?: Headers): AuthGatewayParsedRequest;
 	encodeResponse(message: AssistantMessage, requestedModelId: string): Record<string, unknown>;
@@ -137,8 +143,10 @@ export interface AuthGatewayFormatModule {
 export interface AuthGatewayServerOptions {
 	/** Listen address. Default `127.0.0.1:4000`. */
 	bind?: string;
-	/** Accept any of these bearer tokens. Empty allows unauthenticated calls. */
+	/** Static bearer tokens accepted by the gateway. Empty values never authorize. */
 	bearerTokens: string[];
+	/** Optional live token source. When present, its current values replace the static list per request. */
+	resolveBearerTokens?: () => readonly string[] | Promise<readonly string[]>;
 	/** Version surfaced on `/healthz`. */
 	version?: string;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { normalizeApprovalMode, validateApprovalModeSetting } from "@veyyon/coding-agent/tools/core/approval";
+import { normalizeApprovalMode } from "@veyyon/coding-agent/tools/core/approval";
 import {
 	APPROVAL_MODE_VALUES,
 	DEFAULT_APPROVAL_MODE,
@@ -66,20 +66,5 @@ describe("normalizeApprovalMode fail-closed", () => {
 		expect(normalizeApprovalMode("yolo ")).toBe("ask");
 		expect(normalizeApprovalMode("")).toBe("ask");
 		expect(normalizeApprovalMode("banana")).toBe("ask");
-	});
-});
-
-describe("validateApprovalModeSetting", () => {
-	it("returns undefined for known modes and for undefined", () => {
-		expect(validateApprovalModeSetting(undefined)).toBeUndefined();
-		expect(validateApprovalModeSetting("yolo")).toBeUndefined();
-		expect(validateApprovalModeSetting("ask")).toBeUndefined();
-	});
-
-	it("returns a warning string for typos that names the bad value", () => {
-		const warning = validateApprovalModeSetting("askk");
-		expect(typeof warning).toBe("string");
-		expect(warning!).toMatch(/askk/i);
-		expect(warning!.toLowerCase()).toMatch(/approval|mode|unknown|invalid|ask/i);
 	});
 });

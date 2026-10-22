@@ -67,7 +67,7 @@ test("interactive discovery starts after session initialization and its model ca
 		await writeFile(
 			path.join(agent, "config.yml"),
 			JSON.stringify({
-				modelRoles: { default: "startup-study/gpt-4o" },
+				defaultModel: "startup-study/gpt-4o",
 				startup: { quiet: true, showSplash: false, checkUpdate: false, autoUpdate: false },
 			}),
 		);

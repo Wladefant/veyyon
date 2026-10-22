@@ -129,22 +129,23 @@
       <div class="panel">
         <div class="copy">
           <ul>
-            <li><b>Interactive</b>: <span class="mono">/model</span>, <span class="mono">--model</span>; stored as <span class="mono">modelRoles.default</span>.</li>
-            <li><b>Roles</b>: <span class="mono">smol</span>, <span class="mono">slow</span>, <span class="mono">plan</span>, <span class="mono">task</span>, <span class="mono">advisor</span>, … via <span class="mono">modelRoles</span>.</li>
+            <li><b>Interactive</b>: <span class="mono">/model</span>, <span class="mono">--model</span>; stored as <span class="mono">defaultModel</span>.</li>
+            <li><b>Helpers</b>: <span class="mono">advisor</span>, <span class="mono">plan</span>, <span class="mono">vision</span>, <span class="mono">commit</span>, <span class="mono">title</span>, … via <span class="mono">agent.helpers</span>.</li>
             <li><b>Overrides</b>: <span class="mono">agent.model</span>, <span class="mono">compaction.model</span>.</li>
-            <li><b>Cycle</b>: <span class="mono">cycleOrder</span> (default <span class="mono">smol</span>, <span class="mono">slow</span>).</li>
+            <li><b>Cycle</b>: <span class="mono">Ctrl+P</span> cycles the scoped models (<span class="mono">--models</span>).</li>
           </ul>
         </div>
         <pre class="demo" aria-hidden="true"><span class="c"># ~/.veyyon/profiles/default/agent/config.yml</span>
-<span class="k">modelRoles</span>:
-  <span class="k">default</span>: <span class="s">openai/gpt-5</span>
-  <span class="k">smol</span>: <span class="s">openai/gpt-4.1-mini</span>
+<span class="k">defaultModel</span>: <span class="s">openai/gpt-5</span>
 <span class="k">agent</span>:
   <span class="k">model</span>: <span class="s">deepseek/deepseek-chat</span>
+  <span class="k">helpers</span>:
+    <span class="k">title</span>:
+      <span class="k">model</span>: <span class="s">openai/gpt-4.1-mini</span>
 <span class="k">compaction</span>:
   <span class="k">model</span>: <span class="s">openai/gpt-5-mini</span></pre>
       </div>
-      <a class="section-link" href="./models.html">Model selection, roles, and compaction</a>
+      <a class="section-link" href="./models.html">Model selection, helpers, and compaction</a>
     </div>
   </section>
 

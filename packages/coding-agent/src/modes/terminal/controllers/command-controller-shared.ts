@@ -6,7 +6,7 @@
 import { Markdown } from "@veyyon/tui";
 import type { SourceMeta } from "../../../discovery/capability/types";
 import { getMarkdownTheme } from "../../../theme/markdown-theme";
-import { theme } from "../../../theme/theme";
+import { theme } from "../../../theme/theme-binding";
 import { shortenPath } from "../../../tools/core/render-utils";
 import { COMPOSER_INSET_COLS } from "../components/composer/composer-chrome";
 import { mountTranscriptBlock, transcriptBlockText } from "../components/transcript/transcript-block-chrome";

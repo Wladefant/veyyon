@@ -84,18 +84,12 @@ export function transaction<T>(db: Database, fn: () => T): T {
 		return result;
 	} catch (error) {
 		state.depth = 0;
-		try {
-			db.exec("ROLLBACK");
-		} catch {
-			// Preserve the original error; rollback can fail if SQLite already closed the transaction.
-		}
+		rollbackQuietly(db);
 		throw error;
 	} finally {
 		delete txDb[TX_STATE];
 	}
 }
-
-export const deferredTransaction = transaction;
 
 export async function transactionAsync<T>(db: Database, fn: () => Promise<T>): Promise<T> {
 	const txDb = db as TxDatabase;
@@ -119,14 +113,19 @@ export async function transactionAsync<T>(db: Database, fn: () => Promise<T>): P
 		return result;
 	} catch (error) {
 		state.depth = 0;
-		try {
-			db.exec("ROLLBACK");
-		} catch {
-			// Preserve the original error; rollback can fail if SQLite already closed the transaction.
-		}
+		rollbackQuietly(db);
 		throw error;
 	} finally {
 		delete txDb[TX_STATE];
+	}
+}
+
+/** Roll back, keeping the caller's error: a rollback fails when SQLite already closed the transaction. */
+export function rollbackQuietly(db: Database): void {
+	try {
+		db.exec("ROLLBACK");
+	} catch {
+		// The caller rethrows the error that ended the transaction.
 	}
 }
 

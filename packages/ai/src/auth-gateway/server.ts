@@ -20,7 +20,6 @@
 
 import { Effort } from "@veyyon/catalog/effort";
 import * as logger from "@veyyon/utils/logger";
-import { errorMessage } from "@veyyon/utils/type-guards";
 import type { AuthStorage } from "../auth-storage";
 import { classifyGatewayError } from "../error/gateway";
 import * as anthropicMessages from "../providers/anthropic-messages-server";
@@ -43,7 +42,7 @@ import {
 	gatewayResponseHeaders,
 	isAuthorized,
 	json,
-	resolvePeer,
+	redactResponse,
 	withCors,
 } from "./http";
 import type {
@@ -258,7 +257,7 @@ async function handleFormatEndpoint(
 		body = await req.json();
 	} catch (error) {
 		if (controller.signal.aborted) return clientClosedResponse(route);
-		return route.module.formatError(400, "invalid_request_error", `Invalid JSON body: ${String(error)}`);
+		return route.module.formatError(400, "invalid_request_error", "Invalid JSON body");
 	}
 	if (controller.signal.aborted) return clientClosedResponse(route);
 
@@ -289,8 +288,7 @@ async function handleFormatEndpoint(
 		parsed = route.module.parseRequest(body, req.headers);
 	} catch (error) {
 		if (controller.signal.aborted) return clientClosedResponse(route);
-		const message = errorMessage(error);
-		return route.module.formatError(400, "invalid_request_error", message);
+		return route.module.formatError(400, "invalid_request_error", "Invalid request");
 	}
 	// Merge gateway-captured passthrough headers under the parser's own
 	// captures. Parsers that set `options.headers` themselves win (they may
@@ -316,6 +314,7 @@ async function handleFormatEndpoint(
 	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
 	if (controller.signal.aborted) return clientClosedResponse(route);
 	if (typeof apiKey !== "string") return route.module.formatError(apiKey.status, apiKey.type, apiKey.message);
+	bootOpts.rememberCredential?.(apiKey);
 
 	const streamOpts = buildStreamOptions(parsed, model.api, controller.signal);
 	streamOpts.fetch = bootOpts.fetch;
@@ -327,6 +326,7 @@ async function handleFormatEndpoint(
 		controller.signal,
 		route.label,
 		peer,
+		bootOpts.rememberCredential,
 	);
 
 	logger.info("auth-gateway request", {
@@ -432,7 +432,7 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 		body = await req.json();
 	} catch (error) {
 		if (controller.signal.aborted) return aborted();
-		return piNative.formatError(400, "invalid_request_error", `Invalid JSON body: ${String(error)}`);
+		return piNative.formatError(400, "invalid_request_error", "Invalid JSON body");
 	}
 	if (controller.signal.aborted) return aborted();
 
@@ -441,8 +441,7 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 		parsed = piNative.parseRequest(body, req.headers);
 	} catch (error) {
 		if (controller.signal.aborted) return aborted();
-		const message = errorMessage(error);
-		return piNative.formatError(400, "invalid_request_error", message);
+		return piNative.formatError(400, "invalid_request_error", "Invalid request");
 	}
 
 	const model = bootOpts.resolveModel(parsed.modelId);
@@ -460,6 +459,7 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
 	if (controller.signal.aborted) return aborted();
 	if (typeof apiKey !== "string") return piNative.formatError(apiKey.status, apiKey.type, apiKey.message);
+	bootOpts.rememberCredential?.(apiKey);
 
 	// Build the SimpleStreamOptions actually handed to `streamSimple`. We
 	// trust the client's options (already allow-listed by `parseRequest`) and
@@ -475,6 +475,7 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 		controller.signal,
 		"pi-native",
 		peer,
+		bootOpts.rememberCredential,
 	);
 	if (model.api === "openai-codex-responses") {
 		delete streamOpts.temperature;
@@ -635,75 +636,95 @@ function handleModelsList(opts: AuthGatewayBootOptions): Response {
 
 export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServerHandle {
 	const bind = parseBind(opts.bind ?? DEFAULT_AUTH_GATEWAY_BIND);
-	const tokens = new Set<string>(opts.bearerTokens);
+	const tokens = async (): Promise<ReadonlySet<string>> => {
+		try {
+			return new Set(opts.resolveBearerTokens ? await opts.resolveBearerTokens() : opts.bearerTokens);
+		} catch {
+			return new Set();
+		}
+	};
 	const version = opts.version;
 
 	const server = Bun.serve({
 		hostname: bind.hostname,
 		port: bind.port,
-		fetch: async (req): Promise<Response> => {
+		fetch: async (req): Promise<Response> => logger.withLogRedaction(
+			() => '{"message":"auth-gateway provider activity; private diagnostics withheld"}\n',
+			async () => {
+			const secrets: string[] = [];
+			const collect = (value: unknown): void => {
+				if (typeof value === "string" && value.length > 0) secrets.push(value, JSON.stringify(value).slice(1, -1));
+				else if (value && typeof value === "object") {
+					for (const [key, child] of Object.entries(value)) {
+						if (typeof child === "object" || /key|access|refresh|token|secret|password/i.test(key)) collect(child);
+					}
+				}
+			};
+			const requestOpts: AuthGatewayBootOptions = {
+				...opts,
+				rememberCredential: credential => {
+					collect(credential);
+					try { collect(JSON.parse(credential)); } catch { /* Raw bearer, not a structured OAuth credential. */ }
+				},
+			};
 			const url = new URL(req.url);
 			const pathname = url.pathname;
-			const peer = resolvePeer(req);
-			// CORS preflight is always answered without auth — browsers send
-			// preflights pre-authentication and a 401 here breaks the actual
-			// request before the bearer is ever attached.
+			const peer = "authenticated-device";
+			// CORS preflight is the only credential-free request.
 			if (req.method === "OPTIONS") {
 				return new Response(null, { status: 204, headers: corsHeaders(req) });
 			}
 			try {
+				if (!isAuthorized(req, await tokens())) {
+					logger.info("auth-gateway request unauthorized", { method: req.method });
+					return withCors(json(401, { error: "unauthorized" }), req);
+				}
+				collect(opts.storage.exportSnapshot?.().credentials);
 				if (req.method === "GET" && pathname === "/healthz") {
 					return withCors(json(200, { ok: true, version }), req);
 				}
-				if (!isAuthorized(req, tokens)) {
-					logger.info("auth-gateway request unauthorized", { method: req.method, path: pathname, peer });
-					return withCors(json(401, { error: "unauthorized" }), req);
-				}
 
+				if (opts.resolveBearerTokens && (pathname === "/v1/usage" || pathname === "/v1/credentials/check")) {
+					return withCors(json(404, { error: "not found" }), req);
+				}
 				// Aggregated usage — backed by AuthStorage's 5-min per-credential cache.
 				// Same shape as the broker's `/v1/usage`, so widget/llm-git speak to either with the
 				// same client struct.
 				if (req.method === "GET" && pathname === "/v1/usage") {
-					return withCors(await handleUsage(opts.storage, req.signal), req);
+					return redactResponse(withCors(await handleUsage(opts.storage, req.signal), req), secrets);
 				}
 
 				// Per-credential auth probe — diagnoses which row in a multi-account
 				// pool is producing 401s. Aggregated `/v1/usage` silently drops failed
 				// credentials, so we need a separate endpoint that captures errors.
 				if (req.method === "GET" && pathname === "/v1/credentials/check") {
-					return withCors(await handleCredentialsCheck(opts.storage, req.signal), req);
+					return redactResponse(withCors(await handleCredentialsCheck(opts.storage, req.signal), req), secrets);
 				}
 
 				// Provider-format dispatch.
 				const formatRoute = FORMAT_ROUTES[pathname];
 				if (formatRoute && req.method === "POST") {
-					return withCors(await handleFormatEndpoint(formatRoute, opts, req, peer), req);
+					return redactResponse(withCors(await handleFormatEndpoint(formatRoute, requestOpts, req, peer), req), secrets);
 				}
 
 				// Pi-native fast path. Same auth + provider plumbing as the
 				// foreign-wire routes, just without the wire-format translation.
 				if (req.method === "POST" && pathname === "/v1/pi/stream") {
-					return withCors(await handlePiNative(opts, req, peer), req);
+					return redactResponse(withCors(await handlePiNative(requestOpts, req, peer), req), secrets);
 				}
 
 				// Model catalog.
 				if (req.method === "GET" && pathname === "/v1/models") {
-					return withCors(handleModelsList(opts), req);
+					return redactResponse(withCors(handleModelsList(opts), req), secrets);
 				}
 
-				// Route-table miss: no format module to defer to, so we emit a
-				// plain JSON 404 rather than guessing at a protocol-specific envelope.
-				return withCors(json(404, { error: `No route: ${req.method} ${pathname}` }), req);
-			} catch (error) {
-				logger.error("auth-gateway handler crashed", {
-					method: req.method,
-					path: pathname,
-					peer,
-					error: String(error),
-				});
+				return withCors(json(404, { error: "not found" }), req);
+			} catch {
+				logger.error("auth-gateway handler crashed", { method: req.method });
 				return withCors(json(500, { error: "internal error" }), req);
 			}
-		},
+			},
+		),
 		// Max-out Bun's idle timeout. Long thinking-budget calls can sit idle
 		// for minutes before the first token arrives; the default kills them.
 		idleTimeout: 255,

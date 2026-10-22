@@ -37,7 +37,7 @@ describe("buildHotkeysMarkdown", () => {
 		expect(lines[0]).toBe("**Navigation**");
 		expect(markdown).toContain("| `Ctrl+Shift+P` | Copy whole prompt |");
 		expect(markdown).toContain("| `Ctrl+Shift+L` | Select model (temporary) |");
-		expect(markdown).toContain("| `Alt+M` | Select model (set roles) |");
+		expect(markdown).toContain("| `Alt+M` | Select model (set default) |");
 		expect(markdown).toContain("| `Ctrl+L` | Reset terminal display |");
 		expect(markdown).toContain("| `Alt+R` | Retry last failed assistant turn |");
 		expect(markdown).toContain("| `Alt+Shift+P` | Toggle plan mode |");
@@ -69,6 +69,6 @@ describe("buildHotkeysMarkdown", () => {
 		});
 
 		expect(markdown).toContain("| `Disabled` | Select model (temporary) |");
-		expect(markdown).toContain("| `Alt+M` | Select model (set roles) |");
+		expect(markdown).toContain("| `Alt+M` | Select model (set default) |");
 	});
 });
