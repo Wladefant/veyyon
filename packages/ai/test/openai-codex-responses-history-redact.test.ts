@@ -94,7 +94,7 @@ describe("convertCodexResponsesMessages history credential redaction", () => {
 				api: model.api,
 				provider: model.provider,
 				model: model.id,
-				content: [],
+				content: [{ type: "text", text: "The assistant is preserving the archived exchange." }],
 				providerPayload: {
 					type: "openaiResponsesHistory",
 					provider: model.provider,
@@ -181,7 +181,7 @@ describe("convertCodexResponsesMessages history credential redaction", () => {
 				api: model.api,
 				provider: model.provider,
 				model: model.id,
-				content: [],
+				content: [{ type: "text", text: "The assistant is preserving prior tool context." }],
 				providerPayload: {
 					type: "openaiResponsesHistory",
 					provider: model.provider,
@@ -260,7 +260,7 @@ describe("convertCodexResponsesMessages history credential redaction", () => {
 				api: model.api,
 				provider: model.provider,
 				model: model.id,
-				content: [],
+				content: [{ type: "text", text: "The assistant is continuing after the snapshot." }],
 				providerPayload: {
 					type: "openaiResponsesHistory",
 					provider: model.provider,
