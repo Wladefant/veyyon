@@ -41,10 +41,16 @@ const MODE_INPUTS: Record<SearchType, string> = {
 	structure: "console.log($A)",
 };
 
+/** Every text block of a result, in order. */
+function textOf(result: AgentToolResult<SearchToolDetails>): string {
+	return result.content.flatMap(block => (block.type === "text" ? [block.text] : [])).join("\n");
+}
+
 /**
  * The unified search facade must route every public discriminator through the
- * production engine while rejecting fields owned by another mode. This suite
- * does not cover each engine's pattern dialect; their engine suites own that.
+ * production engine, running a call that carries a field another mode owns as
+ * if the field were absent and stating the field it ignored. This suite does not
+ * cover each engine's pattern dialect; their engine suites own that.
  */
 describe("one search tool dispatches every workspace search mode", () => {
 	let cwd: string;
@@ -111,11 +117,7 @@ describe("one search tool dispatches every workspace search mode", () => {
 		expect(streamed).toContain("sample.ts");
 	});
 
-	it("rejects a field owned by another mode but ignores an absent optional field", async () => {
-		await expect(
-			tool.execute("search-invalid-field", { type: "text", input: "needle", hidden: true }),
-		).rejects.toThrow('Search type "text" does not accept: hidden');
-
+	it("ignores an absent optional field without a notice", async () => {
 		const result = await tool.execute("search-undefined-field", {
 			type: "text",
 			input: "needle",
@@ -123,6 +125,7 @@ describe("one search tool dispatches every workspace search mode", () => {
 			hidden: undefined,
 		});
 		expect(result.details?.type).toBe("text");
+		expect(textOf(result)).not.toContain("Ignored for");
 	});
 
 	it("rejects empty or whitespace search input", async () => {
@@ -140,25 +143,50 @@ describe("one search tool dispatches every workspace search mode", () => {
 	// The field table listed nine pairs literally, so a field added to `searchSchema` was
 	// checked against one mode and left unchecked against the other two. This sweep reads the
 	// field set out of the schema at run time and drives every (mode, field) pair: a new field
-	// with no sample value, or a mode that starts accepting one it did not, goes red here.
-	it("accepts exactly the fields its mode owns, across every field the schema declares", async () => {
+	// with no sample value, or a mode that starts taking one it did not, goes red here. A field
+	// another mode owns leaves the mode's output byte-identical to the call without it, behind
+	// one paragraph listing the ignored field and the fields the mode takes.
+	it("takes exactly the fields its mode owns and ignores the rest, across every field the schema declares", async () => {
 		const declaredFields = searchSchema.value.props
 			.map(prop => String(prop.key))
 			.filter(name => name !== "type" && name !== "input");
 		expect(declaredFields.slice().sort()).toEqual(Object.keys(FIELD_SAMPLES).sort());
 
 		for (const type of SEARCH_TYPES) {
+			const baseline = textOf(await tool.execute(`search-sweep-${type}`, { type, input: MODE_INPUTS[type] }));
+			expect(baseline).toContain("sample.ts");
 			for (const field of declaredFields) {
 				const params = { type, input: MODE_INPUTS[type], [field]: FIELD_SAMPLES[field] } as SearchToolInput;
-				const call = tool.execute(`search-sweep-${type}-${field}`, params);
+				const result = await tool.execute(`search-sweep-${type}-${field}`, params);
+				expect(result.details?.type).toBe(type);
+				const text = textOf(result);
 				if (ACCEPTED_FIELDS[type].includes(field)) {
-					const result = await call;
-					expect(result.details?.type).toBe(type);
-				} else {
-					await expect(call).rejects.toThrow(`Search type "${type}" does not accept: ${field}`);
+					expect(text).not.toContain("Ignored for");
+					continue;
+				}
+				const cut = text.indexOf("\n\n");
+				expect(cut).toBeGreaterThan(0);
+				expect(text.slice(cut + 2)).toBe(baseline);
+				const notice = text.slice(0, cut);
+				expect(notice).toContain(`Ignored for a ${type} search: ${field}.`);
+				for (const accepted of ACCEPTED_FIELDS[type]) {
+					expect(notice).toContain(accepted);
 				}
 			}
 		}
+	});
+
+	it("lists every ignored field of one call in one notice", async () => {
+		const result = await tool.execute("search-two-foreign", {
+			type: "text",
+			input: "needle",
+			path: "sample.ts",
+			hidden: false,
+			limit: 100,
+		});
+		const text = textOf(result);
+		expect(text.slice(0, text.indexOf("\n\n"))).toContain("Ignored for a text search: hidden, limit.");
+		expect(text.match(/Ignored for/g)).toHaveLength(1);
 	});
 
 	it("resolves filesystem targets per search mode", () => {

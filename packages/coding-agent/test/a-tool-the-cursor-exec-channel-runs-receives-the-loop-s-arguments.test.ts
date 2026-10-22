@@ -6,7 +6,8 @@
  * skipped every step the loop applies first: the `i` intent field was never stripped, `repairToolCallArguments`
  * never ran, the schema was never checked, and `transformToolCallArguments` (codec handles, secret placeholders)
  * never expanded anything. The reported failure was `search` rejecting every MCP-channel call with `Search type
- * "text" does not accept: i`, because the wire schema carried `i` and nothing removed it.
+ * "text" does not accept: i`, because the wire schema carried `i` and nothing removed it. `search` now ignores a
+ * field its type does not take and states it, so the backtest asserts that no such notice names `i`.
  *
  * THE CLASS. Any handler on the bridge that runs a registry tool without `prepareToolCall`. The sweep enumerates
  * `CursorExecHandlers.prototype` at run time, so a new handler turns the suite red until it is given a call here
@@ -275,6 +276,8 @@ describe("the reported failure: search through the MCP channel", () => {
 			const details = result.details;
 			expect(isRecord(details) && isRecord(details.result) ? details.result.matchCount : undefined).toBe(1);
 			expect(startOf(events, "call-search")?.intent).toBe("Finding the greeting");
+			const text = result.content.map(c => (c.type === "text" ? c.text : "")).join("");
+			expect(text).not.toContain("Ignored for");
 		} finally {
 			await removeWithRetries(cwd);
 		}

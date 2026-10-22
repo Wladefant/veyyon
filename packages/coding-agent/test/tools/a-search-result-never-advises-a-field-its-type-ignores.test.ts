@@ -1,11 +1,11 @@
 // WHY: a structure search that hit its match limit told the model "narrow path
-// or increase limit." The unified search tool accepts `limit` for `type: "files"`
-// only, and `rejectCrossTypeFields` throws `Search type "structure" does not
-// accept: limit` for the other two, so a model that followed the advice paid a
-// call, an error result and a retry to learn the field does not exist. The field
-// structure search does accept for a second page is `skip`.
+// or increase limit." The unified search tool takes `limit` for `type: "files"`
+// only and ignores it for the other two, so a model that followed the advice
+// paid a call to page nothing. The field structure search does take for a second
+// page is `skip`.
 //
-// The class this closes: a search result naming a field its own type rejects.
+// The class this closes: a search result naming a field its own type ignores,
+// including the notice that states which fields a call carried for another type.
 // The suite derives the accepted set per type from `TYPE_FIELDS` at run time and
 // the scenario table is keyed by the same record, so a new search type, or a
 // field moved between types, turns it red until someone records a decision.
@@ -197,9 +197,10 @@ describe("a search result never advises a field the tool rejects", () => {
 		});
 	});
 
-	it("names the accepted set when it rejects a cross-type field", async () => {
-		// A model in a real trial sent `limit` to a text search and spent a second
-		// call rediscovering the field by removing it.
+	it("assigns no ignored field in the notice of a call that carries one", async () => {
+		// The notice lists the ignored fields beside the accepted set, so a
+		// wording that put the ignored name next to `=` or `:` would read as advice
+		// to send it again.
 		await withWorkspace(async dir => {
 			for (const [type, fields] of Object.entries(TYPE_FIELDS) as Array<
 				[SearchType, ReadonlySet<keyof SearchToolInput>]
@@ -207,12 +208,16 @@ describe("a search result never advises a field the tool rejects", () => {
 				const foreign = SCHEMA_FIELDS.filter(field => !fields.has(field as keyof SearchToolInput));
 				expect(foreign.length).toBeGreaterThan(0);
 				const text = await searchText(dir, {
-					callId: `reject-${type}`,
-					args: { type, input: "needle", [foreign[0]!]: type === "files" ? "." : 1 },
-				}).catch(error => (error instanceof Error ? error.message : String(error)));
-				expect(text).toContain(`does not accept: ${foreign[0]}`);
-				for (const accepted of fields) {
-					expect(text).toContain(String(accepted));
+					callId: `ignore-${type}`,
+					args: {
+						type,
+						input: type === "files" ? "fx-*.txt" : "needle",
+						...Object.fromEntries(foreign.map(field => [field, 1])),
+					},
+				});
+				expect(text).toContain(`Ignored for a ${type} search: ${foreign.join(", ")}.`);
+				for (const field of assignedFields(text)) {
+					expect(fields.has(field as keyof SearchToolInput)).toBe(true);
 				}
 			}
 		});

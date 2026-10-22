@@ -198,23 +198,20 @@ describe("a locate query can ask for paths instead of match lines", () => {
 		});
 	});
 
-	it("accepts the field for text search and rejects it for every other type", async () => {
+	it("projects text search and is ignored, with a notice, by every other type", async () => {
 		const types = SEARCH_TYPES;
 		expect(types.length).toBeGreaterThan(1);
 		await withWorkspace("paths-types-", async dir => {
 			await seedWorkspace(dir);
 			const tool = toolFor(dir);
-			const accepted: string[] = [];
+			const projected: string[] = [];
 			for (const type of types) {
-				try {
-					await tool.execute("type-sweep", { type, input: NEEDLE, paths: true });
-					accepted.push(type);
-				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					expect(message).toContain("does not accept: paths");
-				}
+				const input = type === "files" ? "**/*" : NEEDLE;
+				const result = await tool.execute("type-sweep", { type, input, paths: true });
+				if (result.details?.type === "text" && result.details.result.pathsOnly === true) projected.push(type);
+				if (type !== "text") expect(textOf(result)).toContain(`Ignored for a ${type} search: paths.`);
 			}
-			expect(accepted).toEqual(["text"]);
+			expect(projected).toEqual(["text"]);
 		});
 	});
 });
