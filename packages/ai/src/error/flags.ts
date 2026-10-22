@@ -320,6 +320,14 @@ export function isFastModeUnsupported(error: unknown): boolean {
 }
 
 /**
+ * The endpoint rejected the `tool_choice` value the request named.
+ * Accessor for {@link Flag.ToolChoiceRejected}.
+ */
+export function isToolChoiceRejected(error: unknown): boolean {
+	return is(classify(error), Flag.ToolChoiceRejected);
+}
+
+/**
  * GitHub Copilot 400 `model_not_supported` routing flap — transient.
  *
  * It had its own copy of the rule, reading `code` and the SDK's nested `error.code` and nothing

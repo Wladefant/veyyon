@@ -2,13 +2,13 @@ import { describe, expect, it } from "bun:test";
 import { generateDiffString } from "@veyyon/coding-agent/edit/diff";
 
 describe("generateDiffString", () => {
-	it("collapses unchanged lines between distant edits", () => {
+	it("collapses unchanged lines between distant edits", async () => {
 		const oldLines = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`);
 		const newLines = [...oldLines];
 		newLines[1] = "line 2 changed";
 		newLines[17] = "line 18 changed";
 
-		const result = generateDiffString(oldLines.join("\n"), newLines.join("\n"), 2);
+		const result = await generateDiffString(oldLines.join("\n"), newLines.join("\n"), 2);
 		const diffLines = result.diff.split("\n");
 
 		// The mid-skip emits no placeholder row; the jump from the leading
@@ -23,7 +23,7 @@ describe("generateDiffString", () => {
 		expect(diffLines).not.toContain(" 12|line 12");
 	});
 
-	it("adds an elided matching bracket line when context stops before the closer", () => {
+	it("adds an elided matching bracket line when context stops before the closer", async () => {
 		const oldLines = [
 			"function outer() {",
 			"  const value = 1;",
@@ -35,7 +35,7 @@ describe("generateDiffString", () => {
 		];
 		const newLines = [...oldLines];
 		newLines[0] = "function renamed() {";
-		const result = generateDiffString(oldLines.join("\n"), newLines.join("\n"), 1, { path: "sample.ts" });
+		const result = await generateDiffString(oldLines.join("\n"), newLines.join("\n"), 1, { path: "sample.ts" });
 		const diffLines = result.diff.split("\n");
 
 		expect(diffLines).toContain("-1|function outer() {");
@@ -48,7 +48,7 @@ describe("generateDiffString", () => {
 		expect(diffLines).not.toContain(" 6|  return value + two + three + four;");
 	});
 
-	it("never emits adjacent gap rows when block context lands between hunks", () => {
+	it("never emits adjacent gap rows when block context lands between hunks", async () => {
 		// Hunk 1 covers alpha's opener, so alpha's closer (line 7) is pulled
 		// down into the gap between the hunks; hunk 2 covers beta's closer, so
 		// beta's opener (line 9) is pulled up into the same gap. Each insertion
@@ -74,7 +74,7 @@ describe("generateDiffString", () => {
 		const newLines = [...oldLines];
 		newLines[1] = "  const a1 = 100;";
 		newLines[13] = "  return b1 + 1;";
-		const result = generateDiffString(oldLines.join("\n"), newLines.join("\n"), 1, { path: "sample.ts" });
+		const result = await generateDiffString(oldLines.join("\n"), newLines.join("\n"), 1, { path: "sample.ts" });
 		const diffLines = result.diff.split("\n");
 
 		// Every elided region around the boundary rows is marked by exactly
@@ -95,7 +95,7 @@ describe("generateDiffString", () => {
 		expect(diffLines[diffLines.length - 1]).not.toBe("");
 	});
 
-	it("drops a gap row stranded between contiguous boundary rows", () => {
+	it("drops a gap row stranded between contiguous boundary rows", async () => {
 		// alpha's closer (7) and beta's opener (8) are contiguous. The first
 		// insertion adds a trailing gap row toward the far hunk; the second
 		// boundary then lands after it, stranding a separator between two
@@ -119,7 +119,7 @@ describe("generateDiffString", () => {
 		const newLines = [...oldLines];
 		newLines[1] = "  const a1 = 100;";
 		newLines[12] = "  return b1 + 1;";
-		const result = generateDiffString(oldLines.join("\n"), newLines.join("\n"), 1, { path: "sample.ts" });
+		const result = await generateDiffString(oldLines.join("\n"), newLines.join("\n"), 1, { path: "sample.ts" });
 		const diffLines = result.diff.split("\n");
 
 		const closer = diffLines.indexOf(" 7|}");
@@ -129,7 +129,7 @@ describe("generateDiffString", () => {
 		expect(diffLines).not.toContain("...");
 	});
 
-	it("emits bracket context under pre-edit numbers when edits shift line offsets", () => {
+	it("emits bracket context under pre-edit numbers when edits shift line offsets", async () => {
 		// Two change runs around an unchanged line, net +2 lines before the
 		// closing brace. The closer is discovered via the NEW file's block
 		// boundaries, so it must be translated back to its pre-edit number
@@ -154,7 +154,7 @@ describe("generateDiffString", () => {
 			"  return a + keep + b;",
 			"}",
 		];
-		const result = generateDiffString(oldLines.join("\n"), newLines.join("\n"), 1, { path: "sample.ts" });
+		const result = await generateDiffString(oldLines.join("\n"), newLines.join("\n"), 1, { path: "sample.ts" });
 		const diffLines = result.diff.split("\n");
 
 		expect(diffLines.filter(line => line.endsWith("|}"))).toEqual([" 6|}"]);

@@ -482,6 +482,12 @@ export class Editor implements Component, Focusable, MouseRoutable {
 	#autocompleteRequestId: number = 0;
 	#autocompleteMaxVisible: number = 5;
 	/**
+	 * Typing asked for an inline replacement or for suggestions while no provider was attached. A
+	 * composer takes keys before its host attaches a provider, so the first provider evaluates the
+	 * text at the cursor once, as the last keystroke would have.
+	 */
+	#editedWithoutProvider = false;
+	/**
 	 * Grow for the suggestion popup, when the host lends one. Absent, the popup
 	 * appears whole — every direct construction (tests, embedders) stays on the
 	 * bytes it had before.
@@ -568,6 +574,13 @@ export class Editor implements Component, Focusable, MouseRoutable {
 
 	setAutocompleteProvider(provider: AutocompleteProvider): void {
 		this.#autocompleteProvider = provider;
+		if (!this.#editedWithoutProvider) return;
+		this.#editedWithoutProvider = false;
+		if (this.#applyInlineReplacement()) {
+			this.onAutocompleteUpdate?.();
+			return;
+		}
+		this.#retriggerAutocompleteAtCursor();
 	}
 
 	/**
@@ -1238,6 +1251,12 @@ export class Editor implements Component, Focusable, MouseRoutable {
 		if (kb.matches(data, "tui.editor.undo")) {
 			this.#applyUndo();
 			return;
+		}
+
+		// Escape before a provider attached withdraws the evaluation the typing left for it, as it would
+		// have closed the popup that evaluation opens.
+		if (!this.#autocompleteProvider && kb.matches(data, "tui.select.cancel")) {
+			this.#editedWithoutProvider = false;
 		}
 
 		// Autocomplete takes its navigation, Tab and Enter keys first; every other
@@ -1927,7 +1946,11 @@ export class Editor implements Component, Focusable, MouseRoutable {
 	/** Rewrite the inline shortcode ending at the cursor; false when the provider has no replacement for it. */
 	#applyInlineReplacement(): boolean {
 		const provider = this.#autocompleteProvider;
-		if (!provider?.trySyncInlineReplace) return false;
+		if (!provider) {
+			this.#editedWithoutProvider = true;
+			return false;
+		}
+		if (!provider.trySyncInlineReplace) return false;
 		const replaceLine = this.#state.lines[this.#state.cursorLine] || "";
 		const replacement = provider.trySyncInlineReplace(replaceLine.slice(0, this.#state.cursorCol));
 		if (!replacement) return false;
@@ -2895,7 +2918,10 @@ export class Editor implements Component, Focusable, MouseRoutable {
 	}
 
 	async #tryTriggerAutocomplete(explicitTab: boolean = false): Promise<void> {
-		if (!this.#autocompleteProvider) return;
+		if (!this.#autocompleteProvider) {
+			this.#editedWithoutProvider = true;
+			return;
+		}
 		// Check if we should trigger file completion on Tab
 		if (explicitTab) {
 			const shouldTrigger =

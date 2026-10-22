@@ -31,6 +31,12 @@ impl CommandFdInjectionExt for std::process::Command {
 			})
 			.collect::<Result<Vec<_>, _>>()?;
 
+		// `fd_mappings` registers a `pre_exec` hook even for an empty mapping,
+		// and any `pre_exec` hook makes `std` fork instead of `posix_spawn`.
+		if fd_mappings.is_empty() {
+			return Ok(());
+		}
+
 		self
 			.fd_mappings(fd_mappings)
 			.map_err(|_e| error::ErrorKind::ChildCreationFailure)?;
@@ -81,11 +87,18 @@ pub trait CommandSessionExt {
 
 impl CommandSessionExt for std::process::Command {
 	fn detach_session(&mut self) {
-		// SAFETY:
-		// This arranges for a provided function to run in the forked child
-		// before exec. `setsid(2)` is async-signal-safe.
-		unsafe {
-			self.pre_exec(pre_exec_detach_session);
+		// `std` applies `setsid` through `posix_spawn` (`POSIX_SPAWN_SETSID`) on
+		// Linux with glibc, and through setsid(2) after fork elsewhere. The child
+		// is never a process group leader here: a detached child is given no
+		// `process_group`, so setsid(2) cannot fail with EPERM.
+		if posix_spawn_accepts_setsid() {
+			self.setsid(true);
+		} else {
+			// SAFETY: the hook runs in the forked child before exec and calls
+			// only setsid(2), which is async-signal-safe.
+			unsafe {
+				self.pre_exec(pre_exec_detach_session);
+			}
 		}
 	}
 
@@ -96,6 +109,33 @@ impl CommandSessionExt for std::process::Command {
 		unsafe {
 			self.pre_exec(pre_exec_detach_session_reparent);
 		}
+	}
+}
+
+/// Whether `std` can start a child in a new session without failing the
+/// spawn. glibc before 2.26 rejects `POSIX_SPAWN_SETSID` with EINVAL, and
+/// `std` passes the flag on every glibc from 2.24, so a 2.24 or 2.25 host takes
+/// the `pre_exec` hook instead. Other platforms fork when `setsid` is set.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn posix_spawn_accepts_setsid() -> bool {
+	static ACCEPTS: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+		// SAFETY: glibc returns a pointer to a static NUL-terminated string.
+		let version = unsafe { std::ffi::CStr::from_ptr(libc::gnu_get_libc_version()) };
+		let mut parts = version.to_str().unwrap_or("").split('.').map(|part| part.parse::<u32>().unwrap_or(0));
+		(parts.next().unwrap_or(0), parts.next().unwrap_or(0)) >= (2, 26)
+	});
+	*ACCEPTS
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+const fn posix_spawn_accepts_setsid() -> bool {
+	true
+}
+
+fn pre_exec_detach_session() -> Result<(), std::io::Error> {
+	match nix::unistd::setsid() {
+		Ok(_) | Err(nix::errno::Errno::EPERM) => Ok(()),
+		Err(errno) => Err(std::io::Error::from_raw_os_error(errno as i32)),
 	}
 }
 
@@ -124,13 +164,6 @@ fn pre_exec_lead_session() -> Result<(), std::io::Error> {
 	}
 
 	Ok(())
-}
-
-fn pre_exec_detach_session() -> Result<(), std::io::Error> {
-	match nix::unistd::setsid() {
-		Ok(_) | Err(nix::errno::Errno::EPERM) => Ok(()),
-		Err(errno) => Err(std::io::Error::from_raw_os_error(errno as i32)),
-	}
 }
 
 fn pre_exec_detach_session_reparent() -> Result<(), std::io::Error> {

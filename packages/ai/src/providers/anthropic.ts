@@ -421,12 +421,14 @@ function createAnthropicProviderSessionState(): AnthropicProviderSessionState {
 		fastModeDisabled: false,
 		replayUnsignedThinkingDisabled: false,
 		priorReasoningReplayDisabled: false,
+		forcedToolChoiceDisabled: false,
 		cacheTracker: createCacheTrackerState(),
 		close: () => {
 			state.strictToolsDisabled = false;
 			state.fastModeDisabled = false;
 			state.replayUnsignedThinkingDisabled = false;
 			state.priorReasoningReplayDisabled = false;
+			state.forcedToolChoiceDisabled = false;
 			state.cacheTracker = createCacheTrackerState();
 		},
 	};
@@ -461,6 +463,10 @@ function getAnthropicProviderSessionState(
 
 function hasStrictAnthropicTools(params: MessageCreateParamsStreaming): boolean {
 	return params.tools?.some(tool => tool.strict === true) ?? false;
+}
+
+function isForcedAnthropicToolChoice(choice: MessageCreateParamsStreaming["tool_choice"]): boolean {
+	return choice?.type === "any" || choice?.type === "tool";
 }
 
 function dropAnthropicFastMode(params: MessageCreateParamsStreaming): void {
@@ -2335,6 +2341,7 @@ interface AnthropicStreamRetryContext {
 	disableStrictTools: boolean;
 	forceDemoteUnsignedThinking: boolean;
 	omitDemotedPriorReasoning: boolean;
+	dropForcedToolChoice: boolean;
 	dropFastMode: boolean;
 	providerRetryAttempt: number;
 }
@@ -2401,6 +2408,25 @@ async function handleAnthropicFeatureFallbackError(
 		});
 		if (providerSessionState) providerSessionState.priorReasoningReplayDisabled = true;
 		retryCtx.omitDemotedPriorReasoning = true;
+		return true;
+	}
+	if (
+		!retryCtx.dropForcedToolChoice &&
+		firstTokenTime === undefined &&
+		isForcedAnthropicToolChoice(params.tool_choice) &&
+		AIError.isToolChoiceRejected(streamFailure)
+	) {
+		logger.warn(
+			"anthropic: forced tool_choice rejected, so the request was retried with tool_choice auto and forced tool choice is off for this model for the rest of this session",
+			{
+				provider: model.provider,
+				model: model.id,
+				baseUrl,
+				error: errorMessage(streamFailure),
+			},
+		);
+		if (providerSessionState) providerSessionState.forcedToolChoiceDisabled = true;
+		retryCtx.dropForcedToolChoice = true;
 		return true;
 	}
 	if (
@@ -2681,16 +2707,7 @@ async function prepareAnthropicStreamParams(
 	rawRequestDump: RawHttpRequestDump;
 	anthropicWireBodyJson: string;
 }> {
-	let nextParams = buildParams(
-		model,
-		preparedContext,
-		isOAuthToken,
-		options,
-		retryCtx.disableStrictTools,
-		hasUmansGatewayWebSearch,
-		retryCtx.forceDemoteUnsignedThinking,
-		retryCtx.omitDemotedPriorReasoning,
-	);
+	let nextParams = buildParams(model, preparedContext, isOAuthToken, options, retryCtx, hasUmansGatewayWebSearch);
 	if (retryCtx.disableStrictTools) {
 		dropAnthropicStrictTools(nextParams);
 	}
@@ -2842,6 +2859,7 @@ const streamAnthropicOnce = (
 				dropFastMode: providerSessionState?.fastModeDisabled ?? false,
 				forceDemoteUnsignedThinking: providerSessionState?.replayUnsignedThinkingDisabled ?? false,
 				omitDemotedPriorReasoning: providerSessionState?.priorReasoningReplayDisabled ?? false,
+				dropForcedToolChoice: providerSessionState?.forcedToolChoiceDisabled ?? false,
 				providerRetryAttempt: 0,
 			};
 			const mergedCallerHeaders = mergeHeaders(model.headers, options?.headers);
@@ -3424,9 +3442,7 @@ function disableThinkingIfToolChoiceForced(
 	params: MessageCreateParamsStreaming,
 	model: Model<"anthropic-messages">,
 ): void {
-	const toolChoice = params.tool_choice;
-	if (!toolChoice) return;
-	if (toolChoice.type !== "any" && toolChoice.type !== "tool") return;
+	if (!isForcedAnthropicToolChoice(params.tool_choice)) return;
 
 	delete params.thinking;
 	delete params.context_management;
@@ -3769,10 +3785,15 @@ function extractClaudeCodeFirstUserMessageText(messages: readonly Message[]): st
 	return "";
 }
 
+/** The session-learned downgrades the request builder applies, a subset of the retry context. */
+type AnthropicRequestDowngrades = Pick<
+	AnthropicStreamRetryContext,
+	"disableStrictTools" | "forceDemoteUnsignedThinking" | "omitDemotedPriorReasoning" | "dropForcedToolChoice"
+>;
+
 function resolveAnthropicEffectiveModel(
 	model: Model<"anthropic-messages">,
-	forceDemoteUnsignedThinking: boolean,
-	omitDemotedPriorReasoning: boolean,
+	downgrades: AnthropicRequestDowngrades,
 ): Model<"anthropic-messages"> {
 	// A session-scoped auto-demote (learned from a live signing 400) clones the
 	// resolved compat with `replayUnsignedThinking: false` so every subsequent
@@ -3780,16 +3801,19 @@ function resolveAnthropicEffectiveModel(
 	// demoted default without mutating the shared `model` reference. A learned
 	// `reasoning_extraction` refusal clears `replayDemotedPriorReasoning` the
 	// same way, which makes the transform drop prior reasoning it would
-	// otherwise hand over as prose.
-	const demoteUnsigned = forceDemoteUnsignedThinking && model.compat.replayUnsignedThinking;
-	const dropPriorReasoning = omitDemotedPriorReasoning && model.compat.replayDemotedPriorReasoning;
-	if (!demoteUnsigned && !dropPriorReasoning) return model;
+	// otherwise hand over as prose, and a learned forced `tool_choice` rejection
+	// clears `supportsForcedToolChoice`.
+	const demoteUnsigned = downgrades.forceDemoteUnsignedThinking && model.compat.replayUnsignedThinking;
+	const dropPriorReasoning = downgrades.omitDemotedPriorReasoning && model.compat.replayDemotedPriorReasoning;
+	const dropForcedToolChoice = downgrades.dropForcedToolChoice && model.compat.supportsForcedToolChoice;
+	if (!demoteUnsigned && !dropPriorReasoning && !dropForcedToolChoice) return model;
 	return {
 		...model,
 		compat: {
 			...model.compat,
 			...(demoteUnsigned ? { replayUnsignedThinking: false } : {}),
 			...(dropPriorReasoning ? { replayDemotedPriorReasoning: false } : {}),
+			...(dropForcedToolChoice ? { supportsForcedToolChoice: false } : {}),
 		},
 	};
 }
@@ -3934,12 +3958,12 @@ function buildAnthropicToolChoiceParam(
 			),
 		};
 	}
-	// Claude Fable/Mythos 5 reject forced tool use outright ("tool_choice forces
-	// tool use is not compatible with this model"). Downgrade any/tool → auto so the
-	// request succeeds; the tool stays available and the caller's prompt steers
-	// the model toward it.
-	const choiceType = choice?.type;
-	if ((choiceType === "any" || choiceType === "tool") && !model.compat.supportsForcedToolChoice) {
+	// Claude Opus/Sonnet 5.5+ and Fable/Mythos reject forced tool use outright
+	// (`tool_choice: type "tool" and "any" are not supported for this model.`),
+	// and an endpoint that answered a forced choice with that 400 is remembered
+	// for the session. Downgrade any/tool → auto so the request succeeds; the
+	// tool stays available and the caller's prompt steers the model toward it.
+	if (isForcedAnthropicToolChoice(choice) && !model.compat.supportsForcedToolChoice) {
 		return { type: "auto" };
 	}
 	return choice;
@@ -3949,13 +3973,11 @@ function buildParams(
 	model: Model<"anthropic-messages">,
 	context: Context,
 	isOAuthToken: boolean,
-	options?: AnthropicOptions,
-	disableStrictTools = false,
-	useUmansGatewayWebSearch = false,
-	forceDemoteUnsignedThinking = false,
-	omitDemotedPriorReasoning = false,
+	options: AnthropicOptions | undefined,
+	downgrades: AnthropicRequestDowngrades,
+	useUmansGatewayWebSearch: boolean,
 ): MessageCreateParamsStreaming {
-	const effectiveModel = resolveAnthropicEffectiveModel(model, forceDemoteUnsignedThinking, omitDemotedPriorReasoning);
+	const effectiveModel = resolveAnthropicEffectiveModel(model, downgrades);
 	const { cacheControl } = getCacheControl(model, options?.cacheRetention, isOAuthToken);
 
 	// Pre-compute system blocks so they occupy the right slot in the serialized body.
@@ -3974,7 +3996,7 @@ function buildParams(
 		tools = convertTools(
 			context.tools,
 			isOAuthToken,
-			disableStrictTools || anthropicWire(model).rejectsBetas === true,
+			downgrades.disableStrictTools || anthropicWire(model).rejectsBetas === true,
 			model.compat.supportsEagerToolInputStreaming,
 			model.compat.escapeBuiltinToolNames,
 			useUmansGatewayWebSearch,
@@ -4027,7 +4049,12 @@ function buildParams(
 		params.speed = "fast";
 	}
 
-	const toolChoice = buildAnthropicToolChoiceParam(options?.toolChoice, model, isOAuthToken, useUmansGatewayWebSearch);
+	const toolChoice = buildAnthropicToolChoiceParam(
+		options?.toolChoice,
+		effectiveModel,
+		isOAuthToken,
+		useUmansGatewayWebSearch,
+	);
 	if (toolChoice) {
 		params.tool_choice = toolChoice;
 	}

@@ -114,7 +114,7 @@
     "@vtsls/language-server": "0.3.0"
   },
   "engines": {
-    "bun": ">=1.4.0"
+    "bun": ">=1.4.3"
   },
   "files": [
     "src",

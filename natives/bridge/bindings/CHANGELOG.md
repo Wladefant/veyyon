@@ -42,8 +42,34 @@
 - Workspace startup scans skip excluded build directories and retain a bounded set of entries and directory rules ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - Merged upstream v1.5.0.
+### Breaking Changes
+
+- `releaseFreeHeapPages()` returns a `Promise<boolean>` and walks the C allocator's arenas on libuv's thread pool instead of on the calling thread, where the walk held a 6 GiB session's event loop 250 to 1127 ms per call.
+- `enclosingBlockBoundaries()` returns a `Promise` and parses on libuv's thread pool instead of on the calling thread, where a 3.5 MB TypeScript source held the event loop 153 ms; every call shares one retained parse tree, so a second window of the same source answers in 4 ms on any pool thread.
+
+### Added
+
+- `skimSessionFile(fd, start, rules)` reads a session JSONL file on the thread pool and reports each line as the record a load keeps for a cold entry, with each moved value replaced by an empty value of its kind whatever the line's length, ending at the block that brings the report to `rules.outputBytes`; a line under `rules.minLineBytes` that moves nothing is copied whole.
+- `skimSessionFile` reports a compaction with every value copied except the large members `rules.compactionMovedKeys` names and the large members of its server-side window record (`preserveData.remoteCompaction`), unless `rules.wholeEntryTypes` names `compaction`.
+
+### Changed
+
+- Loading the addon fixes glibc's mmap threshold at 1 MiB unless `MALLOC_MMAP_THRESHOLD_` or `glibc.malloc.mmap_threshold` sets one, so a freed block of 1 MiB or more returns to the kernel at once and resuming a 148 MB session peaks at 250 MB resident instead of 271 MB and settles at 178 MB instead of 185 MB.
+- `fuzzyFind` reads the scan cache in place and copies a path only while it ranks among the best `maxResults`, so a cached lookup over a 612,000-entry tree answers in 17 ms instead of 1.4 s for an empty query and in 67 ms instead of 104 ms for `zq`, and peaks at 85 MB instead of 380 MB.
+- `fuzzyFind` scores a name without copying it and rejects an ASCII name that lacks the query's characters in one byte scan, so a cached lookup over a 612,000-entry tree answers in 17 ms instead of 68 ms for `zq` and in 31 ms instead of 190 ms for `lib/zq`.
+- `fuzzyFind`, `glob` and AST file discovery share one walk per root and walk options while it runs instead of each starting its own, so the three lookups `@` completion issues while `@zqx` is typed over a 612,000-entry tree peak at 86 MB instead of 254 MB and finish in 500 ms instead of 630 ms.
+- `grep` given `timeoutMs` returns the matches it found when the limit passes, with `timedOut` set on its result, instead of failing with "Aborted: Timeout".
+
 ### Fixed
 
+- A compiled binary reuses the addon it extracted into `natives/<version>/` only when the `.stamp` file beside it records that build's `sha256` and the file's inode and modification time, so a rebuild of the same version whose addon has the same size loads its own addon instead of the previous build's, and a same-size damaged file there is extracted again instead of failing every launch with "Failed to load veyyon_natives native addon".
+- `gen:native` writes the embedded addon archives and metadata module through `node:fs`, so it waits for a lease on an archive to break instead of failing with `EAGAIN` when an NFS client that built the addon still holds the file.
+- `astGrep` and `astEdit` parse a PHP file under the full PHP grammar, so a file that closes `?>` and continues as HTML is searched and rewritten instead of reported as a parse error and skipped; `astMatch` still reads its source as PHP code without an opening tag.
+- A `$$$NAME` binding in `metaVariables` is the source the capture spans, in brackets, instead of each node joined with `, `, so `foo($$$A)` over `foo(a, b)` binds `[a, b]` instead of `[a, ,, b]`.
+- Loading the addon caps glibc's malloc arenas at eight unless `MALLOC_ARENA_MAX` or `glibc.malloc.arena_max` sets a limit, so 48 shell commands, 32 searches and 16 globs at once peak at 311 MiB RSS instead of 488 MiB and settle at 187 MiB instead of 335 MiB after the idle trim.
+- The scan cache drops every scan past its TTL on the next cached walk and on `releaseFreeHeapPages()`, instead of keeping it until a scan of the same root replaced it, so a session that completed one `@` file mention over a 510,000-entry tree settles at 123 MB of anonymous memory after the idle trim instead of 201 MB.
+- A cached scan's TTL counts from when its walk finished instead of when it began, so a tree whose walk outlasts the TTL is served from the cache, and a repeated lookup answers in 19 ms instead of walking again for 500 ms.
+- A walk that began before `invalidateFsScanCache()` is neither cached nor shared after it, so a file written while a tree was being walked appears in the next lookup instead of after the TTL.
 - Block-boundary lookups and code summaries parse a PHP file that leaves PHP for HTML with `?>` instead of failing it as a syntax error, which cuts a 191KB plugin source from 767ms to 18ms and gives such a file tree-sitter block context and a structural summary.
 
 ## [1.5.6] - 2026-10-13

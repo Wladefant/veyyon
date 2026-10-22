@@ -77,14 +77,18 @@ export interface FirstFrameDecisionOptions {
 	readonly setupWizard: boolean;
 	readonly stdinIsTTY: boolean | undefined;
 	readonly stdoutIsTTY: boolean | undefined;
-	/** Restoring a session (--resume, --continue, --fork) skips the welcome hero. */
-	readonly resuming?: boolean;
+	/**
+	 * A bare `--resume` opens the session picker, which owns the screen. A resume that names its
+	 * session, `--continue` and `--fork` land on the same card and composer a new session does, with
+	 * the transcript replayed under the card once the session is open.
+	 */
+	readonly pickingSession?: boolean;
 }
 
 /** True only for a normal interactive TTY launch that lands on the home screen. */
 export function shouldPaintFirstFrame(options: FirstFrameDecisionOptions): boolean {
 	if (!options.isInteractive || options.protocolMode) return false;
-	if (options.quiet || options.splash || options.setupWizard || options.resuming) return false;
+	if (options.quiet || options.splash || options.setupWizard || options.pickingSession) return false;
 	return options.stdinIsTTY === true && options.stdoutIsTTY === true;
 }
 

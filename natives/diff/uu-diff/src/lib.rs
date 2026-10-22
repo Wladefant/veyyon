@@ -407,8 +407,12 @@ fn shell_quote(arg: &str) -> String {
 enum Operand {
 	/// The context stdin (`-`).
 	Stdin,
-	/// A regular (or other non-directory) file at the resolved path.
+	/// A regular file at the resolved path.
 	File(PathBuf),
+	/// A pipe, FIFO, socket or device at the resolved path, such as a process
+	/// substitution's `/dev/fd/63`: its bytes can be read once, so it is
+	/// captured up front the way stdin is.
+	Stream(PathBuf),
 	/// A directory at the resolved path.
 	Dir(PathBuf),
 	/// A missing file tolerated by `-N` and compared as empty.
@@ -474,8 +478,9 @@ fn diff_main(
 		diff_dirs(&name_a, res_a, &name_b, res_b, &opts)?
 	} else {
 		// A file operand stays a PATH so an identical or brief comparison never
-		// loads it. Only stdin and an absent `-N` side arrive as bytes, because
-		// stdin cannot be re-read and an absent file has none.
+		// loads it. Only stdin, a stream and an absent `-N` side arrive as bytes,
+		// because stdin and a stream cannot be re-read and an absent file has
+		// none.
 		let eager_a = eager_bytes(&op_a, &name_a)?;
 		let eager_b = eager_bytes(&op_b, &name_b)?;
 		let src_a = source_for(&op_a, eager_a.as_deref());
@@ -523,7 +528,8 @@ fn classify(name: &Path, new_file: bool) -> Result<Operand, String> {
 	let resolved = veyyon_uutils_ctx::resolve(name);
 	match fs::metadata(&resolved) {
 		Ok(meta) if meta.is_dir() => Ok(Operand::Dir(resolved)),
-		Ok(_) => Ok(Operand::File(resolved)),
+		Ok(meta) if meta.is_file() => Ok(Operand::File(resolved)),
+		Ok(_) => Ok(Operand::Stream(resolved)),
 		Err(err) if err.kind() == std::io::ErrorKind::NotFound && new_file => Ok(Operand::Absent),
 		Err(err) => Err(format!("{}: {}", name.display(), io_msg(&err))),
 	}
@@ -646,21 +652,13 @@ fn fill(reader: &mut dyn Read, buf: &mut [u8]) -> std::io::Result<usize> {
 
 /// The bytes an operand must be read into UP FRONT, if any.
 ///
-/// Only the context stdin, which cannot be re-read and so has to be captured
-/// before anything else looks at it. A file stays a path, and `Absent` is the
-/// empty side of `-N`, which owns no bytes at all.
+/// Only the context stdin and a stream, which cannot be re-read and so have to
+/// be captured before anything else looks at them. A file stays a path, and
+/// `Absent` is the empty side of `-N`, which owns no bytes at all.
 fn eager_bytes(op: &Operand, name: &Path) -> Result<Option<Vec<u8>>, String> {
 	match op {
-		Operand::Stdin => read_operand(op, name).map(Some),
-		Operand::File(resolved) => {
-			let is_regular = fs::metadata(resolved).map(|m| m.is_file()).unwrap_or(true);
-			if is_regular {
-				Ok(None)
-			} else {
-				read_operand(op, name).map(Some)
-			}
-		},
-		Operand::Absent => Ok(None),
+		Operand::Stdin | Operand::Stream(_) => read_operand(op, name).map(Some),
+		Operand::File(_) | Operand::Absent => Ok(None),
 		Operand::Dir(_) => unreachable!("directories are handled by diff_dirs"),
 	}
 }
@@ -668,15 +666,10 @@ fn eager_bytes(op: &Operand, name: &Path) -> Result<Option<Vec<u8>>, String> {
 /// Pair an operand with the bytes [`eager_bytes`] captured for it, if any.
 fn source_for<'a>(op: &'a Operand, eager: Option<&'a [u8]>) -> Source<'a> {
 	match op {
-		Operand::File(resolved) => {
-			if let Some(bytes) = eager {
-				Source::Bytes(bytes)
-			} else {
-				Source::File(resolved)
-			}
-		},
-		// `Absent` under `-N` compares as empty, and stdin was captured above.
-		Operand::Stdin | Operand::Absent => Source::Bytes(eager.unwrap_or(&[])),
+		Operand::File(resolved) => Source::File(resolved),
+		// `Absent` under `-N` compares as empty, and stdin and a stream were
+		// captured above.
+		Operand::Stdin | Operand::Stream(_) | Operand::Absent => Source::Bytes(eager.unwrap_or(&[])),
 		Operand::Dir(_) => unreachable!("directories are handled by diff_dirs"),
 	}
 }
@@ -690,7 +683,7 @@ fn read_operand(op: &Operand, name: &Path) -> Result<Vec<u8>, String> {
 				.map_err(|err| format!("-: {}", io_msg(&err)))?;
 			Ok(buf)
 		},
-		Operand::File(resolved) => {
+		Operand::File(resolved) | Operand::Stream(resolved) => {
 			fs::read(resolved).map_err(|err| format!("{}: {}", name.display(), io_msg(&err)))
 		},
 		Operand::Dir(_) => unreachable!("directories are handled by diff_dirs"),
@@ -997,7 +990,7 @@ mod tests {
 
 		let io = ScopeIo {
 			stdin: Box::new(std::io::Cursor::new(stdin.to_vec())),
-			stdin_fd: None,
+			fds: Vec::new(),
 			stdin_is_search_input: false,
 			stdout: Box::new(SharedWriter { buf: stdout_buf.clone() }),
 			stdout_is_terminal: false,

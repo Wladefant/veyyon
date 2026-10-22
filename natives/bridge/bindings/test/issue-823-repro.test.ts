@@ -55,7 +55,12 @@ describe("issue 823: standalone-binary native loader path resolution", () => {
 						{
 							variant: "modern",
 							filename: "veyyon_natives.linux-x64-modern.node",
-							filePath: "/$bunfs/root/natives/bridge/bindings/native/veyyon_natives.linux-x64-modern.node",
+							sha256: "0".repeat(64),
+							archive: {
+								format: "tar.gz",
+								filename: "embedded-addons.linux-x64-modern.tar.gz",
+								filePath: "/$bunfs/root/natives/bridge/bindings/native/embedded-addons.linux-x64-modern.tar.gz",
+							},
 						},
 					],
 				},
@@ -231,8 +236,8 @@ describe("issue 823: standalone-binary native loader path resolution", () => {
 			);
 
 			const files: EmbeddedAddonFile[] = [
-				{ variant: "modern", filename: modernFilename, size: modern.length },
-				{ variant: "baseline", filename: baselineFilename, size: baseline.length },
+				{ variant: "modern", filename: modernFilename, size: modern.length, sha256: "a".repeat(64) },
+				{ variant: "baseline", filename: baselineFilename, size: baseline.length, sha256: "b".repeat(64) },
 			];
 
 			const written = extractEmbeddedAddonArchive({ archivePath, files, targetDir });

@@ -57,13 +57,14 @@ class HeldPublishStorage extends FileSessionStorage {
 
 	override async rewriteTailAtomic(
 		filePath: string,
+		headBytes: number,
 		keepBytes: number,
 		head: string,
 		tail: SessionFileBody,
 		options?: WriteTextAtomicOptions,
 	) {
 		this.publishes.push("tail");
-		return super.rewriteTailAtomic(filePath, keepBytes, head, await this.#held(tail), options);
+		return super.rewriteTailAtomic(filePath, headBytes, keepBytes, head, await this.#held(tail), options);
 	}
 
 	async #held(body: SessionFileBody): Promise<SessionFileBody> {

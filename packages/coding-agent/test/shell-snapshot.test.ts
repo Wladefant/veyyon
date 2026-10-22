@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { getOrCreateSnapshot, sanitizeSnapshotForBrush } from "@veyyon/coding-agent/utils/shell-snapshot";
 import fnEnvHelper from "../src/utils/shell-snapshot-fn-env.sh" with { type: "text" };
 
@@ -392,4 +393,58 @@ describe("getOrCreateSnapshot", () => {
 			await fs.rm(testRoot, { recursive: true, force: true });
 		}
 	}, 5000); // increase test timeout to 5s to accommodate the 2s snapshot timeout
+
+	// WHY: the shutdown cleanup unlinked each cached snapshot with `unlinkSync`. A tmp cleaner that
+	// removed one snapshot first (systemd-tmpfiles, an hourly wipe of /tmp) made it throw ENOENT,
+	// which logged "Cleanup callback failed" on SIGTERM and stopped the loop, so every later snapshot,
+	// holding the inlined values of exported variables, stayed in the shared tmp directory. Driven
+	// through the real SIGTERM path in a child process, since a cleanup run in this process would run
+	// every other test's callbacks too. Does not cover a removal failing for another reason (EACCES).
+	it("removes every snapshot on SIGTERM when a tmp cleaner already removed one", async () => {
+		if (!existsSync(REAL_BASH)) return;
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-snap-cleanup-"));
+		try {
+			const home = path.join(root, "home");
+			const tmp = path.join(root, "tmp");
+			await fs.mkdir(home);
+			await fs.mkdir(tmp);
+			await fs.writeFile(path.join(home, ".bashrc"), "export SNAP_CLEANUP_PROBE=1\n");
+			// Each shell path is its own cache entry, so the process holds two snapshots.
+			const shells = ["bash-first", "bash-second"].map(name => path.join(root, name));
+			for (const shell of shells) await fs.symlink(REAL_BASH, shell);
+			const module = pathToFileURL(path.join(import.meta.dir, "../src/utils/shell-snapshot.ts")).href;
+			const probe = path.join(root, "probe.ts");
+			await fs.writeFile(
+				probe,
+				[
+					`import * as fs from "node:fs";`,
+					`import { getOrCreateSnapshot } from ${JSON.stringify(module)};`,
+					`const paths = [];`,
+					`for (const shell of ${JSON.stringify(shells)}) paths.push(await getOrCreateSnapshot(shell, process.env));`,
+					`fs.rmSync(paths[0]);`,
+					`process.stdout.write(JSON.stringify(paths));`,
+					`setTimeout(() => {}, 10_000);`,
+					`process.kill(process.pid, "SIGTERM");`,
+				].join("\n"),
+			);
+			const child = Bun.spawn([process.execPath, probe], {
+				env: { ...process.env, HOME: home, TMPDIR: tmp },
+				stdout: "pipe",
+				stderr: "ignore",
+				timeout: 15_000,
+				killSignal: "SIGKILL",
+			});
+			const stdout = await readStream(child.stdout as ReadableStream<Uint8Array> | null);
+			await child.exited;
+			const paths = JSON.parse(stdout) as (string | null)[];
+
+			expect({ exitCode: child.exitCode, created: paths.map(snapshot => typeof snapshot) }).toEqual({
+				exitCode: 143,
+				created: ["string", "string"],
+			});
+			expect(await fs.readdir(path.join(tmp, "veyyon-shell-snapshots"))).toEqual([]);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	}, 20_000);
 });

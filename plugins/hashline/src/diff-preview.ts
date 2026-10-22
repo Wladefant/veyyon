@@ -34,6 +34,15 @@ function appendPreviewLine(output: string[], line: string): void {
 	output.push(normalized);
 }
 
+/** A numbered row of a compact preview: `<line>:<content>`, `line` at its post-edit position. */
+const PREVIEW_ROW = /^(\d+):/;
+
+/** The post-edit line and verbatim content a {@link buildCompactDiffPreview} row shows, or `undefined` for a separator. */
+export function parsePreviewRow(row: string): { line: number; content: string } | undefined {
+	const match = PREVIEW_ROW.exec(row);
+	return match ? { line: Number(match[1]), content: row.slice(match[0].length) } : undefined;
+}
+
 interface ParsedDiffLine {
 	kind: "+" | "-" | " ";
 	lineNumber: number;

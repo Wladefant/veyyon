@@ -1229,10 +1229,10 @@ export class BashTool
 		const waitResult = await this.#waitForManagedBashJob(job, { thresholdMs: wallThresholdMs, stallMs, signal });
 		switch (waitResult.kind) {
 			case "completed":
-				manager.acknowledgeDeliveries([job.jobId]);
+				manager.release(job.jobId);
 				return waitResult.result;
 			case "failed":
-				manager.acknowledgeDeliveries([job.jobId]);
+				manager.release(job.jobId);
 				throw waitResult.error;
 			case "aborted":
 				manager.cancel(job.jobId);

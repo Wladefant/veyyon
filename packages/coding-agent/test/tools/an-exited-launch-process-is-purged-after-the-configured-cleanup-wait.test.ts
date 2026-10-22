@@ -297,7 +297,7 @@ describe("an exited launch process is purged after the configured cleanup wait",
 		}
 	}, 15_000);
 
-	it("ensures an exited record is queryable via list, describe, and logs during wait and absent after purge", async () => {
+	it("keeps an exited record in list, describe and logs during the wait, then answers from its completion record", async () => {
 		const projectDir = await tempDir("launch-cleanup-query-project-");
 		const runtimeDir = await tempDir("launch-cleanup-query-runtime-");
 		const scriptPath = path.join(projectDir, "log-exit.ts");
@@ -369,18 +369,23 @@ describe("an exited launch process is purged after the configured cleanup wait",
 			}, 3_000);
 			expect(purged).toBeTrue();
 
-			// After purge, describe and logs fail with unknown daemon error.
-			await expect(client.request({ op: "describe", name: "queryable-daemon" })).rejects.toThrow(/Unknown daemon/);
-			await expect(
-				client.request({
-					op: "logs",
-					name: "queryable-daemon",
-					lines: 10,
-					head: false,
-					follow: false,
-					timeoutMs: 5_000,
-				}),
-			).rejects.toThrow(/Unknown daemon/);
+			// After purge, describe and logs answer from the retained completion record.
+			const describeAfter = await client.request({ op: "describe", name: "queryable-daemon" });
+			if (describeAfter.op !== "describe") throw new Error("Unexpected describe result");
+			expect(describeAfter.daemon.state).toBe("exited");
+			expect(describeAfter.spec.name).toBe("queryable-daemon");
+			const logsAfter = await client.request({
+				op: "logs",
+				name: "queryable-daemon",
+				lines: 10,
+				head: false,
+				follow: false,
+				timeoutMs: 5_000,
+			});
+			if (logsAfter.op !== "logs") throw new Error("Unexpected logs result");
+			expect(logsAfter.text).toContain("HELLO_WORLD");
+			// A name no generation ever ran under is still unknown.
+			await expect(client.request({ op: "describe", name: "never-started" })).rejects.toThrow(/Unknown daemon/);
 		} finally {
 			await shutdown(client);
 		}

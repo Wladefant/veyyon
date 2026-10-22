@@ -97,7 +97,9 @@ const BARRELS = ["@veyyon/tui", "@veyyon/utils", "@veyyon/agent-core", "@veyyon/
  * and launch-facts reorganization. The ceiling keeps the one leaf of margin.
  */
 // 363 -> 365 (exclusive ceiling, measured 363): re-measured 2026-10-04 after PR #470 added github-copilot-client-id.ts to settings.ts (Refs #472).
-const SHELL_GRAPH_MODULE_CEILING = 365;
+// RE-MEASURED 2026-10-09 at 364, from 360: four terminal-engine leaves split from modules already evaluated by the shell.
+// RE-MEASURED 2026-10-19 at 366, from 365: launch-card eligibility added one leaf.
+const SHELL_GRAPH_MODULE_CEILING = 367;
 
 async function probe(code: string): Promise<number> {
 	const { stdout } = await run("bun", ["-e", code], { cwd: repoRoot, maxBuffer: 1 << 24 });

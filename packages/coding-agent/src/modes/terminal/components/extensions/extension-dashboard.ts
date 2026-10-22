@@ -249,7 +249,7 @@ export class ExtensionDashboard implements Component {
 	 * centered shortcut chips. Transcript visible around the card.
 	 */
 	render(width: number): readonly string[] {
-		const height = Math.max(14, this.#terminalRows());
+		const height = this.#terminalRows();
 		const sizing = sizingForArea(MODAL_SIZING_LARGE, height);
 		const dims = computeModalDims(width, height, sizing);
 		if (!dims) {

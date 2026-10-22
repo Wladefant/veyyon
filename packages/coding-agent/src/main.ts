@@ -31,6 +31,7 @@ import {
 	getActiveProfileOrDefault,
 	getLogPath,
 	getProjectDir,
+	isTerminalOutputRouted,
 	logger,
 	normalizePathForComparison,
 	postmortem,
@@ -50,6 +51,7 @@ import { EXIT_FAILURE, EXIT_OK, EXIT_USAGE } from "./cli/exit-codes";
 import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
 import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage, type InitialMessageResult } from "./cli/initial-message";
+import { opensSessionPicker } from "./cli/launch-card-eligibility";
 import { type StartupPrologue, takeStartupPrologue } from "./cli/prologue-handoff";
 import type { selectSession } from "./cli/session-picker";
 import { applySessionWorkdir, applyStartupCwd } from "./cli/startup-cwd";
@@ -535,6 +537,21 @@ function loadFirstFrame(): Promise<typeof firstFrameModule> {
 }
 
 /**
+ * Hand the terminal back from the launch card before a session-resolution prompt or notice reaches
+ * it. While the card holds the screen its terminal reads stdin and routes stderr into the log, so a
+ * readline prompt would get no answer and an error would print nowhere the operator looks. The card
+ * stays on screen; a launch that goes on builds its own screen. A launch that painted nothing has no
+ * route installed, so it returns without loading the first-frame module.
+ */
+async function releaseLaunchCard(): Promise<void> {
+	if (!isTerminalOutputRouted()) return;
+	const frame = (await loadFirstFrame()).takeFirstFrame();
+	if (!frame) return;
+	frame.release();
+	frame.ui.stop();
+}
+
+/**
  * The setup wizard module, the scenes it plays, and whether the startup
  * splash plays instead.
  */
@@ -733,14 +750,14 @@ async function runInteractiveMode(
 		});
 
 	// Cold-launch cleanup: this replay replaces the welcome/startup frame with the
-	// resumed/new transcript. It does NOT erase native history unless the operator
-	// asked for it. `clearTerminalHistory` here means ED 3, which is not selective:
+	// resumed/new transcript, built in slices so keystrokes echo while it replays. It
+	// does NOT erase native history unless the operator asked for it.
+	// `clearTerminalHistory` here means ED 3, which is not selective:
 	// it takes the terminal's whole saved scrollback, including everything on screen
 	// before veyyon started. The in-process session loads that share this flag are
 	// mid-session acts the operator just requested; a cold launch is not, and
 	// deleting the history they launched from was never part of starting up.
-	mode.renderInitialMessages({
-		preserveExistingChat: true,
+	await mode.replayInitialMessages({
 		clearTerminalHistory: settings.get("startup.clearScrollback"),
 	});
 
@@ -789,6 +806,7 @@ async function promptMoveSession(session: SessionInfo): Promise<SessionPromptRes
 		return "unavailable";
 	}
 	const message = `Session's directory no longer exists (${session.cwd}). Move (re-root) it into the current directory? [Y/n] `;
+	await releaseLaunchCard();
 	pauseStartupWatchdog();
 	const rl = createInterface({ input: process.stdin, output: process.stdout });
 	try {
@@ -895,6 +913,7 @@ async function forkFromOtherProfile(
 ): Promise<SessionManager> {
 	const forkCwd = source.cwd && fsSync.existsSync(source.cwd) ? source.cwd : cwd;
 	const manager = await SessionManager.forkFrom(source.path, forkCwd, parsed.sessionDir);
+	await releaseLaunchCard();
 	process.stderr.write(
 		`${chalk.dim(
 			`Session ${source.id} belongs to profile "${owner}"; forked into profile "${getActiveProfileOrDefault()}" as ${manager.getSessionId()}.`,
@@ -1733,7 +1752,7 @@ async function paintLaunchCard(
 			deps.forceSetupWizard === true || (!onboarding.unreadable && onboarding.version < CURRENT_SETUP_VERSION),
 		stdinIsTTY: process.stdin.isTTY,
 		stdoutIsTTY: process.stdout.isTTY,
-		resuming: isResumingLaunch(parsedArgs),
+		pickingSession: opensSessionPicker(parsedArgs),
 	});
 	if (paint) logger.time("paintFirstFrame", paintFirstFrame, VERSION);
 }
@@ -1783,6 +1802,7 @@ async function openLaunchSessionManager(
 		sessionManager = await logger.time("createSessionManager", createSessionManager, parsedArgs, cwd, settings);
 	} catch (error: unknown) {
 		if (error instanceof SessionResolutionError) {
+			await releaseLaunchCard();
 			process.stderr.write(`${chalk.red(`Error: ${error.message}`)}\n`);
 			if (error.hint) {
 				process.stderr.write(`${chalk.dim(error.hint)}\n`);
@@ -1796,6 +1816,7 @@ async function openLaunchSessionManager(
 	// cleanly with a friendly message rather than letting the decline bubble up
 	// as an uncaught exception (see issue #1668).
 	if (typeof parsedArgs.resume === "string" && !sessionManager) {
+		await releaseLaunchCard();
 		writeStartupNotice(parsedArgs, `${chalk.dim("Resume cancelled: the session's directory no longer exists.")}\n`);
 		stopStartupWatchdog();
 		process.exit(EXIT_OK);
@@ -2242,7 +2263,7 @@ async function runInteractiveLaunch(launch: RootLaunch, started: StartedLaunch):
 		// The launch card's terminal routes stderr into the log while it holds the screen, so a run that
 		// exits here stops it first and the tree reaches the stderr it was requested on. A run that goes
 		// on into the TUI keeps the routing: its tree is appended to the log.
-		if (exitAfterTimings) (await loadFirstFrame()).takeFirstFrame()?.ui.stop();
+		if (exitAfterTimings) await releaseLaunchCard();
 		logger.printTimings();
 		if (exitAfterTimings) {
 			process.exit(EXIT_OK);
@@ -2402,7 +2423,7 @@ async function runRootCommandInner(parsed: Args, rawArgs: string[], deps: RunRoo
 	// id from UUID-shaped values owned by later extension flags.
 	normalizeContinueSessionArgs(parsedArgs, rawArgs);
 	let sessionManager = await openLaunchSessionManager(parsedArgs, cwd, settings);
-	if (parsedArgs.resume === true && !parsedArgs.fork) {
+	if (opensSessionPicker(parsedArgs)) {
 		sessionManager = await pickResumedSession(launch, cwd);
 	}
 	if (sessionManager && isResumingLaunch(parsedArgs)) {
