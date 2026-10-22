@@ -3,7 +3,7 @@
  *
  * Codex discovery lists, per model, the cyber access programs one ChatGPT account may select
  * (`available_access_programs`). A standard account is offered `standard`; a Daybreak account is also
- * offered `daybreak_blue` or `daybreak_red`, and only a Daybreak account is listed the Daybreak-only
+ * offered `daybreak_blue` or `daybreak_red`, and only a Daybreak account's listing includes the Daybreak-only
  * models. The inference endpoint rejects a program the account or the model is not offered:
  * `daybreak_blue` on a model with no Daybreak program answers 403, a Daybreak-only model sent another
  * program answers 400, and a tier the model offers the account no access to ends the stream with
@@ -11,7 +11,7 @@
  * automatic treatment, whose `cyber_policy` refusal states that `access_programs.cyber` must be set.
  *
  * Discovery lists every signed-in account and records, per model, each account's entry
- * ({@link Model.accountAccess}): whether the account is listed the model and the programs it is offered.
+ * ({@link Model.accountAccess}): whether the account's listing includes the model and the programs it is offered.
  * A request selects from the entry of the account that signs it. A model with no entry for that account
  * (a model never discovered, or an account signed in after discovery ran) lists that account's models
  * before it selects a program. A compaction lists no account: it reads the listing its turn fetched.
@@ -20,7 +20,7 @@ import { fetchCodexModels } from "@veyyon/catalog/discovery/codex";
 import { CODEX_BASE_URL, getCodexAccountId } from "@veyyon/catalog/wire/codex";
 import { logger } from "@veyyon/utils";
 import { untilAborted } from "@veyyon/utils/abortable";
-import { settleWithin } from "@veyyon/utils/scoped-timeout";
+import { settleWithin, withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import type { CyberAccessProgram, FetchImpl, ModelAccountAccess } from "../../types";
 
@@ -84,14 +84,16 @@ async function fetchAccountListing(
 	fetchImpl: FetchImpl | undefined,
 ): Promise<AccountListing> {
 	try {
-		const discovered = await fetchCodexModels({
-			accessToken,
-			accountId,
-			baseUrl,
-			fetchFn: fetchImpl,
-			signal: AbortSignal.timeout(CODEX_ACCESS_PROGRAM_LISTING_TIMEOUT_MS),
-			onFailure: ({ stage, detail }) => logger.debug("Codex access program listing failed", { stage, detail }),
-		});
+		const discovered = await withScopedTimeoutSignal(CODEX_ACCESS_PROGRAM_LISTING_TIMEOUT_MS, signal =>
+			fetchCodexModels({
+				accessToken,
+				accountId,
+				baseUrl,
+				fetchFn: fetchImpl,
+				signal,
+				onFailure: ({ stage, detail }) => logger.debug("Codex access program listing failed", { stage, detail }),
+			}),
+		);
 		if (!discovered) return null;
 		const listing = new Map<string, ModelAccountAccess>();
 		for (const model of discovered.models) {
