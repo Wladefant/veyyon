@@ -219,6 +219,7 @@
 
 ### Fixed
 
+- A Public Web `web_search` that returns no result lists the engines that found no results for the query beside the engines that failed, instead of reporting `All public engines failed` for a query an engine answered with nothing.
 - A `search` of type `files` whose glob ends in `/`, such as `vendor/plugin*/`, lists the directories the glob matches instead of reporting `No files found matching pattern`.
 - With several ChatGPT accounts signed in, the model list holds the Codex models of every account's tier, such as the Daybreak-only models listed for a Daybreak account, and a turn on such a model is sent from an account whose listing includes it.
 - The Codex `web_search` provider and Codex hosted image generation send `access_programs.cyber` set to the Daybreak program the signed-in account is offered for the model, so a Daybreak account's security search or image request is no longer refused with `cyber_policy` for lack of the field.
