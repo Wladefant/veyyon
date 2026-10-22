@@ -1521,14 +1521,12 @@ class SessionStartup {
 	async #startBackgroundWork(session: AgentSession): Promise<CreateAgentSessionResult["lspServers"]> {
 		const options = this.#options;
 		const settings = this.#settings;
-		const prewarmModel = this.#modelSelection.model;
 		prewarmCodexTransport({
-			model: prewarmModel,
+			model: this.#modelSelection.model,
 			modelRegistry: this.#modelRegistry,
 			sessionId: this.#providerSessionId,
 			preferWebsockets: this.#preferWebsockets,
-			providerSessionState: session.providerSessionState,
-			serviceTier: prewarmModel ? session.agent.serviceTierResolver?.(prewarmModel) : undefined,
+			session,
 		});
 		// A print or script invocation (no UI) lists no language servers: it draws no warmup status and
 		// usually finishes before a server stabilizes. The lsp barrel is imported lazily because it pulls
