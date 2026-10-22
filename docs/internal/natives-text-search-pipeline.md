@@ -86,6 +86,7 @@ The loader tries install-specific addon candidates in priority order. Source and
   - Grep always walks with `.cache(false)`: it does not use the shared TTL scan cache (that cache serves `glob`/`fuzzyFind`).
   - Entry filtering: file-only + optional glob filter (`CompiledWalkGlob::compile`) + optional type filter mapping (`js`, `ts`, `rust`, etc.).
   - The compiled glob also supplies the walk's maximum depth through `depth_bound()`, so `--glob 'src/*.ts'` stops at two components instead of traversing the whole tree and filtering the rest back out.
+  - Files are searched 32 at a time (`PREFETCH_BATCH`, defined in `readahead.rs`): a thread opens every file of a batch and, on Linux, advises the kernel to read each ahead (`POSIX_FADV_WILLNEED`) up to the length its read takes, then searches them in order. A walk worker fills a batch in the unordered lane; the ordered windowed lane splits each window into batches across the walker pool. Each thread of the walk pool has up to 32 reads in flight instead of one. A file the batch cannot open is opened again by path when its turn comes, after the files before it closed; a file that second open also fails on is skipped.
 
 ### Search/collection semantics
 

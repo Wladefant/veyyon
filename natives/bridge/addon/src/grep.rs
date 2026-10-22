@@ -31,7 +31,12 @@ use veyyon_grep_kernel::{
 	matches_type_filter, matches_type_filter_str, resolve_context, resolve_type_filter,
 };
 
-use crate::{glob_util, iofs, napi_error::to_napi_with, task};
+use crate::{
+	glob_util, iofs,
+	napi_error::to_napi_with,
+	readahead::{self, PREFETCH_BATCH},
+	task,
+};
 
 const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -399,23 +404,34 @@ fn read_owned_prefix(
 
 /// Read file bytes, distinguishing oversized files from other skips.
 fn read_file_bytes(path: &Path, buffer: &mut Vec<u8>) -> io::Result<ReadFile> {
-	read_file_bytes_with_size(path, None, buffer)
+	read_opened_file_bytes(path, None, None, buffer)
 }
 
-/// Read file bytes with an optional size hint from directory traversal.
-fn read_file_bytes_with_size(
-	path: &Path,
-	size_hint: Option<u64>,
-	buffer: &mut Vec<u8>,
-) -> io::Result<ReadFile> {
-	let file = match File::open(path) {
-		Ok(file) => file,
+/// `prefetched`, or the file at `path` opened now when a batch did not open it
+/// ahead; `None` when the file is gone or unreadable, which a search skips.
+fn open_or_skip(path: &Path, prefetched: Option<File>) -> io::Result<Option<File>> {
+	match prefetched.map_or_else(|| File::open(path), Ok) {
+		Ok(file) => Ok(Some(file)),
 		Err(err)
 			if matches!(err.kind(), io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied) =>
 		{
-			return Ok(ReadFile::Skipped);
+			Ok(None)
 		},
-		Err(err) => return Err(err),
+		Err(err) => Err(err),
+	}
+}
+
+/// Read the bytes of the file at `path`, from `prefetched` when a batch opened
+/// it ahead, with an optional size hint from directory traversal,
+/// distinguishing oversized files from other skips.
+fn read_opened_file_bytes(
+	path: &Path,
+	prefetched: Option<File>,
+	size_hint: Option<u64>,
+	buffer: &mut Vec<u8>,
+) -> io::Result<ReadFile> {
+	let Some(file) = open_or_skip(path, prefetched)? else {
+		return Ok(ReadFile::Skipped);
 	};
 	let size = if let Some(size) = size_hint {
 		size
@@ -674,6 +690,17 @@ enum ReadPolicy {
 	Prefix,
 }
 
+impl ReadPolicy {
+	/// Bytes a read under this policy takes from the start of a file, which is
+	/// what a batch asks the system to read ahead.
+	const fn read_len(self) -> u64 {
+		match self {
+			Self::Full => FILE_CLASSIFICATION_READ_BYTES,
+			Self::Prefix => MAX_FILE_BYTES,
+		}
+	}
+}
+
 /// Outcome of attempting to search one candidate.
 enum FileOutcome {
 	/// File was searched (possibly zero matches); counts toward
@@ -749,14 +776,18 @@ struct DirectorySearch {
 /// read avoids mmap page faults when the backing file is rewritten
 /// concurrently.
 fn read_file_prefix(path: &Path, buffer: &mut Vec<u8>) -> io::Result<ReadFile> {
-	let file = match File::open(path) {
-		Ok(file) => file,
-		Err(err)
-			if matches!(err.kind(), io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied) =>
-		{
-			return Ok(ReadFile::Skipped);
-		},
-		Err(err) => return Err(err),
+	read_opened_file_prefix(path, None, buffer)
+}
+
+/// [`read_file_prefix`] of the file at `path`, from `prefetched` when a batch
+/// opened it ahead.
+fn read_opened_file_prefix(
+	path: &Path,
+	prefetched: Option<File>,
+	buffer: &mut Vec<u8>,
+) -> io::Result<ReadFile> {
+	let Some(file) = open_or_skip(path, prefetched)? else {
+		return Ok(ReadFile::Skipped);
 	};
 	let metadata = file.metadata()?;
 	if !metadata.is_file() {
@@ -772,19 +803,24 @@ fn read_file_prefix(path: &Path, buffer: &mut Vec<u8>) -> io::Result<ReadFile> {
 	Ok(ReadFile::Read)
 }
 
-/// Read one candidate per `policy` and search it, classifying the result.
+/// Read one candidate per `policy`, from `prefetched` when a batch opened it
+/// ahead, and search it, classifying the result.
 fn search_one_file<M: Matcher + Sync>(
 	worker: &mut SearchWorker,
 	matcher: &M,
 	file: &veyyon_walker::FileCandidate,
+	prefetched: Option<File>,
 	file_params: SearchParams,
 	policy: ReadPolicy,
 ) -> FileOutcome {
 	let read = match policy {
-		ReadPolicy::Full => {
-			read_file_bytes_with_size(&file.path, file_size_hint(file.size), &mut worker.buffer)
-		},
-		ReadPolicy::Prefix => read_file_prefix(&file.path, &mut worker.buffer),
+		ReadPolicy::Full => read_opened_file_bytes(
+			&file.path,
+			prefetched,
+			file_size_hint(file.size),
+			&mut worker.buffer,
+		),
+		ReadPolicy::Prefix => read_opened_file_prefix(&file.path, prefetched, &mut worker.buffer),
 	};
 	match read {
 		Ok(ReadFile::Read) => {},
@@ -809,9 +845,11 @@ fn search_one_file<M: Matcher + Sync>(
 	FileOutcome::Searched(search)
 }
 
-/// Search one candidate and fold its outcome into the shared [`PassState`].
+/// Search one candidate, from `prefetched` when a batch opened it ahead, and
+/// fold its outcome into the shared [`PassState`].
 fn handle_file<M: Matcher + Sync>(
 	file: &veyyon_walker::FileCandidate,
+	prefetched: Option<File>,
 	worker: &mut SearchWorker,
 	matcher: &M,
 	file_params: SearchParams,
@@ -826,7 +864,7 @@ fn handle_file<M: Matcher + Sync>(
 	{
 		return Ok(());
 	}
-	match search_one_file(worker, matcher, file, file_params, policy) {
+	match search_one_file(worker, matcher, file, prefetched, file_params, policy) {
 		FileOutcome::Defer => {
 			state.deferred.lock().push(file.clone());
 		},
@@ -853,6 +891,47 @@ fn handle_file<M: Matcher + Sync>(
 	Ok(())
 }
 
+/// Search `chunk`, at most [`PREFETCH_BATCH`] candidates: open each and ask the
+/// system to read it ahead, then search them in order, so the first read waits
+/// for one file and not the chunk, and the rest arrive while it is searched. A
+/// file the chunk cannot open ahead, as when the process has no descriptor to
+/// spare, is opened again when its turn comes, after the files before it
+/// closed.
+fn handle_chunk<M: Matcher + Sync>(
+	chunk: &[veyyon_walker::FileCandidate],
+	worker: &mut SearchWorker,
+	matcher: &M,
+	file_params: SearchParams,
+	policy: ReadPolicy,
+	stop_after_matches: Option<u64>,
+	state: &PassState,
+	ct: &task::CancelToken,
+) -> Result<()> {
+	if stop_after_matches.is_some_and(|stop| state.emitted.load(Ordering::Relaxed) >= stop) {
+		return Ok(());
+	}
+	let prefetched: SmallVec<[Option<File>; PREFETCH_BATCH]> = chunk
+		.iter()
+		.map(|file| readahead::open_ahead(&file.path, Some(policy.read_len())).ok())
+		.collect();
+	chunk
+		.iter()
+		.zip(prefetched)
+		.try_for_each(|(file, prefetched)| {
+			handle_file(
+				file,
+				prefetched,
+				worker,
+				matcher,
+				file_params,
+				policy,
+				stop_after_matches,
+				state,
+				ct,
+			)
+		})
+}
+
 /// Run one search pass over `candidates`, returning its path-sorted results.
 ///
 /// Counters and the deferred list accumulate into `state`; `results` is drained
@@ -868,34 +947,22 @@ fn run_pass<M: Matcher + Sync>(
 	state: &PassState,
 	ct: &task::CancelToken,
 ) -> Result<Vec<FileSearchResult>> {
+	let search_chunk = |worker: &mut SearchWorker, chunk: &[veyyon_walker::FileCandidate]| {
+		handle_chunk(chunk, worker, matcher, file_params, policy, stop_after_matches, state, ct)
+	};
 	let ran = if parallel_allowed && veyyon_walker::should_parallelize(candidates.len()) {
-		veyyon_walker::execute_candidates_init(
+		veyyon_walker::execute_candidate_chunks_init(
 			candidates,
+			PREFETCH_BATCH,
 			|| SearchWorker::new(file_params),
-			|worker, file| {
-				handle_file(file, worker, matcher, file_params, policy, stop_after_matches, state, ct)
-			},
+			search_chunk,
 		)
 	} else {
 		let mut worker = SearchWorker::new(file_params);
 		ct.heartbeat().and_then(|()| {
 			candidates
-				.iter()
-				.take_while(|_| {
-					stop_after_matches.is_none_or(|stop| state.emitted.load(Ordering::Relaxed) < stop)
-				})
-				.try_for_each(|file| {
-					handle_file(
-						file,
-						&mut worker,
-						matcher,
-						file_params,
-						policy,
-						stop_after_matches,
-						state,
-						ct,
-					)
-				})
+				.chunks(PREFETCH_BATCH)
+				.try_for_each(|chunk| search_chunk(&mut worker, chunk))
 		})
 	};
 	state.settle(ct, ran)?;
@@ -1022,7 +1089,14 @@ fn run_parallel_streaming_grep<M: Matcher + Sync>(
 	)?;
 	let file_params = per_file_params(params);
 	let state = PassState::default();
-
+	// Candidates wait here until a batch is full, and the thread that fills it
+	// opens the batch ahead and searches it.
+	let pending = Mutex::new(Vec::with_capacity(PREFETCH_BATCH));
+	let search_batch = |batch: &[veyyon_walker::FileCandidate]| {
+		with_parallel_grep_searcher(file_params, |worker| {
+			handle_chunk(batch, worker, matcher, file_params, ReadPolicy::Full, None, &state, ct)
+		})
+	};
 	let walked = request
 		.for_each_file_candidate_parallel(
 			|file| {
@@ -1031,15 +1105,24 @@ fn run_parallel_streaming_grep<M: Matcher + Sync>(
 				{
 					return Ok(veyyon_walker::ParallelWalkControl::Continue);
 				}
-				with_parallel_grep_searcher(file_params, |searcher| {
-					handle_file(file, searcher, matcher, file_params, ReadPolicy::Full, None, &state, ct)
-				})?;
+				let full = {
+					let mut pending = pending.lock();
+					pending.push(file.clone());
+					(pending.len() >= PREFETCH_BATCH)
+						.then(|| std::mem::replace(&mut *pending, Vec::with_capacity(PREFETCH_BATCH)))
+				};
+				if let Some(batch) = full {
+					search_batch(&batch)?;
+				}
 				Ok(veyyon_walker::ParallelWalkControl::Continue)
 			},
 			|| ct.heartbeat(),
 		)
 		.map_err(iofs::map_walker_error);
-	state.settle(ct, walked)?;
+	if state.settle(ct, walked)?.is_some() {
+		let rest = std::mem::take(&mut *pending.lock());
+		state.settle(ct, search_batch(&rest))?;
+	}
 
 	let mut results = std::mem::take(&mut *state.results.lock());
 	results.sort_unstable_by(|a, b| a.relative_path.cmp(&b.relative_path));
@@ -2219,7 +2302,7 @@ mod tests {
 		}
 
 		/// One `grep` call per search path and output mode.
-		fn configs(root: &Path) -> Vec<(&'static str, GrepConfig)> {
+		pub(super) fn configs(root: &Path) -> Vec<(&'static str, GrepConfig)> {
 			let config = |max_count: Option<u32>, mode: Option<GrepOutputMode>| GrepConfig {
 				max_count,
 				mode,
@@ -2237,7 +2320,7 @@ mod tests {
 		}
 
 		/// A tree of `count` one-line files that each match `needle`.
-		fn needle_tree(root: &Path, count: usize) -> BTreeSet<String> {
+		pub(super) fn needle_tree(root: &Path, count: usize) -> BTreeSet<String> {
 			let tree: BTreeSet<String> = (0..count).map(|index| format!("{index:05}.txt")).collect();
 			for path in &tree {
 				write_file(&root.join(path), "needle\n");
@@ -2356,6 +2439,95 @@ mod tests {
 				}
 			}
 		}
+	}
+
+	/// WHY: a search opens [`PREFETCH_BATCH`] files ahead of reading them, so it
+	/// holds more descriptors at once than one read does. A file whose ahead
+	/// open fails, as when the process has no descriptor to spare, must be
+	/// opened again when its turn comes rather than read as a skip that drops
+	/// its matches. The child lowers its descriptor limit to two above what it
+	/// holds, so most ahead opens of every batch fail, and every search path
+	/// and output mode, over whole files and over the leading window of
+	/// oversized ones, must return what it returns with descriptors to spare.
+	///
+	/// Not caught: several walker threads, which the child does not run, so a
+	/// batch frees its own descriptors before its next open; with several
+	/// threads one thread's batch can hold the descriptors another thread's
+	/// open needs. Nor a walk's directory open that fails under the same
+	/// pressure.
+	///
+	/// [`PREFETCH_BATCH`]: crate::readahead::PREFETCH_BATCH
+	#[cfg(all(target_os = "linux", target_env = "gnu"))]
+	#[test]
+	fn a_file_a_batch_cannot_open_ahead_is_still_searched() {
+		use a_search_past_its_timeout_returns_what_it_found::{configs, needle_tree};
+
+		use crate::{heap_pages::measure::in_child, readahead::PREFETCH_BATCH};
+
+		let name = "a_file_a_batch_cannot_open_ahead_is_still_searched";
+		if !in_child(module_path!(), name, &[("VEYYON_WALK_WORKERS", "1")]) {
+			return;
+		}
+		let root = temp_dir_guard();
+		let tree = needle_tree(root.path(), PREFETCH_BATCH * 4);
+		for index in 0..3 {
+			write_oversized_file(&root.path().join(format!("big{index}.txt")), "needle\n");
+		}
+		let searched = |config: GrepConfig, lane: &str| {
+			grep_sync(config, None, task::CancelToken::default())
+				.unwrap_or_else(|err| panic!("{lane}: the search failed: {err}"))
+		};
+		let references: Vec<_> = configs(root.path())
+			.into_iter()
+			.map(|(lane, config)| searched(config, lane))
+			.collect();
+		assert!(
+			references
+				.iter()
+				.all(|reference| reference.files_with_matches > 0),
+			"a search with descriptors to spare found nothing"
+		);
+
+		leave_spare_descriptors(2);
+		let batch: Vec<_> = tree
+			.iter()
+			.take(PREFETCH_BATCH)
+			.map(|path| fs::File::open(root.path().join(path)))
+			.collect();
+		assert!(
+			batch.iter().any(Result::is_err),
+			"the lowered limit leaves room to open a whole batch"
+		);
+		drop(batch);
+
+		for ((lane, config), reference) in configs(root.path()).into_iter().zip(&references) {
+			let pressed = searched(config, lane);
+			assert_eq!(
+				(pressed.files_searched, pressed.skipped_oversized),
+				(reference.files_searched, reference.skipped_oversized),
+				"{lane}: a file a batch could not open ahead was not searched"
+			);
+			assert_same_grep_result(&pressed, reference);
+		}
+	}
+
+	/// Lower this process's descriptor limit so `spare` descriptors are free.
+	#[cfg(all(target_os = "linux", target_env = "gnu"))]
+	fn leave_spare_descriptors(spare: u64) {
+		// The listing holds one descriptor of its own while it is read, and the
+		// limit bounds the lowest free descriptor number, which the held ones fill.
+		let listed = fs::read_dir("/proc/self/fd")
+			.expect("list the held descriptors")
+			.count();
+		let held = u64::try_from(listed).expect("a descriptor count fits u64") - 1;
+		let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+		// SAFETY: `limit` is a valid `rlimit` the call writes.
+		let read = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit) };
+		assert_eq!(read, 0, "read the descriptor limit: {}", std::io::Error::last_os_error());
+		limit.rlim_cur = held + spare;
+		// SAFETY: `limit` is a valid `rlimit` the call reads.
+		let set = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const limit) };
+		assert_eq!(set, 0, "lower the descriptor limit: {}", std::io::Error::last_os_error());
 	}
 
 	#[cfg(unix)]
