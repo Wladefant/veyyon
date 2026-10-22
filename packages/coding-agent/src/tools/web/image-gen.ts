@@ -6,6 +6,10 @@ import type { ApiKey, FetchImpl, Model } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import { getEnvApiKey } from "@veyyon/ai/env-api-key";
 import { ProviderHttpError } from "@veyyon/ai/error";
+import {
+	type CodexAccessPrograms,
+	resolveCodexAccessPrograms,
+} from "@veyyon/ai/providers/openai-codex/access-programs";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { fetchAntigravityImageModel } from "@veyyon/catalog/discovery/antigravity";
 import {
@@ -228,6 +232,7 @@ interface OpenAIHostedImageRequest {
 	tool_choice: { type: "image_generation" };
 	store: false;
 	stream?: boolean;
+	access_programs?: CodexAccessPrograms;
 }
 
 interface OpenAIImageGenerationCall {
@@ -1045,6 +1050,11 @@ async function generateOpenAIHostedImage(
 ): Promise<OpenAIHostedImageResult> {
 	const stream = model.api === "openai-codex-responses" || model.provider === "openai-codex";
 	const requestBody = buildOpenAIHostedImageRequest(model, promptText, params, inputImages, stream);
+	if (stream) {
+		// A Codex image request is a Codex turn and is judged under the account's program like one.
+		const accessPrograms = await resolveCodexAccessPrograms(model, apiKey, { fetch: fetchImpl, signal });
+		if (accessPrograms) requestBody.access_programs = accessPrograms;
+	}
 	const response = await fetchImpl(getOpenAIResponsesUrl(model), {
 		method: "POST",
 		headers: buildOpenAIImageHeaders(model, apiKey, sessionId),

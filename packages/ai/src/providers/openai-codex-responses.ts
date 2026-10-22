@@ -106,6 +106,7 @@ import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, tool
 import { notifyRawSseEvent } from "../utils/sse-debug";
 import { compactGrammarDefinition } from "./grammar";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
+import { type CodexAccessPrograms, resolveCodexAccessPrograms } from "./openai-codex/access-programs";
 import { applyChatGptWebTurnContract } from "./openai-codex/chatgpt-web-trusted-context";
 import { CodexCompactionV2Accumulator } from "./openai-codex/compaction-v2";
 import {
@@ -1552,12 +1553,20 @@ async function buildCodexRequestContext(
 	context: Context,
 	options: OpenAICodexResponsesOptions | undefined,
 ): Promise<CodexRequestContext> {
-	const transformedBody = await buildTransformedCodexRequestBody(
-		model,
-		context,
-		options,
-		getOpenAIPromptCacheKey(options),
-	);
+	const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
+	if (!apiKey) throw new AIError.MissingApiKeyError(model.provider);
+	const accessPrograms = await resolveCodexAccessPrograms(model, apiKey, {
+		accountId: getCodexAccountId(apiKey),
+		fetch: options?.fetch,
+		signal: options?.signal,
+		waitMs:
+			options?.streamFirstEventTimeoutMs ??
+			getOpenAIStreamFirstEventTimeoutMs(options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs()),
+	});
+	const transformedBody = await buildTransformedCodexRequestBody(model, context, options, {
+		promptCacheKey: getOpenAIPromptCacheKey(options),
+		accessPrograms,
+	});
 	return createCodexRequestContext(model, transformedBody, options, {
 		isolateCompactionTransport: true,
 		startNewTurn: options?.codexCompaction ? undefined : !isCodexWithinTurnContinuation(context),
@@ -1889,13 +1898,14 @@ export async function buildTransformedCodexRequestBody(
 	model: Model<"openai-codex-responses">,
 	context: Context,
 	options: OpenAICodexResponsesOptions | undefined,
-	promptCacheKey = getOpenAIPromptCacheKey(options),
+	request: { promptCacheKey?: string; accessPrograms?: CodexAccessPrograms } = {},
 ): Promise<RequestBody> {
 	const params: RequestBody = {
 		model: model.requestModelId ?? model.id,
 		input: convertCodexResponsesMessages(model, context),
 		stream: true,
-		prompt_cache_key: promptCacheKey,
+		prompt_cache_key:
+			request.promptCacheKey ?? normalizeOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
 	};
 
 	// `maxTokens` is intentionally not forwarded: transformRequestBody strips
@@ -1932,6 +1942,7 @@ export async function buildTransformedCodexRequestBody(
 		textVerbosity: options?.textVerbosity,
 		include: options?.include,
 		responsesLite: options?.responsesLite,
+		accessPrograms: request.accessPrograms,
 	};
 
 	return transformRequestBody(params, model, codexOptions, { developerMessages });
@@ -3287,7 +3298,6 @@ const streamOpenAICodexResponsesOnce = (
 			if (requestContext.websocketState) {
 				requestContext.websocketState.lastTransport = initialTransport.transport;
 			}
-
 			processingContext = new CodexStreamProcessor({
 				runtime,
 				model,
@@ -4968,7 +4978,6 @@ function normalizeInputMessageContent(
 		) ?? []
 	);
 }
-
 
 type CodexToolPayload =
 	| {

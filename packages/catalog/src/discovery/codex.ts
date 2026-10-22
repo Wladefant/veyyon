@@ -1,3 +1,4 @@
+import type { FetchImpl } from "@veyyon/utils/tls-fetch";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { normalizeBaseUrl } from "@veyyon/utils/url";
 import { canonicalizeEfforts, type Effort, isEffort } from "../effort";
@@ -9,9 +10,15 @@ import {
 	codexServiceTierCost,
 	resolveCodexMaxContextWindow,
 } from "../provider-models/codex-subscription";
-import type { CyberAccessProgram, FetchImpl, ModelAccessPrograms, ModelReasoningOptions, ModelSpec } from "../types";
+import type { CyberAccessProgram, ModelAccountAccess, ModelReasoningOptions, ModelSpec } from "../types";
 import { discoveryFetch, toArray, toBoolean, toFields, toFiniteNumber, toNonEmptyString } from "../utils";
-import { CODEX_BASE_URL, CODEX_CLIENT_VERSION, OPENAI_HEADER_VALUES, OPENAI_HEADERS } from "../wire/codex";
+import {
+	CODEX_BASE_URL,
+	CODEX_CLIENT_VERSION,
+	getCodexAccountId,
+	OPENAI_HEADER_VALUES,
+	OPENAI_HEADERS,
+} from "../wire/codex";
 import { type DiscoveryFailure, type DiscoveryHooks, readDiscoveryJson } from "./failure";
 
 const DEFAULT_MODEL_LIST_PATHS = ["/codex/models", "/models"] as const;
@@ -68,7 +75,10 @@ interface NormalizedCodexModel {
 export interface CodexModelDiscoveryOptions {
 	/** OAuth access token used for `Authorization: Bearer ...`. */
 	accessToken: string;
-	/** ChatGPT account id value used for `chatgpt-account-id` header. */
+	/**
+	 * ChatGPT account id value used for `chatgpt-account-id` header. Without it the endpoint answers for the
+	 * account the access token names.
+	 */
 	accountId?: string;
 	/** Base URL for Codex backend. Defaults to `https://chatgpt.com/backend-api`. */
 	baseUrl?: string;
@@ -114,6 +124,7 @@ export async function fetchCodexModels(options: CodexModelDiscoveryOptions): Pro
 	const paths = normalizePaths(options.paths);
 	const clientVersion = normalizeClientVersion(options.clientVersion) ?? CODEX_CLIENT_VERSION;
 	const headers = buildCodexHeaders(options, clientVersion);
+	const listingAccountId = codexListingAccountId(options.accessToken, options.accountId);
 
 	let sawSuccessfulResponse = false;
 	for (const path of paths) {
@@ -136,7 +147,7 @@ export async function fetchCodexModels(options: CodexModelDiscoveryOptions): Pro
 		const payload = await readDiscoveryJson(response, report);
 		if (payload === undefined) continue;
 
-		const models = normalizeCodexModels(payload, baseUrl);
+		const models = normalizeCodexModels(payload, baseUrl, listingAccountId);
 		if (models === null) {
 			report("payload", "response holds no model list this reader recognizes");
 			continue;
@@ -146,6 +157,93 @@ export async function fetchCodexModels(options: CodexModelDiscoveryOptions): Pro
 		return etag ? { models, etag } : { models };
 	}
 	return sawSuccessfulResponse ? { models: [] } : null;
+}
+
+/** The account a listing is for: the `chatgpt-account-id` header's, else the account the access token names. */
+function codexListingAccountId(accessToken: string, accountId: string | undefined): string | undefined {
+	return accountId?.trim() ? accountId : getCodexAccountId(accessToken);
+}
+
+/** One signed-in ChatGPT account Codex discovery lists. */
+export interface CodexDiscoveryAccount {
+	/** OAuth access token used for `Authorization: Bearer ...`. */
+	accessToken: string;
+	/** The `chatgpt-account-id` header. Without it the endpoint answers for the account the token names. */
+	accountId?: string;
+}
+
+/** Options for listing several accounts: every per-account option except the credential. */
+export interface CodexAccountsDiscoveryOptions extends Omit<CodexModelDiscoveryOptions, "accessToken" | "accountId"> {
+	accounts: readonly CodexDiscoveryAccount[];
+}
+
+/**
+ * Lists every account's models and merges the listings into one model list.
+ *
+ * Each account is listed the models its tier may use, so the result is the union of every listing, ordered
+ * as one listing is. Every model records, for every account whose listing answered, whether that account
+ * is listed it and the programs it is offered (see {@link Model.accountAccess}). The first listing that
+ * includes a model supplies its other fields. An account listed twice is listed once.
+ * A listing whose account is unknown adds its models with no entry.
+ * Null when any listing fails, so an authoritative refresh cannot erase another account's models.
+ */
+export async function fetchCodexAccountModels(
+	options: CodexAccountsDiscoveryOptions,
+): Promise<ModelSpec<"openai-codex-responses">[] | null> {
+	const listed: Record<string, true> = {};
+	const accounts = options.accounts.filter(account => {
+		const accountId = codexListingAccountId(account.accessToken, account.accountId);
+		if (accountId === undefined) return true;
+		if (listed[accountId]) return false;
+		listed[accountId] = true;
+		return true;
+	});
+	const listings = await Promise.all(
+		accounts.map(async account => ({
+			accountId: codexListingAccountId(account.accessToken, account.accountId),
+			result: await fetchCodexModels({ ...options, accessToken: account.accessToken, accountId: account.accountId }),
+		})),
+	);
+	if (listings.some(listing => listing.result === null)) return null;
+	const answered = listings.filter(listing => listing.result !== null);
+	if (answered.length === 0) return null;
+
+	const enumerated = answered.flatMap(listing => (listing.accountId === undefined ? [] : [listing.accountId]));
+	const merged = new Map<string, ModelSpec<"openai-codex-responses">>();
+	const access = new Map<string, Record<string, ModelAccountAccess>>();
+	for (const { result } of answered) {
+		for (const model of result!.models) {
+			if (!merged.has(model.id)) merged.set(model.id, model);
+			if (model.accountAccess === undefined) continue;
+			const entries = access.get(model.id) ?? {};
+			Object.assign(entries, model.accountAccess);
+			access.set(model.id, entries);
+		}
+	}
+
+	const models: ModelSpec<"openai-codex-responses">[] = [];
+	for (const [id, model] of merged) {
+		if (enumerated.length === 0) {
+			models.push(model);
+			continue;
+		}
+		const entries = access.get(id) ?? {};
+		const accountAccess: Record<string, ModelAccountAccess> = {};
+		for (const accountId of enumerated) accountAccess[accountId] = entries[accountId] ?? { listed: false };
+		models.push({ ...model, accountAccess });
+	}
+	return models.sort(compareCodexModels);
+}
+
+/** Listing order: the endpoint's priority, then the id. */
+function compareCodexModels(
+	left: Pick<ModelSpec<"openai-codex-responses">, "id" | "priority">,
+	right: Pick<ModelSpec<"openai-codex-responses">, "id" | "priority">,
+): number {
+	const leftPriority = left.priority ?? Number.MAX_SAFE_INTEGER;
+	const rightPriority = right.priority ?? Number.MAX_SAFE_INTEGER;
+	if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+	return left.id.localeCompare(right.id);
 }
 
 function normalizePaths(paths: readonly string[] | undefined): string[] {
@@ -191,7 +289,11 @@ function normalizeClientVersion(value: unknown): string | undefined {
 	return trimmed;
 }
 
-function normalizeCodexModels(payload: unknown, baseUrl: string): ModelSpec<"openai-codex-responses">[] | null {
+function normalizeCodexModels(
+	payload: unknown,
+	baseUrl: string,
+	listingAccountId: string | undefined,
+): ModelSpec<"openai-codex-responses">[] | null {
 	const fields = toFields(payload);
 	if (!fields) {
 		return null;
@@ -208,7 +310,7 @@ function normalizeCodexModels(payload: unknown, baseUrl: string): ModelSpec<"ope
 	const entries = toArray(fields.models) ?? toArray(fields.data) ?? [];
 	const normalized: NormalizedCodexModel[] = [];
 	for (const entry of entries) {
-		const model = normalizeCodexModelEntry(entry, baseUrl);
+		const model = normalizeCodexModelEntry(entry, baseUrl, listingAccountId);
 		if (model) {
 			normalized.push(model);
 		}
@@ -224,7 +326,11 @@ function normalizeCodexModels(payload: unknown, baseUrl: string): ModelSpec<"ope
 	return normalized.map(item => item.model);
 }
 
-function normalizeCodexModelEntry(entry: unknown, baseUrl: string): NormalizedCodexModel | null {
+function normalizeCodexModelEntry(
+	entry: unknown,
+	baseUrl: string,
+	listingAccountId: string | undefined,
+): NormalizedCodexModel | null {
 	const payload: CodexModelEntry | undefined = toFields(entry);
 	if (!payload) {
 		return null;
@@ -268,7 +374,7 @@ function normalizeCodexModelEntry(entry: unknown, baseUrl: string): NormalizedCo
 	const useResponsesLite = toBoolean(payload.use_responses_lite) === true;
 	const applyPatchToolType = toNonEmptyString(payload.apply_patch_tool_type)?.toLowerCase();
 	const priority = toFiniteNumber(payload.priority) ?? Number.MAX_SAFE_INTEGER;
-	const accessPrograms = readAccessPrograms(payload.available_access_programs);
+	const accountAccess = readAccountAccess(payload.available_access_programs, listingAccountId);
 
 	return {
 		priority,
@@ -293,7 +399,7 @@ function normalizeCodexModelEntry(entry: unknown, baseUrl: string): NormalizedCo
 			...(reasoningOptions !== undefined ? { reasoningOptions } : {}),
 			...(applyPatchToolType === "freeform" || applyPatchToolType === "function" ? { applyPatchToolType } : {}),
 			...(priority !== Number.MAX_SAFE_INTEGER ? { priority } : {}),
-			...(accessPrograms !== undefined ? { accessPrograms } : {}),
+			...(accountAccess !== undefined ? { accountAccess } : {}),
 		},
 	};
 }
@@ -305,20 +411,23 @@ const CYBER_ACCESS_PROGRAMS: Record<CyberAccessProgram, true> = {
 };
 
 /**
- * `available_access_programs`, or undefined when the entry states none. A `cyber` value that is not a
- * list makes the whole field unreadable rather than empty, because an empty list is a statement that
- * the caller may select nothing. Program names this reader does not know are dropped, as codex-rs
- * drops them, so a new server program cannot hide the ones it does know.
+ * The listing account's {@link ModelAccountAccess} entry for a model its listing includes, built from
+ * `available_access_programs`. A `cyber` value that is not a list leaves `cyber` absent rather than
+ * empty, because an empty list is a statement that the caller may select nothing. Program names this
+ * reader does not know are dropped, as codex-rs drops them, so a new server program cannot hide the
+ * ones it does know. Undefined when the listing account is unknown, because an entry is keyed by it.
  */
-function readAccessPrograms(value: unknown): ModelAccessPrograms | undefined {
-	const cyber = toArray(toFields(value)?.cyber);
-	if (cyber === undefined) return undefined;
-	return {
-		cyber: cyber.filter(
-			(program): program is CyberAccessProgram =>
-				typeof program === "string" && Object.hasOwn(CYBER_ACCESS_PROGRAMS, program),
-		),
-	};
+function readAccountAccess(
+	value: unknown,
+	listingAccountId: string | undefined,
+): Record<string, ModelAccountAccess> | undefined {
+	if (listingAccountId === undefined) return undefined;
+	const listed = toArray(toFields(value)?.cyber);
+	const cyber = listed?.filter(
+		(program): program is CyberAccessProgram =>
+			typeof program === "string" && Object.hasOwn(CYBER_ACCESS_PROGRAMS, program),
+	);
+	return { [listingAccountId]: { listed: true, ...(cyber !== undefined ? { cyber } : {}) } };
 }
 
 function supportsReasoning(defaultReasoningLevel: unknown, supportedReasoningLevels: unknown): boolean {

@@ -669,7 +669,7 @@ export async function fetchCodexDiscoveryModels(
 			return [];
 		}
 		console.log(`Fetched ${models.length} models from Codex API`);
-		return models.map(({ accessPrograms: _accessPrograms, ...spec }) => spec);
+		return models.map(({ accountAccess: _accountAccess, ...spec }) => spec);
 	} catch (error) {
 		console.warn("Codex API fetch failed, keeping previous models.", error);
 		return [];

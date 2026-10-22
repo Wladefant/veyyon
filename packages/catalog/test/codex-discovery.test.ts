@@ -4,12 +4,18 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { buildModel } from "@veyyon/catalog/build";
-import { fetchCodexModels } from "@veyyon/catalog/discovery/codex";
+import { fetchCodexAccountModels, fetchCodexModels } from "@veyyon/catalog/discovery/codex";
 import { Effort } from "@veyyon/catalog/effort";
 import { writeModelCache } from "@veyyon/catalog/model-cache";
 import { resolveProviderModels } from "@veyyon/catalog/model-manager";
 import { openaiCodexModelManagerOptions } from "@veyyon/catalog/provider-models/special";
 import type { ModelSpec } from "@veyyon/catalog/types";
+
+/** An access token whose payload names `accountId`, as a ChatGPT login's does. */
+function codexToken(accountId: string): string {
+	const payload = { "https://api.openai.com/auth": { chatgpt_account_id: accountId } };
+	return `aaa.${Buffer.from(JSON.stringify(payload)).toBase64()}.bbb`;
+}
 
 describe("Codex model discovery", () => {
 	it("marks discovered models for provider-native V2 compaction", async () => {
@@ -130,6 +136,170 @@ describe("Codex model discovery", () => {
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
+	});
+
+	// WHY: a model row records, per ChatGPT account, whether the account is listed the model and the
+	// programs it is offered, and a request signed by that account selects from its entry with no listing
+	// of its own. The endpoint answers for the `chatgpt-account-id` header when one is sent, so an entry
+	// keyed by the token's account instead would serve one account's Daybreak program to another. Not
+	// caught: a listing whose header and token disagree in production, which no caller is known to send.
+	it("keys a listing's entries by the account it was made for: the account header when sent, else the token's", async () => {
+		const headerAccounts: Array<string | null> = [];
+		const fetchFn: typeof fetch = Object.assign(
+			async (_input: string | URL | Request, init?: RequestInit) => {
+				headerAccounts.push(new Headers(init?.headers).get("chatgpt-account-id"));
+				return new Response(
+					JSON.stringify({
+						models: [
+							{
+								slug: "gpt-5.6-sol",
+								supported_in_api: true,
+								available_access_programs: { cyber: ["standard", "daybreak_blue"] },
+							},
+							{ slug: "gpt-6-astra", supported_in_api: true },
+						],
+					}),
+				);
+			},
+			{ preconnect() {} },
+		);
+		const discover = (accountId?: string) =>
+			fetchCodexModels({
+				accessToken: codexToken("acc_token"),
+				baseUrl: "https://codex.example/backend-api",
+				fetchFn,
+				...(accountId !== undefined ? { accountId } : {}),
+			});
+
+		const byHeader = await discover("acc_header");
+		const byToken = await discover();
+
+		expect(headerAccounts).toEqual(["acc_header", null]);
+		expect(byHeader?.models.map(model => [model.id, model.accountAccess])).toEqual([
+			["gpt-5.6-sol", { acc_header: { listed: true, cyber: ["standard", "daybreak_blue"] } }],
+			["gpt-6-astra", { acc_header: { listed: true } }],
+		]);
+		expect(byToken?.models.map(model => [model.id, model.accountAccess])).toEqual([
+			["gpt-5.6-sol", { acc_token: { listed: true, cyber: ["standard", "daybreak_blue"] } }],
+			["gpt-6-astra", { acc_token: { listed: true } }],
+		]);
+	});
+
+	// WHY: each ChatGPT account is listed the models its tier may use: a Daybreak Blue account is listed
+	// models a standard or Red account is not, and each tier is offered its own programs for a shared
+	// model. Listing one account hid every model only another tier is listed, and recorded no fact about
+	// the other accounts. The class closed: discovery lists every account, the catalog is the union, and
+	// every model states for every account whose listing answered whether it is listed and what it is
+	// offered. Not caught: an account whose listing fails, which has no entry on any model and is left
+	// to the request-time listing.
+	describe("listing every signed-in account", () => {
+		const LISTINGS: Record<string, unknown[]> = {
+			acc_standard: [
+				{ slug: "gpt-5.6-sol", priority: 1, available_access_programs: { cyber: ["standard"] } },
+				{ slug: "gpt-6-astra", priority: 2 },
+			],
+			acc_blue: [
+				{
+					slug: "gpt-5.6-sol",
+					priority: 1,
+					available_access_programs: { cyber: ["standard", "daybreak_blue"] },
+				},
+				{ slug: "gpt-6-astra", priority: 2 },
+				{
+					slug: "gpt-5.6-blue-latest",
+					display_name: "Blue Latest",
+					priority: 3,
+					available_access_programs: { cyber: ["daybreak_blue"] },
+				},
+			],
+			acc_red: [
+				{
+					slug: "gpt-5.6-sol",
+					priority: 1,
+					available_access_programs: { cyber: ["standard", "daybreak_red"] },
+				},
+				{ slug: "gpt-6-astra", priority: 2 },
+			],
+		};
+
+		function tiersFetch(requested: Array<string | null>): typeof fetch {
+			return Object.assign(
+				async (_input: string | URL | Request, init?: RequestInit) => {
+					const accountId = new Headers(init?.headers).get("chatgpt-account-id");
+					requested.push(accountId);
+					const models = accountId === null ? undefined : LISTINGS[accountId];
+					if (models === undefined) return new Response("unavailable", { status: 503 });
+					return new Response(
+						JSON.stringify({ models: models.map(model => ({ supported_in_api: true, ...(model as object) })) }),
+					);
+				},
+				{ preconnect() {} },
+			);
+		}
+
+		const account = (accountId: string) => ({ accessToken: codexToken(accountId), accountId });
+
+		it("merges every account's listing and records each account's entry on every model", async () => {
+			const requested: Array<string | null> = [];
+			const models = await fetchCodexAccountModels({
+				accounts: [account("acc_standard"), account("acc_blue"), account("acc_red")],
+				baseUrl: "https://codex.example/backend-api",
+				fetchFn: tiersFetch(requested),
+			});
+
+			expect(requested.toSorted()).toEqual(["acc_blue", "acc_red", "acc_standard"]);
+			expect(models?.map(model => [model.id, model.accountAccess])).toEqual([
+				[
+					"gpt-5.6-sol",
+					{
+						acc_standard: { listed: true, cyber: ["standard"] },
+						acc_blue: { listed: true, cyber: ["standard", "daybreak_blue"] },
+						acc_red: { listed: true, cyber: ["standard", "daybreak_red"] },
+					},
+				],
+				["gpt-6-astra", { acc_standard: { listed: true }, acc_blue: { listed: true }, acc_red: { listed: true } }],
+				[
+					"gpt-5.6-blue-latest",
+					{
+						acc_standard: { listed: false },
+						acc_blue: { listed: true, cyber: ["daybreak_blue"] },
+						acc_red: { listed: false },
+					},
+				],
+			]);
+			expect(models?.find(model => model.id === "gpt-5.6-blue-latest")?.name).toBe("Blue Latest");
+		});
+
+		it("lists an account given twice once", async () => {
+			const requested: Array<string | null> = [];
+			const models = await fetchCodexAccountModels({
+				accounts: [account("acc_blue"), account("acc_standard"), account("acc_blue")],
+				baseUrl: "https://codex.example/backend-api",
+				fetchFn: tiersFetch(requested),
+			});
+
+			expect(requested.toSorted()).toEqual(["acc_blue", "acc_standard"]);
+			expect(Object.keys(models?.[0]?.accountAccess ?? {}).toSorted()).toEqual(["acc_blue", "acc_standard"]);
+		});
+
+		it("gives an account whose listing fails no entry, and answers null when no listing answers", async () => {
+			const merged = await fetchCodexAccountModels({
+				accounts: [account("acc_down"), account("acc_red")],
+				baseUrl: "https://codex.example/backend-api",
+				fetchFn: tiersFetch([]),
+			});
+			const none = await fetchCodexAccountModels({
+				accounts: [account("acc_down")],
+				baseUrl: "https://codex.example/backend-api",
+				fetchFn: tiersFetch([]),
+			});
+
+			expect(merged?.map(model => [model.id, model.accountAccess])).toEqual([
+				["gpt-5.6-sol", { acc_red: { listed: true, cyber: ["standard", "daybreak_red"] } }],
+				["gpt-6-astra", { acc_red: { listed: true } }],
+			]);
+			expect(none).toBeNull();
+		});
 	});
 
 	// WHY: GPT-6 Astra and GPT-Reserve reached the picker with no effort control

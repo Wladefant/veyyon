@@ -21,24 +21,11 @@ export type KnownApi = (typeof KNOWN_APIS)[number];
 export type Api = KnownApi | (string & {});
 
 /** Catalog kinds used to isolate role-specific runners from session chat models. */
-export const MODEL_KINDS = [
-	"chat",
-	"tiny",
-	"image",
-	"tts",
-	"stt",
-	"search",
-	"judge",
-] as const;
+export const MODEL_KINDS = ["chat", "tiny", "image", "tts", "stt", "search", "judge"] as const;
 /** Technical capability of a catalog model; absent model kinds mean chat. */
 export type ModelKind = (typeof MODEL_KINDS)[number];
 /** Grounding transport available to chat models selected by the web role. */
-export type WebSearchGrounding =
-	| "gemini"
-	| "anthropic"
-	| "codex"
-	| "xai"
-	| "openrouter";
+export type WebSearchGrounding = "gemini" | "anthropic" | "codex" | "xai" | "openrouter";
 /** Non-chat runner protocols accepted by catalog seeds, outside the chat dispatch union. */
 export const RUNNER_APIS = [
 	"local-inference",
@@ -199,13 +186,19 @@ export interface ModelReasoningOptions {
 export type CyberAccessProgram = "standard" | "daybreak_blue" | "daybreak_red";
 
 /**
- * Access programs the endpoint offers the signed-in caller for one model, read from Codex discovery
- * (`available_access_programs`). Discovery grants nothing: the inference endpoint still enforces
- * authorization on every request.
+ * What one ChatGPT account's Codex model listing states for one model. An account is listed the models
+ * its tier may use: a Daybreak-only model appears only in a Daybreak account's listing. Discovery grants
+ * nothing: the inference endpoint still enforces authorization on every request.
  */
-export interface ModelAccessPrograms {
-	/** Accepted explicit selections, unknown program names dropped. An empty list is distinct from absent metadata. */
-	cyber: readonly CyberAccessProgram[];
+export interface ModelAccountAccess {
+	/** Whether the account's listing includes the model. An account not listed a model cannot use it. */
+	listed: boolean;
+	/**
+	 * Accepted explicit `access_programs.cyber` selections (`available_access_programs`), unknown program
+	 * names dropped. Absent when the account is not listed the model or its listing states no list for
+	 * it; an empty list is distinct from an absent one.
+	 */
+	cyber?: readonly CyberAccessProgram[];
 }
 
 // `Provider` is any provider-id string; `KnownProvider` (re-exported above) enumerates
@@ -341,12 +334,7 @@ export interface Usage {
 	};
 }
 
-export type OpenAIReasoningFormat =
-	| "openai"
-	| "openrouter"
-	| "zai"
-	| "qwen"
-	| "qwen-chat-template";
+export type OpenAIReasoningFormat = "openai" | "openrouter" | "zai" | "qwen" | "qwen-chat-template";
 
 /**
  * How each OpenAI-compatible dialect encodes "stop reasoning", as a value so
@@ -362,8 +350,7 @@ export const OPENAI_REASONING_DISABLE_MODES = [
 	"qwen-template-false",
 ] as const;
 
-export type OpenAIReasoningDisableMode =
-	(typeof OPENAI_REASONING_DISABLE_MODES)[number];
+export type OpenAIReasoningDisableMode = (typeof OPENAI_REASONING_DISABLE_MODES)[number];
 
 export type OpenAIStreamMarkupHealingPattern = "kimi" | "dsml" | "thinking";
 
@@ -682,9 +669,7 @@ export interface VercelGatewayRouting {
 	order?: string[];
 }
 
-type ResolvedToolStrictMode =
-	| NonNullable<OpenAICompat["toolStrictMode"]>
-	| "mixed";
+type ResolvedToolStrictMode = NonNullable<OpenAICompat["toolStrictMode"]> | "mixed";
 
 /**
  * Fields whose meaning is identical across chat-completions and Responses surfaces.
@@ -818,8 +803,7 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 	};
 
 /** Fully-resolved Responses-API compat view (same contract as `ResolvedOpenAICompat`). */
-export interface ResolvedOpenAIResponsesCompat
-	extends ResolvedOpenAISharedCompat {
+export interface ResolvedOpenAIResponsesCompat extends ResolvedOpenAISharedCompat {
 	supportsLongPromptCacheRetention: boolean;
 	strictResponsesPairing: boolean;
 	supportsImageDetailOriginal: boolean;
@@ -840,8 +824,7 @@ export interface ResolvedOpenAIResponsesCompat
  * (default) or Chat Completions (`VEYYON_OPENROUTER_RESPONSES=0`) with the same
  * model object, so its resolved compat must satisfy both handlers.
  */
-export type ResolvedOpenRouterCompat = ResolvedOpenAICompat &
-	ResolvedOpenAIResponsesCompat;
+export type ResolvedOpenRouterCompat = ResolvedOpenAICompat & ResolvedOpenAIResponsesCompat;
 
 /** Fully-resolved anthropic-messages compat view (same contract as `ResolvedOpenAICompat`). */
 export type ResolvedAnthropicCompat = Required<AnthropicCompat> & {
@@ -926,10 +909,7 @@ export type CompatOf<TApi extends Api> = TApi extends "openrouter"
 	? ResolvedOpenRouterCompat
 	: TApi extends "openai-completions"
 		? ResolvedOpenAICompat
-		: TApi extends
-					| "openai-responses"
-					| "azure-openai-responses"
-					| "openai-codex-responses"
+		: TApi extends "openai-responses" | "azure-openai-responses" | "openai-codex-responses"
 			? ResolvedOpenAIResponsesCompat
 			: TApi extends "anthropic-messages"
 				? ResolvedAnthropicCompat
@@ -1094,11 +1074,12 @@ export interface Model<TApi extends Api = Api> {
 	 */
 	applyPatchToolType?: "freeform" | "function";
 	/**
-	 * Access programs the endpoint offers the signed-in caller for this model. Caller-specific: it
-	 * states what one account may select, so only runtime discovery sets it and the bundled catalog
-	 * never carries it. Absent means discovery stated nothing.
+	 * What each signed-in ChatGPT account's Codex model listing states for this model, keyed by account
+	 * id. Every account discovery enumerated has an entry, including an account not listed the model,
+	 * so a model one tier may use and another may not records both. An account with no entry was not
+	 * enumerated. Only runtime discovery sets it; the bundled catalog never carries it.
 	 */
-	accessPrograms?: ModelAccessPrograms;
+	accountAccess?: Readonly<Record<string, ModelAccountAccess>>;
 	/**
 	 * Force OAuth-style request shaping for providers whose API key prefix doesn't
 	 * match an OAuth token (e.g. routing Anthropic traffic through a proxy that
@@ -1113,8 +1094,7 @@ export interface Model<TApi extends Api = Api> {
  * vocabulary of `buildModel`. Identical to `Model` except `compat` carries the
  * sparse override shape and nothing is resolved yet.
  */
-export interface ModelSpec<TApi extends Api = Api>
-	extends Omit<Model<TApi>, "compat" | "compatConfig" | "cost"> {
+export interface ModelSpec<TApi extends Api = Api> extends Omit<Model<TApi>, "compat" | "compatConfig" | "cost"> {
 	/** Sparse model cost; normalized to {@link Model.cost} defaults by `buildModel`. */
 	cost?: Partial<Model<TApi>["cost"]>;
 	/** Sparse compatibility overrides; resolved into `Model.compat` by `buildModel`. */
