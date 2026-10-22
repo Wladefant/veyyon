@@ -8,7 +8,7 @@
 - Launch holds a daemon whose native process handle is unavailable in `stopping` instead of settling it as exited: its tree's death is unobservable, so no restart starts and a stop reports failure ([issue](https://github.com/Wladefant/veyyon/issues/530)).
 - Mixed-build IRC sends distinguish unknown sessions from receivers without notice support and report loaded build identities ([#551](https://github.com/Wladefant/veyyon/issues/551)).
 - Browser tabs owned by another session can no longer be reopened, reused, or run, and the tab inventory omits their names, titles, and URLs ([Refs #538](https://github.com/Wladefant/veyyon/issues/538)).
-- Removed two stray closing braces that caused parse errors and blocked coding-agent typechecking.
+- Fixed the coding-agent failing to parse after a merge left stray braces, a duplicated property block and a call to a removed private method in the session and task modules.
 
 - Project plugins load only from the `installPath` entries of a project registry the operator has approved, through both the plugin loader and the Claude-plugin roots. The project directory's `package.json`, lockfile and `node_modules` are no longer read for project plugins. A registry whose directory resolves outside the project is refused, and an approval from a nested directory reaches the gate ([Refs #633](https://github.com/Wladefant/veyyon/issues/633)).
 - Argot teaches its handle table to a model named in `argot.encode.models` with a thinking selector (`provider/id:high`), drops or restores the table when a model switch crosses the allowlist, and records a deliberately untaught model as decode-only instead of logging an `ABSENT` handle table ([#648](https://github.com/Wladefant/veyyon/issues/648))
