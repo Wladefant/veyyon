@@ -69,6 +69,7 @@ import {
 	createOpenAIResponsesHistoryPayload,
 	getOpenAIResponsesHistoryItems,
 	getOpenAIResponsesHistoryPayload,
+	normalizeResponsesToolCallId,
 	normalizeSystemPrompts,
 	resolveCacheRetention,
 	sanitizeOpenAIResponsesAssistantFallbackItemsForReplay,
@@ -145,7 +146,6 @@ import {
 	applyOpenAIServiceTier,
 	applyReasoningSummaryDone,
 	buildResponsesDeltaInput,
-	collectKnownCallIds,
 	convertResponsesAssistantMessage,
 	convertResponsesInputContent,
 	createSequentialCutoffSummaryState,
@@ -158,10 +158,13 @@ import {
 	finalizeReasoningThinking,
 	finalizeToolCallArgumentsDone,
 	getOpenAIPromptCacheKey,
+	hoistInterleavedResponsesToolBatchMessages,
 	isOpenAIResponsesProgressEvent,
 	mapOpenAIResponsesStopReason,
 	populateResponsesUsageFromResponse,
 	promoteResponsesToolUseStopReason,
+	repairOrphanResponsesToolCalls,
+	repairOrphanResponsesToolOutputs,
 	resolveResponsesToolCallDeltaShape,
 	type SequentialCutoffSummaryState,
 	type ToolCallArgumentsDeltaShape,
@@ -4746,6 +4749,27 @@ function sanitizeReplayedAssistantNativeItem(item: ResponseInput[number]): Respo
 	return item;
 }
 
+function rememberReplayedToolItems(
+	items: ReadonlyArray<ResponseInput[number]>,
+	knownCallIds: Set<string>,
+	customCallIds: Set<string>,
+	answeredCallIds: Set<string>,
+): void {
+	for (const item of items) {
+		const call = item as { type?: string; call_id?: string };
+		if (typeof call.call_id !== "string") continue;
+		if (call.type === "function_call" || call.type === "custom_tool_call") {
+			knownCallIds.add(call.call_id);
+			if (call.type === "custom_tool_call") customCallIds.add(call.call_id);
+		} else if (
+			(call.type === "function_call_output" || call.type === "custom_tool_call_output") &&
+			knownCallIds.has(call.call_id)
+		) {
+			answeredCallIds.add(call.call_id);
+		}
+	}
+}
+
 function convertMessages(model: Model<"openai-codex-responses">, context: Context): ResponseInput {
 	const messages: ResponseInput = [];
 
@@ -4771,6 +4795,8 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 	// `function_call_output` (OpenAI rejects mismatched pairs).
 	const customCallIds = new Set<string>();
 	const knownCallIds = new Set<string>();
+	const answeredCallIds = new Set<string>();
+	let hasNativeHistory = false;
 
 	for (const msg of transformedMessages) {
 		if (msg.role === "user" || msg.role === "developer") {
@@ -4781,15 +4807,8 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 			if (historyItems) {
 				const redactedHistoryItems = redactSensitiveInObject(historyItems.map(sanitizeReplayedAssistantNativeItem))
 					.result as Array<ResponseInput[number]>;
-				for (const item of redactedHistoryItems) {
-					const maybe = item as { type?: string; call_id?: string };
-					if ((maybe.type === "function_call" || maybe.type === "custom_tool_call") && typeof maybe.call_id === "string") {
-						knownCallIds.add(maybe.call_id);
-					}
-					if (maybe.type === "custom_tool_call" && typeof maybe.call_id === "string") {
-						customCallIds.add(maybe.call_id);
-					}
-				}
+				hasNativeHistory = true;
+				rememberReplayedToolItems(redactedHistoryItems, knownCallIds, customCallIds, answeredCallIds);
 				const replayItems = isHarmonyDialectModel(model)
 					? escapeReplayedClientText(redactedHistoryItems)
 					: redactedHistoryItems;
@@ -4835,33 +4854,20 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 			const historyItems = providerPayload?.items as Array<Record<string, unknown>> | undefined;
 			let suppressHiddenEmptyFallback = false;
 			if (historyItems) {
+				hasNativeHistory = true;
 				const sanitizedHistoryItems = sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(historyItems)?.map(
 					sanitizeReplayedAssistantNativeItem,
 				);
 				if (sanitizedHistoryItems) {
-					for (const item of sanitizedHistoryItems) {
-						const maybe = item as { type?: string; call_id?: string };
-						if ((maybe.type === "function_call" || maybe.type === "custom_tool_call") && typeof maybe.call_id === "string") {
-							knownCallIds.add(maybe.call_id);
-						}
-						if (maybe.type === "custom_tool_call" && typeof maybe.call_id === "string") {
-							customCallIds.add(maybe.call_id);
-						}
-					}
 					if (providerPayload?.dt) {
 						for (let hi = 0; hi < sanitizedHistoryItems.length; hi++) messages.push(sanitizedHistoryItems[hi]!);
 					} else {
 						messages.splice(0, messages.length, ...sanitizedHistoryItems);
 						knownCallIds.clear();
-						for (const callId of collectKnownCallIds(sanitizedHistoryItems as ResponseInput)) knownCallIds.add(callId);
 						customCallIds.clear();
-						for (const item of sanitizedHistoryItems) {
-							const maybe = item as { type?: string; call_id?: string };
-							if (maybe.type === "custom_tool_call" && typeof maybe.call_id === "string") {
-								customCallIds.add(maybe.call_id);
-							}
-						}
+						answeredCallIds.clear();
 					}
+					rememberReplayedToolItems(sanitizedHistoryItems, knownCallIds, customCallIds, answeredCallIds);
 					msgIndex += 1;
 					continue;
 				}
@@ -4887,21 +4893,29 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 		}
 
 		if (msg.role === "toolResult") {
+			const callId = normalizeResponsesToolCallId(msg.toolCallId).callId;
+			if (answeredCallIds.has(callId)) {
+				msgIndex += 1;
+				continue;
+			}
 			appendResponsesToolResultMessages(
 				messages,
 				msg,
 				model,
-				false,
+				true,
 				model.compat.supportsImageDetailOriginal,
 				knownCallIds,
 				customCallIds,
 			);
+			if (knownCallIds.has(callId)) answeredCallIds.add(callId);
 		}
 
 		msgIndex += 1;
 	}
 
-	return messages;
+	if (!hasNativeHistory) return messages;
+	const pairedOutputs = repairOrphanResponsesToolOutputs(messages);
+	return hoistInterleavedResponsesToolBatchMessages(repairOrphanResponsesToolCalls(pairedOutputs));
 }
 
 function normalizeInputMessageContent(
