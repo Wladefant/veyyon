@@ -1606,7 +1606,10 @@ export class AgentSession {
 			promptGeneration: () => this.#promptGeneration,
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 			discardAssistantTurn: message => this.#discardAssistantTurn(message),
-			dropPersistedAssistantTurn: message => this.#dropPersistedAssistantTurn(message),
+			dropPersistedAssistantTurn: async message => {
+				await this.#persistence.waitFor(message);
+				this.#discardAssistantTurn(message);
+			},
 			removeAssistantFromActiveContext: (message, reason) =>
 				removeAssistantMessageFromActiveContext(this.agent, message, reason),
 			endAnnouncedContinuationWait: finalError => this.#retry.endAnnouncedContinuationWait(finalError),
@@ -7441,18 +7444,6 @@ export class AgentSession {
 			args,
 		);
 	}
-				preferWebsockets: this.#config.preferWebsockets,
-				providerSessionStates: this.#providerSessions.states,
-				secrets: this.#secrets,
-				sideStreamFn: this.#sideStreamFn,
-				convertMessagesToLlm: (messages, signal) => this.convertMessagesToLlm(messages, signal),
-				prepareSimpleStreamOptions: (options, provider) => this.prepareSimpleStreamOptions(options, provider),
-				resolveApiKey: (model, sessionId) => this.#config.modelRegistry.resolver(model, sessionId),
-				effectiveServiceTier: model => this.#effectiveServiceTier(model),
-			},
-			args,
-		);
-	}
 
 	/** Append a custom message to the model's context and the session file without starting a turn. */
 	#appendCustomMessageToContext<T>(message: CustomMessage<T>): void {
@@ -7608,7 +7599,6 @@ export class AgentSession {
 		sessionId: string,
 	): Promise<{ cancelled: boolean; sessionFile: string | undefined }> {
 		return this.#sessionBranch.branchFromBtw(question, assistantMessage, leafId, sessionId);
-	}
 	}
 
 	/**
