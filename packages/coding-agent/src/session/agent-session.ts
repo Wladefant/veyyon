@@ -6631,7 +6631,6 @@ export class AgentSession {
 	handoff(customInstructions?: string, options?: SessionHandoffOptions): Promise<HandoffResult | undefined> {
 		return this.#sessionHandoff.run(customInstructions, options);
 	}
-	}
 
 	async #runPrePromptCompactionIfNeeded(messages: AgentMessage[]): Promise<void> {
 		const model = this.model;
