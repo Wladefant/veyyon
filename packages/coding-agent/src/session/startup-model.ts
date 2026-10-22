@@ -108,7 +108,7 @@ function installPatternFallbackChain(
 	laterPatterns: readonly string[],
 	availableModels: readonly Model[],
 	matchPreferences: ModelMatchPreferences,
-): void {
+): string | undefined {
 	const primarySelector = formatModelSelectorValue(formatModelStringWithRouting(primary.model), primary.thinkingLevel);
 	const seenSelectors = new Set<string>([primarySelector]);
 	const fallbackSelectors: string[] = [];
@@ -131,6 +131,7 @@ function installPatternFallbackChain(
 		if (key !== primarySelector) fallbackChains[key] = existingFallbackChains[key];
 	}
 	settings.override("retry.fallbackChains", fallbackChains);
+	return primarySelector;
 }
 
 /** The service tier a session starts on: the tiers a resumed branch recorded, else the settings tiers. */
@@ -150,6 +151,8 @@ export function startingServiceTierByFamily(
 export class StartupModelSelection {
 	/** Whether the caller named a model, directly or through `--model` patterns. */
 	readonly hasExplicitModel: boolean;
+	/** The deferred spawn chain installed during selection, if one was requested. */
+	modelPatternFallbackKey: string | undefined;
 	readonly #inputs: StartupModelInputs;
 	readonly #deferredPatterns: string[];
 	readonly #matchPreferences: ModelMatchPreferences;
@@ -419,7 +422,7 @@ export class StartupModelSelection {
 			const authFallback = await this.#authFallback(primary, availableModels, matchPreferences);
 			const selected = authFallback ?? primary;
 			if (authFallback === undefined && options.modelPatternFallbackChain) {
-				installPatternFallbackChain(
+				this.modelPatternFallbackKey = installPatternFallbackChain(
 					settings,
 					primary,
 					expandedModelPatterns.slice(patternIndex + 1),

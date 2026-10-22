@@ -1874,6 +1874,7 @@ interface ChildSessionContext {
 interface RunModel {
 	modelRegistry: ModelRegistry;
 	model: Model<Api> | undefined;
+	retryFallbackKey: string | undefined;
 	/** Already fitted to `model`; undefined lets the child session resolve its own default. */
 	thinkingLevel: ConfiguredThinkingLevel | undefined;
 }
@@ -1967,7 +1968,7 @@ async function resolveRunModel(ctx: ChildSessionContext): Promise<RunModel> {
 		// for the session to state it.
 		if (requested !== undefined) monitor.progress.resolvedModel = resolvedModelBadge(model, thinkingLevel);
 	}
-	return { modelRegistry, model, thinkingLevel };
+	return { modelRegistry, model, thinkingLevel, retryFallbackKey };
 }
 
 /**
@@ -2058,6 +2059,7 @@ function childSessionOptionsBuilder(ctx: ChildSessionContext, runModel: RunModel
 		model,
 		modelPattern: deferredPattern ? modelPatterns : undefined,
 		modelPatternAuthFallback: deferredPattern ? options.parentActiveModelPattern : undefined,
+		modelPatternFallbackKey: runModel.retryFallbackKey,
 		modelPatternFallbackChain: deferredPattern,
 		thinkingLevel,
 		toolNames,
