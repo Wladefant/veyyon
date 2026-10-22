@@ -414,9 +414,10 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 
 	/**
 	 * A turn retries into the same exhausted window several times, and each retry re-enters this
-	 * path. Announcing per call would repeat one fact until it is noise, so the notice is deduped by
-	 * the window it describes. A LATER exhaustion is a different window and is announced again,
-	 * which is what separates deduping from announcing once per process.
+	 * path seconds after the last, computing its own end. Announcing per call would repeat one fact
+	 * until it is noise, so the notice is deduped by the account's window, not by the end each mark
+	 * computes. A LATER exhaustion, after that window closed, is announced again, which is what
+	 * separates deduping from announcing once per process.
 	 */
 	test("one exhausted window is announced once, and a later window is announced again", async () => {
 		if (!store) throw new Error("test setup failed");
@@ -430,6 +431,7 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 		const { targetId } = await seed(storage);
 
 		await storage.markUsageLimitReached(PROVIDER, SESSION_ID, { credentialId: targetId, retryAfterMs: 60_000 });
+		setSystemTime(new Date(NOW_MS + 2_000));
 		await storage.markUsageLimitReached(PROVIDER, SESSION_ID, { credentialId: targetId, retryAfterMs: 60_000 });
 		expect(withheld).toHaveLength(1);
 
@@ -441,6 +443,41 @@ describe("exhaustion moves accounts only when load balancing is on", () => {
 		expect(withheld.map(event => (event.reason === "quota" ? event.retryAtMs : undefined))).toEqual([
 			NOW_MS + 60_000,
 			NOW_MS + 3 * 60_000,
+		]);
+	});
+
+	/**
+	 * The field sequence behind this rule. One failed request marks the account twice: the request's
+	 * own credential rotation with the default one-minute park, then the turn's retry with the park
+	 * its error reading chose. Each retry after that lands inside the window the previous one opened
+	 * and moves its end. Every one of those marks is the same exhaustion, so the operator hears about
+	 * it once, with the end the first mark stated.
+	 */
+	test("every layer and retry re-entering an open window announces nothing more", async () => {
+		if (!store) throw new Error("test setup failed");
+		const withheld: UsageLimitWithheldEvent[] = [];
+		const storage = new AuthStorage(store, {
+			loadBalancing: false,
+			onUsageLimitWithheld: event => {
+				withheld.push(event);
+			},
+		});
+		const { targetId } = await seed(storage);
+
+		// The request layer: no retry-after of its own, so the default park.
+		await storage.markUsageLimitReached(PROVIDER, SESSION_ID, { credentialId: targetId });
+		// The retry layer, a moment later, with a shorter park than the one already standing.
+		setSystemTime(new Date(NOW_MS + 1_400));
+		await storage.markUsageLimitReached(PROVIDER, SESSION_ID, { credentialId: targetId, retryAfterMs: 53_000 });
+		// The next retry, inside the first window, moves the end past it.
+		setSystemTime(new Date(NOW_MS + 55_000));
+		await storage.markUsageLimitReached(PROVIDER, SESSION_ID, { credentialId: targetId, retryAfterMs: 60_000 });
+		// Past the first mark's end, inside the end the retry above moved it to.
+		setSystemTime(new Date(NOW_MS + 100_000));
+		await storage.markUsageLimitReached(PROVIDER, SESSION_ID, { credentialId: targetId, retryAfterMs: 60_000 });
+
+		expect(withheld.map(event => (event.reason === "quota" ? event.retryAtMs : undefined))).toEqual([
+			NOW_MS + 60_000,
 		]);
 	});
 
