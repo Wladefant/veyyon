@@ -1,5 +1,5 @@
-// WHY: a files search for `source-cache/forminator*/` answered "No files found
-// matching pattern" over a directory holding 35 `forminator*` directories. A
+// WHY: a files search for `vendor/plugin*/` answered "No files found matching
+// pattern" over a directory holding 35 `plugin*` directories. A
 // trailing `/` names directories, as it does in a shell, but the glob reached
 // the walker with the slash in it, no walked path ends in a separator, and the
 // search stated an absence that was false.

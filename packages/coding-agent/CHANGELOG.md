@@ -113,7 +113,7 @@
 
 ### Fixed
 
-- A `search` of type `files` whose glob ends in `/`, such as `source-cache/forminator*/`, lists the directories the glob matches instead of reporting `No files found matching pattern`.
+- A `search` of type `files` whose glob ends in `/`, such as `vendor/plugin*/`, lists the directories the glob matches instead of reporting `No files found matching pattern`.
 - With several ChatGPT accounts signed in, the model list holds the Codex models of every account's tier, such as the Daybreak-only models listed for a Daybreak account, and a turn on such a model is sent from an account whose listing includes it.
 - The Codex `web_search` provider and Codex hosted image generation send `access_programs.cyber` set to the Daybreak program the signed-in account is offered for the model, so a Daybreak account's security search or image request is no longer refused with `cyber_policy` for lack of the field.
 - A Codex `web_search` on a model the catalog marks for Responses-Lite, which includes every default search model, is sent in the plain Responses shape and searches, instead of failing with `400 Tool choice 'web_search_preview' not found in 'tools' parameter.`

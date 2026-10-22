@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import * as natives from "@veyyon/natives";
-import { formatGroupedPaths, isCancellation, isEnoent, untilAborted } from "@veyyon/utils";
+import { formatGroupedPaths, isCancellation, isEnoent, trimTrailingSlashes, untilAborted } from "@veyyon/utils";
 import { isTimeoutError } from "@veyyon/utils/abortable";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { InternalUrlRouter } from "../../internal-urls";
@@ -169,7 +169,7 @@ function planWalks(targets: FileSearchTarget[]): FileSearchWalk[] {
 	const joined = new Map<string, { walk: FileSearchWalk; patterns: Set<string> }>();
 	for (const target of targets) {
 		const dirsOnly = target.hasGlob && target.globPattern.endsWith("/");
-		const globPattern = dirsOnly ? target.globPattern.replace(/\/+$/, "") : target.globPattern;
+		const globPattern = dirsOnly ? trimTrailingSlashes(target.globPattern) : target.globPattern;
 		const walk: FileSearchWalk = { searchPath: target.searchPath, globPattern, hasGlob: target.hasGlob, dirsOnly };
 		if (!target.hasGlob || !isAlternationMember(globPattern)) {
 			walks.push(walk);
