@@ -4,13 +4,11 @@
 
 ## [Unreleased]
 
+## [1.5.9] - 2026-10-22
+
 ### Breaking Changes
 
 - `SessionStorage.rewriteTailAtomic(path, headBytes, keepBytes, head, tail, options)` takes `headBytes`, the length of the file's first bytes `head` replaces, so a head of another length moves the kept bytes; it fails when `headBytes` exceeds `keepBytes`.
-
-### Removed
-
-- Removed the plugin-id helpers and installed-registry re-exports from `@veyyon/kernel/loader/plugins/marketplace/types` and `marketplace/registry`; import them from `@veyyon/kernel/loader/plugins/plugin-id` and `installed-registry`.
 
 ### Changed
 
@@ -39,6 +37,10 @@
 - A write fault that lands while a recovery publish waits its turn no longer cancels that publish, which left every later entry in memory only and never written to a healthy disk.
 - Reading a session file back for another window's lines no longer parses the lines this session wrote, cutting the read from 304 ms to 107 ms on a 146 MB file.
 - `compactedHistoryEnd` and `contextCompaction` return the boundary the session context is built from, the newest compaction the branch's default model can read, so history a context sends after a resume onto another model is no longer moved out of memory and read back from disk on every build.
+
+### Removed
+
+- Removed the plugin-id helpers and installed-registry re-exports from `@veyyon/kernel/loader/plugins/marketplace/types` and `marketplace/registry`; import them from `@veyyon/kernel/loader/plugins/plugin-id` and `installed-registry`.
 
 ## [1.5.6] - 2026-10-13
 

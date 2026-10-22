@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.9] - 2026-10-22
+
 ### Breaking Changes
 
 - `withTimeoutSignal` is removed; use `withScopedTimeoutSignal(timeoutMs, fn, parent?)` or `scopedTimeoutSignal`, whose timer is cleared when the operation settles.

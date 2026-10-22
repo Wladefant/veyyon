@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.9] - 2026-10-22
+
 ### Breaking Changes
 
 - `SessionStorage.rewriteTailAtomic(path, headBytes, keepBytes, head, tail, options)` takes `headBytes`, the length of the file's first bytes `head` replaces, so a head of another length moves the kept bytes; it fails when `headBytes` exceeds `keepBytes`.

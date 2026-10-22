@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.9] - 2026-10-22
+
 ### Added
 
 - The `browser` tool's `open` takes `context`, an isolated cookie jar that every headless tab naming it shares and no other tab sees, closed with its last tab ([#947](https://github.com/santhreal/veyyon/issues/947)).

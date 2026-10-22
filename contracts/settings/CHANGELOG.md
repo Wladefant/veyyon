@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.9] - 2026-10-22
+
 ### Added
 
 - An enum `SettingDef` may declare `invalid`, the member a configured value outside `values` reads as.

@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.9] - 2026-10-22
+
 ### Added
 
 - `@veyyon/hashline` exports `unquotePath`, which strips one matching pair of surrounding quotes from a path; the section-header parser uses it instead of a private copy.

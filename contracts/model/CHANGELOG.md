@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.9] - 2026-10-22
+
 ### Added
 
 - `Model.accountAccess` records, for every ChatGPT account model discovery listed, whether the account's listing includes the model and the cyber access programs (`standard`, `daybreak_blue`, `daybreak_red`) the account is offered for it.

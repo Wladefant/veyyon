@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.9] - 2026-10-22
+
 ### Removed
 
 - Removed the three backfill-completion setters of the database module, which nothing called; no user-visible change.
