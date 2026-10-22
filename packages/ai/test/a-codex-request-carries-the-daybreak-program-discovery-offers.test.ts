@@ -313,15 +313,22 @@ function codexHost(
 	return { fetch: impl, bodies, listings, listingUrls };
 }
 
-/** A listing that answers nothing until `timeout` aborts, calling `started` each time it is requested. */
-function hungListing(timeout: AbortSignal, started: () => void): () => Promise<Response> {
-	return () => {
-		started();
-		const { promise, reject } = Promise.withResolvers<Response>();
-		if (timeout.aborted) reject(timeout.reason);
-		else timeout.addEventListener("abort", () => reject(timeout.reason), { once: true });
-		return promise;
-	};
+/**
+ * A host whose listing answers once `answer` is called, or rejects when the listing request's signal
+ * aborts first, with `started` resolved when the listing is requested.
+ */
+function heldListingHost(respond: (body: Record<string, unknown> | undefined) => Response) {
+	const started = Promise.withResolvers<void>();
+	const answer = Promise.withResolvers<void>();
+	const host = codexHost(respond, async (accountId, signal) => {
+		started.resolve();
+		const aborted = Promise.withResolvers<never>();
+		if (signal?.aborted) aborted.reject(signal.reason);
+		signal?.addEventListener("abort", () => aborted.reject(signal.reason), { once: true });
+		await Promise.race([aborted.promise, answer.promise]);
+		return levelListing(accountId);
+	});
+	return { host, started: started.promise, answer: answer.resolve };
 }
 
 /** A websocket that records each frame and answers it with a completed response. */
@@ -582,10 +589,7 @@ describe("a Codex request carries the program the account that signs it is offer
 	it("ends the turn as aborted, with nothing sent, when the caller aborts during a listing", async () => {
 		const blue = ACCOUNT_LEVELS.daybreak_blue;
 		const model = await discoveredModel("gpt-5.6-sol", blue.listing, codexToken(blue.accountId));
-		const listingTimeout = new AbortController();
-		vi.spyOn(AbortSignal, "timeout").mockReturnValue(listingTimeout.signal);
-		const listingStarted = Promise.withResolvers<void>();
-		const host = codexHost(completedTurn, hungListing(listingTimeout.signal, listingStarted.resolve));
+		const { host, started, answer } = heldListingHost(completedTurn);
 		const caller = new AbortController();
 
 		const turn = streamOpenAICodexResponses(model, turnContext("Say hello"), {
@@ -594,10 +598,10 @@ describe("a Codex request carries the program the account that signs it is offer
 			preferWebsockets: false,
 			signal: caller.signal,
 		}).result();
-		await listingStarted.promise;
+		await started;
 		caller.abort();
 		const result = await turn;
-		listingTimeout.abort();
+		answer();
 
 		expect(result.stopReason).toBe("aborted");
 		expect(host.bodies).toEqual([]);
@@ -711,53 +715,25 @@ describe("an account's listing is shared, reused for its lifetime and bounded", 
 		expect(host.listings).toEqual([red.accountId, red.accountId]);
 	});
 
-	/**
-	 * The listing deadline under a test clock: every `AbortSignal.timeout` is recorded, and `reach(elapsed)`
-	 * fires each one of `elapsed` ms or less. The listing answers once `answer` is called, unless its request
-	 * was aborted first.
-	 */
-	function listingAgainstDeadline() {
-		const deadlines: Array<{ ms: number; deadline: AbortController }> = [];
-		vi.spyOn(AbortSignal, "timeout").mockImplementation(ms => {
-			const deadline = new AbortController();
-			deadlines.push({ ms, deadline });
-			return deadline.signal;
-		});
-		const started = Promise.withResolvers<void>();
-		const answer = Promise.withResolvers<void>();
-		const host = codexHost(completedTurn, async (accountId, signal) => {
-			started.resolve();
-			const aborted = Promise.withResolvers<never>();
-			if (signal?.aborted) aborted.reject(signal.reason);
-			signal?.addEventListener("abort", () => aborted.reject(signal.reason), { once: true });
-			await Promise.race([aborted.promise, answer.promise]);
-			return levelListing(accountId);
-		});
-		const reach = (elapsed: number) => {
-			for (const { ms, deadline } of deadlines) {
-				if (ms <= elapsed) deadline.abort(new DOMException("The operation timed out.", "TimeoutError"));
-			}
-		};
-		return { host, started: started.promise, answer: answer.resolve, reach };
-	}
-
 	it("uses a listing that answers before the listing timeout", async () => {
-		const { host, started, answer, reach } = listingAgainstDeadline();
+		vi.useFakeTimers();
+		const { host, started, answer } = heldListingHost(completedTurn);
 
 		const programs = resolveCodexAccessPrograms(unrecorded, codexToken(red.accountId), { fetch: host.fetch });
 		await started;
-		reach(CODEX_ACCESS_PROGRAM_LISTING_TIMEOUT_MS - 1);
+		vi.advanceTimersByTime(CODEX_ACCESS_PROGRAM_LISTING_TIMEOUT_MS - 1);
 		answer();
 
 		expect(await programs).toEqual({ cyber: "daybreak_red" });
 	});
 
 	it("abandons a listing that does not answer at the listing timeout and omits the field", async () => {
-		const { host, started, answer, reach } = listingAgainstDeadline();
+		vi.useFakeTimers();
+		const { host, started, answer } = heldListingHost(completedTurn);
 
 		const programs = resolveCodexAccessPrograms(unrecorded, codexToken(red.accountId), { fetch: host.fetch });
 		await started;
-		reach(CODEX_ACCESS_PROGRAM_LISTING_TIMEOUT_MS);
+		vi.advanceTimersByTime(CODEX_ACCESS_PROGRAM_LISTING_TIMEOUT_MS);
 		answer();
 
 		expect(await programs).toBeUndefined();
@@ -801,18 +777,6 @@ describe("an account's listing is shared, reused for its lifetime and bounded", 
 
 		expect(await unbounded).toEqual({ cyber: "daybreak_red" });
 	});
-
-	/** A host whose listing answers only once `answer` resolves, with `started` resolved when it is requested. */
-	function heldListingHost(respond: (body: Record<string, unknown> | undefined) => Response) {
-		const started = Promise.withResolvers<void>();
-		const answer = Promise.withResolvers<void>();
-		const host = codexHost(respond, async accountId => {
-			started.resolve();
-			await answer.promise;
-			return levelListing(accountId);
-		});
-		return { host, started: started.promise, answer: answer.resolve };
-	}
 
 	// Each listing answers right after the caller's bound passes: a caller that kept its bound has already
 	// gone on without it, and a caller that waited for it sends the program it carries.
