@@ -412,7 +412,7 @@ describe("imageGenTool", () => {
 			name: "GPT Codex",
 			baseUrl: "https://example-proxy.invalid/backend-api",
 			headers: { "x-codex-routing-hint": "model=caller-stated" },
-		} as Model;
+		} as unknown as Model;
 		const ctx: CustomToolContext = {
 			fetch: fetchMock,
 			sessionManager: {
