@@ -69,6 +69,9 @@ const LAUNCH_PROVIDER_MODULES = [
 	"providers/kimi.ts",
 	// Kimi and Synthetic route through it to the Anthropic or OpenAI client.
 	"providers/openai-anthropic-shim.ts",
+	// Hosted image generation, on the launch graph for its provider preference, selects the Daybreak
+	// program a Codex image request carries. Its imports are already here.
+	"providers/openai-codex/access-programs.ts",
 	// Compaction and the startup prewarm read the Codex transport details and reset its history.
 	"providers/openai-codex/session-state.ts",
 	// The Codex session state normalizes its prompt cache key.

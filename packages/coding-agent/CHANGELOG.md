@@ -111,6 +111,9 @@
 
 ### Fixed
 
+- With several ChatGPT accounts signed in, the model list holds the Codex models of every account's tier, such as the Daybreak-only models a Daybreak account is listed, and a turn on such a model is sent from an account listed it.
+- The Codex `web_search` provider and Codex hosted image generation send `access_programs.cyber` set to the Daybreak program the signed-in account is offered for the model, so a Daybreak account's security search or image request is no longer refused with `cyber_policy` for lack of the field.
+- A Codex `web_search` on a model the catalog marks for Responses-Lite, which includes every default search model, is sent in the plain Responses shape and searches, instead of failing with `400 Tool choice 'web_search_preview' not found in 'tools' parameter.`
 - veyyon is built on Bun 1.4.3 and refuses an older runtime, so a synchronous spawn, such as reading a reftable repository's `HEAD` or running a `models.yml` `!command` value, no longer spins at 100% CPU forever with its exited child left a zombie when Bun 1.4.0–1.4.2 lost the child's exit ([oven-sh/bun#34069](https://github.com/oven-sh/bun/issues/34069)).
 - A turn stopped by an abort, such as a subagent's soft request budget stopping its free-running turn to force a final `yield`, settles as aborted instead of being re-sent by auto-retry as a dropped request, so the forced `yield` runs instead of the agent reaching its hard request budget.
 - An overlay card on a terminal shorter than 16 rows fits the screen with its title, close glyph and footer chips, instead of drawing a 14- or 16-row card that the screen cut at the top or bottom; this covers the model picker, the model hub, the ask dialog, the plan review, the login dialog, the extensions dashboard, the session picker, the advisor configuration and every list card such as `/theme` and `/effort`.

@@ -10,7 +10,7 @@ import type { Api, Model, ModelSpec } from "./types";
 // Rows persist ModelSpec JSON (sparse `compat`, never the resolved record);
 // the model manager rebuilds via `buildModel` on load. v14 invalidates Codex
 // rows discovered before `available_access_programs` was read: a cached row
-// without `accessPrograms` sends no `access_programs.cyber` for up to the 24
+// without `accountAccess` sends no `access_programs.cyber` for up to the 24
 // hour TTL. v13 invalidates
 // Antigravity rows discovered as client 2.1.4: the endpoint lists Gemini 4 Argon
 // and the per-tier Gemini 3.8 Flash deployments only to client 3.0.0 or later,

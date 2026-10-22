@@ -5,7 +5,7 @@
 ### Added
 
 - `@veyyon/catalog/discovery/cursor-gen/agent_pb` defines Cursor's `McpStateExecArgs` and `McpStateExecResult` exec messages (field 36) and the `McpStateSuccess`, `McpStateServer`, `McpStateError` and `McpStateRejected` messages they carry.
-- Codex discovery reads `available_access_programs` into `Model.accessPrograms`, which the bundled catalog never contains, and the model cache schema moves to v14 so a Codex row cached without it is fetched again.
+- Codex discovery lists every signed-in ChatGPT account, so the catalog holds the models of every account tier, records in `Model.accountAccess` which account is listed each model and its `available_access_programs`, and caches the list per account set, so a login or logout lists the accounts again; the bundled catalog never contains the field, and the model cache schema moves to v14 so a Codex row cached without it is fetched again.
 
 ### Removed
 

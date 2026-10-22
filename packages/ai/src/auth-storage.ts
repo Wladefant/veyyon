@@ -136,7 +136,7 @@ import type {
 	OAuthProvider,
 	OAuthProviderId,
 } from "./registry/oauth/types";
-import type { Provider } from "./types";
+import type { ModelAccountAccess, Provider } from "./types";
 import type {
 	CredentialRankingContext,
 	CredentialRankingStrategy,
@@ -331,6 +331,10 @@ export class AuthStorage {
 	readonly #ranking: CredentialRanking;
 	#rankingStrategyResolver?: (provider: Provider) => CredentialRankingStrategy | undefined;
 	#fallbackResolver?: (provider: string) => string | undefined;
+	#modelAccountAccessResolver?: (
+		provider: string,
+		modelId: string,
+	) => Readonly<Record<string, ModelAccountAccess>> | undefined;
 	#store: AuthCredentialStore;
 	#configValueResolver: (config: string) => Promise<string | undefined>;
 	/** OAuth token refresh: the single-flight, the cross-process lease and the token endpoint call. */
@@ -606,6 +610,16 @@ export class AuthStorage {
 	 */
 	setFallbackResolver(resolver: (provider: string) => string | undefined): void {
 		this.#fallbackResolver = resolver;
+	}
+
+	/**
+	 * Set the lookup of a model's per-account listing ({@link Model.accountAccess}). An account whose
+	 * entry states the model is not listed sorts after every account that may use it.
+	 */
+	setModelAccountAccessResolver(
+		resolver: (provider: string, modelId: string) => Readonly<Record<string, ModelAccountAccess>> | undefined,
+	): void {
+		this.#modelAccountAccessResolver = resolver;
 	}
 
 	/**
@@ -2455,7 +2469,8 @@ export class AuthStorage {
 				candidate !== index &&
 				entry.credential.type === target.credential.type &&
 				!this.#authDeadCredentials.has(entry.id) &&
-				!this.#planExcludesModel(provider, candidate, modelId),
+				!this.#planExcludesModel(provider, candidate, modelId) &&
+				!this.#listingExcludesModel(provider, candidate, modelId),
 		).length;
 		if (idleSiblings === 0) return { switched: false };
 		if (!this.#loadBalancingEnabled()) {
@@ -2491,6 +2506,18 @@ export class AuthStorage {
 		return (
 			this.#blocks.getScopedBlockedUntil(provider, providerKey, index, modelNotInPlanScope(modelId)) !== undefined
 		);
+	}
+
+	/**
+	 * Whether model discovery listed the account at `index` and found `modelId` absent from its listing.
+	 * An account discovery did not list, or a credential with no account id, is not excluded.
+	 */
+	#listingExcludesModel(provider: string, index: number, modelId: string | undefined): boolean {
+		if (modelId === undefined || this.#modelAccountAccessResolver === undefined) return false;
+		const credential = this.#getStoredCredentials(provider)[index]?.credential;
+		const accountId = credential?.type === "oauth" ? credential.accountId : undefined;
+		if (accountId === undefined) return false;
+		return this.#modelAccountAccessResolver(provider, modelId)?.[accountId]?.listed === false;
 	}
 
 	/**
@@ -2546,9 +2573,12 @@ export class AuthStorage {
 		// with the most headroom proactively and fall back intelligently when rate-limited.
 		const movementAllowed = this.#loadBalancingEnabled();
 		// A plan refusal on record steers selection only when the session may move: with movement off
-		// the home account keeps leading for every model, and its refusal reaches the caller.
+		// the home account keeps leading for every model, and its refusal reaches the caller. An account
+		// discovery found not listed the model is excluded in both modes, like a plan requirement: its
+		// listing states it cannot use the model, so leading with it fails the request.
 		const excludesModel = (index: number): boolean =>
-			movementAllowed && this.#planExcludesModel(provider, index, options?.modelId);
+			this.#listingExcludesModel(provider, index, options?.modelId) ||
+			(movementAllowed && this.#planExcludesModel(provider, index, options?.modelId));
 		const sessionPreferredIsAvailable =
 			sessionPreferredIndex !== undefined &&
 			sessionPreferredCanRefreshOrUse &&

@@ -388,11 +388,17 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * import is `@veyyon/utils/abortable`, already here; `diff` stays a lazy `require`. Measured
  * 2026-10-20 at 1495.
  *
+ * 1495 to 1496: `ai/src/providers/openai-codex/access-programs.ts`, which selects the Daybreak
+ * program a Codex request carries for the account that signs it. `tools/web/image-gen.ts`, already
+ * here for the image provider preference, imports it for a Codex image request. Its runtime imports,
+ * the Codex discovery reader and the abort and timeout helpers, are already here. Measured
+ * 2026-10-21 at 1496.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1495;
+const LAUNCH_REACH_CEILING = 1496;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { lazy } from "@veyyon/utils/abortable";
-import { fetchCodexModels } from "../discovery/codex";
+import { type CodexDiscoveryAccount, fetchCodexAccountModels } from "../discovery/codex";
 import type { DevinModelDiscoveryOptions } from "../discovery/devin";
 import { buildGitLabDuoWorkflowFallbackModel, fetchGitLabDuoWorkflowModels } from "../discovery/gitlab-duo-workflow";
 import type { ModelManagerOptions } from "../model-manager";
@@ -10,27 +11,49 @@ import type { FetchImpl } from "../types";
 // ---------------------------------------------------------------------------
 
 export interface OpenAICodexModelManagerConfig {
+	/** Access token of the account discovery lists when `accounts` resolves none. Discovery runs only with one. */
 	accessToken?: string;
+	/** `chatgpt-account-id` of `accessToken`'s account. */
 	accountId?: string;
+	/**
+	 * Every signed-in account discovery lists, resolved when a listing runs, so a launch served from the
+	 * cache refreshes no token. Each account is listed the models its tier may use, and the listings merge.
+	 */
+	accounts?: () => Promise<readonly CodexDiscoveryAccount[]>;
+	/** Ids of the accounts `accounts` resolves. They select the model cache row; see {@link openaiCodexCacheProviderId}. */
+	accountIds?: readonly string[];
 	clientVersion?: string;
+}
+
+/**
+ * The model cache row Codex discovery reads and writes for a set of accounts. The listing differs by
+ * account tier, so each account set has its own row: a login, logout or account switch reads a row that
+ * does not exist yet and lists again. Ids are hashed, so the row name is bounded and holds no account id.
+ * The bare provider id when no account id is known.
+ */
+export function openaiCodexCacheProviderId(accountIds: readonly string[] = []): string {
+	const ids = accountIds.filter((id, index) => id.trim() !== "" && accountIds.indexOf(id) === index).sort();
+	if (ids.length === 0) return "openai-codex";
+	const digest = createHash("sha256").update(ids.join("\u0000")).digest("hex").slice(0, 16);
+	return `openai-codex:accounts-${digest}`;
 }
 
 export function openaiCodexModelManagerOptions(
 	config: OpenAICodexModelManagerConfig = {},
 ): ModelManagerOptions<"openai-codex-responses"> {
-	const { accessToken, accountId, clientVersion } = config;
+	const { accessToken, accountId, accounts, accountIds, clientVersion } = config;
 	return {
 		providerId: "openai-codex",
+		cacheProviderId: openaiCodexCacheProviderId(accountIds),
 		...(accessToken
 			? {
 					fetchDynamicModels: async hooks => {
-						const result = await fetchCodexModels({
-							accessToken,
-							accountId,
+						const resolved = (await accounts?.()) ?? [];
+						return fetchCodexAccountModels({
+							accounts: resolved.length > 0 ? resolved : [{ accessToken, accountId }],
 							clientVersion,
 							onFailure: hooks?.onFailure,
 						});
-						return result?.models ?? null;
 					},
 				}
 			: undefined),

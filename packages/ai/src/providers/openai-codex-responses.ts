@@ -82,6 +82,7 @@ import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, tool
 import { notifyRawSseEvent } from "../utils/sse-debug";
 import { compactGrammarDefinition } from "./grammar";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
+import { type CodexAccessPrograms, resolveCodexAccessPrograms } from "./openai-codex/access-programs";
 import {
 	type CodexReasoningContext,
 	type CodexRequestOptions,
@@ -1145,11 +1146,16 @@ function createRequestSetup(options: OpenAICodexResponsesOptions | undefined): C
 	};
 }
 
+/**
+ * `firstEventTimeoutMs` bounds the wait for the request account's program listing: the listing precedes
+ * the first event, so a caller's first-event budget covers it.
+ */
 async function buildCodexRequestContext(
 	model: Model<"openai-codex-responses">,
 	context: Context,
 	options: OpenAICodexResponsesOptions | undefined,
 	output: AssistantMessage,
+	firstEventTimeoutMs: number | undefined,
 ): Promise<CodexRequestContext> {
 	const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 	if (!apiKey) {
@@ -1162,7 +1168,18 @@ async function buildCodexRequestContext(
 	const promptCacheKey = normalizeOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId);
 	const transportSessionId = normalizeOpenAIPromptCacheKey(options?.sessionId);
 	const codexClientVersion = CODEX_CLIENT_VERSION;
-	const transformedBody = await buildTransformedCodexRequestBody(model, context, options, promptCacheKey);
+	// The program is the request account's, not the discovery account's: a pooled or switched credential
+	// is offered other programs, and a program the account is not offered fails the turn.
+	const accessPrograms = await resolveCodexAccessPrograms(model, apiKey, {
+		accountId,
+		fetch: options?.fetch,
+		signal: options?.signal,
+		waitMs: firstEventTimeoutMs,
+	});
+	const transformedBody = await buildTransformedCodexRequestBody(model, context, options, {
+		promptCacheKey,
+		accessPrograms,
+	});
 
 	const requestHeaders = { ...(model.headers ?? {}), ...(options?.headers ?? {}) };
 	const rawRequestDump: RawHttpRequestDump = {
@@ -1309,13 +1326,14 @@ export async function buildTransformedCodexRequestBody(
 	model: Model<"openai-codex-responses">,
 	context: Context,
 	options: OpenAICodexResponsesOptions | undefined,
-	promptCacheKey = normalizeOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
+	request: { promptCacheKey?: string; accessPrograms?: CodexAccessPrograms } = {},
 ): Promise<RequestBody> {
 	const params: RequestBody = {
 		model: model.requestModelId ?? model.id,
 		input: convertCodexResponsesMessages(model, context),
 		stream: true,
-		prompt_cache_key: promptCacheKey,
+		prompt_cache_key:
+			request.promptCacheKey ?? normalizeOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
 	};
 
 	// `maxTokens` is intentionally not forwarded: transformRequestBody strips
@@ -1352,6 +1370,7 @@ export async function buildTransformedCodexRequestBody(
 		textVerbosity: options?.textVerbosity,
 		include: options?.include,
 		responsesLite: options?.responsesLite,
+		accessPrograms: request.accessPrograms,
 	};
 
 	return transformRequestBody(params, model, codexOptions, { developerMessages });
@@ -2652,7 +2671,13 @@ const streamOpenAICodexResponsesOnce = (
 		let requestContext: CodexRequestContext | undefined;
 
 		try {
-			requestContext = await buildCodexRequestContext(model, context, options, output);
+			requestContext = await buildCodexRequestContext(
+				model,
+				context,
+				options,
+				output,
+				requestSetup.firstEventTimeoutMs,
+			);
 			const cacheTracked =
 				cacheTracking &&
 				beginCodexCacheTrackedRequest(cacheTracking, model, options, requestContext.transformedBody);

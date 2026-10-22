@@ -3,6 +3,7 @@ import {
 	cursorModelManagerOptions,
 	devinModelManagerOptions,
 	gitLabDuoWorkflowModelManagerOptions,
+	openaiCodexCacheProviderId,
 	openaiCodexModelManagerOptions,
 	zaiModelManagerOptions,
 } from "../src/provider-models/special";
@@ -42,6 +43,56 @@ describe("openaiCodexModelManagerOptions", () => {
 		const models = await options.fetchDynamicModels?.();
 		expect(models?.map(model => model.id)).toEqual(["gpt-5-codex"]);
 		expect(sawAuth).toContain("codex-secret");
+	});
+
+	// WHY: each account is listed the models its tier may use, so discovery lists every signed-in account,
+	// and the cached list belongs to the account set that produced it. A row shared by every account set
+	// kept a new login's tier out of the catalog for the cache TTL. Not caught: a stored account whose id
+	// is unknown, which leaves the row to the accounts whose ids are known.
+	it("lists every resolved account and falls back to the access token's account when none resolve", async () => {
+		const requested: Array<string | null> = [];
+		globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+			const accountId = new Headers(init?.headers).get("chatgpt-account-id");
+			requested.push(accountId);
+			return new Response(JSON.stringify({ data: [{ slug: `model-of-${accountId}` }] }), {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			});
+		}) as typeof fetch;
+		const resolved = [
+			{ accessToken: "token-blue", accountId: "acc_blue" },
+			{ accessToken: "token-red", accountId: "acc_red" },
+		];
+
+		const every = await openaiCodexModelManagerOptions({
+			accessToken: "token-blue",
+			accountId: "acc_blue",
+			accounts: async () => resolved,
+		}).fetchDynamicModels?.();
+		const fallback = await openaiCodexModelManagerOptions({
+			accessToken: "token-blue",
+			accountId: "acc_blue",
+			accounts: async () => [],
+		}).fetchDynamicModels?.();
+
+		expect(every?.map(model => [model.id, model.accountAccess])).toEqual([
+			["model-of-acc_blue", { acc_blue: { listed: true }, acc_red: { listed: false } }],
+			["model-of-acc_red", { acc_blue: { listed: false }, acc_red: { listed: true } }],
+		]);
+		expect(fallback?.map(model => model.id)).toEqual(["model-of-acc_blue"]);
+		expect(requested.toSorted()).toEqual(["acc_blue", "acc_blue", "acc_red"]);
+	});
+
+	it("caches each account set under its own row, independent of order and repeats", () => {
+		const blueAndRed = openaiCodexCacheProviderId(["acc_blue", "acc_red"]);
+
+		expect(openaiCodexCacheProviderId()).toBe("openai-codex");
+		expect(openaiCodexCacheProviderId(["", " "])).toBe("openai-codex");
+		expect(blueAndRed).toMatch(/^openai-codex:accounts-[0-9a-f]{16}$/);
+		expect(openaiCodexCacheProviderId(["acc_red", "acc_blue", "acc_red"])).toBe(blueAndRed);
+		expect(openaiCodexCacheProviderId(["acc_blue"])).not.toBe(blueAndRed);
+		expect(blueAndRed).not.toContain("acc_");
+		expect(openaiCodexModelManagerOptions({ accountIds: ["acc_red", "acc_blue"] }).cacheProviderId).toBe(blueAndRed);
 	});
 });
 

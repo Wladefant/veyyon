@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import type { AuthStorage, FetchImpl } from "@veyyon/ai";
+import type { AuthStorage, CyberAccessProgram, FetchImpl } from "@veyyon/ai";
+import { resetCodexAccessProgramListings } from "@veyyon/ai/providers/openai-codex/access-programs";
+import { resolveCodexResponsesLite } from "@veyyon/ai/providers/openai-codex/request-transformer";
+import { getBundledModels } from "@veyyon/catalog/models";
 import type { SearchParams } from "@veyyon/coding-agent/tools/web/search/providers/base";
 import { searchCodex } from "@veyyon/coding-agent/tools/web/search/providers/codex";
 import { SearchProviderError } from "@veyyon/coding-agent/tools/web/search/types";
@@ -208,13 +211,27 @@ describe("searchCodex model selection", () => {
 		},
 	} as unknown as AuthStorage;
 	let capturedRequest: CapturedRequest | null = null;
+	/** The models the account's `/codex/models` listing returns; a search lists its account before it searches. */
+	let accountListing: unknown[] = [];
+	/** The `chatgpt-account-id` of every listing request, in order. */
+	const listingAccounts: Array<string | null> = [];
+
+	/** Answers the account's model listing and forwards every other request to `fetch`. */
+	function answeringListings(fetch: FetchImpl): FetchImpl {
+		return (url, init) => {
+			const href = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+			if (!new URL(href).pathname.endsWith("/models")) return fetch(url, init);
+			listingAccounts.push(new Headers(init?.headers).get("chatgpt-account-id"));
+			return Promise.resolve(new Response(JSON.stringify({ models: accountListing })));
+		};
+	}
 
 	function makeSearchParams(query: string, fetch?: FetchImpl): SearchParams {
 		return {
 			query,
 			systemPrompt: "Codex test system prompt",
 			authStorage: fakeAuthStorage,
-			...(fetch ? { fetch } : {}),
+			...(fetch ? { fetch: answeringListings(fetch) } : {}),
 		};
 	}
 
@@ -238,6 +255,9 @@ describe("searchCodex model selection", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 		capturedRequest = null;
+		accountListing = [];
+		listingAccounts.length = 0;
+		resetCodexAccessProgramListings();
 		if (originalCodexSearchModel === undefined) {
 			delete process.env.VEYYON_CODEX_WEB_SEARCH_MODEL;
 		} else {
@@ -255,6 +275,29 @@ describe("searchCodex model selection", () => {
 		expect(result.model).toBe("gpt-5.6-luna");
 		expect(result.sources).toEqual([{ title: "Example Article", url: "https://example.com/article" }]);
 	});
+
+	// A search is judged under the account's program like a turn. Keyed by program, so a program added
+	// to the union fails the type check until a level is recorded here.
+	const SEARCH_ACCOUNT_LEVELS: Record<CyberAccessProgram, { offered: string[]; sent: unknown }> = {
+		standard: { offered: ["standard"], sent: undefined },
+		daybreak_blue: { offered: ["standard", "daybreak_blue"], sent: { cyber: "daybreak_blue" } },
+		daybreak_red: { offered: ["standard", "daybreak_red"], sent: { cyber: "daybreak_red" } },
+	};
+	for (const [level, { offered, sent }] of Object.entries(SEARCH_ACCOUNT_LEVELS)) {
+		it(`sends the program a ${level} account is offered for the search model`, async () => {
+			delete process.env.VEYYON_CODEX_WEB_SEARCH_MODEL;
+			accountListing = [
+				{ slug: "gpt-5.6-luna", supported_in_api: true, available_access_programs: { cyber: offered } },
+			];
+
+			await searchCodex(makeSearchParams("vulnerability advisory", mockCodexFetch("gpt-5.6-luna")));
+			await searchCodex(makeSearchParams("vulnerability advisory", mockCodexFetch("gpt-5.6-luna")));
+
+			expect(capturedRequest?.body?.access_programs).toEqual(sent);
+			// The account is listed once, under the account id the search sends, and the listing is reused.
+			expect(listingAccounts).toEqual(["acct-test"]);
+		});
+	}
 
 	it("falls back to the default model when VEYYON_CODEX_WEB_SEARCH_MODEL is blank", async () => {
 		process.env.VEYYON_CODEX_WEB_SEARCH_MODEL = "   ";
@@ -320,49 +363,36 @@ describe("searchCodex model selection", () => {
 		expect(calls).toBe(1);
 	});
 
-	it("encodes explicit gpt-5.6-sol as a Responses-Lite request", async () => {
-		process.env.VEYYON_CODEX_WEB_SEARCH_MODEL = "gpt-5.6-sol";
-		const result = await searchCodex(makeSearchParams("Sol web search", mockCodexFetch("gpt-5.6-sol")));
+	// WHY: a search on a model the catalog marks for Responses-Lite was sent in the Lite shape, with
+	// the hosted `web_search` tool moved into an `additional_tools` input item and `tool_choice` still
+	// naming it. The endpoint answers that request 400 `Tool choice 'web_search_preview' not found in
+	// 'tools' parameter.`, and the Lite shape with `tool_choice: auto` answers from the model's own
+	// knowledge without searching, so every default search on a ChatGPT account failed. The sweep sends
+	// a search on every bundled Codex model and requires the plain Responses shape. Not caught: a model
+	// the endpoint later refuses in the plain shape, which only a live request shows.
+	it("sends every bundled Codex model's search in the plain Responses shape, Responses-Lite models included", async () => {
+		const bundled = getBundledModels("openai-codex").filter(model => model.api === "openai-codex-responses");
+		expect(bundled.some(model => resolveCodexResponsesLite(model, undefined))).toBe(true);
 
-		expect(capturedRequest).not.toBeNull();
-		const headers = new Headers(capturedRequest?.headers);
-		expect(headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
-		expect(headers.get("session-id")).toBeTruthy();
-		expect(headers.get("thread-id")).toBeTruthy();
-		expect(headers.get("x-codex-window-id")).toBeTruthy();
-		expect(capturedRequest?.body).toEqual(
-			expect.objectContaining({
-				model: "gpt-5.6-sol",
-				tool_choice: { type: "web_search" },
-				reasoning: { context: "all_turns" },
-				parallel_tool_calls: false,
+		for (const model of bundled) {
+			process.env.VEYYON_CODEX_WEB_SEARCH_MODEL = model.id;
+			const result = await searchCodex(makeSearchParams(`${model.id} web search`, mockCodexFetch(model.id)));
+
+			const headers = new Headers(capturedRequest?.headers);
+			expect(headers.get("x-openai-internal-codex-responses-lite")).toBeNull();
+			expect(capturedRequest?.body).toEqual({
+				model: model.id,
+				stream: true,
+				store: false,
 				input: [
-					{
-						type: "additional_tools",
-						role: "developer",
-						tools: [{ type: "web_search", search_context_size: "high" }],
-					},
-					{
-						type: "message",
-						role: "developer",
-						content: [{ type: "input_text", text: "Codex test system prompt" }],
-					},
-					{
-						type: "message",
-						role: "user",
-						content: [{ type: "input_text", text: "Sol web search" }],
-					},
+					{ type: "message", role: "user", content: [{ type: "input_text", text: `${model.id} web search` }] },
 				],
-				client_metadata: expect.objectContaining({
-					session_id: headers.get("session-id"),
-					thread_id: headers.get("thread-id"),
-					"x-codex-window-id": headers.get("x-codex-window-id"),
-				}),
-			}),
-		);
-		expect(capturedRequest?.body?.tools).toBeUndefined();
-		expect(capturedRequest?.body?.instructions).toBeUndefined();
-		expect(result.model).toBe("gpt-5.6-sol");
+				tools: [{ type: "web_search", search_context_size: "high" }],
+				tool_choice: { type: "web_search" },
+				instructions: "Codex test system prompt",
+			});
+			expect(result.model).toBe(model.id);
+		}
 	});
 
 	it("does not retry default candidates when VEYYON_CODEX_WEB_SEARCH_MODEL is explicitly unsupported", async () => {

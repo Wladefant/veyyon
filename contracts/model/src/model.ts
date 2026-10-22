@@ -161,13 +161,19 @@ export interface ModelReasoningOptions {
 export type CyberAccessProgram = "standard" | "daybreak_blue" | "daybreak_red";
 
 /**
- * Access programs the endpoint offers the signed-in caller for one model, read from Codex discovery
- * (`available_access_programs`). Discovery grants nothing: the inference endpoint still enforces
- * authorization on every request.
+ * What one ChatGPT account's Codex model listing states for one model. An account is listed the models
+ * its tier may use: a Daybreak-only model appears only in a Daybreak account's listing. Discovery grants
+ * nothing: the inference endpoint still enforces authorization on every request.
  */
-export interface ModelAccessPrograms {
-	/** Accepted explicit selections, unknown program names dropped. An empty list is distinct from absent metadata. */
-	cyber: readonly CyberAccessProgram[];
+export interface ModelAccountAccess {
+	/** Whether the account's listing includes the model. An account not listed a model cannot use it. */
+	listed: boolean;
+	/**
+	 * Accepted explicit `access_programs.cyber` selections (`available_access_programs`), unknown program
+	 * names dropped. Absent when the account is not listed the model or its listing states no list for
+	 * it; an empty list is distinct from an absent one.
+	 */
+	cyber?: readonly CyberAccessProgram[];
 }
 
 // `Provider` is any provider-id string; `KnownProvider` (re-exported above) enumerates
@@ -982,11 +988,12 @@ export interface Model<TApi extends Api = Api> {
 	 */
 	applyPatchToolType?: "freeform" | "function";
 	/**
-	 * Access programs the endpoint offers the signed-in caller for this model. Caller-specific: it
-	 * states what one account may select, so only runtime discovery sets it and the bundled catalog
-	 * never carries it. Absent means discovery stated nothing.
+	 * What each signed-in ChatGPT account's Codex model listing states for this model, keyed by account
+	 * id. Every account discovery enumerated has an entry, including an account not listed the model,
+	 * so a model one tier may use and another may not records both. An account with no entry was not
+	 * enumerated. Only runtime discovery sets it; the bundled catalog never carries it.
 	 */
-	accessPrograms?: ModelAccessPrograms;
+	accountAccess?: Readonly<Record<string, ModelAccountAccess>>;
 	/**
 	 * Force OAuth-style request shaping for providers whose API key prefix doesn't
 	 * match an OAuth token (e.g. routing Anthropic traffic through a proxy that
