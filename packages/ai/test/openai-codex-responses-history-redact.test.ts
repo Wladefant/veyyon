@@ -173,4 +173,119 @@ describe("convertCodexResponsesMessages history credential redaction", () => {
 			);
 		});
 	}
+	it("pairs native replayed function and custom calls with appended tool results", () => {
+		const model = createCodexModel("gpt-5.1-codex");
+		const nativeAssistant = (dt: boolean, calls: Array<Record<string, unknown>>) =>
+			({
+				role: "assistant",
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				content: [],
+				providerPayload: {
+					type: "openaiResponsesHistory",
+					provider: model.provider,
+					dt,
+					items: calls,
+				},
+				usage: { ...zeroCost, totalTokens: 0, cost: { ...zeroCost, total: 0 } },
+				stopReason: "toolUse",
+				timestamp: 0,
+			}) as unknown as AssistantMessage;
+		const toolResult = (toolCallId: string, toolName: string) => ({
+			role: "toolResult" as const,
+			toolCallId,
+			toolName,
+			content: [{ type: "text" as const, text: `${toolName} result` }],
+			isError: false,
+			timestamp: 1,
+		});
+		const callItems = [
+			{ type: "function_call", name: "search", call_id: "fn_1", arguments: "{}" },
+			{ type: "custom_tool_call", name: "custom", call_id: "custom_1", input: "query" },
+		];
+		for (const dt of [true, false]) {
+			const replay = convertCodexResponsesMessages(model, {
+				messages: [
+					...(dt ? [{ role: "user" as const, content: "prefix", timestamp: 0 }] : []),
+					nativeAssistant(dt, callItems),
+					toolResult("fn_1", "search"),
+					toolResult("custom_1", "custom"),
+				],
+			});
+			expect(replay).toContainEqual({ type: "function_call_output", call_id: "fn_1", output: "search result" });
+			expect(replay).toContainEqual({
+				type: "custom_tool_call_output",
+				call_id: "custom_1",
+				output: "custom result",
+			});
+			expect(replay.some(item => item.type === "message" && JSON.stringify(item).includes("<stale-tool-result"))).toBe(
+				false,
+			);
+		}
+	});
+
+	it("pairs a native user providerPayload call with its tool result", () => {
+		const model = createCodexModel("gpt-5.1-codex");
+		const replay = convertCodexResponsesMessages(model, {
+			messages: [
+				{
+					role: "user",
+					content: "archive",
+					timestamp: 0,
+					providerPayload: {
+						type: "openaiResponsesHistory",
+						provider: model.provider,
+						items: [{ type: "function_call", name: "search", call_id: "user_fn", arguments: "{}" }],
+					},
+				} as Context["messages"][number],
+				{
+					role: "toolResult",
+					toolCallId: "user_fn",
+					toolName: "search",
+					content: [{ type: "text", text: "found" }],
+					isError: false,
+					timestamp: 1,
+				},
+			],
+		});
+		expect(replay).toContainEqual({ type: "function_call_output", call_id: "user_fn", output: "found" });
+	});
+
+	it("does not accept a call id removed by native history replacement", () => {
+		const model = createCodexModel("gpt-5.1-codex");
+		const nativeAssistant = (dt: boolean, callId: string) =>
+			({
+				role: "assistant",
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				content: [],
+				providerPayload: {
+					type: "openaiResponsesHistory",
+					provider: model.provider,
+					dt,
+					items: [{ type: "function_call", name: "search", call_id: callId, arguments: "{}" }],
+				},
+				usage: { ...zeroCost, totalTokens: 0, cost: { ...zeroCost, total: 0 } },
+				stopReason: "toolUse",
+				timestamp: 0,
+			}) as unknown as AssistantMessage;
+		const replay = convertCodexResponsesMessages(model, {
+			messages: [
+				nativeAssistant(true, "removed_call"),
+				nativeAssistant(false, "kept_call"),
+				{
+					role: "toolResult",
+					toolCallId: "removed_call",
+					toolName: "search",
+					content: [{ type: "text", text: "stale output" }],
+					isError: false,
+					timestamp: 1,
+				},
+			],
+		});
+		expect(replay.some(item => item.type === "function_call_output" && item.call_id === "removed_call")).toBe(false);
+		expect(replay.some(item => item.type === "message" && JSON.stringify(item).includes("stale output"))).toBe(true);
+	});
 });
