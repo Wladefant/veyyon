@@ -532,6 +532,32 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 			),
 		).toThrow(/non-code reader target is not tracked at HEAD/);
 	});
+	it("maps the coding-agent manifest reader and fails closed for unmapped owned assets", () => {
+		const currentGraph = workspaceDependencyGraph();
+		const manifestPath = "packages/coding-agent/package.json";
+		const reader = "scripts/a-package-script-runs-in-an-existing-directory.test.ts";
+		const expected = reverseDependencyClosure(currentGraph, ["packages/coding-agent"]);
+		const selection = selectAffectedWorkspaceMembers(
+			[{ status: "M", paths: [manifestPath] }],
+			currentGraph,
+			currentGraph,
+		);
+
+		expect(selection).toMatchObject({
+			mode: "affected",
+			selectedMembers: expected,
+			changeMembers: [{ path: manifestPath, selectedMembers: expected }],
+		});
+		expect(ciContractTestsForPaths([manifestPath], new Set([reader]))).toEqual([
+			{ runner: "bun", path: reader },
+		]);
+
+		const unknownAsset = "packages/coding-agent/assets/payload.schema.json";
+		expect(fullTriggerReason(unknownAsset)).toContain("owned non-code input has no explicit reader mapping");
+		expect(
+			selectAffectedWorkspaceMembers([{ status: "M", paths: [unknownAsset] }], currentGraph, currentGraph),
+		).toMatchObject({ mode: "full" });
+	});
 	it("keeps changed script tests in a mixed workspace selection", () => {
 		const knownGraph = basicGraph();
 		const scriptTest = "scripts/ci-test-concurrency-default.test.ts";

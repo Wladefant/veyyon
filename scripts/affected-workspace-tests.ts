@@ -18,7 +18,7 @@ import {
 
 export const AFFECTED_SELECTOR_ID = "affected-workspace-tests-v1";
 export const AFFECTED_STATIC_DEPENDENCY_POLICY =
-	"Workspace graphs combine manifest dependencies with parser-resolved TypeScript/JavaScript imports. Counts are unique cross-member import edges per revision. Unresolved or undeclared targets force full coverage. Non-literal loaders in audited files add potential edges to every workspace member; any other non-literal loader forces full coverage. Non-code reader dependencies are explicit CI contract mappings, not statically discovered filesystem calls; unowned or unmapped paths force full coverage, and mapped reader targets must exist at HEAD.";
+	"Workspace graphs combine manifest dependencies with parser-resolved TypeScript/JavaScript imports. Counts are unique cross-member import edges per revision. Unresolved or undeclared targets force full coverage. Non-literal loaders in audited files add potential edges to every workspace member; any other non-literal loader forces full coverage. Non-code reader dependencies are explicit CI contract mappings, not statically discovered filesystem calls; unowned or unmapped paths and owned non-code inputs without explicit reader mappings force full coverage, and mapped reader targets must exist at HEAD.";
 export interface AffectedDynamicImportSite {
 	file: string;
 	owner: string;
@@ -359,6 +359,13 @@ const isTrackedMarkdownReaderInput = (file: string): boolean =>
 
 const CI_CONTRACT_TEST_MAP: readonly CiContractTestRule[] = [
 	{
+		// This reader sweeps package manifests across the TypeScript workspace.
+		matches: file =>
+			/^(?:packages|plugins|apps|hosts)\/.+\/package\.json$/i.test(file),
+		targets: () => ciContractTargets("bun", ["scripts/a-package-script-runs-in-an-existing-directory.test.ts"]),
+		requireTrackedTargets: true,
+	},
+	{
 		matches: isTrackedMarkdownReaderInput,
 		targets: file => {
 			const readers = ["scripts/check-doc-links.test.ts", "scripts/check-doc-paths.test.ts"];
@@ -503,7 +510,20 @@ export function fullTriggerReason(file: string): string | undefined {
 	if (normalized.startsWith("tests/fixtures/") || normalized.startsWith("tests/fuzz/")) {
 		return "shared fixtures or fuzz inputs are outside one workspace member";
 	}
-	if (isCiContractOwnedPath(normalized)) return undefined;
+	const ownerPath =
+		normalized.startsWith("packages/") ||
+		normalized.startsWith("plugins/") ||
+		normalized.startsWith("apps/") ||
+		normalized.startsWith("hosts/");
+	if (
+		ownerPath &&
+		!SOURCE_MODULE_EXTENSION.test(normalized) &&
+		!/\.md$/i.test(normalized) &&
+		!/\/package\.json$/i.test(normalized) &&
+		!CI_CONTRACT_TEST_MAP.some(rule => rule.matches(normalized) && rule.targets(normalized, new Set()).length > 0)
+	) {
+		return `owned non-code input has no explicit reader mapping: ${normalized}`;
+	}
 	return undefined;
 }
 export interface WorkspaceImportGraph {
