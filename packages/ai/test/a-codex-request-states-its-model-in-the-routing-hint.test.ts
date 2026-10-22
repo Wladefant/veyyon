@@ -1,29 +1,26 @@
 /**
  * WHY: codex-rs sends `x-codex-routing-hint: model=<model>;tier=<tier>`, or `model=<model>` when the
- * request sets no service tier, on every ChatGPT Codex Responses request, on the websocket upgrade
- * (startup prewarm included) and on the remote compaction (`build_routing_hint_header`, since 0.153).
- * veyyon sent none, so a websocket upgrade reached the Codex backend stating no model at all; the
- * model appeared only in the first frame.
+ * request sets no service tier, on every ChatGPT Codex Responses request and on the websocket upgrade,
+ * startup prewarm included (`build_routing_hint_header`, since 0.153). veyyon sent none, so a
+ * websocket upgrade reached the Codex backend stating no model at all; the model appeared only in the
+ * first frame.
  *
- * Class closed: every request the Codex provider sends carries the hint its own body derives, the
- * wire model (`requestModelId`, not the catalog id) and the tier the body sets. The suite drives the
- * production path for each transport: an HTTP turn, a websocket turn's upgrade, the prewarm upgrade a
- * later turn reuses, and the server-side compaction. Every request the host receives is checked
- * against the body it carries. A caller header stating another model, an `onPayload` hook rewriting
- * the model, and a model whose hint is not a valid header value are each driven.
+ * Class closed: every turn request the Codex provider sends carries the hint its own body derives,
+ * the wire model (`requestModelId`, not the catalog id) and the tier the body sets. The suite drives
+ * the production path for each transport: an HTTP turn, a websocket turn's upgrade, and the prewarm
+ * upgrade a later turn reuses. Every request the host receives is checked against the body it
+ * carries. A caller header stating another model, an `onPayload` hook rewriting the model, and a
+ * model whose hint is not a valid header value are each driven.
  *
- * Not caught: the web search and image generation requests (covered in coding-agent), and a Codex
- * request site this suite does not drive. The suite asserts what is sent; how the backend routes on
- * the hint is not observable offline.
+ * Not caught: the server-side compaction sends no hint, because `openai-compaction.ts` is locked
+ * (`scripts/the-codex-compaction-route-is-locked.test.ts`); the web search and image generation
+ * requests are covered in coding-agent. The suite asserts what is sent; how the backend routes on the
+ * hint is not observable offline.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { resetCodexAccessProgramListings } from "@veyyon/ai/providers/openai-codex/access-programs";
 import { prewarmOpenAICodexResponses, streamOpenAICodexResponses } from "@veyyon/ai/providers/openai-codex-responses";
-import {
-	openAIResponsesServerCompaction,
-	resetServerCompactionRouteCache,
-} from "@veyyon/ai/providers/openai-compaction";
 import type { Context, FetchImpl, Model, ProviderSessionState, ServiceTier } from "@veyyon/ai/types";
 import { codexRoutingHint } from "@veyyon/catalog/wire/codex";
 import * as piUtils from "@veyyon/utils";
@@ -43,7 +40,6 @@ beforeEach(() => {
 afterEach(() => {
 	global.WebSocket = originalWebSocket;
 	vi.restoreAllMocks();
-	resetServerCompactionRouteCache();
 	resetCodexAccessProgramListings();
 });
 
@@ -107,7 +103,7 @@ interface SentRequest {
 	body: Record<string, unknown>;
 }
 
-/** A Codex host recording every POST; a compaction (its last input item is the trigger) is answered 404. */
+/** A Codex host recording every POST and answering each with a completed response. */
 function codexHost(): { fetch: FetchImpl; sent: SentRequest[] } {
 	const sent: SentRequest[] = [];
 	const fetch = (async (input: string | URL, init?: RequestInit) => {
@@ -115,10 +111,7 @@ function codexHost(): { fetch: FetchImpl; sent: SentRequest[] } {
 		if (!url.endsWith("/codex/responses")) return new Response("not found", { status: 404 });
 		const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
 		sent.push({ headers: new Headers(init?.headers), body });
-		const last = (Array.isArray(body.input) ? body.input : []).at(-1) as { type?: string } | undefined;
-		return last?.type === "compaction_trigger"
-			? new Response('{"detail":"Not Found"}', { status: 404 })
-			: new Response(COMPLETED_SSE, { status: 200, headers: { "content-type": "text/event-stream" } });
+		return new Response(COMPLETED_SSE, { status: 200, headers: { "content-type": "text/event-stream" } });
 	}) as FetchImpl;
 	return { fetch, sent };
 }
@@ -307,26 +300,6 @@ describe("a websocket Codex turn states its model and tier on the upgrade", () =
 		expect(sockets).toHaveLength(1);
 		expect(sockets[0]?.frames).toHaveLength(1);
 		expect(sockets[0]?.headers[ROUTING_HINT]).toBe(hintFor(sockets[0]?.frames[0] ?? {}));
-	});
-});
-
-describe("a Codex compaction states the model its body sends", () => {
-	it("sends the wire model the compaction body names", async () => {
-		const host = codexHost();
-		await expect(
-			openAIResponsesServerCompaction.compact({
-				sessionId: "routing-hint-compaction",
-				model: daybreakModel(),
-				messages: [{ role: "user", content: "compact this span", timestamp: 1 }],
-				apiKey: codexToken(),
-				fetch: host.fetch,
-			}),
-		).rejects.toThrow("Server-side compaction is not available");
-
-		expect(host.sent).toHaveLength(1);
-		expect(host.sent[0]?.body.model).toBe(WIRE_MODEL);
-		expect(host.sent[0]?.headers.get(ROUTING_HINT)).toBe(`model=${WIRE_MODEL}`);
-		expectEveryRequestStatesItsBody(host.sent);
 	});
 });
 
