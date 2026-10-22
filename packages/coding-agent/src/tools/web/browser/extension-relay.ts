@@ -130,6 +130,7 @@ export interface ExtensionRelayOptions {
 
 interface OwnedTab {
 	tabId: number;
+	windowId?: number;
 	targetId: string;
 	/** Chrome's id of the tab's main frame (its page target id). */
 	mainFrameId: string;
@@ -173,9 +174,18 @@ const extensionMessageSchema = type({
 });
 
 const debugSourceSchema = type({ tabId: "number", "sessionId?": "string" });
-const targetInfoSchema = type({ targetInfo: { targetId: "string" } });
+const targetInfoSchema = type({
+	targetInfo: { targetId: "string", "title?": "string", "url?": "string" },
+});
+const targetInfoChangedSchema = targetInfoSchema;
 const responseBodySchema = type({ body: "string", "base64Encoded?": "boolean" });
-const tabSchema = type({ id: "number", "openerTabId?": "number", "pendingUrl?": "string", "url?": "string" });
+const tabSchema = type({
+	id: "number",
+	"openerTabId?": "number",
+	"pendingUrl?": "string",
+	"url?": "string",
+	"windowId?": "number",
+});
 const requestPausedSchema = type({
 	requestId: "string",
 	"frameId?": "string",
@@ -304,6 +314,17 @@ export class ExtensionRelay {
 
 	get tabCount(): number {
 		return this.#tabs.size;
+	}
+
+	/** Snapshot only tabs this relay already created or adopted; never queries Chrome's other tabs. */
+	getTrackedTabs(): Array<{ tabId: number; windowId?: number; targetId: string; url: string; title: string }> {
+		return [...this.#tabs.values()].map(({ tabId, windowId, targetId, url, title }) => ({
+			tabId,
+			windowId,
+			targetId,
+			url,
+			title,
+		}));
 	}
 
 	get closed(): boolean {
@@ -550,7 +571,7 @@ export class ExtensionRelay {
 				if (this.#bootstrapUrl !== undefined && landing === this.#bootstrapUrl) {
 					this.#bootstrapUrl = undefined;
 					this.#pendingBootstrapTabs.add(tab.id);
-					this.#bootstrapReady = this.#registerTab(tab.id, true)
+					this.#bootstrapReady = this.#registerTab(tab.id, true, tab.windowId)
 						.then(() => {
 							this.#bootstrapTabId = tab.id;
 							this.#markReady();
@@ -572,7 +593,7 @@ export class ExtensionRelay {
 						return;
 					}
 				}
-				void this.#registerTab(tab.id).catch(error =>
+				void this.#registerTab(tab.id, false, tab.windowId).catch(error =>
 					this.#log("could not adopt a popup", { error: errorText(error) }),
 				);
 				return;
@@ -603,6 +624,12 @@ export class ExtensionRelay {
 		if (method === "Target.detachedFromTarget") {
 			const detached = attachedSchema(eventParams);
 			if (!(detached instanceof type.errors)) this.#childSessions.delete(detached.sessionId);
+		} else if (method === "Target.targetInfoChanged") {
+			const changed = targetInfoChangedSchema(eventParams);
+			if (!(changed instanceof type.errors) && changed.targetInfo.targetId === tab.mainFrameId) {
+				if (changed.targetInfo.url !== undefined) tab.url = changed.targetInfo.url;
+				if (changed.targetInfo.title !== undefined) tab.title = changed.targetInfo.title;
+			}
 		} else if (method === "Page.frameNavigated" && source.sessionId === undefined) {
 			const navigated = frameNavigatedSchema(eventParams);
 			if (!(navigated instanceof type.errors) && navigated.frame.parentId === undefined) {
@@ -792,8 +819,10 @@ export class ExtensionRelay {
 
 	// ----- Tabs and sessions ---------------------------------------------------------------
 
-	async #registerTab(tabId: number, bootstrap = false): Promise<OwnedTab> {
+	async #registerTab(tabId: number, bootstrap = false, windowId?: number): Promise<OwnedTab> {
 		let mainFrameId: string;
+		let url = "about:blank";
+		let title = "";
 		try {
 			await this.#call("chrome.debugger.attach", [{ tabId }, "1.3"]);
 			await this.#enableFetchGate({ tabId }, true);
@@ -804,6 +833,10 @@ export class ExtensionRelay {
 			);
 			if (info instanceof type.errors) throw new Error("Chrome did not name the main frame of the tab.");
 			mainFrameId = info.targetInfo.targetId;
+			if (!bootstrap) {
+				url = info.targetInfo.url ?? url;
+				title = info.targetInfo.title ?? title;
+			}
 			if (bootstrap)
 				await this.#call("chrome.debugger.sendCommand", [{ tabId }, "Page.navigate", { url: "about:blank" }]);
 			if (bootstrap && (this.#closed || !this.#pendingBootstrapTabs.has(tabId)))
@@ -818,7 +851,7 @@ export class ExtensionRelay {
 			throw error;
 		}
 		if (bootstrap) this.#pendingBootstrapTabs.delete(tabId);
-		const tab: OwnedTab = { tabId, targetId: `ext-${tabId}`, mainFrameId, url: "about:blank", title: "" };
+		const tab: OwnedTab = { tabId, windowId, targetId: `ext-${tabId}`, mainFrameId, url, title };
 		this.#tabs.set(tabId, tab);
 		for (const client of this.#clients.values()) {
 			if (client.discover)
@@ -1060,7 +1093,7 @@ export class ExtensionRelay {
 		if (!tab) {
 			const created = tabSchema(await this.#call("chrome.tabs.create", [{ url: "about:blank", active: true }]));
 			if (created instanceof type.errors) throw new Error("The extension returned no tab.");
-			tab = await this.#registerTab(created.id);
+			tab = await this.#registerTab(created.id, false, created.windowId);
 		}
 		if (url !== "about:blank") {
 			this.#audit(tab.tabId, url, decision);

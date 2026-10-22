@@ -154,6 +154,16 @@ function splitThinkingSuffix(
 		: { base: pattern };
 }
 
+/**
+ * A model pattern without its trailing `:<level>` thinking selector, the guarded
+ * `:max` level and the `:auto` sentinel included; the input itself when it carries
+ * none. A suffix that is not a thinking level (`:free`, `:0`, `:671b`) is part of
+ * the model id and stays.
+ */
+export function stripThinkingSelector(pattern: string): string {
+	return splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS).base;
+}
+
 function matchingGlobModels(
 	pattern: string,
 	availableModels: readonly Model<Api>[],
