@@ -405,12 +405,19 @@ export async function executeFileSearch(
 				if (isSingle) throw new ToolError(`Path is not a directory: ${target.searchPath}`);
 				return [];
 			}
+			// A glob that ends in `/` names directories, as it does in a shell:
+			// `forminator*/` lists the directories `forminator*` matches. No walked
+			// path ends in a separator, so the glob loses the slash and the walk
+			// keeps directories only; passed through, it matched nothing and the
+			// result stated that no files exist.
+			const dirsOnly = target.hasGlob && target.globPattern.endsWith("/");
 			try {
 				const result = await untilAborted(combinedSignal, () =>
 					natives.glob(
 						{
-							pattern: target.globPattern,
+							pattern: dirsOnly ? target.globPattern.replace(/\/+$/, "") : target.globPattern,
 							path: target.searchPath,
+							fileType: dirsOnly ? natives.FileType.Dir : undefined,
 							hidden: includeHidden,
 							maxResults: effectiveLimit,
 							sortByMtime: true,
