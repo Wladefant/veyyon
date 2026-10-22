@@ -8,6 +8,7 @@
 - Launch holds a daemon whose native process handle is unavailable in `stopping` instead of settling it as exited: its tree's death is unobservable, so no restart starts and a stop reports failure ([issue](https://github.com/Wladefant/veyyon/issues/530)).
 - Mixed-build IRC sends distinguish unknown sessions from receivers without notice support and report loaded build identities ([#551](https://github.com/Wladefant/veyyon/issues/551)).
 - Browser tabs owned by another session can no longer be reopened, reused, or run, and the tab inventory omits their names, titles, and URLs ([Refs #538](https://github.com/Wladefant/veyyon/issues/538)).
+- Fixed the coding-agent failing to parse after a merge left stray braces, a duplicated property block and a call to a removed private method in the session and task modules.
 
 - Project plugins load only from the `installPath` entries of a project registry the operator has approved, through both the plugin loader and the Claude-plugin roots. The project directory's `package.json`, lockfile and `node_modules` are no longer read for project plugins. A registry whose directory resolves outside the project is refused, and an approval from a nested directory reaches the gate ([Refs #633](https://github.com/Wladefant/veyyon/issues/633)).
 - Argot teaches its handle table to a model named in `argot.encode.models` with a thinking selector (`provider/id:high`), drops or restores the table when a model switch crosses the allowlist, and records a deliberately untaught model as decode-only instead of logging an `ABSENT` handle table ([#648](https://github.com/Wladefant/veyyon/issues/648))
@@ -19,6 +20,7 @@
 - Session cwd changes leave the shared process directory unchanged and load plugin configuration from each session's destination project ([issue](https://github.com/Wladefant/veyyon/issues/529)).
 - Quota refusals block the failed request's credential, not a healthy account selected by a later resolver call ([PR](https://github.com/Wladefant/veyyon/pull/619)).
 - Automatic lane handoff reserves the summary model's full output limit, including reasoning, before selection. The request sends the same limit ([issue](https://github.com/Wladefant/veyyon/issues/552)).
+- Extension browser sessions close the connect tab they opened, by tab id, once the first browser tab is attached. A failed open still removes it, a reused operator Chrome and its other tabs stay untouched, and a relay owned by another process closes it through `POST /control/<secret>/close-connect-tab` ([Refs #641](https://github.com/Wladefant/veyyon/pull/641#issuecomment-6278404345)).
 - Extension browser sessions reuse their exact connect tab and remove pages created by failed opens. Closing a tab removes it before the extension can disconnect ([issue](https://github.com/Wladefant/veyyon/issues/548)).
 - A browser returned by `acquireBrowser` carries a lease its caller releases, so one session's release can no longer close a browser another session has just reused.
 - Session factory callback typing and mixed native actor rosters now pass the workspace type check ([Refs](https://github.com/Wladefant/veyyon/issues/569)).
