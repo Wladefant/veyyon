@@ -2,6 +2,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { applyOwnerOnlyWindowsAcl, atomicWriteFileWith, getConfigRootDir, postmortem } from "@veyyon/utils";
+import { getLoadedBuildIdentity } from "./build-info";
 import { createTerminalControlTransport, type TerminalSocket } from "./terminal-control-transport";
 
 /** Versioned, private discovery record. Only the owning terminal publishes this. */
@@ -13,6 +14,9 @@ export interface TerminalOwner {
 	sessionFile: string;
 	endpoint: string;
 	token: string;
+	loadedVersion: string;
+	loadedBuildSha: string | null;
+	capabilities: readonly string[];
 }
 
 export interface TerminalControlTarget {
@@ -24,7 +28,7 @@ export interface TerminalControlTarget {
 }
 
 /** Optional protocol features this build serves. A peer that lacks one never sees the field. */
-export const TERMINAL_CAPABILITIES = ["deliver-ack"] as const;
+export const TERMINAL_CAPABILITIES = ["deliver-ack", "session-notices"] as const;
 /** The newest assistant entries a subscriber is told about; older ones were seen by any earlier subscriber. */
 const HISTORY_FRAME_ENTRIES = 1000;
 const MAX_REMEMBERED_DELIVERIES = 256;
@@ -291,11 +295,25 @@ export async function serveTerminalControl(
 	});
 	const publish = async (): Promise<void> => {
 		const identity = target.identity();
-		const record: TerminalOwner = { version: 1, ...identity, pid: process.pid, endpoint, token };
-		await atomicWriteFileWith(recordPath, async tempPath => {
-			await fs.writeFile(tempPath, JSON.stringify(record), { mode: 0o600 });
-			await applyOwnerOnlyWindowsAcl(tempPath);
-		}, { mode: 0o600 });
+		const build = getLoadedBuildIdentity();
+		const record: TerminalOwner = {
+			version: 1,
+			...identity,
+			pid: process.pid,
+			endpoint,
+			token,
+			loadedVersion: build.version,
+			loadedBuildSha: build.buildSha,
+			capabilities: TERMINAL_CAPABILITIES,
+		};
+		await atomicWriteFileWith(
+			recordPath,
+			async tempPath => {
+				await fs.writeFile(tempPath, JSON.stringify(record), { mode: 0o600 });
+				await applyOwnerOnlyWindowsAcl(tempPath);
+			},
+			{ mode: 0o600 },
+		);
 		if (closed) {
 			await fs.rm(recordPath, { force: true });
 			return;

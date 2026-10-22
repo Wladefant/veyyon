@@ -34,6 +34,7 @@ import {
 	injectVeyyonExtensionCliRoots,
 } from "@veyyon/coding-agent/discovery/veyyon-extension-roots";
 import { removeSyncWithRetries, setAgentDir } from "@veyyon/utils";
+import { trustProjectRegistry } from "../helpers/project-registry-trust";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
 const PROVIDER_ID = "veyyon-plugins";
@@ -243,13 +244,12 @@ test("project-scoped installed plugins surface project-level sub-discovery", asy
 	const installed = path.join(pluginsDir, "node_modules", "my-project-ext");
 	fs.mkdirSync(installed, { recursive: true });
 	fs.cpSync(ext, installed, { recursive: true });
-	writeFile(
-		path.join(pluginsDir, "veyyon-plugins.lock.json"),
-		JSON.stringify({
-			plugins: { "my-project-ext": { version: "1.0.0", enabled: true, enabledFeatures: null } },
-			settings: {},
-		}),
-	);
+	await trustProjectRegistry({
+		cwd: project,
+		agentDir: path.join(home, ".veyyon", "agent"),
+		pluginsRoot: pluginsDir,
+		installPaths: [installed],
+	});
 
 	const skills = await loadFromPlugin<{ name: string; path: string; level: "user" | "project" }>(
 		skillCapability.id,

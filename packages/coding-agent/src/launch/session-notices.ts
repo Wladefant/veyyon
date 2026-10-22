@@ -70,8 +70,27 @@ function queueDir(root: string, sessionId: string): string {
 	return path.join(root, "run", "notices", sessionId);
 }
 
-/** Session ids of the terminals that are registered and whose process runs, ignoring this process's own session. */
-export function listLiveSessionIds(root = getConfigRootDir(), exceptSessionId?: string): string[] {
+export const SESSION_NOTICE_CAPABILITY = "session-notices";
+
+export interface SessionNoticeOwner {
+	sessionId: string;
+	loadedVersion?: string;
+	loadedBuildSha?: string | null;
+	capabilities?: readonly string[];
+}
+
+export class SessionNoticeCapabilityError extends Error {
+	readonly support: "unsupported" | "unverified";
+
+	constructor(readonly recipient: SessionNoticeOwner) {
+		super(`Session ${recipient.sessionId} does not advertise ${SESSION_NOTICE_CAPABILITY}`);
+		this.name = "SessionNoticeCapabilityError";
+		this.support = recipient.capabilities ? "unsupported" : "unverified";
+	}
+}
+
+/** Registered terminal owners that are live, ignoring this process's own session. */
+export function listLiveSessionOwners(root = getConfigRootDir(), exceptSessionId?: string): SessionNoticeOwner[] {
 	const directory = path.join(root, "run", "terminals");
 	let files: string[];
 	try {
@@ -80,7 +99,7 @@ export function listLiveSessionIds(root = getConfigRootDir(), exceptSessionId?: 
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
 		throw error;
 	}
-	const ids = new Set<string>();
+	const owners = new Map<string, SessionNoticeOwner>();
 	for (const file of files) {
 		if (!file.endsWith(".json")) continue;
 		let owner: Partial<TerminalOwner>;
@@ -93,9 +112,20 @@ export function listLiveSessionIds(root = getConfigRootDir(), exceptSessionId?: 
 		if (owner.version !== 1 || typeof owner.sessionId !== "string" || !isValidSessionId(owner.sessionId)) continue;
 		if (typeof owner.pid !== "number" || !Number.isSafeInteger(owner.pid) || owner.pid <= 0) continue;
 		if (owner.sessionId === exceptSessionId || !isProcessAlive(owner.pid)) continue;
-		ids.add(owner.sessionId);
+		const capabilities =
+			Array.isArray(owner.capabilities) && owner.capabilities.every(capability => typeof capability === "string")
+				? owner.capabilities
+				: undefined;
+		owners.set(owner.sessionId, {
+			sessionId: owner.sessionId,
+			...(typeof owner.loadedVersion === "string" ? { loadedVersion: owner.loadedVersion } : {}),
+			...(typeof owner.loadedBuildSha === "string" || owner.loadedBuildSha === null
+				? { loadedBuildSha: owner.loadedBuildSha }
+				: {}),
+			...(capabilities ? { capabilities } : {}),
+		});
 	}
-	return [...ids];
+	return [...owners.values()];
 }
 
 /**
@@ -174,14 +204,22 @@ export function sendSessionNotice(args: {
 	if (args.ttlMs !== undefined && !(args.ttlMs > 0)) throw new Error("Notice ttl must be positive");
 	const ttlMs = args.ttlMs === undefined ? undefined : Math.min(args.ttlMs, NOTICE_TTL_MS);
 	if (args.to !== "all" && args.to === args.from) throw new Error("Cannot send a notice to your own session");
-	const live = new Set(listLiveSessionIds(root));
+	const owners = new Map(listLiveSessionOwners(root).map(owner => [owner.sessionId, owner]));
+	const live = new Set(owners.keys());
 	const targets = args.to === "all" ? [...live].filter(id => id !== args.from) : [args.to];
+	for (const to of targets) {
+		const owner = owners.get(to);
+		const directory = queueDir(root, to);
+		if (!owner && !fs.existsSync(directory)) {
+			throw new Error(`Unknown session ${to}: no live terminal and no notice queue`);
+		}
+		if (owner && !owner.capabilities?.includes(SESSION_NOTICE_CAPABILITY)) {
+			throw new SessionNoticeCapabilityError(owner);
+		}
+	}
 	const receipts: SessionNoticeReceipt[] = [];
 	for (const to of targets) {
 		const directory = queueDir(root, to);
-		if (!live.has(to) && !fs.existsSync(directory)) {
-			throw new Error(`Unknown session ${to}: no live terminal and no notice queue`);
-		}
 		fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
 		const now = Date.now();
 		if (pendingNames(directory, now).length >= MAX_PENDING_PER_SESSION) {

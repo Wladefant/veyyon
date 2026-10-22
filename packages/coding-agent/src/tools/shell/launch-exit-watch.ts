@@ -60,6 +60,9 @@ async function exitNotice(client: DaemonBrokerClient, daemon: DaemonSnapshot, si
 	} else if (daemon.exitReason) {
 		lines.push(`Reason: ${daemon.exitReason}`);
 	}
+	if (daemon.ownershipUncertain) {
+		lines.push("Ownership: uncertain; its process tree was not proven gone, so a replacement needs its ready port free.");
+	}
 	let output = "";
 	try {
 		const logs = await client.request(

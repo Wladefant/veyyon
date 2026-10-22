@@ -93,6 +93,37 @@ describe("executeBash", () => {
 		}
 	});
 
+	// WHY: A partial native capture must keep its status and reach the model with
+	// its raw prefix. The native boundary is mocked; Rust tests cover pipe reads.
+	for (const status of ["success", "timeout", "cancel"] as const) {
+		it(`keeps ${status} status and discloses an incomplete captured prefix`, async () => {
+			vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation(async (_options, onChunk) => {
+				onChunk?.(null, "prefix");
+				return {
+					exitCode: status === "success" ? 0 : undefined,
+					cancelled: status === "cancel",
+					timedOut: status === "timeout",
+					outputIncomplete: true,
+					capturedOutput: "prefix",
+				};
+			});
+			vi.spyOn(piNatives.Shell.prototype, "abort").mockResolvedValue();
+			const result = await executeBash("printf prefix", {
+				cwd: tempDir,
+				timeout: 5000,
+				sessionKey: `incomplete-${status}`,
+			});
+			expect(result.exitCode).toBe(status === "success" ? 0 : undefined);
+			expect(result.cancelled).toBe(status !== "success");
+			expect(Boolean(result.timedOut)).toBe(status === "timeout");
+			expect(result.outputIncomplete).toBe(true);
+			expect(result.output).toContain("Shell output capture is incomplete");
+			expect(result.output.split("prefix").length - 1).toBe(1);
+			if (status === "timeout") expect(result.output).toContain("Command timed out");
+			if (status === "cancel") expect(result.output).toContain("Command cancelled");
+		});
+	}
+
 	it("omits minimizer options when the feature is disabled", () => {
 		const group: ShellMinimizerSettings = {
 			enabled: false,
@@ -482,7 +513,7 @@ exit 64
 			return;
 		}
 
-		const nativeResult = Promise.withResolvers<{ exitCode: undefined; cancelled: true; timedOut: false }>();
+		const nativeResult = Promise.withResolvers<ShellRunResult>();
 		const dispatched = Promise.withResolvers<void>();
 		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation((_options, onChunk) => {
 			onChunk?.(null, "started\n");
@@ -502,7 +533,7 @@ exit 64
 		controller.abort();
 		await promise;
 
-		nativeResult.resolve({ exitCode: undefined, cancelled: true, timedOut: false });
+		nativeResult.resolve({ exitCode: undefined, cancelled: true, timedOut: false, outputIncomplete: false });
 		await Bun.sleep(0);
 		vi.restoreAllMocks();
 
@@ -596,8 +627,8 @@ exit 64
 		expect(result.cancelled).toBe(true);
 		expect(abortSpy).toHaveBeenCalledTimes(1);
 
-		isolatedResult.resolve({ exitCode: undefined, cancelled: true, timedOut: true });
-		ownerResult.resolve({ exitCode: 0, cancelled: false, timedOut: false });
+		isolatedResult.resolve({ exitCode: undefined, cancelled: true, timedOut: true, outputIncomplete: false });
+		ownerResult.resolve({ exitCode: 0, cancelled: false, timedOut: false, outputIncomplete: false });
 		await owner;
 	});
 

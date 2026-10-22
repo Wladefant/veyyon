@@ -21,7 +21,6 @@ describe("bundled agent parsing", () => {
 	});
 
 	/**
-<<<<<<< HEAD
 	 * The reviewer pins an explicit spawn allowlist so it can delegate mechanical
 	 * sub-steps to the task agent and reconnaissance to scout, without granting
 	 * unrestricted spawning.
@@ -35,9 +34,6 @@ describe("bundled agent parsing", () => {
 
 	/**
 	 * No bundled agent pins a model.
-=======
-	 * No bundled agent pins a model or an effort.
->>>>>>> santhreal/main
 	 *
 	 * They used to: the default lane carried `@task`, `scout`/`sonic` carried
 	 * `@smol`, `reviewer` carried `@slow`, `designer` carried `@designer`. Those
