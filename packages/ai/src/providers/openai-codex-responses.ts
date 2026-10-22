@@ -159,6 +159,7 @@ import {
 	appendResponsesToolResultMessages,
 	applyOpenAIServiceTier,
 	buildResponsesDeltaInput,
+	collectKnownCallIds,
 	convertResponsesAssistantMessage,
 	convertResponsesInputContent,
 	encodeResponsesToolCallId,
@@ -4811,6 +4812,9 @@ export function convertCodexResponsesMessages(model: Model<"openai-codex-respons
 					.result as Array<ResponseInput[number]>;
 				for (const item of redactedHistoryItems) {
 					const maybe = item as { type?: string; call_id?: string };
+					if ((maybe.type === "function_call" || maybe.type === "custom_tool_call") && typeof maybe.call_id === "string") {
+						knownCallIds.add(maybe.call_id);
+					}
 					if (maybe.type === "custom_tool_call" && typeof maybe.call_id === "string") {
 						customCallIds.add(maybe.call_id);
 					}
@@ -4866,6 +4870,9 @@ export function convertCodexResponsesMessages(model: Model<"openai-codex-respons
 				if (sanitizedHistoryItems) {
 					for (const item of sanitizedHistoryItems) {
 						const maybe = item as { type?: string; call_id?: string };
+						if ((maybe.type === "function_call" || maybe.type === "custom_tool_call") && typeof maybe.call_id === "string") {
+							knownCallIds.add(maybe.call_id);
+						}
 						if (maybe.type === "custom_tool_call" && typeof maybe.call_id === "string") {
 							customCallIds.add(maybe.call_id);
 						}
@@ -4874,7 +4881,15 @@ export function convertCodexResponsesMessages(model: Model<"openai-codex-respons
 						for (let hi = 0; hi < sanitizedHistoryItems.length; hi++) messages.push(sanitizedHistoryItems[hi]!);
 					} else {
 						messages.splice(0, messages.length, ...sanitizedHistoryItems);
-						// Keep customCallIds from the pre-splice state since historyItems may re-introduce them.
+						knownCallIds.clear();
+						for (const callId of collectKnownCallIds(sanitizedHistoryItems as ResponseInput)) knownCallIds.add(callId);
+						customCallIds.clear();
+						for (const item of sanitizedHistoryItems) {
+							const maybe = item as { type?: string; call_id?: string };
+							if (maybe.type === "custom_tool_call" && typeof maybe.call_id === "string") {
+								customCallIds.add(maybe.call_id);
+							}
+						}
 					}
 					msgIndex += 1;
 					continue;
