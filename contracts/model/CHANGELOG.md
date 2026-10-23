@@ -5,6 +5,11 @@
 ## [Unreleased]
 
 ## [1.6.0] - 2026-10-28
+### Added
+
+- `ModelReasoningOptions.defaultLevel` and `ModelReasoningOptions.requiresEffort` state a model's default effort and that it has no off state; they become `thinking.defaultLevel` and `thinking.requiresEffort`.
+
+## [1.5.9] - 2026-10-22
 
 ### Added
 

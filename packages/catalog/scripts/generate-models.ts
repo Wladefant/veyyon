@@ -860,7 +860,6 @@ async function generateModels() {
 	// policy re-bake so the aliases get the same baked thinking metadata.
 	allModels = projectOpenAIProReasoningAliases(allModels);
 	allModels = overlayModelsDevReasoningOptions(allModels, modelsDevModels);
-	allModels = applyKimiCodingAliasSurface(allModels, modelsDevModels);
 	allModels = applyTwinReasoningSurfaces(allModels, modelsDevModels);
 	applyGeneratedModelPolicies(allModels);
 	linkOpenAIPromotionTargets(allModels);

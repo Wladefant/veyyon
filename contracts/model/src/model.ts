@@ -170,6 +170,19 @@ export interface ModelReasoningOptions {
 	 */
 	efforts?: readonly Effort[];
 	/**
+	 * The effort the endpoint applies when a request names none (Kimi Code `/models`
+	 * `reasoning.effort.default`). Becomes `thinking.defaultLevel`; ignored unless
+	 * `efforts` lists it.
+	 */
+	defaultLevel?: Effort;
+	/**
+	 * The endpoint always reasons and offers no off state (Kimi Code `/models`
+	 * `reasoning.type: "only"`). Becomes `thinking.requiresEffort`. On a Kimi
+	 * Moonshot-native host the compat layers also keep thinking on and forced
+	 * tool choice off for such a row.
+	 */
+	requiresEffort?: boolean;
+	/**
 	 * Discovery explicitly reports no selectable efforts: an empty options
 	 * list (always-thinks SKUs like `kimi-k2-thinking`) or a binary on/off
 	 * toggle with no levels. The row keeps `reasoning: true` but exposes no

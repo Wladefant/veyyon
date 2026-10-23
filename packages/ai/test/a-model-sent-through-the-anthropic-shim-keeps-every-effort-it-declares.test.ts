@@ -6,7 +6,8 @@
  * minimal, low, medium, high, xhigh", a list the model never declared.
  *
  * Class closed: for every bundled `openai-completions` reasoning model, every tier its catalog row
- * declares reaches the Anthropic wire with that tier's budget, and a reasoning model that declares
+ * declares reaches the Anthropic wire as that tier (a budget, or an adaptive effort where the
+ * endpoint takes one), and a reasoning model that declares
  * no tier gets no fabricated one. The sweep reads the bundled catalog at run time, so a new
  * provider or model on this API is covered by default.
  *
@@ -79,7 +80,10 @@ describe("the Anthropic shim keeps the effort ladder the catalog declares", () =
 		expect(k3 && getSupportedEfforts(k3)).toEqual([Effort.Low, Effort.High, Effort.Max]);
 		const { payload, error } = await anthropicPayload(k3 as Model<"openai-completions">, Effort.Max);
 		expect(error).toBeUndefined();
-		expect(payload?.thinking).toMatchObject({ type: "enabled", budget_tokens: ANTHROPIC_THINKING_BUDGETS.max });
+		expect({ thinking: payload?.thinking, effort: payload?.output_config?.effort }).toEqual({
+			thinking: { type: "adaptive", display: "summarized" },
+			effort: Effort.Max,
+		});
 	});
 
 	it("fabricates no tier for a reasoning model that declares none, and does not switch its thinking off", async () => {

@@ -16,7 +16,7 @@
 
 import { describe, expect, it } from "bun:test";
 import { buildAnthropicCompat } from "../src/compat/anthropic";
-import { matchesKimiK27CodeFamily } from "../src/compat/kimi";
+import { matchesKimiK27CodeFamily, rejectsKimiThinkingOff } from "../src/compat/kimi";
 import { buildOpenAICompat } from "../src/compat/openai";
 import type { ModelSpec } from "../src/types";
 
@@ -115,11 +115,12 @@ describe("both compat layers", () => {
 	 * The lock. Both compat layers carried the pattern AND the match, one of them documenting
 	 * itself as a mirror of the other, which is what let a rule about one model live in four
 	 * places. Asserted on what each layer resolves rather than on its source: for every identity
-	 * above, a Moonshot-hosted request forces thinking on through the Anthropic-compatible path
+	 * below, a Moonshot-hosted request forces thinking on through the Anthropic-compatible path
 	 * exactly when it does through the OpenAI-compatible one, and exactly when the owner says the
-	 * model is the family. A private copy that disagrees with the owner on any spelling fails here.
+	 * model rejects thinking off. A private copy that disagrees with the owner on any spelling, or
+	 * that reads the family and not the row's always-thinking flag, fails here.
 	 */
-	const IDENTITIES: Array<{ id: string; name?: string }> = [
+	const IDENTITIES: Array<{ id: string; name?: string; reasoningOptions?: { requiresEffort?: boolean } }> = [
 		{ id: "kimi-k2.7-code" },
 		{ id: "kimi-k2p7-code" },
 		{ id: "kimi_k2_7_code" },
@@ -142,16 +143,22 @@ describe("both compat layers", () => {
 		{ id: "kimi-k2.7-code-highspeed-v2" },
 		{ id: "notkimi-k2.7-code" },
 		{ id: "gpt-5" },
+		// Kimi Code's K3 rows: bare ids, always-thinking only by the row's flag.
+		{ id: "k3.1-pro", name: "K3.1 Pro", reasoningOptions: { requiresEffort: true } },
+		{ id: "k3", name: "K3", reasoningOptions: { requiresEffort: true } },
+		{ id: "kimi-for-coding", name: "Kimi K2.8 Preview", reasoningOptions: { requiresEffort: true } },
+		{ id: "k3", name: "K3", reasoningOptions: { requiresEffort: false } },
 	];
 
 	function moonshotSpec<TApi extends "anthropic-messages" | "openai-completions">(
 		api: TApi,
-		identity: { id: string; name?: string },
+		identity: { id: string; name?: string; reasoningOptions?: { requiresEffort?: boolean } },
 	): ModelSpec<TApi> {
 		return {
 			api,
 			id: identity.id,
 			name: identity.name,
+			reasoningOptions: identity.reasoningOptions,
 			provider: "moonshot",
 			baseUrl: api === "anthropic-messages" ? "https://api.moonshot.ai/anthropic" : "https://api.moonshot.ai/v1",
 			input: ["text"],
@@ -163,17 +170,35 @@ describe("both compat layers", () => {
 	}
 
 	it.each(IDENTITIES)("force thinking on together for %j", identity => {
-		const family = matchesKimiK27CodeFamily(identity);
+		const rejects = rejectsKimiThinkingOff(identity);
 		const anthropic = buildAnthropicCompat(moonshotSpec("anthropic-messages", identity));
 		const openai = buildOpenAICompat(moonshotSpec("openai-completions", identity));
 
-		expect(anthropic.requiresThinkingEnabled).toBe(family);
-		expect(openai.supportsForcedToolChoice).toBe(!family);
+		expect(anthropic.requiresThinkingEnabled).toBe(rejects);
+		expect(openai.supportsForcedToolChoice).toBe(!rejects);
+	});
+
+	/**
+	 * A row that cannot stop thinking speaks Kimi's chat dialect even under a bare id: the effort rides
+	 * beside `thinking: {type: "enabled"}`, and a tool-call turn replays its reasoning.
+	 */
+	it("treats an always-thinking Moonshot row as a Kimi model on the chat wire", () => {
+		const openai = buildOpenAICompat(
+			moonshotSpec("openai-completions", { id: "k3.1-pro", reasoningOptions: { requiresEffort: true } }),
+		);
+		expect({
+			thinkingFormat: openai.thinkingFormat,
+			reasoningDisableMode: openai.reasoningDisableMode,
+			requiresReasoningContentForToolCalls: openai.requiresReasoningContentForToolCalls,
+		}).toEqual({ thinkingFormat: "zai", reasoningDisableMode: "omit", requiresReasoningContentForToolCalls: true });
 	});
 
 	/** Non-vacuity: the sweep holds both answers, so agreement is not two layers that never fire. */
 	it("covers family members and non-members", () => {
-		const answers = new Set(IDENTITIES.map(identity => matchesKimiK27CodeFamily(identity)));
+		const answers = new Set(IDENTITIES.map(identity => rejectsKimiThinkingOff(identity)));
 		expect([...answers].sort()).toEqual([false, true]);
+		expect(IDENTITIES.some(identity => !matchesKimiK27CodeFamily(identity) && rejectsKimiThinkingOff(identity))).toBe(
+			true,
+		);
 	});
 });

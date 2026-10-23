@@ -51229,7 +51229,8 @@
 					"low",
 					"high",
 					"max"
-				]
+				],
+				"requiresEffort": true
 			},
 			"input": [
 				"text",
@@ -51254,7 +51255,8 @@
 					"low",
 					"high",
 					"max"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"k3-256k": {
@@ -51269,7 +51271,8 @@
 					"low",
 					"high",
 					"max"
-				]
+				],
+				"requiresEffort": true
 			},
 			"input": [
 				"text",
@@ -51293,12 +51296,13 @@
 					"low",
 					"high",
 					"max"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
-		"kimi-for-coding": {
-			"id": "kimi-for-coding",
-			"name": "Kimi K2.7 Code",
+		"k3.1-pro": {
+			"id": "k3.1-pro",
+			"name": "Kimi K3.1 Pro",
 			"api": "openai-completions",
 			"provider": "kimi-code",
 			"baseUrl": "https://api.kimi.com/coding/v1",
@@ -51308,7 +51312,8 @@
 					"low",
 					"high",
 					"max"
-				]
+				],
+				"requiresEffort": true
 			},
 			"input": [
 				"text",
@@ -51321,7 +51326,89 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 262144,
+			"contextWindow": 1048576,
+			"maxTokens": 131072,
+			"headers": {
+				"User-Agent": "KimiCLI/1.0",
+				"X-Msh-Platform": "kimi_cli"
+			},
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"low",
+					"high",
+					"max"
+				],
+				"requiresEffort": true
+			}
+		},
+		"k3.1-pro-highspeed": {
+			"id": "k3.1-pro-highspeed",
+			"name": "Kimi K3.1 Pro Highspeed",
+			"api": "openai-completions",
+			"provider": "kimi-code",
+			"baseUrl": "https://api.kimi.com/coding/v1",
+			"reasoning": true,
+			"reasoningOptions": {
+				"efforts": [
+					"low",
+					"high",
+					"max"
+				],
+				"requiresEffort": true
+			},
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072,
+			"headers": {
+				"User-Agent": "KimiCLI/1.0",
+				"X-Msh-Platform": "kimi_cli"
+			},
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"low",
+					"high",
+					"max"
+				],
+				"requiresEffort": true
+			}
+		},
+		"kimi-for-coding": {
+			"id": "kimi-for-coding",
+			"name": "Kimi K2.8 Preview",
+			"api": "openai-completions",
+			"provider": "kimi-code",
+			"baseUrl": "https://api.kimi.com/coding/v1",
+			"reasoning": true,
+			"reasoningOptions": {
+				"efforts": [
+					"low",
+					"high",
+					"max"
+				],
+				"requiresEffort": true
+			},
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
 			"maxTokens": 32768,
 			"headers": {
 				"User-Agent": "KimiCLI/1.0",
@@ -51333,7 +51420,8 @@
 					"low",
 					"high",
 					"max"
-				]
+				],
+				"requiresEffort": true
 			}
 		},
 		"kimi-for-coding-highspeed": {
@@ -51344,11 +51432,7 @@
 			"baseUrl": "https://api.kimi.com/coding/v1",
 			"reasoning": true,
 			"reasoningOptions": {
-				"efforts": [
-					"low",
-					"high",
-					"max"
-				]
+				"noEffortControl": true
 			},
 			"input": [
 				"text",
@@ -51366,14 +51450,6 @@
 			"headers": {
 				"User-Agent": "KimiCLI/1.0",
 				"X-Msh-Platform": "kimi_cli"
-			},
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"low",
-					"high",
-					"max"
-				]
 			}
 		},
 		"kimi-k2": {
