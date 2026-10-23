@@ -23,7 +23,7 @@
 import { getOAuthProviders } from "@veyyon/ai/oauth";
 import { type Component, Input } from "@veyyon/tui";
 import { HoverController } from "@veyyon/tui/utils/hover-controller";
-import { clampLow } from "@veyyon/utils";
+import { clampLow, collapseWhitespace } from "@veyyon/utils";
 import { fuzzyFilter } from "@veyyon/utils/fuzzy";
 import { extractPrintableText, matchesKey } from "@veyyon/utils/keys";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
@@ -281,8 +281,8 @@ export class AccountManagerComponent implements Component {
 
 	/** Show `text` on the card's notice line, or clear it. Whitespace runs collapse to one space. */
 	setNotice(text: string | undefined): void {
-		const line = text?.replace(/\s+/g, " ").trim();
-		this.#notice = line ? line : undefined;
+		const line = collapseWhitespace(text);
+		this.#notice = line.length > 0 ? line : undefined;
 		this.#requestRender?.();
 	}
 

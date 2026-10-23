@@ -14,6 +14,7 @@
 
 - `/login <url>` completes only an MCP server's OAuth flow; a provider login takes the pasted address in its login card.
 - The startup Codex websocket prewarm resolves its service tier from the session it opens the socket for; no user-facing change.
+- The account card's notice line flattens whitespace through the shared `collapseWhitespace`; no user-facing change.
 
 ### Fixed
 
