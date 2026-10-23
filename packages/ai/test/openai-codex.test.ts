@@ -33,6 +33,16 @@ describe("openai-codex oauth", () => {
 		expect(scopes.has("api.connectors.invoke")).toBe(true);
 	});
 
+	it("asks auth.openai.com for a fresh sign-in instead of reusing the browser's", () => {
+		const authUrl = createOpenAICodexAuthorizationUrl({
+			state: "state",
+			redirectUri: "http://localhost:1455/auth/callback",
+			challenge: "challenge",
+		});
+
+		expect(new URL(authUrl).searchParams.get("force_challenge")).toBe("true");
+	});
+
 	it("formats object token endpoint errors without object coercion", () => {
 		const detail = formatOpenAICodexTokenEndpointError(
 			403,
