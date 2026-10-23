@@ -8,12 +8,9 @@ import { StringDecoder } from "node:string_decoder";
 export interface TerminalSocket extends EventEmitter {
 	readonly destroyed: boolean;
 	readonly writableLength: number;
-	setEncoding(encoding: BufferEncoding | string): this;
-	write(
-		chunk: string | Uint8Array,
-		encodingOrCb?: BufferEncoding | ((err?: Error) => void),
-		cb?: (err?: Error) => void,
-	): boolean;
+	setEncoding(encoding: BufferEncoding): this;
+	write(chunk: string | Uint8Array, cb?: (err?: Error | null) => void): boolean;
+	write(chunk: string | Uint8Array, encoding?: BufferEncoding, cb?: (err?: Error | null) => void): boolean;
 	destroy(error?: Error): this;
 	on(event: "data", listener: (chunk: string | Buffer) => void): this;
 	on(event: "error", listener: (err: Error) => void): this;
@@ -49,12 +46,12 @@ export class VirtualTerminalSocket extends EventEmitter implements TerminalSocke
 	private _destroyed = false;
 	private _writableLength = 0;
 	private _decoder?: StringDecoder;
-	private readonly _writeFn: (clientId: number, base64: string, cb?: (err?: Error) => void) => boolean;
+	private readonly _writeFn: (clientId: number, base64: string, cb?: (err?: Error | null) => void) => boolean;
 	private readonly _destroyFn: (clientId: number) => void;
 
 	constructor(
 		clientId: number,
-		writeFn: (clientId: number, base64: string, cb?: (err?: Error) => void) => boolean,
+		writeFn: (clientId: number, base64: string, cb?: (err?: Error | null) => void) => boolean,
 		destroyFn: (clientId: number) => void,
 	) {
 		super();
@@ -71,15 +68,15 @@ export class VirtualTerminalSocket extends EventEmitter implements TerminalSocke
 		return this._destroyed ? 0 : this._writableLength;
 	}
 
-	setEncoding(encoding: BufferEncoding | string): this {
-		this._decoder = new StringDecoder(encoding as BufferEncoding);
+	setEncoding(encoding: BufferEncoding): this {
+		this._decoder = new StringDecoder(encoding);
 		return this;
 	}
 
 	write(
 		chunk: string | Uint8Array,
-		encodingOrCb?: BufferEncoding | ((err?: Error) => void),
-		cb?: (err?: Error) => void,
+		encodingOrCb?: BufferEncoding | ((err?: Error | null) => void),
+		cb?: (err?: Error | null) => void,
 	): boolean {
 		if (this._destroyed) {
 			const callback = typeof encodingOrCb === "function" ? encodingOrCb : cb;
@@ -88,7 +85,7 @@ export class VirtualTerminalSocket extends EventEmitter implements TerminalSocke
 		}
 
 		let encoding: BufferEncoding = "utf8";
-		let callback: ((err?: Error) => void) | undefined;
+		let callback = cb;
 		if (typeof encodingOrCb === "function") {
 			callback = encodingOrCb;
 		} else if (typeof encodingOrCb === "string") {
@@ -483,7 +480,7 @@ export async function createWindowsPipeTransport(
 		}
 	}, readinessTimeoutMs);
 
-	const writeToBroker = (cid: number, base64: string, cb?: (err?: Error) => void): boolean => {
+	const writeToBroker = (cid: number, base64: string, cb?: (err?: Error | null) => void): boolean => {
 		if (!child.stdin || child.stdin.destroyed) {
 			cb?.(new Error("Broker stdin is closed"));
 			return false;
