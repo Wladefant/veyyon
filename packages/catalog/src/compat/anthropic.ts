@@ -13,7 +13,7 @@ import {
 import { ANTHROPIC_API_ENDPOINT } from "../provider-endpoints";
 import type { ModelSpec, ResolvedAnthropicCompat } from "../types";
 import { applyCompatOverrides } from "./apply";
-import { matchesKimiK27CodeFamily } from "./kimi";
+import { rejectsKimiThinkingOff } from "./kimi";
 
 /**
  * Official first-party Anthropic API. A missing baseUrl is official on purpose:
@@ -90,7 +90,7 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 	// signature-enforcing Anthropic — same failure class as GitHub Copilot #2851
 	// (issue #4192).
 	const isZenmux = modelMatchesHost(spec, "zenmux");
-	const requiresThinkingEnabled = modelMatchesHost(spec, "moonshotNative") && matchesKimiK27CodeFamily(spec);
+	const requiresThinkingEnabled = modelMatchesHost(spec, "moonshotNative") && rejectsKimiThinkingOff(spec);
 	const isVertex = isVertexAnthropicRoute(baseUrl);
 	const isBedrock = isBedrockAnthropicRoute(baseUrl);
 	const isAzure = isAzureAnthropicRoute(baseUrl);

@@ -9,6 +9,8 @@
 - Codex requests send `x-codex-routing-hint` stating the wire model and service tier of the body sent, on HTTP turns, the websocket upgrade and the startup prewarm, as codex-rs does.
 - ChatGPT Codex browser login sends `force_challenge=true`, so auth.openai.com prompts for a fresh sign-in instead of minting the token from the browser's existing sign-in, and a Daybreak account can sign in with its hardware security key to clear `individual_blue_security_signin_required` and the `cyber_policy` refusals it causes.
 - A credential health check attributes the usage report it returns to the credential's organization, as a usage fetch does, so the report matches its account when one email holds logins to two organizations.
+- Kimi Code's Anthropic wire sends adaptive thinking with `output_config.effort` and a summarized display, as Kimi Code's own client does, so Low, High and Max each reach the model as that effort.
+- A Kimi Code request with thinking turned off sends the model's lowest effort on both wires, and the chat wire sends `thinking: {type: "enabled"}` beside the effort for a model that cannot stop thinking.
 
 ## [1.5.9] - 2026-10-22
 

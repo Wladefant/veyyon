@@ -1027,6 +1027,15 @@ function applyQwenPreserveThinking(params: OpenAICompletionsParams, compat: Open
 	params.chat_template_kwargs = { ...params.chat_template_kwargs, preserve_thinking: true };
 }
 
+/** The `zai` dialect's on switch: `thinking: {type: "enabled"}`, with the effort beside it where the host takes one. */
+function encodeZaiEnabledThinking(params: OpenAICompletionsParams, policy: OpenAICompatPolicy): void {
+	params.thinking = { type: "enabled" };
+	if (policy.compat.thinkingKeep) params.thinking.keep = policy.compat.thinkingKeep;
+	if (policy.compat.supportsReasoningEffort && policy.reasoning.wireEffort !== undefined) {
+		params.reasoning_effort = policy.reasoning.wireEffort as Effort;
+	}
+}
+
 function encodeChatCompletionsEnabledReasoning(params: OpenAICompletionsParams, policy: OpenAICompatPolicy): void {
 	const reasoning = policy.reasoning;
 	switch (reasoning.disableMode) {
@@ -1035,9 +1044,14 @@ function encodeChatCompletionsEnabledReasoning(params: OpenAICompletionsParams, 
 				encodeChatCompletionsDisabledReasoning(params, reasoning.disableMode);
 				return;
 			}
-			params.thinking = { type: "enabled" };
-			if (policy.compat.thinkingKeep) params.thinking.keep = policy.compat.thinkingKeep;
-			if (policy.compat.supportsReasoningEffort && reasoning.wireEffort !== undefined) {
+			encodeZaiEnabledThinking(params, policy);
+			break;
+		case "omit":
+			// A model with no off state still takes its dialect's on switch. Moonshot's always-thinking
+			// Kimi rows get `thinking: {type: "enabled"}` beside the effort, as Kimi Code's client sends.
+			if (policy.compat.thinkingFormat === "zai") {
+				encodeZaiEnabledThinking(params, policy);
+			} else if (!reasoning.omitReasoningEffort && reasoning.wireEffort !== undefined) {
 				params.reasoning_effort = reasoning.wireEffort as Effort;
 			}
 			break;

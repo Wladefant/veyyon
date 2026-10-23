@@ -9,6 +9,7 @@
 - The login card sends a browser login's link to the clipboard when it appears, and `c` (or `alt+c` while its field holds typed text) sends it again, shown on a `copy link` key chip.
 - A browser login whose provider takes a pasted callback asks in the login card for the address the browser ended on, so a sign-in over SSH completes without a forwarded port; an address that does not complete the sign-in is asked for again.
 - `codexRoutingHint` in `@veyyon/catalog/wire/codex` builds the `x-codex-routing-hint` value (`model=<model>;tier=<tier>`, or `model=<model>` without a tier) from a Codex Responses request body.
+- `ModelReasoningOptions.defaultLevel` and `ModelReasoningOptions.requiresEffort` state a model's default effort and that it has no off state; they become `thinking.defaultLevel` and `thinking.requiresEffort`.
 
 ### Changed
 
@@ -29,6 +30,11 @@
 - Codex requests send `x-codex-routing-hint` stating the wire model and service tier of the body sent, on HTTP turns, the websocket upgrade and the startup prewarm, as codex-rs does.
 - ChatGPT Codex browser login sends `force_challenge=true`, so auth.openai.com prompts for a fresh sign-in instead of minting the token from the browser's existing sign-in, and a Daybreak account can sign in with its hardware security key to clear `individual_blue_security_signin_required` and the `cyber_policy` refusals it causes.
 - A credential health check attributes the usage report it returns to the credential's organization, as a usage fetch does, so the report matches its account when one email holds logins to two organizations.
+- Kimi Code's Anthropic wire sends adaptive thinking with `output_config.effort` and a summarized display, as Kimi Code's own client does, so Low, High and Max each reach the model as that effort.
+- A Kimi Code request with thinking turned off sends the model's lowest effort on both wires, and the chat wire sends `thinking: {type: "enabled"}` beside the effort for a model that cannot stop thinking.
+- Kimi Code bundles K3.1 Pro, K3.1 Pro Highspeed and the K2.8 Preview name of `kimi-for-coding`, read from the `kimi-code-plan-cn` key models.dev now lists Kimi Code under.
+- Kimi Code models offer Low, High and Max with no Off, and discovery takes each model's effort ladder, default effort and off state from the account's `/models` listing.
+- A Kimi Code model that cannot stop thinking keeps thinking on and sends no forced tool choice on both wires, including the K3 rows whose ids carry no `kimi` prefix.
 
 ## [1.5.9] - 2026-10-22
 

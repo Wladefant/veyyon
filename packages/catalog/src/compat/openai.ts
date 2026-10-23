@@ -32,7 +32,7 @@ import type {
 	ResolvedOpenRouterCompat,
 } from "../types";
 import { applyCompatOverrides } from "./apply";
-import { matchesKimiK27CodeFamily } from "./kimi";
+import { rejectsKimiThinkingOff } from "./kimi";
 import { leakedToolCallGrammar } from "./markup-leaks";
 
 /** GLM coding-plan SKUs idle for minutes mid-reasoning; see `streamIdleTimeoutMs`. */
@@ -231,8 +231,11 @@ function detectChatCompatTraits(spec: ModelSpec<"openai-completions">): ChatComp
 	const name = spec.name ?? "";
 	const reasoning = Boolean(spec.reasoning);
 	const isZaiFamily = modelMatchesHost(hostModel, "zai") || modelMatchesHost(hostModel, "zhipu");
-	const isKimiModel = isKimiModelId(spec.id);
 	const isMoonshotNative = modelMatchesHost(hostModel, "moonshotNative");
+	const rejectsThinkingOff = isMoonshotNative && rejectsKimiThinkingOff(spec);
+	// Kimi Code lists its K3 rows under bare ids (`k3`, `k3.1-pro`) with no `kimi` segment. A row that
+	// Moonshot's own host serves and declares always-thinking is a Kimi model all the same.
+	const isKimiModel = isKimiModelId(spec.id) || rejectsThinkingOff;
 	const isMoonshotKimi = isKimiModel && isMoonshotNative;
 	const isXiaomiHost = modelMatchesHost(hostModel, "xiaomi");
 	const isMimoModel = isMimoModelIdOrName(spec.id) || isMimoModelIdOrName(name);
@@ -259,7 +262,7 @@ function detectChatCompatTraits(spec: ModelSpec<"openai-completions">): ChatComp
 		isMoonshotKimi,
 		// Host and family, as the Anthropic-compatible layer gates it: `isKimiModelId` does not read
 		// the underscore spelling the family matcher accepts, so gating on it too split the layers.
-		requiresEnabledThinking: isMoonshotNative && matchesKimiK27CodeFamily(spec),
+		requiresEnabledThinking: rejectsThinkingOff,
 		usesMoonshotKimiPreservedThinking: isMoonshotKimi && isKimiK26ModelId(spec.id),
 		isAnthropicModel:
 			modelMatchesHost(hostModel, "anthropic") || isClaudeModelId(spec.id) || isAnthropicNamespacedModelId(spec.id),
