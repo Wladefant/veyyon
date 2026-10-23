@@ -168,19 +168,28 @@ describe("a provider whose login accepts a pasted address asks for it in the car
 
 	/**
 	 * Run `/login <id>` far enough to reach the provider flow, hand the flow's controller to `drive`,
-	 * then fail the login so the controller unwinds without opening the account card.
+	 * then fail the login so the controller unwinds without opening the account card. A failed
+	 * expectation inside `drive` is rethrown here rather than left in the controller's error line.
 	 */
 	async function driveLogin(
 		id: string,
 		drive: (ctrl: OAuthDriveControl, dialog: LoginDialogComponent) => Promise<void>,
 	): Promise<void> {
 		const overlays: unknown[] = [];
-		const login = vi.fn(async (_provider: string, ctrl: OAuthDriveControl) => {
-			const dialog = overlays.find(overlay => overlay instanceof LoginDialogComponent);
-			if (!(dialog instanceof LoginDialogComponent)) throw new Error("the login card was not mounted");
-			await drive(ctrl, dialog);
+		const shownErrors: string[] = [];
+		let driven = false;
+		let driveError: unknown;
+		const login = async (_provider: string, ctrl: OAuthDriveControl) => {
+			try {
+				const dialog = overlays.find(overlay => overlay instanceof LoginDialogComponent);
+				if (!(dialog instanceof LoginDialogComponent)) throw new Error("the login card was not mounted");
+				await drive(ctrl, dialog);
+				driven = true;
+			} catch (error) {
+				driveError = error;
+			}
 			throw new Error("stop after the drive");
-		});
+		};
 		const ctx = {
 			session: { modelRegistry: { authStorage: { login } as unknown as AuthStorage, refreshInBackground: vi.fn() } },
 			editorContainer: { clear: vi.fn(), addChild: vi.fn(), children: [] },
@@ -195,15 +204,18 @@ describe("a provider whose login accepts a pasted address asks for it in the car
 				}),
 			},
 			showStatus: vi.fn(),
-			showError: vi.fn(),
+			showError: (message: string) => {
+				shownErrors.push(message);
+			},
 			present: vi.fn(),
 			openInBrowser: vi.fn(),
 			refreshComposerShortcuts: vi.fn(),
 			dismissWelcome: vi.fn(),
 		} as unknown as InteractiveModeContext;
 		await new SelectorController(ctx).showLogin(id);
-		expect(login).toHaveBeenCalledTimes(1);
-		expect(ctx.showError).toHaveBeenCalledWith("Login failed: stop after the drive");
+		if (driveError) throw driveError;
+		expect(driven).toBe(true);
+		expect(shownErrors).toEqual(["Login failed: stop after the drive"]);
 	}
 
 	it.each(rows.filter(row => PASTE_CODE_LOGIN_PROVIDERS.has(row.id)).map(row => [row.id] as const))(
