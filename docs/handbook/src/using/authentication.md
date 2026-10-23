@@ -12,10 +12,34 @@ Use the interactive slash commands inside a session:
 
 - `/login`: opens the OAuth/key selector.
 - `/login <provider>`: jumps straight to one provider, e.g. `/login anthropic`, `/login github-copilot`.
-- `/login <redirect-url>`: completes an OAuth flow that needs a pasted callback URL.
+- `/login <redirect-url>`: completes an MCP server's OAuth flow that needs a pasted callback URL. A
+  provider login takes the pasted address in its own login card (see
+  [Signing in over SSH](#signing-in-over-ssh)).
 - `/logout`: opens the provider selector to remove stored credentials.
 
 On first run, the first-run setup (`veyyon setup`, or `/setup` later) walks the same flow.
+
+## Signing in over SSH
+
+A browser login opens a browser on the machine Veyyon runs on. Over SSH that is the remote host, so
+open the link on your own machine:
+
+1. The login card sends the link to your clipboard when it appears. Inside tmux the copy goes
+   through `tmux load-buffer -w`, which forwards it to the terminal you are attached from; outside
+   tmux it is an OSC 52 escape, which your terminal must allow. Press `c` to send it again, or
+   `alt+c` while the card's field holds typed text.
+2. Paste the link into your local browser and sign in.
+3. The provider sends the browser back to a `localhost` address, which nothing on your machine
+   answers. Copy the full address from the browser's address bar and paste it into the card's
+   field, then press `enter`. The field's placeholder shows the shape of that address. An address
+   that does not complete the sign-in is asked for again.
+
+To have the browser reach Veyyon directly, forward the callback port before you sign in. The port
+is in the `redirect_uri` of the link; for `openai-codex` it is 1455:
+
+```console
+$ ssh -L 1455:localhost:1455 <host>
+```
 
 ## Using several accounts for one provider
 
@@ -30,9 +54,12 @@ The sidebar lists your providers and the body lists that provider's accounts, on
 email, the plan, how the credential was supplied, and how much of its quota is spent. A row marked
 `this session` is the one serving your current session.
 
-From that card you press `enter` to use the selected account, `n` to name it, `r` to re-check its
-health, `u` to open its usage, `x` twice to log it out, and `a` to add another account for the same
-provider. `/account manager` opens the same card.
+From that card you press `enter` to use the selected account, `n` to name it, `r` to re-check it,
+`u` to open its usage, `x` twice to log it out, and `a` to add another account for the same
+provider. `r` on the `+ add another … account` row re-checks every account of that provider and no
+other. Each key reports its result on the line above the key chips; `r` shows `Checking …` at once,
+then whether the provider accepted the login, and updates the usage bars from the same request.
+`/account manager` opens the same card.
 
 The last row of the list is `+ add another … account`. It is a position in the list like any other:
 arrow down past your last account to land on it, and press `enter` there to start a login. The

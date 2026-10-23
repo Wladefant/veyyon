@@ -1,9 +1,11 @@
 import { type Component, Input, type TUI } from "@veyyon/tui";
 import { getKeybindings } from "@veyyon/utils/keybindings";
+import { matchesKey } from "@veyyon/utils/keys";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
 import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
 import { theme } from "../../../../theme/theme-binding";
+import { copyToClipboard } from "../../../../utils/clipboard";
 import { openPath } from "../../../../utils/open";
 import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
 import {
@@ -22,6 +24,8 @@ interface PromptState {
 	secret: boolean;
 	/** The verb Enter performs in this prompt ("submit" a credential, "save" a name). */
 	submitVerb: string;
+	/** The field that takes the address the browser ended on, for a login whose callback cannot arrive. */
+	redirect?: boolean;
 }
 
 /** Where the operator has to go to authorize, once a flow knows. */
@@ -31,15 +35,21 @@ interface AuthState {
 	instructions?: string;
 }
 
-const LOGIN_CANCEL_CHIPS: readonly ModalShortcut[] = [
-	{ label: "cancel", keybindings: ["tui.select.cancel"], clickable: true, id: "cancel" },
-];
+const CANCEL_CHIP: ModalShortcut = {
+	label: "cancel",
+	keybindings: ["tui.select.cancel"],
+	clickable: true,
+	id: "cancel",
+};
 
-function loginPromptChips(submitVerb: string, cancelVerb: string): readonly ModalShortcut[] {
-	return [
-		{ label: submitVerb, keybindings: ["tui.select.confirm"] },
-		{ label: cancelVerb, keybindings: ["tui.select.cancel"], clickable: true, id: "cancel" },
-	];
+/** The verbatim address a browser lands on after a login, with the code still to be filled in. */
+function redirectExample(authUrl: string): string | undefined {
+	try {
+		const redirect = new URL(authUrl).searchParams.get("redirect_uri");
+		return redirect ? `${redirect}?code=…&state=…` : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 /**
@@ -64,6 +74,8 @@ export class LoginDialogComponent implements Component {
 	#inputResolver?: (value: string) => void;
 	#inputRejecter?: (error: Error) => void;
 	#auth?: AuthState;
+	/** The link has been sent to the clipboard at least once since it was last reported. */
+	#copied = false;
 	#status?: string;
 	#prompt?: PromptState;
 	/**
@@ -133,9 +145,38 @@ export class LoginDialogComponent implements Component {
 	}
 
 	#chips(): readonly ModalShortcut[] {
+		const copyKey = this.#copyKey();
+		const copy: ModalShortcut[] = copyKey ? [{ label: `${copyKey} copy link`, clickable: true, id: "copy" }] : [];
 		const prompt = this.#prompt;
-		if (!prompt) return LOGIN_CANCEL_CHIPS;
-		return loginPromptChips(prompt.submitVerb, this.#escapeMode === "skip" ? "skip" : "cancel");
+		if (!prompt) return [...copy, CANCEL_CHIP];
+		return [
+			{ label: prompt.submitVerb, keybindings: ["tui.select.confirm"] },
+			...copy,
+			{ ...CANCEL_CHIP, label: this.#escapeMode === "skip" ? "skip" : "cancel" },
+		];
+	}
+
+	/**
+	 * The key that copies the sign-in link right now, or nothing when there is no link to copy.
+	 *
+	 * Bare `c` while the card takes no typed text, or while the field waiting for the browser's
+	 * address is still empty: an address arrives as a paste, never as a lone `c` keystroke, so the
+	 * key is free there. Every other field takes typed text, and `alt+c` cannot be typed into one.
+	 * Nothing once the credential is stored and the card is only asking for a name.
+	 */
+	#copyKey(): "c" | "alt+c" | undefined {
+		if (!this.#auth || this.#escapeMode === "skip") return undefined;
+		const prompt = this.#prompt;
+		if (!prompt || (prompt.redirect === true && this.#input.getValue().length === 0)) return "c";
+		return "alt+c";
+	}
+
+	#copyLink(): void {
+		const url = this.#auth?.url;
+		if (!url) return;
+		this.#copied = true;
+		this.#tui.requestRender();
+		void copyToClipboard(url);
 	}
 
 	invalidate(): void {
@@ -171,7 +212,8 @@ export class LoginDialogComponent implements Component {
 			}
 			say(theme.fg("accent", auth.url));
 			const clickHint = process.platform === "darwin" ? "Cmd+click to open" : "Ctrl+click to open";
-			body.push(theme.fg("dim", `\x1b]8;;${auth.url}\x07${clickHint}\x1b]8;;\x07`));
+			const copied = this.#copied ? " · link sent to the clipboard" : "";
+			body.push(theme.fg("dim", `\x1b]8;;${auth.url}\x07${clickHint}\x1b]8;;\x07${copied}`));
 			if (auth.launchUrl && auth.launchUrl !== auth.url) {
 				say(theme.fg("dim", `Local shortcut (this machine only): ${auth.launchUrl}`));
 			}
@@ -224,6 +266,12 @@ export class LoginDialogComponent implements Component {
 			return;
 		}
 
+		const copyKey = this.#copyKey();
+		if (copyKey && (matchesKey(data, "alt+c") || (copyKey === "c" && data === "c"))) {
+			this.#copyLink();
+			return;
+		}
+
 		this.#input.handleInput(data);
 	}
 
@@ -238,6 +286,10 @@ export class LoginDialogComponent implements Component {
 			},
 			onCancel: () => this.#escape(),
 			onShortcut: id => {
+				if (id === "copy") {
+					this.#copyLink();
+					return true;
+				}
 				if (id !== "cancel") return false;
 				this.#escape();
 				return true;
@@ -273,13 +325,17 @@ export class LoginDialogComponent implements Component {
 	 * The browser is launched only for a login that waits on it. An API-key login reports the
 	 * dashboard where a key is obtained; launching that opened a platform login page on top of the
 	 * paste prompt, so choosing "OpenAI" read as starting an OAuth login instead of pasting a key.
+	 * A browser login's link is also sent to the clipboard, because over SSH the launch opens no
+	 * browser the operator can see and the wrapped URL is cut by the card's borders when selected.
 	 */
 	showAuth(url: string, instructions?: string, launchUrl?: string): void {
 		this.#auth = { url, ...(launchUrl ? { launchUrl } : {}), ...(instructions ? { instructions } : {}) };
+		this.#copied = false;
 		this.#tui.requestRender();
 		if (this.#browserLogin) {
 			// Best-effort: a relayout must never open a second tab.
 			openPath(url);
+			this.#copyLink();
 		}
 	}
 
@@ -300,6 +356,26 @@ export class LoginDialogComponent implements Component {
 			// Absent means masked: a flow that wants a readable field says so.
 			secret: prompt.secret !== false,
 			submitVerb: "submit",
+		});
+	}
+
+	/**
+	 * Ask for the address the browser ended on, for a login whose callback may never reach this
+	 * process: over SSH the browser runs on another machine, its redirect to `localhost` fails there,
+	 * and the address in its bar is the only place the code exists. Masked, because the address
+	 * carries an authorization code. `retry` reports that the previous answer did not complete the
+	 * sign-in, which the flow learns only by asking again.
+	 */
+	askForRedirect(options: { retry: boolean }): Promise<string> {
+		const example = this.#auth ? redirectExample(this.#auth.url) : undefined;
+		return this.#ask({
+			message: options.retry
+				? "That did not complete the sign-in. Paste the full address the browser ended on:"
+				: "Signing in from another machine? Paste the address the browser ended on:",
+			...(example ? { placeholder: example } : {}),
+			secret: true,
+			submitVerb: "submit",
+			redirect: true,
 		});
 	}
 

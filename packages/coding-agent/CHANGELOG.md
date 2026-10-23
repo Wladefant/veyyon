@@ -2,14 +2,24 @@
 
 ## [Unreleased]
 
+### Added
+
+- The login card sends a browser login's link to the clipboard when it appears, and `c` (or `alt+c` while its field holds typed text) sends it again, shown on a `copy link` key chip.
+- A browser login whose provider takes a pasted callback asks in the login card for the address the browser ended on, so a sign-in over SSH completes without a forwarded port; an address that does not complete the sign-in is asked for again.
+
 ### Changed
 
+- `/login <url>` completes only an MCP server's OAuth flow; a provider login takes the pasted address in its login card.
 - The startup Codex websocket prewarm resolves its service tier from the session it opens the socket for; no user-facing change.
 
 ### Fixed
 
 - A resumed or switched-to session whose model exists only in a provider's discovery listing runs on that model instead of the settings default when the discovery cache cannot supply it, as on the first launch after an upgrade that changes the cache format.
 - Codex web search and image generation requests send `x-codex-routing-hint`, and the startup websocket prewarm states the session's configured service tier, which the first turn on that socket sends.
+- A copy from inside tmux reaches the attached terminal's clipboard through `tmux load-buffer -w` instead of an OSC 52 escape that tmux drops under its default `set-clipboard external`, falling back to the escape when tmux rejects the command.
+- `r` on the account card shows `Checking …` and then whether the provider accepted the login on the card's notice line, and updates the usage bars from the check's own reading instead of leaving them unchanged until the next fetch.
+- `r` on the account card's `+ add another … account` row checks the accounts of that provider instead of every stored account of every provider.
+- Selecting, naming, logging out, forgetting and unblocking an account on the account card report their result on the card's notice line instead of only in the hidden transcript.
 
 ## [1.5.9] - 2026-10-22
 

@@ -231,6 +231,14 @@ export class AccountManagerComponent implements Component {
 	#searchQuery = "";
 	/** Whether the sidebar is filtering. Entered with `ctrl+s`, left with `esc`. */
 	#searching = false;
+	/**
+	 * One line above the shortcuts reporting what the last action on this card did.
+	 *
+	 * The card is a fullscreen overlay, so a status written to the transcript sits underneath it
+	 * until the card closes, and `r` read as a key that did nothing. Dropped like any tip line when
+	 * the card is too short to spare the row.
+	 */
+	#notice: string | undefined;
 
 	constructor(inventory: AccountInventory, callbacks: AccountManagerCallbacks, options: AccountManagerOptions = {}) {
 		this.#inventory = inventory;
@@ -269,6 +277,13 @@ export class AccountManagerComponent implements Component {
 			this.#rename = null;
 			this.#pendingLogoutCredentialId = null;
 		}
+	}
+
+	/** Show `text` on the card's notice line, or clear it. Whitespace runs collapse to one space. */
+	setNotice(text: string | undefined): void {
+		const line = text?.replace(/\s+/g, " ").trim();
+		this.#notice = line ? line : undefined;
+		this.#requestRender?.();
 	}
 
 	dispose(): void {
@@ -1052,12 +1067,14 @@ export class AccountManagerComponent implements Component {
 		const bodyWidth = Math.max(1, contentWidth - sidebarWidth - 3);
 
 		const shortcuts = this.#shortcuts();
+		const tipCandidates = this.#notice ? [this.#notice] : undefined;
 		const chrome = planModalChrome({
 			sizing,
 			modalHeight: dims.modalHeight,
 			contentWidth,
 			shortcuts,
 			hoveredShortcutId: this.#hoveredShortcutId,
+			tipCandidates,
 		});
 		const splitRows = Math.max(1, chrome.maxBodyRows);
 		// Published before the panes render: `#sidebarListRows` reads it, and so does every mouse
@@ -1106,6 +1123,7 @@ export class AccountManagerComponent implements Component {
 			areaHeight: height,
 			body,
 			shortcuts,
+			tipCandidates,
 			hoveredShortcutId: this.#hoveredShortcutId,
 			showClose: true,
 		});

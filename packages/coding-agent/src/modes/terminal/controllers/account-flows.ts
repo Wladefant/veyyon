@@ -14,6 +14,7 @@ import { errorMessage, getActiveAuthDbPath } from "@veyyon/utils";
 import * as logger from "@veyyon/utils/logger";
 import { formatProviderName } from "../../../session/account-format";
 import {
+	type AccountInventory,
 	accountDisplayLabel,
 	applyCredentialHealth,
 	applyUsageReports,
@@ -33,8 +34,6 @@ import { ResetUsageSelectorComponent } from "../components/selectors/reset-usage
 import { TranscriptBlock } from "../components/transcript/transcript-container";
 import type { SelectorController, SelectorControllerContext } from "./selector-controller";
 
-const MANUAL_LOGIN_TIP = "Tip: You can complete pairing with /login <redirect URL>.";
-
 /**
  * Probe answers accumulated for ONE open account card.
  *
@@ -46,6 +45,49 @@ const MANUAL_LOGIN_TIP = "Tip: You can complete pairing with /login <redirect UR
 interface AccountProbeCache {
 	health: Map<number, CredentialHealthResult>;
 	usage: UsageReport[] | null;
+}
+
+/** What one health probe answered: a result per credential it reached, or why it reached none. */
+interface AccountCheckOutcome {
+	health: readonly CredentialHealthResult[];
+	failure?: string;
+}
+
+/**
+ * An inventory with every probe answer the card holds folded in.
+ *
+ * Usage comes from the cached fan-out AND from each health probe's own report. The health probe
+ * reads the usage endpoint live, so its report is the freshest reading there is, while the cached
+ * fan-out can be five minutes old: folding only the cache is how `r` re-checked an account and left
+ * every bar where it was. Both kinds of report go through the same attribution and keep the
+ * freshest reading per window, so `r` updates the bars without a second request per account.
+ */
+function withProbeAnswers(inventory: AccountInventory, probes: AccountProbeCache): AccountInventory {
+	const health = [...probes.health.values()];
+	const reports: UsageReport[] = [...(probes.usage ?? [])];
+	for (const result of health) if (result.report) reports.push(result.report);
+	return applyUsageReports(applyCredentialHealth(inventory, health), reports);
+}
+
+/** The notice a finished check leaves on the account card. */
+function describeAccountCheck(subject: string, outcome: AccountCheckOutcome): string {
+	if (outcome.failure !== undefined) return `${subject}: the check did not run: ${outcome.failure}`;
+	const { health } = outcome;
+	if (health.length === 0) return `${subject}: no stored account to check`;
+	if (health.length === 1) {
+		const [result] = health;
+		if (result.ok === true) return result.report ? `${subject}: signed in · usage updated` : `${subject}: signed in`;
+		if (result.ok === false)
+			return `${subject}: check failed: ${result.reason ?? "the provider refused the credential"}`;
+		return result.reason ? `${subject}: could not be checked: ${result.reason}` : `${subject}: could not be checked`;
+	}
+	const signedIn = health.filter(result => result.ok === true).length;
+	const failed = health.filter(result => result.ok === false).length;
+	const unchecked = health.length - signedIn - failed;
+	const parts = [`${signedIn} signed in`];
+	if (failed > 0) parts.push(`${failed} failed`);
+	if (unchecked > 0) parts.push(`${unchecked} could not be checked`);
+	return `${subject}: checked ${health.length} accounts · ${parts.join(" · ")}`;
 }
 
 /**
@@ -89,8 +131,10 @@ export class AccountFlows {
 		// name this provider the same way, and a login is where the operator meets it first.
 		const providerLabel = formatProviderName(providerId);
 		this.#ctx.showStatus(`Logging in to ${providerLabel}…`);
-		const manualInput = this.#ctx.oauthManualInput;
-		const useManualInput = PASTE_CODE_LOGIN_PROVIDERS.has(providerId);
+		// The dialog owns the pasted redirect: it is a fullscreen overlay holding focus, so the
+		// editor where `/login <redirect URL>` would be typed cannot be reached until it closes.
+		const asksForRedirect = PASTE_CODE_LOGIN_PROVIDERS.has(providerId);
+		let redirectAsks = 0;
 		let restored = false;
 		let overlayHandle: OverlayHandle | undefined;
 		const restoreEditor = () => {
@@ -128,12 +172,9 @@ export class AccountFlows {
 			const identity = await this.#ctx.session.modelRegistry.authStorage.login(providerId as OAuthProvider, {
 				signal: dialog.signal,
 				onAuth: (info: { url: string; launchUrl?: string; instructions?: string }) => {
-					// The dialog renders the full URL (SSH-safe copy target) and
+					// The dialog renders the full URL (SSH-safe copy target), copies it, and
 					// opens the browser best-effort.
 					dialog.showAuth(info.url, info.instructions, info.launchUrl);
-					if (useManualInput) {
-						dialog.showProgress(MANUAL_LOGIN_TIP);
-					}
 				},
 				// The whole prompt, not two of its fields: the flow that asks declares whether the answer
 				// is a credential (`secret`), and the dialog masks the input from that rather than
@@ -143,7 +184,8 @@ export class AccountFlows {
 				onProgress: (message: string) => {
 					dialog.showProgress(message);
 				},
-				onManualCodeInput: useManualInput ? () => manualInput.waitForInput(providerId) : undefined,
+				// Asked again only after an answer that did not complete the sign-in.
+				onManualCodeInput: asksForRedirect ? () => dialog.askForRedirect({ retry: redirectAsks++ > 0 }) : undefined,
 				onSuccessPage: (url: string) => {
 					// Device-code/paste flows (grok, Copilot, Kimi) get no browser
 					// redirect of their own; open the freshly-served branded success
@@ -186,9 +228,6 @@ export class AccountFlows {
 			this.#ctx.showError(`Login failed: ${errorMessage(error)}`);
 			return "failed";
 		} finally {
-			if (useManualInput) {
-				manualInput.clear(`Manual OAuth input cleared for ${providerId}`);
-			}
 			restoreEditor();
 		}
 	}
@@ -231,15 +270,19 @@ export class AccountFlows {
 	 * what a logout DID: which account left, which file it left, and whether the provider is still
 	 * authenticated by an env variable or a config key that a credential removal cannot touch. That
 	 * last line is the one an operator needs and the one a status toast kept dropping.
+	 *
+	 * Returns the one-line outcome for the card's notice line, which the transcript block sits under
+	 * until the card closes.
 	 */
-	async #handleCredentialLogout(providerId: string, credentialId: number, label: string): Promise<void> {
+	async #handleCredentialLogout(providerId: string, credentialId: number, label: string): Promise<string> {
 		const providerLabel = formatProviderName(providerId);
 		try {
 			const authStorage = this.#ctx.session.modelRegistry.authStorage;
 			const removed = await authStorage.removeCredential(providerId, credentialId);
 			if (!removed) {
-				this.#ctx.showError(`Logout skipped: ${label} is no longer stored for ${providerLabel}.`);
-				return;
+				const skipped = `Logout skipped: ${label} is no longer stored for ${providerLabel}.`;
+				this.#ctx.showError(skipped);
+				return skipped;
 			}
 
 			await this.#ctx.session.modelRegistry.refresh();
@@ -259,8 +302,13 @@ export class AccountFlows {
 				);
 			}
 			this.#ctx.present(block);
+			return remainingSource
+				? `Logged out ${label} from ${providerLabel}; still authenticated via ${remainingSource}`
+				: `Logged out ${label} from ${providerLabel}`;
 		} catch (error: unknown) {
-			this.#ctx.showError(`Logout failed: ${errorMessage(error)}`);
+			const failed = `Logout failed: ${errorMessage(error)}`;
+			this.#ctx.showError(failed);
+			return failed;
 		}
 	}
 
@@ -356,12 +404,34 @@ export class AccountFlows {
 		// the account's readings.
 		const reload = () => {
 			if (closed) return;
-			let inventory = applyCredentialHealth(buildAccountInventory(authStorage, { sessionId }), [
-				...probes.health.values(),
-			]);
-			if (probes.usage) inventory = applyUsageReports(inventory, probes.usage);
-			manager?.setInventory(inventory);
+			manager?.setInventory(withProbeAnswers(buildAccountInventory(authStorage, { sessionId }), probes));
 			this.#ctx.ui.requestRender();
+		};
+		// Every outcome of a key pressed on the card lands on the card's notice line as well as in the
+		// transcript: the card is a fullscreen overlay, so the transcript line alone stays hidden
+		// until the card closes and the key reads as having done nothing.
+		const notify = (text: string, level: "status" | "warning" = "status") => {
+			if (level === "warning") this.#ctx.showWarning(text);
+			else this.#ctx.showStatus(text);
+			if (!closed) manager?.setNotice(text);
+		};
+		// `r`, and the re-check after lifting a block: "Checking …" at once, then what the provider
+		// answered. Without the first line nothing on the card moved until the network did.
+		const check = (subject: string, credentialIds: readonly number[], preface?: string) => {
+			const lead = preface ? `${preface} · ` : "";
+			if (credentialIds.length === 0) {
+				manager?.setNotice(`${lead}${subject}: no stored account to check`);
+				return;
+			}
+			manager?.setNotice(`${lead}Checking ${subject}…`);
+			void this.#probeAccountHealth(
+				() => manager,
+				() => closed,
+				probes,
+				credentialIds,
+			).then(outcome => {
+				if (!closed) manager?.setNotice(`${lead}${describeAccountCheck(subject, outcome)}`);
+			});
 		};
 
 		manager = new AccountManagerComponent(
@@ -369,37 +439,39 @@ export class AccountFlows {
 			{
 				onUseAccount: row => {
 					if (authStorage.selectProviderCredential(row.provider, row.credentialId, { sessionId })) {
-						this.#ctx.showStatus(
-							`${row.providerLabel}: now using ${accountDisplayLabel(row)} everywhere on this machine`,
-						);
+						notify(`${row.providerLabel}: now using ${accountDisplayLabel(row)} everywhere on this machine`);
 					} else {
 						// The credential vanished between render and keypress (a peer logged it out).
 						// Say so; a silent no-op reads as the key being broken.
-						this.#ctx.showWarning(`${row.providerLabel}: that account is no longer stored`);
+						notify(`${row.providerLabel}: that account is no longer stored`, "warning");
 					}
 					reload();
 				},
 				onRename: (row, name) => {
 					const previous = accountDisplayLabel(row);
 					if (!authStorage.setAccountName(row.provider, row.credentialId, name)) {
-						this.#ctx.showWarning(
+						notify(
 							`Could not name that account — ${row.providerLabel} credentials are stored where names cannot be kept`,
+							"warning",
 						);
 						return;
 					}
 					reload();
-					this.#ctx.showStatus(
+					notify(
 						name.trim().length === 0
 							? `${row.providerLabel}: cleared the name on ${previous}`
 							: `${row.providerLabel}: ${previous} is now "${name.trim()}"`,
 					);
 				},
-				onRefresh: (_provider, row) => {
-					void this.#probeAccountHealth(
-						() => manager,
-						() => closed,
-						probes,
-						row ? [row.credentialId] : undefined,
+				onRefresh: (provider, row) => {
+					if (row) {
+						check(`${accountDisplayLabel(row)} (${row.providerLabel})`, [row.credentialId]);
+						return;
+					}
+					// The add entry has no row: every account of THIS provider, not of every provider.
+					check(
+						formatProviderName(provider),
+						authStorage.listStoredCredentials(provider).map(stored => stored.id),
 					);
 				},
 				onLogout: row => {
@@ -408,8 +480,13 @@ export class AccountFlows {
 						// "logged out of X" in a status line and stop there, which drops the two facts a
 						// logout has to carry: which file the credential left, and whether the provider
 						// is still authenticated by an env variable this cannot touch.
-						await this.#handleCredentialLogout(row.provider, row.credentialId, accountDisplayLabel(row));
+						const outcome = await this.#handleCredentialLogout(
+							row.provider,
+							row.credentialId,
+							accountDisplayLabel(row),
+						);
 						reload();
+						if (!closed) manager?.setNotice(outcome);
 					})();
 				},
 				onShowUsage: () => {
@@ -422,31 +499,24 @@ export class AccountFlows {
 				},
 				onClearRateLimitBlock: row => {
 					authStorage.clearCredentialBlocks(row.provider, row.credentialId);
+					reload();
+					const label = accountDisplayLabel(row);
+					this.#ctx.showStatus(`${row.providerLabel}: cleared the rate-limit hold on ${label} and re-checked it`);
 					// Re-probe the one account, so the row's countdown is replaced by what the provider
 					// says now rather than by an empty space this cleared. Lifting a block that really
 					// is still in force therefore shows it again, which is the honest outcome: the
 					// operator asked whether the provider still refuses, and the provider answered.
-					void this.#probeAccountHealth(
-						() => manager,
-						() => closed,
-						probes,
-						[row.credentialId],
-					);
-					reload();
-					this.#ctx.showStatus(
-						`${row.providerLabel}: cleared the rate-limit hold on ${accountDisplayLabel(row)} and re-checked it`,
-					);
+					check(`${label} (${row.providerLabel})`, [row.credentialId], "Cleared the rate-limit hold");
 				},
 				onForgetSignedOut: provider => {
 					const forgotten = authStorage.forgetSignedOutLogins(provider);
 					reload();
 					if (forgotten > 0) {
-						this.#ctx.showStatus(
-							`${formatProviderName(provider)}: forgot the signed-out login; its credential stays disabled`,
-						);
+						notify(`${formatProviderName(provider)}: forgot the signed-out login; its credential stays disabled`);
 					} else {
-						this.#ctx.showWarning(
+						notify(
 							`${formatProviderName(provider)}: no signed-out login to forget in this credential store`,
+							"warning",
 						);
 					}
 				},
@@ -514,44 +584,46 @@ export class AccountFlows {
 	 * probe is a sequential network round-trip per credential, so a nine-account provider made the
 	 * user wait for eight accounts they had not asked about. The USAGE fetch stays whole because
 	 * there is nothing per-account to narrow it to: it is one cached call that answers for every
-	 * credential at once, and asking for less would cost the same.
+	 * credential at once, and asking for less would cost the same. The health probe reads the usage
+	 * endpoint live, so its reports are folded in too (see {@link withProbeAnswers}).
+	 *
+	 * Returns what the health probe answered, for the notice `r` leaves on the card.
 	 */
 	async #probeAccountHealth(
 		getManager: () => AccountManagerComponent | undefined,
 		isClosed: () => boolean,
 		probes: AccountProbeCache,
 		credentialIds?: readonly number[],
-	): Promise<void> {
+	): Promise<AccountCheckOutcome> {
 		const authStorage = this.#ctx.session.modelRegistry.authStorage;
 		const sessionId = this.#ctx.session.sessionId;
 		const baseUrlResolver = (target: string) => this.#ctx.session.modelRegistry.getProviderBaseUrl?.(target);
-		const [health, usage] = await Promise.all([
-			authStorage
-				.checkCredentials(credentialIds ? { baseUrlResolver, credentialIds } : { baseUrlResolver })
-				.catch(error => {
-					logger.debug("account manager: credential health probe failed", { error: errorMessage(error) });
-					return [];
-				}),
+		const [outcome, usage] = await Promise.all([
+			authStorage.checkCredentials(credentialIds ? { baseUrlResolver, credentialIds } : { baseUrlResolver }).then(
+				(health): AccountCheckOutcome => ({ health }),
+				(error): AccountCheckOutcome => {
+					const failure = errorMessage(error);
+					logger.debug("account manager: credential health probe failed", { error: failure });
+					return { health: [], failure };
+				},
+			),
 			this.#ctx.session.fetchUsageReports().catch(error => {
 				logger.debug("account manager: usage probe failed", { error: errorMessage(error) });
 				return null;
 			}),
 		]);
-		if (isClosed()) return;
+		if (isClosed()) return outcome;
 		const manager = getManager();
-		if (!manager) return;
+		if (!manager) return outcome;
 		// ACCUMULATED for the life of this card, because a scoped probe answers for one credential
 		// while the inventory underneath it is rebuilt from the store every time. Without this,
 		// refreshing one row would blank the health mark on every other row that had already been
 		// probed: a card that had answered for nine accounts would answer for one.
-		for (const result of health) probes.health.set(result.id, result);
+		for (const result of outcome.health) probes.health.set(result.id, result);
 		if (usage) probes.usage = usage;
-		let inventory = applyCredentialHealth(await loadAccountInventory(authStorage, { sessionId }), [
-			...probes.health.values(),
-		]);
-		if (probes.usage) inventory = applyUsageReports(inventory, probes.usage);
-		manager.setInventory(inventory);
+		manager.setInventory(withProbeAnswers(await loadAccountInventory(authStorage, { sessionId }), probes));
 		this.#ctx.ui.requestRender();
+		return outcome;
 	}
 
 	async showResetUsageSelector(): Promise<void> {

@@ -43,7 +43,7 @@ Logins are **provider-scoped**: authenticating `anthropic` does not authenticate
 
 Use the interactive slash commands inside a session:
 
-- `/login`: opens the OAuth/key selector. `/login <provider>` jumps straight to one provider (e.g. `/login anthropic`); for an OAuth flow that needs a pasted callback, run `/login <redirect-url>` to complete it.
+- `/login`: opens the OAuth/key selector. `/login <provider>` jumps straight to one provider (e.g. `/login anthropic`). A provider login that ends on a `localhost` address the browser cannot reach takes the pasted address in its login card (see [Signing in over SSH](../using/authentication.md#signing-in-over-ssh)); `/login <redirect-url>` completes an MCP server's OAuth flow the same way.
 - `/logout`: opens the provider selector to remove stored credentials.
 
 For headless or remote setups backed by a shared auth broker, the CLI exposes `veyyon auth-broker login <provider>` / `veyyon auth-broker logout` (and `status`, `list`, `import`, `migrate`). See [Secrets and credentials](../architecture/secrets.md) for the broker model.

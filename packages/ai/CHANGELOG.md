@@ -8,6 +8,7 @@
 - The notice that an account is out of quota while load balancing leaves other accounts idle appears once per exhausted window instead of once for every request layer and retry that re-entered it.
 - Codex requests send `x-codex-routing-hint` stating the wire model and service tier of the body sent, on HTTP turns, the websocket upgrade and the startup prewarm, as codex-rs does.
 - ChatGPT Codex browser login sends `force_challenge=true`, so auth.openai.com prompts for a fresh sign-in instead of minting the token from the browser's existing sign-in, and a Daybreak account can sign in with its hardware security key to clear `individual_blue_security_signin_required` and the `cyber_policy` refusals it causes.
+- A credential health check attributes the usage report it returns to the credential's organization, as a usage fetch does, so the report matches its account when one email holds logins to two organizations.
 
 ## [1.5.9] - 2026-10-22
 

@@ -6,20 +6,28 @@
 
 ### Added
 
+- The login card sends a browser login's link to the clipboard when it appears, and `c` (or `alt+c` while its field holds typed text) sends it again, shown on a `copy link` key chip.
+- A browser login whose provider takes a pasted callback asks in the login card for the address the browser ended on, so a sign-in over SSH completes without a forwarded port; an address that does not complete the sign-in is asked for again.
 - `codexRoutingHint` in `@veyyon/catalog/wire/codex` builds the `x-codex-routing-hint` value (`model=<model>;tier=<tier>`, or `model=<model>` without a tier) from a Codex Responses request body.
 
 ### Changed
 
+- `/login <url>` completes only an MCP server's OAuth flow; a provider login takes the pasted address in its login card.
 - The startup Codex websocket prewarm resolves its service tier from the session it opens the socket for; no user-facing change.
 
 ### Fixed
 
 - A resumed or switched-to session whose model exists only in a provider's discovery listing runs on that model instead of the settings default when the discovery cache cannot supply it, as on the first launch after an upgrade that changes the cache format.
 - Codex web search and image generation requests send `x-codex-routing-hint`, and the startup websocket prewarm states the session's configured service tier, which the first turn on that socket sends.
+- A copy from inside tmux reaches the attached terminal's clipboard through `tmux load-buffer -w` instead of an OSC 52 escape that tmux drops under its default `set-clipboard external`, falling back to the escape when tmux rejects the command.
+- `r` on the account card shows `Checking …` and then whether the provider accepted the login on the card's notice line, and updates the usage bars from the check's own reading instead of leaving them unchanged until the next fetch.
+- `r` on the account card's `+ add another … account` row checks the accounts of that provider instead of every stored account of every provider.
+- Selecting, naming, logging out, forgetting and unblocking an account on the account card report their result on the card's notice line instead of only in the hidden transcript.
 - Cursor's "You're out of usage" answer parks the account for the quota window instead of a 45 to 75 second capacity backoff, so a turn on a spent plan ends on the first failure instead of retrying it every minute.
 - The notice that an account is out of quota while load balancing leaves other accounts idle appears once per exhausted window instead of once for every request layer and retry that re-entered it.
 - Codex requests send `x-codex-routing-hint` stating the wire model and service tier of the body sent, on HTTP turns, the websocket upgrade and the startup prewarm, as codex-rs does.
 - ChatGPT Codex browser login sends `force_challenge=true`, so auth.openai.com prompts for a fresh sign-in instead of minting the token from the browser's existing sign-in, and a Daybreak account can sign in with its hardware security key to clear `individual_blue_security_signin_required` and the `cyber_policy` refusals it causes.
+- A credential health check attributes the usage report it returns to the credential's organization, as a usage fetch does, so the report matches its account when one email holds logins to two organizations.
 
 ## [1.5.9] - 2026-10-22
 
