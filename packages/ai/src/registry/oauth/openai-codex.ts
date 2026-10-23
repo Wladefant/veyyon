@@ -69,7 +69,15 @@ export function formatOpenAICodexTokenEndpointError(status: number, bodyText: st
 		return `${status} ${trimmed}`;
 	}
 }
-/** Builds the Codex browser OAuth URL used by browser login; exported for auth regression tests. */
+/**
+ * Builds the Codex browser OAuth URL used by browser login; exported for auth regression tests.
+ *
+ * `force_challenge=true` is the authorize parameter chatgpt.com sends for re-authentication. Without it,
+ * auth.openai.com completes the authorize request from the browser's existing sign-in, so the issued token
+ * carries that sign-in's authentication method and time. Individual Daybreak trusted access requires a
+ * sign-in made with a hardware security key, and a token minted from an older passkey or password sign-in
+ * reports `individual_blue_security_signin_required` and is refused with `cyber_policy`.
+ */
 export function createOpenAICodexAuthorizationUrl(args: {
 	state: string;
 	redirectUri: string;
@@ -87,6 +95,7 @@ export function createOpenAICodexAuthorizationUrl(args: {
 		state: args.state,
 		id_token_add_organizations: "true",
 		codex_cli_simplified_flow: "true",
+		force_challenge: "true",
 		originator,
 	});
 
