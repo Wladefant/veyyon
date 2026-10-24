@@ -1151,7 +1151,8 @@ describe("secrets stay out of logs", () => {
 				ext.emit("chrome.tabs.onCreated", [{ id: 41, url }]);
 				await relay.waitForExtension(2000);
 				const cdp = await CdpTestClient.connect(relay.cdpUrl);
-				const rejected = await cdp.send("Nonsense.method");
+				const hostileMethod = `Nonsense.${EXTENSION_TOKEN}`;
+				const rejected = await cdp.send(hostileMethod);
 				expect(rejected.error?.code).toBe(-32601);
 				const created = await cdp.send("Target.createTarget", { url: "about:blank" });
 				const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
@@ -1162,8 +1163,10 @@ describe("secrets stay out of logs", () => {
 				expect(joined).toContain('"cdpMethod":"Runtime.evaluate"');
 				expect(joined).toContain('"instance":"Profile 7"');
 				expect(joined).toContain('"tabId":41');
-				expect(joined).toContain('"urlMatch":true');
+				expect(joined).toContain("extension bootstrap claimed");
 				expect(joined).toContain('"clientId":1');
+				expect(joined).toContain('"cdpMethod":"<invalid>"');
+				expect(joined).not.toContain(hostileMethod);
 				expect(joined).not.toContain(url);
 				expect(joined).not.toContain(relay.extensionUrl);
 				expect(joined).not.toContain(EXTENSION_TOKEN);

@@ -203,6 +203,12 @@ const attachedSchema = type({
 	"targetInfo?": { type: "string", "targetId?": "string" },
 });
 
+function diagnosticMethod(method: string, scrub: readonly string[]): string {
+	return /^[A-Za-z][A-Za-z0-9]*\.[A-Za-z][A-Za-z0-9]*$/.test(method) && method.length <= 128
+		? redactSecrets(method, scrub)
+		: "<invalid>";
+}
+
 function errorText(error: unknown): string {
 	if (typeof error === "string") return error;
 	if (error instanceof Error) return error.message;
@@ -412,11 +418,12 @@ export class ExtensionRelay {
 	#writeStateFile(): void {
 		const file = this.#stateFile();
 		const state = { port: this.port, control: this.#controlSecret, pid: process.pid };
+		fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
 		fs.writeFileSync(file, JSON.stringify(state), { mode: 0o600 });
 	}
 
 	#log(message: string, fields?: Record<string, unknown>): void {
-		logger.info(redactSecrets(message, this.#scrub), fields);
+		logger.debug(redactSecrets(message, this.#scrub), fields);
 	}
 
 	// ----- HTTP and WebSocket entry --------------------------------------------------------
@@ -588,12 +595,8 @@ export class ExtensionRelay {
 				const tab = tabSchema(params[0]);
 				if (tab instanceof type.errors) return;
 				const landing = tab.pendingUrl ?? tab.url;
-				this.#log("extension bootstrap claim", {
-					port: this.port,
-					tabId: tab.id,
-					urlMatch: this.#bootstrapUrl !== undefined && landing === this.#bootstrapUrl,
-				});
 				if (this.#bootstrapUrl !== undefined && landing === this.#bootstrapUrl) {
+					this.#log("extension bootstrap claimed", { port: this.port, tabId: tab.id });
 					this.#bootstrapUrl = undefined;
 					this.#pendingBootstrapTabs.add(tab.id);
 					this.#bootstrapReady = this.#registerTab(tab.id, true, tab.windowId)
@@ -961,7 +964,7 @@ export class ExtensionRelay {
 				port: this.port,
 				clientId: client.id,
 				...(clientTabId === undefined ? {} : { tabId: clientTabId }),
-				cdpMethod: method,
+				cdpMethod: diagnosticMethod(method, this.#scrub),
 			});
 			const code = error instanceof UnsupportedMethod ? METHOD_NOT_FOUND_CODE : CDP_ERROR_CODE;
 			this.#reply(client, id, sessionId, { error: { code, message: redactSecrets(errorText(error), this.#scrub) } });
