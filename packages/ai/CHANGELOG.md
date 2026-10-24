@@ -146,7 +146,7 @@
 - A captured error body that replaces a status-only `status code (no body)` message keeps the `retry-after-ms=` wait the response stated.
 - The Devin provider reads Cascade's stated reset window through the shared `extractRetryHint` instead of a parser of its own; no user-facing change.
 - An Anthropic Messages reply that ends before `message_start` (an empty `200` body, preamble events only, or events out of order) is retried once and then ends the provider's retry ladder, instead of running all ten provider retries under every session retry: a dead endpoint costs 22 requests over 53 s instead of up to 121 over minutes.
-- A `200` from an OpenAI-compatible endpoint whose body is an HTML page or a JSON document instead of an event stream fails on the first request with `200 from <endpoint> is an HTML page titled "…", not an event stream. Check the provider's baseUrl.`, or the provider's own error sentence, instead of being retried as a truncated stream ten times over about 47 s.
+- A `200` whose body is an HTML page or a JSON document instead of an event stream fails on the first request with `200 from <endpoint> is an HTML page titled "…", not an event stream. Check the provider's baseUrl.`, or the provider's own error sentence, on the OpenAI-compatible, Anthropic Messages, Google Generative AI, Vertex, Gemini CLI, Codex and pi-native wires, instead of being retried as a truncated stream: 11 requests over about 47 s on an OpenAI-compatible or Google endpoint, 22 over about 55 s on Anthropic Messages.
 
 ## [1.5.9] - 2026-10-22
 

@@ -88,7 +88,7 @@ import {
 	PRE_RESPONSE_STALL_ATTEMPTS,
 } from "../utils/first-event-budget";
 import { escapeHarmonyControlTokens, isHarmonyDialectModel } from "../utils/harmony-leak";
-import { materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
+import { eventStreamBody, materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
 	armPreResponseTimeout,
 	getOpenAIStreamFirstEventTimeoutMs,
@@ -1907,7 +1907,7 @@ export async function buildTransformedCodexRequestBody(
 		input: convertCodexResponsesMessages(model, context),
 		stream: true,
 		prompt_cache_key:
-			request.promptCacheKey ?? normalizeOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
+			request.promptCacheKey ?? getOpenAIPromptCacheKey(options),
 	};
 
 	// `maxTokens` is intentionally not forwarded: transformRequestBody strips
@@ -4634,7 +4634,7 @@ async function openCodexSseEventStream(
 	if (!response.body) {
 		throw new CodexProviderStreamError("No response body", { retryable: false });
 	}
-	const events = readSseJson<Record<string, unknown>>(response.body, signal, event =>
+	const events = readSseJson<Record<string, unknown>>(eventStreamBody(response, response.body, url), signal, event =>
 		notifyRawSseEvent(onSseEvent, { event: event.event, data: event.data, raw: event.raw.slice() }),
 	);
 	return { events, response, requestId: response.headers.get("x-request-id") };

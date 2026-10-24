@@ -36,7 +36,7 @@ import type {
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { extractGoogleValidationUrl, formatGoogleValidationRequiredMessage } from "../utils/google-validation";
-import { materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
+import { eventStreamBody, materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
 import { armPreResponseTimeout, getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
 import { fetchProviderWithRetry } from "../utils/provider-fetch";
 // Refresh is the sole responsibility of AuthStorage (broker-aware, single-flighted);
@@ -991,7 +991,8 @@ class GeminiCliStreamRun {
 			toolNames,
 			this.#ensureStarted,
 		);
-		for await (const chunk of readSseJson<CloudCodeAssistResponseChunk>(body, options?.signal, event =>
+		const events = eventStreamBody(response, body, response.url);
+		for await (const chunk of readSseJson<CloudCodeAssistResponseChunk>(events, options?.signal, event =>
 			options?.onSseEvent?.({ event: event.event, data: event.data, raw: event.raw.slice() }, model),
 		)) {
 			decoder.apply(chunk);

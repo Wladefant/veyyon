@@ -1,34 +1,48 @@
 /**
- * Contract: a `2xx` answer from an OpenAI-wire endpoint whose body is not an event stream fails on
- * the request that received it, states what came back and from where, and is not retried unless
- * the provider's own sentence reads as transient. A mislabelled event stream still streams.
+ * Contract: a `2xx` answer whose body is not an event stream fails on the request that received it,
+ * states what came back and from where, and is not retried unless the provider's own sentence reads
+ * as transient. A mislabelled event stream still streams.
  *
- * WHY THIS EXISTS. A `baseUrl` that points at a login page, a docs site or a non-streaming endpoint
- * answers `200` with HTML or a JSON document. The body was handed to the SSE decoder as it was,
- * which found no events in it, and the turn ended as "stream closed before a terminal finish
- * reason". That is an `incomplete-stream` failure, which is retryable, so the session sent the same
- * request to the same page until its retry budget ran out: eleven requests and close to a minute
- * before the error, and the error described a cut stream that never existed.
+ * WHY THIS EXISTS. A `baseUrl` that points at a login page, a docs site or a non-streaming endpoint,
+ * or a proxy that answers with its own page, returns `200` with HTML or a JSON document. The body was
+ * handed to the SSE decoder as it was, which found no events in it, and the turn ended as a cut
+ * stream: "stream closed before a terminal finish reason" on the OpenAI wire, "stream ended before
+ * message_start" on Anthropic, "stream ended without a finish reason" on Google. Each of those is
+ * retryable, so the same request went to the same page until the retry budget ran out: eleven to
+ * twenty-two requests and close to a minute before the error, and the error described a truncated
+ * stream that never existed.
  *
- * THE CLASS: every provider that reads its body through `postOpenAIStream`, crossed with every body
- * shape that cannot be an event stream (HTML with and without a title, a JSON document, a JSON
- * array, a JSON error envelope) and every way such a body arrives (any content type but
- * `text/event-stream`, a blank lead, the lead split across chunks, a body that never ends). The
- * converse is swept too: an event stream under the wrong content type, behind blank lines or behind
- * a comment, must still decode, so the check cannot be satisfied by rejecting every unlabelled body.
+ * THE CLASS: every provider stream that reads an HTTP body as an event stream, through
+ * `eventStreamBody`, crossed with every body shape that cannot be an event stream (HTML with and
+ * without a title, a JSON document, a JSON array, a JSON error envelope) and every way such a body
+ * arrives (any content type but `text/event-stream`, a blank lead, the lead split across chunks, a
+ * body that never ends). The converse is swept too: an event stream under the wrong content type,
+ * behind blank lines or behind a comment, must still decode, so the check cannot be satisfied by
+ * rejecting every unlabelled body.
  *
  * WHAT IT DOES NOT CATCH: a body labelled `text/event-stream` that is HTML is decoded as an event
- * stream and still reads as a truncated one. The label is taken at its word there. A provider that
- * reads its body without `postOpenAIStream` is outside the sweep; the three below are its callers.
+ * stream and still reads as a truncated one; the label is taken at its word. A provider list is
+ * written out below, so a new provider that reads its body without `eventStreamBody` is outside the
+ * sweep. Codex server-side compaction reads its body without it and falls back to local compaction
+ * on any failure; the auth broker and Ollama's NDJSON wire are not event streams.
  */
 
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as AIError from "@veyyon/ai/error";
+import { streamAnthropic } from "@veyyon/ai/providers/anthropic";
 import { streamAzureOpenAIResponses } from "@veyyon/ai/providers/azure-openai-responses";
+import { streamGoogle } from "@veyyon/ai/providers/google";
+import { streamGoogleGeminiCli } from "@veyyon/ai/providers/google-gemini-cli";
+import { streamOpenAICodexResponses } from "@veyyon/ai/providers/openai-codex-responses";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
 import { streamOpenAIResponses } from "@veyyon/ai/providers/openai-responses";
-import type { AssistantMessage, Context, FetchImpl, Model } from "@veyyon/ai/types";
+import { streamPiNative } from "@veyyon/ai/providers/pi-native-client";
+import type { AssistantMessage, Context, FetchImpl, Model, ModelSpec } from "@veyyon/ai/types";
+import { eventStreamBody } from "@veyyon/ai/utils/http-inspector";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
+import * as piUtils from "@veyyon/utils";
+import { createCodexModel } from "./helpers";
 
 const SPEC = {
 	name: "Probe",
@@ -74,6 +88,43 @@ const RESPONSES_ANSWER = sseText([
 		},
 	},
 ]);
+
+/** Anthropic names each event; the decoder reads the name. */
+const ANTHROPIC_ANSWER = [
+	{
+		type: "message_start",
+		message: {
+			id: "msg_probe",
+			usage: { input_tokens: 1, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+		},
+	},
+	{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+	{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "hello" } },
+	{ type: "content_block_stop", index: 0 },
+	{ type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+	{ type: "message_stop" },
+]
+	.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+	.join("");
+
+const GOOGLE_CHUNK = {
+	candidates: [{ content: { parts: [{ text: "hello" }], role: "model" }, finishReason: "STOP", index: 0 }],
+	usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+};
+
+/** A Codex access token naming an account. */
+function codexToken(): string {
+	const claims = { "https://api.openai.com/auth": { chatgpt_account_id: "acc_probe" } };
+	return `aaa.${Buffer.from(JSON.stringify(claims), "utf8").toBase64()}.bbb`;
+}
+
+beforeEach(() => {
+	vi.spyOn(piUtils, "getInstallId").mockReturnValue("00000000-0000-4000-8000-000000000001");
+});
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 interface Provider {
 	readonly name: string;
@@ -140,6 +191,98 @@ const PROVIDERS: readonly Provider[] = [
 				},
 			).result(),
 	},
+	{
+		name: "anthropic-messages",
+		answer: ANTHROPIC_ANSWER,
+		run: fetch =>
+			streamAnthropic(
+				buildModel({
+					...SPEC,
+					id: "probe-claude",
+					api: "anthropic-messages",
+					provider: "probe",
+					baseUrl: "https://llm.example.test",
+				}) as Model<"anthropic-messages">,
+				context(),
+				{ apiKey: "test-key", fetch, providerRetryWait: async () => {} },
+			).result(),
+	},
+	{
+		name: "google-generative-ai",
+		answer: sseText([GOOGLE_CHUNK]),
+		run: fetch =>
+			streamGoogle(
+				buildModel({
+					...SPEC,
+					id: "probe-gemini",
+					api: "google-generative-ai",
+					provider: "probe",
+					baseUrl: "https://llm.example.test/v1beta",
+				}) as Model<"google-generative-ai">,
+				context(),
+				{ apiKey: "test-key", fetch },
+			).result(),
+	},
+	{
+		name: "google-gemini-cli",
+		answer: sseText([{ response: GOOGLE_CHUNK }]),
+		run: fetch =>
+			streamGoogleGeminiCli(
+				buildModel({
+					...SPEC,
+					id: "gemini-2.5-flash",
+					api: "google-gemini-cli",
+					provider: "google-gemini-cli",
+					baseUrl: "https://llm.example.test",
+				}) as Model<"google-gemini-cli">,
+				context(),
+				{ apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }), fetch },
+			).result(),
+	},
+	{
+		name: "openai-codex-responses",
+		answer: RESPONSES_ANSWER,
+		run: fetch =>
+			streamOpenAICodexResponses(
+				createCodexModel("gpt-5.1-codex", { baseUrl: "https://llm.example.test/backend-api" }),
+				context(),
+				{ apiKey: codexToken(), fetch },
+			).result(),
+	},
+	{
+		name: "pi-native",
+		answer: sseText([
+			{
+				type: "done",
+				reason: "stop",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "hello" }],
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "probe-native",
+					usage: emptyUsage(),
+					stopReason: "stop",
+					timestamp: 0,
+				},
+			},
+		]),
+		run: fetch =>
+			streamPiNative(
+				buildModel({
+					...SPEC,
+					id: "probe-native",
+					api: "anthropic-messages",
+					provider: "anthropic",
+					baseUrl: "https://llm.example.test",
+					transport: "pi-native",
+				} as ModelSpec<"anthropic-messages">),
+				context(),
+				{ apiKey: "gw-bearer", fetch },
+			)
+				.result()
+				.catch(failedTurn),
+	},
 ];
 
 function chunked(chunks: readonly string[]): ReadableStream<Uint8Array> {
@@ -152,15 +295,49 @@ function chunked(chunks: readonly string[]): ReadableStream<Uint8Array> {
 	});
 }
 
-/** Answers every request with `chunks`, recording the URL of each. */
+function isTurnRequest(input: string | URL | Request, init: RequestInit | undefined): boolean {
+	return (init?.method ?? (input instanceof Request ? input.method : "GET")) === "POST";
+}
+
+/**
+ * Answers every turn request (a POST) with `chunks`, recording the URL of each. Anything else, such as
+ * the model listing Codex reads first, is a 404.
+ */
 function answering(chunks: readonly string[], contentType: string | undefined): { fetch: FetchImpl; urls: string[] } {
 	const urls: string[] = [];
-	const fetch: FetchImpl = async input => {
-		urls.push(input instanceof Request ? input.url : String(input));
+	const fetch: FetchImpl = async (input, init) => {
+		const url = input instanceof Request ? input.url : String(input);
+		if (!isTurnRequest(input, init)) return new Response("not found", { status: 404 });
+		urls.push(url);
 		const headers = contentType === undefined ? undefined : { "content-type": contentType };
-		return new Response(chunked(chunks), { status: 200, headers });
+		return withUrl(new Response(chunked(chunks), { status: 200, headers }), url);
 	};
 	return { fetch, urls };
+}
+
+/**
+ * The turn a consumer records for a stream whose result rejects, which is how pi-native reports a
+ * failure: the error's message, classified.
+ */
+function failedTurn(error: unknown): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [],
+		api: "anthropic-messages",
+		provider: "anthropic",
+		model: "probe-native",
+		usage: emptyUsage(),
+		stopReason: "error",
+		errorMessage: error instanceof Error ? error.message : String(error),
+		errorId: AIError.classify(error),
+		timestamp: 0,
+	};
+}
+
+/** A constructed `Response` has an empty `url`; `fetch` sets it to the URL it fetched. */
+function withUrl(response: Response, url: string): Response {
+	Object.defineProperty(response, "url", { value: url });
+	return response;
 }
 
 function retriable(message: AssistantMessage): boolean {
@@ -230,8 +407,8 @@ describe("a 2xx body that is not an event stream fails on the request that recei
 			expect(retriable(refused)).toBe(false);
 
 			const transient = answering([JSON.stringify({ error: { message: "Rate limit exceeded" } })], undefined);
+			// Retried by any ladder that retries a transient failure, which is what the sentence asks for.
 			const limited = await provider.run(transient.fetch);
-			expect(transient.urls.length).toBe(1);
 			expect(limited.errorMessage).toBe("200 Rate limit exceeded");
 			expect(retriable(limited)).toBe(true);
 		});
@@ -252,8 +429,10 @@ describe("a 2xx body that is not an event stream fails on the request that recei
 					released = true;
 				},
 			});
-			const fetch: FetchImpl = async () =>
-				new Response(body, { status: 200, headers: { "content-type": "text/html" } });
+			const fetch: FetchImpl = async (input, init) =>
+				isTurnRequest(input, init)
+					? new Response(body, { status: 200, headers: { "content-type": "text/html" } })
+					: new Response("not found", { status: 404 });
 
 			const result = await provider.run(fetch);
 
@@ -273,7 +452,7 @@ describe("an event stream decodes whatever it is labelled", () => {
 			{ name: "labelled plain text", chunks: [provider.answer], label: "text/plain" },
 			{
 				name: "behind blank chunks, split inside its first field",
-				chunks: ["\n", "\n", "da", provider.answer.slice(2)],
+				chunks: ["\n", "\n", provider.answer.slice(0, 2), provider.answer.slice(2)],
 				label: undefined,
 			},
 			{ name: "behind a comment", chunks: [": keep-alive\n\n", provider.answer], label: "application/octet-stream" },
@@ -289,5 +468,16 @@ describe("an event stream decodes whatever it is labelled", () => {
 				expect(urls.length).toBe(1);
 			});
 		}
+	}
+});
+
+describe("a blank unlabelled body is an empty event stream", () => {
+	// Nothing but whitespace is neither markup nor JSON: it reads as an event stream that held no
+	// events, and it ends instead of waiting for a first byte that is never coming.
+	for (const chunks of [[], ["\n"], ["\r\n", "  \t\n"]]) {
+		it(`passes ${JSON.stringify(chunks)} through and closes`, async () => {
+			const stream = eventStreamBody(new Response(null, { status: 200 }), chunked(chunks), undefined);
+			expect(await new Response(stream).text()).toBe(chunks.join(""));
+		});
 	}
 });

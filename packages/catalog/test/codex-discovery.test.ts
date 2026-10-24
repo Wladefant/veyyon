@@ -428,8 +428,8 @@ describe("Codex model discovery", () => {
 		expect(legacy?.contextWindow).toBe(272_000);
 	});
 
-	it("ignores pre-V2 Codex discovery cache rows", async () => {
-		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-codex-v7-cache-"));
+	it.each([7, 14])("refreshes a Codex cache row predating per-account access (schema %s)", async version => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-codex-stale-cache-"));
 		const dbPath = path.join(tempDir, "models.db");
 		const cachedModel: ModelSpec<"openai-codex-responses"> = {
 			id: "gpt-5.5",
@@ -448,6 +448,7 @@ describe("Codex model discovery", () => {
 		const refreshedModel: ModelSpec<"openai-codex-responses"> = {
 			...cachedModel,
 			maxTokens: 96_000,
+			accountAccess: { account_blue: { listed: true, cyber: ["daybreak_blue"] } },
 		};
 		try {
 			writeModelCache(
@@ -460,7 +461,7 @@ describe("Codex model discovery", () => {
 			);
 			const db = new Database(dbPath);
 			try {
-				db.run("UPDATE model_cache SET version = 7 WHERE provider_id = ?", ["openai-codex"]);
+				db.run("UPDATE model_cache SET version = ? WHERE provider_id = ?", [version, "openai-codex"]);
 			} finally {
 				db.close();
 			}
@@ -479,6 +480,7 @@ describe("Codex model discovery", () => {
 
 			expect(fetched).toBe(true);
 			expect(result.models.find(model => model.id === "gpt-5.5")?.maxTokens).toBe(refreshedModel.maxTokens);
+			expect(result.models.find(model => model.id === "gpt-5.5")?.accountAccess).toEqual(refreshedModel.accountAccess);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
