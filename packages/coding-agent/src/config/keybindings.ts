@@ -13,8 +13,8 @@ import type { KeyId } from "@veyyon/utils/keys";
 // Owners, not the `@veyyon/utils` barrel: 6 modules against 74.
 import * as logger from "@veyyon/utils/logger";
 import { quarantineUnparseableFileSync } from "@veyyon/utils/quarantine-file";
-import { syncYamlTextToSettings } from "@veyyon/utils/yaml-sync";
-import { JSONC, YAML } from "bun";
+import { parseYaml, syncYamlTextToSettings } from "@veyyon/utils/yaml-sync";
+import { JSONC } from "bun";
 
 /**
  * The table itself lives in `keybinding-defs.ts`, a leaf that imports only the
@@ -202,7 +202,7 @@ function loadRawConfig(filePath: string): unknown {
 		if (filePath.endsWith(".json")) {
 			parsed = JSONC.parse(content);
 		} else if (filePath.endsWith(".yml") || filePath.endsWith(".yaml")) {
-			parsed = YAML.parse(content);
+			parsed = parseYaml(content);
 		} else {
 			throw new Error(`Unsupported keybindings config extension: ${filePath}`);
 		}

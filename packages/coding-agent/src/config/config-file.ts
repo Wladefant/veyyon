@@ -10,6 +10,7 @@ import {
 	isEnoent,
 	isRecord,
 	logger,
+	parseYaml,
 	pathStateSync,
 	reportFault,
 	truncate,
@@ -424,13 +425,15 @@ export class ConfigFile<T> implements IConfigFile<T> {
 
 	/** Parse `content` by the read path's format and validate it against the schema. */
 	#validateContent(content: string, readPath: string): { value: T } | { error: ConfigError } {
-		let parsed: unknown;
-		if (readPath.endsWith(".json") || readPath.endsWith(".jsonc")) {
-			parsed = JSONC.parse(content);
-		} else if (readPath.endsWith(".yml") || readPath.endsWith(".yaml")) {
-			parsed = YAML.parse(content);
-		} else {
+		const isJson = readPath.endsWith(".json") || readPath.endsWith(".jsonc");
+		if (!isJson && !readPath.endsWith(".yml") && !readPath.endsWith(".yaml")) {
 			throw new Error(`Invalid config file path: ${readPath}`);
+		}
+		let parsed: unknown;
+		try {
+			parsed = isJson ? JSONC.parse(content) : parseYaml(content);
+		} catch (error) {
+			return { error: new ConfigError(this.id, undefined, { err: error, stage: "Parse" }, readPath) };
 		}
 		const checked = this.schema(parsed);
 		if (!isArkErrors(checked)) return { value: checked as T };

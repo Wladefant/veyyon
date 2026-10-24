@@ -31,6 +31,8 @@
 - A rate limit that states its reset window in words, such as Devin's `Your limit will reset in 17 minutes`, is retried once that window passes, or ends the turn at once when the window exceeds `retry.maxDelayMs`, instead of being retried inside the window until the retry budget runs out.
 - A retry stopped by `retry.maxDelayMs` states both waits as durations, `Provider requested a 17m wait, longer than retry.maxDelayMs (5m)`, instead of in milliseconds.
 - A `models.yml` that fails to load is stated once with its own `Fix:` line, without the `defaults.. Fix the model configuration` splice, the repeated load error, or the API-key advice a print run added, and a prompt sent with no model names that file instead of `/login`.
+- A YAML syntax error in `config.yml`, the global config, a `--config` overlay, `models.yml`, `keybindings.yml`, a watchdog or harness profile file, or a swarm file states its line and column instead of `Unexpected token`, and the settings notice states each file's reason and how to restore it.
+- A print run with a settings file that does not parse states it on stderr instead of running on defaults without a word.
 
 ## [1.5.9] - 2026-10-22
 

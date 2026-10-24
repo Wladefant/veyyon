@@ -25,6 +25,7 @@ import {
 	deepMergeSettings,
 	type GlobalSettingBinding,
 	groupSettingPaths,
+	type QuarantinedSettingsFile,
 	type RawSettings,
 	type SettingsOptions,
 	SettingsStore,
@@ -105,6 +106,22 @@ export function validateProviderMaxInFlightRequests(value: unknown): Record<stri
 		throw new Error(`Provider request limits must be positive numbers: ${invalidProviders.join(", ")}`);
 	}
 	return normalized;
+}
+
+/**
+ * The notice for settings files that did not parse, stated by the TUI at startup and by every other
+ * mode on stderr before the session runs without them.
+ *
+ * Each file is stated with the parser's reason, which for a YAML syntax error includes the line and
+ * column, and with the copy of the file kept beside it. A setting saved in the session rewrites the
+ * file from the settings the session holds, so the kept copy is then the only one holding the rest.
+ */
+export function unparseableSettingsNotice(files: readonly QuarantinedSettingsFile[]): string {
+	const lines = files.map(file => `  ${file.path}: ${file.reason}\n    original kept at ${file.quarantinePath}`);
+	return (
+		`Could not read your settings, so this session uses defaults for them:\n${lines.join("\n")}\n` +
+		"Fix: correct the file and restart veyyon. A setting changed in this session rewrites the file; the kept copy still holds your settings."
+	);
 }
 
 const PATH_SCOPED_ARRAY_SETTINGS = new Set<SettingPath>(["enabledModels", "disabledProviders"]);

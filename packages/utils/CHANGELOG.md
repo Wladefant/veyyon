@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- `parseYaml` in `@veyyon/utils/yaml-sync` parses YAML and throws a `SyntaxError` stating the line and column of a syntax error, such as `Nested mappings are not allowed in compact mappings at line 2, column 13`, instead of Bun's `YAML Parse error: Unexpected token`.
+
+### Changed
+
+- `QuarantinedFile` holds the `reason` its file did not parse.
+
 ### Fixed
 
 - `extractRetryHint` reads a reset window stated in prose in any unit or combination of units, such as `Your limit will reset in 17 minutes`, `Resets in 20m45s` and `Resets in 1hr 39min`, after the machine-readable fields a body states.

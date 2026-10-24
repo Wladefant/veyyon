@@ -17,7 +17,6 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { YAML } from "bun";
 import { engines, version } from "../package.json" with { type: "json" };
 import { APP_DIRECTORY_SLUG } from "./app-identity";
 // FIRST, for its side effect: the environment scrub and `$HOME/.env`. Every path this module caches at
@@ -34,7 +33,7 @@ import { isUuid } from "./regex";
 import { bareVersion } from "./semver";
 import { sleepSync } from "./sleep";
 import { errorMessage, isRecord } from "./type-guards";
-import { syncYamlTextToSettings } from "./yaml-sync";
+import { parseYaml, syncYamlTextToSettings } from "./yaml-sync";
 
 /** App name (e.g. "veyyon") */
 /**
@@ -456,7 +455,7 @@ function classifyConfigCandidate(filePath: string, fileKind: ConfigFileKind): Ma
 	if (text === undefined) return { kind: "absent" };
 	let parsed: unknown;
 	try {
-		parsed = YAML.parse(text);
+		parsed = parseYaml(text);
 	} catch (error) {
 		throw new Error(
 			`${fileKind.subject} ${filePath} is not valid YAML: ${errorMessage(error)}. ${fileKind.repairHint}`,

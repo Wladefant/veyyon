@@ -142,7 +142,11 @@ describe("Settings", () => {
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
 
 			expect(settings.quarantinedFiles).toEqual([
-				{ path: getConfigPath(), quarantinePath: `${getConfigPath()}.corrupt` },
+				{
+					path: getConfigPath(),
+					quarantinePath: `${getConfigPath()}.corrupt`,
+					reason: "Nested mappings are not allowed in compact mappings at line 3, column 8",
+				},
 			]);
 		});
 
@@ -195,7 +199,11 @@ describe("Settings", () => {
 			expect(fs.existsSync(`${getConfigPath()}.corrupt`)).toBe(true);
 			expect(fs.readFileSync(`${getConfigPath()}.corrupt`, "utf-8")).toBe(sequenceYaml);
 			expect(settings.quarantinedFiles).toEqual([
-				{ path: getConfigPath(), quarantinePath: `${getConfigPath()}.corrupt` },
+				{
+					path: getConfigPath(),
+					quarantinePath: `${getConfigPath()}.corrupt`,
+					reason: "settings root must be a YAML mapping, not a scalar or sequence",
+				},
 			]);
 		});
 

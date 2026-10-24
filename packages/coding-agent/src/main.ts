@@ -71,7 +71,7 @@ import {
 	type ScopedModel,
 } from "./config/model-resolver";
 import { ModelsConfigFile } from "./config/models-config";
-import { getDefault, type SettingPath, Settings, settings } from "./config/settings";
+import { getDefault, type SettingPath, Settings, settings, unparseableSettingsNotice } from "./config/settings";
 import { initializeWithSettings } from "./discovery";
 import { reset as resetCapabilities } from "./discovery/capability";
 import {
@@ -2325,6 +2325,11 @@ async function runSessionLaunch(
 	// the TUI delivers them once it is up (see the `setSink` call in `runInteractiveMode`). Every other mode
 	// keeps the default, which writes to stderr as they arrive.
 	const operatorNotices = launch.isInteractive ? new OperatorNotices() : new OperatorNotices(stderrNoticeSink);
+	// The TUI states settings files that did not parse once its screen exists (`runInteractiveMode`).
+	// Every other mode states them here, before a session that runs on defaults for them.
+	if (!launch.isInteractive && launch.settings.quarantinedFiles.length > 0) {
+		operatorNotices.error("settings", unparseableSettingsNotice(launch.settings.quarantinedFiles));
+	}
 	const shared: LaunchSessionShared = { eventBus, operatorNotices, preloadedExtensions };
 	const created = await createSession({ ...sessionOptions, ...shared }, launch.isInteractive);
 	const { session } = created;

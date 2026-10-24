@@ -7,6 +7,7 @@ import {
 	isRecord,
 	lazy,
 	logger,
+	parseYaml,
 	quarantineUnparseableFile,
 	syncYamlTextToSettings,
 } from "@veyyon/utils";
@@ -137,7 +138,7 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 	for (const item of items) {
 		let parsed: unknown;
 		try {
-			parsed = YAML.parse(item.content);
+			parsed = parseYaml(item.content);
 		} catch (err) {
 			logger.warn("Advisor config: failed to parse YAML", { path: item.path, error: errorMessage(err) });
 			continue;
@@ -241,7 +242,7 @@ export async function loadWatchdogConfigFile(filePath: string): Promise<Watchdog
 	}
 	let parsed: unknown;
 	try {
-		parsed = YAML.parse(text);
+		parsed = parseYaml(text);
 	} catch (err) {
 		await quarantineUnparseableFile(filePath, text, err);
 		return { advisors: [] };

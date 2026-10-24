@@ -18,6 +18,7 @@
 - `ColdEntryPayloads.warmed` counts the cold entries read back into memory.
 - `ModelReasoningOptions.defaultLevel` and `ModelReasoningOptions.requiresEffort` state a model's default effort and that it has no off state; they become `thinking.defaultLevel` and `thinking.requiresEffort`.
 - `SelectListLayoutOptions.tabularDescription` keeps runs of spaces in a description, so a list whose descriptions are space-padded columns lines up under a heading ([#966](https://github.com/santhreal/veyyon/issues/966)).
+- `parseYaml` in `@veyyon/utils/yaml-sync` parses YAML and throws a `SyntaxError` stating the line and column of a syntax error, such as `Nested mappings are not allowed in compact mappings at line 2, column 13`, instead of Bun's `YAML Parse error: Unexpected token`.
 
 ### Changed
 
@@ -35,6 +36,8 @@
 - OpenCode Go discovery sends no Authorization for a Console login, whose token the public listing rejects, and keys its model cache by the credential it sends, so a refreshed login token keeps its cached models.
 - A compaction's republish moves every cold entry onto the new session file at once, closes the replaced file off the event loop, and skips the second walk over history when nothing changed since the first, so on a 200,000-entry, 419 MiB session a compaction holds the event loop for at most 14-15 ms instead of 86-90 ms and finishes in 120-124 ms instead of 159-165 ms.
 - A staged session rewrite is flushed to disk before it replaces the file, so a power cut during a rewrite leaves the previous file or the new one, and on ext4 the rename no longer blocks the event loop for 38-92 ms.
+- A settings file that does not parse is quarantined with the parser's reason, which for a YAML syntax error states its line and column.
+- `QuarantinedFile` holds the `reason` its file did not parse.
 
 ### Fixed
 
@@ -50,6 +53,8 @@
 - A rate limit that states its reset window in words, such as Devin's `Your limit will reset in 17 minutes`, is retried once that window passes, or ends the turn at once when the window exceeds `retry.maxDelayMs`, instead of being retried inside the window until the retry budget runs out.
 - A retry stopped by `retry.maxDelayMs` states both waits as durations, `Provider requested a 17m wait, longer than retry.maxDelayMs (5m)`, instead of in milliseconds.
 - A `models.yml` that fails to load is stated once with its own `Fix:` line, without the `defaults.. Fix the model configuration` splice, the repeated load error, or the API-key advice a print run added, and a prompt sent with no model names that file instead of `/login`.
+- A YAML syntax error in `config.yml`, the global config, a `--config` overlay, `models.yml`, `keybindings.yml`, a watchdog or harness profile file, or a swarm file states its line and column instead of `Unexpected token`, and the settings notice states each file's reason and how to restore it.
+- A print run with a settings file that does not parse states it on stderr instead of running on defaults without a word.
 - When a Cursor turn is cut short by a dropped stream or an abort, the partial-completion ledger reports each exec-channel call whose result arrived as ran instead of "started, no result recorded", and a batch whose every call has its result gets no ledger.
 - Cursor's "You're out of usage" answer parks the account for the quota window instead of a 45 to 75 second capacity backoff, so a turn on a spent plan ends on the first failure instead of retrying it every minute.
 - The notice that an account is out of quota while load balancing leaves other accounts idle appears once per exhausted window instead of once for every request layer and retry that re-entered it.

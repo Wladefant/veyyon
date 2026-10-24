@@ -16,6 +16,7 @@
 
 - A compaction's republish moves every cold entry onto the new session file at once, closes the replaced file off the event loop, and skips the second walk over history when nothing changed since the first, so on a 200,000-entry, 419 MiB session a compaction holds the event loop for at most 14-15 ms instead of 86-90 ms and finishes in 120-124 ms instead of 159-165 ms.
 - A staged session rewrite is flushed to disk before it replaces the file, so a power cut during a rewrite leaves the previous file or the new one, and on ext4 the rename no longer blocks the event loop for 38-92 ms.
+- A settings file that does not parse is quarantined with the parser's reason, which for a YAML syntax error states its line and column.
 
 ## [1.5.9] - 2026-10-22
 

@@ -18,13 +18,13 @@ import {
 	MAIN_CONFIG_FILENAMES,
 	normalizeProfileName,
 	type ProfileInfo,
+	parseYaml,
 	profileExists,
 	removeWithRetries,
 	resolveGlobalDefaultProfile,
 	syncYamlTextToSettings,
 	writeGlobalDefaultProfile,
 } from "@veyyon/utils";
-import { YAML } from "bun";
 import chalk from "chalk";
 import { seedKeybindingsFromAgentDir } from "../config/keybindings";
 import { ensureProfileAgentsFileAt } from "../discovery/agents-guidance";
@@ -294,7 +294,7 @@ async function clearCopiedDisplayName(agentDir: string): Promise<void> {
 		const text = await file.text();
 		let parsed: unknown;
 		try {
-			parsed = YAML.parse(text);
+			parsed = parseYaml(text);
 		} catch (error) {
 			throw new Error(`Copied settings file ${filePath} is not valid YAML: ${errorMessage(error)}`);
 		}
