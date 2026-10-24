@@ -95,7 +95,7 @@ export async function openExtensionSession(
 		if (opts.signal?.aborted) throw error;
 		const reason = errorMessage(error);
 		throw new ToolError(
-			`Could not connect to the Chrome extension: ${reason} Check that Chrome is running with the extension installed and that the token is current. State directory: ${extensionStateDir()}.`,
+			`Could not connect to the Chrome extension: ${reason} Inspect the connect page and relay diagnostics for the cause. State directory: ${extensionStateDir()}.`,
 		);
 	}
 }
