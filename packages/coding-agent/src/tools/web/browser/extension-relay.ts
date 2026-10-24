@@ -547,7 +547,7 @@ export class ExtensionRelay {
 				this.#log("extension RPC timed out", {
 					port: this.port,
 					method,
-					...(cdpMethod === undefined ? {} : { cdpMethod }),
+					...(cdpMethod === undefined ? {} : { cdpMethod: diagnosticMethod(cdpMethod, this.#scrub) }),
 					...(typeof debuggee === "object" && debuggee !== null && "tabId" in debuggee && typeof debuggee.tabId === "number"
 						? { tabId: debuggee.tabId }
 						: {}),
