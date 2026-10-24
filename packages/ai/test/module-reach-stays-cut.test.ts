@@ -137,8 +137,12 @@ function runtimeImportsOf(relative: string): string[] {
  * the envelope from the wire leaf, whose only import is `@veyyon/utils/url`, already reached. The Console
  * device flow, `registry/oauth/opencode-console.ts`, stays behind the registry's lazy `await import`, so
  * the two add two modules and no subtree.
+ *
+ * 233 since 2026-10-24, measured: `@veyyon/utils/collapse-whitespace`, a zero-import leaf.
+ * `utils/http-inspector.ts`, already in this closure, flattens a quoted HTML title onto one line through
+ * it, so it adds one module and no subtree.
  */
-const AUTH_STORAGE_CEILING = 232;
+const AUTH_STORAGE_CEILING = 233;
 
 /**
  * Measured 2026-07-26 at 158, down from 204/212. This module is four functions over a table and its doc
