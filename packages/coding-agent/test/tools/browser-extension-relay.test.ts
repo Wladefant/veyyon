@@ -1203,6 +1203,8 @@ describe("secrets stay out of logs", () => {
 				ext.emit("chrome.tabs.onCreated", [{ id: 51, url }]);
 				await relay.waitForExtension(2000);
 				const cdp = await CdpTestClient.connect(relay.cdpUrl);
+				await cdp.send("Target.setDiscoverTargets", { discover: true });
+				await cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
 				await cdp.send("Target.createTarget", { url: "about:blank" });
 				await until(() => cdp.events.some(event => event.method === "Target.attachedToTarget"), "session attach");
 				const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
