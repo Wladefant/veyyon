@@ -2190,32 +2190,36 @@ function nextSessionFactory(
 
 /**
  * Queue the model fallback warning and any model-registry error for the TUI.
- * A non-interactive run with no model cannot proceed, so it prints the setup
- * instructions and exits.
+ * A non-interactive run with no model cannot proceed, so it prints the same
+ * notices and the setup instructions, and exits.
+ *
+ * A fallback message the registry error caused already includes that error, so
+ * the error is stated once, as part of it, and at error severity.
  */
 function reportModelAvailability(launch: RootLaunch, created: CreateAgentSessionResult): void {
 	const { modelFallbackMessage } = created;
+	const registryError = launch.modelRegistry.getError()?.message;
+	const fallbackStatesRegistryError =
+		registryError !== undefined && modelFallbackMessage?.includes(registryError) === true;
+	const notices: InteractiveModeNotify[] = [];
 	if (modelFallbackMessage) {
-		launch.notifs.push({ kind: "warn", message: modelFallbackMessage });
+		notices.push({ kind: fallbackStatesRegistryError ? "error" : "warn", message: modelFallbackMessage });
 	}
-
-	const modelRegistryError = launch.modelRegistry.getError();
-	if (modelRegistryError) {
-		launch.notifs.push({ kind: "error", message: modelRegistryError.message });
+	if (registryError !== undefined && !fallbackStatesRegistryError) {
+		notices.push({ kind: "error", message: registryError });
 	}
+	launch.notifs.push(...notices);
 
 	if (launch.isInteractive || created.session.model) return;
-	if (modelRegistryError) {
-		process.stderr.write(`${chalk.red(modelRegistryError.message)}\n\n`);
+	for (const notice of notices) process.stderr.write(`${chalk.red(notice.message)}\n\n`);
+	if (!modelFallbackMessage) process.stderr.write(`${chalk.red("No models available.")}\n\n`);
+	// The registry error ends with the fix for the file it names; key advice and an
+	// offer to create that file would point away from it.
+	if (registryError === undefined) {
+		process.stderr.write(`${chalk.yellow("Set an API key environment variable:")}\n`);
+		process.stderr.write("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.\n");
+		process.stderr.write(`${chalk.yellow(`\nOr create ${ModelsConfigFile.path()}`)}\n`);
 	}
-	if (modelFallbackMessage) {
-		process.stderr.write(`${chalk.red(modelFallbackMessage)}\n`);
-	} else {
-		process.stderr.write(`${chalk.red("No models available.")}\n`);
-	}
-	process.stderr.write(`${chalk.yellow("\nSet an API key environment variable:")}\n`);
-	process.stderr.write("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.\n");
-	process.stderr.write(`${chalk.yellow(`\nOr create ${ModelsConfigFile.path()}`)}\n`);
 	process.exit(EXIT_FAILURE);
 }
 

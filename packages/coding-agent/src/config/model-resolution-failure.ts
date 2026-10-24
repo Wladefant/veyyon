@@ -129,11 +129,12 @@ export function describeModelResolutionFailure(context: ModelResolutionContext):
 	const requested = describeRequested(context.requested);
 
 	if (context.registryError) {
+		// The registry error states the file and its remedy, so it follows the lead sentence whole
+		// instead of being spliced into it.
+		const idClause = context.requested.length > 0 ? "; the model id is not the problem" : "";
 		return {
 			kind: "registry-error",
-			message:
-				`The model registry could not be loaded, so ${requested} could not be resolved: ` +
-				`${context.registryError}. Fix the model configuration and retry; the model id is not the problem.`,
+			message: `The model configuration failed to load, so ${requested} could not be resolved${idClause}.\n${context.registryError}`,
 			nearMatches: [],
 		};
 	}

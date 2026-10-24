@@ -4793,6 +4793,15 @@ export class AgentSession {
 
 			// Validate model
 			if (!this.model) {
+				// A model configuration that failed to load is the cause to fix first: signing in
+				// cannot select a model the broken file declares. Its message names the file and
+				// the remedy.
+				const registryError = this.#config.modelRegistry.getError()?.message;
+				if (registryError !== undefined) {
+					throw new Error(
+						`No model selected, so there is nothing to send the prompt to. The model configuration failed to load:\n${registryError}`,
+					);
+				}
 				// Every command named here has to work in the channel the reader is in.
 				// `/login` carries no `textMode: true` in
 				// `slash-commands/builtin-declarations.ts`, so it is TUI-only, and
