@@ -1,0 +1,177 @@
+name: OVH CI
+
+on:
+  pull_request:
+  push:
+    branches: ['ovh-ci/**']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ovh-ci:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, veyyon]
+    timeout-minutes: 45
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Record checkout identity
+        run: |
+          echo "checked-out SHA: $(git rev-parse HEAD)"
+          echo "runner.name: ${RUNNER_NAME}"
+      - name: Detect changed paths
+        id: changed
+        shell: bash
+        env:
+          RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
+          RELATED_TESTS: ${{ runner.temp }}/ovh-related-tests
+        run: |
+          set -euo pipefail
+          base="$(git merge-base origin/main HEAD)"
+          echo "RELATED_TESTS=$RUNNER_TEMP/ovh-related-tests" >> "$GITHUB_ENV"
+          echo "RECEIPT=$RUNNER_TEMP/ovh-receipt.txt" >> "$GITHUB_ENV"
+          git diff --name-only -z "$base" HEAD | BASE="$base" node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>{const paths=s.split('\\0').filter(Boolean);const code=paths.some(p=>/\\.(?:[cm]?js|[cm]?ts|tsx|jsx|rs)$/.test(p));require('fs').appendFileSync(process.env.GITHUB_OUTPUT,'has_code='+code+'\\n');require('fs').writeFileSync(process.env.RECEIPT,'sha='+require('child_process').execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim()+'\\nrunner.name='+process.env.RUNNER_NAME+'\\nmerge-base='+process.env.BASE+'\\nchanged-paths='+paths.length+'\\nselected-tests=0\\npass=0\\nfail=0\\nran=0\\n');if(!code){require('fs').writeFileSync(process.env.RELATED_TESTS,'');console.log('no-related-tests: 0 selected, 0 passed, 0 failed')}})"
+      - name: Install dependencies and generate code
+        id: install
+        if: steps.changed.outputs.has_code == 'true'
+        uses: ./.github/actions/bun-install
+      - name: Resolve related test graph
+        id: selection
+        if: steps.changed.outputs.has_code == 'true' && steps.install.outcome == 'success'
+        shell: bash
+        env:
+          RELATED_TESTS: ${{ runner.temp }}/ovh-related-tests
+          RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import { execFileSync } from 'node:child_process';
+          import { ts } from 'ts-morph';
+          const root = process.cwd();
+          const changed = execFileSync('git', ['diff', '--name-only', '-z', 'origin/main...HEAD'], {encoding:'utf8'}).split('\0').filter(Boolean);
+          const code = changed.filter(p => /\.(?:[cm]?js|[cm]?ts|tsx|jsx|rs)$/.test(p));
+          const roots = code.filter(p => /\.(?:[cm]?js|[cm]?ts|tsx|jsx)$/.test(p));
+          const tracked = execFileSync('git', ['ls-files', '-z'], {encoding:'utf8'}).split('\0').filter(p => /\.(?:[cm]?js|[cm]?ts|tsx|jsx)$/.test(p) && fs.existsSync(p));
+          const tests = new Set(tracked.filter(p => /(?:\.test|\.spec)\.[cm]?[jt]sx?$/.test(p)));
+          const configs = new Map();
+          function optionsFor(file) {
+            let dir = path.dirname(path.resolve(root,file));
+            while (dir.startsWith(root)) {
+              const cfg = path.join(dir,'tsconfig.json');
+              if (fs.existsSync(cfg)) {
+                if (!configs.has(cfg)) { const r=ts.readConfigFile(cfg,ts.sys.readFile); configs.set(cfg,ts.parseJsonConfigFileContent(r.config,ts.sys,dir).options); }
+                return configs.get(cfg);
+              }
+              const up=path.dirname(dir); if(up===dir) break; dir=up;
+            }
+            return {};
+          }
+          const pkgs=new Map();
+          for(const p of execFileSync('git',['ls-files','-z'],{encoding:'utf8'}).split('\0').filter(p=>p.endsWith('package.json'))) { try { const j=JSON.parse(fs.readFileSync(p,'utf8')); if(j.name) pkgs.set(j.name,path.dirname(p)); } catch {} }
+          function resolve(spec, importer) {
+            const hit=ts.resolveModuleName(spec,path.resolve(root,importer),optionsFor(importer),ts.sys).resolvedModule?.resolvedFileName;
+            if(hit) return path.relative(root,hit).replaceAll(path.sep,'/');
+            for(const [name,dir] of pkgs) if(spec===name||spec.startsWith(name+'/')) { const sub=spec.slice(name.length).replace(/^\//,''); for(const base of [path.join(root,dir,sub),path.join(root,dir,'src',sub)]) for(const ext of ['', '.ts','.tsx','.js','.jsx','/index.ts','/index.js']) if(fs.existsSync(base+ext)&&fs.statSync(base+ext).isFile()) return path.relative(root,base+ext).replaceAll(path.sep,'/'); }
+            if(spec.startsWith('.')) { let base=path.resolve(root,path.dirname(importer),spec); if(/\.js$/.test(base)&&fs.existsSync(base.slice(0,-3)+'.ts')) base=base.slice(0,-3)+'.ts'; for(const ext of ['', '.ts','.tsx','.js','.jsx','/index.ts','/index.js']) if(fs.existsSync(base+ext)&&fs.statSync(base+ext).isFile()) return path.relative(root,base+ext).replaceAll(path.sep,'/'); }
+            return null;
+          }
+          const reverse=new Map(), forward=new Map();
+          for(const file of tracked) { const info=ts.preProcessFile(fs.readFileSync(file,'utf8'),true,true); for(const item of [...info.importedFiles,...info.referencedFiles,...info.typeReferenceDirectives]) { const dep=resolve(item.fileName,file); if(dep) { if(!reverse.has(dep)) reverse.set(dep,new Set()); reverse.get(dep).add(file); if(!forward.has(file)) forward.set(file,new Set()); forward.get(file).add(dep); } } }
+          const reached=new Set(roots), q=[...roots]; while(q.length) for(const f of reverse.get(q.shift())??[]) if(!reached.has(f)){reached.add(f);q.push(f);}
+          const selected=[...tests].filter(p=>reached.has(p)).sort();
+          fs.writeFileSync(process.env.RELATED_TESTS,selected.join('\n')+(selected.length?'\n':''));
+          const closure=new Set(selected), pending=[...selected]; while(pending.length) for(const dep of forward.get(pending.shift())??[]) if(!closure.has(dep)){closure.add(dep);pending.push(dep);}
+          const native=code.some(p=>p.startsWith('natives/'))||[...closure].some(p=>p.startsWith('natives/bridge/bindings/'));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,`ts_changed=${code.some(p=>/\.(?:[cm]?ts|tsx)$/.test(p))}\nnative=${native}\n`);
+          fs.writeFileSync(process.env.RECEIPT,fs.readFileSync(process.env.RECEIPT,'utf8').replace(/^selected-tests=0$/m,`selected-tests=${selected.length}`));
+          console.log(`Changed files:\n${changed.map(p=>'  '+p).join('\n')}`);
+          console.log(`Selected related tests (${selected.length}):\n${selected.join('\n')||'(none)'}`);
+          NODE
+      - name: Prepare bwrap runtime
+        id: bwrap
+        if: steps.install.outcome == 'success'
+        run: |
+          set -euo pipefail
+          mkdir -p .ovh-tools/bin /var/tmp
+          cp -L "$(bun -p 'process.execPath')" .ovh-tools/bin/bun
+          alias_root="$(mktemp -d /var/tmp/veyyon-ovh-XXXXXX)"
+          ln -s "$GITHUB_WORKSPACE" "$alias_root/repo"
+          echo "VEYYON_SANDBOX_REPO_ROOT=$alias_root/repo" >> "$GITHUB_ENV"
+          echo 'VEYYON_SANDBOX_REMOTE=0' >> "$GITHUB_ENV"
+          echo 'VEYYON_SANDBOX_RUNG=bwrap' >> "$GITHUB_ENV"
+          echo 'VEYYON_SANDBOX_TIMEOUT=1800' >> "$GITHUB_ENV"
+      - name: Build native addon when required
+        if: ${{ !cancelled() && steps.selection.outputs.native == 'true' }}
+        env:
+          CARGO_BUILD_JOBS: "2"
+        run: bun run ci:build:native
+      - name: Biome changed TypeScript and JavaScript
+        id: biome
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          mapfile -d '' files < <(git diff --diff-filter=ACMRT --name-only -z "$(git merge-base origin/main HEAD)" HEAD -- '*.ts' '*.tsx' '*.js' '*.jsx' '*.mts' '*.cts' '*.mjs' '*.cjs')
+          if ((${#files[@]})); then bunx biome check --no-errors-on-unmatched -- "${files[@]}"; else echo 'No changed TS/JS files for Biome.'; fi
+      - name: TypeScript check
+        id: types
+        if: ${{ !cancelled() && steps.selection.outputs.ts_changed == 'true' }}
+        continue-on-error: true
+        run: bun run check:ts
+      - name: Run selected tests serially
+        if: ${{ !cancelled() && steps.selection.outcome == 'success' && steps.bwrap.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          if [[ ! -s "$RUNNER_TEMP/ovh-related-tests" ]]; then
+            echo 'no-related-tests: 0 selected, 0 passed, 0 failed'
+            exit 0
+          fi
+          status=0; total_pass=0; total_fail=0; total_ran=0
+          while IFS= read -r file; do
+            [[ -n "$file" ]] || continue
+            log="$RUNNER_TEMP/ovh-test-$(printf '%s' "$file" | sha256sum | cut -c1-16).log"
+            sandbox_root="$(bash scripts/test-sandbox/run.sh --rung=bwrap /bin/pwd)"
+            runtime_bin="$sandbox_root/.ovh-tools/bin"
+            if timeout 1800 bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c 'export PATH="$1:$PATH"; shift; exec "$@"' _ "$runtime_bin" "$runtime_bin/bun" test --preload "$sandbox_root/packages/utils/test/helpers/real-data-tripwire.ts" --preload "$sandbox_root/packages/ai/test/helpers/provider-override-tripwire.ts" "$file" 2>&1 | tee "$log"; then rc=0; else rc=${PIPESTATUS[0]}; status=1; fi
+            summary="$(grep -E '^[[:space:]]*[0-9]+ (pass|fail)([,[:space:]]|$)|Ran [0-9]+' "$log" || true)"; printf '%s\n' "$summary"
+            pass="$(printf '%s\n' "$summary" | sed -nE 's/^[[:space:]]*([0-9]+) pass.*/\1/p' | awk '{s+=$1} END{print s+0}')"
+            fail="$(printf '%s\n' "$summary" | sed -nE 's/^[[:space:]]*([0-9]+) fail.*/\1/p' | awk '{s+=$1} END{print s+0}')"
+            ran="$(printf '%s\n' "$summary" | sed -nE 's/^[[:space:]]*Ran ([0-9]+).*/\1/p' | awk '{s+=$1} END{print s+0}')"
+            total_pass=$((total_pass+pass)); total_fail=$((total_fail+fail)); total_ran=$((total_ran+ran))
+            if ((rc!=0||ran==0||fail!=0)); then echo "::error::Test failed or ran zero cases: $file exit=$rc ran=$ran fail=$fail"; status=1; fi
+          done < "$RUNNER_TEMP/ovh-related-tests"
+          echo "OVH_TEST_TOTAL pass=$total_pass fail=$total_fail ran=$total_ran"
+          sed -i "s/^pass=.*/pass=$total_pass/;s/^fail=.*/fail=$total_fail/;s/^ran=.*/ran=$total_ran/" "$RECEIPT"
+          ((total_ran>0)) || { echo '::error::No selected tests ran'; status=1; }
+          exit "$status"
+      - name: Upload test logs and receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ovh-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ovh-test-*.log
+            ${{ runner.temp }}/ovh-receipt.txt
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Fail if static checks failed
+        if: always()
+        shell: bash
+        run: |
+          if [[ "${{ steps.biome.outcome }}" == failure || "${{ steps.types.outcome }}" == failure ]]; then
+            echo '::error::Biome or TypeScript check failed.'
+            exit 1
+          fi
