@@ -33,6 +33,7 @@
 - The OpenCode Console device flow loads when an OpenCode Go login or token refresh first runs instead of at startup, with no user-visible change.
 - A provider login that stores under another provider states its `loginMethod` ("API key", "device code"), which `getOAuthProviders()` returns beside its name.
 - The OpenCode Console login asks for its code in one line, `Enter code X if the page asks for it.`, and an OpenCode Go login that finds no Go subscription names `/login opencode-go-api-key` for the API key instead.
+- The HTML page title quoted by the non-event-stream error is flattened through the shared `collapseWhitespace` helper; no user-facing change.
 - OpenCode Go discovery sends no Authorization for a Console login, whose token the public listing rejects, and keys its model cache by the credential it sends, so a refreshed login token keeps its cached models.
 - A compaction's republish moves every cold entry onto the new session file at once, closes the replaced file off the event loop, and skips the second walk over history when nothing changed since the first, so on a 200,000-entry, 419 MiB session a compaction holds the event loop for at most 14-15 ms instead of 86-90 ms and finishes in 120-124 ms instead of 159-165 ms.
 - A staged session rewrite is flushed to disk before it replaces the file, so a power cut during a rewrite leaves the previous file or the new one, and on ext4 the rename no longer blocks the event loop for 38-92 ms.
