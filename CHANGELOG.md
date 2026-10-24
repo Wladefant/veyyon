@@ -32,6 +32,7 @@
 - An error from an OpenAI-compatible provider whose body carries `type`, `param` or `code` states the provider's sentence once, as `401 This API key has expired. … (type=authentication_error code=api_key_expired)`, instead of repeating it on a second line with the fields.
 - A captured error body that replaces a status-only `status code (no body)` message keeps the `retry-after-ms=` wait the response stated.
 - The Devin provider reads Cascade's stated reset window through the shared `extractRetryHint` instead of a parser of its own; no user-facing change.
+- An Anthropic Messages reply that ends before `message_start` (an empty `200` body, preamble events only, or events out of order) is retried once and then ends the provider's retry ladder, instead of running all ten provider retries under every session retry: a dead endpoint costs 22 requests over 53 s instead of up to 121 over minutes.
 - Kimi Code bundles K3.1 Pro, K3.1 Pro Highspeed and the K2.8 Preview name of `kimi-for-coding`, read from the `kimi-code-plan-cn` key models.dev now lists Kimi Code under.
 - Kimi Code models offer Low, High and Max with no Off, and discovery takes each model's effort ladder, default effort and off state from the account's `/models` listing.
 - A Kimi Code model that cannot stop thinking keeps thinking on and sends no forced tool choice on both wires, including the K3 rows whose ids carry no `kimi` prefix.
