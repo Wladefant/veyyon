@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `SelectListLayoutOptions.tabularDescription` keeps runs of spaces in a description, so a list whose descriptions are space-padded columns lines up under a heading ([#966](https://github.com/santhreal/veyyon/issues/966)).
+
 ## [1.5.9] - 2026-10-22
 
 ### Added

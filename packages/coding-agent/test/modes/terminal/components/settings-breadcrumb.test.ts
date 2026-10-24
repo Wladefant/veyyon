@@ -189,6 +189,30 @@ describe("settings breadcrumb chrome", () => {
 		comp.handleInput("\x1b");
 		expect(cancelCount).toBe(1);
 	});
+
+	it("names the sub-pane's keys while a sub-pane opened from a search result is showing", () => {
+		let cancelCount = 0;
+		const comp = createSelector(() => {
+			cancelCount++;
+		});
+		comp.handleInput("/");
+		for (const char of "in-flight") comp.handleInput(char);
+		let rendered = strip(comp.render(120).join("\n")).toLowerCase();
+		expect(rendered).toContain("esc clear search");
+
+		// Enter opens the matched setting's sub-pane; Esc there goes back, not clearing the search.
+		comp.handleInput("\n");
+		rendered = strip(comp.render(120).join("\n")).toLowerCase();
+		expect(rendered).toContain("select a provider");
+		expect(rendered).toContain("esc back");
+		expect(rendered).not.toContain("clear search");
+
+		comp.handleInput("\x1b");
+		rendered = strip(comp.render(120).join("\n")).toLowerCase();
+		expect(cancelCount).toBe(0);
+		expect(rendered).not.toContain("select a provider");
+		expect(rendered).toContain("esc clear search");
+	});
 });
 
 describe("settings column alignment", () => {

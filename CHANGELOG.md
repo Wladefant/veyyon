@@ -12,9 +12,11 @@
 - `codexRoutingHint` in `@veyyon/catalog/wire/codex` builds the `x-codex-routing-hint` value (`model=<model>;tier=<tier>`, or `model=<model>` without a tier) from a Codex Responses request body.
 - `@veyyon/catalog/wire/opencode-go` carries an OpenCode Go Console login's organization and inference endpoint in its API key and resolves the endpoint, route and organization header a request uses.
 - `ModelReasoningOptions.defaultLevel` and `ModelReasoningOptions.requiresEffort` state a model's default effort and that it has no off state; they become `thinking.defaultLevel` and `thinking.requiresEffort`.
+- `SelectListLayoutOptions.tabularDescription` keeps runs of spaces in a description, so a list whose descriptions are space-padded columns lines up under a heading ([#966](https://github.com/santhreal/veyyon/issues/966)).
 
 ### Changed
 
+- Settings → Agents → Roster lists the subagents before the helpers, in aligned State, Effort and Model columns under a one-line heading with `session` in an unset cell and the model cut first in a narrow card, shows an overridden row's layer in its Effort and Model columns and what it runs in its detail line, reads a catalog model id ending in `:max` as that model rather than max effort, drops its duplicate key hints, returns to the opening row on Esc, and the agent page labels its spawn row "Can spawn" ([#966](https://github.com/santhreal/veyyon/issues/966)).
 - `/login <url>` completes only an MCP server's OAuth flow; a provider login takes the pasted address in its login card.
 - The startup Codex websocket prewarm resolves its service tier from the session it opens the socket for; no user-facing change.
 - The account card's notice line flattens whitespace through the shared `collapseWhitespace`; no user-facing change.
@@ -35,6 +37,7 @@
 - Selecting, naming, logging out, forgetting and unblocking an account on the account card report their result on the card's notice line instead of only in the hidden transcript.
 - A login started by its alternate id, such as `/login opencode-go-api-key`, is labelled with the provider it stores under, asks for a name when that provider already holds an account, and reopens the account card on that provider instead of the first one listed.
 - The account card's provider filter labels `enter` with what it does, `enter add <provider> account` on a provider with no accounts, instead of always `enter switch to this account`.
+- A settings submenu opened from a search result shows "enter confirm · esc back" in the card footer instead of the search's "enter keep filter · esc clear search" ([#966](https://github.com/santhreal/veyyon/issues/966)).
 - Cursor's "You're out of usage" answer parks the account for the quota window instead of a 45 to 75 second capacity backoff, so a turn on a spent plan ends on the first failure instead of retrying it every minute.
 - The notice that an account is out of quota while load balancing leaves other accounts idle appears once per exhausted window instead of once for every request layer and retry that re-entered it.
 - Codex requests send `x-codex-routing-hint` stating the wire model and service tier of the body sent, on HTTP turns, the websocket upgrade and the startup prewarm, as codex-rs does.

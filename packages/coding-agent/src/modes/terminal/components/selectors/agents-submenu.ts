@@ -4,24 +4,27 @@
  */
 import { ThinkingLevel } from "@veyyon/agent-core";
 import type { Api, Model } from "@veyyon/ai";
-import { type Component, Container, type SelectItem, type SelectList, Spacer, Text } from "@veyyon/tui";
+import { type Component, Container, type SelectItem, type SelectList, Text, TruncatedText } from "@veyyon/tui";
 import { clamp, errorMessage, isRecord } from "@veyyon/utils";
 import { matchesKey } from "@veyyon/utils/keys";
+import { padding } from "@veyyon/utils/padding";
+import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
 import { namesInheritedModel, normalizeModelPatternList } from "../../../../config/model-pattern-list";
 import type { ModelRegistry } from "../../../../config/model-registry";
-import { extractExplicitThinkingSelector } from "../../../../config/model-resolver";
+import { extractExplicitThinkingSelector, parseModelString } from "../../../../config/model-resolver";
 import { settings } from "../../../../config/settings";
 import type { AgentLaneSettings, AgentSettings, HelperLaneSettings } from "../../../../config/settings-domains/agents";
 import type { SettingPath } from "../../../../config/settings-schema";
 import {
 	AGENT_ENABLE_STATE_LABEL,
+	type AgentModelSource,
 	agentEnableState,
-	agentModelSourceLabel,
 	agentScopeIsShared,
 	agentSettingsFor,
 	delegationBlockedNotice,
 	isAgentEnableDefaulted,
 	nextAgentEnableValue,
+	type ResolvedAgentModel,
 	resolveAgentMaxNestedSpawnDepth,
 	resolveAgentModel,
 	resolveAgentThinkingLevel,
@@ -55,18 +58,51 @@ import {
 	SelectSubmenu,
 } from "./settings-submenus";
 
-const AGENT_LIST_DESCRIPTION =
-	"Helpers are model calls features make on their own; subagents are agents the model may spawn. Unset rows run the session's model and effort.";
+/** What the Roster page is, for the status frame drawn while agents are being read. */
+const AGENT_LIST_DESCRIPTION = "The model and effort each subagent and each helper runs.";
 
 const AGENTS_PATH = "agent.agents" satisfies SettingPath;
 
 const HELPERS_PATH = "agent.helpers" satisfies SettingPath;
 
 /**
- * Rows the roster shows at once before it scrolls. Eight keeps the page's footer on screen in a
- * 40-row terminal with a three-line agent description under the list.
+ * Rows the roster shows at once before it scrolls, its two section headings included. Ten keeps
+ * the bundled subagents and the first helpers on screen in a 36-row terminal beside the page's
+ * description, the column heading, the focused row's one-line description and the authoring hint.
  */
-const ROSTER_MAX_ROWS = 8;
+const ROSTER_MAX_ROWS = 10;
+
+/**
+ * Width of the name column: the longest helper label and the two-cell gap after it. The column
+ * heading is laid out from the same number.
+ */
+const ROSTER_NAME_COLUMN = 17;
+
+/** Width of a subagent row's state cell. Helper rows leave it blank so their columns line up. */
+const ROSTER_STATE_COLUMN = 10;
+
+/**
+ * Width of the effort cell: the longest level, `minimal`, or the `session` an unset cell reads,
+ * and the two-cell gap after it. The model cell after it takes the rest of the row.
+ */
+const ROSTER_EFFORT_COLUMN = 9;
+
+/** Columns the select list draws before a row's name: the cursor and the gap after it. */
+const ROSTER_ROW_PREFIX = 2;
+
+/**
+ * Narrowest pane that draws the column heading: the row's prefix and name column, its State and
+ * Effort cells, and the select list's scrollbar and two-cell margin. Narrower, the list cuts the
+ * cells the heading names, so the heading is left out rather than wrapped onto a second line.
+ */
+const ROSTER_HEADING_MIN_WIDTH =
+	ROSTER_ROW_PREFIX + ROSTER_NAME_COLUMN + ROSTER_STATE_COLUMN + ROSTER_EFFORT_COLUMN + 3;
+
+/** What a cell holding no value of its own reads: the row follows the session. */
+const SESSION_CELL_TEXT = "session";
+
+/** Width of the label column on an agent's or a helper's page: "Reset to defaults" and its gap. */
+const PAGE_LABEL_COLUMN = 20;
 
 const AGENT_ROW_OFFERED = "\u0000agent-offered";
 
@@ -175,10 +211,6 @@ export function agentEffortOptions(
  */
 function laneSpawnEnabled(lane: AgentLaneSettings, depth: number, resolvedMax: number): boolean {
 	return lane.enabled ?? canSpawnAtDepth(resolvedMax, depth);
-}
-
-function lanePath(name: string, depth: number): string {
-	return `agent.agents.${name}${".agents".repeat(depth)}`;
 }
 
 /**
@@ -323,28 +355,91 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 		this.onChange("agent.agents");
 	}
 
+	/**
+	 * What one lane runs, for its page header: the model, the effort, and in words where a value
+	 * came from when it was not chosen on this page.
+	 */
 	#runsSummary(agent: AgentDefinition, depth = 0): string {
-		const model = modelSummary(agent, depth);
 		const resolved = resolveAgentModel({
 			settings,
 			agentName: agent.name,
 			agentModel: agent.model,
 			taskDepth: depth + 1,
 		});
-		const head = resolved.patterns[0];
-		if (head && extractExplicitThinkingSelector(head) !== undefined) return model;
-		const effort = resolveAgentThinkingLevel({
+		if (resolved.unresolved) return theme.fg("error", `${resolved.unresolved.value} matches no model`);
+		const level = resolveAgentThinkingLevel({
 			settings,
 			agentName: agent.name,
 			agentThinkingLevel: agent.thinkingLevel,
 			taskDepth: depth + 1,
 		});
-		if (effort !== ThinkingLevel.Inherit) return `${model} ${theme.fg("dim", `· ${effort} effort`)}`;
-		if (resolved.inherited) return theme.fg("dim", "the session's model and effort");
-		return `${model} ${theme.fg("dim", "· session effort")}`;
+		const head = resolved.inherited ? undefined : resolved.patterns[0];
+		const model = head === undefined ? SESSION_CELL : modelCell(resolved.patterns);
+		const origin = runsOrigin(resolved, depth);
+		return `${runsText(model, this.#effortCell(head, level))}${origin ? theme.fg("dim", ` (${origin})`) : ""}`;
 	}
 
-	#showAgentList(): void {
+	/**
+	 * One subagent's row: whether it may be spawned, then the effort and model a spawn runs. A row
+	 * an override layer supplies shows `overridden` across the Effort and Model columns instead,
+	 * since this page cannot change it, and its detail line shows what it runs.
+	 */
+	#agentRow(agent: AgentDefinition, overridden?: string): string {
+		const state = agentEnableState(agent, this.#row(agent.name).enabled);
+		const stateText = theme.fg(state === "on" ? "success" : "dim", AGENT_ENABLE_STATE_LABEL[state]);
+		if (overridden) return `${padEnd(stateText, ROSTER_STATE_COLUMN)}${theme.fg("dim", overridden)}`;
+		const resolved = resolveAgentModel({ settings, agentName: agent.name, agentModel: agent.model, taskDepth: 1 });
+		const level = resolveAgentThinkingLevel({
+			settings,
+			agentName: agent.name,
+			agentThinkingLevel: agent.thinkingLevel,
+			taskDepth: 1,
+		});
+		if (resolved.unresolved) {
+			return rosterRow(
+				stateText,
+				{ text: `${resolved.unresolved.value} matches no model`, tone: "error" },
+				this.#effortCell(undefined, level),
+			);
+		}
+		if (resolved.inherited) return rosterRow(stateText, SESSION_CELL, this.#effortCell(undefined, level));
+		return rosterRow(
+			stateText,
+			modelCell(resolved.patterns, ROSTER_SOURCE_NOTE[resolved.source]),
+			this.#effortCell(resolved.patterns[0], level),
+		);
+	}
+
+	/** One helper's row, on the subagent row's columns with the state cell left blank. */
+	#helperRow(id: HelperId, overridden?: string): string {
+		if (overridden) return `${padding(ROSTER_STATE_COLUMN)}${theme.fg("dim", overridden)}`;
+		const patterns = helperModelPatterns(settings, id);
+		return rosterRow("", modelCell(patterns), this.#effortCell(patterns[0], helperThinkingLevel(settings, id)));
+	}
+
+	/**
+	 * The effort a row runs: a `:level` on its model head wins, as it does at dispatch, then the
+	 * configured level. Inherit and nothing both follow the session. A head that is a catalog id
+	 * ending in `:max` names that model, as the resolver reads it, and carries no effort.
+	 */
+	#effortCell(head: string | undefined, level: string | undefined): RosterCell {
+		const models = this.models;
+		const explicit = extractExplicitThinkingSelector(head, {
+			isLiteralModelId: (provider, id) =>
+				models?.some(model => model.provider === provider && model.id === id) === true,
+		});
+		const effective = explicit ?? level;
+		if (effective === undefined || effective === ThinkingLevel.Inherit) return SESSION_CELL;
+		return { text: effective, tone: "set" };
+	}
+
+	/**
+	 * The roster: subagents, then helpers, one aligned row each.
+	 *
+	 * `focus` is the row to put the cursor on, so leaving an agent's or a helper's page lands on
+	 * the row that opened it instead of the top of the list.
+	 */
+	#showAgentList(focus?: string): void {
 		this.clear();
 		this.#escapeTo = undefined;
 
@@ -381,45 +476,49 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 			headerExtra = new Text(theme.fg("warning", `  ${blocked}`), 0, 0);
 		}
 
-		// Helpers, then one row per discovered agent. There is no header pair
-		// answering for the whole list: a control that reached every agent at once
-		// is what made "I changed the model" and "my agents changed model" one
-		// event.
-		const items: SelectItem[] = HELPER_IDS.map(id => {
-			const value = `${HELPER_ROW_PREFIX}${id}`;
-			const shown = this.#helperSummary(id);
-			const source = recordEntrySource(HELPERS_PATH, id);
-			if (isOverrideSource(source)) {
-				return {
-					value,
-					label: HELPERS[id].label,
-					description: `${shown} · ${overriddenEntryLabel(source)}`,
-					group: HELPERS_GROUP,
-					disabled: true,
-				};
-			}
-			return { value, label: HELPERS[id].label, description: shown, group: HELPERS_GROUP };
-		});
+		// Subagents first, since they are what this page is opened for, then helpers. There is
+		// no row answering for the whole list: a control that reached every agent at once is
+		// what made "I changed the model" and "my agents changed model" one event.
+		const items: SelectItem[] = [];
 		for (const agent of this.#agents) {
-			const shown = `${AGENT_ENABLE_STATE_LABEL[agentEnableState(agent, this.#row(agent.name).enabled)]} · ${modelSummary(agent)}`;
 			const source = recordEntrySource(AGENTS_PATH, agent.name);
 			if (isOverrideSource(source)) {
 				items.push({
 					value: agent.name,
 					label: agent.name,
-					description: `${shown} · ${overriddenEntryLabel(source)}`,
+					description: this.#agentRow(agent, overriddenEntryLabel(source)),
 					group: SUBAGENTS_GROUP,
 					disabled: true,
 				});
 				continue;
 			}
-			items.push({ value: agent.name, label: agent.name, description: shown, group: SUBAGENTS_GROUP });
+			items.push({
+				value: agent.name,
+				label: agent.name,
+				description: this.#agentRow(agent),
+				group: SUBAGENTS_GROUP,
+			});
 		}
 		if (this.#agents.length === 0) {
 			items.push({ value: AGENT_ROW_NONE, label: "No agent types found", group: SUBAGENTS_GROUP, disabled: true });
 		}
+		for (const id of HELPER_IDS) {
+			const value = `${HELPER_ROW_PREFIX}${id}`;
+			const source = recordEntrySource(HELPERS_PATH, id);
+			if (isOverrideSource(source)) {
+				items.push({
+					value,
+					label: HELPERS[id].label,
+					description: this.#helperRow(id, overriddenEntryLabel(source)),
+					group: HELPERS_GROUP,
+					disabled: true,
+				});
+				continue;
+			}
+			items.push({ value, label: HELPERS[id].label, description: this.#helperRow(id), group: HELPERS_GROUP });
+		}
 
-		const selectList = createFocusedSelectList(items, clamp(items.length, 1, ROSTER_MAX_ROWS), undefined, {
+		const selectList = createFocusedSelectList(items, clamp(items.length, 1, ROSTER_MAX_ROWS), focus, {
 			onSelect: item => {
 				const helper = helperFromRowValue(item.value);
 				if (helper) this.#showHelperEditor(helper);
@@ -427,26 +526,32 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 				this.requestRender?.();
 			},
 			onCancel: this.onCancel,
+			minPrimaryColumnWidth: ROSTER_NAME_COLUMN,
+			maxPrimaryColumnWidth: ROSTER_NAME_COLUMN,
+			// The settings card's footer names Enter and Esc, and typing still filters: the status
+			// row appears with the query as soon as there is one.
+			statusLegend: false,
+			searchPrompt: false,
+			tabularDescription: true,
 		});
 		this.#selectList = selectList;
 
-		const detail = new Text(this.#detailText(items[0]?.value), 0, 0);
+		const focused = items.find(item => item.value === focus) ?? items[0];
+		const detail = new Container();
+		this.#fillDetail(detail, focused?.value);
 		selectList.onSelectionChange = item => {
-			if (detail.setText(this.#detailText(item.value))) this.requestRender?.();
+			this.#fillDetail(detail, item.value);
+			this.requestRender?.();
 		};
 
-		const footerExtra = new Container();
-		footerExtra.addChild(detail);
-		footerExtra.addChild(new Spacer(1));
-		footerExtra.addChild(new Text(theme.fg("muted", `  ${CUSTOM_AGENT_HINT}`), 0, 0));
-
+		const session = this.sessionModel ? ` (${this.sessionModel.provider}/${this.sessionModel.id})` : "";
 		this.renderSubmenuFrame({
 			title: "Roster",
-			description: AGENT_LIST_DESCRIPTION,
+			description: `A cell that reads ${SESSION_CELL_TEXT} follows this session's model and effort${session}.`,
 			headerExtra,
+			bodyLead: new RosterHeading(),
 			body: selectList,
-			footerExtra,
-			footerHint: "  Enter to configure · Esc to go back",
+			footerExtra: detail,
 		});
 	}
 
@@ -454,19 +559,37 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 		return this.#agents.find(candidate => candidate.name === name);
 	}
 
-	#detailText(value: string | undefined): string {
-		if (value === undefined) return "";
+	/**
+	 * The focused row's detail under the list: its description on one line, which the row's own
+	 * page shows whole, so the list keeps its rows at any description length. A row an override
+	 * layer supplies cannot be opened, so its detail adds what it runs. Any other subagent row adds
+	 * where a new agent type is written, since the roster is where someone looking for an agent
+	 * that does not exist yet arrives.
+	 */
+	#fillDetail(detail: Container, value: string | undefined): void {
+		detail.clear();
+		if (value === undefined) return;
 		const helper = helperFromRowValue(value);
-		const description = helper ? HELPERS[helper].description : this.#agent(value)?.description?.trim();
-		if (!description) return "";
-		return theme.fg("muted", `  ${description}`);
+		const agent = helper ? undefined : this.#agent(value);
+		const description = helper ? HELPERS[helper].description : agent?.description?.trim();
+		if (description) detail.addChild(new TruncatedText(theme.fg("muted", `  ${description}`)));
+		const overridden = helper
+			? isOverrideSource(recordEntrySource(HELPERS_PATH, helper))
+			: isOverrideSource(recordEntrySource(AGENTS_PATH, value));
+		if (overridden) {
+			const runs = helper ? this.#helperSummary(helper) : agent ? this.#runsSummary(agent) : undefined;
+			if (runs) detail.addChild(new TruncatedText(pageHeaderRow("Runs", runs)));
+			return;
+		}
+		if (!helper) detail.addChild(new Text(theme.fg("dim", `  ${CUSTOM_AGENT_HINT}`), 0, 0));
 	}
 
 	/**
 	 * One lane's page. `depth` 0 is the agent itself; each step down is one
-	 * `Agents` row followed, and the page shape never changes.
+	 * `Can spawn` row followed, and the page shape never changes. `focus` is the
+	 * row to put the cursor on when the page is drawn again after a change.
 	 */
-	#showAgentEditor(name: string, depth = 0): void {
+	#showAgentEditor(name: string, depth = 0, focus?: string): void {
 		const agent = this.#agent(name);
 		if (!agent) {
 			this.#showAgentList();
@@ -496,10 +619,11 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 		// What this lane runs, resolved, above the rows that change it — and the
 		// rows below change THIS lane, so the reader is never sent elsewhere to
 		// edit the value they are looking at.
-		headerExtra.addChild(new Text(`  ${theme.fg("muted", "Runs")} ${this.#runsSummary(agent, depth)}`, 0, 0));
+		headerExtra.addChild(new Text(pageHeaderRow("Runs", this.#runsSummary(agent, depth)), 0, 0));
 		if (shared) {
-			headerExtra.addChild(new Spacer(1));
-			headerExtra.addChild(new Text(theme.fg("dim", "  Set for every agent · Agents → Shared Model"), 0, 0));
+			headerExtra.addChild(
+				new Text(theme.fg("dim", "  Same Model for All Agents is on: Agents → Shared Model sets it."), 0, 0),
+			);
 		}
 
 		const items: SelectItem[] = [
@@ -523,9 +647,9 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 					]),
 			{
 				value: AGENT_ROW_NESTED,
-				label: "Agents",
+				label: "Can spawn",
 				description: spawnAllowed
-					? laneModelSummary(child, depth + 1)
+					? `on · ${laneModelSummary(child, depth + 1)}`
 					: theme.fg("dim", "off · may not spawn agents"),
 			},
 		];
@@ -533,11 +657,11 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 			items.push({
 				value: AGENT_ROW_RESET,
 				label: "Reset to defaults",
-				description: theme.fg("dim", `clears ${lanePath(name, depth)}`),
+				description: theme.fg("dim", "clears every value on this page"),
 			});
 		}
 
-		const selectList = createFocusedSelectList(items, items.length, undefined, {
+		const selectList = createFocusedSelectList(items, items.length, focus, {
 			onSelect: item => {
 				switch (item.value) {
 					case AGENT_ROW_OFFERED:
@@ -548,7 +672,7 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 								? { ...lane, enabled: nextAgentEnableValue(agent, lane.enabled) }
 								: { ...lane, enabled: !laneSpawnEnabled(lane, depth, resolvedMax) },
 						);
-						this.#showAgentEditor(name, depth);
+						this.#showAgentEditor(name, depth, AGENT_ROW_OFFERED);
 						break;
 					case AGENT_ROW_MODEL:
 						this.#showLaneModelPicker(name, depth);
@@ -567,10 +691,14 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 				this.requestRender?.();
 			},
 			onCancel: () => {
-				if (depth === 0) this.#showAgentList();
-				else this.#showAgentEditor(name, depth - 1);
+				if (depth === 0) this.#showAgentList(name);
+				else this.#showAgentEditor(name, depth - 1, AGENT_ROW_NESTED);
 				this.requestRender?.();
 			},
+			minPrimaryColumnWidth: PAGE_LABEL_COLUMN,
+			maxPrimaryColumnWidth: PAGE_LABEL_COLUMN,
+			statusLegend: false,
+			searchPrompt: false,
 		});
 		this.#selectList = selectList;
 
@@ -582,7 +710,6 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 					: `What ${depth === 1 ? name : "the agents at this level"} may spawn. Unset follows the level above.`,
 			headerExtra,
 			body: selectList,
-			footerHint: "  Enter to change · Esc to go back",
 		});
 	}
 
@@ -595,7 +722,7 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 	#showLaneModelPicker(name: string, depth: number): void {
 		this.clear();
 		this.#selectList = undefined;
-		const back = () => this.#showAgentEditor(name, depth);
+		const back = () => this.#showAgentEditor(name, depth, AGENT_ROW_MODEL);
 		this.#escapeTo = back;
 		if (!this.picker) {
 			this.#renderCatalogUnavailable(
@@ -632,7 +759,7 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 	#showLaneEffortPicker(name: string, depth: number): void {
 		this.clear();
 		this.#selectList = undefined;
-		const back = () => this.#showAgentEditor(name, depth);
+		const back = () => this.#showAgentEditor(name, depth, AGENT_ROW_EFFORT);
 		this.#escapeTo = back;
 		const lane = this.#lane(name, depth);
 		const { options, notice } = agentEffortOptions(this.#laneEffortScope(name, depth), this.models);
@@ -687,16 +814,10 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 		this.renderSubmenuFrame({ title, body: container, footerHint: "  Esc to go back" });
 	}
 
-	/** What a helper runs, as its row and its page header show it. */
+	/** What a helper runs, for its page header: the model, then the effort. */
 	#helperSummary(id: HelperId): string {
 		const patterns = helperModelPatterns(settings, id);
-		const level = helperThinkingLevel(settings, id);
-		const head = patterns[0];
-		if (head === undefined && level === undefined) return theme.fg("dim", "the session's model and effort");
-		const model = head === undefined ? "session model" : formatModelSummaryWithFallbacks(head, patterns.length - 1);
-		if (head !== undefined && extractExplicitThinkingSelector(head) !== undefined) return model;
-		if (level !== undefined) return `${model} ${theme.fg("dim", `· ${level} effort`)}`;
-		return `${model} ${theme.fg("dim", "· session effort")}`;
+		return runsText(modelCell(patterns), this.#effortCell(patterns[0], helperThinkingLevel(settings, id)));
 	}
 
 	/**
@@ -721,8 +842,11 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 		this.onChange(HELPERS_PATH);
 	}
 
-	/** One helper's page: its Model and its Effort, each unset to follow the session. */
-	#showHelperEditor(id: HelperId): void {
+	/**
+	 * One helper's page: its Model and its Effort, each unset to follow the session. `focus` is
+	 * the row to put the cursor on when the page is drawn again after a change.
+	 */
+	#showHelperEditor(id: HelperId, focus?: string): void {
 		const info = HELPERS[id];
 		const row = helperSettingsFor(settings, id);
 		const patterns = helperModelPatterns(settings, id);
@@ -749,11 +873,11 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 			items.push({
 				value: AGENT_ROW_RESET,
 				label: "Reset to defaults",
-				description: theme.fg("dim", `clears ${HELPERS_PATH}.${id}`),
+				description: theme.fg("dim", "clears this helper's model and effort"),
 			});
 		}
 
-		const selectList = createFocusedSelectList(items, items.length, undefined, {
+		const selectList = createFocusedSelectList(items, items.length, focus, {
 			onSelect: item => {
 				switch (item.value) {
 					case AGENT_ROW_MODEL:
@@ -770,25 +894,28 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 				this.requestRender?.();
 			},
 			onCancel: () => {
-				this.#showAgentList();
+				this.#showAgentList(`${HELPER_ROW_PREFIX}${id}`);
 				this.requestRender?.();
 			},
+			minPrimaryColumnWidth: PAGE_LABEL_COLUMN,
+			maxPrimaryColumnWidth: PAGE_LABEL_COLUMN,
+			statusLegend: false,
+			searchPrompt: false,
 		});
 		this.#selectList = selectList;
 
 		this.renderSubmenuFrame({
 			title: `Helper: ${info.label}`,
 			description: info.description,
-			headerExtra: new Text(`  ${theme.fg("muted", "Runs")} ${this.#helperSummary(id)}`, 0, 0),
+			headerExtra: new Text(pageHeaderRow("Runs", this.#helperSummary(id)), 0, 0),
 			body: selectList,
-			footerHint: "  Enter to change · Esc to go back",
 		});
 	}
 
 	#showHelperModelPicker(id: HelperId): void {
 		this.clear();
 		this.#selectList = undefined;
-		const back = () => this.#showHelperEditor(id);
+		const back = () => this.#showHelperEditor(id, AGENT_ROW_MODEL);
 		this.#escapeTo = back;
 		const title = `Model · ${HELPERS[id].label}`;
 		if (!this.picker) {
@@ -816,7 +943,7 @@ export class AgentsSubmenu extends MouseRoutedSubmenu {
 	#showHelperEffortPicker(id: HelperId): void {
 		this.clear();
 		this.#selectList = undefined;
-		const back = () => this.#showHelperEditor(id);
+		const back = () => this.#showHelperEditor(id, AGENT_ROW_EFFORT);
 		this.#escapeTo = back;
 		const label = HELPERS[id].label;
 		const scope = effortScopeForPattern(this.models, helperModelPatterns(settings, id)[0], this.sessionModel);
@@ -876,25 +1003,113 @@ function helperFromRowValue(value: string): HelperId | undefined {
 	return isHelperId(id) ? id : undefined;
 }
 
-function modelSummary(agent: AgentDefinition, depth = 0): string {
-	// `taskDepth` is the depth a SPAWN runs at, and a lane page describes exactly
-	// one: the agent's own page is a direct child (depth 1), each level down is
-	// one deeper. Passing it is what makes the badge name the lane that decided
-	// rather than the table.
-	const resolved = resolveAgentModel({
-		settings,
-		agentName: agent.name,
-		agentModel: agent.model,
-		taskDepth: depth + 1,
-	});
-	if (resolved.unresolved) return theme.fg("error", `${resolved.unresolved.value} matches no model`);
-	// Short, because a roster row also has to fit the agent's state and a read-only source marker.
-	if (resolved.inherited) return theme.fg("dim", "session model");
-	const pattern = resolved.patterns[0];
-	if (!pattern) return theme.fg("dim", "no model resolved");
-	const fallbacks = resolved.patterns.length - 1;
-	const summary = formatModelSummaryWithFallbacks(pattern, fallbacks, true);
-	return `${summary} ${theme.fg("dim", `· ${agentModelSourceLabel(resolved.source, agent.name, resolved.depth)}`)}`;
+/** One roster cell: its text and how it reads — a value of its own, a value it follows, or a fault. */
+interface RosterCell {
+	text: string;
+	tone: "set" | "unset" | "error";
+}
+
+const SESSION_CELL: RosterCell = { text: SESSION_CELL_TEXT, tone: "unset" };
+
+const ROSTER_CELL_COLOR = { set: "text", unset: "dim", error: "error" } as const;
+
+/**
+ * Where a roster model came from, when it is not the row's own value: a note on the cell, so a
+ * model the row never set does not read as one it did. A lane is the row's own value, and the
+ * default is the session, which the cell already reads as.
+ */
+const ROSTER_SOURCE_NOTE: Record<AgentModelSource, string | undefined> = {
+	shared: "all agents",
+	frontmatter: "definition",
+	lane: undefined,
+	default: undefined,
+};
+
+/** `text` padded with spaces to `width` visible columns. ANSI styling counts for nothing. */
+function padEnd(text: string, width: number): string {
+	return text + padding(Math.max(0, width - visibleWidth(text)));
+}
+
+/** A cell painted for its tone; with a `width`, cut with an ellipsis or padded to fill it. */
+function paintCell(cell: RosterCell, width?: number): string {
+	const text = width === undefined ? cell.text : padEnd(truncateToWidth(cell.text, width - 1), width);
+	return theme.fg(ROSTER_CELL_COLOR[cell.tone], text);
+}
+
+/**
+ * One roster row's description: state, effort and model, each in its column. The model is last
+ * so it takes whatever width the card has left, and the list cuts it with an ellipsis where the
+ * card is narrow; the fixed columns before it stay whole.
+ */
+function rosterRow(state: string, model: RosterCell, effort: RosterCell): string {
+	return `${padEnd(state, ROSTER_STATE_COLUMN)}${paintCell(effort, ROSTER_EFFORT_COLUMN)}${paintCell(model)}`;
+}
+
+/**
+ * The column heading over the roster, laid out from the widths the rows are drawn with: one line,
+ * cut at the pane's edge, and absent below {@link ROSTER_HEADING_MIN_WIDTH}.
+ */
+class RosterHeading extends TruncatedText {
+	constructor() {
+		super(
+			theme.fg(
+				"dim",
+				`${padding(ROSTER_ROW_PREFIX + ROSTER_NAME_COLUMN)}${padEnd("State", ROSTER_STATE_COLUMN)}${padEnd("Effort", ROSTER_EFFORT_COLUMN)}Model`,
+			),
+		);
+	}
+
+	override render(width: number): readonly string[] {
+		return width < ROSTER_HEADING_MIN_WIDTH ? [] : super.render(width);
+	}
+}
+
+/** A line above an agent's or a helper's rows, its value in the rows' value column. */
+function pageHeaderRow(label: string, value: string): string {
+	return `${padding(ROSTER_ROW_PREFIX)}${theme.fg("muted", padEnd(label, PAGE_LABEL_COLUMN))}${value}`;
+}
+
+/**
+ * What a page's "Runs" line reads: the model, then the effort, each in words when it follows the
+ * session, and one phrase when both do.
+ */
+function runsText(model: RosterCell, effort: RosterCell): string {
+	if (model.tone === "unset" && effort.tone === "unset") return theme.fg("dim", "the session's model and effort");
+	const modelText = model.tone === "unset" ? theme.fg("dim", "the session's model") : paintCell(model);
+	const effortText = effort.tone === "unset" ? theme.fg("dim", "the session's effort") : `${effort.text} effort`;
+	return `${modelText} · ${effortText}`;
+}
+
+/** A model selector without its `:level`, which the effort cell shows instead. */
+function bareModel(raw: string): string {
+	const trimmed = raw.trim();
+	const parsed = parseModelString(trimmed);
+	return parsed ? `${parsed.provider}/${parsed.id}` : trimmed;
+}
+
+/** A model chain's cell: its head, how many fallbacks follow, and an optional source note. */
+function modelCell(patterns: ReadonlyArray<string>, note?: string): RosterCell {
+	const head = patterns[0];
+	if (head === undefined) return SESSION_CELL;
+	const fallbacks = patterns.length > 1 ? ` +${patterns.length - 1}` : "";
+	return { text: `${bareModel(head)}${fallbacks}${note ? ` · ${note}` : ""}`, tone: "set" };
+}
+
+/**
+ * Where a lane page's model came from, in words, when it was not chosen on that page. `depth`
+ * is the page's lane level; a lane that decided at another level is the level above.
+ */
+function runsOrigin(resolved: ResolvedAgentModel, depth: number): string | undefined {
+	switch (resolved.source) {
+		case "shared":
+			return "Same Model for All Agents";
+		case "frontmatter":
+			return "from the agent definition";
+		case "lane":
+			return (resolved.depth ?? 0) === depth ? undefined : "from the level above";
+		case "default":
+			return undefined;
+	}
 }
 
 /**

@@ -10,6 +10,7 @@
 
 ### Changed
 
+- Settings → Agents → Roster lists the subagents before the helpers, in aligned State, Effort and Model columns under a one-line heading with `session` in an unset cell and the model cut first in a narrow card, shows an overridden row's layer in its Effort and Model columns and what it runs in its detail line, reads a catalog model id ending in `:max` as that model rather than max effort, drops its duplicate key hints, returns to the opening row on Esc, and the agent page labels its spawn row "Can spawn" ([#966](https://github.com/santhreal/veyyon/issues/966)).
 - `/login <url>` completes only an MCP server's OAuth flow; a provider login takes the pasted address in its login card.
 - The startup Codex websocket prewarm resolves its service tier from the session it opens the socket for; no user-facing change.
 - The account card's notice line flattens whitespace through the shared `collapseWhitespace`; no user-facing change.
@@ -24,6 +25,7 @@
 - Selecting, naming, logging out, forgetting and unblocking an account on the account card report their result on the card's notice line instead of only in the hidden transcript.
 - A login started by its alternate id, such as `/login opencode-go-api-key`, is labelled with the provider it stores under, asks for a name when that provider already holds an account, and reopens the account card on that provider instead of the first one listed.
 - The account card's provider filter labels `enter` with what it does, `enter add <provider> account` on a provider with no accounts, instead of always `enter switch to this account`.
+- A settings submenu opened from a search result shows "enter confirm · esc back" in the card footer instead of the search's "enter keep filter · esc clear search" ([#966](https://github.com/santhreal/veyyon/issues/966)).
 
 ## [1.5.9] - 2026-10-22
 
