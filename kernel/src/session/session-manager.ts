@@ -334,11 +334,10 @@ function nextSessionSequence(entries: readonly SessionEntry[]): number {
  * tree by `(id, parentId)`, and the mutable leaf pointer selects which path is
  * active for future appends and for LLM context construction.
  *
- * Durability is software-crash safe but not power-loss safe: appends are handed
- * to the OS synchronously in-body (so an entry survives an OOM/SIGKILL the
- * instant `appendMessage` returns) but never `fsync`'d. Full-file rewrites go
- * through the storage layer's atomic temp-write+rename so a crash mid-rewrite
- * cannot truncate the prior good file.
+ * Durability: appends are handed to the OS synchronously in-body (so an entry survives an
+ * OOM/SIGKILL the instant `appendMessage` returns) but never `fsync`'d. Full-file rewrites go
+ * through the storage layer's atomic temp-write+flush+rename, so a crash or a power cut mid-rewrite
+ * leaves the prior file or the new one, never a truncated one.
  */
 export class SessionManager {
 	#absoluteCwd = "";
@@ -472,6 +471,16 @@ export class SessionManager {
 	 * an update that lands while a rewrite runs is written by the next one.
 	 */
 	#firstUpdatedEntry = Number.POSITIVE_INFINITY;
+	/**
+	 * What the last {@link #coolUnreachablePayloads} walk that visited every entry read: the file
+	 * object, the active path with its length, and how many cold entries had been read back. Every
+	 * entry the index takes either extends its cached path, changing the length, or drops it, so the
+	 * next path is another array, and a load replaces the cold store and the path together. A walk
+	 * over the same four finds nothing new to move, and is skipped: a compaction's tail republish
+	 * walks and the compaction then asks for a walk, and each took 21-43ms of the event loop on a
+	 * 198,874-entry session.
+	 */
+	#cooledWalk: { identity: string; path: readonly SessionEntry[]; pathLength: number; warmed: number } | undefined;
 
 	#artifactManager: ArtifactManager | null = null;
 	#artifactManagerSessionFile: string | null = null;
@@ -1303,7 +1312,7 @@ export class SessionManager {
 		const to = this.#publishedFileState?.identity;
 		if (from === undefined || to === undefined || sessionFile === undefined) return;
 		if (this.#cold.pinnedIdentity !== from) return;
-		this.#cold.rebase(this.#entries, to, () => this.#openPinnedReader(sessionFile), shift);
+		this.#cold.rebase(to, () => this.#openPinnedReader(sessionFile), shift);
 	}
 
 	#openPinnedReader(sessionFile: string): PinnedSessionReader | undefined {
@@ -1352,10 +1361,21 @@ export class SessionManager {
 		) {
 			return;
 		}
+		const { base, baseLength, appended, entryOffsets } = lines;
+		const identity = state.identity;
 		const path = this.#activePath();
+		const walked = this.#cooledWalk;
+		if (
+			walked !== undefined &&
+			walked.identity === identity &&
+			walked.path === path &&
+			walked.pathLength === path.length &&
+			walked.warmed === this.#cold.warmed
+		) {
+			return;
+		}
 		const applied = contextCompaction(path);
 		const liveFrom = compactedHistoryEnd(path, applied);
-		const { base, baseLength, appended, entryOffsets } = lines;
 		// A session that never branched has the whole file as its branch, in file order: an entry's
 		// index in the file is its index on the branch, and no set of the live entries is needed.
 		let inFileOrder = path.length === entryOffsets.length;
@@ -1372,7 +1392,6 @@ export class SessionManager {
 				if (i >= liveFrom || entry === applied || RESIDENT_SETTINGS_ENTRY_TYPES.has(entry.type)) live.add(entry);
 			}
 		}
-		const identity = state.identity;
 		const blobs = this.#blobs;
 		let pinned = false;
 		for (let i = 0; i < entryOffsets.length; i++) {
@@ -1397,6 +1416,7 @@ export class SessionManager {
 			}
 			this.#cold.cool(entry, offset, end - offset);
 		}
+		this.#cooledWalk = { identity, path, pathLength: path.length, warmed: this.#cold.warmed };
 	}
 
 	/**

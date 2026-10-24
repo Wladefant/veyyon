@@ -130,11 +130,12 @@ function writeChunksSync(fpath: string, body: SessionFileBody): void {
 }
 
 /**
- * The async twin of {@link writeChunksSync}.
+ * The async twin of {@link writeChunksSync}, for a file a rename publishes.
  *
  * Each chunk is awaited, so a large rewrite yields to the loop between chunks
  * instead of holding it for the whole file. That is the point of the async path:
- * one 253MiB body used to stall the loop for 554ms in a single stretch.
+ * one 253MiB body used to stall the loop for 554ms in a single stretch. The
+ * file is flushed before it closes, see {@link flushStaged}.
  */
 async function writeChunks(fpath: string, body: SessionFileBody): Promise<void> {
 	const handle = await fs.promises.open(fpath, "w");
@@ -142,9 +143,20 @@ async function writeChunks(fpath: string, body: SessionFileBody): Promise<void> 
 		for (const chunk of sessionBodyChunks(body)) {
 			if (chunk.length > 0) await handle.write(chunk);
 		}
+		await flushStaged(handle);
 	} finally {
 		await handle.close();
 	}
+}
+
+/**
+ * Write a staged file's data to disk on the thread pool, before the rename that publishes it. ext4
+ * writes back a file renamed over another inside `rename(2)` (`auto_da_alloc`), so a sync rename of
+ * an unflushed 420MB session held the event loop for 38-92ms; flushed first, it took 0.1ms. The
+ * flush also makes the replacement survive a power cut.
+ */
+async function flushStaged(handle: fs.promises.FileHandle): Promise<void> {
+	await handle.datasync();
 }
 
 /**
@@ -365,12 +377,19 @@ class FilePinnedSessionReader implements PinnedSessionReader {
 		}
 	}
 
+	/**
+	 * The descriptor is closed on the thread pool. The object a reader is released from is usually
+	 * one a republish replaced, and closing its last descriptor frees its blocks: 19-23ms on the
+	 * calling thread for a 420MB session on ext4.
+	 */
 	close(): void {
 		const fd = this.#fd;
 		if (fd === undefined) return;
 		this.#fd = undefined;
 		pinnedReaderRegistry.unregister(this);
-		fs.closeSync(fd);
+		fs.close(fd, err => {
+			if (err) logger.debug("pinned session reader did not close", { identity: this.identity, error: err.message });
+		});
 	}
 }
 
@@ -742,6 +761,7 @@ export class FileSessionStorage implements SessionStorage {
 				for (const chunk of sessionBodyChunks(tail)) {
 					position += await writeTextAt(handle, tempPath, chunk, position);
 				}
+				await flushStaged(handle);
 			} finally {
 				await handle.close();
 			}
