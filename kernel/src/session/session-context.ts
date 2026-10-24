@@ -26,6 +26,8 @@ import {
 	remoteCompactionProviderPayload,
 	remoteCompactionReplayableBy,
 } from "@veyyon/agent-core/compaction/remote-compaction-entry";
+// The zero-import leaf that owns "this tool result is a placeholder", not the package barrel.
+import { toolResultNeverRan } from "@veyyon/agent-core/tool-result-never-ran";
 import type { TextContent } from "@veyyon/ai";
 // From the module that DEFINES the coercion, not the barrel that re-exports it.
 // `@veyyon/ai/types` is 5 modules against the barrel's 346, and this file is on
@@ -649,29 +651,71 @@ function withoutDanglingToolCalls(
 }
 
 /**
- * Strip dangling tool_use blocks (a tool_use with no matching tool_result on the resolved leaf→root
- * path) from ANY assistant turn, not just the trailing one.
+ * Strip the tool traffic of the path that has no partner.
  *
- * This happens whenever the leaf (or a branch point) lands such that an assistant turn's tool results
- * are off the selected path: its result children live on a sibling branch, or it is the leaf itself
- * (results are children below it). Left in place, `transformMessages` fabricates one synthetic
- * "aborted"/"No result provided" result per dangling call, which render as phantom failed calls and
- * re-inject the failed batch into the model's context: the rewind/restore loop.
+ * A dangling tool_use block (a tool_use with no matching tool_result on the resolved leaf→root path)
+ * is stripped from ANY assistant turn, not just the trailing one. This happens whenever the leaf (or a
+ * branch point) lands such that an assistant turn's tool results are off the selected path: its result
+ * children live on a sibling branch, or it is the leaf itself (results are children below it). Left in
+ * place, `transformMessages` fabricates one synthetic "aborted"/"No result provided" result per
+ * dangling call, which render as phantom failed calls and re-inject the failed batch into the model's
+ * context: the rewind/restore loop.
+ *
+ * Outside the transcript, a never-ran placeholder result whose call is on no assistant turn of the
+ * path is dropped too. A classifier-refused turn is not written to the log, and older logs still hold
+ * the placeholders the loop paired with its calls; `transformMessages` folds an unpaired result into a
+ * user note, which replayed the refusal text on every request after a resume. A result whose tool ran
+ * is kept and folded, because its output is real.
  *
  * A turn is dropped only outside the transcript, so `cacheMissExplainedAt`, which only the transcript
  * fills, stays parallel to the messages.
  */
-function stripDanglingToolCalls(messages: AgentMessage[], transcript: boolean): void {
+function stripUnpairedToolTraffic(messages: AgentMessage[], transcript: boolean): void {
 	const pairedToolResultIds = new Set<string>();
+	// Never-ran placeholders no call asks for. The loop writes a placeholder right behind the turn
+	// that declared its call, so that turn answers almost every one, and the path is read again only
+	// for the rest.
+	const unpairedPlaceholderIds = new Set<string>();
+	let lastTurn: AgentMessage | undefined;
 	for (const message of messages) {
-		if (message.role === "toolResult") pairedToolResultIds.add(message.toolCallId);
+		if (message.role === "assistant") lastTurn = message;
+		if (message.role !== "toolResult") continue;
+		pairedToolResultIds.add(message.toolCallId);
+		if (!transcript && toolResultNeverRan(message.details) && !declaresCall(lastTurn, message.toolCallId)) {
+			unpairedPlaceholderIds.add(message.toolCallId);
+		}
 	}
+	if (unpairedPlaceholderIds.size > 0) forgetAnsweredCalls(messages, unpairedPlaceholderIds);
 	let kept = 0;
 	for (const message of messages) {
+		if (
+			message.role === "toolResult" &&
+			unpairedPlaceholderIds.has(message.toolCallId) &&
+			toolResultNeverRan(message.details)
+		) {
+			continue;
+		}
 		const stripped = withoutDanglingToolCalls(message, pairedToolResultIds, transcript);
 		if (stripped !== undefined) messages[kept++] = stripped;
 	}
 	messages.length = kept;
+}
+
+/** Whether {@link message} is an assistant turn with a `toolCall` block of id {@link callId}. */
+function declaresCall(message: AgentMessage | undefined, callId: string): boolean {
+	return (
+		message?.role === "assistant" && message.content.some(block => block.type === "toolCall" && block.id === callId)
+	);
+}
+
+/** Remove from {@link resultIds} every id a `toolCall` block of {@link messages} declares. */
+function forgetAnsweredCalls(messages: readonly AgentMessage[], resultIds: Set<string>): void {
+	for (const message of messages) {
+		if (message.role !== "assistant") continue;
+		for (const block of message.content) {
+			if (block.type === "toolCall" && resultIds.delete(block.id) && resultIds.size === 0) return;
+		}
+	}
 }
 
 /**
@@ -697,7 +741,7 @@ export function buildSessionContextFromPath(
 	// Live turns only qualify mid-turn: a transcript rebuild while the tool still executes sees the
 	// persisted assistant turn without its result. Those callers pass `keepDanglingToolCalls` so the
 	// in-flight call stays visible as a pending block instead of vanishing from the chat.
-	if (!(transcript && options?.keepDanglingToolCalls === true)) stripDanglingToolCalls(out.messages, transcript);
+	if (!(transcript && options?.keepDanglingToolCalls === true)) stripUnpairedToolTraffic(out.messages, transcript);
 
 	return {
 		messages: out.messages,

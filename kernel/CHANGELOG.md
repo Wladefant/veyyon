@@ -18,6 +18,10 @@
 - A staged session rewrite is flushed to disk before it replaces the file, so a power cut during a rewrite leaves the previous file or the new one, and on ext4 the rename no longer blocks the event loop for 38-92 ms.
 - A settings file that does not parse is quarantined with the parser's reason, which for a YAML syntax error states its line and column.
 
+### Fixed
+
+- A context rebuilt from a session log drops a never-ran placeholder tool result whose call is on no turn of the branch, so a resume of a log written before the fix no longer replays a refused turn's refusal text to the model on every request; a result whose tool ran is kept.
+
 ## [1.5.9] - 2026-10-22
 
 ### Breaking Changes

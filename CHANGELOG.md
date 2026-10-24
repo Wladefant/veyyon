@@ -57,6 +57,7 @@
 - A print run with a settings file that does not parse states it on stderr instead of running on defaults without a word.
 - A session in a project with no context file no longer logs `Context file discovery disabled: caller supplied an empty resolved list` when it opens and at every prompt rebuild; an empty list its caller supplies is logged once.
 - `veyyon -p` and RPC mode write a hand-edited setting of the wrong kind or outside its declared values to stderr as `warning: settings: …`, with the file and the value the run uses, instead of running on the replaced value without a word.
+- A classifier refusal that ends a turn after the model streamed a tool call no longer writes that call's never-ran placeholder result to the session log, so a resumed session does not send the refusal text back to the model.
 - When a Cursor turn is cut short by a dropped stream or an abort, the partial-completion ledger reports each exec-channel call whose result arrived as ran instead of "started, no result recorded", and a batch whose every call has its result gets no ledger.
 - Cursor's "You're out of usage" answer parks the account for the quota window instead of a 45 to 75 second capacity backoff, so a turn on a spent plan ends on the first failure instead of retrying it every minute.
 - The notice that an account is out of quota while load balancing leaves other accounts idle appears once per exhausted window instead of once for every request layer and retry that re-entered it.
@@ -72,6 +73,7 @@
 - Kimi Code bundles K3.1 Pro, K3.1 Pro Highspeed and the K2.8 Preview name of `kimi-for-coding`, read from the `kimi-code-plan-cn` key models.dev now lists Kimi Code under.
 - Kimi Code models offer Low, High and Max with no Off, and discovery takes each model's effort ladder, default effort and off state from the account's `/models` listing.
 - A Kimi Code model that cannot stop thinking keeps thinking on and sends no forced tool choice on both wires, including the K3 rows whose ids carry no `kimi` prefix.
+- A context rebuilt from a session log drops a never-ran placeholder tool result whose call is on no turn of the branch, so a resume of a log written before the fix no longer replays a refused turn's refusal text to the model on every request; a result whose tool ran is kept.
 - A swarm file with a YAML syntax error fails with the error's line and column, such as `Nested mappings are not allowed in compact mappings at line 4, column 9`, instead of `Unexpected token`.
 - `extractRetryHint` reads a reset window stated in prose in any unit or combination of units, such as `Your limit will reset in 17 minutes`, `Resets in 20m45s` and `Resets in 1hr 39min`, after the machine-readable fields a body states.
 

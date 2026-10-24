@@ -279,6 +279,30 @@ describe("a message offered for the log", () => {
 		expect(labels(store)).toEqual(["assistant:partial answer"]);
 	});
 
+	it("drops a never-ran placeholder for a call of a refusal it dropped, and no other result", () => {
+		const { store, persistence } = harness();
+		const neverRan = { __synthetic: true, source: "assistant_stop_error", executed: false };
+		const calls = (...ids: string[]) =>
+			ids.map(id => ({ type: "toolCall" as const, id, name: "read", arguments: { path: id } }));
+		persistence.persistIfMissing(
+			assistant("", 1, {
+				content: calls("refused-1", "refused-2", "refused-3"),
+				stopReason: "error",
+				stopDetails: { type: "refusal" },
+			}),
+		);
+		persistence.persistIfMissing({ ...toolResult("refused-1", 2), details: neverRan });
+		persistence.persistIfMissing({ ...toolResult("refused-2", 3), details: { __skipped: true, entered: false } });
+		// The tool was entered before the turn ended, so its side effects are real.
+		persistence.persistIfMissing({ ...toolResult("refused-3", 4), details: { __skipped: true, entered: true } });
+		// A placeholder of an error turn the log holds keeps that turn's pairing.
+		persistence.persistIfMissing(
+			assistant("", 5, { content: calls("errored-1"), stopReason: "error", errorMessage: "stream reset" }),
+		);
+		persistence.persistIfMissing({ ...toolResult("errored-1", 6), details: neverRan });
+		expect(labels(store)).toEqual(["tool:refused-3", "assistant:", "tool:errored-1"]);
+	});
+
 	it("skips a rewind result whose rewind already rewrote the branch, and only that one", () => {
 		const { store, persistence, rewound } = harness({ rewound: ["call-1"] });
 		persistence.persistIfMissing(toolResult("call-1", 1, "read"));
