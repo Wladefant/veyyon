@@ -8,7 +8,7 @@
 
 - The login card sends a browser login's link to the clipboard when it appears, and `c` (or `alt+c` while its field holds typed text) sends it again, shown on a `copy link` key chip.
 - A browser login whose provider takes a pasted callback asks in the login card for the address the browser ended on, so a sign-in over SSH completes without a forwarded port; an address that does not complete the sign-in is asked for again.
-- The account card lists a provider's second way to sign in as its own `+ add with <login>` row, such as `+ add with OpenCode Go (API key, legacy)`, the Nous Research API key and the ChatGPT device login, which were reachable only by typing their id.
+- The account card lists a provider's second way to sign in as its own row named by the method, such as `+ add with API key (legacy)` under OpenCode Go, `+ add with API key` under Nous Research and `+ add with device code` under ChatGPT, which were reachable only by typing their id.
 - `codexRoutingHint` in `@veyyon/catalog/wire/codex` builds the `x-codex-routing-hint` value (`model=<model>;tier=<tier>`, or `model=<model>` without a tier) from a Codex Responses request body.
 - `@veyyon/catalog/wire/opencode-go` carries an OpenCode Go Console login's organization and inference endpoint in its API key and resolves the endpoint, route and organization header a request uses.
 - `ModelReasoningOptions.defaultLevel` and `ModelReasoningOptions.requiresEffort` state a model's default effort and that it has no off state; they become `thinking.defaultLevel` and `thinking.requiresEffort`.
@@ -21,6 +21,8 @@
 - `/login opencode-go` signs in with an OpenCode Console account through its device flow and sends requests to the Go inference endpoint of the organization that holds the subscription, with the organization id in `x-opencode-org-id`; an OpenCode Go API key is the legacy `opencode-go-api-key` login.
 - The OpenCode Go usage ledger reports spend for a Console login as it does for an API key.
 - The OpenCode Console device flow loads when an OpenCode Go login or token refresh first runs instead of at startup, with no user-visible change.
+- A provider login that stores under another provider states its `loginMethod` ("API key", "device code"), which `getOAuthProviders()` returns beside its name.
+- The OpenCode Console login asks for its code in one line, `Enter code X if the page asks for it.`, and an OpenCode Go login that finds no Go subscription names `/login opencode-go-api-key` for the API key instead.
 - OpenCode Go discovery sends no Authorization for a Console login, whose token the public listing rejects, and keys its model cache by the credential it sends, so a refreshed login token keeps its cached models.
 
 ### Fixed
@@ -32,6 +34,7 @@
 - `r` on the account card's `+ add another … account` row checks the accounts of that provider instead of every stored account of every provider.
 - Selecting, naming, logging out, forgetting and unblocking an account on the account card report their result on the card's notice line instead of only in the hidden transcript.
 - A login started by its alternate id, such as `/login opencode-go-api-key`, is labelled with the provider it stores under, asks for a name when that provider already holds an account, and reopens the account card on that provider instead of the first one listed.
+- The account card's provider filter labels `enter` with what it does, `enter add <provider> account` on a provider with no accounts, instead of always `enter switch to this account`.
 - Cursor's "You're out of usage" answer parks the account for the quota window instead of a 45 to 75 second capacity backoff, so a turn on a spent plan ends on the first failure instead of retrying it every minute.
 - The notice that an account is out of quota while load balancing leaves other accounts idle appears once per exhausted window instead of once for every request layer and retry that re-entered it.
 - Codex requests send `x-codex-routing-hint` stating the wire model and service tier of the body sent, on HTTP turns, the websocket upgrade and the startup prewarm, as codex-rs does.

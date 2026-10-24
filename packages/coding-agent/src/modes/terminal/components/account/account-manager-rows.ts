@@ -79,10 +79,13 @@ export interface AccountSidebarEntry {
 	alternateLogins: readonly AccountLoginChoice[];
 }
 
-/** A login a provider's credential can be added with, by its login id and display name. */
+/**
+ * A login a provider's credential can be added with: its login id, and the mechanism it differs by
+ * ("API key", "device code"), which the card shows beside the provider's own name.
+ */
 export interface AccountLoginChoice {
 	id: string;
-	name: string;
+	method: string;
 }
 
 /** A provider the sidebar can offer, whether or not it currently holds credentials. */
@@ -113,7 +116,7 @@ export function buildSidebarEntries(
 	const alternates = new Map<string, AccountLoginChoice[]>();
 	for (const provider of providers) {
 		if (!provider.alternateLogin) continue;
-		const login = { id: provider.alternateLogin.id, name: sanitizeAccountText(provider.alternateLogin.name) };
+		const login = { id: provider.alternateLogin.id, method: sanitizeAccountText(provider.alternateLogin.method) };
 		const list = alternates.get(provider.id);
 		if (list) list.push(login);
 		else alternates.set(provider.id, [login]);

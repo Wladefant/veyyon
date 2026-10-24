@@ -63,16 +63,16 @@ then whether the provider accepted the login, and updates the usage bars from th
 
 Below the accounts is `+ add another … account`. It is a position in the list like any other:
 arrow down past your last account to land on it, and press `enter` there to start a login. A
-provider with a second way to sign in lists it beneath, as `+ add with <login>`: OpenCode Go offers
-`+ add with OpenCode Go (API key, legacy)`, Nous Research its API key, and ChatGPT its device login.
+provider with a second way to sign in lists it beneath, as `+ add with <method>`: OpenCode Go offers
+`+ add with API key (legacy)`, Nous Research `+ add with API key`, and ChatGPT `+ add with device code`.
 Each stores the account under the same provider. `a` always starts the provider's default login.
 The mouse works on the card as well. Click an account to select it, click an add row to start that
 login, and click any key chip in the footer to run what it names.
 
 The provider list filters. Press `ctrl+s`, type part of a provider's name or id, and the sidebar
-keeps the providers that match; the arrows move within them and `enter` still switches to the
-selected account. Press `esc` to leave the filter and get the full list back, and `esc` again to
-close the card.
+keeps the providers that match; the arrows move within them and `enter` switches to the selected
+account, or starts a login on a provider with no accounts. Press `esc` to leave the filter and get
+the full list back, and `esc` again to close the card.
 
 Switching is **per provider**. Choosing another Anthropic account changes Anthropic and nothing else,
 because several providers serve one session at the same time: your main model, your agent roles,

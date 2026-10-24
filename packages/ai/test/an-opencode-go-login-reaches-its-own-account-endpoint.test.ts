@@ -371,6 +371,24 @@ describe("an OpenCode Go login reaches its own account endpoint", () => {
 		}
 	});
 
+	it("keeps serving a key an earlier version stored under the provider's own id", async () => {
+		// Before the Console login, `opencode-go` itself was the API-key login, so an upgraded store holds
+		// a login-sourced key under `opencode-go` with no OAuth row beside it.
+		await storage.set("opencode-go", [{ type: "api_key", key: "sk-go-stored", source: "login" }]);
+		const apiKey = await storage.getApiKey("opencode-go");
+		expect(apiKey).toBe("sk-go-stored");
+		const sent: Sent[] = [];
+		const server = opencodeServer(sent, THREE_ORGS);
+		for (const [api, model] of bundledModelPerApi()) {
+			const mark = sent.length;
+			await aiStream.stream(model, CONTEXT, { apiKey, fetch: server }).result();
+			expect({ api, requests: apiRequestsSince(sent, mark) }).toEqual({
+				api,
+				requests: [{ url: `${GATEWAY}${GATEWAY_PATH[api]}`, credential: "sk-go-stored", org: null }],
+			});
+		}
+	});
+
 	it("lists models without the login token, and with an API key", async () => {
 		const envelope = opencodeGoApiKey("access-issued", `${ROOT}/openai/v1`, "org-b");
 		for (const [apiKey, expected] of [
@@ -438,8 +456,8 @@ describe("an OpenCode Go login reaches its own account endpoint", () => {
 			);
 		});
 
-		it("names the legacy key login when no organization has Go", async () => {
-			const legacy = `"${opencodeGoApiKeyProvider.name}"`;
+		it("names the command that reaches the legacy key login when no organization has Go", async () => {
+			const legacy = `\`/login ${opencodeGoApiKeyProvider.id}\``;
 			const none = await loginError({ ...THREE_ORGS, goEndpoints: {} });
 			expect(none).toStartWith("No organization of this OpenCode account has an OpenCode Go subscription.");
 			expect(none).toContain(legacy);
@@ -454,7 +472,7 @@ describe("an OpenCode Go login reaches its own account endpoint", () => {
 				goEndpoints: { "org-b": "http://plain.example.test/openai/v1" },
 			});
 			expect(message).toContain("http://plain.example.test/openai/v1");
-			expect(message).toContain(`"${opencodeGoApiKeyProvider.name}"`);
+			expect(message).toContain(`\`/login ${opencodeGoApiKeyProvider.id}\``);
 		});
 
 		it("reports a declined login", async () => {

@@ -16,4 +16,5 @@ export const openaiCodexDeviceProvider = {
 		return refreshOpenAICodexToken(credentials.refresh, signal);
 	},
 	storeCredentialsAs: "openai-codex",
+	loginMethod: "device code",
 } as const satisfies ProviderDefinition;

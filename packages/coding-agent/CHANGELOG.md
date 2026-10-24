@@ -6,7 +6,7 @@
 
 - The login card sends a browser login's link to the clipboard when it appears, and `c` (or `alt+c` while its field holds typed text) sends it again, shown on a `copy link` key chip.
 - A browser login whose provider takes a pasted callback asks in the login card for the address the browser ended on, so a sign-in over SSH completes without a forwarded port; an address that does not complete the sign-in is asked for again.
-- The account card lists a provider's second way to sign in as its own `+ add with <login>` row, such as `+ add with OpenCode Go (API key, legacy)`, the Nous Research API key and the ChatGPT device login, which were reachable only by typing their id.
+- The account card lists a provider's second way to sign in as its own row named by the method, such as `+ add with API key (legacy)` under OpenCode Go, `+ add with API key` under Nous Research and `+ add with device code` under ChatGPT, which were reachable only by typing their id.
 
 ### Changed
 
@@ -23,6 +23,7 @@
 - `r` on the account card's `+ add another … account` row checks the accounts of that provider instead of every stored account of every provider.
 - Selecting, naming, logging out, forgetting and unblocking an account on the account card report their result on the card's notice line instead of only in the hidden transcript.
 - A login started by its alternate id, such as `/login opencode-go-api-key`, is labelled with the provider it stores under, asks for a name when that provider already holds an account, and reopens the account card on that provider instead of the first one listed.
+- The account card's provider filter labels `enter` with what it does, `enter add <provider> account` on a provider with no accounts, instead of always `enter switch to this account`.
 
 ## [1.5.9] - 2026-10-22
 

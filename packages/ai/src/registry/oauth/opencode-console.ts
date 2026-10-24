@@ -30,7 +30,7 @@ const PROVIDER_ID = "opencode-go";
 /** RFC 8628 defaults, for a Console that omits `interval` or `expires_in`. */
 const DEFAULT_INTERVAL_SECONDS = 5;
 const DEFAULT_EXPIRES_IN_SECONDS = 600;
-const API_KEY_LOGIN_HINT = 'To use an OpenCode Go API key instead, log in with "OpenCode Go (API key, legacy)".';
+const API_KEY_LOGIN_HINT = "To use an OpenCode Go API key instead, run `/login opencode-go-api-key`.";
 
 interface DeviceCodeResponse {
 	device_code?: unknown;
@@ -414,9 +414,8 @@ export async function loginOpenCodeGo(options: OAuthController): Promise<OAuthCr
 	const device = await requestDeviceAuthorization(fetchImpl, signal);
 	options.onAuth({
 		url: device.verificationUrl,
-		instructions:
-			`Open the URL in a browser and enter code ${device.userCode} if prompted. ` +
-			"If no browser opens or this is a headless/remote session, copy the URL into any browser.",
+		// The link already carries the code, and every surface that shows it says how to open it.
+		instructions: `Enter code ${device.userCode} if the page asks for it.`,
 	});
 	options.onProgress?.("Waiting for OpenCode Console authorization...");
 	const token = await pollForToken(device, fetchImpl, signal);

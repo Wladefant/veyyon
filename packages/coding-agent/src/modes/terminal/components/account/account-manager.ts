@@ -306,7 +306,11 @@ export class AccountManagerComponent implements Component {
 			// sidebar, so the short form is both consistent and more readable here.
 			getOAuthProviders().map(provider => {
 				const id = provider.storeCredentialsAs ?? provider.id;
-				const alternateLogin = id === provider.id ? undefined : { id: provider.id, name: provider.name };
+				// The mechanism, not the login's full name: the card already names the provider, and
+				// "+ add with OpenCode Go (API key, legacy)" under "+ add OpenCode Go account" says it
+				// twice. A custom login that states no mechanism falls back to its name.
+				const alternateLogin =
+					id === provider.id ? undefined : { id: provider.id, method: provider.loginMethod ?? provider.name };
 				return { id, label: formatProviderName(id), alternateLogin };
 			}),
 		);
@@ -997,7 +1001,7 @@ export class AccountManagerComponent implements Component {
 			),
 		);
 		for (const login of entry.alternateLogins) {
-			lines.push(this.#addLine(`+ add with ${login.name}`, { kind: "add", loginId: login.id }, width));
+			lines.push(this.#addLine(`+ add with ${login.method}`, { kind: "add", loginId: login.id }, width));
 		}
 		return lines;
 	}
@@ -1020,33 +1024,18 @@ export class AccountManagerComponent implements Component {
 				{ label: "esc cancel", clickable: true, id: "close" },
 			];
 		}
+		const use = this.#enterLabel();
 		// Search mode advertises only what search mode answers. Every letter chip below is a key
 		// the filter is consuming while the mode is on, and a footer that offers them anyway is
-		// the defect this mode exists to remove.
+		// the defect this mode exists to remove. `enter` still runs `#activate`, so it is labelled
+		// by the same rule as outside the mode: on a provider with no accounts it starts a login.
 		if (this.#searching) {
 			return [
 				{ label: "↑↓ move" },
-				{ label: "enter switch to this account", clickable: true, id: "confirm" },
+				{ label: use, clickable: true, id: "confirm" },
 				{ label: "esc exit search", clickable: true, id: "close" },
 			];
 		}
-		const entry = this.#activeEntry();
-		// The chip names the ACTION, not the mechanism: "switch to" is what pressing enter does, and
-		// the previous "use for <provider>" left the card's headline capability reading as a noun.
-		// Naming the provider is still the point — switching is per provider, and a bare "enter
-		// switch" reads as a global account change. On the add entry `enter` switches nothing, so
-		// the chip says what it will actually do rather than naming an account it cannot pick.
-		const alternate = this.#selectedAlternateLogin();
-		const use =
-			this.#bodySelection.kind === "add"
-				? alternate
-					? `enter add with ${alternate.name}`
-					: entry
-						? `enter add ${entry.label} account`
-						: "enter add account"
-				: entry
-					? `enter switch ${entry.label} to this account`
-					: "enter switch to this account";
 		// The three account-scoped keys are omitted while the add entry is selected. `n`, `u` and `x`
 		// all read the selected ACCOUNT, and the add entry is not one, so each was a chip the card
 		// painted, made clickable, and answered with nothing: the same defect the `enter` chip above
@@ -1087,6 +1076,23 @@ export class AccountManagerComponent implements Component {
 			{ label: "ctrl+s search", clickable: true, id: "search" },
 			{ label: "esc close", clickable: true, id: "close" },
 		];
+	}
+
+	/**
+	 * The `enter` chip. It names the ACTION, not the mechanism: "switch to" is what pressing enter
+	 * does, and the previous "use for <provider>" left the card's headline capability reading as a
+	 * noun. Naming the provider is still the point — switching is per provider, and a bare "enter
+	 * switch" reads as a global account change. On an add entry `enter` switches nothing, so the
+	 * chip says what it will actually do rather than naming an account it cannot pick.
+	 */
+	#enterLabel(): string {
+		const entry = this.#activeEntry();
+		if (this.#bodySelection.kind === "add") {
+			const alternate = this.#selectedAlternateLogin();
+			if (alternate) return `enter add with ${alternate.method}`;
+			return entry ? `enter add ${entry.label} account` : "enter add account";
+		}
+		return entry ? `enter switch ${entry.label} to this account` : "enter switch to this account";
 	}
 
 	render(width: number): readonly string[] {

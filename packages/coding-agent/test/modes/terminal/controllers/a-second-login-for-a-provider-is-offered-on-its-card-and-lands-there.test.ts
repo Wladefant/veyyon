@@ -139,7 +139,13 @@ describe("the account card offers every login a provider can be added with", () 
 		const base = login.storeCredentialsAs ?? login.id;
 		const siblings = ALTERNATES.filter(other => other.storeCredentialsAs === base);
 		const position = siblings.indexOf(login) + 1;
-		const entry = `+ add with ${login.name}`;
+		const method = login.loginMethod ?? "";
+		const entry = `+ add with ${method}`;
+
+		test(`${login.id}: labelled by its mechanism, not by the provider the card already names`, () => {
+			expect(method.length).toBeGreaterThan(0);
+			expect(method.toLowerCase()).not.toContain(formatProviderName(base).toLowerCase());
+		});
 
 		test(`${login.id}: listed after ${base}'s own login, and enter starts it`, () => {
 			const view = card(base);
@@ -150,7 +156,7 @@ describe("the account card offers every login a provider can be added with", () 
 
 			for (let step = 0; step < position; step++) view.component.handleInput(DOWN);
 			expect(view.cursorLine()).toBe(`› ${entry}`);
-			expect(view.frame().join("\n")).toContain(`enter add with ${login.name}`);
+			expect(view.frame().join("\n")).toContain(`enter add with ${method}`);
 
 			view.component.handleInput(ENTER);
 			expect(view.added).toEqual([[base, login.id]]);
@@ -179,7 +185,7 @@ describe("OpenCode Go signs in with the Console first and keeps the API key as t
 	test("`a` starts the Console login even from the legacy entry", () => {
 		const view = card("opencode-go");
 		view.component.handleInput(DOWN);
-		expect(view.cursorLine()).toBe("› + add with OpenCode Go (API key, legacy)");
+		expect(view.cursorLine()).toBe("› + add with API key (legacy)");
 
 		view.component.handleInput("a");
 
@@ -193,15 +199,51 @@ describe("OpenCode Go signs in with the Console first and keeps the API key as t
 		view.component.handleInput(DOWN);
 		expect(view.cursorLine()).toBe("› + add another OpenCode Go account");
 		view.component.handleInput(DOWN);
-		expect(view.cursorLine()).toBe("› + add with OpenCode Go (API key, legacy)");
+		expect(view.cursorLine()).toBe("› + add with API key (legacy)");
 		view.component.handleInput(DOWN);
 		expect(view.cursorLine()).toContain("first");
 
 		view.component.handleInput(UP);
-		expect(view.cursorLine()).toBe("› + add with OpenCode Go (API key, legacy)");
+		expect(view.cursorLine()).toBe("› + add with API key (legacy)");
 		view.component.handleInput(ENTER);
 		expect(view.added).toEqual([["opencode-go", "opencode-go-api-key"]]);
 		expect(view.used).toEqual([]);
+	});
+});
+
+/**
+ * The provider filter keeps `enter`, and `enter` there runs the same action as outside it. On a
+ * provider with no accounts that is its login, which the filter's footer used to call
+ * "switch to this account".
+ */
+describe("enter in the provider filter is labelled by what it does", () => {
+	const CTRL_S = "\x13";
+	const filtered = (rows: AccountRow[]) => {
+		const view = card("opencode-go", rows);
+		view.component.handleInput(CTRL_S);
+		for (const char of "opencode go") view.component.handleInput(char);
+		return view;
+	};
+
+	test("a provider with no accounts offers its login, and enter starts it", () => {
+		const view = filtered([]);
+		const footer = view.frame().join("\n");
+		expect(footer).toContain("enter add OpenCode Go account");
+		expect(footer).not.toContain("enter switch");
+
+		view.component.handleInput(ENTER);
+
+		expect(view.added).toEqual([["opencode-go", undefined]]);
+	});
+
+	test("a provider with an account offers to switch to it, and enter does", () => {
+		const view = filtered([account("opencode-go", 7, "first")]);
+		expect(view.frame().join("\n")).toContain("enter switch OpenCode Go to this account");
+
+		view.component.handleInput(ENTER);
+
+		expect(view.used).toEqual([7]);
+		expect(view.added).toEqual([]);
 	});
 });
 

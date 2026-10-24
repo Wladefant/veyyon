@@ -23,4 +23,5 @@ export const opencodeGoApiKeyProvider = {
 	login: loginOpenCodeGoApiKey,
 	credential: "api-key",
 	storeCredentialsAs: "opencode-go",
+	loginMethod: "API key (legacy)",
 } as const satisfies ProviderDefinition;
