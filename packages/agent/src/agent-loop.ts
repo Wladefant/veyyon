@@ -9,6 +9,7 @@ import type {
 	AssistantMessageEventStream,
 	AssistantTurnStatus,
 	Context,
+	CursorToolResultHandler,
 	IncompleteToolCall,
 	InstrumentationLevel,
 	Model,
@@ -674,6 +675,7 @@ async function runLoop(
 				invokeAgentSpan,
 				stepCounter,
 				streamFn,
+				execChannelResults: new Map(),
 			}),
 		);
 	} catch (err) {
@@ -753,6 +755,12 @@ interface LoopRun {
 	readonly invokeAgentSpan: Span | undefined;
 	readonly stepCounter: StepCounter;
 	readonly streamFn: StreamFn | undefined;
+	/**
+	 * Whether each result Cursor's exec channel delivered this run is an error, by tool-call id. The exec channel hands
+	 * its results to `cursorOnToolResult`, whose host holds them until the assistant message ends, so the loop's context
+	 * never contains them while the turn is open; the ledger of a cut-short turn reads them here.
+	 */
+	readonly execChannelResults: Map<string, boolean>;
 }
 
 /** What the loop carries from one turn to the next. */
@@ -1062,8 +1070,8 @@ async function settleFailedTurn(
 	// process, and their `toolCall` block is synthesized BEFORE the
 	// handler is awaited. A reset can land while one is still running, so
 	// they are never reported as "never ran": `buildAbortedTurnLedger`
-	// resolves them against the transcript and falls back to "started, no
-	// result recorded".
+	// resolves them against the results the exec channel delivered and
+	// falls back to "started, no result recorded".
 	//
 	// Emitting the ledger on the first placeholder keeps it to one
 	// bounded copy per batch. When the batch left no placeholder at all
@@ -1071,7 +1079,7 @@ async function settleFailedTurn(
 	const batchLedger = buildAbortedTurnLedger(
 		stopReason === "aborted" ? "aborted" : "stream_error",
 		message,
-		run.context.messages,
+		run.execChannelResults,
 	);
 	const toolResults: ToolResultMessage[] = [];
 	for (const toolCall of toolCalls) {
@@ -1426,6 +1434,11 @@ async function resolveTurnOptions(
 		cwd: config.getCwd?.() ?? config.cwd,
 		signal: providerSignal,
 		onResponse,
+		// The handler `streamSimple` would select, wrapped so every result it returns is recorded for the ledger.
+		cursorOnToolResult: recordExecChannelResults(
+			run.execChannelResults,
+			config.cursorOnToolResult ?? config.cursorExecHandlers?.onToolResult,
+		),
 	};
 }
 
@@ -2898,9 +2911,12 @@ function syntheticDetailsFor(
  *   this process, inside the provider stream. The block is synthesized before
  *   the handler is awaited, so the call may have finished, may still be
  *   running, or may have applied part of its side effects. Its outcome is
- *   `ok`/`failed` once the buffered result is in the transcript, and
+ *   `ok`/`failed` once the exec channel has delivered its result, and
  *   `interrupted` while that result is still pending, because "it ran but you
- *   cannot see the result" is not the same claim as "it never ran".
+ *   cannot see the result" is not the same claim as "it never ran". The
+ *   delivered results are read from `execChannelResults`, not from the
+ *   context: the host holds them until the assistant message ends, so the
+ *   context of a turn that is still open never contains them.
  * - A call whose arguments were still streaming was deleted from the message
  *   by `retainCompletedToolCalls`, which records its id and name on
  *   `incompleteToolCalls`. It never reached dispatch either, so it is
@@ -2908,34 +2924,31 @@ function syntheticDetailsFor(
  *   left in the transcript for the model to copy its arguments back from.
  *
  * Returns `undefined` only when the ledger would restate what the transcript
- * already says; see {@link transcriptStatesLoneCall}.
+ * already says; see {@link transcriptStatesEveryCall}.
  */
 function buildAbortedTurnLedger(
 	cause: ToolBatchLedgerCause,
 	message: AssistantMessage,
-	contextMessages: ReadonlyArray<AgentMessage>,
+	execChannelResults: ReadonlyMap<string, boolean>,
 ): ToolBatchLedger | undefined {
-	const entries = abortedTurnEntries(message, contextMessages);
-	if (entries.length === 0 || transcriptStatesLoneCall(entries)) return undefined;
+	const entries = abortedTurnEntries(message, execChannelResults);
+	if (entries.length === 0 || transcriptStatesEveryCall(entries)) return undefined;
 	return buildToolBatchLedger(cause, entries);
 }
 
 /** One ledger entry per tool call the aborted turn holds, then one per call whose arguments never finished. */
 function abortedTurnEntries(
 	message: AssistantMessage,
-	contextMessages: ReadonlyArray<AgentMessage>,
+	execChannelResults: ReadonlyMap<string, boolean>,
 ): ToolBatchCallEntry[] {
 	const entries: ToolBatchCallEntry[] = [];
-	// Built on the first exec-channel call; no other call reads the transcript's results.
-	let answeredIsError: Map<string, boolean> | undefined;
 	for (const block of message.content) {
 		if (block.type !== "toolCall") continue;
 		if ((block as CursorExecResolvedCarrier)[kCursorExecResolved] !== true) {
 			entries.push({ toolCallId: block.id, toolName: block.name, outcome: "dropped" });
 			continue;
 		}
-		answeredIsError ??= toolResultErrorFlags(contextMessages);
-		const isError = answeredIsError.get(block.id);
+		const isError = execChannelResults.get(block.id);
 		entries.push({
 			toolCallId: block.id,
 			toolName: block.name,
@@ -2953,28 +2966,39 @@ function abortedTurnEntries(
 	return entries;
 }
 
-/** Whether each tool result in `messages` is an error, by tool-call id. */
-function toolResultErrorFlags(messages: ReadonlyArray<AgentMessage>): Map<string, boolean> {
-	const flags = new Map<string, boolean>();
-	for (const message of messages) {
-		if (message.role === "toolResult") flags.set(message.toolCallId, message.isError === true);
-	}
-	return flags;
+/**
+ * Wrap the exec channel's result handler so each result it returns is recorded in `record`, keyed by the tool-call id
+ * of the message the host keeps. The provider receives what the handler returned, or the result as it came when the
+ * handler returned nothing, which is what the provider substitutes in that case. No handler, no wrapper: the provider
+ * then has nowhere to deliver a result, and the loop has nothing to record.
+ */
+function recordExecChannelResults(
+	record: Map<string, boolean>,
+	handler: CursorToolResultHandler | undefined,
+): CursorToolResultHandler | undefined {
+	if (!handler) return undefined;
+	return async result => {
+		const delivered = (await handler(result)) ?? result;
+		record.set(delivered.toolCallId, delivered.isError === true);
+		return delivered;
+	};
 }
 
 /**
- * Whether `entries` is one call whose story the transcript already tells in full, so an inventory would restate it.
- * That is a lone `dropped` call with complete arguments (its `toolCall` block survived and it gets its own placeholder
- * result) and a lone exec-channel call that finished (block plus its real result).
+ * Whether the transcript already tells every call's story in full, so an inventory would restate it.
  *
- * The other two lone shapes keep the ledger, because nothing else states them: a call whose arguments never finished
- * has no block at all, and an exec-channel call still in flight has a block but no result, so "started, no result
- * recorded" appears nowhere else.
+ * That holds when every call ran: each has its block and its real result. It also holds for a lone `dropped` call
+ * with complete arguments, whose block survived and which gets its own placeholder result.
+ *
+ * Every other shape keeps the ledger, because nothing else states it: a call whose arguments never finished has no
+ * block at all, an exec-channel call still in flight has a block but no result, so "started, no result recorded"
+ * appears nowhere else, and two or more `dropped` calls are tied together only by the ledger's retry advice.
  */
-function transcriptStatesLoneCall(entries: readonly ToolBatchCallEntry[]): boolean {
+function transcriptStatesEveryCall(entries: readonly ToolBatchCallEntry[]): boolean {
+	if (entries.every(entry => entry.outcome === "ok" || entry.outcome === "failed")) return true;
 	if (entries.length !== 1) return false;
 	const { outcome, argumentsIncomplete } = entries[0]!;
-	return outcome === "ok" || outcome === "failed" || (outcome === "dropped" && argumentsIncomplete !== true);
+	return outcome === "dropped" && argumentsIncomplete !== true;
 }
 
 /**
