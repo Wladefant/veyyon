@@ -36,6 +36,7 @@
 - A session in a project with no context file no longer logs `Context file discovery disabled: caller supplied an empty resolved list` when it opens and at every prompt rebuild; an empty list its caller supplies is logged once.
 - `veyyon -p` and RPC mode write a hand-edited setting of the wrong kind or outside its declared values to stderr as `warning: settings: …`, with the file and the value the run uses, instead of running on the replaced value without a word.
 - A classifier refusal that ends a turn after the model streamed a tool call no longer writes that call's never-ran placeholder result to the session log, so a resumed session does not send the refusal text back to the model.
+- A `--print` run whose turn a classifier refused exits 1 and writes the refusal to stderr instead of exiting 0 with no output.
 
 ## [1.5.9] - 2026-10-22
 

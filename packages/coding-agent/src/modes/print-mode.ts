@@ -13,6 +13,7 @@ import { awaitStdoutDrain } from "../cli/stdout-drain";
 import { transformProviderPayload } from "../provider-boundary";
 import { SECRET_SPEND_NOTICE_SOURCE } from "../secrets/notices";
 import type { AgentSession } from "../session/agent-session";
+import { findLastAssistantMessage } from "../session/agent-session-message-shapes";
 import type { AgentSessionEvent } from "../session/agent-session-types";
 import { isSilentAbort } from "../session/messages";
 import { executeAcpBuiltinSlashCommand } from "../slash-commands/acp-builtins";
@@ -183,8 +184,13 @@ export async function runPrintMode(session: PrintModeSession, options: PrintMode
 		});
 	}
 
+	// The last assistant turn of the latest model run, as the run produced it. The session drops a
+	// classifier refusal from its context once the turn settles, so the context's tail cannot tell
+	// that the run failed.
+	let runEndAssistant: AssistantMessage | undefined;
 	// Always subscribe to enable session persistence via _handleAgentEvent
 	session.subscribe(event => {
+		if (event.type === "agent_end") runEndAssistant = findLastAssistantMessage(event.messages);
 		// In JSON mode, output all events
 		if (mode === "json") {
 			writeJsonLine(printableEvent(event));
@@ -246,6 +252,7 @@ export async function runPrintMode(session: PrintModeSession, options: PrintMode
 	// script cannot read a failure as success (exit-codes.md).
 	const finalAssistant = ((): AssistantMessage | undefined => {
 		if (!promptedModel) return undefined;
+		if (runEndAssistant?.stopReason === "error") return runEndAssistant;
 		const state = session.state;
 		const lastMessage = state.messages[state.messages.length - 1];
 		return lastMessage?.role === "assistant" ? (lastMessage as AssistantMessage) : undefined;
