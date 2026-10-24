@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { errorMessage, isEnoent, logger, postmortem, ptree, settleWithin, untilAborted } from "@veyyon/utils";
+import { readFileText } from "@veyyon/utils/fs-io";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { primarySessionCpuAdoption } from "../session/cpu-limit";
 import { ToolAbortError, throwIfAborted } from "../tools/core/tool-errors";
@@ -840,7 +841,7 @@ export async function ensureFileOpen(client: LspClient, filePath: string, signal
 
 		let content: string;
 		try {
-			content = await Bun.file(filePath).text();
+			content = await readFileText(filePath);
 			throwIfAborted(signal);
 		} catch (err) {
 			if (isEnoent(err)) return;
@@ -1085,7 +1086,7 @@ export async function refreshFile(client: LspClient, filePath: string, signal?: 
 
 		let content: string;
 		try {
-			content = await Bun.file(filePath).text();
+			content = await readFileText(filePath);
 			throwIfAborted(signal);
 		} catch (err) {
 			if (isEnoent(err)) return;

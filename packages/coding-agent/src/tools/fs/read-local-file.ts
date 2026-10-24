@@ -210,7 +210,7 @@ export async function readLocalFileMultiRange(
 
 	let outputText: string;
 	if (!rawSelector && fullLines && visibleSpans.length > 0) {
-		const entries = buildLineEntriesWithBlockContext(
+		const entries = await buildLineEntriesWithBlockContext(
 			fullLines,
 			visibleSpans,
 			{ path: absolutePath, text: materialized?.text },
@@ -393,12 +393,12 @@ async function readLocalFileRange(
 	} else {
 		const entries =
 			materialized &&
-			buildLineEntriesWithBlockContext(
+			(await buildLineEntriesWithBlockContext(
 				materialized.lines,
 				[{ startLine: startLineDisplay, endLine: displayedEndLine }],
 				{ path: absolutePath, text: materialized.text },
 				{ lineText: clip.lineText },
-			);
+			));
 		outputText = entries
 			? formatter.entries(entries, startLineDisplay)
 			: formatter.text(truncation.content, startLineDisplay);

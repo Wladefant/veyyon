@@ -38,7 +38,6 @@ import {
 	type CompactionResult,
 	calculateContextTokens,
 	compactionContextTokens,
-	resolveCompactionBoundaryIndex,
 	type SessionMessageEntry,
 	type ShakeConfig,
 	shouldCompact,
@@ -105,15 +104,11 @@ import { OperatorNotices, stderrNoticeSink } from "@veyyon/kernel/session/operat
 import { disposeOwnedResources } from "@veyyon/kernel/session/owned-resources";
 import {
 	type BuildSessionContextOptions,
-	getEffectiveCompactionEntry,
+	compactedHistoryEnd,
+	contextCompaction,
 	type SessionContext,
 } from "@veyyon/kernel/session/session-context";
-import {
-	type CompactionEntry,
-	EPHEMERAL_MODEL_CHANGE_ROLE,
-	type NewSessionOptions,
-	type SessionEntry,
-} from "@veyyon/kernel/session/session-entries";
+import { EPHEMERAL_MODEL_CHANGE_ROLE, type NewSessionOptions } from "@veyyon/kernel/session/session-entries";
 import { cleanupEmptyMoveSession, type SessionManager } from "@veyyon/kernel/session/session-manager";
 import {
 	isAwaitingUserAnswer,
@@ -323,6 +318,7 @@ import { SESSION_STATE_MESSAGE_TYPE, SESSION_STOP_CONTINUATION_CAP } from "./nud
 import { AdvisorRoster, type AdvisorRosterHost } from "./runtime/advisor-roster";
 import { CheckpointRuntime } from "./runtime/checkpoint-runtime";
 import { CompactionRuntime } from "./runtime/compaction-runtime";
+import { readCompactionSpanBack } from "./runtime/compaction-summarizer";
 import { ContextAccounting } from "./runtime/context-accounting";
 import { ExtensionEventForwarder } from "./runtime/extension-event-forwarder";
 import { FinalizeReminders } from "./runtime/finalize-reminders";
@@ -398,6 +394,7 @@ async function collectMemoryBackendContext(
 ): Promise<string | undefined> {
 	const backend = await resolveMemoryBackend(session.settings);
 	if (!backend.preCompactionContext) return undefined;
+	await readCompactionSpanBack(preparation);
 	const messages = preparation.messagesToSummarize.concat(preparation.turnPrefixMessages);
 	try {
 		return await backend.preCompactionContext(messages, session.settings, session);
@@ -709,17 +706,6 @@ async function saveBashOriginalArtifact(
 }
 
 /**
- * The compaction the prompt is built from: the newest one the active provider
- * can read, which is the one `buildSessionContext` applies. A provider switch
- * can leave the latest entry an unreadable server-side window, and every pass
- * that treats "before the keep marker" as absent from the prompt must use this
- * entry's marker, not the latest one's, or it misreads live entries as gone.
- */
-function promptCompaction(branch: readonly SessionEntry[], model: Model | undefined): CompactionEntry | null {
-	return getEffectiveCompactionEntry(branch, model?.provider);
-}
-
-/**
  * `details` with the text the queue chip shows for a queued custom message. Details that are not an
  * object are replaced, since the chip text needs a record to ride on.
  */
@@ -844,7 +830,6 @@ export class AgentSession {
 		estimateStoredContextTokens: () => this.#context.estimateStoredTokens(),
 		memoryBackendContext: preparation => collectMemoryBackendContext(this, preparation),
 		withPlanProtection: config => this.#planMode.withProtection(config),
-		promptCompaction: branch => promptCompaction(branch, this.model),
 		offloadAndApplyShakeRegions: regions => this.#rewrites.offloadAndApply(regions),
 		rebasePendingContextSnapshotAfterHistoryRewrite: () => this.#context.rebaseAfterHistoryRewrite(),
 		resetAllAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),
@@ -884,7 +869,11 @@ export class AgentSession {
 		emitSessionEvent: event => this.#emitSessionEvent(event),
 		promptGeneration: () => this.#promptGeneration,
 		scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
-		abortIsDeliberate: () => this.#abortInProgress || this.#isDisposed || this.#streamingEdit.abortTriggered,
+		abortIsDeliberate: message =>
+			this.#deliberateAborts.has(message) ||
+			this.#abortInProgress ||
+			this.#isDisposed ||
+			this.#streamingEdit.abortTriggered,
 		setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
 		resetCurrentResponsesProviderSession: reason => this.#providerSessions.resetResponses(this.model, reason),
 		maybeAutoRedeemCodexReset: () => this.#usage.maybeAutoRedeemCodexReset(),
@@ -1044,6 +1033,11 @@ export class AgentSession {
 	/** Prompts in flight and the power assertion held while any runs. */
 	readonly #inFlight: TurnsInFlight;
 	#abortInProgress = false;
+	/**
+	 * Turns that ended while `abort()` was running. `abort()` clears `#abortInProgress` once the agent
+	 * loop is idle, which is before the turn's settle reads it, so the settle reads this instead.
+	 */
+	readonly #deliberateAborts = new WeakSet<AssistantMessage>();
 	/** The empty-stop and unexpected-stop retry cycles, their reminders and the terminal empty-stop flag. */
 	readonly #stopRetries: StopRetries;
 	/** Usage headers and turn cost recording, usage reports, saved-reset redeems and Codex auto-redeem. */
@@ -1606,7 +1600,10 @@ export class AgentSession {
 			promptGeneration: () => this.#promptGeneration,
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 			discardAssistantTurn: message => this.#discardAssistantTurn(message),
-			dropPersistedAssistantTurn: message => this.#dropPersistedAssistantTurn(message),
+			dropPersistedAssistantTurn: async message => {
+				await this.#persistence.waitFor(message);
+				this.#discardAssistantTurn(message);
+			},
 			removeAssistantFromActiveContext: (message, reason) =>
 				removeAssistantMessageFromActiveContext(this.agent, message, reason),
 			endAnnouncedContinuationWait: finalError => this.#retry.endAnnouncedContinuationWait(finalError),
@@ -1628,7 +1625,7 @@ export class AgentSession {
 			settings: this.settings,
 			withPlanProtection: config => this.#planMode.withProtection(config),
 			model: () => this.model,
-			keepBoundaryId: branch => promptCompaction(branch, this.model)?.firstKeptEntryId,
+			keepBoundaryId: branch => contextCompaction(branch)?.firstKeptEntryId,
 			rebuiltMessages: () => this.buildDisplaySessionContext().messages,
 			resetAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),
 			closeCodexSessions: () => this.#providerSessions.closeCodexForHistoryRewrite(this.model),
@@ -1909,7 +1906,7 @@ export class AgentSession {
 				this.#scheduledHiddenNextTurnGeneration = undefined;
 			},
 			cancelOwnAsyncJobs: () => this.#cancelOwnAsyncJobs(),
-			rescopeAgentRegistry: () => this.#rescopeAgentRegistry(),
+			endConversation: () => this.#endConversation(),
 			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
 			resetAllAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),
 		});
@@ -1954,7 +1951,7 @@ export class AgentSession {
 				this.#toolActivation.restoreMCPSelections(sessionContext, options),
 			setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
 			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
-			rescopeAgentRegistry: () => this.#rescopeAgentRegistry(),
+			endConversation: () => this.#endConversation(),
 			resetAllAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),
 		});
 	}
@@ -2325,6 +2322,29 @@ export class AgentSession {
 		manager.cancelAll({ ownerId: this.#config.agentId });
 		for (const descendant of AgentRegistry.global().descendantsOf(this.#config.agentId)) {
 			manager.cancelAll({ ownerId: descendant });
+		}
+	}
+
+	/**
+	 * Release what the conversation this session just left holds: its spawned agents and registry
+	 * scope, then its eval kernels.
+	 *
+	 * A kernel is keyed by the transcript's eval session id, so no cell of the next conversation
+	 * reaches the previous one's kernel, and it kept its interpreter's memory until the session
+	 * ended: a window open for days held one kernel per conversation. The release runs the
+	 * registry `dispose` uses, so every eval language goes with it; a kernel a spawned agent still
+	 * shares stays alive for that agent. A cell still running in a released kernel ends cancelled:
+	 * the pool no longer holds its session, so it is not retried into a fresh kernel. A release that
+	 * fails is logged and does not fail the switch.
+	 */
+	async #endConversation(): Promise<void> {
+		await this.#rescopeAgentRegistry();
+		try {
+			await disposeOwnedResources("eval-kernel-owner", this.#evalKernelOwnerId);
+		} catch (error) {
+			logger.warn("Some eval kernels of the previous conversation failed to release", {
+				error: errorMessage(error),
+			});
 		}
 	}
 
@@ -2840,6 +2860,7 @@ export class AgentSession {
 			// settles as if it still carried tool calls.
 			this.#lastAssistantMessage = message;
 			if (message.stopReason === "aborted") this.#stampAbortedAssistant(message);
+			if (this.#abortInProgress) this.#deliberateAborts.add(message);
 			interruptedThinkingMessage = demoteInterruptedThinkingOnUserInterrupt(message);
 			// Make the hidden continuity turn visible to the next prompt before any awaited
 			// extension delivery or persistence can stall this handler.
@@ -3290,6 +3311,14 @@ export class AgentSession {
 					await this.#retry.maybeRestoreFallbackPrimary();
 					if (signal.aborted || this.#isDisposed) {
 						skipAgentContinue("post-restore-unavailable", options);
+						return;
+					}
+					// Another start (a queued-message drain, a second continuation scheduled at the same
+					// settle) can begin a run during the restore above. That run reads the state this
+					// continuation was scheduled for and polls the same queues, so yield to it rather than
+					// call continue() on a busy agent.
+					if (this.agent.state.isStreaming) {
+						skipAgentContinue("agent-busy", options);
 						return;
 					}
 					await this.agent.continue();
@@ -4505,7 +4534,7 @@ export class AgentSession {
 	get sessionId(): string {
 		return this.#providerSessions.activeId();
 	}
-	getEvalSessionId(): string | null {
+	getEvalSessionId(): string {
 		const parentEvalSessionId = this.#config.parentEvalSessionId;
 		if (parentEvalSessionId !== undefined) return parentEvalSessionId;
 		return defaultEvalSessionId({
@@ -6077,9 +6106,8 @@ export class AgentSession {
 			await this.sessionManager.flush();
 		}
 		await this.sessionManager.newSession(options);
-		// The transcript changed under this session, so its spawned agents belong to a
-		// conversation the operator has left. Release them and re-root this ref.
-		await this.#rescopeAgentRegistry();
+		// The transcript changed under this session: release what the conversation it left held.
+		await this.#endConversation();
 
 		this.#checkpoint.clear();
 		this.setTodoPhases([]);
@@ -6605,7 +6633,6 @@ export class AgentSession {
 	 */
 	handoff(customInstructions?: string, options?: SessionHandoffOptions): Promise<HandoffResult | undefined> {
 		return this.#sessionHandoff.run(customInstructions, options);
-	}
 	}
 
 	async #runPrePromptCompactionIfNeeded(messages: AgentMessage[]): Promise<void> {
@@ -7181,12 +7208,7 @@ export class AgentSession {
 			}
 
 			// Use the same session ID as eval's Python backend for kernel sharing.
-			const sessionId =
-				this.getEvalSessionId() ??
-				defaultEvalSessionId({
-					cwd,
-					getSessionFile: () => this.sessionManager.getSessionFile() ?? null,
-				});
+			const sessionId = this.getEvalSessionId();
 			const { executePython: executePythonCommand } = await loadPythonExecutor();
 			this.assertEvalExecutionAllowed();
 			const result = await executePythonCommand(code, {
@@ -7442,18 +7464,6 @@ export class AgentSession {
 			args,
 		);
 	}
-				preferWebsockets: this.#config.preferWebsockets,
-				providerSessionStates: this.#providerSessions.states,
-				secrets: this.#secrets,
-				sideStreamFn: this.#sideStreamFn,
-				convertMessagesToLlm: (messages, signal) => this.convertMessagesToLlm(messages, signal),
-				prepareSimpleStreamOptions: (options, provider) => this.prepareSimpleStreamOptions(options, provider),
-				resolveApiKey: (model, sessionId) => this.#config.modelRegistry.resolver(model, sessionId),
-				effectiveServiceTier: model => this.#effectiveServiceTier(model),
-			},
-			args,
-		);
-	}
 
 	/** Append a custom message to the model's context and the session file without starting a turn. */
 	#appendCustomMessageToContext<T>(message: CustomMessage<T>): void {
@@ -7610,7 +7620,6 @@ export class AgentSession {
 	): Promise<{ cancelled: boolean; sessionFile: string | undefined }> {
 		return this.#sessionBranch.branchFromBtw(question, assistantMessage, leafId, sessionId);
 	}
-	}
 
 	/**
 	 * Navigate to a different node in the session tree, in the same session file; see
@@ -7663,7 +7672,7 @@ export class AgentSession {
 	 */
 	#sessionSpend(): SessionSpend {
 		const branch = this.sessionManager.getBranch();
-		const boundary = resolveCompactionBoundaryIndex(branch, promptCompaction(branch, this.model)?.firstKeptEntryId);
+		const boundary = compactedHistoryEnd(branch);
 		return this.#spendLedger.total(branch, boundary, this.state.messages);
 	}
 

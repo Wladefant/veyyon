@@ -831,7 +831,7 @@ export class PlanReviewOverlay implements Component {
 	}
 
 	render(width: number): readonly string[] {
-		const termHeight = Math.max(14, process.stdout.rows || 40);
+		const termHeight = process.stdout.rows || 40;
 		const sizing = MODAL_SIZING_LARGE;
 		const dims = computeModalDims(width, termHeight, sizing);
 		const contentWidth = dims?.contentWidth ?? Math.max(1, width - 4);

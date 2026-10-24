@@ -19,10 +19,14 @@
  * instrumentation sees the reads once the session leaves rest, so zero reads under the hold is the
  * guard and not a blind probe. Around it: creation files nothing, a session's first turn files the
  * reading at rest before its request reaches the provider, with no host involved, the edit takes the
- * reading after its frame and not inside the keystroke, a first keystroke that opens a popup (`/`,
- * `@`, `#`) builds no schema while the popup computes its rows (the slash popup evaluates every
- * command's description, and `/context` and `/compact` state no figure at rest), a submission takes
- * it before its message lands, the borrowed gauge is the recorded one for the default role and the
+ * reading after its frame and not inside the keystroke, and builds each tool's schema in its own
+ * event-loop turn so no single turn holds the loop for the whole set (one turn for every schema
+ * held it about 40 ms, and the second key of a word waited behind it), a host stopped while those
+ * builds run leaves the reading held and files nothing, a first keystroke that opens
+ * a popup (`/`, `@`, `#`) builds no schema while the popup computes its rows (the slash popup
+ * evaluates every command's description, and `/context` and `/compact` state no figure at rest), a
+ * submission takes it before its message lands, the borrowed gauge is the recorded one for the
+ * default role and the
  * unknown for any other model, a resumed session states the resting usage its last stamped response
  * supports (the figure the measurement reaches while the stamped non-message size is current) in the
  * row and the slash popup without building a schema, a session whose messages carry no stamped size
@@ -112,9 +116,10 @@ async function create(extra: Partial<CreateAgentSessionOptions>): Promise<AgentS
 
 /**
  * Count every read of `parameters` on the session's active tools, the objects the tool-schema
- * estimate iterates. Each tool keeps its own getter or value; the counter wraps it on the instance.
+ * estimate iterates, and pass each read's tool name to `onRead`. Each tool keeps its own getter or
+ * value; the counter wraps it on the instance.
  */
-function countSchemaReads(session: AgentSession): { count: number } {
+function countSchemaReads(session: AgentSession, onRead?: (tool: string) => void): { count: number } {
 	const reads = { count: 0 };
 	for (const tool of session.agent.state.tools) {
 		let owner: object | null = tool;
@@ -130,6 +135,7 @@ function countSchemaReads(session: AgentSession): { count: number } {
 			enumerable: true,
 			get(): unknown {
 				reads.count++;
+				onRead?.(tool.name);
 				return found.get ? found.get.call(tool) : found.value;
 			},
 		});
@@ -498,6 +504,15 @@ describe("the interactive host holds the reading until the session leaves rest",
 		expect(isAtRestReadingDeferred(session)).toBe(true);
 	});
 
+	/** Await event-loop turns, one at a time, until `done` holds or `bound` turns passed. */
+	async function turnsUntil(done: () => boolean, bound: number): Promise<void> {
+		for (let passed = 0; !done() && passed < bound; passed++) {
+			const turn = Promise.withResolvers<void>();
+			setImmediate(turn.resolve);
+			await turn.promise;
+		}
+	}
+
 	it("takes the reading after the frame that draws the first edit, not inside the keystroke", async () => {
 		const session = await create({});
 		const reads = countSchemaReads(session);
@@ -509,9 +524,60 @@ describe("the interactive host holds the reading until the session leaves rest",
 		expect(isAtRestReadingDeferred(session)).toBe(true);
 
 		await committedFrame(mode);
+		await turnsUntil(() => !isAtRestReadingDeferred(session), session.agent.state.tools.length + 2);
 		expect(reads.count).toBeGreaterThan(0);
 		expect(isAtRestReadingDeferred(session)).toBe(false);
 		expect(readLaunchFacts().contextPercent).not.toBe(RECORDED_PERCENT);
+	});
+
+	// One turn that built every schema held the loop for the whole set, about 40 ms on a launch, and a
+	// key typed right after the first waited behind it.
+	it("builds each tool's schema for the first edit's reading in its own event-loop turn", async () => {
+		const session = await create({});
+		const tools = session.agent.state.tools;
+		expect(tools.length).toBeGreaterThan(1);
+		// Advances once per event-loop turn: started before the edit, its tick runs ahead of every step
+		// the edit queues, so two schemas built in one turn read the same value.
+		const clock = { turn: 0, ticking: true };
+		const tick = (): void => {
+			clock.turn++;
+			if (clock.ticking) setImmediate(tick);
+		};
+		const builtAt = new Map<string, number>();
+		countSchemaReads(session, name => {
+			if (!builtAt.has(name)) builtAt.set(name, clock.turn);
+		});
+		const mode = await host(session);
+		await committedFrame(mode);
+
+		setImmediate(tick);
+		try {
+			mode.editor.handleInput("h");
+			await committedFrame(mode);
+			await turnsUntil(() => !isAtRestReadingDeferred(session), tools.length + 2);
+		} finally {
+			clock.ticking = false;
+		}
+
+		expect(isAtRestReadingDeferred(session)).toBe(false);
+		expect([...builtAt.keys()].sort()).toEqual(tools.map(tool => tool.name).sort());
+		const turns = [...builtAt.values()];
+		expect(new Set(turns).size).toBe(turns.length);
+	});
+
+	it("leaves the reading held when the host stops before the first edit's schemas are built", async () => {
+		const session = await create({});
+		const mode = await host(session);
+		await committedFrame(mode);
+
+		mode.editor.handleInput("h");
+		await committedFrame(mode);
+		modes.splice(modes.indexOf(mode), 1);
+		mode.stop();
+		await turnsUntil(() => false, session.agent.state.tools.length + 2);
+
+		expect(isAtRestReadingDeferred(session)).toBe(true);
+		expect(readLaunchFacts().contextPercent).toBe(RECORDED_PERCENT);
 	});
 
 	it("takes the reading when a prompt is submitted with no edit before it", async () => {

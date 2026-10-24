@@ -34,15 +34,13 @@ interface MaterializedFile {
 	windowLines: string[] | undefined;
 }
 
-/** Preserves a leading BOM, which `Bun.file().text()` silently drops. */
-const BOM_PRESERVING_DECODER = new TextDecoder("utf-8", { ignoreBOM: true });
-
 export async function materializeFile(absolutePath: string, fileSize: number): Promise<MaterializedFile | undefined> {
 	if (fileSize > SNAPSHOT_MAX_BYTES) return undefined;
 	try {
 		// Decoded with the BOM intact because the line streamer keeps it on line 1: a decode that
 		// drops it reports a file whose first line differs from the one the reader is shown.
-		const raw = BOM_PRESERVING_DECODER.decode(await Bun.file(absolutePath).bytes());
+		// `readFile`'s own UTF-8 decode keeps a BOM, unlike `readFileText`.
+		const raw = await fs.readFile(absolutePath, "utf8");
 		const hasBom = raw.startsWith("\uFEFF");
 		// The snapshot tag and the bracket context both fingerprint the file the way every other
 		// reader of it does, BOM stripped, so a tag minted here still matches one minted by a

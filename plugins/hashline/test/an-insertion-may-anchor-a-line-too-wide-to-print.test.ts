@@ -211,22 +211,25 @@ describe("an insertion may anchor a line too wide to print", () => {
 		expect(fs.get(PATH)).toBe(CONTENT);
 	});
 
-	it("still refuses an insertion beside a clipped line under a different tag's provenance", async () => {
+	it("still refuses an insertion beside a clipped line a change moved under a different tag", async () => {
 		// Clipped lines belong to the snapshot they were recorded against. A later
-		// read of DIFFERENT content must not inherit the earlier permission.
+		// read of DIFFERENT content inherits only the lines the change left at the
+		// same line; a line it moved is a guess at a position under the new tag.
 		const fs = new InMemoryFilesystem([[PATH, CONTENT]]);
 		const snapshots = new InMemorySnapshotStore();
 		const stale = snapshots.record(PATH, CONTENT, [1, 3]);
 		snapshots.recordClippedLines(PATH, stale, [CLIPPED_LINE]);
-		const changed = `${CONTENT}extra\n`;
+		const changed = `extra\n${CONTENT}`;
 		fs.set(PATH, changed);
-		const fresh = snapshots.record(PATH, changed, [1, 3]);
+		const fresh = snapshots.record(PATH, changed, [1]);
 		expect(fresh).not.toBe(stale);
 		const patcher = new Patcher({ fs, snapshots });
 
-		await expect(patcher.apply(Patch.parse(`[${PATH}#${fresh}]\nINS.PRE ${CLIPPED_LINE}:\n+added`))).rejects.toThrow(
-			/never displayed \(it showed/,
-		);
+		for (const line of [CLIPPED_LINE, CLIPPED_LINE + 1]) {
+			await expect(patcher.apply(Patch.parse(`[${PATH}#${fresh}]\nINS.PRE ${line}:\n+added`))).rejects.toThrow(
+				/never displayed \(it showed/,
+			);
+		}
 		expect(fs.get(PATH)).toBe(changed);
 	});
 });

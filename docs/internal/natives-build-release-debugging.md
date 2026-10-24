@@ -160,7 +160,7 @@ in-tree build are distinguishable; it used to print the bare file name, which is
 In compiled mode (`VEYYON_COMPILED`, Bun embedded URL markers, or populated embedded manifest):
 
 1. Loader computes versioned cache dir: `<getNativesDir()>/<packageVersion>`.
-2. If embedded manifest matches current platform+version, loader extracts the selected file from `embedded-addons.<tag>.tar.gz` into that versioned dir when the cached file is absent or has the wrong size.
+2. If embedded manifest matches current platform+version, loader extracts the selected file from `embedded-addons.<tag>-<variant>.tar.gz` into that versioned dir unless `<filename>.stamp` beside the cached file records the manifest's `sha256` and the file's current inode and modification time. A rebuild of the same version therefore replaces the copy a previous build extracted.
 3. Runtime candidate order includes:
    - extracted versioned cache path, if available,
    - versioned cache dir,
@@ -302,4 +302,4 @@ Workspaces that hardlinked a `.node` before GC retain access via the kernel inod
 
 Trigger an automatic miss by editing any path in the key set: a single touched byte under `natives/`, `Cargo.lock`, `Cargo.toml`, `rust-toolchain.toml`, or `natives/bridge/bindings/` shifts the tree hash and forces a fresh build at the next populate.
 
-*Verified against `4aaaffd0a` on 2026-08-30.*
+*Verified against `b68e3a26` on 2026-10-20.*

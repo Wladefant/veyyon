@@ -36,24 +36,35 @@ function escapeGlobMetachars(value: string): string {
 	return value.replace(/[*?[{]/g, "[$&]");
 }
 
+/** The one path a suffix search found. */
+interface SuffixMatch {
+	absolutePath: string;
+	displayPath: string;
+}
+
 /**
  * Attempt to resolve a non-existent path by finding a unique suffix match within the workspace.
  * Uses a glob suffix pattern so the native engine handles matching directly.
- * Returns null when 0 or >1 candidates match (ambiguous = no auto-resolution).
+ * Returns null when 0 or >1 candidates match (ambiguous = no auto-resolution), or when the walk
+ * outlasts `timeoutMs`.
  */
 async function findUniqueSuffixMatch(
 	rawPath: string,
 	cwd: string,
+	timeoutMs: number,
 	signal?: AbortSignal,
-): Promise<{ absolutePath: string; displayPath: string } | null> {
+): Promise<SuffixMatch | null> {
 	const normalized = trimTrailingSlashes(rawPath.replace(/\\/g, "/").replace(/^\.\//, ""));
 	if (!normalized) return null;
 	const pattern = `**/${escapeGlobMetachars(normalized)}`;
 
 	// scopedTimeoutSignal cancels the backing timer on settle, so the glob
 	// timeout never outlives the walk (a bare AbortSignal.timeout would keep its
-	// timer armed for the full window and accumulate under load).
-	const { signal: combinedSignal, cancel } = scopedTimeoutSignal(GLOB_TIMEOUT_MS, signal);
+	// timer armed for the full window and accumulate under load). The native
+	// walk takes the signal too: racing the promise alone returned at the
+	// deadline and left the walk running to the end of the tree, so every miss
+	// in a large working directory kept a walker busy in the background.
+	const { signal: combinedSignal, cancel } = scopedTimeoutSignal(timeoutMs, signal);
 
 	let matches: string[];
 	try {
@@ -63,6 +74,9 @@ async function findUniqueSuffixMatch(
 				path: cwd,
 				// No fileType filter: matches both files and directories
 				hidden: true,
+				// Two matches already make the suffix ambiguous, so no more are returned.
+				maxResults: 2,
+				signal: combinedSignal,
 			}),
 		);
 		matches = result.matches.map(m => m.path);
@@ -113,9 +127,6 @@ export interface ResolvedSqliteReadPath {
 	suffixResolution?: { from: string; to: string };
 }
 
-/** Per-execute memo of suffix-glob lookups; `null` records a confirmed miss. */
-export type SuffixMatchCache = Map<string, { absolutePath: string; displayPath: string } | null>;
-
 /** A path found on disk, with the suffix match that found it when the literal path was missing. */
 export type ResolvedReadPath = {
 	absolutePath: string;
@@ -124,29 +135,30 @@ export type ResolvedReadPath = {
 };
 
 /**
- * Memoized {@link findUniqueSuffixMatch} for a single read call. A missing
- * path with archive/sqlite extensions probes the workspace once per stage
- * (archive candidates, sqlite candidates, plain path) — each glob carries a
- * 5s timeout, so repeated lookups of the same string stack into a long
- * stall before erroring. The cache collapses repeats within one execute().
+ * The suffix searches of one read call. Each path is searched once, a miss recorded as `null`, so
+ * the archive, SQLite and plain-path stages of one path share it. Every search shares one
+ * {@link GLOB_TIMEOUT_MS} limit counted from the first: a working directory too large to search in
+ * that time is searched for 5 s per read, not 5 s for each path of a list that misses.
  */
-async function findSuffixMatchCached(
-	cwd: string,
-	cache: SuffixMatchCache,
-	rawPath: string,
-	signal?: AbortSignal,
-): Promise<{ absolutePath: string; displayPath: string } | null> {
-	const hit = cache.get(rawPath);
-	if (hit !== undefined) return hit;
-	const result = await findUniqueSuffixMatch(rawPath, cwd, signal);
-	cache.set(rawPath, result);
-	return result;
+export class SuffixSearch {
+	readonly #matches = new Map<string, SuffixMatch | null>();
+	#deadline: number | undefined;
+
+	async find(cwd: string, rawPath: string, signal?: AbortSignal): Promise<SuffixMatch | null> {
+		const hit = this.#matches.get(rawPath);
+		if (hit !== undefined) return hit;
+		this.#deadline ??= performance.now() + GLOB_TIMEOUT_MS;
+		const remaining = this.#deadline - performance.now();
+		const match = remaining > 0 ? await findUniqueSuffixMatch(rawPath, cwd, remaining, signal) : null;
+		this.#matches.set(rawPath, match);
+		return match;
+	}
 }
 
 export async function statCandidateWithSuffix(
 	cwd: string,
 	rawPath: string,
-	suffixCache: SuffixMatchCache,
+	suffixSearch: SuffixSearch,
 	signal?: AbortSignal,
 	options: { throwNonMissing?: boolean } = {},
 ): Promise<ResolvedReadPath | null> {
@@ -160,7 +172,7 @@ export async function statCandidateWithSuffix(
 			return null;
 		}
 		if (isRemoteMountPath(absolutePath)) return null;
-		const suffixMatch = await findSuffixMatchCached(cwd, suffixCache, rawPath, signal);
+		const suffixMatch = await suffixSearch.find(cwd, rawPath, signal);
 		if (!suffixMatch) return null;
 		try {
 			const stat = await Bun.file(suffixMatch.absolutePath).stat();
@@ -179,11 +191,11 @@ export async function statCandidateWithSuffix(
 export async function resolveArchiveReadPath(
 	cwd: string,
 	readPath: string,
-	suffixCache: SuffixMatchCache,
+	suffixSearch: SuffixSearch,
 	signal?: AbortSignal,
 ): Promise<ResolvedArchiveReadPath | null> {
 	for (const candidate of parseArchivePathCandidates(readPath)) {
-		const resolved = await statCandidateWithSuffix(cwd, candidate.archivePath, suffixCache, signal);
+		const resolved = await statCandidateWithSuffix(cwd, candidate.archivePath, suffixSearch, signal);
 		if (resolved && !resolved.stat.isDirectory()) {
 			return {
 				absolutePath: resolved.absolutePath,
@@ -198,11 +210,11 @@ export async function resolveArchiveReadPath(
 export async function resolveSqliteReadPath(
 	cwd: string,
 	readPath: string,
-	suffixCache: SuffixMatchCache,
+	suffixSearch: SuffixSearch,
 	signal?: AbortSignal,
 ): Promise<ResolvedSqliteReadPath | null> {
 	for (const candidate of parseSqlitePathCandidates(readPath)) {
-		const resolved = await statCandidateWithSuffix(cwd, candidate.sqlitePath, suffixCache, signal);
+		const resolved = await statCandidateWithSuffix(cwd, candidate.sqlitePath, suffixSearch, signal);
 		if (resolved && !resolved.stat.isDirectory() && (await isSqliteFile(resolved.absolutePath))) {
 			return {
 				absolutePath: resolved.absolutePath,

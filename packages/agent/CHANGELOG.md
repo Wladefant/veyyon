@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `prepareToolCall` in `@veyyon/agent-core/tool-call-preparation` and `Agent.prepareExternalToolCall` strip the intent field from a tool call's arguments, repair, validate and transform them as the agent loop does, for a provider that runs tool calls itself during the stream.
+
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.
@@ -29,10 +33,17 @@
 ### Changed
 
 - `normalizeTools` moved from `@veyyon/agent-core/agent-loop` to `@veyyon/agent-core/tool-normalization`, so building the provider-bound tool list no longer loads the agent loop; the package root still exports it.
+- `prepareCompaction` validates only the server-side windows it uses, the newest valid window of each provider and api and the furthest kept boundary's window, instead of every window on the branch, so a pass over a session whose summarized windows were moved to disk reads none of them back.
+- `prepareToolCall` builds every rejection through one constructor; the rejections it returns are unchanged.
 
 ### Fixed
 
 - Preparing a compaction behind server-side compaction windows no longer reads the summarized history back from the session file; `CompactionPreparation.fileOps` is computed on first read.
+- Planning a history summary measures the span in slices that yield to the event loop every 8 ms and stages a span whose byte count already puts one request past the window without serializing it whole, so on a resumed 34,572-entry session the candidate estimate holds the event loop at most 9.5 ms instead of 405 ms; `estimateCompactionRequestTokens` and `planSummarySegments` are now async, and `planSummarySegments` takes the `SummarySource` that `measureSummarySource` returns.
+- Summarization requests that do not replay the session prefix (the turn-prefix summary of a split turn, a history summary without cache alignment, staged segment and merge summaries, and branch summaries) are sent with `cacheRetention: "none"`, so Anthropic no longer bills a cache write that is never read and no longer warns "prompt cache prefix changed" after each split-turn compaction.
+- A compaction no longer cuts between a tool call and its result when a message sits between them, such as the `cwd_changed` and `prompt_cache_invalidated` messages `set_cwd` appends while it runs, so the kept history no longer starts with a result whose call was summarized and every later request no longer folds that result into a note.
+- A compaction on a model that does not accept the requested effort logs "Compaction effort is not accepted by the model" once per model and effort instead of once per request, so a staged compaction of a 146 MB session logs it once instead of 133 times; `clampPassEffort` in `@veyyon/agent-core/effort-clamp` is the shared clamp.
+- The agent loop's cooperative yield hands the event loop one turn instead of sleeping 20 ms (`YieldGateOptions.sleep` and `sleepMs` are replaced by `yieldTurn`), so with a 300 ms provider the gap between a tool-call response and the next request falls from 26.8 ms to 6.9 ms and a response's first streamed event is no longer held 20 ms.
 
 ### Removed
 

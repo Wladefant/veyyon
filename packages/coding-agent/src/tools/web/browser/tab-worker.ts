@@ -2345,7 +2345,7 @@ export class WorkerCore {
 					)
 				: path.join(os.tmpdir(), `veyyon-sshots-${Snowflake.next()}.${ext}`));
 		await fs.promises.mkdir(path.dirname(dest), { recursive: true });
-		await Bun.write(dest, savedBuffer);
+		await fs.promises.writeFile(dest, savedBuffer);
 		const info: ScreenshotResult = {
 			dest,
 			mimeType: savedMimeType,

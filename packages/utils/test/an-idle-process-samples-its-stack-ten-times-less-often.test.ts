@@ -15,11 +15,11 @@ import { StallSampler } from "@veyyon/utils/stall-sampler";
  * real profiler and read its samples back: a profile started after 10s without a busy tick samples
  * at the idle interval, one busy tick restores the busy interval at once, a process that worked
  * inside the idle stretch keeps the busy interval through a rotation, the boundary of the idle
- * stretch falls on 10s exactly, and a profile is replaced once it could hold 1,000 samples, which
- * is 10s at the busy interval and 100s at the idle one. A parked sampler samples once a second, and
- * the first quiet tick after the watchdog wakes restores the idle interval. The watchdog cases pin
- * what a quiet tick reports as busy: CPU over `BUSY_CPU_RATIO` of the wall time the tick's interval
- * spanned.
+ * stretch falls on 10s exactly, a busy tick replaces the profile at once, and an idle tick keeps it
+ * until it could hold 1,000 samples, which is 10s at the busy interval and 100s at the idle one. A
+ * parked sampler samples once a second, and the first quiet tick after the watchdog wakes restores
+ * the idle interval. The watchdog cases pin what a quiet tick reports as busy: CPU over
+ * `BUSY_CPU_RATIO` of the wall time the tick's interval spanned.
  *
  * WHAT IT DOES NOT CATCH. The wakeup counts themselves are a property of the engine's profiler
  * thread and are measured on the binary, not here. Sample counts read the interval: a held loop of
@@ -150,15 +150,15 @@ describe("an idle process samples its stack ten times less often", () => {
 		expect(await samplesInHold(sampler)).toBeLessThanOrEqual(IDLE_MAX);
 	});
 
-	test("a busy-interval profile is replaced once it could hold 1,000 samples, 10s", async () => {
+	test("a busy tick replaces the profile at once, and an idle tick keeps it until it is full", async () => {
 		const sampler = await startedSampler(performance.now());
 
 		holdTheLoopForMs(300);
-		sampler.quiet(performance.now() + 8_000, true);
+		sampler.quiet(performance.now() + 5_000, false);
 		expect((await sampler.stacksBetween(0, performance.now()))?.samples).toBeGreaterThan(0);
 
 		holdTheLoopForMs(300);
-		sampler.quiet(performance.now() + 10_000, true);
+		sampler.quiet(performance.now(), true);
 		expect((await sampler.stacksBetween(0, performance.now()))?.samples).toBe(0);
 	});
 

@@ -37,6 +37,7 @@ import { paintFirstFrame, shouldPaintFirstFrame } from "../modes/terminal/first-
 import { shouldShowStartupSplash } from "../startup-splash";
 import { initTheme } from "../theme/theme";
 import type { Args } from "./args";
+import { opensSessionPicker } from "./launch-card-eligibility";
 import { type StartupPrologue, setStartupPrologue } from "./prologue-handoff";
 import { applySessionWorkdir, applyStartupCwd } from "./startup-cwd";
 
@@ -87,7 +88,7 @@ export async function runStartupPrologue(parsed: Args, forceSetupWizard = false)
 		setupWizard: forceSetupWizard || (!onboarding.unreadable && onboarding.version < CURRENT_SETUP_VERSION),
 		stdinIsTTY: process.stdin.isTTY,
 		stdoutIsTTY: process.stdout.isTTY,
-		resuming,
+		pickingSession: opensSessionPicker(parsed),
 	});
 	if (paint) {
 		const frame = logger.time("paintFirstFrame", paintFirstFrame, VERSION);

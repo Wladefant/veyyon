@@ -1128,21 +1128,6 @@ function backfillPriorityPremiumRequests(database: Database): void {
 	resetFileOffsetsOnce(database, PRIORITY_PREMIUM_REQUESTS_BACKFILL_KEY);
 }
 
-export function markPriorityPremiumRequestsBackfillComplete(): void {
-	if (!db) return;
-	writeBackfillState(db, PRIORITY_PREMIUM_REQUESTS_BACKFILL_KEY, BACKFILL_COMPLETE);
-}
-
-export function markUserMessagesBackfillComplete(): void {
-	if (!db) return;
-	writeBackfillState(db, USER_MESSAGES_BACKFILL_KEY, BACKFILL_COMPLETE);
-}
-
-export function markUserMessageLinksRepairComplete(): void {
-	if (!db) return;
-	writeBackfillState(db, USER_MESSAGE_LINKS_REPAIR_KEY, BACKFILL_COMPLETE);
-}
-
 /**
  * Insert user-message stats. Idempotent via UNIQUE(session_file, entry_id).
  * The `WHERE NOT EXISTS` clause matches {@link insertMessageStats}: forks
