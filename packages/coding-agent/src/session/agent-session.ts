@@ -140,6 +140,7 @@ import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mod
 import { credentialRemedySentence, missingCredentialsMessage } from "../config/missing-credentials";
 import { normalizeModelPatternList } from "../config/model-pattern-list";
 import type { ModelRegistry } from "../config/model-registry";
+import { noModelSelectedMessage } from "../config/model-resolution-failure";
 import {
 	extractExplicitThinkingSelector,
 	filterAvailableModelsByEnabledPatterns,
@@ -4792,31 +4793,7 @@ export class AgentSession {
 			await this.#retry.maybeRestoreFallbackPrimary();
 
 			// Validate model
-			if (!this.model) {
-				// A model configuration that failed to load is the cause to fix first: signing in
-				// cannot select a model the broken file declares. Its message names the file and
-				// the remedy.
-				const registryError = this.#config.modelRegistry.getError()?.message;
-				if (registryError !== undefined) {
-					throw new Error(
-						`No model selected, so there is nothing to send the prompt to. The model configuration failed to load:\n${registryError}`,
-					);
-				}
-				// Every command named here has to work in the channel the reader is in.
-				// `/login` carries no `textMode: true` in
-				// `slash-commands/builtin-declarations.ts`, so it is TUI-only, and
-				// `veyyon setup` hard-exits with "requires an interactive TTY" when
-				// stdin or stdout is not a terminal (see `commands/setup.ts`). This error
-				// reaches `--print` runs and ACP clients too, so the terminal path is
-				// named separately from the interactive one and the environment variable
-				// is named for the case where neither is available.
-				throw new Error(
-					"No model selected, so there is nothing to send the prompt to.\n\n" +
-						"Fix: in an interactive veyyon session, run /login to sign in and then /model to choose a model. " +
-						"From a terminal, run `veyyon auth-broker login` to sign in and `veyyon models` to see what is available. " +
-						"With no terminal at all, set the provider's API key environment variable and pass `--model <provider>/<id>`.",
-				);
-			}
+			if (!this.model) throw new Error(noModelSelectedMessage(this.#config.modelRegistry.getError()?.message));
 
 			// Validate API key
 			const apiKey = await this.#config.modelRegistry.getApiKey(this.model, this.sessionId);

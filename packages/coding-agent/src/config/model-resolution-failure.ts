@@ -235,3 +235,27 @@ export function modelResolutionFailureMessage(requested: readonly string[], regi
 		registryError: registry.getError?.()?.message,
 	}).message;
 }
+
+/**
+ * The sentence for a prompt sent while no model is selected.
+ *
+ * A model configuration that failed to load is the cause to fix first: signing in cannot select
+ * a model the broken file declares, and its message states the file and the remedy.
+ *
+ * Otherwise every command named has to work in the channel the reader is in. `/login` carries no
+ * `textMode: true` in `slash-commands/builtin-declarations.ts`, so it is TUI-only, and
+ * `veyyon setup` exits with "requires an interactive TTY" when stdin or stdout is not a terminal
+ * (see `commands/setup.ts`). This error reaches `--print` runs and ACP clients too, so the
+ * terminal path is stated separately from the interactive one, and the environment variable is
+ * stated for the case where neither is available.
+ */
+export function noModelSelectedMessage(registryError: string | undefined): string {
+	const lead = "No model selected, so there is nothing to send the prompt to.";
+	if (registryError !== undefined) return `${lead} The model configuration failed to load:\n${registryError}`;
+	return (
+		`${lead}\n\n` +
+		"Fix: in an interactive veyyon session, run /login to sign in and then /model to choose a model. " +
+		"From a terminal, run `veyyon auth-broker login` to sign in and `veyyon models` to see what is available. " +
+		"With no terminal at all, set the provider's API key environment variable and pass `--model <provider>/<id>`."
+	);
+}
