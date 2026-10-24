@@ -114,6 +114,8 @@ jobs:
           echo 'VEYYON_SANDBOX_TIMEOUT=1800' >> "$GITHUB_ENV"
       - name: Build native addon when required
         if: ${{ !cancelled() && steps.selection.outputs.native == 'true' }}
+        env:
+          CARGO_BUILD_JOBS: "2"
         run: bun run ci:build:native
       - name: Biome changed TypeScript and JavaScript
         id: biome
