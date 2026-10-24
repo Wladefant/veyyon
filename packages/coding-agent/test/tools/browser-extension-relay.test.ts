@@ -1204,6 +1204,7 @@ describe("secrets stay out of logs", () => {
 				await relay.waitForExtension(2000);
 				const cdp = await CdpTestClient.connect(relay.cdpUrl);
 				await cdp.send("Target.createTarget", { url: "about:blank" });
+				await until(() => cdp.events.some(event => event.method === "Target.attachedToTarget"), "session attach");
 				const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
 				// The extension never answers this call. The 15 s RPC timer is fired at once so the test stays fast.
 				const method = `Runtime.${token}`;
