@@ -398,8 +398,8 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * `ai/src/registry/registry.ts`, already here, lists beside the OpenCode Console login, and
  * `catalog/src/wire/opencode-go.ts`, the OpenCode Go endpoint rules and the envelope a Console login's
  * key is carried in, which `catalog/src/provider-models/openai-compat.ts` and
- * `ai/src/registry/oauth/index.ts`, both already here, read. Their runtime imports are
- * `./api-key-login` and `@veyyon/utils/url`, both already here. The Console device flow stays behind
+ * `ai/src/registry/oauth/index.ts`, both already here, read. Their runtime imports, the shared API-key
+ * login builder and `@veyyon/utils/url`, are already here. The Console device flow stays behind
  * the registry's lazy `await import`. Measured 2026-10-24 at 1498.
  *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There

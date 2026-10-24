@@ -132,7 +132,7 @@ function runtimeImportsOf(relative: string): string[] {
  * 232 since 2026-10-24, measured: `registry/opencode-go-api-key.ts`, the OpenCode Go API-key login, and
  * `catalog/wire/opencode-go.ts`, the OpenCode Go endpoint rules and the envelope a Console login's key
  * is carried in. `registry/registry.ts`, already in this closure, lists the API-key login beside the
- * Console one, and its imports (`./api-key-login` and types) were already reached.
+ * Console one, and its imports (the shared API-key login builder and types) were already reached.
  * `catalog/provider-models/openai-compat.ts` and `registry/oauth/index.ts`, both already reached, read
  * the envelope from the wire leaf, whose only import is `@veyyon/utils/url`, already reached. The Console
  * device flow, `registry/oauth/opencode-console.ts`, stays behind the registry's lazy `await import`, so
