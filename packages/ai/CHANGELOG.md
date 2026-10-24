@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `/login opencode-go` signs in with an OpenCode Console account through its device flow and sends requests to the Go inference endpoint of the organization that holds the subscription, with the organization id in `x-opencode-org-id`; an OpenCode Go API key is the legacy `opencode-go-api-key` login.
+- The OpenCode Go usage ledger reports spend for a Console login as it does for an API key.
+
 ### Fixed
 
 - Cursor's "You're out of usage" answer parks the account for the quota window instead of a 45 to 75 second capacity backoff, so a turn on a spent plan ends on the first failure instead of retrying it every minute.
@@ -11,6 +16,7 @@
 - A credential health check attributes the usage report it returns to the credential's organization, as a usage fetch does, so the report matches its account when one email holds logins to two organizations.
 - Kimi Code's Anthropic wire sends adaptive thinking with `output_config.effort` and a summarized display, as Kimi Code's own client does, so Low, High and Max each reach the model as that effort.
 - A Kimi Code request with thinking turned off sends the model's lowest effort on both wires, and the chat wire sends `thinking: {type: "enabled"}` beside the effort for a model that cannot stop thinking.
+- The OpenCode Go API-key login prompt names OpenCode Go instead of OpenCode Zen.
 
 ## [1.5.9] - 2026-10-22
 

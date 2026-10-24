@@ -48,6 +48,7 @@ import { routeModalChrome } from "../selectors/select-list-mouse-routing";
 import { hoverBandAt, renderScrollableList, selectionBand } from "../selectors/selector-helpers";
 import {
 	type AccountGlyphKind,
+	type AccountLoginChoice,
 	type AccountSidebarEntry,
 	accountGlyphKind,
 	accountHeadLine,
@@ -111,8 +112,11 @@ export interface AccountManagerCallbacks {
 	onLogout: (row: AccountRow) => void;
 	/** Show the full usage report for one account. */
 	onShowUsage: (row: AccountRow) => void;
-	/** Start a login that adds another account for this provider. */
-	onAddAccount: (provider: string) => void;
+	/**
+	 * Start a login that adds another account for this provider: its own login, or `loginId`, an
+	 * alternate login that stores its credential under `provider`.
+	 */
+	onAddAccount: (provider: string, loginId?: string) => void;
 	/**
 	 * Lift the rate-limit block this card is showing on one account, and re-probe it.
 	 *
@@ -159,10 +163,11 @@ export interface AccountManagerOptions {
 /**
  * What a body line points at.
  *
- * `add` is the `+ add another …` entry. It is a real list position, not a hint: arrowing off the
- * last account lands on it, `enter` there starts a login, and a click on it does the same.
+ * `add` is a `+ add …` entry. It is a real list position, not a hint: arrowing off the last account
+ * lands on it, `enter` there starts a login, and a click on it does the same. `loginId` is absent on
+ * the provider's own login and names the alternate login on each entry after it.
  */
-type BodyTarget = { kind: "account"; credentialId: number } | { kind: "add" };
+type BodyTarget = { kind: "account"; credentialId: number } | { kind: "add"; loginId?: string };
 
 /** One rendered body line, and the entry it belongs to. */
 interface BodyLine {
@@ -301,7 +306,8 @@ export class AccountManagerComponent implements Component {
 			// sidebar, so the short form is both consistent and more readable here.
 			getOAuthProviders().map(provider => {
 				const id = provider.storeCredentialsAs ?? provider.id;
-				return { id, label: formatProviderName(id) };
+				const alternateLogin = id === provider.id ? undefined : { id: provider.id, name: provider.name };
+				return { id, label: formatProviderName(id), alternateLogin };
 			}),
 		);
 		if (!this.#entries.some(entry => entry.providerId === this.#activeProviderId)) {
@@ -343,12 +349,29 @@ export class AccountManagerComponent implements Component {
 		this.#bodySelection = first ? { kind: "account", credentialId: first.credentialId } : { kind: "add" };
 	}
 
+	/** The add entries in list order: the provider's own login, then each alternate login. */
+	#addTargets(): BodyTarget[] {
+		const alternates = this.#activeEntry()?.alternateLogins ?? [];
+		return [{ kind: "add" }, ...alternates.map(login => ({ kind: "add" as const, loginId: login.id }))];
+	}
+
+	/**
+	 * The alternate login the cursor is on, or undefined on an account or the provider's own add
+	 * entry. A login id the active provider does not offer reads as its own login, so a selection
+	 * left over from another provider never starts a login this card is not showing.
+	 */
+	#selectedAlternateLogin(): AccountLoginChoice | undefined {
+		const selection = this.#bodySelection;
+		if (selection.kind !== "add" || selection.loginId === undefined) return undefined;
+		return this.#activeEntry()?.alternateLogins.find(login => login.id === selection.loginId);
+	}
+
 	#isSelected(target: BodyTarget | undefined): boolean {
 		if (!target) return false;
 		const selection = this.#bodySelection;
-		return target.kind === "add"
-			? selection.kind === "add"
-			: selection.kind === "account" && selection.credentialId === target.credentialId;
+		if (target.kind === "add")
+			return selection.kind === "add" && this.#selectedAlternateLogin()?.id === target.loginId;
+		return selection.kind === "account" && selection.credentialId === target.credentialId;
 	}
 
 	/**
@@ -556,20 +579,24 @@ export class AccountManagerComponent implements Component {
 			return;
 		}
 		const rows = this.#rows();
-		// The add entry is the position AFTER the last account, so arrowing off the bottom of the
-		// list lands on it instead of stopping. The list wraps, like `SelectList` and like the
-		// sidebar above: down from the add entry returns to the first account.
-		const count = rows.length + 1;
+		// The add entries are the positions AFTER the last account, so arrowing off the bottom of the
+		// list lands on them instead of stopping. The list wraps, like `SelectList` and like the
+		// sidebar above: down from the last add entry returns to the first account.
+		const adds = this.#addTargets();
+		const count = rows.length + adds.length;
+		const alternate = this.#selectedAlternateLogin();
 		const current =
 			this.#bodySelection.kind === "add"
-				? rows.length
+				? rows.length + adds.findIndex(target => target.kind === "add" && target.loginId === alternate?.id)
 				: Math.max(
 						0,
 						rows.findIndex(row => row.credentialId === this.#selectedCredentialId()),
 					);
 		const next = (current + direction + count) % count;
 		const row = rows[next];
-		this.#bodySelection = row ? { kind: "account", credentialId: row.credentialId } : { kind: "add" };
+		this.#bodySelection = row
+			? { kind: "account", credentialId: row.credentialId }
+			: (adds[next - rows.length] ?? { kind: "add" });
 	}
 
 	/**
@@ -579,7 +606,9 @@ export class AccountManagerComponent implements Component {
 	 */
 	#activate(): void {
 		if (this.#bodySelection.kind === "add") {
-			if (this.#activeProviderId) this.#callbacks.onAddAccount(this.#activeProviderId);
+			if (this.#activeProviderId) {
+				this.#callbacks.onAddAccount(this.#activeProviderId, this.#selectedAlternateLogin()?.id);
+			}
 			return;
 		}
 		const row = this.#selectedRow();
@@ -952,24 +981,36 @@ export class AccountManagerComponent implements Component {
 			lines.push({ text: "" });
 		}
 
-		// The last position in the list, and a selectable one. Down from the last account lands
-		// here, `enter` starts the login, and the cursor column lines up with the account glyphs
-		// above so the entry reads as part of the same list rather than a caption under it.
-		const addTarget: BodyTarget = { kind: "add" };
-		const addSelected = this.#isSelected(addTarget);
-		const addCursor = addSelected && this.#focus === "body" ? theme.fg("accent", theme.nav.cursor) : " ";
+		// The last positions in the list, and selectable ones. Down from the last account lands on
+		// the provider's own login, then on each alternate login; `enter` starts that login, and the
+		// cursor column lines up with the account glyphs above so the entries read as part of the
+		// same list rather than a caption under it.
 		// No `(a)` hint: the footer chip two rows below already says `a add`, and naming the key
 		// twice on one card reads as two different affordances.
 		// No article on the first account: provider names are brands and initialisms ("xAI",
 		// "AIML API") whose article follows pronunciation, which no letter test predicts.
-		const addLabel = `+ add ${rows.length > 0 ? "another " : ""}${sanitizeAccountText(entry.label)} account`;
-		let addText = truncateToWidth(
-			` ${addCursor} ${addSelected ? theme.bold(theme.fg("accent", addLabel)) : theme.fg("accent", addLabel)}`,
+		lines.push(
+			this.#addLine(
+				`+ add ${rows.length > 0 ? "another " : ""}${sanitizeAccountText(entry.label)} account`,
+				{ kind: "add" },
+				width,
+			),
+		);
+		for (const login of entry.alternateLogins) {
+			lines.push(this.#addLine(`+ add with ${login.name}`, { kind: "add", loginId: login.id }, width));
+		}
+		return lines;
+	}
+
+	#addLine(label: string, target: BodyTarget, width: number): BodyLine {
+		const selected = this.#isSelected(target);
+		const cursor = selected && this.#focus === "body" ? theme.fg("accent", theme.nav.cursor) : " ";
+		let text = truncateToWidth(
+			` ${cursor} ${selected ? theme.bold(theme.fg("accent", label)) : theme.fg("accent", label)}`,
 			width,
 		);
-		if (addSelected) addText = selectionBand(addText, width);
-		lines.push({ text: addText, target: addTarget });
-		return lines;
+		if (selected) text = selectionBand(text, width);
+		return { text, target };
 	}
 
 	#shortcuts(): ModalShortcut[] {
@@ -995,11 +1036,14 @@ export class AccountManagerComponent implements Component {
 		// Naming the provider is still the point — switching is per provider, and a bare "enter
 		// switch" reads as a global account change. On the add entry `enter` switches nothing, so
 		// the chip says what it will actually do rather than naming an account it cannot pick.
+		const alternate = this.#selectedAlternateLogin();
 		const use =
 			this.#bodySelection.kind === "add"
-				? entry
-					? `enter add ${entry.label} account`
-					: "enter add account"
+				? alternate
+					? `enter add with ${alternate.name}`
+					: entry
+						? `enter add ${entry.label} account`
+						: "enter add account"
 				: entry
 					? `enter switch ${entry.label} to this account`
 					: "enter switch to this account";

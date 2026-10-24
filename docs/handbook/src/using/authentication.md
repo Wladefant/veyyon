@@ -61,9 +61,12 @@ other. Each key reports its result on the line above the key chips; `r` shows `C
 then whether the provider accepted the login, and updates the usage bars from the same request.
 `/account manager` opens the same card.
 
-The last row of the list is `+ add another … account`. It is a position in the list like any other:
-arrow down past your last account to land on it, and press `enter` there to start a login. The
-mouse works on the card as well. Click an account to select it, click that last row to start the
+Below the accounts is `+ add another … account`. It is a position in the list like any other:
+arrow down past your last account to land on it, and press `enter` there to start a login. A
+provider with a second way to sign in lists it beneath, as `+ add with <login>`: OpenCode Go offers
+`+ add with OpenCode Go (API key, legacy)`, Nous Research its API key, and ChatGPT its device login.
+Each stores the account under the same provider. `a` always starts the provider's default login.
+The mouse works on the card as well. Click an account to select it, click an add row to start that
 login, and click any key chip in the footer to run what it names.
 
 The provider list filters. Press `ctrl+s`, type part of a provider's name or id, and the sidebar

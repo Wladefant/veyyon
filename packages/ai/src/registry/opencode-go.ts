@@ -1,13 +1,14 @@
-import type { OAuthLoginCallbacks } from "./oauth/types";
+import { loginOpenCodeGo, refreshOpenCodeGoToken } from "./oauth/opencode-console";
 import type { ProviderDefinition } from "./types";
 
+/**
+ * OpenCode Go, signed in with an OpenCode Console account. An OpenCode Go API key is the legacy way in,
+ * offered by `opencode-go-api-key`.
+ */
 export const opencodeGoProvider = {
 	id: "opencode-go",
 	name: "OpenCode Go",
-	login: async (cb: OAuthLoginCallbacks) => {
-		// Lazy import: keep heavy OAuth flow modules out of the eager registry graph.
-		const { loginOpenCode } = await import("./oauth/opencode");
-		return loginOpenCode(cb);
-	},
-	credential: "api-key",
+	login: loginOpenCodeGo,
+	credential: "oauth",
+	refreshToken: (credentials, signal) => refreshOpenCodeGoToken(credentials, undefined, signal),
 } as const satisfies ProviderDefinition;

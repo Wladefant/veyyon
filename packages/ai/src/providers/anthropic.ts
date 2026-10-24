@@ -11,6 +11,7 @@ import { providerWireCapabilities } from "@veyyon/catalog/provider-models/wire-c
 import { isAnthropicOAuthToken } from "@veyyon/catalog/utils";
 import { ANTHROPIC_WEB_SEARCH_TOOL, CLAUDE_CODE_VERSION as claudeCodeVersion } from "@veyyon/catalog/wire/anthropic";
 import { parseGitHubCopilotApiKey } from "@veyyon/catalog/wire/github-copilot";
+import { OPENCODE_GO_ORG_HEADER, resolveOpenCodeGoEndpoint } from "@veyyon/catalog/wire/opencode-go";
 import { getInstallId } from "@veyyon/utils/dirs";
 import { $env } from "@veyyon/utils/env";
 import { DEFAULT_MAX_DELAY_MS } from "@veyyon/utils/fetch-retry";
@@ -3113,7 +3114,26 @@ export function normalizeExtraBetas(betas?: string[] | string): string[] {
 	return raw.map(beta => beta.trim()).filter(beta => beta.length > 0);
 }
 
-export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): AnthropicClientOptionsResult {
+/**
+ * The client arguments of an OpenCode Go request: a Console login sends its token, to its account's
+ * messages route, with its organization. Every other request is returned unchanged.
+ */
+function withOpenCodeGoAccount(args: AnthropicClientOptionsArgs): AnthropicClientOptionsArgs {
+	if (args.model.provider !== "opencode-go") return args;
+	const endpoint = resolveOpenCodeGoEndpoint(args.apiKey, args.model.baseUrl, "anthropic");
+	if (endpoint.orgId === undefined) {
+		return endpoint.apiKey === args.apiKey ? args : { ...args, apiKey: endpoint.apiKey };
+	}
+	return {
+		...args,
+		apiKey: endpoint.apiKey,
+		model: { ...args.model, baseUrl: endpoint.baseUrl ?? args.model.baseUrl },
+		headers: { ...args.headers, [OPENCODE_GO_ORG_HEADER]: endpoint.orgId },
+	};
+}
+
+export function buildAnthropicClientOptions(input: AnthropicClientOptionsArgs): AnthropicClientOptionsResult {
+	const args = withOpenCodeGoAccount(input);
 	const {
 		model,
 		apiKey,

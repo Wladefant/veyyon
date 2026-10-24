@@ -4,7 +4,7 @@
  */
 import type { CredentialHealthResult, UsageReport } from "@veyyon/ai";
 import type { ResetCreditAccountStatus, ResetCreditRedeemOutcome } from "@veyyon/ai/auth-storage";
-import { getLoginCredential } from "@veyyon/ai/oauth";
+import { getLoginCredential, getOAuthProviders } from "@veyyon/ai/oauth";
 import type { OAuthProvider } from "@veyyon/ai/oauth/types";
 // The derived provider set from the registry that derives it (164 modules) rather than the
 // barrel (346).
@@ -91,6 +91,15 @@ function describeAccountCheck(subject: string, outcome: AccountCheckOutcome): st
 }
 
 /**
+ * The provider a login stores its credential under. An alternate login, such as an API key beside a
+ * browser login, files it under another provider's id through `storeCredentialsAs`; that provider is
+ * where the account lands, what names it, and the card entry that lists it.
+ */
+function credentialProviderOf(loginId: string): string {
+	return getOAuthProviders().find(provider => provider.id === loginId)?.storeCredentialsAs ?? loginId;
+}
+
+/**
  * How a login ended, for callers that reopen a surface afterwards.
  *
  * `cancelled` and `failed` are both "no credential stored", but they are not
@@ -127,9 +136,10 @@ export class AccountFlows {
 	 * nothing.
 	 */
 	async login(providerId: string): Promise<LoginOutcome> {
+		const storedAs = credentialProviderOf(providerId);
 		// `formatProviderName`, not the raw slug: the account card, the model hub and the footline all
 		// name this provider the same way, and a login is where the operator meets it first.
-		const providerLabel = formatProviderName(providerId);
+		const providerLabel = formatProviderName(storedAs);
 		this.#ctx.showStatus(`Logging in to ${providerLabel}…`);
 		// The dialog owns the pasted redirect: it is a fullscreen overlay holding focus, so the
 		// editor where `/login <redirect URL>` would be typed cannot be reached until it closes.
@@ -197,7 +207,7 @@ export class AccountFlows {
 			// Naming happens here, while the operator still knows which account this was. Doing it from
 			// the account card instead asks them to recognize it later, among the others, which is the
 			// moment the name would have helped.
-			const accountName = await this.#offerAccountName(dialog, providerId, providerLabel, identity?.credentialId);
+			const accountName = await this.#offerAccountName(dialog, storedAs, providerLabel, identity?.credentialId);
 			const block = new TranscriptBlock();
 			// Name the account (and Anthropic organization) that was stored so a
 			// login that lands on an unintended account/subscription is visible
@@ -324,7 +334,8 @@ export class AccountFlows {
 	 */
 	async showLogin(providerId?: string): Promise<void> {
 		if (providerId) {
-			if ((await this.login(providerId)) === "stored") await this.showAccountManager(providerId);
+			if ((await this.login(providerId)) === "stored")
+				await this.showAccountManager(credentialProviderOf(providerId));
 			return;
 		}
 		await this.showAccountManager();
@@ -493,9 +504,9 @@ export class AccountFlows {
 					done();
 					void this.#ctx.handleUsageCommand();
 				},
-				onAddAccount: provider => {
+				onAddAccount: (provider, loginId) => {
 					done();
-					void this.#loginThenReopenAccountManager(provider);
+					void this.#loginThenReopenAccountManager(loginId ?? provider);
 				},
 				onClearRateLimitBlock: row => {
 					authStorage.clearCredentialBlocks(row.provider, row.credentialId);
@@ -550,8 +561,8 @@ export class AccountFlows {
 	}
 
 	/**
-	 * `a` / `+ add another …` from the account card: log in, then come back to the card on the
-	 * provider the login was started from.
+	 * `a` / `+ add …` from the account card: log in, then come back to the card on the provider the
+	 * login stored its account under, which is the provider it was started from.
 	 *
 	 * Reopened after a CANCELLED login too, not just a successful one, because escape unwinds one
 	 * level: the login is what the user opened from the card, so abandoning it must return them to
@@ -563,13 +574,13 @@ export class AccountFlows {
 	 * selected credential decides what gets spent, and a login is not a request to move the
 	 * session's traffic; the card shows the new row and `enter` moves traffic when the user says so.
 	 */
-	async #loginThenReopenAccountManager(providerId: string): Promise<void> {
+	async #loginThenReopenAccountManager(loginId: string): Promise<void> {
 		// Cancelling unwinds one level: the card offered the login, so the card is
 		// where escape belongs. A FAILURE does not, because the card is a
 		// fullscreen overlay and reopening it draws straight over the error
 		// `login` just printed — which is how a rejected API key read
 		// as "Validating…" and then the same card, with no account and no reason.
-		if ((await this.login(providerId)) !== "failed") await this.showAccountManager(providerId);
+		if ((await this.login(loginId)) !== "failed") await this.showAccountManager(credentialProviderOf(loginId));
 	}
 
 	/**

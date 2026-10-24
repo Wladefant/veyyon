@@ -21,6 +21,7 @@ import {
 } from "@veyyon/catalog/wire/coreweave";
 import { parseGitHubCopilotApiKey } from "@veyyon/catalog/wire/github-copilot";
 import { resolveKimiCodeEndpoint } from "@veyyon/catalog/wire/kimi-code";
+import { OPENCODE_GO_ORG_HEADER, resolveOpenCodeGoEndpoint } from "@veyyon/catalog/wire/opencode-go";
 import { $env } from "@veyyon/utils/env";
 import { extractHttpStatusFromError } from "@veyyon/utils/fetch-retry";
 import { stringifyJson } from "@veyyon/utils/json";
@@ -293,6 +294,12 @@ function resolveOpenAIProviderEndpoint(
 		case "kimi-code": {
 			// The key names the deployment that issued the token; a token reaches only that deployment.
 			const { apiKey, baseUrl } = resolveKimiCodeEndpoint(rawApiKey, model.baseUrl);
+			return { apiKey, baseUrl };
+		}
+		case "opencode-go": {
+			// A Console login token reaches only its organization's endpoint, named in the key.
+			const { apiKey, baseUrl, orgId } = resolveOpenCodeGoEndpoint(rawApiKey, model.baseUrl, "openai");
+			if (orgId !== undefined) headers[OPENCODE_GO_ORG_HEADER] = orgId;
 			return { apiKey, baseUrl };
 		}
 	}

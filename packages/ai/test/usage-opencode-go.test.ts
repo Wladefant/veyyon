@@ -58,3 +58,35 @@ describe("opencodeGoUsageProvider status uses the shared 0.9 warning owner", () 
 		expect(limit?.status).toBe("ok");
 	});
 });
+
+describe("opencodeGoUsageProvider serves a Console login", () => {
+	// The ledger is Veyyon's own record of spend, so it does not depend on how the account signed in.
+	// It once accepted only an API key, and a Console login lost its usage display.
+	const loginParams: UsageFetchParams = {
+		provider: "opencode-go",
+		accountKey: "acct-1",
+		credential: { type: "oauth", accessToken: "console-token", orgId: "org-1" },
+	};
+
+	it("supports the login and reports the same windows as for a key", async () => {
+		expect(opencodeGoUsageProvider.supports?.(loginParams)).toBe(true);
+		const entry: UsageCostHistoryEntry = {
+			recordedAt: Date.now(),
+			provider: "opencode-go",
+			accountKey: "acct-1",
+			costUsd: 6,
+		};
+		const report = await opencodeGoUsageProvider.fetchUsage(loginParams, ctxWithCosts([entry]));
+		expect(report?.limits.map(limit => [limit.window?.id, limit.amount.used])).toEqual([
+			["rolling-5h", 6],
+			["weekly", 6],
+			["monthly", 6],
+		]);
+	});
+
+	it("serves no other provider", async () => {
+		const params: UsageFetchParams = { ...loginParams, provider: "opencode-zen" };
+		expect(opencodeGoUsageProvider.supports?.(params)).toBe(false);
+		expect(await opencodeGoUsageProvider.fetchUsage(params, ctxWithCosts([]))).toBeNull();
+	});
+});

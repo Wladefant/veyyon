@@ -70,12 +70,27 @@ export interface AccountSidebarEntry {
 	 * the warning glyph, because which glyph that is depends on the active symbol preset.
 	 */
 	hasFailure: boolean;
+	/**
+	 * Logins other than the provider's own that store a credential under it, in registry order: a
+	 * second mechanism such as an API key beside a browser login. The card offers each as an add
+	 * entry after the provider's own, so a mechanism without a sidebar entry of its own stays
+	 * reachable without knowing its id.
+	 */
+	alternateLogins: readonly AccountLoginChoice[];
+}
+
+/** A login a provider's credential can be added with, by its login id and display name. */
+export interface AccountLoginChoice {
+	id: string;
+	name: string;
 }
 
 /** A provider the sidebar can offer, whether or not it currently holds credentials. */
 export interface AccountProviderChoice {
 	id: string;
 	label: string;
+	/** Set when this choice is a login filed under `id` by `storeCredentialsAs`, not `id`'s own login. */
+	alternateLogin?: AccountLoginChoice;
 }
 
 /**
@@ -95,6 +110,14 @@ export function buildSidebarEntries(
 	inventory: AccountInventory,
 	providers: readonly AccountProviderChoice[],
 ): AccountSidebarEntry[] {
+	const alternates = new Map<string, AccountLoginChoice[]>();
+	for (const provider of providers) {
+		if (!provider.alternateLogin) continue;
+		const login = { id: provider.alternateLogin.id, name: sanitizeAccountText(provider.alternateLogin.name) };
+		const list = alternates.get(provider.id);
+		if (list) list.push(login);
+		else alternates.set(provider.id, [login]);
+	}
 	const entries = new Map<string, AccountSidebarEntry>();
 	for (const group of inventory.providers) {
 		entries.set(group.provider, {
@@ -106,6 +129,7 @@ export function buildSidebarEntries(
 			// provider is the only place that fact can surface, and a provider whose ONLY login died
 			// has no row left to carry it.
 			hasFailure: group.rows.some(row => row.health === "failed") || group.disabledCause !== undefined,
+			alternateLogins: alternates.get(group.provider) ?? [],
 		});
 	}
 	for (const provider of providers) {
@@ -116,6 +140,7 @@ export function buildSidebarEntries(
 			accountCount: 0,
 			annotation: NO_ACCOUNTS_ANNOTATION,
 			hasFailure: false,
+			alternateLogins: alternates.get(provider.id) ?? [],
 		});
 	}
 	const all = Array.from(entries.values());
