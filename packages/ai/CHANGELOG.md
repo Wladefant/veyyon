@@ -81,6 +81,12 @@
 - `wrapLeakedThinkingStream` relays the inner stream through one `LeakedThinkingRelay` that handles each event kind in its own case; healed streams are unchanged.
 - The Hermes, Qwen3, Kimi, DeepSeek, Gemini and pi-native scanners read a tool call's body through `BlockBody` in `dialect/coercion.ts`, and Gemma through a string-aware reader that walks each delta once, leaving only a suffix that could begin the closer unread between deltas instead of searching the whole body again on every delta, cutting a 320 KB argument streamed in 5-byte deltas from 449–966 ms to 3.1–5.5 ms and an 80 KB pi-native argument from 97.4 to 1.2 ms; every other dialect emits identical events across 44,000 generated scans.
 - The Codex request transformer drops item references and item ids in one pass, and reads the instruction it repeats as the user turn only when every input item is a developer message, instead of scanning for it on every request; request bodies are identical across 60,000 generated requests.
+- `/login opencode-go` signs in with an OpenCode Console account through its device flow and sends requests to the Go inference endpoint of the organization that holds the subscription, with the organization id in `x-opencode-org-id`; an OpenCode Go API key is the legacy `opencode-go-api-key` login.
+- The OpenCode Go usage ledger reports spend for a Console login as it does for an API key.
+- The OpenCode Console device flow loads when an OpenCode Go login or token refresh first runs instead of at startup, with no user-visible change.
+- A provider login that stores under another provider states its `loginMethod` ("API key", "device code"), which `getOAuthProviders()` returns beside its name.
+- The OpenCode Console login asks for its code in one line, `Enter code X if the page asks for it.`, and an OpenCode Go login that finds no Go subscription names `/login opencode-go-api-key` for the API key instead.
+- The HTML page title quoted by the non-event-stream error is flattened through the shared `collapseWhitespace` helper; no user-facing change.
 
 ### Fixed
 

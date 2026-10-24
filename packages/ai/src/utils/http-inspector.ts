@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { collapseWhitespace } from "@veyyon/utils/collapse-whitespace";
 import { getLogsDir } from "@veyyon/utils/dirs";
 import { isBunTestRuntime } from "@veyyon/utils/env";
 import { asRecord, errorMessage, getNonBlankStringProperty, isRecord } from "@veyyon/utils/type-guards";
@@ -179,7 +180,7 @@ function nonEventStreamError(status: number, url: string | undefined, read: Prov
 	}
 	const text = read.text.trimStart();
 	if (text.startsWith("<")) {
-		const title = /<title[^>]*>([^<]*)<\/title>/i.exec(text)?.[1]?.replace(/\s+/g, " ").trim();
+		const title = collapseWhitespace(/<title[^>]*>([^<]*)<\/title>/i.exec(text)?.[1]);
 		const named = title ? ` titled "${title.slice(0, MAX_QUOTED_TITLE_CHARS)}"` : "";
 		return new ProviderResponseError(
 			`${status}${from} is an HTML page${named}, not an event stream. Check the provider's baseUrl.`,

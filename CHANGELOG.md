@@ -5,6 +5,41 @@
 ## [Unreleased]
 
 ## [1.6.4] - 2026-10-28
+### Breaking Changes
+
+- `ColdEntryPayloads.rebase(identity, open, shift)` drops its `entries` parameter and moves every cold entry read through the current handle onto the new object at once.
+
+### Added
+
+- The login card sends a browser login's link to the clipboard when it appears, and `c` (or `alt+c` while its field holds typed text) sends it again, shown on a `copy link` key chip.
+- A browser login whose provider takes a pasted callback asks in the login card for the address the browser ended on, so a sign-in over SSH completes without a forwarded port; an address that does not complete the sign-in is asked for again.
+- The account card lists a provider's second way to sign in as its own row named by the method, such as `+ add with API key (legacy)` under OpenCode Go, `+ add with API key` under Nous Research and `+ add with device code` under ChatGPT, which were reachable only by typing their id.
+- `codexRoutingHint` in `@veyyon/catalog/wire/codex` builds the `x-codex-routing-hint` value (`model=<model>;tier=<tier>`, or `model=<model>` without a tier) from a Codex Responses request body.
+- `@veyyon/catalog/wire/opencode-go` carries an OpenCode Go Console login's organization and inference endpoint in its API key and resolves the endpoint, route and organization header a request uses.
+- `ColdEntryPayloads.warmed` counts the cold entries read back into memory.
+- `ModelReasoningOptions.defaultLevel` and `ModelReasoningOptions.requiresEffort` state a model's default effort and that it has no off state; they become `thinking.defaultLevel` and `thinking.requiresEffort`.
+- `SelectListLayoutOptions.tabularDescription` keeps runs of spaces in a description, so a list whose descriptions are space-padded columns lines up under a heading ([#966](https://github.com/santhreal/veyyon/issues/966)).
+- `parseYaml` in `@veyyon/utils/yaml-sync` parses YAML and throws a `SyntaxError` stating the line and column of a syntax error, such as `Nested mappings are not allowed in compact mappings at line 2, column 13`, instead of Bun's `YAML Parse error: Unexpected token`.
+
+### Changed
+
+- Settings → Agents → Roster lists the subagents before the helpers, in aligned State, Effort and Model columns under a one-line heading with `session` in an unset cell and the model cut first in a narrow card, shows an overridden row's layer in its Effort and Model columns and what it runs in its detail line, reads a catalog model id ending in `:max` as that model rather than max effort, drops its duplicate key hints, returns to the opening row on Esc, and the agent page labels its spawn row "Can spawn" ([#966](https://github.com/santhreal/veyyon/issues/966)).
+- `/login <url>` completes only an MCP server's OAuth flow; a provider login takes the pasted address in its login card.
+- The startup Codex websocket prewarm resolves its service tier from the session it opens the socket for; no user-facing change.
+- The account card's notice line flattens whitespace through the shared `collapseWhitespace`; no user-facing change.
+- `bench/session-compaction-stall.bench.ts` measures the longest event-loop stall and the wall time of a compaction's republish on a large synthetic session; no user-facing change.
+- The no-model sentence a prompt receives is built in `config/model-resolution-failure.ts` instead of the session runtime; no user-facing change.
+- `/login opencode-go` signs in with an OpenCode Console account through its device flow and sends requests to the Go inference endpoint of the organization that holds the subscription, with the organization id in `x-opencode-org-id`; an OpenCode Go API key is the legacy `opencode-go-api-key` login.
+- The OpenCode Go usage ledger reports spend for a Console login as it does for an API key.
+- The OpenCode Console device flow loads when an OpenCode Go login or token refresh first runs instead of at startup, with no user-visible change.
+- A provider login that stores under another provider states its `loginMethod` ("API key", "device code"), which `getOAuthProviders()` returns beside its name.
+- The OpenCode Console login asks for its code in one line, `Enter code X if the page asks for it.`, and an OpenCode Go login that finds no Go subscription names `/login opencode-go-api-key` for the API key instead.
+- The HTML page title quoted by the non-event-stream error is flattened through the shared `collapseWhitespace` helper; no user-facing change.
+- OpenCode Go discovery sends no Authorization for a Console login, whose token the public listing rejects, and keys its model cache by the credential it sends, so a refreshed login token keeps its cached models.
+- A compaction's republish moves every cold entry onto the new session file at once, closes the replaced file off the event loop, and skips the second walk over history when nothing changed since the first, so on a 200,000-entry, 419 MiB session a compaction holds the event loop for at most 14-15 ms instead of 86-90 ms and finishes in 120-124 ms instead of 159-165 ms.
+- A staged session rewrite is flushed to disk before it replaces the file, so a power cut during a rewrite leaves the previous file or the new one, and on ext4 the rename no longer blocks the event loop for 38-92 ms.
+- A settings file that does not parse is quarantined with the parser's reason, which for a YAML syntax error states its line and column.
+- `QuarantinedFile` holds the `reason` its file did not parse.
 
 ### Fixed
 
