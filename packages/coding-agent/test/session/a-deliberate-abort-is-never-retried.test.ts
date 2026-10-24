@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
-import { Agent } from "@veyyon/agent-core";
+import { Agent, type AgentTool } from "@veyyon/agent-core";
 import type { AssistantMessage, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as envApiKeyModule from "@veyyon/ai/env-api-key";
@@ -11,9 +11,10 @@ import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
-import { USER_INTERRUPT_LABEL } from "@veyyon/coding-agent/session/messages";
+import { convertToLlm, USER_INTERRUPT_LABEL } from "@veyyon/coding-agent/session/messages";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { type } from "arktype";
 
 /**
  * WHY. A turn stopped by `session.abort()` was re-sent by the auto-retry ladder as if the provider
@@ -31,9 +32,12 @@ import { TempDir } from "@veyyon/utils";
  *
  * The class closed here is "a deliberate abort read from session state that no longer holds when
  * the settle reads it". Deliberateness is recorded against the turn when it ends, so the answer
- * cannot change between the stop and the settle. Every option shape `abort()` accepts is swept. A
- * user interrupt was settled before this fix by its own `UserInterrupt` error id and stays in the
- * sweep so the contract holds whichever mark protects it; the other three go red without the fix.
+ * cannot change between the stop and the settle. Every option shape `abort()` accepts is swept,
+ * at every point of a turn an abort lands on: while the provider streams, inside the `message_end`
+ * of a tool-use reply before its tools run (where the run monitor's budget stop fires, from a
+ * session event listener), and while a tool runs. A user interrupt was settled before this fix by
+ * its own `UserInterrupt` error id and stays in the sweep so the contract holds whichever mark
+ * protects it; the other shapes go red without the fix in every phase.
  *
  * Not caught: an abort issued after the turn's `message_end` and finished before its settle. That
  * abort arrives after the turn already ended, so it did not cause the failure the ladder would
@@ -51,6 +55,17 @@ const ABORT_SHAPES: readonly AbortShape[] = [
 	{ name: "a user interrupt", options: { reason: USER_INTERRUPT_LABEL } },
 	{ name: "a manual-compaction startup abort", options: { preserveCompaction: true } },
 ];
+
+/** Where in the turn the abort lands. */
+type AbortPhase = "while the provider streams" | "at the end of a tool-use reply" | "while a tool runs";
+
+const ABORT_PHASES: readonly AbortPhase[] = [
+	"while the provider streams",
+	"at the end of a tool-use reply",
+	"while a tool runs",
+];
+
+const TOOL_NAME = "probe";
 
 function emptyTurn(model: Model): AssistantMessage {
 	return {
@@ -98,27 +113,66 @@ describe("a deliberate session abort", () => {
 	});
 
 	/**
-	 * A session whose first request streams until it is aborted and then ends the way a provider
-	 * client ends an aborted request: an empty turn with the generic sentence. Any later request
-	 * answers with text, so a retry is visible both as a second request and as a recovered turn.
+	 * A session whose first request either streams until it is aborted and then ends the way a
+	 * provider client ends an aborted request (an empty turn with the generic sentence), or answers
+	 * with a call to a tool that runs until it is aborted. Any later request on a live signal answers
+	 * with text, so a retry is visible both as a second live request and as a recovered turn. A
+	 * request opened on a signal that is already aborted re-sends nothing and is not counted.
 	 */
-	function startSession() {
+	function startSession(phase: AbortPhase, abortOptions: AbortShape["options"]) {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected bundled Anthropic test model to exist");
-		const streaming = Promise.withResolvers<void>();
-		let requests = 0;
+		const abortPoint = Promise.withResolvers<void>();
+		let liveRequests = 0;
+		const tool: AgentTool = {
+			name: TOOL_NAME,
+			label: TOOL_NAME,
+			description: TOOL_NAME,
+			parameters: type({}),
+			execute: async (_id, _params, signal) => {
+				const aborted = Promise.withResolvers<void>();
+				if (signal?.aborted) aborted.resolve();
+				else signal?.addEventListener("abort", () => aborted.resolve(), { once: true });
+				abortPoint.resolve();
+				await aborted.promise;
+				return { content: [{ type: "text", text: "stopped" }] };
+			},
+		};
 		const agent = new Agent({
 			getApiKey: requested => `${requested.provider}-test-key`,
-			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+			initialState: { model, systemPrompt: ["Test"], tools: [tool], messages: [] },
+			convertToLlm,
 			streamFn: (requestedModel, _context, options) => {
-				requests += 1;
 				const stream = new AssistantMessageEventStream();
 				const partial = emptyTurn(requestedModel);
-				if (requests > 1) {
+				if (options?.signal?.aborted) {
+					queueMicrotask(() => {
+						stream.push({
+							type: "error",
+							reason: "aborted",
+							error: { ...partial, stopReason: "aborted", errorMessage: "Request was aborted" },
+						});
+					});
+					return stream;
+				}
+				liveRequests += 1;
+				if (liveRequests > 1) {
 					queueMicrotask(() => {
 						const text = { type: "text" as const, text: "retried after the abort" };
 						stream.push({ type: "start", partial });
 						stream.push({ type: "done", reason: "stop", message: { ...partial, content: [text] } });
+					});
+					return stream;
+				}
+				if (phase !== "while the provider streams") {
+					queueMicrotask(() => {
+						const call = { type: "toolCall" as const, id: "call-1", name: TOOL_NAME, arguments: {} };
+						stream.push({ type: "start", partial });
+						stream.push({
+							type: "done",
+							reason: "toolUse",
+							message: { ...partial, content: [call], stopReason: "toolUse" },
+						});
 					});
 					return stream;
 				}
@@ -133,45 +187,76 @@ describe("a deliberate session abort", () => {
 					};
 					if (options?.signal?.aborted) finish();
 					else options?.signal?.addEventListener("abort", finish, { once: true });
-					streaming.resolve();
+					abortPoint.resolve();
 				});
 				return stream;
 			},
 		});
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
+			"todo.enabled": false,
 			"retry.baseDelayMs": 5,
 			"retry.maxDelayMs": 5_000,
 			"retry.maxRetries": 3,
 		});
 		settings.setDefaultModel(`${model.provider}/${model.id}`);
-		const created = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
+		const created = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+			toolRegistry: new Map([[TOOL_NAME, tool]]),
+		});
 		session = created;
 		const retryStarts: Extract<AgentSessionEvent, { type: "auto_retry_start" }>[] = [];
+		let aborting: Promise<void> | undefined;
 		created.subscribe(event => {
 			if (event.type === "auto_retry_start") retryStarts.push(event);
+			// The run monitor's budget stop: issued from inside the tool-use reply's `message_end`
+			// dispatch, while the loop is already handing that reply's calls to the tool batch.
+			if (
+				phase === "at the end of a tool-use reply" &&
+				event.type === "message_end" &&
+				event.message.role === "assistant" &&
+				event.message.stopReason === "toolUse"
+			) {
+				aborting ??= created.abort(abortOptions);
+			}
 		});
-		return { session: created, streaming: streaming.promise, requests: () => requests, retryStarts };
+		const abort = async (): Promise<void> => {
+			if (phase === "at the end of a tool-use reply") {
+				for (let tick = 0; tick < 50 && !aborting; tick++) {
+					await new Promise<void>(resolve => setImmediate(resolve));
+				}
+				if (!aborting) throw new Error("The tool-use reply never reached its message_end");
+				await aborting;
+				return;
+			}
+			await abortPoint.promise;
+			await created.abort(abortOptions);
+		};
+		return { session: created, abort, liveRequests: () => liveRequests, retryStarts };
 	}
 
-	for (const shape of ABORT_SHAPES) {
-		it(`settles the turn stopped by ${shape.name} instead of re-sending it`, async () => {
-			const run = startSession();
-			const prompted = run.session.prompt("Work until stopped");
-			await run.streaming;
+	for (const phase of ABORT_PHASES) {
+		for (const shape of ABORT_SHAPES) {
+			it(`settles the turn stopped by ${shape.name} ${phase} instead of re-sending it`, async () => {
+				const run = startSession(phase, shape.options);
+				const prompted = run.session.prompt("Work until stopped");
 
-			await run.session.abort(shape.options);
-			await prompted;
-			await run.session.waitForIdle();
-			// Let a retry the settle scheduled after idle reach the provider before reading the count.
-			for (let tick = 0; tick < 20; tick++) await new Promise<void>(resolve => setImmediate(resolve));
+				await run.abort();
+				await prompted;
+				await run.session.waitForIdle();
+				// Let a retry the settle scheduled after idle reach the provider before reading the count.
+				for (let tick = 0; tick < 20; tick++) await new Promise<void>(resolve => setImmediate(resolve));
 
-			expect(run.retryStarts).toHaveLength(0);
-			expect(run.requests()).toBe(1);
-			const last = run.session.agent.state.messages.at(-1) as AssistantMessage;
-			expect(last.role).toBe("assistant");
-			expect(last.stopReason).toBe("aborted");
-			expect(last.content).toHaveLength(0);
-		});
+				expect(run.retryStarts).toHaveLength(0);
+				expect(run.liveRequests()).toBe(1);
+				const last = run.session.agent.state.messages.at(-1) as AssistantMessage;
+				expect(last.role).toBe("assistant");
+				expect(last.stopReason).toBe("aborted");
+				expect(last.content).toHaveLength(0);
+			});
+		}
 	}
 });
