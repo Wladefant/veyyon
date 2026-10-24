@@ -293,7 +293,6 @@ function resolveCallSpawn(
 	if (!discoveredAgent) {
 		return `Unknown agent "${agentName}". Available: ${available}`;
 	}
-	}
 	if (!isAgentEnabled(session.settings, discoveredAgent) && !session.agentGrantedThisTurn?.(agentName)) {
 		return `Agent "${agentName}" is disabled (agent.agents.${agentName}.enabled is false), so it cannot be chosen. Enable it in the Agents settings tab (/settings), or use a different agent type.${available !== "none" ? ` Enabled: ${available}` : ""}`;
 	}

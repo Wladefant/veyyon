@@ -19,12 +19,12 @@ import {
 } from "@veyyon/utils";
 import {
 	canonicalProjectRoot,
-	describeProjectExecutable,
 	describeRefusal,
 	isInsideRoot,
 	ProjectTrust,
 	realProjectPath,
 } from "../config/project-trust";
+import { describeProjectPluginRegistry } from "../config/project-plugin-registry-trust";
 import { type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "../thinking";
 import { normalizeToolNames, TOOL } from "../tools/core/builtin-names";
 import { isForeignConfigImportEnabled, registerProvider } from "./capability";
@@ -1403,8 +1403,7 @@ export async function gateProjectPluginRegistry(
 			state: `${registryPath}\0escape`,
 		};
 	}
-
-	const executable = await describeProjectExecutable(registryPath, canonicalRoot);
+	const executable = await describeProjectPluginRegistry(registryPath, canonicalRoot);
 	if (!executable) {
 		return {
 			allowed: false,
