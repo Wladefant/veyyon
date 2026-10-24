@@ -77,7 +77,12 @@ import {
 } from "../utils/block-symbols";
 import { withEmptyCompletionRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import { type FirstEventBudget, isPreResponseStall, openStallLadderBudget } from "../utils/first-event-budget";
+import {
+	type FirstEventBudget,
+	isPreResponseStall,
+	openStallLadderBudget,
+	PRE_RESPONSE_STALL_ATTEMPTS,
+} from "../utils/first-event-budget";
 import { isFoundryEnabled } from "../utils/foundry";
 import { finalizeErrorMessage, materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
 import { getStreamFirstEventTimeoutMs, getStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
@@ -2308,6 +2313,13 @@ interface AnthropicStreamRetryContext {
 	dropForcedToolChoice: boolean;
 	dropFastMode: boolean;
 	providerRetryAttempt: number;
+	/**
+	 * Replies that ended before `message_start`, counted against {@link PRE_RESPONSE_STALL_ATTEMPTS}.
+	 * Such a reply arrives at once and spends none of the first-event budget, so the time bound that
+	 * ends a run of stalls never ends a run of these: a dead endpoint answering `200` with an empty
+	 * body ran the whole provider ladder under every retry of the session's.
+	 */
+	emptyEnvelopeAttempts: number;
 }
 
 async function handleAnthropicFeatureFallbackError(
@@ -2437,10 +2449,12 @@ async function handleAnthropicTransientRetry(
 		!streamedReplayUnsafeContent &&
 		isAnthropicStreamRetryable(streamFailure, model.provider);
 
+	const emptyEnvelope = firstTokenTime === undefined && AIError.isEmptyStreamEnvelopeError(streamFailure);
+	if (emptyEnvelope) retryCtx.emptyEnvelopeAttempts++;
 	const nothingArrivedOutlivedBudget =
 		firstTokenTime === undefined &&
-		(isPreResponseStall(streamFailure) || AIError.isEmptyStreamEnvelopeError(streamFailure)) &&
-		firstEventBudget.spent();
+		(isPreResponseStall(streamFailure) || emptyEnvelope) &&
+		(firstEventBudget.spent() || (emptyEnvelope && retryCtx.emptyEnvelopeAttempts >= PRE_RESPONSE_STALL_ATTEMPTS));
 	if (
 		activeAbortTracker.wasCallerAbort() ||
 		retryCtx.providerRetryAttempt >= PROVIDER_MAX_RETRIES ||
@@ -2821,6 +2835,7 @@ const streamAnthropicOnce = (
 				omitDemotedPriorReasoning: providerSessionState?.priorReasoningReplayDisabled ?? false,
 				dropForcedToolChoice: providerSessionState?.forcedToolChoiceDisabled ?? false,
 				providerRetryAttempt: 0,
+				emptyEnvelopeAttempts: 0,
 			};
 			const mergedCallerHeaders = mergeHeaders(model.headers, options?.headers);
 			const umansGatewayWebSearchHeader = getUmansWebSearchHeader(model, mergedCallerHeaders);
@@ -2993,6 +3008,7 @@ const streamAnthropicOnce = (
 						if (retryResult.resetAttempt) {
 							({ params, body } = await prepareParams());
 							retryCtx.providerRetryAttempt = 0;
+							retryCtx.emptyEnvelopeAttempts = 0;
 						}
 						discardAnthropicAttempt(model, output, copilotDynamicHeaders?.premiumRequests);
 						firstTokenTime = undefined;

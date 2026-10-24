@@ -23,6 +23,7 @@
 - An error from an OpenAI-compatible provider whose body carries `type`, `param` or `code` states the provider's sentence once, as `401 This API key has expired. … (type=authentication_error code=api_key_expired)`, instead of repeating it on a second line with the fields.
 - A captured error body that replaces a status-only `status code (no body)` message keeps the `retry-after-ms=` wait the response stated.
 - The Devin provider reads Cascade's stated reset window through the shared `extractRetryHint` instead of a parser of its own; no user-facing change.
+- An Anthropic Messages reply that ends before `message_start` (an empty `200` body, preamble events only, or events out of order) is retried once and then ends the provider's retry ladder, instead of running all ten provider retries under every session retry: a dead endpoint costs 22 requests over 53 s instead of up to 121 over minutes.
 
 ## [1.5.9] - 2026-10-22
 
