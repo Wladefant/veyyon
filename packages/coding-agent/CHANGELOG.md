@@ -37,6 +37,7 @@
 - `veyyon -p` and RPC mode write a hand-edited setting of the wrong kind or outside its declared values to stderr as `warning: settings: …`, with the file and the value the run uses, instead of running on the replaced value without a word.
 - A classifier refusal that ends a turn after the model streamed a tool call no longer writes that call's never-ran placeholder result to the session log, so a resumed session does not send the refusal text back to the model.
 - A `--print` run whose turn a classifier refused exits 1 and writes the refusal to stderr instead of exiting 0 with no output.
+- A failed auto-compaction summary retries under the attempt count, backoff ceiling and `retry.maxDelayMs` a turn on the same provider runs under, and a spent usage allowance moves to another account or ends compaction at once as a usage limit, instead of retrying on an uncapped backoff that held the turn for over eight minutes and reporting a 403 out-of-credits response as missing credentials.
 
 ## [1.5.9] - 2026-10-22
 

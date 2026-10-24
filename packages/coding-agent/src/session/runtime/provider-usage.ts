@@ -11,6 +11,8 @@
  *   the way requests do.
  * - A weekly Codex block that `codexResets.autoRedeem` permits spends one saved reset and retries,
  *   asking first when the policy is unset.
+ * - A usage-limit failure parks the credential it spent, for a failed turn and a failed compaction
+ *   summary alike.
  */
 import type {
 	AssistantMessage,
@@ -23,6 +25,7 @@ import type {
 	UsageReport,
 } from "@veyyon/ai";
 import type { AuthStorage } from "@veyyon/ai/auth-storage";
+import { calculateRateLimitBackoffMs, parseRateLimitReason } from "@veyyon/ai/error/rate-limit";
 import { ANTIGRAVITY_PRIMARY_ENDPOINT, ANTIGRAVITY_SANDBOX_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { errorMessage, formatDuration, logger, withScopedTimeoutSignal } from "@veyyon/utils";
 import type { Settings } from "../../config/settings";
@@ -42,6 +45,55 @@ export const CODEX_AUTO_REDEEM_TIMEOUT_MS = 15_000;
 
 /** The notice source every auto-redeem notice is filed under. */
 export const CODEX_AUTO_REDEEM_SOURCE = "codex-auto-reset";
+
+/**
+ * Slack added past a sibling credential's block expiry before retrying, so
+ * the next getApiKey lands after the block has actually lapsed.
+ */
+const SIBLING_UNBLOCK_BUFFER_MS = 1_000;
+
+/** What a usage-limit failure leaves the next attempt on the same model. */
+export interface UsageLimitPark {
+	/** A sibling credential took over, so the next attempt goes now. */
+	readonly switched: boolean;
+	/** How long the model stays unservable when no sibling took over; zero after a switch. */
+	readonly waitMs: number;
+}
+
+/**
+ * Park the credential a usage-limit failure on `model` spent, and state how long the model stays
+ * unservable: no wait when a sibling credential took over, else the sooner of the provider's
+ * retry-after window (or the backoff its wording reads as) and the moment a temporarily blocked
+ * sibling frees up. A failed turn and a failed compaction summary both settle a usage limit here,
+ * so neither retries inside a window the other waits out.
+ */
+export async function parkUsageLimitedCredential(
+	authStorage: Pick<AuthStorage, "markUsageLimitReached">,
+	model: Model,
+	sessionId: string,
+	failure: { errorMessage: string; retryAfterMs: number | undefined; modelNotInPlan: boolean },
+): Promise<UsageLimitPark> {
+	const retryAfterMs =
+		failure.retryAfterMs ??
+		calculateRateLimitBackoffMs(parseRateLimitReason(failure.errorMessage), "credential-park");
+	const outcome = await authStorage.markUsageLimitReached(model.provider, sessionId, {
+		retryAfterMs,
+		baseUrl: model.baseUrl,
+		modelId: model.id,
+		modelNotInPlan: failure.modelNotInPlan,
+	});
+	if (outcome.switched) return { switched: true, waitMs: 0 };
+	// Without the sibling bound, one short-lived sibling block (a 60s post-401 block, a 5-min
+	// usage-probe block) escalates a recoverable situation into the provider's multi-hour wait and
+	// trips the `retry.maxDelayMs` fail-fast cap; the next attempt's getApiKey re-ranks and picks
+	// the sibling up.
+	let waitMs = retryAfterMs;
+	if (outcome.retryAtMs !== undefined) {
+		const siblingWaitMs = Math.max(0, outcome.retryAtMs - Date.now()) + SIBLING_UNBLOCK_BUFFER_MS;
+		if (siblingWaitMs < waitMs) waitMs = siblingWaitMs;
+	}
+	return { switched: false, waitMs };
+}
 
 /** The credential store slice usage reads and writes. `AuthStorage` satisfies this. */
 export type ProviderUsageAuth = Pick<

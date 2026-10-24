@@ -25,13 +25,15 @@ import {
 import { modelServesPrefixCacheHits } from "@veyyon/agent-core/compaction/cache-aligned-context";
 import type { CodexCompactionContext, Message, Model, ProviderSessionState, ServiceTier } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
+import { calculateRetryBackoffDelayMs, resolveRetryPolicy } from "@veyyon/kernel/session/retry-policy";
 import { readColdMessage } from "@veyyon/kernel/session/session-cold-payloads";
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
-import { errorMessage, exponentialBackoffDelay, extractRetryHint, logger, TimeSlice } from "@veyyon/utils";
+import { errorMessage, extractRetryHint, logger, TimeSlice } from "@veyyon/utils";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
 import type { ExtensionRunner } from "../../extensibility/extensions";
 import { compactionModelCandidates, configuredCompactionEfforts, modelKey } from "../agent-session-model-targets";
+import { parkUsageLimitedCredential } from "./provider-usage";
 import type { SessionSecrets } from "./session-secrets";
 
 /** What {@link CompactionSummarizer} reads from the session's public surface. */
@@ -720,8 +722,10 @@ export class CompactionSummarizer {
 	}
 
 	/**
-	 * Run one compaction candidate, retrying a transient or rate-limited failure
-	 * with backoff.
+	 * Run one compaction candidate, retrying a transient or rate-limited failure under the retry
+	 * policy a turn on the candidate runs under: its `retry.perProvider` or built-in attempt count
+	 * and backoff, a spent allowance parked through {@link parkUsageLimitedCredential}, and no wait
+	 * past `retry.maxDelayMs`.
 	 *
 	 * A failure is returned rather than thrown so the caller moves on to the
 	 * next candidate; only an abort is thrown. A retry wait over 30s moves on
@@ -735,6 +739,15 @@ export class CompactionSummarizer {
 		hasMoreCandidates: boolean,
 	): Promise<{ result: CompactionResult } | { error: Error; skipReason: string }> {
 		const retrySettings = this.#session.settings.getGroup("retry");
+		const policy = resolveRetryPolicy(
+			{
+				maxRetries: retrySettings.maxRetries,
+				baseDelayMs: retrySettings.baseDelayMs,
+				maxDelayMs: retrySettings.maxDelayMs,
+			},
+			this.#session.settings.get("retry.perProvider"),
+			candidate,
+		);
 		const maxAcceptableDelayMs = 30_000;
 		let attempt = 0;
 		while (true) {
@@ -757,7 +770,10 @@ export class CompactionSummarizer {
 				const message = errorMessage(error);
 				const skipReason = `it failed: ${message}`;
 				const id = AIError.classify(error, candidate.api);
-				if (AIError.is(id, AIError.Flag.AuthFailed)) {
+				const usageLimited = AIError.is(id, AIError.Flag.UsageLimit);
+				// A 403 that states a spent balance carries both flags; the credential is valid and the
+				// allowance is not, so it is settled as a usage limit, the way a turn settles it.
+				if (AIError.is(id, AIError.Flag.AuthFailed) && !usageLimited) {
 					return { error: this.#buildCompactionAuthError(), skipReason };
 				}
 				if (AIError.is(id, AIError.Flag.Timeout)) {
@@ -776,21 +792,31 @@ export class CompactionSummarizer {
 				const retryAfterMs = extractRetryHint(undefined, message);
 				const shouldRetry =
 					retrySettings.enabled &&
-					attempt < retrySettings.maxRetries &&
-					(retryAfterMs !== undefined ||
-						AIError.is(id, AIError.Flag.Transient) ||
-						AIError.is(id, AIError.Flag.UsageLimit));
+					attempt < policy.maxRetries &&
+					(retryAfterMs !== undefined || usageLimited || AIError.is(id, AIError.Flag.Transient));
 				if (!shouldRetry) {
 					return { error: compactionCandidateError(candidate, error), skipReason };
 				}
 
-				// Bounded by `retry.maxRetries`; the schedule is uncapped so a configured base keeps its full ladder.
-				const baseDelayMs = exponentialBackoffDelay(attempt, {
-					baseMs: retrySettings.baseDelayMs,
-					maxMs: Number.POSITIVE_INFINITY,
-					jitter: 0,
-				});
-				const delayMs = retryAfterMs !== undefined ? Math.max(baseDelayMs, retryAfterMs) : baseDelayMs;
+				const modelNotInPlan = AIError.is(id, AIError.Flag.ModelNotInPlan);
+				const park = usageLimited
+					? await parkUsageLimitedCredential(
+							this.#session.modelRegistry.authStorage,
+							candidate,
+							this.#session.sessionId,
+							{ errorMessage: message, retryAfterMs, modelNotInPlan },
+						)
+					: undefined;
+				// No account serves the model on its plan, and no wait changes that.
+				if (modelNotInPlan && !park?.switched) {
+					return { error: compactionCandidateError(candidate, error), skipReason };
+				}
+
+				attempt++;
+				const providerWaitMs = park ? park.waitMs : retryAfterMs;
+				const delayMs = park?.switched
+					? 0
+					: Math.max(calculateRetryBackoffDelayMs(policy.baseDelayMs, attempt), providerWaitMs ?? 0);
 				if (delayMs > maxAcceptableDelayMs && hasMoreCandidates) {
 					logger.warn("Auto-compaction retry delay too long, trying next model", {
 						delayMs,
@@ -800,11 +826,21 @@ export class CompactionSummarizer {
 					});
 					return { error: compactionCandidateError(candidate, error), skipReason };
 				}
+				// The fail-fast cap a turn honors: a summary does not hold the session through a wait
+				// the provider stated past `retry.maxDelayMs`.
+				if (policy.maxDelayMs > 0 && delayMs > policy.maxDelayMs) {
+					logger.warn("Auto-compaction retry wait exceeds retry.maxDelayMs, not retrying", {
+						delayMs,
+						maxDelayMs: policy.maxDelayMs,
+						error: message,
+						model: `${candidate.provider}/${candidate.id}`,
+					});
+					return { error: compactionCandidateError(candidate, error), skipReason };
+				}
 
-				attempt++;
 				logger.warn("Auto-compaction failed, retrying", {
 					attempt,
-					maxRetries: retrySettings.maxRetries,
+					maxRetries: policy.maxRetries,
 					delayMs,
 					retryAfterMs,
 					error: message,

@@ -10,7 +10,6 @@
 import { scheduler } from "node:timers/promises";
 import type { AssistantMessage, AssistantRetryRecovery, Model } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
-import { calculateRateLimitBackoffMs, parseRateLimitReason } from "@veyyon/ai/error/rate-limit";
 import type { OperatorNotices } from "@veyyon/kernel/session/operator-notices";
 import {
 	calculateRetryBackoffDelayMs,
@@ -40,13 +39,8 @@ import {
 } from "../failed-turn";
 import { THINKING_LOOP_REDIRECT_TYPE } from "../nudges";
 import { sameMessageContent, sessionMessagePersistenceKey } from "../turn-persistence";
+import { parkUsageLimitedCredential } from "./provider-usage";
 import { RetryFallback, type RetryFallbackSession } from "./retry-fallback";
-
-/**
- * Slack added past a sibling credential's block expiry before retrying, so
- * the next getApiKey lands after the block has actually lapsed.
- */
-const SIBLING_UNBLOCK_BUFFER_MS = 1_000;
 
 /** How a failed turn entered retry handling: which switches the recovery may make. */
 interface RetryEntryOptions {
@@ -557,44 +551,29 @@ export class RetryRuntime {
 
 	/**
 	 * Park the credential a usage-limit failure exhausted and decide the wait: none when a sibling
-	 * credential or a banked Codex reset takes over, else the sooner of the provider's retry-after
-	 * window and the moment a temporarily blocked sibling frees up.
+	 * credential or a banked Codex reset takes over, else {@link parkUsageLimitedCredential}'s.
 	 */
 	async #parkUsageLimit(attempt: RetryAttempt, model: Model): Promise<void> {
-		const retryAfterMs =
-			attempt.parsedRetryAfterMs ??
-			calculateRateLimitBackoffMs(parseRateLimitReason(attempt.errorMessage), "credential-park");
-		const outcome = await this.#session.modelRegistry.authStorage.markUsageLimitReached(
-			model.provider,
+		const park = await parkUsageLimitedCredential(
+			this.#session.modelRegistry.authStorage,
+			model,
 			this.#session.sessionId,
 			{
-				retryAfterMs,
-				baseUrl: model.baseUrl,
-				modelId: model.id,
+				errorMessage: attempt.errorMessage,
+				retryAfterMs: attempt.parsedRetryAfterMs,
 				modelNotInPlan: attempt.modelNotInPlan,
 			},
 		);
 		// A live usage-limit 429 on the active Codex account, with a banked reset and the opt-in
 		// setting on, spends the reset and retries immediately instead of waiting out the window.
 		// It runs after the free sibling switch and before model fallback.
-		if (outcome.switched || (await this.#host.maybeAutoRedeemCodexReset())) {
+		if (park.switched || (await this.#host.maybeAutoRedeemCodexReset())) {
 			attempt.switchedCredential = true;
 			attempt.delayMs = 0;
 			return;
 		}
-		// No sibling credential is usable right now. Wait for whichever comes first: the provider's
-		// retry-after window for the current account, or the earliest moment a temporarily blocked
-		// sibling frees up (e.g. a 60s post-401 block or a 5-min usage-probe block); the next
-		// attempt's getApiKey re-ranks and picks it up. Without this, one short-lived sibling block
-		// escalates a recoverable situation into the provider's multi-hour wait and trips the
-		// fail-fast cap.
-		let waitMs = retryAfterMs;
-		if (outcome.retryAtMs !== undefined) {
-			const siblingWaitMs = Math.max(0, outcome.retryAtMs - Date.now()) + SIBLING_UNBLOCK_BUFFER_MS;
-			if (siblingWaitMs < waitMs) waitMs = siblingWaitMs;
-		}
-		attempt.usageLimitWaitMs = waitMs;
-		if (waitMs > attempt.delayMs) attempt.delayMs = waitMs;
+		attempt.usageLimitWaitMs = park.waitMs;
+		if (park.waitMs > attempt.delayMs) attempt.delayMs = park.waitMs;
 	}
 
 	/**
