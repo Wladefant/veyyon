@@ -153,7 +153,7 @@ describe("a reset window a provider states in words", () => {
 			expect(calls).toBe(1);
 			expect(ends).toHaveLength(1);
 			expect(ends[0]).toMatchObject({ success: false });
-			expect(ends[0]?.finalError).toContain(`Provider requested ${OVER_CAP_MS}ms wait`);
+			expect(ends[0]?.finalError).toContain("Provider requested a 17m wait, longer than retry.maxDelayMs (5m)");
 			expect(lastAssistant(session).stopReason).toBe("error");
 		});
 	}

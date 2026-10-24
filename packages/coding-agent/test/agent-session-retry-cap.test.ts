@@ -154,8 +154,9 @@ describe("AgentSession retry delay cap", () => {
 		expect(retryStartEvents).toHaveLength(0);
 		expect(retryEndEvents).toHaveLength(1);
 		expect(retryEndEvents[0]).toMatchObject({ success: false });
-		expect(retryEndEvents[0].finalError).toContain("exceeds retry.maxDelayMs");
-		expect(retryEndEvents[0].finalError).toContain("11180000");
+		expect(retryEndEvents[0].finalError).toContain(
+			"Provider requested a 3h6m wait, longer than retry.maxDelayMs (100ms)",
+		);
 		// No multi-hour (or any) sleep — the cap path skips scheduler.wait entirely.
 		for (const call of waitSpy.mock.calls) {
 			expect(call[0]).toBeLessThanOrEqual(100);

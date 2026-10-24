@@ -20,7 +20,7 @@ import {
 	unreplayableContinueDelayMs,
 } from "@veyyon/kernel/session/retry-policy";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
-import { errorMessage, extractRetryHint, logger } from "@veyyon/utils";
+import { errorMessage, extractRetryHint, formatDuration, logger } from "@veyyon/utils";
 import type { RecoveredRetryError } from "../../extensibility/shared-events";
 import { turnControlPrompts } from "../../prompts/turn-control/rows";
 import { isEmptyAssistantStop, isSameAssistantMessage } from "../agent-session-message-shapes";
@@ -680,7 +680,7 @@ export class RetryRuntime {
 			return this.#endWithFailure(
 				message,
 				this.#attempt,
-				`Provider requested ${delayMs}ms wait, exceeds retry.maxDelayMs (${maxDelayMs}ms). Original error: ${attempt.errorMessage}`,
+				`Provider requested a ${formatDuration(delayMs)} wait, longer than retry.maxDelayMs (${formatDuration(maxDelayMs)}). Original error: ${attempt.errorMessage}`,
 			);
 		}
 		return false;
