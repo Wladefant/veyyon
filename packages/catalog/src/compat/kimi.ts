@@ -16,10 +16,11 @@
 /** Ids the family publishes, including the `highspeed` variant and the punctuation spellings. */
 const KIMI_K27_CODE_MODEL_PATTERN = /(?:^|\/)kimi[-._]?k2(?:[._-]?|p)7[-._]?code(?:[-._]?highspeed)?$/i;
 
-/** The model spec fields this decision reads, so both compat layers' generics fit. */
+/** The model spec fields these decisions read, so both compat layers' generics fit. */
 interface KimiModelIdentity {
 	id: string;
 	name?: string;
+	reasoningOptions?: { requiresEffort?: boolean };
 }
 
 /**
@@ -32,4 +33,16 @@ interface KimiModelIdentity {
 export function matchesKimiK27CodeFamily(spec: KimiModelIdentity): boolean {
 	if (KIMI_K27_CODE_MODEL_PATTERN.test(spec.id)) return true;
 	return spec.id === "kimi-for-coding" && /k2\.?7 code/i.test(spec.name ?? "");
+}
+
+/**
+ * Does this Kimi model reject a request with thinking turned off?
+ *
+ * True for the K2.7 Code family, and for a model whose row states that it reasons on every request
+ * (`reasoningOptions.requiresEffort`, which the Kimi Code `/models` listing declares as
+ * `reasoning.type: "only"`). Such a model takes no `thinking.type: "disabled"` and no forced tool
+ * choice. As with the family, whether the host is Moonshot's own API is the caller's question.
+ */
+export function rejectsKimiThinkingOff(spec: KimiModelIdentity): boolean {
+	return matchesKimiK27CodeFamily(spec) || spec.reasoningOptions?.requiresEffort === true;
 }

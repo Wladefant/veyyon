@@ -282,7 +282,7 @@ export async function computeHashlineSectionDiff(
 			if (section.fileOp) return { diff: "", firstChangedLine: undefined };
 			return { error: `No changes would be made to ${section.path}.` };
 		}
-		return generateDiffString(normalized, result.text, undefined, { path: section.path });
+		return await generateDiffString(normalized, result.text, undefined, { path: section.path });
 	} catch (err) {
 		return { error: errorMessage(err) };
 	}

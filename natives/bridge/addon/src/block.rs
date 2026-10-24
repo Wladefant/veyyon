@@ -3,7 +3,7 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
-use crate::napi_error::to_napi;
+use crate::{napi_error::to_napi, task};
 
 #[napi(object)]
 pub struct BlockRangeOptions {
@@ -78,20 +78,30 @@ pub struct EnclosingBoundaryOptions {
 /// Returns `null` when the language is unrecognized or the source fails to
 /// parse / carries a syntax error (caller should fall back to a lexical scan);
 /// a sorted, unique list of 1-indexed boundary lines otherwise.
+///
+/// The parse runs on the thread pool, so a large source never holds the event
+/// loop, and every lookup borrows one retained tree
+/// ([`veyyon_ast::with_shared_slot`]): a second window of the same file, or the
+/// file an edit would produce, reuses the tree whichever pool thread asks.
 #[napi]
-pub fn enclosing_block_boundaries(options: EnclosingBoundaryOptions) -> Result<Option<Vec<u32>>> {
-	veyyon_ast::block::enclosing_block_boundaries(veyyon_ast::block::EnclosingBoundaryOptions {
-		code:   options.code,
-		lang:   options.lang,
-		path:   options.path,
-		ranges: options
-			.ranges
-			.into_iter()
-			.map(|range| veyyon_ast::block::LineRange {
-				start_line: range.start_line,
-				end_line:   range.end_line,
-			})
-			.collect(),
+pub fn enclosing_block_boundaries(
+	options: EnclosingBoundaryOptions,
+) -> task::Promise<Option<Vec<u32>>> {
+	task::blocking("enclosing_block_boundaries", (), move |_| {
+		let options = veyyon_ast::block::EnclosingBoundaryOptions {
+			code:   options.code,
+			lang:   options.lang,
+			path:   options.path,
+			ranges: options
+				.ranges
+				.into_iter()
+				.map(|range| veyyon_ast::block::LineRange {
+					start_line: range.start_line,
+					end_line:   range.end_line,
+				})
+				.collect(),
+		};
+		veyyon_ast::with_shared_slot(|| veyyon_ast::block::enclosing_block_boundaries(options))
+			.map_err(to_napi)
 	})
-	.map_err(to_napi)
 }

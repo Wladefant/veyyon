@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isFsError, isMissingPath } from "@veyyon/utils/fs-error";
+import { readFileText } from "@veyyon/utils/fs-io";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
 
@@ -30,7 +31,7 @@ export async function readFile(filePath: string): Promise<string | null> {
 			contentCache.set(abs, null);
 			return null;
 		}
-		const content = await Bun.file(abs).text();
+		const content = await readFileText(abs);
 		contentCache.set(abs, content);
 		return content;
 	} catch (err) {

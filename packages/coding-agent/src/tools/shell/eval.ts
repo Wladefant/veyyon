@@ -16,7 +16,13 @@ import type {
 } from "../../eval/types";
 import { formatExitCodeNotice } from "../../exec/exit-notice";
 import { toolsPrompts } from "../../prompts/tools/rows";
-import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from "../../session/streaming-output";
+import {
+	DEFAULT_MAX_BYTES,
+	LIVE_OUTPUT_INTERVAL_MS,
+	OutputSink,
+	type OutputSummary,
+	TailBuffer,
+} from "../../session/streaming-output";
 import { type EnabledAgentCatalog, resolveEnabledAgents } from "../../task/agent-settings";
 import { discoverAgents } from "../../task/discovery";
 import { resolveSpawnPolicy } from "../../task/spawn-policy";
@@ -534,6 +540,8 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 		let outputSink: OutputSink | undefined;
 		let outputSummary: OutputSummary | undefined;
 		let outputDumped = false;
+		/** A live update waiting out {@link LIVE_OUTPUT_INTERVAL_MS}; cleared before the call returns. */
+		let updateTimer: Timer | undefined;
 		const finalizeOutput = async (): Promise<OutputSummary | undefined> => {
 			if (outputDumped || !outputSink) return outputSummary;
 			outputSummary = await outputSink.dump();
@@ -603,13 +611,27 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 					return details;
 				};
 
+				// Every update hands the whole tail to the agent loop, which sanitizes it, and to the renderer, so
+				// streamed output asks for one through `requestUpdate`, at most once per interval. A cell printing
+				// a line per chunk held the event loop for the whole run when each line sent one. State changes
+				// (running, finished) call this directly and send at once.
+				let lastUpdateAt = Number.NEGATIVE_INFINITY;
 				const pushUpdate = () => {
+					clearTimeout(updateTimer);
+					updateTimer = undefined;
 					if (!onUpdate) return;
-					const tailText = tailBuffer.text();
+					lastUpdateAt = performance.now();
+					if (activeLiveCell) activeLiveCell.result.output = activeLiveCell.buf.text();
 					onUpdate({
-						content: [{ type: "text", text: tailText }],
+						content: [{ type: "text", text: tailBuffer.text() }],
 						details: buildUpdateDetails(),
 					});
+				};
+				const requestUpdate = () => {
+					if (!onUpdate || updateTimer) return;
+					const wait = lastUpdateAt + LIVE_OUTPUT_INTERVAL_MS - performance.now();
+					if (wait <= 0) pushUpdate();
+					else updateTimer = setTimeout(pushUpdate, wait);
 				};
 
 				const sessionFile = session.getSessionFile?.() ?? undefined;
@@ -627,11 +649,8 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 					maxColumns: resolveOutputMaxColumns(session.settings),
 					onChunk: chunk => {
 						appendTail(chunk);
-						if (activeLiveCell) {
-							activeLiveCell.buf.append(chunk);
-							activeLiveCell.result.output = activeLiveCell.buf.text();
-						}
-						pushUpdate();
+						activeLiveCell?.buf.append(chunk);
+						requestUpdate();
 					},
 				});
 				const sessionId = session.getEvalSessionId?.() ?? defaultEvalSessionId(session);
@@ -700,7 +719,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 							}
 							cellResult.statusEvents ??= [];
 							upsertStatusEvent(cellResult.statusEvents, event);
-							pushUpdate();
+							requestUpdate();
 						},
 					});
 				} finally {
@@ -859,6 +878,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 					(hasImages ? `(displayed ${formatCount("image", images.length)}; no text output)` : "(no output)");
 				return await finishCell(outputText, false);
 			} finally {
+				clearTimeout(updateTimer);
 				if (!outputDumped) {
 					try {
 						await finalizeOutput();

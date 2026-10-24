@@ -16,6 +16,9 @@ const BLOB_PREFIX = "blob:sha256:";
  */
 const TEXT_BLOB_PREFIX = "blobtext:sha256:";
 
+/** Every prefix a blob reference starts with: {@link isBlobRef} and {@link isTextBlobRef}. */
+export const BLOB_REF_PREFIXES: readonly string[] = [BLOB_PREFIX, TEXT_BLOB_PREFIX];
+
 export interface BlobPutOptions {
 	/** Optional file extension for a sidecar hardlink/copy that OS openers can type-detect. */
 	extension?: string;
@@ -295,6 +298,22 @@ export function externalizeTextSync(blobStore: BlobStore, text: string): string 
 	return `${TEXT_BLOB_PREFIX}${stored.hash}`;
 }
 
+/**
+ * Blob paths a resolve found missing in this process. A missing blob stays missing for every
+ * reference to it, so it is logged the first time and not again: a session that references one
+ * payload from many lines, opens twice, or reads a cold entry back on every pass otherwise logged
+ * the same hash once per reference per read, tens of thousands of lines for one lost directory.
+ * A blob restored later is still read, since only the report is remembered, not the miss.
+ */
+const reportedMissingBlobs = new Set<string>();
+
+function reportMissingBlob(blobStore: BlobStore, hash: string, warningMessage: string): void {
+	const blobPath = path.join(blobStore.dir, hash);
+	if (reportedMissingBlobs.has(blobPath)) return;
+	reportedMissingBlobs.add(blobPath);
+	logger.warn(warningMessage, { hash, dir: blobStore.dir });
+}
+
 async function resolveBlobBuffer(
 	blobStore: BlobStore,
 	data: string,
@@ -304,7 +323,7 @@ async function resolveBlobBuffer(
 	const hash = parser(data);
 	if (!hash) return null;
 	const buffer = await blobStore.get(hash);
-	if (!buffer) logger.warn(warningMessage, { hash });
+	if (!buffer) reportMissingBlob(blobStore, hash, warningMessage);
 	return buffer;
 }
 
@@ -317,7 +336,7 @@ function resolveBlobBufferSync(
 	const hash = parser(data);
 	if (!hash) return null;
 	const buffer = blobStore.getSync(hash);
-	if (!buffer) logger.warn(warningMessage, { hash });
+	if (!buffer) reportMissingBlob(blobStore, hash, warningMessage);
 	return buffer;
 }
 

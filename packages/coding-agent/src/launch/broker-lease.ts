@@ -35,19 +35,30 @@ function parseClaim(text: string): { pid: number; instanceId: string } | undefin
 	return { pid: raw.pid, instanceId: raw.instanceId };
 }
 
-/** True when the lease at `leasePath` names a running process. */
-async function leaseHasLiveOwner(leasePath: string): Promise<boolean> {
+/** The claim the lease at `leasePath` holds, or undefined when there is no lease or it holds no claim. */
+async function readClaim(leasePath: string): Promise<{ pid: number; instanceId: string } | undefined> {
 	let text: string;
 	try {
 		// fs.readFile, not Bun.file().text(): a Bun.file read does not ref the event loop, so a broker
 		// that reaches this await with nothing else pending can exit 0 mid-read.
 		text = await fs.readFile(leasePath, "utf8");
 	} catch (error) {
-		if (isEnoent(error)) return false;
+		if (isEnoent(error)) return undefined;
 		throw error;
 	}
-	const claim = parseClaim(text);
+	return parseClaim(text);
+}
+
+/** True when the lease at `leasePath` names a running process. */
+async function leaseHasLiveOwner(leasePath: string): Promise<boolean> {
+	const claim = await readClaim(leasePath);
 	return claim !== undefined && isProcessAlive(claim.pid);
+}
+
+/** True while the broker running as `pid` still holds the lease in `runtimeDir`. */
+export async function brokerHoldsLease(runtimeDir: string, pid: number): Promise<boolean> {
+	const claim = await readClaim(daemonBrokerLeasePath(runtimeDir));
+	return claim?.pid === pid && isProcessAlive(pid);
 }
 
 /**
@@ -82,12 +93,5 @@ export async function acquireBrokerLease(runtimeDir: string): Promise<BrokerLeas
 
 /** Remove the lease if it is still `lease`; a lease another broker has taken since is left in place. */
 export async function releaseBrokerLease(lease: BrokerLease): Promise<void> {
-	let text: string;
-	try {
-		text = await fs.readFile(lease.path, "utf8");
-	} catch (error) {
-		if (isEnoent(error)) return;
-		throw error;
-	}
-	if (parseClaim(text)?.instanceId === lease.instanceId) await fs.rm(lease.path, { force: true });
+	if ((await readClaim(lease.path))?.instanceId === lease.instanceId) await fs.rm(lease.path, { force: true });
 }

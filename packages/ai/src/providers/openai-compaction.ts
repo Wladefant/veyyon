@@ -57,6 +57,7 @@ import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { boundProviderErrorDetail, ProviderHttpError, readProviderErrorDetail } from "../error";
 import type { Api, CodexCompactionRequestContext, FetchImpl, Message, Model, ProviderSessionState } from "../types";
 import { conversationIdForOpenCode } from "../utils/opencode-headers";
+import { resolveCodexAccessPrograms } from "./openai-codex/access-programs";
 import {
 	buildCodexCompactionV2Window,
 	CODEX_COMPACTION_TRIGGER_ITEM,
@@ -416,6 +417,19 @@ export const openAIResponsesServerCompaction: ServerCompactionTransport = {
 		const timeoutMs = request.timeoutMs ?? 0;
 		const requestTimeout = timeoutMs > 0 ? scopedTimeoutSignal(timeoutMs, request.signal) : undefined;
 		try {
+			if (isCodex) {
+				// The program the turn carries, for the account that signs the compaction. A compaction sent
+				// without it is judged under the server's automatic treatment and refused with `cyber_policy`
+				// on the span the turn was allowed to send. The compaction fetches no listing, so the
+				// compaction route is its only request; it reads the listing its turn fetched, waiting for one
+				// in flight under the call's ceiling.
+				const accessPrograms = await resolveCodexAccessPrograms(model, apiKey, {
+					fetch: request.fetch,
+					signal: requestTimeout?.signal ?? request.signal,
+					reuseListing: true,
+				});
+				if (accessPrograms) body.access_programs = accessPrograms;
+			}
 			const response = await (request.fetch ?? fetch)(url, {
 				method: "POST",
 				headers: { "content-type": "application/json", ...headers },

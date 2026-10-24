@@ -28,7 +28,7 @@ Optional type-specific fields:
 
 | Field | Type | Applicable Types | Description |
 | --- | --- | --- | --- |
-| `path` | `string` | `text`, `structure` | Search scope: file, directory, glob, internal URL, or semicolon-delimited list (`"src; tests"`). `ssh://` is text-only; inspect remote code with `read` before structural matching. Pass the narrowest known scope; omit it only when the workspace root (`"."`) is intended. Single file targets accept line-range selectors (`:50-100`) in text mode. |
+| `path` | `string` | `files`, `text`, `structure` | Search scope. For `files`, the one directory the globs in `input` are searched under. For `text` and `structure`: file, directory, glob, internal URL, or semicolon-delimited list (`"src; tests"`). `ssh://` is text-only; inspect remote code with `read` before structural matching. Pass the narrowest known scope; omit it only when the workspace root (`"."`) is intended. Single file targets accept line-range selectors (`:50-100`) in text mode. |
 | `case` | `boolean` | `text` | Case-sensitive matching. Defaults to `true`. |
 | `hidden` | `boolean` | `files` | Include hidden files. Defaults to `true`. |
 | `gitignore` | `boolean` | `files`, `text` | Respect `.gitignore`. Defaults to `true`. |
@@ -36,7 +36,7 @@ Optional type-specific fields:
 | `limit` | `number` | `files` | Maximum returned paths. Defaults to `200`, max `200`. |
 | `skip` | `number` | `text`, `structure` | Results to skip for pagination (file page offset for `text`, match offset for `structure`). |
 
-Cross-type fields are rejected with `Search type "<type>" does not accept: <field>`.
+A field another type takes is ignored. The result then starts with `Ignored for a <type> search: <fields>. A <type> search takes <fields>.`
 
 ## Outputs
 
@@ -48,17 +48,19 @@ The tool returns a single text block in `content[0].text` plus structured detail
 ## Flow
 
 1. `SearchTool.execute()` validates `input` is non-empty after trimming.
-2. `rejectCrossTypeFields()` ensures only options valid for `type` are present.
+2. `crossTypeFields()` lists the fields set for another type. An invalid `type` fails here.
 3. Dispatch by `type`:
    - `files`: invokes `executeFileSearch` with `path: params.input`, `hidden`, `gitignore`, `limit`.
    - `text`: invokes `executeTextSearch` with `pattern: params.input`, `path`, `case`, `gitignore`, `skip`, and projects the result to matching paths when `paths` is `true`.
    - `structure`: invokes `executeStructureSearch` with `pattern: params.input`, `path`, `skip`.
-4. Returns formatted content and `{ type, result }` details.
+4. Returns formatted content and `{ type, result }` details, with the ignored-field line prepended when step 2 listed any.
 
 ## Modes / Variants
 
 1. **Files search (`type: "files"`)**
    - Match workspace file paths and directory layout via globs or directory names.
+   - A glob that ends in `/`, such as `src/*/`, lists only the directories it matches.
+   - Entries of a `;`-separated input that share a root are matched in one walk of that root.
    - Example: `{ type: "files", input: "src/**/*.ts" }`
 2. **Text search (`type: "text"`)**
    - Regex or literal content search across files, directories, globs, or internal URLs (`veyyon://`, `skill://`).
@@ -82,6 +84,5 @@ The tool is part of the default inventory. Text matching uses two settings:
 ## Errors
 
 - `Search input must not be empty` when `input` is empty or whitespace.
-- `Search type "<type>" does not accept: <fields>` on cross-type options.
 - `Search scope entries must be non-empty paths or globs` for invalid `path`.
 - `Path not found: ...` when target paths do not exist.

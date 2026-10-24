@@ -27,7 +27,7 @@ describe("createLspWritethrough batching", () => {
 		const fileB = path.join(tempDir.path(), "b.ts");
 		const batchId = `batch-${Date.now()}`;
 
-		const firstResult = await writethrough(fileA, "const a = 1;\n", undefined, undefined, {
+		const firstResult = await writethrough(fileA, "const a = 1;\n", undefined, {
 			id: batchId,
 			flush: false,
 		});
@@ -37,7 +37,7 @@ describe("createLspWritethrough batching", () => {
 		expect(loadConfigSpy).toHaveBeenCalledTimes(0);
 		expect(await Bun.file(fileA).text()).toBe("const a = 1;\n");
 
-		const secondResult = await writethrough(fileB, "const b = 2;\n", undefined, undefined, {
+		const secondResult = await writethrough(fileB, "const b = 2;\n", undefined, {
 			id: batchId,
 			flush: true,
 		});

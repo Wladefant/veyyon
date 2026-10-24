@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isCancellation, untilAborted } from "@veyyon/utils/abortable";
 // Owners, not the `@veyyon/utils` barrel: 2 modules against 74.
@@ -185,7 +186,7 @@ export async function convertFileWithMarkit(
 	throwIfAborted(signal);
 	let bytes: Uint8Array;
 	try {
-		bytes = await untilAborted(signal, () => Bun.file(filePath).bytes());
+		bytes = await untilAborted(signal, () => fs.readFile(filePath));
 	} catch (error) {
 		if (error instanceof ToolAbortError) throw error;
 		// Must stay ahead of the degraded-result return below: a cancelled or

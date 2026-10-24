@@ -128,8 +128,17 @@ function runtimeImportsOf(relative: string): string[] {
  * 230 since 2026-10-16, measured: `auth-storage/usage-reporting.ts`, the usage fetch, cache and fan-out
  * split out of `auth-storage.ts`. Every module it imports was already reached from `auth-storage.ts`,
  * so the split adds one file and no subtree.
+ *
+ * 232 since 2026-10-24, measured: `registry/opencode-go-api-key.ts`, the OpenCode Go API-key login, and
+ * `catalog/wire/opencode-go.ts`, the OpenCode Go endpoint rules and the envelope a Console login's key
+ * is carried in. `registry/registry.ts`, already in this closure, lists the API-key login beside the
+ * Console one, and its imports (the shared API-key login builder and types) were already reached.
+ * `catalog/provider-models/openai-compat.ts` and `registry/oauth/index.ts`, both already reached, read
+ * the envelope from the wire leaf, whose only import is `@veyyon/utils/url`, already reached. The Console
+ * device flow, `registry/oauth/opencode-console.ts`, stays behind the registry's lazy `await import`, so
+ * the two add two modules and no subtree.
  */
-const AUTH_STORAGE_CEILING = 230;
+const AUTH_STORAGE_CEILING = 232;
 
 /**
  * Measured 2026-07-26 at 158, down from 204/212. This module is four functions over a table and its doc
@@ -207,8 +216,14 @@ const AUTH_STORAGE_CEILING = 230;
  * and `catalog/provider-models/openai-compat.ts`, already in this closure, bound their discovery fetches
  * with its `withScopedTimeoutSignal` instead of each keeping a private timer, and it imports nothing, so it
  * adds one module and no subtree.
+ *
+ * 88 since 2026-10-24, measured: `catalog/wire/opencode-go.ts`, the OpenCode Go endpoint rules and the
+ * envelope a Console login's key is carried in. `catalog/provider-models/openai-compat.ts`, already in
+ * this closure, reads from it whether a key is a Console login, which OpenCode Go discovery does not
+ * send, and its only import is `@veyyon/utils/url`, already reached, so it adds one module and no
+ * subtree.
  */
-const ENV_API_KEY_CEILING = 87;
+const ENV_API_KEY_CEILING = 88;
 
 /** Measured 2026-07-26 at 75: the logger and nothing else. A backend import here is the regression. */
 const USAGE_REGISTRY_CEILING = 83;

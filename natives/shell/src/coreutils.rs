@@ -89,9 +89,28 @@ async fn run_uutil<SE: ShellExtensions>(
 	// Capture everything owned *before* the first await so the returned future
 	// stays `Send`: the borrowed `ExecutionContext` (and its `&mut Shell`) is
 	// dropped before we await the blocking task.
-	let stdin = context.try_fd(OpenFiles::STDIN_FD);
-	let stdout = context.try_fd(OpenFiles::STDOUT_FD);
-	let stderr = context.try_fd(OpenFiles::STDERR_FD);
+	// Every descriptor the command holds, under its number in the command. The
+	// handles are duplicates that stay open until the utility returns, so a
+	// descriptor path (`/dev/stdin`, the `/dev/fd/63` of a `<(…)`) resolves to
+	// the command's own descriptor rather than the host process's.
+	let mut open_fds: Vec<(i32, OpenFile)> = context.iter_fds().collect();
+	#[cfg(unix)]
+	let fds: Vec<(i32, i32)> = {
+		use std::os::fd::AsRawFd;
+		open_fds
+			.iter()
+			.filter_map(|(fd, file)| Some((*fd, file.try_borrow_as_fd().ok()?.as_raw_fd())))
+			.collect()
+	};
+	#[cfg(not(unix))]
+	let fds: Vec<(i32, i32)> = Vec::new();
+	let mut take_fd = |number: i32| {
+		let index = open_fds.iter().position(|(fd, _)| *fd == number)?;
+		Some(open_fds.swap_remove(index).1)
+	};
+	let stdin = take_fd(OpenFiles::STDIN_FD);
+	let stdout = take_fd(OpenFiles::STDOUT_FD);
+	let stderr = take_fd(OpenFiles::STDERR_FD);
 	let cwd = context.shell.working_dir().to_path_buf();
 	let cancel = context.cancel_token();
 
@@ -102,19 +121,6 @@ async fn run_uutil<SE: ShellExtensions>(
 		}
 	}
 
-	// On unix, capture the raw stdin fd so the context can poll it for
-	// cancellation; the `OpenFile` is moved into (and kept alive by) the
-	// blocking task below, so the fd stays valid for the poll loop.
-	#[cfg(unix)]
-	let stdin_fd: Option<i32> = {
-		use std::os::fd::AsRawFd;
-		stdin
-			.as_ref()
-			.and_then(|file| file.try_borrow_as_fd().ok())
-			.map(|fd| fd.as_raw_fd())
-	};
-	#[cfg(not(unix))]
-	let stdin_fd: Option<i32> = None;
 	let stdin_is_search_input = stdin
 		.as_ref()
 		.is_some_and(|file| matches!(file, OpenFile::PipeReader(_) | OpenFile::Stream(_)));
@@ -147,6 +153,8 @@ async fn run_uutil<SE: ShellExtensions>(
 	// completes. We await that completion before returning so no detached
 	// thread keeps writing to the command's (possibly redirected) fds.
 	let code = run_cancellable_blocking(cancel, move |scope_flag| {
+		// Keeps every descriptor in `fds` open for the utility's lifetime.
+		let _held = open_fds;
 		let stdin: Box<dyn Read + Send> = match stdin {
 			Some(file) => Box::new(file),
 			None => Box::new(io::empty()),
@@ -162,7 +170,7 @@ async fn run_uutil<SE: ShellExtensions>(
 		veyyon_uutils_ctx::scope(
 			veyyon_uutils_ctx::ScopeIo {
 				stdin,
-				stdin_fd,
+				fds,
 				stdin_is_search_input,
 				stdout,
 				stdout_is_terminal,
@@ -316,7 +324,7 @@ mod tests {
 	fn scope_io(stderr: Box<dyn Write + Send>) -> veyyon_uutils_ctx::ScopeIo {
 		veyyon_uutils_ctx::ScopeIo {
 			stdin: Box::new(io::empty()),
-			stdin_fd: None,
+			fds: Vec::new(),
 			stdin_is_search_input: false,
 			stdout: Box::new(io::sink()),
 			stdout_is_terminal: false,

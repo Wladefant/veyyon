@@ -1492,6 +1492,13 @@ async fn read_output_bytes(
 }
 
 impl SpawnObserver for process::SpawnRegistry {
+	fn before_spawn(&self) {
+		// The host's own descriptors (its session file, its log) are not all
+		// opened close-on-exec; mark them so the child inherits only the
+		// descriptors the command maps into it.
+		veyyon_uutils_ctx::mark_host_descriptors_cloexec();
+	}
+
 	fn on_spawn(&self, pid: i32, pgid: Option<i32>) {
 		// Pin a stable process reference *now*, before the pid can be recycled.
 		// On Windows an open handle keeps the pid slot reserved for the lifetime
@@ -1516,6 +1523,10 @@ struct RunSpawnObserver {
 }
 
 impl SpawnObserver for RunSpawnObserver {
+	fn before_spawn(&self) {
+		SpawnObserver::before_spawn(&*self.registry);
+	}
+
 	fn on_spawn(&self, pid: i32, pgid: Option<i32>) {
 		if let Some(budget) = &self.budget {
 			budget.adopt(pid);

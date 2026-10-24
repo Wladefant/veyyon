@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@veyyon/utils",
-  "version": "1.5.8",
+  "version": "1.5.9",
   "description": "Shared utilities for pi packages",
   "homepage": "https://veyyon.dev",
   "author": "santhreal",
@@ -44,7 +44,7 @@
     "fast-check": "catalog:"
   },
   "engines": {
-    "bun": ">=1.4.0"
+    "bun": ">=1.4.3"
   },
   "files": [
     "src",

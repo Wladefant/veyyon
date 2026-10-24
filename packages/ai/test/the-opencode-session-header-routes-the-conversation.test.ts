@@ -37,11 +37,16 @@ describe("the opencode session header routes the conversation", () => {
 		expect(openCodeSessionHeaderValue("ses_other")).not.toBe(value);
 	});
 
-	it("omits the session header when no conversation is known, because a per-request value defeats the affinity", () => {
+	it("routes a request with no conversation under one process-stable session", () => {
+		// The gateway rejects a request without the header, and a per-request
+		// value would defeat the affinity it exists for.
 		const bare = getOpenCodeHeaders();
-		expect(Object.keys(bare).sort()).toEqual(["User-Agent"]);
+		expect(Object.keys(bare).sort()).toEqual(["User-Agent", "x-opencode-session"]);
+		expect(bare["x-opencode-session"]).toMatch(/^ses_[0-9a-f]{32}$/);
+		expect(getOpenCodeHeaders()["x-opencode-session"]).toBe(bare["x-opencode-session"]);
 		const named = getOpenCodeHeaders("ses_local_secret");
-		expect(named["x-opencode-session"]).toMatch(/^ses_[0-9a-f]{32}$/);
+		expect(named["x-opencode-session"]).toBe(openCodeSessionHeaderValue("ses_local_secret"));
+		expect(named["x-opencode-session"]).not.toBe(bare["x-opencode-session"]);
 		expect(named["User-Agent"]).toBeTruthy();
 	});
 

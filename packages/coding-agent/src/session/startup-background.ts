@@ -4,7 +4,7 @@
  * hydration.
  */
 
-import type { Model, ProviderSessionState } from "@veyyon/ai";
+import type { Model } from "@veyyon/ai";
 import { getOpenAICodexTransportDetails } from "@veyyon/ai/providers/openai-codex/session-state";
 import { loadOpenAICodexResponses } from "@veyyon/ai/providers/register-builtins";
 import { errorMessage, logger } from "@veyyon/utils";
@@ -23,7 +23,8 @@ export interface CodexPrewarmInput {
 	modelRegistry: ModelRegistry;
 	sessionId: string;
 	preferWebsockets: boolean | undefined;
-	providerSessionState: Map<string, ProviderSessionState>;
+	/** Its provider state holds the socket; its agent resolves the tier the first turn on the socket sends. */
+	session: Pick<AgentSession, "providerSessionState" | "agent">;
 }
 
 /**
@@ -40,7 +41,7 @@ export function prewarmCodexTransport(input: CodexPrewarmInput): void {
 		sessionId: input.sessionId,
 		baseUrl: model.baseUrl,
 		preferWebsockets: input.preferWebsockets,
-		providerSessionState: input.providerSessionState,
+		providerSessionState: input.session.providerSessionState,
 	});
 	if (!transport.websocketPreferred) return;
 	void (async () => {
@@ -52,7 +53,8 @@ export function prewarmCodexTransport(input: CodexPrewarmInput): void {
 				apiKey,
 				sessionId: input.sessionId,
 				preferWebsockets: input.preferWebsockets,
-				providerSessionState: input.providerSessionState,
+				providerSessionState: input.session.providerSessionState,
+				serviceTier: input.session.agent.serviceTierResolver?.(model),
 			});
 		} catch (error) {
 			logger.debug("Codex websocket prewarm failed", {

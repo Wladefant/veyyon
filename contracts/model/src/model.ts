@@ -145,12 +145,48 @@ export interface ModelReasoningOptions {
 	 */
 	efforts?: readonly Effort[];
 	/**
+	 * The effort the endpoint applies when a request names none (Kimi Code `/models`
+	 * `reasoning.effort.default`). Becomes `thinking.defaultLevel`; ignored unless
+	 * `efforts` lists it.
+	 */
+	defaultLevel?: Effort;
+	/**
+	 * The endpoint always reasons and offers no off state (Kimi Code `/models`
+	 * `reasoning.type: "only"`). Becomes `thinking.requiresEffort`. On a Kimi
+	 * Moonshot-native host the compat layers also keep thinking on and forced
+	 * tool choice off for such a row.
+	 */
+	requiresEffort?: boolean;
+	/**
 	 * Discovery explicitly reports no selectable efforts: an empty options
 	 * list (always-thinks SKUs like `kimi-k2-thinking`) or a binary on/off
 	 * toggle with no levels. The row keeps `reasoning: true` but exposes no
 	 * effort control at all.
 	 */
 	noEffortControl?: boolean;
+}
+
+/**
+ * A cyber access program the ChatGPT Codex backend accepts as `access_programs.cyber` (codex-rs
+ * `CyberAccessProgram`, wire values in snake case). `standard` is the default treatment; the two
+ * Daybreak programs are the tiers for security work.
+ */
+export type CyberAccessProgram = "standard" | "daybreak_blue" | "daybreak_red";
+
+/**
+ * What one ChatGPT account's Codex model listing states for one model. An account is listed the models
+ * its tier may use: a Daybreak-only model appears only in a Daybreak account's listing. Discovery grants
+ * nothing: the inference endpoint still enforces authorization on every request.
+ */
+export interface ModelAccountAccess {
+	/** Whether the account's listing includes the model. An account not listed a model cannot use it. */
+	listed: boolean;
+	/**
+	 * Accepted explicit `access_programs.cyber` selections (`available_access_programs`), unknown program
+	 * names dropped. Absent when the account is not listed the model or its listing states no list for
+	 * it; an empty list is distinct from an absent one.
+	 */
+	cyber?: readonly CyberAccessProgram[];
 }
 
 // `Provider` is any provider-id string; `KnownProvider` (re-exported above) enumerates
@@ -964,6 +1000,13 @@ export interface Model<TApi extends Api = Api> {
 	 * - `"function"` or undefined: JSON function-tool with `{input: string}` (spec §1.2).
 	 */
 	applyPatchToolType?: "freeform" | "function";
+	/**
+	 * What each signed-in ChatGPT account's Codex model listing states for this model, keyed by account
+	 * id. Every account discovery enumerated has an entry, including an account not listed the model,
+	 * so a model one tier may use and another may not records both. An account with no entry was not
+	 * enumerated. Only runtime discovery sets it; the bundled catalog never carries it.
+	 */
+	accountAccess?: Readonly<Record<string, ModelAccountAccess>>;
 	/**
 	 * Force OAuth-style request shaping for providers whose API key prefix doesn't
 	 * match an OAuth token (e.g. routing Anthropic traffic through a proxy that

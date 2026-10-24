@@ -60,9 +60,10 @@ export function streamOpenAIAnthropicShim(
 
 			if (format === "anthropic") {
 				// The Anthropic-shape copy is the same model on a second wire, so it keeps the
-				// effort ladder the catalog declared for it. Built without one, a reasoning
-				// model on `anthropic-messages` falls back to the five budget tiers, and a
-				// declared tier outside them (`max` on Kimi K3) is rejected before any request.
+				// effort ladder the catalog declared for it and whether it can be switched off.
+				// Built without one, a reasoning model on `anthropic-messages` falls
+				// back to the five budget tiers, and a declared tier outside them (`max` on Kimi K3)
+				// is rejected before any request.
 				const anthropicModel = buildModel({
 					id: model.id,
 					name: model.name,
@@ -73,7 +74,12 @@ export function streamOpenAIAnthropicShim(
 					contextWindow: model.contextWindow,
 					maxTokens: model.maxTokens,
 					reasoning: model.reasoning,
-					reasoningOptions: model.thinking ? { efforts: model.thinking.efforts } : { noEffortControl: true },
+					reasoningOptions: model.thinking
+						? {
+								efforts: model.thinking.efforts,
+								requiresEffort: model.thinking.requiresEffort,
+							}
+						: { noEffortControl: true },
 					input: model.input,
 					cost: model.cost,
 				} as ModelSpec<"anthropic-messages">);
@@ -109,6 +115,9 @@ export function streamOpenAIAnthropicShim(
 					fetch: options?.fetch,
 					thinkingEnabled,
 					thinkingBudgetTokens: thinkingBudget,
+					// An adaptive or budget-effort transport sends the selected effort as
+					// `output_config.effort`; a plain budget transport sends only the budget.
+					reasoning: reasoningEffort,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					serviceTier: options?.serviceTier,
 				});
@@ -130,7 +139,14 @@ export function streamOpenAIAnthropicShim(
 						} as ModelSpec<"openai-completions">)
 					: model;
 
-				const reasoningEffort = options?.reasoning;
+				// A model that cannot reason with thinking off takes its lowest effort in place of off, as
+				// the Anthropic branch above and every other OpenAI-compatible request resolve it.
+				const offSelection =
+					options?.disableReasoning === true || options?.reasoning === undefined
+						? resolveReasoningSelection(openaiModel, { disabled: options?.disableReasoning })
+						: undefined;
+				const forcedOn = offSelection?.forcedByModel === true;
+				const reasoningEffort = forcedOn ? offSelection.effort : options?.reasoning;
 				const innerStream = streamOpenAICompletions(openaiModel, context, {
 					apiKey,
 					temperature: options?.temperature,
@@ -150,7 +166,7 @@ export function streamOpenAIAnthropicShim(
 					reasoning: reasoningEffort,
 					toolChoice: options?.toolChoice,
 					serviceTier: options?.serviceTier,
-					disableReasoning: options?.disableReasoning,
+					disableReasoning: forcedOn ? undefined : options?.disableReasoning,
 				});
 
 				for await (const event of innerStream) {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { Model } from "@veyyon/ai";
+import { resetCodexAccessProgramListings } from "@veyyon/ai/providers/openai-codex/access-programs";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import type { CustomToolContext } from "@veyyon/coding-agent/extensibility/custom-tools";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
@@ -40,6 +41,7 @@ const generatedImagePaths: string[] = [];
 
 afterEach(async () => {
 	await Promise.all(generatedImagePaths.splice(0).map(imagePath => removeWithRetries(imagePath)));
+	resetCodexAccessProgramListings();
 	if (originalOpenRouterKey === undefined) {
 		delete Bun.env.OPENROUTER_API_KEY;
 	} else {
@@ -293,8 +295,10 @@ describe("imageGenTool", () => {
 		expect(result.details?.imageCount).toBe(1);
 	});
 
-	it("adds Codex account headers when the bearer token exposes an account id", async () => {
+	it("adds Codex account headers and the account's program when the bearer token exposes an account id", async () => {
 		let requestHeaders: Headers | undefined;
+		let requestBody: Record<string, unknown> | undefined;
+		const listingAccounts: Array<string | null> = [];
 		const tokenPayload = Buffer.from(
 			JSON.stringify({
 				"https://api.openai.com/auth": { chatgpt_account_id: "acc_test" },
@@ -302,8 +306,19 @@ describe("imageGenTool", () => {
 		).toString("base64");
 		const codexJwt = `header.${tokenPayload}.signature`;
 
-		const fetchMock: typeof fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+		const fetchMock: typeof fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			if (new URL(input.toString()).pathname.endsWith("/codex/models")) {
+				// The account's model listing, read before the image request to select its program.
+				listingAccounts.push(new Headers(init?.headers).get("chatgpt-account-id"));
+				const offered = { cyber: ["standard", "daybreak_red"] };
+				return new Response(
+					JSON.stringify({
+						models: [{ slug: "gpt-5.5-codex", supported_in_api: true, available_access_programs: offered }],
+					}),
+				);
+			}
 			requestHeaders = new Headers(init?.headers);
+			requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
 			return new Response(
 				[
 					"event: response.output_item.done",
@@ -357,7 +372,70 @@ describe("imageGenTool", () => {
 
 		expect(requestHeaders?.get("authorization")).toBe(`Bearer ${codexJwt}`);
 		expect(requestHeaders?.get("chatgpt-account-id")).toBe("acc_test");
+		expect(requestHeaders?.get("x-codex-routing-hint")).toBe("model=gpt-5.5-codex");
+		expect(requestBody?.access_programs).toEqual({ cyber: "daybreak_red" });
+		expect(listingAccounts).toEqual(["acc_test"]);
 		expect(result.details?.imageCount).toBe(1);
+	});
+
+	it("sends no Codex routing hint, and drops the model's own, when the model is not a valid header value", async () => {
+		let requestHeaders: Headers | undefined;
+		let requestBody: Record<string, unknown> | undefined;
+		const tokenPayload = Buffer.from(
+			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
+		).toString("base64");
+		const codexJwt = `header.${tokenPayload}.signature`;
+		const fetchMock: typeof fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			if (new URL(input.toString()).pathname.endsWith("/codex/models")) {
+				return new Response(JSON.stringify({ models: [] }));
+			}
+			requestHeaders = new Headers(init?.headers);
+			requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+			const done = {
+				type: "response.output_item.done",
+				item: {
+					type: "image_generation_call",
+					result: Buffer.from("webp").toString("base64"),
+					status: "completed",
+				},
+			};
+			const completed = { type: "response.completed", response: { output: [], status: "completed", error: null } };
+			return new Response(`data: ${JSON.stringify(done)}\n\ndata: ${JSON.stringify(completed)}\n\n`, {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		}) as unknown as typeof fetch;
+		const model = {
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			id: "gpt-5.5-codex-é",
+			name: "GPT Codex",
+			baseUrl: "https://example-proxy.invalid/backend-api",
+			headers: { "x-codex-routing-hint": "model=caller-stated" },
+		} as unknown as Model;
+		const ctx: CustomToolContext = {
+			fetch: fetchMock,
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => codexJwt,
+				getApiKeyForProvider: async () => undefined,
+				authStorage: { rotateSessionCredential: async () => false },
+				resolver: () => async () => codexJwt,
+			} as unknown as ModelRegistry,
+			model,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute("call-codex-invalid-hint", { subject: "a cat" }, undefined, ctx);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestBody?.model).toBe("gpt-5.5-codex-é");
+		expect(requestHeaders?.has("x-codex-routing-hint")).toBe(false);
 	});
 
 	it("routes xAI image generation with xAI-only aspect ratios", async () => {

@@ -7,13 +7,9 @@
  * SQLite store, never POSTs the broker sentinel to an OpenAI token endpoint.
  */
 import * as os from "node:os";
-import type { AuthStorage, FetchImpl, Model, OAuthAccess } from "@veyyon/ai";
+import type { AuthStorage, FetchImpl, OAuthAccess } from "@veyyon/ai";
 import { withOAuthAccess } from "@veyyon/ai/auth-retry";
-import {
-	applyCodexResponsesLiteShape,
-	resolveCodexResponsesLite,
-} from "@veyyon/ai/providers/openai-codex/request-transformer";
-import { createOpenAICodexCompatibilityMetadata } from "@veyyon/ai/providers/openai-codex-responses";
+import { resolveCodexAccessPrograms } from "@veyyon/ai/providers/openai-codex/access-programs";
 import { getBundledModels } from "@veyyon/catalog/models";
 import {
 	// The host is imported, never respelled. `@veyyon/catalog/wire/codex` owns it and
@@ -22,6 +18,8 @@ import {
 	// web search alone would have kept posting to the old endpoint.
 	CODEX_BASE_URL,
 	CODEX_CLIENT_VERSION,
+	type CodexRoutedBody,
+	codexRoutingHint,
 	getCodexAccountId,
 	OPENAI_HEADER_VALUES,
 	OPENAI_HEADERS,
@@ -60,50 +58,21 @@ const DEFAULT_MODEL_PREFERENCES = [
 const DEFAULT_INSTRUCTIONS =
 	"You are a helpful assistant with web search capabilities. Search the web to answer the user's question accurately and cite your sources.";
 
-type CodexSearchModel = Model<"openai-codex-responses">;
-
-interface CodexModelCandidate {
-	modelId: string;
-	catalogModel?: CodexSearchModel;
-}
-
-function getBundledCodexModels(): CodexSearchModel[] {
-	const models: CodexSearchModel[] = [];
+/** The ids of the bundled Codex Responses models, in catalog order. */
+function getBundledCodexModelIds(): string[] {
+	const ids: string[] = [];
 	for (const model of getBundledModels("openai-codex")) {
-		if (model.api === "openai-codex-responses") {
-			models.push(model as CodexSearchModel);
-		}
+		if (model.api === "openai-codex-responses") ids.push(model.id);
 	}
-	return models;
+	return ids;
 }
 
-function getConfiguredModel(): CodexModelCandidate | undefined {
-	const configuredModel = $env.VEYYON_CODEX_WEB_SEARCH_MODEL?.trim();
-	if (!configuredModel) return undefined;
-
-	const catalogModel = getBundledCodexModels().find(model => model.id === configuredModel);
-	return { modelId: configuredModel, ...(catalogModel ? { catalogModel } : {}) };
-}
-
-function getDefaultModelCandidates(): CodexModelCandidate[] {
-	const bundledModels = getBundledCodexModels();
-	const candidates: CodexModelCandidate[] = [];
-	for (const modelId of DEFAULT_MODEL_PREFERENCES) {
-		const catalogModel = bundledModels.find(model => model.id === modelId);
-		if (catalogModel) candidates.push({ modelId, catalogModel });
-	}
-
-	if (candidates.length > 0) {
-		return candidates;
-	}
-
-	const nonMini = bundledModels.find(model => !model.id.includes("mini") && !model.id.includes("spark"));
-	if (nonMini) {
-		return [{ modelId: nonMini.id, catalogModel: nonMini }];
-	}
-
-	const fallbackModel = bundledModels[0];
-	return fallbackModel ? [{ modelId: fallbackModel.id, catalogModel: fallbackModel }] : [{ modelId: FALLBACK_MODEL }];
+function getDefaultModelCandidates(): string[] {
+	const bundled = getBundledCodexModelIds();
+	const candidates = DEFAULT_MODEL_PREFERENCES.filter(id => bundled.includes(id));
+	if (candidates.length > 0) return candidates;
+	const nonMini = bundled.find(id => !id.includes("mini") && !id.includes("spark"));
+	return [nonMini ?? bundled[0] ?? FALLBACK_MODEL];
 }
 
 /** The Codex error body, or the message raised from it, of a model a ChatGPT account cannot use. */
@@ -177,6 +146,12 @@ function buildCodexHeaders(accessToken: string, accountId: string): Record<strin
  * The caller provides the exact model id to send; retry / fallback policy
  * lives one layer up in `searchCodex()` so we can distinguish explicit user
  * overrides from the default ChatGPT-account model-selection path.
+ *
+ * The request is the plain Responses shape for every model, including one discovery marks for
+ * Responses-Lite. Under the Lite header the endpoint accepts only function, custom and client tool
+ * search tools in `tools`: a hosted `web_search` moved into the `additional_tools` input item is
+ * never forced and answers from the model's own knowledge, and a `tool_choice` naming it fails with
+ * 400 `Tool choice 'web_search_preview' not found in 'tools' parameter.`
  */
 async function callCodexSearch(
 	auth: { accessToken: string; accountId: string },
@@ -185,8 +160,7 @@ async function callCodexSearch(
 		signal?: AbortSignal;
 		systemPrompt?: string;
 		searchContextSize?: "low" | "medium" | "high";
-		model: CodexModelCandidate;
-		sessionId?: string;
+		model: string;
 		fetch?: FetchImpl;
 		resolveProviderTextTransform?: ProviderTextTransformResolver;
 	},
@@ -194,14 +168,7 @@ async function callCodexSearch(
 	const url = `${CODEX_BASE_URL}${CODEX_RESPONSES_PATH}`;
 	const headers = buildCodexHeaders(auth.accessToken, auth.accountId);
 
-	const requestedModel = options.model.modelId;
-	const candidateModel = options.model.catalogModel ?? {
-		id: requestedModel,
-		api: "openai-codex-responses" as const,
-		provider: "openai-codex" as const,
-	};
-	const usesResponsesLite = resolveCodexResponsesLite(candidateModel, undefined);
-
+	const requestedModel = options.model;
 	const body: Record<string, unknown> = {
 		model: requestedModel,
 		stream: true,
@@ -222,26 +189,28 @@ async function callCodexSearch(
 		tool_choice: { type: "web_search" },
 		instructions: options.systemPrompt ?? DEFAULT_INSTRUCTIONS,
 	};
-	if (usesResponsesLite) {
-		const metadata = createOpenAICodexCompatibilityMetadata({
-			sessionId: options.sessionId,
-			requestKind: "turn",
-			startNewTurn: true,
-		});
-		Object.assign(headers, metadata.headers);
-		headers[OPENAI_HEADERS.RESPONSES_LITE] = "true";
-		body.client_metadata = metadata.clientMetadata;
-		body.reasoning = { context: "all_turns" };
-		applyCodexResponsesLiteShape(body);
-	}
 
 	const fetchImpl = options.fetch ?? fetch;
 	return withHardTimeout(options.signal, async hardSignal => {
 		const transform = resolveProviderTextTransform(options.resolveProviderTextTransform, "Codex search request");
+		// A search for security material is judged like a turn: without the account's Daybreak program it
+		// is answered under the automatic treatment and refused with `cyber_policy`.
+		const accessPrograms = await resolveCodexAccessPrograms(
+			{ id: requestedModel, baseUrl: CODEX_BASE_URL },
+			auth.accessToken,
+			{
+				accountId: auth.accountId,
+				fetch: fetchImpl,
+				signal: hardSignal,
+			},
+		);
+		if (accessPrograms) body.access_programs = accessPrograms;
 		const requestBody = transformProviderPayload(body, transform, "Codex search request");
+		// The hint states the model of the body as sent, as a turn's does.
+		const routingHint = codexRoutingHint(requestBody as CodexRoutedBody);
 		const response = await fetchImpl(url, {
 			method: "POST",
-			headers,
+			headers: routingHint ? { ...headers, [OPENAI_HEADERS.ROUTING_HINT]: routingHint } : headers,
 			body: JSON.stringify(requestBody),
 			signal: hardSignal,
 		});
@@ -288,7 +257,7 @@ export async function searchCodex(params: SearchParams): Promise<SearchResponse>
 		);
 	}
 
-	const configuredModel = getConfiguredModel();
+	const configuredModel = $env.VEYYON_CODEX_WEB_SEARCH_MODEL?.trim();
 	const modelCandidates = configuredModel ? [configuredModel] : getDefaultModelCandidates();
 
 	const result = await withOAuthAccess(
@@ -312,7 +281,6 @@ export async function searchCodex(params: SearchParams): Promise<SearchResponse>
 						systemPrompt: params.systemPrompt,
 						searchContextSize: "high",
 						model: candidate,
-						sessionId: params.sessionId,
 						fetch: params.fetch,
 						resolveProviderTextTransform: params.resolveProviderTextTransform,
 					});

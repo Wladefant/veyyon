@@ -64,7 +64,8 @@ describe("search structure parse errors", () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-grep-parse-"));
 		try {
 			const filePath = path.join(tempDir, "broken.ts");
-			await Bun.write(filePath, "export function broken( { return 1; }");
+			// The comment holds the pattern's name, so the file could hold a match and is parsed.
+			await Bun.write(filePath, "// someUnlikelyCall\nexport function broken( { return 1; }");
 
 			const tools = await createTools(createTestSession(tempDir));
 			const tool = tools.find(entry => entry.name === "search");
@@ -99,7 +100,14 @@ describe("search structure parse errors", () => {
 		try {
 			const fileCount = 35;
 			for (let i = 0; i < fileCount; i++) {
-				await Bun.write(path.join(tempDir, `broken-${i}.ts`), "export function broken( { return 1; }");
+				await Bun.write(
+					path.join(tempDir, `broken-${i}.ts`),
+					"// someUnlikelyCall\nexport function broken( { return 1; }",
+				);
+			}
+			// Broken files without the pattern's name cannot hold a match, so they are not parsed or counted.
+			for (let i = 0; i < 5; i++) {
+				await Bun.write(path.join(tempDir, `unrelated-${i}.ts`), "export function broken( { return 1; }");
 			}
 
 			const tools = await createTools(createTestSession(tempDir));
@@ -398,7 +406,11 @@ describe("search structure mixed-language and pagination contracts", () => {
 	it("preserves genuine source parse errors when malformed source exists alongside matching files", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-grep-source-err-"));
 		try {
-			await fs.writeFile(path.join(tempDir, "broken.ts"), "export function broken( { return 1; }", "utf8");
+			await fs.writeFile(
+				path.join(tempDir, "broken.ts"),
+				"// calls compute\nexport function broken( { return 1; }",
+				"utf8",
+			);
 			await fs.writeFile(
 				path.join(tempDir, "valid.ts"),
 				"export function compute(x: number) {\n\treturn x * 2;\n}\n",

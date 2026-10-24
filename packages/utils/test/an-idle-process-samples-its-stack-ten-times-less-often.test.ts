@@ -15,16 +15,20 @@ import { StallSampler } from "@veyyon/utils/stall-sampler";
  * real profiler and read its samples back: a profile started after 10s without a busy tick samples
  * at the idle interval, one busy tick restores the busy interval at once, a process that worked
  * inside the idle stretch keeps the busy interval through a rotation, the boundary of the idle
- * stretch falls on 10s exactly, and a profile is replaced once it could hold 1,000 samples, which
- * is 10s at the busy interval and 100s at the idle one. A parked sampler samples once a second, and
- * the first quiet tick after the watchdog wakes restores the idle interval. The watchdog cases pin
- * what a quiet tick reports as busy: CPU over `BUSY_CPU_RATIO` of the wall time the tick's interval
- * spanned.
+ * stretch falls on 10s exactly, a busy tick replaces the profile at once, and an idle tick keeps it
+ * until it could hold 1,000 samples, which is 10s at the busy interval and 100s at the idle one. A
+ * parked sampler samples once a second, and the first quiet tick after the watchdog wakes restores
+ * the idle interval. The watchdog cases pin what a quiet tick reports as busy: CPU over
+ * `BUSY_CPU_RATIO` of the wall time the tick's interval spanned.
  *
  * WHAT IT DOES NOT CATCH. The wakeup counts themselves are a property of the engine's profiler
  * thread and are measured on the binary, not here. Sample counts read the interval: a held loop of
- * 500ms records about 50 samples at 10ms and about 5 at 100ms, and the bounds below sit far enough
- * from both that a loaded host does not move a case across them.
+ * 500ms records about 50 samples at 10ms and about 5 at 100ms. A loaded host adds its scheduling
+ * delay to every wait, which only lowers a count, so an upper bound on a slower interval holds on
+ * any host, and each lower bound sits one above the next slower interval's upper bound rather than
+ * at a share of the faster one's: with twelve busy loops on its CPU the 10ms interval recorded 11 to
+ * 14 samples in 500ms. The cases therefore pin which interval is in effect, not its value: a busy
+ * interval anywhere under about 45ms passes.
  */
 
 /** Holds the loop so the profiler records samples. */
@@ -37,12 +41,12 @@ function holdTheLoopForMs(ms: number): number {
 
 /** At most this many samples land in a 500ms hold at the 100ms idle interval. */
 const IDLE_MAX = 10;
-/** At least this many samples land in a 500ms hold at the 10ms busy interval. */
-const BUSY_MIN = 25;
+/** More samples than the idle interval can record in a 500ms hold, so the busy interval ran. */
+const BUSY_MIN = IDLE_MAX + 1;
 /** At most this many samples land in a 2s hold at the 1s parked interval. */
 const PARKED_MAX = 3;
-/** At least this many land in a 2s hold that starts inside a parked wait and ends at the idle interval. */
-const RESTORED_MIN = 6;
+/** More samples than the parked interval can record in a 2s hold, so the idle interval was restored. */
+const RESTORED_MIN = PARKED_MAX + 1;
 
 const samplers: StallSampler[] = [];
 
@@ -107,7 +111,10 @@ describe("an idle process samples its stack ten times less often", () => {
 	});
 
 	test("one busy tick restores the busy interval without waiting for a rotation", async () => {
-		const sampler = await idleSampler();
+		// The last busy tick was 20s ago, so only the tick below can restore the busy interval.
+		const sampler = await startedSampler(performance.now() - 20_000);
+		sampler.quiet(performance.now() + 10_000, false);
+		await sampler.stacksBetween(0, 0);
 		sampler.quiet(performance.now(), true);
 		expect(await samplesInHold(sampler)).toBeGreaterThanOrEqual(BUSY_MIN);
 	});
@@ -117,7 +124,9 @@ describe("an idle process samples its stack ten times less often", () => {
 		const sampler = await startedSampler(started);
 		const workedAt = performance.now() + 5_000;
 		sampler.quiet(workedAt, true);
-		// The profile is full 10s after it started; the work was 7s before this tick.
+		// The busy tick's restart settles first, so the profile is full 10s after it and the tick below
+		// rotates it; the work was 7s before that tick.
+		await sampler.stacksBetween(0, 0);
 		sampler.quiet(workedAt + 7_000, false);
 		expect(await samplesInHold(sampler)).toBeGreaterThanOrEqual(BUSY_MIN);
 	});
@@ -150,15 +159,15 @@ describe("an idle process samples its stack ten times less often", () => {
 		expect(await samplesInHold(sampler)).toBeLessThanOrEqual(IDLE_MAX);
 	});
 
-	test("a busy-interval profile is replaced once it could hold 1,000 samples, 10s", async () => {
+	test("a busy tick replaces the profile at once, and an idle tick keeps it until it is full", async () => {
 		const sampler = await startedSampler(performance.now());
 
 		holdTheLoopForMs(300);
-		sampler.quiet(performance.now() + 8_000, true);
+		sampler.quiet(performance.now() + 5_000, false);
 		expect((await sampler.stacksBetween(0, performance.now()))?.samples).toBeGreaterThan(0);
 
 		holdTheLoopForMs(300);
-		sampler.quiet(performance.now() + 10_000, true);
+		sampler.quiet(performance.now(), true);
 		expect((await sampler.stacksBetween(0, performance.now()))?.samples).toBe(0);
 	});
 

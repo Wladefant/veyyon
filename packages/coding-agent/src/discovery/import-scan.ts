@@ -7,6 +7,8 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { isEnoent } from "@veyyon/utils/fs-error";
+import { readFileText } from "@veyyon/utils/fs-io";
 // Provider registrations are side effects of the discovery barrel.
 import "./index";
 import { FOREIGN_PROVIDER_IDS, loadCapability } from "./capability";
@@ -107,15 +109,16 @@ async function importInstructions(agentDir: string, candidate: ImportCandidate):
 	const marker = importMarker(candidate.sourcePath);
 	// The target AGENTS.md may not exist yet, which is the normal first-import case, and empty is the correct
 	// reading of that: the marker check below finds nothing and the section is written as the whole file.
-	const existing = await Bun.file(targetFile)
-		.text()
-		.catch(() => "");
+	const existing = await readFileText(targetFile).catch(error => {
+		if (isEnoent(error)) return "";
+		throw error;
+	});
 	if (existing.includes(marker)) return "skipped";
-	const content = await Bun.file(candidate.sourcePath).text();
+	const content = await readFileText(candidate.sourcePath);
 	const section = `${marker}\n${content.trimEnd()}\n`;
 	const merged = existing.trimEnd().length > 0 ? `${existing.trimEnd()}\n\n${section}` : section;
 	await fs.mkdir(agentDir, { recursive: true });
-	await Bun.write(targetFile, merged);
+	await fs.writeFile(targetFile, merged);
 	return "imported";
 }
 

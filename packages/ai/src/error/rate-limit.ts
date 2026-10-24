@@ -117,6 +117,10 @@ export function parseRateLimitReason(errorMessage: string): RateLimitReason {
 		lower.includes("exhausted") ||
 		lower.includes("quota") ||
 		lower.includes("usage limit") ||
+		// Cursor: `resource_exhausted: … You're out of usage. Switch to Auto … (ERROR_RATE_LIMITED)`. The
+		// plan's allowance for the model is spent; with the status token stripped nothing else here
+		// matched, so the body read as transient capacity and was retried every minute.
+		lower.includes("out of usage") ||
 		// xAI SuperGrok: HTTP 403 "run out of credits" / spending-limit is an
 		// account-local cap — rotate, don't treat as auth failure.
 		lower.includes("run out of credits") ||
@@ -165,7 +169,7 @@ export function calculateRateLimitBackoffMs(reason: RateLimitReason, context: Ra
 
 /** Detect usage/quota limit errors in error messages (persistent, requires credential switch). */
 const USAGE_LIMIT_PATTERN =
-	/usage.?limit|usage_limit_reached|usage_not_included|limit_reached|quota.?(?:exceeded|reached|insufficient)|额度不足|额度耗尽|resource.?exhausted|exhausted your capacity|quota will reset|insufficient.?(?:balance|quota)|run out of credits|out of credits|spending[- _]?limit|personal-team-blocked/i;
+	/usage.?limit|usage_limit_reached|usage_not_included|limit_reached|quota.?(?:exceeded|reached|insufficient)|额度不足|额度耗尽|resource.?exhausted|exhausted your capacity|quota will reset|insufficient.?(?:balance|quota)|run out of credits|out of credits|out of usage|spending[- _]?limit|personal-team-blocked/i;
 
 // `isUsageLimitStatus` and `isUsageLimitOutcome` are gone. They were the quota decision tree written
 // a second time, outside the registry: `isUsageLimit(error) || isUsageLimitOutcome(status, message)`

@@ -366,11 +366,47 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * type-only. `goals/goal-record.ts`, already here, checks a recorded goal's status against that
  * tuple when a session resumes, so a status no build writes restores no goal.
  *
+ * 1491 to 1492: `cli/launch-card-eligibility.ts`, the argv-only launch decisions, which `main.ts`
+ * imports to tell a bare `--resume` (the session picker, no launch card) from a resume that names its
+ * session. Its only import is type-only, and the shipped launch already evaluates it through
+ * `commands/launch.ts`. Measured 2026-10-19 at 1492.
+ *
+ * 1492 to 1493: `agent/src/tool-call-preparation.ts`, which strips the intent field, repairs,
+ * validates and transforms a tool call's arguments, and which left `agent/src/agent-loop.ts` so the
+ * Cursor exec channel prepares the calls it runs itself exactly as the loop does. It imports only
+ * what that code imported there.
+ *
+ * 1493 to 1494: `utils/src/fs-io.ts`, the reads and writes that open a workspace file through
+ * `node:fs` so an open under an NFS lease waits for the lease to break instead of failing with
+ * `EAGAIN`. It replaced `Bun.file` and `Bun.write` calls on the launch path, its only imports are
+ * `node:fs/promises` and `node:path`, and its callers name it by subpath, so the `@veyyon/utils`
+ * barrel does not carry it. Measured 2026-10-20 at 1494.
+ *
+ * 1494 to 1495: `hashline/src/line-map.ts`, which pairs the unchanged lines of two versions of a
+ * file. It left `hashline/src/recovery.ts`, and `hashline/src/patcher.ts`, already here, uses it to
+ * keep the lines an edit's text was displayed with under the edited version's tag. Its only runtime
+ * import is `@veyyon/utils/abortable`, already here; `diff` stays a lazy `require`. Measured
+ * 2026-10-20 at 1495.
+ *
+ * 1495 to 1496: `ai/src/providers/openai-codex/access-programs.ts`, which selects the Daybreak
+ * program a Codex request carries for the account that signs it. `tools/web/image-gen.ts`, already
+ * here for the image provider preference, imports it for a Codex image request. Its runtime imports,
+ * the Codex discovery reader and the abort and timeout helpers, are already here. Measured
+ * 2026-10-21 at 1496.
+ *
+ * 1496 to 1498: `ai/src/registry/opencode-go-api-key.ts`, the OpenCode Go API-key login, which
+ * `ai/src/registry/registry.ts`, already here, lists beside the OpenCode Console login, and
+ * `catalog/src/wire/opencode-go.ts`, the OpenCode Go endpoint rules and the envelope a Console login's
+ * key is carried in, which `catalog/src/provider-models/openai-compat.ts` and
+ * `ai/src/registry/oauth/index.ts`, both already here, read. Their runtime imports, the shared API-key
+ * login builder and `@veyyon/utils/url`, are already here. The Console device flow stays behind
+ * the registry's lazy `await import`. Measured 2026-10-24 at 1498.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1491;
+const LAUNCH_REACH_CEILING = 1498;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

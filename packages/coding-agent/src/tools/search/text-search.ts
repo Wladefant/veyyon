@@ -826,6 +826,9 @@ export interface TextSearchDetails {
 	files?: string[];
 	fileMatches?: Array<{ path: string; count: number }>;
 	truncated?: boolean;
+	/** What the result prints when the time limit stopped the search, kept so a
+	 * projection of the result prints it too. */
+	timeoutNotice?: string;
 	error?: string;
 	/** Pre-formatted text for the user-visible TUI render. Mirrors the model-facing
 	 * `result.text` lines but uses a `│` gutter and `*` to mark match lines (vs space for
@@ -866,6 +869,8 @@ interface NativeSearchOutcome {
 	 * sub-search, so the first non-empty notice is authoritative.
 	 */
 	literalFallbackError: string | undefined;
+	/** The time limit stopped native grep, so `result` holds what it found by then. */
+	timedOut: boolean;
 }
 
 /** A finished search, before it is paged and rendered. */
@@ -881,6 +886,8 @@ interface TextSearchOutcome {
 	/** Result paths of virtual internal resources, which name no file on disk. */
 	virtualPathSet: ReadonlySet<string>;
 	warningNote: string | undefined;
+	/** The time limit stopped the search, so `result` holds what it found by then. */
+	timedOut: boolean;
 }
 
 /** The page of matching files one call shows, and the matches drawn from it. */
@@ -942,14 +949,7 @@ function invalidRegexError(err: unknown): ToolError | undefined {
 
 /** A native grep failure as the error the caller can act on. */
 function nativeGrepError(err: unknown): unknown {
-	const invalidRegex = invalidRegexError(err);
-	if (invalidRegex) return invalidRegex;
-	if (err instanceof Error && err.message.includes("Aborted: Timeout")) {
-		return new ToolError(
-			`Text search timed out after ${SEARCH_GREP_TIMEOUT_MS / 1000}s; narrow \`path\` or \`input\`, or locate a tighter scope with \`type: "files"\` first`,
-		);
-	}
-	return err;
+	return invalidRegexError(err) ?? err;
 }
 
 /** A virtual-resource search failure as the error the caller can act on. */
@@ -1034,6 +1034,7 @@ async function searchPhysicalScope(scope: TextSearchScope, request: NativeGrepRe
 			result,
 			skippedOversized: result.skippedOversized ?? 0,
 			literalFallbackError: result.patternTreatedAsLiteral ?? undefined,
+			timedOut: Boolean(result.timedOut),
 		};
 	} catch (err) {
 		throw nativeGrepError(err);
@@ -1043,7 +1044,7 @@ async function searchPhysicalScope(scope: TextSearchScope, request: NativeGrepRe
 /**
  * Grep each target in turn and rebase every match onto the scope's search path. Overlapping
  * targets (a directory plus a file nested inside it) surface the same physical line twice; the
- * first occurrence is kept.
+ * first occurrence is kept. The targets share one time limit: each gets what the earlier ones left.
  */
 async function grepTargets(scope: TextSearchScope, request: NativeGrepRequest): Promise<NativeSearchOutcome> {
 	const { exactFilePaths, searchPath } = scope;
@@ -1057,8 +1058,12 @@ async function grepTargets(scope: TextSearchScope, request: NativeGrepRequest): 
 	let limitReached = false;
 	let totalMatches = 0;
 	let filesSearched = 0;
+	let timedOut = false;
+	const deadlineAt = request.timeoutMs === undefined ? undefined : Date.now() + request.timeoutMs;
 	for (const target of targets) {
-		const targetResult = await grep({ ...request, path: target.basePath, glob: target.glob }, undefined);
+		const timeoutMs = deadlineAt === undefined ? undefined : Math.max(0, deadlineAt - Date.now());
+		const targetResult = await grep({ ...request, path: target.basePath, glob: target.glob, timeoutMs }, undefined);
+		timedOut ||= Boolean(targetResult.timedOut);
 		skippedOversized += targetResult.skippedOversized ?? 0;
 		literalFallbackError ??= targetResult.patternTreatedAsLiteral ?? undefined;
 		limitReached = limitReached || Boolean(targetResult.limitReached);
@@ -1085,6 +1090,7 @@ async function grepTargets(scope: TextSearchScope, request: NativeGrepRequest): 
 		},
 		skippedOversized,
 		literalFallbackError,
+		timedOut,
 	};
 }
 
@@ -1133,6 +1139,16 @@ async function oversizedTargetsNote(cwd: string, targets: readonly string[]): Pr
 	if (oversized.length === 0) return undefined;
 	const limitMb = Math.floor(NATIVE_GREP_MAX_FILE_BYTES / (1024 * 1024));
 	return `Searched only the first ${limitMb}MB of large files (matches past the ${limitMb}MB window are not shown; use \`read\` for the rest): ${oversized.join(", ")}`;
+}
+
+/** What a search stopped by its time limit prints, or undefined for a search that finished. */
+function timeoutNoticeText(outcome: TextSearchOutcome): string | undefined {
+	if (!outcome.timedOut) return undefined;
+	const seconds = SEARCH_GREP_TIMEOUT_MS / 1000;
+	const searched = outcome.result.filesSearched;
+	return outcome.result.matches.length > 0
+		? `Text search timed out after ${seconds}s with ${searched} file${searched === 1 ? "" : "s"} searched; results are incomplete — narrow \`path\` or \`input\` instead of retrying blindly`
+		: `Text search timed out after ${seconds}s before finding any matches — the search is incomplete, NOT proof of absence; narrow \`path\` or \`input\`, or locate a tighter scope with \`type: "files"\` first`;
 }
 
 /** The non-fatal warnings printed after the result, one per line, or undefined when there are none. */
@@ -1270,6 +1286,7 @@ function noMatchResult(
 	skip: number,
 ): AgentToolResult<TextSearchDetails> {
 	const { scope } = outcome;
+	const timeoutNotice = timeoutNoticeText(outcome);
 	const skipPastEnd = outcome.isMultiScope && skip > 0 && page.totalFiles > 0 && page.skipFiles >= page.totalFiles;
 	const details: TextSearchDetails = {
 		scopePath: scope.scopePath,
@@ -1278,15 +1295,18 @@ function noMatchResult(
 		matchCount: skipPastEnd ? outcome.result.totalMatches : 0,
 		fileCount: skipPastEnd ? page.totalFiles : 0,
 		files: [],
-		truncated: false,
+		truncated: outcome.timedOut,
+		timeoutNotice,
 		missingPaths: scope.missingPaths.length > 0 ? scope.missingPaths : undefined,
 	};
-	const noMatchText = skipPastEnd
+	const lead = skipPastEnd
 		? `No more results (${totalFilesLabel} files total; skip=${skip} has exhausted the result set)`
-		: "No matches found";
-	const text = outcome.warningNote ? `${noMatchText}\n${outcome.warningNote}` : noMatchText;
+		: outcome.timedOut
+			? undefined
+			: "No matches found";
+	const text = [lead, timeoutNotice, outcome.warningNote].filter((line): line is string => Boolean(line)).join("\n");
 	const resultBuilder = toolResult(details).text(text);
-	if (skipPastEnd) return resultBuilder.done();
+	if (skipPastEnd || outcome.timedOut) return resultBuilder.done();
 	// A true zero-match result is useless: by the time compaction runs,
 	// the follow-up call has already corrected course.
 	return resultBuilder.useless().done();
@@ -1628,7 +1648,8 @@ async function presentTextSearch(
 	const body = formatSearchBody(search, useGroupedOutput);
 	const outputLines = body.model;
 	const bodyLineCount = outputLines.length;
-	const trailer = [limitMessage, outcome.warningNote].filter((note): note is string => Boolean(note));
+	const timeoutNotice = timeoutNoticeText(outcome);
+	const trailer = [limitMessage, timeoutNotice, outcome.warningNote].filter((note): note is string => Boolean(note));
 	for (const note of trailer) outputLines.push("", note);
 	const shown = await fitSearchOutput(
 		session,
@@ -1648,6 +1669,7 @@ async function presentTextSearch(
 		page.fileLimitReached ||
 			page.perFileLimitReached ||
 			result.limitReached ||
+			outcome.timedOut ||
 			truncation?.truncated ||
 			linesTruncated,
 	);
@@ -1660,6 +1682,7 @@ async function presentTextSearch(
 		files: fileList,
 		fileMatches: fileList.map(file => ({ path: file, count: search.matchesByFile.get(file)?.length ?? 0 })),
 		truncated,
+		timeoutNotice,
 		fileLimitReached: page.fileLimitReached ? DEFAULT_FILE_LIMIT : undefined,
 		perFileLimitReached: page.perFileLimitReached ? perFileMatchCap : undefined,
 		displayContent: body.display.join("\n"),
@@ -1784,6 +1807,7 @@ async function runTextSearch(
 					result: { matches: [], totalMatches: 0, filesWithMatches: 0, filesSearched: 0, limitReached: false },
 					skippedOversized: 0,
 					literalFallbackError: undefined,
+					timedOut: false,
 				};
 	let virtualResult: GrepResult;
 	try {
@@ -1822,6 +1846,7 @@ async function runTextSearch(
 		archiveDisplaySet: archives.displaySet,
 		virtualPathSet: internalResolution.virtualPathSet,
 		warningNote: warningNoteText(native, missingPaths, archives.unreadable, oversizedNote),
+		timedOut: native.timedOut,
 	};
 }
 

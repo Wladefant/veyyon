@@ -4,6 +4,27 @@
 
 ### Changed
 
+- `/login opencode-go` signs in with an OpenCode Console account through its device flow and sends requests to the Go inference endpoint of the organization that holds the subscription, with the organization id in `x-opencode-org-id`; an OpenCode Go API key is the legacy `opencode-go-api-key` login.
+- The OpenCode Go usage ledger reports spend for a Console login as it does for an API key.
+- The OpenCode Console device flow loads when an OpenCode Go login or token refresh first runs instead of at startup, with no user-visible change.
+- A provider login that stores under another provider states its `loginMethod` ("API key", "device code"), which `getOAuthProviders()` returns beside its name.
+- The OpenCode Console login asks for its code in one line, `Enter code X if the page asks for it.`, and an OpenCode Go login that finds no Go subscription names `/login opencode-go-api-key` for the API key instead.
+
+### Fixed
+
+- Cursor's "You're out of usage" answer parks the account for the quota window instead of a 45 to 75 second capacity backoff, so a turn on a spent plan ends on the first failure instead of retrying it every minute.
+- The notice that an account is out of quota while load balancing leaves other accounts idle appears once per exhausted window instead of once for every request layer and retry that re-entered it.
+- Codex requests send `x-codex-routing-hint` stating the wire model and service tier of the body sent, on HTTP turns, the websocket upgrade and the startup prewarm, as codex-rs does.
+- ChatGPT Codex browser login sends `force_challenge=true`, so auth.openai.com prompts for a fresh sign-in instead of minting the token from the browser's existing sign-in, and a Daybreak account can sign in with its hardware security key to clear `individual_blue_security_signin_required` and the `cyber_policy` refusals it causes.
+- A credential health check attributes the usage report it returns to the credential's organization, as a usage fetch does, so the report matches its account when one email holds logins to two organizations.
+- Kimi Code's Anthropic wire sends adaptive thinking with `output_config.effort` and a summarized display, as Kimi Code's own client does, so Low, High and Max each reach the model as that effort.
+- A Kimi Code request with thinking turned off sends the model's lowest effort on both wires, and the chat wire sends `thinking: {type: "enabled"}` beside the effort for a model that cannot stop thinking.
+- The OpenCode Go API-key login prompt names OpenCode Go instead of OpenCode Zen.
+
+## [1.5.9] - 2026-10-22
+
+### Changed
+
 - Moved the usage-report fetch, cache, header ingest and fan-out out of `auth-storage.ts` into `auth-storage/usage-reporting.ts`, with no user-visible change.
 - Moved usage-backed credential ranking out of `auth-storage.ts` into `auth-storage/usage-ranking.ts`, with no user-visible change beyond the fixes below.
 - Moved the credential health check behind `AuthStorage.checkCredentials` into `auth-storage/usage-reporting.ts`, with no user-visible change.
@@ -18,6 +39,13 @@
 
 ### Fixed
 
+- A ChatGPT Codex turn, each of its websocket frames and its server-side compaction send `access_programs.cyber` set to the Daybreak program the signing account is offered for the model, `daybreak_blue` before `daybreak_red`, read from that account's entry in the model's discovery listing, or from its own listing when discovery did not list it (a compaction reads the listing its turn fetched and fetches none), so security work is no longer refused with `cyber_policy` for lack of the field and a pooled or switched account never sends a program it is not offered.
+- OAuth account selection sends a model's request from an account whose model listing includes the model before one whose listing leaves it out, with load balancing on or off, so a model only a Daybreak account's listing includes is no longer sent from a standard account.
+- A Gemini, Vertex, Gemini CLI or Antigravity turn that decodes a large function call, such as a `write` of more than about 45 KB, waits up to 660 s for the call instead of ending at 120 s with `Provider stream stalled while waiting for the next event` and decoding the same call again on every retry.
+- Cursor's MCP state request (`mcp_state_exec_args`, exec field 36), sent before a call to a tool reached over MCP, is answered with the `pi-agent` server and the tools the turn advertised, instead of failed with `This client does not run Cursor exec field 36.` and a logged warning.
+- An OpenCode request sent without a session id, such as a session title or a task label, carries a process-stable `x-opencode-session` header instead of none, so the gateway no longer rejects it with `400 Request is missing x-opencode-session (type=MissingSessionID)`.
+- An Anthropic-messages endpoint that answers a forced `tool_choice` with a 400 naming the field (`tool_choice: type "tool" and "any" are not supported for this model.`, or Kimi's `tool_choice 'specified' is incompatible with thinking enabled`) is retried once with `tool_choice: auto` and sent `auto` for that model for the rest of the session, instead of failing the turn.
+- Claude Opus and Sonnet 5.5 and later, Fable and Mythos on Bedrock are sent `auto` in place of a forced tool choice they reject.
 - A Bedrock, Codex, Ollama or Gemini CLI endpoint that never answers ends the turn with `Timed out after N ms waiting for the first event`, classified as a retryable timeout, instead of `Request was aborted` or `The operation timed out.`, which read as a cancellation or named no phase.
 - An OAuth account ranking whose usage fetch misses its deadline tries unblocked accounts first and blocked ones by the soonest reset, as API-key ranking already did, instead of storage order.
 - A credential ranking whose usage fetch fails clears its 5–15 s deadline timer instead of leaving it armed.

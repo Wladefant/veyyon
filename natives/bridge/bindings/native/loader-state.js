@@ -1001,22 +1001,62 @@ function isSafeEmbeddedAddonFilename(filename) {
 	return filename.length > 0 && path.basename(filename) === filename && !filename.includes("/") && !filename.includes("\\");
 }
 
+/**
+ * Path of the stamp written beside an extracted addon: the manifest's `sha256` for that file plus
+ * the inode and modification time of the file the extraction wrote.
+ *
+ * The version does not identify a build. Every local rebuild of one version extracts into the same
+ * `natives/<version>/` directory. The size does not identify one either: a change that keeps the
+ * code the same length (a constant, a comparison) leaves the `.node` the same size, and the old
+ * copy loaded in place of the new one. A same-size file no extraction wrote, such as a damaged
+ * copy, loaded the same way and failed every launch until the directory was deleted.
+ */
+function embeddedAddonStampPath(targetPath) {
+	return `${targetPath}.stamp`;
+}
+
+/** The stat fields that change when anything replaces or rewrites the file at a path. */
+function extractedFileIdentity(stat) {
+	return { ino: String(stat.ino), mtimeNs: String(stat.mtimeNs) };
+}
+
+/**
+ * Whether `targetPath` holds the bytes `file` describes, decided without reading them.
+ *
+ * A file replaced since the stamp was written (another build of the same version, a Windows
+ * staging copy, a copy over it) has another inode or modification time than the stamp records,
+ * so it is extracted again.
+ */
 function isEmbeddedAddonFileCurrent(targetPath, file) {
+	let stat;
 	try {
-		const stat = fs.statSync(targetPath);
-		if (!stat.isFile()) return false;
-		return typeof file.size !== "number" || stat.size === file.size;
+		stat = fs.statSync(targetPath, { bigint: true });
 	} catch (err) {
 		if (err && err.code === "ENOENT") return false;
 		throw err;
 	}
+	let stamp;
+	try {
+		stamp = JSON.parse(fs.readFileSync(embeddedAddonStampPath(targetPath), "utf8"));
+	} catch (err) {
+		// An absent or unparseable stamp leaves the file's origin unknown, so it is written again.
+		if ((err && err.code === "ENOENT") || err instanceof SyntaxError) return false;
+		throw err;
+	}
+	const identity = extractedFileIdentity(stat);
+	return stamp?.sha256 === file.sha256 && stamp?.ino === identity.ino && stamp?.mtimeNs === identity.mtimeNs;
 }
 
-function writeEmbeddedAddonFile(targetPath, content) {
+/** Write `content` to `targetPath` through a sibling temp file and a rename; returns the temp file's stat. */
+function replaceFileAtomically(targetPath, content, mode) {
 	const tempPath = `${targetPath}.tmp.${process.pid}.${Date.now()}`;
 	try {
-		fs.writeFileSync(tempPath, content, { mode: 0o755 });
+		fs.writeFileSync(tempPath, content, { mode });
+		// Taken before the rename: a rename keeps the inode and the modification time, and after it
+		// the path can already hold a file another process renamed over it.
+		const written = fs.statSync(tempPath, { bigint: true });
 		fs.renameSync(tempPath, targetPath);
+		return written;
 	} catch (err) {
 		try {
 			fs.unlinkSync(tempPath);
@@ -1025,6 +1065,15 @@ function writeEmbeddedAddonFile(targetPath, content) {
 		}
 		throw err;
 	}
+}
+
+function writeEmbeddedAddonFile(targetPath, content, file) {
+	const written = replaceFileAtomically(targetPath, content, 0o755);
+	replaceFileAtomically(
+		embeddedAddonStampPath(targetPath),
+		JSON.stringify({ sha256: file.sha256, ...extractedFileIdentity(written) }),
+		0o644,
+	);
 }
 
 const TAR_BLOCK_BYTES = 512;
@@ -1053,6 +1102,10 @@ export function extractEmbeddedAddonArchive({ archivePath, files, targetDir }) {
 	for (const file of files) {
 		if (!isSafeEmbeddedAddonFilename(file.filename)) {
 			throw new Error(`Unsafe embedded addon filename: ${file.filename}`);
+		}
+		// Without the digest the stamp cannot tell this build's file from another build's.
+		if (typeof file.sha256 !== "string" || file.sha256.length === 0) {
+			throw new Error(`Embedded addon metadata has no sha256 for ${file.filename}`);
 		}
 		const targetPath = path.join(targetDir, file.filename);
 		if (!isEmbeddedAddonFileCurrent(targetPath, file)) {
@@ -1092,7 +1145,7 @@ export function extractEmbeddedAddonArchive({ archivePath, files, targetDir }) {
 				throw new Error(`Embedded addon size mismatch for ${filename}: expected ${file.size}, got ${size}`);
 			}
 			const targetPath = path.join(targetDir, filename);
-			writeEmbeddedAddonFile(targetPath, archive.subarray(offset, offset + size));
+			writeEmbeddedAddonFile(targetPath, archive.subarray(offset, offset + size), file);
 			pending.delete(filename);
 			writtenPaths.push(targetPath);
 		}
@@ -1149,40 +1202,21 @@ export function maybeExtractEmbeddedAddon(ctx, errors, bundle = embeddedAddon) {
 	}
 
 	const archive = selectedEmbeddedFile.archive;
-	if (archive) {
-		try {
-			extractEmbeddedAddonArchive({
-				archivePath: archive.filePath,
-				files: [selectedEmbeddedFile],
-				targetDir: ctx.versionedDir,
-			});
-			if (isEmbeddedAddonFileCurrent(targetPath, selectedEmbeddedFile)) {
-				return targetPath;
-			}
-			errors.push(`embedded addon archive (${archive.filename}): missing ${selectedEmbeddedFile.filename}`);
-			return null;
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			errors.push(`embedded addon archive (${archive.filename}): ${message}`);
-			return null;
-		}
-	}
-
-	if (isEmbeddedAddonFileCurrent(targetPath, selectedEmbeddedFile)) {
-		return targetPath;
-	}
-	if (!selectedEmbeddedFile.filePath) {
-		errors.push(`embedded addon metadata missing file path for ${selectedEmbeddedFile.filename}`);
+	if (!archive) {
+		errors.push(`embedded addon metadata has no archive for ${selectedEmbeddedFile.filename}`);
 		return null;
 	}
-
 	try {
-		const buffer = fs.readFileSync(selectedEmbeddedFile.filePath);
-		fs.writeFileSync(targetPath, buffer);
+		// Returns once the file is current: a pending file the archive does not hold throws.
+		extractEmbeddedAddonArchive({
+			archivePath: archive.filePath,
+			files: [selectedEmbeddedFile],
+			targetDir: ctx.versionedDir,
+		});
 		return targetPath;
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		errors.push(`embedded addon write (${selectedEmbeddedFile.filename}): ${message}`);
+		errors.push(`embedded addon archive (${archive.filename}): ${message}`);
 		return null;
 	}
 }
@@ -1210,30 +1244,21 @@ export function extractRemainingEmbeddedAddons(ctx, errors, bundle = embeddedAdd
 	startupMarker("native:extractRemainingEmbeddedAddons:start");
 	const written = [];
 	for (const file of remaining) {
-		const targetPath = path.join(ctx.versionedDir, file.filename);
-		if (isEmbeddedAddonFileCurrent(targetPath, file)) continue;
-		if (file.archive) {
-			try {
-				written.push(
-					...extractEmbeddedAddonArchive({
-						archivePath: file.archive.filePath,
-						files: [file],
-						targetDir: ctx.versionedDir,
-					}),
-				);
-			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
-				errors.push(`embedded addon fallback (${file.archive.filename}): ${message}`);
-			}
+		if (!file.archive) {
+			errors.push(`embedded addon metadata has no archive for ${file.filename}`);
 			continue;
 		}
-		if (!file.filePath) continue;
 		try {
-			fs.writeFileSync(targetPath, fs.readFileSync(file.filePath));
-			written.push(targetPath);
+			written.push(
+				...extractEmbeddedAddonArchive({
+					archivePath: file.archive.filePath,
+					files: [file],
+					targetDir: ctx.versionedDir,
+				}),
+			);
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
-			errors.push(`embedded addon fallback write (${file.filename}): ${message}`);
+			errors.push(`embedded addon fallback (${file.archive.filename}): ${message}`);
 		}
 	}
 	return written;
@@ -1286,7 +1311,7 @@ let warnedStaleWorkspaceNative = false;
 
 /**
  * The export name the Rust addon emits for `version`, e.g. `1.0.14` ->
- * `__veyyonNativesV1_5_8`. `scripts/release.ts` bumps this name in lock-step
+ * `__veyyonNativesV1_5_9`. `scripts/release.ts` bumps this name in lock-step
  * with the package version, so a `.node` from another release physically cannot
  * expose the symbol this loader looks for. Exported so the version<->sentinel
  * contract can be pinned by a test (the workspace/test env skips the runtime

@@ -21,6 +21,7 @@ import {
 	parseFindPattern,
 	toPathList,
 } from "../core/path-utils";
+import { prependResultNotice } from "../core/result-notice";
 import { ToolError } from "../core/tool-errors";
 import { executeFileSearch, type FileSearchDetails } from "./file-search";
 
@@ -74,9 +75,9 @@ export type SearchToolDetails =
 	| { type: "text"; result: TextSearchDetails; meta?: OutputMeta }
 	| { type: "structure"; result: StructureSearchDetails; meta?: OutputMeta };
 
-/** Fields each search type accepts. A result that advises a field outside its own
- * set costs the caller a rejected call and a round trip, so this is the set a
- * pagination or limit notice may name. */
+/** Fields each search type takes; the rest are ignored. A result that advises a
+ * field outside its own set sends the caller a field the search ignores, so this
+ * is the set a pagination or limit notice may name. */
 export const TYPE_FIELDS: Record<SearchType, ReadonlySet<keyof SearchToolInput>> = {
 	files: new Set(["type", "input", "path", "hidden", "gitignore", "limit"]),
 	text: new Set(["type", "input", "path", "case", "paths", "gitignore", "skip"]),
@@ -142,21 +143,19 @@ function fileSearchInput(params: Pick<SearchToolInput, "input" | "path">, cwd: s
 	return scoped.length === 1 ? scoped[0] : JSON.stringify(scoped);
 }
 
-function rejectCrossTypeFields(params: SearchToolInput): void {
+/**
+ * The fields of `params` its type does not take. A strict tool schema requires every key, so a
+ * model fills a field another type owns as readily as one its own type takes, and a rejection cost
+ * a whole turn spent resending the call without the field. The search runs on the fields its type
+ * takes, which are the only ones its engine reads, and the result states what it ignored.
+ */
+function crossTypeFields(params: SearchToolInput): string[] {
 	const allowed = TYPE_FIELDS[params.type];
 	if (!allowed) {
 		throw new ToolError(`Invalid search type "${params.type}"`);
 	}
-	const invalid = Object.keys(params).filter(
+	return Object.keys(params).filter(
 		key => params[key as keyof SearchToolInput] !== undefined && !allowed.has(key as keyof SearchToolInput),
-	);
-	if (invalid.length === 0) return;
-	// The rejection is a whole request the caller paid for, so it states the set
-	// that would have worked rather than leaving the retry to a guess. A model in
-	// a real trial sent `limit` to a text search, read "does not accept: limit",
-	// and spent a second call rediscovering the field by removing it.
-	throw new ToolError(
-		`Search type "${params.type}" does not accept: ${invalid.join(", ")}. It accepts: ${[...allowed].join(", ")}.`,
 	);
 }
 
@@ -209,6 +208,7 @@ function projectToMatchingPaths(result: AgentToolResult<TextSearchDetails>): Age
 	if ((details?.fileLimitReached ?? 0) > 0) {
 		lines.push("More files matched than are listed; page with `skip`.");
 	}
+	if (details?.timeoutNotice) lines.push(details.timeoutNotice);
 	if (details?.missingPaths?.length) {
 		lines.push(`Paths not found: ${details.missingPaths.join(", ")}`);
 	}
@@ -267,8 +267,20 @@ export class SearchTool implements AgentTool<typeof searchSchema.value, SearchTo
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<SearchToolDetails>> {
 		if (params.input.trim().length === 0) throw new ToolError("Search input must not be empty");
-		rejectCrossTypeFields(params);
+		const ignored = crossTypeFields(params);
+		const result = await this.#run(params, signal, onUpdate);
+		if (ignored.length === 0) return result;
+		return prependResultNotice(
+			result,
+			`Ignored for a ${params.type} search: ${ignored.join(", ")}. A ${params.type} search takes ${[...TYPE_FIELDS[params.type]].join(", ")}.`,
+		);
+	}
 
+	async #run(
+		params: SearchToolInput,
+		signal: AbortSignal | undefined,
+		onUpdate: AgentToolUpdateCallback<SearchToolDetails> | undefined,
+	): Promise<AgentToolResult<SearchToolDetails>> {
 		if (params.type === "files") {
 			const update: AgentToolUpdateCallback<FileSearchDetails> | undefined = onUpdate
 				? event => {

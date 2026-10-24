@@ -10,13 +10,14 @@ import type { SnapshotStore } from "@veyyon/hashline";
 import type { SessionContext } from "@veyyon/kernel/session/session-context";
 import type { SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import { type Component, Text, type TUI } from "@veyyon/tui";
-import { formatCount } from "@veyyon/utils";
+import { formatCount, TimeSlice } from "@veyyon/utils";
 import type { BlockId, CustomBlock, HookBlock, TranscriptBlock } from "@veyyon/wire/presentation";
 import type { ArgotSession } from "argot/session";
 // The slot leaf, not the 95-module store: this file reads settings, it does not fill them.
 import type { Settings } from "../../../../config/settings";
 import { settings } from "../../../../config/settings-instance";
 import type { AssistantThinkingRenderer, MessageRenderer } from "../../../../extensibility/extensions/types";
+import { warmDisplaySchema } from "../../../../presentation/display-arguments";
 import {
 	resolveAssistantErrorPresentation,
 	toAssistantMessageView,
@@ -46,7 +47,12 @@ import { EvalExecutionComponent } from "./eval-execution";
 import { HookMessageComponent } from "./hook-message";
 import type { CustomRenderCapability } from "./message-frame";
 import { ReadToolGroupComponent, readArgsHaveTarget, readArgsTargetInternalUrl } from "./read-tool-group";
-import { ToolExecutionComponent, type ToolExecutionHandle, turnFailedToolResult } from "./tool-execution";
+import {
+	ToolExecutionComponent,
+	type ToolExecutionHandle,
+	type TranscriptLiveRegionProbe,
+	turnFailedToolResult,
+} from "./tool-execution";
 import { TranscriptBlockComponent, type TranscriptBlockComponentOptions } from "./transcript-block-component";
 import { TranscriptContainer } from "./transcript-container";
 import { createUsageRowBlock } from "./usage-row";
@@ -100,6 +106,30 @@ function extractMessagesAndCacheMiss(
 	return { messages: input.map(item => ("message" in item ? item.message : item)) };
 }
 
+/** Rebuilt rows a {@link ChatTranscriptBuilder.rebuildInSlices} draws per batch before it checks the slice. */
+const WARM_BATCH = 16;
+
+/** A {@link ChatTranscriptBuilder.rebuildInSlices} that has not mounted its rows yet. */
+interface SlicedRebuild {
+	/** Detached container the rows are built in; never drawn by the screen. */
+	readonly staging: TranscriptContainer;
+	readonly messages: readonly AgentMessage[];
+	/** Message count when the rebuild started, so a message persisted mid-rebuild arrives live, once. */
+	readonly end: number;
+	readonly cacheMissExplainedAt: readonly boolean[] | undefined;
+	readonly populateHistory: boolean | undefined;
+	/** Whether the session was streaming when the rebuild started, which is what its transcript reflects. */
+	readonly streaming: boolean;
+	readonly mount: (transcript: readonly Component[]) => void;
+	/** Next message to append. */
+	next: number;
+	finalized: boolean;
+	/** Next built row to highlight and draw. */
+	warmed: number;
+	/** Tools whose display schema this rebuild has built, so each is built once and alone. */
+	readonly warmedTools: Set<string>;
+}
+
 export class ChatTranscriptBuilder {
 	#ownContainer: TranscriptContainer | undefined;
 	#ownPendingTools: Map<string, ToolExecutionHandle> | undefined;
@@ -126,6 +156,11 @@ export class ChatTranscriptBuilder {
 	readonly #renderHost: ChatBlockHost = {
 		requestComponentRender: component => this.deps.ui.requestComponentRender(component),
 	};
+	#sliced: SlicedRebuild | undefined;
+	/** Live-region probe for the cards this builds: asks whichever container holds them now. */
+	readonly #liveRegion: TranscriptLiveRegionProbe = {
+		isBlockInLiveRegion: component => this.#container.isBlockInLiveRegion(component),
+	};
 
 	constructor(private readonly deps: ChatTranscriptBuilderDeps) {
 		this.#expanded = deps.initialExpanded ?? false;
@@ -137,6 +172,11 @@ export class ChatTranscriptBuilder {
 		if (this.deps.container) return this.deps.container;
 		this.#ownContainer ??= new TranscriptContainer();
 		return this.#ownContainer;
+	}
+
+	/** Where rows are built: the staging container while a sliced rebuild runs, else {@link container}. */
+	get #container(): TranscriptContainer {
+		return this.#sliced?.staging ?? this.container;
 	}
 
 	get #pendingTools(): Map<string, ToolExecutionHandle> {
@@ -182,11 +222,120 @@ export class ChatTranscriptBuilder {
 		this.#finalizeRebuild();
 	}
 
+	/**
+	 * {@link rebuild} without blocking input. Rows are built in a detached container, one
+	 * {@link TimeSlice} at a time with input and frames running between slices, then highlighted and
+	 * drawn at the terminal width so the frame that shows them reuses every row. The first slice runs
+	 * in an event-loop turn of its own, never in the caller's, so it does not extend whatever work the
+	 * caller's turn already holds. `mount` receives the rows once, in order; until then
+	 * {@link container} keeps what it showed. Every other call that reads or changes the transcript
+	 * first finishes the remaining work synchronously ({@link settle}), so it observes the transcript
+	 * {@link rebuild} would have left.
+	 */
+	async rebuildInSlices(
+		input: SessionContext,
+		options: { populateHistory?: boolean },
+		mount: (transcript: readonly Component[]) => void,
+	): Promise<void> {
+		this.settle();
+		const { messages, cacheMissExplainedAt } = extractMessagesAndCacheMiss(input);
+		const job: SlicedRebuild = {
+			staging: new TranscriptContainer(),
+			messages,
+			end: messages.length,
+			cacheMissExplainedAt,
+			populateHistory: options.populateHistory,
+			streaming: this.deps.isStreaming?.() ?? false,
+			mount,
+			next: 0,
+			finalized: false,
+			warmed: 0,
+			warmedTools: new Set(),
+		};
+		this.#clearState();
+		this.#settledToolCalls.clear();
+		this.#sliced = job;
+		const slice = new TimeSlice();
+		do {
+			await slice.yield();
+		} while (this.#sliced === job && !this.#advance(job, slice));
+	}
+
+	/** Finish a {@link rebuildInSlices} still in progress, synchronously, and mount its rows. */
+	settle(): void {
+		const job = this.#sliced;
+		if (job) this.#advance(job, undefined);
+	}
+
+	/** Work `job` forward until `slice` is due, or to the end without one; true once it has mounted. */
+	#advance(job: SlicedRebuild, slice: TimeSlice | undefined): boolean {
+		while (job.next < job.end) {
+			if (slice?.due) return false;
+			// A tool's first card builds its ArkType schema, several milliseconds each. Build each tool
+			// the next message calls ahead of it with the slice checked after every one, so a message
+			// that introduces several tools does not hold one turn for all of them.
+			if (slice && this.#warmNextToolSchema(job)) continue;
+			const index = job.next++;
+			this.#appendPersistedMessage(job.messages[index]!, {
+				populateHistory: job.populateHistory,
+				cacheMissExplained: job.cacheMissExplainedAt?.[index] ?? false,
+			});
+		}
+		if (!job.finalized) {
+			job.finalized = true;
+			this.#finalizeRebuildState(job.streaming);
+		}
+		const rows = job.staging.children;
+		if (slice) {
+			while (job.warmed < rows.length) {
+				if (slice.due) return false;
+				job.warmed = this.#warm(rows, job.warmed);
+			}
+		} else {
+			this.#prefetchHighlights(rows, job.warmed);
+		}
+		if (this.#sliced !== job) return true;
+		this.#sliced = undefined;
+		job.staging.clear();
+		job.mount(rows);
+		return true;
+	}
+
+	/**
+	 * Build the display schema of one tool the next message calls that `job` has not built yet.
+	 * Returns whether it took a tool, so the caller checks its slice before the next one.
+	 */
+	#warmNextToolSchema(job: SlicedRebuild): boolean {
+		const message = job.messages[job.next]!;
+		if (message.role !== "assistant") return false;
+		for (const content of message.content) {
+			if (content.type !== "toolCall" || job.warmedTools.has(content.name)) continue;
+			job.warmedTools.add(content.name);
+			warmDisplaySchema(this.deps.getTool?.(content.name));
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Highlight and draw the next {@link WARM_BATCH} rebuilt rows at the width the screen draws the
+	 * transcript at, so the frame that mounts them reuses each row rather than drawing every one.
+	 * Returns the index after the batch.
+	 */
+	#warm(rows: readonly Component[], from: number): number {
+		const end = Math.min(rows.length, from + WARM_BATCH);
+		this.#prefetchHighlights(rows, from, end);
+		const width = this.deps.ui.terminal.columns;
+		for (let index = from; index < end; index++) rows[index]!.render(width);
+		return end;
+	}
+
 	/** Append newly persisted entries without rebuilding already rendered rows. */
 	append(
 		input: SessionContext | readonly SessionMessageEntry[] | readonly AgentMessage[],
 		options: { populateHistory?: boolean } = {},
 	): void {
+		this.settle();
 		const { messages, cacheMissExplainedAt } = extractMessagesAndCacheMiss(input);
 		const count = messages.length;
 		for (let i = 0; i < count; i++) {
@@ -204,11 +353,12 @@ export class ChatTranscriptBuilder {
 		message: AgentMessage,
 		options?: { populateHistory?: boolean; imageLinks?: readonly (string | undefined)[] },
 	): Component[] {
+		this.settle();
 		switch (message.role) {
 			case "assistant": {
 				const timeline = splitAssistantMessageToolTimeline(message);
 				const assistantComponent = this.#createAssistantComponent(timeline.beforeTools);
-				this.container.addChild(assistantComponent);
+				this.#container.addChild(assistantComponent);
 				return [];
 			}
 			case "toolResult":
@@ -232,6 +382,13 @@ export class ChatTranscriptBuilder {
 
 	/** Discard rendered rows while retaining the session's completed-call ledger. */
 	clearTranscript(): void {
+		this.settle();
+		this.#clearState();
+		this.#container.disposeChildren();
+	}
+
+	/** Builder state of the rendered rows, cleared without touching the rows themselves. */
+	#clearState(): void {
 		if (this.deps.pendingTools === undefined && this.#ownPendingTools) {
 			for (const pending of this.#ownPendingTools.values()) pending.seal();
 		}
@@ -249,7 +406,6 @@ export class ChatTranscriptBuilder {
 		this.#waitingPoll = null;
 		this.#todoSnapshot = null;
 		this.#expandables = [];
-		this.container.disposeChildren();
 	}
 
 	#getTranscriptBlockOptions(): TranscriptBlockComponentOptions {
@@ -273,6 +429,7 @@ export class ChatTranscriptBuilder {
 	}
 
 	appendTranscriptBlock(block: TranscriptBlock): void {
+		this.settle();
 		if (this.#blocksById.has(block.id)) {
 			this.updateTranscriptBlock(block.id, block);
 			return;
@@ -298,10 +455,11 @@ export class ChatTranscriptBuilder {
 		const comp = new TranscriptBlockComponent(block, this.#getTranscriptBlockOptions());
 		this.#blocksById.set(block.id, { block, component: comp });
 		this.#trackExpandable(comp);
-		this.container.addChild(comp);
+		this.#container.addChild(comp);
 	}
 
 	updateTranscriptBlock(id: BlockId, patch: Partial<TranscriptBlock>): void {
+		this.settle();
 		const record = this.#blocksById.get(id);
 		if (!record) return;
 		const block = { ...record.block, ...patch, id } as TranscriptBlock;
@@ -320,15 +478,16 @@ export class ChatTranscriptBuilder {
 	}
 
 	removeTranscriptBlock(id: BlockId): boolean {
+		this.settle();
 		const entry = this.#blocksById.get(id);
-		if (!entry || !this.container.isBlockUncommitted(entry.component)) return false;
+		if (!entry || !this.#container.isBlockUncommitted(entry.component)) return false;
 		const comp = entry.component;
 		this.#blocksById.delete(id);
 		if (comp instanceof ReadToolGroupComponent && entry.readToolCallId !== undefined) {
 			if (comp.removeEntry(entry.readToolCallId) > 0) return true;
 		}
 		if (this.#readGroup === comp) this.#readGroup = null;
-		this.container.removeChild(comp);
+		this.#container.removeChild(comp);
 		const expandableIndex = this.#expandables.indexOf(comp);
 		if (expandableIndex !== -1) this.#expandables.splice(expandableIndex, 1);
 		comp.dispose?.();
@@ -354,8 +513,8 @@ export class ChatTranscriptBuilder {
 		const previous = this.#waitingPoll;
 		if (!previous) return;
 		this.#waitingPoll = null;
-		if (nextToolName === "job" && previous.isDisplaceableBlock() && this.container.isBlockUncommitted(previous)) {
-			this.container.removeChild(previous);
+		if (nextToolName === "job" && previous.isDisplaceableBlock() && this.#container.isBlockUncommitted(previous)) {
+			this.#container.removeChild(previous);
 		}
 		previous.seal();
 	}
@@ -369,8 +528,8 @@ export class ChatTranscriptBuilder {
 		}
 		if (previous.canBeDisplacedBy(nextToolName)) {
 			this.#todoSnapshot = null;
-			if (this.container.isBlockUncommitted(previous)) {
-				this.container.removeChild(previous);
+			if (this.#container.isBlockUncommitted(previous)) {
+				this.#container.removeChild(previous);
 			}
 			previous.seal();
 			return;
@@ -386,7 +545,7 @@ export class ChatTranscriptBuilder {
 				showContentPreview: this.#settings.get("read.toolResultPreview"),
 			});
 			this.#trackExpandable(this.#readGroup);
-			this.container.addChild(this.#readGroup);
+			this.#container.addChild(this.#readGroup);
 		}
 		return this.#readGroup;
 	}
@@ -395,7 +554,7 @@ export class ChatTranscriptBuilder {
 		if (!this.#pendingUsage) return;
 		this.#readGroup?.seal();
 		this.#readGroup = null;
-		this.container.addChild(
+		this.#container.addChild(
 			createUsageRowBlock(this.#pendingUsage, this.#pendingUsageDuration, this.#pendingUsageTtft),
 		);
 		this.#pendingUsage = undefined;
@@ -444,12 +603,12 @@ export class ChatTranscriptBuilder {
 				if (textContent) {
 					const ledgerMarker = ledgerMarkerLine(textContent);
 					if (ledgerMarker !== null) {
-						this.container.addChild(new Text(ledgerMarker, 0, 0));
+						this.#container.addChild(new Text(ledgerMarker, 0, 0));
 						return [];
 					}
 					userView.imageLinks = options?.imageLinks ?? this.deps.resolveImageLinks?.(message);
 					const userComponent = new UserMessageComponent(userView);
-					this.container.addChild(userComponent);
+					this.#container.addChild(userComponent);
 					if (options?.populateHistory && message.role === "user" && !userView.synthetic) {
 						this.deps.onPopulateHistory?.(textContent);
 					}
@@ -460,14 +619,14 @@ export class ChatTranscriptBuilder {
 				const component = new BashExecutionComponent(message.command, this.deps.ui, message.excludeFromContext);
 				if (message.output) component.appendOutput(message.output);
 				component.setComplete(message.exitCode, message.cancelled, { truncation: message.meta?.truncation });
-				this.container.addChild(component);
+				this.#container.addChild(component);
 				return [];
 			}
 			case "pythonExecution": {
 				const component = new EvalExecutionComponent(message.code, this.deps.ui, message.excludeFromContext);
 				if (message.output) component.appendOutput(message.output);
 				component.setComplete(message.exitCode, message.cancelled, { truncation: message.meta?.truncation });
-				this.container.addChild(component);
+				this.#container.addChild(component);
 				return [];
 			}
 			case "hookMessage":
@@ -476,19 +635,19 @@ export class ChatTranscriptBuilder {
 			case "compactionSummary": {
 				const component = new CompactionSummaryMessageComponent(message);
 				this.#trackExpandable(component);
-				this.container.addChild(component);
+				this.#container.addChild(component);
 				return [];
 			}
 			case "branchSummary": {
 				const component = new BranchSummaryMessageComponent(message);
 				this.#trackExpandable(component);
-				this.container.addChild(component);
+				this.#container.addChild(component);
 				return [];
 			}
 			case "fileMention": {
 				const indent = this.deps.indentFileMentions ?? 0;
 				const block = buildFileMentionBlock(message.files, indent);
-				if (block.children.length > 0) this.container.addChild(block);
+				if (block.children.length > 0) this.#container.addChild(block);
 				return [];
 			}
 			default:
@@ -518,7 +677,7 @@ export class ChatTranscriptBuilder {
 		const retryAttempt = this.deps.retryAttempt?.() ?? 0;
 		const timeline = splitAssistantMessageToolTimeline(message);
 		const assistantComponent = this.#createAssistantComponent(timeline.beforeTools, retryAttempt);
-		this.container.addChild(assistantComponent);
+		this.#container.addChild(assistantComponent);
 
 		const usage = message.usage;
 		if (this.#settings.get("display.cacheMissMarker") && !cacheMissExplained) {
@@ -544,7 +703,7 @@ export class ChatTranscriptBuilder {
 		const appendAssistantSegment = (segment: Extract<AgentMessage, { role: "assistant" }> | undefined) => {
 			if (!segment || !assistantHasVisibleContent(segment)) return;
 			const component = this.#createAssistantComponent(segment, retryAttempt);
-			this.container.addChild(component);
+			this.#container.addChild(component);
 		};
 
 		for (const content of message.content) {
@@ -599,7 +758,7 @@ export class ChatTranscriptBuilder {
 					showImages: settings.get("terminal.showImages"),
 					editFuzzyThreshold: settings.get("edit.fuzzyThreshold"),
 					editAllowFuzzy: settings.get("edit.fuzzyMatch"),
-					liveRegion: this.container,
+					liveRegion: this.#liveRegion,
 				},
 				tool,
 				this.deps.ui,
@@ -607,7 +766,7 @@ export class ChatTranscriptBuilder {
 				content.id,
 			);
 			this.#trackExpandable(component);
-			this.container.addChild(component);
+			this.#container.addChild(component);
 
 			if (hasErrorStop && errorMessage) {
 				component.updateResult(turnFailedToolResult(errorMessage), false, content.id);
@@ -623,7 +782,7 @@ export class ChatTranscriptBuilder {
 				? message.strippedToolCalls
 				: 0;
 		if (strippedToolCalls > 0) {
-			this.container.addChild(
+			this.#container.addChild(
 				new Text(
 					theme.fg(
 						"dim",
@@ -702,7 +861,7 @@ export class ChatTranscriptBuilder {
 
 	#appendCustomMessage(message: Extract<AgentMessage, { role: "custom" | "hookMessage" }>): Component[] {
 		if (!message.display) return [];
-		const block = toTranscriptBlock(message, { index: this.container.children.length });
+		const block = toTranscriptBlock(message, { index: this.#container.children.length });
 
 		// Specialized display takes precedence over extension renderers (matching production semantics)
 		if (block.kind === "custom" || block.kind === "hook") {
@@ -711,7 +870,7 @@ export class ChatTranscriptBuilder {
 				if (isExpandable(component)) {
 					this.#trackExpandable(component);
 				}
-				this.container.addChild(component);
+				this.#container.addChild(component);
 				if (block.display.variant === "irc") {
 					return [component];
 				}
@@ -727,14 +886,14 @@ export class ChatTranscriptBuilder {
 		if (block.kind === "hook") {
 			const component = new HookMessageComponent(block, renderCustom);
 			this.#trackExpandable(component);
-			this.container.addChild(component);
+			this.#container.addChild(component);
 			return [];
 		}
 
 		if (block.kind === "custom") {
 			const component = new CustomMessageComponent(block, renderCustom);
 			this.#trackExpandable(component);
-			this.container.addChild(component);
+			this.#container.addChild(component);
 			return [];
 		}
 
@@ -742,11 +901,17 @@ export class ChatTranscriptBuilder {
 	}
 
 	#finalizeRebuild(): void {
+		this.#finalizeRebuildState(this.deps.isStreaming?.() ?? false);
+		this.#prefetchHighlights(this.#container.children);
+		this.deps.requestRender();
+	}
+
+	/** Close what the rebuilt history left open: usage, read group, snapshots and unanswered calls. */
+	#finalizeRebuildState(isStreaming: boolean): void {
 		this.#flushPendingUsage();
 		this.#readGroup?.seal();
 		this.#resolveWaitingPoll();
 
-		const isStreaming = this.deps.isStreaming?.() ?? false;
 		if (this.#todoSnapshot && isStreaming) {
 			this.deps.onInheritDisplaceableTodo?.(this.#todoSnapshot);
 			this.#todoSnapshot = null;
@@ -766,19 +931,18 @@ export class ChatTranscriptBuilder {
 				this.#pendingTools.delete(toolCallId);
 			}
 		}
-		this.#prefetchHighlights();
-		this.deps.requestRender();
 	}
 
 	/**
-	 * Highlight every source the rebuilt tool cards draw in one batch before the frame that draws them.
-	 * The frame draws every card, and each card otherwise highlights its sources one after another on
-	 * the render thread; the batch spreads them across threads.
+	 * Highlight every source the rebuilt tool cards in `rows[from, end)` draw in one batch before the
+	 * frame that draws them. The frame draws every card, and each card otherwise highlights its
+	 * sources one after another on the render thread; the batch spreads them across threads.
 	 */
-	#prefetchHighlights(): void {
+	#prefetchHighlights(rows: readonly Component[], from = 0, end = rows.length): void {
 		const requests: HighlightRequest[] = [];
-		for (const child of this.container.children) {
-			if (child instanceof ToolExecutionComponent) child.highlightRequests(requests);
+		for (let index = from; index < end; index++) {
+			const row = rows[index];
+			if (row instanceof ToolExecutionComponent) row.highlightRequests(requests);
 		}
 		prefetchHighlights(requests);
 	}

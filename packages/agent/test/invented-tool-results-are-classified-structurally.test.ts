@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { collectPackageSources, PACKAGES_DIR } from "../../utils/test/support/package-sources";
-import { loopSource, unionMembers } from "./support/invented-tool-result-sources";
+import { loopSource, preparationSource, unionMembers } from "./support/invented-tool-result-sources";
 
 /**
  * Structural lock on one mistake class: classifying a tool result by matching its
@@ -39,19 +39,21 @@ import { loopSource, unionMembers } from "./support/invented-tool-result-sources
  *  - A text classifier that reconstructs a headline instead of quoting it, or that
  *    matches a loose fragment ("aborted", "skipped") the tables share with real
  *    tool errors.
- *  - Placeholders invented outside `agent-loop.ts`. The provider-side pairing
- *    fillers in `ai/src/providers/transform-messages.ts` are deliberately out of
- *    scope: they are built during the outbound wire transform, are never persisted
- *    to agent state, and the provider payload has no `details` field to carry a
- *    discriminator in.
+ *  - Placeholders invented outside `agent-loop.ts` and `tool-call-preparation.ts`.
+ *    The provider-side pairing fillers in `ai/src/providers/transform-messages.ts`
+ *    are deliberately out of scope: they are built during the outbound wire
+ *    transform, are never persisted to agent state, and the provider payload has
+ *    no `details` field to carry a discriminator in.
  *    `coding-agent/src/cursor.ts` `buildToolErrorResult` also ships `details: {}`
- *    for a tool the bridge could not find, but its text names the missing tool, so
- *    two of them never collide and no consumer counts repeats of it. It is recorded
- *    here rather than fixed: giving it a discriminator means inventing a third
- *    concept for one call site, and this lock cannot see it from `packages/agent`.
+ *    for an MCP tool the bridge could not find, but its text names the missing
+ *    tool, so two of them never collide and no consumer counts repeats of it. It
+ *    is recorded here rather than fixed: giving it a discriminator means inventing
+ *    a third concept for one call site, and this lock cannot see it from
+ *    `packages/agent`.
  */
 
 const LOOP_REL = "agent/src/agent-loop.ts";
+const PREPARATION_REL = "agent/src/tool-call-preparation.ts";
 
 /**
  * Split the argument list of the call whose `(` is at `open`, respecting nesting.
@@ -143,21 +145,20 @@ describe("invented tool results are classified structurally", () => {
 	 * Inline results at an `emitToolResult` site, each declared by the expression
 	 * that supplies its text.
 	 *
-	 * All three are exonerated rather than tolerated, and for one reason: their text
-	 * is derived from the actual cause, so two of them are only byte-identical when
-	 * the same thing really did happen twice. That is the property the fixed
-	 * headlines lack, and it is what makes them safe for a consumer to compare. They
-	 * are also correctly classified as refusals: an argument the schema rejected IS
-	 * a verdict on the payload.
+	 * The one inline site answers a call `prepareToolCall` rejected, and it is
+	 * exonerated rather than tolerated: every text a rejection carries is derived
+	 * from the actual cause, which the next test pins, so two of them are only
+	 * byte-identical when the same thing really did happen twice. That is the
+	 * property the fixed headlines lack, and it is what makes them safe for a
+	 * consumer to compare. They are also correctly classified as refusals: an
+	 * argument the schema rejected IS a verdict on the payload.
 	 *
-	 * A fourth inline site matches nothing here and turns this red, which is the
+	 * A second inline site matches nothing here and turns this red, which is the
 	 * point: the untagged placeholder got in as an inline literal nobody had to
 	 * justify.
 	 */
 	const INLINE_RESULT_SITES: Readonly<Record<string, string>> = {
-		errorText: "argument repair gave up; the text is the repairer's own reason",
-		"errorMessage(validationError)": "schema validation refused the payload",
-		"errorMessage(transformError)": "the argument transform threw",
+		"prepared.error": "prepareToolCall rejected the call; its text is one of the causes declared below",
 	};
 
 	it("no tool result is invented inline at an emitToolResult call site without a recorded reason", async () => {
@@ -181,12 +182,46 @@ describe("invented tool results are classified structurally", () => {
 			const name = /^[A-Za-z_$][\w$]*/.exec(head)?.[0];
 			if (name === undefined || !allowed.has(name)) offenders.push(head.split("\n")[0]);
 		}
-		// The scan has to have found the call sites for its silence to mean anything.
-		expect(sites).toBeGreaterThanOrEqual(7);
+		// The scan has to have found the call sites for its silence to mean anything: the
+		// method's own signature, two skipped results, the signal-aborted result, the
+		// rejected call and the executed result.
+		expect(sites).toBeGreaterThanOrEqual(6);
 		expect(offenders).toEqual([]);
 		// Exactly the declared set, each exactly once: a removed site is as much a
 		// signal as an added one, because it means this reasoning is now stale.
 		expect(inlineSeen.sort()).toEqual(Object.keys(INLINE_RESULT_SITES).sort());
+	});
+
+	/**
+	 * The text of every rejection `prepareToolCall` returns, declared by the
+	 * expression that supplies it. Each is the cause's own message: the missing
+	 * tool's name and the tools that exist, the repairer's reason and hints, the
+	 * schema's verdict, the transform's error. A Cursor exec-channel call answers a
+	 * rejection with the same text, so this covers it as well.
+	 */
+	const REJECTION_TEXTS: Readonly<Record<string, string>> = {
+		"new AIError.ToolNotFoundError(": "names the tool the model called and the tools it could have called",
+		"unrepairableArgumentsText(outcome)": "argument repair gave up; the text is the repairer's own reason",
+		"errorMessage(validationError)": "schema validation refused the payload",
+		"errorMessage(transformError)": "the argument transform threw",
+	};
+
+	it("every call prepareToolCall rejects carries text derived from its cause", async () => {
+		const source = await preparationSource();
+		// One constructor builds every rejection, so the sweep below sees all of them. The
+		// pattern is an object literal opening on the field; the interface declares it as `readonly`.
+		expect(source.match(/\{\s*ok: false\b/g)).toHaveLength(1);
+		const offenders: string[] = [];
+		const seen: string[] = [];
+		for (let at = source.indexOf("rejected("); at !== -1; at = source.indexOf("rejected(", at + 1)) {
+			if (/[\w$]/.test(source[at - 1] ?? "")) continue;
+			const head = (callArguments(source, at + "rejected".length)[0] ?? "").trim();
+			const declared = Object.keys(REJECTION_TEXTS).filter(marker => head.startsWith(marker));
+			if (declared.length === 1) seen.push(declared[0]);
+			else offenders.push(`rejection with no recorded cause: ${head.split("\n")[0]}`);
+		}
+		expect(offenders).toEqual([]);
+		expect(seen.sort()).toEqual(Object.keys(REJECTION_TEXTS).sort());
 	});
 
 	/**
@@ -252,8 +287,8 @@ describe("invented tool results are classified structurally", () => {
 		expect(offenders).toEqual([]);
 	});
 
-	it("reads the loop from the path this lock names", async () => {
+	it.each([LOOP_REL, PREPARATION_REL])("reads %s from the path this lock names", async relative => {
 		// A wrong path would make every scan above silently vacuous.
-		await expect(fs.stat(path.join(PACKAGES_DIR, LOOP_REL))).resolves.toBeDefined();
+		await expect(fs.stat(path.join(PACKAGES_DIR, relative))).resolves.toBeDefined();
 	});
 });

@@ -20,6 +20,7 @@ import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import { type Component, Input, type SelectItem, SelectList, type TUI } from "@veyyon/tui";
 import { clampLow, errorMessage } from "@veyyon/utils";
 import { type MouseRoutable, routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
+import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth } from "@veyyon/utils/width";
 import {
 	ADVISOR_DEFAULT_TOOL_NAMES,
@@ -139,6 +140,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 	// so SGR `event.row`/`event.col` — already 0-based — index it directly).
 	#bodyRowStart = 0;
 	#dividerCol = 0;
+	/** False while the screen is too short for a frame, so no row answers the pointer. */
+	#framePainted = true;
 
 	constructor(
 		tui: TUI,
@@ -163,12 +166,22 @@ export class AdvisorConfigOverlayComponent implements Component {
 	// ───────────────────────────── render ─────────────────────────────
 
 	render(width: number): readonly string[] {
-		const height = Math.max(14, process.stdout.rows || 40);
+		const height = process.stdout.rows || 40;
 		// THE FRAME ENDS WHERE THE CONTENT DOES. `height - 4` drew a four-advisor
 		// roster and then twenty-five empty rows inside the same border, on both
 		// sides of the split, because the box was sized to the terminal rather than
 		// to what it holds.
-		const roomForBody = Math.max(3, height - 4);
+		// It also ends inside the screen. The host mounts it with `maxHeight: "100%"`,
+		// which cuts every row past the screen, and those rows are the key legend
+		// and the bottom border. Four rows are chrome (top border, divider, legend,
+		// bottom border); a screen with no room for one body row gets a blank frame.
+		const roomForBody = height - 4;
+		if (roomForBody < 1) {
+			this.#framePainted = false;
+			return Array.from({ length: height }, () => padding(width));
+		}
+		this.#framePainted = true;
+		const minBodyRows = Math.min(3, roomForBody);
 		const title = `Advisor configuration · ${this.#scope}${this.#dirty ? `  ${theme.status.active} unsaved` : ""}`;
 		const out: string[] = [];
 
@@ -181,7 +194,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			// entry still scrolls; it is the SHORTER pane that no longer pads. Rendered
 			// once, because the frame is sized off its length and then filled from it.
 			const previewLines = this.#previewContent(bodyWidth);
-			const bodyRows = clampLow(Math.max(sidebar.length, previewLines.length), 3, roomForBody);
+			const bodyRows = clampLow(Math.max(sidebar.length, previewLines.length), minBodyRows, roomForBody);
 			const preview = this.#previewWindow(previewLines, bodyRows);
 			out.push(topBorderSplit(width, title, sidebarWidth, theme));
 			this.#bodyRowStart = out.length;
@@ -193,7 +206,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			out.push(topBorder(width, title, theme));
 			this.#bodyRowStart = out.length;
 			const lines = this.#active.render(Math.max(1, width - 4));
-			const bodyRows = clampLow(lines.length, 3, roomForBody);
+			const bodyRows = clampLow(lines.length, minBodyRows, roomForBody);
 			for (let i = 0; i < bodyRows; i++) out.push(row(lines[i] ?? "", width, theme));
 			out.push(divider(width, theme));
 		}
@@ -219,6 +232,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 	}
 
 	#routeMouseEvent(event: SgrMouseEvent): boolean {
+		if (!this.#framePainted) return true;
 		// Right pane of the split (the preview) only scrolls; everything left of the
 		// divider routes into the active list/component at frame-local coordinates.
 		if (this.#screen === "list" && event.col >= this.#dividerCol) {

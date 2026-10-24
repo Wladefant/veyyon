@@ -14,7 +14,7 @@ import {
 import { isExecutable, type ShellConfig } from "@veyyon/utils/procmgr";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { sessionCpuLimit } from "../session/cpu-limit";
-import { OutputSink } from "../session/streaming-output";
+import { LIVE_OUTPUT_INTERVAL_MS, OutputSink } from "../session/streaming-output";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/core/output-meta";
 import { TOOL_TIMEOUTS } from "../tools/core/tool-timeouts";
 import { getOrCreateSnapshot } from "../utils/shell-snapshot";
@@ -455,7 +455,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		...(options?.spillThreshold !== undefined ? { spillThreshold: options.spillThreshold } : {}),
 		headBytes: resolveOutputSinkHeadBytes(settings),
 		maxColumns: resolveOutputMaxColumns(settings),
-		chunkThrottleMs: options?.onChunk ? (options.chunkThrottleMs ?? 50) : 0,
+		chunkThrottleMs: options?.onChunk ? (options.chunkThrottleMs ?? LIVE_OUTPUT_INTERVAL_MS) : 0,
 	});
 	if (options?.signal?.aborted) return cancelledResult(sink, "Command cancelled");
 

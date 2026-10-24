@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@veyyon/tool",
-  "version": "1.5.8",
+  "version": "1.5.9",
   "description": "What a tool states about itself and what it returns: spec, approval tier, result and streaming update",
   "homepage": "https://veyyon.dev",
   "author": "santhreal",
@@ -37,7 +37,7 @@
     "@types/bun": "catalog:"
   },
   "engines": {
-    "bun": ">=1.4.0"
+    "bun": ">=1.4.3"
   },
   "files": [
     "src",

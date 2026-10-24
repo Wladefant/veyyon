@@ -14,12 +14,23 @@ import { PACKAGES_DIR } from "../../../utils/test/support/package-sources";
  */
 
 const LOOP = "agent/src/agent-loop.ts";
+const PREPARATION = "agent/src/tool-call-preparation.ts";
 const TYPES = "agent/src/types.ts";
 
-/** `agent-loop.ts` with comments removed, so prose cannot supply a union member. */
-export async function loopSource(): Promise<string> {
-	const text = await fs.readFile(path.join(PACKAGES_DIR, LOOP), "utf8");
+/** A package source with comments removed, so prose cannot supply a union member or a call site. */
+async function codeOf(relative: string): Promise<string> {
+	const text = await fs.readFile(path.join(PACKAGES_DIR, relative), "utf8");
 	return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+}
+
+/** `agent-loop.ts` with comments removed. */
+export function loopSource(): Promise<string> {
+	return codeOf(LOOP);
+}
+
+/** `tool-call-preparation.ts`, where every call the loop does not run is rejected, with comments removed. */
+export function preparationSource(): Promise<string> {
+	return codeOf(PREPARATION);
 }
 
 /**

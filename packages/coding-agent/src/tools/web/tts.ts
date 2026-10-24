@@ -9,6 +9,7 @@ import { withAuth } from "@veyyon/ai/auth-retry";
 import { ProviderHttpError } from "@veyyon/ai/error";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy } from "@veyyon/utils/abortable";
+import { writeFileCreatingParents } from "@veyyon/utils/fs-io";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 // The slot leaf, not the 95-module store: this file reads settings, it does not fill them.
 import { settings } from "../../config/settings-instance";
@@ -207,7 +208,7 @@ async function synthesizeXai(
 	} finally {
 		requestTimeout.cancel();
 	}
-	await Bun.write(outputPath, bytes);
+	await writeFileCreatingParents(outputPath, bytes);
 	return {
 		content: [
 			{
@@ -244,7 +245,7 @@ async function synthesizeLocal(
 
 	const { wavPath, substituted } = resolveLocalWavPath(outputPath);
 	const wav = encodeWav(audio.pcm, audio.sampleRate);
-	await Bun.write(wavPath, wav);
+	await writeFileCreatingParents(wavPath, wav);
 	const displayPath = formatPathRelativeToCwd(wavPath, cwd);
 	const note = substituted
 		? ` No local MP3 encoder is bundled, so WAV (PCM16) was written instead of the requested container.`

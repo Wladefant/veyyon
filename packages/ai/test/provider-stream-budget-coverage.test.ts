@@ -18,9 +18,9 @@ import { iterateWithIdleTimeout } from "@veyyon/ai/utils/idle-iterator";
  * no limits inherits finite generic defaults. A registration that passes
  * `providerHandlesStreamTimeouts: true` gets `{ idleTimeoutMs: undefined,
  * firstItemTimeoutMs: 0 }` — no shared watchdog at all — on the promise that the
- * provider module arms its own. Nothing checked either half. That is why
- * `streamGoogle` / `streamGoogleVertex` read as unguarded to anyone auditing the
- * file (they are in fact on the finite generic defaults), and it is why a new
+ * provider module arms its own. Nothing checked either half. That is why a
+ * registration with no limits read as unguarded to anyone auditing the file
+ * (it is on the finite generic defaults), and it is why a new
  * provider could ship with the opt-out and no watchdog anywhere: a silent stream
  * that only a user cancel ends, which is #4593's failure mode by construction.
  *
@@ -86,9 +86,9 @@ const WATCHDOG_DECISIONS: Record<string, WatchdogDecision> = {
 	streamCursor: "provider-owned-idle",
 	streamDevin: "shared-widened-budget",
 	streamGitLabDuoWorkflow: "provider-owned",
-	streamGoogle: "shared-generic-defaults",
+	streamGoogle: "shared-widened-budget",
 	streamGoogleGeminiCli: "shared-widened-budget",
-	streamGoogleVertex: "shared-generic-defaults",
+	streamGoogleVertex: "shared-widened-budget",
 	streamOllama: "shared-openai-env-precedence",
 	streamOpenAICodexResponses: "provider-owned",
 	streamOpenAICompletions: "provider-owned",

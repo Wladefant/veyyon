@@ -3,6 +3,7 @@
 // ============================================================================
 
 import { kimiCodeApiKey } from "@veyyon/catalog/wire/kimi-code";
+import { opencodeGoApiKey } from "@veyyon/catalog/wire/opencode-go";
 import { decodeJwtPayload } from "@veyyon/utils/jwt";
 import * as AIError from "../../error";
 import { getProviderDefinition, PROVIDER_REGISTRY } from "../registry";
@@ -26,6 +27,7 @@ const builtInOAuthProviders: OAuthProviderInfo[] = PROVIDER_REGISTRY.filter(
 	available: provider.available ?? true,
 	credential: provider.credential ?? "oauth",
 	storeCredentialsAs: provider.storeCredentialsAs,
+	loginMethod: provider.loginMethod,
 }));
 
 const customOAuthProviders = new Map<string, OAuthProviderInterface>();
@@ -151,6 +153,9 @@ export async function getOAuthApiKey(
 	if (provider === "kimi-code") {
 		// The deployment that issued the token rides in the key, so the request goes to its API host.
 		apiKey = kimiCodeApiKey(creds.access, creds.apiEndpoint);
+	} else if (provider === "opencode-go") {
+		// A Console login token reaches only its organization's endpoint, which rides in the key.
+		apiKey = opencodeGoApiKey(creds.access, creds.apiEndpoint, creds.orgId);
 	} else if (needsStructuredApiKey) {
 		apiKey = JSON.stringify({
 			apiEndpoint: creds.apiEndpoint,

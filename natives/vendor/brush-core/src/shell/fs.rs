@@ -198,16 +198,19 @@ impl<SE: crate::extensions::ShellExtensions> crate::Shell<SE> {
 
 		let path_to_open = self.absolute_path(path.as_ref());
 
-		// See if this is a reference to a file descriptor, in which case the actual
-		// /dev/fd* file path for this process may not match with what's in the
-		// execution parameters.
-		if let Some(parent) = path_to_open.parent()
-			&& parent == Path::new("/dev/fd")
-			&& let Some(filename) = path_to_open.file_name()
-			&& let Ok(fd_num) = filename.to_string_lossy().to_string().parse::<ShellFd>()
-			&& let Some(open_file) = params.try_fd(self, fd_num)
-		{
-			return open_file.try_clone();
+		// A path naming a descriptor (`/dev/stdout`, `/dev/fd/N`, ...) names the
+		// COMMAND's descriptor, which this process's `/dev` knows nothing about:
+		// its own `/dev/stdout` is the host's terminal. A number the command does
+		// not hold fails the way opening a closed descriptor's `/dev/fd` entry
+		// does, rather than reaching a descriptor of the host.
+		if let Some(fd_num) = veyyon_uutils_ctx::descriptor_named_by(&path_to_open) {
+			return match params.try_fd(self, fd_num) {
+				Some(open_file) => open_file.try_clone(),
+				#[cfg(unix)]
+				None => Err(std::io::Error::from_raw_os_error(libc::ENOENT)),
+				#[cfg(not(unix))]
+				None => Err(std::io::ErrorKind::NotFound.into()),
+			};
 		}
 
 		Ok(options.open(path_to_open)?.into())

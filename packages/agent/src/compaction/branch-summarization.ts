@@ -737,6 +737,9 @@ export async function generateBranchSummary(
 			sessionId: options.sessionId,
 			conversationId: options.conversationId,
 			promptCacheKey: options.promptCacheKey,
+			// The context opens with SUMMARIZATION_SYSTEM_PROMPT and one user message
+			// no later request repeats: a cache marker buys only the write premium.
+			cacheRetention: "none",
 			onPayload,
 		},
 		{ telemetry: options.telemetry, oneshotKind: "branch_summary", completeImpl: options.completeImpl },

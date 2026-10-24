@@ -10,7 +10,7 @@ use ast_grep_core::{
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
 
-use crate::language::SupportLang;
+use crate::language::{Grammar, SupportLang};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AstMatchStrictness {
@@ -94,11 +94,11 @@ pub fn is_supported_file(file_path: &Path, explicit_lang: Option<&str>) -> bool 
 	resolve_language(None, file_path).is_ok()
 }
 
-pub fn compile_pattern(
+pub fn compile_pattern<L: Grammar>(
 	pattern: &str,
 	selector: Option<&str>,
 	strictness: &MatchStrictness,
-	lang: SupportLang,
+	lang: L,
 ) -> Result<Pattern> {
 	let selector = selector.map(str::trim).filter(|s| !s.is_empty());
 	let mut compiled = if let Some(selector) = selector {
@@ -181,7 +181,7 @@ const PROBE_SOURCES: &[&str] = &["", "a", "a b", "a(b)", "{ a }", "!^", "a; b;"]
 /// This is a boundary that converts a panic into an error, not a fallback:
 /// nothing continues past it, and the message names both the pattern and what
 /// the matcher said.
-fn matching_would_panic(compiled: &Pattern, lang: SupportLang) -> Option<String> {
+fn matching_would_panic<L: Grammar>(compiled: &Pattern, lang: L) -> Option<String> {
 	for source in PROBE_SOURCES {
 		let probe = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
 			let ast = lang.ast_grep(*source);
@@ -255,15 +255,15 @@ const fn wrapper_template(lang: SupportLang) -> Option<(&'static str, &'static s
 /// valid context and selecting the node kind that spans it. Returns the
 /// compiled pattern (with `strictness` applied) or `None` if this language has
 /// no template or the wrapped form still fails to compile.
-fn compile_wrapped_fallback(
+fn compile_wrapped_fallback<L: Grammar>(
 	pattern: &str,
 	strictness: &MatchStrictness,
-	lang: SupportLang,
+	lang: L,
 ) -> Option<Pattern> {
-	let (prefix, suffix, selector) = wrapper_template(lang)?;
+	let (prefix, suffix, selector) = wrapper_template(lang.support_lang())?;
 	// JSON only accepts a bare `$V` inside a string, so quote value-position
 	// metavars; ast-grep still reads the quoted `"$V"` as capture `V`.
-	let prepared = if lang == SupportLang::Json {
+	let prepared = if lang.support_lang() == SupportLang::Json {
 		quote_bare_metavars(pattern)
 	} else {
 		pattern.to_string()

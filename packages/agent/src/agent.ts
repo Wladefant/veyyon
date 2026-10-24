@@ -39,6 +39,7 @@ import {
 } from "./agent-loop";
 import type { AppendOnlyContextManager } from "./append-only-context";
 import { isProviderRefusalMessage } from "./replay-policy";
+import { type PreparedToolCall, prepareToolCall } from "./tool-call-preparation";
 import { normalizeTools } from "./tool-normalization";
 import type {
 	AgentContext,
@@ -46,6 +47,7 @@ import type {
 	AgentLoopConfig,
 	AgentMessage,
 	AgentState,
+	AgentToolCall,
 	AgentToolContext,
 	AgentTurnEndContext,
 	AnyAgentTool,
@@ -886,6 +888,18 @@ export class Agent {
 		}
 
 		this.#emit(event);
+	}
+
+	/**
+	 * A call a provider runs itself during the stream (Cursor's exec channel), prepared with the hooks the loop
+	 * prepares its own calls with, so the tool receives the arguments it would receive from the loop.
+	 */
+	prepareExternalToolCall(tool: AnyAgentTool, toolCall: AgentToolCall): PreparedToolCall {
+		return prepareToolCall(tool, toolCall, {
+			intentTracing: this.#resolveIntentTracing(),
+			repairToolCallArguments: this.#repairToolCallArguments,
+			transformToolCallArguments: this.#transformToolCallArguments,
+		});
 	}
 
 	// State mutators

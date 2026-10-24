@@ -15,6 +15,7 @@ import { bundledCatalogDigest, getBundledModels, getBundledProviders } from "@ve
 import {
 	googleAntigravityModelManagerOptions,
 	googleGeminiCliModelManagerOptions,
+	openaiCodexCacheProviderId,
 	openaiCodexModelManagerOptions,
 	PROVIDER_DESCRIPTORS,
 } from "@veyyon/catalog/provider-models";
@@ -517,6 +518,11 @@ export class ModelRegistry {
 			if (!keyConfig) return undefined;
 			return resolveConfigValueSync(keyConfig, `API key for provider "${provider}"`);
 		});
+		// Each Codex account is listed the models its tier may use, so selection sorts an account its listing
+		// left out after every account that may use the model.
+		this.authStorage.setModelAccountAccessResolver(
+			(provider, modelId) => this.find(provider, modelId)?.accountAccess,
+		);
 		// Load models synchronously in constructor.
 		this.#loadModels();
 	}
@@ -884,6 +890,7 @@ export class ModelRegistry {
 	}
 
 	#resolveStartupModelCacheProviderId(providerId: string): string {
+		if (providerId === "openai-codex") return openaiCodexCacheProviderId(this.#codexAccountIds());
 		const descriptor = PROVIDER_DESCRIPTORS.find(candidate => candidate.providerId === providerId);
 		if (!descriptor?.resolveCacheProviderId) return providerId;
 		const registry = this;
@@ -897,6 +904,13 @@ export class ModelRegistry {
 				);
 			},
 		});
+	}
+
+	/** Account ids of the stored Codex logins. They select Codex's model cache row. */
+	#codexAccountIds(): string[] {
+		return this.authStorage
+			.listOAuthAccounts("openai-codex")
+			.flatMap(account => (account.accountId ? [account.accountId] : []));
 	}
 
 	#loadCachedStandardProviderModels(): {
@@ -1460,6 +1474,8 @@ export class ModelRegistry {
 			providerId: string;
 			resolveKey: (value: string | undefined) => string | undefined;
 			createOptions: (key: string) => ModelManagerOptions<Api>;
+			/** The model cache row discovery reads; the provider id when absent. */
+			cacheProviderId?: () => string;
 		}> = [
 			{
 				providerId: "google-antigravity",
@@ -1484,13 +1500,19 @@ export class ModelRegistry {
 			{
 				providerId: "openai-codex",
 				resolveKey: value => value,
-				createOptions: accessToken => {
-					const accountId = resolveOAuthAccountIdForAccessToken(this.authStorage, "openai-codex", accessToken);
-					return openaiCodexModelManagerOptions({
+				cacheProviderId: () => openaiCodexCacheProviderId(this.#codexAccountIds()),
+				createOptions: accessToken =>
+					openaiCodexModelManagerOptions({
 						accessToken,
-						accountId,
-					});
-				},
+						accountId: resolveOAuthAccountIdForAccessToken(this.authStorage, "openai-codex", accessToken),
+						// Every login is listed, so the catalog holds each tier's models and records which
+						// account may use each one. Tokens are resolved only when a listing runs.
+						accounts: async () =>
+							(await this.authStorage.getOAuthAccesses("openai-codex")).flatMap(access =>
+								access.ok ? [{ accessToken: access.accessToken, accountId: access.accountId }] : [],
+							),
+						accountIds: this.#codexAccountIds(),
+					}),
 			},
 		];
 		const disabledProviders = disabledProviderIds();
@@ -1515,7 +1537,11 @@ export class ModelRegistry {
 		);
 		const specialKeys = await Promise.all(
 			enabledSpecialProviderDescriptors.map(descriptor =>
-				this.#resolveBuiltInDiscoveryApiKey(descriptor.providerId, strategy, () => descriptor.providerId),
+				this.#resolveBuiltInDiscoveryApiKey(
+					descriptor.providerId,
+					strategy,
+					() => descriptor.cacheProviderId?.() ?? descriptor.providerId,
+				),
 			),
 		);
 		const options: ModelManagerOptions<Api>[] = [];

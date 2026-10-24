@@ -163,9 +163,13 @@ describe("asking whether a model is configured is not calling one", () => {
 	 * RE-MEASURED 2026-10-15 at 217: `ai/registry/oauth/token-response.ts`, the shared reader that requires
 	 * a token endpoint's JSON to be an object, reached through `ai/registry/oauth/nous-research.ts`. Not a
 	 * mnemopi edge.
+	 *
+	 * RE-MEASURED 2026-10-24 at 218: `catalog/wire/opencode-go.ts`, the OpenCode Go endpoint rules and the
+	 * envelope a Console login's key is carried in, reached through `catalog/provider-models/openai-compat.ts`.
+	 * Not a mnemopi edge.
 	 */
-	it("local-llm reaches at most 217 modules", () => {
-		expect(reach("core/local-llm.ts")).toBeLessThanOrEqual(217);
+	it("local-llm reaches at most 218 modules", () => {
+		expect(reach("core/local-llm.ts")).toBeLessThanOrEqual(218);
 	});
 
 	/**

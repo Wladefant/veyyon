@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- `ModelReasoningOptions.defaultLevel` and `ModelReasoningOptions.requiresEffort` state a model's default effort and that it has no off state; they become `thinking.defaultLevel` and `thinking.requiresEffort`.
+
+## [1.5.9] - 2026-10-22
+
+### Added
+
+- `Model.accountAccess` records, for every ChatGPT account model discovery listed, whether the account's listing includes the model and the cyber access programs (`standard`, `daybreak_blue`, `daybreak_red`) the account is offered for it.
+
 ## [1.5.6] - 2026-10-13
 
 ### Changed

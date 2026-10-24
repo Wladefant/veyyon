@@ -30,6 +30,12 @@ run_bwrap() {
 	local -a gitdir_args=()
 	[ -n "${SANDBOX_GITDIR:-}" ] && gitdir_args=(--ro-bind "${SANDBOX_GITDIR}" "${SANDBOX_GITDIR}")
 
+	# bwrap passes the host environment through, so the terminal identity the engine reads to detect
+	# a multiplexer is removed here, for the reason given in rungs/docker.sh.
+	local -a term_args=() name
+	for name in TERM TERM_PROGRAM TERM_PROGRAM_VERSION TMUX STY ZELLIJ CMUX_WORKSPACE_ID CMUX_SURFACE_ID; do
+		term_args+=(--unsetenv "$name")
+	done
 	bwrap \
 		--unshare-user --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup \
 		--die-with-parent --new-session \
@@ -45,6 +51,7 @@ run_bwrap() {
 		--setenv HOME /sandbox/home \
 		--setenv TMPDIR /tmp \
 		--setenv BUN_INSTALL_CACHE_DIR /sandbox/home/.bun/install/cache \
+		"${term_args[@]}" \
 		/bin/sh -c 'mkdir -p "$HOME"; exec "$@"' _ "$@"
 }
 

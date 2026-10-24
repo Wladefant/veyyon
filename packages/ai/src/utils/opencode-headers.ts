@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { getOpenCodeUserAgent } from "@veyyon/catalog/wire/opencode-headers";
 
 /**
@@ -43,16 +43,27 @@ export function openCodeSessionHeaderValue(sessionId: string): string {
 }
 
 /**
+ * The `x-opencode-session` value a request with no conversation routes under:
+ * one random id per process, digested like a session id. A request without the
+ * header is rejected with `MissingSessionID`, and a per-request value would
+ * defeat the affinity the header exists for, so every session-less request
+ * this process sends (a session title, a task label, a memory pass) shares one
+ * gateway session.
+ */
+let processSessionHeaderValue: string | undefined;
+
+function processSessionHeader(): string {
+	processSessionHeaderValue ??= openCodeSessionHeaderValue(randomUUID());
+	return processSessionHeaderValue;
+}
+
+/**
  * Headers every OpenCode request carries. The gateway documents both under
  * "Where can I use it?": a client has to identify itself with a narrow
  * user agent, and has to send `x-opencode-session` so the gateway can optimize
- * prompt caching. Traffic that does neither is flagged as abusive.
- *
- * The session header is omitted when the caller has no session id, because a
- * per-request value would defeat the affinity it exists for.
+ * prompt caching. Traffic that omits the session header is rejected.
  */
-export function getOpenCodeHeaders(sessionId?: string): Record<string, string> {
-	const headers: Record<string, string> = { "User-Agent": getOpenCodeUserAgent() };
-	if (sessionId) headers["x-opencode-session"] = openCodeSessionHeaderValue(sessionId);
-	return headers;
+export function getOpenCodeHeaders(conversationId?: string): Record<string, string> {
+	const session = conversationId ? openCodeSessionHeaderValue(conversationId) : processSessionHeader();
+	return { "User-Agent": getOpenCodeUserAgent(), "x-opencode-session": session };
 }

@@ -1,3 +1,4 @@
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { raceWithTimeout } from "./scoped-timeout";
 
 /**
@@ -69,5 +70,34 @@ export class AsyncDrain<T> {
 		}
 		queue.push(value);
 		return this.#promise;
+	}
+}
+
+/** Synchronous milliseconds a {@link TimeSlice} runs before it is due to yield. */
+export const TIME_SLICE_MS = 8;
+
+/**
+ * A long synchronous walk cut into slices of about {@link TIME_SLICE_MS}, so input, rendering and
+ * timers run between them. Read `due` between items and await `yield()` when it is set:
+ *
+ * @example
+ * const slice = new TimeSlice();
+ * for (const item of items) {
+ * 	if (slice.due) await slice.yield();
+ * 	visit(item);
+ * }
+ */
+export class TimeSlice {
+	#start = performance.now();
+
+	/** Whether the current slice has run for {@link TIME_SLICE_MS}. */
+	get due(): boolean {
+		return performance.now() - this.#start >= TIME_SLICE_MS;
+	}
+
+	/** Let the event loop run, then start the next slice. */
+	async yield(): Promise<void> {
+		await yieldToEventLoop();
+		this.#start = performance.now();
 	}
 }

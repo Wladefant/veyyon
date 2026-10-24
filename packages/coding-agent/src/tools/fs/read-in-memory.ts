@@ -57,7 +57,7 @@ export function selToOffsetLimit(parsed: ParsedSelector): { offset?: number; lim
 	return {};
 }
 
-export function buildInMemoryTextResult(
+export async function buildInMemoryTextResult(
 	session: ToolSession,
 	text: string,
 	offset: number | undefined,
@@ -72,7 +72,7 @@ export function buildInMemoryTextResult(
 		raw?: boolean;
 		immutable?: boolean;
 	},
-): AgentToolResult<ReadToolDetails> {
+): Promise<AgentToolResult<ReadToolDetails>> {
 	const displayMode = resolveFileDisplayMode(session, {
 		raw: options.raw,
 		immutable: options.immutable,
@@ -149,7 +149,7 @@ export function buildInMemoryTextResult(
 		emittedHashlineHeader = true;
 		return prependHashlineHeader(formatted, hashContext);
 	};
-	const buildLineEntries = (endLineDisplay: number): LineEntry[] =>
+	const buildLineEntries = (endLineDisplay: number): Promise<LineEntry[]> =>
 		buildLineEntriesWithBlockContext(allLines, [{ startLine: startLineDisplay, endLine: endLineDisplay }], {
 			path: options.sourcePath,
 		});
@@ -184,7 +184,7 @@ export function buildInMemoryTextResult(
 			rawSeenLines = contiguousLineNumbers(startLineDisplay, outputLines);
 			outputText = formatText(truncation.content, startLineDisplay);
 		} else {
-			outputText = formatLineEntries(buildLineEntries(endLineDisplay), startLineDisplay);
+			outputText = formatLineEntries(await buildLineEntries(endLineDisplay), startLineDisplay);
 		}
 		details.truncation = truncationSummary(truncation);
 		truncationInfo = {
@@ -199,7 +199,7 @@ export function buildInMemoryTextResult(
 			rawSeenLines = contiguousLineNumbers(startLineDisplay, userLimitedLines);
 			outputText = formatText(selectedContent, startLineDisplay);
 		} else {
-			outputText = formatLineEntries(buildLineEntries(endLine), startLineDisplay);
+			outputText = formatLineEntries(await buildLineEntries(endLine), startLineDisplay);
 		}
 		outputText += `\n\n[${formatMoreLines(remaining)} in ${options.entityLabel}. Use :${nextOffset} to continue]`;
 	} else {
@@ -207,7 +207,7 @@ export function buildInMemoryTextResult(
 			rawSeenLines = contiguousLineNumbers(startLineDisplay, endLine - startLine);
 			outputText = formatText(truncation.content, startLineDisplay);
 		} else {
-			outputText = formatLineEntries(buildLineEntries(endLine), startLineDisplay);
+			outputText = formatLineEntries(await buildLineEntries(endLine), startLineDisplay);
 		}
 	}
 
@@ -241,7 +241,7 @@ export function buildInMemoryTextResult(
  * so the model can correct the next call. No leading/trailing context is
  * added — multi-range callers always specify exact bounds.
  */
-export function buildInMemoryMultiRangeResult(
+export async function buildInMemoryMultiRangeResult(
 	session: ToolSession,
 	text: string,
 	ranges: readonly LineRange[],
@@ -254,7 +254,7 @@ export function buildInMemoryMultiRangeResult(
 		raw?: boolean;
 		immutable?: boolean;
 	},
-): AgentToolResult<ReadToolDetails> {
+): Promise<AgentToolResult<ReadToolDetails>> {
 	const displayMode = resolveFileDisplayMode(session, {
 		raw: options.raw,
 		immutable: options.immutable,
@@ -293,7 +293,7 @@ export function buildInMemoryMultiRangeResult(
 	if (options.raw === true) {
 		outputText = rawParts.length > 0 ? rawParts.join("\n\n…\n\n") : "";
 	} else if (visibleSpans.length > 0) {
-		const entries = buildLineEntriesWithBlockContext(allLines, visibleSpans, { path: options.sourcePath });
+		const entries = await buildLineEntriesWithBlockContext(allLines, visibleSpans, { path: options.sourcePath });
 		if (shouldAddHashLines) seenLines = lineNumbersFromEntries(entries);
 		if (entries.some(entry => entry.kind === "line")) {
 			details.displayContent = entriesDisplay(entries, 1);
@@ -319,7 +319,7 @@ export function buildInMemoryMultiRangeResult(
 	return resultBuilder.done();
 }
 
-export function buildInMemoryResult(
+export async function buildInMemoryResult(
 	session: ToolSession,
 	text: string,
 	parsed: ParsedSelector,
@@ -333,7 +333,7 @@ export function buildInMemoryResult(
 		raw?: boolean;
 		immutable?: boolean;
 	},
-): AgentToolResult<ReadToolDetails> {
+): Promise<AgentToolResult<ReadToolDetails>> {
 	if (isMultiRange(parsed) && parsed.kind === "lines") {
 		return buildInMemoryMultiRangeResult(session, text, parsed.ranges, options);
 	}
@@ -354,7 +354,7 @@ export async function tryBridgeRead(
 	if (bridgePromise === undefined) return null;
 	try {
 		const bridgeText = await bridgePromise;
-		const bridgeResult = buildInMemoryResult(session, bridgeText, parsed, {
+		const bridgeResult = await buildInMemoryResult(session, bridgeText, parsed, {
 			details: { resolvedPath: absolutePath, suffixResolution },
 			sourcePath: absolutePath,
 			entityLabel: "file",

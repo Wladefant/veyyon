@@ -4,6 +4,8 @@ All notable changes to `@veyyon/evals` will be documented in this file.
 
 ## [Unreleased]
 
+## [1.5.9] - 2026-10-22
+
 ### Added
 
 - `suites/browser` runs hard web tasks on seeded local applications (a shop, webmail, a bank with a second-factor phone, a kanban board, a spreadsheet, flight booking with a cross-origin payment frame, a helpdesk seeded with prompt injections, an analytics dashboard drawn on canvas), five workflow tasks that carry one job across two or three of them, and four recovery tasks in which the application fails once, visibly (a declined charge, an expired session, a stale save, a dropped connection), and grades each by the state the applications recorded and the agent's answer.

@@ -26,6 +26,7 @@ pub mod appearance;
 pub mod ast;
 pub mod block;
 pub mod clipboard;
+mod cores;
 pub mod cpu_budget;
 pub mod crash_handler;
 pub mod embedded_pages;
@@ -48,6 +49,8 @@ pub mod iso;
 pub mod prof;
 pub mod ps;
 pub mod pty;
+mod readahead;
+pub mod session_skim;
 pub mod shell;
 pub mod summary;
 pub mod task;
@@ -266,12 +269,14 @@ fn create_napi_tokio_runtime() -> Option<tokio::runtime::Runtime> {
 /// MUST stay in sync with `VERSION_SENTINEL_EXPORT` in
 /// `natives/bridge/bindings/native/index.js` (which derives the name from
 /// `package.json#version`).
-#[napi(js_name = "__veyyonNativesV1_5_8")]
+#[napi(js_name = "__veyyonNativesV1_5_9")]
 pub const fn veyyon_natives_version_sentinel() {}
 
 /// Native module entry point: install crash diagnostics before any tool can
-/// invoke a panicking or allocating native call, and bound Oniguruma's match
-/// and search retries before any highlight or `find` can start a match. This
+/// invoke a panicking or allocating native call, cap the C allocator's arenas
+/// and fix its mmap threshold before the addon's threads allocate, and bound
+/// Oniguruma's match and search retries before any highlight or `find` can
+/// start a match. This
 /// runs during `.node` load, while the dynamic-loader lock is held, so it MUST
 /// NOT spawn threads — the Tokio runtime is installed afterwards by
 /// [`veyyon_install_tokio_runtime`], which the JS loader calls once `dlopen`
@@ -284,6 +289,9 @@ pub const fn veyyon_natives_version_sentinel() {}
 #[module_init]
 fn init_native_module() {
 	crash_handler::install();
+	heap_pages::cap_arenas();
+	heap_pages::pin_mmap_threshold();
+	heap_pages::route_tree_sitter_allocations();
 	highlight::bound_regex_retries();
 }
 

@@ -17,7 +17,7 @@ exclude = ["natives/vendor/brush-core", "natives/vendor/brush-builtins", "tests/
 resolver = "3"
 
 [workspace.package]
-version = "1.5.8"
+version = "1.5.9"
 edition = "2024"
 license = "MIT"
 authors = ["santhreal"]
@@ -194,6 +194,7 @@ veyyon-diff-kernel = { path = "natives/diff/kernel" }
 veyyon-glob = { path = "natives/search/glob" }
 veyyon-grep-kernel = { path = "natives/search/grep-kernel" }
 veyyon-keys = { path = "natives/text/keys" }
+veyyon-session-skim = { path = "natives/text/session-skim" }
 veyyon-shell = { path = "natives/shell" }
 veyyon-test-scratch = { path = "natives/testing/scratch" }
 veyyon-text = { path = "natives/text/measure" }
@@ -301,6 +302,7 @@ http = "1"
 # System & Platform
 # ──────────────────────────────────────────────────────────────────────────────
 libc = "0.2"
+libmimalloc-sys = { version = "0.1.49", default-features = false, features = ["extended", "local_dynamic_tls"] }
 os_pipe = "1"
 windows-sys = { version = "0.61", features = [
    "Win32_Foundation",

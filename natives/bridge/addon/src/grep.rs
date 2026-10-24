@@ -12,7 +12,7 @@ use std::{
 	fs::File,
 	io::{self, Read},
 	path::{Path, PathBuf},
-	sync::atomic::{AtomicU64, Ordering},
+	sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use grep_matcher::Matcher;
@@ -31,7 +31,12 @@ use veyyon_grep_kernel::{
 	matches_type_filter, matches_type_filter_str, resolve_context, resolve_type_filter,
 };
 
-use crate::{glob_util, iofs, napi_error::to_napi_with, task};
+use crate::{
+	glob_util, iofs,
+	napi_error::to_napi_with,
+	readahead::{self, PREFETCH_BATCH},
+	task,
+};
 
 const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -121,7 +126,8 @@ pub struct GrepOptions<'env> {
 	pub max_count_per_file: Option<u32>,
 	/// Abort signal for cancelling the operation.
 	pub signal:             Option<Unknown<'env>>,
-	/// Timeout in milliseconds for the operation.
+	/// Stop searching after this many milliseconds and return the matches
+	/// found by then, with `timedOut` set.
 	pub timeout_ms:         Option<u32>,
 }
 
@@ -213,6 +219,10 @@ pub struct GrepResult {
 	/// compile error. Callers MUST surface this — a literal fallback silently
 	/// loses regex recall otherwise. `None` on a normal regex compile.
 	pub pattern_treated_as_literal: Option<String>,
+	/// The search stopped at `timeoutMs` before it searched every file, so
+	/// `matches` and the counts cover only the files searched by then. `None`
+	/// on a search that finished.
+	pub timed_out:                  Option<bool>,
 }
 
 /// Outcome of attempting to read a file for searching.
@@ -394,23 +404,34 @@ fn read_owned_prefix(
 
 /// Read file bytes, distinguishing oversized files from other skips.
 fn read_file_bytes(path: &Path, buffer: &mut Vec<u8>) -> io::Result<ReadFile> {
-	read_file_bytes_with_size(path, None, buffer)
+	read_opened_file_bytes(path, None, None, buffer)
 }
 
-/// Read file bytes with an optional size hint from directory traversal.
-fn read_file_bytes_with_size(
-	path: &Path,
-	size_hint: Option<u64>,
-	buffer: &mut Vec<u8>,
-) -> io::Result<ReadFile> {
-	let file = match File::open(path) {
-		Ok(file) => file,
+/// `prefetched`, or the file at `path` opened now when a batch did not open it
+/// ahead; `None` when the file is gone or unreadable, which a search skips.
+fn open_or_skip(path: &Path, prefetched: Option<File>) -> io::Result<Option<File>> {
+	match prefetched.map_or_else(|| File::open(path), Ok) {
+		Ok(file) => Ok(Some(file)),
 		Err(err)
 			if matches!(err.kind(), io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied) =>
 		{
-			return Ok(ReadFile::Skipped);
+			Ok(None)
 		},
-		Err(err) => return Err(err),
+		Err(err) => Err(err),
+	}
+}
+
+/// Read the bytes of the file at `path`, from `prefetched` when a batch opened
+/// it ahead, with an optional size hint from directory traversal,
+/// distinguishing oversized files from other skips.
+fn read_opened_file_bytes(
+	path: &Path,
+	prefetched: Option<File>,
+	size_hint: Option<u64>,
+	buffer: &mut Vec<u8>,
+) -> io::Result<ReadFile> {
+	let Some(file) = open_or_skip(path, prefetched)? else {
+		return Ok(ReadFile::Skipped);
 	};
 	let size = if let Some(size) = size_hint {
 		size
@@ -636,7 +657,7 @@ fn collect_grep_candidates(
 	skip_node_modules: bool,
 	order: veyyon_walker::WalkOrder,
 	ct: &task::CancelToken,
-) -> Result<Option<Vec<veyyon_walker::FileCandidate>>> {
+) -> Result<Vec<veyyon_walker::FileCandidate>> {
 	let request = build_grep_walk_request(
 		search_path,
 		glob,
@@ -645,14 +666,13 @@ fn collect_grep_candidates(
 		skip_node_modules,
 		order,
 	)?;
-	let mut candidates = match request.collect_file_candidates_with_heartbeat(|| ct.heartbeat()) {
-		Ok(candidates) => candidates,
-		Err(err) => return Err(iofs::map_walker_error(err)),
-	};
+	let mut candidates = request
+		.collect_file_candidates_with_heartbeat(|| ct.heartbeat())
+		.map_err(iofs::map_walker_error)?;
 	if let Some(filter) = type_filter {
 		candidates.retain(|candidate| matches_type_filter_str(&candidate.relative, filter));
 	}
-	Ok(Some(candidates))
+	Ok(candidates)
 }
 
 fn file_size_hint(size: Option<f64>) -> Option<u64> {
@@ -668,6 +688,17 @@ enum ReadPolicy {
 	Full,
 	/// Map only the leading [`MAX_FILE_BYTES`] window (deferred oversized pass).
 	Prefix,
+}
+
+impl ReadPolicy {
+	/// Bytes a read under this policy takes from the start of a file, which is
+	/// what a batch asks the system to read ahead.
+	const fn read_len(self) -> u64 {
+		match self {
+			Self::Full => FILE_CLASSIFICATION_READ_BYTES,
+			Self::Prefix => MAX_FILE_BYTES,
+		}
+	}
 }
 
 /// Outcome of attempting to search one candidate.
@@ -686,7 +717,8 @@ enum FileOutcome {
 /// Shared accumulator across both search passes.
 ///
 /// `results` is drained between passes; `deferred` is filled by pass 1 and
-/// consumed by pass 2; the counters accumulate across both.
+/// consumed by pass 2; the counters accumulate across both. `timed_out` is set
+/// when the cancel token's timeout stops a walk or a pass.
 #[derive(Default)]
 struct PassState {
 	results:           Mutex<Vec<FileSearchResult>>,
@@ -694,7 +726,49 @@ struct PassState {
 	files_searched:    AtomicU64,
 	skipped_oversized: AtomicU64,
 	emitted:           AtomicU64,
+	timed_out:         AtomicBool,
 }
+
+impl PassState {
+	/// `stage`'s value, or `None` when the cancel token's timeout stopped it.
+	///
+	/// A search that reaches its timeout returns what it found by then, so the
+	/// timeout is recorded here instead of failing the search. Every heartbeat
+	/// past the timeout fails, so a stage started after it stops at once. Any
+	/// other failure, a cancellation included, is returned.
+	fn settle<T>(&self, ct: &task::CancelToken, stage: Result<T>) -> Result<Option<T>> {
+		match stage {
+			Ok(value) => Ok(Some(value)),
+			Err(_) if ct.timed_out() => {
+				self.timed_out.store(true, Ordering::Relaxed);
+				Ok(None)
+			},
+			Err(err) => Err(err),
+		}
+	}
+
+	/// The search's outcome: `results` with the counters this state holds.
+	fn into_searched(self, results: Vec<FileSearchResult>) -> DirectorySearch {
+		DirectorySearch {
+			results,
+			skipped_oversized: self.skipped_oversized.into_inner(),
+			files_searched: self.files_searched.into_inner(),
+			timed_out: self.timed_out.into_inner(),
+		}
+	}
+}
+
+/// What a directory search found.
+struct DirectorySearch {
+	/// Per-file results: normal-sized files first, each group path-sorted.
+	results:           Vec<FileSearchResult>,
+	skipped_oversized: u64,
+	files_searched:    u64,
+	/// The cancel token's timeout stopped the search, so `results` holds what
+	/// it found by then.
+	timed_out:         bool,
+}
+
 /// Read the first [`MAX_FILE_BYTES`] of a file into owned bytes for searching.
 ///
 /// Used by the deferred oversized pass: files larger than the cap are searched
@@ -702,14 +776,18 @@ struct PassState {
 /// read avoids mmap page faults when the backing file is rewritten
 /// concurrently.
 fn read_file_prefix(path: &Path, buffer: &mut Vec<u8>) -> io::Result<ReadFile> {
-	let file = match File::open(path) {
-		Ok(file) => file,
-		Err(err)
-			if matches!(err.kind(), io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied) =>
-		{
-			return Ok(ReadFile::Skipped);
-		},
-		Err(err) => return Err(err),
+	read_opened_file_prefix(path, None, buffer)
+}
+
+/// [`read_file_prefix`] of the file at `path`, from `prefetched` when a batch
+/// opened it ahead.
+fn read_opened_file_prefix(
+	path: &Path,
+	prefetched: Option<File>,
+	buffer: &mut Vec<u8>,
+) -> io::Result<ReadFile> {
+	let Some(file) = open_or_skip(path, prefetched)? else {
+		return Ok(ReadFile::Skipped);
 	};
 	let metadata = file.metadata()?;
 	if !metadata.is_file() {
@@ -725,19 +803,24 @@ fn read_file_prefix(path: &Path, buffer: &mut Vec<u8>) -> io::Result<ReadFile> {
 	Ok(ReadFile::Read)
 }
 
-/// Read one candidate per `policy` and search it, classifying the result.
+/// Read one candidate per `policy`, from `prefetched` when a batch opened it
+/// ahead, and search it, classifying the result.
 fn search_one_file<M: Matcher + Sync>(
 	worker: &mut SearchWorker,
 	matcher: &M,
 	file: &veyyon_walker::FileCandidate,
+	prefetched: Option<File>,
 	file_params: SearchParams,
 	policy: ReadPolicy,
 ) -> FileOutcome {
 	let read = match policy {
-		ReadPolicy::Full => {
-			read_file_bytes_with_size(&file.path, file_size_hint(file.size), &mut worker.buffer)
-		},
-		ReadPolicy::Prefix => read_file_prefix(&file.path, &mut worker.buffer),
+		ReadPolicy::Full => read_opened_file_bytes(
+			&file.path,
+			prefetched,
+			file_size_hint(file.size),
+			&mut worker.buffer,
+		),
+		ReadPolicy::Prefix => read_opened_file_prefix(&file.path, prefetched, &mut worker.buffer),
 	};
 	match read {
 		Ok(ReadFile::Read) => {},
@@ -762,9 +845,11 @@ fn search_one_file<M: Matcher + Sync>(
 	FileOutcome::Searched(search)
 }
 
-/// Search one candidate and fold its outcome into the shared [`PassState`].
+/// Search one candidate, from `prefetched` when a batch opened it ahead, and
+/// fold its outcome into the shared [`PassState`].
 fn handle_file<M: Matcher + Sync>(
 	file: &veyyon_walker::FileCandidate,
+	prefetched: Option<File>,
 	worker: &mut SearchWorker,
 	matcher: &M,
 	file_params: SearchParams,
@@ -779,7 +864,7 @@ fn handle_file<M: Matcher + Sync>(
 	{
 		return Ok(());
 	}
-	match search_one_file(worker, matcher, file, file_params, policy) {
+	match search_one_file(worker, matcher, file, prefetched, file_params, policy) {
 		FileOutcome::Defer => {
 			state.deferred.lock().push(file.clone());
 		},
@@ -806,10 +891,52 @@ fn handle_file<M: Matcher + Sync>(
 	Ok(())
 }
 
+/// Search `chunk`, at most [`PREFETCH_BATCH`] candidates: open each and ask the
+/// system to read it ahead, then search them in order, so the first read waits
+/// for one file and not the chunk, and the rest arrive while it is searched. A
+/// file the chunk cannot open ahead, as when the process has no descriptor to
+/// spare, is opened again when its turn comes, after the files before it
+/// closed.
+fn handle_chunk<M: Matcher + Sync>(
+	chunk: &[veyyon_walker::FileCandidate],
+	worker: &mut SearchWorker,
+	matcher: &M,
+	file_params: SearchParams,
+	policy: ReadPolicy,
+	stop_after_matches: Option<u64>,
+	state: &PassState,
+	ct: &task::CancelToken,
+) -> Result<()> {
+	if stop_after_matches.is_some_and(|stop| state.emitted.load(Ordering::Relaxed) >= stop) {
+		return Ok(());
+	}
+	let prefetched: SmallVec<[Option<File>; PREFETCH_BATCH]> = chunk
+		.iter()
+		.map(|file| readahead::open_ahead(&file.path, Some(policy.read_len())).ok())
+		.collect();
+	chunk
+		.iter()
+		.zip(prefetched)
+		.try_for_each(|(file, prefetched)| {
+			handle_file(
+				file,
+				prefetched,
+				worker,
+				matcher,
+				file_params,
+				policy,
+				stop_after_matches,
+				state,
+				ct,
+			)
+		})
+}
+
 /// Run one search pass over `candidates`, returning its path-sorted results.
 ///
 /// Counters and the deferred list accumulate into `state`; `results` is drained
-/// here so the same state can drive a second pass.
+/// here so the same state can drive a second pass. A pass the timeout stops
+/// returns the results of the files it searched by then.
 fn run_pass<M: Matcher + Sync>(
 	candidates: &[veyyon_walker::FileCandidate],
 	matcher: &M,
@@ -820,35 +947,25 @@ fn run_pass<M: Matcher + Sync>(
 	state: &PassState,
 	ct: &task::CancelToken,
 ) -> Result<Vec<FileSearchResult>> {
-	if parallel_allowed && veyyon_walker::should_parallelize(candidates.len()) {
-		veyyon_walker::execute_candidates_init(
+	let search_chunk = |worker: &mut SearchWorker, chunk: &[veyyon_walker::FileCandidate]| {
+		handle_chunk(chunk, worker, matcher, file_params, policy, stop_after_matches, state, ct)
+	};
+	let ran = if parallel_allowed && veyyon_walker::should_parallelize(candidates.len()) {
+		veyyon_walker::execute_candidate_chunks_init(
 			candidates,
+			PREFETCH_BATCH,
 			|| SearchWorker::new(file_params),
-			|worker, file| {
-				handle_file(file, worker, matcher, file_params, policy, stop_after_matches, state, ct)
-			},
-		)?;
+			search_chunk,
+		)
 	} else {
 		let mut worker = SearchWorker::new(file_params);
-		ct.heartbeat()?;
-		for file in candidates {
-			if let Some(stop) = stop_after_matches
-				&& state.emitted.load(Ordering::Relaxed) >= stop
-			{
-				break;
-			}
-			handle_file(
-				file,
-				&mut worker,
-				matcher,
-				file_params,
-				policy,
-				stop_after_matches,
-				state,
-				ct,
-			)?;
-		}
-	}
+		ct.heartbeat().and_then(|()| {
+			candidates
+				.chunks(PREFETCH_BATCH)
+				.try_for_each(|chunk| search_chunk(&mut worker, chunk))
+		})
+	};
+	state.settle(ct, ran)?;
 	let mut results = std::mem::take(&mut *state.results.lock());
 	results.sort_unstable_by(|a, b| a.relative_path.cmp(&b.relative_path));
 	Ok(results)
@@ -866,10 +983,10 @@ fn process_candidates<M: Matcher + Sync>(
 	params: SearchParams,
 	parallel_allowed: bool,
 	stop_after_matches: Option<u64>,
+	state: &PassState,
 	ct: &task::CancelToken,
-) -> Result<(Vec<FileSearchResult>, u64, u64)> {
+) -> Result<Vec<FileSearchResult>> {
 	let file_params = per_file_params(params);
-	let state = PassState::default();
 
 	// Partition oversized-by-hint files out of pass 1 up front; files without a
 	// size hint stay in pass 1 and are deferred at read time if oversized.
@@ -891,7 +1008,7 @@ fn process_candidates<M: Matcher + Sync>(
 		ReadPolicy::Full,
 		parallel_allowed,
 		stop_after_matches,
-		&state,
+		state,
 		ct,
 	)?;
 
@@ -908,17 +1025,12 @@ fn process_candidates<M: Matcher + Sync>(
 			ReadPolicy::Prefix,
 			parallel_allowed,
 			stop_after_matches,
-			&state,
+			state,
 			ct,
 		)?;
 		results.extend(oversized);
 	}
-
-	Ok((
-		results,
-		state.skipped_oversized.load(Ordering::Relaxed),
-		state.files_searched.load(Ordering::Relaxed),
-	))
+	Ok(results)
 }
 
 fn run_sequential_grep<M: Matcher + Sync>(
@@ -932,8 +1044,9 @@ fn run_sequential_grep<M: Matcher + Sync>(
 	skip_node_modules: bool,
 	ct: &task::CancelToken,
 	stop_after_matches: Option<u64>,
-) -> Result<(Vec<FileSearchResult>, u64, u64)> {
-	let Some(candidates) = collect_grep_candidates(
+) -> Result<DirectorySearch> {
+	let state = PassState::default();
+	let candidates = collect_grep_candidates(
 		search_path,
 		glob,
 		type_filter,
@@ -942,11 +1055,13 @@ fn run_sequential_grep<M: Matcher + Sync>(
 		skip_node_modules,
 		veyyon_walker::WalkOrder::Path,
 		ct,
-	)?
-	else {
-		return Ok((Vec::new(), 0, 0));
+	);
+	let Some(candidates) = state.settle(ct, candidates)? else {
+		return Ok(state.into_searched(Vec::new()));
 	};
-	process_candidates(candidates, matcher, params, false, stop_after_matches, ct)
+	let results =
+		process_candidates(candidates, matcher, params, false, stop_after_matches, &state, ct)?;
+	Ok(state.into_searched(results))
 }
 
 #[allow(
@@ -963,7 +1078,7 @@ fn run_parallel_streaming_grep<M: Matcher + Sync>(
 	use_gitignore: bool,
 	skip_node_modules: bool,
 	ct: &task::CancelToken,
-) -> Result<(Vec<FileSearchResult>, u64, u64)> {
+) -> Result<DirectorySearch> {
 	let request = build_grep_walk_request(
 		search_path,
 		glob,
@@ -974,8 +1089,15 @@ fn run_parallel_streaming_grep<M: Matcher + Sync>(
 	)?;
 	let file_params = per_file_params(params);
 	let state = PassState::default();
-
-	request
+	// Candidates wait here until a batch is full, and the thread that fills it
+	// opens the batch ahead and searches it.
+	let pending = Mutex::new(Vec::with_capacity(PREFETCH_BATCH));
+	let search_batch = |batch: &[veyyon_walker::FileCandidate]| {
+		with_parallel_grep_searcher(file_params, |worker| {
+			handle_chunk(batch, worker, matcher, file_params, ReadPolicy::Full, None, &state, ct)
+		})
+	};
+	let walked = request
 		.for_each_file_candidate_parallel(
 			|file| {
 				if let Some(filter) = type_filter
@@ -983,14 +1105,24 @@ fn run_parallel_streaming_grep<M: Matcher + Sync>(
 				{
 					return Ok(veyyon_walker::ParallelWalkControl::Continue);
 				}
-				with_parallel_grep_searcher(file_params, |searcher| {
-					handle_file(file, searcher, matcher, file_params, ReadPolicy::Full, None, &state, ct)
-				})?;
+				let full = {
+					let mut pending = pending.lock();
+					pending.push(file.clone());
+					(pending.len() >= PREFETCH_BATCH)
+						.then(|| std::mem::replace(&mut *pending, Vec::with_capacity(PREFETCH_BATCH)))
+				};
+				if let Some(batch) = full {
+					search_batch(&batch)?;
+				}
 				Ok(veyyon_walker::ParallelWalkControl::Continue)
 			},
 			|| ct.heartbeat(),
 		)
-		.map_err(iofs::map_walker_error)?;
+		.map_err(iofs::map_walker_error);
+	if state.settle(ct, walked)?.is_some() {
+		let rest = std::mem::take(&mut *pending.lock());
+		state.settle(ct, search_batch(&rest))?;
+	}
 
 	let mut results = std::mem::take(&mut *state.results.lock());
 	results.sort_unstable_by(|a, b| a.relative_path.cmp(&b.relative_path));
@@ -1001,12 +1133,7 @@ fn run_parallel_streaming_grep<M: Matcher + Sync>(
 			run_pass(&deferred, matcher, file_params, ReadPolicy::Prefix, true, None, &state, ct)?;
 		results.extend(oversized);
 	}
-
-	Ok((
-		results,
-		state.skipped_oversized.load(Ordering::Relaxed),
-		state.files_searched.load(Ordering::Relaxed),
-	))
+	Ok(state.into_searched(results))
 }
 
 fn emitted_content_matches(results: &[FileSearchResult]) -> u64 {
@@ -1054,7 +1181,7 @@ fn run_windowed_streaming_grep<M: Matcher + Sync>(
 	skip_node_modules: bool,
 	ct: &task::CancelToken,
 	stop_after_matches: u64,
-) -> Result<(Vec<FileSearchResult>, u64, u64)> {
+) -> Result<DirectorySearch> {
 	let request = build_grep_walk_request(
 		search_path,
 		glob,
@@ -1068,7 +1195,7 @@ fn run_windowed_streaming_grep<M: Matcher + Sync>(
 	let mut window = Vec::with_capacity(GREP_STREAM_WINDOW);
 	let mut results = Vec::new();
 
-	request
+	let walked = request
 		.for_each_entry_with_heartbeat(
 			|| ct.heartbeat(),
 			|entry| {
@@ -1100,7 +1227,8 @@ fn run_windowed_streaming_grep<M: Matcher + Sync>(
 			},
 			|_| Ok(veyyon_walker::WalkDecision::Include),
 		)
-		.map_err(iofs::map_walker_error)?;
+		.map_err(iofs::map_walker_error);
+	state.settle(ct, walked)?;
 
 	if state.emitted.load(Ordering::Relaxed) < stop_after_matches {
 		flush_stream_window(
@@ -1131,11 +1259,7 @@ fn run_windowed_streaming_grep<M: Matcher + Sync>(
 		results.extend(oversized);
 	}
 
-	Ok((
-		results,
-		state.skipped_oversized.load(Ordering::Relaxed),
-		state.files_searched.load(Ordering::Relaxed),
-	))
+	Ok(state.into_searched(results))
 }
 
 fn run_streaming_grep<M: Matcher + Sync>(
@@ -1148,7 +1272,7 @@ fn run_streaming_grep<M: Matcher + Sync>(
 	use_gitignore: bool,
 	skip_node_modules: bool,
 	ct: &task::CancelToken,
-) -> Result<(Vec<FileSearchResult>, u64, u64)> {
+) -> Result<DirectorySearch> {
 	let stop_after_matches = streaming_stop_after(params);
 	match stop_after_matches {
 		None => run_parallel_streaming_grep(
@@ -1567,18 +1691,18 @@ fn grep_sync_with_matcher<M: Matcher + Sync>(
 	veyyon_walker::ensure_readable_dir(&search_path).map_err(iofs::map_walker_error)?;
 
 	let mentions_node_modules = glob.is_some_and(|g| g.contains("node_modules"));
-	let results = run_streaming_grep(
-		&search_path,
-		matcher,
-		glob,
-		type_filter.as_ref(),
-		params,
-		include_hidden,
-		use_gitignore,
-		!mentions_node_modules,
-		&ct,
-	)?;
-	let (results, skipped_oversized, files_searched) = results;
+	let DirectorySearch { results, skipped_oversized, files_searched, timed_out } =
+		run_streaming_grep(
+			&search_path,
+			matcher,
+			glob,
+			type_filter.as_ref(),
+			params,
+			include_hidden,
+			use_gitignore,
+			!mentions_node_modules,
+			&ct,
+		)?;
 	let (matches, total_matches, files_with_matches, files_searched, limit_reached) =
 		aggregate_parallel_results(results, params, files_searched);
 
@@ -1601,6 +1725,7 @@ fn grep_sync_with_matcher<M: Matcher + Sync>(
 		} else {
 			None
 		},
+		timed_out: timed_out.then_some(true),
 		..Default::default()
 	})
 }
@@ -1687,6 +1812,9 @@ pub fn has_match(
 ///
 /// # Returns
 /// Aggregated results across matching files.
+///
+/// Reaching `timeoutMs` is not an error: the result holds the matches found by
+/// then and sets `timedOut`.
 #[napi]
 pub fn grep(
 	options: GrepOptions<'_>,
@@ -1741,7 +1869,7 @@ mod tests {
 	#[cfg(unix)]
 	use std::{ffi::CString, os::unix::ffi::OsStrExt};
 	#[cfg(unix)]
-	use std::{fs, path::Path, time::Duration};
+	use std::{fs, path::Path};
 
 	use grep_matcher::Matcher;
 	use veyyon_grep_kernel::{escape_unescaped_parentheses, sanitize_braces};
@@ -2103,23 +2231,303 @@ mod tests {
 		assert_eq!(result.matches[0].match_count, Some(2));
 	}
 
+	/// What reaching `timeoutMs` does to a directory search, on every path
+	/// the search takes.
+	///
+	/// The defect: every heartbeat past the timeout failed the search with
+	/// "Aborted: Timeout", which discarded the matches of every file searched
+	/// by then, so a text search that reached its limit over a large tree
+	/// returned nothing. The class is each path a directory grep takes, with
+	/// the timeout reached in the walk or in a file pass: the unordered
+	/// parallel walk (no content budget), the ordered serial pass (a budget of
+	/// at most `ORDERED_STREAMING_STOP_MAX_COUNT`), the windowed walk (a larger
+	/// budget), and the count and files-with-matches modes. Not caught: a read
+	/// that stalls inside one file, which no heartbeat interrupts.
 	#[cfg(unix)]
-	#[test]
-	fn grep_streaming_respects_pre_cancelled_token() {
-		let root = temp_dir_guard();
-		write_file(&root.path().join("regular.txt"), "needle\n");
-
-		let ct = task::CancelToken::new(Some(0), None);
-		std::thread::sleep(Duration::from_millis(1));
-		let result = grep_sync(base_grep_config(root.path()), None, ct);
-
-		let Err(err) = result else {
-			panic!("pre-cancelled grep should fail before returning matches");
+	mod a_search_past_its_timeout_returns_what_it_found {
+		use std::{
+			collections::BTreeSet,
+			path::Path,
+			time::{Duration, Instant},
 		};
+
+		use grep_matcher::{Match, Matcher};
+		use veyyon_grep_kernel::CompiledMatcher;
+
+		use super::{
+			super::{
+				ORDERED_STREAMING_STOP_MAX_COUNT, OutputMode, SearchParams, build_matcher,
+				run_streaming_grep,
+			},
+			GrepConfig, GrepOutputMode, assert_same_grep_result, base_grep_config,
+			content_search_params, grep_sync, task, temp_dir_guard, unlimited_params, write_file,
+		};
+
+		/// The timeout of a search the slow matcher holds past it.
+		const TIMEOUT_MS: u32 = 300;
+		/// How long each match attempt takes: [`FILES_PER_WORKER`] attempts
+		/// outlast [`TIMEOUT_MS`] several times over.
+		const ATTEMPT_DELAY: Duration = Duration::from_millis(10);
+		const FILES_PER_WORKER: usize = 256;
+		/// How far past its timeout a search may run before it returns.
+		const OVERRUN_BOUND: Duration = Duration::from_secs(2);
+
+		/// A matcher that sleeps before every match attempt, so a search over
+		/// many files takes a known minimum time.
+		struct SlowMatcher<M> {
+			inner: M,
+		}
+
+		impl<M: Matcher> Matcher for SlowMatcher<M> {
+			type Captures = M::Captures;
+			type Error = M::Error;
+
+			fn find_at(&self, haystack: &[u8], at: usize) -> Result<Option<Match>, Self::Error> {
+				std::thread::sleep(ATTEMPT_DELAY);
+				self.inner.find_at(haystack, at)
+			}
+
+			fn new_captures(&self) -> Result<Self::Captures, Self::Error> {
+				self.inner.new_captures()
+			}
+		}
+
+		/// The content budgets that select each path a content search takes.
+		fn lanes() -> [(&'static str, SearchParams); 3] {
+			[
+				("parallel", unlimited_params(OutputMode::Content, 0)),
+				("serial", content_search_params(ORDERED_STREAMING_STOP_MAX_COUNT, None)),
+				("windowed", content_search_params(ORDERED_STREAMING_STOP_MAX_COUNT * 1_000, None)),
+			]
+		}
+
+		/// One `grep` call per search path and output mode.
+		pub(super) fn configs(root: &Path) -> Vec<(&'static str, GrepConfig)> {
+			let config = |max_count: Option<u32>, mode: Option<GrepOutputMode>| GrepConfig {
+				max_count,
+				mode,
+				..base_grep_config(root)
+			};
+			let ordered =
+				u32::try_from(ORDERED_STREAMING_STOP_MAX_COUNT).expect("the ordered budget fits a u32");
+			vec![
+				("parallel", config(None, None)),
+				("serial", config(Some(ordered), None)),
+				("windowed", config(Some(ordered * 1_000), None)),
+				("count", config(None, Some(GrepOutputMode::Count))),
+				("files", config(None, Some(GrepOutputMode::FilesWithMatches))),
+			]
+		}
+
+		/// A tree of `count` one-line files that each match `needle`.
+		pub(super) fn needle_tree(root: &Path, count: usize) -> BTreeSet<String> {
+			let tree: BTreeSet<String> = (0..count).map(|index| format!("{index:05}.txt")).collect();
+			for path in &tree {
+				write_file(&root.join(path), "needle\n");
+			}
+			tree
+		}
+
+		#[test]
+		fn a_timeout_reached_mid_search_keeps_the_files_searched_by_then() {
+			let workers = veyyon_walker::walk_workers();
+			assert!(workers > 1, "the windowed path needs a parallel walker");
+			let files = FILES_PER_WORKER * workers.max(4);
+			let root = temp_dir_guard();
+			let tree = needle_tree(root.path(), files);
+			let (CompiledMatcher::Rust(inner), _) =
+				build_matcher("needle", false, false).expect("compile the test pattern")
+			else {
+				panic!("`needle` compiles on the Rust engine");
+			};
+			let matcher = SlowMatcher { inner };
+
+			for (lane, params) in lanes() {
+				let started = Instant::now();
+				let ct = task::CancelToken::new(Some(TIMEOUT_MS), None);
+				let searched = run_streaming_grep(
+					root.path(),
+					&matcher,
+					None,
+					None,
+					params,
+					true,
+					false,
+					true,
+					&ct,
+				)
+				.unwrap_or_else(|err| panic!("{lane}: a search past its timeout failed: {err}"));
+				let elapsed = started.elapsed();
+
+				let found: Vec<&str> = searched
+					.results
+					.iter()
+					.map(|result| result.relative_path.as_str())
+					.collect();
+				let distinct: BTreeSet<&str> = found.iter().copied().collect();
+				assert!(searched.timed_out, "{lane}: the timeout is not reported");
+				assert!(
+					!found.is_empty(),
+					"{lane}: the files searched before the timeout were dropped"
+				);
+				assert!(found.len() < files, "{lane}: the search beat its timeout, so nothing was cut");
+				assert_eq!(distinct.len(), found.len(), "{lane}: a file was reported twice");
+				assert!(
+					distinct.iter().all(|path| tree.contains(*path)),
+					"{lane}: reported a file outside the tree"
+				);
+				assert!(
+					searched.files_searched >= found.len() as u64,
+					"{lane}: reported {} files but counted {} searched",
+					found.len(),
+					searched.files_searched
+				);
+				assert!(
+					elapsed < Duration::from_millis(TIMEOUT_MS.into()) + OVERRUN_BOUND,
+					"{lane}: returned {elapsed:?} after it started"
+				);
+			}
+		}
+
+		#[test]
+		fn a_timeout_passed_before_the_search_returns_no_matches_and_reports_it() {
+			let root = temp_dir_guard();
+			needle_tree(root.path(), FILES_PER_WORKER * 2);
+			for (lane, config) in configs(root.path()) {
+				let ct = task::CancelToken::new(Some(0), None);
+				std::thread::sleep(Duration::from_millis(1));
+				let result = grep_sync(config, None, ct)
+					.unwrap_or_else(|err| panic!("{lane}: a search past its timeout failed: {err}"));
+				assert_eq!(result.timed_out, Some(true), "{lane}: the timeout is not reported");
+				assert!(result.matches.is_empty(), "{lane}: searched a file past the timeout");
+				assert_eq!(result.files_searched, 0, "{lane}: searched a file past the timeout");
+			}
+		}
+
+		#[test]
+		fn a_search_that_beats_its_timeout_finds_everything_and_reports_no_timeout() {
+			let root = temp_dir_guard();
+			needle_tree(root.path(), FILES_PER_WORKER * 2);
+			for ((lane, bounded), (_, unbounded)) in
+				configs(root.path()).into_iter().zip(configs(root.path()))
+			{
+				let beaten = grep_sync(bounded, None, task::CancelToken::new(Some(60_000), None))
+					.unwrap_or_else(|err| panic!("{lane}: {err}"));
+				let reference = grep_sync(unbounded, None, task::CancelToken::default())
+					.unwrap_or_else(|err| panic!("{lane}: {err}"));
+				assert_eq!(beaten.timed_out, None, "{lane}: a finished search reports a timeout");
+				assert_same_grep_result(&beaten, &reference);
+			}
+		}
+
+		#[test]
+		fn a_cancelled_search_fails_even_past_its_timeout() {
+			let root = temp_dir_guard();
+			needle_tree(root.path(), FILES_PER_WORKER * 2);
+			for timeout_ms in [None, Some(0)] {
+				for (lane, config) in configs(root.path()) {
+					let mut ct = task::CancelToken::new(timeout_ms, None);
+					ct.emplace_abort_token().abort(task::AbortReason::Signal);
+					std::thread::sleep(Duration::from_millis(1));
+					let Err(err) = grep_sync(config, None, ct) else {
+						panic!("{lane}, timeout {timeout_ms:?}: a cancelled search returned a result");
+					};
+					assert!(
+						err.to_string().contains("Aborted: Signal"),
+						"{lane}, timeout {timeout_ms:?}: expected the cancellation, got: {err}"
+					);
+				}
+			}
+		}
+	}
+
+	/// WHY: a search opens [`PREFETCH_BATCH`] files ahead of reading them, so it
+	/// holds more descriptors at once than one read does. A file whose ahead
+	/// open fails, as when the process has no descriptor to spare, must be
+	/// opened again when its turn comes rather than read as a skip that drops
+	/// its matches. The child lowers its descriptor limit to two above what it
+	/// holds, so most ahead opens of every batch fail, and every search path
+	/// and output mode, over whole files and over the leading window of
+	/// oversized ones, must return what it returns with descriptors to spare.
+	///
+	/// Not caught: several walker threads, which the child does not run, so a
+	/// batch frees its own descriptors before its next open; with several
+	/// threads one thread's batch can hold the descriptors another thread's
+	/// open needs. Nor a walk's directory open that fails under the same
+	/// pressure.
+	///
+	/// [`PREFETCH_BATCH`]: crate::readahead::PREFETCH_BATCH
+	#[cfg(all(target_os = "linux", target_env = "gnu"))]
+	#[test]
+	fn a_file_a_batch_cannot_open_ahead_is_still_searched() {
+		use a_search_past_its_timeout_returns_what_it_found::{configs, needle_tree};
+
+		use crate::{heap_pages::measure::in_child, readahead::PREFETCH_BATCH};
+
+		let name = "a_file_a_batch_cannot_open_ahead_is_still_searched";
+		if !in_child(module_path!(), name, &[("VEYYON_WALK_WORKERS", "1")]) {
+			return;
+		}
+		let root = temp_dir_guard();
+		let tree = needle_tree(root.path(), PREFETCH_BATCH * 4);
+		for index in 0..3 {
+			write_oversized_file(&root.path().join(format!("big{index}.txt")), "needle\n");
+		}
+		let searched = |config: GrepConfig, lane: &str| {
+			grep_sync(config, None, task::CancelToken::default())
+				.unwrap_or_else(|err| panic!("{lane}: the search failed: {err}"))
+		};
+		let references: Vec<_> = configs(root.path())
+			.into_iter()
+			.map(|(lane, config)| searched(config, lane))
+			.collect();
 		assert!(
-			err.to_string().contains("Timeout"),
-			"expected timeout cancellation error, got: {err}"
+			references
+				.iter()
+				.all(|reference| reference.files_with_matches > 0),
+			"a search with descriptors to spare found nothing"
 		);
+
+		leave_spare_descriptors(2);
+		let batch: Vec<_> = tree
+			.iter()
+			.take(PREFETCH_BATCH)
+			.map(|path| fs::File::open(root.path().join(path)))
+			.collect();
+		assert!(
+			batch.iter().any(Result::is_err),
+			"the lowered limit leaves room to open a whole batch"
+		);
+		drop(batch);
+
+		for ((lane, config), reference) in configs(root.path()).into_iter().zip(&references) {
+			let pressed = searched(config, lane);
+			assert_eq!(
+				(pressed.files_searched, pressed.skipped_oversized),
+				(reference.files_searched, reference.skipped_oversized),
+				"{lane}: a file a batch could not open ahead was not searched"
+			);
+			assert_same_grep_result(&pressed, reference);
+		}
+	}
+
+	/// Lower this process's descriptor limit so `spare` descriptors are free.
+	#[cfg(all(target_os = "linux", target_env = "gnu"))]
+	fn leave_spare_descriptors(spare: u64) {
+		// The listing holds one descriptor of its own while it is read, and the
+		// limit bounds the lowest free descriptor number, which the held ones fill.
+		let listed = fs::read_dir("/proc/self/fd")
+			.expect("list the held descriptors")
+			.count();
+		let held = u64::try_from(listed).expect("a descriptor count fits u64") - 1;
+		let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+		// SAFETY: `limit` is a valid `rlimit` the call writes.
+		let read = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit) };
+		assert_eq!(read, 0, "read the descriptor limit: {}", std::io::Error::last_os_error());
+		limit.rlim_cur = held + spare;
+		// SAFETY: `limit` is a valid `rlimit` the call reads.
+		let set = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const limit) };
+		assert_eq!(set, 0, "lower the descriptor limit: {}", std::io::Error::last_os_error());
 	}
 
 	#[cfg(unix)]
@@ -2307,19 +2715,20 @@ mod tests {
 	#[cfg(unix)]
 	fn sequential_reference_result(root: &Path, params: super::SearchParams) -> super::GrepResult {
 		let (matcher, _) = super::build_matcher("needle", false, false).expect("build test matcher");
-		let (results, skipped_oversized, files_searched) = super::run_sequential_grep(
-			root,
-			&matcher,
-			None,
-			None,
-			params,
-			true,
-			true,
-			true,
-			&task::CancelToken::default(),
-			super::streaming_stop_after(params),
-		)
-		.expect("sequential grep should succeed");
+		let super::DirectorySearch { results, skipped_oversized, files_searched, .. } =
+			super::run_sequential_grep(
+				root,
+				&matcher,
+				None,
+				None,
+				params,
+				true,
+				true,
+				true,
+				&task::CancelToken::default(),
+				super::streaming_stop_after(params),
+			)
+			.expect("sequential grep should succeed");
 		let (matches, total_matches, files_with_matches, files_searched, limit_reached) =
 			super::aggregate_parallel_results(results, params, files_searched);
 
@@ -2379,9 +2788,15 @@ mod tests {
 		)
 		.expect("sequential grep should succeed");
 
-		assert_eq!(parallel.1, sequential.1, "oversized skip counts must match");
-		assert_eq!(parallel.2, sequential.2, "searched file counts must match");
-		assert_eq!(file_snapshots(&parallel.0), file_snapshots(&sequential.0));
+		assert_eq!(
+			parallel.skipped_oversized, sequential.skipped_oversized,
+			"oversized skip counts must match"
+		);
+		assert_eq!(
+			parallel.files_searched, sequential.files_searched,
+			"searched file counts must match"
+		);
+		assert_eq!(file_snapshots(&parallel.results), file_snapshots(&sequential.results));
 	}
 
 	#[cfg(unix)]
@@ -2492,27 +2907,6 @@ mod tests {
 
 	#[cfg(unix)]
 	#[test]
-	fn parallel_streaming_respects_cancelled_token_mid_walk() {
-		let root = temp_dir_guard();
-		for index in 0..1_000 {
-			write_file(&root.path().join(format!("{index:04}.txt")), "needle\n");
-		}
-
-		let ct = task::CancelToken::new(Some(1), None);
-		std::thread::sleep(Duration::from_millis(5));
-		let result = grep_sync(base_grep_config(root.path()), None, ct);
-
-		let Err(err) = result else {
-			panic!("cancelled parallel grep should fail before returning matches");
-		};
-		assert!(
-			err.to_string().contains("Timeout"),
-			"expected timeout cancellation error, got: {err}"
-		);
-	}
-
-	#[cfg(unix)]
-	#[test]
 	fn streaming_grep_stops_after_first_page_content_budget() {
 		let root = temp_dir_guard();
 		write_file(&root.path().join("a.txt"), "needle a1\nneedle a2\n");
@@ -2520,18 +2914,19 @@ mod tests {
 		let (matcher, _) = super::build_matcher("needle", false, false).expect("build test matcher");
 		let params = content_search_params(1, None);
 
-		let (results, skipped_oversized, files_searched) = super::run_streaming_grep(
-			root.path(),
-			&matcher,
-			None,
-			None,
-			params,
-			true,
-			false,
-			true,
-			&task::CancelToken::default(),
-		)
-		.expect("streaming grep should succeed");
+		let super::DirectorySearch { results, skipped_oversized, files_searched, .. } =
+			super::run_streaming_grep(
+				root.path(),
+				&matcher,
+				None,
+				None,
+				params,
+				true,
+				false,
+				true,
+				&task::CancelToken::default(),
+			)
+			.expect("streaming grep should succeed");
 
 		assert_eq!(skipped_oversized, 0);
 		assert_eq!(files_searched, 1);
@@ -2550,18 +2945,19 @@ mod tests {
 		let (matcher, _) = super::build_matcher("needle", false, false).expect("build test matcher");
 		let params = content_search_params(3, Some(1));
 
-		let (results, skipped_oversized, files_searched) = super::run_streaming_grep(
-			root.path(),
-			&matcher,
-			None,
-			None,
-			params,
-			true,
-			false,
-			true,
-			&task::CancelToken::default(),
-		)
-		.expect("streaming grep should succeed");
+		let super::DirectorySearch { results, skipped_oversized, files_searched, .. } =
+			super::run_streaming_grep(
+				root.path(),
+				&matcher,
+				None,
+				None,
+				params,
+				true,
+				false,
+				true,
+				&task::CancelToken::default(),
+			)
+			.expect("streaming grep should succeed");
 
 		assert_eq!(skipped_oversized, 0);
 		assert_eq!(files_searched, 3);
@@ -2590,18 +2986,19 @@ mod tests {
 		let (matcher, _) = super::build_matcher("needle", false, false).expect("build test matcher");
 		let params = content_search_params(budget, None);
 
-		let (results, skipped_oversized, files_searched) = super::run_streaming_grep(
-			root.path(),
-			&matcher,
-			None,
-			None,
-			params,
-			true,
-			false,
-			true,
-			&task::CancelToken::default(),
-		)
-		.expect("streaming grep should succeed");
+		let super::DirectorySearch { results, skipped_oversized, files_searched, .. } =
+			super::run_streaming_grep(
+				root.path(),
+				&matcher,
+				None,
+				None,
+				params,
+				true,
+				false,
+				true,
+				&task::CancelToken::default(),
+			)
+			.expect("streaming grep should succeed");
 
 		let result_paths: Vec<&str> = results
 			.iter()

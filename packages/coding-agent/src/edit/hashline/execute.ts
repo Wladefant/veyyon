@@ -99,11 +99,12 @@ function formatBlockResolution(resolution: BlockResolution): string {
 	return `${op} ${resolution.anchorLine} → resolved ${span} (${formatCount("line", lines)})${suffix}`;
 }
 
-function renderSection(
+async function renderSection(
 	result: PatchSectionResult,
 	diagnostics: FileDiagnosticsResult | undefined,
 	sourcePath: string,
-): RenderedSection {
+	patcher: Patcher,
+): Promise<RenderedSection> {
 	if (result.op === "delete") {
 		const toolResult: AgentToolResult<EditToolDetails, typeof hashlineEditParamsSchema.value> = {
 			content: [{ type: "text", text: `Deleted ${result.path}` }],
@@ -137,8 +138,9 @@ function renderSection(
 		};
 	}
 
-	const diff = generateDiffString(result.before, result.after, undefined, { path: result.path });
+	const diff = await generateDiffString(result.before, result.after, undefined, { path: result.path });
 	const preview = buildCompactDiffPreview(diff.diff);
+	patcher.recordPreviewLines(result, preview.preview);
 	const meta = outputMeta()
 		.diagnostics(diagnostics?.summary ?? "", diagnostics?.messages ?? [])
 		.get();
@@ -215,10 +217,12 @@ export async function executeHashlineSingle(
 			if (escalate) {
 				throw new ToolError(noChangeLoopDiagnostic(sectionResult.path, count));
 			}
-			return renderSection(sectionResult, undefined, prepared.section.path).toolResult;
+			return (await renderSection(sectionResult, undefined, prepared.section.path, patcher)).toolResult;
 		}
 		resetNoopEdit(options.session, sectionResult.canonicalPath);
-		return renderSection(sectionResult, fs.consumeDiagnostics(sectionResult.path), prepared.section.path).toolResult;
+		return (
+			await renderSection(sectionResult, fs.consumeDiagnostics(sectionResult.path), prepared.section.path, patcher)
+		).toolResult;
 	}
 
 	// Multi-section: prepare every section up front so we fail fast before
@@ -249,7 +253,14 @@ export async function executeHashlineSingle(
 				: new ToolError(noChangeDiagnostic(sectionResult.path));
 		}
 		resetNoopEdit(options.session, sectionResult.canonicalPath);
-		rendered.push(renderSection(sectionResult, fs.consumeDiagnostics(sectionResult.path), prepared[i].section.path));
+		rendered.push(
+			await renderSection(
+				sectionResult,
+				fs.consumeDiagnostics(sectionResult.path),
+				prepared[i].section.path,
+				patcher,
+			),
+		);
 	}
 
 	return {

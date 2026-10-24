@@ -203,9 +203,11 @@ describe("Wire contract invariants across all server endpoints", () => {
 		const createExpBody = (await createExpRes.json()) as CreateExperimentResponse;
 		expect(createExpBody).toEqual({ id: "wire_exp", goal: "verify wire contract" });
 
-		// Register the fixture run with coordinates
+		// Register the fixture run with coordinates. Its pid is above any kernel's pid_max: step 11
+		// cancels this row, and `cancel` sends SIGTERM to a recorded pid that is alive, which inside a
+		// container's pid namespace is a sibling test worker.
 		manager.store.registerLaunch({
-			pid: 1234,
+			pid: 999999999,
 			benchmark: "harbor",
 			jobName: "wire_exp-arm_a",
 			experiment: "wire_exp",

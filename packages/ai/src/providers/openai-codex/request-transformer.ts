@@ -7,6 +7,7 @@ import {
 import { requireSupportedEffort } from "@veyyon/catalog/model-thinking";
 import type { Model } from "../../types";
 import { mapOpenAIReasoningEffort, repairResponsesToolPairs } from "../openai-shared";
+import type { CodexAccessPrograms } from "./access-programs";
 
 /** Reasoning replay scope for the Codex Responses API (`reasoning.context`). */
 export type CodexReasoningContext = "auto" | "current_turn" | "all_turns";
@@ -47,6 +48,11 @@ export interface CodexRequestOptions {
 	 * `use_responses_lite`).
 	 */
 	responsesLite?: boolean;
+	/**
+	 * The `access_programs` field, resolved by `resolveCodexAccessPrograms` for the account that
+	 * signs the request. Omitted when undefined.
+	 */
+	accessPrograms?: CodexAccessPrograms;
 }
 
 export interface InputItem {
@@ -87,6 +93,7 @@ export interface RequestBody {
 	max_output_tokens?: number;
 	max_completion_tokens?: number;
 	service_tier?: "auto" | "default" | "flex" | "scale" | "priority" | null;
+	access_programs?: CodexAccessPrograms;
 	[key: string]: unknown;
 }
 
@@ -397,6 +404,12 @@ export async function transformRequestBody(
 	const include = Array.isArray(options.include) ? options.include.slice() : [];
 	include.push("reasoning.encrypted_content");
 	body.include = Array.from(new Set(include));
+
+	if (options.accessPrograms) {
+		body.access_programs = options.accessPrograms;
+	} else {
+		delete body.access_programs;
+	}
 
 	delete body.max_output_tokens;
 	delete body.max_completion_tokens;

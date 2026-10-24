@@ -241,7 +241,7 @@ export declare function __veyyonInstallTokioRuntime(): void
  * `natives/bridge/bindings/native/index.js` (which derives the name from
  * `package.json#version`).
  */
-export declare function __veyyonNativesV1_5_8(): void
+export declare function __veyyonNativesV1_5_9(): void
 
 /**
  * Apply ast-grep rewrite rules to matching files; honors `dryRun` and returns
@@ -267,7 +267,10 @@ export interface AstFindMatch {
   endLine: number
   /** 1-based end column. */
   endColumn: number
-  /** Meta-variable name to captured text, when `includeMeta` was enabled. */
+  /**
+   * Meta-variable name to captured text, when `includeMeta` was enabled. A
+   * `$$$NAME` capture is the source it spans, in brackets.
+   */
   metaVariables?: Record<string, string>
 }
 
@@ -602,8 +605,13 @@ export declare enum Ellipsis {
  * Returns `null` when the language is unrecognized or the source fails to
  * parse / carries a syntax error (caller should fall back to a lexical scan);
  * a sorted, unique list of 1-indexed boundary lines otherwise.
+ *
+ * The parse runs on the thread pool, so a large source never holds the event
+ * loop, and every lookup borrows one retained tree
+ * ([`veyyon_ast::with_shared_slot`]): a second window of the same file, or the
+ * file an edit would produce, reuses the tree whichever pool thread asks.
  */
-export declare function enclosingBlockBoundaries(options: EnclosingBoundaryOptions): Array<number> | null
+export declare function enclosingBlockBoundaries(options: EnclosingBoundaryOptions): Promise<Array<number> | undefined | null>
 
 export interface EnclosingBoundaryOptions {
   /** Source code to inspect. */
@@ -736,10 +744,12 @@ export declare function getWorkProfile(lastSeconds: number): WorkProfile
  * native layer applies final symlink-aware file-type filtering and callback
  * emission.
  *
+ * Reaching `timeoutMs` is not an error: the result holds the matches found by
+ * then and sets `timedOut`.
+ *
  * # Errors
  * Returns an error when the search path cannot be resolved, the path is not a
- * directory, the glob pattern is invalid, or cancellation/timeout is
- * triggered.
+ * directory, the glob pattern is invalid, or the abort signal fires.
  */
 export declare function glob(options: GlobOptions, onMatch?: ((error: Error | null, match: GlobMatch) => void) | undefined | null): Promise<GlobResult>
 
@@ -785,7 +795,10 @@ export interface GlobOptions {
   includeNodeModules?: boolean
   /** Abort signal for cancelling the operation. */
   signal?: unknown
-  /** Timeout in milliseconds for the operation. */
+  /**
+   * Stop walking after this many milliseconds and return the matches found
+   * by then, with `timedOut` set.
+   */
   timeoutMs?: number
 }
 
@@ -795,6 +808,11 @@ export interface GlobResult {
   matches: Array<GlobMatch>
   /** Number of returned matches (`matches.len()`), clamped to `u32::MAX`. */
   totalMatches: number
+  /**
+   * The walk stopped at `timeoutMs` before it read the whole tree, so
+   * `matches` holds only what it found by then.
+   */
+  timedOut: boolean
 }
 
 /**
@@ -806,6 +824,9 @@ export interface GlobResult {
  *
  * # Returns
  * Aggregated results across matching files.
+ *
+ * Reaching `timeoutMs` is not an error: the result holds the matches found by
+ * then and sets `timedOut`.
  */
 export declare function grep(options: GrepOptions, onMatch?: ((error: Error | null, match: GrepMatch) => void) | undefined | null): Promise<GrepResult>
 
@@ -867,7 +888,10 @@ export interface GrepOptions {
   maxCountPerFile?: number
   /** Abort signal for cancelling the operation. */
   signal?: unknown
-  /** Timeout in milliseconds for the operation. */
+  /**
+   * Stop searching after this many milliseconds and return the matches
+   * found by then, with `timedOut` set.
+   */
   timeoutMs?: number
 }
 
@@ -905,6 +929,12 @@ export interface GrepResult {
    * loses regex recall otherwise. `None` on a normal regex compile.
    */
   patternTreatedAsLiteral?: string
+  /**
+   * The search stopped at `timeoutMs` before it searched every file, so
+   * `matches` and the counts cover only the files searched by then. `None`
+   * on a search that finished.
+   */
+  timedOut?: boolean
 }
 
 /**
@@ -1462,11 +1492,14 @@ export declare function readImageFromClipboard(): Promise<ClipboardImage | undef
 export declare function releaseEmbeddedModulePages(): number
 
 /**
- * Returns the free pages of every C allocator arena to the kernel. Returns
- * true when any memory was released, and false when none was or the platform
- * allocator has no such call.
+ * Drops expired cached scans and returns free heap pages to the kernel.
+ *
+ * Runs on libuv's thread pool: drops the walker's expired cached scans, then
+ * returns the free pages of every C allocator arena. Resolves true when any
+ * memory was released, and false when none was or the platform allocator has
+ * no such call.
  */
-export declare function releaseFreeHeapPages(): boolean
+export declare function releaseFreeHeapPages(): Promise<boolean>
 
 /**
  * Search content for a pattern (one-shot, compiles pattern each time).
@@ -1522,6 +1555,50 @@ export interface SearchResult {
    * loses regex recall otherwise. `None` on a normal regex compile.
    */
   patternTreatedAsLiteral?: string
+}
+
+/**
+ * The skim of a session file: one JSON value per line, and where the lines it
+ * covers end.
+ */
+export interface SessionSkim {
+  /** One JSON value per line, each followed by a line feed. */
+  lines: Buffer
+  /** The offset just past the line feed of the last line reported. */
+  end: number
+}
+
+/**
+ * What moves out of a session entry, as the load that parses the skim decides
+ * it.
+ */
+export interface SessionSkimRules {
+  /**
+   * A line shorter than this many bytes that moves nothing is reported
+   * whole; a line that moves a value is projected whatever its length.
+   */
+  minLineBytes: number
+  /** A string of at least this many UTF-16 code units moves. */
+  minStringLength: number
+  /** An entry's members that never move. */
+  residentKeys: Array<string>
+  /** A message's members that never move. */
+  messageResidentKeys: Array<string>
+  /** A compaction's members that move; every other member of it stays. */
+  compactionMovedKeys: Array<string>
+  /** A string starting with one of these moves whatever its length. */
+  largeStringPrefixes: Array<string>
+  /** Entry types reported whole. */
+  wholeEntryTypes: Array<string>
+  /** Lines at the start of the read reported by length alone. */
+  rawLines: number
+  /** The longest line the caller reads; the skim stops before a longer one. */
+  maxLineBytes: number
+  /**
+   * The skim stops at the end of the first block whose lines bring its
+   * output to this many bytes; the caller skims again from `end`.
+   */
+  outputBytes: number
 }
 
 /**
@@ -1613,6 +1690,17 @@ export interface ShellRunResult {
   /** Shell working directory after command completion. */
   workingDir?: string
 }
+
+/**
+ * Skim the session file open at descriptor `fd` from byte `start`, reading it
+ * on the thread pool through a duplicate of `fd`, so the caller may close its
+ * own once the promise settles.
+ *
+ * Each line is reported as the record the load keeps for a cold entry: small
+ * values copied, each value `rules` moves replaced by an empty value of its
+ * kind (see `veyyon_session_skim`).
+ */
+export declare function skimSessionFile(fd: number, start: number, rules: SessionSkimRules): Promise<SessionSkim>
 
 /**
  * Visible slice of a line after ANSI-aware column selection

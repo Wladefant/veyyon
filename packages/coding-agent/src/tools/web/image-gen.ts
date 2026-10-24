@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult } from "@veyyon/agent-core";
@@ -5,6 +6,10 @@ import type { ApiKey, FetchImpl, Model } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import { getEnvApiKey } from "@veyyon/ai/env-api-key";
 import { ProviderHttpError } from "@veyyon/ai/error";
+import {
+	type CodexAccessPrograms,
+	resolveCodexAccessPrograms,
+} from "@veyyon/ai/providers/openai-codex/access-programs";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import {
 	ANTIGRAVITY_ENDPOINTS,
@@ -15,6 +20,7 @@ import {
 } from "@veyyon/catalog/provider-endpoints";
 import {
 	CODEX_BASE_URL,
+	codexRoutingHint,
 	getCodexAccountId,
 	OPENAI_HEADER_VALUES,
 	OPENAI_HEADERS,
@@ -226,6 +232,7 @@ interface OpenAIHostedImageRequest {
 	tool_choice: { type: "image_generation" };
 	store: false;
 	stream?: boolean;
+	access_programs?: CodexAccessPrograms;
 }
 
 interface OpenAIImageGenerationCall {
@@ -643,7 +650,7 @@ async function findImageApiKey(
 async function loadImageFromPath(imagePath: string, cwd: string): Promise<InlineImageData> {
 	const resolved = resolveReadPath(imagePath, cwd);
 	try {
-		const buffer = await Bun.file(resolved).bytes();
+		const buffer = await fs.readFile(resolved);
 		if (buffer.length > MAX_IMAGE_SIZE) {
 			throw new Error(`Image file too large: ${imagePath}`);
 		}
@@ -908,7 +915,12 @@ function getOpenAIResponsesUrl(model: Model): string {
 		.replace(URL_PATHS.RESPONSES, URL_PATHS.CODEX_RESPONSES);
 }
 
-function buildOpenAIImageHeaders(model: Model, apiKey: string, sessionId: string | undefined): Headers {
+function buildOpenAIImageHeaders(
+	model: Model,
+	apiKey: string,
+	sessionId: string | undefined,
+	requestBody: OpenAIHostedImageRequest,
+): Headers {
 	const headers = new Headers(model.headers ?? {});
 	headers.set("Content-Type", "application/json");
 	headers.set("Authorization", `Bearer ${apiKey}`);
@@ -926,6 +938,10 @@ function buildOpenAIImageHeaders(model: Model, apiKey: string, sessionId: string
 			headers.set(OPENAI_HEADERS.CONVERSATION_ID, sessionId);
 			headers.set(OPENAI_HEADERS.SESSION_ID, sessionId);
 		}
+		// The hint states the model of the body sent, as a Codex turn's does.
+		const routingHint = codexRoutingHint(requestBody);
+		if (routingHint) headers.set(OPENAI_HEADERS.ROUTING_HINT, routingHint);
+		else headers.delete(OPENAI_HEADERS.ROUTING_HINT);
 	}
 
 	return headers;
@@ -975,9 +991,14 @@ async function generateOpenAIHostedImage(
 ): Promise<OpenAIHostedImageResult> {
 	const stream = model.api === "openai-codex-responses" || model.provider === "openai-codex";
 	const requestBody = buildOpenAIHostedImageRequest(model, promptText, params, inputImages, stream);
+	if (stream) {
+		// A Codex image request is a Codex turn and is judged under the account's program like one.
+		const accessPrograms = await resolveCodexAccessPrograms(model, apiKey, { fetch: fetchImpl, signal });
+		if (accessPrograms) requestBody.access_programs = accessPrograms;
+	}
 	const response = await fetchImpl(getOpenAIResponsesUrl(model), {
 		method: "POST",
-		headers: buildOpenAIImageHeaders(model, apiKey, sessionId),
+		headers: buildOpenAIImageHeaders(model, apiKey, sessionId, requestBody),
 		body: JSON.stringify(requestBody),
 		signal,
 	});

@@ -79,8 +79,28 @@ export interface SessionSwitchHost {
 	): Promise<void>;
 	setModelWithProviderSessionReset(model: Model): void;
 	resetMemoryContextForNewTranscript(): void;
-	rescopeAgentRegistry(): Promise<void>;
+	/** Releases what the conversation being left holds: spawned agents, registry scope, eval kernels. */
+	endConversation(): Promise<void>;
 	resetAllAdvisorRuntimes(): void;
+}
+
+/** A transcript model reference, `provider/id` split at its first slash. */
+interface TranscriptModelTarget {
+	readonly provider: string;
+	readonly id: string;
+}
+
+/** The first of `targets` that `available` lists, with its index; index -1 when none is. */
+function firstListed(
+	available: readonly Model[],
+	targets: readonly TranscriptModelTarget[],
+): { index: number; model: Model | undefined } {
+	for (let index = 0; index < targets.length; index++) {
+		const target = targets[index]!;
+		const model = available.find(m => m.provider === target.provider && m.id === target.id);
+		if (model) return { index, model };
+	}
+	return { index: -1, model: undefined };
 }
 
 /**
@@ -328,19 +348,19 @@ export class SessionSwitch {
 			host.providerSessions.closeAll("session reload");
 		}
 
-		this.#restoreTranscriptModel(sessionContext, switchingToDifferentSession);
+		await this.#restoreTranscriptModel(sessionContext, switchingToDifferentSession);
 		const closedTurnContext = this.#closeInterruptedTranscriptTurn();
 		this.#restoreTranscriptThinkingAndTier(closedTurnContext ?? sessionContext);
 
 		if (switchingToDifferentSession) {
 			host.resetMemoryContextForNewTranscript();
-			await host.rescopeAgentRegistry();
+			await host.endConversation();
 		}
 	}
 
 	/** Selects the newest model the transcript recorded that is still available, if any. */
-	#restoreTranscriptModel(sessionContext: SessionContext, switchingToDifferentSession: boolean): void {
-		const match = this.#findRestorableTranscriptModel(sessionContext);
+	async #restoreTranscriptModel(sessionContext: SessionContext, switchingToDifferentSession: boolean): Promise<void> {
+		const match = await this.#findRestorableTranscriptModel(sessionContext);
 		if (!match) return;
 		const currentModel = this.#session.model;
 		const shouldResetProviderState =
@@ -356,22 +376,28 @@ export class SessionSwitch {
 		}
 	}
 
-	#findRestorableTranscriptModel(sessionContext: SessionContext): Model | undefined {
-		const targetModelStrings = getRestorableSessionModels(
+	/**
+	 * The first transcript model the registry lists. The providers of preferred models it does not
+	 * list are discovered first: a model only a provider's listing has is absent until the
+	 * background refresh started at launch completes, and a switch inside that window would keep
+	 * the current model.
+	 */
+	async #findRestorableTranscriptModel(sessionContext: SessionContext): Promise<Model | undefined> {
+		const targets = getRestorableSessionModels(
 			sessionContext.models,
 			this.#session.sessionManager.getLastModelChangeRole(),
-		);
-		if (targetModelStrings.length === 0) return undefined;
-		const availableModels = this.#host.modelRegistry().getAvailable();
-		for (const targetModelStr of targetModelStrings) {
-			const slashIdx = targetModelStr.indexOf("/");
-			if (slashIdx <= 0) continue;
-			const provider = targetModelStr.slice(0, slashIdx);
-			const modelId = targetModelStr.slice(slashIdx + 1);
-			const match = availableModels.find(m => m.provider === provider && m.id === modelId);
-			if (match) return match;
-		}
-		return undefined;
+		).flatMap(value => {
+			const slashIdx = value.indexOf("/");
+			return slashIdx > 0 ? [{ provider: value.slice(0, slashIdx), id: value.slice(slashIdx + 1) }] : [];
+		});
+		if (targets.length === 0) return undefined;
+		const registry = this.#host.modelRegistry();
+		const listed = firstListed(registry.getAvailable(), targets);
+		const preferred = targets.slice(0, listed.index < 0 ? targets.length : listed.index);
+		if (preferred.length === 0) return listed.model;
+		const providers = new Set(preferred.map(target => target.provider));
+		await Promise.all(Array.from(providers, provider => registry.refreshProvider(provider, "online-if-uncached")));
+		return firstListed(registry.getAvailable(), targets).model;
 	}
 
 	/**

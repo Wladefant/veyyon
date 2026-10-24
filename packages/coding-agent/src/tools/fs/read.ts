@@ -59,7 +59,7 @@ import {
 	type ResolvedReadPath,
 	resolveArchiveReadPath,
 	resolveSqliteReadPath,
-	type SuffixMatchCache,
+	SuffixSearch,
 	statCandidateWithSuffix,
 } from "./read-paths";
 import { readPdfImageMember, splitPdfImageMemberReadPath } from "./read-pdf-images";
@@ -154,6 +154,7 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 
 	async #tryReadDelimitedPaths(
 		readPath: string,
+		suffixSearch: SuffixSearch,
 		signal?: AbortSignal,
 		options: DelimitedPathSplitOptions = {},
 		directory: { depth?: number; limit?: number } = {},
@@ -187,6 +188,7 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 					{ path: part, depth: directory.depth, limit: directory.limit },
 					signal,
 					false,
+					suffixSearch,
 				);
 				displayReadTargets.push(result.details?.suffixResolution?.to ?? part);
 				for (const block of result.content) {
@@ -231,6 +233,7 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 		rawPath: string,
 		urlPath: string,
 		parsedSel: ParsedSelector,
+		suffixSearch: SuffixSearch,
 		signal?: AbortSignal,
 		directory: { depth?: number; limit?: number } = {},
 	): Promise<AgentToolResult<ReadToolDetails>> {
@@ -240,6 +243,7 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 			if (error instanceof ToolAbortError || signal?.aborted) throw error;
 			const delimited = await this.#tryReadDelimitedPaths(
 				rawPath,
+				suffixSearch,
 				signal,
 				{
 					internalUrls: "split-on-semicolon",
@@ -259,7 +263,12 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 	 * separate so a sibling literal file cannot shadow the URL's selector semantics during
 	 * filesystem routing. Every other scheme is served here.
 	 */
-	async #routeInternalUrl(readPath: string, params: ReadParams, signal?: AbortSignal): Promise<InternalUrlRouting> {
+	async #routeInternalUrl(
+		readPath: string,
+		params: ReadParams,
+		suffixSearch: SuffixSearch,
+		signal?: AbortSignal,
+	): Promise<InternalUrlRouting> {
 		if (!InternalUrlRouter.instance().canHandle(readPath)) return { kind: "not-internal" };
 		// The internal-URL-aware splitter peels a malformed selector off the URL so parseSel reports
 		// it, rather than the handler receiving a path it cannot make sense of.
@@ -273,7 +282,7 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 		const urlMeta = parseInternalUrl(internalTarget.path);
 		const serve = async (): Promise<InternalUrlRouting> => ({
 			kind: "handled",
-			result: await this.#readInternalUrlOrList(readPath, internalTarget.path, parsed, signal, {
+			result: await this.#readInternalUrlOrList(readPath, internalTarget.path, parsed, suffixSearch, signal, {
 				depth: params.depth,
 				limit: params.limit,
 			}),
@@ -334,7 +343,8 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 		_onUpdate?: AgentToolUpdateCallback<ReadToolDetails>,
 		_toolContext?: AgentToolContext,
 	): Promise<AgentToolResult<ReadToolDetails>> {
-		return this.#read(params, signal, true);
+		// One suffix search per call: every path a delimited list names shares its memo and its limit.
+		return this.#read(params, signal, true, new SuffixSearch());
 	}
 
 	/** `refuseInContext` is false only for a part of a delimited list; see `#tryReadDelimitedPaths`. */
@@ -342,6 +352,7 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 		params: ReadParams,
 		signal: AbortSignal | undefined,
 		refuseInContext: boolean,
+		suffixSearch: SuffixSearch,
 	): Promise<AgentToolResult<ReadToolDetails>> {
 		const readPath = params.path.startsWith("file://") ? expandPath(params.path) : params.path;
 		const conflictUri = parseConflictUri(readPath);
@@ -359,12 +370,19 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 			return this.#readUrlTarget(parsedUrlTarget, signal);
 		}
 
-		const routed = await this.#routeInternalUrl(readPath, params, signal);
+		const routed = await this.#routeInternalUrl(readPath, params, suffixSearch, signal);
 		if (routed.kind === "handled") return routed.result;
 		if (routed.kind === "promoted") {
-			return this.#readFilesystemPath(routed.readPath, routed.selector, params, signal, refuseInContext);
+			return this.#readFilesystemPath(
+				routed.readPath,
+				routed.selector,
+				params,
+				signal,
+				refuseInContext,
+				suffixSearch,
+			);
 		}
-		return this.#readFilesystemPath(readPath, undefined, params, signal, refuseInContext);
+		return this.#readFilesystemPath(readPath, undefined, params, signal, refuseInContext, suffixSearch);
 	}
 
 	/**
@@ -379,11 +397,8 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 		params: ReadParams,
 		signal: AbortSignal | undefined,
 		refuseInContext: boolean,
+		suffixSearch: SuffixSearch,
 	): Promise<AgentToolResult<ReadToolDetails>> {
-		// One suffix-glob memo per read call — archive, sqlite, and plain-path
-		// resolution share misses instead of re-globbing the workspace.
-		const suffixCache: SuffixMatchCache = new Map();
-
 		// Prefer a literal filesystem match over selector interpretation so real
 		// POSIX filenames containing selector-looking suffixes win over structured
 		// archive / sqlite / pdf-image dispatch.
@@ -396,27 +411,31 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 				? readPath.includes(":") && (await probeLiteralPathExists(readPath, this.session.cwd)) !== "missing"
 				: target.sel === undefined && splitPathAndSel(readPath).sel !== undefined;
 		if (!rawPathIsLiteral) {
-			const member = await this.#readContainerMember(readPath, promotedSelector, suffixCache, signal);
+			const member = await this.#readContainerMember(readPath, promotedSelector, suffixSearch, signal);
 			if (member) return member;
 		}
 
 		const parsed = parseSel(target.sel);
-		const resolved = await statCandidateWithSuffix(this.session.cwd, target.path, suffixCache, signal, {
+		// A delimited list is split before the suffix match below runs: a list
+		// names several targets, so no file is named by the joint string, and
+		// matching it walked the whole working directory to the glob deadline on
+		// every multi-path read. A literal path holding a delimiter still wins,
+		// since the split refuses a path that exists.
+		const delimitedResult = await this.#tryReadDelimitedPaths(
+			readPath,
+			suffixSearch,
+			signal,
+			{},
+			{
+				depth: params.depth,
+				limit: params.limit,
+			},
+		);
+		if (delimitedResult) return delimitedResult;
+		const resolved = await statCandidateWithSuffix(this.session.cwd, target.path, suffixSearch, signal, {
 			throwNonMissing: true,
 		});
-		if (!resolved) {
-			const delimitedResult = await this.#tryReadDelimitedPaths(
-				readPath,
-				signal,
-				{},
-				{
-					depth: params.depth,
-					limit: params.limit,
-				},
-			);
-			if (delimitedResult) return delimitedResult;
-			throw new ToolError(`Path '${target.path}' not found`);
-		}
+		if (!resolved) throw new ToolError(`Path '${target.path}' not found`);
 		if (resolved.stat.isDirectory()) {
 			return this.#readResolvedDirectory(resolved, parsed, params);
 		}
@@ -434,10 +453,10 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 	async #readContainerMember(
 		readPath: string,
 		promotedSelector: string | undefined,
-		suffixCache: SuffixMatchCache,
+		suffixSearch: SuffixSearch,
 		signal: AbortSignal | undefined,
 	): Promise<AgentToolResult<ReadToolDetails> | undefined> {
-		const archivePath = await resolveArchiveReadPath(this.session.cwd, readPath, suffixCache, signal);
+		const archivePath = await resolveArchiveReadPath(this.session.cwd, readPath, suffixSearch, signal);
 		if (archivePath) {
 			const archiveSubPath =
 				promotedSelector === undefined
@@ -453,7 +472,7 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 			);
 		}
 
-		const sqlitePath = await resolveSqliteReadPath(this.session.cwd, readPath, suffixCache, signal);
+		const sqlitePath = await resolveSqliteReadPath(this.session.cwd, readPath, suffixSearch, signal);
 		if (sqlitePath) {
 			return readSqlite(this.session, sqlitePath, signal);
 		}
@@ -463,7 +482,7 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 		const resolved = await statCandidateWithSuffix(
 			this.session.cwd,
 			pdfImageMemberPath.pdfPath,
-			suffixCache,
+			suffixSearch,
 			signal,
 			{
 				throwNonMissing: true,

@@ -17,8 +17,10 @@
 use std::{
 	cell::{Cell, RefCell},
 	collections::HashMap,
+	ffi::OsStr,
 	io::{self, Read, Write},
 	path::{Path, PathBuf},
+	process::{Command, ExitStatus, Stdio},
 	sync::{
 		Arc,
 		atomic::{AtomicBool, Ordering},
@@ -27,11 +29,10 @@ use std::{
 
 struct Ctx {
 	stdin:                 Box<dyn Read + Send>,
-	/// Raw fd backing `stdin` when it is a real OS file/pipe, used for
-	/// cancellable readiness polling on unix. `None` for non-fd readers, and
-	/// absent entirely off unix, where no reader consumes it.
+	/// The command's descriptor table, as [`ScopeIo::fds`] describes it.
+	/// Absent off unix, where no reader consumes it.
 	#[cfg(unix)]
-	stdin_fd:              Option<i32>,
+	fds:                   Vec<(i32, i32)>,
 	/// Whether stdin is a shell pipe/stream that should be searched implicitly.
 	stdin_is_search_input: bool,
 	stdout:                Box<dyn Write + Send>,
@@ -63,9 +64,18 @@ static RAYON_GLOBAL_POOL_AVAILABLE: AtomicBool = AtomicBool::new(!cfg!(target_os
 pub struct ScopeIo {
 	/// Standard input reader.
 	pub stdin:                 Box<dyn Read + Send>,
-	/// Raw fd backing `stdin` when it is a real OS file/pipe (unix), used for
-	/// cancellable readiness polling; `None` for non-fd readers.
-	pub stdin_fd:              Option<i32>,
+	/// The command's descriptor table: each descriptor the command holds open,
+	/// paired with the OS descriptor that backs it in this process, as
+	/// `(descriptor in the command, OS descriptor)`.
+	///
+	/// A path that names a descriptor (`/dev/stdin`, or the `/dev/fd/63` a
+	/// process substitution expands to) resolves through this table in
+	/// [`resolve`], and entry 0 backs cancellable polling of `stdin` on unix.
+	/// Neither falls back to the host process's own descriptors, which are its
+	/// terminal, session and log files. Empty for streams with no descriptor
+	/// behind them, such as a test's `Cursor`. The host keeps every listed
+	/// descriptor open until the scope ends.
+	pub fds:                   Vec<(i32, i32)>,
 	/// Whether stdin should be used as `rg PATTERN`'s implicit input.
 	pub stdin_is_search_input: bool,
 	/// Standard output writer.
@@ -118,7 +128,7 @@ pub fn scope<R>(io: ScopeIo, f: impl FnOnce() -> R) -> R {
 		c.borrow_mut().replace(Ctx {
 			stdin:                 io.stdin,
 			#[cfg(unix)]
-			stdin_fd:              io.stdin_fd,
+			fds:                   io.fds,
 			stdin_is_search_input: io.stdin_is_search_input,
 			stdout:                io.stdout,
 			stdout_is_terminal:    io.stdout_is_terminal,
@@ -190,14 +200,80 @@ pub fn cwd() -> PathBuf {
 /// Resolves `p` against the scope's working directory when relative; absolute
 /// paths are returned unchanged. uutils utilities are patched to resolve every
 /// path argument through this before touching the filesystem.
+///
+/// A path naming a descriptor ([`descriptor_named_by`]) is the exception on
+/// unix: inside a scope it resolves to the descriptor the COMMAND holds under
+/// that number, read through the scope's descriptor table, because this
+/// process's `/dev/fd` lists the host's descriptors rather than the
+/// command's. A number the command does not hold resolves to a path that does
+/// not exist, so opening it fails the way a closed descriptor does.
 pub fn resolve(p: impl AsRef<Path>) -> PathBuf {
 	let p = p.as_ref();
+	#[cfg(unix)]
+	if let Some(fd) = descriptor_named_by(p)
+		&& let Some(path) = CTX.with(|c| c.borrow().as_ref().map(|ctx| descriptor_path(ctx, fd)))
+	{
+		return path;
+	}
 	if p.is_absolute() {
 		p.to_path_buf()
 	} else {
 		cwd().join(p)
 	}
 }
+
+/// The descriptor a path names, when it is one of the spellings a shell reads
+/// as a descriptor of the command rather than as a file: `/dev/stdin`,
+/// `/dev/stdout`, `/dev/stderr`, `/dev/fd/N` and `/proc/self/fd/N`, with `N`
+/// in decimal digits.
+///
+/// The shell's redirections and the builtins' path arguments both resolve
+/// these through the command's descriptor table, and this function is the
+/// single definition of which paths qualify.
+#[must_use]
+pub fn descriptor_named_by(path: &Path) -> Option<i32> {
+	let path = path.to_str()?;
+	match path {
+		"/dev/stdin" => Some(0),
+		"/dev/stdout" => Some(1),
+		"/dev/stderr" => Some(2),
+		_ => {
+			let number = path
+				.strip_prefix("/dev/fd/")
+				.or_else(|| path.strip_prefix("/proc/self/fd/"))?;
+			if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+				return None;
+			}
+			number.parse().ok()
+		},
+	}
+}
+
+/// The OS descriptor behind descriptor `fd` of the scope's command.
+#[cfg(unix)]
+fn command_fd(ctx: &Ctx, fd: i32) -> Option<i32> {
+	ctx.fds
+		.iter()
+		.find(|(number, _)| *number == fd)
+		.map(|(_, raw)| *raw)
+}
+
+/// The path that opens descriptor `fd` of the scope's command: the OS
+/// descriptor behind it, through this process's `/dev/fd`, or
+/// [`CLOSED_DESCRIPTOR`] when the command does not hold `fd` open.
+#[cfg(unix)]
+fn descriptor_path(ctx: &Ctx, fd: i32) -> PathBuf {
+	command_fd(ctx, fd).map_or_else(
+		|| PathBuf::from(CLOSED_DESCRIPTOR),
+		|raw| PathBuf::from(format!("/dev/fd/{raw}")),
+	)
+}
+
+/// A descriptor path no system can open, since descriptor numbers are never
+/// negative: opening it fails with "No such file or directory", which is what
+/// opening a closed descriptor's `/dev/fd` entry reports.
+#[cfg(unix)]
+const CLOSED_DESCRIPTOR: &str = "/dev/fd/-1";
 
 /// Looks up an environment variable from the scope's environment map (the
 /// shell's exported variables). uutils utilities are patched to read the
@@ -232,7 +308,8 @@ pub fn env_snapshot() -> Vec<(String, String)> {
 /// A name holding a path separator names a file directly and is resolved
 /// against the scope's working directory. A bare name is looked up in the
 /// scope's `PATH`, entry by entry and in order; an empty entry means the
-/// working directory, which is what POSIX says it means. `None` means no
+/// working directory, which is what POSIX says it means, and an unset `PATH`
+/// searches [`DEFAULT_PATH`], as `execvp` does. `None` means no
 /// executable of that name is reachable, and the caller reports it rather than
 /// guessing.
 ///
@@ -245,15 +322,18 @@ pub fn env_snapshot() -> Vec<(String, String)> {
 #[must_use]
 pub fn resolve_program(program: impl AsRef<Path>) -> Option<PathBuf> {
 	let program = program.as_ref();
-	let named_directly = program
-		.as_os_str()
-		.to_string_lossy()
-		.contains(std::path::is_separator);
-	if named_directly {
+	if names_a_path(program) {
 		let candidate = resolve(program);
 		return executable(&candidate).then_some(candidate);
 	}
-	let path = var("PATH").unwrap_or_default();
+	let path = CTX.with(|c| {
+		c.borrow().as_ref().map(|ctx| {
+			ctx.env
+				.get("PATH")
+				.map_or(DEFAULT_PATH, String::as_str)
+				.to_owned()
+		})
+	})?;
 	for dir in path.split(PATH_SEPARATOR) {
 		// An empty entry is the working directory. Joining an empty path would produce
 		// the bare program name, which resolves against the HOST process directory.
@@ -270,8 +350,58 @@ pub fn resolve_program(program: impl AsRef<Path>) -> Option<PathBuf> {
 	None
 }
 
+/// Whether `program` holds a path separator, which makes it name a file
+/// rather than a program to look up on `PATH`.
+fn names_a_path(program: &Path) -> bool {
+	program
+		.as_os_str()
+		.to_string_lossy()
+		.contains(std::path::is_separator)
+}
+
+/// A command that runs `program` the way the shell runs it from directory
+/// `dir`: looked up on the scope's `PATH` ([`resolve_program`]), or, when
+/// `program` names a relative path, found under `dir`; started in `dir`
+/// (relative to the scope's working directory), with the scope's exported
+/// environment and no other.
+///
+/// Every builtin that starts a process builds it here, because the host
+/// process's `PATH`, environment and working directory belong to the host,
+/// not to the shell. Building one also marks the host's descriptors
+/// close-on-exec ([`mark_host_descriptors_cloexec`]), so spawn the command
+/// right after building it.
+pub fn child_command(program: impl AsRef<OsStr>, dir: impl AsRef<Path>) -> io::Result<Command> {
+	let program = Path::new(program.as_ref());
+	let dir = resolve(dir);
+	let found = if program.is_relative() && names_a_path(program) {
+		let candidate = dir.join(program);
+		executable(&candidate).then_some(candidate)
+	} else {
+		resolve_program(program)
+	};
+	let found = found.ok_or_else(|| {
+		io::Error::new(
+			io::ErrorKind::NotFound,
+			format!("{}: no such program on the shell's PATH", program.display()),
+		)
+	})?;
+	let mut command = Command::new(found);
+	command.current_dir(dir).env_clear();
+	CTX.with(|c| {
+		if let Some(ctx) = c.borrow().as_ref() {
+			command.envs(&ctx.env);
+		}
+	});
+	mark_host_descriptors_cloexec();
+	Ok(command)
+}
+
 /// The character that separates `PATH` entries: `:` everywhere but Windows.
 const PATH_SEPARATOR: char = if cfg!(windows) { ';' } else { ':' };
+
+/// The directories searched for a program when the scope has no `PATH`: the
+/// default `execvp` uses on glibc and macOS.
+const DEFAULT_PATH: &str = if cfg!(windows) { "" } else { "/usr/bin:/bin" };
 
 /// Whether this path names a file the current user may execute.
 ///
@@ -428,7 +558,7 @@ impl Read for CtxStdin {
 			// utility then sees EOF and unwinds cleanly (no detached thread, no
 			// writes after the host has moved on).
 			#[cfg(unix)]
-			if let Some(fd) = ctx.stdin_fd {
+			if let Some(fd) = command_fd(ctx, 0) {
 				loop {
 					if ctx.cancel.load(Ordering::Relaxed) {
 						return Ok(0);
@@ -492,7 +622,7 @@ pub fn stdin() -> CtxStdin {
 pub fn stdin_size() -> Option<u64> {
 	#[cfg(unix)]
 	{
-		let fd = CTX.with(|c| c.borrow().as_ref().and_then(|ctx| ctx.stdin_fd))?;
+		let fd = CTX.with(|c| c.borrow().as_ref().and_then(|ctx| command_fd(ctx, 0)))?;
 		// SAFETY: `fstat` writes the whole struct and the result is read only when
 		// the call reported success. `fd` is owned by the `OpenFile` the live
 		// context holds, so it is open for the duration of this call.
@@ -512,6 +642,198 @@ pub fn stdin_size() -> Option<u64> {
 	{
 		None
 	}
+}
+
+/// Marks every descriptor of this process above standard error close-on-exec,
+/// so a child started after this call inherits none of them.
+///
+/// The host opens descriptors no command may see (its session file, its log,
+/// its terminal), and not every runtime it embeds opens them close-on-exec.
+/// The flag changes nothing in this process, and a descriptor handed to a
+/// child on purpose still arrives: `Command::stdin`, `stdout` and `stderr` and
+/// the shell's descriptor mappings duplicate it into the child's slot, and
+/// duplicating clears the flag on the copy. Call it immediately before each
+/// spawn: a descriptor another thread opens between the call and the spawn
+/// still reaches that child.
+///
+/// Marking in the parent, rather than in a `pre_exec` hook in the child,
+/// keeps the spawn eligible for `posix_spawn`: a `pre_exec` hook forces
+/// `fork`, whose cost grows with the host's resident memory.
+pub fn mark_host_descriptors_cloexec() {
+	#[cfg(unix)]
+	{
+		#[cfg(target_os = "linux")]
+		{
+			// SAFETY: `close_range` takes no pointers. A kernel older than 5.11
+			// rejects the call or the flag, and the listing below takes over.
+			let marked = unsafe {
+				libc::syscall(libc::SYS_close_range, 3_u32, u32::MAX, libc::CLOSE_RANGE_CLOEXEC)
+			};
+			if marked == 0 {
+				return;
+			}
+		}
+		if !mark_listed_descriptors_cloexec() {
+			// SAFETY: no arguments.
+			let table = unsafe { libc::getdtablesize() };
+			for fd in 3..table {
+				set_cloexec(fd);
+			}
+		}
+	}
+}
+
+/// Marks every descriptor `/proc/self/fd` lists above standard error
+/// close-on-exec. False when the listing could not be read in full.
+#[cfg(target_os = "linux")]
+fn mark_listed_descriptors_cloexec() -> bool {
+	// SAFETY: a NUL-terminated path literal.
+	let dir = unsafe {
+		libc::open(c"/proc/self/fd".as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC)
+	};
+	if dir < 0 {
+		return false;
+	}
+	let mut buffer = [0_u8; 4096];
+	let complete = loop {
+		// SAFETY: the buffer is writable for its whole length.
+		let filled =
+			unsafe { libc::syscall(libc::SYS_getdents64, dir, buffer.as_mut_ptr(), buffer.len()) };
+		let Ok(filled) = usize::try_from(filled) else {
+			break false;
+		};
+		if filled == 0 {
+			break true;
+		}
+		let mut offset = 0;
+		// Each `linux_dirent64` record is `d_ino` (8 bytes), `d_off` (8),
+		// `d_reclen` (2), `d_type` (1), then the NUL-terminated name.
+		while offset + 19 <= filled {
+			let record = usize::from(u16::from_ne_bytes([buffer[offset + 16], buffer[offset + 17]]));
+			if record == 0 {
+				break;
+			}
+			let name = &buffer[offset + 19..(offset + record).min(filled)];
+			if let Some(fd) = descriptor_number(name)
+				&& fd > 2
+				&& fd != dir
+			{
+				set_cloexec(fd);
+			}
+			offset += record;
+		}
+	};
+	// SAFETY: `dir` was opened above and is closed once.
+	unsafe { libc::close(dir) };
+	complete
+}
+
+/// Marks every descriptor the kernel lists for this process above standard
+/// error close-on-exec. False when the list could not be read in full.
+#[cfg(target_os = "macos")]
+fn mark_listed_descriptors_cloexec() -> bool {
+	const CAPACITY: usize = 1024;
+	let mut listed = [libc::proc_fdinfo { proc_fd: 0, proc_fdtype: 0 }; CAPACITY];
+	let bytes = CAPACITY * std::mem::size_of::<libc::proc_fdinfo>();
+	let Ok(capacity) = libc::c_int::try_from(bytes) else {
+		return false;
+	};
+	// SAFETY: `getpid` has no preconditions.
+	let pid = unsafe { libc::getpid() };
+	// SAFETY: the buffer is writable for `capacity` bytes.
+	let written = unsafe {
+		libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, listed.as_mut_ptr().cast(), capacity)
+	};
+	// A full buffer may have left descriptors out.
+	let Ok(written) = usize::try_from(written) else {
+		return false;
+	};
+	if written == 0 || written >= bytes {
+		return false;
+	}
+	for info in &listed[..written / std::mem::size_of::<libc::proc_fdinfo>()] {
+		if info.proc_fd > 2 {
+			set_cloexec(info.proc_fd);
+		}
+	}
+	true
+}
+
+/// No listing of a process's descriptors on this system: every slot is marked.
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn mark_listed_descriptors_cloexec() -> bool {
+	false
+}
+
+/// The descriptor number a `/proc/self/fd` entry name spells, up to its NUL.
+#[cfg(target_os = "linux")]
+fn descriptor_number(name: &[u8]) -> Option<i32> {
+	let mut number: i32 = 0;
+	let mut digits = 0;
+	for &byte in name {
+		if byte == 0 {
+			break;
+		}
+		if !byte.is_ascii_digit() {
+			return None;
+		}
+		number = number
+			.checked_mul(10)?
+			.checked_add(i32::from(byte - b'0'))?;
+		digits += 1;
+	}
+	(digits > 0).then_some(number)
+}
+
+/// Sets `FD_CLOEXEC` on `fd` when it is open and not already marked.
+#[cfg(unix)]
+fn set_cloexec(fd: libc::c_int) {
+	// SAFETY: `fcntl` on a descriptor number; one that is not open fails with
+	// `EBADF` and is left alone.
+	let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+	if flags >= 0 && flags & libc::FD_CLOEXEC == 0 {
+		// SAFETY: as above.
+		unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) };
+	}
+}
+
+/// Runs `command` as a child of the scope's command and waits for it,
+/// returning its exit status.
+///
+/// The child reads the null device, and its standard output and error are
+/// relayed into the scope's streams: those are in-process `Write` handles
+/// (pipes or in-memory buffers), not descriptors a child can inherit, and the
+/// host process's own descriptors 0, 1 and 2 belong to its terminal. Child
+/// stdout streams into the scope's stdout on the calling thread while a helper
+/// thread drains stderr into a buffer, since the scope's streams are
+/// thread-local to the scope thread; the buffered stderr is forwarded once the
+/// child exits.
+///
+/// Build `command` with [`child_command`].
+pub fn run_child(command: &mut Command) -> io::Result<ExitStatus> {
+	command
+		.stdin(Stdio::null())
+		.stdout(Stdio::piped())
+		.stderr(Stdio::piped());
+	let mut child = command.spawn()?;
+
+	let mut child_err = child.stderr.take();
+	let stderr_thread = std::thread::spawn(move || {
+		let mut buf = Vec::new();
+		if let Some(err) = child_err.as_mut() {
+			let _ = err.read_to_end(&mut buf);
+		}
+		buf
+	});
+
+	if let Some(mut out) = child.stdout.take() {
+		let _ = io::copy(&mut out, &mut stdout());
+	}
+	let status = child.wait();
+	if let Ok(buf) = stderr_thread.join() {
+		let _ = stderr().write_all(&buf);
+	}
+	status
 }
 
 /// Generate the usage string for clap without evaluating argv-dependent
@@ -553,7 +875,7 @@ mod tests {
 	fn empty_io() -> ScopeIo {
 		ScopeIo {
 			stdin:                 Box::new(io::empty()),
-			stdin_fd:              None,
+			fds:                   Vec::new(),
 			stdin_is_search_input: false,
 			stdout:                Box::new(io::sink()),
 			stdout_is_terminal:    false,
@@ -656,13 +978,16 @@ mod tests {
 			root
 		}
 
-		/// A scope with `cwd` and `PATH` set to what the caller asks for.
-		fn scoped<R>(cwd: &Path, path_var: &str, f: impl FnOnce() -> R) -> R {
+		/// A scope with `cwd` and `PATH` set to what the caller asks for, or no
+		/// `PATH` at all for `None`.
+		fn scoped_path<R>(cwd: &Path, path_var: Option<&str>, f: impl FnOnce() -> R) -> R {
 			let mut env = HashMap::new();
-			env.insert("PATH".to_string(), path_var.to_string());
+			if let Some(path_var) = path_var {
+				env.insert("PATH".to_string(), path_var.to_string());
+			}
 			let io = ScopeIo {
 				stdin: Box::new(io::empty()),
-				stdin_fd: None,
+				fds: Vec::new(),
 				stdin_is_search_input: false,
 				stdout: Box::new(io::sink()),
 				stdout_is_terminal: false,
@@ -672,6 +997,10 @@ mod tests {
 				cancel: Arc::new(AtomicBool::new(false)),
 			};
 			scope(io, f)
+		}
+
+		fn scoped<R>(cwd: &Path, path_var: &str, f: impl FnOnce() -> R) -> R {
+			scoped_path(cwd, Some(path_var), f)
 		}
 
 		/// The headline: a bare name is found in a `PATH` entry the SCOPE names,
@@ -807,6 +1136,25 @@ mod tests {
 		#[test]
 		fn no_scope_means_no_answer() {
 			assert_eq!(resolve_program("sh"), None, "no scope, no PATH, no program");
+		}
+
+		/// A scope with no `PATH` searches `/usr/bin:/bin`, as `execvp` does,
+		/// while a `PATH` set to the empty string searches only the working
+		/// directory.
+		#[test]
+		fn an_unset_path_searches_the_default_directories() {
+			let root = tools("unset");
+			let default = ["/usr/bin/sh", "/bin/sh"]
+				.into_iter()
+				.map(PathBuf::from)
+				.find(|candidate| executable(candidate));
+
+			assert_eq!(scoped_path(&root, None, || resolve_program("sh")), default);
+			assert_eq!(scoped_path(&root, Some(""), || resolve_program("sh")), None);
+			assert_eq!(
+				scoped_path(&root, Some(""), || resolve_program("mytool")),
+				Some(root.join("mytool"))
+			);
 		}
 	}
 

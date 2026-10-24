@@ -65,7 +65,8 @@ export interface SessionHandoffHost {
 	/** Drops the queued next-turn asides and the scheduled hidden next turn. */
 	clearNextTurnMessages(): void;
 	cancelOwnAsyncJobs(): void;
-	rescopeAgentRegistry(): Promise<void>;
+	/** Releases what the conversation being left holds: spawned agents, registry scope, eval kernels. */
+	endConversation(): Promise<void>;
 	resetMemoryContextForNewTranscript(): void;
 	resetAllAdvisorRuntimes(): void;
 }
@@ -261,8 +262,9 @@ export class SessionHandoff {
 			await sessionManager.newSession(previousSessionFile ? { parentSession: previousSessionFile } : undefined);
 			// A handoff continues the work in a NEW transcript. The pre-handoff
 			// spawned agents wrote into the old one and their jobs were just cancelled;
-			// leaving them registered would list them under the new conversation.
-			await host.rescopeAgentRegistry();
+			// leaving them registered would list them under the new conversation, and
+			// no cell of the new transcript reaches the old one's eval kernels.
+			await host.endConversation();
 
 			host.checkpoint.clear();
 			// agent.reset() clears the core steering/follow-up queues. Preserve any queued

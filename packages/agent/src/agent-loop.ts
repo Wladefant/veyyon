@@ -57,7 +57,6 @@ import {
 	recoverHarmonyToolCall,
 	signalListLabel,
 } from "@veyyon/ai/utils/harmony-leak";
-import { validateToolArguments } from "@veyyon/ai/utils/validation";
 import { preferredDialect } from "@veyyon/catalog/identity";
 import { emptyUsage } from "@veyyon/catalog/models";
 import {
@@ -96,7 +95,8 @@ import {
 	type ToolBatchLedger,
 	type ToolBatchLedgerCause,
 } from "./tool-batch-ledger";
-import { extractIntent, normalizeTools } from "./tool-normalization";
+import { prepareToolCall } from "./tool-call-preparation";
+import { normalizeTools } from "./tool-normalization";
 import { capToolResultContent } from "./tool-result-cap";
 import { toolResultNeverRan } from "./tool-result-never-ran";
 import type {
@@ -114,7 +114,6 @@ import type {
 	SteeringQueueState,
 	StreamFn,
 	ToolCallArgumentTransform,
-	ToolCallRepairResult,
 } from "./types";
 import { isSoftToolRequirement } from "./types";
 import { yieldIfDue } from "./utils/yield";
@@ -883,8 +882,7 @@ async function driveLoop(run: LoopRun): Promise<void> {
 /** One turn: inject pending messages, sample the model, settle its tool calls. True when the run ended. */
 async function runTurn(run: LoopRun, state: LoopState): Promise<boolean> {
 	if (endIfDeadlinePassed(run)) return true;
-	// Yield at the top of each iteration to prevent busy-wait when
-	// the agent loop is executing tool calls back-to-back.
+	// Hand the event loop a turn so back-to-back tool batches cannot hold off timers, input and rendering.
 	await yieldIfDue();
 	if (await parkWhilePaused(run)) return true;
 	if (!state.firstTurn) {
@@ -1608,8 +1606,8 @@ class AssistantTurnStream {
 				this.#absorbDeliveredEvents(event);
 				return await this.#endAborted(iterator);
 			}
-			// Yield to the event loop periodically to prevent busy-wait when the LLM is streaming chunks faster than the
-			// loop can rest.
+			// Hand the event loop a turn periodically so a buffered run of stream events cannot hold off timers, input and
+			// rendering.
 			await yieldIfDue();
 			this.#apply(event);
 		}
@@ -2218,12 +2216,6 @@ interface ToolCallOutcome {
 	completed: boolean;
 }
 
-/** A tool call whose arguments validated, in the form `tool.execute()` receives. */
-interface ValidatedToolCall {
-	tool: AnyAgentTool;
-	execution: Record<string, unknown>;
-}
-
 /**
  * Whether a call observes peer IRC interrupts. `interruptible` may be declared per call: a tool where only some
  * operations block (an `irc` wait, a `job` poll) is not interruptible for the rest of them. Resolving it per call
@@ -2264,32 +2256,6 @@ function resolveConcurrency(tool: AnyAgentTool | undefined, args: Record<string,
 		});
 		return "exclusive";
 	}
-}
-
-/** The intent label a tool's own resolver derives from the stripped arguments, if it has one. */
-function derivedIntent(
-	tool: AnyAgentTool | undefined,
-	toolName: string,
-	args: Record<string, unknown>,
-): string | undefined {
-	if (typeof tool?.intent !== "function") return undefined;
-	try {
-		return tool.intent(args as never)?.trim() || undefined;
-	} catch (error) {
-		// Must never break tool execution, but a throwing intent resolver is a broken tool feature — surface it.
-		logger.warn("tool intent resolver threw; using the default intent label", {
-			tool: toolName,
-			error: errorMessage(error),
-		});
-		return undefined;
-	}
-}
-
-/** The error text for arguments `repairToolCallArguments` could not repair, followed by its hints. */
-function unrepairableArgumentsText(outcome: ToolCallRepairResult): string {
-	const hints =
-		outcome.hints.length > 0 ? `\n\n[Tool argument repair]\n${outcome.hints.map(h => `- ${h}`).join("\n")}` : "";
-	return `${outcome.reason ?? "Tool arguments could not be repaired."}${hints}`;
 }
 
 /** The source a queued-steering poll reports, or `undefined` when nothing is queued. */
@@ -2507,16 +2473,23 @@ class ToolBatch {
 		// unaffected (pausing never aborts); a batch interrupted mid-pause unwinds via the signal checks below.
 		const pauseGate = this.#config.pauseGate ?? agentPauseGate;
 		if (pauseGate.paused && !(await this.#resumedFromPause(record, pauseGate))) return;
-		const call = this.#validatedCall(record, this.#strippedOfIntent(record));
-		if (!call) return;
-		const args = this.#transformedArguments(record, call.execution);
-		if (!args) return;
-		record.args = args.display;
+		const prepared = prepareToolCall(record.tool, record.toolCall, this.#config, this.#tools);
+		if (prepared.intent) record.toolCall.intent = prepared.intent;
+		if (!prepared.ok) {
+			record.args = prepared.args;
+			this.#emitToolResult(
+				record,
+				{ content: [{ type: "text", text: prepared.error }], details: { isError: true, error: prepared.error } },
+				true,
+			);
+			return;
+		}
+		record.args = prepared.display;
 		if (record.signal.aborted) {
 			this.#answerAbortedBeforeStart(record);
 			return;
 		}
-		await this.#execute(record, call.tool, args);
+		await this.#execute(record, prepared.tool, prepared);
 	}
 
 	/** False when an abort released the park, which marks the call skipped. */
@@ -2528,122 +2501,6 @@ class ToolBatch {
 			if (!isAbortError(err) && !record.signal.aborted) throw err;
 			record.skipped = true;
 			return false;
-		}
-	}
-
-	/** The call's arguments with the intent field stripped, setting the call's intent from it or from the tool. */
-	#strippedOfIntent(record: ToolCallRecord): Record<string, unknown> {
-		const { toolCall } = record;
-		const args = toolCall.arguments as Record<string, unknown>;
-		if (!this.#config.intentTracing) return args;
-		const { intent, strippedArgs } = extractIntent(args);
-		const label = intent ?? derivedIntent(record.tool, toolCall.name, strippedArgs);
-		if (label) toolCall.intent = label;
-		return strippedArgs;
-	}
-
-	/**
-	 * The tool and the arguments it receives, repaired and validated; `undefined` once the call was answered with the
-	 * error that stopped it. A tool declaring `lenientArgValidation` runs with its arguments as they are.
-	 */
-	#validatedCall(record: ToolCallRecord, stripped: Record<string, unknown>): ValidatedToolCall | undefined {
-		const { tool, toolCall } = record;
-		let args = stripped;
-		try {
-			if (!tool) {
-				throw new AIError.ToolNotFoundError(
-					toolCall.name,
-					this.#tools?.map(t => t.name),
-				);
-			}
-			const repaired = this.#repairedArguments(record, tool, args);
-			if (!repaired) return undefined;
-			args = repaired;
-			return { tool, execution: validateToolArguments(tool, { ...toolCall, arguments: args }) };
-		} catch (validationError) {
-			if (tool?.lenientArgValidation) {
-				const execution = { ...args };
-				delete execution.__parseError;
-				delete execution.__rawJson;
-				return { tool, execution };
-			}
-			record.args = "__parseError" in args ? { __parseError: args.__parseError } : args;
-			this.#emitToolResult(
-				record,
-				{
-					content: [{ type: "text", text: errorMessage(validationError) }],
-					details: { isError: true, error: errorMessage(validationError) },
-				},
-				true,
-			);
-			return undefined;
-		}
-	}
-
-	/**
-	 * The arguments `repairToolCallArguments` returns, stripped of intent again; `undefined` once a call it could not
-	 * repair was answered with its reason and hints.
-	 */
-	#repairedArguments(
-		record: ToolCallRecord,
-		tool: AnyAgentTool,
-		args: Record<string, unknown>,
-	): Record<string, unknown> | undefined {
-		const repair = this.#config.repairToolCallArguments;
-		if (!repair) return args;
-		const outcome = repair(tool, { ...record.toolCall, arguments: args });
-		if (outcome.status === "unrepairable") {
-			record.args = args;
-			const errorText = unrepairableArgumentsText(outcome);
-			this.#emitToolResult(
-				record,
-				{ content: [{ type: "text", text: errorText }], details: { isError: true, error: errorText } },
-				true,
-			);
-			return undefined;
-		}
-		if (!this.#config.intentTracing) return outcome.arguments;
-		const { intent, strippedArgs } = extractIntent(outcome.arguments);
-		if (intent) record.toolCall.intent = intent;
-		return strippedArgs;
-	}
-
-	/**
-	 * The arguments rewritten HERE, before anything else observes them, and split by AUDIENCE; `undefined` once a
-	 * throwing transform was answered with its error.
-	 *
-	 * Two different expansions ride this hook and they disagree about display. A codec handle MUST be expanded before
-	 * a person sees it: `tool_execution_start` is the event a renderer treats as authoritative ("args are final,
-	 * reconcile them"), so leaving it unexpanded overwrote the live preview with `§handle` and left it there. A secret
-	 * placeholder is the exact opposite: its expansion is a live credential, and a rendered card, a stream event, a
-	 * telemetry span and a session file are precisely where it must never land.
-	 *
-	 * One form cannot satisfy both, so the transform returns both and the loop routes them. `execution` goes to
-	 * `tool.execute` and to `beforeToolCall` — the hook that decides whether the call runs, so it must see what would
-	 * actually run, and whose in-place mutations must reach the tool. `display` goes to everything that shows, streams,
-	 * traces or records arguments. A sink added here later inherits `display`, so it is safe without knowing that
-	 * secrets exist.
-	 */
-	#transformedArguments(
-		record: ToolCallRecord,
-		execution: Record<string, unknown>,
-	): ToolCallArgumentTransform | undefined {
-		const transform = this.#config.transformToolCallArguments;
-		if (!transform) return { execution, display: execution };
-		try {
-			const transformed = transform(execution, record.toolCall.name);
-			return { execution: transformed.execution, display: transformed.display };
-		} catch (transformError) {
-			record.args = execution;
-			this.#emitToolResult(
-				record,
-				{
-					content: [{ type: "text", text: errorMessage(transformError) }],
-					details: { isError: true, error: errorMessage(transformError) },
-				},
-				true,
-			);
-			return undefined;
 		}
 	}
 
@@ -2951,8 +2808,7 @@ async function executeToolCalls(run: LoopRun, assistantMessage: AssistantMessage
 	} finally {
 		clearInterval(steeringWatch);
 	}
-	// Yield after batch tool execution to let GC and I/O catch up, especially when tool results are large (e.g. bash
-	// output).
+	// Hand the event loop a turn after the batch so I/O the tools queued, such as large results, is serviced first.
 	await yieldIfDue();
 	return batch.answerUnresolved();
 }

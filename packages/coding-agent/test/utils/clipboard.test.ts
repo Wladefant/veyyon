@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import {
+	copyToClipboard,
 	readImageFromClipboard,
 	readMacFileUrlsFromClipboard,
 	readTextFromClipboard,
@@ -54,7 +55,7 @@ function restorePlatform(): void {
 	if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
 }
 
-const ENV_KEYS = ["WSL_DISTRO_NAME", "WSL_INTEROP", "DISPLAY", "WAYLAND_DISPLAY", "TERMUX_VERSION"] as const;
+const ENV_KEYS = ["WSL_DISTRO_NAME", "WSL_INTEROP", "DISPLAY", "WAYLAND_DISPLAY", "TERMUX_VERSION", "TMUX"] as const;
 let savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
 
 beforeEach(() => {
@@ -299,5 +300,70 @@ describe("readTextFromClipboard", () => {
 		// If the read blocked the loop, ticks would stay at 0. A yielding
 		// implementation fires several ticks in the ~80ms window.
 		expect(ticks).toBeGreaterThanOrEqual(2);
+	});
+});
+
+/**
+ * A copy from inside tmux reaches the attached terminal's clipboard.
+ *
+ * tmux drops an OSC 52 written by an application in a pane unless the server's `set-clipboard` is
+ * `on`, and the default is `external`, so the escape alone copied nothing from a tmux pane. Inside
+ * tmux the text goes to `tmux load-buffer -w`, which forwards it to the client under every setting;
+ * the escape is the fallback for a server that rejects `-w`, and the only path outside tmux. Not
+ * covered: whether the outer terminal honours the OSC 52 tmux forwards.
+ */
+describe("copyToClipboard", () => {
+	const TEXT = "https://auth.example/authorize?client_id=app&state=s1";
+	const OSC52 = `\x1b]52;c;${Buffer.from(TEXT).toString("base64")}\x07`;
+	const ttyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+
+	function captureTerminal(): string[] {
+		Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+		const written: string[] = [];
+		vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+			written.push(String(chunk));
+			return true;
+		});
+		vi.spyOn(native, "copyToClipboard").mockImplementation(() => {});
+		return written;
+	}
+
+	afterEach(() => {
+		if (ttyDescriptor) Object.defineProperty(process.stdout, "isTTY", ttyDescriptor);
+		else Reflect.deleteProperty(process.stdout, "isTTY");
+	});
+
+	it("inside tmux hands the text to load-buffer -w and writes no escape of its own", async () => {
+		process.env.TMUX = "/repo/tmux-socket,1,0";
+		const written = captureTerminal();
+		const calls: SpawnCall[] = [];
+		spyPowershell(calls, "");
+
+		await copyToClipboard(TEXT);
+
+		expect(calls.map(call => call.cmd)).toEqual([["tmux", "load-buffer", "-w", "-"]]);
+		expect(String(calls[0]?.options.stdin)).toBe(TEXT);
+		expect(written).toEqual([]);
+	});
+
+	it("inside tmux writes the escape when the server rejects load-buffer -w", async () => {
+		process.env.TMUX = "/repo/tmux-socket,1,0";
+		const written = captureTerminal();
+		spyPowershell([], "", 1);
+
+		await copyToClipboard(TEXT);
+
+		expect(written).toEqual([OSC52]);
+	});
+
+	it("outside tmux writes the escape and runs no tmux command", async () => {
+		const written = captureTerminal();
+		const calls: SpawnCall[] = [];
+		spyPowershell(calls, "");
+
+		await copyToClipboard(TEXT);
+
+		expect(calls).toEqual([]);
+		expect(written).toEqual([OSC52]);
 	});
 });

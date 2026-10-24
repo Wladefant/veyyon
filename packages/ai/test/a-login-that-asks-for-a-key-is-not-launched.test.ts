@@ -44,6 +44,7 @@ const BROWSER_LOGIN_PROVIDERS = [
 	"nous-research",
 	"openai-codex",
 	"openai-codex-device",
+	"opencode-go",
 	"perplexity",
 	"xai-oauth",
 ] as const;

@@ -67,10 +67,11 @@ function buildWindowLimit(
 
 export const opencodeGoUsageProvider: UsageProvider = {
 	id: OPENCODE_GO_PROVIDER,
-	supports: params => params.provider === OPENCODE_GO_PROVIDER && params.credential.type === "api_key",
+	// The ledger reads Veyyon's own record of spend, so a Console login and an API key are served alike.
+	supports: params => params.provider === OPENCODE_GO_PROVIDER,
 	validatesCredentials: false,
 	async fetchUsage(params, ctx) {
-		if (params.provider !== OPENCODE_GO_PROVIDER || params.credential.type !== "api_key") return null;
+		if (params.provider !== OPENCODE_GO_PROVIDER) return null;
 		const nowMs = Date.now();
 		const sinceMs = nowMs - OPENCODE_GO_LIMITS[OPENCODE_GO_LIMITS.length - 1]!.durationMs;
 		const entries =

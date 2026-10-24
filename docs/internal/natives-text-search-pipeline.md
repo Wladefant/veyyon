@@ -62,7 +62,7 @@ Terminology follows [`natives-architecture.md`](./natives-architecture.md):
 
 `natives/bridge/bindings/package.json` selects `native/index.js` as the JavaScript entrypoint and `native/index.d.ts` as its generated declaration surface. Every public function in `native/index.js` is a `lazyNativeFn` wrapper. Importing the package, reading enum values, or taking a bare function reference does not load a `.node` binary. The first actual call invokes the hand-written loader in `loader-state.js`, and the resolved function is then cached by that wrapper.
 
-The loader tries install-specific addon candidates in priority order. Source and ordinary `node_modules` installs prefer leaf/in-tree release candidates and then the per-version cache. Compiled and staged modes put extracted or versioned candidates ahead of release-tree candidates. A missing or unloadable binary records the failure and permits the next candidate; a present-but-unloadable binary also emits a warning. Once a candidate loads, version-sentinel validation runs outside that fallback path and fails closed on a mismatch instead of trying another copy. Exhausting all candidates throws. Candidate fallback only selects another native binary; there is no functional pure-JavaScript implementation fallback.
+The loader tries install-specific addon candidates in priority order. Source and ordinary `node_modules` installs prefer leaf/in-tree release candidates and then the per-version cache. Compiled and staged modes put extracted or versioned candidates ahead of release-tree candidates. A compiled binary reuses the addon it extracted into `natives/<version>/` only when the `.stamp` file beside it records the embedded file's `sha256` and the extracted file's inode and modification time; otherwise it extracts the addon again. A missing or unloadable binary records the failure and permits the next candidate; a present-but-unloadable binary also emits a warning. Once a candidate loads, version-sentinel validation runs outside that fallback path and fails closed on a mismatch instead of trying another copy. Exhausting all candidates throws. Candidate fallback only selects another native binary; there is no functional pure-JavaScript implementation fallback.
 
 ## 1) Regex search (`grep`, `search`, `hasMatch`)
 
@@ -70,7 +70,7 @@ The loader tries install-specific addon candidates in priority order. Source and
 
 1. Callers invoke the package's lazy JavaScript exports directly; there is no package-local TS wrapper that renames `search` to `searchContent`.
 2. Rust option structs in `grep.rs` deserialize camelCase fields (`ignoreCase`, `maxCount`, `contextBefore`, `contextAfter`, `maxColumns`, `timeoutMs`).
-3. `grep` creates `CancelToken` from `timeoutMs` + `AbortSignal` and runs inside `task::blocking("grep", ...)`.
+3. `grep` creates `CancelToken` from `timeoutMs` + `AbortSignal` and runs inside `task::blocking("grep", ...)`. Reaching `timeoutMs` stops the search and returns the matches found by then with `timedOut` set (`PassState::settle`); the abort signal fails the call.
 4. `search` and `hasMatch` operate on provided string/`Uint8Array` content and do not scan the filesystem.
 
 ### Execution branches
@@ -85,7 +85,8 @@ The loader tries install-specific addon candidates in priority order. Source and
   - Directory walks go through `veyyon_walker::WalkRequest` (files-only filter, `WalkDetail::Minimal`, `FollowLinks::Never`, `SizeHintPolicy::WhenCheap`) built by `build_grep_walk_request`.
   - Grep always walks with `.cache(false)`: it does not use the shared TTL scan cache (that cache serves `glob`/`fuzzyFind`).
   - Entry filtering: file-only + optional glob filter (`CompiledWalkGlob::compile`) + optional type filter mapping (`js`, `ts`, `rust`, etc.).
-  - The compiled glob also supplies the walk's maximum depth through `depth_bound()`, so `--glob 'src/*.ts'` stops at two components instead of traversing the whole tree and filtering the rest back out.
+  - The compiled glob also supplies the walk's maximum depth through `depth_bound()`, so `--glob 'src/*.ts'` stops at two components instead of traversing the whole tree and filtering the rest back out. A `{a,b}` group counts as its deepest alternative.
+  - Files are searched 32 at a time (`PREFETCH_BATCH`, defined in `readahead.rs`): a thread opens every file of a batch and, on Linux, advises the kernel to read each ahead (`POSIX_FADV_WILLNEED`) up to the length its read takes, then searches them in order. A walk worker fills a batch in the unordered lane; the ordered windowed lane splits each window into batches across the walker pool. Each thread of the walk pool has up to 32 reads in flight instead of one. A file the batch cannot open is opened again by path when its turn comes, after the files before it closed; a file that second open also fails on is skipped.
 
 ### Search/collection semantics
 
@@ -104,13 +105,14 @@ The loader tries install-specific addon candidates in priority order. Source and
 - Rust `SearchResult`/`GrepResult` fields map to TS interfaces via N-API object conversion.
 - Counters are clamped before crossing N-API where needed.
 - `GrepResult.limitReached` is optional and emitted when true.
+- `GrepResult.timedOut` is optional and emitted when true: the search reached `timeoutMs`, and the result holds only what it found by then.
 - `SearchResult.patternTreatedAsLiteral` and `GrepResult.patternTreatedAsLiteral` are optional. When present, the field holds the original regex compile error and reports that the successful search used an escaped literal matcher instead.
 - Streaming callbacks receive each shaped `GrepMatch` for content or count-style entries. The result-level literal-demotion notice is not part of an individual callback entry.
 
 ### Failure behavior
 
 - `search` returns a populated result after ordinary literal demotion. `SearchResult.error` is reserved for failures that remain after matcher construction, such as failure to construct the final literal matcher, content conversion failure, or search execution failure.
-- `grep` also returns normally after ordinary literal demotion. It rejects on hard errors such as an invalid path or glob, cancellation, final matcher-construction failure, or search execution failure.
+- `grep` also returns normally after ordinary literal demotion and after reaching `timeoutMs`. It rejects on hard errors such as an invalid path or glob, cancellation through the abort signal, final matcher-construction failure, or search execution failure.
 - `hasMatch` returns the literal match boolean after demotion but currently drops the demotion notice because its return type is only `boolean`. Input or pattern UTF-8 conversion and final matcher-construction failures can still throw.
 - File open/search errors in multi-file scans are skipped per-file; scan continues.
 
@@ -125,7 +127,7 @@ The loader tries install-specific addon candidates in priority order. Source and
 
 ## 2) File discovery (`glob`) and fuzzy path search (`fuzzyFind`)
 
-`glob`, `fuzzyFind`, and directory candidate discovery for `astGrep`/`astEdit` use the `veyyon-walker` TTL scan cache; their matching logic and cache controls differ.
+`glob` and `fuzzyFind` use the `veyyon-walker` TTL scan cache; their matching logic and cache controls differ. Directory candidate discovery for `astGrep`/`astEdit` walks uncached (section 3).
 
 ### `glob` flow
 
@@ -138,22 +140,24 @@ The loader tries install-specific addon candidates in priority order. Source and
    - apply glob match;
    - apply file-type filter; symlink `file`/`dir` filters resolve target metadata.
 5. Optional sort by mtime descending (`sortByMtime`) before truncating to `maxResults`.
+6. Reaching `timeoutMs` stops the walk; the result holds the matches found by then and sets `timedOut`. The abort signal fails the call.
 
 ### `fuzzyFind` flow
 
 1. Rust implementation lives in `fd.rs`; generated export is `fuzzyFind`.
-2. Shared scan source from the `veyyon-walker` cache with the same cache/no-cache split and stale-empty recheck policy (fd walks with `FollowLinks::Always`).
+2. Shared scan source from the `veyyon-walker` cache with the same cache/no-cache split and stale-empty recheck policy (fd walks with `FollowLinks::Always`). The entries are read in place through `collect_shared_with_heartbeat`, so a cache hit copies no entry.
 3. Scoring:
    - exact / starts-with / contains / subsequence-based fuzzy score;
    - separator/punctuation-normalized scoring path;
-   - directory bonus (+10) and deterministic ordering: `score` desc, then path-depth asc (shallower paths first), then `path` asc.
+   - directory bonus (+10) and deterministic ordering: `score` desc, then path-depth asc (shallower paths first), then `path` asc, where a directory path ends in `/`.
 4. Symlink entries are excluded from fuzzy results.
+5. Selection: a bounded heap keeps the best `maxResults` matches, and a path is copied only while its match ranks among them. The result equals a full sort cut at `maxResults` for any entry order. `totalMatches` counts every match.
 
 ### Failure behavior
 
 - Invalid glob pattern returns an error from `CompiledWalkGlob::compile`, carrying the glob engine's own message.
 - Search root must resolve to an existing directory for directory discovery flows.
-- Cancellation/timeouts propagate as abort errors via `CancelToken::heartbeat()` checks in loops.
+- The abort signal, and `timeoutMs` in `fuzzyFind`, propagate as abort errors via `CancelToken::heartbeat()` checks in loops. `glob` returns the matches it found when `timeoutMs` passes, with `timedOut` set.
 
 ### Malformed glob handling
 
@@ -175,12 +179,16 @@ The walk depth is measured after that normalization, so the same `*.ts` is bound
 - `dryRun` defaults to true for edit options in the generated documentation.
 - Options include language override, path/glob/selector, strictness, limits, parse-error policy, `signal`, and `timeoutMs`.
 
-For a directory operand, `astGrep` and `astEdit` discover candidates through a walker request with caching always enabled and `EmptyRecheck::Configured`. A stale cached directory result that filters to no candidates can therefore trigger the configured fresh recheck. A single-file operand bypasses the walker and its cache. `astMatch` remains wholly in-memory and uncached.
+For a directory operand, `astGrep` streams an uncached walker request (`.cache(false)`) through `for_each_file_candidate_parallel`, compiling its patterns per language on first use; `astEdit` collects the same request and sorts it by path. A file is parsed only when it contains the literal text of every named leaf of at least one pattern compiled for its language (`veyyon_ast::required_text::RequiredText`); metavariables, unnamed tokens and `Signature` strictness require nothing, so the filter never drops a file that could match. Parse errors are reported for parsed files only, one per file, sorted by path, after the compile errors of patterns no language compiled. `astEdit` applies the same filter per rule unless `failOnParseError` is set. A file that is not valid UTF-8 is still reported. A single-file operand bypasses the walker. `astMatch` remains wholly in-memory and uncached and parses its source unconditionally.
+
+`astGrep` reads and screens files on the walk's workers and parses on threads of its own: one per core the walker pool leaves (`parse_thread_count`). A walk worker queues a file that needs a parse and parses it itself when the queue is full. The parses of every search in the process hold their source against one 8 MiB budget (`PARSE_SOURCE_BUDGET`); a file larger than the budget parses alone. When the search ends, its tree-sitter pages are returned to the system (`heap_pages::release_tree_sitter_pages`).
+
+A walk thread takes the files it accepts 32 at a time (`PREFETCH_BATCH`), opens every file of the batch and, on Linux, advises the kernel to read each ahead (`POSIX_FADV_WILLNEED`) before reading the first, so each thread of the walk pool has up to 32 reads in flight instead of one. A file the batch cannot open is opened again by path and reports that error. A parsed tree is walked for ERROR nodes only when tree-sitter marks its root as holding an error or a missing node (`holds_error_node`), for `astGrep`, `astMatch` and `astEdit` alike.
 
 The adjacent N-API adapters expose three in-memory tree-sitter helpers:
 
 - `blockRangeAt({ code, line, lang?, path? })` returns the 1-indexed inclusive range of the outermost named node beginning on `line`. It returns `null` for an unknown language, an out-of-range or blank line, no node beginning on the line, or a resolved subtree containing a syntax error.
-- `enclosingBlockBoundaries({ code, ranges, lang?, path? })` returns sorted, unique, 1-indexed boundary lines for multi-line named nodes crossing the visible ranges. It returns `null` for an unknown language or a parse tree with syntax errors, signaling that the caller should use a lexical fallback.
+- `enclosingBlockBoundaries({ code, ranges, lang?, path? })` resolves a Promise of sorted, unique, 1-indexed boundary lines for multi-line named nodes crossing the visible ranges. It resolves `null` for an unknown language or a parse tree with syntax errors, signaling that the caller should use a lexical fallback. The parse runs on the libuv thread pool, and every call shares one retained parse tree (`veyyon_ast::with_shared_slot`), so a second window of the same source reuses the tree whichever pool thread serves it.
 - `summarizeCode(options)` produces an in-memory tree-sitter summary with canonical language and parse status, total-line and elision metadata, and source-ordered `kept`/`elided` segments. Its options control body/comment elision thresholds and breadth-first unfolding targets and limits.
 
 All six public functions are reached through the package's lazy JS wrappers. Once the addon is loaded they call N-API directly; no package-local TypeScript layer changes their contracts.
@@ -198,7 +206,7 @@ Tunables are env-configured: `FS_SCAN_CACHE_TTL_MS` (default 1000ms; `0` disable
 2. **Hit**
    - Entry age is within TTL -> return cached entries + `cache_age_ms`.
 3. **Stale-empty recheck**
-   - Requests that opt in via `EmptyRecheck::Configured` (`glob`, `fuzzyFind`, and AST directory discovery): if the query yields zero matches and cache age exceeds the empty-result threshold, force one rescan.
+   - Requests that opt in via `EmptyRecheck::Configured` (`glob` and `fuzzyFind`): if the query yields zero matches and cache age exceeds the empty-result threshold, force one rescan.
 4. **Invalidation**
    - `invalidateFsScanCache(path?)` (exported from `iofs.rs`, backed by `veyyon_walker::cache::invalidate_all` / `invalidate_path_string`):
      - no arg: clear all keys;
@@ -272,7 +280,7 @@ Text functions generally return deterministic transformed output; errors are lim
 | `countTokens`                             | No                | No                    | tokenization only                                      |
 | `astMatch`                                | No                | No                    | in-memory syntax-aware match (no disk)                 |
 | structural block/summary helpers          | No                | No                    | in-memory tree-sitter operations                       |
-| `astGrep` / `astEdit`, directory operand  | Yes               | Always                | cached directory candidate discovery                   |
+| `astGrep` / `astEdit`, directory operand  | Yes               | No (`.cache(false)`)  | streamed (`astGrep`) or collected (`astEdit`) walk     |
 | `astGrep` / `astEdit`, single-file operand | Yes              | No                    | direct file candidate, walker bypassed                 |
 | `glob`                                    | Yes               | Optional              | directory scans + glob filtering                       |
 | `fuzzyFind`                               | Yes               | Optional              | directory scans + fuzzy scoring                        |
@@ -287,4 +295,4 @@ Text functions generally return deterministic transformed output; errors are lim
 5. Rust shapes outputs into N-API objects (`lineNumber`, `matchCount`, `limitReached`, `patternTreatedAsLiteral`, etc.).
 6. The package's lazy binding returns typed JS objects and optional per-match callbacks for `grep`/`glob`.
 
-*Verified against `0eb8d74a3ecf60e1b2ec37c15e9255f2dbe310dc` on 2026-07-30.*
+*Verified against `a69fe7a47dccc1ce64cd941479d0b14b6253029d` on 2026-10-22.*

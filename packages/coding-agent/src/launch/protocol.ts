@@ -209,6 +209,21 @@ export interface DaemonWireRequest {
 /** Response envelope kept raw until matched with its pending operation. */
 export type DaemonWireResponse = { id: string; ok: true; result: unknown } | { id: string; ok: false; error: string };
 
+/**
+ * Id of the notice a broker writes to every connection when it starts shutting down. From then on it
+ * acts on no request, so a client sends what it has pending to the broker that follows once this one
+ * has released its lease. The envelope is an ordinary failed response, which a client without this
+ * notice drops as the answer to no request it made.
+ */
+export const DAEMON_BROKER_RETIRING_ID = "broker-retiring";
+/** The error a shutting-down broker answers each request with. The request was not acted on. */
+export const DAEMON_BROKER_RETIRING_ERROR = "Daemon broker is shutting down";
+
+/** The retiring notice line of the broker running as `pid`. */
+export function daemonBrokerRetiringNotice(pid: number): string {
+	return `${JSON.stringify({ id: DAEMON_BROKER_RETIRING_ID, ok: false, error: DAEMON_BROKER_RETIRING_ERROR, pid })}\n`;
+}
+
 // launch/protocol.ts is deliberately dependency-free (zero imports) so the
 // broker worker can load it in isolation, so this keeps a self-contained copy of
 // isRecord rather than importing @veyyon/utils. The type-guards source-lock test
@@ -398,6 +413,12 @@ export function parseDaemonWireResponse(value: unknown): DaemonWireResponse {
 	if (source.ok === true) return { id, ok: true, result: source.result };
 	if (source.ok === false) return { id, ok: false, error: stringValue(source.error, "response.error") };
 	throw new Error("response.ok must be a boolean");
+}
+
+/** The pid a retiring notice names, or undefined when `value` is not a retiring notice. */
+export function parseDaemonRetiringNotice(value: unknown): number | undefined {
+	if (!isRecord(value) || value.id !== DAEMON_BROKER_RETIRING_ID) return undefined;
+	return numberValue(value.pid, "notice.pid");
 }
 
 function parseDaemonOperation(value: unknown): DaemonOperation {

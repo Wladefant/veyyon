@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import type {
+	Agent,
 	AgentEvent,
+	AgentToolCall,
 	AgentToolContext,
 	AgentToolResult,
 	AgentToolUpdateCallback,
 	AnyAgentTool,
+	PreparedToolCall,
+	ReadyToolCall,
 } from "@veyyon/agent-core";
 import type {
 	CursorMcpCall,
@@ -19,6 +23,11 @@ import { resolveToCwd } from "./tools/core/path-utils";
 interface CursorExecBridgeOptions {
 	cwd: string;
 	tools: Map<string, AnyAgentTool>;
+	/**
+	 * Prepares a call as the agent loop prepares the calls it dispatches: `i` stripped, arguments repaired, validated
+	 * and transformed. Cursor runs these calls itself, outside the loop.
+	 */
+	prepareToolCall: (tool: AnyAgentTool, toolCall: AgentToolCall) => PreparedToolCall;
 	getToolContext?: () => AgentToolContext | undefined;
 	emitEvent?: (event: AgentEvent) => void;
 }
@@ -47,6 +56,47 @@ function buildToolErrorResult(message: string): AgentToolResult<unknown> {
 	};
 }
 
+function sanitizedResult(result: AgentToolResult<unknown>): AgentToolResult<unknown> {
+	return {
+		content: result.content.map(c => (c.type === "text" ? { ...c, text: sanitizeText(c.text) } : c)),
+		details: result.details,
+	};
+}
+
+/**
+ * `args` prepared for `tool`; a call the preparation rejects is answered here, its start and end emitted, and its
+ * result message is returned instead.
+ */
+function prepareCall(
+	options: CursorExecBridgeOptions,
+	tool: AnyAgentTool,
+	toolName: string,
+	toolCallId: string,
+	args: Record<string, unknown>,
+): ReadyToolCall | ToolResultMessage {
+	const prepared = options.prepareToolCall(tool, {
+		type: "toolCall",
+		id: toolCallId,
+		name: toolName,
+		arguments: args,
+	});
+	if (prepared.ok) return prepared;
+	const { error, intent } = prepared;
+	options.emitEvent?.({ type: "tool_execution_start", toolCallId, toolName, args: prepared.args, intent });
+	const result: AgentToolResult<unknown> = {
+		content: [{ type: "text", text: error }],
+		details: { isError: true, error },
+	};
+	options.emitEvent?.({
+		type: "tool_execution_end",
+		toolCallId,
+		toolName,
+		result: sanitizedResult(result),
+		isError: true,
+	});
+	return createToolResultMessage(toolCallId, toolName, result, true);
+}
+
 async function executeTool(
 	options: CursorExecBridgeOptions,
 	toolName: string,
@@ -58,36 +108,29 @@ async function executeTool(
 		const result = buildToolErrorResult(`Tool "${toolName}" not available`);
 		return createToolResultMessage(toolCallId, toolName, result, true);
 	}
+	const call = prepareCall(options, tool, toolName, toolCallId, args);
+	if ("role" in call) return call;
+	const { display, intent } = call;
 
-	options.emitEvent?.({ type: "tool_execution_start", toolCallId, toolName, args });
+	options.emitEvent?.({ type: "tool_execution_start", toolCallId, toolName, args: display, intent });
 
 	let result: AgentToolResult<unknown>;
 	let isError = false;
 
 	const onUpdate: AgentToolUpdateCallback<unknown> | undefined = options.emitEvent
 		? partialResult => {
-				const sanitizedResult: AgentToolResult<unknown> = {
-					content: partialResult.content.map(c => (c.type === "text" ? { ...c, text: sanitizeText(c.text) } : c)),
-					details: partialResult.details,
-				};
 				options.emitEvent?.({
 					type: "tool_execution_update",
 					toolCallId,
 					toolName,
-					args,
-					partialResult: sanitizedResult,
+					args: display,
+					partialResult: sanitizedResult(partialResult),
 				});
 			}
 		: undefined;
 
 	try {
-		result = await tool.execute(
-			toolCallId,
-			args as Record<string, unknown>,
-			undefined,
-			onUpdate,
-			options.getToolContext?.(),
-		);
+		result = await tool.execute(toolCallId, call.execution, undefined, onUpdate, options.getToolContext?.());
 	} catch (error) {
 		const message = errorMessage(error);
 		result = buildToolErrorResult(message);
@@ -95,11 +138,7 @@ async function executeTool(
 	}
 	isError ||= result.isError === true;
 
-	const sanitizedFinalResult: AgentToolResult<unknown> = {
-		content: result.content.map(c => (c.type === "text" ? { ...c, text: sanitizeText(c.text) } : c)),
-		details: result.details,
-	};
-	options.emitEvent?.({ type: "tool_execution_end", toolCallId, toolName, result: sanitizedFinalResult, isError });
+	options.emitEvent?.({ type: "tool_execution_end", toolCallId, toolName, result: sanitizedResult(result), isError });
 
 	return createToolResultMessage(toolCallId, toolName, result, isError);
 }
@@ -136,6 +175,15 @@ async function executeDelete(options: CursorExecBridgeOptions, pathArg: string, 
 
 	options.emitEvent?.({ type: "tool_execution_end", toolCallId, toolName, result, isError });
 	return createToolResultMessage(toolCallId, toolName, result, isError);
+}
+
+/** The `bash` arguments for a Cursor shell call; an unset working directory or timeout is absent, as on the wire. */
+function bashArgs(args: { command: string; workingDirectory: string; timeout: number }): Record<string, unknown> {
+	return {
+		command: args.command,
+		...(args.workingDirectory ? { cwd: args.workingDirectory } : {}),
+		...(args.timeout > 0 ? { timeout: args.timeout } : {}),
+	};
 }
 
 function decodeToolCallId(toolCallId?: string): string {
@@ -183,7 +231,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 			type: "text",
 			input: args.pattern,
 			path: searchPath,
-			case: args.caseInsensitive === true ? false : undefined,
+			...(args.caseInsensitive === true ? { case: false } : {}),
 		});
 		return toolResultMessage;
 	}
@@ -206,12 +254,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 
 	async shell(args: Parameters<NonNullable<ICursorExecHandlers["shell"]>>[0]) {
 		const toolCallId = decodeToolCallId(args.toolCallId);
-		const timeoutSeconds = args.timeout && args.timeout > 0 ? args.timeout : undefined;
-		const toolResultMessage = await executeTool(this.options, "bash", toolCallId, {
-			command: args.command,
-			cwd: args.workingDirectory || undefined,
-			timeout: timeoutSeconds,
-		});
+		const toolResultMessage = await executeTool(this.options, "bash", toolCallId, bashArgs(args));
 		return toolResultMessage;
 	}
 
@@ -227,14 +270,10 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 			return createToolResultMessage(toolCallId, toolName, result, true);
 		}
 
-		const timeoutSeconds = args.timeout && args.timeout > 0 ? args.timeout : undefined;
-		const toolArgs: Record<string, unknown> = {
-			command: args.command,
-			cwd: args.workingDirectory || undefined,
-			timeout: timeoutSeconds,
-		};
-
-		this.options.emitEvent?.({ type: "tool_execution_start", toolCallId, toolName, args: toolArgs });
+		const call = prepareCall(this.options, tool, toolName, toolCallId, bashArgs(args));
+		if ("role" in call) return call;
+		const { display, intent } = call;
+		this.options.emitEvent?.({ type: "tool_execution_start", toolCallId, toolName, args: display, intent });
 
 		let result: AgentToolResult<unknown>;
 		let isError = false;
@@ -250,16 +289,15 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 			}
 			rawText = newRawText;
 			sanitizedRawText = sanitizeText(newRawText);
-			const sanitizedPartialResult: AgentToolResult<unknown> = {
-				content: [{ type: "text" as const, text: sanitizedRawText }],
-				details: partialResult.details,
-			};
 			this.options.emitEvent?.({
 				type: "tool_execution_update",
 				toolCallId,
 				toolName,
-				args: toolArgs,
-				partialResult: sanitizedPartialResult,
+				args: display,
+				partialResult: {
+					content: [{ type: "text" as const, text: sanitizedRawText }],
+					details: partialResult.details,
+				},
 			});
 			if (!canStreamSanitizedDelta) {
 				return;
@@ -279,7 +317,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 		};
 
 		try {
-			result = await tool.execute(toolCallId, toolArgs, undefined, onUpdate, this.options.getToolContext?.());
+			result = await tool.execute(toolCallId, call.execution, undefined, onUpdate, this.options.getToolContext?.());
 		} catch (error) {
 			const message = errorMessage(error);
 			result = buildToolErrorResult(message);
@@ -302,15 +340,11 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 			}
 		}
 
-		const sanitizedFinalResult: AgentToolResult<unknown> = {
-			content: result.content.map(c => (c.type === "text" ? { ...c, text: sanitizeText(c.text) } : c)),
-			details: result.details,
-		};
 		this.options.emitEvent?.({
 			type: "tool_execution_end",
 			toolCallId,
 			toolName,
-			result: sanitizedFinalResult,
+			result: sanitizedResult(result),
 			isError,
 		});
 		return createToolResultMessage(toolCallId, toolName, result, isError);
@@ -340,4 +374,24 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 		const toolResultMessage = await executeTool(this.options, toolName, toolCallId, args);
 		return toolResultMessage;
 	}
+}
+
+/**
+ * The bridge for an agent constructed after it: the agent's stream is handed the bridge, so the bridge reaches the
+ * agent through `agent` once it exists. A call prepares through `prepareExternalToolCall`, and its events reach the
+ * agent's subscribers through `emitExternalEvent`.
+ */
+export function cursorExecHandlersForAgent(
+	options: Omit<CursorExecBridgeOptions, "prepareToolCall" | "emitEvent"> & { agent: () => Agent | undefined },
+): CursorExecHandlers {
+	const { agent, ...bridge } = options;
+	return new CursorExecHandlers({
+		...bridge,
+		prepareToolCall: (tool, toolCall) => {
+			const current = agent();
+			if (!current) throw new Error("A Cursor tool call arrived before the agent was constructed.");
+			return current.prepareExternalToolCall(tool, toolCall);
+		},
+		emitEvent: event => agent()?.emitExternalEvent(event),
+	});
 }

@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@veyyon/model",
-  "version": "1.5.8",
+  "version": "1.5.9",
   "description": "Dependency-free model and message vocabulary a provider implements and a host reads",
   "homepage": "https://veyyon.dev",
   "author": "santhreal",
@@ -34,7 +34,7 @@
     "@types/bun": "catalog:"
   },
   "engines": {
-    "bun": ">=1.4.0"
+    "bun": ">=1.4.3"
   },
   "files": [
     "src",

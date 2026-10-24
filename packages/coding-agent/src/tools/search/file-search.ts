@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import * as natives from "@veyyon/natives";
-import { formatGroupedPaths, isCancellation, isEnoent, untilAborted } from "@veyyon/utils";
+import { formatGroupedPaths, isCancellation, isEnoent, trimTrailingSlashes, untilAborted } from "@veyyon/utils";
 import { isTimeoutError } from "@veyyon/utils/abortable";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { InternalUrlRouter } from "../../internal-urls";
@@ -41,6 +41,10 @@ export interface FileSearchInput {
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 200;
 const DEFAULT_GLOB_TIMEOUT_MS = 5000;
+// The native walk stops itself at the deadline and returns what it found. This
+// backstop ends the call when the walk cannot reach its next deadline check,
+// such as a directory read blocked on an unresponsive network mount.
+const GLOB_BACKSTOP_GRACE_MS = 1000;
 
 // File paths are far denser than match lines (no content per result), and
 // results are mtime-sorted with the most recently modified file on top, so a
@@ -120,6 +124,70 @@ interface FileSearchTarget {
 	searchPath: string;
 	globPattern: string;
 	hasGlob: boolean;
+}
+
+/** One native walk: a root, the glob it matches, and whether it keeps directories only. */
+interface FileSearchWalk {
+	searchPath: string;
+	globPattern: string;
+	hasGlob: boolean;
+	dirsOnly: boolean;
+}
+
+/**
+ * True when `pattern` can stand as one member of a `{a,b}` alternation and mean
+ * what it means alone: its braces balance and it holds no `,` outside them.
+ * A bracket class can hold a brace or a comma that is a member rather than
+ * syntax, so a pattern with one keeps its own walk.
+ */
+function isAlternationMember(pattern: string): boolean {
+	if (pattern.includes("[")) return false;
+	let depth = 0;
+	for (const char of pattern) {
+		if (char === "{") {
+			depth += 1;
+		} else if (char === "}") {
+			depth -= 1;
+			if (depth < 0) return false;
+		} else if (char === "," && depth === 0) {
+			return false;
+		}
+	}
+	return depth === 0;
+}
+
+/**
+ * Plans one walk per root. Glob entries that share a root and a file-type
+ * filter join one `{a,b}` alternation, so `*a*;*b*` reads the tree once rather
+ * than once per entry in walks that run in parallel and contend for the same
+ * directories. A glob that ends in `/` names directories, as it does in a
+ * shell: no walked path ends in a separator, so the glob loses the slash and
+ * its walk keeps directories only.
+ */
+function planWalks(targets: FileSearchTarget[]): FileSearchWalk[] {
+	const walks: FileSearchWalk[] = [];
+	const joined = new Map<string, { walk: FileSearchWalk; patterns: Set<string> }>();
+	for (const target of targets) {
+		const dirsOnly = target.hasGlob && target.globPattern.endsWith("/");
+		const globPattern = dirsOnly ? trimTrailingSlashes(target.globPattern) : target.globPattern;
+		const walk: FileSearchWalk = { searchPath: target.searchPath, globPattern, hasGlob: target.hasGlob, dirsOnly };
+		if (!target.hasGlob || !isAlternationMember(globPattern)) {
+			walks.push(walk);
+			continue;
+		}
+		const key = `${dirsOnly ? "dirs" : "all"}:${target.searchPath}`;
+		const group = joined.get(key);
+		if (group) {
+			group.patterns.add(globPattern);
+			continue;
+		}
+		joined.set(key, { walk, patterns: new Set([globPattern]) });
+		walks.push(walk);
+	}
+	for (const { walk, patterns } of joined.values()) {
+		if (patterns.size > 1) walk.globPattern = `{${[...patterns].join(",")}}`;
+	}
+	return walks;
 }
 
 export async function executeFileSearch(
@@ -228,7 +296,8 @@ export async function executeFileSearch(
 		const includeHidden = hidden ?? true;
 		const useGitignore = gitignore ?? true;
 		const timeoutMs = DEFAULT_GLOB_TIMEOUT_MS;
-		const scopedTimeout = scopedTimeoutSignal(timeoutMs, signal);
+		const deadlineAt = Date.now() + timeoutMs;
+		const scopedTimeout = scopedTimeoutSignal(timeoutMs + GLOB_BACKSTOP_GRACE_MS, signal);
 		const combinedSignal = scopedTimeout.signal;
 		const formatMatchPath = (matchPath: string, base: string, fileType?: natives.FileType): string => {
 			const hadTrailingSlash = matchPath.endsWith("/") || matchPath.endsWith("\\");
@@ -314,10 +383,11 @@ export async function executeFileSearch(
 			return resultBuilder.done();
 		};
 
-		// Walk each user path as its own root and run the globs concurrently.
+		// Each user path keeps its own root, and the roots are walked concurrently.
 		// Collapsing multiple paths to a shared base would force the walker to
 		// traverse and stat every unrelated sibling under that ancestor; per-path
-		// roots keep each scan bounded to exactly what the user asked for.
+		// roots keep each scan bounded to exactly what the user asked for. Entries
+		// that share a root share its walk (`planWalks`).
 		if (customOps?.glob) {
 			const operations = customOps;
 			const perTarget = await Promise.all(
@@ -350,7 +420,6 @@ export async function executeFileSearch(
 		}
 
 		const onUpdateMatches: string[] = [];
-		const onUpdateMtimes: number[] = [];
 		const updateIntervalMs = 200;
 		let lastUpdate = 0;
 		const emitUpdate = () => {
@@ -378,12 +447,11 @@ export async function executeFileSearch(
 				if (streamed.has(relativePath)) return;
 				streamed.add(relativePath);
 				onUpdateMatches.push(relativePath);
-				onUpdateMtimes.push(match.mtime ?? 0);
 				emitUpdate();
 			};
 
 		let timedOut = false;
-		const runTarget = async (target: FileSearchTarget): Promise<Array<{ path: string; mtime: number }>> => {
+		const runWalk = async (target: FileSearchWalk): Promise<Array<{ path: string; mtime: number }>> => {
 			throwIfAborted(signal);
 			let stat: fs.Stats;
 			try {
@@ -408,6 +476,7 @@ export async function executeFileSearch(
 						{
 							pattern: target.globPattern,
 							path: target.searchPath,
+							fileType: target.dirsOnly ? natives.FileType.Dir : undefined,
 							hidden: includeHidden,
 							maxResults: effectiveLimit,
 							sortByMtime: true,
@@ -419,12 +488,14 @@ export async function executeFileSearch(
 							// native auto-recursion so `dir/*` does not silently match
 							// `dir/sub/nested.ts`.
 							recursive: false,
+							timeoutMs: Math.max(0, deadlineAt - Date.now()),
 							signal: combinedSignal,
 						},
 						makeOnMatch(target.searchPath),
 					),
 				);
 				throwIfAborted(signal);
+				if (result.timedOut) timedOut = true;
 				const out: Array<{ path: string; mtime: number }> = [];
 				for (const match of result.matches) {
 					if (!match.path) continue;
@@ -435,16 +506,12 @@ export async function executeFileSearch(
 				}
 				return out;
 			} catch (error) {
-				// A deadline yields the partial matches gathered so far; a real
-				// cancellation propagates with its reason.
+				// The backstop yields the matches of the walks that finished; a
+				// real cancellation propagates with its reason.
 				//
-				// The deadline test used to read `combinedSignal.reason` rather
-				// than the error, because `AbortError` stamped its own name over
-				// the `TimeoutError` and the error could not be asked. It carries
-				// its own name now, so the question goes to the thing that was
-				// thrown. `!signal?.aborted` is still required: an operator
-				// interrupt that lands in the same window is a cancellation even
-				// though the scoped signal also shows a timeout reason.
+				// `!signal?.aborted` is required: an operator interrupt that lands
+				// in the same window is a cancellation even though the scoped
+				// signal also shows a timeout reason.
 				if (isTimeoutError(error) && !signal?.aborted) {
 					timedOut = true;
 					return [];
@@ -457,41 +524,20 @@ export async function executeFileSearch(
 			}
 		};
 
-		let perTarget: Array<Array<{ path: string; mtime: number }>>;
+		let perWalk: Array<Array<{ path: string; mtime: number }>>;
 		try {
-			perTarget = await Promise.all(targets.map(runTarget));
+			perWalk = await Promise.all(planWalks(targets).map(runWalk));
 		} finally {
 			scopedTimeout.cancel();
 		}
 
-		if (timedOut) {
-			// Drain the partial matches accumulated during streaming and return them
-			// instead of throwing — empty results after a multi-second wait force the
-			// caller to retry blind, which is the worst possible outcome.
-			const partial: FileSearchResultEntry[] = onUpdateMatches.map((entry, index) => ({
-				path: entry,
-				mtime: onUpdateMtimes[index] ?? 0,
-			}));
-			partial.sort(compareFileSearchResults);
-			const sortedPaths = partial.map(entry => entry.path);
-			const seconds = timeoutMs % 1000 === 0 ? `${timeoutMs / 1000}` : (timeoutMs / 1000).toFixed(1);
-			// Walk cost tracks directory-tree size, not pattern specificity: a
-			// mtime-ranked scan cannot early-exit, so a "narrow" pattern over a
-			// huge tree still times out. Say so instead of implying the pattern
-			// was too broad.
-			const notice =
-				sortedPaths.length > 0
-					? `File search timed out after ${seconds}s; returning ${sortedPaths.length} partial matches — results are incomplete, scope to a deeper directory instead of retrying blindly`
-					: `File search timed out after ${seconds}s before finding any matches — the scan is incomplete, NOT proof of absence. The walk is bounded by directory size, not pattern width; scope the search to a deeper directory (e.g. \`sub/dir/*.ext\` instead of \`*.ext\` at a huge root).`;
-			return await buildResult(sortedPaths, { notice, forceTruncated: true, timedOut: true });
-		}
-
-		// Merge per-target results: native glob already ranks each target's own
+		// Merge per-walk results: native glob already ranks each walk's own
 		// matches by mtime and caps them at the limit, so a global mtime re-sort
-		// plus dedup yields the correct top-N across all roots.
+		// plus dedup yields the correct top-N across all roots. A walk that
+		// reached the deadline contributes the matches it found by then.
 		const seen = new Set<string>();
 		const merged: FileSearchResultEntry[] = [];
-		for (const group of perTarget) {
+		for (const group of perWalk) {
 			for (const entry of group) {
 				if (seen.has(entry.path)) continue;
 				seen.add(entry.path);
@@ -499,7 +545,19 @@ export async function executeFileSearch(
 			}
 		}
 		merged.sort(compareFileSearchResults);
-		return await buildResult(merged.map(entry => entry.path));
+		const sortedPaths = merged.map(entry => entry.path);
+		if (!timedOut) return await buildResult(sortedPaths);
+
+		const seconds = timeoutMs % 1000 === 0 ? `${timeoutMs / 1000}` : (timeoutMs / 1000).toFixed(1);
+		// Walk cost tracks directory-tree size, not pattern specificity: a
+		// mtime-ranked scan cannot early-exit, so a "narrow" pattern over a
+		// huge tree still times out. Say so instead of implying the pattern
+		// was too broad.
+		const notice =
+			sortedPaths.length > 0
+				? `File search timed out after ${seconds}s; returning ${sortedPaths.length} partial matches — results are incomplete, scope to a deeper directory instead of retrying blindly`
+				: `File search timed out after ${seconds}s before finding any matches — the scan is incomplete, NOT proof of absence. The walk is bounded by directory size, not pattern width; scope the search to a deeper directory (e.g. \`sub/dir/*.ext\` instead of \`*.ext\` at a huge root).`;
+		return await buildResult(sortedPaths, { notice, forceTruncated: true, timedOut: true });
 	});
 }
 

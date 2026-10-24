@@ -2,9 +2,7 @@
 
 ## [Unreleased]
 
-### Removed
-
-- Removed the `ImageBudget` and `DEFAULT_MAX_INLINE_IMAGES` re-exports from `@veyyon/tui/components/image`; import them from `@veyyon/tui` or `@veyyon/tui/core/image-budget`.
+## [1.5.9] - 2026-10-22
 
 ### Added
 
@@ -17,10 +15,15 @@
 
 ### Fixed
 
+- An `Editor` evaluates the text at the cursor when its first autocomplete provider attaches, so an `@` mention, `#` action, slash command or shortcode typed before then opens its suggestions or is rewritten instead of being ignored until the next keystroke.
 - A nested `Markdown` blockquote styles each row once, at the outermost quote, instead of once per level, so a `>`×20 quote row is 242 bytes instead of 584 and renders in 0.03 ms instead of 0.05 ms averaged over widths 1 to 40.
 - `Loader.start()` replaces a running animation timer instead of arming a second one that `stop()` could not clear.
 - An SGR mouse or kitty escape that starts while an expired partial is being held is no longer merged into that partial and delivered as typed characters; the stale partial is delivered on its own and the new sequence gets its own hold window.
 - A terminal started again while running no longer leaves its first keyboard-probe fallback armed, which enabled modifyOtherKeys on the restored terminal after `stop()`.
+
+### Removed
+
+- Removed the `ImageBudget` and `DEFAULT_MAX_INLINE_IMAGES` re-exports from `@veyyon/tui/components/image`; import them from `@veyyon/tui` or `@veyyon/tui/core/image-budget`.
 
 ## [1.5.7] - 2026-10-15
 

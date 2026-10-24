@@ -1929,7 +1929,7 @@ export class ModelHubComponent implements Component {
 	 * a full-width strip/hint row below the split, and centered footer chips.
 	 */
 	render(width: number): string[] {
-		const height = Math.max(16, this.#tui.terminal?.rows || process.stdout.rows || 40);
+		const height = this.#tui.terminal?.rows || process.stdout.rows || 40;
 		const sizing = sizingForArea(MODAL_SIZING_LARGE, height);
 		const dims = computeModalDims(width, height, sizing);
 		if (!dims) {

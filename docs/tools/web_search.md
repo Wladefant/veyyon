@@ -219,7 +219,8 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
   - **Public Web**: `packages/coding-agent/src/tools/web/search/providers/public.ts`
     - Availability: explicit selection only (`isAvailable()` is `false`; `isExplicitlyAvailable()` is `true`).
     - Querying: fans out to every credential-free engine in parallel (`duckduckgo`, `startpage`, `google`, `mojeek`, minus excluded ones), then consolidates: URLs deduplicated on a canonical key (host without `www.`, no trailing slash, no fragment), ranked by cross-engine consensus, then best per-engine rank; the longest snippet wins.
-    - Deadline race: returns at the earliest of all engines settled, 5s soft deadline with at least one success, or 30s hard cap; stragglers are aborted. Individual engine failures are tolerated; it fails only when every engine fails (aggregated 503).
+    - Deadline race: returns at the earliest of all engines settled, 5s soft deadline with at least one success, or 30s hard cap; stragglers are aborted. Individual engine failures are tolerated.
+    - No result: when every engine answers with no results, the tool reports `Public Web found no results for this query.` Otherwise the error lists each engine under its outcome: the engines that did not answer by the hard cap (status 504), the engines that found no results for the query, and each failed engine with its error (status 503). `All public engines failed: …` is reported only when every engine failed.
 
 ## Side Effects
 - Network

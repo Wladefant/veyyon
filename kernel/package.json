@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@veyyon/kernel",
-  "version": "1.5.8",
+  "version": "1.5.9",
   "description": "The only Veyyon member that is not a plugin: it loads plugins, resolves their contributions and runs a session, and it names no tool and no host",
   "homepage": "https://veyyon.dev",
   "author": "santhreal",
@@ -33,6 +33,7 @@
     "@veyyon/agent-core": "catalog:",
     "@veyyon/ai": "catalog:",
     "@veyyon/catalog": "catalog:",
+    "@veyyon/natives": "catalog:",
     "@veyyon/plugin": "catalog:",
     "@veyyon/session": "catalog:",
     "@veyyon/settings": "catalog:",
@@ -42,7 +43,7 @@
     "@types/bun": "catalog:"
   },
   "engines": {
-    "bun": ">=1.4.0"
+    "bun": ">=1.4.3"
   },
   "files": [
     "src",

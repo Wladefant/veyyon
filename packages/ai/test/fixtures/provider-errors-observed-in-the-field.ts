@@ -178,6 +178,12 @@ export const OBSERVED_PROVIDER_ERRORS: readonly ObservedProviderError[] = [
 	},
 	{
 		message:
+			"Connect error resource_exhausted: Increase limits for faster responses: You're out of usage. Switch to Auto or Composer 2.5, or ask your admin to increase your limit to continue. (ERROR_RATE_LIMITED)",
+		verdict: "wall",
+		why: "Cursor stating the plan's allowance for the model is spent. The same account gets the same answer until the plan changes or the limit is raised.",
+	},
+	{
+		message:
 			"429 Rate limit exceeded. Please try again later. retry-after-ms=50352000\nRate limit exceeded. Please try again later. (type=FreeUsageLimitError)",
 		verdict: "wall",
 		why: "A retry-after of fourteen hours is a cap, whatever the sentence beside it suggests.",
@@ -216,6 +222,18 @@ export const OBSERVED_PROVIDER_ERRORS: readonly ObservedProviderError[] = [
 		message: "400 Thinking mode does not support this tool_choice",
 		verdict: "wall",
 		why: "A thinking model that takes no forced tool choice. The same request fails the same way, so only a request without the field can succeed.",
+	},
+	{
+		message:
+			'400 {"type":"error","error":{"type":"invalid_request_error","message":"tool_choice: type \\"tool\\" and \\"any\\" are not supported for this model."},"request_id":"req_011C00000000000000000000"}',
+		verdict: "wall",
+		why: "A Claude model that takes no forced tool choice. Re-sending the pin reproduces it; the provider rebuilds the request with an automatic choice instead.",
+	},
+	{
+		message:
+			'400 {"error":{"type":"invalid_request_error","message":"tool_choice \'specified\' is incompatible with thinking enabled"},"type":"error"}',
+		verdict: "wall",
+		why: "A Kimi model on an Anthropic-compatible endpoint that takes no forced tool choice while it thinks. The same request fails the same way; the provider rebuilds it with an automatic choice.",
 	},
 ];
 
