@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import { CREDENTIAL_CLOCK_TOLERANCE_MS, epochSecondsToMs, isRecordFromFutureClock } from "@veyyon/ai/credential-clock";
 import { removeWithRetries } from "../../utils/src/temp";
 

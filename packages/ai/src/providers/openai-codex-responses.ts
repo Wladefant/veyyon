@@ -48,6 +48,7 @@ import type {
 	Api,
 	AssistantMessage,
 	CodexCompactionRequestContext,
+	CodexForkRequestContext,
 	Context,
 	FetchImpl,
 	ImageContent,
@@ -123,6 +124,27 @@ import {
 	isCodexProviderSessionState,
 	resetCodexWebSocketAppendState,
 } from "./openai-codex/session-state";
+import {
+	accumulateCustomToolCallInputDelta,
+	accumulateToolCallArgumentsDelta,
+	appendMessageContentPart,
+	appendMessageTextDelta,
+	appendReasoningSummaryPart,
+	appendReasoningSummaryPartDone,
+	appendReasoningSummaryTextDelta,
+	applyReasoningSummaryDone,
+	createSequentialCutoffSummaryState,
+	finalizeCustomToolCallInputDone,
+	finalizeMessageText,
+	finalizePendingResponsesToolCalls,
+	finalizeReasoningThinking,
+	finalizeToolCallArgumentsDone,
+	mapOpenAIResponsesStopReason,
+	promoteResponsesToolUseStopReason,
+	resolveResponsesToolCallDeltaShape,
+	type SequentialCutoffSummaryState,
+	type ToolCallArgumentsDeltaShape,
+} from "./openai-responses-stream";
 import type {
 	ResponseCustomToolCall,
 	ResponseFunctionToolCall,
@@ -134,33 +156,18 @@ import type {
 	ResponseStatus,
 } from "./openai-responses-wire";
 import {
-	accumulateCustomToolCallInputDelta,
-	accumulateToolCallArgumentsDelta,
-	appendMessageContentPart,
-	appendMessageTextDelta,
-	appendReasoningSummaryPart,
-	appendReasoningSummaryPartDone,
-	appendReasoningSummaryTextDelta,
 	appendResponsesImageResult,
 	appendResponsesToolResultMessages,
 	applyOpenAIServiceTier,
-	applyReasoningSummaryDone,
 	buildResponsesDeltaInput,
 	convertResponsesAssistantMessage,
 	convertResponsesInputContent,
-	createSequentialCutoffSummaryState,
 	encodeResponsesToolCallId,
 	encodeTextSignatureV1,
 	escapeReplayedClientText,
-	finalizeCustomToolCallInputDone,
-	finalizeMessageText,
-	finalizePendingResponsesToolCalls,
-	finalizeReasoningThinking,
-	finalizeToolCallArgumentsDone,
 	getOpenAIPromptCacheKey,
 	hoistInterleavedResponsesToolBatchMessages,
 	isOpenAIResponsesProgressEvent,
-	mapOpenAIResponsesStopReason,
 	populateResponsesUsageFromResponse,
 	promoteResponsesToolUseStopReason,
 	repairOrphanResponsesToolCalls,
@@ -481,6 +488,12 @@ interface CodexMetadataSessionState {
 	turnStates: Map<string, CodexTurnStateCell>;
 }
 
+/** Fork identity serialized into the turn envelope of an ephemeral fork. */
+interface CodexForkMetadata {
+	threadSource: string;
+	forkedFromThreadId?: string;
+}
+
 interface CodexCompatibilityIdentity {
 	installationId: string;
 	sessionId: string;
@@ -614,6 +627,7 @@ function createCodexRequestMetadata(
 		clientMetadata?: Readonly<Record<string, string>>;
 		parentTurnId?: string;
 		compaction?: CodexCompactionRequestContext;
+		fork?: CodexForkMetadata;
 	},
 ): CodexRequestMetadata {
 	if (options.startNewTurn || !session.turnId) {
@@ -654,6 +668,10 @@ function createCodexRequestMetadata(
 			phase: options.compaction.phase,
 			strategy: options.compaction.strategy,
 		};
+	}
+	if (options.fork) {
+		if (options.fork.forkedFromThreadId) turnMetadata.forked_from_thread_id = options.fork.forkedFromThreadId;
+		turnMetadata.thread_source = options.fork.threadSource;
 	}
 	if (session.turnStartedAtUnixMs !== undefined) {
 		turnMetadata.turn_started_at_unix_ms = session.turnStartedAtUnixMs;
@@ -1467,6 +1485,7 @@ function createCodexRequestContext(
 		clientMetadata: transformedBody.client_metadata,
 		parentTurnId: options?.parentTurnId,
 		compaction,
+		fork: resolveCodexForkMetadata(options?.codexFork, providerSessionState),
 	});
 	transformedBody.client_metadata = requestMetadata.clientMetadata;
 	// The last place every half of the bridge's turn contract is final and still
@@ -1517,6 +1536,20 @@ function createCodexRequestContext(
 		transformedBody,
 		rawRequestDump,
 	};
+}
+
+/**
+ * Resolve a fork request to the parent's Codex thread id. The parent has a thread id only once one of its turns has
+ * gone out; a fork of a session that never reached Codex still carries its `thread_source`.
+ */
+function resolveCodexForkMetadata(
+	fork: CodexForkRequestContext | undefined,
+	providerSessionState: CodexProviderSessionState | undefined,
+): CodexForkMetadata | undefined {
+	if (!fork) return undefined;
+	const parentSessionId = normalizeOpenAIPromptCacheKey(fork.parentSessionId);
+	const parent = parentSessionId ? providerSessionState?.metadataSessions.get(parentSessionId) : undefined;
+	return { threadSource: fork.threadSource, forkedFromThreadId: parent?.threadId };
 }
 
 async function buildCodexRequestContext(
@@ -1865,7 +1898,7 @@ export async function buildTransformedCodexRequestBody(
 ): Promise<RequestBody> {
 	const params: RequestBody = {
 		model: model.requestModelId ?? model.id,
-		input: convertMessages(model, context),
+		input: convertCodexResponsesMessages(model, context),
 		stream: true,
 		prompt_cache_key: promptCacheKey,
 	};
@@ -4770,7 +4803,7 @@ function rememberReplayedToolItems(
 	}
 }
 
-function convertMessages(model: Model<"openai-codex-responses">, context: Context): ResponseInput {
+export function convertCodexResponsesMessages(model: Model<"openai-codex-responses">, context: Context): ResponseInput {
 	const messages: ResponseInput = [];
 
 	const normalizeToolCallId = (id: string): string => {
@@ -4942,8 +4975,6 @@ function normalizeInputMessageContent(
 	);
 }
 
-/** @internal Exported for tests. */
-export { convertMessages as convertCodexResponsesMessages };
 
 type CodexToolPayload =
 	| {

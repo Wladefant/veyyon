@@ -1,6 +1,7 @@
 import type { DeferredDiagnosticsEntry, ToolSession } from "../tools";
+import type { FileDiagnosticsResult } from "./diagnostics";
 import { getDiagnosticsLedger } from "./diagnostics-ledger";
-import type { FileDiagnosticsResult, WritethroughDeferredHandle } from "./index";
+import type { WritethroughDeferredHandle } from "./writethrough";
 
 /** Coordinates late LSP diagnostics for one mutation tool instance. */
 export class DeferredDiagnostics {

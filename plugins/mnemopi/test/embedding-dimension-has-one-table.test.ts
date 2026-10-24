@@ -33,6 +33,7 @@ import * as path from "node:path";
 
 import { EMBEDDING_DIMS, embeddingDim, FALLBACK_EMBEDDING_DIM } from "@veyyon/mnemopi/config";
 import { embeddingDimFor } from "@veyyon/mnemopi/core/embeddings";
+import { exportedDeclarationsIn } from "@veyyon/utils/source-declarations";
 
 const SRC = path.join(import.meta.dir, "..", "src");
 
@@ -164,7 +165,8 @@ describe("no second dimension table", () => {
 	it("and config.ts really still holds it", async () => {
 		const text = await readFile(path.join(SRC, "config.ts"), "utf8");
 
-		expect(text).toMatch(/"BAAI\/bge-small-en-v1\.5"\s*:\s*384/);
+		expect(exportedDeclarationsIn(text)).toContain("EMBEDDING_DIMS");
+		expect(EMBEDDING_DIMS["BAAI/bge-small-en-v1.5"]).toBe(384);
 		expect(Object.keys(EMBEDDING_DIMS).length).toBeGreaterThan(10);
 	});
 });

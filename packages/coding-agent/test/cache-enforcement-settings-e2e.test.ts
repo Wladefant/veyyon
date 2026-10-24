@@ -102,8 +102,9 @@ describe("prompt-cache enforcement settings", () => {
 	 * A config file is not type-checked, and `"false"` is a truthy string. Read
 	 * for truthiness, a hand-edited `cache.blockOnRejection: "false"` turns hard
 	 * blocking ON for an operator whose config says it is off — the exact silent
-	 * inversion this feature is supposed to catch elsewhere. The mapping compares
-	 * against `true`, so a non-boolean cannot enable anything.
+	 * inversion this feature is supposed to catch elsewhere. The settings read
+	 * serves the declared default in place of a value of the wrong kind, so a
+	 * non-boolean cannot enable anything.
 	 */
 	it("never enables blocking from a non-boolean config value", async () => {
 		resetSettingsForTest();
@@ -114,9 +115,7 @@ describe("prompt-cache enforcement settings", () => {
 				"cache.blockOnRejection": "false" as unknown as boolean,
 			},
 		});
-		// The stored value is passed through unvalidated, which is precisely why the
-		// read has to be strict rather than trusting the schema's declared type.
-		expect(settings.get("cache.blockOnRejection")).toBe("false" as unknown as boolean);
+		expect(settings.get("cache.blockOnRejection")).toBe(false);
 		expect(enforcementFor(settings)).toBe("warn");
 	});
 

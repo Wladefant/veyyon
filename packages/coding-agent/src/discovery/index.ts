@@ -32,6 +32,7 @@ import "./github";
 import "./veyyon-plugins";
 import "./ssh";
 import "./windsurf";
+import "./project-skills";
 
 // Re-export the main API from capability registry
 export {
@@ -73,3 +74,4 @@ export type { SSHHost } from "./capability/ssh";
 export type { DiscoveredCustomTool } from "./capability/tool";
 // Re-export types
 export type * from "./capability/types";
+export * from "./project-skills";

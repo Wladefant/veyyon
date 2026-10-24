@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import {
-	embed,
-	resetEmbeddingProviderForTests,
-	setLocalModelInitializerForTests,
-} from "@veyyon/mnemopi/core/embeddings";
+import { embed, resetEmbeddingProviderForTests, setLocalModelInitializer } from "@veyyon/mnemopi/core/embeddings";
 import { withMnemopiRuntimeOptions } from "@veyyon/mnemopi/core/runtime-options";
 import { logger } from "@veyyon/utils";
 import { useMnemopiTestEnv } from "./setup";
@@ -59,7 +55,7 @@ describe("embedding failure logging (#2322)", () => {
 		const warnSpy = spyOn(logger, "warn").mockImplementation(() => {});
 		try {
 			await withLocalModelEnv(async () => {
-				setLocalModelInitializerForTests(async () => {
+				setLocalModelInitializer(async () => {
 					throw new Error("onnx init blew up");
 				});
 
@@ -88,7 +84,7 @@ describe("embedding failure logging (#2322)", () => {
 		const warnSpy = spyOn(logger, "warn").mockImplementation(() => {});
 		try {
 			await withLocalModelEnv(async () => {
-				setLocalModelInitializerForTests(async () => {
+				setLocalModelInitializer(async () => {
 					throw new Error("onnx init blew up again");
 				});
 

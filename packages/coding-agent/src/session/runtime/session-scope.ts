@@ -10,13 +10,13 @@
  * verbatim, so a session that moved without re-scoping names a directory it has left, and the model
  * reads the old project's AGENTS.md while resolving relative paths against the new one.
  */
+import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@veyyon/agent-core";
-import { setProjectDir } from "@veyyon/utils";
 import { applyProviderGlobalsFromSettings } from "../../config/provider-globals";
 import type { Settings } from "../../config/settings";
 import { reset as resetCapabilities } from "../../discovery/capability";
-import { clearClaudePluginRootsCache } from "../../discovery/helpers";
+import { clearClaudePluginRootsCache, preloadPluginRoots } from "../../discovery/helpers";
 
 /** The session log slice a re-root moves and records into. `SessionManager` satisfies this. */
 export interface SessionScopeStore {
@@ -101,9 +101,10 @@ export class SessionScope {
 		// The process singleton may be a different instance (SDK/embedded and spawned agent sessions
 		// commonly use isolated Settings).
 		await host.settings.reloadForCwd(normalizedCwd);
-		// A spawned agent may not mutate process-global cwd/capability state, but its session-owned
-		// settings, secrets, tools, prompt, and advisors still move.
+		// Session cwd is independent of the OS cwd, including for the root session. Commands and
+		// tool paths resolve against the session store, never a process-wide directory change.
 		if (!host.isSpawned) this.#rescopeProcess(normalizedCwd);
+		await preloadPluginRoots(os.homedir(), normalizedCwd);
 		await host.refreshSecrets();
 		await host.refreshSshTool();
 		await host.refreshBaseSystemPrompt();
@@ -182,18 +183,14 @@ export class SessionScope {
 	}
 
 	/**
-	 * The half of a re-root that belongs to the PROCESS, not to one session. Every line writes state
-	 * shared by everything running in this process, which is why only the session that owns the
-	 * process runs it; anything session-scoped belongs in {@link rescope} beside the prompt refresh.
+	 * Refresh process-wide provider and discovery state for the root session. The directory itself
+	 * remains session-owned; changing it here would redirect unrelated sessions and hold worktrees.
 	 */
 	#rescopeProcess(cwd: string): void {
-		// Align process project dir so status-line / discovery readers that still consult
-		// getProjectDir() stay consistent with the live session root.
-		setProjectDir(cwd);
 		// Provider preferences are process-wide, but their source is the destination scope of this
 		// session's Settings instance.
 		applyProviderGlobalsFromSettings(this.#host.settings);
-		clearClaudePluginRootsCache();
+		clearClaudePluginRootsCache(cwd);
 		resetCapabilities();
 	}
 

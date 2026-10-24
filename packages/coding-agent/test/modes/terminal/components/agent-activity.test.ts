@@ -81,8 +81,7 @@ describe("call signs are stable names, not decoration", () => {
 		const before = collectLiveAgents([first, second]);
 		const after = collectLiveAgents([{ ...first, lastActivity: 5000 }, second]);
 
-		const nameOf = (agents: ReturnType<typeof collectLiveAgents>, id: string) =>
-			agents.find(agent => agent.id === id)?.callSign;
+		const nameOf = (agents: LiveAgent[], id: string) => agents.find(agent => agent.id === id)?.callSign;
 		expect(nameOf(before, "sub-a")).toBe(AGENT_CODE_NAMES[0]);
 		expect(nameOf(after, "sub-a")).toBe(AGENT_CODE_NAMES[0]);
 		expect(nameOf(after, "sub-b")).toBe(AGENT_CODE_NAMES[1]);

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { getEnvApiKey } from "@veyyon/ai/stream";
+import { getEnvApiKey } from "@veyyon/ai/env-api-key";
 import { DEFAULT_MODEL_PER_PROVIDER, PROVIDER_DESCRIPTORS } from "@veyyon/catalog/provider-models/descriptors";
 import { aimlApiModelManagerOptions, isLikelyAimlApiChatModelId } from "@veyyon/catalog/provider-models/openai-compat";
 

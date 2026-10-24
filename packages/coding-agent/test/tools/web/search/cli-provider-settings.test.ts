@@ -3,11 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import {
-	SEARCH_PROVIDER_ORDER,
-	setExcludedSearchProviders,
-	setPreferredSearchProvider,
-} from "@veyyon/coding-agent/tools/web/search/provider";
+import { setExcludedSearchProviders, setPreferredSearchProvider } from "@veyyon/coding-agent/tools/web/search/provider";
+import { SEARCH_PROVIDER_ORDER } from "@veyyon/coding-agent/tools/web/search/types";
 import { setAgentDir, TempDir } from "@veyyon/utils";
 import { __resetDirsFromEnvForTests, getActiveAuthDbPath } from "@veyyon/utils/dirs";
 import { runSearchCommand } from "../../../../src/cli/web-search-cli";

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { htmlToBasicMarkdown } from "@veyyon/web/scrapers/types";
+import { htmlToBasicMarkdown } from "@veyyon/utils/html-markdown";
 
 /**
  * Locks FINDING-HTMLTOBASICMARKDOWN-SKIPS-TABLE-NORMALIZE. htmlToBasicMarkdown

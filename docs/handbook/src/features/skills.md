@@ -1,38 +1,44 @@
 # Skills
 
-A skill is a folder of instructions you drop into your profile, and the agent loads it automatically. Use one to give Veyyon instructions for a repeated task: how your project runs its tests, the steps of a release, the shape of a code review. Skills are files on disk, not part of the binary, so you add or change one by editing a file, with no rebuild.
+A skill is a folder of reusable instructions. Veyyon can load a project skill after trust or a profile skill from the active profile. Use one for repeated tasks such as tests, releases or code reviews. Skills are files on disk, not part of the binary, so you can add or change one without a rebuild.
 
 For general information on Veyyon extension capabilities, see [Tools, skills, and extension data](../using/extending.md).
 
 ## Skill locations
 
-Skills load only from the active profile. Veyyon reads these three locations,
-all under `$HOME/.veyyon/profiles/<profile>/agent` (`profiles/default/` when you
-have not selected a profile):
+Skills can come from the open project or the active profile. Veyyon checks project roots first:
 
 | Scope | Location | Description |
 | --- | --- | --- |
+| **Project** | `.agents/skills`, `.github/skills`, `.claude/skills` at the project root, in that order | Project skills; the first matching name wins and project skills take precedence over profile skills. |
 | **User** | `.../agent/skills` | Skills you author or install for the active profile. |
 | **Managed** | `.../agent/managed-skills` | Auto-learn skills Veyyon writes itself. A same-named user skill always wins. |
 | **Plugins** | plugins installed into the active profile | Skills bundled with a plugin you added to this profile. |
 
-Nothing else contributes skills. There is no autodiscovery from across your
-computer: another tool's skill directory (`$HOME/.claude/skills`,
-`$HOME/.codex/skills`, `$HOME/.agents/skills`, `.github/skills`, and the rest) is
-never scanned, and a project-local `.veyyon/skills` directory next to your code is
-not read either. Skills belong to your profile, so switching profiles switches
-the whole skill set, and no repository you open can inject a skill into a session.
+Profile locations are under `$HOME/.veyyon/profiles/<profile>/agent` (`profiles/default/` when you
+have not selected a profile). The project root is discovery's `repoRoot`, or `cwd` when no
+repository root is available.
+
+Veyyon scans only the three project roots in the table. It does not scan nested package skill roots,
+`.agent/skills` or `.veyyon/skills`. Each project skill requires approval through its `SKILL.md`
+path. The SHA-256 digest covers the full skill directory, including relative paths and file
+contents. A change requires approval again. Veyyon refuses unapproved, denied, changed or
+out-of-root symlink skills and logs a warning. Scripts and assets are included in the single skill-folder approval. Veyyon does not approve them separately and does not sandbox them. See [Project trust](../reference/project-trust.md).
+
+Foreign home skill directories such as `$HOME/.claude/skills`, `$HOME/.codex/skills`,
+`$HOME/.agents/skills` and other tool-specific locations are never scanned. Switching profiles
+changes profile skills; project skills remain scoped to the current project and its trust decision.
+
 
 Full provider list and dedup rules: [`docs/handbook/src/reference/skills.md`](../reference/skills.md).
 
 ## Importing another tool's skills
 
-Because foreign skills never load on their own, you bring one into Veyyon by
-importing it. The onboarding import scan finds user-level skills and instruction
-files that other AI tools (Claude, Codex, Gemini, Cursor, and similar) left on
-disk, and copies the ones you pick into the active profile's `skills` directory.
-The copy belongs to the profile from then on, so it loads like any other profile skill
-and is not affected by the original tool.
+Foreign home skills do not load on their own. Use the onboarding import scan to
+find user-level skills and instruction files that other AI tools (Claude, Codex,
+Gemini, Cursor and similar) left on disk. The scan copies the ones you pick into
+the active profile's `skills` directory. The copy belongs to the profile from then
+on and does not depend on the original tool.
 
 A separate setting, `discovery.importForeignConfig`, governs whether Veyyon
 ambiently reads other tools' context files (`CLAUDE.md`, standalone `AGENTS.md`),
@@ -48,11 +54,11 @@ discovery:
   importForeignConfig: true
 ```
 
-The setting does not change skill loading: foreign skills are never loaded
-ambiently whether it is on or off. It also does not affect the import scan. The
-onboarding scan always finds and offers foreign files for import, because
-importing copies a file into your profile, which is the default route for foreign
-config.
+The setting does not change skill loading: foreign home skills remain import-only whether it is on
+or off. It also does not affect the import scan. The onboarding scan always finds and offers foreign
+files for import, because importing copies a file into your profile, which is the default route for
+foreign config.
+
 
 Veyyon's instructions load from these four layers and no others:
 
@@ -101,14 +107,14 @@ of your instruction budget. It is there for you when you open the file to edit
 it, not for the agent. A new profile's `AGENTS.md` gets the same kind of note.
 Delete the note if you like; Veyyon does not add it back.
 
-## Profiles isolate skills
+## Profiles isolate profile skills
 
 Each [profile](./profiles.md) is a separate config root
-(`$HOME/.veyyon/profiles/<name>/agent`), and every skill source resolves under
-that root, so profiles never share a skill directory. Switching profiles re-homes
-user skills, managed (auto-learn) skills, and plugin skills to the active
-profile, and all `skills.*` settings are stored per profile. One profile can hold
-a large skill set while another stays empty.
+(`$HOME/.veyyon/profiles/<name>/agent`), and every profile skill source resolves under that root.
+Switching profiles re-homes user skills, managed (auto-learn) skills and plugin skills to the
+active profile, and all `skills.*` settings are stored per profile. Project skills use the current
+project root and its trust decision instead of the profile root.
+
 
 ## Skill structure
 
@@ -163,10 +169,10 @@ skills:
   enableSkillCommands: false
 ```
 
-There are no per-source toggles and no `customDirectories` setting. Skills load
-only from the active profile (see [Skill locations](#skill-locations)), so there
-is nothing to enable or disable per source. To use a skill from another tool,
-import it into your profile.
+There are no per-source toggles and no `customDirectories` setting. Skills load from the current
+project roots and active profile (see [Skill locations](#skill-locations)). To use a foreign
+home skill, import it into your profile.
+
 
 ### Manage individual skills
 

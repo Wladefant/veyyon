@@ -40,8 +40,6 @@ export interface Args {
 	provider?: string;
 	model?: string;
 	config?: string[];
-	smol?: string;
-	slow?: string;
 	plan?: string;
 	compactionModel?: string;
 	prewalk?: boolean;
@@ -501,6 +499,7 @@ export function getExtraHelpText(): string {
 			["TAVILY_API_KEY", "Tavily web search"],
 			["TINYFISH_API_KEY", "TinyFish web search"],
 			["FIRECRAWL_API_KEY", "Firecrawl web search"],
+			["DEEPSEEK_API_KEY", "DeepSeek web search and fetch (also the DeepSeek model provider key)"],
 			["ANTHROPIC_SEARCH_API_KEY", "Anthropic web search (override; isolates search from main ANTHROPIC_API_KEY)"],
 			["ANTHROPIC_SEARCH_BASE_URL", "Anthropic web search base URL (override; pairs with ANTHROPIC_SEARCH_API_KEY)"],
 		]),
@@ -516,9 +515,6 @@ export function getExtraHelpText(): string {
 					`Agent directory, default profile only (default: ~/${CONFIG_DIR_NAME}/profiles/default/agent; a named profile derives ~/${CONFIG_DIR_NAME}/profiles/<name>/agent and ignores this)`,
 				],
 				["VEYYON_PACKAGE_DIR", "Override package directory (for Nix/Guix store paths)"],
-				["VEYYON_SMOL_MODEL", "Override smol/fast model (see --smol)"],
-				["VEYYON_SLOW_MODEL", "Override slow/reasoning model (see --slow)"],
-				["VEYYON_PLAN_MODEL", "Override planning model (see --plan)"],
 				["VEYYON_NO_PTY", "Disable PTY-based interactive bash execution"],
 			],
 			{ indent: "  " },

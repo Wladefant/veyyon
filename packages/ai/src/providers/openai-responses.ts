@@ -5,8 +5,8 @@ import { structuredCloneJSON } from "@veyyon/utils/json";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
+import { getEnvApiKey } from "../env-api-key";
 import * as AIError from "../error";
-import { getEnvApiKey } from "../stream";
 import type {
 	AssistantMessage,
 	CacheRetention,
@@ -79,6 +79,7 @@ import {
 	rememberOpenAIReasoningEffortFallback,
 	resolveOpenAIReasoningEffortFallback,
 } from "./openai-reasoning-fallback";
+import { processResponsesStream } from "./openai-responses-stream";
 import type {
 	Tool as OpenAITool,
 	ReasoningEffort,
@@ -112,14 +113,16 @@ import {
 	type OpenAIStrictToolsScope,
 	type OpenAIStrictToolsState,
 	type OpenAIToolChoiceState,
-	processResponsesStream,
 	rejectToolChoiceForScope,
 	resolveOpenAICompatPolicy,
 	resolveOpenAIOutputTokenParam,
 	resolveOpenAIRequestSetup,
 	resolveOpenAIResponsesOutputClamp,
 	shouldRetryWithoutStrictTools,
+	supportsFreeformApplyPatch,
 } from "./openai-shared";
+
+export { supportsFreeformApplyPatch } from "./openai-shared";
 
 // OpenAI Responses-specific options
 export interface OpenAIResponsesOptions extends StreamOptions {
@@ -1103,6 +1106,7 @@ export function buildParams(
 		context,
 		strictResponsesPairing,
 		supportsImageDetailOriginal: model.compat.supportsImageDetailOriginal,
+		supportsCustomToolCalls: supportsFreeformApplyPatch(model),
 		supportsDeveloperRole: policy.messages.supportsDeveloperRole,
 		nativeHistory: {
 			replay: shouldReplayNativeHistory,
@@ -1278,20 +1282,6 @@ function applyResponsesStableEffort(
 	);
 	params.reasoning = { ...reasoning, effort: planStableOpenAIEffort(state, input, effort) };
 }
-
-/**
- * Whether this model should get the OpenAI custom-tool grammar variant
- * for `apply_patch`. The generated model catalog sets
- * `model.applyPatchToolType` for first-party GPT-5 Responses models; this
- * runtime path only consumes that metadata.
- * @internal Exported for tests.
- */
-export function supportsFreeformApplyPatch(
-	model: Model<"openai-responses" | "azure-openai-responses" | "openai-codex-responses">,
-): boolean {
-	return model.applyPatchToolType === "freeform";
-}
-
 /** @internal Exported for tests. */
 export function mapOpenAIResponsesToolChoiceForTools(
 	choice: ToolChoice | undefined,

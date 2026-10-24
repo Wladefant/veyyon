@@ -14,7 +14,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
-describe("AgentSession role model thinking behavior", () => {
+describe("AgentSession model effort behavior", () => {
 	let tempDir: TempDir;
 	let session: AgentSession;
 	let sessionSettings: Settings;
@@ -44,7 +44,8 @@ describe("AgentSession role model thinking behavior", () => {
 	async function createSession(options: {
 		initialModelId: string;
 		initialThinkingLevel: Effort;
-		modelRoles: Record<string, string>;
+		defaultModel?: string;
+		helpers?: Record<string, { model?: string; thinkingLevel?: string }>;
 		initialThinkingSource?: "selector" | "session";
 		initialConfiguredThinkingLevel?: Effort | "off";
 		runtimeApiKeys?: Record<string, string>;
@@ -68,10 +69,8 @@ describe("AgentSession role model thinking behavior", () => {
 		}
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 
-		sessionSettings = Settings.isolated();
-		for (const [role, modelRoleValue] of Object.entries(options.modelRoles)) {
-			sessionSettings.setModelRole(role, modelRoleValue);
-		}
+		sessionSettings = Settings.isolated(options.helpers ? { "agent.helpers": options.helpers } : {});
+		if (options.defaultModel) sessionSettings.setDefaultModel(options.defaultModel);
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
@@ -83,69 +82,44 @@ describe("AgentSession role model thinking behavior", () => {
 	}
 
 	/**
-	 * A role suffix applies until the user chooses a session override. The
-	 * override survives role switches, and clearing it reveals the active
+	 * A selector's effort applies until the user chooses a session override.
+	 * The override survives model switches, and clearing it reveals the active
 	 * selector pin immediately instead of waiting for another model switch.
 	 */
-	it("keeps session effort above role pins and restores the pin when cleared", async () => {
+	it("keeps session effort above selector pins and restores the pin when cleared", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
-		const slowModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const pinnedModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
 
-		await createSession({
-			initialModelId: defaultModel.id,
-			initialThinkingLevel: Effort.High,
-			modelRoles: {
-				default: `${defaultModel.provider}/${defaultModel.id}`,
-				slow: `${slowModel.provider}/${slowModel.id}:off`,
-			},
-		});
+		await createSession({ initialModelId: defaultModel.id, initialThinkingLevel: Effort.High });
 
-		const firstSwitch = await session.cycleRoleModels(["default", "slow"]);
-		expect(firstSwitch?.role).toBe("slow");
-		expect(firstSwitch?.model.id).toBe(slowModel.id);
-		expect(firstSwitch?.thinkingLevel).toBe("off");
+		await session.setModel(pinnedModel, "default", { thinkingLevel: "off" });
+		expect(session.model?.id).toBe(pinnedModel.id);
 		expect(session.thinkingLevel).toBe("off");
 
 		session.setThinkingLevel(Effort.High);
 		expect(session.thinkingLevel).toBe(Effort.High);
 
-		const secondSwitch = await session.cycleRoleModels(["default", "slow"]);
-		expect(secondSwitch?.role).toBe("default");
-		expect(secondSwitch?.model.id).toBe(defaultModel.id);
+		await session.setModel(defaultModel);
 		expect(session.thinkingLevel).toBe(Effort.High);
 
-		const thirdSwitch = await session.cycleRoleModels(["default", "slow"]);
-		expect(thirdSwitch?.role).toBe("slow");
-		expect(thirdSwitch?.model.id).toBe(slowModel.id);
-		expect(thirdSwitch?.thinkingLevel).toBe(Effort.High);
+		await session.setModel(pinnedModel, "default", { thinkingLevel: "off" });
 		expect(session.thinkingLevel).toBe(Effort.High);
 
 		session.setThinkingLevel(undefined);
 		expect(session.thinkingLevel).toBe("off");
-
-		const fourthSwitch = await session.cycleRoleModels(["default", "slow"]);
-		expect(fourthSwitch?.role).toBe("default");
-		expect(fourthSwitch?.thinkingLevel).toBe(Effort.High);
-
-		const fifthSwitch = await session.cycleRoleModels(["default", "slow"]);
-		expect(fifthSwitch?.role).toBe("slow");
-		expect(fifthSwitch?.thinkingLevel).toBe("off");
 	});
 
 	/**
-	 * A session that starts from a role suffix must remember that selector
+	 * A session that starts from a selector suffix must remember that selector
 	 * beneath a later temporary override. Default should reveal it immediately.
 	 */
 	it("restores an initial selector pin after clearing a later session override", async () => {
-		const slowModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const nextModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
 		await createSession({
-			initialModelId: slowModel.id,
+			initialModelId: nextModel.id,
 			initialThinkingLevel: Effort.Low,
 			initialThinkingSource: "selector",
 			initialConfiguredThinkingLevel: "off",
-			modelRoles: {
-				slow: `${slowModel.provider}/${slowModel.id}:off`,
-			},
 		});
 
 		session.setThinkingLevel(Effort.High);
@@ -156,98 +130,49 @@ describe("AgentSession role model thinking behavior", () => {
 		expect(session.thinkingLevel).toBe("off");
 	});
 
-	it("activates auto thinking when cycling into a role whose value carries an explicit :auto suffix", async () => {
+	it("activates auto thinking when a model switch carries an explicit :auto selector", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
-		const smolModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const autoModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
 
-		await createSession({
-			initialModelId: defaultModel.id,
-			initialThinkingLevel: Effort.High,
-			modelRoles: {
-				default: `${defaultModel.provider}/${defaultModel.id}`,
-				smol: `${smolModel.provider}/${smolModel.id}:auto`,
-			},
-		});
+		await createSession({ initialModelId: defaultModel.id, initialThinkingLevel: Effort.High });
 
-		const toSmol = await session.cycleRoleModels(["default", "smol"]);
-		expect(toSmol?.role).toBe("smol");
-		expect(toSmol?.model.id).toBe(smolModel.id);
+		await session.setModel(autoModel, "default", { thinkingLevel: AUTO_THINKING });
+		expect(session.model?.id).toBe(autoModel.id);
 		expect(session.configuredThinkingLevel()).toBe(AUTO_THINKING);
 	});
 
-	it("preserves current thinking when switching into default/no-suffix role", async () => {
+	it("preserves current thinking when switching to a model with no selector effort", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
-		const slowModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const pinnedModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
 
-		await createSession({
-			initialModelId: defaultModel.id,
-			initialThinkingLevel: Effort.Low,
-			modelRoles: {
-				default: `${defaultModel.provider}/${defaultModel.id}`,
-				slow: `${slowModel.provider}/${slowModel.id}:high`,
-			},
-		});
+		await createSession({ initialModelId: defaultModel.id, initialThinkingLevel: Effort.Low });
 
-		const toSlow = await session.cycleRoleModels(["default", "slow"]);
-		expect(toSlow?.role).toBe("slow");
-		expect(toSlow?.thinkingLevel).toBe(Effort.High);
+		await session.setModel(pinnedModel, "default", { thinkingLevel: Effort.High });
 		expect(session.thinkingLevel).toBe(Effort.High);
 
 		// `medium` is supported on both ladders (4-6 dropped `minimal`), so the
-		// selection survives the role switch unclamped.
+		// selection survives the switch unclamped.
 		session.setThinkingLevel(Effort.Medium);
 		expect(session.thinkingLevel).toBe(Effort.Medium);
 
-		const toDefault = await session.cycleRoleModels(["default", "slow"]);
-		expect(toDefault?.role).toBe("default");
-		expect(toDefault?.model.id).toBe(defaultModel.id);
-		expect(toDefault?.thinkingLevel).toBe(Effort.Medium);
+		await session.setModel(defaultModel);
+		expect(session.model?.id).toBe(defaultModel.id);
 		expect(session.thinkingLevel).toBe(Effort.Medium);
 	});
 
-	it("applies slow role thinking even when plan shares the same model", async () => {
+	it("preserves the default model's explicit effort when replacing an unresolved default model", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
-		const smolModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
-		const slowPlanModel = getAnthropicModelOrThrow("claude-opus-4-5");
-
-		await createSession({
-			initialModelId: defaultModel.id,
-			initialThinkingLevel: Effort.Medium,
-			modelRoles: {
-				default: `${defaultModel.provider}/${defaultModel.id}`,
-				smol: `${smolModel.provider}/${smolModel.id}:low`,
-				slow: `${slowPlanModel.provider}/${slowPlanModel.id}:high`,
-				plan: `${slowPlanModel.provider}/${slowPlanModel.id}:off`,
-			},
-		});
-
-		const toSmol = await session.cycleRoleModels(["slow", "default", "smol"]);
-		expect(toSmol?.role).toBe("smol");
-		expect(toSmol?.thinkingLevel).toBe(Effort.Low);
-		expect(session.thinkingLevel).toBe(Effort.Low);
-
-		const toSlow = await session.cycleRoleModels(["slow", "default", "smol"]);
-		expect(toSlow?.role).toBe("slow");
-		expect(toSlow?.model.id).toBe(slowPlanModel.id);
-		expect(toSlow?.thinkingLevel).toBe(Effort.High);
-		expect(session.thinkingLevel).toBe(Effort.High);
-	});
-
-	it("preserves explicit role thinking when updating default model despite unresolved previous model", async () => {
-		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
-		const slowModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+		const nextModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
 
 		await createSession({
 			initialModelId: defaultModel.id,
 			initialThinkingLevel: Effort.High,
-			modelRoles: {
-				default: "anthropic/nonexistent-model:off",
-			},
+			defaultModel: "anthropic/nonexistent-model:off",
 		});
 
-		await session.setModel(slowModel, "default", { persist: true });
+		await session.setModel(nextModel, "default", { persist: true });
 
-		expect(sessionSettings.getModelRole("default")).toBe(`${slowModel.provider}/${slowModel.id}:off`);
+		expect(sessionSettings.get("defaultModel")).toBe(`${nextModel.provider}/${nextModel.id}:off`);
 	});
 
 	it("clamps unsupported selections from model metadata", async () => {
@@ -384,7 +309,7 @@ describe("AgentSession role model thinking behavior", () => {
 		await createSession({
 			initialModelId: model.id,
 			initialThinkingLevel: Effort.High,
-			modelRoles: { default: `${model.provider}/${model.id}` },
+			defaultModel: `${model.provider}/${model.id}`,
 		});
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 		const classifierSpy = vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockResolvedValue(Effort.Medium);
@@ -587,7 +512,7 @@ describe("AgentSession role model thinking behavior", () => {
 		await createSession({
 			initialModelId: model.id,
 			initialThinkingLevel: Effort.High,
-			modelRoles: { default: `${model.provider}/${model.id}` },
+			defaultModel: `${model.provider}/${model.id}`,
 		});
 		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 		vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockRejectedValue(new Error("classifier down"));
@@ -607,7 +532,7 @@ describe("AgentSession role model thinking behavior", () => {
 		await createSession({
 			initialModelId: model.id,
 			initialThinkingLevel: Effort.High,
-			modelRoles: { default: `${model.provider}/${model.id}` },
+			defaultModel: `${model.provider}/${model.id}`,
 		});
 		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 		const classifierSpy = vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockResolvedValue(Effort.XHigh);
@@ -627,7 +552,7 @@ describe("AgentSession role model thinking behavior", () => {
 		await createSession({
 			initialModelId: model.id,
 			initialThinkingLevel: Effort.High,
-			modelRoles: { default: `${model.provider}/${model.id}` },
+			defaultModel: `${model.provider}/${model.id}`,
 		});
 		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 		const classifierSpy = vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockResolvedValue(Effort.Low);
@@ -648,7 +573,7 @@ describe("AgentSession role model thinking behavior", () => {
 		await createSession({
 			initialModelId: model.id,
 			initialThinkingLevel: Effort.High,
-			modelRoles: { default: `${model.provider}/${model.id}` },
+			defaultModel: `${model.provider}/${model.id}`,
 		});
 		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 		const classifierSpy = vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockResolvedValue(Effort.Low);
@@ -701,7 +626,7 @@ describe("AgentSession role model thinking behavior", () => {
 		expect(session.autoResolvedThinkingLevel()).toBeUndefined();
 	});
 
-	it("applies matching role thinking to temporary model picks", async () => {
+	it("applies a helper selector's effort to a temporary pick of the same model", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
 		const temporaryModel = getBundledModel("google-antigravity", "gemini-3.5-flash");
 		if (!temporaryModel) throw new Error("Expected google-antigravity model gemini-3.5-flash to exist");
@@ -709,62 +634,21 @@ describe("AgentSession role model thinking behavior", () => {
 		await createSession({
 			initialModelId: defaultModel.id,
 			initialThinkingLevel: Effort.Low,
-			modelRoles: {
-				smol: `${temporaryModel.provider}/${temporaryModel.id}:high`,
-			},
+			helpers: { plan: { model: `${temporaryModel.provider}/${temporaryModel.id}:high` } },
 			runtimeApiKeys: {
 				[temporaryModel.provider]: "test-key",
 			},
 		});
 
-		const roleResolved = session.resolveRoleModelWithThinking("smol");
-		expect(roleResolved.model?.id).toBe(temporaryModel.id);
-		expect(roleResolved.thinkingLevel).toBe(Effort.High);
+		const helperResolved = session.resolveHelperModel("plan");
+		expect(helperResolved?.model.id).toBe(temporaryModel.id);
+		expect(helperResolved?.thinkingLevel).toBe(Effort.High);
 
-		const roleThinkingLevel = session.resolveTemporaryModelThinkingLevel(temporaryModel);
-		await session.setModelTemporary(temporaryModel, roleThinkingLevel);
+		const selectorThinkingLevel = session.resolveTemporaryModelThinkingLevel(temporaryModel);
+		await session.setModelTemporary(temporaryModel, selectorThinkingLevel);
 
 		expect(session.model?.provider).toBe(temporaryModel.provider);
 		expect(session.model?.id).toBe(temporaryModel.id);
 		expect(session.thinkingLevel).toBe(Effort.High);
-	});
-
-	it("ignores a stale recorded role and cycles from the active model", async () => {
-		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
-		const slowModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
-
-		await createSession({
-			initialModelId: defaultModel.id,
-			initialThinkingLevel: Effort.High,
-			modelRoles: {
-				default: `${defaultModel.provider}/${defaultModel.id}`,
-				slow: `${slowModel.provider}/${slowModel.id}`,
-			},
-		});
-
-		// Record a model_change for the "slow" role WITHOUT switching the
-		// active model — the session still runs the default model. This is the
-		// stale state left behind when the model is changed through another
-		// surface (alt+m, temporary model, /model) after a role cycle.
-		session.sessionManager.appendModelChange(`${slowModel.provider}/${slowModel.id}`, "slow");
-		expect(session.sessionManager.getLastModelChangeRole()).toBe("slow");
-		expect(session.model?.id).toBe(defaultModel.id);
-
-		// The recorded role's resolved model (4-6) no longer equals the active
-		// model (4-5), so the cycle position must fall back to model equality
-		// and point at "default" — not trust the stale "slow" slot.
-		const cycle = session.getRoleModelCycle(["default", "slow"]);
-		if (!cycle) throw new Error("Expected a resolved role model cycle");
-		expect(cycle.models.map(entry => entry.role)).toEqual(["default", "slow"]);
-		expect(cycle.currentIndex).toBe(0);
-		expect(cycle.models[cycle.currentIndex]?.role).toBe("default");
-
-		// Cycling advances from the ACTIVE model's position: default → slow.
-		// With the stale slot trusted, the cycle would compute slow → default
-		// and "switch" right back onto the model already running.
-		const result = await session.cycleRoleModels(["default", "slow"]);
-		expect(result?.role).toBe("slow");
-		expect(result?.model.id).toBe(slowModel.id);
-		expect(session.model?.id).toBe(slowModel.id);
 	});
 });

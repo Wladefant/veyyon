@@ -281,7 +281,7 @@ function geminiFlashFamily(mode: "budget" | "google-level"): EffortVariantFamily
 		// (exact match wins in every resolver).
 		//
 		// `gemini-3.6-flash` is deliberately NOT aliased here. It is the id of a
-		// real, separate family ({@link gemini36FlashFamily}) whose per-tier wire
+		// real, separate family ({@link tierFamily}) whose per-tier wire
 		// ids come from the same Antigravity discovery list this family is built
 		// from, so the two CAN be live on one provider — they are presence
 		// filtered, not provider partitioned. Aliasing it meant that whenever
@@ -337,19 +337,32 @@ function geminiProFamily(mode: "budget" | "google-level"): EffortVariantFamily {
  * shared by both CCA tables safely. The bare `gemini-3.6-flash` id is served
  * only by unrelated aggregators, so the logical id introduced here never
  * collides with a CCA member.
+ *
+ * Gemini 4 Argon is served the same way: `gemini-4-argon-{low,medium,high}`
+ * ("Gemini 4 Argon (Low/Medium/High)", 1,048,576-token context, 65,536 output
+ * tokens), listed only to a client that reports `antigravity/hub` 3.0.0 or later.
+ * Google rejects MINIMAL for Argon and the Antigravity client offers low, medium
+ * and high, so its ladder has no minimal tier.
+ *
+ * Claude Opus 5.5 and Claude Sonnet 5.5 are served the same way on Antigravity:
+ * `claude-{opus,sonnet}-5-5-{low,medium,high}`, with no bare id. Each collapses to
+ * one row whose effort picks the tier. They carry no `off` route: thinking off
+ * runs the `-low` deployment with thinking disabled in the body, which the
+ * endpoint accepts.
  */
-function gemini36FlashFamily(): EffortVariantFamily {
+function tierFamily(id: string, name: string, efforts: readonly Effort[]): EffortVariantFamily {
+	const low = `${id}-low`;
 	return {
-		id: "gemini-3.6-flash",
-		name: "Gemini 3.6 Flash",
-		members: ["gemini-3.6-flash-low", "gemini-3.6-flash-medium", "gemini-3.6-flash-high"],
+		id,
+		name,
+		members: [low, `${id}-medium`, `${id}-high`],
 		routing: {
-			[Effort.Minimal]: "gemini-3.6-flash-low",
-			[Effort.Low]: "gemini-3.6-flash-low",
-			[Effort.Medium]: "gemini-3.6-flash-medium",
-			[Effort.High]: "gemini-3.6-flash-high",
+			...(efforts.includes(Effort.Minimal) ? { [Effort.Minimal]: low } : {}),
+			[Effort.Low]: low,
+			[Effort.Medium]: `${id}-medium`,
+			[Effort.High]: `${id}-high`,
 		},
-		thinking: { mode: "effort", efforts: GEMINI_3_FLASH_FAMILY_EFFORTS },
+		thinking: { mode: "effort", efforts },
 	};
 }
 
@@ -357,8 +370,8 @@ function gemini36FlashFamily(): EffortVariantFamily {
  * Gemini 3.x Flash on Cloud Code Assist is also served as a single `-tiered`
  * deployment (`gemini-3.8-flash-tiered`, `gemini-3.7-flash-tiered`,
  * `gemini-3.6-flash-tiered`): one wire id for every tier, with the tier carried
- * in the request body as `thinkingLevel` (the `google-level` mode). For 3.7 and
- * 3.8 the tiered id is the ONLY id the endpoint serves, with no bare id and no
+ * in the request body as `thinkingLevel` (the `google-level` mode). For 3.7 the
+ * tiered id is the ONLY id the endpoint serves, with no bare id and no
  * `-low`/`-medium`/`-high` siblings, so sibling-id effort routing is impossible
  * there. The surface is curated per id, never derived from the suffix:
  * models.dev's `google/gemini-3.7-flash` and `google/gemini-3.8-flash` entries
@@ -380,12 +393,22 @@ function gemini36FlashFamily(): EffortVariantFamily {
  * offers off, matching the bundled `google/gemini-3.7-flash` row. Shared
  * verbatim by both CCA tables: the two providers serve the same discovery list
  * and these deployments take `thinkingLevel` on both endpoints.
+ *
+ * Under a client version of 3.0.0 or later the endpoint also lists 3.8 Flash as
+ * per-tier deployments, `gemini-3.8-flash-{low,medium,high}`. They are passed as
+ * `siblings`: members after the tiered id, so they collapse into this row rather
+ * than showing as three raw rows, while every request stays on the tiered id.
  */
-function geminiTieredFlashFamily(id: string, name: string, wireId: string): EffortVariantFamily {
+function geminiLevelFamily(
+	id: string,
+	name: string,
+	wireId: string,
+	siblings: readonly string[] = [],
+): EffortVariantFamily {
 	return {
 		id,
 		name,
-		members: [wireId],
+		members: [wireId, ...siblings],
 		routing: {
 			[Effort.Low]: wireId,
 			[Effort.Medium]: wireId,
@@ -397,7 +420,24 @@ function geminiTieredFlashFamily(id: string, name: string, wireId: string): Effo
 
 /** CCA families shared verbatim by both providers (transport-agnostic, or one transport both endpoints speak). */
 const SHARED_CCA_FAMILIES: readonly EffortVariantFamily[] = [
-	gemini36FlashFamily(),
+	{
+		id: "gemini-4-argon",
+		name: "Gemini 4 Argon",
+		members: ["gemini-4-argon-low", "gemini-4-argon-medium", "gemini-4-argon-high"],
+		routing: {
+			[Effort.Low]: "gemini-4-argon-low",
+			[Effort.Medium]: "gemini-4-argon-medium",
+			[Effort.High]: "gemini-4-argon-high",
+		},
+		thinking: {
+			mode: "google-level",
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+			defaultLevel: Effort.Medium,
+		},
+	},
+	tierFamily("gemini-3.6-flash", "Gemini 3.6 Flash", GEMINI_3_FLASH_FAMILY_EFFORTS),
+	tierFamily("claude-opus-5-5", "Claude Opus 5.5", [Effort.Low, Effort.Medium, Effort.High]),
+	tierFamily("claude-sonnet-5-5", "Claude Sonnet 5.5", [Effort.Low, Effort.Medium, Effort.High]),
 	geminiTieredFlashFamily("gemini-3.8-flash", "Gemini 3.8 Flash", "gemini-3.8-flash-tiered"),
 	geminiTieredFlashFamily("gemini-3.7-flash", "Gemini 3.7 Flash", "gemini-3.7-flash-tiered"),
 	geminiTieredFlashFamily("gemini-3.6-flash-tiered", "Gemini 3.6 Flash Tiered", "gemini-3.6-flash-tiered"),
@@ -792,10 +832,7 @@ export function deriveThinkingPairFamilies<TSpec extends VariantSpecLike>(
 	specs: readonly TSpec[],
 	table?: VariantCollapseTable,
 ): EffortVariantFamily[] {
-	const byId = new Map<string, TSpec>();
-	for (const spec of specs) {
-		if (!byId.has(spec.id)) byId.set(spec.id, spec);
-	}
+	const byId = indexFirstById(specs);
 	const claimed = table ? getAliasIndex(table) : undefined;
 	const families: EffortVariantFamily[] = [];
 	for (const spec of specs) {
@@ -909,8 +946,9 @@ export function isVariantCollapsedSpec(spec: VariantSpecLike): boolean {
 function reconcileRetiredRouting<TSpec extends VariantSpecLike>(
 	spec: TSpec,
 	family: EffortVariantFamily,
-	retired: ReadonlySet<string>,
+	retired: ReadonlySet<string> | undefined,
 ): TSpec {
+	if (retired === undefined) return spec;
 	const routing = spec.thinking?.effortRouting;
 	const requestRetired = spec.requestModelId !== undefined && retired.has(spec.requestModelId);
 	let routingRetired = false;
@@ -987,9 +1025,7 @@ function refreshCollapsedThinking<TSpec extends VariantSpecLike>(
 			hasRouting = true;
 		}
 	}
-	const thinking: ThinkingConfig = { ...family.thinking };
-	if (hasRouting) thinking.effortRouting = routing;
-	if (family.suppressWhenOff) thinking.suppressWhenOff = true;
+	const thinking = familyThinkingConfig(family, hasRouting ? routing : undefined);
 	const offTarget = family.routing.off;
 	const requestModelId =
 		offTarget !== undefined && !retired?.has(offTarget) && offTarget !== spec.id ? offTarget : spec.requestModelId;
@@ -997,6 +1033,40 @@ function refreshCollapsedThinking<TSpec extends VariantSpecLike>(
 		return spec;
 	}
 	return { ...spec, thinking, ...(requestModelId !== undefined ? { requestModelId } : {}) };
+}
+
+/** First spec per id: later duplicates (stale rows) never shadow it. */
+function indexFirstById<TSpec extends VariantSpecLike>(specs: readonly TSpec[]): Map<string, TSpec> {
+	const byId = new Map<string, TSpec>();
+	for (const spec of specs) {
+		if (!byId.has(spec.id)) byId.set(spec.id, spec);
+	}
+	return byId;
+}
+
+function retiredMemberSet(family: EffortVariantFamily): ReadonlySet<string> | undefined {
+	return family.retiredMembers !== undefined && family.retiredMembers.length > 0
+		? new Set(family.retiredMembers)
+		: undefined;
+}
+
+/** The family's capability surface plus the routing and suppression collapsing bakes in. */
+function familyThinkingConfig(
+	family: EffortVariantFamily,
+	effortRouting: Partial<Record<Effort | "off", string>> | undefined,
+): ThinkingConfig {
+	const thinking: ThinkingConfig = { ...family.thinking };
+	if (effortRouting !== undefined) thinking.effortRouting = effortRouting;
+	if (family.suppressWhenOff) thinking.suppressWhenOff = true;
+	return thinking;
+}
+
+/** What collapsing emits: the replacement per family id, and the family id each consumed spec id folds into. */
+interface CollapsePlan<TSpec> {
+	/** family id → spec to emit at the family's first occurrence. */
+	replacement: Map<string, TSpec>;
+	/** spec ids that belong to a touched family (members + logical id). */
+	familyIdBySpecId: Map<string, string>;
 }
 
 /**
@@ -1008,154 +1078,166 @@ export function collapseEffortVariants<TSpec extends VariantSpecLike>(
 	specs: readonly TSpec[],
 	table: VariantCollapseTable,
 ): TSpec[] {
-	const byId = new Map<string, TSpec>();
-	for (const spec of specs) {
-		if (!byId.has(spec.id)) byId.set(spec.id, spec);
-	}
-
-	/** family id → spec to emit at the family's first occurrence. */
-	const replacement = new Map<string, TSpec>();
-	/** spec ids that belong to a touched family (members + logical id). */
-	const familyIdBySpecId = new Map<string, string>();
-
-	for (const family of table.families) {
-		const retired =
-			family.retiredMembers !== undefined && family.retiredMembers.length > 0
-				? new Set(family.retiredMembers)
-				: undefined;
-		const existing = byId.get(family.id);
-		const existingCollapsed =
-			existing !== undefined &&
-			(existing.requestModelId !== undefined || existing.thinking?.effortRouting !== undefined);
-		const reconciled =
-			existing !== undefined && existingCollapsed && retired !== undefined
-				? reconcileRetiredRouting(existing, family, retired)
-				: existing;
-		const rawPresent = family.members.filter(id => byId.has(id) && !(id === family.id && existingCollapsed));
-		if (rawPresent.length === 0) {
-			// Inert (no members) or already collapsed (pass-through). A stale
-			// family.id-keyed snapshot is refreshed in place from the current
-			// hand-table family (transport/budgets/routing); retired targets drop.
-			// Recycled extraAliases rows are healed in a later pass.
-			const refreshed =
-				existing !== undefined && existingCollapsed
-					? refreshCollapsedThinking(reconciled ?? existing, family, retired)
-					: reconciled;
-			if (refreshed !== undefined && refreshed !== existing) {
-				familyIdBySpecId.set(family.id, family.id);
-				replacement.set(family.id, refreshed);
-			}
-			continue;
-		}
-
-		for (const id of rawPresent) familyIdBySpecId.set(id, family.id);
-		if (existing) familyIdBySpecId.set(family.id, family.id);
-
-		if (existingCollapsed) {
-			// Mixed input: the collapsed entry (live truth) wins; stale raw
-			// members are deduped away. Retired targets are re-pointed first.
-			replacement.set(family.id, reconciled as TSpec);
-			continue;
-		}
-
-		const memberSpecs = rawPresent.map(id => byId.get(id) as TSpec);
-		const presentSet = new Set(rawPresent);
-		const routing: Partial<Record<Effort | "off", string>> = {};
-		let hasRouting = false;
-		let hasEffortRoute = false;
-		let usedAbsentEffortRoute = false;
-		for (const effortKey in family.routing) {
-			const target = family.routing[effortKey as Effort | "off"];
-			const effort = effortKey as Effort | "off";
-			const targetPresent = target !== undefined && presentSet.has(target);
-			const preserveAbsentEffort =
-				target !== undefined && effort !== "off" && family.preserveAbsentEffortRoutes === true;
-			if (target !== undefined && (targetPresent || preserveAbsentEffort) && !retired?.has(target)) {
-				routing[effort] = target;
-				hasRouting = true;
-				if (effortKey !== "off") hasEffortRoute = true;
-				if (!targetPresent && effort !== "off") usedAbsentEffortRoute = true;
-			}
-		}
-
-		// A family that routes efforts to a live thinking backing id reasons
-		// even when upstream metadata forgot to mark the members.
-		const reasoning = memberSpecs.some(spec => spec.reasoning) || hasEffortRoute;
-		const thinking: ThinkingConfig = { ...family.thinking };
-		if (hasRouting) thinking.effortRouting = routing;
-		if (family.suppressWhenOff) thinking.suppressWhenOff = true;
-
-		const input: ("text" | "image" | "video")[] = [];
-		if (memberSpecs.some(spec => spec.input.includes("text"))) input.push("text");
-		if (memberSpecs.some(spec => spec.input.includes("image"))) input.push("image");
-		if (memberSpecs.some(spec => spec.input.includes("video"))) input.push("video");
-
-		const collapsed: TSpec = {
-			...(memberSpecs[0] as TSpec),
-			id: family.id,
-			name: family.name,
-			reasoning,
-			input,
-			contextWindow: maxOrNull(memberSpecs.map(spec => spec.contextWindow)),
-			maxTokens: maxOrNull(memberSpecs.map(spec => spec.maxTokens)),
-		};
-		// The default wire id is the highest-priority live member; omit when it
-		// equals the logical id (bare/thinking pairs) — `resolveWireModelId`
-		// falls back. Retired members never become the default.
-		const defaultWireId = rawPresent.find(id => !retired?.has(id)) ?? rawPresent[0];
-		if (defaultWireId === family.id) {
-			if (usedAbsentEffortRoute) {
-				collapsed.requestModelId = defaultWireId as string;
-			} else {
-				delete collapsed.requestModelId;
-			}
-		} else {
-			collapsed.requestModelId = defaultWireId as string;
-		}
-		if (reasoning) {
-			collapsed.thinking = thinking;
-		} else {
-			delete collapsed.thinking;
-		}
-		replacement.set(family.id, collapsed);
-	}
-
-	// Refresh stale alias-keyed snapshots in place (recycled bare ids). Runs even
-	// when the canonical family.id row is also present, since the exact-id merge
-	// keeps the stale alias row alongside the discovered canonical one.
-	for (const family of table.families) {
-		if (family.extraAliases === undefined) continue;
-		const retired =
-			family.retiredMembers !== undefined && family.retiredMembers.length > 0
-				? new Set(family.retiredMembers)
-				: undefined;
-		for (const alias of family.extraAliases) {
-			if (alias === family.id || familyIdBySpecId.has(alias)) continue;
-			const aliasSpec = byId.get(alias);
-			if (aliasSpec === undefined) continue;
-			const refreshed = refreshCollapsedThinking(aliasSpec, family, retired);
-			if (refreshed !== aliasSpec) {
-				familyIdBySpecId.set(alias, alias);
-				replacement.set(alias, refreshed);
-			}
-		}
-	}
-
-	if (replacement.size === 0) return specs.slice();
+	const byId = indexFirstById(specs);
+	const plan: CollapsePlan<TSpec> = { replacement: new Map(), familyIdBySpecId: new Map() };
+	for (const family of table.families) planFamily(family, byId, plan);
+	// Alias rows are planned after every family, so an alias row that any
+	// family consumes is skipped rather than refreshed.
+	for (const family of table.families) planAliasRefreshes(family, byId, plan);
+	if (plan.replacement.size === 0) return specs.slice();
 
 	const emitted = new Set<string>();
 	const out: TSpec[] = [];
 	for (const spec of specs) {
-		const familyId = familyIdBySpecId.get(spec.id);
+		const familyId = plan.familyIdBySpecId.get(spec.id);
 		if (familyId === undefined) {
 			out.push(spec);
 			continue;
 		}
 		if (emitted.has(familyId)) continue;
 		emitted.add(familyId);
-		out.push(replacement.get(familyId) as TSpec);
+		out.push(plan.replacement.get(familyId) as TSpec);
 	}
 	return out;
+}
+
+function planFamily<TSpec extends VariantSpecLike>(
+	family: EffortVariantFamily,
+	byId: ReadonlyMap<string, TSpec>,
+	plan: CollapsePlan<TSpec>,
+): void {
+	const retired = retiredMemberSet(family);
+	const existing = byId.get(family.id);
+	const snapshot =
+		existing !== undefined &&
+		(existing.requestModelId !== undefined || existing.thinking?.effortRouting !== undefined)
+			? existing
+			: undefined;
+	const rawPresent = family.members.filter(id => byId.has(id) && !(id === family.id && snapshot !== undefined));
+	if (rawPresent.length === 0) {
+		// Inert (no members) or already collapsed (pass-through). A stale
+		// family.id-keyed snapshot is refreshed in place from the current
+		// hand-table family (transport/budgets/routing); retired targets drop.
+		// Recycled extraAliases rows are healed in a later pass.
+		if (snapshot === undefined) return;
+		const refreshed = refreshCollapsedThinking(reconcileRetiredRouting(snapshot, family, retired), family, retired);
+		if (refreshed !== snapshot) {
+			plan.familyIdBySpecId.set(family.id, family.id);
+			plan.replacement.set(family.id, refreshed);
+		}
+		return;
+	}
+
+	for (const id of rawPresent) plan.familyIdBySpecId.set(id, family.id);
+	if (existing !== undefined) plan.familyIdBySpecId.set(family.id, family.id);
+	plan.replacement.set(
+		family.id,
+		// Mixed input: the collapsed entry (live truth) wins; stale raw members
+		// are deduped away. Retired targets are re-pointed first.
+		snapshot !== undefined
+			? reconcileRetiredRouting(snapshot, family, retired)
+			: buildCollapsedSpec(family, rawPresent, byId, retired),
+	);
+}
+
+/** Hand-table routing filtered to live targets, plus what that filtering implies. */
+interface LiveFamilyRouting {
+	routing: Partial<Record<Effort | "off", string>>;
+	/** Some non-off effort routes to a backing id. */
+	hasEffortRoute: boolean;
+	/** Some effort route targets a member discovery did not list (`preserveAbsentEffortRoutes`). */
+	usedAbsentEffortRoute: boolean;
+}
+
+function routeLiveMembers(
+	family: EffortVariantFamily,
+	present: ReadonlySet<string>,
+	retired: ReadonlySet<string> | undefined,
+): LiveFamilyRouting {
+	const live: LiveFamilyRouting = { routing: {}, hasEffortRoute: false, usedAbsentEffortRoute: false };
+	for (const key in family.routing) {
+		const effort = key as Effort | "off";
+		const target = family.routing[effort];
+		if (target === undefined || retired?.has(target)) continue;
+		const targetPresent = present.has(target);
+		if (effort === "off") {
+			if (targetPresent) live.routing.off = target;
+			continue;
+		}
+		if (!targetPresent && family.preserveAbsentEffortRoutes !== true) continue;
+		live.routing[effort] = target;
+		live.hasEffortRoute = true;
+		if (!targetPresent) live.usedAbsentEffortRoute = true;
+	}
+	return live;
+}
+
+/** Fold the raw members present in the input into the family's logical spec. */
+function buildCollapsedSpec<TSpec extends VariantSpecLike>(
+	family: EffortVariantFamily,
+	rawPresent: readonly string[],
+	byId: ReadonlyMap<string, TSpec>,
+	retired: ReadonlySet<string> | undefined,
+): TSpec {
+	const memberSpecs = rawPresent.map(id => byId.get(id) as TSpec);
+	const { routing, hasEffortRoute, usedAbsentEffortRoute } = routeLiveMembers(family, new Set(rawPresent), retired);
+	// A family that routes efforts to a live thinking backing id reasons
+	// even when upstream metadata forgot to mark the members.
+	const reasoning = memberSpecs.some(spec => spec.reasoning) || hasEffortRoute;
+	const input: ("text" | "image")[] = [];
+	if (memberSpecs.some(spec => spec.input.includes("text"))) input.push("text");
+	if (memberSpecs.some(spec => spec.input.includes("image"))) input.push("image");
+
+	const collapsed: TSpec = {
+		...(memberSpecs[0] as TSpec),
+		id: family.id,
+		name: family.name,
+		reasoning,
+		input,
+		contextWindow: maxOrNull(memberSpecs.map(spec => spec.contextWindow)),
+		maxTokens: maxOrNull(memberSpecs.map(spec => spec.maxTokens)),
+	};
+	// The default wire id is the highest-priority live member; omit when it
+	// equals the logical id (bare/thinking pairs) — `resolveWireModelId`
+	// falls back — unless an absent effort route needs the bare id pinned.
+	// Retired members never become the default.
+	const defaultWireId = rawPresent.find(id => !retired?.has(id)) ?? (rawPresent[0] as string);
+	if (defaultWireId === family.id && !usedAbsentEffortRoute) {
+		delete collapsed.requestModelId;
+	} else {
+		collapsed.requestModelId = defaultWireId;
+	}
+	if (reasoning) {
+		const hasRouting = hasEffortRoute || routing.off !== undefined;
+		collapsed.thinking = familyThinkingConfig(family, hasRouting ? routing : undefined);
+	} else {
+		delete collapsed.thinking;
+	}
+	return collapsed;
+}
+
+/**
+ * Refresh stale alias-keyed snapshots in place (recycled bare ids). Runs even
+ * when the canonical family.id row is also present, since the exact-id merge
+ * keeps the stale alias row alongside the discovered canonical one.
+ */
+function planAliasRefreshes<TSpec extends VariantSpecLike>(
+	family: EffortVariantFamily,
+	byId: ReadonlyMap<string, TSpec>,
+	plan: CollapsePlan<TSpec>,
+): void {
+	if (family.extraAliases === undefined) return;
+	const retired = retiredMemberSet(family);
+	for (const alias of family.extraAliases) {
+		if (alias === family.id || plan.familyIdBySpecId.has(alias)) continue;
+		const aliasSpec = byId.get(alias);
+		if (aliasSpec === undefined) continue;
+		const refreshed = refreshCollapsedThinking(aliasSpec, family, retired);
+		if (refreshed !== aliasSpec) {
+			plan.familyIdBySpecId.set(alias, alias);
+			plan.replacement.set(alias, refreshed);
+		}
+	}
 }
 
 /**

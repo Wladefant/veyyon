@@ -266,14 +266,17 @@ describe("the conversation engine does not instantiate the TUI package", () => {
 	 *
 	 * `session/image-visibility.ts`, `tools/agent/todo.ts`,
 	 * `slash-commands/builtin-registry.ts`, `modes/terminal/draw/code-cell.ts`,
-	 * `modes/terminal/draw/output-block.ts` and
-	 * `modes/terminal/draw/width-aware-text.ts` used to be on this list.
+	 * `modes/terminal/draw/output-block.ts`,
+	 * `modes/terminal/draw/width-aware-text.ts`, `theme/theme.ts` and
+	 * `theme/theme-class.ts` used to be on this list.
 	 * That is the delta those probes bought: a question about a pipe is no longer
 	 * answered by loading a renderer, the todo tool's drawing moved to
 	 * `tools/agent/todo-view.ts`, which print mode never reaches, the `/collab`
 	 * QR block draws its own spacing instead of the registry stacking a terminal
-	 * component above it, and the three block helpers that still import the
-	 * package are no longer on print mode's graph. Shrink-only -- a row
+	 * component above it, the three block helpers that still import the
+	 * package are no longer on print mode's graph, and the modules that read only
+	 * the active theme take it from `theme/theme-binding`, so print mode loads no
+	 * theme engine. Shrink-only -- a row
 	 * leaves when the edge is cut, and none is added, so a new module reaching the
 	 * package from print mode's graph reds this.
 	 *

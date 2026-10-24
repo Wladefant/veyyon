@@ -459,9 +459,9 @@ describe("remote compaction with no resolvable credential", () => {
 		// Only anthropic is keyed: openai (the session model) resolves no credential.
 		// A key alone is not a candidate under the shipped `auto` fallback strategy,
 		// which refuses to spend an account the operator never named for this
-		// session, so the anthropic model is ALSO assigned to the `smol` role below
-		// (the remedy the auth error itself names). That keeps the row about the
-		// downgrade notice rather than about cross-provider candidate selection.
+		// session, so the anthropic model is ALSO named as `defaultModel` below.
+		// That keeps the row about the downgrade notice rather than about
+		// cross-provider candidate selection.
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage);
 		const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
@@ -529,7 +529,7 @@ describe("remote compaction with no resolvable credential", () => {
 		});
 		const localCandidate = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!localCandidate) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
-		session.settings.setModelRole("smol", `${localCandidate.provider}/${localCandidate.id}`);
+		session.settings.setDefaultModel(`${localCandidate.provider}/${localCandidate.id}`);
 		session.subscribe(event => {
 			if (event.type === "notice") notices.push(event);
 		});

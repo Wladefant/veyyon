@@ -12,7 +12,7 @@ import type { Component, OverlayOptions } from "@veyyon/tui";
 import type { MouseRoutable, SgrMouseEvent } from "@veyyon/utils/mouse";
 import { truncateToWidth } from "@veyyon/utils/width";
 import type { ConsoleAction, LoopConsoleModel } from "../../../../autoresearch/console";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { bottomBorder, divider, row, topBorder, topBorderTitleWidth } from "../chrome/overlay-box";
 import { footerHint } from "./autoresearch-screen";
 import { SetupFormComponent } from "./autoresearch-setup-form";

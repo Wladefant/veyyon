@@ -1,6 +1,5 @@
 import * as fs from "node:fs/promises";
-import * as timers from "node:timers/promises";
-import { errorMessage, isEnoent, logger, ptree } from "@veyyon/utils";
+import { errorMessage, isEnoent, logger, ptree, settleWithin } from "@veyyon/utils";
 import { NON_INTERACTIVE_ENV } from "../../exec/non-interactive-env";
 import { primarySessionCpuAdoption } from "../../session/cpu-limit";
 import { ToolAbortError } from "../../tools/core/tool-errors";
@@ -684,7 +683,11 @@ export class DapClient {
 	 */
 	async #adapterExitError(writeError: unknown): Promise<Error> {
 		if (this.proc.exitCode === null) {
-			await Promise.race([this.proc.exited.catch(() => {}), timers.setTimeout(EXIT_REASON_GRACE_MS)]);
+			await settleWithin(
+				this.proc.exited.catch(() => {}),
+				EXIT_REASON_GRACE_MS,
+				undefined,
+			);
 		}
 		if (this.proc.exitCode === null) {
 			return new Error(`DAP adapter ${this.adapter.name} write failed: ${errorMessage(writeError)}`);

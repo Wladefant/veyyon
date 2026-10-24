@@ -26,9 +26,10 @@
  * a match against it: `[...SOURCE.matchAll(/"app\.[a-z.]+":\s*\["[a-z+]+"/g)]` asserted empty, which is
  * a claim about a literal table's SHAPE and has no query to replace it, and a `split("\n").filter(...)`
  * that reports which lines are not re-exports. Byte matching through an indirection this does not
- * follow: a helper in another module that returns source text, a path assembled at run time from
- * values not visible here, or text pulled from a `Bun.file` handle. The allowlist below is empty, so
- * the shapes it does see are all converted; it may only shrink.
+ * follow: a helper in another module that returns source text, or a path assembled at run time from
+ * values not visible here, such as a loop variable naming the file. Reads through `fs.readFile`,
+ * `fs.readFileSync` and `Bun.file`, awaited or not, are all followed. The allowlist below is empty,
+ * so the shapes it does see are all converted; it may only shrink.
  */
 
 import { describe, expect, it } from "bun:test";
@@ -76,7 +77,7 @@ function testFiles(root: string): string[] {
 		if (entry.includes(`node_modules${path.sep}`) || entry.includes("node_modules/")) continue;
 		const file = path.join(root, entry);
 		const text = fs.readFileSync(file, "utf-8");
-		if (!/readFileSync|readFile\(/.test(text)) continue;
+		if (!/readFileSync|readFile\(|Bun\.file\(/.test(text)) continue;
 		if (!text.includes("src")) continue;
 		found.push(file);
 	}
@@ -102,11 +103,11 @@ function pathFragments(node: Node, seen: Set<string>): string[] {
 	return fragments;
 }
 
-/** Whether `call` reads a `.ts`/`.tsx` module out of a package's `src`. */
+/** Whether `call` reads a `.ts`/`.tsx` module out of a package's `src`, or opens a `Bun.file` handle on one. */
 function readsAModule(call: Node): boolean {
 	if (!Node.isCallExpression(call)) return false;
 	const callee = call.getExpression().getText();
-	if (!/(^|\.)readFileSync$|(^|\.)readFile$/.test(callee)) return false;
+	if (!/(^|\.)readFileSync$|(^|\.)readFile$|^Bun\.file$/.test(callee)) return false;
 	const target = call.getArguments()[0];
 	if (target === undefined) return false;
 	const fragments = pathFragments(target, new Set());
@@ -130,19 +131,25 @@ function isModuleSource(node: Node, locals: Map<string, boolean>): boolean {
 	if (Node.isPropertyAccessExpression(node)) return isModuleSource(node.getExpression(), locals);
 	if (Node.isIdentifier(node)) return locals.get(node.getText()) === true;
 	if (Node.isParenthesizedExpression(node)) return isModuleSource(node.getExpression(), locals);
+	// `await fs.readFile(...)`, `await Bun.file(...).text()`: the awaited value is the source.
+	if (Node.isAwaitExpression(node)) return isModuleSource(node.getExpression(), locals);
 	return false;
 }
 
-/** Every local name in `file` bound to module source, directly or through another such name. */
+/**
+ * Every name in `file` bound to module source, directly or through another such name, at any depth:
+ * a read stored inside a test body is the common shape. Names are not scoped, so a name bound to
+ * source in one test and to something else in another counts as source in both.
+ */
 function moduleSourceLocals(file: SourceFile): Map<string, boolean> {
 	const locals = new Map<string, boolean>();
 	// Two passes: a variable may be declared after the helper that reads for it.
 	for (let round = 0; round < 2; round += 1) {
-		for (const declaration of file.getVariableDeclarations()) {
+		for (const declaration of file.getDescendantsOfKind(SyntaxKind.VariableDeclaration)) {
 			const initializer = declaration.getInitializer();
 			if (initializer && isModuleSource(initializer, locals)) locals.set(declaration.getName(), true);
 		}
-		for (const fn of file.getFunctions()) {
+		for (const fn of file.getDescendantsOfKind(SyntaxKind.FunctionDeclaration)) {
 			const returns = fn.getDescendantsOfKind(SyntaxKind.ReturnStatement);
 			const reads = returns.some(statement => {
 				const value = statement.getExpression();
@@ -329,6 +336,41 @@ describe("an invariant about a module is read from the module graph", () => {
 				"expect(source.match(/export function/)).not.toBeNull();",
 			],
 			true,
+		],
+		[
+			"a read stored inside a test body",
+			[
+				'it("reads", async () => {',
+				'\tconst source = await fs.readFile(path.join(SRC, "env.ts"), "utf-8");',
+				'\texpect(source).not.toContain("x");',
+				"});",
+			],
+			true,
+		],
+		[
+			"an awaited async read",
+			['const source = await fs.readFile(path.join(SRC, "env.ts"), "utf-8");', 'expect(source).toContain("x");'],
+			true,
+		],
+		[
+			"a Bun.file read",
+			['const source = await Bun.file(path.join(SRC, "env.ts")).text();', 'expect(source).toContain("x");'],
+			true,
+		],
+		[
+			"a Bun.file read through an async helper",
+			[
+				"async function read() {",
+				"\treturn await Bun.file(new URL('../src/env.ts', import.meta.url)).text();",
+				"}",
+				'expect(await read()).toContain("x");',
+			],
+			true,
+		],
+		[
+			"a Bun.file read of a css asset",
+			['const source = await Bun.file(path.join(SRC, "tokens.css")).text();', 'expect(source).toContain("x");'],
+			false,
 		],
 		[
 			"a css asset",

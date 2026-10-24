@@ -106,8 +106,6 @@ export function hasCjk(text: string): boolean {
 	return CJK_RE.test(text);
 }
 
-export const containsSpacelessCjk = hasCjk;
-
 export function recallTokens(text: string): string[] {
 	RECALL_TOKEN_RE.lastIndex = 0;
 	const tokens: string[] = [];

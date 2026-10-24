@@ -87,13 +87,13 @@ import {
 	TTS_LOCAL_MODELS,
 	TTS_LOCAL_VOICE_OPTIONS,
 } from "../../speech/tts/models";
-import { theme } from "../../theme/theme";
+import { theme } from "../../theme/theme-binding";
 import {
 	configuredThinkingLevelsForModel,
 	getConfiguredThinkingLevelMetadata,
 	parseConfiguredThinkingLevel,
 } from "../../thinking";
-import { runResolveInvocation } from "../../tools/agent/resolve";
+import { type ResolveParams, runResolveInvocation } from "../../tools/agent/resolve";
 import { ToolError } from "../../tools/core/tool-errors";
 import { canonicalizeMessage } from "../../utils/thinking-display";
 import { createAcpClientBridge } from "./acp-client-bridge";
@@ -954,11 +954,10 @@ export class AcpAgent implements Agent {
 				return { reports: reports ?? [] };
 			}
 			case "_veyyon/extensions": {
-				const cwd = typeof params.cwd === "string" ? (params.cwd as string) : undefined;
+				const cwd = typeof params.cwd === "string" ? params.cwd : undefined;
 				const sm = await Settings.init();
-				const disabledIds = (sm.get("disabledExtensions") as string[] | undefined) ?? [];
-				const extensions = await loadAllExtensions(cwd, disabledIds);
-				return { extensions: extensions as unknown as Array<{ [key: string]: unknown }> };
+				const extensions = await loadAllExtensions(cwd, sm.get("disabledExtensions"));
+				return { extensions };
 			}
 			case "_veyyon/extensions/toggle": {
 				const providerId = params.providerId;
@@ -1459,7 +1458,7 @@ export class AcpAgent implements Agent {
 				workflow: previous?.workflow ?? "parallel",
 				reentry: previous !== undefined,
 			});
-			// Mirror `InteractiveMode.#enterPlanMode`: register the standing resolve
+			// Mirror `PlanModeController.enter`: register the standing resolve
 			// handler that consumes `resolve { action: "apply" }` from plan-mode.
 			// Without this, the agent's resolve call falls through to the "No
 			// pending action to resolve" error (issue #1869).
@@ -1478,13 +1477,13 @@ export class AcpAgent implements Agent {
 	 * approval renames the plan to `local://<title>.md`, exits plan mode, and
 	 * notifies the client of both mode surfaces so the agent regains full tools.
 	 *
-	 * Mirrors `InteractiveMode.#runPlanApprovalResolve` for the parts the agent
+	 * Mirrors `PlanModeController.#runPlanApprovalResolve` for the parts the agent
 	 * sees (same `PlanApprovalDetails` shape, same source tool name `plan_approval`).
 	 * Clients without form-mode elicitation get an auto-approve so plan mode is
 	 * never stranded — the agent always has a way out.
 	 */
 	#runAcpPlanApprovalResolve(session: AgentSession, input: unknown): Promise<AgentToolResult<unknown>> {
-		return runResolveInvocation(input as Parameters<typeof runResolveInvocation>[0], {
+		return runResolveInvocation(input as ResolveParams, {
 			sourceToolName: "plan_approval",
 			label: "Plan ready for approval",
 			apply: async (_reason, extra) => {
@@ -2437,7 +2436,6 @@ function getAvailableModes(session: AgentSession): Array<{ id: string; name: str
 			description: "Read-only planning mode that drafts a plan to a markdown file before any code changes",
 		});
 	}
-	void session;
 	return modes;
 }
 

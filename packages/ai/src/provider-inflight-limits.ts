@@ -8,7 +8,7 @@
  * error taxonomy. `packages/coding-agent/src/config/settings.ts` did exactly that, for one setter, and
  * paid it into ~530 test files plus every runtime consumer of `Settings`.
  *
- * This module imports nothing. `stream.ts` re-exports the setter, so no existing caller changes.
+ * This module imports nothing. The package root exports the setter from here.
  *
  * ONE MUTABLE RECORD, and it is deliberately module scope rather than a parameter. A cap is a property
  * of the process, not of a request: a second concurrent stream must see the same limit, and the
@@ -29,11 +29,6 @@ let configuredLimits: Record<string, number> = {};
  */
 export function configureProviderMaxInFlightRequests(limits: Record<string, number> | undefined): void {
 	configuredLimits = limits ?? {};
-}
-
-/** The caps in force, for a reader that wants the record rather than one provider's number. */
-export function configuredProviderMaxInFlightRequests(): Record<string, number> {
-	return configuredLimits;
 }
 
 /**

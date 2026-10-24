@@ -6,7 +6,7 @@ import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding, padLineToWidth } from "@veyyon/utils/padding";
 import { visibleWidth } from "@veyyon/utils/width";
 import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
-import { theme } from "../../../theme/theme";
+import { theme } from "../../../theme/theme-binding";
 import {
 	layoutShortcutRows,
 	type ModalShortcut,

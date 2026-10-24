@@ -31,7 +31,7 @@ Run `veyyon --help` for the generated flag set. Common options:
 | Option | Effect |
 | --- | --- |
 | `--mode json` | Machine-readable event stream on stdout |
-| `--model` / role flags | Model selection for the run |
+| `--model` / `--plan` | Model selection for the run |
 | `--approval-mode` / `--yolo` | Approval policy for the run |
 
 Headless runs have no TTY for approval prompts: choose a mode that does not block (`--yolo` only on disposable runners) or expect the turn to stop when a prompt would be required. See [Approvals](./sandbox.md).

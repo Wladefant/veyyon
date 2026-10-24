@@ -13,7 +13,7 @@
  * Deterministic LCG so a failing (line, width) pair reproduces from the seed.
  */
 import { describe, expect, it } from "bun:test";
-import { wordWrapLine } from "@veyyon/tui/components/editor";
+import { type TextChunk, wordWrapLine } from "@veyyon/tui/components/editor";
 import { fuzzStrings } from "@veyyon/utils/adversarial-strings";
 import { getSegmenter, visibleWidth } from "@veyyon/utils/width";
 
@@ -25,7 +25,7 @@ function graphemeCount(text: string): number {
 	return n;
 }
 
-function assertChunkInvariants(line: string, chunks: ReturnType<typeof wordWrapLine>): void {
+function assertChunkInvariants(line: string, chunks: TextChunk[]): void {
 	expect(Array.isArray(chunks)).toBe(true);
 	expect(chunks.length).toBeGreaterThan(0); // always at least one (possibly empty) chunk
 	let prevStart = -1;
@@ -60,7 +60,7 @@ describe("wordWrapLine fuzz invariants", () => {
 	it("never throws and emits in-range, forward-ordered chunk indices", () => {
 		fuzzStrings({ seed: 0x2ec_0_a11, iterations: 10000, corpus: WORDWRAP_CORPUS }, line => {
 			for (const width of WIDTHS) {
-				let chunks: ReturnType<typeof wordWrapLine>;
+				let chunks: TextChunk[];
 				try {
 					chunks = wordWrapLine(line, width);
 				} catch (e) {

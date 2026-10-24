@@ -169,7 +169,7 @@ describe("AgentSession Gemini header-runaway interrupt", () => {
 			"model.loopGuard.toolCallReminder": true,
 			...overrides,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 		session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
 	}
 

@@ -14,7 +14,6 @@ import {
 	setProfile,
 	VERSION,
 } from "@veyyon/utils/dirs";
-import { moduleSpecifiersIn } from "@veyyon/utils/module-reach";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../utils/test/helpers/isolated-config-root";
 import { runCli } from "../src/cli";
 import * as profileAliasCli from "../src/cli/profile-alias";
@@ -286,28 +285,11 @@ describe("global --profile flag", () => {
 		}
 	});
 
-	it("cli.ts imports no top-level @veyyon/utils barrel (would eager-load .env before setProfile)", async () => {
-		// Fast source lock guarding the ordering the test above proves behaviorally:
-		// the "@veyyon/utils" barrel re-exports ./env, which parses the agent-dir
-		// .env at import time. cli.ts must reach every utils symbol through a subpath
-		// (e.g. @veyyon/utils/type-guards, /dirs) so nothing loads the agent .env
-		// before runCli() calls setProfile(). A bare-barrel static import here
-		// silently reintroduces the wrong-profile-.env bug, so fail on it.
-		//
-		// The specifier list comes from moduleSpecifiersIn, not a per-line regex: a
-		// clause broken across lines by the formatter, which is what a long import
-		// becomes, put the specifier on a line with no `import` keyword on it and
-		// the scan walked past the exact edge it exists to forbid.
-		const cliSource = await fs.readFile(path.join(import.meta.dir, "..", "src", "cli.ts"), "utf-8");
-		const barrelImports = moduleSpecifiersIn(cliSource).filter(specifier => specifier === "@veyyon/utils");
-		expect(barrelImports).toEqual([]);
-	});
-
 	it("importing cli.ts (whole static graph) loads no agent .env before setProfile runs", async () => {
-		// Stronger than the source lock above: the source lock only inspects cli.ts
-		// itself, but the invariant covers the ENTIRE static import graph reachable
-		// before runCli() calls setProfile() — any transitively imported module that
-		// pulls the "@veyyon/utils" barrel would eager-load the agent .env just the
+		// The invariant covers the ENTIRE static import graph reachable before
+		// runCli() calls setProfile(), not only cli.ts: cli.ts itself, or any
+		// transitively imported module, that pulls the "@veyyon/utils" barrel would
+		// eager-load the agent .env just the
 		// same. This probe imports the cli module WITHOUT calling runCli and asserts
 		// a planted default-profile .env never leaked into the process env; if it
 		// did, some module in the pre-setProfile graph loaded .env at import time.

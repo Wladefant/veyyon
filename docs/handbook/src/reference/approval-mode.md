@@ -26,6 +26,8 @@ Under `plan`, `exec` is always denied (it returns an error to the model, never a
 
 Legacy aliases still accepted: `always-ask` → `ask`, `write` and `auto-edit` → `ask-command`.
 
+A value in `config.yml` that is none of these reads as `ask`, not as the default. A warning at startup states the value found, the file it came from and the mode in force.
+
 `--auto-approve` and `--yolo` force `tools.approvalMode: yolo` for the session.
 
 ## The working-directory boundary

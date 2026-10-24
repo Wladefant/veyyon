@@ -551,6 +551,11 @@ describe("ExtensionUiController hook editor abort", () => {
 	});
 });
 
+/**
+ * One hook dialog at a time on the shared surface, the rest queued in order.
+ *
+ * Subject: `modes/terminal/controllers/dialog-queue.ts`, driven through `ExtensionUiController.showHookSelector`.
+ */
 describe("ExtensionUiController dialog serialization", () => {
 	type SelectorController = {
 		showHookSelector: (

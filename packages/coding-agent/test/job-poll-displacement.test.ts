@@ -9,13 +9,19 @@
  *    finalizes normally; seal() always freezes.
  *  - EventController: a follow-up `job` call removes the tracked waiting
  *    poll from the transcript; any other tool seals it in place.
+ *
+ * Subject: `modes/terminal/controllers/displaceable-blocks.ts`, driven through `EventController`.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { ToolExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/tool-execution";
 import { TranscriptContainer } from "@veyyon/coding-agent/modes/terminal/components/transcript/transcript-container";
-import { EventController } from "@veyyon/coding-agent/modes/terminal/controllers/event-controller";
+import { DisplaceableBlocks } from "@veyyon/coding-agent/modes/terminal/controllers/displaceable-blocks";
+import {
+	EventController,
+	type EventControllerContext,
+} from "@veyyon/coding-agent/modes/terminal/controllers/event-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { UiHelpers } from "@veyyon/coding-agent/modes/terminal/utils/ui-helpers";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
@@ -178,7 +184,7 @@ describe("EventController displaces consecutive waiting polls", () => {
 			refreshComposerShortcuts: vi.fn(),
 			dismissWelcome: vi.fn(),
 		} as unknown as InteractiveModeContext;
-		return { controller: new EventController(ctx), children, pendingTools };
+		return { controller: new EventController(ctx), children, pendingTools, chatContainer };
 	}
 
 	async function runPoll(controller: EventController, children: Component[], toolCallId: string) {
@@ -391,6 +397,71 @@ describe("EventController displaces consecutive waiting polls", () => {
 		// A poll that carried real results is kept as history.
 		expect(children).toContain(settled);
 		expect(children).toContain(next);
+	});
+
+	it("seals a todo snapshot whose rows entered scrollback instead of removing it", async () => {
+		const { controller, children, chatContainer } = createFixture();
+
+		const first = await runTodo(controller, children, "todo-1", ["plan", "read"]);
+		chatContainer.setNativeScrollbackCommittedRows(chatContainer.render(80).length);
+		const second = await runTodo(controller, children, "todo-2", ["fix", "test"]);
+
+		// Rows on the tape are immutable history: removing them is an interior deletion the engine cannot express.
+		expect(children).toContain(first);
+		expect(children).toContain(second);
+		expect(first.isTranscriptBlockFinalized()).toBe(true);
+	});
+
+	it("forgets the live todo snapshot across a transcript rebuild", async () => {
+		const { controller, children } = createFixture();
+
+		const first = await runTodo(controller, children, "todo-1", ["plan", "read"]);
+		controller.resetTranscriptAnchors();
+		await runTodo(controller, children, "todo-2", ["fix", "test"]);
+
+		// The rebuild detached the old snapshot, so the next update leaves it alone.
+		expect(children).toContain(first);
+		expect(first.isTranscriptBlockFinalized()).toBe(false);
+	});
+
+	it("displaces a todo snapshot the rebuilt tail hands back", async () => {
+		const { controller, children } = createFixture();
+
+		const first = await runTodo(controller, children, "todo-1", ["plan", "read"]);
+		controller.resetTranscriptAnchors();
+		controller.inheritDisplaceableTodo(first);
+		const second = await runTodo(controller, children, "todo-2", ["fix", "test"]);
+
+		expect(children).not.toContain(first);
+		expect(children).toContain(second);
+		expect(first.isTranscriptBlockFinalized()).toBe(true);
+	});
+});
+
+describe("DisplaceableBlocks at a turn boundary", () => {
+	beforeEach(async () => {
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true });
+		await initTheme();
+	});
+
+	afterEach(() => {
+		resetSettingsForTest();
+	});
+
+	it("seals the live todo snapshot in place, where no later update of the turn can replace it", () => {
+		const chatContainer = new TranscriptContainer();
+		const blocks = new DisplaceableBlocks({ chatContainer, ui: uiStub } as unknown as EventControllerContext);
+		const todo = createToolExecution("todo", { op: "view" }, {}, undefined, uiStub);
+		todo.updateResult(todoResult(), false);
+		chatContainer.addChild(todo);
+		blocks.track("todo", todo);
+
+		blocks.sealTodo();
+
+		expect(chatContainer.children).toContain(todo);
+		expect(todo.isTranscriptBlockFinalized()).toBe(true);
+		expect(todo.isDisplaceableBlock()).toBe(false);
 	});
 });
 

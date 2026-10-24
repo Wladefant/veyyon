@@ -1,5 +1,5 @@
 import { withIcon } from "../../../../theme/icon-label";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import {
 	createBoundedTodoPreview,
 	prioritizeTodoItems,

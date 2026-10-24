@@ -86,10 +86,8 @@ describe("classifyUnexpectedStop", () => {
 		const settings = {
 			get(path: string) {
 				if (path === "providers.unexpectedStopModel") return "online";
+				if (path === "agent.helpers") return { unexpectedStop: { model: `${model.provider}/${model.id}` } };
 				return undefined;
-			},
-			getModelRole(role: string) {
-				return role === "smol" ? `${model.provider}/${model.id}` : undefined;
 			},
 		} as never;
 		const registry = {
