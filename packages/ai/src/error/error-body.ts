@@ -311,18 +311,26 @@ export async function readProviderErrorDetail(response: Response, options?: { ma
  * existing detail rather than inventing one.
  */
 export function providerErrorMessage(body: ProviderErrorBody): string {
+	return providerErrorEnvelopeMessage(body) ?? body.detail;
+}
+
+/**
+ * The human sentence inside a provider's JSON error envelope, or `undefined` when the body is not
+ * JSON or carries no `error` string, `error.message`, `message` or `detail`.
+ */
+export function providerErrorEnvelopeMessage(body: ProviderErrorBody): string | undefined {
 	const trimmed = body.text.trim();
-	if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return body.detail;
+	if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return undefined;
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(trimmed);
 	} catch {
 		// A truncated or non-JSON body is normal from a proxy; the raw detail is
 		// still the most informative thing available.
-		return body.detail;
+		return undefined;
 	}
 	const message = extractMessage(parsed);
-	return message ? boundProviderErrorDetail(message) : body.detail;
+	return message ? boundProviderErrorDetail(message) : undefined;
 }
 
 /**

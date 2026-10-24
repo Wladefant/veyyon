@@ -2,7 +2,9 @@ import * as path from "node:path";
 import { getLogsDir } from "@veyyon/utils/dirs";
 import { isBunTestRuntime } from "@veyyon/utils/env";
 import { asRecord, errorMessage, getNonBlankStringProperty, isRecord } from "@veyyon/utils/type-guards";
+import { type ProviderErrorBody, providerErrorEnvelopeMessage, readProviderErrorBody } from "../error/error-body";
 import * as AIError from "../error/flags";
+import { ProviderResponseError } from "../error/provider";
 import { redactDiagnosticHeaders } from "./request-debug.js";
 import { appendRetryAfterHint, errorText } from "./retry-after.js";
 
@@ -69,6 +71,127 @@ export async function captureHttpErrorResponse(response: Response): Promise<Capt
 		// Body unreadable (already consumed / stream fault): status-only capture.
 	}
 	return { status: response.status, headers: response.headers, bodyText, bodyJson };
+}
+
+/** An event stream opens with a field name, a comment or a blank line, never with markup or a JSON value. */
+const NON_EVENT_STREAM_LEAD = /^[<{[]/;
+/** The most of an HTML page's title a failure quotes. */
+const MAX_QUOTED_TITLE_CHARS = 120;
+
+/**
+ * `body` as an event stream, or a stream that fails with what the body is instead.
+ *
+ * A body labelled `text/event-stream` is returned as it is. Any other body is read on its first pull
+ * up to its first non-blank byte. An event stream never opens with `<`, `{` or `[`, so a body that
+ * does is an HTML page or a JSON document, which the endpoint returns on every attempt: decoded as
+ * an event stream it held no events, the turn failed as a truncated stream, and the truncated stream
+ * was retried until the retry budget ran out. Such a body fails the stream with what it is and where
+ * it came from; a mislabelled event stream is replayed from the bytes already read. The check runs
+ * inside the stream, so the caller's first-event and idle deadlines cover it.
+ */
+export function eventStreamBody(
+	response: Response,
+	body: ReadableStream<Uint8Array>,
+	url: string | undefined,
+): ReadableStream<Uint8Array> {
+	const contentType = response.headers.get("content-type");
+	if (contentType !== null && /^\s*text\/event-stream\b/i.test(contentType)) return body;
+	const reader = body.getReader();
+	let checked = false;
+	return new ReadableStream<Uint8Array>(
+		{
+			async pull(controller) {
+				if (checked) {
+					const { done, value } = await reader.read();
+					if (done) controller.close();
+					else controller.enqueue(value);
+					return;
+				}
+				checked = true;
+				const held: Uint8Array[] = [];
+				const decoder = new TextDecoder();
+				let lead = "";
+				let ended = false;
+				while (lead.length === 0) {
+					const { done, value } = await reader.read();
+					if (done) {
+						ended = true;
+						break;
+					}
+					held.push(value);
+					lead = decoder.decode(value, { stream: true }).trimStart();
+				}
+				if (NON_EVENT_STREAM_LEAD.test(lead)) {
+					const read = await readProviderErrorBody({
+						body: replayed(
+							held,
+							() => reader.read(),
+							reason => reader.cancel(reason),
+						),
+						headers: response.headers,
+						text: () => Promise.resolve(""),
+					});
+					throw nonEventStreamError(response.status, url, read);
+				}
+				for (const chunk of held) controller.enqueue(chunk);
+				if (ended) controller.close();
+			},
+			cancel(reason) {
+				return reader.cancel(reason);
+			},
+		},
+		{ highWaterMark: 0 },
+	);
+}
+
+/** `held`, then what `next` reads; cancelling it calls `cancel`. */
+function replayed(
+	held: Uint8Array[],
+	next: () => Promise<{ done: boolean; value?: Uint8Array }>,
+	cancel: (reason: unknown) => Promise<void>,
+): ReadableStream<Uint8Array> {
+	return new ReadableStream<Uint8Array>({
+		start(controller) {
+			for (const chunk of held) controller.enqueue(chunk);
+		},
+		async pull(controller) {
+			const { done, value } = await next();
+			if (done || value === undefined) controller.close();
+			else controller.enqueue(value);
+		},
+		cancel,
+	});
+}
+
+/**
+ * The failure a `2xx` body that is not an event stream states: the provider's own sentence when it
+ * is a JSON error envelope, which classifies as that sentence does on any other answer, and what came
+ * back and from where otherwise. The endpoint is stated without its query string, which can hold a
+ * key. Not retried unless the provider's sentence reads as transient.
+ */
+function nonEventStreamError(status: number, url: string | undefined, read: ProviderErrorBody): ProviderResponseError {
+	let from = "";
+	if (url) {
+		try {
+			const parsed = new URL(url);
+			from = ` from ${parsed.origin}${parsed.pathname}`;
+		} catch {}
+	}
+	const text = read.text.trimStart();
+	if (text.startsWith("<")) {
+		const title = /<title[^>]*>([^<]*)<\/title>/i.exec(text)?.[1]?.replace(/\s+/g, " ").trim();
+		const named = title ? ` titled "${title.slice(0, MAX_QUOTED_TITLE_CHARS)}"` : "";
+		return new ProviderResponseError(
+			`${status}${from} is an HTML page${named}, not an event stream. Check the provider's baseUrl.`,
+			{ kind: "envelope" },
+		);
+	}
+	const sentence = providerErrorEnvelopeMessage(read);
+	if (sentence) return new ProviderResponseError(`${status} ${sentence}`, { kind: "envelope" });
+	return new ProviderResponseError(
+		`${status}${from} is a JSON document, not an event stream. Check the provider's baseUrl and that the endpoint streams.`,
+		{ kind: "envelope" },
+	);
 }
 
 /**

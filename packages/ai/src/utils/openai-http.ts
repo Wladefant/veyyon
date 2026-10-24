@@ -22,7 +22,7 @@ import { OpenAIHttpError } from "../error";
 export { OpenAIHttpError };
 
 import type { FetchImpl } from "../types";
-import { captureHttpErrorResponse } from "./http-inspector";
+import { captureHttpErrorResponse, eventStreamBody } from "./http-inspector";
 import { fetchProviderWithRetry } from "./provider-fetch";
 
 /**
@@ -36,10 +36,6 @@ const DEFAULT_MAX_ATTEMPTS = 6;
 
 /** Bound the `Error.message` allocation for proxy HTML error pages and the like. */
 const MAX_DETAIL_CHARS = 4096;
-/** The most of a body that is not an event stream read to describe it. */
-const MAX_NON_STREAM_BODY_CHARS = 65_536;
-/** An event stream opens with a field name or a comment, never with markup or a JSON value. */
-const NON_STREAM_BODY_LEAD = /^[<{[]/;
 
 export interface OpenAIStreamRequestInit {
 	url: string;
@@ -101,98 +97,10 @@ export async function postOpenAIStream<TEvent>(init: OpenAIStreamRequestInit): P
 		});
 	}
 	return {
-		events: readSseJson<TEvent>(
-			await eventStreamBody(response, response.body, init.url),
-			init.signal,
-			init.onSseEvent,
-		),
+		events: readSseJson<TEvent>(eventStreamBody(response, response.body, init.url), init.signal, init.onSseEvent),
 		response,
 		requestId: response.headers.get("x-request-id"),
 	};
-}
-
-/**
- * The body as an event stream, or the failure it is instead.
- *
- * A body labelled `text/event-stream` is read as it is. Any other body is read up to its first
- * non-blank byte: an event stream never opens with `<`, `{` or `[`, so a body that does is an HTML
- * page or a JSON document, and the endpoint answers it on every attempt. Read as an event stream it
- * held no events, and the turn was retried as a truncated stream until the retry budget ran out. A
- * mislabelled event stream is replayed from the bytes already read.
- */
-async function eventStreamBody(
-	response: Response,
-	body: ReadableStream<Uint8Array>,
-	url: string,
-): Promise<ReadableStream<Uint8Array>> {
-	const contentType = response.headers.get("content-type");
-	if (contentType !== null && /^\s*text\/event-stream\b/i.test(contentType)) return body;
-	const reader = body.getReader();
-	const decoder = new TextDecoder();
-	const held: Uint8Array[] = [];
-	let text = "";
-	while (text.trimStart().length === 0) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		held.push(value);
-		text += decoder.decode(value, { stream: true });
-	}
-	if (!NON_STREAM_BODY_LEAD.test(text.trimStart())) {
-		return new ReadableStream<Uint8Array>({
-			start(controller) {
-				for (const chunk of held) controller.enqueue(chunk);
-			},
-			async pull(controller) {
-				const { done, value } = await reader.read();
-				if (done) controller.close();
-				else controller.enqueue(value);
-			},
-			cancel(reason) {
-				return reader.cancel(reason);
-			},
-		});
-	}
-	while (text.length < MAX_NON_STREAM_BODY_CHARS) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		text += decoder.decode(value, { stream: true });
-	}
-	await reader.cancel().catch(() => {});
-	throw nonStreamBodyError(response.status, url, text.trim());
-}
-
-/**
- * The failure a `2xx` body that is not an event stream states: the provider's own sentence when it
- * is an error envelope, which classifies as the same sentence would on a non-`2xx` answer, and what
- * came back and from where otherwise. Not retried unless that sentence reads as transient.
- */
-function nonStreamBodyError(status: number, url: string, body: string): AIError.ProviderResponseError {
-	let where = url;
-	try {
-		const parsed = new URL(url);
-		where = `${parsed.origin}${parsed.pathname}`;
-	} catch {}
-	if (body.startsWith("<")) {
-		const title = /<title[^>]*>([^<]*)<\/title>/i.exec(body)?.[1]?.trim();
-		const named = title ? ` titled "${title.slice(0, 120)}"` : "";
-		return new AIError.ProviderResponseError(
-			`${status} from ${where} is an HTML page${named}, not an event stream. Check the provider's baseUrl.`,
-			{ kind: "envelope" },
-		);
-	}
-	let json: unknown;
-	try {
-		json = JSON.parse(body);
-	} catch {}
-	const { detail } = OpenAIHttpError.parseEnvelope(json, undefined);
-	if (detail) {
-		const bounded = detail.length > MAX_DETAIL_CHARS ? detail.slice(0, MAX_DETAIL_CHARS) : detail;
-		return new AIError.ProviderResponseError(`${status} ${bounded}`, { kind: "envelope" });
-	}
-	return new AIError.ProviderResponseError(
-		`${status} from ${where} is a JSON document, not an event stream. Check the provider's baseUrl and that the endpoint streams.`,
-		{ kind: "envelope" },
-	);
 }
 
 /** Decode a non-2xx response into an {@link OpenAIHttpError} without consuming it twice. */

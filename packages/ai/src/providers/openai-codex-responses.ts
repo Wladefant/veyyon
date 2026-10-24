@@ -69,7 +69,7 @@ import {
 	openStallLadderBudget,
 	PRE_RESPONSE_STALL_ATTEMPTS,
 } from "../utils/first-event-budget";
-import { materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
+import { eventStreamBody, materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
 	armPreResponseTimeout,
 	getOpenAIStreamFirstEventTimeoutMs,
@@ -3306,7 +3306,7 @@ async function openCodexSseEventStream(
 	if (!response.body) {
 		throw new CodexProviderStreamError("No response body", { retryable: false });
 	}
-	const events = readSseJson<Record<string, unknown>>(response.body, signal, event =>
+	const events = readSseJson<Record<string, unknown>>(eventStreamBody(response, response.body, url), signal, event =>
 		notifyRawSseEvent(onSseEvent, { event: event.event, data: event.data, raw: event.raw.slice() }),
 	);
 	return { events, response, requestId: response.headers.get("x-request-id") };

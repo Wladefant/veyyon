@@ -84,7 +84,12 @@ import {
 	PRE_RESPONSE_STALL_ATTEMPTS,
 } from "../utils/first-event-budget";
 import { isFoundryEnabled } from "../utils/foundry";
-import { finalizeErrorMessage, materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
+import {
+	eventStreamBody,
+	finalizeErrorMessage,
+	materializeDumpBody,
+	type RawHttpRequestDump,
+} from "../utils/http-inspector";
 import { getStreamFirstEventTimeoutMs, getStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
 import { conversationIdForOpenCode, getOpenCodeHeaders, isOpenCodeProvider } from "../utils/opencode-headers";
 import { notifyProviderResponse } from "../utils/provider-response";
@@ -1445,7 +1450,7 @@ export async function* iterateAnthropicEvents(
 	let droppedFrames = 0;
 	let yieldedEvents = 0;
 
-	for await (const sse of readSseEvents(response.body, signal)) {
+	for await (const sse of readSseEvents(eventStreamBody(response, response.body, response.url), signal)) {
 		notifyRawSseEvent(onSseEvent, sse);
 		if (sse.event === "error") {
 			throw createAnthropicSseStreamError(sse.data);

@@ -35,7 +35,7 @@ import type {
 import { shouldSendServiceTier } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import { materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
+import { eventStreamBody, materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { normalizeSchemaForCCA, normalizeSchemaForGoogle, toolWireSchema } from "../utils/schema";
 import { stopReasonForTerminallessEof } from "../utils/terminalless-eof";
@@ -1012,7 +1012,7 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 						kind: "empty-body",
 					});
 				}
-				return response.body as ReadableStream<Uint8Array>;
+				return eventStreamBody(response, response.body as ReadableStream<Uint8Array>, requestUrl);
 			};
 			// A regional Vertex endpoint 404s for models published only on the
 			// global endpoint; retry global once so a stale/ambient region never
