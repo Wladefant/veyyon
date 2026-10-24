@@ -70,6 +70,7 @@
 - Kimi Code bundles K3.1 Pro, K3.1 Pro Highspeed and the K2.8 Preview name of `kimi-for-coding`, read from the `kimi-code-plan-cn` key models.dev now lists Kimi Code under.
 - Kimi Code models offer Low, High and Max with no Off, and discovery takes each model's effort ladder, default effort and off state from the account's `/models` listing.
 - A Kimi Code model that cannot stop thinking keeps thinking on and sends no forced tool choice on both wires, including the K3 rows whose ids carry no `kimi` prefix.
+- A swarm file with a YAML syntax error fails with the error's line and column, such as `Nested mappings are not allowed in compact mappings at line 4, column 9`, instead of `Unexpected token`.
 - `extractRetryHint` reads a reset window stated in prose in any unit or combination of units, such as `Your limit will reset in 17 minutes`, `Resets in 20m45s` and `Resets in 1hr 39min`, after the machine-readable fields a body states.
 
 ## [1.5.9] - 2026-10-22
