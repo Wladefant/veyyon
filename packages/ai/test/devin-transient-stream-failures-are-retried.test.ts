@@ -26,7 +26,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { create, toBinary } from "@bufbuild/protobuf";
-import { parseDevinRateLimitResetMs, streamDevin } from "@veyyon/ai/providers/devin";
+import { streamDevin } from "@veyyon/ai/providers/devin";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { GetChatMessageResponseSchema } from "@veyyon/catalog/discovery/devin-gen/exa/api_server_pb/api_server_pb";
@@ -133,46 +133,6 @@ async function collect(
 	for await (const event of stream) events.push(event);
 	return { events, waits, result: await stream.result() };
 }
-
-describe("parseDevinRateLimitResetMs", () => {
-	/**
-	 * The server's sentence is the only machine-usable retry hint on a Connect trailer.
-	 *
-	 * There is no `retry-after` header to read, so this parse is what decides both how long to wait
-	 * and, for a long window, whether to wait at all. Each unit is covered because a scale error here
-	 * turns a one-minute pause into an hour or a retry that fires immediately and fails again.
-	 */
-	it("reads the stated window in every unit the server uses", () => {
-		expect(parseDevinRateLimitResetMs("Your limit will reset in 1 minute.")).toBe(60_000);
-		expect(parseDevinRateLimitResetMs("Your limit will reset in 40 minutes.")).toBe(2_400_000);
-		expect(parseDevinRateLimitResetMs("Your limit will reset in 30 seconds.")).toBe(30_000);
-		expect(parseDevinRateLimitResetMs("Your limit will reset in 2 hours.")).toBe(7_200_000);
-	});
-
-	/** The real message, whole, because that is the string the parse has to survive. */
-	it("reads the window out of the message Cascade actually sends", () => {
-		expect(parseDevinRateLimitResetMs(RATE_LIMIT_MESSAGE)).toBe(60_000);
-	});
-
-	/** Wording variants that mean the same thing, so a server rephrasing does not silently stop retries. */
-	it("accepts the phrasings that carry the same claim", () => {
-		expect(parseDevinRateLimitResetMs("limit resets in 15 seconds")).toBe(15_000);
-		expect(parseDevinRateLimitResetMs("will reset after 5 minutes")).toBe(300_000);
-		expect(parseDevinRateLimitResetMs("will reset in about 2 minutes")).toBe(120_000);
-	});
-
-	/**
-	 * No window stated means no window invented.
-	 *
-	 * The caller distinguishes `undefined` from a number: `undefined` falls back to exponential
-	 * backoff, so a parse that guessed would override real backoff with a fabricated wait.
-	 */
-	it("returns undefined when the message states no window", () => {
-		expect(parseDevinRateLimitResetMs("Reached overall message rate limit.")).toBeUndefined();
-		expect(parseDevinRateLimitResetMs("")).toBeUndefined();
-		expect(parseDevinRateLimitResetMs("reset in a moment")).toBeUndefined();
-	});
-});
 
 describe("streamDevin retries a turn that failed before saying anything", () => {
 	/**

@@ -3,8 +3,17 @@ import { scheduler } from "node:timers/promises";
 import { cancellationError, isAbortError, isTimeoutError } from "./abortable";
 import { exponentialBackoffDelay } from "./backoff";
 
-// "reset after 1h2m3s" / "10m15s" / "39s"
-const QUOTA_RESET_PATTERN = /reset after (?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s/i;
+// Units a stated duration may use; `unitToMs` converts each. A unit must not run into a letter, so
+// `5ms` is milliseconds and `5min` is minutes, never `m` followed by noise.
+const DURATION_UNIT = "milliseconds?|ms|seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d";
+// "reset after 1h2m3s" / "Resets in 20m45s" / "Resets in 1hr 39min" / "will reset in 17 minutes" /
+// "resets in about 2 minutes"
+const RESET_WINDOW_PATTERN = new RegExp(
+	String.raw`\bresets?\s+(?:in|after)\s+(?:about\s+|approximately\s+|~\s*)?(\d+(?:\.\d+)?\s*(?:${DURATION_UNIT})(?![a-z])(?:[\s,]*(?:and\s+)?\d+(?:\.\d+)?\s*(?:${DURATION_UNIT})(?![a-z]))*)`,
+	"i",
+);
+// One `<number><unit>` term of a duration RESET_WINDOW_PATTERN captured.
+const DURATION_TERM_PATTERN = new RegExp(String.raw`(\d+(?:\.\d+)?)\s*(${DURATION_UNIT})(?![a-z])`, "gi");
 // "Please retry in 250ms" / "Please retry in 12s"
 const PLEASE_RETRY_PATTERN = /Please retry in ([0-9.]+)(ms|s)/i;
 // JSON field: "retryDelay": "34.074824224s"
@@ -214,10 +223,11 @@ export function resetHeaderTargetMs(value: number): { atMs: number } | { delta: 
  *    `name=value` or `name value` (`retry-after-ms=62000`, `retry-after: 60`,
  *    `retry-after: 2026-01-01T00:00:00Z`, `x-ratelimit-reset: 60`), read by the
  *    same `read` as the header; a zero or elapsed window states no wait
- *  - `Your quota will reset after 18h31m10s` / `10m15s` / `39s`
  *  - `Please retry in 250ms` / `Please retry in 12s`
  *  - `"retryDelay": "34.074824224s"` (JSON error detail field)
  *  - `try again in 250ms` / `try again in 12s` / `try again in 5 min` / `try again in ~158 min`
+ *  - `reset after 18h31m10s`, `Resets in 20m45s`, `Resets in 1hr 39min`, `will reset in 17 minutes`:
+ *    a reset window in prose, read last because it is the least precise statement of the wait
  *
  * Returns `undefined` if no signal is found.
  */
@@ -229,7 +239,7 @@ export function extractRetryHint(source: Response | Headers | null | undefined, 
 		if (ms !== undefined) return ms;
 	}
 	if (!body) return undefined;
-	return headerTextRetryHint(body, nowMs) ?? quotaResetHint(body) ?? unitDelayHint(body);
+	return headerTextRetryHint(body, nowMs) ?? unitDelayHint(body) ?? resetWindowHint(body);
 }
 
 /** The first window a response header states: {@link RETRY_HINT_HEADERS} in order, then the Anthropic reset clocks. */
@@ -254,15 +264,16 @@ function headerTextRetryHint(body: string, nowMs: number): number | undefined {
 	return undefined;
 }
 
-/** `reset after 1h2m3s` as a positive wait in ms. */
-function quotaResetHint(body: string): number | undefined {
-	const match = QUOTA_RESET_PATTERN.exec(body);
-	if (!match) return undefined;
-	const hours = match[1] ? Number.parseInt(match[1], 10) : 0;
-	const minutes = match[2] ? Number.parseInt(match[2], 10) : 0;
-	const seconds = Number.parseFloat(match[3]!);
-	if (Number.isNaN(seconds)) return undefined;
-	const totalMs = ((hours * 60 + minutes) * 60 + seconds) * 1000;
+/** A reset window stated in prose (`Resets in 1hr 39min`) as a positive wait in ms. */
+function resetWindowHint(body: string): number | undefined {
+	const duration = RESET_WINDOW_PATTERN.exec(body)?.[1];
+	if (duration === undefined) return undefined;
+	let totalMs = 0;
+	for (const term of duration.matchAll(DURATION_TERM_PATTERN)) {
+		const unitMs = unitToMs(term[2] ?? "");
+		if (unitMs === undefined) return undefined;
+		totalMs += Number.parseFloat(term[1] ?? "") * unitMs;
+	}
 	return totalMs > 0 ? totalMs : undefined;
 }
 
@@ -285,9 +296,14 @@ function unitDelayHint(body: string): number | undefined {
 function unitToMs(unit: string): number | undefined {
 	switch (unit.toLowerCase()) {
 		case "ms":
+		case "millisecond":
+		case "milliseconds":
 			return 1;
 		case "s":
 		case "sec":
+		case "secs":
+		case "second":
+		case "seconds":
 			return 1000;
 		case "m":
 		case "min":
@@ -301,6 +317,10 @@ function unitToMs(unit: string): number | undefined {
 		case "hour":
 		case "hours":
 			return 60 * 60_000;
+		case "d":
+		case "day":
+		case "days":
+			return 24 * 60 * 60_000;
 		default:
 			return undefined;
 	}

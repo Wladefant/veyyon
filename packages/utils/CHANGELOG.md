@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `extractRetryHint` reads a reset window stated in prose in any unit or combination of units, such as `Your limit will reset in 17 minutes`, `Resets in 20m45s` and `Resets in 1hr 39min`, after the machine-readable fields a body states.
+
 ## [1.5.9] - 2026-10-22
 
 ### Breaking Changes

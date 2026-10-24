@@ -22,6 +22,7 @@
 - The OpenCode Go API-key login prompt names OpenCode Go instead of OpenCode Zen.
 - An error from an OpenAI-compatible provider whose body carries `type`, `param` or `code` states the provider's sentence once, as `401 This API key has expired. … (type=authentication_error code=api_key_expired)`, instead of repeating it on a second line with the fields.
 - A captured error body that replaces a status-only `status code (no body)` message keeps the `retry-after-ms=` wait the response stated.
+- The Devin provider reads Cascade's stated reset window through the shared `extractRetryHint` instead of a parser of its own; no user-facing change.
 
 ## [1.5.9] - 2026-10-22
 

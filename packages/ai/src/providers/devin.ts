@@ -42,6 +42,7 @@ import { calculateCost, discardAttemptUsage } from "@veyyon/catalog/models";
 import { DEVIN_CASCADE_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { isAbortError } from "@veyyon/utils/abortable";
 import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
+import { extractRetryHint } from "@veyyon/utils/fetch-retry";
 import { tryParseJson } from "@veyyon/utils/json";
 import { parseStreamingJson, parseStreamingJsonThrottled } from "@veyyon/utils/json-parse";
 import * as logger from "@veyyon/utils/logger";
@@ -798,28 +799,6 @@ function readConnectTrailerError(text: string): DevinTrailerError | null {
 }
 
 /**
- * How long Cascade says to wait, read out of the sentence it says it in.
- *
- * There is no `retry-after` header on a Connect trailer, so the only machine-usable signal is the
- * server's own English: "Your limit will reset in 1 minute", "in 40 minutes". Honoring it matters
- * in both directions. Retrying sooner than the server asked is a guaranteed failure that burns the
- * retry budget, and a window far longer than any backoff (the 40-minute case is real) means the
- * turn must fail now rather than sit in a doomed sleep.
- *
- * Exported for tests: the parse is the part that decides whether a retry is even attempted.
- */
-export function parseDevinRateLimitResetMs(message: string): number | undefined {
-	const match =
-		/\breset(?:s)?\s+(?:in|after)\s+(?:about\s+|approximately\s+|~)?(\d+)\s*(second|minute|hour)s?\b/i.exec(message);
-	if (!match?.[1] || !match[2]) return undefined;
-	const amount = Number(match[1]);
-	if (!Number.isFinite(amount) || amount < 0) return undefined;
-	const unit = match[2].toLowerCase();
-	const scale = unit === "second" ? 1_000 : unit === "minute" ? 60_000 : 3_600_000;
-	return amount * scale;
-}
-
-/**
  * How long to wait before re-running a failed turn, or `undefined` when it must not be re-run.
  *
  * WHY EVERY CONDITION IS HERE. Each one is a way a retry does harm rather than good:
@@ -848,7 +827,9 @@ function devinRetryDelayMs(
 	if (!AIError.isProviderRetryableError(error)) return undefined;
 
 	const message = errorMessage(error);
-	const statedResetMs = parseDevinRateLimitResetMs(message);
+	// Cascade sends no `retry-after` header on a Connect trailer; the window is in its sentence:
+	// "Your limit will reset in 1 minute".
+	const statedResetMs = extractRetryHint(undefined, message);
 	if (statedResetMs !== undefined) {
 		// One second of slack, because waiting until the exact stated instant races the server's own
 		// clock and a retry that lands a moment early just burns an attempt.

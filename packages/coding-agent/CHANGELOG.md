@@ -27,6 +27,7 @@
 - A login started by its alternate id, such as `/login opencode-go-api-key`, is labelled with the provider it stores under, asks for a name when that provider already holds an account, and reopens the account card on that provider instead of the first one listed.
 - The account card's provider filter labels `enter` with what it does, `enter add <provider> account` on a provider with no accounts, instead of always `enter switch to this account`.
 - A settings submenu opened from a search result shows "enter confirm · esc back" in the card footer instead of the search's "enter keep filter · esc clear search" ([#966](https://github.com/santhreal/veyyon/issues/966)).
+- A rate limit that states its reset window in words, such as Devin's `Your limit will reset in 17 minutes`, is retried once that window passes, or ends the turn at once when the window exceeds `retry.maxDelayMs`, instead of being retried inside the window until the retry budget runs out.
 
 ## [1.5.9] - 2026-10-22
 
