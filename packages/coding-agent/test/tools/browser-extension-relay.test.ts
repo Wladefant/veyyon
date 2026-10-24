@@ -1128,4 +1128,53 @@ describe("secrets stay out of logs", () => {
 			for (const spy of spies) spy.mockRestore();
 		}
 	});
+	describe("diagnostic metadata", () => {
+		test("logs relay lifecycle, bootstrap claim, and client command without sensitive values", async () => {
+			const lines: string[] = [];
+			const record = (...args: unknown[]): void => {
+				lines.push(JSON.stringify(args));
+			};
+			const spies = [
+				spyOn(logger, "debug").mockImplementation(record),
+				spyOn(logger, "info").mockImplementation(record),
+			];
+			try {
+				const bootstrap = {
+					extensionId: "mmlmfjhmonkocbjadbfplnigmagldckm",
+					protocolVersion: 2,
+					token: EXTENSION_TOKEN,
+					clientName: "veyyon",
+				};
+				relay = ExtensionRelay.start({ instance: "Profile 7", bootstrap });
+				const url = buildConnectUrl({ ...bootstrap, relayUrl: relay.extensionUrl });
+				const ext = await FakeExtension.connect(relay.extensionUrl);
+				ext.emit("chrome.tabs.onCreated", [{ id: 41, url }]);
+				await relay.waitForExtension(2000);
+				const cdp = await CdpTestClient.connect(relay.cdpUrl);
+				const rejected = await cdp.send("Nonsense.method");
+				expect(rejected.error?.code).toBe(-32601);
+				const created = await cdp.send("Target.createTarget", { url: "about:blank" });
+				const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
+				ext.failNext("Runtime.evaluate");
+				expect((await cdp.send("Runtime.evaluate", { expression: "private-expression" }, sessionId)).error).toBeDefined();
+				const joined = lines.join("\n");
+				expect(joined).toContain('"port":');
+				expect(joined).toContain('"cdpMethod":"Runtime.evaluate"');
+				expect(joined).toContain('"instance":"Profile 7"');
+				expect(joined).toContain('"tabId":41');
+				expect(joined).toContain('"urlMatch":true');
+				expect(joined).toContain('"clientId":1');
+				expect(joined).not.toContain(url);
+				expect(joined).not.toContain(relay.extensionUrl);
+				expect(joined).not.toContain(EXTENSION_TOKEN);
+				expect(joined).not.toContain("private.example");
+				expect(joined).not.toContain("secret-param");
+				expect(joined).not.toContain("private-expression");
+				await cdp.close();
+				await ext.close();
+			} finally {
+				for (const spy of spies) spy.mockRestore();
+			}
+		});
+	});
 });
