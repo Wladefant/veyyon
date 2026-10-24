@@ -20,6 +20,7 @@
 - The account card's notice line flattens whitespace through the shared `collapseWhitespace`; no user-facing change.
 - `/login opencode-go` signs in with an OpenCode Console account through its device flow and sends requests to the Go inference endpoint of the organization that holds the subscription, with the organization id in `x-opencode-org-id`; an OpenCode Go API key is the legacy `opencode-go-api-key` login.
 - The OpenCode Go usage ledger reports spend for a Console login as it does for an API key.
+- The OpenCode Console device flow loads when an OpenCode Go login or token refresh first runs instead of at startup, with no user-visible change.
 - OpenCode Go discovery sends no Authorization for a Console login, whose token the public listing rejects, and keys its model cache by the credential it sends, so a refreshed login token keeps its cached models.
 
 ### Fixed

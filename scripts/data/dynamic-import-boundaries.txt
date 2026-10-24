@@ -16,6 +16,7 @@ packages/ai/src/registry/minimax-code-cn.ts
 packages/ai/src/registry/minimax-code.ts
 packages/ai/src/registry/openai-codex-device.ts
 packages/ai/src/registry/openai-codex.ts
+packages/ai/src/registry/opencode-go.ts
 packages/ai/src/registry/opencode-zen.ts
 packages/ai/src/registry/perplexity.ts
 packages/ai/src/registry/wafer-serverless.ts

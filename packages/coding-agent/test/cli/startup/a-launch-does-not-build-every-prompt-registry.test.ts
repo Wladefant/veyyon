@@ -394,11 +394,19 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * the Codex discovery reader and the abort and timeout helpers, are already here. Measured
  * 2026-10-21 at 1496.
  *
+ * 1496 to 1498: `ai/src/registry/opencode-go-api-key.ts`, the OpenCode Go API-key login, which
+ * `ai/src/registry/registry.ts`, already here, lists beside the OpenCode Console login, and
+ * `catalog/src/wire/opencode-go.ts`, the OpenCode Go endpoint rules and the envelope a Console login's
+ * key is carried in, which `catalog/src/provider-models/openai-compat.ts` and
+ * `ai/src/registry/oauth/index.ts`, both already here, read. Their runtime imports are
+ * `./api-key-login` and `@veyyon/utils/url`, both already here. The Console device flow stays behind
+ * the registry's lazy `await import`. Measured 2026-10-24 at 1498.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1496;
+const LAUNCH_REACH_CEILING = 1498;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

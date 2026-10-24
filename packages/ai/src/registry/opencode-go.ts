@@ -1,5 +1,8 @@
-import { loginOpenCodeGo, refreshOpenCodeGoToken } from "./oauth/opencode-console";
+import type { OAuthCredentials, OAuthLoginCallbacks } from "./oauth/types";
 import type { ProviderDefinition } from "./types";
+
+// Every `await import` here is the registry's lazy boundary: the OAuth flow module stays out of the
+// eager startup graph until a login or refresh runs.
 
 /**
  * OpenCode Go, signed in with an OpenCode Console account. An OpenCode Go API key is the legacy way in,
@@ -8,7 +11,13 @@ import type { ProviderDefinition } from "./types";
 export const opencodeGoProvider = {
 	id: "opencode-go",
 	name: "OpenCode Go",
-	login: loginOpenCodeGo,
+	login: async (cb: OAuthLoginCallbacks) => {
+		const { loginOpenCodeGo } = await import("./oauth/opencode-console");
+		return loginOpenCodeGo(cb);
+	},
 	credential: "oauth",
-	refreshToken: (credentials, signal) => refreshOpenCodeGoToken(credentials, undefined, signal),
+	refreshToken: async (credentials: OAuthCredentials, signal?: AbortSignal) => {
+		const { refreshOpenCodeGoToken } = await import("./oauth/opencode-console");
+		return refreshOpenCodeGoToken(credentials, undefined, signal);
+	},
 } as const satisfies ProviderDefinition;
