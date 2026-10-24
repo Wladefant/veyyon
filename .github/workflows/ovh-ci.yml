@@ -58,7 +58,7 @@ jobs:
           import fs from 'node:fs';
           import path from 'node:path';
           import { execFileSync } from 'node:child_process';
-          import ts from 'typescript';
+          import { ts } from 'ts-morph';
           const root = process.cwd();
           const changed = execFileSync('git', ['diff', '--name-only', '-z', 'origin/main...HEAD'], {encoding:'utf8'}).split('\0').filter(Boolean);
           const code = changed.filter(p => /\.(?:[cm]?js|[cm]?ts|tsx|jsx|rs)$/.test(p));
