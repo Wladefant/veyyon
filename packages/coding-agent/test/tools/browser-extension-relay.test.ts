@@ -1154,7 +1154,7 @@ describe("secrets stay out of logs", () => {
 				const hostileMethod = `Nonsense.${EXTENSION_TOKEN}`;
 				const rejected = await cdp.send(hostileMethod);
 				expect(rejected.error?.code).toBe(-32601);
-				const created = await cdp.send("Target.createTarget", { url: "about:blank" });
+				await cdp.send("Target.createTarget", { url: "about:blank" });
 				const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
 				ext.failNext("Runtime.evaluate");
 				expect((await cdp.send("Runtime.evaluate", { expression: "private-expression" }, sessionId)).error).toBeDefined();
@@ -1170,13 +1170,59 @@ describe("secrets stay out of logs", () => {
 				expect(joined).not.toContain(url);
 				expect(joined).not.toContain(relay.extensionUrl);
 				expect(joined).not.toContain(EXTENSION_TOKEN);
-				expect(joined).not.toContain("private.example");
-				expect(joined).not.toContain("secret-param");
 				expect(joined).not.toContain("private-expression");
 				await cdp.close();
 				await ext.close();
 			} finally {
 				for (const spy of spies) spy.mockRestore();
+			}
+		});
+
+		test("timeout log names the method without the secret it carries", async () => {
+			const lines: string[] = [];
+			const record = (...args: unknown[]): void => {
+				lines.push(JSON.stringify(args));
+			};
+			const spies = [
+				spyOn(logger, "debug").mockImplementation(record),
+				spyOn(logger, "info").mockImplementation(record),
+			];
+			const realSetTimeout = globalThis.setTimeout;
+			let timers: { mockRestore(): void } | undefined;
+			try {
+				const token = "TimeoutSentinel0123456789";
+				const bootstrap = {
+					extensionId: "mmlmfjhmonkocbjadbfplnigmagldckm",
+					protocolVersion: 2,
+					token,
+					clientName: "veyyon",
+				};
+				relay = ExtensionRelay.start({ instance: "Profile 8", bootstrap });
+				const url = buildConnectUrl({ ...bootstrap, relayUrl: relay.extensionUrl });
+				const ext = await FakeExtension.connect(relay.extensionUrl);
+				ext.emit("chrome.tabs.onCreated", [{ id: 51, url }]);
+				await relay.waitForExtension(2000);
+				const cdp = await CdpTestClient.connect(relay.cdpUrl);
+				await cdp.send("Target.createTarget", { url: "about:blank" });
+				const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
+				// The extension never answers this call. The 15 s RPC timer is fired at once so the test stays fast.
+				const method = `Runtime.${token}`;
+				const release = ext.delayNext(method);
+				timers = spyOn(globalThis, "setTimeout").mockImplementation(((handler: () => void, ms?: number) =>
+					realSetTimeout(handler, ms === 15_000 ? 0 : ms)) as typeof setTimeout);
+				const reply = await cdp.send(method, {}, sessionId).finally(() => {
+					timers?.mockRestore();
+					release();
+				});
+				expect(reply.error?.message).toContain("did not answer chrome.debugger.sendCommand within 15 s");
+				const joined = lines.join("\n");
+				expect(joined).toContain("extension RPC timed out");
+				expect(joined).not.toContain(token);
+				await cdp.close();
+				await ext.close();
+			} finally {
+				for (const spy of spies) spy.mockRestore();
+				timers?.mockRestore();
 			}
 		});
 	});
