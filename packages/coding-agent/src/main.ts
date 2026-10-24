@@ -2333,6 +2333,11 @@ async function runSessionLaunch(
 	const shared: LaunchSessionShared = { eventBus, operatorNotices, preloadedExtensions };
 	const created = await createSession({ ...sessionOptions, ...shared }, launch.isInteractive);
 	const { session } = created;
+	// The TUI states a hand-edited setting that reads as another value above its first prompt
+	// (`InteractiveMode.init`). Every other mode states it here, before the run uses that value.
+	if (!launch.isInteractive) {
+		for (const warning of session.configWarnings) operatorNotices.warn("settings", warning);
+	}
 	installPersistedAgentReviver(launch, session, eventBus, sessionOptions.enableLsp ?? true);
 	if (launch.parsedArgs.apiKey && !sessionOptions.model && session.model) {
 		launch.authStorage.setRuntimeApiKey(session.model.provider, launch.parsedArgs.apiKey);

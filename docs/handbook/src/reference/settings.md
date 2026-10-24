@@ -57,7 +57,8 @@ These rules cover the corners:
 - A value whose type does not match the setting's declaration is named in a startup
   warning with the file to edit. An enum value outside its list reads as the setting's
   default, except `tools.approvalMode`, which reads as `ask`; the warning states the
-  value in force.
+  value in force. The TUI shows the warning above the first prompt; `veyyon -p` and
+  RPC mode write it to stderr as `warning: settings: <setting>: …`.
 
 ## Reading and writing settings
 

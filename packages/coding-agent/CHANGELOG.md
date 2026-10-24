@@ -34,6 +34,7 @@
 - A YAML syntax error in `config.yml`, the global config, a `--config` overlay, `models.yml`, `keybindings.yml`, a watchdog or harness profile file, or a swarm file states its line and column instead of `Unexpected token`, and the settings notice states each file's reason and how to restore it.
 - A print run with a settings file that does not parse states it on stderr instead of running on defaults without a word.
 - A session in a project with no context file no longer logs `Context file discovery disabled: caller supplied an empty resolved list` when it opens and at every prompt rebuild; an empty list its caller supplies is logged once.
+- `veyyon -p` and RPC mode write a hand-edited setting of the wrong kind or outside its declared values to stderr as `warning: settings: …`, with the file and the value the run uses, instead of running on the replaced value without a word.
 
 ## [1.5.9] - 2026-10-22
 
