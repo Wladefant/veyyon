@@ -418,7 +418,7 @@ export class ExtensionRelay {
 	#writeStateFile(): void {
 		const file = this.#stateFile();
 		const state = { port: this.port, control: this.#controlSecret, pid: process.pid };
-		fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+		fs.mkdirSync(path.dirname(file), { recursive: true });
 		fs.writeFileSync(file, JSON.stringify(state), { mode: 0o600 });
 	}
 
