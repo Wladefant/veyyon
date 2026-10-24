@@ -77,7 +77,7 @@ import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
 import {
 	type BuildSystemPromptResult,
-	buildSystemPrompt as buildSystemPromptInternal,
+	buildSessionSystemPrompt as buildSystemPromptInternal,
 	buildSystemPromptToolMetadata,
 } from "./system-prompt";
 import { resolveGateInputs, resolveIntentField } from "./system-prompt-builder/gate-inputs";

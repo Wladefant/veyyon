@@ -737,8 +737,30 @@ function resolveEvalStatementOverrides(): StatementOverrides {
 	return overrides;
 }
 
-/** Build the system prompt with tools, guidelines, and context */
+/**
+ * Build the system prompt with tools, guidelines, and context.
+ *
+ * A `contextFiles` of `[]` turns discovery off and is logged, because it is far more often a filter
+ * that ate the list than a caller that wants a prompt with no operator context; see the option.
+ */
 export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}): Promise<BuildSystemPromptResult> {
+	if (options.contextFiles?.length === 0) {
+		logger.warn("Context file discovery disabled: caller supplied an empty resolved list", {
+			cwd: options.cwd ?? getProjectDir(),
+			agentDir: path.resolve(options.agentDir ?? getAgentDir()),
+		});
+	}
+	return buildSessionSystemPrompt(options);
+}
+
+/**
+ * {@link buildSystemPrompt} for the session runtime, which passes the context files its own discovery
+ * found and logs an empty list from its caller once, when the session opens. Its discovery finding no
+ * file is the ordinary case of a project with no `AGENTS.md`, so a build or a rebuild logs nothing.
+ */
+export async function buildSessionSystemPrompt(
+	options: BuildSystemPromptOptions = {},
+): Promise<BuildSystemPromptResult> {
 	if ($env.NULL_PROMPT === "true") {
 		// No prompt was rendered, so there is no context it was rendered with.
 		return {
@@ -889,14 +911,9 @@ async function preparePromptInputs(
 	const deadline = new PromptPrepDeadline();
 
 	// Presence, not truthiness. Every array is truthy, so the old `providedContextFiles ? ... : ...`
-	// spelling read as "a caller supplied files" while actually meaning "a caller supplied the key",
-	// and a list some spawn site had filtered down to `[]` took the resolved branch and switched
-	// discovery off with nothing said. The distinction is the same one the option's doc states, and
-	// the empty case is announced rather than assumed, because it is far more often a filter that
-	// ate the list than a caller that truly wants a prompt with no operator context.
-	if (providedContextFiles?.length === 0) {
-		logger.warn("Context file discovery disabled: caller supplied an empty resolved list", { cwd, agentDir });
-	}
+	// spelling read as "a caller supplied files" while meaning "a caller supplied the key", and a list
+	// some spawn site had filtered down to `[]` took the resolved branch and switched discovery off.
+	// `buildSystemPrompt` logs that case for its callers; the session runtime logs it when it opens.
 	const contextFilesLookup =
 		providedContextFiles !== undefined
 			? Promise.resolve(providedContextFiles)
