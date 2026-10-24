@@ -4,7 +4,7 @@ import { isBunTestRuntime } from "@veyyon/utils/env";
 import { asRecord, errorMessage, getNonBlankStringProperty, isRecord } from "@veyyon/utils/type-guards";
 import * as AIError from "../error/flags";
 import { redactDiagnosticHeaders } from "./request-debug.js";
-import { formatErrorMessageWithRetryAfter } from "./retry-after.js";
+import { appendRetryAfterHint, errorText } from "./retry-after.js";
 
 export type RawHttpRequestDump = {
 	provider: string;
@@ -126,16 +126,28 @@ export async function finalizeErrorMessage(
 	rawRequestDump: RawHttpRequestDump | undefined,
 	capturedErrorResponse?: CapturedHttpErrorResponse,
 ): Promise<string> {
-	let message = formatErrorMessageWithRetryAfter(error, capturedErrorResponse?.headers);
-	const capturedMessage = formatCapturedHttpError(capturedErrorResponse);
-	if (capturedMessage) {
-		if (/\bstatus code\s*\(no body\)/i.test(message)) {
-			message = `${capturedErrorResponse?.status ?? "HTTP"} status code: ${capturedMessage}`;
-		} else if (!message.includes(capturedMessage)) {
-			message = `${message}\n${capturedMessage}`;
-		}
-	}
+	const message = appendRetryAfterHint(
+		withCapturedBody(errorText(error), capturedErrorResponse),
+		error,
+		capturedErrorResponse?.headers,
+	);
 	return appendRawHttpRequestDumpFor400(message, error, rawRequestDump);
+}
+
+/**
+ * `message` with what the captured body states that it does not. A provider error is usually thrown
+ * as `<status> <sentence>` from the same body, so when `message` ends with the body's sentence only
+ * the body's `type`/`param`/`code` fields are added to it; a body whose sentence `message` does not
+ * end with (an `HTTP 401 from <url>`, or a body embedded as JSON) is added on its own line.
+ */
+function withCapturedBody(message: string, captured: CapturedHttpErrorResponse | undefined): string {
+	const body = readCapturedHttpError(captured);
+	if (!body) return message;
+	const stated = body.fields === undefined ? body.sentence : `${body.sentence} (${body.fields})`;
+	if (/\bstatus code\s*\(no body\)/i.test(message)) return `${captured?.status ?? "HTTP"} status code: ${stated}`;
+	if (message.includes(stated)) return message;
+	if (body.fields !== undefined && message.endsWith(body.sentence)) return `${message} (${body.fields})`;
+	return `${message}\n${stated}`;
 }
 
 /**
@@ -179,29 +191,36 @@ function redactHeaders(headers: Record<string, string> | undefined): Record<stri
 	return redactDiagnosticHeaders(Object.entries(headers));
 }
 
-function formatCapturedHttpError(captured: CapturedHttpErrorResponse | undefined): string | undefined {
+/** A captured error body as an operator reads it: the provider's sentence and its machine fields. */
+interface CapturedHttpErrorText {
+	sentence: string;
+	/** `type=… param=… code=…`, or undefined when the body states none of them. */
+	fields: string | undefined;
+}
+
+function readCapturedHttpError(captured: CapturedHttpErrorResponse | undefined): CapturedHttpErrorText | undefined {
 	if (!captured) return undefined;
 	const bodyText = captured.bodyText?.trim();
 	if (!bodyText) return undefined;
 	const payload = parseCapturedErrorPayload(captured);
-	if (!payload) return bodyText;
+	if (!payload) return { sentence: bodyText, fields: undefined };
 
 	const errorPayload = asRecord(payload.error) ?? payload;
 	// {"error": "string"} — the error value is a plain string, not a nested object.
 	// Fall back to it when the structured fields ("message", etc.) are absent.
 	const stringError = errorPayload === payload ? getNonBlankStringProperty(payload, "error") : undefined;
-	const message =
+	const sentence =
 		getNonBlankStringProperty(errorPayload, "message") ??
 		getNonBlankStringProperty(payload, "message") ??
 		stringError ??
 		bodyText;
-	const extras = (["type", "param", "code"] as const)
+	const fields = (["type", "param", "code"] as const)
 		.map(field => {
 			const value = getNonBlankStringProperty(errorPayload, field) ?? getNonBlankStringProperty(payload, field);
 			return value === undefined ? undefined : `${field}=${value}`;
 		})
 		.filter((entry): entry is string => entry !== undefined);
-	return extras.length > 0 ? `${message} (${extras.join(" ")})` : message;
+	return { sentence, fields: fields.length > 0 ? fields.join(" ") : undefined };
 }
 
 function parseCapturedErrorPayload(captured: CapturedHttpErrorResponse): Record<string, unknown> | undefined {

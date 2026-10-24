@@ -5,20 +5,28 @@ export type HeadersLike = Headers | Record<string, string | undefined> | undefin
 const RETRY_AFTER_HINT = "retry-after-ms=";
 
 export function formatErrorMessageWithRetryAfter(error: unknown, headers?: HeadersLike): string {
-	let message: string;
-	if (error instanceof Error) {
-		message = error.message;
-	} else {
+	return appendRetryAfterHint(errorText(error), error, headers);
+}
+
+/** `error`'s own text: its message when it is an `Error`, otherwise its JSON or string form. */
+export function errorText(error: unknown): string {
+	if (error instanceof Error) return error.message;
+	try {
+		return JSON.stringify(error) ?? String(error);
+	} catch {
 		try {
-			message = JSON.stringify(error) ?? String(error);
+			return String(error);
 		} catch {
-			try {
-				message = String(error);
-			} catch {
-				message = "Unknown error";
-			}
+			return "Unknown error";
 		}
 	}
+}
+
+/**
+ * `message` with the server-directed wait appended as `retry-after-ms=<n>`, read from `headers` or
+ * else from the headers `error` holds. A message that already states the hint is returned unchanged.
+ */
+export function appendRetryAfterHint(message: string, error: unknown, headers?: HeadersLike): string {
 	if (message.includes(RETRY_AFTER_HINT)) {
 		return message;
 	}
