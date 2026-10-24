@@ -134,7 +134,7 @@ export { applyOpenRouterRoutingVariant } from "./openai-shared";
 
 type OpenAICompletionsReasoningField = NonNullable<ResolvedOpenAICompat["reasoningContentField"]>;
 
-type GeminiMessageThoughtSignatureField = "thinking_signature" | "thought_signature";
+type GeminiMessageThoughtSignatureField = "thinking_signature" | "thought_signature" | "reasoning_signature";
 type GeminiMessageThoughtSignature = { field: GeminiMessageThoughtSignatureField; signature: string };
 type GeminiThoughtSignatureNamespace = "google" | "vertex";
 type GeminiThoughtSignatureExtraContent = Partial<
@@ -147,6 +147,7 @@ const GEMINI_THOUGHT_SIGNATURE_NAMESPACES: readonly GeminiThoughtSignatureNamesp
 const GEMINI_MESSAGE_THOUGHT_SIGNATURE_FIELDS: readonly GeminiMessageThoughtSignatureField[] = [
 	"thinking_signature",
 	"thought_signature",
+	"reasoning_signature",
 ];
 function getGeminiThoughtSignatureExtraContent(value: unknown): GeminiThoughtSignatureExtraContent | undefined {
 	if (typeof value !== "object" || value === null) return undefined;
