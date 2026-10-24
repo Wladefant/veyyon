@@ -15,6 +15,7 @@
 - The startup Codex websocket prewarm resolves its service tier from the session it opens the socket for; no user-facing change.
 - The account card's notice line flattens whitespace through the shared `collapseWhitespace`; no user-facing change.
 - `bench/session-compaction-stall.bench.ts` measures the longest event-loop stall and the wall time of a compaction's republish on a large synthetic session; no user-facing change.
+- The no-model sentence a prompt receives is built in `config/model-resolution-failure.ts` instead of the session runtime; no user-facing change.
 
 ### Fixed
 
