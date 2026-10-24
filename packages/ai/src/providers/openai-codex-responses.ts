@@ -169,12 +169,8 @@ import {
 	hoistInterleavedResponsesToolBatchMessages,
 	isOpenAIResponsesProgressEvent,
 	populateResponsesUsageFromResponse,
-	promoteResponsesToolUseStopReason,
 	repairOrphanResponsesToolCalls,
 	repairOrphanResponsesToolOutputs,
-	resolveResponsesToolCallDeltaShape,
-	type SequentialCutoffSummaryState,
-	type ToolCallArgumentsDeltaShape,
 } from "./openai-shared";
 import { normalizeOpenAIPromptCacheKey } from "./openai-stable-ids";
 import {
