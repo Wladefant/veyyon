@@ -979,6 +979,24 @@ function replayAssistantMessage<TApi extends Api>(
 
 type IndexedToolResult = { index: number; msg: ToolResultMessage; consumed: boolean };
 
+type ToolResultPairingModel = Pick<Model, "api" | "provider" | "id">;
+
+/** Native Codex history is serialized from provider payloads, so the wire serializer owns pairing. */
+function hasNativeCodexHistoryPayload(msg: Message, model: ToolResultPairingModel): boolean {
+	if (model.api !== "openai-codex-responses") return false;
+	const payload = msg.providerPayload;
+	if (!isRecord(payload) || payload.type !== "openaiResponsesHistory" || !Array.isArray(payload.items)) return false;
+	if (msg.role === "assistant") {
+		return (
+			msg.api === model.api &&
+			msg.model === model.id &&
+			!shouldDropTruncatedThinkingOnlyAssistant(msg) &&
+			(payload.provider ?? msg.provider) === model.provider
+		);
+	}
+	return (msg.role === "user" || msg.role === "developer") && payload.provider === model.provider;
+}
+
 /**
  * The second pass of {@link transformMessages}: each surviving assistant tool call is followed
  * immediately by exactly one corresponding tool result.
@@ -1001,7 +1019,8 @@ class ToolResultPairing {
 	// Track which tool calls already have an emitted result so delayed/duplicate
 	// toolResult messages cannot create a second provider-visible result.
 	readonly #toolCallStatus = new Map<string, ToolCallStatus>();
-	readonly #model: Pick<Model, "provider" | "id">;
+	readonly #model: ToolResultPairingModel;
+	readonly #preserveNativeCodexHistory: boolean;
 	#pendingToolCalls: ToolCall[] = [];
 	// Index of the assistant turn that declared `#pendingToolCalls`; a pulled
 	// result must be positioned after it (see `#takeRealToolResult`).
@@ -1010,8 +1029,14 @@ class ToolResultPairing {
 	#pendingAbortedTimestamp: number | undefined;
 	#pendingAbortedStartIndex = -1;
 
-	constructor(messages: readonly Message[], model: Pick<Model, "provider" | "id">) {
+	constructor(
+		messages: readonly Message[],
+		model: ToolResultPairingModel,
+		preserveNativeCodexHistory: boolean,
+	) {
 		this.#model = model;
+		this.#preserveNativeCodexHistory = preserveNativeCodexHistory;
+		if (preserveNativeCodexHistory) return;
 		for (let index = 0; index < messages.length; index++) {
 			const msg = messages[index];
 			if (msg.role === "toolResult") {
@@ -1034,8 +1059,9 @@ class ToolResultPairing {
 
 	/** Append an assistant turn and open the result window for its tool calls. */
 	appendAssistant(msg: AssistantMessage, index: number): void {
-		const toolCalls = msg.content.filter(b => b.type === "toolCall") as ToolCall[];
 		this.output.push(msg);
+		if (this.#preserveNativeCodexHistory) return;
+		const toolCalls = msg.content.filter(b => b.type === "toolCall") as ToolCall[];
 		if (msg.stopReason === "error" || msg.stopReason === "aborted") {
 			// Keep the assistant message with tool calls intact. Real tool results are
 			// emitted immediately if available; otherwise synthesize aborted results
@@ -1053,6 +1079,10 @@ class ToolResultPairing {
 
 	/** Append a tool result that answers a call in an open window, or fold one whose call is gone. */
 	appendToolResult(msg: ToolResultMessage, timestamp: number): void {
+		if (this.#preserveNativeCodexHistory) {
+			this.output.push(msg);
+			return;
+		}
 		const id = msg.toolCallId;
 		if (this.#toolCallStatus.has(id)) return;
 		if (this.#pendingAbortedToolCalls.has(id)) {
@@ -1101,6 +1131,7 @@ class ToolResultPairing {
 	 * turn, and with a placeholder error result otherwise.
 	 */
 	closeWindows(timestamp: number): void {
+		if (this.#preserveNativeCodexHistory) return;
 		if (this.#pendingToolCalls.length > 0) {
 			this.#answer(
 				this.#pendingToolCalls,
@@ -1409,7 +1440,12 @@ export function transformMessages<TApi extends Api>(
 
 	// Second pass: ensure each surviving assistant tool call is immediately
 	// followed by exactly one corresponding tool result.
-	const pairing = new ToolResultPairing(transformed, model);
+	const preserveNativeCodexHistory = transformed.some((msg, index) => {
+		const originalMsg = messages[index]!;
+		if (originalMsg.role === "assistant" && shouldDropTruncatedThinkingOnlyAssistant(originalMsg)) return false;
+		return hasNativeCodexHistoryPayload(msg, model);
+	});
+	const pairing = new ToolResultPairing(transformed, model, preserveNativeCodexHistory);
 	for (let i = 0; i < transformed.length; i++) {
 		const msg = transformed[i];
 		const messageTimestamp = "timestamp" in msg && typeof msg.timestamp === "number" ? msg.timestamp : Date.now();
