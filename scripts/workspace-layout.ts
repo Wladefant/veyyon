@@ -123,7 +123,16 @@ export interface WorkspaceMember {
  * empty answer: every sweep built on this asserts it found members before it asserts it found no
  * offenders.
  */
-export function expandMemberPattern(pattern: string, repoRoot: string, manifest: string): string[] {
+interface ParsedMemberPattern {
+	readonly pattern: string;
+	readonly parent: string;
+	readonly segment: string;
+	readonly prefix: string;
+	readonly suffix: string;
+	readonly wildcard: boolean;
+}
+
+function parseMemberPattern(pattern: string): ParsedMemberPattern {
 	const separator = pattern.lastIndexOf("/");
 	const parent = separator < 0 ? "" : pattern.slice(0, separator);
 	const segment = separator < 0 ? pattern : pattern.slice(separator + 1);
@@ -134,24 +143,124 @@ export function expandMemberPattern(pattern: string, repoRoot: string, manifest:
 	if (wildcards > 1) {
 		throw new Error(`workspace member "${pattern}" holds more than one wildcard, which this reader does not resolve`);
 	}
-	const holdsManifest = (directory: string): boolean => existsSync(join(repoRoot, directory, manifest));
-	if (wildcards === 0) return holdsManifest(pattern) ? [pattern] : [];
+	if (wildcards === 0) return { pattern, parent, segment, prefix: segment, suffix: "", wildcard: false };
 	const star = segment.indexOf("*");
-	const prefix = segment.slice(0, star);
-	const suffix = segment.slice(star + 1);
+	return {
+		pattern,
+		parent,
+		segment,
+		prefix: segment.slice(0, star),
+		suffix: segment.slice(star + 1),
+		wildcard: true,
+	};
+}
+
+function matchesMemberPattern(pattern: ParsedMemberPattern, directory: string): boolean {
+	if (!pattern.wildcard) return directory === pattern.pattern;
+	const separator = directory.lastIndexOf("/");
+	const parent = separator < 0 ? "" : directory.slice(0, separator);
+	const segment = separator < 0 ? directory : directory.slice(separator + 1);
+	return (
+		parent === pattern.parent &&
+		segment.startsWith(pattern.prefix) &&
+		segment.endsWith(pattern.suffix) &&
+		segment.length >= pattern.prefix.length + pattern.suffix.length
+	);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validateWorkspaceDirectory(directory: string, subject: string): void {
+	if (
+		directory.length === 0 ||
+		directory.startsWith("/") ||
+		directory.includes("\\") ||
+		directory.split("/").some(part => part.length === 0 || part === "." || part === "..")
+	) {
+		throw new Error(`${subject} "${directory}" is not a normalized workspace-relative directory`);
+	}
+}
+
+const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/;
+
+/**
+ * Resolves the package directories declared by the root manifest against package manifest paths.
+ *
+ * This pure form uses the same one-segment wildcard rules as `expandMemberPattern`, so callers can
+ * resolve immutable Git snapshots without checking out or executing their contents.
+ */
+export function resolveWorkspaceMemberDirectories(
+	rootManifest: Record<string, unknown>,
+	availableManifestPaths: readonly string[],
+): string[] {
+	if (!isRecord(rootManifest)) throw new Error("root package manifest must be an object");
+	const workspaces = rootManifest.workspaces;
+	if (!isRecord(workspaces)) throw new Error("root package manifest must declare workspaces.packages");
+	const patterns = workspaces.packages;
+	if (!Array.isArray(patterns) || patterns.length === 0) {
+		throw new Error("root package manifest workspaces.packages must be a non-empty string array");
+	}
+	const parsedPatterns: ParsedMemberPattern[] = [];
+	for (const pattern of patterns) {
+		if (typeof pattern !== "string") {
+			throw new Error("root package manifest workspaces.packages must be a non-empty string array");
+		}
+		if (
+			!/^[A-Za-z0-9._/*-]+$/.test(pattern) ||
+			pattern.startsWith("/") ||
+			pattern.includes("\\") ||
+			pattern.split("/").some(part => part.length === 0 || part === "." || part === "..")
+		) {
+			throw new Error(`workspace member pattern "${pattern}" is not a normalized workspace-relative path`);
+		}
+		parsedPatterns.push(parseMemberPattern(pattern));
+	}
+
+	const directories: string[] = [];
+	const seenPaths = new Set<string>();
+	for (const path of availableManifestPaths) {
+		if (typeof path !== "string" || path.includes("\\") || path.startsWith("/")) {
+			throw new Error(`workspace manifest path "${String(path)}" is not a relative package.json path`);
+		}
+		if (seenPaths.has(path)) throw new Error(`duplicate workspace manifest path "${path}"`);
+		seenPaths.add(path);
+		if (path === "package.json") continue;
+		if (!path.endsWith("/package.json")) {
+			throw new Error(`workspace manifest path "${path}" is not a relative package.json path`);
+		}
+		const directory = path.slice(0, -"/package.json".length);
+		validateWorkspaceDirectory(directory, "workspace manifest directory");
+		directories.push(directory);
+	}
+	if (directories.length === 0) throw new Error("no package manifest paths were available for workspace resolution");
+
+	const members = new Set<string>();
+	for (const pattern of parsedPatterns) {
+		for (const directory of directories) {
+			if (matchesMemberPattern(pattern, directory)) members.add(directory);
+		}
+	}
+	if (members.size === 0) throw new Error("root workspace patterns resolved no package manifest paths");
+	return [...members].sort();
+}
+
+export function expandMemberPattern(pattern: string, repoRoot: string, manifest: string): string[] {
+	const parsed = parseMemberPattern(pattern);
+	const holdsManifest = (directory: string): boolean => existsSync(join(repoRoot, directory, manifest));
+	if (!parsed.wildcard) return holdsManifest(pattern) ? [pattern] : [];
 	const resolved: string[] = [];
 	let entries: Dirent[];
 	try {
-		entries = readdirSync(join(repoRoot, parent), { withFileTypes: true });
+		entries = readdirSync(join(repoRoot, parsed.parent), { withFileTypes: true });
 	} catch {
 		return resolved;
 	}
 	for (const entry of entries) {
 		if (!entry.isDirectory()) continue;
-		if (!entry.name.startsWith(prefix) || !entry.name.endsWith(suffix)) continue;
-		if (entry.name.length < prefix.length + suffix.length) continue;
-		const directory = parent === "" ? entry.name : `${parent}/${entry.name}`;
-		if (!holdsManifest(directory)) continue;
+		const directory = parsed.parent === "" ? entry.name : `${parsed.parent}/${entry.name}`;
+		if (!matchesMemberPattern(parsed, directory) || !holdsManifest(directory)) continue;
 		resolved.push(directory);
 	}
 	return resolved;
@@ -448,6 +557,172 @@ export function workspaceManifests(repoRoot: string = REPO_ROOT): WorkspaceManif
 		}
 	}
 	return found;
+}
+
+/** A package manifest paired with its declared workspace directory. */
+export interface WorkspaceGraphEntry {
+	readonly directory: string;
+	readonly manifest: Record<string, unknown>;
+}
+
+/** A workspace member and the workspace members named in its dependency fields. */
+export interface WorkspaceGraphNode {
+	readonly directory: string;
+	readonly name: string;
+	readonly dependencies: ReadonlySet<string>;
+}
+
+/** A dependency graph keyed by member directory, with reverse edges for impact selection. */
+export interface WorkspaceDependencyGraph {
+	readonly nodes: ReadonlyMap<string, WorkspaceGraphNode>;
+	readonly names: ReadonlyMap<string, string>;
+	readonly reverseDependencies: ReadonlyMap<string, ReadonlySet<string>>;
+}
+
+const PACKAGE_DEPENDENCY_FIELDS = [
+	"dependencies",
+	"devDependencies",
+	"peerDependencies",
+	"optionalDependencies",
+] as const;
+
+/**
+ * Builds a strict dependency graph from explicit workspace manifest records.
+ *
+ * Only manifest dependency fields define edges. This does not claim to discover every static import.
+ */
+export function buildWorkspaceDependencyGraph(entries: readonly WorkspaceGraphEntry[]): WorkspaceDependencyGraph {
+	if (!Array.isArray(entries) || entries.length === 0) {
+		throw new Error("workspace dependency graph requires at least one member manifest");
+	}
+	for (const entry of entries) {
+		if (!isRecord(entry) || typeof entry.directory !== "string" || !isRecord(entry.manifest)) {
+			throw new Error("workspace dependency graph entries must contain a directory and manifest object");
+		}
+	}
+	const orderedEntries = [...entries].sort((left, right) =>
+		left.directory < right.directory ? -1 : left.directory > right.directory ? 1 : 0,
+	);
+	const names = new Map<string, string>();
+	const directories = new Set<string>();
+
+	for (const entry of orderedEntries) {
+		validateWorkspaceDirectory(entry.directory, "workspace member directory");
+		if (directories.has(entry.directory)) {
+			throw new Error(`duplicate workspace member directory "${entry.directory}"`);
+		}
+		directories.add(entry.directory);
+
+		const name = entry.manifest.name;
+		if (typeof name !== "string" || !PACKAGE_NAME_PATTERN.test(name)) {
+			throw new Error(`workspace member "${entry.directory}" has an invalid package name`);
+		}
+		if (names.has(name)) throw new Error(`duplicate workspace package name "${name}"`);
+		names.set(name, entry.directory);
+	}
+
+	const nodes = new Map<string, WorkspaceGraphNode>();
+	for (const entry of orderedEntries) {
+		const name = entry.manifest.name;
+		if (typeof name !== "string") throw new Error(`workspace member "${entry.directory}" has an invalid package name`);
+		const dependencyDirectories = new Set<string>();
+		for (const field of PACKAGE_DEPENDENCY_FIELDS) {
+			const declared = entry.manifest[field];
+			if (declared === undefined) continue;
+			if (!isRecord(declared)) {
+				throw new Error(`workspace member "${entry.directory}" ${field} must be an object of package specs`);
+			}
+			for (const [dependencyName, spec] of Object.entries(declared)) {
+				if (!PACKAGE_NAME_PATTERN.test(dependencyName)) {
+					throw new Error(`workspace member "${entry.directory}" has invalid dependency name "${dependencyName}"`);
+				}
+				if (typeof spec !== "string" || spec.length === 0 || spec.trim() !== spec) {
+					throw new Error(`workspace member "${entry.directory}" ${field}.${dependencyName} must be a non-empty string`);
+				}
+				const protocol = /^([a-z]+):/i.exec(spec)?.[1]?.toLowerCase();
+				if (protocol === "file" || protocol === "link" || protocol === "npm") {
+					throw new Error(
+						`workspace member "${entry.directory}" uses unsupported ${protocol}: dependency spec for "${dependencyName}"`,
+					);
+				}
+				const dependencyDirectory = names.get(dependencyName);
+				if (
+					protocol === "workspace" &&
+					(spec.slice(spec.indexOf(":") + 1).trim().length === 0 || dependencyDirectory === undefined)
+				) {
+					throw new Error(
+						`workspace member "${entry.directory}" has an unresolved workspace dependency "${dependencyName}"`,
+					);
+				}
+				if (dependencyDirectory !== undefined) dependencyDirectories.add(dependencyDirectory);
+			}
+		}
+		nodes.set(entry.directory, {
+			directory: entry.directory,
+			name,
+			dependencies: new Set([...dependencyDirectories].sort()),
+		});
+	}
+
+	const reverseDependencies = new Map<string, Set<string>>();
+	for (const directory of directories) reverseDependencies.set(directory, new Set());
+	for (const node of nodes.values()) {
+		for (const dependency of node.dependencies) reverseDependencies.get(dependency)?.add(node.directory);
+	}
+	return { nodes, names, reverseDependencies };
+}
+
+/**
+ * Builds the strict dependency graph for the current checkout.
+ */
+export function workspaceDependencyGraph(repoRoot: string = REPO_ROOT): WorkspaceDependencyGraph {
+	const rootManifest = readWorkspaceManifest(join(repoRoot, "package.json"));
+	const availableManifestPaths = typeScriptMembersOf(repoRoot).map(directory => `${directory}/package.json`);
+	const directories = resolveWorkspaceMemberDirectories(rootManifest, availableManifestPaths);
+	const entries = directories.map(directory => ({
+		directory,
+		manifest: readWorkspaceManifest(join(repoRoot, directory, "package.json")),
+	}));
+	return buildWorkspaceDependencyGraph(entries);
+}
+
+/**
+ * Returns a member and every transitive workspace dependent, including cycle members, in sorted order.
+ */
+export function reverseDependencyClosure(
+	graph: WorkspaceDependencyGraph,
+	changedDirectories: readonly string[],
+): string[] {
+	if (!Array.isArray(changedDirectories) || changedDirectories.length === 0) {
+		throw new Error("reverse dependency closure requires at least one changed member directory");
+	}
+	const pending = [...new Set(changedDirectories)].sort();
+	for (const directory of pending) {
+		if (!graph.nodes.has(directory)) throw new Error(`unknown changed workspace member "${directory}"`);
+	}
+	const selected = new Set<string>();
+	for (let index = 0; index < pending.length; index += 1) {
+		const directory = pending[index];
+		if (directory === undefined || selected.has(directory)) continue;
+		selected.add(directory);
+		const dependents = [...(graph.reverseDependencies.get(directory) ?? [])].sort();
+		for (const dependent of dependents) {
+			if (!selected.has(dependent)) pending.push(dependent);
+		}
+	}
+	return [...selected].sort();
+}
+
+function readWorkspaceManifest(filePath: string): Record<string, unknown> {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(readFileSync(filePath, "utf-8"));
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		throw new Error(`cannot read workspace manifest "${filePath}": ${detail}`);
+	}
+	if (!isRecord(parsed)) throw new Error(`workspace manifest "${filePath}" must contain a JSON object`);
+	return parsed;
 }
 
 export function testFileCount(dir: string, repoRoot: string = REPO_ROOT): number {
