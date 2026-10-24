@@ -230,7 +230,6 @@ const NAMED_BY_NO_TEST: readonly string[] = [
 	"hosts/terminal/engine/src/components/settings-search.ts",
 	"kernel/src/session/classifier-tokens.ts",
 	"packages/agent/src/compaction/legacy-provider-native.ts",
-	"packages/agent/src/tool-result-never-ran.ts",
 	"packages/ai/src/auth-broker/refresher.ts",
 	"packages/ai/src/auth-broker/remote-store.ts",
 	"packages/ai/src/cache/tracker.ts",
