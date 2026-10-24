@@ -9,6 +9,14 @@
 - Fixed the Windows binary exiting a few seconds after startup with `The owner-only Windows ACL operation failed (... SeSecurityPrivilege ...)` once its terminal ownership directory had been protected by an earlier launch.
 - A resumed or switched-to session whose model exists only in a provider's discovery listing runs on that model instead of the settings default when the discovery cache cannot supply it, as on the first launch after an upgrade that changes the cache format.
 - Codex web search and image generation requests send `x-codex-routing-hint`, and the startup websocket prewarm states the session's configured service tier, which the first turn on that socket sends.
+- A copy from inside tmux reaches the attached terminal's clipboard through `tmux load-buffer -w` instead of an OSC 52 escape that tmux drops under its default `set-clipboard external`, falling back to the escape when tmux rejects the command.
+- `r` on the account card shows `Checking …` and then whether the provider accepted the login on the card's notice line, and updates the usage bars from the check's own reading instead of leaving them unchanged until the next fetch.
+- `r` on the account card's `+ add another … account` row checks the accounts of that provider instead of every stored account of every provider.
+- Selecting, naming, logging out, forgetting and unblocking an account on the account card report their result on the card's notice line instead of only in the hidden transcript.
+- A login started by its alternate id, such as `/login opencode-go-api-key`, is labelled with the provider it stores under, asks for a name when that provider already holds an account, and reopens the account card on that provider instead of the first one listed.
+- The account card's provider filter labels `enter` with what it does, `enter add <provider> account` on a provider with no accounts, instead of always `enter switch to this account`.
+- A settings submenu opened from a search result shows "enter confirm · esc back" in the card footer instead of the search's "enter keep filter · esc clear search" ([#966](https://github.com/santhreal/veyyon/issues/966)).
+- A rate limit that states its reset window in words, such as Devin's `Your limit will reset in 17 minutes`, is retried once that window passes, or ends the turn at once when the window exceeds `retry.maxDelayMs`, instead of being retried inside the window until the retry budget runs out.
 
 ## [1.6.3] - 2026-10-28
 

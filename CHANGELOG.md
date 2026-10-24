@@ -19,6 +19,8 @@
 - A login started by its alternate id, such as `/login opencode-go-api-key`, is labelled with the provider it stores under, asks for a name when that provider already holds an account, and reopens the account card on that provider instead of the first one listed.
 - The account card's provider filter labels `enter` with what it does, `enter add <provider> account` on a provider with no accounts, instead of always `enter switch to this account`.
 - A settings submenu opened from a search result shows "enter confirm · esc back" in the card footer instead of the search's "enter keep filter · esc clear search" ([#966](https://github.com/santhreal/veyyon/issues/966)).
+- A rate limit that states its reset window in words, such as Devin's `Your limit will reset in 17 minutes`, is retried once that window passes, or ends the turn at once when the window exceeds `retry.maxDelayMs`, instead of being retried inside the window until the retry budget runs out.
+- When a Cursor turn is cut short by a dropped stream or an abort, the partial-completion ledger reports each exec-channel call whose result arrived as ran instead of "started, no result recorded", and a batch whose every call has its result gets no ledger.
 - Cursor's "You're out of usage" answer parks the account for the quota window instead of a 45 to 75 second capacity backoff, so a turn on a spent plan ends on the first failure instead of retrying it every minute.
 - The notice that an account is out of quota while load balancing leaves other accounts idle appears once per exhausted window instead of once for every request layer and retry that re-entered it.
 - Codex requests send `x-codex-routing-hint` stating the wire model and service tier of the body sent, on HTTP turns, the websocket upgrade and the startup prewarm, as codex-rs does.
@@ -29,9 +31,11 @@
 - The OpenCode Go API-key login prompt names OpenCode Go instead of OpenCode Zen.
 - An error from an OpenAI-compatible provider whose body carries `type`, `param` or `code` states the provider's sentence once, as `401 This API key has expired. … (type=authentication_error code=api_key_expired)`, instead of repeating it on a second line with the fields.
 - A captured error body that replaces a status-only `status code (no body)` message keeps the `retry-after-ms=` wait the response stated.
+- The Devin provider reads Cascade's stated reset window through the shared `extractRetryHint` instead of a parser of its own; no user-facing change.
 - Kimi Code bundles K3.1 Pro, K3.1 Pro Highspeed and the K2.8 Preview name of `kimi-for-coding`, read from the `kimi-code-plan-cn` key models.dev now lists Kimi Code under.
 - Kimi Code models offer Low, High and Max with no Off, and discovery takes each model's effort ladder, default effort and off state from the account's `/models` listing.
 - A Kimi Code model that cannot stop thinking keeps thinking on and sends no forced tool choice on both wires, including the K3 rows whose ids carry no `kimi` prefix.
+- `extractRetryHint` reads a reset window stated in prose in any unit or combination of units, such as `Your limit will reset in 17 minutes`, `Resets in 20m45s` and `Resets in 1hr 39min`, after the machine-readable fields a body states.
 
 ## [1.6.3] - 2026-10-28
 

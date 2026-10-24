@@ -390,9 +390,52 @@ describe("extractRetryHint", () => {
 		expect(extractRetryHint(null)).toBeUndefined();
 	});
 
-	it("parses quota-reset durations from the body", () => {
+	it("reads a reset window stated in prose, in every unit and spelling", () => {
 		expect(extractRetryHint(null, "Your quota will reset after 1h2m3s")).toBe(((1 * 60 + 2) * 60 + 3) * 1000);
 		expect(extractRetryHint(null, "reset after 39s")).toBe(39_000);
+		expect(extractRetryHint(null, "Individual quota reached. Resets in 20m45s.")).toBe((20 * 60 + 45) * 1000);
+		expect(extractRetryHint(null, "Your limit will reset in 1 minute.")).toBe(60_000);
+		expect(extractRetryHint(null, "Your limit will reset in 40 minutes.")).toBe(40 * 60_000);
+		expect(extractRetryHint(null, "Your limit will reset in 30 seconds.")).toBe(30_000);
+		expect(extractRetryHint(null, "Your limit will reset in 2 hours.")).toBe(2 * 60 * 60_000);
+		expect(extractRetryHint(null, "Your weekly limit resets in 3 days.")).toBe(3 * 24 * 60 * 60_000);
+		expect(extractRetryHint(null, "5-hour usage limit reached. Resets in 1hr 39min.")).toBe((60 + 39) * 60_000);
+		expect(extractRetryHint(null, "limit resets in 1 hour and 30 minutes")).toBe(90 * 60_000);
+		expect(extractRetryHint(null, "limit resets in 15 seconds")).toBe(15_000);
+		expect(extractRetryHint(null, "will reset after 5 minutes")).toBe(5 * 60_000);
+		expect(extractRetryHint(null, "will reset in about 2 minutes")).toBe(2 * 60_000);
+		expect(extractRetryHint(null, "bucket resets in 500ms")).toBe(500);
+	});
+
+	it("reads the window out of a whole provider sentence with a clock and an id beside it", () => {
+		expect(
+			extractRetryHint(
+				null,
+				"Reached free model rate limit. Upgrade to Max for higher limits, or switch to a different model. Your limit will reset in 17 minutes (at 02:56 UTC). (trace ID: 00000000000000000000000000000000)",
+			),
+		).toBe(17 * 60_000);
+		expect(
+			extractRetryHint(
+				null,
+				"Reached overall message rate limit. Please try again later. Your limit will reset in 23 seconds. (error ID: 0000) (trace ID: 0000)",
+			),
+		).toBe(23_000);
+	});
+
+	it("prefers a machine-readable window over the same window rounded into prose", () => {
+		const quotaBody = `{"error":{"code":429,"message":"Individual quota reached. Resets in 20m45s.","details":[{"retryDelay": "1245.661778631s"}]}}`;
+		expect(extractRetryHint(null, quotaBody)).toBe(1245.661778631 * 1000);
+		expect(
+			extractRetryHint(null, "429 5-hour usage limit reached. Resets in 1hr 39min. retry-after-ms=5923000"),
+		).toBe(5_923_000);
+	});
+
+	it("states no wait when the prose names no window", () => {
+		expect(extractRetryHint(null, "Reached overall message rate limit. Please try again later.")).toBeUndefined();
+		expect(extractRetryHint(null, "Your limit will reset in a moment.")).toBeUndefined();
+		expect(extractRetryHint(null, "Your limit will reset in 0 seconds.")).toBeUndefined();
+		// `m` followed by more letters is not minutes.
+		expect(extractRetryHint(null, "Your plan resets in 5 months.")).toBeUndefined();
 	});
 
 	it("parses Please-retry, retryDelay JSON fields, and try-again phrasing", () => {
