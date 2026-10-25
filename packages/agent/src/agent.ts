@@ -1236,12 +1236,13 @@ export class Agent {
 				context.systemPrompt = this.#state.systemPrompt;
 				context.tools = this.#state.tools;
 				// A mid-run handoff changes provider routing without stopping this loop.
-				config.sessionId = this.#sessionId;
-				config.promptCacheKey = this.#promptCacheKey;
-				config.metadata = this.#metadataResolver ? undefined : this.#metadata;
-				config.metadataResolver = this.#metadataResolver;
-				config.providerSessionState = this.#providerSessionState;
-				config.getApiKey = this.getApiKey;
+				// Keep the live request options aligned with session state after a handoff.
+				options.sessionId = this.#sessionId;
+				options.promptCacheKey = this.#promptCacheKey;
+				options.metadata = this.#metadataResolver ? undefined : this.#metadata;
+				options.metadataResolver = this.#metadataResolver;
+				options.providerSessionState = this.#providerSessionState;
+				options.getApiKey = this.getApiKey;
 			},
 			cursorExecHandlers: this.#cursorExecHandlers,
 			cursorOnToolResult:
