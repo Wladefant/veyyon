@@ -114,6 +114,7 @@ function sessionEmitting(events: readonly AgentSessionEvent[]): PrintModeSession
 			for (const event of events) listener?.(event);
 			return true;
 		},
+		waitForQuiescence: async () => {},
 		dispose: async () => {},
 		displayAssistantContent: content => content,
 		obfuscateProviderText: text => text.split(CREDENTIAL).join(PLACEHOLDER),

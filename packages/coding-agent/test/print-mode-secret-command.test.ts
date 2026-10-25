@@ -84,6 +84,7 @@ function createHarness(): PrintHarness {
 	const session = {
 		subscribe: () => () => {},
 		prompt,
+		waitForQuiescence: async () => {},
 		dispose: vi.fn(async () => {}),
 		displayAssistantContent: (content: unknown) => content,
 		// `--mode json` re-redacts every stdout line through this. Identity here on

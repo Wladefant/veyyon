@@ -135,7 +135,7 @@ import {
 	expandSessionContext,
 	expandSessionMessageEntries,
 } from "../argot-wire";
-import { type AsyncJob, AsyncJobManager } from "../async";
+import { type AsyncJob, AsyncJobManager, JOB_ENDS_ON_ITS_OWN } from "../async";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import { credentialRemedySentence, missingCredentialsMessage } from "../config/missing-credentials";
 import { normalizeModelPatternList } from "../config/model-pattern-list";
@@ -2332,14 +2332,16 @@ export class AgentSession {
 	 * stop-time passes (todo reminder, session_stop hooks) defer to the settle
 	 * reached once the session is fully idle. Suppressed deliveries
 	 * (acknowledged, or watched by an in-flight `job` poll) never wake the loop,
-	 * so they don't count.
+	 * so they don't count. With `endingJobsOnly`, neither does a job that runs until stopped.
 	 */
-	#hasPendingAsyncWake(): boolean {
+	#hasPendingAsyncWake(endingJobsOnly = false): boolean {
 		const manager = this.#asyncJobManager;
 		if (!manager) return false;
 		const ownerFilter = this.#config.agentId ? { ownerId: this.#config.agentId } : undefined;
 		return (
-			manager.getRunningJobs(ownerFilter).some(job => !manager.isDeliverySuppressed(job.id)) ||
+			manager
+				.getRunningJobs(ownerFilter)
+				.some(job => !manager.isDeliverySuppressed(job.id) && (!endingJobsOnly || JOB_ENDS_ON_ITS_OWN[job.type])) ||
 			manager.hasPendingDeliveries(ownerFilter)
 		);
 	}
@@ -3665,12 +3667,13 @@ export class AgentSession {
 	/**
 	 * Wait until this conversation has nothing left to run: the loop and its post-prompt recovery
 	 * are idle, and no background job this agent owns will wake the loop again. A job completion
-	 * that starts another turn is waited out in turn. Returns once `signal` aborts.
+	 * that starts another turn is waited out in turn. Returns once `signal` aborts. `endingJobsOnly`
+	 * leaves out jobs that run until stopped, such as the exit watch on a launched process.
 	 */
-	async waitForQuiescence(signal?: AbortSignal): Promise<void> {
+	async waitForQuiescence(signal?: AbortSignal, options?: { endingJobsOnly?: boolean }): Promise<void> {
 		while (!signal?.aborted) {
 			await this.waitForIdle();
-			if (signal?.aborted || !this.#hasPendingAsyncWake()) return;
+			if (signal?.aborted || !this.#hasPendingAsyncWake(options?.endingJobsOnly)) return;
 			await this.#nextAsyncWakeChange(signal);
 		}
 	}

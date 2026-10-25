@@ -67,6 +67,7 @@ describe("Print-mode exit codes on error vs aborted stopReason", () => {
 		const session: PrintModeSession = {
 			subscribe: () => () => {},
 			prompt: async () => true,
+			waitForQuiescence: async () => {},
 			dispose: async () => {},
 			displayAssistantContent: content => content,
 			obfuscateProviderText: text => text,
@@ -85,6 +86,7 @@ describe("Print-mode exit codes on error vs aborted stopReason", () => {
 		const session: PrintModeSession = {
 			subscribe: () => () => {},
 			prompt: async () => true,
+			waitForQuiescence: async () => {},
 			dispose: async () => {},
 			displayAssistantContent: content => content,
 			obfuscateProviderText: text => text,
@@ -103,6 +105,7 @@ describe("Print-mode exit codes on error vs aborted stopReason", () => {
 		const session: PrintModeSession = {
 			subscribe: () => () => {},
 			prompt: async () => true,
+			waitForQuiescence: async () => {},
 			dispose: async () => {},
 			displayAssistantContent: content => content,
 			obfuscateProviderText: text => text,

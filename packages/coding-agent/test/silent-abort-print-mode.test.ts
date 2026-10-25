@@ -55,6 +55,7 @@ function createMockSession(messages: AssistantMessage[]): PrintModeSession {
 		// today, but a stub that lies about the signature is how the next drift
 		// goes unnoticed.
 		prompt: async () => true,
+		waitForQuiescence: async () => {},
 		dispose: async () => {},
 		// Print mode routes stored content through the session's display seam to
 		// expand secret placeholders and argot handles. The real expansion is

@@ -49,6 +49,7 @@ function createDelayedSession(finalMessage: AssistantMessage): DelayedSession {
 			messages.push(finalMessage);
 			return true;
 		},
+		waitForQuiescence: async () => {},
 		dispose: async () => {},
 		// The display seam (agent-session.ts) resolves obfuscated secret
 		// placeholders and argot handles to real values before print-mode writes

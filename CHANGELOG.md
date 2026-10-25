@@ -65,6 +65,7 @@
 - The date and working directory stay in the model's context after a compaction or a failed prompt, and a compaction no longer spends a summary request on them.
 - A recalled memory block that a compaction, a rewind or an abandoned prompt took out of the context is sent again at the next prompt instead of being treated as delivered.
 - A failed command's exit notice in a bash, eval or ssh tool result follows the output after one blank line instead of two.
+- A `-p` run waits for the agents it spawned and the commands it ran in the background, and prints its answer to their results, instead of exiting after the turn that started them and stopping them unanswered.
 - When a Cursor turn is cut short by a dropped stream or an abort, the partial-completion ledger reports each exec-channel call whose result arrived as ran instead of "started, no result recorded", and a batch whose every call has its result gets no ledger.
 - `prepareCompaction` and `findCutPoint` treat custom messages of an excluded type as absent when choosing the cut and when deciding a branch is already compacted, so excluding a block never turns an over-budget compaction into a refusal.
 - Cursor's "You're out of usage" answer parks the account for the quota window instead of a 45 to 75 second capacity backoff, so a turn on a spent plan ends on the first failure instead of retrying it every minute.

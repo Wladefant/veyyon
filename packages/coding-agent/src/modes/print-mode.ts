@@ -112,7 +112,10 @@ export function printableEvent(event: AgentSessionEvent): unknown {
  */
 export type PrintModeSession =
 	| AgentSession
-	| (Pick<AgentSession, "subscribe" | "prompt" | "dispose" | "displayAssistantContent" | "obfuscateProviderText"> & {
+	| (Pick<
+			AgentSession,
+			"subscribe" | "prompt" | "waitForQuiescence" | "dispose" | "displayAssistantContent" | "obfuscateProviderText"
+	  > & {
 			// Only the two members print mode reads, not the whole state object and
 			// the whole SessionManager class. A caller that has just these can drive
 			// print mode, and that is worth being able to say.
@@ -246,6 +249,10 @@ export async function runPrintMode(session: PrintModeSession, options: PrintMode
 	for (const message of messages) {
 		await logger.time("print:prompt:next", () => dispatchPromptOrCommand(message));
 	}
+	// A spawned agent or a backgrounded command reports by waking the loop when it finishes. Exiting
+	// here kills it and drops that report, so the run ends once nothing it started is still due to
+	// finish. A launched process is not waited for: it runs until something stops it.
+	await logger.time("print:settle", () => session.waitForQuiescence(undefined, { endingJobsOnly: true }));
 
 	// An errored or aborted turn is a failed command in either output mode:
 	// `--mode json` streams the error event and still exits non-zero, so a

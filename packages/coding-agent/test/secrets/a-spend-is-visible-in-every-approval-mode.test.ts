@@ -735,6 +735,7 @@ function printSessionEmitting(notices: readonly AgentSessionEvent[]): PrintModeS
 			for (const notice of notices) listener?.(notice);
 			return true;
 		},
+		waitForQuiescence: async () => {},
 		dispose: async () => {},
 		displayAssistantContent: content => content,
 		// `--mode json` re-redacts every line through this. Identity: these tests assert

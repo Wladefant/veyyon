@@ -37,6 +37,14 @@ interface PollEscalationState {
  */
 export type AsyncJobType = "bash" | "task" | "launch";
 
+/**
+ * Whether a job of each kind ends without being stopped. A backgrounded command runs under its
+ * timeout and a spawned agent runs until it yields; a launched process runs until something stops
+ * it, so the watch on its exit can last as long as the process. A run that waits for its background
+ * work before exiting waits for the first two and never for the third.
+ */
+export const JOB_ENDS_ON_ITS_OWN: Readonly<Record<AsyncJobType, boolean>> = { bash: true, task: true, launch: false };
+
 export interface AsyncJob {
 	id: string;
 	type: AsyncJobType;
