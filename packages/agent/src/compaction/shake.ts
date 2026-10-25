@@ -12,7 +12,7 @@
 
 import type { TextContent, ToolResultMessage } from "@veyyon/ai";
 import { countTokens } from "../tokenizer";
-import type { AgentMessage, AgentToolCall } from "../types";
+import type { AgentToolCall } from "../types";
 import type { CustomMessageEntry, SessionEntry, SessionMessageEntry } from "./entries";
 import { getToolResultMessage, resolveCompactionBoundaryIndex } from "./entries";
 import { estimateTokens } from "./token-estimate";
@@ -58,8 +58,22 @@ export const AGGRESSIVE_SHAKE_CONFIG: ShakeConfig = {
 	fenceMinTokens: 400,
 };
 
-/** Rough token cost of a placeholder line; used only for the savings gate. */
+/**
+ * Rough token cost of the placeholder that replaces one region: a recoverable
+ * marker measures 14-15 tokens, a bare one 5.
+ */
 const PLACEHOLDER_TOKEN_ESTIMATE = 16;
+
+/**
+ * Whether replacing `tokens` of text with a placeholder leaves the context
+ * smaller. A region no larger than its marker costs the model the text and
+ * frees nothing, so every collector below skips one: a manual `/shake` used to
+ * swap each short edit or write confirmation in history for a marker of the
+ * same size, and count it as dropped.
+ */
+function freesRoom(tokens: number): boolean {
+	return tokens > PLACEHOLDER_TOKEN_ESTIMATE;
+}
 
 /** A located eligible region. */
 export interface ToolResultShakeRegion {
@@ -258,7 +272,7 @@ function pushBlockRegions(
 		const slice = text.slice(range.start, range.end);
 		if (slice.length === 0) continue;
 		const tokens = countTokens(slice);
-		if (tokens < config.fenceMinTokens) continue;
+		if (tokens < config.fenceMinTokens || !freesRoom(tokens)) continue;
 		out.push({
 			kind: "block",
 			entry,
@@ -356,7 +370,7 @@ export function collectShakeRegions(entries: SessionEntry[], config: ShakeConfig
 	}
 
 	let savings = 0;
-	for (const region of regions) savings += Math.max(0, region.tokens - PLACEHOLDER_TOKEN_ESTIMATE);
+	for (const region of regions) savings += region.tokens - PLACEHOLDER_TOKEN_ESTIMATE;
 	return savings < config.minSavings ? [] : regions;
 }
 
@@ -381,13 +395,27 @@ function pushToolResultRegion(
 ): void {
 	const text = elidableToolResultText(toolResult, toolCallsById, protectedTools);
 	if (text === undefined) return;
-	out.push({
-		kind: "toolResult",
-		entry,
-		tokens: estimateTokens(toolResult as AgentMessage),
-		originalText: text,
-		label: toolResult.toolName,
-	});
+	const region = toolResultRegion(entry, toolResult, text);
+	if (region) out.push(region);
+}
+
+/**
+ * The region that elides `text`, the elidable text of `toolResult`, or
+ * undefined when eliding it frees no room. The placeholder replaces the text
+ * alone, and images and every other non-text block stay (see
+ * {@link applyShakeRegion}), so a region is the size of its text. Sizing it by
+ * the whole message charged each kept screenshot as freed: a captioned
+ * screenshot reported ~1,200 tokens shaken and its marker said so, while the
+ * context grew by the marker.
+ */
+function toolResultRegion(
+	entry: SessionMessageEntry,
+	toolResult: ToolResultMessage,
+	text: string,
+): ToolResultShakeRegion | undefined {
+	const tokens = countTokens(text);
+	if (!freesRoom(tokens)) return undefined;
+	return { kind: "toolResult", entry, tokens, originalText: text, label: toolResult.toolName };
 }
 
 /** The text of a tool result a reducer may elide: one not pruned yet, not from a protected tool, and not empty. */
@@ -467,13 +495,8 @@ export function collectRedundantToolResultRegions(entries: SessionEntry[], confi
 	for (const candidate of candidates) {
 		// The newest copy of each signature survives; every earlier copy is elided.
 		if (latestBySignature.get(candidate.signature) === candidate.index) continue;
-		regions.push({
-			kind: "toolResult",
-			entry: candidate.entry,
-			tokens: estimateTokens(candidate.message as AgentMessage),
-			originalText: candidate.text,
-			label: candidate.message.toolName,
-		});
+		const region = toolResultRegion(candidate.entry, candidate.message, candidate.text);
+		if (region) regions.push(region);
 	}
 	return regions;
 }
@@ -663,7 +686,7 @@ function middleRegion(candidate: TruncationCandidate, keepEdgeTokens: number): B
 	const middle = candidate.text.slice(start, end);
 	if (middle.length === 0) return undefined;
 	const middleTokens = countTokens(middle);
-	if (middleTokens <= 0) return undefined;
+	if (!freesRoom(middleTokens)) return undefined;
 	return {
 		kind: "block",
 		entry: candidate.entry,

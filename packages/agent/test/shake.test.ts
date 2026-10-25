@@ -412,7 +412,8 @@ describe("collectRedundantToolResultRegions — identical re-reads / re-runs", (
 	test("ignores the protect-recent window and the savings gate (a duplicate is always eligible)", () => {
 		// collectShakeRegions would protect both recent copies and gate on minSavings;
 		// dedup elides the older copy regardless because it carries no unique info.
-		const body = "SMALL\n".repeat(4);
+		// The body is small against both limits and still larger than its marker.
+		const body = "SMALL\n".repeat(40);
 		const first = messageEntry(toolResultMessage("read", body));
 		const second = messageEntry(toolResultMessage("read", body));
 		const entries = [first, second];

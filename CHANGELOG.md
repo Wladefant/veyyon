@@ -26,6 +26,7 @@
 - `defs()` in a Python `eval` cell shows a list, tuple, dict or set as its type and length, such as `list[1000000]`, and cuts a string before its repr, instead of building each value's whole repr to show 60 characters of it, which took 0.5s over 170MB of values and timed out on larger kernels.
 - A Python or JS `eval` error shows the frames of the cell and the code it called, without the runner and worker frames that dispatched the cell, names each JS cell `<cell>` instead of a UUID file, and shows a JS cell that did not parse or a thrown non-Error as its text alone.
 - A Python `eval` cell that does not compile reports its `SyntaxError` at its line in `<cell>` instead of under `<unknown>` behind runner and `ast.parse` frames, and a chained exception keeps the blank line after its separator.
+- Shake and duplicate elision leave a tool result, block or truncated middle in place when its marker is not smaller than it, and size a captioned image result by its caption, so `/shake` no longer reports a kept image as freed tokens.
 
 ## [1.5.10] - 2026-10-25
 
