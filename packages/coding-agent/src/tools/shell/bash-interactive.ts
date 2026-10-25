@@ -9,10 +9,10 @@ import type { Terminal as XtermTerminalType } from "@xterm/headless";
 import { Settings } from "../../config/settings";
 import type { ExtensionTerminalCapability } from "../../extensibility/terminal-capability";
 import { styleTerminalRow } from "../../modes/terminal/draw/terminal-row";
-import { OutputSink, type OutputSummary } from "../../session/streaming-output";
+import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary } from "../../session/streaming-output";
 import type { Theme } from "../../theme/theme";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
-import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../core/output-meta";
+import { resolveOutputMaxColumns, resolveOutputSinkWindow } from "../core/output-meta";
 import { replaceTabs } from "../core/render-utils";
 import { formatStatusIcon } from "../core/tool-ui-status";
 import { loadXtermTerminal, readTerminalRows } from "./terminal-output";
@@ -301,8 +301,7 @@ export async function runInteractiveBashPty(
 	const sink = new OutputSink({
 		artifactPath: options.artifactPath,
 		artifactId: options.artifactId,
-		...(options.spillThreshold !== undefined ? { spillThreshold: options.spillThreshold } : {}),
-		headBytes: resolveOutputSinkHeadBytes(settings),
+		...resolveOutputSinkWindow(settings, options.spillThreshold ?? DEFAULT_MAX_BYTES),
 		maxColumns: resolveOutputMaxColumns(settings),
 	});
 	const result = await terminal.custom<BashInteractiveResult>(

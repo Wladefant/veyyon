@@ -674,18 +674,22 @@ export class BashTool
 		const signal = "signal" in result ? result.signal : undefined;
 		const failedExit = exitCode !== undefined && exitCode !== 0;
 
-		let outputText = formatResultOutput(result);
+		const body = formatResultOutput(result);
 		const notices: string[] = [];
 		if (options.notices) {
 			for (const notice of options.notices) {
 				if (notice) notices.push(notice);
 			}
 		}
-		if (notices.length > 0) outputText = appendNotice(outputText, notices.join("\n"));
-		if (failedExit) outputText = appendNotice(outputText, formatExitCodeNotice(exitCode, signal));
+		const withNotices = (text: string): string => {
+			let annotated = text;
+			if (notices.length > 0) annotated = appendNotice(annotated, notices.join("\n"));
+			if (failedExit) annotated = appendNotice(annotated, formatExitCodeNotice(exitCode, signal));
+			return annotated;
+		};
 
 		// Aborts / timeouts / missing-status still propagate as thrown errors.
-		await this.#throwIfUnfinished(result, timeoutSec, outputText);
+		await this.#throwIfUnfinished(result, timeoutSec, withNotices(body));
 
 		const details: BashToolDetails = {};
 		if (timeoutSec === undefined) {
@@ -707,19 +711,24 @@ export class BashTool
 			if (signal !== undefined) details.signal = signal;
 		}
 		// Final defense at the tool-result boundary: no bash path (client bridge,
-		// head-retention spill, minimizer miss) may emit more than
-		// ~DEFAULT_MAX_BYTES inline. No-op for already-bounded output.
-		const cappedOutputText = await enforceInlineByteCap(outputText, {
-			// Scale the inline budget by how long this result will sit in context:
-			// an early result is re-read for the rest of the session, a late one
-			// barely at all.
+		// minimizer miss) may emit more than the inline budget, scaled by how long
+		// this result will sit in context. The body is capped before the notices and
+		// the exit code are appended, so they are never elided, and a body the sink
+		// already held to the budget is not cut again for the bytes a notice adds. A
+		// sink that spilled saved the full stream already, so a cut here points at that
+		// artifact rather than saving the sink's window as a second one.
+		const sinkArtifactId = result.artifactId;
+		const cappedBody = await enforceInlineByteCap(body, {
 			...inlineOutputPricing(this.session),
-			saveArtifact: full => saveBashOriginalArtifact(this.session, full),
+			saveArtifact: sinkArtifactId
+				? async () => sinkArtifactId
+				: full => saveBashOriginalArtifact(this.session, full),
 		});
 
-		const resultBuilder = toolResult(details)
-			.text(cappedOutputText)
-			.truncationFromSummary(result, { direction: "tail" });
+		const resultBuilder = toolResult(details).text(withNotices(cappedBody));
+		// The summary describes the sink's window. A body cut again here carries its own
+		// elision marker and artifact footer, which a summary notice would contradict.
+		if (cappedBody === body) resultBuilder.truncationFromSummary(result, { direction: "tail" });
 		if (failedExit) resultBuilder.error();
 		return resultBuilder.done();
 	}

@@ -3,7 +3,7 @@ import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { OutputSink } from "../../session/streaming-output";
 import type { ToolSession } from "../../tools";
 import { inlineBudgetFor } from "../../tools/core/output-artifact";
-import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../../tools/core/output-meta";
+import { resolveOutputMaxColumns, resolveOutputSinkWindow } from "../../tools/core/output-meta";
 import { isEvalTimeoutControlEvent } from "../bridge-timeout";
 import { executeInVmContext, type JsDisplayOutput } from "./context-manager";
 import type { JsStatusEvent } from "./shared/types";
@@ -74,8 +74,7 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 	const outputSink = new OutputSink({
 		artifactPath: options.artifactPath,
 		artifactId: options.artifactId,
-		spillThreshold: inlineBudgetFor(options.session),
-		headBytes: resolveOutputSinkHeadBytes(options.session.settings),
+		...resolveOutputSinkWindow(options.session.settings, inlineBudgetFor(options.session)),
 		maxColumns: resolveOutputMaxColumns(options.session.settings),
 		onChunk: chunk => options.onChunk?.(chunk),
 	});

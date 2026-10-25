@@ -76,18 +76,17 @@ describe("OutputSink inline budget", () => {
 	});
 
 	/**
-	 * The contract. A sink either prices its own budget from a session
-	 * (`inlineBudgetFor`) or forwards one its caller priced (`options.spillThreshold`).
-	 * What it may not do is omit the field and inherit the flat default, which is
-	 * exactly what all six did.
+	 * The contract. A sink takes its windows from `resolveOutputSinkWindow`, the one owner of the
+	 * head/tail split, and hands it a budget it either prices from a session (`inlineBudgetFor`)
+	 * or forwards from its caller (`options.spillThreshold`). What it may not do is omit the
+	 * budget and inherit the flat default, which is exactly what all six did.
 	 */
-	it("gives every sink a priced spillThreshold, never the flat default", () => {
+	it("gives every sink a priced window, never the flat default", () => {
 		const unpriced: string[] = [];
 		for (const file of sinkConstructionSites()) {
 			const source = fs.readFileSync(file, "utf8");
-			const pricesItself = source.includes("spillThreshold: inlineBudgetFor(");
-			const forwardsCallerBudget = /spillThreshold: options[.?]*\.spillThreshold/.test(source);
-			if (!pricesItself && !forwardsCallerBudget) unpriced.push(path.relative(ROOT, file));
+			const priced = /resolveOutputSinkWindow\([^;]*?(inlineBudgetFor\(|options[.?]*\.spillThreshold)/s.test(source);
+			if (!priced) unpriced.push(path.relative(ROOT, file));
 		}
 		expect(unpriced).toEqual([]);
 	});

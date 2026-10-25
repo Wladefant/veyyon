@@ -33,7 +33,7 @@ import type { ToolSession } from "..";
 import { truncateForPrompt } from "../core/approval";
 import { inlineBudgetFor } from "../core/output-artifact";
 import { foldToolOutputBookkeeping } from "../core/output-fold";
-import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../core/output-meta";
+import { resolveOutputMaxColumns, resolveOutputSinkWindow } from "../core/output-meta";
 import { ToolAbortError, ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 import { clampTimeout, describeTimeoutParam, formatTimeoutClampNotice, TOOL_TIMEOUTS } from "../core/tool-timeouts";
@@ -644,8 +644,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 					// eval is the single largest producer of tool-result bytes, and its
 					// largest tenth of results carried two thirds of them. Price the
 					// inline window through the one owner rather than the flat default.
-					spillThreshold: inlineBudgetFor(session),
-					headBytes: resolveOutputSinkHeadBytes(session.settings),
+					...resolveOutputSinkWindow(session.settings, inlineBudgetFor(session)),
 					maxColumns: resolveOutputMaxColumns(session.settings),
 					onChunk: chunk => {
 						appendTail(chunk);
@@ -921,6 +920,9 @@ async function summarizeFinal(
 	};
 	const outputLines = cellOutput.length > 0 ? cellOutput.split("\n").length : 0;
 	const outputBytes = Buffer.byteLength(cellOutput, "utf-8");
+	// A head and tail window: the sink's own totals and per-window line counts describe what the
+	// text shows. Rebasing them on the visible text would turn the head into part of a tail.
+	if (rawSummary.elidedBytes !== undefined) return { ...rawSummary, output: cellOutput, outputLines, outputBytes };
 	const missingLines = Math.max(0, rawSummary.totalLines - rawSummary.outputLines);
 	const missingBytes = Math.max(0, rawSummary.totalBytes - rawSummary.outputBytes);
 	return {

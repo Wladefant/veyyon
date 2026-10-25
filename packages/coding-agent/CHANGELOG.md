@@ -12,6 +12,10 @@
 - An update interrupted by closing the terminal, Ctrl+C, quitting the session or a fatal error during its download or checksum check removes its partial `<binary>.<id>.new` download instead of leaving it beside the binary until uninstall.
 - `read` of a named pipe, socket or device, directly or through a symbolic link, selector, path list, suffix match or archive, SQLite or PDF member path, fails at once naming the entry's kind instead of blocking the turn until a writer appears or failing with a bare `ENXIO`.
 - A prompt that `@`-mentions a named pipe, socket or device no longer hangs on submit; the entry is not attached.
+- A truncated `bash`, `eval`, `ssh` or interactive shell result states the line ranges it shows, counting only whole lines, instead of ranges split evenly from the totals that named lines it did not show.
+- A `bash` result larger than the inline budget is cut once and references one artifact holding the full output, instead of being cut a second time and naming a second artifact.
+- A truncated `eval` result shows the first and last lines of its output within the inline budget, as `bash` does, instead of only its last 32.5KB.
+- Streamed tool output whose chunk boundary leaves the head window less room than the next character keeps its order, instead of placing a later chunk in the head ahead of output already kept in the tail.
 
 ## [1.5.10] - 2026-10-25
 

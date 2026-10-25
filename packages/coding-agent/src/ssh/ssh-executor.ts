@@ -2,8 +2,8 @@ import { randomBytes } from "node:crypto";
 import { logger, ptree } from "@veyyon/utils";
 import { Settings } from "../config/settings";
 import { primarySessionCpuAdoption } from "../session/cpu-limit";
-import { LIVE_OUTPUT_INTERVAL_MS, OutputSink } from "../session/streaming-output";
-import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/core/output-meta";
+import { DEFAULT_MAX_BYTES, LIVE_OUTPUT_INTERVAL_MS, OutputSink } from "../session/streaming-output";
+import { resolveOutputMaxColumns, resolveOutputSinkWindow } from "../tools/core/output-meta";
 import {
 	buildRemoteCommand,
 	ensureConnection,
@@ -277,8 +277,7 @@ export async function executeSSH(
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
 		artifactId: options?.artifactId,
-		...(options?.spillThreshold !== undefined ? { spillThreshold: options.spillThreshold } : {}),
-		headBytes: resolveOutputSinkHeadBytes(settings),
+		...resolveOutputSinkWindow(settings, options?.spillThreshold ?? DEFAULT_MAX_BYTES),
 		maxColumns: resolveOutputMaxColumns(settings),
 		chunkThrottleMs: options?.onChunk ? LIVE_OUTPUT_INTERVAL_MS : 0,
 	});

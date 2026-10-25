@@ -21,6 +21,7 @@ import { getDefault } from "../../config/settings-schema";
 // and the schema is 60, and this file only needs to know what a setting defaults to. `Settings` is a
 // type here, so naming the store for it is free.
 import {
+	MIDDLE_ELISION_MAX_BYTES,
 	type OutputSummary,
 	type TruncationResult,
 	truncateMiddle,
@@ -93,12 +94,11 @@ export class OutputMetaBuilder {
 		if (isMiddle) {
 			const elidedLines = result.elidedLines ?? Math.max(0, effectiveTotalLines - outputLines);
 			const elidedBytes = result.elidedBytes ?? Math.max(0, result.totalBytes - outputBytes);
-			// Reconstruct head/tail line ranges. The kept output spans the first
-			// `headLines` lines and the last `tailLines` lines of the source; lines
-			// in the middle (count == elidedLines) are dropped.
-			const keptLines = Math.max(0, outputLines - 1); // -1 for marker line
-			const headLines = Math.ceil(keptLines / 2);
-			const tailLines = keptLines - headLines;
+			// Ranges come only from the kept line counts truncateMiddle reports. The windows are cut by
+			// bytes and hold different numbers of lines, so an even split of the kept lines states lines
+			// the output does not show; without the counts the notice states no range.
+			const headLines = result.headLines ?? 0;
+			const tailLines = result.tailLines ?? 0;
 			this.#meta.truncation = {
 				direction: "middle",
 				truncatedBy: "middle",
@@ -174,9 +174,9 @@ export class OutputMetaBuilder {
 		// Middle elision: the sink retained head + tail with an elision marker.
 		if (summary.elidedBytes != null && summary.elidedBytes > 0) {
 			const elidedLines = summary.elidedLines ?? Math.max(0, totalLines - summary.outputLines);
-			const keptLines = Math.max(0, summary.outputLines - 1); // -1 for marker line
-			const headLines = Math.ceil(keptLines / 2);
-			const tailLines = keptLines - headLines;
+			// The sink reports the lines each window kept; see `truncation()` for why nothing derives them.
+			const headLines = summary.headLines ?? 0;
+			const tailLines = summary.tailLines ?? 0;
 			this.#meta.truncation = {
 				direction: "middle",
 				truncatedBy: "middle",
@@ -424,12 +424,30 @@ function getSpillConfig(s: Settings | undefined) {
 }
 
 /**
- * Resolve the OutputSink `headBytes` budget from session settings.
- * Exposed so streaming executors (bash/python/ssh/eval) can opt into
- * middle elision with the same per-user configuration.
+ * The head and tail windows a result keeps inside `budget` bytes: the configured head and tail
+ * sizes, scaled down together when they do not fit, keeping their ratio. A head of 0 keeps only
+ * the tail.
  */
-export function resolveOutputSinkHeadBytes(s: Settings | undefined): number {
-	return getSpillConfig(s).headBytes;
+function splitInlineWindow(headBytes: number, tailBytes: number, budget: number): { head: number; tail: number } {
+	const window = Math.floor(Math.min(headBytes + tailBytes, budget));
+	const head = headBytes > 0 ? Math.max(Math.floor((window * headBytes) / (headBytes + tailBytes)), 1) : 0;
+	return { head, tail: Math.max(window - head, 1) };
+}
+
+/**
+ * The `OutputSink` head and tail windows for a streaming executor (bash, eval, ssh, the
+ * interactive shell) holding its output to `budget` bytes. The windows follow
+ * `tools.artifactHeadBytes` and `tools.artifactTailBytes` as the centralised spill does, and
+ * leave room for the elision marker, so a head, a marker and a tail together fit the budget.
+ */
+export function resolveOutputSinkWindow(
+	s: Settings | undefined,
+	budget: number,
+): { headBytes: number; spillThreshold: number } {
+	const { headBytes, tailBytes } = getSpillConfig(s);
+	const room = headBytes > 0 ? Math.max(budget - MIDDLE_ELISION_MAX_BYTES, 2) : budget;
+	const { head, tail } = splitInlineWindow(headBytes, tailBytes, room);
+	return { headBytes: head, spillThreshold: tail };
 }
 
 /**
@@ -513,10 +531,7 @@ async function spillLargeResultToArtifact(
 	// result: the setting wrote an artifact sooner and cost a request exactly the same.
 	// The head and tail settings now shape the window INSIDE the budget, keeping their
 	// ratio, and the elided bytes stay recoverable through the artifact either way.
-	const windowBytes = Math.min(headBytes + tailBytes, threshold);
-	const keptHeadBytes =
-		headBytes > 0 ? Math.max(Math.floor((windowBytes * headBytes) / (headBytes + tailBytes)), 1) : 0;
-	const keptTailBytes = Math.max(windowBytes - keptHeadBytes, 1);
+	const { head: keptHeadBytes, tail: keptTailBytes } = splitInlineWindow(headBytes, tailBytes, threshold);
 
 	// Truncate: middle elision when a head budget is configured, otherwise tail-only.
 	const useMiddle = headBytes > 0;
@@ -548,14 +563,10 @@ async function spillLargeResultToArtifact(
 	if (truncated.truncatedBy === "middle") {
 		const elidedLines = truncated.elidedLines ?? Math.max(0, truncated.totalLines - outputLines);
 		const elidedBytes = truncated.elidedBytes ?? Math.max(0, truncated.totalBytes - outputBytes);
-		// Use the real kept head/tail split from truncateMiddle. The head and tail windows are
-		// sized by independent byte and line budgets, so a byte-limited head can keep far fewer
-		// lines than the tail; re-deriving an even ceil/floor split here reports wrong line ranges
-		// to the operator (and the LLM reading the notice). Fall back to an even split only when
-		// the source did not carry the counts.
-		const keptLines = Math.max(0, outputLines - 1); // -1 for marker line
-		const headLines = truncated.headLines ?? Math.ceil(keptLines / 2);
-		const tailLineCount = truncated.tailLines ?? keptLines - headLines;
+		// The real kept head/tail split from truncateMiddle, which sizes the two windows by
+		// independent byte and line budgets; see `truncation()` for why nothing derives it.
+		const headLines = truncated.headLines ?? 0;
+		const tailLineCount = truncated.tailLines ?? 0;
 		truncationMeta = {
 			direction: "middle",
 			truncatedBy: "middle",
