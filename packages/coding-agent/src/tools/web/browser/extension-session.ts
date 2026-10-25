@@ -4,6 +4,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { logger } from "@veyyon/utils";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { ToolError } from "../../core/tool-errors";
 import {
@@ -81,6 +82,12 @@ export async function openExtensionSession(
 	try {
 		const connectUrl = buildConnectUrl({ ...bootstrap, relayUrl: relay.extensionUrl });
 		await (opts.launchConnect ?? launchChrome)(connectUrl, kind);
+		
+		logger.debug("extension connect page launch completed", {
+			port: relay.port,
+			profile: kind.profile,
+			instance,
+		});
 		await relay.waitForExtension(opts.timeoutMs ?? CONNECT_TIMEOUT_MS, opts.signal);
 		return relay;
 	} catch (error) {
@@ -88,7 +95,7 @@ export async function openExtensionSession(
 		if (opts.signal?.aborted) throw error;
 		const reason = errorMessage(error);
 		throw new ToolError(
-			`Could not connect to the Chrome extension: ${reason} Check that Chrome is running with the extension installed and that the token is current. State directory: ${extensionStateDir()}.`,
+			`Could not connect to the Chrome extension: ${reason} Inspect the connect page and relay diagnostics for the cause. State directory: ${extensionStateDir()}.`,
 		);
 	}
 }
