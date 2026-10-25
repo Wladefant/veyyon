@@ -1588,17 +1588,15 @@ async function fetchDeepinfraModels(options: {
 	const fetchImpl = discoveryFetch(options.fetch);
 	let payload: unknown;
 	try {
-		const response = await withCatalogDiscoveryTimeout(DEEPINFRA_DISCOVERY_TIMEOUT_MS, signal =>
-			fetchImpl(`${options.baseUrl}/models?filter=with_meta&sort_by=omp`, {
+		payload = await withScopedTimeoutSignal(DEEPINFRA_DISCOVERY_TIMEOUT_MS, async signal => {
+			const response = await fetchImpl(`${options.baseUrl}/models?filter=with_meta&sort_by=omp`, {
 				method: "GET",
 				headers,
 				signal,
-			}),
-		);
-		if (!response.ok) {
-			return null;
-		}
-		payload = await response.json();
+			});
+			if (!response.ok) return null;
+			return response.json();
+		});
 	} catch {
 		return null;
 	}
