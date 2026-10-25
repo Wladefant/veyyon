@@ -18,6 +18,8 @@
 - Streamed tool output whose chunk boundary leaves the head window less room than the next character keeps its order, instead of placing a later chunk in the head ahead of output already kept in the tail.
 - A tool result whose output ends in a line break puts one blank line between its last line and its truncation or limit notice instead of two.
 - `defs()` in a Python `eval` cell shows a list, tuple, dict or set as its type and length, such as `list[1000000]`, and cuts a string before its repr, instead of building each value's whole repr to show 60 characters of it, which took 0.5s over 170MB of values and timed out on larger kernels.
+- A Python or JS `eval` error shows the frames of the cell and the code it called, without the runner and worker frames that dispatched the cell, names each JS cell `<cell>` instead of a UUID file, and shows a JS cell that did not parse or a thrown non-Error as its text alone.
+- A Python `eval` cell that does not compile reports its `SyntaxError` at its line in `<cell>` instead of under `<unknown>` behind runner and `ast.parse` frames, and a chained exception keeps the blank line after its separator.
 
 ## [1.5.10] - 2026-10-25
 

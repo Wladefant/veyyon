@@ -217,7 +217,7 @@ From runner frames:
 
 - `stdout` / `stderr` → plain text chunks
 - `display` / `result` → rich display handling (MIME bundle)
-- `error` → traceback text
+- `error` → traceback text, from the first frame of cell code inward; the runner frames that dispatched the cell are omitted, and a cell that does not compile shows its `SyntaxError` at its line in `<cell>` with no frames
 - `application/x-veyyon-status` MIME inside `display` → structured status events
 
 Display MIME precedence:
