@@ -40,7 +40,11 @@ describe("openai-codex oauth", () => {
 			challenge: "challenge",
 		});
 
-		expect(new URL(authUrl).searchParams.get("force_challenge")).toBe("true");
+		const params = new URL(authUrl).searchParams;
+		expect({ prompt: params.getAll("prompt"), forceChallenge: params.get("force_challenge") }).toEqual({
+			prompt: ["login"],
+			forceChallenge: "true",
+		});
 	});
 
 	it("formats object token endpoint errors without object coercion", () => {
