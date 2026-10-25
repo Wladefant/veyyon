@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import type { Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import type {
 	AgentTool,
@@ -16,6 +17,7 @@ import {
 	isRecord,
 	lazy,
 	prompt,
+	statIfPresentOrThrow,
 	untilAborted,
 	urlScheme,
 } from "@veyyon/utils";
@@ -332,6 +334,35 @@ async function maybeMarkExecutableForShebang(absolutePath: string, content: stri
 		return true;
 	} catch {
 		return false;
+	}
+}
+
+/** Whether `target` ends in a path separator, which spells a directory. A backslash separates only on Windows. */
+function endsWithPathSeparator(target: string): boolean {
+	return target.endsWith("/") || (process.platform === "win32" && target.endsWith("\\"));
+}
+
+/**
+ * The error for a write aimed at a directory, with the path it takes instead: a file under the
+ * directory, or the file itself when `target` is an existing file spelled with a trailing separator.
+ */
+function directoryTargetMessage(target: string, existing: Stats | undefined): string {
+	const base = target.replace(/[\\/]+$/, "");
+	if (existing?.isFile()) {
+		return `'${target}' ends in a path separator, but '${base}' is a file; write to '${base}' to replace it.`;
+	}
+	return `'${target}' is a directory path; write creates or replaces a file. Give the file's path, such as '${base}/<name>'.`;
+}
+
+/**
+ * The write target's `stat`, or `undefined` when nothing is there. A fault, such as a parent that
+ * is a file, fails the write with the `Failed to write <path>` prefix the commit step uses.
+ */
+async function statWriteTarget(absolutePath: string): Promise<Stats | undefined> {
+	try {
+		return await statIfPresentOrThrow(absolutePath);
+	} catch (error) {
+		throw new Error(`Failed to write ${absolutePath}: ${errorMessage(error)}`, { cause: error });
 	}
 }
 
@@ -987,8 +1018,15 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 			const absolutePath = resolvePlanPath(this.session, path);
 			const batchRequest = getLspBatchRequest(context?.toolCall);
 
-			// Check if file exists and is auto-generated before overwriting
-			const overwritingExistingFile = await fs.exists(absolutePath);
+			// A directory, or a path spelled as one, cannot be replaced by a file. Resolution drops a
+			// trailing separator, so without this check `dir/` writes a file named `dir`, and an
+			// existing directory fails in the auto-generated probe below as a raw EISDIR on a read.
+			const existing = await statWriteTarget(absolutePath);
+			if (existing?.isDirectory() || endsWithPathSeparator(path)) {
+				throw new ToolError(directoryTargetMessage(path, existing));
+			}
+			// An existing file is checked for an auto-generated marker before it is overwritten.
+			const overwritingExistingFile = existing !== undefined;
 			if (overwritingExistingFile) {
 				await assertEditableFile(absolutePath, path);
 			}
