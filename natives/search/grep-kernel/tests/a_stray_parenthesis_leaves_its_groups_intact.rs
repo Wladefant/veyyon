@@ -20,6 +20,12 @@
 //! than demoting it to a literal, inserts only backslashes, inserts the minimum
 //! number of them, and that the compiled matcher agrees with the rewrite.
 //!
+//! `MatcherSpec` (the `rg` builtin's compile path) has no retry: there the
+//! same sweep asserts, for every engine and both Unicode settings, that a
+//! pattern with an unpaired parenthesis is an error, that a balanced one
+//! matches what grep-regex matches, and that a fixed string matches its own
+//! text, parentheses included.
+//!
 //! Not caught: which of two equally short repairs is chosen when a stray `(`
 //! sits inside a run of opens, beyond the table rows; patterns that combine a
 //! parenthesis fault with a second syntax fault, which fall to the literal
@@ -28,7 +34,9 @@
 
 use grep_matcher::Matcher;
 use grep_regex::RegexMatcherBuilder;
-use veyyon_grep_kernel::{compile_with_demotion, escape_unbalanced_parentheses};
+use veyyon_grep_kernel::{
+	MatcherSpec, RegexEngine, compile_with_demotion, escape_unbalanced_parentheses,
+};
 
 /// `(pattern, rewrite, lines it matches, lines it misses)`.
 const CASES: &[(&str, &str, &[&str], &[&str])] = &[
@@ -166,4 +174,77 @@ fn every_parenthesis_fault_is_repaired_with_the_fewest_escapes() {
 			);
 		}
 	}
+}
+
+/// Every engine `MatcherSpec` compiles for. The match is exhaustive, so an
+/// engine added to `RegexEngine` does not compile until it is listed here.
+fn every_engine() -> [RegexEngine; 3] {
+	let engines = [RegexEngine::Default, RegexEngine::Pcre2, RegexEngine::Auto];
+	for engine in engines {
+		match engine {
+			RegexEngine::Default | RegexEngine::Pcre2 | RegexEngine::Auto => {},
+		}
+	}
+	engines
+}
+
+#[test]
+fn an_explicit_engine_rejects_a_parenthesis_that_cannot_pair() {
+	let patterns = strings_over(&['(', ')', 'a', '|'], 6);
+	let mut haystacks = strings_over(&['(', ')', 'a'], 3);
+	haystacks.push(String::new());
+	for engine in every_engine() {
+		for unicode in [true, false] {
+			let regex = MatcherSpec { unicode, ..MatcherSpec::default() };
+			let fixed = MatcherSpec { fixed_strings: true, ..regex.clone() };
+			for pattern in &patterns {
+				let written = std::slice::from_ref(pattern);
+				let label = format!("{engine:?}, unicode {unicode}, `{pattern}`");
+				match (unpaired_count(pattern), regex.build_matcher(written, engine)) {
+					(0, Ok(compiled)) => {
+						let reference = RegexMatcherBuilder::new()
+							.build(pattern)
+							.unwrap_or_else(|err| panic!("{label}: reference: {err}"));
+						for hay in &haystacks {
+							assert_eq!(
+								matches(&compiled, hay),
+								matches(&reference, hay),
+								"{label} disagrees with grep-regex on {hay:?}"
+							);
+						}
+					},
+					(0, Err(err)) => panic!("{label} pairs every parenthesis, got: {err}"),
+					(_, Ok(_)) => panic!("{label} has an unpaired parenthesis and compiled"),
+					(_, Err(_)) => {},
+				}
+				let literal = fixed
+					.build_matcher(written, engine)
+					.unwrap_or_else(|err| panic!("{label} as a fixed string: {err}"));
+				for hay in &haystacks {
+					assert_eq!(
+						matches(&literal, hay),
+						hay.contains(pattern.as_str()),
+						"{label} as a fixed string on {hay:?}"
+					);
+				}
+			}
+		}
+	}
+}
+
+/// The check before a PCRE2 build compiles in the builder's own Unicode mode.
+/// UTF mode refuses `\C` inside a look-behind and the byte mode accepts it, so
+/// a check fixed to UTF would refuse `rg --no-unicode --pcre2 '(?<=\C)a'`.
+#[test]
+fn the_check_before_a_pcre2_build_uses_the_builders_unicode_mode() {
+	let pattern = [r"(?<=\C)a".to_string()];
+	let bytes = MatcherSpec { unicode: false, ..MatcherSpec::default() }
+		.build_matcher(&pattern, RegexEngine::Pcre2)
+		.unwrap_or_else(|err| panic!("the byte mode compiles `{}`: {err}", pattern[0]));
+	assert!(matches(&bytes, "ba"));
+	assert!(!matches(&bytes, "a"));
+
+	let refused = MatcherSpec { unicode: true, ..MatcherSpec::default() }
+		.build_matcher(&pattern, RegexEngine::Pcre2);
+	assert!(refused.is_err(), "UTF mode refuses `{}`", pattern[0]);
 }

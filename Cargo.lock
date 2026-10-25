@@ -6033,6 +6033,7 @@ dependencies = [
  "grep-regex",
  "grep-searcher",
  "ignore",
+ "pcre2",
  "regex-syntax",
  "serde_json",
  "smallvec",

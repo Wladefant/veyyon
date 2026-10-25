@@ -3,9 +3,12 @@ use std::{borrow::Cow, io};
 use grep_matcher::Matcher;
 use grep_pcre2::{RegexMatcher as PcreMatcher, RegexMatcherBuilder as PcreMatcherBuilder};
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
-use regex_syntax::ast::{ErrorKind as AstErrorKind, parse::Parser as AstParser};
+use regex_syntax::ast::ErrorKind as AstErrorKind;
 
-use crate::{CompiledMatcher, escape_literal_pattern, pcre_matcher_defaults};
+use crate::{
+	CompiledMatcher, escape_literal_pattern, pcre_matcher_defaults, pcre_standalone_error,
+	rust_standalone_error,
+};
 
 /// The rule that fences the default engine's error off from PCRE2's, 79 tildes
 /// wide, which is the width ripgrep 15.1.0 writes.
@@ -67,10 +70,11 @@ impl Default for MatcherSpec {
 
 impl MatcherSpec {
 	/// Build a `grep_regex::RegexMatcher` with these flags.
-	pub fn build_rust_matcher(
-		&self,
-		patterns: &[String],
-	) -> Result<RegexMatcher, grep_regex::Error> {
+	///
+	/// Each pattern is parsed as written first, unless it is a fixed string:
+	/// the builder wraps it in `(?:…)`, where a `)` that closes no group of
+	/// its own pairs with the wrapper and `)(` compiles as `(?:)()`.
+	pub fn build_rust_matcher(&self, patterns: &[String]) -> Result<RegexMatcher, String> {
 		let Self {
 			case_insensitive,
 			case_smart,
@@ -83,6 +87,13 @@ impl MatcherSpec {
 			multi_line,
 			line_terminator,
 		} = *self;
+		if !fixed_strings
+			&& let Some(error) = patterns
+				.iter()
+				.find_map(|pattern| rust_standalone_error(pattern))
+		{
+			return Err(error.to_string());
+		}
 		let mut builder = RegexMatcherBuilder::new();
 		builder
 			.case_insensitive(case_insensitive)
@@ -97,10 +108,13 @@ impl MatcherSpec {
 		if let Some(terminator) = line_terminator {
 			builder.line_terminator(Some(terminator));
 		}
-		builder.build_many(patterns)
+		builder
+			.build_many(patterns)
+			.map_err(|error| error.to_string())
 	}
 
-	/// Build a `grep_pcre2::RegexMatcher` with these flags.
+	/// Build a `grep_pcre2::RegexMatcher` with these flags, checking each
+	/// pattern as written first for the same reason as the Rust engine.
 	pub fn build_pcre_matcher(&self, patterns: &[String]) -> Result<PcreMatcher, String> {
 		let Self {
 			case_insensitive,
@@ -114,6 +128,13 @@ impl MatcherSpec {
 			multi_line,
 			line_terminator: _,
 		} = *self;
+		if !fixed_strings
+			&& let Some(error) = patterns
+				.iter()
+				.find_map(|pattern| pcre_standalone_error(pattern, unicode))
+		{
+			return Err(error.to_string());
+		}
 		let mut builder = PcreMatcherBuilder::new();
 		builder
 			.caseless(case_insensitive)
@@ -141,17 +162,14 @@ impl MatcherSpec {
 		engine: RegexEngine,
 	) -> Result<CompiledMatcher, String> {
 		match engine {
-			RegexEngine::Default => self
-				.build_rust_matcher(patterns)
-				.map(CompiledMatcher::Rust)
-				.map_err(|error| error.to_string()),
+			RegexEngine::Default => self.build_rust_matcher(patterns).map(CompiledMatcher::Rust),
 			RegexEngine::Pcre2 => self.build_pcre_matcher(patterns).map(CompiledMatcher::Pcre),
 			RegexEngine::Auto => match self.build_rust_matcher(patterns) {
 				Ok(matcher) => Ok(CompiledMatcher::Rust(matcher)),
 				Err(rust) => self
 					.build_pcre_matcher(patterns)
 					.map(CompiledMatcher::Pcre)
-					.map_err(|pcre| both_engines_refused(&rust.to_string(), &pcre)),
+					.map_err(|pcre| both_engines_refused(&rust, &pcre)),
 			},
 		}
 	}
@@ -343,13 +361,12 @@ pub fn compile_with_demotion(
 	ignore_case: bool,
 	multiline: bool,
 ) -> Result<(CompiledMatcher, Option<String>), String> {
-	// grep-regex parses a pattern inside `(?:…)`, so a pattern that closes a
-	// group it never opened pairs with that wrapper: `)(` compiles as `(?:)()`
-	// and matches every line. Parsing the pattern alone first rejects it as it
-	// is written. The error carries whether the fault is an unpaired group,
-	// which is the one fault the retry below repairs.
+	// Each engine is asked about the pattern as written before it builds it,
+	// since both builders wrap it in `(?:…)` and would otherwise pair a stray
+	// `)` with that wrapper. The Rust error records whether the fault is an
+	// unpaired group, which is the one fault the retry below repairs.
 	let build_rust = |pat: &str| -> Result<RegexMatcher, (String, bool)> {
-		if let Err(err) = AstParser::new().parse(pat) {
+		if let Some(err) = rust_standalone_error(pat) {
 			let group_fault =
 				matches!(err.kind(), AstErrorKind::GroupUnclosed | AstErrorKind::GroupUnopened);
 			return Err((err.to_string(), group_fault));
@@ -368,11 +385,14 @@ pub fn compile_with_demotion(
 		build(false).map_err(|err| (err.to_string(), false))
 	};
 
-	let build_pcre = |pat: &str| {
+	let build_pcre = |pat: &str| -> Option<PcreMatcher> {
+		if pcre_standalone_error(pat, true).is_some() {
+			return None;
+		}
 		let mut builder = PcreMatcherBuilder::new();
 		builder.caseless(ignore_case).multi_line(multiline);
 		pcre_matcher_defaults(&mut builder);
-		builder.build(pat)
+		builder.build(pat).ok()
 	};
 
 	let sanitized = sanitize_braces(pattern);
@@ -381,26 +401,18 @@ pub fn compile_with_demotion(
 		Err(err) => err,
 	};
 
-	// A group fault is a parenthesis fault in syntax both engines share: Rust
-	// reports PCRE2-only syntax (look-around, `\Q`, `(?>`, `(*VERB)`) as a
-	// different fault at its own position. PCRE2 therefore rejects the pattern
-	// as written too, and only accepts it by pairing the stray `)` with the
-	// `(?:…)` grep-pcre2 wraps it in, so it is not asked.
-	if !group_fault && let Ok(matcher) = build_pcre(sanitized.as_ref()) {
+	if let Some(matcher) = build_pcre(sanitized.as_ref()) {
 		return Ok((CompiledMatcher::Pcre(matcher), None));
 	}
 
 	if group_fault {
 		let escaped = escape_unbalanced_parentheses(sanitized.as_ref());
 		if escaped.as_ref() != sanitized.as_ref() {
-			match build_rust(escaped.as_ref()) {
-				Ok(matcher) => return Ok((CompiledMatcher::Rust(matcher), None)),
-				Err((_, false)) => {
-					if let Ok(matcher) = build_pcre(escaped.as_ref()) {
-						return Ok((CompiledMatcher::Pcre(matcher), None));
-					}
-				},
-				Err((_, true)) => {},
+			if let Ok(matcher) = build_rust(escaped.as_ref()) {
+				return Ok((CompiledMatcher::Rust(matcher), None));
+			}
+			if let Some(matcher) = build_pcre(escaped.as_ref()) {
+				return Ok((CompiledMatcher::Pcre(matcher), None));
 			}
 		}
 	}

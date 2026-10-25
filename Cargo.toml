@@ -342,6 +342,10 @@ grep-pcre2 = "0.1"
 grep-regex = "0.1"
 grep-searcher = "0.1"
 ignore = "0.4"
+# The PCRE2 bindings grep-pcre2 compiles through, depended on directly by veyyon-grep-kernel to
+# compile a pattern without grep-pcre2's `(?:…)` wrapper. Already in the graph under grep-pcre2,
+# so this costs no build time.
+pcre2 = "0.2"
 memchr = "2.8"
 
 # ──────────────────────────────────────────────────────────────────────────────
