@@ -21,6 +21,7 @@
 ### Fixed
 
 - A context rebuilt from a session log drops a never-ran placeholder tool result whose call is on no turn of the branch, so a resume of a log written before the fix no longer replays a refused turn's refusal text to the model on every request; a result whose tool ran is kept.
+- A session file that ends inside a line, left by a write that was cut off, is rewritten whole on its first write after a resume instead of appended to, so the next entry no longer merges into the cut line and is no longer lost on the following resume.
 
 ## [1.5.9] - 2026-10-22
 

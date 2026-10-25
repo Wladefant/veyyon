@@ -1829,7 +1829,7 @@ export class SessionManager {
 	 * parsing a second time.
 	 */
 	async #switchToLoadedFile(resolvedSessionFile: string, loaded: LoadedSessionFile): Promise<void> {
-		const { entries: fileEntries, layout, cold } = loaded;
+		const { entries: fileEntries, layout, cold, endsMidLine } = loaded;
 		const titleSlot = await readTitleSlotFromFile(resolvedSessionFile, this.#storage);
 		let migrated = false;
 		let header: SessionHeader | undefined;
@@ -1886,7 +1886,10 @@ export class SessionManager {
 		this.#titleUpdatedAt = titleSlot?.updatedAt ?? header.timestamp;
 		this.#hasTitleSlot = titleSlot !== undefined;
 		this.#fileIsCurrent = true;
-		this.#rewriteRequired = migrated;
+		// A file a cut write left ending inside a line is republished by its first write rather
+		// than appended to: an append would continue the cut line, and the record it carried would
+		// be lost with it.
+		this.#rewriteRequired = migrated || endsMidLine;
 		this.#forceFileCreation = true;
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
