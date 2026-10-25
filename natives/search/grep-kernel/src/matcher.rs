@@ -3,6 +3,7 @@ use std::{borrow::Cow, io};
 use grep_matcher::Matcher;
 use grep_pcre2::{RegexMatcher as PcreMatcher, RegexMatcherBuilder as PcreMatcherBuilder};
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
+use regex_syntax::ast::{ErrorKind as AstErrorKind, parse::Parser as AstParser};
 
 use crate::{CompiledMatcher, escape_literal_pattern, pcre_matcher_defaults};
 
@@ -271,48 +272,64 @@ pub fn sanitize_braces(pattern: &str) -> Cow<'_, str> {
 	}
 }
 
-/// Escape unescaped parentheses after a group-syntax regex error.
+/// Escape the parentheses that cannot pair, after a group-syntax regex error.
+///
+/// A `(` with no later `)` and a `)` with no earlier open `(` are escaped. A
+/// balanced pair stays a group, so `(get|set)Value(` keeps its alternation and
+/// matches `getValue(` rather than the text `(get` or `set)Value(`. Escaped
+/// parentheses and parentheses inside a character class are literal already
+/// and are left as written.
 #[must_use]
-pub fn escape_unescaped_parentheses(pattern: &str) -> Cow<'_, str> {
+pub fn escape_unbalanced_parentheses(pattern: &str) -> Cow<'_, str> {
+	// Byte scan: every byte compared below is ASCII, and the bytes of a
+	// multi-byte character are all >= 0x80, so none of them is mistaken for one
+	// and every recorded offset is a character boundary.
 	let bytes = pattern.as_bytes();
-	if !bytes.contains(&b'(') && !bytes.contains(&b')') {
+	let mut open = Vec::new();
+	let mut stray = Vec::new();
+	let mut class_depth = 0usize;
+	let mut i = 0;
+	while i < bytes.len() {
+		match bytes[i] {
+			b'\\' => {
+				i += 2;
+				continue;
+			},
+			b'[' => {
+				class_depth += 1;
+				i += 1;
+				// A `]` first in a class, after an optional `^`, is a member.
+				if bytes.get(i) == Some(&b'^') {
+					i += 1;
+				}
+				if bytes.get(i) == Some(&b']') {
+					i += 1;
+				}
+				continue;
+			},
+			b']' if class_depth > 0 => class_depth -= 1,
+			b'(' if class_depth == 0 => open.push(i),
+			// The guard pops the `(` this `)` closes; with none open, it is stray.
+			b')' if class_depth == 0 && open.pop().is_none() => stray.push(i),
+			_ => {},
+		}
+		i += 1;
+	}
+	stray.extend(open);
+	if stray.is_empty() {
 		return Cow::Borrowed(pattern);
 	}
+	stray.sort_unstable();
 
-	let mut result = String::with_capacity(pattern.len() + 4);
-	let mut modified = false;
-	let mut i = 0;
-
-	while i < bytes.len() {
-		if bytes[i] == b'\\' && i + 1 < bytes.len() {
-			result.push('\\');
-			i += 1;
-			let ch = pattern[i..]
-				.chars()
-				.next()
-				.expect("non-empty slice has a char");
-			result.push(ch);
-			i += ch.len_utf8();
-			continue;
-		}
-
-		let ch = pattern[i..]
-			.chars()
-			.next()
-			.expect("non-empty slice has a char");
-		if matches!(ch, '(' | ')') {
-			result.push('\\');
-			modified = true;
-		}
-		result.push(ch);
-		i += ch.len_utf8();
+	let mut result = String::with_capacity(pattern.len() + stray.len());
+	let mut copied = 0;
+	for at in stray {
+		result.push_str(&pattern[copied..at]);
+		result.push('\\');
+		copied = at;
 	}
-
-	if modified {
-		Cow::Owned(result)
-	} else {
-		Cow::Borrowed(pattern)
-	}
+	result.push_str(&pattern[copied..]);
+	Cow::Owned(result)
 }
 
 /// Compile a single pattern with automatic sanitization, fallback to PCRE2,
@@ -326,7 +343,17 @@ pub fn compile_with_demotion(
 	ignore_case: bool,
 	multiline: bool,
 ) -> Result<(CompiledMatcher, Option<String>), String> {
-	let build_rust = |pat: &str| {
+	// grep-regex parses a pattern inside `(?:…)`, so a pattern that closes a
+	// group it never opened pairs with that wrapper: `)(` compiles as `(?:)()`
+	// and matches every line. Parsing the pattern alone first rejects it as it
+	// is written. The error carries whether the fault is an unpaired group,
+	// which is the one fault the retry below repairs.
+	let build_rust = |pat: &str| -> Result<RegexMatcher, (String, bool)> {
+		if let Err(err) = AstParser::new().parse(pat) {
+			let group_fault =
+				matches!(err.kind(), AstErrorKind::GroupUnclosed | AstErrorKind::GroupUnopened);
+			return Err((err.to_string(), group_fault));
+		}
 		let build = |line_terminated| {
 			let mut builder = RegexMatcherBuilder::new();
 			builder.case_insensitive(ignore_case).multi_line(multiline);
@@ -338,7 +365,7 @@ pub fn compile_with_demotion(
 		if !multiline && let Ok(matcher) = build(true) {
 			return Ok(matcher);
 		}
-		build(false)
+		build(false).map_err(|err| (err.to_string(), false))
 	};
 
 	let build_pcre = |pat: &str| {
@@ -349,24 +376,31 @@ pub fn compile_with_demotion(
 	};
 
 	let sanitized = sanitize_braces(pattern);
-	let err = match build_rust(sanitized.as_ref()) {
+	let (message, group_fault) = match build_rust(sanitized.as_ref()) {
 		Ok(matcher) => return Ok((CompiledMatcher::Rust(matcher), None)),
 		Err(err) => err,
 	};
 
-	if let Ok(matcher) = build_pcre(sanitized.as_ref()) {
+	// A group fault is a parenthesis fault in syntax both engines share: Rust
+	// reports PCRE2-only syntax (look-around, `\Q`, `(?>`, `(*VERB)`) as a
+	// different fault at its own position. PCRE2 therefore rejects the pattern
+	// as written too, and only accepts it by pairing the stray `)` with the
+	// `(?:…)` grep-pcre2 wraps it in, so it is not asked.
+	if !group_fault && let Ok(matcher) = build_pcre(sanitized.as_ref()) {
 		return Ok((CompiledMatcher::Pcre(matcher), None));
 	}
 
-	let message = err.to_string();
-	if message.contains("unclosed group") || message.contains("unopened group") {
-		let escaped = escape_unescaped_parentheses(sanitized.as_ref());
+	if group_fault {
+		let escaped = escape_unbalanced_parentheses(sanitized.as_ref());
 		if escaped.as_ref() != sanitized.as_ref() {
-			if let Ok(matcher) = build_rust(escaped.as_ref()) {
-				return Ok((CompiledMatcher::Rust(matcher), None));
-			}
-			if let Ok(matcher) = build_pcre(escaped.as_ref()) {
-				return Ok((CompiledMatcher::Pcre(matcher), None));
+			match build_rust(escaped.as_ref()) {
+				Ok(matcher) => return Ok((CompiledMatcher::Rust(matcher), None)),
+				Err((_, false)) => {
+					if let Ok(matcher) = build_pcre(escaped.as_ref()) {
+						return Ok((CompiledMatcher::Pcre(matcher), None));
+					}
+				},
+				Err((_, true)) => {},
 			}
 		}
 	}

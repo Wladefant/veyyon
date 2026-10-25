@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `grep` repairs a pattern rejected for an unpaired parenthesis by escaping only that parenthesis, so `(get|set)Value(` matches `getValue(` instead of the text `(get` or `set)Value(`, and `)(` matches the text `)(` instead of every line.
+
 ## [1.5.9] - 2026-10-22
 
 ### Breaking Changes

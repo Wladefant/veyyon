@@ -1872,7 +1872,7 @@ mod tests {
 	use std::{fs, path::Path};
 
 	use grep_matcher::Matcher;
-	use veyyon_grep_kernel::{escape_unescaped_parentheses, sanitize_braces};
+	use veyyon_grep_kernel::{escape_unbalanced_parentheses, sanitize_braces};
 
 	#[cfg(unix)]
 	use super::{GrepConfig, GrepOutputMode, grep_sync, resolve_grep_operand};
@@ -1956,18 +1956,18 @@ mod tests {
 
 	#[test]
 	fn preserves_escaped_parentheses() {
-		assert_eq!(escape_unescaped_parentheses(r"foo\(bar\)").as_ref(), r"foo\(bar\)");
+		assert_eq!(escape_unbalanced_parentheses(r"foo\(bar\)").as_ref(), r"foo\(bar\)");
 	}
 
 	#[test]
-	fn escapes_literal_parentheses() {
+	fn escapes_only_the_parentheses_that_cannot_pair() {
 		assert_eq!(
-			escape_unescaped_parentheses("fetchAnthropicProvider(").as_ref(),
+			escape_unbalanced_parentheses("fetchAnthropicProvider(").as_ref(),
 			r"fetchAnthropicProvider\("
 		);
 		assert_eq!(
-			escape_unescaped_parentheses("fetchAnthropicProvider()").as_ref(),
-			r"fetchAnthropicProvider\(\)"
+			escape_unbalanced_parentheses("fetchAnthropicProvider()").as_ref(),
+			"fetchAnthropicProvider()"
 		);
 	}
 
