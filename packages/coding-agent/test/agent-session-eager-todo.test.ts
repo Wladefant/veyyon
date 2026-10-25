@@ -328,7 +328,7 @@ describe("AgentSession eager todo enforcement", () => {
 		expect(session.getTodoPhases()[0]?.tasks[0]?.content).toBe("List all git worktrees in the current repository");
 	});
 
-	it("refreshes an auto title on todo init from recent user, assistant, and thinking context", async () => {
+	it("refreshes an auto title on todo init from the visible text of recent turns, never their reasoning", async () => {
 		await recreateSession({ "title.refreshOnReplan": true });
 		await session.setSessionName("Old auto title", "auto");
 		const priorUser: AgentMessage = {
@@ -361,7 +361,7 @@ describe("AgentSession eager todo enforcement", () => {
 		const titleInput = firstMessageText(sideCalls[0] as Context);
 		expect(titleInput).toContain("fix parser recovery");
 		expect(titleInput).toContain("I found the parser recovery path.");
-		expect(titleInput).toContain("The recovery heuristic should drive the replan title.");
+		expect(titleInput).not.toContain("The recovery heuristic should drive the replan title.");
 		expect(titleInput).toContain("replan parser diagnostics");
 	});
 
