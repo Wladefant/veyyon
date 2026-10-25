@@ -85,6 +85,7 @@
 - Kimi Code bundles K3.1 Pro, K3.1 Pro Highspeed and the K2.8 Preview name of `kimi-for-coding`, read from the `kimi-code-plan-cn` key models.dev now lists Kimi Code under.
 - Kimi Code models offer Low, High and Max with no Off, and discovery takes each model's effort ladder, default effort and off state from the account's `/models` listing.
 - A Kimi Code model that cannot stop thinking keeps thinking on and sends no forced tool choice on both wires, including the K3 rows whose ids carry no `kimi` prefix.
+- `InMemorySnapshotStore.record` drops a leading BOM before hashing, so an edit made with the tag a whole-file read printed for a file that opens with a BOM applies instead of being rejected as a file changed between read and edit.
 - A context rebuilt from a session log drops a never-ran placeholder tool result whose call is on no turn of the branch, so a resume of a log written before the fix no longer replays a refused turn's refusal text to the model on every request; a result whose tool ran is kept.
 - A session file that ends inside a line, left by a write that was cut off, is rewritten whole on its first write after a resume instead of appended to, so the next entry no longer merges into the cut line and is no longer lost on the following resume.
 - A swarm file with a YAML syntax error fails with the error's line and column, such as `Nested mappings are not allowed in compact mappings at line 4, column 9`, instead of `Unexpected token`.
