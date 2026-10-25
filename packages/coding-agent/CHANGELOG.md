@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- `veyyon @<path>` naming a directory, named pipe, socket or device exits with `Cannot attach <path>: it is <kind>` instead of waiting forever on a pipe with no writer or failing with a bare `EISDIR`, `ENXIO` or `ESPIPE`.
 - An update interrupted by closing the terminal, Ctrl+C, quitting the session or a fatal error during its download or checksum check removes its partial `<binary>.<id>.new` download instead of leaving it beside the binary until uninstall.
 - `read` of a named pipe, socket or device, directly or through a symbolic link, selector, path list, suffix match or archive, SQLite or PDF member path, fails at once naming the entry's kind instead of blocking the turn until a writer appears or failing with a bare `ENXIO`.
 - A prompt that `@`-mentions a named pipe, socket or device no longer hangs on submit; the entry is not attached.
