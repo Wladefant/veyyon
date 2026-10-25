@@ -6,7 +6,7 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import type { ImageContent } from "@veyyon/ai";
 import { errorMessage, getProjectDir, isEnoent, readImageMetadata } from "@veyyon/utils";
-import { nonRegularKind } from "@veyyon/utils/atomic-write";
+import { nonRegularKind } from "@veyyon/utils/file-kind";
 import { formatBytes } from "@veyyon/utils/format";
 import chalk from "chalk";
 import { CONVERTIBLE_EXTENSIONS } from "../export/markit/convertible-extensions";

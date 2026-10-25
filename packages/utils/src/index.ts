@@ -16,6 +16,7 @@ export * from "./env";
 export * from "./eval-prompt-overrides";
 export * from "./fault-sink";
 export * from "./fetch-retry";
+export * from "./file-kind";
 export * from "./file-lock";
 export * from "./format";
 export * from "./frontmatter";
