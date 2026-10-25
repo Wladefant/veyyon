@@ -27,8 +27,7 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { nonRegularKind } from "./file-kind";
-import { isEnoent, isFsError } from "./fs-error";
+import { isEnoent, isFsError, nonRegularKind } from "./fs-error";
 
 export interface AtomicWriteOptions {
 	/**

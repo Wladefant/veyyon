@@ -6,7 +6,7 @@
 
 ### Added
 
-- `nonRegularKind` in `@veyyon/utils/file-kind` returns the phrase a refusal uses for an entry that is not a regular file, such as `a named pipe (FIFO)`.
+- `nonRegularKind` in `@veyyon/utils/fs-error` returns the phrase a refusal uses for an entry that is not a regular file, such as `a named pipe (FIFO)`.
 
 ## [1.5.10] - 2026-10-25
 
