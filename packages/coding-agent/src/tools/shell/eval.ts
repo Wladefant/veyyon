@@ -14,7 +14,7 @@ import type {
 	EvalStatusEvent,
 	EvalToolDetails,
 } from "../../eval/types";
-import { formatExitCodeNotice } from "../../exec/exit-notice";
+import { appendNotice, formatExitCodeNotice } from "../../exec/exit-notice";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import {
 	DEFAULT_MAX_BYTES,
@@ -863,9 +863,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 				if (result.exitCode !== 0 && result.exitCode !== undefined) {
 					cellResult.status = "error";
 					pushUpdate();
-					const outputText = foldedOutput
-						? `${foldedOutput}\n\n${formatExitCodeNotice(result.exitCode)}`
-						: formatExitCodeNotice(result.exitCode);
+					const outputText = appendNotice(foldedOutput, formatExitCodeNotice(result.exitCode));
 					return await finishCell(outputText, true);
 				}
 

@@ -78,9 +78,10 @@ describe("a retired bash notice costs the payload nothing", () => {
 	});
 
 	it("keeps the exit notice, one separator line before it, nothing after", async () => {
-		// `echo` ends in a newline and the notice list adds one blank line, so the
-		// notice sits two newlines past the output and the payload ends AT it.
-		expect(await bashPayload("call-exit", "echo boom; exit 1")).toBe("boom\n\n\nCommand exited with code 1");
+		// `echo` ends its last line with a newline; that newline is not the separator, so the payload
+		// reads the same as for output with no trailing newline, and ends AT the notice.
+		expect(await bashPayload("call-exit", "echo boom; exit 1")).toBe("boom\n\nCommand exited with code 1");
+		expect(await bashPayload("call-exit-bare", "printf boom; exit 1")).toBe("boom\n\nCommand exited with code 1");
 	});
 
 	it("states wall time in the details and never in the payload", async () => {

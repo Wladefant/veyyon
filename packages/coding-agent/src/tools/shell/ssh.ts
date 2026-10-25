@@ -5,7 +5,7 @@ import { lazy, prompt } from "@veyyon/utils";
 import { loadCapability } from "../../discovery";
 import type { SSHHost } from "../../discovery/capability/ssh";
 import { sshCapability } from "../../discovery/capability/ssh";
-import { formatExitCodeNotice } from "../../exec/exit-notice";
+import { appendNotice, formatExitCodeNotice } from "../../exec/exit-notice";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import { DEFAULT_MAX_BYTES, streamTailUpdates, TailBuffer } from "../../session/streaming-output";
 import type { SSHHostInfo } from "../../ssh/connection-manager";
@@ -231,7 +231,7 @@ export class SshTool implements AgentTool<typeof sshSchema.value, SSHToolDetails
 		const resultBuilder = toolResult(details).text(outputText).truncationFromSummary(result, { direction: "tail" });
 
 		if (result.exitCode !== 0 && result.exitCode !== undefined) {
-			throw new ToolError(`${outputText}\n\n${formatExitCodeNotice(result.exitCode)}`);
+			throw new ToolError(appendNotice(outputText, formatExitCodeNotice(result.exitCode)));
 		}
 
 		return resultBuilder.done();

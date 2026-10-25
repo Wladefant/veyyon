@@ -25,7 +25,7 @@ import {
 } from "@veyyon/utils";
 import type { AsyncJobManager } from "../../async/job-manager";
 import { type BashResult, executeBash } from "../../exec/bash-executor";
-import { formatExitCodeNotice } from "../../exec/exit-notice";
+import { appendNotice, formatExitCodeNotice } from "../../exec/exit-notice";
 import type { ExtensionTerminalCapability } from "../../extensibility/terminal-capability";
 import { InternalUrlRouter } from "../../internal-urls";
 import { toolsPrompts } from "../../prompts/tools/rows";
@@ -645,18 +645,18 @@ export class BashTool
 			// the sink; PTY/bridge interactive output does not, so annotate it here.
 			// The annotation is appended AFTER the cap so it is never elided.
 			const out = await this.#boundBashOutput(normalizeResultOutput(result), result.artifactId);
-			const annotated = isInteractiveResult(result) && out ? `${out}\n\n[Command aborted]` : out;
+			const annotated = isInteractiveResult(result) && out ? appendNotice(out, "[Command aborted]") : out;
 			throw new ToolError(annotated || "Command aborted");
 		}
 		if (isInteractiveResult(result) && result.timedOut) {
 			const out = await this.#boundBashOutput(normalizeResultOutput(result), result.artifactId);
 			const message =
 				timeoutSec === undefined ? "Command timed out" : `Command timed out after ${timeoutSec} seconds`;
-			throw new ToolError(out ? `${out}\n\n[${message}]` : message);
+			throw new ToolError(out ? appendNotice(out, `[${message}]`) : message);
 		}
 		if (result.exitCode === undefined) {
 			const out = await this.#boundBashOutput(outputText, result.artifactId);
-			throw new ToolError(`${out}\n\nCommand failed: missing exit status`);
+			throw new ToolError(appendNotice(out, "Command failed: missing exit status"));
 		}
 	}
 
@@ -674,16 +674,15 @@ export class BashTool
 		const signal = "signal" in result ? result.signal : undefined;
 		const failedExit = exitCode !== undefined && exitCode !== 0;
 
-		const outputLines = [formatResultOutput(result)];
+		let outputText = formatResultOutput(result);
 		const notices: string[] = [];
 		if (options.notices) {
 			for (const notice of options.notices) {
 				if (notice) notices.push(notice);
 			}
 		}
-		if (notices.length > 0) outputLines.push("", ...notices);
-		if (failedExit) outputLines.push("", formatExitCodeNotice(exitCode, signal));
-		const outputText = outputLines.join("\n");
+		if (notices.length > 0) outputText = appendNotice(outputText, notices.join("\n"));
+		if (failedExit) outputText = appendNotice(outputText, formatExitCodeNotice(exitCode, signal));
 
 		// Aborts / timeouts / missing-status still propagate as thrown errors.
 		await this.#throwIfUnfinished(result, timeoutSec, outputText);
@@ -1259,7 +1258,8 @@ export class BashTool
 			// the model can tell an abort from a plain failure. Cap first so a
 			// killed command's output cannot exceed the inline budget.
 			const out = await this.#boundBashOutput(normalizeResultOutput(result), result.artifactId);
-			const message = isInteractiveResult(result) && out ? `${out}\n\n[Command aborted]` : out || "Command aborted";
+			const message =
+				isInteractiveResult(result) && out ? appendNotice(out, "[Command aborted]") : out || "Command aborted";
 			if (signal?.aborted) {
 				throw new ToolAbortError(message);
 			}
@@ -1269,7 +1269,7 @@ export class BashTool
 			const out = await this.#boundBashOutput(normalizeResultOutput(result), result.artifactId);
 			const message =
 				timeoutSec === undefined ? "Command timed out" : `Command timed out after ${timeoutSec} seconds`;
-			throw new ToolError(out ? `${out}\n\n[${message}]` : message);
+			throw new ToolError(out ? appendNotice(out, `[${message}]`) : message);
 		}
 		return this.#buildCompletedResult(result, timeoutSec, {
 			requestedTimeoutSec: call.requestedTimeoutSec,

@@ -41,6 +41,7 @@
 - A todo replan refreshes the session title from the conversation's visible text only, so a provider no longer rejects the title request for carrying the assistant's hidden reasoning.
 - The date and working directory stay in the model's context after a compaction or a failed prompt, and a compaction no longer spends a summary request on them.
 - A recalled memory block that a compaction, a rewind or an abandoned prompt took out of the context is sent again at the next prompt instead of being treated as delivered.
+- A failed command's exit notice in a bash, eval or ssh tool result follows the output after one blank line instead of two.
 
 ## [1.5.9] - 2026-10-22
 
