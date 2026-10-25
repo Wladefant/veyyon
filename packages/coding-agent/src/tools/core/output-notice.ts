@@ -67,6 +67,12 @@ export interface TruncationMeta {
 	 * reads as "the file has N lines" to the agent.
 	 */
 	totalLinesUnknown?: boolean;
+	/**
+	 * The 1-indexed line a head read started on that alone is longer than `maxBytes`. No range of
+	 * whole lines was shown, so the notice states the line and the limit, and `nextOffset` is the
+	 * line after it: naming the same line again would return the same result.
+	 */
+	oversizedLine?: number;
 }
 
 /**
@@ -272,21 +278,24 @@ export function formatTruncationMetaNotice(truncation: TruncationMeta): string {
 		return notice;
 	}
 
-	const range = truncation.shownRange;
-	const total = truncation.totalLinesUnknown ? "" : ` of ${truncation.totalLines}`;
-	if (range && range.end >= range.start) {
-		notice = `Showing lines ${range.start}-${range.end}${total}`;
+	if (truncation.oversizedLine !== undefined) {
+		const limit = truncation.maxBytes === undefined ? "output" : formatBytes(truncation.maxBytes);
+		notice = `Line ${truncation.oversizedLine} exceeds the ${limit} limit`;
 	} else {
-		notice = `Showing ${truncation.outputLines}${total} lines`;
+		const range = truncation.shownRange;
+		const total = truncation.totalLinesUnknown ? "" : ` of ${truncation.totalLines}`;
+		notice =
+			range && range.end >= range.start
+				? `Showing lines ${range.start}-${range.end}${total}`
+				: `Showing ${truncation.outputLines}${total} lines`;
+		const qualifiers: string[] = [];
+		if (truncation.totalLinesUnknown) qualifiers.push("file not scanned to end");
+		if (truncation.truncatedBy === "bytes") {
+			const maxBytes = truncation.maxBytes ?? truncation.outputBytes;
+			qualifiers.push(`${formatBytes(maxBytes)} limit`);
+		}
+		if (qualifiers.length > 0) notice += ` (${qualifiers.join("; ")})`;
 	}
-
-	const qualifiers: string[] = [];
-	if (truncation.totalLinesUnknown) qualifiers.push("file not scanned to end");
-	if (truncation.truncatedBy === "bytes") {
-		const maxBytes = truncation.maxBytes ?? truncation.outputBytes;
-		qualifiers.push(`${formatBytes(maxBytes)} limit`);
-	}
-	if (qualifiers.length > 0) notice += ` (${qualifiers.join("; ")})`;
 
 	if (truncation.nextOffset != null) {
 		notice += `. Use :${truncation.nextOffset} to continue`;

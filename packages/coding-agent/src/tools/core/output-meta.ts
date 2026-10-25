@@ -42,6 +42,8 @@ export interface TruncationOptions {
 	/** The scan stopped after the shown window; `result.totalLines` is a lower bound, not the file length. */
 	totalLinesUnknown?: boolean;
 	artifactId?: string;
+	/** The byte budget the output was held to, which a byte-truncation notice states as its limit. */
+	maxBytes?: number;
 }
 
 export interface TruncationSummaryOptions {
@@ -76,7 +78,7 @@ export class OutputMetaBuilder {
 	truncation(result: TruncationResult, options: TruncationOptions): this {
 		if (!result.truncated) return this;
 
-		const { direction, startLine = 1, totalFileLines, totalLinesUnknown, artifactId } = options;
+		const { direction, startLine = 1, totalFileLines, totalLinesUnknown, artifactId, maxBytes } = options;
 		const outputLines = result.outputLines ?? result.totalLines;
 		const outputBytes = result.outputBytes ?? result.totalBytes;
 		const isMiddle = direction === "middle" || result.truncatedBy === "middle";
@@ -114,6 +116,26 @@ export class OutputMetaBuilder {
 			return this;
 		}
 
+		if (result.firstLineExceedsLimit) {
+			// Nothing of the line was shown whole, so there is no range to state, and the line after
+			// it is the continuation: the same line again returns the same refusal.
+			const hasNextLine = totalLinesUnknown === true || startLine < effectiveTotalLines;
+			this.#meta.truncation = {
+				direction: "head",
+				truncatedBy: "bytes",
+				totalLines: effectiveTotalLines,
+				totalBytes: result.totalBytes,
+				outputLines,
+				outputBytes,
+				...(maxBytes === undefined ? {} : { maxBytes }),
+				oversizedLine: startLine,
+				artifactId,
+				nextOffset: hasNextLine ? startLine + 1 : undefined,
+				...(totalLinesUnknown ? { totalLinesUnknown } : {}),
+			};
+			return this;
+		}
+
 		let shownStart: number;
 		let shownEnd: number;
 
@@ -135,6 +157,7 @@ export class OutputMetaBuilder {
 			shownRange: { start: shownStart, end: shownEnd },
 			artifactId,
 			nextOffset: direction === "head" ? shownEnd + 1 : undefined,
+			...(maxBytes === undefined ? {} : { maxBytes }),
 			...(totalLinesUnknown ? { totalLinesUnknown } : {}),
 		};
 

@@ -42,6 +42,7 @@
 
 ### Fixed
 
+- A read that reaches a line longer than its byte budget names that line and continues at the next one, instead of `Use :N to continue` sending the reader back to the same window, and its truncation notices and card state the read's budget instead of the bytes shown.
 - A resumed or switched-to session whose model exists only in a provider's discovery listing runs on that model instead of the settings default when the discovery cache cannot supply it, as on the first launch after an upgrade that changes the cache format.
 - Codex web search and image generation requests send `x-codex-routing-hint`, and the startup websocket prewarm states the session's configured service tier, which the first turn on that socket sends.
 - A copy from inside tmux reaches the attached terminal's clipboard through `tmux load-buffer -w` instead of an OSC 52 escape that tmux drops under its default `set-clipboard external`, falling back to the escape when tmux rejects the command.
