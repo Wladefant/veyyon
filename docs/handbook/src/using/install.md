@@ -456,8 +456,10 @@ Without that, typing `veyyon` straight after uninstalling answers "No such file 
 
 It also reclaims what an UPDATE may have left. An update stages the new binary
 beside the old one and keeps the one it replaces as a backup until the new one
-has proved itself, and on Windows that backup cannot be deleted while the process
-holding it is still running, so a `veyyon.<id>.new` or a `veyyon.<id>.bak` can
+has proved itself. An update interrupted during its download or checksum check
+removes its staged file when the process exits, but one killed outright (SIGKILL,
+power loss) leaves a `veyyon.<id>.new`, and on Windows the backup cannot be
+deleted while the process holding it is still running, so a `veyyon.<id>.bak` can
 outlive the update that made it. Uninstall removes those too, so the install
 directory is left empty rather than holding a few hundred megabytes you have no
 name for. A backup you saved yourself under a name of your own is left alone.

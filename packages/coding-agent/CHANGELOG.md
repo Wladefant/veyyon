@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- An update interrupted by closing the terminal, Ctrl+C, quitting the session or a fatal error during its download or checksum check removes its partial `<binary>.<id>.new` download instead of leaving it beside the binary until uninstall.
+
 ## [1.5.10] - 2026-10-25
 
 ### Added
