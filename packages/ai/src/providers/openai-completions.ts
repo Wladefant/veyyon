@@ -850,7 +850,7 @@ async function runOpenAICompletionsAttempt(
 	try {
 		const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 		const { idleTimeoutMs, firstEventTimeoutMs, requestTimeoutMs } = openAICompletionsTimeouts(model, options);
-		const { copilotPremiumRequests, baseUrl, headers, query, requestHeaders } = createRequestSetup(
+		const { baseUrl, headers, query, requestHeaders } = createRequestSetup(
 			model,
 			context,
 			apiKey,
@@ -893,12 +893,9 @@ async function runOpenAICompletionsAttempt(
 			},
 		}).open();
 		await notifyProviderResponse(options, openaiHandle.response, model, openaiHandle.requestId);
-		if (copilotPremiumRequests !== undefined) {
-			output.usage.premiumRequests = copilotPremiumRequests;
-		}
 		stream.push({ type: "start", partial: output });
 		const activeTurn = new OpenAICompletionsTurn(output, stream, policy.stream, rawUsage =>
-			parseChunkUsage(rawUsage, model, copilotPremiumRequests),
+			parseChunkUsage(rawUsage, model),
 		);
 		turn = activeTurn;
 		const timedOpenaiStream = iterateWithIdleTimeout(openaiHandle.events, {
