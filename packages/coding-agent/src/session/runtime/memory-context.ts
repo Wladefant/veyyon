@@ -61,8 +61,6 @@ export function lastDeliveredBlock(messages: readonly AgentMessage[], customType
 export class MemoryContext<S> {
 	readonly #host: MemoryContextHost<S>;
 	#hindsight: HindsightSessionState | undefined;
-	/** The recalled block the conversation already carries, so an unchanged recall is not resent. */
-	#delivered: string | undefined;
 	/** A recalled block waiting for the next step boundary to carry it in. */
 	#pending: string | undefined;
 
@@ -96,12 +94,11 @@ export class MemoryContext<S> {
 	 * Forget what the previous conversation was told, on every path that starts a new one (`/new`,
 	 * `/clear`, a session switch, a resume onto a different transcript).
 	 *
-	 * The backend's conversation tracking is reset so the next turn recalls afresh, and the delivered
-	 * block is re-derived from the transcript the session is now on: `/new` lands on an empty
-	 * transcript, so an identical recall is delivered again, and a fork or a switch lands on one that
-	 * already carries the block, so it is not delivered twice. A queued block is dropped, because the
-	 * recall it came from belonged to the conversation being left; the first prompt of the new
-	 * transcript collects the current context anyway.
+	 * The backend's conversation tracking is reset so the next turn recalls afresh. A queued block is
+	 * dropped, because the recall it came from belonged to the conversation being left; the first
+	 * prompt of the new transcript collects the current context anyway, and it is compared against the
+	 * transcript the session is now on, so `/new` delivers an identical recall again and a fork or a
+	 * switch that already carries it does not.
 	 *
 	 * The system prompt is not rebuilt: both backends' developer instructions are static for the life
 	 * of the session, so a rebuild could only produce the same bytes.
@@ -112,7 +109,6 @@ export class MemoryContext<S> {
 			backendId === "hindsight" ? this.#hindsight : backendId === "mnemopi" ? this.#host.mnemopiState() : undefined;
 		if (state && !state.aliasOf) state.resetConversationTracking();
 		this.#pending = undefined;
-		this.#delivered = lastDeliveredBlock(this.#host.messages(), MEMORY_CONTEXT_MESSAGE_TYPE);
 	}
 
 	/**
@@ -177,26 +173,36 @@ export class MemoryContext<S> {
 			return false;
 		}
 		const trimmed = text?.trim();
-		if (!trimmed || trimmed === this.#delivered) return false;
+		if (!trimmed || trimmed === this.#delivered()) return false;
 		this.#pending = trimmed;
 		logger.debug("memory context queued for the context tail", { reason, chars: trimmed.length });
 		return true;
 	}
 
 	/**
-	 * Drain the queued block as a message, if one is waiting. A queued block always differs from the
-	 * delivered one, because every path that changes the delivered block clears the queue.
+	 * Drain the queued block as a message, if one is waiting and the live context does not already
+	 * carry it: a prompt that landed the same recall between the queueing and this boundary has
+	 * delivered it.
 	 */
 	takePending(): AgentMessage | null {
 		const pending = this.#pending;
+		this.#pending = undefined;
 		return pending === undefined ? null : this.#message(pending);
 	}
 
-	/** A memory-context message for `text`, or null when it is empty or already delivered. */
+	/**
+	 * The block the live context carries. Read from the messages the next request sends, not from a
+	 * record of what was sent, so a compaction or a rewind that drops the block, or a prompt abandoned
+	 * after collecting it, leaves an unchanged recall to be delivered again.
+	 */
+	#delivered(): string | undefined {
+		return lastDeliveredBlock(this.#host.messages(), MEMORY_CONTEXT_MESSAGE_TYPE);
+	}
+
+	/** A memory-context message for `text`, or null when it is empty or the live context carries it. */
 	#message(text: string): AgentMessage | null {
 		const trimmed = text.trim();
-		if (!trimmed || trimmed === this.#delivered) return null;
-		this.#delivered = trimmed;
+		if (!trimmed || trimmed === this.#delivered()) return null;
 		this.#pending = undefined;
 		return {
 			role: "custom",

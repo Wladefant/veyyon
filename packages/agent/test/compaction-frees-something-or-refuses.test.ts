@@ -17,10 +17,16 @@
  * Each shape below is a real session skeleton that produced one of those two
  * outcomes. They are deliberately tiny: a failure points at the cut-point search
  * and nothing else.
+ *
+ * A custom message the caller excludes (a block it restates after compacting)
+ * is never summarized, so a cut with only such blocks in front of it has the
+ * same dead end as a cut at the start of the range: excluding the block turned
+ * a summary request that read nothing but the block into a refusal against a
+ * full gauge.
  */
 import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
-import type { SessionEntry, SessionMessageEntry } from "@veyyon/agent-core/compaction";
+import type { CustomMessageEntry, SessionEntry, SessionMessageEntry } from "@veyyon/agent-core/compaction";
 import {
 	DEFAULT_COMPACTION_SETTINGS,
 	findCutPoint,
@@ -72,6 +78,24 @@ const result = (text: string): ToolResultMessage =>
 
 const HUGE = "x".repeat(800_000);
 const settings = { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 30_000 };
+
+const RESTATED = "restated-block";
+const excluded = { excludedCustomMessageTypes: new Set([RESTATED]) };
+
+function custom(customType: string, content: string): CustomMessageEntry {
+	return {
+		type: "custom_message",
+		id: `e-${idCounter++}`,
+		parentId: null,
+		timestamp: "2026-08-06T00:00:00.000Z",
+		customType,
+		content,
+		display: false,
+	};
+}
+
+/** The custom type of a custom message, else its role, so an excluded block shows by name. */
+const kind = (message: AgentMessage): string => (message.role === "custom" ? message.customType : message.role);
 
 /** Every shape here is over budget by two orders of magnitude. */
 const overBudgetShapes: Array<[string, SessionEntry[]]> = [
@@ -156,6 +180,51 @@ describe("a whole turn ending in an oversized result", () => {
 		expect(kept.content[0].type === "text" && kept.content[0].text).toContain("elided by compaction");
 		expect(prepared!.tailElisions).toHaveLength(1);
 		expect(prepared!.tailElisions![0]!.originalText).toBe(HUGE);
+	});
+});
+
+describe("a block the summary never reads is not history", () => {
+	test("an over-budget cut behind only that block moves past the next message the summary reads", () => {
+		// The prelude carries the budget, so the cut lands on it and then backs up over the block in
+		// front: with the block excluded, nothing in front of the cut is summarizable.
+		const entries = [
+			custom(RESTATED, "date and working directory"),
+			custom("prelude", "p".repeat(4_000)),
+			entry(user("q")),
+			entry(assistant([{ type: "text", text: "a" }])),
+		];
+		const prepared = prepareCompaction(entries, { ...settings, keepRecentTokens: 50 }, excluded);
+
+		expect(prepared!.messagesToSummarize.map(kind)).toEqual(["prelude"]);
+		expect(prepared!.turnPrefixMessages).toEqual([]);
+		expect(prepared!.recentMessages.map(kind)).toEqual(["user", "assistant"]);
+	});
+
+	test("a whole turn ending in an oversized result still splits when the block opens the range", () => {
+		const entries = [
+			custom(RESTATED, "date and working directory"),
+			entry(user("q")),
+			entry(withCall()),
+			entry(result(HUGE)),
+		];
+
+		expect(
+			findCutPoint(entries, 0, entries.length, settings.keepRecentTokens, 0, excluded.excludedCustomMessageTypes),
+		).toEqual({ firstKeptEntryIndex: 2, turnStartIndex: 1, isSplitTurn: true });
+		const prepared = prepareCompaction(entries, settings, excluded);
+		expect(prepared!.messagesToSummarize).toEqual([]);
+		expect(prepared!.turnPrefixMessages.map(kind)).toEqual(["user"]);
+		expect(prepared!.recentMessages.map(kind)).toEqual(["assistant", "toolResult"]);
+	});
+
+	test("a range that fits the budget is still refused", () => {
+		const entries = [
+			custom(RESTATED, "date and working directory"),
+			entry(user("hello")),
+			entry(assistant([{ type: "text", text: "hi" }])),
+		];
+
+		expect(prepareCompaction(entries, settings, excluded)).toBeUndefined();
 	});
 });
 

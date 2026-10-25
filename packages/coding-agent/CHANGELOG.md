@@ -39,6 +39,8 @@
 - A `--print` run whose turn a classifier refused exits 1 and writes the refusal to stderr instead of exiting 0 with no output.
 - A failed auto-compaction summary retries under the attempt count, backoff ceiling and `retry.maxDelayMs` a turn on the same provider runs under, and a spent usage allowance moves to another account or ends compaction at once as a usage limit, instead of retrying on an uncapped backoff that held the turn for over eight minutes and reporting a 403 out-of-credits response as missing credentials.
 - A todo replan refreshes the session title from the conversation's visible text only, so a provider no longer rejects the title request for carrying the assistant's hidden reasoning.
+- The date and working directory stay in the model's context after a compaction or a failed prompt, and a compaction no longer spends a summary request on them.
+- A recalled memory block that a compaction, a rewind or an abandoned prompt took out of the context is sent again at the next prompt instead of being treated as delivered.
 
 ## [1.5.9] - 2026-10-22
 

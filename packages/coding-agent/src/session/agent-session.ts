@@ -773,6 +773,7 @@ export class AgentSession {
 			this.#planMode.invalidateReference();
 			this.#resetAllAdvisorRuntimes();
 			this.#todo.syncFromBranch();
+			this.#restateSessionState();
 		},
 		closeCodexProviderSessionsForHistoryRewrite: () => this.#providerSessions.closeCodexForHistoryRewrite(this.model),
 		whileDisconnectedFromAgent: run => this.#whileDisconnectedFromAgent(run),
@@ -3372,13 +3373,10 @@ export class AgentSession {
 	/**
 	 * Forget what the previous conversation was told, on every path that starts a new one
 	 * (`/new`, `/clear`, a session switch, a resume onto a different transcript): the memory
-	 * backend's tracking and delivered block (see {@link MemoryContext.resetForNewTranscript}), and
-	 * the session-state block. A fork or a switch lands on a transcript that already states the date
-	 * and working directory, `/new` does not, so the delivered block is read from the messages.
+	 * backend's tracking and queued block (see {@link MemoryContext.resetForNewTranscript}).
 	 */
 	#resetMemoryContextForNewTranscript(): void {
 		this.#memory.resetForNewTranscript();
-		this.#deliveredSessionState = lastDeliveredBlock(this.agent.state.messages, SESSION_STATE_MESSAGE_TYPE);
 	}
 
 	/** True once dispose() has begun; deferred background work (e.g. the deferred
@@ -3934,12 +3932,6 @@ export class AgentSession {
 	}
 
 	/**
-	 * The session-state block already delivered, so the same date and working
-	 * directory are never stated twice. Undefined until the first delivery.
-	 */
-	#deliveredSessionState: string | undefined;
-
-	/**
 	 * Publish the backend's current volatile context for delivery at the next step
 	 * boundary, and report whether anything new is queued.
 	 *
@@ -4425,13 +4417,14 @@ export class AgentSession {
 	}
 
 	/**
-	 * The date and working directory as they stand now, or null when the model has
-	 * already been told exactly this.
+	 * The date and working directory as they stand now, or null when the live context
+	 * already carries exactly this block.
 	 *
-	 * Deduped against the last block delivered, so a session that never re-roots
-	 * states them once and a session that re-roots restates them on the next turn.
-	 * Re-sending an unchanged block would grow the context every turn for no new
-	 * information, which is the cost this whole arrangement exists to avoid.
+	 * Deduped against the messages the next request sends, not against a record of what
+	 * was sent: a compaction, a shake or a rewind that drops the block, and a prompt that
+	 * is abandoned after building it, all leave a context without it, and the block is
+	 * stated again. Re-sending an unchanged block that is still there would grow the
+	 * context every turn for no new information.
 	 */
 	#buildSessionStateMessage(): CustomMessage | null {
 		const content = prompt
@@ -4440,8 +4433,7 @@ export class AgentSession {
 				cwd: shortenPath(normalizePromptPath(this.sessionManager.getCwd())),
 			})
 			.trim();
-		if (content === this.#deliveredSessionState) return null;
-		this.#deliveredSessionState = content;
+		if (content === lastDeliveredBlock(this.agent.state.messages, SESSION_STATE_MESSAGE_TYPE)) return null;
 		return {
 			role: "custom",
 			customType: SESSION_STATE_MESSAGE_TYPE,
@@ -4450,6 +4442,26 @@ export class AgentSession {
 			attribution: "agent",
 			timestamp: Date.now(),
 		};
+	}
+
+	/**
+	 * Put the session-state block back into the live context and the session file after a
+	 * compaction summarized it away. A compaction between the calls of one run has no prompt
+	 * after it to restate the date and working directory, so they go in here, ahead of the next
+	 * request, as a plain append: a step-boundary aside would force an extra model turn when the
+	 * compaction lands on the run's last turn.
+	 */
+	#restateSessionState(): void {
+		const message = this.#buildSessionStateMessage();
+		if (!message) return;
+		this.agent.appendMessage(message);
+		this.sessionManager.appendCustomMessageEntry(
+			SESSION_STATE_MESSAGE_TYPE,
+			message.content,
+			false,
+			undefined,
+			"agent",
+		);
 	}
 
 	#buildVibeModeMessage(): CustomMessage | null {
@@ -4926,11 +4938,6 @@ export class AgentSession {
 			startupMarker("prompt:memory-context:done");
 			startupMarker("prompt:context-build:done");
 
-			// Ahead of the memories for the same reason the memories are ahead of the
-			// question: the date and the working directory are what the model should
-			// already know when it reads either.
-			const sessionStateMessage = this.#buildSessionStateMessage();
-			if (sessionStateMessage) messages.unshift(sessionStateMessage);
 			const beforeAgentStartSystemPrompt = this.#toolActivation.baseSystemPrompt;
 			startupMarker("prompt:before-agent-start:start");
 			// Emit before_agent_start extension event
@@ -5002,6 +5009,13 @@ export class AgentSession {
 			if (this.#promptGeneration !== generation) {
 				return;
 			}
+
+			// Built after the pre-prompt compaction, which restates a block it summarized
+			// away, so the two never both send one. Ahead of the memories for the same reason
+			// the memories are ahead of the question: the date and the working directory are
+			// what the model should already know when it reads either.
+			const sessionStateMessage = this.#buildSessionStateMessage();
+			if (sessionStateMessage) messages.unshift(sessionStateMessage);
 
 			const agentPromptOptions = options?.toolChoice ? { toolChoice: options.toolChoice } : undefined;
 			this.#context.beginPrompt(messages);

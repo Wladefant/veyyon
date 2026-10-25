@@ -54,7 +54,10 @@ function createModel(): Model<"openai-responses"> {
 
 interface Harness {
 	session: AgentSession;
-	/** Drain the aside provider the session installed, as the agent loop does at a step boundary. */
+	/**
+	 * Drain the aside provider the session installed and land what it returns in the context, as the
+	 * agent loop does at a step boundary.
+	 */
 	drainAsides(): AgentMessage[];
 }
 
@@ -121,9 +124,11 @@ async function harness(): Promise<Harness> {
 		drainAsides() {
 			const thunks = provider?.();
 			if (!thunks || thunks instanceof Promise) return [];
-			return thunks
+			const delivered = thunks
 				.map(entry => (typeof entry === "function" ? entry() : entry))
 				.filter((message): message is AgentMessage => message !== null);
+			for (const message of delivered) session.agent.appendMessage(message);
+			return delivered;
 		},
 	};
 }

@@ -3,13 +3,16 @@
  * `memory-context` message at the context tail. The defects at that boundary share one shape: the
  * model reads a block a number of times other than once per transcript. An unchanged recall resent
  * every turn grows the context for no new information; a block queued mid-run and then collected
- * at the next prompt is sent twice; a block re-derived wrongly after `/new` is never sent to the new
- * transcript, or sent twice to a fork that already carries it; a hook that throws takes the whole
- * turn's context with it; a rekey or reset reaches the backend that is not active.
+ * at the next prompt is sent twice; a block a compaction or a rewind took out of the context, or a
+ * prompt collected and then abandoned, is never sent again because a record of what was sent says
+ * the model has it; a block is never sent to a new transcript, or sent twice to a fork that already
+ * carries it; a hook that throws takes the whole turn's context with it; a rekey or reset reaches the
+ * backend that is not active.
  *
  * The class this closes is a memory block delivered zero or two times to a transcript that needs it
  * once, or backend state touched for a backend that is not selected. Each case drives the real
- * collaborator against a scripted backend and real message arrays.
+ * collaborator against a scripted backend and real message arrays; `deliver` lands a block in those
+ * messages the way a sent request does, and a block not landed was never sent.
  *
  * What it does not catch: which session paths call `rekey` and `resetForNewTranscript`
  * (`memory-context-rides-the-tail` drives `/new`, a session switch and a real Hindsight backend
@@ -93,6 +96,12 @@ function block(content: string): AgentMessage {
 	};
 }
 
+/** Land a collected or taken block in the live context, as a request that sends it does. */
+function deliver(state: Script, message: AgentMessage | null): void {
+	if (!message) throw new Error("expected a block to deliver");
+	state.messages = [...state.messages, message];
+}
+
 function contentOf(message: AgentMessage | null): string | undefined {
 	if (!message) return undefined;
 	expect(message.role).toBe("custom");
@@ -115,10 +124,26 @@ describe("collecting a turn's memory", () => {
 
 	it("does not resend an unchanged block, and sends a changed one", async () => {
 		const { memory, state } = harness({ volatile: "facts" });
-		expect(contentOf(await memory.collect("first"))).toBe("facts");
+		const first = await memory.collect("first");
+		expect(contentOf(first)).toBe("facts");
+		deliver(state, first);
 		expect(await memory.collect("second")).toBeNull();
 		state.volatile = "new facts";
 		expect(contentOf(await memory.collect("third"))).toBe("new facts");
+	});
+
+	it("collects an unchanged block again when the prompt that collected it never sent it", async () => {
+		const { memory } = harness({ volatile: "facts" });
+		expect(contentOf(await memory.collect("abandoned"))).toBe("facts");
+		expect(contentOf(await memory.collect("retried"))).toBe("facts");
+	});
+
+	it("collects an unchanged block again once a rewrite took it out of the context", async () => {
+		const { memory, state } = harness({ volatile: "facts" });
+		state.messages = [block("facts")];
+		expect(await memory.collect("before")).toBeNull();
+		state.messages = [];
+		expect(contentOf(await memory.collect("after"))).toBe("facts");
 	});
 
 	it("skips a hook that throws and keeps what the other reported", async () => {
@@ -143,8 +168,8 @@ describe("a block published mid-run", () => {
 	});
 
 	it("is not queued when the conversation already carries it", async () => {
-		const { memory } = harness({ volatile: "facts" });
-		await memory.collect("question");
+		const { memory, state } = harness({ volatile: "facts" });
+		deliver(state, await memory.collect("question"));
 		expect(await memory.publish("reload")).toBe(false);
 		expect(memory.takePending()).toBeNull();
 	});
@@ -152,13 +177,29 @@ describe("a block published mid-run", () => {
 	it("is not sent again by the next prompt once taken, and is dropped when the prompt delivers it", async () => {
 		const taken = harness({ volatile: "facts" });
 		await taken.memory.publish("recall");
-		taken.memory.takePending();
+		deliver(taken.state, taken.memory.takePending());
 		expect(await taken.memory.collect("next")).toBeNull();
 
 		const collected = harness({ volatile: "facts" });
 		await collected.memory.publish("recall");
 		expect(contentOf(await collected.memory.collect("next"))).toBe("facts");
 		expect(collected.memory.takePending()).toBeNull();
+	});
+
+	it("is consumed by the boundary that finds the context already carrying it", async () => {
+		const { memory, state } = harness({ volatile: "facts" });
+		await memory.publish("recall");
+		state.messages = [block("facts")];
+		expect(memory.takePending()).toBeNull();
+		state.messages = [];
+		expect(memory.takePending()).toBeNull();
+	});
+
+	it("is offered again by the next prompt when the boundary that took it never sent it", async () => {
+		const { memory } = harness({ volatile: "facts" });
+		await memory.publish("recall");
+		expect(contentOf(memory.takePending())).toBe("facts");
+		expect(contentOf(await memory.collect("next"))).toBe("facts");
 	});
 
 	it("is dropped when the next prompt delivers a newer block", async () => {
@@ -183,7 +224,7 @@ describe("a block published mid-run", () => {
 describe("a new transcript", () => {
 	it("is told an identical recall again when it carries no block", async () => {
 		const { memory, state } = harness({ volatile: "facts" });
-		await memory.collect("question");
+		deliver(state, await memory.collect("question"));
 		state.messages = [];
 		memory.resetForNewTranscript();
 		expect(contentOf(await memory.collect("question"))).toBe("facts");

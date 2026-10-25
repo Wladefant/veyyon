@@ -17,6 +17,7 @@ import {
 	type CompactionResult,
 	type CompactionSettings,
 	DEFAULT_RESERVE_TOKENS,
+	endsAtCompaction,
 	formatCompactionThreshold,
 	getRemoteCompactionPreserveData,
 	prepareCompaction,
@@ -52,6 +53,7 @@ import type { CompactOptions } from "../../extensibility/extensions/types";
 import type { GoalAbortReason } from "../../goals/state";
 import { compactionModelCandidates } from "../agent-session-model-targets";
 import type { AgentSessionEvent } from "../agent-session-types";
+import { SESSION_STATE_MESSAGE_TYPE } from "../nudges";
 import {
 	type AutoCompactionReason,
 	CompactionRecovery,
@@ -64,6 +66,14 @@ import {
 	type CompactionSummarizerHost,
 	type CompactionSummarizerSession,
 } from "./compaction-summarizer";
+
+/**
+ * Hidden blocks the session restates on its own after a compaction drops them, so they are never sent
+ * to the summary model: the session-state block goes back into the context as the compaction is applied
+ * (`afterHistoryCompacted`). A history span holding nothing else is not a history, and summarizing it
+ * is a model request that produces nothing.
+ */
+const RESTATED_BLOCK_TYPES: ReadonlySet<string> = new Set([SESSION_STATE_MESSAGE_TYPE]);
 
 /** What {@link CompactionRuntime} reads from the session's public surface. */
 export interface CompactionSession extends CompactionSummarizerSession, CompactionRecoverySession {
@@ -194,13 +204,13 @@ export class CompactionRuntime {
 			);
 			const pathEntries = this.#session.sessionManager.getBranch();
 			preparation = prepareCompaction(pathEntries, toAgentCompactionSettings(effectiveSettings), {
+				excludedCustomMessageTypes: RESTATED_BLOCK_TYPES,
 				nonMessageTokens: this.#host.nonMessageTokens(),
 				contextWindow: declaredContextWindow(this.#session.model),
 			});
 			if (!preparation) {
 				// Check why we can't compact
-				const lastEntry = pathEntries[pathEntries.length - 1];
-				if (lastEntry?.type === "compaction") {
+				if (endsAtCompaction(pathEntries, RESTATED_BLOCK_TYPES)) {
 					throw new Error("Already compacted");
 				}
 				// The window being full and this returning nothing were once the
@@ -580,6 +590,7 @@ export class CompactionRuntime {
 			const pathEntries = this.#session.sessionManager.getBranch();
 
 			preparation = prepareCompaction(pathEntries, toAgentCompactionSettings(compactionSettings), {
+				excludedCustomMessageTypes: RESTATED_BLOCK_TYPES,
 				nonMessageTokens: this.#host.nonMessageTokens(),
 				contextWindow: declaredContextWindow(this.#session.model),
 			});
