@@ -2,7 +2,7 @@
 
 `--print` (short `-p`) runs Veyyon without the interactive TUI: one prompt, tools run under the active approval mode, then exit. Use this from scripts, CI, and other programs.
 
-The run exits after the agents it spawned and the commands it ran in the background have finished and their results are answered. It does not wait for a process started with the `launch` tool.
+The run exits after the agents it spawned and the commands it ran in the background have finished and their results are answered. It does not wait for a process started with the `launch` tool or a background command run with `timeout: 0`.
 
 ```console
 $ veyyon -p "add a unit test for parse_config and run it"

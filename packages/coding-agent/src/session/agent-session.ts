@@ -135,7 +135,7 @@ import {
 	expandSessionContext,
 	expandSessionMessageEntries,
 } from "../argot-wire";
-import { type AsyncJob, AsyncJobManager, JOB_ENDS_ON_ITS_OWN } from "../async";
+import { type AsyncJob, AsyncJobManager } from "../async";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import { credentialRemedySentence, missingCredentialsMessage } from "../config/missing-credentials";
 import { normalizeModelPatternList } from "../config/model-pattern-list";
@@ -2341,7 +2341,7 @@ export class AgentSession {
 		return (
 			manager
 				.getRunningJobs(ownerFilter)
-				.some(job => !manager.isDeliverySuppressed(job.id) && (!endingJobsOnly || JOB_ENDS_ON_ITS_OWN[job.type])) ||
+				.some(job => !manager.isDeliverySuppressed(job.id) && (!endingJobsOnly || job.endsOnItsOwn)) ||
 			manager.hasPendingDeliveries(ownerFilter)
 		);
 	}

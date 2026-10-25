@@ -251,7 +251,8 @@ export async function runPrintMode(session: PrintModeSession, options: PrintMode
 	}
 	// A spawned agent or a backgrounded command reports by waking the loop when it finishes. Exiting
 	// here kills it and drops that report, so the run ends once nothing it started is still due to
-	// finish. A launched process is not waited for: it runs until something stops it.
+	// finish. A job that runs until stopped is not waited for: a launched process, or a command given
+	// no timeout.
 	await logger.time("print:settle", () => session.waitForQuiescence(undefined, { endingJobsOnly: true }));
 
 	// An errored or aborted turn is a failed command in either output mode:

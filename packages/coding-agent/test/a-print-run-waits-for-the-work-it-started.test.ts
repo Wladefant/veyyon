@@ -3,25 +3,25 @@
  * spawned agent or a backgrounded command that turn started was stopped, and its result, which
  * arrives by waking the loop for a follow-up turn, was never answered. The run printed the turn
  * that started the work and exited 0. The class this closes: a print run that ends while background
- * work it started is still due to report, for every kind of job the manager runs. Each kind is
- * pinned to whether a run waits for it by exact equality, so a new kind is a compile error here
- * until someone decides it. A launched process is the one kind not waited for: it runs until
- * something stops it, and waiting on it would hold the run open forever, which `RUN_BOUND_MS`
- * turns into a failure instead of a hang.
+ * work it started is still due to report, for every kind of job the manager runs, and for the
+ * backgrounded command with and without a deadline. Each kind is pinned to whether a run waits for
+ * it by exact equality, so a new kind is a compile error here until someone decides it. A job that
+ * runs until stopped is not waited for: a launched process, or a command given `timeout: 0`.
+ * Waiting on one would hold the run open forever, which `RUN_BOUND_MS` turns into a failure
+ * instead of a hang.
  *
  * It drives a session built by `createAgentSession` against a scripted provider, so a finished job
- * reaches the conversation through the production delivery path. Not caught: the `bash` and `task`
- * tools that register these jobs (the provider registers each job here, at the point in the turn
- * where a tool would, under the owner those tools use), and `--mode json`, which reads the same
- * settled session as text mode.
+ * reaches the conversation through the production delivery path. The backgrounded commands run
+ * through the real `bash` tool. Not caught: the `task` and `launch` tools themselves (their kinds
+ * are registered here at the point in the turn where the tool would, under the owner those tools
+ * use), and `--mode json`, which reads the same settled session as text mode.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { Context } from "@veyyon/ai";
 import { unregisterCustomApis } from "@veyyon/ai/api-registry";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { createMockModel, registerMockApi } from "@veyyon/ai/providers/mock";
+import { createMockModel, type MockResponse, registerMockApi } from "@veyyon/ai/providers/mock";
 import { AsyncJobManager, type AsyncJobType, JOB_ENDS_ON_ITS_OWN } from "@veyyon/coding-agent/async/job-manager";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -36,12 +36,28 @@ const A_PRINT_RUN_WAITS_FOR: Record<AsyncJobType, boolean> = { bash: true, task:
 
 /** How long a job that ends on its own runs: long enough to outlast the turn that started it. */
 const JOB_MS = 60;
-/** The bound on a run that must not wait: a regression that waits on a launch hangs until here. */
+/** The bound on a run that must not wait: a regression that waits on such a job hangs until here. */
 const RUN_BOUND_MS = 10_000;
 /** Each test's own limit, past the run bound so a run that hangs fails on the bound and its message. */
 const TEST_TIMEOUT_MS = RUN_BOUND_MS * 3;
 
 const MOCK_API_SOURCE = "a-print-run-waits-for-the-work-it-started";
+
+/** What the backgrounded command prints. The shell computes it, so the command line does not hold it. */
+const COMMAND_OUTPUT = "BG-42-DONE";
+const COMMAND = "echo BG-$((40+2))-DONE";
+
+/** What the first turn does, and the text each piece of work leaves in the context once answered. */
+interface Work {
+	start(session: AgentSession): MockResponse;
+	results: Readonly<Record<string, string>>;
+}
+
+/** A job the session ran, as it stood when the provider was last called. */
+interface JobSeen {
+	type: AsyncJobType;
+	endsOnItsOwn: boolean;
+}
 
 /** How a job ended: on its own, or stopped when the run disposed its session. */
 type Outcome = "finished" | "stopped";
@@ -50,8 +66,67 @@ function resultOf(type: AsyncJobType): string {
 	return `JOB-RESULT-${type}`;
 }
 
-function contextText(context: Context): string {
-	return JSON.stringify(context.messages);
+/** One job of each kind in `types`, registered the way the tool that owns the kind registers it. */
+function jobsOfKinds(types: readonly AsyncJobType[]): {
+	work: Work;
+	outcomes: () => Promise<Partial<Record<AsyncJobType, Outcome>>>;
+} {
+	const outcomes: Partial<Record<AsyncJobType, Outcome>> = {};
+	const ended: Promise<unknown>[] = [];
+	const work: Work = {
+		start: session => {
+			const manager = session.asyncJobManager;
+			if (!manager) throw new Error("Expected a top-level session to own a job manager");
+			for (const type of types) {
+				manager.register(
+					type,
+					`${type} started by the turn`,
+					({ signal }) => {
+						const body = (async () => {
+							try {
+								// A launched process runs until it is stopped; the others end on their own.
+								await sleep(type === "launch" ? RUN_BOUND_MS * 10 : JOB_MS, undefined, { signal });
+							} catch (error) {
+								outcomes[type] = "stopped";
+								throw error;
+							}
+							outcomes[type] = "finished";
+							return resultOf(type);
+						})();
+						ended.push(body.catch(() => undefined));
+						return body;
+					},
+					// The owner a tool registers its job under (bash.ts, launch-exit-watch.ts).
+					{ ownerId: session.getAgentId() },
+				);
+			}
+			return { content: ["Started."] };
+		},
+		results: Object.fromEntries(types.map(type => [type, resultOf(type)])),
+	};
+	return {
+		work,
+		outcomes: async () => {
+			await Promise.all(ended);
+			return outcomes;
+		},
+	};
+}
+
+/** A command the real `bash` tool runs in the background, after `delaySec`, under `timeout`. */
+function backgroundCommand(delaySec: number, timeout: number): Work {
+	return {
+		start: () => ({
+			content: [
+				{
+					type: "toolCall",
+					name: "bash",
+					arguments: { command: `sleep ${delaySec}; ${COMMAND}`, async: true, timeout },
+				},
+			],
+		}),
+		results: { bash: COMMAND_OUTPUT },
+	};
 }
 
 describe("a print run waits for the work it started", () => {
@@ -88,11 +163,11 @@ describe("a print run waits for the work it started", () => {
 	});
 
 	/**
-	 * Run `-p` on a top-level session whose first turn starts one job of each kind in `types` and
-	 * answers `Started.`, and whose later turns answer with the job results the context holds by
-	 * then. Resolves once the run has returned and every job has ended, with how each one ended.
+	 * Run `-p` on a top-level session whose first turn does `work.start`, and whose later turns
+	 * answer `Saw <names>.` with the work whose results the context holds by then. Resolves once the
+	 * run has returned, with every job the session ran.
 	 */
-	async function printRun(types: readonly AsyncJobType[]): Promise<Partial<Record<AsyncJobType, Outcome>>> {
+	async function printRun(work: Work): Promise<JobSeen[]> {
 		tempDir = TempDir.createSync("@veyyon-print-settle-");
 		const cwd = tempDir.join("project");
 		const agentDir = tempDir.join("agent");
@@ -101,44 +176,24 @@ describe("a print run waits for the work it started", () => {
 		authStorage.setRuntimeApiKey("mock", "mock-key");
 		registerMockApi(MOCK_API_SOURCE);
 
-		const outcomes: Partial<Record<AsyncJobType, Outcome>> = {};
-		const ended: Promise<unknown>[] = [];
-		const startJob = (owner: AgentSession, type: AsyncJobType): void => {
-			const manager = owner.asyncJobManager;
-			if (!manager) throw new Error("Expected a top-level session to own a job manager");
-			manager.register(
-				type,
-				`${type} started by the turn`,
-				({ signal }) => {
-					const body = (async () => {
-						try {
-							// A launched process runs until it is stopped; the others end on their own.
-							await sleep(type === "launch" ? RUN_BOUND_MS * 10 : JOB_MS, undefined, { signal });
-						} catch (error) {
-							outcomes[type] = "stopped";
-							throw error;
-						}
-						outcomes[type] = "finished";
-						return resultOf(type);
-					})();
-					ended.push(body.catch(() => undefined));
-					return body;
-				},
-				// The owner a tool registers its job under (bash.ts, launch-exit-watch.ts).
-				{ ownerId: owner.getAgentId() },
-			);
+		const jobs = new Map<string, JobSeen>();
+		const noteJobs = (): void => {
+			for (const job of session?.asyncJobManager?.getAllJobs() ?? []) {
+				jobs.set(job.id, { type: job.type, endsOnItsOwn: job.endsOnItsOwn });
+			}
 		};
-
-		let startedJobs = false;
+		let started = false;
 		const model = createMockModel({
 			handler: context => {
-				if (!startedJobs && session) {
-					startedJobs = true;
-					for (const type of types) startJob(session, type);
-					return { content: ["Started."] };
+				noteJobs();
+				if (!started && session) {
+					started = true;
+					const reply = work.start(session);
+					noteJobs();
+					return reply;
 				}
-				const text = contextText(context);
-				const seen = types.filter(type => text.includes(resultOf(type)));
+				const text = JSON.stringify(context.messages);
+				const seen = Object.keys(work.results).filter(name => text.includes(work.results[name]));
 				return { content: [`Saw ${seen.join(",") || "nothing"}.`] };
 			},
 		});
@@ -148,7 +203,11 @@ describe("a print run waits for the work it started", () => {
 			authStorage,
 			modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
 			sessionManager: SessionManager.inMemory(cwd),
-			settings: Settings.isolated({ "async.enabled": true, "compaction.enabled": false }),
+			settings: Settings.isolated({
+				"async.enabled": true,
+				"compaction.enabled": false,
+				"tools.approvalMode": "yolo",
+			}),
 			model,
 			disableExtensionDiscovery: true,
 			skills: [],
@@ -166,8 +225,7 @@ describe("a print run waits for the work it started", () => {
 			RUN_BOUND_MS,
 			"the print run did not return",
 		);
-		await Promise.all(ended);
-		return outcomes;
+		return [...jobs.values()];
 	}
 
 	it("pins a decision for every kind of job", () => {
@@ -179,7 +237,9 @@ describe("a print run waits for the work it started", () => {
 			it(
 				`answers with a ${type} job's result before it exits`,
 				async () => {
-					expect(await printRun([type])).toEqual({ [type]: "finished" });
+					const run = jobsOfKinds([type]);
+					await printRun(run.work);
+					expect(await run.outcomes()).toEqual({ [type]: "finished" });
 					expect(stdout).toBe(`Saw ${type}.\n`);
 					expect(exitCodes).toEqual([]);
 				},
@@ -189,7 +249,9 @@ describe("a print run waits for the work it started", () => {
 			it(
 				`exits while a ${type} job still runs, and stops it`,
 				async () => {
-					expect(await printRun([type])).toEqual({ [type]: "stopped" });
+					const run = jobsOfKinds([type]);
+					await printRun(run.work);
+					expect(await run.outcomes()).toEqual({ [type]: "stopped" });
 					expect(stdout).toBe("Started.\n");
 					expect(exitCodes).toEqual([]);
 				},
@@ -202,11 +264,34 @@ describe("a print run waits for the work it started", () => {
 		"waits for the jobs that end and exits past the ones that do not",
 		async () => {
 			const types = Object.keys(JOB_ENDS_ON_ITS_OWN) as AsyncJobType[];
-			const expected = Object.fromEntries(
-				types.map(type => [type, A_PRINT_RUN_WAITS_FOR[type] ? "finished" : "stopped"]),
+			const run = jobsOfKinds(types);
+			await printRun(run.work);
+			expect(await run.outcomes()).toEqual(
+				Object.fromEntries(types.map(type => [type, A_PRINT_RUN_WAITS_FOR[type] ? "finished" : "stopped"])),
 			);
-			expect(await printRun(types)).toEqual(expected);
 			expect(stdout).toBe(`Saw ${types.filter(type => A_PRINT_RUN_WAITS_FOR[type]).join(",")}.\n`);
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	it(
+		"answers with a command the bash tool ran in the background under a timeout",
+		async () => {
+			expect(await printRun(backgroundCommand(0.1, 5))).toEqual([{ type: "bash", endsOnItsOwn: true }]);
+			expect(stdout).toBe("Saw bash.\n");
+			expect(exitCodes).toEqual([]);
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	it(
+		"exits past a command the bash tool ran in the background with no timeout",
+		async () => {
+			// The command would print only after the run's bound, so an answer naming it cannot exist.
+			const delaySec = (RUN_BOUND_MS / 1000) * 6;
+			expect(await printRun(backgroundCommand(delaySec, 0))).toEqual([{ type: "bash", endsOnItsOwn: false }]);
+			expect(stdout).toBe("Saw nothing.\n");
+			expect(exitCodes).toEqual([]);
 		},
 		TEST_TIMEOUT_MS,
 	);

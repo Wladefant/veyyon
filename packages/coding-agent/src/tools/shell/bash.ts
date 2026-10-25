@@ -810,6 +810,8 @@ export class BashTool
 			},
 			{
 				ownerId: this.session.getAgentId?.() ?? undefined,
+				// A command given no timeout runs until it is stopped, so a run does not wait for it.
+				endsOnItsOwn: options.timeoutMs !== undefined,
 				onProgress: async text => {
 					latestText = text;
 					if (!forwardUpdates) return;

@@ -42,7 +42,7 @@
 - The date and working directory stay in the model's context after a compaction or a failed prompt, and a compaction no longer spends a summary request on them.
 - A recalled memory block that a compaction, a rewind or an abandoned prompt took out of the context is sent again at the next prompt instead of being treated as delivered.
 - A failed command's exit notice in a bash, eval or ssh tool result follows the output after one blank line instead of two.
-- A `-p` run waits for the agents it spawned and the commands it ran in the background, and prints its answer to their results, instead of exiting after the turn that started them and stopping them unanswered.
+- A `-p` run waits for the agents it spawned and the commands it ran in the background with a timeout, and prints its answer to their results, instead of exiting after the turn that started them and stopping them unanswered.
 
 ## [1.5.9] - 2026-10-22
 

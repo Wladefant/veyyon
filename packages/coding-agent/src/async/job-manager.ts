@@ -38,10 +38,11 @@ interface PollEscalationState {
 export type AsyncJobType = "bash" | "task" | "launch";
 
 /**
- * Whether a job of each kind ends without being stopped. A backgrounded command runs under its
- * timeout and a spawned agent runs until it yields; a launched process runs until something stops
- * it, so the watch on its exit can last as long as the process. A run that waits for its background
- * work before exiting waits for the first two and never for the third.
+ * Whether a job of each kind ends without being stopped, unless its registration states otherwise.
+ * A backgrounded command runs under its timeout and a spawned agent runs until it yields; a launched
+ * process runs until something stops it, so the watch on its exit can last as long as the process.
+ * A command given no timeout is registered as running until stopped. A run that waits for its
+ * background work before exiting waits only for jobs that end on their own.
  */
 export const JOB_ENDS_ON_ITS_OWN: Readonly<Record<AsyncJobType, boolean>> = { bash: true, task: true, launch: false };
 
@@ -53,6 +54,8 @@ export interface AsyncJob {
 	label: string;
 	abortController: AbortController;
 	promise: Promise<void>;
+	/** Whether the job ends without being stopped; see {@link JOB_ENDS_ON_ITS_OWN}. */
+	endsOnItsOwn: boolean;
 	resultText?: string;
 	errorText?: string;
 	/**
@@ -113,6 +116,8 @@ export interface AsyncJobRegisterOptions {
 	agentId?: string;
 	/** Tool call that started this job; see {@link AsyncJob.toolCallId}. */
 	toolCallId?: string;
+	/** Whether the job ends without being stopped; defaults to {@link JOB_ENDS_ON_ITS_OWN} for its kind. */
+	endsOnItsOwn?: boolean;
 	onProgress?: (text: string, details?: Record<string, unknown>) => void | Promise<void>;
 	/** Register the job in queued state; see {@link AsyncJob.queued}. */
 	queued?: boolean;
@@ -217,6 +222,7 @@ export class AsyncJobManager {
 			label,
 			abortController,
 			promise: Promise.resolve(),
+			endsOnItsOwn: options?.endsOnItsOwn ?? JOB_ENDS_ON_ITS_OWN[type],
 			ownerId: options?.ownerId,
 			agentId: options?.agentId,
 			toolCallId: options?.toolCallId,

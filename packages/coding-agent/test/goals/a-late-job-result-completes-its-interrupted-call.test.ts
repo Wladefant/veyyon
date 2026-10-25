@@ -163,6 +163,7 @@ describe("a late job result completes its interrupted call", () => {
 			label: "bash: early",
 			abortController: new AbortController(),
 			promise: Promise.resolve(),
+			endsOnItsOwn: true,
 			toolCallId: CALL_ID,
 		});
 		session.yieldQueue.register<{ jobId: string }>("async-result", {
@@ -183,6 +184,7 @@ describe("a late job result completes its interrupted call", () => {
 			label: "bash: late",
 			abortController: new AbortController(),
 			promise: Promise.resolve(),
+			endsOnItsOwn: true,
 			toolCallId: CALL_ID,
 		});
 
@@ -219,6 +221,7 @@ describe("a late job result completes its interrupted call", () => {
 			label: "bash: gone",
 			abortController: new AbortController(),
 			promise: Promise.resolve(),
+			endsOnItsOwn: true,
 			toolCallId: "call_that_left_the_branch",
 		});
 
@@ -253,6 +256,7 @@ describe("a late job result completes its interrupted call", () => {
 			label: "bash: failing",
 			abortController: new AbortController(),
 			promise: Promise.resolve(),
+			endsOnItsOwn: true,
 			toolCallId: CALL_ID,
 		});
 
@@ -320,6 +324,7 @@ describe("a late job result completes its interrupted call", () => {
 			label: "task: 2",
 			abortController: new AbortController(),
 			promise: Promise.resolve(),
+			endsOnItsOwn: true,
 			toolCallId: CALL_2,
 		});
 		expect(outcome2).toBe("attached");
@@ -339,6 +344,7 @@ describe("a late job result completes its interrupted call", () => {
 			label: "task: 1",
 			abortController: new AbortController(),
 			promise: Promise.resolve(),
+			endsOnItsOwn: true,
 			toolCallId: CALL_1,
 		});
 		expect(outcome1).toBe("attached");
@@ -355,6 +361,7 @@ describe("a late job result completes its interrupted call", () => {
 			label: "bash: once",
 			abortController: new AbortController(),
 			promise: Promise.resolve(),
+			endsOnItsOwn: true,
 			toolCallId: CALL_ID,
 		});
 		expect(outcome1).toBe("attached");
@@ -377,6 +384,7 @@ describe("a late job result completes its interrupted call", () => {
 			label: "bash: once",
 			abortController: new AbortController(),
 			promise: Promise.resolve(),
+			endsOnItsOwn: true,
 			toolCallId: CALL_ID,
 		});
 		expect(outcome2).toBe("queued");
@@ -433,6 +441,7 @@ describe("a late job result completes its interrupted call", () => {
 			label: "bash: compacted away",
 			abortController: new AbortController(),
 			promise: Promise.resolve(),
+			endsOnItsOwn: true,
 			toolCallId: CALL_ID,
 		});
 
@@ -461,6 +470,7 @@ describe("a late job result completes its interrupted call", () => {
 			label: "bash: kept in tail",
 			abortController: new AbortController(),
 			promise: Promise.resolve(),
+			endsOnItsOwn: true,
 			toolCallId: CALL_ID,
 		});
 
