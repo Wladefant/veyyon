@@ -176,26 +176,38 @@ describe("a print run waits for the work it started", () => {
 
 	for (const type of Object.keys(JOB_ENDS_ON_ITS_OWN) as AsyncJobType[]) {
 		if (A_PRINT_RUN_WAITS_FOR[type]) {
-			it(`answers with a ${type} job's result before it exits`, async () => {
-				expect(await printRun([type])).toEqual({ [type]: "finished" });
-				expect(stdout).toBe(`Saw ${type}.\n`);
-				expect(exitCodes).toEqual([]);
-			}, TEST_TIMEOUT_MS);
+			it(
+				`answers with a ${type} job's result before it exits`,
+				async () => {
+					expect(await printRun([type])).toEqual({ [type]: "finished" });
+					expect(stdout).toBe(`Saw ${type}.\n`);
+					expect(exitCodes).toEqual([]);
+				},
+				TEST_TIMEOUT_MS,
+			);
 		} else {
-			it(`exits while a ${type} job still runs, and stops it`, async () => {
-				expect(await printRun([type])).toEqual({ [type]: "stopped" });
-				expect(stdout).toBe("Started.\n");
-				expect(exitCodes).toEqual([]);
-			}, TEST_TIMEOUT_MS);
+			it(
+				`exits while a ${type} job still runs, and stops it`,
+				async () => {
+					expect(await printRun([type])).toEqual({ [type]: "stopped" });
+					expect(stdout).toBe("Started.\n");
+					expect(exitCodes).toEqual([]);
+				},
+				TEST_TIMEOUT_MS,
+			);
 		}
 	}
 
-	it("waits for the jobs that end and exits past the ones that do not", async () => {
-		const types = Object.keys(JOB_ENDS_ON_ITS_OWN) as AsyncJobType[];
-		const expected = Object.fromEntries(
-			types.map(type => [type, A_PRINT_RUN_WAITS_FOR[type] ? "finished" : "stopped"]),
-		);
-		expect(await printRun(types)).toEqual(expected);
-		expect(stdout).toBe(`Saw ${types.filter(type => A_PRINT_RUN_WAITS_FOR[type]).join(",")}.\n`);
-	}, TEST_TIMEOUT_MS);
+	it(
+		"waits for the jobs that end and exits past the ones that do not",
+		async () => {
+			const types = Object.keys(JOB_ENDS_ON_ITS_OWN) as AsyncJobType[];
+			const expected = Object.fromEntries(
+				types.map(type => [type, A_PRINT_RUN_WAITS_FOR[type] ? "finished" : "stopped"]),
+			);
+			expect(await printRun(types)).toEqual(expected);
+			expect(stdout).toBe(`Saw ${types.filter(type => A_PRINT_RUN_WAITS_FOR[type]).join(",")}.\n`);
+		},
+		TEST_TIMEOUT_MS,
+	);
 });
