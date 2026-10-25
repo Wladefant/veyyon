@@ -4,9 +4,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- `nonRegularKind` in `@veyyon/utils/atomic-write` returns the phrase a refusal uses for an entry that is not a regular file, such as `a named pipe (FIFO)`.
+
 ### Fixed
 
 - An update interrupted by closing the terminal, Ctrl+C, quitting the session or a fatal error during its download or checksum check removes its partial `<binary>.<id>.new` download instead of leaving it beside the binary until uninstall.
+- `read` of a named pipe, socket or device, directly or through a symbolic link, selector, path list, suffix match or archive, SQLite or PDF member path, fails at once naming the entry's kind instead of blocking the turn until a writer appears or failing with a bare `ENXIO`.
+- A prompt that `@`-mentions a named pipe, socket or device no longer hangs on submit; the entry is not attached.
 
 ## [1.5.10] - 2026-10-25
 

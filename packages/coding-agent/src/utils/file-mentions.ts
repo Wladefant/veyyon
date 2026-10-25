@@ -219,12 +219,15 @@ export async function generateFileMentionMessages(
 		}
 		const absolutePath = resolveReadPath(resolvedPath, cwd);
 		try {
-			const stat = await Bun.file(absolutePath).stat();
+			const stat = await fs.stat(absolutePath);
 			if (stat.isDirectory()) {
 				const { output, lineCount } = await buildDirectoryListing(absolutePath, maxBytes);
 				files.push({ path: resolvedPath, content: output, lineCount });
 				continue;
 			}
+			// A pipe, socket or device is not a file to attach, and opening one can hold the prompt until a
+			// writer appears. It is skipped like a path this session cannot read.
+			if (!stat.isFile()) continue;
 
 			const imageMetadata = await readImageMetadata(absolutePath);
 			const mimeType = imageMetadata?.mimeType;
