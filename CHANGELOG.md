@@ -23,6 +23,7 @@
 - A truncated `eval` result shows the first and last lines of its output within the inline budget, as `bash` does, instead of only its last 32.5KB.
 - Streamed tool output whose chunk boundary leaves the head window less room than the next character keeps its order, instead of placing a later chunk in the head ahead of output already kept in the tail.
 - A tool result whose output ends in a line break puts one blank line between its last line and its truncation or limit notice instead of two.
+- `defs()` in a Python `eval` cell shows a list, tuple, dict or set as its type and length, such as `list[1000000]`, and cuts a string before its repr, instead of building each value's whole repr to show 60 characters of it, which took 0.5s over 170MB of values and timed out on larger kernels.
 
 ## [1.5.10] - 2026-10-25
 

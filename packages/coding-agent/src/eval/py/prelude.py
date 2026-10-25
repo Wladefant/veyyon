@@ -361,12 +361,18 @@ if "__veyyon_prelude_loaded__" not in globals():
     kv = _Kv()
 
     def _format_def(value) -> str:
+        """A name's type and a preview of at most 60 characters, built without reading the whole
+        value: a container states its length instead of its items, and a string is cut before its
+        repr, as the JS defs() does."""
         try:
             if callable(value):
                 name = getattr(value, "__qualname__", None) or type(value).__name__
                 return f"function {name}"
-            text = repr(value)
-            return f"{type(value).__name__} {text[:57] + '...' if len(text) > 60 else text}"
+            kind = type(value).__name__
+            if isinstance(value, (list, tuple, dict, set, frozenset)):
+                return f"{kind}[{len(value)}]"
+            text = repr(value[:61]) if isinstance(value, (str, bytes, bytearray)) else repr(value)
+            return f"{kind} {text[:57] + '...' if len(text) > 60 else text}"
         except Exception:
             return type(value).__name__
 

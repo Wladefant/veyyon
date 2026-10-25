@@ -575,6 +575,46 @@ describeRequiringTool("python3", "the store across languages", () => {
 		expect(res.output).toContain("bad: BadRepr");
 	});
 
+	/**
+	 * defs() printed each value's repr cut to 60 characters, but built the whole repr first, so a session holding
+	 * a few large strings, or a dict that held them, spent seconds to minutes in a call that shows 60 characters
+	 * of each. The spies record any repr of a whole container or string; a container states its length instead.
+	 */
+	it("Python defs states a container's length and cuts a string before its repr", async () => {
+		using tempDir = TempDir.createSync("@veyyon-kernel-defs-");
+		const artifacts = path.join(tempDir.path(), "artifacts");
+		const sessionId = `kv-py-defs-bounded:${crypto.randomUUID()}`;
+
+		const spies = ["list", "tuple", "dict", "set", "frozenset", "str", "bytes"]
+			.map(
+				base =>
+					`class Spy_${base}(${base}):\n    def __repr__(self):\n        seen.append('${base}')\n        return '?'\n`,
+			)
+			.join("");
+		const res = await executePython(
+			`seen = []\n${spies}` +
+				"rows = Spy_list(range(3))\npair = Spy_tuple((1, 2))\ntable = Spy_dict(a=1)\nmembers = Spy_set({1})\n" +
+				"frozen = Spy_frozenset({1, 2})\ntext = Spy_str('y' * 100)\nblob = Spy_bytes(b'z' * 100)\n" +
+				"listed = defs()\n" +
+				"print('\\n'.join(entry for entry in listed if not entry.startswith('Spy_')))\n" +
+				"print('seen', seen)",
+			{ cwd: tempDir.path(), sessionId, kernelOwnerId: OWNER, artifactsDir: artifacts },
+		);
+		expect(res.exitCode).toBe(0);
+		expect(res.output.split("\n")).toEqual([
+			`blob: Spy_bytes b'${"z".repeat(55)}...`,
+			"frozen: Spy_frozenset[2]",
+			"members: Spy_set[1]",
+			"pair: Spy_tuple[2]",
+			"rows: Spy_list[3]",
+			"seen: list[0]",
+			"table: Spy_dict[1]",
+			`text: Spy_str '${"y".repeat(56)}...`,
+			"seen []",
+			"",
+		]);
+	});
+
 	it("Python kv validates keys and sizes matching JS contracts", async () => {
 		using tempDir = TempDir.createSync("@veyyon-kernel-defs-");
 		const artifacts = path.join(tempDir.path(), "artifacts");

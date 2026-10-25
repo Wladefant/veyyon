@@ -184,7 +184,7 @@ kv.delete("cursor_handle")
 
 `kv.get(name, default=None)` accepts a Python default value. JavaScript returns `undefined` for a missing key. Keys contain 1–256 characters without `/`, `\`, or NUL. One encoded value is limited to 256 KiB and the store is limited to 4 MiB. Concurrent JavaScript and Python writes preserve updates to different keys.
 
-`defs()` returns up to 200 sorted names defined by user cells with a short value shape. Prelude and runtime names are omitted. Use it to check retained kernel state before redefining a helper.
+`defs()` returns up to 200 sorted names defined by user cells with a short value shape: `function <name>` for a callable, the type and length for a list, tuple, dict or set (`list[1000000]`), and the type and at most 60 characters of the repr for any other value. Prelude and runtime names are omitted. Use it to check retained kernel state before redefining a helper.
 
 ## Execution flow and cancellation/timeout
 
