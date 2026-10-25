@@ -42,7 +42,7 @@ jobs:
           echo "RELATED_TESTS=$RUNNER_TEMP/ovh-related-tests" >> "$GITHUB_ENV"
           echo "RECEIPT=$RUNNER_TEMP/ovh-receipt.txt" >> "$GITHUB_ENV"
           echo "TOUCHED_PACKAGES=$RUNNER_TEMP/ovh-touched-packages" >> "$GITHUB_ENV"
-          git diff --name-only -z "$base" HEAD | BASE="$base" node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>{const paths=s.split('\\0').filter(Boolean);const code=paths.some(p=>/\\.(?:[cm]?js|[cm]?ts|tsx|jsx|rs)$/.test(p)||/(?:^|\\/)Cargo\\.(?:toml|lock)$/.test(p));require('fs').appendFileSync(process.env.GITHUB_OUTPUT,'has_code='+code+'\\n');require('fs').writeFileSync(process.env.RECEIPT,'sha='+require('child_process').execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim()+'\\nrunner.name='+process.env.RUNNER_NAME+'\\nmerge-base='+process.env.BASE+'\\nchanged-paths='+paths.length+'\\nselected-tests=0\\npass=0\\nfail=0\\nran=0\\n');if(!code){require('fs').writeFileSync(process.env.RELATED_TESTS,'');console.log('no-related-tests: 0 selected, 0 passed, 0 failed')}})"
+          git diff --name-only -z "$base" HEAD | BASE="$base" node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>{const paths=s.split('\\0').filter(Boolean);const code=paths.length>0;require('fs').appendFileSync(process.env.GITHUB_OUTPUT,'has_code='+code+'\\n');require('fs').writeFileSync(process.env.RECEIPT,'sha='+require('child_process').execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim()+'\\nrunner.name='+process.env.RUNNER_NAME+'\\nmerge-base='+process.env.BASE+'\\nchanged-paths='+paths.length+'\\nselected-tests=0\\npass=0\\nfail=0\\nran=0\\n');if(!code){require('fs').writeFileSync(process.env.RELATED_TESTS,'');console.log('no-related-tests: 0 selected, 0 passed, 0 failed')}})"
       - name: Install dependencies and generate code
         id: install
         if: steps.changed.outputs.has_code == 'true'
@@ -57,59 +57,7 @@ jobs:
           RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
         run: |
           set -euo pipefail
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs';
-          import path from 'node:path';
-          import { execFileSync } from 'node:child_process';
-          import { ts } from 'ts-morph';
-          const root = process.cwd();
-          const changed = execFileSync('git', ['diff', '--name-only', '-z', 'origin/main...HEAD'], {encoding:'utf8'}).split('\0').filter(Boolean);
-          const code = changed.filter(p => /\.(?:[cm]?js|[cm]?ts|tsx|jsx|rs)$/.test(p));
-          const roots = code.filter(p => /\.(?:[cm]?js|[cm]?ts|tsx|jsx)$/.test(p));
-          const tracked = execFileSync('git', ['ls-files', '-z'], {encoding:'utf8'}).split('\0').filter(p => /\.(?:[cm]?js|[cm]?ts|tsx|jsx)$/.test(p) && fs.existsSync(p));
-          const tests = new Set(tracked.filter(p => /(?:\.test|\.spec)\.[cm]?[jt]sx?$/.test(p)));
-          const configs = new Map();
-          function optionsFor(file) {
-            let dir = path.dirname(path.resolve(root,file));
-            while (dir.startsWith(root)) {
-              const cfg = path.join(dir,'tsconfig.json');
-              if (fs.existsSync(cfg)) {
-                if (!configs.has(cfg)) { const r=ts.readConfigFile(cfg,ts.sys.readFile); configs.set(cfg,ts.parseJsonConfigFileContent(r.config,ts.sys,dir).options); }
-                return configs.get(cfg);
-              }
-              const up=path.dirname(dir); if(up===dir) break; dir=up;
-            }
-            return {};
-          }
-          const pkgs=new Map();
-          for(const p of execFileSync('git',['ls-files','-z'],{encoding:'utf8'}).split('\0').filter(p=>p.endsWith('package.json'))) { try { const j=JSON.parse(fs.readFileSync(p,'utf8')); if(j.name) pkgs.set(j.name,path.dirname(p)); } catch {} }
-          function resolve(spec, importer) {
-            const hit=ts.resolveModuleName(spec,path.resolve(root,importer),optionsFor(importer),ts.sys).resolvedModule?.resolvedFileName;
-            if(hit) return path.relative(root,hit).replaceAll(path.sep,'/');
-            for(const [name,dir] of pkgs) if(spec===name||spec.startsWith(name+'/')) { const sub=spec.slice(name.length).replace(/^\//,''); for(const base of [path.join(root,dir,sub),path.join(root,dir,'src',sub)]) for(const ext of ['', '.ts','.tsx','.js','.jsx','/index.ts','/index.js']) if(fs.existsSync(base+ext)&&fs.statSync(base+ext).isFile()) return path.relative(root,base+ext).replaceAll(path.sep,'/'); }
-            if(spec.startsWith('.')) { let base=path.resolve(root,path.dirname(importer),spec); if(/\.js$/.test(base)&&fs.existsSync(base.slice(0,-3)+'.ts')) base=base.slice(0,-3)+'.ts'; for(const ext of ['', '.ts','.tsx','.js','.jsx','/index.ts','/index.js']) if(fs.existsSync(base+ext)&&fs.statSync(base+ext).isFile()) return path.relative(root,base+ext).replaceAll(path.sep,'/'); }
-            return null;
-          }
-          const reverse=new Map();
-          for(const file of tracked) { const info=ts.preProcessFile(fs.readFileSync(file,'utf8'),true,true); for(const item of [...info.importedFiles,...info.referencedFiles,...info.typeReferenceDirectives]) { const dep=resolve(item.fileName,file); if(dep) { if(!reverse.has(dep)) reverse.set(dep,new Set()); reverse.get(dep).add(file); } } }
-          const changedTests=new Set([...tests].filter(p=>changed.includes(p)));
-          const directImporters=new Set(changedTests);
-          for(const file of roots) for(const importer of reverse.get(file)??[]) if(tests.has(importer)) directImporters.add(importer);
-          const hubTouched=roots.some(file=>(reverse.get(file)?.size??0)>20);
-          const touchedPackageDirs=[...new Set([...pkgs.values()].filter(dir=>changed.some(file=>file===dir||file.startsWith(dir+'/'))))];
-          // More than 20 changed paths or a module with over 20 direct importers uses touched-package coverage.
-          const broad=changed.length>20||hubTouched;
-          const selected=[...(broad?new Set([...tests].filter(test=>touchedPackageDirs.some(dir=>test.startsWith(dir+'/')))):directImporters)].sort();
-          fs.writeFileSync(process.env.RELATED_TESTS,selected.join('\n')+(selected.length?'\n':''));
-          const touchedPackageNames=[...pkgs].filter(([,dir])=>touchedPackageDirs.includes(dir)).map(([name])=>name).sort();
-          fs.writeFileSync(process.env.TOUCHED_PACKAGES,touchedPackageNames.join('\n')+(touchedPackageNames.length?'\n':''));
-          const rustChanged=changed.some(p=>/\.rs$/.test(p)||/(?:^|\/)Cargo\.(?:toml|lock)$/.test(p));
-          fs.appendFileSync(process.env.GITHUB_OUTPUT,`ts_changed=${code.some(p=>/\.(?:[cm]?ts|tsx)$/.test(p))}\nrust_changed=${rustChanged}\n`);
-          fs.writeFileSync(process.env.RECEIPT,fs.readFileSync(process.env.RECEIPT,'utf8').replace(/^selected-tests=0$/m,`selected-tests=${selected.length}`));
-          console.log(`Changed files:\n${changed.map(p=>'  '+p).join('\n')}`);
-          console.log(`Selection mode: ${broad?'touched-package':'direct-importer'}${hubTouched?' (hub touched)':''}`);
-          console.log(`Selected related tests (${selected.length}):\n${selected.join('\n')||'(none)'}`);
-          NODE
+          node scripts/ovh-related-tests.mjs --base origin/main --head HEAD
       - name: Prepare bwrap runtime
         id: bwrap
         if: steps.install.outcome == 'success'
