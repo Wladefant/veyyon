@@ -210,6 +210,10 @@ describe("a deliberate session abort", () => {
 		session = created;
 		const retryStarts: Extract<AgentSessionEvent, { type: "auto_retry_start" }>[] = [];
 		let aborting: Promise<void> | undefined;
+		// Settles when the tool-use reply's `message_end` issues the abort, and fails when the run
+		// ends without one. A fixed count of event-loop ticks expired before `message_end` on a loaded
+		// runner, so the wait is on the event itself, bounded by the run's own end.
+		const abortIssued = Promise.withResolvers<void>();
 		created.subscribe(event => {
 			if (event.type === "auto_retry_start") retryStarts.push(event);
 			// The run monitor's budget stop: issued from inside the tool-use reply's `message_end`
@@ -221,14 +225,15 @@ describe("a deliberate session abort", () => {
 				event.message.stopReason === "toolUse"
 			) {
 				aborting ??= created.abort(abortOptions);
+				abortIssued.resolve();
+			}
+			if (phase === "at the end of a tool-use reply" && event.type === "agent_end" && !aborting) {
+				abortIssued.reject(new Error("The tool-use reply never reached its message_end"));
 			}
 		});
 		const abort = async (): Promise<void> => {
 			if (phase === "at the end of a tool-use reply") {
-				for (let tick = 0; tick < 50 && !aborting; tick++) {
-					await new Promise<void>(resolve => setImmediate(resolve));
-				}
-				if (!aborting) throw new Error("The tool-use reply never reached its message_end");
+				await abortIssued.promise;
 				await aborting;
 				return;
 			}
