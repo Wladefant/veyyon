@@ -6,7 +6,11 @@
 
 ### Added
 
-- `nonRegularKind` in `@veyyon/utils/atomic-write` returns the phrase a refusal uses for an entry that is not a regular file, such as `a named pipe (FIFO)`.
+- `nonRegularKind` in `@veyyon/utils/file-kind` returns the phrase a refusal uses for an entry that is not a regular file, such as `a named pipe (FIFO)`.
+
+### Changed
+
+- `read` and the CLI `@` attachment import the entry-kind phrase from `@veyyon/utils/file-kind`; no user-facing change.
 
 ### Fixed
 

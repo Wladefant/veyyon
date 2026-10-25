@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `read` and the CLI `@` attachment import the entry-kind phrase from `@veyyon/utils/file-kind`; no user-facing change.
+
 ### Fixed
 
 - `veyyon @<path>` naming a directory, named pipe, socket or device exits with `Cannot attach <path>: it is <kind>` instead of waiting forever on a pipe with no writer or failing with a bare `EISDIR`, `ENXIO` or `ESPIPE`.
