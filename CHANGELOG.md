@@ -22,6 +22,7 @@
 - A `bash` result larger than the inline budget is cut once and references one artifact holding the full output, instead of being cut a second time and naming a second artifact.
 - A truncated `eval` result shows the first and last lines of its output within the inline budget, as `bash` does, instead of only its last 32.5KB.
 - Streamed tool output whose chunk boundary leaves the head window less room than the next character keeps its order, instead of placing a later chunk in the head ahead of output already kept in the tail.
+- A tool result whose output ends in a line break puts one blank line between its last line and its truncation or limit notice instead of two.
 
 ## [1.5.10] - 2026-10-25
 

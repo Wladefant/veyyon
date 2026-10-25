@@ -14,10 +14,13 @@
  *   - a head window left with room for less than the next character stayed open, so a later, smaller chunk
  *     filled it and was shown ahead of output that had already gone to the tail.
  *
+ * The tool wrapper that appends the notice, which every tool result passes, joined the notice's own blank line to
+ * the output's final line break, so bash's output, which ends in one, read as two blank lines above the notice.
+ *
  * The class closed: for any stream, chunking and window, every line the body shows is a whole line of the stream
  * at the number the notice states, the counts reconcile with the body and the stream, and the body fits the window
  * it was sized for; the windows fit the budget with room for the marker; bash and eval return that body under one
- * notice and one artifact.
+ * notice and one artifact; and any tool's notice follows its last line after one blank line.
  *
  * Not caught: eval trims the whitespace around a cell's stdout and folds test bookkeeping lines, so its ranges
  * describe the stream rather than the trimmed text; a window holding no whole line shows a fragment of the one line
@@ -27,6 +30,7 @@
 import { afterAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import type { AgentTool, AgentToolContext, AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { disposeAllVmContexts } from "@veyyon/coding-agent/eval/js/context-manager";
 import {
@@ -42,6 +46,7 @@ import {
 	resolveOutputSinkWindow,
 	wrapToolWithMetaNotice,
 } from "@veyyon/coding-agent/tools/core/output-meta";
+import { formatOutputNotice, type OutputMeta, stripOutputNotice } from "@veyyon/coding-agent/tools/core/output-notice";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
 import { useIsolatedGlobalSettings } from "./helpers/isolated-global-settings";
@@ -353,8 +358,8 @@ async function expectOneWindowOfNumbers(text: string, budget: number, allocated:
 	expect(shown.slice(0, head)).toEqual(Array.from({ length: head }, (_, i) => String(i + 1)));
 	expect(shown[head]).toMatch(/^\[…[\d,]+ln elided…\]$/);
 	const tail = Array.from({ length: total - first + 1 }, (_, i) => (first + i <= count ? String(first + i) : ""));
-	// The empty last line may be trimmed with the whitespace around the output.
-	expect([tail, tail.slice(0, -1)]).toContainEqual(shown.slice(head + 1));
+	// The stream's final line break ends its last line, and one blank line separates that line from the notice.
+	expect(shown.slice(head + 1)).toEqual(tail.slice(0, -1));
 
 	expect(allocated.map(entry => entry.id)).toEqual([artifactId]);
 	const full = await fs.readFile(allocated[0].path, "utf-8");
@@ -414,4 +419,39 @@ describe("a streaming tool returns one window under one notice", () => {
 		expect(footer?.[1]).toBe(allocated[0]?.id);
 		expect(bytes(text.slice(0, footer?.index))).toBeLessThanOrEqual(inlineBudgetFor(session));
 	}, 30_000);
+});
+
+describe("a tool's notice follows its output after one blank line", () => {
+	const meta: OutputMeta = { limits: { matchLimit: { reached: 100, suggestion: 500 } } };
+	const notice = formatOutputNotice(meta);
+
+	async function wrapped(body: string): Promise<string> {
+		const tool = {
+			name: "probe",
+			description: "probe",
+			parameters: undefined,
+			execute: async (): Promise<AgentToolResult> => ({
+				content: [{ type: "text", text: body }],
+				details: { meta },
+			}),
+		} as unknown as AgentTool;
+		const context = { settings: Settings.isolated({}) } as unknown as AgentToolContext;
+		return textOf(await wrapToolWithMetaNotice(tool).execute("probe", {} as never, undefined, undefined, context));
+	}
+
+	it("treats the output's final line break as the end of its last line, and keeps a blank line the output printed", async () => {
+		const cases: Array<[body: string, text: string, stripped: string]> = [
+			["a\nb\n", `a\nb${notice}`, "a\nb"],
+			["a\nb", `a\nb${notice}`, "a\nb"],
+			["a\nb\n\n", `a\nb\n${notice}`, "a\nb\n"],
+			["\n", notice, ""],
+			["", notice, ""],
+		];
+		for (const [body, text, stripped] of cases) {
+			const result = await wrapped(body);
+			expect({ body, text: result }).toEqual({ body, text });
+			// The renderer strips the notice it draws as its own warning line.
+			expect({ body, stripped: stripOutputNotice(result, meta) }).toEqual({ body, stripped });
+		}
+	});
 });

@@ -391,7 +391,11 @@ function appendOutputNotice(
 	for (let i = result.length - 1; i >= 0; i--) {
 		const item = result[i];
 		if (item.type === "text") {
-			result[i] = { ...item, text: item.text + notice };
+			// The notice opens with the blank line that separates it. A body's final line break ends
+			// its last line and is not a second blank line, as in `appendNotice`; a blank line the
+			// body ends with stays.
+			const body = item.text.endsWith("\n") ? item.text.slice(0, -1) : item.text;
+			result[i] = { ...item, text: body + notice };
 			return result;
 		}
 	}
