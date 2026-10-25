@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.10] - 2026-10-25
+
 ### Changed
 
 - `/login opencode-go` signs in with an OpenCode Console account through its device flow and sends requests to the Go inference endpoint of the organization that holds the subscription, with the organization id in `x-opencode-org-id`; an OpenCode Go API key is the legacy `opencode-go-api-key` login.

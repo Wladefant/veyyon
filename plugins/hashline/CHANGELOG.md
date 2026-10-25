@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.10] - 2026-10-25
+
 ### Fixed
 
 - `InMemorySnapshotStore.record` drops a leading BOM before hashing, so an edit made with the tag a whole-file read printed for a file that opens with a BOM applies instead of being rejected as a file changed between read and edit.

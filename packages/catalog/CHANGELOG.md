@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.10] - 2026-10-25
+
 ### Added
 
 - `codexRoutingHint` in `@veyyon/catalog/wire/codex` builds the `x-codex-routing-hint` value (`model=<model>;tier=<tier>`, or `model=<model>` without a tier) from a Codex Responses request body.

@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.10] - 2026-10-25
+
 ### Breaking Changes
 
 - `ColdEntryPayloads.rebase(identity, open, shift)` drops its `entries` parameter and moves every cold entry read through the current handle onto the new object at once.

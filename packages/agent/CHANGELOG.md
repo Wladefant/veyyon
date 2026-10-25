@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.10] - 2026-10-25
+
 ### Fixed
 
 - When a Cursor turn is cut short by a dropped stream or an abort, the partial-completion ledger reports each exec-channel call whose result arrived as ran instead of "started, no result recorded", and a batch whose every call has its result gets no ledger.

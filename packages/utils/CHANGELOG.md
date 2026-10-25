@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.10] - 2026-10-25
+
 ### Added
 
 - `parseYaml` in `@veyyon/utils/yaml-sync` parses YAML and throws a `SyntaxError` stating the line and column of a syntax error, such as `Nested mappings are not allowed in compact mappings at line 2, column 13`, instead of Bun's `YAML Parse error: Unexpected token`.
