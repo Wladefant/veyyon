@@ -2686,14 +2686,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handlePythonCommand(code, excludeFromContext);
 	}
 
-	async handleMCPCommand(text: string): Promise<void> {
+	async handleMCPCommand(args: string): Promise<void> {
 		const { MCPCommandController } = await import("./controllers/mcp-command-controller");
-		await new MCPCommandController(this).handle(text);
+		await new MCPCommandController(this).handle(args);
 	}
 
-	async handleSSHCommand(text: string): Promise<void> {
+	async handleSSHCommand(args: string): Promise<void> {
 		const { SSHCommandController } = await import("./controllers/ssh-command-controller");
-		await new SSHCommandController(this).handle(text);
+		await new SSHCommandController(this).handle(args);
 	}
 
 	handleCompactCommand(

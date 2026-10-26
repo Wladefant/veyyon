@@ -143,19 +143,19 @@ describe("an MCP command parses arguments across terminal and CLI", () => {
 		it("rejects trailing scope words on terminal surface", async () => {
 			const harness = createTerminalHarness();
 
-			await harness.controller.handle("/mcp smithery-search redis project");
+			await harness.controller.handle("smithery-search redis project");
 			expect(harness.errors).toHaveLength(1);
 			expect(harness.errors[0]).toContain("project is gone:");
 			expect(harness.errors[0]).toContain(MCP_SCOPE_REMOVED_REPLACEMENT);
 
 			harness.errors.length = 0;
-			await harness.controller.handle("/mcp smithery-search redis user");
+			await harness.controller.handle("smithery-search redis user");
 			expect(harness.errors).toHaveLength(1);
 			expect(harness.errors[0]).toContain("user is gone:");
 			expect(harness.errors[0]).toContain(MCP_SCOPE_REMOVED_REPLACEMENT);
 
 			harness.errors.length = 0;
-			await harness.controller.handle("/mcp smithery-search redis project 50");
+			await harness.controller.handle("smithery-search redis project 50");
 			expect(harness.errors).toHaveLength(1);
 			expect(harness.errors[0]).toContain("project is gone:");
 		});
@@ -179,7 +179,7 @@ describe("an MCP command parses arguments across terminal and CLI", () => {
 			const searches = recordSearches();
 
 			const harness = createTerminalHarness();
-			await harness.controller.handle('/mcp smithery-search "redis project"');
+			await harness.controller.handle('smithery-search "redis project"');
 
 			expect(harness.errors).toHaveLength(0);
 			expect(searches.map(search => search.keyword)).toEqual(["redis project"]);
@@ -189,7 +189,7 @@ describe("an MCP command parses arguments across terminal and CLI", () => {
 	describe("search argument validation parity", () => {
 		it("refuses empty keyword on both surfaces", async () => {
 			const term = createTerminalHarness();
-			await term.controller.handle("/mcp smithery-search");
+			await term.controller.handle("smithery-search");
 			expect(term.errors[0]).toBe(`Keyword required.\n${MCP_SEARCH_USAGE}`);
 
 			const cli = createCliHarness();
@@ -199,11 +199,11 @@ describe("an MCP command parses arguments across terminal and CLI", () => {
 
 		it("refuses out-of-range numeric limits on both surfaces", async () => {
 			const term = createTerminalHarness();
-			await term.controller.handle("/mcp smithery-search redis 0");
+			await term.controller.handle("smithery-search redis 0");
 			expect(term.errors[0]).toBe(`Invalid limit: 0. Use an integer between 1 and 100.\n${MCP_SEARCH_USAGE}`);
 
 			term.errors.length = 0;
-			await term.controller.handle("/mcp smithery-search redis 101");
+			await term.controller.handle("smithery-search redis 101");
 			expect(term.errors[0]).toBe(`Invalid limit: 101. Use an integer between 1 and 100.\n${MCP_SEARCH_USAGE}`);
 
 			const cli = createCliHarness();
@@ -213,11 +213,11 @@ describe("an MCP command parses arguments across terminal and CLI", () => {
 
 		it("refuses duplicate options on both surfaces", async () => {
 			const term = createTerminalHarness();
-			await term.controller.handle("/mcp smithery-search redis semantic semantic");
+			await term.controller.handle("smithery-search redis semantic semantic");
 			expect(term.errors[0]).toBe(`\`semantic\` given twice.\n${MCP_SEARCH_USAGE}`);
 
 			term.errors.length = 0;
-			await term.controller.handle("/mcp smithery-search redis 10 20");
+			await term.controller.handle("smithery-search redis 10 20");
 			expect(term.errors[0]).toBe(`\`limit\` given twice.\n${MCP_SEARCH_USAGE}`);
 
 			const cli = createCliHarness();
@@ -232,7 +232,7 @@ describe("an MCP command parses arguments across terminal and CLI", () => {
 		it("refuses dashed options on both surfaces", async () => {
 			for (const key of Object.keys(MCP_SEARCH_REMOVED_OPTIONS)) {
 				const term = createTerminalHarness();
-				await term.controller.handle(`/mcp smithery-search redis --${key}`);
+				await term.controller.handle(`smithery-search redis --${key}`);
 				expect(term.errors[0]).toContain(`--${key} is gone:`);
 
 				const cli = createCliHarness();
@@ -264,7 +264,7 @@ describe("an MCP command parses arguments across terminal and CLI", () => {
 			.flatMap(word => [word, word.toUpperCase()]);
 		it.each(words)(`${verb} preserves surface-specific bare option %s`, async word => {
 			const term = createTerminalHarness();
-			await term.controller.handle(`/mcp ${verb} server ${word}`);
+			await term.controller.handle(`${verb} server ${word}`);
 			if (word === "project" || word === "user") {
 				expect(term.errors[0]).toContain("is gone:");
 			} else {
@@ -279,7 +279,7 @@ describe("an MCP command parses arguments across terminal and CLI", () => {
 	describe("add and remove argument validation parity", () => {
 		it("refuses removed scope options on /mcp add", async () => {
 			const term = createTerminalHarness();
-			await term.controller.handle("/mcp add my-server project");
+			await term.controller.handle("add my-server project");
 			expect(term.errors[0]).toContain("project is gone:");
 			expect(term.errors[0]).toContain(MCP_SCOPE_REMOVED_REPLACEMENT);
 
@@ -291,7 +291,7 @@ describe("an MCP command parses arguments across terminal and CLI", () => {
 
 		it("refuses removed scope options on /mcp remove", async () => {
 			const term = createTerminalHarness();
-			await term.controller.handle("/mcp remove my-server project");
+			await term.controller.handle("remove my-server project");
 			expect(term.errors[0]).toContain("project is gone:");
 			expect(term.errors[0]).toContain(MCP_SCOPE_REMOVED_REPLACEMENT);
 
@@ -303,7 +303,7 @@ describe("an MCP command parses arguments across terminal and CLI", () => {
 
 		it("refuses unknown extra arguments on /mcp remove", async () => {
 			const term = createTerminalHarness();
-			await term.controller.handle("/mcp remove my-server extra");
+			await term.controller.handle("remove my-server extra");
 			expect(term.errors[0]).toBe(`Unknown argument: extra\n${MCP_REMOVE_USAGE}`);
 
 			const cli = createCliHarness();

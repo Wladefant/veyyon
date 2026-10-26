@@ -413,8 +413,10 @@ export interface InteractiveModeContext {
 	handleForkCommand(): Promise<void>;
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void>;
 	handlePythonCommand(code: string, excludeFromContext?: boolean): Promise<void>;
-	handleMCPCommand(text: string): Promise<void>;
-	handleSSHCommand(text: string): Promise<void>;
+	/** `args` is the text after `/mcp`, as the dispatcher parsed it. */
+	handleMCPCommand(args: string): Promise<void>;
+	/** `args` is the text after `/ssh`, as the dispatcher parsed it. */
+	handleSSHCommand(args: string): Promise<void>;
 	handleCompactCommand(
 		customInstructions?: string,
 		mode?: CompactMode,

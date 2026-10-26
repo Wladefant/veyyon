@@ -12,13 +12,12 @@ export function refreshStatusLine(ctx: Pick<InteractiveModeContext, "statusLine"
 	ctx.ui.requestRender();
 }
 
-/** A TUI handler that clears the composer and hands the trimmed text after the command name to `dispatch`. */
+/** A TUI handler that clears the composer and hands the trimmed arguments after the command name to `dispatch`. */
 export function argumentHandlerTui(
 	dispatch: (ctx: TuiSlashCommandHostContext, text: string) => Promise<void>,
 ): (command: ParsedSlashCommand, runtime: TuiSlashCommandRuntime) => Promise<void> {
 	return async (command, runtime) => {
-		const text = command.text.slice(`/${command.name}`.length).trim();
 		runtime.ctx.editor.setText("");
-		await dispatch(runtime.ctx, text);
+		await dispatch(runtime.ctx, command.args.trim());
 	};
 }

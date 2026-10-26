@@ -117,7 +117,7 @@ describe("input controller — slash command history (#3148)", () => {
 
 		await editor.onSubmit?.("/mcp list");
 
-		expect(handleMCPCommand).toHaveBeenCalledWith("/mcp list");
+		expect(handleMCPCommand).toHaveBeenCalledWith("list");
 		expect(addToHistory).toHaveBeenCalledWith("/mcp list");
 	});
 
@@ -128,7 +128,7 @@ describe("input controller — slash command history (#3148)", () => {
 		await editor.onSubmit?.("/mcp add srv url http://x token sk-secret123");
 
 		// Command still executes...
-		expect(handleMCPCommand).toHaveBeenCalledWith("/mcp add srv url http://x token sk-secret123");
+		expect(handleMCPCommand).toHaveBeenCalledWith("add srv url http://x token sk-secret123");
 		// ...but the secret-bearing text is kept out of recallable history.
 		expect(addToHistory).not.toHaveBeenCalled();
 	});
@@ -145,7 +145,7 @@ describe("input controller — slash command history (#3148)", () => {
 
 		await editor.onSubmit?.("/mcp add srv --url http://x --token sk-secret123");
 
-		expect(handleMCPCommand).toHaveBeenCalledWith("/mcp add srv --url http://x --token sk-secret123");
+		expect(handleMCPCommand).toHaveBeenCalledWith("add srv --url http://x --token sk-secret123");
 		expect(addToHistory).not.toHaveBeenCalled();
 	});
 
@@ -161,7 +161,7 @@ describe("input controller — slash command history (#3148)", () => {
 
 		await editor.onSubmit?.("/mcp add srv --url http://x --token=sk-secret123");
 
-		expect(handleMCPCommand).toHaveBeenCalledWith("/mcp add srv --url http://x --token=sk-secret123");
+		expect(handleMCPCommand).toHaveBeenCalledWith("add srv --url http://x --token=sk-secret123");
 		expect(addToHistory).not.toHaveBeenCalled();
 	});
 

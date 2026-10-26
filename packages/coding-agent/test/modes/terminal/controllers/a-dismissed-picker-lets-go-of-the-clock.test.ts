@@ -362,7 +362,7 @@ describe("a dismissed picker lets go of the clock", () => {
 		const controller = new MCPCommandController(ctx as unknown as McpCommandControllerContext);
 		// A name on the command line skips the wizard's text step and opens it on the transport
 		// list, which is the step with rows a pointer can travel over.
-		void controller.handle("/mcp add a-server");
+		void controller.handle("add a-server");
 		const card = await opened.promise;
 		card.render(WIDTH);
 		drain();

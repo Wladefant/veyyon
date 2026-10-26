@@ -5,6 +5,7 @@
  */
 import { Markdown } from "@veyyon/tui";
 import type { SourceMeta } from "../../../discovery/capability/types";
+import { parseSubcommand } from "../../../slash-commands/helpers/parse";
 import { getMarkdownTheme } from "../../../theme/markdown-theme";
 import { theme } from "../../../theme/theme-binding";
 import { shortenPath } from "../../../tools/core/render-utils";
@@ -16,7 +17,8 @@ import type { InteractiveModeContext } from "../types";
 export interface SubcommandRouteDef {
 	name: string;
 	aliases?: string[];
-	handler: (argsText: string, fullText: string, parts: string[]) => void | Promise<void>;
+	/** Receives the text after the subcommand word, trimmed. */
+	handler: (rest: string) => void | Promise<void>;
 }
 
 export interface SubcommandDispatchOptions {
@@ -25,34 +27,28 @@ export interface SubcommandDispatchOptions {
 }
 
 /**
- * Parse and dispatch a command string to its registered subcommands.
- * Checks for missing subcommand or 'help' and routes to `onHelp`.
- * Dispatches to matching handler by name or alias, or shows an unknown subcommand error.
+ * Dispatch a command's arguments to its registered subcommands. `args` is the text the slash dispatcher parsed
+ * after the command name, split by the same `parseSubcommand` the text-mode handlers use, so `/mcp list` and
+ * `/mcp:list` reach one route on every surface. No subcommand or `help` routes to `onHelp`; an unmatched one
+ * shows an error.
  */
 export async function dispatchSubcommand(
-	text: string,
+	args: string,
 	commandName: string,
 	routes: readonly SubcommandRouteDef[],
 	options: SubcommandDispatchOptions,
 ): Promise<void> {
-	const parts = text.trim().split(/\s+/);
-	const subcommand = parts[1]?.toLowerCase();
-
-	if (!subcommand || subcommand === "help") {
+	const { verb, rest } = parseSubcommand(args);
+	if (!verb || verb === "help") {
 		options.onHelp();
 		return;
 	}
-
-	for (const route of routes) {
-		if (route.name === subcommand || route.aliases?.includes(subcommand)) {
-			const prefixMatch = text.match(new RegExp(`^\\/${commandName}\\s+${subcommand}\\b\\s*(.*)$`, "i"));
-			const argsText = prefixMatch?.[1]?.trim() ?? "";
-			await route.handler(argsText, text, parts);
-			return;
-		}
+	const route = routes.find(candidate => candidate.name === verb || candidate.aliases?.includes(verb));
+	if (!route) {
+		options.showError(`Unknown subcommand: ${verb}. Type /${commandName} help for usage.`);
+		return;
 	}
-
-	options.showError(`Unknown subcommand: ${subcommand}. Type /${commandName} help for usage.`);
+	await route.handler(rest);
 }
 
 /**

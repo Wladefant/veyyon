@@ -59,17 +59,15 @@ export type SshCommandControllerContext = Pick<InteractiveModeContext, "present"
 export class SSHCommandController {
 	constructor(private ctx: SshCommandControllerContext) {}
 
-	/**
-	 * Handle /ssh command and route to subcommands
-	 */
-	async handle(text: string): Promise<void> {
+	/** `/ssh <subcommand>`. `args` is the text after `/ssh`, as the slash dispatcher parsed it. */
+	async handle(args: string): Promise<void> {
 		await dispatchSubcommand(
-			text,
+			args,
 			"ssh",
 			[
-				{ name: "add", handler: () => this.#handleAdd(text) },
+				{ name: "add", handler: rest => this.#handleAdd(rest) },
 				{ name: "list", handler: () => this.#handleList() },
-				{ name: "remove", aliases: ["rm"], handler: () => this.#handleRemove(text) },
+				{ name: "remove", aliases: ["rm"], handler: rest => this.#handleRemove(rest) },
 			],
 			{
 				onHelp: () => this.#showHelp(),
@@ -102,8 +100,8 @@ export class SSHCommandController {
 	/**
 	 * Handle /ssh add - read the plain-word arguments and add the host to config
 	 */
-	async #handleAdd(text: string): Promise<void> {
-		const parsed = parseAddCommand(text);
+	async #handleAdd(rest: string): Promise<void> {
+		const parsed = parseAddCommand(rest);
 		if (parsed.error) {
 			this.ctx.showError(parsed.error);
 			return;
@@ -232,9 +230,8 @@ export class SSHCommandController {
 	/**
 	 * Handle /ssh remove <name> - remove a host from config
 	 */
-	async #handleRemove(text: string): Promise<void> {
-		const match = text.match(/^\/ssh\s+(?:remove|rm)\b\s*(.*)$/i);
-		const tokens = parseCommandArgs(match?.[1]?.trim() ?? "");
+	async #handleRemove(rest: string): Promise<void> {
+		const tokens = parseCommandArgs(rest);
 		const name = tokens[0];
 		if (!name) {
 			this.ctx.showError(`Host name required.\n${SSH_REMOVE_USAGE}`);
@@ -294,9 +291,8 @@ export class SSHCommandController {
  * word and no word for a port. A keyword's value is consumed by position and
  * never examined, so a user named `2222` is still a user.
  */
-function parseAddCommand(text: string): SshAddParsed {
-	const prefixMatch = text.match(/^\/ssh\s+add\b\s*(.*)$/i);
-	const tokens = parseCommandArgs(prefixMatch?.[1]?.trim() ?? "");
+function parseAddCommand(rest: string): SshAddParsed {
+	const tokens = parseCommandArgs(rest);
 	if (tokens.length === 0) return {};
 
 	const name = tokens[0];

@@ -96,6 +96,11 @@ interface ResolvedServer extends ConfiguredServer {
 	discovered: boolean;
 }
 
+/** The server name a `/mcp <verb> <name>` subcommand acts on: the first word after the verb, if any. */
+function firstWord(rest: string): string | undefined {
+	return rest.split(/\s+/, 1)[0] || undefined;
+}
+
 export class MCPCommandController {
 	readonly #smithery: McpSmitheryCommands;
 
@@ -103,29 +108,27 @@ export class MCPCommandController {
 		this.#smithery = new McpSmitheryCommands(ctx, (name, config) => this.#handleWizardComplete(name, config));
 	}
 
-	/**
-	 * Handle /mcp command and route to subcommands
-	 */
-	async handle(text: string): Promise<void> {
+	/** `/mcp <subcommand>`. `args` is the text after `/mcp`, as the slash dispatcher parsed it. */
+	async handle(args: string): Promise<void> {
 		await dispatchSubcommand(
-			text,
+			args,
 			"mcp",
 			[
-				{ name: "add", handler: () => this.#handleAdd(text) },
+				{ name: "add", handler: rest => this.#handleAdd(rest) },
 				{ name: "list", handler: () => this.#handleList() },
-				{ name: "remove", aliases: ["rm"], handler: () => this.#handleRemove(text) },
-				{ name: "test", handler: (_args, _full, parts) => this.#handleTest(parts[2]) },
-				{ name: "reauth", handler: (_args, _full, parts) => this.#handleReauth(parts[2]) },
-				{ name: "unauth", handler: (_args, _full, parts) => this.#handleUnauth(parts[2]) },
-				{ name: "enable", handler: (_args, _full, parts) => this.#handleSetEnabled(parts[2], true) },
-				{ name: "disable", handler: (_args, _full, parts) => this.#handleSetEnabled(parts[2], false) },
+				{ name: "remove", aliases: ["rm"], handler: rest => this.#handleRemove(rest) },
+				{ name: "test", handler: rest => this.#handleTest(firstWord(rest)) },
+				{ name: "reauth", handler: rest => this.#handleReauth(firstWord(rest)) },
+				{ name: "unauth", handler: rest => this.#handleUnauth(firstWord(rest)) },
+				{ name: "enable", handler: rest => this.#handleSetEnabled(firstWord(rest), true) },
+				{ name: "disable", handler: rest => this.#handleSetEnabled(firstWord(rest), false) },
 				{ name: "resources", handler: () => this.#showReport(resourcesReport) },
 				{ name: "prompts", handler: () => this.#showReport(promptsReport) },
 				{ name: "notifications", handler: () => this.#showReport(notificationsReport) },
-				{ name: "smithery-search", handler: () => this.#smithery.search(text) },
+				{ name: "smithery-search", handler: rest => this.#smithery.search(rest) },
 				{ name: "smithery-login", handler: () => this.#smithery.login() },
 				{ name: "smithery-logout", handler: () => this.#smithery.logout() },
-				{ name: "reconnect", handler: (_args, _full, parts) => this.#handleReconnect(parts[2]) },
+				{ name: "reconnect", handler: rest => this.#handleReconnect(firstWord(rest)) },
 				{ name: "reload", handler: () => this.#handleReload() },
 			],
 			{
@@ -138,9 +141,8 @@ export class MCPCommandController {
 	/**
 	 * Handle /mcp add - Launch interactive wizard or quick-add from args
 	 */
-	async #handleAdd(text: string): Promise<void> {
-		const match = text.match(/^\/mcp\s+add\b\s*(.*)$/i);
-		const parsed = parseMcpAddCommand(match?.[1]?.trim() ?? "");
+	async #handleAdd(rest: string): Promise<void> {
+		const parsed = parseMcpAddCommand(rest);
 		if (parsed.error) {
 			this.ctx.showError(parsed.error);
 			return;
@@ -461,9 +463,8 @@ export class MCPCommandController {
 	/**
 	 * Handle /mcp remove <name> - Remove a server
 	 */
-	async #handleRemove(text: string): Promise<void> {
-		const match = text.match(/^\/mcp\s+(?:remove|rm)\b\s*(.*)$/i);
-		const parsed = parseMcpRemoveArgs(match?.[1]?.trim() ?? "", "terminal");
+	async #handleRemove(rest: string): Promise<void> {
+		const parsed = parseMcpRemoveArgs(rest, "terminal");
 		if (parsed.error) {
 			this.ctx.showError(parsed.error);
 			return;
