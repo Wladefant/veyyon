@@ -49,9 +49,11 @@ import {
 } from "../utils/schema";
 import { notifyRawSseEvent, resolveOpenAiSseEventName } from "../utils/sse-debug";
 import {
+	carryRequiredToolCall,
 	isForcedToolChoice,
 	mapToOpenAIResponsesToolChoice,
 	type OpenAIResponsesToolChoice,
+	openAIToolCallForce,
 } from "../utils/tool-choice";
 import type { CacheControlEphemeral } from "./anthropic-wire";
 import { compactGrammarDefinition } from "./grammar";
@@ -968,9 +970,21 @@ export function buildParams(
 	});
 	const strictResponsesPairing = policy.tools.strictResponsesPairing;
 	const shouldReplayNativeHistory = providerSessionState?.nativeHistoryReplayWarmed ?? true;
+	const toolPlan = context.tools
+		? planResponsesTools(
+				model,
+				context.tools,
+				options?.toolChoice,
+				disableStrictToolsOverride || isStrictToolsDisabledForScope(providerSessionState, strictToolsScope),
+				toolChoiceState,
+				strictToolsScope,
+			)
+		: undefined;
 	const messages = buildResponsesInput({
 		model,
-		context,
+		context: carryRequiredToolCall(context, options?.toolChoice, openAIToolCallForce(toolPlan?.toolChoice), {
+			tools: toolPlan?.offeredTools,
+		}),
 		strictResponsesPairing,
 		supportsImageDetailOriginal: model.compat.supportsImageDetailOriginal,
 		supportsCustomToolCalls: supportsFreeformApplyPatch(model),
@@ -1044,38 +1058,11 @@ export function buildParams(
 	// TODO: openai responses has no top-level `frequency_penalty` field as of the current SDK;
 	// `StreamOptions.frequencyPenalty` is intentionally dropped for this provider.
 
-	let strictToolsApplied = false;
-	if (context.tools) {
-		const disableStrictTools =
-			disableStrictToolsOverride || isStrictToolsDisabledForScope(providerSessionState, strictToolsScope);
-		const strictMode = !disableStrictTools && model.compat.supportsStrictMode !== false;
-		params.tools = convertTools(context.tools, strictMode, model);
-		strictToolsApplied = params.tools.some(t => (t as { strict?: boolean }).strict === true);
-		if (options?.toolChoice) {
-			// Map tool_choice against the tools that survived quarantine, not the
-			// original list: a forced choice for a dropped tool — or "required" when
-			// every tool was dropped — would otherwise send a tool_choice with no
-			// matching tool, which the provider rejects just like the bad schema did (#2652).
-			const emittedNames = new Set(
-				params.tools.map(t => (t as { name?: string }).name).filter((n): n is string => n !== undefined),
-			);
-			const survivingTools =
-				params.tools.length === context.tools.length
-					? context.tools
-					: context.tools.filter(t => emittedNames.has(t.customWireName ?? t.name));
-			const toolChoice = mapOpenAIResponsesToolChoiceForTools(options.toolChoice, survivingTools, model);
-			if (toolChoice !== undefined && params.tools.length > 0) {
-				params.tool_choice = toolChoice;
-			}
-		}
-		if (
-			toolChoiceState &&
-			strictToolsScope &&
-			isToolChoiceRejectedForScope(toolChoiceState, strictToolsScope, params.tool_choice)
-		) {
-			// This model rejected this form of `tool_choice` earlier in the session. Leaving the
-			// field out is `auto`, and the reasoning policy below reads the choice actually sent.
-			delete params.tool_choice;
+	const strictToolsApplied = toolPlan?.strictToolsApplied ?? false;
+	if (toolPlan) {
+		params.tools = toolPlan.tools;
+		if (toolPlan.toolChoice !== undefined) {
+			params.tool_choice = toolPlan.toolChoice;
 		}
 	}
 
@@ -1115,6 +1102,51 @@ export function buildParams(
 	applyOpenAIExtraBody(params, options?.extraBody);
 
 	return { params, strictToolsApplied };
+}
+
+/** The tools a Responses request offers and the `tool_choice` it sends with them. */
+interface ResponsesToolPlan {
+	tools: OpenAITool[];
+	/** The caller's tools that survived quarantine into `tools`. */
+	offeredTools: Tool[];
+	toolChoice: OpenAIResponsesToolChoice;
+	strictToolsApplied: boolean;
+}
+
+function planResponsesTools(
+	model: Model<"openai-responses">,
+	contextTools: Tool[],
+	choice: ToolChoice | undefined,
+	disableStrictTools: boolean,
+	toolChoiceState: OpenAIToolChoiceState | undefined,
+	strictToolsScope: OpenAIStrictToolsScope | undefined,
+): ResponsesToolPlan {
+	const strictMode = !disableStrictTools && model.compat.supportsStrictMode !== false;
+	const tools = convertTools(contextTools, strictMode, model);
+	const strictToolsApplied = tools.some(t => "strict" in t && t.strict === true);
+	// Map tool_choice against the tools that survived quarantine, not the
+	// original list: a forced choice for a dropped tool — or "required" when
+	// every tool was dropped — would otherwise send a tool_choice with no
+	// matching tool, which the provider rejects just like the bad schema did (#2652).
+	let offeredTools = contextTools;
+	if (tools.length !== contextTools.length) {
+		const emittedNames = new Set(tools.flatMap(t => ("name" in t && typeof t.name === "string" ? [t.name] : [])));
+		offeredTools = contextTools.filter(t => emittedNames.has(t.customWireName ?? t.name));
+	}
+	let toolChoice: OpenAIResponsesToolChoice;
+	if (choice && tools.length > 0) {
+		toolChoice = mapOpenAIResponsesToolChoiceForTools(choice, offeredTools, model);
+	}
+	if (
+		toolChoiceState &&
+		strictToolsScope &&
+		isToolChoiceRejectedForScope(toolChoiceState, strictToolsScope, toolChoice)
+	) {
+		// This model rejected this form of `tool_choice` earlier in the session. Leaving the
+		// field out is `auto`, and the reasoning policy reads the choice actually sent.
+		toolChoice = undefined;
+	}
+	return { tools, offeredTools, toolChoice, strictToolsApplied };
 }
 
 /** @internal Exported for tests. */

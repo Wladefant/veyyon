@@ -63,6 +63,7 @@ import type {
 	ThinkingContent,
 	Tool,
 	ToolCall,
+	ToolChoice,
 	ToolResultMessage,
 	Usage,
 	UserMessage,
@@ -79,6 +80,7 @@ import {
 import { deterministicUuid } from "../utils/deterministic-id";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { toolWireSchema } from "../utils/schema/wire";
+import { carryRequiredToolCall } from "../utils/tool-choice";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
 
 /**
@@ -93,6 +95,8 @@ export { DEVIN_CASCADE_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 export interface DevinOptions extends StreamOptions {
 	/** Wire model uid selected after thinking-effort routing. */
 	chatModelUid?: string;
+	/** A tool call the turn requires. Cascade is always sent `auto`, so the requirement is sent as text. */
+	toolChoice?: ToolChoice;
 	/**
 	 * Which provider-level retry this is, counted from 0. Internal.
 	 *
@@ -656,7 +660,12 @@ function buildDevinChatRequest(
 			locale: "en",
 		}),
 		prompt: (context.systemPrompt ?? []).join("\n\n"),
-		chatMessagePrompts: buildChatMessagePrompts(context.messages, cascadeId),
+		// Cascade is sent `toolChoice: auto` below whatever the caller asked for, so a
+		// required call rides the conversation as text.
+		chatMessagePrompts: buildChatMessagePrompts(
+			carryRequiredToolCall(context, options?.toolChoice, "open").messages,
+			cascadeId,
+		),
 		chatModelUid: options?.chatModelUid ?? model.requestModelId ?? model.id,
 		requestType: ChatMessageRequestType.CASCADE,
 		plannerMode: ConversationalPlannerMode.DEFAULT,

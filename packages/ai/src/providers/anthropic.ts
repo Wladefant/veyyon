@@ -95,6 +95,7 @@ import { conversationIdForOpenCode, getOpenCodeHeaders, isOpenCodeProvider } fro
 import { notifyProviderResponse } from "../utils/provider-response";
 import { createSdkStreamRequestOptions } from "../utils/sdk-stream-timeout";
 import { notifyRawSseEvent } from "../utils/sse-debug";
+import { carryRequiredToolCall } from "../utils/tool-choice";
 import {
 	AnthropicApiError,
 	AnthropicConnectionTimeoutError,
@@ -3872,7 +3873,7 @@ function buildAnthropicToolChoiceParam(
 	// (`tool_choice: type "tool" and "any" are not supported for this model.`),
 	// and an endpoint that answered a forced choice with that 400 is remembered
 	// for the session. Downgrade any/tool → auto so the request succeeds; the
-	// tool stays available and the caller's prompt steers the model toward it.
+	// tool stays available and `buildParams` asks for the call in the request text.
 	if (isForcedAnthropicToolChoice(choice) && !model.compat.supportsForcedToolChoice) {
 		return { type: "auto" };
 	}
@@ -3881,7 +3882,7 @@ function buildAnthropicToolChoiceParam(
 
 function buildParams(
 	model: Model<"anthropic-messages">,
-	context: Context,
+	requestContext: Context,
 	isOAuthToken: boolean,
 	options: AnthropicOptions | undefined,
 	downgrades: AnthropicRequestDowngrades,
@@ -3889,6 +3890,26 @@ function buildParams(
 ): MessageCreateParamsStreaming {
 	const effectiveModel = resolveAnthropicEffectiveModel(model, downgrades);
 	const { cacheControl } = getCacheControl(model, options?.cacheRetention, isOAuthToken);
+	const toolChoice = buildAnthropicToolChoiceParam(
+		options?.toolChoice,
+		effectiveModel,
+		isOAuthToken,
+		useUmansGatewayWebSearch,
+	);
+	const context = carryRequiredToolCall(
+		requestContext,
+		options?.toolChoice,
+		toolChoice?.type === "tool" ? "named" : toolChoice?.type === "any" ? "any" : "open",
+		{
+			wireName: name =>
+				encodeAnthropicToolName(
+					name,
+					isOAuthToken,
+					effectiveModel.compat.escapeBuiltinToolNames,
+					useUmansGatewayWebSearch,
+				),
+		},
+	);
 
 	// Pre-compute system blocks so they occupy the right slot in the serialized body.
 	const shouldInjectClaudeCodeInstruction = isOAuthToken && !model.id.startsWith("claude-3-5-haiku");
@@ -3959,12 +3980,6 @@ function buildParams(
 		params.speed = "fast";
 	}
 
-	const toolChoice = buildAnthropicToolChoiceParam(
-		options?.toolChoice,
-		effectiveModel,
-		isOAuthToken,
-		useUmansGatewayWebSearch,
-	);
 	if (toolChoice) {
 		params.tool_choice = toolChoice;
 	}

@@ -25,8 +25,9 @@
  * case.
  *
  * WHAT IT DOES NOT CATCH. Whether the live gateway still answers with these messages: that is the
- * live sweep's job. Whether a model complies with a suggestion once the pin is dropped: the callers
- * that force a tool parse a JSON text reply when no call arrives.
+ * live sweep's job. Whether a model complies once the pin is dropped: a dropped forced pin is asked
+ * for in the request text instead, and a caller that forces a tool parses a JSON text reply when
+ * no call arrives.
  */
 import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
@@ -215,6 +216,11 @@ function kindOf(choice: unknown): "auto" | "none" | "forced" | undefined {
 	return "forced";
 }
 
+/** Whether a request body asks for a tool call in its text, the form a dropped forced pin takes. */
+function asksInText(body: Record<string, unknown> | undefined): boolean {
+	return JSON.stringify(body?.messages ?? body?.input ?? []).includes("This turn must call");
+}
+
 async function runTurn(
 	gateway: FakeGateway,
 	model: Model<OpenAIShapedApi>,
@@ -317,10 +323,16 @@ describe("a tool choice the endpoint rejects is dropped once and remembered", ()
 					expect(JSON.stringify(gateway.bodies[1]?.tools ?? []), "the retry still offers the tool").toContain(
 						"respond",
 					);
+					const forced = rejectedKind === "forced";
+					expect(gateway.bodies.map(asksInText), "only a dropped forced pin is asked for in text").toStrictEqual([
+						false,
+						forced,
+					]);
 
 					const second = await runTurn(gateway, model, value, session);
 					expect(second.stopReason, second.errorMessage).toBe("stop");
 					expect(gateway.bodies.map(body => kindOf(body.tool_choice))).toStrictEqual([undefined]);
+					expect(gateway.bodies.map(asksInText)).toStrictEqual([forced]);
 				});
 			}
 		}

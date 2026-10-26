@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- `/force`, the executor's final `yield` reminder and the eager todo require their tool on OpenRouter, Cursor, Devin and GitLab Duo models, where they required nothing and `/force` failed with `Current model does not support forcing a specific tool.`
 - `write` to a directory, or to a path ending in `/`, fails with an error giving the path to use, instead of creating a file named after the directory, replacing the file before the `/`, or failing with a bare `EISDIR`.
 - `veyyon @<path>` naming a directory, named pipe, socket or device exits with `Cannot attach <path>: it is <kind>` instead of waiting forever on a pipe with no writer or failing with a bare `EISDIR`, `ENXIO` or `ESPIPE`.
 - An update interrupted by closing the terminal, Ctrl+C, quitting the session or a fatal error during its download or checksum check removes its partial `<binary>.<id>.new` download instead of leaving it beside the binary until uninstall.
@@ -27,7 +28,9 @@
 - `defs()` in a Python `eval` cell shows a list, tuple, dict or set as its type and length, such as `list[1000000]`, and cuts a string before its repr, instead of building each value's whole repr to show 60 characters of it, which took 0.5s over 170MB of values and timed out on larger kernels.
 - A Python or JS `eval` error shows the frames of the cell and the code it called, without the runner and worker frames that dispatched the cell, names each JS cell `<cell>` instead of a UUID file, and shows a JS cell that did not parse or a thrown non-Error as its text alone.
 - A Python `eval` cell that does not compile reports its `SyntaxError` at its line in `<cell>` instead of under `<unknown>` behind runner and `ast.parse` frames, and a chained exception keeps the blank line after its separator.
+- A required tool call under an in-band tool dialect is asked for in the conversation text instead of being sent as a native `tool_choice` the dialect never reads.
 - Shake and duplicate elision leave a tool result, block or truncated middle in place when its marker is not smaller than it, and size a captioned image result by its caption, so `/shake` no longer reports a kept image as freed tokens.
+- A required tool call on a request that cannot force it (a model or host that rejects a forced `tool_choice`, a host without `tool_choice`, a remembered rejection, Ollama, Cursor, Devin, GitLab Duo, and Claude on Antigravity) is asked for in the request text, instead of the tool only being offered.
 - `grep` repairs a pattern rejected for an unpaired parenthesis by escaping only that parenthesis, so `(get|set)Value(` matches `getValue(` instead of the text `(get` or `set)Value(`, and `)(` matches the text `)(` instead of every line.
 - The shell `grep` and `rg` builtins reject a pattern whose `)` closes no group instead of matching every line: `grep -E ')('`, `grep -P ')('` and `rg ')('` exit 2, `grep -G '\)\('` and `grep -G '\('` exit 2 with GNU grep's `Unmatched ) or \)` and `Unmatched ( or \(`, and a bare `grep ')('` searches for the text `)(`.
 

@@ -117,6 +117,7 @@ import type {
 	ThinkingContent,
 	Tool,
 	ToolCall,
+	ToolChoice,
 	ToolResultMessage,
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
@@ -146,6 +147,7 @@ import {
 	type RequestDebugSession,
 } from "../utils/request-debug";
 import { toolWireSchema } from "../utils/schema/wire";
+import { carryRequiredToolCall } from "../utils/tool-choice";
 import {
 	buildDeleteErrorResult,
 	buildDeleteRejectedResult,
@@ -239,6 +241,8 @@ export interface CursorOptions extends StreamOptions {
 	onToolResult?: CursorToolResultHandler;
 	/** Wire model uid selected after thinking-effort routing (see mapOptionsForApi). */
 	wireModelId?: string;
+	/** A tool call the turn requires. The run request cannot force one, so the requirement is sent as text. */
+	toolChoice?: ToolChoice;
 }
 
 interface CursorLogEntry {
@@ -3290,7 +3294,7 @@ function countTextOccurrences(haystack: string, needle: string): number {
 /** Build the run request. Exported so a test can read what the active turn carries. */
 export async function buildGrpcRequest(
 	model: Model<"cursor-agent">,
-	context: Context,
+	requestContext: Context,
 	options: CursorOptions | undefined,
 	state: {
 		conversationId: string;
@@ -3308,6 +3312,8 @@ export async function buildGrpcRequest(
 	 */
 	systemPromptBlobIds: ReadonlySet<string>;
 }> {
+	// Cursor's run request has no tool-choice field, so a required call rides the turn as text.
+	const context = carryRequiredToolCall(requestContext, options?.toolChoice, "open");
 	const blobStore = state.blobStore;
 
 	const systemPromptJsons = buildCursorSystemPromptJsons();

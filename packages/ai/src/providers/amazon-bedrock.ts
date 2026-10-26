@@ -51,6 +51,7 @@ import { fetchProviderWithRetry } from "../utils/provider-fetch";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { toolWireSchema } from "../utils/schema/wire";
 import { stopReasonForTerminallessEof } from "../utils/terminalless-eof";
+import { carryRequiredToolCall } from "../utils/tool-choice";
 import { invalidateAwsCredentialCache, resolveAwsCredentials } from "./aws-credentials";
 import { decodeEventStream, type EventStreamMessage } from "./aws-eventstream";
 import { type AwsCredentials, signRequest } from "./aws-sigv4";
@@ -445,15 +446,16 @@ class BedrockTurn {
 
 	async #buildRequest(): Promise<ConverseStreamRequest> {
 		const model = this.#model;
-		const context = this.#context;
 		const options = this.#options;
+		const toolChoice = resolveBedrockToolChoice(options.toolChoice, model.id);
+		const context = carryRequiredToolCall(
+			this.#context,
+			options.toolChoice,
+			typeof toolChoice === "object" ? "named" : toolChoice === "any" ? "any" : "open",
+		);
 		const cacheRetention = resolveCacheRetention(options.cacheRetention);
 		const messages = convertMessages(context, model, cacheRetention);
-		const { toolConfig, sentinelInjected } = planToolConfig(
-			context.tools,
-			resolveBedrockToolChoice(options.toolChoice, model.id),
-			messages,
-		);
+		const { toolConfig, sentinelInjected } = planToolConfig(context.tools, toolChoice, messages);
 		this.#sentinelInjected = sentinelInjected;
 		const additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
 		// Bedrock rejects thinking + forced tool_choice ("any" or specific tool),

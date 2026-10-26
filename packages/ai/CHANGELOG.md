@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- A required tool call on a request that cannot force it (a model or host that rejects a forced `tool_choice`, a host without `tool_choice`, a remembered rejection, Ollama, Cursor, Devin, GitLab Duo, and Claude on Antigravity) is asked for in the request text, instead of the tool only being offered.
+
 ## [1.5.10] - 2026-10-25
 
 ### Changed
