@@ -227,7 +227,7 @@ describe("AgentSession message pipeline", () => {
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "compaction.enabled": false }),
 			modelRegistry: {} as never,
-			onPayload: sessionOnPayload,
+			payloadHook: () => sessionOnPayload,
 		});
 		sessions.push(session);
 		const options: SimpleStreamOptions = {

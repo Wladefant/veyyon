@@ -25,7 +25,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
-import { getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
+import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
@@ -42,7 +42,7 @@ const WIDTH = 100;
 const MAX_CARD_PADDING = 4;
 
 let geometry: StubbedStdoutGeometry;
-let policy: ReturnType<typeof getAnsiPolicy>;
+let policy: AnsiPolicy;
 
 beforeEach(async () => {
 	await initTheme(false);

@@ -1,5 +1,5 @@
 import { type Component, type Container, Spacer, Text } from "@veyyon/tui";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { COMPOSER_INSET_COLS } from "../composer/composer-chrome";
 import { TranscriptBlock } from "./transcript-container";
 

@@ -167,6 +167,7 @@ const OVERLAY_SPECS: readonly OverlaySpec[] = [
 					onShowUsage: () => {},
 					onAddAccount: () => {},
 					onClearRateLimitBlock: () => {},
+					onForgetSignedOut: () => {},
 					onCancel: () => {},
 				},
 			),
@@ -292,8 +293,8 @@ const OVERLAY_SPECS: readonly OverlaySpec[] = [
 		name: "ModelHubComponent",
 		create: async () =>
 			new ModelHubComponent(DUMMY_UI, await Settings.init(), DUMMY_REGISTRY, [], {
-				onAssign: () => {},
-				onUnassign: () => {},
+				onSetDefault: () => {},
+				onClearDefault: () => {},
 				onCancel: () => {},
 			}),
 	},

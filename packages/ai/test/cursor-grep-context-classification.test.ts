@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { buildGrepResultFromToolResult } from "@veyyon/ai/providers/cursor";
+import { buildGrepResultFromToolResult } from "@veyyon/ai/providers/cursor-exec-results";
 import type { ToolResultMessage } from "@veyyon/ai/types";
 
 /**

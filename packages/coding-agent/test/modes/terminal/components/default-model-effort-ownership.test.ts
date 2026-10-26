@@ -1,7 +1,7 @@
 /**
  * Default Model chooses a model. Default Effort owns the main model's saved effort.
  *
- * The default-model submenu used to append an effort suffix to `modelRoles.default`.
+ * The default-model submenu used to append an effort suffix to `defaultModel`.
  * That hidden selector pin outranked the adjacent Default Effort row, so changing the
  * setting named "Default Effort" could have no effect until the model was re-picked.
  */
@@ -12,9 +12,8 @@ import type { Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
-import { DEFAULT_MODEL_SLOT } from "@veyyon/coding-agent/config/model-roles";
 import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/config/settings";
-import { resolveRoleAssignments } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-browser";
+import { resolveDefaultModelAssignment } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-browser";
 import { DEFAULT_MODEL_SETTING_ID } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-defs";
 import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
@@ -75,24 +74,24 @@ function openDefaultModel(): SettingsSelectorComponent {
 describe("default model and effort ownership", () => {
 	/** Re-picking a configurable model must remove an old hidden suffix instead of opening a second effort editor. */
 	it("stores a bare selector from the Default Model picker", () => {
-		settings.setModelRole(DEFAULT_MODEL_SLOT, "test/reasoning-model:high");
+		settings.setDefaultModel("test/reasoning-model:high");
 		const component = openDefaultModel();
 
 		component.handleInput("\n");
 
-		expect(settings.getModelRole(DEFAULT_MODEL_SLOT)).toBe("test/reasoning-model");
+		expect(settings.get("defaultModel")).toBe("test/reasoning-model");
 	});
 
 	/** Once Default Model is bare, edits to the model-specific Default Effort row must immediately decide startup effort. */
 	it("lets Default Effort control the selected main model", () => {
-		settings.setModelRole(DEFAULT_MODEL_SLOT, "test/reasoning-model:high");
+		settings.setDefaultModel("test/reasoning-model:high");
 		const component = openDefaultModel();
 		component.handleInput("\n");
 
 		settings.set("defaultEffort", { "test/reasoning-model": ThinkingLevel.Low });
-		expect(resolveRoleAssignments(Settings.instance, [model]).default?.thinkingLevel).toBe(ThinkingLevel.Low);
+		expect(resolveDefaultModelAssignment(Settings.instance, [model])?.thinkingLevel).toBe(ThinkingLevel.Low);
 
 		settings.set("defaultEffort", { "test/reasoning-model": ThinkingLevel.High });
-		expect(resolveRoleAssignments(Settings.instance, [model]).default?.thinkingLevel).toBe(ThinkingLevel.High);
+		expect(resolveDefaultModelAssignment(Settings.instance, [model])?.thinkingLevel).toBe(ThinkingLevel.High);
 	});
 });

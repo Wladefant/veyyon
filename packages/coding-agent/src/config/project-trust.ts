@@ -37,6 +37,7 @@
  * newer build.
  */
 import { createHash } from "node:crypto";
+import * as fsCallback from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { atomicWriteFile, errorMessage, isEnoent, isRecord, logger } from "@veyyon/utils";
@@ -83,10 +84,29 @@ export interface ProjectExecutable {
 	hash: string;
 }
 
+/** A project file as the gate read it: its identity, its hash, and the exact text that hash covers. */
+export interface ProjectFileSnapshot extends ProjectExecutable {
+	/** The file's bytes, decoded as UTF-8. The hash covers these bytes: parse this, never read the file again. */
+	content: string;
+}
+
+/**
+ * The real path of `target`, resolved to the spelling Windows stores it under.
+ *
+ * `fs.realpath` keeps the case the caller typed, so `C:\Repo` and `c:\repo` would key two records for one
+ * directory. `fs.realpath.native` returns the on-disk spelling. Every key this module writes or reads goes
+ * through here, so a record made from one spelling is found from another.
+ */
+export function realProjectPath(target: string): Promise<string> {
+	const { promise, resolve, reject } = Promise.withResolvers<string>();
+	fsCallback.realpath.native(target, (err, resolved) => (err ? reject(err) : resolve(resolved)));
+	return promise;
+}
+
 /** The canonical, symlink-resolved project root, which is what a record is keyed by. */
 export async function canonicalProjectRoot(cwd: string): Promise<string> {
 	try {
-		return await fs.realpath(path.resolve(cwd));
+		return await realProjectPath(path.resolve(cwd));
 	} catch (err) {
 		// A root that cannot be resolved (deleted under us, permission) still needs a stable
 		// key, and `resolve` is the same answer `realpath` gives for a path with no symlinks.
@@ -95,41 +115,50 @@ export async function canonicalProjectRoot(cwd: string): Promise<string> {
 	}
 }
 
-/** sha-256 of a file's bytes, or null when it cannot be read. */
-export async function hashFile(absolutePath: string): Promise<string | null> {
-	try {
-		return createHash("sha256")
-			.update(await fs.readFile(absolutePath))
-			.digest("hex");
-	} catch {
-		return null;
-	}
+/**
+ * Whether `real` lies strictly beneath `root`. Both must already be resolved. Windows path comparison is
+ * case-insensitive, so a drive-letter variant of `root` still counts as inside it.
+ */
+export function isInsideRoot(root: string, real: string): boolean {
+	const relative = path.relative(root, real);
+	return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
 /**
- * Describe one candidate executable, or null when it is not readable.
+ * Describe one candidate executable, or null when it is not readable or resolves outside the root.
  *
  * A file outside the project root is NOT a project executable: it belongs to the operator's
  * own profile or an installed plugin, which they put there themselves. That distinction is the
  * whole reason this returns null instead of a record — a gate that trusted `~/.veyyon`
  * extensions through this path would ask the operator to approve their own configuration.
+ * Callers that gate project code must therefore treat null as a refusal, never as "not ours".
+ *
+ * The snapshot's `content` is the exact byte sequence that `hash` covers. Parse it; do not read the file again.
  */
 export async function describeProjectExecutable(
 	absolutePath: string,
 	canonicalRoot: string,
-): Promise<ProjectExecutable | null> {
+): Promise<ProjectFileSnapshot | null> {
 	const resolved = path.resolve(absolutePath);
 	const real = await realPathOrSelf(resolved);
-	const relative = path.relative(canonicalRoot, real);
-	if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return null;
-	const hash = await hashFile(real);
-	if (hash === null) return null;
-	return { absolutePath: resolved, relativePath: relative.split(path.sep).join("/"), hash };
+	if (!isInsideRoot(canonicalRoot, real)) return null;
+	let bytes: Buffer;
+	try {
+		bytes = await fs.readFile(real);
+	} catch {
+		return null;
+	}
+	return {
+		absolutePath: resolved,
+		relativePath: path.relative(canonicalRoot, real).split(path.sep).join("/"),
+		hash: createHash("sha256").update(bytes).digest("hex"),
+		content: bytes.toString("utf8"),
+	};
 }
 
 async function realPathOrSelf(target: string): Promise<string> {
 	try {
-		return await fs.realpath(target);
+		return await realProjectPath(target);
 	} catch {
 		return target;
 	}

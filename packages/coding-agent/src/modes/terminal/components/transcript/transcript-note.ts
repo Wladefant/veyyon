@@ -4,7 +4,7 @@ import { visibleWidth } from "@veyyon/utils/width";
 import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
 import type { ThemeColor } from "../../../../theme/color";
 import { getVisibleGround } from "../../../../theme/ground-tints";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { WidthAwareText } from "../../draw/width-aware-text";
 import { COMPOSER_INSET_COLS } from "../composer/composer-chrome";
 

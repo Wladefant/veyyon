@@ -167,37 +167,41 @@ impl From<CoreMinimizerResult> for MinimizerResult {
 #[napi(object)]
 pub struct ShellRunResult {
 	/// Exit code when the command completes normally.
-	pub exit_code: Option<i32>,
+	pub exit_code:         Option<i32>,
 	/// The signal number that killed the command, when it died from a signal.
 	///
 	/// `exitCode` reports bash's `128 + signal`, which a command that calls
 	/// `exit(137)` itself produces just as readily. This field is set only for a
 	/// real signalled death, so callers can tell an out-of-memory kill (SIGKILL,
 	/// 9) from a program choosing that exit code.
-	pub signal:    Option<i32>,
+	pub signal:            Option<i32>,
 	/// Whether the command was cancelled via abort.
-	pub cancelled: bool,
+	pub cancelled:         bool,
 	/// Whether the command timed out before completion.
-	pub timed_out: bool,
-
+	pub timed_out:         bool,
+	/// Whether output capture stopped before EOF.
+	pub output_incomplete: bool,
+	/// Retained raw output prefix, present only for incomplete buffered capture.
+	pub captured_output:   Option<String>,
 	/// When the minimizer rewrote the captured output, this carries the
 	/// original buffer + telemetry so the session layer can persist it as
 	/// an artifact and splice an `artifact://<id>` reference into the
 	/// minimized text shown to the agent. `None` when nothing was rewritten.
-	pub minimized:   Option<MinimizerResult>,
+	pub minimized:         Option<MinimizerResult>,
 	/// Shell working directory after command completion.
-	pub working_dir: Option<String>,
+	pub working_dir:       Option<String>,
 }
-
 impl From<CoreShellRunResult> for ShellRunResult {
 	fn from(value: CoreShellRunResult) -> Self {
 		Self {
-			exit_code:   value.exit_code,
-			signal:      value.signal,
-			cancelled:   value.cancelled,
-			timed_out:   value.timed_out,
-			minimized:   value.minimized.map(Into::into),
-			working_dir: value.working_dir,
+			exit_code:         value.exit_code,
+			signal:            value.signal,
+			cancelled:         value.cancelled,
+			timed_out:         value.timed_out,
+			output_incomplete: value.output_incomplete,
+			captured_output:   value.captured_output,
+			minimized:         value.minimized.map(Into::into),
+			working_dir:       value.working_dir,
 		}
 	}
 }

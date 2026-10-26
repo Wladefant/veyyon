@@ -1,11 +1,24 @@
 /**
- * Default themes for TUI tests using chalk
+ * Default themes for TUI tests: one raw SGR open/close pair per style, the shape the production
+ * theme writes. Chalk re-opens a style after every inner close, so a row nested `d` styles deep
+ * would carry O(d²) escape codes that no production render carries.
  */
 import type { EditorTheme, MarkdownTheme, SelectListTheme } from "@veyyon/tui";
 import type { SymbolTheme } from "@veyyon/utils/symbols";
-import { Chalk } from "chalk";
 
-const chalk = new Chalk({ level: 3 });
+const sgr =
+	(open: number, close: number) =>
+	(text: string): string =>
+		`\x1b[${open}m${text}\x1b[${close}m`;
+const bold = sgr(1, 22);
+const dim = sgr(2, 22);
+const italic = sgr(3, 23);
+const underline = sgr(4, 24);
+const strikethrough = sgr(9, 29);
+const green = sgr(32, 39);
+const yellow = sgr(33, 39);
+const blue = sgr(34, 39);
+const cyan = sgr(36, 39);
 
 const defaultSymbols: SymbolTheme = {
 	cursor: ">",
@@ -50,34 +63,34 @@ const defaultSymbols: SymbolTheme = {
 };
 
 export const defaultSelectListTheme: SelectListTheme = {
-	selectedPrefix: (text: string) => chalk.blue(text),
-	selectedText: (text: string) => chalk.bold(text),
-	description: (text: string) => chalk.dim(text),
-	scrollInfo: (text: string) => chalk.dim(text),
-	noMatch: (text: string) => chalk.dim(text),
+	selectedPrefix: blue,
+	selectedText: bold,
+	description: dim,
+	scrollInfo: dim,
+	noMatch: dim,
 	symbols: defaultSymbols,
 };
 
 export const defaultMarkdownTheme: MarkdownTheme = {
-	heading: (text: string) => chalk.bold.cyan(text),
-	link: (text: string) => chalk.blue(text),
-	linkUrl: (text: string) => chalk.dim(text),
-	code: (text: string) => chalk.yellow(text),
-	codeBlock: (text: string) => chalk.green(text),
-	codeBlockBorder: (text: string) => chalk.dim(text),
-	quote: (text: string) => chalk.italic(text),
-	quoteBorder: (text: string) => chalk.dim(text),
-	hr: (text: string) => chalk.dim(text),
-	listBullet: (text: string) => chalk.cyan(text),
-	bold: (text: string) => chalk.bold(text),
-	italic: (text: string) => chalk.italic(text),
-	strikethrough: (text: string) => chalk.strikethrough(text),
-	underline: (text: string) => chalk.underline(text),
+	heading: (text: string) => bold(cyan(text)),
+	link: blue,
+	linkUrl: dim,
+	code: yellow,
+	codeBlock: green,
+	codeBlockBorder: dim,
+	quote: italic,
+	quoteBorder: dim,
+	hr: dim,
+	listBullet: cyan,
+	bold,
+	italic,
+	strikethrough,
+	underline,
 	symbols: defaultSymbols,
 };
 
 export const defaultEditorTheme: EditorTheme = {
-	borderColor: (text: string) => chalk.dim(text),
+	borderColor: dim,
 	selectList: defaultSelectListTheme,
 	symbols: defaultSymbols,
 };

@@ -81,7 +81,7 @@ export interface OpenInEditorOptions {
  * Opens `content` in the user's external editor and returns the edited text.
  * Returns `null` if the editor exits with a non-zero code.
  *
- * The caller is responsible for stopping/starting the TUI around this call.
+ * Runs with the screen untouched; `editInTerminal` hands a running TUI's terminal to the editor.
  */
 export async function openInEditor(
 	editorCmd: string,
@@ -117,5 +117,55 @@ export async function openInEditor(
 		} catch {
 			// Ignore cleanup errors
 		}
+	}
+}
+
+/** Shown when neither `$VISUAL` nor `$EDITOR` names an editor on a platform without a default. */
+export const NO_EDITOR_CONFIGURED = "No editor configured. Set $VISUAL or $EDITOR environment variable.";
+
+/** The part of a terminal UI an editor handoff drives: release the screen, then take it back. */
+export interface EditorHandoffScreen {
+	stop(): void;
+	start(): void;
+}
+
+/**
+ * Opens the controlling terminal for the editor child, or returns `null` when there is none:
+ * Windows, piped stdin, a CI runner, a detached process. `null` hands the editor the inherited
+ * stdio, which is the same terminal whenever one exists.
+ */
+async function openControllingTerminal(): Promise<fs.FileHandle | null> {
+	if (process.platform === "win32") return null;
+	try {
+		return await fs.open("/dev/tty", "r+");
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Hands the terminal to the external editor for one edit of `content`, then takes it back.
+ *
+ * The editor runs on the controlling terminal when one opens, so it reads keys from a descriptor of
+ * its own rather than the stdin the stopped screen was reading. The terminal handle is closed and
+ * the screen restarted whether the editor saves, exits non-zero, or fails to start. Returns the
+ * edited text, or `null` when the editor exits non-zero; rejects when the editor cannot start.
+ */
+export async function editInTerminal(
+	screen: EditorHandoffScreen,
+	editorCmd: string,
+	content: string,
+	options?: Omit<OpenInEditorOptions, "stdio">,
+): Promise<string | null> {
+	const tty = await openControllingTerminal();
+	screen.stop();
+	try {
+		const stdio: OpenInEditorOptions["stdio"] = tty ? [tty.fd, tty.fd, tty.fd] : undefined;
+		return await openInEditor(editorCmd, content, { ...options, stdio });
+	} finally {
+		// The edit's outcome is already settled; a close that fails here must not replace it, and the
+		// descriptor is released with the process regardless.
+		await tty?.close().catch(() => {});
+		screen.start();
 	}
 }

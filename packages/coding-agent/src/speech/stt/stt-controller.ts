@@ -98,7 +98,7 @@ export class STTController {
 	}
 
 	async #ensureDeps(options: ToggleOptions): Promise<boolean> {
-		const modelKey = resolveSttModelSpec(settings.get("stt.modelName") as string | undefined).key;
+		const modelKey = resolveSttModelSpec(settings.get("stt.modelName")).key;
 		// Keyed on the model rather than a one-shot flag: switching stt.modelName
 		// mid-session must re-run preflight so an uncached new tier downloads here
 		// (with progress) instead of blocking silently at stop.
@@ -184,8 +184,8 @@ export class STTController {
 	}
 
 	async #startStreaming(editor: Editor, options: ToggleOptions): Promise<void> {
-		const modelKey = resolveSttModelSpec(settings.get("stt.modelName") as string | undefined).key;
-		const language = settings.get("stt.language") as string | undefined;
+		const modelKey = resolveSttModelSpec(settings.get("stt.modelName")).key;
+		const language = settings.get("stt.language");
 		this.#streamEditor = editor;
 		this.#streamCommitted = false;
 		this.#streamUtterance = "";
@@ -334,8 +334,8 @@ export class STTController {
 			this.#setState("transcribing", options);
 
 			const sttSettings = {
-				modelName: settings.get("stt.modelName") as string | undefined,
-				language: settings.get("stt.language") as string | undefined,
+				modelName: settings.get("stt.modelName"),
+				language: settings.get("stt.language"),
 			};
 			this.#transcriptionAbort = new AbortController();
 			const text = await transcribe(tempFile, { ...sttSettings, signal: this.#transcriptionAbort.signal });

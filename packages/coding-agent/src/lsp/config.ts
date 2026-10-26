@@ -376,6 +376,7 @@ export interface CollectConfigSourcesOptions<T> {
 	cwd: string;
 	fileSource: (filePath: string) => ConfigSource<T>;
 	pluginSource?: (root: ClaudePluginRoot) => ConfigSource<T> | null;
+	pluginRoots?: readonly ClaudePluginRoot[];
 }
 
 export function collectConfigSources<T>(options: CollectConfigSourcesOptions<T>): Array<ConfigSource<T>> {
@@ -404,7 +405,7 @@ export function collectConfigSources<T>(options: CollectConfigSourcesOptions<T>)
 	}
 
 	// Plugin configs (from marketplace/--plugin-dir roots)
-	const pluginRoots = getPreloadedPluginRoots();
+	const pluginRoots = options.pluginRoots ?? getPreloadedPluginRoots(options.cwd);
 	for (const root of pluginRoots) {
 		for (const filename of filenames) {
 			sources.push(options.fileSource(path.join(root.path, filename)));
@@ -513,10 +514,11 @@ function marketplaceConfigSource(root: ClaudePluginRoot): ConfigSource {
  * Configuration sources in priority order.
  * Supports both visible and hidden variants at each config location.
  */
-function getConfigSources(cwd: string): Array<ConfigSource<NormalizedConfig>> {
+function getConfigSources(cwd: string, pluginRoots?: readonly ClaudePluginRoot[]): Array<ConfigSource<NormalizedConfig>> {
 	return collectConfigSources({
 		baseName: "lsp",
 		cwd,
+		pluginRoots,
 		fileSource: fileConfigSource,
 		pluginSource: marketplaceConfigSource,
 	});
@@ -553,10 +555,10 @@ function getConfigSources(cwd: string): Array<ConfigSource<NormalizedConfig>> {
  * }
  * ```
  */
-export function loadConfig(cwd: string): LspConfig {
+export function loadConfig(cwd: string, pluginRoots?: readonly ClaudePluginRoot[]): LspConfig {
 	let mergedServers = coerceServerConfigs(DEFAULTS);
 
-	const configSources = getConfigSources(cwd).reverse();
+	const configSources = getConfigSources(cwd, pluginRoots).reverse();
 	let hasOverrides = false;
 
 	let idleTimeoutMs: number | undefined;
@@ -655,23 +657,4 @@ export function getServersForFile(config: LspConfig, filePath: string): Array<[s
 		const bIsLinter = b[1].isLinter ? 1 : 0;
 		return aIsLinter - bIsLinter;
 	});
-}
-
-/**
- * Find the primary server for a file (prefers type-checkers over linters).
- * Used for operations like definition, hover, references that need type intelligence.
- */
-export function getServerForFile(config: LspConfig, filePath: string): [string, ServerConfig] | null {
-	const servers = getServersForFile(config, filePath);
-	return servers.length > 0 ? servers[0] : null;
-}
-
-/**
- * Check if a server has a specific capability
- */
-export function hasCapability(
-	config: ServerConfig,
-	capability: keyof NonNullable<ServerConfig["capabilities"]>,
-): boolean {
-	return config.capabilities?.[capability] === true;
 }

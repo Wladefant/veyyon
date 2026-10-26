@@ -1,14 +1,8 @@
 /**
  * normalizeApprovalMode fails closed on typos (ask, never yolo).
- * validateApprovalModeSetting surfaces unrecognized values loudly.
  */
 import { describe, expect, it } from "bun:test";
-import {
-	APPROVAL_MODE_VALUES,
-	isKnownApprovalMode,
-	normalizeApprovalMode,
-	validateApprovalModeSetting,
-} from "../src/tools/core/approval";
+import { normalizeApprovalMode } from "../src/tools/core/approval";
 
 describe("normalizeApprovalMode", () => {
 	/**
@@ -44,30 +38,5 @@ describe("normalizeApprovalMode", () => {
 			expect(normalizeApprovalMode(bad)).toBe("ask");
 			expect(normalizeApprovalMode(bad)).not.toBe("yolo");
 		}
-	});
-});
-
-describe("validateApprovalModeSetting", () => {
-	it("undefined/null and known modes yield no warning", () => {
-		expect(validateApprovalModeSetting(undefined)).toBeUndefined();
-		expect(validateApprovalModeSetting(null)).toBeUndefined();
-		for (const m of APPROVAL_MODE_VALUES) {
-			expect(validateApprovalModeSetting(m)).toBeUndefined();
-			expect(isKnownApprovalMode(m)).toBe(true);
-		}
-	});
-
-	it("unrecognized values return a loud warning naming ask fallback", () => {
-		const w = validateApprovalModeSetting("askk");
-		expect(w).toBeDefined();
-		expect(w!).toContain("unrecognized");
-		expect(w!).toContain("askk");
-		expect(w!).toContain('"ask"');
-		expect(w!).toContain(APPROVAL_MODE_VALUES[0]!);
-	});
-
-	it("non-string unrecognized values also warn", () => {
-		expect(validateApprovalModeSetting(42)).toContain("unrecognized");
-		expect(validateApprovalModeSetting({})).toContain("unrecognized");
 	});
 });

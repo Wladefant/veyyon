@@ -23,8 +23,8 @@
 import { describe, expect, it } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import * as path from "node:path";
-
 import { ABORT_MARKER, BEGIN_PATCH_MARKER, END_PATCH_MARKER } from "@veyyon/hashline";
+import { stringConstantsIn } from "@veyyon/utils/source-declarations";
 import {
 	ADD_FILE_MARKER,
 	DELETE_FILE_MARKER,
@@ -203,12 +203,16 @@ describe("no module keeps its own copy", () => {
 	 * quietly, ready to excuse a copy that lands at that path later.
 	 */
 	it("and markers.ts really still declares them", async () => {
-		const text = await readFile(path.join(EDIT_SRC, "apply-patch", "markers.ts"), "utf8");
+		const declared = stringConstantsIn(await readFile(path.join(EDIT_SRC, "apply-patch", "markers.ts"), "utf8"));
 
-		expect(text).toInclude('"*** Add File:"');
-		expect(text).toInclude('"*** Delete File:"');
-		expect(text).toInclude('"*** Update File:"');
-		expect(text).toInclude('"*** Move to:"');
-		expect(text).toInclude('"*** End of File"');
+		expect(
+			Object.fromEntries(declared.filter(constant => constant.value.startsWith("*** ")).map(c => [c.name, c.value])),
+		).toEqual({
+			ADD_FILE_MARKER: "*** Add File:",
+			DELETE_FILE_MARKER: "*** Delete File:",
+			UPDATE_FILE_MARKER: "*** Update File:",
+			MOVE_TO_MARKER: "*** Move to:",
+			EOF_MARKER: "*** End of File",
+		});
 	});
 });

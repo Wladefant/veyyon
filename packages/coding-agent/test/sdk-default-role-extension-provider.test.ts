@@ -1,13 +1,13 @@
 /**
  * Regression: issue #3569.
  *
- * `modelRoles.default` set to a model from an extension-registered provider was
+ * `defaultModel` set to a model from an extension-registered provider was
  * ignored on fresh interactive launches (no `-c`/`--resume`, no `--model`).
- * Extensions register their providers AFTER the SDK's early `defaultRoleSpec`
- * resolution, so the role-pointed model wasn't visible there. The post-extension
+ * Extensions register their providers AFTER the SDK's early `defaultModelSpec`
+ * resolution, so the configured model wasn't visible there. The post-extension
  * fallback then went straight to `pickDefaultAvailableModel`, which prefers a
  * bundled provider's default (e.g. `openai/gpt-5.5` when `OPENAI_API_KEY` is set)
- * over the configured default role.
+ * over the configured default model.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
@@ -21,7 +21,7 @@ import { createAgentSession, type ExtensionFactory } from "@veyyon/coding-agent/
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Snowflake } from "@veyyon/utils";
 
-describe("issue #3569 fresh launch default role from extension provider", () => {
+describe("issue #3569 fresh launch default model from extension provider", () => {
 	let tempDir: string;
 	const authStoragesToClose: AuthStorage[] = [];
 
@@ -59,7 +59,7 @@ describe("issue #3569 fresh launch default role from extension provider", () => 
 		});
 	};
 
-	test("honors modelRoles.default pointing at an extension model when a bundled provider key is present", async () => {
+	test("honors defaultModel pointing at an extension model when a bundled provider key is present", async () => {
 		const bundledOpenAiDefault = getBundledModel("openai", "gpt-5.5");
 		if (!bundledOpenAiDefault) {
 			throw new Error("Expected bundled OpenAI GPT-5.5 default");
@@ -74,7 +74,7 @@ describe("issue #3569 fresh launch default role from extension provider", () => 
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
 
 		const settings = Settings.isolated();
-		settings.setModelRole("default", "runtime-provider/runtime-model");
+		settings.setDefaultModel("runtime-provider/runtime-model");
 
 		const { session } = await createAgentSession({
 			cwd: tempDir,

@@ -50,6 +50,12 @@ interface FakeSessionConfig {
 	 * child last said), so a suite sets the two independently.
 	 */
 	lastAssistantMessage?: AssistantMessage;
+	/**
+	 * Cancels the run from inside the child's turn, after its events. A salvage test cancels here
+	 * rather than through a short `agent.maxRuntimeMs`, because a real wall-clock cap can fire during
+	 * child setup on a loaded machine, before the turn it is meant to cut short has run.
+	 */
+	cancelAfterEvents?: AbortController;
 }
 
 /**
@@ -81,6 +87,7 @@ function createFakeSession(config: FakeSessionConfig = {}): MockSessionHandle {
 		({ emit, state }) => {
 			if (config.lastAssistantMessage) state.messages.push(config.lastAssistantMessage);
 			for (const event of config.events ?? []) emit(event);
+			config.cancelAfterEvents?.abort();
 		},
 		{ hangUntilAbort: config.hang },
 	);
@@ -244,9 +251,11 @@ describe("runSubprocess request guards", () => {
 	});
 
 	it("salvages the last assistant text for an aborted child with no completed output", async () => {
-		const settings = Settings.isolated({ "agent.maxRuntimeMs": 50 });
+		const cancel = new AbortController();
+		const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
 		const handle = createFakeSession({
 			hang: true,
+			cancelAfterEvents: cancel,
 			events: [
 				// One completed assistant turn with usage but no text content:
 				// counts a request and tokens without producing output chunks.
@@ -256,7 +265,7 @@ describe("runSubprocess request guards", () => {
 		});
 		mockCreateAgentSession(handle.session);
 
-		const result = await runSubprocess({ ...baseOptions, id: "agent-salvage", settings });
+		const result = await runSubprocess({ ...baseOptions, id: "agent-salvage", settings, signal: cancel.signal });
 
 		expect(result.aborted).toBe(true);
 		expect(result.requests).toBe(1);
@@ -269,15 +278,22 @@ describe("runSubprocess request guards", () => {
 	});
 
 	it("clips oversized salvage snippets", async () => {
-		const settings = Settings.isolated({ "agent.maxRuntimeMs": 50 });
+		const cancel = new AbortController();
+		const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
 		const longText = `start-marker ${"x".repeat(700)}`;
 		const handle = createFakeSession({
 			hang: true,
+			cancelAfterEvents: cancel,
 			lastAssistantMessage: createAssistantStopMessage(longText, "aborted"),
 		});
 		mockCreateAgentSession(handle.session);
 
-		const result = await runSubprocess({ ...baseOptions, id: "agent-salvage-clip", settings });
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "agent-salvage-clip",
+			settings,
+			signal: cancel.signal,
+		});
 
 		expect(result.aborted).toBe(true);
 		expect(result.output).toContain("start-marker");

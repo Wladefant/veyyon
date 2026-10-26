@@ -10,7 +10,7 @@
  * the identical fault under its prose name spent the retry budget and normally
  * recovered.
  *
- * `OAUTH_TRANSIENT_FAILURE_PATTERN`, twenty lines away in the same file, has
+ * `OAUTH_TRANSPORT_FAILURE_PATTERN`, twenty lines away in the same file, has
  * always listed `ECONN(REFUSED|RESET)`, `ETIMEDOUT` and `EAI_AGAIN`. So a token
  * refresh retried exactly the bytes a model request gave up on, which is two
  * classifiers in one file disagreeing about one fault.

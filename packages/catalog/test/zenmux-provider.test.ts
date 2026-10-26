@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
+import { getEnvApiKey } from "@veyyon/ai/env-api-key";
 import { getOAuthProviders } from "@veyyon/ai/registry/oauth";
 import { getEnvApiKey } from "@veyyon/ai/stream";
-import { PROVIDER_DESCRIPTORS } from "@veyyon/catalog/provider-models/descriptors";
+import { DEFAULT_MODEL_PER_PROVIDER, PROVIDER_DESCRIPTORS } from "@veyyon/catalog/provider-models/descriptors";
 import { zenmuxModelManagerOptions } from "@veyyon/catalog/provider-models/openai-compat";
 import type { FetchImpl } from "@veyyon/catalog/types";
 

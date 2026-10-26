@@ -26,9 +26,10 @@ export default class AuthGateway extends Command {
 		json: Flags.boolean({ description: "Output JSON (token/status/check)" }),
 		bind: Flags.string({ description: "Bind address for `serve` (host:port)", char: "b" }),
 		regenerate: Flags.boolean({ description: "Regenerate the gateway bearer token (token)" }),
+		"device-tokens-file": Flags.string({ description: "Server-only JSON map of active device IDs to bearer tokens; re-read per request" }),
 		"no-auth": Flags.boolean({
 			description:
-				"Disable inbound bearer-token auth (serve). Useful when bound to loopback, where any caller is allowed.",
+				"Rejected: inbound device bearer authentication is mandatory.",
 		}),
 		strict: Flags.boolean({
 			description:
@@ -41,7 +42,7 @@ export default class AuthGateway extends Command {
 		`# Boot on a non-default port\n  ${APP_NAME} auth-gateway serve --bind=127.0.0.1:4000`,
 		`# Print the gateway bearer token (creates one on first run)\n  ${APP_NAME} auth-gateway token`,
 		`# Rotate the gateway bearer token\n  ${APP_NAME} auth-gateway token --regenerate`,
-		`# Run on loopback without any bearer (anyone on this host can call)\n  ${APP_NAME} auth-gateway serve --no-auth`,
+		`# Use active per-device bearers from a server-only JSON map\n  ${APP_NAME} auth-gateway serve --device-tokens-file=/secure/devices.json`,
 		`# Show local gateway + broker config status\n  ${APP_NAME} auth-gateway status`,
 		`# Probe each broker credential to see which one is producing 401s\n  ${APP_NAME} auth-gateway check`,
 		`# Same, machine-readable for scripts\n  ${APP_NAME} auth-gateway check --json`,
@@ -60,6 +61,7 @@ export default class AuthGateway extends Command {
 				json: flags.json,
 				bind: flags.bind,
 				regenerate: flags.regenerate,
+				deviceTokensFile: flags["device-tokens-file"],
 				noAuth: flags["no-auth"],
 				strict: flags.strict,
 			},

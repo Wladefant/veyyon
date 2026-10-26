@@ -65,7 +65,7 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/image-attachment-describe": 142,
 	"tools/image-attachment-describe-system": 196,
 	"tools/image-gen": 110,
-	"tools/inspect-image": 255,
+	"tools/inspect-image": 260,
 	"tools/inspect-image-system": 192,
 	"tools/irc": 681,
 	"tools/isolation-recovery-hint": 83,
@@ -78,7 +78,7 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/manage-skill": 217,
 	"tools/memory-edit": 243,
 	"tools/patch": 692,
-	"tools/read": 1288,
+	"tools/read": 1295,
 	"tools/recall": 164,
 	"tools/reflect": 98,
 	// 318 -> 323: the single-replace parameters beside the internal batch contract.

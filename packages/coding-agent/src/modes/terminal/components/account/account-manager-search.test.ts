@@ -54,6 +54,7 @@ function makeCallbacks(recorded: Recorded): AccountManagerCallbacks {
 		onClearRateLimitBlock: () => {
 			recorded.cleared += 1;
 		},
+		onForgetSignedOut: () => {},
 		onCancel: () => {
 			recorded.cancels += 1;
 		},

@@ -19,7 +19,7 @@
  * whether the browser opens.
  */
 
-import { beforeAll, describe, expect, it, vi } from "bun:test";
+import { beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import { LoginDialogComponent } from "@veyyon/coding-agent/modes/terminal/components/dialogs/login-dialog";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
@@ -31,7 +31,7 @@ const ROWS = 40;
 
 function makeCard(): {
 	dialog: LoginDialogComponent;
-	completed: ReturnType<typeof vi.fn>;
+	completed: Mock<() => void>;
 	rows: () => string[];
 } {
 	const tui = { requestRender: vi.fn() } as unknown as TUI;

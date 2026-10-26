@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Sync upstream changes from santhreal/veyyon.
+
 ## [1.5.6] - 2026-10-10
 
 ### Added
@@ -16,6 +20,11 @@
 ### Fixed
 
 - Included native generated images in the assistant content contract used by Responses providers.
+## [1.5.6] - 2026-10-13
+
+### Changed
+
+- The `toolSchemaFlavor` documentation lists api.kimi.ai among the hosts that select `"moonshot-mfjs"` automatically; the type is unchanged.
 
 ## [1.5.0] - 2026-09-18
 

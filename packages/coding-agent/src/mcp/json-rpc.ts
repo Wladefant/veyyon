@@ -5,7 +5,7 @@
  * without maintaining persistent connections.
  */
 import { logger, tryParseJson } from "@veyyon/utils";
-import { scopedTimeoutSignal } from "../utils/fetch-timeout";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { mcpHttpFailureMessage } from "./transports/http-failure";
 import type { JsonRpcResponse } from "./types";
 

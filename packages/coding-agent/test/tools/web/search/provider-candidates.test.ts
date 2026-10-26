@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { resolveProviderCandidates, setExcludedSearchProviders } from "@veyyon/coding-agent/tools/web/search/provider";
 import {
 	getSearchProviderLabel,
-	resolveProviderCandidates,
-	setExcludedSearchProviders,
-} from "@veyyon/coding-agent/tools/web/search/provider";
-import { SEARCH_PROVIDER_ORDER, type SearchProviderId } from "@veyyon/coding-agent/tools/web/search/types";
+	SEARCH_PROVIDER_ORDER,
+	type SearchProviderId,
+} from "@veyyon/coding-agent/tools/web/search/types";
 
 /**
  * resolveProviderCandidates builds the web-search candidate list WITHOUT loading any provider

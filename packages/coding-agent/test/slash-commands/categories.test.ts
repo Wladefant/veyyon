@@ -15,12 +15,9 @@
  *     would mint a surprise header instead of joining an existing group.
  */
 import { describe, expect, it } from "bun:test";
-import {
-	BUILTIN_SLASH_COMMAND_CATEGORIES,
-	BUILTIN_SLASH_COMMAND_CATEGORY_ORDER,
-	BUILTIN_SLASH_COMMAND_DEFS,
-	BUILTIN_SLASH_COMMANDS,
-} from "../../src/slash-commands/builtin-registry";
+import { BUILTIN_SLASH_COMMAND_CATEGORIES } from "../../src/slash-commands/builtin-categories";
+import { BUILTIN_SLASH_COMMAND_DEFS, BUILTIN_SLASH_COMMANDS } from "../../src/slash-commands/builtin-registry";
+import { BUILTIN_SLASH_COMMAND_CATEGORY_ORDER } from "../../src/slash-commands/category-order";
 
 const KNOWN_CATEGORIES = new Set(["setup", "modes", "model", "share", "workspace", "context", "session", "info"]);
 

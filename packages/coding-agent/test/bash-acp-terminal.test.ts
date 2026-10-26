@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { afterEach, describe, expect, it, mock, spyOn, vi } from "bun:test";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import type { ClientBridge, ClientBridgeTerminalHandle } from "@veyyon/kernel/session/client-bridge";
+import { driveFakeTime, installFakeTime } from "./helpers/fake-time";
 import { useIsolatedGlobalSettings } from "./helpers/isolated-global-settings";
 import { makeToolSession } from "./helpers/tool-session";
 
@@ -42,6 +43,7 @@ function makeSession(bridge: ClientBridge): ToolSession {
 
 afterEach(() => {
 	mock.restore();
+	vi.useRealTimers();
 });
 
 describe("BashTool ACP terminal routing", () => {
@@ -78,7 +80,7 @@ describe("BashTool ACP terminal routing", () => {
 		expect(createSpy).toHaveBeenCalledTimes(1);
 		const params = createSpy.mock.calls[0]![0];
 		expect(params.command).toBe("/bin/bash");
-		expect(params.args).toEqual(["-l", "-c", "echo hi"]);
+		expect(params.args).toEqual(["-l", "-c", "{\necho hi\n} </dev/null"]);
 
 		// The first onUpdate must carry the terminalId so the editor can embed it
 		expect(updates.length).toBeGreaterThanOrEqual(1);
@@ -119,7 +121,7 @@ describe("BashTool ACP terminal routing", () => {
 		expect(createSpy).toHaveBeenCalledTimes(1);
 		const params = createSpy.mock.calls[0]![0];
 		expect(params.command).toBe("/bin/bash");
-		expect(params.args).toEqual(["-l", "-c", line]);
+		expect(params.args).toEqual(["-l", "-c", `{\n${line}\n} </dev/null`]);
 		// `args` must actually be present — the bug was omitting it entirely.
 		expect(params.args).toBeDefined();
 		expect(params.args?.length).toBeGreaterThan(0);
@@ -189,16 +191,52 @@ describe("BashTool ACP terminal routing", () => {
 		const killSpy = spyOn(handle, "kill");
 		const releaseSpy = spyOn(handle, "release");
 
-		spyOn(Bun, "sleep").mockImplementation(async () => {});
+		installFakeTime();
 
 		const tool = new BashTool(makeSession(bridge));
 
-		await expect(tool.execute("call-timeout", { command: "sleep 60", timeout: 1 })).rejects.toThrow(
-			/Command timed out after 1 seconds/,
+		const failure = await driveFakeTime(tool.execute("call-timeout", { command: "sleep 60", timeout: 1 })).then(
+			() => undefined,
+			(error: unknown) => error,
 		);
+
+		expect(failure).toBeInstanceOf(Error);
+		expect((failure as Error).message).toMatch(/Command timed out after 1 seconds/);
 
 		expect(killSpy).toHaveBeenCalledTimes(1);
 		expect(releaseSpy).toHaveBeenCalledTimes(1);
 		pendingExit.resolve({ exitCode: null, signal: "TERM" });
+	});
+
+	// The command deadline and the poll tick used to be `Bun.sleep` promises raced against the exit:
+	// a command that finished first left both armed, the deadline for the rest of its timeout, holding
+	// the event loop open long after the result was returned.
+	it("leaves no timer armed once the client terminal reports the exit", async () => {
+		const exit = Promise.withResolvers<{ exitCode: number | null; signal: string | null }>();
+		let kills = 0;
+		const handle: ClientBridgeTerminalHandle = {
+			terminalId: "term-fast-exit",
+			waitForExit: async () => exit.promise,
+			currentOutput: async () => ({ output: "done\n", truncated: false }),
+			kill: async () => {
+				kills++;
+			},
+			release: async () => {},
+		};
+		const bridge: ClientBridge = {
+			capabilities: { terminal: true },
+			createTerminal: async () => handle,
+		};
+		installFakeTime();
+
+		const tool = new BashTool(makeSession(bridge));
+		const running = tool.execute("call-fast-exit", { command: "echo done", timeout: 60 });
+		// Two poll ticks pass before the exit lands, so the poll timer has been re-armed in between.
+		setTimeout(() => exit.resolve({ exitCode: 0, signal: null }), 600);
+		const result = await driveFakeTime(running);
+
+		expect(result.content.find(c => c.type === "text")?.text).toContain("done");
+		expect(kills).toBe(0);
+		expect(vi.getTimerCount()).toBe(0);
 	});
 });

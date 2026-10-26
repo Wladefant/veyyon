@@ -13,12 +13,11 @@ import type {
 	ClientBridgeTerminalHandle,
 	ClientBridgeTerminalOutput,
 } from "@veyyon/kernel/session/client-bridge";
-import { errorMessage, isEnoent, lazy, logger, prompt, SIGNAL_EXIT_BASE, signalNumber } from "@veyyon/utils";
-import { normalizePathForComparison } from "@veyyon/utils/dirs";
-import { resolveAutoBackgroundWaitMs } from "../../async/auto-background";
+
 import type { AsyncJobManager } from "../../async/job-manager";
 import { type BashResult, executeBash } from "../../exec/bash-executor";
 import { formatExitCodeNotice } from "../../exec/exit-notice";
+import { buildNonInteractiveEnv } from "../../exec/non-interactive-env";
 import type { ExtensionTerminalCapability } from "../../extensibility/terminal-capability";
 import { InternalUrlRouter } from "../../internal-urls";
 import { toolsPrompts } from "../../prompts/tools/rows";
@@ -67,8 +66,8 @@ export { type BackgroundReason, formatBackgroundNotice } from "./execution-messa
 export const BASH_DEFAULT_PREVIEW_LINES = DEFAULT_TERMINAL_PREVIEW_LINES;
 
 const BASH_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const DEFAULT_AUTO_BACKGROUND_THRESHOLD_MS = 300_000;
-const DEFAULT_STALL_DETECTION_MS = 30_000;
+/** How often a client-bridge terminal's output is pushed while its command runs. */
+const BRIDGE_POLL_INTERVAL_MS = 250;
 
 /**
  * Shape a shell command line for an ACP-conformant `terminal/create` request.
@@ -88,12 +87,19 @@ const DEFAULT_STALL_DETECTION_MS = 30_000;
  * `-l`) instead of dropping to `cmd.exe` on Windows. The agent host's shell
  * path is used as a proxy for the client's, matching the near-universal
  * ACP deployment shape of an editor spawning veyyon as a co-hosted subprocess.
+ *
+ * The command runs in a brace group whose stdin is `/dev/null`. ACP `terminal/create` has no
+ * stdin control, so the client's open pipe would otherwise reach the command, and a `read`,
+ * `cat` or stdin-reading child would wait forever. A pipe, a heredoc or a `< file` inside the
+ * command overrides the group's stdin, so explicit input still arrives. The newline before the
+ * closing brace ends a trailing `# comment`.
  */
 export function wrapShellLineForClientTerminal(
 	line: string,
 	shellConfig: { shell: string; args: string[]; prefix?: string | undefined },
 ): { command: string; args: string[] } {
-	const finalLine = shellConfig.prefix ? `${shellConfig.prefix} ${line}` : line;
+	const prefixed = shellConfig.prefix ? `${shellConfig.prefix} ${line}` : line;
+	const finalLine = `{\n${prefixed}\n} </dev/null`;
 	return { command: shellConfig.shell, args: shellConfig.args.concat([finalLine]) };
 }
 
@@ -531,7 +537,7 @@ export class BashTool
 	// property. `bashApprovalDecision` stays exported and takes the paths
 	// explicitly, so the rule is testable without constructing a session.
 	readonly approval = (args: unknown): ToolApprovalDecision =>
-		bashApprovalDecision(args, this.session.settings.get("tools.protectedPaths") ?? [], this.session.cwd);
+		bashApprovalDecision(args, this.session.settings.get("tools.protectedPaths"), this.session.cwd);
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const rawCommand = (args as Partial<BashToolInput>).command;
 		const command = typeof rawCommand === "string" ? rawCommand : "(missing)";
@@ -591,15 +597,10 @@ export class BashTool
 		this.#autoBackgroundEnabled = this.session.settings.get("bash.autoBackground.enabled");
 		this.#autoBackgroundThresholdMs = Math.max(
 			0,
-			Math.floor(
-				this.session.settings.get("bash.autoBackground.thresholdMs") ?? DEFAULT_AUTO_BACKGROUND_THRESHOLD_MS,
-			),
+			Math.floor(this.session.settings.get("bash.autoBackground.thresholdMs")),
 		);
 		this.#stallDetectionEnabled = this.session.settings.get("bash.stallDetection.enabled");
-		this.#stallMs = Math.max(
-			0,
-			Math.floor(this.session.settings.get("bash.stallDetection.stallMs") ?? DEFAULT_STALL_DETECTION_MS),
-		);
+		this.#stallMs = Math.max(0, Math.floor(this.session.settings.get("bash.stallDetection.stallMs")));
 	}
 
 	/**
@@ -911,15 +912,7 @@ export class BashTool
 		const waiters: Array<
 			Promise<ManagedBashJobCompletion | { kind: "background"; reason: BackgroundReason } | { kind: "aborted" }>
 		> = [job.completion];
-		let thresholdTimer: Timer | undefined;
-		if (thresholdMs > 0) {
-			const { promise: thresholdPromise, resolve: resolveThreshold } = Promise.withResolvers<{
-				kind: "background";
-				reason: BackgroundReason;
-			}>();
-			thresholdTimer = setTimeout(() => resolveThreshold({ kind: "background", reason: "threshold" }), thresholdMs);
-			waiters.push(thresholdPromise);
-		}
+
 		if (stallMs > 0) {
 			waiters.push(watchStall(job, stallMs, internal.signal));
 		}
@@ -942,9 +935,10 @@ export class BashTool
 		}
 
 		try {
-			return await Promise.race(waiters);
+			const raced = Promise.race(waiters);
+			if (thresholdMs <= 0) return await raced;
+			return await settleWithin(raced, thresholdMs, { kind: "background" as const, reason: "threshold" as const });
 		} finally {
-			clearTimeout(thresholdTimer);
 			internal.abort();
 			unregisterManual();
 			if (signal && onAbort) {
@@ -996,9 +990,7 @@ export class BashTool
 				command: shellSpawn.command,
 				args: shellSpawn.args,
 				cwd: call.commandCwd,
-				env: call.resolvedEnv
-					? Object.entries(call.resolvedEnv).map(([name, value]) => ({ name, value }))
-					: undefined,
+				env: Object.entries(buildNonInteractiveEnv(call.resolvedEnv)).map(([name, value]) => ({ name, value })),
 				outputByteLimit: DEFAULT_MAX_BYTES,
 			});
 			return this.#runOnClientTerminal(call, handle, wallTimeStart, signal, onUpdate);
@@ -1523,22 +1515,29 @@ async function waitForClientTerminal(
 	};
 	signal?.addEventListener("abort", onAbortSignal, { once: true });
 
+	// The deadline spans every poll tick, so it is one timer cleared on every exit path rather
+	// than a sleep that stays armed for the full timeout after the command finishes.
+	let deadlineTimer: NodeJS.Timeout | undefined;
+	let timeoutPromise: Promise<{ kind: "timeout" }> | undefined;
 	try {
 		if (signal?.aborted) {
 			await fireKill();
 			throw new ToolAbortError("Command aborted");
 		}
-		const timeoutPromise = timeoutMs ? Bun.sleep(timeoutMs).then(() => ({ kind: "timeout" as const })) : undefined;
+		if (timeoutMs) {
+			const { promise, resolve } = Promise.withResolvers<{ kind: "timeout" }>();
+			deadlineTimer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
+			timeoutPromise = promise;
+		}
 		for (;;) {
 			const racers: Array<Promise<BridgeRaceResult>> = [
 				exitPromise.then(s => ({ kind: "exit" as const, status: s })),
-				Bun.sleep(250).then(() => ({ kind: "poll" as const })),
 			];
 			if (timeoutPromise) racers.push(timeoutPromise);
 			if (signal) {
 				racers.push(abortedP.then(() => ({ kind: "aborted" as const })));
 			}
-			const raced = await Promise.race(racers);
+			const raced = await settleWithin(Promise.race(racers), BRIDGE_POLL_INTERVAL_MS, { kind: "poll" as const });
 			if (raced.kind === "aborted" || signal?.aborted) {
 				await fireKill();
 				throw new ToolAbortError("Command aborted");
@@ -1565,6 +1564,7 @@ async function waitForClientTerminal(
 			});
 		}
 	} finally {
+		clearTimeout(deadlineTimer);
 		signal?.removeEventListener("abort", onAbortSignal);
 	}
 }

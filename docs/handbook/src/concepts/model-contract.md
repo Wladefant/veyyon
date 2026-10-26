@@ -136,22 +136,21 @@ For BYOK providers, model and provider entries are data in `models.yml`:
 
 Malformed provider data fails at load and reports the error.
 
-## Per-role models
+## Per-feature models
 
-The conversation model (`/model` or `--model`) is separate from background roles. Roles are configured
-under `modelRoles`:
+The conversation model (`/model` or `--model`, stored as `defaultModel`) is separate from the helpers:
+the model calls a feature makes on its own behalf, such as session titles, memory, and auto-thinking.
+Each helper is configured under `agent.helpers.<id>` and runs the session's model while unset.
 
-- `modelRoles.tiny` (or `smol`): lightweight background work (titles, memory, auto-thinking).
-
-Agent models are not roles. They are configured in the Agents settings area, on two exclusive scopes.
+Agent models are not helpers. They are configured in the Agents settings area, on two exclusive scopes.
 With **Same Model for All Agents** off, the first of these sets the model: that agent's row in
-`agent.agents`, then the agent definition's own `model:`, otherwise the `default` model role.
+`agent.agents`, then the agent definition's own `model:`, otherwise the spawning session's live model.
 With it on, `agent.model` sets it for every agent and the rows above are not read. There is no
 silent blend, and a configured value that matches no available model rejects the spawn instead of
 falling through to the next layer. `/agents` shows the resolved model and which
 setting applied.
 See [Settings: Agents](../reference/settings.md#agents) and
-[Models, roles, and profiles](../using/roles-and-profiles.md).
+[Models, helpers, and profiles](../using/roles-and-profiles.md).
 
 ## Automation note
 

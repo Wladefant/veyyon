@@ -45,7 +45,7 @@ import { scheduler } from "node:timers/promises";
 import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
 import type { ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { createMockModel, type MockResponse } from "@veyyon/ai/providers/mock";
+import { createMockModel, type MockModel, type MockResponse } from "@veyyon/ai/providers/mock";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
@@ -90,7 +90,7 @@ describe("aborting mid-tool settles the session with no dangling pending state",
 	let tempDir: string;
 	let authStorage: AuthStorage | undefined;
 	let session: AgentSession;
-	let mock: ReturnType<typeof createMockModel>;
+	let mock: MockModel;
 	let scriptedResponses: MockResponse[];
 	let toolEntered: Promise<void>;
 	let markToolEntered: () => void;

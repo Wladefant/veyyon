@@ -56,6 +56,8 @@ export { Settings, settings } from "./config/settings";
 // barrel; they now live here so the CLI boot path (which never imports this
 // library entry) can lazy-load tool implementations on first construction.
 export * from "./edit";
+// Skills
+export * from "./extensibility/active-skills";
 // Custom commands
 export type * from "./extensibility/custom-commands/types";
 export type * from "./extensibility/custom-tools";
@@ -74,7 +76,6 @@ export * from "./extensibility/extensions";
 // extension API, so eleven event-result type names are declared in both modules
 // and a star re-export is ambiguous. These two are what a hook file needs.
 export type { HookAPI, HookContext } from "./extensibility/hooks";
-// Skills
 export * from "./extensibility/skills";
 export * from "./goals";
 export * from "./goals/goal-view";
@@ -130,6 +131,7 @@ export * from "./theme/theme";
 export * from "./tools";
 export * from "./tools/agent/ask";
 export * from "./tools/agent/irc";
+export * from "./tools/agent/irc-enabled";
 export * from "./tools/agent/learn";
 export * from "./tools/agent/manage-skill";
 export * from "./tools/agent/memory-edit";
@@ -162,6 +164,15 @@ export * from "./tools/shell/launch";
 export * from "./tools/shell/ssh";
 export * from "./tools/web/browser";
 export * from "./tools/web/gh";
+export * from "./tools/web/gh-fetch";
+export { parsePositiveDecimalInt } from "./tools/web/gh-format";
+export {
+	type GhRunWatchFailedLogDetails,
+	type GhRunWatchJobDetails,
+	type GhRunWatchRunDetails,
+	type GhRunWatchViewDetails,
+	resolveTailLimit,
+} from "./tools/web/gh-run-watch";
 export * from "./tools/web/image-gen";
 export * from "./tools/web/search";
 export * from "./tools/web/tts";

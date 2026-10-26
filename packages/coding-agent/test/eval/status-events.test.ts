@@ -21,6 +21,7 @@ import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { upsertStatusEvent } from "@veyyon/coding-agent/eval/status-events";
 import type { EvalStatusEvent } from "@veyyon/coding-agent/eval/types";
+import { reachedNames } from "../helpers/module-reach-gate";
 
 const SRC = path.resolve(import.meta.dir, "../../src");
 
@@ -173,31 +174,20 @@ describe("recording an eval status event", () => {
 
 describe("the status-event helper stays out of the renderer", () => {
 	/**
-	 * The whole point of the move. The producer imports it from the leaf, not from the module that draws events,
-	 * and the leaf imports nothing but the event type.
+	 * Measured on the module graph, transitively, because `export ... from` instantiates a module just like an
+	 * import does. The tool reaches the leaf and not the terminal engine: the renderer the helper used to sit in
+	 * pulled `Markdown`, the theme engine and the settings store into a tool that starts a Python kernel.
 	 */
-	it("is imported by the eval tool from the leaf", async () => {
-		const tool = await Bun.file(path.join(SRC, "tools/shell/eval.ts")).text();
-		// Resolved against the tool's own directory, because the edge is to the leaf module and not to
-		// the number of `..` segments that reach it from wherever the tool currently sits.
-		const specifiers = [...tool.matchAll(/from "(\.[^"]+)"/g)].map(match =>
-			path.posix.normalize(path.posix.join("tools/shell", match[1] ?? "")),
-		);
+	it("is reached by the eval tool, which instantiates no part of the terminal engine", () => {
+		const reached = reachedNames("tools/shell/eval.ts");
 
-		expect(specifiers).toContain("eval/status-events");
-		// And the tool has no edge to the renderer left at all. Moving the helper alone bought nothing, because
-		// `eval.ts` also re-exported the renderer, and `export ... from` instantiates a module just like an
-		// import does. Both edges had to go for the Python runner to stop carrying `Markdown` and the theme
-		// engine: 801 modules to 638.
-		expect(specifiers.filter(specifier => specifier.includes("eval-render"))).toEqual([]);
+		expect(reached).toContain("coding-agent/src/eval/status-events.ts");
+		expect(reached.filter(name => name.includes("terminal/engine"))).toEqual([]);
 	});
 
 	/** The leaf's only import is the type it operates on, so appending to a list costs one module. */
-	it("imports only the event type", async () => {
-		const leaf = await Bun.file(path.join(SRC, "eval/status-events.ts")).text();
-		const imports = [...leaf.matchAll(/^import .*?from "(.+?)";$/gm)].map(match => match[1]);
-		expect(imports).toEqual(["./types"]);
-		expect(leaf).toContain("import type");
+	it("instantiates no module but itself", () => {
+		expect(reachedNames("eval/status-events.ts")).toEqual(["coding-agent/src/eval/status-events.ts"]);
 	});
 
 	/**

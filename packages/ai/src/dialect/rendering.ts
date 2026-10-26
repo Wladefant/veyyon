@@ -129,15 +129,6 @@ export function stringifyJson(value: unknown): string {
 	return stringifyJsonValue(value) ?? "null";
 }
 
-// XML escaping has ONE owner in @veyyon/utils: `escapeXmlText` (escapes `&`,
-// `<`, `>`) and `escapeXmlAttribute` (also escapes `"` for attribute values),
-// both single-pass with a no-alloc fast path. Re-exported here (the attribute
-// one under this module's shorter `escapeXmlAttr` name) so dialect modules keep
-// importing them from `./rendering` alongside the other render helpers. Behavior
-// parity with the naive replaceAll chains these replaced is locked by the
-// differentials in utils/test/sanitize-text.test.ts.
-export { escapeXmlAttribute as escapeXmlAttr, escapeXmlText } from "@veyyon/utils/sanitize-text";
-
 export type AssistantTranscriptParts = {
 	readonly text: string;
 	readonly thinking: string;

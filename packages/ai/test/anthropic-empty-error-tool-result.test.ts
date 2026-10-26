@@ -20,6 +20,13 @@ const anthropicModel: Model<"anthropic-messages"> = buildModel({
 	baseUrl: "https://api.anthropic.com",
 });
 
+const visionModel: Model<"anthropic-messages"> = buildModel({
+	...baseModel,
+	input: ["text", "image"],
+	provider: "anthropic",
+	baseUrl: "https://api.anthropic.com",
+});
+
 const user: UserMessage = {
 	role: "user",
 	content: "run the tool",
@@ -94,5 +101,39 @@ describe("anthropic empty error tool_result encoding", () => {
 		const block = getToolResultBlock(anthropicModel, toolResult);
 		expect(block.is_error).toBe(false);
 		expect(block.content).toBe("");
+	});
+
+	// Image-capable models encode tool results as a block array, so an empty successful result became
+	// `content: []`. Official Anthropic accepts it; strict Anthropic-compatible endpoints (Z.AI GLM) reject
+	// the whole request with 400 code 1213. `""` is accepted by both
+	// (oh-my-pi 4025b27c156d90dbda6fd1312e60e4895d6af3b1).
+	it("encodes an empty successful tool result as an empty string on image-capable models", () => {
+		const toolResult: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: "toolu_empty_error",
+			toolName: "write",
+			content: [{ type: "text", text: "" }],
+			isError: false,
+			timestamp: Date.now(),
+		};
+
+		const block = getToolResultBlock(visionModel, toolResult);
+		expect(block.is_error).toBe(false);
+		expect(block.content).toBe("");
+	});
+
+	it("still fills an empty error tool result on image-capable models", () => {
+		const toolResult: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: "toolu_empty_error",
+			toolName: "write",
+			content: [{ type: "text", text: "  " }],
+			isError: true,
+			timestamp: Date.now(),
+		};
+
+		const block = getToolResultBlock(visionModel, toolResult);
+		expect(block.is_error).toBe(true);
+		expect(block.content).toBe("Tool failed with no output.");
 	});
 });

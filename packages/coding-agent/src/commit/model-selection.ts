@@ -5,14 +5,10 @@ import {
 	fallbackForUnavailableDefault,
 	getModelMatchPreferences,
 	type ModelLookupRegistry,
-	parseModelPattern,
-	resolveModelRoleValue,
-	resolveRoleSelection,
-	resolveRoleSelectionWithInherit,
+	resolveModelSelectorValue,
 } from "../config/model-resolver";
-import { DEFAULT_MODEL_SLOT, MODEL_ROLE_IDS } from "../config/model-roles";
 import type { Settings } from "../config/settings";
-import MODEL_PRIO from "../priority.json" with { type: "json" };
+import { resolveHelperModel } from "../task/helper-settings";
 import { concreteThinkingLevel } from "../thinking";
 
 export interface ResolvedCommitModel {
@@ -45,8 +41,8 @@ export async function resolvePrimaryModel(
 	const available = modelRegistry.getAvailable();
 	const matchPreferences = getModelMatchPreferences(settings);
 	const resolved = override
-		? resolveModelRoleValue(override, available, { settings, matchPreferences })
-		: resolveRoleSelectionWithInherit(["commit", "smol", ...MODEL_ROLE_IDS], settings, available);
+		? resolveModelSelectorValue(override, available, { settings, matchPreferences })
+		: resolveHelperModel(settings, "commit", available);
 	let model = resolved?.model;
 	let thinkingLevel = resolved?.thinkingLevel;
 	if (!model && !override) {
@@ -56,10 +52,11 @@ export async function resolvePrimaryModel(
 		// authoritative and still fails hard. With no configured default at all
 		// there is nothing to warn about — picking an available model IS the
 		// default resolution (mirrors main.ts's un-warned scopedModels[0] path).
-		const configuredDefault = settings.getModelRole(DEFAULT_MODEL_SLOT);
-		const fallback = fallbackForUnavailableDefault(configuredDefault, available);
+		const configuredDefault = settings.get("defaultModel");
+		const defaultPattern = Array.isArray(configuredDefault) ? configuredDefault[0] : configuredDefault;
+		const fallback = fallbackForUnavailableDefault(defaultPattern, available);
 		if (fallback) {
-			if (configuredDefault) warn(fallback.warning);
+			if (defaultPattern) warn(fallback.warning);
 			model = fallback.model;
 			thinkingLevel = undefined;
 		}
@@ -78,7 +75,7 @@ export async function resolvePrimaryModel(
 	};
 }
 
-export async function resolveSmolModel(
+export async function resolveCommitHelperModel(
 	settings: Settings,
 	modelRegistry: CommitModelRegistry,
 	fallbackModel: Model<Api>,
@@ -86,37 +83,20 @@ export async function resolveSmolModel(
 	warn: (message: string) => void = message => process.stderr.write(`Warning: ${message}\n`),
 ): Promise<ResolvedCommitModel> {
 	const available = modelRegistry.getAvailable();
-	const resolvedSmol = resolveRoleSelection(["smol"], settings, available);
-	if (resolvedSmol?.model) {
-		const apiKey = await modelRegistry.getApiKey(resolvedSmol.model);
+	const resolved = resolveHelperModel(settings, "commit", available);
+	if (resolved?.model) {
+		const apiKey = await modelRegistry.getApiKey(resolved.model);
 		if (apiKey) {
 			return {
-				model: resolvedSmol.model,
-				apiKey: modelRegistry.resolver(resolvedSmol.model),
-				thinkingLevel: concreteThinkingLevel(resolvedSmol.thinkingLevel),
+				model: resolved.model,
+				apiKey: modelRegistry.resolver(resolved.model),
+				thinkingLevel: concreteThinkingLevel(resolved.thinkingLevel),
 			};
 		}
-		// Law 10: a CONFIGURED smol role being skipped for missing credentials
-		// must be loud, not a quiet substitution down the priority list.
-		// `veyyon auth` is not a command: `cli-commands.ts` registers `auth-broker`
-		// and `auth-gateway`, and a bare `veyyon auth` hits the near-miss guard
-		// rather than a login flow. This warning is printed by `veyyon commit`,
-		// which has no TUI, so `/login` is not available here either.
-		warn(
-			`Configured smol model ${resolvedSmol.model.provider}/${resolvedSmol.model.id} has no stored credentials; picking a substitute — run \`veyyon auth-broker login ${resolvedSmol.model.provider}\` to sign in.`,
-		);
-	}
-
-	const matchPreferences = getModelMatchPreferences(settings);
-	for (const pattern of MODEL_PRIO.smol) {
-		const candidate = parseModelPattern(pattern, available, matchPreferences).model;
-		if (!candidate) continue;
-		const apiKey = await modelRegistry.getApiKey(candidate);
-		if (apiKey) {
-			return {
-				model: candidate,
-				apiKey: modelRegistry.resolver(candidate),
-			};
+		if (!resolved.inherited) {
+			warn(
+				`Configured commit helper model ${resolved.model.provider}/${resolved.model.id} has no stored credentials; picking a substitute — run \`veyyon auth-broker login ${resolved.model.provider}\` to sign in.`,
+			);
 		}
 	}
 

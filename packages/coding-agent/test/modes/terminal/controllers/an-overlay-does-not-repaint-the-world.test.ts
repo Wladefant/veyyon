@@ -26,7 +26,7 @@
  * the whole UI once, on purpose, because the rows underneath the overlay changed too.
  */
 
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -76,8 +76,8 @@ afterEach(() => {
 interface Mounted {
 	readonly cards: AccountManagerComponent[];
 	readonly card: AccountManagerComponent;
-	readonly requestRender: ReturnType<typeof vi.fn<() => void>>;
-	readonly requestComponentRender: ReturnType<typeof vi.fn<(component: unknown) => void>>;
+	readonly requestRender: Mock<() => void>;
+	readonly requestComponentRender: Mock<(component: unknown) => void>;
 }
 
 async function mountCard(): Promise<Mounted> {

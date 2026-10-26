@@ -62,7 +62,7 @@ describe("issue #1022 — path-scoped enabledModels respected by default fallbac
 			YAML.stringify({
 				enabledModels: [{ path: privatePath, models: ["openai-codex"] }],
 				disabledProviders: [{ path: privatePath, providers: ["github-copilot"] }],
-				modelRoles: { default: "github-copilot/gpt-5.5" },
+				defaultModel: "github-copilot/gpt-5.5",
 			}),
 		);
 

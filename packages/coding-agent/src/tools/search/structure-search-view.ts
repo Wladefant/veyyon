@@ -12,6 +12,7 @@
  * from it.
  */
 
+import { formatCount } from "@veyyon/utils/format";
 import type {
 	StatusRowView,
 	ToolView,
@@ -27,7 +28,6 @@ import { toPathList } from "../core/path-utils";
 import {
 	emptyStatusLine as emptyLine,
 	errorTextBlock,
-	formatCount,
 	formatParseErrorsCountLabel,
 	heldBack,
 	MATCH_NOUN,

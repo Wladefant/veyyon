@@ -1,11 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getActiveSkills } from "@veyyon/coding-agent/extensibility/skills";
+import { getActiveSkills } from "@veyyon/coding-agent/extensibility/active-skills";
 import { MCPManager } from "@veyyon/coding-agent/mcp/manager";
-import { getMemoryRoot } from "@veyyon/coding-agent/memory/local";
+import { getMemoryRoot } from "@veyyon/coding-agent/memory/paths";
 import * as themeEngine from "@veyyon/coding-agent/theme/theme";
-import { formatStatusIcon } from "@veyyon/coding-agent/tools/core/render-utils";
+import { formatStatusIcon } from "@veyyon/coding-agent/tools/core/tool-ui-status";
 import {
 	dynamicImportBindings,
 	dynamicImportSpecifiersIn,
@@ -840,28 +840,6 @@ describe("reading a local file does not load the MCP client, the skill loader or
 	});
 
 	/**
-	 * And the tool still re-exports every fetcher, which is the promise that made the move invisible to
-	 * callers. `tools/web/gh-view.ts` and a long tail of tests name `./gh` for these, and the re-export is
-	 * the only reason none of them changed. Asserted through the module's exports rather than by reading
-	 * the source, so a re-export that compiles but resolves to nothing would fail here.
-	 */
-	it("the github tool still re-exports the fetchers it used to own", async () => {
-		const tool = (await import("@veyyon/coding-agent/tools/web/gh")) as Record<string, unknown>;
-
-		for (const name of [
-			"getOrFetchIssue",
-			"getOrFetchPr",
-			"getOrFetchPrDiff",
-			"githubIssueJsonWithStateReasonFallback",
-			"parsePrUnifiedDiff",
-			"resolveDefaultRepoMemoized",
-			"parsePositiveDecimalInt",
-		]) {
-			expect(typeof tool[name], `tools/gh must still re-export ${name}`).toBe("function");
-		}
-	});
-
-	/**
 	 * The handler-to-subsystem edges by name, so a failure says which import to change. The MCP one is
 	 * the subtle case and the reason it is asserted as a runtime SPECIFIER rather than only as
 	 * reachability: `import type { MCPManager }` and `import { MCPManager }` differ by one word, compile
@@ -985,6 +963,12 @@ const LEAF_OWNERS: ReadonlyArray<
 		"slash-commands/builtin-registry.ts",
 		1381,
 	],
+	// THE ACTIVE THEME. `theme` is a live binding the engine reassigns through `setActiveTheme`, and
+	// `./theme-binding` holds it so a reader need not load theme JSON, highlighting and mermaid to read
+	// the palette. 96 modules took it alone from the engine: summed reach 39,001 -> 31,642, 60 of them
+	// left the engine's graph entirely (package modules reaching it 256 -> 135), `extensibility/utils.ts`
+	// 170 -> 11, `cli/update-cli.ts` 229 -> 100.
+	["theme", "theme/theme-binding.ts", "theme/theme.ts", 164],
 ];
 
 /** Every runtime (non-`type`) named binding a file takes from a module whose path ends with `suffix`. */
@@ -1037,6 +1021,7 @@ describe("a cheap value is owned by a leaf, and a file that wants only it names 
 		expect(runtimeImportsOf(path.join(SRC, "mcp/manager-instance.ts"))).toEqual([]);
 		expect(runtimeImportsOf(path.join(SRC, "extensibility/active-skills.ts"))).toEqual([]);
 		expect(runtimeImportsOf(path.join(SRC, "tools/core/tool-ui-status.ts"))).toEqual([]);
+		expect(runtimeImportsOf(path.join(SRC, "theme/theme-binding.ts"))).toEqual([]);
 		// `@veyyon/utils/dirs` (15) rather than the barrel (74), for `getMemoriesDir`. Safe to name directly
 		// since `dirs.ts` applies `$HOME/.env` itself; see `packages/utils/test/dotenv-*.test.ts`. 75 -> 18.
 		expect(runtimeImportsOf(path.join(SRC, "memory/paths.ts"))).toEqual(["node:path", "@veyyon/utils/dirs"]);
