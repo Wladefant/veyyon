@@ -203,7 +203,7 @@ describe("an /ssh host line means the same at the terminal and over ACP", () => 
 
 	// The malformed lines are refusals on both surfaces, not two identical writes:
 	// agreement alone would pass if a malformed line were accepted everywhere.
-	test.each(MALFORMED)("%s changes nothing", async line => {
+	test.each([...MALFORMED])("%s changes nothing", async line => {
 		const outcome = await throughText(line);
 		expect(outcome.changes).toEqual([]);
 		expect(outcome.refusal).toContain("Usage: /ssh");
