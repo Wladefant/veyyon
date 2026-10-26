@@ -9,6 +9,7 @@ export { type ByteTruncationResult, truncateHeadBytes, truncateTailBytes } from 
 import { formatBytes } from "@veyyon/utils/format";
 import { DEFAULT_INLINE_FLOOR_FRACTION, DEFAULT_INLINE_OUTPUT_MAX_BYTES } from "../config/settings-domains/shared";
 import { sanitizeWithOptionalSixelPassthrough } from "../utils/sixel";
+import type { ProducerOutputGuard } from "../secrets/producer-output";
 
 // =============================================================================
 // Constants
@@ -80,6 +81,8 @@ export interface OutputSummary {
 }
 
 export interface OutputSinkOptions {
+	/** Opt-in producer protection, applied before callbacks or backing artifact writes. */
+	outputGuard?: ProducerOutputGuard;
 	artifactPath?: string;
 	artifactId?: string;
 	/** Tail buffer budget (bytes). Default DEFAULT_MAX_BYTES. */
@@ -860,6 +863,7 @@ export class OutputSink {
 	readonly #onChunk?: (chunk: string) => void;
 	readonly #chunkThrottleMs: number;
 	readonly #maxColumns: number;
+	readonly #outputGuard?: ProducerOutputGuard;
 
 	// Optional artifact-on-disk cap. When `#artifactMaxBytes > 0` the file sink
 	// owns a head budget + a rolling tail buffer; once the head is closed,
@@ -893,6 +897,7 @@ export class OutputSink {
 			artifactHeadBytes = ARTIFACT_DEFAULT_HEAD_BYTES,
 		} = options ?? {};
 		this.#artifactPath = artifactPath;
+		this.#outputGuard = options?.outputGuard;
 		this.#artifactId = artifactId;
 		this.#spillThreshold = spillThreshold;
 		this.#headLimit = Math.max(0, headBytes);
@@ -917,11 +922,15 @@ export class OutputSink {
 	 * `emitInline: false` keeps that representation out of the live callback.
 	 */
 	push(chunk: string, options?: { inline?: string; emitInline?: boolean }): void {
+		this.#pushFiltered(this.#outputGuard ? this.#outputGuard.push(chunk) : chunk, options);
+	}
+
+	#pushFiltered(chunk: string, options?: { inline?: string; emitInline?: boolean }): void {
 		const { head, partial } = splitTrailingPartialEscape(this.#partialEscape + chunk);
 		this.#partialEscape = partial;
 		if (head.length === 0) return;
 		chunk = sanitizeWithOptionalSixelPassthrough(head, sanitizeText);
-		const inline = options?.inline;
+		const inline = options?.inline === undefined ? undefined : this.#outputGuard?.sanitize(options.inline) ?? options.inline;
 		const substituted = inline !== undefined;
 		const inlineChunk = inline === undefined ? chunk : sanitizeText(inline);
 
@@ -1269,6 +1278,8 @@ export class OutputSink {
 	 * branch in `dump()` against stale totals.
 	 */
 	replace(text: string): void {
+		this.#outputGuard?.reset();
+		text = this.#outputGuard?.sanitize(text) ?? text;
 		this.#clearPendingChunkTimer();
 		this.#buffer = text;
 		this.#bufferBytes = Buffer.byteLength(text, "utf-8");
@@ -1415,6 +1426,7 @@ export class OutputSink {
 	}
 
 	async #dumpInternal(notice: string | undefined, strict: boolean): Promise<OutputSummary> {
+		if (this.#outputGuard) this.#pushFiltered(this.#outputGuard.finish());
 		const noticeLine = notice ? `[${notice}]\n` : "";
 
 		// Flush any chunk still held back by the throttle so the live preview
