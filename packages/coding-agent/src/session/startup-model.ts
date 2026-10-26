@@ -123,7 +123,6 @@ function installPatternFallbackChain(
 		seenSelectors.add(fallbackSelector);
 		fallbackSelectors.push(fallbackSelector);
 	}
-	if (fallbackSelectors.length === 0) return;
 
 	const fallbackChains: Record<string, string[]> = { [primarySelector]: fallbackSelectors };
 	const existingFallbackChains = settings.get("retry.fallbackChains");

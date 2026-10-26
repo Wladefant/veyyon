@@ -227,14 +227,13 @@ function installAgentRetryFallbackChain(args: {
 	authFallbackUsed: boolean;
 }): string | undefined {
 	const { settings, candidates, model, authFallbackUsed } = args;
-	if (!model || authFallbackUsed || candidates.length <= 1) return undefined;
+	if (!model || authFallbackUsed || candidates.length === 0) return undefined;
 
 	const selectedIndex = candidates.findIndex(
 		candidate => candidate.model.provider === model.provider && candidate.model.id === model.id,
 	);
 	if (selectedIndex < 0) return undefined;
 	const fallbackSelectors = candidates.slice(selectedIndex + 1).map(candidate => candidate.selector);
-	if (fallbackSelectors.length === 0) return undefined;
 
 	// Keyed by the primary's own selector, so the chain applies to that model in this agent's settings
 	// fork and never reaches the parent's chains.

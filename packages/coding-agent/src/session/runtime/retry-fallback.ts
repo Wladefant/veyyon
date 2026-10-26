@@ -95,7 +95,7 @@ export class RetryFallback {
 		const explicitRole = this.#session.modelPatternFallbackKey;
 		const chains = sanitizeRetryFallbackChains(settings.get("retry.fallbackChains"));
 		return {
-			chains: explicitRole && chains[explicitRole] ? { [explicitRole]: chains[explicitRole] } : chains,
+			chains: explicitRole !== undefined ? { [explicitRole]: chains[explicitRole] ?? [] } : chains,
 			defaultModel: () => normalizeModelPatternList(settings.get("defaultModel"))[0],
 			models: this.#session.modelRegistry,
 			activeModel: this.#session.model,
