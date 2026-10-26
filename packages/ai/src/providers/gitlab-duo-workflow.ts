@@ -27,6 +27,7 @@ import type {
 } from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { openBoundedFirstEventBudget } from "../utils/first-event-budget";
+import { messageContentText } from "../utils/message-text";
 import { toolWireSchema } from "../utils/schema/wire";
 import { carryRequiredToolCall } from "../utils/tool-choice";
 import {
@@ -641,7 +642,7 @@ export function selectGitLabDuoWorkflowModelRef(
 }
 
 export function buildGitLabPlainTextFromToolResult(toolResult: ToolResultMessage): GitLabPlainTextResponse {
-	const text = gitLabToolResultToText(toolResult);
+	const text = messageContentText(toolResult.content);
 	return toolResult.isError ? { error: text } : { response: text };
 }
 function findGitLabDuoWorkflowToolResultById(
@@ -2482,10 +2483,6 @@ function buildGitLabDuoWorkflowActionResponse(
 	response: GitLabPlainTextResponse,
 ): GitLabDuoWorkflowActionResponse {
 	return { actionResponse: { requestID, plainTextResponse: response } };
-}
-
-function gitLabToolResultToText(toolResult: ToolResultMessage): string {
-	return toolResult.content.map(item => (item.type === "text" ? item.text : `[${item.mimeType} image]`)).join("\n");
 }
 
 function buildGitLabMcpToolDefinition(tool: Tool): GitLabMcpToolDefinition {

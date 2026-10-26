@@ -90,7 +90,7 @@ interface AgentSessionWithMnemopiState extends AgentSession {
 	[kMnemopiSessionState]?: MnemopiSessionState;
 }
 
-interface MnemopiScopedMemory {
+export interface MnemopiScopedMemory {
 	bank: string;
 	memory: Mnemopi;
 }
@@ -726,7 +726,8 @@ export function getMnemopiScopedBanks(config: MnemopiBackendConfig): readonly st
 	return uniqueBanks([banks.retainBank, banks.globalBank, ...banks.recallBanks]);
 }
 
-function dedupeScopedTargets(targets: readonly MnemopiScopedMemory[]): readonly MnemopiScopedMemory[] {
+/** Keep the first target per bank, in order. */
+export function dedupeScopedTargets(targets: readonly MnemopiScopedMemory[]): readonly MnemopiScopedMemory[] {
 	const seen = new Set<string>();
 	const unique: MnemopiScopedMemory[] = [];
 	for (const target of targets) {

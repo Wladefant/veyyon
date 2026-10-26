@@ -20,6 +20,7 @@
  */
 import type { AgentMessage, AgentTurnEndContext } from "@veyyon/agent-core";
 import { calculatePromptTokens } from "@veyyon/agent-core/compaction";
+import { isProviderRefusalMessage } from "@veyyon/agent-core/replay-policy";
 import { toolResultNeverRan } from "@veyyon/agent-core/tool-result-never-ran";
 import type { AssistantMessage, ImageContent, Message, MessageAttribution, TextContent } from "@veyyon/ai";
 import {
@@ -38,7 +39,6 @@ import type { BashExecutionMessage, PythonExecutionMessage } from "../../tools/s
 import { isSameAssistantMessage } from "../agent-session-message-shapes";
 import type { MessageEndPersistenceSlot, PendingContextSnapshot } from "../agent-session-types";
 import { buildContextSnapshot, estimateContextSnapshotAttribution } from "../context-usage";
-import { isClassifierRefusal } from "../failed-turn";
 import {
 	type CustomMessage,
 	type FileMentionMessage,
@@ -385,7 +385,7 @@ export class MessagePersistence {
 		if (this.alreadyPersisted(persistenceMessage)) return;
 		if (message.role === "assistant") {
 			const assistantMessage = persistenceMessage as AssistantMessage;
-			if (isClassifierRefusal(assistantMessage)) {
+			if (isProviderRefusalMessage(assistantMessage)) {
 				for (const block of assistantMessage.content) {
 					if (block.type === "toolCall") this.#refusedCallIds.add(block.id);
 				}

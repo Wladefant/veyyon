@@ -7,6 +7,7 @@
  * {@link RetryFallbackSession} and {@link RetryFallbackHost}.
  */
 import type { Agent, ThinkingLevel } from "@veyyon/agent-core";
+import { isProviderRefusalMessage } from "@veyyon/agent-core/replay-policy";
 import type { AssistantMessage, Model } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
 import { calculateRateLimitBackoffMs, parseRateLimitReason } from "@veyyon/ai/error/rate-limit";
@@ -31,7 +32,7 @@ import {
 	sanitizeRetryFallbackChains,
 } from "../agent-session-retry-fallback";
 import type { AgentSessionEvent } from "../agent-session-types";
-import { hasReplayUnsafeToolOutput, isClassifierRefusal } from "../failed-turn";
+import { hasReplayUnsafeToolOutput } from "../failed-turn";
 
 /** What {@link RetryFallback} reads from the session's public surface. */
 export interface RetryFallbackSession {
@@ -201,7 +202,7 @@ export class RetryFallback {
 		if (message.content.some(block => block.type === "toolCall")) return false;
 		// A content refusal/sensitivity stop is the model's decision, not a route
 		// failure — switching to the base model would just re-trigger it.
-		if (isClassifierRefusal(message)) return false;
+		if (isProviderRefusalMessage(message)) return false;
 		const id = this.#host.classify(message);
 		if (AIError.isContextOverflow(message, model.contextWindow ?? 0)) return false;
 		if (AIError.is(id, AIError.Flag.UsageLimit)) return false;
@@ -226,7 +227,7 @@ export class RetryFallback {
 		if (!model) return false;
 		const retrySettings = this.#session.settings.getGroup("retry");
 		if (!retrySettings.enabled || !retrySettings.modelFallback) return false;
-		if (isClassifierRefusal(message)) return false;
+		if (isProviderRefusalMessage(message)) return false;
 		const id = this.#host.classify(message);
 		if (AIError.is(id, AIError.Flag.Abort) || AIError.is(id, AIError.Flag.UserInterrupt)) return false;
 		if (AIError.isContextOverflow(message, model.contextWindow ?? 0)) return false;

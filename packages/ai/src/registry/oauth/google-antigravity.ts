@@ -12,9 +12,7 @@ import {
 } from "@veyyon/catalog/wire/google-oauth";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import * as AIError from "../../error";
-import { credentialExpiryFromExpiresIn } from "./expiry";
-import { runGoogleOAuthLogin, TIER_LEGACY } from "./google-oauth-shared";
-import { requireTokenResponseObject } from "./token-response";
+import { refreshGoogleOAuthToken, runGoogleOAuthLogin, TIER_LEGACY } from "./google-oauth-shared";
 import type { OAuthController, OAuthCredentials } from "./types";
 
 const decode = (s: string) => atob(s);
@@ -190,39 +188,16 @@ export async function refreshAntigravityToken(
 	projectId: string,
 	signal?: AbortSignal,
 ): Promise<OAuthCredentials> {
-	const response = await fetch(TOKEN_URL, {
-		method: "POST",
-		headers: { "Content-Type": "application/x-www-form-urlencoded" },
-		body: new URLSearchParams({
-			client_id: CLIENT_ID,
-			client_secret: CLIENT_SECRET,
-			refresh_token: refreshToken,
-			grant_type: "refresh_token",
-		}),
-		signal,
-	});
-
-	if (!response.ok) {
-		// A refresh endpoint's error body can echo the credential it refused, so it is read
-		// through the shared bounded reader and its redactor.
-		const error = await AIError.readProviderErrorDetail(response);
-		throw new AIError.OAuthError(`Antigravity token refresh failed: ${response.status} ${error}`, {
-			kind: "token-refresh",
+	return refreshGoogleOAuthToken(
+		{
+			clientId: CLIENT_ID,
+			clientSecret: CLIENT_SECRET,
+			tokenUrl: TOKEN_URL,
 			provider: "google-antigravity",
-			status: response.status,
-		});
-	}
-
-	const data = requireTokenResponseObject<{
-		access_token: string;
-		expires_in: number;
-		refresh_token?: string;
-	}>(await response.json(), "google-antigravity", "token refresh");
-
-	return {
-		refresh: data.refresh_token || refreshToken,
-		access: data.access_token,
-		expires: credentialExpiryFromExpiresIn(data.expires_in, { provider: "google-antigravity" }),
+			label: "Antigravity",
+		},
+		refreshToken,
 		projectId,
-	};
+		signal,
+	);
 }

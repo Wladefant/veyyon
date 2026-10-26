@@ -139,6 +139,7 @@ import {
 } from "../utils/connect-frames";
 import { deterministicUuid } from "../utils/deterministic-id";
 import { AssistantMessageEventStream } from "../utils/event-stream";
+import { messageContentText } from "../utils/message-text";
 import { connectProxiedSocket, getProxyForProvider, shouldBypassProxy } from "../utils/proxy";
 import {
 	createRequestDebugSession,
@@ -170,7 +171,6 @@ import {
 	buildWriteRejectedResult,
 	buildWriteResultFromToolResult,
 	emptyGrepPatternRejection,
-	toolResultToText,
 } from "./cursor-exec-results";
 import { type CursorLiveness, startCursorLiveness } from "./cursor-liveness";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
@@ -2376,7 +2376,7 @@ function buildTodoArgs(toolCall: CursorToolCallView): {
 
 function buildMcpResultFromToolResult(_mcpCall: CursorMcpCall, toolResult: ToolResultMessage) {
 	if (toolResult.isError) {
-		return buildMcpErrorResult(toolResultToText(toolResult) || "MCP tool failed");
+		return buildMcpErrorResult(messageContentText(toolResult.content) || "MCP tool failed");
 	}
 	const content = toolResult.content.map(item => {
 		if (item.type === "image") {
@@ -3079,7 +3079,7 @@ function buildRootPromptMessagesJson(
 			if (!text) continue;
 			pushJson({ role: "assistant", content: [{ type: "text", text }] });
 		} else if (msg.role === "toolResult") {
-			const text = toolResultToText(msg);
+			const text = messageContentText(msg.content);
 			if (!text) continue;
 			const prefix = msg.isError ? "[Tool Error]" : "[Tool Result]";
 			pushJson({
@@ -3160,7 +3160,7 @@ function buildConversationTurns(
 				}
 			} else if (stepMsg.role === "toolResult") {
 				// Include tool results as assistant text for context
-				const text = toolResultToText(stepMsg);
+				const text = messageContentText(stepMsg.content);
 				if (text) {
 					const prefix = stepMsg.isError ? "[Tool Error]" : "[Tool Result]";
 					const step = create(ConversationStepSchema, {

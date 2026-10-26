@@ -31,11 +31,13 @@ import {
 	truncateApproxTokens,
 } from "./config";
 import {
+	dedupeScopedTargets,
 	getMnemopiScopedBanks,
 	getMnemopiScopedDbPaths,
 	getMnemopiSessionState,
 	loadMnemopi,
 	loadMnemopiCore,
+	type MnemopiScopedMemory,
 	MnemopiSessionState,
 	requireMnemopi,
 	requireMnemopiCore,
@@ -288,19 +290,14 @@ export const mnemopiBackend: MemoryBackend = {
 	},
 };
 
-interface MnemopiStatsTarget {
-	bank: string;
-	memory: Mnemopi;
-}
-
 function createStatsTargets(
 	agentDir: string,
 	session: AgentSession | undefined,
-): { targets: MnemopiStatsTarget[]; owned: Mnemopi[] } {
+): { targets: readonly MnemopiScopedMemory[]; owned: Mnemopi[] } {
 	const state = getMnemopiSessionState(session);
 	if (state) {
 		return {
-			targets: dedupeStatsTargets([state.getScopedRetainTarget(), ...state.getScopedRecallTargets()]),
+			targets: dedupeScopedTargets([state.getScopedRetainTarget(), ...state.getScopedRecallTargets()]),
 			owned: [],
 		};
 	}
@@ -335,18 +332,7 @@ function resolveBankDbPath(config: MnemopiBackendConfig, bank: string): string {
 	return new BankManager(path.dirname(config.dbPath)).getBankDbPath(bank);
 }
 
-function dedupeStatsTargets(targets: readonly MnemopiStatsTarget[]): MnemopiStatsTarget[] {
-	const seen = new Set<string>();
-	const unique: MnemopiStatsTarget[] = [];
-	for (const target of targets) {
-		if (seen.has(target.bank)) continue;
-		seen.add(target.bank);
-		unique.push(target);
-	}
-	return unique;
-}
-
-function renderMnemopiStats(targets: readonly MnemopiStatsTarget[]): string {
+function renderMnemopiStats(targets: readonly MnemopiScopedMemory[]): string {
 	const lines = [
 		"# Mnemopi Memory Stats",
 		"",
@@ -365,7 +351,7 @@ function renderMnemopiStats(targets: readonly MnemopiStatsTarget[]): string {
 }
 
 function summarizeMnemopiStatus(
-	targets: readonly MnemopiStatsTarget[],
+	targets: readonly MnemopiScopedMemory[],
 	session: AgentSession | undefined,
 ): MemoryBackendStatus {
 	let workingCount = 0;

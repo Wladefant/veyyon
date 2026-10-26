@@ -8,6 +8,7 @@
  * {@link RetryHost}.
  */
 import { scheduler } from "node:timers/promises";
+import { isProviderRefusalMessage } from "@veyyon/agent-core/replay-policy";
 import type { AssistantMessage, AssistantRetryRecovery, Model } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
 import type { OperatorNotices } from "@veyyon/kernel/session/operator-notices";
@@ -31,7 +32,6 @@ import type {
 } from "../agent-session-types";
 import {
 	hasReplayUnsafeToolOutput,
-	isClassifierRefusal,
 	isGenericAbortSentinel,
 	retryRecoveryKind,
 	retryRecoveryNote,
@@ -231,7 +231,7 @@ export class RetryRuntime {
 		const contextWindow = this.#session.model?.contextWindow ?? 0;
 		if (AIError.isContextOverflow(message, contextWindow)) return false;
 
-		if (isClassifierRefusal(message)) return true;
+		if (isProviderRefusalMessage(message)) return true;
 		return AIError.retriable(id, {
 			replayUnsafe: hasReplayUnsafeToolOutput(message, this.#session.agent.state.messages),
 		});
@@ -485,7 +485,7 @@ export class RetryRuntime {
 			// this last resort a provider-wide usage cap never fails over to the
 			// configured chain.
 			budgetExhausted: this.#attempt > policy.maxRetries,
-			classifierRefusal: isClassifierRefusal(message),
+			classifierRefusal: isProviderRefusalMessage(message),
 			modelNotInPlan: AIError.is(id, AIError.Flag.ModelNotInPlan),
 			options,
 			delayMs: staleReplay ? 0 : calculateRetryBackoffDelayMs(policy.baseDelayMs, this.#attempt),

@@ -8,6 +8,10 @@
 
 - `nonRegularKind` in `@veyyon/utils/fs-error` returns the phrase a refusal uses for an entry that is not a regular file, such as `a named pipe (FIFO)`.
 
+### Changed
+
+- `sgrEnd` is exported from `@veyyon/utils/ansi` and is the single definition `wrap` and `width` use; no user-facing change.
+
 ## [1.5.10] - 2026-10-25
 
 ### Added

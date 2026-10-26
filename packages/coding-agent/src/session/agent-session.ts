@@ -42,6 +42,7 @@ import {
 	type ShakeConfig,
 	shouldCompact,
 } from "@veyyon/agent-core/compaction";
+import { isProviderRefusalMessage } from "@veyyon/agent-core/replay-policy";
 import type {
 	Api,
 	AssistantMessage,
@@ -285,7 +286,6 @@ import {
 // on the session engine's graph and cost the layering gate a standing exception.
 import { computeStoredMessagesTokens } from "./context-usage";
 import { initSessionCpuLimit, rekeySessionCpuLimit, sessionCpuLimit } from "./cpu-limit";
-import { isClassifierRefusal } from "./failed-turn";
 import {
 	type CustomMessage,
 	type CustomMessagePayload,
@@ -2980,7 +2980,7 @@ export class AgentSession {
 		// Classifier refusals are persisted-skipped above; also prune the trailing stub from active
 		// context so the next turn's prompt does not replay it. Fall through to the standard error
 		// tail so `session_stop` hooks (block, continue, telemetry) still fire.
-		if (isClassifierRefusal(msg)) {
+		if (isProviderRefusalMessage(msg)) {
 			removeAssistantMessageFromActiveContext(this.agent, msg);
 		}
 		this.#retry.resolve();
