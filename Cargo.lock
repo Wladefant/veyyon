@@ -969,7 +969,6 @@ dependencies = [
  "tracing",
  "uuid",
  "uzers",
- "veyyon-uutils-ctx",
  "whoami",
  "windows-sys 0.59.0",
 ]
@@ -9918,7 +9917,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop"
-version = "1.5.6"
+version = "1.5.8"
 dependencies = [
  "bytes",
  "clap",
@@ -9944,7 +9943,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop-kit"
-version = "1.5.6"
+version = "1.5.8"
 dependencies = [
  "anyhow",
  "gpui_platform",
@@ -9962,7 +9961,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop-model"
-version = "1.5.6"
+version = "1.5.8"
 dependencies = [
  "base64",
  "serde",
@@ -9975,7 +9974,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop-motion"
-version = "1.5.6"
+version = "1.5.8"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -9985,7 +9984,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop-scene"
-version = "1.5.6"
+version = "1.5.8"
 dependencies = [
  "image",
  "png 0.18.1",
@@ -10004,7 +10003,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop-surface"
-version = "1.5.6"
+version = "1.5.8"
 dependencies = [
  "image",
  "serde",
@@ -10028,7 +10027,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop-tokens"
-version = "1.5.6"
+version = "1.5.8"
 dependencies = [
  "flume 0.11.1",
  "notify",
@@ -10056,7 +10055,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-gpui"
-version = "1.5.6"
+version = "1.5.8"
 dependencies = [
  "gpui",
  "gpui_platform",

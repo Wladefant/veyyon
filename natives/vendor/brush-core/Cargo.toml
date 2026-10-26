@@ -124,11 +124,6 @@ version = "0.1.44"
 [dependencies.tokio-util]
 version = "0.7.16"
 
-# The single definition of which paths name a descriptor, shared with the
-# in-process builtins.
-[dependencies.veyyon-uutils-ctx]
-path = "../../fs/uutils-ctx"
-
 [dev-dependencies.anyhow]
 version = "1.0.102"
 
