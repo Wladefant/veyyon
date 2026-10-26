@@ -626,6 +626,25 @@ describe("only admitted users can use their own secrets", () => {
 		expect(await h.admission.authorize(requestWith(accessHeaders(token, CLIENT_A, SECRET_A)), "search:public")).toBeNull();
 	});
 
+	test.each(["userId", "clientId", "deviceId"] as const)(
+		"an in-place %s change while its key is being fetched refuses authorization and discovery",
+		async (field) => {
+			for (const operation of ["authorize", "discover"] as const) {
+				const h = await start(signer);
+				const token = await signJwt(signer, claimsFor({}));
+				h.net.state.onRequest = () => {
+					h.deviceA[field] = field === "userId" ? h.userB.userId : `rotated-${h.deviceA[field]}`;
+				};
+				const request = requestWith(accessHeaders(token, CLIENT_A, SECRET_A));
+				if (operation === "authorize") {
+					expect(await h.admission.authorize(request, "search:public")).toBeNull();
+				} else {
+					expect(await h.admission.discover(request)).toEqual([]);
+				}
+			}
+		},
+	);
+
 	test("a device re-enrolled with a new secret while its key is being fetched is refused", async () => {
 		const h = await start(signer);
 		const token = await signJwt(signer, claimsFor({}));
