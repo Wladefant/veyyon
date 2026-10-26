@@ -116,7 +116,7 @@ act on a bare invocation: `/yolo`, `/fast`, and `/browser` flip a switch, `/goal
 
 | Command | Purpose |
 | --- | --- |
-| `/model [id]`, `/models` | Select the **interactive** model only (helper models live in settings) |
+| `/model [query]`, `/models` | Select the **interactive** model only (helper models live in settings). In the terminal, `/model <query>` opens the picker with `<query>` in its search field. Over ACP and in print mode, `/model <id>` switches to that model and a bare `/model` prints the current one |
 | `/switch` | Try a model for this session only, without saving it as default (same as alt+p) |
 | `/fast on\|off\|status` | Fast mode |
 | `/effort [level]` (`/thinking`) | Set reasoning effort; no argument opens the picker |

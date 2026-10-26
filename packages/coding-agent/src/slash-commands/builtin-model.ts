@@ -106,8 +106,12 @@ export const MODEL_HANDLERS = {
 			);
 			return commandConsumed();
 		},
-		handleTui: (_command, runtime) => {
-			runtime.ctx.showModelSelector();
+		handleTui: (command, runtime) => {
+			// The argument seeds the picker's search rather than switching outright: the picker
+			// is where the terminal chooses a model, and Enter confirms the match.
+			const query = command.args.trim();
+			if (query) runtime.ctx.showModelSelector({ query });
+			else runtime.ctx.showModelSelector();
 			runtime.ctx.editor.setText("");
 		},
 	},

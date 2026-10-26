@@ -47,6 +47,8 @@ interface PickerHarness {
 	picker: ModelPickerComponent;
 	onPick: Mock<(model: Model, selector: string) => void>;
 	onCancel: Mock<() => void>;
+	/** Every model picked, in order. */
+	picked: Model[];
 }
 
 function createPicker(options: {
@@ -66,7 +68,10 @@ function createPicker(options: {
 		getAll: modelsFn,
 	} as unknown as ModelRegistry;
 	const ui = { requestRender: vi.fn(), terminal: { rows: 40 } } as unknown as TUI;
-	const onPick = vi.fn();
+	const picked: Model[] = [];
+	const onPick = vi.fn((model: Model, _selector: string) => {
+		picked.push(model);
+	});
 	const onCancel = vi.fn();
 	const picker = new ModelPickerComponent(
 		ui,
@@ -76,7 +81,7 @@ function createPicker(options: {
 		{ onPick, onCancel },
 		options.picker ?? {},
 	);
-	return { picker, onPick, onCancel };
+	return { picker, onPick, onCancel, picked };
 }
 
 const DOWN = "\x1b[B";
@@ -161,6 +166,24 @@ describe("ModelPicker", () => {
 		// Enter without navigation picks the preselected current model.
 		picker.handleInput("\n");
 		expect(onPick.mock.calls[0]?.[0]?.id).toBe("bb-model");
+	});
+
+	test("opens on the search `/model <query>` typed, and Enter picks the model it names", () => {
+		const models = [makeModel("test", "aa-model"), makeModel("test", "bb-model"), makeModel("test", "cc-model")];
+		const { picker, picked } = createPicker({
+			models,
+			scoped: true,
+			// The current model is filtered out by the query, so Enter must land on the match.
+			picker: { currentSelector: "test/aa-model", initialQuery: "bb" },
+		});
+
+		const rendered = normalize(picker.render(220));
+		expect(rendered).toContain("bb-model");
+		expect(rendered).not.toContain("aa-model");
+		expect(rendered).not.toContain("cc-model");
+
+		picker.handleInput("\n");
+		expect(picked.map(model => model.id)).toEqual(["bb-model"]);
 	});
 
 	test("treats @ as a normal model search prefix (no quick-role mode)", () => {

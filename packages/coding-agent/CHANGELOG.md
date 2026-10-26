@@ -46,6 +46,7 @@
 - `/session info` over ACP and in print mode prints `Title: (untitled)` for a session with no title instead of `Title: undefined`.
 - `/yolo` with a word it does not know, such as `/yolo disable`, prints the usage line in the terminal instead of raising the confirmation that turns every permission prompt off.
 - Bare `/yolo` in the terminal turns the bypass off when it is on, as it already did over ACP and in print mode, instead of reporting that it is already on.
+- `/model <query>` in the terminal opens the model picker with `<query>` in its search field instead of ignoring the argument.
 
 ## [1.5.10] - 2026-10-25
 

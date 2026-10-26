@@ -2795,7 +2795,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#commandController.showSecretList();
 	}
 
-	showModelSelector(options?: { temporaryOnly?: boolean }): void {
+	showModelSelector(options?: { temporaryOnly?: boolean; query?: string }): void {
 		this.#openSelector(selectors => selectors.showModelSelector(options));
 	}
 

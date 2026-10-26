@@ -448,7 +448,8 @@ export interface InteractiveModeContext {
 	showAgentsDashboard(options?: { requireContent?: boolean }): void;
 	/** Prints `/secret list`, which is what the footline's secrets chip is a handle for. */
 	showSecretList(): void;
-	showModelSelector(options?: { temporaryOnly?: boolean }): void;
+	/** `query` seeds the picker's search: `/model <query>`. */
+	showModelSelector(options?: { temporaryOnly?: boolean; query?: string }): void;
 	showThinkingSelector(): void;
 	/**
 	 * The card a bare `/cmd` opens when the command declares subcommands.

@@ -43,6 +43,8 @@ export interface ModelPickerOptions {
 	currentContextTokens?: number;
 	/** `provider/id` of the session's active model; highlighted and preselected. */
 	currentSelector?: string;
+	/** Search text the picker opens with, so `/model <query>` lands on the models it names. */
+	initialQuery?: string;
 }
 
 /** Rows the browser renders around its list window (search + blank, blank + two detail rows). */
@@ -118,6 +120,9 @@ export class ModelPickerComponent implements Component {
 		});
 
 		this.#syncFromRegistryState();
+		if (options.initialQuery) {
+			this.#browser.setQuery(options.initialQuery);
+		}
 		if (options.currentSelector) {
 			this.#browser.selectSelector(options.currentSelector);
 		}
