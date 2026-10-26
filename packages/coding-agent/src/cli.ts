@@ -3,7 +3,9 @@
 // terminal during its own evaluation, which is the only position from which it beats the ~33ms of
 // import below it. It reaches node builtins only. See ./cli/first-frame-replay.
 import "./cli/first-frame-replay-entry";
+import { writeSync } from "node:fs";
 import { CliUsageError } from "@veyyon/utils/cli-usage-error";
+import { DAY_MS } from "@veyyon/utils/time";
 // Subpath, NOT the "@veyyon/utils" barrel: the barrel re-exports ./env, which
 // eagerly parses the agent-directory .env at import time (env.ts). Pulling that
 // in here would load the .env BEFORE runCli() calls setProfile(), so
@@ -543,9 +545,15 @@ export async function runCli(argv: string[]): Promise<void> {
 			return;
 		}
 	}
+	const buildMetadata = [
+		BUILD_TAG,
+		process.env.VEYYON_BUILD_SHA ? `build SHA ${process.env.VEYYON_BUILD_SHA}` : undefined,
+	]
+		.filter((part): part is string => Boolean(part))
+		.join("; ");
 	return logger.time("cliRun", run, {
 		bin: APP_NAME,
-		version: BUILD_TAG ? `${VERSION} (${BUILD_TAG})` : VERSION,
+		version: buildMetadata ? `${VERSION} (${buildMetadata})` : VERSION,
 		argv: resolved.argv,
 		commands,
 		help: showHelp,
@@ -634,6 +642,22 @@ export function formatCliFatal(err: unknown, opts: { stack: boolean; colors: boo
 	return `${out}\n  (set VEYYON_STACK=1 for the full stack trace)\n`;
 }
 
+/** A pending CLI promise must not masquerade as a successful empty launch. */
+export async function awaitCliCompletion(command: Promise<void>): Promise<void> {
+	const keepalive = setInterval(() => {}, DAY_MS);
+	const unfinished = () => {
+		writeSync(2, "Error: Veyyon's event loop ended before the command finished. Startup did not complete.\n");
+		process.exitCode = EXIT_FAILURE;
+	};
+	process.once("beforeExit", unfinished);
+	try {
+		await command;
+	} finally {
+		clearInterval(keepalive);
+		process.removeListener("beforeExit", unfinished);
+	}
+}
+
 // Floating call instead of top-level await: TLA forces `--bytecode` (CJS
 // lowering) builds to fail, and the entrypoint needs nothing after this.
 // The catch mirrors what an unhandled TLA rejection produced: error report to
@@ -643,7 +667,7 @@ export function formatCliFatal(err: unknown, opts: { stack: boolean; colors: boo
 // their entry with `import.meta.main === false`, so the worker-host dispatch
 // is admitted via `!Bun.isMainThread`.
 if (isProcessEntry || !Bun.isMainThread) {
-	runCli(process.argv.slice(2)).catch((err: unknown) => {
+	awaitCliCompletion(runCli(process.argv.slice(2))).catch((err: unknown) => {
 		process.stderr.write(
 			formatCliFatal(err, {
 				stack: process.env.VEYYON_STACK === "1",

@@ -10,7 +10,7 @@ import { type Component, Text } from "@veyyon/tui";
 import { formatBytes, formatDuration, sanitizeText } from "@veyyon/utils";
 import type { AsyncResultCustomDisplay, Attachment, IrcMessageCustomDisplay } from "@veyyon/wire/presentation";
 import type { FileMentionMessage } from "../../../session/messages";
-import { theme } from "../../../theme/theme";
+import { theme } from "../../../theme/theme-binding";
 import { shortenPath } from "../../../tools/core/render-utils";
 import { canonicalizeMessage } from "../../../utils/thinking-display";
 import { COMPOSER_INSET_COLS } from "../components/composer/composer-chrome";

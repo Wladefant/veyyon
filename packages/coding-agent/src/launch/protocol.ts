@@ -77,6 +77,8 @@ export interface DaemonSnapshot {
 	readyMatch?: string;
 	/** Readiness conditions still unmet while `state` is `starting`; absent once ready or without a ready spec. */
 	readyPending?: ("log" | "port")[];
+	/** Set when recovery could not prove the previous process tree gone. Such a record is `failed`, never restarted, and gates a replacement. */
+	ownershipUncertain?: boolean;
 	persist: boolean;
 	detached: boolean;
 }
@@ -358,6 +360,8 @@ export function parseDaemonSnapshot(value: unknown): DaemonSnapshot {
 		readyPending: source.readyPending === undefined ? undefined : readyPendingList(source.readyPending),
 		persist: booleanValue(source.persist, "daemon.persist"),
 		detached: source.detached === undefined ? false : booleanValue(source.detached, "daemon.detached"),
+		ownershipUncertain:
+			source.ownershipUncertain === undefined ? undefined : booleanValue(source.ownershipUncertain, "daemon.ownershipUncertain"),
 	};
 }
 

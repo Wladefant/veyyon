@@ -38,7 +38,9 @@ import {
 	describeSettingTypeMismatch,
 	enumMember,
 	getDefault,
+	getInvalidValue,
 	getType,
+	hasDeclaredKind,
 	isUnsetNumberPath,
 	type SettingPath,
 	type SettingValue,
@@ -85,6 +87,12 @@ export interface InvalidSettingValue {
 	file: string;
 	/** Human-readable explanation naming the expected type and what was found. */
 	reason: string;
+	/**
+	 * True when a read serves a value the schema names in place of this one: a value not of its
+	 * declared kind reads as the default, an enum outside its members as its declared fallback.
+	 * False when the value is served and only an entry inside it is wrong.
+	 */
+	replaced: boolean;
 }
 
 /** Layer that currently supplies a setting's effective value. */
@@ -435,8 +443,8 @@ export class SettingsStore {
 
 	/** Dotted-key problems already reported, so each one is said once per process rather than once per read. */
 	#reportedDottedKeyProblems = new Set<string>();
-	/** Enum settings already reported as holding a value outside their declared set, one warning per path. */
-	#reportedInvalidEnums = new Set<SettingPath>();
+	/** Settings already reported as holding a value the schema does not declare, one warning per path. */
+	#reportedInvalidValues = new Set<SettingPath>();
 
 	/** Pending save (debounced) */
 	#saveTimer?: NodeJS.Timeout;
@@ -528,27 +536,46 @@ export class SettingsStore {
 	}
 
 	/**
-	 * `value` as the setting reads it: unchanged, unless `path` is an enum and `value` is not one of
-	 * its members, in which case the declared default, reported once per path.
+	 * `value` as the setting reads it: unchanged when the schema declares it, else a value the schema
+	 * names, reported once per path. An enum outside its members reads as its declared `invalid`
+	 * member (the default when none is declared); any other setting whose value is not of its
+	 * declared kind reads as its default.
 	 *
-	 * A value written into a config file by hand reaches here unchecked, and every consumer compares
-	 * it against its own literals, so an out-of-set value takes whichever branch a consumer's `else`
-	 * happens to be. Answering with the default here gives every consumer the value the schema
-	 * declares. The load-time report states the file to edit; this one states the value in use.
+	 * A value written into a config file by hand reaches here unchecked, and every consumer reads it
+	 * as the type the declaration promises: `compaction.enabled: "no"` is a truthy string, and an empty
+	 * `disabledExtensions:` is `null` to a reader that calls `.slice()`. An enum consumer compares it
+	 * against its own literals, so an out-of-set value takes whichever branch its `else` happens to
+	 * be. A safety control declares its strictest member as `invalid`, so a typo cannot loosen it.
+	 * The load-time report states the file to edit; this one states the value in use.
 	 */
 	#declaredValue<P extends SettingPath>(path: P, value: unknown): SettingValue<P> {
-		if (getType(path) !== "enum") return value as SettingValue<P>;
-		const member = enumMember(path, value);
-		if (member !== undefined) return member as SettingValue<P>;
-		const fallback = getDefault(path);
-		if (!this.#reportedInvalidEnums.has(path)) {
-			this.#reportedInvalidEnums.add(path);
-			logger.warn("Settings: enum value is not one of its declared values; using the default", {
-				reason: describeSettingTypeMismatch(path, value),
-				default: fallback,
-			});
+		if (getType(path) === "enum") {
+			const member = enumMember(path, value);
+			if (member !== undefined) return member as SettingValue<P>;
+			const fallback = getInvalidValue(path);
+			this.#reportInvalidValue(
+				path,
+				value,
+				fallback,
+				"Settings: enum value is not one of its declared values; using its declared fallback",
+			);
+			return fallback;
 		}
+		if (hasDeclaredKind(path, value)) return value as SettingValue<P>;
+		const fallback = getDefault(path);
+		this.#reportInvalidValue(
+			path,
+			value,
+			fallback,
+			"Settings: configured value is not of its declared kind; using its default",
+		);
 		return fallback;
+	}
+
+	#reportInvalidValue(path: SettingPath, value: unknown, fallback: unknown, message: string): void {
+		if (this.#reportedInvalidValues.has(path)) return;
+		this.#reportedInvalidValues.add(path);
+		logger.warn(message, { reason: describeSettingTypeMismatch(path, value), fallback });
 	}
 
 	/**
@@ -624,15 +651,14 @@ export class SettingsStore {
 	}
 
 	/**
-	 * Configured settings whose value does not match the schema's declared type.
+	 * Values in the profile config file and every `--config` overlay that do not match the
+	 * schema's declared type, one entry per path and file. Empty in the normal case.
 	 *
-	 * Empty in the normal case. A non-empty list means the config on disk says
-	 * something the app cannot honor, and the user has to be told: a wrong type is
-	 * usually silently WRONG rather than obviously broken. `autoUpdate: "no"` is a
-	 * truthy string, so a setting the user plainly meant to turn off stays on and
-	 * nothing explains why. Surfacing this is what keeps that from being invisible
-	 * (Law 10); the values themselves are left exactly as written, because quietly
-	 * substituting the default would hide the broken config instead of reporting it.
+	 * A read never serves such a value as written when it is the wrong kind: it reads as the
+	 * setting's default, or an enum's declared fallback, and `replaced` marks that. This list is
+	 * how a surface reports the substitution to the person who wrote the file: `startup.autoUpdate:
+	 * "no"` reads as the default `true`, and nothing else explains why updates stay on. Runtime
+	 * overrides are set by code and flags that already hold a typed value, and are not listed.
 	 */
 	get invalidValues(): readonly InvalidSettingValue[] {
 		return this.#invalidValues;
@@ -914,7 +940,8 @@ export class SettingsStore {
 			} else if (allowed) {
 				changed.push({ path: key, before, after });
 				outcomes.push({ path: key, status: "applied" });
-				if (!events.has(root!)) events.set(root!, this.get(root!));
+				// Merged objects can share a layer's object, which the activation below mutates.
+				if (!events.has(root!)) events.set(root!, structuredClone(this.get(root!)));
 			} else {
 				restartRequired.push(key);
 				outcomes.push({
@@ -1134,8 +1161,8 @@ export class SettingsStore {
 			this.#pendingSentinelStrips = stripLegacyUnsetSentinels(this.#global);
 		}
 
-		this.#configOverlay = await this.#loadConfigOverlays();
 		this.#collectInvalidValues(this.#global, this.#configPath ?? "");
+		this.#configOverlay = await this.#loadConfigOverlays();
 		this.rebuildMerged();
 	}
 
@@ -1169,7 +1196,8 @@ export class SettingsStore {
 			const reason = describeSettingTypeMismatch(path, value);
 			if (reason === undefined) continue;
 			if (this.#invalidValues.some(entry => entry.path === path && entry.file === file)) continue;
-			this.#invalidValues.push({ path, file, reason });
+			const replaced = getType(path) === "enum" || !hasDeclaredKind(path, value);
+			this.#invalidValues.push({ path, file, reason, replaced });
 			// Logged as a warning AND exposed on the instance: the log is for a
 			// developer reading a session afterwards, the accessor is for a surface
 			// that can actually put it in front of the person who wrote the file.
@@ -1282,6 +1310,7 @@ export class SettingsStore {
 		for (const filePath of this.#configFiles) {
 			const overlay = await this.#loadOverlayYaml(filePath);
 			if (overlay === null) throw new Error(`Config overlay not found: ${filePath}`);
+			this.#collectInvalidValues(overlay, filePath);
 			merged = deepMergeSettings(merged, overlay);
 		}
 		return merged;

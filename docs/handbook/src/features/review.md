@@ -15,9 +15,9 @@ See the command help in-session and `docs/handbook` task guides for example prom
 
 ## Advisor
 
-The advisor is a second model role that reads each main-agent turn and can inject notes
+The advisor is a second model that reads each main-agent turn and can inject notes
 (nit, concern, or blocker). Enable with `--advisor` or the `advisor.enabled` setting; assign its
-model via the advisor role.
+model with the `advisor` helper (`agent.helpers.advisor`).
 Uses its own context and model assignment when configured.
 
 ## Plan review
@@ -43,4 +43,4 @@ Tool approvals use `tools.approvalMode` and per-tool policy. See [Approvals](./s
 
 - [Approvals](./sandbox.md)
 - [Non-interactive mode](./exec.md)
-- [Roles and profiles](../using/roles-and-profiles.md)
+- [Models, helpers, and profiles](../using/roles-and-profiles.md)

@@ -207,8 +207,10 @@ describe("a budget that cannot be honoured is refused out loud", () => {
 	 * down to its ellipsis. A negative one is the same, and a non-finite one
 	 * poisons every byte comparison downstream so nothing spills at all. Each
 	 * falls back to the compiled default, which is the same answer as not setting
-	 * it, and each says so -- a silently corrected setting is a file whose value
-	 * disagrees with the value in force, with nothing an operator can see.
+	 * it, and each says so, naming the setting -- a silently corrected setting is
+	 * a file whose value disagrees with the value in force, with nothing an
+	 * operator can see. The settings read refuses the non-finite ones before the
+	 * budget sees them; the budget refuses the rest.
 	 */
 	it.each([
 		["zero", 0],
@@ -220,8 +222,7 @@ describe("a budget that cannot be honoured is refused out loud", () => {
 		try {
 			expect(inlineBudgetFor(pricingSource({ "tools.artifactSpillThreshold": configured }))).toBe(DEFAULT_MAX_BYTES);
 			expect(warn).toHaveBeenCalled();
-			const message = warn.mock.calls[0]?.[0];
-			expect(message).toContain("tools.artifactSpillThreshold");
+			expect(JSON.stringify(warn.mock.calls[0])).toContain("tools.artifactSpillThreshold");
 		} finally {
 			warn.mockRestore();
 		}

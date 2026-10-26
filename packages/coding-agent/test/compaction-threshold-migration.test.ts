@@ -1,6 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { resolveThresholdTokens, resolveThresholdWithOrigin } from "@veyyon/agent-core/compaction/compaction";
-import { AUTO_COMPACTION_THRESHOLD } from "@veyyon/agent-core/compaction/threshold";
+import {
+	AUTO_COMPACTION_THRESHOLD,
+	resolveThresholdTokens,
+	resolveThresholdWithOrigin,
+} from "@veyyon/agent-core/compaction/threshold";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 
 /**

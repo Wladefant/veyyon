@@ -29,7 +29,6 @@
 import { describe, expect, it } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import * as path from "node:path";
-
 import {
 	DEFAULT_RECALL_WEIGHTS,
 	ftsWeight,
@@ -37,6 +36,8 @@ import {
 	normalizedRecallWeights,
 	vectorWeight,
 } from "@veyyon/mnemopi/config";
+import { moduleSpecifiersIn, namedImportsFrom } from "@veyyon/utils/module-reach";
+import { exportedDeclarationsIn } from "@veyyon/utils/source-declarations";
 
 const SRC = path.join(import.meta.dir, "..", "src");
 
@@ -213,12 +214,15 @@ describe("no module keeps a second normalizer", () => {
 	/**
 	 * The helpers module no longer parses the weight variables itself either. Three
 	 * `envFloat("MNEMOPI_..._WEIGHT", ...)` calls lived there, behind accessors that
-	 * already existed, which is why those accessors looked unused.
+	 * already existed, which is why those accessors looked unused. A module that imports
+	 * no float parser cannot call one, since an undeclared name fails the type check. Not
+	 * caught: a parser the module declares for itself.
 	 */
 	it("the helpers module no longer parses the weight variables", async () => {
 		const text = await readFile(path.join(SRC, "core", "beam", "helpers.ts"), "utf8");
+		const imported = moduleSpecifiersIn(text).flatMap(specifier => namedImportsFrom(text, specifier));
 
-		expect(text).not.toMatch(/envFloat\(\s*"MNEMOPI_(?:VEC|FTS|IMPORTANCE)_WEIGHT"/);
+		expect(imported).not.toContain("envFloat");
 	});
 
 	/**
@@ -245,11 +249,12 @@ describe("no module keeps a second normalizer", () => {
 
 	/**
 	 * The exemption above is only sound while `config.ts` really still declares the triple.
-	 * An exemption for a file that stopped declaring it is a hole that opens quietly.
+	 * An exemption for a file that stopped declaring it is a hole that opens quietly. The
+	 * value it holds is pinned at the top of this file.
 	 */
 	it("and config.ts really still declares it", async () => {
 		const text = await readFile(path.join(SRC, "config.ts"), "utf8");
 
-		expect(text).toMatch(/DEFAULT_RECALL_WEIGHTS: HybridWeights = \[0\.5, 0\.3, 0\.2\]/);
+		expect(exportedDeclarationsIn(text)).toContain("DEFAULT_RECALL_WEIGHTS");
 	});
 });

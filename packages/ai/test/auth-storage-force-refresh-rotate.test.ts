@@ -3,7 +3,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { withAuth } from "@veyyon/ai";
-import { type AuthCredentialStore, AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { type AuthCredentialStore, AuthStorage } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import { ProviderHttpError } from "@veyyon/ai/error";
 import { registerOAuthProvider, unregisterOAuthProviders } from "@veyyon/ai/registry/oauth";
 import type { CredentialRankingStrategy, UsageProvider } from "@veyyon/ai/usage";
@@ -691,6 +692,9 @@ describe("AuthStorage forceRefresh + rotateSessionCredential", () => {
 
 		await authStorage.getApiKey(PROVIDER, "sess");
 		const outcome = await authStorage.markUsageLimitReached(PROVIDER, "sess", { retryAfterMs: 3_600_000 });
-		expect(outcome).toEqual({ switched: false, retryAtMs: undefined });
+		expect(outcome.switched).toBe(false);
+		expect(outcome.retryAtMs).toBeUndefined();
+		expect(outcome.quotaMessage).toContain("0 other accounts available");
+		expect(outcome.quotaMessage).toContain("no sibling account exists");
 	});
 });

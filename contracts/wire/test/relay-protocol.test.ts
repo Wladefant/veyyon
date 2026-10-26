@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { moduleSpecifiersIn } from "@veyyon/utils/module-reach";
+import { moduleSpecifiersIn, namedImportsFrom, withoutComments } from "@veyyon/utils/module-reach";
 import type { RelayControlMessage } from "../src/index";
 import * as barrel from "../src/index";
 import {
@@ -133,11 +133,14 @@ describe("the relay protocol has one owner", () => {
 		const offenders: string[] = [];
 		const scanned = [...CLIENTS, "clients/web/scripts/local-relay.ts"];
 		for (const file of scanned) {
-			const text = await Bun.file(path.join(REPO_ROOT, file)).text();
+			const code = withoutComments(await Bun.file(path.join(REPO_ROOT, file)).text());
 			for (const reason of Object.values(RELAY_FATAL_CLOSE_REASONS)) {
-				if (text.includes(`"${reason}"`)) offenders.push(`${file} spells "${reason}"`);
+				// Any quote style: a single-quoted or template copy is the same copy.
+				if (['"', "'", "`"].some(quote => code.includes(`${quote}${reason}${quote}`))) {
+					offenders.push(`${file} spells "${reason}"`);
+				}
 			}
-			if (/const MAX_PENDING_SENDS\b/.test(text)) offenders.push(`${file} declares MAX_PENDING_SENDS`);
+			if (/const MAX_PENDING_SENDS\b/.test(code)) offenders.push(`${file} declares MAX_PENDING_SENDS`);
 		}
 		expect(offenders).toEqual([]);
 	});
@@ -149,24 +152,15 @@ describe("the relay protocol has one owner", () => {
 	it("has both clients importing the table and the bound from the owner", async () => {
 		for (const file of CLIENTS) {
 			const text = await Bun.file(path.join(REPO_ROOT, file)).text();
-			expect(text).toContain("RELAY_FATAL_CLOSE_REASONS");
-			expect(text).toContain("RELAY_MAX_PENDING_SENDS");
-			expect(moduleSpecifiersIn(text)).toContain("@veyyon/wire/relay");
+			expect(namedImportsFrom(text, "@veyyon/wire/relay"), file).toEqual(
+				expect.arrayContaining(["RELAY_FATAL_CLOSE_REASONS", "RELAY_MAX_PENDING_SENDS"]),
+			);
 			expect(text.length).toBeGreaterThan(1_000);
 		}
 	});
 
-	/**
-	 * The dev relay is the PRODUCER of these codes, so its copy was the one that mattered most: a relay and a
-	 * client disagreeing about the reason for a code is exactly what a shared table prevents.
-	 */
-	it("has the dev relay closing with the owner's reasons", async () => {
-		const text = await Bun.file(path.join(REPO_ROOT, "clients/web/scripts/local-relay.ts")).text();
-		expect(moduleSpecifiersIn(text)).toContain("@veyyon/wire/relay");
-		for (const code of [4001, 4004, 4009]) {
-			expect(text).toContain(`close(${code}, RELAY_FATAL_CLOSE_REASONS[${code}]`);
-		}
-	});
+	// The dev relay is the PRODUCER of these codes. Its close reasons are asserted on the wire, against
+	// this table, in `clients/web/test/local-relay.test.ts`; the ratchet above keeps it from spelling one.
 
 	/**
 	 * The owner is a leaf, so a client pays one module for the protocol instead of the 900-line message

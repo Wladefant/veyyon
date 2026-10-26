@@ -30,7 +30,12 @@ import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import * as obfuscatorModule from "@veyyon/coding-agent/secrets/obfuscator";
-import { resolveVaultLocations, SecretVault, vaultPathFor } from "@veyyon/coding-agent/secrets/vault";
+import {
+	resolveVaultLocations,
+	SecretVault,
+	type VaultLocations,
+	vaultPathFor,
+} from "@veyyon/coding-agent/secrets/vault";
 import { runSecretCommandForSurface } from "@veyyon/coding-agent/slash-commands/helpers/secret";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
@@ -63,7 +68,7 @@ interface Harness {
 	providerRedactions: () => number;
 	/** Drive a genuine provider turn, used only to prove the seam counter can reach one. */
 	prompt: (text: string) => Promise<void>;
-	locations: ReturnType<typeof resolveVaultLocations>;
+	locations: VaultLocations;
 	dispose: () => Promise<void>;
 }
 

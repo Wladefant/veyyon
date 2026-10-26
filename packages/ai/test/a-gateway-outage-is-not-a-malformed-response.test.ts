@@ -24,12 +24,17 @@ import { describe, expect, it } from "bun:test";
 import * as AIError from "@veyyon/ai/error";
 import { refreshNousResearchToken } from "@veyyon/ai/registry/oauth/nous-research";
 
-/** Bodies an intermediary returns instead of the Portal's JSON. */
+/**
+ * Bodies an intermediary returns instead of the Portal's JSON object. A JSON `null` or string parses,
+ * but carries no `error` field either, so it is the status that is reported.
+ */
 const UNPARSEABLE_BODIES: ReadonlyArray<readonly [string, string]> = [
 	["cloudflare html", "<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head></html>"],
 	["nginx html", "<html><body><center><h1>504 Gateway Time-out</h1></center></body></html>"],
 	["bare proxy line", "upstream connect error or disconnect/reset before headers"],
 	["empty body", ""],
+	["json null", "null"],
+	["json string", JSON.stringify("Bad Gateway")],
 ];
 
 /** Statuses an intermediary answers with when the Portal is unreachable. */

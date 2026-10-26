@@ -4,11 +4,8 @@ import { PROVIDER_REGISTRY } from "@veyyon/ai/registry";
 import { getAgentDir, getGlobalConfigRootDir, logger, nearestNames, truncate } from "@veyyon/utils";
 import { runTrustSlashCommand } from "../cli/trust-cli";
 import { credentialRemedySentence } from "../config/missing-credentials";
-import {
-	getModelMatchPreferences,
-	resolveConfiguredModelPatterns,
-	resolveModelFromString,
-} from "../config/model-resolver";
+import { normalizeModelPatternList } from "../config/model-pattern-list";
+import { getModelMatchPreferences, resolveModelFromString } from "../config/model-resolver";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../discovery/helpers.js";
 import type { ExtensionReloadResult } from "../extensibility/extensions/types";
 import { formatProviderName } from "../session/account-format";
@@ -23,7 +20,7 @@ import {
 } from "../session/account-inventory";
 import type { AgentSession } from "../session/agent-session";
 import { configuredAgentModelChains } from "../task/agent-settings";
-import { theme } from "../theme/theme";
+import { theme } from "../theme/theme-binding";
 import { BUILTIN_SLASH_COMMAND_DECLARATIONS, type BuiltinSlashCommandDeclaration } from "./builtin-declarations";
 import type { BuiltinSlashCommandHandlers } from "./handler-types";
 import {
@@ -57,24 +54,22 @@ export const ACCOUNT_VERBS: readonly string[] = BUILTIN_SLASH_COMMAND_DECLARATIO
  * looking at, the models spawned agents run on, and the web-search backend. They are read from the
  * settings the runtime itself obeys, so the block cannot claim a role the router does not honor.
  *
- * Spawned agents are a UNION of every chain a spawn can land on: the default model role, the shared
- * chain, and every lane that names a model of its own. Both scopes are read, because the scope
- * switch is one keystroke and re-annotating providers on it would make the badges flicker.
- * Nothing resolvable at all falls back to the main provider, which is what a spawn reaches when
- * the default role is unset.
+ * Spawned agents run the session's model unless a setting names another, so the main provider is
+ * an agent provider, followed by every chain a setting names: the shared chain and every lane that
+ * names a model of its own. Both scopes are read, because the scope switch is one keystroke and
+ * re-annotating providers on it would make the badges flicker.
  */
 export function accountRoleSources(session: AgentSession): AccountRoleSources {
 	const model = session.model;
 	const available = session.modelRegistry.getAvailable();
 	const preferences = getModelMatchPreferences(session.settings);
-	const agentProviders: string[] = [];
+	const agentProviders: string[] = model ? [model.provider] : [];
 	for (const chain of configuredAgentModelChains(session.settings)) {
-		for (const pattern of resolveConfiguredModelPatterns(chain, session.settings)) {
+		for (const pattern of normalizeModelPatternList(chain)) {
 			const resolved = resolveModelFromString(pattern, available, preferences);
 			if (resolved && !agentProviders.includes(resolved.provider)) agentProviders.push(resolved.provider);
 		}
 	}
-	if (agentProviders.length === 0 && model) agentProviders.push(model.provider);
 	const webSearch = session.settings.get("providers.webSearch");
 	return {
 		...(model ? { mainModel: { provider: model.provider, id: model.id } } : {}),
@@ -220,13 +215,13 @@ export async function credentialedProviderIds(session: AgentSession): Promise<st
 }
 
 /**
- * `/account use <provider> <account>`: make one account the machine-wide choice for its provider.
+ * `/account use <provider> <account>`: choose which account of a provider serves traffic.
  *
  * The text twin of pressing `enter` on the account card, for the callers that have no card to
- * press: ACP clients, `--print`, and anything driving veyyon from a script. It writes the SAME
- * durable per-provider selection the card writes rather than a session pin, because a caller that
- * cannot see the card also cannot see a choice that quietly expires with the session.
- *
+ * press: ACP clients, `--print`, and anything driving veyyon from a script. It follows the same
+ * shared policy as the account card: with `accounts.loadBalancing` enabled, the choice pins that
+ * account for this session only without writing a global selection. With load balancing off, it
+ * writes the durable machine-wide per-provider selection so all sessions and profiles default to it.
  * An account is named by any of the things an account surface prints for it — the name it was
  * given, its email, its account id, or the label the card renders — matched case-insensitively,
  * exact before prefix. A prefix matching two accounts is REFUSED with both named: picking either
@@ -282,9 +277,16 @@ export async function useProviderAccount(
 	if (!authStorage.selectProviderCredential(provider, row.credentialId, { sessionId: session.sessionId })) {
 		return { ok: false, message: `Could not switch to ${label}: that account is no longer stored.` };
 	}
+	const scope = (
+		typeof authStorage.isLoadBalancingEnabled === "function"
+			? authStorage.isLoadBalancingEnabled()
+			: session.settings.get("accounts.loadBalancing") === true
+	)
+		? "for this session only"
+		: "everywhere on this machine";
 	return {
 		ok: true,
-		message: `${row.providerLabel}: now using ${label} everywhere on this machine.`,
+		message: `${row.providerLabel}: now using ${label} ${scope}.`,
 	};
 }
 
@@ -871,6 +873,7 @@ export const SETUP_HANDLERS = {
 		handle: async (_command, runtime) => {
 			try {
 				const result = await runtime.settings.reloadConfig();
+				const ruleLines = await runtime.session.reloadRules();
 				let extensionRunner: { reloadExtensions: () => Promise<ExtensionReloadResult[]> } | undefined;
 				try {
 					extensionRunner = runtime.session?.extensionRunner;
@@ -918,6 +921,7 @@ export const SETUP_HANDLERS = {
 							? "Applied routing values are used by new spawns."
 							: "No effective routing changes.",
 						...extensionLines,
+						...ruleLines,
 					].join("\n"),
 				);
 				return commandConsumed();

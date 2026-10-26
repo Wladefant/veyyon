@@ -21,9 +21,9 @@ import {
 	type AuthCredentialStore,
 	AuthStorage,
 	type CredentialFailoverEvent,
-	SqliteAuthCredentialStore,
 	type UsageLimitWithheldEvent,
 } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import * as oauthUtils from "@veyyon/ai/registry/oauth";
 import { logger } from "@veyyon/utils";
 
@@ -99,6 +99,7 @@ describe("a notice subscriber fault never reaches the emitter", () => {
 				provider: PROVIDER,
 				from: { credentialId: targetId, label: "target@example.com" },
 				to: { credentialId: siblingId, label: "sibling@example.com" },
+				reason: "auth",
 				cause: "invalid_grant: token revoked",
 			},
 		]);
@@ -142,12 +143,17 @@ describe("a notice subscriber fault never reaches the emitter", () => {
 			await settled.promise;
 			await Bun.sleep(0);
 
-			expect(result).toEqual({ switched: false, retryAtMs: NOW_MS + 60_000 });
+			expect(result).toEqual({
+				switched: false,
+				retryAtMs: NOW_MS + 60_000,
+				quotaMessage: `Quota reached on ${PROVIDER} account target@example.com; resets ${new Date(NOW_MS + 60_000).toISOString()}. 1 other account available but load balancing is off, so Veyyon waits for this account.`,
+			});
 			expect(withheld).toEqual([
 				{
 					provider: PROVIDER,
 					account: { credentialId: targetId, label: "target@example.com" },
 					idleSiblings: 1,
+					reason: "quota",
 					retryAtMs: NOW_MS + 60_000,
 				},
 			]);

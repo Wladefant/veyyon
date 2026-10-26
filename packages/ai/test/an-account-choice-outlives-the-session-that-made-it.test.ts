@@ -28,7 +28,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type AuthCredentialStore, AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { type AuthCredentialStore, AuthStorage } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import * as oauthUtils from "@veyyon/ai/registry/oauth";
 import { removeWithRetries } from "../../utils/src/temp";
 
@@ -238,6 +239,53 @@ describe("an account choice outlives the session that made it", () => {
 		expect(await storage.getApiKey(PROVIDER, OTHER_SESSION_ID)).toBe(`access-${chosenSuffix}`);
 		expect(await storage.getApiKey(PROVIDER)).toBe(`access-${chosenSuffix}`);
 		expect(storage.selectedProviderCredentialId(PROVIDER)).toBe(chosenId);
+	});
+
+	/**
+	 * With load balancing enabled, explicit account choice is session-only, leaving global provider
+	 * selection empty. When load balancing is disabled, the choice is saved globally.
+	 */
+	test("with load balancing on, explicit account choice is session-only, leaving global provider selection empty", async () => {
+		if (!store) throw new Error("test setup failed");
+		const balancingStorage = new AuthStorage(store, { loadBalancing: true });
+		const { chosenId, chosenSuffix, otherId } = await seedAndPickTheLosingAccount(balancingStorage);
+
+		// With balancing true and a session, selection pins only this session and does not write global choice
+		expect(balancingStorage.selectProviderCredential(PROVIDER, chosenId, { sessionId: SESSION_ID })).toBe(true);
+		expect(balancingStorage.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
+		expect(balancingStorage.sessionCredentialRouting(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(chosenId);
+		expect(
+			balancingStorage.sessionCredentialRouting(PROVIDER, OTHER_SESSION_ID)?.selectedCredentialId,
+		).toBeUndefined();
+		expect(balancingStorage.sessionCredentialRouting(PROVIDER, undefined)?.selectedCredentialId).toBeUndefined();
+		expect(await balancingStorage.getApiKey(PROVIDER, SESSION_ID)).toBe(`access-${chosenSuffix}`);
+
+		// Missing session id cannot pin globally under balancing true
+		expect(balancingStorage.selectProviderCredential(PROVIDER, otherId, { sessionId: undefined })).toBe(false);
+		expect(balancingStorage.selectProviderCredential(PROVIDER, otherId)).toBe(false);
+		expect(balancingStorage.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
+
+		// Switching to another account for the same session replaces the session pin
+		expect(balancingStorage.selectProviderCredential(PROVIDER, otherId, { sessionId: SESSION_ID })).toBe(true);
+		expect(balancingStorage.sessionCredentialRouting(PROVIDER, SESSION_ID)?.selectedCredentialId).toBe(otherId);
+		expect(balancingStorage.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
+
+		// Reopening the database confirms no global selection was persisted
+		const reopened = new AuthStorage(store, { loadBalancing: true });
+		await reopened.reload();
+		expect(reopened.selectedProviderCredentialId(PROVIDER)).toBeUndefined();
+
+		// With balancing false, global persistence is preserved
+		const globalStorage = new AuthStorage(store, { loadBalancing: false });
+		await globalStorage.reload();
+		expect(globalStorage.selectProviderCredential(PROVIDER, chosenId, { sessionId: SESSION_ID })).toBe(true);
+		expect(globalStorage.selectedProviderCredentialId(PROVIDER)).toBe(chosenId);
+		expect(globalStorage.sessionCredentialRouting(PROVIDER, OTHER_SESSION_ID)?.selectedCredentialId).toBe(chosenId);
+		expect(globalStorage.sessionCredentialRouting(PROVIDER, undefined)?.selectedCredentialId).toBe(chosenId);
+
+		const reopenedGlobal = new AuthStorage(store, { loadBalancing: false });
+		await reopenedGlobal.reload();
+		expect(reopenedGlobal.selectedProviderCredentialId(PROVIDER)).toBe(chosenId);
 	});
 
 	/**

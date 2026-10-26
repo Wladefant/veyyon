@@ -415,7 +415,36 @@ describe("AgentSession concurrent prompt guard", () => {
 		expect(stopEvents[0]?.last_assistant_message?.role).toBe("assistant");
 	});
 
-	it("uses non-empty session_stop reason when additional context is empty", async () => {
+	// A stop hook may answer with both a reason and additional context. A
+	// `continue` answer is the hook's own instruction, so its context wins and
+	// the reason is the fallback; a `block` answer explains the refusal, so its
+	// reason wins and the context is the fallback. An empty string is absent.
+	it.each([
+		{
+			name: "continue falls back to the reason when the context is empty",
+			result: { continue: true, additionalContext: "", reason: "REASON-TEXT" },
+			sent: "REASON-TEXT",
+			withheld: undefined,
+		},
+		{
+			name: "continue prefers the context over the reason",
+			result: { continue: true, additionalContext: "CONTEXT-TEXT", reason: "REASON-TEXT" },
+			sent: "CONTEXT-TEXT",
+			withheld: "REASON-TEXT",
+		},
+		{
+			name: "block prefers the reason over the context",
+			result: { decision: "block", additionalContext: "CONTEXT-TEXT", reason: "REASON-TEXT" },
+			sent: "REASON-TEXT",
+			withheld: "CONTEXT-TEXT",
+		},
+		{
+			name: "block falls back to the context when the reason is empty",
+			result: { decision: "block", additionalContext: "CONTEXT-TEXT", reason: "" },
+			sent: "CONTEXT-TEXT",
+			withheld: undefined,
+		},
+	])("session_stop $name", async ({ result, sent, withheld }) => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({
 			handler: () => ({ content: ["Done"] }),
@@ -433,14 +462,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
 			emitSessionStop: vi.fn(() => {
 				stopCount++;
-				if (stopCount === 1) {
-					return Promise.resolve({
-						continue: true,
-						additionalContext: "",
-						reason: "Continue from fallback reason.",
-					});
-				}
-				return Promise.resolve(undefined);
+				return Promise.resolve(stopCount === 1 ? result : undefined);
 			}),
 		} as unknown as ExtensionRunner;
 		const sessionManager = SessionManager.inMemory();
@@ -456,15 +478,15 @@ describe("AgentSession concurrent prompt guard", () => {
 		await session.waitForIdle();
 
 		expect(mock.calls).toHaveLength(2);
-		expect(
-			mock.calls[1]?.context.messages.some(message =>
+		const continuation = (mock.calls[1]?.context.messages ?? [])
+			.map(message =>
 				typeof message.content === "string"
-					? message.content.includes("Continue from fallback reason.")
-					: message.content.some(
-							content => content.type === "text" && content.text.includes("Continue from fallback reason."),
-						),
-			),
-		).toBe(true);
+					? message.content
+					: message.content.map(content => (content.type === "text" ? content.text : "")).join("\n"),
+			)
+			.join("\n");
+		expect(continuation).toContain(sent);
+		if (withheld !== undefined) expect(continuation).not.toContain(withheld);
 	});
 
 	it("honors hard session-stop blocks after advisory continuations exhaust their cap", async () => {

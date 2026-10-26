@@ -44,7 +44,11 @@ const SELECTOR_CONTROLLER = path.join(TERMINAL, "controllers/selector-controller
 const COMPONENTS = path.join(TERMINAL, "components");
 
 /** Components the controller imports that the session also draws with, so they load with it. */
-const SHARED_WITH_THE_SESSION = ["status-line/quiet-row.ts", "transcript/transcript-container.ts"];
+const SHARED_WITH_THE_SESSION = [
+	"status-line/quiet-row.ts",
+	"transcript/assistant-message.ts",
+	"transcript/transcript-container.ts",
+];
 
 /** The file a relative specifier in `from` names, as Bun resolves it. */
 function resolveRelative(from: string, specifier: string): string {
@@ -56,12 +60,26 @@ function resolveRelative(from: string, specifier: string): string {
 	return file;
 }
 
+/** Every relative import of `file`, resolved to the file it names. */
+function relativeImports(file: string): string[] {
+	return moduleSpecifiersIn(readFileSync(file, "utf8"))
+		.filter(specifier => specifier.startsWith("."))
+		.map(specifier => resolveRelative(file, specifier));
+}
+
 describe("the interactive session's static import graph", () => {
 	const graph = buildStartupImportGraph(REPO_ROOT, INTERACTIVE_MODE);
-	const cards = moduleSpecifiersIn(readFileSync(SELECTOR_CONTROLLER, "utf8"))
-		.filter(specifier => specifier.startsWith("."))
-		.map(specifier => resolveRelative(SELECTOR_CONTROLLER, specifier))
-		.filter(file => file.startsWith(`${COMPONENTS}${path.sep}`));
+	// The controller and the sibling controller modules it opens cards through (the account and
+	// session flows), so a card moved out of the controller file is still enumerated here.
+	const controllerModules = [
+		SELECTOR_CONTROLLER,
+		...relativeImports(SELECTOR_CONTROLLER).filter(file => path.dirname(file) === path.dirname(SELECTOR_CONTROLLER)),
+	];
+	const cards = [
+		...new Set(
+			controllerModules.flatMap(relativeImports).filter(file => file.startsWith(`${COMPONENTS}${path.sep}`)),
+		),
+	];
 
 	it("is complete enough to judge by", () => {
 		expect(graph.unscannable).toEqual([]);
@@ -72,8 +90,14 @@ describe("the interactive session's static import graph", () => {
 		expect(cards.length).toBeGreaterThan(10);
 	});
 
-	it("does not hold the selector controller", () => {
-		expect(graph.files.has(SELECTOR_CONTROLLER)).toBe(false);
+	it("does not hold the selector controller or the modules it opens cards through", () => {
+		expect(controllerModules.map(file => path.basename(file)).sort()).toEqual([
+			"account-flows.ts",
+			"selector-controller.ts",
+			"session-flows.ts",
+			"setting-effects.ts",
+		]);
+		expect(controllerModules.filter(file => graph.files.has(file))).toEqual([]);
 	});
 
 	it("holds only the components the controller shares with the session", () => {

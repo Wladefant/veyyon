@@ -86,7 +86,7 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 	{
 		name: "reload-config",
 		aliases: ["reload"],
-		description: "Reload model and effort defaults for new subagents and reload loaded extensions",
+		description: "Reload config defaults, rule files, skills and loaded extensions without restarting",
 		textMode: true,
 	},
 	{
@@ -146,7 +146,8 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 			{ name: "switch", description: "Open the account manager focused on one provider", usage: "[provider]" },
 			{
 				name: "use",
-				description: "Switch a provider to one account, everywhere on this machine",
+				description:
+					"Switch a provider to one account for this session (or everywhere on this machine with load balancing off)",
 				usage: "<provider> <account>",
 			},
 			{ name: "name", description: "Name this session's active account for its provider", usage: "<text>" },
@@ -724,7 +725,7 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 	{
 		// TEXT MODE, because the operation needs no terminal. `AgentSession.handoff` generates the
 		// document with a oneshot request and swaps the session manager onto a new transcript, and
-		// the RPC surface has always driven exactly that (`rpc-mode.ts`, command "handoff"). Only the
+		// the RPC surface has always driven exactly that (`rpc-commands.ts`, command "handoff"). Only the
 		// spinner and the transcript repaint were TUI-bound. Leaving it TUI-only meant `/compact
 		// handoff` refused an ACP client by naming `/handoff`, a command that client could not reach.
 		name: "handoff",

@@ -6,10 +6,23 @@
 
 ### Changed
 
+- Sync upstream changes from santhreal/veyyon.
+
+## [1.5.6] - 2026-10-10
+### Added
+
+- `@veyyon/hashline` exports `unquotePath`, which strips one matching pair of surrounding quotes from a path; the section-header parser uses it instead of a private copy.
+
+## [1.5.6] - 2026-10-13
+
+### Changed
+
 - The edit prompt states the same line, block, and Markdown-section boundaries in fewer words and removes redundant examples.
 - Bare `- ` bullet body rows are now auto-accepted as literal content with a warning when the hunk is unambiguously a Markdown bullet list (every `-` row bullet-shaped and no unified-diff `+new` counterpart rows) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 03e6564c05626854890e9067b5ffeae2c952718e).
 - Two class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - Patch recovery evaluates the `diff` package when it first maps an edit from a stale snapshot onto the current file instead of when the module loads; behavior is unchanged.
+- Boundary repair, block lowering, batch preparation, anchor remapping, header parsing and line streaming run as separate per-step functions; patch output, warnings and errors are unchanged.
+- File-tag normalization no longer uses a lookahead regex; a read tool range read of a 982 KB markdown file drops from 3.81 ms to 1.83 ms median.
 
 ## [1.5.0] - 2026-09-18
 
@@ -19,7 +32,6 @@
 
 ### Changed
 
-- File-tag normalization no longer uses a lookahead regex; a read tool range read of a 982 KB markdown file drops from 3.81 ms to 1.83 ms median.
 - Unified patch operation definitions into a shared declarative operation table across tokenization and execution.
 - Array copies that allocated with a spread now use `.slice()`, `.concat()` or `Array.from()`. No user-visible behavior changes.
 - The package directory is `plugins/hashline` instead of `packages/hashline`; the published package name, entry points and behavior are unchanged.

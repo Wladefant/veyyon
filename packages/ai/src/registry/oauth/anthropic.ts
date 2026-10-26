@@ -2,6 +2,7 @@
  * Anthropic OAuth flow (Claude Pro/Max)
  */
 
+import { ANTHROPIC_API_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { CLAUDE_CODE_VERSION as claudeCodeVersion } from "@veyyon/catalog/wire/anthropic";
 import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import * as AIError from "../../error";
@@ -9,13 +10,14 @@ import type { FetchImpl } from "../../types";
 import { DEFAULT_CALLBACK_PATH, OAuthCallbackFlow } from "./callback-server";
 import { credentialExpiryFromExpiresIn } from "./expiry";
 import { generatePKCE } from "./pkce";
+import { requireTokenResponseObject } from "./token-response";
 import type { OAuthController, OAuthCredentials } from "./types";
 
 const decode = (s: string) => atob(s);
 const CLIENT_ID = decode("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl");
 const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
-const TOKEN_URL = "https://api.anthropic.com/v1/oauth/token";
-const BOOTSTRAP_URL = "https://api.anthropic.com/api/claude_cli/bootstrap";
+const TOKEN_URL = `${ANTHROPIC_API_ENDPOINT}/v1/oauth/token`;
+const BOOTSTRAP_URL = `${ANTHROPIC_API_ENDPOINT}/api/claude_cli/bootstrap`;
 const CLAUDE_CODE_BOOTSTRAP_MODEL = "claude-opus-4-8";
 const CLAUDE_CODE_BOOTSTRAP_USER_AGENT = `claude-code/${claudeCodeVersion}`;
 const CALLBACK_PORT = 54545;
@@ -47,10 +49,12 @@ async function postJson(
 	body: Record<string, string | number>,
 	fetchImpl: FetchImpl,
 	extraHeaders?: Record<string, string>,
+	callerSignal?: AbortSignal,
 ): Promise<string> {
 	// The fence spans the body read and its timer is cleared on settle
 	// (a bare AbortSignal.timeout stays armed for the full 30s).
-	return await withScopedTimeoutSignal(30_000, async signal => {
+	return await withScopedTimeoutSignal(30_000, async scopedSignal => {
+		const signal = callerSignal ? AbortSignal.any([scopedSignal, callerSignal]) : scopedSignal;
 		const response = await fetchImpl(url, {
 			method: "POST",
 			headers: {
@@ -117,14 +121,16 @@ function nonEmpty(value: string | undefined): string | undefined {
 }
 
 function parseOAuthTokenResponse(responseBody: string, operation: string): AnthropicTokenResponse {
+	let parsed: unknown;
 	try {
-		return JSON.parse(responseBody) as AnthropicTokenResponse;
+		parsed = JSON.parse(responseBody);
 	} catch (error) {
 		throw new AIError.OAuthError(
 			`Anthropic ${operation} returned invalid JSON. url=${TOKEN_URL}; body=${responseBody}; details=${formatErrorDetails(error)}`,
 			{ kind: "validation", provider: "anthropic", cause: error },
 		);
 	}
+	return requireTokenResponseObject<AnthropicTokenResponse>(parsed, "anthropic", operation);
 }
 
 /**
@@ -307,11 +313,12 @@ export async function loginAnthropic(ctrl: OAuthController): Promise<OAuthCreden
 }
 
 /**
- * Refresh Anthropic OAuth token
+ * Refresh Anthropic OAuth token. `signal` aborts the token request.
  */
 export async function refreshAnthropicToken(
 	refreshToken: string,
 	fetchOverride?: FetchImpl,
+	signal?: AbortSignal,
 ): Promise<OAuthCredentials> {
 	const fetchImpl = fetchOverride ?? fetch;
 	let responseBody: string;
@@ -329,6 +336,7 @@ export async function refreshAnthropicToken(
 				"anthropic-beta": "oauth-2025-04-20",
 				"User-Agent": "anthropic-sdk-typescript/0.94.0 userOAuthProvider",
 			},
+			signal,
 		);
 	} catch (error) {
 		throw new AIError.OAuthError(

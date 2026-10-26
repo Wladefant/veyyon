@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, type Mock, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -154,7 +154,7 @@ describe("skills", () => {
 		let agentSkillsDir: string;
 		let agentDir: string;
 		let dirOverrides: DirOverridesSnapshot;
-		let homedirSpy: ReturnType<typeof spyOn>;
+		let homedirSpy: Mock<typeof os.homedir>;
 
 		beforeEach(async () => {
 			dirOverrides = captureDirOverrides();

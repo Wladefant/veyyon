@@ -47,7 +47,7 @@ export interface ChosenCredential extends RoutedCredential {
 export class CredentialRouting {
 	readonly #store: AuthCredentialStore;
 	readonly #rows: (provider: string) => StoredCredential[];
-	/** `operation:provider` keys already warned about, so the warning fires once. */
+	readonly #loadBalancing?: boolean | (() => boolean);
 	#reportedStickyCacheFailures = new Set<string>();
 	/** Tracks the last used credential per provider for a session (used for rate-limit switching). */
 	#sessionLastCredential: Map<string, Map<string, RoutedCredential>> = new Map();
@@ -64,9 +64,20 @@ export class CredentialRouting {
 	#providerSelection: Map<string, { identity: string | null; readAtMs: number; persisted: boolean }> = new Map();
 
 	/** `rows` returns the provider's loaded credential rows, in the order indices refer to. */
-	constructor(store: AuthCredentialStore, rows: (provider: string) => StoredCredential[]) {
+	constructor(
+		store: AuthCredentialStore,
+		rows: (provider: string) => StoredCredential[],
+		loadBalancing?: boolean | (() => boolean),
+	) {
 		this.#store = store;
 		this.#rows = rows;
+		this.#loadBalancing = loadBalancing;
+	}
+
+	#loadBalancingEnabled(): boolean {
+		const setting = this.#loadBalancing;
+		if (setting === undefined) return false;
+		return typeof setting === "function" ? setting() : setting;
 	}
 
 	/**
@@ -373,10 +384,24 @@ export class CredentialRouting {
 		return { type: entry.credential.type, index, credentialId: entry.id };
 	}
 
-	/** See {@link AuthStorage.selectProviderCredential}. */
+	/**
+	 * See {@link AuthStorage.selectProviderCredential}.
+	 *
+	 * When load balancing is enabled, the choice is session-only: it pins the account for `sessionId`
+	 * and performs no global `auth_provider_selection` write. If `sessionId` is missing or undefined,
+	 * it creates no selection and returns false.
+	 *
+	 * When load balancing is disabled, it persists the global choice to `this.#store` and retires any
+	 * existing session pin for `sessionId`.
+	 */
 	selectProviderCredential(provider: string, credentialId: number, sessionId: string | undefined): boolean {
 		const entry = this.#rows(provider).find(row => row.id === credentialId);
 		if (!entry) return false;
+
+		if (this.#loadBalancingEnabled()) {
+			if (!sessionId) return false;
+			return this.pinSessionCredential(provider, sessionId, credentialId);
+		}
 		const identity = resolveAccountNameIdentity(provider, entry);
 		let persisted = false;
 		const write = this.#store.setProviderSelection;
@@ -401,6 +426,9 @@ export class CredentialRouting {
 
 	/** See {@link AuthStorage.clearProviderSelection}. */
 	clearProviderSelection(provider: string, sessionId: string | undefined): void {
+		if (this.#loadBalancingEnabled()) {
+			this.clearSessionCredentialPin(provider, sessionId);
+		}
 		let persisted = false;
 		const clear = this.#store.clearProviderSelection;
 		if (clear) {

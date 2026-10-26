@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
+import { stripReadSelector } from "@veyyon/utils/read-selector";
 import {
 	computeFileLists,
 	createFileOps,
@@ -7,7 +8,6 @@ import {
 	extractFileOpsFromMessages,
 	formatFileOperations,
 	isUrlSchemePath,
-	stripReadSelector,
 	upsertFileOperations,
 } from "../src/compaction/utils";
 import { createAssistantMessage } from "./helpers";

@@ -15,6 +15,9 @@
  * pinned here: a timestamp appended out of order, appends past the room the index left, two
  * timestamps that print alike without being the same number, and a message with no timestamp. A
  * fresh process measures the bytes it holds per logged message (`fixtures/persistence-index-heap.ts`).
+ * A leaf that grew past the indexed one adds only the new entries, so the cases that would leave a
+ * new entry unindexed are pinned too: an entry the index did not see written behind a custom entry,
+ * a sibling branch as long as the indexed one, and another session file reusing the leaf id.
  *
  * What it does not catch: which `AgentSession` event routes a message here (the session suites
  * `agent-session-persisted-keys-cache` and `session/persistence-fault-recovery` pin that), and the
@@ -23,6 +26,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { execFile } from "node:child_process";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import type { AgentMessage } from "@veyyon/agent-core";
@@ -31,6 +35,7 @@ import type { InstrumentationLevel } from "@veyyon/ai/instrumentation";
 import type { PendingContextSnapshot } from "@veyyon/coding-agent/session/agent-session-types";
 import { MessagePersistence } from "@veyyon/coding-agent/session/runtime/message-persistence";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { TempDir } from "@veyyon/utils";
 import type { PersistenceIndexHeap } from "../fixtures/persistence-index-heap";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 
@@ -355,6 +360,96 @@ describe("the branch index a lookup reads", () => {
 		persistence.persistIfMissing(untimed);
 		persistence.persistIfMissing({ ...untimed });
 		expect(labels(store)).toEqual(["user:indexed", "user:untimed"]);
+	});
+
+	it("finds a message logged past it behind a custom entry, reading only the entries past it", () => {
+		const store = SessionManager.inMemory();
+		const reads = new Set<number>();
+		const persistence = new MessagePersistence({
+			sessionStore: {
+				getSessionFile: () => store.getSessionFile(),
+				getLeafId: () => store.getLeafId(),
+				getBranch: () =>
+					new Proxy(store.getBranch(), {
+						get(target, key, receiver) {
+							if (typeof key === "string" && /^\d+$/.test(key)) reads.add(Number(key));
+							return Reflect.get(target, key, receiver);
+						},
+					}),
+				appendMessage: message => store.appendMessage(message),
+				appendCustomMessageEntry: (...args) => store.appendCustomMessageEntry(...args),
+				branch: id => store.branch(id),
+				resetLeaf: () => store.resetLeaf(),
+			},
+			instrumentationLevel: () => "off",
+			pendingContextSnapshot: () => undefined,
+			nonMessageTokens: () => 100,
+			consumeRewoundResult: () => false,
+			onTtsrInjectionPersisted: () => {},
+		});
+		for (let index = 0; index < 200; index++) persistence.persistIfMissing(user(`m${index}`, index));
+		for (let round = 0; round < 2; round++) {
+			const indexed = store.getBranch().length;
+			store.appendMessage(user(`unseen ${round}`, 1_000 + round * 10));
+			store.appendCustomMessageEntry("note", "a custom entry", false, undefined, "agent");
+			reads.clear();
+			persistence.persistIfMissing(user(`unseen ${round}`, 1_000 + round * 10));
+			persistence.persistIfMissing(user(`after ${round}`, 1_001 + round * 10));
+			expect(labels(store).slice(-2)).toEqual([`user:unseen ${round}`, `user:after ${round}`]);
+			expect([...reads].sort((a, b) => a - b)).toEqual([indexed - 1, indexed, indexed + 1]);
+
+			reads.clear();
+			persistence.persistIfMissing(user(`next ${round}`, 1_002 + round * 10));
+			expect(reads.size).toBe(0);
+		}
+	});
+
+	it("indexes the branch again when another session file holds the same leaf id", async () => {
+		using tempDir = TempDir.createSync("@persistence-index-file-");
+		const dir = tempDir.path();
+		const first = SessionManager.create(dir, dir);
+		first.appendMessage(user("question", 1));
+		first.appendMessage(assistant("answer", 2));
+		await first.flush();
+		const firstFile = first.getSessionFile() ?? "";
+		await first.close();
+		// The second file reuses the first one's entry ids for messages stamped later.
+		const lines = (await fs.readFile(firstFile, "utf8"))
+			.trimEnd()
+			.split("\n")
+			.map(line => JSON.parse(line) as { type: string; message?: { timestamp: number } });
+		for (const line of lines) if (line.message) line.message.timestamp += 10;
+		const secondFile = path.join(dir, "second.jsonl");
+		await fs.writeFile(secondFile, `${lines.map(line => JSON.stringify(line)).join("\n")}\n`);
+
+		const store = await SessionManager.open(firstFile, dir, undefined, { suppressBreadcrumb: true });
+		const persistence = new MessagePersistence({
+			sessionStore: store,
+			instrumentationLevel: () => "off",
+			pendingContextSnapshot: () => undefined,
+			nonMessageTokens: () => 100,
+			consumeRewoundResult: () => false,
+			onTtsrInjectionPersisted: () => {},
+		});
+		persistence.persistIfMissing(user("question", 1));
+		await store.setSessionFile(secondFile);
+		persistence.persistIfMissing(user("question", 11));
+		expect(labels(store)).toEqual(["user:question", "assistant:answer"]);
+		await store.close();
+	});
+
+	it("indexes the whole branch again when the leaf moves to a sibling at least as long", () => {
+		const { store, persistence } = harness();
+		persistence.persistIfMissing(user("root", 1));
+		const rootId = store.getLeafId() ?? "";
+		persistence.persistIfMissing(user("left", 2));
+		persistence.persistIfMissing(user("left again", 3));
+		store.branch(rootId);
+		store.appendMessage(user("right", 4));
+		store.appendCustomMessageEntry("note", "a custom entry", false, undefined, "agent");
+
+		persistence.persistIfMissing(user("right", 4));
+		expect(labels(store)).toEqual(["user:root", "user:right"]);
 	});
 
 	it("holds a few bytes a logged message, not a key string each", async () => {

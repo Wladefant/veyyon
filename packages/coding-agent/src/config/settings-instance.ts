@@ -61,6 +61,16 @@ export function settingsOrNull(): Settings | null {
 	return globalInstance;
 }
 
+/**
+ * The provider ids in `disabledProviders`, or none before settings are initialised.
+ *
+ * The model registry and the sign-in list both filter on this set, so a disabled provider stays out of the model
+ * list and out of the login choices alike. An uninitialised process has disabled nothing.
+ */
+export function disabledProviderIds(): ReadonlySet<string> {
+	return new Set(globalInstance?.get("disabledProviders"));
+}
+
 /** The initialised store, or a throw naming `Settings.init()`. Never a default. */
 export function settingsOrThrow(): Settings {
 	if (!globalInstance) throw new Error(SETTINGS_NOT_INITIALIZED_MESSAGE);

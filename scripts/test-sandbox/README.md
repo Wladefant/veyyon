@@ -50,10 +50,9 @@ workstation it adds 2.1s of boot and roughly 10x on small-file reads, because vi
 a sandbox that turns green suites red is one people switch off. Select it deliberately
 with `--rung=microvm`.
 
-`bwrap` does not work on this workstation. Bubblewrap is installed and the sysctl says
-unprivileged user namespaces are enabled, but AppArmor refuses the `uid_map` write. The
-probe therefore runs bubblewrap rather than looking for it on `PATH`, because the sysctl
-advertises a capability the host does not grant.
+Some Linux hosts deny bwrap user namespaces through AppArmor despite the sysctl setting.
+The probe runs bubblewrap because the sysctl alone does not prove that it works.
+WSL on this PC supports the bwrap boundary.
 
 ## The contract
 
@@ -83,6 +82,38 @@ bash scripts/test-sandbox/leak-proof.sh             # the red run, every availab
 
 Package scripts wrap the common ones: `test:sandbox:probe`, `test:sandbox:build`,
 `test:sandbox:remote:build`, `test:sandbox:proof`.
+
+### Windows through WSL
+
+Use WSL when Windows has no available kernel sandbox. Do not run bare `bun test`.
+The bwrap guest uses Linux system paths, not the Windows PATH inherited by `wsl --exec`.
+Install the manifest's Bun version in `/usr/local/bin/bun`, outside the hidden home.
+Git and sh must also exist in the WSL distro.
+
+If a Windows worktree has no Linux dependencies, install them in a separate WSL checkout.
+Use `bun install --frozen-lockfile` there, through a medium build slot.
+Never install through a shared Windows `node_modules` junction.
+Set `VEYYON_SANDBOX_NODE_MODULES` to that checkout's absolute Linux `node_modules` path.
+Bwrap binds only that directory read-only over the tested worktree's `node_modules`.
+Relative workspace links then resolve to the tested worktree, not the dependency checkout.
+
+Put the command in a shell script to keep `$?` from expanding on Windows:
+
+```sh
+#!/bin/bash
+set -euo pipefail
+cd /mnt/c/Users/wkiri/development/<worktree>
+bash scripts/test-sandbox/run.sh --rung=bwrap bun test <paths>
+```
+
+Run that script through the PC's medium build slot:
+
+```text
+python C:/Users/wkiri/.veyyon/workflows/build_slot.py run <lane>-tests --class medium --timeout 2400 -- wsl.exe --exec /bin/bash /mnt/c/<script-path>
+```
+
+Read the Bun summary. A receipt passes only with `N pass`, `0 fail`, and `N > 0`.
+Exit status alone does not prove that tests ran.
 
 ## The remote rung
 

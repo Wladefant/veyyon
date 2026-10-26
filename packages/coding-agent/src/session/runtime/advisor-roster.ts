@@ -12,7 +12,8 @@
  * - **aside**: a nit, batched into one non-interrupting card on the yield queue;
  * - **preserve**: a card recorded visibly without waking a turn, when the conversation already
  *   rests on an answer or a user interrupt suppressed auto-resume;
- * - **steer**: a concern or blocker steered into the running loop, which it wakes when idle;
+ * - **steer**: a concern or blocker steered into the running loop during active turns;
+ *   when idle, advice queues as deferred next-turn context;
  * - plan mode turns every steer into a preserved card, since only user-driven turns converge there.
  */
 
@@ -59,16 +60,11 @@ import {
 	resolveAdvisorDeliveryChannel,
 	slugifyAdvisorName,
 } from "../../advisor";
-import {
-	formatModelString,
-	formatModelStringWithRouting,
-	resolveAdvisorRoleSelection,
-	resolveModelOverride,
-} from "../../config/model-resolver";
-import { MODEL_ROLES } from "../../config/model-roles";
+import { formatModelString, formatModelStringWithRouting, resolveModelOverride } from "../../config/model-resolver";
 import { serviceTierForAllFamilies, serviceTierSettingToTier } from "../../config/service-tier";
 import { advisorPrompts } from "../../prompts/advisor/rows";
 import type { SecretObfuscator } from "../../secrets/obfuscator";
+import { HELPERS, helperSettingPath, resolveHelperModel } from "../../task/helper-settings";
 import {
 	concreteThinkingLevel,
 	resolveThinkingLevelForModel,
@@ -125,7 +121,8 @@ export interface AdvisorProviderShaping {
 	/** The advisor stream override; `streamSimple` when unset. */
 	readonly streamFn: StreamFn | undefined;
 	readonly preferWebsockets: boolean | undefined;
-	readonly onPayload: SimpleStreamOptions["onPayload"] | undefined;
+	/** The session's payload hook, resolved per request; `undefined` while no hook runs. */
+	readonly payloadHook: (() => SimpleStreamOptions["onPayload"]) | undefined;
 	readonly onResponse: SimpleStreamOptions["onResponse"] | undefined;
 	readonly onSseEvent: SimpleStreamOptions["onSseEvent"] | undefined;
 	readonly transformProviderContext:
@@ -174,7 +171,7 @@ export interface AdvisorRosterHost extends AdvisorContextEnv {
 	/** Whether the conversation rests on an answer with nothing queued behind it. */
 	hasTerminalTextAnswerWithoutQueuedWork(): boolean;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
-	/** Steer an advice card into the primary and wake it when idle. */
+	/** Steer an advice card into the primary during active turns or queue it as deferred next-turn context when idle. */
 	steerAdvice(content: string, details: AdvisorMessageDetails): Promise<void>;
 	/** Hold a card for the next turn. */
 	parkForNextTurn(card: CustomMessage): void;
@@ -252,7 +249,7 @@ export class AdvisorRoster {
 
 	/** Read `advisor.enabled` and start the advisors when it is on. */
 	enableFromSettings(): void {
-		this.#enabled = isAdvisorProductEnabled() && (this.#host.settings.get("advisor.enabled") as boolean);
+		this.#enabled = isAdvisorProductEnabled() && this.#host.settings.get("advisor.enabled");
 		if (this.#enabled) this.#build();
 	}
 
@@ -267,8 +264,8 @@ export class AdvisorRoster {
 		return false;
 	}
 
-	/** A model role changed: rebuild any advisor whose resolved model no longer matches. */
-	onModelRolesChanged(): void {
+	/** A helper model changed: rebuild any advisor whose resolved model no longer matches. */
+	onHelperModelsChanged(): void {
 		if (!isAdvisorProductEnabled() || !this.#enabled || this.#host.isDisposed()) return;
 		if (this.#advisors.length > 0 && !this.#matchesCurrentConfig()) this.stop();
 		this.#build(true);
@@ -514,8 +511,8 @@ export class AdvisorRoster {
 	// ------------------------------------------------------------ building
 
 	#immuneTurnLimit(): number {
-		const immuneTurns = this.#host.settings.get("advisor.immuneTurns") as number;
-		if (!Number.isFinite(immuneTurns) || immuneTurns <= 0) return 0;
+		const immuneTurns = this.#host.settings.get("advisor.immuneTurns");
+		if (immuneTurns <= 0) return 0;
 		return Math.trunc(immuneTurns);
 	}
 
@@ -566,8 +563,9 @@ export class AdvisorRoster {
 					continue;
 				}
 			} else {
-				const sel = resolveAdvisorRoleSelection(
+				const sel = resolveHelperModel(
 					host.settings,
+					"advisor",
 					host.modelRegistry.getAvailable(),
 					host.agent.state.model,
 				);
@@ -577,7 +575,7 @@ export class AdvisorRoster {
 					if (emitWarnings) {
 						host.emitNotice(
 							"warning",
-							`Advisor "${config.name}": no advisor model available (set Advisor Model in /settings → Model → Advisor, or sign in so the session model can be inherited); advisor inactive`,
+							`Advisor "${config.name}": no advisor model available (set ${helperSettingPath("advisor", "model")} in /settings, or sign in so the session model can be inherited); advisor inactive`,
 							"advisor",
 						);
 					}
@@ -728,7 +726,7 @@ export class AdvisorRoster {
 		// back to the UUIDv7 provider session id, not the local `-advisor` label.
 		const advisorTelemetry = deriveAdvisorTelemetry(host.agent.telemetry, {
 			id: advisorSessionLabel,
-			name: slug ? `${MODEL_ROLES.advisor.name}: ${advisorName}` : MODEL_ROLES.advisor.name,
+			name: slug ? `${HELPERS.advisor.label}: ${advisorName}` : HELPERS.advisor.label,
 			description: formatModelString(advisorModel),
 		});
 		// Mirror the SDK's provider-shaping options (streamFn/onPayload/...,
@@ -746,7 +744,7 @@ export class AdvisorRoster {
 				advisorSecretRuntime ??
 				provider.resolveSecretRuntimeLeaseForContext?.(requestContext) ??
 				(await host.leaseSecretRuntime());
-			const sessionOnPayload = provider.onPayload;
+			const sessionOnPayload = provider.payloadHook?.();
 			const requestOnPayload = requestOptions?.onPayload;
 			const onPayload =
 				runtime.hasRedactions || sessionOnPayload || requestOnPayload
@@ -881,6 +879,7 @@ export class AdvisorRoster {
 						retryAfterMs: extractRetryHint(undefined, message),
 						baseUrl: advisorModel.baseUrl,
 						modelId: advisorModel.id,
+						modelNotInPlan: AIError.isModelNotInPlan(error),
 					},
 				);
 			},
@@ -914,8 +913,9 @@ export class AdvisorRoster {
 
 	/**
 	 * Route one accepted advice note from `advisor` to the primary. Concern and
-	 * blocker interrupt the running agent through the steering channel; once the
-	 * loop has yielded, `triggerTurn` resumes it. If the loop already ended with a
+	 * blocker interrupt the running agent through the steering channel during an
+	 * active turn. When idle, advice queues as deferred next-turn context for the
+	 * next operator turn without waking the agent. If the loop already ended with a
 	 * terminal text answer and no queued work remains, the note is preserved as an
 	 * advisor card instead of waking a duplicate completion turn. After a deliberate
 	 * user interrupt auto-resume is suppressed while idle/unwinding (the note

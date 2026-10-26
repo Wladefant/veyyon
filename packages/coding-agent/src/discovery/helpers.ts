@@ -21,14 +21,16 @@ import {
 	canonicalProjectRoot,
 	describeProjectExecutable,
 	describeRefusal,
+	isInsideRoot,
 	ProjectTrust,
+	realProjectPath,
 } from "../config/project-trust";
 import { type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "../thinking";
 import { normalizeToolNames, TOOL } from "../tools/core/builtin-names";
 import { isForeignConfigImportEnabled, registerProvider } from "./capability";
 import type { ContextFile } from "./capability/context-file";
 import type { ExtensionModule } from "./capability/extension-module";
-import { invalidate as invalidateFsCache, readDirEntries, readFile } from "./capability/fs";
+import { findRepoRoot, invalidate as invalidateFsCache, readDirEntries, readFile } from "./capability/fs";
 import type { Hook } from "./capability/hook";
 import type { Prompt } from "./capability/prompt";
 import { parseRuleConditionAndScope, type Rule, type RuleFrontmatter } from "./capability/rule";
@@ -337,6 +339,8 @@ export interface ParsedAgentFields {
 	output?: unknown;
 	thinkingLevel?: ConfiguredThinkingLevel;
 	autoloadSkills?: string[];
+	contextVariant?: string;
+	skillList?: "all" | "none" | string[];
 	readSummarize?: boolean;
 	blocking?: boolean;
 }
@@ -396,7 +400,32 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 	const autoloadSkills = parseArrayOrCSV(frontmatter.autoloadSkills)
 		?.map(s => s.trim())
 		.filter(Boolean);
-	return { name, description, tools, spawns, model, output, thinkingLevel, blocking, autoloadSkills, readSummarize };
+	const contextVariant =
+		typeof frontmatter.contextVariant === "string" && frontmatter.contextVariant.trim() !== ""
+			? frontmatter.contextVariant.trim()
+			: undefined;
+	let skillList: ParsedAgentFields["skillList"];
+	if (typeof frontmatter.skillList === "string" && ["all", "none"].includes(frontmatter.skillList.trim())) {
+		skillList = frontmatter.skillList.trim() as "all" | "none";
+	} else if (frontmatter.skillList !== undefined) {
+		skillList = parseArrayOrCSV(frontmatter.skillList)
+			?.map(s => s.trim())
+			.filter(Boolean);
+	}
+	return {
+		name,
+		description,
+		tools,
+		spawns,
+		model,
+		output,
+		thinkingLevel,
+		blocking,
+		autoloadSkills,
+		readSummarize,
+		contextVariant,
+		skillList,
+	};
 }
 
 // An empty directory scan is ambiguous: the directory may be genuinely empty or
@@ -506,7 +535,7 @@ export async function scanSkillsFromDir(options: ScanSkillsFromDirOptions): Prom
 
 	let entries: fs.Dirent[];
 	try {
-		entries = await fs.promises.readdir(dir, { withFileTypes: true });
+		entries = await readDirEntries(dir);
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
 			warnings.push(`Failed to read skills directory: ${dir} (${errorMessage(error)})`);
@@ -543,17 +572,13 @@ export async function scanSkillsFromDir(options: ScanSkillsFromDirOptions): Prom
 	const work: Promise<void>[] = [];
 	if (options.includeSelf) {
 		const selfSkillPath = path.join(dir, "SKILL.md");
-		if (fs.existsSync(selfSkillPath)) {
-			work.push(loadSkill(selfSkillPath));
-		}
+		work.push(loadSkill(selfSkillPath));
 	}
 	for (const entry of entries) {
 		if (entry.name.startsWith(".")) continue;
 		if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
 		const skillPath = path.join(dir, entry.name, "SKILL.md");
-		if (fs.existsSync(skillPath)) {
-			work.push(loadSkill(skillPath));
-		}
+		work.push(loadSkill(skillPath));
 	}
 	await Promise.all(work);
 
@@ -1282,10 +1307,10 @@ export async function resolveOrDefaultProjectRegistryPath(cwd: string): Promise<
 
 const pluginRootsCache = new Map<string, { roots: ClaudePluginRoot[]; warnings: string[] }>();
 
-const pluginCacheInvalidators = new Set<() => void>();
+const pluginCacheInvalidators = new Set<(cwd?: string) => void>();
 
 /** Register a process-global plugin cache invalidator called whenever plugin roots are cleared. */
-export function registerPluginCacheInvalidator(invalidator: () => void): void {
+export function registerPluginCacheInvalidator(invalidator: (cwd?: string) => void): void {
 	pluginCacheInvalidators.add(invalidator);
 }
 
@@ -1305,25 +1330,102 @@ export function pluginsRootFor(agentDir: string): string | undefined {
 }
 
 /**
- * Whether the project-scoped plugin registry at `registryPath` may be read at all.
+ * The trust root that governs the project registry `cwd` resolves to, and that `runTrustCommand` records under.
  *
- * The registry itself is the trusted unit, not the plugins it names: its `installPath` entries
- * are arbitrary absolute paths, so filtering by location would let a project point at a payload
- * anywhere on disk. A registry that lives outside the canonical project root is not
- * project-controlled and is left alone, which is what keeps a profile-level registry working.
+ * The registry is resolved first, and its owner is the directory three levels above the file, because that is
+ * the directory the registry belongs to. The owner's git root, or the owner itself outside a repository, is the
+ * key. Keying on `cwd` instead sent a registry above a nested `.git` to a root that does not contain it. With no
+ * registry there is nothing to gate, and the repository root of `cwd` is the key.
  */
-export async function projectRegistryIsTrusted(
-	registryPath: string,
+export async function projectTrustKey(cwd: string): Promise<string> {
+	const registry = await resolveActiveProjectRegistryPath(cwd);
+	return projectTrustKeyForRegistry(cwd, registry);
+}
+
+function projectTrustKeyForRegistry(cwd: string, registry: string | null): Promise<string> {
+	if (!registry) return findRepoRoot(cwd).then(root => canonicalProjectRoot(root ?? cwd));
+	// `<owner>/.veyyon/plugins/installed_plugins.json`: three levels up is the owner.
+	const owner = path.dirname(path.dirname(path.dirname(registry)));
+	return findRepoRoot(owner).then(root => canonicalProjectRoot(root ?? owner));
+}
+
+/** What the project plugin gate decided for one `cwd`. `state` names the outcome, so a cache keyed on it cannot outlive the decision. */
+export type ProjectPluginGate =
+	| { allowed: true; registry: { path: string; content: string } | null; state: string }
+	| { allowed: false; reason: string; state: string };
+
+/** The gate's answer when no project plugin directory is in play. */
+const NO_PROJECT_PLUGIN_GATE: ProjectPluginGate = { allowed: true, registry: null, state: "" };
+
+/**
+ * Gate the project plugin directory `cwd` resolves to. Every consumer of that directory calls this before reading
+ * anything from it: the Claude-plugin roots below, and the plugin loader's project route. One decision governs both,
+ * keyed by the registry owner's trust root. The approval covers the registry file's exact bytes, and through them the
+ * `installPath` entries it names. Plugin content in those directories is not hashed. The loader reads
+ * `.veyyon/plugin-overrides.json` separately; those bytes are not part of approval.
+ *
+ * `userPluginsRoot` is the operator's own profile directory. A project that resolves to it has no project registry,
+ * and that file is not gated.
+ *
+ * Fails closed. A project directory that cannot be resolved, lies outside the owner's root (a symlink or junction),
+ * or holds a registry that is missing, unreadable, or unapproved is refused. A project directory that does not
+ * exist has nothing to load and is allowed. A registry read here is the one the verdict covers: the caller parses
+ * `registry.content` and never reads the file again.
+ */
+export async function gateProjectPluginRegistry(
 	cwd: string,
+	userPluginsRoot: string,
 	agentDir?: string,
-): Promise<{ allowed: true } | { allowed: false; reason: string }> {
-	const canonicalRoot = await canonicalProjectRoot(cwd);
+): Promise<ProjectPluginGate> {
+	const registryPath = await resolveActiveProjectRegistryPath(cwd);
+	if (!registryPath) return NO_PROJECT_PLUGIN_GATE;
+	const pluginDir = path.dirname(registryPath);
+	if (path.resolve(pluginDir) === path.resolve(userPluginsRoot)) return NO_PROJECT_PLUGIN_GATE;
+
+	const canonicalRoot = await projectTrustKeyForRegistry(cwd, registryPath);
+	const refusalPrefix = `plugins: ${getConfigDirName()}/plugins/installed_plugins.json was not loaded because`;
+
+	let realDir: string;
+	try {
+		realDir = await realProjectPath(pluginDir);
+	} catch (err) {
+		if (isEnoent(err)) return { allowed: true, registry: null, state: `${registryPath}\0none` };
+		return {
+			allowed: false,
+			reason: `${refusalPrefix} its directory could not be resolved.`,
+			state: `${registryPath}\0unresolvable`,
+		};
+	}
+	if (!isInsideRoot(canonicalRoot, realDir)) {
+		return {
+			allowed: false,
+			reason: `${refusalPrefix} its directory resolves outside the project root.`,
+			state: `${registryPath}\0escape`,
+		};
+	}
+
 	const executable = await describeProjectExecutable(registryPath, canonicalRoot);
-	if (!executable) return { allowed: true };
+	if (!executable) {
+		return {
+			allowed: false,
+			reason: `${refusalPrefix} its registry is missing, unreadable, or resolves outside the project root.`,
+			state: `${registryPath}\0unreadable`,
+		};
+	}
 	const trust = await ProjectTrust.load(agentDir ?? getAgentDir());
 	const verdict = trust.evaluate(canonicalRoot, executable);
-	if (verdict === "trusted") return { allowed: true };
-	return { allowed: false, reason: describeRefusal("plugins", executable.relativePath, verdict) };
+	if (verdict !== "trusted") {
+		return {
+			allowed: false,
+			reason: describeRefusal("plugins", executable.relativePath, verdict),
+			state: `${registryPath}\0${verdict}`,
+		};
+	}
+	return {
+		allowed: true,
+		registry: { path: registryPath, content: executable.content },
+		state: `${registryPath}\0trusted:${executable.hash}`,
+	};
 }
 
 /**
@@ -1347,16 +1449,20 @@ export async function listClaudePluginRoots(
 	pluginsRoot?: string,
 	agentDir?: string,
 ): Promise<{ roots: ClaudePluginRoot[]; warnings: string[] }> {
-	const resolvedProjectPath = cwd ? await resolveActiveProjectRegistryPath(cwd) : null;
 	const resolvedPluginsRoot = pluginsRoot ?? getPluginsDir(home);
 	const resolvedAgentDir = agentDir ?? getAgentDir();
+	// The gate runs before the cache lookup, and its outcome is part of the key: a load taken under an approval is never
+	// served after that approval is denied, or after the registry bytes change.
+	const projectGate = cwd
+		? await gateProjectPluginRegistry(cwd, resolvedPluginsRoot, resolvedAgentDir)
+		: NO_PROJECT_PLUGIN_GATE;
 	// The agent dir is part of the key because the project-trust decision is per profile: without
 	// it, one profile's refusal would be served to a profile that had approved the same repository.
 	// The foreign-config gate is part of the key because it selects whether the Claude Code
 	// registry below contributes roots: without it a load taken while the gate was off would be
 	// served, without those roots, after the operator turned it on.
 	const importForeign = isForeignConfigImportEnabled();
-	const cacheKey = `${home}:${resolvedProjectPath ?? ""}:${resolvedPluginsRoot}:${resolvedAgentDir}:${importForeign}`;
+	const cacheKey = `${home}:${projectGate.state}:${resolvedPluginsRoot}:${resolvedAgentDir}:${importForeign}`;
 	const cached = pluginRootsCache.get(cacheKey);
 	if (cached) return cached;
 
@@ -1426,20 +1532,14 @@ export async function listClaudePluginRoots(
 	// Failing closed here is silent by design at this layer — this is a cached discovery helper
 	// with no operator channel — so the refusal is reported as a warning, which every capability
 	// load already surfaces.
-	if (resolvedProjectPath && cwd) {
-		const trusted = await projectRegistryIsTrusted(resolvedProjectPath, cwd, resolvedAgentDir);
-		if (!trusted.allowed) {
-			warnings.push(trusted.reason);
+	if (!projectGate.allowed) {
+		warnings.push(projectGate.reason);
+	} else if (projectGate.registry) {
+		const projectRegistry = parseClaudePluginsRegistry(projectGate.registry.content);
+		if (projectRegistry) {
+			collectRegistryRoots(projectRegistry, warnings, "project", projectRoots);
 		} else {
-			const projectContent = await readFile(resolvedProjectPath);
-			if (projectContent) {
-				const projectRegistry = parseClaudePluginsRegistry(projectContent);
-				if (projectRegistry) {
-					collectRegistryRoots(projectRegistry, warnings, "project", projectRoots);
-				} else {
-					warnings.push(`Failed to parse project plugin registry: ${resolvedProjectPath}`);
-				}
-			}
+			warnings.push(`Failed to parse project plugin registry: ${projectGate.registry.path}`);
 		}
 	}
 
@@ -1465,15 +1565,24 @@ export async function listClaudePluginRoots(
 }
 
 /**
- * Clear the plugin roots cache (useful for testing or when plugins change).
+ * Clear discovery caches; a scoped caller must await preloadPluginRoots for that cwd.
  */
-export function clearClaudePluginRootsCache(): void {
+export function clearClaudePluginRootsCache(cwd?: string): void {
 	pluginRootsCache.clear();
-	for (const invalidate of pluginCacheInvalidators) invalidate();
-	preloadedPluginRoots = injectedPluginDirRoots.slice();
-	// Re-warm preloaded roots asynchronously so sync LSP config reads stay valid
-	if (lastPreloadHome) {
-		void preloadPluginRoots(lastPreloadHome, getProjectDir());
+	for (const invalidate of pluginCacheInvalidators) invalidate(cwd);
+	if (cwd !== undefined) {
+		const scope = path.resolve(cwd);
+		preloadedPluginRoots.delete(scope);
+		preloadGenerations.set(scope, (preloadGenerations.get(scope) ?? 0) + 1);
+		return;
+	}
+	preloadedPluginRoots.clear();
+	// Registry mutations affect every known scope; re-rooting affects only its destination.
+	for (const scope of preloadHomes.keys()) {
+		preloadGenerations.set(scope, (preloadGenerations.get(scope) ?? 0) + 1);
+	}
+	for (const [scope, home] of preloadHomes) {
+		void preloadPluginRoots(home, scope);
 	}
 }
 
@@ -1493,27 +1602,51 @@ export function clearPluginRootsAndCaches(extraPaths?: readonly string[]): void 
 // Populated at startup by preloadPluginRoots(). Read synchronously by
 // getPreloadedPluginRoots(). Safe degradation: empty array if not warmed.
 
-let preloadedPluginRoots: ClaudePluginRoot[] = [];
+const preloadedPluginRoots = new Map<string, ClaudePluginRoot[]>();
 let injectedPluginDirRoots: ClaudePluginRoot[] = [];
-let lastPreloadHome: string | undefined;
+const preloadHomes = new Map<string, string>();
+const preloadGenerations = new Map<string, number>();
 
 /**
  * Populate the module-level plugin roots cache for sync consumers.
  * Call during session initialization, after dir resolution completes
  * but before any LSP config is read.
  */
-export async function preloadPluginRoots(home: string, cwd?: string): Promise<void> {
-	lastPreloadHome = home;
-	const { roots } = await listClaudePluginRoots(home, cwd);
-	preloadedPluginRoots = roots;
+export async function preloadPluginRoots(home: string, cwd: string): Promise<readonly ClaudePluginRoot[]> {
+	const scope = path.resolve(cwd);
+	preloadHomes.set(scope, home);
+	for (let attempt = 1; attempt <= 3; attempt++) {
+		const generation = preloadGenerations.get(scope) ?? 0;
+		const { roots } = await listClaudePluginRoots(home, scope);
+		if (generation !== (preloadGenerations.get(scope) ?? 0)) {
+			// Discovery may have filled the shared cache after its invalidation.
+			pluginRootsCache.clear();
+			if (attempt < 3) continue;
+			logger.debug("Plugin preload reached invalidation retry limit; publishing completed snapshot", {
+				cwd: scope,
+				attempts: attempt,
+			});
+		}
+		preloadedPluginRoots.set(scope, roots);
+		return roots;
+	}
+	throw new Error("Plugin discovery exhausted without a completed snapshot");
+}
+
+/** Warm a cold sync view using the scope's original home, before loading LSP configuration. */
+export async function ensurePreloadedPluginRoots(cwd: string): Promise<readonly ClaudePluginRoot[]> {
+	const scope = path.resolve(cwd);
+	const warmed = preloadedPluginRoots.get(scope);
+	if (warmed) return warmed;
+	return preloadPluginRoots(preloadHomes.get(scope) ?? os.homedir(), scope);
 }
 
 /**
  * Get pre-loaded plugin roots synchronously.
  * Returns empty array if preloadPluginRoots() hasn't been called.
  */
-export function getPreloadedPluginRoots(): readonly ClaudePluginRoot[] {
-	return preloadedPluginRoots;
+export function getPreloadedPluginRoots(cwd: string): readonly ClaudePluginRoot[] {
+	return preloadedPluginRoots.get(path.resolve(cwd)) ?? injectedPluginDirRoots;
 }
 
 // ── --plugin-dir injection ──────────────────────────────────────────────────
@@ -1554,11 +1687,9 @@ export async function injectPluginDirRoots(home: string, dirs: string[], cwd?: s
 
 	// Set injected roots BEFORE populating cache so listClaudePluginRoots merges them.
 	injectedPluginDirRoots = injected;
-	lastPreloadHome = home; // ensure cache-clear re-warm fires even when injectPluginDirRoots was the startup path
 	// Clear any stale cache entries (populated before injected roots were set).
 	pluginRootsCache.clear();
 	// Rebuild — cache miss triggers fresh load that includes both user+project registries
 	// and prepends injectedPluginDirRoots at highest precedence.
-	const { roots } = await listClaudePluginRoots(home, cwd);
-	preloadedPluginRoots = roots;
+	await preloadPluginRoots(home, cwd ?? getProjectDir());
 }

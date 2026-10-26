@@ -4,7 +4,6 @@ import {
 	normalizeCompactionStrategy,
 } from "@veyyon/coding-agent/config/compaction-strategy";
 import { resolveCompactionModelPatterns } from "@veyyon/coding-agent/config/model-resolver";
-import { getKnownRoleIds, MODEL_ROLE_IDS, SELECTABLE_MODEL_ROLE_IDS } from "@veyyon/coding-agent/config/model-roles";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { SETTINGS_SCHEMA } from "@veyyon/coding-agent/config/settings-schema";
 import { getSettingsForTab } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-defs";
@@ -60,43 +59,6 @@ describe("compaction strategy settings", () => {
 			compaction: { compactionModel: "openai/gpt-5" },
 		} as Record<string, unknown>);
 		expect(settings.get("compaction.model")).toBe("openai/gpt-5");
-	});
-});
-
-/**
- * WHY: a model slot with two settings surfaces is a slot the operator sets in
- * one place and the feature reads from the other. `task` was removed for that
- * reason and `advisor` followed it. The class this closes is "a built-in role
- * that owns a feature's model AND appears in the generic Roles table": the
- * table's membership is pinned by exact equality, so adding a role there is a
- * decision someone records rather than a default.
- *
- * Not caught here: a role whose model is duplicated by a NON-settings surface
- * (a slash command, a CLI flag). Those are covered by each feature's own suite.
- */
-describe("model role selectability", () => {
-	it("offers exactly the roles that no feature group owns", () => {
-		expect(SELECTABLE_MODEL_ROLE_IDS).toEqual(["smol", "slow", "vision", "plan", "commit", "tiny"]);
-	});
-
-	it("excludes default from selectable built-in role ids", () => {
-		expect(MODEL_ROLE_IDS).not.toContain("default");
-		expect(SELECTABLE_MODEL_ROLE_IDS).not.toContain("default");
-	});
-
-	it("keeps the advisor slot working while dropping its row from the Roles table", () => {
-		// The slot is what resolveAdvisorRoleSelection reads and what `@advisor`
-		// names; only the duplicate surface went away.
-		expect(MODEL_ROLE_IDS).toContain("advisor");
-		expect(SELECTABLE_MODEL_ROLE_IDS).not.toContain("advisor");
-		const settings = Settings.isolated({ modelRoles: { advisor: "openai/gpt-5" } });
-		expect(settings.getModelRole("advisor")).toBe("openai/gpt-5");
-		expect(getKnownRoleIds(settings)).toContain("advisor");
-	});
-
-	it("getKnownRoleIds does not surface default", () => {
-		const settings = Settings.isolated({ modelRoles: { default: "openai/gpt-5" } });
-		expect(getKnownRoleIds(settings)).not.toContain("default");
 	});
 });
 
@@ -157,10 +119,5 @@ describe("model tab compaction UI", () => {
 		const visible = getSettingsForTab("model").map(def => def.path);
 		expect(visible).not.toContain("compaction.enabled");
 		expect(visible).not.toContain("compaction.autoContinue");
-	});
-
-	it("exposes modelRoles on the model tab under Roles", () => {
-		const rolesUi = getSettingsForTab("model").filter(def => def.group === "Roles");
-		expect(rolesUi.map(def => def.path)).toContain("modelRoles");
 	});
 });

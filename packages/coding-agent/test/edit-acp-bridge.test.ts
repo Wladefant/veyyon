@@ -6,7 +6,7 @@ import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/sett
 import { DEFAULT_FUZZY_THRESHOLD, executePatchSingle, executeReplaceSingle } from "@veyyon/coding-agent/edit";
 import { HashlineFilesystem } from "@veyyon/coding-agent/edit/hashline/filesystem";
 import { resolveLocalUrlToPath } from "@veyyon/coding-agent/internal-urls";
-import type { WritethroughCallback } from "@veyyon/coding-agent/lsp";
+import type { WritethroughCallback } from "@veyyon/coding-agent/lsp/writethrough";
 import type { PlanModeState } from "@veyyon/coding-agent/plan-mode/state";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import type { ClientBridge } from "@veyyon/kernel/session/client-bridge";

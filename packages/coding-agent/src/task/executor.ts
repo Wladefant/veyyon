@@ -60,9 +60,9 @@ import { rootBudgetGroupOwnerId, withInheritedBudgetGroup } from "../session/cpu
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "../session/factory-options";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
 import { truncateTail } from "../session/streaming-output";
-import type { ConfiguredThinkingLevel } from "../thinking";
+import { AUTO_THINKING, type ConfiguredThinkingLevel, resolveThinkingLevelForModel } from "../thinking";
 import type { ContextFileEntry, ToolSession } from "../tools";
-import { isIrcEnabled } from "../tools/agent/irc";
+import { isIrcEnabled } from "../tools/agent/irc-enabled";
 import { type ReportFindingDetails, toReviewFinding } from "../tools/agent/review";
 import { normalizeSchema } from "../tools/core/jtd-to-json-schema";
 import {
@@ -83,6 +83,8 @@ import {
 	resolveAgentPruneBudget,
 } from "./agent-settings";
 import { type AutoloadSkillPlan, settleAutoloadSkills } from "./inherited-collections";
+import { reportProviderError } from "./provider-error-reporter";
+import { selectRoleContext } from "./role-context";
 import { type AbortReason, type AgentRunMonitor, createAgentRunMonitor } from "./run-monitor";
 import { YIELD_TOOL_NAME } from "./subprocess-tool-registry";
 import {
@@ -193,8 +195,6 @@ function normalizeModelPatterns(value: string | string[] | undefined): string[] 
 		.filter(Boolean);
 }
 
-const AGENT_RETRY_FALLBACK_ROLE_PREFIX = "agent:";
-
 interface AgentRetryFallbackCandidate {
 	model: Model<Api>;
 	selector: string;
@@ -222,12 +222,11 @@ function resolveAgentRetryFallbackCandidates(
 
 function installAgentRetryFallbackChain(args: {
 	settings: Settings;
-	id: string;
 	candidates: AgentRetryFallbackCandidate[];
 	model: Model<Api> | undefined;
 	authFallbackUsed: boolean;
 }): string | undefined {
-	const { settings, id, candidates, model, authFallbackUsed } = args;
+	const { settings, candidates, model, authFallbackUsed } = args;
 	if (!model || authFallbackUsed || candidates.length <= 1) return undefined;
 
 	const selectedIndex = candidates.findIndex(
@@ -237,28 +236,16 @@ function installAgentRetryFallbackChain(args: {
 	const fallbackSelectors = candidates.slice(selectedIndex + 1).map(candidate => candidate.selector);
 	if (fallbackSelectors.length === 0) return undefined;
 
-	const role = `${AGENT_RETRY_FALLBACK_ROLE_PREFIX}${id}`;
-	const modelRoles: Record<string, string> = {};
-	const existingRoles = settings.getModelRoles();
-	for (const existingRole in existingRoles) {
-		const selector = existingRoles[existingRole];
-		if (selector) {
-			modelRoles[existingRole] = selector;
-		}
-	}
-	modelRoles[role] = candidates[selectedIndex].selector;
-	settings.override("modelRoles", modelRoles);
-	const fallbackChains: Record<string, string[]> = {
-		[role]: fallbackSelectors,
-	};
+	// Keyed by the primary's own selector, so the chain applies to that model in this agent's settings
+	// fork and never reaches the parent's chains.
+	const key = candidates[selectedIndex].selector;
+	const fallbackChains: Record<string, string[]> = { [key]: fallbackSelectors };
 	const existingFallbackChains = settings.get("retry.fallbackChains");
-	for (const existingRole in existingFallbackChains) {
-		if (existingRole !== role) {
-			fallbackChains[existingRole] = existingFallbackChains[existingRole];
-		}
+	for (const existingKey in existingFallbackChains) {
+		if (existingKey !== key) fallbackChains[existingKey] = existingFallbackChains[existingKey];
 	}
 	settings.override("retry.fallbackChains", fallbackChains);
-	return role;
+	return key;
 }
 
 type AbortableAwaiter = <T>(promise: Promise<T>) => Promise<T>;
@@ -1041,6 +1028,9 @@ function resolveTurnEnd(session: AgentSession, monitor: AgentRunMonitor, failure
 	const lastAssistant = session.getLastAssistantMessage();
 	if (lastAssistant?.stopReason === "error") {
 		failure ??= lastAssistant.errorMessage || "Agent failed";
+		if (lastAssistant.errorMessage) {
+			reportProviderError(`${lastAssistant.provider}/${lastAssistant.model}`, lastAssistant.errorMessage);
+		}
 	}
 	// A budget stop that produced no yield cut the turn short even though no signal named it: the
 	// stop cancels the free-running turn, the forced wrap-up reminder is the child's last chance,
@@ -1807,7 +1797,11 @@ const PARENT_OWNED_TOOL_NAMES: ReadonlySet<string> = new Set(["todo"]);
  * may spawn gains `task` and one at the spawn-depth limit loses it; `irc` is always carried because the
  * COOP prompt section advertises it; `exec` expands to `bash`, plus `eval` when an eval backend exists.
  */
-function resolveChildToolNames(agent: AgentDefinition, atMaxDepth: boolean, settings: Settings): string[] | undefined {
+export function resolveChildToolNames(
+	agent: AgentDefinition,
+	atMaxDepth: boolean,
+	settings: Settings,
+): string[] | undefined {
 	if (!agent.tools || agent.tools.length === 0) return undefined;
 	let toolNames = agent.tools;
 	if (agent.spawns !== undefined && !atMaxDepth && !toolNames.includes("task")) toolNames = toolNames.concat(["task"]);
@@ -1832,6 +1826,10 @@ function nonNegativeInt(value: unknown): number {
 	return Math.max(0, Math.trunc(Number(value) || 0));
 }
 
+function resolveSoftRequestBudget(settings: Settings, agentName: string): number {
+	const configuredDefault = nonNegativeInt(settings.get("agent.softRequestBudget"));
+	return configuredDefault === 0 ? 0 : (SOFT_REQUEST_BUDGET[agentName] ?? configuredDefault);
+}
 function throwIfRunAborted(abortSignal: AbortSignal): void {
 	if (abortSignal.aborted) throw new ToolAbortError();
 }
@@ -1876,7 +1874,8 @@ interface ChildSessionContext {
 interface RunModel {
 	modelRegistry: ModelRegistry;
 	model: Model<Api> | undefined;
-	thinkingLevel: ConfiguredThinkingLevel;
+	/** Already fitted to `model`; undefined lets the child session resolve its own default. */
+	thinkingLevel: ConfiguredThinkingLevel | undefined;
 }
 
 type ChildSessionOptionsBuilder = (sessionManager: SessionManager, settings: Settings) => CreateAgentSessionOptions;
@@ -1931,16 +1930,15 @@ async function resolveRunModel(ctx: ChildSessionContext): Promise<RunModel> {
 			resolvedModel: model.id,
 		});
 	}
-	const retryFallbackRole = installAgentRetryFallbackChain({
+	const retryFallbackKey = installAgentRetryFallbackChain({
 		settings,
-		id: options.id,
 		candidates: resolveAgentRetryFallbackCandidates(modelPatterns, modelRegistry, settings),
 		model,
 		authFallbackUsed,
 	});
-	if (retryFallbackRole) {
+	if (retryFallbackKey) {
 		logger.debug("Configured agent runtime model fallback chain", {
-			role: retryFallbackRole,
+			key: retryFallbackKey,
 			requested: modelPatterns,
 		});
 	}
@@ -1949,18 +1947,25 @@ async function resolveRunModel(ctx: ChildSessionContext): Promise<RunModel> {
 		resolution.thinkingLevel,
 		options.thinkingLevel,
 	);
+	// `inherit` takes the parent's live effort, which was fitted to the PARENT's model. Fitting it, or a
+	// configured level, to the model this agent resolved to here makes the badge and the child session
+	// state the one level the child runs at; a level its model does not accept named a run that never
+	// happened. A parent with no level leaves nothing to inherit, so the child resolves its own default.
+	const requested =
+		selected === undefined || selected === ThinkingLevel.Inherit ? options.parentThinkingLevel : selected;
 	const thinkingLevel =
-		selected === undefined || selected === ThinkingLevel.Inherit
-			? (options.parentThinkingLevel ?? ThinkingLevel.Inherit)
-			: selected;
+		model === undefined || requested === undefined || requested === AUTO_THINKING
+			? requested
+			: resolveThinkingLevelForModel(model, requested);
 	if (model) {
 		if (model.contextWindow && model.contextWindow > 0) monitor.progress.contextWindow = model.contextWindow;
 		// The badge carries the effort this agent ACTUALLY runs at, not only an effort somebody typed as
 		// a `:level` suffix. Effort inherits on its own axis (this agent's row, then the blanket agent
 		// effort, then frontmatter, then the session), so the ordinary case is an agent running at a
 		// definite effort that no suffix names; a bare model there reads as "no effort level" next to a
-		// sibling that shows one.
-		monitor.progress.resolvedModel = resolvedModelBadge(model, thinkingLevel);
+		// sibling that shows one. With no level requested the session picks its own, so the badge waits
+		// for the session to state it.
+		if (requested !== undefined) monitor.progress.resolvedModel = resolvedModelBadge(model, thinkingLevel);
 	}
 	return { modelRegistry, model, thinkingLevel };
 }
@@ -1988,13 +1993,13 @@ function deriveAgentTelemetry(options: ExecutorOptions): AgentTelemetryConfig | 
 }
 
 /** The run inputs the agent's system prompt section reads. */
-type AgentPromptInputs = Pick<
+export type AgentPromptInputs = Pick<
 	ExecutorOptions,
 	"agent" | "context" | "planReference" | "worktree" | "outputSchema" | "outputSchemaOverridesAgent"
 >;
 
 /** The agent's own system prompt section; it depends only on the run's fixed inputs. */
-function renderAgentSystemPrompt(options: AgentPromptInputs, ircEnabled: boolean): string {
+export function renderAgentSystemPrompt(options: AgentPromptInputs, ircEnabled: boolean): string {
 	const { normalized: normalizedOutputSchema } = normalizeSchema(options.outputSchema);
 	return prompt.render(agentPrompts["agent/system-prompt"].text, {
 		agent: options.agent.systemPrompt,
@@ -2030,7 +2035,7 @@ function childSessionOptionsBuilder(ctx: ChildSessionContext, runModel: RunModel
 	const { modelRegistry, model, thinkingLevel } = runModel;
 	const id = options.id;
 	// A requested pattern that resolved to no model is handed to the session to resolve itself, with
-	// the parent's model as its auth fallback and the run's retry chain as its fallback role.
+	// the parent's model as its auth fallback and the run's retry chain as its fallback chain.
 	const deferredPattern = !model && options.modelOverride !== undefined;
 	const mcpProxyTools = options.mcpManager ? createMCPProxyTools(options.mcpManager) : [];
 	const promptInputs: AgentPromptInputs = {
@@ -2053,7 +2058,7 @@ function childSessionOptionsBuilder(ctx: ChildSessionContext, runModel: RunModel
 		model,
 		modelPattern: deferredPattern ? modelPatterns : undefined,
 		modelPatternAuthFallback: deferredPattern ? options.parentActiveModelPattern : undefined,
-		modelPatternFallbackRole: deferredPattern ? `${AGENT_RETRY_FALLBACK_ROLE_PREFIX}${id}` : undefined,
+		modelPatternFallbackChain: deferredPattern,
 		thinkingLevel,
 		toolNames,
 		requireYieldTool: true,
@@ -2128,10 +2133,9 @@ function createSessionReviver(
 	const { options, sessionFile, settings } = ctx;
 	const { id, parentArtifactManager, parentSessionId } = options;
 	return async () => {
-		// Re-peek as well as re-open on every use: /move can rewrite the header after this closure was
-		// created, and a deleted recorded cwd must fail closed rather than use open()'s general
-		// interactive fallback.
-		const current = await SessionManager.peekSessionInit(sessionFile);
+		const currentSessionFile = AgentRegistry.global().get(id)?.sessionFile ?? sessionFile;
+		// Re-peek as well as re-open on every use: /move and handoff can replace the transcript.
+		const current = await SessionManager.peekSessionInit(currentSessionFile);
 		if (!current?.init) {
 			throw new Error(`Cannot revive ${id}: persisted session contract is missing`);
 		}
@@ -2140,7 +2144,7 @@ function createSessionReviver(
 		} catch {
 			throw new Error(`Cannot revive ${id}: persisted working directory is unavailable`);
 		}
-		const reopened = await SessionManager.open(sessionFile, undefined, undefined, {
+		const reopened = await SessionManager.open(currentSessionFile, undefined, undefined, {
 			initialCwd: current.cwd,
 			suppressBreadcrumb: true,
 		});
@@ -2190,8 +2194,9 @@ async function openChildSession(ctx: ChildSessionContext): Promise<OpenedChildSe
 	// events; the subscription survives this run.
 	syncStatusWithTurns(AgentRegistry.global(), options.id, session);
 	// No override resolved, so the session picked its model itself: the parent's, or the persisted
-	// default. The badge names what runs either way, at the effort the session settled on — `auto`
-	// resolved, an unsupported level clamped — the same authority the follow-up turn reads.
+	// default. Or no effort was requested, so the session picked its own level. The badge names what
+	// runs either way, at the effort the session settled on — `auto` resolved, an unsupported level
+	// clamped — the same authority the follow-up turn reads.
 	const progress = monitor.progress;
 	if (!progress.resolvedModel && session.model) {
 		progress.resolvedModel = resolvedModelBadge(session.model, session.thinkingLevel);
@@ -2501,19 +2506,28 @@ async function driveChildRun(
 /**
  * Run a single agent in-process.
  */
-export async function runSubprocess(options: ExecutorOptions): Promise<SingleResult> {
-	const { agent, id, worktree, modelOverride, signal } = options;
+export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<SingleResult> {
+	const { agent, id, worktree, modelOverride, signal } = spawnOptions;
 	const startTime = Date.now();
-	if (signal?.aborted) return cancelledBeforeStart(options);
+	if (signal?.aborted) return cancelledBeforeStart(spawnOptions);
 
 	// An agent ALWAYS gets a durable session file — never an in-memory session that would silently lose
 	// its transcript (Law 10, no silent fallback). When the caller provides no artifacts dir, route the
 	// transcript to the durable sessions dir so the run stays studyable and revivable via
 	// history://<id> (GRAN-1).
-	const sessionFile = options.artifactsDir
-		? path.join(options.artifactsDir, sessionFileName(id))
+	const sessionFile = spawnOptions.artifactsDir
+		? path.join(spawnOptions.artifactsDir, sessionFileName(id))
 		: path.join(getSessionsDir(), sessionFileName(`${ORPHAN_AGENT_TRANSCRIPT_PREFIX}${id}`));
-	const effectiveCwd = worktree ?? options.cwd;
+	const effectiveCwd = worktree ?? spawnOptions.cwd;
+	// Both spawn paths (`task` tool, eval `agent()`) end here, so a role's context selection is
+	// applied once, on the lists they inherited, before any session option is built from them.
+	const roleContext = await selectRoleContext({
+		agent,
+		contextFiles: spawnOptions.contextFiles,
+		skills: spawnOptions.skills,
+		cwd: effectiveCwd,
+	});
+	const options: ExecutorOptions = { ...spawnOptions, ...roleContext };
 	const settings = await createSubagentSettingsForCwd(
 		options.settings ?? Settings.isolated(),
 		effectiveCwd,
@@ -2543,7 +2557,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		parentToolCallId: options.parentToolCallId,
 		detached: options.detached,
 		sessionFile,
-		softRequestBudget: resolveAgentSoftRequestBudget(settings, agent.name),
+		softRequestBudget: resolveSoftRequestBudget(settings, agent.name),
 		softRequestBudgetNotice: settings.get("agent.softRequestBudgetNotice") ?? false,
 		maxRuntimeMs: nonNegativeInt(options.maxRuntimeMs ?? settings.get("agent.maxRuntimeMs")),
 	});

@@ -1,4 +1,4 @@
-import { errorMessage, exponentialBackoffDelay, logger } from "@veyyon/utils";
+import { errorMessage, exponentialBackoffDelay, logger, settleWithin } from "@veyyon/utils";
 
 const DELIVERY_RETRY_BASE_MS = 500;
 const DELIVERY_RETRY_MAX_MS = 30_000;
@@ -91,6 +91,8 @@ interface AsyncJobDelivery {
 	nextAttemptAt: number;
 	lastError?: string;
 	ownerId?: string;
+	/** Keep routing identity alive after the inspection entry expires. */
+	job?: AsyncJob;
 	promise?: Promise<void>;
 }
 
@@ -153,6 +155,8 @@ export class AsyncJobManager {
 	readonly #retentionMs: number;
 	#deliveryLoop: Promise<void> | undefined;
 	#disposed = false;
+	/** Owners whose session was torn down and not parked; their completions are orphans, not retries. */
+	readonly #disposedOwners = new Set<string>();
 
 	constructor(options: AsyncJobManagerOptions) {
 		this.#onJobComplete = options.onJobComplete;
@@ -525,7 +529,7 @@ export class AsyncJobManager {
 				return false;
 			}
 
-			await Promise.race([loop, Bun.sleep(remainingMs)]);
+			await settleWithin(loop, remainingMs, undefined);
 			if (Date.now() >= deadline && this.hasPendingDeliveries(filter)) {
 				return false;
 			}
@@ -667,6 +671,18 @@ export class AsyncJobManager {
 		return this.#suppressedDeliveries.has(jobId) || this.#watchedJobs.has(jobId);
 	}
 
+	/**
+	 * Record that an owner's session was disposed without parking. Its completions route to Main as one
+	 * batched orphan note; an owner that is merely absent keeps retrying its retained completion.
+	 */
+	markOwnerDisposed(ownerId: string): void {
+		this.#disposedOwners.add(ownerId);
+	}
+
+	isOwnerDisposed(ownerId: string | undefined): boolean {
+		return ownerId !== undefined && this.#disposedOwners.has(ownerId);
+	}
+
 	#enqueueDelivery(jobId: string, text: string): void {
 		// Skip delivery if already acknowledged
 		if (this.isDeliverySuppressed(jobId)) {
@@ -678,6 +694,7 @@ export class AsyncJobManager {
 			attempt: 0,
 			nextAttemptAt: Date.now(),
 			ownerId: this.#jobs.get(jobId)?.ownerId,
+			job: this.#jobs.get(jobId),
 		});
 		this.#ensureDeliveryLoop();
 	}
@@ -727,7 +744,7 @@ export class AsyncJobManager {
 		const promise = (async () => {
 			this.#inFlightDeliveries.push(delivery);
 			try {
-				await this.#onJobComplete(delivery.jobId, delivery.text, this.#jobs.get(delivery.jobId));
+				await this.#onJobComplete(delivery.jobId, delivery.text, delivery.job);
 			} catch (error) {
 				delivery.attempt += 1;
 				delivery.lastError = errorMessage(error);
@@ -773,14 +790,8 @@ async function waitForDeliveryPromise(promise: Promise<void> | undefined, deadli
 	}
 	const remainingMs = deadline - Date.now();
 	if (remainingMs <= 0) return false;
-	let timedOut = false;
-	await Promise.race([
-		promise,
-		Bun.sleep(remainingMs).then(() => {
-			timedOut = true;
-		}),
-	]);
-	return !timedOut;
+	const TIMED_OUT = Symbol("delivery-wait-timed-out");
+	return (await settleWithin(promise, remainingMs, TIMED_OUT)) !== TIMED_OUT;
 }
 
 function getRetryDelay(attempt: number): number {

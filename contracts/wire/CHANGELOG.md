@@ -4,9 +4,20 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Sync upstream changes from santhreal/veyyon.
+
+## [1.5.6] - 2026-10-10
+
 ### Fixed
 
 - Included generated assistant images in the wire content contract.
+## [1.5.6] - 2026-10-13
+
+### Changed
+
+- `parseCollabLink` delegates input expansion and secret decoding to two internal helpers; accepted links, parsed fields and error messages are unchanged.
 
 ## [1.5.0] - 2026-09-18
 

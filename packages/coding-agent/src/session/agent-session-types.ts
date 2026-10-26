@@ -254,8 +254,11 @@ export interface AgentSessionConfig {
 	advisorStreamFn?: StreamFn;
 	/** Hint that OpenAI Codex requests should prefer websocket transport when supported. */
 	preferWebsockets?: boolean;
-	/** Provider payload hook used by the active session request path */
-	onPayload?: SimpleStreamOptions["onPayload"];
+	/**
+	 * The session's provider payload hook for the active request path, resolved per request;
+	 * `undefined` from it means no hook runs and the provider serializes the request once.
+	 */
+	payloadHook?: () => SimpleStreamOptions["onPayload"];
 	/** Provider response hook used by the active session request path */
 	onResponse?: SimpleStreamOptions["onResponse"];
 	/** Raw SSE hook used by the active session request path */
@@ -269,6 +272,14 @@ export interface AgentSessionConfig {
 	convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	/** System prompt builder that can consider tool availability. Returns ordered provider-facing blocks. */
 	rebuildSystemPrompt?: (toolNames: string[], tools: Map<string, AgentTool>) => Promise<{ systemPrompt: string[] }>;
+	/**
+	 * Whether a prompt built for `model` teaches Argot shorthand. Two models in one prompt cohort
+	 * render different prompts when only one of them is on the encode allowlist, so a model switch
+	 * compares this alongside the cohort to decide whether the prompt in force is stale.
+	 */
+	argotTeaches?: (model: Model) => boolean;
+	/** Re-discover the current project's rule files and skills from disk. Returns path-only change notices. */
+	reloadProjectInputs?: () => Promise<string[]>;
 	/** Local calendar date provider used by prompt-cache invalidation. Defaults to the host local date. */
 	getLocalCalendarDate?: () => string;
 	/** Rebuild the SSH tool from current capability discovery results. */
@@ -452,6 +463,12 @@ export interface SessionHandoffOptions {
 	autoTriggered?: boolean;
 	signal?: AbortSignal;
 	onSwitchCancelled?: () => void;
+	/** Request a focused, bounded successor summary rather than a general summary. */
+	compactSummary?: boolean;
+	/** Keep this spawned agent's task lineage and child jobs across the transcript switch. */
+	preserveAgentLineage?: boolean;
+	/** Summary model selected by the session's configured compaction candidates. */
+	summaryModel?: Model;
 }
 
 /** Result from cycleModel() */
@@ -460,29 +477,6 @@ export interface ModelCycleResult {
 	thinkingLevel: ThinkingLevel | undefined;
 	/** Whether cycling through scoped models (--models flag) or all available */
 	isScoped: boolean;
-}
-
-/** Result from cycleRoleModels() */
-export interface RoleModelCycleResult {
-	model: Model;
-	thinkingLevel: ThinkingLevel | undefined;
-	role: string;
-}
-
-/** A configured role resolved to a concrete model, used by role cycling and
- *  the plan-approval model slider. */
-export interface ResolvedRoleModel {
-	role: string;
-	model: Model;
-	thinkingLevel?: ConfiguredThinkingLevel;
-	explicitThinkingLevel: boolean;
-}
-
-/** The set of resolvable role models plus the index of the currently active
- *  one within {@link ResolvedRoleModel.role} order. */
-export interface RoleModelCycle {
-	models: ResolvedRoleModel[];
-	currentIndex: number;
 }
 
 export interface ContextUsageBreakdown {

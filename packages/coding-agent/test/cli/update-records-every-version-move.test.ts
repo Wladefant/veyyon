@@ -132,7 +132,7 @@ describe.skipIf(isWindows)("installRelease records the move", () => {
 	it("records a forward update, which used to leave no trace", async () => {
 		const harness = await makeHarness(["2.0.0"]);
 
-		await installRelease("2.0.0", false, () => {}, "1.0.0", harness.historyPath);
+		await installRelease("2.0.0", () => {}, "1.0.0", harness.historyPath);
 
 		const moves = await readVersionMoves(harness.historyPath);
 		expect(moves.map(move => ({ from: move.from, to: move.to }))).toEqual([{ from: "1.0.0", to: "2.0.0" }]);
@@ -142,7 +142,7 @@ describe.skipIf(isWindows)("installRelease records the move", () => {
 	it("stamps the move with a parseable ISO 8601 instant", async () => {
 		const harness = await makeHarness(["2.0.0"]);
 
-		await installRelease("2.0.0", false, () => {}, "1.0.0", harness.historyPath);
+		await installRelease("2.0.0", () => {}, "1.0.0", harness.historyPath);
 
 		const [move] = await readVersionMoves(harness.historyPath);
 		expect(move?.at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
@@ -157,7 +157,7 @@ describe.skipIf(isWindows)("installRelease records the move", () => {
 	it("does not record a forced reinstall of the version already running", async () => {
 		const harness = await makeHarness(["2.0.0"]);
 
-		await installRelease("2.0.0", true, () => {}, "2.0.0", harness.historyPath);
+		await installRelease("2.0.0", () => {}, "2.0.0", harness.historyPath);
 
 		expect(await readVersionMoves(harness.historyPath)).toEqual([]);
 	});
@@ -170,7 +170,7 @@ describe.skipIf(isWindows)("installRelease records the move", () => {
 		// 3.0.0 is not served, so the download 404s and the swap never runs.
 		const harness = await makeHarness(["2.0.0"]);
 
-		await expect(installRelease("3.0.0", false, () => {}, "1.0.0", harness.historyPath)).rejects.toThrow();
+		await expect(installRelease("3.0.0", () => {}, "1.0.0", harness.historyPath)).rejects.toThrow();
 
 		expect(await readVersionMoves(harness.historyPath)).toEqual([]);
 	});
@@ -182,8 +182,8 @@ describe.skipIf(isWindows)("installRelease records the move", () => {
 	it("appends successive moves oldest first", async () => {
 		const harness = await makeHarness(["2.0.0", "3.0.0"]);
 
-		await installRelease("2.0.0", false, () => {}, "1.0.0", harness.historyPath);
-		await installRelease("3.0.0", false, () => {}, "2.0.0", harness.historyPath);
+		await installRelease("2.0.0", () => {}, "1.0.0", harness.historyPath);
+		await installRelease("3.0.0", () => {}, "2.0.0", harness.historyPath);
 
 		const moves = await readVersionMoves(harness.historyPath);
 		expect(moves.map(move => `${move.from}->${move.to}`)).toEqual(["1.0.0->2.0.0", "2.0.0->3.0.0"]);
@@ -214,7 +214,7 @@ describe.skipIf(isWindows)("rollbackToVersion records exactly one move", () => {
 	it("keeps an update and the rollback that undoes it in one history", async () => {
 		const harness = await makeHarness(["2.0.0", "1.0.0"]);
 
-		await installRelease("2.0.0", false, () => {}, "1.0.0", harness.historyPath);
+		await installRelease("2.0.0", () => {}, "1.0.0", harness.historyPath);
 		await rollbackToVersion("1.0.0", () => {}, "2.0.0", harness.historyPath);
 
 		const moves = await readVersionMoves(harness.historyPath);

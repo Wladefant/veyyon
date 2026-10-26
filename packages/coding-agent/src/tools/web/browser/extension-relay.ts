@@ -22,7 +22,6 @@ import type { Server, ServerWebSocket } from "bun";
 import {
 	checkCdpMethod,
 	checkNavigation,
-	type ExtensionPolicy,
 	extensionStateDir,
 	generateSecret,
 	instanceFileName,
@@ -45,16 +44,22 @@ const AUTO_ATTACH = { autoAttach: true, waitForDebuggerOnStart: true, flatten: t
  * open a window or tab by any path (`window.open`, also with `noopener`; `target=_blank`; `formtarget`;
  * modified clicks), so no new tab starts loading before the relay can attach to it. Every other
  * capability stays on, and `allow-same-origin` keeps cookies and storage working. The request gate still
- * judges each navigation, so `allow-top-navigation` widens nothing.
+ * judges each navigation, so `allow-top-navigation` widens nothing. `worker-src 'none'` is the gate for
+ * workers: a worker or service worker cannot be paused (no `Fetch` on a worker session, a service worker is
+ * never auto-attached), so Chrome refuses to start one, from any realm, `blob:`, `data:` or `srcdoc` child.
+ * Local-network pages get no header (see `isSandboxedDocument`) and keep only the guard script.
  */
 const POPUP_SANDBOX_POLICY =
-	"sandbox allow-downloads allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-presentation allow-same-origin allow-scripts allow-storage-access-by-user-activation allow-top-navigation";
+	"sandbox allow-downloads allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-presentation allow-same-origin allow-scripts allow-storage-access-by-user-activation allow-top-navigation; worker-src 'none'";
 
 /**
  * Runs in every document of a controlled tab so nothing opens a new tab: `window.open` returns null, forms
  * (`submit()`, `requestSubmit()`, submit events, `formtarget`), `<base target>` and links (also inside shadow
- * DOM, and ctrl/meta/shift/middle clicks) stay in the same tab, where the request gate judges them. Best
- * effort: a path that is not script-visible can still open a tab, which the relay then removes unattached.
+ * DOM, and ctrl/meta/shift/middle clicks) stay in the same tab, where the request gate judges them. It also
+ * refuses to create a worker or register a service worker: Chrome offers no Fetch gate on either (measured
+ * 2026-10-06: `Fetch.enable` is not found on a worker session, and a service worker is never auto-attached),
+ * so their requests could not be judged. Best effort: a path that is not script-visible can still open a tab,
+ * which the relay then removes unattached.
  */
 const POPUP_GUARD_SOURCE = `(() => {
   const key = "__veyyonPopupGuard";
@@ -96,6 +101,13 @@ const POPUP_GUARD_SOURCE = `(() => {
   };
   addEventListener("click", onLink, true);
   addEventListener("auxclick", onLink, true);
+  const refuseWorker = () => Promise.reject(new DOMException("Service workers are disabled in a controlled tab.", "SecurityError"));
+  if (window.ServiceWorkerContainer) {
+    Object.defineProperty(ServiceWorkerContainer.prototype, "register", { value: refuseWorker, configurable: false, writable: false });
+  }
+  for (const name of ["Worker", "SharedWorker"]) {
+    try { delete window[name]; } catch {}
+  }
 })();`;
 
 export interface NavigationAudit {
@@ -107,7 +119,8 @@ export interface NavigationAudit {
 }
 
 export interface ExtensionRelayOptions {
-	policy: ExtensionPolicy;
+	/** Exact consent URL parameters for the handshake tab opened by this caller. */
+	bootstrap?: Omit<ConnectUrlOptions, "relayUrl">;
 	/** Names the state file so several Chrome profiles do not collide. */
 	instance?: string;
 	/** Other secrets the caller holds (the extension token); they are scrubbed from every log line. */
@@ -117,6 +130,7 @@ export interface ExtensionRelayOptions {
 
 interface OwnedTab {
 	tabId: number;
+	windowId?: number;
 	targetId: string;
 	/** Chrome's id of the tab's main frame (its page target id). */
 	mainFrameId: string;
@@ -160,9 +174,18 @@ const extensionMessageSchema = type({
 });
 
 const debugSourceSchema = type({ tabId: "number", "sessionId?": "string" });
-const targetInfoSchema = type({ targetInfo: { targetId: "string" } });
+const targetInfoSchema = type({
+	targetInfo: { targetId: "string", "title?": "string", "url?": "string" },
+});
+const targetInfoChangedSchema = targetInfoSchema;
 const responseBodySchema = type({ body: "string", "base64Encoded?": "boolean" });
-const tabSchema = type({ id: "number", "openerTabId?": "number", "pendingUrl?": "string", "url?": "string" });
+const tabSchema = type({
+	id: "number",
+	"openerTabId?": "number",
+	"pendingUrl?": "string",
+	"url?": "string",
+	"windowId?": "number",
+});
 const requestPausedSchema = type({
 	requestId: "string",
 	"frameId?": "string",
@@ -179,6 +202,12 @@ const attachedSchema = type({
 	"waitingForDebugger?": "boolean",
 	"targetInfo?": { type: "string", "targetId?": "string" },
 });
+
+function diagnosticMethod(method: string, scrub: readonly string[]): string {
+	return /^[A-Za-z][A-Za-z0-9]*\.[A-Za-z][A-Za-z0-9]*$/.test(method) && method.length <= 128
+		? redactSecrets(method, scrub)
+		: "<invalid>";
+}
 
 function errorText(error: unknown): string {
 	if (typeof error === "string") return error;
@@ -203,14 +232,20 @@ function isLocalNetworkUrl(url: string): boolean {
 	const bare = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
 	if (isIPv4(bare)) {
 		const [a, b] = bare.split(".").map(Number);
-		return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+		return (
+			a === 0 ||
+			a === 10 ||
+			a === 127 ||
+			(a === 169 && b === 254) ||
+			(a === 172 && b >= 16 && b <= 31) ||
+			(a === 192 && b === 168)
+		);
 	}
 	if (isIPv6(bare)) return /^(?:::1?|f[cd]|fe[89ab])/i.test(bare);
 	return bare === "localhost" || bare.endsWith(".localhost") || bare.endsWith(".local");
 }
 
 export class ExtensionRelay {
-	readonly #policy: ExtensionPolicy;
 	readonly #instance: string | undefined;
 	readonly #scrub: string[];
 	readonly #onAudit: ((entry: NavigationAudit) => void) | undefined;
@@ -220,9 +255,18 @@ export class ExtensionRelay {
 	readonly #server: Server<SocketData>;
 	readonly #clients = new Map<number, CdpClient>();
 	readonly #tabs = new Map<number, OwnedTab>();
+	readonly #pendingBootstrapTabs = new Set<number>();
 	/** Chrome's own child session ids (iframes, workers) to the tab that owns them. */
 	readonly #childSessions = new Map<string, number>();
+	/** Per Chrome debuggee: isolated-world creation in flight, so later commands wait for its guard. */
+	readonly #worldLocks = new Map<string, Promise<void>>();
+	/** Isolated worlds (`debuggee:contextId`) whose guard failed; commands on them are refused. */
+	readonly #unguardedWorlds = new Set<string>();
 	readonly #pending = new Map<number, PendingCall>();
+	#bootstrapUrl: string | undefined;
+	#bootstrapTabId: number | undefined;
+	#bootstrapReady: Promise<void> | undefined;
+	#ready = false;
 	#extension: ServerWebSocket<SocketData> | undefined;
 	#extensionWaiters: Array<() => void> = [];
 	#nextCallId = 1;
@@ -231,10 +275,10 @@ export class ExtensionRelay {
 	#closed = false;
 
 	private constructor(opts: ExtensionRelayOptions) {
-		this.#policy = opts.policy;
 		this.#instance = opts.instance;
 		this.#onAudit = opts.onAudit;
 		this.#scrub = [...(opts.scrub ?? [])];
+		if (opts.bootstrap) this.#scrub.push(opts.bootstrap.token);
 		this.#server = Bun.serve<SocketData>({
 			hostname: "127.0.0.1",
 			port: 0,
@@ -245,8 +289,10 @@ export class ExtensionRelay {
 				close: ws => this.#onSocketClose(ws),
 			},
 		});
+		if (opts.bootstrap) this.#bootstrapUrl = buildConnectUrl({ ...opts.bootstrap, relayUrl: this.extensionUrl });
 		this.#scrub.push(this.#relaySecret, this.#cdpSecret, this.#controlSecret);
 		this.#writeStateFile();
+		this.#log("extension relay listening", { port: this.port, pid: process.pid, instance: this.#instance });
 	}
 
 	static start(opts: ExtensionRelayOptions): ExtensionRelay {
@@ -277,13 +323,24 @@ export class ExtensionRelay {
 		return this.#tabs.size;
 	}
 
+	/** Snapshot only tabs this relay already created or adopted; never queries Chrome's other tabs. */
+	getTrackedTabs(): Array<{ tabId: number; windowId?: number; targetId: string; url: string; title: string }> {
+		return [...this.#tabs.values()].map(({ tabId, windowId, targetId, url, title }) => ({
+			tabId,
+			windowId,
+			targetId,
+			url,
+			title,
+		}));
+	}
+
 	get closed(): boolean {
 		return this.#closed;
 	}
 
 	/** Resolve once the extension has connected. */
 	waitForExtension(timeoutMs: number, signal?: AbortSignal): Promise<void> {
-		if (this.#extension) return Promise.resolve();
+		if (this.#ready) return Promise.resolve();
 		return new Promise<void>((resolve, reject) => {
 			const done = (): void => {
 				clearTimeout(timer);
@@ -300,6 +357,12 @@ export class ExtensionRelay {
 			const timer = setTimeout(() => {
 				this.#extensionWaiters = this.#extensionWaiters.filter(w => w !== done);
 				signal?.removeEventListener("abort", onAbort);
+				this.#log("extension connection wait timed out", {
+					port: this.port,
+					extensionConnected: this.extensionConnected,
+					ready: this.#ready,
+					trackedTabCount: this.#tabs.size,
+				});
 				reject(new Error(`The extension did not connect within ${Math.round(timeoutMs / 1000)} s.`));
 			}, timeoutMs);
 			this.#extensionWaiters.push(done);
@@ -314,14 +377,18 @@ export class ExtensionRelay {
 	 */
 	async disconnect(): Promise<number> {
 		const tabs = [...this.#tabs.values()];
+		const pendingBootstrapTabs = [...this.#pendingBootstrapTabs];
+		this.#pendingBootstrapTabs.clear();
 		this.#tabs.clear();
 		this.#childSessions.clear();
+		// Removing the last tab first avoids losing the socket when debugger detach closes the extension group.
+		for (const tab of tabs) this.#fireAndForget("chrome.tabs.remove", [tab.tabId]);
+		for (const tabId of pendingBootstrapTabs) this.#fireAndForget("chrome.tabs.remove", [tabId]);
 		await Promise.all(
-			tabs.map(tab =>
-				this.#call("chrome.debugger.detach", [{ tabId: tab.tabId }], DETACH_TIMEOUT_MS).catch(() => undefined),
+			[...tabs.map(tab => tab.tabId), ...pendingBootstrapTabs].map(tabId =>
+				this.#call("chrome.debugger.detach", [{ tabId }], DETACH_TIMEOUT_MS).catch(() => undefined),
 			),
 		);
-		for (const tab of tabs) this.#fireAndForget("chrome.tabs.remove", [tab.tabId]);
 		for (const client of this.#clients.values()) client.ws.close(1001, "relay disconnected");
 		this.#clients.clear();
 		this.#extension?.close(1000, "disconnected by veyyon");
@@ -350,8 +417,8 @@ export class ExtensionRelay {
 	/** Lets `veyyon browser-extension status|disconnect` reach this process. Private to the user. */
 	#writeStateFile(): void {
 		const file = this.#stateFile();
-		fs.mkdirSync(path.dirname(file), { recursive: true });
 		const state = { port: this.port, control: this.#controlSecret, pid: process.pid };
+		fs.mkdirSync(path.dirname(file), { recursive: true });
 		fs.writeFileSync(file, JSON.stringify(state), { mode: 0o600 });
 	}
 
@@ -402,15 +469,22 @@ export class ExtensionRelay {
 		return new Response("not found", { status: 404 });
 	}
 
+	#markReady(): void {
+		this.#ready = true;
+		const waiters = this.#extensionWaiters;
+		this.#extensionWaiters = [];
+		for (const waiter of waiters) waiter();
+	}
+
 	#onOpen(ws: ServerWebSocket<SocketData>): void {
 		if (ws.data.role === "extension") {
 			this.#extension = ws;
-			const waiters = this.#extensionWaiters;
-			this.#extensionWaiters = [];
-			for (const waiter of waiters) waiter();
+			this.#log("extension websocket accepted", { port: this.port });
+			if (this.#bootstrapUrl === undefined) this.#markReady();
 			return;
 		}
 		const clientId = ws.data.clientId;
+		this.#log("CDP websocket accepted", { port: this.port, clientId: ws.data.clientId });
 		if (clientId === undefined) return;
 		this.#clients.set(clientId, { id: clientId, ws, discover: false, autoAttach: false, sessions: new Map() });
 	}
@@ -418,14 +492,17 @@ export class ExtensionRelay {
 	#onSocketClose(ws: ServerWebSocket<SocketData>): void {
 		if (ws.data.role === "extension") {
 			if (this.#extension === ws) this.#onExtensionGone();
+			this.#log("extension websocket disconnected", { port: this.port });
 			return;
 		}
 		if (ws.data.clientId !== undefined) this.#clients.delete(ws.data.clientId);
+		this.#log("CDP websocket disconnected", { port: this.port, clientId: ws.data.clientId });
 	}
 
 	/** The extension went away (idle service worker, last tab detached, user removed it). */
 	#onExtensionGone(): void {
 		this.#extension = undefined;
+		this.#ready = false;
 		this.#tabs.clear();
 		this.#childSessions.clear();
 		for (const pending of this.#pending.values()) {
@@ -465,6 +542,16 @@ export class ExtensionRelay {
 		const id = this.#nextCallId++;
 		return new Promise<unknown>((resolve, reject) => {
 			const timer = setTimeout(() => {
+				const debuggee = params[0];
+				const cdpMethod = method === "chrome.debugger.sendCommand" && Array.isArray(params) && typeof params[1] === "string" ? params[1] : undefined;
+				this.#log("extension RPC timed out", {
+					port: this.port,
+					method,
+					...(cdpMethod === undefined ? {} : { cdpMethod: diagnosticMethod(cdpMethod, this.#scrub) }),
+					...(typeof debuggee === "object" && debuggee !== null && "tabId" in debuggee && typeof debuggee.tabId === "number"
+						? { tabId: debuggee.tabId }
+						: {}),
+				});
 				this.#pending.delete(id);
 				reject(new Error(`The extension did not answer ${method} within ${Math.round(timeoutMs / 1000)} s.`));
 			}, timeoutMs);
@@ -507,17 +594,34 @@ export class ExtensionRelay {
 			case "chrome.tabs.onCreated": {
 				const tab = tabSchema(params[0]);
 				if (tab instanceof type.errors) return;
-				if (tab.openerTabId === undefined || !this.#tabs.has(tab.openerTabId)) return;
 				const landing = tab.pendingUrl ?? tab.url;
+				if (this.#bootstrapUrl !== undefined && landing === this.#bootstrapUrl) {
+					this.#log("extension bootstrap claimed", { port: this.port, tabId: tab.id });
+					this.#bootstrapUrl = undefined;
+					this.#pendingBootstrapTabs.add(tab.id);
+					this.#bootstrapReady = this.#registerTab(tab.id, true, tab.windowId)
+						.then(() => {
+							this.#bootstrapTabId = tab.id;
+							this.#markReady();
+						})
+						.catch(error => {
+							this.#log("could not adopt connect tab", { error: errorText(error) });
+							throw error;
+						});
+					// The session awaits this promise. An event can arrive before that await is installed.
+					void this.#bootstrapReady.catch(() => undefined);
+					return;
+				}
+				if (tab.openerTabId === undefined || !this.#tabs.has(tab.openerTabId)) return;
 				if (landing !== undefined && landing !== "") {
-					const decision = checkNavigation(this.#policy, landing);
+					const decision = checkNavigation(landing);
 					if (!decision.allowed) {
 						this.#audit(tab.id, landing, decision);
 						this.#fireAndForget("chrome.tabs.remove", [tab.id]);
 						return;
 					}
 				}
-				void this.#registerTab(tab.id).catch(error =>
+				void this.#registerTab(tab.id, false, tab.windowId).catch(error =>
 					this.#log("could not adopt a popup", { error: errorText(error) }),
 				);
 				return;
@@ -548,6 +652,12 @@ export class ExtensionRelay {
 		if (method === "Target.detachedFromTarget") {
 			const detached = attachedSchema(eventParams);
 			if (!(detached instanceof type.errors)) this.#childSessions.delete(detached.sessionId);
+		} else if (method === "Target.targetInfoChanged") {
+			const changed = targetInfoChangedSchema(eventParams);
+			if (!(changed instanceof type.errors) && changed.targetInfo.targetId === tab.mainFrameId) {
+				if (changed.targetInfo.url !== undefined) tab.url = changed.targetInfo.url;
+				if (changed.targetInfo.title !== undefined) tab.title = changed.targetInfo.title;
+			}
 		} else if (method === "Page.frameNavigated" && source.sessionId === undefined) {
 			const navigated = frameNavigatedSchema(eventParams);
 			if (!(navigated instanceof type.errors) && navigated.frame.parentId === undefined) {
@@ -585,15 +695,17 @@ export class ExtensionRelay {
 	): Promise<void> {
 		const debuggee = { tabId: tab.tabId, sessionId: attached.sessionId };
 		try {
-			await this.#enableFetchGate(debuggee);
+			await this.#enableFetchGate(debuggee, !(attached.targetInfo?.type ?? "").endsWith("worker"));
 			await this.#call("chrome.debugger.sendCommand", [debuggee, "Target.setAutoAttach", AUTO_ATTACH]);
 		} catch (error) {
 			this.#childSessions.delete(attached.sessionId);
 			const targetId = attached.targetInfo?.targetId;
 			if (targetId !== undefined) {
-				await this.#call("chrome.debugger.sendCommand", [{ tabId: tab.tabId }, "Target.closeTarget", { targetId }]).catch(
-					closeError => this.#log("could not close an ungated target", { error: errorText(closeError) }),
-				);
+				await this.#call("chrome.debugger.sendCommand", [
+					{ tabId: tab.tabId },
+					"Target.closeTarget",
+					{ targetId },
+				]).catch(closeError => this.#log("could not close an ungated target", { error: errorText(closeError) }));
 			}
 			throw error;
 		}
@@ -610,17 +722,23 @@ export class ExtensionRelay {
 	 * happen at the new tab. Two layers stop it at the source instead: the guard script, and a sandbox
 	 * header (no `allow-popups`) on every document response, which Chrome enforces for paths no script sees.
 	 */
-	async #enableFetchGate(debuggee: { tabId: number; sessionId?: string }): Promise<void> {
+	async #enableFetchGate(debuggee: { tabId: number; sessionId?: string }, hasDocuments: boolean): Promise<void> {
 		await this.#call("chrome.debugger.sendCommand", [
 			debuggee,
 			"Fetch.enable",
 			{ patterns: [{ urlPattern: "*", requestStage: "Request" }] },
 		]);
+		// Workers have no document: the Page and Network domains do not exist on them, so only pages and
+		// frames get the popup guard and the service-worker bypass.
+		if (!hasDocuments) return;
 		await this.#call("chrome.debugger.sendCommand", [
 			debuggee,
 			"Page.addScriptToEvaluateOnNewDocument",
 			{ source: POPUP_GUARD_SOURCE, runImmediately: true },
 		]);
+		// A service worker answers a page's requests from its own context, which the debugger gate of this
+		// tab never sees. Pages go around it, so every request they make is paused and judged here.
+		await this.#call("chrome.debugger.sendCommand", [debuggee, "Network.setBypassServiceWorker", { bypass: true }]);
 	}
 
 	/**
@@ -673,7 +791,7 @@ export class ExtensionRelay {
 		const url = paused.request.url;
 		let allowed: boolean;
 		if (paused.resourceType === "Document") {
-			const decision = checkNavigation(this.#policy, url);
+			const decision = checkNavigation(url);
 			if (!decision.allowed) this.#audit(source.tabId, url, decision);
 			allowed = decision.allowed;
 		} else if (url.startsWith("data:") || url.startsWith("blob:")) {
@@ -702,7 +820,7 @@ export class ExtensionRelay {
 	/** A page can navigate itself (redirect, link, script). Catch the landing and send the tab to about:blank. */
 	#onMainFrameNavigated(tab: OwnedTab, url: string): void {
 		tab.url = url;
-		const decision = checkNavigation(this.#policy, url);
+		const decision = checkNavigation(url);
 		this.#audit(tab.tabId, url, decision);
 		if (decision.allowed) return;
 		void this.#call("chrome.debugger.sendCommand", [
@@ -729,11 +847,13 @@ export class ExtensionRelay {
 
 	// ----- Tabs and sessions ---------------------------------------------------------------
 
-	async #registerTab(tabId: number): Promise<OwnedTab> {
-		await this.#call("chrome.debugger.attach", [{ tabId }, "1.3"]);
+	async #registerTab(tabId: number, bootstrap = false, windowId?: number): Promise<OwnedTab> {
 		let mainFrameId: string;
+		let url = "about:blank";
+		let title = "";
 		try {
-			await this.#enableFetchGate({ tabId });
+			await this.#call("chrome.debugger.attach", [{ tabId }, "1.3"]);
+			await this.#enableFetchGate({ tabId }, true);
 			await this.#call("chrome.debugger.sendCommand", [{ tabId }, "Target.setAutoAttach", AUTO_ATTACH]);
 			// Chrome names a page's main frame after its target. Needed to tell its document from a sub-frame's.
 			const info = targetInfoSchema(
@@ -741,12 +861,25 @@ export class ExtensionRelay {
 			);
 			if (info instanceof type.errors) throw new Error("Chrome did not name the main frame of the tab.");
 			mainFrameId = info.targetInfo.targetId;
+			if (!bootstrap) {
+				url = info.targetInfo.url ?? url;
+				title = info.targetInfo.title ?? title;
+			}
+			if (bootstrap)
+				await this.#call("chrome.debugger.sendCommand", [{ tabId }, "Page.navigate", { url: "about:blank" }]);
+			if (bootstrap && (this.#closed || !this.#pendingBootstrapTabs.has(tabId)))
+				throw new Error("The bootstrap registration was cancelled.");
 		} catch (error) {
-			// Fail closed: a tab we cannot gate is never exposed.
-			this.#fireAndForget("chrome.debugger.detach", [{ tabId }]);
+			// Fail closed: a tab we cannot gate is never exposed. A detach alone leaves a page that has
+			// already loaded running with no gate, so the tab is removed as well.
+			if (!bootstrap || this.#pendingBootstrapTabs.delete(tabId)) {
+				this.#fireAndForget("chrome.tabs.remove", [tabId]);
+				this.#fireAndForget("chrome.debugger.detach", [{ tabId }]);
+			}
 			throw error;
 		}
-		const tab: OwnedTab = { tabId, targetId: `ext-${tabId}`, mainFrameId, url: "about:blank", title: "" };
+		if (bootstrap) this.#pendingBootstrapTabs.delete(tabId);
+		const tab: OwnedTab = { tabId, windowId, targetId: `ext-${tabId}`, mainFrameId, url, title };
 		this.#tabs.set(tabId, tab);
 		for (const client of this.#clients.values()) {
 			if (client.discover)
@@ -825,6 +958,14 @@ export class ExtensionRelay {
 					: await this.#sessionCommand(sessionId, client, method, params);
 			this.#reply(client, id, sessionId, { result });
 		} catch (error) {
+			const mappedTabId = sessionId === undefined ? undefined : client.sessions.get(sessionId) ?? this.#childSessions.get(sessionId);
+			const clientTabId = mappedTabId ?? (method === "Target.createTarget" ? undefined : typeof params.targetId === "string" ? this.#tabByTargetId(params.targetId)?.tabId : undefined);
+			this.#log("CDP client command failed", {
+				port: this.port,
+				clientId: client.id,
+				...(clientTabId === undefined ? {} : { tabId: clientTabId }),
+				cdpMethod: diagnosticMethod(method, this.#scrub),
+			});
 			const code = error instanceof UnsupportedMethod ? METHOD_NOT_FOUND_CODE : CDP_ERROR_CODE;
 			this.#reply(client, id, sessionId, { error: { code, message: redactSecrets(errorText(error), this.#scrub) } });
 		}
@@ -847,12 +988,64 @@ export class ExtensionRelay {
 		if (!blocked.allowed) throw new Error(blocked.reason);
 		if (method === "Page.navigate" && typeof params.url === "string") this.#checkNavigationOrThrow(tabId, params.url);
 		const debuggee = rootTab !== undefined ? { tabId } : { tabId, sessionId };
+		const key = rootTab !== undefined ? `${tabId}:root` : `${tabId}:${sessionId}`;
+		if (method === "Page.createIsolatedWorld") {
+			// Creation, guard run and the client's reply are one step. The next command of this session
+			// waits for it, so a pipelined command cannot reach a world before the guard has.
+			const run = (this.#worldLocks.get(key) ?? Promise.resolve()).then(() =>
+				this.#createGuardedWorld(key, debuggee, method, params),
+			);
+			const settled = run.then(
+				() => undefined,
+				() => undefined,
+			);
+			this.#worldLocks.set(key, settled);
+			void settled.then(() => {
+				if (this.#worldLocks.get(key) === settled) this.#worldLocks.delete(key);
+			});
+			return run;
+		}
+		await this.#worldLocks.get(key);
+		for (const field of ["contextId", "executionContextId"]) {
+			if (this.#unguardedWorlds.has(`${key}:${String(params[field])}`)) {
+				throw new Error("That isolated world could not be guarded and is refused.");
+			}
+		}
 		const result = await this.#call("chrome.debugger.sendCommand", [debuggee, method, params]);
 		return result ?? {};
 	}
 
+	/**
+	 * An isolated world has its own `Worker` and `ServiceWorkerContainer`, which the document guard script
+	 * (main world only) never reaches. Puppeteer needs these worlds for ordinary work, so run the guard in
+	 * each one before the client hears its context id. If the guard fails the command fails, and the world
+	 * is remembered as unguarded so no later command can use it.
+	 */
+	async #createGuardedWorld(
+		key: string,
+		debuggee: { tabId: number; sessionId?: string },
+		method: string,
+		params: Record<string, unknown>,
+	): Promise<unknown> {
+		const created = await this.#call("chrome.debugger.sendCommand", [debuggee, method, params]);
+		const contextId = (created as { executionContextId?: unknown } | undefined)?.executionContextId;
+		if (typeof contextId !== "number") throw new Error("Isolated world refused: no context id to guard.");
+		const worldKey = `${key}:${contextId}`;
+		this.#unguardedWorlds.add(worldKey);
+		const guard = await this.#call("chrome.debugger.sendCommand", [
+			debuggee,
+			"Runtime.evaluate",
+			{ expression: POPUP_GUARD_SOURCE, contextId },
+		]);
+		if ((guard as { exceptionDetails?: unknown } | undefined)?.exceptionDetails !== undefined) {
+			throw new Error("Isolated world refused: the guard script failed in it.");
+		}
+		this.#unguardedWorlds.delete(worldKey);
+		return created;
+	}
+
 	#checkNavigationOrThrow(tabId: number, url: string): void {
-		const decision = checkNavigation(this.#policy, url);
+		const decision = checkNavigation(url);
 		this.#audit(tabId, url, decision);
 		if (!decision.allowed) throw new Error(decision.reason);
 	}
@@ -914,9 +1107,6 @@ export class ExtensionRelay {
 			case "Target.closeTarget": {
 				const tab = this.#tabByTargetId(params.targetId);
 				if (!tab) return { success: false };
-				await this.#call("chrome.debugger.detach", [{ tabId: tab.tabId }], DETACH_TIMEOUT_MS).catch(
-					() => undefined,
-				);
 				this.#fireAndForget("chrome.tabs.remove", [tab.tabId]);
 				this.#dropTab(tab.tabId);
 				return { success: true };
@@ -928,14 +1118,19 @@ export class ExtensionRelay {
 
 	async #createTarget(params: Record<string, unknown>): Promise<unknown> {
 		const url = typeof params.url === "string" && params.url.length > 0 ? params.url : "about:blank";
-		const decision = checkNavigation(this.#policy, url);
+		const decision = checkNavigation(url);
 		if (!decision.allowed) {
 			this.#audit(0, url, decision);
 			throw new Error(decision.reason);
 		}
-		const created = tabSchema(await this.#call("chrome.tabs.create", [{ url: "about:blank", active: true }]));
-		if (created instanceof type.errors) throw new Error("The extension returned no tab.");
-		const tab = await this.#registerTab(created.id);
+		await this.#bootstrapReady;
+		let tab = this.#bootstrapTabId === undefined ? undefined : this.#tabs.get(this.#bootstrapTabId);
+		this.#bootstrapTabId = undefined;
+		if (!tab) {
+			const created = tabSchema(await this.#call("chrome.tabs.create", [{ url: "about:blank", active: true }]));
+			if (created instanceof type.errors) throw new Error("The extension returned no tab.");
+			tab = await this.#registerTab(created.id, false, created.windowId);
+		}
 		if (url !== "about:blank") {
 			this.#audit(tab.tabId, url, decision);
 			await this.#call("chrome.debugger.sendCommand", [{ tabId: tab.tabId }, "Page.navigate", { url }]);

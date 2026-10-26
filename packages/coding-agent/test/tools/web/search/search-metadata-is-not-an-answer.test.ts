@@ -27,7 +27,7 @@ import type { AuthStorage } from "@veyyon/ai";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { WebSearchTool } from "@veyyon/coding-agent/tools/web/search";
 import * as provider from "@veyyon/coding-agent/tools/web/search/provider";
-import type { SearchParams } from "@veyyon/coding-agent/tools/web/search/providers/base";
+import type { SearchParams, SearchProvider } from "@veyyon/coding-agent/tools/web/search/providers/base";
 import type { SearchProviderId, SearchResponse } from "@veyyon/coding-agent/tools/web/search/types";
 import { useIsolatedAgentDir } from "../../../helpers/isolated-agent-dir";
 import { makeToolSession } from "../../../helpers/tool-session";
@@ -75,11 +75,11 @@ const CONTENT_FIELDS = ["answer", "sources", "citations"] as const;
 function fakeProvider(
 	id: SearchProviderId,
 	behaviour: (params: SearchParams) => Promise<SearchResponse>,
-): provider.SearchProvider {
+): SearchProvider {
 	return { id, label: id, isAvailable: () => true, isExplicitlyAvailable: () => true, search: behaviour };
 }
 
-function mockProviderChain(providers: provider.SearchProvider[]) {
+function mockProviderChain(providers: SearchProvider[]) {
 	vi.spyOn(provider, "resolveProviderCandidates").mockReturnValue(
 		providers.map(({ id }) => ({ id, explicit: false })),
 	);

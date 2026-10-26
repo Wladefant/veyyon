@@ -5,11 +5,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Args, Command, Flags } from "@veyyon/utils/cli";
+import { errorMessage } from "@veyyon/utils/type-guards";
 import {
 	extensionStateDir,
 	hasExtensionToken,
 	instanceFileName,
-	policyFilePath,
 	removeExtensionToken,
 	writeExtensionToken,
 } from "../tools/web/browser/extension-policy";
@@ -65,7 +65,7 @@ export default class BrowserExtension extends Command {
 
 	static examples = [
 		"# Store the token copied from the extension status page (reads one line from stdin)\n  veyyon browser-extension set-token",
-		"# Check the token, the allowlist and any running relay\n  veyyon browser-extension status",
+		"# Check the token and any running relay\n  veyyon browser-extension status",
 		"# Detach every controlled tab and drop the extension\n  veyyon browser-extension disconnect",
 	];
 
@@ -93,7 +93,6 @@ export default class BrowserExtension extends Command {
 				return;
 			case "status": {
 				process.stdout.write(`Token stored: ${hasExtensionToken(instance) ? "yes" : "no"}\n`);
-				process.stdout.write(`Allowlist file: ${policyFilePath()}\n`);
 				const state = readRelayState(instance);
 				if (!state) {
 					process.stdout.write("Relay: not running\n");
@@ -102,9 +101,7 @@ export default class BrowserExtension extends Command {
 				try {
 					process.stdout.write(`Relay: ${JSON.stringify(await control(state, "status"))}\n`);
 				} catch (error) {
-					process.stdout.write(
-						`Relay: not reachable (${error instanceof Error ? error.message : String(error)})\n`,
-					);
+					process.stdout.write(`Relay: not reachable (${errorMessage(error)})\n`);
 				}
 				return;
 			}

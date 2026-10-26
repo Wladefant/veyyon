@@ -24,7 +24,7 @@ import { clampLow } from "@veyyon/utils/math";
 import { routeSgrMouseInput } from "@veyyon/utils/mouse";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
 import { getMarkdownTheme } from "../../../../theme/markdown-theme";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import {
 	matchesAppExternalEditor,
 	matchesSelectCancel,

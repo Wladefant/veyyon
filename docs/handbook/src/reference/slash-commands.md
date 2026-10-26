@@ -116,7 +116,7 @@ act on a bare invocation: `/yolo`, `/fast`, and `/browser` flip a switch, `/goal
 
 | Command | Purpose |
 | --- | --- |
-| `/model [id]`, `/models` | Select the **interactive** model only (no role cycle; roles live in settings) |
+| `/model [id]`, `/models` | Select the **interactive** model only (helper models live in settings) |
 | `/switch` | Try a model for this session only, without saving it as default (same as alt+p) |
 | `/fast on\|off\|status` | Fast mode |
 | `/effort [level]` (`/thinking`) | Set reasoning effort; no argument opens the picker |
@@ -137,7 +137,7 @@ act on a bare invocation: `/yolo`, `/fast`, and `/browser` flip a switch, `/goal
 | `/account switch <provider>` | Open the manager focused on one provider, to move that provider to another of your accounts |
 | `/statusline` | Settings UI, jumped to Status Line (preset/segments/separator) |
 | `/reload-plugins` | Reload extensions |
-| `/reload-config`, `/reload` | Reload model and effort defaults and the spawn ceiling for new subagents, and reload loaded extensions |
+| `/reload-config`, `/reload` | Reload model and effort defaults, the spawn ceiling for new subagents, loaded extensions, rule files, and skills |
 | `/trust` | Decide whether this project's code may run; `approve`, `deny`, `forget`, or a path ([Project trust](./project-trust.md)) |
 | `/force <tool> [prompt]` (`/force:`) | Force the next turn to use a specific tool |
 

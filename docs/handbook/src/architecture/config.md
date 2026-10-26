@@ -18,7 +18,7 @@ Operator guide: [Configuration](../using/configuration.md). Every setting, by na
 ## Public boundary
 
 - Primary user file: `~/.veyyon/profiles/default/agent/config.yml` (or profile path under `~/.veyyon/profiles/`)
-- CLI: `veyyon config list|get|set`, `/settings`, and [`/reload-config`](../using/configuration.md#reload-routing-defaults-without-restarting) for routing defaults. `/reload-plugins` refreshes plugin registries, not profile configuration.
+- CLI: `veyyon config list|get|set`, `/settings`, and [`/reload-config`](../using/configuration.md#reload-routing-defaults-without-restarting) for routing defaults, rule files, and skills. `/reload-plugins` refreshes plugin registries, not profile configuration.
 
 ## Settings declarations
 
@@ -260,19 +260,21 @@ Relevant keys:
 
 ## 6) Native `.veyyon` provider behavior (`packages/coding-agent/src/discovery/builtin.ts`)
 
-Native provider (`id: native`) reads native config from one place: the active profile's agent directory, `~/.veyyon/profiles/<name>/agent/...`. The provider's config-dir helper resolves HOME only. `<cwd>/.veyyon` is not read, because one line in a cloned repo would configure the agent. The only thing a repository contributes is the context-file walk.
+Native provider (`id: native`) reads native config from one place: the active profile's agent directory, `~/.veyyon/profiles/<name>/agent/...`. The provider's config-dir helper resolves HOME only. `<cwd>/.veyyon` is not read for native config, because one line in a cloned repo would configure the agent. The native provider's project read is the context-file walk; a separate provider handles project skills.
 
 ### Directory admission rules
 
 - The profile agent directory is used only when it exists and is non-empty.
-- Skills are loaded only from the active profile's agent dir (`~/.veyyon/profiles/<name>/agent/skills`). Project-local `.veyyon/skills` directories are not scanned, preventing repositories from injecting skills into a session via ambient autodiscovery.
+- Profile skills load only from the active profile's agent dir (`~/.veyyon/profiles/<name>/agent/skills`). The native provider does not scan project `.veyyon/skills`; a separate project-skills provider reads only the project-root `.agents/skills`, `.github/skills` and `.claude/skills` directories, in that order.
+
 - `AGENTS.md` has three scopes: the global cross-profile `~/.veyyon/AGENTS.md`, the active profile's first matching instruction file, and the project walk from the working directory to the repository root (one file per directory level: `.veyyon/AGENTS.md` at the nearest non-empty `.veyyon/` claims its level, bare `AGENTS.md` next, bare `CLAUDE.md` last). `RULES.md` is the active profile's file only; a repository's `.veyyon/RULES.md` is not read. Persistent system-prompt changes use `PROMPT_SECTIONS/` under the active profile's agent dir. See [`docs/handbook/src/models/system-prompt.md`](../models/system-prompt.md).
 
 ### Scope-specific loading
 
-All under the active profile's agent dir:
+The native provider reads the following paths under the active profile's agent dir:
 
-- Skills: `skills/*/SKILL.md`
+- Profile skills: `skills/*/SKILL.md`
+
 - Slash commands: `commands/*.md`
 - Rules: `rules/*.{md,mdc}`
 - Prompts: `prompts/*.md`
@@ -285,7 +287,8 @@ All under the active profile's agent dir:
 
 ### Project context-file walk
 
-The native provider's only project-scope read is the context-file walk: the nearest non-empty `.veyyon/` directory's `AGENTS.md` claims its own directory level, and every level from the repository root down to the cwd contributes at most one file (`.veyyon/AGENTS.md`, else bare `AGENTS.md`, else bare `CLAUDE.md`).
+The native provider's only project-scope read remains the context-file walk: the nearest non-empty `.veyyon/` directory's `AGENTS.md` claims its own directory level, and every level from the repository root down to the cwd contributes at most one file (`.veyyon/AGENTS.md`, else bare `AGENTS.md`, else bare `CLAUDE.md`). A separate project-skills provider reads only the project-root `.agents/skills`, `.github/skills` and `.claude/skills` directories, in that order. It uses discovery's `repoRoot`, or `cwd` when no repository root is available.
+
 
 ## 7) How major subsystems consume config
 
@@ -349,7 +352,7 @@ The settings layers deep-merge in a fixed order (profile, then `--config` overla
 
 - `ConfigFile` JSON -> YAML migration for YAML-targeted files.
 - Settings migration from `settings.json` and `agent.db` to `config.yml`.
-- Settings key migrations include `queueMode`, `ask.timeout`, flat `theme`, `task.isolation.enabled`, legacy `task.isolation.mode` values, the whole `task.*` group plus `modelRoles.task` moving to `agent.*`, removed edit modes, `statusLine.plan_mode`, `memories.enabled`, and hindsight scoping/name fields.
-- The removed per-source skill toggles (`skills.enableCodexUser`, `skills.enableClaudeUser`, `skills.enableClaudeProject`, `skills.enablePiUser`, `skills.enablePiProject`, `skills.enableAgentsUser`, `skills.enableAgentsProject`) and `skills.customDirectories` are not read. Skills load only from the active profile. A stale key in an old `config.yml` is ignored, not an error.
+- Settings key migrations include `queueMode`, `ask.timeout`, flat `theme`, `task.isolation.enabled`, legacy `task.isolation.mode` values, the whole `task.*` group plus `modelRoles.task` moving to `agent.*`, `modelRoles`, `cycleOrder` and `modelTags` moving to `defaultModel` and `agent.helpers`, removed edit modes, `statusLine.plan_mode`, `memories.enabled`, and hindsight scoping/name fields.
+- The removed per-source skill toggles (`skills.enableCodexUser`, `skills.enableClaudeUser`, `skills.enableClaudeProject`, `skills.enablePiUser`, `skills.enablePiProject`, `skills.enableAgentsUser`, `skills.enableAgentsProject`) and `skills.customDirectories` are not read. Skills load from project-root `.agents/skills`, `.github/skills` and `.claude/skills`, in that order, then from the active profile. A stale key in an old `config.yml` is ignored, not an error.
 
 If these compatibility paths are removed in code, update this document immediately; several runtime behaviors still depend on them today.

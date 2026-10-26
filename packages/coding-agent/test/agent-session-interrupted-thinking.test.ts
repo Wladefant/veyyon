@@ -140,7 +140,7 @@ describe("AgentSession interrupted thinking persistence", () => {
 			"retry.enabled": false,
 			"todo.enabled": false,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 		const sessionManager = SessionManager.inMemory();
 		session = new AgentSession({
 			agent,

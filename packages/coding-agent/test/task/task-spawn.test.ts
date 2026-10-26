@@ -205,6 +205,61 @@ describe("task spawn routing", () => {
 		expect(runSpy).toHaveBeenCalledTimes(1);
 	});
 
+	it("reports the resolved spawn identity before execution and again at completion", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [taskAgent, reviewerAgent],
+			projectAgentsDir: null,
+		});
+		const events: string[] = [];
+		const starts: Array<{ agentId: string; agentName: string; ticketId?: string; runId?: string }> = [];
+		const completions: Array<{ agentId: string; agentName: string; ticketId?: string; runId?: string }> = [];
+		const runSpy = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			events.push("execute");
+			return makeResult(options.id, { agent: "reviewer" });
+		});
+		const tool = await TaskTool.create(
+			makeToolSession({
+				cwd: "/tmp",
+				settings: Settings.isolated({
+					"async.enabled": false,
+					"agent.agents": { reviewer: { enabled: true } },
+				}),
+				onSubagentStart: event => {
+					events.push("start");
+					starts.push(event);
+				},
+				onSubagentComplete: async record => {
+					events.push("complete");
+					completions.push(record);
+				},
+			}),
+		);
+
+		const result = await tool.execute("tc-verifier-spawn", {
+			agent: "reviewer",
+			name: "VerifierSpawn",
+			task: "Review this.",
+			ticketId: "ticket-verifier",
+			runId: "run-verifier",
+			nativeDispatchBound: true,
+		} as TaskParams);
+
+
+		expect(result.details?.results[0]?.agent).toBe("reviewer");
+		expect(runSpy).toHaveBeenCalledTimes(1);
+		expect(events).toEqual(["start", "execute", "complete"]);
+		expect(starts).toEqual([
+			{
+				agentId: "VerifierSpawn",
+				agentName: "reviewer",
+				ticketId: "ticket-verifier",
+				runId: "run-verifier",
+			},
+		]);
+		expect(completions).toHaveLength(1);
+		expect(completions[0]).toMatchObject(starts[0]!);
+	});
+
 	/**
 	 * Task dispatch reads policy at spawn time, so a model or effort change applies to the next
 	 * child without rebuilding the TaskTool — and a `agent.agents.<name>` row is the layer that
@@ -243,6 +298,40 @@ describe("task spawn routing", () => {
 		expect(spy.mock.calls[0]?.[0]?.thinkingLevel).toBe(ThinkingLevel.XHigh);
 		// Nothing to inherit: the session names no effort, and the row is not an inheritance source.
 		expect(spy.mock.calls[0]?.[0]?.parentThinkingLevel).toBeUndefined();
+	});
+
+	it("uses the task spawn identity to select the shared pool's first model", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [taskAgent],
+			projectAgentsDir: null,
+		});
+		const runSpy = vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(makeResult("SharedPoolTask"));
+		const settings = Settings.isolated({
+			"async.enabled": false,
+			"agent.agents": {
+				task: { model: ["google/gemini-3.8-flash", "openai-codex/gpt-6-luna", "anthropic/claude-sonnet-4"] },
+			},
+		});
+		const tool = await TaskTool.create(
+			makeToolSession({
+				cwd: "/tmp",
+				hasUI: false,
+				settings,
+				getSessionFile: () => null,
+				getSessionSpawns: () => "*",
+			}),
+		);
+		await tool.execute("tc-profile-policy", {
+			agent: "task",
+			name: "SharedPoolTask",
+			task: "Use the shared pool.",
+		} as TaskParams);
+
+		expect(runSpy.mock.calls[0]?.[0]?.modelOverride).toEqual([
+			"openai-codex/gpt-6-luna",
+			"google/gemini-3.8-flash",
+			"anthropic/claude-sonnet-4",
+		]);
 	});
 
 	it("returns immediately on spawn and delivers the follow-up hint when the job completes", async () => {

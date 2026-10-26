@@ -4,6 +4,47 @@
 
 ### Changed
 
+- Sync upstream changes from santhreal/veyyon.
+
+### Fixed
+
+- GitHub Copilot discovery prices a base model from the default tier Copilot reports, keeping the provider cache-write rate, instead of the bundled or default rate (oh-my-pi 27c1d6e8d4eceafd85b33c3294d88bd6cffd6dc3, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+
+## [1.5.6] - 2026-10-10
+### Removed
+
+- Removed the `ANTIGRAVITY_PRIMARY_ENDPOINT` and `ANTIGRAVITY_SANDBOX_ENDPOINT` re-exports from `@veyyon/catalog/discovery/antigravity`; import them from `@veyyon/catalog/provider-endpoints` or `@veyyon/catalog/discovery`.
+
+### Changed
+
+- OpenAI-compatible and LiteLLM discovery take their request deadline from `withScopedTimeoutSignal` in `@veyyon/utils` and `toNonEmptyString` from the catalog's own helpers instead of private copies; no user-visible change.
+- The `OPENROUTER_API_ENDPOINT` documentation states which clients fall back to it; no user-visible change.
+
+### Fixed
+
+- Moonshot-hosted Kimi K2.7 Code ids spelled with underscores (`kimi_k2_7_code`) force thinking on through the OpenAI-compatible path, as they already did through the Anthropic-compatible one.
+
+## [1.5.7] - 2026-10-15
+
+### Added
+
+- `@veyyon/catalog/model-thinking` exports `googleThinkingLevelWhenOff(model)`, the Google thinking level a request names when thinking is off: the model's lowest declared effort level.
+
+### Changed
+
+- Google Antigravity lists Claude Opus 5.5 and Claude Sonnet 5.5 as one model each (`claude-opus-5-5`, `claude-sonnet-5-5`) with low, medium and high routed to the `-low`, `-medium` and `-high` deployments, instead of three rows per model.
+- Comments in the xAI OAuth resolver and the model generator name the `defaultModel` setting instead of the removed model roles; no user-visible change.
+
+## [1.5.6] - 2026-10-13
+
+### Added
+
+- `@veyyon/catalog/wire/kimi-code` exports `KIMI_CODE_REGIONS`, the display name, site, OAuth host and API hosts of the global (kimi.ai) and mainland China (kimi.com) Kimi Code deployments in the order the login lists them, with `kimiCodeApiKey`, which encodes a credential's deployment into its API key, and `resolveKimiCodeEndpoint`, which reads the token and API bases a request uses from that key.
+- `@veyyon/catalog/wire/codex` exports `getCodexPlanType`, which reads the lowercased ChatGPT plan (`chatgpt_plan_type`) out of a Codex access token.
+- Gemini 4 Argon (`gemini-4-argon`) is bundled for the Google provider with a 1,048,576-token context and the low, medium and high thinking levels, and for Google Antigravity with the same context, a 65,536-token output cap, and low, medium and high routed to the `gemini-4-argon-low`, `-medium` and `-high` deployments.
+
+### Changed
+
 - Replaced `OPENCODE_HEADERS` with `COPILOT_IDENTITY_HEADERS`, set `COPILOT_USER_AGENT` to `veyyon/<version>`, and removed the baked `opencode/1.3.15` User-Agent from bundled Copilot models ([Refs https://github.com/Wladefant/veyyon/issues/468](https://github.com/Wladefant/veyyon/issues/468)).
 
 ### Added
@@ -80,11 +121,15 @@
 - A read of one bundled provider parses that provider's object out of `models.json` instead of the whole 2.3 MB catalog, and listing providers parses none of it, which cut the heap of a default-role launch 3 seconds after start from 46.70 MiB to 44.47 MiB, its live objects from 418,889 to 371,624 and `createAgentSession` from 69.7 ms to 63.5 ms (median of 5 and 11 runs).
 - A custom or discovered model's bundled reference lookup scans the model ids out of `models.json` and parses only the models the id reaches instead of the whole catalog, which cut a custom-model launch's time to a ready session from 217.2 ms to 206.6 ms and its idle heap from 36.21 MiB to 33.71 MiB and live objects from 399,664 to 350,968 (median of 11 and 5 runs).
 - A model reference lookup checks each reduction of a proxied id as it derives it and reads each lookup key once, which cut the mean lookup over every bundled id, bare and under two proxy affixes (13,218 ids), from 4.6 µs to 2.7 µs on the lazy bundled index and from 4.1 µs to 1.9 µs on the full index (2 runs before, 4 after).
+- `collapseEffortVariants` plans each hand-table family, its live effort routing, its collapsed spec and its recycled alias rows in separate steps, and the collapse and the snapshot refresh build the thinking surface through one `familyThinkingConfig`; every collapsed catalog, discovered model list and cached snapshot is unchanged across 92,001 randomized and bundled inputs compared with the previous implementation.
 
 ### Fixed
 
+- Kimi Code model discovery with a kimi.ai credential lists models at api.kimi.ai instead of api.kimi.com, and a model on api.kimi.ai gets the Moonshot-native compat (`moonshot-mfjs` tool schemas and K2.6 `thinking.keep`) that api.kimi.com gets.
 - OpenCode gateway models send the `tool_choice` a caller sets, so the models that accept a pinned tool receive it; a model that rejects it pays one retried request per session.
 - A model the models.dev overlay enriches keeps the compat its bundled row declares, so wafer.ai GLM and Kimi models request the Z.ai thinking format and xAI OAuth models map `minimal` effort to `low` again; the model cache schema moves to v12 to drop rows that stored a resolved compat record as their declaration, which cut the cached rows of a full catalog refresh from 4.85 MB to 1.72 MB and the static model stage a launch restores from 10.8 MB to 7.8 MB and 4.79 MiB to 3.16 MiB retained.
+- Google Antigravity lists Gemini 4 Argon: the client reports version 3.0.0 instead of 2.1.4, which the endpoint served neither Argon nor the per-tier Gemini 3.8 Flash deployments; the model cache schema moves to v13 to drop lists discovered as 2.1.4.
+- The Google, Vertex and Gemini CLI transports send `thinkingLevel` to every Gemini model from 3.0 up, including Gemini 4 and the `argon` tier, instead of a `thinkingBudget` that Gemini 4 rejects with HTTP 400.
 
 ## [1.5.4] - 2026-09-24
 

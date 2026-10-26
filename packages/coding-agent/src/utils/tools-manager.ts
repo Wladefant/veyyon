@@ -7,13 +7,13 @@ import { APP_NAME, getToolsDir } from "@veyyon/utils/dirs";
 // Owners, not the `@veyyon/utils` barrel: 8 modules against 74.
 import * as logger from "@veyyon/utils/logger";
 import * as ptree from "@veyyon/utils/ptree";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { bareVersion } from "@veyyon/utils/semver";
 import { TempDir } from "@veyyon/utils/temp";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { $which } from "@veyyon/utils/which";
 import { primarySessionCpuAdoption } from "../session/cpu-limit";
 import { throwIfAborted } from "../tools/core/tool-errors";
-import { scopedTimeoutSignal } from "./fetch-timeout";
 import { extractArchive } from "./zip";
 
 const TOOLS_DIR = getToolsDir();

@@ -27,9 +27,11 @@
  * `test/modes/terminal/components/account-manager.test.ts`; this suite drives the real component but asserts
  * on the removal and the report, not on the frame. Whether the removal reaches the database is the
  * store's contract, exercised here through a real `SqliteAuthCredentialStore` rather than a fake.
+ *
+ * Subject: `modes/terminal/controllers/account-flows.ts`, driven through `SelectorController.showLogout`.
  */
 
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -41,6 +43,7 @@ import { AccountManagerComponent } from "@veyyon/coding-agent/modes/terminal/com
 import { SelectorController } from "@veyyon/coding-agent/modes/terminal/controllers/selector-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { getActiveAuthDbPath } from "@veyyon/utils";
 import { useIsolatedAgentDir } from "../../../helpers/isolated-agent-dir";
 
 useIsolatedAgentDir({ globalSettings: true });
@@ -102,7 +105,7 @@ interface Harness {
 	readonly presented: () => string;
 	readonly statuses: string[];
 	readonly errors: string[];
-	readonly refresh: ReturnType<typeof vi.fn<() => Promise<void>>>;
+	readonly refresh: Mock<() => Promise<void>>;
 }
 
 async function harness(seed: { provider: string; credentials: AuthCredential[] }): Promise<Harness> {
@@ -212,7 +215,8 @@ describe("/logout lands in the account card", () => {
 		expect(h.storage.listStoredCredentials("anthropic").map(row => row.id)).toEqual([before[0]]);
 		const report = h.presented();
 		expect(report).toContain("Successfully logged out b@example.com from Anthropic");
-		expect(report).toContain("Credential removed from");
+		// The store that is open, which under profile sharing is not this profile's own agent.db.
+		expect(report).toContain(`Credential removed from ${getActiveAuthDbPath()}`);
 		expect(h.refresh).toHaveBeenCalled();
 		expect(h.errors).toEqual([]);
 	});

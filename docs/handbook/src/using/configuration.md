@@ -35,21 +35,36 @@ $ veyyon config path                     # print the active agent directory
 `/settings` does the same inside a live session. A key must be a full schema path
 (`theme.dark`, not `theme`).
 
-### Reload routing defaults without restarting
+### <a id="reload-routing-defaults-without-restarting"></a>Reload configuration, rules, and skills without restarting
 
-After editing the active profile configuration, send `/reload-config` in the running TUI,
-RPC, or ACP session. SDK callers use `await session.settings.reloadConfig()`.
-The command rediscovers the main filename in normal startup order, then re-reads existing
-`--config` overlays. Deleting the main file restores absent/default routing; replacing
+After editing the active profile configuration, rule files, or skills, send `/reload-config`
+(or `/reload`) in the running TUI, RPC, or ACP session. SDK callers use `await session.settings.reloadConfig()` and `await session.reloadRules()`.
+The command rediscovers the main configuration filename in normal startup order, re-reads existing
+`--config` overlays, re-reads loaded extensions, and re-reads global, profile, and project rule
+files (`AGENTS.md`, `CLAUDE.md`, sticky rules) and skills from disk without restarting the session.
+Deleting the main file restores absent/default routing; replacing
 `config.yml` with a supported alternate filename is discovered on the next reload.
 Malformed or unreadable files, invalid lane members (including nested lanes), and missing
-explicit overlays reject the whole reload and preserve prior routing. No file is quarantined
+explicit overlays reject the affected reload and preserve prior routing. No file is quarantined
 or rewritten. If a settings save is in flight, wait for it to finish and retry.
 Starting a newer reload supersedes older in-flight reloads, including while the newer
 request is still reading or when later edits restore the original values.
 A superseded request rejects without changing live routing; retry the command to read the current files.
 
-**Hot-reloadable:** non-startup `modelRoles.<role>` values, `agent.agents` lane
+**Rule files, skills, and next-turn semantics:** Reload re-reads global rules (`~/.veyyon/AGENTS.md`),
+active profile rules (`AGENTS.md`, sticky rules), project rules (workspace `AGENTS.md` / `CLAUDE.md`),
+and discovered skills from disk without a session restart. It rebuilds the running session's system prompt,
+so modified instructions take effect on the very next turn.
+The reload summary names added, changed, and dropped paths without repeating file contents.
+It preserves the normal layer precedence and discovery warnings.
+If a file cannot be read or rule frontmatter cannot be parsed, reload keeps the last good rule and skill snapshot and reports the path and error.
+Deleted files still leave the snapshot. Fix an unreadable file and retry to apply pending edits.
+Skill body edits count as changed files, even when their names and descriptions stay the same.
+An unchanged reload keeps the existing advisor agent.
+SDK-supplied context files, skills, and rules remain caller-owned and do not become disk-discovered inputs.
+There is no automatic file watching or mtime polling. Running workers need their own reload command or SDK call.
+
+**Hot-reloadable:** non-startup `modelRoles.<role>` values (including `modelRoles.advisor`), `agent.agents` lane
 settings (including nested `model` and `thinkingLevel`), `agent.model`,
 `agent.sharedModel`, `agent.thinkingLevel`, and `agent.maxConcurrency`. A raised
 `agent.maxConcurrency` admits lanes already queued for a slot at once; a lowered one
@@ -68,8 +83,8 @@ spawn, it runs the same reload. A rejected reload (a malformed file, an invalid 
 save in flight) does not fail the spawn: the spawn keeps the active routing, the warning is
 logged once per file state, and the next spawn retries.
 
-**Restart-only:** `defaultEffort`, `modelRoles.default`, `modelRoles.advisor`, and
-all settings outside the routing set above. If the current default or advisor role
+**Restart-only:** `defaultEffort`, `modelRoles.default`, and
+all settings outside the routing set above. If the current default role
 references another role (`@role`), this narrow reload retains the entire role map
 to avoid changing a startup-bound target indirectly; direct lane settings can still apply.
 `pickInitialThinkingLevel` captures `defaultEffort` at startup and
@@ -86,8 +101,9 @@ Malformed/invalid edits still apply **nothing**. SDK callers receive the same
 `outcomes`, plus `changed` and `restartRequired` arrays.
 
 **Read-once versus per-use:** SDK startup resolves the default role and initial
-effort into the session's established model/thinking binding. Advisor construction
-also establishes a runtime that settings-store notifications do not rebind.
+effort into the session's established model/thinking binding. An established advisor
+runtime re-resolves its model when reload changes `modelRoles.advisor` or an alias
+target, rebuilding the advisor without rebinding Main or existing forks.
 The task/eval/vibe dispatchers instead invoke `resolveAgentModel` and
 `resolveAgentThinkingLevel` per spawn; the executor forks that same dispatch snapshot
 for the child. Reload preserves the existing latest-started generation guard for
@@ -97,7 +113,7 @@ overlapping requests and commits the applicable leaves synchronously.
 change Main. Settings outside this narrow routing reload—including tools, provider
 initialization, transports, lifecycle, concurrency limits other than `agent.maxConcurrency`, plugins, UI and role presentation
 metadata—retain their active values and report changed keys as requiring restart.
-Credentials, environment variables, agent definitions/prompts, catalogs and profile
+Credentials, environment variables, catalogs, and profile
 selection are not reloaded.
 `Settings.init()` is startup initialization, not a reload API. `/reload-plugins` refreshes
 plugin/project registries, not profile routing; SIGHUP tears down the session.
@@ -227,25 +243,26 @@ and change the setting again, and nothing further is reported.
 
 ## Pick models and providers
 
-Configure the interactive model, agent policy, compaction model, and optional roles separately:
+Configure the default model, agent policy, helper models, and compaction model separately:
 
 | Goal | What to set |
 | --- | --- |
-| Choose the model you talk to | `--model` / `/model` (persisted as `modelRoles.default`) |
+| Choose the model you talk to | `--model` / `/model` (persisted as `defaultModel`) |
 | Run every agent on one model and effort | `agent.sharedModel`, then `agent.model` and `agent.thinkingLevel` |
 | Customize one agent | `agent.agents.<name>` or Settings → Agents → Agents |
 | Choose the model for context compaction | `compaction.model` |
-| Add named model assignments | `modelRoles`, per profile (Settings → Model → Roles) |
+| Choose the model a feature runs (plan, advisor, titles, …) | `agent.helpers.<id>` or Settings → Agents → Roster → Helpers |
 | Add a local or BYOK provider | a `providers:` entry in `models.yml` (see [Models](../reference/models-yml.md)) |
 
 ```yaml
 # ~/.veyyon/profiles/default/agent/config.yml
-modelRoles:
-  default: openai/gpt-5           # interactive model (persisted default)
-  smol: openai/gpt-4.1-mini
+defaultModel: openai/gpt-5        # session model (persisted default)
 agent:
   model: deepseek/deepseek-chat
   thinkingLevel: high
+  helpers:
+    title:
+      model: openai/gpt-4.1-mini
   agents:
     reviewer:
       enabled: true
@@ -254,7 +271,7 @@ compaction:
   model: openai/gpt-5-mini        # optional; else inherit interactive
 ```
 
-`/model` changes the interactive model (persists to `modelRoles.default` when saved as default) and shows the current one. `/session info` shows session stats. Role list and Ctrl+P cycling: [Models, roles, and profiles](./roles-and-profiles.md).
+`/model` changes the session model (persists to `defaultModel` when saved as default) and shows the current one. `/session info` shows session stats. Helper list and Ctrl+P cycling: [Models, helpers, and profiles](./roles-and-profiles.md).
 
 ## Stay safe (approvals)
 
@@ -262,7 +279,7 @@ compaction:
 | --- | --- |
 | When Veyyon prompts before acting | `tools.approvalMode`: `plan`, `ask`, `ask-command`, `auto` (default), `yolo`; legacy `always-ask`/`write`/`auto-edit` accepted |
 | Per-tool policy | `tools.approval`: map a tool to `allow` / `deny` / `prompt` |
-| Advisor review pass | `advisor.enabled` + `modelRoles.advisor` |
+| Advisor review pass | `advisor.enabled` + `agent.helpers.advisor` |
 
 ```yaml
 tools:

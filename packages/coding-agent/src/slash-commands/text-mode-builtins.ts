@@ -16,7 +16,7 @@
  *
  * WHY THE FLAG CANNOT DRIFT. `textMode` is not a second copy of "has a handler" that a test compares.
  * The registry's handler table is TYPED against it: a declaration with `textMode: true` must supply
- * `handle` and one without it may not, both enforced by `HandlerSetFor` in `builtin-registry.ts`. There
+ * `handle` and one without it may not, both enforced by `HandlerSetFor` in `handler-types.ts`. There
  * is nothing here for a gate to keep in sync.
  *
  * WHAT STAYS IN `acp-builtins.ts` is dispatch, `executeAcpBuiltinSlashCommand`, which runs a handler

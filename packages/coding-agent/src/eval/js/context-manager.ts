@@ -2,6 +2,7 @@
 // hidden argv mode, so compiled/standalone builds only need one JavaScript entry.
 import { registerOwnedResourceDisposer } from "@veyyon/kernel/session/owned-resources";
 import { errorMessage, isAbortError, logger, postmortem, Snowflake, workerHostEntry } from "@veyyon/utils";
+import { raceWithTimeout } from "@veyyon/utils/scoped-timeout";
 import {
 	createWorkerHandle,
 	createWorkerSubprocess,
@@ -11,7 +12,6 @@ import {
 import { logWorkerMessage } from "../../subprocess/worker-log";
 import type { ToolSession } from "../../tools";
 import { ToolAbortError, ToolError } from "../../tools/core/tool-errors";
-import { raceWithTimeout } from "../../utils/fetch-timeout";
 import { safeSend as safeSendIpc } from "../../utils/ipc";
 import { JS_EVAL_PROCESS_ARG, JS_EVAL_WORKER_ARG } from "../../worker-args";
 import { attachSessionOwner } from "../executor-base";
@@ -77,6 +77,18 @@ interface JsSession {
 const sessions = new Map<string, JsSession>();
 const startingSessions = new Map<string, Promise<JsSession>>();
 const resettingSessions = new Map<string, Promise<void>>();
+
+/**
+ * An `executeInVmContext` call that has named its owner but has not attached it to a session yet.
+ * It is recorded before the first await, so disposal sees an owner that ends during a reset or a
+ * startup. Once `ended`, the owner is never attached.
+ */
+interface OwnerLease {
+	sessionKey: string;
+	ownerId: string | undefined;
+	ended: boolean;
+}
+const ownerLeases = new Set<OwnerLease>();
 // Worker startup (module-graph import + WorkerCore construction) is infrastructure
 // cost, not user compute. Floor it independently of Bun's 5s default per-test timeout
 // so a slow cold-start under load isn't aborted mid-init — terminating a still-
@@ -110,7 +122,7 @@ export function setJsEvalWorkerThreadForTests(enabled: boolean): boolean {
 	return previous;
 }
 
-export async function executeInVmContext(options: {
+interface VmExecuteOptions {
 	sessionKey: string;
 	sessionId: string;
 	cwd: string;
@@ -128,7 +140,24 @@ export async function executeInVmContext(options: {
 	 * the context falls back to being owned by its own `sessionKey`.
 	 */
 	ownerId?: string;
-}): Promise<{ value: unknown }> {
+}
+
+export async function executeInVmContext(options: VmExecuteOptions): Promise<{ value: unknown }> {
+	// Record the owner before the first await. Reset coalescing and startup both yield,
+	// and an owner that ends in either window must still be visible to disposal.
+	const lease: OwnerLease = { sessionKey: options.sessionKey, ownerId: options.ownerId, ended: false };
+	ownerLeases.add(lease);
+	const session = await acquireOwnedSession(options, lease).finally(() => ownerLeases.delete(lease));
+	return await runOnce(session, options);
+}
+
+/**
+ * Coalesce an in-flight reset, then start or join the context. The owner is attached in the same
+ * synchronous step that checks the lease, so disposal never sees an owner that is neither leased
+ * nor attached. A lease that ended while this call waited is not attached: the context is reaped
+ * here unless another live owner still needs it.
+ */
+async function acquireOwnedSession(options: VmExecuteOptions, lease: OwnerLease): Promise<JsSession> {
 	if (options.reset) {
 		// Coalesce concurrent resets: an existing in-flight reset already
 		// produces a fresh context, so a follow-up `reset: true` cell should
@@ -159,6 +188,8 @@ export async function executeInVmContext(options: {
 		// context: if it failed, `acquireSession` below starts a fresh one and fails with its own reason.
 		if (inFlight) await inFlight.catch(() => undefined);
 	}
+	// The owner ended while it waited for a reset: do not start a worker for it.
+	if (lease.ended) throw new ToolError("JS context disposed");
 	const session = await acquireSession(
 		options.sessionKey,
 		{
@@ -169,10 +200,28 @@ export async function executeInVmContext(options: {
 		},
 		options.timeoutMs,
 	);
-	// Record which agent session owns this context so it can be reaped on that
-	// session's end (ONE PLACE with py/rb/jl via the shared attachSessionOwner).
+	if (lease.ended) {
+		// The owner ended during startup. Reap the context unless another live owner still needs it.
+		await releaseIfUnowned(session);
+		throw new ToolError("JS context disposed");
+	}
+	// Synchronous with the lease check above: no disposal can run between the check and the attach.
 	attachSessionOwner(session, options.sessionId, options.ownerId);
-	return await runOnce(session, options);
+	return session;
+}
+
+/** Reap a context that no owner needs: no attached owner and no live lease for its key. */
+async function releaseIfUnowned(session: JsSession): Promise<void> {
+	if (session.ownerIds.size > 0 || hasLiveOwnerLease(session.sessionKey)) return;
+	if (sessions.get(session.sessionKey) === session) sessions.delete(session.sessionKey);
+	await killSession(session, new ToolError("JS context disposed"), { force: false });
+}
+
+function hasLiveOwnerLease(sessionKey: string): boolean {
+	for (const lease of ownerLeases) {
+		if (lease.sessionKey === sessionKey && !lease.ended) return true;
+	}
+	return false;
 }
 
 export async function resetVmContext(sessionKey: string): Promise<void> {
@@ -205,10 +254,19 @@ export async function disposeAllVmContexts(): Promise<void> {
  * life of the parent process (BACKLOG GRAN-11).
  */
 export async function disposeVmContextsByOwner(ownerId: string): Promise<void> {
+	// Mark the owner's leases first, synchronously: a call still waiting on a reset or a startup must
+	// not attach an owner that has gone. Disposal never awaits a startup, so a hung worker cannot stall
+	// the caller; that startup reaps itself when it settles.
+	for (const lease of ownerLeases) {
+		if (lease.ownerId === ownerId) lease.ended = true;
+	}
 	const toKill: JsSession[] = [];
 	for (const session of Array.from(sessions.values())) {
 		if (!session.ownerIds.has(ownerId)) continue;
-		if (session.ownerIds.size === 1) {
+		// Kill only when ownerId is the last attached owner AND no live lease still names this context.
+		// A call that leased this key before its attach yields at acquireSession; it must find the
+		// context alive. Its own attach or release decides the context's fate.
+		if (session.ownerIds.size === 1 && !hasLiveOwnerLease(session.sessionKey)) {
 			toKill.push(session);
 			continue;
 		}
@@ -383,6 +441,11 @@ async function acquireSession(sessionKey: string, snapshot: SessionSnapshot, tim
 				}
 				session.state = "alive";
 			}
+		}
+		if (!hasLiveOwnerLease(sessionKey)) {
+			// Every call that asked for this context ended while it started. Publish nothing and reap the worker.
+			await killSession(session, new ToolError("JS context disposed"), { force: false });
+			throw new ToolError("JS context disposed");
 		}
 		sessions.set(sessionKey, session);
 		return session;

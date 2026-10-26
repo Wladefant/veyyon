@@ -30,7 +30,17 @@ import { ToolAbortError } from "@veyyon/coding-agent/tools/core/tool-errors";
 import { makeToolSession } from "../helpers/tool-session";
 
 /** A recording stand-in for the mnemopi session state the two tools reach for. */
-function fakeMnemopiState(options: { abortAfter?: number; controller?: AbortController } = {}) {
+/** What the two memory tools read from the session state, with the writes they made. */
+interface FakeState {
+	remembered: string[];
+	edits: Array<{ op: string; id: string }>;
+	sessionId: string;
+	session: { sessionManager: { getCwd: () => string } };
+	rememberScoped(content: string): void;
+	editScopedMemory(op: string, id: string): { status: string; bank: string; store: string };
+}
+
+function fakeMnemopiState(options: { abortAfter?: number; controller?: AbortController } = {}): FakeState {
 	const remembered: string[] = [];
 	const edits: Array<{ op: string; id: string }> = [];
 	return {
@@ -52,8 +62,6 @@ function fakeMnemopiState(options: { abortAfter?: number; controller?: AbortCont
 		},
 	};
 }
-
-type FakeState = ReturnType<typeof fakeMnemopiState>;
 
 function session(state: FakeState): ToolSession {
 	return makeToolSession({

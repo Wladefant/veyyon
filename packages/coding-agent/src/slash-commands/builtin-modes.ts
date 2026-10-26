@@ -10,8 +10,9 @@ import * as path from "node:path";
 import { truncate } from "@veyyon/utils";
 import { sanitizeStatusText } from "@veyyon/utils/sanitize-status-text";
 import { missingCredentialsMessage } from "../config/missing-credentials";
+import { normalizeModelPatternList } from "../config/model-pattern-list";
 import { modelResolutionFailureMessage } from "../config/model-resolution-failure";
-import { getModelMatchPreferences, normalizeModelPatternList, resolveCliModel } from "../config/model-resolver";
+import { getModelMatchPreferences, resolveCliModel } from "../config/model-resolver";
 import { PRIORITY_TIER_COMMAND_LABEL, PRIORITY_TIER_LABEL } from "../config/service-tier";
 import type { Settings } from "../config/settings";
 import { settings } from "../config/settings-instance";
@@ -378,10 +379,9 @@ export const MODES_HANDLERS = {
 	},
 	prewalk: {
 		handle: async (command, runtime) => {
-			// The target no longer defaults to a role alias: an unset role stopped
-			// resolving to a model (#980 fail-closed). `/prewalk <model>` names the
-			// target for this session; without an argument, `prewalk.cheapModel`
-			// is required, and the refusal names the setting that fixes it.
+			// `/prewalk <model>` names the target for this session; without an
+			// argument, `prewalk.cheapModel` is required, and the refusal names the
+			// setting that fixes it.
 			const arg = command.args.trim();
 			// Same chain normalization the setting gets: a comma list contributes
 			// its first entry, an empty argument falls through to the setting.
@@ -398,7 +398,6 @@ export const MODES_HANDLERS = {
 				cliModel: cheapPattern,
 				modelRegistry: runtime.session.modelRegistry,
 				preferences: getModelMatchPreferences(runtime.settings),
-				settings: runtime.settings,
 			});
 			if (resolved.error || !resolved.model) {
 				return usage(

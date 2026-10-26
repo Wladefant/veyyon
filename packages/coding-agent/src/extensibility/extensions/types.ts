@@ -381,7 +381,7 @@ export interface CompactOptions {
 /**
  * Read-only model query facade exposed at `ctx.models`. Lets an extension select a
  * model the same way core does — list authenticated models, read the session model,
- * resolve a model string or role alias, and compare model families — without reaching
+ * resolve a model selector or chain, and compare model families — without reaching
  * into the mutable registry or re-implementing matching/family heuristics.
  */
 export interface ExtensionModelQuery {
@@ -390,9 +390,9 @@ export interface ExtensionModelQuery {
 	/** The current session model, if one is set. */
 	current(): Model | undefined;
 	/**
-	 * Resolve a model string (`provider/id`, bare id) or role alias (`@slow`, a
-	 * configured role) to a Model, using the same settings-backed aliases and match
-	 * preferences as core selection. Thinking/routing suffixes are accepted and resolved
+	 * Resolve a model selector (`provider/id`, bare id) or a comma-separated chain
+	 * of them to a Model, using the same match preferences as core selection; the
+	 * first entry that matches wins. Thinking/routing suffixes are accepted and resolved
 	 * to the base model (pass effort separately). Returns undefined when nothing matches.
 	 */
 	resolve(spec: string): Model | undefined;
@@ -527,6 +527,19 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	defaultInactive?: boolean;
 	/** If true, tool may stage deferred changes that require explicit resolve/discard. */
 	deferrable?: boolean;
+	/**
+	 * Whether the agent loop may abort this call mid-execution to deliver a
+	 * queued steering message (instead of waiting for it to finish on its own).
+	 * Set only where the call purely *waits* and observes its abort signal
+	 * cleanly (e.g. the `job` poll), so the abort surfaces the tool's current
+	 * snapshot rather than corrupting a side effect. Honored only when
+	 * `interruptMode` is "immediate".
+	 *
+	 * - boolean: every call to the tool is (or is not) interruptible.
+	 * - function: resolved per call from the (raw, pre-validation) arguments,
+	 *   for a tool where only some operations block.
+	 */
+	interruptible?: boolean | ((args: Partial<Static<TParams>>) => boolean);
 	/** Tool approval tier. Defaults to `"exec"` when omitted.
 	 *  `"read"`: read-only operations. `"write"`: mutations. `"exec"`: code execution. */
 	approval?: ToolApproval;
@@ -1374,8 +1387,8 @@ export interface ProviderConfig {
 		name: string;
 		/** Run the provider login flow and return credentials (or a plain API key) to persist. */
 		login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials | string>;
-		/** Refresh expired credentials. */
-		refreshToken?(credentials: OAuthCredentials): Promise<OAuthCredentials>;
+		/** Refresh expired credentials. Pass `signal` to the token request so an abandoned refresh stops. */
+		refreshToken?(credentials: OAuthCredentials, signal?: AbortSignal): Promise<OAuthCredentials>;
 		/** Convert credentials to an API key string for requests. */
 		getApiKey?(credentials: OAuthCredentials): string;
 		/** Optional model rewrite hook for credential-aware routing (e.g., enterprise URLs). */

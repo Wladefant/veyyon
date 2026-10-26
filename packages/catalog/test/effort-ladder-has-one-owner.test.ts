@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { readFile } from "node:fs/promises";
-import * as path from "node:path";
-import { collectPackageSourceFiles, memberRelative, PACKAGES_DIR } from "../../utils/test/support/package-sources";
+import * as ai from "@veyyon/ai";
+import { collectPackageSourceFiles, memberRelative } from "../../utils/test/support/package-sources";
 import { canonicalizeEfforts, Effort, isEffort, THINKING_EFFORTS } from "../src/effort";
 
 /**
@@ -252,8 +252,9 @@ describe("production code takes the ladder from its owner", () => {
 	 * would break published consumers with no deprecation. If it is ever to go,
 	 * it goes with a migration path and this line edited to say so.
 	 */
-	it("keeps the @veyyon/ai re-export, which is published API", async () => {
-		const types = await readFile(path.join(PACKAGES_DIR, "ai", "src", "types.ts"), "utf8");
-		expect(types).toContain('export * from "@veyyon/catalog/effort";');
+	it("keeps the @veyyon/ai re-export, which is published API", () => {
+		expect(ai.THINKING_EFFORTS).toBe(THINKING_EFFORTS);
+		expect(ai.isEffort).toBe(isEffort);
+		expect(ai.canonicalizeEfforts).toBe(canonicalizeEfforts);
 	});
 });

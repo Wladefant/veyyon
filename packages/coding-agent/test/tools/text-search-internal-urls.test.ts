@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import * as capability from "@veyyon/coding-agent/discovery/capability";
 import type { CapabilityResult } from "@veyyon/coding-agent/discovery/capability/types";
-import { resetActiveSkillsForTests, setActiveSkills } from "@veyyon/coding-agent/extensibility/skills";
+import { resetActiveSkillsForTests, setActiveSkills } from "@veyyon/coding-agent/extensibility/active-skills";
 import {
 	type InternalResource,
 	type InternalUrl,

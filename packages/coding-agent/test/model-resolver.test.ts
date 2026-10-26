@@ -5,11 +5,9 @@ import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { DEFAULT_MODEL_PER_PROVIDER } from "@veyyon/catalog/provider-models";
 import {
-	expandRoleAlias,
 	extractExplicitThinkingSelector,
 	fallbackForUnavailableDefault,
 	filterAvailableModelsByEnabledPatterns,
-	findSlowModel,
 	formatModelSelectorValue,
 	formatModelString,
 	formatModelStringWithRouting,
@@ -18,15 +16,12 @@ import {
 	pickDefaultAvailableModel,
 	resolveAllowedModels,
 	resolveCliModel,
-	resolveConfiguredModelPatterns,
 	resolveModelFromString,
 	resolveModelOverride,
-	resolveModelRoleValue,
 	resolveModelScope,
+	resolveModelSelectorValue,
 	resolveProviderModelReference,
-	resolveRoleSelectionWithInherit,
 } from "@veyyon/coding-agent/config/model-resolver";
-import { DEFAULT_MODEL_ROLE_ALIAS, LEGACY_MODEL_ROLE_ALIAS_PREFIX } from "@veyyon/coding-agent/config/model-roles";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AUTO_THINKING } from "@veyyon/coding-agent/thinking";
 
@@ -296,25 +291,6 @@ function createBedrockDefaultModel(): Model<"bedrock-converse-stream"> {
 		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
 		contextWindow: 1000000,
 		maxTokens: 128000,
-	});
-}
-
-function createOpusModel(provider: string, id: string, name: string): Model<"anthropic-messages"> {
-	return buildModel({
-		id,
-		name,
-		api: "anthropic-messages",
-		provider,
-		baseUrl: provider === "anthropic" ? "https://api.anthropic.com" : "https://api.githubcopilot.com",
-		reasoning: true,
-		thinking: {
-			mode: "budget",
-			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
-		},
-		input: ["text", "image"],
-		cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
-		contextWindow: 200000,
-		maxTokens: 32000,
 	});
 }
 
@@ -633,50 +609,9 @@ describe("parseModelPattern", () => {
 	});
 });
 
-describe("resolveModelRoleValue", () => {
-	test("resolves @role:<thinking> by expanding role alias before parsing thinking", () => {
-		const settings = {
-			getModelRole: (role: string) => (role === "smol" ? "openrouter/qwen/qwen3-coder:exacto" : undefined),
-		} as NonNullable<Parameters<typeof resolveModelRoleValue>[2]>["settings"];
-
-		const result = resolveModelRoleValue("@smol:high", allModels, { settings });
-
-		expect(result.model?.provider).toBe("openrouter");
-		expect(result.model?.id).toBe("qwen/qwen3-coder:exacto");
-		expect(result.thinkingLevel).toBe(Effort.High);
-		expect(result.explicitThinkingLevel).toBe(true);
-	});
-
-	test("resolves @role:max by expanding role alias before parsing thinking", () => {
-		const settings = {
-			getModelRole: (role: string) => (role === "smol" ? "openai-codex/gpt-5.3-codex" : undefined),
-		} as NonNullable<Parameters<typeof resolveModelRoleValue>[2]>["settings"];
-
-		const result = resolveModelRoleValue("@smol:max", allModels, { settings });
-
-		expect(result.model?.provider).toBe("openai-codex");
-		expect(result.model?.id).toBe("gpt-5.3-codex");
-		// Role-value resolution clamps: gpt-5.3-codex's ladder tops out at xhigh.
-		expect(result.thinkingLevel).toBe(Effort.XHigh);
-		expect(result.explicitThinkingLevel).toBe(true);
-	});
-
-	test("resolves @default through configured default role alias", () => {
-		const settings = {
-			getModelRole: (role: string) => (role === "default" ? "openrouter/qwen/qwen3-coder:exacto" : undefined),
-		} as NonNullable<Parameters<typeof resolveModelRoleValue>[2]>["settings"];
-
-		const result = resolveModelRoleValue("@default", allModels, { settings });
-
-		expect(result.model?.provider).toBe("openrouter");
-		expect(result.model?.id).toBe("qwen/qwen3-coder:exacto");
-		expect(result.thinkingLevel).toBeUndefined();
-		expect(result.explicitThinkingLevel).toBe(false);
-		expect(result.warning).toBeUndefined();
-	});
-
+describe("resolveModelSelectorValue", () => {
 	test("splits direct comma fallback chains before parsing thinking selectors", () => {
-		const result = resolveModelRoleValue("anthropic/claude-sonnet-4-5:off,openai/gpt-4o:off", allModels);
+		const result = resolveModelSelectorValue("anthropic/claude-sonnet-4-5:off,openai/gpt-4o:off", allModels);
 
 		expect(result.model?.provider).toBe("anthropic");
 		expect(result.model?.id).toBe("claude-sonnet-4-5");
@@ -686,7 +621,7 @@ describe("resolveModelRoleValue", () => {
 	});
 
 	test("tries later direct comma fallback entries when earlier entries miss", () => {
-		const result = resolveModelRoleValue("anthropic/missing:off,openai/gpt-4o:off", allModels);
+		const result = resolveModelSelectorValue("anthropic/missing:off,openai/gpt-4o:off", allModels);
 
 		expect(result.model?.provider).toBe("openai");
 		expect(result.model?.id).toBe("gpt-4o");
@@ -695,14 +630,14 @@ describe("resolveModelRoleValue", () => {
 		expect(result.warning).toBeUndefined();
 	});
 
-	test("does not resolve exact codex role values to codex-spark via substring matching", () => {
-		const providerQualified = resolveModelRoleValue("openai-codex/gpt-5.3-codex:xhigh", allModels);
+	test("does not resolve exact codex selectors to codex-spark via substring matching", () => {
+		const providerQualified = resolveModelSelectorValue("openai-codex/gpt-5.3-codex:xhigh", allModels);
 		expect(providerQualified.model?.provider).toBe("openai-codex");
 		expect(providerQualified.model?.id).toBe("gpt-5.3-codex");
 		expect(providerQualified.thinkingLevel).toBe(Effort.XHigh);
 		expect(providerQualified.explicitThinkingLevel).toBe(true);
 
-		const idOnly = resolveModelRoleValue("gpt-5.3-codex:xhigh", allModels);
+		const idOnly = resolveModelSelectorValue("gpt-5.3-codex:xhigh", allModels);
 		expect(idOnly.model?.provider).toBe("openai-codex");
 		expect(idOnly.model?.id).toBe("gpt-5.3-codex");
 		expect(idOnly.thinkingLevel).toBe(Effort.XHigh);
@@ -710,7 +645,7 @@ describe("resolveModelRoleValue", () => {
 	});
 
 	test("clamps explicit thinking selectors from model metadata", () => {
-		const result = resolveModelRoleValue("anthropic/claude-sonnet-4-5:xhigh", allModels);
+		const result = resolveModelSelectorValue("anthropic/claude-sonnet-4-5:xhigh", allModels);
 
 		expect(result.model?.provider).toBe("anthropic");
 		expect(result.model?.id).toBe("claude-sonnet-4-5");
@@ -719,7 +654,7 @@ describe("resolveModelRoleValue", () => {
 	});
 
 	test("passes max through unclamped when the model ladder includes it", () => {
-		const result = resolveModelRoleValue("anthropic/claude-opus-4-7:max", mockMaxCapableModels);
+		const result = resolveModelSelectorValue("anthropic/claude-opus-4-7:max", mockMaxCapableModels);
 
 		expect(result.model?.provider).toBe("anthropic");
 		expect(result.model?.id).toBe("claude-opus-4-7");
@@ -728,7 +663,7 @@ describe("resolveModelRoleValue", () => {
 	});
 
 	test("preserves an explicit :auto suffix as an explicit thinking selector", () => {
-		const result = resolveModelRoleValue("anthropic/claude-sonnet-4-5:auto", allModels);
+		const result = resolveModelSelectorValue("anthropic/claude-sonnet-4-5:auto", allModels);
 
 		expect(result.model?.provider).toBe("anthropic");
 		expect(result.model?.id).toBe("claude-sonnet-4-5");
@@ -740,148 +675,12 @@ describe("resolveModelRoleValue", () => {
 	test("does not clamp :auto against the model's supported efforts", () => {
 		// claude-sonnet-4-5 caps at "high"; ensure auto isn't collapsed onto it
 		// by resolveThinkingLevelForModel.
-		const result = resolveModelRoleValue("anthropic/claude-sonnet-4-5:auto", allModels);
+		const result = resolveModelSelectorValue("anthropic/claude-sonnet-4-5:auto", allModels);
 
 		expect(result.thinkingLevel).toBe("auto");
 		expect(result.explicitThinkingLevel).toBe(true);
 	});
 });
-/**
- * Role EXPANSION, the layer every agent model pattern passes through.
- *
- * Expansion answers one question: does this `@role` alias name a model of its
- * own? It must never answer with a model the operator did not choose, because
- * the caller (`resolveAgentModel`) applies inherit afterwards and cannot tell
- * an operator's choice from a built-in guess once expansion has returned one.
- */
-describe("resolveConfiguredModelPatterns — role expansion", () => {
-	/**
-	 * `@task` was retired along with the `task` model role: the agent model
-	 * lives in the Agents settings area (`agent.model`) and having a role by
-	 * the same name meant two owners for one value, with role expansion answering
-	 * first. An old agent file still carrying `@task` must expand to nothing so the
-	 * spawn path reports it loudly rather than resolving it behind the operator.
-	 */
-	test("@task names no role and expands to nothing", () => {
-		const settings = Settings.isolated({
-			modelRoles: { default: "anthropic/claude-sonnet-4-5" },
-		});
-
-		expect(resolveConfiguredModelPatterns("@task", settings)).toEqual([]);
-	});
-
-	/** A role configured with a YAML list expands to every pattern, in order. */
-	test("expands a role configured as a YAML list to all its patterns in order", () => {
-		const settings = Settings.isolated({
-			modelRoles: {
-				slow: ["anthropic/claude-sonnet-4-6", "zai/glm-5.2:high"],
-			},
-		});
-
-		expect(resolveConfiguredModelPatterns("@slow", settings)).toEqual([
-			"anthropic/claude-sonnet-4-6",
-			"zai/glm-5.2:high",
-		]);
-	});
-
-	/**
-	 * Locks the removal of the built-in priority chain from role EXPANSION.
-	 *
-	 * `@smol` / `@slow` / `@designer` used to expand to `priority.json` when the
-	 * role was unset, which is why a stock install spawned scout, reviewer and
-	 * designer agents on three different models and no agent model setting
-	 * could hold: agent frontmatter carries those aliases, and the chain answered
-	 * before any operator choice was consulted. An unset role must contribute NO
-	 * pattern of its own so the caller applies inherit.
-	 */
-	test("an unset role expands to nothing, leaving the caller to inherit", () => {
-		const settings = Settings.isolated({
-			modelRoles: { default: "local/llama" },
-		});
-
-		expect(resolveConfiguredModelPatterns("@smol", settings)).toEqual([]);
-		expect(resolveConfiguredModelPatterns("@slow", settings)).toEqual([]);
-		expect(resolveConfiguredModelPatterns("@designer", settings)).toEqual([]);
-	});
-
-	/**
-	 * An unset role must not quietly borrow the default slot either. `modelRoles.default`
-	 * is the main conversation's model, not a stand-in for every role: expanding to
-	 * it here would make a role look configured when it is not.
-	 */
-	test("does not expand an unset role to modelRoles.default", () => {
-		const settings = Settings.isolated({
-			modelRoles: { default: "@slow", slow: "anthropic/claude-sonnet-4-5" },
-		});
-
-		expect(resolveConfiguredModelPatterns("@smol", settings)).toEqual([]);
-	});
-
-	/** A role the operator DID configure expands to exactly that choice. */
-	test("expands a configured role to the operator's model", () => {
-		const settings = Settings.isolated({
-			modelRoles: {
-				default: "anthropic/claude-sonnet-4-5",
-				designer: "openai/gpt-4o",
-			},
-		});
-
-		expect(resolveConfiguredModelPatterns("@designer", settings)).toEqual(["openai/gpt-4o"]);
-	});
-
-	/**
-	 * An effort on the alias is the caller's selector, so it replaces rather
-	 * than stacks on top of efforts stored in the aliased fallback chain.
-	 */
-	test("replaces existing valid effort suffixes when an alias overrides effort", () => {
-		const settings = Settings.isolated({
-			modelRoles: {
-				slow: ["anthropic/claude-sonnet-4-5:high", "openai/gpt-4o:max"],
-			},
-		});
-
-		expect(resolveConfiguredModelPatterns("@slow:low", settings)).toEqual([
-			"anthropic/claude-sonnet-4-5:low",
-			"openai/gpt-4o:low",
-		]);
-	});
-});
-
-/**
- * `priority.json` survives for FIRST-RUN model selection only — picking a fast or
- * strong model when the operator has chosen nothing yet. These cases moved here
- * from the retired agent-model resolver when role expansion stopped consulting the
- * chain; they keep the ordering contract covered at the one place it still
- * applies, so a reordering regression is still caught.
- */
-describe("findSlowModel — priority chain ordering", () => {
-	test("falls forward to Opus 4.8 before older Opus aliases (dotted ids)", async () => {
-		const dottedRegistry = {
-			getAvailable: () => [
-				createOpusModel("github-copilot", "claude-opus-4.7", "Claude Opus 4.7"),
-				createOpusModel("github-copilot", "claude-opus-4.8", "Claude Opus 4.8"),
-			],
-		} as Parameters<typeof findSlowModel>[0];
-
-		const dotted = await findSlowModel(dottedRegistry);
-		expect(dotted?.provider).toBe("github-copilot");
-		expect(dotted?.id).toBe("claude-opus-4.8");
-	});
-
-	test("falls forward to Opus 4.8 before older Opus aliases (dashed ids)", async () => {
-		const dashedRegistry = {
-			getAvailable: () => [
-				createOpusModel("anthropic", "claude-opus-4-7", "Claude Opus 4.7"),
-				createOpusModel("anthropic", "claude-opus-4-8", "Claude Opus 4.8"),
-			],
-		} as Parameters<typeof findSlowModel>[0];
-
-		const dashed = await findSlowModel(dashedRegistry);
-		expect(dashed?.provider).toBe("anthropic");
-		expect(dashed?.id).toBe("claude-opus-4-8");
-	});
-});
-
 describe("resolveModelFromString", () => {
 	test("falls back to pattern parsing for provider/model:thinking when strict provider+id miss", () => {
 		const resolved = resolveModelFromString("openrouter/qwen/qwen3-coder:exacto:high", allModels);
@@ -936,70 +735,6 @@ describe("resolveCliModel", () => {
 		expect(result.error).toBeUndefined();
 		expect(result.model?.provider).toBe("openai");
 		expect(result.model?.id).toBe("gpt-4o");
-	});
-
-	test("resolves configured custom, legacy, and default role aliases from --model", () => {
-		const registry = {
-			getAll: () => allModels,
-		};
-		const settings = Settings.isolated({
-			modelRoles: {
-				default: "openai/gpt-4o",
-				fable: "anthropic/claude-sonnet-4-5:high",
-			},
-		});
-
-		const canonical = resolveCliModel({
-			cliModel: "@fable",
-			modelRegistry: registry,
-			settings,
-		});
-		const legacy = resolveCliModel({
-			cliModel: `${LEGACY_MODEL_ROLE_ALIAS_PREFIX}fable`,
-			modelRegistry: registry,
-			settings,
-		});
-		const defaultRole = resolveCliModel({
-			cliModel: DEFAULT_MODEL_ROLE_ALIAS,
-			modelRegistry: registry,
-			settings,
-		});
-
-		expect(canonical.error).toBeUndefined();
-		expect(canonical.model?.provider).toBe("anthropic");
-		expect(canonical.model?.id).toBe("claude-sonnet-4-5");
-		expect(canonical.thinkingLevel).toBe(Effort.High);
-		expect(legacy).toEqual(canonical);
-		expect(defaultRole.model?.provider).toBe("openai");
-		expect(defaultRole.model?.id).toBe("gpt-4o");
-	});
-
-	test("splits thinking suffixes and abbreviations off the * default alias", () => {
-		const registry = {
-			getAll: () => allModels,
-		};
-		const settings = Settings.isolated({
-			modelRoles: { default: "anthropic/claude-sonnet-4-5" },
-		});
-
-		const explicit = resolveCliModel({
-			cliModel: `${DEFAULT_MODEL_ROLE_ALIAS}:high`,
-			modelRegistry: registry,
-			settings,
-		});
-		const abbreviated = resolveCliModel({
-			cliModel: `${DEFAULT_MODEL_ROLE_ALIAS}:xhi`,
-			modelRegistry: registry,
-			settings,
-		});
-
-		expect(explicit.error).toBeUndefined();
-		expect(explicit.model?.id).toBe("claude-sonnet-4-5");
-		expect(explicit.thinkingLevel).toBe(Effort.High);
-		// `xhi` → xhigh via unique-prefix parsing, then clamped to the model ladder.
-		expect(abbreviated.error).toBeUndefined();
-		expect(abbreviated.model?.id).toBe("claude-sonnet-4-5");
-		expect(abbreviated.thinkingLevel).toBe(Effort.High);
 	});
 
 	test("resolves fuzzy patterns within an explicit provider", () => {
@@ -1213,25 +948,6 @@ describe("resolveModelScope", () => {
 		expect(scoped[0].model.id).toBe("gpt-5.5");
 	});
 
-	test("resolves role aliases in --models scope to the role's model with its thinking level", async () => {
-		const settings = Settings.isolated({
-			modelRoles: { fable: "anthropic/claude-sonnet-4-5:high" },
-		});
-
-		const scoped = await resolveModelScope(
-			["@fable", "openai/gpt-4o"],
-			{ getAvailable: () => allModels },
-			undefined,
-			settings,
-		);
-
-		expect(scoped).toHaveLength(2);
-		expect(scoped[0].model.id).toBe("claude-sonnet-4-5");
-		expect(scoped[0].thinkingLevel).toBe(Effort.High);
-		expect(scoped[0].explicitThinkingLevel).toBe(true);
-		expect(scoped[1].model.id).toBe("gpt-4o");
-	});
-
 	test("applies max thinking selectors to glob scopes when no literal max ids match", async () => {
 		const registry = {
 			getAvailable: () => mockCodexOverlapModels,
@@ -1395,55 +1111,30 @@ describe("resolveModelFromString", () => {
 	});
 });
 
-describe("expandRoleAlias", () => {
-	test("expands @vision to configured vision role", () => {
-		const settings = Settings.isolated();
-		settings.setModelRole("vision", "openai/gpt-4o");
-
-		expect(expandRoleAlias("@vision", settings)).toBe("openai/gpt-4o");
-	});
-
-	test("keeps @vision alias when vision role is unset", () => {
-		const settings = Settings.isolated();
-		settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
-
-		expect(expandRoleAlias("@vision", settings)).toBe("@vision");
-	});
-});
-
 describe("extractExplicitThinkingSelector", () => {
 	test("does not carry max from literal role model ids", () => {
-		const result = extractExplicitThinkingSelector("nanogpt/coding-router:max", undefined, {
+		const result = extractExplicitThinkingSelector("nanogpt/coding-router:max", {
 			isLiteralModelId: (provider, id) => provider === "nanogpt" && id === "coding-router:max",
 		});
 		expect(result).toBeUndefined();
 	});
 
 	test("treats max as an explicit selector when the model id is not literal", () => {
-		const result = extractExplicitThinkingSelector("nanogpt/coding-router:max", undefined, {
+		const result = extractExplicitThinkingSelector("nanogpt/coding-router:max", {
 			isLiteralModelId: () => false,
 		});
 		expect(result).toBe(Effort.Max);
 	});
 
-	test("treats max on pi role aliases as an explicit selector before expansion", () => {
-		const settings = Settings.isolated();
-		settings.setModelRole("smol", "nanogpt/coding-router:max");
-		const result = extractExplicitThinkingSelector("@smol:max", settings, {
-			isLiteralModelId: (provider, id) => provider === "nanogpt" && id === "coding-router:max",
-		});
-		expect(result).toBe(Effort.Max);
-	});
-
 	test("does not carry auto from literal role model ids", () => {
-		const result = extractExplicitThinkingSelector("nanogpt/coding-router:auto", undefined, {
+		const result = extractExplicitThinkingSelector("nanogpt/coding-router:auto", {
 			isLiteralModelId: (provider, id) => provider === "nanogpt" && id === "coding-router:auto",
 		});
 		expect(result).toBeUndefined();
 	});
 
 	test("treats auto as an explicit selector when the model id is not literal", () => {
-		const result = extractExplicitThinkingSelector("openai/gpt-5:auto", undefined, {
+		const result = extractExplicitThinkingSelector("openai/gpt-5:auto", {
 			isLiteralModelId: () => false,
 		});
 		expect(result).toBe("auto");
@@ -1601,15 +1292,6 @@ describe("filterAvailableModelsByEnabledPatterns", () => {
 	const models = mockModels as Model[];
 	test("returns all models when patterns is empty", () => {
 		expect(filterAvailableModelsByEnabledPatterns(models, [])).toEqual(models);
-	});
-
-	test("resolves role aliases to the role's model when settings are provided", () => {
-		const settings = Settings.isolated({
-			modelRoles: { fable: "anthropic/claude-sonnet-4-5:high" },
-		});
-		const result = filterAvailableModelsByEnabledPatterns(models, ["@fable"], settings);
-		expect(result).toHaveLength(1);
-		expect(result[0].id).toBe("claude-sonnet-4-5");
 	});
 
 	test("filters by exact provider/modelId", () => {
@@ -1798,42 +1480,6 @@ describe("effort-tier variant aliases", () => {
 	test("consumed X-thinking twins resolve via the grammar fallback", () => {
 		expect(parseModelPattern("venice/kimi-k2-thinking", variantModels).model?.id).toBe("kimi-k2");
 		expect(parseModelPattern("kimi-k2-thinking", variantModels).model?.id).toBe("kimi-k2");
-	});
-});
-
-describe("resolveRoleSelectionWithInherit", () => {
-	test("configured role wins over the live model", () => {
-		const settings = Settings.isolated();
-		settings.setModelRole("tiny", "openai/gpt-4o");
-
-		const live = mockModels[0]!; // anthropic/claude-sonnet-4-5
-		const result = resolveRoleSelectionWithInherit(["tiny", "smol"], settings, mockModels, live);
-		expect(result?.model.provider).toBe("openai");
-		expect(result?.model.id).toBe("gpt-4o");
-	});
-
-	test("unset roles inherit the live main model", () => {
-		const settings = Settings.isolated();
-
-		const live = mockModels[1]!; // openai/gpt-4o
-		const result = resolveRoleSelectionWithInherit(["tiny", "smol"], settings, mockModels, live);
-		expect(result?.model.provider).toBe("openai");
-		expect(result?.model.id).toBe("gpt-4o");
-		expect(result?.thinkingLevel).toBeUndefined();
-	});
-
-	test("headless (no live model) inherits the persisted default role", () => {
-		const settings = Settings.isolated();
-		settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
-
-		const result = resolveRoleSelectionWithInherit(["tiny", "smol"], settings, mockModels);
-		expect(result?.model.provider).toBe("anthropic");
-		expect(result?.model.id).toBe("claude-sonnet-4-5");
-	});
-
-	test("returns undefined only when nothing is configured and no live model exists", () => {
-		const settings = Settings.isolated();
-		expect(resolveRoleSelectionWithInherit(["tiny", "smol"], settings, mockModels)).toBeUndefined();
 	});
 });
 

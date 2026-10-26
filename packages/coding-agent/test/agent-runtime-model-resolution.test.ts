@@ -93,7 +93,7 @@ describe("agent runtime model resolution", () => {
 				default: ["global/inherited-model"],
 			},
 		});
-		settings.setModelRole("default", "primary/bad-runtime-model");
+		settings.setDefaultModel("primary/bad-runtime-model");
 		const result = await runSubprocess({
 			cwd: "/tmp",
 			agent,
@@ -111,24 +111,11 @@ describe("agent runtime model resolution", () => {
 			artifactsDir: isolatedArtifactsDir(),
 		});
 
-		let firstFallbackRole: string | undefined;
-		let agentFallbackChain: string[] | undefined;
-		let inheritedFallbackChain: string[] | undefined;
-		for (const role in childFallbackChains) {
-			const chain = childFallbackChains[role];
-			if (!firstFallbackRole) {
-				firstFallbackRole = role;
-			}
-			if (role === "agent:issue-2750") {
-				agentFallbackChain = chain;
-			}
-			if (role === "default") {
-				inheritedFallbackChain = chain;
-			}
-		}
-		expect(firstFallbackRole).toBe("agent:issue-2750");
-		expect(agentFallbackChain).toEqual(["fallback/working-model"]);
-		expect(inheritedFallbackChain).toEqual(["global/inherited-model"]);
+		// The chain is keyed by the primary's own selector and listed first, ahead of the inherited chains.
+		const chainKeys = Object.keys(childFallbackChains ?? {});
+		expect(chainKeys[0]).toBe("primary/bad-runtime-model");
+		expect(childFallbackChains?.["primary/bad-runtime-model"]).toEqual(["fallback/working-model"]);
+		expect(childFallbackChains?.default).toEqual(["global/inherited-model"]);
 		expect(result.modelOverride).toEqual(["primary/bad-runtime-model", "fallback/working-model"]);
 		expect(result.resolvedModel).toBe("fallback/working-model");
 	});
@@ -165,7 +152,7 @@ describe("agent runtime model resolution", () => {
 			artifactsDir: isolatedArtifactsDir(),
 		});
 
-		expect(childFallbackChains?.["agent:issue-2750-routed"]).toEqual(["openrouter/z-ai/glm-4.7@fireworks"]);
+		expect(childFallbackChains?.["openrouter/z-ai/glm-4.7@cerebras"]).toEqual(["openrouter/z-ai/glm-4.7@fireworks"]);
 	});
 
 	it("defers unresolved explicit agent model selectors instead of picking an available default", async () => {
@@ -173,13 +160,11 @@ describe("agent runtime model resolution", () => {
 		let childModel: Model | undefined;
 		let childModelPattern: unknown;
 		let childModelPatternAuthFallback: unknown;
-		let childModelPatternFallbackRole: unknown;
 		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
 			if (!options) throw new Error("Expected createAgentSession options");
 			childModel = options.model;
 			childModelPattern = options.modelPattern;
 			childModelPatternAuthFallback = options.modelPatternAuthFallback;
-			childModelPatternFallbackRole = options.modelPatternFallbackRole;
 			return {
 				session: createYieldingSession(),
 				extensionsResult: {},
@@ -210,6 +195,5 @@ describe("agent runtime model resolution", () => {
 		expect(childModel).toBeUndefined();
 		expect(childModelPattern).toEqual(["openai-codex/gpt-5.5:auto"]);
 		expect(childModelPatternAuthFallback).toBe("openai-codex/gpt-5.5");
-		expect(childModelPatternFallbackRole).toBe("agent:issue-4421");
 	});
 });

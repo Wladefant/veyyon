@@ -12,10 +12,6 @@ import {
 	removeInstalledPlugin,
 	writeInstalledPluginsRegistry,
 } from "@veyyon/kernel/loader/plugins/installed-registry";
-// The marketplace registry barrel re-exports the installed-plugins surface from
-// the owner. Importing through it proves the re-export stays wired for the many
-// marketplace consumers that import from `./registry`.
-import * as marketplaceRegistry from "@veyyon/kernel/loader/plugins/marketplace/registry";
 
 /**
  * `installed-registry.ts` is the single owner of the installed-plugins registry:
@@ -60,19 +56,6 @@ describe("installed-registry owner surface", () => {
 
 		const referenced = collectReferencedPaths(userReg, projReg);
 		expect(referenced).toEqual(new Set(["/cache/shared", "/cache/only-user"]));
-	});
-});
-
-describe("marketplace registry re-export identity", () => {
-	it("re-exports the exact same installed-registry function references as the owner", () => {
-		expect(marketplaceRegistry.getInstalledPluginsRegistryPath).toBe(getInstalledPluginsRegistryPath);
-		expect(marketplaceRegistry.getPluginsCacheDir).toBe(getPluginsCacheDir);
-		expect(marketplaceRegistry.readInstalledPluginsRegistry).toBe(readInstalledPluginsRegistry);
-		expect(marketplaceRegistry.writeInstalledPluginsRegistry).toBe(writeInstalledPluginsRegistry);
-		expect(marketplaceRegistry.addInstalledPlugin).toBe(addInstalledPlugin);
-		expect(marketplaceRegistry.removeInstalledPlugin).toBe(removeInstalledPlugin);
-		expect(marketplaceRegistry.getInstalledPlugin).toBe(getInstalledPlugin);
-		expect(marketplaceRegistry.collectReferencedPaths).toBe(collectReferencedPaths);
 	});
 });
 

@@ -26,6 +26,8 @@ export function fingerprintOAuthBearer(bearer: string): string {
 export type AuthApiKeyOptions = {
 	baseUrl?: string;
 	modelId?: string;
+	/** Request-local identity sink. Never receives bearer bytes or email addresses. */
+	onCredentialSelected?: (credentialId: string) => void;
 	/**
 	 * Caller's cancel signal. Threaded into any broker-bound OAuth refresh so
 	 * `ESC` / request abort actually kills a hung broker fetch instead of

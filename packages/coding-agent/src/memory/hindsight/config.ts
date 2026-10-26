@@ -147,7 +147,7 @@ export function loadHindsightConfig(settings: Settings, env: NodeJS.ProcessEnv =
 
 		recallBudget: recallBudgetEnv ?? settingsRecallBudget ?? "mid",
 		recallMaxTokens: recallMaxTokensEnv ?? settings.get("hindsight.recallMaxTokens"),
-		recallTypes: settings.get("hindsight.recallTypes") as string[],
+		recallTypes: settings.get("hindsight.recallTypes"),
 		recallContextTurns: recallContextTurnsEnv ?? settings.get("hindsight.recallContextTurns"),
 		recallMaxQueryChars: recallMaxQueryCharsEnv ?? settings.get("hindsight.recallMaxQueryChars"),
 		recallPromptPreamble: DEFAULT_PREAMBLE,

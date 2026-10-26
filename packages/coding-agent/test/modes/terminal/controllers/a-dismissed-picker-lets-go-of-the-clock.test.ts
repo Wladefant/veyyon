@@ -25,7 +25,7 @@
 // (nothing here proves a future route reaches it), a card that registers motion with something other
 // than the shared clock, and how the fade LOOKS while it travels — that is the band suite's job.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -69,7 +69,7 @@ interface Card {
 
 interface OpenedPicker {
 	card: Card;
-	hide: ReturnType<typeof vi.fn>;
+	hide: Mock<() => void>;
 }
 
 let treeCounter = 0;
@@ -118,7 +118,7 @@ function assistantMessage(text: string): AgentMessage {
 function makeController(): {
 	controller: SelectorController;
 	mounted: Promise<Card>;
-	hide: ReturnType<typeof vi.fn>;
+	hide: Mock<() => void>;
 } {
 	const hide = vi.fn();
 	const opened = Promise.withResolvers<Card>();

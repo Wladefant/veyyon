@@ -10,7 +10,7 @@ import { Type } from "@veyyon/ai/utils/schema/arktype";
 import { factoryExportMissingMessage, moduleImportFailedMessage } from "@veyyon/kernel/loader/load-failure";
 import { type ManifestHolder, manifestFromPackageJson } from "@veyyon/kernel/loader/manifest-key";
 import * as TypeBox from "@veyyon/kernel/registry/typebox";
-import { errorMessage, getAgentDir, hasFsCode, isEacces, isEnoent, logger, reportFault } from "@veyyon/utils";
+import { DAY_MS, errorMessage, getAgentDir, hasFsCode, isEacces, isEnoent, logger, reportFault } from "@veyyon/utils";
 import type { KeyId } from "@veyyon/utils/keys";
 import {
 	canonicalProjectRoot,
@@ -668,6 +668,21 @@ export async function discoverExtensionPaths(
 	disabledExtensionIds?: string[],
 	agentDir?: string,
 ): Promise<string[]> {
+	// Promises and unref'ed discovery work do not keep Bun's event loop alive.
+	const keepalive = setInterval(() => {}, DAY_MS);
+	try {
+		return await discoverExtensionPathsInner(configuredPaths, cwd, disabledExtensionIds, agentDir);
+	} finally {
+		clearInterval(keepalive);
+	}
+}
+
+async function discoverExtensionPathsInner(
+	configuredPaths: string[],
+	cwd: string,
+	disabledExtensionIds?: string[],
+	agentDir?: string,
+): Promise<string[]> {
 	const allPaths: string[] = [];
 	const seen = new Set<string>();
 	const disabled = new Set(disabledExtensionIds ?? []);
@@ -759,9 +774,9 @@ export async function discoverExtensionPaths(
 	// 3. Discover extension and hook entry points from installed plugins. A
 	// manifest `hooks` entry is a hook factory exactly like a discovered
 	// `hooks/*.ts` file above, and binds through the same runner.
-	const pluginsRoot = agentDir ? pluginsRootFor(agentDir) : undefined;
-	addPaths(await getAllPluginExtensionPaths(cwd, pluginsRoot));
-	addPaths(await getAllPluginHookPaths(cwd, pluginsRoot));
+	const pluginOptions = { pluginsRoot: agentDir ? pluginsRootFor(agentDir) : undefined, agentDir };
+	addPaths(await getAllPluginExtensionPaths(cwd, pluginOptions));
+	addPaths(await getAllPluginHookPaths(cwd, pluginOptions));
 	// 4. Explicitly configured paths
 	for (const configuredPath of configuredPaths) {
 		const resolved = resolvePath(configuredPath, cwd);

@@ -1,4 +1,4 @@
-import type { Api, ApiKeyResolver, AuthStorage, Model } from "@veyyon/ai";
+import type { Api, ApiKey, ApiKeyResolver, AuthStorage, Model } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
 
 /** Model slice accepted by the model-form `resolver(model, sessionId)` overload. */
@@ -22,7 +22,13 @@ export interface ApiKeyResolverRegistry {
 	getApiKeyForProvider(
 		provider: string,
 		sessionId?: string,
-		options?: { baseUrl?: string; modelId?: string; forceRefresh?: boolean; signal?: AbortSignal },
+		options?: {
+			baseUrl?: string;
+			modelId?: string;
+			forceRefresh?: boolean;
+			signal?: AbortSignal;
+			onCredentialSelected?: (credentialId: string) => void;
+		},
 	): Promise<string | undefined>;
 	authStorage: Pick<AuthStorage, "rotateSessionCredential">;
 	/**
@@ -50,9 +56,9 @@ export function createApiKeyResolver(
 	options: ApiKeyResolverOptions = {},
 ): ApiKeyResolver {
 	const { sessionId, baseUrl, modelId } = options;
-	return async ({ lastChance, error, signal, previousKey }) => {
+	return async ({ lastChance, error, signal, previousKey, onCredentialSelected }) => {
 		if (error === undefined) {
-			return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId });
+			return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId, signal, onCredentialSelected });
 		}
 		if (lastChance) {
 			// Account constraint (401 / usage / account-rate-limit): rotate to a
@@ -72,8 +78,32 @@ export function createApiKeyResolver(
 				// auth decline can instead mean a peer refreshed the bearer.
 				if (AIError.isUsageLimit(error)) return undefined;
 			}
-			return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId });
+			return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId, signal, onCredentialSelected });
 		}
-		return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId, forceRefresh: true, signal });
+		return registry.getApiKeyForProvider(provider, sessionId, {
+			baseUrl,
+			modelId,
+			forceRefresh: true,
+			signal,
+			onCredentialSelected,
+		});
+	};
+}
+
+/**
+ * Run `refresh` once now and again after every resolution of `apiKey`.
+ *
+ * A request whose context depends on the credential (the provider text it may obfuscate) rebuilds that context
+ * immediately before each physical attempt. A static key makes one attempt, so the immediate call is the only
+ * one. A resolver is wrapped: `refresh` runs after each awaited resolution, including the re-resolution an
+ * authentication retry performs, and the resolved key passes through unchanged.
+ */
+export function refreshAfterEachApiKeyResolution(apiKey: ApiKey, refresh: () => void): ApiKey {
+	refresh();
+	if (typeof apiKey === "string") return apiKey;
+	return async context => {
+		const resolved = await apiKey(context);
+		refresh();
+		return resolved;
 	};
 }

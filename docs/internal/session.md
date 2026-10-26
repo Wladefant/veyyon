@@ -16,6 +16,48 @@ Covers:
 
 Does not cover `/tree` UI rendering behavior beyond semantics that affect session data.
 
+## Optional cloud checkpoints
+
+Cloud checkpoints are opt-in. Local sessions continue to work without cloud
+configuration. The local Veyyon process remains responsible for execution.
+
+Configure `VEYYON_CHECKPOINT_URL`, `VEYYON_CHECKPOINT_TOKEN`, and
+`VEYYON_CHECKPOINT_KEY` on the local machine. The key is a 32-byte base64
+encryption key. Never put its value in a session, log, or checkpoint. Enable
+`checkpoints.enabled` to use the checkpoint inspection and export commands.
+
+The checkpoint client encrypts native session bundles with AES-GCM before
+upload. It verifies ciphertext hashes before decryption. The manifest contains
+ciphertext hashes and sizes, not plaintext payload hashes.
+
+`veyyon session checkpoint-export --file <stopped-session.jsonl> --workspace <approved-file>`
+uploads a stopped journal and approved workspace files. The service lease fences
+checkpoint publication. Set `VEYYON_CHECKPOINT_SESSION` to the native session ID
+to admit a synchronized local runtime. Veyyon checks its server epoch before
+each prompt and tool call, and renews the lease every 15 seconds. Lease loss
+blocks further admission; continuing offline requires an explicit new fork.
+Each export or restore invocation uses a unique lease owner, even on one host.
+
+`veyyon session checkpoint-restore <id> --output <new-directory>` writes the
+verified journal under `sessions/session.jsonl`, artifacts beside it, referenced
+blobs under `blobs`, and approved files under `workspace`. It refuses an existing
+destination. Resume explicitly with `veyyon --resume <journal-path>`.
+
+`veyyon session checkpoint-fork <id>` materializes a new independent journal ID.
+Do not append an offline divergent journal to its original cloud ID.
+Recovery restores history and files, not running jobs or uncommitted output.
+Keep the URL, bearer token and recovery key outside journals.
+
+## Expensive subagent handoff
+
+An expensive spawned agent can hand its assignment to a fresh transcript between provider requests after a completed turn/tool-result pair when its estimated context reaches `compaction.laneHandoffThresholdTokens` (default 150,000). Set the threshold to `0` to disable this automatic handoff. The threshold measures current context size, not cumulative usage. Luna and root sessions do not use this path.
+
+The session uses the normal handoff mechanism. It writes a bounded summary of the goal, current state, open steps, worktree and branch, observed head and test counts, and important paths. Missing repository metadata or test counts remain explicitly unknown. The successor starts from that summary only, then continues the same assignment. Failed summary generation leaves the current transcript active; queued external steering survives a successful switch.
+
+Automatic handoff runs only after a safely completed turn, before the next request. It uses the existing side-request transport and telemetry. It does not retry a failed handoff blindly.
+
+The summary model must fit the current context, an 8,000-token reserve for added instructions, and its full output limit, including reasoning. Automatic handoff skips models without a known output limit. The request explicitly uses that same model output limit. The successor keeps the persisted child initialization contract for later revival. It keeps existing jobs and descendants, refreshes provider routing, and rebases the current context estimate without stopping the active tool loop.
+
 ## Implementation Files
 
 - [`kernel/src/session/session-manager.ts`](../../kernel/src/session/session-manager.ts): orchestration: tree/leaf, appends, persistence, blobs, lifecycle factories
@@ -480,6 +522,19 @@ A navigable parent to child index entry: one per agent a session spawned. It let
 - `agentId` matches the child transcript filename stem and the `history://<agentId>` reference.
 - `sessionFile` is the child's durable transcript path (`<parentArtifactsDir>/<agentId>.jsonl`). That file, its externalized blobs, and this index entry are retained together; GC never archives the child independently and moves it with the parent (proven in `gc-cli.test.ts`).
 - `status` is `"completed" | "failed" | "cancelled"`; `usage`/`error` are optional.
+
+### Usage attribution
+
+Usage entries may include optional `credentialId`, `transport`, and `model` fields. `credentialId`
+is the numeric storage-row ID rendered as a string for the account that served that request;
+transport and model describe the actual serving path, including Codex transport fallback. Older
+JSONL entries without these fields remain valid and readable. Attribution is request-local and
+contains no bearer, account email, or global credential mapping.
+
+`credentialId` is absent for environment, runtime, or configured keys without a stored account.
+`transport` is `websocket` or `http` for Codex, including fallback to HTTP.
+The stream records observed HTTP fetches as `http`, and gateway routing as `pi-native`.
+Providers that do not expose their transport record `unknown`, rather than a guessed transport.
 
 ### `settings_snapshot`
 

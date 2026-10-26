@@ -7,8 +7,6 @@
  * router constructs that handler, `tools/fs/read.ts` consults the router (a `read` of `skill://…` is a real
  * feature), and 54 test files import `read`, so a local file read pulled in the skill loader.
  *
- * `skills.ts` re-exports all three names, so no existing caller changed.
- *
  * AN EMPTY SNAPSHOT IS NOT A FAILURE and is not silent about anything: it is the state of a process with
  * no skills configured, and the `skill://` handler already answers "no skill named X" with the list of
  * active skills, which is empty. The slot is filled once per top-level session by the code that loaded

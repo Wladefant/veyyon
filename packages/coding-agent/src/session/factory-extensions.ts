@@ -12,6 +12,7 @@ import type { ModelRegistry } from "../config/model-registry";
 import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate } from "../config/prompt-templates";
 import type { Settings, SkillsSettings } from "../config/settings";
 import { type CapabilityResult, loadCapability } from "../discovery/capability";
+import { reportDiscoveryFailures } from "../discovery/capability/fs";
 import { type Rule, ruleCapability } from "../discovery/capability/rule";
 import {
 	type CustomCommandsLoadResult,
@@ -64,8 +65,8 @@ export async function discoverSessionExtensionPaths(
 	if (options.disableExtensionDiscovery) {
 		return options.additionalExtensionPaths ?? [];
 	}
-	const configuredPaths = [...(options.additionalExtensionPaths ?? []), ...(settings.get("extensions") ?? [])];
-	const disabledExtensionIds = settings.get("disabledExtensions") ?? [];
+	const configuredPaths = [...(options.additionalExtensionPaths ?? []), ...settings.get("extensions")];
+	const disabledExtensionIds = settings.get("disabledExtensions");
 	return discoverExtensionPaths(configuredPaths, cwd, disabledExtensionIds, agentDir);
 }
 
@@ -97,7 +98,7 @@ export async function loadSessionExtensions(
 		adoptSpawnedPid,
 		{
 			agentDir,
-			configuredPaths: [...(options.additionalExtensionPaths ?? []), ...(settings.get("extensions") ?? [])],
+			configuredPaths: [...(options.additionalExtensionPaths ?? []), ...settings.get("extensions")],
 		},
 		gateSpawn,
 	);
@@ -211,7 +212,9 @@ export async function discoverSkills(
  * and cannot be forgotten at a call site again.
  */
 export async function discoverRules(cwd?: string, agentDir?: string): Promise<CapabilityResult<Rule>> {
-	return await loadCapability<Rule>(ruleCapability.id, discoveryRoots(cwd, agentDir));
+	const result = await loadCapability<Rule>(ruleCapability.id, discoveryRoots(cwd, agentDir));
+	reportDiscoveryFailures(result.warnings);
+	return result;
 }
 
 /**
@@ -273,7 +276,7 @@ export function discoverProjectInputs(
 			? Promise.resolve({ skills: supplied.skills, warnings: [] })
 			: logger.time("discoverSkills", discoverSkills, cwd, agentDir, {
 					...settings.getGroup("skills"),
-					disabledExtensions: settings.get("disabledExtensions") ?? [],
+					disabledExtensions: settings.get("disabledExtensions"),
 				});
 	return {
 		cwd,
@@ -302,7 +305,7 @@ function discoverWorkspaceTree(
 	supplied: WorkspaceTree | undefined,
 ): Promise<WorkspaceTree> {
 	if (supplied !== undefined) return Promise.resolve(supplied);
-	if (!(settings.get("includeWorkspaceTree") ?? false)) {
+	if (!settings.get("includeWorkspaceTree")) {
 		return Promise.resolve({ rootPath: cwd, rendered: "", truncated: false, totalLines: 0, agentsMdFiles: [] });
 	}
 	return logger.time("buildWorkspaceTree", buildWorkspaceTree, cwd, { timeoutMs: WORKSPACE_TREE_DEADLINE_MS });

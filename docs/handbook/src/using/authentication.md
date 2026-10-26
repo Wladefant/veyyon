@@ -34,6 +34,12 @@ From that card you press `enter` to use the selected account, `n` to name it, `r
 health, `u` to open its usage, `x` twice to log it out, and `a` to add another account for the same
 provider. `/account manager` opens the same card.
 
+When `accounts.loadBalancing` is on, pressing `enter` on an account row or running
+`/account use <provider> <account>` selects that account for your current session only. Global provider
+selection stays empty so other sessions and profiles continue to balance across your accounts. When
+load balancing is off, selecting an account saves it machine-wide as the default choice across all
+profiles and sessions on this machine.
+
 The last row of the list is `+ add another … account`. It is a position in the list like any other:
 arrow down past your last account to land on it, and press `enter` there to start a login. The
 mouse works on the card as well. Click an account to select it, click that last row to start the
@@ -84,18 +90,26 @@ Anthropic          personal                    main model  (opus-5)
 Your choice is kept, not discarded. Once the limit resets, traffic returns to the account you picked
 with no further action.
 
+Antigravity meters Gemini separately from Claude and GPT. `/usage` reports capacity for each family,
+not one provider-wide total. A Gemini quota error names the account and its reset time.
+With load balancing on, Veyyon checks the sibling accounts for that model family and retries an
+available account before returning the error. Claude quota exhaustion does not block Gemini.
+
 ## When a login is signed out for you
 
-A stored login can stop working without you doing anything: the provider revokes the grant, or a
-token refresh fails and the credential is set aside. Veyyon does not hide that. The account manager
-marks the provider and prints the provider's own reason, so you can tell a revoked grant from a
-temporary outage:
+A stored login can stop working without you doing anything: the provider revokes the grant, or
+refuses a token refresh, and the credential is set aside. A refusal is a 401, an OAuth error code such
+as `invalid_grant`, or a 403 whose JSON body states one. A refresh that times out, fails on the
+network, meets a provider outage, is answered with a bare 403, or receives a token response that is
+not a JSON object does not set the login aside: the account stays in place and the
+next request refreshes again. The account manager marks a signed-out provider and prints the
+provider's own reason:
 
 ```text
 Kimi Code · 1 account
   a previous login was signed out: oauth refresh failed:
   invalid_grant: The provided authorization grant is invalid
-  press a to sign in again
+  press a to sign in again, or f to forget it
 ```
 
 If that provider had only one login, it now has none, and the card states that rather than showing the
@@ -103,10 +117,19 @@ provider as one you never signed into. `/account` shows it too, so you do not ha
 to find out:
 
 ```text
-1 provider has a signed-out login (Kimi Code) · /providers to sign in again
+1 provider has a signed-out login (Kimi Code) · /providers to sign in again or forget it
 ```
 
-A logout you performed yourself is not reported this way. You already know about it.
+A logout you performed yourself is not reported this way.
+
+Press `f` on the card to forget a signed-out login you do not intend to sign back in. The note and the
+`/account` line stop reporting it; the credential stays disabled in the auth database and a later
+refresh does not bring it back.
+
+A Google login (Google Antigravity, Gemini CLI) records the Google account id. A login under a new
+address of the same Google account replaces the login under the old address and clears its
+signed-out note. A login stored before the account id was recorded carries none and is not linked;
+forget its note with `f`.
 
 ## Headless and remote hosts
 

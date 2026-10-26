@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext } from "@veyyon/agent-core";
-import type { Settings } from "@veyyon/coding-agent/config/settings";
+import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { BashExecutorOptions } from "@veyyon/coding-agent/exec/bash-executor";
 import type { SSHExecutorOptions } from "@veyyon/coding-agent/ssh/ssh-executor";
 import { type InlinePricingSource, inlineBudgetFor } from "@veyyon/coding-agent/tools/core/output-artifact";
@@ -233,7 +233,7 @@ describe("the pricing owner", () => {
 describe("the priced budget, as a number", () => {
 	/** A settings stand-in that answers only the two keys the pricing owner reads. */
 	function settingsWith(values: Record<string, unknown>): Settings {
-		return { get: (key: string) => values[key] } as unknown as Settings;
+		return Settings.isolated(values);
 	}
 
 	/**

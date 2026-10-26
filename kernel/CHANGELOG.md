@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Sync upstream changes from santhreal/veyyon.
+
+## [1.5.6] - 2026-10-10
+### Removed
+
+- Removed the plugin-id helpers and installed-registry re-exports from `@veyyon/kernel/loader/plugins/marketplace/types` and `marketplace/registry`; import them from `@veyyon/kernel/loader/plugins/plugin-id` and `installed-registry`.
+
+### Changed
+
+- An enum setting whose configured value is not one of its members reads as the declaration's `invalid` member when one is declared, and as its default otherwise; `getInvalidValue` returns that member.
+- A setting whose configured value is not of its declared kind (a string for a boolean, `null` for an array, a non-finite number) reads as its default and is reported once; `hasDeclaredKind` states the rule.
+- `declareSettings` rejects a table in which one setting path is the parent of another, since one config key holds a value or a group of settings, not both.
+- `invalidValues` lists mismatched values from `--config` overlay files as well as the profile file, and each entry's `replaced` marks a value a read serves the default or fallback in place of.
+- Opening a session reads each distinct blob once instead of once per reference, and a missing blob logs one warning per open instead of one per reference.
+
+## [1.5.6] - 2026-10-13
+
 ### Breaking Changes
 
 - `SessionEntryIndex.entriesById()` is removed; `walkBranchPath`, `resolveContextLeaf` and `buildSessionContext` take any `SessionEntryLookup`, which `SessionEntryIndex` and a `Map<string, SessionEntry>` both satisfy.
@@ -18,10 +37,12 @@
 
 - The settings store calls `isRecord` from `@veyyon/utils` for the reload namespace check and the routing-key expansion instead of hand-writing the same three-term predicate ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 - `SessionManager.open` parses the session file once instead of twice, cutting resume time and peak RSS.
+- Eval display migration uses the registered result codec. Read-only history and resume loads do not write artifacts; writable flush stores complete recovery values before publishing the migrated session version ([#451](https://github.com/Wladefant/veyyon/pull/451)).
 - Bump `CURRENT_SESSION_VERSION` from 3 to 4, migrating legacy v3 session transcripts with oversized eval `jsonOutputs` to versioned bounded previews while persisting full payloads to durable artifacts without data loss ([#451](https://github.com/Wladefant/veyyon/pull/451)).
 - Restore blob-backed display values before migration, publish the new session version only after all saves succeed, and reserve artifact IDs across independent writers and synchronous allocations. The registered eval-result codec owns display migration; read-only loads retain full values without writing, and writable flush saves recovery artifacts ([#451](https://github.com/Wladefant/veyyon/pull/451)).
 
 ### Fixed
+- Config reload snapshots changed routing objects before activation so live listeners receive their model changes ([Refs](https://github.com/Wladefant/veyyon/issues/519)).
 - Flush persists stale OpenAI Responses replay cleanup while deferring legacy structural migrations until writable activity ([PR 451](https://github.com/Wladefant/veyyon/pull/451)).
 - Fence fresh terminal breadcrumbs to an explicit session directory and require positive directory inode evidence before re-rooting moved projects (oh-my-pi 13fc0b6c33c536481221a1b23d16ef993f01d7b0, oh-my-pi cd46dd0ca51641560e53d3cd14e164cd4f241e9d, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Session discovery recovers hashed-layout transcripts without changing active directory names or deleting conflicting stale copies ([#107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -47,6 +68,7 @@
 - `SessionLoadOptions.coolCompactedHistory` makes a streamed load move compacted history to disk as it reads and return the store and the session's usage totals as `cold`, and `SessionEntryIndex.rebuild` takes those totals instead of counting every entry.
 - `readColdEntry` returns an entry whose payloads are held in the session file as its line reads back, and leaves the entry's payloads in the file.
 - A `ToolResultCodec` can define `settle`, which a persisting `SessionManager` calls on a tool result it records, before writing it, to replace in place each `details` field `slim` drops with the form `restore` builds.
+- `SessionManagerStateSnapshot`, the type `SessionManager.captureState()` returns and `restoreState()` takes, is exported from `@veyyon/kernel/session/session-manager`.
 
 ### Changed
 
@@ -91,6 +113,7 @@
 - A session load's string-pooling walk writes a string back only when an earlier equal string replaces it and skips a cold entry's moved fields by one cursor over its key order, which cut the walk over a 108,163-entry synthetic session with two thirds of it cooled from 89 ms to 80 ms (median of 7 rounds, 2 runs each) and its median open from 500 ms to 494 ms (6 interleaved runs).
 - The pass that moves unreachable entries out of memory after a resume, a publish or a compaction matches entries to a never-branched session's active branch by file position instead of building a set of the live entries, which cut that pass over a 312 MB, 108,163-entry synthetic session from 2.86 ms to 2.51 ms (median of 5 interleaved runs of 31 passes each).
 - `AgentStorage` builds its credential store on the first credential or cache call instead of when it opens, and leaves a current schema version row unwritten, which cut the memory of a launch's held `agent.db` connection from 384 KiB to 209 KiB and its open plus model-usage read from 827 µs to 606 µs (median of 7 alternating runs of 60 opens).
+- `prepareEntryForPersistence` copies an array or object only from its first changed child on, cutting the persistence pass over a 400-entry session with nothing to externalize from 0.33 ms to 0.10 ms (median of 200 alternating rounds, three runs).
 
 ### Fixed
 
@@ -106,6 +129,7 @@
 - A tool call recorded in an OpenAI Responses or Codex native history payload keeps its provider id through outbound canonicalization, so its result is sent as that call's output instead of a stale-output note after a "No tool output was recorded" placeholder on every turn.
 - A session file under 8 MiB opened for a partial rewrite no longer keeps its whole text alive through the header line the loaded layout holds, which held a second copy of the file for as long as the session stayed open.
 - `isSamplingKnob` answers `false` for a name inherited from `Object.prototype`, such as `toString` or `constructor`, instead of `true`.
+- A persisted session entry keeps the `lineCount` its producer wrote beside a `content` string instead of recounting it from that string when another field of the same object is dropped or externalized, which recorded the shown head's line count for a mentioned file as the file's.
 
 ## [1.5.5] - 2026-09-25
 

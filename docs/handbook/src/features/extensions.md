@@ -43,6 +43,10 @@ Extensions can combine all of the following in one module:
 4. Session/agent/tool lifecycle events are emitted to handlers.
 5. Every tool execution is wrapped with extension interception (`tool_call` / `tool_result`).
 
+Automatic discovery keeps the process alive until its filesystem and plugin lookups finish.
+The CLI also owns its full pending command, including startup work before and after discovery.
+If the event loop ends before the CLI finishes, Veyyon reports an error and exits with a nonzero status.
+
 ```text
 Extension lifecycle (simplified)
 
@@ -171,7 +175,7 @@ Handlers and tool `execute` receive `ctx` with:
 
 - `list()`: authenticated models available this session.
 - `current()`: the live session model (read lazily, so it reflects `/model` switches).
-- `resolve(spec)`: a model string (`provider/id`, bare id) or role alias (`@slow`, a configured role) → `Model`, honoring the same settings-backed aliases and match preferences as `--model`. Returns `undefined` when nothing matches.
+- `resolve(spec)`: a model string (`provider/id`, bare id) or a comma-separated chain of them → `Model`, the first entry that matches, honoring the same match preferences as `--model`. Returns `undefined` when nothing matches.
 - `family(model)`: an opaque lineage token for "same family?" checks (Claude point releases share a token; Claude and GPT differ). Compare it; don't persist it (the vocabulary tracks new releases).
 
 ```ts
@@ -291,6 +295,7 @@ pi.registerTool({
   hidden: false,
   defaultInactive: false,
   deferrable: false,
+  interruptible: false,
   async execute(_id, _params, signal, onUpdate, ctx) {
     if (signal?.aborted) {
       return { content: [{ type: "text", text: "Cancelled" }] };
@@ -310,7 +315,7 @@ pi.registerTool({
 });
 ```
 
-`tool_call`/`tool_result` intercept all tools once the registry is wrapped in `sdk.ts`, including built-ins and extension/custom tools. `ToolDefinition` also supports optional `hidden`, `defaultInactive`, `deferrable`, `approval`, `mcpServerName`, `mcpToolName`, `view`, `renderCall`, and `renderResult` fields.
+`tool_call`/`tool_result` intercept all tools once the registry is wrapped in `sdk.ts`, including built-ins and extension/custom tools. `ToolDefinition` also supports optional `hidden`, `defaultInactive`, `deferrable`, `interruptible`, `approval`, `mcpServerName`, `mcpToolName`, `view`, `renderCall`, and `renderResult` fields.
 
 ## UI integration points
 
@@ -335,7 +340,7 @@ Supported:
 - `terminal.setWidgetComponent(key, factory, options)` puts a component in the same widget slot `setWidget` writes text into
 - `terminal.setEditorComponent(factory)` replaces the live editor
 
-### RPC mode (`rpc-mode.ts`)
+### RPC mode (`rpc-ui-context.ts`)
 
 `ctx.ui` is backed by RPC `extension_ui_request` events:
 

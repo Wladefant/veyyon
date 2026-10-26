@@ -10,8 +10,10 @@
   - `packages/coding-agent/src/task/discovery.ts`: discover project/user/plugin/bundled agents.
   - `packages/coding-agent/src/task/agents.ts`: bundled agent definitions and frontmatter parsing.
   - `packages/coding-agent/src/task/executor.ts`: create child sessions, run agents, collect output, hand finished sessions to the lifecycle manager.
-  - `packages/coding-agent/src/task/run-monitor.ts`: per-run progress, abort and soft request-budget enforcement, usage totals and output capture for one agent.
+  - `packages/coding-agent/src/task/run-monitor.ts`: per-run progress, abort and soft request-budget enforcement, usage totals, output capture, and timed wait hints for expensive child models.
+  - `packages/coding-agent/src/task/provider-error-reporter.ts`: report terminal provider HTTP 429/402 lane errors to `model_routing.py record-error`.
   - `packages/coding-agent/src/registry/agent-lifecycle.ts`: idle-TTL parking and revival of finished agents.
+
   - `packages/coding-agent/src/registry/agent-registry.ts`: process-global agent directory (`running | idle | parked | aborted`).
   - `packages/coding-agent/src/async/job-manager.ts`: background job registration, progress, and result delivery.
   - `packages/coding-agent/src/task/parallel.ts`: `Semaphore` used for the session-scoped concurrency bound.
@@ -22,8 +24,13 @@
   - `packages/coding-agent/src/internal-urls/agent-protocol.ts`: resolve `agent://<id>` to saved agent output.
   - `packages/coding-agent/src/internal-urls/history-protocol.ts`: resolve `history://<id>` to a concise transcript.
   - `packages/coding-agent/src/tools/index.ts`: tool registration and recursion-depth gating.
+
   - `packages/coding-agent/src/sdk.ts`: child-session router/tool wiring and per-agent `AgentOutputManager`.
   - `docs/internal/task-agent-discovery.md`: deeper discovery and precedence notes.
+
+### Long waits on expensive lanes
+
+When an expensive-model child stays inside one supported wait operation for more than five minutes, the run monitor emits one operator warning. It recommends handing the wait to a `task` or Luna child when that fits. The warning does not queue steering, interrupt the tool, or make another model request. Fast operations and cheap model families receive no warning.
 
 ## Inputs
 
@@ -111,7 +118,7 @@ Artifacts and side channels:
 - Isolation merge strategy: patch mode (capture/apply root patches) or branch mode (commit to `veyyon/task/<id>`, cherry-pick into parent).
 - Agent source precedence: project custom agents, then user custom agents, then bundled agents, which are `scout`, `designer`, `reviewer`, `librarian`, `deep`, `sonic` in that order. `task` was the old name for `deep` and still resolves through `RETIRED_AGENT_NAMES` (`packages/coding-agent/src/task/spawn-policy.ts`), so a settings row, a saved transcript, or an SDK caller still carrying it keeps working; the roster itself no longer holds that name.
 - Which of those the model may pick is `agent.agents` (the Agents settings tab, or `/agents`). Only the general-purpose `deep` worker and agents you wrote yourself are offered by default; the bundled specialists are not, so their descriptions cost nothing until you enable one. There are two states and no third: a disabled agent is refused even when a caller names it outright. The one exception is a `/` command that declares the agent for its own turn (`CustomCommand.spawnsAgents` → `session.agentGrantedThisTurn`), which is how `/review` reaches `reviewer` without `reviewer` being enabled.
-- The model each spawn runs comes from `resolveAgentModel` (`packages/coding-agent/src/task/agent-settings.ts`), on two exclusive scopes selected by `agent.sharedModel`. On, `agent.model` decides for every agent and nothing else is read. Off, highest layer first: the `agent.agents.<name>` lane governing the spawn's own depth, then the agent definition's `model:`, otherwise the `default` model role. `agent.modelByDepth` is retired in both. A configured value that matches no available model refuses the spawn and names the setting, rather than falling through to the next layer.
+- The model each spawn runs comes from `resolveAgentModel` (`packages/coding-agent/src/task/agent-settings.ts`), on two exclusive scopes selected by `agent.sharedModel`. On, `agent.model` decides for every agent and nothing else is read. Off, highest layer first: the `agent.agents.<name>` lane governing the spawn's own depth, then the agent definition's `model:`, otherwise the spawning session's live model. `agent.modelByDepth` is retired in both. A configured value that matches no available model refuses the spawn and names the setting, rather than falling through to the next layer.
 
 ## Side Effects
 - Filesystem
@@ -123,6 +130,7 @@ Artifacts and side channels:
 - Subprocesses / native bindings
   - Isolation backends run through the `veyyon-natives` PAL (`natives/fs/iso`): kernel `overlay` with `fuse-overlayfs`/`fusermount[3]` fallback on Linux, APFS/Btrfs/ZFS/reflink clones, ProjFS on Windows, recursive copy as last resort.
   - Git operations for baseline capture, patch apply, worktrees, branches, stash, cherry-pick, commits.
+  - Provider error reporter spawns `python <script> record-error --model <model>` with stdin payload on provider HTTP 429/402 errors.
 - Session state (transcript, memory, jobs, checkpoints, registries)
   - Creates child `AgentSession` instances with isolated settings snapshots; finished sessions stay registered in the process-global `AgentRegistry` as `idle`/`parked` until process teardown or explicit release.
   - With `async.enabled=true`, registers one async job per spawn in `session.asyncJobManager`; completion is injected into the parent as an async-result message.
@@ -159,6 +167,14 @@ Artifacts and side channels:
 - If the child omits `yield`, `finalizeSubprocessOutput(...)` injects warnings such as `SYSTEM WARNING: Agent exited without calling yield tool after 3 reminders.`
 - `agent://<id>` resolution errors are model-visible when another tool reads them: no session, no artifacts dir, missing id, conflicting extraction syntax, or invalid JSON for extraction.
 
+- Terminal provider 429 and 402 lane errors:
+  - `reportProviderError(model, body, options?)` in `packages/coding-agent/src/task/provider-error-reporter.ts` reports HTTP 429 and 402 errors to `model_routing.py record-error`.
+  - The default script is `~/.veyyon/workflows/model_routing.py`. The environment variable `VEYYON_MODEL_ROUTING_SCRIPT` overrides this script path.
+  - If the routing script is missing, reporting is a silent no-op.
+  - The reporter ignores arbitrary numeric text and non-429/non-402 responses.
+  - The reporter spawns `python <script> record-error --model <model>` with the error body piped through stdin.
+  - The spawned process runs unreferenced with a 10-second timeout and `windowsHide: true`.
+  - Spawn and stdin failures log generic warning messages. The reporter never logs or leaks error payloads.
 ## Slot left after a crash during setup
 Isolation slots live under the worktrees directory (`VEYYON_WORKTREE_DIR`, else the `worktree.base` setting, else the profile `wt/` directory), one `t<9 hex>` directory per repository and task id. Setup mounts the backend first and writes `.veyyon-retained-backend.json` second. If the owner process dies between those two steps, the slot has an owner record (`.veyyon-owner.json`) and a mount directory (`m-<16 hex>`), but no backend record.
 

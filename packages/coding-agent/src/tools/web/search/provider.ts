@@ -12,9 +12,9 @@ import type { AuthStorage } from "@veyyon/ai";
 import type { SearchProvider } from "./providers/base";
 import { getSearchProviderLabel, SEARCH_PROVIDER_ORDER, SearchProviderError, type SearchProviderId } from "./types";
 
-export type { SearchParams } from "./providers/base";
-export { SearchProvider } from "./providers/base";
-export { getSearchProviderLabel, SEARCH_PROVIDER_ORDER } from "./types";
+// The approved web-search renderer oracle is a historical blob that imports this name from here, and
+// its bytes are fixed by `ORACLE_SNAPSHOT_COMMIT`.
+export { getSearchProviderLabel };
 
 /** Lazy factories. Each one dynamic-imports its provider module on first call. */
 const PROVIDER_LOADERS: Record<SearchProviderId, () => Promise<SearchProvider>> = {
@@ -29,6 +29,7 @@ const PROVIDER_LOADERS: Record<SearchProviderId, () => Promise<SearchProvider>> 
 	jina: async () => new (await import("./providers/jina")).JinaProvider(),
 	kagi: async () => new (await import("./providers/kagi")).KagiProvider(),
 	tavily: async () => new (await import("./providers/tavily")).TavilyProvider(),
+	deepseek: async () => new (await import("./providers/deepseek")).DeepSeekProvider(),
 	firecrawl: async () => new (await import("./providers/firecrawl")).FirecrawlProvider(),
 	brave: async () => new (await import("./providers/brave")).BraveProvider(),
 	kimi: async () => new (await import("./providers/kimi")).KimiProvider(),

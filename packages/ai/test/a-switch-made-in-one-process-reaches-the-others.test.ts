@@ -50,11 +50,11 @@ describe("an account switch made in another process", () => {
 		const storeA = await SqliteAuthCredentialStore.open(dbPath);
 		storeA.saveOAuth(PROVIDER, oauthCredential("first"));
 		storeA.saveOAuth(PROVIDER, oauthCredential("second"));
-		const switcher = new AuthStorage(storeA, { loadBalancing: true });
+		const switcher = new AuthStorage(storeA, { loadBalancing: false });
 		await switcher.reload();
 		const [first, second] = storeA.listAuthCredentials(PROVIDER).map(row => row.id);
 
-		const lane = new AuthStorage(await SqliteAuthCredentialStore.open(dbPath), { loadBalancing: true });
+		const lane = new AuthStorage(await SqliteAuthCredentialStore.open(dbPath), { loadBalancing: false });
 		await lane.reload();
 		try {
 			expect(switcher.selectProviderCredential(PROVIDER, first!)).toBe(true);
@@ -75,7 +75,7 @@ describe("an account switch made in another process", () => {
 		const store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
 		store.saveOAuth(PROVIDER, oauthCredential("first"));
 		store.saveOAuth(PROVIDER, oauthCredential("second"));
-		const storage = new AuthStorage(store, { loadBalancing: true });
+		const storage = new AuthStorage(store, { loadBalancing: false });
 		await storage.reload();
 		const [, second] = store.listAuthCredentials(PROVIDER).map(row => row.id);
 		store.setProviderSelection = () => {
@@ -95,7 +95,7 @@ describe("an account switch made in another process", () => {
 		const store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
 		store.saveOAuth(PROVIDER, oauthCredential("first"));
 		store.saveOAuth(PROVIDER, oauthCredential("second"));
-		const storage = new AuthStorage(store, { loadBalancing: true });
+		const storage = new AuthStorage(store, { loadBalancing: false });
 		await storage.reload();
 		const [, second] = store.listAuthCredentials(PROVIDER).map(row => row.id);
 		Object.defineProperties(store, {
@@ -118,7 +118,7 @@ describe("an account switch made in another process", () => {
 		const store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
 		store.saveOAuth(PROVIDER, oauthCredential("first"));
 		store.saveOAuth(PROVIDER, oauthCredential("second"));
-		const storage = new AuthStorage(store, { loadBalancing: true });
+		const storage = new AuthStorage(store, { loadBalancing: false });
 		await storage.reload();
 		const [, second] = store.listAuthCredentials(PROVIDER).map(row => row.id);
 		try {

@@ -218,6 +218,12 @@ export interface Usage {
 		/** Orchestration output tokens. */
 		output?: number;
 	};
+	/** Safe serving-account attribution. Never contains a bearer or account secret. */
+	credentialId?: string;
+	/** Transport that served the successful request (for example, websocket or http). */
+	transport?: string;
+	/** Model identifier that served the successful request. */
+	model?: string;
 	/** Copilot premium-request counter, when applicable. */
 	premiumRequests?: number;
 	/**
@@ -461,7 +467,7 @@ export interface OpenAICompat {
 	 * normalization (collapse `const`→`enum`, infer `type` on bare enums, strip
 	 * unsupported validators/`prefixItems`) because Moonshot/Kimi native hosts
 	 * reject standard JSON Schema constructs with HTTP 400. Default:
-	 * auto-detected (`"moonshot-mfjs"` on api.moonshot.ai / api.kimi.com). Set
+	 * auto-detected (`"moonshot-mfjs"` on api.moonshot.ai / api.kimi.com / api.kimi.ai). Set
 	 * `"none"` to opt a custom Moonshot-compatible host out.
 	 */
 	toolSchemaFlavor?: "moonshot-mfjs" | "none";

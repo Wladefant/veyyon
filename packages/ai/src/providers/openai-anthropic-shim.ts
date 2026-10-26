@@ -59,6 +59,10 @@ export function streamOpenAIAnthropicShim(
 			};
 
 			if (format === "anthropic") {
+				// The Anthropic-shape copy is the same model on a second wire, so it keeps the
+				// effort ladder the catalog declared for it. Built without one, a reasoning
+				// model on `anthropic-messages` falls back to the five budget tiers, and a
+				// declared tier outside them (`max` on Kimi K3) is rejected before any request.
 				const anthropicModel = buildModel({
 					id: model.id,
 					name: model.name,
@@ -69,6 +73,7 @@ export function streamOpenAIAnthropicShim(
 					contextWindow: model.contextWindow,
 					maxTokens: model.maxTokens,
 					reasoning: model.reasoning,
+					reasoningOptions: model.thinking ? { efforts: model.thinking.efforts } : { noEffortControl: true },
 					input: model.input,
 					cost: model.cost,
 				} as ModelSpec<"anthropic-messages">);
@@ -78,7 +83,10 @@ export function streamOpenAIAnthropicShim(
 					disabled: options?.disableReasoning,
 				});
 				const reasoningEffort = reasoningSelection.effort;
-				const thinkingEnabled = reasoningSelection.enabled;
+				// A model with no effort control reasons as shipped: the field is left out, as the
+				// OpenAI surface leaves it out, rather than sent as `disabled` nobody asked for.
+				const thinkingEnabled =
+					reasoningSelection.state === "uncontrolled" ? undefined : reasoningSelection.enabled;
 				const thinkingBudget = reasoningEffort
 					? resolveThinkingBudget(reasoningEffort, ANTHROPIC_THINKING_BUDGETS, options?.thinkingBudgets)
 					: undefined;

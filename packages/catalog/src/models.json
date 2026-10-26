@@ -29783,6 +29783,35 @@
 				}
 			}
 		},
+		"gemini-4-argon": {
+			"id": "gemini-4-argon",
+			"name": "Gemini 4 Argon",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+			"reasoning": true,
+			"input": ["text", "image", "video"],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"pricing": "unknown",
+			"contextWindow": 1048576,
+			"maxTokens": 65536,
+			"requestModelId": "gemini-4-argon-low",
+			"thinking": {
+				"mode": "google-level",
+				"efforts": ["low", "medium", "high"],
+				"defaultLevel": "medium",
+				"effortRouting": {
+					"low": "gemini-4-argon-low",
+					"medium": "gemini-4-argon-medium",
+					"high": "gemini-4-argon-high"
+				}
+			}
+		},
 		"gpt-oss-120b": {
 			"id": "gpt-oss-120b",
 			"name": "GPT OSS 120B",

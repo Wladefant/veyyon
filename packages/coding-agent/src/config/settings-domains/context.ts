@@ -196,7 +196,7 @@ export const CONTEXT_SETTINGS = {
 	// What happens once the configured chain is exhausted. Every tier `auto`
 	// reaches is a model the operator NAMED: the chain, the sibling the model's
 	// own catalog row recommends inside the same provider, the interactive model,
-	// and the model roles they assigned. `any-model` adds the historical last
+	// and the default model they set. `any-model` adds the historical last
 	// tier, the largest window among everything authenticated, which is the one
 	// that can send a summary to a provider nobody chose and bill it for the
 	// privilege. `configured-only` stops at the models named in the chain and
@@ -210,13 +210,13 @@ export const CONTEXT_SETTINGS = {
 			group: "Compaction",
 			label: "Compaction Fallback",
 			description:
-				"What to try after the compaction models you configured. Auto stays on models you named: the main model, its same-provider compaction sibling, and your model roles. Any authenticated model also reaches the largest window available, on any provider you have credentials for. Configured only stops at the chain and fails loudly.",
+				"What to try after the compaction models you configured. Auto stays on models you named: the main model, its same-provider compaction sibling, and your default model. Any authenticated model also reaches the largest window available, on any provider you have credentials for. Configured only stops at the chain and fails loudly.",
 			keywords: ["compaction", "fallback", "chain", "model", "candidates", "billing"],
 			options: [
 				{
 					value: "auto",
 					label: "Auto",
-					description: "Main model, its same-provider sibling, then your model roles",
+					description: "Main model, its same-provider sibling, then your default model",
 				},
 				{
 					value: "any-model",
@@ -259,6 +259,18 @@ export const CONTEXT_SETTINGS = {
 	"compaction.handoffSaveToDisk": {
 		type: "boolean",
 		default: false,
+	},
+
+	"compaction.laneHandoffThresholdTokens": {
+		type: "number",
+		default: 150000,
+		ui: {
+			tab: "model",
+			group: "Compaction",
+			label: "Expensive Agent Handoff Threshold",
+			description:
+				"Start a fresh transcript for expensive spawned agents at this context size. Set to 0 to disable.",
+		},
 	},
 
 	// No default: an unset reserve tells the compaction layer the user never
@@ -363,7 +375,7 @@ export const CONTEXT_SETTINGS = {
 			condition: "argotEnabled",
 			label: "Argot Models",
 			description:
-				"Models allowed to write Argot shorthand, by model id. Empty (the default) means no model does, so turning Argot on alone stays inert until you add one here. A model left off this list is never taught the shorthand; handles already in history still expand.",
+				"Models allowed to write Argot shorthand, by model id: provider/id, or a bare id for any provider. A trailing thinking selector such as :high also admits the bare model, so anthropic/claude-opus-5-5:high covers that model at every level. Empty (the default) means no model does, so turning Argot on alone stays inert until you add one here. A model left off this list is never taught the shorthand; handles already in history still expand.",
 		},
 	},
 
@@ -884,21 +896,21 @@ export const CONTEXT_SETTINGS = {
 	},
 	"mnemopi.llmMode": {
 		type: "enum",
-		values: ["none", "smol", "remote"] as const,
-		default: "smol",
+		values: ["none", "online", "remote"] as const,
+		default: "online",
 		ui: {
 			tab: "memory",
 			group: "Mnemopi",
 			label: "Mnemopi LLM Mode",
 			description:
-				"Use no LLM, the online tiny model (the TINY role from /models, else @smol), or a remote OpenAI-compatible endpoint",
+				"Use no LLM, the Memory helper model (Agents → Roster → Helpers), or a remote OpenAI-compatible endpoint",
 			condition: "mnemopiActive",
 			options: [
 				{ value: "none", label: "None", description: "Disable Mnemopi LLM-backed extraction" },
 				{
-					value: "smol",
-					label: "Online (tiny)",
-					description: "Use the online tiny model (the TINY role from /models, else @smol)",
+					value: "online",
+					label: "Online",
+					description: "Use the Memory helper model (Agents → Roster → Helpers)",
 				},
 				{
 					value: "remote",

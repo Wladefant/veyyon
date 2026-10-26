@@ -8,6 +8,7 @@ import { isOfficialOpenAIEndpoint } from "@veyyon/catalog/compat/openai";
 import type { Effort } from "@veyyon/catalog/effort";
 import { isVertexExpressOpenAIUrl, isVertexRawPredictUrl } from "@veyyon/catalog/hosts";
 import {
+	googleThinkingLevelWhenOff,
 	mapEffortToAnthropicAdaptiveEffort,
 	mapEffortToGoogleThinkingLevel,
 	type ReasoningSelection,
@@ -203,16 +204,6 @@ const PROVIDER_INFLIGHT_HEARTBEAT_FAILURES_BEFORE_STALE = Math.ceil(
 );
 
 let providerInFlightRootOverride: string | undefined;
-
-/**
- * The caps and their resolver live in `./provider-inflight-limits`, which imports nothing.
- *
- * The WRITER of this state is the harness's settings layer, and reaching a setter that lived here meant
- * importing this module's 285: every provider transport, the model registry, the error taxonomy. The
- * re-export keeps `@veyyon/ai/stream` a working import path for it, so nothing that already calls it
- * changes, while a caller that only configures caps can name the owner instead.
- */
-export { configureProviderMaxInFlightRequests } from "./provider-inflight-limits";
 
 function providerInFlightRoot(): string {
 	if (providerInFlightRootOverride) return providerInFlightRootOverride;
@@ -887,13 +878,67 @@ function resolveRequestApiKey(model: Model<Api>, explicit: string | undefined): 
 	return $env.AWS_BEARER_TOKEN_BEDROCK;
 }
 
+function recordUsageIdentity(message: AssistantMessage, model: Model<Api>, credentialId?: string): void {
+	message.usage.model ??= message.model;
+	message.usage.transport ??= model.transport === "pi-native" ? "pi-native" : "unknown";
+	if (credentialId !== undefined) message.usage.credentialId = credentialId;
+}
+
+function withUsageIdentity(
+	model: Model<Api>,
+	inner: AssistantMessageEventStream,
+	transport?: () => string | undefined,
+): AssistantMessageEventStream {
+	const outer = new AssistantMessageEventStream();
+	void (async () => {
+		try {
+			for await (const event of inner) {
+				if (event.type === "done") {
+					if ((!event.message.usage.transport || event.message.usage.transport === "unknown") && transport?.())
+						event.message.usage.transport = transport();
+					recordUsageIdentity(event.message, model);
+				} else if (event.type === "error") {
+					if ((!event.error.usage.transport || event.error.usage.transport === "unknown") && transport?.())
+						event.error.usage.transport = transport();
+					recordUsageIdentity(event.error, model);
+				}
+				outer.push(event);
+			}
+			if (!outer.done) {
+				const message = await inner.result();
+				recordUsageIdentity(message, model);
+				outer.end(message);
+			}
+		} catch (error) {
+			outer.fail(error);
+		}
+	})();
+	return outer;
+}
+
+function observeRequestTransport<T extends Pick<StreamOptions, "fetch">>(options: T | undefined) {
+	let transport: string | undefined;
+	const fetchImpl = options?.fetch ?? (globalThis.fetch as FetchImpl);
+	const observedFetch: FetchImpl = async (input, init) => {
+		const response = await fetchImpl(input, init);
+		transport = "http";
+		return response;
+	};
+	return { options: { ...options, fetch: observedFetch } as T, transport: () => transport };
+}
+
 export function stream<TApi extends Api>(
 	model: Model<TApi>,
 	context: Context,
 	options?: OptionsForApi<TApi>,
 ): AssistantMessageEventStream {
-	return withGeminiThinkingLoopGuard(model, options, opts =>
-		withProviderInFlightLimit(model, opts, () => streamDispatch(model, context, opts)),
+	const observed = observeRequestTransport(options);
+	return withUsageIdentity(
+		model,
+		withGeminiThinkingLoopGuard(model, observed.options, opts =>
+			withProviderInFlightLimit(model, opts, () => streamDispatch(model, context, opts)),
+		),
+		observed.transport,
 	);
 }
 
@@ -1150,6 +1195,15 @@ export function streamSimple<TApi extends Api>(
 	context: Context,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
+	const observed = observeRequestTransport(options);
+	return withUsageIdentity(model, streamSimpleDispatch(model, context, observed.options), observed.transport);
+}
+
+function streamSimpleDispatch<TApi extends Api>(
+	model: Model<TApi>,
+	context: Context,
+	options?: SimpleStreamOptions,
+): AssistantMessageEventStream {
 	const baseOptions = (options || {}) as SimpleStreamOptions;
 	const debugOptions = withExtraCaFetch(withRequestDebugFetch(baseOptions));
 	const requestOptions = {
@@ -1160,6 +1214,10 @@ export function streamSimple<TApi extends Api>(
 	if (apiKeyResolver) {
 		const outer = new AssistantMessageEventStream();
 		const signal = requestOptions?.signal;
+		let selectedCredentialId: string | undefined;
+		const onCredentialSelected = (id: string): void => {
+			selectedCredentialId = id;
+		};
 		// One inner attempt against a resolved string key. A retryable auth error
 		// that arrives before any replay-unsafe event is buffered and returned
 		// (so the caller can retry with a fresh key) instead of surfaced. Once any
@@ -1176,6 +1234,8 @@ export function streamSimple<TApi extends Api>(
 			try {
 				const inner = streamSimple(model, context, { ...requestOptions, apiKey });
 				for await (const event of inner) {
+					if (event.type === "done") recordUsageIdentity(event.message, model, selectedCredentialId);
+					else if (event.type === "error") recordUsageIdentity(event.error, model, selectedCredentialId);
 					if (!emittedReplayUnsafeEvent && event.type === "start") {
 						bufferedEvents.push(event);
 						continue;
@@ -1215,7 +1275,9 @@ export function streamSimple<TApi extends Api>(
 		void (async () => {
 			let lastKey: string | undefined;
 			try {
-				lastKey = (await apiKeyResolver({ lastChance: false, error: undefined, signal })) || undefined;
+				lastKey =
+					(await apiKeyResolver({ lastChance: false, error: undefined, signal, onCredentialSelected })) ||
+					undefined;
 			} catch (error) {
 				// A thrown resolver is a broker/OAuth/network failure, not a missing
 				// key — surface the cause instead of masking it as "No API key".
@@ -1238,7 +1300,14 @@ export function streamSimple<TApi extends Api>(
 				// Caller aborted between attempts: don't mint a fresh token or fire
 				// another doomed request — emit the captured failure instead.
 				if (signal?.aborted) break;
-				const nextKey = await resolveNextAuthRetryKey(retryState, apiKeyResolver, failure.error, signal);
+				selectedCredentialId = undefined;
+				const nextKey = await resolveNextAuthRetryKey(
+					retryState,
+					apiKeyResolver,
+					failure.error,
+					signal,
+					onCredentialSelected,
+				);
 				if (nextKey === undefined) break;
 				const next = await runAttempt(nextKey);
 				if (!next) return;
@@ -1500,6 +1569,7 @@ function optionsForApi(mapping: OptionsMapping): OptionsForApi<Api> {
 				serviceTier: options.serviceTier,
 				preferWebsockets: options.preferWebsockets,
 				codexCompaction: options.codexCompaction,
+				codexFork: options.codexFork,
 				reasoningSummary: options.hideThinkingSummary ? null : "detailed",
 				textVerbosity: options.textVerbosity,
 			} satisfies OptionsForApi<"openai-codex-responses">;
@@ -1838,7 +1908,8 @@ function googleGeminiCliOptions(mapping: OptionsMapping): OptionsForApi<"google-
 	}
 	const thinking: GoogleGeminiCliOptions["thinking"] = { enabled: false };
 	if (model.reasoning && model.thinking?.suppressWhenOff) {
-		thinking.suppress = model.thinking.mode === "google-level" ? { level: "MINIMAL" } : { budget: 0 };
+		thinking.suppress =
+			model.thinking.mode === "google-level" ? { level: googleThinkingLevelWhenOff(model) } : { budget: 0 };
 	}
 	return {
 		...base,

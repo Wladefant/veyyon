@@ -5,9 +5,11 @@ import * as path from "node:path";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
+import { executeAcpBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/acp-builtins";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake, setAgentDir } from "@veyyon/utils";
 import { isolatedAuthStorage } from "./helpers/isolated-auth-storage";
+import { trustProjectRegistry } from "./helpers/project-registry-trust";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 function textContent(result: { content?: Array<{ type: string; text?: string }> }): string {
@@ -146,6 +148,66 @@ describe("createAgentSession cwd after /move", () => {
 		}
 	});
 
+	it("reloads rule edits through the live config command without restarting the session", async () => {
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-reload-smoke-"));
+		tempDirs.push(tempDir);
+		const cwd = path.join(tempDir, "project");
+		fs.mkdirSync(cwd);
+		const file = path.join(cwd, "AGENTS.md");
+		fs.writeFileSync(file, "RELOAD_OLD_RULE\n");
+		globals = beginSettingsTest();
+		setAgentDir(tempDir);
+		fs.writeFileSync(
+			path.join(tempDir, "config.yml"),
+			"async:\n  enabled: false\nbashInterceptor:\n  enabled: false\nadvisor:\n  enabled: true\n",
+		);
+		const { session } = await createAgentSession({
+			cwd,
+			agentDir: tempDir,
+			sessionManager: SessionManager.create(cwd, path.join(tempDir, "sessions")),
+			authStorage: await isolatedAuthStorage(tempDir),
+			settings: await Settings.loadReadOnly({ agentDir: tempDir }),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			rules: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			toolNames: ["read"],
+		});
+		try {
+			const identity = session.sessionId;
+			expect(session.agent.state.systemPrompt.join("\n")).toContain("RELOAD_OLD_RULE");
+			fs.writeFileSync(file, "RELOAD_NEW_RULE\n");
+			const lines: string[] = [];
+			await executeAcpBuiltinSlashCommand("/reload-config", {
+				session,
+				sessionManager: session.sessionManager,
+				settings: session.settings,
+				cwd,
+				output: text => {
+					lines.push(text);
+				},
+				refreshCommands: () => {},
+				reloadPlugins: async () => {},
+			});
+			const text = session.agent.state.systemPrompt.join("\n");
+			expect(text).toContain("RELOAD_NEW_RULE");
+			expect(text).not.toContain("RELOAD_OLD_RULE");
+			expect(lines.join("\n")).toContain(`Changed rule files and skills: ${file}`);
+			expect(session.sessionId).toBe(identity);
+			const advisor = await session.getAdvisorAgent();
+			expect(advisor).toBeDefined();
+			expect((await session.reloadRules()).join("\n")).toContain("unchanged");
+			expect(await session.getAdvisorAgent()).toBe(advisor);
+			console.log(`rules-reload smoke: pid=${process.pid} session=${identity} old absent, new present, no restart`);
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	/**
 	 * Project-installed extension skills are cwd-scoped. A move must replace the
 	 * live session and tool resolver inventory, not only repaint the prompt.
@@ -157,7 +219,7 @@ describe("createAgentSession cwd after /move", () => {
 		const cwdB = path.join(tempDir, "cwd-b");
 		const agentDir = path.join(tempDir, "agent");
 
-		const installProjectSkill = (project: string, packageName: string, skillName: string): void => {
+		const installProjectSkill = async (project: string, packageName: string, skillName: string): Promise<void> => {
 			const pluginsDir = path.join(project, ".veyyon", "plugins");
 			const packageDir = path.join(pluginsDir, "node_modules", packageName);
 			const skillDir = path.join(packageDir, "skills", skillName);
@@ -172,17 +234,11 @@ describe("createAgentSession cwd after /move", () => {
 				path.join(skillDir, "SKILL.md"),
 				`---\nname: ${skillName}\ndescription: ${skillName} description\n---\n${skillName} body\n`,
 			);
-			fs.writeFileSync(
-				path.join(pluginsDir, "veyyon-plugins.lock.json"),
-				JSON.stringify({
-					plugins: { [packageName]: { version: "1.0.0", enabled: true, enabledFeatures: null } },
-					settings: {},
-				}),
-			);
+			await trustProjectRegistry({ cwd: project, agentDir, pluginsRoot: pluginsDir, installPaths: [packageDir] });
 		};
 
-		installProjectSkill(cwdA, "project-a-skills", "only-a");
-		installProjectSkill(cwdB, "project-b-skills", "only-b");
+		await installProjectSkill(cwdA, "project-a-skills", "only-a");
+		await installProjectSkill(cwdB, "project-b-skills", "only-b");
 		fs.mkdirSync(agentDir, { recursive: true });
 
 		globals = beginSettingsTest();
@@ -238,7 +294,7 @@ describe("createAgentSession cwd after /move", () => {
 		const cwdB = path.join(tempDir, "cwd-b");
 		const agentDir = path.join(tempDir, "agent");
 
-		const installProjectRule = (project: string, packageName: string, name: string, condition: string): void => {
+		const installProjectRule = async (project: string, packageName: string, name: string, condition: string): Promise<void> => {
 			const pluginsDir = path.join(project, ".veyyon", "plugins");
 			const packageDir = path.join(pluginsDir, "node_modules", packageName);
 			fs.mkdirSync(path.join(packageDir, "src"), { recursive: true });
@@ -252,16 +308,10 @@ describe("createAgentSession cwd after /move", () => {
 				path.join(packageDir, "rules", `${name}.md`),
 				`---\ndescription: ${name}\ncondition: ${condition}\nscope: [text]\n---\n${name} body\n`,
 			);
-			fs.writeFileSync(
-				path.join(pluginsDir, "veyyon-plugins.lock.json"),
-				JSON.stringify({
-					plugins: { [packageName]: { version: "1.0.0", enabled: true, enabledFeatures: null } },
-					settings: {},
-				}),
-			);
+			await trustProjectRegistry({ cwd: project, agentDir, pluginsRoot: pluginsDir, installPaths: [packageDir] });
 		};
-		installProjectRule(cwdA, "project-a-rules", "source-only", "SOURCE_TRIGGER");
-		installProjectRule(cwdB, "project-b-rules", "destination-only", "DESTINATION_TRIGGER");
+		await installProjectRule(cwdA, "project-a-rules", "source-only", "SOURCE_TRIGGER");
+		await installProjectRule(cwdB, "project-b-rules", "destination-only", "DESTINATION_TRIGGER");
 		fs.mkdirSync(agentDir, { recursive: true });
 
 		globals = beginSettingsTest();
