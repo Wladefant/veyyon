@@ -2661,8 +2661,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handleRenameCommand(title);
 	}
 
-	handleMemoryCommand(text: string): Promise<void> {
-		return this.#commandController.handleMemoryCommand(text);
+	handleMemoryCommand(args: string): Promise<void> {
+		return this.#commandController.handleMemoryCommand(args);
 	}
 
 	handleSTTToggle(): Promise<void> {

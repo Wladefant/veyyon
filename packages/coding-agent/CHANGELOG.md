@@ -49,6 +49,7 @@
 - Bare `/yolo` in the terminal turns the bypass off when it is on, as it already did over ACP and in print mode, instead of reporting that it is already on.
 - `/model <query>` in the terminal opens the model picker with `<query>` in its search field instead of ignoring the argument.
 - `/force <tool>` accepts a tab between the tool name and the prompt instead of treating the whole line as the tool name.
+- Fixed `/memory:<action>` in the terminal printing the usage line instead of running the action, as print mode and ACP already did.
 
 ## [1.5.10] - 2026-10-25
 

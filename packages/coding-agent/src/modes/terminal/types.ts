@@ -425,7 +425,8 @@ export interface InteractiveModeContext {
 	handleShakeCommand(mode: ShakeMode): Promise<void>;
 	handleMoveCommand(targetPath?: string): Promise<void>;
 	handleRenameCommand(title: string): Promise<void>;
-	handleMemoryCommand(text: string): Promise<void>;
+	/** `args` is the text after `/memory`, as the dispatcher parsed it. */
+	handleMemoryCommand(args: string): Promise<void>;
 	handleRephraseCommand(): void;
 	handleSTTToggle(): Promise<void>;
 	executeCompaction(

@@ -467,8 +467,8 @@ export class CommandController {
 			.catch(error => this.ctx.showWarning(errorMessage(error)));
 	}
 
-	handleMemoryCommand(text: string): Promise<void> {
-		return this.#memory.handle(text);
+	handleMemoryCommand(args: string): Promise<void> {
+		return this.#memory.handle(args);
 	}
 
 	/**
