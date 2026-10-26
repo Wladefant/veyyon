@@ -37,7 +37,7 @@ with a grammar:
 /mcp add <name> [http|sse] [url <url>] [token <token>] [run <command...>]
 /mcp remove <name>
 /mcp smithery-search <keyword...> [<limit 1-100>] [semantic]
-/ssh add <name> <host> [user <user>] [<port>] [key <keyPath>]
+/ssh add <name> <host> [user <user>] [<port>] [key <keyPath>] [desc <description>] [compat]
 /ssh remove <name>
 /stats [<port>]
 ```
@@ -46,8 +46,9 @@ with a grammar:
 
 Position covers every required word, so `/mcp remove project` removes a server named
 `project`. Where meaning is taken from a word's shape instead, the sets cannot overlap: on
-`/ssh add` a port is digits and nothing else the command reads is, and `user` and `key` are the only
-two keywords, each taking the word after it. A word the command cannot use is rejected, not ignored.
+`/ssh add` a port is digits and nothing else the command reads is, `user`, `key` and `desc` are
+keywords, each taking the word after it, and `compat` is a word on its own. A word the command
+cannot use is rejected, not ignored.
 
 ### A spelling that was an option
 
@@ -57,7 +58,7 @@ replaced each one:
 ```text
 /ssh add box example.com --port 2222
 --port is gone: write the port as a plain integer.
-Usage: /ssh add <name> <host> [user <user>] [<port>] [key <keyPath>]
+Usage: /ssh add <name> <host> [user <user>] [<port>] [key <keyPath>] [desc <description>] [compat]
 ```
 
 The plain word gets the same answer as the dashed one. `/stats port 8080` is rejected the way

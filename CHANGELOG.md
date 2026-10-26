@@ -59,6 +59,7 @@
 - `/force <tool>` accepts a tab between the tool name and the prompt instead of treating the whole line as the tool name.
 - Fixed `/memory:<action>` in the terminal printing the usage line instead of running the action, as print mode and ACP already did.
 - Fixed `/mcp:<verb>`, `/ssh:<verb>`, `/btw:`, `/tan:` and `/omfg:` in the terminal reading the colon as part of their arguments, so `/mcp:list` showed help instead of the server list.
+- `/ssh add` and `/ssh remove` read one grammar in the terminal and over ACP, print mode and RPC: text mode accepts `desc` and `compat`, the terminal names the replacement for a plain `host`, `port` or `scope`, and an empty `/ssh add` reports the missing host name on both.
 - A required tool call under an in-band tool dialect is asked for in the conversation text instead of being sent as a native `tool_choice` the dialect never reads.
 - Shake and duplicate elision leave a tool result, block or truncated middle in place when its marker is not smaller than it, and size a captioned image result by its caption, so `/shake` no longer reports a kept image as freed tokens.
 - A required tool call on a request that cannot force it (a model or host that rejects a forced `tool_choice`, a host without `tool_choice`, a remembered rejection, Ollama, Cursor, Devin, GitLab Duo, and Claude on Antigravity) is asked for in the request text, instead of the tool only being offered.

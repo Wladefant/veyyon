@@ -22,15 +22,17 @@
  * new keyword that collides with a removed option turns this suite red until
  * someone records the collision.
  *
- * WHAT THIS DOES NOT CATCH. It sweeps the text/ACP handlers only. The TUI
- * controllers (`mcp-command-controller.ts`, `ssh-command-controller.ts`) have
- * their own argument readers, and a plain removed word there is covered by
- * `mcp-command-ignores-repo-config.test.ts` for the scope words alone — no sweep
- * enumerates the other keys on that surface. It also asserts the SENTENCE, not
- * the effect: a refusal that carried the right words while still writing a file
- * would pass here and fail that suite.
+ * WHAT THIS DOES NOT CATCH. `/ssh` is swept on both surfaces — the text/ACP
+ * handler and the terminal `ssh-command-controller.ts` — because both read one
+ * grammar (`helpers/ssh-args.ts`) and a second reader would drift. `/mcp` is
+ * swept on the text/ACP handler only: the TUI `mcp-command-controller.ts` is
+ * covered for a plain removed word by `mcp-command-ignores-repo-config.test.ts`,
+ * for the scope words alone — no sweep enumerates the other keys on that surface.
+ * It also asserts the SENTENCE, not the effect: a refusal that carried the
+ * right words while still writing a file would pass here and fail that suite.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, vi } from "bun:test";
+import { SSHCommandController } from "@veyyon/coding-agent/modes/terminal/controllers/ssh-command-controller";
 import {
 	handleMcpAcp,
 	MCP_ADD_REMOVED_OPTIONS,
@@ -38,11 +40,11 @@ import {
 	MCP_SEARCH_REMOVED_OPTIONS,
 } from "@veyyon/coding-agent/slash-commands/helpers/mcp";
 import { parseSlashCommand } from "@veyyon/coding-agent/slash-commands/helpers/parse";
+import { handleSshAcp } from "@veyyon/coding-agent/slash-commands/helpers/ssh";
 import {
-	handleSshAcp,
 	SSH_ADD_REMOVED_OPTIONS,
 	SSH_REMOVE_REMOVED_OPTIONS,
-} from "@veyyon/coding-agent/slash-commands/helpers/ssh";
+} from "@veyyon/coding-agent/slash-commands/helpers/ssh-args";
 import {
 	parseStatsDashboardArgs,
 	STATS_DASHBOARD_REMOVED_OPTIONS,
@@ -52,6 +54,7 @@ import type {
 	SlashCommandResult,
 	SlashCommandRuntime,
 } from "@veyyon/coding-agent/slash-commands/types";
+import * as sshConfigWriter from "@veyyon/coding-agent/ssh/config-writer";
 
 type Handler = (command: ParsedSlashCommand, runtime: SlashCommandRuntime) => Promise<SlashCommandResult>;
 
@@ -81,6 +84,34 @@ function surface(handler: Handler) {
 
 const runMcp = surface(handleMcpAcp as Handler);
 const runSsh = surface(handleSshAcp as Handler);
+/**
+ * The terminal reader of `/ssh`: the real controller, handed the argument tail
+ * the way the slash dispatcher hands it. Every line this file sends is refused
+ * during parsing, so the config writers are made to reject: a line that got past
+ * the grammar fails here naming the writer instead of editing a profile.
+ */
+const runSshTerminal = async (text: string): Promise<string> => {
+	const shown: string[] = [];
+	const reached = (writer: string) => () => Promise.reject(new Error(`${text} reached ${writer}`));
+	const add = vi.spyOn(sshConfigWriter, "addSSHHost").mockImplementation(reached("addSSHHost"));
+	const remove = vi.spyOn(sshConfigWriter, "removeSSHHost").mockImplementation(reached("removeSSHHost"));
+	try {
+		const controller = new SSHCommandController({
+			present: () => {
+				shown.push(`${text} presented a result`);
+			},
+			showError: (message: string) => {
+				shown.push(message);
+			},
+			session: {},
+		} as never);
+		await controller.handle(parseSlashCommand(text)?.args ?? "");
+		return shown.join("\n");
+	} finally {
+		add.mockRestore();
+		remove.mockRestore();
+	}
+};
 /**
  * `/stats` has no ACP handler to drive: the parser IS the whole grammar, and it
  * returns the refusal rather than printing it. Driven directly, with the command
@@ -138,23 +169,32 @@ const COMMANDS: readonly SweptCommand[] = [
 		liveSyntax: [],
 		fallback: (word: string) => `Unknown argument: ${word}`,
 	},
-	{
-		name: "/ssh add",
-		map: SSH_ADD_REMOVED_OPTIONS,
-		run: () => runSsh,
-		line: (word: string) => `/ssh add box example.com ${word}`,
-		// `user` and `key` are the keywords that replaced `--user` and `--key`.
-		liveSyntax: ["key", "user"],
-		fallback: (word: string) => `Unknown argument: ${word}`,
-	},
-	{
-		name: "/ssh remove",
-		map: SSH_REMOVE_REMOVED_OPTIONS,
-		run: () => runSsh,
-		line: (word: string) => `/ssh remove box ${word}`,
-		liveSyntax: [],
-		fallback: (word: string) => `Unknown argument: ${word}`,
-	},
+	// One row per reader of the shared `/ssh` grammar. The map, the live syntax and
+	// the fallback are declared once for both, so a surface that reads a word
+	// differently from the other fails its own rows.
+	...[
+		{ label: "text", run: () => runSsh },
+		{ label: "terminal", run: () => runSshTerminal },
+	].flatMap(reader => [
+		{
+			name: `/ssh add (${reader.label})`,
+			map: SSH_ADD_REMOVED_OPTIONS,
+			run: reader.run,
+			line: (word: string) => `/ssh add box example.com ${word}`,
+			// `user`, `key` and `desc` are the keywords that replaced their dashed
+			// spellings, and `compat` is the plain flag that replaced `--compat`.
+			liveSyntax: ["compat", "desc", "key", "user"],
+			fallback: (word: string) => `Unknown argument: ${word}`,
+		},
+		{
+			name: `/ssh remove (${reader.label})`,
+			map: SSH_REMOVE_REMOVED_OPTIONS,
+			run: reader.run,
+			line: (word: string) => `/ssh remove box ${word}`,
+			liveSyntax: [],
+			fallback: (word: string) => `Unknown argument: ${word}`,
+		},
+	]),
 	{
 		name: "/stats",
 		map: STATS_DASHBOARD_REMOVED_OPTIONS,
