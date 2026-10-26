@@ -411,6 +411,7 @@ export async function executeFileSearch(
 				emitUpdate();
 			};
 
+		const nativeGlob = options?.nativeGlob ?? natives.glob;
 		let timedOut = false;
 		const runTarget = async (target: FileSearchTarget): Promise<Array<{ path: string; mtime: number }>> => {
 			throwIfAborted(signal);
@@ -433,7 +434,7 @@ export async function executeFileSearch(
 			}
 			try {
 				const result = await untilAborted(combinedSignal, () =>
-					natives.glob(
+					nativeGlob(
 						{
 							pattern: target.globPattern,
 							path: target.searchPath,

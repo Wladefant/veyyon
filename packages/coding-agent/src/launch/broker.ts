@@ -1678,12 +1678,10 @@ export class DaemonBroker {
 				if (detached && spec.ready?.port !== undefined && snapshot.state !== "ready") {
 					void this.#pollPort(record, record.generation, spec.ready);
 				}
-				// A daemon the dead broker never settled never got a completion
-				// record; the recovery kill above IS its terminal transition, so
-				// retain it here. One already terminal on disk was recorded by the
-				// broker that settled it.
-				if (!detached && !wasTerminal) this.#queueCompletion(record, "exited");
-				if (terminalState(snapshot.state)) {
+				// Recovery marks an unfinished non-detached record failed without claiming
+				// ownership of the old process tree. Retain that terminal state.
+				if (!detached && !wasTerminal) this.#queueCompletion(record, "failed");
+				if (terminalState(snapshot.state) && !snapshot.ownershipUncertain) {
 					this.#scheduleCleanup(record);
 				}
 				persist(record);

@@ -183,7 +183,8 @@ class SocketDaemonClient implements DaemonBrokerClient {
 				pending.removeAbort?.();
 				reject(new Error(`Daemon ${operation.op} request timed out`));
 			}, requestTimeoutMs(operation));
-			const pending: PendingRequest = { operation, resolve, reject, timer };
+			const line = `${JSON.stringify({ id, token: this.#token, operation })}\n`;
+			const pending: PendingRequest = { operation, line, resolve, reject, timer };
 			if (signal) {
 				const abort = (): void => {
 					if (!this.#pending.delete(id)) return;
@@ -194,7 +195,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 				pending.removeAbort = () => signal.removeEventListener("abort", abort);
 			}
 			this.#pending.set(id, pending);
-			socket.write(`${JSON.stringify({ id, token: this.#token, operation })}\n`);
+			socket.write(line);
 			return await promise;
 		} finally {
 			this.#requestsInFlight--;
@@ -357,6 +358,22 @@ class SocketDaemonClient implements DaemonBrokerClient {
 			},
 			error => this.#rejectPending(error instanceof Error ? error : new Error(String(error))),
 		);
+	}
+
+	#scheduleIdleDisconnect(): void {
+		if (this.#closed || this.#requestsInFlight > 0 || !this.#socket || this.#idleDisconnectMs === undefined) return;
+		const grace = this.#idleDisconnectMs;
+		this.#idleTimer = setTimeout(
+			() => {
+				this.#idleTimer = undefined;
+				if (this.#requestsInFlight > 0) return;
+				const socket = this.#socket;
+				this.#socket = undefined;
+				socket?.destroy();
+			},
+			Number.isFinite(grace) && grace >= 0 ? grace : 3_000,
+		);
+		this.#idleTimer.unref();
 	}
 
 	#rejectPending(error: Error): void {

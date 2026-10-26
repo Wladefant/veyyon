@@ -31,7 +31,6 @@ export function conversationIdForOpenCode(
 }
 
 /**
-/**
  * The `x-opencode-session` value a request with no conversation routes under:
  * one random id per process, digested like a session id. A request without the
  * header is rejected with `MissingSessionID`, and a per-request value would
@@ -45,6 +44,7 @@ function processSessionHeader(): string {
 	processSessionHeaderValue ??= openCodeSessionHeaderValue(randomUUID());
 	return processSessionHeaderValue;
 }
+/**
  * Headers every OpenCode request carries. The gateway documents both under
  * "Where can I use it?": a client has to identify itself with a narrow
  * user agent, and has to send `x-opencode-session` so the gateway can optimize
