@@ -7,6 +7,7 @@
 - `read` and the CLI `@` attachment import the entry-kind phrase from `@veyyon/utils/fs-error`, which adds no module to any import graph; no user-facing change.
 - The provider-refusal check and the Mnemopi per-bank target dedupe each have one definition; no user-facing change.
 - `/todo` with an unknown verb in the TUI lists the accepted verbs, the message ACP shows, instead of the full usage.
+- `veyyon ttsr scan` compiles rule conditions, globs and scopes with the functions a session uses instead of a copy of them; no user-facing change.
 
 ### Fixed
 

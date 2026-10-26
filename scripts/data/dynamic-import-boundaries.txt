@@ -39,7 +39,6 @@ packages/coding-agent/src/cli.ts
 packages/coding-agent/src/cli/profile-cli.ts
 packages/coding-agent/src/cli/runtime-stages.ts
 packages/coding-agent/src/cli/stats-cli.ts
-packages/coding-agent/src/cli/ttsr-cli.ts
 packages/coding-agent/src/commands/launch.ts
 packages/coding-agent/src/debug/profiler.ts
 packages/coding-agent/src/eval/agent-bridge.ts
