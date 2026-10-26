@@ -22,6 +22,7 @@
  * - The trust store is keyed by the real relative POSIX path of `SKILL.md`.
  */
 import { createHash, type Hash } from "node:crypto";
+import type { Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { errorMessage, logger } from "@veyyon/utils";
