@@ -675,13 +675,14 @@ export class DaemonBroker {
 				return this.#wait(operation);
 			case "send":
 				return this.#send(operation);
-			case "stop": {
-				const found = await this.#lookup(operation.name);
-				// A purged generation is over; stopping it again is a no-op, as it is before the purge.
-				if (!("snapshot" in found)) return { op: "stop", daemon: retainedSnapshot(found) };
-				await this.#stopRecord(found, operation.timeoutMs);
-				return { op: "stop", daemon: found.snapshot };
-			}
+			case "stop":
+				return this.#serialized(operation.name, async (): Promise<DaemonRpcResult> => {
+					const found = await this.#lookup(operation.name);
+					// A purged generation is over; stopping it again is a no-op, as it is before the purge.
+					if (!("snapshot" in found)) return { op: "stop", daemon: retainedSnapshot(found) };
+					await this.#stopRecord(found, operation.timeoutMs);
+					return { op: "stop", daemon: found.snapshot };
+				});
 			case "restart":
 				return this.#serialized(operation.name, () => this.#restart(operation.name));
 			case "describe": {
