@@ -135,6 +135,23 @@ describe("spawn quota fallback", () => {
 		}
 	});
 
+	it.each([false, true])("keeps an empty or missing explicit chain closed before global Flash (missing=%s)", async missing => {
+		const { runtime, session, settings, events } = fixture(true, true);
+		settings.override("retry.fallbackChains", {
+			...(missing ? {} : { [selectors[0]]: [] }),
+			"openai-codex/*": [selectors[1]],
+			default: [selectors[1]],
+		});
+		try {
+			expect(await runtime.recoverFailedTurn(quota())).toBe(false);
+			expect(session.model).toBe(models[0]);
+			expect(events.filter(event => event.type === "retry_fallback_applied")).toEqual([]);
+			expect(runtime.isRetrying).toBe(false);
+		} finally {
+			runtime.abort();
+		}
+	});
+
 	it("does not enable inherited chains for a session without an explicit list", async () => {
 		const { runtime, session } = fixture(false);
 		try {
