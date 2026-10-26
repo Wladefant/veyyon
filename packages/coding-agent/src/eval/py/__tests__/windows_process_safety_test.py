@@ -60,12 +60,20 @@ class WindowsProcessSafety(unittest.TestCase):
             text=True, creationflags=FLAGS,
         )
         try:
-            code = "import sys; sys.audit('os.kill', 123, 0)"
+            requests = [
+                {"id": "nonzero", "code": "import sys; sys.audit('os.kill', 123, 15)"},
+                {"id": "guard", "code": "import sys; sys.audit('os.kill', 123, 0)"},
+                {"type": "exit"},
+            ]
             output, errors = runner.communicate(
-                json.dumps({"id": "guard", "code": code}) + '\n{"type":"exit"}\n', timeout=15,
+                "".join(json.dumps(request) + "\n" for request in requests), timeout=15,
             )
             frames = [json.loads(line) for line in output.splitlines()]
             failures = [frame for frame in frames if frame.get("type") == "error"]
+            self.assertTrue(any(
+                frame.get("type") == "done" and frame.get("id") == "nonzero"
+                and frame.get("status") == "ok" for frame in frames
+            ), output)
             self.assertEqual(len(failures), 1, errors)
             self.assertEqual(failures[0]["ename"], "PermissionError")
             self.assertIn("terminates", failures[0]["evalue"])
