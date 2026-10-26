@@ -24,6 +24,7 @@ const ACCEPTED_CALL_ID = /^[a-zA-Z0-9_-]{1,64}$/;
 const FOREIGN_CALL_IDS = [
 	"call_abc\nitem_def",
 	"call.with.dots",
+	"call.fixture.41",
 	`call_${"x".repeat(80)}`,
 	`toolu_${"y".repeat(70)}|fc_123`,
 	"|leading-separator",
