@@ -1028,6 +1028,7 @@ describe("agentLoop with AgentMessage", () => {
 						return {
 							status: "repaired",
 							arguments: { value: String(length), i: "x".repeat(length) },
+							hints: [],
 						};
 					}
 				: undefined,
