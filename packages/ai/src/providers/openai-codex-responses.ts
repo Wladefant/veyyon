@@ -169,8 +169,7 @@ import {
 	hoistInterleavedResponsesToolBatchMessages,
 	isOpenAIResponsesProgressEvent,
 	populateResponsesUsageFromResponse,
-	repairOrphanResponsesToolCalls,
-	repairOrphanResponsesToolOutputs,
+	repairResponsesToolPairs,
 } from "./openai-shared";
 import { normalizeOpenAIPromptCacheKey } from "./openai-stable-ids";
 import {
@@ -4943,8 +4942,7 @@ export function convertCodexResponsesMessages(model: Model<"openai-codex-respons
 	}
 
 	if (!hasNativeHistory) return messages;
-	const pairedOutputs = repairOrphanResponsesToolOutputs(messages);
-	return hoistInterleavedResponsesToolBatchMessages(repairOrphanResponsesToolCalls(pairedOutputs));
+	return hoistInterleavedResponsesToolBatchMessages(repairResponsesToolPairs(messages));
 }
 
 function normalizeInputMessageContent(
