@@ -36,6 +36,23 @@ export function formatYoloStatus(session: AgentSession): string {
 	return session.isApprovalBypassed() ? "on" : "off";
 }
 
+const YOLO_USAGE = "Usage: /yolo [on|off|status]";
+const YOLO_OFF = "Full permission bypass off. Approval prompts are back on.";
+
+/**
+ * What one `/yolo` invocation asks for, read the same way by the text and TUI handlers. Bare `/yolo`
+ * and `toggle` flip the bypass, as the declaration states. An unknown word is `undefined` and gets
+ * the usage line, so a typo such as `/yolo of` never reaches the path that turns prompts off.
+ */
+function parseYoloRequest(rawArgs: string, session: AgentSession): "status" | "enable" | "disable" | undefined {
+	const arg = rawArgs.trim().toLowerCase();
+	if (arg === "status") return "status";
+	if (arg === "on") return "enable";
+	if (arg === "off") return "disable";
+	if (!arg || arg === "toggle") return session.isApprovalBypassed() ? "disable" : "enable";
+	return undefined;
+}
+
 /**
  * The rung in force plus where it came from, e.g. `Ask cmds (session)`.
  *
@@ -290,54 +307,41 @@ export const MODES_HANDLERS = {
 	yolo: {
 		getTuiAutocompleteDescription: runtime => `Full permission bypass · ${formatYoloStatus(runtime.ctx.session)}`,
 		handle: async (command, runtime) => {
-			const arg = command.args.trim().toLowerCase();
-			if (arg === "status") {
+			const request = parseYoloRequest(command.args, runtime.session);
+			if (!request) return usage(YOLO_USAGE, runtime);
+			if (request === "status") {
 				await runtime.output(`Full permission bypass is ${formatYoloStatus(runtime.session)}.`);
 				return commandConsumed();
 			}
-			if (arg === "off") {
-				runtime.session.setApprovalBypass(false);
-				await runtime.output("Full permission bypass off. Approval prompts are back on.");
-				await runtime.notifyConfigChanged?.();
-				return commandConsumed();
-			}
-			if (!arg || arg === "on" || arg === "toggle") {
-				const next = arg === "toggle" || !arg ? !runtime.session.isApprovalBypassed() : true;
-				runtime.session.setApprovalBypass(next);
-				await runtime.output(
-					next
-						? "Full permission bypass ON. Every approval prompt is off for this session (explicit deny and plan mode still block)."
-						: "Full permission bypass off. Approval prompts are back on.",
-				);
-				await runtime.notifyConfigChanged?.();
-				return commandConsumed();
-			}
-			return usage("Usage: /yolo [on|off|status]", runtime);
+			runtime.session.setApprovalBypass(request === "enable");
+			await runtime.output(
+				request === "enable"
+					? "Full permission bypass ON. Every approval prompt is off for this session (explicit deny and plan mode still block)."
+					: YOLO_OFF,
+			);
+			await runtime.notifyConfigChanged?.();
+			return commandConsumed();
 		},
 		handleTui: async (command, runtime) => {
-			const arg = command.args.trim().toLowerCase();
+			const request = parseYoloRequest(command.args, runtime.ctx.session);
 			runtime.ctx.editor.setText("");
-			if (arg === "status") {
+			if (!request) {
+				runtime.ctx.showWarning(YOLO_USAGE);
+				return;
+			}
+			if (request === "status") {
 				runtime.ctx.showStatus(`Full permission bypass is ${formatYoloStatus(runtime.ctx.session)}.`);
 				return;
 			}
-			if (arg === "off") {
+			if (request === "disable") {
 				runtime.ctx.session.setApprovalBypass(false);
 				refreshStatusLine(runtime.ctx);
 				runtime.ctx.updateEditorBorderColor();
-				runtime.ctx.showStatus("Full permission bypass off. Approval prompts are back on.");
+				runtime.ctx.showStatus(YOLO_OFF);
 				return;
 			}
-			// Any enabling path (bare, `on`, or `toggle` landing on) requires an
+			// Every enabling path (bare, `on`, or `toggle` landing on) requires an
 			// explicit danger confirmation: this turns off EVERY prompt.
-			const enabling = arg === "toggle" ? !runtime.ctx.session.isApprovalBypassed() : true;
-			if (!enabling) {
-				runtime.ctx.session.setApprovalBypass(false);
-				refreshStatusLine(runtime.ctx);
-				runtime.ctx.updateEditorBorderColor();
-				runtime.ctx.showStatus("Full permission bypass off. Approval prompts are back on.");
-				return;
-			}
 			if (runtime.ctx.session.isApprovalBypassed()) {
 				runtime.ctx.showStatus("Full permission bypass is already on.");
 				return;

@@ -44,6 +44,8 @@
 - `/fast` and `/browser` accept an argument followed by whitespace outside the terminal, as the terminal does, instead of printing the usage line.
 - `/session Info` and `/session info ` (trailing space) now show session info over ACP and in print mode instead of the usage line, and a mistyped `/session` verb in the terminal prints the usage line instead of showing session info.
 - `/session info` over ACP and in print mode prints `Title: (untitled)` for a session with no title instead of `Title: undefined`.
+- `/yolo` with a word it does not know, such as `/yolo disable`, prints the usage line in the terminal instead of raising the confirmation that turns every permission prompt off.
+- Bare `/yolo` in the terminal turns the bypass off when it is on, as it already did over ACP and in print mode, instead of reporting that it is already on.
 
 ## [1.5.10] - 2026-10-25
 
