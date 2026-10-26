@@ -310,13 +310,13 @@ const CODEX_CALL_ID_INVALID_CHAR = /[^a-zA-Z0-9_-]/g;
 export function sanitizeCodexCallId(rawCallId: string): string {
 	const separator = rawCallId.search(/[\n|]/);
 	const base = separator > 0 ? rawCallId.slice(0, separator) : separator === 0 ? rawCallId.slice(1) : rawCallId;
-	const sanitized = base.replace(CODEX_CALL_ID_INVALID_CHAR, "_").replace(/_+$/, "");
-	if (sanitized.length > 0 && sanitized.length <= CODEX_CALL_ID_MAX_LENGTH && sanitized === base) return sanitized;
+	const sanitized = base.replace(CODEX_CALL_ID_INVALID_CHAR, "_");
+	if (sanitized.length > 0 && sanitized.length <= CODEX_CALL_ID_MAX_LENGTH && sanitized === base) return base;
 	const digest = createHash("sha256")
 		.update(base || rawCallId)
 		.digest("base64url")
 		.slice(0, 11);
-	const prefix = (sanitized.length > 0 ? sanitized : "call").slice(0, CODEX_CALL_ID_MAX_LENGTH - digest.length - 1);
+	const prefix = (sanitized.replace(/_+$/, "") || "call").slice(0, CODEX_CALL_ID_MAX_LENGTH - digest.length - 1);
 	return `${prefix}_${digest}`;
 }
 
