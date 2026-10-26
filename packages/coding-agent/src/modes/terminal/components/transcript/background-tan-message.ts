@@ -1,7 +1,7 @@
 import { Text } from "@veyyon/tui";
 import type { BackgroundTanDispatchCustomDisplay } from "@veyyon/wire/presentation";
 import { withIcon } from "../../../../theme/icon-label";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { previewLine } from "../../../../tools/core/render-utils";
 import { TranscriptBlock } from "./transcript-container";
 

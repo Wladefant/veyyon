@@ -203,6 +203,17 @@ export interface UsageHistoryQuery {
 	sinceMs?: number;
 }
 
+/** One observed provider request cost, attributed to the credential that made it. */
+export interface UsageCostHistoryEntry {
+	/** Epoch ms the request completed. */
+	recordedAt: number;
+	provider: Provider;
+	/** Stable credential identity key (account/email/project/secret derived). */
+	accountKey: string;
+	/** Estimated request cost in USD. */
+	costUsd: number;
+}
+
 // The wire schemas for a usage report live in `./usage/report-wire`, built on first use.
 // Declaring them here made every consumer of this module -- which is every launch, through
 // `auth-storage.ts` -> `api-registry.ts` -> `stream.ts` -- evaluate arktype for 362ms in

@@ -3,7 +3,7 @@
  * Why: large registries must not drop, reorder, or invent tools.
  */
 import { describe, expect, it } from "bun:test";
-import { normalizeTools } from "@veyyon/agent-core/agent-loop";
+import { normalizeTools } from "@veyyon/agent-core/tool-normalization";
 
 describe("normalizeTools name-only 100 tools matrix", () => {
 	const tools = Array.from({ length: 100 }, (_, i) => ({

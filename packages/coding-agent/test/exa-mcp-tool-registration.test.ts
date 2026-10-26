@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import { getExaMcpTools, RESEARCHER_MCP_TOOL_NAMES } from "@veyyon/coding-agent/exa/tools";
 import type { CustomToolContext } from "@veyyon/coding-agent/extensibility/custom-tools";
 import { logger } from "@veyyon/utils";
@@ -35,7 +35,7 @@ describe("Exa MCP tool registration", () => {
 	let requestedUrls: string[] = [];
 	let savedFetch: typeof globalThis.fetch;
 	let savedKey: string | undefined;
-	let errorSpy: ReturnType<typeof vi.spyOn>;
+	let errorSpy: Mock<typeof logger.error>;
 
 	/** Reply with a JSON-RPC `tools/list` result, chosen by which host was called. */
 	function stubMcp(routes: { exa?: unknown; websets?: unknown }): void {

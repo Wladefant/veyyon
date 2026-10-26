@@ -43,7 +43,7 @@ import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool, DEFAULT_TOOL_RESULT_MAX_BYTES } from "@veyyon/agent-core";
 import type { Message, ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { createMockModel, type MockResponse } from "@veyyon/ai/providers/mock";
+import { createMockModel, type MockModel, type MockResponse } from "@veyyon/ai/providers/mock";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
@@ -101,7 +101,7 @@ describe("an oversized tool result is capped before it is persisted or sent", ()
 	let tempDir: string;
 	let authStorage: AuthStorage | undefined;
 	let session: AgentSession;
-	let mock: ReturnType<typeof createMockModel>;
+	let mock: MockModel;
 	let scriptedResponses: MockResponse[];
 	let toolOutput: string;
 

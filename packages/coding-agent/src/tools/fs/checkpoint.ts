@@ -3,7 +3,7 @@ import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy, prompt } from "@veyyon/utils";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";
-import type { OutputMeta } from "../core/output-meta";
+import type { OutputMeta } from "../core/output-notice";
 import { ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 

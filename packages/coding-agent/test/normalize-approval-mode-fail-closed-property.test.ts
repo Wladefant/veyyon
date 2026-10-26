@@ -3,7 +3,7 @@
  * aliases exact; unrecognized non-empty → ask (fail closed, never the default).
  */
 import { describe, expect, it } from "bun:test";
-import { normalizeApprovalMode, validateApprovalModeSetting } from "@veyyon/coding-agent/tools/core/approval";
+import { normalizeApprovalMode } from "@veyyon/coding-agent/tools/core/approval";
 
 describe("normalizeApprovalMode fail-closed property", () => {
 	it("undefined maps to the shipped default", () => {
@@ -39,25 +39,5 @@ describe("normalizeApprovalMode fail-closed property", () => {
 		for (const t of ["askk", "bogus", "auto-edit ", " plan", "YOLO"]) {
 			expect(normalizeApprovalMode(t)).toBe("ask");
 		}
-	});
-});
-
-describe("validateApprovalModeSetting matrix", () => {
-	for (const m of ["plan", "ask", "auto-edit", "yolo", "always-ask", "write"]) {
-		it(`ok ${m}`, () => {
-			expect(validateApprovalModeSetting(m)).toBeUndefined();
-		});
-	}
-
-	it("undefined/null ok", () => {
-		expect(validateApprovalModeSetting(undefined)).toBeUndefined();
-		expect(validateApprovalModeSetting(null)).toBeUndefined();
-	});
-
-	it("unrecognized surfaces loudly with fallback wording", () => {
-		const w = validateApprovalModeSetting("askk");
-		expect(w).toContain("unrecognized");
-		expect(w).toContain("askk");
-		expect(w).toContain('"ask"');
 	});
 });

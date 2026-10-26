@@ -12,20 +12,6 @@ import {
 } from "@veyyon/utils/session-file";
 
 /**
- * The advisor transcript naming contract, owned by `@veyyon/utils/session-file` and re-exported here.
- *
- * It lives there because `@veyyon/stats` classifies a transcript as the advisor's by matching this name and
- * cannot import the coding agent, so it had declared the same filename itself. The stem is chosen so it
- * cannot collide with a task agent's `<id>.jsonl` (task ids are reserved against this exact stem in
- * {@link AgentOutputManager}).
- */
-export {
-	ADVISOR_TRANSCRIPT_FILENAME,
-	ADVISOR_TRANSCRIPT_STEM,
-	isAdvisorTranscriptName,
-} from "@veyyon/utils/session-file";
-
-/**
  * Transcript filename for an advisor: `__advisor.jsonl` for the legacy/default
  * advisor (empty slug), `__advisor.<slug>.jsonl` for a named advisor. The `.`
  * separator keeps named files out of the output manager's `-<n>` bump namespace.

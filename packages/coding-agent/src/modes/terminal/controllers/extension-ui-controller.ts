@@ -1,7 +1,6 @@
 import { abortDetached } from "@veyyon/kernel/session/detached-abort";
 import {
 	type Component,
-	Container,
 	DEFAULT_MASK_CHAR,
 	type OverlayHandle,
 	type OverlayOptions,
@@ -12,7 +11,7 @@ import {
 } from "@veyyon/tui";
 import { clampLow, errorMessage } from "@veyyon/utils";
 import type { SgrMouseEvent } from "@veyyon/utils/mouse";
-import type { CollabUiRequestDraft, CollabUiSelectItem } from "@veyyon/wire";
+import type { CollabUiRequestDraft } from "@veyyon/wire";
 import { type AutoresearchUiDelegate, registerAutoresearchUi } from "../../../autoresearch/dashboard";
 import { KeybindingsManager } from "../../../config/keybindings";
 import type {
@@ -20,14 +19,12 @@ import type {
 	ExtensionActions,
 	ExtensionAskDialogQuestion,
 	ExtensionAskDialogResult,
-	ExtensionAskDialogResultItem,
 	ExtensionCommandContextActions,
 	ExtensionContextActions,
 	ExtensionError,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionUISelectItem,
-	ExtensionUiComponent,
 	ExtensionWidgetOptions,
 	SendUserMessageHandler,
 	TerminalInputHandler,
@@ -40,17 +37,15 @@ import { sessionWorkerAccess } from "../../../native-control/telegram-control-br
 import { toConfirmDialog, toPromptDialog, toSelectDialog } from "../../../presentation/overlay-builder";
 import { normalizeCustomMessagePayload, USER_INTERRUPT_LABEL } from "../../../session/messages";
 import { getAvailableThemesWithPaths, getThemeByName, setTheme, type Theme, theme } from "../../../theme/theme";
-import {
-	ASK_CHAT_OPTION_LABEL,
-	ASK_NEXT_OPTION_LABEL,
-	ASK_OTHER_OPTION_LABEL,
-} from "../../../tools/agent/ask-option-labels";
 import { setTerminalTitle } from "../../../utils/title-generator";
-import { AskDialogComponent, boundPromptTitle } from "../components/dialogs/ask-dialog";
+import { AskDialogComponent } from "../components/dialogs/ask-dialog";
 import { HookEditorComponent } from "../components/dialogs/hook-editor";
 import { HookInputComponent } from "../components/dialogs/hook-input";
 import { HookSelectorComponent, type HookSelectorSlider } from "../components/selectors/hook-selector";
 import type { InteractiveModeContext, InteractiveSelectorDialogOptions } from "../types";
+import { guestSelectRequest, raceCollabAskDialog, raceCollabDialog } from "./collab-guest-dialogs";
+import { DialogQueue } from "./dialog-queue";
+import { HookWidgets } from "./hook-widgets";
 
 /**
  * The slice of the interactive context this uses: 31 members of the 215
@@ -95,50 +90,22 @@ export type ExtensionUiControllerContext = Pick<
 	| "ui"
 >;
 
-const MAX_WIDGET_LINES = 10;
-
-interface CollabDialogWinner {
-	source: "local" | "remote";
-	value: string | undefined;
-}
-
-interface CollabAskDialogWinner {
-	source: "local" | "remote";
-	value: ExtensionAskDialogResult | undefined;
-}
-/** Tagged result from a guest UI request, distinguishing a real answer (even
- *  one whose literal value is "unavailable"), an explicit guest cancel, and a
- *  transport-unavailable sentinel (collab teardown / abort). Replaces the old
- *  `string | "unavailable" | undefined` channel that let a guest answer of
- *  "unavailable" collide with the transport sentinel. */
-type GuestUiResult = { kind: "answered"; value: string } | { kind: "cancelled" } | { kind: "unavailable" };
-
-function toWireSelectOptions(options: ExtensionUISelectItem[]): CollabUiSelectItem[] {
-	return options.map(option =>
-		typeof option === "string"
-			? option
-			: option.description
-				? { label: option.label, description: option.description }
-				: { label: option.label },
-	);
-}
-
 export class ExtensionUiController {
 	#extensionTerminalInputUnsubscribers = new Set<() => void>();
-	#hookWidgetsAbove = new Map<string, ExtensionUiComponent>();
-	#hookWidgetsBelow = new Map<string, ExtensionUiComponent>();
-	// Single-file dialog surface (`editorContainer` + focus) is shared by the
-	// selector / input / editor modals, so only one may be presented at a time;
-	// the rest queue. See `#presentDialog`.
-	#dialogActive = false;
-	#dialogQueue: Array<() => void> = [];
+	readonly #widgets: HookWidgets;
+	// Selector / input / editor / ask modals share one editor surface, so only one may be
+	// presented at a time; the rest queue.
+	readonly #dialogs: DialogQueue;
 	/** Live overlay for the hook selector card, so `hide` reaches the right one. */
 	#hookSelectorOverlay: OverlayHandle | undefined;
 	/** Live overlay for the hook input card. */
 	#hookInputOverlay: OverlayHandle | undefined;
 	/** Live overlay for the hook editor card. */
 	#hookEditorOverlay: OverlayHandle | undefined;
-	constructor(private ctx: ExtensionUiControllerContext) {}
+	constructor(private ctx: ExtensionUiControllerContext) {
+		this.#widgets = new HookWidgets(ctx);
+		this.#dialogs = new DialogQueue(() => this.#restWorkingLoaderWhileIdle());
+	}
 
 	/**
 	 * Initialize the hook system with TUI-based UI context.
@@ -215,43 +182,7 @@ export class ExtensionUiController {
 	}
 
 	setHookWidget(key: string, content: TerminalWidgetContent, options?: ExtensionWidgetOptions): void {
-		const placement = options?.placement ?? "aboveEditor";
-		removeHookWidget(this.#hookWidgetsAbove, key);
-		removeHookWidget(this.#hookWidgetsBelow, key);
-
-		if (content === undefined) {
-			this.#rebuildHookWidgets();
-			return;
-		}
-
-		const target = placement === "belowEditor" ? this.#hookWidgetsBelow : this.#hookWidgetsAbove;
-		target.set(key, this.#createHookWidget(content));
-		this.#rebuildHookWidgets();
-	}
-
-	#createHookWidget(content: TerminalWidgetContent): ExtensionUiComponent {
-		if (Array.isArray(content)) {
-			const container = new Container();
-			for (const line of content.slice(0, MAX_WIDGET_LINES)) {
-				// A whitespace-only Text renders zero rows, so a deliberate blank separator in
-				// extension-supplied content needs a Spacer to survive.
-				container.addChild(line.trim() === "" ? new Spacer(1) : new Text(line, 1, 0));
-			}
-			if (content.length > MAX_WIDGET_LINES) {
-				container.addChild(new Text(theme.fg("muted", "... (widget truncated)"), 1, 0));
-			}
-			return container;
-		}
-		if (content === undefined) {
-			throw new Error("Widget content missing");
-		}
-		return content(this.ctx.ui, theme);
-	}
-
-	#rebuildHookWidgets(): void {
-		renderHookWidgetContainer(this.ctx.hookWidgetContainerAbove, this.#hookWidgetsAbove, true, true);
-		renderHookWidgetContainer(this.ctx.hookWidgetContainerBelow, this.#hookWidgetsBelow, false, false);
-		this.ctx.ui.requestRender();
+		this.#widgets.set(key, content, options);
 	}
 
 	initializeHookRunner(uiContext: ExtensionUIContext, _hasUI: boolean): void {
@@ -471,18 +402,11 @@ export class ExtensionUiController {
 			selectedIndex: dialogOptions?.initialIndex,
 			filterable: options.length > 12,
 		});
-		const request: CollabUiRequestDraft = {
-			kind: "select",
-			title: selectDialog.title,
-			options: toWireSelectOptions(options),
-			initialIndex: dialogOptions?.initialIndex,
-			selectionMarker: dialogOptions?.selectionMarker,
-			checkedIndices: dialogOptions?.checkedIndices ? dialogOptions.checkedIndices.slice() : undefined,
-			markableCount: dialogOptions?.markableCount,
-			helpText: dialogOptions?.helpText,
-		};
-		return this.#raceCollabDialog(request, dialogOptions?.signal, signal =>
-			this.showHookSelector(selectDialog.title, options, { ...dialogOptions, signal }, extra),
+		return raceCollabDialog(
+			this.ctx.collabHost,
+			guestSelectRequest(selectDialog.title, options, dialogOptions),
+			dialogOptions?.signal,
+			signal => this.showHookSelector(selectDialog.title, options, { ...dialogOptions, signal }, extra),
 		);
 	}
 
@@ -493,7 +417,7 @@ export class ExtensionUiController {
 		editorOptions?: { promptStyle?: boolean },
 	): Promise<string | undefined> {
 		const request: CollabUiRequestDraft = { kind: "editor", title, prefill };
-		return this.#raceCollabDialog(request, dialogOptions?.signal, signal =>
+		return raceCollabDialog(this.ctx.collabHost, request, dialogOptions?.signal, signal =>
 			this.showHookEditor(title, prefill, { ...dialogOptions, signal }, editorOptions),
 		);
 	}
@@ -502,23 +426,12 @@ export class ExtensionUiController {
 		questions: ExtensionAskDialogQuestion[],
 		dialogOptions?: ExtensionUIDialogOptions,
 	): Promise<ExtensionAskDialogResult | undefined> {
-		const host = this.ctx.collabHost;
-		if (!host) return this.#showLocalAskDialog(questions, dialogOptions);
-		const localAbort = new AbortController();
-		const remoteAbort = new AbortController();
-		const parentSignal = dialogOptions?.signal;
-		const localSignal = parentSignal ? AbortSignal.any([parentSignal, localAbort.signal]) : localAbort.signal;
-		const remoteSignal = parentSignal ? AbortSignal.any([parentSignal, remoteAbort.signal]) : remoteAbort.signal;
-		const localWinner = this.#showLocalAskDialog(questions, { ...dialogOptions, signal: localSignal }).then(
-			(value): CollabAskDialogWinner => ({ source: "local", value }),
+		return raceCollabAskDialog(
+			() => this.ctx.collabHost,
+			questions,
+			dialogOptions?.signal,
+			signal => this.#showLocalAskDialog(questions, { ...dialogOptions, signal }),
 		);
-		const remoteWinner: Promise<CollabAskDialogWinner> = this.#runGuestAskDialog(questions, remoteSignal).then(
-			result => (result === "unavailable" ? localWinner : { source: "remote", value: result }),
-		);
-		const winner = await Promise.race([localWinner, remoteWinner]);
-		if (winner.source === "remote") localAbort.abort();
-		else remoteAbort.abort();
-		return winner.value;
 	}
 
 	/**
@@ -533,7 +446,7 @@ export class ExtensionUiController {
 		questions: ExtensionAskDialogQuestion[],
 		dialogOptions?: ExtensionUIDialogOptions,
 	): Promise<ExtensionAskDialogResult | undefined> {
-		return this.#presentDialog<ExtensionAskDialogResult>(dialogOptions?.signal, settle => {
+		return this.#dialogs.present<ExtensionAskDialogResult>(dialogOptions?.signal, settle => {
 			let askDialog: AskDialogComponent | undefined;
 			let overlayHandle: OverlayHandle | undefined;
 			let promptEditor: HookEditorComponent | undefined;
@@ -629,170 +542,6 @@ export class ExtensionUiController {
 	}
 
 	/**
-	 * Race the local hook dialog against a mirrored guest ask. First *answer*
-	 * wins and cancels the other side. A remote `unavailable` settlement
-	 * (collab teardown, relay drop, abort) is NOT an answer: the local dialog
-	 * keeps running — the host user may be mid-keystroke in it — and its
-	 * eventual result is returned.
-	 */
-	async #raceCollabDialog(
-		request: CollabUiRequestDraft,
-		signal: AbortSignal | undefined,
-		local: (signal: AbortSignal | undefined) => Promise<string | undefined>,
-	): Promise<string | undefined> {
-		const host = this.ctx.collabHost;
-		if (!host) return local(signal);
-		const localAbort = new AbortController();
-		const remoteAbort = new AbortController();
-		const remote = host.requestGuestUi(
-			request,
-			signal ? AbortSignal.any([signal, remoteAbort.signal]) : remoteAbort.signal,
-		);
-		if (!remote) return local(signal);
-		const localWinner = local(signal ? AbortSignal.any([signal, localAbort.signal]) : localAbort.signal).then(
-			(value): CollabDialogWinner => ({ source: "local", value }),
-		);
-		const remoteWinner: Promise<CollabDialogWinner> = remote.then(result =>
-			result.kind === "answered" ? { source: "remote", value: result.value } : localWinner,
-		);
-		const winner = await Promise.race([localWinner, remoteWinner]);
-		if (winner.source === "remote") localAbort.abort();
-		else remoteAbort.abort();
-		return winner.value;
-	}
-
-	async #runGuestAskDialog(
-		questions: ExtensionAskDialogQuestion[],
-		signal: AbortSignal,
-	): Promise<ExtensionAskDialogResult | "unavailable" | undefined> {
-		const results: ExtensionAskDialogResultItem[] = [];
-		for (const question of questions) {
-			const result = await this.#runGuestAskQuestion(question, signal);
-			if (result === "unavailable" || result === undefined) return result;
-			if (result === "chat") return { kind: "chat" };
-			results.push(result);
-		}
-		return { kind: "submit", results };
-	}
-
-	async #runGuestAskQuestion(
-		question: ExtensionAskDialogQuestion,
-		signal: AbortSignal,
-	): Promise<ExtensionAskDialogResultItem | "chat" | "unavailable" | undefined> {
-		const selected = new Set<string>();
-		let customInput: string | undefined;
-		const baseOptions: CollabUiSelectItem[] = question.options.map(option =>
-			option.description?.trim() ? { label: option.label, description: option.description.trim() } : option.label,
-		);
-		// Mirror the local dialog: `allowOther: false` offers no free-text row, so a
-		// guest cannot return an answer outside the listed options.
-		const otherOption: CollabUiSelectItem[] = question.allowOther === false ? [] : [ASK_OTHER_OPTION_LABEL];
-		if (question.multi) {
-			while (true) {
-				const checkedIndices = question.options
-					.map((option, index) => (selected.has(option.label) ? index : -1))
-					.filter(index => index >= 0);
-				// Mirror the local dialog's Next gating: omit the Next option until
-				// at least one option is checked or a custom answer exists, so a
-				// guest cannot submit an empty multi-select result
-				// (PRRT_kwDOQxs0bc6OFbDW). The remote select has no "disabled" row
-				// concept, so we omit rather than dim it.
-				const hasAnswer = selected.size > 0 || customInput !== undefined;
-				const options = baseOptions.concat(otherOption);
-				if (hasAnswer) options.push(ASK_NEXT_OPTION_LABEL);
-				options.push(ASK_CHAT_OPTION_LABEL);
-				const choice = await this.#requestGuestUiString(
-					{
-						kind: "select",
-						title: question.question,
-						options,
-						selectionMarker: "checkbox",
-						checkedIndices,
-						markableCount: question.options.length,
-						helpText: hasAnswer
-							? "up/down navigate  enter toggle  Next → continue  esc cancel"
-							: "up/down navigate  enter toggle  esc cancel",
-					},
-					signal,
-				);
-				if (choice.kind === "unavailable") return "unavailable";
-				if (choice.kind === "cancelled") return undefined;
-				if (choice.value === ASK_CHAT_OPTION_LABEL) return "chat";
-				if (choice.value === ASK_NEXT_OPTION_LABEL) break;
-				if (otherOption.length > 0 && choice.value === ASK_OTHER_OPTION_LABEL) {
-					const input = await this.#requestGuestUiString(
-						{ kind: "editor", title: boundPromptTitle("Custom answer: ", question.question) },
-						signal,
-					);
-					if (input.kind === "unavailable") return "unavailable";
-					// Guest cancelled the Other editor: keep the ask open and
-					// return to the option list instead of cancelling the whole ask.
-					if (input.kind === "cancelled") continue;
-					customInput = input.value;
-					break;
-				}
-				if (selected.has(choice.value)) selected.delete(choice.value);
-				else selected.add(choice.value);
-			}
-		} else {
-			const recommended =
-				typeof question.recommended === "number" && Number.isInteger(question.recommended)
-					? question.recommended
-					: 0;
-			const initialIndex = clampLow(recommended, 0, Math.max(0, question.options.length - 1));
-			while (true) {
-				const choice = await this.#requestGuestUiString(
-					{
-						kind: "select",
-						title: question.question,
-						options: baseOptions.concat(otherOption, [ASK_CHAT_OPTION_LABEL]),
-						initialIndex,
-						selectionMarker: "radio",
-						markableCount: question.options.length,
-						helpText: "up/down navigate  enter select  esc cancel",
-					},
-					signal,
-				);
-				if (choice.kind === "unavailable") return "unavailable";
-				if (choice.kind === "cancelled") return undefined;
-				if (choice.value === ASK_CHAT_OPTION_LABEL) return "chat";
-				if (otherOption.length > 0 && choice.value === ASK_OTHER_OPTION_LABEL) {
-					const input = await this.#requestGuestUiString(
-						{ kind: "editor", title: boundPromptTitle("Custom answer: ", question.question) },
-						signal,
-					);
-					if (input.kind === "unavailable") return "unavailable";
-					// Guest cancelled the Other editor: re-show the select list
-					// instead of cancelling the whole ask.
-					if (input.kind === "cancelled") continue;
-					customInput = input.value;
-				} else {
-					selected.add(choice.value);
-				}
-				break;
-			}
-		}
-		return {
-			id: question.id,
-			question: question.question,
-			options: question.options.map(option => option.label),
-			multi: question.multi ?? false,
-			selectedOptions: question.options.map(option => option.label).filter(label => selected.has(label)),
-			customInput,
-		};
-	}
-
-	async #requestGuestUiString(request: CollabUiRequestDraft, signal: AbortSignal): Promise<GuestUiResult> {
-		const host = this.ctx.collabHost;
-		if (!host) return { kind: "unavailable" };
-		const remote = host.requestGuestUi(request, signal);
-		if (!remote) return { kind: "unavailable" };
-		const result = await remote;
-		if (result.kind === "unavailable") return { kind: "unavailable" };
-		return typeof result.value === "string" ? { kind: "answered", value: result.value } : { kind: "cancelled" };
-	}
-
-	/**
 	 * Show a selector for hooks: a fullscreen ModalShell overlay over the
 	 * transcript, the same surface the ask dialog and the session pickers use,
 	 * rather than a bordered stack swapped into the editor slot.
@@ -803,7 +552,7 @@ export class ExtensionUiController {
 		dialogOptions?: InteractiveSelectorDialogOptions,
 		extra?: { slider?: HookSelectorSlider },
 	): Promise<string | undefined> {
-		return this.#presentDialog(dialogOptions?.signal, settle => {
+		return this.#dialogs.present(dialogOptions?.signal, settle => {
 			const maxVisible = clampLow(this.ctx.ui.terminal.rows - 12, 4, 15);
 			const selector = new HookSelectorComponent(
 				title,
@@ -907,7 +656,7 @@ export class ExtensionUiController {
 			placeholder,
 			masked: inputOptions?.mask,
 		});
-		return this.#presentDialog(dialogOptions?.signal, settle => {
+		return this.#dialogs.present(dialogOptions?.signal, settle => {
 			const input = new HookInputComponent(
 				dialog.title,
 				dialog.placeholder,
@@ -959,7 +708,7 @@ export class ExtensionUiController {
 		dialogOptions?: ExtensionUIDialogOptions,
 		editorOptions?: { promptStyle?: boolean },
 	): Promise<string | undefined> {
-		return this.#presentDialog(dialogOptions?.signal, settle => {
+		return this.#dialogs.present(dialogOptions?.signal, settle => {
 			const editor = new HookEditorComponent(
 				this.ctx.ui,
 				title,
@@ -1084,15 +833,7 @@ export class ExtensionUiController {
 	}
 
 	clearHookWidgets(): void {
-		for (const widget of this.#hookWidgetsAbove.values()) {
-			widget.dispose?.();
-		}
-		for (const widget of this.#hookWidgetsBelow.values()) {
-			widget.dispose?.();
-		}
-		this.#hookWidgetsAbove.clear();
-		this.#hookWidgetsBelow.clear();
-		this.#rebuildHookWidgets();
+		this.#widgets.clear();
 	}
 
 	clearExtensionTerminalInputListeners(): void {
@@ -1140,78 +881,6 @@ export class ExtensionUiController {
 	}
 
 	/**
-	 * Present a modal dialog on the shared editor surface, serializing against any
-	 * dialog already open. `present` builds the component, swaps it into
-	 * `editorContainer`, steals focus, and returns a `hide` closure; it is invoked
-	 * with a single `settle` callback that the component fires on submit/cancel.
-	 *
-	 * Because selector / input / editor all clear `editorContainer` and re-focus,
-	 * showing a second one while the first is open would orphan the first — its
-	 * promise would hang until the caller's signal aborts. So at most one dialog is
-	 * presented at a time and the rest queue (FIFO). `settle` (or an abort) hides
-	 * the current dialog and hands the surface to the next queued request. A request
-	 * whose signal aborts before its turn resolves `undefined` and is never shown.
-	 */
-	#presentDialog<T = string>(
-		signal: AbortSignal | undefined,
-		present: (settle: (value: T | undefined) => void) => () => void,
-	): Promise<T | undefined> {
-		const { promise, resolve, reject } = Promise.withResolvers<T | undefined>();
-		let settled = false;
-		let started = false;
-		let hide: (() => void) | undefined;
-
-		function onAbort(): void {
-			settle(undefined);
-		}
-
-		const settle = (value: T | undefined): void => {
-			if (settled) return;
-			settled = true;
-			signal?.removeEventListener("abort", onAbort);
-			if (started) {
-				hide?.();
-				this.#dialogActive = false;
-				this.#advanceDialogQueue();
-			}
-			resolve(value);
-		};
-
-		const startPresentation = (): void => {
-			if (settled) {
-				// Aborted before its turn arrived — never present, hand off the surface.
-				this.#advanceDialogQueue();
-				return;
-			}
-			started = true;
-			this.#dialogActive = true;
-			this.#restWorkingLoaderWhileIdle();
-			try {
-				hide = present(settle);
-			} catch (error) {
-				settled = true;
-				signal?.removeEventListener("abort", onAbort);
-				this.#dialogActive = false;
-				reject(error);
-				this.#advanceDialogQueue();
-			}
-		};
-
-		if (signal?.aborted) {
-			resolve(undefined);
-			return promise;
-		}
-		signal?.addEventListener("abort", onAbort, { once: true });
-
-		if (this.#dialogActive) {
-			this.#dialogQueue.push(startPresentation);
-		} else {
-			startPresentation();
-		}
-		return promise;
-	}
-
-	/**
 	 * A hook UI that waits on the user is not the agent working. A slash command
 	 * mounts the `Working…` loader on submit and keeps it until its handler
 	 * returns, so a command that opens a console sat under `Working… · 0:19
@@ -1222,40 +891,8 @@ export class ExtensionUiController {
 		if (this.ctx.session.isStreaming) return;
 		this.ctx.clearWorkingLoader();
 	}
-
-	#advanceDialogQueue(): void {
-		this.#dialogQueue.shift()?.();
-	}
 }
 
-function removeHookWidget(widgets: Map<string, ExtensionUiComponent>, key: string): void {
-	const existing = widgets.get(key);
-	existing?.dispose?.();
-	widgets.delete(key);
-}
-
-function renderHookWidgetContainer(
-	container: Container,
-	widgets: Map<string, ExtensionUiComponent>,
-	spacerWhenEmpty: boolean,
-	leadingSpacer: boolean,
-): void {
-	container.clear();
-
-	if (widgets.size === 0) {
-		if (spacerWhenEmpty) {
-			container.addChild(new Spacer(1));
-		}
-		return;
-	}
-
-	if (leadingSpacer) {
-		container.addChild(new Spacer(1));
-	}
-	for (const widget of widgets.values()) {
-		container.addChild(widget);
-	}
-}
 /** The terminal host's autoresearch surfaces: the run screen and the launcher, each a `custom` overlay. */
 export const terminalAutoresearchUi: AutoresearchUiDelegate = {
 	async showScreen(ctx, runtime, model, options) {

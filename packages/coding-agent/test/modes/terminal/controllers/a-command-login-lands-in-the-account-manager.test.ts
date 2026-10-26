@@ -34,7 +34,7 @@
  * `test/slash-commands/login-names-a-provider-or-refuses.test.ts` against the real dispatcher.
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -91,7 +91,7 @@ interface Harness {
 	/** Everything written to the transcript, which is where the login receipt goes. */
 	readonly presented: () => string;
 	readonly statuses: string[];
-	readonly showError: ReturnType<typeof vi.fn>;
+	readonly showError: Mock<(message: string) => void>;
 	/** Resolves once the mocked provider flow has started and the dialog is on screen. */
 	readonly loginStarted: Promise<void>;
 	readonly dialog: () => LoginDialogComponent;

@@ -72,7 +72,7 @@ export default function (pi) {
                 return;
             }
             // Generate the handoff prompt with loader UI
-            const result = await terminal.custom((tui, theme, done) => {
+            const result = await terminal.custom((tui, theme, _keybindings, done) => {
                 const loader = new ComposerLoader(tui, theme, `Generating handoff prompt...`);
                 loader.onAbort = () => done(null);
                 const doGenerate = async () => {

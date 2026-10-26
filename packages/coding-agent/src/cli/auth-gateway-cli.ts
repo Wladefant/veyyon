@@ -12,6 +12,7 @@
  *   - `token` / `token --regenerate` — manages the gateway bearer token file.
  *   - `status` — prints the locally-stored gateway token and bind hint.
  */
+import * as fs from "node:fs/promises";
 import {
 	type Api,
 	type AssistantMessage,
@@ -26,6 +27,7 @@ import { DEFAULT_AUTH_GATEWAY_BIND, startAuthGateway } from "@veyyon/ai/auth-gat
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { type GeneratedProvider, getBundledChatModels, getBundledProviders } from "@veyyon/catalog/models";
 import { errorMessage, formatCount, VERSION } from "@veyyon/utils";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import chalk from "chalk";
 import { Settings } from "../config/settings";
 import {
@@ -33,7 +35,6 @@ import {
 	accountLoadBalancingSetting,
 	resolveAuthBrokerConfig,
 } from "../session/auth-broker-config";
-import { scopedTimeoutSignal } from "../utils/fetch-timeout";
 import { AuthTokenFile, printToken } from "./auth-token-file";
 
 export type AuthGatewayAction = "serve" | "token" | "status" | "check";
@@ -44,11 +45,9 @@ export interface AuthGatewayCommandArgs {
 		json?: boolean;
 		bind?: string;
 		regenerate?: boolean;
-		/**
-		 * Disable bearer-token auth on inbound requests. Useful when the gateway
-		 * is bound to loopback (the default `127.0.0.1:4000`) and you don't want
-		 * to wire token-paste plumbing into every local client.
-		 */
+		/** Server-only JSON map from device IDs to active bearer tokens. Re-read per request. */
+		deviceTokensFile?: string;
+		/** Rejected: inbound bearer authentication cannot be disabled. */
 		noAuth?: boolean;
 		/**
 		 * Strict mode for `check` — additionally exercise every credential
@@ -76,7 +75,21 @@ async function fetchBrokerSnapshot(client: AuthBrokerClient): Promise<SnapshotRe
 	return result.snapshot;
 }
 
+export async function readGatewayDeviceTokens(file: string): Promise<string[]> {
+	try {
+		const value: unknown = JSON.parse(await fs.readFile(file, "utf8"));
+		if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+		const tokens = Object.values(value);
+		if (!tokens.every(token => typeof token === "string" && /^[A-Za-z0-9._~+/-]+=*$/.test(token))) return [];
+		return tokens as string[];
+	} catch {
+		// An unavailable or invalid device list revokes all devices, never falls back.
+		return [];
+	}
+}
+
 async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
+	if (flags.noAuth) throw new Error("auth-gateway requires device bearer authentication; --no-auth is not supported");
 	// The gateway selects an account per request through `getApiKey`, so it is held to the same
 	// `accounts.loadBalancing` the interactive session is. The setting is read from the operator's
 	// config here; without this init the resolver below sees no settings and answers the default.
@@ -88,7 +101,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		);
 	}
 	const bind = flags.bind ?? DEFAULT_AUTH_GATEWAY_BIND;
-	const gatewayToken = flags.noAuth ? null : await TOKEN_FILE.ensure();
+	const gatewayToken = flags.deviceTokensFile ? null : await TOKEN_FILE.ensure();
 
 	// Build a broker-backed AuthStorage — same pattern as discoverAuthStorage()
 	// in sdk.ts. The gateway never touches local SQLite.
@@ -131,6 +144,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		storage,
 		bind,
 		bearerTokens: gatewayToken ? [gatewayToken] : [],
+		resolveBearerTokens: flags.deviceTokensFile ? () => readGatewayDeviceTokens(flags.deviceTokensFile!) : undefined,
 		version: VERSION,
 		resolveModel: (id: string) => modelById.get(id),
 		listModels: () => modelById.values(),
@@ -139,7 +153,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	if (gatewayToken) {
 		process.stdout.write(`bearer token: ${TOKEN_FILE.path()} (chmod 0600)\n`);
 	} else {
-		process.stdout.write(`auth: disabled (--no-auth) — any client can call this gateway\n`);
+		process.stdout.write("auth: per-device bearer authentication (live device list)\n");
 	}
 	process.stdout.write(`upstream broker: ${brokerConfig.url}\n`);
 

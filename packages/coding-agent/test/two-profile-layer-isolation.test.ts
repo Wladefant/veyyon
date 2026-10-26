@@ -401,7 +401,7 @@ describe("marketplace plugin roots follow the named profile's plugins dir", () =
 		f.resetCaches();
 		const named = await discoverAgents(f.cwd, f.home, namedAgentDir);
 
-		const pluginAgents = (result: Awaited<ReturnType<typeof discoverAgents>>): string[] =>
+		const pluginAgents = (result: DiscoveryResult): string[] =>
 			result.agents.map(agent => agent.name).filter(name => name.endsWith("-agent"));
 		expect(pluginAgents(defaulted)).toEqual(["active-agent"]);
 		expect(pluginAgents(named)).toEqual(["named-agent"]);

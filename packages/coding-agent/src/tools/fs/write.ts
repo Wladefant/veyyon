@@ -24,14 +24,10 @@ import { allLineNumbers, canonicalSnapshotKey, getFileSnapshotStore } from "../.
 import { normalizeToLF } from "../../edit/normalize";
 import { InternalUrlRouter } from "../../internal-urls";
 import { parseInternalUrl } from "../../internal-urls/parse";
-import {
-	createLspWritethrough,
-	type FileDiagnosticsResult,
-	type WritethroughCallback,
-	writethroughNoop,
-} from "../../lsp";
 import { DeferredDiagnostics } from "../../lsp/deferred-diagnostics";
+import type { FileDiagnosticsResult } from "../../lsp/diagnostics";
 import { getDiagnosticsLedger } from "../../lsp/diagnostics-ledger";
+import { createLspWritethrough, type WritethroughCallback, writethroughNoop } from "../../lsp/writethrough";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "../../sdk";
 import { budgetedFileCommit, sessionBudgetLimits } from "../../session/cpu-limit";
@@ -48,7 +44,8 @@ import {
 import { routeWriteThroughBridge } from "../core/acp-bridge";
 import { truncateForPrompt } from "../core/approval";
 import { invalidateFsScanAfterWrite } from "../core/fs-cache-invalidation";
-import { type OutputMeta, outputMeta } from "../core/output-meta";
+import { outputMeta } from "../core/output-meta";
+import type { OutputMeta } from "../core/output-notice";
 import {
 	formatPathRelativeToCwd,
 	isInternalUrlPath,

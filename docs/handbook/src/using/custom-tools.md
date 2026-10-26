@@ -124,14 +124,14 @@ From `types.ts` and `loader.ts`:
 
 - `cwd`: host working directory
 - `exec(command, args, options?)`: process execution helper
-- `ui`: UI context (can be no-op in headless modes)
-- `hasUI`: `false` in non-interactive flows
+- `ui`: the host's UI context, installed by the session when the host installs its tool UI; a no-op context before that and in hosts without one
+- `hasUI`: `true` once the host's UI is installed, `false` in non-interactive flows
 - `logger`: shared file logger
 - `typebox`: self-contained compatibility shim for legacy TypeBox-style schemas (legacy/compat, prefer `arktype` or `zod` for new tools)
 - `zod`: injected `zod/v4` module (canonical for new schemas)
 - `pi`: injected `@veyyon/coding-agent` exports
 - `pushPendingAction(action)`: register a preview action for hidden `resolve` tool (`docs/internal/resolve-tool-runtime.md`)
-  Loader starts with a no-op UI context and requires host code to call `setUIContext(...)` when real UI is ready.
+  The loader starts with a no-op UI context; the session calls the loader's `setUIContext(...)` with the host's UI, so a factory reads `pi.ui` at call time rather than caching it.
 
 ## Execution contract and typing
 

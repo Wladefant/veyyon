@@ -26,6 +26,7 @@
  * is only valid if the unpriced side is byte-identical to the old behaviour.
  */
 import { describe, expect, it } from "bun:test";
+import { Settings } from "../src/config/settings";
 import { DEFAULT_INLINE_FLOOR_FRACTION } from "../src/config/settings-domains/shared";
 import {
 	DEFAULT_MAX_BYTES,
@@ -220,9 +221,14 @@ function sessionWith(turnIndex: number | undefined, floor: unknown): ToolSession
  * reason anyone decided. These pin that the owner reads both.
  */
 describe("inlineOutputPricing", () => {
-	/** Both inputs come from the session, and nothing else does. */
+	/** Every input comes from the session, and nothing else does. */
 	it("reads the turn index and the floor setting", () => {
-		expect(inlineOutputPricing(sessionWith(7, 0.5))).toEqual({ turnIndex: 7, floorFraction: 0.5 });
+		const spillKb = Settings.isolated().get("tools.artifactSpillThreshold");
+		expect(inlineOutputPricing(sessionWith(7, 0.5))).toEqual({
+			turnIndex: 7,
+			floorFraction: 0.5,
+			maxBytes: spillKb * 1024,
+		});
 	});
 
 	/**
@@ -243,13 +249,13 @@ describe("inlineOutputPricing", () => {
 		expect(inlineOutputPricing(sessionWith(0, 1)).floorFraction).toBe(1);
 	});
 
-	/** An unset setting yields undefined, and `inlineCapForTurn` then applies its
-	 * own default. The two defaults are the same constant, so an operator who has
-	 * never touched the setting and one who set it to 0.25 get the same cap. */
-	it("yields undefined for an unset setting, which takes the shared default", () => {
+	/** An unset setting reads as its declared default, which is the constant
+	 * `inlineCapForTurn` applies when given none, so a session that never set the
+	 * floor and one that set it to that value get the same cap. */
+	it("reads an unset setting as the shared default", () => {
 		const pricing = inlineOutputPricing(sessionWith(0, undefined));
-		expect(pricing.floorFraction).toBeUndefined();
-		expect(inlineCapForTurn(BUDGET, 0, HORIZON, pricing.floorFraction)).toBe(
+		expect(pricing.floorFraction).toBe(DEFAULT_INLINE_FLOOR_FRACTION);
+		expect(inlineCapForTurn(BUDGET, 0, HORIZON, undefined)).toBe(
 			inlineCapForTurn(BUDGET, 0, HORIZON, DEFAULT_INLINE_FLOOR_FRACTION),
 		);
 	});

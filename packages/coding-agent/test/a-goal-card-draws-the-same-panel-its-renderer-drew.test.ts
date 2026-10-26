@@ -49,6 +49,7 @@ import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
 import { formatNumber } from "@veyyon/utils";
 import { truncateToWidth } from "@veyyon/utils/width";
+import type { ToolView } from "@veyyon/view";
 
 /**
  * Colour is forced on, through its one owner and restored after.
@@ -94,7 +95,7 @@ function result(
 	return { content: [{ type: "text", text }], details };
 }
 
-function rows(view: ReturnType<typeof goalToolView.renderResult>): readonly string[] {
+function rows(view: ToolView): readonly string[] {
 	return drawToolView(view, theme).render(WIDTH);
 }
 
@@ -104,7 +105,7 @@ function rows(view: ReturnType<typeof goalToolView.renderResult>): readonly stri
  * `Text.render` pads a row to the width it was given, which the old renderers' bare strings did not
  * carry, so the pad is dropped on both sides rather than written into every expectation.
  */
-function line(view: ReturnType<typeof goalToolView.renderCall>): string {
+function line(view: ToolView): string {
 	return drawToolView(view, theme).render(WIDTH).join("\n").trimEnd();
 }
 

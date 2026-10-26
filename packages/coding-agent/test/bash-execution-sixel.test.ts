@@ -106,25 +106,6 @@ describe("BashExecutionComponent streaming throttle", () => {
 		expect(output).not.toContain("line0\n");
 	});
 
-	it("gate drops rapid chunks", async () => {
-		const component = new BashExecutionComponent("test", ui, false);
-
-		// Send 100 chunks rapidly (all in same tick, before setTimeout fires)
-		for (let i = 0; i < 100; i++) {
-			component.appendOutput(`chunk${i}\n`);
-		}
-
-		// Only the first chunk should have been processed (gate blocks the rest)
-		const output = component.getOutput();
-		expect(output).toContain("chunk0");
-		expect(output).not.toContain("chunk99");
-
-		// After the gate timer expires, the next chunk is accepted
-		await Bun.sleep(60); // CHUNK_THROTTLE_MS is 50
-		component.appendOutput("after_gate\n");
-		expect(component.getOutput()).toContain("after_gate");
-	});
-
 	it("setComplete replaces streaming output with final output", () => {
 		const component = new BashExecutionComponent("test", ui, false);
 

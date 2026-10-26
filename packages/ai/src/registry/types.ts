@@ -60,7 +60,8 @@ interface ProviderDefinitionFields {
 	readonly showInLoginList?: boolean;
 	// --- env-var fallback (the catalog table's `envVars` supplies plain names; set this only for computed resolvers) ---
 	// --- interactive login (OAuthProviderInterface-compatible) ---
-	readonly refreshToken?: (credentials: OAuthCredentials) => Promise<OAuthCredentials>;
+	/** `signal` aborts the token request; a refresher passes it to that request's `fetch`. */
+	readonly refreshToken?: (credentials: OAuthCredentials, signal?: AbortSignal) => Promise<OAuthCredentials>;
 	readonly getApiKey?: (credentials: OAuthCredentials) => string;
 	/** Store OAuth credentials under a different provider id (e.g. `openai-codex-device` ⇒ `openai-codex`). */
 	readonly storeCredentialsAs?: string;

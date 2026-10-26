@@ -9,6 +9,7 @@ import {
 	MAX_REPAIR_INPUT_BYTES,
 	planAliasKeyRepairs,
 	repairToolCallArguments,
+	type ToolCallRepairOutcome,
 } from "@veyyon/coding-agent/tools/core/repair/schema-repair";
 import { type } from "arktype";
 
@@ -41,10 +42,7 @@ const strictTool: Tool = {
 
 // `| string` deliberately: malformed model output can arrive as a raw string,
 // and the oversize/adversarial cases exercise exactly that path.
-function call(
-	args: ToolCall["arguments"] | string,
-	tool: Tool = sampleTool,
-): ReturnType<typeof repairToolCallArguments> {
+function call(args: ToolCall["arguments"] | string, tool: Tool = sampleTool): ToolCallRepairOutcome {
 	return repairToolCallArguments(tool, {
 		type: "toolCall",
 		id: "tc-1",

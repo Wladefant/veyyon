@@ -56,12 +56,12 @@ import {
 } from "../../../../tools/core/json-tree-render";
 import {
 	formatExpandHint,
-	formatStatusIcon,
 	replaceTabs,
 	resolveImageOptions,
 	shortenEmbeddedPaths,
 	truncateToWidth,
 } from "../../../../tools/core/render-utils";
+import { formatStatusIcon } from "../../../../tools/core/tool-ui-status";
 import { toolViewDefinitions } from "../../../../tools/view-registry";
 import { drawToolView, type SpinnerFrameSource, toolViewHighlightRequests } from "../../draw/draw-tool-view";
 import {

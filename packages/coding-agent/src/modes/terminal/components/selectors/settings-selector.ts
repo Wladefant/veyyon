@@ -10,7 +10,7 @@ import {
 	Input,
 	rankSettingItems,
 	type SelectItem,
-	SelectList,
+	type SelectList,
 	type SettingItem,
 	SettingsList,
 	Spacer,
@@ -29,19 +29,9 @@ import {
 	type DefaultEffortList,
 	withLegacyDefaultEffort,
 } from "../../../../config/effort-resolver";
+import { normalizeModelPatternList } from "../../../../config/model-pattern-list";
 import type { ModelRegistry } from "../../../../config/model-registry";
-import {
-	extractExplicitThinkingSelector,
-	normalizeModelPatternList,
-	resolveModelRoleValue,
-} from "../../../../config/model-resolver";
-import {
-	DEFAULT_MODEL_SLOT,
-	getRoleInfo,
-	isDefaultModelSlot,
-	ROLE_INHERIT_LABEL,
-	SELECTABLE_MODEL_ROLE_IDS,
-} from "../../../../config/model-roles";
+import { extractExplicitThinkingSelector } from "../../../../config/model-resolver";
 import { BUILTIN_PERSONALITY_DESCRIPTIONS, NONE_PERSONALITY } from "../../../../config/personality-resolver";
 import {
 	normalizeProviderMaxInFlightRequests,
@@ -49,7 +39,7 @@ import {
 	settings,
 	validateProviderMaxInFlightRequests,
 } from "../../../../config/settings";
-import type { AgentLaneSettings, AgentSettings } from "../../../../config/settings-domains/agents";
+import type { AgentSettings } from "../../../../config/settings-domains/agents";
 import {
 	getDefault,
 	getType,
@@ -65,30 +55,11 @@ import { loadCapability } from "../../../../discovery";
 import { PROVIDER_ID as NATIVE_RULES_PROVIDER_ID } from "../../../../discovery/builtin";
 import { BUILTIN_RULE_SECTIONS, type BuiltinRuleSection } from "../../../../discovery/builtin-rules";
 import { BUILTIN_DEFAULTS_PROVIDER_ID, type Rule, ruleCapability } from "../../../../discovery/capability/rule";
-import {
-	AGENT_ENABLE_STATE_LABEL,
-	agentEnableState,
-	agentModelSourceLabel,
-	agentScopeIsShared,
-	agentSettingsFor,
-	delegationBlockedNotice,
-	isAgentEnableDefaulted,
-	nextAgentEnableValue,
-	resolveAgentMaxNestedSpawnDepth,
-	resolveAgentModel,
-	resolveAgentThinkingLevel,
-	resolveDelegation,
-} from "../../../../task/agent-settings";
-import { discoverAgents } from "../../../../task/discovery";
-import { type AgentDefinition, canSpawnAtDepth } from "../../../../task/types";
+import { includedPredictionLogins } from "../../../../session/composer-prediction";
+import { HELPER_IDS, helperSettingsFor } from "../../../../task/helper-settings";
 import { withIcon } from "../../../../theme/icon-label";
-import { getCurrentThemeName, getSelectListTheme, getSettingsListTheme, theme } from "../../../../theme/theme";
-import {
-	configuredThinkingLevelOptions,
-	hasConfigurableThinkingEffort,
-	INHERIT_EFFORT_OPTION_VALUE,
-	noSelectableEffortNotice,
-} from "../../../../thinking";
+import { getCurrentThemeName, getSettingsListTheme, theme } from "../../../../theme/theme";
+import { INHERIT_EFFORT_OPTION_VALUE } from "../../../../thinking";
 import { getTabBarTheme } from "../../shared";
 import { computeModalDims, MODAL_SIZING_SETTINGS, sizingForArea } from "../chrome/modal-geometry";
 import {
@@ -105,8 +76,10 @@ import {
 import { handleInputOrEscape, PluginSettingsComponent } from "../dialogs/plugin-settings";
 import { RollbackPanelComponent } from "../dialogs/rollback-panel";
 import { getPreset } from "../status-line/presets";
-import { formatSelectorSummary, renderEffortStep } from "./effort-picker";
-import { ModelSelectorPanel } from "./model-selector";
+import { AgentsSubmenu, agentEffortOptions, effortScopeForPattern } from "./agents-submenu";
+import { renderEffortStep } from "./effort-picker";
+import { barePickerSelector, ModelChainSubmenu } from "./model-chain-submenu";
+import type { ModelSelectorPanel } from "./model-selector";
 import { MouseRoutedSubmenu, routeModalChrome, routeSettingsListPointer } from "./select-list-mouse-routing";
 import {
 	isOverrideSource,
@@ -118,8 +91,6 @@ import {
 	SETTING_SOURCE_LABELS,
 } from "./setting-source";
 import {
-	ADVISOR_MODEL_SETTING_ID,
-	ADVISOR_MODEL_SLOT,
 	DEFAULT_MODEL_SETTING_ID,
 	formatLspSummary,
 	getSettingDef,
@@ -131,8 +102,23 @@ import {
 	type SettingDef,
 	settingsSearchLandingPath,
 } from "./settings-defs";
+import {
+	createFocusedSelectList,
+	formatModelSummaryWithFallbacks,
+	handleRowDeleteKey,
+	MODEL_CATALOG_UNAVAILABLE,
+	marker,
+	renderAsyncStatusFrame,
+	renderModelSelectorPanel,
+	SelectSubmenu,
+	selectListOrModelPickerTarget,
+} from "./settings-submenus";
 
 const DECIMAL_NUMBER = /^-?\d+(?:\.\d+)?$/;
+
+const PREDICTIONS_MODE_PATH: SettingPath = "composer.predictions.mode";
+const INCLUDED_PREDICTION_MODE = "chatgpt-pro";
+const CONNECT_PRO_PREDICTION_HINT = "Connect a ChatGPT Pro account to use this mode.";
 
 export const UNSET_NUMBER_INPUT = "unset";
 
@@ -147,107 +133,8 @@ export function parseNumberSetting(path: SettingPath, text: string): number | ty
 	return parsed;
 }
 
-const AGENT_LIST_DESCRIPTION =
-	"Which agents the model may spawn and what each one runs. Open an agent to set its model and effort and which agents it may spawn in turn. An agent with neither set runs the default model at medium effort.";
-
-const AGENTS_PATH = "agent.agents" satisfies SettingPath;
 const DEFAULT_EFFORT_PATH = "defaultEffort" satisfies SettingPath;
 const PROVIDER_LIMITS_PATH = "providers.maxInFlightRequests" satisfies SettingPath;
-
-const MODEL_CATALOG_UNAVAILABLE = "Model catalog unavailable in this context";
-
-function formatModelSummaryWithFallbacks(primarySelector: string, fallbackCount: number, dim = false): string {
-	const summary = formatSelectorSummary(primarySelector);
-	if (fallbackCount <= 0) return summary;
-	const text = `+${formatCount("fallback", fallbackCount)}`;
-	return `${summary} ${dim ? theme.fg("dim", text) : text}`;
-}
-
-function selectListOrModelPickerTarget(
-	selectList: SelectList | undefined,
-	container: Container,
-): SelectList | ModelSelectorPanel | undefined {
-	return (
-		selectList ?? container.children.find((child): child is ModelSelectorPanel => child instanceof ModelSelectorPanel)
-	);
-}
-
-function createFocusedSelectList(
-	items: ReadonlyArray<SelectItem>,
-	visibleRows: number,
-	focusedValue?: string,
-	options?: {
-		onSelect?: (item: SelectItem) => void;
-		onCancel?: () => void;
-		onSelectionChange?: (item: SelectItem) => void;
-		minPrimaryColumnWidth?: number;
-		maxPrimaryColumnWidth?: number;
-	},
-): SelectList {
-	const columnWidths =
-		options?.minPrimaryColumnWidth !== undefined || options?.maxPrimaryColumnWidth !== undefined
-			? {
-					minPrimaryColumnWidth: options.minPrimaryColumnWidth,
-					maxPrimaryColumnWidth: options.maxPrimaryColumnWidth,
-				}
-			: undefined;
-	const list = new SelectList(items, clamp(visibleRows, 1, 12), getSelectListTheme(), columnWidths);
-	if (focusedValue !== undefined) {
-		const index = items.findIndex(item => item.value === focusedValue);
-		if (index >= 0) list.setSelectedIndex(index);
-	}
-	if (options?.onSelect) list.onSelect = options.onSelect;
-	if (options?.onCancel) list.onCancel = options.onCancel;
-	if (options?.onSelectionChange) list.onSelectionChange = options.onSelectionChange;
-	return list;
-}
-
-function handleRowDeleteKey(data: string, list: SelectList | undefined, onRemove: () => void): boolean {
-	if (list && (matchesKey(data, "delete") || matchesKey(data, "backspace"))) {
-		onRemove();
-		return true;
-	}
-	return false;
-}
-
-function renderAsyncStatusFrame(
-	submenu: MouseRoutedSubmenu,
-	title: string,
-	description: string,
-	loaded: boolean,
-	loadError: string | undefined,
-	loadingText: string,
-	errorPrefix: string,
-): boolean {
-	if (loadError) {
-		const container = new Container();
-		container.addChild(new Text(theme.fg("error", `  ${errorPrefix}: ${loadError}`), 0, 0));
-		submenu.renderSubmenuFrame({ title, description, body: container, footerHint: "  Esc to go back" });
-		return true;
-	}
-	if (!loaded) {
-		const container = new Container();
-		container.addChild(new Text(theme.fg("dim", `  ${loadingText}`), 0, 0));
-		submenu.renderSubmenuFrame({ title, description, body: container });
-		return true;
-	}
-	return false;
-}
-function renderModelSelectorPanel(
-	container: MouseRoutedSubmenu & { requestRender?: () => void },
-	registry: ModelRegistry,
-	models: ReadonlyArray<Model>,
-	options: ConstructorParameters<typeof ModelSelectorPanel>[3],
-	callbacks: ConstructorParameters<typeof ModelSelectorPanel>[4],
-): void {
-	container.clear();
-	const panel = new ModelSelectorPanel(settings, registry, models, options, callbacks);
-	panel.setHoverMotion({
-		requestRender: () => container.requestRender?.(),
-		enabled: pointerMotionEnabled(),
-	});
-	container.addChild(panel);
-}
 
 function headingItem(id: string, label: string): SettingItem {
 	return { id, label, currentValue: "", heading: true };
@@ -301,75 +188,6 @@ class TextInputSubmenu extends MouseRoutedSubmenu {
 
 	override handleInput(data: string): void {
 		handleInputOrEscape(data, this.#input, this.onCancel);
-	}
-}
-
-class SelectSubmenu extends MouseRoutedSubmenu {
-	#selectList: SelectList;
-	#previewText: Text | null = null;
-	#previewUpdateRequestId = 0;
-
-	constructor(
-		title: string,
-		description: string,
-		options: ReadonlyArray<SelectItem>,
-		currentValue: string,
-		onSelect: (value: string) => void,
-		onCancel: () => void,
-		onSelectionChange?: (value: string) => void | Promise<void>,
-		private readonly getPreview?: () => string,
-		footer?: Component,
-	) {
-		super();
-		const selectList = createFocusedSelectList(options, Math.min(options.length, 10), currentValue, {
-			onSelect: item => onSelect(item.value),
-			onCancel,
-		});
-
-		let headerExtra: Component | undefined;
-		let previewText: Text | null = null;
-		if (getPreview) {
-			const container = new Container();
-			container.addChild(new Text(theme.fg("muted", "Preview:"), 0, 0));
-			previewText = new Text(getPreview(), 0, 0);
-			container.addChild(previewText);
-			headerExtra = container;
-		}
-
-		this.renderSubmenuFrame({
-			title,
-			description,
-			headerExtra,
-			body: selectList,
-			footerExtra: footer,
-		});
-
-		this.#selectList = selectList;
-		this.#previewText = previewText;
-
-		if (onSelectionChange) {
-			selectList.onSelectionChange = item => {
-				const requestId = ++this.#previewUpdateRequestId;
-				const result = onSelectionChange(item.value);
-				if (result && typeof (result as Promise<void>).then === "function") {
-					void (result as Promise<void>).finally(() => {
-						if (requestId === this.#previewUpdateRequestId) this.#updatePreview();
-					});
-					return;
-				}
-				if (requestId === this.#previewUpdateRequestId) this.#updatePreview();
-			};
-		}
-	}
-
-	#updatePreview(): void {
-		if (this.#previewText && this.getPreview) {
-			this.#previewText.setText(this.getPreview());
-		}
-	}
-
-	mouseTarget(): SelectList {
-		return this.#selectList;
 	}
 }
 
@@ -640,10 +458,6 @@ function currentRaw(): string {
 	return String(settings.get("compaction.threshold") ?? AUTO_COMPACTION_THRESHOLD);
 }
 
-function marker(active: boolean): string {
-	return active ? `${theme.fg("success", theme.status.enabled)} ` : "  ";
-}
-
 function validateCustom(mode: "percent" | "tokens", value: string): string {
 	const text = value.trim();
 	if (mode === "percent") {
@@ -777,161 +591,66 @@ function profileLimits(): Record<string, number> {
 	return normalizeProviderMaxInFlightRequests(profileWritableRecord(PROVIDER_LIMITS_PATH));
 }
 
-export function barePickerSelector(raw: string | undefined, models: ReadonlyArray<Model<Api>>): string | undefined {
-	if (!raw) return undefined;
-	const resolved = resolveModelRoleValue(raw, models).model;
-	return resolved ? `${resolved.provider}/${resolved.id}` : raw;
-}
-
-export function replaceModelChainEntry(
-	chain: readonly string[],
-	index: number | null,
-	value: string,
-	models: ReadonlyArray<Model<Api>>,
-): string[] | undefined {
-	const trimmed = value.trim();
-	if (trimmed === "") return undefined;
-	const bare = barePickerSelector(trimmed, models);
-	const duplicate = chain.some(
-		(candidate, candidateIndex) => candidateIndex !== index && barePickerSelector(candidate, models) === bare,
-	);
-	if (duplicate) return undefined;
-	const next = chain.slice();
-	if (index === null) {
-		next.push(trimmed);
-		return next;
+/** The profile's own `defaultModel` chain: what the Default Model row edits, never a `--model` override. */
+function profileDefaultModelChain(): string[] {
+	const stored = settings.layerValue("profile", ["defaultModel"]);
+	if (typeof stored === "string") return normalizeModelPatternList(stored);
+	if (Array.isArray(stored) && stored.every((entry): entry is string => typeof entry === "string")) {
+		return normalizeModelPatternList(stored);
 	}
-	if (!Number.isInteger(index) || index < 0 || index >= next.length) return undefined;
-	next[index] = trimmed;
-	return next;
+	return [];
 }
 
-class ModelRolesSubmenu extends MouseRoutedSubmenu {
-	#selectList: SelectList | undefined;
-	#models: ReadonlyArray<Model>;
-	#registry: ModelRegistry;
-	#soleRole: string | undefined;
-
+/**
+ * The Default Model row's picker: one model, written to the profile's
+ * `defaultModel`. A `--model` launch overrides the key for its run and leaves
+ * what this row stores alone. Effort is set in Default Effort, so the picker
+ * has no effort step.
+ */
+class DefaultModelSubmenu extends MouseRoutedSubmenu {
 	constructor(
 		models: ReadonlyArray<Model>,
 		registry: ModelRegistry,
 		private readonly onChange: () => void,
 		private readonly onCancel: () => void,
 		public requestRender?: () => void,
-		soleRole?: string,
 	) {
 		super();
-		this.#models = models;
-		this.#registry = registry;
-		this.#soleRole = soleRole;
-		if (soleRole) this.#showModelPicker(soleRole);
-		else this.#showRoleList();
-	}
-
-	#goBack(): void {
-		if (this.#soleRole) {
-			this.onCancel();
-			return;
-		}
-		this.#showRoleList();
-	}
-
-	#showRoleList(): void {
-		this.clear();
-		const items: SelectItem[] = SELECTABLE_MODEL_ROLE_IDS.map(role => {
-			const info = getRoleInfo(role, settings);
-			const assigned = settings.getModelRole(role)?.trim();
-			const shown =
-				assigned && assigned.length > 0 ? formatSelectorSummary(assigned) : (info.unsetLabel ?? ROLE_INHERIT_LABEL);
-			const source = settings.getModelRoleSource(role);
-			if (isOverrideSource(source)) {
-				return {
-					value: role,
-					label: info.name,
-					description: `${shown} · ${overriddenEntryLabel(source)}`,
-					disabled: true,
-				};
-			}
-			return { value: role, label: info.name, description: shown };
-		});
-		const selectList = createFocusedSelectList(items, items.length, undefined, {
-			onSelect: item => this.#showModelPicker(item.value),
-			onCancel: this.onCancel,
-		});
-		this.#selectList = selectList;
-
-		this.renderSubmenuFrame({
-			title: "Role Models",
-			description: "Assign a model per role. Searchable picker · auth status on each row. Per active profile.",
-			body: selectList,
-			footerHint: "  Enter to pick model · Esc to go back",
-		});
-	}
-
-	#showModelPicker(role: string): void {
-		this.#selectList = undefined;
-		const isDefault = isDefaultModelSlot(role);
-		const info = getRoleInfo(role, settings);
-		const current = (
-			isDefault ? settings.getPersistedModelRole(DEFAULT_MODEL_SLOT) : settings.getModelRole(role)
-		)?.trim();
 		renderModelSelectorPanel(
 			this,
-			this.#registry,
-			this.#models,
+			registry,
+			models,
 			{
-				title: isDefault ? info.name : `${info.name} model`,
-				description: isDefault
-					? "The model each new session starts on, restored on launch. Del or the clear row restores auto-select on launch."
-					: `Role \`${role}\` — used when that work type runs. Del or the (inherit) row clears (${info.unsetLabel ?? "inherit main model"}).`,
-				currentSelector: barePickerSelector(current, this.#models as Model<Api>[]),
+				title: "Default Model",
+				description:
+					"The model each new session starts on, restored on launch. Del or the clear row restores auto-select on launch.",
+				currentSelector: barePickerSelector(profileDefaultModelChain()[0], models as Model<Api>[]),
 				allowClear: true,
-				clearLabel: isDefault ? `(${info.unsetLabel ?? "auto-select on launch"})` : undefined,
+				clearLabel: "(auto-select on launch)",
 			},
 			{
-				onPick: (model, selector) => {
-					if (isDefault || !hasConfigurableThinkingEffort(model)) {
-						this.#persistRole(role, selector);
-						return;
-					}
-					this.#showEffortPicker(role, selector, model);
-					this.requestRender?.();
-				},
-				onClear: () => this.#persistRole(role, undefined),
-				onCancel: () => {
-					this.#goBack();
-					this.requestRender?.();
-				},
+				onPick: (_model, selector) => this.#persist(selector),
+				onClear: () => this.#persist(undefined),
+				onCancel: this.onCancel,
 			},
 		);
 	}
 
-	#showEffortPicker(role: string, selector: string, model: Model): void {
-		this.#selectList = renderEffortStep(
-			this,
-			selector,
-			model,
-			value => this.#persistRole(role, value),
-			() => {
-				this.#showModelPicker(role);
-				this.requestRender?.();
-			},
-		);
-	}
-
-	#persistRole(role: string, value: string | undefined): void {
-		if (isDefaultModelSlot(role)) {
-			settings.setPersistedModelRole(DEFAULT_MODEL_SLOT, value);
-		} else {
-			settings.setModelRole(role, value);
-		}
+	#persist(selector: string | undefined): void {
+		if (selector === undefined) {
+			// `unset` also drops a runtime override. This row edits only the profile
+			// value, so a `--model` launch stays the session's model.
+			const runtime = settings.layerValue("runtime", ["defaultModel"]);
+			settings.unset("defaultModel");
+			if (typeof runtime === "string") settings.override("defaultModel", runtime);
+		} else settings.set("defaultModel", selector);
 		this.onChange();
-		this.#goBack();
+		this.onCancel();
 		this.requestRender?.();
 	}
 
 	mouseTarget(): SelectList | ModelSelectorPanel | undefined {
-		return selectListOrModelPickerTarget(this.#selectList, this);
+		return selectListOrModelPickerTarget(undefined, this);
 	}
 }
 
@@ -1197,676 +916,7 @@ function warningComponent(builtinOff: boolean): Component | undefined {
 	return container;
 }
 
-const AGENT_ROW_OFFERED = "\u0000agent-offered";
-const AGENT_ROW_NESTED = "\u0000agent-nested";
-const AGENT_ROW_RESET = "\u0000agent-reset";
-
-/**
- * Row ids for the two settings an agent's own page edits: the model and the
- * effort THAT agent runs. The page that shows a lane's value is the page that
- * changes it, because the previous shape showed a value and then named a
- * different screen to go and change it on.
- */
-const AGENT_ROW_MODEL = "\u0000agent-model";
-const AGENT_ROW_EFFORT = "\u0000agent-effort";
-
-const CUSTOM_AGENT_HINT =
-	"Write your own: a markdown file in ~/.veyyon/subagents/. Guide: veyyon.dev/docs/features/agents-authoring.html";
-
-/** The settings one pass through the roster can write. */
-type AgentRosterPath = "agent.agents";
-
-/**
- * What a lane's Effort row narrows against, as three distinct answers rather
- * than one nullable model.
- *
- * `model` — a model is named and resolved: the lane's chain head, or the
- * session's own model when the lane names none.
- * `unresolved` — a model is named and this session has no catalog entry for it
- * (an unauthenticated provider, a pattern matching nothing). Offering a ladder
- * here invents one: the picker says which pattern it cannot read instead.
- * `blanket` — nothing is named at all, so the row spans the catalog and the
- * honest list is the union of what the catalog declares.
- *
- * The three used to be one `Model | undefined`, and undefined fell through to
- * the full vocabulary: `minimal` on a row whose endpoint declares `low, high,
- * max`, and an invented ladder for an id like `cursor-grok-4.6-medium` whose id
- * IS its effort.
- */
-type AgentEffortScope = { kind: "model"; model: Model } | { kind: "unresolved"; pattern: string } | { kind: "blanket" };
-
-function effortScopeForPattern(
-	models: ReadonlyArray<Model> | undefined,
-	head: string | undefined,
-	sessionModel: Model | undefined,
-): AgentEffortScope {
-	if (!head) return sessionModel ? { kind: "model", model: sessionModel } : { kind: "blanket" };
-	const bare = models ? barePickerSelector(head, models as Model<Api>[]) : head;
-	const found = models?.find(candidate => `${candidate.provider}/${candidate.id}` === bare);
-	return found ? { kind: "model", model: found } : { kind: "unresolved", pattern: head };
-}
-
-/** The picker rows and the sentence that explains a short list, from one scope. */
-function agentEffortOptions(
-	scope: AgentEffortScope,
-	catalog: ReadonlyArray<Model> | undefined,
-): { options: Array<{ value: string; label: string; description: string }>; notice: string | undefined } {
-	if (scope.kind === "unresolved") {
-		return {
-			options: configuredThinkingLevelOptions({
-				inheritLabel: "Inherit",
-				inheritDescription: "Follow the session's effort",
-			}).map(option => ({ ...option })),
-			notice: `No model in this session matches \`${scope.pattern}\`, so its effort levels are unknown. Inherit is the only choice that means anything until the chain resolves.`,
-		};
-	}
-	const options = configuredThinkingLevelOptions({
-		model: scope.kind === "model" ? scope.model : undefined,
-		scope: scope.kind === "blanket" ? catalog : undefined,
-		inheritLabel: "Inherit",
-		inheritDescription: "Follow the session's effort",
-	}).map(option => ({ ...option }));
-	if (options.length > 1) return { options, notice: undefined };
-	return {
-		options,
-		notice:
-			scope.kind === "model"
-				? noSelectableEffortNotice()
-				: "No model in this session declares a selectable effort, so only Inherit applies.",
-	};
-}
-
-/**
- * Whether a lane at `depth` may run, with the default applied.
- *
- * `depth` is the lane's index in the chain, and lane index `i` is the process
- * at task depth `i + 1`, so a lane runs exactly when the level above it may
- * spawn — {@link canSpawnAtDepth} against the cap that governs this agent.
- * Unset is NOT off: it is the blanket ceiling still answering, which is why a
- * stock roster shows the nested level off and a config that raised the ceiling
- * shows it on without anything being written per agent.
- *
- * Stated once here because the page, the summary row and the resolver all need
- * the same answer, and a hardcoded "off below the first level" gave the page a
- * different one than the spawn gate.
- */
-function laneSpawnEnabled(lane: AgentLaneSettings, depth: number, resolvedMax: number): boolean {
-	return lane.enabled ?? canSpawnAtDepth(resolvedMax, depth);
-}
-
-function lanePath(name: string, depth: number): string {
-	return `agent.agents.${name}${".agents".repeat(depth)}`;
-}
-
-/**
- * One lane with its empty fields dropped, or undefined when nothing is left.
- *
- * A lane that stores only `{}` — or only `{ agents: {} }` — is a row that
- * reads as configured to everything that checks for one, while deciding nothing.
- * Pruning bottom-up is what lets a page be opened, looked at, and left without
- * writing anything.
- */
-function pruneLane(lane: AgentLaneSettings): AgentLaneSettings | undefined {
-	const cleaned: AgentLaneSettings = {};
-	if (lane.enabled !== undefined) cleaned.enabled = lane.enabled;
-	if (lane.model !== undefined && (Array.isArray(lane.model) ? lane.model.length > 0 : lane.model.trim().length > 0)) {
-		cleaned.model = lane.model;
-	}
-	if (lane.thinkingLevel !== undefined && lane.thinkingLevel.trim().length > 0) {
-		cleaned.thinkingLevel = lane.thinkingLevel;
-	}
-	if (lane.softRequestBudget !== undefined) {
-		cleaned.softRequestBudget = lane.softRequestBudget;
-	}
-	const child = lane.agents === undefined ? undefined : pruneLane(lane.agents);
-	if (child !== undefined) cleaned.agents = child;
-	// The pre-tree number survives only while there is no chain. It still decides
-	// in that state, so dropping it on an unrelated toggle would silently change
-	// the ceiling; once a chain exists it decides nothing, and leaving it behind
-	// is a dead value in the operator's file that once did.
-	if (lane.maxNestedSpawnDepth !== undefined && child === undefined) {
-		cleaned.maxNestedSpawnDepth = lane.maxNestedSpawnDepth;
-	}
-	return Object.keys(cleaned).length === 0 ? undefined : cleaned;
-}
-
-/**
- * The `agent.agents` table: the discovered agents, each with what it runs and
- * what it may spawn.
- *
- * Every answer comes from `task/agent-settings.ts` — the enable default, the
- * state wording, the model precedence and the layer that decided it — so this and
- * `/agents` cannot describe the same row differently. It edits settings rows only;
- * writing an agent FILE stays in `/agents`, which is why the footer points there.
- *
- * A lane is RECURSIVE and every page has the same shape: Enabled, Model, Effort,
- * and a door to what this lane may spawn. Open `deep`, and you are setting what
- * `deep` runs; open its `Agents` row and you are setting what `deep` spawns,
- * with `inherit` meaning the page you came from. There is no ceiling: the chain
- * goes as deep as levels are turned on, and `Agents → Enabled` IS the depth
- * limit, which is why no numeric row sits beside it.
- *
- * The hazard this shape has to keep answering: a per-agent model once outranked
- * the blanket setting from a screen that did not show it, and two screens gave
- * different answers for one agent. The rule that fixes it is not "no per-agent
- * layer" but "the page that SHOWS a value CHANGES that value" — every row here
- * edits the lane it is drawn on, and the badge names the exact path that decided.
- *
- * The list is discovered rather than read off the stored table: a row exists only
- * once something is overridden, so a table-driven list would be empty on a stock
- * install and would hide exactly the specialists the operator came to turn on.
- */
-class AgentsSubmenu extends MouseRoutedSubmenu {
-	#selectList: SelectList | undefined;
-	#agents: AgentDefinition[] = [];
-	#loadError: string | undefined;
-	#loaded = false;
-	#escapeTo: (() => void) | undefined;
-
-	constructor(
-		private readonly cwd: string,
-		private readonly sessionModel: Model | undefined,
-		private readonly models: ReadonlyArray<Model> | undefined,
-		private readonly picker: { registry: ModelRegistry; models: ReadonlyArray<Model> } | undefined,
-		private readonly onChange: (path: AgentRosterPath) => void,
-		private readonly onCancel: () => void,
-		private readonly requestRender?: () => void,
-	) {
-		super();
-		this.#showAgentList();
-		void this.#load();
-	}
-
-	async #load(): Promise<void> {
-		try {
-			const { agents } = await discoverAgents(this.cwd);
-			this.#agents = agents.slice().sort((a, b) => a.name.localeCompare(b.name));
-		} catch (error) {
-			this.#loadError = errorMessage(error);
-		}
-		this.#loaded = true;
-		this.#showAgentList();
-		this.requestRender?.();
-	}
-
-	/**
-	 * The rows the profile itself holds, always an object so callers can spread
-	 * it. Writing one lane never copies a row an override supplies into the
-	 * profile.
-	 */
-	#table(): Record<string, AgentSettings> {
-		const stored = profileWritableRecord(AGENTS_PATH);
-		return stored && typeof stored === "object" ? ({ ...stored } as Record<string, AgentSettings>) : {};
-	}
-
-	#row(name: string): AgentSettings {
-		return { ...agentSettingsFor(settings, name) };
-	}
-
-	/**
-	 * The lane a page is showing: `[]` is the agent's own page, `["agents"]`
-	 * the page for what it may spawn, and one more step per level below that.
-	 *
-	 * A level the operator has not opened yet does not exist in the file, so this
-	 * answers with an empty lane rather than undefined: the page renders the
-	 * defaults, and nothing is written until something is chosen.
-	 */
-	#lane(name: string, depth: number): AgentLaneSettings {
-		let lane: AgentLaneSettings = this.#row(name);
-		for (let step = 0; step < depth; step++) lane = lane.agents ?? {};
-		return { ...lane };
-	}
-
-	/**
-	 * Write one lane back into its agent's row, rebuilding the chain above it.
-	 *
-	 * Empty fields and empty lanes are dropped on the way up, and a row left with
-	 * nothing is deleted: an empty row and no row must not be distinguishable,
-	 * because a bare `{}` in the file reads as "configured" to anything checking
-	 * for a row.
-	 */
-	#writeLane(name: string, depth: number, next: AgentLaneSettings): void {
-		const chain: AgentLaneSettings[] = [];
-		let lane: AgentLaneSettings = this.#row(name);
-		for (let step = 0; step < depth; step++) {
-			chain.push(lane);
-			lane = lane.agents ?? {};
-		}
-		let rebuilt = pruneLane(next);
-		for (let step = chain.length - 1; step >= 0; step--) {
-			rebuilt = pruneLane({ ...chain[step], agents: rebuilt });
-		}
-		const table = this.#table();
-		if (rebuilt === undefined) delete table[name];
-		else table[name] = rebuilt;
-		settings.set("agent.agents", table);
-		this.onChange("agent.agents");
-	}
-
-	#runsSummary(agent: AgentDefinition, depth = 0): string {
-		const model = modelSummary(agent, depth);
-		const head = resolveAgentModel({
-			settings,
-			agentName: agent.name,
-			agentModel: agent.model,
-			taskDepth: depth + 1,
-		}).patterns[0];
-		if (head && extractExplicitThinkingSelector(head, settings) !== undefined) return model;
-		const effort = resolveAgentThinkingLevel({
-			settings,
-			agentName: agent.name,
-			agentThinkingLevel: agent.thinkingLevel,
-			taskDepth: depth + 1,
-		});
-		return `${model} ${theme.fg("dim", `· ${effort} effort`)}`;
-	}
-
-	#showAgentList(): void {
-		this.clear();
-		this.#escapeTo = undefined;
-
-		this.#selectList = undefined;
-
-		if (
-			renderAsyncStatusFrame(
-				this,
-				"Agents",
-				AGENT_LIST_DESCRIPTION,
-				this.#loaded,
-				this.#loadError,
-				"Reading agents…",
-				"Could not read the agent directories",
-			)
-		) {
-			return;
-		}
-
-		let headerExtra: Component | undefined;
-		// Whether this table has any effect is decided by `agent.delegation` as
-		// well, and that setting is a row the reader is not looking at right now. So
-		// the panel says when nothing will be delegated, from the one resolver that
-		// reads both — the same sentence `/agents` shows, for the same reason.
-		const blocked = delegationBlockedNotice(
-			resolveDelegation(
-				settings,
-				this.#agents
-					.filter(agent => agentEnableState(agent, this.#row(agent.name).enabled) === "on")
-					.map(agent => agent.name),
-			),
-		);
-		if (blocked) {
-			headerExtra = new Text(theme.fg("warning", `  ${blocked}`), 0, 0);
-		}
-
-		// One row per discovered agent, and nothing above them. There is no header
-		// pair answering for the whole list any more: a control that reached every
-		// agent at once is what made "I changed the model" and "my agents
-		// changed model" one event.
-		const items: SelectItem[] = this.#agents.map(agent => {
-			const shown = `${AGENT_ENABLE_STATE_LABEL[agentEnableState(agent, this.#row(agent.name).enabled)]} · ${modelSummary(agent)}`;
-			const source = recordEntrySource(AGENTS_PATH, agent.name);
-			if (isOverrideSource(source)) {
-				return {
-					value: agent.name,
-					label: agent.name,
-					description: `${shown} · ${overriddenEntryLabel(source)}`,
-					disabled: true,
-				};
-			}
-			return { value: agent.name, label: agent.name, description: shown };
-		});
-
-		if (items.length === 0) {
-			const container = new Container();
-			container.addChild(new Text(theme.fg("dim", "  No agent types found."), 0, 0));
-			container.addChild(new Spacer(1));
-			container.addChild(new Text(theme.fg("muted", `  ${CUSTOM_AGENT_HINT}`), 0, 0));
-			this.renderSubmenuFrame({
-				title: "Agents",
-				description: AGENT_LIST_DESCRIPTION,
-				headerExtra,
-				body: container,
-				footerHint: "  Esc to go back",
-			});
-			return;
-		}
-
-		const selectList = createFocusedSelectList(items, Math.min(items.length, 5), undefined, {
-			onSelect: item => {
-				this.#showAgentEditor(item.value);
-				this.requestRender?.();
-			},
-			onCancel: this.onCancel,
-		});
-		this.#selectList = selectList;
-
-		const detail = new Text(this.#detailText(items[0]?.value), 0, 0);
-		selectList.onSelectionChange = item => {
-			if (detail.setText(this.#detailText(item.value))) this.requestRender?.();
-		};
-
-		const footerExtra = new Container();
-		footerExtra.addChild(detail);
-		footerExtra.addChild(new Spacer(1));
-		footerExtra.addChild(new Text(theme.fg("muted", `  ${CUSTOM_AGENT_HINT}`), 0, 0));
-
-		this.renderSubmenuFrame({
-			title: "Agents",
-			description: AGENT_LIST_DESCRIPTION,
-			headerExtra,
-			body: selectList,
-			footerExtra,
-			footerHint: "  Enter to configure · Esc to go back",
-		});
-	}
-
-	#agent(name: string): AgentDefinition | undefined {
-		return this.#agents.find(candidate => candidate.name === name);
-	}
-
-	#detailText(name: string | undefined): string {
-		const description = name ? this.#agent(name)?.description?.trim() : undefined;
-		if (!description) return "";
-		return theme.fg("muted", `  ${description}`);
-	}
-
-	/**
-	 * One lane's page. `depth` 0 is the agent itself; each step down is one
-	 * `Agents` row followed, and the page shape never changes.
-	 */
-	#showAgentEditor(name: string, depth = 0): void {
-		const agent = this.#agent(name);
-		if (!agent) {
-			this.#showAgentList();
-			return;
-		}
-		const lane = this.#lane(name, depth);
-		const child = lane.agents ?? {};
-		// The cap this agent's whole tree runs under, asked once: every default on
-		// this page is read off it, so the page cannot claim a level the spawn gate
-		// would refuse.
-		const resolvedMax = resolveAgentMaxNestedSpawnDepth(settings, name);
-		const spawnAllowed = laneSpawnEnabled(child, depth + 1, resolvedMax);
-
-		this.clear();
-		this.#escapeTo = undefined;
-		// The trail, not just the name: three levels down, "Agent: deep" alone
-		// cannot say which of the three pages you are on.
-		const trail = depth === 0 ? `Agent: ${name}` : `${name}${" › agents".repeat(depth)}`;
-		// One scope draws its rows and the other draws none. A Model row here
-		// while the blanket switch is on would show a value no spawn reads, which
-		// is the exact confusion that retired the switch the first time. The
-		// signpost replaces the rows rather than sitting beside them, so the page
-		// still says where the answer is instead of looking like it lost one.
-		const shared = agentScopeIsShared(settings);
-
-		const headerExtra = new Container();
-		// What this lane runs, resolved, above the rows that change it — and the
-		// rows below change THIS lane, so the reader is never sent elsewhere to
-		// edit the value they are looking at.
-		headerExtra.addChild(new Text(`  ${theme.fg("muted", "Runs")} ${this.#runsSummary(agent, depth)}`, 0, 0));
-		if (shared) {
-			headerExtra.addChild(new Spacer(1));
-			headerExtra.addChild(new Text(theme.fg("dim", "  Set for every agent · Agents → Shared Model"), 0, 0));
-		}
-
-		const items: SelectItem[] = [
-			{
-				value: AGENT_ROW_OFFERED,
-				label: "Enabled",
-				description:
-					depth === 0
-						? `${AGENT_ENABLE_STATE_LABEL[agentEnableState(agent, lane.enabled)]}${
-								isAgentEnableDefaulted(lane.enabled) ? theme.fg("dim", " (default)") : ""
-							}`
-						: `${laneSpawnEnabled(lane, depth, resolvedMax) ? "on" : "off"}${
-								lane.enabled === undefined ? theme.fg("dim", " (default)") : ""
-							}`,
-			},
-			...(shared
-				? []
-				: [
-						{ value: AGENT_ROW_MODEL, label: "Model", description: laneModelSummary(lane, depth) },
-						{ value: AGENT_ROW_EFFORT, label: "Effort", description: laneEffortSummary(lane, depth) },
-					]),
-			{
-				value: AGENT_ROW_NESTED,
-				label: "Agents",
-				description: spawnAllowed
-					? laneModelSummary(child, depth + 1)
-					: theme.fg("dim", "off · may not spawn agents"),
-			},
-		];
-		if (Object.keys(lane).length > 0) {
-			items.push({
-				value: AGENT_ROW_RESET,
-				label: "Reset to defaults",
-				description: theme.fg("dim", `clears ${lanePath(name, depth)}`),
-			});
-		}
-
-		const selectList = createFocusedSelectList(items, items.length, undefined, {
-			onSelect: item => {
-				switch (item.value) {
-					case AGENT_ROW_OFFERED:
-						this.#writeLane(
-							name,
-							depth,
-							depth === 0
-								? { ...lane, enabled: nextAgentEnableValue(agent, lane.enabled) }
-								: { ...lane, enabled: !laneSpawnEnabled(lane, depth, resolvedMax) },
-						);
-						this.#showAgentEditor(name, depth);
-						break;
-					case AGENT_ROW_MODEL:
-						this.#showLaneModelPicker(name, depth);
-						break;
-					case AGENT_ROW_EFFORT:
-						this.#showLaneEffortPicker(name, depth);
-						break;
-					case AGENT_ROW_NESTED:
-						this.#showAgentEditor(name, depth + 1);
-						break;
-					case AGENT_ROW_RESET:
-						this.#writeLane(name, depth, {});
-						this.#showAgentEditor(name, depth);
-						break;
-				}
-				this.requestRender?.();
-			},
-			onCancel: () => {
-				if (depth === 0) this.#showAgentList();
-				else this.#showAgentEditor(name, depth - 1);
-				this.requestRender?.();
-			},
-		});
-		this.#selectList = selectList;
-
-		this.renderSubmenuFrame({
-			title: trail,
-			description:
-				depth === 0
-					? agent.description || `${agent.source} agent`
-					: `What ${depth === 1 ? name : "the agents at this level"} may spawn. Unset follows the level above.`,
-			headerExtra,
-			body: selectList,
-			footerHint: "  Enter to change · Esc to go back",
-		});
-	}
-
-	/**
-	 * One lane's model chain, edited through the SAME chain editor every other
-	 * model surface uses ({@link ModelChainSubmenu}) — handed a writer instead of
-	 * a settings key, because a lane lives inside the `agent.agents` record
-	 * and only that record's owner can prune the chain of lanes above it.
-	 */
-	#showLaneModelPicker(name: string, depth: number): void {
-		this.clear();
-		this.#selectList = undefined;
-		const back = () => this.#showAgentEditor(name, depth);
-		this.#escapeTo = back;
-		if (!this.picker) {
-			const container = new Container();
-			container.addChild(new Text(theme.fg("warning", MODEL_CATALOG_UNAVAILABLE), 0, 0));
-			this.renderSubmenuFrame({
-				title: depth === 0 ? `Model · ${name}` : `Model · what ${name} spawns${" (nested)".repeat(depth - 1)}`,
-				body: container,
-				footerHint: "  Esc to go back",
-			});
-			return;
-		}
-		const lane = this.#lane(name, depth);
-		this.addChild(
-			new ModelChainSubmenu(
-				{
-					write: chain => {
-						const next = { ...this.#lane(name, depth) };
-						if (chain === undefined) delete next.model;
-						else next.model = chain;
-						this.#writeLane(name, depth, next);
-					},
-				},
-				this.picker.registry,
-				this.picker.models,
-				depth === 0 ? `Model · ${name}` : `Model · what ${name} spawns${" (nested)".repeat(depth - 1)}`,
-				lane.model,
-				() => {
-					this.#escapeTo = undefined;
-					back();
-					this.requestRender?.();
-				},
-				() => this.onChange("agent.agents"),
-				this.requestRender,
-			),
-		);
-	}
-
-	#showLaneEffortPicker(name: string, depth: number): void {
-		this.clear();
-		this.#selectList = undefined;
-		const back = () => this.#showAgentEditor(name, depth);
-		this.#escapeTo = back;
-		const lane = this.#lane(name, depth);
-		const { options, notice } = agentEffortOptions(this.#laneEffortScope(name, depth), this.models);
-		const description =
-			notice === undefined
-				? depth === 0
-					? `Effort ${name} runs at. Inherit follows the session's effort; a \`:level\` on the model chain still wins.`
-					: "Effort the agents spawned at this level run at. Inherit follows the level above."
-				: `Effort the agents spawned at this level run at. ${notice}`;
-		this.addChild(
-			new SelectSubmenu(
-				depth === 0 ? `Effort · ${name}` : `Effort · what ${name} spawns`,
-				description,
-				options,
-				lane.thinkingLevel?.trim() ?? "",
-				value => {
-					const next = { ...this.#lane(name, depth) };
-					if (value === INHERIT_EFFORT_OPTION_VALUE) delete next.thinkingLevel;
-					else next.thinkingLevel = value;
-					this.#writeLane(name, depth, next);
-					this.#escapeTo = undefined;
-					back();
-					this.requestRender?.();
-				},
-				() => {
-					this.#escapeTo = undefined;
-					back();
-					this.requestRender?.();
-				},
-			),
-		);
-	}
-
-	/**
-	 * What this lane's effort narrows against: the model the lane RESOLVES to,
-	 * found by asking the same resolver a spawn asks, so the page and the spawn
-	 * cannot disagree about which ladder is on screen.
-	 */
-	#laneEffortScope(name: string, depth: number): AgentEffortScope {
-		const head = resolveAgentModel({
-			settings,
-			agentName: name,
-			taskDepth: depth + 1,
-		}).patterns[0];
-		return effortScopeForPattern(this.models, head, this.sessionModel);
-	}
-
-	mouseTarget(): SelectList | ModelChainSubmenu | SelectSubmenu | undefined {
-		if (this.#selectList) return this.#selectList;
-		return this.children.find(
-			(child): child is ModelChainSubmenu | SelectSubmenu =>
-				child instanceof ModelChainSubmenu || child instanceof SelectSubmenu,
-		);
-	}
-
-	override handleInput(data: string): void {
-		if (this.#selectList) {
-			this.#selectList.handleInput(data);
-			return;
-		}
-		if (this.#escapeTo && (matchesKey(data, "escape") || data === "\x1b")) {
-			const back = this.#escapeTo;
-			this.#escapeTo = undefined;
-			back();
-			this.requestRender?.();
-			return;
-		}
-		this.children[0]?.handleInput?.(data);
-	}
-}
-
-function modelSummary(agent: AgentDefinition, depth = 0): string {
-	// `taskDepth` is the depth a SPAWN runs at, and a lane page describes exactly
-	// one: the agent's own page is a direct child (depth 1), each level down is
-	// one deeper. Passing it is what makes the badge name the lane that decided
-	// rather than the table.
-	const resolved = resolveAgentModel({
-		settings,
-		agentName: agent.name,
-		agentModel: agent.model,
-		taskDepth: depth + 1,
-	});
-	if (resolved.unresolved) return theme.fg("error", `${resolved.unresolved.value} matches no model`);
-	const pattern = resolved.patterns[0];
-	if (!pattern) return theme.fg("dim", "no model resolved");
-	const fallbacks = resolved.patterns.length - 1;
-	const summary = formatModelSummaryWithFallbacks(pattern, fallbacks, true);
-	return resolved.source === "default"
-		? theme.fg("dim", `default · ${summary}`)
-		: `${summary} ${theme.fg("dim", `· ${agentModelSourceLabel(resolved.source, agent.name, resolved.depth)}`)}`;
-}
-
-/**
- * One lane's Model row: what it stores, or the level it inherits from.
- *
- * The stored value rather than the resolved one, because this row EDITS the
- * stored value — a row showing a resolved answer it does not own is how a
- * screen comes to look configured when it has not been.
- */
-function laneModelSummary(lane: AgentLaneSettings, depth: number): string {
-	const chain = lane.model;
-	if (chain === undefined || (Array.isArray(chain) ? chain.length === 0 : chain.trim().length === 0)) {
-		return theme.fg("dim", depth === 0 ? "default · the default model role" : "inherit · the level above");
-	}
-	const entries = Array.isArray(chain) ? chain : [chain];
-	const head = entries[0] ?? "";
-	const fallbacks = entries.length - 1;
-	return formatModelSummaryWithFallbacks(head, fallbacks, true);
-}
-
-/** One lane's Effort row, on the same stored-not-resolved rule as the model. */
-function laneEffortSummary(lane: AgentLaneSettings, depth: number): string {
-	const level = lane.thinkingLevel?.trim() ?? "";
-	return level.length > 0
-		? level
-		: theme.fg("dim", depth === 0 ? "default · the default effort" : "inherit · the level above");
-}
-
 const ADD_EFFORT_ROW = "\u0000add-effort-row";
-const CHAIN_ENTRY_PREFIX = "\u0000chain-entry:";
-const CHAIN_ADD_ROW = "\u0000chain-add-row";
-const CHAIN_CLEAR_ROW = "\u0000chain-clear-row";
 
 class DefaultEffortSubmenu extends MouseRoutedSubmenu {
 	#selectList: SelectList | undefined;
@@ -1995,7 +1045,7 @@ class DefaultEffortSubmenu extends MouseRoutedSubmenu {
 	}
 
 	#persist(key: string, selectorWithEffort: string): void {
-		const level = extractExplicitThinkingSelector(selectorWithEffort, settings);
+		const level = extractExplicitThinkingSelector(selectorWithEffort);
 		const rows = this.#profileRows();
 		if (level === undefined) delete rows[key];
 		else rows[key] = level;
@@ -2032,215 +1082,6 @@ class DefaultEffortSubmenu extends MouseRoutedSubmenu {
 function overrideSource(key: string): SettingSource | undefined {
 	const source = recordEntrySource(DEFAULT_EFFORT_PATH, key);
 	return isOverrideSource(source) ? source : undefined;
-}
-
-/**
- * Where a chain the picker edits actually lives, when it is not a settings key.
- *
- * `agent.model` and `compaction.model` are keys, and `settings.set` addresses
- * them directly. A per-agent lane is a field inside the `agent.agents`
- * record, whose owner rebuilds and prunes the whole chain of lanes above it on
- * every write, so the picker hands the value over instead of storing it: two
- * writers for one record is how an empty lane comes to persist as `{}` and read
- * as configuration nobody entered.
- */
-export interface ModelChainSlot {
-	write: (chain: string[] | undefined) => void;
-}
-
-/**
- * Ordered-chain picker for a model settings slot (`compaction.model`,
- * `agent.model`).
- *
- * Both slots have always accepted a CHAIN rather than one model: the stored
- * value goes through {@link normalizeModelPatternList}, which splits on commas,
- * and each consumer tries the entries in order until one works (compaction skips
- * a candidate that is unauthenticated or whose window is too small; an agent
- * retries on the next entry when its model errors). Only the picker was
- * single-slot, so the feature existed and was unreachable.
- *
- * The list is the chain, in order. Entry one is the choice; the rest are
- * fallbacks. Adding an entry runs the same two steps as before, pick a model
- * then pick a thinking effort, and the effort rides the stored selector as a
- * `:level` suffix (via {@link renderEffortStep}), which is the encoding the
- * compaction candidate resolver and the agent spawner already parse back out.
- * Models with no supported efforts skip the second step and store the bare
- * selector.
- *
- * Persisted as a string array so the ordered choices survive YAML save/reload
- * without being reparsed from a display-oriented comma string.
- */
-export class ModelChainSubmenu extends MouseRoutedSubmenu {
-	#selectList: SelectList | undefined;
-	#chain: string[];
-
-	constructor(
-		private readonly slot: SettingPath | ModelChainSlot,
-		private readonly registry: ModelRegistry,
-		private readonly models: ReadonlyArray<Model>,
-		private readonly title: string,
-		current: string | string[] | undefined,
-		private readonly done: (value?: string) => void,
-		private readonly onChange: (value: string[] | undefined) => void,
-		public requestRender?: () => void,
-	) {
-		super();
-		this.#chain = normalizeModelPatternList(current);
-		if (this.#chain.length === 0) this.#showModelPicker(null);
-		else this.#showChain();
-	}
-
-	#showChain(): void {
-		this.clear();
-		this.#selectList = undefined;
-		const items: SelectItem[] = this.#chain.map((selector, index) => ({
-			value: `${CHAIN_ENTRY_PREFIX}${index}`,
-			label: `${index + 1}. ${formatSelectorSummary(selector)}`,
-			description: index === 0 ? "first choice" : "fallback",
-		}));
-		items.push({ value: CHAIN_ADD_ROW, label: "Add fallback…", description: "pick a model, then its effort" });
-		items.push({ value: CHAIN_CLEAR_ROW, label: "Clear (inherit)", description: "follow the main model" });
-
-		const selectList = createFocusedSelectList(items, items.length, undefined, {
-			onSelect: item => {
-				if (item.value === CHAIN_ADD_ROW) this.#showModelPicker(null);
-				else if (item.value === CHAIN_CLEAR_ROW) this.#clear();
-				else this.#showModelPicker(Number(item.value.slice(CHAIN_ENTRY_PREFIX.length)));
-				this.requestRender?.();
-			},
-			onCancel: () => this.done(this.#chain.join(",")),
-		});
-		this.#selectList = selectList;
-		this.renderSubmenuFrame({
-			title: this.title,
-			description: "Tried in order. The rest are used when the one above cannot run.",
-			body: selectList,
-			footerHint: "  Enter edits · Del removes · Esc to go back",
-		});
-	}
-
-	#removeSelectedRow(): void {
-		const value = this.#selectList?.getSelectedItem?.()?.value;
-		if (!value?.startsWith(CHAIN_ENTRY_PREFIX)) return;
-		this.#removeIndex(Number(value.slice(CHAIN_ENTRY_PREFIX.length)));
-	}
-
-	#removeIndex(index: number | null): boolean {
-		if (index !== null && Number.isInteger(index) && index >= 0 && index < this.#chain.length) {
-			this.#chain.splice(index, 1);
-			this.#persistChain();
-			return true;
-		}
-		return false;
-	}
-
-	#showModelPicker(index: number | null): void {
-		this.#selectList = undefined;
-		const current = index === null ? undefined : this.#chain[index];
-		const position =
-			index === 0 ? "first choice" : index === null ? `fallback ${this.#chain.length + 1}` : `fallback ${index + 1}`;
-		renderModelSelectorPanel(
-			this,
-			this.registry,
-			this.models,
-			{
-				title: this.#chain.length === 0 ? this.title : `${this.title} · ${position}`,
-				description:
-					index === null ? "Pick a model to append to the chain." : "Pick a replacement for this position.",
-				currentSelector: barePickerSelector(current, this.models as Model<Api>[]) || undefined,
-				allowClear: true,
-				clearLabel:
-					index !== null
-						? "(remove this position)"
-						: this.#chain.length === 0
-							? "(inherit main model)"
-							: "(cancel adding fallback)",
-			},
-			{
-				onPick: (model, selector) => {
-					if (!hasConfigurableThinkingEffort(model)) {
-						this.#store(selector, index);
-						return;
-					}
-					this.#showEffortPicker(selector, model, index);
-					this.requestRender?.();
-				},
-				onClear: () => this.#clearPicker(index),
-				onCancel: () => {
-					if (this.#chain.length === 0) this.done();
-					else this.#showChain();
-					this.requestRender?.();
-				},
-			},
-		);
-	}
-
-	#showEffortPicker(selector: string, model: Model, index: number | null): void {
-		this.#selectList = renderEffortStep(
-			this,
-			selector,
-			model,
-			value => this.#store(value, index),
-			() => {
-				this.#showModelPicker(index);
-				this.requestRender?.();
-			},
-		);
-	}
-
-	#store(value: string, index: number | null): void {
-		const next = replaceModelChainEntry(this.#chain, index, value, this.models as Model<Api>[]);
-		if (!next) {
-			this.#showChain();
-			this.requestRender?.();
-			return;
-		}
-		this.#chain = next;
-		this.#persistChain();
-	}
-
-	#clearPicker(index: number | null): void {
-		if (this.#removeIndex(index)) return;
-		if (this.#chain.length === 0) {
-			this.#clear();
-		} else {
-			this.#showChain();
-			this.requestRender?.();
-		}
-	}
-
-	#clear(): void {
-		this.#chain = [];
-		this.#persist(undefined);
-		this.onChange(undefined);
-		this.done("inherit");
-	}
-
-	#persistChain(): void {
-		const value = this.#chain.slice();
-		this.#persist(value.length === 0 ? undefined : value);
-		this.onChange(value.length === 0 ? undefined : value);
-		this.#showChain();
-		this.requestRender?.();
-	}
-
-	#persist(chain: string[] | undefined): void {
-		if (typeof this.slot !== "string") {
-			this.slot.write(chain);
-			return;
-		}
-		if (chain === undefined) settings.unset(this.slot);
-		else settings.set(this.slot, chain as never);
-	}
-
-	mouseTarget(): SelectList | ModelSelectorPanel | undefined {
-		return selectListOrModelPickerTarget(this.#selectList, this);
-	}
-
-	override handleInput(data: string): void {
-		if (handleRowDeleteKey(data, this.#selectList, () => this.#removeSelectedRow())) return;
-		super.handleInput(data);
-	}
 }
 
 const ADVANCED_TOGGLE_ID_PREFIX = "__advanced:";
@@ -2381,6 +1222,13 @@ export const SETTING_KIND_HANDLERS: SettingKindHandlers = {
 	submenu: {
 		formatValue: (self, def, currentValue) => self.getSubmenuCurrentValue(def.path, currentValue),
 		labelForValue: (self, def) => value => {
+			if (
+				def.path === PREDICTIONS_MODE_PATH &&
+				value === INCLUDED_PREDICTION_MODE &&
+				self.lacksProPredictionLogin()
+			) {
+				return "Off (no ChatGPT Pro account)";
+			}
 			const option = self.submenuOptions(def).find(opt => opt.value === value);
 			return humanizeOptionLabel(option?.label, value);
 		},
@@ -2406,7 +1254,7 @@ export const SETTING_KIND_HANDLERS: SettingKindHandlers = {
 	},
 	modelSelector: {
 		formatValue: (self, _def, currentValue) => self.formatModelSelectorValue(currentValue),
-		createSubmenu: (self, def, _currentValue, done) => self.createModelSelectorInput(def.path, done),
+		createSubmenu: (self, def, _currentValue, done) => self.createModelSelectorInput(def.path, def.label, done),
 	},
 	defaultEffort: {
 		formatValue: self => self.formatDefaultEffortValue(),
@@ -2415,10 +1263,6 @@ export const SETTING_KIND_HANDLERS: SettingKindHandlers = {
 	agentSharedEffort: {
 		formatValue: self => self.formatAgentSharedEffortValue(),
 		createSubmenu: (self, _def, _currentValue, done) => self.createAgentSharedEffortInput(done),
-	},
-	modelRoles: {
-		formatValue: self => self.formatModelRolesValue(),
-		createSubmenu: (self, _def, _currentValue, done) => self.createModelRolesInput(done),
 	},
 	agents: {
 		formatValue: self => self.formatAgentsValue(),
@@ -2434,34 +1278,24 @@ export const SETTING_KIND_HANDLERS: SettingKindHandlers = {
 		createSubmenu: (self, _def, _currentValue, done) => self.createLspInput(done),
 	},
 	defaultModel: {
-		isChanged: (_self, _def, currentValue) => typeof currentValue === "string" && currentValue.trim().length > 0,
+		isChanged: (_self, _def, currentValue) => Array.isArray(currentValue) && currentValue.length > 0,
 		buildItem: (self, def, currentValue, changed) => {
-			const active = settings.getModelRole(DEFAULT_MODEL_SLOT);
-			const source = settings.getModelRoleSource(DEFAULT_MODEL_SLOT);
-			const overridden =
-				(source === "config-file" || source === "runtime") &&
-				typeof active === "string" &&
-				active.trim() !== currentValue;
-			const effectiveModel = typeof active === "string" && active.trim().length > 0 ? active : currentValue;
-			const effectiveFormatted = self.formatModelSelectorValue(effectiveModel);
-			const currentFormatted = self.formatModelSelectorValue(currentValue);
-			const description = overridden
-				? `Active model ${effectiveFormatted} comes from ${SETTING_SOURCE_LABELS[source]}; this row changes the saved profile default (${currentFormatted}). ${def.description}`
-				: def.description;
+			const source = settings.getSource(DEFAULT_MODEL_SETTING_ID);
+			const saved = self.formatModelSelectorValue(currentValue);
+			const effective = self.formatModelSelectorValue(settings.get(DEFAULT_MODEL_SETTING_ID));
+			const description =
+				isOverrideSource(source) && effective !== saved
+					? `Active model ${effective} comes from ${SETTING_SOURCE_LABELS[source]}; this row changes the saved profile default (${saved}). ${def.description}`
+					: def.description;
 			return {
 				id: def.path,
 				label: def.label,
 				description,
-				currentValue: effectiveFormatted,
+				currentValue: effective,
 				submenu: (_cv, done) => self.createDefaultModelInput(done),
 				changed,
 			};
 		},
-	},
-	advisorModel: {
-		formatValue: (self, _def, currentValue) => self.formatModelSelectorValue(currentValue),
-		isChanged: (_self, _def, currentValue) => typeof currentValue === "string" && currentValue.trim().length > 0,
-		createSubmenu: (self, _def, _currentValue, done) => self.createAdvisorModelInput(done),
 	},
 };
 
@@ -2485,12 +1319,10 @@ export function assertAllSettingKindsHandled(): void {
 		"modelSelector",
 		"defaultEffort",
 		"agentSharedEffort",
-		"modelRoles",
 		"agents",
 		"rules",
 		"lsp",
 		"defaultModel",
-		"advisorModel",
 	];
 	for (const kind of expected) {
 		if (!SETTING_KIND_HANDLERS[kind]) {
@@ -3145,12 +1977,33 @@ export class SettingsSelectorComponent implements Component {
 		return def.options;
 	}
 
+	/**
+	 * True when the settings screen can tell that no Codex login would answer a ChatGPT Pro
+	 * included prediction (see `includedPredictionLogins`), so that mode would request nothing.
+	 * False when no model registry is available to tell.
+	 */
+	lacksProPredictionLogin(): boolean {
+		const registry = this.context.modelRegistry;
+		return registry !== undefined && includedPredictionLogins(registry).length === 0;
+	}
+
+	/** The submenu's options, with the ChatGPT Pro prediction mode greyed out while no Pro login is present. */
+	#submenuItems(def: SettingDef & { type: "submenu" }): ReadonlyArray<SelectItem> {
+		const options = this.submenuOptions(def);
+		if (def.path !== PREDICTIONS_MODE_PATH || !this.lacksProPredictionLogin()) return options;
+		return options.map(option =>
+			option.value === INCLUDED_PREDICTION_MODE
+				? { ...option, description: CONNECT_PRO_PREDICTION_HINT, disabled: true }
+				: option,
+		);
+	}
+
 	createSubmenu(
 		def: SettingDef & { type: "submenu" },
 		currentValue: string,
 		done: (value?: string) => void,
 	): Container {
-		const options = this.submenuOptions(def);
+		const options = this.#submenuItems(def);
 		const description = def.description;
 
 		let onPreview: ((value: string) => void | Promise<void>) | undefined;
@@ -3266,20 +2119,13 @@ export class SettingsSelectorComponent implements Component {
 		return providerSlash >= 0 ? summary.slice(providerSlash + 1) : summary;
 	}
 
-	formatModelRolesValue(): string {
-		const roles = settings.getModelRoles();
-		const assigned = SELECTABLE_MODEL_ROLE_IDS.filter(role => roles[role]?.trim()).length;
-		return assigned === 0 ? "All inherit" : `${assigned} assigned`;
-	}
-
-	createModelSelectorInput(path: SettingPath, done: (value?: string) => void): Container {
+	createModelSelectorInput(path: SettingPath, label: string, done: (value?: string) => void): Container {
 		return this.#withModelPickerContext(done, ctx => {
 			const current: unknown = settings.get(path);
 			const rawCurrent =
 				typeof current === "string" || (Array.isArray(current) && current.every(v => typeof v === "string"))
 					? (current as string | string[])
 					: undefined;
-			const label = path === "compaction.model" ? "Compaction Model" : String(path);
 			return new ModelChainSubmenu(
 				path,
 				ctx.registry,
@@ -3354,7 +2200,7 @@ export class SettingsSelectorComponent implements Component {
 	 * the switch is on that chain is what every spawn resolves to, and narrowing
 	 * against the model on screen would offer levels no agent endpoint
 	 * accepts. An unset chain falls back to the session model, which is what an
-	 * unset chain resolves to through the default role.
+	 * unset chain resolves to.
 	 */
 	createAgentSharedEffortInput(done: (value?: string) => void): Container {
 		const chain: unknown = settings.get("agent.model");
@@ -3395,9 +2241,15 @@ export class SettingsSelectorComponent implements Component {
 		const stored = settings.get("agent.agents");
 		const table = stored && typeof stored === "object" ? (stored as Record<string, AgentSettings>) : {};
 		const rows = Object.values(table);
-		if (rows.length === 0) return "defaults";
+		const helpers = HELPER_IDS.filter(id => {
+			const row = helperSettingsFor(settings, id);
+			return row.model !== undefined || row.thinkingLevel !== undefined;
+		}).length;
+		if (rows.length === 0 && helpers === 0) return "defaults";
 		const blocked = rows.filter(row => row?.enabled === false).length;
-		const parts = [`${rows.length} configured`];
+		const parts: string[] = [];
+		if (helpers > 0) parts.push(`${helpers} ${helpers === 1 ? "helper" : "helpers"} set`);
+		if (rows.length > 0) parts.push(`${rows.length} configured`);
 		if (blocked > 0) parts.push(`${blocked} blocked`);
 		return parts.join(", ");
 	}
@@ -3424,12 +2276,8 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	formatRulesValue(): string {
-		const disabled = settings.get("ttsr.disabledRules");
-		const off = Array.isArray(disabled) ? disabled.filter(name => String(name).trim().length > 0).length : 0;
-		const experimental = settings.get("ttsr.experimentalRules");
-		const experiments = Array.isArray(experimental)
-			? experimental.filter(name => String(name).trim().length > 0).length
-			: 0;
+		const off = settings.get("ttsr.disabledRules").filter(name => String(name).trim().length > 0).length;
+		const experiments = settings.get("ttsr.experimentalRules").filter(name => String(name).trim().length > 0).length;
 		const experimentSuffix = experiments === 0 ? "" : `, ${experiments} experimental on`;
 		if (settings.get("ttsr.builtinRules") !== true) {
 			return (off === 0 ? "Built-ins off" : `Built-ins off, ${off} more off`) + experimentSuffix;
@@ -3459,56 +2307,17 @@ export class SettingsSelectorComponent implements Component {
 		);
 	}
 
-	#createRoleModelInput(
-		role: string | undefined,
-		settingId: SettingPath | undefined,
-		formatDone: () => string,
-		done: (value?: string) => void,
-	): Container {
+	createDefaultModelInput(done: (value?: string) => void): Container {
 		return this.#withModelPickerContext(
 			done,
 			ctx =>
-				new ModelRolesSubmenu(
+				new DefaultModelSubmenu(
 					ctx.models,
 					ctx.registry,
-					() => {
-						if (settingId) {
-							this.callbacks.onChange(
-								settingId,
-								(isDefaultModelSlot(role ?? "")
-									? settings.getPersistedModelRole(DEFAULT_MODEL_SLOT)
-									: settings.getModelRole(role!)) ?? "",
-							);
-						} else {
-							this.callbacks.onChange("modelRoles", settings.getModelRoles());
-						}
-					},
-					() => done(formatDone()),
+					() => this.callbacks.onChange(DEFAULT_MODEL_SETTING_ID, settings.get(DEFAULT_MODEL_SETTING_ID)),
+					() => done(this.formatModelSelectorValue(settings.get(DEFAULT_MODEL_SETTING_ID))),
 					this.context.requestRender,
-					role,
 				),
-		);
-	}
-
-	createModelRolesInput(done: (value?: string) => void): Container {
-		return this.#createRoleModelInput(undefined, undefined, () => this.formatModelRolesValue(), done);
-	}
-
-	createAdvisorModelInput(done: (value?: string) => void): Container {
-		return this.#createRoleModelInput(
-			ADVISOR_MODEL_SLOT,
-			ADVISOR_MODEL_SETTING_ID,
-			() => this.formatModelSelectorValue(settings.getModelRole(ADVISOR_MODEL_SLOT)),
-			done,
-		);
-	}
-
-	createDefaultModelInput(done: (value?: string) => void): Container {
-		return this.#createRoleModelInput(
-			DEFAULT_MODEL_SLOT,
-			DEFAULT_MODEL_SETTING_ID as SettingPath,
-			() => this.formatModelSelectorValue(settings.getModelRole(DEFAULT_MODEL_SLOT)),
-			done,
 		);
 	}
 
@@ -3826,8 +2635,7 @@ function buildSearchTabs(counts: Map<SettingTab, number>, matchedTabOrder: reado
 }
 
 function getCurrentValue(def: SettingDef): unknown {
-	if (def.type === "defaultModel") return settings.getPersistedModelRole(DEFAULT_MODEL_SLOT);
-	if (def.type === "advisorModel") return settings.getModelRole(ADVISOR_MODEL_SLOT);
+	if (def.type === "defaultModel") return profileDefaultModelChain();
 	return settings.get(def.path);
 }
 

@@ -1,4 +1,4 @@
-import { formatCount, logger } from "@veyyon/utils";
+import { formatCount, logger, settleWithin } from "@veyyon/utils";
 import type { AgentSession } from "../../session/agent-session";
 import { type BankScope, ensureBankExists } from "./bank";
 import type { HindsightApi, MemoryItemInput } from "./client";
@@ -472,7 +472,7 @@ export class HindsightSessionState {
 
 	async beforeAgentStartPrompt(promptText: string): Promise<string | undefined> {
 		if (this.config.mentalModelsEnabled && this.mentalModelsLoadPromise && this.mentalModelsLoadedAt === undefined) {
-			await Promise.race([this.mentalModelsLoadPromise, Bun.sleep(MENTAL_MODEL_FIRST_TURN_DEADLINE_MS)]);
+			await settleWithin(this.mentalModelsLoadPromise, MENTAL_MODEL_FIRST_TURN_DEADLINE_MS, undefined);
 		}
 
 		if (!this.config.autoRecall || this.hasRecalledForFirstTurn) return undefined;

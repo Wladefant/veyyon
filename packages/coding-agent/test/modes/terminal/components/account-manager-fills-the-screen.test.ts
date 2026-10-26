@@ -57,6 +57,7 @@ function card(terminalHeight: number): readonly string[] {
 			onShowUsage: () => {},
 			onAddAccount: () => {},
 			onClearRateLimitBlock: () => {},
+			onForgetSignedOut: () => {},
 			onCancel: () => {},
 		},
 		{ terminalHeight },

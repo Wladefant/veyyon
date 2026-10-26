@@ -21,7 +21,6 @@
  * re-read the pricing page.
  */
 
-import { fetchOpenAICompatibleModels } from "../discovery/openai-compatible";
 import { Effort } from "../effort";
 import type { ModelManagerOptions } from "../model-manager";
 import type { FetchImpl, LongContextCost, ModelSpec } from "../types";
@@ -261,8 +260,10 @@ export function commandCodeModelManagerOptions(
 	return {
 		providerId: "command-code",
 		dynamicModelsAuthoritative: true,
-		fetchDynamicModels: hooks =>
-			fetchOpenAICompatibleModels({
+		fetchDynamicModels: async hooks => {
+			// Deferred import: static import pulls discovery into @veyyon/catalog/provider-models and inflates the reach graph.
+			const { fetchOpenAICompatibleModels } = await import("../discovery/openai-compatible");
+			return fetchOpenAICompatibleModels({
 				onFailure: hooks?.onFailure,
 				api: "openai-completions",
 				provider: "command-code",
@@ -281,6 +282,7 @@ export function commandCodeModelManagerOptions(
 					});
 				},
 				fetch: config?.fetch,
-			}),
+			});
+		},
 	};
 }

@@ -165,6 +165,30 @@ describe("InteractiveMode todo HUD persistence", () => {
 		expect(renderTodos(mode)).not.toContain("done task");
 	});
 
+	// A stopped mode draws nothing more, and a pending clear is a redraw: it would rewrite the board
+	// of a mode whose containers are already gone.
+	it("drops a pending configured clear when the mode stops", async () => {
+		await createMode(1);
+		vi.useFakeTimers();
+		const phases: TodoPhase[] = [
+			{
+				name: "Implementation",
+				tasks: [
+					{ content: "done task", status: "completed" },
+					{ content: "open task", status: "pending" },
+				],
+			},
+		];
+		mode.setTodos(phases);
+		expect(vi.getTimerCount()).toBe(1);
+
+		mode.stop();
+		vi.advanceTimersByTime(5_000);
+
+		expect(vi.getTimerCount()).toBe(0);
+		expect(mode.todoPhases).toEqual(phases);
+	});
+
 	it("keeps the anchored todo panel in the live region while visible", async () => {
 		await createMode();
 

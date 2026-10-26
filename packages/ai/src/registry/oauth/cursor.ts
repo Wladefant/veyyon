@@ -1,12 +1,14 @@
+import { CURSOR_API_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { decodeJwtPayload } from "@veyyon/utils/jwt";
 import * as AIError from "../../error";
 import { credentialExpiryFromJwtExp } from "./expiry";
 import { generatePKCE } from "./pkce";
+import { requireTokenResponseObject } from "./token-response";
 import type { OAuthCredentials } from "./types";
 
 const CURSOR_LOGIN_URL = "https://cursor.com/loginDeepControl";
-const CURSOR_POLL_URL = "https://api2.cursor.sh/auth/poll";
-const CURSOR_REFRESH_URL = "https://api2.cursor.sh/auth/exchange_user_api_key";
+const CURSOR_POLL_URL = `${CURSOR_API_ENDPOINT}/auth/poll`;
+const CURSOR_REFRESH_URL = `${CURSOR_API_ENDPOINT}/auth/exchange_user_api_key`;
 
 const POLL_MAX_ATTEMPTS = 150;
 const POLL_BASE_DELAY = 1000;
@@ -108,7 +110,10 @@ export async function loginCursor(
 	};
 }
 
-export async function refreshCursorToken(apiKeyOrRefreshToken: string): Promise<OAuthCredentials> {
+export async function refreshCursorToken(
+	apiKeyOrRefreshToken: string,
+	signal?: AbortSignal,
+): Promise<OAuthCredentials> {
 	const response = await fetch(CURSOR_REFRESH_URL, {
 		method: "POST",
 		headers: {
@@ -116,29 +121,38 @@ export async function refreshCursorToken(apiKeyOrRefreshToken: string): Promise<
 			"Content-Type": "application/json",
 		},
 		body: "{}",
+		signal,
 	});
 
 	if (!response.ok) {
 		// A refresh endpoint's error body can echo the credential it refused, so it is read
 		// through the shared bounded reader and its redactor.
+		// The status leads the message: a dead Cursor key answers `401 {"message":"Invalid User API
+		// Key"}`, which carries no OAuth error code, so the status is the only definitive signal.
 		const error = await AIError.readProviderErrorDetail(response);
-		throw new AIError.OAuthError(`Cursor token refresh failed: ${error}`, {
+		throw new AIError.OAuthError(`Cursor token refresh failed: ${response.status} ${error}`, {
 			kind: "token-refresh",
+			provider: "cursor",
+			status: response.status,
+		});
+	}
+
+	const data = requireTokenResponseObject<{ accessToken?: unknown; refreshToken?: unknown }>(
+		await response.json(),
+		"cursor",
+		"token refresh",
+	);
+	if (typeof data.accessToken !== "string" || data.accessToken.length === 0) {
+		throw new AIError.OAuthError("Cursor token refresh response missing accessToken", {
+			kind: "validation",
 			provider: "cursor",
 		});
 	}
 
-	const data = (await response.json()) as {
-		accessToken: string;
-		refreshToken: string;
-	};
-
-	const expiresAt = getTokenExpiry(data.accessToken);
-
 	return {
 		access: data.accessToken,
-		refresh: data.refreshToken || apiKeyOrRefreshToken,
-		expires: expiresAt,
+		refresh: typeof data.refreshToken === "string" && data.refreshToken ? data.refreshToken : apiKeyOrRefreshToken,
+		expires: getTokenExpiry(data.accessToken),
 	};
 }
 
@@ -148,13 +162,4 @@ function getTokenExpiry(token: string): number {
 		return credentialExpiryFromJwtExp(decoded.exp, { provider: "cursor" });
 	}
 	return Date.now() + 3600 * 1000;
-}
-
-export function isCursorTokenExpiringSoon(token: string, thresholdSeconds = 300): boolean {
-	const decoded = decodeJwtPayload<{ exp?: number }>(token);
-	if (!decoded) return true;
-	const currentTime = Math.floor(Date.now() / 1000);
-	// A token with no `exp` claim is treated as not expiring soon (NaN < n is false),
-	// matching the prior hand-rolled decode.
-	return (decoded.exp ?? Number.NaN) - currentTime < thresholdSeconds;
 }

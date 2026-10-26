@@ -19,11 +19,10 @@ export interface EvalConcurrencyResult {
 
 /**
  * Resolve the worker-pool ceiling for an eval cell's `parallel()`/`pipeline()`
- * helpers from the live `agent.maxConcurrency` setting. Negative/non-finite
- * values collapse to `0` (unbounded), matching the `task` tool's own handling.
+ * helpers from the live `agent.maxConcurrency` setting. Negative values collapse
+ * to `0` (unbounded), matching the `task` tool's own handling.
  */
 export function runEvalConcurrency(_args: unknown, options: EvalConcurrencyBridgeOptions): EvalConcurrencyResult {
-	const raw = options.session.settings.get("agent.maxConcurrency");
-	const limit = Number.isFinite(raw) ? Math.trunc(raw) : 0;
+	const limit = Math.trunc(options.session.settings.get("agent.maxConcurrency"));
 	return { limit: limit > 0 ? limit : 0 };
 }

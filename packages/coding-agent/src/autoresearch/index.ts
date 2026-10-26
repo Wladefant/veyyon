@@ -454,7 +454,7 @@ export const createAutoresearchExtension: BuiltinExtensionFactory = api => {
 	 */
 	async function startOrResume(ctx: ExtensionContext, runtime: AutoresearchRuntime, setup: LoopSetup): Promise<void> {
 		const goal = setup.goal.length > 0 ? setup.goal : null;
-		const branchResult = await ensureAutoresearchBranch(api, ctx.cwd, goal ?? runtime.goal);
+		const branchResult = await ensureAutoresearchBranch(ctx.cwd, goal ?? runtime.goal);
 		if (!branchResult.ok) {
 			ctx.ui.notify(branchResult.error, "error");
 			return;
@@ -577,7 +577,7 @@ export const createAutoresearchExtension: BuiltinExtensionFactory = api => {
 		}
 
 		const goalArg = resumeWord || freeText.length === 0 ? null : freeText;
-		const branchResult = await ensureAutoresearchBranch(api, ctx.cwd, goalArg ?? runtime.goal);
+		const branchResult = await ensureAutoresearchBranch(ctx.cwd, goalArg ?? runtime.goal);
 		if (!branchResult.ok) {
 			ctx.ui.notify(branchResult.error, "error");
 			return;

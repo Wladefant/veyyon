@@ -1,6 +1,7 @@
+import { setTimeout as delay } from "node:timers/promises";
 import type { AuthStorage } from "@veyyon/ai";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { SEARCH_HARD_TIMEOUT_MS } from "@veyyon/web/hard-timeout";
-import { scopedTimeoutSignal } from "../../../../utils/fetch-timeout";
 import { formatSearchProviderFailures, getSearchProvider, isSearchProviderExcluded } from "../provider";
 import type { SearchProviderId, SearchResponse, SearchSource } from "../types";
 import { SearchProviderError } from "../types";
@@ -175,8 +176,12 @@ export async function searchPublicWeb(
 		}),
 	);
 
+	// The deadline waits end with the fan-out: a timer left armed after an early answer would hold
+	// the process open until the deadline it no longer guards.
+	const waits = new AbortController();
+	const wait = (ms: number): Promise<void> => delay(ms, undefined, { signal: waits.signal }).catch(() => undefined);
 	try {
-		await Promise.race([all, Bun.sleep(softMs), callerAbort.promise]);
+		await Promise.race([all, wait(softMs), callerAbort.promise]);
 		const failureCount = failures.reduce(count => count + 1, 0);
 		// Wait past the soft deadline on "nothing to merge yet", not on "nobody
 		// replied yet". A fast engine serving a bot wall parses to zero results and
@@ -187,9 +192,10 @@ export async function searchPublicWeb(
 			!responses.some(response => response !== undefined && response.sources.length > 0) &&
 			failureCount < engineIds.length
 		) {
-			await Promise.race([all, firstSuccess.promise, Bun.sleep(Math.max(0, hardMs - softMs)), callerAbort.promise]);
+			await Promise.race([all, firstSuccess.promise, wait(Math.max(0, hardMs - softMs)), callerAbort.promise]);
 		}
 	} finally {
+		waits.abort();
 		params.signal?.removeEventListener("abort", onCallerAbort);
 		straggler.abort();
 		hardTimeout.cancel();

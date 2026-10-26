@@ -19,14 +19,12 @@ import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } f
  * profile, in both directions, and expects switching profiles to switch the skill
  * set rather than accumulate it.
  *
- * The second claim here is a security property, stated in `discovery/builtin.ts`:
- * project-local `.veyyon/skills` directories are deliberately NOT scanned, so no
- * repository you happen to open can inject a skill into your session by ambient
- * autodiscovery. That is load-bearing. A skill is instructions the agent follows,
- * so a repo that could plant one could steer the agent that opens it, and nothing
- * about cloning a repository should grant that. Losing this silently would be
- * indistinguishable from working correctly until it was abused, which is exactly
- * why it is pinned rather than left to the comment.
+ * The second claim here is specific to the native provider in
+ * `discovery/builtin.ts`: project-local `.veyyon/skills` directories are not
+ * scanned. That boundary remains important even though project skills have
+ * separate, explicitly supported roots and a trust gate. This test keeps the
+ * native profile skill set isolated from any `.veyyon/skills` directory in the
+ * opened repository.
  */
 describe("skills are isolated between two named profiles", () => {
 	let settingsState: SettingsTestState | undefined;
@@ -106,8 +104,9 @@ describe("skills are isolated between two named profiles", () => {
 		expect((await skillsVisibleFrom(profileA)).map(s => s.name)).toEqual(["skill-a"]);
 	});
 
-	test("a project-local .veyyon/skills directory is NOT scanned, so no repo can inject a skill", async () => {
-		// A hostile (or merely careless) repository plants a skill in the tree you open.
+	test("native skill discovery ignores project-local .veyyon/skills", async () => {
+		// Project skills use separate, trust-gated roots. This case preserves the
+		// native provider's narrower rule for the `.veyyon/skills` path.
 		const planted = path.join(projectDir, ".veyyon", "skills", "repo-planted", "SKILL.md");
 		await fs.mkdir(path.dirname(planted), { recursive: true });
 		await fs.writeFile(
@@ -122,9 +121,9 @@ describe("skills are isolated between two named profiles", () => {
 
 		const visible = await skillsVisibleFrom(profileA);
 
-		// Opening a repository must not grant it the ability to add instructions the
-		// agent follows: the profile's own skill is here, the planted one is not, and
-		// the set is exact so no third source slipped in either.
+		// The native provider returns the profile-owned skill but not this
+		// repository's `.veyyon/skills` file. The project-skills provider is not
+		// selected by this test.
 		expect(visible.map(skill => skill.name)).toEqual(["profile-owned"]);
 	});
 

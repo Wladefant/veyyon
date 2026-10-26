@@ -167,21 +167,20 @@ afterEach(() => {
  * The failure class each API surfaces when the endpoint accepts and never
  * answers, pinned so a change of class is visible rather than silent.
  *
- * `first-event-timeout` is the iterator watchdog naming the phase. `aborted` is
- * a provider whose own pre-response fence fired first and reports the abort
- * instead: Bedrock's SDK-level abort, Codex's per-attempt fence, and GitLab
- * Duo's setup deadline, which surfaces through its namespace-resolution error.
- * Both are correct terminations inside the caller's budget; which one wins is a
- * property of where the deadline sits, and moving one is a decision, not drift.
+ * `first-event-timeout` names the phase. A pre-response fence (Bedrock, Codex,
+ * Ollama, Gemini CLI) and the iterator watchdog over the same stream run on the
+ * same first-event budget, so either can fire first; both name the first event,
+ * so the class does not depend on which won. `aborted` is GitLab Duo's setup
+ * deadline, which surfaces through its namespace-resolution error.
  */
 const NO_ANSWER_OUTCOMES: Record<string, Outcome> = {
 	"openai-completions": "first-event-timeout",
 	"openai-responses": "first-event-timeout",
 	openrouter: "first-event-timeout",
-	"openai-codex-responses": "aborted",
+	"openai-codex-responses": "first-event-timeout",
 	"azure-openai-responses": "first-event-timeout",
 	"anthropic-messages": "first-event-timeout",
-	"bedrock-converse-stream": "aborted",
+	"bedrock-converse-stream": "first-event-timeout",
 	"google-generative-ai": "first-event-timeout",
 	"google-gemini-cli": "first-event-timeout",
 	"google-vertex": "first-event-timeout",
@@ -193,14 +192,10 @@ const NO_ANSWER_OUTCOMES: Record<string, Outcome> = {
 
 /**
  * The same table for headers-then-silence. Every pre-response fence is cleared
- * by design here, so the watchdog over the stream is what remains and the whole
- * union converges on one class.
+ * by design here, so the watchdog over the stream is what remains, and it
+ * names the same phase the fences do.
  */
-const STALLED_BODY_OUTCOMES: Record<string, Outcome> = {
-	...NO_ANSWER_OUTCOMES,
-	"openai-codex-responses": "first-event-timeout",
-	"bedrock-converse-stream": "first-event-timeout",
-};
+const STALLED_BODY_OUTCOMES: Record<string, Outcome> = NO_ANSWER_OUTCOMES;
 
 /** What one arm observed per API: the class, whether it stayed inside the bound, and whether the transport was reached at all. */
 interface ArmObservation {

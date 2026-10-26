@@ -23,6 +23,7 @@ import { CONFIG_DIR_NAME } from "@veyyon/utils/dirs";
 import { SANDBOX_MARKER_ENV_KEY } from "../src/dir-env-keys";
 import {
 	type Breach,
+	CONFIG_ROOT_PREFIX,
 	HOST_BROWSER_ENV,
 	HOST_BROWSER_HOME_PREFIX,
 	HOST_BROWSER_SUITES,
@@ -355,8 +356,7 @@ describe("VEYYON_CONFIG_DIR", () => {
 
 	/** The gate's own copy of the config-root name must not drift from the resolver's. */
 	it("spells the config root the same way the resolver does", () => {
-		const gateSource = fs.readFileSync(path.join(import.meta.dir, "helpers", "sandbox-gate.ts"), "utf8");
-		expect(gateSource).toContain(`const CONFIG_ROOT_PREFIX = "${CONFIG_DIR_NAME}"`);
+		expect(CONFIG_ROOT_PREFIX).toBe(CONFIG_DIR_NAME);
 	});
 });
 

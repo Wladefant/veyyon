@@ -1,9 +1,10 @@
+import { setTimeout as delay } from "node:timers/promises";
 import type { FetchImpl } from "@veyyon/ai";
 import { untilAborted } from "@veyyon/utils";
 import { SEARCH_HARD_TIMEOUT_MS } from "@veyyon/web/hard-timeout";
 import type { Page } from "puppeteer-core";
 import { applyStealthPatches, applyViewport } from "../../browser/launch";
-import { acquireBrowser, holdBrowser, releaseBrowser } from "../../browser/registry";
+import { acquireBrowser, releaseBrowser } from "../../browser/registry";
 import { buildBrowserNavigationHeaders } from "./browser-headers";
 
 /**
@@ -115,20 +116,28 @@ async function browseHtmlPage(
 		throw new Error("Headless browser acquisition returned a non-Puppeteer browser");
 	}
 
-	holdBrowser(handle);
 	let page: Page | undefined;
 	try {
-		const activePage = await untilAborted(signal, () => handle.browser.newPage());
+		// A page that opens after the abort is never assigned to `page`, so the `finally` below does not
+		// close it, and it would stay open in a browser other tabs and searches share.
+		const opening = handle.browser.newPage();
+		const activePage = await untilAborted(signal, () => opening).catch(error => {
+			void opening.then(late => late.close()).catch(() => undefined);
+			throw error;
+		});
 		page = activePage;
-		await applyViewport(activePage);
-		await applyStealthPatches(handle.browser, activePage, handle.stealth);
+		await applyViewport(activePage, undefined, false);
+		await applyStealthPatches(activePage, handle.identity);
 		if (homeUrl) {
 			await untilAborted(signal, () =>
 				activePage.goto(homeUrl(), { waitUntil: "domcontentloaded", timeout: SEARCH_HARD_TIMEOUT_MS }),
 			);
 		}
 		for (let attempt = 0; attempt < attempts; attempt++) {
-			if (attempt > 0 && options.retryDelayMs) await Bun.sleep(options.retryDelayMs);
+			if (attempt > 0 && options.retryDelayMs) {
+				const retryDelayMs = options.retryDelayMs;
+				await untilAborted(signal, () => delay(retryDelayMs, undefined, { signal }));
+			}
 
 			const response = await untilAborted(signal, () =>
 				activePage.goto(createAttempt().url, {

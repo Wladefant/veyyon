@@ -208,7 +208,7 @@ const CHECKOUT = useFixtureCheckout({ branch: "launch-card-fixture" });
 beforeAll(async () => {
 	await Settings.init({ inMemory: true, cwd: process.cwd() });
 	await initTheme(false);
-	settings.setModelRole("default", CONFIGURED_MODEL);
+	settings.setDefaultModel(CONFIGURED_MODEL);
 	settings.set("tools.approvalMode", CONFIGURED_APPROVAL);
 });
 

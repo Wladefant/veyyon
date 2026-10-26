@@ -184,7 +184,10 @@ describe("advisor compaction closes out tail elisions", () => {
 			// No model promotion mid-test: the advisor model under test stays put.
 			"contextPromotion.enabled": false,
 		});
-		settings.setModelRole("advisor", `${ELISION_PROVIDER}/${ELISION_MODEL_ID}`);
+		settings.set("agent.helpers", {
+			...settings.get("agent.helpers"),
+			advisor: { model: `${ELISION_PROVIDER}/${ELISION_MODEL_ID}` },
+		});
 
 		const advisorBatches: string[] = [];
 		const advisorStreamFn: StreamFn = (requestModel, requestContext) => {

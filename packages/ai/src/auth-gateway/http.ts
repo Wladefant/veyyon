@@ -1,23 +1,9 @@
 /**
- * Shared HTTP helpers for the auth-gateway routes.
- *
- * Centralized so we share the same JSON shape, auth check,
- * and peer-resolution logic.
+ * HTTP helpers for the auth-gateway routes: response diagnostic headers,
+ * passthrough header capture, prompt-cache identity, and CORS.
  */
-import { timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
 import type { Api, AssistantMessage, Model } from "../types";
-
-const JSON_HEADERS = {
-	"Content-Type": "application/json",
-	"X-Content-Type-Options": "nosniff",
-} as const;
-
-export function json(status: number, body: unknown, headers?: Record<string, string>): Response {
-	return new Response(JSON.stringify(body) ?? "null", {
-		status,
-		headers: headers ? { ...JSON_HEADERS, ...headers } : JSON_HEADERS,
-	});
-}
+import { GatewaySemanticRedactor } from "./semantic-redaction";
 
 /**
  * Diagnostic response headers for translated inference requests, mirroring the
@@ -78,22 +64,20 @@ export function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
 const TOKEN_ENCODER = new TextEncoder();
 
 export function isAuthorized(req: Request, tokens: ReadonlySet<string>): boolean {
-	if (tokens.size === 0) return true;
 	const header = req.headers.get("authorization");
 	if (!header) return false;
-	const match = header.match(/^Bearer\s+(.+)$/i);
+	const match = header.match(/^Bearer ([^\s,]+)$/);
 	if (!match) return false;
-	const presented = TOKEN_ENCODER.encode(match[1].trim());
-	// Iterate every allowed token regardless of early hits so the result
-	// timing reflects the full set, not the position of the match.
+	const presented = TOKEN_ENCODER.encode(match[1]);
+	// Process every allowed token. Empty configured values never authorize.
 	let ok = false;
 	for (const tok of tokens) {
+		if (tok.length === 0) continue;
 		const expected = TOKEN_ENCODER.encode(tok);
 		if (timingSafeEqual(presented, expected)) ok = true;
 	}
 	return ok;
 }
-
 /**
  * Allow-list of inbound request headers that the gateway captures and forwards
  * to the underlying parsers (which decide whether to surface them to the
@@ -123,8 +107,8 @@ const PASSTHROUGH_HEADER_NAMES: Record<string, true> = {
 
 /**
  * Extract allow-listed passthrough headers from an inbound request. Keys are
- * lowercased; empty values are dropped. Called once per request in
- * `handleFormatEndpoint`; parsers then read `options.headers`.
+ * lowercased; empty values are dropped. Every completion route merges the
+ * result under the headers its parser or client already set.
  */
 export function captureRequestHeaders(headers: Headers): Record<string, string> {
 	const out: Record<string, string> = {};
@@ -224,4 +208,56 @@ export function withCors(response: Response, req: Request): Response {
 		statusText: response.statusText,
 		headers,
 	});
+}
+
+/** Guard reassembled semantic deltas, then redact credentials in full JSON/SSE frames and headers. */
+export function redactResponse(response: Response, secrets: readonly string[]): Response {
+	const scrub = (text: string): string => {
+		for (const secret of [...new Set(secrets)].sort((a, b) => b.length - a.length)) {
+			if (secret) text = text.replaceAll(secret, "[REDACTED]");
+		}
+		return text;
+	};
+	const headers = new Headers(response.headers);
+	for (const [name, value] of headers) headers.set(name, scrub(value));
+	headers.delete("content-length");
+	if (!response.body) return new Response(null, { status: response.status, headers });
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	const encoder = new TextEncoder();
+	const streaming = headers.get("content-type")?.includes("text/event-stream");
+	const semantic = new GatewaySemanticRedactor(secrets);
+	let carry = "";
+	const body = new ReadableStream<Uint8Array>({
+		async pull(controller) {
+			try {
+				for (;;) {
+					const { value, done } = await reader.read();
+					carry += decoder.decode(value, { stream: !done });
+					if (done) {
+						controller.enqueue(encoder.encode(scrub(streaming ? semantic.push(carry, true) : carry)));
+						controller.close();
+						return;
+					}
+					if (streaming) {
+						let output = "";
+						let boundary = carry.indexOf("\n\n");
+						while (boundary >= 0) {
+							output += semantic.push(carry.slice(0, boundary + 2));
+							carry = carry.slice(boundary + 2);
+							boundary = carry.indexOf("\n\n");
+						}
+						if (output) {
+							controller.enqueue(encoder.encode(scrub(output)));
+							return;
+						}
+					}
+				}
+			} catch {
+				controller.error(new Error("Gateway response stream failed"));
+			}
+		},
+		cancel(reason) { return reader.cancel(reason); },
+	});
+	return new Response(body, { status: response.status, headers });
 }

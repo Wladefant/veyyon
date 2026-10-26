@@ -22,10 +22,8 @@ function createSettings(model: Model<Api>, tinyModel = "online") {
 	return {
 		get(path: string) {
 			if (path === "providers.tinyModel") return tinyModel;
+			if (path === "agent.helpers") return { title: { model: `${model.provider}/${model.id}` } };
 			return undefined;
-		},
-		getModelRole(role: string) {
-			return role === "smol" ? `${model.provider}/${model.id}` : undefined;
 		},
 	} as never;
 }
@@ -620,77 +618,52 @@ describe("title generator", () => {
 		expect(title).toBe("Refactor API client error handling");
 	});
 
-	it("resolves the model roles in precedence order: tiny -> commit -> smol", async () => {
-		const tinyModel = getModelOrThrow("claude-haiku-4-5");
-		const commitModel = getModelOrThrow("claude-sonnet-4-5");
-		const smolModel = getModelOrThrow("claude-opus-4-8");
+	it("resolves the title model in precedence order: title helper -> session model -> defaultModel", async () => {
+		const titleModel = getModelOrThrow("claude-haiku-4-5");
+		const sessionModel = getModelOrThrow("claude-sonnet-4-5");
+		const defaultModel = getModelOrThrow("claude-opus-4-8");
 
 		const mockComplete = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "<title>Test Title</title>" }],
 		} as never);
 
-		// Case 1: All three roles configured. 'tiny' should be used.
-		let currentSettings = {
-			get(path: string) {
-				if (path === "providers.tinyModel") return "online";
-				return undefined;
-			},
-			getModelRole(role: string) {
-				if (role === "tiny") return `${tinyModel.provider}/${tinyModel.id}`;
-				if (role === "commit") return `${commitModel.provider}/${commitModel.id}`;
-				if (role === "smol") return `${smolModel.provider}/${smolModel.id}`;
-				return undefined;
-			},
-		} as never;
+		const settingsWith = (helpers: Record<string, unknown>) =>
+			({
+				get(path: string) {
+					if (path === "providers.tinyModel") return "online";
+					if (path === "agent.helpers") return helpers;
+					if (path === "defaultModel") return [`${defaultModel.provider}/${defaultModel.id}`];
+					return undefined;
+				},
+			}) as never;
 
 		const registry = {
-			getAvailable: () => [tinyModel, commitModel, smolModel],
+			getAvailable: () => [titleModel, sessionModel, defaultModel],
 			getApiKey: async () => "test-key",
 			getApiKeyForProvider: async () => "test-key",
 			authStorage: { rotateSessionCredential: async () => false },
 			resolver: () => async () => "test-key",
 		} as never;
 
-		await generateSessionTitle("Some message", registry, currentSettings);
-		expect(mockComplete).toHaveBeenCalled();
-		expect(mockComplete.mock.calls[0]?.[0]).toBe(tinyModel);
-
+		// A configured title helper outranks the session's model.
+		await generateSessionTitle(
+			"Some message",
+			registry,
+			settingsWith({ title: { model: `${titleModel.provider}/${titleModel.id}` } }),
+			undefined,
+			sessionModel,
+		);
+		expect(mockComplete.mock.calls[0]?.[0]).toBe(titleModel);
 		mockComplete.mockClear();
 
-		// Case 2: 'tiny' role not configured, 'commit' and 'smol' configured. 'commit' should be used.
-		currentSettings = {
-			get(path: string) {
-				if (path === "providers.tinyModel") return "online";
-				return undefined;
-			},
-			getModelRole(role: string) {
-				if (role === "commit") return `${commitModel.provider}/${commitModel.id}`;
-				if (role === "smol") return `${smolModel.provider}/${smolModel.id}`;
-				return undefined;
-			},
-		} as never;
-
-		await generateSessionTitle("Some message", registry, currentSettings);
-		expect(mockComplete).toHaveBeenCalled();
-		expect(mockComplete.mock.calls[0]?.[0]).toBe(commitModel);
-
+		// An unset title helper runs the session's model.
+		await generateSessionTitle("Some message", registry, settingsWith({}), undefined, sessionModel);
+		expect(mockComplete.mock.calls[0]?.[0]).toBe(sessionModel);
 		mockComplete.mockClear();
 
-		// Case 3: Only 'smol' role configured. 'smol' should be used.
-		currentSettings = {
-			get(path: string) {
-				if (path === "providers.tinyModel") return "online";
-				return undefined;
-			},
-			getModelRole(role: string) {
-				if (role === "smol") return `${smolModel.provider}/${smolModel.id}`;
-				return undefined;
-			},
-		} as never;
-
-		await generateSessionTitle("Some message", registry, currentSettings);
-		expect(mockComplete).toHaveBeenCalled();
-		expect(mockComplete.mock.calls[0]?.[0]).toBe(smolModel);
+		// With no session model, the persisted defaultModel answers.
+		await generateSessionTitle("Some message", registry, settingsWith({}));
+		expect(mockComplete.mock.calls[0]?.[0]).toBe(defaultModel);
 	});
 });

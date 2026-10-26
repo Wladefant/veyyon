@@ -1,7 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import type { Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
-import { Settings } from "@veyyon/coding-agent/config/settings";
 import {
 	buildBrowserItems,
 	ModelBrowser,
@@ -52,7 +51,7 @@ describe("model browser column alignment while scrolling", () => {
 		const models: Model[] = [];
 		for (let i = 0; i < 20; i++) models.push(makeModel(`cheap-${i}`, { input: 0.05, output: 0.2 }, 8_000));
 		for (let i = 0; i < 20; i++) models.push(makeModel(`costly-${i}`, { input: 150, output: 600 }, 1_000_000));
-		const browser = new ModelBrowser(Settings.isolated({}));
+		const browser = new ModelBrowser();
 		browser.setItems(buildBrowserItems(models));
 		browser.setMaxVisible(8);
 		return browser;
@@ -193,7 +192,7 @@ describe("model browser price labels", () => {
 			contextWindow: 128_000,
 			maxTokens: 1024,
 		});
-		const browser = new ModelBrowser(Settings.isolated({}));
+		const browser = new ModelBrowser();
 		browser.setItems(buildBrowserItems([model]));
 		browser.setMaxVisible(4);
 		return browser;

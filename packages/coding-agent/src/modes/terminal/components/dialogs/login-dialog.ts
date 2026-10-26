@@ -3,7 +3,7 @@ import { getKeybindings } from "@veyyon/utils/keybindings";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
 import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { openPath } from "../../../../utils/open";
 import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
 import {

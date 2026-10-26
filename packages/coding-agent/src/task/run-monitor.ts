@@ -223,9 +223,9 @@ export interface RunMonitorArgs {
 	settings?: Settings;
 	/**
 	 * The parent session's live model selector. Label generation inherits it when
-	 * the tiny/commit/smol roles are unset, the way a session title inherits the
+	 * the title helper is unset, the way a session title inherits the
 	 * live model: a spawn is not a headless context, and resolving the label
-	 * through the persisted default role instead ran it on whatever the config
+	 * through the persisted `defaultModel` instead ran it on whatever the config
 	 * file last named, which is not necessarily a model that answers.
 	 */
 	parentActiveModelPattern?: string;
@@ -591,9 +591,9 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 	// failures just leave the label unset.
 	const labelSource = assignment?.trim();
 	if (!args.description && args.modelRegistry && args.settings && labelSource) {
-		// The model the label inherits when no title role is configured. A pattern
+		// The model the label inherits when no title helper is configured. A pattern
 		// that no longer resolves (a retired id, a signed-out provider) leaves the
-		// title generator on its headless path, the persisted default role.
+		// title generator on its headless path, the persisted `defaultModel`.
 		const liveModel = args.parentActiveModelPattern
 			? resolveModelOverride([args.parentActiveModelPattern], args.modelRegistry, args.settings).model
 			: undefined;

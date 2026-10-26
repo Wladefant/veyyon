@@ -8,6 +8,7 @@ import type * as MnemopiCoreNs from "@veyyon/mnemopi/core";
 import type { LocalModelInitializer } from "@veyyon/mnemopi/core";
 import * as logger from "@veyyon/utils/logger";
 import { escapeRegExp } from "@veyyon/utils/regex";
+import { settleWithin } from "@veyyon/utils/scoped-timeout";
 import type { AgentSession } from "../../session/agent-session";
 import type { AgentSessionEvent } from "../../session/agent-session-types";
 import {
@@ -49,9 +50,9 @@ function installLocalModelInitializer(setInitializer: (initializer: LocalModelIn
  * through the dedicated embeddings subprocess. The override is installed once
  * — before any consumer gets the chance to call `embed()` — so
  * `onnxruntime-node`'s NAPI constructor + finalizer never run inside the
- * agent's address space (issue #3031). Test seams that swap the initializer
- * with `setLocalModelInitializerForTests` still win because both go through
- * the same module-level slot.
+ * agent's address space (issue #3031). A test that swaps the initializer with
+ * `setLocalModelInitializer` writes the same module-level slot, so the last
+ * call wins.
  */
 export async function loadMnemopi(): Promise<typeof MnemopiNs> {
 	if (!mnemopiMod) {
@@ -650,10 +651,7 @@ export class MnemopiSessionState {
 		const { timeoutMs } = options;
 		if (timeoutMs !== undefined && timeoutMs > 0) {
 			const TIMED_OUT = Symbol("mnemopi.dispose.timedOut");
-			const winner = await Promise.race([
-				consolidatePromise.then(() => undefined as unknown),
-				Bun.sleep(timeoutMs).then(() => TIMED_OUT as unknown),
-			]);
+			const winner = await settleWithin(consolidatePromise, timeoutMs, TIMED_OUT);
 			if (winner === TIMED_OUT) {
 				logger.warn("Mnemopi: consolidate-on-dispose exceeded shutdown budget; detaching to background.", {
 					timeoutMs,

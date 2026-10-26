@@ -5,7 +5,7 @@ import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth } from "@veyyon/utils/width";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { matchesSelectCancel } from "../../utils/keybinding-matchers";
 import { computeModalDims, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
 import {
@@ -256,11 +256,6 @@ export class UserMessageSelectorComponent implements Component {
 		this.#messageList = new UserMessageList(messages);
 		this.#messageList.onSelect = onSelect;
 		this.#messageList.onCancel = onCancel;
-
-		// Auto-cancel if no messages
-		if (messages.length === 0) {
-			setTimeout(() => onCancel(), 100);
-		}
 	}
 
 	setOnRequestRender(cb: () => void): void {

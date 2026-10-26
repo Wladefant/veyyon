@@ -60,7 +60,7 @@ describe("setting signal listeners", () => {
 			"symbolPreset",
 			"colorBlindMode",
 			"provider.appendOnlyContext",
-			"modelRoles",
+			"agent.helpers",
 			"statusLine.sessionAccent",
 			"hindsight scope",
 		]);

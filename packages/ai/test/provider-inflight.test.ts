@@ -3,8 +3,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { clearCustomApis } from "@veyyon/ai/api-registry";
+import { configureProviderMaxInFlightRequests } from "@veyyon/ai/provider-inflight-limits";
 import { createMockModel, registerMockApi } from "@veyyon/ai/providers/mock";
-import { __providerInFlightForTesting, configureProviderMaxInFlightRequests, streamSimple } from "@veyyon/ai/stream";
+import { __providerInFlightForTesting, streamSimple } from "@veyyon/ai/stream";
 import type { Context } from "@veyyon/ai/types";
 
 function context(): Context {

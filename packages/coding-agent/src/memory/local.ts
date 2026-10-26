@@ -38,18 +38,12 @@ function clampMemoryEffort(model: Model, requested: Effort): Effort | undefined 
 	return clamped;
 }
 
+import { refreshAfterEachApiKeyResolution } from "../config/api-key-resolver";
 import type { ModelRegistry } from "../config/model-registry";
-import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
-import { DEFAULT_MODEL_SLOT } from "../config/model-roles";
 import type { Settings } from "../config/settings";
-
-// The path layout lives in its own leaf: this module reaches 558 modules (it asks a model to
-// summarise a session), and `internal-urls/memory-protocol` needs only the root. Re-exported so
-// every existing caller keeps asking this file for it.
-export { getMemoryRoot } from "./paths";
-
 import { memoriesPrompts } from "../prompts/memories/rows";
 import type { AgentSession } from "../session/agent-session";
+import { helperSettingPath, resolveHelperModel } from "../task/helper-settings";
 import { getMemoryRoot } from "./paths";
 import {
 	claimStage1Jobs,
@@ -91,25 +85,6 @@ interface MemoryRuntimeConfig {
 	fallbackTokenLimit: number;
 	summaryInjectionTokenLimit: number;
 }
-
-const DEFAULTS: MemoryRuntimeConfig = {
-	enabled: false,
-	maxRolloutsPerStartup: 64,
-	maxRolloutAgeDays: 30,
-	minRolloutIdleHours: 12,
-	threadScanLimit: 300,
-	maxRawMemoriesForGlobal: 200,
-	stage1Concurrency: 8,
-	stage1LeaseSeconds: 120,
-	stage1RetryDelaySeconds: 120,
-	phase2LeaseSeconds: 180,
-	phase2RetryDelaySeconds: 180,
-	phase2HeartbeatSeconds: 30,
-	rolloutPayloadPercent: 0.7,
-	phase1InputTokenLimit: 4_000,
-	fallbackTokenLimit: 16_000,
-	summaryInjectionTokenLimit: 5_000,
-};
 
 interface Stage1Stats {
 	claimed: number;
@@ -381,11 +356,7 @@ async function runPhase1(options: {
 		const threads = await collectThreads(session, currentThreadId);
 		upsertThreads(db, threads);
 
-		const phase1Model = await resolveMemoryModel({
-			modelRegistry,
-			session,
-			fallbackRole: "default",
-		});
+		const phase1Model = resolveMemoryModel(modelRegistry, session);
 		if (!phase1Model) {
 			logger.debug("Phase1 skipped: no model available");
 			return;
@@ -539,11 +510,7 @@ async function runPhase2(options: {
 			return;
 		}
 
-		const phase2Model = await resolveMemoryModel({
-			modelRegistry,
-			session,
-			fallbackRole: "smol",
-		});
+		const phase2Model = resolveMemoryModel(modelRegistry, session);
 		if (!phase2Model) {
 			markPhase2FailureWithFallback(db, {
 				claim,
@@ -818,7 +785,7 @@ async function runStage1Job(options: {
 			];
 		};
 		const response = await completeSimple(model, providerContext, {
-			apiKey: refreshProviderContextForApiKey(apiKey, refreshProviderContext),
+			apiKey: refreshAfterEachApiKeyResolution(apiKey, refreshProviderContext),
 			metadata: options.metadata,
 			maxTokens: clampLow(Math.floor(modelMaxTokens * 0.2), 1024, 4096),
 			reasoning: clampMemoryEffort(model, Effort.Low),
@@ -1008,7 +975,7 @@ async function runConsolidationModel(options: {
 		];
 	};
 	const response = await completeSimple(model, providerContext, {
-		apiKey: refreshProviderContextForApiKey(apiKey, refreshProviderContext),
+		apiKey: refreshAfterEachApiKeyResolution(apiKey, refreshProviderContext),
 		metadata: options.metadata,
 		maxTokens: 8192,
 		reasoning: clampMemoryEffort(model, Effort.Medium),
@@ -1191,7 +1158,7 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
 	try {
 		const parsed = JSON.parse(text) as unknown;
 		if (isRecord(parsed)) {
-			return parsed as Record<string, unknown>;
+			return parsed;
 		}
 	} catch {
 		const match = text.match(/\{[\s\S]*\}/);
@@ -1199,7 +1166,7 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
 		try {
 			const parsed = JSON.parse(match[0]) as unknown;
 			if (isRecord(parsed)) {
-				return parsed as Record<string, unknown>;
+				return parsed;
 			}
 		} catch {
 			return undefined;
@@ -1228,17 +1195,16 @@ function parseConsolidationOutputSchema(value: Record<string, unknown>): Consoli
 	const skills: ConsolidationSkillSchema[] = [];
 	for (const item of value.skills) {
 		if (!isRecord(item)) return undefined;
-		const data = item as Record<string, unknown>;
-		if (!hasExactKeys(data, ["name", "content", "scripts", "templates", "examples"], true)) return undefined;
-		if (typeof data.name !== "string") return undefined;
-		if (!(typeof data.content === "string" || data.content === undefined)) return undefined;
-		const scripts = parseConsolidationSkillFileArray(data.scripts);
-		const templates = parseConsolidationSkillFileArray(data.templates);
-		const examples = parseConsolidationSkillFileArray(data.examples);
+		if (!hasExactKeys(item, ["name", "content", "scripts", "templates", "examples"], true)) return undefined;
+		if (typeof item.name !== "string") return undefined;
+		if (!(typeof item.content === "string" || item.content === undefined)) return undefined;
+		const scripts = parseConsolidationSkillFileArray(item.scripts);
+		const templates = parseConsolidationSkillFileArray(item.templates);
+		const examples = parseConsolidationSkillFileArray(item.examples);
 		if (!scripts || !templates || !examples) return undefined;
 		skills.push({
-			name: data.name,
-			content: data.content,
+			name: item.name,
+			content: item.content,
 			scripts,
 			templates,
 			examples,
@@ -1298,10 +1264,9 @@ function parseConsolidationSkillFileArray(value: unknown): ConsolidationSkillFil
 	const files: ConsolidationSkillFileSchema[] = [];
 	for (const item of value) {
 		if (!isRecord(item)) return undefined;
-		const data = item as Record<string, unknown>;
-		if (!hasExactKeys(data, ["path", "content"])) return undefined;
-		if (typeof data.path !== "string" || typeof data.content !== "string") return undefined;
-		files.push({ path: data.path, content: data.content });
+		if (!hasExactKeys(item, ["path", "content"])) return undefined;
+		if (typeof item.path !== "string" || typeof item.content !== "string") return undefined;
+		files.push({ path: item.path, content: item.content });
 	}
 	return files;
 }
@@ -1342,18 +1307,6 @@ function sanitizeSkillRelativePath(rawPath: string): string | undefined {
 	return parts.join("/");
 }
 
-function refreshProviderContextForApiKey(apiKey: ApiKey, refresh: () => void): ApiKey {
-	// Populate once for static keys and test seams. Resolver-backed keys refresh again only after
-	// every awaited credential resolution, immediately before completeSimple starts that attempt.
-	refresh();
-	if (typeof apiKey === "string") return apiKey;
-	return async context => {
-		const resolved = await apiKey(context);
-		refresh();
-		return resolved;
-	};
-}
-
 function truncateByApproxTokens(text: string, tokenLimit: number): string {
 	if (tokenLimit <= 0) return "";
 	const maxChars = tokenLimit * 4;
@@ -1371,43 +1324,35 @@ function computeModelTokenBudget(model: Model, config: MemoryRuntimeConfig): num
 	return Math.max(2048, Math.floor(maxTokens));
 }
 
-async function resolveMemoryModel(options: {
-	modelRegistry: ModelRegistry;
-	session: AgentSession;
-	fallbackRole: string;
-}): Promise<Model | undefined> {
-	const { modelRegistry, session, fallbackRole } = options;
-	const requestedModel =
-		session.settings.getModelRole(fallbackRole) || session.settings.getModelRole(DEFAULT_MODEL_SLOT);
-	if (requestedModel) {
-		const resolved = resolveModelRoleValue(requestedModel, modelRegistry.getAll(), {
-			settings: session.settings,
-			matchPreferences: getModelMatchPreferences(session.settings),
+/** The `memory` helper's model: its configured chain, else the session's model. */
+function resolveMemoryModel(modelRegistry: ModelRegistry, session: AgentSession): Model | undefined {
+	const selection = resolveHelperModel(session.settings, "memory", modelRegistry.getAll(), session.model);
+	if (!selection) {
+		logger.warn("Memory pass skipped: the configured model matches no model", {
+			setting: helperSettingPath("memory", "model"),
 		});
-		if (resolved.model) return resolved.model;
 	}
-	return session.model ?? modelRegistry.getAll()[0];
+	return selection?.model;
 }
 
 function loadMemoryConfig(settings: Settings): MemoryRuntimeConfig {
 	return {
 		enabled: settings.get("memory.backend") === "local",
-		maxRolloutsPerStartup: settings.get("memories.maxRolloutsPerStartup") ?? DEFAULTS.maxRolloutsPerStartup,
-		maxRolloutAgeDays: settings.get("memories.maxRolloutAgeDays") ?? DEFAULTS.maxRolloutAgeDays,
-		minRolloutIdleHours: settings.get("memories.minRolloutIdleHours") ?? DEFAULTS.minRolloutIdleHours,
-		threadScanLimit: settings.get("memories.threadScanLimit") ?? DEFAULTS.threadScanLimit,
-		maxRawMemoriesForGlobal: settings.get("memories.maxRawMemoriesForGlobal") ?? DEFAULTS.maxRawMemoriesForGlobal,
-		stage1Concurrency: settings.get("memories.stage1Concurrency") ?? DEFAULTS.stage1Concurrency,
-		stage1LeaseSeconds: settings.get("memories.stage1LeaseSeconds") ?? DEFAULTS.stage1LeaseSeconds,
-		stage1RetryDelaySeconds: settings.get("memories.stage1RetryDelaySeconds") ?? DEFAULTS.stage1RetryDelaySeconds,
-		phase2LeaseSeconds: settings.get("memories.phase2LeaseSeconds") ?? DEFAULTS.phase2LeaseSeconds,
-		phase2RetryDelaySeconds: settings.get("memories.phase2RetryDelaySeconds") ?? DEFAULTS.phase2RetryDelaySeconds,
-		phase2HeartbeatSeconds: settings.get("memories.phase2HeartbeatSeconds") ?? DEFAULTS.phase2HeartbeatSeconds,
-		rolloutPayloadPercent: settings.get("memories.rolloutPayloadPercent") ?? DEFAULTS.rolloutPayloadPercent,
-		phase1InputTokenLimit: settings.get("memories.phase1InputTokenLimit") ?? DEFAULTS.phase1InputTokenLimit,
-		fallbackTokenLimit: settings.get("memories.fallbackTokenLimit") ?? DEFAULTS.fallbackTokenLimit,
-		summaryInjectionTokenLimit:
-			settings.get("memories.summaryInjectionTokenLimit") ?? DEFAULTS.summaryInjectionTokenLimit,
+		maxRolloutsPerStartup: settings.get("memories.maxRolloutsPerStartup"),
+		maxRolloutAgeDays: settings.get("memories.maxRolloutAgeDays"),
+		minRolloutIdleHours: settings.get("memories.minRolloutIdleHours"),
+		threadScanLimit: settings.get("memories.threadScanLimit"),
+		maxRawMemoriesForGlobal: settings.get("memories.maxRawMemoriesForGlobal"),
+		stage1Concurrency: settings.get("memories.stage1Concurrency"),
+		stage1LeaseSeconds: settings.get("memories.stage1LeaseSeconds"),
+		stage1RetryDelaySeconds: settings.get("memories.stage1RetryDelaySeconds"),
+		phase2LeaseSeconds: settings.get("memories.phase2LeaseSeconds"),
+		phase2RetryDelaySeconds: settings.get("memories.phase2RetryDelaySeconds"),
+		phase2HeartbeatSeconds: settings.get("memories.phase2HeartbeatSeconds"),
+		rolloutPayloadPercent: settings.get("memories.rolloutPayloadPercent"),
+		phase1InputTokenLimit: settings.get("memories.phase1InputTokenLimit"),
+		fallbackTokenLimit: settings.get("memories.fallbackTokenLimit"),
+		summaryInjectionTokenLimit: settings.get("memories.summaryInjectionTokenLimit"),
 	};
 }
 

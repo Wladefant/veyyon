@@ -2,8 +2,9 @@
  * Resolve configuration values that may be shell commands, environment variables, or literals.
  *
  * This is the ASYNCHRONOUS entry point, used on the API-key path where command
- * execution must not block the TUI. Its synchronous sibling lives in
- * `model-registry.ts`, which must resolve eagerly in a sync constructor. The two
+ * execution must not block the TUI. Its synchronous sibling is
+ * `resolve-config-value-sync.ts`, which the model registry calls to resolve eagerly in a sync
+ * constructor. The two
  * differ ONLY in how they run the command: the grammar (`!command` / env /
  * literal), the reason vocabulary, and the caching/back-off/report-once policy
  * all come from `config-value-resolution.ts`, so a value resolves the same way
@@ -93,7 +94,7 @@ async function runShellCommand(command: string, timeoutMs: number, describedAs?:
 	// credential must never reach a log file. `recordFailure` is therefore called
 	// with no stderr, and the report sends the reader to run the command
 	// themselves, where they see the real stderr. The sibling resolver in
-	// `model-registry.ts` runs commands through `execSync` with separate pipes, so
+	// `resolve-config-value-sync.ts` runs commands through `execSync` with separate pipes, so
 	// it CAN report stderr, and does.
 	let output = "";
 	try {
