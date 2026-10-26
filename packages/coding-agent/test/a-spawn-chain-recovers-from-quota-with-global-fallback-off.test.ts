@@ -137,7 +137,7 @@ describe("spawn quota fallback", () => {
 		}
 	});
 
-	it.each([[], ["unavailable/full-model"]])("keeps a resolved explicit list closed when no tail resolves (%j)", async tail => {
+	it.each([{ tail: [] }, { tail: ["unavailable/full-model"] }])("keeps a resolved explicit list closed when no tail resolves (%j)", async ({ tail }) => {
 		const { runtime, session, settings, events } = fixture(false, true);
 		try {
 			const selection = await StartupModelSelection.begin({
