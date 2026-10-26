@@ -217,7 +217,7 @@ export async function discoverCustomCommands(
 	// (`resolvePluginCommandPaths` accepts a file or a directory holding an
 	// index), so it joins the list as-is rather than going through the
 	// `<commandsDir>/<name>/index.*` scan above.
-	for (const commandPath of await getAllPluginCommandPaths(cwd, agentDir ? pluginsRootFor(agentDir) : undefined)) {
+	for (const commandPath of await getAllPluginCommandPaths(cwd, { pluginsRoot: agentDir ? pluginsRootFor(agentDir) : undefined, agentDir })) {
 		addPath(commandPath, "plugin");
 	}
 

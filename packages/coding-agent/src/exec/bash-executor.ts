@@ -94,6 +94,7 @@ export interface BashResult {
 	 */
 	signal?: number;
 	cancelled: boolean;
+	outputIncomplete?: boolean;
 	timedOut?: boolean;
 	truncated: boolean;
 	totalLines: number;
@@ -460,8 +461,19 @@ class RunStop {
 	}
 }
 
-async function cancelledResult(sink: OutputSink, annotation: string, timedOut = false): Promise<BashResult> {
-	return { exitCode: undefined, cancelled: true, timedOut, ...(await sink.dumpWithArtifactStatus(annotation)) };
+async function cancelledResult(
+	sink: OutputSink,
+	annotation: string,
+	timedOut = false,
+	outputIncomplete = false,
+): Promise<BashResult> {
+	return {
+		exitCode: undefined,
+		cancelled: true,
+		timedOut,
+		outputIncomplete,
+		...(await sink.dumpWithArtifactStatus(annotation)),
+	};
 }
 
 /**
@@ -483,6 +495,12 @@ function abandonStoppedRun(
 function interruptedRunAnnotation(result: ShellRunResult, timeoutMs: number | undefined): string {
 	if (!result.timedOut) return "Command cancelled";
 	return timeoutMs ? `Command timed out after ${Math.round(timeoutMs / 1000)} seconds` : "Command timed out";
+}
+
+const INCOMPLETE_CAPTURE_NOTICE = "Shell output capture is incomplete";
+
+function replaceIncompleteCapture(sink: OutputSink, capturedOutput: string | undefined): void {
+	if (capturedOutput !== undefined) sink.replace(capturedOutput);
 }
 
 /**
@@ -648,17 +666,31 @@ async function runBash(
 		if (result.timedOut || result.cancelled) {
 			resetSession = true;
 			if (lease.persistent) quarantineShellSession(sessionKey, runPromise, stop.shellAbort);
+			if (result.outputIncomplete) replaceIncompleteCapture(sink, result.capturedOutput);
 			return await cancelledResult(
 				sink,
-				interruptedRunAnnotation(result, options?.timeout),
+				`${interruptedRunAnnotation(result, options?.timeout)}${result.outputIncomplete ? `\n${INCOMPLETE_CAPTURE_NOTICE}` : ""}`,
 				result.timedOut,
+				result.outputIncomplete,
 			);
+		}
+		if (result.outputIncomplete) {
+			replaceIncompleteCapture(sink, result.capturedOutput);
+			return {
+				exitCode: result.exitCode,
+				signal: result.signal,
+				cancelled: false,
+				outputIncomplete: true,
+				workingDir: result.workingDir,
+				...(await sink.dumpWithArtifactStatus(INCOMPLETE_CAPTURE_NOTICE)),
+			};
 		}
 		await spliceMinimizedOutput(sink, result.minimized, options?.onMinimizedSave);
 		return {
 			exitCode: result.exitCode,
 			signal: result.signal,
 			cancelled: false,
+			outputIncomplete: false,
 			workingDir: result.workingDir,
 			...(await sink.dumpWithArtifactStatus()),
 		};

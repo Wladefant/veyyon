@@ -3,11 +3,18 @@
 ## [Unreleased]
 
 ### Fixed
+- Recovered daemons whose process tree cannot be proven gone now settle as `failed` with `ownershipUncertain`, are never restarted automatically, and allow manual replacement only when the configured ready port is free.
+- Launch retains stable handles for tracked descendants after a wrapper exits and waits for their teardown before restarting ([issue](https://github.com/Wladefant/veyyon/issues/530)).
+- Launch holds a daemon whose native process handle is unavailable in `stopping` instead of settling it as exited: its tree's death is unobservable, so no restart starts and a stop reports failure ([issue](https://github.com/Wladefant/veyyon/issues/530)).
 - Mixed-build IRC sends distinguish unknown sessions from receivers without notice support and report loaded build identities ([#551](https://github.com/Wladefant/veyyon/issues/551)).
+- Browser tabs owned by another session can no longer be reopened, reused, or run, and the tab inventory omits their names, titles, and URLs ([Refs #538](https://github.com/Wladefant/veyyon/issues/538)).
 
+- Project plugins load only from the `installPath` entries of a project registry the operator has approved, through both the plugin loader and the Claude-plugin roots. The project directory's `package.json`, lockfile and `node_modules` are no longer read for project plugins. A registry whose directory resolves outside the project is refused, and an approval from a nested directory reaches the gate ([Refs #633](https://github.com/Wladefant/veyyon/issues/633)).
 - Argot teaches its handle table to a model named in `argot.encode.models` with a thinking selector (`provider/id:high`), drops or restores the table when a model switch crosses the allowlist, and records a deliberately untaught model as decode-only instead of logging an `ABSENT` handle table ([#648](https://github.com/Wladefant/veyyon/issues/648))
 - Closing a launch client during broker connection now rejects pending requests and destroys late sockets, so an empty broker can exit after its configured grace when all clients close ([Refs #517](https://github.com/Wladefant/veyyon/issues/517)).
 - Reviewer prompts now enforce exact-head, gate-safe, verdict-only reviews and declare `task`, `qa-verifier`, and `haiku` as child roles ([#566](https://github.com/Wladefant/veyyon/issues/566)).
+- Project skill folders over 256 files, 8 directory levels, 1 MiB per file or 16 MiB in total are no longer trusted; every directory, including `node_modules` and `.git`, counts toward these bounds and its files affect the digest.
+- Incomplete native shell capture keeps the command's status, returns the retained output prefix, and reports the output as incomplete.
 
 - Session cwd changes leave the shared process directory unchanged and load plugin configuration from each session's destination project ([issue](https://github.com/Wladefant/veyyon/issues/529)).
 - Quota refusals block the failed request's credential, not a healthy account selected by a later resolver call ([PR](https://github.com/Wladefant/veyyon/pull/619)).
@@ -16,6 +23,7 @@
 - A browser returned by `acquireBrowser` carries a lease its caller releases, so one session's release can no longer close a browser another session has just reused.
 - Session factory callback typing and mixed native actor rosters now pass the workspace type check ([Refs](https://github.com/Wladefant/veyyon/issues/569)).
 - Background jobs whose owning lane was disposed reach Main as one batched note listing each result once. A lane's jobs still reach only that lane while it lives, and an absent owner keeps its completions until it returns ([Refs #564](https://github.com/Wladefant/veyyon/issues/564)).
+- Session dispose closes only the browser tabs that session created. Another lane's tabs and the operator's tabs stay open ([Refs #538](https://github.com/Wladefant/veyyon/issues/538)).
 - ACP client-terminal commands receive closed stdin and non-interactive defaults while explicit input redirects and environment overrides still work ([#565](https://github.com/Wladefant/veyyon/issues/565)).
 - Disposing a session's owner during kernel startup returns at once and releases the runner when startup completes, and a kernel whose stdin pipe stalls at shutdown is still signalled and reaches SIGKILL, so eval interpreters no longer outlive their session ([Refs #639](https://github.com/Wladefant/veyyon/issues/639)).
 - A JS eval context stays alive for an owner that attaches after another owner ends, so disposing the first owner no longer kills the second owner's in-flight cell ([Refs #639](https://github.com/Wladefant/veyyon/issues/639)).
@@ -31,6 +39,7 @@
 - Auth gateway accepts a server-only live device token map with `--device-tokens-file`. PC2 uses existing `pi-native` transport with a device bearer instead of provider credentials ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
 - Task and qa-verifier spawns share configured Gemini 3.8 Flash and GPT-6 Luna models evenly by spawn identity.
 - `deepseek` is a `web_search` provider and a `fetch` reader backend. Both use the `DEEPSEEK_API_KEY` that the DeepSeek model provider already reads, so a machine with a DeepSeek key searches and reads pages with no second credential.
+- Browser tab inventory lists only relay-controlled tabs, and approved close IDs apply only to ownerless relay-controlled tabs; lane-owned tabs remain protected ([Refs](https://github.com/Wladefant/veyyon/issues/538)).
 
 - Terminal provider HTTP 429 and 402 lane errors notify `model_routing.py record-error` without waiting. The reporter uses a hidden child, a 10-second timeout and payload-free failure logs ([Refs](https://github.com/Wladefant/superboard/issues/451)).
 - `irc` sends a durable notice to another session with `to: "session:<id>"` or `to: "session:all"`. A session reads its notices at the start of each prompt and at step boundaries, shows them to the model and forwards them to its running lanes, so a warning survives a dropped terminal pipe and reaches the lanes ([Refs](https://github.com/Wladefant/veyyon/issues/537)).
