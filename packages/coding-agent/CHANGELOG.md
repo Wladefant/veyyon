@@ -53,6 +53,7 @@
 - Fixed `/mcp:<verb>`, `/ssh:<verb>`, `/btw:`, `/tan:` and `/omfg:` in the terminal reading the colon as part of their arguments, so `/mcp:list` showed help instead of the server list.
 - `/ssh add` and `/ssh remove` read one grammar in the terminal and over ACP, print mode and RPC: text mode accepts `desc` and `compat`, the terminal names the replacement for a plain `host`, `port` or `scope`, and an empty `/ssh add` reports the missing host name on both.
 - A diff or read window of a multi-megabyte source copies the source to the block-boundary lookup in an event-loop turn of its own, so the copy no longer lengthens the turn that built the diff: a one-line edit of a 3.5 MB file held the loop longer than splitting the file.
+- `/mcp add` and `/mcp remove` in the terminal refuse a plain `scope`, `project`, `user` or `transport`, in any letter case, with the sentence print mode and ACP give instead of `Unknown argument`, and the terminal `/mcp smithery-search` refuses a trailing `scope` as it already refused `project` and `user`.
 
 ## [1.5.10] - 2026-10-25
 

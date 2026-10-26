@@ -22,16 +22,17 @@
  * new keyword that collides with a removed option turns this suite red until
  * someone records the collision.
  *
- * WHAT THIS DOES NOT CATCH. `/ssh` is swept on both surfaces — the text/ACP
- * handler and the terminal `ssh-command-controller.ts` — because both read one
- * grammar (`helpers/ssh-args.ts`) and a second reader would drift. `/mcp` is
- * swept on the text/ACP handler only: the TUI `mcp-command-controller.ts` is
- * covered for a plain removed word by `mcp-command-ignores-repo-config.test.ts`,
- * for the scope words alone — no sweep enumerates the other keys on that surface.
- * It also asserts the SENTENCE, not the effect: a refusal that carried the
- * right words while still writing a file would pass here and fail that suite.
+ * WHAT THIS DOES NOT CATCH. `/mcp` and `/ssh` are swept on both surfaces — the
+ * text/ACP handler and the terminal controller — because each reads one shared
+ * grammar (`helpers/mcp-args.ts`, `helpers/ssh-args.ts`) and a second reader
+ * would drift. `/mcp smithery-search` is not swept, for the reason given where
+ * it is tested below. It also asserts the SENTENCE, not the effect on the text
+ * surface: a refusal that carried the right words while still writing a file
+ * would pass there and fail `mcp-command-ignores-repo-config.test.ts`.
  */
 import { describe, expect, test, vi } from "bun:test";
+import * as mcpConfigWriter from "@veyyon/coding-agent/mcp/config-writer";
+import { MCPCommandController } from "@veyyon/coding-agent/modes/terminal/controllers/mcp-command-controller";
 import { SSHCommandController } from "@veyyon/coding-agent/modes/terminal/controllers/ssh-command-controller";
 import {
 	handleMcpAcp,
@@ -84,17 +85,43 @@ function surface(handler: Handler) {
 
 const runMcp = surface(handleMcpAcp as Handler);
 const runSsh = surface(handleSshAcp as Handler);
+/** A config writer a refused line must never reach: it rejects naming the line that did. */
+const unreachable = (line: string, writer: string) => () => Promise.reject(new Error(`${line} reached ${writer}`));
+
 /**
- * The terminal reader of `/ssh`: the real controller, handed the argument tail
- * the way the slash dispatcher hands it. Every line this file sends is refused
- * during parsing, so the config writers are made to reject: a line that got past
- * the grammar fails here naming the writer instead of editing a profile.
+ * The terminal readers: the real controllers, handed the argument tail the way
+ * the slash dispatcher hands it. Every line this file sends is refused during
+ * parsing, so the config writers are made to reject: a line that got past the
+ * grammar fails here naming the writer instead of editing a profile.
  */
+const runMcpTerminal = async (text: string): Promise<string> => {
+	const shown: string[] = [];
+	const add = vi.spyOn(mcpConfigWriter, "addMCPServer").mockImplementation(unreachable(text, "addMCPServer"));
+	const remove = vi.spyOn(mcpConfigWriter, "removeMCPServer").mockImplementation(unreachable(text, "removeMCPServer"));
+	try {
+		const show = (message: string) => {
+			shown.push(message);
+		};
+		const controller = new MCPCommandController({
+			present: () => {
+				shown.push(`${text} presented a result`);
+			},
+			showError: show,
+			showStatus: show,
+			showWarning: show,
+		} as never);
+		await controller.handle(parseSlashCommand(text)?.args ?? "");
+		return shown.join("\n");
+	} finally {
+		add.mockRestore();
+		remove.mockRestore();
+	}
+};
+
 const runSshTerminal = async (text: string): Promise<string> => {
 	const shown: string[] = [];
-	const reached = (writer: string) => () => Promise.reject(new Error(`${text} reached ${writer}`));
-	const add = vi.spyOn(sshConfigWriter, "addSSHHost").mockImplementation(reached("addSSHHost"));
-	const remove = vi.spyOn(sshConfigWriter, "removeSSHHost").mockImplementation(reached("removeSSHHost"));
+	const add = vi.spyOn(sshConfigWriter, "addSSHHost").mockImplementation(unreachable(text, "addSSHHost"));
+	const remove = vi.spyOn(sshConfigWriter, "removeSSHHost").mockImplementation(unreachable(text, "removeSSHHost"));
 	try {
 		const controller = new SSHCommandController({
 			present: () => {
@@ -150,28 +177,33 @@ interface SweptCommand {
 }
 
 const COMMANDS: readonly SweptCommand[] = [
-	{
-		name: "/mcp add",
-		map: MCP_ADD_REMOVED_OPTIONS,
-		run: () => runMcp,
-		line: (word: string) => `/mcp add srv ${word}`,
-		// `url` and `token` are the keywords that replaced `--url` and `--token`,
-		// so their plain spelling is syntax. The empty key is the old `--`
-		// separator and has no plain spelling at all: a word cannot be empty.
-		liveSyntax: ["", "token", "url"],
-		fallback: (word: string) => `Unknown argument: ${word}`,
-	},
-	{
-		name: "/mcp remove",
-		map: MCP_REMOVE_REMOVED_OPTIONS,
-		run: () => runMcp,
-		line: (word: string) => `/mcp remove srv ${word}`,
-		liveSyntax: [],
-		fallback: (word: string) => `Unknown argument: ${word}`,
-	},
-	// One row per reader of the shared `/ssh` grammar. The map, the live syntax and
-	// the fallback are declared once for both, so a surface that reads a word
+	// One row per reader of each shared grammar. The map, the live syntax and the
+	// fallback are declared once for both readers, so a surface that reads a word
 	// differently from the other fails its own rows.
+	...[
+		{ label: "text", run: () => runMcp },
+		{ label: "terminal", run: () => runMcpTerminal },
+	].flatMap(reader => [
+		{
+			name: `/mcp add (${reader.label})`,
+			map: MCP_ADD_REMOVED_OPTIONS,
+			run: reader.run,
+			line: (word: string) => `/mcp add srv ${word}`,
+			// `url` and `token` are the keywords that replaced `--url` and `--token`,
+			// so their plain spelling is syntax. The empty key is the old `--`
+			// separator and has no plain spelling at all: a word cannot be empty.
+			liveSyntax: ["", "token", "url"],
+			fallback: (word: string) => `Unknown argument: ${word}`,
+		},
+		{
+			name: `/mcp remove (${reader.label})`,
+			map: MCP_REMOVE_REMOVED_OPTIONS,
+			run: reader.run,
+			line: (word: string) => `/mcp remove srv ${word}`,
+			liveSyntax: [],
+			fallback: (word: string) => `Unknown argument: ${word}`,
+		},
+	]),
 	...[
 		{ label: "text", run: () => runSsh },
 		{ label: "terminal", run: () => runSshTerminal },

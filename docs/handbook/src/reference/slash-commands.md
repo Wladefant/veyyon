@@ -70,9 +70,11 @@ A word that never was an option is rejected more briefly, since there is no repl
 `Unknown argument: <word>`, or `Invalid port: <word>` where a port was the only thing the command
 reads.
 
-`/mcp smithery-search` is the exception: its trailing words are search
-terms, arbitrary text with no closed set, so a plain `project` there is a keyword to search for and
-is searched for. Only the dashed spellings are rejected.
+`/mcp smithery-search` is the exception: its trailing words are search terms, arbitrary text with
+no closed set, so in ACP and `--print` mode a plain `project` there is a keyword and is searched
+for. Only the dashed spellings are rejected. In the terminal, picking a result adds the server, so a
+trailing `scope`, `project` or `user`, which used to choose where the server was written, is
+rejected with its replacement instead.
 
 ## A bare command that has subcommands
 

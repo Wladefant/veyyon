@@ -464,7 +464,7 @@ export class MCPCommandController {
 	 * Handle /mcp remove <name> - Remove a server
 	 */
 	async #handleRemove(rest: string): Promise<void> {
-		const parsed = parseMcpRemoveArgs(rest, "terminal");
+		const parsed = parseMcpRemoveArgs(rest);
 		if (parsed.error) {
 			this.ctx.showError(parsed.error);
 			return;
