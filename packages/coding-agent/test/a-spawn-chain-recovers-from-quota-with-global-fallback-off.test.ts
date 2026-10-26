@@ -12,6 +12,7 @@ import type { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import type { AgentSessionEvent } from "../src/session/agent-session-types";
 import { RetryRuntime, type RetrySession } from "../src/session/runtime/retry-runtime";
+import { type StartupModelInputs, StartupModelSelection } from "../src/session/startup-model";
 import { resolveAgentModel } from "../src/task/agent-settings";
 
 const selectors = [
@@ -57,6 +58,7 @@ function fixture(explicit = true, global = false) {
 			getAll: () => models,
 			getAvailable: () => models,
 			getApiKey: async () => "fake-key",
+			refreshSelectedModelMetadata: async model => model,
 			authStorage: { markUsageLimitReached: async () => ({ switched: false }) },
 			isSelectorSuppressed: (selector: string) => (cooldowns.get(selector.split(":")[0]) ?? 0) > Date.now(),
 			suppressSelector: (selector: string, until: number) => cooldowns.set(selector.split(":")[0], until),
@@ -130,6 +132,28 @@ describe("spawn quota fallback", () => {
 				selectors.slice(1),
 			);
 			expect(runtime.isRetrying).toBe(false);
+		} finally {
+			runtime.abort();
+		}
+	});
+
+	it.each([[], ["unavailable/full-model"]])("keeps a resolved explicit list closed when no tail resolves (%j)", async tail => {
+		const { runtime, session, settings, events } = fixture(false, true);
+		try {
+			const selection = await StartupModelSelection.begin({
+				options: { modelPattern: [selectors[0], ...tail], modelPatternFallbackChain: true },
+				settings,
+				modelRegistry: session.modelRegistry,
+				sessionManager: session.sessionManager,
+				existingSession: {} as StartupModelInputs["existingSession"],
+				hasExistingSession: false,
+				hasThinkingEntry: false,
+			});
+			await selection.completeAfterExtensions();
+			Object.assign(session, { model: selection.model, modelPatternFallbackKey: selection.modelPatternFallbackKey });
+			expect(await runtime.recoverFailedTurn(quota())).toBe(false);
+			expect(session.model).toBe(models[0]);
+			expect(events.filter(event => event.type === "retry_fallback_applied")).toEqual([]);
 		} finally {
 			runtime.abort();
 		}
