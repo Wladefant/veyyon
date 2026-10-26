@@ -203,6 +203,12 @@ const attachedSchema = type({
 	"targetInfo?": { type: "string", "targetId?": "string" },
 });
 
+function diagnosticMethod(method: string, scrub: readonly string[]): string {
+	return /^[A-Za-z][A-Za-z0-9]*\.[A-Za-z][A-Za-z0-9]*$/.test(method) && method.length <= 128
+		? redactSecrets(method, scrub)
+		: "<invalid>";
+}
+
 function errorText(error: unknown): string {
 	if (typeof error === "string") return error;
 	if (error instanceof Error) return error.message;
@@ -287,6 +293,7 @@ export class ExtensionRelay {
 		if (opts.bootstrap) this.#bootstrapUrl = buildConnectUrl({ ...opts.bootstrap, relayUrl: this.extensionUrl });
 		this.#scrub.push(this.#relaySecret, this.#cdpSecret, this.#controlSecret);
 		this.#writeStateFile();
+		this.#log("extension relay listening", { port: this.port, pid: process.pid, instance: this.#instance });
 	}
 
 	static start(opts: ExtensionRelayOptions): ExtensionRelay {
@@ -351,6 +358,12 @@ export class ExtensionRelay {
 			const timer = setTimeout(() => {
 				this.#extensionWaiters = this.#extensionWaiters.filter(w => w !== done);
 				signal?.removeEventListener("abort", onAbort);
+				this.#log("extension connection wait timed out", {
+					port: this.port,
+					extensionConnected: this.extensionConnected,
+					ready: this.#ready,
+					trackedTabCount: this.#tabs.size,
+				});
 				reject(new Error(`The extension did not connect within ${Math.round(timeoutMs / 1000)} s.`));
 			}, timeoutMs);
 			this.#extensionWaiters.push(done);
@@ -424,8 +437,8 @@ export class ExtensionRelay {
 	/** Lets `veyyon browser-extension status|disconnect` reach this process. Private to the user. */
 	#writeStateFile(): void {
 		const file = this.#stateFile();
-		fs.mkdirSync(path.dirname(file), { recursive: true });
 		const state = { port: this.port, control: this.#controlSecret, pid: process.pid };
+		fs.mkdirSync(path.dirname(file), { recursive: true });
 		fs.writeFileSync(file, JSON.stringify(state), { mode: 0o600 });
 	}
 
@@ -489,10 +502,12 @@ export class ExtensionRelay {
 	#onOpen(ws: ServerWebSocket<SocketData>): void {
 		if (ws.data.role === "extension") {
 			this.#extension = ws;
+			this.#log("extension websocket accepted", { port: this.port });
 			if (this.#bootstrapUrl === undefined) this.#markReady();
 			return;
 		}
 		const clientId = ws.data.clientId;
+		this.#log("CDP websocket accepted", { port: this.port, clientId: ws.data.clientId });
 		if (clientId === undefined) return;
 		this.#clients.set(clientId, { id: clientId, ws, discover: false, autoAttach: false, sessions: new Map() });
 	}
@@ -500,9 +515,11 @@ export class ExtensionRelay {
 	#onSocketClose(ws: ServerWebSocket<SocketData>): void {
 		if (ws.data.role === "extension") {
 			if (this.#extension === ws) this.#onExtensionGone();
+			this.#log("extension websocket disconnected", { port: this.port });
 			return;
 		}
 		if (ws.data.clientId !== undefined) this.#clients.delete(ws.data.clientId);
+		this.#log("CDP websocket disconnected", { port: this.port, clientId: ws.data.clientId });
 	}
 
 	/** The extension went away (idle service worker, last tab detached, user removed it). */
@@ -548,6 +565,16 @@ export class ExtensionRelay {
 		const id = this.#nextCallId++;
 		return new Promise<unknown>((resolve, reject) => {
 			const timer = setTimeout(() => {
+				const debuggee = params[0];
+				const cdpMethod = method === "chrome.debugger.sendCommand" && Array.isArray(params) && typeof params[1] === "string" ? params[1] : undefined;
+				this.#log("extension RPC timed out", {
+					port: this.port,
+					method,
+					...(cdpMethod === undefined ? {} : { cdpMethod: diagnosticMethod(cdpMethod, this.#scrub) }),
+					...(typeof debuggee === "object" && debuggee !== null && "tabId" in debuggee && typeof debuggee.tabId === "number"
+						? { tabId: debuggee.tabId }
+						: {}),
+				});
 				this.#pending.delete(id);
 				reject(new Error(`The extension did not answer ${method} within ${Math.round(timeoutMs / 1000)} s.`));
 			}, timeoutMs);
@@ -592,6 +619,7 @@ export class ExtensionRelay {
 				if (tab instanceof type.errors) return;
 				const landing = tab.pendingUrl ?? tab.url;
 				if (this.#bootstrapUrl !== undefined && landing === this.#bootstrapUrl) {
+					this.#log("extension bootstrap claimed", { port: this.port, tabId: tab.id });
 					this.#bootstrapUrl = undefined;
 					this.#pendingBootstrapTabs.add(tab.id);
 					this.#connectTabId = tab.id;
@@ -954,6 +982,14 @@ export class ExtensionRelay {
 					: await this.#sessionCommand(sessionId, client, method, params);
 			this.#reply(client, id, sessionId, { result });
 		} catch (error) {
+			const mappedTabId = sessionId === undefined ? undefined : client.sessions.get(sessionId) ?? this.#childSessions.get(sessionId);
+			const clientTabId = mappedTabId ?? (method === "Target.createTarget" ? undefined : typeof params.targetId === "string" ? this.#tabByTargetId(params.targetId)?.tabId : undefined);
+			this.#log("CDP client command failed", {
+				port: this.port,
+				clientId: client.id,
+				...(clientTabId === undefined ? {} : { tabId: clientTabId }),
+				cdpMethod: diagnosticMethod(method, this.#scrub),
+			});
 			const code = error instanceof UnsupportedMethod ? METHOD_NOT_FOUND_CODE : CDP_ERROR_CODE;
 			this.#reply(client, id, sessionId, { error: { code, message: redactSecrets(errorText(error), this.#scrub) } });
 		}
