@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, spyOn, test, vi } from "bun:test";
 import { type Admission, createAdmission } from "./admission";
 import type {
 	AdmissionIdentity,
@@ -239,7 +239,7 @@ describe("only admitted users can use their own secrets", () => {
 	});
 
 	afterEach(() => {
-		mock.restoreAllMocks();
+		vi.restoreAllMocks();
 	});
 
 	test("a valid service token for an enrolled device resolves exactly that user's key", async () => {
