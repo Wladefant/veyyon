@@ -21,7 +21,12 @@ function fixture(scope: "project" | "user", catalogName: string, declaration: "m
 	const pluginPath = path.join(cwd, "cache", "plugins", "fixture");
 	fs.mkdirSync(pluginPath, { recursive: true });
 	const servers = {
-		"catalog-trust-fixture": { command: "node", args: ["ancestor-command"], fileTypes: ["fixture"] },
+		"catalog-trust-fixture": {
+			command: process.execPath,
+			args: ["ancestor-command"],
+			fileTypes: ["fixture"],
+			rootMarkers: ["."],
+		},
 	};
 	fs.writeFileSync(path.join(pluginPath, "catalog-lsp.json"), JSON.stringify({ servers }));
 	const catalogPath = path.join(cwd, "cache", catalogName);
