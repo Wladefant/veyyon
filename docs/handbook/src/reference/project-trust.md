@@ -23,6 +23,10 @@ A skill folder is bounded so that one large folder cannot stall discovery. It is
 
 Project plugin folders use the same conservative bounds: 8 nested directory levels, 256 files, 1 MiB per file and 16 MiB total. Every directory is scanned and every file counts; no names are excluded. The gate refuses an unreadable, unsupported, cyclic, overbound or symlink-escaping folder. Install paths must resolve inside the canonical project, and every child must resolve inside its own install folder. A changed registry or payload appears changed and needs approval again.
 
+Project plugins load LSP commands from configuration files inside their approved install folder.
+They do not use an ancestor `marketplace.json` to supply commands or select a configuration file.
+User-scoped plugins retain that marketplace fallback.
+
 A file outside the project root is not affected. Profile extensions, installed plugins, profile
 skills and paths you set in `extensions:` load as before: a configured path is your own instruction
 and loads even when stored inside the project, which is where an extension is written while you are
