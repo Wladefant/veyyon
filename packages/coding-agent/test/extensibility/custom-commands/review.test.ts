@@ -5,13 +5,8 @@ import * as path from "node:path";
 import { ReviewCommand } from "@veyyon/coding-agent/extensibility/custom-commands/bundled/review";
 import type { CustomCommandAPI } from "@veyyon/coding-agent/extensibility/custom-commands/types";
 import type { HookCommandContext } from "@veyyon/coding-agent/extensibility/hooks/types";
-<<<<<<< HEAD
 import type { PrDiffPayload, ViewLookupResult } from "@veyyon/coding-agent/tools/web/gh";
 import * as ghFetch from "@veyyon/coding-agent/tools/web/gh-fetch";
-=======
-import type { PrDiffPayload, ViewLookupResult } from "@veyyon/coding-agent/tools/web/gh-fetch";
-import * as gh from "@veyyon/coding-agent/tools/web/gh-fetch";
->>>>>>> santhreal/main
 import * as git from "@veyyon/coding-agent/utils/git";
 import * as jj from "@veyyon/coding-agent/utils/jj";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";

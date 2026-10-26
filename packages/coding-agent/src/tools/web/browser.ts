@@ -48,10 +48,11 @@ import {
 	acquireTab,
 	captureTabState,
 	dropHeadlessTabs,
+	getExtensionTabInventory,
 	getTab,
 	isolatedContextName,
-	releaseAllTabs,
-	releaseTab,
+	releaseTabForOwner,
+	releaseTabsForOwner,
 	runInTab,
 	type TabSession,
 	tabNamesOn,
@@ -109,7 +110,7 @@ const appSchema = lazy(() =>
 
 const browserSchema = lazy(() =>
 	type({
-		action: type("'open' | 'close' | 'run' | 'save_state'").describe("operation"),
+		action: type("'open' | 'close' | 'inventory' | 'run' | 'save_state'").describe("operation"),
 		"name?": type("string").describe("tab id (default 'main')"),
 		"url?": type("string").describe("url to open"),
 		"context?": type("string").describe("isolated context: tabs naming the same one share cookies and storage"),
@@ -132,7 +133,10 @@ const browserSchema = lazy(() =>
 		"dialogs?": type("'accept' | 'dismiss'").describe("auto-handle dialogs"),
 		"code?": type("string").describe("js body to run in tab"),
 		"timeout?": type("number").describe(describeTimeoutParam("browser")),
-		"all?": type("boolean").describe("close every tab"),
+		"all?": type("boolean").describe("close every tab owned by this session"),
+		"approved_tab_ids?": type("number[]").describe(
+			"exact Chrome tab IDs from inventory that authorize closing only ownerless relay-controlled tabs",
+		),
 		"kill?": type("boolean").describe("also kill spawned-app browsers"),
 	}),
 );
@@ -239,6 +243,9 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 		if (typeof params.url === "string" && params.url.length > 0) {
 			lines.push(`URL: ${truncateForPrompt(params.url)}`);
 		}
+		if (Array.isArray(params.approved_tab_ids) && params.approved_tab_ids.length > 0) {
+			lines.push(`Approved Tab IDs: ${params.approved_tab_ids.join(", ")}`);
+		}
 		if (typeof params.code === "string" && params.code.length > 0) {
 			lines.push(`Code:\n${truncateForPrompt(params.code)}`);
 		}
@@ -263,6 +270,10 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 		{
 			caption: "Open a tab",
 			call: { action: "open", name: "docs", url: "https://example.com" },
+		},
+		{
+			caption: "List relay-controlled extension tabs and lane ownership",
+			call: { action: "inventory" },
 		},
 		{
 			caption: "Read structured page data in the opened tab",
@@ -315,7 +326,7 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 			},
 		},
 		{
-			caption: "Close every tab and kill spawned-app processes",
+			caption: "Close this session's tabs and kill spawned-app processes",
 			call: { action: "close", all: true, kill: true },
 		},
 	];
@@ -343,12 +354,22 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 			throwIfAborted(signal);
 			const timeoutSeconds = clampTimeout("browser", params.timeout, this.session.settings.get("tools.maxTimeout"));
 			const timeoutMs = timeoutSeconds * 1000;
-			// A clamp changes the budget the agent asked for; surface it on the
-			// result rather than applying it silently (Law 10). Each action builds
-			// its own result, so prepend the notice once around the dispatch.
 			const clampNotice = formatTimeoutClampNotice("browser", params.timeout, timeoutSeconds);
 			const name = params.name ?? DEFAULT_TAB_NAME;
-			const details: BrowserToolDetails = { action: params.action, name };
+			const ownerId = this.session.getSessionId?.() ?? undefined;
+			const details: BrowserToolDetails = {
+				action: params.action,
+				name: params.action === "inventory" ? undefined : name,
+			};
+			if (params.approved_tab_ids !== undefined) {
+				if (params.action !== "close") throw new ToolError("approved_tab_ids applies only to close.");
+				if (
+					params.approved_tab_ids.some(id => !Number.isSafeInteger(id) || id <= 0) ||
+					new Set(params.approved_tab_ids).size !== params.approved_tab_ids.length
+				) {
+					throw new ToolError("approved_tab_ids must contain unique positive Chrome tab IDs.");
+				}
+			}
 			// Ignored silently, either would read as done: a context on a run, or a state file on a close.
 			if (typeof params.context === "string" && params.action !== "open") {
 				throw new ToolError(`context applies to open, which puts a tab in it; ${params.action} takes none.`);
@@ -370,7 +391,10 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 					result = await this.#open(name, params, details, timeoutMs, signal);
 					break;
 				case "close":
-					result = await close(name, params, details, signal);
+					result = await close(name, params, details, ownerId, signal);
+					break;
+				case "inventory":
+					result = inventory(ownerId, details);
 					break;
 				case "run":
 					result = await this.#run(name, params, details, timeoutMs, signal);
@@ -493,9 +517,11 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 			if (moved) await this.#returnTab(name, moved, timeoutMs, error);
 			throw error;
 		} finally {
-			if (!result && browser && browser.refCount === 0) {
+			// The lease `acquireBrowser` took ends here. A tab that opened holds the browser itself, so only a
+			// failed open can drop the last reference, and then the browser is disposed.
+			if (browser) {
 				await releaseBrowser(browser, { kill: true }).catch(err => {
-					logger.debug("Failed to release browser after failed acquisition", { error: errorMessage(err) });
+					logger.debug("Failed to release browser lease", { error: errorMessage(err) });
 				});
 			}
 		}
@@ -587,14 +613,21 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 				cwd: this.session.cwd,
 				ownerSessionId: this.session.getSessionId?.() ?? undefined,
 			});
-			await acquireTab(name, browser, {
-				url: moved.url,
-				timeoutMs,
-				dialogs: moved.dialogs,
-				context: moved.context,
-				storageState: moved.state,
-				ownerSessionId: this.session.getSessionId?.() ?? undefined,
-			});
+			try {
+				await acquireTab(name, browser, {
+					url: moved.url,
+					timeoutMs,
+					dialogs: moved.dialogs,
+					context: moved.context,
+					storageState: moved.state,
+					ownerSessionId: this.session.getSessionId?.() ?? undefined,
+				});
+			} finally {
+				// The lease `acquireBrowser` took; a tab that opened holds the browser, so this drops only the lease.
+				await releaseBrowser(browser, { kill: true }).catch(err => {
+					logger.debug("Failed to release browser lease after returning a tab", { error: errorMessage(err) });
+				});
+			}
 			if (stated) {
 				error.message += `\nTab ${JSON.stringify(name)} is back on ${describeKind(moved.from)} with its session.`;
 			}
@@ -838,17 +871,39 @@ async function close(
 	name: string,
 	params: BrowserParams,
 	details: BrowserToolDetails,
+	ownerId: string | undefined,
 	signal?: AbortSignal,
 ): Promise<AgentToolResult<BrowserToolDetails>> {
-	const kill = !!params.kill;
+	const options = { kill: !!params.kill, approvedTabIds: params.approved_tab_ids };
 	if (params.all) {
-		const count = await untilAborted(signal, () => releaseAllTabs({ kill }));
+		const count = await untilAborted(signal, () => releaseTabsForOwner(ownerId, options));
 		details.result = `Closed ${count} tab(s)`;
 		return toolResult(details).text(details.result).done();
 	}
-	const closed = await untilAborted(signal, () => releaseTab(name, { kill }));
+	const closed = await untilAborted(signal, () => releaseTabForOwner(name, ownerId, options));
 	details.result = closed ? `Closed tab ${JSON.stringify(name)}` : `No tab named ${JSON.stringify(name)}`;
 	return toolResult(details).text(details.result).done();
+}
+
+function inventory(
+	ownerId: string | undefined,
+	details: BrowserToolDetails,
+): AgentToolResult<BrowserToolDetails> {
+	const tabs = getExtensionTabInventory(ownerId);
+	if (tabs.length === 0) {
+		details.result = "No relay-managed extension tabs are open.";
+		return toolResult(details).text(details.result).done();
+	}
+	const rows = tabs.map(tab => ({
+		tab_id: tab.tabId,
+		window_id: tab.windowId,
+		name: truncateForPrompt(tab.name),
+		url: truncateForPrompt(tab.url),
+		title: truncateForPrompt(tab.title),
+		ownership: tab.ownership,
+	}));
+	details.result = `Listed ${rows.length} relay-managed extension tab(s)`;
+	return toolResult(details).text(JSON.stringify(rows, null, 2)).done();
 }
 
 /** Persist over-cap browser run output as a session artifact; mirrors the bash minimizer's save path. */

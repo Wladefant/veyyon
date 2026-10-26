@@ -211,7 +211,7 @@ export function daemonLabel(daemon: DaemonSnapshot): string {
 			: ` terminated-by=${daemon.terminatedBy}${daemon.exitReason ? ` — ${daemon.exitReason}` : ""}`;
 	return `${daemon.name}: ${daemon.state}${pid}${exit} uptime=${formatDuration(
 		(daemon.exitedAt ?? Date.now()) - daemon.startedAt,
-	)} restarts=${daemon.restartCount} lifetime=${daemonLifetime(daemon)}${termination}`;
+	)} restarts=${daemon.restartCount} lifetime=${daemonLifetime(daemon)}${termination}${daemon.ownershipUncertain ? " ownership=uncertain" : ""}`;
 }
 
 /**

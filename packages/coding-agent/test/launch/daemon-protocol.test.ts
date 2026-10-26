@@ -109,6 +109,13 @@ describe("parseDaemonSnapshot", () => {
 			"port",
 		]);
 	});
+	it("preserves ownership uncertainty and rejects non-boolean metadata", () => {
+		expect(parseDaemonSnapshot({ ...baseSnapshot, ownershipUncertain: true }).ownershipUncertain).toBeTrue();
+		expect(parseDaemonSnapshot(baseSnapshot).ownershipUncertain).toBeUndefined();
+		expect(() => parseDaemonSnapshot({ ...baseSnapshot, ownershipUncertain: "yes" })).toThrow(
+			"daemon.ownershipUncertain must be a boolean",
+		);
+	});
 
 	it("parses every daemon state in DAEMON_STATES and fails on additions", () => {
 		for (const state of DAEMON_STATES) {

@@ -15,7 +15,6 @@ import {
 import * as tabSupervisor from "@veyyon/coding-agent/tools/web/browser/tab-supervisor";
 import {
 	getTabsMapForTest,
-	releaseAllTabs,
 	releaseTab,
 	releaseTabsForOwner,
 } from "@veyyon/coding-agent/tools/web/browser/tab-supervisor";
@@ -54,50 +53,31 @@ describe("browser registry sweep — close browsers when session releases tabs",
 		}
 	});
 
-	it("closes and deletes a launched browser with refCount 0 when its session releases tabs", async () => {
+	it("keeps a browser another session reused open when the owner releases before the reuser holds it", async () => {
 		const { mockBrowser, closeSpy } = makeMockBrowser();
 		const launchSpy = spyOn(launch, "launchHeadlessBrowser").mockResolvedValue({
 			browser: mockBrowser,
 			profileDir: undefined,
 			identity: undefined,
 		});
+		const kind = { kind: "headless", headless: true } as const;
 
-		const handle = await acquireBrowser(
-			{ kind: "headless", headless: true },
-			{ cwd: "/tmp", ownerSessionId: "session-sweep-test" },
-		);
-
+		// The owner's acquisition has returned, but no tab holds the browser yet.
+		const owned = await acquireBrowser(kind, { cwd: "/tmp", ownerSessionId: "session-owner" });
+		// Another session reuses that browser before the owner's hold lands.
+		const reused = await acquireBrowser(kind, { cwd: "/tmp", ownerSessionId: "session-reuser" });
 		expect(launchSpy).toHaveBeenCalledTimes(1);
-		expect(handle.refCount).toBe(0);
-		expect(getBrowsersMapForTest().size).toBe(1);
+		expect(reused).toBe(owned);
 
-		// When the session releases its tabs, it must also close and delete any browser
-		// it launched that has refCount 0 and no remaining tabs.
-		await releaseTabsForOwner("session-sweep-test", { kill: true });
+		// The owner session releases now. The reuser's lease must keep the browser open.
+		await releaseTabsForOwner("session-owner", { kill: true });
+		expect(closeSpy).not.toHaveBeenCalled();
+		expect(getBrowsersMapForTest().get(owned.key)).toBe(owned);
 
-		expect(closeSpy).toHaveBeenCalledTimes(1);
-		expect(getBrowsersMapForTest().size).toBe(0);
-	});
-
-	it("closes and deletes orphan launched browsers when releaseAllTabs is called", async () => {
-		const { mockBrowser, closeSpy } = makeMockBrowser();
-		const launchSpy = spyOn(launch, "launchHeadlessBrowser").mockResolvedValue({
-			browser: mockBrowser,
-			profileDir: undefined,
-			identity: undefined,
-		});
-
-		const handle = await acquireBrowser(
-			{ kind: "headless", headless: true },
-			{ cwd: "/tmp" },
-		);
-
-		expect(launchSpy).toHaveBeenCalledTimes(1);
-		expect(handle.refCount).toBe(0);
-		expect(getBrowsersMapForTest().size).toBe(1);
-
-		await releaseAllTabs({ kill: true });
-
+		// The browser closes only when the last lease is released.
+		await releaseBrowser(owned, { kill: true });
+		expect(closeSpy).not.toHaveBeenCalled();
+		await releaseBrowser(reused, { kill: true });
 		expect(closeSpy).toHaveBeenCalledTimes(1);
 		expect(getBrowsersMapForTest().size).toBe(0);
 	});
@@ -158,8 +138,9 @@ describe("browser registry sweep — one failed release never stops the sweep", 
 			})
 			.mockImplementation(() => undefined);
 
-		await acquireBrowser(makeCmuxKind("boom-a"), { cwd: "/tmp", ownerSessionId: "s-sweep" });
-		await acquireBrowser(makeCmuxKind("boom-b"), { cwd: "/tmp", ownerSessionId: "s-sweep" });
+		// Model orphaned handles: no acquisition lease or tab still holds them.
+		(await acquireBrowser(makeCmuxKind("boom-a"), { cwd: "/tmp", ownerSessionId: "s-sweep" })).refCount = 0;
+		(await acquireBrowser(makeCmuxKind("boom-b"), { cwd: "/tmp", ownerSessionId: "s-sweep" })).refCount = 0;
 		expect(getBrowsersMapForTest().size).toBe(2);
 
 		await expect(releaseTabsForOwner("s-sweep", { kill: false })).resolves.toBe(0);
@@ -182,7 +163,8 @@ describe("browser registry sweep — one failed release never stops the sweep", 
 
 		const tabBrowser = await acquireBrowser(makeCmuxKind("tab-owner"), { cwd: "/tmp", ownerSessionId: "s-sweep" });
 		await acquireTab("sweep-tab", tabBrowser, { timeoutMs: 1_000, ownerSessionId: "s-sweep" });
-		await acquireBrowser(makeCmuxKind("orphan"), { cwd: "/tmp", ownerSessionId: "s-sweep" });
+		await releaseBrowser(tabBrowser, { kill: false });
+		(await acquireBrowser(makeCmuxKind("orphan"), { cwd: "/tmp", ownerSessionId: "s-sweep" })).refCount = 0;
 		expect(getTabsMapForTest().size).toBe(1);
 		expect(getBrowsersMapForTest().size).toBe(2);
 

@@ -2,9 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- `PtySession.process` exposes the spawned child's stable process handle after a run starts.
+
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.
+
+### Fixed
+
+- Embedded shell results report output capture that stopped before EOF as metadata, with `outputIncomplete` set and the retained raw `capturedOutput` prefix, and keep the command's exit status instead of failing the call.
+- Embedded shell cancel and timeout results keep their `cancelled` or `timedOut` flag and report `outputIncomplete` with the stopped run's `capturedOutput` when its graceful stop returns, and report `outputIncomplete` with no `capturedOutput` on a hard abort.
 
 ## [1.5.6] - 2026-10-10
 

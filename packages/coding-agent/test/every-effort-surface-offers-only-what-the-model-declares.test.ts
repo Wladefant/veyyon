@@ -450,21 +450,12 @@ function openModelHubEffortStrip(model: Model<Api>): string {
 	// strip follows immediately.
 	hub.handleInput(ENTER);
 	hub.handleInput(ENTER);
-<<<<<<< HEAD
 	const frames: string[] = [stripVTControlCharacters(hub.render(PANEL_WIDTH).join("\n"))];
 	// Cycle through the strip so a model whose chips overflow the horizontal
 	// window renders every offered tier as the window scrolls right.
 	for (let i = 0; i < thinking.CONFIGURED_THINKING_LEVELS.length + 1; i++) {
 		hub.handleInput("\t");
 		frames.push(stripVTControlCharacters(hub.render(PANEL_WIDTH).join("\n")));
-=======
-	// The strip is a horizontal window that drops chips past the right edge until the cursor
-	// reaches them, so every frame a user sees while stepping right is part of what it offers.
-	const frames: string[] = [];
-	for (let step = 0; step <= VOCABULARY.length; step++) {
-		frames.push(stripVTControlCharacters(hub.render(PANEL_WIDTH).join("\n")));
-		hub.handleInput(RIGHT);
->>>>>>> santhreal/main
 	}
 	return frames.join("\n");
 }
