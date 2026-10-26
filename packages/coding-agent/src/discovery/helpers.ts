@@ -1518,15 +1518,11 @@ export async function listClaudePluginRoots(
 
 	// ── Project-scoped veyyon registry ────────────────────────────────────────
 	// Loaded from the nearest .veyyon/plugins/installed_plugins.json relative to cwd, and ONLY
-	// once the operator has trusted that file's exact bytes.
+	// once the operator has trusted the registry bytes and every named payload.
 	//
 	// This registry is repository-controlled content that names `installPath` directories, and
-	// those directories then supply extensions, hooks, custom tools, slash commands and MCP
-	// servers — code and spawn commands, loaded during startup, before any tool approval can
-	// apply. `installPath` is arbitrary, so the danger is not that the plugin lives in the
-	// project: a project registry pointing at `/tmp/anything` is the same exploit with the
-	// payload moved. Trusting the REGISTRY FILE is therefore the gate, because it is the one
-	// thing the repository must author to reach any of it.
+	// those directories supply extensions, hooks, custom tools, slash commands and MCP servers.
+	// Approval covers both the registry and its payloads, with realpath containment at each folder.
 	//
 	// Failing closed here is silent by design at this layer — this is a cached discovery helper
 	// with no operator channel — so the refusal is reported as a warning, which every capability
