@@ -994,6 +994,60 @@ describe("agentLoop with AgentMessage", () => {
 		expect(toolCall?.type === "toolCall" ? toolCall.intent : "missing").toBeUndefined();
 	});
 
+	it.each([false, true])("bounds harness intent before execution (repaired: %s)", async repaired => {
+		const toolSchema = type({ value: "string" });
+		const executed: string[] = [];
+		const tool: AgentTool<typeof toolSchema> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_id, params) {
+				executed.push(params.value);
+				return { content: [{ type: "text", text: params.value }] };
+			},
+		};
+		const calls = [200, 201].map(length => ({
+			type: "toolCall" as const,
+			id: `intent-${length}`,
+			name: "echo",
+			arguments: repaired
+				? { __parseError: "Unexpected token", __rawJson: String(length) }
+				: { value: String(length), i: "x".repeat(length) },
+		}));
+		const mock = createMockModel({
+			responses: [{ content: calls }, { content: ["done"] }],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			intentTracing: true,
+			repairToolCallArguments: repaired
+				? (_tool, call) => {
+						const length = Number(call.arguments.__rawJson);
+						return {
+							status: "repaired",
+							arguments: { value: String(length), i: "x".repeat(length) },
+						};
+					}
+				: undefined,
+		};
+		const messages = await agentLoop(
+			[createUserMessage("run")],
+			{ systemPrompt: [""], messages: [], tools: [tool] },
+			config,
+			undefined,
+			mock.stream,
+		).result();
+		expect(executed).toEqual(["200"]);
+		const rejection = messages.find(message => message.role === "toolResult" && message.toolCallId === "intent-201");
+		expect(rejection?.role === "toolResult" && rejection.isError).toBe(true);
+		expect(rejection?.role === "toolResult" && rejection.content).toContainEqual({
+			type: "text",
+			text: "`i` is a short intent label (at most 200 chars); the value you sent is 201 chars. The tool was not run. Put that content in the tool's own parameters and retry with a brief `i`.",
+		});
+	});
+
 	it("repairs malformed JSON then strips intent before tool execution", async () => {
 		const toolSchema = type({ value: "string" });
 		const executedParams: Record<string, unknown>[] = [];

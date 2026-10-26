@@ -10,6 +10,10 @@
 
 - Sync upstream changes from santhreal/veyyon.
 
+### Fixed
+
+- Tool-call preparation preserves schema-owned `i` arguments and rejects oversized harness intent before execution, including repaired arguments.
+
 ## [1.5.6] - 2026-10-10
 
 ### Added

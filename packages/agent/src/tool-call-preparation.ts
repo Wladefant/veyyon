@@ -6,9 +6,11 @@
  */
 
 import * as AIError from "@veyyon/ai/error";
+import { toolWireSchema } from "@veyyon/ai/utils/schema/wire";
 import { validateToolArguments } from "@veyyon/ai/utils/validation";
+import { INTENT_FIELD } from "@veyyon/wire";
 import { errorMessage, logger } from "@veyyon/utils";
-import { extractIntent } from "./tool-normalization";
+import { extractIntent, MAX_INTENT_LENGTH, schemaDefinesProperty } from "./tool-normalization";
 import type { AgentContext, AgentLoopConfig, AgentToolCall, AnyAgentTool, ToolCallRepairResult } from "./types";
 
 /** The hooks {@link prepareToolCall} applies, as the agent loop is configured with them. */
@@ -78,7 +80,8 @@ export function prepareToolCall(
 ): PreparedToolCall {
 	let args = toolCall.arguments as Record<string, unknown>;
 	let intent: string | undefined;
-	if (config.intentTracing) {
+	const stripIntent = config.intentTracing && !(tool && schemaDefinesProperty(toolWireSchema(tool), INTENT_FIELD));
+	if (stripIntent) {
 		const extracted = extractIntent(args);
 		args = extracted.strippedArgs;
 		intent = extracted.intent ?? derivedIntent(tool, toolCall.name, args);
@@ -97,6 +100,14 @@ export function prepareToolCall(
 			).message,
 		);
 	}
+	const oversizedIntent = (): RejectedToolCall | undefined =>
+		intent !== undefined && intent.length > MAX_INTENT_LENGTH
+			? rejected(
+					`\`${INTENT_FIELD}\` is a short intent label (at most ${MAX_INTENT_LENGTH} chars); the value you sent is ${intent.length} chars. The tool was not run. Put that content in the tool's own parameters and retry with a brief \`${INTENT_FIELD}\`.`,
+				)
+			: undefined;
+	const intentRejection = oversizedIntent();
+	if (intentRejection) return intentRejection;
 	let execution: Record<string, unknown>;
 	try {
 		const repair = config.repairToolCallArguments;
@@ -106,10 +117,12 @@ export function prepareToolCall(
 				return rejected(unrepairableArgumentsText(outcome), args);
 			}
 			args = outcome.arguments;
-			if (config.intentTracing) {
+			if (stripIntent) {
 				const extracted = extractIntent(args);
 				args = extracted.strippedArgs;
 				intent = extracted.intent ?? intent;
+				const repairedIntentRejection = oversizedIntent();
+				if (repairedIntentRejection) return repairedIntentRejection;
 			}
 		}
 		execution = validateToolArguments(tool, { ...toolCall, arguments: args });
