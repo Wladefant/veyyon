@@ -43,6 +43,30 @@ export function noThinkingControlMessage(session: AgentSession): string {
 	return `${model.provider}/${model.id} manages reasoning itself; there is no effort to set.`;
 }
 
+/**
+ * Apply `/effort <level>` to the session, shared by the text and TUI surfaces so both accept the
+ * same levels and report the same sentence. The level holds for this session only: trying an effort
+ * never rewrites the saved default, which is a settings edit (the cycle keybinding works the same
+ * way).
+ */
+export function applyEffortCommand(arg: string, session: AgentSession): { ok: boolean; message: string } {
+	const choices = configuredThinkingLevelsForModel(session.model);
+	if (choices.length === 0) return { ok: false, message: noThinkingControlMessage(session) };
+	const available = formatThinkingLevelChoices(session);
+	const level = parseConfiguredThinkingLevel(arg);
+	if (level === undefined) {
+		return { ok: false, message: `Unknown thinking level: ${arg}. Choose one of: ${available}.` };
+	}
+	if (!choices.includes(level)) {
+		return {
+			ok: false,
+			message: `${session.model?.provider}/${session.model?.id} does not accept ${level}. Choose one of: ${available}.`,
+		};
+	}
+	session.setThinkingLevel(level, false);
+	return { ok: true, message: `Effort set to ${level} for this session. ${DEFAULT_EFFORT_POINTER}` };
+}
+
 /** What the model builtins DO, keyed by the name each is declared under. */
 export const MODEL_HANDLERS = {
 	model: {
@@ -100,35 +124,19 @@ export const MODEL_HANDLERS = {
 		},
 		handle: async (command, runtime) => {
 			const arg = command.args.trim();
-			const choices = configuredThinkingLevelsForModel(runtime.session.model);
-			if (choices.length === 0) {
-				await runtime.output(noThinkingControlMessage(runtime.session));
-				return commandConsumed();
-			}
-			const available = formatThinkingLevelChoices(runtime.session);
 			if (!arg) {
+				const hasControl = configuredThinkingLevelsForModel(runtime.session.model).length > 0;
 				const current = runtime.session.configuredThinkingLevel();
 				await runtime.output(
-					`Effort: ${current ?? "auto"} (this session). Choose one of: ${available}. Usage: /effort <level>. ${DEFAULT_EFFORT_POINTER}`,
+					hasControl
+						? `Effort: ${current ?? "auto"} (this session). Choose one of: ${formatThinkingLevelChoices(runtime.session)}. Usage: /effort <level>. ${DEFAULT_EFFORT_POINTER}`
+						: noThinkingControlMessage(runtime.session),
 				);
 				return commandConsumed();
 			}
-			const level = parseConfiguredThinkingLevel(arg);
-			if (level === undefined) {
-				return usage(`Unknown thinking level: ${arg}. Choose one of: ${available}.`, runtime);
-			}
-			if (!choices.includes(level)) {
-				return usage(
-					`${runtime.session.model?.provider}/${runtime.session.model?.id} does not accept ${level}. Choose one of: ${available}.`,
-					runtime,
-				);
-			}
-			// Session only. A command typed mid-run changes this run; the saved default
-			// is a settings edit, so trying an effort never rewrites it (the cycle
-			// keybinding already worked this way, and the two disagreeing is what made
-			// effort feel "muddled").
-			runtime.session.setThinkingLevel(level, false);
-			await runtime.output(`Effort set to ${level} for this session. ${DEFAULT_EFFORT_POINTER}`);
+			const result = applyEffortCommand(arg, runtime.session);
+			if (!result.ok) return usage(result.message, runtime);
+			await runtime.output(result.message);
 			await runtime.notifyConfigChanged?.();
 			return commandConsumed();
 		},
@@ -139,27 +147,12 @@ export const MODEL_HANDLERS = {
 				runtime.ctx.showThinkingSelector();
 				return;
 			}
-			const choices = configuredThinkingLevelsForModel(runtime.ctx.session.model);
-			if (choices.length === 0) {
-				runtime.ctx.showStatus(noThinkingControlMessage(runtime.ctx.session));
-				return;
+			const result = applyEffortCommand(arg, runtime.ctx.session);
+			if (result.ok) {
+				refreshStatusLine(runtime.ctx);
+				runtime.ctx.updateEditorBorderColor();
 			}
-			const available = formatThinkingLevelChoices(runtime.ctx.session);
-			const level = parseConfiguredThinkingLevel(arg);
-			if (level === undefined) {
-				runtime.ctx.showStatus(`Unknown thinking level: ${arg}. Choose one of: ${available}.`);
-				return;
-			}
-			if (!choices.includes(level)) {
-				runtime.ctx.showStatus(
-					`${runtime.ctx.session.model?.provider}/${runtime.ctx.session.model?.id} does not accept ${level}. Choose one of: ${available}.`,
-				);
-				return;
-			}
-			runtime.ctx.session.setThinkingLevel(level, false);
-			refreshStatusLine(runtime.ctx);
-			runtime.ctx.updateEditorBorderColor();
-			runtime.ctx.showStatus(`Effort set to ${level} for this session. ${DEFAULT_EFFORT_POINTER}`);
+			runtime.ctx.showStatus(result.message);
 		},
 	},
 	advisor: {
