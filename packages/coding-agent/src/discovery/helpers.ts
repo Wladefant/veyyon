@@ -1229,7 +1229,7 @@ function collectRegistryRoots(
 				plugin: pluginName,
 				version: entry.version || "unknown",
 				path: entry.installPath,
-				scope: entry.scope || defaultScope,
+				scope: defaultScope === "project" ? "project" : entry.scope || defaultScope,
 			});
 		}
 	}

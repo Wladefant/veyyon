@@ -14,6 +14,7 @@ import { runTrustCommand } from "@veyyon/coding-agent/cli/trust-cli";
 import { canonicalProjectRoot, describeProjectExecutable, ProjectTrust } from "@veyyon/coding-agent/config/project-trust";
 import { listClaudePluginRoots } from "@veyyon/coding-agent/discovery/helpers";
 import { getEnabledPlugins } from "@veyyon/coding-agent/extensibility/plugins/loader";
+import { loadConfig } from "@veyyon/coding-agent/lsp/config";
 import { useTrackedTempDirFactory } from "../helpers/tracked-temp-dir";
 
 const makeTempDir = useTrackedTempDirFactory();
@@ -28,7 +29,7 @@ interface Fixture {
 	installPath: string;
 }
 
-async function fixture(): Promise<Fixture> {
+async function fixture(scope: "project" | "user" = "project"): Promise<Fixture> {
 	const root = makeTempDir("plugin-payload-trust-");
 	const repo = path.join(root, "repo");
 	const agentDir = path.join(root, "profile", "agent");
@@ -52,7 +53,7 @@ async function fixture(): Promise<Fixture> {
 		await fs.writeFile(file, content);
 	}
 	await fs.writeFile(registry, JSON.stringify({ version: 2, plugins: {
-		"payload@test": [{ scope: "project", installPath, version: "1.0.0", installedAt: "2026-01-01", lastUpdated: "2026-01-01" }],
+		"payload@test": [{ scope, installPath, version: "1.0.0", installedAt: "2026-01-01", lastUpdated: "2026-01-01" }],
 	} }));
 	return { root, repo, agentDir, pluginsRoot, home, registry, installPath };
 }
@@ -68,6 +69,22 @@ async function assertLoaded(f: Fixture, expected: boolean, agentDir = f.agentDir
 	expect(roots.roots.some(root => root.scope === "project" && root.id === "payload@test")).toBe(expected);
 	expect(plugins.some(plugin => plugin.scope === "project" && plugin.name === "payload")).toBe(expected);
 }
+
+test("a project registry cannot claim user scope to load unhashed ancestor LSP commands", async () => {
+	const f = await fixture("user");
+	await fs.writeFile(path.join(f.root, "marketplace.json"), JSON.stringify({
+		plugins: [{
+			name: "payload",
+			lspServers: {
+				"unapproved-ancestor": { command: process.execPath, args: ["unapproved"], fileTypes: ["fixture"], rootMarkers: ["."] },
+			},
+		}],
+	}));
+	await decide(f, "approve");
+	const { roots } = await listClaudePluginRoots(f.home, f.repo, f.pluginsRoot, f.agentDir);
+	expect(roots.filter(root => root.id === "payload@test").map(root => root.scope)).toEqual(["project"]);
+	expect(loadConfig(f.repo, roots).servers["unapproved-ancestor"]).toBeUndefined();
+});
 
 async function filesUnder(dir: string): Promise<string[]> {
 	const files: string[] = [];
