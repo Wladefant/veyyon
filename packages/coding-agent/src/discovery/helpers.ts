@@ -1360,9 +1360,9 @@ const NO_PROJECT_PLUGIN_GATE: ProjectPluginGate = { allowed: true, registry: nul
 /**
  * Gate the project plugin directory `cwd` resolves to. Every consumer of that directory calls this before reading
  * anything from it: the Claude-plugin roots below, and the plugin loader's project route. One decision governs both,
- * keyed by the registry owner's trust root. The approval covers the registry file's exact bytes, and through them the
- * `installPath` entries it names. Plugin content in those directories is not hashed. The loader reads
- * `.veyyon/plugin-overrides.json` separately; those bytes are not part of approval.
+ * keyed by the registry owner's trust root. The approval covers the registry file's exact bytes and every file
+ * under each named `installPath`. The loader reads `.veyyon/plugin-overrides.json` separately; those bytes
+ * are not part of approval.
  *
  * `userPluginsRoot` is the operator's own profile directory. A project that resolves to it has no project registry,
  * and that file is not gated.
