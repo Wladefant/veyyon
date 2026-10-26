@@ -272,6 +272,16 @@ describe("ACP builtin slash commands", () => {
 		expect(output).toEqual(["Next turn forced to use read."]);
 	});
 
+	it("forces a tool when a tab separates its name from the prompt", async () => {
+		const { output, runtime } = createRuntime();
+
+		const result = await executeAcpBuiltinSlashCommand("/force read\tinspect package.json", runtime);
+
+		expect(result).toEqual({ prompt: "inspect package.json" });
+		expect(runtime.session.forcedToolChoice).toBe("read");
+		expect(output).toEqual(["Next turn forced to use read."]);
+	});
+
 	it("renders provider usage reports when the session can fetch them", async () => {
 		const { output, runtime } = createRuntime();
 		runtime.session.fetchUsageReports = async () => [

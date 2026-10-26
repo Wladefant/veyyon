@@ -67,6 +67,24 @@ export function applyEffortCommand(arg: string, session: AgentSession): { ok: bo
 	return { ok: true, message: `Effort set to ${level} for this session. ${DEFAULT_EFFORT_POINTER}` };
 }
 
+/**
+ * Apply one `/force` invocation, shared by the text and TUI surfaces: the first word names the tool
+ * the next turn must call, and the rest, when present, is the prompt that starts that turn.
+ */
+function applyForceCommand(rawArgs: string, session: AgentSession): { ok: boolean; message: string; prompt?: string } {
+	const args = rawArgs.trim();
+	const split = args.search(/\s/);
+	const toolName = split === -1 ? args : args.slice(0, split);
+	if (!toolName) return { ok: false, message: "Usage: /force:<tool-name> [prompt]" };
+	try {
+		session.setForcedToolChoice(toolName);
+	} catch (err) {
+		return { ok: false, message: errorMessage(err) };
+	}
+	const prompt = split === -1 ? "" : args.slice(split + 1).trim();
+	return { ok: true, message: `Next turn forced to use ${toolName}.`, prompt: prompt || undefined };
+}
+
 /** What the model builtins DO, keyed by the name each is declared under. */
 export const MODEL_HANDLERS = {
 	model: {
@@ -234,42 +252,21 @@ export const MODEL_HANDLERS = {
 				: `Force the next turn to use a tool · ${count} active`;
 		},
 		handle: async (command, runtime) => {
-			const spaceIdx = command.args.indexOf(" ");
-			const toolName = spaceIdx === -1 ? command.args : command.args.slice(0, spaceIdx);
-			const prompt = spaceIdx === -1 ? "" : command.args.slice(spaceIdx + 1).trim();
-			if (!toolName) return usage("Usage: /force:<tool-name> [prompt]", runtime);
-			try {
-				runtime.session.setForcedToolChoice(toolName);
-			} catch (err) {
-				return usage(errorMessage(err), runtime);
-			}
-			await runtime.output(`Next turn forced to use ${toolName}.`);
-			return prompt ? { prompt } : commandConsumed();
+			const result = applyForceCommand(command.args, runtime.session);
+			if (!result.ok) return usage(result.message, runtime);
+			await runtime.output(result.message);
+			return result.prompt ? { prompt: result.prompt } : commandConsumed();
 		},
 		handleTui: (command, runtime) => {
-			const spaceIdx = command.args.indexOf(" ");
-			const toolName = spaceIdx === -1 ? command.args : command.args.slice(0, spaceIdx);
-			const prompt = spaceIdx === -1 ? "" : command.args.slice(spaceIdx + 1).trim();
-
-			if (!toolName) {
-				runtime.ctx.showError("Usage: /force:<tool-name> [prompt]");
-				runtime.ctx.editor.setText("");
-				return;
-			}
-
-			try {
-				runtime.ctx.session.setForcedToolChoice(toolName);
-				runtime.ctx.showStatus(`Next turn forced to use ${toolName}.`);
-			} catch (error) {
-				runtime.ctx.showError(errorMessage(error));
-				runtime.ctx.editor.setText("");
-				return;
-			}
-
+			const result = applyForceCommand(command.args, runtime.ctx.session);
 			runtime.ctx.editor.setText("");
-
-			// If a prompt was provided, pass it through as input
-			if (prompt) return { prompt };
+			if (!result.ok) {
+				runtime.ctx.showError(result.message);
+				return;
+			}
+			runtime.ctx.showStatus(result.message);
+			// The prompt after the tool name is sent as the turn the tool is forced on.
+			if (result.prompt) return { prompt: result.prompt };
 		},
 	},
 } satisfies Partial<BuiltinSlashCommandHandlers>;
