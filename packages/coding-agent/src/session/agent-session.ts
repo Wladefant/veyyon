@@ -223,6 +223,7 @@ import type { ApprovalMode, SessionToolApprovals } from "../tools/core/approval-
 import { TOOL } from "../tools/core/builtin-names";
 import { reportLostOutputArtifact } from "../tools/core/output-artifact";
 import { outputMeta } from "../tools/core/output-meta";
+import { resolveToCwd } from "../tools/core/path-utils";
 import { shortenPath } from "../tools/core/render-utils";
 import { clampTimeout } from "../tools/core/tool-timeouts";
 import type { CheckpointState, CompletedRewindState } from "../tools/fs/checkpoint";
@@ -7201,8 +7202,12 @@ export class AgentSession {
 
 	/**
 	 * Export session to HTML.
-	 * @param outputPath Optional output path (defaults to session directory)
-	 * @returns Path to exported file
+	 *
+	 * A relative `outputPath` resolves against the session's working directory, as a path given to
+	 * `/move` does, and `~` expands to the home directory. Without one the file is written to that
+	 * directory under a generated name. The process working directory is not consulted: an ACP
+	 * server holds several sessions, and its working directory is at most one of theirs.
+	 * @returns Absolute path to the exported file
 	 */
 	async exportToHtml(outputPath?: string): Promise<string> {
 		// Public HTML export ships in the veyyon brand palette (collab-web
@@ -7216,8 +7221,10 @@ export class AgentSession {
 		// (source-install launch failure, 2026-07-24). This is the one carve-out
 		// from the no-inline-import rule and it stays.
 		const { exportSessionToHtml } = await import("../export/html");
+		const cwd = this.sessionManager.getCwd();
 		return exportSessionToHtml(this.sessionManager, this.state, {
-			outputPath,
+			outputPath: outputPath ? resolveToCwd(outputPath, cwd) : undefined,
+			cwd,
 			palette: "web",
 			obfuscator: this.settings.get("share.redactSecrets") ? this.providerRedactor : undefined,
 		});

@@ -130,17 +130,10 @@ export class CommandController {
 		openPath(urlOrPath);
 	}
 
-	async handleExportCommand(text: string): Promise<void> {
-		const parts = text.split(/\s+/);
-		const arg = parts.length > 1 ? parts[1] : undefined;
-
-		if (arg === "--copy" || arg === "clipboard" || arg === "copy") {
-			this.ctx.showWarning("Use /dump to copy the session to clipboard.");
-			return;
-		}
-
+	/** Writes the export `/export` parsed (`parseExportTarget`) and opens it in the browser. */
+	async handleExportCommand(outputPath: string | undefined): Promise<void> {
 		try {
-			const filePath = await this.ctx.session.exportToHtml(arg);
+			const filePath = await this.ctx.session.exportToHtml(outputPath);
 			this.ctx.showStatus(`Session exported to: ${filePath}`);
 			this.openInBrowser(filePath);
 		} catch (error: unknown) {

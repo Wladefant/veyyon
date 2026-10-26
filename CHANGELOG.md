@@ -45,6 +45,8 @@
 - ACP and RPC clients receive the new directory's command list after `/cwd` or the agent's `set_cwd` tool, and ACP clients its config options, as they already did after `/move`.
 - `/cwd` strips outer double quotes from its path, as `/move` does.
 - In print mode, a slash command after `/move` or `/cwd` resolves relative paths against the session's current directory instead of the launch directory.
+- `/export` and RPC `export_html` resolve the output path against the session's working directory and report the absolute path written, so an ACP session no longer exports into the server's launch directory.
+- `/export` keeps a path that contains spaces whole and strips outer double quotes in the terminal, ACP and print mode, as `/move` and `/cwd` do.
 - A required tool call under an in-band tool dialect is asked for in the conversation text instead of being sent as a native `tool_choice` the dialect never reads.
 - Shake and duplicate elision leave a tool result, block or truncated middle in place when its marker is not smaller than it, and size a captioned image result by its caption, so `/shake` no longer reports a kept image as freed tokens.
 - A required tool call on a request that cannot force it (a model or host that rejects a forced `tool_choice`, a host without `tool_choice`, a remembered rejection, Ollama, Cursor, Devin, GitLab Duo, and Claude on Antigravity) is asked for in the request text, instead of the tool only being offered.

@@ -37,6 +37,8 @@
 - ACP and RPC clients receive the new directory's command list after `/cwd` or the agent's `set_cwd` tool, and ACP clients its config options, as they already did after `/move`.
 - `/cwd` strips outer double quotes from its path, as `/move` does.
 - In print mode, a slash command after `/move` or `/cwd` resolves relative paths against the session's current directory instead of the launch directory.
+- `/export` and RPC `export_html` resolve the output path against the session's working directory and report the absolute path written, so an ACP session no longer exports into the server's launch directory.
+- `/export` keeps a path that contains spaces whole and strips outer double quotes in the terminal, ACP and print mode, as `/move` and `/cwd` do.
 
 ## [1.5.10] - 2026-10-25
 

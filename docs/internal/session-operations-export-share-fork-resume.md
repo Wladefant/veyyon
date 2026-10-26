@@ -30,27 +30,24 @@ This document describes operator-visible behavior for session export/share/fork/
 
 ## Export and dump
 
-### `/export [outputPath]` (interactive)
+### `/export [outputPath]` (interactive and ACP)
 
 Flow:
 
-1. The builtin slash-command registry (`src/slash-commands/builtin-registry.ts`) routes `/export...` to `CommandController.handleExportCommand` in the TUI.
-2. The command splits on whitespace and uses only the first argument after `/export` as `outputPath`.
-3. `AgentSession.exportToHtml()` calls `exportSessionToHtml(sessionManager, state, { outputPath, themeName })`.
-4. On success, UI shows path and opens the file in browser.
+1. Both surfaces read the argument through `parseExportTarget` (`src/slash-commands/builtin-share.ts`): trimmed, outer double quotes stripped, spaces kept, the way `/move` and `/cwd` read their paths.
+2. The TUI passes the parsed path to `CommandController.handleExportCommand`; ACP and print mode call `session.exportToHtml` directly.
+3. `AgentSession.exportToHtml()` resolves a given path with `resolveToCwd` against the session's working directory (`~` expands) and calls `exportSessionToHtml(sessionManager, state, { outputPath, cwd, palette, obfuscator })`. Without a path the generated `veyyon-session-<session>.html` is written to that directory. The returned path is absolute.
+4. On success the TUI shows the path and opens the file in the browser; ACP prints it.
 
 Behavior details:
 
-- `--copy`, `clipboard`, and `copy` arguments are explicitly rejected with a warning to use `/dump`.
+- `--copy`, `clipboard`, and `copy` arguments are rejected with a warning to use `/dump`.
 - Export embeds session header/entries/leaf plus current `systemPrompt` and tool descriptions from agent state.
 - Agent transcripts stored next to the session file (`<session>/<AgentId>.jsonl`, recursively for nested spawns) are embedded as `subSessions` (`collectSubSessions` in `src/export/html/index.ts`; disable with `includeSubSessions: false` in `ExportOptions`). In the page, agent ids in task tool cards open a breadcrumbed sub-session overlay.
 - Tool calls render through the `<vey-tool-view>` web component using projected `ToolExecutionDisplay` values and the React components in `packages/tool-render/src/`, prebuilt into `src/export/html/tool-views.generated.js` by `bun run gen:tool-views`.
 - No session entries are appended during export.
 - With an obfuscator, export redacts configured secrets in primary and embedded transcripts, including both model fields of provider fallback transitions.
-
-Caveat:
-
-- Argument parsing is whitespace-based (`text.split(/\s+/)`), so quoted paths with spaces are not preserved as a single path by this command path.
+- The process working directory is not consulted. An ACP server holds several sessions, and its working directory is at most one of theirs.
 
 ### `--export <inputSessionFile> [outputPath]` (CLI)
 

@@ -393,7 +393,7 @@ export interface InteractiveModeContext {
 	toggleTodoExpansion(): void;
 
 	// Command handling
-	handleExportCommand(text: string): Promise<void>;
+	handleExportCommand(outputPath: string | undefined): Promise<void>;
 	handleShareCommand(): Promise<void>;
 	handleTodoCommand(args: string): Promise<void>;
 	handleSessionCommand(): Promise<void>;
