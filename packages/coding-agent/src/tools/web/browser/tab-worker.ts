@@ -639,6 +639,24 @@ function toActionableHandle(handle: ElementHandle, actions: HandleActions): Acti
 	return enriched;
 }
 
+/** Use one pointer evaluation for relocated main-frame handles and Puppeteer's offsets for child frames. */
+function puppeteerPress(
+	kind: "click" | "hover",
+	relocating: boolean,
+	options?: Readonly<ClickOptions>,
+): (target: ElementHandle) => Promise<void> {
+	return async target => {
+		if (!relocating || target.frame.parentFrame()) {
+			const own = ownOf(target);
+			return kind === "click" ? own.click(options) : own.hover();
+		}
+		const { x, y } = await pointerPoint(target, kind === "click" ? options?.offset : undefined);
+		const mouse = target.frame.page().mouse;
+		if (kind === "click") await mouse.click(x, y, options);
+		else await mouse.move(x, y);
+	};
+}
+
 /**
  * Strip `user:pass@` from a URL before surfacing it in tool outputs / details
  * so Basic Auth credentials don't leak into transcripts. Returns the original
