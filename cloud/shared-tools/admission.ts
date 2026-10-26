@@ -135,7 +135,7 @@ export function createAdmission(policy: AdmissionPolicy, config: AdmissionConfig
 
 	// Every call re-indexes the live policy, so an edit made after construction
 	// takes effect on the next request. A malformed edit refuses, it never admits.
-	const admit = async (request: Request): Promise<Admitted | null> => {
+	const admit = async (request: Request): Promise<Enrollment | null> => {
 		try {
 			const at = now();
 			const index = indexPolicy(policy);
@@ -169,7 +169,7 @@ export function createAdmission(policy: AdmissionPolicy, config: AdmissionConfig
 			const key = await keyFor(jwt.kid, at);
 			if (key === null) return null;
 			const valid = await crypto.subtle.verify(RSA_VERIFY, key, jwt.signature, jwt.signingInput);
-			return valid ? confirmEnrollment(proven, now()) : null;
+			return valid && confirmEnrollment(proven, now()) !== null ? proven : null;
 		} catch {
 			return null;
 		}
@@ -188,16 +188,27 @@ export function createAdmission(policy: AdmissionPolicy, config: AdmissionConfig
 
 	const authorize = async (request: Request, scope: ToolScope): Promise<AdmissionIdentity | null> => {
 		if (!isToolScope(scope)) return null;
-		const admitted = await admit(request);
-		if (admitted === null || !grantedScopes(admitted.index.policy, admitted.user).includes(scope)) {
+		const proven = await admit(request);
+		try {
+			// Confirm after the outer await; no live policy reference crosses that boundary.
+			const admitted = proven === null ? null : confirmEnrollment(proven, now());
+			if (admitted === null || !grantedScopes(admitted.index.policy, admitted.user).includes(scope)) {
+				return null;
+			}
+			return mint(admitted.device);
+		} catch {
 			return null;
 		}
-		return mint(admitted.device);
 	};
 
 	const discover = async (request: Request): Promise<ToolScope[]> => {
-		const admitted = await admit(request);
-		return admitted === null ? [] : grantedScopes(admitted.index.policy, admitted.user);
+		const proven = await admit(request);
+		try {
+			const admitted = proven === null ? null : confirmEnrollment(proven, now());
+			return admitted === null ? [] : grantedScopes(admitted.index.policy, admitted.user);
+		} catch {
+			return [];
+		}
 	};
 
 	// Revalidates everything an admission depended on, because a key can outlive
