@@ -81,3 +81,29 @@ test("a final snapshot cannot reopen a withheld producer stream", () => {
 	guard.reset();
 	expect(guard.push("safe new producer\n")).toBe("safe new producer\n");
 });
+
+test("aggregate filtering keeps large benign multiline minimizer artifacts", async () => {
+	const output = "ordinary build progress\n".repeat(5000);
+	const guard = new ProducerOutputGuard();
+	expect(guard.sanitize(output)).toBe(output);
+	const sink = new OutputSink({ outputGuard: guard, spillThreshold: output.length * 2 });
+	sink.replace(output);
+	expect((await sink.dump()).output).toBe(output);
+});
+
+test("ANSI between a credential key and delimiter cannot hide a record", async () => {
+	const live: string[] = [];
+	const sink = new OutputSink({
+		outputGuard: new ProducerOutputGuard(),
+		onChunk: chunk => live.push(chunk),
+	});
+	for (const character of "\x1b[32mAPI_KEY\x1b[0m=fake-credential-123\n") sink.push(character);
+	expect((await sink.dump()).output).toBe(BLOCKED_OUTPUT_RECORD + "\n");
+	expect(live.join("")).toBe(BLOCKED_OUTPUT_RECORD + "\n");
+});
+
+test("ANSI within a known value cannot bypass its secret owner", () => {
+	const guard = new ProducerOutputGuard(text => text.replaceAll("fake-known-value", "<redacted>"));
+	expect(guard.sanitize("fake-\x1b[32mknown\x1b[0m-value")).toBe("<redacted>");
+	expect(guard.sanitize("\x1b[32mordinary output\x1b[0m")).toBe("\x1b[32mordinary output\x1b[0m");
+});

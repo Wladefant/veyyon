@@ -1,3 +1,5 @@
+import { sanitizeText } from "@veyyon/utils/sanitize-text";
+
 // Hold a complete record before publishing it: a pipe can split a credential at any byte.
 // This is accidental-disclosure protection, not a sandbox against encoded or arbitrary exfiltration.
 const MAX_RECORD_CHARS = 64 * 1024;
@@ -16,10 +18,13 @@ export class ProducerOutputGuard {
 	}
 
 	sanitize(text: string): string {
-		if (text.length > MAX_RECORD_CHARS || text.split("\n").some(line => CREDENTIAL_RECORD.test(line))) {
-			return BLOCKED_OUTPUT_RECORD;
-		}
 		try {
+			const normalized = sanitizeText(text);
+			if (normalized.split("\n").some(line => line.length > MAX_RECORD_CHARS || CREDENTIAL_RECORD.test(line))) {
+				return BLOCKED_OUTPUT_RECORD;
+			}
+			const redacted = this.#redact?.(normalized) ?? normalized;
+			if (redacted !== normalized) return redacted;
 			return this.#redact?.(text) ?? text;
 		} catch {
 			return BLOCKED_OUTPUT_RECORD;
