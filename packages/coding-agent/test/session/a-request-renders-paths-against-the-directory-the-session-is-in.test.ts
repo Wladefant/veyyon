@@ -9,16 +9,17 @@
  * `src/app.ts` in a request names a file under a directory the tools no longer resolve against. A
  * wire moved by a transition that then failed and rolled back does the same in reverse.
  *
- * THE CLASS. Every transition that changes a session's working directory: `setCwd`, `moveToCwd`
- * and `switchSession` to a conversation recorded in another directory, each once completed and
- * once failed after the session manager already moved. The assertion is on the request a provider
- * receives, read through the transform the session installs on its agent, so a transition that
- * moves the session but not the wire, or restores the session but not the wire, fails here.
- * `switchSession` fails after it moved the wire, which is the one transition whose rollback
- * restores a moved wire rather than never moving it.
- *
- * WHAT IT DOES NOT CATCH. The transition table is hand-kept: a new public method that moves the
- * working directory is not enumerated until a row is added for it. Relativization itself, the
+ * THE CLASS. Every transition that changes a session's working directory: `setCwd`, `moveToCwd`,
+ * `switchSession` to a conversation recorded in another directory, and the `/move` command on each
+ * surface that offers it (the terminal's command controller and the ACP builtin), each once
+ * completed and once failed after the session manager already moved. The assertion is on the
+ * request a provider receives, read through the transform the session installs on its agent, so a
+ * transition that moves the session but not the wire, or restores the session but not the wire,
+ * fails here. A `/move` that relocates storage and re-scopes on its own instead of going through
+ * `moveToCwd` is one such transition. `switchSession` fails after it moved the wire, which is the
+ * one transition whose rollback restores a moved wire rather than never moving it.
+ * WHAT IT DOES NOT CATCH. The transition table is hand-kept: a new public method or command that
+ * moves the working directory is not enumerated until a row is added for it. Relativization itself, the
  * tool-call id handles and the prefix freeze after a move are proven in
  * `canonicalize-tool-call-ids.test.ts` and `a-cwd-change-does-not-rewrite-history-already-sent.test.ts`.
  */
@@ -31,8 +32,14 @@ import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import {
+	CommandController,
+	type CommandControllerContext,
+} from "@veyyon/coding-agent/modes/terminal/controllers/command-controller";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
+import { executeAcpBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/acp-builtins";
+import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { getProjectDir, setProjectDir, TempDir } from "@veyyon/utils";
 
@@ -110,6 +117,45 @@ const TRANSITIONS: Record<string, Transition> = {
 			});
 		},
 	},
+	"the terminal /move command": {
+		run: async ({ session, destination }) => {
+			const errors: string[] = [];
+			const ctx = {
+				session,
+				sessionManager: session.sessionManager,
+				showError: (message: string) => errors.push(message),
+				showWarning: (message: string) => errors.push(message),
+				updateEditorBorderColor: () => {},
+				reloadTodos: async () => {},
+				ui: { requestRender: () => {} },
+				present: () => {},
+			} as unknown as CommandControllerContext;
+			await new CommandController(ctx).handleMoveCommand(destination);
+			// The terminal shows a failed move instead of throwing it.
+			if (errors.length > 0) throw new Error(errors.join("\n"));
+		},
+		fail: failRescopeAtDestination,
+	},
+	"the ACP /move command": {
+		run: async ({ session, origin, destination }) => {
+			const output: string[] = [];
+			await executeAcpBuiltinSlashCommand(`/move ${destination}`, {
+				session,
+				sessionManager: session.sessionManager,
+				settings: session.settings,
+				cwd: origin,
+				output: text => {
+					output.push(text);
+				},
+				refreshCommands: () => {},
+				reloadPlugins: async () => {},
+			});
+			// ACP reports a failed move as command output instead of throwing it.
+			const failure = output.find(text => text.startsWith("Move failed"));
+			if (failure) throw new Error(failure);
+		},
+		fail: failRescopeAtDestination,
+	},
 };
 
 describe("a request renders paths against the directory the session is in", () => {
@@ -129,6 +175,10 @@ describe("a request renders paths against the directory the session is in", () =
 		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!bundled) throw new Error("Expected the bundled anthropic model to exist");
 		model = bundled;
+		// The terminal `/move` row presents its confirmation through the active theme.
+		const dark = await getThemeByName("dark");
+		if (!dark) throw new Error("Expected the dark theme to exist");
+		setThemeInstance(dark);
 	});
 
 	afterAll(async () => {

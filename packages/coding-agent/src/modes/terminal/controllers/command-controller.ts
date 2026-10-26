@@ -50,14 +50,13 @@ import { MemoryCommandController } from "./memory-command-controller";
 import { renderSessionInfo } from "./session-info-view";
 import { renderUsageReports } from "./usage-report-view";
 /**
- * The slice of the interactive context this controller uses: 37 members of the
+ * The slice of the interactive context this controller uses: 36 members of the
  * 215 `InteractiveModeContext` requires. See `CollabHostContext` for why the
  * full interface cannot be used as a parameter type: nothing but the real TUI
  * can satisfy it, so every test has to cast a stub into place unchecked.
  */
 export type CommandControllerContext = Pick<
 	InteractiveModeContext,
-	| "applyCwdChange"
 	| "attachMainSession"
 	| "bashComponent"
 	| "chatContainer"
@@ -679,14 +678,15 @@ export class CommandController {
 
 		if (!(await this.#ensureMoveTarget(resolvedPath))) return;
 
+		// The session moves storage and every cwd-derived input as one transaction, re-roots the
+		// wire's path relativization and records the change for the model, exactly as `/move` does in
+		// ACP. Its `cwd_changed` event runs `applyCwdChange`, which refreshes what only the terminal draws.
 		try {
-			await this.ctx.sessionManager.moveTo(resolvedPath);
+			await this.ctx.session.moveToCwd(resolvedPath);
 		} catch (err) {
 			this.ctx.showError(`Move failed: ${errorMessage(err)}`);
 			return;
 		}
-
-		await this.ctx.applyCwdChange(resolvedPath);
 
 		this.ctx.updateEditorBorderColor();
 		await this.ctx.reloadTodos();
@@ -694,7 +694,11 @@ export class CommandController {
 
 		this.ctx.present([
 			new Spacer(1),
-			new Text(`${theme.fg("accent", `${theme.status.success} Moved to ${resolvedPath}`)}`, 1, 1),
+			new Text(
+				`${theme.fg("accent", `${theme.status.success} Moved to ${this.ctx.sessionManager.getCwd()}`)}`,
+				1,
+				1,
+			),
 		]);
 	}
 

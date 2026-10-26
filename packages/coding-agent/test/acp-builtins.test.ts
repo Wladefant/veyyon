@@ -79,6 +79,7 @@ interface FakeAcpBuiltinSessionManager {
 	dropSession(sessionPath: string): Promise<void>;
 	getCwd(): string;
 	setSessionName(name: string, source: string): Promise<boolean>;
+	getSessionName(): string | undefined;
 }
 
 function createRuntime() {
@@ -226,6 +227,9 @@ function createRuntime() {
 		async setSessionName(name: string, _source: string): Promise<boolean> {
 			this._sessionName = name;
 			return true;
+		},
+		getSessionName(): string | undefined {
+			return this._sessionName;
 		},
 	};
 	return {
@@ -607,16 +611,18 @@ describe("session lifecycle commands", () => {
 		expect(notified).toBe(true);
 	});
 
-	it("/rename: outputs precedence message when setSessionName returns false", async () => {
+	it("/rename: a title with nothing left once cleaned prints the terminal's message and renames nothing", async () => {
 		const { output, fakeSessionManager, runtime } = createRuntime();
 		let notified = false;
 		runtime.notifyTitleChanged = async () => {
 			notified = true;
 		};
+		// A user-sourced rename always replaces the title, so `false` means the cleaned title was empty.
 		fakeSessionManager.setSessionName = async () => false;
 		const result = await executeAcpBuiltinSlashCommand("/rename Bar", runtime);
 		expect(result).toEqual({ consumed: true });
-		expect(output[0]).toContain("takes precedence");
+		expect(output).toEqual(["Session name cannot be empty."]);
+		expect(fakeSessionManager._sessionName).toBeUndefined();
 		expect(notified).toBe(false);
 	});
 
@@ -918,6 +924,29 @@ describe("wave 3 commands", () => {
 		} finally {
 			await fs.rm(targetDir, { recursive: true, force: true });
 		}
+	});
+
+	it("/move: strips outer double quotes from the path, as the terminal does", async () => {
+		const { output, runtime, fakeSessionManager } = createRuntime();
+		const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-move-quoted-"));
+
+		try {
+			const result = await executeAcpBuiltinSlashCommand(`/move "${targetDir}"`, runtime);
+
+			expect(result).toEqual({ consumed: true });
+			expect(fakeSessionManager.getCwd()).toBe(targetDir);
+			expect(output).toEqual([`Moved to ${targetDir}.`]);
+		} finally {
+			await fs.rm(targetDir, { recursive: true, force: true });
+		}
+	});
+
+	it("/move: a quoted empty path prints usage", async () => {
+		const { output, runtime, fakeSessionManager } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand('/move ""', runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output).toEqual(["Usage: /move <path>"]);
+		expect(fakeSessionManager._movedTo).toBeUndefined();
 	});
 
 	it("/move: reports a failed transaction and keeps the original cwd", async () => {

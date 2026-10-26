@@ -188,7 +188,6 @@ async function openMove(): Promise<OpenedPicker> {
 		focusActiveEditorArea: vi.fn(),
 		showError: vi.fn(),
 		showWarning: vi.fn(),
-		applyCwdChange: vi.fn(async () => {}),
 		updateEditorBorderColor: vi.fn(),
 		reloadTodos: vi.fn(async () => {}),
 		refreshComposerShortcuts: vi.fn(),

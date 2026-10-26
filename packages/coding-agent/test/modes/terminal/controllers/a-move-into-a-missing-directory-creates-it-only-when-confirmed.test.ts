@@ -12,7 +12,7 @@
  *  - the path is resolved against the session cwd with outer quotes stripped; an empty one prints usage;
  *  - nothing moves while a response streams.
  *
- * Gap: what `moveTo` relocates (session file, artifacts) is owned by the session manager suites.
+ * Gap: what `moveToCwd` relocates (session file, artifacts) and re-scopes is owned by the session suites.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
@@ -44,7 +44,6 @@ interface MoveRun {
 	errors: string[];
 	warnings: string[];
 	movedTo: string[];
-	cwdChanges: string[];
 	presented: number;
 }
 
@@ -52,15 +51,18 @@ async function runMove(
 	input: string,
 	options: { confirm?: boolean; streaming?: boolean; moveError?: Error } = {},
 ): Promise<MoveRun> {
-	const run: MoveRun = { prompts: [], errors: [], warnings: [], movedTo: [], cwdChanges: [], presented: 0 };
+	const run: MoveRun = { prompts: [], errors: [], warnings: [], movedTo: [], presented: 0 };
 	const ctx = {
-		session: { isStreaming: options.streaming ?? false },
-		sessionManager: {
-			getCwd: () => path.join(root, "home"),
-			moveTo: async (target: string) => {
+		session: {
+			isStreaming: options.streaming ?? false,
+			moveToCwd: async (target: string) => {
 				if (options.moveError) throw options.moveError;
 				run.movedTo.push(target);
+				return target;
 			},
+		},
+		sessionManager: {
+			getCwd: () => path.join(root, "home"),
 		},
 		showHookConfirm: async (title: string, message: string) => {
 			run.prompts.push([title, message]);
@@ -68,9 +70,6 @@ async function runMove(
 		},
 		showError: (message: string) => run.errors.push(message),
 		showWarning: (message: string) => run.warnings.push(message),
-		applyCwdChange: async (cwd: string) => {
-			run.cwdChanges.push(cwd);
-		},
 		updateEditorBorderColor: () => {},
 		reloadTodos: async () => {},
 		ui: { requestRender: () => {} },
@@ -103,7 +102,6 @@ describe("a move into a missing directory creates it only when confirmed", () =>
 			errors: [],
 			warnings: [],
 			movedTo: [target],
-			cwdChanges: [target],
 			presented: 1,
 		});
 	});
@@ -117,7 +115,6 @@ describe("a move into a missing directory creates it only when confirmed", () =>
 			errors: [],
 			warnings: [],
 			movedTo: [target],
-			cwdChanges: [target],
 			presented: 1,
 		});
 	});
@@ -131,7 +128,6 @@ describe("a move into a missing directory creates it only when confirmed", () =>
 			errors: [],
 			warnings: [],
 			movedTo: [],
-			cwdChanges: [],
 			presented: 0,
 		});
 	});
@@ -145,7 +141,6 @@ describe("a move into a missing directory creates it only when confirmed", () =>
 			errors: ['Cannot create "child": parent directory does not exist'],
 			warnings: [],
 			movedTo: [],
-			cwdChanges: [],
 			presented: 0,
 		});
 	});
@@ -157,7 +152,6 @@ describe("a move into a missing directory creates it only when confirmed", () =>
 		expect(run.errors).toHaveLength(1);
 		expect(run.errors[0]).toStartWith("Failed to create directory: ");
 		expect(run.movedTo).toEqual([]);
-		expect(run.cwdChanges).toEqual([]);
 	});
 
 	it("a failed move shows its error and leaves the cwd alone", async () => {
@@ -168,7 +162,6 @@ describe("a move into a missing directory creates it only when confirmed", () =>
 			errors: ["Move failed: session file is locked"],
 			warnings: [],
 			movedTo: [],
-			cwdChanges: [],
 			presented: 0,
 		});
 	});
@@ -192,7 +185,6 @@ describe("a move target is read the way it was typed", () => {
 			errors: ["Usage: /move <path>"],
 			warnings: [],
 			movedTo: [],
-			cwdChanges: [],
 			presented: 0,
 		});
 	});
@@ -204,7 +196,6 @@ describe("a move target is read the way it was typed", () => {
 			errors: [],
 			warnings: ["Wait for the current response to finish or abort it before moving."],
 			movedTo: [],
-			cwdChanges: [],
 			presented: 0,
 		});
 	});

@@ -32,6 +32,8 @@
 - `/todo copy` in the TUI reports a clipboard failure instead of `Copied todos as Markdown to clipboard.`
 - `/todo done`, `drop` and `rm`, and `/todo start` in the TUI, match a task or phase named in quotes.
 - `/todo export` in the TUI creates the directories a missing path needs, as ACP does.
+- The terminal `/move` command records the directory change for the model, renders request paths against the new directory and rolls the move back when the destination fails to load, as the ACP `/move` command already did.
+- The ACP `/move` command strips outer double quotes from its path, and the ACP `/rename` command prints `Session name cannot be empty.` for a title with nothing left once cleaned, as the terminal does.
 
 ## [1.5.10] - 2026-10-25
 

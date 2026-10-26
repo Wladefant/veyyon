@@ -1446,14 +1446,13 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	async applyCwdChange(newCwd: string): Promise<void> {
 		// The mode-independent half lives on the session, because this is not the
-		// only way a session moves. Three paths reach here: `/move`, which calls
-		// `sessionManager.moveTo` directly; resuming a session that belongs to
-		// another project; and the `cwd_changed` event, which the `set_cwd` tool
-		// raises through `AgentSession.setCwd`. Only the third goes through
-		// `setCwd`, so this cannot simply be dropped in favour of it, and `setCwd`
-		// cannot be left as the sole owner either. Both call the one owner, which
-		// skips a repeat of the same destination so the third path does the work
-		// once rather than twice.
+		// only way a session moves. Two paths reach here: resuming a session that
+		// belongs to another project, and the `cwd_changed` event, which
+		// `AgentSession.setCwd` (`/cd`, the `set_cwd` tool) and
+		// `AgentSession.moveToCwd` (`/move`) raise once their transaction is
+		// recorded. The resume path goes through neither, so this cannot be dropped
+		// in favour of them. Both call the one owner, which skips a repeat of the
+		// same destination so the event path does the work once rather than twice.
 		//
 		// It reloads project settings, reapplies provider globals, clears the plugin
 		// root cache, resets capabilities, refreshes the ssh tool, and rebuilds the

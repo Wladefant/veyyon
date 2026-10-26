@@ -11,7 +11,7 @@ import { resolveResumableSession } from "@veyyon/kernel/session/session-listing"
 import { settings } from "../config/settings-instance";
 import type { FreshSessionResult } from "../session/agent-session-types";
 import { veyyonRelaunchArgv } from "../task/veyyon-command";
-import { resolveToCwd } from "../tools/core/path-utils";
+import { normalizePathLikeInput, resolveToCwd } from "../tools/core/path-utils";
 import type { BuiltinSlashCommandHandlers } from "./handler-types";
 import { commandConsumed, errorMessage, usage } from "./helpers/parse";
 import type { ParsedSlashCommand, SlashCommandResult, TuiSlashCommandRuntime } from "./types";
@@ -167,13 +167,12 @@ export const SESSION_HANDLERS = {
 	rename: {
 		handle: async (command, runtime) => {
 			if (!command.args) return usage("Usage: /rename <title>", runtime);
+			// A user rename always replaces the title; `false` means the title held nothing once its
+			// control characters were cleaned out.
 			const ok = await runtime.sessionManager.setSessionName(command.args, "user");
-			if (!ok) {
-				await runtime.output("Session name not changed (a user-set name takes precedence).");
-				return commandConsumed();
-			}
+			if (!ok) return usage("Session name cannot be empty.", runtime);
 			await runtime.notifyTitleChanged?.();
-			await runtime.output(`Session renamed to ${command.args}.`);
+			await runtime.output(`Session renamed to ${runtime.sessionManager.getSessionName()}.`);
 			return commandConsumed();
 		},
 		handleTui: async (command, runtime) => {
@@ -190,8 +189,10 @@ export const SESSION_HANDLERS = {
 	move: {
 		handle: async (command, runtime) => {
 			if (runtime.session.isStreaming) return usage("Cannot move while streaming.", runtime);
-			if (!command.args) return usage("Usage: /move <path>", runtime);
-			const resolvedPath = resolveToCwd(command.args, runtime.cwd);
+			// The path is read the way the terminal reads it: trimmed, outer double quotes stripped.
+			const target = normalizePathLikeInput(command.args);
+			if (!target) return usage("Usage: /move <path>", runtime);
+			const resolvedPath = resolveToCwd(target, runtime.cwd);
 			try {
 				const stat = await fs.stat(resolvedPath);
 				if (!stat.isDirectory()) {

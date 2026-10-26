@@ -9,24 +9,23 @@ import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/the
 function createMoveContext(sourceDir: string) {
 	const state = { cwd: sourceDir, movedTo: undefined as string | undefined };
 	const present = vi.fn();
-	const applyCwdChange = vi.fn(async (cwd: string) => {
-		expect(state.cwd).toBe(cwd);
-	});
 	const ctx = {
-		session: { isStreaming: false },
-		sessionManager: {
-			getCwd: () => state.cwd,
-			moveTo: vi.fn(async (cwd: string) => {
+		session: {
+			isStreaming: false,
+			moveToCwd: async (cwd: string) => {
 				state.cwd = cwd;
 				state.movedTo = cwd;
-			}),
+				return cwd;
+			},
+		},
+		sessionManager: {
+			getCwd: () => state.cwd,
 			dropSession: vi.fn(async () => {}),
 		},
 		showHookCustom: vi.fn(),
 		showHookConfirm: vi.fn(),
 		showError: vi.fn(),
 		showWarning: vi.fn(),
-		applyCwdChange,
 		updateEditorBorderColor: vi.fn(),
 		reloadTodos: vi.fn(async () => {}),
 		ui: { requestRender: vi.fn() },
@@ -48,7 +47,7 @@ describe("CommandController /move", () => {
 		setThemeInstance(theme);
 	});
 
-	it("relocates the active session before re-scoping cwd-derived state", async () => {
+	it("moves the session through its transaction, then refreshes the terminal chrome", async () => {
 		const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-move-source-"));
 		const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-move-target-"));
 		try {
@@ -59,7 +58,6 @@ describe("CommandController /move", () => {
 
 			expect(state.movedTo).toBe(targetDir);
 			expect(ctx.sessionManager.dropSession).not.toHaveBeenCalled();
-			expect(ctx.applyCwdChange).toHaveBeenCalledWith(targetDir);
 			expect(ctx.updateEditorBorderColor).toHaveBeenCalled();
 			expect(ctx.reloadTodos).toHaveBeenCalled();
 			expect(ctx.ui.requestRender).toHaveBeenCalledWith();
