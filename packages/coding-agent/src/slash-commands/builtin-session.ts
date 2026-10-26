@@ -54,7 +54,7 @@ export const SESSION_HANDLERS = {
 				await runtime.output(
 					[
 						`Session: ${runtime.session.sessionId}`,
-						`Title: ${runtime.session.sessionName}`,
+						`Title: ${runtime.session.sessionName ?? "(untitled)"}`,
 						`CWD: ${runtime.cwd}`,
 					].join("\n"),
 				);

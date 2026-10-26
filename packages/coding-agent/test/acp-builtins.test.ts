@@ -20,7 +20,7 @@ interface FakeAcpBuiltinSession {
 	isStreaming: boolean;
 	sessionFile: string | undefined;
 	sessionId: string;
-	sessionName: string;
+	sessionName: string | undefined;
 	_todoPhases: Array<{ name: string; tasks: Array<{ content: string; status: string }> }>;
 	agent: { _messages: unknown[]; appendMessage(message: unknown): void };
 	_switchedTo: string | undefined;
@@ -582,6 +582,19 @@ describe("ACP builtin slash commands", () => {
 });
 
 describe("session lifecycle commands", () => {
+	it("/session info: a named session prints its title", async () => {
+		const { output, runtime } = createRuntime();
+		await executeAcpBuiltinSlashCommand("/session info", runtime);
+		expect(output).toEqual(["Session: fake-session-id\nTitle: Fake Session\nCWD: /tmp/project"]);
+	});
+
+	it("/session info: a session with no title yet says it is untitled", async () => {
+		const { output, session, runtime } = createRuntime();
+		session.sessionName = undefined;
+		await executeAcpBuiltinSlashCommand("/session info", runtime);
+		expect(output).toEqual(["Session: fake-session-id\nTitle: (untitled)\nCWD: /tmp/project"]);
+	});
+
 	it("/session delete: returns in-memory usage when no sessionFile", async () => {
 		const { output, runtime } = createRuntime();
 		const result = await executeAcpBuiltinSlashCommand("/session delete", runtime);
