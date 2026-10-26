@@ -13,7 +13,7 @@
  * card clears it, and a leaked interval keeps calling into a component that has
  * been unmounted for the rest of the session.
  */
-import { afterEach, beforeAll, beforeEach, describe, expect, setSystemTime, test, vi } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, type Mock, setSystemTime, test, vi } from "bun:test";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -43,7 +43,7 @@ afterEach(() => {
 });
 
 /** A TUI double that records which of the two repaint entry points was used. */
-function recordingUi(): { ui: TUI; full: ReturnType<typeof vi.fn>; scoped: ReturnType<typeof vi.fn> } {
+function recordingUi(): { ui: TUI; full: Mock<TUI["requestRender"]>; scoped: Mock<TUI["requestComponentRender"]> } {
 	const full = vi.fn();
 	const scoped = vi.fn();
 	return { ui: { requestRender: full, requestComponentRender: scoped } as unknown as TUI, full, scoped };

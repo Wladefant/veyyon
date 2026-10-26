@@ -106,7 +106,8 @@ export interface OAuthProviderInterface {
 	readonly name: string;
 	readonly sourceId?: string;
 	login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials | string>;
-	refreshToken?(credentials: OAuthCredentials): Promise<OAuthCredentials>;
+	/** `signal` aborts the token request; a refresher passes it to that request's `fetch`. */
+	refreshToken?(credentials: OAuthCredentials, signal?: AbortSignal): Promise<OAuthCredentials>;
 	getApiKey?(credentials: OAuthCredentials): string;
 	/** Store resulting OAuth credentials under a different provider id. */
 	readonly storeCredentialsAs?: string;

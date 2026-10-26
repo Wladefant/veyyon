@@ -3,7 +3,6 @@ import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import * as Beam from "@veyyon/mnemopi/core/beam";
 import * as Embeddings from "@veyyon/mnemopi/core/embeddings";
 import type { CompleteOptions, LlmBackend } from "@veyyon/mnemopi/core/llm-backends";
 import * as LlmBackends from "@veyyon/mnemopi/core/llm-backends";
@@ -14,33 +13,14 @@ import {
 } from "../../../packages/utils/test/helpers/isolated-config-root";
 import { DELIBERATE_HOME_CONTROL_ROOT } from "./helpers/home-isolation";
 
-type ResettableModule = Record<string, unknown>;
-
-const RESET_FUNCTION_NAMES = [
-	"resetForTests",
-	"resetModuleStateForTests",
-	"resetMemoryForTests",
-	"resetBeamForTests",
-	"resetEmbeddingStateForTests",
-	"resetHostLlmBackendForTests",
-	"resetLlmBackendStateForTests",
-] as const;
-
-const RESETTABLE_MODULES: readonly ResettableModule[] = [Memory, Beam, LlmBackends, Embeddings];
-
-function callResetFunctions(moduleExports: ResettableModule): void {
-	for (const name of RESET_FUNCTION_NAMES) {
-		const reset = moduleExports[name];
-		if (typeof reset === "function") {
-			reset();
-		}
-	}
-}
-
+/**
+ * Every module-level reset the suite runs between tests, called by reference so a renamed or removed reset fails
+ * the typecheck instead of being skipped.
+ */
 export function resetModuleStateForTests(): void {
-	for (const moduleExports of RESETTABLE_MODULES) {
-		callResetFunctions(moduleExports);
-	}
+	Memory.resetMemoryForTests();
+	LlmBackends.resetHostLlmBackendForTests();
+	Embeddings.resetEmbeddingProviderForTests();
 }
 
 export function disableLocalLlmForTests(): void {

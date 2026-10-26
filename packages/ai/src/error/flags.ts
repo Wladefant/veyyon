@@ -295,6 +295,14 @@ export function isUsageLimit(error: unknown, api?: Api): boolean {
 }
 
 /**
+ * Whether the provider refused the model for the account's plan, so a credential that can serve the
+ * model is needed rather than a wait. Accessor for {@link Flag.ModelNotInPlan}.
+ */
+export function isModelNotInPlan(error: unknown, api?: Api): boolean {
+	return is(classify(error, api), Flag.ModelNotInPlan);
+}
+
+/**
  * Strict-tool rejection: grammar too large, schema too complex, or structured
  * outputs unsupported by the model/endpoint.
  * Accessor for {@link Flag.Grammar}.

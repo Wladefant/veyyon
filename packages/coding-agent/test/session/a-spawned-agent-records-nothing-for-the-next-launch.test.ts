@@ -97,7 +97,7 @@ beforeEach(async () => {
 	resetSettingsForTest();
 	resetLaunchFactsForTest();
 	await Settings.init({ cwd: isolated.root });
-	settings.setModelRole("default", `${PROVIDER}/${MODEL_ID}`);
+	settings.setDefaultModel(`${PROVIDER}/${MODEL_ID}`);
 });
 
 afterEach(async () => {

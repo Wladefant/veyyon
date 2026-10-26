@@ -144,6 +144,46 @@ export const INTERACTION_SETTINGS = {
 		},
 	},
 
+	"composer.predictions.mode": {
+		type: "enum",
+		values: ["off", "chatgpt-pro", "custom"] as const,
+		default: "off",
+		ui: {
+			tab: "interaction",
+			group: "Composer Predictions",
+			label: "Suggest Next Message",
+			description:
+				"After each turn, suggest the message you are likely to send next as dim text in the empty composer. Tab inserts it; typing replaces it. Nothing is sent without Enter.",
+			options: [
+				{ value: "off", label: "Off", description: "No predictions." },
+				{
+					value: "chatgpt-pro",
+					label: "ChatGPT Pro included",
+					description:
+						"The ChatGPT Codex prediction service on GPT-6 Astra or GPT-6.1 Sol, sent with a linked OpenAI Codex account on a ChatGPT Pro plan. OpenAI states that predictions in its Codex app use no Codex usage limits or credits during the beta; that statement does not cover Veyyon, and these requests may count against the account's limits. Without a Pro account, or when an API key replaces the Codex login, no prediction is requested.",
+				},
+				{
+					value: "custom",
+					label: "Custom (choose model)",
+					description: "Predictions from the model chosen in Prediction Model, from any provider.",
+				},
+			],
+		},
+	},
+
+	"composer.predictions.model": {
+		type: "modelChain",
+		default: undefined,
+		ui: {
+			tab: "interaction",
+			group: "Composer Predictions",
+			label: "Prediction Model",
+			description:
+				"Models that write predictions in Custom mode, from any provider, tried in order: the first one with credentials is used. A :level suffix sets its thinking level. Inherit: the session's model.",
+			condition: "composerPredictionsCustom",
+		},
+	},
+
 	"startup.quiet": {
 		type: "boolean",
 		default: false,

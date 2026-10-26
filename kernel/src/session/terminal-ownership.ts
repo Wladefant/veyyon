@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as path from "node:path";
-import { getConfigRootDir } from "@veyyon/utils";
+import { getConfigRootDir, readOwnerOnlyFile } from "@veyyon/utils";
 
 /** Windows recycles PIDs fast, so a live pid is not proof: the owner's pipe must answer. */
 async function isEndpointServing(endpoint: string): Promise<boolean> {
@@ -36,8 +36,10 @@ export async function assertNotTerminalOwned(sessionFile: string, root = getConf
 	for (const file of files) {
 		if (!file.endsWith(".json")) continue;
 		let owner: { version?: unknown; sessionFile?: unknown; pid?: unknown; endpoint?: unknown };
+		// A record another user can read or write is refused, not skipped: a claim we cannot verify may be a
+		// live owner, so the session is not opened. A missing record is still no owner.
 		try {
-			owner = JSON.parse(await fs.readFile(path.join(directory, file), "utf8"));
+			owner = JSON.parse(await readOwnerOnlyFile(path.join(directory, file)));
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
 			throw new Error("Cannot establish terminal writer ownership", { cause: error });

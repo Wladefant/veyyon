@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import type { spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
@@ -372,6 +372,180 @@ describe("terminal-control-transport", () => {
 
 			client.write("posix payload\n");
 			expect(await received.promise).toBe("posix payload\n");
+
+			server.close();
+		});
+
+		// WHY: issue 580. The socket is the control channel, so it must be owner-only. This checks a real
+		// socket's mode and owner, not the source text, because chmod or the owner check can regress unnoticed.
+		it("creates the POSIX control socket with mode 0600 owned by the current uid", async () => {
+			const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-transport-test-"));
+			cleanupActions.push(() => fs.rm(tempDir, { recursive: true, force: true }));
+			const socketPath = path.join(tempDir, "control.sock");
+
+			const server = await createPosixSocketServer(socketPath, () => {});
+			cleanupActions.push(() => server.close());
+
+			const stat = await fs.lstat(socketPath);
+			expect(stat.isSocket()).toBe(true);
+			expect(stat.mode & 0o777).toBe(0o600);
+			const processUid = process.getuid?.();
+			expect(processUid).toBeDefined();
+			expect(stat.uid).toBe(processUid);
+		});
+	}
+
+	if (process.platform === "win32") {
+		it("runs the real Windows pipe broker with owner-and-SYSTEM ACL and verifies same-user delivery", async () => {
+			const pipeName = `veyyon-test-pipe-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			const endpoint = `\\\\.\\pipe\\${pipeName}`;
+
+			const connection = Promise.withResolvers<TerminalSocket>();
+			const clientFailure = Promise.withResolvers<never>();
+			void clientFailure.promise.catch(() => undefined);
+			const server = await createWindowsPipeTransport(endpoint, socket => {
+				connection.resolve(socket);
+			});
+			cleanupActions.push(() => server.close());
+
+			const client = net.connect(endpoint);
+			cleanupActions.push(() => client.destroy());
+			client.once("error", error => {
+				clientFailure.reject(new Error("Windows named-pipe client failed", { cause: error }));
+			});
+
+			// Real OS and process events cannot use fake timers, so bound each wait with a platform timer.
+			const withClientBound = async <T>(promise: Promise<T>, label: string): Promise<T> => {
+				const timeout = Promise.withResolvers<never>();
+				const timer = setTimeout(() => timeout.reject(new Error(`${label} timed out after 5000ms`)), 5000);
+				try {
+					return await Promise.race([promise, clientFailure.promise, timeout.promise]);
+				} finally {
+					clearTimeout(timer);
+				}
+			};
+
+			const clientConnected = Promise.withResolvers<void>();
+			client.once("connect", () => clientConnected.resolve());
+			await withClientBound(clientConnected.promise, "Windows named-pipe client connection");
+			const serverSocket = await withClientBound(connection.promise, "Windows transport connection callback");
+			serverSocket.setEncoding("utf8");
+
+			const received = Promise.withResolvers<string>();
+			serverSocket.on("data", chunk => {
+				received.resolve(chunk as string);
+			});
+
+			client.write("pipe roundtrip test\n");
+			expect(await withClientBound(received.promise, "Windows named-pipe payload delivery")).toBe(
+				"pipe roundtrip test\n",
+			);
+
+			const psCommand = `
+$client = [System.IO.Pipes.NamedPipeClientStream]::new('.', '${pipeName}', [System.IO.Pipes.PipeDirection]::InOut)
+$client.Connect(2000)
+$sec = $client.GetAccessControl()
+$owner = $sec.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+$isProtected = $sec.AreAccessRulesProtected
+$rules = @($sec.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]) | ForEach-Object {
+    [PSCustomObject]@{
+        Identity = $_.IdentityReference.Value
+        Rights = $_.PipeAccessRights.ToString()
+        Type = $_.AccessControlType.ToString()
+    }
+})
+$client.Dispose()
+[PSCustomObject]@{
+    Owner = $owner
+    IsProtected = $isProtected
+    Rules = $rules
+} | ConvertTo-Json -Compress
+`.trim();
+
+			const powershell = path.win32.join(
+				process.env.SystemRoot ?? "C:\\Windows",
+				"System32",
+				"WindowsPowerShell",
+				"v1.0",
+				"powershell.exe",
+			);
+			type ProcessResult = { stdout: string; stderr: string; exitCode: number };
+			const runBoundedProcess = (
+				command: string,
+				args: string[],
+				label: string,
+			): Promise<ProcessResult> => {
+				const result = Promise.withResolvers<ProcessResult>();
+				const proc = spawn(command, args, { windowsHide: true });
+				let stdout = "";
+				let stderr = "";
+				let settled = false;
+				const timer = setTimeout(() => {
+					if (settled) return;
+					settled = true;
+					try {
+						proc.kill();
+					} catch {}
+					result.reject(new Error(`${label} timed out after 5000ms`));
+				}, 5000);
+				void clientFailure.promise.catch(() => {
+					if (!settled) {
+						try {
+							proc.kill();
+						} catch {}
+					}
+				});
+				const fail = (error: Error): void => {
+					if (settled) return;
+					settled = true;
+					clearTimeout(timer);
+					result.reject(new Error(`${label} failed: ${error.message}`, { cause: error }));
+				};
+				proc.stdout.on("data", data => (stdout += data.toString()));
+				proc.stderr.on("data", data => (stderr += data.toString()));
+				proc.once("error", fail);
+				proc.once("close", code => {
+					if (settled) return;
+					settled = true;
+					clearTimeout(timer);
+					result.resolve({ stdout, stderr, exitCode: code ?? -1 });
+				});
+				return result.promise;
+			};
+			const cp = await withClientBound(
+				runBoundedProcess(
+					powershell,
+					["-NoProfile", "-NonInteractive", "-Command", psCommand],
+					"Pipe ACL query",
+				),
+				"Pipe ACL query",
+			);
+			const whoami = path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "whoami.exe");
+			const identity = await withClientBound(
+				runBoundedProcess(whoami, ["/user", "/fo", "csv", "/nh"], "Current-user SID query"),
+				"Current-user SID query",
+			);
+
+			expect(cp.exitCode, cp.stderr).toBe(0);
+			const aclResult = JSON.parse(cp.stdout.trim());
+			expect(aclResult.IsProtected).toBe(true);
+			expect(identity.exitCode, identity.stderr).toBe(0);
+			const identityMatch = identity.stdout.match(/"[^"]+","(S-1-[^"]+)"/);
+			expect(identityMatch, identity.stdout).not.toBeNull();
+			const currentUserSid = identityMatch?.[1];
+			expect(aclResult.Owner).toBe(currentUserSid);
+			// The broker grants only the owner and LocalSystem; exact count and values reject extra or missing principals.
+			expect(aclResult.Rules).toHaveLength(2);
+			expect(aclResult.Rules).toContainEqual({
+				Identity: currentUserSid,
+				Rights: "FullControl",
+				Type: "Allow",
+			});
+			expect(aclResult.Rules).toContainEqual({
+				Identity: "S-1-5-18",
+				Rights: "FullControl",
+				Type: "Allow",
+			});
 
 			server.close();
 		});

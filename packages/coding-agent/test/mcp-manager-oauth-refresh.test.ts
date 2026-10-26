@@ -223,7 +223,9 @@ describe("MCPManager OAuth refresh failure", () => {
 		expect(remaining).toMatchObject({ type: "oauth", access: "fresh-access", refresh: "fresh-refresh" });
 	});
 
-	test("aborts a timed-out token fetch and waits for it before releasing refresh ownership", async () => {
+	// The token request is not aborted when the connection stops waiting for it: a provider that
+	// answers later has already spent the old refresh token, and the abort would discard the new one.
+	test("connects with the held token at the caller wait, aborts the token fetch only at the flight ceiling, and holds refresh ownership until the fetch ends", async () => {
 		vi.useFakeTimers();
 		const fetchCalled = Promise.withResolvers<void>();
 		const abortObserved = Promise.withResolvers<void>();
@@ -258,28 +260,29 @@ describe("MCPManager OAuth refresh failure", () => {
 
 		vi.advanceTimersByTime(9_999);
 		await drainMicrotasks();
-		expect(capturedSignal!.aborted).toBe(false);
 		expect(preparedSettled).toBe(false);
-		expect(releaseSpy).not.toHaveBeenCalled();
 
 		vi.advanceTimersByTime(1);
+		const preparedConfig = await prepared;
+		expect(getAuthorizationHeader(preparedConfig)).toBe(`Bearer ${STALE_ACCESS}`);
+		expect(capturedSignal!.aborted).toBe(false);
+		expect(releaseSpy).not.toHaveBeenCalled();
+
+		vi.advanceTimersByTime(120_000 - 10_000);
 		await abortObserved.promise;
 		expect(capturedSignal!.aborted).toBe(true);
 		await drainMicrotasks();
-		expect(preparedSettled).toBe(false);
 		expect(releaseSpy).not.toHaveBeenCalled();
 
 		allowFetchReject.resolve();
-		const preparedConfig = await prepared;
-
-		expect(preparedSettled).toBe(true);
+		await drainMicrotasks(50);
 		expect(releaseSpy).toHaveBeenCalledTimes(1);
-		expect(getAuthorizationHeader(preparedConfig)).toBe(`Bearer ${STALE_ACCESS}`);
 	});
 });
 
 describe("MCPManager shared SQLite OAuth refresh", () => {
 	afterEach(() => {
+		vi.useRealTimers();
 		setSystemTime();
 		vi.restoreAllMocks();
 	});
@@ -287,6 +290,8 @@ describe("MCPManager shared SQLite OAuth refresh", () => {
 	test("renews refresh ownership while the token endpoint is blocked", async () => {
 		await withSharedSQLiteAuth(async ({ authA, authB, storeA }) => {
 			const startMs = Date.parse("2026-07-10T12:00:00.000Z");
+			// The renewal tick is a timer; the peer's lease poll is a `Bun.sleep`, held until released.
+			vi.useFakeTimers();
 			setSystemTime(new Date(startMs));
 			const sleeps = installControlledBunSleep();
 			const renewSpy = vi.spyOn(storeA, "renewCredentialRefreshLease");
@@ -342,10 +347,8 @@ describe("MCPManager shared SQLite OAuth refresh", () => {
 
 				const preparedA = managerA.prepareConfig(config);
 				await refreshStarted.promise;
-				const renewalSleep = await waitForControlledSleep(sleeps, 5_000);
-
+				vi.advanceTimersByTime(5_000);
 				setSystemTime(new Date(startMs + 5_000));
-				renewalSleep.resolve();
 				await drainMicrotasks();
 				expect(renewSpy).toHaveBeenCalledTimes(1);
 

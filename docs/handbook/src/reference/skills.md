@@ -12,6 +12,7 @@ Implementation: `src/extensibility/skills.ts`, `src/discovery/builtin.ts`, `src/
 
 A discovered skill is represented as:
 
+
 - `name`
 - `description`
 - `filePath` (the `SKILL.md` path)
@@ -65,26 +66,46 @@ Current runtime behavior:
 
 ## Discovery pipeline
 
-Skills load only from the active profile. `loadSkills()` passes an explicit
-provider allowlist to `loadCapability("skills")`, so only the profile-native
-providers run and no foreign-tool directory is ever scanned:
+Skills can come from the project root and the active profile. `loadSkills()` combines the
+project-skills provider with the profile providers. Project skills come first.
 
-- `native` (priority 100): the profile's `.../agent/skills` dir, user level only, via `src/discovery/builtin.ts`. Project-local `.veyyon/skills` is not scanned.
+The project root is discovery's `repoRoot`, or `cwd` when no repository root is available. The
+project-skills provider scans only these roots, in order:
+
+- `<project-root>/.agents/skills`
+- `<project-root>/.github/skills`
+- `<project-root>/.claude/skills`
+
+Each root uses the one-level layout above. Veyyon does not scan nested package roots, `.agent/skills`
+or `.veyyon/skills`. A same-named skill in an earlier project root wins. Project skills also win
+over same-named profile skills.
+
+Profile providers run after project skills:
+
+- `native` (priority 100): the active profile's `.../agent/skills` directory, via `src/discovery/builtin.ts`
 - `veyyon-plugins` (priority 90): `skills/` bundled with plugins installed into the active profile
 - `veyyon-managed` (priority 5): auto-learn skills under `.../agent/managed-skills`, discovered unconditionally (only writing/nudging is controlled by `autolearn.enabled`); always defers to a same-named authored skill
 
-The allowlist is defined by `profileSkillProviderIds()` in `src/extensibility/skills.ts`. If `skills.enabled` is `false`, discovery returns no skills.
+The profile provider allowlist is defined by `profileSkillProviderIds()` in `src/extensibility/skills.ts`.
+If `skills.enabled` is `false`, discovery returns no skills.
 
-Dedup key is skill name; the first item with a given name wins, and a same-named authored (`native` or `veyyon-plugins`) skill always beats the managed one.
+Dedup key is skill name; the first item with a given name wins, so the project root order above,
+project-before-profile order, and existing profile provider precedence decide collisions.
+
+Project skill trust is covered in [Project trust](project-trust.md). You approve a project skill by
+its `SKILL.md` path, but the SHA-256 digest covers every relative path and file content in that skill
+directory, in sorted order. A change to the skill file, a script or an asset requires approval
+again. Scripts and assets are included in this single skill-folder approval. Veyyon does not approve them separately and does not sandbox them.
+Veyyon refuses a skill with a symlink that resolves outside the project root and logs a warning.
 
 ### Foreign providers are import-only
 
-The `claude`, `codex`, `agents`, `opencode`, `claude-plugins`, and `github`
-skill providers are still registered, but they are **not** in the ambient
-allowlist, so they never contribute skills to a session. They exist to feed the
-onboarding import scan (`scanForeignConfig` in `src/discovery/import-scan.ts`),
-which enumerates user-level foreign skills so you can copy the ones you want into
-the active profile. An imported skill becomes a profile-native `native` skill.
+The `claude`, `codex`, `agents`, `opencode`, `claude-plugins`, and `github` skill providers are
+still registered, but they are not in the profile-provider allowlist. They do not scan foreign
+home directories. The dedicated project-skills provider above separately reads only the listed
+project roots. Foreign providers feed the onboarding import scan (`scanForeignConfig` in
+`src/discovery/import-scan.ts`), which enumerates user-level foreign skills so you can copy the ones
+you want into the active profile. An imported skill becomes a profile-native `native` skill.
 
 ### Filtering
 
@@ -204,5 +225,6 @@ No fallback search is performed for missing assets.
 - Put each skill in its own directory: `<skills-root>/<skill-name>/SKILL.md`
 - Always include explicit `name` and `description` frontmatter
 - Keep referenced assets under the same skill directory and access with `skill://<name>/...`
-- Put every skill in the active profile's `skills/` dir; there is no nested-taxonomy or custom-directory scanning
-- Avoid duplicate skill names; the first match wins by provider precedence (authored beats managed)
+- Put profile skills in the active profile's `skills/` directory; put project skills in one of the three project roots above. There is no nested taxonomy or custom-directory scanning.
+
+- Avoid duplicate skill names; project roots take precedence in the listed order, and profile-authored skills take precedence over managed skills.

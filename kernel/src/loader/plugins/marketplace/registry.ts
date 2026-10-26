@@ -6,9 +6,8 @@
  *   - installed_plugins.json under getPluginsDir() — which plugins are installed
  *
  * This module owns the MARKETPLACES registry (marketplaces.json). The INSTALLED
- * plugins registry (installed_plugins.json) is owned by `../installed-registry`
- * and re-exported here so marketplace callers keep a single `./registry` import
- * surface. Read/write functions accept explicit file paths so callers control
+ * plugins registry (installed_plugins.json) is owned by `../installed-registry`.
+ * Read/write functions accept explicit file paths so callers control
  * the location. Path helpers compute the default paths from the dir singleton.
  *
  * Writes use atomic write (tmp + rename) via the canonical `atomicWriteJson`
@@ -21,18 +20,6 @@ import * as path from "node:path";
 import { atomicWriteJson, getConfigRootDir, getPluginsDir, isEnoent, logger, tryParseJson } from "@veyyon/utils";
 
 import type { MarketplaceRegistryEntry, MarketplacesRegistry } from "./types";
-
-// ── Installed plugins registry (re-exported from the single owner) ────
-export {
-	addInstalledPlugin,
-	collectReferencedPaths,
-	getInstalledPlugin,
-	getInstalledPluginsRegistryPath,
-	getPluginsCacheDir,
-	readInstalledPluginsRegistry,
-	removeInstalledPlugin,
-	writeInstalledPluginsRegistry,
-} from "../installed-registry";
 
 // ── Path helpers ─────────────────────────────────────────────────────
 

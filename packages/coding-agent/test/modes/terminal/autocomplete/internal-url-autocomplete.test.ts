@@ -4,8 +4,8 @@ import type { Rule } from "@veyyon/coding-agent/discovery/capability/rule";
 import { resetActiveRulesForTests, setActiveRules } from "@veyyon/coding-agent/discovery/capability/rule";
 import type { SSHHost } from "@veyyon/coding-agent/discovery/capability/ssh";
 import type { CapabilityResult } from "@veyyon/coding-agent/discovery/capability/types";
+import { resetActiveSkillsForTests, setActiveSkills } from "@veyyon/coding-agent/extensibility/active-skills";
 import type { Skill } from "@veyyon/coding-agent/extensibility/skills";
-import { resetActiveSkillsForTests, setActiveSkills } from "@veyyon/coding-agent/extensibility/skills";
 import { InternalUrlRouter } from "@veyyon/coding-agent/internal-urls/router";
 import {
 	applyInternalUrlCompletion,

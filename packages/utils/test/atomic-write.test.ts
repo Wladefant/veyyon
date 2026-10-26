@@ -978,6 +978,10 @@ const HANDROLLED_ATOMIC_ALLOWED = new Map<string, string>([
 	// staging-sibling naming convention (`profiles/.name.<pid>.tmp`) in docs and
 	// validation, not a temp-write. Nothing here copies the owner's logic.
 	["utils/src/dirs.ts", "directory-entry moves + staging-name validation, not a temp-file write"],
+	// Rotation releases the live log name by renaming it to a private name and reading which file it
+	// held, since POSIX has no unlink-if-inode; no file is written. Its `.tmp` mentions are the
+	// compression temporaries, which go through atomicWriteFileWith.
+	["utils/src/log-file.ts", "live-name release by rename, not a temp-file write"],
 	// hashline is a lean patch library that deliberately imports no `@veyyon/*`
 	// (its consuming builds pin the published crate and exclude the vendored copy),
 	// so it cannot route through the owner without dragging utils' heavy transitive

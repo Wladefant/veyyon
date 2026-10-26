@@ -150,6 +150,12 @@ export interface LaunchArgotInput {
 	sessionManager: StartRecorder;
 	/** Rebuild the base system prompt so it teaches the loaded handles; resolves to its parts. */
 	refreshPrompt: () => Promise<string[]>;
+	/**
+	 * Whether the prompt for the active model teaches shorthand at all. A model off the encode
+	 * allowlist, or a context past the cutoff, is taught no handle by design, and the probe must not
+	 * report that as a broken arm.
+	 */
+	teaches: () => boolean;
 }
 
 /**
@@ -160,8 +166,9 @@ export interface LaunchArgotInput {
  * on the session's `custom_message` channel, because `session_init` is written before the load
  * finishes and so always shows an unarmed prompt: `argot_armed` holds the loaded vocabulary, an
  * empty one included, so an empty corpus reads differently from a dictionary the model ignored;
- * `argot_taught` states whether the refreshed prompt holds the handle table, and an armed prompt
- * without one is logged as an error; `argot_arm_failed` records a failed load.
+ * `argot_taught` states whether the refreshed prompt holds the handle table and whether the active
+ * model is meant to be taught one; a prompt that should teach the table and lacks it is logged as an
+ * error; `argot_arm_failed` records a failed load.
  */
 export function armLaunchArgot(input: LaunchArgotInput): void {
 	const { argot, sessionManager } = input;
@@ -175,16 +182,19 @@ export function armLaunchArgot(input: LaunchArgotInput): void {
 			const joined = (await input.refreshPrompt()).join("\n\n");
 			const taughtHandles = argot.loaded ? argot.vocabulary().handles.size : 0;
 			const inPrompt = joined.includes(ARGOT_HANDLES_BANNER);
+			const encodes = input.teaches();
 			sessionManager.appendCustomMessageEntry(
 				"argot_taught",
 				inPrompt
 					? `argot: system prompt refreshed, teaching ${taughtHandles} handle${taughtHandles === 1 ? "" : "s"}`
-					: "argot: system prompt refreshed but the handle table is ABSENT; the model was taught no handles",
+					: encodes
+						? "argot: system prompt refreshed but the handle table is ABSENT; the model was taught no handles"
+						: "argot: handles armed for decoding only; the active model is not on argot.encode.models or the context is past the cutoff",
 				false,
-				{ handles: taughtHandles, inPrompt, promptChars: joined.length },
+				{ handles: taughtHandles, inPrompt, encodes, promptChars: joined.length },
 				"agent",
 			);
-			if (!inPrompt) {
+			if (encodes && !inPrompt) {
 				logger.error("argot: refreshed system prompt carries no handle table; session is effectively UNARMED", {
 					cwd: input.cwd,
 					handles: taughtHandles,

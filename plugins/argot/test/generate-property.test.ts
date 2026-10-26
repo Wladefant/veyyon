@@ -13,7 +13,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { HANDLE_NAME_RE, MAX_EXPANSION_BYTES } from "../src/constants.js";
-import { generateDict, generateDictFromRepo, type RepoFile } from "../src/generate.js";
+import { type GeneratedDict, generateDict, generateDictFromRepo, type RepoFile } from "../src/generate.js";
 import { parseDict } from "../src/parse.js";
 
 const SEED = 0x1b873593;
@@ -93,7 +93,7 @@ function randomCorpus(rand: () => number): string[] {
 }
 
 /** Assert every generator guarantee for one result. */
-function assertGuarantees(result: ReturnType<typeof generateDict>, budget: number, caseId: number): void {
+function assertGuarantees(result: GeneratedDict, budget: number, caseId: number): void {
 	// Budget is never exceeded.
 	if (result.dictTokens > budget) {
 		throw new Error(`case ${caseId}: dictTokens ${result.dictTokens} > budget ${budget}`);

@@ -39,8 +39,8 @@ output(*ids, format?="raw", query?=None, offset?=None, limit?=None) → str | di
     Task/agent output by id; one → text/dict, multiple → list.
 tool.<name>(args) → unknown
     Invoke any session tool; `args` = its parameter object.
-completion(prompt, model?="default", system?=None, schema?=None) → str | dict
-    Oneshot, stateless (no history/tools). `model`: "smol" | "default" | "slow". `schema` (JSON-Schema) → parsed structured output.
+completion(prompt, model?=None, system?=None, schema?=None) → str | dict
+    Oneshot, stateless (no history/tools). `model`: omit → completion helper; "default" → session model; else a selector (`provider/id[:level]`). `schema` (JSON-Schema) → parsed structured output.
 {{#if spawns}}
 {{#if hasSpawnDefaultAgent}}agent(prompt, agent?="{{spawnDefaultAgent}}", model?=None, label?=None, schema?=None, handle?=False) → str | dict
     Run an agent → final output. `agent` picks another enabled agent; omit it to use `{{spawnDefaultAgent}}`.{{else}}agent(prompt, agent, model?=None, label?=None, schema?=None, handle?=False) → str | dict

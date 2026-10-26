@@ -9,7 +9,7 @@
   - `packages/coding-agent/src/utils/zip.ts`: the unified ZIP/tar wrapper: parse `archive.ext:entry` selectors and rewrite the archive whole.
   - `packages/coding-agent/src/tools/core/sqlite-reader.ts`: detect SQLite paths and perform row insert/update/delete.
   - `packages/coding-agent/src/tools/fs/conflict-detect.ts`: parse `conflict://` URIs and splice recorded merge-conflict regions.
-  - `packages/coding-agent/src/lsp/index.ts`: format-on-write and diagnostics writethrough.
+  - `packages/coding-agent/src/lsp/writethrough.ts`: format-on-write and diagnostics writethrough.
   - `packages/coding-agent/src/tools/fs/auto-generated-guard.ts`: block overwriting generated files.
   - `packages/coding-agent/src/tools/core/fs-cache-invalidation.ts`: invalidate shared FS scan caches after writes.
   - `packages/coding-agent/src/tools/core/plan-mode-guard.ts`: resolve paths and enforce plan-mode write policy.
@@ -150,7 +150,7 @@ content: ""
 - Subprocesses / native bindings
   - Uses Bun SQLite bindings via `bun:sqlite`.
   - Uses `Bun.Archive` for tar; ZIP read/write is framed in `packages/coding-agent/src/utils/zip.ts` over the `node:zlib` DEFLATE codec.
-  - May talk to configured LSP servers through `packages/coding-agent/src/lsp/index.ts`.
+  - May talk to configured LSP servers through `packages/coding-agent/src/lsp/writethrough.ts`.
 - Session state (transcript, memory, jobs, checkpoints, registries)
   - Invalidates shared filesystem scan cache entries through `invalidateFsScanAfterWrite()`.
   - Enforces plan-mode write restrictions before mutating the target.
@@ -162,7 +162,7 @@ content: ""
 - `WriteTool` itself exposes no byte cap beyond storing `content` in memory and, for archives, rebuilding the archive in memory.
 - Generated-file detection reads at most `CHECK_BYTE_COUNT = 1024` bytes and `HEADER_LINE_LIMIT = 40` header lines from an existing file in `packages/coding-agent/src/tools/fs/auto-generated-guard.ts`.
 - SQLite writes set `PRAGMA busy_timeout = 3000`.
-- LSP writethrough uses a `5_000` ms operation timeout in `runLspWritethrough()` and may schedule a deferred diagnostics fetch with `AbortSignal.timeout(25_000)` in `scheduleDeferredDiagnosticsFetch()`.
+- LSP writethrough uses a `5_000` ms operation timeout in `runLspWritethrough()` and may schedule a deferred diagnostics fetch with a `25_000` ms `scopedTimeoutSignal()` in `scheduleDeferredDiagnosticsFetch()`.
 - Shebang executable handling depends on host filesystem chmod support.
 
 ## Errors

@@ -1,37 +1,64 @@
+/**
+ * WHY: the online hook examples send conversation text to a provider, and each must route it
+ * through the post-credential runtime and the final `onPayload` walk. `qna` and `handoff` also take
+ * over the screen through `ctx.ui.terminal.custom`, and the terminal they take over is the
+ * interactive host's own (`ExtensionUiController.initHooksAndCustomTools`), not a stand-in. A
+ * stand-in that called the factory as `(tui, theme, done)` passed here while the host called it as
+ * `(tui, theme, keybindings, done)`, so both examples treated the keybindings manager as `done` and
+ * never resolved. Driving the host's terminal makes the examples' argument order the host's.
+ *
+ * Not caught here: the terminal's rendering and focus, which the controller's own suites own.
+ */
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import type { Context, Model, StreamOptions } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
+import type { ExtensionUIContext } from "@veyyon/coding-agent/extensibility/extensions/types";
+import { ExtensionUiController } from "@veyyon/coding-agent/modes/terminal/controllers/extension-ui-controller";
+import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import customCompaction from "../examples/hooks/custom-compaction";
 import handoff from "../examples/hooks/handoff";
 import qna from "../examples/hooks/qna";
+import { useTruecolorTheme } from "./helpers/theme-assertions";
+
+useTruecolorTheme("dark");
 
 const model = { provider: "test", id: "hook-model" } as Model;
 
-function customUi(notifications: string[], setEditorText: (text: string) => void = () => {}) {
+/** The terminal an idle interactive session hands its hooks, built by the controller itself. */
+async function interactiveTerminal(): Promise<ExtensionUIContext["terminal"]> {
+	let installed: ExtensionUIContext | undefined;
+	const editor = { getText: () => "", setText: () => {} };
+	const ctx = {
+		editor,
+		editorContainer: { clear() {}, addChild() {} },
+		ui: {
+			requestRender: () => {},
+			requestComponentRender: () => {},
+			requestDirectWrite: () => {},
+			setFocus: () => {},
+		},
+		session: { isStreaming: false, extensionRunner: undefined },
+		clearWorkingLoader: () => false,
+		setToolUIContext: (uiContext: ExtensionUIContext) => {
+			installed = uiContext;
+		},
+		setToolNotifier: () => {},
+	} as unknown as InteractiveModeContext;
+	await new ExtensionUiController(ctx).initHooksAndCustomTools();
+	if (!installed?.terminal) throw new Error("the interactive host installed no terminal");
+	return installed.terminal;
+}
+
+async function customUi(notifications: string[], setEditorText: (text: string) => void = () => {}) {
 	// Screen takeover lives behind `ui.terminal`, which a host offers or omits. These
-	// examples take it over, so the fake stands in for an interactive host and offers it;
-	// a fake without it would send them down their "no terminal" branch and prove nothing
-	// about the provider boundary this suite is here for.
+	// examples take it over, so the suite hands them the interactive host's terminal;
+	// without one they would take their "no terminal" branch and prove nothing about
+	// the provider boundary this suite is here for.
 	return {
 		notify: (message: string) => notifications.push(message),
 		setEditorText,
 		editor: async (_prompt: string, initial: string) => initial,
-		terminal: {
-			custom: async <T>(
-				render: (tui: unknown, theme: unknown, done: (value: T) => void) => { dispose?: () => void },
-			) =>
-				await new Promise<T>(resolve => {
-					let component: { dispose?: () => void } | undefined;
-					component = render(
-						{ requestComponentRender: () => {}, requestDirectWrite: () => {} },
-						{ fg: (_role: string, text: string) => text },
-						value => {
-							component?.dispose?.();
-							resolve(value);
-						},
-					);
-				}),
-		},
+		terminal: await interactiveTerminal(),
 	};
 }
 
@@ -52,7 +79,7 @@ function providerContext(marker: string, replacement: string, notifications: str
 				},
 			},
 			obfuscateProviderText: (text: string) => text.replaceAll(marker, activeReplacement),
-			ui: customUi(notifications),
+			ui: { notify: (message: string) => notifications.push(message) },
 		},
 	};
 }
@@ -112,7 +139,7 @@ describe("published online hook examples", () => {
 		const qnaNotices: string[] = [];
 		let qnaEditor = "";
 		const qnaRuntime = providerContext(marker, "#QNA_CURRENT#", qnaNotices);
-		qnaRuntime.context.ui = customUi(qnaNotices, text => (qnaEditor = text)) as never;
+		qnaRuntime.context.ui = (await customUi(qnaNotices, text => (qnaEditor = text))) as never;
 		await qnaHandler?.("", {
 			...qnaRuntime.context,
 			sessionManager: {
@@ -137,7 +164,7 @@ describe("published online hook examples", () => {
 		const handoffNotices: string[] = [];
 		let handoffEditor = "";
 		const handoffRuntime = providerContext(marker, "#HANDOFF_CURRENT#", handoffNotices);
-		handoffRuntime.context.ui = customUi(handoffNotices, text => (handoffEditor = text)) as never;
+		handoffRuntime.context.ui = (await customUi(handoffNotices, text => (handoffEditor = text))) as never;
 		await handoffHandler?.(marker, {
 			...handoffRuntime.context,
 			sessionManager: {

@@ -241,7 +241,7 @@ export declare function __veyyonInstallTokioRuntime(): void
  * `natives/bridge/bindings/native/index.js` (which derives the name from
  * `package.json#version`).
  */
-export declare function __veyyonNativesV1_5_6(): void
+export declare function __veyyonNativesV1_5_8(): void
 
 /**
  * Apply ast-grep rewrite rules to matching files; honors `dryRun` and returns
@@ -1623,6 +1623,8 @@ export interface ShellRunResult {
   cancelled: boolean
   /** Whether the command timed out before completion. */
   timedOut: boolean
+  outputIncomplete: boolean
+  capturedOutput?: string
   /**
    * When the minimizer rewrote the captured output, this carries the
    * original buffer + telemetry so the session layer can persist it as

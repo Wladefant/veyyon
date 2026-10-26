@@ -8,6 +8,7 @@
  */
 
 import { collapseWhitespace } from "@veyyon/utils";
+import { formatCount } from "@veyyon/utils/format";
 import { replaceTabs } from "@veyyon/utils/tab-width";
 import type {
 	FramedBlockView,
@@ -22,7 +23,6 @@ import { classifyGroupedLines, groupLineIndicesByBlank } from "../core/grouped-f
 import { extractResultText } from "../core/output-notice";
 import {
 	errorSection,
-	formatCount,
 	formatParseErrorsCountLabel,
 	heldBack,
 	PARSE_ERRORS_LIMIT,

@@ -33,7 +33,22 @@ const header = (id: string, cwd: string): FileEntry =>
 const message = (msg: unknown, ts: number): FileEntry =>
 	({ type: "message", id: "e", parentId: null, timestamp: String(ts), message: msg }) as unknown as FileEntry;
 
-const usage = (input: number, output: number, cacheRead: number, cacheWrite: number, totalTokens: number) => ({
+/** The token counts one assistant entry records. */
+interface TokenCounts {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	totalTokens: number;
+}
+
+const usage = (
+	input: number,
+	output: number,
+	cacheRead: number,
+	cacheWrite: number,
+	totalTokens: number,
+): TokenCounts => ({
 	input,
 	output,
 	cacheRead,
@@ -41,7 +56,7 @@ const usage = (input: number, output: number, cacheRead: number, cacheWrite: num
 	totalTokens,
 });
 
-const assistant = (model: string, ts: number, duration: number | undefined, u: ReturnType<typeof usage>): FileEntry =>
+const assistant = (model: string, ts: number, duration: number | undefined, u: TokenCounts): FileEntry =>
 	message({ role: "assistant", model, timestamp: ts, duration, usage: u, content: [] }, ts);
 
 const user = (ts: number): FileEntry => message({ role: "user", timestamp: ts, content: "hi" }, ts);

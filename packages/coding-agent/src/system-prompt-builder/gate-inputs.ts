@@ -204,7 +204,7 @@ export function resolveGateInputs(settings: Settings, context: GateInputContext)
 		eagerTasksAlways: delegation.required,
 		agentNames,
 		includeModelInPrompt: settings.get("includeModelInPrompt"),
-		includeWorkspaceTree: settings.get("includeWorkspaceTree") ?? false,
+		includeWorkspaceTree: settings.get("includeWorkspaceTree"),
 		// `auto` enforces the per-model policy (inline for Gemini, off otherwise).
 		inlineToolDescriptors: shouldInlineToolDescriptors(settings.get("inlineToolDescriptors"), context.model?.id),
 		nativeTools: resolveDialect(settings.get("tools.format"), context.model) === undefined,

@@ -71,7 +71,7 @@ export interface AdvisorConfigDeps {
 	settings: Settings;
 	scopedModels: ReadonlyArray<{ model: Model; thinkingLevel?: ConfiguredThinkingLevel }>;
 	availableToolNames: string[];
-	/** Formatted advisor-role model shown on the seeded default row (e.g. "anthropic/claude-..."). */
+	/** Formatted advisor helper model shown on the seeded default row (e.g. "anthropic/claude-..."). */
 	defaultModelLabel?: string;
 }
 
@@ -284,7 +284,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 	}
 
 	#advisorPreview(advisor: AdvisorConfig, bodyWidth: number): string[] {
-		const model = advisor.model?.trim() || this.#defaultModelLabel || "advisor role default";
+		const model = advisor.model?.trim() || this.#defaultModelLabel || "advisor helper default";
 		const tools = formatAdvisorTools(advisor.tools, "no tools");
 		const lines = [
 			theme.bold(advisor.name || "(unnamed)"),
@@ -318,7 +318,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 	}
 
 	#advisorSummary(advisor: AdvisorConfig): string {
-		const model = advisor.model?.trim() || this.#defaultModelLabel || "advisor role default";
+		const model = advisor.model?.trim() || this.#defaultModelLabel || "advisor helper default";
 		const tools = formatAdvisorTools(advisor.tools, "no tools");
 		return `${model} · ${tools}`;
 	}
@@ -406,7 +406,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			this.#showList();
 			return;
 		}
-		const modelDescription = advisor.model?.trim() || this.#defaultModelLabel || "advisor role default";
+		const modelDescription = advisor.model?.trim() || this.#defaultModelLabel || "advisor helper default";
 		const toolsDescription = formatAdvisorTools(advisor.tools, "no tools");
 		const items: SelectItem[] = [
 			{ value: "name", label: "Name", description: advisor.name },
@@ -505,7 +505,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const items = buildBrowserItems(models);
 		sortModelItems(items, { mruOrder });
 
-		const picker = new ModelBrowser(this.#settings, {});
+		const picker = new ModelBrowser({});
 		picker.setMruOrder(mruOrder);
 		picker.setPerfStats(storage?.getModelPerf() ?? new Map());
 		picker.setItems(items);

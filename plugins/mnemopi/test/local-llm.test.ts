@@ -3,17 +3,15 @@ import type { FetchImpl } from "@veyyon/ai";
 import { ProviderHttpError } from "@veyyon/ai/error";
 import { createMockModel, registerMockApi } from "@veyyon/ai/providers/mock";
 import { CallableLlmBackend, resetHostLlmBackendForTests, setHostLlmBackend } from "@veyyon/mnemopi/core/llm-backends";
+import { callRemoteLlm, complete, summarizeMemories } from "@veyyon/mnemopi/core/local-llm";
 import {
 	buildHostPrompt,
 	buildPrompt,
-	callRemoteLlm,
 	chunkMemoriesByBudget,
 	cleanOutput,
-	complete,
 	configuredLlmWillHandleCall,
 	llmAvailable,
-	summarizeMemories,
-} from "@veyyon/mnemopi/core/local-llm";
+} from "@veyyon/mnemopi/core/local-llm-config";
 import { Mnemopi } from "@veyyon/mnemopi/core/memory";
 import { withMnemopiRuntimeOptions } from "@veyyon/mnemopi/core/runtime-options";
 

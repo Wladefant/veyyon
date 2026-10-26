@@ -3,7 +3,7 @@ import * as AIError from "../../error";
 import { clearGitLabDuoDirectAccessCache } from "../../providers/gitlab-duo";
 import type { FetchImpl } from "../../types";
 import { DEFAULT_CALLBACK_PATH, OAuthCallbackFlow, type OAuthCallbackFlowOptions } from "./callback-server";
-import { type GitLabTokenResponse, mapGitLabTokenResponse } from "./gitlab-token";
+import { mapGitLabTokenResponse } from "./gitlab-token";
 import { generatePKCE, type PKCEPair } from "./pkce";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "./types";
 
@@ -140,7 +140,7 @@ class GitLabDuoOAuthFlow extends OAuthCallbackFlow {
 		}
 
 		clearGitLabDuoDirectAccessCache();
-		return mapGitLabTokenResponse((await response.json()) as GitLabTokenResponse, "gitlab-duo");
+		return mapGitLabTokenResponse(await response.json(), "gitlab-duo");
 	}
 }
 
@@ -152,7 +152,10 @@ export async function loginGitLabDuo(callbacks: OAuthLoginCallbacks): Promise<OA
 	return flow.login();
 }
 
-export async function refreshGitLabDuoToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
+export async function refreshGitLabDuoToken(
+	credentials: OAuthCredentials,
+	signal?: AbortSignal,
+): Promise<OAuthCredentials> {
 	const response = await fetch(`${GITLAB_SAAS_URL}/oauth/token`, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -161,6 +164,7 @@ export async function refreshGitLabDuoToken(credentials: OAuthCredentials): Prom
 			grant_type: "refresh_token",
 			refresh_token: credentials.refresh,
 		}).toString(),
+		signal,
 	});
 
 	if (!response.ok) {
@@ -173,5 +177,5 @@ export async function refreshGitLabDuoToken(credentials: OAuthCredentials): Prom
 	}
 
 	clearGitLabDuoDirectAccessCache();
-	return mapGitLabTokenResponse((await response.json()) as GitLabTokenResponse, "gitlab-duo");
+	return mapGitLabTokenResponse(await response.json(), "gitlab-duo");
 }

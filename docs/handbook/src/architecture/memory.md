@@ -103,14 +103,7 @@ Memory extraction and consolidation behavior is driven by static prompt files in
 
 ### Model selection
 
-Memory piggybacks on the model role system.
-
-| Phase                   | Role                                                                | Purpose                          |
-| ----------------------- | ------------------------------------------------------------------- | -------------------------------- |
-| Phase 1 (extraction)    | `default`                                                           | Per-session knowledge extraction |
-| Phase 2 (consolidation) | `smol` (falls back to `default`, then current/first registry model) | Cross-session synthesis          |
-
-If the requested memory role is not configured, memory model resolution falls back to the `default` role, then the active session model, then the first model in the registry.
+Both phases, per-session extraction and cross-session consolidation, run the `memory` helper (`agent.helpers.memory`). Unset, they run the session's model. A configured chain that matches no model skips the pass and logs the setting.
 
 ## Configuration
 

@@ -10,10 +10,10 @@ export const openaiCodexDeviceProvider = {
 		return loginOpenAICodexDevice(cb);
 	},
 	credential: "oauth",
-	refreshToken: async (credentials: OAuthCredentials) => {
+	refreshToken: async (credentials: OAuthCredentials, signal?: AbortSignal) => {
 		// Lazy import: keep heavy OAuth flow modules out of the eager registry graph.
 		const { refreshOpenAICodexToken } = await import("./oauth/openai-codex");
-		return refreshOpenAICodexToken(credentials.refresh);
+		return refreshOpenAICodexToken(credentials.refresh, signal);
 	},
 	storeCredentialsAs: "openai-codex",
 } as const satisfies ProviderDefinition;

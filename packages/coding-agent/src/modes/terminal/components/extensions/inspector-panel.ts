@@ -11,7 +11,7 @@ import { truncateToWidth } from "@veyyon/utils/width";
 import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
 import type { ExtensionRow, ExtensionState } from "../../../../extensibility/extension-state/types";
 import type { ThemeColor } from "../../../../theme/color";
-import { theme } from "../../../../theme/theme";
+import { theme } from "../../../../theme/theme-binding";
 import { PREVIEW_LIMITS, replaceTabs, shortenPath, TRUNCATE_LENGTHS } from "../../../../tools/core/render-utils";
 
 /** Structural views over extension payloads whose concrete shape varies by source (zod tool, wire tool, MCP config, skill). Each renderer narrows `unknown` once to the optional fields it reads. */

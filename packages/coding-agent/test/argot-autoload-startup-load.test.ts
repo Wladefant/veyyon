@@ -177,6 +177,7 @@ describe("the session's startup arm honours the setting", () => {
 			cwd: "/repo",
 			sessionManager: SessionManager.inMemory(),
 			refreshPrompt: async () => [],
+			teaches: () => true,
 		});
 		return arm.mock.calls.map(([opts]) => ({ argot: opts.argot, cwd: opts.cwd, tokenBudget: opts.tokenBudget }));
 	}

@@ -8,12 +8,9 @@ import { StringDecoder } from "node:string_decoder";
 export interface TerminalSocket extends EventEmitter {
 	readonly destroyed: boolean;
 	readonly writableLength: number;
-	setEncoding(encoding: BufferEncoding | string): this;
-	write(
-		chunk: string | Uint8Array,
-		encodingOrCb?: BufferEncoding | ((err?: Error) => void),
-		cb?: (err?: Error) => void,
-	): boolean;
+	setEncoding(encoding: BufferEncoding): this;
+	write(chunk: string | Uint8Array, cb?: (err?: Error | null) => void): boolean;
+	write(chunk: string | Uint8Array, encoding?: BufferEncoding, cb?: (err?: Error | null) => void): boolean;
 	destroy(error?: Error): this;
 	on(event: "data", listener: (chunk: string | Buffer) => void): this;
 	on(event: "error", listener: (err: Error) => void): this;
@@ -49,12 +46,12 @@ export class VirtualTerminalSocket extends EventEmitter implements TerminalSocke
 	private _destroyed = false;
 	private _writableLength = 0;
 	private _decoder?: StringDecoder;
-	private readonly _writeFn: (clientId: number, base64: string, cb?: (err?: Error) => void) => boolean;
+	private readonly _writeFn: (clientId: number, base64: string, cb?: (err?: Error | null) => void) => boolean;
 	private readonly _destroyFn: (clientId: number) => void;
 
 	constructor(
 		clientId: number,
-		writeFn: (clientId: number, base64: string, cb?: (err?: Error) => void) => boolean,
+		writeFn: (clientId: number, base64: string, cb?: (err?: Error | null) => void) => boolean,
 		destroyFn: (clientId: number) => void,
 	) {
 		super();
@@ -71,15 +68,15 @@ export class VirtualTerminalSocket extends EventEmitter implements TerminalSocke
 		return this._destroyed ? 0 : this._writableLength;
 	}
 
-	setEncoding(encoding: BufferEncoding | string): this {
-		this._decoder = new StringDecoder(encoding as BufferEncoding);
+	setEncoding(encoding: BufferEncoding): this {
+		this._decoder = new StringDecoder(encoding);
 		return this;
 	}
 
 	write(
 		chunk: string | Uint8Array,
-		encodingOrCb?: BufferEncoding | ((err?: Error) => void),
-		cb?: (err?: Error) => void,
+		encodingOrCb?: BufferEncoding | ((err?: Error | null) => void),
+		cb?: (err?: Error | null) => void,
 	): boolean {
 		if (this._destroyed) {
 			const callback = typeof encodingOrCb === "function" ? encodingOrCb : cb;
@@ -88,7 +85,7 @@ export class VirtualTerminalSocket extends EventEmitter implements TerminalSocke
 		}
 
 		let encoding: BufferEncoding = "utf8";
-		let callback: ((err?: Error) => void) | undefined;
+		let callback = cb;
 		if (typeof encodingOrCb === "function") {
 			callback = encodingOrCb;
 		} else if (typeof encodingOrCb === "string") {
@@ -197,24 +194,20 @@ public class VeyyonTerminalPipeBroker {
         if (identity == null) {
             throw new InvalidOperationException("Failed to resolve current Windows user SID.");
         }
-        var systemSid = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
 
+        // WHY: issue 580. The owner and LocalSystem are the only identities allowed to reach the control channel.
         var security = new PipeSecurity();
         security.SetOwner(identity);
         security.SetAccessRuleProtection(true, false);
 
-        security.AddAccessRule(new PipeAccessRule(
-            identity,
-            PipeAccessRights.FullControl,
-            AccessControlType.Allow
-        ));
-
-        security.AddAccessRule(new PipeAccessRule(
-            systemSid,
-            PipeAccessRights.FullControl,
-            AccessControlType.Allow
-        ));
-
+        var system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+        foreach (var principal in new[] { identity, system }) {
+            security.AddAccessRule(new PipeAccessRule(
+                principal,
+                PipeAccessRights.FullControl,
+                AccessControlType.Allow
+            ));
+        }
         return security;
     }
 
@@ -487,7 +480,7 @@ export async function createWindowsPipeTransport(
 		}
 	}, readinessTimeoutMs);
 
-	const writeToBroker = (cid: number, base64: string, cb?: (err?: Error) => void): boolean => {
+	const writeToBroker = (cid: number, base64: string, cb?: (err?: Error | null) => void): boolean => {
 		if (!child.stdin || child.stdin.destroyed) {
 			cb?.(new Error("Broker stdin is closed"));
 			return false;
@@ -670,6 +663,16 @@ export async function createWindowsPipeTransport(
 	return server;
 }
 
+// WHY: issue 580. chmod follows symlinks and would change the mode of a socket another uid
+// created. lstat does not follow links, so a symlink or a foreign-owned path is refused here.
+async function assertOwnedPosixSocket(endpoint: string): Promise<void> {
+	const processUid = process.getuid?.();
+	const stat = await fs.lstat(endpoint);
+	if (processUid === undefined || !stat.isSocket() || stat.uid !== processUid) {
+		throw new Error(`Control socket ${endpoint} is not a socket owned by the current user`);
+	}
+}
+
 export async function createPosixSocketServer(
 	endpoint: string,
 	onConnection: (socket: TerminalSocket) => void,
@@ -685,6 +688,7 @@ export async function createPosixSocketServer(
 	await readyPromise;
 
 	try {
+		await assertOwnedPosixSocket(endpoint);
 		await fs.chmod(endpoint, 0o600);
 	} catch (err) {
 		server.close();

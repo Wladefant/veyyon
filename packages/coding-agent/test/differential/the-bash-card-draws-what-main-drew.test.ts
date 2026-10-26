@@ -48,7 +48,7 @@ import {
 	formatTruncationMetaNotice,
 	type OutputMeta,
 	type TruncationMeta,
-} from "@veyyon/coding-agent/tools/core/output-meta";
+} from "@veyyon/coding-agent/tools/core/output-notice";
 import { previewWindowRows } from "@veyyon/coding-agent/tools/core/render-utils";
 import { BASH_DEFAULT_PREVIEW_LINES, type BashToolDetails } from "@veyyon/coding-agent/tools/shell/bash";
 import { type BashViewArgs, type BashViewResult, bashToolView } from "@veyyon/coding-agent/tools/shell/bash-view";

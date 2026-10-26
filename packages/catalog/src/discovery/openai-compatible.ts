@@ -1,3 +1,4 @@
+import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { normalizeBaseUrl } from "@veyyon/utils/url";
 import type { Api, FetchImpl, ModelSpec, Provider } from "../types";
@@ -5,27 +6,6 @@ import { discoveryFetch, toArray, toFields } from "../utils";
 import type { DiscoveryHooks } from "./failure";
 
 const MODELS_PATH = "/models";
-
-/**
- * Uses a cancellable timer rather than the native abort-timeout helper so
- * successful fast discovery requests do not leave armed timeout signals for
- * concurrent GC to trip over later.
- */
-async function withOpenAICompatibleDiscoveryTimeout<T>(
-	timeoutMs: number,
-	run: (signal: AbortSignal) => Promise<T>,
-): Promise<T> {
-	const controller = new AbortController();
-	const timer = setTimeout(
-		() => controller.abort(new DOMException("The operation timed out.", "TimeoutError")),
-		timeoutMs,
-	);
-	try {
-		return await run(controller.signal);
-	} finally {
-		clearTimeout(timer);
-	}
-}
 
 /**
  * Minimal OpenAI-style model entry shape consumed by discovery.
@@ -202,7 +182,7 @@ export async function fetchOpenAICompatibleModels<TApi extends Api>(
 		options.signal !== undefined
 			? await fetchPayload(options.signal)
 			: options.timeoutMs !== undefined
-				? await withOpenAICompatibleDiscoveryTimeout(options.timeoutMs, fetchPayload)
+				? await withScopedTimeoutSignal(options.timeoutMs, fetchPayload)
 				: await fetchPayload();
 	if (payload === null) {
 		return null;

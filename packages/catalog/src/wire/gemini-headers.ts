@@ -27,7 +27,9 @@ export const ANTIGRAVITY_SYSTEM_INSTRUCTION =
  * parse graph.
  */
 export let getAntigravityUserAgent = () => {
-	const DEFAULT_ANTIGRAVITY_VERSION = "2.23.0";
+// The endpoint lists Gemini 4 Argon and the per-tier Gemini 3.8 Flash deployments only to a
+	// client reporting 3.0.0 or later; 2.9.x and earlier receive neither.
+	const DEFAULT_ANTIGRAVITY_VERSION = "3.0.0";
 	const version = process.env.VEYYON_AI_ANTIGRAVITY_VERSION || DEFAULT_ANTIGRAVITY_VERSION;
 	// Map Node.js platform/arch to Antigravity's expected format.
 	// Verified against Antigravity source: _qn() and wqn() in main.js.
