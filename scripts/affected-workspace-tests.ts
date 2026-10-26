@@ -864,10 +864,12 @@ export function buildWorkspaceGraphWithImports(
 			true,
 			scriptKind,
 		);
-		if (parsedSource.parseDiagnostics.length > 0) {
-			fallbackReason ??= `could not parse import syntax in ${sourcePath}`;
-			continue;
-		}
+		if (
+			!("parseDiagnostics" in parsedSource) ||
+			!Array.isArray(parsedSource.parseDiagnostics) ||
+			parsedSource.parseDiagnostics.length > 0
+		) { fallbackReason ??= `could not parse import syntax in ${sourcePath}`;
+			continue; }
 		const scanned = moduleReferences(parsedSource);
 		if (scanned.fallbackReason !== undefined) fallbackReason ??= scanned.fallbackReason;
 		const dependencies = addedDependencies.get(sourceOwner) ?? new Set<string>();
