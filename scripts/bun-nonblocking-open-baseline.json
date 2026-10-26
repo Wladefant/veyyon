@@ -69,7 +69,6 @@
 	"packages/coding-agent/src/session/agent-session.ts": 1,
 	"packages/coding-agent/src/session/runtime/session-handoff.ts": 1,
 	"packages/coding-agent/src/session/streaming-output.ts": 1,
-	"packages/coding-agent/src/slash-commands/helpers/todo.ts": 2,
 	"packages/coding-agent/src/speech/stt/recorder.ts": 1,
 	"packages/coding-agent/src/speech/stt/transcriber.ts": 1,
 	"packages/coding-agent/src/speech/tts/runtime.ts": 1,
