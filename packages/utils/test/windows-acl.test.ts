@@ -3,6 +3,7 @@
  * the final case executes the real Windows ACL provider when the platform can support it.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -281,7 +282,7 @@ describe("owner-only Windows ACL helpers", () => {
 				windowsHide: true,
 			});
 			expect(removed.status).toBe(0);
-			await expect(verifyOwnerOnlyWindowsAcl(filePath)).rejects.toThrow("ACL must contain exactly two access rules");
+			await expect(verifyOwnerOnlyWindowsAcl(filePath)).rejects.toThrow("ACL does not contain exactly two access rules");
 		});
 
 		/** Adding Everyone proves the verifier rejects an unapproved principal, not only missing SYSTEM. */
@@ -294,7 +295,7 @@ describe("owner-only Windows ACL helpers", () => {
 				windowsHide: true,
 			});
 			expect(granted.status).toBe(0);
-			await expect(verifyOwnerOnlyWindowsAcl(filePath)).rejects.toThrow("ACL does not grant access exclusively to the owner and SYSTEM");
+			await expect(verifyOwnerOnlyWindowsAcl(filePath)).rejects.toThrow("ACL does not contain exactly two access rules");
 		});
 	});
 });

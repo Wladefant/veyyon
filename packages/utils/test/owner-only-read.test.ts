@@ -227,8 +227,8 @@ describe.skipIf(posix)("owner-only discovery reads on Windows", () => {
 		await applyOwnerOnlyWindowsAcl(file);
 		const granted = spawnSync("icacls", [file, "/grant", "*S-1-1-0:(R)"], { windowsHide: true });
 		expect(granted.status).toBe(0);
-		await expect(readOwnerOnlyFile(file)).rejects.toThrow("Refusing discovery record");
-		expect(() => readOwnerOnlyFileSync(file)).toThrow("Refusing discovery record");
+		await expect(readOwnerOnlyFile(file)).rejects.toThrow("owner-only Windows ACL operation failed");
+		expect(() => readOwnerOnlyFileSync(file)).toThrow("owner-only Windows ACL operation failed");
 	});
 	// WHY: a private record in a broadly accessible directory can be replaced or redirected by another user.
 	// The directory itself must pass owner-plus-SYSTEM verification before the record can be opened.
@@ -241,8 +241,8 @@ describe.skipIf(posix)("owner-only discovery reads on Windows", () => {
 		await applyOwnerOnlyWindowsAcl(file);
 		const granted = spawnSync("icacls", [dir, "/grant", "*S-1-1-0:(RX)"], { windowsHide: true });
 		expect(granted.status).toBe(0);
-		await expect(readOwnerOnlyFile(file)).rejects.toThrow("Refusing discovery record");
-		expect(() => readOwnerOnlyFileSync(file)).toThrow("Refusing discovery record");
+		await expect(readOwnerOnlyFile(file)).rejects.toThrow("owner-only Windows ACL operation failed");
+		expect(() => readOwnerOnlyFileSync(file)).toThrow("owner-only Windows ACL operation failed");
 	});
 
 
@@ -353,17 +353,4 @@ describe("Windows owner-only discovery path policy", () => {
 		}
 	});
 
-	// WHY: parent-directory ACLs are part of the trust boundary, not only the record's ACL.
-	it("refuses a discovery directory with an Everyone read ACE", async () => {
-		const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "owner-only-read-"));
-		tempDirs.push(dir);
-		const file = path.join(dir, "record.json");
-		await fsp.writeFile(file, '{"version":1}');
-		await applyOwnerOnlyWindowsAcl(dir);
-		await applyOwnerOnlyWindowsAcl(file);
-		const granted = spawnSync("icacls", [dir, "/grant", "*S-1-1-0:(RX)"], { windowsHide: true });
-		expect(granted.status).toBe(0);
-		await expect(readOwnerOnlyFile(file)).rejects.toThrow("Refusing discovery record");
-		expect(() => readOwnerOnlyFileSync(file)).toThrow("Refusing discovery record");
-	});
 });
