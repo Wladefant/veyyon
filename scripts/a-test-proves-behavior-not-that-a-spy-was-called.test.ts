@@ -275,7 +275,7 @@ const GRANDFATHERED: Readonly<Record<string, number>> = {
 	"packages/coding-agent/test/modes/terminal/controllers/event-controller-toolcall-finalize.test.ts": 3,
 	"packages/coding-agent/test/modes/terminal/controllers/handoff-command.test.ts": 4,
 	"packages/coding-agent/test/modes/terminal/controllers/input-controller-tool-expansion.test.ts": 5,
-	"packages/coding-agent/test/modes/terminal/controllers/move-command.test.ts": 7,
+	"packages/coding-agent/test/modes/terminal/controllers/move-command.test.ts": 6,
 	"packages/coding-agent/test/modes/terminal/controllers/omfg-controller.test.ts": 7,
 	"packages/coding-agent/test/modes/terminal/controllers/selector-controller-login.test.ts": 7,
 	"packages/coding-agent/test/modes/terminal/controllers/selector-controller-logout.test.ts": 1,
