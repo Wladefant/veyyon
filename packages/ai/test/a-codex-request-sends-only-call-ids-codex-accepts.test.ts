@@ -67,10 +67,28 @@ describe("Codex call_id on the wire", () => {
 		expect(ids[1]).toBe(ids[0]);
 	});
 
-	it("leaves a valid call_id unchanged", () => {
-		const valid = `call_${"a".repeat(59)}`;
-		expect(sanitizeCodexCallId(valid)).toBe(valid);
-		expect(sanitizeCodexCallId("toolu_01AbC-xyz")).toBe("toolu_01AbC-xyz");
+	it.each([`call_${"a".repeat(59)}`, "toolu_01AbC-xyz", "call_abc_", "_", "-_"])(
+		"leaves valid call_id %j unchanged through both request shapers",
+		async valid => {
+			const model = createCodexModel("gpt-5.1-codex");
+			const body = await transformRequestBody({ model: model.id, input: pairedInput(valid) }, model);
+			expect(callIds(body.input)).toEqual([valid, valid]);
+			applyCodexResponsesLiteShape(body);
+			expect(callIds(body.input)).toEqual([valid, valid]);
+		},
+	);
+
+	it.each(FOREIGN_CALL_IDS)("keeps repaired call_id %j stable through repeated shaping", async callId => {
+		const model = createCodexModel("gpt-5.1-codex");
+		const body = await transformRequestBody({ model: model.id, input: pairedInput(callId) }, model);
+		const repairedIds = callIds(body.input);
+		expect(repairedIds).toHaveLength(2);
+		expect(repairedIds[0]).toMatch(ACCEPTED_CALL_ID);
+		expect(repairedIds[1]).toBe(repairedIds[0]);
+		applyCodexResponsesLiteShape(body);
+		expect(callIds(body.input)).toEqual(repairedIds);
+		applyCodexResponsesLiteShape(body);
+		expect(callIds(body.input)).toEqual(repairedIds);
 	});
 
 	it("keeps distinct over-long ids distinct", () => {
