@@ -103,6 +103,35 @@ export function applyPermissionsCommand(
 	};
 }
 
+/**
+ * Apply one `/fast` invocation, shared by the text and TUI surfaces so both accept exactly the same
+ * words and report the same sentence.
+ */
+export function applyFastCommand(rawArgs: string, session: AgentSession): { ok: boolean; message: string } {
+	const arg = rawArgs.trim().toLowerCase();
+	if (!arg || arg === "toggle") {
+		const enabled = session.toggleFastMode();
+		return { ok: true, message: `${PRIORITY_TIER_COMMAND_LABEL} ${enabled ? "enabled" : "disabled"}.` };
+	}
+	if (arg === "on") {
+		const supported = session.setFastMode(true);
+		return {
+			ok: true,
+			message: supported
+				? `${PRIORITY_TIER_COMMAND_LABEL} enabled.`
+				: `${PRIORITY_TIER_COMMAND_LABEL} is unavailable for the current model.`,
+		};
+	}
+	if (arg === "off") {
+		session.setFastMode(false);
+		return { ok: true, message: `${PRIORITY_TIER_COMMAND_LABEL} disabled.` };
+	}
+	if (arg === "status") {
+		return { ok: true, message: `${PRIORITY_TIER_COMMAND_LABEL} is ${formatFastModeStatus(session)}.` };
+	}
+	return { ok: false, message: "Usage: /fast [on|off|status]" };
+}
+
 export const AUTOCOMPLETE_DETAIL_LIMIT = 48;
 
 /**
@@ -199,66 +228,16 @@ export const MODES_HANDLERS = {
 		getTuiAutocompleteDescription: runtime =>
 			`Toggle the ${PRIORITY_TIER_LABEL} tier · ${formatFastModeStatus(runtime.ctx.session)}`,
 		handle: async (command, runtime) => {
-			const arg = command.args.toLowerCase();
-			if (!arg || arg === "toggle") {
-				const enabled = runtime.session.toggleFastMode();
-				await runtime.output(`${PRIORITY_TIER_COMMAND_LABEL} ${enabled ? "enabled" : "disabled"}.`);
-				return commandConsumed();
-			}
-			if (arg === "on") {
-				const supported = runtime.session.setFastMode(true);
-				await runtime.output(
-					supported
-						? `${PRIORITY_TIER_COMMAND_LABEL} enabled.`
-						: `${PRIORITY_TIER_COMMAND_LABEL} is unavailable for the current model.`,
-				);
-				return commandConsumed();
-			}
-			if (arg === "off") {
-				runtime.session.setFastMode(false);
-				await runtime.output(`${PRIORITY_TIER_COMMAND_LABEL} disabled.`);
-				return commandConsumed();
-			}
-			if (arg === "status") {
-				await runtime.output(`${PRIORITY_TIER_COMMAND_LABEL} is ${formatFastModeStatus(runtime.session)}.`);
-				return commandConsumed();
-			}
-			return usage("Usage: /fast [on|off|status]", runtime);
+			const result = applyFastCommand(command.args, runtime.session);
+			if (!result.ok) return usage(result.message, runtime);
+			await runtime.output(result.message);
+			return commandConsumed();
 		},
 		handleTui: (command, runtime) => {
-			const arg = command.args.trim().toLowerCase();
-			if (!arg || arg === "toggle") {
-				const enabled = runtime.ctx.session.toggleFastMode();
-				refreshStatusLine(runtime.ctx);
-				runtime.ctx.showStatus(`${PRIORITY_TIER_COMMAND_LABEL} ${enabled ? "enabled" : "disabled"}.`);
-				runtime.ctx.editor.setText("");
-				return;
-			}
-			if (arg === "on") {
-				const supported = runtime.ctx.session.setFastMode(true);
-				refreshStatusLine(runtime.ctx);
-				runtime.ctx.showStatus(
-					supported
-						? `${PRIORITY_TIER_COMMAND_LABEL} enabled.`
-						: `${PRIORITY_TIER_COMMAND_LABEL} is unavailable for the current model.`,
-				);
-				runtime.ctx.editor.setText("");
-				return;
-			}
-			if (arg === "off") {
-				runtime.ctx.session.setFastMode(false);
-				refreshStatusLine(runtime.ctx);
-				runtime.ctx.showStatus(`${PRIORITY_TIER_COMMAND_LABEL} disabled.`);
-				runtime.ctx.editor.setText("");
-				return;
-			}
-			if (arg === "status") {
-				runtime.ctx.showStatus(`${PRIORITY_TIER_COMMAND_LABEL} is ${formatFastModeStatus(runtime.ctx.session)}.`);
-				runtime.ctx.editor.setText("");
-				return;
-			}
-			runtime.ctx.showStatus("Usage: /fast [on|off|status]");
 			runtime.ctx.editor.setText("");
+			const result = applyFastCommand(command.args, runtime.ctx.session);
+			refreshStatusLine(runtime.ctx);
+			runtime.ctx.showStatus(result.message);
 		},
 	},
 	permissions: {

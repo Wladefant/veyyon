@@ -16,6 +16,7 @@
 - `veyyon ttsr scan` compiles rule conditions, globs and scopes with the functions a session uses instead of a copy of them; no user-facing change.
 - The secret vault and its key file remove a stale entry through one quarantine-and-recheck helper instead of two copies of it; no user-facing change.
 - The Mnemopi stats command resolves a bank's database path through the function a session uses instead of a copy of it; no user-facing change.
+- The terminal reports a `/browser` restart that fails after the mode is saved as `Browser mode set to <mode>, but restart failed: …`, the sentence ACP prints, and shows the `/browser` usage line as a warning.
 - Cursor and GitLab Duo tool results, GitLab Duo goal prompts and the Antigravity and Google Cloud token refreshes each run through one shared implementation; no user-facing change.
 - `sgrEnd` is exported from `@veyyon/utils/ansi` and is the single definition `wrap` and `width` use; no user-facing change.
 
@@ -47,6 +48,7 @@
 - In print mode, a slash command after `/move` or `/cwd` resolves relative paths against the session's current directory instead of the launch directory.
 - `/export` and RPC `export_html` resolve the output path against the session's working directory and report the absolute path written, so an ACP session no longer exports into the server's launch directory.
 - `/export` keeps a path that contains spaces whole and strips outer double quotes in the terminal, ACP and print mode, as `/move` and `/cwd` do.
+- `/fast` and `/browser` accept an argument followed by whitespace outside the terminal, as the terminal does, instead of printing the usage line.
 - A required tool call under an in-band tool dialect is asked for in the conversation text instead of being sent as a native `tool_choice` the dialect never reads.
 - Shake and duplicate elision leave a tool result, block or truncated middle in place when its marker is not smaller than it, and size a captioned image result by its caption, so `/shake` no longer reports a kept image as freed tokens.
 - A required tool call on a request that cannot force it (a model or host that rejects a forced `tool_choice`, a host without `tool_choice`, a remembered rejection, Ollama, Cursor, Devin, GitLab Duo, and Claude on Antigravity) is asked for in the request text, instead of the tool only being offered.

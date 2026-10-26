@@ -10,6 +10,7 @@
 - `veyyon ttsr scan` compiles rule conditions, globs and scopes with the functions a session uses instead of a copy of them; no user-facing change.
 - The secret vault and its key file remove a stale entry through one quarantine-and-recheck helper instead of two copies of it; no user-facing change.
 - The Mnemopi stats command resolves a bank's database path through the function a session uses instead of a copy of it; no user-facing change.
+- The terminal reports a `/browser` restart that fails after the mode is saved as `Browser mode set to <mode>, but restart failed: …`, the sentence ACP prints, and shows the `/browser` usage line as a warning.
 
 ### Fixed
 
@@ -39,6 +40,7 @@
 - In print mode, a slash command after `/move` or `/cwd` resolves relative paths against the session's current directory instead of the launch directory.
 - `/export` and RPC `export_html` resolve the output path against the session's working directory and report the absolute path written, so an ACP session no longer exports into the server's launch directory.
 - `/export` keeps a path that contains spaces whole and strips outer double quotes in the terminal, ACP and print mode, as `/move` and `/cwd` do.
+- `/fast` and `/browser` accept an argument followed by whitespace outside the terminal, as the terminal does, instead of printing the usage line.
 
 ## [1.5.10] - 2026-10-25
 
