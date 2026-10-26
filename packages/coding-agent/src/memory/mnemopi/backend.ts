@@ -1,4 +1,3 @@
-import * as path from "node:path";
 import type { ApiKeyResolver, FetchImpl } from "@veyyon/ai";
 import { completeSimple } from "@veyyon/ai/stream";
 import "@veyyon/ai/usage/defaults";
@@ -41,6 +40,7 @@ import {
 	MnemopiSessionState,
 	requireMnemopi,
 	requireMnemopiCore,
+	resolveBankDbPath,
 	setMnemopiSessionState,
 } from "./state";
 
@@ -323,13 +323,6 @@ function createStatsMemory(config: MnemopiBackendConfig, bank: string): Mnemopi 
 		...providerOptions,
 		reconcile: false,
 	} as ConstructorParameters<typeof Mnemopi>[0]);
-}
-
-function resolveBankDbPath(config: MnemopiBackendConfig, bank: string): string {
-	const sharedBank = config.globalBank ?? config.baseBank ?? "default";
-	if (bank === sharedBank) return config.dbPath;
-	const { BankManager } = requireMnemopiCore();
-	return new BankManager(path.dirname(config.dbPath)).getBankDbPath(bank);
 }
 
 function renderMnemopiStats(targets: readonly MnemopiScopedMemory[]): string {
