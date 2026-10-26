@@ -645,6 +645,41 @@ describe("only admitted users can use their own secrets", () => {
 		},
 	);
 
+	test.each(["userId", "clientId", "deviceId"] as const)(
+		"an in-place %s change before the caller resumes refuses authorization and discovery",
+		async (field) => {
+			for (const operation of ["authorize", "discover"] as const) {
+				const fx = await fixture();
+				const net = fakeNetwork([signer.publicJwk]);
+				let clockReads = 0;
+				let changed = false;
+				const admission = createAdmission(fx.policy, {
+					issuer: ISSUER,
+					audience: AUDIENCE,
+					secrets: fx.secrets,
+					fetch: net.fetch,
+					now: () => {
+						if (++clockReads === 2) {
+							queueMicrotask(() => {
+								fx.deviceA[field] = field === "userId" ? fx.userB.userId : `rotated-${fx.deviceA[field]}`;
+								changed = true;
+							});
+						}
+						return NOW;
+					},
+				});
+				const token = await signJwt(signer, claimsFor({}));
+				const request = requestWith(accessHeaders(token, CLIENT_A, SECRET_A));
+				if (operation === "authorize") {
+					expect(await admission.authorize(request, "search:public")).toBeNull();
+				} else {
+					expect(await admission.discover(request)).toEqual([]);
+				}
+				expect(changed).toBe(true);
+			}
+		},
+	);
+
 	test("a device re-enrolled with a new secret while its key is being fetched is refused", async () => {
 		const h = await start(signer);
 		const token = await signJwt(signer, claimsFor({}));
