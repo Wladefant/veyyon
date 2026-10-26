@@ -375,17 +375,19 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 			"scripts/check-doc-links.test.ts",
 			"scripts/check-doc-paths.test.ts",
 			"scripts/first-party-docs-are-indexed.test.ts",
+			"scripts/a-documented-provider-default-is-the-descriptor-default.test.ts",
 		]);
 		for (const directory of currentGraph.nodes.keys()) {
 			const asset = `${directory}/README.md`;
-			const expected = reverseDependencyClosure(currentGraph, [directory]);
+			const full = fullTriggerReason(asset) !== undefined;
+			const expected = full ? [...currentGraph.nodes.keys()].sort() : reverseDependencyClosure(currentGraph, [directory]);
 			const selection = selectAffectedWorkspaceMembers(
 				[{ status: "M", paths: [asset] }],
 				currentGraph,
 				currentGraph,
 			);
 			expect(selection).toMatchObject({
-				mode: "affected",
+				mode: full ? "full" : "affected",
 				selectedMembers: expected,
 				changeMembers: [{ path: asset, selectedMembers: expected }],
 			});
@@ -393,6 +395,7 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 				"scripts/check-doc-links.test.ts",
 				"scripts/check-doc-paths.test.ts",
 				"scripts/first-party-docs-are-indexed.test.ts",
+				...(directory === "packages/ai" ? ["scripts/a-documented-provider-default-is-the-descriptor-default.test.ts"] : []),
 			]);
 		}
 	});
@@ -428,19 +431,8 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 		);
 		expect(targets("packages/ai/NOTES.md")).toContain("scripts/first-party-docs-are-indexed.test.ts");
 		expect(targets("README.zh.md")).toContain("scripts/first-party-docs-are-indexed.test.ts");
-		for (const file of [
-			".github/workflows/ci-notes.md",
-			"contracts/model/README.md",
-			"natives/text/keys/README.md",
-			"crates/example/README.md",
-			".cargo/README.md",
-			"rust-toolchain.md",
-			"docs/internal/testing.md",
-			"packages/ai/NOTES.md",
-		]) {
-			expect(ciContractTestsForPaths([file], new Set(trackedReaders)).length).toBeGreaterThan(0);
-			expect(fullTriggerReason(file)).toBeDefined();
-		}
+		for (const file of [".github/workflows/ci-notes.md", "contracts/model/README.md", "natives/text/keys/README.md", "crates/example/README.md", ".cargo/README.md"]) { expect(ciContractTestsForPaths([file], new Set(trackedReaders)).length).toBeGreaterThan(0);
+			expect(fullTriggerReason(file)).toBeDefined(); }
 		expect(fullTriggerReason("docs/internal/testing.md")).toBeUndefined();
 		expect(fullTriggerReason("packages/ai/NOTES.md")).toBeUndefined();
 
@@ -458,6 +450,7 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 		const trackedReaders = new Set([
 			"scripts/check-doc-links.test.ts",
 			"scripts/check-doc-paths.test.ts",
+			"scripts/first-party-docs-are-indexed.test.ts",
 			"scripts/a-generated-doc-says-so-on-its-first-line.test.ts",
 		]);
 		const targets = ciContractTestsForPaths(
@@ -496,6 +489,7 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 		const trackedReaders = new Set([
 			"scripts/check-doc-links.test.ts",
 			"scripts/check-doc-paths.test.ts",
+			"scripts/first-party-docs-are-indexed.test.ts",
 			"scripts/a-generated-doc-says-so-on-its-first-line.test.ts",
 		]);
 		const targets = ciContractTestsForPaths(
@@ -710,25 +704,22 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 		});
 	});
 
-	it("runs node contract targets through node --test and leaves python ones unrun", () => {
+	it("runs all Node contract readers through node --test and leaves Python ones unrun", () => {
 		const knownGraph = basicGraph();
 		const selection = selectAffectedWorkspaceMembers(
-			[{ status: "M", paths: ["ci/cloudflare/cf_ci.py"] }],
-			knownGraph,
-			knownGraph,
+			[{ status: "M", paths: ["ci/cloudflare/cf_ci.py"] }], knownGraph, knownGraph,
 		);
 		const result = composeRelatedSelection({
-			inspection: inspectionFor(selection),
-			drift: [],
-			headTrackedPaths: new Set(),
-			ownedCommands: [],
+			inspection: inspectionFor(selection), drift: [], headTrackedPaths: new Set(), ownedCommands: [],
 		});
 		expect(result.contractTargets).toContainEqual({ runner: "python-unittest", path: "ci/cloudflare/test_cf_ci.py" });
-		expect(result.contractTargets).toContainEqual({ runner: "node", path: "ci/cloudflare/lane-routing.test.mjs" });
-		expect(result.commands).toHaveLength(1);
-		expect(result.commands[0]).toMatchObject({ label: "node contract tests", cwd: "." });
-		expect(result.commands[0]?.command).toEqual([...NODE_TEST_PREFIX, "ci/cloudflare/lane-routing.test.mjs"]);
-		expect(result.commands[0]?.command).not.toContain("ci/cloudflare/test_cf_ci.py");
+		expect(result.commands).toHaveLength(2);
+		expect(result.commands[0]?.command).toContain("scripts/affected-workspace-selection-keeps-safe-coverage.test.ts");
+		expect(result.commands[1]).toMatchObject({ label: "node contract tests", cwd: "." });
+		expect(result.commands[1]?.command).toEqual([
+			...NODE_TEST_PREFIX, "ci/cloudflare/worker.test.mjs", "ci/cloudflare/lane-routing.test.mjs", "ci/cloudflare/native-cache.test.mjs",
+		]);
+		for (const command of result.commands) expect(command.command).not.toContain("ci/cloudflare/test_cf_ci.py");
 	});
 
 	it("counts node TAP totals only from a complete, consistent summary", () => {
@@ -749,18 +740,22 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 		expect(totals).toEqual({ pass: 2, fail: 1, skip: 0, todo: 0, files: 4, runs: 2 });
 	});
 
-	it("treats docs-only and deleted-only selections as an explicit no-op", () => {
+	it("runs docs-only readers and keeps deleted-only test selections an explicit no-op", () => {
 		const knownGraph = basicGraph();
+		const readers = ["scripts/check-doc-links.test.ts", "scripts/check-doc-paths.test.ts", "scripts/internal-docs-are-tracked.test.ts"];
 		for (const paths of [["docs/internal/testing.md"], ["scripts/ci-test-deleted-away.test.ts"]]) {
 			const selection = selectAffectedWorkspaceMembers([{ status: "M", paths }], knownGraph, knownGraph);
-			expect(
-				composeRelatedSelection({
-					inspection: inspectionFor(selection),
-					drift: [],
-					headTrackedPaths: new Set(),
-					ownedCommands: [ownedCommand("packages/app")],
-				}),
-			).toMatchObject({ selectedMembers: [], commands: [] });
+			const result = composeRelatedSelection({
+				inspection: inspectionFor(selection), drift: [], headTrackedPaths: new Set(readers), ownedCommands: [ownedCommand("packages/app")],
+			});
+			expect(result.selectedMembers).toEqual([]);
+			if (paths[0] === "docs/internal/testing.md") {
+				expect(result.contractTargets.map(target => target.path)).toEqual(readers);
+				expect(result.commands).toHaveLength(1);
+				for (const reader of readers) expect(result.commands[0]?.command).toContain(reader);
+			} else {
+				expect(result.commands).toEqual([]);
+			}
 		}
 	});
 

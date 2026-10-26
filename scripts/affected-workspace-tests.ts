@@ -1,12 +1,8 @@
 import * as nodeChildProcess from "node:child_process";
 import * as nodeModule from "node:module";
 import * as nodePath from "node:path";
-import * as tsNamespace from "typescript";
-const ts = "createSourceFile" in tsNamespace
-	? tsNamespace
-	: ("default" in tsNamespace && tsNamespace.default && typeof tsNamespace.default === "object"
-		? (tsNamespace.default as typeof tsNamespace)
-		: tsNamespace);
+import { ts } from "ts-morph";
+
 import {
 	buildWorkspaceDependencyGraph,
 	resolveWorkspaceMemberDirectories,
