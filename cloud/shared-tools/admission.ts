@@ -158,11 +158,18 @@ export function createAdmission(policy: AdmissionPolicy, config: AdmissionConfig
 			if (device === undefined) return null;
 			const user = usableUser(index, device, at);
 			if (user === null) return null;
-			if (!constantTimeEqual(await sha256Hex(clientSecret), device.secretSha256)) return null;
+			// Snapshot scalar enrollment fields before hashing or fetching keys can yield to policy edits.
+			const proven: Enrollment = {
+				deviceId: device.deviceId,
+				userId: device.userId,
+				clientId: device.clientId,
+				secretSha256: device.secretSha256,
+			};
+			if (!constantTimeEqual(await sha256Hex(clientSecret), proven.secretSha256)) return null;
 			const key = await keyFor(jwt.kid, at);
 			if (key === null) return null;
 			const valid = await crypto.subtle.verify(RSA_VERIFY, key, jwt.signature, jwt.signingInput);
-			return valid ? confirmEnrollment(device, now()) : null;
+			return valid ? confirmEnrollment(proven, now()) : null;
 		} catch {
 			return null;
 		}
