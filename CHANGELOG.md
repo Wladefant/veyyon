@@ -12,6 +12,7 @@
 
 - `read` and the CLI `@` attachment import the entry-kind phrase from `@veyyon/utils/fs-error`, which adds no module to any import graph; no user-facing change.
 - The provider-refusal check and the Mnemopi per-bank target dedupe each have one definition; no user-facing change.
+- `/todo` with an unknown verb in the TUI lists the accepted verbs, the message ACP shows, instead of the full usage.
 - Cursor and GitLab Duo tool results, GitLab Duo goal prompts and the Antigravity and Google Cloud token refreshes each run through one shared implementation; no user-facing change.
 - `sgrEnd` is exported from `@veyyon/utils/ansi` and is the single definition `wrap` and `width` use; no user-facing change.
 
@@ -32,6 +33,10 @@
 - `defs()` in a Python `eval` cell shows a list, tuple, dict or set as its type and length, such as `list[1000000]`, and cuts a string before its repr, instead of building each value's whole repr to show 60 characters of it, which took 0.5s over 170MB of values and timed out on larger kernels.
 - A Python or JS `eval` error shows the frames of the cell and the code it called, without the runner and worker frames that dispatched the cell, names each JS cell `<cell>` instead of a UUID file, and shows a JS cell that did not parse or a thrown non-Error as its text alone.
 - A Python `eval` cell that does not compile reports its `SyntaxError` at its line in `<cell>` instead of under `<unknown>` behind runner and `ast.parse` frames, and a chained exception keeps the blank line after its separator.
+- `/todo` in ACP and text mode tells the agent the list changed, and after a removal not to re-add what was removed, as the TUI does.
+- `/todo copy` in the TUI reports a clipboard failure instead of `Copied todos as Markdown to clipboard.`
+- `/todo done`, `drop` and `rm`, and `/todo start` in the TUI, match a task or phase named in quotes.
+- `/todo export` in the TUI creates the directories a missing path needs, as ACP does.
 - A required tool call under an in-band tool dialect is asked for in the conversation text instead of being sent as a native `tool_choice` the dialect never reads.
 - Shake and duplicate elision leave a tool result, block or truncated middle in place when its marker is not smaller than it, and size a captioned image result by its caption, so `/shake` no longer reports a kept image as freed tokens.
 - A required tool call on a request that cannot force it (a model or host that rejects a forced `tool_choice`, a host without `tool_choice`, a remembered rejection, Ollama, Cursor, Devin, GitLab Duo, and Claude on Antigravity) is asked for in the request text, instead of the tool only being offered.

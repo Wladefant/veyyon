@@ -9,7 +9,8 @@
   - `packages/coding-agent/src/tools/index.ts`: registers tool, exposes session hooks, gates availability.
   - `packages/coding-agent/src/modes/terminal/controllers/event-controller.ts`: updates the visible todo UI on tool completion.
   - `packages/coding-agent/src/session/agent-session.ts`: stores cached phases, strips done/dropped tasks on session resume, emits failure reminders.
-  - `packages/coding-agent/src/modes/terminal/controllers/todo-command-controller.ts`: `/todo` command path, custom-entry persistence, transcript reminder injection.
+  - `packages/coding-agent/src/slash-commands/helpers/todo.ts`: the `/todo` command for every surface (`runTodoCommand`): verb parsing, fuzzy task and phase matching, custom-entry persistence, transcript reminder injection.
+  - `packages/coding-agent/src/modes/terminal/controllers/todo-command-controller.ts`: the TUI surface of `/todo`: todo panel redraw, clipboard and `$EDITOR`.
   - `packages/coding-agent/src/tools/core/render-utils.ts`: collapsed-preview cap for renderer trees.
 
 ## Inputs

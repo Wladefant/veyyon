@@ -22,6 +22,7 @@ interface FakeAcpBuiltinSession {
 	sessionId: string;
 	sessionName: string;
 	_todoPhases: Array<{ name: string; tasks: Array<{ content: string; status: string }> }>;
+	agent: { _messages: unknown[]; appendMessage(message: unknown): void };
 	_switchedTo: string | undefined;
 	_movedFromEmptySessionFile: string | undefined;
 	toggleFastMode(): boolean;
@@ -61,6 +62,7 @@ interface FakeAcpBuiltinSessionManager {
 	_cwd: string;
 	_entries: { type: string }[];
 	_customEntries: Array<{ customType: string; data: unknown }>;
+	_messages: unknown[];
 	_movedTo: string | undefined;
 	_flushed: boolean;
 	_droppedSessions: string[];
@@ -70,6 +72,7 @@ interface FakeAcpBuiltinSessionManager {
 	getEntries(): { type: string }[];
 	getBranch(): { type: string }[];
 	appendCustomEntry(customType: string, data?: unknown): string;
+	appendMessage(message: unknown): string;
 	flush(): Promise<void>;
 	moveTo(newCwd: string): Promise<void>;
 	setSessionFile(sessionFile: string): Promise<void>;
@@ -90,6 +93,12 @@ function createRuntime() {
 		sessionId: "fake-session-id",
 		sessionName: "Fake Session",
 		_todoPhases: [],
+		agent: {
+			_messages: [],
+			appendMessage(message: unknown) {
+				this._messages.push(message);
+			},
+		},
 		_switchedTo: undefined,
 		_movedFromEmptySessionFile: undefined,
 		toggleFastMode() {
@@ -166,6 +175,7 @@ function createRuntime() {
 		_cwd: "/tmp/project",
 		_entries: [] as { type: string }[],
 		_customEntries: [] as Array<{ customType: string; data: unknown }>,
+		_messages: [] as unknown[],
 		_movedTo: undefined as string | undefined,
 		_flushed: false,
 		_droppedSessions: [] as string[],
@@ -185,6 +195,10 @@ function createRuntime() {
 		appendCustomEntry(customType: string, data?: unknown): string {
 			this._customEntries.push({ customType, data });
 			return "fake-entry-id";
+		},
+		appendMessage(message: unknown): string {
+			this._messages.push(message);
+			return "fake-message-id";
 		},
 		async flush() {
 			this._flushed = true;
@@ -660,6 +674,43 @@ describe("wave 3 commands", () => {
 		expect(fakeSessionManager._customEntries[0]?.customType).toBe("user_todo_edit");
 	});
 
+	it("/todo rm <phase>: tells the agent and the session file not to re-add what was removed", async () => {
+		const { session, fakeSessionManager, runtime } = createRuntime();
+		session._todoPhases = [
+			{ name: "Foundation", tasks: [{ content: "Scaffold crate", status: "completed" }] },
+			{ name: "Auth", tasks: [{ content: "Port credential store", status: "pending" }] },
+		];
+
+		await executeAcpBuiltinSlashCommand("/todo rm Auth", runtime);
+
+		expect(session._todoPhases.flatMap(phase => phase.tasks.map(task => task.content))).toEqual(["Scaffold crate"]);
+		const [reminder] = session.agent._messages as Array<{ role: string; content: Array<{ text: string }> }>;
+		expect(reminder?.role).toBe("developer");
+		expect(reminder?.content[0]?.text).toMatch(/Do NOT re-add them/);
+		expect(reminder?.content[0]?.text).toContain("# Foundation");
+		expect(fakeSessionManager._messages).toEqual(session.agent._messages);
+	});
+
+	it("/todo done: a quoted task is matched without its quotes", async () => {
+		const { output, session, runtime } = createRuntime();
+		session._todoPhases = [{ name: "Setup", tasks: [{ content: "Wire up router", status: "pending" }] }];
+
+		await executeAcpBuiltinSlashCommand('/todo done "wire up"', runtime);
+
+		expect(output[0]).toBe("Marked completed: Wire up router");
+		expect(session._todoPhases[0]?.tasks[0]?.status).toBe("completed");
+	});
+
+	it("/todo start: a task whose text holds quotes is matched as typed", async () => {
+		const { output, session, runtime } = createRuntime();
+		session._todoPhases = [{ name: "Setup", tasks: [{ content: 'Rename "foo" to bar', status: "pending" }] }];
+
+		await executeAcpBuiltinSlashCommand('/todo start Rename "foo"', runtime);
+
+		expect(output[0]).toBe('Started: Rename "foo" to bar');
+		expect(session._todoPhases[0]?.tasks[0]?.status).toBe("in_progress");
+	});
+
 	it("/todo export: writes the default file under the active session cwd", async () => {
 		const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pi-todo-export-"));
 		try {
@@ -671,6 +722,22 @@ describe("wave 3 commands", () => {
 
 			const target = path.join(tempRoot, "TODO.md");
 			expect(result).toEqual({ consumed: true });
+			expect(output[0]).toBe(`Wrote todos to ${target}`);
+			expect(await fs.readFile(target, "utf8")).toBe("# Work\n- [ ] Ship it\n");
+		} finally {
+			await removeWithRetries(tempRoot);
+		}
+	});
+
+	it("/todo export: creates the directories a missing path needs", async () => {
+		const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pi-todo-export-nested-"));
+		try {
+			const { output, session, runtime } = createRuntime();
+			session._todoPhases = [{ name: "Work", tasks: [{ content: "Ship it", status: "pending" }] }];
+			const target = path.join(tempRoot, "plans", "next", "TODO.md");
+
+			await executeAcpBuiltinSlashCommand(`/todo export ${target}`, runtime);
+
 			expect(output[0]).toBe(`Wrote todos to ${target}`);
 			expect(await fs.readFile(target, "utf8")).toBe("# Work\n- [ ] Ship it\n");
 		} finally {
