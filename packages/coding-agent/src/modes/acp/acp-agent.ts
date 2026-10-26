@@ -1096,16 +1096,31 @@ export class AcpAgent implements Agent {
 	}
 
 	async #handleLifetimeEvent(record: ManagedSessionRecord, event: AgentSessionEvent): Promise<void> {
-		if (event.type !== "thinking_level_changed") {
+		if (event.type === "thinking_level_changed") {
+			try {
+				await this.#pushConfigOptionUpdate(record);
+			} catch (error) {
+				logger.warn("Failed to push thinking-level config_option_update", {
+					sessionId: record.session.sessionId,
+					error,
+				});
+			}
 			return;
 		}
-		try {
-			await this.#pushConfigOptionUpdate(record);
-		} catch (error) {
-			logger.warn("Failed to push thinking-level config_option_update", {
-				sessionId: record.session.sessionId,
-				error,
-			});
+		if (event.type === "cwd_changed") {
+			// Every working-directory change lands here: `/move`, `/cwd` and the agent's `set_cwd` tool.
+			// The session re-scoped its settings and prompt; the destination's file commands and plugins,
+			// and the config options its settings select, are this host's to reload and re-advertise.
+			try {
+				await this.#reloadPluginState(record);
+				await this.#pushConfigOptionUpdate(record);
+			} catch (error) {
+				logger.warn("Failed to refresh ACP session state after a cwd change", {
+					sessionId: record.session.sessionId,
+					cwd: event.cwd,
+					error,
+				});
+			}
 		}
 	}
 
@@ -1679,11 +1694,11 @@ export class AcpAgent implements Agent {
 	}
 
 	/**
-	 * Reload plugin/registry state for an ACP session. Mirrors the interactive
-	 * `/reload-plugins` and `/move` flows: invalidates the plugin-roots cache,
-	 * resets the capability cache, refreshes the session's slash-command state,
-	 * then re-advertises commands so the client sees newly installed/disabled
-	 * plugins.
+	 * Reload plugin/registry state for an ACP session, after `/reload-plugins`,
+	 * a plugin change, or any working-directory change: invalidates the
+	 * plugin-roots cache, resets the capability cache, refreshes the session's
+	 * slash-command state, then re-advertises commands so the client sees the
+	 * plugins and commands now in effect.
 	 */
 	async #reloadPluginState(record: ManagedSessionRecord): Promise<void> {
 		const cwd = record.session.sessionManager.getCwd();

@@ -203,15 +203,13 @@ export const SESSION_HANDLERS = {
 			}
 			try {
 				// One owner moves storage and every cwd-derived runtime input as a
-				// transaction. A failed re-scope rolls the storage move back.
+				// transaction. A failed re-scope rolls the storage move back. Its
+				// `cwd_changed` event is where each host reloads and re-advertises its
+				// cwd-local command surface, as for `/cwd` and the `set_cwd` tool.
 				await runtime.session.moveToCwd(resolvedPath);
 			} catch (err) {
 				return usage(`Move failed: ${errorMessage(err)}`, runtime);
 			}
-			// Protocol modes still need to re-advertise their cwd-local command
-			// surface after the shared session re-scope has completed.
-			await runtime.reloadPlugins();
-			await runtime.notifyConfigChanged?.();
 			await runtime.notifyTitleChanged?.();
 			await runtime.output(`Moved to ${runtime.sessionManager.getCwd()}.`);
 			return commandConsumed();

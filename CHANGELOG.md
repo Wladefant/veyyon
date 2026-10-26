@@ -42,6 +42,9 @@
 - `/todo export` in the TUI creates the directories a missing path needs, as ACP does.
 - The terminal `/move` command records the directory change for the model, renders request paths against the new directory and rolls the move back when the destination fails to load, as the ACP `/move` command already did.
 - The ACP `/move` command strips outer double quotes from its path, and the ACP `/rename` command prints `Session name cannot be empty.` for a title with nothing left once cleaned, as the terminal does.
+- ACP and RPC clients receive the new directory's command list after `/cwd` or the agent's `set_cwd` tool, and ACP clients its config options, as they already did after `/move`.
+- `/cwd` strips outer double quotes from its path, as `/move` does.
+- In print mode, a slash command after `/move` or `/cwd` resolves relative paths against the session's current directory instead of the launch directory.
 - A required tool call under an in-band tool dialect is asked for in the conversation text instead of being sent as a native `tool_choice` the dialect never reads.
 - Shake and duplicate elision leave a tool result, block or truncated middle in place when its marker is not smaller than it, and size a captioned image result by its caption, so `/shake` no longer reports a kept image as freed tokens.
 - A required tool call on a request that cannot force it (a model or host that rejects a forced `tool_choice`, a host without `tool_choice`, a remembered rejection, Ollama, Cursor, Devin, GitLab Duo, and Claude on Antigravity) is asked for in the request text, instead of the tool only being offered.

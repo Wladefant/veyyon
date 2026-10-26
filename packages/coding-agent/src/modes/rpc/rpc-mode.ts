@@ -10,7 +10,7 @@
  * - Events: AgentSessionEvent objects streamed as they occur
  * - Extension UI: Extension UI requests are emitted, client responds with extension_ui_response
  */
-import { errorMessage, isRecord, readLines } from "@veyyon/utils";
+import { errorMessage, isRecord, logger, readLines } from "@veyyon/utils";
 import { exitAfterStdoutDrain } from "../../cli/stdout-drain";
 import { reset as resetCapabilities } from "../../discovery/capability";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
@@ -342,6 +342,14 @@ export async function runRpcMode(attached: AttachableSession, options: RpcModeOp
 		route: session => {
 			const stopEvents = session.subscribe(event => {
 				output(event);
+				// Every working-directory change lands here: `/move`, `/cwd` and the agent's `set_cwd`
+				// tool. The session re-scoped its settings and prompt; the destination's file commands and
+				// plugins are this host's to reload and re-advertise.
+				if (event.type === "cwd_changed") {
+					reloadPlugins().catch((error: unknown) => {
+						logger.warn("Failed to reload RPC plugin state after a cwd change", { cwd: event.cwd, error });
+					});
+				}
 			});
 			const stopCommandUpdates = session.subscribeCommandMetadataChanged(() => {
 				void emitAvailableCommandsUpdate();

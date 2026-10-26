@@ -911,6 +911,36 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it("re-advertises commands and config options after any working-directory change", async () => {
+		// `/move`, `/cwd` and the agent's `set_cwd` tool all end in one session `cwd_changed` event,
+		// and only `/move` used to refresh the client: after `/cwd` or `set_cwd` an ACP client kept the
+		// previous directory's command list and config options. The host reacts to the event, so every
+		// path that changes the directory, present or future, refreshes the client the same way.
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		await waitForBootstrapGuard();
+
+		const before = harness.updates.length;
+		for (const listener of session.listeners()) {
+			listener({ type: "cwd_changed", previous: harness.cwdA, cwd: harness.cwdB } as AgentSessionEvent);
+		}
+		const kinds = () =>
+			harness.updates
+				.slice(before)
+				.filter(notification => notification.sessionId === created.sessionId)
+				.map(notification => notification.update.sessionUpdate);
+		// The refresh reloads plugin state from disk; it ends well inside this bound or not at all.
+		const deadline = Date.now() + 2_000;
+		while (!kinds().includes("config_option_update") && Date.now() < deadline) await Bun.sleep(10);
+
+		expect(kinds()).toEqual(["available_commands_update", "config_option_update"]);
+		expectAcpNotifications(harness.updates.slice(before));
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
 	it("emits a single config_option_update per setSessionConfigOption(thinking) call", async () => {
 		// Client-initiated thinking changes flow through #setThinkingLevelById,
 		// which fires `thinking_level_changed` and lets the lifetime subscription

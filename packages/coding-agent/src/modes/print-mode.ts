@@ -37,9 +37,11 @@ export interface PrintModeOptions {
 	printThoughts?: boolean;
 	/**
 	 * Headless slash-command runtime supplied by the CLI entrypoint. Optional
-	 * only for narrow unit-test sessions that cannot execute builtins.
+	 * only for narrow unit-test sessions that cannot execute builtins. The cwd
+	 * is read from the session manager at each dispatch, so a command after a
+	 * `/move` or `/cwd` resolves against the directory the session is in.
 	 */
-	commandRuntime?: Omit<SlashCommandRuntime, "output">;
+	commandRuntime?: Omit<SlashCommandRuntime, "output" | "cwd">;
 }
 
 /** Drop the provider-opaque replay payload (e.g. encrypted reasoning items) before printing. */
@@ -229,6 +231,7 @@ export async function runPrintMode(session: PrintModeSession, options: PrintMode
 		if (commandRuntime) {
 			const result = await executeAcpBuiltinSlashCommand(message, {
 				...commandRuntime,
+				cwd: commandRuntime.sessionManager.getCwd(),
 				output: emitCommandOutput,
 			});
 			if (result !== false) {

@@ -2293,7 +2293,6 @@ async function runPrintLaunch(mode: "text" | "json", started: StartedLaunch): Pr
 			session,
 			sessionManager: session.sessionManager,
 			settings: session.settings,
-			cwd: session.sessionManager.getCwd(),
 			// A single-shot process has no client-side command palette or
 			// long-lived plugin registry to refresh after a command.
 			refreshCommands: () => {},

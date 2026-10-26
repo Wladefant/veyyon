@@ -34,6 +34,9 @@
 - `/todo export` in the TUI creates the directories a missing path needs, as ACP does.
 - The terminal `/move` command records the directory change for the model, renders request paths against the new directory and rolls the move back when the destination fails to load, as the ACP `/move` command already did.
 - The ACP `/move` command strips outer double quotes from its path, and the ACP `/rename` command prints `Session name cannot be empty.` for a title with nothing left once cleaned, as the terminal does.
+- ACP and RPC clients receive the new directory's command list after `/cwd` or the agent's `set_cwd` tool, and ACP clients its config options, as they already did after `/move`.
+- `/cwd` strips outer double quotes from its path, as `/move` does.
+- In print mode, a slash command after `/move` or `/cwd` resolves relative paths against the session's current directory instead of the launch directory.
 
 ## [1.5.10] - 2026-10-25
 

@@ -125,7 +125,6 @@ function createHarness(): PrintHarness {
 			session,
 			sessionManager: session.sessionManager,
 			settings: session.settings,
-			cwd,
 			refreshCommands: () => {},
 			reloadPlugins: async () => {},
 		},

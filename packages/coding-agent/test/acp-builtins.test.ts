@@ -904,10 +904,6 @@ describe("wave 3 commands", () => {
 		const { output, runtime, session, fakeSessionManager } = createRuntime();
 		const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-move-target-"));
 		const moveToCwd = spyOn(session, "moveToCwd");
-		let configNotified = 0;
-		runtime.notifyConfigChanged = () => {
-			configNotified++;
-		};
 
 		try {
 			const result = await executeAcpBuiltinSlashCommand(`/move ${targetDir}`, runtime);
@@ -919,7 +915,6 @@ describe("wave 3 commands", () => {
 			expect(session._movedFromEmptySessionFile).toBeUndefined();
 			expect(moveToCwd).toHaveBeenCalledTimes(1);
 			expect(moveToCwd).toHaveBeenCalledWith(targetDir);
-			expect(configNotified).toBe(1);
 			expect(output[0]).toContain(`Moved to ${targetDir}.`);
 		} finally {
 			await fs.rm(targetDir, { recursive: true, force: true });

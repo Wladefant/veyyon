@@ -11,7 +11,7 @@ import * as path from "node:path";
 import { settings } from "../config/settings-instance";
 import { formatDurationCoarse } from "../session/account-format";
 import type { AgentSession } from "../session/agent-session";
-import { resolveToCwd } from "../tools/core/path-utils";
+import { normalizePathLikeInput, resolveToCwd } from "../tools/core/path-utils";
 import type { BuiltinSlashCommandHandlers } from "./handler-types";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import {
@@ -253,18 +253,20 @@ export const WORKSPACE_HANDLERS = {
 	cwd: {
 		handle: async (command, runtime) => {
 			const current = runtime.sessionManager.getCwd();
-			if (!command.args) {
+			// The path is read the way `/move` reads it: trimmed, outer double quotes stripped.
+			const target = normalizePathLikeInput(command.args);
+			if (!target) {
 				await runtime.output(
 					`${current}\n(session-scoped and ephemeral. For a per-profile default working directory, set session.workdir in /settings › Interaction › Profile on this profile, or run: veyyon config set session.workdir <path>.)`,
 				);
 				return commandConsumed();
 			}
 			if (runtime.session.isStreaming) return usage("Cannot change cwd while streaming.", runtime);
-			const resolvedPath = resolveToCwd(command.args, current);
+			const resolvedPath = resolveToCwd(target, current);
 			// A relative arg resolves against the SESSION cwd, not the OS cwd or the
 			// project root, so name that base in the failure — otherwise `/cwd tmp`
 			// from a session rooted elsewhere reads as "tmp doesn't exist" with no clue why.
-			const relativeHint = path.isAbsolute(command.args.trim())
+			const relativeHint = path.isAbsolute(target)
 				? ""
 				: ` (relative paths resolve against the current session cwd ${current}; pass an absolute path to avoid this)`;
 			try {
