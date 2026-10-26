@@ -42,6 +42,7 @@
 - `/export` and RPC `export_html` resolve the output path against the session's working directory and report the absolute path written, so an ACP session no longer exports into the server's launch directory.
 - `/export` keeps a path that contains spaces whole and strips outer double quotes in the terminal, ACP and print mode, as `/move` and `/cwd` do.
 - `/fast` and `/browser` accept an argument followed by whitespace outside the terminal, as the terminal does, instead of printing the usage line.
+- `/session Info` and `/session info ` (trailing space) now show session info over ACP and in print mode instead of the usage line, and a mistyped `/session` verb in the terminal prints the usage line instead of showing session info.
 
 ## [1.5.10] - 2026-10-25
 

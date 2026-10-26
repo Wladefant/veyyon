@@ -13,7 +13,7 @@ import type { FreshSessionResult } from "../session/agent-session-types";
 import { veyyonRelaunchArgv } from "../task/veyyon-command";
 import { normalizePathLikeInput, resolveToCwd } from "../tools/core/path-utils";
 import type { BuiltinSlashCommandHandlers } from "./handler-types";
-import { commandConsumed, errorMessage, usage } from "./helpers/parse";
+import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import type { ParsedSlashCommand, SlashCommandResult, TuiSlashCommandRuntime } from "./types";
 
 export function formatFreshSessionResult(result: FreshSessionResult): string {
@@ -30,11 +30,27 @@ export const shutdownHandlerTui = (
 	return commandConsumed();
 };
 
+const SESSION_USAGE = "Usage: /session [info|delete]";
+
+/**
+ * The verb one `/session` invocation names, read the same way by the text and TUI handlers so a
+ * word one surface runs is never refused by the other. Bare `/session` is `info`; anything else,
+ * including trailing words after a verb, is `undefined` and gets the usage line.
+ */
+function parseSessionVerb(rawArgs: string): "info" | "delete" | undefined {
+	const { verb, rest } = parseSubcommand(rawArgs);
+	if (rest) return undefined;
+	if (!verb || verb === "info") return "info";
+	if (verb === "delete") return "delete";
+	return undefined;
+}
+
 /** What the session builtins DO, keyed by the name each is declared under. */
 export const SESSION_HANDLERS = {
 	session: {
 		handle: async (command, runtime) => {
-			if (!command.args || command.args === "info") {
+			const verb = parseSessionVerb(command.args);
+			if (verb === "info") {
 				await runtime.output(
 					[
 						`Session: ${runtime.session.sessionId}`,
@@ -44,7 +60,7 @@ export const SESSION_HANDLERS = {
 				);
 				return commandConsumed();
 			}
-			if (command.args === "delete") {
+			if (verb === "delete") {
 				if (runtime.session.isStreaming) return usage("Cannot delete the session while streaming.", runtime);
 				const sessionFile = runtime.sessionManager.getSessionFile();
 				if (!sessionFile) return usage("No session file to delete (in-memory session).", runtime);
@@ -63,18 +79,18 @@ export const SESSION_HANDLERS = {
 				);
 				return commandConsumed();
 			}
-			return usage("Usage: /session [info|delete]", runtime);
+			return usage(SESSION_USAGE, runtime);
 		},
 		handleTui: async (command, runtime) => {
-			const sub = command.args.trim().toLowerCase() || "info";
-			if (sub === "delete") {
+			const verb = parseSessionVerb(command.args);
+			if (verb === "info") {
+				await runtime.ctx.handleSessionCommand();
 				runtime.ctx.editor.setText("");
-				await runtime.ctx.handleSessionDeleteCommand();
 				return;
 			}
-			// Default: show session info
-			await runtime.ctx.handleSessionCommand();
 			runtime.ctx.editor.setText("");
+			if (verb === "delete") await runtime.ctx.handleSessionDeleteCommand();
+			else runtime.ctx.showWarning(SESSION_USAGE);
 		},
 	},
 	branch: {
