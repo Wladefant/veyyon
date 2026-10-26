@@ -526,6 +526,7 @@ export class ExtensionRelay {
 	#onExtensionGone(): void {
 		this.#extension = undefined;
 		this.#ready = false;
+		this.#connectTabId = undefined;
 		this.#tabs.clear();
 		this.#childSessions.clear();
 		for (const pending of this.#pending.values()) {
@@ -938,6 +939,7 @@ export class ExtensionRelay {
 	}
 
 	#dropTab(tabId: number): void {
+		if (this.#connectTabId === tabId) this.#connectTabId = undefined;
 		const tab = this.#tabs.get(tabId);
 		if (!tab) return;
 		this.#tabs.delete(tabId);

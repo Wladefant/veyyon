@@ -180,6 +180,26 @@ test("the connect tab stays attached until the first browser tab is attached, th
 	cdp.close();
 });
 
+test("a removed connect tab is never removed again when a working tab attaches", async () => {
+	relay = await openExtensionSession(
+		{ kind: "extension", instanceId: INSTANCE },
+		{ timeoutMs: 3000, launchConnect: reusedOperatorChrome({ openConnectTab: true }) },
+	);
+	const ext = extension;
+	if (!ext) throw new Error("the fake extension never connected");
+	ext.emit("chrome.tabs.onRemoved", [CONNECT_TAB]);
+	await until(() => relay?.tabCount === 0, "the connect tab removal event");
+	const cdp = await openCdp(relay.cdpUrl);
+	try {
+		expect((await createTarget(cdp)).result?.targetId).toBe("ext-900");
+		expect(await relay.closeConnectTab()).toBe(false);
+		expect(ext.removedTabs()).toEqual([]);
+		expect(relay.tabCount).toBe(1);
+	} finally {
+		cdp.close();
+	}
+});
+
 test("a failed connect also closes the connect tab it opened, and no other tab", async () => {
 	await expect(
 		openExtensionSession(
