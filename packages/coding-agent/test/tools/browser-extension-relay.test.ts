@@ -197,7 +197,7 @@ beforeEach(() => {
 	audits.length = 0;
 });
 describe("owned connect bootstrap", () => {
-	test("reuses the exact welcome tab and closes it without touching unrelated tabs", async () => {
+	test("replaces the exact welcome tab and closes it without touching unrelated tabs", async () => {
 		const bootstrap = {
 			extensionId: "mmlmfjhmonkocbjadbfplnigmagldckm",
 			protocolVersion: 2,
@@ -207,21 +207,36 @@ describe("owned connect bootstrap", () => {
 		relay = ExtensionRelay.start({ instance: "test", bootstrap });
 		const ext = await FakeExtension.connect(relay.extensionUrl);
 		const url = buildConnectUrl({ ...bootstrap, relayUrl: relay.extensionUrl });
-		ext.emit("chrome.tabs.onCreated", [{ id: 41, url: `${url}&unrelated=1` }]);
+		const variants = [
+			`${url}&unrelated=1`,
+			buildConnectUrl({ ...bootstrap, relayUrl: relay.extensionUrl, token: "wrong-token" }),
+			buildConnectUrl({ ...bootstrap, relayUrl: relay.extensionUrl, protocolVersion: 3 }),
+			buildConnectUrl({ ...bootstrap, relayUrl: relay.extensionUrl, extensionId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }),
+			buildConnectUrl({ ...bootstrap, relayUrl: relay.extensionUrl, clientName: "another-client" }),
+			buildConnectUrl({ ...bootstrap, relayUrl: `${relay.extensionUrl}/wrong-endpoint` }),
+		];
+		for (const [index, variant] of variants.entries())
+			ext.emit("chrome.tabs.onCreated", [{ id: 50 + index, url: variant }]);
 		ext.emit("chrome.tabs.onCreated", [{ id: 42, url }]);
 		await relay.waitForExtension(2000);
 		const cdp = await CdpTestClient.connect(relay.cdpUrl);
 		await until(() => relay!.tabCount === 1, "welcome bootstrap ownership");
 		const created = await cdp.send("Target.createTarget", { url: "about:blank" });
-		expect(created.result?.targetId).toBe("ext-42");
-		expect(ext.callsOf("chrome.tabs.create")).toHaveLength(0);
+		expect(created.result?.targetId).toBe("ext-100");
+		expect(ext.callsOf("chrome.tabs.create")).toHaveLength(1);
 		expect(ext.callsOf("chrome.debugger.sendCommand")).toContainEqual({
 			method: "chrome.debugger.sendCommand",
 			params: [{ tabId: 42 }, "Page.navigate", { url: "about:blank" }],
 		});
-		await cdp.send("Target.closeTarget", { targetId: "ext-42" });
 		await until(() => ext.callsOf("chrome.tabs.remove").length === 1, "owned bootstrap removal");
 		expect(ext.callsOf("chrome.tabs.remove")[0]?.params).toEqual([42]);
+		expect(ext.callsOf("chrome.debugger.attach").map(call => call.params[0])).toEqual([
+			{ tabId: 42 },
+			{ tabId: 100 },
+		]);
+		await cdp.send("Target.closeTarget", { targetId: created.result?.targetId });
+		await until(() => ext.callsOf("chrome.tabs.remove").length === 2, "working tab removal");
+		expect(ext.callsOf("chrome.tabs.remove").map(call => call.params)).toEqual([[42], [100]]);
 		cdp.close();
 		ext.close();
 	});
