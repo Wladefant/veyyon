@@ -228,16 +228,11 @@ test("authenticated rotate replaces private discovery atomically and invalidates
 	// New connection with old token must be rejected
 	await expect(rpc(oldOwner, "ping")).rejects.toThrow();
 
-	// Existing socket must reject subsequent requests with old token or close
-	existingSocket.send({ op: "ping" });
-	const rejectedOrClosed = await Promise.race([
-		existingSocket.waitForClose(1_000).then(() => true),
-		existingSocket.next(frame => frame.ok === true, 1_000).then(
-			() => false,
-			() => true,
-		),
-	]);
-	expect(rejectedOrClosed).toBe(true);
+	// Rotation must close the old socket within the bound, without accepting a stale request.
+	const staleRequestId = "stale-after-rotation";
+	existingSocket.send({ op: "ping", id: staleRequestId });
+	expect(await existingSocket.waitForClose(1_000)).toBe(true);
+	expect(existingSocket.frames.some(frame => frame.id === staleRequestId && frame.ok === true)).toBe(false);
 
 	// Newly read discovery record ping and deliver works
 	const newPing = await rpc(newOwner, "ping");
