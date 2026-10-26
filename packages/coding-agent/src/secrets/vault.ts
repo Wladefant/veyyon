@@ -31,7 +31,7 @@ import { isWellFormedUtf16 } from "@veyyon/utils/string-length";
 import { escapeTerminalText } from "@veyyon/utils/terminal-safe";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { applyOwnerOnlyWindowsAcl, verifyOwnerOnlyWindowsAcl } from "@veyyon/utils/windows-acl";
-import { moveNoReplace, replaceWithRollback } from "./atomic-path";
+import { moveNoReplace, removePathIfSameInode, replaceWithRollback, sameInode } from "./atomic-path";
 import { noteSecretsCondition } from "./notices";
 import {
 	buildNamePlaceholder,
@@ -656,10 +656,6 @@ function canonicalVaultPathSync(vaultPath: string): string {
 	}
 }
 
-function sameInode(left: Pick<Stats, "dev" | "ino">, right: Pick<Stats, "dev" | "ino">): boolean {
-	return left.dev === right.dev && left.ino === right.ino;
-}
-
 function snapshotOf(stat: Stats, contentHash = ""): VaultFileSnapshot {
 	return {
 		dev: stat.dev,
@@ -1026,53 +1022,6 @@ async function assertExpectedVaultPath(
 	}
 }
 
-async function removePathIfSameInode(target: string, identity: Pick<Stats, "dev" | "ino">): Promise<void> {
-	let current: Stats;
-	try {
-		current = await fs.lstat(target);
-	} catch (error) {
-		if (isMissingPath(error)) return;
-		throw error;
-	}
-	if (!current.isFile() || !sameInode(current, identity)) return;
-
-	// Rename first so the pathname and inode are consumed in one kernel operation. An
-	// lstat-then-rm sequence can unlink a different file installed between those calls.
-	const quarantinePath = `${target}.${randomUUID()}.removing`;
-	let moved: boolean;
-	try {
-		moved = moveNoReplace(target, quarantinePath);
-	} catch (error) {
-		try {
-			await fs.lstat(target);
-		} catch (pathError) {
-			if (isMissingPath(pathError)) return;
-		}
-		throw error;
-	}
-	if (!moved) {
-		throw new Error("A vault cleanup quarantine path already exists. Refusing to remove either entry.");
-	}
-
-	const quarantined = await fs.lstat(quarantinePath);
-	if (!quarantined.isFile() || !sameInode(quarantined, identity)) {
-		let restored: boolean;
-		try {
-			restored = moveNoReplace(quarantinePath, target);
-		} catch (error) {
-			throw new Error(
-				`A racing vault cleanup entry could not be restored safely (${safeError(error)}). Refusing to continue.`,
-			);
-		}
-		if (!restored) {
-			throw new Error("A racing vault cleanup entry was isolated but its original path is occupied.");
-		}
-		throw new Error("A vault cleanup entry changed before removal. It was restored without deleting its bytes.");
-	}
-
-	await fs.rm(quarantinePath);
-}
-
 async function retireDisplacedVault(
 	scope: VaultScope,
 	displacedPath: string,
@@ -1097,7 +1046,7 @@ async function retireDisplacedVault(
 	} finally {
 		await handle.close();
 	}
-	await removePathIfSameInode(displacedPath, identity);
+	await removePathIfSameInode(displacedPath, identity, "vault");
 }
 
 /** Persist a rename after its staged file has already been synced. */
@@ -1191,8 +1140,8 @@ async function writeVaultAtomically(
 		}
 	} finally {
 		if (!installed && stagedStat !== null) {
-			await removePathIfSameInode(temporaryPath, stagedStat).catch(() => {});
-			await removePathIfSameInode(windowsBackupPath, stagedStat).catch(() => {});
+			await removePathIfSameInode(temporaryPath, stagedStat, "vault").catch(() => {});
+			await removePathIfSameInode(windowsBackupPath, stagedStat, "vault").catch(() => {});
 		}
 	}
 }

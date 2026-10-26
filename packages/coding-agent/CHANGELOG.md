@@ -8,6 +8,7 @@
 - The provider-refusal check and the Mnemopi per-bank target dedupe each have one definition; no user-facing change.
 - `/todo` with an unknown verb in the TUI lists the accepted verbs, the message ACP shows, instead of the full usage.
 - `veyyon ttsr scan` compiles rule conditions, globs and scopes with the functions a session uses instead of a copy of them; no user-facing change.
+- The secret vault and its key file remove a stale entry through one quarantine-and-recheck helper instead of two copies of it; no user-facing change.
 
 ### Fixed
 
