@@ -1,9 +1,6 @@
 name: OVH CI
 
 on:
-  pull_request:
-  push:
-    branches: ['ovh-ci/**']
   workflow_dispatch:
     inputs:
       target_sha:
