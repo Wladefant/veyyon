@@ -3,6 +3,19 @@
 ## [Unreleased]
 
 ## [1.6.0] - 2026-10-28
+### Fixed
+
+- A required tool call under an in-band tool dialect is asked for in the conversation text instead of being sent as a native `tool_choice` the dialect never reads.
+- Shake and duplicate elision leave a tool result, block or truncated middle in place when its marker is not smaller than it, and size a captioned image result by its caption, so `/shake` no longer reports a kept image as freed tokens.
+
+## [1.5.10] - 2026-10-25
+
+### Fixed
+
+- When a Cursor turn is cut short by a dropped stream or an abort, the partial-completion ledger reports each exec-channel call whose result arrived as ran instead of "started, no result recorded", and a batch whose every call has its result gets no ledger.
+- `prepareCompaction` and `findCutPoint` treat custom messages of an excluded type as absent when choosing the cut and when deciding a branch is already compacted, so excluding a block never turns an over-budget compaction into a refusal.
+
+## [1.5.9] - 2026-10-22
 
 ### Added
 

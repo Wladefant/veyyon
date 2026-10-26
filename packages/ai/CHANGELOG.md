@@ -22,6 +22,11 @@
 - `@veyyon/ai/utils/schema` exports `ZOD_INSTANCE_KINDS`, every Zod 4 kind by which `decontaminateZodInstance` recognizes a serialized instance.
 - `AuthStorage.forgetSignedOutLogins(provider)` dismisses the provider's logins that a failed refresh signed out, keeping them disabled under a cause no reader reports and no successful refresh re-enables, and returns how many it dismissed.
 - A Google Antigravity or Gemini CLI login stores the Google account id as the credential's `accountId`, and a login with the same id under a new email replaces the login under the old email and purges its signed-out row.
+### Fixed
+
+- A required tool call on a request that cannot force it (a model or host that rejects a forced `tool_choice`, a host without `tool_choice`, a remembered rejection, Ollama, Cursor, Devin, GitLab Duo, and Claude on Antigravity) is asked for in the request text, instead of the tool only being offered.
+
+## [1.5.10] - 2026-10-25
 
 ### Changed
 

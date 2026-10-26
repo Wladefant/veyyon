@@ -5,74 +5,11 @@
 ## [Unreleased]
 
 ## [1.6.4] - 2026-10-28
-### Breaking Changes
-
-- `ColdEntryPayloads.rebase(identity, open, shift)` drops its `entries` parameter and moves every cold entry read through the current handle onto the new object at once.
-
-### Added
-
-- The login card sends a browser login's link to the clipboard when it appears, and `c` (or `alt+c` while its field holds typed text) sends it again, shown on a `copy link` key chip.
-- A browser login whose provider takes a pasted callback asks in the login card for the address the browser ended on, so a sign-in over SSH completes without a forwarded port; an address that does not complete the sign-in is asked for again.
-- The account card lists a provider's second way to sign in as its own row named by the method, such as `+ add with API key (legacy)` under OpenCode Go, `+ add with API key` under Nous Research and `+ add with device code` under ChatGPT, which were reachable only by typing their id.
-- `codexRoutingHint` in `@veyyon/catalog/wire/codex` builds the `x-codex-routing-hint` value (`model=<model>;tier=<tier>`, or `model=<model>` without a tier) from a Codex Responses request body.
-- `@veyyon/catalog/wire/opencode-go` carries an OpenCode Go Console login's organization and inference endpoint in its API key and resolves the endpoint, route and organization header a request uses.
-- `ColdEntryPayloads.warmed` counts the cold entries read back into memory.
-- `ModelReasoningOptions.defaultLevel` and `ModelReasoningOptions.requiresEffort` state a model's default effort and that it has no off state; they become `thinking.defaultLevel` and `thinking.requiresEffort`.
-- `SelectListLayoutOptions.tabularDescription` keeps runs of spaces in a description, so a list whose descriptions are space-padded columns lines up under a heading ([#966](https://github.com/santhreal/veyyon/issues/966)).
-- `parseYaml` in `@veyyon/utils/yaml-sync` parses YAML and throws a `SyntaxError` stating the line and column of a syntax error, such as `Nested mappings are not allowed in compact mappings at line 2, column 13`, instead of Bun's `YAML Parse error: Unexpected token`.
-
-### Changed
-
-- Settings → Agents → Roster lists the subagents before the helpers, in aligned State, Effort and Model columns under a one-line heading with `session` in an unset cell and the model cut first in a narrow card, shows an overridden row's layer in its Effort and Model columns and what it runs in its detail line, reads a catalog model id ending in `:max` as that model rather than max effort, drops its duplicate key hints, returns to the opening row on Esc, and the agent page labels its spawn row "Can spawn" ([#966](https://github.com/santhreal/veyyon/issues/966)).
-- `/login <url>` completes only an MCP server's OAuth flow; a provider login takes the pasted address in its login card.
-- The startup Codex websocket prewarm resolves its service tier from the session it opens the socket for; no user-facing change.
-- The account card's notice line flattens whitespace through the shared `collapseWhitespace`; no user-facing change.
-- `bench/session-compaction-stall.bench.ts` measures the longest event-loop stall and the wall time of a compaction's republish on a large synthetic session; no user-facing change.
-- The no-model sentence a prompt receives is built in `config/model-resolution-failure.ts` instead of the session runtime; no user-facing change.
-- `/login opencode-go` signs in with an OpenCode Console account through its device flow and sends requests to the Go inference endpoint of the organization that holds the subscription, with the organization id in `x-opencode-org-id`; an OpenCode Go API key is the legacy `opencode-go-api-key` login.
-- The OpenCode Go usage ledger reports spend for a Console login as it does for an API key.
-- The OpenCode Console device flow loads when an OpenCode Go login or token refresh first runs instead of at startup, with no user-visible change.
-- A provider login that stores under another provider states its `loginMethod` ("API key", "device code"), which `getOAuthProviders()` returns beside its name.
-- The OpenCode Console login asks for its code in one line, `Enter code X if the page asks for it.`, and an OpenCode Go login that finds no Go subscription names `/login opencode-go-api-key` for the API key instead.
-- The HTML page title quoted by the non-event-stream error is flattened through the shared `collapseWhitespace` helper; no user-facing change.
-- OpenCode Go discovery sends no Authorization for a Console login, whose token the public listing rejects, and keys its model cache by the credential it sends, so a refreshed login token keeps its cached models.
-- A compaction's republish moves every cold entry onto the new session file at once, closes the replaced file off the event loop, and skips the second walk over history when nothing changed since the first, so on a 200,000-entry, 419 MiB session a compaction holds the event loop for at most 14-15 ms instead of 86-90 ms and finishes in 120-124 ms instead of 159-165 ms.
-- A staged session rewrite is flushed to disk before it replaces the file, so a power cut during a rewrite leaves the previous file or the new one, and on ext4 the rename no longer blocks the event loop for 38-92 ms.
-- A settings file that does not parse is quarantined with the parser's reason, which for a YAML syntax error states its line and column.
-- `QuarantinedFile` holds the `reason` its file did not parse.
 
 ### Fixed
 
 - Fixed the Windows binary exiting a few seconds after startup with `The owner-only Windows ACL operation failed (... SeSecurityPrivilege ...)` once its terminal ownership directory had been protected by an earlier launch.
 - Fixed `applyOwnerOnlyWindowsAcl` failing with `SeSecurityPrivilege` when it re-applied the owner-only ACL to an already protected path, which ended every Windows launch after the first.
-- A resumed or switched-to session whose model exists only in a provider's discovery listing runs on that model instead of the settings default when the discovery cache cannot supply it, as on the first launch after an upgrade that changes the cache format.
-- Codex web search and image generation requests send `x-codex-routing-hint`, and the startup websocket prewarm states the session's configured service tier, which the first turn on that socket sends.
-- A copy from inside tmux reaches the attached terminal's clipboard through `tmux load-buffer -w` instead of an OSC 52 escape that tmux drops under its default `set-clipboard external`, falling back to the escape when tmux rejects the command.
-- `r` on the account card shows `Checking …` and then whether the provider accepted the login on the card's notice line, and updates the usage bars from the check's own reading instead of leaving them unchanged until the next fetch.
-- `r` on the account card's `+ add another … account` row checks the accounts of that provider instead of every stored account of every provider.
-- Selecting, naming, logging out, forgetting and unblocking an account on the account card report their result on the card's notice line instead of only in the hidden transcript.
-- A login started by its alternate id, such as `/login opencode-go-api-key`, is labelled with the provider it stores under, asks for a name when that provider already holds an account, and reopens the account card on that provider instead of the first one listed.
-- The account card's provider filter labels `enter` with what it does, `enter add <provider> account` on a provider with no accounts, instead of always `enter switch to this account`.
-- A settings submenu opened from a search result shows "enter confirm · esc back" in the card footer instead of the search's "enter keep filter · esc clear search" ([#966](https://github.com/santhreal/veyyon/issues/966)).
-- A rate limit that states its reset window in words, such as Devin's `Your limit will reset in 17 minutes`, is retried once that window passes, or ends the turn at once when the window exceeds `retry.maxDelayMs`, instead of being retried inside the window until the retry budget runs out.
-- When a Cursor turn is cut short by a dropped stream or an abort, the partial-completion ledger reports each exec-channel call whose result arrived as ran instead of "started, no result recorded", and a batch whose every call has its result gets no ledger.
-- Cursor's "You're out of usage" answer parks the account for the quota window instead of a 45 to 75 second capacity backoff, so a turn on a spent plan ends on the first failure instead of retrying it every minute.
-- The notice that an account is out of quota while load balancing leaves other accounts idle appears once per exhausted window instead of once for every request layer and retry that re-entered it.
-- Codex requests send `x-codex-routing-hint` stating the wire model and service tier of the body sent, on HTTP turns, the websocket upgrade and the startup prewarm, as codex-rs does.
-- ChatGPT Codex browser login sends `prompt=login`, `reauth=password` and `max_age=0`, so auth.openai.com runs a fresh re-authentication and an individual Daybreak account receives a token with the cyber program active instead of one refused with `cyber_policy` for `individual_blue_security_signin_required`.
-- A credential health check attributes the usage report it returns to the credential's organization, as a usage fetch does, so the report matches its account when one email holds logins to two organizations.
-- Kimi Code's Anthropic wire sends adaptive thinking with `output_config.effort` and a summarized display, as Kimi Code's own client does, so Low, High and Max each reach the model as that effort.
-- A Kimi Code request with thinking turned off sends the model's lowest effort on both wires, and the chat wire sends `thinking: {type: "enabled"}` beside the effort for a model that cannot stop thinking.
-- The OpenCode Go API-key login prompt names OpenCode Go instead of OpenCode Zen.
-- An error from an OpenAI-compatible provider whose body carries `type`, `param` or `code` states the provider's sentence once, as `401 This API key has expired. … (type=authentication_error code=api_key_expired)`, instead of repeating it on a second line with the fields.
-- A captured error body that replaces a status-only `status code (no body)` message keeps the `retry-after-ms=` wait the response stated.
-- The Devin provider reads Cascade's stated reset window through the shared `extractRetryHint` instead of a parser of its own; no user-facing change.
-- An Anthropic Messages reply that ends before `message_start` (an empty `200` body, preamble events only, or events out of order) is retried once and then ends the provider's retry ladder, instead of running all ten provider retries under every session retry: a dead endpoint costs 22 requests over 53 s instead of up to 121 over minutes.
-- A `200` whose body is an HTML page or a JSON document instead of an event stream fails on the first request with `200 from <endpoint> is an HTML page titled "…", not an event stream. Check the provider's baseUrl.`, or the provider's own error sentence, on the OpenAI-compatible, Anthropic Messages, Google Generative AI, Vertex, Gemini CLI, Codex and pi-native wires, instead of being retried as a truncated stream: 11 requests over about 47 s on an OpenAI-compatible or Google endpoint, 22 over about 55 s on Anthropic Messages.
-- Kimi Code bundles K3.1 Pro, K3.1 Pro Highspeed and the K2.8 Preview name of `kimi-for-coding`, read from the `kimi-code-plan-cn` key models.dev now lists Kimi Code under.
-- Kimi Code models offer Low, High and Max with no Off, and discovery takes each model's effort ladder, default effort and off state from the account's `/models` listing.
-- A Kimi Code model that cannot stop thinking keeps thinking on and sends no forced tool choice on both wires, including the K3 rows whose ids carry no `kimi` prefix.
-- `extractRetryHint` reads a reset window stated in prose in any unit or combination of units, such as `Your limit will reset in 17 minutes`, `Resets in 20m45s` and `Resets in 1hr 39min`, after the machine-readable fields a body states.
 
 ## [1.6.3] - 2026-10-28
 

@@ -32,6 +32,7 @@ import type {
 	StreamFunction,
 	StreamOptions,
 	TextContent,
+	ToolChoice,
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
@@ -44,6 +45,7 @@ import { fetchProviderWithRetry } from "../utils/provider-fetch";
 import { normalizeSchemaForCCA } from "../utils/schema";
 import { type } from "../utils/schema/arktype";
 import { StreamMarkupHealing, type StreamMarkupHealingEvent } from "../utils/stream-markup-healing";
+import { carryRequiredToolCall } from "../utils/tool-choice";
 import { interleavedThinkingBeta } from "./anthropic";
 import type { Content, FunctionCallingConfigMode, ThinkingConfig, ThinkingLevel } from "./google-shared";
 import {
@@ -1149,6 +1151,11 @@ function buildAntigravityRequestEnvelope(
 	return { sessionId, requestId, labels };
 }
 
+/** The caller's choice in the unified form, read back from the Gemini form `stream.ts` maps it to. */
+function unifiedToolChoice(choice: GoogleGeminiCliOptions["toolChoice"]): ToolChoice | undefined {
+	return typeof choice === "object" ? { type: "tool", name: choice.allowedFunctionNames[0] } : choice;
+}
+
 export function buildRequest(
 	model: Model<"google-gemini-cli">,
 	context: Context,
@@ -1157,7 +1164,22 @@ export function buildRequest(
 	isAntigravity = false,
 ): CloudCodeAssistRequest {
 	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
-	const contents = convertMessages(model, context);
+	const contents = convertMessages(
+		model,
+		// Claude on Antigravity runs in VALIDATED mode whatever the request asks (below), so a
+		// required call there rides the conversation as text. Gemini forces it with `mode: ANY`.
+		carryRequiredToolCall(
+			context,
+			unifiedToolChoice(options.toolChoice),
+			isAntigravity && isClaudeModel(model.id)
+				? "open"
+				: typeof options.toolChoice === "object"
+					? "named"
+					: options.toolChoice === "any"
+						? "any"
+						: "open",
+		),
+	);
 	const generationConfig: CloudCodeAssistRequest["request"]["generationConfig"] =
 		buildGoogleBaseGenerationConfig(options);
 

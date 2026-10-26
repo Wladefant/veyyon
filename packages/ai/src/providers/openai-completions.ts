@@ -57,7 +57,12 @@ import { callWithCopilotModelRetry } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT, normalizeSchemaForMoonshot, toolWireSchema } from "../utils/schema";
 import { notifyRawSseEvent, resolveOpenAiSseEventName } from "../utils/sse-debug";
 import { stopReasonForTerminallessEof } from "../utils/terminalless-eof";
-import { isForcedToolChoice, mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
+import {
+	carryRequiredToolCall,
+	isForcedToolChoice,
+	mapToOpenAICompletionsToolChoice,
+	openAIToolCallForce,
+} from "../utils/tool-choice";
 import type { CacheControlEphemeral } from "./anthropic-wire";
 import { parseAzureDeploymentNameMap } from "./azure-deployment-names";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
@@ -1206,7 +1211,11 @@ function buildParams(
 		toolChoice: params.tool_choice,
 	});
 	const compat = finalPolicy.compat as ResolvedOpenAICompat;
-	const messages = convertMessages(model, context, compat);
+	const messages = convertMessages(
+		model,
+		carryRequiredToolCall(context, options?.toolChoice, openAIToolCallForce(params.tool_choice)),
+		compat,
+	);
 	maybeAddAnthropicCacheControl(compat, messages, resolveCacheRetention(options?.cacheRetention));
 	params.messages = messages;
 	applyOpenAICompletionsOutputTokens(params, model, compat, options);

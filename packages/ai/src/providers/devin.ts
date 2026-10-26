@@ -63,6 +63,7 @@ import type {
 	ThinkingContent,
 	Tool,
 	ToolCall,
+	ToolChoice,
 	ToolResultMessage,
 	Usage,
 	UserMessage,
@@ -81,6 +82,7 @@ import {
 import { deterministicUuid } from "../utils/deterministic-id";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { toolWireSchema } from "../utils/schema/wire";
+import { carryRequiredToolCall } from "../utils/tool-choice";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
 import { NON_VIDEO_MODEL_PLACEHOLDER } from "./vision-content";
 
@@ -96,6 +98,8 @@ export { DEVIN_CASCADE_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 export interface DevinOptions extends StreamOptions {
 	/** Wire model uid selected after thinking-effort routing. */
 	chatModelUid?: string;
+	/** A tool call the turn requires. Cascade is always sent `auto`, so the requirement is sent as text. */
+	toolChoice?: ToolChoice;
 	/**
 	 * Which provider-level retry this is, counted from 0. Internal.
 	 *
@@ -659,7 +663,11 @@ function buildDevinChatRequest(
 			locale: "en",
 		}),
 		prompt: normalizeSystemPrompts(context.systemPrompt).join("\n\n"),
-		chatMessagePrompts: buildChatMessagePrompts(context.messages, cascadeId),
+		// Cascade sends auto, so a required call rides the conversation as text.
+		chatMessagePrompts: buildChatMessagePrompts(
+			carryRequiredToolCall(context, options?.toolChoice, "open").messages,
+			cascadeId,
+		),
 		chatModelUid: options?.chatModelUid ?? model.requestModelId ?? model.id,
 		requestType: ChatMessageRequestType.CASCADE,
 		plannerMode: ConversationalPlannerMode.DEFAULT,
@@ -706,9 +714,10 @@ function buildChatMessagePrompts(messages: Message[], cascadeId: string): ChatMe
 }
 
 /** The text parts of a user turn or a tool result joined in order, and its images. */
-function promptTextAndImages(
-	content: string | (TextContent | ImageContent | VideoContent)[],
-): { text: string; images: ImageData[] } {
+function promptTextAndImages(content: string | (TextContent | ImageContent | VideoContent)[]): {
+	text: string;
+	images: ImageData[];
+} {
 	if (typeof content === "string") return { text: content, images: [] };
 	let text = "";
 	const images: ImageData[] = [];
@@ -716,8 +725,7 @@ function promptTextAndImages(
 		if (part.type === "text") text += part.text;
 		else if (part.type === "image")
 			images.push(create(ImageDataSchema, { base64Data: part.data, mimeType: part.mimeType }));
-		else if (part.type === "video")
-			text += (text ? "\n" : "") + NON_VIDEO_MODEL_PLACEHOLDER;
+		else if (part.type === "video") text += (text ? "\n" : "") + NON_VIDEO_MODEL_PLACEHOLDER;
 	}
 	return { text, images };
 }

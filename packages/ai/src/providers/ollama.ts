@@ -44,6 +44,7 @@ import {
 	type StreamMarkupHealingEvent,
 } from "../utils/stream-markup-healing";
 import { stopReasonForTerminallessEof } from "../utils/terminalless-eof";
+import { carryRequiredToolCall } from "../utils/tool-choice";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
 import { transformMessages } from "./transform-messages";
 import { joinTextWithImagePlaceholder, NON_VIDEO_MODEL_PLACEHOLDER, partitionVisionContent } from "./vision-content";
@@ -327,7 +328,9 @@ function createChatBody(model: Model<"ollama-chat">, context: Context, options: 
 	const tools = convertTools(selectedTools);
 	return {
 		model: model.id,
-		messages: convertMessages(model, context),
+		// `/api/chat` has no `tool_choice` field and ignores the one sent below, so
+		// a required call is forced by nothing on the wire: it rides as text.
+		messages: convertMessages(model, carryRequiredToolCall(context, options?.toolChoice, "open")),
 		...(tools ? { tools } : {}),
 		...(think !== undefined ? { think } : {}),
 		...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),

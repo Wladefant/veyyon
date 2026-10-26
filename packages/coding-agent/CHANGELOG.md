@@ -7,6 +7,41 @@
 ### Fixed
 
 - Fixed the Windows binary exiting a few seconds after startup with `The owner-only Windows ACL operation failed (... SeSecurityPrivilege ...)` once its terminal ownership directory had been protected by an earlier launch.
+- `/force`, the executor's final `yield` reminder and the eager todo require their tool on OpenRouter, Cursor, Devin and GitLab Duo models, where they required nothing and `/force` failed with `Current model does not support forcing a specific tool.`
+- `write` to a directory, or to a path ending in `/`, fails with an error giving the path to use, instead of creating a file named after the directory, replacing the file before the `/`, or failing with a bare `EISDIR`.
+- `veyyon @<path>` naming a directory, named pipe, socket or device exits with `Cannot attach <path>: it is <kind>` instead of waiting forever on a pipe with no writer or failing with a bare `EISDIR`, `ENXIO` or `ESPIPE`.
+- An update interrupted by closing the terminal, Ctrl+C, quitting the session or a fatal error during its download or checksum check removes its partial `<binary>.<id>.new` download instead of leaving it beside the binary until uninstall.
+- `read` of a named pipe, socket or device, directly or through a symbolic link, selector, path list, suffix match or archive, SQLite or PDF member path, fails at once naming the entry's kind instead of blocking the turn until a writer appears or failing with a bare `ENXIO`.
+- A prompt that `@`-mentions a named pipe, socket or device no longer hangs on submit; the entry is not attached.
+- A truncated `bash`, `eval`, `ssh` or interactive shell result states the line ranges it shows, counting only whole lines, instead of ranges split evenly from the totals that named lines it did not show.
+- A `bash` result larger than the inline budget is cut once and references one artifact holding the full output, instead of being cut a second time and naming a second artifact.
+- A truncated `eval` result shows the first and last lines of its output within the inline budget, as `bash` does, instead of only its last 32.5KB.
+- Streamed tool output whose chunk boundary leaves the head window less room than the next character keeps its order, instead of placing a later chunk in the head ahead of output already kept in the tail.
+- A tool result whose output ends in a line break puts one blank line between its last line and its truncation or limit notice instead of two.
+- `defs()` in a Python `eval` cell shows a list, tuple, dict or set as its type and length, such as `list[1000000]`, and cuts a string before its repr, instead of building each value's whole repr to show 60 characters of it, which took 0.5s over 170MB of values and timed out on larger kernels.
+- A Python or JS `eval` error shows the frames of the cell and the code it called, without the runner and worker frames that dispatched the cell, names each JS cell `<cell>` instead of a UUID file, and shows a JS cell that did not parse or a thrown non-Error as its text alone.
+- A Python `eval` cell that does not compile reports its `SyntaxError` at its line in `<cell>` instead of under `<unknown>` behind runner and `ast.parse` frames, and a chained exception keeps the blank line after its separator.
+
+## [1.5.10] - 2026-10-25
+
+### Added
+
+- The login card sends a browser login's link to the clipboard when it appears, and `c` (or `alt+c` while its field holds typed text) sends it again, shown on a `copy link` key chip.
+- A browser login whose provider takes a pasted callback asks in the login card for the address the browser ended on, so a sign-in over SSH completes without a forwarded port; an address that does not complete the sign-in is asked for again.
+- The account card lists a provider's second way to sign in as its own row named by the method, such as `+ add with API key (legacy)` under OpenCode Go, `+ add with API key` under Nous Research and `+ add with device code` under ChatGPT, which were reachable only by typing their id.
+
+### Changed
+
+- Settings → Agents → Roster lists the subagents before the helpers, in aligned State, Effort and Model columns under a one-line heading with `session` in an unset cell and the model cut first in a narrow card, shows an overridden row's layer in its Effort and Model columns and what it runs in its detail line, reads a catalog model id ending in `:max` as that model rather than max effort, drops its duplicate key hints, returns to the opening row on Esc, and the agent page labels its spawn row "Can spawn" ([#966](https://github.com/santhreal/veyyon/issues/966)).
+- `/login <url>` completes only an MCP server's OAuth flow; a provider login takes the pasted address in its login card.
+- The startup Codex websocket prewarm resolves its service tier from the session it opens the socket for; no user-facing change.
+- The account card's notice line flattens whitespace through the shared `collapseWhitespace`; no user-facing change.
+- `bench/session-compaction-stall.bench.ts` measures the longest event-loop stall and the wall time of a compaction's republish on a large synthetic session; no user-facing change.
+- The no-model sentence a prompt receives is built in `config/model-resolution-failure.ts` instead of the session runtime; no user-facing change.
+
+### Fixed
+
+- A read that reaches a line longer than its byte budget names that line and continues at the next one, instead of `Use :N to continue` sending the reader back to the same window, and its truncation notices and card state the read's budget instead of the bytes shown.
 - A resumed or switched-to session whose model exists only in a provider's discovery listing runs on that model instead of the settings default when the discovery cache cannot supply it, as on the first launch after an upgrade that changes the cache format.
 - Codex web search and image generation requests send `x-codex-routing-hint`, and the startup websocket prewarm states the session's configured service tier, which the first turn on that socket sends.
 - A copy from inside tmux reaches the attached terminal's clipboard through `tmux load-buffer -w` instead of an OSC 52 escape that tmux drops under its default `set-clipboard external`, falling back to the escape when tmux rejects the command.
