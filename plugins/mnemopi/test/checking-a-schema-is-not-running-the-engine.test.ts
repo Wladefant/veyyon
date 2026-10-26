@@ -171,9 +171,13 @@ describe("asking whether a model is configured is not calling one", () => {
 	 * RE-MEASURED 2026-10-24 at 219: `utils/collapse-whitespace.ts`, a zero-import leaf, reached through
 	 * `ai/utils/http-inspector.ts`, which flattens a quoted HTML title onto one line through it. Not a
 	 * mnemopi edge.
+	 *
+	 * RE-MEASURED 2026-10-25 at 221: `ai/prompts/tool-choice/any.md` and `ai/prompts/tool-choice/named.md`,
+	 * the request text that asks for a tool call a wire cannot force, reached through `ai/prompts/registry.ts`.
+	 * Not a mnemopi edge.
 	 */
-	it("local-llm reaches at most 219 modules", () => {
-		expect(reach("core/local-llm.ts")).toBeLessThanOrEqual(219);
+	it("local-llm reaches at most 221 modules", () => {
+		expect(reach("core/local-llm.ts")).toBeLessThanOrEqual(221);
 	});
 
 	/**

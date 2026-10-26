@@ -9,6 +9,7 @@
 ### Fixed
 
 - `/force`, the executor's final `yield` reminder and the eager todo require their tool on OpenRouter, Cursor, Devin and GitLab Duo models, where they required nothing and `/force` failed with `Current model does not support forcing a specific tool.`
+- `VEYYON_EVAL_PROMPTS` accepts the `tool-choice/any` and `tool-choice/named` prompt ids instead of refusing them as unknown.
 - `write` to a directory, or to a path ending in `/`, fails with an error giving the path to use, instead of creating a file named after the directory, replacing the file before the `/`, or failing with a bare `EISDIR`.
 - `veyyon @<path>` naming a directory, named pipe, socket or device exits with `Cannot attach <path>: it is <kind>` instead of waiting forever on a pipe with no writer or failing with a bare `EISDIR`, `ENXIO` or `ESPIPE`.
 - An update interrupted by closing the terminal, Ctrl+C, quitting the session or a fatal error during its download or checksum check removes its partial `<binary>.<id>.new` download instead of leaving it beside the binary until uninstall.

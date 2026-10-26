@@ -183,8 +183,13 @@ const PRUNING_CEILING = 197;
  * `catalog/provider-models/openai-compat.ts` reads to send no Console token to OpenCode Go discovery. It
  * imports only `@veyyon/utils/url`, already on the engine's reach, so the growth is that one file and no
  * subtree.
+ *
+ * RE-MEASURED 2026-10-25: engine 313. The two new modules are `ai/prompts/tool-choice/any.md` and
+ * `ai/prompts/tool-choice/named.md`, the request text that asks for a tool call a wire cannot force,
+ * which `ai/prompts/registry.ts`, already on the engine's reach, registers. They import nothing, so the
+ * growth is those two files and no subtree.
  */
-const COMPACTION_ENGINE_CEILING = 311;
+const COMPACTION_ENGINE_CEILING = 313;
 const REMOTE_SUMMARIZER_CEILING = 101;
 
 describe("the estimator is a leaf", () => {

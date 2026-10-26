@@ -402,11 +402,17 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * login builder and `@veyyon/utils/url`, are already here. The Console device flow stays behind
  * the registry's lazy `await import`. Measured 2026-10-24 at 1498.
  *
+ * 1498 to 1501: `ai/src/prompts/tool-choice/any.md` and `ai/src/prompts/tool-choice/named.md`, the
+ * request text that asks for a tool call a wire cannot force, which `ai/src/prompts/registry.ts`,
+ * already here, registers, and `ai/src/utils/tool-choice.ts`, which `agent/src/agent-loop.ts`,
+ * already here, imports to put that text into an in-band dialect's turn. Its runtime import is the
+ * prompt registry, already here. Measured 2026-10-25 at 1501.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1498;
+const LAUNCH_REACH_CEILING = 1501;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
@@ -434,8 +440,11 @@ const LAUNCH_REACH_CEILING = 1498;
  *
  * 526 to 488: re-measured. The modules that left prompt assembly since the last entry had left it
  * without lowering this line, so the slack would have admitted 38 new ones unrecorded.
+ *
+ * 488 to 489: re-measured at 487 before, plus `ai/src/prompts/tool-choice/any.md` and
+ * `ai/src/prompts/tool-choice/named.md`, which `ai/src/prompts/registry.ts`, already here, registers.
  */
-const ASSEMBLER_REACH_CEILING = 488;
+const ASSEMBLER_REACH_CEILING = 489;
 
 function reached(entry: string): string[] {
 	return [...moduleReach(entry, RESOLUTION, CACHE)].map(file => path.relative(REPO_ROOT, file)).sort();

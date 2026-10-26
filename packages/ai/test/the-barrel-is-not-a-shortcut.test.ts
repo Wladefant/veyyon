@@ -302,6 +302,12 @@ describe("the modules that were repointed stay cut", () => {
 	 * leaf. `ai/utils/http-inspector.ts`, already on every one of these reaches, flattens a quoted HTML
 	 * title onto one line through it, so no consumer gained an edge to a subsystem it did not already reach.
 	 */
+	/**
+	 * Re-measured 2026-10-25: `shared-llm.ts` 216 -> 218 by `ai/prompts/tool-choice/any.md` and
+	 * `ai/prompts/tool-choice/named.md`, the request text that asks for a tool call a wire cannot force.
+	 * `ai/prompts/registry.ts`, already on this reach, registers them; they import nothing, so no consumer
+	 * gained an edge to a subsystem it did not already reach.
+	 */
 	it.each([
 		["agent/src/proxy.ts", 149],
 		["apps/stats/src/parser.ts", 126],
@@ -322,7 +328,7 @@ describe("the modules that were repointed stay cut", () => {
 		// `@veyyon/model` leaves of 2026-09-04; 202 was one module from the catalog OpenCode discovery
 		// header leaf; 184 was the 2026-07-27 engine-call remeasure; 325 before that was the leak. The
 		// file still takes no name from the barrel.
-		["coding-agent/src/commit/shared-llm.ts", 216],
+		["coding-agent/src/commit/shared-llm.ts", 218],
 		// The agent's hot loop and the `Agent` class. Both STREAM, so both reach the engine whatever
 		// specifier they use; the ceilings are what the other ten names cost when taken from the entry
 		// point. 378 -> 321 and 380 -> 323.
