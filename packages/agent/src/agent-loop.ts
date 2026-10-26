@@ -57,7 +57,6 @@ import {
 	recoverHarmonyToolCall,
 	signalListLabel,
 } from "@veyyon/ai/utils/harmony-leak";
-import { toolWireSchema } from "@veyyon/ai/utils/schema/wire";
 import { carryRequiredToolCall } from "@veyyon/ai/utils/tool-choice";
 import { preferredDialect } from "@veyyon/catalog/identity";
 import { emptyUsage } from "@veyyon/catalog/models";
@@ -72,7 +71,6 @@ import {
 	sanitizeText,
 	structuredCloneJSON,
 } from "@veyyon/utils";
-import { INTENT_FIELD } from "@veyyon/wire";
 import { type AgentPauseGate, agentPauseGate } from "./pause";
 import { type AgentRunCoverage, type AgentRunSummary, ToolCallBlockedError } from "./run-collector";
 import {

@@ -390,6 +390,7 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * the Codex discovery reader and the abort and timeout helpers, are already here. Measured
  * 2026-10-21 at 1496.
  *
+
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
