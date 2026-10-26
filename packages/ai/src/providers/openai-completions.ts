@@ -895,7 +895,7 @@ async function runOpenAICompletionsAttempt(
 		await notifyProviderResponse(options, openaiHandle.response, model, openaiHandle.requestId);
 		stream.push({ type: "start", partial: output });
 		const activeTurn = new OpenAICompletionsTurn(output, stream, policy.stream, rawUsage =>
-			parseChunkUsage(rawUsage, model),
+			parseChunkUsage(rawUsage, model, undefined),
 		);
 		turn = activeTurn;
 		const timedOpenaiStream = iterateWithIdleTimeout(openaiHandle.events, {
