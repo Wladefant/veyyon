@@ -8,10 +8,12 @@ export const loginTogether = createApiKeyLogin({
 	promptMessage: "Paste your Together API key",
 	placeholder: "sk-...",
 	validation: {
-		kind: "chat-completions",
+		// Validate against the authenticated models listing, not a chat completion: Together answers a
+		// model served only from a dedicated endpoint (e.g. `moonshotai/Kimi-K2.5`) with HTTP 400
+		// `model_not_available`, which failed validation for every valid key. `/v1/models` names no model.
+		kind: "models-endpoint",
 		provider: "together",
-		baseUrl: "https://api.together.xyz/v1",
-		model: "moonshotai/Kimi-K2.5",
+		modelsUrl: "https://api.together.xyz/v1/models",
 	},
 });
 

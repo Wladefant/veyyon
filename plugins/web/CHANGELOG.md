@@ -5,6 +5,8 @@
 ### Added
 
 - The DeepSeek Fetch client reads one page through `https://api.deepseek.com/v1/tools/fetch` and returns its title and Markdown body, using the DeepSeek API key the coding agent already stores.
+- The public search handler `createPublicSearchHandler` runs `POST` `{query}` through Brave Web Search for each identity its injected `authorize` dependency admits, requires the host's server-side auth, admission and Brave key dependencies, and is not mounted on a route yet; its in-memory per-user cap (5 a rolling minute, 500 a UTC month, 2,500,000 microusd a UTC month) resets on restart and is kept per instance.
+
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.

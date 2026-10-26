@@ -184,3 +184,32 @@ export function redactSecrets(text: string, secrets: readonly string[]): string 
 	}
 	return out;
 }
+
+const SENSITIVE_URL_PARAM =
+	/(?:token|secret|password|passwd|auth|credential|cookie|session|code|api[-_]?key|access[-_]?key|signature|(?:^|[-_])key(?:$|[-_])|(?:^|[-_])state(?:$|[-_]))/i;
+
+/** Redact URL credentials and sensitive values before an inventory row reaches tool output. */
+export function redactTabInventoryUrl(value: string): string {
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch {
+		return "[URL omitted]";
+	}
+	if (url.username) url.username = "[redacted]";
+	if (url.password) url.password = "[redacted]";
+	for (const key of [...url.searchParams.keys()]) {
+		if (SENSITIVE_URL_PARAM.test(key)) url.searchParams.set(key, "[redacted]");
+	}
+	if (url.hash) {
+		const fragment = new URLSearchParams(url.hash.slice(1));
+		let redacted = false;
+		for (const key of [...fragment.keys()]) {
+			if (!SENSITIVE_URL_PARAM.test(key)) continue;
+			fragment.set(key, "[redacted]");
+			redacted = true;
+		}
+		if (redacted) url.hash = fragment.toString();
+	}
+	return url.toString();
+}
