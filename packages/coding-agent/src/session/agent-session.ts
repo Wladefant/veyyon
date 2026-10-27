@@ -15,7 +15,6 @@
 
 import * as os from "node:os";
 import * as path from "node:path";
-import { isPromise } from "node:util/types";
 import {
 	type AfterToolCallContext,
 	type AfterToolCallResult,
@@ -160,7 +159,6 @@ import {
 	type AgentContinueSkipReason,
 	type AgentSessionConfig,
 	type AgentSessionDisposeOptions,
-	type AgentSessionEvent,
 	type AgentSessionEventListener,
 	type AsyncJobSnapshot,
 	type AsyncResultEntry,
@@ -211,7 +209,6 @@ import { ContextAccounting } from "./runtime/context-accounting";
 import { ConversationRelease } from "./runtime/conversation-release";
 import { DisplayCopy } from "./runtime/display-copy";
 import { ExitRecord } from "./runtime/exit-record";
-import { ExtensionEventForwarder } from "./runtime/extension-event-forwarder";
 import { FinalizeReminders } from "./runtime/finalize-reminders";
 import { HistoryRewrites } from "./runtime/history-rewrites";
 import { type ImageAttachment, ImageAttachments } from "./runtime/image-attachments";
@@ -236,6 +233,7 @@ import { RetryRuntime } from "./runtime/retry-runtime";
 import { ServiceTiers } from "./runtime/service-tiers";
 import { SessionApprovals } from "./runtime/session-approvals";
 import { SessionBranch, type TreeNavigationResult } from "./runtime/session-branch";
+import { SessionEvents } from "./runtime/session-events";
 import { SessionHandoff } from "./runtime/session-handoff";
 import { SessionScope } from "./runtime/session-scope";
 import { type SecretsRefreshOptions, SessionSecrets } from "./runtime/session-secrets";
@@ -532,7 +530,6 @@ export class AgentSession {
 	#startupHydration: Promise<void> = Promise.resolve();
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
-	#eventListeners: AgentSessionEventListener[] = [];
 
 	/** Plan mode state, the approved-plan reference, and the decision ladder. */
 	readonly #planMode: PlanModeRuntime;
@@ -548,7 +545,7 @@ export class AgentSession {
 	#allowAcpAgentInitiatedTurns = false;
 
 	readonly #compaction = new CompactionRuntime(this, {
-		emitSessionEvent: event => this.#emitSessionEvent(event),
+		emitSessionEvent: event => this.#events.send(event),
 		promptGeneration: () => this.#promptGeneration,
 		scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 		scheduleAutoContinuePrompt: generation => this.#scheduleAutoContinuePrompt(generation),
@@ -596,7 +593,7 @@ export class AgentSession {
 	});
 
 	readonly #retry = new RetryRuntime(this, {
-		emitSessionEvent: event => this.#emitSessionEvent(event),
+		emitSessionEvent: event => this.#events.send(event),
 		promptGeneration: () => this.#promptGeneration,
 		scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 		abortIsDeliberate: message =>
@@ -658,8 +655,8 @@ export class AgentSession {
 	/** The per-family service tiers `/fast` and `tier.*` set, and the tier each request resolves to. */
 	readonly #tiers: ServiceTiers;
 	#isDisposed = false;
-	/** Session events forwarded to extensions, in order, with the run's turn index. */
-	readonly #extensionEvents: ExtensionEventForwarder;
+	/** Subscribers, the extension forwarding every session event passes through, and the held `agent_end`. */
+	readonly #events: SessionEvents;
 	readonly #persistence: MessagePersistence;
 	/** The tool start markers and the exit entry a later reader learns how the session ended from. */
 	readonly #exitRecord: ExitRecord;
@@ -750,14 +747,6 @@ export class AgentSession {
 	/** Stale-result and overflow prunes, image drops, shake and dedup of the recorded history. */
 	readonly #rewrites: HistoryRewrites;
 	#promptGeneration = 0;
-	// Wire-level agent_end emission deferred until no prompt is in flight.
-	// Internal extension hooks and post-emit work (auto-retry, auto-compaction, todo
-	// checks in #handleAgentEvent) still fire on the original schedule — only the
-	// `#emit(event)` that reaches external subscribers (rpc-mode stdout, ACP bridge,
-	// Cursor exec, TUI listeners) is held back. Without this, a client that resumes
-	// on `agent_end` can fire its next `prompt` before #promptWithMessage's finally
-	// block unwinds, into a session that still reports `isStreaming`.
-	#pendingAgentEndEmit: AgentSessionEvent | undefined;
 	/** Context usage: the prompt snapshot of the run in flight and the usage anchors it reads. */
 	readonly #context: ContextAccounting;
 	/** The memory backend's session state, and the recalled block delivered or waiting at the tail. */
@@ -793,11 +782,7 @@ export class AgentSession {
 	 */
 	#endInFlight(all = false): void {
 		if (!this.#inFlight.end(all)) return;
-		const pendingAgentEnd = this.#pendingAgentEndEmit;
-		if (pendingAgentEnd) {
-			this.#pendingAgentEndEmit = undefined;
-			this.#emit(pendingAgentEnd);
-		}
+		this.#events.releaseHeldAgentEnd();
 		this.#drainStrandedQueuedMessages();
 		this.#commands.clearGrantedAgents();
 	}
@@ -857,14 +842,14 @@ export class AgentSession {
 		this.#config = config;
 		// Power assertions are taken per turn; nothing acquired here.
 		this.#inFlight = new TurnsInFlight(this.settings);
-		this.#extensionEvents = new ExtensionEventForwarder(config.extensionRunner);
+		this.#events = new SessionEvents(config.extensionRunner, { promptInFlight: () => this.#inFlight.active });
 		this.#irc = new IrcDelivery({
 			agent: this.agent,
 			isDisposed: () => this.#isDisposed,
 			isStreaming: () => this.isStreaming,
 			planModeEnabled: () => this.#planMode.enabled,
 			asyncEnabled: () => this.settings.get("async.enabled"),
-			emitIrcMessage: record => void this.#emitSessionEvent({ type: "irc_message", message: record }),
+			emitIrcMessage: record => void this.#events.send({ type: "irc_message", message: record }),
 			appendToContext: record => this.#appendCustomMessageToContext(record),
 			canAutoContinueForFollowUp: () => this.#queue.canAutoContinueForFollowUp(),
 			beginWakeTurn: () => {
@@ -881,7 +866,7 @@ export class AgentSession {
 					? this.#config.extensionRunner
 					: undefined,
 			promptGeneration: () => this.#promptGeneration,
-			turnId: () => Math.max(0, this.#extensionEvents.turnIndex - 1),
+			turnId: () => Math.max(0, this.#events.extensions.turnIndex - 1),
 			sessionId: () => this.sessionId,
 			sessionFile: () => this.sessionFile,
 			queueContinuation: message => this.#nextTurn.queue(message, true),
@@ -897,7 +882,7 @@ export class AgentSession {
 				await this.refreshBaseSystemPrompt("cwd-change");
 			},
 			rootWireAt: cwd => this.#wire.rootAt(cwd),
-			emitCwdChanged: (previous, cwd) => this.#emit({ type: "cwd_changed", previous, cwd }),
+			emitCwdChanged: (previous, cwd) => this.#events.emit({ type: "cwd_changed", previous, cwd }),
 		});
 		this.#context = new ContextAccounting({
 			sessionStore: this.sessionManager,
@@ -1014,8 +999,8 @@ export class AgentSession {
 				appendLateToolResult: message => {
 					this.agent.appendMessage(message);
 					this.#persistence.persistIfMissing(message);
-					this.#emitSessionEventDetached({ type: "message_start", message }, "late tool result");
-					this.#emitSessionEventDetached({ type: "message_end", message }, "late tool result");
+					this.#events.sendDetached({ type: "message_start", message }, "late tool result");
+					this.#events.sendDetached({ type: "message_end", message }, "late tool result");
 				},
 				enqueueAsyncResult: entry => this.yieldQueue.enqueue<AsyncResultEntry>("async-result", entry),
 				subscribe: listener => this.subscribe(listener),
@@ -1044,7 +1029,7 @@ export class AgentSession {
 			promptGeneration: () => this.#promptGeneration,
 			magicKeywordEnabled: keyword => magicKeywordEnabled(this.settings, keyword),
 			clearInheritedProviderPromptCacheKey: reason => this.#providerSessions.clearInheritedCacheKey(reason),
-			emitSessionEvent: event => this.#emit(event),
+			emitSessionEvent: event => this.#events.emit(event),
 		});
 		this.#thinking.seedFromConfig(config.thinkingLevel, config.thinkingSource);
 		this.#models = new ModelSelection(
@@ -1333,7 +1318,7 @@ export class AgentSession {
 				argotEnabled: () => this.settings.get("argot.enabled") === true,
 				argotLoaded: () => this.#config.argot?.loaded === true,
 				promptGeneration: () => this.#promptGeneration,
-				emitSessionEventDetached: (event, context) => this.#emitSessionEventDetached(event, context),
+				emitSessionEventDetached: (event, context) => this.#events.sendDetached(event, context),
 				scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 				schedulePostPromptTask: (task, options) => this.#postPrompt.schedule(task, options),
 			},
@@ -1355,7 +1340,7 @@ export class AgentSession {
 			eagerPreludeContext: () => this.#preludes.eagerContext(),
 			consumeLastServedToolChoiceLabel: () => this.#toolChoiceQueue.consumeLastServedLabel(),
 			hasPendingAsyncWake: () => this.#ownedJobs.hasPendingWake(),
-			emitSessionEvent: event => this.#emitSessionEvent(event),
+			emitSessionEvent: event => this.#events.send(event),
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 			promptGeneration: () => this.#promptGeneration,
 		});
@@ -1390,7 +1375,7 @@ export class AgentSession {
 			getCurrentUsage: () => this.#goalUsage(),
 			emit: event => {
 				if (event.type === "goal_updated") {
-					return this.#emitSessionEvent({ type: "goal_updated", goal: event.goal, state: event.state });
+					return this.#events.send({ type: "goal_updated", goal: event.goal, state: event.state });
 				}
 			},
 			persist: (mode, state) => recordGoal(this.sessionManager, mode, state),
@@ -1883,28 +1868,12 @@ export class AgentSession {
 	// Event Subscription
 	// =========================================================================
 
-	/** Emit an event to all listeners */
-	#emit(event: AgentSessionEvent): void {
-		// Copy array before iteration to avoid mutation during iteration.
-		const listeners = this.#eventListeners.slice();
-		for (const l of listeners) {
-			try {
-				const result = l(event) as unknown;
-				// Listener may be an async function whose returned Promise we don't await;
-				// attach a catch so a rejection does not become an unhandled rejection.
-				if (isPromise(result)) {
-					result.catch(err => {
-						logger.warn("AgentSession listener rejected", {
-							error: errorMessage(err),
-						});
-					});
-				}
-			} catch (err) {
-				logger.warn("AgentSession listener threw", {
-					error: errorMessage(err),
-				});
-			}
-		}
+	/**
+	 * Subscribe to session events. Persistence runs inside the session and needs no subscriber.
+	 * Returns the function that removes this listener.
+	 */
+	subscribe(listener: AgentSessionEventListener): () => void {
+		return this.#events.subscribe(listener);
 	}
 
 	/**
@@ -1917,44 +1886,7 @@ export class AgentSession {
 	 * react to (e.g. background queue flush failures).
 	 */
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void {
-		this.#emit({ type: "notice", level, message, source });
-	}
-
-	/**
-	 * Emit a session event without waiting for it, when the caller genuinely cannot wait.
-	 *
-	 * The TTSR paths use this: the abort has to happen immediately and must not be gated on extension
-	 * callbacks. But the failure still matters. `#emitSessionEvent` runs the extension handlers AND the
-	 * wire-level `#emit` to subscribers, so an extension that throws stops the event reaching subscribers
-	 * altogether -- the TTSR notification silently stops working, with the rule still applied and nothing
-	 * saying why the client never heard about it. So the emit is detached, and the failure is reported.
-	 */
-	#emitSessionEventDetached(event: AgentSessionEvent, context: string): void {
-		void this.#emitSessionEvent(event).catch((error: unknown) => {
-			logger.warn("session event emit failed", { context, event: event.type, error: errorMessage(error) });
-		});
-	}
-
-	async #emitSessionEvent(event: AgentSessionEvent): Promise<void> {
-		if (event.type === "message_update") {
-			this.#emit(event);
-			void this.#extensionEvents.enqueue(event);
-			return;
-		}
-		await this.#extensionEvents.forward(event);
-		// Hold the wire-level agent_end until in-flight prompts unwind. Subscribers
-		// (rpc-mode, ACP, Cursor) treat agent_end as the "session is idle" signal;
-		// emitting while a prompt is in flight lets a client fire its next
-		// `prompt` into a session that still reports isStreaming === true. Flush
-		// happens in #endInFlight. A later agent_end (e.g. from
-		// an auto-compaction turn that starts before the original prompt unwinds)
-		// supersedes the pending one, which is what subscribers want — they only
-		// care about the final settle.
-		if (event.type === "agent_end" && this.#inFlight.active) {
-			this.#pendingAgentEndEmit = event;
-			return;
-		}
-		this.#emit(event);
+		this.#events.emit({ type: "notice", level, message, source });
 	}
 
 	/** Internal handler for agent events - shared by subscribe and reconnect.
@@ -2004,10 +1936,10 @@ export class AgentSession {
 		switch (event.type) {
 			case "message_start":
 				if (event.message.role === "assistant") this.#display.startStream();
-				await this.#emitSessionEvent(expandAssistantEvent(this, event));
+				await this.#events.send(expandAssistantEvent(this, event));
 				return;
 			case "message_update":
-				await this.#emitSessionEvent(this.#display.streamUpdate(event));
+				await this.#events.send(this.#display.streamUpdate(event));
 				// A TTSR rule matching a stream delta may abort the turn to inject its body;
 				// the retry it scheduled carries the rest.
 				await this.#ttsr.observeStreamDelta(event.message, event.assistantMessageEvent);
@@ -2021,11 +1953,11 @@ export class AgentSession {
 				// already reached.
 				this.#streamingEdit.resetForTurn();
 				this.#goalRuntime.onTurnStart(`turn-${++this.#goalTurnCounter}`);
-				await this.#emitSessionEvent(event);
+				await this.#events.send(event);
 				this.#ttsr.onTurnStart();
 				return;
 			case "turn_end":
-				await this.#emitSessionEvent(expandAssistantEvent(this, event));
+				await this.#events.send(expandAssistantEvent(this, event));
 				this.#ttsr.onTurnEnd();
 				this.#settleInFlightToolChoice(event.message);
 				return;
@@ -2037,24 +1969,24 @@ export class AgentSession {
 				// transcript right beneath it shows the same call expanded.
 				const intent = this.displayToolIntent(event.intent);
 				this.#exitRecord.recordToolStart(event);
-				await this.#emitSessionEvent(intent === event.intent ? event : { ...event, intent });
+				await this.#events.send(intent === event.intent ? event : { ...event, intent });
 				return;
 			}
 			case "tool_execution_end":
 				this.#finalize.evidence.recordToolEnd(event);
-				await this.#emitSessionEvent(event);
+				await this.#events.send(event);
 				await this.#onToolExecutionEnd(event);
 				return;
 			case "agent_end": {
-				await this.#emitSessionEvent(expandAgentEndEvent(this, event));
+				await this.#events.send(expandAgentEndEvent(this, event));
 				const settledMessages = this.agent.state.messages;
 				await this.#goalRuntime.onAgentEnd();
 				await this.#stopSettlement.run(settledMessages);
-				await this.#extensionEvents.agentEnd(settledMessages);
+				await this.#events.extensions.agentEnd(settledMessages);
 				return;
 			}
 			default:
-				await this.#emitSessionEvent(event);
+				await this.#events.send(event);
 		}
 	};
 
@@ -2091,7 +2023,7 @@ export class AgentSession {
 			this.#applyToolResultState(message);
 		}
 		try {
-			await this.#emitSessionEvent(displayEvent);
+			await this.#events.send(displayEvent);
 		} catch (error) {
 			persistence?.release();
 			throw error;
@@ -2396,12 +2328,6 @@ export class AgentSession {
 	}
 
 	/**
-	 * Subscribe to agent events.
-	 * Session persistence is handled internally (saves messages on message_end).
-	 * Multiple listeners can be added. Returns unsubscribe function for this listener.
-	 */
-
-	/**
 	 * Re-read everything that depends on the session's working directory: settings, process-global
 	 * provider and capability state, secrets, the SSH tool and the base system prompt, in that order.
 	 * Every mode reaches this, not only the TUI's `cwd_changed` handler. A spawned agent re-roots
@@ -2446,18 +2372,6 @@ export class AgentSession {
 	 */
 	get thoughtSignatureBytesSaved(): number {
 		return this.#wire.thoughtSignatureBytesSaved;
-	}
-
-	subscribe(listener: AgentSessionEventListener): () => void {
-		this.#eventListeners.push(listener);
-
-		// Return unsubscribe function for this specific listener
-		return () => {
-			const index = this.#eventListeners.indexOf(listener);
-			if (index !== -1) {
-				this.#eventListeners.splice(index, 1);
-			}
-		};
 	}
 
 	subscribeCommandMetadataChanged(listener: CommandMetadataChangedListener): () => void {
@@ -2667,7 +2581,7 @@ export class AgentSession {
 		await mnemopiState?.dispose({ timeoutMs: options.mnemopiConsolidateTimeoutMs });
 		this.#disconnectFromAgent();
 		for (const release of this.#listenerReleases.splice(0)) release();
-		this.#eventListeners = [];
+		this.#events.clear();
 	}
 
 	freshSession(): FreshSessionResult | undefined {
@@ -4669,7 +4583,7 @@ export class AgentSession {
 	 * agent↔agent traffic on the main session.
 	 */
 	emitIrcRelayObservation(record: CustomMessage): void {
-		void this.#emitSessionEvent({ type: "irc_message", message: record });
+		void this.#events.send({ type: "irc_message", message: record });
 	}
 
 	/**

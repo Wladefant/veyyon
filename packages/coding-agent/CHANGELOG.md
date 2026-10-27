@@ -37,7 +37,8 @@
 - The display copy of assistant content, tool intents, streamed deltas and rebuilt transcripts, with the stream decoder a streamed reply runs through, moved out of the session class into the `DisplayCopy` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - The normalization of a message's images for the active model, the description a text-only model reads in their place and the latest images a tool addresses moved out of the session class into the `ImageAttachments` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - The response and raw SSE interceptors every request runs with, the raw SSE capture, the side stream function and the preparation of a side request's options moved out of the session class into the `ProviderTransport` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- - The redacted tool start markers, the `session_exit` entry and the process teardown callback that writes it when no dispose runs moved out of the session class into the `ExitRecord` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The redacted tool start markers, the `session_exit` entry and the process teardown callback that writes it when no dispose runs moved out of the session class into the `ExitRecord` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The event subscribers, the extension event forwarder and the wire-level `agent_end` held while a prompt unwinds moved out of the session class into the `SessionEvents` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 
 ### Fixed
 

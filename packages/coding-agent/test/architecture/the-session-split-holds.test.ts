@@ -133,8 +133,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-27 at 5115: the `/move` marker nothing set was removed with its dispose step
  * (-9), and the tool start markers and the exit entry moved into the `exit-record.ts`
  * collaborator (-88).
+ * RE-MEASURED 2026-10-27 at 5029: the subscriber list, the extension event forwarder and the held
+ * wire-level `agent_end` moved into the `session-events.ts` collaborator, and a doc comment that
+ * documented no member was dropped (-86).
  */
-const RUNTIME_CEILING = 5_170;
+const RUNTIME_CEILING = 5_080;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -181,6 +184,7 @@ const COLLABORATORS = [
 	"service-tiers.ts",
 	"session-approvals.ts",
 	"session-branch.ts",
+	"session-events.ts",
 	"session-handoff.ts",
 	"session-scope.ts",
 	"session-secrets.ts",
