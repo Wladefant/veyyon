@@ -33,7 +33,7 @@
  * its extensions load, and `acp` refuses it at `session/new` (pinned in acp-mcp-isolation.test.ts);
  * this sweep checks neither.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { parseArgs, reportUnrecognizedFlags } from "@veyyon/coding-agent/cli/args";
 import {
 	OPTIONAL_VALUE_FLAGS,
@@ -42,7 +42,7 @@ import {
 	VALUELESS_FLAGS,
 } from "@veyyon/coding-agent/cli/flag-tables";
 import { commands } from "@veyyon/coding-agent/cli-commands";
-import type { CliConfig, CommandCtor } from "@veyyon/utils/cli";
+import { CLI_EXIT_USAGE, type CommandCtor, run } from "@veyyon/utils/cli";
 import { CliUsageError } from "@veyyon/utils/cli-usage-error";
 
 /** Collect what the reporter writes instead of letting it reach the real stderr. */
@@ -205,14 +205,30 @@ const ctors = new Map<string, CommandCtor>();
 for (const entry of commands) {
 	ctors.set(entry.name, (await entry.load()) as CommandCtor);
 }
-const cliConfig = { bin: "veyyon", version: "0.0.0", commands: ctors } as CliConfig;
 
-/** What `run()` does first: parse `argv` against the command's declared flags and args. */
-function parseAs(name: string, argv: string[]): Promise<unknown> {
-	const ctor = ctors.get(name);
-	if (!ctor) throw new Error(`no registered command ${name}`);
-	const instance = new ctor(argv, cliConfig) as unknown as { parse(cmd: CommandCtor): Promise<unknown> };
-	return instance.parse(ctor);
+/** Run `veyyon <name> ...argv` through the real dispatcher, returning its exit status and stderr. */
+async function runAs(
+	name: string,
+	argv: string[],
+): Promise<{ exitCode: number | string | null | undefined; stderr: string }> {
+	const errs: string[] = [];
+	const stderrSpy = spyOn(process.stderr, "write").mockImplementation(chunk => {
+		errs.push(String(chunk));
+		return true;
+	});
+	const stdoutSpy = spyOn(process.stdout, "write").mockImplementation(() => true);
+	const prevExitCode = process.exitCode;
+	let exitCode: number | string | null | undefined;
+	try {
+		process.exitCode = 0;
+		await run({ bin: "veyyon", version: "0.0.0", argv: [name, ...argv], commands });
+		exitCode = process.exitCode;
+	} finally {
+		stderrSpy.mockRestore();
+		stdoutSpy.mockRestore();
+		process.exitCode = prevExitCode ?? 0;
+	}
+	return { exitCode, stderr: errs.join("") };
 }
 
 describe("a subcommand's unrecognized flag", () => {
@@ -229,18 +245,48 @@ describe("a subcommand's unrecognized flag", () => {
 
 	for (const name of [...ctors.keys()].filter(name => ctors.get(name)?.strict !== false)) {
 		it(`is refused by ${name}`, async () => {
-			await expect(parseAs(name, ["--zzzz-not-a-flag"])).rejects.toThrow(CliUsageError);
+			const result = await runAs(name, ["--zzzz-not-a-flag"]);
+
+			expect(result.exitCode).toBe(CLI_EXIT_USAGE);
+			expect(result.stderr).toContain("zzzz-not-a-flag");
 		});
 	}
 
 	/** The reported case: a misspelled refusal must never reach the approving default. */
 	it("refuses `trust --denny` before any decision is made", async () => {
-		await expect(parseAs("trust", ["--denny"])).rejects.toThrow(/denny/);
+		const result = await runAs("trust", ["--denny"]);
+
+		expect(result.exitCode).toBe(CLI_EXIT_USAGE);
+		expect(result.stderr).toContain("denny");
 	});
 
 	/** Anti-vacuity: the sweep loaded the real command table. */
 	it("sweeps the registered commands", () => {
 		expect(ctors.size).toBeGreaterThan(20);
 		expect(ctors.has("trust")).toBe(true);
+	});
+});
+
+/**
+ * `veyyon licenses nosuch` printed the license bundle at exit 0: its run() never parsed, so neither a
+ * stray word nor a typo was checked. A command that declares no argument refuses every word.
+ */
+describe("a stray word after a command that takes no argument", () => {
+	const argless = [...ctors]
+		.filter(([, ctor]) => ctor.strict !== false && Object.keys(ctor.args ?? {}).length === 0)
+		.map(([name]) => name);
+
+	for (const name of argless) {
+		it(`is refused by ${name}`, async () => {
+			const result = await runAs(name, ["zzzz-stray"]);
+
+			expect(result.exitCode).toBe(CLI_EXIT_USAGE);
+			expect(result.stderr).toContain('Unexpected argument: "zzzz-stray"');
+		});
+	}
+
+	/** Anti-vacuity: the reported command is in the sweep. */
+	it("sweeps the command that never parsed", () => {
+		expect(argless).toContain("licenses");
 	});
 });

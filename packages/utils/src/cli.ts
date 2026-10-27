@@ -866,6 +866,10 @@ async function runCommand(bin: string, version: string, entry: CommandEntry, arg
 	const config: CliConfig = { bin, version, commands: new Map([[entry.name, Cmd]]) };
 	const instance = new Cmd(argv, config);
 	try {
+		// The command line is checked against the command's declarations before run(), so a command
+		// whose run() reads no flag and no argument still refuses `--typo` or a stray word instead of
+		// running on it at exit 0. A lenient command hands argv to a parser of its own and checks there.
+		if (Cmd.strict !== false) await instance.parse(Cmd);
 		await instance.run();
 	} catch (error) {
 		if (!(error instanceof CliUsageError)) throw error;

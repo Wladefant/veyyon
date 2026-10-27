@@ -1,5 +1,14 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { Args, CLI_EXIT_USAGE, Command, type CommandEntry, Flags, run, tokenizeQuotedArgs } from "../src/cli";
+import {
+	Args,
+	CLI_EXIT_USAGE,
+	Command,
+	type CommandCtor,
+	type CommandEntry,
+	Flags,
+	run,
+	tokenizeQuotedArgs,
+} from "../src/cli";
 
 class GoodCommand extends Command {
 	static description = "prints good things";
@@ -19,6 +28,22 @@ class BenchLikeCommand extends Command {
 	};
 	async run(): Promise<void> {
 		await this.parse(BenchLikeCommand);
+	}
+}
+
+let ranCount = 0;
+
+/** A command like `licenses`: declares nothing and never parses its argv. */
+class QuietCommand extends Command {
+	async run(): Promise<void> {
+		ranCount++;
+	}
+}
+
+class LenientQuietCommand extends Command {
+	static strict = false;
+	async run(): Promise<void> {
+		ranCount++;
 	}
 }
 
@@ -252,6 +277,60 @@ describe("run() usage errors", () => {
 		}
 		expect(observedExitCode).toBe(CLI_EXIT_USAGE);
 		expect(errs.join("")).toContain("Error: Unknown command 'nope'");
+	});
+
+	// Contract: the runner checks a command line against the command's declarations before run(). A
+	// command whose run() never parsed (`veyyon licenses`) ran on `--typo` and on a stray word at exit
+	// 0; the check sits in the runner so a new command that forgets to parse cannot reopen that.
+	describe("a command whose run() reads no argv", () => {
+		async function runQuiet(
+			ctor: CommandCtor,
+			argv: string[],
+		): Promise<{ ran: number; exitCode: number | string | null | undefined; stderr: string }> {
+			ranCount = 0;
+			const commands: CommandEntry[] = [{ name: "quiet", load: async () => ctor }];
+			const errs: string[] = [];
+			const stderrSpy = spyOn(process.stderr, "write").mockImplementation(chunk => {
+				errs.push(String(chunk));
+				return true;
+			});
+			const prevExitCode = process.exitCode;
+			let exitCode: number | string | null | undefined;
+			try {
+				process.exitCode = 0;
+				await run({ bin: "veyyon", version: "0.0.0", argv: ["quiet", ...argv], commands });
+				exitCode = process.exitCode;
+			} finally {
+				stderrSpy.mockRestore();
+				process.exitCode = prevExitCode ?? 0;
+			}
+			return { ran: ranCount, exitCode, stderr: errs.join("") };
+		}
+
+		it.each([
+			["an unknown flag", ["--zzzz"], "zzzz"],
+			["a stray positional", ["stray"], 'Unexpected argument: "stray"'],
+		])("refuses %s without running it", async (_label, argv, named) => {
+			const result = await runQuiet(QuietCommand, argv);
+
+			expect(result.ran).toBe(0);
+			expect(result.exitCode).toBe(CLI_EXIT_USAGE);
+			expect(result.stderr).toContain(named);
+		});
+
+		it("runs once on an empty command line", async () => {
+			const result = await runQuiet(QuietCommand, []);
+
+			expect(result.ran).toBe(1);
+			expect(result.exitCode).toBe(0);
+		});
+
+		it("leaves a lenient command's argv to the command's own parser", async () => {
+			const result = await runQuiet(LenientQuietCommand, ["--zzzz", "stray"]);
+
+			expect(result.ran).toBe(1);
+			expect(result.exitCode).toBe(0);
+		});
 	});
 });
 
