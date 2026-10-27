@@ -1552,6 +1552,14 @@ export class AgentSession {
 			thunks.push(() => this.#ttsr.takePendingToolReminders());
 			return thunks;
 		});
+		const protectedToolNames =
+			config.protectedToolNames ??
+			new Set(
+				[
+					...(config.requestedToolNames ? Array.from(config.requestedToolNames) : []),
+					...this.agent.state.tools.map(t => t.name),
+				].filter(name => !isMCPToolName(name)),
+			);
 		this.#discovery = new ToolDiscovery(
 			{
 				registry: this.#toolRegistry,
@@ -1560,7 +1568,10 @@ export class AgentSession {
 				maxDiscoveredTools: () => this.settings.get("tools.maxDiscoveredTools"),
 				sessionMessages: () => this.messages,
 			},
-			config,
+			{
+				...config,
+				protectedToolNames,
+			},
 		);
 		this.#toolActivation = new ToolActivation(this, {
 			registry: this.#toolRegistry,

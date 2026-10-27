@@ -623,9 +623,7 @@ export class CompactionRuntime {
 			});
 			if (!preparation) {
 				await this.#emitEmptyAutoCompactionEnd(action, "skipped");
-				const outcome = this.#recovery.afterNothingToSummarize(reason, generation, suppressContinuation);
-				this.#evaluateAutoCompactionGuard(reason);
-				return outcome;
+				return this.#recovery.afterNothingToSummarize(reason, generation, suppressContinuation);
 			}
 
 			const beforeCompact = await this.#emitBeforeCompact(preparation, pathEntries, undefined, autoCompactionSignal);
@@ -722,13 +720,11 @@ export class CompactionRuntime {
 							? `Incomplete response recovery failed: ${failure}`
 							: `Auto-compaction failed: ${failure}`,
 			});
-			const outcome = await this.#recovery.afterFailedCompaction(reason, willRetry, autoCompactionSignal, generation, {
+			return await this.#recovery.afterFailedCompaction(reason, willRetry, autoCompactionSignal, generation, {
 				suppressContinuation,
 				shouldAutoContinue,
 				payloadGapTokens: this.#summarizer.payloadGapTokens,
 			});
-			this.#evaluateAutoCompactionGuard(reason);
-			return outcome;
 		} finally {
 			if (this.#autoCompactionAbortController === autoCompactionAbortController) {
 				this.#autoCompactionAbortController = undefined;

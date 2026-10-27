@@ -91,7 +91,14 @@ interface TestHarnessState {
 	promptGeneration: number;
 }
 
-function createCompactionRuntimeHarness(initialTokens = 115000, contextWindow = 128000) {
+function createCompactionRuntimeHarness(
+	initialTokens = 115000,
+	contextWindow = 128000,
+	options: {
+		seedBranch?: boolean;
+		failCompaction?: boolean;
+	} = {},
+) {
 	const state: TestHarnessState = {
 		model: createMockModel({ contextWindow }),
 		sessionId: "test-session-1",
@@ -106,6 +113,23 @@ function createCompactionRuntimeHarness(initialTokens = 115000, contextWindow = 
 	};
 
 	const sessionManager = SessionManager.inMemory();
+	if (options.seedBranch !== false) {
+		sessionManager.appendMessage({
+			role: "user",
+			content: "Investigate repository history",
+			timestamp: 1000,
+		});
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "history payload\n".repeat(6000) }],
+			timestamp: 2000,
+		});
+		sessionManager.appendMessage({
+			role: "user",
+			content: "next step",
+			timestamp: 3000,
+		});
+	}
 	const agent = new Agent({
 		initialState: {
 			model: state.model,
@@ -120,6 +144,24 @@ function createCompactionRuntimeHarness(initialTokens = 115000, contextWindow = 
 		"compaction.threshold": "100000",
 		"compaction.keepRecentTokens": 10000,
 	});
+	const extensionRunner = {
+		hasHandlers: (event: string) => event === "session_before_compact",
+		emit: async (event: { type: string; preparation?: { firstKeptEntryId?: string } }) => {
+			if (options.failCompaction) {
+				throw new Error("Compaction LLM summarization failed");
+			}
+			if (event.type === "session_before_compact" && event.preparation) {
+				return {
+					compaction: {
+						summary: "test auto-compaction summary",
+						firstKeptEntryId: event.preparation.firstKeptEntryId,
+						tokensBefore: 25000,
+					},
+				};
+			}
+			return undefined;
+		},
+	};
 
 	const session: CompactionSession = {
 		agent,
@@ -132,7 +174,7 @@ function createCompactionRuntimeHarness(initialTokens = 115000, contextWindow = 
 			find: () => state.model,
 		} as never,
 		thinkingLevel: undefined,
-		extensionRunner: undefined,
+		extensionRunner: options.seedBranch === false ? undefined : (extensionRunner as never),
 		dedupeRedundantToolResults: async () => ({ toolResultsDropped: 0, tokensFreed: 0 }),
 		buildDisplaySessionContext: () => sessionManager.buildSessionContext(),
 		abort: async () => {},
@@ -205,8 +247,7 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 		};
 		state.currentTokens = 105000;
 
-		// Trigger an auto-compaction that has nothing to summarize (empty preparation)
-		// which calls #evaluateAutoCompactionGuard
+		// Trigger an auto-compaction pass that completes successfully and evaluates the guard
 		const outcome = await runtime.runAutoCompaction("threshold", false);
 		expect(outcome).toBe(COMPACTION_CHECK_NONE);
 
@@ -296,7 +337,9 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 
 		// Emitted skipped auto_compaction_end event
 		const skippedEndEvents = state.emittedEvents.filter(
-			e => e.type === "auto_compaction_end" && "outcome" in e && e.outcome === "skipped",
+			e =>
+				e.type === "auto_compaction_end" &&
+				(("outcome" in e && e.outcome === "skipped") || ("skipped" in e && e.skipped === true)),
 		);
 		expect(skippedEndEvents.length).toBe(1);
 
@@ -441,6 +484,148 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 		// Guard must not be armed
 		expect(runtime.isAutoCompactionSuppressed()).toBe(false);
 		expect(state.notices.length).toBe(0);
+	});
+	it("does not arm guard and produces no false completion warning when auto-compaction fails", async () => {
+		const { runtime, state } = createCompactionRuntimeHarness(105000, 128000, { failCompaction: true });
+
+		state.breakdown = {
+			contextWindow: 128000,
+			anchored: false,
+			usedTokens: 105000,
+			systemPromptTokens: 65000,
+			systemContextTokens: 5000,
+			skillsTokens: 2000,
+			systemToolsTokens: 18000,
+			messagesTokens: 15000,
+		};
+		state.currentTokens = 105000;
+
+		const outcome = await runtime.runAutoCompaction("threshold", false);
+		expect(outcome).toBe(COMPACTION_CHECK_NONE);
+
+		// Failure path must NOT arm the guard
+		expect(runtime.isAutoCompactionSuppressed()).toBe(false);
+
+		// Failure path must NOT emit the "after compaction" warning notice
+		const compactionWarnings = state.notices.filter(n => n.category === "compaction" && n.level === "warning");
+		expect(compactionWarnings.length).toBe(0);
+
+		// Emitted event reports failure, not successful compaction
+		const failedEndEvents = state.emittedEvents.filter(
+			e => e.type === "auto_compaction_end" && "errorMessage" in e && Boolean(e.errorMessage),
+		);
+		expect(failedEndEvents.length).toBe(1);
+	});
+
+	it("arms guard after successful compaction with post-compaction tool pruning when context remains >= threshold", async () => {
+		const { runtime, state } = createCompactionRuntimeHarness(105000, 128000);
+
+		state.breakdown = {
+			contextWindow: 128000,
+			anchored: false,
+			usedTokens: 105000,
+			systemPromptTokens: 65000,
+			systemContextTokens: 5000,
+			skillsTokens: 2000,
+			systemToolsTokens: 18000,
+			messagesTokens: 15000,
+		};
+		state.currentTokens = 105000;
+
+		const outcome = await runtime.runAutoCompaction("threshold", false);
+		expect(outcome).toBe(COMPACTION_CHECK_NONE);
+
+		// Post-compaction tool pruning was called during #applyCompaction
+		expect(state.pruneCallCount).toBeGreaterThan(0);
+
+		// Guard is armed after successful compaction and post-pruning
+		expect(runtime.isAutoCompactionSuppressed()).toBe(true);
+
+		// Warning notice is emitted
+		const compactionWarnings = state.notices.filter(n => n.category === "compaction" && n.level === "warning");
+		expect(compactionWarnings.length).toBe(1);
+		expect(compactionWarnings[0].message).toContain("Automatic compaction is paused");
+	});
+
+	it("does not arm guard on no-op run when there is nothing to summarize", async () => {
+		const { runtime, state } = createCompactionRuntimeHarness(105000, 128000, { seedBranch: false });
+
+		state.breakdown = {
+			contextWindow: 128000,
+			anchored: false,
+			usedTokens: 105000,
+			systemPromptTokens: 65000,
+			systemContextTokens: 5000,
+			skillsTokens: 2000,
+			systemToolsTokens: 18000,
+			messagesTokens: 15000,
+		};
+		state.currentTokens = 105000;
+
+		// No messages in branch -> prepareCompaction returns undefined (nothing to summarize)
+		const outcome = await runtime.runAutoCompaction("threshold", false);
+		expect(outcome).toBe(COMPACTION_CHECK_NONE);
+
+		// No-op run must NOT arm the guard
+		expect(runtime.isAutoCompactionSuppressed()).toBe(false);
+
+		// No-op run must NOT emit the "after compaction" warning notice
+		const compactionWarnings = state.notices.filter(n => n.category === "compaction" && n.level === "warning");
+		expect(compactionWarnings.length).toBe(0);
+	});
+
+	it("retains existing armed guard when a subsequent pass has nothing to summarize", async () => {
+		const { runtime, state } = createCompactionRuntimeHarness(105000, 128000);
+
+		state.breakdown = {
+			contextWindow: 128000,
+			anchored: false,
+			usedTokens: 105000,
+			systemPromptTokens: 65000,
+			systemContextTokens: 5000,
+			skillsTokens: 2000,
+			systemToolsTokens: 18000,
+			messagesTokens: 15000,
+		};
+		state.currentTokens = 105000;
+
+		// Successful compaction arms the guard
+		await runtime.runAutoCompaction("threshold", false);
+		expect(runtime.isAutoCompactionSuppressed()).toBe(true);
+
+		// Subsequent pass is skipped due to guard
+		const outcome = await runtime.runAutoCompaction("threshold", false);
+		expect(outcome).toBe(COMPACTION_CHECK_NONE);
+		// Guard remains armed and did not escape
+		expect(runtime.isAutoCompactionSuppressed()).toBe(true);
+	});
+
+	it("guard suppresses all automatic compaction reasons while armed", async () => {
+		const { runtime, state } = createCompactionRuntimeHarness(105000, 128000);
+
+		state.breakdown = {
+			contextWindow: 128000,
+			anchored: false,
+			usedTokens: 105000,
+			systemPromptTokens: 65000,
+			systemContextTokens: 5000,
+			skillsTokens: 2000,
+			systemToolsTokens: 18000,
+			messagesTokens: 15000,
+		};
+		state.currentTokens = 105000;
+
+		await runtime.runAutoCompaction("threshold", false);
+		expect(runtime.isAutoCompactionSuppressed()).toBe(true);
+
+		// "overflow" reason must also be suppressed while guard is armed
+		state.emittedEvents.length = 0;
+		const overflowOutcome = await runtime.runAutoCompaction("overflow", false);
+		expect(overflowOutcome).toBe(COMPACTION_CHECK_NONE);
+
+		// "incomplete" reason must also be suppressed while guard is armed
+		const incompleteOutcome = await runtime.runAutoCompaction("incomplete", false);
+		expect(incompleteOutcome).toBe(COMPACTION_CHECK_NONE);
 	});
 });
 

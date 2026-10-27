@@ -62,12 +62,6 @@ export interface ToolDiscoveryConfig {
 	protectedToolNames?: Iterable<string>;
 }
 
-/** An MCP activation: the names it activated and the full active list that carries them. */
-export interface MCPActivation {
-	activated: string[];
-	nextActive: string[];
-}
-
 /** A discovery activation plan with LRU eviction when exceeding maxDiscoveredTools. */
 export interface DiscoveryActivationPlan {
 	readonly activated: string[];
@@ -153,14 +147,35 @@ export class ToolDiscovery {
 			}
 		}
 
-		const configuredDefaults = new Set(this.configuredDefaultMCP());
+		// Identify restored search-activated candidates (excluding inherently protected defaults/config).
+		const searchCandidates: string[] = [];
 		for (const name of initialSelected) {
-			if (configuredDefaults.has(name) || this.#protected.has(name)) continue;
-			const tool = this.#host.registry.get(name);
-			if (this.#builtIn.has(name) && tool && tool.loadMode !== "discoverable") continue;
+			if (this.isInherentlyProtected(name)) continue;
 			if (this.#selectedMCP.has(name) || this.#selectedLocal.has(name)) {
-				this.#searchActivated.set(name, ++this.#activationSeq);
+				searchCandidates.push(name);
 			}
+		}
+
+		// Bound restored search-activated selections to maxDiscoveredTools, keeping the most recent.
+		const cap = this.maxDiscoveredTools;
+		const keptSearch =
+			searchCandidates.length > cap
+				? searchCandidates.slice(searchCandidates.length - cap)
+				: searchCandidates;
+		const droppedSearch =
+			searchCandidates.length > cap
+				? new Set(searchCandidates.slice(0, searchCandidates.length - cap))
+				: null;
+
+		if (droppedSearch) {
+			for (const name of droppedSearch) {
+				this.#selectedMCP.delete(name);
+				this.#selectedLocal.delete(name);
+			}
+		}
+
+		for (const name of keptSearch) {
+			this.#searchActivated.set(name, ++this.#activationSeq);
 		}
 
 		this.pruneSelectedMCP();
@@ -285,14 +300,21 @@ export class ToolDiscovery {
 		return 40;
 	}
 
-	/** Whether `name` is a protected default tool that must never evict. */
-	isProtected(name: string): boolean {
+	/** Whether `name` is inherently protected by defaults or configuration. */
+	isInherentlyProtected(name: string): boolean {
 		if (this.#protected.has(name)) return true;
 		if (this.#defaultMCPTools.has(name)) return true;
 		if (this.configuredDefaultMCP().includes(name)) return true;
 		const tool = this.#host.registry.get(name);
 		if (this.#builtIn.has(name) && (!tool || tool.loadMode !== "discoverable")) return true;
-		return !this.#searchActivated.has(name);
+		return false;
+	}
+
+	/** Whether `name` is a protected default tool that must never evict. */
+	isProtected(name: string): boolean {
+		if (this.isInherentlyProtected(name)) return true;
+		if (this.#searchActivated.has(name)) return false;
+		return this.#host.activeToolNames().includes(name);
 	}
 
 	/** The currently active tools that were activated through search (and thus eligible for cap eviction or compaction pruning). */
@@ -330,39 +352,96 @@ export class ToolDiscovery {
 			};
 		}
 
+		const messages = options?.messages ?? this.#host.sessionMessages?.() ?? [];
+		const lastCalls = extractToolLastCallIndices(messages);
 		const currentSearchActive = this.searchActivatedTools();
 		const cap = this.maxDiscoveredTools;
-		const excess = Math.max(0, currentSearchActive.length + toActivate.length - cap);
 
-		let evicted: string[] = [];
-		if (excess > 0) {
-			const messages = options?.messages ?? this.#host.sessionMessages?.() ?? [];
-			const lastCalls = extractToolLastCallIndices(messages);
-			const sorted = [...currentSearchActive].sort((a, b) => {
-				const hasA = lastCalls.has(a);
-				const hasB = lastCalls.has(b);
-				if (!hasA && !hasB) {
-					return (this.#searchActivated.get(a) ?? 0) - (this.#searchActivated.get(b) ?? 0);
-				}
-				if (!hasA && hasB) return -1;
-				if (hasA && !hasB) return 1;
-				const callA = lastCalls.get(a)!;
-				const callB = lastCalls.get(b)!;
-				if (callA !== callB) return callA - callB;
+		// Sort existing search-activated tools by LRU eviction priority (first to evict at index 0)
+		const existingLRU = [...currentSearchActive].sort((a, b) => {
+			const hasA = lastCalls.has(a);
+			const hasB = lastCalls.has(b);
+			if (!hasA && !hasB) {
 				return (this.#searchActivated.get(a) ?? 0) - (this.#searchActivated.get(b) ?? 0);
-			});
-			evicted = sorted.slice(0, excess);
+			}
+			if (!hasA && hasB) return -1;
+			if (hasA && !hasB) return 1;
+			const callA = lastCalls.get(a)!;
+			const callB = lastCalls.get(b)!;
+			if (callA !== callB) return callA - callB;
+			return (this.#searchActivated.get(a) ?? 0) - (this.#searchActivated.get(b) ?? 0);
+		});
+
+		// Track incoming order for deterministic tie-breaking among incoming tools
+		const incomingOrder = new Map(toActivate.map((name, idx) => [name, idx]));
+		const compareIncoming = (a: string, b: string): number => {
+			const hasA = lastCalls.has(a);
+			const hasB = lastCalls.has(b);
+			if (!hasA && !hasB) {
+				return (incomingOrder.get(a) ?? 0) - (incomingOrder.get(b) ?? 0);
+			}
+			if (!hasA && hasB) return -1;
+			if (hasA && !hasB) return 1;
+			const callA = lastCalls.get(a)!;
+			const callB = lastCalls.get(b)!;
+			if (callA !== callB) return callA - callB;
+			return (incomingOrder.get(a) ?? 0) - (incomingOrder.get(b) ?? 0);
+		};
+
+		const remainingExisting = [...existingLRU];
+		const activeIncoming: string[] = [];
+		const evictedExisting: string[] = [];
+		const finalProtected: string[] = [];
+
+		for (const candidate of toActivate) {
+			if (this.isInherentlyProtected(candidate)) {
+				finalProtected.push(candidate);
+				continue;
+			}
+
+			const currentActiveCount = remainingExisting.length + activeIncoming.length;
+			if (currentActiveCount < cap) {
+				activeIncoming.push(candidate);
+			} else if (remainingExisting.length > 0) {
+				// Evict LRU from existing search activated first
+				const evicted = remainingExisting.shift()!;
+				evictedExisting.push(evicted);
+				activeIncoming.push(candidate);
+			} else {
+				// Evict oldest never-called within incoming batch as needed
+				const pool = [...activeIncoming, candidate];
+				pool.sort(compareIncoming);
+				const toEvict = pool[0];
+				if (toEvict === candidate) {
+					continue;
+				}
+				const evictIdx = activeIncoming.indexOf(toEvict);
+				if (evictIdx !== -1) {
+					activeIncoming.splice(evictIdx, 1);
+				}
+				activeIncoming.push(candidate);
+			}
 		}
 
-		const evictedSet = new Set(evicted);
+		const activated = [...finalProtected, ...activeIncoming];
+		if (activated.length === 0 && evictedExisting.length === 0) {
+			return {
+				activated: [],
+				evicted: [],
+				nextActive: this.#host.activeToolNames(),
+				changed: false,
+			};
+		}
+
+		const evictedSet = new Set(evictedExisting);
 		const nextActive = this.#host
 			.activeToolNames()
 			.filter(name => !evictedSet.has(name))
-			.concat(toActivate);
+			.concat(activated);
 
 		return {
-			activated: toActivate,
-			evicted,
+			activated,
+			evicted: evictedExisting,
 			nextActive,
 			changed: true,
 		};
@@ -376,7 +455,7 @@ export class ToolDiscovery {
 			this.#selectedMCP.delete(name);
 		}
 		for (const name of plan.activated) {
-			if (!this.isProtected(name)) {
+			if (!this.isInherentlyProtected(name)) {
 				this.#searchActivated.set(name, ++this.#activationSeq);
 			}
 			if (isMCPToolName(name)) {
@@ -425,35 +504,6 @@ export class ToolDiscovery {
 		this.invalidate();
 	}
 
-	/**
-	 * What activating the discoverable MCP tools among `toolNames` activates, or `undefined` when it
-	 * activates none. The selection itself follows the active list once the session applies it.
-	 */
-	planMCPActivation(toolNames: readonly string[]): MCPActivation | undefined {
-		const plan = this.planActivation(toolNames.filter(isMCPToolName));
-		if (!plan.changed) return undefined;
-		return {
-			activated: plan.activated,
-			nextActive: plan.nextActive,
-		};
-	}
-
-	/**
-	 * Select the registered, inactive local tools among `toolNames` and return them, in order. The
-	 * session activates them.
-	 */
-	selectLocal(toolNames: readonly string[]): string[] {
-		const registry = this.#host.registry;
-		const active = new Set(this.#host.activeToolNames());
-		const selected: string[] = [];
-		for (const name of toolNames) {
-			if (!registry.has(name) || active.has(name)) continue;
-			selected.push(name);
-			this.#selectedLocal.add(name);
-			this.#searchActivated.set(name, ++this.#activationSeq);
-		}
-		return selected;
-	}
 
 	/** Remove `name` from the local selection, after its registry entry went away. */
 	deselect(name: string): void {

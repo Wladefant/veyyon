@@ -285,6 +285,8 @@ export interface AgentSessionConfig {
 	/** Rebuild the SSH tool from current capability discovery results. */
 	reloadSshTool?: () => Promise<AgentTool | null>;
 	requestedToolNames?: ReadonlySet<string>;
+	/** Tool names that are protected from eviction or pruning. */
+	protectedToolNames?: Iterable<string>;
 	/**
 	 * Optional accessor for live MCP server instructions. Read by the session's
 	 * `rebuildSystemPrompt`-skip optimization to detect server-side instruction
