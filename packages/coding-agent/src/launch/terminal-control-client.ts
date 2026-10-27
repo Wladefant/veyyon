@@ -2,7 +2,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as path from "node:path";
-import { errorMessage, getConfigRootDir, isProcessAlive, isRecord } from "@veyyon/utils";
+import { errorMessage, getConfigRootDir, isProcessAlive, isRecord, readOwnerOnlyFile } from "@veyyon/utils";
 import { isValidSessionId } from "./session-notices";
 import type { TerminalOwner } from "./terminal-control";
 
@@ -68,7 +68,7 @@ export async function discoverTerminalOwner(sessionId: string, root = getConfigR
 		if (!file.endsWith(".json")) continue;
 		let content: string;
 		try {
-			content = await fs.readFile(path.join(directory, file), "utf8");
+			content = await readOwnerOnlyFile(path.join(directory, file));
 		} catch {
 			continue;
 		}
