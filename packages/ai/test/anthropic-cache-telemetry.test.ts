@@ -279,6 +279,13 @@ describe("Anthropic cache telemetry", () => {
 					{ type: "text", text: "sys1", cache_control: { type: "ephemeral", ttl: "1h" } },
 					{ type: "text", text: "sys2", cache_control: { type: "ephemeral" } },
 				];
+				for (const m of payload.messages ?? []) {
+					if (Array.isArray(m.content)) {
+						for (const b of m.content) {
+							delete b.cache_control;
+						}
+					}
+				}
 				return payload;
 			},
 		});
