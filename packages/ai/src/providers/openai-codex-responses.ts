@@ -4942,8 +4942,6 @@ function normalizeInputMessageContent(
 	);
 }
 
-/** @internal Exported for tests. */
-export { convertMessages as convertCodexResponsesMessages };
 
 type CodexToolPayload =
 	| {

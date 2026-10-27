@@ -43,7 +43,6 @@ import {
 	type ShakeConfig,
 	shouldCompact,
 } from "@veyyon/agent-core/compaction";
-import { countTokens } from "@veyyon/agent-core/tokenizer";
 import type {
 	Api,
 	AssistantMessage,

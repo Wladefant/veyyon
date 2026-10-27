@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Restored the missing compaction configuration and video content types.
+
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.

@@ -15,6 +15,7 @@ import type { ImageContent, Static, TextContent, TSchema } from "@veyyon/ai";
 // Owners, not the `@veyyon/utils` barrel: 2 modules against 74.
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
+import type { Theme } from "../../theme/theme";
 import type { Settings } from "../../config/settings";
 import { getDefault } from "../../config/settings-schema";
 // `getDefault` from the SCHEMA that owns it, not through the store's re-export: the store is 95 modules
