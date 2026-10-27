@@ -137,9 +137,11 @@ async function run(header: number, height: number, turns: number, frames: number
 	return { redraws: tui.fullRedraws - before, erases: paints.erases() - erasesBefore, lost };
 }
 
+// Each case drives its own terminal and engine and spends nearly all of its time waiting out frame
+// timers in settleFrames, so the cases run concurrently.
 describe("a transcript under a header does not rebuild the screen", () => {
 	for (const header of [0, 2, 5]) {
-		it(`a header of ${header} rows costs no rebuild`, async () => {
+		it.concurrent(`a header of ${header} rows costs no rebuild`, async () => {
 			const result = await run(header, 40, 30, 40);
 			// eslint-disable-next-line no-console
 			console.log(`header=${header}`, JSON.stringify(result));
@@ -251,10 +253,11 @@ async function runBusyTurn(height: number, steps: number): Promise<{ busy: Paint
 	}
 }
 
+// Concurrent for the reason the header cases are.
 describe("a busy turn does not rebuild the screen", () => {
 	const STEPS = 60;
 	for (const height of [24, 40]) {
-		it(`several live blocks streaming at once cost no destructive paint at ${height} rows`, async () => {
+		it.concurrent(`several live blocks streaming at once cost no destructive paint at ${height} rows`, async () => {
 			// A multiplexer pane gates the divergence rebuild off, so the arm would
 			// pass without exercising anything it claims to cover.
 			expect(isInsideTerminalMultiplexer()).toBe(false);
