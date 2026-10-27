@@ -120,7 +120,7 @@ describe("run() usage errors", () => {
 			return true;
 		});
 		const prevExitCode = process.exitCode;
-		let exitCode: number | string | undefined;
+		let exitCode: typeof process.exitCode;
 		try {
 			await run({ bin: "veyyon", version: "0.0.0", argv: ["completions"], commands });
 			exitCode = process.exitCode;
