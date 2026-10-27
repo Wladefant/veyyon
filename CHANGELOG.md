@@ -36,6 +36,7 @@
 - An `Editor` asks its autocomplete provider again on the edit that changes an open suggestion list instead of 100 ms later, so typing `/mo` narrows the slash command list in 3 ms instead of 105 ms and an `@` file list follows each keystroke one frame later instead of after the timer.
 - Esc and Ctrl+C paint on the next frame unless their handler arms a double-press window through the new `TUI.holdFrameForInput()`, which replaces the engine's one-frame hold on every Esc and Ctrl+C.
 - A key press lets the frame its handler requests and the next one skip the 30 fps cadence, and pulls forward a frame already waiting out the cadence, so an answer a handler awaits paints without an extra frame interval.
+- `FramePacer`'s comments in `core/frame-pacing.ts` are shorter, keeping the module under its size ceiling; behavior is unchanged.
 - `sgrEnd` is exported from `@veyyon/utils/ansi` and is the single definition `wrap` and `width` use; no user-facing change.
 
 ### Fixed
