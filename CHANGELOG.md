@@ -74,6 +74,8 @@
 
 ### Fixed
 
+- `veyyon trust` exits 2 on an unknown flag instead of ignoring it, so a typo of `--deny` such as `--denny` no longer approves the project, and it accepts several paths and tab-completes them as files.
+- `veyyon rollback <version>` moves to the named version instead of failing with `Unexpected argument`, and `veyyon rollback` exits 2 on an unknown flag instead of ignoring it.
 - `--compaction-model` tab-completes model ids from the catalog like `--model`, instead of completing nothing.
 - Hidden context queued for the next turn (an extension's `nextTurn` message, a parked advisor concern, a reminder) reaches the next turn when a prompt is interrupted or fails before its turn starts, instead of being dropped with that prompt, and an interrupt during that window still shows a parked advisor concern as advice.
 - `/force`, the executor's final `yield` reminder and the eager todo require their tool on OpenRouter, Cursor, Devin and GitLab Duo models, where they required nothing and `/force` failed with `Current model does not support forcing a specific tool.`
