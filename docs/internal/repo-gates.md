@@ -43,6 +43,17 @@ because the account's five concurrent macOS slots were being spent four at a tim
 an artifact the commit had not changed. `scripts/install-methods-coverage.test.ts` fails if a monitor
 comes back onto the push path.
 
+## Two coding-agent buckets run two chunks at a time
+
+The coding-agent UI, runtime and native buckets share one runner job. Each bucket is split into
+chunks of 5 or 10 files, and each chunk is its own `bun test` process. `ciChunksAtOnce` in
+`codingAgentBucketPlans` (`scripts/ci-test-ts.ts`) sets how many chunk processes of one bucket CI
+runs side by side: two for the runtime and native buckets, one for the singleton and UI buckets.
+Run 40581477474 spent 10.9 minutes on the native bucket and 4.3 on the runtime bucket, one chunk
+at a time, in the longest job of the run. The width multiplies the job's peak RSS, never one
+process's. `scripts/no-coding-agent-bucket-runs-as-one-process.test.ts` fails when a mode that
+reaches the singleton bucket runs more than one chunk at a time.
+
 ## Why the changelog gate is push-based
 
 `bun run changelog:check` runs on the direct-to-main push (base: the branch tip before the push) as
@@ -77,4 +88,4 @@ HTML. The `Site` workflow builds the handbook before deploying to Cloudflare Pag
 
 The mdbook version is pinned to v0.5.2. A different version renders content-hashed filenames
 differently, so CI and local builds use the same pinned version.
-*Verified against `9c904aa2db` on 2026-09-05.*
+*Verified against `bc9b41a845` on 2026-10-27.*

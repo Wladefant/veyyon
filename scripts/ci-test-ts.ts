@@ -29,7 +29,7 @@ import {
 import { isCI } from "./ci-signal";
 import { ensureToolViewsGenerated } from "./ensure-tool-views";
 
-type Mode =
+export type Mode =
 	| "all"
 	| "local"
 	| "local-ts"
@@ -145,7 +145,7 @@ const onlyFailuresArgs = onlyFailures ? ["--only-failures"] : [];
 // quiet path is whatever the verbose filter is not.
 const quiet = onlyFailures;
 
-const validModes: Record<Mode, true> = {
+export const validModes: Record<Mode, true> = {
 	all: true,
 	local: true,
 	"local-ts": true,
@@ -182,19 +182,46 @@ const validModes: Record<Mode, true> = {
 // fault — the crash is cumulative heap volume. Under a 256MB-forced heap, a
 // 10-file chunk aborts ~50% of runs while either 5-file half is 0/20; halving the
 // chunk keeps each process under the threshold.
+//
+// `ciChunksAtOnce` is how many of a bucket's chunk processes CI runs side by side.
+// Each chunk is its own process with its own heap, so the width bounds the job's
+// total RSS (width x one chunk, about 1.3 GB at the worst) and never what one
+// process holds. The singleton bucket stays at 1, because nothing may run beside a
+// global-state suite. The UI bucket stays at 1: its suites are bound by CPU and
+// frame timers. The runtime and native buckets mostly wait on child processes,
+// sockets and timers, so two at a time on the 4-vCPU runner roughly halves them.
 interface CodingAgentBucketPlan {
 	label: string;
 	parallel: number;
 	// Required, with no unchunked spelling: see the comment above.
 	chunkSize: number;
+	ciChunksAtOnce: number;
 }
 
 export const codingAgentBucketPlans: Record<CodingAgentBucket, CodingAgentBucketPlan> = {
-	singleton: { label: "singleton/global-state bucket", parallel: 1, chunkSize: 10 },
-	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 5 },
-	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: 10 },
-	native: { label: "native/tooling/browser/unit bucket", parallel: 1, chunkSize: 10 },
+	singleton: { label: "singleton/global-state bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 1 },
+	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 5, ciChunksAtOnce: 1 },
+	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 2 },
+	native: { label: "native/tooling/browser/unit bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 2 },
 };
+
+const BUCKET_OF_MODE: Partial<Record<Mode, CodingAgentBucket>> = {
+	"coding-agent-singleton": "singleton",
+	"coding-agent-ui": "ui",
+	"coding-agent-runtime": "runtime",
+	"coding-agent-native": "native",
+};
+
+/**
+ * How many of `total` chunk processes run at once. In CI it is the bucket plan's
+ * `ciChunksAtOnce` for a single coding-agent bucket and 1 for every other mode;
+ * outside CI it is {@link testConcurrency}.
+ */
+export function chunksAtOnce(mode: Mode, ci: boolean, total: number): number {
+	if (!ci) return testConcurrency(total);
+	const bucket = BUCKET_OF_MODE[mode];
+	return Math.max(1, Math.min(bucket ? codingAgentBucketPlans[bucket].ciChunksAtOnce : 1, total));
+}
 
 // Smaller workspace packages stay separate from native/TUI/integration suites so
 // their short TS suites can run together. CI still downloads the Linux x64 native
@@ -996,10 +1023,10 @@ function chunkTimeoutMs(): number {
 	return 600_000;
 }
 
-// The standard `CI` signal is authoritative. In CI each bucket is its own
-// memory-capped runner job (a single fat invocation gets OOM-killed at 137), so
-// chunks run sequentially within a job and parallelism happens across jobs.
-// Locally we trade memory for wall-clock and fan the chunks out across cores.
+// The standard `CI` signal is authoritative. In CI a single process never holds a
+// whole bucket (a single fat invocation gets OOM-killed at 137): chunks run one at
+// a time, or `ciChunksAtOnce` at a time for a bucket whose plan sets it (see
+// `chunksAtOnce`). Locally the width is `testConcurrency`.
 
 // Fan-out width for the local parallel path, clamped to the command count.
 // Defaults to the machine's available parallelism; `VEYYON_TEST_CONCURRENCY`
@@ -1576,8 +1603,9 @@ if (import.meta.main) {
 
 	await ensureToolViewsGenerated();
 	const testCommands = await commandsForMode(requestedMode as Mode);
-	// Outside CI, fan the independent chunk processes out across cores; CI runs them one
-	// at a time so each memory-capped runner job stays bounded. Both run every chunk.
+	// Outside CI the chunk processes go through the parallel runner at `testConcurrency`
+	// width; CI runs them one at a time unless the bucket plan sets a wider
+	// `ciChunksAtOnce`. Every path runs every chunk.
 	// Third protection layer: PROOF. Layers one and two (a sandboxed HOME for every
 	// child, and the tripwire preload) are meant to make real-data writes
 	// impossible, but a safety mechanism believed to work and never checked is how
@@ -1589,8 +1617,9 @@ if (import.meta.main) {
 	const before = snapshotRealConfigRoot();
 
 	try {
-		if (!isDryRun && !isCI() && testCommands.length > 1) {
-			await runTestCommandsInParallel(testCommands, testConcurrency(testCommands.length));
+		const width = chunksAtOnce(requestedMode as Mode, isCI(), testCommands.length);
+		if (!isDryRun && testCommands.length > 1 && (!isCI() || width > 1)) {
+			await runTestCommandsInParallel(testCommands, width);
 		} else {
 			await runTestCommandsInSequence(testCommands);
 		}
