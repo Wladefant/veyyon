@@ -16,7 +16,7 @@
  * file (`supersedeTargets` in `@veyyon/agent-core/compaction`).
  */
 import type { AgentMessage, AgentToolResult } from "@veyyon/agent-core";
-import type { ImageContent, TextContent, ToolResultMessage } from "@veyyon/ai";
+import type { ImageContent, TextContent, ToolResultMessage, VideoContent } from "@veyyon/ai";
 import { HASHLINE_LINE_PREFIX } from "../../edit/file-snapshot-store";
 import type { ToolSession } from "../../sdk";
 import { resolveToCwd, splitPathAndSel } from "../core/path-utils";
@@ -54,7 +54,7 @@ function displayedRowsBySection(text: string): Map<string, Set<string>> {
 	return sections;
 }
 
-function resultText(content: readonly (TextContent | ImageContent)[]): string {
+function resultText(content: readonly (TextContent | ImageContent | VideoContent)[]): string {
 	let text = "";
 	for (const block of content) {
 		if (block.type !== "text") continue;

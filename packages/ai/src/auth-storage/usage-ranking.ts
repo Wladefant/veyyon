@@ -385,6 +385,7 @@ export class CredentialRanking {
 				allowanceSpent,
 				blocked,
 				blockedUntil,
+				usageMeasured: usage !== null,
 				hasPriorityBoost: strategy.hasPriorityBoost?.(primary) ?? false,
 				planPriority: getOpenAICodexPlanPriority(usage, planRequirement),
 				secondaryUsed: normalizeUsageFraction(secondaryTarget),
