@@ -1119,6 +1119,13 @@ async function resolveWithThinkingLoopCook<TApi extends Api>(
 		// A loop is sampled tokens the provider bills and this re-sample throws
 		// away, which is the most expensive discard in the system: carry it.
 		discardAttemptUsage(model, stalled.usage, message.usage);
+		if (stalled.usage.cacheRequests && stalled.usage.cacheRequests.length > 0) {
+			const existing = new Set(message.usage.cacheRequests ?? []);
+			const toAdd = stalled.usage.cacheRequests.filter(r => !existing.has(r));
+			if (toAdd.length > 0) {
+				message.usage.cacheRequests = [...toAdd, ...(message.usage.cacheRequests ?? [])];
+			}
+		}
 		thinkingLoopRetry =
 			message.stopReason === "error" &&
 			message.content.length === 0 &&
@@ -1129,6 +1136,13 @@ async function resolveWithThinkingLoopCook<TApi extends Api>(
 	// Abort budget spent and still looping: let it cook with the guard disabled.
 	const cooked = await cook().result();
 	discardAttemptUsage(model, message.usage, cooked.usage);
+	if (message.usage.cacheRequests && message.usage.cacheRequests.length > 0) {
+		const existing = new Set(cooked.usage.cacheRequests ?? []);
+		const toAdd = message.usage.cacheRequests.filter(r => !existing.has(r));
+		if (toAdd.length > 0) {
+			cooked.usage.cacheRequests = [...toAdd, ...(cooked.usage.cacheRequests ?? [])];
+		}
+	}
 	return cooked;
 }
 
