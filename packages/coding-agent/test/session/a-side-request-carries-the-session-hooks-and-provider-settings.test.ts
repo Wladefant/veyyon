@@ -191,20 +191,23 @@ describe("a side request's payload hook", () => {
 
 describe("a side request's response and SSE hooks", () => {
 	it("records the response into the session's capture and usage ledger when the caller has no hook", async () => {
-		const ingest = spyOn(authStorage, "ingestUsageHeaders");
+		const ledger: string[] = [];
+		spyOn(authStorage, "ingestUsageHeaders").mockImplementation(provider => {
+			ledger.push(provider);
+			return false;
+		});
 		const session = sessionWith();
 		const options = await session.prepareSimpleStreamOptions({});
 
 		await options.onResponse?.(RESPONSE, bundledModel());
 
 		expect(session.rawSseDebugBuffer?.snapshot().records.map(record => record.kind)).toEqual(["response"]);
-		expect(ingest).toHaveBeenCalledTimes(1);
-		expect(ingest.mock.calls[0]?.[0]).toBe("anthropic");
+		expect(ledger).toEqual(["anthropic"]);
 	});
 
 	it("runs the session's interceptor and then the caller's hook", async () => {
 		const order: string[] = [];
-		const ingest = spyOn(authStorage, "ingestUsageHeaders").mockImplementation(() => {
+		spyOn(authStorage, "ingestUsageHeaders").mockImplementation(() => {
 			order.push("ledger");
 			return false;
 		});
@@ -218,7 +221,6 @@ describe("a side request's response and SSE hooks", () => {
 		await options.onResponse?.(RESPONSE, bundledModel());
 
 		expect(order).toEqual(["ledger", "caller"]);
-		expect(ingest).toHaveBeenCalledTimes(1);
 		expect(session.rawSseDebugBuffer?.snapshot().records.map(record => record.kind)).toEqual(["response"]);
 	});
 
