@@ -94,8 +94,8 @@ describe("veyyon-natives", () => {
 	});
 
 	describe("summarize", () => {
-		it("summarizes TypeScript function bodies", () => {
-			const result = summarizeCode({
+		it("summarizes TypeScript function bodies", async () => {
+			const result = await summarizeCode({
 				path: "fixture.ts",
 				code: "export function greet(name: string): string {\n\tconst clean = name.trim();\n\tconst label = clean || 'world';\n\treturn label.toUpperCase();\n}\n",
 			});
@@ -109,12 +109,12 @@ describe("veyyon-natives", () => {
 			expect(result.segments[2].text).toBe("}");
 		});
 
-		it("summarizes Rust and Python bodies while preserving boundary lines", () => {
-			const rust = summarizeCode({
+		it("summarizes Rust and Python bodies while preserving boundary lines", async () => {
+			const rust = await summarizeCode({
 				path: "fixture.rs",
 				code: 'impl Greeter {\n\tfn greet(&self) -> String {\n\t\tlet name = "world";\n\t\tlet label = name.to_uppercase();\n\t\tformat!("hello {label}")\n\t}\n}\n',
 			});
-			const python = summarizeCode({
+			const python = await summarizeCode({
 				path: "fixture.py",
 				code: "class Greeter:\n    def greet(self, name: str) -> str:\n        clean = name.strip()\n        label = clean or 'world'\n        return f'hello {label}'\n",
 			});
@@ -126,9 +126,9 @@ describe("veyyon-natives", () => {
 			expect(python.segments.at(-1)?.text).toContain("return");
 		});
 
-		it("summarizes Emacs Lisp function bodies through native inference", () => {
+		it("summarizes Emacs Lisp function bodies through native inference", async () => {
 			for (const path of ["fixture.el", ".emacs"]) {
-				const result = summarizeCode({
+				const result = await summarizeCode({
 					path,
 					code: '(defun greet (name)\n  "Doc."\n  (let ((message (format "Hello %s" name)))\n    (message "%s" message)\n    message)\n)\n',
 				});
@@ -140,8 +140,8 @@ describe("veyyon-natives", () => {
 			}
 		});
 
-		it("summarizes multiline literals and block comments", () => {
-			const result = summarizeCode({
+		it("summarizes multiline literals and block comments", async () => {
+			const result = await summarizeCode({
 				path: "fixture.ts",
 				code: "/*\n * line 1\n * line 2\n * line 3\n * line 4\n */\nexport const config = {\n\ta: 1,\n\tb: 2,\n\tc: 3,\n};\n",
 			});
@@ -154,9 +154,9 @@ describe("veyyon-natives", () => {
 			);
 		});
 
-		it("falls back for unsupported or empty input", () => {
-			const unsupported = summarizeCode({ path: "fixture.txt", code: "plain text\nwith lines\n" });
-			const empty = summarizeCode({ path: "fixture.ts", code: "" });
+		it("falls back for unsupported or empty input", async () => {
+			const unsupported = await summarizeCode({ path: "fixture.txt", code: "plain text\nwith lines\n" });
+			const empty = await summarizeCode({ path: "fixture.ts", code: "" });
 
 			expect(unsupported.parsed).toBe(false);
 			expect(unsupported.segments).toHaveLength(1);
@@ -165,10 +165,46 @@ describe("veyyon-natives", () => {
 			expect(empty.segments).toHaveLength(0);
 		});
 
-		it("respects minBodyLines", () => {
+		it("turns the event loop while it summarizes a large source on the thread pool", async () => {
+			// WHY: the read tool summarizes every whole-file read of parseable code, and the parse
+			// scans the whole source: 68 ms of an 18,000-line TypeScript read, during which the
+			// terminal took no keystroke and drew no frame, and four such reads in one batch queued
+			// behind each other. A synchronous native call finishes before a queued `setImmediate`
+			// runs, so it reads as zero turns; a parse on the thread pool lets the loop turn.
+			// What it does not catch: a parse fast enough to finish before the loop's first check
+			// phase would also read as zero turns, so the source is sized to take tens of ms.
+			const lines: string[] = [];
+			for (let n = 0; lines.length < 40_000; n++) {
+				lines.push(
+					`export function unit${n}(value: number): number {`,
+					`\tconst a = value + ${n};`,
+					"\treturn a;",
+					"}",
+				);
+			}
+			let turns = 0;
+			let pending = true;
+			const tick = () => {
+				if (!pending) return;
+				turns++;
+				setImmediate(tick);
+			};
+			setImmediate(tick);
+			const result = await Promise.resolve()
+				.then(() => summarizeCode({ path: "large.ts", code: `${lines.join("\n")}\n` }))
+				.finally(() => {
+					pending = false;
+				});
+
+			expect(result.parsed).toBe(true);
+			expect(result.segments.filter(segment => segment.kind === "elided")).toHaveLength(10_000);
+			expect(turns).toBeGreaterThan(0);
+		});
+
+		it("respects minBodyLines", async () => {
 			const code = "function small() {\n\treturn 1;\n}\n";
-			expect(summarizeCode({ path: "fixture.ts", code }).elided).toBe(false);
-			expect(summarizeCode({ path: "fixture.ts", code, minBodyLines: 3 }).elided).toBe(true);
+			expect((await summarizeCode({ path: "fixture.ts", code })).elided).toBe(false);
+			expect((await summarizeCode({ path: "fixture.ts", code, minBodyLines: 3 })).elided).toBe(true);
 		});
 	});
 
