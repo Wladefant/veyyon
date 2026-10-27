@@ -160,7 +160,7 @@ describe("session exit diagnostics", () => {
 
 		// The assistant message persists through an async queue; the tool start
 		// marker is appended synchronously and is what makes the session durable
-		// enough for #recordSessionExit to write the exit entry (same setup as
+		// enough for the exit record to write the exit entry (same setup as
 		// the plain-dispose test above).
 		agent.emitExternalEvent({ type: "message_end", message: pendingAssistant });
 		await Promise.resolve();

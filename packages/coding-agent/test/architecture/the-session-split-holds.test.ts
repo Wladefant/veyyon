@@ -130,8 +130,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-27 at 5212: the response and raw SSE interceptors every request runs with,
  * the raw SSE capture, the side stream function and the side-request option preparation moved into
  * the `provider-transport.ts` collaborator (-128).
+ * RE-MEASURED 2026-10-27 at 5115: the `/move` marker nothing set was removed with its dispose step
+ * (-9), and the tool start markers and the exit entry moved into the `exit-record.ts`
+ * collaborator (-88).
  */
-const RUNTIME_CEILING = 5_270;
+const RUNTIME_CEILING = 5_170;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -150,6 +153,7 @@ const COLLABORATORS = [
 	"context-accounting.ts",
 	"conversation-release.ts",
 	"display-copy.ts",
+	"exit-record.ts",
 	"extension-event-forwarder.ts",
 	"finalize-reminders.ts",
 	"history-rewrites.ts",

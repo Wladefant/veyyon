@@ -18,7 +18,7 @@
  * member from inheriting whatever the fallback happens to be.
  *
  * WHAT IT DOES NOT CATCH. It asserts the level of one log line, not whether the line is written
- * at all on a path that never reaches `#recordSessionExit` (a `process.exit` that outruns the
+ * at all on a path that never reaches the exit record (a `process.exit` that outruns the
  * postmortem list, an OOM kill, SIGKILL). Nothing in-process can record those.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";

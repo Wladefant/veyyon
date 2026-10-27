@@ -499,11 +499,17 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * `session/agent-session.ts`, already here, and its runtime imports (`@veyyon/ai/stream`,
  * `config/settings.ts` and `debug/raw-sse-buffer.ts`) are already here. Measured 2026-10-27 at 1518.
  *
+ * 1518 to 1519: `coding-agent/src/session/runtime/exit-record.ts`, the session collaborator that
+ * writes the redacted tool start markers and the one `session_exit` entry, and registers the process
+ * teardown callback that writes it when no dispose runs. It left `session/agent-session.ts`, already
+ * here, and its runtime imports (`@veyyon/kernel/session/exit-diagnostics` and `@veyyon/utils`) are
+ * already here. Measured 2026-10-27 at 1519.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1518;
+const LAUNCH_REACH_CEILING = 1519;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

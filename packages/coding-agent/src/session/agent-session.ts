@@ -61,16 +61,6 @@ import type { InMemorySnapshotStore } from "@veyyon/hashline";
 import { declaredContextWindow } from "@veyyon/kernel/session/agent-session-compaction-policy";
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import type { ClientBridge } from "@veyyon/kernel/session/client-bridge";
-import {
-	assistantRecordsToolCall,
-	collectPendingToolCalls,
-	SESSION_EXIT_CUSTOM_TYPE,
-	type SessionExitData,
-	sessionExitLogLevel,
-	summarizeToolArguments,
-	TOOL_EXECUTION_START_CUSTOM_TYPE,
-	type ToolExecutionStartData,
-} from "@veyyon/kernel/session/exit-diagnostics";
 import { OperatorNotices, stderrNoticeSink } from "@veyyon/kernel/session/operator-notices";
 import { disposeOwnedResources } from "@veyyon/kernel/session/owned-resources";
 import {
@@ -85,7 +75,7 @@ import type { ShakeMode, ShakeResult } from "@veyyon/kernel/session/shake-types"
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import { ToolChoiceQueue } from "@veyyon/kernel/session/tool-choice-queue";
 import { YieldQueue } from "@veyyon/kernel/session/yield-queue";
-import { errorMessage, logger, postmortem, prompt, Snowflake, withTimeout } from "@veyyon/utils";
+import { errorMessage, logger, prompt, Snowflake, withTimeout } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
 import { startupMarker } from "@veyyon/utils/startup-marker";
 import type { ArgotSession } from "argot";
@@ -220,6 +210,7 @@ import { readCompactionSpanBack } from "./runtime/compaction-summarizer";
 import { ContextAccounting } from "./runtime/context-accounting";
 import { ConversationRelease } from "./runtime/conversation-release";
 import { DisplayCopy } from "./runtime/display-copy";
+import { ExitRecord } from "./runtime/exit-record";
 import { ExtensionEventForwarder } from "./runtime/extension-event-forwarder";
 import { FinalizeReminders } from "./runtime/finalize-reminders";
 import { HistoryRewrites } from "./runtime/history-rewrites";
@@ -362,38 +353,6 @@ function configWarningsFor(settings: Settings, modelRegistry: ModelRegistry): st
 	}
 	warnings.push(...validateApprovalPolicySettings(settings.get("tools.approval")));
 	return warnings;
-}
-
-/**
- * Record the start of a tool execution in the session file.
- *
- * The arguments and intent are REDACTED, because `event.args` and the intent are post-expansion.
- * The assistant message holds the placeholder the model wrote; this event holds what the tool was
- * handed, which for `#GITHUB_TOKEN#` is the credential itself. The session file must never contain
- * it: the vault is encrypted at rest and this entry sits beside it in the same directory, and it
- * travels through `/share` and exports. The intent goes through the same redactor because the
- * model can quote an argument back into it.
- */
-function recordToolExecutionStart(
-	session: AgentSession,
-	event: Extract<AgentEvent, { type: "tool_execution_start" }>,
-): void {
-	const sessionManager = session.sessionManager;
-	// The entry's timestamp is the start time, so the marker includes none of its own.
-	const data: ToolExecutionStartData = { toolCallId: event.toolCallId, toolName: event.toolName };
-	const redact = (text: string): string => session.obfuscateProviderText(text);
-	// The command/path projection the resume warning renders, written only when no assistant
-	// message on the branch records the call yet: a Cursor server-side call, or a crash before the
-	// assistant message reached the file. Otherwise the warning reads that message's arguments.
-	const recorded = assistantRecordsToolCall(
-		sessionManager.getLeafEntry(),
-		id => sessionManager.getEntry(id),
-		event.toolCallId,
-	);
-	const args = recorded ? undefined : summarizeToolArguments(event.args, redact);
-	if (args) data.args = args;
-	if (event.intent) data.intent = redact(event.intent);
-	sessionManager.appendCustomEntry(TOOL_EXECUTION_START_CUSTOM_TYPE, data);
 }
 
 /**
@@ -558,8 +517,6 @@ export class AgentSession {
 
 	// Event subscription state
 	#unsubscribeAgent?: () => void;
-	#cancelExitRecorder?: () => void;
-	#exitRecorded = false;
 	/** Unsubscribers for the process-wide and settings listeners, released at the end of dispose. */
 	readonly #listenerReleases: Array<() => void> = [];
 	#promptRefresh: Promise<void> = Promise.resolve();
@@ -704,6 +661,8 @@ export class AgentSession {
 	/** Session events forwarded to extensions, in order, with the run's turn index. */
 	readonly #extensionEvents: ExtensionEventForwarder;
 	readonly #persistence: MessagePersistence;
+	/** The tool start markers and the exit entry a later reader learns how the session ended from. */
+	readonly #exitRecord: ExitRecord;
 
 	#skills: Skill[];
 	readonly #operatorNotices: OperatorNotices;
@@ -1447,8 +1406,9 @@ export class AgentSession {
 				);
 			},
 		});
-		this.#cancelExitRecorder = postmortem.register(`agent-session:${this.sessionManager.getSessionId()}`, reason => {
-			this.#recordSessionExit(reason);
+		this.#exitRecord = new ExitRecord({
+			sessionStore: this.sessionManager,
+			redact: text => this.obfuscateProviderText(text),
 		});
 
 		this.#advisorRoster = this.#createAdvisorRoster(config);
@@ -1960,52 +1920,6 @@ export class AgentSession {
 		this.#emit({ type: "notice", level, message, source });
 	}
 
-	#recordSessionExit(reason: postmortem.Reason | "dispose"): void {
-		if (this.#exitRecorded) return;
-		this.#exitRecorded = true;
-		const pendingToolCalls = collectPendingToolCalls(this.sessionManager.getBranch());
-		if (
-			pendingToolCalls.length === 0 &&
-			!this.sessionManager.getEntries().some(entry => entry.type === "message" && entry.message.role === "assistant")
-		) {
-			return;
-		}
-		const kind: SessionExitData["kind"] =
-			reason === "dispose" || reason === postmortem.Reason.MANUAL
-				? "normal"
-				: reason === postmortem.Reason.UNCAUGHT_EXCEPTION || reason === postmortem.Reason.UNHANDLED_REJECTION
-					? "fatal"
-					: reason === postmortem.Reason.EXIT
-						? "process_exit"
-						: "signal";
-		const data: SessionExitData = {
-			reason,
-			kind,
-			recordedAt: new Date().toISOString(),
-		};
-		if (pendingToolCalls.length > 0) data.pendingToolCalls = pendingToolCalls;
-		try {
-			this.sessionManager.appendCustomEntry(SESSION_EXIT_CUSTOM_TYPE, data);
-			this.sessionManager.flushSync();
-			// Looked up on `logger` at call time, not captured in a table: the level is the
-			// method name, and a captured function would also detach the spy a test installs.
-			logger[sessionExitLogLevel(kind, pendingToolCalls.length)]("Session exit recorded", {
-				sessionId: this.sessionManager.getSessionId(),
-				sessionFile: this.sessionManager.getSessionFile(),
-				reason,
-				kind,
-				pendingToolCalls: pendingToolCalls.length,
-			});
-		} catch (error) {
-			logger.error("Failed to record session exit", {
-				sessionId: this.sessionManager.getSessionId(),
-				sessionFile: this.sessionManager.getSessionFile(),
-				reason,
-				error: errorMessage(error),
-			});
-		}
-	}
-
 	/**
 	 * Emit a session event without waiting for it, when the caller genuinely cannot wait.
 	 *
@@ -2122,7 +2036,7 @@ export class AgentSession {
 				// this the working line announces a call in raw handle form while the
 				// transcript right beneath it shows the same call expanded.
 				const intent = this.displayToolIntent(event.intent);
-				recordToolExecutionStart(this, event);
+				this.#exitRecord.recordToolStart(event);
 				await this.#emitSessionEvent(intent === event.intent ? event : { ...event, intent });
 				return;
 			}
@@ -2632,9 +2546,7 @@ export class AgentSession {
 
 	async #doDispose(options: AgentSessionDisposeOptions = {}): Promise<void> {
 		this.beginDispose();
-		this.#recordSessionExit(options.reason ?? "dispose");
-		this.#cancelExitRecorder?.();
-		this.#cancelExitRecorder = undefined;
+		this.#exitRecord.close(options.reason ?? "dispose");
 		try {
 			if (this.#config.extensionRunner?.hasHandlers("session_shutdown")) {
 				await this.#config.extensionRunner.emit({ type: "session_shutdown" });
