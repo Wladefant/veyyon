@@ -441,11 +441,18 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * agent registry and `session/agent-session-types.ts`) are already here. Measured 2026-10-27 at
  * 1509.
  *
+ * 1509 to 1510: `coding-agent/src/session/runtime/conversation-release.ts`, the session
+ * collaborator that releases what a conversation ends with on `/new`, `/resume` and a handoff:
+ * its spawned agents, registry scope, IRC traffic, standing grants and eval kernels. It left
+ * `session/agent-session.ts`, already here, and its runtime imports (the agent lifecycle and
+ * registry, the IRC bus, the owned-resource registry and `session/agent-session-types.ts`) are
+ * already here. Measured 2026-10-27 at 1510.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1509;
+const LAUNCH_REACH_CEILING = 1510;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

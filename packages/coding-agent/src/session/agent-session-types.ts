@@ -138,6 +138,9 @@ export const DISPOSE_AGENT_LOOP_SETTLE_MS = 1_000;
  */
 export const QUIESCENCE_RECHECK_MS = 1_000;
 
+/** Abort reason recorded on a spawned agent stopped because its conversation was left by `/new`, `/resume`, a handoff or a disposal. */
+export const RESCOPE_TERMINATE_REASON = "Stopped: the conversation that spawned it ended";
+
 export interface AgentSessionDisposeOptions {
 	mnemopiConsolidateTimeoutMs?: number;
 	/**

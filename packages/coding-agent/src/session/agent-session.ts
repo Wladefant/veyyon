@@ -179,8 +179,6 @@ import type { PlanModeState } from "../plan-mode/state";
 import { goalsPrompts } from "../prompts/goals/rows";
 import { sessionPrompts } from "../prompts/session/rows";
 import { turnControlPrompts } from "../prompts/turn-control/rows";
-import { AgentLifecycleManager } from "../registry/agent-lifecycle";
-import { AgentRegistry } from "../registry/agent-registry";
 import { mapAssistantContentStrings, type SecretObfuscator } from "../secrets/obfuscator";
 import {
 	parseSlashCommand,
@@ -197,7 +195,6 @@ import {
 	resolveHelperModel,
 } from "../task/helper-settings";
 import {
-	IrcBus,
 	type IrcMessage,
 	type IrcPersistedDeliveryFacts,
 	type IrcPersistedDeliveryTelemetry,
@@ -295,6 +292,7 @@ import { CheckpointRuntime } from "./runtime/checkpoint-runtime";
 import { CompactionRuntime } from "./runtime/compaction-runtime";
 import { readCompactionSpanBack } from "./runtime/compaction-summarizer";
 import { ContextAccounting } from "./runtime/context-accounting";
+import { ConversationRelease } from "./runtime/conversation-release";
 import { ExtensionEventForwarder } from "./runtime/extension-event-forwarder";
 import { FinalizeReminders } from "./runtime/finalize-reminders";
 import { HistoryRewrites } from "./runtime/history-rewrites";
@@ -335,9 +333,6 @@ import { formatSessionDumpText } from "./session-dump-format";
 import { SessionSpendLedger } from "./session-spend";
 import { classifyUnexpectedStop } from "./unexpected-stop-classifier";
 import type { VibeModeState } from "./vibe-runtime";
-
-/** Abort reason recorded on a spawned agent stopped because its conversation was left by `/new`, `/resume` or a handoff. */
-export const RESCOPE_TERMINATE_REASON = "Stopped: the conversation that spawned it ended";
 
 /** Whether writing `path` must rebuild the prompt the model is holding. */
 function rebuildsThePrompt(path: string): boolean {
@@ -809,6 +804,8 @@ export class AgentSession {
 	#evalKernelOwnerId: string;
 	/** The background jobs this session owns: delivery, snapshot, cancellation and the wake they hold; see {@link OwnedAsyncJobs}. */
 	readonly #ownedJobs: OwnedAsyncJobs;
+	/** The spawned agents, registry scope, IRC traffic, grants and kernels a conversation ends with; see {@link ConversationRelease}. */
+	readonly #conversation: ConversationRelease;
 
 	/** IRC records reaching this session, the wake turns and auto-replies they start; see {@link IrcDelivery}. */
 	readonly #irc: IrcDelivery;
@@ -1156,6 +1153,14 @@ export class AgentSession {
 			config,
 		);
 		this.#evalKernelOwnerId = config.evalKernelOwnerId ?? `agent-session:${Snowflake.next()}`;
+		this.#conversation = new ConversationRelease(
+			{
+				sessionId: () => this.sessionManager.getSessionId?.() ?? undefined,
+				forgetToolDecisions: () => this.#approvals.forgetToolDecisions(),
+			},
+			config.agentId,
+			this.#evalKernelOwnerId,
+		);
 		this.#ownedJobs = new OwnedAsyncJobs(
 			{
 				messages: () => this.agent.state.messages,
@@ -1716,7 +1721,7 @@ export class AgentSession {
 			effectiveServiceTier: model => this.#effectiveServiceTier(model),
 			clearNextTurnMessages: () => this.#nextTurn.clear(),
 			cancelOwnAsyncJobs: () => this.#ownedJobs.cancelOwn(),
-			endConversation: () => this.#endConversation(),
+			endConversation: () => this.#conversation.release(),
 			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
 			resetAllAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),
 		});
@@ -1756,7 +1761,7 @@ export class AgentSession {
 				this.#toolActivation.restoreMCPSelections(sessionContext, options),
 			setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
 			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
-			endConversation: () => this.#endConversation(),
+			endConversation: () => this.#conversation.release(),
 			resetAllAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),
 		});
 	}
@@ -2013,128 +2018,9 @@ export class AgentSession {
 		return this.#ownedJobs.snapshot(options?.recentLimit);
 	}
 
-	/**
-	 * Release what the conversation this session just left holds: its spawned agents and registry
-	 * scope, then its eval kernels.
-	 *
-	 * A kernel is keyed by the transcript's eval session id, so no cell of the next conversation
-	 * reaches the previous one's kernel, and it kept its interpreter's memory until the session
-	 * ended: a window open for days held one kernel per conversation. The release runs the
-	 * registry `dispose` uses, so every eval language goes with it; a kernel a spawned agent still
-	 * shares stays alive for that agent. A cell still running in a released kernel ends cancelled:
-	 * the pool no longer holds its session, so it is not retried into a fresh kernel. A release that
-	 * fails is logged and does not fail the switch.
-	 */
-	async #endConversation(): Promise<void> {
-		await this.#rescopeAgentRegistry();
-		try {
-			await disposeOwnedResources("eval-kernel-owner", this.#evalKernelOwnerId);
-		} catch (error) {
-			logger.warn("Some eval kernels of the previous conversation failed to release", {
-				error: errorMessage(error),
-			});
-		}
-	}
-
-	/**
-	 * Re-root this session in the agent registry after it has moved to a
-	 * different transcript, and release the spawned agents of the conversation it
-	 * left.
-	 *
-	 * The registry is process-global and, until this existed, nothing ever told
-	 * it that a conversation had ended. `/new` and `/resume` swap the transcript
-	 * under the same `AgentSession`, so every spawned agent of the previous
-	 * conversation stayed registered: the agent dashboard listed them, `irc
-	 * list` offered them as peers, and messaging one woke an agent whose replies
-	 * were written into a transcript the operator had already left. That is the
-	 * "agents from other sessions" symptom, and it is a leak as much as a
-	 * display bug — a parked ref holds its session file, and a live one holds a
-	 * whole `AgentSession`.
-	 *
-	 * Order matters. Terminate the descendants BEFORE the re-scope, so they are
-	 * reached while they still resolve as this agent's subtree; re-scoping first
-	 * would leave them parented to a scope nothing walks. Their async jobs are
-	 * already cancelled by the caller's {@link OwnedAsyncJobs.cancelOwn}, which
-	 * walks the same subtree.
-	 *
-	 * Terminate, not release. Release disposes the session, and dispose stops the
-	 * agent loop but leaves the agent's bash, eval, handoff and advisor work
-	 * running and its scheduled continuations armed. `terminate` aborts a running
-	 * agent first, deepest generation first, which is the kill the dashboard and
-	 * `job cancel` use. It is called on each direct child; the child's own
-	 * subtree is terminated inside that call.
-	 *
-	 * A termination that throws is logged and skipped rather than failing the
-	 * session switch: a spawned agent that cannot be stopped must not strand the
-	 * operator between two conversations. The wait lasts as long as the child's
-	 * abort, the same wait this session's own abort imposes at the start of `/new`.
-	 */
-	async #rescopeAgentRegistry(): Promise<void> {
-		const id = this.#config.agentId;
-		if (!id) return;
-		const registry = AgentRegistry.global();
-		const self = registry.get(id);
-		if (!self) return;
-		const endingScope = self.scope;
-		const descendants = registry.descendantsOf(id);
-		await this.terminateSpawnedAgents(RESCOPE_TERMINATE_REASON);
-		// The traffic goes whether or not anything was still registered to release.
-		// Guarding this on `descendants.length` was wrong in the COMMON case: a
-		// agent that finished and aged out, or was disposed, is already
-		// unregistered by the time the operator types `/new`, so the walk returns
-		// nothing and the entire previous conversation's log survived in the
-		// process-global bus. The new session's Comms pane then opened on the old
-		// one's chatter, because every one of those lines has this still-in-scope
-		// agent at one end.
-		//
-		// Forget this agent's own legs too. `forgetAgents` drops a line when
-		// EITHER endpoint is named, and every line of the conversation that just
-		// ended has either a released child or this agent on it. Bounded by the
-		// ENDING scope so the purge cannot reach a line another conversation in
-		// this process recorded under a recycled agent name.
-		IrcBus.global().forgetAgents(descendants.concat([id]), endingScope);
-		// Standing approval grants die with the conversation they were given in.
-		// "Allow bash for this session" is an answer about the work in front of
-		// you, and `/new` or `/resume` replaces that work entirely; carrying the
-		// grant across meant a permission granted for one task silently governed
-		// the next one, on a store that is deliberately never persisted precisely
-		// so it cannot outlive its context.
-		this.#approvals.forgetToolDecisions();
-		registry.rescope(id, this.sessionManager.getSessionId?.() ?? undefined);
-		logger.debug("Re-rooted the agent registry for a new conversation", {
-			agentId: id,
-			from: endingScope,
-			to: registry.get(id)?.scope,
-			released: descendants.length,
-		});
-	}
-
-	/**
-	 * Terminate every agent this session spawned, each direct child with its own
-	 * subtree, deepest generation first. A termination that throws is logged and
-	 * skipped. Used when this conversation ends while the process keeps running:
-	 * a `/new` or `/resume` in place, and the disposal of a top-level session
-	 * that is not the last one in the process.
-	 */
-	async terminateSpawnedAgents(reason: string): Promise<void> {
-		const id = this.#config.agentId;
-		if (!id) return;
-		const registry = AgentRegistry.global();
-		const children = registry.descendantsOf(id).filter(descendant => registry.get(descendant)?.parentId === id);
-		if (children.length === 0) return;
-		const lifecycle = AgentLifecycleManager.global();
-		await Promise.all(
-			children.map(async child => {
-				try {
-					await lifecycle.terminate(child, reason);
-				} catch (error) {
-					logger.warn("Failed to terminate a spawned agent of an ending conversation", {
-						agentId: child,
-						error: errorMessage(error),
-					});
-				}
-			}),
-		);
+	/** Terminate every agent this session spawned; see {@link ConversationRelease.terminateSpawnedAgents}. */
+	terminateSpawnedAgents(reason: string): Promise<void> {
+		return this.#conversation.terminateSpawnedAgents(reason);
 	}
 
 	// =========================================================================
@@ -5308,7 +5194,7 @@ export class AgentSession {
 		}
 		await this.sessionManager.newSession(options);
 		// The transcript changed under this session: release what the conversation it left held.
-		await this.#endConversation();
+		await this.#conversation.release();
 
 		this.#checkpoint.clear();
 		this.setTodoPhases([]);

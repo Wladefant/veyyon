@@ -96,8 +96,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-27 at 6769: the owned background jobs (late result delivery, the job
  * snapshot, descendant cancellation, the settle wake and the ACP delivery drain) left as the
  * `owned-async-jobs.ts` collaborator (-161).
+ * RE-MEASURED 2026-10-27 at 6655: the release of what a conversation ends with (its spawned agents,
+ * registry scope, IRC traffic, standing grants and eval kernels) left as the
+ * `conversation-release.ts` collaborator (-114).
  */
-const RUNTIME_CEILING = 6_850;
+const RUNTIME_CEILING = 6_700;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -114,6 +117,7 @@ const COLLABORATORS = [
 	"compaction-runtime.ts",
 	"compaction-summarizer.ts",
 	"context-accounting.ts",
+	"conversation-release.ts",
 	"extension-event-forwarder.ts",
 	"finalize-reminders.ts",
 	"history-rewrites.ts",
