@@ -2130,6 +2130,15 @@ export class TUI extends Container {
 		const input = this.#filterInput(data);
 		// Consume terminal cell size responses without blocking unrelated input.
 		if (input === null || this.#consumeCellSizeResponse(input)) return;
+		// The frames answering a key press skip the cadence. A pointer report keeps it: wheel and
+		// hover arrive at a rate the cadence exists to cap. A release answers nothing.
+		const keyPress = !input.startsWith("\x1b[<") && !isKeyRelease(input);
+		if (keyPress) this.#pacer.keyPressed();
+		this.#routeInput(input);
+		if (keyPress) this.#expediteWaitingFrame();
+	}
+
+	#routeInput(input: string): void {
 		if (this.#consumeIsolationMouse(input) || this.#consumeAltArrowScroll(input)) return;
 
 		// Global debug key handler (Shift+Ctrl+D)
@@ -2138,6 +2147,17 @@ export class TUI extends Container {
 			return;
 		}
 		this.#deliverToFocused(input);
+	}
+
+	/**
+	 * Reschedule a frame that was waiting out the cadence when the key arrived, so it paints the press.
+	 * After the handler, so a double-press window the press armed holds the rescheduled frame too.
+	 */
+	#expediteWaitingFrame(): void {
+		if (this.#renderTimer === undefined) return;
+		this.#renderTimer.cancel();
+		this.#renderTimer = undefined;
+		this.#scheduleRender();
 	}
 
 	/** Run the input listeners over `data` in order; null when one consumed it or they reduced it to nothing. */

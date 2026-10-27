@@ -9,6 +9,14 @@ const MIN_RENDER_INTERVAL_MS = 1000 / 30;
 const INPUT_RENDER_GRACE_MS = MIN_RENDER_INTERVAL_MS;
 
 /**
+ * Frames a key press may paint without waiting out the cadence: the frame its handler requests,
+ * and the one after it, which a handler that awaits (a dashboard reading its rows, a session list
+ * read from disk) requests a few milliseconds later. The cadence held that second frame up to an
+ * interval behind the first although nothing else was painting.
+ */
+const KEY_PRESS_FRAMES = 2;
+
+/**
  * Weight of the newest frame in `FramePacer`'s cost estimate. At 0.3 a sustained
  * change in frame cost is ~90% absorbed within seven frames, so the loop
  * reaches its duty-cycle floor inside a quarter second of going slow, while
@@ -73,7 +81,7 @@ export const GHOSTTY_INITIAL_IMAGE_DELAY_MS = 100;
 // drift and would just see an unnecessary post-paint latency. See #2095.
 export const CONPTY_POST_FULL_PAINT_SETTLE_MS = 150;
 
-/** The throttle between frames: a 30 fps cadence, a cost-derived floor and an input grace. */
+/** The throttle between frames: a 30 fps cadence a key press is exempt from, a cost-derived floor and an input grace. */
 export class FramePacer {
 	/** Start of the newest frame. */
 	#frameStartedAt = 0;
@@ -97,6 +105,7 @@ export class FramePacer {
 	 */
 	#frameCostEstimateMs = 0;
 	#inputGraceUntilMs = 0;
+	#keyPressFrames = 0;
 
 	/**
 	 * Records the start of a frame. Called before the frame composes, because a render requested
@@ -104,6 +113,7 @@ export class FramePacer {
 	 */
 	frameStarted(start: number): void {
 		this.#frameStartedAt = start;
+		if (this.#keyPressFrames > 0) this.#keyPressFrames--;
 	}
 
 	/** Folds the cost of the frame that ran from `start` to `end` into the estimate. */
@@ -119,6 +129,15 @@ export class FramePacer {
 		this.#inputGraceUntilMs = now + INPUT_RENDER_GRACE_MS;
 	}
 
+	/**
+	 * Lets the next {@link KEY_PRESS_FRAMES} frames skip the cadence. The cost floor and the input
+	 * grace still apply, and a frame nothing asked for in between takes one of them, so a press adds
+	 * at most that many frames to the cadence's count.
+	 */
+	keyPressed(): void {
+		this.#keyPressFrames = KEY_PRESS_FRAMES;
+	}
+
 	/** Milliseconds a frame requested at `now` waits before it paints. */
 	delay(now: number): number {
 		const elapsed = now - this.#frameStartedAt;
@@ -131,6 +150,7 @@ export class FramePacer {
 		// CPU (#4145) and an isolated expensive paint is not charged to the
 		// cheap frame behind it. Capped so a pathological cost cannot lock the UI.
 		const adaptiveFloor = Math.min(MAX_ADAPTIVE_RENDER_MS, this.#frameCostEstimateMs * 2);
-		return Math.max(0, MIN_RENDER_INTERVAL_MS - elapsed, adaptiveFloor - elapsed, this.#inputGraceUntilMs - now);
+		const cadence = this.#keyPressFrames > 0 ? 0 : MIN_RENDER_INTERVAL_MS - elapsed;
+		return Math.max(0, cadence, adaptiveFloor - elapsed, this.#inputGraceUntilMs - now);
 	}
 }
