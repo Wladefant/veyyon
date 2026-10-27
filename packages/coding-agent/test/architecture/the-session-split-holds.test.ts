@@ -109,8 +109,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-27 at 6138: running a shell command or Python cell the user typed (the
  * `user_bash` and `user_python` extension hand-off, the run, the record and the artifact holding a
  * command's unminimized output) moved into the `user-executions.ts` collaborator (-107).
+ * RE-MEASURED 2026-10-27 at 5967: the threshold checks before a prompt and between the provider
+ * calls of a tool loop, and the switch to a larger-context model they share with the post-turn
+ * check, moved into the `turn-context-check.ts` collaborator (-171).
  */
-const RUNTIME_CEILING = 6_200;
+const RUNTIME_CEILING = 6_000;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";

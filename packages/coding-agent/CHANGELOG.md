@@ -29,6 +29,7 @@
 - The message a prompt raises when a provider's credential produced no token is built in the credential-message module beside the other missing-credential messages ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - Queueing steers and follow-ups, the idle drain that starts a turn on them, and the queue count, chips, clear and pop moved out of the session class into one session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - Running a shell command or Python cell typed with `!` or `$` moved out of the session class into the session collaborator that tracks those runs ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The context threshold checks before a prompt and between the provider calls of a tool loop, and the switch to a larger-context model they share, moved out of the session class into the `TurnContextCheck` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 
 ### Fixed
 

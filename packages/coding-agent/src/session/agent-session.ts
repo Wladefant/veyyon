@@ -26,7 +26,6 @@ import {
 	type AgentMessage,
 	type AgentState,
 	type AgentTool,
-	type AgentTurnEndContext,
 	AppendOnlyContextManager,
 	type AsideMessage,
 	type StreamFn,
@@ -34,14 +33,7 @@ import {
 	type ThinkingLevel,
 	type ToolChoiceDirective,
 } from "@veyyon/agent-core";
-import {
-	type CompactionResult,
-	calculateContextTokens,
-	compactionContextTokens,
-	type SessionMessageEntry,
-	type ShakeConfig,
-	shouldCompact,
-} from "@veyyon/agent-core/compaction";
+import type { CompactionResult, SessionMessageEntry, ShakeConfig } from "@veyyon/agent-core/compaction";
 import type {
 	Api,
 	AssistantMessage,
@@ -198,7 +190,6 @@ import { formatAdvisorStatus } from "./advisor-stats";
 import { throwIfExtensionCommand, tryExecuteCustomCommand, tryExecuteExtensionCommand } from "./agent-session-commands";
 import { type EphemeralTurnArgs, type EphemeralTurnResult, runEphemeralTurn } from "./agent-session-ephemeral-turn";
 import { findLastAssistantMessage, lastCopyCandidateAssistantMessage } from "./agent-session-message-shapes";
-import { contextPromotionTarget } from "./agent-session-model-targets";
 import {
 	IMAGE_ATTACHMENT_DESCRIPTION_TYPE,
 	isAdvisorCard,
@@ -699,7 +690,8 @@ export class AgentSession {
 		waitForPersisted: message => this.#persistence.waitFor(message),
 		discardAssistantTurn: message => this.#discardAssistantTurn(message),
 		removeAssistantFromActiveContext: message => removeAssistantMessageFromActiveContext(this.agent, message),
-		promoteContextModel: () => this.#promoteContextModel(),
+		isDisposed: () => this.#isDisposed,
+		persistTurnForMidRunCompaction: context => this.#persistence.persistTurnForMidRunCompaction(context),
 		scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 		runAutoCompaction: (reason, willRetry, options) => this.#compaction.runAutoCompaction(reason, willRetry, options),
 		noticeCompactionThresholdClamp: (contextWindow, settings) =>
@@ -1331,7 +1323,7 @@ export class AgentSession {
 			}
 			await this.#handoff.advancePrewalk(messages, context);
 			await this.#advisorRoster.onPrimaryTurnEnd(messages, context?.willContinue, signal);
-			await this.#maintainContextMidRun(messages, signal, context);
+			await this.#contextCheck.betweenProviderCalls(messages, signal, context);
 		});
 		this.yieldQueue = new YieldQueue({
 			isStreaming: () => this.isStreaming,
@@ -1649,7 +1641,7 @@ export class AgentSession {
 			effectiveServiceTier: model => this.#effectiveServiceTier(model),
 			primaryPromptCacheKey: () => this.agent.promptCacheKey,
 			resolveContextPromotionTarget: (model, contextWindow) =>
-				this.#resolveContextPromotionTarget(model, contextWindow),
+				this.#contextCheck.promotionTarget(model, contextWindow),
 			convertToLlmForSideRequest: messages => this.#convertToLlmForSideRequest(messages),
 			primaryContextBudget: () => ({
 				nonMessageTokens: computeNonMessageTokens(this),
@@ -4327,7 +4319,7 @@ export class AgentSession {
 			}
 
 			startupMarker("prompt:pre-prompt-compaction:start");
-			await this.#runPrePromptCompactionIfNeeded(messages);
+			await this.#contextCheck.beforePrompt(messages);
 			startupMarker("prompt:pre-prompt-compaction:done");
 			if (this.#promptGeneration !== generation) {
 				return;
@@ -5137,124 +5129,6 @@ export class AgentSession {
 		return this.#sessionHandoff.run(customInstructions, options);
 	}
 
-	async #runPrePromptCompactionIfNeeded(messages: AgentMessage[]): Promise<void> {
-		const model = this.model;
-		if (!model) return;
-		const contextWindow = model.contextWindow ?? 0;
-		if (contextWindow <= 0) return;
-		const compactionSettings = this.settings.getGroup("compaction");
-		// The local-estimate floor is applied in getContextBreakdown, so this is the exact number the
-		// footline gauge shows.
-		const contextTokens = this.getContextBreakdown({ contextWindow, pendingMessages: messages })?.usedTokens ?? 0;
-		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) return;
-
-		// Auto-promote first: switching to a larger-context model avoids compacting
-		// the history at all. The post-turn threshold path already promotes before
-		// compacting; without this, the pre-prompt path would pre-empt promotion and
-		// compact (summary) a session that should have just been promoted.
-		if (await this.#promoteContextModel()) {
-			logger.debug("Pre-prompt context promotion avoided compaction", {
-				contextTokens,
-				contextWindow,
-				model: `${model.provider}/${model.id}`,
-			});
-			return;
-		}
-
-		logger.debug("Pre-prompt context maintenance triggered by pending prompt size", {
-			contextTokens,
-			contextWindow,
-			model: `${model.provider}/${model.id}`,
-		});
-		await this.#compaction.runAutoCompaction("threshold", false, {
-			autoContinue: false,
-			triggerContextTokens: contextTokens,
-			phase: "pre_turn",
-		});
-	}
-
-	/**
-	 * Compact continuing tool-loop runs before the next provider request.
-	 *
-	 * `onTurnEnd` is the safe boundary: tool results for the just-finished turn
-	 * are already paired in `activeMessages`, the live array the agent loop reads
-	 * before its next model call. Before compacting, the just-finished turn is
-	 * synchronously persisted if async message hooks have not reached the normal
-	 * append path yet.
-	 */
-	async #maintainContextMidRun(
-		activeMessages: AgentMessage[],
-		signal: AbortSignal | undefined,
-		context: AgentTurnEndContext | undefined,
-	): Promise<void> {
-		if (
-			signal?.aborted ||
-			this.#isDisposed ||
-			this.isCompacting ||
-			this.isGeneratingHandoff ||
-			!context?.willContinue
-		)
-			return;
-
-		const model = this.model;
-		const contextWindow = model?.contextWindow ?? 0;
-		if (contextWindow <= 0) return;
-
-		const compactionSettings = this.settings.getGroup("compaction");
-		if (!compactionSettings.enabled || compactionSettings.midTurnEnabled === false) {
-			return;
-		}
-
-		const lastAssistant = [...activeMessages]
-			.reverse()
-			.find((message): message is AssistantMessage => message.role === "assistant");
-		if (!lastAssistant || lastAssistant.stopReason === "aborted" || lastAssistant.stopReason === "error") return;
-
-		if (!(await this.#persistence.persistTurnForMidRunCompaction(context))) return;
-
-		const billedContextTokens = calculateContextTokens(lastAssistant.usage);
-		const storedContextTokens = this.#context.estimateStoredTokens();
-		const contextTokens = compactionContextTokens(billedContextTokens, storedContextTokens);
-		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) return;
-
-		// Promote to a larger-context sibling before compacting, mirroring the
-		// pre-prompt (#runPrePromptCompactionIfNeeded) and post-turn threshold
-		// (`TurnContextCheck`) paths. Without this, a long mid-turn tool loop that
-		// crosses the threshold compacts the history (and can hit the no-progress
-		// dead-end on a single oversized turn) on a model that should have just
-		// been promoted to a larger window instead.
-		if (await this.#promoteContextModel()) {
-			logger.debug("Mid-run context promotion avoided compaction", {
-				contextTokens,
-				contextWindow,
-				from: `${model?.provider}/${model?.id}`,
-			});
-			return;
-		}
-
-		const messagesBefore = activeMessages.length;
-		await this.#compaction.runAutoCompaction("threshold", false, {
-			autoContinue: false,
-			suppressContinuation: true,
-			triggerContextTokens: contextTokens,
-			phase: "mid_turn",
-		});
-
-		if (signal?.aborted) return;
-		const compactedMessages = this.agent.state.messages;
-		if (compactedMessages !== activeMessages) {
-			activeMessages.splice(0, activeMessages.length, ...compactedMessages);
-		}
-		logger.debug("Mid-run compaction ran between provider calls", {
-			contextTokens,
-			contextWindow,
-			strategy: compactionSettings.strategy,
-			goalActive: this.#goalModeState?.enabled === true && this.#goalModeState.goal.status === "active",
-			messagesBefore,
-			messagesAfter: activeMessages.length,
-		});
-	}
-
 	/**
 	 * Drop an assistant turn from BOTH the live agent context and the persisted
 	 * session branch (reparenting the leaf to the turn's parent), so a discarded
@@ -5370,54 +5244,6 @@ export class AgentSession {
 		const task = this.#createEagerTaskPrelude(undefined);
 		if (task) nudges.push(task);
 		return nudges;
-	}
-
-	/**
-	 * Switch to a larger-context sibling when context promotion is enabled and a
-	 * target with a strictly larger window (and a usable key) exists. Returns true
-	 * when the model was switched, so the caller can retry without compacting.
-	 * Message-independent core shared by the post-turn check ({@link TurnContextCheck})
-	 * and the pre-prompt threshold path
-	 * ({@link #runPrePromptCompactionIfNeeded}).
-	 */
-	async #promoteContextModel(): Promise<boolean> {
-		const promotionSettings = this.settings.getGroup("contextPromotion");
-		if (!promotionSettings.enabled) return false;
-		const currentModel = this.model;
-		if (!currentModel) return false;
-		const contextWindow = currentModel.contextWindow ?? 0;
-		if (contextWindow <= 0) return false;
-		const targetModel = await this.#resolveContextPromotionTarget(currentModel, contextWindow);
-		if (!targetModel) return false;
-
-		try {
-			await this.setModelTemporary(targetModel, undefined, { ephemeral: true });
-			logger.debug("Context promotion switched model on overflow", {
-				from: `${currentModel.provider}/${currentModel.id}`,
-				to: `${targetModel.provider}/${targetModel.id}`,
-			});
-			return true;
-		} catch (error) {
-			logger.warn("Context promotion failed", {
-				from: `${currentModel.provider}/${currentModel.id}`,
-				to: `${targetModel.provider}/${targetModel.id}`,
-				error: errorMessage(error),
-			});
-			return false;
-		}
-	}
-
-	async #resolveContextPromotionTarget(currentModel: Model, contextWindow: number): Promise<Model | undefined> {
-		const availableModels = this.#config.modelRegistry.getAvailable();
-		if (availableModels.length === 0) return undefined;
-
-		const candidate = contextPromotionTarget(currentModel, availableModels);
-		if (!candidate) return undefined;
-		if (modelsAreEqual(candidate, currentModel)) return undefined;
-		if (candidate.contextWindow == null || candidate.contextWindow <= contextWindow) return undefined;
-		const apiKey = await this.#config.modelRegistry.getApiKey(candidate, this.sessionId);
-		if (!apiKey) return undefined;
-		return candidate;
 	}
 
 	#setModelWithProviderSessionReset(model: Model): void {

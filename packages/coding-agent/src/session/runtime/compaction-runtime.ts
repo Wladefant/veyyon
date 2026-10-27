@@ -6,8 +6,8 @@
  * This is a session collaborator. It holds the abort controllers `isCompacting` reads and the
  * threshold notice already announced, and reaches the session through {@link CompactionSession} and
  * {@link CompactionHost}. The summary request is `CompactionSummarizer`'s and what follows a pass
- * (the bar, the dead-end rescue tiers, the next turn) is `CompactionRecovery`'s. The post-turn check
- * that triggers a pass is `TurnContextCheck`'s; the pre-prompt and mid-run checks stay with the session.
+ * (the bar, the dead-end rescue tiers, the next turn) is `CompactionRecovery`'s. The checks that
+ * trigger a pass, before a prompt, between provider calls and after a turn, are `TurnContextCheck`'s.
  */
 import { resolveTelemetry } from "@veyyon/agent-core";
 import {
