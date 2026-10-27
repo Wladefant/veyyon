@@ -19,7 +19,8 @@ import {
 	renderHandoffPrompt,
 	upsertFileOperations,
 } from "@veyyon/agent-core/compaction";
-import { countTokens, type AssistantMessage, type Message, type Model, type ServiceTier, type SimpleStreamOptions } from "@veyyon/ai";
+import { countTokens } from "@veyyon/agent-core/tokenizer";
+import type { AssistantMessage, Message, Model, ServiceTier, SimpleStreamOptions } from "@veyyon/ai";
 import type { SessionContext } from "@veyyon/kernel/session/session-context";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";

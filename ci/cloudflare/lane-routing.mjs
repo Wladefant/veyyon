@@ -1,5 +1,11 @@
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
+export const CLOUDFLARE_NIGHTLY_BRANCH = readFileSync(
+	new URL("./nightly-branch.txt", import.meta.url),
+	"utf8",
+).trim();
+if (!CLOUDFLARE_NIGHTLY_BRANCH) throw new Error("nightly-branch.txt must name a branch");
 
 export function resolveCloudflareShard(config = {}) {
 	const veyyonShard = config.veyyonShard ?? config.VEYYON_CI_SHARD;
@@ -152,13 +158,23 @@ export function selectCloudflareLane(
 	return { kind: "tests", shard, shardCount };
 }
 
+export function selectCloudflareTestMode(config = {}) {
+	const branch = config.WORKERS_CI_BRANCH ?? config.branch ?? "";
+	const isNightly = branch === CLOUDFLARE_NIGHTLY_BRANCH || config.CI_NIGHTLY === "1" || config.ciNightly === "1";
+	return isNightly ? "full" : "related";
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 	try {
+	if (process.argv[2] === "--test-mode") {
+		process.stdout.write(`${selectCloudflareTestMode(process.env)}\n`);
+	} else {
 		const route = selectCloudflareLane(process.env);
 		const output = route.kind === "tests"
 			? `${route.kind}|${route.shard}|${route.shardCount}`
 			: `${route.kind}|${route.releaseMode}|${route.shard}`;
 		process.stdout.write(`${output}\n`);
+	}
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : error);
 		process.exitCode = 1;

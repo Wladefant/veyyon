@@ -5,6 +5,8 @@
 ### Added
 
 - `prepareToolCall` in `@veyyon/agent-core/tool-call-preparation` and `Agent.prepareExternalToolCall` strip the intent field from a tool call's arguments, repair, validate and transform them as the agent loop does, for a provider that runs tool calls itself during the stream.
+### Fixed
+- Restored the missing compaction configuration and video content types.
 
 ### Changed
 

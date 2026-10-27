@@ -51,6 +51,7 @@ import {
 	getExtensionTabInventory,
 	getTab,
 	isolatedContextName,
+	releaseTab,
 	releaseTabForOwner,
 	releaseTabsForOwner,
 	runInTab,

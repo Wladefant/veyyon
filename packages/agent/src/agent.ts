@@ -1211,7 +1211,7 @@ export class Agent {
 		options: (AgentPromptOptions & { skipInitialSteeringPoll?: boolean }) | undefined,
 	): AgentLoopConfig {
 		let skipInitialSteeringPoll = options?.skipInitialSteeringPoll === true;
-		return {
+		const config: AgentLoopConfig = {
 			model,
 			reasoning: this.#state.thinkingLevel,
 			disableReasoning: this.#state.disableReasoning,
@@ -1250,6 +1250,7 @@ export class Agent {
 				context.systemPrompt = this.#state.systemPrompt;
 				context.tools = this.#state.tools;
 				// A mid-run handoff changes provider routing without stopping this loop.
+				// Keep the live request options aligned with session state after a handoff.
 				config.sessionId = this.#sessionId;
 				config.promptCacheKey = this.#promptCacheKey;
 				config.metadata = this.#metadataResolver ? undefined : this.#metadata;
@@ -1298,6 +1299,7 @@ export class Agent {
 			onToolUpdateAfterRun: event => this.#emit(event),
 			telemetry: this.#telemetry,
 		};
+		return config;
 	}
 
 	/**

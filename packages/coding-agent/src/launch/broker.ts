@@ -930,12 +930,14 @@ export class DaemonBroker {
 		record.drained = Promise.all([
 			this.#drain(record, generation, process.stdout),
 			this.#drain(record, generation, process.stderr),
-		]).catch(error =>
-			logger.warn("Daemon output stream failed; output observation is lost, the process is not settled", {
-				name: record.snapshot.name,
-				error: errorMessage(error),
-			}),
-		);
+		])
+			.then(() => undefined)
+			.catch(error =>
+				logger.warn("Daemon output stream failed; output observation is lost, the process is not settled", {
+					name: record.snapshot.name,
+					error: errorMessage(error),
+				}),
+			);
 		void process.exited
 			.then(exitCode => this.#settle(record, generation, exitCode))
 			.catch(error => this.#settle(record, generation, undefined, errorMessage(error)));

@@ -2,7 +2,7 @@
  * Shared utilities for compaction and branch summarization.
  */
 
-import type { AssistantMessage, ImageContent, Message, TextContent, ToolCall, ToolResultMessage } from "@veyyon/ai";
+import type { AssistantMessage, ImageContent, Message, TextContent, ToolCall, ToolResultMessage, VideoContent } from "@veyyon/ai";
 import type { Dialect } from "@veyyon/ai/dialect";
 // The factory declares it; the dialect barrel re-exports every definition alongside it.
 import { getDialectDefinition } from "@veyyon/ai/dialect/factory";
@@ -491,7 +491,7 @@ function pushAssistantParts(message: AssistantMessage, uselessCallIds: ReadonlyS
 }
 
 /** The text blocks of `content`, concatenated. */
-function joinedText(content: readonly (TextContent | ImageContent)[]): string {
+function joinedText(content: readonly (TextContent | ImageContent | VideoContent)[]): string {
 	let text = "";
 	for (const block of content) if (block.type === "text") text += block.text;
 	return text;

@@ -504,6 +504,7 @@ interface OwnActions {
 	type(text: string, options?: Readonly<KeyboardTypeOptions>): Promise<void>;
 }
 
+const relocatingHandles = new WeakSet<ElementHandle>();
 const ownActions = new WeakMap<ElementHandle, OwnActions>();
 
 /** `handle`'s own actions, kept at the first read so a later enrichment wraps puppeteer's, not a wrapper. */
@@ -638,44 +639,7 @@ function toActionableHandle(handle: ElementHandle, actions: HandleActions): Acti
 	return enriched;
 }
 
-/** What `fill` does with an element, decided in the page. */
-type FillPlan =
-	| { readonly kind: "insert" }
-	| { readonly kind: "set" }
-	| { readonly kind: "refuse"; readonly reason: string };
-
-/** An element as `activeElement` returns it: what took focus in a document or shadow root. */
-interface FocusHolder {
-	readonly isContentEditable?: boolean;
-	contains(node: unknown): boolean;
-}
-
-/** The parts of an element `fill` touches, typed here because this package compiles without the DOM lib. */
-interface FillTarget extends FocusHolder {
-	readonly tagName: string;
-	readonly type?: string;
-	readonly disabled?: boolean;
-	readonly readOnly?: boolean;
-	value?: string;
-	focus(): void;
-	select?(): void;
-	dispatchEvent(event: unknown): boolean;
-	/** The document or shadow root the element is in. */
-	getRootNode(): { readonly activeElement: FocusHolder | null };
-	readonly ownerDocument: {
-		createRange(): { selectNodeContents(node: unknown): void };
-		readonly defaultView: {
-			getSelection(): { removeAllRanges(): void; addRange(range: unknown): void } | null;
-			readonly Event: new (type: string, init?: { bubbles?: boolean; composed?: boolean }) => unknown;
-		} | null;
-	};
-}
-/**
- * Puppeteer's press for `kind` on the element a {@link pressUncovered} check passed. A relocating
- * handle's press aims in one evaluation, so a node the page redraws between puppeteer's round trips
- * still receives it (see pointerPoint); a node in a child frame keeps puppeteer's path, which adds
- * the frame offsets.
- */
+/** Use one pointer evaluation for relocated main-frame handles and Puppeteer's offsets for child frames. */
 function puppeteerPress(
 	kind: "click" | "hover",
 	relocating: boolean,
@@ -691,66 +655,6 @@ function puppeteerPress(
 		if (kind === "click") await mouse.click(x, y, options);
 		else await mouse.move(x, y);
 	};
-	if (tag === "input") {
-		const type = (el.type ?? "text").toLowerCase();
-		if (type === "checkbox" || type === "radio") return refuse(`an <input type="${type}"> is set by clicking it`);
-		if (type === "file") return refuse(`an <input type="file"> takes files through tab.uploadFile`);
-		if (["button", "hidden", "image", "reset", "submit"].includes(type)) {
-			return refuse(`an <input type="${type}"> holds no text`);
-		}
-		if (el.disabled) return refuse("the <input> is disabled");
-		if (el.readOnly) return refuse("the <input> is read-only");
-		if (["color", "date", "datetime-local", "month", "range", "time", "week"].includes(type)) {
-			const view = el.ownerDocument.defaultView;
-			el.focus();
-			const previous = el.value;
-			el.value = value;
-			if (el.value !== value) {
-				el.value = previous;
-				return refuse(`${JSON.stringify(value)} is not a value an <input type="${type}"> holds`);
-			}
-			if (view) {
-				el.dispatchEvent(new view.Event("input", { bubbles: true, composed: true }));
-				el.dispatchEvent(new view.Event("change", { bubbles: true }));
-			}
-			return { kind: "set" };
-		}
-		return selectAll();
-	}
-	if (tag === "textarea") {
-		if (el.disabled) return refuse("the <textarea> is disabled");
-		if (el.readOnly) return refuse("the <textarea> is read-only");
-		return selectAll();
-	}
-	if (tag === "select") return refuse("a <select> is set with tab.select(selector, ...values)");
-	if (el.isContentEditable) {
-		el.focus();
-		const range = el.ownerDocument.createRange();
-		range.selectNodeContents(el);
-		const selection = el.ownerDocument.defaultView?.getSelection();
-		selection?.removeAllRanges();
-		selection?.addRange(range);
-		// An element inside an editor is edited through the editor's host, which the selection focuses.
-		const active = el.getRootNode().activeElement;
-		if (active?.isContentEditable !== true || !active.contains(el)) return unfocusable();
-		return { kind: "insert" };
-	}
-	return refuse(`a <${tag}> is not an <input>, a <textarea> or contenteditable`);
-}
-
-/**
- * Replace an element's value, shared by `tab.fill` and enriched handles. The replacement is one
- * trusted text insertion into the selected contents, the one a paste makes: React, Vue and every
- * other framework that listens for `input` sees a real edit, and a value of any length costs one
- * round trip rather than one keystroke per character. `change` fires when focus leaves, as it does
- * for a person.
- */
-async function fillViaHandle(handle: ElementHandle, value: string, signal?: AbortSignal): Promise<void> {
-	const plan = await untilAborted(signal, () => handle.evaluate(planFill, value));
-	if (plan.kind === "refuse") throw new ToolError(`fill: ${plan.reason}`);
-	if (plan.kind === "set") return;
-	// An empty insertion deletes the selection, so clearing a field is the same one edit.
-	await untilAborted(signal, () => handle.frame.page().keyboard.sendCharacter(value));
 }
 
 /**
@@ -2897,11 +2801,14 @@ export class WorkerCore {
 		sig: AbortSignal,
 		opts?: { visible?: boolean },
 	): Promise<ActionableHandle> {
-		if (parseAriaRefSelector(selector) !== null) return this.#resolveAriaRef(selector);
+		if (parseAriaRefSelector(selector) !== null) {
+			return toActionableHandle(await this.#resolveAriaRef(selector), this.#handleActions);
+		}
 		const locator = this.#requirePage().locator(normalizeSelector(selector)).setTimeout(timeoutMs);
-		return (await untilAborted(sig, () =>
+		const handle = await untilAborted(sig, () =>
 			(opts?.visible ? locator.setVisibility("visible") : locator).waitHandle({ signal: sig }),
-		)) as ElementHandle;
+		);
+		return toActionableHandle(handle as ElementHandle, this.#handleActions);
 	}
 
 	#clearElementCache(): void {

@@ -548,6 +548,8 @@ function normalizeSuppressedSelector(
 }
 
 /**
+ * Whether extended context is enabled in the loaded settings.
+ */
 function isExtendedContextEnabled(): boolean {
 	try {
 		return settings.get("extendedContext");
@@ -560,6 +562,7 @@ interface ConfiguredProviderApiKey {
 	readonly keyConfig: string;
 	readonly fallback: boolean;
 }
+/**
  * Model registry - loads and manages models, resolves API keys via AuthStorage.
  */
 export class ModelRegistry {
@@ -770,8 +773,11 @@ export class ModelRegistry {
 				patch.maxTokens = effectiveMaxTokens;
 			}
 		}
+		// The upstream Model input contract does not include video modalities.
+		// Keep the existing input value rather than misrepresenting a video model.
 		if (
 			input !== undefined &&
+			!input.includes("video") &&
 			override?.input === undefined &&
 			customModel?.input === undefined &&
 			(current.input.length !== input.length ||

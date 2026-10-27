@@ -188,11 +188,11 @@ outside these accounts.
 
 ### A pull request needs an issue first
 
-A bug fix may open with no issue. Everything else — feature, refactor, dependency, migration —
-needs an issue first, and `Refs #N` in the pull request body.
+Every pull request needs an issue first, bug fixes included, and `Refs #N` in the pull request
+body. A bug fix states the observed and the expected behavior on its issue.
 
-Scope is settled on the issue, before the work exists. For a large pull request with no issue
-behind it, request the issue instead of reviewing the diff.
+Scope is settled on the issue, before the work exists. For a pull request with no issue behind
+it, request the issue instead of reviewing the diff.
 
 One concern per pull request. The description covers every change in the diff; an undescribed
 change is itself a finding, per [`review.md`](review.md). Split a fix that includes unrelated work.
