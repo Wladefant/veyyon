@@ -147,14 +147,21 @@ export class ToolDiscovery {
 			}
 		}
 
-		// Identify restored search-activated candidates (excluding inherently protected defaults/config).
-		const searchCandidates: string[] = [];
-		for (const name of initialSelected) {
-			if (this.isInherentlyProtected(name)) continue;
-			if (this.#selectedMCP.has(name) || this.#selectedLocal.has(name)) {
-				searchCandidates.push(name);
-			}
-		}
+		// Restore the combined selection in its persisted activation order, using retained
+		// call recency when available. This lets a reduced cap retain the most recently used tools.
+		const restoredCallIndices = extractToolLastCallIndices(this.#host.sessionMessages?.() ?? []);
+		const searchCandidates = initialSelected.filter(name => {
+			if (this.isInherentlyProtected(name)) return false;
+			return this.#selectedMCP.has(name) || this.#selectedLocal.has(name);
+		});
+		searchCandidates.sort((a, b) => {
+			const callA = restoredCallIndices.get(a);
+			const callB = restoredCallIndices.get(b);
+			if (callA !== undefined && callB !== undefined && callA !== callB) return callA - callB;
+			if (callA !== undefined && callB === undefined) return 1;
+			if (callA === undefined && callB !== undefined) return -1;
+			return initialSelected.indexOf(a) - initialSelected.indexOf(b);
+		});
 
 		// Bound restored search-activated selections to maxDiscoveredTools, keeping the most recent.
 		const cap = this.maxDiscoveredTools;
@@ -269,12 +276,11 @@ export class ToolDiscovery {
 	}
 
 	/**
-	 * The MCP selection to persist after an activation, or `undefined` when discovery is off or the
-	 * selection equals `previous`.
+	 * The combined selected-tool order to persist, or `undefined` when it equals `previous`.
 	 */
 	selectedMCPChangedFrom(previous: readonly string[]): string[] | undefined {
 		if (!this.#mcpEnabled) return undefined;
-		const next = this.selectedMCP();
+		const next = this.selectedDiscovered();
 		return sameToolNames(previous, next) ? undefined : next;
 	}
 
@@ -538,7 +544,7 @@ export class ToolDiscovery {
 		this.invalidate();
 	}
 
-	/** The selected tools: the MCP selection and the local selection that is still active. */
+	/** The selected tools in activation order: MCP and active local selections share one order. */
 	selectedDiscovered(): string[] {
 		const active = new Set(this.#host.activeToolNames());
 		const registry = this.#host.registry;
@@ -546,7 +552,11 @@ export class ToolDiscovery {
 		for (const name of this.#selectedLocal) {
 			if (active.has(name) && registry.has(name) && !isMCPToolName(name)) selected.add(name);
 		}
-		return Array.from(selected);
+		return Array.from(selected).sort(
+			(a, b) =>
+				(this.#searchActivated.get(a) ?? Number.MAX_SAFE_INTEGER) -
+				(this.#searchActivated.get(b) ?? Number.MAX_SAFE_INTEGER),
+		);
 	}
 
 	/** Whether the registry entry for `name` came from a built-in factory. */

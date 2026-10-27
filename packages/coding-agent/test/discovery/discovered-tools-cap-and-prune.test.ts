@@ -678,8 +678,8 @@ describe("AgentSession integration: cap, prune, persistence, and reload", () => 
 		});
 		sessions.push(session1);
 
-		await session1.activateDiscoveredTools(["mcp__s__t1", "custom_local"]);
-		expect(sessionManager.buildSessionContext().selectedMCPToolNames).toEqual(["mcp__s__t1", "custom_local"]);
+		await session1.activateDiscoveredTools(["custom_local", "mcp__s__t1"]);
+		expect(sessionManager.buildSessionContext().selectedMCPToolNames).toEqual(["custom_local", "mcp__s__t1"]);
 
 		// Session 2 resumes from the same sessionManager
 		const persistedSelection = sessionManager.buildSessionContext().selectedMCPToolNames;
@@ -697,6 +697,7 @@ describe("AgentSession integration: cap, prune, persistence, and reload", () => 
 			settings: Settings.isolated({
 				"tools.discoveryMode": "all",
 				"mcp.discoveryMode": true,
+				"tools.maxDiscoveredTools": 2,
 			}),
 			modelRegistry: {} as never,
 			toolRegistry,
@@ -707,8 +708,7 @@ describe("AgentSession integration: cap, prune, persistence, and reload", () => 
 			}),
 		});
 		sessions.push(session2);
-
-		expect(session2.getSelectedDiscoveredToolNames()).toEqual(["mcp__s__t1", "custom_local"]);
+		expect(session2.getSelectedDiscoveredToolNames()).toEqual(["custom_local", "mcp__s__t1"]);
 	});
 
 	it("enforces cap on oversized activateDiscoveredTools batch and returns only active tools", async () => {

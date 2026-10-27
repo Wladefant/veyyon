@@ -56,10 +56,10 @@ function assistantWithToolCall(toolName: string, callId: string): AssistantMessa
 		role: "assistant",
 		content: [
 			{
-				type: "tool_use",
+				type: "toolCall",
 				id: callId,
 				name: toolName,
-				input: { value: "test" },
+				arguments: { value: "test" },
 			},
 		],
 		timestamp: Date.now(),
@@ -68,10 +68,11 @@ function assistantWithToolCall(toolName: string, callId: string): AssistantMessa
 
 function toolResult(callId: string, toolName: string): ToolResultMessage {
 	return {
-		role: "tool_result",
+		role: "toolResult",
 		toolCallId: callId,
 		toolName,
 		content: [{ type: "text", text: "ok" }],
+		details: undefined,
 		isError: false,
 		timestamp: Date.now(),
 	};
@@ -185,10 +186,19 @@ function createCompactionRuntimeHarness(
 			contextWindow: state.model.contextWindow ?? 128000,
 			percent: state.currentTokens / (state.model.contextWindow ?? 128000),
 		}),
-		getContextBreakdown: () => state.breakdown,
 		pruneDiscoveredToolsAfterCompaction: async messages => {
 			state.pruneCallCount++;
 			state.prunedMessages = messages;
+			state.breakdown = {
+				contextWindow: 128000,
+				anchored: false,
+				usedTokens: 105000,
+				systemPromptTokens: 65000,
+				systemContextTokens: 5000,
+				skillsTokens: 2000,
+				systemToolsTokens: 18000,
+				messagesTokens: 15000,
+			};
 		},
 	};
 
@@ -233,16 +243,17 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 	it("arms loop guard when auto-compaction leaves context >= threshold and names dominant split", async () => {
 		const { runtime, state } = createCompactionRuntimeHarness(105000, 128000);
 
-		// Post-compaction breakdown has system prompt as dominant split
+		// The pre-prune snapshot makes history dominant; the prune callback replaces it
+		// with a snapshot where the system prompt is dominant.
 		state.breakdown = {
 			contextWindow: 128000,
 			anchored: false,
 			usedTokens: 105000,
-			systemPromptTokens: 65000,
+			systemPromptTokens: 10000,
 			systemContextTokens: 5000,
 			skillsTokens: 2000,
 			systemToolsTokens: 18000,
-			messagesTokens: 15000,
+			messagesTokens: 70000,
 		};
 		state.currentTokens = 105000;
 
