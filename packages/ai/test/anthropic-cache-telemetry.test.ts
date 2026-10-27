@@ -1,3 +1,4 @@
+import nodeCrypto from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { streamAnthropic } from "@veyyon/ai/providers/anthropic";
 import { AnthropicMessages } from "@veyyon/ai/providers/anthropic-client";
@@ -328,12 +329,19 @@ describe("Anthropic cache telemetry", () => {
 		expect(typeof req?.prefixHash).toBe("string");
 
 		// When isOAuth is true, Anthropic injects the billing header into system[0].
-		// The unpatched body has cch=00000, while the wire body and prefixHash reflect the patched cch.
+		// serializedBody passed to client contains the placeholder before fetch-time attestation.
 		const serializedWire = capturedOptions?.serializedBody as string | undefined;
 		expect(serializedWire).toBeDefined();
-		expect(serializedWire).toContain("cch=");
-		expect(serializedWire).not.toContain("cch=00000");
-		// createAnthropicCacheRequestRecord patches cch so prefixHash reflects the wire serialization
+		expect(serializedWire).toContain("cch=00000");
+
+		// createAnthropicCacheRequestRecord patches cch so prefixHash matches the wire attestation,
+		// differing from a hash computed over the unpatched cch=00000 placeholder body.
+		const unpatchedParsed = JSON.parse(serializedWire!);
+		const unpatchedPrefixHash = nodeCrypto
+			.createHash("sha256")
+			.update(JSON.stringify({ system: unpatchedParsed.system, tools: unpatchedParsed.tools }))
+			.digest("hex");
+		expect(req?.prefixHash).not.toBe(unpatchedPrefixHash);
 		expect(req?.prefixHash).toMatch(/^[0-9a-f]{64}$/);
 	});
 
