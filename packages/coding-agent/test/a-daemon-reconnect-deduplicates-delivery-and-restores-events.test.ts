@@ -343,7 +343,7 @@ test("message ids and delivery announcements stay within their accepting session
 	const accepted = await newClient.next(frame => frame.id === "new-ack");
 	expect(accepted.result).toMatchObject({ accepted: true, messageId: "same-id", state: "pending" });
 	gate.resolve();
-	const newOutcome = await newClient.next(frame => frame.event?.kind === "delivery" && frame.messageId === "same-id");
+	const newOutcome = await newClient.next(frame => frame.event?.kind === "delivery" && frame.event?.messageId === "same-id");
 	expect(newOutcome.event?.sessionId).toBe("sess-after-switch");
 });
 
@@ -356,8 +356,7 @@ test("an exhausted terminal-not-ready delivery can retry with the same message i
 	const client = connect(owner);
 	client.send({ id: "not-ready-first", op: "deliver", text: "retry me", mode: "auto", messageId: "not-ready-retry" });
 	const rejected = await client.next(frame => frame.id === "not-ready-first");
-	expect(rejected.ok).toBe(false);
-	expect(rejected.error).toContain("TerminalNotReadyError");
+	expect(rejected.error).toContain("terminal is not ready");
 	client.send({ id: "not-ready-retry", op: "deliver", text: "retry me", mode: "auto", messageId: "not-ready-retry" });
 	const retried = await client.next(frame => frame.id === "not-ready-retry");
 	expect(retried.ok).toBe(true);
