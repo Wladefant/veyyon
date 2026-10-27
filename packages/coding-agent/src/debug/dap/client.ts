@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
-import { errorMessage, isEnoent, logger, ptree, settleWithin } from "@veyyon/utils";
+import * as path from "node:path";
+import { errorMessage, isEnoent, logger, privateTempDir, ptree, Snowflake, settleWithin } from "@veyyon/utils";
 import { NON_INTERACTIVE_ENV } from "../../exec/non-interactive-env";
 import { primarySessionCpuAdoption } from "../../session/cpu-limit";
 import { ToolAbortError } from "../../tools/core/tool-errors";
@@ -152,7 +153,9 @@ export class DapClient {
 		env: Record<string, string | undefined>;
 		timeoutMs: number;
 	}): Promise<DapClient> {
-		const socketPath = `/tmp/dap-${adapter.name}-${Date.now()}-${Math.random().toString(36).slice(2)}.sock`;
+		// In the user's private temp directory: the adapter accepts debug requests on this socket, which evaluate
+		// code as this user. The name stays short so the path fits the 104-byte socket limit of macOS.
+		const socketPath = path.join(privateTempDir(), `dap-${Snowflake.next()}.sock`);
 		const proc = ptree.spawn([adapter.resolvedCommand, ...adapter.args, `--listen=unix:${socketPath}`], {
 			cwd,
 			stdin: "pipe",

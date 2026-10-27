@@ -4,6 +4,7 @@
  * Provides tools for debugging, bug report generation, and system diagnostics.
  */
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import * as url from "node:url";
 import { getWorkProfile } from "@veyyon/natives";
 import {
@@ -16,7 +17,7 @@ import {
 	type TerminalNotification,
 	Text,
 } from "@veyyon/tui";
-import { errorMessage, getSessionsDir } from "@veyyon/utils";
+import { errorMessage, getSessionsDir, privateTempDir } from "@veyyon/utils";
 import { formatBytes } from "@veyyon/utils/format";
 import { ModalSelectListComponent } from "../modes/terminal/components/selectors/modal-select-list";
 import {
@@ -272,7 +273,7 @@ export class DebugSelectorComponent {
 			}
 
 			// Write SVG to temp file and open in browser
-			const tmpPath = `/tmp/work-profile-${Date.now()}.svg`;
+			const tmpPath = path.join(privateTempDir(), `work-profile-${Date.now()}.svg`);
 			await Bun.write(tmpPath, workProfile.svg);
 
 			openPath(tmpPath);
