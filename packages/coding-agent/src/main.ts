@@ -1412,6 +1412,7 @@ interface RunRootCommandDependencies {
 	discoverAuthStorage?: typeof discoverAuthStorage;
 	selectSession?: typeof selectSession;
 	runAcpMode?: RunAcpMode;
+	runRpcMode?: RunRpcMode;
 	settings?: Settings;
 	forceSetupWizard?: boolean;
 	/**
@@ -1969,17 +1970,24 @@ async function buildLaunchSessionOptions(
 	return sessionOptions;
 }
 
+/**
+ * Build a session. With `refreshModels` (the default) background model discovery starts once the
+ * session exists: ACP and RPC clients list models before their first prompt, and a session a host
+ * creates later serves the same host. The terminal starts discovery after its first frame and a
+ * print run after its first response starts streaming (`refreshModelsOnFirstResponse`), so neither
+ * delays its first request.
+ */
 type LaunchSessionCreator = (
 	options: CreateAgentSessionOptions,
-	deferModelRefresh?: boolean,
+	refreshModels?: boolean,
 ) => Promise<CreateAgentSessionResult>;
 
 function launchSessionCreator(launch: RootLaunch): LaunchSessionCreator {
 	const createAgentSessionImpl = launch.deps.createAgentSession ?? createAgentSession;
 	const { modelRegistry } = launch;
-	return async (options, deferModelRefresh = false) => {
+	return async (options, refreshModels = true) => {
 		const result = await logger.time("createAgentSession", createAgentSessionImpl, options);
-		if (!deferModelRefresh) {
+		if (refreshModels) {
 			await yieldToEventLoop();
 			// Kick off background model discovery only after createAgentSession finishes its parallel
 			// discovery arms; running these concurrently contends for the event loop and stretches
@@ -2232,9 +2240,9 @@ interface StartedLaunch {
 	readonly createNextSession: NextSessionFactory;
 }
 
-async function runRpcLaunch(mode: "rpc" | "rpc-ui", started: StartedLaunch): Promise<void> {
+async function runRpcLaunch(launch: RootLaunch, mode: "rpc" | "rpc-ui", started: StartedLaunch): Promise<void> {
 	// Branch-only protocol runner: keep RPC host code out of normal interactive startup.
-	const runRpcMode: RunRpcMode = (await import("./modes/rpc/rpc-mode")).runRpcMode;
+	const runRpcMode = launch.deps.runRpcMode ?? (await import("./modes/rpc/rpc-mode")).runRpcMode;
 	stopStartupWatchdog();
 	const { created } = started;
 	await runRpcMode(created, {
@@ -2279,10 +2287,25 @@ async function runInteractiveLaunch(launch: RootLaunch, started: StartedLaunch):
 	await runInteractiveMode(launch, started, versionCheckPromise);
 }
 
+/**
+ * Start model discovery once the run's first response starts streaming. A print run resolves its
+ * model at startup, so discovery is not needed for the first request and would only delay it.
+ * Started while the provider generates, it still refreshes the catalog for what a longer run
+ * resolves later: an agent's model, a role model, the compaction model.
+ */
+function refreshModelsOnFirstResponse(session: AgentSession): void {
+	const unsubscribe = session.subscribe(event => {
+		if (event.type !== "message_start" || event.message.role !== "assistant") return;
+		unsubscribe();
+		session.modelRegistry.refreshInBackground();
+	});
+}
+
 async function runPrintLaunch(mode: "text" | "json", started: StartedLaunch): Promise<void> {
 	stopStartupWatchdog();
 	const runPrintMode: RunPrintMode = (await import("./modes/print-mode")).runPrintMode;
 	const { session } = started.created;
+	refreshModelsOnFirstResponse(session);
 	await runPrintMode(session, {
 		mode,
 		messages: started.initialArgs.messages,
@@ -2330,7 +2353,10 @@ async function runSessionLaunch(
 		operatorNotices.error("settings", unparseableSettingsNotice(launch.settings.quarantinedFiles));
 	}
 	const shared: LaunchSessionShared = { eventBus, operatorNotices, preloadedExtensions };
-	const created = await createSession({ ...sessionOptions, ...shared }, launch.isInteractive);
+	// RPC refreshes the model catalog once its session exists. The terminal refreshes after its first
+	// frame and a print run after its first response starts streaming.
+	const isRpc = mode === "rpc" || mode === "rpc-ui";
+	const created = await createSession({ ...sessionOptions, ...shared }, isRpc);
 	const { session } = created;
 	// The TUI states a hand-edited setting that reads as another value above its first prompt
 	// (`InteractiveMode.init`). Every other mode states it here, before the run uses that value.
@@ -2351,8 +2377,8 @@ async function runSessionLaunch(
 	reportModelAvailability(launch, created);
 
 	const started: StartedLaunch = { created, eventBus, initialArgs, prompt, createNextSession };
-	if (mode === "rpc" || mode === "rpc-ui") {
-		await runRpcLaunch(mode, started);
+	if (isRpc) {
+		await runRpcLaunch(launch, mode, started);
 	} else if (launch.isInteractive) {
 		await runInteractiveLaunch(launch, started);
 	} else {

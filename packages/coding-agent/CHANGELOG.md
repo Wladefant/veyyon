@@ -4,6 +4,7 @@
 
 ### Changed
 
+- A `-p` or `--mode json` run starts background model discovery once its first response starts streaming instead of when its session is created, which sends the first request about 33 ms sooner and cut a run against a provider that answers in 300 ms and streams for 150 ms from 615.2 ms to 564.9 ms (median of 8).
 - `read` and the CLI `@` attachment import the entry-kind phrase from `@veyyon/utils/fs-error`, which adds no module to any import graph; no user-facing change.
 - The provider-refusal check and the Mnemopi per-bank target dedupe each have one definition; no user-facing change.
 - `/todo` with an unknown verb in the TUI lists the accepted verbs, the message ACP shows, instead of the full usage.
