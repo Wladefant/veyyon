@@ -1606,6 +1606,15 @@ export class TUI extends Container {
 		this.#executeRender();
 	}
 
+	/**
+	 * Holds the next frame one cadence interval. A handler that arms a double-press window (Ctrl+C to
+	 * exit, Esc to discard a draft) calls this so the second press, already queued on stdin, is read
+	 * before a repaint that could take longer than the window. A press that arms nothing paints at once.
+	 */
+	holdFrameForInput(): void {
+		this.#pacer.holdForInput(this.#renderScheduler.now());
+	}
+
 	requestRender(force = false, options?: RenderRequestOptions): void {
 		// Any non-component-scoped request makes the pending frame a full one.
 		this.#pendingRenderComponentsOnly = false;
@@ -2118,13 +2127,6 @@ export class TUI extends Container {
 	}
 
 	#dispatchInput(data: string): void {
-		// Ctrl+C/Esc use app-level double-press windows. Give those gestures one
-		// frame to drain queued input before an ordinary repaint; delaying every
-		// key would make idle navigation pay a full frame of latency.
-		const c0 = data.charCodeAt(0);
-		if ((c0 === 3 || c0 === 27) && (matchesKey(data, "ctrl+c") || matchesKey(data, "escape"))) {
-			this.#pacer.holdForInput(this.#renderScheduler.now());
-		}
 		const input = this.#filterInput(data);
 		// Consume terminal cell size responses without blocking unrelated input.
 		if (input === null || this.#consumeCellSizeResponse(input)) return;

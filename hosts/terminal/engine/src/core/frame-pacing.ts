@@ -112,9 +112,8 @@ export class FramePacer {
 	}
 
 	/**
-	 * Holds the next frame one cadence interval past `now`. Ctrl+C/Esc use app-level double-press
-	 * windows, and the hold gives those gestures one frame to drain queued input before an
-	 * ordinary repaint.
+	 * Holds the next frame one cadence interval past `now`, so the second press of a double-press
+	 * gesture the caller just armed drains from stdin before an ordinary repaint.
 	 */
 	holdForInput(now: number): void {
 		this.#inputGraceUntilMs = now + INPUT_RENDER_GRACE_MS;

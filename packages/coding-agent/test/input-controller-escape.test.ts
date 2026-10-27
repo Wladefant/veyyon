@@ -145,6 +145,7 @@ function createContext(): {
 		ui: {
 			requestRender,
 			resetDisplay,
+			holdFrameForInput: vi.fn(),
 			scrollToLiveTail: vi.fn(),
 			addInputListener: vi.fn(listener => {
 				inputListeners.push(listener as (data: string) => { consume?: boolean; data?: string } | undefined);
@@ -792,6 +793,28 @@ describe("InputController Ctrl+C behavior", () => {
 		editor.onEscape?.(); // Esc is a different handler
 
 		expect(spies.flushSync).not.toHaveBeenCalled();
+	});
+
+	// The first press arms the 500 ms exit window. Holding the next frame lets the second press, already
+	// queued on stdin, be read before a slow repaint can outlast the window; the exiting press arms nothing.
+	it("holds the next frame on the press that arms the exit window and on no other", () => {
+		const { ctx, editor } = createContext();
+		const events: string[] = [];
+		ctx.ui.holdFrameForInput = () => {
+			events.push("hold");
+		};
+		ctx.clearEditor = () => {
+			events.push("clear");
+		};
+		ctx.shutdown = async () => {
+			events.push("shutdown");
+		};
+		new InputController(ctx).setupKeyHandlers();
+
+		editor.onClear?.();
+		expect(events).toEqual(["clear", "hold"]);
+		editor.onClear?.();
+		expect(events).toEqual(["clear", "hold", "shutdown"]);
 	});
 });
 

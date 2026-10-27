@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, setSystemTime, vi } from "bun:test";
 import { type Component, type RenderScheduler, TUI } from "@veyyon/tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
+/** Ctrl+C twice inside 500 ms exits. The first press arms that window and holds the next frame, as the app does. */
 class BlockingDoubleInterruptComponent implements Component {
 	interruptsHandled = 0;
 	exitRequests = 0;
@@ -9,6 +10,8 @@ class BlockingDoubleInterruptComponent implements Component {
 	#blockNextRenderMs = 0;
 	secondInterruptSeen = false;
 	slowRenderBeforeSecond = false;
+
+	constructor(private readonly armed: () => void) {}
 
 	armSlowRender(blockMs: number): void {
 		this.#blockNextRenderMs = blockMs;
@@ -19,6 +22,7 @@ class BlockingDoubleInterruptComponent implements Component {
 		this.interruptsHandled++;
 		if (this.interruptsHandled === 1) {
 			this.#firstInterruptAt = Date.now();
+			this.armed();
 			return;
 		}
 		this.secondInterruptSeen = true;
@@ -40,15 +44,16 @@ class BlockingDoubleInterruptComponent implements Component {
 	}
 }
 
-class NavigationProbe implements Component {
-	#selected = 0;
+/** Counts every press it receives, so a frame shows whether the press was painted. */
+class PressProbe implements Component {
+	#presses = 0;
 
-	handleInput(data: string): void {
-		if (data === "\x1b[B") this.#selected++;
+	handleInput(_data: string): void {
+		this.#presses++;
 	}
 
 	render(_width: number): readonly string[] {
-		return [`selected:${this.#selected}`];
+		return [`presses:${this.#presses}`];
 	}
 }
 
@@ -94,7 +99,7 @@ describe("TUI input priority", () => {
 		setSystemTime(new Date(1_000));
 		const terminal = new VirtualTerminal(40, 8);
 		const tui = new TUI(terminal, undefined, { renderScheduler: fakeTimerScheduler() });
-		const component = new BlockingDoubleInterruptComponent();
+		const component = new BlockingDoubleInterruptComponent(() => tui.holdFrameForInput());
 		tui.addChild(component);
 		tui.setFocus(component);
 		tui.start();
@@ -115,12 +120,18 @@ describe("TUI input priority", () => {
 		expect(component.exitRequests).toBe(1);
 	});
 
-	it("renders ordinary navigation without an interrupt-grace delay", async () => {
+	// Esc and Ctrl+C included: the engine holds a frame only when a handler armed a double-press
+	// window, so a press that arms nothing (closing a selector, interrupting a turn) paints at once.
+	it.each([
+		["navigation", "\x1b[B"],
+		["Esc", "\x1b"],
+		["Ctrl+C", "\x03"],
+	])("paints a %s press that arms no gesture without an input-grace delay", async (_name, key) => {
 		vi.useFakeTimers();
 		setSystemTime(new Date(1_000));
 		const terminal = new VirtualTerminal(40, 8);
 		const tui = new TUI(terminal, undefined, { renderScheduler: fakeTimerScheduler() });
-		const component = new NavigationProbe();
+		const component = new PressProbe();
 		tui.addChild(component);
 		tui.setFocus(component);
 
@@ -129,11 +140,11 @@ describe("TUI input priority", () => {
 			await drainNextTick();
 			vi.advanceTimersByTime(40);
 
-			terminal.sendInput("\x1b[B");
+			terminal.sendInput(key);
 			await drainNextTick();
 			await drainNextTick();
 
-			expect(terminal.getViewport().map(row => row.trimEnd())).toContain("selected:1");
+			expect(terminal.getViewport().map(row => row.trimEnd())).toContain("presses:1");
 		} finally {
 			tui.stop();
 		}

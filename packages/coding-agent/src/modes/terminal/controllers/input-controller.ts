@@ -457,6 +457,7 @@ export class InputController {
 		} else {
 			this.ctx.clearEditor();
 			this.ctx.lastSigintTime = now;
+			this.ctx.ui.holdFrameForInput();
 		}
 	}
 

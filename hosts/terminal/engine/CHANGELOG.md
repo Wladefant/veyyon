@@ -5,6 +5,7 @@
 ### Changed
 
 - An `Editor` asks its autocomplete provider again on the edit that changes an open suggestion list instead of 100 ms later, so typing `/mo` narrows the slash command list in 3 ms instead of 105 ms and an `@` file list follows each keystroke one frame later instead of after the timer.
+- Esc and Ctrl+C paint on the next frame unless their handler arms a double-press window through the new `TUI.holdFrameForInput()`, which replaces the engine's one-frame hold on every Esc and Ctrl+C.
 
 ## [1.5.10] - 2026-10-25
 

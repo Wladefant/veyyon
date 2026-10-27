@@ -28,9 +28,11 @@
 - The `session_stop` hook pass moved out of `AgentSession` into the `SessionStopHook` session collaborator, with no change to the event a handler receives, the continuation it queues or the cap that ends a chain.
 - The hidden next-turn message queue moved out of `AgentSession` into the `NextTurnMessages` session collaborator, with no change to when a queued message reaches a turn or the order it arrives in.
 - Model switching moved out of `AgentSession` into the `ModelSelection` session collaborator, with no change to what a saved switch, a session-only switch or the Ctrl+P cycle records, persists or pins.
+- Esc repaints a frame sooner when it arms no double-press gesture: closing a selector takes 4 ms instead of 35 ms with the kitty keyboard protocol and 54 ms instead of 86 ms without.
 - Cursor and GitLab Duo tool results, GitLab Duo goal prompts and the Antigravity and Google Cloud token refreshes each run through one shared implementation; no user-facing change.
 - The shell's built-in output filters compile their output-stage regular expressions the first time each filter applies instead of when the registry loads; a filter file loaded from config still rejects a bad regular expression at load.
 - An `Editor` asks its autocomplete provider again on the edit that changes an open suggestion list instead of 100 ms later, so typing `/mo` narrows the slash command list in 3 ms instead of 105 ms and an `@` file list follows each keystroke one frame later instead of after the timer.
+- Esc and Ctrl+C paint on the next frame unless their handler arms a double-press window through the new `TUI.holdFrameForInput()`, which replaces the engine's one-frame hold on every Esc and Ctrl+C.
 - `sgrEnd` is exported from `@veyyon/utils/ansi` and is the single definition `wrap` and `width` use; no user-facing change.
 
 ### Fixed
