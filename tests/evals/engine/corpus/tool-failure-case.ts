@@ -10,6 +10,7 @@ export interface HistoricalToolCall {
 	arguments: { [key: string]: CaseValue };
 }
 
+/** The collection format admits all three proof kinds; current cases use later-success only. */
 export type HistoricalProvenance =
 	| { kind: "later-success"; evidenceKey: string; observation: string; successfulCall: HistoricalToolCall; result: CaseValue }
 	| { kind: "merged-fix"; evidenceKey: string; observation: string; url: string }

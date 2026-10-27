@@ -22,10 +22,20 @@ Each case records:
 7. The limits of the minimized case.
 
 Keep transcript paths, session IDs, original prose, account names, and credentials in a private provenance map only.
-Use neutral relative paths in fixtures. Never commit raw transcript extracts.
+Use neutral relative paths or neutral roots such as `C:/repo/` and `/repo/`. Preserve the recorded path dialect.
+Never commit raw transcript extracts.
 A later-success case includes the successful call and its minimized result.
 An observed failure alone does not prove the expected outcome.
 Several variants of the same incident keep the same family key.
+
+The current collection uses generic neutral prior-message text. Its decision-specific context lives in the call and recovery shapes.
+It is not a faithful reconstruction of the original prompts and must not be treated as a ready model evaluation.
+Artifact identity and full recovery payloads were checked in the private provenance map. Committed payload shapes do not independently prove identity.
+Argument values are neutral literals, not wildcard matchers. A future runner must define fixture bindings before exact-argument scoring.
+`expected.requiredCalls` records the ordered recovery sequence. `provenance.successfulCall` records its final successful call.
+Case IDs retain gaps for two excluded compacted-payload records. IDs are stable collection keys, not a contiguous count.
+The format admits all three provenance kinds required by the collection contract. Current cases use later-success only.
+The JSONL reader rejects a leading byte-order mark as `invalid-json`. It does not silently repair malformed input.
 
 ## Evaluation boundary
 

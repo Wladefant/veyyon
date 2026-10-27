@@ -41,7 +41,7 @@ function jsonl(...rows: unknown[]): string {
 }
 
 describe("tool-failure index row parsing", () => {
-	test("accepts version 1 and preserves the private row only in memory", () => {
+	test("returns a valid version-1 row unchanged", () => {
 		const expected = row();
 		const result = parseToolFailureIndex(jsonl(expected));
 
@@ -75,7 +75,7 @@ describe("tool-failure index row parsing", () => {
 		]);
 	});
 
-	test("rejects malformed JSON, invalid fields and whitespace-only signatures", () => {
+	test("rejects malformed JSON, invalid fields and blank required strings", () => {
 		const wrongType = row({ tool: 3 });
 		const unsafePath = row({ file: "../outside.ts" });
 		const badTimestamp = row({ timestamp: "2026-02-31T12:30:00.000Z" });
@@ -93,6 +93,7 @@ describe("tool-failure index row parsing", () => {
 				JSON.stringify(emptyError),
 				JSON.stringify(blankTool),
 				JSON.stringify(blankSession),
+				`\uFEFF${JSON.stringify(row())}`,
 			].join("\n"),
 		);
 
@@ -106,6 +107,7 @@ describe("tool-failure index row parsing", () => {
 			{ line: 6, reason: "invalid-field" },
 			{ line: 7, reason: "invalid-field" },
 			{ line: 8, reason: "invalid-field" },
+			{ line: 9, reason: "invalid-json" },
 		]);
 	});
 });
@@ -146,7 +148,7 @@ describe("newest tool-failure index directory loading", () => {
 		expect(result.rejections).toEqual([{ line: 1, reason: "invalid-json" }]);
 	});
 
-	test("rejects an unsupported digest version and a count that disagrees with accepted rows", async () => {
+	test("rejects an unsupported digest version and a count that disagrees with source rows", async () => {
 		for (const [digest, message] of [
 			[{ schema_version: 2, tool_case_count: 0, coverage_complete: false }, "invalid digest.json"],
 			[{ schema_version: 1, tool_case_count: 1, coverage_complete: false }, "count does not match"],

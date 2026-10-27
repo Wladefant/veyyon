@@ -37,7 +37,7 @@ export const TOOL_FAILURE_CASES = [
 					"arguments": {
 						"op": "file_read",
 						"repo": "example/project",
-						"branch": "<revision>",
+						"branch": "reviewed-revision",
 						"path": "repo/target.ps1",
 						"pr": null,
 						"force": null,
@@ -73,7 +73,7 @@ export const TOOL_FAILURE_CASES = [
 				"arguments": {
 					"op": "file_read",
 					"repo": "example/project",
-					"branch": "<revision>",
+					"branch": "reviewed-revision",
 					"path": "repo/target.ps1",
 					"pr": null,
 					"force": null,
@@ -1894,7 +1894,7 @@ export const TOOL_FAILURE_CASES = [
 				{
 					"tool": "read",
 					"arguments": {
-						"path": "local://artifact1.tsv:1-2",
+						"path": "local://ledger.tsv:1-2",
 						"depth": null,
 						"limit": null
 					}
