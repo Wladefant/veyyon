@@ -94,12 +94,6 @@ import { contentText } from "@veyyon/utils/content-text";
 import { startupMarker } from "@veyyon/utils/startup-marker";
 import type { ArgotSession } from "argot";
 import type { AdvisorConfig } from "../advisor";
-import {
-	ArgotStreamDisplayDecoder,
-	expandAssistantContent,
-	expandSessionContext,
-	expandSessionMessageEntries,
-} from "../argot-wire";
 import { type AsyncJob, AsyncJobManager } from "../async";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import { unusableCredentialMessage } from "../config/missing-credentials";
@@ -141,7 +135,7 @@ import type { PlanModeState } from "../plan-mode/state";
 import { goalsPrompts } from "../prompts/goals/rows";
 import { sessionPrompts } from "../prompts/session/rows";
 import { turnControlPrompts } from "../prompts/turn-control/rows";
-import { mapAssistantContentStrings, type SecretObfuscator } from "../secrets/obfuscator";
+import type { SecretObfuscator } from "../secrets/obfuscator";
 import { isLivePromptGate } from "../system-prompt-builder/gate-registry";
 import {
 	HELPER_IDS,
@@ -235,6 +229,7 @@ import { CompactionRuntime } from "./runtime/compaction-runtime";
 import { readCompactionSpanBack } from "./runtime/compaction-summarizer";
 import { ContextAccounting } from "./runtime/context-accounting";
 import { ConversationRelease } from "./runtime/conversation-release";
+import { DisplayCopy } from "./runtime/display-copy";
 import { ExtensionEventForwarder } from "./runtime/extension-event-forwarder";
 import { FinalizeReminders } from "./runtime/finalize-reminders";
 import { HistoryRewrites } from "./runtime/history-rewrites";
@@ -875,8 +870,8 @@ export class AgentSession {
 	readonly #stopHook: SessionStopHook;
 	/** Secret obfuscator, runtime lease, provider redaction and display expansion. */
 	readonly #secrets: SessionSecrets;
-	/** Per-streaming-message argot display decoder (seam 3); reset on each assistant message_start. */
-	#argotStreamDisplay: ArgotStreamDisplayDecoder | undefined;
+	/** Display copy: secrets deobfuscated and argot handles expanded, with the stream decoder (seam 3). */
+	readonly #display: DisplayCopy;
 	/** Resolves the active model's inline-descriptor policy for session dumps. */
 	#resolvePruneToolDescriptions: (model: Model) => boolean = () => false;
 	/** The open checkpoint, its pending rewind report and the last completed rewind. */
@@ -1068,6 +1063,11 @@ export class AgentSession {
 			refreshSystemPrompt: async () => {
 				await this.refreshBaseSystemPrompt("secrets-refresh");
 			},
+		});
+		this.#display = new DisplayCopy({
+			argot: config.argot,
+			secrets: this.#secrets,
+			sessionStore: this.sessionManager,
 		});
 		this.#approvals = new SessionApprovals(
 			{
@@ -2139,50 +2139,16 @@ export class AgentSession {
 	};
 
 	/**
-	 * Assistant message content in display form: secrets deobfuscated and argot
-	 * handles expanded, composed in that order. Stored messages keep the
-	 * obfuscated placeholders and cheap handles (the token win and the persistence
-	 * contract); any surface that shows content to a person — the streamed
-	 * `message_end` display event, and headless `--print`, which reads the stored
-	 * message directly — must route it through here first so operators never see a
-	 * raw `#HASH#` secret token or a bare `§handle`. Returns the same content
-	 * reference when neither transform applies.
+	 * Assistant message content in display form, which every surface showing content to a person
+	 * reads; see {@link DisplayCopy.assistantContent}.
 	 */
 	displayAssistantContent(content: AssistantMessage["content"]): AssistantMessage["content"] {
-		// DISPLAY PATH: the streamed `message_end` display event, the interactive
-		// event fan-out, and `--print`. Degrades per string; never throws.
-		const expand = this.#secrets.displayExpander();
-		let out =
-			expand === undefined ? content : mapAssistantContentStrings(content, expand, { includeToolMetadata: true });
-		if (this.#config.argot?.loaded) {
-			out = expandAssistantContent(this.#config.argot, out);
-		}
-		return out;
+		return this.#display.assistantContent(content);
 	}
 
-	/**
-	 * A tool call's intent in display form, through the same two transforms as its
-	 * content.
-	 *
-	 * The intent is a sentence the MODEL wrote about what it is doing, and the
-	 * interactive working line puts it on screen the moment the call starts. That
-	 * makes it a display surface with the same obligation as any other: a person
-	 * reads "Reading src/db.ts to check the schema", never "Reading §db …".
-	 *
-	 * It needs its own pass because it does not travel with the arguments. The
-	 * intent is lifted out of the arguments before the argument transform runs, so
-	 * the expansion applied to every argument reaches everything except this one
-	 * field, and the `tool_execution_start` event carries it verbatim.
-	 */
+	/** A tool call's intent in display form; see {@link DisplayCopy.toolIntent}. */
 	displayToolIntent(intent: string | undefined): string | undefined {
-		if (intent === undefined || intent === "") return intent;
-		// DISPLAY PATH: the working line puts this on screen the moment a tool call
-		// starts, so it degrades to the literal placeholder and never throws.
-		let out = this.#secrets.expandForDisplay(intent);
-		if (this.#config.argot?.loaded) {
-			out = this.#config.argot.expand(out);
-		}
-		return out;
+		return this.#display.toolIntent(intent);
 	}
 
 	/**
@@ -2194,16 +2160,11 @@ export class AgentSession {
 	#processAgentEvent = async (event: AgentEvent): Promise<void> => {
 		switch (event.type) {
 			case "message_start":
-				if (event.message.role === "assistant") {
-					// Start a fresh per-message argot stream decoder (seam 3): the live
-					// preview re-renders the accumulated partial, and a handle can split
-					// across deltas, so text/thinking blocks render only decoder-proved text.
-					this.#argotStreamDisplay = new ArgotStreamDisplayDecoder(this.#config.argot);
-				}
+				if (event.message.role === "assistant") this.#display.startStream();
 				await this.#emitSessionEvent(expandAssistantEvent(this, event));
 				return;
 			case "message_update":
-				await this.#emitSessionEvent(this.#decodeStreamUpdate(event));
+				await this.#emitSessionEvent(this.#display.streamUpdate(event));
 				// A TTSR rule matching a stream delta may abort the turn to inject its body;
 				// the retry it scheduled carries the rest.
 				await this.#ttsr.observeStreamDelta(event.message, event.assistantMessageEvent);
@@ -2255,31 +2216,6 @@ export class AgentSession {
 	};
 
 	/**
-	 * The display copy of a streamed assistant delta. The whole stream event is decoded, not only the
-	 * accumulated content: a machine consumer that reconstructs text from the delta stream alone
-	 * (print `--mode json`) must never see a raw §handle, and neither must one reading the event's
-	 * own `partial`, `content` or `toolCall` payload. The decoded increments sum to the same decoded
-	 * content `decodeContent` exposes, so every view agrees and reconciles with the wholesale-expanded
-	 * `message_end` message.
-	 */
-	#decodeStreamUpdate(
-		event: Extract<AgentEvent, { type: "message_update" }>,
-	): Extract<AgentEvent, { type: "message_update" }> {
-		const decoder = this.#argotStreamDisplay;
-		if (decoder === undefined || event.message.role !== "assistant") return event;
-		const streamEvent = event.assistantMessageEvent;
-		const assistantMessageEvent = decoder.decodeStreamEvent(streamEvent);
-		const streamedContent = decoder.decodeContent(event.message.content);
-		const contentChanged = streamedContent !== event.message.content;
-		if (!contentChanged && assistantMessageEvent === streamEvent) return event;
-		return {
-			...event,
-			message: contentChanged ? { ...event.message, content: streamedContent } : event.message,
-			assistantMessageEvent,
-		};
-	}
-
-	/**
 	 * A finished message: the state later events read is applied, the display copy is emitted, and
 	 * the message is persisted before its settle-time effects run.
 	 */
@@ -2303,8 +2239,7 @@ export class AgentSession {
 		}
 		const persistence = this.#persistence.openSlot(message);
 		// The finished message expands wholesale; drop the stream state.
-		this.#argotStreamDisplay?.flush();
-		this.#argotStreamDisplay = undefined;
+		this.#display.endStream();
 		let displayEvent = event;
 		if (message.role === "assistant") {
 			applyProviderReportedContextWindow(this.agent, this.modelRegistry, message);
@@ -3331,21 +3266,7 @@ export class AgentSession {
 	}
 
 	buildDisplaySessionContext(): SessionContext {
-		// RENDER PATH, and also the agent-state rebuild after a compaction, a
-		// history rewrite or a session switch, so a throw here does not fail one
-		// render, it fails the session. Degrades per string; never throws.
-		return this.#expandArgot(
-			this.#secrets.deobfuscateSessionContextForDisplay(this.sessionManager.buildSessionContext()),
-		);
-	}
-
-	/**
-	 * Expand argot handles across a rebuilt transcript so display/export/resume
-	 * matches the live message seam. No-op unless a dictionary was read this
-	 * session. Composes after secret deobfuscation.
-	 */
-	#expandArgot(context: SessionContext): SessionContext {
-		return this.#config.argot?.loaded ? expandSessionContext(this.#config.argot, context) : context;
+		return this.#display.sessionContext();
 	}
 
 	/**
@@ -3356,29 +3277,18 @@ export class AgentSession {
 	 * the same codec through this accessor rather than reaching for `#argot`.
 	 */
 	expandArgotEntries(entries: SessionMessageEntry[]): SessionMessageEntry[] {
-		return this.#config.argot?.loaded ? expandSessionMessageEntries(this.#config.argot, entries) : entries;
+		return this.#display.expandEntries(entries);
 	}
 
 	/**
-	 * Transcript for TUI display. Full history is kept for export/resume-style
-	 * callers; live chat can collapse compacted history to keep the hot render
-	 * surface bounded. Display-only — NEVER feed the result to
-	 * `agent.replaceMessages` or a provider.
+	 * Transcript for TUI display; see {@link DisplayCopy.transcriptContext}. Full history is kept for
+	 * export/resume-style callers; live chat can collapse compacted history to keep the hot render
+	 * surface bounded.
 	 */
 	buildTranscriptSessionContext(
 		options?: Pick<BuildSessionContextOptions, "collapseCompactedHistory" | "keepDanglingToolCalls">,
 	): SessionContext {
-		// RENDER PATH: every TUI repaint runs this, so a throw would unwind the
-		// render loop. Degrades per string; never throws.
-		return this.#expandArgot(
-			this.#secrets.deobfuscateSessionContextForDisplay(
-				this.sessionManager.buildSessionContext({
-					transcript: true,
-					collapseCompactedHistory: options?.collapseCompactedHistory,
-					keepDanglingToolCalls: options?.keepDanglingToolCalls,
-				}),
-			),
-		);
+		return this.#display.transcriptContext(options);
 	}
 
 	#convertToLlmForSideRequest(messages: AgentMessage[]): Message[] {

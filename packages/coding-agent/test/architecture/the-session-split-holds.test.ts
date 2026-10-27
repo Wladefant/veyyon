@@ -121,8 +121,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-27 at 5545: the command registries, the resolution of a typed prompt through
  * extension, custom and file-based commands and the prompt templates, and the agents a `/` command
  * grants for its turn moved into the `prompt-commands.ts` collaborator (-108).
+ * RE-MEASURED 2026-10-27 at 5455: the display copy of assistant content, tool intents, streamed
+ * deltas and rebuilt transcripts, with the stream decoder it holds, moved into the `display-copy.ts`
+ * collaborator (-90).
  */
-const RUNTIME_CEILING = 5_600;
+const RUNTIME_CEILING = 5_500;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -140,6 +143,7 @@ const COLLABORATORS = [
 	"compaction-summarizer.ts",
 	"context-accounting.ts",
 	"conversation-release.ts",
+	"display-copy.ts",
 	"extension-event-forwarder.ts",
 	"finalize-reminders.ts",
 	"history-rewrites.ts",
