@@ -61,7 +61,6 @@ import type {
 	SimpleStreamOptions,
 	TextContent,
 	ToolChoice,
-	ToolResultMessage,
 	UsageReport,
 } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
@@ -261,7 +260,6 @@ import {
 	type Prewalk,
 	type ProjectAdvisorScope,
 	type PromptOptions,
-	QUIESCENCE_RECHECK_MS,
 	type ScheduledAgentContinueOptions,
 	type SecretRuntimeLease,
 	type SessionHandoffOptions,
@@ -307,6 +305,7 @@ import { MessagePersistence } from "./runtime/message-persistence";
 import { ModelHandoff } from "./runtime/model-handoff";
 import { ModelSelection, type SetModelOptions } from "./runtime/model-selection";
 import { NextTurnMessages } from "./runtime/next-turn-messages";
+import { OwnedAsyncJobs } from "./runtime/owned-async-jobs";
 import { PlanModeRuntime } from "./runtime/plan-mode-runtime";
 import { PostPromptTasks } from "./runtime/post-prompt-tasks";
 import { ProviderSessions } from "./runtime/provider-sessions";
@@ -808,14 +807,8 @@ export class AgentSession {
 
 	// Python execution state
 	#evalKernelOwnerId: string;
-	/**
-	 * AsyncJobManager scoped to this session for introspection/cancellation.
-	 *
-	 * This differs from `config.ownedAsyncJobManager`: agents can inherit a parent
-	 * manager for their own owner id, while secondary top-level sessions are left
-	 * undefined to avoid reading the primary's jobs.
-	 */
-	readonly #asyncJobManager: AsyncJobManager | undefined;
+	/** The background jobs this session owns: delivery, snapshot, cancellation and the wake they hold; see {@link OwnedAsyncJobs}. */
+	readonly #ownedJobs: OwnedAsyncJobs;
 
 	/** IRC records reaching this session, the wake turns and auto-replies they start; see {@link IrcDelivery}. */
 	readonly #irc: IrcDelivery;
@@ -1163,7 +1156,30 @@ export class AgentSession {
 			config,
 		);
 		this.#evalKernelOwnerId = config.evalKernelOwnerId ?? `agent-session:${Snowflake.next()}`;
-		this.#asyncJobManager = config.asyncJobManager ?? config.ownedAsyncJobManager;
+		this.#ownedJobs = new OwnedAsyncJobs(
+			{
+				messages: () => this.agent.state.messages,
+				appendLateToolResult: message => {
+					this.agent.appendMessage(message);
+					this.#persistence.persistIfMissing(message);
+					this.#emitSessionEventDetached({ type: "message_start", message }, "late tool result");
+					this.#emitSessionEventDetached({ type: "message_end", message }, "late tool result");
+				},
+				enqueueAsyncResult: entry => this.yieldQueue.enqueue<AsyncResultEntry>("async-result", entry),
+				subscribe: listener => this.subscribe(listener),
+				allowingAgentInitiatedTurns: async <T>(run: () => Promise<T>): Promise<T> => {
+					const previous = this.#allowAcpAgentInitiatedTurns;
+					this.#allowAcpAgentInitiatedTurns = true;
+					try {
+						return await run();
+					} finally {
+						this.#allowAcpAgentInitiatedTurns = previous;
+					}
+				},
+			},
+			config.asyncJobManager ?? config.ownedAsyncJobManager,
+			config.agentId,
+		);
 		this.#thinking = new ThinkingRuntime({
 			agent: this.agent,
 			sessionStore: this.sessionManager,
@@ -1518,7 +1534,7 @@ export class AgentSession {
 			activeToolNames: () => this.getActiveToolNames(),
 			eagerPreludeContext: () => this.#buildEagerPreludeContext(),
 			consumeLastServedToolChoiceLabel: () => this.#toolChoiceQueue.consumeLastServedLabel(),
-			hasPendingAsyncWake: () => this.#hasPendingAsyncWake(),
+			hasPendingAsyncWake: () => this.#ownedJobs.hasPendingWake(),
 			emitSessionEvent: event => this.#emitSessionEvent(event),
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 			promptGeneration: () => this.#promptGeneration,
@@ -1677,7 +1693,7 @@ export class AgentSession {
 			sideComplete: this.#sideCompleteImpl,
 			effectiveServiceTier: model => this.#effectiveServiceTier(model),
 			clearNextTurnMessages: () => this.#nextTurn.clear(),
-			cancelOwnAsyncJobs: () => this.#cancelOwnAsyncJobs(),
+			cancelOwnAsyncJobs: () => this.#ownedJobs.cancelOwn(),
 			cancelPostPromptTasks: () => this.#cancelPostPromptTasks(),
 			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
 			restoreMCPSelectionsForSessionContext: sessionContext =>
@@ -1699,7 +1715,7 @@ export class AgentSession {
 			baseSystemPrompt: () => this.#toolActivation.baseSystemPrompt,
 			effectiveServiceTier: model => this.#effectiveServiceTier(model),
 			clearNextTurnMessages: () => this.#nextTurn.clear(),
-			cancelOwnAsyncJobs: () => this.#cancelOwnAsyncJobs(),
+			cancelOwnAsyncJobs: () => this.#ownedJobs.cancelOwn(),
 			endConversation: () => this.#endConversation(),
 			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
 			resetAllAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),
@@ -1775,7 +1791,7 @@ export class AgentSession {
 	}
 
 	get asyncJobManager(): AsyncJobManager | undefined {
-		return this.#asyncJobManager;
+		return this.#ownedJobs.manager;
 	}
 
 	getAgentId(): string | undefined {
@@ -1988,130 +2004,13 @@ export class AgentSession {
 		this.#planInternalAbortPending = false;
 	}
 
-	/**
-	 * Deliver a finished async job's result to the conversation.
-	 *
-	 * When the job names the tool call that started it and that call is still
-	 * pending in the current context — its `toolCall` block has no `toolResult`
-	 * because a continuation, abort or crash split the pair — the result
-	 * attaches to the original call and no model turn is enqueued: the loop
-	 * does not need to reason over an arrival the transcript can simply record.
-	 * When the call is answered already, or no longer present (the session
-	 * branched away from it), the result takes the ordinary async-result
-	 * follow-up, which re-wakes the loop; a request that then replays the
-	 * unanswered call keeps the provider-side orphan-placeholder repair.
-	 */
+	/** Deliver a finished async job's result to the conversation; see {@link OwnedAsyncJobs.deliver}. */
 	deliverAsyncJobResult(jobId: string, text: string, job?: AsyncJob): "attached" | "queued" {
-		const toolCallId = job?.toolCallId;
-		if (toolCallId && this.#attachLateToolResult(toolCallId, text, job)) {
-			return "attached";
-		}
-		this.yieldQueue.enqueue<AsyncResultEntry>("async-result", {
-			jobId,
-			result: text,
-			job,
-			durationMs: job ? Math.max(0, Date.now() - job.startTime) : undefined,
-		});
-		return "queued";
-	}
-
-	/**
-	 * Append a `toolResult` for a call the current context left unanswered.
-	 * Returns false — caller falls back to the async-result follow-up — when
-	 * the call is not in the message list at all (branched away, compacted
-	 * out) or already has its result.
-	 */
-	#attachLateToolResult(toolCallId: string, text: string, job: AsyncJob | undefined): boolean {
-		const messages = this.agent.state.messages;
-		let callIndex = -1;
-		let toolName: string | undefined;
-		for (let i = messages.length - 1; i >= 0; i--) {
-			const message = messages[i];
-			if (message.role !== "assistant") continue;
-			const block = message.content.find(part => part.type === "toolCall" && part.id === toolCallId);
-			if (block && block.type === "toolCall") {
-				callIndex = i;
-				toolName = block.name;
-				break;
-			}
-		}
-		if (callIndex < 0) return false;
-		for (let i = callIndex + 1; i < messages.length; i++) {
-			const message = messages[i];
-			if (message.role === "toolResult" && message.toolCallId === toolCallId) return false;
-		}
-		const toolResultMessage: ToolResultMessage = {
-			role: "toolResult",
-			toolCallId,
-			toolName: toolName ?? job?.type ?? "tool",
-			content: [{ type: "text", text }],
-			details: job
-				? { async: { state: job.status === "failed" ? "failed" : "completed", jobId: job.id } }
-				: undefined,
-			isError: job?.status === "failed",
-			timestamp: Date.now(),
-		};
-		this.agent.appendMessage(toolResultMessage);
-		this.#persistence.persistIfMissing(toolResultMessage);
-		this.#emitSessionEventDetached({ type: "message_start", message: toolResultMessage }, "late tool result");
-		this.#emitSessionEventDetached({ type: "message_end", message: toolResultMessage }, "late tool result");
-		return true;
+		return this.#ownedJobs.deliver(jobId, text, job);
 	}
 
 	getAsyncJobSnapshot(options?: { recentLimit?: number }): AsyncJobSnapshot | null {
-		const manager = this.#asyncJobManager;
-		if (!manager) return null;
-		const ownerFilter = this.#config.agentId ? { ownerId: this.#config.agentId } : undefined;
-		const running = manager.getRunningJobs(ownerFilter).map(job => ({
-			id: job.id,
-			type: job.type,
-			status: job.status,
-			label: job.label,
-			startTime: job.startTime,
-		}));
-		const recent = manager.getRecentJobs(options?.recentLimit ?? 5, ownerFilter).map(job => ({
-			id: job.id,
-			type: job.type,
-			status: job.status,
-			label: job.label,
-			startTime: job.startTime,
-		}));
-		const delivery = manager.getDeliveryState(ownerFilter);
-		return { running, recent, delivery };
-	}
-
-	/**
-	 * Cancel async jobs registered by this agent and by every agent it spawned.
-	 * Used by lifecycle transitions (newSession, switchSession, handoff, dispose)
-	 * so a session cleans up its own background work without touching its
-	 * parent's or a sibling's jobs.
-	 *
-	 * DOWN the spawn tree, never up or sideways. A spawned agent exists to serve the
-	 * agent that spawned it, so once this session is being torn down or moved to a
-	 * new session, a grandchild's background job has nobody left to deliver to: it
-	 * would keep running, keep spending, and report to a session that is gone.
-	 * Cancelling only `ownerId` left exactly that orphan whenever a spawned agent had
-	 * itself delegated. Reaching UP would be the old bug this scoping fixed (issue
-	 * #1923): a secondary in-process session must never tear down the primary's
-	 * work.
-	 *
-	 * Cancellation runs against this session's scoped manager. Spawned agents have
-	 * unique agent ids and inherit the parent's manager to clean up their own
-	 * jobs. A secondary in-process top-level session gets no scoped manager,
-	 * because it defaults to `MAIN_AGENT_ID`; reaching through the global
-	 * singleton would tear down the owning primary session's bash/task jobs at
-	 * dispose time (issue #1923).
-	 *
-	 * No-op when no manager is reachable or this session has no agent id.
-	 */
-	#cancelOwnAsyncJobs(): void {
-		if (!this.#config.agentId) return;
-		const manager = this.#asyncJobManager;
-		if (!manager) return;
-		manager.cancelAll({ ownerId: this.#config.agentId });
-		for (const descendant of AgentRegistry.global().descendantsOf(this.#config.agentId)) {
-			manager.cancelAll({ ownerId: descendant });
-		}
+		return this.#ownedJobs.snapshot(options?.recentLimit);
 	}
 
 	/**
@@ -2155,8 +2054,8 @@ export class AgentSession {
 	 * Order matters. Terminate the descendants BEFORE the re-scope, so they are
 	 * reached while they still resolve as this agent's subtree; re-scoping first
 	 * would leave them parented to a scope nothing walks. Their async jobs are
-	 * already cancelled by the caller's `#cancelOwnAsyncJobs`, which walks the
-	 * same subtree.
+	 * already cancelled by the caller's {@link OwnedAsyncJobs.cancelOwn}, which
+	 * walks the same subtree.
 	 *
 	 * Terminate, not release. Release disposes the session, and dispose stops the
 	 * agent loop but leaves the agent's bash, eval, handoff and advisor work
@@ -2235,28 +2134,6 @@ export class AgentSession {
 					});
 				}
 			}),
-		);
-	}
-
-	/**
-	 * True when a background async job owned by this agent is still running with
-	 * an unsuppressed delivery, or a finished job's delivery is still queued or
-	 * in flight. Either way the async-result follow-up will re-wake the loop, so
-	 * a settle observed now is a scheduling pause rather than a terminal stop:
-	 * stop-time passes (todo reminder, session_stop hooks) defer to the settle
-	 * reached once the session is fully idle. Suppressed deliveries
-	 * (acknowledged, or watched by an in-flight `job` poll) never wake the loop,
-	 * so they don't count. With `endingJobsOnly`, neither does a job that runs until stopped.
-	 */
-	#hasPendingAsyncWake(endingJobsOnly = false): boolean {
-		const manager = this.#asyncJobManager;
-		if (!manager) return false;
-		const ownerFilter = this.#config.agentId ? { ownerId: this.#config.agentId } : undefined;
-		return (
-			manager
-				.getRunningJobs(ownerFilter)
-				.some(job => !manager.isDeliverySuppressed(job.id) && (!endingJobsOnly || job.endsOnItsOwn)) ||
-			manager.hasPendingDeliveries(ownerFilter)
 		);
 	}
 
@@ -2941,7 +2818,7 @@ export class AgentSession {
 		// A pending async wake means this settle is a scheduling pause, not the terminal stop: the
 		// async-result delivery continues the loop and the real stop settles later, so the
 		// session_stop hook pass waits until the session is fully idle.
-		if (this.#hasPendingAsyncWake()) return true;
+		if (this.#ownedJobs.hasPendingWake()) return true;
 		// Gated BEFORE the enforcer runs: it drains the ledger's one reminder as it reads it, so
 		// deferring from inside would spend the reminder it meant to keep.
 		if (mayContinueAtSettle("verification-evidence", settleState) && this.#finalize.verificationBeforeFinalize()) {
@@ -3334,7 +3211,7 @@ export class AgentSession {
 		// leak its background bash/task work into the parent's manager. Only
 		// the session that owns the manager goes on to dispose it (which itself
 		// nukes any leftover jobs and pending deliveries).
-		this.#cancelOwnAsyncJobs();
+		this.#ownedJobs.cancelOwn();
 		const ownedAsyncManager = this.#config.ownedAsyncJobManager;
 		if (ownedAsyncManager) {
 			const drained = await ownedAsyncManager.dispose({ timeoutMs: 3_000 });
@@ -3538,51 +3415,13 @@ export class AgentSession {
 	async waitForQuiescence(signal?: AbortSignal, options?: { endingJobsOnly?: boolean }): Promise<void> {
 		while (!signal?.aborted) {
 			await this.waitForIdle();
-			if (signal?.aborted || !this.#hasPendingAsyncWake(options?.endingJobsOnly)) return;
-			await this.#nextAsyncWakeChange(signal);
+			if (signal?.aborted || !this.#ownedJobs.hasPendingWake(options?.endingJobsOnly)) return;
+			await this.#ownedJobs.nextWakeChange(signal);
 		}
 	}
 
-	/**
-	 * Resolve on the first event that can change {@link #hasPendingAsyncWake}: an owned job
-	 * settling, a turn starting, `signal` aborting, or {@link QUIESCENCE_RECHECK_MS} passing.
-	 */
-	async #nextAsyncWakeChange(signal: AbortSignal | undefined): Promise<void> {
-		const { promise, resolve } = Promise.withResolvers<void>();
-		const wake = (): void => resolve();
-		const timer = setTimeout(wake, QUIESCENCE_RECHECK_MS);
-		const unsubscribe = this.subscribe(event => {
-			if (event.type === "agent_start") wake();
-		});
-		signal?.addEventListener("abort", wake, { once: true });
-		const ownerFilter = this.#config.agentId ? { ownerId: this.#config.agentId } : undefined;
-		for (const job of this.#asyncJobManager?.getRunningJobs(ownerFilter) ?? []) {
-			job.promise.then(wake, wake);
-		}
-		try {
-			await promise;
-		} finally {
-			clearTimeout(timer);
-			unsubscribe();
-			signal?.removeEventListener("abort", wake);
-		}
-	}
-
-	async drainAsyncJobDeliveriesForAcp(options?: { timeoutMs?: number }): Promise<boolean> {
-		const manager = this.#asyncJobManager;
-		if (!manager) return false;
-		const ownerFilter = this.#config.agentId ? { ownerId: this.#config.agentId } : undefined;
-		const before = manager.getDeliveryState(ownerFilter);
-		if (before.queued === 0 && !before.delivering) return false;
-		const previousAllowAcpAgentInitiatedTurns = this.#allowAcpAgentInitiatedTurns;
-		this.#allowAcpAgentInitiatedTurns = true;
-		try {
-			const drained = await manager.drainDeliveries({ timeoutMs: options?.timeoutMs, filter: ownerFilter });
-			const after = manager.getDeliveryState(ownerFilter);
-			return drained && (before.queued !== after.queued || before.delivering !== after.delivering);
-		} finally {
-			this.#allowAcpAgentInitiatedTurns = previousAllowAcpAgentInitiatedTurns;
-		}
+	drainAsyncJobDeliveriesForAcp(options?: { timeoutMs?: number }): Promise<boolean> {
+		return this.#ownedJobs.drainDeliveries(options?.timeoutMs);
 	}
 
 	/** Most recent assistant message in agent state. */
@@ -5449,7 +5288,7 @@ export class AgentSession {
 		options: NewSessionOptions | undefined,
 	): Promise<void> {
 		await this.abort();
-		this.#cancelOwnAsyncJobs();
+		this.#ownedJobs.cancelOwn();
 		this.#providerSessions.closeAll("new session");
 		this.agent.reset();
 		if (options?.drop && previousSessionFile) {

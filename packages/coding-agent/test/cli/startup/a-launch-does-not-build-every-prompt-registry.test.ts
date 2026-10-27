@@ -435,11 +435,17 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * arguments. Their other runtime imports (`@veyyon/utils`, `@veyyon/utils/json-parse` and
  * `tools/core/builtin-names`) are already here. Measured 2026-10-27 at 1508.
  *
+ * 1508 to 1509: `coding-agent/src/session/runtime/owned-async-jobs.ts`, the session collaborator
+ * that delivers, lists and cancels the background jobs a session owns and holds the wake they keep
+ * over a settle. It left `session/agent-session.ts`, already here, and its runtime imports (the
+ * agent registry and `session/agent-session-types.ts`) are already here. Measured 2026-10-27 at
+ * 1509.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1508;
+const LAUNCH_REACH_CEILING = 1509;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

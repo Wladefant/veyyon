@@ -33,6 +33,7 @@
 - Views that load after the key that opens them, such as the Extension Control Center, paint up to 30 ms sooner.
 - `/cpu-limit status` reports the kill policy in force: `kill on sustained saturation` for the CPU budget and `kill when exceeded` for the write budget.
 - The tool argument repair registry lists path resolution in the file tools among the tool-local parsing it excludes; no user-facing change.
+- Background job delivery, listing, cancellation and the settle wake moved out of the session class into one session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - Cursor and GitLab Duo tool results, GitLab Duo goal prompts and the Antigravity and Google Cloud token refreshes each run through one shared implementation; no user-facing change.
 - The shell's built-in output filters compile their output-stage regular expressions the first time each filter applies instead of when the registry loads; a filter file loaded from config still rejects a bad regular expression at load.
 - An `Editor` asks its autocomplete provider again on the edit that changes an open suggestion list instead of 100 ms later, so typing `/mo` narrows the slash command list in 3 ms instead of 105 ms and an `@` file list follows each keystroke one frame later instead of after the timer.

@@ -120,7 +120,7 @@ describe("AsyncJobManager singleton across concurrent top-level sessions", () =>
 			// from the session rather than typed here: every interactive driver is
 			// keyed `main:<sessionId>`, so a literal name matches whichever session
 			// happened to claim it and the test would assert nothing once two
-			// sessions exist. The secondary's dispose-time `cancelOwnAsyncJobs`
+			// sessions exist. The secondary's dispose-time `OwnedAsyncJobs.cancelOwn`
 			// must not reach this job (issue #1923).
 			const primaryOwner = primary.getAgentId();
 			expect(primaryOwner).toBeTruthy();

@@ -14,7 +14,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir, withTimeout } from "@veyyon/utils";
 
 /**
- * Regression coverage for the `#hasPendingAsyncWake()` gate shared by the
+ * Regression coverage for the `OwnedAsyncJobs.hasPendingWake()` check shared by the
  * stop-time passes in the `agent_end` settle path: a background async job
  * (bash/task) owned by this agent re-wakes the loop when it completes — its
  * result delivery enqueues an async-result follow-up that continues the run,

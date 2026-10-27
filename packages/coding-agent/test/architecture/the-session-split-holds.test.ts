@@ -93,8 +93,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * left as the `model-selection.ts` collaborator with the scoped models (-180).
  * RE-MEASURED 2026-10-27 at 6930: the session budget registration, its id-change rekey and its
  * settings listener left as `bindSessionBudget` in `cpu-limit.ts` (-32).
+ * RE-MEASURED 2026-10-27 at 6769: the owned background jobs (late result delivery, the job
+ * snapshot, descendant cancellation, the settle wake and the ACP delivery drain) left as the
+ * `owned-async-jobs.ts` collaborator (-161).
  */
-const RUNTIME_CEILING = 7_000;
+const RUNTIME_CEILING = 6_850;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -122,6 +125,7 @@ const COLLABORATORS = [
 	"model-handoff.ts",
 	"model-selection.ts",
 	"next-turn-messages.ts",
+	"owned-async-jobs.ts",
 	"plan-mode-runtime.ts",
 	"post-prompt-tasks.ts",
 	"provider-sessions.ts",
@@ -156,8 +160,13 @@ const COLLABORATOR_CEILING = 1_000;
 /** MEASURED: the largest sibling is `agent-session-types.ts` at 782 lines. */
 const SIBLING_CEILING = 900;
 
-/** MEASURED: the facade is 342 lines. */
-const FACADE_CEILING = 500;
+/**
+ * MEASURED: the facade is 342 lines. It was also held under a twentieth of the runtime, but the
+ * runtime is the file every extraction shrinks: at 6769 lines that ratio turned red with the facade
+ * unchanged, so it measured the decomposition rather than the facade. The ceiling ratchets instead,
+ * like the runtime's, and 345 sits under the 346 the ratio last allowed.
+ */
+const FACADE_CEILING = 345;
 
 /**
  * The concerns that left the runtime and still sit beside it, pinned by exact
@@ -241,8 +250,8 @@ describe("the facade's size", () => {
 		expect(lineCount(FACADE)).toBeLessThanOrEqual(FACADE_CEILING);
 	});
 
-	it("is a small fraction of the runtime it wraps", () => {
-		expect(lineCount(FACADE) * 20).toBeLessThan(lineCount(RUNTIME));
+	it("has a ceiling tight enough to fail on real growth", () => {
+		expect(FACADE_CEILING).toBeLessThanOrEqual(Math.round(lineCount(FACADE) * 1.05));
 	});
 });
 
