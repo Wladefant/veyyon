@@ -155,7 +155,10 @@ describe("config hot reload", () => {
 	it("dispatches the real text command with an off/on routing differential", async () => {
 		const dir = dirs();
 		const file = path.join(dir, "config.yml");
-		await fs.writeFile(file, "agent:\n  model: openai/old\n  sharedModel: true\n");
+		await fs.writeFile(
+			file,
+			"agent:\n  model: openai/old\n  sharedModel: true\ncompaction:\n  threshold: \"200000\"\n",
+		);
 		const settings = await Settings.loadReadOnly({ agentDir: dir });
 		const output: string[] = [];
 		const runtime: SlashCommandRuntime = {
@@ -175,12 +178,16 @@ describe("config hot reload", () => {
 				throw new Error("reload must not reload plugins");
 			},
 		};
-		await fs.writeFile(file, "agent:\n  model: openai/new\n  sharedModel: true\ndefaultEffort:\n  '*': high\n");
+		await fs.writeFile(
+			file,
+			"agent:\n  model: openai/new\n  sharedModel: true\ndefaultEffort:\n  '*': high\ncompaction:\n  threshold: \"400000\"\n",
+		);
 		expect(resolveAgentModel({ settings, agentName: "task" }).patterns).toEqual(["openai/old"]);
 		expect(await executeAcpBuiltinSlashCommand("/reload-config", runtime)).toEqual({ consumed: true });
 		expect(resolveAgentModel({ settings, agentName: "task" }).patterns).toEqual(["openai/new"]);
 		expect(output[0]).toContain('agent.model: applied ("openai/old" → "openai/new")');
 		expect(output[0]).toContain("agent.sharedModel: unchanged");
+		expect(output[0]).toContain('compaction.threshold: applied ("200000" → "400000")');
 		expect(output[0]).toContain("defaultEffort: restart-required — pickInitialThinkingLevel captures it at startup");
 		await executeAcpBuiltinSlashCommand("/reload-config", runtime);
 		expect(output[1]).toContain("No effective routing changes.");
@@ -372,6 +379,36 @@ describe("config hot reload", () => {
 		const result = await settings.reloadConfig();
 		expect(result.restartRequired).toEqual(expect.arrayContaining(["thinkingLevel", "agent.unknownSetting"]));
 		expect(settings.get("agent.model")).toBe("openai/new");
+	});
+	it("reloads compaction settings from disk and reports applied values", async () => {
+		const dir = dirs();
+		const file = path.join(dir, "config.yml");
+		await fs.writeFile(
+			file,
+			'compaction:\n  threshold: "200000"\n  idleThresholdTokens: 120000\n  keepRecentTokens: 20000\n',
+		);
+		const settings = await Settings.loadReadOnly({ agentDir: dir });
+
+		await fs.writeFile(
+			file,
+			'compaction:\n  threshold: "400000"\n  idleThresholdTokens: 240000\n  keepRecentTokens: 40000\n',
+		);
+		const result = await settings.reloadConfig();
+
+		expect(settings.getGroup("compaction")).toMatchObject({
+			threshold: "400000",
+			idleThresholdTokens: 240000,
+			keepRecentTokens: 40000,
+		});
+		expect(result.outcomes).toContainEqual({
+			path: "compaction.threshold",
+			status: "applied",
+		});
+		const unchanged = await settings.reloadConfig();
+		expect(unchanged.outcomes).toContainEqual({
+			path: "compaction.threshold",
+			status: "unchanged",
+		});
 	});
 
 	it("preserves override precedence and applies removed routing fields", async () => {
