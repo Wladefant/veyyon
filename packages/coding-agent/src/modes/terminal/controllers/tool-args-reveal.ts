@@ -121,6 +121,24 @@ function isHexDigit(ch: string): boolean {
 	return (ch >= "0" && ch <= "9") || (ch >= "a" && ch <= "f") || (ch >= "A" && ch <= "F");
 }
 
+/** Index of the first `"` or `\` in `text` at or after `from`, or its length: the end of a run of plain string characters. */
+function stringRunEnd(text: string, from: number): number {
+	for (let i = from; i < text.length; i++) {
+		const code = text.charCodeAt(i);
+		if (code === 0x22 || code === 0x5c) return i;
+	}
+	return text.length;
+}
+
+/** Index of the first `"`, `{`, `}`, `[` or `]` in `text` at or after `from`, or its length: the next byte the scan between strings acts on. */
+function scanRunEnd(text: string, from: number): number {
+	for (let i = from; i < text.length; i++) {
+		const code = text.charCodeAt(i);
+		if (code === 0x22 || code === 0x7b || code === 0x7d || code === 0x5b || code === 0x5d) return i;
+	}
+	return text.length;
+}
+
 type StreamingJsonStringExtractorState = "scan" | "candidate" | "afterCandidate" | "beforeValue" | "target";
 
 class StreamingJsonStringExtractor {
@@ -213,6 +231,9 @@ class StreamingJsonStringExtractor {
 			this.#depth++;
 		} else if (ch === "}" || ch === "]") {
 			this.#depth--;
+		} else {
+			this.#offset = scanRunEnd(this.#source, this.#offset);
+			return;
 		}
 		this.#offset++;
 	}
@@ -243,8 +264,9 @@ class StreamingJsonStringExtractor {
 			this.#offset++;
 			return;
 		}
-		this.#candidate += ch;
-		this.#offset++;
+		const end = stringRunEnd(this.#source, this.#offset);
+		this.#candidate += this.#source.slice(this.#offset, end);
+		this.#offset = end;
 	}
 
 	#readCandidateUnicode(ch: string): void {
@@ -327,8 +349,9 @@ class StreamingJsonStringExtractor {
 			this.#offset++;
 			return;
 		}
-		this.#appendTarget(ch);
-		this.#offset++;
+		const end = stringRunEnd(this.#source, this.#offset);
+		this.#appendTarget(this.#source.slice(this.#offset, end));
+		this.#offset = end;
 	}
 
 	#readTargetUnicode(ch: string): void {
