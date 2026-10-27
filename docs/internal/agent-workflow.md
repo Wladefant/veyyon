@@ -40,19 +40,20 @@ Dirty files and unfinished edits belong to someone. Treat them as live work:
 The boundary is **instruction authorization and safety policy**.
 User instructions constitute approval for the actions they request (`AGENTS.md`).
 Agents execute requested tasks without redundant per-action confirmation prompts.
-Never act uninstructed: no unsolicited comments, issues, or reviews on external repositories.
+Never act uninstructed: no unsolicited comment, issue or review, and nothing on a repository outside these accounts.
 
 | Autonomous / Instruction-approved | Operator-gated (explicit approval needed) |
 | --- | --- |
 | Reading, editing, and staging exact paths | Release cuts (`bun run release <bump>`), which require global policy approval |
-| Local typechecks, tests, and builds | Production data, DDL, or database mutations |
-| Creating feature branches, committing, and pushing for instructed work | Modifying secrets or Bitwarden vaults |
-| Opening and updating pull requests (`Refs #N`) and issues when instructed | Unsolicited public repository issues, comments, or reviews |
-| Updating changelog `[Unreleased]` sections | Direct third-party registry publication (npm, crates.io, Homebrew) |
+| Typechecks, tests and builds, where the operator's policy allows them (it may require CI runners instead of local runs) | Production writes other than deploys (data, DDL, config) need an operator Telegram yes; deploys need none |
+| Creating feature branches, committing, and pushing for instructed work | |
+| Opening and updating pull requests (`Refs #N`) and issues when instructed | |
+| Updating changelog `[Unreleased]` sections | |
+
+Veyyon is never published to npm, Homebrew or crates.io (AGENTS.md Distribution).
 
 When an instruction requests an action, that instruction is the approval.
 Write the text, push the branch, or open the pull request, then report what was done.
-Sensitive production changes remain gated on operator confirmation through Telegram.
 
 ## Shipping an update to production
 
@@ -67,7 +68,7 @@ The interactive script prompt is only a terminal confirmation, not the approval.
 The prompt fails without a TTY.
 [`releasing.md`](./releasing.md) states what each half does.
 
-**Website and install scripts.** Run `bun run site:build` locally at will because the brand check is part of the gate. A matching push to `main`, and every release, deploys both `veyyon.dev` and `get.veyyon.dev`. With approval, run both `bun run site:deploy` and `bun run site:deploy:get` for an out-of-band deployment. If handbook sources changed, run `mdbook build` in `docs/handbook` first.
+**Website and install scripts.** Run `bun run site:build` where the operator's policy allows it (it may require CI runners instead of local runs). The brand check is part of the gate. A matching push to `main`, and every release, deploys both `veyyon.dev` and `get.veyyon.dev`. With approval, run both `bun run site:deploy` and `bun run site:deploy:get` for an out-of-band deployment. If handbook sources changed, run `mdbook build` in `docs/handbook` first.
 
 ## Verify like a user, not like a builder
 
