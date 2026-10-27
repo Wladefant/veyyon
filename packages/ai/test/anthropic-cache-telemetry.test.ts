@@ -50,7 +50,7 @@ function createEvents(
 		cacheCreation?: { ephemeral_5m_input_tokens?: number; ephemeral_1h_input_tokens?: number } | null;
 	} = {},
 ) {
-	return [
+	const events: Array<Record<string, unknown>> = [
 		{
 			type: "message_start",
 			message: {
@@ -65,17 +65,22 @@ function createEvents(
 				},
 			},
 		},
-		{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-		{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: options.text ?? "Hello" } },
-		{ type: "content_block_stop", index: 0 },
-		{
-			type: "message_delta",
-			delta: { stop_reason: "end_turn" },
-			usage: {
-				output_tokens: options.outputTokens ?? 5,
-			},
-		},
 	];
+	if (options.text !== "") {
+		events.push(
+			{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: options.text ?? "Hello" } },
+			{ type: "content_block_stop", index: 0 },
+		);
+	}
+	events.push({
+		type: "message_delta",
+		delta: { stop_reason: "end_turn" },
+		usage: {
+			output_tokens: options.text === "" ? (options.outputTokens ?? 0) : (options.outputTokens ?? 5),
+		},
+	});
+	return events;
 }
 
 afterEach(() => {
@@ -368,6 +373,7 @@ describe("Anthropic cache telemetry", () => {
 
 		const s = streamAnthropic(MODEL, CONTEXT, {
 			apiKey: "sk-ant-test",
+			cacheRetention: "none",
 			onPayload: payload => {
 				for (const m of payload.messages ?? []) {
 					if (Array.isArray(m.content)) {
@@ -466,7 +472,10 @@ describe("Anthropic cache telemetry", () => {
 			) as never;
 		});
 
-		const s = streamAnthropic(MODEL, CONTEXT, { apiKey: "sk-ant-test" });
+		const s = streamAnthropic(MODEL, CONTEXT, {
+			apiKey: "sk-ant-test",
+			providerRetryWait: async () => {},
+		});
 		for await (const _ of s) {
 			// drain
 		}
