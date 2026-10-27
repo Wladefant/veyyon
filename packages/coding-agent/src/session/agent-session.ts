@@ -13,7 +13,6 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
-import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isPromise } from "node:util/types";
@@ -97,7 +96,7 @@ import type { ShakeMode, ShakeResult } from "@veyyon/kernel/session/shake-types"
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import { ToolChoiceQueue } from "@veyyon/kernel/session/tool-choice-queue";
 import { YieldQueue } from "@veyyon/kernel/session/yield-queue";
-import { errorMessage, isEnoent, logger, postmortem, prompt, Snowflake, withTimeout } from "@veyyon/utils";
+import { errorMessage, logger, postmortem, prompt, Snowflake, withTimeout } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
 import { localCalendarDate } from "@veyyon/utils/local-time";
 import { startupMarker } from "@veyyon/utils/startup-marker";
@@ -131,7 +130,7 @@ import type { BashResult } from "../exec/bash-executor";
 import type { TtsrManager } from "../export/ttsr";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands/types";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
-import type { ExtensionRunner, SessionBeforeSwitchResult } from "../extensibility/extensions";
+import type { ExtensionRunner } from "../extensibility/extensions";
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
@@ -1703,6 +1702,7 @@ export class AgentSession {
 			wire: this.#wire,
 			providerSessions: this.#providerSessions,
 			memory: this.#memory,
+			planMode: this.#planMode,
 			discovery: this.#discovery,
 			checkpoint: this.#checkpoint,
 			thinking: this.#thinking,
@@ -1726,6 +1726,11 @@ export class AgentSession {
 			setServiceTierByFamily: byFamily => {
 				this.#serviceTierByFamily = byFamily;
 			},
+			serviceTierEntry: () => serviceTierEntry(this.#serviceTierByFamily),
+			applyToolNames: async toolNames => {
+				await this.#toolActivation.apply(toolNames, { persistMCPSelection: false });
+			},
+			cancelOwnAsyncJobs: () => this.#ownedJobs.cancelOwn(),
 			restoreMCPSelectionsForSessionContext: (sessionContext, options) =>
 				this.#toolActivation.restoreMCPSelections(sessionContext, options),
 			setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
@@ -4703,91 +4708,8 @@ export class AgentSession {
 	 * @param options - Optional initial messages and parent session path
 	 * @returns true if completed, false if cancelled by hook
 	 */
-	async newSession(options?: NewSessionOptions): Promise<boolean> {
-		const previousSessionFile = this.sessionFile;
-		const nextDiscoverySessionToolNames = this.#discovery.mcpEnabled
-			? [...this.#discovery.activeNonMCP(), ...this.#discovery.defaultMCPTools()]
-			: undefined;
-
-		// Emit session_before_switch event with reason "new" (can be cancelled)
-		if (this.#config.extensionRunner?.hasHandlers("session_before_switch")) {
-			const result = (await this.#config.extensionRunner.emit({
-				type: "session_before_switch",
-				reason: "new",
-			})) as SessionBeforeSwitchResult | undefined;
-
-			if (result?.cancel) {
-				return false;
-			}
-		}
-
-		await this.#whileDisconnectedFromAgent(() =>
-			this.#startNewTranscript(previousSessionFile, nextDiscoverySessionToolNames, options),
-		);
-
-		// Emit session_switch event with reason "new" to hooks
-		if (this.#config.extensionRunner) {
-			await this.#config.extensionRunner.emit({
-				type: "session_switch",
-				reason: "new",
-				previousSessionFile,
-			});
-		}
-
-		return true;
-	}
-
-	/** Saves or drops the outgoing transcript and starts an empty one. Runs with agent events detached. */
-	async #startNewTranscript(
-		previousSessionFile: string | undefined,
-		nextDiscoverySessionToolNames: string[] | undefined,
-		options: NewSessionOptions | undefined,
-	): Promise<void> {
-		await this.abort();
-		this.#ownedJobs.cancelOwn();
-		this.#providerSessions.closeAll("new session");
-		this.agent.reset();
-		if (options?.drop && previousSessionFile) {
-			// Detach the advisor recorder feed and drain its writer BEFORE deleting the
-			// old artifacts dir: `await this.abort()` only stops the primary, so a still-
-			// running advisor turn could otherwise finish, emit `message_end`, and recreate
-			// `<old>/__advisor.jsonl`. The roster's resetSessionState (after newSession) re-primes
-			// the advisor and re-attaches the feed at the new session's path.
-			await this.#advisorRoster.closeRecorders();
-			try {
-				await this.sessionManager.dropSession(previousSessionFile);
-			} catch (err) {
-				logger.error("Failed to delete session during /drop", { err });
-			}
-		} else {
-			await this.sessionManager.flush();
-		}
-		await this.sessionManager.newSession(options);
-		// The transcript changed under this session: release what the conversation it left held.
-		await this.#conversation.release();
-
-		this.#checkpoint.clear();
-		this.setTodoPhases([]);
-		this.#providerSessions.freshId = undefined;
-		this.#providerSessions.clearInheritedCacheKey("new-session");
-		this.#providerSessions.sync();
-		this.#memory.rekey();
-		this.#resetMemoryContextForNewTranscript();
-		this.#nextTurn.clear();
-
-		this.sessionManager.appendThinkingLevelChange(this.thinkingLevel, this.configuredThinkingLevel());
-		this.sessionManager.appendServiceTierChange(serviceTierEntry(this.#serviceTierByFamily));
-		if (nextDiscoverySessionToolNames) {
-			await this.#toolActivation.apply(nextDiscoverySessionToolNames, { persistMCPSelection: false });
-			if (this.getSelectedMCPToolNames().length > 0) {
-				this.sessionManager.appendMCPToolSelection(this.getSelectedMCPToolNames());
-			}
-		}
-		this.#discovery.rememberSessionDefaults(this.sessionFile);
-
-		this.#todo.resetForNewContext();
-		this.#planMode.resetReference();
-		this.#advisorRoster.resetSessionState();
+	newSession(options?: NewSessionOptions): Promise<boolean> {
+		return this.#sessionSwitch.startNew(options);
 	}
 
 	/**
@@ -4804,66 +4726,8 @@ export class AgentSession {
 	 * Unlike newSession(), this preserves all messages in the agent state.
 	 * @returns true if completed, false if cancelled by hook or not persisting
 	 */
-	async fork(): Promise<boolean> {
-		const previousSessionFile = this.sessionFile;
-
-		// Emit session_before_switch event with reason "fork" (can be cancelled)
-		if (this.#config.extensionRunner?.hasHandlers("session_before_switch")) {
-			const result = (await this.#config.extensionRunner.emit({
-				type: "session_before_switch",
-				reason: "fork",
-			})) as SessionBeforeSwitchResult | undefined;
-
-			if (result?.cancel) {
-				return false;
-			}
-		}
-
-		// Flush current session to ensure all entries are written
-		await this.sessionManager.flush();
-
-		// Fork the session (creates new session file with same entries)
-		const forkResult = await this.sessionManager.fork();
-		if (!forkResult) {
-			return false;
-		}
-
-		// Copy artifacts directory if it exists
-		const oldArtifactDir = forkResult.oldSessionFile.slice(0, -6);
-		const newArtifactDir = forkResult.newSessionFile.slice(0, -6);
-
-		try {
-			const oldDirStat = await fs.promises.stat(oldArtifactDir);
-			if (oldDirStat.isDirectory()) {
-				await fs.promises.cp(oldArtifactDir, newArtifactDir, { recursive: true });
-			}
-		} catch (err) {
-			if (!isEnoent(err)) {
-				logger.warn("Failed to copy artifacts during fork", {
-					oldArtifactDir,
-					newArtifactDir,
-					error: errorMessage(err),
-				});
-			}
-		}
-
-		// Update agent session ID
-		this.#providerSessions.freshId = undefined;
-		this.#providerSessions.adoptInheritedCacheKey();
-		this.#providerSessions.sync();
-		this.#memory.rekey();
-		this.#resetMemoryContextForNewTranscript();
-
-		// Emit session_switch event with reason "fork" to hooks
-		if (this.#config.extensionRunner) {
-			await this.#config.extensionRunner.emit({
-				type: "session_switch",
-				reason: "fork",
-				previousSessionFile,
-			});
-		}
-
-		return true;
+	fork(): Promise<boolean> {
+		return this.#sessionSwitch.fork();
 	}
 
 	// =========================================================================

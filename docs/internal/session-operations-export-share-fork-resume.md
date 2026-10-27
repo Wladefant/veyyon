@@ -182,7 +182,7 @@ Interactive `/fork` creates a new session from the current one and switches the 
 
 ### Session-level flow
 
-`AgentSession.fork()`:
+`AgentSession.fork()` delegates to `SessionSwitch.fork` (`session/runtime/session-switch.ts`), which:
 
 1. Emits `session_before_switch` with `reason: "fork"` (cancellable).
 2. Flushes pending writes.
