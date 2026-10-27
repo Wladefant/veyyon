@@ -134,11 +134,8 @@ import { type DiscoverableTool, type DiscoverableToolSearchIndex, isMCPToolName 
 // engine and the EditTool and pulls in 44 modules nothing else here reaches.
 import { getFileSnapshotStore } from "../edit/file-snapshot-store";
 import type { PythonResult } from "../eval/py/executor";
-// The leaf, not `../eval/py`: that module declares the Python backend descriptor and reaches
-// hundreds of modules, and all this needs is the id prefix.
-import { namespaceSessionId as namespacePythonSessionId } from "../eval/py/session-namespace";
 import { defaultEvalSessionId } from "../eval/session-id";
-import { type BashResult, executeBash as executeBashCommand } from "../exec/bash-executor";
+import type { BashResult } from "../exec/bash-executor";
 import type { TtsrManager } from "../export/ttsr";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands/types";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
@@ -188,13 +185,8 @@ import type { TodoPhase } from "../tools/agent/todo";
 import { validateApprovalPolicySettings } from "../tools/core/approval";
 import type { ApprovalMode, SessionToolApprovals } from "../tools/core/approval-modes";
 import { TOOL } from "../tools/core/builtin-names";
-import { reportLostOutputArtifact } from "../tools/core/output-artifact";
-import { outputMeta } from "../tools/core/output-meta";
 import { shortenPath } from "../tools/core/render-utils";
-import { clampTimeout } from "../tools/core/tool-timeouts";
 import type { CheckpointState, CompletedRewindState } from "../tools/fs/checkpoint";
-import type { BashExecutionMessage, PythonExecutionMessage } from "../tools/shell/execution-messages";
-import { loadPythonExecutor } from "../tools/shell/manifest";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
@@ -585,21 +577,6 @@ async function normalizeAgentMessageImages<T extends AgentMessage>(message: T, m
 	return { ...message, content: normalized } as T;
 }
 
-async function saveBashOriginalArtifact(
-	sessionManager: SessionManager,
-	originalText: string,
-): Promise<string | undefined> {
-	try {
-		return await sessionManager.saveArtifact(originalText, "bash-original");
-	} catch (err) {
-		// The executor only appends the `artifact://<id>` footer when an id comes back, so undefined has to
-		// stay the answer here: the minimized output is still correct, it cannot be expanded. The loss
-		// is reported through the same owner the tool spill path uses, so both report the same thing.
-		reportLostOutputArtifact("bash-original", err);
-		return undefined;
-	}
-}
-
 /**
  * `details` with the text the queue chip shows for a queued custom message. Details that are not an
  * object are replaced, since the chip text needs a record to ride on.
@@ -772,6 +749,13 @@ export class AgentSession {
 			this.agent.appendMessage(message);
 			this.sessionManager.appendMessage(message);
 		},
+		cwd: () => this.sessionManager.getCwd(),
+		sessionId: () => this.sessionId,
+		evalSessionId: () => this.getEvalSessionId(),
+		evalKernelOwnerId: () => this.#evalKernelOwnerId,
+		extensions: () => this.#config.extensionRunner,
+		settings: () => this.settings,
+		saveArtifact: (content, type) => this.sessionManager.saveArtifact(content, type),
 	});
 
 	// Python execution state
@@ -5578,35 +5562,7 @@ export class AgentSession {
 		onChunk?: (chunk: string) => void,
 		options?: { excludeFromContext?: boolean; useUserShell?: boolean },
 	): Promise<BashResult> {
-		const excludeFromContext = options?.excludeFromContext === true;
-		const cwd = this.sessionManager.getCwd();
-
-		if (this.#config.extensionRunner?.hasHandlers("user_bash")) {
-			const hookResult = await this.#config.extensionRunner.emitUserBash({
-				type: "user_bash",
-				command,
-				excludeFromContext,
-				cwd,
-			});
-			if (hookResult?.result) {
-				this.recordBashResult(command, hookResult.result, options);
-				return hookResult.result;
-			}
-		}
-
-		return await this.#executions.runBash(async signal => {
-			const result = await executeBashCommand(command, {
-				onChunk,
-				signal,
-				sessionKey: this.sessionId,
-				cwd,
-				timeout: clampTimeout(TOOL.bash, undefined, this.settings.get("tools.maxTimeout")) * 1000,
-				onMinimizedSave: originalText => saveBashOriginalArtifact(this.sessionManager, originalText),
-				useUserShell: options?.useUserShell,
-			});
-			this.recordBashResult(command, result, options);
-			return result;
-		});
+		return this.#executions.executeBash(command, onChunk, options);
 	}
 
 	/**
@@ -5614,21 +5570,7 @@ export class AgentSession {
 	 * Used by executeBash and by extensions that handle bash execution themselves.
 	 */
 	recordBashResult(command: string, result: BashResult, options?: { excludeFromContext?: boolean }): void {
-		const meta = outputMeta().truncationFromSummary(result, { direction: "tail" }).get();
-		const bashMessage: BashExecutionMessage = {
-			role: "bashExecution",
-			command,
-			output: result.output,
-			exitCode: result.exitCode,
-			signal: result.signal,
-			cancelled: result.cancelled,
-			truncated: result.truncated,
-			meta,
-			timestamp: Date.now(),
-			excludeFromContext: options?.excludeFromContext,
-		};
-
-		this.#executions.record(bashMessage);
+		this.#executions.recordBash(command, result, options);
 	}
 
 	/**
@@ -5664,43 +5606,7 @@ export class AgentSession {
 		onChunk?: (chunk: string) => void,
 		options?: { excludeFromContext?: boolean },
 	): Promise<PythonResult> {
-		const excludeFromContext = options?.excludeFromContext === true;
-		const cwd = this.sessionManager.getCwd();
-		this.assertEvalExecutionAllowed();
-
-		const abortController = new AbortController();
-		const execution = (async (): Promise<PythonResult> => {
-			if (this.#config.extensionRunner?.hasHandlers("user_python")) {
-				const hookResult = await this.#config.extensionRunner.emitUserPython({
-					type: "user_python",
-					code,
-					excludeFromContext,
-					cwd,
-				});
-				this.assertEvalExecutionAllowed();
-				if (hookResult?.result) {
-					this.recordPythonResult(code, hookResult.result, options);
-					return hookResult.result;
-				}
-			}
-
-			// Use the same session ID as eval's Python backend for kernel sharing.
-			const sessionId = this.getEvalSessionId();
-			const { executePython: executePythonCommand } = await loadPythonExecutor();
-			this.assertEvalExecutionAllowed();
-			const result = await executePythonCommand(code, {
-				cwd,
-				sessionId: namespacePythonSessionId(sessionId),
-				kernelOwnerId: this.#evalKernelOwnerId,
-				kernelMode: this.settings.get("python.kernelMode"),
-				interpreter: this.settings.get("python.interpreter")?.trim() || undefined,
-				onChunk,
-				signal: abortController.signal,
-			});
-			this.recordPythonResult(code, result, options);
-			return result;
-		})();
-		return await this.trackEvalExecution(execution, abortController);
+		return this.#executions.executePython(code, onChunk, options);
 	}
 
 	assertEvalExecutionAllowed(): void {
@@ -5718,20 +5624,7 @@ export class AgentSession {
 	 * Record a Python execution result in session history.
 	 */
 	recordPythonResult(code: string, result: PythonResult, options?: { excludeFromContext?: boolean }): void {
-		const meta = outputMeta().truncationFromSummary(result, { direction: "tail" }).get();
-		const pythonMessage: PythonExecutionMessage = {
-			role: "pythonExecution",
-			code,
-			output: result.output,
-			exitCode: result.exitCode,
-			cancelled: result.cancelled,
-			truncated: result.truncated,
-			meta,
-			timestamp: Date.now(),
-			excludeFromContext: options?.excludeFromContext,
-		};
-
-		this.#executions.record(pythonMessage);
+		this.#executions.recordPython(code, result, options);
 	}
 
 	/**

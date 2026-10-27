@@ -106,8 +106,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * or hidden developer message, the drain that starts a turn on them, the count, the chips, clear and
  * pop) left as the `queued-messages.ts` collaborator (-171 from 6416, after the unusable-credential
  * message moved to `missing-credentials.ts`).
+ * RE-MEASURED 2026-10-27 at 6138: running a shell command or Python cell the user typed (the
+ * `user_bash` and `user_python` extension hand-off, the run, the record and the artifact holding a
+ * command's unminimized output) moved into the `user-executions.ts` collaborator (-107).
  */
-const RUNTIME_CEILING = 6_300;
+const RUNTIME_CEILING = 6_200;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
