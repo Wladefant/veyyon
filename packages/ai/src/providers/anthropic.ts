@@ -43,6 +43,8 @@ import type {
 	AnthropicFallbackContent,
 	Api,
 	AssistantMessage,
+	CacheRequestRecord,
+	CacheRequestTtl,
 	CacheRetention,
 	Context,
 	FetchImpl,
@@ -1656,7 +1658,12 @@ function createEmptyUsage(): Usage {
  * as far as `message_start` was billed for the whole prompt, cache write
  * included. One owner means a fifth reason to retry cannot forget it.
  */
-function discardAnthropicAttempt(model: Model<"anthropic-messages">, output: AssistantMessage): void {
+function discardAnthropicAttempt(
+	model: Model<"anthropic-messages">,
+	output: AssistantMessage,
+	cacheRequests?: CacheRequestRecord[],
+): void {
+	const retained = cacheRequests ?? output.usage.cacheRequests;
 	output.content.length = 0;
 	output.model = model.id;
 	output.responseId = undefined;
@@ -1664,6 +1671,9 @@ function discardAnthropicAttempt(model: Model<"anthropic-messages">, output: Ass
 	output.stopDetails = undefined;
 	output.providerPayload = undefined;
 	output.usage = discardAttemptUsage(model, output.usage, createEmptyUsage());
+	if (retained) {
+		output.usage.cacheRequests = retained;
+	}
 	output.stopReason = "stop";
 }
 
@@ -1704,6 +1714,100 @@ export function applyAnthropicUsageExtras(usage: Usage, source: AnthropicUsageLi
 			delete usage.server;
 		}
 	}
+}
+
+function createAnthropicCacheRequestRecord(
+	params: MessageCreateParamsStreaming,
+	body: string,
+	isOAuthToken: boolean,
+	model: Model<"anthropic-messages">,
+	requestStartedAt: number,
+): CacheRequestRecord {
+	let finalBody = body;
+	if (isOAuthToken && body.includes(CCH_PLACEHOLDER_STR)) {
+		const encoded = cchEncoder.encode(body);
+		if (patchCch(encoded) === "patched") {
+			finalBody = new TextDecoder().decode(encoded);
+		}
+	}
+
+	let parsed: {
+		model?: string;
+		system?: unknown;
+		tools?: unknown;
+		messages?: unknown[];
+	};
+	try {
+		parsed = JSON.parse(finalBody);
+	} catch {
+		parsed = params as unknown as typeof parsed;
+	}
+
+	const sentModel = typeof parsed.model === "string" ? parsed.model : model.id;
+
+	const prefixData: { system?: unknown; tools?: unknown } = {};
+	if (parsed.system !== undefined) prefixData.system = parsed.system;
+	if (parsed.tools !== undefined) prefixData.tools = parsed.tools;
+	const prefixHash = nodeCrypto.createHash("sha256").update(JSON.stringify(prefixData)).digest("hex");
+
+	const ttls: ("5m" | "1h")[] = [];
+	if (Array.isArray(parsed.tools)) {
+		for (const tool of parsed.tools) {
+			if (isRecord(tool) && isRecord(tool.cache_control)) {
+				ttls.push(tool.cache_control.ttl === "1h" ? "1h" : "5m");
+			}
+		}
+	}
+	if (Array.isArray(parsed.system)) {
+		for (const block of parsed.system) {
+			if (isRecord(block) && isRecord(block.cache_control)) {
+				ttls.push(block.cache_control.ttl === "1h" ? "1h" : "5m");
+			}
+		}
+	}
+	if (Array.isArray(parsed.messages)) {
+		for (const message of parsed.messages) {
+			if (isRecord(message) && Array.isArray(message.content)) {
+				for (const block of message.content) {
+					if (isRecord(block) && isRecord(block.cache_control)) {
+						ttls.push(block.cache_control.ttl === "1h" ? "1h" : "5m");
+					}
+				}
+			}
+		}
+	}
+
+	let requestedTtl: CacheRequestTtl;
+	let requestedTtls: ("5m" | "1h")[] | undefined;
+
+	if (ttls.length === 0) {
+		requestedTtl = "none";
+	} else {
+		const has5m = ttls.includes("5m");
+		const has1h = ttls.includes("1h");
+		if (has5m && has1h) {
+			requestedTtl = "mixed";
+			requestedTtls = ttls;
+		} else if (has1h) {
+			requestedTtl = "1h";
+			requestedTtls = ttls;
+		} else {
+			requestedTtl = "5m";
+			requestedTtls = ttls;
+		}
+	}
+
+	const record: CacheRequestRecord = {
+		requestStartedAt,
+ 		requestedTtl,
+		model: sentModel,
+		prefixHash,
+	};
+	if (requestedTtls !== undefined) {
+		record.requestedTtls = requestedTtls;
+	}
+
+	return record;
 }
 
 function parseAnthropicFallbackWireBlock(value: unknown): AnthropicFallbackContent | undefined {
@@ -1870,9 +1974,13 @@ interface AnthropicStreamState {
 	firstTokenTime: number | undefined;
 	closedBlockIndexes: Set<number>;
 	openBlocks: Map<number, AnthropicOpenBlockEntry>;
+	currentAttemptRecord?: CacheRequestRecord;
 }
 
-function createAnthropicStreamState(firstTokenTime: number | undefined): AnthropicStreamState {
+function createAnthropicStreamState(
+	firstTokenTime: number | undefined,
+	currentAttemptRecord?: CacheRequestRecord,
+): AnthropicStreamState {
 	return {
 		sawEvent: false,
 		sawMessageStart: false,
@@ -1883,6 +1991,7 @@ function createAnthropicStreamState(firstTokenTime: number | undefined): Anthrop
 		firstTokenTime,
 		closedBlockIndexes: new Set<number>(),
 		openBlocks: new Map<number, AnthropicOpenBlockEntry>(),
+		currentAttemptRecord,
 	};
 }
 
@@ -1966,6 +2075,30 @@ function handleAnthropicMessageStart(
 		}
 	} else {
 		reportAnthropicEnvelopeAnomaly("message_start missing usage");
+	}
+	if (state.currentAttemptRecord) {
+		if (!state.currentAttemptRecord.requestId && startMessage?.id) {
+			state.currentAttemptRecord.requestId = startMessage.id;
+		}
+		if (startUsage) {
+			if (startUsage.cache_read_input_tokens != null) {
+				state.currentAttemptRecord.cacheRead = startUsage.cache_read_input_tokens;
+			}
+			if (startUsage.cache_creation_input_tokens != null) {
+				state.currentAttemptRecord.cacheWrite = startUsage.cache_creation_input_tokens;
+			}
+			const cacheCreation = startUsage.cache_creation;
+			if (cacheCreation != null) {
+				const fiveMinute = cacheCreation.ephemeral_5m_input_tokens ?? 0;
+				const oneHour = cacheCreation.ephemeral_1h_input_tokens ?? 0;
+				if (fiveMinute > 0 || oneHour > 0) {
+					state.currentAttemptRecord.cttl = {
+						...(fiveMinute > 0 ? { ephemeral5m: fiveMinute } : {}),
+						...(oneHour > 0 ? { ephemeral1h: oneHour } : {}),
+					};
+				}
+			}
+		}
 	}
 }
 
@@ -2238,6 +2371,25 @@ function handleAnthropicMessageDelta(
 			output.usage.cacheWrite = deltaUsage.cache_creation_input_tokens;
 		}
 		applyAnthropicUsageExtras(output.usage, deltaUsage);
+		if (state.currentAttemptRecord) {
+			if (deltaUsage.cache_read_input_tokens != null) {
+				state.currentAttemptRecord.cacheRead = deltaUsage.cache_read_input_tokens;
+			}
+			if (deltaUsage.cache_creation_input_tokens != null) {
+				state.currentAttemptRecord.cacheWrite = deltaUsage.cache_creation_input_tokens;
+			}
+			const cacheCreation = deltaUsage.cache_creation;
+			if (cacheCreation != null) {
+				const fiveMinute = cacheCreation.ephemeral_5m_input_tokens ?? 0;
+				const oneHour = cacheCreation.ephemeral_1h_input_tokens ?? 0;
+				if (fiveMinute > 0 || oneHour > 0) {
+					state.currentAttemptRecord.cttl = {
+						...(fiveMinute > 0 ? { ephemeral5m: fiveMinute } : {}),
+						...(oneHour > 0 ? { ephemeral1h: oneHour } : {}),
+					};
+				}
+			}
+		}
 		output.usage.totalTokens =
 			output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
 		if (serverSideFallback) {
@@ -2809,6 +2961,7 @@ const streamAnthropicOnce = (
 			timestamp: Date.now(),
 		};
 		let rawRequestDump: RawHttpRequestDump | undefined;
+		const cacheRequests: CacheRequestRecord[] = [];
 		/** Exact bytes of the last sent request body; materialized into a dump only on the 400/413 path. */
 		let anthropicWireBodyJson: string | undefined;
 		let activeAbortTracker = createAbortSourceTracker(options?.signal);
@@ -2933,6 +3086,15 @@ const streamAnthropicOnce = (
 					umansGatewayWebSearchHeader || injectedClientEffortHeaders
 						? { ...umansGatewayWebSearchHeader, ...injectedClientEffortHeaders }
 						: undefined;
+				const requestStartedAt = Date.now();
+				const currentAttemptRecord = createAnthropicCacheRequestRecord(
+					params,
+					body,
+					isOAuthToken,
+					model,
+					requestStartedAt,
+				);
+				cacheRequests.push(currentAttemptRecord);
 				const anthropicRequest = createAnthropicStreamRequest(
 					client,
 					params,
@@ -2946,7 +3108,7 @@ const streamAnthropicOnce = (
 				// already streamed: the event loop can throw mid-stream, and a retry
 				// decided on a copy taken after a loop that never finished would replay
 				// a turn whose text or tool call already reached the consumer.
-				const streamState = createAnthropicStreamState(firstTokenTime);
+				const streamState = createAnthropicStreamState(firstTokenTime, currentAttemptRecord);
 
 				try {
 					const {
@@ -2963,6 +3125,9 @@ const streamAnthropicOnce = (
 						firstEventTimeoutAbortError,
 					);
 					await notifyProviderResponse(options, response, model, requestId);
+					if (requestId && !currentAttemptRecord.requestId) {
+						currentAttemptRecord.requestId = requestId;
+					}
 					const timedAnthropicStream = iterateWithIdleTimeout(anthropicStream, {
 						idleTimeoutMs,
 						firstItemTimeoutMs: firstEventTimeoutMs,
@@ -3012,8 +3177,18 @@ const streamAnthropicOnce = (
 					// left no anchors at all the verdict correctly becomes
 					// `not-requested`, which the stale count would have hidden.
 					recordAnthropicStreamCacheOutcome(cacheTracker, cacheTracked, cacheEnforcement, params, output, model);
+					if (!currentAttemptRecord.requestId && output.responseId) {
+						currentAttemptRecord.requestId = output.responseId;
+					}
 					break;
 				} catch (streamError) {
+					if (!currentAttemptRecord.requestId && isRecord(streamError)) {
+						if (typeof streamError.request_id === "string") {
+							currentAttemptRecord.requestId = streamError.request_id;
+						} else if (isRecord(streamError.headers) && typeof streamError.headers["request-id"] === "string") {
+							currentAttemptRecord.requestId = streamError.headers["request-id"];
+						}
+					}
 					firstTokenTime = streamState.firstTokenTime;
 					const retryResult = await handleAnthropicStreamAttemptError(
 						streamError,
@@ -3037,10 +3212,13 @@ const streamAnthropicOnce = (
 							({ params, body } = await prepareParams());
 							retryCtx.providerRetryAttempt = 0;
 						}
-						discardAnthropicAttempt(model, output);
+						discardAnthropicAttempt(model, output, cacheRequests);
 						firstTokenTime = undefined;
 					}
 				}
+			}
+			if (cacheRequests.length > 0) {
+				output.usage.cacheRequests = cacheRequests;
 			}
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
@@ -3067,6 +3245,9 @@ const streamAnthropicOnce = (
 				rawRequestDump: materializeDumpBody(rawRequestDump, anthropicWireBodyJson),
 			});
 			AIError.applyFinalizeResult(output, result, maybeAddReplayUnsignedThinkingHint(model, result.message));
+			if (cacheRequests.length > 0) {
+				output.usage.cacheRequests = cacheRequests;
+			}
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });

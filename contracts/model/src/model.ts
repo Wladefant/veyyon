@@ -198,6 +198,32 @@ export type Provider = string;
 /** Token budgets for each thinking level (token-based providers only) */
 export type ThinkingBudgets = { [key in Effort]?: number };
 
+export type CacheRequestTtl = "5m" | "1h" | "none" | "mixed";
+
+export interface CacheRequestRecord {
+	/** Unix timestamp (ms) when this provider attempt dispatch started. */
+	requestStartedAt: number;
+	/** Requested cache TTL derived from wire body: "5m", "1h", "none", or "mixed". */
+	requestedTtl: CacheRequestTtl;
+	/** Sequence of requested TTLs across breakpoints in document order. */
+	requestedTtls?: ("5m" | "1h")[];
+	/** Model identifier as sent on the wire. */
+	model: string;
+	/** SHA256 hex digest of the system + tools wire serialization as sent. */
+	prefixHash: string;
+	/** Provider request ID if returned in response headers or stream. */
+	requestId?: string;
+	/** Prompt cache read tokens for this attempt. */
+	cacheRead?: number;
+	/** Prompt cache write / creation tokens for this attempt. */
+	cacheWrite?: number;
+	/** Cache-write TTL breakdown for this attempt when returned by the provider. */
+	cttl?: {
+		ephemeral5m?: number;
+		ephemeral1h?: number;
+	};
+}
+
 export interface Usage {
 	/** Non-cached conversation input tokens (matches the bucket the provider bills as new input). */
 	input: number;
@@ -243,6 +269,11 @@ export interface Usage {
 		ephemeral5m?: number;
 		ephemeral1h?: number;
 	};
+	/**
+	 * Per-attempt prompt cache telemetry records. Safe metadata only: no prompt or
+	 * tool content strings. Preserved across in-provider retries.
+	 */
+	cacheRequests?: CacheRequestRecord[];
 	/**
 	 * Server-side tool invocations made during this turn (Anthropic web_search /
 	 * web_fetch, OpenAI built-in tools when reported). Counts requests, not tokens.
