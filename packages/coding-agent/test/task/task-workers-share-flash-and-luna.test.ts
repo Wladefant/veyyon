@@ -108,6 +108,20 @@ describe("task workers share Flash and GPT-6 Luna deterministically", () => {
 			L,
 		]);
 	});
+	it("starts Haiku-first task and QA chains with Haiku", () => {
+		for (const agentName of ["task", "qa-verifier"]) {
+			const settings = Settings.isolated({
+				"agent.agents": { [agentName]: { model: [H, L, F] } },
+			});
+			const resolved = resolveAgentModel({
+				settings,
+				agentName,
+				taskDepth: 1,
+				spawnId: `${agentName}-haiku-first`,
+			});
+			expect(resolved.patterns).toEqual([H, L, F]);
+		}
+	});
 
 	it("preserves configured model order at deeper configured depths", () => {
 		const deepTask = Settings.isolated({

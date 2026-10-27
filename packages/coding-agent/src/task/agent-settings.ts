@@ -61,19 +61,31 @@ function shareTaskModelPools(
 	const lunaIndex = patterns.findIndex(pattern => SHARED_LUNA_POOL.test(pattern));
 	if (flashIndex < 0 || lunaIndex < 0) return patterns;
 
-	const configuredFirst = flashIndex < lunaIndex ? flashIndex : lunaIndex;
-	let selectedFirst = configuredFirst;
-	// A pool in cooldown is skipped at the first selection, not only at retry. When both are
-	// suppressed the configured order is kept, so the retry ladder keeps its own order.
 	const flashDown = suppression?.isSelectorSuppressed(patterns[flashIndex]!) === true;
 	const lunaDown = suppression?.isSelectorSuppressed(patterns[lunaIndex]!) === true;
-	if (flashDown !== lunaDown) selectedFirst = flashDown ? lunaIndex : flashIndex;
-	const selectedSecond = selectedFirst === flashIndex ? lunaIndex : flashIndex;
-	// A routine spawn must never reach an expensive entry through the retry ladder, including when
-	// both pools return 429 after the child started, so the entry is dropped before the child runs.
-	const tail = patterns.filter((_, index) => index !== flashIndex && index !== lunaIndex);
-	const safeTail = tail.filter(pattern => !EXPENSIVE_ROUTINE_TAIL.test(pattern));
-	return [patterns[selectedFirst]!, patterns[selectedSecond]!, ...safeTail];
+	const firstPoolPattern =
+		flashDown !== lunaDown
+			? flashDown
+				? patterns[lunaIndex]!
+				: patterns[flashIndex]!
+			: patterns[Math.min(flashIndex, lunaIndex)]!;
+	const secondPoolPattern =
+		flashDown !== lunaDown
+			? flashDown
+				? patterns[flashIndex]!
+				: patterns[lunaIndex]!
+			: patterns[Math.max(flashIndex, lunaIndex)]!;
+
+	const ordered: string[] = [];
+	let poolIndex = 0;
+	for (let index = 0; index < patterns.length; index++) {
+		if (index === flashIndex || index === lunaIndex) {
+			ordered.push(poolIndex++ === 0 ? firstPoolPattern : secondPoolPattern);
+		} else if (!EXPENSIVE_ROUTINE_TAIL.test(patterns[index]!)) {
+			ordered.push(patterns[index]!);
+		}
+	}
+	return ordered;
 }
 
 /**
