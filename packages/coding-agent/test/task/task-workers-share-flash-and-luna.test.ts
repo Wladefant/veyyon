@@ -108,6 +108,20 @@ describe("task workers share Flash and GPT-6 Luna deterministically", () => {
 			L,
 		]);
 	});
+	it("starts Haiku-first task and QA chains with Haiku", () => {
+		for (const agentName of ["task", "qa-verifier"]) {
+			const settings = Settings.isolated({
+				"agent.agents": { [agentName]: { model: [H, L, F] } },
+			});
+			const resolved = resolveAgentModel({
+				settings,
+				agentName,
+				taskDepth: 1,
+				spawnId: `${agentName}-haiku-first`,
+			});
+			expect(resolved.patterns).toEqual([H, L, F]);
+		}
+	});
 
 	it("preserves configured model order at deeper configured depths", () => {
 		const deepTask = Settings.isolated({
@@ -315,6 +329,19 @@ describe("the Flash and Luna share follows quota suppression and the live provid
 		registry.suppressSelector(F, Date.now() + 60_000);
 		res = resolveAgentModel({ settings: qaSettings, agentName: "qa-verifier", taskDepth: 1, spawnId: "triad-q4", modelRegistry: registry });
 		expect(res.patterns).toEqual([H, F, L]);
+		const taskHaikuFirstSettings = Settings.isolated({
+			"agent.agents": { task: { model: [H, L, F] } },
+		});
+		res = resolveAgentModel({
+			settings: taskHaikuFirstSettings,
+			agentName: "task",
+			taskDepth: 1,
+			spawnId: "triad-t-haiku-first-both-down",
+			modelRegistry: registry,
+		});
+		expect(res.patterns).toEqual([H, L, F]);
+		registry.clearSuppressedSelectors();
+
 
 		// 3. Haiku lane (explicit H-first): [H, L, F] stays [H, L, F] unchanged under all suppression states
 		const haikuSettings = Settings.isolated({
