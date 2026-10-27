@@ -61,31 +61,23 @@ export interface StopSettlementHost {
 
 export class StopSettlement {
 	readonly #host: StopSettlementHost;
-	#lastAssistant: AssistantMessage | undefined = undefined;
 
 	constructor(host: StopSettlementHost) {
 		this.#host = host;
 	}
 
 	/**
-	 * Records the assistant message a `message_end` settled. Called before any await: `agent_end`
-	 * is dispatched immediately after its `message_end`, and a settle that read the previous reply
-	 * would treat a tool-use turn followed by a text-only stop as if it still carried tool calls.
-	 */
-	noteAssistant(message: AssistantMessage): void {
-		this.#lastAssistant = message;
-	}
-
-	/**
-	 * Post-run maintenance: retry, compaction and the stop-time continuation passes. The caller emits
-	 * the `agent_end` notification after it on every route.
+	 * Post-run maintenance: retry, compaction and the stop-time passes. The caller emits the
+	 * `agent_end` notification after it on every route.
+	 *
+	 * The settle acts on the last assistant message in agent state, which agent-core appends before
+	 * it emits that message's `message_end`. A run that throws ends on a failure agent-core appends
+	 * with no `message_end` at all, so the last reply a `message_end` delivered is not the reply the
+	 * run ended on.
 	 */
 	async run(settledMessages: AgentMessage[]): Promise<void> {
 		const host = this.#host;
-		const msg =
-			this.#lastAssistant ??
-			settledMessages.findLast((message): message is AssistantMessage => message.role === "assistant");
-		this.#lastAssistant = undefined;
+		const msg = settledMessages.findLast((message): message is AssistantMessage => message.role === "assistant");
 		if (!msg) {
 			host.yields.clear();
 			const goal = host.goalMode();

@@ -24,6 +24,8 @@ It explicitly excludes context-overflow recovery via auto-compaction. Overflow i
 
 ## Scope boundary vs compaction
 
+The settle acts on the last assistant message in agent state when `agent_end` arrives. For a run that threw, that is the failure agent-core appended without a `message_end`, not the last reply a `message_end` delivered.
+
 Retry and compaction are checked from the same `agent_end` maintenance path (`StopSettlement.run`, then `#settleStop` in `stop-settlement.ts`), in this order:
 
 1. A successful `yield` this run (or a pending yield termination) suppresses all retry/continuation; only an active goal still runs the compaction check (`TurnContextCheck.check(...)`).

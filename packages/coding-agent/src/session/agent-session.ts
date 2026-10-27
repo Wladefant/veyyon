@@ -2229,10 +2229,10 @@ export class AgentSession {
 	}
 
 	/**
-	 * Every agent event, one route per type. The state a later event reads (the settle's last
-	 * assistant message, the mid-run todo counter, the streaming-edit reset) is applied before the
-	 * first await: agent-core dispatches these handlers fire-and-forget, so `agent_end` can run
-	 * before its `message_end` handler resumes.
+	 * Every agent event, one route per type. The state a later event reads (the mid-run todo
+	 * counter, the streaming-edit reset) is applied before the first await: agent-core dispatches
+	 * these handlers fire-and-forget, so `agent_end` can run before its `message_end` handler
+	 * resumes.
 	 */
 	#processAgentEvent = async (event: AgentEvent): Promise<void> => {
 		switch (event.type) {
@@ -2337,8 +2337,6 @@ export class AgentSession {
 			// permission-denied calls never count, and only successful mutating tools tick.
 			this.#todo.onToolResultLanded(message.toolName, message.isError);
 		} else if (message.role === "assistant") {
-			// Recorded before any await; see StopSettlement.noteAssistant.
-			this.#stopSettlement.noteAssistant(message);
 			if (message.stopReason === "aborted") this.#stampAbortedAssistant(message);
 			if (this.#abortInProgress) this.#deliberateAborts.add(message);
 			interruptedThinkingMessage = demoteInterruptedThinkingOnUserInterrupt(message);
