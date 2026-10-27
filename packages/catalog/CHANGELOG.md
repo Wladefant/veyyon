@@ -3,6 +3,16 @@
 ## [Unreleased]
 
 ## [1.6.0] - 2026-10-28
+### Changed
+
+- The models.dev overlay keeps only the providers a catalog descriptor maps, in memory and in `models-dev.json`, so a model refresh parses 2.26 MB instead of 5.96 MB and a cached whole file is rewritten in cut form at its next renewal.
+
+## [1.5.10] - 2026-10-25
+
+### Added
+
+- `codexRoutingHint` in `@veyyon/catalog/wire/codex` builds the `x-codex-routing-hint` value (`model=<model>;tier=<tier>`, or `model=<model>` without a tier) from a Codex Responses request body.
+- `@veyyon/catalog/wire/opencode-go` carries an OpenCode Go Console login's organization and inference endpoint in its API key and resolves the endpoint, route and organization header a request uses.
 
 ### Changed
 

@@ -42,7 +42,42 @@ const PAYLOAD_HOLD_MS = 30_000;
 interface PayloadCache {
 	fetchedAt: number;
 	etag?: string;
+	/**
+	 * The models.dev provider keys the payload was cut to, sorted. Absent on a payload written whole by an
+	 * earlier release, which holds every key and is served as it is.
+	 */
+	coveredKeys?: readonly string[];
 	payload: unknown;
+}
+
+/**
+ * The models.dev provider keys a descriptor maps. `api.json` lists every provider models.dev catalogs (232
+ * in October 2026, 5.96 MB); the 46 a descriptor reads are 2.26 MB, so the overlay keeps only those, in
+ * memory and in `models-dev.json`, and a refresh parses that instead of the whole catalog.
+ */
+const COVERED_KEYS: readonly string[] = [
+	...new Set(MODELS_DEV_PROVIDER_DESCRIPTORS.map(descriptor => descriptor.modelsDevKey)),
+].sort();
+
+/** The part of a models.dev payload a descriptor maps; a payload that is not an object is kept as it is. */
+function coveredSlice(payload: unknown): unknown {
+	if (!isRecord(payload)) return payload;
+	const slice: Record<string, unknown> = {};
+	for (const key of COVERED_KEYS) {
+		if (key in payload) slice[key] = payload[key];
+	}
+	return slice;
+}
+
+/**
+ * Whether `cache` holds every provider a descriptor maps. A payload cut to an earlier release's descriptors
+ * lacks a provider a descriptor added since, and renewing it on a 304 would keep it missing.
+ */
+function coversEveryDescriptor(cache: PayloadCache): boolean {
+	const { coveredKeys } = cache;
+	if (coveredKeys === undefined) return true;
+	const recorded = new Set(coveredKeys);
+	return COVERED_KEYS.every(key => recorded.has(key));
 }
 
 let memoryCache: PayloadCache | null = null;
@@ -65,13 +100,28 @@ function payloadCachePath(dbPath?: string): string {
 	return path.join(path.dirname(dbPath ?? getModelDbPath()), "models-dev.json");
 }
 
+/** `value` as a list of strings, or null when it is not one. */
+function stringList(value: unknown): string[] | null {
+	if (!Array.isArray(value)) return null;
+	const list: string[] = [];
+	for (const item of value as unknown[]) {
+		if (typeof item !== "string") return null;
+		list.push(item);
+	}
+	return list;
+}
+
 async function readDiskCache(dbPath?: string): Promise<PayloadCache | null> {
 	try {
 		const parsed: unknown = JSON.parse(await fs.readFile(payloadCachePath(dbPath), "utf8"));
 		if (!isRecord(parsed) || typeof parsed.fetchedAt !== "number" || parsed.payload === undefined) return null;
+		const coveredKeys = parsed.coveredKeys === undefined ? undefined : stringList(parsed.coveredKeys);
+		// A cut payload whose key record is unreadable cannot be told apart from one missing providers.
+		if (coveredKeys === null) return null;
 		return {
 			fetchedAt: parsed.fetchedAt,
 			etag: typeof parsed.etag === "string" ? parsed.etag : undefined,
+			coveredKeys,
 			payload: parsed.payload,
 		};
 	} catch {
@@ -135,7 +185,9 @@ async function fetchPayloadUncached(hooks?: DiscoveryHooks, dbPath?: string): Pr
 	const now = Date.now();
 	// A released memo reads back from disk, which holds the payload it held.
 	const disk = memoryCache ?? (await readDiskCache(dbPath));
-	if (disk && now - disk.fetchedAt < PAYLOAD_TTL_MS) return remember(disk);
+	// A payload missing a provider a descriptor maps is refetched whole, but still beats none on a failure.
+	const current = disk !== null && coversEveryDescriptor(disk);
+	if (disk && current && now - disk.fetchedAt < PAYLOAD_TTL_MS) return remember(disk);
 	// Inside the failure backoff a stale payload is served with no network attempt.
 	if (now < failureBackoffUntil) return disk ? remember(disk) : null;
 
@@ -153,7 +205,7 @@ async function fetchPayloadUncached(hooks?: DiscoveryHooks, dbPath?: string): Pr
 				method: "GET",
 				headers: {
 					Accept: "application/json",
-					...(disk?.etag ? { "If-None-Match": disk.etag } : {}),
+					...(current && disk?.etag ? { "If-None-Match": disk.etag } : {}),
 				},
 				signal: timeout.signal,
 			});
@@ -163,7 +215,13 @@ async function fetchPayloadUncached(hooks?: DiscoveryHooks, dbPath?: string): Pr
 			return disk ? remember(disk) : null;
 		}
 		if (response.status === 304 && disk) {
-			const renewed = { ...disk, fetchedAt: now };
+			// Written cut, so a payload an earlier release wrote whole is cut on its next renewal too.
+			const renewed: PayloadCache = {
+				fetchedAt: now,
+				etag: disk.etag,
+				coveredKeys: COVERED_KEYS,
+				payload: coveredSlice(disk.payload),
+			};
 			void writeDiskCache(renewed, dbPath);
 			return remember(renewed);
 		}
@@ -173,9 +231,9 @@ async function fetchPayloadUncached(hooks?: DiscoveryHooks, dbPath?: string): Pr
 			return disk ? remember(disk) : null;
 		}
 		try {
-			const payload: unknown = await response.json();
+			const payload = coveredSlice(await response.json());
 			const etag = response.headers.get("etag") ?? undefined;
-			const fresh: PayloadCache = { fetchedAt: now, etag, payload };
+			const fresh: PayloadCache = { fetchedAt: now, etag, coveredKeys: COVERED_KEYS, payload };
 			void writeDiskCache(fresh, dbPath);
 			return remember(fresh);
 		} catch (error) {
