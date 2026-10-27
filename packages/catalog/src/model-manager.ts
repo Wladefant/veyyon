@@ -98,6 +98,14 @@ export interface ModelManagerOptions<
 	 * `null` and used to be even quieter.
 	 */
 	onDiscoveryFailure?: (failure: DiscoveryFailure) => void;
+	/**
+	 * Whether a failed dynamic fetch restarts the retry backoff. Default true: the failure rewrites the cache
+	 * row stamped with the current time, and `online-if-uncached` probes again once the row is
+	 * `NON_AUTHORITATIVE_RETRY_MS` old. A caller that probes on every refresh whatever the cache holds sets
+	 * false; the failure then rewrites the row only when its content changes, so an endpoint that stays down
+	 * costs no disk write per launch.
+	 */
+	failureRestartsBackoff?: boolean;
 	/** Optional models.dev fallback hook. */
 	modelsDev?: ModelsDevFallback<TApi, TModelsDevPayload>;
 	/** Clock override for deterministic tests. */
@@ -342,6 +350,7 @@ export async function resolveProviderModels<
 				false,
 				staticFingerprint,
 				dbPath,
+				{ skipUnchanged: options.failureRestartsBackoff === false },
 			);
 		}
 	}

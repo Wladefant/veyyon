@@ -3,6 +3,51 @@
 ## [Unreleased]
 
 ## [1.6.4] - 2026-10-28
+### Changed
+
+- A `-p` or `--mode json` run starts background model discovery once its first response starts streaming instead of when its session is created, which sends the first request about 33 ms sooner and cut a run against a provider that answers in 300 ms and streams for 150 ms from 580.8 ms to 560.0 ms (median of 15).
+- A launch with no llama.cpp server running no longer rewrites the llama.cpp model-cache row and syncs `models.db` four times, which cut a print run against a provider that answers in 300 ms and streams for 150 ms from 558.3 ms to 553.9 ms (median of 15).
+- `read` and the CLI `@` attachment import the entry-kind phrase from `@veyyon/utils/fs-error`, which adds no module to any import graph; no user-facing change.
+- The provider-refusal check and the Mnemopi per-bank target dedupe each have one definition; no user-facing change.
+- `/todo` with an unknown verb in the TUI lists the accepted verbs, the message ACP shows, instead of the full usage.
+- `veyyon ttsr scan` compiles rule conditions, globs and scopes with the functions a session uses instead of a copy of them; no user-facing change.
+- The secret vault and its key file remove a stale entry through one quarantine-and-recheck helper instead of two copies of it; no user-facing change.
+- The Mnemopi stats command resolves a bank's database path through the function a session uses instead of a copy of it; no user-facing change.
+- The terminal reports a `/browser` restart that fails after the mode is saved as `Browser mode set to <mode>, but restart failed: …`, the sentence ACP prints, and shows the `/browser` usage line as a warning.
+- `/effort` checks a level through one function the terminal and the text surfaces share, with no change to what either accepts or prints.
+- No user-visible change: `/export` path resolution moved from the session runtime into the HTML exporter.
+- IRC message delivery moved out of `AgentSession` into the `IrcDelivery` session collaborator, with no change to how a message is steered, queued, woken on or auto-replied to.
+- The first shell command of a session no longer compiles the output-stage regular expressions of every built-in output filter; each filter compiles them the first time it applies, so a first `ls` runs in 5 ms instead of 12 ms.
+- The `session_stop` hook pass moved out of `AgentSession` into the `SessionStopHook` session collaborator, with no change to the event a handler receives, the continuation it queues or the cap that ends a chain.
+- The hidden next-turn message queue moved out of `AgentSession` into the `NextTurnMessages` session collaborator, with no change to when a queued message reaches a turn or the order it arrives in.
+- Model switching moved out of `AgentSession` into the `ModelSelection` session collaborator, with no change to what a saved switch, a session-only switch or the Ctrl+P cycle records, persists or pins.
+- Esc repaints a frame sooner when it arms no double-press gesture: closing a selector takes 4 ms instead of 35 ms with the kitty keyboard protocol and 54 ms instead of 86 ms without.
+- The `/model` picker resolves the default model against the models it lists, as startup does, so its first open paints in 4 ms instead of 41 ms and the default mark lands on the model a new session starts on.
+- Views that load after the key that opens them, such as the Extension Control Center, paint up to 30 ms sooner.
+- `/cpu-limit status` reports the kill policy in force: `kill on sustained saturation` for the CPU budget and `kill when exceeded` for the write budget.
+- The tool argument repair registry lists path resolution in the file tools among the tool-local parsing it excludes; no user-facing change.
+- Background job delivery, listing, cancellation and the settle wake moved out of the session class into one session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- Releasing what a conversation ends with on `/new`, `/resume` and a handoff moved out of the session class into one session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- Routing a finished run through retry, compaction and the stop-time passes moved out of the session class into one session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The message a prompt raises when a provider's credential produced no token is built in the credential-message module beside the other missing-credential messages ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- Queueing steers and follow-ups, the idle drain that starts a turn on them, and the queue count, chips, clear and pop moved out of the session class into one session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- Running a shell command or Python cell typed with `!` or `$` moved out of the session class into the session collaborator that tracks those runs ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The context threshold checks before a prompt and between the provider calls of a tool loop, and the switch to a larger-context model they share, moved out of the session class into the `TurnContextCheck` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- Starting a new transcript with `/new` or `/drop` and forking one with `/fork` moved out of the session class into the `SessionSwitch` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The session-state block and the eager delegate reminders a turn carries ahead of its message moved out of the session class into the `TurnPreludes` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The per-family service tiers, `/fast` and the tier each request resolves to moved out of the session class into the `ServiceTiers` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The command registries, the resolution of a typed prompt through extension, custom and file-based commands and the prompt templates, and the agents a `/` command grants for its turn moved out of the session class into the `PromptCommands` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The display copy of assistant content, tool intents, streamed deltas and rebuilt transcripts, with the stream decoder a streamed reply runs through, moved out of the session class into the `DisplayCopy` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The normalization of a message's images for the active model, the description a text-only model reads in their place and the latest images a tool addresses moved out of the session class into the `ImageAttachments` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The response and raw SSE interceptors every request runs with, the raw SSE capture, the side stream function and the preparation of a side request's options moved out of the session class into the `ProviderTransport` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The redacted tool start markers, the `session_exit` entry and the process teardown callback that writes it when no dispose runs moved out of the session class into the `ExitRecord` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The event subscribers, the extension event forwarder and the wire-level `agent_end` held while a prompt unwinds moved out of the session class into the `SessionEvents` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The scheduled `agent.continue()`, the auto-continue prompt a compaction resumes with, their cancel and the recovery wait a prompt runs moved out of the session class into the `TurnContinuations` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The HTML export, the `/copy` texts, the `/dump` text and its request snapshot moved out of the session class into the `TranscriptExports` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The mode blocks a prompt restates (plan reference, plan-mode rules, goal, vibe mode), the reads of the files it mentions as `@path` and the `before_agent_start` extension input moved out of the session class into the `TurnInput` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The release at dispose of the session's background jobs, owned job manager, eval kernels, session-scoped resources and MCP hold moved out of the session class into the `SessionRelease` session collaborator, and the memory backends' release into `MemoryContext` ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- How a custom message reaches the conversation, queued, held for the next turn, run as a turn or appended, and the custom-message prompt with its keyword notices moved out of the session class into the `CustomMessages` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
 
 ### Fixed
 

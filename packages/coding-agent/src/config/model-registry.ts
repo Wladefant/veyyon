@@ -1030,8 +1030,7 @@ export class ModelRegistry {
 				),
 			);
 			for (let mi = 0; mi < models.length; mi++) cachedModels.push(models[mi]!);
-			const stale =
-				providerConfig.discovery.type === "llama.cpp" || !cache.fresh || !cache.authoritative || configStale;
+			const stale = reprobesEveryRefresh(providerConfig) || !cache.fresh || !cache.authoritative || configStale;
 			this.#providerDiscoveryStates.set(providerConfig.provider, {
 				provider: providerConfig.provider,
 				status: "cached",
@@ -1258,7 +1257,8 @@ export class ModelRegistry {
 		const cacheProviderId = configuredDiscoveryCacheProviderId(providerConfig);
 		const cached = readModelCache<Api>(cacheProviderId, DAY_MS, Date.now, this.#cacheDbPath);
 		const cacheOlderThanConfig = cached !== null && this.#isDiscoveryCacheOlderThanModelsConfig(cached.updatedAt);
-		const bypassFreshCache = providerConfig.discovery.type === "llama.cpp" && strategy === "online-if-uncached";
+		const reprobes = reprobesEveryRefresh(providerConfig);
+		const bypassFreshCache = reprobes && strategy === "online-if-uncached";
 		const effectiveStrategy =
 			strategy === "online-if-uncached" && (cacheOlderThanConfig || bypassFreshCache) ? "online" : strategy;
 		const requiresAuth = !this.#keylessProviders.has(providerConfig.provider);
@@ -1306,6 +1306,7 @@ export class ModelRegistry {
 			cacheProviderId,
 			cacheTtlMs: DAY_MS,
 			fetchDynamicModels,
+			failureRestartsBackoff: !reprobes,
 		});
 		const result = await manager.refresh(effectiveStrategy);
 		const status = discoveryError
@@ -2456,6 +2457,15 @@ function normalizeDiscoverableModels(providerConfig: DiscoveryProviderConfig, mo
 			maxTokens: Math.min(contextLengthOverride, DISCOVERY_DEFAULT_MAX_TOKENS),
 		};
 	});
+}
+
+/**
+ * Whether discovery probes `providerConfig`'s endpoint on every refresh, fresh cache or not. A llama.cpp
+ * server reports the context size it was started with, so a restart with a new `n_ctx` reaches the catalog
+ * at the next launch instead of when the cached row expires.
+ */
+function reprobesEveryRefresh(providerConfig: DiscoveryProviderConfig): boolean {
+	return providerConfig.discovery.type === "llama.cpp";
 }
 
 function configuredDiscoveryCacheProviderId(providerConfig: DiscoveryProviderConfig): string {
