@@ -6,7 +6,7 @@ describe("OVH test shard planner", () => {
 		const durations = { a: 9, b: 8, c: 7, d: 6, e: 5, f: 4 };
 		const plan = planShards(["f", "e", "d", "c", "b", "a"], durations, 10);
 		expect(plan.shardCount).toBe(4);
-		expect(plan.shards.map(shard => shard.files)).toEqual([["a"], ["b"], ["c", "e"], ["d", "f"]]);
+		expect(plan.shards.map(shard => shard.files)).toEqual([["a"], ["b"], ["c", "f"], ["d", "e"]]);
 		expect(planShards(["a", "b", "c", "d", "e", "f"], durations, 10)).toEqual(plan);
 	});
 
