@@ -49,6 +49,12 @@ export const AFFECTED_DYNAMIC_IMPORT_SITES: readonly AffectedDynamicImportSite[]
 		targetPolicy: "all-workspace-members",
 	},
 	{
+		file: "packages/coding-agent/src/eval/js/shared/runtime.ts",
+		owner: "variable:load",
+		maxCalls: 1,
+		targetPolicy: "all-workspace-members",
+	},
+	{
 		file: "packages/coding-agent/src/export/custom-share.ts",
 		owner: "function:loadCustomShare",
 		maxCalls: 1,

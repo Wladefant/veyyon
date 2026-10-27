@@ -204,7 +204,7 @@ describe("affected workspace selection preserves complete safe coverage", () => 
 		const other = member("packages/other", "@test/other");
 		const result = buildWorkspaceGraphWithImports(
 			[codingAgent, other],
-			[{ path: loaderPath, contents: "export const load = (target: string) => import(target);" }],
+			[{ path: loaderPath, contents: "export const runtime = { __veyyon_import__: (target: string) => import(target) };" }],
 			["packages/coding-agent/package.json", loaderPath, "packages/other/package.json"],
 		);
 
