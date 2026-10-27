@@ -113,7 +113,10 @@ async function openCdp(cdpUrl: string): Promise<WebSocket> {
 /** Asks the relay for a new target over CDP and returns its reply. */
 function createTarget(cdp: WebSocket): Promise<{ result?: { targetId?: string } }> {
 	const created = Promise.withResolvers<{ result?: { targetId?: string } }>();
-	cdp.onmessage = event => created.resolve(JSON.parse(String(event.data)));
+	cdp.onmessage = event => {
+		const message = JSON.parse(String(event.data));
+		if (message.id === 1) created.resolve(message);
+	};
 	cdp.send(JSON.stringify({ id: 1, method: "Target.createTarget", params: { url: "about:blank" } }));
 	return created.promise;
 }
