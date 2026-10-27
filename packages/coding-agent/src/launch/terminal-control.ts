@@ -256,8 +256,6 @@ export async function serveTerminalControl(
 						let result: unknown;
 						switch (request.op) {
 							case "subscribe": {
-								subscribers.add(socket);
-								startEvents();
 								const fullHistory = target.history();
 								const cursorIndex = typeof request.cursor === "string" && request.cursor
 									? fullHistory.findIndex(entry => entry.entryId === request.cursor)
@@ -265,6 +263,8 @@ export async function serveTerminalControl(
 								if (typeof request.cursor === "string" && request.cursor && cursorIndex < 0) {
 									throw new Error("Unknown history cursor; reconnect without a cursor to reset history");
 								}
+								subscribers.add(socket);
+								startEvents();
 								const entries = cursorIndex >= 0 ? fullHistory.slice(cursorIndex + 1) : fullHistory.slice(-HISTORY_FRAME_ENTRIES);
 								const maxBytes = 512 * 1024;
 								const maxEntries = 100;
