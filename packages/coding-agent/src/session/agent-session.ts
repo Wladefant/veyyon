@@ -213,7 +213,7 @@ import { MemoryContext } from "./runtime/memory-context";
 import { MessagePersistence } from "./runtime/message-persistence";
 import { ModelHandoff } from "./runtime/model-handoff";
 import { ModelSelection, type SetModelOptions } from "./runtime/model-selection";
-import { NextTurnMessages } from "./runtime/next-turn-messages";
+import { type NextTurnLease, NextTurnMessages } from "./runtime/next-turn-messages";
 import { OwnedAsyncJobs } from "./runtime/owned-async-jobs";
 import { PlanModeRuntime } from "./runtime/plan-mode-runtime";
 import { PostPromptTasks } from "./runtime/post-prompt-tasks";
@@ -718,9 +718,9 @@ export class AgentSession {
 	readonly #nextTurn = new NextTurnMessages({
 		promptGeneration: () => this.#promptGeneration,
 		postPrompt: this.#postPrompt,
-		promptWith: (message, prependMessages) =>
+		promptWith: (message, prepended) =>
 			this.#promptWithMessage(message, getCustomMessageTextContent(message), {
-				prependMessages,
+				prepended,
 				skipPostPromptRecoveryWait: true,
 			}),
 	});
@@ -3377,6 +3377,8 @@ export class AgentSession {
 		expandedText: string,
 		options?: Pick<PromptOptions, "toolChoice" | "images" | "skipCompactionCheck"> & {
 			prependMessages?: AgentMessage[];
+			/** Queued context a requested turn leased ahead of `message`; settled when the agent takes the input. */
+			prepended?: NextTurnLease;
 			skipPostPromptRecoveryWait?: boolean;
 			acceptTerminalEmptyStop?: boolean;
 		},
@@ -3384,6 +3386,9 @@ export class AgentSession {
 		this.#inFlight.begin();
 		startupMarker("prompt:start");
 		const generation = this.#promptGeneration;
+		// Queued context leaves its queue only when the agent takes this prompt's input; a prompt that
+		// ends before that (an interrupt, a throw) puts it back for the next one.
+		let queued: NextTurnLease | undefined;
 		try {
 			// The turn leaves rest: take the held at-rest reading before the flush below or the prompt
 			// appends a message, since the reading is at rest only while the session holds none.
@@ -3459,6 +3464,9 @@ export class AgentSession {
 			if (options?.prependMessages) {
 				messages.push(...options.prependMessages);
 			}
+			if (options?.prepended) {
+				messages.push(...options.prepended.messages);
+			}
 
 			messages.push(message);
 
@@ -3469,9 +3477,8 @@ export class AgentSession {
 			}
 
 			// Inject any pending "nextTurn" messages as context alongside the user message
-			for (const msg of this.#nextTurn.take()) {
-				messages.push(msg);
-			}
+			queued = this.#nextTurn.lease();
+			messages.push(...queued.messages);
 
 			// Auto-read @filepath mentions
 			const fileMentions = extractFileMentions(expandedText);
@@ -3579,7 +3586,10 @@ export class AgentSession {
 			const agentPromptOptions = options?.toolChoice ? { toolChoice: options.toolChoice } : undefined;
 			this.#context.beginPrompt(messages);
 			try {
-				await this.#promptAgentWithIdleRetry(messages, agentPromptOptions, generation);
+				await this.#promptAgentWithIdleRetry(messages, agentPromptOptions, generation, () => {
+					queued?.settle();
+					options?.prepended?.settle();
+				});
 			} finally {
 				this.#context.endPrompt();
 			}
@@ -3587,6 +3597,7 @@ export class AgentSession {
 				await this.#continuations.waitForRecovery(generation);
 			}
 		} finally {
+			queued?.release();
 			this.#endInFlight();
 		}
 	}
@@ -4271,7 +4282,7 @@ export class AgentSession {
 	/**
 	 * Prompt the agent, waiting out a run that is still in flight. A hidden
 	 * continuation queued from an `agent_end` handler lands here while the turn
-	 * it reacts to is still unwinding, so its first `prompt` is refused as busy.
+	 * it reacts to is still unwinding, so the agent is still busy with it.
 	 *
 	 * `generation` is the prompt cycle the caller started in. The wait ends when
 	 * the agent is idle, and a user interrupt is one way it gets there: `abort()`
@@ -4279,32 +4290,32 @@ export class AgentSession {
 	 * that settle would start the very turn the user stopped. The autoresearch
 	 * stall nudge did exactly that -- Escape ended the run and the nudge queued a
 	 * turn earlier restarted it three milliseconds later. A stale generation
-	 * returns without prompting; the messages are dropped like every other
-	 * setup-time bail-out in `#promptWithMessage`.
+	 * returns without prompting; the prompt's own messages are dropped like every
+	 * other setup-time bail-out in `#promptWithMessage`, and the queued context
+	 * it leased goes back to its queue.
+	 *
+	 * `accepted` runs the moment the agent takes `messages`. `Agent.prompt`
+	 * refuses a busy agent before it takes anything, so the busy agent is waited
+	 * out here rather than prompted and refused.
 	 */
 	async #promptAgentWithIdleRetry(
 		messages: AgentMessage[],
 		options: { toolChoice?: ToolChoice } | undefined,
 		generation: number,
+		accepted: () => void,
 	): Promise<void> {
 		const deadline = Date.now() + 30_000;
-		for (;;) {
-			try {
-				await this.agent.prompt(messages, options);
+		while (this.agent.state.isStreaming) {
+			if (Date.now() >= deadline) {
+				throw new Error("Timed out waiting for prior agent run to finish before prompting.");
+			}
+			await this.#queue.whileWaitingOnIdle(() => this.agent.waitForIdle());
+			if (this.#promptGeneration !== generation) {
 				return;
-			} catch (err) {
-				if (!(err instanceof AgentBusyError)) {
-					throw err;
-				}
-				if (Date.now() >= deadline) {
-					throw new Error("Timed out waiting for prior agent run to finish before prompting.");
-				}
-				await this.#queue.whileWaitingOnIdle(() => this.agent.waitForIdle());
-				if (this.#promptGeneration !== generation) {
-					return;
-				}
 			}
 		}
+		accepted();
+		await this.agent.prompt(messages, options);
 	}
 
 	/** Whether auto-retry is currently in progress */

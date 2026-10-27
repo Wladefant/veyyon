@@ -21,7 +21,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
-import { Agent, AgentBusyError, type AgentMessage, type AgentPromptOptions } from "@veyyon/agent-core";
+import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, Message } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
@@ -31,6 +31,7 @@ import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { convertToLlm, USER_INTERRUPT_LABEL } from "@veyyon/coding-agent/session/messages";
+import { QueuedMessages } from "@veyyon/coding-agent/session/runtime/queued-messages";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { logger, TempDir } from "@veyyon/utils";
 import { createAssistantMessage } from "../helpers/agent-session-setup";
@@ -334,27 +335,22 @@ describe("a queued message starts a turn only when no run will deliver it", () =
 		plans = ["hold"];
 		const firstPrompt = session.prompt("First message");
 		await waitFor(() => providerCalls.length === 1);
-		let busyRefusals = 0;
-		const realPrompt: (messages: AgentMessage[], options?: AgentPromptOptions) => Promise<void> =
-			session.agent.prompt.bind(session.agent);
-		vi.spyOn(session.agent, "prompt").mockImplementation(async (input, options) => {
-			if (typeof input === "string" || !Array.isArray(input) || Array.isArray(options)) {
-				throw new Error("the session prompts the agent with a message array");
-			}
-			try {
-				await realPrompt(input, options);
-			} catch (error) {
-				if (error instanceof AgentBusyError) busyRefusals += 1;
-				throw error;
-			}
+		let idleWaits = 0;
+		const waitOnIdle = QueuedMessages.prototype.whileWaitingOnIdle;
+		vi.spyOn(QueuedMessages.prototype, "whileWaitingOnIdle").mockImplementation(function (
+			this: QueuedMessages,
+			wait: () => Promise<void>,
+		) {
+			idleWaits += 1;
+			return waitOnIdle.call(this, wait);
 		});
 
-		// The requested turn takes its message off the next-turn queue, is refused as busy, and waits.
+		// The requested turn leases its message off the next-turn queue and waits for the busy agent.
 		await session.sendCustomMessage(
 			{ customType: "build-reminder", content: "Check the build", display: false, attribution: "agent" },
 			{ deliverAs: "nextTurn", triggerTurn: true },
 		);
-		await waitFor(() => busyRefusals === 1);
+		await waitFor(() => idleWaits === 1);
 
 		expect(session.queuedMessageCount).toBe(1);
 		heldCalls.resolve();
