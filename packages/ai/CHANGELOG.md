@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Speech transport uses withScopedTimeoutSignal instead of the removed withTimeoutSignal ([Refs #707](https://github.com/Wladefant/veyyon/issues/707)).
 
 - Auth gateway refuses missing, malformed, wrong and revoked device bearers before provider dispatch. Device tokens can refresh per request ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
 - Gateway privacy guards credentials split across semantic SSE deltas and withholds Cursor diagnostics and raw request-debug dumps inside private requests ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).

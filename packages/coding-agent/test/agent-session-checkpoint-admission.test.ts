@@ -56,7 +56,7 @@ test("production prompt and tool admission both stop when the cloud lease is los
 	const model = createMockModel({ provider: "openai", id: "gpt-test" }).model;
 	const modelRegistry = new ModelRegistry(authStorage);
 	const settings = Settings.isolated({ "checkpoints.enabled": true, "compaction.enabled": false, "todo.enabled": false });
-	settings.setModelRole("default", `${model.provider}/${model.id}`);
+	settings.setDefaultModel(`${model.provider}/${model.id}`);
 	const sessionManager = SessionManager.create(tempDir.path(), join(tempDir.path(), "sessions"));
 	const sessionFile = sessionManager.getSessionFile();
 	const sessionId = sessionManager.getSessionId();

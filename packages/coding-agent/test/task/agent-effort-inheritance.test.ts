@@ -63,7 +63,7 @@ describe("task agent effort inheritance", () => {
 				file,
 				JSON.stringify({
 					agent: { agents: { task: { model, thinkingLevel: effort } } },
-					modelRoles: { worker: model },
+					defaultModel: model,
 				}),
 			);
 		await writeRouting("openai/old", "low");
@@ -82,7 +82,7 @@ describe("task agent effort inheritance", () => {
 			// This is the real executor's destination-settings fork, after the
 			// deterministic barrier where a reload can land.
 			const child = await executorModule.createSubagentSettingsForCwd(options.settings!, tempDir.path());
-			bindings.push([options.modelOverride, options.thinkingLevel, child.getModelRole("worker")]);
+			bindings.push([options.modelOverride, options.thinkingLevel, child.get("defaultModel")]);
 			return result(options);
 		});
 		const tool = await TaskTool.create(

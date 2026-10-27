@@ -196,4 +196,22 @@ describe("speech transport postSpeechRequest", () => {
 		expect(err.message.includes("key-1")).toBe(false);
 		expect(err.message.includes("key-2")).toBe(false);
 	});
+
+	it("aborts the request when caller passes an aborted signal", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const fetchImpl: FetchImpl = async (_input, init) => {
+			if (init?.signal?.aborted) {
+				throw new DOMException("The operation was aborted.", "AbortError");
+			}
+			return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+		};
+		await expect(
+			postSpeechRequest(testModel, "/audio/speech", { input: "hello" }, "mp3", {
+				apiKey: "test-key",
+				fetch: fetchImpl,
+				signal: controller.signal,
+			}),
+		).rejects.toThrow();
+	});
 });
