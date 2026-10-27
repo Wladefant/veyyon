@@ -12,6 +12,7 @@
 
 - `sgrEnd` is exported from `@veyyon/utils/ansi` and is the single definition `wrap` and `width` use; no user-facing change.
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
+- A subcommand's unknown flag is reported as `Unknown flag: --jsno` followed by the declared flag it resembles (``Did you mean `--json`?``), instead of node:util's advice about positionals that start with `-`.
 
 ### Fixed
 

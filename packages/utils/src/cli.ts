@@ -1,8 +1,9 @@
 import { parseArgs as nodeParseArgs } from "node:util";
 import { CliUsageError } from "./cli-usage-error";
+import { nearestNames } from "./levenshtein";
 import { clampLow } from "./math";
 import { startupMarker } from "./startup-marker";
-import { errorMessage } from "./type-guards";
+import { errorMessage, isRecord } from "./type-guards";
 
 /**
  * A token that is a negative number rather than an option: `-1`, `-0.5`, `-1e-3`.
@@ -343,8 +344,36 @@ function parseArgv(argv: readonly string[], options: Record<string, ParseOption>
 	try {
 		return restore(nodeParseArgs({ args, options, allowPositionals: true, strict }));
 	} catch (error) {
-		throw new CliUsageError(errorMessage(error));
+		const unknown =
+			isRecord(error) && error.code === "ERR_PARSE_ARGS_UNKNOWN_OPTION"
+				? unknownFlagMessage(args, options)
+				: undefined;
+		throw new CliUsageError(unknown ?? errorMessage(error));
 	}
+}
+
+/**
+ * The refusal of the first flag in `args` that `options` does not declare, with the declared flags
+ * it most resembles. node:util's own text explains the `--` escape for a positional that starts with
+ * `-`, which answers a different mistake: `veyyon gc --dry-run` read as advice about positionals,
+ * where a mistyped launch flag is answered with the flag that was meant.
+ */
+function unknownFlagMessage(args: string[], options: Record<string, ParseOption>): string | undefined {
+	const { tokens } = nodeParseArgs({ args, options, allowPositionals: true, strict: false, tokens: true });
+	for (const token of tokens) {
+		if (token.kind !== "option" || Object.hasOwn(options, token.name)) continue;
+		// A single-letter short flag has no spelling to be near; only a long name is compared.
+		const near = token.rawName.startsWith("--")
+			? nearestNames(
+					token.name,
+					Object.keys(options).filter(name => name.length > 1),
+					3,
+				)
+			: [];
+		const suggestion = near.length > 0 ? `\nDid you mean ${near.map(name => `\`--${name}\``).join(" or ")}?` : "";
+		return `Unknown flag: ${token.rawName}${suggestion}`;
+	}
+	return undefined;
 }
 
 /** Each flag of `flagDefs` typed from its raw parsed value, validated in declaration order. */

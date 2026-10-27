@@ -169,8 +169,42 @@ describe("run() usage errors", () => {
 			process.exitCode = prevExitCode ?? 0;
 		}
 		const out = errs.join("");
-		expect(out).toContain("Error: Unknown option '--unknown'");
+		expect(out).toContain("Error: Unknown flag: --unknown\n");
+		expect(out).not.toContain("Did you mean");
 		expect(out).toContain("$ veyyon bench MODELS... [FLAGS]");
+	});
+
+	// Contract: a mistyped subcommand flag is answered with the declared flag it resembles, the way a
+	// mistyped launch flag is, and not with node:util's advice about positionals that start with `-`.
+	it.each([
+		["a transposition", ["--rnus"], "Error: Unknown flag: --rnus\nDid you mean `--runs`?\n"],
+		["a prefix", ["--run=3"], "Error: Unknown flag: --run\nDid you mean `--runs`?\n"],
+		[
+			"a typo after a declared flag",
+			["--runs", "3", "--rnus"],
+			"Error: Unknown flag: --rnus\nDid you mean `--runs`?\n",
+		],
+		["a short flag", ["-x"], "Error: Unknown flag: -x\n\n"],
+	])("names the declared flag nearest %s", async (_label, flags, expected) => {
+		const commands: CommandEntry[] = [{ name: "bench", load: async () => BenchLikeCommand }];
+		const errs: string[] = [];
+		const stderrSpy = spyOn(process.stderr, "write").mockImplementation(chunk => {
+			errs.push(String(chunk));
+			return true;
+		});
+		const prevExitCode = process.exitCode;
+		let observedExitCode: number | string | null | undefined;
+		try {
+			await run({ bin: "veyyon", version: "0.0.0", argv: ["bench", "gpt", ...flags], commands });
+			observedExitCode = process.exitCode;
+		} finally {
+			stderrSpy.mockRestore();
+			process.exitCode = prevExitCode ?? 0;
+		}
+		const out = errs.join("");
+		expect(observedExitCode).toBe(CLI_EXIT_USAGE);
+		expect(out).toStartWith(expected);
+		expect(out).not.toContain("place it at the end");
 	});
 
 	// Contract: a positional beyond what the declared args consume must fail
