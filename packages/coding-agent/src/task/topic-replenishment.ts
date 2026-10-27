@@ -25,7 +25,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { $which, errorMessage, getAgentDir, isRecord, logger } from "@veyyon/utils";
 import { atomicWriteFileSync } from "@veyyon/utils/atomic-write";
-import { DEFAULT_MODEL_SLOT } from "../config/model-roles";
+import { normalizeModelPatternList } from "../config/model-pattern-list";
 import { isSettingsInitialized, Settings } from "../config/settings";
 import { resolveAgentModel } from "./agent-settings";
 import nativeLedgerBridgeAssetPath from "./native-ledger-bridge.py" with { type: "file" };
@@ -96,9 +96,9 @@ export function resolveTopicWorkerModel(options?: {
 		if (agentResolved.patterns.length > 0) {
 			return agentResolved.patterns[0];
 		}
-		const defaultRole = settings.getModelRole(DEFAULT_MODEL_SLOT);
-		if (defaultRole?.trim()) {
-			return defaultRole.trim();
+		const defaultModel = normalizeModelPatternList(settings.get("defaultModel"))[0];
+		if (defaultModel) {
+			return defaultModel;
 		}
 	}
 	return process.env.VEYYON_DEFAULT_MODEL?.trim() ?? "";

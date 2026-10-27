@@ -3,6 +3,7 @@
  * passthrough header capture, prompt-cache identity, and CORS.
  */
 import type { Api, AssistantMessage, Model } from "../types";
+import { timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
 import { GatewaySemanticRedactor } from "./semantic-redaction";
 
 /**

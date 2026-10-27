@@ -666,7 +666,12 @@ function raiseThinkingLoop(
 	});
 	controller.abort(AIError.attach(new Error(THINKING_LOOP_ERROR_MARKER), AIError.create(AIError.Flag.ThinkingLoop)));
 	const stall = buildThinkingLoopError(model, detail);
-	if (partial) discardAttemptUsage(model, partial.usage, stall.usage);
+	if (partial) {
+		discardAttemptUsage(model, partial.usage, stall.usage);
+		if (partial.usage.cacheRequests && partial.usage.cacheRequests.length > 0) {
+			stall.usage.cacheRequests = [...partial.usage.cacheRequests];
+		}
+	}
 	outer.push({ type: "error", reason: "error", error: stall });
 }
 
