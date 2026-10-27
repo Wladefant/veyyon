@@ -1023,7 +1023,11 @@ export async function releaseTabsForOwner(
 		.map(tab => tab.name);
 	let count = 0;
 	for (const name of names) {
-		if (await releaseTab(name, opts)) count++;
+		try {
+			if (await releaseTab(name, opts)) count++;
+		} catch (err) {
+			logger.warn("Failed to release browser tab during session sweep", { name, error: errorMessage(err) });
+		}
 	}
 	await releaseOrphanBrowsers({
 		kill: opts.kill ?? false,
