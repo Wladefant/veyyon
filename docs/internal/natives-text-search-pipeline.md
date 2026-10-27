@@ -118,11 +118,11 @@ The loader tries install-specific addon candidates in priority order. Source and
 
 ### Malformed regex handling
 
-`grep.rs#build_matcher` runs a tolerant compile chain:
+`grep.rs#build_matcher` calls `veyyon_grep_kernel::compile_with_demotion`, a tolerant compile chain:
 
 1. Braces that cannot form `{N}`, `{N,}`, `{N,M}` are escaped (`{`/`}` -> `\{`/`\}`), so literal-template fragments (for example `${platform}`) do not fail as malformed repetition.
 2. The sanitized pattern is compiled with the Rust regex engine; on failure it is retried with PCRE2, which supports lookaround and backreferences the Rust engine omits.
-3. An unclosed/unopened-group error triggers one retry with unescaped parentheses escaped (so literal snippets like `fetchAnthropicProvider(` still search), tried on both engines.
+3. An unclosed/unopened-group error triggers one retry with only the unpairable parentheses escaped (`escape_unbalanced_parentheses`), tried on both engines. A literal snippet like `fetchAnthropicProvider(` still searches, and a balanced group such as `(get|set)Value(` keeps its alternation.
 4. If both engines reject the regex attempts, the original pattern is `regex::escape`d and compiled as a literal matcher. A successful literal demotion returns normal search results plus `patternTreatedAsLiteral` on `SearchResult` or `GrepResult`; `hasMatch` uses the same matcher but drops that notice. Only failure to build the final literal matcher remains a regex error.
 
 ## 2) File discovery (`glob`) and fuzzy path search (`fuzzyFind`)
@@ -295,4 +295,4 @@ Text functions generally return deterministic transformed output; errors are lim
 5. Rust shapes outputs into N-API objects (`lineNumber`, `matchCount`, `limitReached`, `patternTreatedAsLiteral`, etc.).
 6. The package's lazy binding returns typed JS objects and optional per-match callbacks for `grep`/`glob`.
 
-*Verified against `a69fe7a47dccc1ce64cd941479d0b14b6253029d` on 2026-10-22.*
+*Verified against `980793ac4160be113a4855f3b052a629d16f4b62` on 2026-10-27.*
