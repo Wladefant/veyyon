@@ -232,7 +232,10 @@ describe("no frame composes past the viewport while slack remains", () => {
 		// virtualized transcript reports a different frame than a plain one.
 		for (const kind of ["plain", "virtualized"] as const) {
 			for (const paint of PAINTS) {
-				test(`${name}, ${kind} transcript, ${paint} repaint`, async () => {
+				// Each arm builds its own terminal, engine and layout and spends its
+				// time waiting out frame timers, so the arms share nothing and run
+				// at once.
+				test.concurrent(`${name}, ${kind} transcript, ${paint} repaint`, async () => {
 					const term = new VirtualTerminal(80, 24, 5_000);
 					const tui = new TUI(term, true);
 					const transcript = kind === "plain" ? new Container() : new TranscriptContainer();
