@@ -90,7 +90,7 @@ describe("when a launch starts model discovery", () => {
 			if (previous === undefined) delete process.env[key];
 			else process.env[key] = previous;
 		}
-		process.exitCode = savedExitCode;
+		process.exitCode = savedExitCode ?? 0;
 	});
 
 	/** Launch `mode` through `runRootCommand` and return what it recorded. */
