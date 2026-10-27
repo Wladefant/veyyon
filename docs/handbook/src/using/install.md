@@ -382,8 +382,10 @@ and bash needs the `bash-completion` package), the installer reports it and prin
 the exact line to add, rather than leaving you a file nothing reads.
 
 Completion covers more than the command names. It offers the models in the
-catalog for `--model`, your saved sessions for `--resume`, and for `veyyon
-config` it offers the settings that exist and the values each one accepts:
+catalog for `--model` and every other flag that takes a model (`--plan`,
+`--compaction-model`, `--prewalk-into`), your saved sessions for `--resume`, and
+for `veyyon config` it offers the settings that exist and the values each one
+accepts:
 
 ```console
 $ veyyon config set startup.<Tab>

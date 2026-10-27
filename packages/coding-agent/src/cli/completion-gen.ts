@@ -89,6 +89,7 @@ export function binNames(spec: CompletionSpec): string[] {
 const MODEL_FLAGS: Record<string, true> = {
 	model: true,
 	plan: true,
+	"compaction-model": true,
 	// Both name the model a phase hands off to; their descriptions say so.
 	"prewalk-into": true,
 	"plan-yolo-into": true,
