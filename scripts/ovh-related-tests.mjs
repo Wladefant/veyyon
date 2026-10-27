@@ -13,6 +13,7 @@ function option(name, fallback) {
 const base = option('--base', 'origin/main');
 const head = option('--head', 'HEAD');
 const changedFile = option('--changed-files', null);
+const typecheckPlanned = args.includes('--typecheck-planned');
 const dryRun = args.includes('--dry-run');
 const changed = changedFile
   ? JSON.parse(fs.readFileSync(changedFile, 'utf8'))
@@ -27,7 +28,6 @@ const tests = new Set(sourceFiles.filter(file => testRx.test(file)));
 const changedSet = new Set(changed.map(normalize));
 const deletedChanged = new Set([...changedSet].filter(file => !fs.existsSync(file)));
 const changedCode = [...changedSet].filter(file => codeRx.test(file));
-const roots = changedCode;
 const configs = new Map();
 const parsed = new Map();
 const packageDirs = new Map();
@@ -127,6 +127,19 @@ function edge(graph, dependency, consumer) {
   if (!graph.has(dependency)) graph.set(dependency, new Set());
   graph.get(dependency).add(consumer);
 }
+const typecheckCoverage = new Map();
+const typecheckOwners = packageRecords.filter(record => record.dir)
+  .sort((a, b) => b.dir.length - a.dir.length);
+const typecheckDirs = new Set(changedCode.filter(file => /\.(?:[cm]?ts|tsx)$/.test(file))
+  .map(file => typecheckOwners.find(record => file.startsWith(`${record.dir}/`))?.dir).filter(Boolean));
+function typeOnlyCovered(file) {
+  if (!typecheckPlanned) return false;
+  if (typecheckCoverage.has(file)) return typecheckCoverage.get(file);
+  const owner = typecheckOwners.find(record => file.startsWith(`${record.dir}/`));
+  const covered = Boolean(owner && typecheckDirs.has(owner.dir));
+  typecheckCoverage.set(file, covered);
+  return covered;
+}
 function pureBarrel(file) {
   if (deletedChanged.has(file)) return false;
   if (barrelCache.has(file)) return barrelCache.get(file);
@@ -155,7 +168,8 @@ function moduleExportLeaves(file, exportName, seen = new Set()) {
   if (!pureBarrel(file)) {
     const hasExport = ast.statements.some(statement => {
       if (ts.isExportDeclaration(statement)) {
-        if (statement.exportClause && ts.isNamedExports(statement.exportClause)) return statement.exportClause.elements.some(element => element.name.text === exportName);
+        if (statement.isTypeOnly && typeOnlyCovered(file)) return false;
+        if (statement.exportClause && ts.isNamedExports(statement.exportClause)) return statement.exportClause.elements.some(element => (!element.isTypeOnly || !typeOnlyCovered(file)) && element.name.text === exportName);
         if (statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)) {
           if (!statement.exportClause) return exportName !== 'default';
           if (ts.isNamespaceExport(statement.exportClause)) return statement.exportClause.name.text === exportName;
@@ -175,7 +189,7 @@ function moduleExportLeaves(file, exportName, seen = new Set()) {
   const explicit = new Set();
   const stars = new Set();
   for (const statement of ast.statements) {
-    if (!ts.isExportDeclaration(statement) || !statement.moduleSpecifier || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
+    if (!ts.isExportDeclaration(statement) || (typeOnlyCovered(file) && statement.isTypeOnly) || !statement.moduleSpecifier || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
     const target = resolve(statement.moduleSpecifier.text, file);
     if (!target) continue;
     if (!statement.exportClause) {
@@ -183,7 +197,7 @@ function moduleExportLeaves(file, exportName, seen = new Set()) {
     } else if (ts.isNamespaceExport(statement.exportClause)) {
       if (exportName === '*' || exportName === statement.exportClause.name.text) for (const leaf of moduleLeaves(target, new Set(nextSeen))) explicit.add(leaf);
     } else if (ts.isNamedExports(statement.exportClause)) {
-      for (const item of statement.exportClause.elements) if (exportName === '*' || item.name.text === exportName) {
+      for (const item of statement.exportClause.elements) if ((!item.isTypeOnly || !typeOnlyCovered(file)) && (exportName === '*' || item.name.text === exportName)) {
         const original = item.propertyName?.text ?? item.name.text;
         for (const leaf of moduleExportLeaves(target, original, new Set(nextSeen))) explicit.add(leaf);
       }
@@ -204,7 +218,7 @@ function moduleLeaves(file, seen = new Set()) {
   const leaves = new Set();
   const { ast } = astFor(file);
   for (const statement of ast.statements) {
-    if (!ts.isExportDeclaration(statement) || !statement.moduleSpecifier || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
+    if (!ts.isExportDeclaration(statement) || (typeOnlyCovered(file) && (statement.isTypeOnly || statement.exportClause && ts.isNamedExports(statement.exportClause) && statement.exportClause.elements.every(item => item.isTypeOnly))) || !statement.moduleSpecifier || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
     const target = resolve(statement.moduleSpecifier.text, file);
     if (target) for (const leaf of moduleLeaves(target, new Set(nextSeen))) leaves.add(leaf);
   }
@@ -217,21 +231,25 @@ for (const file of sourceFiles) {
   const { ast } = astFor(file);
   for (const statement of ast.statements) {
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
+      const clause = statement.importClause;
+      if (typeOnlyCovered(file) && (clause?.isTypeOnly || clause?.namedBindings && ts.isNamedImports(clause.namedBindings) && !clause.name && clause.namedBindings.elements.length > 0 && clause.namedBindings.elements.every(binding => binding.isTypeOnly))) continue;
       const dependency = resolve(statement.moduleSpecifier.text, file);
       if (!dependency) continue;
-      const clause = statement.importClause;
       if (!pureBarrel(dependency)) {
         edge(ordinaryReverse, dependency, file);
       } else if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings) && !clause.name) {
-        for (const binding of clause.namedBindings.elements) {
+        const valueBindings = clause.namedBindings.elements.filter(binding => !typeOnlyCovered(file) || !binding.isTypeOnly);
+        for (const binding of valueBindings) {
           for (const leaf of moduleExportLeaves(dependency, binding.propertyName?.text ?? binding.name.text)) edge(symbolReverse, leaf, file);
         }
         edge(ordinaryReverse, dependency, file);
+        // Without a purity proof, every value re-export can evaluate a side-effectful module.
+        for (const leaf of moduleLeaves(dependency)) edge(conservativeReverse, leaf, file);
       } else {
         edge(ordinaryReverse, dependency, file);
         for (const leaf of moduleLeaves(dependency)) edge(conservativeReverse, leaf, file);
       }
-    } else if (!pureBarrel(file) && ts.isExportDeclaration(statement) && statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)) {
+    } else if (!pureBarrel(file) && ts.isExportDeclaration(statement) && (!typeOnlyCovered(file) || !statement.isTypeOnly) && statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)) {
       const dependency = resolve(statement.moduleSpecifier.text, file);
       if (dependency) edge(ordinaryReverse, dependency, file);
     }
@@ -329,29 +347,26 @@ for (const consumer of allTracked) {
 
 const reverse = new Map();
 for (const graph of [ordinaryReverse, symbolReverse, conservativeReverse, refReverse, cliReverse]) for (const [dependency, consumers] of graph) for (const consumer of consumers) edge(reverse, dependency, consumer);
-function reachableFrom(rootFile, graphs = [reverse]) {
-  const seen = new Set([rootFile]);
+function reachableFrom(rootFile) {
+  const distances = new Map([[rootFile, 0]]);
   const queue = [rootFile];
   for (let i = 0; i < queue.length; i++) {
-    for (const graph of graphs) for (const next of graph.get(queue[i]) ?? []) if (!seen.has(next)) { seen.add(next); queue.push(next); }
+    const file = queue[i];
+    for (const next of reverse.get(file) ?? []) if (!distances.has(next)) {
+      distances.set(next, distances.get(file) + 1);
+      queue.push(next);
+    }
   }
-  return seen;
-}
-function owningPackage(file) {
-  return packageRecords.filter(record => record.dir && (file === record.dir || file.startsWith(`${record.dir}/`))).sort((a, b) => b.dir.length - a.dir.length)[0] ?? null;
+  return distances;
 }
 const selected = new Set([...tests].filter(test => changedSet.has(test)));
 const decisions = [];
 for (const changedRoot of changedSet) {
-  const reachable = reachableFrom(changedRoot);
-  const reachedTests = [...reachable].filter(file => tests.has(file));
-  const owner = roots.includes(changedRoot) ? owningPackage(changedRoot) : null;
-  const ownedTests = owner ? [...tests].filter(test => test.startsWith(`${owner.dir}/`) && !packageRecords.some(nested => nested.dir !== owner.dir && nested.dir.startsWith(`${owner.dir}/`) && test.startsWith(`${nested.dir}/`))) : [];
-  const hub = roots.includes(changedRoot) && tests.size > 0 && reachedTests.length / tests.size > 0.25;
-  const fallbackEvidence = hub && owner ? [...reachableFrom(changedRoot, [refReverse, cliReverse])].filter(file => tests.has(file)) : [];
-  const perRoot = hub && owner ? [...new Set([...ownedTests, ...fallbackEvidence])] : reachedTests;
-  for (const test of perRoot) selected.add(test);
-  decisions.push({ root: changedRoot, reachedTests: reachedTests.length, mode: hub && owner ? `owning-package:${owner.dir}` : 'transitive', selectedTests: perRoot.length });
+  const distances = reachableFrom(changedRoot);
+  const reachedTests = [...distances.keys()].filter(file => tests.has(file))
+    .sort((a, b) => distances.get(a) - distances.get(b) || (a < b ? -1 : a > b ? 1 : 0));
+  for (const test of reachedTests) selected.add(test);
+  decisions.push({ root: changedRoot, reachedTests: reachedTests.length, mode: 'transitive', selectedTests: reachedTests.length });
 }
 const selectedList = [...selected].sort();
 const touchedPackageDirs = [...new Set(packageRecords.filter(record => record.dir && [...changedSet].some(file => file === record.dir || file.startsWith(`${record.dir}/`))).map(record => record.dir))];
