@@ -170,7 +170,7 @@ import { type BashResult, executeBash as executeBashCommand } from "../exec/bash
 import type { TtsrManager } from "../export/ttsr";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands/types";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
-import type { ExtensionRunner, SessionBeforeSwitchResult, SessionStopEventResult } from "../extensibility/extensions";
+import type { ExtensionRunner, SessionBeforeSwitchResult } from "../extensibility/extensions";
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
@@ -299,7 +299,7 @@ import {
 	USER_INTERRUPT_LABEL,
 } from "./messages";
 import { computeNonMessageBreakdown, computeNonMessageTokens, takeHeldAtRestReading } from "./non-message-tokens";
-import { SESSION_STATE_MESSAGE_TYPE, SESSION_STOP_CONTINUATION_CAP } from "./nudges";
+import { SESSION_STATE_MESSAGE_TYPE } from "./nudges";
 import { AdvisorRoster, type AdvisorRosterHost } from "./runtime/advisor-roster";
 import { CheckpointRuntime } from "./runtime/checkpoint-runtime";
 import { CompactionRuntime } from "./runtime/compaction-runtime";
@@ -325,6 +325,7 @@ import { SessionBranch, type TreeNavigationResult } from "./runtime/session-bran
 import { SessionHandoff } from "./runtime/session-handoff";
 import { SessionScope } from "./runtime/session-scope";
 import { type SecretsRefreshOptions, SessionSecrets } from "./runtime/session-secrets";
+import { SessionStopHook } from "./runtime/session-stop-hook";
 import { SessionSwitch } from "./runtime/session-switch";
 import { StopRetries } from "./runtime/stop-retries";
 import { StreamingEditGuard } from "./runtime/streaming-edit-guard";
@@ -415,22 +416,6 @@ function demoteInterruptedThinkingOnUserInterrupt(
 function skipAgentContinue(reason: AgentContinueSkipReason, options: ScheduledAgentContinueOptions | undefined): void {
 	logger.debug("agent.continue skipped after scheduling", { reason });
 	options?.onSkip?.(reason);
-}
-
-function sessionStopContinuationContext(result: SessionStopEventResult | undefined): string | undefined {
-	if (!result) return undefined;
-	const additionalContext =
-		typeof result.additionalContext === "string" && result.additionalContext.length > 0
-			? result.additionalContext
-			: undefined;
-	const reason = typeof result.reason === "string" && result.reason.length > 0 ? result.reason : undefined;
-	if (result.continue === true) {
-		return additionalContext ?? reason;
-	}
-	if (result.decision === "block") {
-		return reason ?? additionalContext;
-	}
-	return undefined;
 }
 
 function getCustomMessageTextContent(message: Pick<CustomMessage, "content">): string {
@@ -814,9 +799,7 @@ export class AgentSession {
 			if (!isEmptyErrorTurn(message) || this.#persistence.alreadyPersisted(message)) return;
 			this.#persistence.append(message);
 		},
-		resetSessionStopContinuationState: () => {
-			this.#sessionStopContinuationCount = 0;
-		},
+		resetSessionStopContinuationState: () => this.#stopHook.reset(),
 	});
 	/**
 	 * The title refresh a re-plan starts, and the TITLE_SYSTEM.md override every automatic title
@@ -981,11 +964,8 @@ export class AgentSession {
 	readonly #context: ContextAccounting;
 	/** The memory backend's session state, and the recalled block delivered or waiting at the tail. */
 	readonly #memory: MemoryContext<AgentSession>;
-	/**
-	 * `session_stop` continuations queued in a row. Nonzero is the `stop_hook_active` flag the next
-	 * `session_stop` handler reads.
-	 */
-	#sessionStopContinuationCount = 0;
+	/** The `session_stop` hook pass and the continuation chain it queues. */
+	readonly #stopHook: SessionStopHook;
 	/** Secret obfuscator, runtime lease, provider redaction and display expansion. */
 	readonly #secrets: SessionSecrets;
 	/** Per-streaming-message argot display decoder (seam 3); reset on each assistant message_start. */
@@ -1104,6 +1084,18 @@ export class AgentSession {
 			},
 			endWakeTurn: () => this.#endInFlight(),
 			runEphemeralTurn: args => this.runEphemeralTurn(args),
+		});
+		this.#stopHook = new SessionStopHook({
+			isHalted: () => this.#abortInProgress || this.#isDisposed,
+			stopHookRunner: () =>
+				this.#config.agentKind !== "sub" && this.#config.extensionRunner?.hasHandlers("session_stop")
+					? this.#config.extensionRunner
+					: undefined,
+			promptGeneration: () => this.#promptGeneration,
+			turnId: () => Math.max(0, this.#extensionEvents.turnIndex - 1),
+			sessionId: () => this.sessionId,
+			sessionFile: () => this.sessionFile,
+			queueContinuation: message => this.#queueHiddenNextTurnMessage(message, true),
 		});
 		this.#scope = new SessionScope({
 			sessionStore: this.sessionManager,
@@ -2945,7 +2937,7 @@ export class AgentSession {
 			compactionResult = await this.#trackedCompactionCheck(msg);
 		}
 		if (await this.#continueAtSettle(msg, settleState, compactionResult)) return;
-		await this.#emitSessionStopEvent(settledMessages, msg);
+		await this.#stopHook.run(settledMessages, msg);
 	}
 
 	/**
@@ -3142,55 +3134,6 @@ export class AgentSession {
 			if (message.role === "assistant") turns++;
 		}
 		return turns;
-	}
-
-	async #emitSessionStopEvent(
-		messages: AgentMessage[],
-		lastAssistantMessage = this.getLastAssistantMessage(),
-	): Promise<void> {
-		if (this.#abortInProgress || this.#isDisposed) {
-			this.#sessionStopContinuationCount = 0;
-			return;
-		}
-		if (this.#config.agentKind === "sub" || !this.#config.extensionRunner?.hasHandlers("session_stop")) return;
-		const generation = this.#promptGeneration;
-		const result = await this.#config.extensionRunner.emitSessionStop({
-			messages,
-			turn_id: Math.max(0, this.#extensionEvents.turnIndex - 1),
-			last_assistant_message: lastAssistantMessage,
-			session_id: this.sessionId,
-			session_file: this.sessionFile,
-			stop_hook_active: this.#sessionStopContinuationCount > 0,
-		});
-		if (this.#promptGeneration !== generation || this.#abortInProgress || this.#isDisposed) {
-			this.#sessionStopContinuationCount = 0;
-			return;
-		}
-		const additionalContext = sessionStopContinuationContext(result);
-		if (!additionalContext) {
-			this.#sessionStopContinuationCount = 0;
-			return;
-		}
-		if (this.#sessionStopContinuationCount >= SESSION_STOP_CONTINUATION_CAP) {
-			logger.warn("session_stop continuation cap reached", {
-				sessionId: this.sessionId,
-				cap: SESSION_STOP_CONTINUATION_CAP,
-			});
-			this.#sessionStopContinuationCount = 0;
-			return;
-		}
-		this.#sessionStopContinuationCount++;
-		this.#queueHiddenNextTurnMessage(
-			{
-				role: "custom",
-				customType: "session-stop-continuation",
-				content: additionalContext,
-				display: false,
-				attribution: "agent",
-				timestamp: Date.now(),
-			},
-			true,
-		);
 	}
 
 	/**
@@ -5529,7 +5472,7 @@ export class AgentSession {
 			// block runs, but nested prompt setup/finalizers may still be unwinding. Without this,
 			// a subsequent prompt() can incorrectly observe the session as busy after an abort.
 			this.#endInFlight(true);
-			this.#sessionStopContinuationCount = 0;
+			this.#stopHook.reset();
 			this.#pendingNextTurnMessages = this.#pendingNextTurnMessages.filter(
 				message => message.customType !== "session-stop-continuation",
 			);

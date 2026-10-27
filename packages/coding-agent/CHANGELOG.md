@@ -15,6 +15,7 @@
 - No user-visible change: `/export` path resolution moved from the session runtime into the HTML exporter.
 - IRC message delivery moved out of `AgentSession` into the `IrcDelivery` session collaborator, with no change to how a message is steered, queued, woken on or auto-replied to.
 - The first shell command of a session no longer compiles the output-stage regular expressions of every built-in output filter; each filter compiles them the first time it applies, so a first `ls` runs in 5 ms instead of 12 ms.
+- The `session_stop` hook pass moved out of `AgentSession` into the `SessionStopHook` session collaborator, with no change to the event a handler receives, the continuation it queues or the cap that ends a chain.
 
 ### Fixed
 

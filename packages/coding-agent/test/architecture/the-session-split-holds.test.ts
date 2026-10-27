@@ -85,8 +85,10 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-26 at 7271: IRC delivery (the incoming record, its steer, inbox, context or
  * wake-turn route, the auto-reply and the stranded-record resume and flush) left as the
  * `irc-delivery.ts` collaborator (-176); it holds the IRC inbox.
+ * RE-MEASURED 2026-10-26 at 7215: the `session_stop` hook pass and its continuation chain left as
+ * the `session-stop-hook.ts` collaborator (-56).
  */
-const RUNTIME_CEILING = 7_300;
+const RUNTIME_CEILING = 7_250;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -125,6 +127,7 @@ const COLLABORATORS = [
 	"session-handoff.ts",
 	"session-scope.ts",
 	"session-secrets.ts",
+	"session-stop-hook.ts",
 	"session-switch.ts",
 	"stop-retries.ts",
 	"streaming-edit-guard.ts",
