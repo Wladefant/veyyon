@@ -900,12 +900,11 @@ function convertMessages(
 ): WireMessage[] {
 	const result: WireMessage[] = [];
 	const messages = transformMessages(context.messages, model, normalizeToolCallId);
-	const signsThinking = supportsThinkingSignature(model);
 
 	for (let i = 0; i < messages.length; i++) {
 		const message = messages[i];
 		if (message.role !== "toolResult") {
-			const converted = convertMessage(message, model.id, signsThinking);
+			const converted = convertMessage(message, model.id);
 			if (converted) result.push(converted);
 			continue;
 		}
@@ -942,14 +941,13 @@ function convertMessages(
 function convertMessage(
 	message: Exclude<Message, ToolResultMessage>,
 	modelId: string,
-	signsThinking: boolean,
 ): WireMessage | undefined {
 	switch (message.role) {
 		case "developer":
 		case "user":
 			return convertUserMessage(message.content);
 		case "assistant":
-			return convertAssistantMessage(message.content, modelId, signsThinking);
+			return convertAssistantMessage(message.content, modelId);
 		default:
 			throw new AIError.ValidationError("Unknown message role");
 	}
@@ -970,11 +968,10 @@ function convertUserMessage(content: UserMessage["content"]): WireMessage | unde
 function convertAssistantMessage(
 	content: AssistantMessage["content"],
 	modelId: string,
-	signsThinking: boolean,
 ): WireMessage | undefined {
 	const blocks: AssistantContent[] = [];
 	for (const block of content) {
-		const converted = convertAssistantBlock(block, modelId, signsThinking);
+		const converted = convertAssistantBlock(block, modelId);
 		if (converted) blocks.push(converted);
 	}
 	return blocks.length > 0 ? { role: "assistant", content: blocks } : undefined;
@@ -1000,7 +997,6 @@ function convertUserBlock(block: TextContent | ImageContent | VideoContent): Use
 function convertAssistantBlock(
 	block: AssistantMessage["content"][number],
 	modelId: string,
-	signsThinking: boolean,
 ): AssistantContent | undefined {
 	switch (block.type) {
 		case "text":
