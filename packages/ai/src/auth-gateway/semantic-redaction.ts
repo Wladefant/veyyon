@@ -32,6 +32,7 @@ export class GatewaySemanticRedactor {
 						} else {
 							frame.prefix = match[1];
 							this.#slots(frame.value, frame.slots);
+							frame.completed = this.#completed(frame.value);
 							if (parsed.type === "done" || parsed.type === "response.completed") final = true;
 						}
 					}
