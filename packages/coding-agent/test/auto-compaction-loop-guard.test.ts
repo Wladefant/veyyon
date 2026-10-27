@@ -7,7 +7,6 @@ import {
 	type ToolResultMessage,
 	type UserMessage,
 } from "@veyyon/agent-core";
-import { DEFAULT_COMPACTION_SETTINGS } from "@veyyon/agent-core/compaction";
 import type { Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
 import { Settings } from "@veyyon/coding-agent/config/settings";

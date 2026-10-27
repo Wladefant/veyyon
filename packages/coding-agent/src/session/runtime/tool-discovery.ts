@@ -306,7 +306,7 @@ export class ToolDiscovery {
 		if (this.#defaultMCPTools.has(name)) return true;
 		if (this.configuredDefaultMCP().includes(name)) return true;
 		const tool = this.#host.registry.get(name);
-		if (this.#builtIn.has(name) && (!tool || tool.loadMode !== "discoverable")) return true;
+		if (this.#builtIn.has(name) && tool?.loadMode !== "discoverable") return true;
 		return false;
 	}
 
