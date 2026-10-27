@@ -14,6 +14,10 @@ veyyon acp --config ./acp.yml
 `acp` takes every launch flag (`veyyon --help` lists them) and forces `--mode acp`. Run by hand
 with a terminal on stdin, it prints a notice on stderr and waits for protocol frames.
 
+Extension flags are read per session, against the session's directory, so an unknown flag is
+reported at `session/new` rather than at startup: the request fails with
+`unknown flag: --aproval-mode` and the nearest known flag, and no session is created.
+
 Implementation: `packages/coding-agent/src/modes/acp/`. The RPC surface in
 [The RPC surface](./rpc.md) is a separate protocol; a client uses one or the other.
 

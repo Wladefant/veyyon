@@ -29,9 +29,9 @@
  * rollback. The sweep below covers every registered command, so a new one that copies the lenient
  * setting fails until it is recorded as a command that hands its argv to a parser of its own.
  *
- * NOT CAUGHT: a lenient command's own parser that keeps an unknown flag. `acp` is one: extension flags
- * apply per `session/new`, against that session's directory, so the set of valid flags is not known
- * when the server starts and an unknown flag is not refused there.
+ * NOT CAUGHT: what a lenient command's own parser does with an unknown flag. A launch refuses it once
+ * its extensions load, and `acp` refuses it at `session/new` (pinned in acp-mcp-isolation.test.ts);
+ * this sweep checks neither.
  */
 import { describe, expect, it } from "bun:test";
 import { parseArgs, reportUnrecognizedFlags } from "@veyyon/coding-agent/cli/args";

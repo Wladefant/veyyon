@@ -50,6 +50,7 @@
 
 ### Fixed
 
+- `veyyon acp` fails `session/new` on a flag neither the launch parser nor the session's extensions recognize, with the flag and the nearest known one, instead of serving every session with the flag ignored.
 - `veyyon trust` exits 2 on an unknown flag instead of ignoring it, so a typo of `--deny` such as `--denny` no longer approves the project, and it accepts several paths and tab-completes them as files.
 - `veyyon rollback <version>` moves to the named version instead of failing with `Unexpected argument`, and `veyyon rollback` exits 2 on an unknown flag instead of ignoring it.
 - `--compaction-model` tab-completes model ids from the catalog like `--model`, instead of completing nothing.

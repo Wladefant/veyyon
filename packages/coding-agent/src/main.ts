@@ -36,6 +36,7 @@ import {
 	normalizePathForComparison,
 	postmortem,
 	setProjectDir,
+	stripAnsi,
 	VERSION,
 } from "@veyyon/utils";
 import { IdleTrim } from "@veyyon/utils/idle-trim";
@@ -45,6 +46,7 @@ import {
 	type Mode,
 	namesSessionFile,
 	normalizeContinueSessionArgs,
+	parseArgs,
 	reportUnrecognizedFlags,
 } from "./cli/args";
 import { EXIT_FAILURE, EXIT_OK, EXIT_USAGE } from "./cli/exit-codes";
@@ -515,7 +517,19 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 		if (args.parsedArgs.apiKey && !args.baseOptions.model && nextSession.model) {
 			args.authStorage.setRuntimeApiKey(nextSession.model.provider, args.parsedArgs.apiKey);
 		}
-		applyExtensionFlags(nextSession.extensionRunner, args.rawArgs);
+		// A flag neither the launch parser nor this session's extensions recognize is a typo, refused the
+		// way a launch refuses it once its extensions load. It is checked here because extension flags are
+		// registered per session, for that session's directory; the client reads the reason as the
+		// `session/new` error, where a server that kept running on the typo would show nothing.
+		const flags = applyExtensionFlags(nextSession.extensionRunner, args.rawArgs) ?? parseArgs(args.rawArgs);
+		if (flags.unrecognizedFlags.length > 0) {
+			let report = "";
+			reportUnrecognizedFlags(flags, text => {
+				report += text;
+			});
+			await nextSession.dispose().catch(error => logger.warn("Failed to dispose ACP session", { error }));
+			throw new Error(stripAnsi(report).trim());
+		}
 		return nextSession;
 	};
 }

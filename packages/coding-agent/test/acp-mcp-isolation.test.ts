@@ -140,3 +140,95 @@ describe("createAcpSessionFactory TITLE_SYSTEM.md per-cwd resolution (PR #3736)"
 		}
 	});
 });
+
+/**
+ * `veyyon acp` runs the launch parser over its argv, and that parser keeps a flag it does not know for
+ * the check a launch makes once its extensions load. ACP never made that check, so `acp --aproval-mode
+ * yolo` started a server that ran every session on the default approval mode at exit 0, the typo
+ * reported nowhere. Extension flags are registered per session, so the check runs at `session/new`:
+ * a flag neither the parser nor the session's extensions recognize fails the session with the reason,
+ * and the session it built is disposed rather than left registered.
+ *
+ * NOT CAUGHT: a client that ignores the `session/new` error text.
+ */
+describe("createAcpSessionFactory refuses a flag nobody recognizes", () => {
+	async function withFactory(
+		rawArgs: string[],
+		extensionFlags: Map<string, { type: "boolean" | "string" }> | undefined,
+		run: (factory: (cwd: string) => Promise<AgentSession>, disposed: () => number, cwd: string) => Promise<void>,
+	): Promise<void> {
+		const tempDir = TempDir.createSync("@pi-acp-unknown-flag-");
+		let authStorage: AuthStorage | undefined;
+		let disposeCount = 0;
+		const flagValues = new Map<string, boolean | string>();
+		try {
+			authStorage = await AuthStorage.create(tempDir.join("auth.db"));
+			const session = {
+				extensionRunner: extensionFlags
+					? {
+							getFlags: () => extensionFlags,
+							setFlagValue: (name: string, value: boolean | string) => flagValues.set(name, value),
+						}
+					: undefined,
+				dispose: async () => {
+					disposeCount++;
+				},
+			} as unknown as AgentSession;
+			const createSession = async (): Promise<CreateAgentSessionResult> =>
+				({ session }) as unknown as CreateAgentSessionResult;
+			const factory = createAcpSessionFactory({
+				baseOptions: {} as CreateAgentSessionOptions,
+				settings: Settings.isolated({}),
+				sessionDir: tempDir.join("sessions"),
+				authStorage,
+				modelRegistry: new ModelRegistry(authStorage),
+				parsedArgs: {},
+				rawArgs,
+				createSession,
+			});
+			await run(factory, () => disposeCount, tempDir.path());
+		} finally {
+			try {
+				authStorage?.close();
+			} finally {
+				await Bun.sleep(0);
+				await tempDir.remove();
+			}
+		}
+	}
+
+	it("fails session/new on a mistyped flag, naming it and the flag it resembles, and disposes the session", async () => {
+		await withFactory(["--aproval-mode", "yolo"], undefined, async (factory, disposed, cwd) => {
+			const error = await factory(cwd).then(
+				() => undefined,
+				(caught: unknown) => caught,
+			);
+
+			expect(error).toBeInstanceOf(Error);
+			expect((error as Error).message).toContain("unknown flag: --aproval-mode");
+			expect((error as Error).message).toContain("--approval-mode");
+			expect((error as Error).message).not.toContain("\x1b[");
+			expect(disposed()).toBe(1);
+		});
+	});
+
+	it("creates the session when every flag is one the launch parser knows", async () => {
+		await withFactory(["--approval-mode", "yolo"], undefined, async (factory, disposed, cwd) => {
+			await factory(cwd);
+
+			expect(disposed()).toBe(0);
+		});
+	});
+
+	it("creates the session when the unknown flag is one this session's extensions register", async () => {
+		await withFactory(
+			["--spawn-peer", "reviewer"],
+			new Map([["spawn-peer", { type: "string" }]]),
+			async (factory, disposed, cwd) => {
+				await factory(cwd);
+
+				expect(disposed()).toBe(0);
+			},
+		);
+	});
+});
