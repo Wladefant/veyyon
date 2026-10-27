@@ -105,16 +105,7 @@ import type { ShakeMode, ShakeResult } from "@veyyon/kernel/session/shake-types"
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import { ToolChoiceQueue } from "@veyyon/kernel/session/tool-choice-queue";
 import { YieldQueue } from "@veyyon/kernel/session/yield-queue";
-import {
-	errorMessage,
-	getActiveAuthDbPath,
-	isEnoent,
-	logger,
-	postmortem,
-	prompt,
-	Snowflake,
-	withTimeout,
-} from "@veyyon/utils";
+import { errorMessage, isEnoent, logger, postmortem, prompt, Snowflake, withTimeout } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
 import { localCalendarDate } from "@veyyon/utils/local-time";
 import { startupMarker } from "@veyyon/utils/startup-marker";
@@ -128,7 +119,7 @@ import {
 } from "../argot-wire";
 import { type AsyncJob, AsyncJobManager } from "../async";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
-import { credentialRemedySentence } from "../config/missing-credentials";
+import { unusableCredentialMessage } from "../config/missing-credentials";
 import type { ModelRegistry } from "../config/model-registry";
 import { noModelSelectedMessage } from "../config/model-resolution-failure";
 import { formatModelString, getModelMatchPreferences, resolveModelSelectorValue } from "../config/model-resolver";
@@ -4197,47 +4188,15 @@ export class AgentSession {
 			// Validate model
 			if (!this.model) throw new Error(noModelSelectedMessage(this.#config.modelRegistry.getError()?.message));
 
-			// Validate API key
-			const apiKey = await this.#config.modelRegistry.getApiKey(this.model, this.sessionId);
+			// Validate API key. `hasAuth` reads the stored credential without refreshing it, and
+			// `getApiKey` refreshed it and produced nothing; the message tells those apart.
+			const registry = this.#config.modelRegistry;
+			const apiKey = await registry.getApiKey(this.model, this.sessionId);
 			if (!apiKey) {
 				const provider = this.model.provider;
-				// Distinguish "never signed in" from "signed in, but no usable token
-				// right now". `hasAuth` reports whether a credential is configured
-				// WITHOUT refreshing; `getApiKey` refreshes and just returned nothing.
-				// So when `hasAuth` is true the credential IS stored and the token
-				// could not be produced — an expired OAuth token whose refresh failed,
-				// or the provider rejecting the refresh (e.g. a 403/402 for a lapsed
-				// subscription). Reporting "No API key found" there reads as lost
-				// credentials and pushes the user into a re-login loop; name the real
-				// cause instead so a provider-side account problem is not mistaken for
-				// veyyon losing the login.
-				const signedIn = this.#config.modelRegistry.authStorage.hasAuth(provider);
-				// A credential a failed refresh disabled is invisible to `hasAuth`,
-				// because disabled rows are filtered out of the credential list. So
-				// the user whose login was torn down looks identical to the one who
-				// never signed in, and gets told to sign in with nothing saying what
-				// happened to the login they had. Name the cause instead.
-				const disabledCause = signedIn
-					? undefined
-					: this.#config.modelRegistry.authStorage.disabledCredentialCause(provider);
-				throw new Error(
-					signedIn
-						? `Signed in to ${provider}, but could not get a usable token right now.\n\n` +
-								`The stored token may have expired and its refresh failed, or ${provider} rejected it ` +
-								`(for example a lapsed subscription or unpaid balance). ` +
-								`${credentialRemedySentence(provider)} ` +
-								`If signing in again succeeds and the next call still fails the same way, the problem is on the ${provider} side: check that account's billing and plan status. ` +
-								`Your credentials are still stored in ${getActiveAuthDbPath()}.`
-						: disabledCause
-							? `Your ${provider} login was disabled after a token refresh failed, so there is no usable credential right now.\n\n` +
-								`The provider rejected the refresh with: ${disabledCause}\n\n` +
-								`This usually means the refresh token was already spent or revoked, which a crash mid-refresh can cause. ` +
-								`${credentialRemedySentence(provider)} ` +
-								`The disabled credential is still recorded in ${getActiveAuthDbPath()} and signing in replaces it.`
-							: `No API key found for ${provider}.\n\n` +
-								`${credentialRemedySentence(provider)} ` +
-								`Stored credentials live in ${getActiveAuthDbPath()}.`,
-				);
+				const signedIn = registry.authStorage.hasAuth(provider);
+				const disabledCause = signedIn ? undefined : registry.authStorage.disabledCredentialCause(provider);
+				throw new Error(unusableCredentialMessage(provider, { signedIn, disabledCause }));
 			}
 
 			// Phase markers for the submit path: VEYYON_DEBUG_STARTUP=1 writes one

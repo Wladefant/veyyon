@@ -33,13 +33,19 @@ import { describe, expect, it } from "bun:test";
 import { getOAuthProviders } from "@veyyon/ai/oauth";
 import { CATALOG_PROVIDERS, type ProviderCatalogEntry } from "@veyyon/catalog/provider-models";
 import { commands } from "@veyyon/coding-agent/cli-commands";
-import { credentialRemedySentence, missingCredentialsMessage } from "@veyyon/coding-agent/config/missing-credentials";
+import {
+	credentialRemedySentence,
+	missingCredentialsMessage,
+	type UnusableCredentialState,
+	unusableCredentialMessage,
+} from "@veyyon/coding-agent/config/missing-credentials";
 import {
 	describeModelResolutionFailure,
 	type ModelResolutionFailureKind,
 } from "@veyyon/coding-agent/config/model-resolution-failure";
 import { fallbackForUnavailableDefault } from "@veyyon/coding-agent/config/model-resolver";
 import { ModelsConfigFile } from "@veyyon/coding-agent/config/models-config";
+import { getActiveAuthDbPath } from "@veyyon/utils";
 
 /** Every top-level subcommand name and alias the CLI actually routes. */
 const REGISTERED_COMMANDS: ReadonlySet<string> = new Set(
@@ -187,6 +193,52 @@ describe("missingCredentialsMessage", () => {
 				`or set providers.openai.apiKey in ${ModelsConfigFile.path()}.`,
 		);
 	});
+});
+
+/**
+ * The message a turn raises when the provider's credential produced no token. Swept over every
+ * catalog provider and the three states a token lookup cannot tell apart: a stored credential
+ * whose refresh failed, a credential a failed refresh disabled, and none at all. The first two
+ * must never read as a missing key, or the reader signs in again to fix a provider-side account
+ * problem, and the disabled one must carry the reason the provider gave.
+ */
+describe("unusableCredentialMessage", () => {
+	const CAUSE = "invalid_grant: refresh token already used";
+	const STATES: ReadonlyArray<{ name: string; state: UnusableCredentialState; opens: (provider: string) => string }> =
+		[
+			{
+				name: "a stored credential whose refresh failed",
+				state: { signedIn: true },
+				opens: provider => `Signed in to ${provider}, but could not get a usable token right now.`,
+			},
+			{
+				name: "a credential a failed refresh disabled",
+				state: { signedIn: false, disabledCause: CAUSE },
+				opens: provider => `Your ${provider} login was disabled after a token refresh failed`,
+			},
+			{
+				name: "no credential",
+				state: { signedIn: false },
+				opens: provider => `No API key found for ${provider}.`,
+			},
+		];
+
+	for (const { name, state, opens } of STATES) {
+		it(`states ${name} and a remedy the reader can run, for every catalog provider`, () => {
+			const providers = (CATALOG_PROVIDERS as readonly ProviderCatalogEntry[]).map(entry => entry.id);
+			expect(providers.length).toBeGreaterThan(0);
+			for (const provider of providers) {
+				const message = unusableCredentialMessage(provider, state);
+				expect(message).toStartWith(opens(provider));
+				expect(message).toContain(credentialRemedySentence(provider));
+				expect(message).toContain(getActiveAuthDbPath());
+				expect(message.includes("No API key")).toBe(state.signedIn === false && state.disabledCause === undefined);
+				expect(message.includes(CAUSE)).toBe(state.disabledCause !== undefined);
+				expect(unroutableSubcommandsIn(message)).toEqual([]);
+				expect(namesSlashCommandWithoutSayingWhere(message)).toBe(false);
+			}
+		});
+	}
 });
 
 describe("describeModelResolutionFailure remedies", () => {
