@@ -207,25 +207,35 @@ export function kernelRunnerCacheDir(tmpDir: string, language: string): string {
 }
 
 /**
- * Creates a cached runner-script publisher for a language kernel.
- * Writes the runner script once to `<tmpdir>/veyyon-<language>-runner/runner-<hash>.<extension>`.
+ * Creates a runner-script publisher for a language kernel. Each call returns the path of
+ * `<tmpdir>/veyyon-<language>-runner/runner-<hash>.<extension>`, writing the script there first when the
+ * file is not present.
+ *
+ * The presence check runs on every kernel start, not once per process: a temp cleaner (`systemd-tmpfiles`,
+ * a tmpfs wiped on a schedule) removes the file while the process runs, and every kernel started on the
+ * missing path exits before its first frame. The script is written to a sibling file and renamed over the
+ * target, so another process that finds the target never runs a partly written script.
  */
 export function createRunnerScriptPublisher(
 	language: string,
 	script: string,
 	extension: string,
 ): () => Promise<string> {
-	let cachedPath: string | null = null;
 	const cacheDir = kernelRunnerCacheDir(os.tmpdir(), language);
+	const target = path.join(cacheDir, `runner-${Bun.hash(script).toString(36)}.${extension}`);
 	return async () => {
-		if (cachedPath) return cachedPath;
+		if (fs.existsSync(target)) return target;
 		await fs.promises.mkdir(cacheDir, { recursive: true });
-		const hash = Bun.hash(script).toString(36);
-		const target = path.join(cacheDir, `runner-${hash}.${extension}`);
-		if (!fs.existsSync(target)) {
-			await Bun.write(target, script);
+		const staging = `${target}.${process.pid}-${Snowflake.next()}.tmp`;
+		await fs.promises.writeFile(staging, script);
+		try {
+			await fs.promises.rename(staging, target);
+		} catch (error) {
+			// Windows refuses to replace a script another process's interpreter holds open; that file is
+			// the same script, written by a concurrent publisher.
+			await fs.promises.rm(staging, { force: true });
+			if (!fs.existsSync(target)) throw error;
 		}
-		cachedPath = target;
 		return target;
 	};
 }
@@ -610,6 +620,8 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 	#disposed = false;
 	#shutdownConfirmed = false;
 	#exitedPromise: Promise<number> | null = null;
+	/** Why the runner stopped on its own, set before the executions it strands are settled. */
+	#stopReason: string | undefined;
 	#pending = new Map<string, PendingExecution>();
 	readonly #options: Required<BaseKernelOptions<TExecuteOptions>>;
 
@@ -631,9 +643,8 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 		this.#exitedPromise = proc.exited;
 		void this.#exitedPromise.then(code => {
 			this.#alive = false;
-			this.#abortPendingExecutions(`${this.#options.languageName} kernel exited with code ${code}`, {
-				kernelKilled: true,
-			});
+			this.#stopReason = `${this.#options.languageName} kernel exited with code ${code}`;
+			this.#abortPendingExecutions(this.#stopReason, { kernelKilled: true });
 		});
 
 		this.#startReader(proc.stdout as ReadableStream<Uint8Array>);
@@ -867,10 +878,10 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 					await this.#handleLine(decoder.decode(line));
 				}
 			} catch (err) {
-				const reason = `${this.#options.languageName} kernel output could not be read: ${errorMessage(err)}`;
-				logger.warn(reason);
+				this.#stopReason = `${this.#options.languageName} kernel output could not be read: ${errorMessage(err)}`;
+				logger.warn(this.#stopReason);
 				// No later frame can arrive, so nothing pending can finish and nothing new can run.
-				this.#abortPendingExecutions(reason, { kernelKilled: true });
+				this.#abortPendingExecutions(this.#stopReason, { kernelKilled: true });
 				void this.shutdown();
 			}
 		};
@@ -1013,6 +1024,14 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 				storeHistory: false,
 			} as TExecuteOptions);
 			if (result.cancelled) {
+				// Only this start's own abort, the caller's signal or the startup budget, cancels it. A run that
+				// ended any other way is a failed start; reported as a cancellation, it reached the cell as an
+				// empty cancelled result with nothing stating why.
+				if (!controller.signal.aborted) {
+					const why =
+						this.#stopReason ?? result.error?.value ?? `the ${this.#options.languageName} runner cancelled it`;
+					throw new Error(`${label} failed: ${why}`);
+				}
 				throw createAbortError(result.timedOut ? "TimeoutError" : "AbortError", `${label} cancelled`);
 			}
 			if (result.status === "error") {
