@@ -430,7 +430,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	// and lane rows key on that child depth — the same value the executor derives
 	// as `childDepth`.
 	const resolvedModel = parsed.model
-		? { patterns: resolveConfiguredModelPatterns(parsed.model, spawnSettings), source: "agent" as const }
+		? { patterns: normalizeModelPatternList(parsed.model), source: "agent" as const }
 		: resolveAgentModel({
 				settings: spawnSettings,
 				agentName,
