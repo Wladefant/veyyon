@@ -4,16 +4,19 @@ Never call os.kill with signal zero. Synthetic audit events test rejection witho
 issuing a process operation. Native liveness checks use only this test's child.
 This does not claim protection from hostile native code or ctypes bypasses.
 """
+import ctypes
 import json
 import os
 from pathlib import Path
+import queue
 import subprocess
 import sys
 import tempfile
-import ctypes
+import threading
+import time
 from types import SimpleNamespace
-from unittest.mock import patch
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
@@ -60,14 +63,20 @@ class WindowsProcessSafety(unittest.TestCase):
             text=True, creationflags=FLAGS,
         )
         try:
+            deadline = time.monotonic() + 15
+            lines = queue.Queue()
+            def drain():
+                for line in runner.stdout:
+                    lines.put(line)
+            drain_thread = threading.Thread(target=drain, daemon=True)
+            drain_thread.start()
             frames = []
             def send_and_wait(request):
                 runner.stdin.write(json.dumps(request) + "\n")
                 runner.stdin.flush()
                 while True:
-                    line = runner.stdout.readline()
-                    if not line:
-                        break
+                    remaining = max(0.1, deadline - time.monotonic())
+                    line = lines.get(timeout=remaining)
                     frame = json.loads(line)
                     frames.append(frame)
                     if frame.get("type") == "done" and frame.get("id") == request.get("id"):
@@ -76,7 +85,8 @@ class WindowsProcessSafety(unittest.TestCase):
             send_and_wait({"id": "guard", "code": "import sys; sys.audit('os.kill', 123, 0)"})
             runner.stdin.write(json.dumps({"type": "exit"}) + "\n")
             runner.stdin.flush()
-            remaining_output, errors = runner.communicate(timeout=5)
+            remaining = max(0.1, deadline - time.monotonic())
+            remaining_output, errors = runner.communicate(timeout=remaining)
             for line in remaining_output.splitlines():
                 if line.strip():
                     frames.append(json.loads(line))
@@ -94,6 +104,7 @@ class WindowsProcessSafety(unittest.TestCase):
             if runner.poll() is None:
                 runner.kill()
                 runner.wait(timeout=5)
+            drain_thread.join(timeout=1)
 
     def test_kv_liveness_preserves_live_owner_and_detects_owned_child_exit(self):
         namespace = {"__veyyon_display": lambda *args, **kwargs: None}
