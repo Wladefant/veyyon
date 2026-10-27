@@ -240,7 +240,6 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 				browser,
 				relay,
 				refCount: 0,
-				stealth: { browserSession: null, override: null },
 				ownerSessionId: opts.ownerSessionId,
 			};
 		} catch (err) {

@@ -9,9 +9,8 @@ import {
 	getModelMatchPreferences,
 	pickDefaultAvailableModel,
 	resolveAllowedModels,
-	resolveModelRoleValue,
+	resolveModelSelectorValue,
 } from "../config/model-resolver";
-import { DEFAULT_MODEL_SLOT } from "../config/model-roles";
 import { Settings } from "../config/settings";
 import { writeFrame } from "./frames";
 import type { ClientSessionState } from "./turns";
@@ -41,7 +40,7 @@ async function offeredModels(registry: ModelRegistry, settings: Settings | undef
 
 /**
  * The model a session created right now would run on, in the order the session
- * itself resolves it: the configured default role first, then the first
+ * itself resolves its configured `defaultModel` first, then the first
  * authenticated provider default in the allowed set. Stating anything else
  * makes the composer name a model the next turn will not use.
  */
@@ -51,11 +50,11 @@ function modelANewSessionWouldRun(
 	offered: Model<Api>[],
 ): Model<Api> | undefined {
 	const matchPreferences = getModelMatchPreferences(settings);
-	const role = resolveModelRoleValue(settings.getModelRole(DEFAULT_MODEL_SLOT), offered, {
+	const selected = resolveModelSelectorValue(settings.get("defaultModel"), offered, {
 		settings,
 		matchPreferences,
 	});
-	if (role.model) return role.model;
+	if (selected.model) return selected.model;
 	return pickDefaultAvailableModel(offered.filter(model => registry.hasConfiguredAuth(model)));
 }
 
