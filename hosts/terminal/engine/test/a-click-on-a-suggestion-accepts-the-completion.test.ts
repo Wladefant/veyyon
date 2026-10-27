@@ -104,7 +104,7 @@ async function mountComposer(options: { padRows?: number } = {}): Promise<Harnes
 			"/tmp",
 		),
 	);
-	// The host is what turns a debounced suggestion refresh into a repaint, and a
+	// The host is what turns a suggestion refresh into a repaint, and a
 	// row that was never painted cannot be hit-tested. Wiring it is not harness
 	// convenience: it is the contract interactive-mode holds.
 	editor.onAutocompleteUpdate = () => tui.requestRender();
@@ -264,7 +264,7 @@ describe("a click on a composer suggestion", () => {
 		const line = h.localRowOf("memory");
 
 		// Move the buffer off the prefix the popup was built for, without letting
-		// the debounced refresh run: accepting now would splice the completion
+		// the popup refresh: accepting now would splice the completion
 		// into a span the user is no longer typing.
 		h.editor.setText("unrelated text");
 		const press = parseSgrMouse(clickAt(line, 6));

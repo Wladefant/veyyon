@@ -31,13 +31,10 @@ class SlashProvider implements AutocompleteProvider {
 }
 
 async function settle(term: VirtualTerminal, tui: TUI): Promise<void> {
-	// Each keystroke arms Editor's autocomplete debounce (100ms) before the
-	// provider is re-queried. That debounce is NOT a pending frame — the engine
-	// owes nothing until it fires — so it is a real wall-clock wait and has to be
-	// slept through. Only the render it triggers is settled on, which removes the
-	// second half of the old fixed 250ms guess (debounce + throttle + jitter).
+	// A keystroke into the open popup re-queries the provider at once, and the
+	// answer lands on a microtask, so the render it requests is a pending frame
+	// the owner settles on.
 	await new Promise<void>(resolve => process.nextTick(resolve));
-	await Bun.sleep(120);
 	await settleFrames(term, tui);
 }
 
