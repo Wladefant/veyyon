@@ -117,6 +117,7 @@ describe("AgentSession eager task prelude", () => {
 		agentKind?: "main" | "sub",
 		enabledAgentNames: string[] = SPAWNABLE_AGENTS,
 		promptRefreshGate?: Promise<void>,
+		todoWireName?: string,
 	): Promise<Harness> {
 		const observedCalls: ObservedPromptCall[] = [];
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
@@ -159,6 +160,7 @@ describe("AgentSession eager task prelude", () => {
 			settings,
 		};
 		const todoTool = todoEnabled ? new TodoTool(toolSession) : undefined;
+		if (todoTool && todoWireName !== undefined) Object.assign(todoTool, { customWireName: todoWireName });
 		const tools: AgentTool[] = todoTool
 			? [todoTool as unknown as AgentTool, mockTaskTool, mockBashTool]
 			: [mockTaskTool, mockBashTool];
@@ -385,6 +387,43 @@ describe("AgentSession eager task prelude", () => {
 		const reminder = turn(observedCalls[0]).texts[0] ?? "";
 		expect(reminder).toContain("`delegate`");
 		expect(reminder).not.toContain("`task`");
+	});
+
+	it("cites the todo tool by its wire name in the eager todo reminder", async () => {
+		const { session, observedCalls } = await createHarness(
+			{ "agent.delegation": "off", "todo.enabled": true, "todo.eager": "preferred", "todo.reminders": false },
+			undefined,
+			undefined,
+			undefined,
+			SPAWNABLE_AGENTS,
+			undefined,
+			"plan_board",
+		);
+
+		await session.prompt("refactor the parser across modules");
+
+		expect(observedCalls).toHaveLength(1);
+		expect(turn(observedCalls[0]).roles).toEqual(["developer", "user"]);
+		const reminder = turn(observedCalls[0]).texts[0] ?? "";
+		expect(reminder).toContain("`plan_board`");
+		expect(reminder).not.toContain("`todo`");
+	});
+
+	/**
+	 * Delegation is resolved against the registered task tool, which a narrowed tool set keeps
+	 * registered while it stops offering it. A reminder to call a tool missing from the request's
+	 * tool list asks for a call the provider cannot accept.
+	 */
+	it("sends no eager reminder when the task tool is registered but not offered", async () => {
+		const { session, observedCalls } = await createHarness();
+		await session.setActiveToolsByName(["bash"]);
+
+		await session.prompt("refactor the parser across modules");
+
+		expect(observedCalls).toHaveLength(1);
+		expect(observedCalls[0]?.toolNames).toEqual(["bash"]);
+		expect(turn(observedCalls[0]).roles).toEqual(["user"]);
+		expect(turn(observedCalls[0]).texts).toEqual(["refactor the parser across modules"]);
 	});
 
 	/**

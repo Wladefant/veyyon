@@ -98,7 +98,6 @@ import { ToolChoiceQueue } from "@veyyon/kernel/session/tool-choice-queue";
 import { YieldQueue } from "@veyyon/kernel/session/yield-queue";
 import { errorMessage, logger, postmortem, prompt, Snowflake, withTimeout } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
-import { localCalendarDate } from "@veyyon/utils/local-time";
 import { startupMarker } from "@veyyon/utils/startup-marker";
 import type { ArgotSession } from "argot";
 import type { AdvisorConfig } from "../advisor";
@@ -156,7 +155,6 @@ import {
 	unresolvedSlashCommandName,
 } from "../slash-commands/helpers/parse";
 import { isLivePromptGate } from "../system-prompt-builder/gate-registry";
-import { enabledAgentNames, resolveDelegation } from "../task/agent-settings";
 import {
 	HELPER_IDS,
 	type HelperId,
@@ -183,7 +181,6 @@ import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
 import { normalizeModelContextImages } from "../utils/image-loading";
 import { describeAttachedImagesForTextModel } from "../utils/image-vision-fallback";
-import { normalizePromptPath } from "../utils/prompt-path";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import { formatAdvisorStatus } from "./advisor-stats";
 import { throwIfExtensionCommand, tryExecuteCustomCommand, tryExecuteExtensionCommand } from "./agent-session-commands";
@@ -245,7 +242,6 @@ import {
 	USER_INTERRUPT_LABEL,
 } from "./messages";
 import { computeNonMessageBreakdown, computeNonMessageTokens, takeHeldAtRestReading } from "./non-message-tokens";
-import { SESSION_STATE_MESSAGE_TYPE } from "./nudges";
 import { AdvisorRoster, type AdvisorRosterHost } from "./runtime/advisor-roster";
 import { CheckpointRuntime } from "./runtime/checkpoint-runtime";
 import { CompactionRuntime } from "./runtime/compaction-runtime";
@@ -257,7 +253,7 @@ import { FinalizeReminders } from "./runtime/finalize-reminders";
 import { HistoryRewrites } from "./runtime/history-rewrites";
 import { IrcDelivery } from "./runtime/irc-delivery";
 import { LoopGuards } from "./runtime/loop-guards";
-import { lastDeliveredBlock, MemoryContext } from "./runtime/memory-context";
+import { MemoryContext } from "./runtime/memory-context";
 import { MessagePersistence } from "./runtime/message-persistence";
 import { ModelHandoff } from "./runtime/model-handoff";
 import { ModelSelection, type SetModelOptions } from "./runtime/model-selection";
@@ -287,6 +283,7 @@ import { ToolActivation } from "./runtime/tool-activation";
 import { sameToolNames, ToolDiscovery } from "./runtime/tool-discovery";
 import { TtsrRuntime } from "./runtime/ttsr-runtime";
 import { removeAssistantMessageFromActiveContext, TurnContextCheck } from "./runtime/turn-context-check";
+import { TurnPreludes } from "./runtime/turn-preludes";
 import { TurnsInFlight } from "./runtime/turns-in-flight";
 import { UserExecutions } from "./runtime/user-executions";
 import { YieldTracker } from "./runtime/yield-tracker";
@@ -675,7 +672,7 @@ export class AgentSession {
 			this.#planMode.invalidateReference();
 			this.#resetAllAdvisorRuntimes();
 			this.#todo.syncFromBranch();
-			this.#restateSessionState();
+			this.#preludes.restateSessionState();
 		},
 		closeCodexProviderSessionsForHistoryRewrite: () => this.#providerSessions.closeCodexForHistoryRewrite(this.model),
 		whileDisconnectedFromAgent: run => this.#whileDisconnectedFromAgent(run),
@@ -837,6 +834,8 @@ export class AgentSession {
 	/** The todo board plus the eager prelude, mid-run nudge and stop-time
 	 *  reminder that keep it honest. Owns all todo state. */
 	#todo: TodoRuntime;
+	/** The session-state block and the eager delegate reminders a turn carries ahead of its message. */
+	readonly #preludes: TurnPreludes;
 	/** How hard the model thinks and who decided: the session override, the
 	 *  selector pin, the saved default, and `auto`. Owns all thinking state. */
 	#thinking: ThinkingRuntime;
@@ -1480,12 +1479,23 @@ export class AgentSession {
 			planModeEnabled: () => this.#planMode.enabled,
 			goalModeActive: () => this.#goalModeState?.enabled === true && this.#goalModeState.goal.status === "active",
 			activeToolNames: () => this.getActiveToolNames(),
-			eagerPreludeContext: () => this.#buildEagerPreludeContext(),
+			eagerPreludeContext: () => this.#preludes.eagerContext(),
 			consumeLastServedToolChoiceLabel: () => this.#toolChoiceQueue.consumeLastServedLabel(),
 			hasPendingAsyncWake: () => this.#ownedJobs.hasPendingWake(),
 			emitSessionEvent: event => this.#emitSessionEvent(event),
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 			promptGeneration: () => this.#promptGeneration,
+		});
+		this.#preludes = new TurnPreludes({
+			settings: this.settings,
+			sessionStore: this.sessionManager,
+			todo: this.#todo,
+			isSubagent: this.#config.agentKind === "sub",
+			messages: () => this.agent.state.messages,
+			appendMessage: message => this.agent.appendMessage(message),
+			tool: name => this.#toolRegistry.get(name),
+			activeToolNames: () => this.getActiveToolNames(),
+			planModeEnabled: () => this.#planMode.enabled,
 		});
 		// Runs synchronously on the stream, ahead of the queued `message_update`, so a guard abort
 		// lands on the delta that earned it.
@@ -2531,7 +2541,7 @@ export class AgentSession {
 			// delegate-via-tasks / phased-todo reminders on this auto-resumed turn. This runs
 			// at invocation (past the abort check below), so an aborted continuation queues
 			// nothing; scoped to this request via prependMessages, never the shared queue.
-			const eagerNudges = this.#buildPostCompactionEagerNudges();
+			const eagerNudges = this.#preludes.postCompactionNudges();
 			await this.#promptWithMessage(
 				{
 					role: "developer",
@@ -3770,54 +3780,6 @@ export class AgentSession {
 		};
 	}
 
-	/**
-	 * The date and working directory as they stand now, or null when the live context
-	 * already carries exactly this block.
-	 *
-	 * Deduped against the messages the next request sends, not against a record of what
-	 * was sent: a compaction, a shake or a rewind that drops the block, and a prompt that
-	 * is abandoned after building it, all leave a context without it, and the block is
-	 * stated again. Re-sending an unchanged block that is still there would grow the
-	 * context every turn for no new information.
-	 */
-	#buildSessionStateMessage(): CustomMessage | null {
-		const content = prompt
-			.render(sessionPrompts["session/session-state"].text, {
-				date: localCalendarDate(Date.now()),
-				cwd: shortenPath(normalizePromptPath(this.sessionManager.getCwd())),
-			})
-			.trim();
-		if (content === lastDeliveredBlock(this.agent.state.messages, SESSION_STATE_MESSAGE_TYPE)) return null;
-		return {
-			role: "custom",
-			customType: SESSION_STATE_MESSAGE_TYPE,
-			content,
-			display: false,
-			attribution: "agent",
-			timestamp: Date.now(),
-		};
-	}
-
-	/**
-	 * Put the session-state block back into the live context and the session file after a
-	 * compaction summarized it away. A compaction between the calls of one run has no prompt
-	 * after it to restate the date and working directory, so they go in here, ahead of the next
-	 * request, as a plain append: a step-boundary aside would force an extra model turn when the
-	 * compaction lands on the run's last turn.
-	 */
-	#restateSessionState(): void {
-		const message = this.#buildSessionStateMessage();
-		if (!message) return;
-		this.agent.appendMessage(message);
-		this.sessionManager.appendCustomMessageEntry(
-			SESSION_STATE_MESSAGE_TYPE,
-			message.content,
-			false,
-			undefined,
-			"agent",
-		);
-	}
-
 	#buildVibeModeMessage(): CustomMessage | null {
 		if (!this.#vibeModeState?.enabled) return null;
 		return {
@@ -4025,7 +3987,7 @@ export class AgentSession {
 		const eagerTodoPrelude =
 			!options?.synthetic && !hasPendingUserDirective ? this.#todo.eagerPrelude(expandedText) : undefined;
 		const eagerTaskPrelude =
-			!options?.synthetic && !hasPendingUserDirective ? this.#createEagerTaskPrelude(expandedText) : undefined;
+			!options?.synthetic && !hasPendingUserDirective ? this.#preludes.eagerTask(expandedText) : undefined;
 		const {
 			content: userContent,
 			images: normalizedImages,
@@ -4334,7 +4296,7 @@ export class AgentSession {
 			// away, so the two never both send one. Ahead of the memories for the same reason
 			// the memories are ahead of the question: the date and the working directory are
 			// what the model should already know when it reads either.
-			const sessionStateMessage = this.#buildSessionStateMessage();
+			const sessionStateMessage = this.#preludes.sessionState();
 			if (sessionStateMessage) messages.unshift(sessionStateMessage);
 
 			const agentPromptOptions = options?.toolChoice ? { toolChoice: options.toolChoice } : undefined;
@@ -5050,66 +5012,6 @@ export class AgentSession {
 	 * batch-call guidance that would steer toward a failing call shape when `task.batch`
 	 * is off (the flat single-spawn schema rejects `tasks`/`context`).
 	 */
-	#buildEagerPreludeContext(): { toolRefs: Record<string, string>; taskBatch: boolean } {
-		const wireName = (name: string): string => {
-			const tool = this.#toolRegistry.get(name);
-			return typeof tool?.customWireName === "string" ? tool.customWireName : name;
-		};
-		return {
-			toolRefs: { task: wireName(TOOL.task), todo: wireName(TOOL.todo) },
-			taskBatch: this.settings.get("agent.batch"),
-		};
-	}
-
-	#createEagerTaskPrelude(promptText: string | undefined): AgentMessage | undefined {
-		// Resolved against the agents the live task tool will actually accept: a
-		// reminder to delegate, in a session where every agent is disabled, is an
-		// instruction the model can only fail to follow.
-		if (!resolveDelegation(this.settings, enabledAgentNames(this.#toolRegistry.get(TOOL.task))).required) {
-			return undefined;
-		}
-		// Main agent only: agents keep `task` active (the parent only filters `todo`),
-		// so a salient delegate-reminder there would amplify nested fan-out. Gate on the
-		// resolved agent kind, not the id, so a top-level session with a custom `agentId`
-		// still gets the reminder.
-		if (this.#config.agentKind === "sub") return undefined;
-		if (this.#planMode.enabled) return undefined;
-		// First-message-only gates are skipped post-compaction (`promptText === undefined`),
-		// where there is no fresh user message to suppress the reminder for.
-		if (promptText !== undefined) {
-			if (this.agent.state.messages.some(m => m.role === "user")) return undefined;
-			const trimmed = promptText.trimEnd();
-			if (trimmed.endsWith("?") || trimmed.endsWith("!")) return undefined;
-		}
-		if (!this.getActiveToolNames().includes(TOOL.task)) return undefined;
-		return {
-			role: "custom",
-			customType: "eager-task-prelude",
-			content: prompt.render(turnControlPrompts["turn-control/eager-task"].text, this.#buildEagerPreludeContext()),
-			display: false,
-			attribution: "agent",
-			timestamp: Date.now(),
-		};
-	}
-
-	/**
-	 * Build the eager task/todo reminders to re-inject on the auto-continuation turn that
-	 * follows a compaction. The first-message preludes are the oldest messages, so
-	 * compaction summarizes them away and the agent silently loses the delegate-via-tasks
-	 * and phased-todo guidance mid-work; this re-asserts them, reminder-only (the todo
-	 * builder drops its forced tool_choice when `promptText` is undefined). Each builder
-	 * still applies its own mode / agent-kind / plan-mode / tool-active / surviving-todo
-	 * gates, so an empty array means nothing currently warrants a nudge.
-	 */
-	#buildPostCompactionEagerNudges(): AgentMessage[] {
-		const nudges: AgentMessage[] = [];
-		const todo = this.#todo.eagerPrelude(undefined);
-		if (todo) nudges.push(todo.message);
-		const task = this.#createEagerTaskPrelude(undefined);
-		if (task) nudges.push(task);
-		return nudges;
-	}
-
 	#setModelWithProviderSessionReset(model: Model): void {
 		const currentModel = this.model;
 		if (currentModel) {

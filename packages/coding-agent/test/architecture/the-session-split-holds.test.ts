@@ -112,8 +112,12 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-27 at 5967: the threshold checks before a prompt and between the provider
  * calls of a tool loop, and the switch to a larger-context model they share with the post-turn
  * check, moved into the `turn-context-check.ts` collaborator (-171).
+ * RE-MEASURED 2026-10-27 at 5730: starting a new transcript with `/new` or `/drop` and forking one
+ * with `/fork` moved into the `session-switch.ts` collaborator (-136 from 5963), then the session-state
+ * block and the eager delegate reminders a turn carries ahead of its message moved into the
+ * `turn-preludes.ts` collaborator (-98).
  */
-const RUNTIME_CEILING = 6_000;
+const RUNTIME_CEILING = 5_800;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -168,6 +172,7 @@ const COLLABORATORS = [
 	"tool-discovery.ts",
 	"ttsr-runtime.ts",
 	"turn-context-check.ts",
+	"turn-preludes.ts",
 	"turns-in-flight.ts",
 	"user-executions.ts",
 	"yield-tracker.ts",

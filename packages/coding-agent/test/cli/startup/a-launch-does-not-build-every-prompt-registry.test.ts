@@ -461,11 +461,17 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * its one runtime import (`session/agent-session-queue.ts`) is already here. Measured 2026-10-27
  * at 1512.
  *
+ * 1512 to 1513: `coding-agent/src/session/runtime/turn-preludes.ts`, the session collaborator that
+ * builds the session-state block and the eager delegate reminders a turn carries ahead of its
+ * message. It left `session/agent-session.ts`, already here, and its runtime imports (the session and
+ * turn-control prompt rows, `task/agent-settings.ts`, `utils/prompt-path.ts` and `@veyyon/utils`) are
+ * already here. Measured 2026-10-27 at 1513.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1512;
+const LAUNCH_REACH_CEILING = 1513;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
