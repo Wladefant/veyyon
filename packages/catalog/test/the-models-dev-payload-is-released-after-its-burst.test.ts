@@ -39,7 +39,8 @@ const FIXTURE_TIMEOUT_MS = 30_000;
 const HOLD_MS = 30_000;
 const STALE_MS = 3 * 60 * 60 * 1000;
 const SEEDED_AT_OFFSET = 1;
-const PAYLOAD = { sentinel: "models-dev-payload" };
+/** Keyed by a provider a descriptor maps: the overlay keeps only those from a payload it fetches. */
+const PAYLOAD = { anthropic: { sentinel: "models-dev-payload" } };
 
 let dir: string;
 
