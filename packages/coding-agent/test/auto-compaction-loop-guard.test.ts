@@ -97,6 +97,7 @@ function createCompactionRuntimeHarness(
 	options: {
 		seedBranch?: boolean;
 		failCompaction?: boolean;
+		pruneBreakdown?: ContextUsageBreakdown;
 	} = {},
 ) {
 	const state: TestHarnessState = {
@@ -189,16 +190,7 @@ function createCompactionRuntimeHarness(
 		pruneDiscoveredToolsAfterCompaction: async messages => {
 			state.pruneCallCount++;
 			state.prunedMessages = messages;
-			state.breakdown = {
-				contextWindow: 128000,
-				anchored: false,
-				usedTokens: 105000,
-				systemPromptTokens: 65000,
-				systemContextTokens: 5000,
-				skillsTokens: 2000,
-				systemToolsTokens: 18000,
-				messagesTokens: 15000,
-			};
+			if (options.pruneBreakdown) state.breakdown = options.pruneBreakdown;
 		},
 	};
 
@@ -241,7 +233,18 @@ function createCompactionRuntimeHarness(
 
 describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 	it("arms loop guard when auto-compaction leaves context >= threshold and names dominant split", async () => {
-		const { runtime, state } = createCompactionRuntimeHarness(105000, 128000);
+		const { runtime, state } = createCompactionRuntimeHarness(105000, 128000, {
+			pruneBreakdown: {
+				contextWindow: 128000,
+				anchored: false,
+				usedTokens: 105000,
+				systemPromptTokens: 65000,
+				systemContextTokens: 5000,
+				skillsTokens: 2000,
+				systemToolsTokens: 18000,
+				messagesTokens: 15000,
+			},
+		});
 
 		// The pre-prune snapshot makes history dominant; the prune callback replaces it
 		// with a snapshot where the system prompt is dominant.
