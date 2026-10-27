@@ -32,6 +32,7 @@
  */
 import { TranscriptContainer } from "@veyyon/coding-agent/modes/terminal/components/transcript/transcript-container";
 import { HomeAnchorLayout } from "@veyyon/coding-agent/modes/terminal/controllers/home-anchor-layout";
+import { Semaphore } from "@veyyon/coding-agent/task/parallel";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type Component, Container, CURSOR_MARKER, type Focusable, TUI } from "@veyyon/tui";
 import { countDestructivePaints } from "../../../../hosts/terminal/engine/test/helpers/destructive-paints";
@@ -258,6 +259,14 @@ const turnText = (turn: number): string[] => [
 ];
 
 /**
+ * Scenarios painting at once. A scenario spends most of its time waiting out the engine's frame
+ * throttle (a 30 fps cadence) between its seventy-odd frames, so the sweeps run their arms
+ * concurrently; each scenario holds a terminal of its own, and this bounds how many are alive.
+ */
+const SCENARIOS_AT_ONCE = 8;
+const scenarioSlots = new Semaphore(SCENARIOS_AT_ONCE);
+
+/**
  * Drive one shape and report what the engine wrote.
  *
  * The measurement window opens AFTER the lead turns, so a scenario is asking
@@ -265,6 +274,15 @@ const turnText = (turn: number): string[] => [
  * legitimate and is never counted.
  */
 export async function paintSim(shape: PaintShape): Promise<PaintReport> {
+	await scenarioSlots.acquire();
+	try {
+		return await paintScenario(shape);
+	} finally {
+		scenarioSlots.release();
+	}
+}
+
+async function paintScenario(shape: PaintShape): Promise<PaintReport> {
 	await theme();
 	const term = new VirtualTerminal(shape.width, shape.height, 20_000);
 	const paints = countDestructivePaints(term);
