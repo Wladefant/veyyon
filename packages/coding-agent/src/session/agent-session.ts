@@ -161,6 +161,7 @@ import type { CheckpointState, CompletedRewindState } from "../tools/fs/checkpoi
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
+import { webpExclusionForModel } from "../utils/image-loading";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import { formatAdvisorStatus } from "./advisor-stats";
 import { type EphemeralTurnArgs, type EphemeralTurnResult, runEphemeralTurn } from "./agent-session-ephemeral-turn";
@@ -3896,13 +3897,12 @@ export class AgentSession {
 					this,
 					{
 						autoResizeImages: this.settings.get("images.autoResize"),
+						excludeWebP: webpExclusionForModel(this.model),
 						useHashLines: resolveFileDisplayMode(this).hashLines,
 						snapshotStore: getFileSnapshotStore(this),
 					},
 				);
-				for (const fileMentionMessage of fileMentionMessages) {
-					messages.push(await this.#images.normalizeMessage(fileMentionMessage));
-				}
+				messages.push(...fileMentionMessages);
 			}
 
 			// Ahead of the user's message, not after it: the memories are what the model

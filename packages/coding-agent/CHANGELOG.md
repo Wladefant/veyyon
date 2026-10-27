@@ -84,6 +84,7 @@
 - A `session.memoryLimitGb` the host cannot enforce is reported once, at session start, instead of at the first spawned command.
 - The `task` brief and shared context escaped twice and a `yield` result sent as a JSON string are repaired once, before validation, so approval, hooks, the `tool_execution_*` events and the tool receive the same arguments ([#896](https://github.com/santhreal/veyyon/issues/896)).
 - Fixed a run that failed after one or more tool steps (a credential lookup or provider call that threw) being settled on its earlier tool-use reply, so a transient failure there is now retried and `session_stop` hooks receive the failure.
+- An @-mentioned image is encoded for the active model, so a model that cannot decode WebP (Ollama, llama.cpp, LM Studio and other `stb`-backed local servers) receives PNG or JPEG instead of WebP, and with `images.autoResize` off the mention goes through the same canonical re-encode as the read tool.
 
 ## [1.5.10] - 2026-10-25
 

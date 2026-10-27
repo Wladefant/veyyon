@@ -71,6 +71,10 @@ the mention stays in the transcript and is billed on every later request. A capp
 the lines it showed and the selector that pages the rest. A file over 5 MB, a binary file, or an
 image over 25 MB is not read: the message states the path and the reason. A path to a named pipe, a
 socket or a device node is not opened and not attached; the `@path` text stays in the prompt.
+A mentioned image goes through the encoder `read` uses: with `images.autoResize` on it is
+downscaled to the model bounds and the mention states its original size, with it off it is
+re-encoded at its own size, and a model that cannot decode WebP (Ollama, llama.cpp, LM Studio and
+other `stb`-backed local servers) receives PNG or JPEG.
 
 `tools.artifactSpillThreshold` bounds every model-visible result. `read` applies it directly to a
 file window, a structural summary, a directory listing, an archive listing, a notebook or converted

@@ -1,8 +1,8 @@
 /**
  * An image reaches the model in the form it reads: the images a tool addresses are the newest
- * message's, every image a prompt or a custom message carries is encoded for the active model, and a
- * text-only model reads a hidden description in the image's place, produced under the session's own
- * identity and saved where the session's `local://` resolves.
+ * message's, every image a prompt, a custom message or an @-mention carries is encoded for the active
+ * model, and a text-only model reads a hidden description in the image's place, produced under the
+ * session's own identity and saved where the session's `local://` resolves.
  *
  * WHY: the image normalization, the text-only description and the latest-attachment lookup moved out
  * of `AgentSession` into the `ImageAttachments` collaborator (`session/runtime/image-attachments.ts`).
@@ -14,15 +14,20 @@
  * session's telemetry, id, model string or `local://` root from the vision call all left every suite
  * green. Each case below fails on one of them.
  *
+ * An @-mentioned image went to the model as it was read: the mention holds its image in `files`,
+ * which the session's normalization never looked at, so a WebP file reached a model that cannot
+ * decode WebP. The two @-mention cases are the regression for that, one per auto-resize setting. The
+ * auto-resize cases pin the shared encoder the mention now uses: `images.autoResize` is honored, and a
+ * downscaled image arrives with a note mapping its size to the original.
+ *
  * Driven through a real `AgentSession`. The stand-ins are the agent's `prompt`, which records what
  * the session hands it instead of calling a provider, the vision call's `completeImpl`, and, where the
  * description's text is not the subject, the description itself.
  *
- * NOT CAUGHT: an @-mentioned image. Its message holds the image in `files`, not `content`, so
- * normalizing that message changes nothing and no case here can tell it from skipping it. What the
- * description says is owned by `image-vision-fallback.test.ts`; its order against the message by
- * `an-image-sent-to-a-text-only-model-arrives-with-its-description.test.ts`; the resize bounds by
- * `a-custom-message-image-enters-context-at-model-size.test.ts`.
+ * NOT CAUGHT: an @-mentioned file whose bytes do not decode goes to the model as read; nothing here
+ * pins that fallback. What the description says is owned by `image-vision-fallback.test.ts`; its
+ * order against the message by `an-image-sent-to-a-text-only-model-arrives-with-its-description.test.ts`;
+ * the resize bounds by `a-custom-message-image-enters-context-at-model-size.test.ts`.
  */
 import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as fs from "node:fs/promises";
@@ -61,6 +66,20 @@ async function redWebp(): Promise<ImageContent> {
 	return { type: "image", data: Buffer.from(bytes).toBase64(), mimeType: "image/webp" };
 }
 
+/** A red PNG of the given size, upscaled by the native encoder. */
+async function redPng(width: number, height: number): Promise<ImageContent> {
+	const bytes = await new Bun.Image(Buffer.from(RED_1X1_PNG.data, "base64"))
+		.resize(width, height, { filter: "nearest" })
+		.png()
+		.bytes();
+	return { type: "image", data: Buffer.from(bytes).toBase64(), mimeType: "image/png" };
+}
+
+async function size(image: ImageContent): Promise<{ width: number; height: number }> {
+	const metadata = await new Bun.Image(Buffer.from(image.data, "base64")).metadata();
+	return { width: metadata.width, height: metadata.height };
+}
+
 /** An image block whose bytes are never decoded, told apart by `data`. */
 function marker(data: string): ImageContent {
 	return { type: "image", data, mimeType: "image/png" };
@@ -82,6 +101,13 @@ function sentImages(sent: readonly AgentMessage[]): ImageContent[] {
 
 function descriptions(sent: readonly AgentMessage[]): AgentMessage[] {
 	return sent.filter(message => message.role === "custom" && message.customType === DESCRIPTION_TYPE);
+}
+
+/** The images of every @-mention the session handed the agent, which a mention holds in `files`. */
+function mentionedImages(sent: readonly AgentMessage[]): ImageContent[] {
+	return sent.flatMap(message =>
+		message.role === "fileMention" ? message.files.flatMap(file => (file.image ? [file.image] : [])) : [],
+	);
 }
 
 interface Harness {
@@ -244,6 +270,59 @@ describe("an image reaches the model in the form it reads", () => {
 			const mimeTypes = sentImages([last]).map(image => image.mimeType);
 			expect(mimeTypes).toHaveLength(1);
 			expect(["image/png", "image/jpeg"]).toContain(mimeTypes[0]);
+		});
+
+		for (const autoResize of [true, false]) {
+			it(`re-encodes an @-mentioned image out of WebP for a model that cannot decode it (autoResize ${autoResize})`, async () => {
+				const { session, sent } = await createHarness({
+					model: stbModel(),
+					settings: { "images.autoResize": autoResize },
+				});
+				const webp = await redWebp();
+				await fs.writeFile(path.join(tempDir.path(), "pic.webp"), Buffer.from(webp.data, "base64"));
+
+				await session.prompt("what is in @pic.webp");
+
+				const mimeTypes = mentionedImages(sent).map(image => image.mimeType);
+				expect(mimeTypes).toHaveLength(1);
+				expect(["image/png", "image/jpeg"]).toContain(mimeTypes[0]);
+			});
+		}
+	});
+
+	describe("an @-mentioned image follows the auto-resize setting", () => {
+		/** The one image a mention of a 3000x1000 PNG attached, with the text the mention gave it. */
+		async function mentionWide(autoResize: boolean): Promise<{ image: ImageContent; content: string }> {
+			const { session, sent } = await createHarness({
+				model: sonnet({ input: ["text", "image"] }),
+				settings: { "images.autoResize": autoResize },
+			});
+			const wide = await redPng(3000, 1000);
+			await fs.writeFile(path.join(tempDir.path(), "wide.png"), Buffer.from(wide.data, "base64"));
+
+			await session.prompt("what is in @wide.png");
+
+			const files = sent.flatMap(message => (message.role === "fileMention" ? message.files : []));
+			const image = files.length === 1 ? files[0]?.image : undefined;
+			if (!image) throw new Error("Expected one mentioned image");
+			return { image, content: files[0]?.content ?? "" };
+		}
+
+		it("is downscaled, with a note mapping its size to the original", async () => {
+			const file = await mentionWide(true);
+			const shown = await size(file.image);
+
+			expect(Math.max(shown.width, shown.height)).toBeLessThan(3000);
+			expect(file.content).toStartWith(
+				`[Image: original 3000x1000, displayed at ${shown.width}x${shown.height}. Multiply coordinates by `,
+			);
+		});
+
+		it("keeps its size, with no note, while auto-resize is off", async () => {
+			const file = await mentionWide(false);
+
+			expect(await size(file.image)).toEqual({ width: 3000, height: 1000 });
+			expect(file.content).toBe("");
 		});
 	});
 

@@ -18,7 +18,7 @@ import type { FileMentionMessage } from "../session/messages";
 import { formatHeadTruncationNotice, truncateHead, truncateHeadBytes } from "../session/streaming-output";
 import { type InlinePricingSource, inlineBudgetFor } from "../tools/core/output-artifact";
 import { resolveReadPath } from "../tools/core/path-utils";
-import { formatDimensionNote, resizeImage } from "./image-resize";
+import { encodeImageForModel } from "./image-loading";
 
 /** Regex to match @filepath patterns in text */
 const FILE_MENTION_REGEX = /@(?:"([^"]+)"|'([^']+)'|([^\s@]+))/g;
@@ -204,7 +204,13 @@ export async function generateFileMentionMessages(
 	filePaths: string[],
 	cwd: string,
 	pricing: InlinePricingSource,
-	options?: { autoResizeImages?: boolean; useHashLines?: boolean; snapshotStore?: SnapshotStore },
+	options?: {
+		autoResizeImages?: boolean;
+		/** Encode mentioned images out of WebP, for a model that cannot decode it. */
+		excludeWebP?: boolean;
+		useHashLines?: boolean;
+		snapshotStore?: SnapshotStore;
+	},
 ): Promise<AgentMessage[]> {
 	if (filePaths.length === 0) return [];
 
@@ -249,19 +255,15 @@ export async function generateFileMentionMessages(
 				const base64Content = buffer.toBase64();
 				let image: ImageContent = { type: "image", mimeType, data: base64Content };
 				let dimensionNote: string | undefined;
-
-				if (autoResizeImages) {
-					try {
-						const resized = await resizeImage({ type: "image", data: base64Content, mimeType });
-						dimensionNote = formatDimensionNote(resized);
-						image = {
-							type: "image",
-							mimeType: resized.mimeType,
-							data: resized.data,
-						};
-					} catch {
-						image = { type: "image", mimeType, data: base64Content };
-					}
+				try {
+					const encoded = await encodeImageForModel(base64Content, {
+						autoResize: autoResizeImages,
+						excludeWebP: options?.excludeWebP,
+					});
+					image = { type: "image", mimeType: encoded.mimeType, data: encoded.data };
+					dimensionNote = encoded.dimensionNote;
+				} catch {
+					// Bytes the encoder cannot decode go to the model as they were read.
 				}
 
 				files.push({ path: resolvedPath, content: dimensionNote ?? "", image });
