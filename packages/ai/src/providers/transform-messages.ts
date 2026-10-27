@@ -984,7 +984,7 @@ type ToolResultPairingModel = Pick<Model, "api" | "provider" | "id">;
 /** Native Codex history is serialized from provider payloads, so the wire serializer owns pairing. */
 function hasNativeCodexHistoryPayload(msg: Message, model: ToolResultPairingModel): boolean {
 	if (model.api !== "openai-codex-responses") return false;
-	const payload = msg.providerPayload;
+	const payload = "providerPayload" in msg ? msg.providerPayload : undefined;
 	if (!isRecord(payload) || payload.type !== "openaiResponsesHistory" || !Array.isArray(payload.items)) return false;
 	if (msg.role === "assistant") {
 		return (

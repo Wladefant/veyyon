@@ -217,6 +217,7 @@ describe("native ChatGPT tool history pairing", () => {
 			model: model.id,
 			content: [{ type: "toolCall", id: "call_aborted", name: "bash", arguments: { command: "ls" } }],
 			stopReason: "aborted",
+			usage: { ...zeroCost, totalTokens: 0, cost: { ...zeroCost, total: 0 } },
 			timestamp: 1000,
 		} as AssistantMessage;
 		const context: Context = {
