@@ -60,15 +60,27 @@ class WindowsProcessSafety(unittest.TestCase):
             text=True, creationflags=FLAGS,
         )
         try:
-            requests = [
-                {"id": "nonzero", "code": "import sys; sys.audit('os.kill', 123, 15)"},
-                {"id": "guard", "code": "import sys; sys.audit('os.kill', 123, 0)"},
-                {"type": "exit"},
-            ]
-            output, errors = runner.communicate(
-                "".join(json.dumps(request) + "\n" for request in requests), timeout=15,
-            )
-            frames = [json.loads(line) for line in output.splitlines()]
+            frames = []
+            def send_and_wait(request):
+                runner.stdin.write(json.dumps(request) + "\n")
+                runner.stdin.flush()
+                while True:
+                    line = runner.stdout.readline()
+                    if not line:
+                        break
+                    frame = json.loads(line)
+                    frames.append(frame)
+                    if frame.get("type") == "done" and frame.get("id") == request.get("id"):
+                        break
+            send_and_wait({"id": "nonzero", "code": "import sys; sys.audit('os.kill', 123, 15)"})
+            send_and_wait({"id": "guard", "code": "import sys; sys.audit('os.kill', 123, 0)"})
+            runner.stdin.write(json.dumps({"type": "exit"}) + "\n")
+            runner.stdin.flush()
+            remaining_output, errors = runner.communicate(timeout=5)
+            for line in remaining_output.splitlines():
+                if line.strip():
+                    frames.append(json.loads(line))
+            output = "\n".join(json.dumps(f) for f in frames)
             failures = [frame for frame in frames if frame.get("type") == "error"]
             self.assertTrue(any(
                 frame.get("type") == "done" and frame.get("id") == "nonzero"
