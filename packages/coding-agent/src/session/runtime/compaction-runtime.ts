@@ -695,7 +695,7 @@ export class CompactionRuntime {
 			if (deadEndWarning) {
 				this.#session.emitNotice("warning", deadEndWarning, "compaction");
 			}
-			this.#evaluateAutoCompactionGuard(reason);
+			this.#evaluateAutoCompactionGuard();
 			return compactionCheckOutcome(continuationScheduled, progress.deadEnd);
 		} catch (error) {
 			this.#rollbackCompactionTailElisions(preparation);
@@ -951,8 +951,7 @@ export class CompactionRuntime {
 		);
 	}
 
-	#evaluateAutoCompactionGuard(reason: AutoCompactionReason): void {
-		if (reason === "idle") return;
+	#evaluateAutoCompactionGuard(): void {
 		const model = this.#session.model;
 		const contextWindow = model?.contextWindow ?? 0;
 		if (contextWindow <= 0) return;

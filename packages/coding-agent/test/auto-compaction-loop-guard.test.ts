@@ -276,6 +276,27 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 		expect(compactionWarnings[0].message).toContain("10,000");
 	});
 
+	it("arms the loop guard after a successful idle compaction", async () => {
+		const { runtime, state } = createCompactionRuntimeHarness(105000, 128000);
+		state.breakdown = {
+			contextWindow: 128000,
+			anchored: false,
+			usedTokens: 105000,
+			systemPromptTokens: 65000,
+			systemContextTokens: 5000,
+			skillsTokens: 2000,
+			systemToolsTokens: 18000,
+			messagesTokens: 15000,
+		};
+		state.currentTokens = 105000;
+
+		await runtime.runAutoCompaction("idle", false);
+
+		expect(state.pruneCallCount).toBe(1);
+		expect(runtime.isAutoCompactionSuppressed()).toBe(true);
+		expect(state.notices.some(notice => notice.message.includes("system prompt"))).toBe(true);
+	});
+
 	it("identifies tool definitions as dominant split when tool tokens are largest", async () => {
 		const { runtime, state } = createCompactionRuntimeHarness(108000, 128000);
 
