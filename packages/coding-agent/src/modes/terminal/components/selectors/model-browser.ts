@@ -67,9 +67,9 @@ export interface DefaultModelAssignment {
 }
 
 /**
- * Resolve the configured `defaultModel` chain against `allModels`: the first
- * entry that matches, with its effort. Shared by the /models hub and the alt+p
- * session picker.
+ * Resolve the configured `defaultModel` chain against `models`: the first
+ * entry that matches, with its effort. Shared by the /models hub, which passes
+ * the catalog, and the alt+p session picker, which passes the models it lists.
  *
  * An unset default, or one that matches nothing, gets no assignment: the hub
  * shows no default rather than advertise a model nobody picked. The effort is
@@ -78,9 +78,9 @@ export interface DefaultModelAssignment {
  */
 export function resolveDefaultModelAssignment(
 	settings: Settings,
-	allModels: ReadonlyArray<Model>,
+	models: ReadonlyArray<Model>,
 ): DefaultModelAssignment | undefined {
-	const resolved = resolveModelSelectorValue(settings.get("defaultModel"), allModels, {
+	const resolved = resolveModelSelectorValue(settings.get("defaultModel"), models, {
 		settings,
 		matchPreferences: getModelMatchPreferences(settings),
 	});

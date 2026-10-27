@@ -161,8 +161,11 @@ export class ModelPickerComponent implements Component {
 			}
 		}
 
-		const allModels = this.#scopedModels.length > 0 ? models : this.#registry.getAll();
-		const defaultModel = resolveDefaultModelAssignment(this.#settings, allModels);
+		// The default ranks and marks a listed row, so it resolves against the listed models: the set a
+		// session started now resolves `defaultModel` against. The whole catalog is every provider's
+		// build, which was most of the picker's first open, and could resolve the default to a model
+		// the list does not hold while startup picks a listed one.
+		const defaultModel = resolveDefaultModelAssignment(this.#settings, models);
 		const storage = AgentStorage.forAgentDir(this.#settings.getAgentDir());
 		const mruOrder = storage?.getModelUsageOrder() ?? [];
 		this.#modelItems = buildBrowserItems(models);

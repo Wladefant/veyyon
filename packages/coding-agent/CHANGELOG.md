@@ -19,6 +19,7 @@
 - The hidden next-turn message queue moved out of `AgentSession` into the `NextTurnMessages` session collaborator, with no change to when a queued message reaches a turn or the order it arrives in.
 - Model switching moved out of `AgentSession` into the `ModelSelection` session collaborator, with no change to what a saved switch, a session-only switch or the Ctrl+P cycle records, persists or pins.
 - Esc repaints a frame sooner when it arms no double-press gesture: closing a selector takes 4 ms instead of 35 ms with the kitty keyboard protocol and 54 ms instead of 86 ms without.
+- The `/model` picker resolves the default model against the models it lists, as startup does, so its first open paints in 4 ms instead of 41 ms and the default mark lands on the model a new session starts on.
 
 ### Fixed
 
