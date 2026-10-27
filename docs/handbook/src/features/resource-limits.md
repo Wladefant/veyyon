@@ -134,8 +134,10 @@ kills. Nothing throttles. The settings row and the startup warning state this, a
 warning appears on any platform where no backend works. A configured limit never fails silently:
 if the group cannot be created, new commands are refused rather than run uncapped.
 
-Changing `session.cpuLimitCores` mid-session takes effect on the next command: the live quota is
-rewritten, and setting it back to 0 lifts it.
+A change to any `session.*` limit mid-session applies to the live budget at once, before the next
+command: the CPU quota, `memory.max` and `pids.max` on an existing group are rewritten, a raised
+write budget lifts its refusal, and setting a limit back to 0 lifts it. A process started after
+the change, such as a new eval kernel or MCP server, joins a group that holds the new value.
 
 ## Example
 

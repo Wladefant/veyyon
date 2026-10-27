@@ -91,6 +91,8 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * left as the `next-turn-messages.ts` collaborator (-73).
  * RE-MEASURED 2026-10-26 at 6962: the saved switch, the session-only switch and the Ctrl+P cycle
  * left as the `model-selection.ts` collaborator with the scoped models (-180).
+ * RE-MEASURED 2026-10-27 at 6930: the session budget registration, its id-change rekey and its
+ * settings listener left as `bindSessionBudget` in `cpu-limit.ts` (-32).
  */
 const RUNTIME_CEILING = 7_000;
 

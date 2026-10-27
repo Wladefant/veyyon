@@ -21,6 +21,7 @@
 - Esc repaints a frame sooner when it arms no double-press gesture: closing a selector takes 4 ms instead of 35 ms with the kitty keyboard protocol and 54 ms instead of 86 ms without.
 - The `/model` picker resolves the default model against the models it lists, as startup does, so its first open paints in 4 ms instead of 41 ms and the default mark lands on the model a new session starts on.
 - Views that load after the key that opens them, such as the Extension Control Center, paint up to 30 ms sooner.
+- `/cpu-limit status` reports the kill policy in force: `kill on sustained saturation` for the CPU budget and `kill when exceeded` for the write budget.
 
 ### Fixed
 
@@ -64,6 +65,9 @@
 - `/mcp add` and `/mcp remove` in the terminal refuse a plain `scope`, `project`, `user` or `transport`, in any letter case, with the sentence print mode and ACP give instead of `Unknown argument`, and the terminal `/mcp smithery-search` refuses a trailing `scope` as it already refused `project` and `user`.
 - A whole-file read of a large source file no longer freezes the terminal while tree-sitter summarizes it: the parse runs off the event loop, so on an 18,000-line TypeScript file the longest event-loop stall falls from 69 ms to 1.4 ms, and four 6,000-line files read in one batch finish in 24 ms instead of 95 ms.
 - Shell commands that start together at the beginning of a session share one shell snapshot and one persistent shell instead of each creating a snapshot, one of which stayed in the tmp directory after exit, and a snapshot still being created at exit is stopped and removed.
+- A mid-session change to `session.memoryLimitGb`, `session.maxProcesses`, `session.writeBudgetGb` or `session.writeBudgetKill` applies to the live session budget at once instead of at the next bash, launch, write or edit call, so an eval kernel or MCP server started in between no longer joins a group with the old caps.
+- A disposed session no longer registers a new budget when its session manager later starts another conversation.
+- A `session.memoryLimitGb` the host cannot enforce is reported once, at session start, instead of at the first spawned command.
 
 ## [1.5.10] - 2026-10-25
 

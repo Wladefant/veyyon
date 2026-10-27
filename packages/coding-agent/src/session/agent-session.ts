@@ -275,7 +275,7 @@ import {
 // The accounting, not the drawing. It used to be imported from `modes/`, which put the terminal UI
 // on the session engine's graph and cost the layering gate a standing exception.
 import { computeStoredMessagesTokens } from "./context-usage";
-import { initSessionCpuLimit, rekeySessionCpuLimit, sessionCpuLimit } from "./cpu-limit";
+import { bindSessionBudget } from "./cpu-limit";
 import {
 	type CustomMessage,
 	type CustomMessagePayload,
@@ -1238,36 +1238,17 @@ export class AgentSession {
 		this.#slashCommands = config.slashCommands ?? [];
 		this.#skills = config.skills ?? [];
 		this.#operatorNotices = config.operatorNotices ?? new OperatorNotices(stderrNoticeSink);
-		// Per-session CPU budget. Probed once per process, registered always
-		// (even at 0 cores) so a mid-session change to session.cpuLimitCores
-		// activates enforcement, and warned about here when a configured limit
-		// cannot be enforced on this host. Cleanup rides the "session"-scoped
-		// owned-resource disposers in dispose().
-		let cpuLimitSessionId = this.sessionManager.getSessionId();
-		if (cpuLimitSessionId) {
-			void initSessionCpuLimit({
-				sessionId: cpuLimitSessionId,
-				cores: this.settings.get("session.cpuLimitCores"),
-				kill: this.settings.get("session.cpuLimitKill"),
+		// The session budget: registered under the current id with every
+		// Resources limit, following id changes and live setting changes.
+		// Cleanup of the limiter rides the "session"-scoped owned-resource
+		// disposers in dispose().
+		this.#listenerReleases.push(
+			bindSessionBudget({
+				sessionStore: this.sessionManager,
+				settings: this.settings,
 				onNotice: text => this.#operatorNotices.warn("cpu", text),
-			}).catch(error => logger.warn("CPU limit init failed", { error: errorMessage(error) }));
-		}
-		// `/new`, `/resume`, a fork and a branch mint a fresh id on this same live
-		// process. Spawn sites resolve the limiter by the current id, so without
-		// this the budget stays registered under the conversation the operator
-		// just left and the one they are in now spawns unlimited.
-		this.sessionManager.onSessionIdChanged(nextSessionId => {
-			if (!nextSessionId) return;
-			const previous = cpuLimitSessionId;
-			cpuLimitSessionId = nextSessionId;
-			if (previous && rekeySessionCpuLimit(previous, nextSessionId)) return;
-			void initSessionCpuLimit({
-				sessionId: nextSessionId,
-				cores: this.settings.get("session.cpuLimitCores"),
-				kill: this.settings.get("session.cpuLimitKill"),
-				onNotice: text => this.#operatorNotices.warn("cpu", text),
-			}).catch(error => logger.warn("CPU limit re-init failed", { error: errorMessage(error) }));
-		});
+			}),
+		);
 		this.#customCommands = config.customCommands ?? [];
 		// Resolve the wire service-tier per request so the Fireworks Priority
 		// toggle scopes priority to Fireworks alone, without mutating the shared
@@ -1607,19 +1588,6 @@ export class AgentSession {
 			// survive disable/re-enable and silence the fresh runway.
 			if ((path === "todo.reminders" || path === "todo.enabled") && value === false) {
 				this.#todo.onRemindersDisabled();
-			}
-			// The limiter used to learn about a changed budget only when the bash
-			// or launch tool next ran, because those two are the only spawn paths
-			// that call `update()` themselves. Everything else (eval kernels, MCP
-			// servers, hook and custom-tool `exec`) adopts into the group without
-			// touching the quota, so lowering the limit did nothing to work
-			// already running and `/cpu-limit remove` did not lift a live cap
-			// until the operator happened to run a command.
-			if (path === "session.cpuLimitCores" || path === "session.cpuLimitKill") {
-				const limiter = sessionCpuLimit(this.sessionManager.getSessionId());
-				void limiter
-					?.update(this.settings.get("session.cpuLimitCores"), this.settings.get("session.cpuLimitKill"))
-					.catch(error => logger.warn("CPU limit update failed", { error: errorMessage(error) }));
 			}
 			if (!rebuildsThePrompt(path)) return;
 			this.#promptRefresh = this.#promptRefresh

@@ -31,6 +31,7 @@
 - Esc repaints a frame sooner when it arms no double-press gesture: closing a selector takes 4 ms instead of 35 ms with the kitty keyboard protocol and 54 ms instead of 86 ms without.
 - The `/model` picker resolves the default model against the models it lists, as startup does, so its first open paints in 4 ms instead of 41 ms and the default mark lands on the model a new session starts on.
 - Views that load after the key that opens them, such as the Extension Control Center, paint up to 30 ms sooner.
+- `/cpu-limit status` reports the kill policy in force: `kill on sustained saturation` for the CPU budget and `kill when exceeded` for the write budget.
 - Cursor and GitLab Duo tool results, GitLab Duo goal prompts and the Antigravity and Google Cloud token refreshes each run through one shared implementation; no user-facing change.
 - The shell's built-in output filters compile their output-stage regular expressions the first time each filter applies instead of when the registry loads; a filter file loaded from config still rejects a bad regular expression at load.
 - An `Editor` asks its autocomplete provider again on the edit that changes an open suggestion list instead of 100 ms later, so typing `/mo` narrows the slash command list in 3 ms instead of 105 ms and an `@` file list follows each keystroke one frame later instead of after the timer.
@@ -81,6 +82,9 @@
 - `/mcp add` and `/mcp remove` in the terminal refuse a plain `scope`, `project`, `user` or `transport`, in any letter case, with the sentence print mode and ACP give instead of `Unknown argument`, and the terminal `/mcp smithery-search` refuses a trailing `scope` as it already refused `project` and `user`.
 - A whole-file read of a large source file no longer freezes the terminal while tree-sitter summarizes it: the parse runs off the event loop, so on an 18,000-line TypeScript file the longest event-loop stall falls from 69 ms to 1.4 ms, and four 6,000-line files read in one batch finish in 24 ms instead of 95 ms.
 - Shell commands that start together at the beginning of a session share one shell snapshot and one persistent shell instead of each creating a snapshot, one of which stayed in the tmp directory after exit, and a snapshot still being created at exit is stopped and removed.
+- A mid-session change to `session.memoryLimitGb`, `session.maxProcesses`, `session.writeBudgetGb` or `session.writeBudgetKill` applies to the live session budget at once instead of at the next bash, launch, write or edit call, so an eval kernel or MCP server started in between no longer joins a group with the old caps.
+- A disposed session no longer registers a new budget when its session manager later starts another conversation.
+- A `session.memoryLimitGb` the host cannot enforce is reported once, at session start, instead of at the first spawned command.
 - A required tool call under an in-band tool dialect is asked for in the conversation text instead of being sent as a native `tool_choice` the dialect never reads.
 - Shake and duplicate elision leave a tool result, block or truncated middle in place when its marker is not smaller than it, and size a captioned image result by its caption, so `/shake` no longer reports a kept image as freed tokens.
 - A required tool call on a request that cannot force it (a model or host that rejects a forced `tool_choice`, a host without `tool_choice`, a remembered rejection, Ollama, Cursor, Devin, GitLab Duo, and Claude on Antigravity) is asked for in the request text, instead of the tool only being offered.
