@@ -117,12 +117,23 @@ export async function serveTerminalControl(
 	// Crash window: from the ack until `target.deliver` runs, the message exists only in this process.
 	// A crash or close in that window loses it, although the daemon already holds the ack. The window
 	// is the time the terminal needs to reach the message on the chain.
-	const deliveries = new Map<string, { status: DeliveryState; watchers: Set<net.Socket> }>();
+	const deliveries = new Map<
+		string,
+		{ status: DeliveryState; watchers: Set<net.Socket>; promise?: Promise<string> }
+	>();
+	const evictOldDeliveries = (): void => {
+		for (const [oldestId, oldest] of deliveries) {
+			if (deliveries.size <= MAX_REMEMBERED_DELIVERIES) break;
+			if (oldest.status.state !== "pending") deliveries.delete(oldestId);
+		}
+	};
 	// One chain for acked and plain deliveries: messages reach the terminal in the order they were accepted.
 	let deliveryChain: Promise<void> = Promise.resolve();
 	let pendingDeliveries = 0;
 	const announceDelivery = (messageId: string, watchers: Iterable<net.Socket>, status: DeliveryState): void => {
-		for (const socket of watchers) {
+		const targets = new Set<net.Socket>(watchers);
+		for (const socket of subscribers) targets.add(socket);
+		for (const socket of targets) {
 			send(socket, { event: { kind: "delivery", sessionId: publishedSessionId, messageId, ...status } });
 		}
 	};
@@ -161,22 +172,33 @@ export async function serveTerminalControl(
 		messageId: string,
 		text: string,
 		mode: "auto" | "steer" | "followUp",
-	): { accepted: true; messageId: string; state: DeliveryState["state"] } => {
+	): { accepted: true; messageId: string; state: DeliveryState["state"]; outcome?: string; error?: string } => {
 		const known = deliveries.get(messageId);
 		if (known) {
-			if (known.status.state === "pending") known.watchers.add(socket);
-			return { accepted: true, messageId, state: known.status.state };
+			if (known.status.state === "pending") {
+				known.watchers.add(socket);
+				return { accepted: true, messageId, state: "pending" };
+			}
+			send(socket, { event: { kind: "delivery", sessionId: publishedSessionId, messageId, ...known.status } });
+			return {
+				accepted: true,
+				messageId,
+				state: known.status.state,
+				...(known.status.state === "delivered" ? { outcome: known.status.outcome } : { error: known.status.error }),
+			};
 		}
 		if (pendingDeliveries >= MAX_PENDING_DELIVERIES) {
 			throw new Error("Terminal busy: too many deliveries pending; retry later");
 		}
-		const record = { status: { state: "pending" } as DeliveryState, watchers: new Set([socket]) };
+		const deliveryPromise = runDelivery(sessionId, text, mode);
+		const record = {
+			status: { state: "pending" } as DeliveryState,
+			watchers: new Set([socket]),
+			promise: deliveryPromise,
+		};
 		deliveries.set(messageId, record);
-		for (const [oldestId, oldest] of deliveries) {
-			if (deliveries.size <= MAX_REMEMBERED_DELIVERIES) break;
-			if (oldest.status.state !== "pending") deliveries.delete(oldestId);
-		}
-		void runDelivery(sessionId, text, mode).then(
+		evictOldDeliveries();
+		void deliveryPromise.then(
 			outcome => {
 				record.status = { state: "delivered", outcome };
 			},
@@ -201,6 +223,9 @@ export async function serveTerminalControl(
 			clearTimeout(authDeadline);
 			sockets.delete(socket);
 			subscribers.delete(socket);
+			for (const record of deliveries.values()) {
+				record.watchers.delete(socket);
+			}
 			if (!sockets.size) disarmRefresh();
 			if (!subscribers.size) stopEvents();
 		});
@@ -234,18 +259,41 @@ export async function serveTerminalControl(
 						}
 						let result: unknown;
 						switch (request.op) {
-							case "subscribe":
+							case "subscribe": {
 								subscribers.add(socket);
 								startEvents();
+								const fullHistory = target.history();
+								let entries = fullHistory.slice(-HISTORY_FRAME_ENTRIES);
+								if (typeof request.cursor === "string" && request.cursor) {
+									const cursorIndex = fullHistory.findIndex(entry => entry.entryId === request.cursor);
+									if (cursorIndex >= 0) {
+										entries = fullHistory.slice(cursorIndex + 1);
+									}
+								}
 								send(socket, {
 									event: {
 										kind: "history",
 										sessionId: publishedSessionId,
-										entries: target.history().slice(-HISTORY_FRAME_ENTRIES),
+										entries,
 									},
 								});
+								for (const [messageId, record] of deliveries) {
+									if (record.status.state === "pending") {
+										record.watchers.add(socket);
+									} else {
+										send(socket, {
+											event: {
+												kind: "delivery",
+												sessionId: publishedSessionId,
+												messageId,
+												...record.status,
+											},
+										});
+									}
+								}
 								result = true;
 								break;
+							}
 							case "deliver":
 								if (
 									typeof request.text !== "string" ||
@@ -262,6 +310,44 @@ export async function serveTerminalControl(
 									)
 										throw new Error("Invalid delivery");
 									result = acceptDelivery(socket, request.sessionId, request.messageId, request.text, request.mode);
+									break;
+								}
+								if (typeof request.messageId === "string" && request.messageId) {
+									if (request.messageId.length > 128) throw new Error("Invalid delivery");
+									const known = deliveries.get(request.messageId);
+									if (known) {
+										if (known.status.state === "delivered") {
+											result = known.status.outcome;
+											break;
+										}
+										if (known.status.state === "failed") {
+											throw new Error(known.status.error);
+										}
+										if (known.promise) {
+											result = await known.promise;
+											break;
+										}
+									}
+									const deliveryPromise = runDelivery(request.sessionId, request.text, request.mode);
+									const record = {
+										status: { state: "pending" } as DeliveryState,
+										watchers: new Set<net.Socket>(),
+										promise: deliveryPromise,
+									};
+									deliveries.set(request.messageId, record);
+									evictOldDeliveries();
+									void deliveryPromise.then(
+										outcome => {
+											record.status = { state: "delivered", outcome };
+										},
+										error => {
+											record.status = { state: "failed", error: String(error) };
+										},
+									).then(() => {
+										announceDelivery(request.messageId, record.watchers, record.status);
+										record.watchers.clear();
+									});
+									result = await deliveryPromise;
 									break;
 								}
 								result = await runDelivery(request.sessionId, request.text, request.mode);

@@ -139,6 +139,9 @@ export function startTerminalControl(mode: InteractiveMode): Promise<() => void>
 			let previous = history();
 			let seen = new Set(previous.map(entry => entry.entryId));
 			let active = mode.session.isStreaming;
+			if (active) {
+				listener({ kind: "streaming", sessionId, active: true });
+			}
 			// Observe persisted owner entries, never JSONL or uncommitted provider deltas.
 			// An unchanged journal costs only two identity reads, not a transcript copy or expansion.
 			const timer = setInterval(() => {
