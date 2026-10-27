@@ -393,6 +393,7 @@ describe("terminal-control-transport", () => {
 			expect(stat.mode & 0o777).toBe(0o600);
 			const processUid = process.getuid?.();
 			expect(processUid).toBeDefined();
+			if (processUid === undefined) throw new Error("The current process uid is unavailable");
 			expect(stat.uid).toBe(processUid);
 		});
 	}
