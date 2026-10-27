@@ -206,12 +206,12 @@ describe("speech transport postSpeechRequest", () => {
 			}
 			return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
 		};
-		await expect(
-			postSpeechRequest(testModel, "/audio/speech", { input: "hello" }, "mp3", {
-				apiKey: "test-key",
-				fetch: fetchImpl,
-				signal: controller.signal,
-			}),
-		).rejects.toThrow();
+		const failure = await postSpeechRequest(testModel, "/audio/speech", { input: "hello" }, "mp3", {
+			apiKey: "test-key",
+			fetch: fetchImpl,
+			signal: controller.signal,
+		}).catch((error: unknown) => error);
+		expect(failure).toBeInstanceOf(DOMException);
+		expect((failure as DOMException).name).toBe("AbortError");
 	});
 });

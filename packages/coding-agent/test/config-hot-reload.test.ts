@@ -264,100 +264,100 @@ describe("config hot reload", () => {
 	});
 
 	it("re-resolves the advisor runtime model on /reload-config without rebinding Main or existing forks", async () => {
-			const dir = dirs();
-			const file = path.join(dir, "config.yml");
-			const models = ["main-model", "advisor-old", "advisor-new"].map(id =>
-				buildModel({
-					id,
-					name: id,
-					api: "openai-responses",
-					provider: "openai",
-					baseUrl: "https://example.invalid",
-					reasoning: false,
-					input: ["text"],
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					contextWindow: 8192,
-					maxTokens: 2048,
+		const dir = dirs();
+		const file = path.join(dir, "config.yml");
+		const models = ["main-model", "advisor-old", "advisor-new"].map(id =>
+			buildModel({
+				id,
+				name: id,
+				api: "openai-responses",
+				provider: "openai",
+				baseUrl: "https://example.invalid",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 8192,
+				maxTokens: 2048,
+			}),
+		);
+		const mainModel = models[0]!;
+		const modelRegistry = {
+			getAvailable: () => models,
+			find: (provider: string, id: string) => models.find(m => m.provider === provider && m.id === id),
+		} as unknown as ModelRegistry;
+
+		const writeAdvisor = (id: string) =>
+			fs.writeFile(
+				file,
+				JSON.stringify({
+					agent: {
+						helpers: { advisor: { model: `openai/${id}` } },
+						sharedModel: true,
+						model: "openai/main-model",
+					},
+					advisor: { enabled: true },
 				}),
 			);
-			const mainModel = models[0]!;
-			const modelRegistry = {
-				getAvailable: () => models,
-				find: (provider: string, id: string) => models.find(m => m.provider === provider && m.id === id),
-			} as unknown as ModelRegistry;
+		await writeAdvisor("advisor-old");
 
-			const writeAdvisor = (id: string) =>
-				fs.writeFile(
-					file,
-					JSON.stringify({
-						agent: {
-							helpers: { advisor: { model: `openai/${id}` } },
-							sharedModel: true,
-							model: "openai/main-model",
-						},
-						advisor: { enabled: true },
-					}),
-				);
-			await writeAdvisor("advisor-old");
+		const settings = await Settings.loadReadOnly({ agentDir: dir });
+		const existingFork = await createSubagentSettingsForCwd(settings, dir);
+		const agent = new Agent({
+			initialState: {
+				model: mainModel,
+				systemPrompt: ["Main"],
+				tools: [],
+				messages: [],
+			},
+		});
+		const sessionManager = SessionManager.inMemory(dir);
+		const session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+		});
+		liveSessions.push(session);
 
-			const settings = await Settings.loadReadOnly({ agentDir: dir });
-			const existingFork = await createSubagentSettingsForCwd(settings, dir);
-			const agent = new Agent({
-				initialState: {
-					model: mainModel,
-					systemPrompt: ["Main"],
-					tools: [],
-					messages: [],
-				},
-			});
-			const sessionManager = SessionManager.inMemory(dir);
-			const session = new AgentSession({
-				agent,
-				sessionManager,
-				settings,
-				modelRegistry,
-			});
-			liveSessions.push(session);
+		expect(session.isAdvisorActive()).toBe(true);
+		expect(session.getAdvisorAgent()?.state.model.id).toBe("advisor-old");
+		expect(session.model?.id).toBe("main-model");
+		expect(resolveAgentModel({ settings: existingFork, agentName: "task" }).patterns).toEqual([
+			"openai/main-model",
+		]);
 
-			expect(session.isAdvisorActive()).toBe(true);
-			expect(session.getAdvisorAgent()?.state.model.id).toBe("advisor-old");
-			expect(session.model?.id).toBe("main-model");
-			expect(resolveAgentModel({ settings: existingFork, agentName: "task" }).patterns).toEqual([
-				"openai/main-model",
-			]);
+		await writeAdvisor("advisor-new");
 
-			await writeAdvisor("advisor-new");
+		const output: string[] = [];
+		const runtime: SlashCommandRuntime = {
+			settings,
+			cwd: dir,
+			session,
+			sessionManager,
+			output: text => {
+				output.push(text);
+			},
+			refreshCommands: () => {},
+			reloadPlugins: async () => {},
+		};
 
-			const output: string[] = [];
-			const runtime: SlashCommandRuntime = {
-				settings,
-				cwd: dir,
-				session,
-				sessionManager,
-				output: text => {
-					output.push(text);
-				},
-				refreshCommands: () => {},
-				reloadPlugins: async () => {},
-			};
+		const dispatchResult = await executeAcpBuiltinSlashCommand("/reload-config", runtime);
+		expect(dispatchResult).toEqual({ consumed: true });
 
-			const dispatchResult = await executeAcpBuiltinSlashCommand("/reload-config", runtime);
-			expect(dispatchResult).toEqual({ consumed: true });
-
-			expect(session.getAdvisorAgent()?.state.model.id).toBe("advisor-new");
-			expect(session.model?.id).toBe("main-model");
-			expect(session.agent.state.model.id).toBe("main-model");
-			expect(resolveAgentModel({ settings: existingFork, agentName: "task" }).patterns).toEqual([
-				"openai/main-model",
-			]);
-			expect(existingFork.get("agent.helpers")).toEqual({
-				advisor: { model: "openai/advisor-old" },
-			});
-			expect(output[0]).toContain("config: reloaded");
-			const advisor = session.getAdvisorAgent();
-			await executeAcpBuiltinSlashCommand("/reload-config", runtime);
-			expect(session.getAdvisorAgent()).toBe(advisor);
-			expect(output[1]).toContain("No effective routing changes.");
+		expect(session.getAdvisorAgent()?.state.model.id).toBe("advisor-new");
+		expect(session.model?.id).toBe("main-model");
+		expect(session.agent.state.model.id).toBe("main-model");
+		expect(resolveAgentModel({ settings: existingFork, agentName: "task" }).patterns).toEqual([
+			"openai/main-model",
+		]);
+		expect(existingFork.get("agent.helpers")).toEqual({
+			advisor: { model: "openai/advisor-old" },
+		});
+		expect(output[0]).toContain("config: reloaded");
+		const advisor = session.getAdvisorAgent();
+		await executeAcpBuiltinSlashCommand("/reload-config", runtime);
+		expect(session.getAdvisorAgent()).toBe(advisor);
+		expect(output[1]).toContain("No effective routing changes.");
 	});
 
 	it("names an unrecognized root key instead of silently accepting it", async () => {
