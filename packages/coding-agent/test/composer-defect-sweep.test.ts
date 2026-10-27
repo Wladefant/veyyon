@@ -129,13 +129,15 @@ describe("renderer composer defect oracle sweep", () => {
 		expect(unconstructableStates).toEqual([]);
 	});
 
-	// Run sweep across the cross-product
+	// Run sweep across the cross-product. Each case builds its own TUI and terminal and spends most of
+	// its time waiting on frame timers in settleFrames, so cases run concurrently: the 4,203 cases took
+	// 164 s one after another and 52 s concurrently, on the same machine.
 	for (const mode of modeVariants) {
 		for (const width of WIDTHS) {
 			for (const height of HEIGHTS) {
 				for (const transcriptCount of TRANSCRIPTS) {
 					for (const textVariant of TEXT_VARIANTS) {
-						it(`evaluates oracles across (${mode.name}, w=${width}, h=${height}, trans=${transcriptCount}, text=${textVariant.name})`, async () => {
+						it.concurrent(`evaluates oracles across (${mode.name}, w=${width}, h=${height}, trans=${transcriptCount}, text=${textVariant.name})`, async () => {
 							const options: RunnerOptions = {
 								width,
 								height,
