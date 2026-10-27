@@ -5,14 +5,17 @@
  *
  *   1. Parse leniency — trailing commas / relaxed JSON, stringified blobs
  *      ({@link parseJsonWithRepair}).
- *   2. Alias/typo key repair — rename an unrecognized key to the one declared
+ *   2. Leaked parameter markup — move arguments a model wrote as
+ *      `</parameter><parameter name="k">v` inside a string value out into
+ *      their own fields ({@link splitLeakedParameters}).
+ *   3. Alias/typo key repair — rename an unrecognized key to the one declared
  *      schema property it unambiguously matches ({@link planAliasKeyRepairs}).
- *   3. Strict unknown-key rejection — refuse leftover unrecognized keys when
+ *   4. Strict unknown-key rejection — refuse leftover unrecognized keys when
  *      the tool's own schema authoring literally declares
  *      `additionalProperties: false` ({@link detectStrictUnknownKeyRepair}).
  *      Gated to raw-JSON/TypeBox-authored tools only — see the note on
  *      `schemaAuthoredAsPlainJsonSchema` in {@link repairToolCallArguments}.
- *   4. Ambiguity guard — refuse when a missing required string could be
+ *   5. Ambiguity guard — refuse when a missing required string could be
  *      filled from more than one plausible donor field
  *      ({@link detectAmbiguousRequiredStringRepair}).
  *
@@ -23,6 +26,7 @@ import { isArkSchema, isZodSchema, toolWireSchema } from "@veyyon/ai/utils/schem
 import { errorMessage } from "@veyyon/utils";
 import { parseJsonWithRepair } from "@veyyon/utils/json-parse";
 import { isRecord } from "@veyyon/utils/type-guards";
+import { INTENT_FIELD } from "@veyyon/wire";
 
 /** Hard cap on raw JSON bytes accepted for repair attempts. */
 export const MAX_REPAIR_INPUT_BYTES = 1_048_576;
@@ -357,6 +361,57 @@ function recoverFromParseSentinel(args: Record<string, unknown>): ToolCallRepair
 }
 
 /**
+ * The closing tag of one parameter and the opening tag of the next, in the markup a model writes for a
+ * call in text. Leaked into a JSON string value, it carries the call's later arguments inside that value.
+ */
+const LEAKED_PARAMETER_TAG = /<\/parameter>\s*<parameter name="([^"<>\s]+)">/g;
+const PARAMETER_MARKUP = /<\/?(?:parameter|invoke)\b/;
+
+/**
+ * Moves arguments a model leaked into a string value as parameter markup out into their own fields:
+ * `language: 'py</parameter>\n<parameter name="title">x'` becomes `language: "py"` and `title: "x"`.
+ * Fix-if-clear: a value is split only when every name it leaks is a declared parameter or the intent
+ * field, absent from the arguments and named once, and no part holds further markup, so a value that
+ * quotes the markup whole, as a file of tool-call examples does, stays as it is.
+ */
+function splitLeakedParameters(
+	schema: Record<string, unknown>,
+	args: Record<string, unknown>,
+): { arguments: Record<string, unknown>; hints: string[] } | undefined {
+	const properties = isRecord(schema.properties) ? schema.properties : {};
+	let split: Record<string, unknown> | undefined;
+	const hints: string[] = [];
+	for (const [key, value] of Object.entries(args)) {
+		if (typeof value !== "string" || !value.includes("</parameter>")) continue;
+		const tags = Array.from(value.matchAll(LEAKED_PARAMETER_TAG));
+		if (tags.length === 0) continue;
+		const head = value.slice(0, tags[0].index);
+		if (PARAMETER_MARKUP.test(head)) continue;
+		const leaked = tags.map((tag, i) => ({
+			name: tag[1],
+			text: value.slice(tag.index + tag[0].length, i + 1 < tags.length ? tags[i + 1].index : value.length),
+		}));
+		const fields = split ?? args;
+		const clear =
+			new Set(leaked.map(part => part.name)).size === leaked.length &&
+			leaked.every(
+				part =>
+					(Object.hasOwn(properties, part.name) || part.name === INTENT_FIELD) &&
+					fields[part.name] === undefined &&
+					!PARAMETER_MARKUP.test(part.text),
+			);
+		if (!clear) continue;
+		split ??= { ...args };
+		split[key] = head;
+		for (const part of leaked) split[part.name] = part.text;
+		hints.push(
+			`Moved ${leaked.map(part => `\`${part.name}\``).join(", ")} out of \`${key}\`, where parameter markup had placed it; send each argument as its own JSON field.`,
+		);
+	}
+	return split ? { arguments: split, hints } : undefined;
+}
+
+/**
  * Attempt deterministic repair of malformed tool-call arguments before schema validation.
  */
 export function repairToolCallArguments(tool: Tool, toolCall: ToolCall): ToolCallRepairOutcome {
@@ -405,6 +460,13 @@ export function repairToolCallArguments(tool: Tool, toolCall: ToolCall): ToolCal
 		} else {
 			workingArgs = objectArgs;
 		}
+	}
+
+	const leakedSplit = splitLeakedParameters(wireSchema, workingArgs);
+	if (leakedSplit) {
+		workingArgs = leakedSplit.arguments;
+		hints = hints.concat(leakedSplit.hints);
+		repaired = true;
 	}
 
 	const aliasPlan = planAliasKeyRepairs(wireSchema, workingArgs);

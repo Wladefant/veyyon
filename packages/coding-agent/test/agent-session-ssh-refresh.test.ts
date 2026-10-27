@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
@@ -9,7 +9,7 @@ import { loadCapability } from "@veyyon/coding-agent/discovery";
 import { reset as resetCapabilities } from "@veyyon/coding-agent/discovery/capability";
 import { type SSHHost, sshCapability } from "@veyyon/coding-agent/discovery/capability/ssh";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { addSSHHost, removeSSHHost, updateSSHHost } from "@veyyon/coding-agent/ssh/config-writer";
+import { addSSHHost, removeSSHHost, type SSHHostConfig, updateSSHHost } from "@veyyon/coding-agent/ssh/config-writer";
 import * as connectionManager from "@veyyon/coding-agent/ssh/connection-manager";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { loadSshTool } from "@veyyon/coding-agent/tools/shell/ssh";
@@ -17,6 +17,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import {
 	captureDirOverrides,
 	type DirOverridesSnapshot,
+	getRemoteHostDir,
 	getSSHConfigPath,
 	restoreDirOverrides,
 	setAgentDir,
@@ -62,6 +63,7 @@ describe("AgentSession SSH tool refresh", () => {
 	});
 
 	afterEach(async () => {
+		vi.restoreAllMocks();
 		for (const session of sessions.splice(0)) {
 			await session.dispose();
 		}
@@ -111,6 +113,30 @@ describe("AgentSession SSH tool refresh", () => {
 		});
 		sessions.push(session);
 		return session;
+	}
+
+	/** The ssh tool a session starting in `cwd` loads. */
+	async function loadToolFor(cwd: string): Promise<AgentTool> {
+		const tool = await loadSshTool({
+			cwd,
+			hasUI: false,
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			getSessionSpawns: () => "*",
+			getSessionFile: () => null,
+		});
+		if (!tool) throw new Error("expected the profile's hosts to load an ssh tool");
+		return tool as unknown as AgentTool;
+	}
+
+	/** The profile-wide record a probe of `name` leaves, which every session's description reads. */
+	function persistProbedHost(name: string): string {
+		const record = path.join(getRemoteHostDir(), `${name}.json`);
+		fs.mkdirSync(path.dirname(record), { recursive: true });
+		fs.writeFileSync(
+			record,
+			JSON.stringify({ version: 4, os: "linux", shell: "bash", transferShell: "sh", compatEnabled: false }),
+		);
+		return record;
 	}
 
 	it("adds the ssh tool after a first host is written over a cached missing config", async () => {
@@ -218,7 +244,7 @@ describe("AgentSession SSH tool refresh", () => {
 		expect(initialTool).not.toBeNull();
 		const session = createSession(cwd, [initialTool as unknown as AgentTool]);
 
-		const invalidateSpy = spyOn(connectionManager, "invalidateHostMetadata").mockResolvedValue(undefined);
+		const invalidateSpy = vi.spyOn(connectionManager, "invalidateHostMetadata").mockResolvedValue(undefined);
 		await updateSSHHost(configPath, "prod", { host: "203.0.113.10" });
 		await session.refreshSshTool({ activateIfAvailable: true });
 
@@ -237,6 +263,112 @@ describe("AgentSession SSH tool refresh", () => {
 
 		expect(session.getToolByName("ssh")?.description).toContain("fresh (203.0.113.11)");
 		expect(session.getToolByName("ssh")?.description).toContain("fresh (203.0.113.11)");
+	});
+
+	/**
+	 * A re-root refreshes ssh against a profile whose hosts did not change, since hosts come from the
+	 * profile alone. The refresh used to drop every host's probed metadata regardless: it deleted the
+	 * profile-wide record, closed the master connection, and the host's description line fell back to
+	 * "detecting...". The description is part of the tool definitions at the front of the prompt, so
+	 * the first request after every `set_cwd` rewrote the whole provider prompt cache.
+	 */
+	it("keeps an unchanged host's probed shell, its record and the prompt bytes across a refresh", async () => {
+		const tempDir = TempDir.createSync("@pi-ssh-refresh-");
+		tempDirs.push(tempDir);
+		const cwd = tempDir.path();
+		await addSSHHost(configPath, "steady", { host: "203.0.113.40" });
+		const record = persistProbedHost("steady");
+		const session = createSession(cwd, [await loadToolFor(cwd)]);
+		await session.refreshBaseSystemPrompt("session-start");
+		const promptBefore = session.agent.state.systemPrompt.join("\n");
+		expect(promptBefore).toContain("steady (203.0.113.40) | linux/bash");
+
+		await session.refreshSshTool({ activateIfAvailable: true });
+
+		expect(session.getToolByName("ssh")?.description).toContain("steady (203.0.113.40) | linux/bash");
+		expect(session.agent.state.systemPrompt.join("\n")).toBe(promptBefore);
+		expect(fs.existsSync(record)).toBe(true);
+	});
+
+	/**
+	 * Every field that selects which remote an entry reaches, and how, makes a changed entry a new
+	 * destination whose metadata the old probe does not describe. A description selects nothing.
+	 */
+	const DESTINATION_CHANGES: ReadonlyArray<
+		[field: string, before: SSHHostConfig, after: SSHHostConfig, dropped: boolean]
+	> = [
+		["address", { host: "203.0.113.42" }, { host: "203.0.113.43" }, true],
+		["user", { host: "203.0.113.42", username: "deploy" }, { host: "203.0.113.42", username: "admin" }, true],
+		["port", { host: "203.0.113.42", port: 22 }, { host: "203.0.113.42", port: 2222 }, true],
+		["key", { host: "203.0.113.42", keyPath: "/keys/old" }, { host: "203.0.113.42", keyPath: "/keys/new" }, true],
+		["compat", { host: "203.0.113.42" }, { host: "203.0.113.42", compat: true }, true],
+		[
+			"description",
+			{ host: "203.0.113.42", description: "old" },
+			{ host: "203.0.113.42", description: "new" },
+			false,
+		],
+	];
+
+	it.each(DESTINATION_CHANGES)(
+		"a changed %s decides whether a host keeps its probed metadata",
+		async (field, before, after, dropped) => {
+			const tempDir = TempDir.createSync("@pi-ssh-refresh-");
+			tempDirs.push(tempDir);
+			const cwd = tempDir.path();
+			const anchor = `anchor-${field}`;
+			const drifter = `drifter-${field}`;
+			await addSSHHost(configPath, anchor, { host: "203.0.113.41" });
+			await addSSHHost(configPath, drifter, before);
+			const anchorRecord = persistProbedHost(anchor);
+			const drifterRecord = persistProbedHost(drifter);
+			const session = createSession(cwd, [await loadToolFor(cwd)]);
+
+			await updateSSHHost(configPath, drifter, after);
+			await session.refreshSshTool({ activateIfAvailable: true });
+
+			const description = session.getToolByName("ssh")?.description;
+			expect(description).toContain(`${anchor} (203.0.113.41) | linux/bash`);
+			expect(description).toContain(`${drifter} (${after.host}) | ${dropped ? "detecting..." : "linux/bash"}`);
+			expect(fs.existsSync(anchorRecord)).toBe(true);
+			expect(fs.existsSync(drifterRecord)).toBe(!dropped);
+		},
+	);
+
+	it("deletes a removed host's record and keeps the remaining host's", async () => {
+		const tempDir = TempDir.createSync("@pi-ssh-refresh-");
+		tempDirs.push(tempDir);
+		const cwd = tempDir.path();
+		await addSSHHost(configPath, "keeper", { host: "203.0.113.44" });
+		await addSSHHost(configPath, "retired", { host: "203.0.113.45" });
+		const keeperRecord = persistProbedHost("keeper");
+		const retiredRecord = persistProbedHost("retired");
+		const session = createSession(cwd, [await loadToolFor(cwd)]);
+
+		await removeSSHHost(configPath, "retired");
+		await session.refreshSshTool();
+
+		expect(session.getToolByName("ssh")?.description).toContain("keeper (203.0.113.44) | linux/bash");
+		expect(fs.existsSync(keeperRecord)).toBe(true);
+		expect(fs.existsSync(retiredRecord)).toBe(false);
+	});
+
+	/** A session that does not offer ssh, a spawned agent without the tool for one, re-roots too. */
+	it("leaves every host's record alone in a session that does not offer ssh", async () => {
+		const tempDir = TempDir.createSync("@pi-ssh-refresh-");
+		tempDirs.push(tempDir);
+		const cwd = tempDir.path();
+		await addSSHHost(configPath, "bystander", { host: "203.0.113.46" });
+		const record = persistProbedHost("bystander");
+		const session = createSession(cwd, [], [], {
+			reloadSshTool: async () => null,
+			requestedToolNames: new Set(["read"]),
+		});
+
+		await session.refreshSshTool({ activateIfAvailable: true });
+
+		expect(session.getAllToolNames()).not.toContain("ssh");
+		expect(fs.existsSync(record)).toBe(true);
 	});
 
 	it("does not activate ssh when it was excluded from the requested tool allowlist", async () => {

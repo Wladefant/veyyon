@@ -55,21 +55,23 @@ Failure behavior:
 7. On execute, `SshTool.execute()` rejects any `host` not in the discovered host-name set.
 8. `ensureHostInfo()` in `packages/coding-agent/src/ssh/connection-manager.ts` ensures an SSH master connection exists, loads cached host info from disk if present, and probes remote OS/shell when cache is missing or stale.
 9. `buildRemoteCommand()` in `packages/coding-agent/src/tools/shell/ssh.ts` prepends a cwd change when `cwd` is provided:
-   - Unix-like or Windows compat shells: `cd -- '<cwd>' && <command>`
+   - Unix-like or Windows compat shells: `cd -- '<cwd>' || exit; <command>`, so every part of the command runs in `<cwd>`, and none runs when the `cd` fails
    - Windows PowerShell: `Set-Location -Path '<cwd>'; <command>`
    - Windows cmd: `cd /d "<cwd>" && <command>`
 10. `clampTimeout("ssh", rawTimeout)` applies the `1..3600` second clamp from `packages/coding-agent/src/tools/core/tool-timeouts.ts`.
-11. `executeSSH()` in `packages/coding-agent/src/ssh/ssh-executor.ts` calls `ensureConnection(host)` again, opportunistically mounts the remote host root with `sshfs` if available, optionally wraps the command in `bash -c` or `sh -c` for Windows compat mode, then spawns `ssh` with `ptree.spawn`.
-12. Output from both stdout and stderr is piped into one `OutputSink`; chunks are sanitized and forwarded to streaming updates through `streamTailUpdates()`.
-13. On normal exit, the sink returns combined output plus truncation counters. On timeout or abort, `executeSSH()` returns `cancelled: true` and prefixes the output with a notice line such as `[SSH: ...]` or `[Command aborted: ...]`.
+11. `executeSSH()` in `packages/coding-agent/src/ssh/ssh-executor.ts` calls `ensureConnection(host)` again, opportunistically mounts the remote host root with `sshfs` if available, wraps the command with an exit marker when the login shell is `bash`, `zsh` or `sh` on a non-Windows host, optionally wraps the command in `bash -c` or `sh -c` for Windows compat mode, then spawns `ssh` with `ptree.spawn`.
+12. Output from both stdout and stderr is piped into one `OutputSink`; the exit marker is removed from stdout, and chunks are sanitized and forwarded to streaming updates through `streamTailUpdates()`.
+13. On normal exit, the sink returns combined output plus truncation counters. When the exit marker arrives and the session is still open `250` ms later, a background process holds the command's stdout or stderr: `executeSSH()` stops reading, ends the ssh client, and returns the command's own exit status with the notice `[SSH: The command exited while a background process still held its output; ...]`. On timeout or abort, `executeSSH()` returns `cancelled: true` and prefixes the output with a notice line such as `[SSH: ...]` or `[Command aborted: ...]`.
 14. `SshTool.execute()` converts `cancelled: true` into `ToolError`, converts non-zero exit codes into `ToolError`, otherwise returns the text result with truncation metadata.
 
 ## Modes / Variants
 - **Tool unavailable**: `loadSshTool()` returns `null` when discovery finds no hosts, so the tool is not registered for that session.
-- **Unix-like target**: remote command is passed through directly, with optional `cd -- ... &&` prefix.
+- **Unix-like target**: the command runs as `( <command>\n)` followed by `printf '\036__veyyon_exit_<token>:%s\n' "$?"`, with optional `cd -- ... || exit;` prefix inside the subshell. The token is random per call. A command such as `cd dir && nohup job > log 2>&1 & echo started` returns when `echo started` finishes, not when `job` does; `job` keeps running unless it writes to the command's output, which ends it with `SIGPIPE`.
+- **Exit marker not used**: Windows hosts and login shells other than `bash`, `zsh` and `sh` receive the command unchanged, and the call returns when the session closes.
 - **Windows native shell**: cwd wrapper uses PowerShell `Set-Location` or cmd `cd /d`; command otherwise runs in the remote default Windows shell.
 - **Windows compat shell**: if host probing finds `bash` or `sh` on Windows, `executeSSH()` wraps the remote command as `bash -c '...'` or `sh -c '...'`. Host config can force compat on/off with `compat`.
 - **Cached vs probed host info**: shell/OS detection comes from in-memory cache, persisted JSON under the remote-host dir, or a fresh probe over SSH.
+- **Tool refresh**: a cwd change or a tool-set change reloads the host list. A host whose destination (`host`, `username`, `port`, `keyPath`, `compat`) is unchanged keeps its cached and persisted shell/OS info and its control master, so the tool description, and the prompt prefix after it, stay byte-identical. A host that the refresh removes, changes, or adds has its persisted record and its master dropped and is probed again on next use.
 - **Truncated vs untruncated output**: small output stays in memory; large output keeps only the last 50 KiB in memory and may spill full output to an artifact file.
 
 ## Side Effects
@@ -101,6 +103,7 @@ Failure behavior:
 - SSH master reuse persistence: `ControlPersist=3600` in `packages/coding-agent/src/ssh/connection-manager.ts` and `packages/coding-agent/src/ssh/sshfs-mount.ts`.
 - SSH host info schema version: `HOST_INFO_VERSION = 4` in `packages/coding-agent/src/ssh/connection-manager.ts`; stale cache entries are reprobed.
 - Streaming tail buffer compacts after more than `10` pending chunks (`MAX_PENDING`) before trimming.
+- Exit marker grace: `EXIT_MARKER_GRACE_MS = 250` in `packages/coding-agent/src/ssh/ssh-executor.ts`. Stripping holds back at most one partial marker (`\036__veyyon_exit_<token>:` plus three status digits) between chunks.
 
 ## Errors
 - `Unknown SSH host: ... Available hosts: ...` when the model passes a host name not present in discovery.

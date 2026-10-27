@@ -660,7 +660,7 @@ For `anthropic-messages` models the runtime uses a separate `AnthropicCompat` sh
 - `supportsEagerToolInputStreaming`: tools may carry the per-tool `eager_input_streaming` flag. Default: `true`.
 - `supportsLongCacheRetention`: the host accepts `ttl: "1h"` prompt-cache markers. Default: `true` on the Anthropic API.
 - `supportsMidConversationSystem`: the host accepts `role: "system"` messages inside `messages`. Default: auto from model id and base URL.
-- `supportsForcedToolChoice`: accept a forced `tool_choice`; when `false`, a forced choice is sent as `auto`.
+- `supportsForcedToolChoice`: accept a forced `tool_choice`; when `false`, a forced choice is sent as `auto`. Default: `false` for Claude Opus and Sonnet 5.5 and later, Claude Fable and Mythos, and models with `requiresThinkingEnabled`; `true` otherwise. An endpoint that answers a forced choice with a 400 naming `tool_choice` gets `auto` for that model for the rest of the session.
 - `supportsSamplingParams`: the model accepts `temperature`, `top_p` and `top_k`. Default: auto from model id.
 - `requiresToolResultId`: add a non-standard `id` alias to `tool_result` blocks (Z.AI-style proxies).
 - `replayUnsignedThinking`: replay unsigned thinking blocks as native thinking instead of text.

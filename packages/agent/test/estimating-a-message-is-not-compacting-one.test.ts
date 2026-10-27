@@ -168,6 +168,15 @@ const PRUNING_CEILING = 197;
  * shared reader that requires a token endpoint's JSON to be an object, which `registry/oauth/nous-research.ts`
  * reads its token responses through. It imports only `@veyyon/utils/type-guards` and `ai/error`, both
  * already on the engine's reach, so the growth is that one file and no subtree.
+ *
+ * RE-MEASURED 2026-10-18: engine 309. The one new module is `compaction/summary-source.ts`, which sizes
+ * and serializes a summary span in time slices. It imports `@veyyon/utils`, `../tokenizer` and `./utils`,
+ * all already on the engine's reach, so the growth is that one file and no subtree.
+ *
+ * RE-MEASURED 2026-10-18 again: engine 310. The one new module is `effort-clamp.ts`, the clamp every
+ * compaction request and memory pass sends its fixed effort through, which logs a moved effort once per
+ * model. It imports `@veyyon/catalog/model-thinking` and `@veyyon/utils`, both already on the engine's
+ * reach, so the growth is that one file and no subtree.
  */
 // RE-MEASURED 2026-10-01 after the santhreal sync: +1 for `utils/schema/zod-core.ts` (imported by the `@veyyon/ai` barrel) and `catalog/catalog-spans.ts` (imported by `catalog/models.ts`); each is a leaf, so no subtree arrives.
 // RE-MEASURED 2026-10-04 after the upstream port wave (#219): 327 -> 333 and 225 -> 227, provider definitions the `@veyyon/ai` barrel reaches.

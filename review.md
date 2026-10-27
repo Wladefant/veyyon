@@ -28,9 +28,9 @@ style.
 Check that the diff does what the description says and nothing else. An unexplained change outside
 the stated scope is the finding, whatever the change is.
 
-A bug fix may arrive with no issue. Anything else — feature, refactor, dependency, migration —
-needs one, and `Refs #N` in the body. Scope is settled on the issue, before the work exists, so a
-large pull request with no issue behind it is finding 1 and the review stops there. The code may be
+Every pull request needs an issue, bug fixes included, and `Refs #N` in the body. Scope is settled
+on the issue, before the work exists, so a pull request with no issue behind it is finding 1 and the
+review stops there. The code may be
 good and the scope still wrong, and reading the diff first is the most expensive way to find that
 out.
 

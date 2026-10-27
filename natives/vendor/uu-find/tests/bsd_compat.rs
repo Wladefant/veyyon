@@ -31,7 +31,7 @@ fn run_in(cwd: PathBuf, args: Vec<String>) -> (i32, String, String) {
 
 	let io = ScopeIo {
 		stdin: Box::new(std::io::empty()),
-		stdin_fd: None,
+		fds: Vec::new(),
 		stdin_is_search_input: false,
 		stdout: Box::new(SharedWriter { buf: stdout_buf.clone() }),
 		// A capture buffer is not a terminal, and saying so is what keeps this harness

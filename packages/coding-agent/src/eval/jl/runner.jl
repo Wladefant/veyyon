@@ -560,10 +560,23 @@ function should_display_result(parsed_expr)
     return true
 end
 
+# The cwd the previous request put at the front of LOAD_PATH. One kernel serves a
+# session in every directory it moves to, so the previous project leaves the load
+# path when the next cell runs somewhere else.
+global __veyyon_request_cwd = ""
+
 function apply_request_runtime(cwd, env_pairs)
     try
         if !isempty(cwd)
             cd(cwd)
+            previous = __veyyon_request_cwd
+            if !isempty(previous) && previous != cwd
+                filter!(entry -> entry != previous, LOAD_PATH)
+            end
+            if !(cwd in LOAD_PATH)
+                pushfirst!(LOAD_PATH, cwd)
+            end
+            global __veyyon_request_cwd = cwd
         end
     catch
         # ignore

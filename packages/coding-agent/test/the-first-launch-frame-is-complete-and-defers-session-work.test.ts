@@ -10,12 +10,16 @@
  *    (settings and theme init); heavy session work (auth storage await,
  *    model registry, session creation, extension discovery, tool building)
  *    is deferred until after the launch card is on screen.
- * 3. Restoring sessions (--resume, --continue, --fork), non-interactive runs,
- *    quiet mode, and setup wizards correctly opt out of the welcome first-frame.
+ * 3. A bare --resume (which opens the session picker), non-interactive runs, quiet
+ *    mode, and setup wizards opt out of the first frame. A resume that names its
+ *    session, --continue and --fork paint it, so the composer takes keystrokes
+ *    while the session opens instead of after its transcript is built.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { APP_NAME, TempDir } from "@veyyon/utils";
+import { parseArgs } from "../src/cli/args";
+import { opensSessionPicker } from "../src/cli/launch-card-eligibility";
 import { Settings } from "../src/config/settings";
 import { paintFirstFrame, shouldPaintFirstFrame, takeFirstFrame } from "../src/modes/terminal/first-frame";
 import { renderSetupSplash, SETUP_SPLASH_MS } from "../src/modes/terminal/setup-wizard/scenes/splash";
@@ -50,16 +54,27 @@ describe("the first launch frame is complete and defers session work", () => {
 			setupWizard: false,
 			stdinIsTTY: true,
 			stdoutIsTTY: true,
-			resuming: false,
+			pickingSession: false,
 		};
 
 		it("approves first paint for a normal interactive TTY launch", () => {
 			expect(shouldPaintFirstFrame(baseOptions)).toBe(true);
 		});
 
-		it("defers / skips first paint when resuming an existing session", () => {
-			expect(shouldPaintFirstFrame({ ...baseOptions, resuming: true })).toBe(false);
-		});
+		const resumes: ReadonlyArray<readonly [string[], boolean]> = [
+			[["--resume"], false],
+			[["--resume", "0195f5c2"], true],
+			[["--resume", "/repo/sessions/a.jsonl"], true],
+			[["--continue"], true],
+			[["--fork", "0195f5c2"], true],
+			[["--resume", "--fork", "0195f5c2"], true],
+		];
+		for (const [argv, paints] of resumes) {
+			it(`${paints ? "paints" : "skips"} the first frame for ${argv.join(" ")}`, () => {
+				const pickingSession = opensSessionPicker(parseArgs(argv));
+				expect(shouldPaintFirstFrame({ ...baseOptions, pickingSession })).toBe(paints);
+			});
+		}
 
 		it("defers / skips first paint in protocol mode or non-interactive mode", () => {
 			expect(shouldPaintFirstFrame({ ...baseOptions, isInteractive: false })).toBe(false);

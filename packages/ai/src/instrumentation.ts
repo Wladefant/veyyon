@@ -292,7 +292,7 @@ function captureToolSchedule(metrics: ToolCallMetrics, input: ToolCallMetricsInp
 /** Block, byte, image and token weight of a tool result. Bytes are counted without encoding the text. */
 function captureToolResultWeight(
 	metrics: ToolCallMetrics,
-	content: readonly (TextContent | ImageContent)[],
+	content: readonly (TextContent | ImageContent | VideoContent)[],
 	countTokens: ((text: string) => number) | undefined,
 ): void {
 	metrics.resultBlocks = content.length;

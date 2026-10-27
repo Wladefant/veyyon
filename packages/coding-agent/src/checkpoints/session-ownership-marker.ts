@@ -125,7 +125,7 @@ export async function readSessionOwnershipMarker(sessionFile: string, sessionId:
 			throw new Error("Transferred session ownership marker is unreadable", { cause: error });
 	}
 	if (!identity && recovery?.checkpointTransfer !== true) {
-		if (markerValue !== undefined || recovery?.checkpointTransfer === true)
+		if (markerValue !== undefined)
 			throw new Error("Transferred session native handoff identity is missing");
 		return null;
 	}

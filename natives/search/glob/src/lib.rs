@@ -19,9 +19,11 @@
 //! assert!(glob.is_match("src/lib.rs"));
 //! assert!(!glob.is_match("src/lib.ts"));
 //!
-//! // A pattern with no `**` and no `{` can only match so deep, and the walker
-//! // uses that to avoid descending into a subtree it can never match into.
+//! // A pattern with no `**` can only match so deep, and the walker uses that to
+//! // avoid descending into a subtree it can never match into. A `{a,b}` group
+//! // reaches as deep as its deepest alternative.
 //! assert_eq!(walk_depth_bound("dir/*.ts"), 2);
+//! assert_eq!(walk_depth_bound("dir/{a.ts,sub/b.ts}"), 3);
 //! assert_eq!(walk_depth_bound("**/*.ts"), usize::MAX);
 //! ```
 //!
@@ -163,19 +165,107 @@ pub fn build_glob_pattern(glob: &str, recursive: bool) -> String {
 /// subtree they can never match into (the source of "narrow glob timed out on
 /// a populated directory" failures).
 ///
-/// `**` matches any number of components and `{...}` alternations may contain
-/// `/`, so both disable the bound.
+/// `**` matches any number of components and disables the bound. A `{a,b}`
+/// group may contain `/`, so a pattern with one counts the separators of its
+/// widest alternative instead of its segments.
 #[must_use]
 pub fn walk_depth_bound(pattern: &str) -> usize {
-	if pattern.contains("**") || pattern.contains('{') || bracket_class_can_match_separator(pattern)
-	{
+	if pattern.contains("**") || bracket_class_can_match_separator(pattern) {
 		return usize::MAX;
+	}
+	if pattern.contains('{') {
+		return widest_separator_count(pattern.as_bytes())
+			.map_or(usize::MAX, |separators| separators + 1);
 	}
 	pattern
 		.split('/')
 		.filter(|seg| !seg.is_empty())
 		.count()
 		.max(1)
+}
+
+/// Deepest `{...}` nesting the bound follows. A deeper pattern is unbounded
+/// rather than recursed into, so no pattern can exhaust the stack.
+const MAX_ALTERNATION_NESTING: usize = 16;
+
+/// The most `/` separators any expansion of `pattern` contains, a `{a,b}`
+/// group counting as its widest alternative.
+///
+/// `None` answers "unbounded": unbalanced braces, an unterminated class, or
+/// nesting past [`MAX_ALTERNATION_NESTING`]. Over-counting is safe and
+/// under-counting loses results, so the braces, classes and escapes are read
+/// exactly as the engine reads them: a `,` or `}` taken for a member when the
+/// engine takes it for group syntax would split one alternative into two and
+/// count only the wider half.
+fn widest_separator_count(pattern: &[u8]) -> Option<usize> {
+	let mut idx = 0;
+	let separators = sequence_separator_count(pattern, &mut idx, 0)?;
+	(idx >= pattern.len()).then_some(separators)
+}
+
+/// Separators in the sequence at `*idx`, up to the `,` or `}` that ends it
+/// inside a group (`nesting > 0`) or to the end of the pattern.
+fn sequence_separator_count(bytes: &[u8], idx: &mut usize, nesting: usize) -> Option<usize> {
+	let mut separators = 0;
+	while let Some(&byte) = bytes.get(*idx) {
+		match byte {
+			// The engine reads `\` as a separator where it is one, and as an
+			// escape everywhere else.
+			b'\\' if cfg!(windows) => {
+				separators += 1;
+				*idx += 1;
+			},
+			b'\\' => *idx += 2,
+			// The class cannot match `/` (the caller checked), and its `{`, `,`
+			// and `}` are members, not group syntax.
+			b'[' => *idx = class_end(bytes, *idx)?,
+			b'/' => {
+				separators += 1;
+				*idx += 1;
+			},
+			b'{' => {
+				if nesting >= MAX_ALTERNATION_NESTING {
+					return None;
+				}
+				*idx += 1;
+				let mut widest = 0;
+				loop {
+					widest = widest.max(sequence_separator_count(bytes, idx, nesting + 1)?);
+					match bytes.get(*idx) {
+						Some(b',') => *idx += 1,
+						Some(b'}') => {
+							*idx += 1;
+							break;
+						},
+						_ => return None,
+					}
+				}
+				separators += widest;
+			},
+			b',' | b'}' if nesting > 0 => return Some(separators),
+			_ => *idx += 1,
+		}
+	}
+	(nesting == 0).then_some(separators)
+}
+
+/// The index just past the `]` closing the class that opens at `open`, or
+/// `None` when it never closes.
+///
+/// The engine ends a class at the first `]` that is not its first member and
+/// reads `\` inside it as a member, not an escape.
+/// [`bracket_class_can_match_separator`] reads `\` as an escape, so it ends a
+/// class no earlier than this does and still sees every `/` the class holds.
+fn class_end(bytes: &[u8], open: usize) -> Option<usize> {
+	let mut idx = open + 1;
+	if matches!(bytes.get(idx), Some(b'!' | b'^')) {
+		idx += 1;
+	}
+	if bytes.get(idx) == Some(&b']') {
+		idx += 1;
+	}
+	let close = bytes.get(idx..)?.iter().position(|&byte| byte == b']')?;
+	Some(idx + close + 1)
 }
 
 /// Whether any `[...]` in `pattern` can match a `/`.
@@ -456,11 +546,24 @@ mod tests {
 	}
 
 	#[test]
-	fn walk_depth_bound_unbounded_for_recursive_and_brace_patterns() {
+	fn walk_depth_bound_unbounded_for_recursive_patterns() {
 		assert_eq!(walk_depth_bound("**/*"), usize::MAX);
 		assert_eq!(walk_depth_bound("src/**/*.ts"), usize::MAX);
-		// `{}` groups may contain `/`, so segment counting is unsound for them.
-		assert_eq!(walk_depth_bound("{a/b,c}/d.txt"), usize::MAX);
+		assert_eq!(walk_depth_bound("{**/a,b}"), usize::MAX);
+	}
+
+	/// A group reaches as deep as its deepest alternative, nested groups
+	/// included, and an unbalanced one is unbounded.
+	#[test]
+	fn walk_depth_bound_counts_the_widest_alternative() {
+		assert_eq!(walk_depth_bound("{a/b,c}/d.txt"), 3);
+		assert_eq!(walk_depth_bound("{a.json,b/manifest.json,c.py}"), 2);
+		assert_eq!(walk_depth_bound("src/{a,{b/c,d/e/f}}/*.ts"), 5);
+		assert_eq!(walk_depth_bound("{a,b}"), 1);
+		assert_eq!(walk_depth_bound("[{]a/b"), 2);
+		assert_eq!(walk_depth_bound("\\{a/b,c\\}"), 2);
+		assert_eq!(walk_depth_bound("{a,b"), usize::MAX);
+		assert_eq!(walk_depth_bound(&format!("{}a{}", "{".repeat(64), "}".repeat(64))), usize::MAX);
 	}
 
 	#[test]

@@ -716,7 +716,8 @@ export type AgentContinueSkipReason =
 	| PostPromptSkipReason
 	| "session-unavailable"
 	| "should-continue-false"
-	| "post-restore-unavailable";
+	| "post-restore-unavailable"
+	| "agent-busy";
 
 export type ScheduledAgentContinueOptions = {
 	delayMs?: number;

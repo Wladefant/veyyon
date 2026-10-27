@@ -109,20 +109,25 @@ export interface KernelExecutionResult {
 // ---------------------------------------------------------------------------
 
 /**
- * The cwd a retained kernel session is keyed by.
+ * The absolute cwd a cell runs in.
  *
- * One owner for all three managed runtimes. Two callers that disagree about
- * whether `./foo` and `/abs/foo` are the same directory would keep two kernels
- * for one project, which is a doubled interpreter and a cell that cannot see
- * the variable the previous cell defined.
+ * One owner for all three managed runtimes, so `./foo` and `/abs/foo` resolve
+ * to the same directory wherever a cwd is compared or sent to a kernel.
  */
 export function normalizeSessionCwd(cwd: string): string {
 	return path.resolve(cwd);
 }
 
 /**
- * The key a retained kernel session is stored under: session id, cwd, and the
- * explicit interpreter, if the caller named one.
+ * The key a retained kernel session is stored under: the session id, the
+ * explicit interpreter if the caller named one, and otherwise the part of the
+ * cwd that selects the default runtime (a project venv for Python, nothing for
+ * Ruby and Julia).
+ *
+ * The cwd itself is not part of the key. Every runner applies the cwd sent with
+ * each cell, so one kernel serves a session in any directory and keeps its
+ * variables across a directory change. A cwd in the key started a kernel per
+ * directory and kept every earlier one alive until the session ended.
  *
  * Python, Ruby and Julia each had their own copy of this, and the copies had
  * drifted in two ways that both cost a kernel:
@@ -146,22 +151,28 @@ export function buildEvalSessionKey(options: {
 	interpreter: string | undefined;
 	/** The language's own explicit-runtime resolution, e.g. `resolveExplicitPythonRuntime`. */
 	resolveInterpreterPath: (interpreter: string, cwd: string) => string;
+	/**
+	 * What in `cwd` selects the runtime when no interpreter is named, or undefined
+	 * when the default runtime does not depend on the cwd.
+	 */
+	resolveDefaultRuntimeScope?: (cwd: string) => string;
 }): string {
 	const cwd = normalizeSessionCwd(options.cwd);
-	let interpreter = "";
-	if (options.interpreter !== undefined) {
-		const resolved = options.resolveInterpreterPath(options.interpreter, cwd);
-		// A path that cannot be canonicalised is keyed as written. This is not a
-		// fallback to a different mechanism: the string is only ever a map key, and
-		// an interpreter that does not exist yet gets its own key either way. The
-		// failure surfaces where it matters, when the kernel is started.
-		try {
-			interpreter = fs.realpathSync.native(resolved);
-		} catch {
-			interpreter = resolved;
-		}
+	if (options.interpreter === undefined) {
+		return `${options.sessionId}\0\0${options.resolveDefaultRuntimeScope?.(cwd) ?? ""}`;
 	}
-	return `${options.sessionId}\0${cwd}\0${interpreter}`;
+	const resolved = options.resolveInterpreterPath(options.interpreter, cwd);
+	// A path that cannot be canonicalised is keyed as written. This is not a
+	// fallback to a different mechanism: the string is only ever a map key, and
+	// an interpreter that does not exist yet gets its own key either way. The
+	// failure surfaces where it matters, when the kernel is started.
+	let interpreter: string;
+	try {
+		interpreter = fs.realpathSync.native(resolved);
+	} catch {
+		interpreter = resolved;
+	}
+	return `${options.sessionId}\0${interpreter}\0`;
 }
 
 export function getExecutionDeadlineMs(options?: { deadlineMs?: number; timeoutMs?: number }): number | undefined {
@@ -951,6 +962,8 @@ export interface KernelExecutionDriverOptions<
 	startKernel?: (cwd: string, options: TOptions) => Promise<TKernel>;
 	checkKernelAvailability: (cwd: string, interpreter?: string) => Promise<{ ok: boolean; reason?: string }>;
 	resolveInterpreterPath: (interpreter: string, cwd: string) => string;
+	/** See `buildEvalSessionKey`: what in a cwd selects the default runtime, when anything does. */
+	resolveDefaultRuntimeScope?: (cwd: string) => string;
 	buildKernelEnvPatch?: (options: TOptions) => Record<string, string | null | undefined>;
 	formatKernelTimeoutAnnotation?: (executionTimeoutMs: number | undefined, kernelKilled: boolean) => string;
 	formatTimeoutAnnotation?: (executionTimeoutMs: number | undefined) => string | undefined;
@@ -998,6 +1011,7 @@ export function createKernelExecutionDriver<
 		},
 		checkKernelAvailability,
 		resolveInterpreterPath,
+		resolveDefaultRuntimeScope,
 		buildKernelEnvPatch = opts => ({
 			...buildManagedKernelEnvPatch({ ...opts, evalSessionId: opts.sessionId }),
 			...(opts.env ?? {}),
@@ -1082,6 +1096,7 @@ export function createKernelExecutionDriver<
 			cwd,
 			interpreter: options.interpreter,
 			resolveInterpreterPath,
+			resolveDefaultRuntimeScope,
 		});
 		if (options.bridge && !options.bridgeSessionId) {
 			options.bridgeSessionId = sessionId;

@@ -214,6 +214,11 @@ export interface UsageCostHistoryEntry {
 	costUsd: number;
 }
 
+export interface UsageCostHistoryQuery {
+	provider?: string;
+	sinceMs?: number;
+}
+
 // The wire schemas for a usage report live in `./usage/report-wire`, built on first use.
 // Declaring them here made every consumer of this module -- which is every launch, through
 // `auth-storage.ts` -> `api-registry.ts` -> `stream.ts` -- evaluate arktype for 362ms in
@@ -259,6 +264,7 @@ export interface UsageFetchContext {
 	fetch: FetchImpl;
 	logger?: UsageLogger;
 	retryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+	listUsageCosts?: (query?: UsageCostHistoryQuery) => UsageCostHistoryEntry[];
 }
 
 /** Provider implementation for fetching usage information. */

@@ -5,10 +5,12 @@
 // debug report bundler, and the tool-binary installer all go through here so
 // there is exactly one archive implementation to reason about. Do not parse or
 // build ZIP/tar, or call `Bun.Archive`, anywhere else.
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as zlib from "node:zlib";
+// Owners, not the `@veyyon/utils` barrel: 3 modules against 74.
 import { formatBytes } from "@veyyon/utils/format";
-// Owners, not the `@veyyon/utils` barrel: 2 modules against 74.
+import { readFileRange, writeFileCreatingParents } from "@veyyon/utils/fs-io";
 import * as logger from "@veyyon/utils/logger";
 import { ToolError, toolFailure } from "../tools/core/tool-errors";
 
@@ -159,9 +161,8 @@ function readMemoryRange(buffer: Uint8Array, start: number, end: number): Uint8A
 	return buffer.subarray(start, end);
 }
 
-function fileByteSource(filePath: string): ByteSource {
-	const file = Bun.file(filePath);
-	const size = file.size;
+async function fileByteSource(filePath: string): Promise<ByteSource> {
+	const size = (await fs.stat(filePath)).size;
 	if (!Number.isSafeInteger(size)) {
 		throw new ToolError("ZIP archive is too large to read safely");
 	}
@@ -169,7 +170,7 @@ function fileByteSource(filePath: string): ByteSource {
 		size,
 		async read(start, end) {
 			assertValidRange(start, end);
-			const bytes = await file.slice(start, end).bytes();
+			const bytes = await readFileRange(filePath, start, end);
 			if (bytes.byteLength !== end - start) {
 				throw new ToolError("Invalid ZIP archive: truncated data");
 			}
@@ -882,17 +883,16 @@ export async function openArchive(source: ArchiveSource): Promise<ArchiveReader>
 			throw new ToolError(`Unsupported archive format: ${source}`);
 		}
 		if (format === "zip") {
-			return new ArchiveReader(format, await readZipEntries(fileByteSource(source)));
+			return new ArchiveReader(format, await readZipEntries(await fileByteSource(source)));
 		}
 
-		const file = Bun.file(source);
-		const archiveSize = file.size;
+		const archiveSize = (await fs.stat(source)).size;
 		if (archiveSize > MAX_TAR_ARCHIVE_BYTES) {
 			throw new ToolError(
 				`Archive is too large to read in memory (${formatBytes(archiveSize)} > ${formatBytes(MAX_TAR_ARCHIVE_BYTES)} limit)`,
 			);
 		}
-		return new ArchiveReader(format, await readTarEntries(await file.bytes()));
+		return new ArchiveReader(format, await readTarEntries(await fs.readFile(source)));
 	}
 
 	const { bytes, format } = source;
@@ -926,7 +926,7 @@ async function resolveArchiveBytes(source: ArchiveSource): Promise<{ bytes: Uint
 	if (!format) {
 		throw new ToolError(`Unsupported archive format: ${source}`);
 	}
-	return { bytes: await Bun.file(source).bytes(), format };
+	return { bytes: await fs.readFile(source), format };
 }
 
 async function memberToBytes(content: ArchiveMemberContent): Promise<Uint8Array> {
@@ -973,7 +973,7 @@ export async function writeArchive(
 		for (const [name, content] of entries) {
 			record[name.replace(/\\/g, "/")] = await memberToBytes(content);
 		}
-		await Bun.write(destPath, zip(record));
+		await writeFileCreatingParents(destPath, zip(record));
 		return;
 	}
 
@@ -981,7 +981,8 @@ export async function writeArchive(
 	for (const [name, content] of entries) {
 		record[name.replace(/\\/g, "/")] = content;
 	}
-	await Bun.Archive.write(destPath, record, format === "tar.gz" ? { compress: "gzip" } : undefined);
+	const archive = new Bun.Archive(record, format === "tar.gz" ? { compress: "gzip" } : undefined);
+	await writeFileCreatingParents(destPath, await archive.bytes());
 }
 
 /**
@@ -999,7 +1000,7 @@ export async function extractArchive(source: ArchiveSource, destDir: string): Pr
 		if (!outputPath.startsWith(extractRoot + path.sep)) {
 			throw new ToolError(`Archive entry escapes extraction dir: ${name}`);
 		}
-		await Bun.write(outputPath, content);
+		await writeFileCreatingParents(outputPath, await memberToBytes(content));
 		count++;
 	}
 	return count;

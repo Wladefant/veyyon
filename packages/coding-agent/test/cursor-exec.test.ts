@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { create } from "@bufbuild/protobuf";
 import type { AgentEvent, AnyAgentTool } from "@veyyon/agent-core";
+import { prepareToolCall } from "@veyyon/agent-core/tool-call-preparation";
 import { GrepArgsSchema, ReadArgsSchema, ShellArgsSchema } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { CursorExecHandlers } from "@veyyon/coding-agent/cursor";
@@ -46,6 +47,7 @@ describe("CursorExecHandlers.grep bridge", () => {
 		searchTool = new SearchTool(createTestSession(cwd));
 		handlers = new CursorExecHandlers({
 			cwd,
+			prepareToolCall: (tool, toolCall) => prepareToolCall(tool, toolCall, {}),
 			tools: new Map<string, AnyAgentTool>([["search", searchTool]]),
 		});
 	});
@@ -106,6 +108,7 @@ describe("CursorExecHandlers error results", () => {
 		const events: AgentEvent[] = [];
 		const handlers = new CursorExecHandlers({
 			cwd: ".",
+			prepareToolCall: (tool, toolCall) => prepareToolCall(tool, toolCall, {}),
 			tools: new Map([["read", rewrittenErrorTool("read")]]),
 			emitEvent: event => events.push(event),
 		});
@@ -122,6 +125,7 @@ describe("CursorExecHandlers error results", () => {
 		const stdout: string[] = [];
 		const handlers = new CursorExecHandlers({
 			cwd: ".",
+			prepareToolCall: (tool, toolCall) => prepareToolCall(tool, toolCall, {}),
 			tools: new Map([["bash", rewrittenErrorTool("bash")]]),
 			emitEvent: event => events.push(event),
 		});

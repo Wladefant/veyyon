@@ -66,16 +66,22 @@ pub trait ExternalCommandOutputMarker: Send + Sync {
 	) -> Option<ExternalCommandOutputMarkers>;
 }
 
-/// Optional hook invoked after each external command is spawned, reporting the
-/// OS identity of the child. Embedders use it to scope process-tree teardown
-/// (cancellation cleanup) to exactly the processes a given run launched, rather
-/// than diffing the whole host process tree — which cannot distinguish the
-/// children of concurrent runs sharing one host process.
+/// Optional hooks around each external command spawn. `on_spawn` reports the
+/// OS identity of the child, which embedders use to scope process-tree
+/// teardown (cancellation cleanup) to exactly the processes a given run
+/// launched, rather than diffing the whole host process tree — which cannot
+/// distinguish the children of concurrent runs sharing one host process.
 ///
-/// Not called for reparented launches (`detach_reparent`): those deliberately
-/// escape the shell's descendant tree (e.g. `nohup cmd &`) and must survive
-/// teardown, so they are intentionally left unowned.
+/// `on_spawn` is not called for reparented launches (`detach_reparent`): those
+/// deliberately escape the shell's descendant tree (e.g. `nohup cmd &`) and
+/// must survive teardown, so they are intentionally left unowned.
 pub trait SpawnObserver: Send + Sync {
+	/// Runs in this process immediately before every external spawn,
+	/// reparented launches included. Embedders mark their own descriptors
+	/// close-on-exec here, so the child inherits only the descriptors the
+	/// command maps into it.
+	fn before_spawn(&self);
+
 	/// Reports a freshly spawned external child. `pgid` is the child's process
 	/// group id when known (always its own pid under `NewProcessGroup`).
 	fn on_spawn(&self, pid: i32, pgid: Option<i32>);

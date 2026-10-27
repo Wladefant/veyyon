@@ -33,21 +33,21 @@ function preparation(reserveTokens: number): CompactionPreparation {
 
 describe("compaction request admission accounting", () => {
 	/** Provider windows cover requested output as well as input, so a larger reserve must raise admission cost exactly. */
-	test("includes the generated-summary token budget", () => {
-		const low = estimateCompactionRequestTokens(preparation(1_000), model);
-		const high = estimateCompactionRequestTokens(preparation(5_000), model);
+	test("includes the generated-summary token budget", async () => {
+		const low = await estimateCompactionRequestTokens(preparation(1_000), model);
+		const high = await estimateCompactionRequestTokens(preparation(5_000), model);
 
 		expect(high - low).toBe(3_200);
 	});
 
 	/** Previous summaries and hook context are physically sent and must count before a fallback model is selected. */
-	test("includes previous summary, custom focus, prompt override, and hook context", () => {
+	test("includes previous summary, custom focus, prompt override, and hook context", async () => {
 		const base = preparation(1_000);
 		const enriched = preparation(1_000);
 		enriched.previousSummary = "prior-summary-evidence ".repeat(2_000);
 
-		const baseTokens = estimateCompactionRequestTokens(base, model);
-		const enrichedTokens = estimateCompactionRequestTokens(enriched, model, "preserve exact failures", {
+		const baseTokens = await estimateCompactionRequestTokens(base, model);
+		const enrichedTokens = await estimateCompactionRequestTokens(enriched, model, "preserve exact failures", {
 			promptOverride: "custom-summary-contract ".repeat(300),
 			extraContext: ["hook-context-evidence ".repeat(500)],
 		});
@@ -56,13 +56,13 @@ describe("compaction request admission accounting", () => {
 	});
 
 	/** A split turn sends two physical requests; admission must use the larger one rather than summing unrelated windows. */
-	test("uses the largest physical split-turn request", () => {
+	test("uses the largest physical split-turn request", async () => {
 		const split = preparation(2_000);
 		split.isSplitTurn = true;
 		split.turnPrefixMessages = [user("turn-prefix-evidence ".repeat(2_000))];
 
-		const combined = estimateCompactionRequestTokens(split, model);
-		const prefixOnly = estimateCompactionRequestTokens(
+		const combined = await estimateCompactionRequestTokens(split, model);
+		const prefixOnly = await estimateCompactionRequestTokens(
 			{ ...split, messagesToSummarize: [], previousSummary: undefined },
 			model,
 		);
@@ -114,11 +114,22 @@ function summarizePreparation(reserveTokens: number | undefined, split: boolean)
 }
 
 /** Requested output tokens for one summarization request, isolated from its static cost. */
-function outputBudget(candidate: Model<Api>, split: boolean): number {
+async function outputBudget(candidate: Model<Api>, split: boolean): Promise<number> {
 	return (
-		estimateCompactionRequestTokens(summarizePreparation(undefined, split), candidate) -
-		estimateCompactionRequestTokens(summarizePreparation(0, split), candidate)
+		(await estimateCompactionRequestTokens(summarizePreparation(undefined, split), candidate)) -
+		(await estimateCompactionRequestTokens(summarizePreparation(0, split), candidate))
 	);
+}
+
+/** `provider/id (window)` of each bundled window whose request at its threshold does not fit it. */
+async function unsendableAtThreshold(split: boolean): Promise<string[]> {
+	const offenders: string[] = [];
+	for (const [window, candidate] of MODEL_BY_WINDOW) {
+		const request =
+			(await outputBudget(candidate, split)) + resolveThresholdTokens(window, DEFAULT_COMPACTION_SETTINGS);
+		if (request > window) offenders.push(`${candidate.provider}/${candidate.id} (${window})`);
+	}
+	return offenders;
 }
 
 /** Windows whose threshold uses the whole default reserve, i.e. the ones the reserve genuinely fits. */
@@ -140,23 +151,13 @@ describe("summarization output budget against the candidate window", () => {
 	 * total has to fit the window, for every window, or compaction is impossible
 	 * on that model rather than merely tight.
 	 */
-	test("the budget leaves room for the history that triggered compaction", () => {
-		const offenders = MODEL_BY_WINDOW.filter(
-			([window, candidate]) =>
-				outputBudget(candidate, false) + resolveThresholdTokens(window, DEFAULT_COMPACTION_SETTINGS) > window,
-		).map(([window, candidate]) => `${candidate.provider}/${candidate.id} (${window})`);
-
-		expect(offenders).toEqual([]);
+	test("the budget leaves room for the history that triggered compaction", async () => {
+		expect(await unsendableAtThreshold(false)).toEqual([]);
 	});
 
 	/** A split turn sends a second, smaller request; it is bounded by the same window. */
-	test("the turn-prefix budget leaves the same room", () => {
-		const offenders = MODEL_BY_WINDOW.filter(
-			([window, candidate]) =>
-				outputBudget(candidate, true) + resolveThresholdTokens(window, DEFAULT_COMPACTION_SETTINGS) > window,
-		).map(([window, candidate]) => `${candidate.provider}/${candidate.id} (${window})`);
-
-		expect(offenders).toEqual([]);
+	test("the turn-prefix budget leaves the same room", async () => {
+		expect(await unsendableAtThreshold(true)).toEqual([]);
 	});
 
 	/**
@@ -164,10 +165,10 @@ describe("summarization output budget against the candidate window", () => {
 	 * window the reserve fits in asks for exactly what it always asked for, so
 	 * nobody's summaries got shorter to fix a 16k model.
 	 */
-	test("a window the reserve fits in asks for the full budget", () => {
+	test("a window the reserve fits in asks for the full budget", async () => {
 		for (const [, candidate] of ROOMY) {
-			expect(outputBudget(candidate, false)).toBe(Math.floor(0.8 * DEFAULT_RESERVE_TOKENS));
-			expect(outputBudget(candidate, true)).toBe(Math.floor(0.5 * DEFAULT_RESERVE_TOKENS));
+			expect(await outputBudget(candidate, false)).toBe(Math.floor(0.8 * DEFAULT_RESERVE_TOKENS));
+			expect(await outputBudget(candidate, true)).toBe(Math.floor(0.5 * DEFAULT_RESERVE_TOKENS));
 		}
 	});
 });
