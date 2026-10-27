@@ -42,6 +42,7 @@ const NOT_READY_RETRY_MS = 100;
  * and its turn has not started streaming. A delivery on the chain retries this briefly.
  */
 export class TerminalNotReadyError extends Error {}
+class TerminalSessionChangedError extends Error {}
 
 type DeliveryState =
 	| { state: "pending" }
@@ -143,7 +144,7 @@ export async function serveTerminalControl(
 			for (let attempt = 0; ; attempt++) {
 				// The session may have changed since the message was accepted. Never deliver it to another one.
 				if (closed || sessionId !== target.identity().sessionId) {
-					throw new Error("Terminal session detached or changed; message not delivered");
+					throw new TerminalSessionChangedError("Terminal session detached or changed; message not delivered");
 				}
 				try {
 					return await target.deliver(text, mode);
@@ -193,7 +194,7 @@ export async function serveTerminalControl(
 		void deliveryPromise.then(
 			outcome => { record.status = { state: "delivered", outcome }; },
 			error => {
-				if (error instanceof TerminalNotReadyError || String(error).includes("session detached or changed")) {
+				if (error instanceof TerminalNotReadyError || error instanceof TerminalSessionChangedError) {
 					deliveries.delete(key);
 					return;
 				}
@@ -352,7 +353,7 @@ export async function serveTerminalControl(
 									void deliveryPromise.then(
 										outcome => { record.status = { state: "delivered", outcome }; },
 										error => {
-											if (error instanceof TerminalNotReadyError || String(error).includes("session detached or changed")) {
+											if (error instanceof TerminalNotReadyError || error instanceof TerminalSessionChangedError) {
 												deliveries.delete(key);
 												return;
 											}

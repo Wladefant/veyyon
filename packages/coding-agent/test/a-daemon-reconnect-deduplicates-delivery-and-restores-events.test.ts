@@ -7,7 +7,7 @@ import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { serveTerminalControl, type TerminalOwner } from "../src/launch/terminal-control";
+import { serveTerminalControl, TerminalNotReadyError, type TerminalOwner } from "../src/launch/terminal-control";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -345,6 +345,24 @@ test("message ids and delivery announcements stay within their accepting session
 	gate.resolve();
 	const newOutcome = await newClient.next(frame => frame.event?.kind === "delivery" && frame.messageId === "same-id");
 	expect(newOutcome.event?.sessionId).toBe("sess-after-switch");
+});
+
+test("an exhausted terminal-not-ready delivery can retry with the same message id", async () => {
+	let attempts = 0;
+	const owner = await serve(async () => {
+		if (++attempts <= 21) throw new TerminalNotReadyError("terminal is not ready");
+		return "delivered";
+	});
+	const client = connect(owner);
+	client.send({ id: "not-ready-first", op: "deliver", text: "retry me", mode: "auto", messageId: "not-ready-retry" });
+	const rejected = await client.next(frame => frame.id === "not-ready-first");
+	expect(rejected.ok).toBe(false);
+	expect(rejected.error).toContain("TerminalNotReadyError");
+	client.send({ id: "not-ready-retry", op: "deliver", text: "retry me", mode: "auto", messageId: "not-ready-retry" });
+	const retried = await client.next(frame => frame.id === "not-ready-retry");
+	expect(retried.ok).toBe(true);
+	expect(retried.result).toBe("delivered");
+	expect(attempts).toBe(22);
 });
 
 test("concurrent or repeated deliveries with the same messageId share a single terminal turn", async () => {
