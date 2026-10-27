@@ -35,7 +35,6 @@
 	"packages/coding-agent/src/debug/report-bundle.ts": 4,
 	"packages/coding-agent/src/eval/agent-bridge.ts": 1,
 	"packages/coding-agent/src/eval/js/shared/helpers.ts": 3,
-	"packages/coding-agent/src/eval/kernel-base.ts": 1,
 	"packages/coding-agent/src/export/markit/converters/docx.ts": 1,
 	"packages/coding-agent/src/export/markit/converters/pdf/index.ts": 1,
 	"packages/coding-agent/src/export/markit/converters/pptx.ts": 1,

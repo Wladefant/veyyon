@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createRunnerScriptPublisher, kernelRunnerCacheDir } from "@veyyon/coding-agent/eval/kernel-base";
@@ -74,7 +75,7 @@ describe("the runner script publisher", () => {
 		const script = "print('runner')\n";
 		const publish = publisherFor(isolatedLanguage(), script);
 		// Windows refuses to replace a script an interpreter holds open: the other publisher's file is there.
-		vi.spyOn(fs.promises, "rename").mockImplementation(async (_from, to) => {
+		vi.spyOn(fsp, "rename").mockImplementation(async (_from, to) => {
 			fs.writeFileSync(to, script);
 			throw Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" });
 		});
@@ -88,7 +89,7 @@ describe("the runner script publisher", () => {
 	it("fails when the rename fails and no script is there", async () => {
 		const language = isolatedLanguage();
 		const publish = publisherFor(language, "print('runner')\n");
-		vi.spyOn(fs.promises, "rename").mockRejectedValue(
+		vi.spyOn(fsp, "rename").mockRejectedValue(
 			Object.assign(new Error("EACCES: permission denied, rename"), { code: "EACCES" }),
 		);
 

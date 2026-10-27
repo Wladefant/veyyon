@@ -1,7 +1,16 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $flag, errorMessage, isBunTestRuntime, isTimeoutError, logger, readLines, Snowflake } from "@veyyon/utils";
+import {
+	$flag,
+	atomicWriteFile,
+	errorMessage,
+	isBunTestRuntime,
+	isTimeoutError,
+	logger,
+	readLines,
+	Snowflake,
+} from "@veyyon/utils";
 import type { Subprocess } from "bun";
 import { Settings } from "../config/settings";
 import { type KernelDisplayOutput, renderKernelDisplay } from "./py/display";
@@ -213,8 +222,8 @@ export function kernelRunnerCacheDir(tmpDir: string, language: string): string {
  *
  * The presence check runs on every kernel start, not once per process: a temp cleaner (`systemd-tmpfiles`,
  * a tmpfs wiped on a schedule) removes the file while the process runs, and every kernel started on the
- * missing path exits before its first frame. The script is written to a sibling file and renamed over the
- * target, so another process that finds the target never runs a partly written script.
+ * missing path exits before its first frame. The script is written with `atomicWriteFile`, so another
+ * process that finds the target never runs a partly written script.
  */
 export function createRunnerScriptPublisher(
 	language: string,
@@ -225,15 +234,12 @@ export function createRunnerScriptPublisher(
 	const target = path.join(cacheDir, `runner-${Bun.hash(script).toString(36)}.${extension}`);
 	return async () => {
 		if (fs.existsSync(target)) return target;
-		await fs.promises.mkdir(cacheDir, { recursive: true });
-		const staging = `${target}.${process.pid}-${Snowflake.next()}.tmp`;
-		await fs.promises.writeFile(staging, script);
 		try {
-			await fs.promises.rename(staging, target);
+			// 0o644, the mode a plain write gave it: the file holds no secret.
+			await atomicWriteFile(target, script, { mode: 0o644 });
 		} catch (error) {
 			// Windows refuses to replace a script another process's interpreter holds open; that file is
 			// the same script, written by a concurrent publisher.
-			await fs.promises.rm(staging, { force: true });
 			if (!fs.existsSync(target)) throw error;
 		}
 		return target;
