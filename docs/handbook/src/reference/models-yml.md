@@ -297,6 +297,8 @@ If `llama.cpp` is not explicitly configured, registry adds an implicit discovera
 
 Runtime discovery calls llama.cpp model endpoints and synthesizes model entries with local defaults.
 
+Discovery probes a llama.cpp endpoint, implicit or configured, on every refresh whatever `models.db` holds, so a server restarted with a new `n_ctx` reports its context window at the next launch. When the probe fails, the cached models stay listed, and the cache entry is rewritten only when its content changes.
+
 ### Implicit LM Studio discovery
 
 If `lm-studio` is not explicitly configured, registry adds an implicit discoverable provider:

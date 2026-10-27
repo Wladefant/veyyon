@@ -223,6 +223,11 @@ export function readModelCache<TApi extends Api>(
 	}
 }
 
+/**
+ * Upsert `providerId`'s row. With `skipUnchanged`, a row that already states the same content (every
+ * persisted field except the timestamp) is left as it is, timestamp included: the upsert then modifies no
+ * page, so it appends no WAL frame and costs no sync.
+ */
 export function writeModelCache<TApi extends Api>(
 	providerId: string,
 	updatedAt: number,
@@ -230,6 +235,7 @@ export function writeModelCache<TApi extends Api>(
 	authoritative: boolean,
 	staticFingerprint: string,
 	dbPath?: string,
+	options: { skipUnchanged?: boolean } = {},
 ): void {
 	try {
 		withModelCacheDb(dbPath, db => {
@@ -246,6 +252,9 @@ export function writeModelCache<TApi extends Api>(
 				.digest("hex");
 			// An upsert, not INSERT OR REPLACE: the latter deletes and re-inserts,
 			// which fires the mutation triggers for a row whose content did not move.
+			const unchangedGuard = options.skipUnchanged
+				? " WHERE model_cache.content_fingerprint IS NOT excluded.content_fingerprint"
+				: "";
 			db.run(
 				`INSERT INTO model_cache
 				 (provider_id, version, updated_at, authoritative, static_fingerprint, content_fingerprint, models)
@@ -256,7 +265,7 @@ export function writeModelCache<TApi extends Api>(
 				     authoritative = excluded.authoritative,
 				     static_fingerprint = excluded.static_fingerprint,
 				     content_fingerprint = excluded.content_fingerprint,
-				     models = excluded.models`,
+				     models = excluded.models${unchangedGuard}`,
 				[
 					providerId,
 					CACHE_SCHEMA_VERSION,
