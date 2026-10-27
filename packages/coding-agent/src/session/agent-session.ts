@@ -80,7 +80,7 @@ import {
 	type SessionContext,
 } from "@veyyon/kernel/session/session-context";
 import type { NewSessionOptions } from "@veyyon/kernel/session/session-entries";
-import { cleanupEmptyMoveSession, type SessionManager } from "@veyyon/kernel/session/session-manager";
+import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { ShakeMode, ShakeResult } from "@veyyon/kernel/session/shake-types";
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import { ToolChoiceQueue } from "@veyyon/kernel/session/tool-choice-queue";
@@ -589,8 +589,6 @@ export class AgentSession {
 	readonly #spendLedger = new SessionSpendLedger();
 	#clientBridge: ClientBridge | undefined;
 	#allowAcpAgentInitiatedTurns = false;
-	/** Session file created by this session's `/move`; removed on dispose if it stayed empty. */
-	#movedFromEmptySessionFile?: string;
 
 	readonly #compaction = new CompactionRuntime(this, {
 		emitSessionEvent: event => this.#emitSessionEvent(event),
@@ -2597,10 +2595,6 @@ export class AgentSession {
 		return this.#isDisposed;
 	}
 
-	markMovedFromEmptySessionFile(sessionFile: string): void {
-		this.#movedFromEmptySessionFile = path.resolve(sessionFile);
-	}
-
 	/**
 	 * Synchronously mark the session as disposing so new work is rejected
 	 * immediately: eval starts throw, queued asides are dropped, and the
@@ -2723,9 +2717,6 @@ export class AgentSession {
 			}
 		}
 		this.#inFlight.releasePowerAssertion();
-		// Clean up an empty session created by this session's /move so it doesn't accumulate.
-		await cleanupEmptyMoveSession(this.sessionManager, this.#movedFromEmptySessionFile);
-		this.#movedFromEmptySessionFile = undefined;
 		await this.sessionManager.close();
 		// beginDispose() stopped the advisor and captured its recorder close; await
 		// it so the final advisor turn is flushed before the process may exit.

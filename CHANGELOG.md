@@ -56,6 +56,10 @@
 - `FramePacer`'s comments in `core/frame-pacing.ts` are shorter, keeping the module under its size ceiling; behavior is unchanged.
 - `sgrEnd` is exported from `@veyyon/utils/ansi` and is the single definition `wrap` and `width` use; no user-facing change.
 
+### Removed
+
+- `AgentSession.markMovedFromEmptySessionFile` and the dispose step that read it are removed; nothing called the method, so the step never ran; no user-facing change.
+
 ### Fixed
 
 - `/force`, the executor's final `yield` reminder and the eager todo require their tool on OpenRouter, Cursor, Devin and GitLab Duo models, where they required nothing and `/force` failed with `Current model does not support forcing a specific tool.`

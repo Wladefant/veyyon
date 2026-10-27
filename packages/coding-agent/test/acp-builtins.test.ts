@@ -24,7 +24,6 @@ interface FakeAcpBuiltinSession {
 	_todoPhases: Array<{ name: string; tasks: Array<{ content: string; status: string }> }>;
 	agent: { _messages: unknown[]; appendMessage(message: unknown): void };
 	_switchedTo: string | undefined;
-	_movedFromEmptySessionFile: string | undefined;
 	toggleFastMode(): boolean;
 	setFastMode(enabled: boolean): boolean;
 	isFastModeEnabled(): boolean;
@@ -39,7 +38,6 @@ interface FakeAcpBuiltinSession {
 	model: { provider: string; id: string } | undefined;
 	newSession(opts?: { drop?: boolean; parentSession?: string }): Promise<boolean>;
 	switchSession(sessionPath: string): Promise<boolean>;
-	markMovedFromEmptySessionFile(sessionFile: string): void;
 	fork(): Promise<boolean>;
 	handoff(instr?: string): Promise<{ document: string; savedPath?: string } | undefined>;
 	exportToHtml(outputPath?: string): Promise<string>;
@@ -101,7 +99,6 @@ function createRuntime() {
 			},
 		},
 		_switchedTo: undefined,
-		_movedFromEmptySessionFile: undefined,
 		toggleFastMode() {
 			this.fastMode = !this.fastMode;
 			return this.fastMode;
@@ -132,9 +129,6 @@ function createRuntime() {
 			await fakeSessionManager.flush();
 			await fakeSessionManager.setSessionFile(this._switchedTo);
 			return true;
-		},
-		markMovedFromEmptySessionFile(sessionFile: string) {
-			this._movedFromEmptySessionFile = path.resolve(sessionFile);
 		},
 		async fork() {
 			return true;
@@ -935,7 +929,6 @@ describe("wave 3 commands", () => {
 			expect(fakeSessionManager._movedTo).toBe(targetDir);
 			expect(fakeSessionManager.getCwd()).toBe(targetDir);
 			expect(session._switchedTo).toBeUndefined();
-			expect(session._movedFromEmptySessionFile).toBeUndefined();
 			expect(moveToCwd).toHaveBeenCalledTimes(1);
 			expect(moveToCwd).toHaveBeenCalledWith(targetDir);
 			expect(output[0]).toContain(`Moved to ${targetDir}.`);

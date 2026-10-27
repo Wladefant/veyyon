@@ -87,6 +87,10 @@
 - Fixed a run that failed after one or more tool steps (a credential lookup or provider call that threw) being settled on its earlier tool-use reply, so a transient failure there is now retried and `session_stop` hooks receive the failure.
 - An @-mentioned image is encoded for the active model, so a model that cannot decode WebP (Ollama, llama.cpp, LM Studio and other `stb`-backed local servers) receives PNG or JPEG instead of WebP, and with `images.autoResize` off the mention goes through the same canonical re-encode as the read tool.
 
+### Removed
+
+- `AgentSession.markMovedFromEmptySessionFile` and the dispose step that read it are removed; nothing called the method, so the step never ran; no user-facing change.
+
 ## [1.5.10] - 2026-10-25
 
 ### Added
