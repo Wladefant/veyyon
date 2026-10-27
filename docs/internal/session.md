@@ -57,6 +57,7 @@ every field of one subsystem and reaches the session through a host interface it
 |[`irc-inbox.ts`](../../packages/coding-agent/src/session/runtime/irc-inbox.ts)|The peer IRC messages that arrived while a turn streamed and the auto-replies sent on the session's behalf, until a step boundary, an `irc` inbox call or the next prompt takes them; held by `irc-delivery.ts`, no host|0|
 |[`session-stop-hook.ts`](../../packages/coding-agent/src/session/runtime/session-stop-hook.ts)|The `session_stop` pass at a final stop and the chain of hidden continuations its handlers queue: the count behind `stop_hook_active`, the cap that ends a chain, and the drop of a result an abort or dispose overtook|7|
 |[`next-turn-messages.ts`](../../packages/coding-agent/src/session/runtime/next-turn-messages.ts)|The hidden messages queued for the next turn (extension `nextTurn` deliveries, advisor cards parked mid-abort, `session_stop` continuations) and the prompt generation of a turn a queued message requested that has not started; a prompt takes the queue ahead of its own message|3|
+|[`model-selection.ts`](../../packages/coding-agent/src/session/runtime/model-selection.ts)|The saved switch, the session-only switch and the Ctrl+P cycle through the scoped or the available models, with the scoped models the session was created with; every switch lifts the model's suppressed selector, installs it, records it in the session file and in model usage, applies its thinking level and rebuilds the prompt it moved|10|
 
 Three rules hold for a new one:
 

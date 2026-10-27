@@ -104,7 +104,7 @@ import {
 	contextCompaction,
 	type SessionContext,
 } from "@veyyon/kernel/session/session-context";
-import { EPHEMERAL_MODEL_CHANGE_ROLE, type NewSessionOptions } from "@veyyon/kernel/session/session-entries";
+import type { NewSessionOptions } from "@veyyon/kernel/session/session-entries";
 import { cleanupEmptyMoveSession, type SessionManager } from "@veyyon/kernel/session/session-manager";
 import {
 	isAwaitingUserAnswer,
@@ -138,19 +138,10 @@ import {
 } from "../argot-wire";
 import { type AsyncJob, AsyncJobManager } from "../async";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
-import { credentialRemedySentence, missingCredentialsMessage } from "../config/missing-credentials";
-import { normalizeModelPatternList } from "../config/model-pattern-list";
+import { credentialRemedySentence } from "../config/missing-credentials";
 import type { ModelRegistry } from "../config/model-registry";
 import { noModelSelectedMessage } from "../config/model-resolution-failure";
-import {
-	extractExplicitThinkingSelector,
-	filterAvailableModelsByEnabledPatterns,
-	formatModelSelectorValue,
-	formatModelString,
-	formatModelStringWithRouting,
-	getModelMatchPreferences,
-	resolveModelSelectorValue,
-} from "../config/model-resolver";
+import { formatModelString, getModelMatchPreferences, resolveModelSelectorValue } from "../config/model-resolver";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily, PRIORITY_TIER_COMMAND_LABEL } from "../config/service-tier";
 import { type Settings, type SkillsSettings, validateProviderMaxInFlightRequests } from "../config/settings";
@@ -275,6 +266,7 @@ import {
 	type SecretRuntimeLease,
 	type SessionHandoffOptions,
 	type SessionNameTrigger,
+	type SessionScopedModel,
 	type SessionSpend,
 	type SessionStats,
 	type SetSessionNameWithTrigger,
@@ -313,6 +305,7 @@ import { LoopGuards } from "./runtime/loop-guards";
 import { lastDeliveredBlock, MemoryContext } from "./runtime/memory-context";
 import { MessagePersistence } from "./runtime/message-persistence";
 import { ModelHandoff } from "./runtime/model-handoff";
+import { ModelSelection, type SetModelOptions } from "./runtime/model-selection";
 import { NextTurnMessages } from "./runtime/next-turn-messages";
 import { PlanModeRuntime } from "./runtime/plan-mode-runtime";
 import { PostPromptTasks } from "./runtime/post-prompt-tasks";
@@ -683,11 +676,6 @@ export class AgentSession {
 
 	readonly configWarnings: string[] = [];
 
-	#scopedModels: Array<{
-		model: Model;
-		thinkingLevel?: ConfiguredThinkingLevel;
-		explicitThinkingLevel?: boolean;
-	}>;
 	#handoff: ModelHandoff;
 
 	#promptTemplates: PromptTemplate[];
@@ -913,6 +901,8 @@ export class AgentSession {
 	/** How hard the model thinks and who decided: the session override, the
 	 *  selector pin, the saved default, and `auto`. Owns all thinking state. */
 	#thinking: ThinkingRuntime;
+	/** The model switches a caller makes and the scoped models Ctrl+P cycles through. */
+	readonly #models: ModelSelection;
 	/** Stops a turn while an `edit` call streams into an auto-generated file or a
 	 *  patch that cannot apply. Owns all streaming-edit check state. */
 	readonly #streamingEdit: StreamingEditGuard;
@@ -1174,7 +1164,6 @@ export class AgentSession {
 		);
 		this.#evalKernelOwnerId = config.evalKernelOwnerId ?? `agent-session:${Snowflake.next()}`;
 		this.#asyncJobManager = config.asyncJobManager ?? config.ownedAsyncJobManager;
-		this.#scopedModels = config.scopedModels ?? [];
 		this.#thinking = new ThinkingRuntime({
 			agent: this.agent,
 			sessionStore: this.sessionManager,
@@ -1190,6 +1179,23 @@ export class AgentSession {
 			emitSessionEvent: event => this.#emit(event),
 		});
 		this.#thinking.seedFromConfig(config.thinkingLevel, config.thinkingSource);
+		this.#models = new ModelSelection(
+			{
+				settings: this.settings,
+				sessionManager: this.sessionManager,
+				thinking: this.#thinking,
+				modelRegistry: () => this.#config.modelRegistry,
+				model: () => this.model,
+				sessionId: () => this.sessionId,
+				activeEditMode: () => resolveActiveEditMode(this.settings, this.model),
+				installModel: model => {
+					this.#retry.clearActiveFallback();
+					this.#setModelWithProviderSessionReset(model);
+				},
+				syncAfterModelChange: previousEditMode => this.#syncAfterModelChange(previousEditMode),
+			},
+			config.scopedModels ?? [],
+		);
 		this.#handoff = new ModelHandoff(
 			{
 				agent: this.agent,
@@ -4100,12 +4106,8 @@ export class AgentSession {
 	}
 
 	/** Scoped models for cycling (from --models flags). */
-	get scopedModels(): ReadonlyArray<{
-		model: Model;
-		thinkingLevel?: ConfiguredThinkingLevel;
-		explicitThinkingLevel?: boolean;
-	}> {
-		return this.#scopedModels;
+	get scopedModels(): readonly SessionScopedModel[] {
+		return this.#models.scoped;
 	}
 
 	/** Prompt templates */
@@ -5606,199 +5608,37 @@ export class AgentSession {
 	// =========================================================================
 
 	/**
-	 * Set model directly.
-	 * Validates that a credential source is configured (synchronously, without
-	 * refreshing OAuth or running command-backed key programs). Active switches
-	 * always take effect; if the current transcript is too large for the target
-	 * model, the next prompt's compaction/error path owns that recovery instead
-	 * of leaving the session pinned to the old model.
-	 * @throws Error if no API key available for the model
+	 * Set model directly, recorded under `slot` and saved as `defaultModel` with `options.persist`.
+	 * See {@link ModelSelection.setModel}.
+	 * @throws Error if no credential source is configured for the model
 	 */
-	async setModel(
-		model: Model,
-		slot = "default",
-		options?: {
-			selector?: string;
-			thinkingLevel?: ConfiguredThinkingLevel;
-			persist?: boolean;
-			currentContextTokens?: number;
-		},
-	): Promise<{ switched: boolean }> {
-		const previousEditMode = resolveActiveEditMode(this.settings, this.model);
-		if (!this.#config.modelRegistry.hasConfiguredAuth(model)) {
-			throw new Error(missingCredentialsMessage(model.provider, model.id, "the requested model"));
-		}
-
-		const targetModel = await this.#config.modelRegistry.refreshSelectedModelMetadata(model);
-
-		this.#config.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
-		this.#retry.clearActiveFallback();
-		this.#setModelWithProviderSessionReset(targetModel);
-		this.sessionManager.appendModelChange(`${targetModel.provider}/${targetModel.id}`, slot);
-		if (options?.persist) {
-			this.settings.setDefaultModel(
-				this.#formatDefaultModelValue(targetModel, options.selector, options.thinkingLevel),
-			);
-		}
-		AgentStorage.forAgentDir(this.settings.getAgentDir())?.recordModelUsage(
-			`${targetModel.provider}/${targetModel.id}`,
-		);
-
-		// Apply the session override, explicit selector variant, saved per-model
-		// default, or model default in that order.
-		this.#thinking.reapplyForModel(options?.thinkingLevel);
-		await this.#syncAfterModelChange(previousEditMode);
-		return { switched: true };
+	setModel(model: Model, slot = "default", options?: SetModelOptions): Promise<{ switched: boolean }> {
+		return this.#models.setModel(model, slot, options);
 	}
 
 	/**
-	 * Set model temporarily (for this session only).
-	 * Validates that a credential source is configured (synchronously, without
-	 * refreshing OAuth or running command-backed key programs), saves to session
-	 * log but NOT to settings.
-	 * @throws Error if no API key available for the model
+	 * Set model for this session only: the session file records it, settings do not.
+	 * @throws Error if no credential source is configured for the model
 	 */
-	async setModelTemporary(
+	setModelTemporary(
 		model: Model,
 		thinkingLevel?: ConfiguredThinkingLevel,
 		options?: { ephemeral?: boolean },
 	): Promise<void> {
-		const previousEditMode = resolveActiveEditMode(this.settings, this.model);
-		if (!this.#config.modelRegistry.hasConfiguredAuth(model)) {
-			throw new Error(missingCredentialsMessage(model.provider, model.id, "the requested model"));
-		}
-
-		const targetModel = await this.#config.modelRegistry.refreshSelectedModelMetadata(model);
-
-		this.#config.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
-		this.#retry.clearActiveFallback();
-		this.#setModelWithProviderSessionReset(targetModel);
-		this.sessionManager.appendModelChange(
-			`${targetModel.provider}/${targetModel.id}`,
-			options?.ephemeral ? EPHEMERAL_MODEL_CHANGE_ROLE : "temporary",
-		);
-		AgentStorage.forAgentDir(this.settings.getAgentDir())?.recordModelUsage(
-			`${targetModel.provider}/${targetModel.id}`,
-		);
-
-		this.#thinking.reapplyForModel(thinkingLevel);
-		await this.#syncAfterModelChange(previousEditMode);
+		return this.#models.setModelTemporary(model, thinkingLevel, options);
 	}
 
 	/**
-	 * Cycle to next/previous model.
-	 * Uses scoped models (from --models flag) if available, otherwise all available models.
-	 * @param direction - "forward" (default) or "backward"
-	 * @returns The new model info, or undefined if only one model available
+	 * Cycle to the next or previous model: the scoped models (from `--models`) when there are any,
+	 * otherwise every available model. Undefined when there is at most one to cycle through.
 	 */
-	async cycleModel(direction: "forward" | "backward" = "forward"): Promise<ModelCycleResult | undefined> {
-		if (this.#scopedModels.length > 0) {
-			return this.#cycleScopedModel(direction);
-		}
-		return this.#cycleAvailableModel(direction);
+	cycleModel(direction: "forward" | "backward" = "forward"): Promise<ModelCycleResult | undefined> {
+		return this.#models.cycle(direction);
 	}
 
-	async #getScopedModelsWithApiKey(): Promise<
-		Array<{
-			model: Model;
-			thinkingLevel?: ConfiguredThinkingLevel;
-			explicitThinkingLevel?: boolean;
-		}>
-	> {
-		const apiKeysByProvider = new Map<string, string | undefined>();
-		const result: Array<{
-			model: Model;
-			thinkingLevel?: ConfiguredThinkingLevel;
-			explicitThinkingLevel?: boolean;
-		}> = [];
-
-		for (const scoped of this.#scopedModels) {
-			const provider = scoped.model.provider;
-			let apiKey: string | undefined;
-			if (apiKeysByProvider.has(provider)) {
-				apiKey = apiKeysByProvider.get(provider);
-			} else {
-				apiKey = await this.#config.modelRegistry.getApiKeyForProvider(provider, this.sessionId);
-				apiKeysByProvider.set(provider, apiKey);
-			}
-
-			if (apiKey) {
-				result.push(scoped);
-			}
-		}
-
-		return result;
-	}
-
-	async #cycleScopedModel(direction: "forward" | "backward"): Promise<ModelCycleResult | undefined> {
-		const previousEditMode = resolveActiveEditMode(this.settings, this.model);
-		const scopedModels = await this.#getScopedModelsWithApiKey();
-		if (scopedModels.length <= 1) return undefined;
-
-		const currentModel = this.model;
-		let currentIndex = scopedModels.findIndex(sm => modelsAreEqual(sm.model, currentModel));
-
-		if (currentIndex === -1) currentIndex = 0;
-		const len = scopedModels.length;
-		const nextIndex = direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
-		const next = scopedModels[nextIndex];
-
-		// Apply model
-		this.#config.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(next.model));
-		this.#retry.clearActiveFallback();
-		this.#setModelWithProviderSessionReset(next.model);
-		this.sessionManager.appendModelChange(`${next.model.provider}/${next.model.id}`);
-		AgentStorage.forAgentDir(this.settings.getAgentDir())?.recordModelUsage(
-			`${next.model.provider}/${next.model.id}`,
-		);
-
-		// An unsuffixed scoped entry re-reads the current saved per-model default;
-		// only an explicit scope suffix is a selector pin.
-		this.#thinking.reapplyForModel(next.explicitThinkingLevel ? next.thinkingLevel : undefined);
-		await this.#syncAfterModelChange(previousEditMode);
-
-		return { model: next.model, thinkingLevel: this.thinkingLevel, isScoped: true };
-	}
-
-	async #cycleAvailableModel(direction: "forward" | "backward"): Promise<ModelCycleResult | undefined> {
-		const previousEditMode = resolveActiveEditMode(this.settings, this.model);
-		const availableModels = this.#config.modelRegistry.getAvailable();
-		if (availableModels.length <= 1) return undefined;
-
-		const currentModel = this.model;
-		let currentIndex = availableModels.findIndex(m => modelsAreEqual(m, currentModel));
-
-		if (currentIndex === -1) currentIndex = 0;
-		const len = availableModels.length;
-		const nextIndex = direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
-		const nextModel = availableModels[nextIndex];
-
-		const apiKey = await this.#config.modelRegistry.getApiKey(nextModel, this.sessionId);
-		if (!apiKey) {
-			throw new Error(missingCredentialsMessage(nextModel.provider, nextModel.id, "the next model in the cycle"));
-		}
-
-		this.#config.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(nextModel));
-		this.#retry.clearActiveFallback();
-		this.#setModelWithProviderSessionReset(nextModel);
-		this.sessionManager.appendModelChange(`${nextModel.provider}/${nextModel.id}`);
-		AgentStorage.forAgentDir(this.settings.getAgentDir())?.recordModelUsage(`${nextModel.provider}/${nextModel.id}`);
-		// Re-apply the current thinking level (or auto) for the newly selected model
-		this.#thinking.reapplyForModel();
-		await this.#syncAfterModelChange(previousEditMode);
-
-		return { model: nextModel, thinkingLevel: this.thinkingLevel, isScoped: false };
-	}
-
-	/**
-	 * Get all available models with valid API keys, filtered by `enabledModels` when configured.
-	 * See {@link filterAvailableModelsByEnabledPatterns} for supported pattern forms and limitations.
-	 */
+	/** Every available model with a valid API key, narrowed by the `enabledModels` patterns when set. */
 	getAvailableModels(): Model[] {
-		const all = this.#config.modelRegistry.getAvailable();
-		const patterns = this.settings.get("enabledModels");
-		if (!patterns || patterns.length === 0) return all;
-		return filterAvailableModelsByEnabledPatterns(all, patterns);
+		return this.#models.available();
 	}
 
 	/**
@@ -6344,26 +6184,6 @@ export class AgentSession {
 		} else if (!enable && this.agent.appendOnlyContext) {
 			this.agent.setAppendOnlyContext(undefined);
 		}
-	}
-
-	/**
-	 * The `defaultModel` value a persisted switch writes: the chosen selector, carrying an explicit
-	 * effort suffix when one was passed or when the configured primary already named one.
-	 */
-	#formatDefaultModelValue(
-		model: Model,
-		selectorOverride?: string,
-		thinkingLevelOverride?: ConfiguredThinkingLevel,
-	): string {
-		const modelKey = selectorOverride ?? `${model.provider}/${model.id}`;
-		if (thinkingLevelOverride !== undefined) {
-			return formatModelSelectorValue(modelKey, thinkingLevelOverride);
-		}
-		const [primary] = normalizeModelPatternList(this.settings.get("defaultModel"));
-		const thinkingLevel = extractExplicitThinkingSelector(primary, {
-			isLiteralModelId: (provider, id) => this.#config.modelRegistry.find(provider, id) !== undefined,
-		});
-		return formatModelSelectorValue(modelKey, thinkingLevel);
 	}
 
 	/**

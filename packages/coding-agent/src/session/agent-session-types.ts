@@ -175,12 +175,7 @@ export interface AgentSessionConfig {
 	 */
 	parentApprovalBypassed?: () => boolean;
 	/** Models to cycle through with Ctrl+P (from --models flags). */
-	scopedModels?: Array<{
-		model: Model;
-		thinkingLevel?: ConfiguredThinkingLevel;
-		/** True only when this entry carried an explicit `:effort` suffix. */
-		explicitThinkingLevel?: boolean;
-	}>;
+	scopedModels?: SessionScopedModel[];
 	/** Initial session thinking selector. */
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Origin of the initial selector, used to distinguish a session override from a saved default. */
@@ -448,6 +443,14 @@ export interface SessionHandoffOptions {
 	autoTriggered?: boolean;
 	signal?: AbortSignal;
 	onSwitchCancelled?: () => void;
+}
+
+/** A model Ctrl+P cycles through, from the `--models` flags. */
+export interface SessionScopedModel {
+	model: Model;
+	thinkingLevel?: ConfiguredThinkingLevel;
+	/** True only when this entry carried an explicit `:effort` suffix. */
+	explicitThinkingLevel?: boolean;
 }
 
 /** Result from cycleModel() */

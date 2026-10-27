@@ -420,11 +420,17 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * imports `@veyyon/utils` and `session/nudges.ts`, both already here; the second has only type
  * imports. Measured 2026-10-26 at 1504.
  *
+ * 1504 to 1505: `coding-agent/src/session/runtime/model-selection.ts`, the session collaborator
+ * that makes the saved switch, the session-only switch and the Ctrl+P cycle. It left
+ * `session/agent-session.ts`, already here, and its runtime imports (the model equality check, the
+ * agent storage, the session entry roles, the credential message and the model resolver) are
+ * already here. Measured 2026-10-26 at 1505.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1504;
+const LAUNCH_REACH_CEILING = 1505;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

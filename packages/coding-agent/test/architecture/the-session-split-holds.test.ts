@@ -89,8 +89,10 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * the `session-stop-hook.ts` collaborator (-56).
  * RE-MEASURED 2026-10-26 at 7142: the hidden next-turn queue and the turn a queued message requests
  * left as the `next-turn-messages.ts` collaborator (-73).
+ * RE-MEASURED 2026-10-26 at 6962: the saved switch, the session-only switch and the Ctrl+P cycle
+ * left as the `model-selection.ts` collaborator with the scoped models (-180).
  */
-const RUNTIME_CEILING = 7_200;
+const RUNTIME_CEILING = 7_000;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -116,6 +118,7 @@ const COLLABORATORS = [
 	"memory-context.ts",
 	"message-persistence.ts",
 	"model-handoff.ts",
+	"model-selection.ts",
 	"next-turn-messages.ts",
 	"plan-mode-runtime.ts",
 	"post-prompt-tasks.ts",
