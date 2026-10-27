@@ -2,9 +2,9 @@
  * WHICH BUG THIS LOCKS OUT: a command-metadata listener that REJECTED used to
  * kill the session, while one that THREW was handled cleanly.
  *
- * `AgentSession#notifyCommandMetadataChanged` invoked every registered listener
- * as `void listener()` inside a `try`/`catch`. Two facts make that a live bug
- * rather than a style nit:
+ * The session's command-metadata notifier, now `PromptCommands#notifyMetadataChanged`,
+ * invoked every registered listener as `void listener()` inside a `try`/`catch`.
+ * Two facts make that a live bug rather than a style nit:
  *
  *  1. `CommandMetadataChangedListener` is declared `() => void | Promise<void>`,
  *     so the published contract INVITES an async listener.
@@ -186,7 +186,7 @@ describe("command-metadata listener rejection containment", () => {
 
 	it("contains a listener that rejects only after an await boundary", async () => {
 		// The rejection lands on a later microtask turn, long after
-		// `#notifyCommandMetadataChanged` has returned. Nothing on the stack can
+		// `PromptCommands#notifyMetadataChanged` has returned. Nothing on the stack can
 		// catch it by then; only a handler attached to the promise can.
 		session.subscribeCommandMetadataChanged(async () => {
 			await new Promise<void>(resolve => setTimeout(resolve, 1));

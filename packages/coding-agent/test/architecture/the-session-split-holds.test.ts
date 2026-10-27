@@ -118,8 +118,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * `turn-preludes.ts` collaborator (-98).
  * RE-MEASURED 2026-10-27 at 5653: the per-family service tiers, `/fast` and the tier each request
  * resolves to moved into the `service-tiers.ts` collaborator (-76).
+ * RE-MEASURED 2026-10-27 at 5545: the command registries, the resolution of a typed prompt through
+ * extension, custom and file-based commands and the prompt templates, and the agents a `/` command
+ * grants for its turn moved into the `prompt-commands.ts` collaborator (-108).
  */
-const RUNTIME_CEILING = 5_700;
+const RUNTIME_CEILING = 5_600;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -151,6 +154,7 @@ const COLLABORATORS = [
 	"owned-async-jobs.ts",
 	"plan-mode-runtime.ts",
 	"post-prompt-tasks.ts",
+	"prompt-commands.ts",
 	"provider-sessions.ts",
 	"provider-usage.ts",
 	"provider-wire.ts",

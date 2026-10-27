@@ -64,6 +64,7 @@ every field of one subsystem and reaches the session through a host interface it
 |[`queued-messages.ts`](../../packages/coding-agent/src/session/runtime/queued-messages.ts)|The steers and follow-ups on the agent's queues: a queued user message with the hidden companion describing its images and the auto-resume latch it lifts, a hidden developer follow-up, the drain that starts a turn on a resting session and the tail and latch that permit it, the count the queue chip shows with the prompts waiting for the agent to go idle, and the clear and pop that hand user messages back to the editor|7|
 |[`service-tiers.ts`](../../packages/coding-agent/src/session/runtime/service-tiers.ts)|The per-family service tiers (OpenAI, Anthropic, Google) the session sends: the `/fast` switch on the active model's family and its return to the tier the settings configure, the record of every change in the session file, the drop of Anthropic priority a response reports rejected, and the tier each request resolves to, which for Fireworks reads its own setting|6|
 |[`turn-preludes.ts`](../../packages/coding-agent/src/session/runtime/turn-preludes.ts)|Nothing: it builds the hidden blocks a turn carries ahead of its message that no other collaborator holds, the session-state block with the date and the working directory (deduplicated against the live context and restated after a compaction), the reminder to delegate through the task tool on a transcript's first user message, and the todo and delegate reminders restated on the turn that resumes after a compaction|9|
+|[`prompt-commands.ts`](../../packages/coding-agent/src/session/runtime/prompt-commands.ts)|The commands and templates a typed prompt resolves through before it reaches the model: the prompt templates, the file-based slash commands, the TypeScript commands and MCP prompts with the listeners notified when the MCP prompts reload, the resolution order (extension, custom, file-based, templates) with the refusal of a `/name` none of them resolved, the expansion of a steer or follow-up, and the agent types a `/` command grants for the turn it starts|19|
 
 Three rules hold for a new one:
 
@@ -77,7 +78,9 @@ Three rules hold for a new one:
   that owner's surface. `ThinkingRuntime` holds one because `classifyDifficulty` takes a `Settings`
   and reads rows the collaborator never names. `AdvisorRoster` holds one for the same reason:
   `resolveModelOverride`, `resolveAdvisorRoleSelection` and `compactionModelCandidates` each take the
-  handle.
+  handle. `PromptCommands` holds the session as the `SessionCommandHost` that
+  `agent-session-commands.ts` declares, for the same reason: it reads `extensionRunner` alone and
+  passes the rest to the context a custom command runs with.
 - **The collaborator owns its state.** Sibling modules sharing the session's `#private` fields is
   the same object with more files. A field that stays behind is a field the extraction missed.
 - **Extraction order follows host width, not size.** A subsystem needing 60 session members is the

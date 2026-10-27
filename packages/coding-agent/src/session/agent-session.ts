@@ -106,7 +106,7 @@ import { unusableCredentialMessage } from "../config/missing-credentials";
 import type { ModelRegistry } from "../config/model-registry";
 import { noModelSelectedMessage } from "../config/model-resolution-failure";
 import { formatModelString, getModelMatchPreferences, resolveModelSelectorValue } from "../config/model-resolver";
-import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
+import type { PromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily } from "../config/service-tier";
 import { type Settings, type SkillsSettings, validateProviderMaxInFlightRequests } from "../config/settings";
 import { onAppendOnlyModeChanged, onHelperModelsChanged } from "../config/settings-signals";
@@ -125,7 +125,7 @@ import type { CustomTool, CustomToolContext } from "../extensibility/custom-tool
 import type { ExtensionRunner } from "../extensibility/extensions";
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
-import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
+import type { FileSlashCommand } from "../extensibility/slash-commands";
 import { recordGoal } from "../goals/goal-record";
 import { GoalRuntime } from "../goals/runtime";
 import type { GoalAbortReason, GoalModeState, GoalTokenUsage } from "../goals/state";
@@ -142,11 +142,6 @@ import { goalsPrompts } from "../prompts/goals/rows";
 import { sessionPrompts } from "../prompts/session/rows";
 import { turnControlPrompts } from "../prompts/turn-control/rows";
 import { mapAssistantContentStrings, type SecretObfuscator } from "../secrets/obfuscator";
-import {
-	parseSlashCommand,
-	unknownSlashCommandMessage,
-	unresolvedSlashCommandName,
-} from "../slash-commands/helpers/parse";
 import { isLivePromptGate } from "../system-prompt-builder/gate-registry";
 import {
 	HELPER_IDS,
@@ -176,7 +171,6 @@ import { normalizeModelContextImages } from "../utils/image-loading";
 import { describeAttachedImagesForTextModel } from "../utils/image-vision-fallback";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import { formatAdvisorStatus } from "./advisor-stats";
-import { throwIfExtensionCommand, tryExecuteCustomCommand, tryExecuteExtensionCommand } from "./agent-session-commands";
 import { type EphemeralTurnArgs, type EphemeralTurnResult, runEphemeralTurn } from "./agent-session-ephemeral-turn";
 import { findLastAssistantMessage, lastCopyCandidateAssistantMessage } from "./agent-session-message-shapes";
 import {
@@ -254,6 +248,7 @@ import { NextTurnMessages } from "./runtime/next-turn-messages";
 import { OwnedAsyncJobs } from "./runtime/owned-async-jobs";
 import { PlanModeRuntime } from "./runtime/plan-mode-runtime";
 import { PostPromptTasks } from "./runtime/post-prompt-tasks";
+import { PromptCommands } from "./runtime/prompt-commands";
 import { ProviderSessions } from "./runtime/provider-sessions";
 import { ProviderUsage } from "./runtime/provider-usage";
 import { ProviderWire } from "./runtime/provider-wire";
@@ -598,9 +593,6 @@ export class AgentSession {
 
 	#handoff: ModelHandoff;
 
-	#promptTemplates: PromptTemplate[];
-	#slashCommands: FileSlashCommand[];
-
 	// Event subscription state
 	#unsubscribeAgent?: () => void;
 	#cancelExitRecorder?: () => void;
@@ -621,7 +613,6 @@ export class AgentSession {
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
 	#eventListeners: AgentSessionEventListener[] = [];
-	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
 
 	/** Plan mode state, the approved-plan reference, and the decision ladder. */
 	readonly #planMode: PlanModeRuntime;
@@ -755,11 +746,6 @@ export class AgentSession {
 
 	#skills: Skill[];
 	readonly #operatorNotices: OperatorNotices;
-
-	// Custom commands (TypeScript slash commands)
-	#customCommands: LoadedCustomCommand[] = [];
-	/** MCP prompt commands (updated dynamically when prompts are loaded) */
-	#mcpPromptCommands: LoadedCustomCommand[] = [];
 
 	// Tool registry and prompt builder for extensions
 	#toolRegistry: Map<string, AgentTool>;
@@ -922,7 +908,7 @@ export class AgentSession {
 			this.#emit(pendingAgentEnd);
 		}
 		this.#drainStrandedQueuedMessages();
-		this.#grantedAgents.clear();
+		this.#commands.clearGrantedAgents();
 	}
 
 	/** A steer/follow-up can land after the agent loop's final queue poll, or
@@ -948,17 +934,8 @@ export class AgentSession {
 		this.#irc.resumeStranded();
 	}
 
-	/**
-	 * Agent types a `/` command declared for the turn it just started.
-	 *
-	 * Granted from the command's static `spawnsAgents` list, never from anything a handler computed
-	 * while running, so "which commands can reach a disabled agent" is answerable by reading the
-	 * command definitions. Empty except between a command returning a prompt and that prompt's run
-	 * settling: cleared on BOTH settle paths, the normal one and the reset an abort takes, because a
-	 * grant that survived an aborted turn would leave a disabled agent open to the model's next
-	 * unrelated spawn. See {@link agentGrantedThisTurn}.
-	 */
-	readonly #grantedAgents = new Set<string>();
+	/** Command registries, prompt resolution and the agents a `/` command grants for its turn. */
+	readonly #commands: PromptCommands;
 
 	/**
 	 * Whether a `/` command has granted this agent type for the turn in flight.
@@ -971,7 +948,7 @@ export class AgentSession {
 	 * bridge both consult it.
 	 */
 	agentGrantedThisTurn(agentName: string): boolean {
-		return this.#grantedAgents.has(agentName);
+		return this.#commands.agentGranted(agentName);
 	}
 
 	/**
@@ -1204,8 +1181,11 @@ export class AgentSession {
 			promptGeneration: () => this.#promptGeneration,
 		});
 
-		this.#promptTemplates = config.promptTemplates ?? [];
-		this.#slashCommands = config.slashCommands ?? [];
+		this.#commands = new PromptCommands(this, {
+			promptTemplates: config.promptTemplates,
+			slashCommands: config.slashCommands,
+			customCommands: config.customCommands,
+		});
 		this.#skills = config.skills ?? [];
 		this.#operatorNotices = config.operatorNotices ?? new OperatorNotices(stderrNoticeSink);
 		// The session budget: registered under the current id with every
@@ -1219,7 +1199,6 @@ export class AgentSession {
 				onNotice: text => this.#operatorNotices.warn("cpu", text),
 			}),
 		);
-		this.#customCommands = config.customCommands ?? [];
 		// Resolve the wire service-tier per request so the Fireworks Priority
 		// toggle scopes priority to Fireworks alone, without mutating the shared
 		// session `serviceTier` that drives `/fast` and OpenAI/Anthropic priority.
@@ -2704,42 +2683,7 @@ export class AgentSession {
 	}
 
 	subscribeCommandMetadataChanged(listener: CommandMetadataChangedListener): () => void {
-		this.#commandMetadataChangedListeners.push(listener);
-		return () => {
-			const index = this.#commandMetadataChangedListeners.indexOf(listener);
-			if (index !== -1) {
-				this.#commandMetadataChangedListeners.splice(index, 1);
-			}
-		};
-	}
-
-	#notifyCommandMetadataChanged(): void {
-		const listeners = this.#commandMetadataChangedListeners.slice();
-		for (const listener of listeners) {
-			// `CommandMetadataChangedListener` is `() => void | Promise<void>`, so
-			// the published contract INVITES an async listener, but a `catch`
-			// only ever observes a SYNCHRONOUS throw. The old `void listener()`
-			// discarded the promise, so a rejecting async subscriber walked past
-			// the handler three lines below and reached postmortem's global
-			// `unhandledRejection` hook, which prints a crash report and calls
-			// `process.exit(1)`. `setMCPPromptCommands` runs on every MCP prompt
-			// (re)load, reconnects included, so one bad subscriber killed a
-			// working session at a moment the user did not act. Both arms now
-			// land in the SAME sink with the SAME message: to an operator a
-			// rejection and a throw are one greppable failure.
-			try {
-				// `unknown` so `instanceof` narrows cleanly off the `void` arm.
-				// Only a listener that actually returned a promise allocates.
-				const result: unknown = listener();
-				if (result instanceof Promise) {
-					result.catch((err: unknown) => {
-						logger.error("Command metadata listener threw", { err });
-					});
-				}
-			} catch (err) {
-				logger.error("Command metadata listener threw", { err });
-			}
-		}
+		return this.#commands.subscribeMetadataChanged(listener);
 	}
 
 	/** Detach from agent events for good. Dispose is the only caller; a transition uses {@link #whileDisconnectedFromAgent}. */
@@ -3732,29 +3676,27 @@ export class AgentSession {
 	}
 
 	get promptTemplates(): ReadonlyArray<PromptTemplate> {
-		return this.#promptTemplates;
+		return this.#commands.promptTemplates;
 	}
 
 	/** Replace file-based slash commands used for prompt expansion. */
 	setSlashCommands(slashCommands: FileSlashCommand[]): void {
-		this.#slashCommands = [...slashCommands];
+		this.#commands.setSlashCommands(slashCommands);
 	}
 
 	/** Custom commands (TypeScript slash commands and MCP prompts) */
 	get customCommands(): ReadonlyArray<LoadedCustomCommand> {
-		if (this.#mcpPromptCommands.length === 0) return this.#customCommands;
-		return [...this.#customCommands, ...this.#mcpPromptCommands];
+		return this.#commands.customCommands;
 	}
 
 	/** MCP prompt commands only, for command-list metadata. */
 	get mcpPromptCommands(): ReadonlyArray<LoadedCustomCommand> {
-		return this.#mcpPromptCommands;
+		return this.#commands.mcpPromptCommands;
 	}
 
 	/** Update the MCP prompt commands list. Called when server prompts are (re)loaded. */
 	setMCPPromptCommands(commands: LoadedCustomCommand[]): void {
-		this.#mcpPromptCommands = commands;
-		this.#notifyCommandMetadataChanged();
+		this.#commands.setMCPPromptCommands(commands);
 	}
 
 	// =========================================================================
@@ -3902,52 +3844,12 @@ export class AgentSession {
 	async prompt(text: string, options?: PromptOptions): Promise<boolean> {
 		await this.#promptRefresh;
 		await this.#startupHydration;
-		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
-
-		// Handle extension commands first (execute immediately, even during streaming)
-		if (expandPromptTemplates && text.startsWith("/")) {
-			const handled = await tryExecuteExtensionCommand(this.#config.extensionRunner, text);
-			if (handled) {
-				return false;
-			}
-
-			// Try custom commands (TypeScript slash commands)
-			const customResult = await tryExecuteCustomCommand(this, this.customCommands, text, agent =>
-				this.#grantedAgents.add(agent),
-			);
-			if (customResult !== null) {
-				if (customResult === "") {
-					return false;
-				}
-				text = customResult;
-			}
-
-			// Try file-based slash commands (markdown files from commands/ directories)
-			// Only if text still starts with "/" (wasn't transformed by custom command)
-			if (text.startsWith("/")) {
-				const parsed = parseSlashCommand(text);
-				const canonicalInvocation =
-					parsed === null ? text : `/${parsed.name}${parsed.args.length > 0 ? ` ${parsed.args}` : ""}`;
-				text = expandSlashCommand(canonicalInvocation, this.#slashCommands);
-			}
-		}
-
-		// Expand file-based prompt templates if requested
-		const expandedText = expandPromptTemplates ? expandPromptTemplate(text, [...this.#promptTemplates]) : text;
-
-		// Every resolver has now had its turn: builtins upstream in the dispatcher,
-		// then extension, custom, file-based commands and prompt templates above. A
-		// text that STILL reads as `/name` is a command this build does not have,
-		// and forwarding it to the model is the wrong answer to a typo. It is also
-		// the bug this refusal was written for: `/secret list`, typed into a build
-		// that predated the command, was sent as prose and the model began grepping
-		// the filesystem for secrets files. Synthetic prompts are exempt because an
-		// agent-authored turn is never a user reaching for a command.
-		if (expandPromptTemplates && !options?.synthetic && expandedText === text) {
-			const unresolved = unresolvedSlashCommandName(text);
-			// The name only. The argument tail of a miss on `/secret add` is a credential.
-			if (unresolved !== undefined) throw new Error(unknownSlashCommandMessage(unresolved));
-		}
+		const expandedText = await this.#commands.resolve(text, {
+			expandPromptTemplates: options?.expandPromptTemplates ?? true,
+			synthetic: options?.synthetic === true,
+		});
+		// A command handled the text without the model.
+		if (expandedText === undefined) return false;
 
 		// Magic keywords ("ultrathink", "orchestratez"): append hidden system notices after the
 		// user's message that steer this turn. User-authored prompts only — synthetic /
@@ -4313,12 +4215,7 @@ export class AgentSession {
 	 * Queue a steering message to interrupt the agent mid-run.
 	 */
 	async steer(text: string, images?: ImageContent[]): Promise<void> {
-		if (text.startsWith("/")) {
-			throwIfExtensionCommand(this.#config.extensionRunner, text);
-		}
-
-		const expandedText = expandPromptTemplate(text, [...this.#promptTemplates]);
-		await this.#queue.queueUser(expandedText, images, "steer");
+		await this.#queue.queueUser(this.#commands.expandQueued(text), images, "steer");
 	}
 
 	/**
@@ -4329,12 +4226,7 @@ export class AgentSession {
 	 * flipping advisor auto-resume.
 	 */
 	async followUp(text: string, images?: ImageContent[], options?: FollowUpOptions): Promise<void> {
-		if (text.startsWith("/")) {
-			throwIfExtensionCommand(this.#config.extensionRunner, text);
-		}
-
-		const expandedText =
-			options?.expandPromptTemplates === false ? text : expandPromptTemplate(text, [...this.#promptTemplates]);
+		const expandedText = this.#commands.expandQueued(text, options?.expandPromptTemplates !== false);
 		if (options?.synthetic) {
 			await this.#queue.queueDeveloperFollowUp(expandedText, images, options.attribution ?? "agent");
 		} else {

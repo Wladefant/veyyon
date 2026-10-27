@@ -473,11 +473,18 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * service-tier and Fireworks model-id modules, the Anthropic session state and `config/service-tier.ts`)
  * are already here. Measured 2026-10-27 at 1514.
  *
+ * 1514 to 1515: `coding-agent/src/session/runtime/prompt-commands.ts`, the session collaborator that
+ * holds the command registries and resolves a typed prompt through extension, custom and file-based
+ * commands and the prompt templates. It left `session/agent-session.ts`, already here, and its
+ * runtime imports (`config/prompt-templates.ts`, `extensibility/slash-commands.ts`,
+ * `slash-commands/helpers/parse.ts`, `session/agent-session-commands.ts` and `@veyyon/utils`) are
+ * already here. Measured 2026-10-27 at 1515.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1514;
+const LAUNCH_REACH_CEILING = 1515;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
