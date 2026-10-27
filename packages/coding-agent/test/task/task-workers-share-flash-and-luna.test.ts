@@ -266,6 +266,37 @@ describe("the Flash and Luna share follows quota suppression and the live provid
 		registry.clearSuppressedSelectors();
 	});
 
+	it("keeps Haiku first or promotes it when both pools are down, without exposing the expensive tail", () => {
+		const opus = "anthropic/claude-opus-5-5";
+		const astra = "openai-codex/gpt-6-astra";
+		const haikuFirstSettings = Settings.isolated({
+			"agent.agents": { task: { model: [H, F, L, opus, astra] } },
+		});
+		const poolFirstSettings = Settings.isolated({
+			"agent.agents": { task: { model: [F, L, H, opus, astra] } },
+		});
+		registry.clearSuppressedSelectors();
+		registry.suppressSelector(L, Date.now() + 60_000);
+		registry.suppressSelector(F, Date.now() + 60_000);
+		const haikuFirst = resolveAgentModel({
+			settings: haikuFirstSettings,
+			agentName: "task",
+			taskDepth: 1,
+			spawnId: "haiku-first-both-down",
+			modelRegistry: registry,
+		}).patterns;
+		const poolFirst = resolveAgentModel({
+			settings: poolFirstSettings,
+			agentName: "task",
+			taskDepth: 1,
+			spawnId: "triad-t-haiku-first-both-down",
+			modelRegistry: registry,
+		}).patterns;
+		expect(haikuFirst).toEqual([H, F, L]);
+		expect(poolFirst).toEqual([H, F, L]);
+		registry.clearSuppressedSelectors();
+	});
+
 	it("never puts Opus or Astra in a routine chain, healthy or suppressed", () => {
 		const opus = "anthropic/claude-opus-5-5";
 		const astra = "openai-codex/gpt-6-astra";
