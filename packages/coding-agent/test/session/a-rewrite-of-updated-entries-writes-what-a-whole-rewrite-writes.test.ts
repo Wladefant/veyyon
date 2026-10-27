@@ -458,7 +458,7 @@ describe("a resumed session's first rewrite keeps the lines before its earliest 
 			name: "holds an entry whose parent is missing",
 			alter: (raw: string, ids: string[]) => insertBefore(raw, ids[5]!, foreignLine("orphan", "re-linked", "gone")),
 		},
-		{ name: "was written by an older version", alter: (raw: string) => raw.replace('"version":3', '"version":2') },
+		{ name: "was written by an older version", alter: (raw: string) => raw.replace(/"version":\s*\d+/, '"version":2') },
 		{
 			name: "has a header line that carries a title",
 			alter: (raw: string) =>

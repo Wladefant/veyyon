@@ -403,6 +403,7 @@ export class MCPManager {
 		| "duplicate"
 		| Promise<void | "queued" | "duplicate">;
 	#activeEvents = new Map<string, ActiveMCPEventSubscription>();
+	#eventStartupControllers = new Map<string, AbortController>();
 
 	#tools: CustomTool<TSchema, MCPToolDetails>[] = [];
 	#pendingConnections = new Map<string, Promise<MCPServerConnection>>();
@@ -462,6 +463,9 @@ export class MCPManager {
 				const config = this.#serverConfigs.get(serverName);
 				if (config?.events) void this.#startConfiguredEvents(serverName, connection, config.events);
 			}
+		} else {
+			for (const controller of this.#eventStartupControllers.values()) controller.abort();
+			this.#eventStartupControllers.clear();
 		}
 	}
 
@@ -482,6 +486,8 @@ export class MCPManager {
 	}
 
 	async #stopServerEvents(serverName: string): Promise<void> {
+		this.#eventStartupControllers.get(serverName)?.abort();
+		this.#eventStartupControllers.delete(serverName);
 		const matching = [...this.#activeEvents.entries()].filter(([key]) => key.startsWith(`${serverName}\0`));
 		for (const [key, subscription] of matching) this.#stopEvent(key, subscription);
 		await Promise.allSettled(
@@ -490,6 +496,8 @@ export class MCPManager {
 	}
 
 	async stopEvents(): Promise<void> {
+		for (const controller of this.#eventStartupControllers.values()) controller.abort();
+		this.#eventStartupControllers.clear();
 		const active = [...this.#activeEvents.entries()];
 		for (const [key, subscription] of active) this.#stopEvent(key, subscription);
 		await Promise.allSettled(
@@ -507,17 +515,44 @@ export class MCPManager {
 		config: MCPServerConfig["events"],
 	): Promise<void> {
 		if (!this.#onEvent || !isMCPEventsEnabled(config) || !connection.capabilities.events) return;
+		this.#eventStartupControllers.get(serverName)?.abort();
+		const controller = new AbortController();
+		this.#eventStartupControllers.set(serverName, controller);
 		let descriptors;
 		try {
-			descriptors = await listEvents(connection);
+			descriptors = await listEvents(connection, { signal: controller.signal });
 		} catch (error) {
+			if (controller.signal.aborted) return;
 			logger.warn("Failed to list MCP event types", { path: `mcp:${serverName}`, error: errorMessage(error) });
+			return;
+		} finally {
+			if (this.#eventStartupControllers.get(serverName) === controller) {
+				this.#eventStartupControllers.delete(serverName);
+			}
+		}
+		if (
+			controller.signal.aborted ||
+			!this.#onEvent ||
+			this.#connections.get(serverName) !== connection
+		) {
 			return;
 		}
 		const byName = new Map(descriptors.map(descriptor => [descriptor.name, descriptor]));
 		for (const requested of config.subscriptions ?? []) {
+			if (
+				controller.signal.aborted ||
+				!this.#onEvent ||
+				this.#connections.get(serverName) !== connection
+			) {
+				return;
+			}
 			const descriptor = byName.get(requested.name);
-			if (!descriptor || !descriptor.delivery.includes(requested.mode)) continue;
+			if (!descriptor || !descriptor.delivery.includes(requested.mode)) {
+				const key = this.#eventKey(serverName, requested);
+				const active = this.#activeEvents.get(key);
+				if (active) this.#stopEvent(key, active);
+				continue;
+			}
 			if (requested.mode === "push" && !connection.transport.streamRequest) {
 				logger.warn("Configured MCP event push mode is unsupported by this transport", {
 					path: `mcp:${serverName}`,
@@ -701,19 +736,7 @@ export class MCPManager {
 		const connection = this.#connections.get(serverName);
 		const config = this.#serverConfigs.get(serverName);
 		if (!connection || !config?.events || !this.#onEvent) return;
-		try {
-			const descriptors = new Map((await listEvents(connection)).map(descriptor => [descriptor.name, descriptor]));
-			for (const subscription of config.events.subscriptions ?? []) {
-				if (!descriptors.get(subscription.name)?.delivery.includes(subscription.mode)) {
-					const key = this.#eventKey(serverName, subscription);
-					const active = this.#activeEvents.get(key);
-					if (active) this.#stopEvent(key, active);
-				}
-			}
-			await this.#startConfiguredEvents(serverName, connection, config.events);
-		} catch (error) {
-			logger.warn("Failed to refresh MCP event types", { path: `mcp:${serverName}`, error: errorMessage(error) });
-		}
+		await this.#startConfiguredEvents(serverName, connection, config.events);
 	}
 
 	async #recordEventCursor(subscription: ActiveMCPEventSubscription, cursor: string | null): Promise<void> {

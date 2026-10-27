@@ -60,7 +60,7 @@ describe("MCP webhook receiver contract", () => {
 		const target = receiver(async () => "queued");
 		const request = signedRequest(JSON.stringify(event));
 		expect((await target.handle(new Request(request, { body: "{}" }))).status).toBe(401);
-		const missing = new Request("http://localhost/events", { method: "POST", headers: { "X-MCP-Subscription-Id": subscriptionId }, body: "{}" });
+		const missing = new Request(`http://localhost${callbackPath}`, { method: "POST", headers: { "X-MCP-Subscription-Id": subscriptionId }, body: "{}" });
 		expect((await target.handle(missing)).status).toBe(400);
 		expect((await target.handle(signedRequest(JSON.stringify(event), { "content-type": "text/plain" }))).status).toBe(415);
 	});
