@@ -14,6 +14,7 @@
 
 ### Changed
 
+- The streamed tool-argument preview copies each run of plain characters in a string argument at once instead of one character at a time, which cut the one-shot decode of a 160 KB `write` call from 1.75 ms to 0.68 ms and its live reveal in 100-character steps from 10.5 ms to 9.2 ms (median).
 - A `-p` or `--mode json` run starts background model discovery once its first response starts streaming instead of when its session is created, which sends the first request about 33 ms sooner and cut a run against a provider that answers in 300 ms and streams for 150 ms from 580.8 ms to 560.0 ms (median of 15).
 - A launch with no llama.cpp server running no longer rewrites the llama.cpp model-cache row and syncs `models.db` four times, which cut a print run against a provider that answers in 300 ms and streams for 150 ms from 558.3 ms to 553.9 ms (median of 15).
 - `read` and the CLI `@` attachment import the entry-kind phrase from `@veyyon/utils/fs-error`, which adds no module to any import graph; no user-facing change.
