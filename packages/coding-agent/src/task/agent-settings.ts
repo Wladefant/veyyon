@@ -11,7 +11,6 @@
  * Import this instead of reading `agent.*` keys directly.
  */
 
-import { createHash } from "node:crypto";
 import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import { isRecord, logger } from "@veyyon/utils";
 import { parseConfiguredEffortSetting } from "../config/effort-resolver";
@@ -37,7 +36,7 @@ const spawnCounters = new Map<string, number>();
 
 /**
  * A stable, unique identity for a spawn made outside the task tool (eval `agent()`, vibe workers).
- * The counter is per scope so one session's spawns alternate independently of any other.
+ * The counter is per scope, so each spawn in one session gets its own id. The id does not pick a pool.
  */
 export function nextSpawnId(scope: string): string {
 	const next = (spawnCounters.get(scope) ?? 0) + 1;
@@ -62,8 +61,10 @@ function shareTaskModelPools(
 	const lunaIndex = patterns.findIndex(pattern => SHARED_LUNA_POOL.test(pattern));
 	if (flashIndex < 0 || lunaIndex < 0) return patterns;
 
-	let selectedFirst = createHash("sha256").update(spawnId).digest()[0] & 1 ? flashIndex : lunaIndex;
-	// Keep the healthy-pool split, but prefer a pool whose recorded cooldown has expired.
+	// Configured order: the earlier of the two shared pools in the policy list. Never hashed.
+	const configuredFirst = flashIndex < lunaIndex ? flashIndex : lunaIndex;
+	let selectedFirst = configuredFirst;
+	// A pool in cooldown is skipped at the first selection, not only at retry.
 	const flashDown = suppression?.isSelectorSuppressed(patterns[flashIndex]!) === true;
 	const lunaDown = suppression?.isSelectorSuppressed(patterns[lunaIndex]!) === true;
 	if (flashDown !== lunaDown) selectedFirst = flashDown ? lunaIndex : flashIndex;
