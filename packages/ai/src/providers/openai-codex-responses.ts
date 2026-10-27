@@ -4935,7 +4935,7 @@ export function convertCodexResponsesMessages(model: Model<"openai-codex-respons
 				knownCallIds,
 				customCallIds,
 			);
-			if (knownCallIds.has(callId)) answeredCallIds.add(callId);
+			answeredCallIds.add(callId);
 		}
 
 		msgIndex += 1;

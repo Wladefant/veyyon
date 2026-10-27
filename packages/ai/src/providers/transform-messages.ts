@@ -1057,10 +1057,20 @@ class ToolResultPairing {
 		this.output.push(msg);
 	}
 
+	/** Reset open windows when a full native history snapshot replaces previous conversation turns. */
+	resetSnapshot(): void {
+		this.#pendingToolCalls = [];
+		this.#pendingToolCallsStartIndex = -1;
+		this.#pendingAbortedToolCalls = new Map();
+		this.#pendingAbortedTimestamp = undefined;
+		this.#pendingAbortedStartIndex = -1;
+		this.#toolCallStatus.clear();
+	}
+
 	/** Append an assistant turn and open the result window for its tool calls. */
 	appendAssistant(msg: AssistantMessage, index: number): void {
 		this.output.push(msg);
-		if (this.#preserveNativeCodexHistory) return;
+		if (hasNativeCodexHistoryPayload(msg, this.#model)) return;
 		const toolCalls = msg.content.filter(b => b.type === "toolCall") as ToolCall[];
 		if (msg.stopReason === "error" || msg.stopReason === "aborted") {
 			// Keep the assistant message with tool calls intact. Real tool results are
@@ -1079,10 +1089,6 @@ class ToolResultPairing {
 
 	/** Append a tool result that answers a call in an open window, or fold one whose call is gone. */
 	appendToolResult(msg: ToolResultMessage, timestamp: number): void {
-		if (this.#preserveNativeCodexHistory) {
-			this.output.push(msg);
-			return;
-		}
 		const id = msg.toolCallId;
 		if (this.#toolCallStatus.has(id)) return;
 		if (this.#pendingAbortedToolCalls.has(id)) {
@@ -1092,6 +1098,10 @@ class ToolResultPairing {
 		}
 		if (this.#pendingToolCalls.some(tc => tc.id === id)) {
 			this.#emitReal(msg);
+			return;
+		}
+		if (this.#preserveNativeCodexHistory) {
+			this.output.push(msg);
 			return;
 		}
 		// The matching tool_use exists elsewhere, but this result is not in
@@ -1131,7 +1141,6 @@ class ToolResultPairing {
 	 * turn, and with a placeholder error result otherwise.
 	 */
 	closeWindows(timestamp: number): void {
-		if (this.#preserveNativeCodexHistory) return;
 		if (this.#pendingToolCalls.length > 0) {
 			this.#answer(
 				this.#pendingToolCalls,
@@ -1452,6 +1461,12 @@ export function transformMessages<TApi extends Api>(
 		if (msg.role === "toolResult") {
 			pairing.appendToolResult(msg, messageTimestamp);
 			continue;
+		}
+		if (msg.role === "assistant" && hasNativeCodexHistoryPayload(msg, model)) {
+			const payload = msg.providerPayload;
+			if (isRecord(payload) && payload.dt === false) {
+				pairing.resetSnapshot();
+			}
 		}
 		pairing.closeWindows(messageTimestamp);
 		if (msg.role !== "assistant") {

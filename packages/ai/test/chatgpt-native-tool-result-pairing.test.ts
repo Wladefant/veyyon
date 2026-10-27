@@ -199,4 +199,61 @@ describe("native ChatGPT tool history pairing", () => {
 			expect(input.some(item => item.type === "function_call_output" && item.call_id === "call_b")).toBe(true);
 		}
 	});
+
+	it("synthesizes canonical aborted pair after a native dt:false snapshot", async () => {
+		const model = createCodexModel("gpt-5.1-codex");
+		const snapshot = nativeAssistant(model, {
+			dt: false,
+			content: [{ type: "text", text: "The assistant preserved the snapshot." }],
+			items: [
+				nativeFunctionCall("call_snap"),
+				{ type: "function_call_output", call_id: "call_snap", output: "snap result" },
+			],
+		});
+		const canonicalAborted = {
+			role: "assistant",
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			content: [{ type: "toolCall", id: "call_aborted", name: "bash", arguments: { command: "ls" } }],
+			stopReason: "aborted",
+			timestamp: 1000,
+		} as AssistantMessage;
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "Resume from snapshot.", timestamp: 0 },
+				snapshot,
+				{ role: "user", content: "Run bash command.", timestamp: 500 },
+				canonicalAborted,
+			],
+		};
+
+		const input = (await buildTransformedCodexRequestBody(model, context, undefined)).input as WireItem[];
+		const snapOutput = input.find(item => item.type === "function_call_output" && item.call_id === "call_snap");
+		const abortedOutput = input.find(item => item.type === "function_call_output" && item.call_id === "call_aborted");
+		expect(snapOutput?.output).toBe("snap result");
+		expect(abortedOutput?.output).toBe("aborted");
+	});
+
+	it("deduplicates repeated results for a call removed by a native snapshot", async () => {
+		const model = createCodexModel("gpt-5.1-codex");
+		const snapshot = nativeAssistant(model, {
+			dt: false,
+			content: textAndCall("call_a"),
+			items: [nativeFunctionCall("call_b")],
+		});
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "Continue after compaction.", timestamp: 0 },
+				snapshot,
+				result("call_a", "search", "orphaned snapshot result"),
+				result("call_a", "search", "duplicate orphaned snapshot result"),
+			],
+		};
+
+		const input = (await buildTransformedCodexRequestBody(model, context, undefined)).input as WireItem[];
+		const staleNotes = input.filter(item => item.type === "message" && item.role === "user"
+			&& typeof item.content === "string" && item.content.includes("orphaned snapshot result"));
+		expect(staleNotes).toHaveLength(1);
+	});
 });

@@ -1455,4 +1455,55 @@ describe("OpenAI responses history payload", () => {
 		});
 		expect(assistantNotes).toEqual([]);
 	});
+
+	it("synthesizes canonical aborted tool result after native dt:false snapshot in openai-codex-responses", async () => {
+		const model = getBundledModel<"openai-codex-responses">("openai-codex", "gpt-5.2-codex");
+		const snapshotItems = [
+			{ type: "function_call", name: "search", call_id: "call_snap_1", arguments: '{"q":"test"}' },
+			{ type: "function_call_output", call_id: "call_snap_1", output: "snap result" },
+		];
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "Resume from snapshot", timestamp: 1000 },
+				{
+					role: "assistant",
+					content: [{ type: "text", text: "Snapshot restored" }],
+					api: "openai-codex-responses",
+					provider: "openai-codex",
+					model: "gpt-5.2-codex",
+					providerPayload: {
+						type: "openaiResponsesHistory",
+						provider: "openai-codex",
+						dt: false,
+						items: snapshotItems,
+					},
+					stopReason: "stop",
+					timestamp: 2000,
+				},
+				{ role: "user", content: "Run command", timestamp: 3000 },
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "call_aborted_1", name: "bash", arguments: { command: "ls" } }],
+					api: "openai-codex-responses",
+					provider: "openai-codex",
+					model: "gpt-5.2-codex",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "aborted",
+					timestamp: 4000,
+				},
+			],
+		};
+		const payload = (await captureCodexPayload(model, context)) as { input?: unknown[] };
+		const snapOutput = findResponsesInputItemByCallId(payload.input ?? [], "function_call_output", "call_snap_1");
+		const abortedOutput = findResponsesInputItemByCallId(payload.input ?? [], "function_call_output", "call_aborted_1");
+		expect(snapOutput?.output).toBe("snap result");
+		expect(abortedOutput?.output).toBe("aborted");
+	});
 });
