@@ -188,8 +188,6 @@ import { resolvePlanFilePath } from "../plan-mode/plan-path";
 import type { PlanModeState } from "../plan-mode/state";
 import { goalsPrompts } from "../prompts/goals/rows";
 import { sessionPrompts } from "../prompts/session/rows";
-import { sideChannelPrompts } from "../prompts/side-channel/rows";
-import { steeringPrompts } from "../prompts/steering/rows";
 import { turnControlPrompts } from "../prompts/turn-control/rows";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { AgentRegistry } from "../registry/agent-registry";
@@ -310,7 +308,7 @@ import { ContextAccounting } from "./runtime/context-accounting";
 import { ExtensionEventForwarder } from "./runtime/extension-event-forwarder";
 import { FinalizeReminders } from "./runtime/finalize-reminders";
 import { HistoryRewrites } from "./runtime/history-rewrites";
-import { IrcInbox } from "./runtime/irc-inbox";
+import { IrcDelivery } from "./runtime/irc-delivery";
 import { LoopGuards } from "./runtime/loop-guards";
 import { lastDeliveredBlock, MemoryContext } from "./runtime/memory-context";
 import { MessagePersistence } from "./runtime/message-persistence";
@@ -850,9 +848,8 @@ export class AgentSession {
 	 */
 	readonly #asyncJobManager: AsyncJobManager | undefined;
 
-	// Incoming IRC records received while a turn was streaming. Parent IRCs enter the steering
-	// queue; peer IRCs wait here as interrupts and drain as asides at the next boundary.
-	readonly #ircInbox = new IrcInbox();
+	/** IRC records reaching this session, the wake turns and auto-replies they start; see {@link IrcDelivery}. */
+	readonly #irc: IrcDelivery;
 	/** Provider session ids, the inherited prompt cache key, and the transport state they route. */
 	readonly #providerSessions: ProviderSessions;
 	#isDisposed = false;
@@ -1047,65 +1044,7 @@ export class AgentSession {
 			}
 		}
 		this.#scheduleQueuedMessageDrain();
-		this.#resumeStrandedIrcAsides();
-	}
-
-	/** IRC records that arrive after the loop's final aside poll — or while an abort skipped that
-	 *  poll — land in pending IRC queues with no loop left to drain them; the queued-message drain's
-	 *  gate (agent.hasQueuedMessages()) does not count peer IRC interrupts. Once idle, wake a turn so
-	 *  the agent responds to the peer. Skip only when a queued steer/follow-up will itself drive a
-	 *  resume turn whose aside poll already consumes these (no double-wake). */
-	#resumeStrandedIrcAsides(): void {
-		if (this.#isDisposed || this.isStreaming) return;
-		if (this.#ircInbox.isEmpty) return;
-		if (this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages()) return;
-		const records = this.#ircInbox.takeAll();
-		if (this.#planMode.enabled) {
-			// Plan mode: fold stranded IRC asides into context without waking an
-			// autonomous turn. Convergence to ask/resolve stays user-driven.
-			for (const record of records) {
-				this.#appendCustomMessageToContext(record);
-			}
-			return;
-		}
-		this.#wakeForIrc(records);
-	}
-
-	/** Fire-and-forget wake turn for incoming IRC — idle delivery and stranded-aside resume both
-	 *  route here. Wrapped in a begin/#endInFlight pair so the turn is tracked and its settle
-	 *  re-drains anything that stranded during it. A user interrupt may have intentionally left a
-	 *  follow-up queued behind an invalid tail (seam #5); the wake turn's loop would otherwise drain
-	 *  it, so park the follow-up queue across the wake and restore it after. It stays queued post-wake
-	 *  because #canAutoContinueForFollowUp suppresses follow-up auto-resume while a user interrupt is
-	 *  in effect, even though the wake left a provider-valid tail. */
-	#wakeForIrc(records: CustomMessage[]): void {
-		// Park only a *blocked* follow-up (one a user interrupt is intentionally holding); an
-		// already-resumable follow-up can ride the wake turn normally without reordering.
-		const parkedFollowUps =
-			this.agent.peekSteeringQueue().length === 0 &&
-			this.agent.peekFollowUpQueue().length > 0 &&
-			!this.#canAutoContinueForFollowUp()
-				? this.agent.peekFollowUpQueue().slice()
-				: [];
-		if (parkedFollowUps.length > 0) {
-			this.agent.replaceQueues(this.agent.peekSteeringQueue().slice(), []);
-		}
-		this.#resetPromptMaintenanceState();
-		this.#inFlight.begin();
-		void this.agent
-			.prompt(records)
-			.catch(error => {
-				logger.warn("IRC wake turn failed", { error: errorMessage(error) });
-			})
-			.finally(() => {
-				if (parkedFollowUps.length > 0) {
-					this.agent.replaceQueues(
-						this.agent.peekSteeringQueue().slice(),
-						parkedFollowUps.concat(this.agent.peekFollowUpQueue()),
-					);
-				}
-				this.#endInFlight();
-			});
+		this.#irc.resumeStranded();
 	}
 
 	/**
@@ -1150,6 +1089,22 @@ export class AgentSession {
 		// Power assertions are taken per turn; nothing acquired here.
 		this.#inFlight = new TurnsInFlight(this.settings);
 		this.#extensionEvents = new ExtensionEventForwarder(config.extensionRunner);
+		this.#irc = new IrcDelivery({
+			agent: this.agent,
+			isDisposed: () => this.#isDisposed,
+			isStreaming: () => this.isStreaming,
+			planModeEnabled: () => this.#planMode.enabled,
+			asyncEnabled: () => this.settings.get("async.enabled"),
+			emitIrcMessage: record => void this.#emitSessionEvent({ type: "irc_message", message: record }),
+			appendToContext: record => this.#appendCustomMessageToContext(record),
+			canAutoContinueForFollowUp: () => this.#canAutoContinueForFollowUp(),
+			beginWakeTurn: () => {
+				this.#resetPromptMaintenanceState();
+				this.#inFlight.begin();
+			},
+			endWakeTurn: () => this.#endInFlight(),
+			runEphemeralTurn: args => this.runEphemeralTurn(args),
+		});
 		this.#scope = new SessionScope({
 			sessionStore: this.sessionManager,
 			settings: this.settings,
@@ -1438,9 +1393,9 @@ export class AgentSession {
 		// each step boundary as non-interrupting asides. Peer IRCs share the aside
 		// injection boundary, but also expose a non-consuming interrupt peek so
 		// `job poll` / `irc wait` can return early before the boundary drains them.
-		this.agent.hasIrcInterrupts = () => this.#ircInbox.hasInterrupts;
+		this.agent.hasIrcInterrupts = () => this.#irc.inbox.hasInterrupts;
 		this.agent.setAsideMessageProvider(() => {
-			const pendingIrc = this.#ircInbox.takeAll();
+			const pendingIrc = this.#irc.inbox.takeAll();
 			const thunks: AsideMessage[] = pendingIrc.map(record => () => record);
 			thunks.push(...this.yieldQueue.drainLazy());
 			// Mid-run todo reconciliation — evaluated at injection time so a turn
@@ -3402,7 +3357,7 @@ export class AgentSession {
 	 */
 	beginDispose(): void {
 		this.#isDisposed = true;
-		this.#flushPendingIrcAsides();
+		this.#irc.flushPending();
 		this.yieldQueue.clear();
 		this.agent.setAsideMessageProvider(undefined);
 		this.agent.hasIrcInterrupts = undefined;
@@ -4797,7 +4752,7 @@ export class AgentSession {
 			takeHeldAtRestReading(this);
 			// Flush any pending bash and Python results before the new prompt
 			this.#executions.flush();
-			this.#flushPendingIrcAsides();
+			this.#irc.flushPending();
 
 			// A new user prompt does not reset stop-time reminder suppression. Replaying
 			// the same unfinished list after each "continue" correction floods context.
@@ -6837,132 +6792,17 @@ export class AgentSession {
 	 * also drain here.
 	 */
 	drainPendingIrcInboxMessages(agentId: string, opts?: { from?: string; limit?: number }): IrcMessage[] {
-		return this.#ircInbox.takeIncoming(agentId, opts);
+		return this.#irc.inbox.takeIncoming(agentId, opts);
 	}
 
 	/**
-	 * Deliver an IRC message into this session (recipient side; called by the
-	 * IrcBus). Emits the `irc_message` session event for UI cards and injects
-	 * the rendered message into the model's context as an `irc:incoming`
-	 * custom message:
-	 *
-	 * - mid-turn → queued on the aside channel and folded in at the next step
-	 *   boundary (non-interrupting, like async-result deliveries) → "injected";
-	 * - idle in plan mode → appended into context without waking an autonomous
-	 *   turn (convergence stays user-driven) → "injected";
-	 * - idle → starts a real turn with the message so the recipient wakes
-	 *   → "woken".
-	 *
-	 * Never blocks on the recipient's turn: the wake turn is fire-and-forget.
-	 *
-	 * When the sender expects a reply (`send await:true`) and this session
-	 * cannot produce a real reply turn in time — mid-turn with async execution
-	 * disabled (the next step boundary may be gated on the sender's own batch
-	 * finishing), or idle in plan mode (wake turns are suppressed) — an
-	 * ephemeral side-channel auto-reply is generated from the current context
-	 * (the old `respondAsBackground` path) and sent back over the bus on this
-	 * agent's behalf.
+	 * Deliver an IRC message into this session (recipient side; called by the IrcBus); see
+	 * {@link IrcDelivery.deliver}.
 	 */
 	async deliverIrcMessage(msg: IrcMessage, opts?: { expectsReply?: boolean }): Promise<"injected" | "woken"> {
-		if (this.#isDisposed) {
-			throw new Error("Recipient session is disposed.");
-		}
-		// Auto-reply eligibility: the sender is blocked on an answer and this
-		// session cannot produce a real reply turn in time — either mid-turn with
-		// async execution disabled (no step boundary until the sender's own batch
-		// ends), or idle in plan mode (autonomous wake turns are suppressed).
-		const planModeIdle = !this.isStreaming && this.#planMode.enabled;
-		const autoReply =
-			(opts?.expectsReply ?? false) && ((this.isStreaming && !this.settings.get("async.enabled")) || planModeIdle);
-		const record: CustomMessage = {
-			role: "custom",
-			customType: "irc:incoming",
-			content: prompt.render(sideChannelPrompts["side-channel/irc-incoming"].text, {
-				from: msg.from,
-				message: msg.body,
-				replyTo: msg.replyTo ?? "",
-				autoReplied: autoReply,
-				interrupting: this.isStreaming,
-			}),
-			display: true,
-			details: { id: msg.id, from: msg.from, message: msg.body, ...(msg.replyTo ? { replyTo: msg.replyTo } : {}) },
-			attribution: "agent",
-			timestamp: msg.ts,
-		};
-		void this.#emitSessionEvent({ type: "irc_message", message: record });
-		if (this.isStreaming) {
-			const recipientParentId = AgentRegistry.global().get(msg.to)?.parentId;
-			if (recipientParentId === msg.from) {
-				this.agent.steer({
-					role: "user",
-					content: prompt.render(steeringPrompts["steering/parent-irc"].text, {
-						from: msg.from,
-						message: msg.body,
-					}),
-					attribution: "agent",
-					timestamp: msg.ts,
-					steering: true,
-				});
-			} else {
-				this.#ircInbox.queueInterrupt(record);
-			}
-			if (autoReply) void this.#runIrcAutoReply(msg);
-			return "injected";
-		}
-		// Plan mode: record into context but do not wake an autonomous turn.
-		if (this.#planMode.enabled) {
-			this.#appendCustomMessageToContext(record);
-			if (autoReply) void this.#runIrcAutoReply(msg);
-			return "injected";
-		}
-		// Idle: wake a real turn so the recipient responds (shared with the stranded-aside resume).
-		this.#wakeForIrc([record]);
-		return "woken";
+		return this.#irc.deliver(msg, opts);
 	}
 
-	/**
-	 * Generate and deliver an ephemeral auto-reply to `msg` on this agent's
-	 * behalf: a no-tools side-channel turn over the current history (same
-	 * pipeline as `/btw`), recorded into this session as an `irc:autoreply`
-	 * aside so the model knows what was said for it, and sent back to the
-	 * sender as a regular bus message (`replyTo: msg.id`) so their parked
-	 * `wait`/`await:true` resolves. Failures only log — the sender then hits
-	 * its normal wait timeout.
-	 */
-	async #runIrcAutoReply(msg: IrcMessage): Promise<void> {
-		try {
-			const { replyText } = await this.runEphemeralTurn({
-				promptText: prompt.render(sideChannelPrompts["side-channel/irc-autoreply"].text, {
-					from: msg.from,
-					message: msg.body,
-					replyTo: msg.replyTo ?? "",
-				}),
-			});
-			const body = replyText.trim();
-			if (!body || this.#isDisposed) return;
-			const record: CustomMessage = {
-				role: "custom",
-				customType: "irc:autoreply",
-				content: `[IRC you → \`${msg.from}\` (auto)]\n\n${body}`,
-				display: true,
-				details: { to: msg.from, body, replyTo: msg.id },
-				attribution: "agent",
-				timestamp: Date.now(),
-			};
-			void this.#emitSessionEvent({ type: "irc_message", message: record });
-			// Asides drain at the next step boundary; anything left over is
-			// flushed at the start of the next prompt (#flushPendingIrcAsides).
-			this.#ircInbox.queueAside(record);
-			// `from` must be the id the sender addressed (msg.to) so their
-			// from-filtered waiter matches.
-			const receipt = await IrcBus.global().send({ from: msg.to, to: msg.from, body, replyTo: msg.id });
-			if (receipt.outcome === "failed") {
-				logger.warn("IRC auto-reply delivery failed", { to: msg.from, error: receipt.error });
-			}
-		} catch (error) {
-			logger.warn("IRC auto-reply turn failed", { from: msg.from, error: errorMessage(error) });
-		}
-	}
 	/**
 	 * Persist one directional, content-free IRC delivery event as session
 	 * metadata. Custom metadata survives JSONL reload but never enters context.
@@ -7024,22 +6864,6 @@ export class AgentSession {
 			message.details,
 			message.attribution ?? "agent",
 		);
-	}
-
-	/**
-	 * Persist any IRC asides that missed their step-boundary injection (the
-	 * message landed after the turn's last aside drain). Called at the start
-	 * of the next prompt so the model still sees them.
-	 */
-	#flushPendingIrcAsides(): void {
-		const records = this.#ircInbox.takeAll();
-		for (const record of records) {
-			// emitExternalEvent on message_end appends to agent state and dispatches
-			// to all session listeners, which in turn handle TUI rendering and
-			// sessionManager persistence via #handleAgentEvent.
-			this.agent.emitExternalEvent({ type: "message_start", message: record });
-			this.agent.emitExternalEvent({ type: "message_end", message: record });
-		}
 	}
 
 	// =========================================================================

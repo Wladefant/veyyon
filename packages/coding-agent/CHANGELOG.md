@@ -13,6 +13,7 @@
 - The terminal reports a `/browser` restart that fails after the mode is saved as `Browser mode set to <mode>, but restart failed: …`, the sentence ACP prints, and shows the `/browser` usage line as a warning.
 - `/effort` checks a level through one function the terminal and the text surfaces share, with no change to what either accepts or prints.
 - No user-visible change: `/export` path resolution moved from the session runtime into the HTML exporter.
+- IRC message delivery moved out of `AgentSession` into the `IrcDelivery` session collaborator, with no change to how a message is steered, queued, woken on or auto-replied to.
 
 ### Fixed
 

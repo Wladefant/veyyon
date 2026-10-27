@@ -816,7 +816,7 @@ describe("IRC", () => {
 			});
 			expect(outcome).toBe("woken");
 			expect(promptSpy).toHaveBeenCalledTimes(1);
-			// The idle wake routes through #wakeForIrc, which batches records into one prompt —
+			// The idle wake (IrcDelivery's wake turn) batches records into one prompt —
 			// even a lone incoming message is delivered as a one-element array.
 			expect(promptSpy.mock.calls[0]).toBeDefined();
 			const prompted = (promptSpy.mock.calls[0]![0] as unknown as CustomMessage[])[0];

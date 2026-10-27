@@ -82,8 +82,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-17 at 7423: extension and custom slash-command resolution, and the command
  * context a session builds when no extension runner does, left as the `agent-session-commands.ts`
  * sibling (-228); it reads the session through a host interface the session satisfies structurally.
+ * RE-MEASURED 2026-10-26 at 7271: IRC delivery (the incoming record, its steer, inbox, context or
+ * wake-turn route, the auto-reply and the stranded-record resume and flush) left as the
+ * `irc-delivery.ts` collaborator (-176); it holds the IRC inbox.
  */
-const RUNTIME_CEILING = 7_450;
+const RUNTIME_CEILING = 7_300;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -103,6 +106,7 @@ const COLLABORATORS = [
 	"extension-event-forwarder.ts",
 	"finalize-reminders.ts",
 	"history-rewrites.ts",
+	"irc-delivery.ts",
 	"irc-inbox.ts",
 	"loop-guards.ts",
 	"memory-context.ts",
