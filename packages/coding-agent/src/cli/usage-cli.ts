@@ -844,8 +844,7 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 	try {
 		if (cmd.action === "invalidate") {
 			const provider = cmd.provider?.toLowerCase();
-			const modelRegistry = new ModelRegistry(authStorage);
-			await authStorage.invalidateUsageCache(provider, undefined, p => modelRegistry.getProviderBaseUrl(p));
+			await authStorage.invalidateUsageCache(provider);
 			if (provider) {
 				process.stdout.write(`Invalidated cached usage reports for provider "${provider}".\n`);
 			} else {
