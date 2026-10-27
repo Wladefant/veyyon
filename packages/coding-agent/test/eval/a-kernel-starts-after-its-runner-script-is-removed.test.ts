@@ -1,33 +1,36 @@
 /**
- * WHY THIS SUITE EXISTS. Each eval kernel runs a runner script published into
- * `<tmpdir>/veyyon-<language>-runner/`, and the publisher remembered that path for the life of the
- * process. A temp cleaner that removed the file (a tmpfs wiped on a schedule, `systemd-tmpfiles`
- * ageing) left every later kernel start in that process launching its interpreter on a missing
- * script: the interpreter exited before its first frame, and every Python cell after a reset came
- * back as an empty cancelled result with no exit code.
+ * WHY THIS SUITE EXISTS. Each eval kernel runs a runner script the process publishes to disk, and the
+ * publisher remembered that path for the life of the process. The runner sat in
+ * `<tmpdir>/veyyon-<language>-runner`, and a cleaner that removed it (a tmpfs wiped on a schedule,
+ * `systemd-tmpfiles` ageing) left every later kernel start in that process launching its interpreter on a
+ * missing script: the interpreter exited before its first frame, and every Python cell after a reset came
+ * back as an empty cancelled result with no exit code. Every account on the host can write the shared temp
+ * directory, so another user could also create the hash-named script first and have it run.
  *
- * THE CLASS THIS CLOSES: a file the process placed in a shared temp directory is assumed to still be
- * there, or to be whole when another process finds it. Python, Ruby and Julia publish through the one
- * `createRunnerScriptPublisher` (kernel-shared-budgets.test.ts pins that each kernel imports it), so
- * the publisher arms cover all three; the end-to-end arm drives Python, the interpreter CI carries.
+ * THE CLASS THIS CLOSES: a file the process placed on disk is assumed to still be there, to be whole when
+ * another process finds it, or to be the process's own. Python, Ruby and Julia publish through the one
+ * `createRunnerScriptPublisher` (kernel-shared-budgets.test.ts pins that each kernel imports it), so the
+ * publisher arms cover all three; the end-to-end arm drives Python, the interpreter CI carries, and checks
+ * that no runner is written under the temp directory.
  *
  * WHAT THIS DOES NOT CATCH: a file removed between the presence check and the interpreter opening it,
  * a window of one spawn. That start fails, and a-kernel-that-cannot-start-says-why.test.ts pins that
- * it fails with the runner's exit code rather than as a cancellation.
+ * it fails with the runner's exit code rather than as a cancellation. A `$XDG_CACHE_HOME` that points at
+ * a directory other accounts can write.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
-import { createRunnerScriptPublisher, kernelRunnerCacheDir } from "@veyyon/coding-agent/eval/kernel-base";
-import { TempDir } from "@veyyon/utils";
+import { createRunnerScriptPublisher } from "@veyyon/coding-agent/eval/kernel-base";
+import { getKernelRunnerDir, TempDir } from "@veyyon/utils";
 import { describeRequiringTool } from "../../../utils/test/helpers/requires-tool";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 
 const SRC = path.resolve(import.meta.dirname, "..", "..", "src");
+const UTILS_DIRS = path.resolve(import.meta.dirname, "..", "..", "..", "utils", "src", "dirs.ts");
 
 /** A language name of this run's own, so the arms never touch a runner directory a live kernel uses. */
 function isolatedLanguage(): string {
@@ -41,7 +44,7 @@ afterEach(() => {
 });
 
 function publisherFor(language: string, script: string): () => Promise<string> {
-	cleanupPaths.push(kernelRunnerCacheDir(os.tmpdir(), language));
+	cleanupPaths.push(getKernelRunnerDir(language));
 	return createRunnerScriptPublisher(language, script, "py");
 }
 
@@ -95,7 +98,7 @@ describe("the runner script publisher", () => {
 
 		await expect(publish()).rejects.toThrow("EACCES: permission denied, rename");
 		// The staging file goes with the failure; a later start writes the script afresh.
-		expect(fs.readdirSync(kernelRunnerCacheDir(os.tmpdir(), language))).toEqual([]);
+		expect(fs.readdirSync(getKernelRunnerDir(language))).toEqual([]);
 	});
 
 	it("never shows another process a partly written script", async () => {
@@ -160,18 +163,17 @@ describe("the runner script publisher", () => {
 });
 
 describeRequiringTool("python3", "a Python cell after the runner script was removed", () => {
-	it("runs on a kernel started from the script written again", async () => {
+	it("runs on a kernel started from the script written again, and writes no runner under the temp directory", async () => {
 		using tempDir = TempDir.createSync("@runner-removed-");
 		const tmp = path.join(tempDir.path(), "tmp");
 		fs.mkdirSync(tmp);
 		const reportPath = path.join(tempDir.path(), "report.json");
 		const entry = path.join(tempDir.path(), "entry.ts");
-		// Its own TMPDIR, so removing the runner directory cannot reach a kernel another process runs.
+		// Its own HOME and TMPDIR, so removing the runner directory cannot reach a kernel another process runs.
 		fs.writeFileSync(
 			entry,
 			`import * as fs from "node:fs";
-import * as os from "node:os";
-import { kernelRunnerCacheDir } from ${JSON.stringify(path.join(SRC, "eval", "kernel-base.ts"))};
+import { getKernelRunnerDir } from ${JSON.stringify(UTILS_DIRS)};
 import { disposeAllKernelSessions, executePython } from ${JSON.stringify(path.join(SRC, "eval", "py", "executor.ts"))};
 const options = { cwd: process.cwd(), sessionId: "runner-removed" };
 const cell = async (code, reset) => {
@@ -179,10 +181,14 @@ const cell = async (code, reset) => {
 	return { exitCode: result.exitCode ?? null, cancelled: result.cancelled, output: result.output.trim() };
 };
 const before = await cell("print('before')", false);
-fs.rmSync(kernelRunnerCacheDir(os.tmpdir(), "python"), { recursive: true, force: true });
+fs.rmSync(getKernelRunnerDir("python"), { recursive: true, force: true });
 const after = await cell("print('after')", true);
 await disposeAllKernelSessions();
-fs.writeFileSync(process.env.RUNNER_REMOVED_REPORT, JSON.stringify({ before, after }));
+const tmpRunners = fs
+	.readdirSync(process.env.TMPDIR, { recursive: true })
+	.map(String)
+	.filter(name => /(^|[\\\\/])runner-[^\\\\/]*$/.test(name));
+fs.writeFileSync(process.env.RUNNER_REMOVED_REPORT, JSON.stringify({ before, after, tmpRunners }));
 process.exit(0);
 `,
 		);
@@ -206,6 +212,7 @@ process.exit(0);
 		expect(JSON.parse(fs.readFileSync(reportPath, "utf8"))).toEqual({
 			before: { exitCode: 0, cancelled: false, output: "before" },
 			after: { exitCode: 0, cancelled: false, output: "after" },
+			tmpRunners: [],
 		});
 	}, 60_000);
 });

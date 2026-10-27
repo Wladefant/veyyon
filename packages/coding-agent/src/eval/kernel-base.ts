@@ -1,10 +1,10 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import {
 	$flag,
 	atomicWriteFile,
 	errorMessage,
+	getKernelRunnerDir,
 	isBunTestRuntime,
 	isTimeoutError,
 	logger,
@@ -204,39 +204,28 @@ export function kernelIpcTraceEnvVar(language: string): string {
 }
 
 /**
- * Where one language's kernel caches its generated runner script, `<tmpdir>/veyyon-<language>-runner`.
- *
- * Same reasoning as {@link kernelIpcTraceEnvVar}: three kernels each joined this path themselves, so the
- * layout under the temp directory was a coincidence rather than a rule, and a stale-runner cleanup that
- * wanted to find all of them had nothing to ask. `language` is the lowercase name in the directory
- * (`python`, `ruby`, `julia`).
- */
-export function kernelRunnerCacheDir(tmpDir: string, language: string): string {
-	return path.join(tmpDir, `veyyon-${language}-runner`);
-}
-
-/**
  * Creates a runner-script publisher for a language kernel. Each call returns the path of
- * `<tmpdir>/veyyon-<language>-runner/runner-<hash>.<extension>`, writing the script there first when the
- * file is not present.
+ * `runner-<hash>.<extension>` in {@link getKernelRunnerDir}, writing the script there first when the file
+ * is not present. `language` is the lowercase name in the directory (`python`, `ruby`, `julia`).
  *
- * The presence check runs on every kernel start, not once per process: a temp cleaner (`systemd-tmpfiles`,
- * a tmpfs wiped on a schedule) removes the file while the process runs, and every kernel started on the
- * missing path exits before its first frame. The script is written with `atomicWriteFile`, so another
- * process that finds the target never runs a partly written script.
+ * The directory is under the user's config or cache root, not the shared temp directory, where another
+ * account could create the hash-named file first or replace it, and every kernel would run that file.
+ * The presence check runs on every kernel start, not once per process, so a cache the user cleared while
+ * the process ran is written again rather than leaving every later kernel to exit before its first frame.
+ * The script is written with `atomicWriteFile`, so another process that finds the target never runs a
+ * partly written script.
  */
 export function createRunnerScriptPublisher(
 	language: string,
 	script: string,
 	extension: string,
 ): () => Promise<string> {
-	const cacheDir = kernelRunnerCacheDir(os.tmpdir(), language);
-	const target = path.join(cacheDir, `runner-${Bun.hash(script).toString(36)}.${extension}`);
+	const name = `runner-${Bun.hash(script).toString(36)}.${extension}`;
 	return async () => {
+		const target = path.join(getKernelRunnerDir(language), name);
 		if (fs.existsSync(target)) return target;
 		try {
-			// 0o644, the mode a plain write gave it: the file holds no secret.
-			await atomicWriteFile(target, script, { mode: 0o644 });
+			await atomicWriteFile(target, script);
 		} catch (error) {
 			// Windows refuses to replace a script another process's interpreter holds open; that file is
 			// the same script, written by a concurrent publisher.

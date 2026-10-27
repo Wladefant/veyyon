@@ -51,7 +51,7 @@
 
 ### Fixed
 
-- Python, Ruby and Julia eval kernels start after a temp cleaner removes their runner script from `<tmpdir>/veyyon-<language>-runner`, instead of every later start in the process returning an empty cancelled cell, and a runner script is written with the shared atomic writer so another process never runs a partly written one.
+- Python, Ruby and Julia eval kernels cache their runner script in `cache/<language>-runner` under the veyyon config root (or `$XDG_CACHE_HOME/veyyon`) instead of `<tmpdir>/veyyon-<language>-runner`, where another account on the host could create the script first and have every kernel run it; a kernel start writes the script again when it is missing, instead of every later start in the process returning an empty cancelled cell, and writes it with the shared atomic writer so another process never runs a partly written one.
 - An eval kernel whose runner exits during startup fails with `<Language> kernel init failed: <Language> kernel exited with code N` instead of returning an empty cancelled cell.
 - `veyyon completions` with no shell lists the four accepted shells in its error again, which the subcommand flag check had dropped, and a bad shell prints the standard USAGE block.
 - `veyyon acp` fails `session/new` on a flag neither the launch parser nor the session's extensions recognize, with the flag and the nearest known one, instead of serving every session with the flag ignored.

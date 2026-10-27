@@ -36,7 +36,7 @@ The tool is `concurrency = "exclusive"` for a session, so calls do not overlap.
 
 ## Kernel lifecycle
 
-Each Python kernel is a single subprocess: `<resolved-python> -u <runner.py>`. The runner is bundled with the host binary (Bun text import) and cached as `runner-<hash>.py` in a `veyyon-python-runner` directory under the OS temp directory. Every spawn checks the file is present and writes it again when a temp cleaner removed it. The script is written to a sibling file and renamed into place, so a second process never runs a partly written runner.
+Each Python kernel is a single subprocess: `<resolved-python> -u <runner.py>`. The runner is bundled with the host binary (Bun text import) and cached as `runner-<hash>.py` in `cache/python-runner` under the veyyon config root, or under `$XDG_CACHE_HOME/veyyon` when that is set. Every spawn checks the file is present and writes it again when it was removed. The script is written to a sibling file and renamed into place, so a second process never runs a partly written runner.
 
 Importing the SDK or session class does not load evaluator implementations. The first `$` Python command
 loads its executor through the shell domain manifest. Constructing `eval` and reading its metadata do

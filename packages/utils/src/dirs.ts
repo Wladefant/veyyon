@@ -2244,6 +2244,16 @@ export function getArgotCacheDir(): string {
 	return dirs.rootSubdir(path.join("cache", "argot"), "cache");
 }
 
+/**
+ * Get the directory an eval kernel caches its runner script in (profile `cache/<language>-runner`).
+ * `language` is the lowercase interpreter name (`python`, `ruby`, `julia`). The directory is under the
+ * user's own config or cache root: another account on the host can create or replace a file in the
+ * shared temp directory, and the kernel runs the script at this path.
+ */
+export function getKernelRunnerDir(language: string): string {
+	return dirs.rootSubdir(path.join("cache", `${language}-runner`), "cache");
+}
+
 /** Get the stats database path (profile `stats.db`). */
 export function getStatsDbPath(): string {
 	return dirs.rootSubdir("stats.db", "data");
