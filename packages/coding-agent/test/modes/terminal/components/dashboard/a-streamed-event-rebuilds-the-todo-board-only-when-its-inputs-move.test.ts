@@ -177,7 +177,7 @@ describe("a streamed event rebuilds the todo board only when its inputs move", (
 		mode.ui = new TUI(terminal);
 		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
 		await mode.init();
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 		// The anchored clock and the loader run on intervals; only the test steps them.
 		vi.useFakeTimers();
 		vi.spyOn(mode.ui, "requestRender").mockImplementation(() => {});

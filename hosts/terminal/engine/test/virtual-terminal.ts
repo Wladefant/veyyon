@@ -1,7 +1,9 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
+import type { TUI } from "@veyyon/tui";
 import type { Terminal, TerminalAppearance } from "@veyyon/tui/terminal";
 import { CellFlags, Ghostty, type GhosttyCell, type GhosttyTerminal } from "ghostty-web";
+import { settleFrames } from "./helpers/settle-frames";
 
 // ---------------------------------------------------------------------------
 // Shared Ghostty VT engine
@@ -304,13 +306,21 @@ export class VirtualTerminal implements Terminal {
 
 	// --- Test-only helpers ---------------------------------------------------
 
-	/** Wait for TUI's throttled render pipeline to settle (matches the ~33ms frame budget). */
-	async waitForRender(): Promise<void> {
+	/**
+	 * Wait until `tui` has painted every frame it owes.
+	 *
+	 * The 40 ms floor keeps the wall time each caller's debounce and throttle windows were written
+	 * against. It does not make the frame land: alone it was a bet against the ~33 ms throttle, and a
+	 * loaded runner lost it, reading the frame before the one the case asserted. {@link settleFrames}
+	 * waits on the engine's own owed-frame signal, so `tui` is required.
+	 */
+	async waitForRender(tui: TUI): Promise<void> {
 		const nextTick = Promise.withResolvers<void>();
 		process.nextTick(nextTick.resolve);
 		await nextTick.promise;
 		await Bun.sleep(40);
 		await this.flush();
+		await settleFrames(this, tui);
 	}
 
 	/** Simulate keyboard input. */

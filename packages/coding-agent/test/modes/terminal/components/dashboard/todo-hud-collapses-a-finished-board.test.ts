@@ -409,7 +409,7 @@ describe("the collapsed board reaches the screen", () => {
 		mode.ui = new TUI(terminal);
 		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
 		await mode.init();
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 	});
 
 	afterEach(async () => {
@@ -423,11 +423,11 @@ describe("the collapsed board reaches the screen", () => {
 
 	it("erases the painted rows when the last task closes", async () => {
 		mode.setTodos(board(["completed", "completed", "in_progress"]));
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 		expect(terminal.getViewport().some(row => row.includes("p0-task-2-in_progress"))).toBe(true);
 
 		mode.setTodos(board(["completed", "completed", "completed"]));
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		const rows = terminal.getViewport().map(row => row.trimEnd());
 		// The rows are gone from the FRAME, not merely from the container. An
@@ -442,11 +442,11 @@ describe("the collapsed board reaches the screen", () => {
 
 	it("paints the whole board again once open work returns", async () => {
 		mode.setTodos(board(["completed", "completed"]));
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 		expect(terminal.getViewport().some(row => /^\s*Todos(\s|$)/.test(row.trimEnd()))).toBe(false);
 
 		mode.setTodos(board(["completed", "completed", "in_progress"]));
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		const rows = terminal.getViewport().map(row => row.trimEnd());
 		expect(rows.some(row => row.includes(TODO_DONE_SUMMARY))).toBe(false);

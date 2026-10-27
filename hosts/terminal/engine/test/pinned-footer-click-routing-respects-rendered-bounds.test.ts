@@ -96,7 +96,7 @@ async function createHarness(cols: number, rows: number, setup: (tui: TUI) => vo
 		harness.selectionAttempts += 1;
 	};
 	tui.start();
-	await term.waitForRender();
+	await term.waitForRender(tui);
 	return harness;
 }
 
@@ -278,7 +278,7 @@ describe("pinned footer click routing respects rendered bounds", () => {
 
 		// Scroll up into history
 		term.sendInput(WHEEL_UP);
-		await term.waitForRender();
+		await term.waitForRender(tui);
 		expect(tui.virtualScrollActive).toBe(true);
 
 		// In virtual scroll on a 10-row terminal with 2 footer rows:

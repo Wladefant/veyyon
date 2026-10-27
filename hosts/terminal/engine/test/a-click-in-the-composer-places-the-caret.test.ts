@@ -237,7 +237,7 @@ describe("a click on the composer text", () => {
 			tui.setFocus(editor);
 			tui.start();
 			stop = () => tui.stop();
-			await term.waitForRender();
+			await term.waitForRender(tui);
 
 			const viewport = term.getViewport();
 			const row = viewport.findIndex(line => line.includes("point at me"));
@@ -245,7 +245,7 @@ describe("a click on the composer text", () => {
 			const col = (viewport[row] ?? "").indexOf("at");
 
 			term.sendInput(clickAt(row, col));
-			await term.waitForRender();
+			await term.waitForRender(tui);
 
 			expect(editor.getCursor()).toEqual({ line: 0, col: "point ".length });
 		});

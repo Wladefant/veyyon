@@ -103,7 +103,7 @@ describe("InteractiveMode startup scrollback", () => {
 		vi.spyOn(createdMode.statusLine, "watchGitState").mockImplementation(() => {});
 
 		await createdMode.init();
-		await createdTerminal.waitForRender();
+		await createdTerminal.waitForRender(createdMode.ui);
 
 		return { mode: createdMode, terminal: createdTerminal, writes, startOptions };
 	}
@@ -183,7 +183,7 @@ describe("InteractiveMode startup scrollback", () => {
 		started.writes.length = 0;
 
 		await started.mode.handleClearCommand();
-		await started.terminal.waitForRender();
+		await started.terminal.waitForRender(started.mode.ui);
 
 		expect(started.writes.join("")).toContain("\x1b[3J");
 	});
@@ -203,7 +203,7 @@ describe("InteractiveMode startup scrollback", () => {
 		const darkGround = theme.getGroundHex();
 
 		onTerminalAppearanceChange("light");
-		await started.terminal.waitForRender();
+		await started.terminal.waitForRender(started.mode.ui);
 
 		// The swap really resolved, so the byte assertion below is not vacuous and
 		// the repaint that the swap owes the operator still happened. Confirmed
@@ -211,7 +211,7 @@ describe("InteractiveMode startup scrollback", () => {
 		// the caller never sees, and its render is scheduled only once that lands.
 		expect(getCurrentThemeName()).toBe("light");
 		expect(theme.getGroundHex()).not.toBe(darkGround);
-		await started.terminal.waitForRender();
+		await started.terminal.waitForRender(started.mode.ui);
 
 		expect(started.writes.join("")).not.toContain("\x1b[3J");
 	});
@@ -225,7 +225,7 @@ describe("InteractiveMode startup scrollback", () => {
 		started.writes.length = 0;
 
 		await previewTheme("light");
-		await started.terminal.waitForRender();
+		await started.terminal.waitForRender(started.mode.ui);
 
 		expect(started.writes.join("")).not.toContain("\x1b[3J");
 	});

@@ -110,7 +110,7 @@ describe("the collapsed Todos HUD distinguishes every task state without colour"
 		mode.ui = new TUI(terminal);
 		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
 		await mode.init();
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 	});
 
 	afterEach(async () => {
@@ -184,7 +184,7 @@ describe("the collapsed Todos HUD distinguishes every task state without colour"
 			]),
 			isError: false,
 		} as never);
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		// The whole point: the closed task is still on the board, showing what
 		// moved, rather than leaving only the two rows that have not. The phase row
@@ -206,7 +206,7 @@ describe("the collapsed Todos HUD distinguishes every task state without colour"
 			["land the change", "completed"],
 			["drop the spike", "abandoned"],
 		]);
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		const rows = hudRows();
 		const phase = rows.find(row => row.includes("Phase One"))!;
@@ -247,7 +247,7 @@ describe("the collapsed Todos HUD distinguishes every task state without colour"
 			["still going", "in_progress"],
 			["not started", "pending"],
 		]);
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		// Two most recent finished tasks, then the open work. The stage tally's
 		// `4/6` is what says two more are finished and not listed.
@@ -268,7 +268,7 @@ describe("the collapsed Todos HUD distinguishes every task state without colour"
 			[long, "completed"],
 			["next up", "in_progress"],
 		]);
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		const rows = hudRows();
 		// One row, not a wrapped stack: the anchored block is rebuilt in place

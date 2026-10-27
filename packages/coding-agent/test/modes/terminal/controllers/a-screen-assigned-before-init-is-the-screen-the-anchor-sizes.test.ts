@@ -75,7 +75,7 @@ describe("a screen assigned before init is the screen the anchor sizes", () => {
 		mode.ui = new TUI(terminal);
 		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
 		await mode.init();
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 		return terminal;
 	}
 
@@ -108,8 +108,8 @@ describe("a screen assigned before init is the screen the anchor sizes", () => {
 
 	it("re-sizes the anchor on every frame of the assigned screen once a conversation starts", async () => {
 		const terminal = await mount(true);
-		const controller = mode?.eventController;
-		if (!controller) throw new Error("mode not mounted");
+		if (!mode) throw new Error("mode not mounted");
+		const controller = mode.eventController;
 		await controller.handleEvent({ type: "agent_start" } as never);
 		await controller.handleEvent({
 			type: "tool_execution_start",
@@ -125,7 +125,7 @@ describe("a screen assigned before init is the screen the anchor sizes", () => {
 			isError: false,
 		} as never);
 		await controller.handleEvent({ type: "agent_end" } as never);
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		// A conversation routes the slack ABOVE the transcript: the card hugs the
 		// composer at the bottom instead of sitting at the top over a band of blank

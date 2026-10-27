@@ -114,7 +114,7 @@ describe("an idle session draws a still todo board", () => {
 		mode.ui = new TUI(terminal);
 		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
 		await mode.init();
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 	});
 
 	afterEach(async () => {
@@ -162,7 +162,7 @@ describe("an idle session draws a still todo board", () => {
 
 		// End the turn: the session enters idle state waiting for user input.
 		await controller.handleEvent({ type: "agent_end" } as never);
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		const first = terminal.getViewport().join("\n");
 		const stripped = Bun.stripANSI(first);
@@ -175,7 +175,7 @@ describe("an idle session draws a still todo board", () => {
 		// from frame 0 ("·") to frame 1 (":"), causing viewport byte divergence.
 		const waitMs = TODO_BOARD_FRAME_DIVISOR * RAIL_IDLE_STEP_MS + 40;
 		await Bun.sleep(waitMs);
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		const second = terminal.getViewport().join("\n");
 		expect(second).toBe(first);
@@ -215,7 +215,7 @@ describe("an idle session draws a still todo board", () => {
 		} as never);
 
 		// Turn is still RUNNING: no agent_end sent.
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		const screen = Bun.stripANSI(terminal.getViewport().join("\n"));
 		// Assert the board is REACHED and drawn (phase row and task rows are on screen),
@@ -261,7 +261,7 @@ describe("an idle session draws a still todo board", () => {
 
 		// End the turn: mode should disarm anchored motion timer and settle.
 		await controller.handleEvent({ type: "agent_end" } as never);
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		// Snapshot the render count once the turn is settled and idle.
 		renderSpy.mockClear();

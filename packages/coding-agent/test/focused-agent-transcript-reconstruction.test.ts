@@ -72,7 +72,7 @@ describe("focused agent transcript reconstruction", () => {
 		mode.ui = new TUI(terminal);
 		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
 		await mode.init();
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 	});
 
 	afterEach(async () => {
@@ -257,7 +257,7 @@ describe("focused agent transcript reconstruction", () => {
 
 		// Focus the agent
 		await mode.focusAgentSession("Worker");
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		// Verify the transcript contains all user, assistant, and tool components
 		const children = mode.chatContainer.children;
@@ -480,7 +480,7 @@ describe("focused agent transcript reconstruction", () => {
 
 		// Settle registry event and unfocus chain
 		for (let i = 0; i < 5; i++) await Promise.resolve();
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		expect(mode.focusedAgentId).toBeUndefined();
 		expect(mode.viewSession).toBe(mainSession);

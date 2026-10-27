@@ -61,7 +61,7 @@ async function mountFooterTui(footerChildren: Component[]): Promise<{ tui: TUI; 
 	tui.setPinnedFooterChildCount(footerChildren.length);
 	tui.setScrollIsolation(true);
 	tui.start();
-	await term.waitForRender();
+	await term.waitForRender(tui);
 	return { tui, term };
 }
 

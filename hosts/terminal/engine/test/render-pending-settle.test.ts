@@ -16,6 +16,8 @@
  * These tests pin the signal (`renderPending` is true exactly while a frame is
  * owed) and the helper's guarantee (it never returns while one is owed, however
  * late the frame is scheduled), including the case the 40 ms sleep got wrong.
+ * `VirtualTerminal.waitForRender` kept that sleep after the helper replaced it
+ * elsewhere, so it is held to the same guarantee.
  */
 import { describe, expect, it } from "bun:test";
 import { type Component, type RenderScheduler, type RenderTimer, TUI } from "@veyyon/tui";
@@ -204,6 +206,33 @@ describe("settleFrames", () => {
 			await expect(settleFrames(term, tui, { timeoutMs: 300 })).rejects.toThrow(
 				/settleFrames: the TUI never settled within 300ms \(last state /,
 			);
+		} finally {
+			tui.stop();
+		}
+	});
+});
+
+describe("VirtualTerminal.waitForRender", () => {
+	/**
+	 * The 40 ms floor it keeps is not the wait. A frame the engine holds past it,
+	 * as the adaptive pacer does to a slow compose on a loaded runner, is painted
+	 * before it returns.
+	 */
+	it("waits for a frame scheduled past its 40 ms floor", async () => {
+		const term = new VirtualTerminal(20, 4);
+		const tui = new TUI(term, undefined, { renderScheduler: new SlowRenderScheduler(120) });
+		const rows = new Rows(["status-before"]);
+		tui.addChild(rows);
+		try {
+			tui.start();
+			await settleFrames(term, tui, { timeoutMs: 10_000 });
+
+			rows.setLines(["status-after"]);
+			tui.requestRender();
+			await term.waitForRender(tui);
+
+			expect(plain(term)[0]).toBe("status-after");
+			expect(tui.renderPending).toBe(false);
 		} finally {
 			tui.stop();
 		}

@@ -118,7 +118,7 @@ async function mountComposer(options: { padRows?: number } = {}): Promise<Harnes
 	tui.setScrollIsolation(true);
 	tui.setFocus(editor);
 	tui.start();
-	await term.waitForRender();
+	await term.waitForRender(tui);
 
 	return {
 		tui,
@@ -144,7 +144,7 @@ async function openPopup(h: Harness): Promise<void> {
 	h.term.sendInput("m");
 	await Bun.sleep(120);
 	expect(h.editor.isShowingAutocomplete()).toBe(true);
-	await h.term.waitForRender();
+	await h.term.waitForRender(h.tui);
 }
 
 describe("a click on a composer suggestion", () => {
@@ -162,7 +162,7 @@ describe("a click on a composer suggestion", () => {
 		// `/memory` is neither the first nor the last row, so a routing bug that
 		// lands on the selection or on an edge row cannot pass by accident.
 		h.term.sendInput(clickAt(h.rowOf("memory"), 6));
-		await h.term.waitForRender();
+		await h.term.waitForRender(h.tui);
 
 		expect(h.editor.getText()).toBe("/memory ");
 		expect(h.editor.isShowingAutocomplete()).toBe(false);
@@ -177,7 +177,7 @@ describe("a click on a composer suggestion", () => {
 		// editor: a container that forwarded the raw line would land three rows
 		// further down the popup, or off it.
 		h.term.sendInput(clickAt(h.rowOf("memory"), 6));
-		await h.term.waitForRender();
+		await h.term.waitForRender(h.tui);
 
 		expect(h.editor.getText()).toBe("/memory ");
 	});
@@ -187,7 +187,7 @@ describe("a click on a composer suggestion", () => {
 		stop = () => clicked.tui.stop();
 		await openPopup(clicked);
 		clicked.term.sendInput(clickAt(clicked.rowOf("mcp"), 4));
-		await clicked.term.waitForRender();
+		await clicked.term.waitForRender(clicked.tui);
 		const byClick = clicked.editor.getText();
 		clicked.tui.stop();
 
@@ -196,7 +196,7 @@ describe("a click on a composer suggestion", () => {
 		await openPopup(typed);
 		typed.term.sendInput("\x1b[B"); // down: model -> mcp
 		typed.term.sendInput("\t");
-		await typed.term.waitForRender();
+		await typed.term.waitForRender(typed.tui);
 
 		expect(byClick).toBe(typed.editor.getText());
 		expect(byClick).toBe("/mcp ");
@@ -215,7 +215,7 @@ describe("a click on a composer suggestion", () => {
 		// The prompt row carries the typed text, so it is above the popup. Column
 		// 3 is the first text cell of the framed variant (border plus padding).
 		h.term.sendInput(clickAt(h.rowOf("/m"), 3));
-		await h.term.waitForRender();
+		await h.term.waitForRender(h.tui);
 
 		expect(h.editor.getText()).toBe("/m");
 		expect(h.editor.getCursor()).toEqual({ line: 0, col: 0 });
@@ -285,10 +285,10 @@ describe("a click on a composer suggestion", () => {
 		for (const ch of "/model s") h.term.sendInput(ch);
 		await Bun.sleep(120);
 		expect(h.editor.isShowingAutocomplete()).toBe(true);
-		await h.term.waitForRender();
+		await h.term.waitForRender(h.tui);
 
 		h.term.sendInput(clickAt(h.rowOf("sonnet-4"), 4));
-		await h.term.waitForRender();
+		await h.term.waitForRender(h.tui);
 
 		expect(h.editor.getText()).toBe("/model sonnet-4");
 		expect(h.editor.isShowingAutocomplete()).toBe(false);

@@ -61,7 +61,7 @@ async function mount(isolation: boolean): Promise<{
 	tui.setPinnedFooterChildCount(1);
 	tui.setScrollIsolation(isolation);
 	tui.start();
-	await term.waitForRender();
+	await term.waitForRender(tui);
 
 	// The pinned footer is the last frame row (row 1), rendered directly below the
 	// short transcript.
@@ -80,7 +80,7 @@ describe("the footline answers a click in a session that never scrolled", () => 
 		stop = () => tui.stop();
 
 		term.sendInput(leftPressAt(footerRow, INDENT + 9));
-		await term.waitForRender();
+		await term.waitForRender(tui);
 
 		// The column the handler receives is line-local: `quietSegmentAt` is indexed from
 		// the first character the provider rendered, not from the terminal's left edge.
@@ -96,7 +96,7 @@ describe("the footline answers a click in a session that never scrolled", () => 
 		stop = () => tui.stop();
 
 		term.sendInput(leftPressAt(footerRow, INDENT + 9));
-		await term.waitForRender();
+		await term.waitForRender(tui);
 
 		expect(clicks).toEqual([]);
 	});

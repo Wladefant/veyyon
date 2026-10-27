@@ -122,7 +122,7 @@ describe("a running agent survives a transcript rebuild", () => {
 		mode.ui = new TUI(terminal);
 		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
 		await mode.init();
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 	});
 
 	afterEach(async () => {
@@ -155,7 +155,7 @@ describe("a running agent survives a transcript rebuild", () => {
 		mode.renderSessionContext(session.buildTranscriptSessionContext({ collapseCompactedHistory: false }), {
 			populateHistory: true,
 		});
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		expect(mode.pendingTools.has(TASK_CALL_ID)).toBe(true);
 		expect(mode.settledToolCalls.has(TASK_CALL_ID)).toBe(false);
@@ -172,7 +172,7 @@ describe("a running agent survives a transcript rebuild", () => {
 		mode.renderSessionContext(session.buildTranscriptSessionContext({ collapseCompactedHistory: false }), {
 			populateHistory: true,
 		});
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		expect(mode.pendingTools.has(BASH_CALL_ID)).toBe(false);
 	});

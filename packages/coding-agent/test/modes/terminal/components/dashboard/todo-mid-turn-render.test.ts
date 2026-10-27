@@ -118,7 +118,7 @@ describe("a mid-turn todo result reaches the screen before the turn ends", () =>
 		mode.ui = new TUI(terminal);
 		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
 		await mode.init();
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 	});
 
 	afterEach(async () => {
@@ -154,7 +154,7 @@ describe("a mid-turn todo result reaches the screen before the turn ends", () =>
 				isError: false,
 			} as never);
 		}
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		const todoCall = (id: string, args: Record<string, unknown>) =>
 			assistant([{ type: "toolCall", id, name: "todo", arguments: args }]);
@@ -185,7 +185,7 @@ describe("a mid-turn todo result reaches the screen before the turn ends", () =>
 			]),
 			isError: false,
 		} as never);
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		const first = viewport();
 		expect(hudPhaseRow(first, "0/2")).toBe(true);
@@ -244,7 +244,7 @@ describe("a mid-turn todo result reaches the screen before the turn ends", () =>
 				assistantMessageEvent: { type: "text_delta", delta: "x" },
 			} as never);
 		}
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		// Still mid-turn: no agent_end has been delivered.
 		const second = viewport();

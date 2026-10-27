@@ -102,7 +102,7 @@ async function runAndRebuild(mode: InteractiveMode, terminal: VirtualTerminal): 
 			result: { content: [{ type: "text", text: `output ${turn}` }] },
 		});
 	}
-	await terminal.waitForRender();
+	await terminal.waitForRender(mode.ui);
 	// A read starting now anchors its images to the last assistant block, the final turn's segment.
 	await send({ type: "tool_execution_start", toolCallId: "call_read", toolName: "read", args: { path: "notes.md" } });
 
@@ -115,7 +115,7 @@ async function runAndRebuild(mode: InteractiveMode, terminal: VirtualTerminal): 
 		if (next instanceof AssistantMessageComponent) detached.segments.push(new WeakRef(next));
 	}
 	mode.rebuildChatFromMessages();
-	await terminal.waitForRender();
+	await terminal.waitForRender(mode.ui);
 	return detached;
 }
 
@@ -186,7 +186,7 @@ describe("a long agent run releases the cards a rebuild detached", () => {
 		mode.ui = new TUI(terminal);
 		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
 		await mode.init();
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 	});
 
 	afterEach(async () => {
