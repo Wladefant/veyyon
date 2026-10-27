@@ -3,7 +3,7 @@
  * gets, each in its own place among the text parts.
  *
  * WHY. `sendCustomMessage` (and the extension, file-mention and mode-context paths beside it) runs
- * its content through `normalizeAgentMessageImages` before the message is queued or appended.
+ * its content through `ImageAttachments.normalizeMessage` before the message is queued or appended.
  * Nothing drove a session through it: the image helpers were covered alone, so skipping the
  * normalization, or writing every resized image into the first image's slot, passed every suite
  * while a 2000-pixel screenshot went to the provider at full size.

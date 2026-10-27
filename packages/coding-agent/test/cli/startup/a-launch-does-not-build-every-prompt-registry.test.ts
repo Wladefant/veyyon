@@ -486,11 +486,18 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * `session/agent-session.ts`, already here, and its runtime imports (`argot-wire.ts` and
  * `secrets/obfuscator.ts`) are already here. Measured 2026-10-27 at 1516.
  *
+ * 1516 to 1517: `coding-agent/src/session/runtime/image-attachments.ts`, the session collaborator
+ * that normalizes a message's images for the active model, has a vision model describe them for a
+ * text-only one, and lists the latest images a tool addresses. It left `session/agent-session.ts`,
+ * already here, and its runtime imports (`utils/image-loading.ts`, `utils/image-vision-fallback.ts`,
+ * `config/model-resolver.ts`, `session/agent-session-queue.ts` and `@veyyon/utils`) are already
+ * here. Measured 2026-10-27 at 1517.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1516;
+const LAUNCH_REACH_CEILING = 1517;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

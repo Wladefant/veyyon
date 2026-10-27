@@ -124,8 +124,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-27 at 5455: the display copy of assistant content, tool intents, streamed
  * deltas and rebuilt transcripts, with the stream decoder it holds, moved into the `display-copy.ts`
  * collaborator (-90).
+ * RE-MEASURED 2026-10-27 at 5339: the latest images a tool addresses, the normalization of a
+ * message's images for the active model and the description a text-only model reads in their place
+ * moved into the `image-attachments.ts` collaborator (-116).
  */
-const RUNTIME_CEILING = 5_500;
+const RUNTIME_CEILING = 5_400;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -147,6 +150,7 @@ const COLLABORATORS = [
 	"extension-event-forwarder.ts",
 	"finalize-reminders.ts",
 	"history-rewrites.ts",
+	"image-attachments.ts",
 	"irc-delivery.ts",
 	"irc-inbox.ts",
 	"loop-guards.ts",

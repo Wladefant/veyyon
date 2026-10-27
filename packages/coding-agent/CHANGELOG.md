@@ -35,6 +35,7 @@
 - The per-family service tiers, `/fast` and the tier each request resolves to moved out of the session class into the `ServiceTiers` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - The command registries, the resolution of a typed prompt through extension, custom and file-based commands and the prompt templates, and the agents a `/` command grants for its turn moved out of the session class into the `PromptCommands` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - The display copy of assistant content, tool intents, streamed deltas and rebuilt transcripts, with the stream decoder a streamed reply runs through, moved out of the session class into the `DisplayCopy` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The normalization of a message's images for the active model, the description a text-only model reads in their place and the latest images a tool addresses moved out of the session class into the `ImageAttachments` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 
 ### Fixed
 

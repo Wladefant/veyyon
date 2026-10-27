@@ -161,18 +161,11 @@ import type { CheckpointState, CompletedRewindState } from "../tools/fs/checkpoi
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
-import { normalizeModelContextImages } from "../utils/image-loading";
-import { describeAttachedImagesForTextModel } from "../utils/image-vision-fallback";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import { formatAdvisorStatus } from "./advisor-stats";
 import { type EphemeralTurnArgs, type EphemeralTurnResult, runEphemeralTurn } from "./agent-session-ephemeral-turn";
 import { findLastAssistantMessage, lastCopyCandidateAssistantMessage } from "./agent-session-message-shapes";
-import {
-	IMAGE_ATTACHMENT_DESCRIPTION_TYPE,
-	isAdvisorCard,
-	isTerminalTextAssistantAnswer,
-	type RestoredQueuedMessage,
-} from "./agent-session-queue";
+import { isAdvisorCard, isTerminalTextAssistantAnswer, type RestoredQueuedMessage } from "./agent-session-queue";
 import { retryFallbackChainWarnings } from "./agent-session-retry-fallback";
 import { buildGoalTodoContext, createMagicKeywordNotices, magicKeywordEnabled } from "./agent-session-turn-notices";
 import {
@@ -233,6 +226,7 @@ import { DisplayCopy } from "./runtime/display-copy";
 import { ExtensionEventForwarder } from "./runtime/extension-event-forwarder";
 import { FinalizeReminders } from "./runtime/finalize-reminders";
 import { HistoryRewrites } from "./runtime/history-rewrites";
+import { type ImageAttachment, ImageAttachments } from "./runtime/image-attachments";
 import { IrcDelivery } from "./runtime/irc-delivery";
 import { LoopGuards } from "./runtime/loop-guards";
 import { MemoryContext } from "./runtime/memory-context";
@@ -521,28 +515,6 @@ async function sendModeContext(
 	);
 }
 
-async function normalizeMessageContentImages(
-	content: string | (TextContent | ImageContent)[],
-	model: Model | undefined,
-): Promise<string | (TextContent | ImageContent)[]> {
-	if (typeof content === "string") return content;
-	const images = content.filter((part): part is ImageContent => part.type === "image");
-	if (images.length === 0) return content;
-	const normalizedImages = await normalizeModelContextImages(images, { model });
-	if (!normalizedImages) return content;
-	let imageIndex = 0;
-	return content.map(part => (part.type === "image" ? normalizedImages[imageIndex++]! : part));
-}
-
-async function normalizeAgentMessageImages<T extends AgentMessage>(message: T, model: Model | undefined): Promise<T> {
-	if (!("content" in message)) return message;
-	const content = message.content;
-	if (typeof content !== "string" && !Array.isArray(content)) return message;
-	const normalized = await normalizeMessageContentImages(content as string | (TextContent | ImageContent)[], model);
-	if (normalized === content) return message;
-	return { ...message, content: normalized } as T;
-}
-
 /**
  * `details` with the text the queue chip shows for a queued custom message. Details that are not an
  * object are replaced, since the chip text needs a record to ride on.
@@ -553,13 +525,12 @@ function withQueueChipText<T>(details: T | undefined, queueChipText: string): T 
 }
 
 /** A custom message as steer/follow-up delivery queues it, without starting a turn. */
-async function queuedCustomMessage<T = unknown>(
+function queuedCustomMessage<T = unknown>(
 	message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
-	model: Model | undefined,
 	queueChipText?: string,
-): Promise<CustomMessage<T>> {
+): CustomMessage<T> {
 	const details = queueChipText !== undefined ? withQueueChipText(message.details, queueChipText) : message.details;
-	const appMessage: CustomMessage<T> = {
+	return {
 		role: "custom",
 		customType: message.customType,
 		content: message.content,
@@ -568,7 +539,6 @@ async function queuedCustomMessage<T = unknown>(
 		attribution: message.attribution ?? "agent",
 		timestamp: Date.now(),
 	};
-	return normalizeAgentMessageImages(appMessage, model);
 }
 
 export class AgentSession {
@@ -872,6 +842,8 @@ export class AgentSession {
 	readonly #secrets: SessionSecrets;
 	/** Display copy: secrets deobfuscated and argot handles expanded, with the stream decoder (seam 3). */
 	readonly #display: DisplayCopy;
+	/** The images a message carries, normalized for the model, and the description a text-only model reads. */
+	readonly #images: ImageAttachments;
 	/** Resolves the active model's inline-descriptor policy for session dumps. */
 	#resolvePruneToolDescriptions: (model: Model) => boolean = () => false;
 	/** The open checkpoint, its pending rewind report and the last completed rewind. */
@@ -1068,6 +1040,15 @@ export class AgentSession {
 			argot: config.argot,
 			secrets: this.#secrets,
 			sessionStore: this.sessionManager,
+		});
+		this.#images = new ImageAttachments({
+			model: () => this.model,
+			messages: () => this.agent.state.messages,
+			settings: this.settings,
+			modelRegistry: config.modelRegistry,
+			localProtocol: localProtocolOptions(this.sessionManager),
+			telemetry: () => this.agent.telemetry,
+			sessionId: () => this.sessionId,
 		});
 		this.#approvals = new SessionApprovals(
 			{
@@ -1529,7 +1510,7 @@ export class AgentSession {
 			isStreaming: () => this.isStreaming,
 			isRetrying: () => this.isRetrying,
 			advisors: this.#advisorRoster,
-			textWithImages: (text, images) => this.#textWithImages(text, images),
+			textWithImages: (text, images) => this.#images.textWithImages(text, images),
 			scheduleContinue: () => this.#scheduleAgentContinue(),
 			nextTurnCount: () => this.#nextTurn.count,
 		});
@@ -3248,21 +3229,8 @@ export class AgentSession {
 	}
 
 	/** Latest image attachments addressable by tools as `Image #N` or `attachment://N`. */
-	getImageAttachments(): { label: string; uri: string; image: ImageContent }[] {
-		for (let i = this.agent.state.messages.length - 1; i >= 0; i--) {
-			const message = this.agent.state.messages[i];
-			if (!message || (message.role !== "user" && message.role !== "developer") || !Array.isArray(message.content)) {
-				continue;
-			}
-			const images = message.content.filter((part): part is ImageContent => part.type === "image");
-			if (images.length === 0) continue;
-			return images.map((image, index) => ({
-				label: `Image #${index + 1}`,
-				uri: `attachment://${index + 1}`,
-				image,
-			}));
-		}
-		return [];
+	getImageAttachments(): ImageAttachment[] {
+		return this.#images.latest();
 	}
 
 	buildDisplaySessionContext(): SessionContext {
@@ -3640,86 +3608,6 @@ export class AgentSession {
 	}
 
 	/**
-	 * Build a hidden companion message describing image attachments for a text-only
-	 * model. Each image is saved under local:// and a vision-capable model describes
-	 * it; the descriptions are returned as a `display: false` custom message (so the
-	 * model reads them but the TUI does not render the blob) carrying one
-	 * `<image path="local://…">…</image>` block per image. Returns `undefined` when
-	 * the active model already accepts images, the feature is disabled, or no
-	 * description could be produced. Never throws.
-	 */
-	async #buildImageDescriptionNotice(
-		normalizedImages: ImageContent[],
-		signal?: AbortSignal,
-	): Promise<CustomMessage | undefined> {
-		const model = this.model;
-		const shouldDescribe =
-			!!model &&
-			!model.input.includes("image") &&
-			!this.settings.get("images.blockImages") &&
-			this.settings.get("images.describeForTextModels");
-		if (!shouldDescribe || !model) {
-			return undefined;
-		}
-		let blocks: TextContent[];
-		try {
-			blocks = await describeAttachedImagesForTextModel(
-				normalizedImages,
-				{
-					activeModel: model,
-					modelRegistry: this.#config.modelRegistry,
-					settings: this.settings,
-					localProtocolOptions: localProtocolOptions(this.sessionManager),
-					activeModelString: formatModelString(model),
-					telemetryConfig: this.agent.telemetry,
-					sessionId: this.sessionId,
-				},
-				signal,
-			);
-		} catch (err) {
-			logger.warn("image attachment vision fallback failed; image left undescribed", {
-				error: errorMessage(err),
-			});
-			return undefined;
-		}
-		if (blocks.length === 0) {
-			return undefined;
-		}
-		return {
-			role: "custom",
-			customType: IMAGE_ATTACHMENT_DESCRIPTION_TYPE,
-			content: blocks,
-			display: false,
-			attribution: "user",
-			timestamp: Date.now(),
-		};
-	}
-
-	/**
-	 * The content of a text message carrying image attachments: the text, then the images normalized
-	 * for the active model. When the model is text-only, the hidden companion describing the images is
-	 * returned beside it; the image stays in the message itself.
-	 */
-	async #textWithImages(
-		text: string,
-		images: ImageContent[] | undefined,
-	): Promise<{
-		content: (TextContent | ImageContent)[];
-		images: ImageContent[] | undefined;
-		imageDescriptionNotice: CustomMessage | undefined;
-	}> {
-		const normalizedImages = await normalizeModelContextImages(images, { model: this.model });
-		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
-		if (!normalizedImages?.length) return { content, images: normalizedImages, imageDescriptionNotice: undefined };
-		content.push(...normalizedImages);
-		return {
-			content,
-			images: normalizedImages,
-			imageDescriptionNotice: await this.#buildImageDescriptionNotice(normalizedImages),
-		};
-	}
-
-	/**
 	 * Hand startup work to the session instead of awaiting it on the boot path.
 	 *
 	 * Chained, so several deferrals order the way they were handed over, and swallowed, so a failure
@@ -3799,7 +3687,7 @@ export class AgentSession {
 			content: userContent,
 			images: normalizedImages,
 			imageDescriptionNotice,
-		} = await this.#textWithImages(expandedText, options?.images);
+		} = await this.#images.textWithImages(expandedText, options?.images);
 
 		const promptAttribution = options?.attribution ?? (options?.synthetic ? "agent" : "user");
 		const message = options?.synthetic
@@ -3859,11 +3747,11 @@ export class AgentSession {
 			if (!options.streamingBehavior) {
 				throw new AgentBusyError();
 			}
-			for (const notice of keywordNotices) {
-				this.#queue.enqueue(await queuedCustomMessage(notice, this.model), options.streamingBehavior);
-			}
+			// The keyword notices are text, so they carry no image to normalize.
+			for (const notice of keywordNotices)
+				this.#queue.enqueue(queuedCustomMessage(notice), options.streamingBehavior);
 			this.#queue.enqueue(
-				await queuedCustomMessage(message, this.model, options.queueChipText),
+				await this.#images.normalizeMessage(queuedCustomMessage(message, options.queueChipText)),
 				options.streamingBehavior,
 			);
 			return;
@@ -4013,7 +3901,7 @@ export class AgentSession {
 					},
 				);
 				for (const fileMentionMessage of fileMentionMessages) {
-					messages.push(await normalizeAgentMessageImages(fileMentionMessage, this.model));
+					messages.push(await this.#images.normalizeMessage(fileMentionMessage));
 				}
 			}
 
@@ -4047,20 +3935,17 @@ export class AgentSession {
 							!Array.isArray(msg) &&
 							(msg.attribution === "user" || msg.attribution === "agent");
 						messages.push(
-							await normalizeAgentMessageImages(
-								{
-									role: "custom",
-									customType: normalized.customType,
-									content: normalized.content,
-									display: normalized.display,
-									details: normalized.details,
-									attribution: hasExplicitAttribution
-										? normalized.attribution
-										: (promptAttribution ?? (message.role === "user" ? "user" : "agent")),
-									timestamp: Date.now(),
-								},
-								this.model,
-							),
+							await this.#images.normalizeMessage({
+								role: "custom",
+								customType: normalized.customType,
+								content: normalized.content,
+								display: normalized.display,
+								details: normalized.details,
+								attribution: hasExplicitAttribution
+									? normalized.attribution
+									: (promptAttribution ?? (message.role === "user" ? "user" : "agent")),
+								timestamp: Date.now(),
+							}),
 						);
 					}
 				}
@@ -4207,7 +4092,7 @@ export class AgentSession {
 			attribution: normalizedPayload.attribution,
 			timestamp: Date.now(),
 		};
-		const normalizedAppMessage = await normalizeAgentMessageImages(appMessage, this.model);
+		const normalizedAppMessage = await this.#images.normalizeMessage(appMessage);
 		if (this.isStreaming) {
 			if (options?.deliverAs === "nextTurn") {
 				this.#nextTurn.queue(normalizedAppMessage, options?.triggerTurn ?? false);
