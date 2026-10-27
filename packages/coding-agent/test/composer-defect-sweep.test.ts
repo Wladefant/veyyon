@@ -23,9 +23,11 @@
 
 import { beforeAll, describe, expect, it } from "bun:test";
 import { ThinkingLevel } from "@veyyon/agent-core";
+import { Semaphore } from "../src/task/parallel";
 import { initTheme } from "../src/theme/theme";
 import {
 	type RunnerOptions,
+	type RunnerResult,
 	runComposerOracleScenario,
 	runnerOptionsToCorpusState,
 } from "./helpers/composer-oracle-runner";
@@ -130,8 +132,12 @@ describe("renderer composer defect oracle sweep", () => {
 	});
 
 	// Run sweep across the cross-product. Each case builds its own TUI and terminal and spends most of
-	// its time waiting on frame timers in settleFrames, so cases run concurrently: the 4,203 cases took
-	// 164 s one after another and 52 s concurrently, on the same machine.
+	// its time waiting on frame timers in settleFrames, so cases run concurrently. Each case's terminal
+	// also holds a Ghostty WASM instance of about 7 MB until the collector reclaims it, so cases past a
+	// few at once add collection work instead of overlap: on one machine the 4,203 cases took 164 s one
+	// after another, 63 s at bun's default of 20 at once, and 38 s at `CASES_AT_ONCE`.
+	const CASES_AT_ONCE = 6;
+	const caseSlots = new Semaphore(CASES_AT_ONCE);
 	for (const mode of modeVariants) {
 		for (const width of WIDTHS) {
 			for (const height of HEIGHTS) {
@@ -149,8 +155,10 @@ describe("renderer composer defect oracle sweep", () => {
 								focused: true,
 							};
 
-							const result = await runComposerOracleScenario(options);
+							await caseSlots.acquire();
+							let result: RunnerResult | undefined;
 							try {
+								result = await runComposerOracleScenario(options);
 								if (!result.evaluation.passed) {
 									// Auto-promote failure to committed corpus
 									const state = runnerOptionsToCorpusState(options);
@@ -163,7 +171,8 @@ describe("renderer composer defect oracle sweep", () => {
 									`Composer oracle failed on (${mode.name}, ${width}x${height}, trans=${transcriptCount}, ${textVariant.name}):\n${result.evaluation.failures.map(f => `[${f.oracle}] ${f.message}`).join("\n")}`,
 								).toEqual([]);
 							} finally {
-								result.cleanUp();
+								result?.cleanUp();
+								caseSlots.release();
 							}
 						});
 					}
