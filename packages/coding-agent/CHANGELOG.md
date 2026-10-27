@@ -40,6 +40,7 @@
 - The redacted tool start markers, the `session_exit` entry and the process teardown callback that writes it when no dispose runs moved out of the session class into the `ExitRecord` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - The event subscribers, the extension event forwarder and the wire-level `agent_end` held while a prompt unwinds moved out of the session class into the `SessionEvents` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - The scheduled `agent.continue()`, the auto-continue prompt a compaction resumes with, their cancel and the recovery wait a prompt runs moved out of the session class into the `TurnContinuations` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The HTML export, the `/copy` texts, the `/dump` text and its request snapshot moved out of the session class into the `TranscriptExports` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 
 ### Fixed
 

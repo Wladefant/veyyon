@@ -13,8 +13,6 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
-import * as os from "node:os";
-import * as path from "node:path";
 import {
 	type AfterToolCallContext,
 	type AfterToolCallResult,
@@ -53,7 +51,6 @@ import * as AIError from "@veyyon/ai/error";
 import { sessionTelemetryDetail } from "@veyyon/ai/instrumentation";
 // Session initialization registers usage backends without loading the AI package barrel.
 import "@veyyon/ai/usage/defaults";
-import { toolWireSchema } from "@veyyon/ai/utils/schema";
 import type { Effort } from "@veyyon/catalog/effort";
 import { modelsAreEqual } from "@veyyon/catalog/models";
 import type { InMemorySnapshotStore } from "@veyyon/hashline";
@@ -150,7 +147,7 @@ import { webpExclusionForModel } from "../utils/image-loading";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import { formatAdvisorStatus } from "./advisor-stats";
 import { type EphemeralTurnArgs, type EphemeralTurnResult, runEphemeralTurn } from "./agent-session-ephemeral-turn";
-import { findLastAssistantMessage, lastCopyCandidateAssistantMessage } from "./agent-session-message-shapes";
+import { findLastAssistantMessage } from "./agent-session-message-shapes";
 import { isAdvisorCard, isTerminalTextAssistantAnswer, type RestoredQueuedMessage } from "./agent-session-queue";
 import { retryFallbackChainWarnings } from "./agent-session-retry-fallback";
 import { buildGoalTodoContext, createMagicKeywordNotices, magicKeywordEnabled } from "./agent-session-turn-notices";
@@ -244,6 +241,7 @@ import { ThinkingRuntime } from "./runtime/thinking-runtime";
 import { TodoRuntime } from "./runtime/todo-runtime";
 import { ToolActivation } from "./runtime/tool-activation";
 import { sameToolNames, ToolDiscovery } from "./runtime/tool-discovery";
+import { TranscriptExports } from "./runtime/transcript-exports";
 import { TtsrRuntime } from "./runtime/ttsr-runtime";
 import { removeAssistantMessageFromActiveContext, TurnContextCheck } from "./runtime/turn-context-check";
 import { TurnContinuations } from "./runtime/turn-continuations";
@@ -251,7 +249,6 @@ import { TurnPreludes } from "./runtime/turn-preludes";
 import { TurnsInFlight } from "./runtime/turns-in-flight";
 import { UserExecutions } from "./runtime/user-executions";
 import { YieldTracker } from "./runtime/yield-tracker";
-import { formatSessionDumpText } from "./session-dump-format";
 import { SessionSpendLedger } from "./session-spend";
 import { classifyUnexpectedStop } from "./unexpected-stop-classifier";
 import type { VibeModeState } from "./vibe-runtime";
@@ -715,6 +712,8 @@ export class AgentSession {
 	readonly #postPrompt = new PostPromptTasks({ promptGeneration: () => this.#promptGeneration });
 	/** The turns the session starts on its own after a prompt, and the wait for them; see {@link TurnContinuations}. */
 	readonly #continuations: TurnContinuations;
+	/** What a reader copies, dumps or exports out of the transcript; see {@link TranscriptExports}. */
+	readonly #exports: TranscriptExports;
 	/** Hidden messages queued for the next turn and the turn scheduled on them; see {@link NextTurnMessages}. */
 	readonly #nextTurn = new NextTurnMessages({
 		promptGeneration: () => this.#promptGeneration,
@@ -853,6 +852,15 @@ export class AgentSession {
 			postCompactionNudges: () => this.#preludes.postCompactionNudges(),
 			promptWith: (message, text, prependMessages) =>
 				this.#promptWithMessage(message, text, { prependMessages, skipPostPromptRecoveryWait: true }),
+		});
+		this.#exports = new TranscriptExports({
+			agent: this.agent,
+			sessionStore: this.sessionManager,
+			thinkingLevel: () => this.#thinking.level,
+			serviceTierEntry: () => this.#tiers.entry(),
+			pruneToolDescriptions: model => this.#resolvePruneToolDescriptions(model),
+			convertMessagesToLlm: messages => this.convertMessagesToLlm(messages),
+			shareRedactor: () => (this.settings.get("share.redactSecrets") ? this.providerRedactor : undefined),
 		});
 		this.#irc = new IrcDelivery({
 			agent: this.agent,
@@ -4674,134 +4682,42 @@ export class AgentSession {
 	 * session's working directory, never the process's: an ACP server holds several sessions.
 	 * @returns Absolute path to the exported file
 	 */
-	async exportToHtml(outputPath?: string): Promise<string> {
-		// Public HTML export ships in the veyyon brand palette (collab-web
-		// pink/purple), matching share.veyyon.dev — not the host's terminal theme.
-		// Callers who want a themed export can pass `palette: "theme"` with
-		// `themeName` directly to `exportSessionToHtml`.
-		// Lazy by necessity, not by oversight. `export/html` text-imports the
-		// gitignored `tool-views.generated.js`, and Bun resolves that text import
-		// when an importer merely parses, so a static import here turns a missing
-		// generated file into a boot failure rather than an export failure
-		// (source-install launch failure, 2026-07-24). This is the one carve-out
-		// from the no-inline-import rule and it stays.
-		const { exportSessionToHtml } = await import("../export/html");
-		return exportSessionToHtml(this.sessionManager, this.state, {
-			outputPath,
-			cwd: this.sessionManager.getCwd(),
-			palette: "web",
-			obfuscator: this.settings.get("share.redactSecrets") ? this.providerRedactor : undefined,
-		});
+	exportToHtml(outputPath?: string): Promise<string> {
+		return this.#exports.toHtml(outputPath);
 	}
 
 	// =========================================================================
 	// Utilities
 	// =========================================================================
 
-	/**
-	 * Get text content of last assistant message.
-	 * Useful for /copy command.
-	 * @returns Text content, or undefined if no assistant message exists
-	 */
+	/** The text of the last assistant message `/copy` picks up; see {@link TranscriptExports.lastAssistantText}. */
 	getLastAssistantText(): string | undefined {
-		const lastAssistant = lastCopyCandidateAssistantMessage(this.messages);
-		if (!lastAssistant) return undefined;
-
-		let text = "";
-		for (const content of lastAssistant.content) {
-			if (content.type === "text") {
-				text += content.text;
-			}
-		}
-
-		return text.trim() || undefined;
+		return this.#exports.lastAssistantText();
 	}
 
 	hasCopyCandidateAssistantMessage(): boolean {
-		return lastCopyCandidateAssistantMessage(this.messages) !== undefined;
+		return this.#exports.hasCopyCandidateAssistantMessage();
 	}
 
-	/**
-	 * Get text content of the most recent visible handoff message.
-	 * Fresh handoff sessions store the handoff context as a custom message, not
-	 * an assistant message, so callers that copy the "last" message can use this
-	 * as a fallback before the new session has an assistant response.
-	 */
+	/** The text of the newest visible handoff; see {@link TranscriptExports.lastVisibleHandoffText}. */
 	getLastVisibleHandoffText(): string | undefined {
-		for (let i = this.messages.length - 1; i >= 0; i--) {
-			const message = this.messages[i];
-			if (message.role !== "custom") continue;
-
-			const customMessage = message as CustomMessage;
-			if (customMessage.customType !== "handoff" || !customMessage.display) continue;
-
-			if (typeof customMessage.content === "string") {
-				return customMessage.content.trim() || undefined;
-			}
-
-			let text = "";
-			for (const content of customMessage.content) {
-				if (content.type === "text") {
-					text += content.text;
-				}
-			}
-			return text.trim() || undefined;
-		}
-
-		return undefined;
+		return this.#exports.lastVisibleHandoffText();
 	}
 
-	/**
-	 * Format the entire session as plain text for clipboard export: system
-	 * prompt, model/thinking config, tool inventory, and the full transcript
-	 * rendered with markdown role headings (`## User`, `## Assistant`,
-	 * `### Tool Call`/`### Tool Result`).
-	 */
+	/** The whole session as plain text for the clipboard; see {@link TranscriptExports.asText}. */
 	formatSessionAsText(): string {
-		const activeModel = this.model;
-		return formatSessionDumpText({
-			messages: this.messages,
-			systemPrompt: this.agent.state.systemPrompt,
-			model: this.agent.state.model,
-			thinkingLevel: this.#thinking.level,
-			tools: this.agent.state.tools,
-			inlineToolDescriptors: activeModel ? this.#resolvePruneToolDescriptions(activeModel) : false,
-		});
+		return this.#exports.asText();
 	}
 
 	/**
-	 * Dump the current session's LLM-facing request context as JSON to a
-	 * auto-named file in `os.tmpdir()`. This is the synchronous
-	 * `convertToLlm`-boundary snapshot — system prompt, tools (wire schemas),
-	 * thinking/service tier, and converted messages — with no network round-trip
-	 * and no arming flag, so advisor/side requests cannot intercept it.
-	 *
-	 * The file persists on disk and may contain the same raw context/secrets
-	 * as `/dump`; treat the path accordingly.
+	 * Write the request the session would send next to a JSON file in `os.tmpdir()`; see
+	 * {@link TranscriptExports.writeRequestSnapshot}. The file may hold the same raw context and
+	 * secrets as `/dump`.
 	 *
 	 * @returns the written file path, or `undefined` when there are no messages.
 	 */
-	async dumpLlmRequestToTmpDir(): Promise<string | undefined> {
-		const messages = this.messages;
-		if (messages.length === 0) return undefined;
-		const llmMessages = await this.convertMessagesToLlm(messages);
-		const payload = {
-			model: this.agent.state.model ?? null,
-			thinkingLevel: this.#thinking.level ?? null,
-			serviceTier: this.#tiers.entry(),
-			systemPrompt: this.agent.state.systemPrompt,
-			tools: this.agent.state.tools.map(tool => ({
-				name: tool.name,
-				description: tool.description,
-				parameters: toolWireSchema(tool),
-				...(tool.strict !== undefined ? { strict: tool.strict } : {}),
-				...(tool.customWireName ? { customWireName: tool.customWireName } : {}),
-			})),
-			messages: llmMessages,
-		};
-		const filePath = path.join(os.tmpdir(), `veyyon-llm-request-${Snowflake.next()}.json`);
-		await Bun.write(filePath, `${JSON.stringify(payload, null, 2)}\n`);
-		return filePath;
+	dumpLlmRequestToTmpDir(): Promise<string | undefined> {
+		return this.#exports.writeRequestSnapshot();
 	}
 
 	/**

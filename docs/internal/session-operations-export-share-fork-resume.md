@@ -36,7 +36,7 @@ Flow:
 
 1. Both surfaces read the argument through `parseExportTarget` (`src/slash-commands/builtin-share.ts`): trimmed, outer double quotes stripped, spaces kept, the way `/move` and `/cwd` read their paths.
 2. The TUI passes the parsed path to `CommandController.handleExportCommand`; ACP and print mode call `session.exportToHtml` directly.
-3. `AgentSession.exportToHtml()` resolves a given path with `resolveToCwd` against the session's working directory (`~` expands) and calls `exportSessionToHtml(sessionManager, state, { outputPath, cwd, palette, obfuscator })`. Without a path the generated `veyyon-session-<session>.html` is written to that directory. The returned path is absolute.
+3. `AgentSession.exportToHtml()` delegates to `TranscriptExports.toHtml` (`src/session/runtime/transcript-exports.ts`), which calls `exportSessionToHtml(sessionManager, state, { outputPath, cwd, palette, obfuscator })` with the session's working directory as `cwd`. `finishExport` resolves a given path against that directory (`~` expands). Without a path the generated `veyyon-session-<session>.html` is written to that directory. The returned path is absolute.
 4. On success the TUI shows the path and opens the file in the browser; ACP prints it.
 
 Behavior details:

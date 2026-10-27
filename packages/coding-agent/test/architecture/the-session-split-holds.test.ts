@@ -139,8 +139,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-27 at 4917: the scheduled `agent.continue()`, the auto-continue prompt a
  * compaction resumes with, their cancel and the recovery wait a prompt runs moved into the
  * `turn-continuations.ts` collaborator (-112).
+ * RE-MEASURED 2026-10-27 at 4833: the HTML export, the copy texts, the plain-text dump and the
+ * request snapshot moved into the `transcript-exports.ts` collaborator, taking the session's one
+ * dynamic import with them (-84).
  */
-const RUNTIME_CEILING = 4_970;
+const RUNTIME_CEILING = 4_880;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -200,6 +203,7 @@ const COLLABORATORS = [
 	"todo-runtime.ts",
 	"tool-activation.ts",
 	"tool-discovery.ts",
+	"transcript-exports.ts",
 	"ttsr-runtime.ts",
 	"turn-context-check.ts",
 	"turn-continuations.ts",
