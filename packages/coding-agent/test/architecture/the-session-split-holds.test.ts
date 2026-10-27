@@ -142,8 +142,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-27 at 4833: the HTML export, the copy texts, the plain-text dump and the
  * request snapshot moved into the `transcript-exports.ts` collaborator, taking the session's one
  * dynamic import with them (-84).
+ * RE-MEASURED 2026-10-27 at 4755: the next-turn lease a prompt holds until the agent takes its input
+ * added 11 lines (4844), then the mode blocks, the `@path` mention reads and the `before_agent_start`
+ * extension input moved into the `turn-input.ts` collaborator (-89).
  */
-const RUNTIME_CEILING = 4_880;
+const RUNTIME_CEILING = 4_800;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -207,6 +210,7 @@ const COLLABORATORS = [
 	"ttsr-runtime.ts",
 	"turn-context-check.ts",
 	"turn-continuations.ts",
+	"turn-input.ts",
 	"turn-preludes.ts",
 	"turns-in-flight.ts",
 	"user-executions.ts",

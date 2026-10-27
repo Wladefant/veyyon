@@ -41,6 +41,7 @@
 - The event subscribers, the extension event forwarder and the wire-level `agent_end` held while a prompt unwinds moved out of the session class into the `SessionEvents` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - The scheduled `agent.continue()`, the auto-continue prompt a compaction resumes with, their cancel and the recovery wait a prompt runs moved out of the session class into the `TurnContinuations` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - The HTML export, the `/copy` texts, the `/dump` text and its request snapshot moved out of the session class into the `TranscriptExports` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The mode blocks a prompt restates (plan reference, plan-mode rules, goal, vibe mode), the reads of the files it mentions as `@path` and the `before_agent_start` extension input moved out of the session class into the `TurnInput` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 
 ### Fixed
 

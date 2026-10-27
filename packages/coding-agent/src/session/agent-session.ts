@@ -89,9 +89,6 @@ import { onAppendOnlyModeChanged, onHelperModelsChanged } from "../config/settin
 import type { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { resolveEffectiveToolDiscoveryMode } from "../discovery/mode";
 import { type DiscoverableTool, type DiscoverableToolSearchIndex, isMCPToolName } from "../discovery/tool-index";
-// The owning module, not the `../edit` barrel, which `export *`s the streaming applier, the hashline
-// engine and the EditTool and pulls in 44 modules nothing else here reaches.
-import { getFileSnapshotStore } from "../edit/file-snapshot-store";
 import type { PythonResult } from "../eval/py/executor";
 import { defaultEvalSessionId } from "../eval/session-id";
 import type { BashResult } from "../exec/bash-executor";
@@ -114,8 +111,6 @@ import type { HindsightSessionState } from "../memory/hindsight/state";
 import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionState } from "../memory/mnemopi/state";
 import { resolvePlanFilePath } from "../plan-mode/plan-path";
 import type { PlanModeState } from "../plan-mode/state";
-import { goalsPrompts } from "../prompts/goals/rows";
-import { sessionPrompts } from "../prompts/session/rows";
 import { turnControlPrompts } from "../prompts/turn-control/rows";
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import { isLivePromptGate } from "../system-prompt-builder/gate-registry";
@@ -141,9 +136,6 @@ import { TOOL } from "../tools/core/builtin-names";
 import { shortenPath } from "../tools/core/render-utils";
 import type { CheckpointState, CompletedRewindState } from "../tools/fs/checkpoint";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
-import { resolveFileDisplayMode } from "../utils/file-display-mode";
-import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
-import { webpExclusionForModel } from "../utils/image-loading";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import { formatAdvisorStatus } from "./advisor-stats";
 import { type EphemeralTurnArgs, type EphemeralTurnResult, runEphemeralTurn } from "./agent-session-ephemeral-turn";
@@ -245,6 +237,7 @@ import { TranscriptExports } from "./runtime/transcript-exports";
 import { TtsrRuntime } from "./runtime/ttsr-runtime";
 import { removeAssistantMessageFromActiveContext, TurnContextCheck } from "./runtime/turn-context-check";
 import { TurnContinuations } from "./runtime/turn-continuations";
+import { TurnInput } from "./runtime/turn-input";
 import { TurnPreludes } from "./runtime/turn-preludes";
 import { TurnsInFlight } from "./runtime/turns-in-flight";
 import { UserExecutions } from "./runtime/user-executions";
@@ -692,6 +685,8 @@ export class AgentSession {
 	#todo: TodoRuntime;
 	/** The session-state block and the eager delegate reminders a turn carries ahead of its message. */
 	readonly #preludes: TurnPreludes;
+	/** The mode blocks, file mentions and extension input a prompt carries beside its own message. */
+	readonly #turnInput: TurnInput;
 	/** How hard the model thinks and who decided: the session override, the
 	 *  selector pin, the saved default, and `auto`. Owns all thinking state. */
 	#thinking: ThinkingRuntime;
@@ -1373,6 +1368,20 @@ export class AgentSession {
 			tool: name => this.#toolRegistry.get(name),
 			activeToolNames: () => this.getActiveToolNames(),
 			planModeEnabled: () => this.#planMode.enabled,
+		});
+		this.#turnInput = new TurnInput({
+			planMode: this.#planMode,
+			images: this.#images,
+			config: this.#config,
+			agent: this.agent,
+			mentionSource: this,
+			activeGoalPrompt: () => this.#goalRuntime.buildActivePrompt(),
+			goalTodoContext: () => buildGoalTodoContext(this),
+			vibeModeEnabled: () => this.#vibeModeState?.enabled === true,
+			cwd: () => this.sessionManager.getCwd(),
+			model: () => this.model,
+			autoResizeImages: () => this.settings.get("images.autoResize"),
+			baseSystemPrompt: () => this.#toolActivation.baseSystemPrompt,
 		});
 		// Runs synchronously on the stream, ahead of the queued `message_update`, so a guard abort
 		// lands on the delta that earned it.
@@ -3072,11 +3081,11 @@ export class AgentSession {
 	}
 
 	async sendGoalModeContext(options?: { deliverAs?: "steer" | "followUp" | "nextTurn" }): Promise<void> {
-		await sendModeContext(this, this.#buildGoalModeMessage(), options);
+		await sendModeContext(this, this.#turnInput.goalBlock(), options);
 	}
 
 	async sendVibeModeContext(options?: { deliverAs?: "steer" | "followUp" | "nextTurn" }): Promise<void> {
-		await sendModeContext(this, this.#buildVibeModeMessage(), options);
+		await sendModeContext(this, this.#turnInput.vibeBlock(), options);
 	}
 
 	/**
@@ -3166,32 +3175,6 @@ export class AgentSession {
 	// =========================================================================
 	// Prompting
 	// =========================================================================
-
-	#buildGoalModeMessage(): CustomMessage | null {
-		const content = this.#goalRuntime.buildActivePrompt();
-		if (!content) return null;
-		const todoContext = buildGoalTodoContext(this);
-		return {
-			role: "custom",
-			customType: "goal-mode-context",
-			content: prompt.render(goalsPrompts["goals/goal-mode-context"].text, { goalContext: content, todoContext }),
-			display: false,
-			attribution: "agent",
-			timestamp: Date.now(),
-		};
-	}
-
-	#buildVibeModeMessage(): CustomMessage | null {
-		if (!this.#vibeModeState?.enabled) return null;
-		return {
-			role: "custom",
-			customType: "vibe-mode-context",
-			content: prompt.render(sessionPrompts["session/vibe-mode-active"].text),
-			display: false,
-			attribution: "agent",
-			timestamp: Date.now(),
-		};
-	}
 
 	/**
 	 * Hand startup work to the session instead of awaiting it on the boot path.
@@ -3442,25 +3425,9 @@ export class AgentSession {
 			await this.#handoff.armPlanYoloIfNeeded();
 			startupMarker("prompt:plan-arm:done");
 
-			// Build messages array (session context, eager todo prelude, then active prompt message)
+			// Build the turn's input: the mode blocks, the messages prepended to this prompt, then the prompt itself
 			startupMarker("prompt:context-build:start");
-			const messages: AgentMessage[] = [];
-			const planReferenceMessage = await this.#planMode.buildReferenceMessage();
-			if (planReferenceMessage) {
-				messages.push(planReferenceMessage);
-			}
-			const planModeMessage = await this.#planMode.buildContextMessage();
-			if (planModeMessage) {
-				messages.push(planModeMessage);
-			}
-			const goalModeMessage = this.#buildGoalModeMessage();
-			if (goalModeMessage) {
-				messages.push(goalModeMessage);
-			}
-			const vibeModeMessage = this.#buildVibeModeMessage();
-			if (vibeModeMessage) {
-				messages.push(vibeModeMessage);
-			}
+			const messages = await this.#turnInput.modeBlocks();
 			if (options?.prependMessages) {
 				messages.push(...options.prependMessages);
 			}
@@ -3481,21 +3448,7 @@ export class AgentSession {
 			messages.push(...queued.messages);
 
 			// Auto-read @filepath mentions
-			const fileMentions = extractFileMentions(expandedText);
-			if (fileMentions.length > 0) {
-				const fileMentionMessages = await generateFileMentionMessages(
-					fileMentions,
-					this.sessionManager.getCwd(),
-					this,
-					{
-						autoResizeImages: this.settings.get("images.autoResize"),
-						excludeWebP: webpExclusionForModel(this.model),
-						useHashLines: resolveFileDisplayMode(this).hashLines,
-						snapshotStore: getFileSnapshotStore(this),
-					},
-				);
-				messages.push(...fileMentionMessages);
-			}
+			messages.push(...(await this.#turnInput.fileMentions(expandedText)));
 
 			// Ahead of the user's message, not after it: the memories are what the model
 			// should already know when it reads the question, which is how the eager-task
@@ -3507,50 +3460,8 @@ export class AgentSession {
 			startupMarker("prompt:memory-context:done");
 			startupMarker("prompt:context-build:done");
 
-			const beforeAgentStartSystemPrompt = this.#toolActivation.baseSystemPrompt;
 			startupMarker("prompt:before-agent-start:start");
-			// Emit before_agent_start extension event
-			if (this.#config.extensionRunner) {
-				const result = await this.#config.extensionRunner.emitBeforeAgentStart(
-					expandedText,
-					options?.images,
-					beforeAgentStartSystemPrompt,
-				);
-				if (result?.messages) {
-					const promptAttribution: "user" | "agent" | undefined =
-						"attribution" in message ? message.attribution : undefined;
-					for (const msg of result.messages) {
-						const normalized = normalizeCustomMessagePayload(msg);
-						const hasExplicitAttribution =
-							msg !== null &&
-							typeof msg === "object" &&
-							!Array.isArray(msg) &&
-							(msg.attribution === "user" || msg.attribution === "agent");
-						messages.push(
-							await this.#images.normalizeMessage({
-								role: "custom",
-								customType: normalized.customType,
-								content: normalized.content,
-								display: normalized.display,
-								details: normalized.details,
-								attribution: hasExplicitAttribution
-									? normalized.attribution
-									: (promptAttribution ?? (message.role === "user" ? "user" : "agent")),
-								timestamp: Date.now(),
-							}),
-						);
-					}
-				}
-
-				if (result?.systemPrompt !== undefined) {
-					this.agent.setSystemPrompt(result.systemPrompt);
-				} else {
-					this.agent.setSystemPrompt(beforeAgentStartSystemPrompt);
-				}
-			} else {
-				this.agent.setSystemPrompt(beforeAgentStartSystemPrompt);
-			}
-
+			messages.push(...(await this.#turnInput.beforeAgentStart(expandedText, options?.images, message)));
 			startupMarker("prompt:before-agent-start:done");
 
 			// Bail out if a newer abort/prompt cycle has started since we began setup

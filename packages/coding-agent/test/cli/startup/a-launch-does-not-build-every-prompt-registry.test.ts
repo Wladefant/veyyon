@@ -522,11 +522,18 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * `@veyyon/ai/utils/schema`) are already here; `export/html` stays behind its lazy import. Measured
  * 2026-10-27 at 1522.
  *
+ * 1522 to 1523: `coding-agent/src/session/runtime/turn-input.ts`, the session collaborator that
+ * builds the mode blocks, the `@path` mention reads and the `before_agent_start` input a prompt
+ * carries. It left `session/agent-session.ts`, already here, and its runtime imports
+ * (`edit/file-snapshot-store.ts`, `utils/file-mentions.ts`, `utils/file-display-mode.ts`,
+ * `utils/image-loading.ts` and the goals and session prompt rows) are already here. Measured
+ * 2026-10-27 at 1523.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1522;
+const LAUNCH_REACH_CEILING = 1523;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
