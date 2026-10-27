@@ -136,8 +136,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-27 at 5029: the subscriber list, the extension event forwarder and the held
  * wire-level `agent_end` moved into the `session-events.ts` collaborator, and a doc comment that
  * documented no member was dropped (-86).
+ * RE-MEASURED 2026-10-27 at 4917: the scheduled `agent.continue()`, the auto-continue prompt a
+ * compaction resumes with, their cancel and the recovery wait a prompt runs moved into the
+ * `turn-continuations.ts` collaborator (-112).
  */
-const RUNTIME_CEILING = 5_080;
+const RUNTIME_CEILING = 4_970;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -199,6 +202,7 @@ const COLLABORATORS = [
 	"tool-discovery.ts",
 	"ttsr-runtime.ts",
 	"turn-context-check.ts",
+	"turn-continuations.ts",
 	"turn-preludes.ts",
 	"turns-in-flight.ts",
 	"user-executions.ts",

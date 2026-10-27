@@ -156,7 +156,6 @@ import { retryFallbackChainWarnings } from "./agent-session-retry-fallback";
 import { buildGoalTodoContext, createMagicKeywordNotices, magicKeywordEnabled } from "./agent-session-turn-notices";
 import {
 	type AdvisorStats,
-	type AgentContinueSkipReason,
 	type AgentSessionConfig,
 	type AgentSessionDisposeOptions,
 	type AgentSessionEventListener,
@@ -172,7 +171,6 @@ import {
 	type Prewalk,
 	type ProjectAdvisorScope,
 	type PromptOptions,
-	type ScheduledAgentContinueOptions,
 	type SecretRuntimeLease,
 	type SessionHandoffOptions,
 	type SessionNameTrigger,
@@ -248,6 +246,7 @@ import { ToolActivation } from "./runtime/tool-activation";
 import { sameToolNames, ToolDiscovery } from "./runtime/tool-discovery";
 import { TtsrRuntime } from "./runtime/ttsr-runtime";
 import { removeAssistantMessageFromActiveContext, TurnContextCheck } from "./runtime/turn-context-check";
+import { TurnContinuations } from "./runtime/turn-continuations";
 import { TurnPreludes } from "./runtime/turn-preludes";
 import { TurnsInFlight } from "./runtime/turns-in-flight";
 import { UserExecutions } from "./runtime/user-executions";
@@ -322,11 +321,6 @@ function demoteInterruptedThinkingOnUserInterrupt(
 		attribution: "agent",
 		timestamp: interruptedAt,
 	};
-}
-
-function skipAgentContinue(reason: AgentContinueSkipReason, options: ScheduledAgentContinueOptions | undefined): void {
-	logger.debug("agent.continue skipped after scheduling", { reason });
-	options?.onSkip?.(reason);
 }
 
 function getCustomMessageTextContent(message: Pick<CustomMessage, "content">): string {
@@ -547,8 +541,8 @@ export class AgentSession {
 	readonly #compaction = new CompactionRuntime(this, {
 		emitSessionEvent: event => this.#events.send(event),
 		promptGeneration: () => this.#promptGeneration,
-		scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
-		scheduleAutoContinuePrompt: generation => this.#scheduleAutoContinuePrompt(generation),
+		scheduleAgentContinue: options => this.#continuations.scheduleContinue(options),
+		scheduleAutoContinuePrompt: generation => this.#continuations.scheduleAutoContinuePrompt(generation),
 		secrets: () => this.#secrets,
 		convertToLlmForSideRequest: messages => this.#convertToLlmForSideRequest(messages),
 		providerSessionState: () => this.#providerSessions.states,
@@ -583,7 +577,7 @@ export class AgentSession {
 		removeAssistantFromActiveContext: message => removeAssistantMessageFromActiveContext(this.agent, message),
 		isDisposed: () => this.#isDisposed,
 		persistTurnForMidRunCompaction: context => this.#persistence.persistTurnForMidRunCompaction(context),
-		scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
+		scheduleAgentContinue: options => this.#continuations.scheduleContinue(options),
 		runAutoCompaction: (reason, willRetry, options) => this.#compaction.runAutoCompaction(reason, willRetry, options),
 		noticeCompactionThresholdClamp: (contextWindow, settings) =>
 			this.#compaction.noticeCompactionThresholdClamp(contextWindow, settings),
@@ -595,7 +589,7 @@ export class AgentSession {
 	readonly #retry = new RetryRuntime(this, {
 		emitSessionEvent: event => this.#events.send(event),
 		promptGeneration: () => this.#promptGeneration,
-		scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
+		scheduleAgentContinue: options => this.#continuations.scheduleContinue(options),
 		abortIsDeliberate: message =>
 			this.#deliberateAborts.has(message) ||
 			this.#abortInProgress ||
@@ -719,6 +713,8 @@ export class AgentSession {
 
 	/** Work a turn left behind after `prompt()` returned; see {@link PostPromptTasks}. */
 	readonly #postPrompt = new PostPromptTasks({ promptGeneration: () => this.#promptGeneration });
+	/** The turns the session starts on its own after a prompt, and the wait for them; see {@link TurnContinuations}. */
+	readonly #continuations: TurnContinuations;
 	/** Hidden messages queued for the next turn and the turn scheduled on them; see {@link NextTurnMessages}. */
 	readonly #nextTurn = new NextTurnMessages({
 		promptGeneration: () => this.#promptGeneration,
@@ -843,6 +839,21 @@ export class AgentSession {
 		// Power assertions are taken per turn; nothing acquired here.
 		this.#inFlight = new TurnsInFlight(this.settings);
 		this.#events = new SessionEvents(config.extensionRunner, { promptInFlight: () => this.#inFlight.active });
+		this.#continuations = new TurnContinuations(this.#postPrompt, {
+			agent: this.agent,
+			promptGeneration: () => this.#promptGeneration,
+			unavailable: () => this.#isDisposed || this.isCompacting || this.isGeneratingHandoff,
+			disposed: () => this.#isDisposed,
+			beginTurn: () => this.#inFlight.begin(),
+			endTurn: () => this.#endInFlight(),
+			restoreFallbackPrimary: () => this.#retry.maybeRestoreFallbackPrimary(),
+			retryGate: () => this.#retry.gate,
+			ttsrResume: () => this.#ttsr.resumePromise,
+			releaseTtsrResume: () => this.#ttsr.resolveResume(),
+			postCompactionNudges: () => this.#preludes.postCompactionNudges(),
+			promptWith: (message, text, prependMessages) =>
+				this.#promptWithMessage(message, text, { prependMessages, skipPostPromptRecoveryWait: true }),
+		});
 		this.#irc = new IrcDelivery({
 			agent: this.agent,
 			isDisposed: () => this.#isDisposed,
@@ -1083,7 +1094,7 @@ export class AgentSession {
 			resolvePlanPath: planFilePath => resolvePlanPath(this.sessionManager, planFilePath),
 			localProtocolOptions: () => localProtocolOptions(this.sessionManager),
 			activeEditMode: () => resolveActiveEditMode(this.settings, this.model),
-			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
+			scheduleAgentContinue: options => this.#continuations.scheduleContinue(options),
 			promptGeneration: () => this.#promptGeneration,
 		});
 
@@ -1272,7 +1283,7 @@ export class AgentSession {
 					completeImpl: this.#transport.sideComplete,
 				}),
 			promptGeneration: () => this.#promptGeneration,
-			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
+			scheduleAgentContinue: options => this.#continuations.scheduleContinue(options),
 			discardAssistantTurn: message => this.#discardAssistantTurn(message),
 			removeAssistantFromActiveContext: (message, reason) =>
 				removeAssistantMessageFromActiveContext(this.agent, message, reason),
@@ -1308,7 +1319,7 @@ export class AgentSession {
 			settings: this.settings,
 			isSpawned: () => config.isSpawned === true,
 			awaitingRewind: () => this.#checkpoint.awaitingRewind,
-			scheduleContinue: () => this.#scheduleAgentContinue({ generation: this.#promptGeneration }),
+			scheduleContinue: () => this.#continuations.scheduleContinue({ generation: this.#promptGeneration }),
 			activeToolNames: () => this.getActiveToolNames(),
 		});
 		this.#ttsr = new TtsrRuntime(
@@ -1319,7 +1330,7 @@ export class AgentSession {
 				argotLoaded: () => this.#config.argot?.loaded === true,
 				promptGeneration: () => this.#promptGeneration,
 				emitSessionEventDetached: (event, context) => this.#events.sendDetached(event, context),
-				scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
+				scheduleAgentContinue: options => this.#continuations.scheduleContinue(options),
 				schedulePostPromptTask: (task, options) => this.#postPrompt.schedule(task, options),
 			},
 			config.ttsrManager,
@@ -1341,7 +1352,7 @@ export class AgentSession {
 			consumeLastServedToolChoiceLabel: () => this.#toolChoiceQueue.consumeLastServedLabel(),
 			hasPendingAsyncWake: () => this.#ownedJobs.hasPendingWake(),
 			emitSessionEvent: event => this.#events.send(event),
-			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
+			scheduleAgentContinue: options => this.#continuations.scheduleContinue(options),
 			promptGeneration: () => this.#promptGeneration,
 		});
 		this.#preludes = new TurnPreludes({
@@ -1404,7 +1415,7 @@ export class AgentSession {
 			isRetrying: () => this.isRetrying,
 			advisors: this.#advisorRoster,
 			textWithImages: (text, images) => this.#images.textWithImages(text, images),
-			scheduleContinue: () => this.#scheduleAgentContinue(),
+			scheduleContinue: () => this.#continuations.scheduleContinue(),
 			nextTurnCount: () => this.#nextTurn.count,
 		});
 		this.#sessionSwitch = this.#createSessionSwitch();
@@ -1536,7 +1547,7 @@ export class AgentSession {
 			effectiveServiceTier: model => this.#tiers.effective(model),
 			clearNextTurnMessages: () => this.#nextTurn.clear(),
 			cancelOwnAsyncJobs: () => this.#ownedJobs.cancelOwn(),
-			cancelPostPromptTasks: () => this.#cancelPostPromptTasks(),
+			cancelPostPromptTasks: () => this.#continuations.cancel(),
 			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
 			restoreMCPSelectionsForSessionContext: sessionContext =>
 				this.#toolActivation.restoreMCPSelections(sessionContext),
@@ -1894,7 +1905,7 @@ export class AgentSession {
 	 * `agent_end` handling schedules post-prompt recovery work such as context
 	 * promotion continuations. It is invoked fire-and-forget by the agent's
 	 * synchronous `#emit`, and only reaches the context check after several
-	 * internal awaits. `prompt()` runs `#waitForPostPromptRecovery()` the instant
+	 * internal awaits. `prompt()` runs `TurnContinuations.waitForRecovery()` the instant
 	 * `agent.prompt()` resolves, which can land before the handler registers its
 	 * tasks. Tracking the `agent_end` handler as a post-prompt task synchronously
 	 * closes that window, so the recovery wait always sees the in-flight handler
@@ -2174,129 +2185,6 @@ export class AgentSession {
 		if (this.#yields.noteExecutionEnd(event)) this.agent.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
 	}
 
-	#scheduleAgentContinue(options?: ScheduledAgentContinueOptions): void {
-		this.#postPrompt.schedule(
-			async signal => {
-				// Defense in depth: do not start a fresh streaming turn while any
-				// context maintenance or explicit handoff is already active.
-				if (signal.aborted || this.#isDisposed || this.isCompacting || this.isGeneratingHandoff) {
-					skipAgentContinue("session-unavailable", options);
-					return;
-				}
-				if (options?.shouldContinue && !options.shouldContinue()) {
-					skipAgentContinue("should-continue-false", options);
-					return;
-				}
-				this.#inFlight.begin();
-				try {
-					await this.#retry.maybeRestoreFallbackPrimary();
-					if (signal.aborted || this.#isDisposed) {
-						skipAgentContinue("post-restore-unavailable", options);
-						return;
-					}
-					// Another start (a queued-message drain, a second continuation scheduled at the same
-					// settle) can begin a run during the restore above. That run reads the state this
-					// continuation was scheduled for and polls the same queues, so yield to it rather than
-					// call continue() on a busy agent.
-					if (this.agent.state.isStreaming) {
-						skipAgentContinue("agent-busy", options);
-						return;
-					}
-					await this.agent.continue();
-				} catch (error) {
-					logger.warn("agent.continue failed after scheduling", {
-						error: errorMessage(error),
-						stack: error instanceof Error ? error.stack : undefined,
-					});
-					options?.onError?.();
-				} finally {
-					this.#endInFlight();
-				}
-			},
-			{
-				delayMs: options?.delayMs,
-				generation: options?.generation,
-				onSkip: reason => skipAgentContinue(reason, options),
-			},
-		);
-	}
-
-	#scheduleAutoContinuePrompt(generation: number): void {
-		const continuePrompt = async () => {
-			// Compaction summarizes away the first-message eager preludes, so re-assert the
-			// delegate-via-tasks / phased-todo reminders on this auto-resumed turn. This runs
-			// at invocation (past the abort check below), so an aborted continuation queues
-			// nothing; scoped to this request via prependMessages, never the shared queue.
-			const eagerNudges = this.#preludes.postCompactionNudges();
-			await this.#promptWithMessage(
-				{
-					role: "developer",
-					content: [{ type: "text", text: turnControlPrompts["turn-control/auto-continue"].text }],
-					attribution: "agent",
-					timestamp: Date.now(),
-				},
-				turnControlPrompts["turn-control/auto-continue"].text,
-				{
-					skipPostPromptRecoveryWait: true,
-					prependMessages: eagerNudges.length > 0 ? eagerNudges : undefined,
-				},
-			);
-		};
-		this.#postPrompt.schedule(
-			async signal => {
-				await Promise.resolve();
-				if (signal.aborted) return;
-				await continuePrompt();
-			},
-			{ generation },
-		);
-	}
-
-	/** Skip scheduled post-prompt work, release the TTSR resume gate, and wait for started work. */
-	#cancelPostPromptTasks(): Promise<void> {
-		const drain = this.#postPrompt.cancel();
-		this.#ttsr.resolveResume();
-		return drain;
-	}
-	/**
-	 * Wait for retry, TTSR resume, and any background continuation to settle.
-	 * Loops because a TTSR continuation can trigger a retry (or vice-versa),
-	 * and fire-and-forget `agent.continue()` may still be streaming after
-	 * the TTSR resume gate resolves.
-	 */
-	async #waitForPostPromptRecovery(generation?: number): Promise<void> {
-		while (true) {
-			// An abort bumps #promptGeneration. When this wait runs on behalf of a
-			// specific prompt turn, stop as soon as that turn has been superseded:
-			// its promise must resolve on the abort, not block on a queued
-			// steer/follow-up that the post-abort drain starts as a fresh turn.
-			if (generation !== undefined && this.#promptGeneration !== generation) return;
-			const retryGate = this.#retry.gate;
-			if (retryGate) {
-				await retryGate;
-				continue;
-			}
-			const ttsrResume = this.#ttsr.resumePromise;
-			if (ttsrResume) {
-				await ttsrResume;
-				continue;
-			}
-			const postPromptDrained = this.#postPrompt.drained;
-			if (postPromptDrained) {
-				await postPromptDrained;
-				continue;
-			}
-			// Tracked post-prompt tasks cover deferred continuations scheduled from
-			// event handlers. Keep the streaming fallback for direct agent activity
-			// outside the scheduler.
-			if (this.agent.state.isStreaming) {
-				await this.agent.waitForIdle();
-				continue;
-			}
-			break;
-		}
-	}
-
 	#afterToolCall(
 		ctx: AfterToolCallContext,
 	): Promise<AfterToolCallResult | undefined> | AfterToolCallResult | undefined {
@@ -2470,7 +2358,7 @@ export class AgentSession {
 		}
 		// Abort maintenance controllers before draining post-prompt work. Otherwise
 		// an in-flight compaction, explicit handoff, or scheduled continuation can
-		// keep awaiting a live model stream while #cancelPostPromptTasks waits for
+		// keep awaiting a live model stream while `TurnContinuations.cancel` waits for
 		// its wrappers to settle. The post-prompt task's AbortSignal does not
 		// propagate into the inner controllers, so abort them explicitly. Abort the
 		// agent as well in case a scheduled continuation already started streaming.
@@ -2480,7 +2368,7 @@ export class AgentSession {
 		// session's dispose.
 		this.abortRetry();
 		this.abortCompaction();
-		const postPromptDrain = this.#cancelPostPromptTasks();
+		const postPromptDrain = this.#continuations.cancel();
 		this.agent.abort();
 		await postPromptDrain;
 		// The aborted loop is still unwinding: a tool that ignores its signal keeps it
@@ -2686,7 +2574,7 @@ export class AgentSession {
 	/** Wait until streaming and deferred recovery work are fully settled. */
 	async waitForIdle(): Promise<void> {
 		await this.agent.waitForIdle();
-		await this.#waitForPostPromptRecovery();
+		await this.#continuations.waitForRecovery();
 	}
 
 	/**
@@ -3688,7 +3576,7 @@ export class AgentSession {
 				this.#context.endPrompt();
 			}
 			if (!options?.skipPostPromptRecoveryWait) {
-				await this.#waitForPostPromptRecovery(generation);
+				await this.#continuations.waitForRecovery(generation);
 			}
 		} finally {
 			this.#endInFlight();
@@ -3734,7 +3622,7 @@ export class AgentSession {
 			}
 			this.#stopRetries.acceptTerminalEmptyStop = acceptTerminalEmptyStop;
 			await this.agent.prompt(message);
-			await this.#waitForPostPromptRecovery();
+			await this.#continuations.waitForRecovery();
 		} finally {
 			this.#stopRetries.acceptTerminalEmptyStop = false;
 			this.#endInFlight();
@@ -4000,7 +3888,7 @@ export class AgentSession {
 			// streaming after the interrupt, one model call per configured advisor, and
 			// bill for a review of work that no longer exists.
 			this.#advisorRoster.cancelInFlight(options?.reason ?? "primary aborted");
-			const postPromptDrain = this.#cancelPostPromptTasks();
+			const postPromptDrain = this.#continuations.cancel();
 			this.agent.abort(options?.reason);
 			await postPromptDrain;
 			await this.agent.waitForIdle();
