@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `CacheRequestTtl`, `CacheRequestRecord`, and optional `Usage.cacheRequests` for per-request prompt-cache telemetry records ([Refs #711](https://github.com/Wladefant/veyyon/pull/711)).
+
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.

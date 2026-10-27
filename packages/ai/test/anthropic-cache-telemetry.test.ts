@@ -1,7 +1,7 @@
 import nodeCrypto from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { streamAnthropic } from "@veyyon/ai/providers/anthropic";
-import { AnthropicMessages } from "@veyyon/ai/providers/anthropic-client";
+import { AnthropicApiError, AnthropicMessages } from "@veyyon/ai/providers/anthropic-client";
 import type { Context, Model, ModelSpec, Tool } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 
@@ -94,6 +94,7 @@ describe("Anthropic cache telemetry", () => {
 			createMockRequest(createEvents({ cacheReadTokens: 10, cacheWriteTokens: 20 }), "req_1h") as never,
 		);
 
+		const before = Date.now();
 		const s = streamAnthropic(MODEL, CONTEXT, {
 			apiKey: "sk-ant-test",
 			cacheRetention: "long",
@@ -102,6 +103,7 @@ describe("Anthropic cache telemetry", () => {
 			// drain
 		}
 		const result = await s.result();
+		const after = Date.now();
 
 		const usage = result.usage as Record<string, any>;
 		expect(usage.cacheRequests).toBeDefined();
@@ -110,7 +112,8 @@ describe("Anthropic cache telemetry", () => {
 		expect(req.requestedTtl).toBe("1h");
 		expect(req.model).toBe("claude-sonnet-4-5");
 		expect(req.requestId).toBe("req_1h");
-		expect(req.requestStartedAt).toBeGreaterThan(0);
+		expect(req.requestStartedAt).toBeGreaterThanOrEqual(before);
+		expect(req.requestStartedAt).toBeLessThanOrEqual(after);
 		expect(typeof req.prefixHash).toBe("string");
 		expect(req.prefixHash).toHaveLength(64);
 		expect(req.cacheRead).toBe(10);
@@ -533,5 +536,46 @@ describe("Anthropic cache telemetry", () => {
 		expect(reqs?.[0]?.cacheRead).toBe(50);
 		expect(reqs?.[1]?.requestId).toBe("req_success_2");
 		expect(reqs?.[1]?.cacheRead).toBe(20);
+	});
+	it("extracts requestId from AnthropicApiError and records start time at dispatch", async () => {
+		let attempt = 0;
+		const beforeDispatch = Date.now();
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(() => {
+			attempt++;
+			if (attempt === 1) {
+				const headers = new Headers({ "request-id": "req_api_err_1" });
+				throw new AnthropicApiError(500, "500 Internal Server Error", headers);
+			}
+			return createMockRequest(
+				createEvents({ cacheReadTokens: 15, cacheWriteTokens: 25, text: "Success on attempt 2" }),
+				"req_success_attempt_2",
+			) as never;
+		});
+
+		const s = streamAnthropic(MODEL, CONTEXT, {
+			apiKey: "sk-ant-test",
+			providerRetryWait: async () => {},
+		});
+		for await (const _ of s) {
+			// drain
+		}
+		const res = await s.result();
+		const afterDispatch = Date.now();
+
+		const usage = res.usage as Record<string, any>;
+		expect(usage.cacheRequests).toBeDefined();
+		expect(usage.cacheRequests).toHaveLength(2);
+
+		const req1 = usage.cacheRequests[0];
+		expect(req1.requestId).toBe("req_api_err_1");
+		expect(req1.requestStartedAt).toBeGreaterThanOrEqual(beforeDispatch);
+		expect(req1.requestStartedAt).toBeLessThanOrEqual(afterDispatch);
+
+		const req2 = usage.cacheRequests[1];
+		expect(req2.requestId).toBe("req_success_attempt_2");
+		expect(req2.requestStartedAt).toBeGreaterThanOrEqual(req1.requestStartedAt);
+		expect(req2.requestStartedAt).toBeLessThanOrEqual(afterDispatch);
+		expect(req2.cacheRead).toBe(15);
+		expect(req2.cacheWrite).toBe(25);
 	});
 });

@@ -1749,7 +1749,6 @@ function createAnthropicCacheRequestRecord(
 	body: string,
 	isOAuthToken: boolean,
 	model: Model<"anthropic-messages">,
-	requestStartedAt: number,
 ): CacheRequestRecord {
 	let finalBody = body;
 	if (isOAuthToken && body.includes(CCH_PLACEHOLDER_STR)) {
@@ -1831,7 +1830,7 @@ function createAnthropicCacheRequestRecord(
 	}
 
 	const record: CacheRequestRecord = {
-		requestStartedAt,
+		requestStartedAt: Date.now(),
 		requestedTtl,
 		model: sentModel,
 		prefixHash,
@@ -3086,13 +3085,11 @@ const streamAnthropicOnce = (
 					umansGatewayWebSearchHeader || injectedClientEffortHeaders
 						? { ...umansGatewayWebSearchHeader, ...injectedClientEffortHeaders }
 						: undefined;
-				const requestStartedAt = Date.now();
 				const currentAttemptRecord = createAnthropicCacheRequestRecord(
 					params,
 					body,
 					isOAuthToken,
 					model,
-					requestStartedAt,
 				);
 				cacheRequests.push(currentAttemptRecord);
 				const anthropicRequest = createAnthropicStreamRequest(
@@ -3183,10 +3180,25 @@ const streamAnthropicOnce = (
 					break;
 				} catch (streamError) {
 					if (!currentAttemptRecord.requestId && isRecord(streamError)) {
-						if (typeof streamError.request_id === "string") {
+						if (typeof streamError.requestId === "string" && streamError.requestId.length > 0) {
+							currentAttemptRecord.requestId = streamError.requestId;
+						} else if (typeof streamError.request_id === "string" && streamError.request_id.length > 0) {
 							currentAttemptRecord.requestId = streamError.request_id;
-						} else if (isRecord(streamError.headers) && typeof streamError.headers["request-id"] === "string") {
-							currentAttemptRecord.requestId = streamError.headers["request-id"];
+						} else if (
+							streamError.headers instanceof Headers ||
+							(isRecord(streamError.headers) && typeof (streamError.headers as Headers).get === "function")
+						) {
+							const id =
+								(streamError.headers as Headers).get("request-id") ??
+								(streamError.headers as Headers).get("x-request-id");
+							if (typeof id === "string" && id.length > 0) {
+								currentAttemptRecord.requestId = id;
+							}
+						} else if (isRecord(streamError.headers)) {
+							const id = streamError.headers["request-id"] ?? streamError.headers["x-request-id"];
+							if (typeof id === "string" && id.length > 0) {
+								currentAttemptRecord.requestId = id;
+							}
 						}
 					}
 					firstTokenTime = streamState.firstTokenTime;
