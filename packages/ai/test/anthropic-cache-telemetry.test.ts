@@ -543,8 +543,12 @@ describe("Anthropic cache telemetry", () => {
 		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(() => {
 			attempt++;
 			if (attempt === 1) {
-				const headers = new Headers({ "request-id": "req_api_err_1" });
-				throw new AnthropicApiError(500, "500 Internal Server Error", headers);
+				return {
+					async withResponse() {
+						const headers = new Headers({ "request-id": "req_api_err_1" });
+						throw new AnthropicApiError(500, "500 Internal Server Error", headers);
+					},
+				} as never;
 			}
 			return createMockRequest(
 				createEvents({ cacheReadTokens: 15, cacheWriteTokens: 25, text: "Success on attempt 2" }),
