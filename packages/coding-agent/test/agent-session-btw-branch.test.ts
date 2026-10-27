@@ -250,8 +250,11 @@ describe("AgentSession.branchFromBtw", () => {
 		activeSession.sessionManager.appendMessage({ role: "user", content: "seed", timestamp: Date.now() });
 		await activeSession.sessionManager.flush();
 		const abortController = new AbortController();
-		const execution = Promise.withResolvers<void>().promise;
-		activeSession.trackEvalExecution(execution, abortController).catch(() => undefined);
+		// A run that ends when aborted, as a kernel run does. One that never settled would hold the
+		// session's dispose for its whole eval settle window.
+		const execution = Promise.withResolvers<void>();
+		abortController.signal.addEventListener("abort", () => execution.resolve(), { once: true });
+		activeSession.trackEvalExecution(execution.promise, abortController).catch(() => undefined);
 		expect(activeSession.isEvalRunning).toBe(true);
 
 		await expect(activeSession.branchFromBtw("question", createBtwAssistant())).rejects.toThrow(
