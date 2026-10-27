@@ -29,6 +29,8 @@
 - Disposing a session's owner during kernel startup returns at once and releases the runner when startup completes, and a kernel whose stdin pipe stalls at shutdown is still signalled and reaches SIGKILL, so eval interpreters no longer outlive their session ([Refs #639](https://github.com/Wladefant/veyyon/issues/639)).
 - A JS eval context stays alive for an owner that attaches after another owner ends, so disposing the first owner no longer kills the second owner's in-flight cell ([Refs #639](https://github.com/Wladefant/veyyon/issues/639)).
 
+
+- Restored model selectors and assigned browser and bash helpers to their owning modules.
 ### Changed
 
 - `/reload-config` and `/reload` re-read rule layers and skills without restarting the session. The summary lists added, changed, and removed paths. Unreadable files keep the last good snapshot, and unchanged rules keep the existing advisor ([issue](https://github.com/Wladefant/veyyon/issues/577)).

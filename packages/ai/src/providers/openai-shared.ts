@@ -293,7 +293,6 @@ function resolveOpenAIProviderEndpoint(
 			const copilot = buildCopilotDynamicHeaders({
 				messages: options.messages,
 				hasImages: hasCopilotVisionInput(options.messages),
-				premiumMultiplier: model.premiumMultiplier,
 				headers,
 				initiatorOverride: options.initiatorOverride,
 			});
@@ -301,7 +300,6 @@ function resolveOpenAIProviderEndpoint(
 			return {
 				apiKey,
 				baseUrl: resolveGitHubCopilotBaseUrl(model.baseUrl, rawApiKey) ?? model.baseUrl,
-				copilotPremiumRequests: copilot.premiumRequests,
 			};
 		}
 		case "alibaba-coding-plan":
@@ -351,7 +349,7 @@ export function resolveOpenAIRequestSetup(
 	}
 	const requestHeaders = { ...headers };
 	headers.Authorization ??= `Bearer ${endpoint.apiKey}`;
-	return { copilotPremiumRequests: endpoint.copilotPremiumRequests, baseUrl, headers, query, requestHeaders };
+	return { baseUrl, headers, query, requestHeaders };
 }
 
 export function applyOpenAIServiceTier(
