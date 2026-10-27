@@ -1,6 +1,5 @@
 import { ThinkingLevel } from "@veyyon/agent-core";
 import { errorMessage, logger } from "@veyyon/utils";
-import { DEFAULT_MODEL_SLOT } from "../../config/model-roles";
 import { buildModelsView, offeredModelsFor, publishModelsView } from "../models-view";
 import { getOrCreateAgentSession } from "../turns";
 import type { ActionContext, ActionHandler, ActionHandlersMap } from "./types";
@@ -79,7 +78,7 @@ const handleSelectModel: ActionHandler<SelectModelPayload | undefined> = async (
 			return;
 		}
 
-		await session.setModel(found, DEFAULT_MODEL_SLOT, { persist: true });
+		await session.setModel(found, "default", { persist: true });
 		const view = await buildModelsView(ctx);
 		ctx.clientState.revision += 1;
 		ctx.reply.snapshot({

@@ -2,8 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Anthropic prompt-cache telemetry records (`Usage.cacheRequests`) capturing requested TTL, prefix hash, model, and request ID across provider attempts ([Refs #711](https://github.com/Wladefant/veyyon/pull/711)).
+
 ### Fixed
 - Google Antigravity usage retains daily windows from the model listing when the quota summary names both counters but omits those windows ([issue](https://github.com/Wladefant/veyyon/issues/611)).
+- Extracted request IDs from `AnthropicApiError` instances and response headers in Anthropic stream attempt error handling ([Refs #711](https://github.com/Wladefant/veyyon/pull/711)).
 
 - Auth gateway refuses missing, malformed, wrong and revoked device bearers before provider dispatch. Device tokens can refresh per request ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
 - Gateway privacy guards credentials split across semantic SSE deltas and withholds Cursor diagnostics and raw request-debug dumps inside private requests ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
@@ -18,6 +23,9 @@
 - Anthropic-compatible requests encode an empty tool result as `content: ""` instead of `content: []` on image-capable models, which strict endpoints such as Z.AI GLM reject with HTTP 400 code 1213 (oh-my-pi 4025b27c156d90dbda6fd1312e60e4895d6af3b1, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - `/login alibaba-coding-plan` with the China endpoint opens the Bailian API-key page instead of the retired DashScope console (oh-my-pi d71ff70c3d9010c5231cb9ffd181c4c866b0be1b, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
+- Bedrock no longer sends an unused signature path, Cursor diagnostics use the intended logger, and Codex no longer exposes a dead alias.
+- Copilot premium usage follows the current premium-request path, and Muse Code refresh and key requests retain scoped timeout and abort signals.
+- DeepInfra discovery uses a scoped timeout signal.
 ## [1.5.6] - 2026-10-10
 ### Changed
 

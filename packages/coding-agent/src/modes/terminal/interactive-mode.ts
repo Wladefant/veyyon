@@ -41,7 +41,6 @@ import type { CollabGuestLink } from "../../collab/guest";
 import type { CollabHost } from "../../collab/host";
 import { KeybindingsManager } from "../../config/keybindings";
 import { recordLaunchFacts } from "../../config/launch-facts";
-import type { ResolvedModelRoleValue } from "../../config/model-resolver";
 import {
 	isSettingsInitialized,
 	type QuarantinedSettingsFile,
@@ -49,7 +48,7 @@ import {
 	type SettingsSaveFailure,
 	settings,
 } from "../../config/settings";
-import { onModelRolesChanged, onStatusLineSessionAccentChanged } from "../../config/settings-signals";
+import { onStatusLineSessionAccentChanged } from "../../config/settings-signals";
 import type {
 	AutocompleteProviderFactory,
 	ExtensionAskDialogQuestion,
@@ -1300,11 +1299,6 @@ export class InteractiveMode implements InteractiveModeContext {
 				// preview (ephemeral) swaps returned above so a hover does not flicker
 				// the terminal background.
 				this.#applyPaintGround();
-			}),
-		);
-		this.#eventBusUnsubscribers.push(
-			onModelRolesChanged(() => {
-				void this.#reapplyPlanModeModelOnRoleChange();
 			}),
 		);
 
