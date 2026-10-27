@@ -21,12 +21,13 @@ Conformance suite: `packages/coding-agent/test/edit/schema-repair.test.ts` (alia
 | `task` | `task`, `context`, `tasks[].task` | Prose the model JSON-escaped twice, which arrives with literal `\n`, `\"` and `\u2014` sequences in place of newlines, quotes and characters. Decoded once. |
 | `yield` | `result` | The `result` wrapper sent as a JSON string: `"{\"data\": {…}}"`. Parsed into its object. |
 
-An entry rewrites only the fields it lists, and only when the call has one reading. A value that would decode twice, which is either encoded three times or quotes escapes of its own, is left as sent. A field longer than 1 MiB is left as sent. Repairing an entry's output again changes nothing.
+An entry rewrites only the fields it lists, and only when the call has one reading. A value that would decode twice, which is either encoded three times or quotes escapes of its own, is left as sent. A field longer than 1,048,576 UTF-16 code units is left as sent. Repairing an entry's output again changes nothing.
 
 These are not argument repair and stay in their tools:
 
 - `search` ignores a field its selected type does not accept and lists it in the result.
 - A URL that `read` loads has a scheme collapsed by path normalization restored: `https:/host` becomes `https://host`.
+- Path resolution in the file tools (`expandPath` and `resolveReadPath` in `packages/coding-agent/src/tools/core/path-utils.ts`) drops a stray leading `:`, or a leading `@` before an absolute path, `~` or an internal URL, maps Unicode spaces to ASCII spaces and reads a `file://` URL as its path. A read of a path that does not exist uses the shell-unescaped, NFD, curly-apostrophe or macOS screenshot spelling that does.
 - The task renderer decodes the streamed brief for the preview. Execution receives the brief from the `task` entry.
 
 Suite: `packages/coding-agent/test/tools/a-tool-specific-argument-repair-reaches-approval-and-the-tool-as-one-set-of-arguments.test.ts`.

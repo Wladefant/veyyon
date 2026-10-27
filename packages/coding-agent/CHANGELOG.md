@@ -22,6 +22,7 @@
 - The `/model` picker resolves the default model against the models it lists, as startup does, so its first open paints in 4 ms instead of 41 ms and the default mark lands on the model a new session starts on.
 - Views that load after the key that opens them, such as the Extension Control Center, paint up to 30 ms sooner.
 - `/cpu-limit status` reports the kill policy in force: `kill on sustained saturation` for the CPU budget and `kill when exceeded` for the write budget.
+- The tool argument repair registry lists path resolution in the file tools among the tool-local parsing it excludes; no user-facing change.
 
 ### Fixed
 

@@ -15,8 +15,9 @@
  *
  * Not repair, and not here:
  * - Domain parsing a tool owns: `search` ignores a field its selected type does not accept and says
- *   so in its result, and `read` canonicalizes a URL with a collapsed scheme. Those interpret valid
- *   input, and the tool keeps them.
+ *   so in its result, `read` canonicalizes a URL with a collapsed scheme, and the file tools resolve
+ *   a path through `tools/core/path-utils.ts` (a stray `:` or `@` prefix, Unicode spaces, the
+ *   spelling of a path that exists). Those interpret valid input, and the tool keeps them.
  * - Display tolerance: the task renderer decodes the raw streamed brief with the same function the
  *   `task` entry uses, for the preview only. A renderer never feeds execution.
  */
