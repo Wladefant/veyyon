@@ -1716,6 +1716,34 @@ export function applyAnthropicUsageExtras(usage: Usage, source: AnthropicUsageLi
 	}
 }
 
+function applyAnthropicAttemptUsage(
+	record: CacheRequestRecord,
+	source: {
+		cache_read_input_tokens?: number | null;
+		cache_creation_input_tokens?: number | null;
+		cache_creation?: { ephemeral_5m_input_tokens?: number | null; ephemeral_1h_input_tokens?: number | null } | null;
+	} | undefined,
+): void {
+	if (!source) return;
+	if (source.cache_read_input_tokens != null) {
+		record.cacheRead = source.cache_read_input_tokens;
+	}
+	if (source.cache_creation_input_tokens != null) {
+		record.cacheWrite = source.cache_creation_input_tokens;
+	}
+	const cacheCreation = source.cache_creation;
+	if (cacheCreation != null) {
+		const fiveMinute = cacheCreation.ephemeral_5m_input_tokens;
+		const oneHour = cacheCreation.ephemeral_1h_input_tokens;
+		if (fiveMinute != null || oneHour != null) {
+			record.cttl = {
+				...(fiveMinute != null ? { ephemeral5m: fiveMinute } : {}),
+				...(oneHour != null ? { ephemeral1h: oneHour } : {}),
+			};
+		}
+	}
+}
+
 function createAnthropicCacheRequestRecord(
 	params: MessageCreateParamsStreaming,
 	body: string,
@@ -1751,6 +1779,9 @@ function createAnthropicCacheRequestRecord(
 	const prefixHash = nodeCrypto.createHash("sha256").update(JSON.stringify(prefixData)).digest("hex");
 
 	const ttls: ("5m" | "1h")[] = [];
+	if (isRecord(parsed) && isRecord(parsed.cache_control)) {
+		ttls.push(parsed.cache_control.ttl === "1h" ? "1h" : "5m");
+	}
 	if (Array.isArray(parsed.tools)) {
 		for (const tool of parsed.tools) {
 			if (isRecord(tool) && isRecord(tool.cache_control)) {
@@ -1764,6 +1795,8 @@ function createAnthropicCacheRequestRecord(
 				ttls.push(block.cache_control.ttl === "1h" ? "1h" : "5m");
 			}
 		}
+	} else if (isRecord(parsed.system) && isRecord(parsed.system.cache_control)) {
+		ttls.push(parsed.system.cache_control.ttl === "1h" ? "1h" : "5m");
 	}
 	if (Array.isArray(parsed.messages)) {
 		for (const message of parsed.messages) {
@@ -1799,7 +1832,7 @@ function createAnthropicCacheRequestRecord(
 
 	const record: CacheRequestRecord = {
 		requestStartedAt,
- 		requestedTtl,
+		requestedTtl,
 		model: sentModel,
 		prefixHash,
 	};
@@ -2080,25 +2113,7 @@ function handleAnthropicMessageStart(
 		if (!state.currentAttemptRecord.requestId && startMessage?.id) {
 			state.currentAttemptRecord.requestId = startMessage.id;
 		}
-		if (startUsage) {
-			if (startUsage.cache_read_input_tokens != null) {
-				state.currentAttemptRecord.cacheRead = startUsage.cache_read_input_tokens;
-			}
-			if (startUsage.cache_creation_input_tokens != null) {
-				state.currentAttemptRecord.cacheWrite = startUsage.cache_creation_input_tokens;
-			}
-			const cacheCreation = startUsage.cache_creation;
-			if (cacheCreation != null) {
-				const fiveMinute = cacheCreation.ephemeral_5m_input_tokens ?? 0;
-				const oneHour = cacheCreation.ephemeral_1h_input_tokens ?? 0;
-				if (fiveMinute > 0 || oneHour > 0) {
-					state.currentAttemptRecord.cttl = {
-						...(fiveMinute > 0 ? { ephemeral5m: fiveMinute } : {}),
-						...(oneHour > 0 ? { ephemeral1h: oneHour } : {}),
-					};
-				}
-			}
-		}
+		applyAnthropicAttemptUsage(state.currentAttemptRecord, startUsage);
 	}
 }
 
@@ -2372,23 +2387,7 @@ function handleAnthropicMessageDelta(
 		}
 		applyAnthropicUsageExtras(output.usage, deltaUsage);
 		if (state.currentAttemptRecord) {
-			if (deltaUsage.cache_read_input_tokens != null) {
-				state.currentAttemptRecord.cacheRead = deltaUsage.cache_read_input_tokens;
-			}
-			if (deltaUsage.cache_creation_input_tokens != null) {
-				state.currentAttemptRecord.cacheWrite = deltaUsage.cache_creation_input_tokens;
-			}
-			const cacheCreation = deltaUsage.cache_creation;
-			if (cacheCreation != null) {
-				const fiveMinute = cacheCreation.ephemeral_5m_input_tokens ?? 0;
-				const oneHour = cacheCreation.ephemeral_1h_input_tokens ?? 0;
-				if (fiveMinute > 0 || oneHour > 0) {
-					state.currentAttemptRecord.cttl = {
-						...(fiveMinute > 0 ? { ephemeral5m: fiveMinute } : {}),
-						...(oneHour > 0 ? { ephemeral1h: oneHour } : {}),
-					};
-				}
-			}
+			applyAnthropicAttemptUsage(state.currentAttemptRecord, deltaUsage);
 		}
 		output.usage.totalTokens =
 			output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
