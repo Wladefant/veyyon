@@ -93,6 +93,7 @@ async function serve(
 	sessionId = "sess-live",
 	getHistory?: () => { entryId: string; text: string }[],
 	identityRef?: { sessionId: string },
+	subscribe?: (listener: (event: unknown) => void) => () => void,
 ) {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "terminal-reconnect-"));
 	cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
@@ -103,7 +104,7 @@ async function serve(
 			deliver,
 			abort: async () => false,
 			history: getHistory ?? (() => [{ entryId: "e-0", text: "initial entry" }]),
-			subscribe: () => () => {},
+			subscribe: subscribe ?? (() => () => {}),
 		},
 		root,
 	);
@@ -455,4 +456,91 @@ test("a delivery failure is retained and replayed to retrying deliveries with th
 
 	// Delivery was attempted once
 	expect(attempts).toBe(1);
+});
+
+test("a second subscriber connecting while streaming receives the active streaming state", async () => {
+	const owner = await serve(
+		async () => "delivered",
+		"sess-streaming",
+		undefined,
+		undefined,
+		listener => {
+			listener({ kind: "streaming", sessionId: "sess-streaming", active: true });
+			return () => {};
+		},
+	);
+
+	// First subscriber connects and receives streaming state
+	const client1 = connect(owner);
+	client1.send({ id: "sub-1", op: "subscribe" });
+	const streamEvent1 = await client1.next(frame => frame.event?.kind === "streaming");
+	expect(streamEvent1.event).toMatchObject({
+		kind: "streaming",
+		sessionId: "sess-streaming",
+		active: true,
+	});
+
+	// Second subscriber connects while subscriber 1 is still connected
+	const client2 = connect(owner);
+	client2.send({ id: "sub-2", op: "subscribe" });
+	const streamEvent2 = await client2.next(frame => frame.event?.kind === "streaming");
+	expect(streamEvent2.event).toMatchObject({
+		kind: "streaming",
+		sessionId: "sess-streaming",
+		active: true,
+	});
+});
+
+test("an acked delivery exhausted by not-ready announces failure to watchers before removing deduplication key", async () => {
+	let attempts = 0;
+	const owner = await serve(async () => {
+		if (++attempts <= 21) throw new TerminalNotReadyError("terminal is not ready");
+		return "delivered";
+	});
+
+	const client = connect(owner);
+	client.send({
+		id: "deliv-ack-1",
+		op: "deliver",
+		text: "exhaust me",
+		mode: "auto",
+		ack: true,
+		messageId: "ack-not-ready",
+	});
+	const ack = await client.next(frame => frame.id === "deliv-ack-1");
+	expect(ack.result).toMatchObject({ accepted: true, messageId: "ack-not-ready", state: "pending" });
+
+	// Watcher socket receives the failure event when retries are exhausted
+	const failedEvent = await client.next(
+		frame => frame.event?.kind === "delivery" && frame.event?.messageId === "ack-not-ready",
+	);
+	expect(failedEvent.event).toMatchObject({
+		kind: "delivery",
+		messageId: "ack-not-ready",
+		state: "failed",
+	});
+	expect(failedEvent.event?.error).toContain("terminal is not ready");
+
+	// Deduplication key was deleted so a retry with the same messageId can succeed when terminal is ready
+	client.send({
+		id: "deliv-ack-2",
+		op: "deliver",
+		text: "exhaust me",
+		mode: "auto",
+		ack: true,
+		messageId: "ack-not-ready",
+	});
+	const retryAck = await client.next(frame => frame.id === "deliv-ack-2");
+	expect(retryAck.result).toMatchObject({ accepted: true, messageId: "ack-not-ready", state: "pending" });
+
+	const deliveredEvent = await client.next(
+		frame => frame.event?.kind === "delivery" && frame.event?.messageId === "ack-not-ready",
+	);
+	expect(deliveredEvent.event).toMatchObject({
+		kind: "delivery",
+		messageId: "ack-not-ready",
+		state: "delivered",
+		outcome: "delivered",
+	});
+	expect(attempts).toBe(22);
 });

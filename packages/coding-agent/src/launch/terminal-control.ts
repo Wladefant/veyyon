@@ -49,6 +49,25 @@ type DeliveryState =
 	| { state: "delivered"; outcome: string }
 	| { state: "failed"; error: string };
 
+interface StreamingSnapshotEvent {
+	kind: "streaming";
+	sessionId: string;
+	active: boolean;
+}
+
+function isStreamingSnapshotEvent(event: unknown): event is StreamingSnapshotEvent {
+	return (
+		typeof event === "object" &&
+		event !== null &&
+		"kind" in event &&
+		event.kind === "streaming" &&
+		"sessionId" in event &&
+		typeof event.sessionId === "string" &&
+		"active" in event &&
+		typeof event.active === "boolean"
+	);
+}
+
 /** The socket lives in the CLI process; neither this module nor a client opens a session file. */
 export async function serveTerminalControl(
 	target: TerminalControlTarget,
@@ -89,6 +108,7 @@ export async function serveTerminalControl(
 		clearInterval(refresh);
 		refresh = undefined;
 	};
+	let currentStreamingEvent: StreamingSnapshotEvent | undefined;
 	const startEvents = (): void => {
 		if (unsubscribe || closed) return;
 		unsubscribe = target.subscribe(event => {
@@ -96,12 +116,16 @@ export async function serveTerminalControl(
 				for (const socket of sockets) socket.destroy();
 				return;
 			}
+			if (isStreamingSnapshotEvent(event)) {
+				currentStreamingEvent = event;
+			}
 			for (const socket of subscribers) send(socket, { event });
 		});
 	};
 	const stopEvents = (): void => {
 		unsubscribe?.();
 		unsubscribe = undefined;
+		currentStreamingEvent = undefined;
 	};
 	const send = (socket: net.Socket, frame: unknown): void => {
 		if (socket.destroyed) return;
@@ -127,11 +151,14 @@ export async function serveTerminalControl(
 	let deliveryChain: Promise<void> = Promise.resolve();
 	let pendingDeliveries = 0;
 	const announceDelivery = (record: { sessionId: string; messageId: string; status: DeliveryState; watchers: Set<net.Socket> }): void => {
-		const targets = new Set<net.Socket>(record.watchers);
-		for (const socket of subscribers) targets.add(socket);
-		for (const socket of targets) {
-			if (record.sessionId === publishedSessionId) {
-				send(socket, { event: { kind: "delivery", sessionId: record.sessionId, messageId: record.messageId, ...record.status } });
+		for (const socket of record.watchers) {
+			send(socket, { event: { kind: "delivery", sessionId: record.sessionId, messageId: record.messageId, ...record.status } });
+		}
+		if (record.sessionId === publishedSessionId) {
+			for (const socket of subscribers) {
+				if (!record.watchers.has(socket)) {
+					send(socket, { event: { kind: "delivery", sessionId: record.sessionId, messageId: record.messageId, ...record.status } });
+				}
 			}
 		}
 	};
@@ -191,19 +218,19 @@ export async function serveTerminalControl(
 		const record = { sessionId, messageId, status: { state: "pending" } as DeliveryState, watchers: new Set([socket]), promise: deliveryPromise };
 		deliveries.set(key, record);
 		evictOldDeliveries();
+		let retryable = false;
 		void deliveryPromise.then(
 			outcome => { record.status = { state: "delivered", outcome }; },
 			error => {
-				if (error instanceof TerminalNotReadyError || error instanceof TerminalSessionChangedError) {
-					deliveries.delete(key);
-					return;
-				}
 				record.status = { state: "failed", error: String(error) };
+				if (error instanceof TerminalNotReadyError || error instanceof TerminalSessionChangedError) {
+					retryable = true;
+				}
 			},
 		).then(() => {
-			if (record.status.state !== "pending") announceDelivery(record);
+			announceDelivery(record);
 			record.watchers.clear();
-			if (record.sessionId !== publishedSessionId) deliveries.delete(key);
+			if (retryable || record.sessionId !== publishedSessionId) deliveries.delete(key);
 		});
 		return { accepted: true, messageId, state: "pending" };
 	};
@@ -264,7 +291,11 @@ export async function serveTerminalControl(
 									throw new Error("Unknown history cursor; reconnect without a cursor to reset history");
 								}
 								subscribers.add(socket);
+								const isNewListener = !unsubscribe;
 								startEvents();
+								if (!isNewListener && currentStreamingEvent?.active && currentStreamingEvent.sessionId === publishedSessionId) {
+									send(socket, { event: currentStreamingEvent });
+								}
 								const entries = cursorIndex >= 0 ? fullHistory.slice(cursorIndex + 1) : fullHistory.slice(-HISTORY_FRAME_ENTRIES);
 								const maxBytes = 512 * 1024;
 								const maxEntries = 100;
@@ -291,7 +322,20 @@ export async function serveTerminalControl(
 											entries: chunks[index],
 										},
 									});
-									if (socket.writableNeedDrain) await new Promise<void>(resolve => socket.once("drain", resolve));
+									if (socket.writableNeedDrain && !socket.destroyed) {
+										await new Promise<void>(resolve => {
+											const onDrain = (): void => { cleanup(); resolve(); };
+											const onClose = (): void => { cleanup(); resolve(); };
+											const cleanup = (): void => {
+												socket.off("drain", onDrain);
+												socket.off("close", onClose);
+												socket.off("error", onClose);
+											};
+											socket.once("drain", onDrain);
+											socket.once("close", onClose);
+											socket.once("error", onClose);
+										});
+									}
 								}
 								for (const [key, record] of deliveries) {
 									if (record.sessionId !== request.sessionId) continue;
@@ -350,19 +394,19 @@ export async function serveTerminalControl(
 									};
 									deliveries.set(key, record);
 									evictOldDeliveries();
+									let retryable = false;
 									void deliveryPromise.then(
 										outcome => { record.status = { state: "delivered", outcome }; },
 										error => {
-											if (error instanceof TerminalNotReadyError || error instanceof TerminalSessionChangedError) {
-												deliveries.delete(key);
-												return;
-											}
 											record.status = { state: "failed", error: String(error) };
+											if (error instanceof TerminalNotReadyError || error instanceof TerminalSessionChangedError) {
+												retryable = true;
+											}
 										},
 									).then(() => {
-										if (record.status.state !== "pending") announceDelivery(record);
+										announceDelivery(record);
 										record.watchers.clear();
-										if (record.sessionId !== publishedSessionId) deliveries.delete(key);
+										if (retryable || record.sessionId !== publishedSessionId) deliveries.delete(key);
 									});
 									result = await deliveryPromise;
 									break;
@@ -422,6 +466,7 @@ export async function serveTerminalControl(
 		const previousSessionId = publishedSessionId;
 		publishedSessionId = identity.sessionId;
 		if (previousSessionId !== identity.sessionId) {
+			currentStreamingEvent = undefined;
 			for (const [key, delivery] of deliveries) {
 				if (delivery.sessionId === previousSessionId && delivery.status.state !== "pending") deliveries.delete(key);
 			}
