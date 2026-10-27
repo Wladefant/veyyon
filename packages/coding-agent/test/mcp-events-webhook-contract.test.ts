@@ -113,8 +113,8 @@ describe("MCP webhook receiver contract", () => {
 	it("accepts signed gap and termination controls through the durable callback", async () => {
 		const accepted: MCPWebhookMessage[] = [];
 		const target = receiver(async (_id, message) => { accepted.push(message); return "queued"; });
-		const gap = { type: "gap", cursor: "opaque-cursor" };
-		const terminated = { type: "terminated", error: { code: -32024, message: "Forbidden", data: { reason: "revoked" } } };
+		const gap = { type: "gap" as const, cursor: "opaque-cursor" };
+		const terminated = { type: "terminated" as const, error: { code: -32024, message: "Forbidden", data: { reason: "revoked" } } };
 		expect((await target.handle(signedRequest(JSON.stringify(gap), { "webhook-id": "msg_gap_a" }))).status).toBe(202);
 		expect((await target.handle(signedRequest(JSON.stringify(terminated), { "webhook-id": "msg_terminated_a" }))).status).toBe(202);
 		expect(accepted).toEqual([{ ...gap, messageId: "msg_gap_a" }, { ...terminated, messageId: "msg_terminated_a" }]);

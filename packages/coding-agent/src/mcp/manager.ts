@@ -166,6 +166,10 @@ function mcpErrorCode(error: unknown): number | undefined {
 	return match ? Number(match[1]) : undefined;
 }
 
+function isWebhookControlMessage(message: MCPWebhookMessage): message is MCPWebhookControl {
+	return "type" in message && (message.type === "gap" || message.type === "terminated");
+}
+
 /**
  * How long startup waits for MCP connections before serving cached tools.
  *
@@ -380,7 +384,7 @@ export class MCPManager {
 			const target = this.#webhookSubscriptions.get(subscriptionId);
 			const subscription = target ? this.#activeEvents.get(target.key) : undefined;
 			if (!target || !subscription) throw new Error("MCP webhook subscription is not active");
-			if ("type" in message) {
+			if (isWebhookControlMessage(message)) {
 				const outcome = await this.#recordEventControl(target.serverName, target.key, message);
 				if (message.type === "gap") {
 					await this.#recordEventCursor(subscription, message.cursor ?? null);
@@ -538,7 +542,7 @@ export class MCPManager {
 			return;
 		}
 		const byName = new Map(descriptors.map(descriptor => [descriptor.name, descriptor]));
-		for (const requested of config.subscriptions ?? []) {
+		for (const requested of config?.subscriptions ?? []) {
 			if (
 				controller.signal.aborted ||
 				!this.#onEvent ||

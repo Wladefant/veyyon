@@ -630,7 +630,7 @@ describe("MCP event notice formatting", () => {
 		const a = { serverName: "alerts-A", subscriptionKey: "A:incident.created", event };
 		const b = { serverName: "alerts-B", subscriptionKey: "B:incident.created", event };
 		const message = buildMcpEventBatchMessage([a, a, b]);
-		expect(message?.details.receipts).toEqual([
+		expect(message?.details?.receipts).toEqual([
 			{ serverName: "alerts-A", subscriptionKey: "A:incident.created", id: "evt-dup" },
 			{ serverName: "alerts-B", subscriptionKey: "B:incident.created", id: "evt-dup" },
 		]);
@@ -718,7 +718,7 @@ describe("MCP Events user config loading", () => {
 				expect(JSON.stringify(result.configs)).not.toContain("fixture-signing-secret-never-serialize");
 				const subscription = result.configs["routing-alerts"]?.events?.subscriptions?.[0];
 				if (!subscription) throw new Error("Missing loaded webhook subscription");
-				manager.setOnEvent(async () => "queued");
+				manager.setOnEvent(async () => "queued" as const);
 				manager.setOnEventCursor(async () => {});
 				const connected = await manager.connectServers(result.configs, result.sources);
 				// Startup runs in the background. Observe its state, not an early load-result snapshot.

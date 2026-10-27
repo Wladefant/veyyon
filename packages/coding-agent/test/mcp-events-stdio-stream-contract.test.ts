@@ -34,8 +34,8 @@ describe("MCP stdio streamRequest contract", () => {
 		const receivedB: string[] = [];
 		let resolveBoth: (() => void) | undefined;
 		const bothReceived = new Promise<void>(resolve => { resolveBoth = resolve; });
-		let streamAId: string | number;
-		let streamBId: string | number;
+		let streamAId: string | number = "";
+		let streamBId: string | number = "";
 		const a = transport.streamRequest("events/stream", {}, message => {
 			if ("params" in message && message.params && typeof message.params === "object" && "marker" in message.params) {
 				receivedA.push(String(message.params.marker));

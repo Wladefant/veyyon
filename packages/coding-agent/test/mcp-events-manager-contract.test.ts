@@ -39,7 +39,7 @@ function fakeMcpServer(options: FakeServerOptions): FakeServer {
 		port: 0,
 		async fetch(request) {
 			if (request.method !== "POST") return new Response(null, { status: 405 });
-			const message: JsonRpcRequest = await request.json();
+			const message = (await request.json()) as JsonRpcRequest;
 			const params = message.params ?? {};
 			requests.push({ id: message.id, method: message.method ?? "", params });
 			if (message.id === undefined) return new Response(null, { status: 202 });
@@ -112,7 +112,7 @@ function emitStreamNotification(
 	controller: ReadableStreamDefaultController<Uint8Array>,
 	streamId: string | number,
 	method: string,
-	params: Record<string, unknown>,
+	params: Record<string, unknown> | MCPEventOccurrence,
 ): void {
 	const payload = JSON.stringify({
 		jsonrpc: "2.0",
@@ -125,7 +125,7 @@ function emitStreamNotification(
 function emitStreamBatch(
 	controller: ReadableStreamDefaultController<Uint8Array>,
 	streamId: string | number,
-	messages: Array<{ method: string; params: Record<string, unknown> }>,
+	messages: Array<{ method: string; params: Record<string, unknown> | MCPEventOccurrence }>,
 ): void {
 	const frame = messages.map(({ method, params }) => {
 		const payload = JSON.stringify({
@@ -337,7 +337,7 @@ describe("MCPManager event subscription contracts", () => {
 			acceptedEvents.push(occurrence.eventId);
 			if (occurrence.eventId === "duplicate-event") retryAccepted.resolve();
 			if (occurrence.eventId === "marker-event") thirdDeliveryProcessed.resolve();
-			return "queued";
+			return "queued" as const;
 		});
 		manager.setOnEventCursor((_name, _key, cursor) => {
 			cursors.push(cursor);
@@ -475,7 +475,7 @@ describe("MCPManager event subscription contracts", () => {
 
 	it("answers webhook challenges before subscribing, refreshes, and unsubscribes on stop", async () => {
 		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
-		const listenPort = probe.port;
+		const listenPort = probe.port ?? 0;
 		probe.stop(true);
 		const subscriptionCalls: number[] = [];
 		const webhookCalls: string[] = [];
@@ -564,7 +564,7 @@ describe("MCPManager event subscription contracts", () => {
 
 	it("reports a missing webhook signing secret through subscription status", async () => {
 		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
-		const listenPort = probe.port;
+		const listenPort = probe.port ?? 0;
 		probe.stop(true);
 		const server = fakeMcpServer({ delivery: "webhook" });
 		const manager = new MCPManager(process.cwd());
@@ -600,7 +600,7 @@ describe("MCPManager event subscription contracts", () => {
 		const listGate = Promise.withResolvers<Record<string, unknown>>();
 		const listRequested = Promise.withResolvers<void>();
 		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
-		const listenPort = probe.port;
+		const listenPort = probe.port ?? 0;
 		probe.stop(true);
 
 		const server = fakeMcpServer({

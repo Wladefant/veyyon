@@ -31,7 +31,7 @@ describe("MCP Events client primitives", () => {
 	it("lists advertised event descriptors and polls with the opaque cursor", async () => {
 		const descriptor = {
 			name: "change.created",
-			delivery: ["poll"],
+			delivery: ["poll" as const],
 			inputSchema: { type: "object" },
 			payloadSchema: { type: "object" },
 		};

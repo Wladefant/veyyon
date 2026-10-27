@@ -24,7 +24,7 @@ export function startMCPWebhookHost(receiver: MCPWebhookReceiver, port: number):
 	});
 	server.unref();
 	return {
-		port: server.port,
+		port: server.port ?? port,
 		async close() {
 			await server.stop(true);
 		},
