@@ -20,8 +20,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { privateTempDir } from "../src/temp";
 
-const uid = process.getuid?.();
-const posix = uid !== undefined;
+const posix = process.getuid !== undefined;
+// Read only inside the POSIX-only block below, where `getuid` exists.
+const uid = process.getuid?.() ?? -1;
 
 describe.if(posix)("privateTempDir", () => {
 	let root: string;
@@ -87,7 +88,7 @@ describe.if(posix)("privateTempDir", () => {
 	it("rejects a directory another uid owns", () => {
 		// The directory this process creates is owned by `uid`; reporting a different uid makes it
 		// another account's directory without needing a second account on the host.
-		const other = (uid ?? 0) + 1;
+		const other = uid + 1;
 		vi.spyOn(process, "getuid").mockReturnValue(other);
 		fs.mkdirSync(path.join(root, `veyyon-${other}`), { mode: 0o700 });
 		expect(() => privateTempDir()).toThrow(refusal(`is owned by uid ${uid}`, other));
