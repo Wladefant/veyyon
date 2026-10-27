@@ -25,6 +25,7 @@
 - The tool argument repair registry lists path resolution in the file tools among the tool-local parsing it excludes; no user-facing change.
 - Background job delivery, listing, cancellation and the settle wake moved out of the session class into one session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - Releasing what a conversation ends with on `/new`, `/resume` and a handoff moved out of the session class into one session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- Routing a finished run through retry, compaction and the stop-time passes moved out of the session class into one session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 
 ### Fixed
 

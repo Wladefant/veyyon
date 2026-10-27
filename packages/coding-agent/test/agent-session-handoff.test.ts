@@ -60,9 +60,9 @@ describe("AgentSession handoff", () => {
 
 	/** Drain post-turn maintenance deterministically for negative tests (those proving
 	 *  maintenance did NOT run, where there is no positive signal to poll on). Post-turn
-	 *  work is scheduled fire-and-forget: a single event-loop turn lets the handler run to
-	 *  its decision and register any compaction pass as a tracked post-prompt task, then
-	 *  `waitForIdle()` drains that task to completion. */
+	 *  work is scheduled fire-and-forget: a single event-loop turn lets the `agent_end` handler
+	 *  start, which registers itself as a tracked post-prompt task, then `waitForIdle()` drains
+	 *  it and the compaction pass it awaits. */
 	async function drainMaintenance(): Promise<void> {
 		await Bun.sleep(0);
 		await session.waitForIdle();

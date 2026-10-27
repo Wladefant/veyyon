@@ -42,7 +42,6 @@ import {
 	type ShakeConfig,
 	shouldCompact,
 } from "@veyyon/agent-core/compaction";
-import { isProviderRefusalMessage } from "@veyyon/agent-core/replay-policy";
 import type {
 	Api,
 	AssistantMessage,
@@ -79,10 +78,7 @@ import {
 	serviceTierFamily,
 } from "@veyyon/catalog/provider-models/service-tier";
 import type { InMemorySnapshotStore } from "@veyyon/hashline";
-import {
-	type CompactionCheckResult,
-	declaredContextWindow,
-} from "@veyyon/kernel/session/agent-session-compaction-policy";
+import { declaredContextWindow } from "@veyyon/kernel/session/agent-session-compaction-policy";
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import type { ClientBridge } from "@veyyon/kernel/session/client-bridge";
 import {
@@ -105,11 +101,6 @@ import {
 } from "@veyyon/kernel/session/session-context";
 import type { NewSessionOptions } from "@veyyon/kernel/session/session-entries";
 import { cleanupEmptyMoveSession, type SessionManager } from "@veyyon/kernel/session/session-manager";
-import {
-	isAwaitingUserAnswer,
-	mayContinueAtSettle,
-	type SettleContinuationState,
-} from "@veyyon/kernel/session/settle-continuation";
 import type { ShakeMode, ShakeResult } from "@veyyon/kernel/session/shake-types";
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import { ToolChoiceQueue } from "@veyyon/kernel/session/tool-choice-queue";
@@ -319,6 +310,7 @@ import { type SecretsRefreshOptions, SessionSecrets } from "./runtime/session-se
 import { SessionStopHook } from "./runtime/session-stop-hook";
 import { SessionSwitch } from "./runtime/session-switch";
 import { StopRetries } from "./runtime/stop-retries";
+import { StopSettlement } from "./runtime/stop-settlement";
 import { StreamingEditGuard } from "./runtime/streaming-edit-guard";
 import { ThinkingRuntime } from "./runtime/thinking-runtime";
 import { TodoRuntime } from "./runtime/todo-runtime";
@@ -790,6 +782,8 @@ export class AgentSession {
 	#toolChoiceQueue = new ToolChoiceQueue();
 	/** The evidence ledger and the rewind, verification and review reminders a settling turn is sent. */
 	readonly #finalize: FinalizeReminders;
+	/** The routing a run that ended goes through before extensions see its `agent_end`; see {@link StopSettlement}. */
+	readonly #stopSettlement: StopSettlement;
 
 	/** Running user shell commands and eval runs, and the results recorded while a turn streamed. */
 	readonly #executions = new UserExecutions({
@@ -1589,6 +1583,22 @@ export class AgentSession {
 		this.#sessionSwitch = this.#createSessionSwitch();
 		this.#sessionBranch = this.#createSessionBranch();
 		this.#sessionHandoff = this.#createSessionHandoff();
+		this.#stopSettlement = new StopSettlement({
+			yields: this.#yields,
+			persistence: this.#persistence,
+			handoff: this.#sessionHandoff,
+			contextCheck: this.#contextCheck,
+			stopRetries: this.#stopRetries,
+			retry: this.#retry,
+			finalize: this.#finalize,
+			planMode: this.#planMode,
+			todo: this.#todo,
+			ownedJobs: this.#ownedJobs,
+			stopHook: this.#stopHook,
+			goalMode: () => this.#goalModeState,
+			forgetCredentials: provider => this.#config.modelRegistry.authStorage.remove(provider),
+			dropFromActiveContext: message => removeAssistantMessageFromActiveContext(this.agent, message),
+		});
 
 		this.#checkpoint.rehydrate(this.sessionManager.getBranch());
 
@@ -2147,9 +2157,6 @@ export class AgentSession {
 		this.#emit(event);
 	}
 
-	// Track last assistant message for auto-compaction check
-	#lastAssistantMessage: AssistantMessage | undefined = undefined;
-
 	/** Internal handler for agent events - shared by subscribe and reconnect.
 	 *
 	 * `agent_end` handling schedules post-prompt recovery work such as context
@@ -2281,7 +2288,7 @@ export class AgentSession {
 				await this.#emitSessionEvent(expandAgentEndEvent(this, event));
 				const settledMessages = this.agent.state.messages;
 				await this.#goalRuntime.onAgentEnd();
-				await this.#runAgentEndMaintenance(settledMessages);
+				await this.#stopSettlement.run(settledMessages);
 				await this.#extensionEvents.agentEnd(settledMessages);
 				return;
 			}
@@ -2330,11 +2337,8 @@ export class AgentSession {
 			// permission-denied calls never count, and only successful mutating tools tick.
 			this.#todo.onToolResultLanded(message.toolName, message.isError);
 		} else if (message.role === "assistant") {
-			// Recorded before any await: `agent_end` is dispatched immediately after its
-			// `message_end`, so an assignment parked behind the persistence await lets the settle
-			// read the PREVIOUS assistant message, and a tool-use turn followed by a text-only stop
-			// settles as if it still carried tool calls.
-			this.#lastAssistantMessage = message;
+			// Recorded before any await; see StopSettlement.noteAssistant.
+			this.#stopSettlement.noteAssistant(message);
 			if (message.stopReason === "aborted") this.#stampAbortedAssistant(message);
 			if (this.#abortInProgress) this.#deliberateAborts.add(message);
 			interruptedThinkingMessage = demoteInterruptedThinkingOnUserInterrupt(message);
@@ -2510,207 +2514,6 @@ export class AgentSession {
 		}
 		this.#planMode.noteToolCompleted(event.toolName);
 		if (this.#yields.noteExecutionEnd(event)) this.agent.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
-	}
-
-	#logMaintenanceRoute(
-		msg: AssistantMessage,
-		successfulYield: boolean,
-		route: string,
-		extra?: Record<string, unknown>,
-	): void {
-		logger.debug("agent_end maintenance routing", {
-			route,
-			stopReason: msg.stopReason,
-			provider: msg.provider,
-			model: msg.model,
-			contentBlocks: msg.content.length,
-			hasToolCalls: msg.content.some(content => content.type === "toolCall"),
-			hasText: msg.content.some(content => content.type === "text"),
-			goalModeEnabled: this.#goalModeState?.enabled === true,
-			goalStatus: this.#goalModeState?.goal.status,
-			successfulYield,
-			...extra,
-		});
-	}
-
-	/** Run the compaction check as a tracked post-prompt task, so the recovery wait sees it. */
-	#trackedCompactionCheck(msg: AssistantMessage): Promise<CompactionCheckResult> {
-		const task = this.#contextCheck.check(msg);
-		this.#postPrompt.track(task);
-		return task;
-	}
-
-	/** Drop GitHub Copilot credentials on an auth failure so the next request does not reuse a stale token. */
-	async #invalidateCopilotOnAuthFailure(msg: AssistantMessage): Promise<void> {
-		if (
-			msg.stopReason === "error" &&
-			msg.provider === "github-copilot" &&
-			AIError.is(AIError.classifyMessage(msg), AIError.Flag.AuthFailed)
-		) {
-			await this.#config.modelRegistry.authStorage.remove("github-copilot");
-		}
-	}
-
-	/**
-	 * Post-run maintenance: retry, compaction and the stop-time continuation passes. The caller emits
-	 * the `agent_end` notification after it on every route.
-	 */
-	async #runAgentEndMaintenance(settledMessages: AgentMessage[]): Promise<void> {
-		const msg =
-			this.#lastAssistantMessage ??
-			settledMessages.findLast((message): message is AssistantMessage => message.role === "assistant");
-		this.#lastAssistantMessage = undefined;
-		if (!msg) {
-			this.#yields.clear();
-			logger.debug("agent_end maintenance routing", {
-				reason: "no-assistant-message",
-				goalModeEnabled: this.#goalModeState?.enabled === true,
-				goalStatus: this.#goalModeState?.goal.status,
-			});
-			return;
-		}
-		// The identity of the settling message is read above, before its persistence slot drains; the
-		// passes below append to the branch, so wait for the entry to exist or a continuation reminder
-		// lands ahead of the reply it answers. Resolved already whenever the slot drained first.
-		await this.#persistence.waitFor(msg);
-
-		const successfulYieldMessage = this.#yields.findYieldMessage(settledMessages);
-		const yieldOnThisMessage = this.#yields.endedWithYield(msg);
-		const route = (name: string, extra?: Record<string, unknown>) =>
-			this.#logMaintenanceRoute(msg, successfulYieldMessage !== undefined, name, extra);
-		route("entered");
-
-		await this.#invalidateCopilotOnAuthFailure(msg);
-
-		if (this.#sessionHandoff.takeMaintenanceSkip(msg.timestamp)) {
-			this.#yields.clear();
-			route("skip-post-turn-maintenance");
-			return;
-		}
-
-		const activeGoal = this.#goalModeState?.enabled === true && this.#goalModeState.goal.status === "active";
-		// A successful `yield` in this run is terminal for execution purposes. Suppress empty-stop
-		// retry, unexpected-stop retry, queued-message drain, and compaction-driven continuations for
-		// the rest of this prompt cycle: the executor consumed the yield as the terminal result, so a
-		// trailing empty/aborted assistant stop must NOT revive the agent loop. The
-		// pending termination clears on the next `prompt()`.
-		if (successfulYieldMessage || this.#yields.terminationPending) {
-			this.#yields.clear();
-			if (!successfulYieldMessage) {
-				route("post-yield-trailing-stop-suppressed");
-			} else if (!activeGoal) {
-				route("successful-yield-no-active-goal");
-			} else {
-				route(
-					yieldOnThisMessage
-						? "successful-yield-active-goal-checkCompaction"
-						: "post-yield-trailing-stop-active-goal-checkCompaction",
-				);
-				await this.#trackedCompactionCheck(successfulYieldMessage);
-			}
-			return;
-		}
-		this.#yields.clear();
-		await this.#settleStop(msg, settledMessages, activeGoal, route);
-	}
-
-	/** Route a stop that no `yield` ended: empty-stop and failure recovery, compaction, then `session_stop`. */
-	async #settleStop(
-		msg: AssistantMessage,
-		settledMessages: AgentMessage[],
-		activeGoal: boolean,
-		route: (name: string, extra?: Record<string, unknown>) => void,
-	): Promise<void> {
-		// One reading of "this reply is waiting on the user", shared by every route below and read
-		// before the first guard runs, so the retry guards that settle earliest see the same answer as
-		// the passes that settle last.
-		const settleState: SettleContinuationState = { awaitingUserAnswer: isAwaitingUserAnswer(msg) };
-		// Empty-stop cleanup MUST run before any compaction continuation: an empty toolUse stop must
-		// be stripped from active context + session history before another turn is scheduled,
-		// otherwise the next Anthropic turn carries a tool_use block with no matching tool_result and
-		// corrupts message history. The handler also schedules its own retry, so a real empty stop
-		// never needs the active-goal threshold pre-empt below.
-		if (await this.#stopRetries.onEmptyStop(msg)) {
-			route("empty-stop-handled");
-			return;
-		}
-
-		let compactionResult: CompactionCheckResult | undefined;
-		if (activeGoal) {
-			route("active-goal-pre-empt-checkCompaction");
-			compactionResult = await this.#trackedCompactionCheck(msg);
-			if (compactionResult.continuationScheduled || compactionResult.automaticContinuationBlocked) {
-				route("active-goal-pre-empt-compaction-handled", {
-					continuationScheduled: compactionResult.continuationScheduled,
-					automaticContinuationBlocked: compactionResult.automaticContinuationBlocked === true,
-				});
-				this.#retry.resolve();
-				return;
-			}
-		}
-
-		if (await this.#stopRetries.onUnexpectedStop(msg, settleState)) {
-			route("unexpected-stop-handled");
-			return;
-		}
-		if (await this.#retry.recoverFailedTurn(msg)) return;
-		// Classifier refusals are persisted-skipped above; also prune the trailing stub from active
-		// context so the next turn's prompt does not replay it. Fall through to the standard error
-		// tail so `session_stop` hooks (block, continue, telemetry) still fire.
-		if (isProviderRefusalMessage(msg)) {
-			removeAssistantMessageFromActiveContext(this.agent, msg);
-		}
-		this.#retry.resolve();
-
-		if (!compactionResult) {
-			route("bottom-checkCompaction");
-			compactionResult = await this.#trackedCompactionCheck(msg);
-		}
-		if (await this.#continueAtSettle(msg, settleState, compactionResult)) return;
-		await this.#stopHook.run(settledMessages, msg);
-	}
-
-	/**
-	 * The stop-time passes that may continue a settled turn instead of ending it. True when one
-	 * scheduled a continuation, or the turn is not a final stop, so `session_stop` must not fire.
-	 */
-	async #continueAtSettle(
-		msg: AssistantMessage,
-		settleState: SettleContinuationState,
-		compactionResult: CompactionCheckResult,
-	): Promise<boolean> {
-		// Stop-time todo reconciliation only fires at a text-only final stop. A run that ends still
-		// mid-tool-use (deadline hit, context full, etc.) skips the reminder so a follow-up does not
-		// pile onto an already in-flight turn. Mid-run sync is TodoRuntime.takeMidRunNudge (#3651).
-		if (msg.content.some(content => content.type === "toolCall")) return true;
-		// When compaction queued recovery or hit a deliberate dead-end, skip the rewind/todo/
-		// session_stop passes: a reminder or hook continuation appended here would race the retry,
-		// auto-continue prompt, queued-message drain, or the pause preventing a compaction loop.
-		if (compactionResult.continuationScheduled || compactionResult.automaticContinuationBlocked) return true;
-		const stopped = msg.stopReason !== "error";
-		if (stopped && mayContinueAtSettle("rewind-checkpoint", settleState) && this.#finalize.rewindBeforeYield()) {
-			return true;
-		}
-		if (
-			stopped &&
-			mayContinueAtSettle("plan-mode-decision", settleState) &&
-			(await this.#planMode.enforceDecisionAtSettle())
-		) {
-			return true;
-		}
-		// Called unconditionally at a stop: its first statement consumes the served tool-choice label,
-		// and skipping that leaks a `user-force` label onto the next turn. The hold is a parameter.
-		if (stopped && (await this.#todo.checkCompletionAtSettle(settleState))) return true;
-		// A pending async wake means this settle is a scheduling pause, not the terminal stop: the
-		// async-result delivery continues the loop and the real stop settles later, so the
-		// session_stop hook pass waits until the session is fully idle.
-		if (this.#ownedJobs.hasPendingWake()) return true;
-		// Gated BEFORE the enforcer runs: it drains the ledger's one reminder as it reads it, so
-		// deferring from inside would spend the reminder it meant to keep.
-		if (mayContinueAtSettle("verification-evidence", settleState) && this.#finalize.verificationBeforeFinalize()) {
-			return true;
-		}
-		return mayContinueAtSettle("code-review", settleState) && this.#finalize.codeReviewBeforeFinalize();
 	}
 
 	#scheduleAgentContinue(options?: ScheduledAgentContinueOptions): void {

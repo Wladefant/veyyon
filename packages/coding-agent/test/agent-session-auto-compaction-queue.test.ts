@@ -208,7 +208,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 		};
 
 		// Drive auto-compaction through the event flow:
-		// message_end → stores #lastAssistantMessage
+		// message_end → StopSettlement.noteAssistant records the reply
 		// agent_end   → TurnContextCheck.check → shouldCompact → #runAutoCompaction
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });

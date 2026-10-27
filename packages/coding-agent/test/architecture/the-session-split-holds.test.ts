@@ -99,8 +99,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-27 at 6655: the release of what a conversation ends with (its spawned agents,
  * registry scope, IRC traffic, standing grants and eval kernels) left as the
  * `conversation-release.ts` collaborator (-114).
+ * RE-MEASURED 2026-10-27 at 6459: the routing of a run that ended (the yield short-circuit, stop
+ * recovery, the compaction check, the stop-time continuation passes and the `session_stop` hooks)
+ * left as the `stop-settlement.ts` collaborator (-196).
  */
-const RUNTIME_CEILING = 6_700;
+const RUNTIME_CEILING = 6_500;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -146,6 +149,7 @@ const COLLABORATORS = [
 	"session-stop-hook.ts",
 	"session-switch.ts",
 	"stop-retries.ts",
+	"stop-settlement.ts",
 	"streaming-edit-guard.ts",
 	"thinking-runtime.ts",
 	"todo-runtime.ts",
