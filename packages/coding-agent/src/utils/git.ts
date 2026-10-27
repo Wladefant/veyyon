@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { isAbortError } from "@veyyon/utils/abortable";
 import { Snowflake } from "@veyyon/utils/snowflake";
+import { privateTempDir } from "@veyyon/utils/temp";
 // Owners, not the `@veyyon/utils` barrel: 5 modules against 74.
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { $which } from "@veyyon/utils/which";
@@ -586,7 +586,7 @@ function buildApplyArgs(patchPath: string, options: PatchOptions): string[] {
 }
 
 async function writeTempPatch(content: string): Promise<string> {
-	const tempPath = path.join(os.tmpdir(), `veyyon-git-patch-${Snowflake.next()}.patch`);
+	const tempPath = path.join(privateTempDir(), `veyyon-git-patch-${Snowflake.next()}.patch`);
 	await Bun.write(tempPath, content);
 	return tempPath;
 }

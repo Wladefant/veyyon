@@ -14,9 +14,8 @@
  * `vibe_wait` can block on the first settling turn with `job`-poll semantics.
  */
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
-import { errorMessage, logger, prompt, Snowflake } from "@veyyon/utils";
+import { errorMessage, logger, privateTempDir, prompt, Snowflake } from "@veyyon/utils";
 import { formatDuration } from "@veyyon/utils/format";
 import type { AsyncJob, AsyncJobManager } from "../async/job-manager";
 import type { LocalProtocolOptions } from "../internal-urls";
@@ -745,7 +744,7 @@ async function buildSpawnOptions(
 ): Promise<ExecutorOptions> {
 	const sessionFile = session.getSessionFile();
 	const sessionArtifactsDir = sessionFile ? sessionFile.slice(0, -6) : null;
-	const artifactsDir = sessionArtifactsDir ?? path.join(os.tmpdir(), `veyyon-vibe-${Snowflake.next()}`);
+	const artifactsDir = sessionArtifactsDir ?? path.join(privateTempDir(), `veyyon-vibe-${Snowflake.next()}`);
 	await fs.mkdir(artifactsDir, { recursive: true });
 	if (!sessionArtifactsDir) registerArtifactsDir(artifactsDir);
 	const localProtocolOptions: LocalProtocolOptions = session.localProtocolOptions ?? {

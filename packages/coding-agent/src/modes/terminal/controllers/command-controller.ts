@@ -1,5 +1,4 @@
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { CompactionCancelledError, type CompactionOutcome } from "@veyyon/agent-core/compaction";
 import type { UsageReport } from "@veyyon/ai";
@@ -15,6 +14,7 @@ import {
 	formatDuration,
 	isAbortError,
 	logger,
+	privateTempDir,
 	Snowflake,
 	stripAnsi,
 } from "@veyyon/utils";
@@ -197,7 +197,7 @@ export class CommandController {
 				this.ctx.showError("No messages to dump yet.");
 				return;
 			}
-			const tmpPath = path.join(os.tmpdir(), `${Snowflake.next()}-tmp.txt`);
+			const tmpPath = path.join(privateTempDir(), `${Snowflake.next()}-tmp.txt`);
 			await Bun.write(tmpPath, `${rendered}\n`);
 			this.ctx.showStatus(`Debug transcript written to:\n${tmpPath}`);
 		} catch (error: unknown) {
@@ -249,7 +249,7 @@ export class CommandController {
 	 * the script runs shows nothing, since cancelling already restored the editor; the export is deleted either way.
 	 */
 	async #runCustomShare(customShare: LoadedCustomShare, loader: ComposerLoader): Promise<void> {
-		const tmpFile = path.join(os.tmpdir(), `${Snowflake.next()}.html`);
+		const tmpFile = path.join(privateTempDir(), `${Snowflake.next()}.html`);
 		try {
 			await this.ctx.session.exportToHtml(tmpFile);
 			const result = await customShare.fn(tmpFile);

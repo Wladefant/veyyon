@@ -4418,7 +4418,7 @@ export class AgentSession {
 	}
 
 	/**
-	 * Write the request the session would send next to a JSON file in `os.tmpdir()`; see
+	 * Write the request the session would send next to a JSON file in the user's private temp directory; see
 	 * {@link TranscriptExports.writeRequestSnapshot}. The file may hold the same raw context and
 	 * secrets as `/dump`.
 	 *

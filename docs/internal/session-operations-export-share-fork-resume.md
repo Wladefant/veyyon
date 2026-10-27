@@ -103,7 +103,7 @@ Requirements:
 - Module must default-export a function `(htmlPath) => Promise<CustomShareResult | string | undefined>`.
 
 If present and valid, the legacy contract is preserved: the session is
-exported to a temp HTML file (`${os.tmpdir()}/${Snowflake.next()}.html`),
+exported to a temp HTML file (`${privateTempDir()}/${Snowflake.next()}.html`),
 the handler receives its path, and the temp file is removed afterwards.
 Handler result interpretation:
 

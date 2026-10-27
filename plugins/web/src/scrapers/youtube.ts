@@ -1,7 +1,6 @@
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
-import { collapseWhitespace, errorMessage, ptree, Snowflake, truncate } from "@veyyon/utils";
+import { collapseWhitespace, errorMessage, privateTempDir, ptree, Snowflake, truncate } from "@veyyon/utils";
 import { formatNumber } from "@veyyon/utils/format";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { throwIfCancelled } from "../abort";
@@ -331,7 +330,7 @@ async function readTranscript(
 		[ytdlp, "--list-subs", "--no-warnings", "--no-playlist", "--skip-download", videoUrl],
 		execOptions,
 	);
-	const tmpBase = path.join(os.tmpdir(), `yt-${videoId}-${Snowflake.next()}`);
+	const tmpBase = path.join(privateTempDir(), `yt-${videoId}-${Snowflake.next()}`);
 	try {
 		let transcript: Transcript = { text: "", source: "" };
 		for (const track of SUBTITLE_TRACKS) {

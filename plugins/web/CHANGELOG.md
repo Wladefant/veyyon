@@ -6,6 +6,10 @@
 
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
 
+### Fixed
+
+- The YouTube scraper downloads subtitles into `<tmpdir>/veyyon-<uid>` (mode 700) instead of by a guessable name in the shared temp directory.
+
 ## [1.5.9] - 2026-10-22
 
 ### Removed

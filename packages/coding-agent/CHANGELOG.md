@@ -105,6 +105,7 @@
 - The `task` brief and shared context escaped twice and a `yield` result sent as a JSON string are repaired once, before validation, so approval, hooks, the `tool_execution_*` events and the tool receive the same arguments ([#896](https://github.com/santhreal/veyyon/issues/896)).
 - Fixed a run that failed after one or more tool steps (a credential lookup or provider call that threw) being settled on its earlier tool-use reply, so a transient failure there is now retried and `session_stop` hooks receive the failure.
 - An @-mentioned image is encoded for the active model, so a model that cannot decode WebP (Ollama, llama.cpp, LM Studio and other `stb`-backed local servers) receives PNG or JPEG instead of WebP, and with `images.autoResize` off the mention goes through the same canonical re-encode as the read tool.
+- The shell snapshot, the `local://` fallback root, the debug transcript, the `/share` HTML handed to a custom share script, the LLM request dump, PDF image extractions, git patches, task branch worktrees, screenshots, generated images, external-editor buffers, speech recordings and eval agent artifacts are written under `<tmpdir>/veyyon-<uid>` (mode 700) instead of by a fixed or guessable name in the shared temp directory, where another account could read them or replace them first.
 
 ### Removed
 

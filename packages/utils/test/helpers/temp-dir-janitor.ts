@@ -173,8 +173,8 @@ export function recordedTempDirs(): string[] {
  * in place.
  *
  * WHY THE RETURN VALUE DECIDES. The janitor must never remove a directory it did not create,
- * because a fixed-name directory under the tmpdir can be shared: a source-level cache like
- * `veyyon-stats-client` is created once and read by whatever runs next. `mkdir` says exactly
+ * because a fixed-name directory under the tmpdir can be shared: the private temp directory
+ * `veyyon-<uid>` is created once and used by whatever runs next. `mkdir` says exactly
  * which case happened. With `recursive: true` it returns the topmost directory it created,
  * or `undefined` when everything already existed; without it, the call throws if the target
  * exists, so returning at all means this process made it. Recording the TOPMOST created path

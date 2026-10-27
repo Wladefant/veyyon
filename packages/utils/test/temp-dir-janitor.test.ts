@@ -446,7 +446,7 @@ describe("what a process leaves behind when it exits", () => {
 	/**
 	 * AND THE REFUSAL THAT MAKES THAT SAFE. A directory the child only re-created with
 	 * `recursive: true` survives, because that call created nothing. This is the fixed-name
-	 * shared-cache case: a source module makes `veyyon-stats-client` once and whatever runs
+	 * shared-cache case: `privateTempDir()` makes `veyyon-<uid>` once and whatever runs
 	 * next opens it, and a janitor that claimed it on sight would delete it under a suite
 	 * running in another worker.
 	 */

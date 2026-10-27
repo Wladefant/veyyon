@@ -8,7 +8,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { logger, postmortem } from "@veyyon/utils";
+import { logger, postmortem, privateTempDir } from "@veyyon/utils";
 import type { Subprocess } from "bun";
 import fnEnvHelper from "./shell-snapshot-fn-env.sh" with { type: "text" };
 
@@ -248,18 +248,10 @@ async function createSnapshot(
 
 	const rcFile = getShellConfigFile(shell, env);
 
-	// Create snapshot directory with owner-only perms — the script may inline
-	// env vars referenced by captured functions (#3470) and `os.tmpdir()` is
-	// shared on Linux. `mode: 0o700` applies to a fresh mkdir; an existing dir
-	// keeps its mode, so chmod it defensively. Ignore EPERM (dir owned by
-	// another user on a shared box).
-	const snapshotDir = path.join(os.tmpdir(), "veyyon-shell-snapshots");
+	// The snapshot is sourced before every bash command, so it is written to the user's private temp directory:
+	// in a directory another account owns, that account could replace the file between its write and its use.
+	const snapshotDir = path.join(privateTempDir(), "shell-snapshots");
 	fs.mkdirSync(snapshotDir, { recursive: true, mode: 0o700 });
-	try {
-		fs.chmodSync(snapshotDir, 0o700);
-	} catch {
-		// best-effort
-	}
 
 	// Generate unique snapshot path
 	const shellName = shell.includes("zsh") ? "zsh" : shell.includes("bash") ? "bash" : "sh";

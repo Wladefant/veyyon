@@ -6,6 +6,10 @@
 
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
 
+### Fixed
+
+- The embedded dashboard is extracted into `<tmpdir>/veyyon-<uid>/stats-client` (mode 700) instead of `<tmpdir>/veyyon-stats-client`, where another account could place its own files first.
+
 ## [1.5.9] - 2026-10-22
 
 ### Removed

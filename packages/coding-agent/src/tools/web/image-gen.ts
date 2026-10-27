@@ -39,6 +39,7 @@ import {
 	untilAborted,
 } from "@veyyon/utils";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
+import { privateTempDir } from "@veyyon/utils/temp";
 import packageJson from "../../../package.json" with { type: "json" };
 import { isAuthenticated } from "../../config/auth-state";
 import type { ModelRegistry } from "../../config/model-registry";
@@ -691,7 +692,7 @@ function getExtensionForMime(mimeType: string): string {
 async function saveImageToTemp(image: InlineImageData): Promise<string> {
 	const ext = getExtensionForMime(image.mimeType);
 	const filename = `veyyon-image-${Snowflake.next()}.${ext}`;
-	const filepath = path.join(os.tmpdir(), filename);
+	const filepath = path.join(privateTempDir(), filename);
 	await Bun.write(filepath, Buffer.from(image.data, "base64"));
 	return filepath;
 }

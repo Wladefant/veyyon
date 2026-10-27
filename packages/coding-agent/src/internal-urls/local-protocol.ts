@@ -1,6 +1,5 @@
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 // Owners, not the `@veyyon/utils` barrel: 19 modules against 74. `logger` is a namespace re-export
 // (`export * as logger from "./logger"`), so it is imported as one here.
@@ -8,6 +7,7 @@ import { formatBytes, formatCount } from "@veyyon/utils/format";
 import { isEnoent } from "@veyyon/utils/fs-error";
 import { readFileRange, readFileText } from "@veyyon/utils/fs-io";
 import * as logger from "@veyyon/utils/logger";
+import { privateTempDir } from "@veyyon/utils/temp";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
 import { getContentType } from "./content-type";
@@ -41,11 +41,14 @@ function safeSessionId(options: LocalProtocolOptions): string {
 	return safe.length > 0 ? safe : "session";
 }
 
-function shortLocalRoot(options: LocalProtocolOptions): string {
-	// Derive the short root from the stable session id, never the artifact path,
-	// so `SessionManager.moveTo()` and the resume-after-move flow keep finding
-	// the same `local://` directory the session wrote pre-move.
-	return path.join(os.tmpdir(), "veyyon-local", safeSessionId(options));
+/**
+ * The session's local root in the user's private temp directory, keyed by the stable session id so
+ * `SessionManager.moveTo()` and the resume-after-move flow keep finding the directory the session wrote
+ * pre-move. Private because the path is derived from the session id, which another account on the host
+ * could otherwise create first, read or replace.
+ */
+function tempLocalRoot(options: LocalProtocolOptions): string {
+	return path.join(privateTempDir(), "local", safeSessionId(options));
 }
 
 const LOCAL_TEXT_SNIFF_BYTES = 8 * 1024;
@@ -224,12 +227,12 @@ export function resolveLocalRoot(options: LocalProtocolOptions, platform: NodeJS
 	if (artifactsDir) {
 		const candidate = path.resolve(artifactsDir, "local");
 		if (platform === "win32" && candidate.length >= WINDOWS_LOCAL_ROOT_MAX_CHARS) {
-			return shortLocalRoot(options);
+			return tempLocalRoot(options);
 		}
 		return candidate;
 	}
 
-	return path.join(os.tmpdir(), "veyyon-local", safeSessionId(options));
+	return tempLocalRoot(options);
 }
 
 /**

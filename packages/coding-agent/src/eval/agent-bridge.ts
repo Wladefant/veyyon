@@ -2,10 +2,9 @@
  * Host-side handler for the eval `agent()` helper.
  */
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { errorMessage, prompt, Snowflake } from "@veyyon/utils";
+import { errorMessage, privateTempDir, prompt, Snowflake } from "@veyyon/utils";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { registerArtifactsDir } from "../internal-urls/registry-helpers";
 import { mcpManagerInstance } from "../mcp/manager-instance";
@@ -241,7 +240,7 @@ async function getArtifacts(session: ToolSession): Promise<ArtifactPaths> {
 	const sessionFile = session.getSessionFile();
 	const sessionArtifactsDir = sessionFile ? sessionFile.slice(0, -6) : null;
 	const tempArtifactsDir = sessionArtifactsDir === null;
-	const artifactsDir = sessionArtifactsDir ?? path.join(os.tmpdir(), `veyyon-eval-agent-${Snowflake.next()}`);
+	const artifactsDir = sessionArtifactsDir ?? path.join(privateTempDir(), `veyyon-eval-agent-${Snowflake.next()}`);
 	await fs.mkdir(artifactsDir, { recursive: true });
 	const unregisterArtifactsDir = tempArtifactsDir ? registerArtifactsDir(artifactsDir) : undefined;
 	return { sessionFile, artifactsDir, unregisterArtifactsDir, tempArtifactsDir };

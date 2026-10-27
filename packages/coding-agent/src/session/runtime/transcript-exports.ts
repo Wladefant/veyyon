@@ -7,13 +7,12 @@
  * {@link TranscriptExportsHost}.
  */
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage, AgentState, ThinkingLevel } from "@veyyon/agent-core";
 import type { Message, Model, ServiceTierByFamily } from "@veyyon/ai";
 import { toolWireSchema } from "@veyyon/ai/utils/schema";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { Snowflake } from "@veyyon/utils";
+import { privateTempDir, Snowflake } from "@veyyon/utils";
 import type { SecretObfuscator } from "../../secrets/obfuscator";
 import { lastCopyCandidateAssistantMessage } from "../agent-session-message-shapes";
 import type { CustomMessage } from "../messages";
@@ -127,7 +126,8 @@ export class TranscriptExports {
 	}
 
 	/**
-	 * Write the request the session would send next, as JSON, to an auto-named file in `os.tmpdir()`:
+	 * Write the request the session would send next, as JSON, to an auto-named file in the user's private
+	 * temp directory (`privateTempDir()`):
 	 * system prompt, tools (wire schemas), thinking and service tier, and the converted messages. No
 	 * network round trip runs and no flag is armed, so an advisor or side request cannot intercept it.
 	 * The file holds the same raw context and secrets as `/dump`.
@@ -154,7 +154,7 @@ export class TranscriptExports {
 			})),
 			messages: llmMessages,
 		};
-		const filePath = path.join(os.tmpdir(), `veyyon-llm-request-${Snowflake.next()}.json`);
+		const filePath = path.join(privateTempDir(), `veyyon-llm-request-${Snowflake.next()}.json`);
 		await fs.writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`);
 		return filePath;
 	}

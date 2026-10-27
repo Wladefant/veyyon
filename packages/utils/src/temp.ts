@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { isEexist } from "./fs-error";
 import * as logger from "./logger";
 import { sleepSync } from "./sleep";
 import { errorMessage } from "./type-guards";
@@ -35,6 +36,44 @@ export async function removeTempPath(target: string, context: string): Promise<v
 			error: errorMessage(error),
 		});
 	}
+}
+
+/**
+ * The directory under the system temp directory that only the current user can enter: `<tmpdir>/veyyon-<uid>`,
+ * created with mode 0700, or `<tmpdir>/veyyon` where the platform has no uid (Windows, whose temp directory
+ * is per-user).
+ *
+ * A fixed or guessable name directly under a shared temp directory can be created first by another account,
+ * which can then read what is written there, replace a file between its write and its use, or point the name
+ * at another file with a symbolic link. A temp path that is reused or derived from a guessable id goes under
+ * this directory instead; `TempDir` and `mkdtemp`, whose names are random and created exclusively, do not need
+ * it. An existing entry is used only when it is a directory, not a symbolic link, owned by this user and closed
+ * to group and other; anything else throws with the entry and the fix. The check runs on every call, so a
+ * directory a temp cleaner removed is created again rather than trusted by name.
+ */
+export function privateTempDir(): string {
+	const uid = process.getuid?.();
+	const dir = path.join(os.tmpdir(), uid === undefined ? "veyyon" : `veyyon-${uid}`);
+	try {
+		fs.mkdirSync(dir, { mode: 0o700 });
+	} catch (error) {
+		if (!isEexist(error)) throw error;
+	}
+	if (uid === undefined) return dir;
+	const problem = privateDirProblem(fs.lstatSync(dir), uid);
+	if (problem === null) return dir;
+	throw new Error(
+		`Refusing to use ${dir}: it ${problem}, and only a directory owned by uid ${uid} with mode 700 keeps other accounts out. Remove it, or set TMPDIR to a directory only you can write.`,
+	);
+}
+
+/** Why `stats` is not a directory only `uid` can enter, or `null` when it is one. */
+function privateDirProblem(stats: fs.Stats, uid: number): string | null {
+	if (stats.isSymbolicLink()) return "is a symbolic link";
+	if (!stats.isDirectory()) return "is not a directory";
+	if (stats.uid !== uid) return `is owned by uid ${stats.uid}`;
+	if ((stats.mode & 0o077) !== 0) return `has mode ${(stats.mode & 0o777).toString(8)}`;
+	return null;
 }
 
 export class TempDir {

@@ -10,7 +10,7 @@ import {
 } from "@veyyon/coding-agent/internal-urls";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { removeWithRetries } from "@veyyon/utils";
+import { privateTempDir, removeWithRetries } from "@veyyon/utils";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "local-protocol-"));
@@ -89,7 +89,7 @@ describe("LocalProtocolHandler", () => {
 
 	it("uses session id fallback root when artifacts dir is unavailable", async () => {
 		const root = resolveLocalRoot({ getSessionId: () => "session-fallback", getArtifactsDir: () => null });
-		expect(root).toContain(path.join("veyyon-local", "session-fallback"));
+		expect(root).toBe(path.join(privateTempDir(), "local", "session-fallback"));
 		expect(resolveLocalUrlToPath("local://memo.txt", { getSessionId: () => "session-fallback" })).toBe(
 			path.join(root, "memo.txt"),
 		);
@@ -97,7 +97,7 @@ describe("LocalProtocolHandler", () => {
 
 	it("uses a stable short temp root for long Windows artifact paths", async () => {
 		const longArtifactsDir = path.join(os.tmpdir(), "a".repeat(220), "artifacts");
-		const expectedRoot = path.join(os.tmpdir(), "veyyon-local", "session_long");
+		const expectedRoot = path.join(privateTempDir(), "local", "session_long");
 		const options = {
 			getArtifactsDir: () => longArtifactsDir,
 			getSessionId: () => "session:long",

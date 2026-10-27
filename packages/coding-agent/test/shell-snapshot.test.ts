@@ -8,6 +8,12 @@ import { pathToFileURL } from "node:url";
 import { getOrCreateSnapshot, sanitizeSnapshotForBrush } from "@veyyon/coding-agent/utils/shell-snapshot";
 import fnEnvHelper from "../src/utils/shell-snapshot-fn-env.sh" with { type: "text" };
 
+/** The snapshot directory a process whose temp directory is `tmp` writes to: the user's private temp directory. */
+function snapshotDirIn(tmp: string): string {
+	const uid = process.getuid?.();
+	return path.join(tmp, uid === undefined ? "veyyon" : `veyyon-${uid}`, "shell-snapshots");
+}
+
 // macOS ships bash at `/bin/bash`, not `/usr/bin/bash`; resolve a real bash the
 // same way `bash-executor.test.ts` does so these e2e tests stay portable. The
 // `getOrCreateSnapshot` tests below symlink this under a unique name and skip
@@ -282,7 +288,7 @@ describe("getOrCreateSnapshot", () => {
 
 		// PR-review hardening: snapshot file must be group/world-unreadable since
 		// it now inlines env-var values. Directory must be 0700 for the same
-		// reason — UUID filenames shouldn't leak via `ls /tmp/veyyon-shell-snapshots`.
+		// reason — UUID filenames shouldn't leak via `ls` of the snapshot directory.
 		const fileStat = await fs.stat(snapshotPath!);
 		expect(fileStat.mode & 0o077).toBe(0);
 		const dirStat = await fs.stat(path.dirname(snapshotPath!));
@@ -327,7 +333,7 @@ describe("getOrCreateSnapshot", () => {
 			await fs.chmod(fakeShell, 0o755);
 
 			const env = { ...process.env, HOME: testRoot };
-			const snapshotDir = path.join(testRoot, "veyyon-shell-snapshots");
+			const snapshotDir = snapshotDirIn(testRoot);
 
 			const snapshotPath = await getOrCreateSnapshot(fakeShell, env);
 			expect(snapshotPath).toBeNull();
@@ -352,7 +358,7 @@ describe("getOrCreateSnapshot", () => {
 			const fakeShell = path.join(testRoot, "does-not-exist-shell");
 
 			const env = { ...process.env, HOME: testRoot };
-			const snapshotDir = path.join(testRoot, "veyyon-shell-snapshots");
+			const snapshotDir = snapshotDirIn(testRoot);
 
 			const snapshotPath = await getOrCreateSnapshot(fakeShell, env);
 			expect(snapshotPath).toBeNull();
@@ -379,7 +385,7 @@ describe("getOrCreateSnapshot", () => {
 			await fs.chmod(fakeShell, 0o755);
 
 			const env = { ...process.env, HOME: testRoot };
-			const snapshotDir = path.join(testRoot, "veyyon-shell-snapshots");
+			const snapshotDir = snapshotDirIn(testRoot);
 
 			const snapshotPath = await getOrCreateSnapshot(fakeShell, env);
 			expect(snapshotPath).toBeNull();
@@ -443,7 +449,7 @@ describe("getOrCreateSnapshot", () => {
 				exitCode: 143,
 				created: ["string", "string"],
 			});
-			expect(await fs.readdir(path.join(tmp, "veyyon-shell-snapshots"))).toEqual([]);
+			expect(await fs.readdir(snapshotDirIn(tmp))).toEqual([]);
 		} finally {
 			await fs.rm(root, { recursive: true, force: true });
 		}
@@ -470,7 +476,7 @@ describe("getOrCreateSnapshot", () => {
 			const env = { ...process.env, HOME: home };
 			const parallel = await Promise.all([0, 1, 2].map(() => getOrCreateSnapshot(shell, env)));
 			const later = await getOrCreateSnapshot(shell, env);
-			const files = await fs.readdir(path.join(tmp, "veyyon-shell-snapshots"));
+			const files = await fs.readdir(snapshotDirIn(tmp));
 
 			expect(typeof later).toBe("string");
 			expect({ parallel, files }).toEqual({ parallel: [later, later, later], files: [path.basename(later!)] });
@@ -498,7 +504,7 @@ describe("getOrCreateSnapshot", () => {
 			const shell = path.join(root, "slow-bash.sh");
 			await fs.writeFile(shell, `#!/bin/sh\nsleep 1\nexec ${REAL_BASH} "$@"\n`);
 			await fs.chmod(shell, 0o755);
-			const snapshotDir = path.join(tmp, "veyyon-shell-snapshots");
+			const snapshotDir = snapshotDirIn(tmp);
 			const module = pathToFileURL(path.join(import.meta.dir, "../src/utils/shell-snapshot.ts")).href;
 			const probe = path.join(root, "probe.ts");
 			await fs.writeFile(

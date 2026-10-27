@@ -1,9 +1,16 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { errorMessage, isTimeoutError, postmortem, Snowflake, settleWithin, untilAborted } from "@veyyon/utils";
+import {
+	errorMessage,
+	isTimeoutError,
+	postmortem,
+	privateTempDir,
+	Snowflake,
+	settleWithin,
+	untilAborted,
+} from "@veyyon/utils";
 // The owner, not the barrel: this module reaches the two discard contracts and nothing else.
 import { bestEffort, optionalResult } from "@veyyon/utils/discarded-fault";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
@@ -2206,7 +2213,7 @@ export class WorkerCore {
 						session.browserScreenshotDir,
 						`screenshot-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, -1)}.${ext}`,
 					)
-				: path.join(os.tmpdir(), `veyyon-sshots-${Snowflake.next()}.${ext}`));
+				: path.join(privateTempDir(), `veyyon-sshots-${Snowflake.next()}.${ext}`));
 		await fs.promises.mkdir(path.dirname(dest), { recursive: true });
 		await fs.promises.writeFile(dest, savedBuffer);
 		const info: ScreenshotResult = {
