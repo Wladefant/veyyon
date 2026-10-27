@@ -145,8 +145,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-27 at 4755: the next-turn lease a prompt holds until the agent takes its input
  * added 11 lines (4844), then the mode blocks, the `@path` mention reads and the `before_agent_start`
  * extension input moved into the `turn-input.ts` collaborator (-89).
+ * RE-MEASURED 2026-10-27 at 4692: the release at dispose of the session's jobs, owned job manager,
+ * eval kernels, session-scoped resources and MCP hold moved into the `session-release.ts`
+ * collaborator, and the memory backends' release into `memory-context.ts` (-63).
  */
-const RUNTIME_CEILING = 4_800;
+const RUNTIME_CEILING = 4_700;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -195,6 +198,7 @@ const COLLABORATORS = [
 	"session-branch.ts",
 	"session-events.ts",
 	"session-handoff.ts",
+	"session-release.ts",
 	"session-scope.ts",
 	"session-secrets.ts",
 	"session-stop-hook.ts",

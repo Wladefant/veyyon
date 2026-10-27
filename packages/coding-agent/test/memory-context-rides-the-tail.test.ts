@@ -15,6 +15,10 @@
  * `systemPromptInvalidations()` — rather than trusting the call graph, and they pin the
  * de-duplication too, because a block re-sent every turn would trade a cache miss for
  * unbounded context growth.
+ *
+ * The last case holds the other end of the session: the retains a session queued reach the server
+ * before its dispose drops the Hindsight state, which a dispose that skips the memory release, or
+ * clears the state before flushing it, loses.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
@@ -477,5 +481,25 @@ describe("the first turn of a session", () => {
 			text.includes("the user prefers tabs over spaces"),
 		).length;
 		expect(secondTurnCopies).toBe(1);
+	});
+});
+
+describe("a session that ends", () => {
+	it("sends the retains it queued before it drops its Hindsight state", async () => {
+		// One retain is under the batch size, so only the flush dispose runs sends it before the
+		// assertion below; dropped first, the queue discards it as `session vanished`.
+		const sent: string[][] = [];
+		vi.spyOn(HindsightApi.prototype, "retainBatch").mockImplementation(async (_bankId, items) => {
+			sent.push(items.map(item => item.content));
+			return {} as never;
+		});
+		vi.spyOn(HindsightApi.prototype, "createBank").mockResolvedValue({} as never);
+		const { session } = await harness();
+		session.getHindsightSessionState()?.enqueueRetain("durable fact", "test context");
+
+		await session.dispose();
+
+		expect(sent).toEqual([["durable fact"]]);
+		expect(session.getHindsightSessionState()).toBeUndefined();
 	});
 });

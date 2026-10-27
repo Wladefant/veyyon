@@ -529,11 +529,17 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * `utils/image-loading.ts` and the goals and session prompt rows) are already here. Measured
  * 2026-10-27 at 1523.
  *
+ * 1523 to 1524: `coding-agent/src/session/runtime/session-release.ts`, the session collaborator that
+ * releases at dispose the jobs, owned job manager, eval kernels, session-scoped resources and MCP
+ * hold the session ends with. It left `session/agent-session.ts`, already here, and its runtime
+ * imports (`@veyyon/kernel/session/owned-resources`, `@veyyon/utils` and `async/`) are already here.
+ * Measured 2026-10-27 at 1524.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1523;
+const LAUNCH_REACH_CEILING = 1524;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

@@ -7,7 +7,8 @@
  * prompt collected and then abandoned, is never sent again because a record of what was sent says
  * the model has it; a block is never sent to a new transcript, or sent twice to a fork that already
  * carries it; a hook that throws takes the whole turn's context with it; a rekey or reset reaches the
- * backend that is not active.
+ * backend that is not active; a session that ends drops Hindsight's state before its retain queue
+ * flushed, and the queue discards the batch as `session vanished`, or leaves a backend undisposed.
  *
  * The class this closes is a memory block delivered zero or two times to a transcript that needs it
  * once, or backend state touched for a backend that is not selected. Each case drives the real
@@ -37,13 +38,18 @@ interface BackendState {
 	aliasOf?: object;
 	setSessionId(sessionId: string): void;
 	resetConversationTracking(): void;
+	flushRetainQueue(): Promise<void>;
+	dispose(options?: { timeoutMs?: number }): Promise<void>;
 }
 
-function backendState(label: string, calls: string[]): BackendState {
+/** A backend state that records each call, with whether the session still holds it (`held`). */
+function backendState(label: string, calls: string[], held: () => boolean): BackendState {
 	return {
 		calls,
 		setSessionId: sessionId => calls.push(`${label}.setSessionId(${sessionId})`),
 		resetConversationTracking: () => calls.push(`${label}.reset`),
+		flushRetainQueue: async () => void calls.push(`${label}.flush(held=${held()})`),
+		dispose: async options => void calls.push(`${label}.dispose(held=${held()}, timeoutMs=${options?.timeoutMs})`),
 	};
 }
 
@@ -58,8 +64,10 @@ interface Script {
 function harness(script: Partial<Script> = {}) {
 	const state: Script = { backendId: "hindsight", sessionId: "sid-1", messages: [], ...script };
 	const calls: string[] = [];
-	const hindsight = backendState("hindsight", calls);
-	const mnemopi = backendState("mnemopi", calls);
+	let memory: MemoryContext<Session> | undefined;
+	let mnemopiAttached = true;
+	const hindsight: BackendState = backendState("hindsight", calls, () => (memory?.hindsight as unknown) === hindsight);
+	const mnemopi = backendState("mnemopi", calls, () => mnemopiAttached);
 	const answer = (value: string | Error | undefined): Promise<string | undefined> =>
 		value instanceof Error ? Promise.reject(value) : Promise.resolve(value);
 	const backend: SessionMemoryBackend<Session> = {
@@ -73,12 +81,17 @@ function harness(script: Partial<Script> = {}) {
 			return answer(state.volatile);
 		},
 	};
-	const memory = new MemoryContext<Session>({
+	memory = new MemoryContext<Session>({
 		session: SESSION,
 		backend: async () => backend,
 		backendId: () => state.backendId,
 		sessionId: () => state.sessionId,
-		mnemopiState: () => mnemopi as unknown as MnemopiSessionState,
+		mnemopiState: () => (mnemopiAttached ? (mnemopi as unknown as MnemopiSessionState) : undefined),
+		detachMnemopiState: () => {
+			if (!mnemopiAttached) return undefined;
+			mnemopiAttached = false;
+			return mnemopi as unknown as MnemopiSessionState;
+		},
 		messages: () => state.messages,
 	});
 	memory.swapHindsight(hindsight as unknown as HindsightSessionState);
@@ -276,7 +289,7 @@ describe("rekeying the backend", () => {
 
 	it("reaches the Hindsight state that replaced the old one, and none after it is cleared", () => {
 		const { memory, calls, hindsight } = harness();
-		const replacement = backendState("replacement", calls);
+		const replacement = backendState("replacement", calls, () => false);
 		expect(memory.swapHindsight(replacement as unknown as HindsightSessionState)).toBe(
 			hindsight as unknown as HindsightSessionState,
 		);
@@ -284,6 +297,21 @@ describe("rekeying the backend", () => {
 		expect(memory.swapHindsight(undefined)).toBe(replacement as unknown as HindsightSessionState);
 		memory.rekey();
 		expect(calls).toEqual(["replacement.setSessionId(sid-1)"]);
+	});
+});
+
+describe("the session's end", () => {
+	it("flushes Hindsight while the session still holds it, then drops and disposes both backends", async () => {
+		const { memory, calls } = harness();
+
+		await memory.release(1_234);
+
+		expect(calls).toEqual([
+			"hindsight.flush(held=true)",
+			"hindsight.dispose(held=false, timeoutMs=undefined)",
+			"mnemopi.dispose(held=false, timeoutMs=1234)",
+		]);
+		expect(memory.hindsight).toBeUndefined();
 	});
 });
 

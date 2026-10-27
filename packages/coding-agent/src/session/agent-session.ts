@@ -58,7 +58,6 @@ import { declaredContextWindow } from "@veyyon/kernel/session/agent-session-comp
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import type { ClientBridge } from "@veyyon/kernel/session/client-bridge";
 import { OperatorNotices, stderrNoticeSink } from "@veyyon/kernel/session/operator-notices";
-import { disposeOwnedResources } from "@veyyon/kernel/session/owned-resources";
 import {
 	type BuildSessionContextOptions,
 	compactedHistoryEnd,
@@ -76,7 +75,7 @@ import { contentText } from "@veyyon/utils/content-text";
 import { startupMarker } from "@veyyon/utils/startup-marker";
 import type { ArgotSession } from "argot";
 import type { AdvisorConfig } from "../advisor";
-import { type AsyncJob, AsyncJobManager } from "../async";
+import type { AsyncJob, AsyncJobManager } from "../async";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import { unusableCredentialMessage } from "../config/missing-credentials";
 import type { ModelRegistry } from "../config/model-registry";
@@ -222,6 +221,7 @@ import { SessionApprovals } from "./runtime/session-approvals";
 import { SessionBranch, type TreeNavigationResult } from "./runtime/session-branch";
 import { SessionEvents } from "./runtime/session-events";
 import { SessionHandoff } from "./runtime/session-handoff";
+import { SessionRelease } from "./runtime/session-release";
 import { SessionScope } from "./runtime/session-scope";
 import { type SecretsRefreshOptions, SessionSecrets } from "./runtime/session-secrets";
 import { SessionStopHook } from "./runtime/session-stop-hook";
@@ -631,6 +631,8 @@ export class AgentSession {
 	readonly #ownedJobs: OwnedAsyncJobs;
 	/** The spawned agents, registry scope, IRC traffic, grants and kernels a conversation ends with; see {@link ConversationRelease}. */
 	readonly #conversation: ConversationRelease;
+	/** The jobs, job manager, eval kernels, session resources and MCP hold the session ends with; see {@link SessionRelease}. */
+	readonly #release: SessionRelease;
 
 	/** IRC records reaching this session, the wake turns and auto-replies they start; see {@link IrcDelivery}. */
 	readonly #irc: IrcDelivery;
@@ -913,6 +915,7 @@ export class AgentSession {
 			backendId: () => this.settings.get("memory.backend"),
 			sessionId: () => this.agent.sessionId,
 			mnemopiState: () => getMnemopiSessionState(this),
+			detachMnemopiState: () => setMnemopiSessionState(this, undefined),
 			messages: () => this.agent.state.messages,
 		});
 		this.#providerSessions = new ProviderSessions(
@@ -1030,6 +1033,15 @@ export class AgentSession {
 			},
 			config.asyncJobManager ?? config.ownedAsyncJobManager,
 			config.agentId,
+		);
+		this.#release = new SessionRelease(
+			{
+				ownedJobs: this.#ownedJobs,
+				executions: this.#executions,
+				config,
+				sessionId: () => this.sessionManager.getSessionId(),
+			},
+			this.#evalKernelOwnerId,
 		);
 		this.#thinking = new ThinkingRuntime({
 			agent: this.agent,
@@ -2400,90 +2412,15 @@ export class AgentSession {
 				error: errorMessage(error),
 			});
 		}
-		// Cancel jobs this agent registered so a spawned agent's teardown doesn't
-		// leak its background bash/task work into the parent's manager. Only
-		// the session that owns the manager goes on to dispose it (which itself
-		// nukes any leftover jobs and pending deliveries).
-		this.#ownedJobs.cancelOwn();
-		const ownedAsyncManager = this.#config.ownedAsyncJobManager;
-		if (ownedAsyncManager) {
-			const drained = await ownedAsyncManager.dispose({ timeoutMs: 3_000 });
-			const deliveryState = ownedAsyncManager.getDeliveryState();
-			if (drained === false && deliveryState) {
-				logger.warn("Async job completion deliveries still pending during dispose", { ...deliveryState });
-			}
-			if (AsyncJobManager.instance() === ownedAsyncManager) {
-				AsyncJobManager.setInstance(undefined);
-			}
-		}
-		const evalExecutionsSettled = await this.#executions.settleEvalForDispose();
-		if (!evalExecutionsSettled) {
-			logger.warn("Detaching retained eval-kernel ownership during dispose while eval execution is still active");
-		}
-		// Every owner-scoped subsystem that registered a disposer: the Python, Ruby and Julia
-		// kernels, and the JS eval contexts, which are owner-scoped like the kernels and leaked the
-		// eval subprocess across sessions for the life of the parent before they were reaped
-		// (GRAN-11). This used to be four `await`s naming those four functions, which meant the
-		// first one to throw skipped the rest AND the browser-tab release below. The registry runs
-		// all of them and reports the failures together; see `session/owned-resources.ts`.
-		try {
-			await disposeOwnedResources("eval-kernel-owner", this.#evalKernelOwnerId);
-		} catch (error) {
-			logger.warn("Some owner-scoped resources failed to release during dispose", { error: errorMessage(error) });
-		}
-		// Everything keyed by the SESSION id rather than the eval-kernel owner id. Today that is the
-		// browser tool's headless / spawned Chromium and worker tabs: its `tabs`/`browsers` maps are
-		// module-global, shared with spawned agents and future sessions, so release walks by
-		// `ownerSessionId` (stamped at `acquireTab` creation, never on reuse) and touches only what
-		// THIS session created. The registry carries the 3s bound that keeps a broken CDP close from
-		// stalling `/exit` (issue #3963).
-		const browserOwnerId = this.sessionManager.getSessionId();
-		if (browserOwnerId) {
-			try {
-				await disposeOwnedResources("session", browserOwnerId);
-			} catch (error) {
-				logger.warn("Some session-scoped resources failed to release during dispose", {
-					error: errorMessage(error),
-				});
-			}
-		}
+		await this.#release.releaseWork();
 		this.#inFlight.releasePowerAssertion();
 		await this.sessionManager.close();
 		// beginDispose() stopped the advisor and captured its recorder close; await
 		// it so the final advisor turn is flushed before the process may exit.
 		await this.#advisorRoster.whenRecordersClosed();
 		this.#providerSessions.closeAll("dispose");
-		// Release this session's hold on the MCP manager. The last top-level holder
-		// disconnects it, so its stdio servers are not orphaned at exit and a
-		// conversation that outlives this one keeps them. Best-effort: a failure
-		// here must never throw out of dispose. Spawned agents reuse a parent's
-		// manager without a hold and omit this callback.
-		//
-		// BOUNDED: the manager may hold an HTTP/SSE server whose session-
-		// termination DELETE blocks up to the MCP request timeout (30s default,
-		// unbounded when VEYYON_MCP_TIMEOUT_MS=0), so awaiting `disconnectAll()`
-		// unbounded would stall /exit and print-mode shutdown on a broken remote
-		// endpoint. Race it against a short deadline — stdio close (the subprocess
-		// reap this targets) completes well within the bound; a slow transport
-		// close is left to finish detached. Mirrors the bounded async-job teardown.
-		const releaseMcpManager = this.#config.releaseMcpManager;
-		if (releaseMcpManager) {
-			try {
-				await withTimeout(releaseMcpManager(), 3_000, "Timed out releasing the MCP manager during dispose");
-			} catch (error) {
-				logger.warn("Failed to release the MCP manager during dispose", { error: errorMessage(error) });
-			}
-		}
-		// Flush the retain queue BEFORE clearing the session's pointer so
-		// `HindsightRetainQueue.#doFlush` still sees `session.getHindsightSessionState() === state`.
-		// Reversed, the spliced batch survives just long enough to fail the
-		// identity check and get dropped with a `session vanished` warning.
-		const hindsightState = this.getHindsightSessionState();
-		await hindsightState?.flushRetainQueue();
-		this.setHindsightSessionState(undefined);
-		hindsightState?.dispose();
-		const mnemopiState = setMnemopiSessionState(this, undefined);
-		await mnemopiState?.dispose({ timeoutMs: options.mnemopiConsolidateTimeoutMs });
+		await this.#release.releaseMcpHold();
+		await this.#memory.release(options.mnemopiConsolidateTimeoutMs);
 		this.#disconnectFromAgent();
 		for (const release of this.#listenerReleases.splice(0)) release();
 		this.#events.clear();

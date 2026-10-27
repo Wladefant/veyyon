@@ -12,6 +12,7 @@
  * - **A new transcript** ({@link MemoryContext.rekey}, {@link MemoryContext.resetForNewTranscript})
  *   points the backend state at the current session id, resets its conversation tracking, and
  *   re-derives the delivered block from the transcript the session is now on.
+ * - **The session's end** ({@link MemoryContext.release}) flushes and drops both backends' state.
  */
 import type { AgentMessage } from "@veyyon/agent-core";
 import { errorMessage, logger } from "@veyyon/utils";
@@ -38,6 +39,8 @@ export interface MemoryContextHost<S> {
 	sessionId(): string | undefined;
 	/** The Mnemopi backend's state for this session, when that backend started one. */
 	mnemopiState(): MnemopiSessionState | undefined;
+	/** Clear the Mnemopi backend's state for this session and return the state cleared. */
+	detachMnemopiState(): MnemopiSessionState | undefined;
 	/** The live context, in the order the next request sends it. */
 	messages(): readonly AgentMessage[];
 }
@@ -109,6 +112,22 @@ export class MemoryContext<S> {
 			backendId === "hindsight" ? this.#hindsight : backendId === "mnemopi" ? this.#host.mnemopiState() : undefined;
 		if (state && !state.aliasOf) state.resetConversationTracking();
 		this.#pending = undefined;
+	}
+
+	/**
+	 * Release both backends' state for a session that is ending, giving Mnemopi's consolidation
+	 * `mnemopiConsolidateTimeoutMs` to finish.
+	 *
+	 * The Hindsight retain queue is flushed while the session still holds its state, because
+	 * `HindsightRetainQueue.#doFlush` checks that the session's state is the one it flushes: cleared
+	 * first, the batch it already spliced fails that check and is dropped as `session vanished`.
+	 */
+	async release(mnemopiConsolidateTimeoutMs: number | undefined): Promise<void> {
+		const hindsight = this.#hindsight;
+		await hindsight?.flushRetainQueue();
+		this.#hindsight = undefined;
+		hindsight?.dispose();
+		await this.#host.detachMnemopiState()?.dispose({ timeoutMs: mnemopiConsolidateTimeoutMs });
 	}
 
 	/**
