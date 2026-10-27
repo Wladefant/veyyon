@@ -385,6 +385,9 @@ describe("terminal-control CLI and owner discovery client", () => {
 				sessionFile: path.join(tempDir, "s.jsonl"),
 				endpoint,
 				token: "bearer-token-12345",
+				loadedVersion: "1.5.8",
+				loadedBuildSha: null,
+				capabilities: ["deliver-ack", "session-notices", "rotate"],
 			};
 
 			const result = await sendTerminalControlRotate(owner);
@@ -416,6 +419,9 @@ describe("terminal-control CLI and owner discovery client", () => {
 				sessionFile: path.join(tempDir, "s.jsonl"),
 				endpoint,
 				token: "secret-bearer-credential",
+				loadedVersion: "1.5.8",
+				loadedBuildSha: null,
+				capabilities: ["deliver-ack", "session-notices", "rotate"],
 			};
 
 			await expect(sendTerminalControlRotate(owner)).rejects.toThrow("Terminal control rotation failed");
@@ -435,6 +441,9 @@ describe("terminal-control CLI and owner discovery client", () => {
 				sessionFile: path.join(tempDir, "s.jsonl"),
 				endpoint,
 				token: "tok",
+				loadedVersion: "1.5.8",
+				loadedBuildSha: null,
+				capabilities: ["deliver-ack", "session-notices", "rotate"],
 			};
 
 			await expect(sendTerminalControlRotate(owner)).rejects.toThrow(

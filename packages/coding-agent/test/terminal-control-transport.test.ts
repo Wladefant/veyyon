@@ -380,7 +380,7 @@ describe("terminal-control-transport", () => {
 
 		// WHY: issue 580. The socket is the control channel, so it must be owner-only. This checks a real
 		// socket's mode and owner, not the source text, because chmod or the owner check can regress unnoticed.
-		it("creates the POSIX control socket with mode 0600 owned by the current uid", async () => {
+		it.skipIf(process.getuid === undefined)("creates the POSIX control socket with mode 0600 owned by the current uid (requires process.getuid)", async () => {
 			const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-transport-test-"));
 			cleanupActions.push(() => fs.rm(tempDir, { recursive: true, force: true }));
 			const socketPath = path.join(tempDir, "control.sock");
@@ -391,9 +391,9 @@ describe("terminal-control-transport", () => {
 			const stat = await fs.lstat(socketPath);
 			expect(stat.isSocket()).toBe(true);
 			expect(stat.mode & 0o777).toBe(0o600);
-			const processUid = process.getuid?.();
-			expect(processUid).toBeDefined();
-			expect(stat.uid).toBe(processUid);
+			const uid = process.getuid?.();
+			if (uid === undefined) return;
+			expect(stat.uid).toBe(uid);
 		});
 	}
 
