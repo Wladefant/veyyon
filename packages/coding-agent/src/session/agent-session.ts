@@ -841,6 +841,8 @@ export class AgentSession {
 		effectiveServiceTier: model => this.#effectiveServiceTier(model),
 		baseSystemPrompt: () => this.#toolActivation.baseSystemPrompt,
 		nonMessageTokens: () => computeNonMessageTokens(this),
+		nonMessageBreakdown: () => computeNonMessageBreakdown(this),
+		unloadIdleDiscoveredMCPTools: () => this.unloadIdleDiscoveredMCPTools(),
 		estimateStoredContextTokens: () => this.#context.estimateStoredTokens(),
 		memoryBackendContext: preparation => collectMemoryBackendContext(this, preparation),
 		withPlanProtection: config => this.#planMode.withProtection(config),
@@ -1556,6 +1558,7 @@ export class AgentSession {
 				registry: this.#toolRegistry,
 				activeToolNames: () => this.getActiveToolNames(),
 				discoveryModeFor: toolCount => resolveEffectiveToolDiscoveryMode(this.settings, toolCount),
+				mcpActivationLimit: () => this.settings.get("mcp.discoveryActiveLimit"),
 			},
 			config,
 		);
@@ -2748,6 +2751,7 @@ export class AgentSession {
 				// already reached.
 				this.#streamingEdit.resetForTurn();
 				this.#goalRuntime.onTurnStart(`turn-${++this.#goalTurnCounter}`);
+				this.#logRequestComposition();
 				await this.#emitSessionEvent(event);
 				this.#ttsr.onTurnStart();
 				return;
@@ -2758,6 +2762,7 @@ export class AgentSession {
 				return;
 			case "tool_execution_start": {
 				this.#finalize.evidence.recordToolStart(event);
+				this.#discovery.touchMCP(event.toolName);
 				// The intent rides on the execution events rather than in the message
 				// content, so the content-level expansion never reaches it. Without
 				// this the working line announces a call in raw handle form while the
@@ -4141,6 +4146,29 @@ export class AgentSession {
 		if (!activation) return [];
 		await this.setActiveToolsByName(activation.nextActive);
 		return activation.activated;
+	}
+
+	/**
+	 * Unload the MCP tools that discovery activated and that no message in the live history calls.
+	 * Runs after a compaction, whose rebuilt history holds only the turns it kept: a tool the kept
+	 * turns never used goes back to being findable by search instead of billing its schema on every
+	 * request. The new selection persists through the same path an activation uses. Tools a
+	 * configuration loads, and every non-MCP tool, stay.
+	 *
+	 * @returns the names unloaded.
+	 */
+	async unloadIdleDiscoveredMCPTools(): Promise<string[]> {
+		const calledNames = new Set<string>();
+		for (const message of this.agent.state.messages) {
+			if (message.role !== "assistant") continue;
+			for (const block of message.content) {
+				if (block.type === "toolCall") calledNames.add(block.name);
+			}
+		}
+		const plan = this.#discovery.planMCPUnload(calledNames);
+		if (!plan) return [];
+		await this.setActiveToolsByName(plan.nextActive);
+		return plan.unloaded;
 	}
 
 	// ── Generic tool discovery (covers built-in + MCP + extension) ────────────
@@ -7683,6 +7711,24 @@ export class AgentSession {
 		pendingMessages?: AgentMessage[];
 	}): ContextUsageBreakdown | undefined {
 		return this.#context.breakdown(options);
+	}
+
+	/** Debug-log what the request about to be sent is made of, so a context that stays full can be explained. */
+	#logRequestComposition(): void {
+		try {
+			const parts = this.#context.breakdown();
+			logger.debug("Request composition", {
+				systemPromptTokens: parts.systemPromptTokens,
+				toolDefinitionTokens: parts.systemToolsTokens,
+				systemContextTokens: parts.systemContextTokens,
+				skillsTokens: parts.skillsTokens,
+				historyTokens: parts.messagesTokens,
+				usedTokens: parts.usedTokens,
+				contextWindow: parts.contextWindow,
+			});
+		} catch (error) {
+			logger.debug("Request composition unavailable", { error: errorMessage(error) });
+		}
 	}
 
 	getContextUsage(options?: { contextWindow?: number }): ContextUsage | undefined {

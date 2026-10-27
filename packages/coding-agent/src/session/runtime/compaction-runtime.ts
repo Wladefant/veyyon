@@ -42,6 +42,7 @@ import { type CompactModeDef, findCompactMode } from "@veyyon/kernel/session/com
 import { getLatestCompactionEntry, type SessionContext } from "@veyyon/kernel/session/session-context";
 import type { CompactionEntry, SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { errorMessage, isAbortError, logger } from "@veyyon/utils";
+import type { NonMessageBreakdown } from "./context-accounting";
 import {
 	type CompactionEngineAction,
 	resolveCompactionEngineAction,
@@ -79,6 +80,10 @@ export interface CompactionHost extends CompactionSummarizerHost, CompactionReco
 	promptGeneration(): number;
 	/** Tokens the system prompt and the tool catalog add to every request. */
 	nonMessageTokens(): number;
+	/** Where the fixed tokens go: system prompt, tool definitions, skills, system context. */
+	nonMessageBreakdown(): NonMessageBreakdown;
+	/** Unload discovery-activated MCP tools no message in the live history calls; returns the names. */
+	unloadIdleDiscoveredMCPTools(): Promise<string[]>;
 	resetAllAdvisorRuntimes(): void;
 	/** Rebuild what was read from the replaced history: the plan reference, the advisors and the todo list. */
 	afterHistoryCompacted(): void;
@@ -118,6 +123,8 @@ export class CompactionRuntime {
 	// switch to a smaller window), so the operator's configured amount is never
 	// silently reinterpreted. See #noticeCompactionThresholdClamp.
 	#compactionClampNoticeWindow: number | undefined = undefined;
+	/** Armed after an automatic pass left the context over the threshold; see {@link #updateThresholdLoopGuard}. */
+	#thresholdLoopGuard: { fixedTokens: number; noticed: boolean } | undefined = undefined;
 	readonly #summarizer: CompactionSummarizer;
 	readonly #recovery: CompactionRecovery;
 
@@ -534,6 +541,7 @@ export class CompactionRuntime {
 		const compactionSettings = this.#session.settings.getGroup("compaction");
 		// Idle compaction has its own gate; `compaction.enabled` governs the rest.
 		if (reason !== "idle" && !compactionSettings.enabled) return COMPACTION_CHECK_NONE;
+		if (reason === "threshold" && this.#thresholdLoopGuardHolds(compactionSettings)) return COMPACTION_CHECK_NONE;
 		const generation = this.#host.promptGeneration();
 		this.#summarizer.forgetPayloadGap();
 		const suppressContinuation = options.suppressContinuation === true;
@@ -647,6 +655,7 @@ export class CompactionRuntime {
 			// triggered by that event already reflects any rescue rewrite (elide /
 			// image-drop) and the dead-end warning stamped on the compaction entry.
 			const progress = await this.#recovery.autoCompactionProgress(reason, willRetry, autoCompactionSignal);
+			this.#updateThresholdLoopGuard(reason, compactionSettings);
 			const deadEndWarning = progress.deadEnd ? compactionDeadEndWarning() : undefined;
 			if (deadEndWarning && savedCompactionEntry) {
 				// Stamp the divider: the compaction bar badges the dead-end and
@@ -764,6 +773,7 @@ export class CompactionRuntime {
 		this.#session.agent.replaceMessages(this.#session.buildDisplaySessionContext().messages);
 		this.#host.rebasePendingContextSnapshotAfterHistoryRewrite();
 		this.#host.afterHistoryCompacted();
+		await this.#unloadIdleDiscoveredTools();
 		if (codexCompaction) {
 			this.#resetCodexProviderAfterCompaction(codexCompaction);
 		} else {
@@ -789,4 +799,73 @@ export class CompactionRuntime {
 			compaction,
 		});
 	}
+
+	/**
+	 * Unload the MCP tools discovery activated that the kept turns never called. A failure here
+	 * must not fail the compaction that already committed, so it is logged and swallowed.
+	 */
+	async #unloadIdleDiscoveredTools(): Promise<void> {
+		try {
+			const unloaded = await this.#host.unloadIdleDiscoveredMCPTools();
+			if (unloaded.length > 0) logger.debug("Unloaded idle discovered MCP tools after compaction", { unloaded });
+		} catch (error) {
+			logger.warn("Unloading idle discovered MCP tools after compaction failed", { error: errorMessage(error) });
+		}
+	}
+
+	/**
+	 * Arm the loop guard when an automatic pass leaves the context over the threshold; disarm it
+	 * once the context fits again. Armed, a threshold trigger cannot shrink anything the pass did
+	 * not already shrink: the fixed part (system prompt, tool definitions) is what fills the window.
+	 */
+	#updateThresholdLoopGuard(
+		reason: AutoCompactionReason,
+		compactionSettings: Parameters<CompactionRecovery["thresholdStillTrips"]>[0],
+	): void {
+		if (reason === "idle") return;
+		if (!this.#recovery.thresholdStillTrips(compactionSettings)) {
+			this.#thresholdLoopGuard = undefined;
+			return;
+		}
+		this.#thresholdLoopGuard = { fixedTokens: this.#host.nonMessageTokens(), noticed: false };
+	}
+
+	/**
+	 * Whether the guard refuses a threshold-triggered compaction. It holds while the fixed part is
+	 * unchanged and the context still trips the threshold, and says why once. A changed fixed part
+	 * (tool set shrank, reload) or a context under the threshold re-arms the trigger.
+	 */
+	#thresholdLoopGuardHolds(compactionSettings: Parameters<CompactionRecovery["thresholdStillTrips"]>[0]): boolean {
+		const guard = this.#thresholdLoopGuard;
+		if (!guard) return false;
+		if (guard.fixedTokens !== this.#host.nonMessageTokens()) {
+			this.#thresholdLoopGuard = undefined;
+			return false;
+		}
+		if (!this.#recovery.thresholdStillTrips(compactionSettings)) {
+			this.#thresholdLoopGuard = undefined;
+			return true;
+		}
+		if (!guard.noticed) {
+			guard.noticed = true;
+			this.#session.emitNotice("warning", this.#thresholdLoopNotice(), "compaction");
+		}
+		return true;
+	}
+
+	/** Name what fills the context: system prompt, tool definitions, and the rest of the history. */
+	#thresholdLoopNotice(): string {
+		const parts = this.#host.nonMessageBreakdown();
+		const fixed = this.#host.nonMessageTokens();
+		const total = this.#session.getContextUsage()?.tokens ?? fixed;
+		const history = Math.max(0, total - fixed);
+		return (
+			"Automatic compaction is paused: the context is still over the compaction threshold right after a compaction, " +
+			"and compacting again would not shrink it. " +
+			`System prompt ~${parts.systemPromptTokens} tokens, tool definitions ~${parts.toolsTokens} tokens, ` +
+			`summary and history ~${history} tokens. ` +
+			"Disable unused MCP servers or tools, or start a new session. It resumes when the context fits or the tool set changes."
+		);
+	}
 }
+

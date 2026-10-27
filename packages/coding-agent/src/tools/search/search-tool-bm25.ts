@@ -21,7 +21,9 @@ const DEFAULT_LIMIT = 8;
  * How close to the best match a tool must score to be activated by the same
  * call. BM25 rank order is not a decision: a natural-language query matches the
  * tail of the inventory weakly, and activating that tail bills its schema on
- * every later request of the session, silently. Measured on the default hidden
+ * every later request until the tool is unloaded (a compaction unloads MCP
+ * tools the kept turns never called, and `mcp.discoveryActiveLimit` evicts the
+ * least recently used), silently. Measured on the default hidden
  * set, "keep track of what is left to do" activated `todo` plus `set_cwd`,
  * `task` and `web_search`, costing 2,239 tokens a request where `todo` alone
  * costs 1,048. A near-tie is still activated, because a fuzzy query whose best

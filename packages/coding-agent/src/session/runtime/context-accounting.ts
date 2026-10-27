@@ -138,7 +138,7 @@ export class ContextAccounting {
 
 	usage(options?: { contextWindow?: number }): ContextUsage {
 		const breakdown = this.breakdown(options);
-		return toUsage(breakdown.usedTokens, breakdown.contextWindow);
+		return { ...toUsage(breakdown.usedTokens, breakdown.contextWindow), toolsTokens: breakdown.systemToolsTokens };
 	}
 
 	/**

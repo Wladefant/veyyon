@@ -712,6 +712,25 @@ export const TOOLS_SETTINGS = {
 		},
 	},
 
+	"mcp.discoveryActiveLimit": {
+		type: "number",
+		default: 24,
+		ui: {
+			tab: "tools",
+			group: "Discovery & MCP",
+			label: "MCP Discovery Active Limit",
+			description:
+				"Most MCP tools that tool discovery keeps loaded at once. Activating more unloads the least recently used ones, which stay findable by search. 0 means no limit. Tools from the default servers never count.",
+			options: [
+				{ value: "0", label: "No limit" },
+				{ value: "8", label: "8 tools" },
+				{ value: "16", label: "16 tools" },
+				{ value: "24", label: "24 tools" },
+				{ value: "48", label: "48 tools" },
+			],
+		},
+	},
+
 	"mcp.notifications": {
 		type: "boolean",
 		default: false,

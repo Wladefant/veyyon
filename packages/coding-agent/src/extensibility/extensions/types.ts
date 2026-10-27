@@ -343,6 +343,8 @@ export interface ContextUsage {
 	contextWindow: number;
 	/** Context usage as percentage of context window. */
 	percent: number;
+	/** Estimated tokens the tool definitions add to every request; absent when not measured. */
+	toolsTokens?: number;
 }
 
 export interface CompactOptions {

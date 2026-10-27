@@ -552,6 +552,7 @@ veyyon config get compaction.threshold
 | `tools.essentialOverride` | Essential Tools Override | array | `[]` | Override the always-loaded built-in tools (default: read, bash, launch, edit, write, search, eval). Leave empty to use defaults. |
 | `mcp.discoveryMode` | MCP Tool Discovery | boolean | `false` | Hide MCP tools from the tool list and expose them through a tool discovery tool. |
 | `mcp.discoveryDefaultServers` | MCP Discovery Default Servers | array | `[]` | Keep MCP tools from these servers visible while discovery mode hides other MCP tools. |
+| `mcp.discoveryActiveLimit` | MCP Discovery Active Limit | number | `24` | Most MCP tools that tool discovery keeps loaded at once. Activating more unloads the least recently used ones, which stay findable by search. 0 means no limit. Tools from the default servers never count. |
 | `mcp.notifications` | MCP Update Injection | boolean | `false` | Inject MCP resource updates into the agent conversation. |
 | `mcp.notificationDebounceMs` | MCP Notification Delay | number | `500` | Milliseconds of quiet after an MCP resource update before one notification for that resource is added to the conversation; further updates to the same resource inside the window restart it. |
 

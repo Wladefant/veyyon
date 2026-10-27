@@ -38,6 +38,8 @@ export interface ToolDiscoveryHost {
 	activeToolNames(): string[];
 	/** `tools.discoveryMode` resolved for a registry of `toolCount` tools. */
 	discoveryModeFor(toolCount: number): EffectiveToolDiscoveryMode;
+	/** Most MCP tools discovery keeps loaded at once; 0 lifts the cap. */
+	mcpActivationLimit(): number;
 }
 
 /** The session configuration discovery starts from. */
@@ -57,6 +59,8 @@ export interface ToolDiscoveryConfig {
 /** An MCP activation: the names it activated and the full active list that carries them. */
 export interface MCPActivation {
 	activated: string[];
+	/** Discovery-activated tools the cap unloaded to make room, least recently used first. */
+	evicted: string[];
 	nextActive: string[];
 }
 
@@ -72,6 +76,9 @@ export class ToolDiscovery {
 	#selectedMCP: Set<string>;
 	#selectedLocal = new Set<string>();
 	readonly #builtIn: Set<string>;
+	/** When each MCP tool was last activated or called: a counter reading, higher is newer. */
+	readonly #lastUsed = new Map<string, number>();
+	#useClock = 0;
 	readonly #defaultMCPServers: ReadonlySet<string>;
 	readonly #defaultMCPTools: ReadonlySet<string>;
 	/** The configured default MCP selection each session file was opened with, by resolved path. */
@@ -205,12 +212,65 @@ export class ToolDiscovery {
 			if (!isMCPToolName(name) || !this.#mcpTools.has(name) || !registry.has(name)) continue;
 			nextSelected.add(name);
 			activated.add(name);
+			this.touchMCP(name);
 		}
 		if (activated.size === 0) return undefined;
+		const evicted = this.#evictOverLimit(nextSelected, activated);
 		return {
 			activated: Array.from(activated),
+			evicted,
 			nextActive: this.activeNonMCP().concat(this.selectableMCP(nextSelected)),
 		};
+	}
+
+	/** Record that the MCP tool `name` was just activated or called. */
+	touchMCP(name: string): void {
+		if (this.#mcpTools.has(name)) this.#lastUsed.set(name, ++this.#useClock);
+	}
+
+	/**
+	 * The selected MCP tools that discovery activated: the selection minus the configured defaults,
+	 * which a configuration loads and discovery never unloads.
+	 */
+	discoveryActivatedMCP(): string[] {
+		const configured = new Set(this.configuredDefaultMCP());
+		return this.selectedMCP().filter(name => !configured.has(name));
+	}
+
+	/**
+	 * The active list left after unloading every discovery-activated MCP tool not named in `keep`, or
+	 * `undefined` when discovery is off or nothing would unload. Unloaded tools are inactive, so the
+	 * search finds them again.
+	 */
+	planMCPUnload(keep: ReadonlySet<string>): { unloaded: string[]; nextActive: string[] } | undefined {
+		if (!this.#mcpEnabled) return undefined;
+		const unloaded = this.discoveryActivatedMCP().filter(name => !keep.has(name));
+		if (unloaded.length === 0) return undefined;
+		const drop = new Set(unloaded);
+		return {
+			unloaded,
+			nextActive: this.#host.activeToolNames().filter(name => !drop.has(name)),
+		};
+	}
+
+	/**
+	 * Remove from `selected` the least recently used discovery-activated tools until the cap holds.
+	 * A tool in `protect` (the ones this activation asked for) stays even when that leaves the
+	 * selection over the cap.
+	 */
+	#evictOverLimit(selected: Set<string>, protect: ReadonlySet<string>): string[] {
+		const limit = this.#host.mcpActivationLimit();
+		if (!(limit > 0)) return [];
+		const configured = new Set(this.configuredDefaultMCP());
+		const candidates = this.selectableMCP(selected).filter(name => !configured.has(name));
+		const excess = candidates.length - limit;
+		if (excess <= 0) return [];
+		const evictable = candidates
+			.filter(name => !protect.has(name))
+			.sort((left, right) => (this.#lastUsed.get(left) ?? 0) - (this.#lastUsed.get(right) ?? 0))
+			.slice(0, excess);
+		for (const name of evictable) selected.delete(name);
+		return evictable;
 	}
 
 	/**
