@@ -443,7 +443,7 @@ export async function submitInteractiveInput(
 			await session.promptCustomMessage(message, { streamingBehavior });
 		} else if (input.synthetic) {
 			// Synthetic continue shortcuts are hidden developer prompts. The streaming
-			// queue (#queueUserMessage) only carries user-attributed messages, so we do
+			// queue (QueuedMessages.queueUser) only carries user-attributed messages, so we do
 			// NOT pass streamingBehavior here: queueing would silently demote the
 			// developer directive to a visible user message. A synthetic submit while
 			// streaming keeps its prior behavior (rejected as busy) rather than changing

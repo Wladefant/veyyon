@@ -210,13 +210,8 @@ import { contextPromotionTarget } from "./agent-session-model-targets";
 import {
 	IMAGE_ATTACHMENT_DESCRIPTION_TYPE,
 	isAdvisorCard,
-	isDisplayableQueuedMessage,
-	isHiddenUserCompanion,
 	isTerminalTextAssistantAnswer,
-	isUserQueuedMessage,
-	queueChipText,
 	type RestoredQueuedMessage,
-	toRestoredQueuedMessage,
 } from "./agent-session-queue";
 import { retryFallbackChainWarnings } from "./agent-session-retry-fallback";
 import { buildGoalTodoContext, createMagicKeywordNotices, magicKeywordEnabled } from "./agent-session-turn-notices";
@@ -291,6 +286,7 @@ import { PostPromptTasks } from "./runtime/post-prompt-tasks";
 import { ProviderSessions } from "./runtime/provider-sessions";
 import { ProviderUsage } from "./runtime/provider-usage";
 import { ProviderWire } from "./runtime/provider-wire";
+import { QueuedMessages } from "./runtime/queued-messages";
 import { ReplanTitleRefresh } from "./runtime/replan-title-refresh";
 import { RetryRuntime } from "./runtime/retry-runtime";
 import { SessionApprovals } from "./runtime/session-approvals";
@@ -613,13 +609,12 @@ function withQueueChipText<T>(details: T | undefined, queueChipText: string): T 
 	return { ...base, __queueChipText: queueChipText } as T;
 }
 
-/** Queue a custom message without starting a turn, matching steer/follow-up delivery. */
-async function queueCustomMessage<T = unknown>(
-	session: AgentSession,
+/** A custom message as steer/follow-up delivery queues it, without starting a turn. */
+async function queuedCustomMessage<T = unknown>(
 	message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
-	deliverAs: "steer" | "followUp",
+	model: Model | undefined,
 	queueChipText?: string,
-): Promise<void> {
+): Promise<CustomMessage<T>> {
 	const details = queueChipText !== undefined ? withQueueChipText(message.details, queueChipText) : message.details;
 	const appMessage: CustomMessage<T> = {
 		role: "custom",
@@ -630,12 +625,7 @@ async function queueCustomMessage<T = unknown>(
 		attribution: message.attribution ?? "agent",
 		timestamp: Date.now(),
 	};
-	const normalizedAppMessage = await normalizeAgentMessageImages(appMessage, session.model);
-	if (deliverAs === "followUp") {
-		session.agent.followUp(normalizedAppMessage);
-	} else {
-		session.agent.steer(normalizedAppMessage);
-	}
+	return normalizeAgentMessageImages(appMessage, model);
 }
 
 export class AgentSession {
@@ -680,7 +670,6 @@ export class AgentSession {
 	#eventListeners: AgentSessionEventListener[] = [];
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
 
-	#queuedMessageDrainScheduled = false;
 	/** Plan mode state, the approved-plan reference, and the decision ladder. */
 	readonly #planMode: PlanModeRuntime;
 	#vibeModeState: VibeModeState | undefined;
@@ -901,6 +890,8 @@ export class AgentSession {
 				skipPostPromptRecoveryWait: true,
 			}),
 	});
+	/** Steers and follow-ups waiting on the agent's queues and the drain that starts a turn on them; see {@link QueuedMessages}. */
+	readonly #queue: QueuedMessages;
 
 	/** Prompts in flight and the power assertion held while any runs. */
 	readonly #inFlight: TurnsInFlight;
@@ -917,14 +908,6 @@ export class AgentSession {
 	/** Stale-result and overflow prunes, image drops, shake and dedup of the recorded history. */
 	readonly #rewrites: HistoryRewrites;
 	#promptGeneration = 0;
-	/**
-	 * Prompts refused as busy and waiting for the agent to go idle. Each is a
-	 * turn already committed to, held by nothing the queues can see: the hidden
-	 * next-turn message was pulled from its queue the moment it was scheduled.
-	 * Counted as queued work so an `agent_end` handler asking whether anything
-	 * is coming reads the turn that is.
-	 */
-	#promptsWaitingOnIdle = 0;
 	// Wire-level agent_end emission deferred until no prompt is in flight.
 	// Internal extension hooks and post-emit work (auto-retry, auto-compaction, todo
 	// checks in #handleAgentEvent) still fire on the original schedule — only the
@@ -989,14 +972,14 @@ export class AgentSession {
 		// that interrupt's suppression is still in effect, reclaim such advisor steers
 		// as visible advice once idle — mirroring abort's advisor-card extraction —
 		// so they neither auto-resume the run the user stopped (a non-empty steer queue
-		// otherwise bypasses the latch in #canAutoContinueForFollowUp) nor linger to
+		// otherwise bypasses the latch in QueuedMessages.canAutoContinueForFollowUp) nor linger to
 		// flush at the next prompt. Real user steers/follow-ups are left untouched.
 		if (this.#advisorRoster.autoResumeSuppressed && !this.isStreaming) {
 			for (const card of this.#advisorRoster.extractQueuedCards()) {
 				this.#advisorRoster.preserveCard(card);
 			}
 		}
-		this.#scheduleQueuedMessageDrain();
+		this.#queue.scheduleDrain();
 		this.#irc.resumeStranded();
 	}
 
@@ -1050,7 +1033,7 @@ export class AgentSession {
 			asyncEnabled: () => this.settings.get("async.enabled"),
 			emitIrcMessage: record => void this.#emitSessionEvent({ type: "irc_message", message: record }),
 			appendToContext: record => this.#appendCustomMessageToContext(record),
-			canAutoContinueForFollowUp: () => this.#canAutoContinueForFollowUp(),
+			canAutoContinueForFollowUp: () => this.#queue.canAutoContinueForFollowUp(),
 			beginWakeTurn: () => {
 				this.#resetPromptMaintenanceState();
 				this.#inFlight.begin();
@@ -1571,6 +1554,15 @@ export class AgentSession {
 
 		this.#advisorRoster = this.#createAdvisorRoster(config);
 		this.#advisorRoster.enableFromSettings();
+		this.#queue = new QueuedMessages({
+			agent: this.agent,
+			isStreaming: () => this.isStreaming,
+			isRetrying: () => this.isRetrying,
+			advisors: this.#advisorRoster,
+			textWithImages: (text, images) => this.#textWithImages(text, images),
+			scheduleContinue: () => this.#scheduleAgentContinue(),
+			nextTurnCount: () => this.#nextTurn.count,
+		});
 		this.#sessionSwitch = this.#createSessionSwitch();
 		this.#sessionBranch = this.#createSessionBranch();
 		this.#sessionHandoff = this.#createSessionHandoff();
@@ -4043,11 +4035,7 @@ export class AgentSession {
 			for (const notice of keywordNotices) {
 				await this.sendCustomMessage(notice, { deliverAs: options.streamingBehavior });
 			}
-			if (options.streamingBehavior === "followUp") {
-				await this.#queueUserMessage(expandedText, options?.images, "followUp");
-			} else {
-				await this.#queueUserMessage(expandedText, options?.images, "steer");
-			}
+			await this.#queue.queueUser(expandedText, options?.images, options.streamingBehavior);
 			return true;
 		}
 
@@ -4122,9 +4110,12 @@ export class AgentSession {
 				throw new AgentBusyError();
 			}
 			for (const notice of keywordNotices) {
-				await queueCustomMessage(this, notice, options.streamingBehavior);
+				this.#queue.enqueue(await queuedCustomMessage(notice, this.model), options.streamingBehavior);
 			}
-			await queueCustomMessage(this, message, options.streamingBehavior, options.queueChipText);
+			this.#queue.enqueue(
+				await queuedCustomMessage(message, this.model, options.queueChipText),
+				options.streamingBehavior,
+			);
 			return;
 		}
 		if (this.isStreaming) {
@@ -4389,7 +4380,7 @@ export class AgentSession {
 		}
 
 		const expandedText = expandPromptTemplate(text, [...this.#promptTemplates]);
-		await this.#queueUserMessage(expandedText, images, "steer");
+		await this.#queue.queueUser(expandedText, images, "steer");
 	}
 
 	/**
@@ -4406,104 +4397,11 @@ export class AgentSession {
 
 		const expandedText =
 			options?.expandPromptTemplates === false ? text : expandPromptTemplate(text, [...this.#promptTemplates]);
-		if (!options?.synthetic) {
-			await this.#queueUserMessage(expandedText, images, "followUp");
-			return;
-		}
-		// Synthetic branch: agent-initiated hidden developer message. Bypass
-		// #queueUserMessage (which clears advisor auto-resume suppression and
-		// enqueues as a user-attributed message) and place the developer message
-		// directly on the follow-up queue.
-		const { content, imageDescriptionNotice } = await this.#textWithImages(expandedText, images);
-		if (imageDescriptionNotice) this.agent.followUp(imageDescriptionNotice);
-		this.agent.followUp({
-			role: "developer",
-			content,
-			attribution: options.attribution ?? "agent",
-			timestamp: Date.now(),
-		});
-		this.#scheduleIdleQueueDrain();
-	}
-
-	async #queueUserMessage(
-		text: string,
-		images: ImageContent[] | undefined,
-		mode: "steer" | "followUp",
-	): Promise<void> {
-		// A queued user message (RPC/SDK/collab steer or follow-up, or a typed message
-		// while streaming) is a deliberate resume; re-enable advisor auto-resume that
-		// a user interrupt suppressed.
-		this.#advisorRoster.allowAutoResume();
-		const { content, imageDescriptionNotice } = await this.#textWithImages(text, images);
-		if (mode === "followUp") {
-			if (imageDescriptionNotice) this.agent.followUp(imageDescriptionNotice);
-			this.agent.followUp({
-				role: "user",
-				content,
-				attribution: "user",
-				timestamp: Date.now(),
-			});
+		if (options?.synthetic) {
+			await this.#queue.queueDeveloperFollowUp(expandedText, images, options.attribution ?? "agent");
 		} else {
-			if (imageDescriptionNotice) this.agent.steer(imageDescriptionNotice);
-			this.agent.steer({
-				role: "user",
-				content,
-				steering: true,
-				attribution: "user",
-				timestamp: Date.now(),
-			});
+			await this.#queue.queueUser(expandedText, images, "followUp");
 		}
-		this.#scheduleIdleQueueDrain();
-	}
-
-	#scheduleIdleQueueDrain(): void {
-		this.#scheduleQueuedMessageDrain();
-	}
-
-	#scheduleQueuedMessageDrain(): void {
-		if (this.#queuedMessageDrainScheduled || !this.#canAutoContinueForFollowUp() || !this.agent.hasQueuedMessages()) {
-			return;
-		}
-		this.#queuedMessageDrainScheduled = true;
-		this.#scheduleAgentContinue({
-			shouldContinue: () => {
-				this.#queuedMessageDrainScheduled = false;
-				return this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages();
-			},
-			onSkip: () => {
-				this.#queuedMessageDrainScheduled = false;
-			},
-			onError: () => {
-				this.#queuedMessageDrainScheduled = false;
-			},
-		});
-	}
-
-	/**
-	 * Gate for idle-path queued-message auto-continue. See `#scheduleIdleQueueDrain` for rationale.
-	 */
-	#canAutoContinueForFollowUp(): boolean {
-		if (this.isStreaming) return false;
-		if (this.isRetrying) return false;
-		// A queued steer resumes from ANY tail: Agent.continue() runs #runLoop(undefined),
-		// whose initial steering poll injects the steer before the first provider call, so the
-		// request tail becomes the steer (valid) regardless of any injected custom / bashExecution
-		// / pythonExecution record a user interrupt left as the literal transcript tail. This is
-		// why a queued user steer stranded behind a preserved advisor card (or a flushed IRC aside
-		// / eval execution record) still resumes — no tail-role enumeration needed.
-		if (this.agent.peekSteeringQueue().length > 0) return true;
-		// Follow-up-only auto-resume stays suppressed while a deliberate user interrupt is in effect
-		// (the advisor roster's auto-resume suppression, cleared on the next user prompt): the user stopped, so their
-		// queued follow-up waits for an explicit resume — even if an interleaving IRC wake turn has
-		// since left a provider-valid tail.
-		if (this.#advisorRoster.autoResumeSuppressed) return false;
-		// Follow-up-only resume has no steer to inject, so Agent.continue() continues from the
-		// existing context tail — which must itself be a valid provider tail. An injected
-		// non-conversational tail (advisor card → `developer`, bash/python execution) would make
-		// the first model call invalid, so leave the follow-up queued for the next explicit resume.
-		const messages = this.agent.state.messages;
-		const last = messages[messages.length - 1];
-		return last?.role === "assistant" || last?.role === "toolResult";
 	}
 
 	queueDeferredMessage(message: CustomMessage): void {
@@ -4576,12 +4474,8 @@ export class AgentSession {
 				return false;
 			}
 
-			if (options?.deliverAs === "followUp") {
-				this.agent.followUp(normalizedAppMessage);
-			} else {
-				this.agent.steer(normalizedAppMessage);
-			}
-			this.#scheduleIdleQueueDrain();
+			this.#queue.enqueue(normalizedAppMessage, options?.deliverAs === "followUp" ? "followUp" : "steer");
+			this.#queue.scheduleDrain();
 			return false;
 		}
 
@@ -4643,12 +4537,8 @@ export class AgentSession {
 			if (images.length === 0) images = undefined;
 		}
 
-		if (options?.deliverAs === "followUp") {
-			await this.#queueUserMessage(text, images, "followUp");
-			return;
-		}
-		if (options?.deliverAs === "steer") {
-			await this.#queueUserMessage(text, images, "steer");
+		if (options?.deliverAs) {
+			await this.#queue.queueUser(text, images, options.deliverAs);
 			return;
 		}
 
@@ -4662,86 +4552,30 @@ export class AgentSession {
 		});
 	}
 
-	/** Clear queued messages and return the user-restorable ones (text plus any attached images).
-	 *  Only user-authored messages (plain user turns, `attribution:"user"` custom like `/skill`) are
-	 *  returned for editor restore. Other queued messages stay in the agent-core queues so a continuing
-	 *  stream still delivers them — EXCEPT on `forInterrupt` (Esc+abort), where only advisor cards are
-	 *  kept (abort() preserves them as visible advice) and every other
-	 *  non-user steer (hidden goal/plan/budget, IRC/extension asides) is dropped, so abort()'s
-	 *  #drainStrandedQueuedMessages can't auto-resume the run the user just interrupted (the drain only
-	 *  fires while agent.hasQueuedMessages()). Plain Alt+Up dequeue preserves those non-user steers. */
+	/** Clear the queues and return the user-restorable messages; see {@link QueuedMessages.clear}. */
 	clearQueue(options?: { forInterrupt?: boolean }): {
 		steering: RestoredQueuedMessage[];
 		followUp: RestoredQueuedMessage[];
 	} {
-		const steeringAll = this.agent.peekSteeringQueue();
-		const followUpAll = this.agent.peekFollowUpQueue();
-		const steering = steeringAll.filter(isUserQueuedMessage).map(toRestoredQueuedMessage);
-		const followUp = followUpAll.filter(isUserQueuedMessage).map(toRestoredQueuedMessage);
-		const keep: (m: AgentMessage) => boolean = options?.forInterrupt
-			? isAdvisorCard
-			: m => !isUserQueuedMessage(m) && !isHiddenUserCompanion(m);
-		this.agent.replaceQueues(steeringAll.filter(keep), followUpAll.filter(keep));
-		return { steering, followUp };
+		return this.#queue.clear(options);
 	}
 
-	/** Number of pending displayable messages (includes steering, follow-up, next-turn messages, and
-	 *  prompts waiting for the agent to go idle). Reflects actual queued work (advisor cards
-	 *  included) — feeds hasPendingMessages()/RPC and the empty-submit abort gate. The
-	 *  user-restorable subset is surfaced by getQueuedMessages()/clearQueue(). */
+	/** Number of pending displayable messages; see {@link QueuedMessages.count}. Feeds
+	 *  hasPendingMessages()/RPC and the empty-submit abort gate. */
 	get queuedMessageCount(): number {
-		return (
-			this.agent.peekSteeringQueue().filter(isDisplayableQueuedMessage).length +
-			this.agent.peekFollowUpQueue().filter(isDisplayableQueuedMessage).length +
-			this.#nextTurn.count +
-			this.#promptsWaitingOnIdle
-		);
+		return this.#queue.count;
 	}
 
 	getQueuedMessages(): { steering: readonly string[]; followUp: readonly string[] } {
-		return {
-			steering: this.agent.peekSteeringQueue().filter(isUserQueuedMessage).map(queueChipText),
-			followUp: this.agent.peekFollowUpQueue().filter(isUserQueuedMessage).map(queueChipText),
-		};
+		return this.#queue.chips();
 	}
 
 	/**
-	 * Pop the last queued message (steering first, then follow-up).
-	 * Used by dequeue keybinding to restore messages to editor one at a time.
-	 * Steps over agent-authored queued messages (advisor cards, hidden/internal steers).
+	 * Pop the last user-restorable queued message, steering first, then follow-up. Used by the
+	 * dequeue keybinding to restore messages to the editor one at a time.
 	 */
 	popLastQueuedMessage(): RestoredQueuedMessage | undefined {
-		const steering = this.agent.peekSteeringQueue();
-		const followUp = this.agent.peekFollowUpQueue();
-		const lastUserIndex = (queue: readonly AgentMessage[]): number => {
-			for (let i = queue.length - 1; i >= 0; i--) {
-				if (isUserQueuedMessage(queue[i])) return i;
-			}
-			return -1;
-		};
-		// Notices queue immediately before their user message, so dropping the popped
-		// prompt means also dropping the contiguous hidden-user companions right before
-		// it — companions of other queued prompts stay put.
-		const removeWithCompanions = (queue: readonly AgentMessage[], userIndex: number): AgentMessage[] => {
-			let start = userIndex;
-			while (start > 0 && isHiddenUserCompanion(queue[start - 1])) start--;
-			const next = queue.slice();
-			next.splice(start, userIndex - start + 1);
-			return next;
-		};
-		const fromSteer = lastUserIndex(steering);
-		if (fromSteer >= 0) {
-			const removed = steering[fromSteer];
-			this.agent.replaceQueues(removeWithCompanions(steering, fromSteer), followUp.slice());
-			return toRestoredQueuedMessage(removed);
-		}
-		const fromFollowUp = lastUserIndex(followUp);
-		if (fromFollowUp >= 0) {
-			const removed = followUp[fromFollowUp];
-			this.agent.replaceQueues(steering.slice(), removeWithCompanions(followUp, fromFollowUp));
-			return toRestoredQueuedMessage(removed);
-		}
-		return undefined;
+		return this.#queue.popLast();
 	}
 
 	get skillsSettings(): SkillsSettings | undefined {
@@ -5693,12 +5527,7 @@ export class AgentSession {
 				if (Date.now() >= deadline) {
 					throw new Error("Timed out waiting for prior agent run to finish before prompting.");
 				}
-				this.#promptsWaitingOnIdle += 1;
-				try {
-					await this.agent.waitForIdle();
-				} finally {
-					this.#promptsWaitingOnIdle -= 1;
-				}
+				await this.#queue.whileWaitingOnIdle(() => this.agent.waitForIdle());
 				if (this.#promptGeneration !== generation) {
 					return;
 				}

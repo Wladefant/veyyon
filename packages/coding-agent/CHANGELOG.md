@@ -27,6 +27,7 @@
 - Releasing what a conversation ends with on `/new`, `/resume` and a handoff moved out of the session class into one session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - Routing a finished run through retry, compaction and the stop-time passes moved out of the session class into one session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - The message a prompt raises when a provider's credential produced no token is built in the credential-message module beside the other missing-credential messages ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- Queueing steers and follow-ups, the idle drain that starts a turn on them, and the queue count, chips, clear and pop moved out of the session class into one session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 
 ### Fixed
 

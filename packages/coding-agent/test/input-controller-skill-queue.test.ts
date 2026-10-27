@@ -476,12 +476,22 @@ function queueMagicCompanion(session: AgentSession, customType = "ultrathink-not
 	});
 }
 
-/** Mirror a steered user prompt (`AgentSession.#queueUserMessage(..., "steer")`). */
+/** Mirror a steered user prompt (`QueuedMessages.queueUser(..., "steer")`). */
 function queueUserSteer(session: AgentSession, text: string): void {
 	session.agent.steer({
 		role: "user",
 		content: [{ type: "text", text }],
 		steering: true,
+		attribution: "user",
+		timestamp: Date.now(),
+	});
+}
+
+/** Mirror a queued user follow-up (`QueuedMessages.queueUser(..., "followUp")`). */
+function queueUserFollowUp(session: AgentSession, text: string): void {
+	session.agent.followUp({
+		role: "user",
+		content: [{ type: "text", text }],
 		attribution: "user",
 		timestamp: Date.now(),
 	});
@@ -649,6 +659,19 @@ describe("AgentSession derived queued custom display", () => {
 		// prompt and its own companion stay intact.
 		const remaining = session.agent.peekSteeringQueue();
 		expect(remaining.map(m => (m.role === "custom" ? m.customType : m.role))).toEqual(["ultrathink-notice", "user"]);
+	});
+
+	it("popLastQueuedMessage takes the newest steer before any follow-up", async () => {
+		fixture = await createRealSession();
+		const { session } = fixture;
+		queueUserFollowUp(session, "older follow-up");
+		queueUserSteer(session, "steer");
+		queueUserFollowUp(session, "newer follow-up");
+
+		expect(session.popLastQueuedMessage()?.text).toBe("steer");
+		expect(session.popLastQueuedMessage()?.text).toBe("newer follow-up");
+		expect(session.popLastQueuedMessage()?.text).toBe("older follow-up");
+		expect(session.popLastQueuedMessage()).toBeUndefined();
 	});
 });
 

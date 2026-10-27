@@ -455,11 +455,17 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * policy, the error registry, the settle-continuation rules and `@veyyon/utils`) are already here.
  * Measured 2026-10-27 at 1511.
  *
+ * 1511 to 1512: `coding-agent/src/session/runtime/queued-messages.ts`, the session collaborator
+ * that queues steers and follow-ups on the agent, drains them into a turn on a resting session,
+ * and counts, lists, clears and pops them. It left `session/agent-session.ts`, already here, and
+ * its one runtime import (`session/agent-session-queue.ts`) is already here. Measured 2026-10-27
+ * at 1512.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1511;
+const LAUNCH_REACH_CEILING = 1512;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

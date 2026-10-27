@@ -102,8 +102,12 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-27 at 6459: the routing of a run that ended (the yield short-circuit, stop
  * recovery, the compaction check, the stop-time continuation passes and the `session_stop` hooks)
  * left as the `stop-settlement.ts` collaborator (-196).
+ * RE-MEASURED 2026-10-27 at 6245: the steers and follow-ups on the agent's queues (queueing a user
+ * or hidden developer message, the drain that starts a turn on them, the count, the chips, clear and
+ * pop) left as the `queued-messages.ts` collaborator (-171 from 6416, after the unusable-credential
+ * message moved to `missing-credentials.ts`).
  */
-const RUNTIME_CEILING = 6_500;
+const RUNTIME_CEILING = 6_300;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -138,6 +142,7 @@ const COLLABORATORS = [
 	"provider-sessions.ts",
 	"provider-usage.ts",
 	"provider-wire.ts",
+	"queued-messages.ts",
 	"replan-title-refresh.ts",
 	"retry-fallback.ts",
 	"retry-runtime.ts",
