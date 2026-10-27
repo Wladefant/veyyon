@@ -20,9 +20,9 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { TempDir } from "@veyyon/utils";
 import { makeToolSession } from "../helpers/tool-session";
 
-const FLASH = "google-antigravity/gemini-3.8-flash";
-const LUNA = "openai-codex/gpt-6-luna";
-const FALLBACK = "anthropic/claude-sonnet-4";
+const F = "google-antigravity/gemini-3.8-flash:high";
+const L = "openai-codex/gpt-6-luna:medium";
+const H = "anthropic/claude-haiku-5-5:max";
 
 function definition(name: string): AgentDefinition {
 	return { name, description: `${name} agent`, systemPrompt: "Execute the assignment.", source: "bundled" };
@@ -52,7 +52,7 @@ describe("eval agent() and vibe workers deterministically use configured first c
 		tempDir = TempDir.createSync("eval-vibe-share-");
 		chains = [];
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
-			agents: [definition("task"), definition("deep"), definition("qa-verifier")],
+			agents: [definition("task"), definition("deep"), definition("qa-verifier"), definition("haiku")],
 			projectAgentsDir: null,
 		});
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
@@ -93,14 +93,17 @@ describe("eval agent() and vibe workers deterministically use configured first c
 	});
 
 	function openSession(sessionId: string, taskDepth = 0): ToolSession {
-		const row = { model: [FLASH, LUNA, FALLBACK] };
+		const taskRow = { model: [L, F, H] };
+		const qaRow = { model: [F, L, H] };
+		const haikuRow = { model: [H, L, F] };
 		const settings = Settings.isolated({
 			"async.enabled": false,
 			"agent.isolation.mode": "none",
 			"agent.agents": {
-				task: { enabled: true, ...row, agents: row },
-				deep: { enabled: true, ...row, agents: row },
-				"qa-verifier": { enabled: true, ...row, agents: row },
+				task: { enabled: true, ...taskRow, agents: taskRow },
+				deep: { enabled: true, ...taskRow, agents: taskRow },
+				"qa-verifier": { enabled: true, ...qaRow, agents: qaRow },
+				haiku: { enabled: true, ...haikuRow, agents: haikuRow },
 			},
 		});
 		const manager = new AsyncJobManager({ onJobComplete: () => {} });
@@ -116,32 +119,56 @@ describe("eval agent() and vibe workers deterministically use configured first c
 			getSessionFile: () => tempDir.join("parent.jsonl"),
 			getArtifactsDir: () => tempDir.path(),
 			getSessionSpawns: () => "*",
-			getModelString: () => FALLBACK,
+			getModelString: () => H,
 		});
 	}
 
-	function expectDeterministicFirst(): void {
+	function expectDeterministicFirst(expectedFirst: string, expectedSecond: string): void {
 		const counts: Record<string, number> = {};
 		for (const chain of chains) counts[chain[0]] = (counts[chain[0]] ?? 0) + 1;
-		for (const chain of chains) expect(chain.slice(2)).toEqual([FALLBACK]);
-		expect(counts[FLASH]).toBe(100);
-		expect(counts[LUNA] ?? 0).toBe(0);
-	}
-
-	for (const agent of ["task", "qa-verifier"]) {
-		for (const taskDepth of [0, 1]) {
-			it(`eval agent(${agent}) at session depth ${taskDepth} deterministically uses configured first choice`, async () => {
-				const session = openSession(`eval-${agent}-${taskDepth}`, taskDepth);
-				for (let index = 0; index < 100; index++) {
-					await runEvalAgent({ agent, prompt: "Inspect the requested behavior." }, { session });
-				}
-				expect(chains).toHaveLength(100);
-				expectDeterministicFirst();
-			}, 60000);
+		for (const chain of chains) {
+			expect(chain[0]).toBe(expectedFirst);
+			expect(chain[1]).toBe(expectedSecond);
+			expect(chain.slice(2)).toEqual([H]);
 		}
+		expect(counts[expectedFirst]).toBe(100);
+		expect(counts[expectedSecond] ?? 0).toBe(0);
 	}
 
-	it("a vibe worker on the deep agent deterministically uses configured first choice", async () => {
+	for (const taskDepth of [0, 1]) {
+		it(`eval agent(task) at session depth ${taskDepth} deterministically uses configured first choice (Luna-first)`, async () => {
+			const session = openSession(`eval-task-${taskDepth}`, taskDepth);
+			for (let index = 0; index < 100; index++) {
+				await runEvalAgent({ agent: "task", prompt: "Inspect the requested behavior." }, { session });
+			}
+			expect(chains).toHaveLength(100);
+			expectDeterministicFirst(L, F);
+		}, 60000);
+	}
+
+	for (const taskDepth of [0, 1]) {
+		it(`eval agent(qa-verifier) at session depth ${taskDepth} deterministically uses configured first choice (Flash-first)`, async () => {
+			const session = openSession(`eval-qa-verifier-${taskDepth}`, taskDepth);
+			for (let index = 0; index < 100; index++) {
+				await runEvalAgent({ agent: "qa-verifier", prompt: "Inspect the requested behavior." }, { session });
+			}
+			expect(chains).toHaveLength(100);
+			expectDeterministicFirst(F, L);
+		}, 60000);
+	}
+
+	it("eval agent(haiku) deterministically uses configured explicit H-first", async () => {
+		const session = openSession("eval-haiku-0", 0);
+		for (let index = 0; index < 100; index++) {
+			await runEvalAgent({ agent: "haiku", prompt: "Inspect the requested behavior." }, { session });
+		}
+		expect(chains).toHaveLength(100);
+		for (const chain of chains) {
+			expect(chain).toEqual([H, L, F]);
+		}
+	}, 60000);
+
+	it("a vibe worker on the deep agent deterministically uses configured first choice (Luna-first)", async () => {
 		const session = openSession("vibe-good");
 		for (let index = 0; index < 100; index++) {
 			const { jobId } = await VibeSessionRegistry.global().spawn(session, {
@@ -152,6 +179,6 @@ describe("eval agent() and vibe workers deterministically use configured first c
 			await session.asyncJobManager?.getJob(jobId)?.promise;
 		}
 		expect(chains).toHaveLength(100);
-		expectDeterministicFirst();
+		expectDeterministicFirst(L, F);
 	}, 120000);
 });
