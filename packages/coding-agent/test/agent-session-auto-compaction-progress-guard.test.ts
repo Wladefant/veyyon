@@ -249,6 +249,48 @@ describe("AgentSession auto-compaction progress guard", () => {
 		expect(noProgress[0].level).toBe("warning");
 	});
 
+	it("does not compact again on the threshold trigger while the fixed context keeps it over the threshold, and says why once", async () => {
+		vi.spyOn(session.agent, "continue").mockResolvedValue();
+		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 190000, contextWindow: 200000, percent: 95 });
+		const notices = collectNotices();
+		const startCount = countCompactionStarts();
+
+		const turn = async () => {
+			const assistantMsg = highUsageAssistant();
+			session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+			session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+			await session.waitForIdle();
+		};
+
+		await turn();
+		await turn();
+		await turn();
+
+		expect(startCount()).toBe(1);
+		const loopNotices = notices.filter(
+			n => n.source === NOTICE_SOURCE && n.message.includes("Automatic compaction is paused"),
+		);
+		expect(loopNotices.length).toBe(1);
+		expect(loopNotices[0].message).toContain("System prompt");
+		expect(loopNotices[0].message).toContain("tool definitions");
+		expect(loopNotices[0].message).toContain("history");
+	});
+
+	it("unloads idle discovery-activated MCP tools as part of every applied compaction", async () => {
+		vi.spyOn(session.agent, "continue").mockResolvedValue();
+		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 190000, contextWindow: 200000, percent: 95 });
+		const unloadSpy = vi.spyOn(session, "unloadIdleDiscoveredMCPTools").mockResolvedValue([]);
+
+		const assistantMsg = highUsageAssistant();
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+		await session.waitForIdle();
+
+		expect(unloadSpy).toHaveBeenCalledTimes(1);
+	});
+
 	it("clamps a reserve exceeding the window for small-window threshold recovery bands", () => {
 		const settings = {
 			enabled: true,
