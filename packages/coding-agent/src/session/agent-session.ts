@@ -55,19 +55,12 @@ import type {
 } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
 import { sessionTelemetryDetail } from "@veyyon/ai/instrumentation";
-import { clearAnthropicFastModeFallback } from "@veyyon/ai/providers/anthropic-session-state";
 import { streamSimple } from "@veyyon/ai/stream";
 // Session initialization registers usage backends without loading the AI package barrel.
 import "@veyyon/ai/usage/defaults";
 import { toolWireSchema } from "@veyyon/ai/utils/schema";
 import type { Effort } from "@veyyon/catalog/effort";
-import { isFireworksFastModelId } from "@veyyon/catalog/fireworks-model-id";
 import { modelsAreEqual } from "@veyyon/catalog/models";
-import {
-	realizesPriorityServiceTier,
-	resolveModelServiceTier,
-	serviceTierFamily,
-} from "@veyyon/catalog/provider-models/service-tier";
 import type { InMemorySnapshotStore } from "@veyyon/hashline";
 import { declaredContextWindow } from "@veyyon/kernel/session/agent-session-compaction-policy";
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
@@ -114,7 +107,7 @@ import type { ModelRegistry } from "../config/model-registry";
 import { noModelSelectedMessage } from "../config/model-resolution-failure";
 import { formatModelString, getModelMatchPreferences, resolveModelSelectorValue } from "../config/model-resolver";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
-import { buildServiceTierByFamily, PRIORITY_TIER_COMMAND_LABEL } from "../config/service-tier";
+import { buildServiceTierByFamily } from "../config/service-tier";
 import { type Settings, type SkillsSettings, validateProviderMaxInFlightRequests } from "../config/settings";
 import { onAppendOnlyModeChanged, onHelperModelsChanged } from "../config/settings-signals";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
@@ -267,6 +260,7 @@ import { ProviderWire } from "./runtime/provider-wire";
 import { QueuedMessages } from "./runtime/queued-messages";
 import { ReplanTitleRefresh } from "./runtime/replan-title-refresh";
 import { RetryRuntime } from "./runtime/retry-runtime";
+import { ServiceTiers } from "./runtime/service-tiers";
 import { SessionApprovals } from "./runtime/session-approvals";
 import { SessionBranch, type TreeNavigationResult } from "./runtime/session-branch";
 import { SessionHandoff } from "./runtime/session-handoff";
@@ -366,11 +360,6 @@ function skipAgentContinue(reason: AgentContinueSkipReason, options: ScheduledAg
 
 function getCustomMessageTextContent(message: Pick<CustomMessage, "content">): string {
 	return contentText(message.content, { separator: "" });
-}
-
-/** The persisted form of a per-family tier map: `null` when no family carries a tier. */
-function serviceTierEntry(byFamily: ServiceTierByFamily): ServiceTierByFamily | null {
-	return Object.keys(byFamily).length > 0 ? byFamily : null;
 }
 
 /**
@@ -657,7 +646,7 @@ export class AgentSession {
 		secrets: () => this.#secrets,
 		convertToLlmForSideRequest: messages => this.#convertToLlmForSideRequest(messages),
 		providerSessionState: () => this.#providerSessions.states,
-		effectiveServiceTier: model => this.#effectiveServiceTier(model),
+		effectiveServiceTier: model => this.#tiers.effective(model),
 		baseSystemPrompt: () => this.#toolActivation.baseSystemPrompt,
 		nonMessageTokens: () => computeNonMessageTokens(this),
 		estimateStoredContextTokens: () => this.#context.estimateStoredTokens(),
@@ -757,6 +746,8 @@ export class AgentSession {
 	readonly #irc: IrcDelivery;
 	/** Provider session ids, the inherited prompt cache key, and the transport state they route. */
 	readonly #providerSessions: ProviderSessions;
+	/** The per-family service tiers `/fast` and `tier.*` set, and the tier each request resolves to. */
+	readonly #tiers: ServiceTiers;
 	#isDisposed = false;
 	/** Session events forwarded to extensions, in order, with the run's turn index. */
 	readonly #extensionEvents: ExtensionEventForwarder;
@@ -1068,6 +1059,22 @@ export class AgentSession {
 				inheritedCacheKey: config.providerPromptCacheKeySource === "fork" ? this.agent.promptCacheKey : undefined,
 			},
 		);
+		this.#tiers = new ServiceTiers(
+			{
+				model: () => this.model,
+				fireworksPriority: () => this.settings.get("providers.fireworksTier") === "priority",
+				configuredTiers: () =>
+					buildServiceTierByFamily(
+						this.settings.get("tier.openai"),
+						this.settings.get("tier.anthropic"),
+						this.settings.get("tier.google"),
+					),
+				providerSessionStates: this.#providerSessions.states,
+				sessionStore: this.sessionManager,
+				emitNotice: (level, message, source) => this.emitNotice(level, message, source),
+			},
+			config.serviceTierByFamily ?? {},
+		);
 		this.#persistence = new MessagePersistence({
 			sessionStore: this.sessionManager,
 			instrumentationLevel: () => this.settings.get("session.instrumentation"),
@@ -1216,7 +1223,7 @@ export class AgentSession {
 		// Resolve the wire service-tier per request so the Fireworks Priority
 		// toggle scopes priority to Fireworks alone, without mutating the shared
 		// session `serviceTier` that drives `/fast` and OpenAI/Anthropic priority.
-		this.agent.serviceTierResolver = model => this.#effectiveServiceTier(model);
+		this.agent.serviceTierResolver = model => this.#tiers.effective(model);
 		// Prompt-cache enforcement, from the two operator settings. Reporting is on
 		// by default and blocking is opt-in, so the common case warns; a `false`
 		// report setting silences the check entirely, which is what `off` means to
@@ -1235,7 +1242,6 @@ export class AgentSession {
 					? "error"
 					: "warn"
 				: "off";
-		this.#serviceTierByFamily = config.serviceTierByFamily ?? {};
 		this.#replanTitle = new ReplanTitleRefresh(
 			{
 				agent: this.agent,
@@ -1647,7 +1653,7 @@ export class AgentSession {
 			},
 			leaseSecretRuntime: () => this.leaseSecretRuntime(),
 			providerRedactor: () => this.providerRedactor,
-			effectiveServiceTier: model => this.#effectiveServiceTier(model),
+			effectiveServiceTier: model => this.#tiers.effective(model),
 			primaryPromptCacheKey: () => this.agent.promptCacheKey,
 			resolveContextPromotionTarget: (model, contextWindow) =>
 				this.#contextCheck.promotionTarget(model, contextWindow),
@@ -1674,7 +1680,7 @@ export class AgentSession {
 			modelRegistry: () => this.#config.modelRegistry,
 			payloadHook: () => this.#config.payloadHook?.(),
 			sideComplete: this.#sideCompleteImpl,
-			effectiveServiceTier: model => this.#effectiveServiceTier(model),
+			effectiveServiceTier: model => this.#tiers.effective(model),
 			clearNextTurnMessages: () => this.#nextTurn.clear(),
 			cancelOwnAsyncJobs: () => this.#ownedJobs.cancelOwn(),
 			cancelPostPromptTasks: () => this.#cancelPostPromptTasks(),
@@ -1696,7 +1702,7 @@ export class AgentSession {
 			extensionRunner: () => this.#config.extensionRunner,
 			modelRegistry: () => this.#config.modelRegistry,
 			baseSystemPrompt: () => this.#toolActivation.baseSystemPrompt,
-			effectiveServiceTier: model => this.#effectiveServiceTier(model),
+			effectiveServiceTier: model => this.#tiers.effective(model),
 			clearNextTurnMessages: () => this.#nextTurn.clear(),
 			cancelOwnAsyncJobs: () => this.#ownedJobs.cancelOwn(),
 			endConversation: () => this.#conversation.release(),
@@ -1725,18 +1731,16 @@ export class AgentSession {
 			captureFields: () => ({
 				nextTurn: this.#nextTurn.snapshot(),
 				baseSystemPrompt: this.#toolActivation.baseSystemPrompt,
-				serviceTierByFamily: this.#serviceTierByFamily,
+				serviceTierByFamily: this.#tiers.byFamily,
 			}),
 			restoreFields: fields => {
 				this.#nextTurn.restore(fields.nextTurn);
 				this.#toolActivation.baseSystemPrompt = fields.baseSystemPrompt;
-				this.#serviceTierByFamily = fields.serviceTierByFamily;
+				this.#tiers.replace(fields.serviceTierByFamily);
 			},
 			clearNextTurnMessages: () => this.#nextTurn.clear(),
-			setServiceTierByFamily: byFamily => {
-				this.#serviceTierByFamily = byFamily;
-			},
-			serviceTierEntry: () => serviceTierEntry(this.#serviceTierByFamily),
+			setServiceTierByFamily: byFamily => this.#tiers.replace(byFamily),
+			serviceTierEntry: () => this.#tiers.entry(),
 			applyToolNames: async toolNames => {
 				await this.#toolActivation.apply(toolNames, { persistMCPSelection: false });
 			},
@@ -2400,14 +2404,7 @@ export class AgentSession {
 				},
 			);
 		}
-		if (message.disabledFeatures?.includes("priority") && this.#serviceTierByFamily.anthropic === "priority") {
-			this.setServiceTierFamily("anthropic", undefined);
-			this.emitNotice(
-				"warning",
-				`${PRIORITY_TIER_COMMAND_LABEL} rejected for this model; retried without it. It is now off.`,
-				"priority",
-			);
-		}
+		this.#tiers.onAssistantSettled(message);
 		this.#ttsr.onAssistantSettled(message);
 		this.#sessionHandoff.noteAssistantSettled(message);
 		await this.#retry.closeRecovered(message);
@@ -2990,11 +2987,9 @@ export class AgentSession {
 		return this.agent.state.model;
 	}
 
-	#serviceTierByFamily: ServiceTierByFamily = {};
-
 	/** Live per-family service tiers (OpenAI / Anthropic / Google). */
 	get serviceTierByFamily(): ServiceTierByFamily {
-		return this.#serviceTierByFamily;
+		return this.#tiers.byFamily;
 	}
 
 	/**
@@ -4730,99 +4725,28 @@ export class AgentSession {
 		return this.#models.available();
 	}
 
-	/**
-	 * True when the currently selected model's family is set to `priority` — the
-	 * `/fast` on/off state for the active model. Returns false when no model is
-	 * selected or the model exposes no service-tier family (e.g. Fireworks, which
-	 * has its own Providers › Fireworks Tier toggle).
-	 *
-	 * For "is priority actually applied to the next request?" use
-	 * {@link isFastModeActive} instead.
-	 */
+	/** Whether the active model's family is set to `priority`; see {@link ServiceTiers.fastModeEnabled}. */
 	isFastModeEnabled(): boolean {
-		const family = this.model ? serviceTierFamily(this.model) : undefined;
-		return family ? this.#serviceTierByFamily[family] === "priority" : false;
+		return this.#tiers.fastModeEnabled();
 	}
 
-	/**
-	 * True when `priority` is actually realized on the wire for the currently
-	 * selected model (OpenAI/Google `service_tier`, direct Anthropic fast mode,
-	 * or Fireworks priority). Returns false for tiers the active model can't
-	 * realize and when no model is selected.
-	 */
+	/** Whether `priority` reaches the wire for the active model; see {@link ServiceTiers.fastModeActive}. */
 	isFastModeActive(): boolean {
-		const model = this.model;
-		return !!model && realizesPriorityServiceTier(this.#effectiveServiceTier(model), model);
-	}
-
-	/**
-	 * Effective wire service-tier for a request to `model`. Fireworks models take
-	 * the Priority serving path only when the Providers › Fireworks Tier setting
-	 * is `"priority"` (and never for `-fast` variants, whose Fast serving path is
-	 * mutually exclusive with Priority). Every other model resolves the live
-	 * per-family tier map down to the entry for its family.
-	 */
-	#effectiveServiceTier(model: Model | undefined = this.model): ServiceTier | undefined {
-		if (model?.provider === "fireworks") {
-			return this.settings.get("providers.fireworksTier") === "priority" && !isFireworksFastModelId(model.id)
-				? "priority"
-				: undefined;
-		}
-		if (!model) return undefined;
-		return resolveModelServiceTier(this.#serviceTierByFamily, model);
+		return this.#tiers.fastModeActive();
 	}
 
 	/** Set one family's tier (or clear it with `undefined`); persists the change. */
 	setServiceTierFamily(family: ServiceTierFamily, tier: ServiceTier | undefined): void {
-		if (this.#serviceTierByFamily[family] === tier) return;
-		const next: ServiceTierByFamily = { ...this.#serviceTierByFamily };
-		if (tier) next[family] = tier;
-		else delete next[family];
-		// Re-arming Anthropic priority clears the per-session fast-mode auto-disable
-		// so the next request carries `speed: "fast"` again.
-		if (next.anthropic === "priority" && this.#serviceTierByFamily.anthropic !== "priority") {
-			clearAnthropicFastModeFallback(this.#providerSessions.states);
-		}
-		this.#serviceTierByFamily = next;
-		this.sessionManager.appendServiceTierChange(serviceTierEntry(next));
+		this.#tiers.setFamily(family, tier);
 	}
 
-	/**
-	 * `/fast on|off` targets the family of the currently selected model: it sets
-	 * that family's `priority` tier, and turning it off returns the family to the
-	 * tier the operator configured rather than to no tier at all. Returns `false`
-	 * when the model has no service-tier family, so callers can report that fast
-	 * mode is unavailable instead of claiming success.
-	 */
+	/** `/fast on|off` for the active model's family; false when it has none. See {@link ServiceTiers.setFastMode}. */
 	setFastMode(enabled: boolean): boolean {
-		const family = this.model ? serviceTierFamily(this.model) : undefined;
-		if (!family) {
-			this.emitNotice("info", "The current model has no service-tier control for /fast to toggle.", "priority");
-			return false;
-		}
-		if (!enabled) {
-			if (this.#serviceTierByFamily[family] !== "priority") return true;
-			// Fast mode OVERRODE whatever this family was configured for, so turning
-			// it off restores that baseline. Clearing outright silently spent the
-			// operator's `tier.openai: flex` (a cheaper, slower tier) for the rest of
-			// the session, and the change is persisted, so a resume kept the loss. A
-			// configured `priority` is the one case where clearing is what was asked
-			// for: there is no other baseline to go back to.
-			const configured = buildServiceTierByFamily(
-				this.settings.get("tier.openai"),
-				this.settings.get("tier.anthropic"),
-				this.settings.get("tier.google"),
-			)[family];
-			this.setServiceTierFamily(family, configured === "priority" ? undefined : configured);
-			return true;
-		}
-		this.setServiceTierFamily(family, "priority");
-		return true;
+		return this.#tiers.setFastMode(enabled);
 	}
 
 	toggleFastMode(): boolean {
-		if (!this.setFastMode(!this.isFastModeEnabled())) return false;
-		return this.isFastModeEnabled();
+		return this.#tiers.toggleFastMode();
 	}
 
 	// =========================================================================
@@ -5306,7 +5230,7 @@ export class AgentSession {
 				convertMessagesToLlm: (messages, signal) => this.convertMessagesToLlm(messages, signal),
 				prepareSimpleStreamOptions: (options, provider) => this.prepareSimpleStreamOptions(options, provider),
 				resolveApiKey: (model, sessionId) => this.#config.modelRegistry.resolver(model, sessionId),
-				effectiveServiceTier: model => this.#effectiveServiceTier(model),
+				effectiveServiceTier: model => this.#tiers.effective(model),
 			},
 			args,
 		);
@@ -5600,7 +5524,7 @@ export class AgentSession {
 		const payload = {
 			model: this.agent.state.model ?? null,
 			thinkingLevel: this.#thinking.level ?? null,
-			serviceTier: serviceTierEntry(this.#serviceTierByFamily),
+			serviceTier: this.#tiers.entry(),
 			systemPrompt: this.agent.state.systemPrompt,
 			tools: this.agent.state.tools.map(tool => ({
 				name: tool.name,

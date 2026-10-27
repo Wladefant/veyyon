@@ -32,6 +32,7 @@
 - The context threshold checks before a prompt and between the provider calls of a tool loop, and the switch to a larger-context model they share, moved out of the session class into the `TurnContextCheck` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - Starting a new transcript with `/new` or `/drop` and forking one with `/fork` moved out of the session class into the `SessionSwitch` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - The session-state block and the eager delegate reminders a turn carries ahead of its message moved out of the session class into the `TurnPreludes` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The per-family service tiers, `/fast` and the tier each request resolves to moved out of the session class into the `ServiceTiers` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 
 ### Fixed
 

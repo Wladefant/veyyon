@@ -112,12 +112,14 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-27 at 5967: the threshold checks before a prompt and between the provider
  * calls of a tool loop, and the switch to a larger-context model they share with the post-turn
  * check, moved into the `turn-context-check.ts` collaborator (-171).
- * RE-MEASURED 2026-10-27 at 5730: starting a new transcript with `/new` or `/drop` and forking one
+ * RE-MEASURED 2026-10-27 at 5729: starting a new transcript with `/new` or `/drop` and forking one
  * with `/fork` moved into the `session-switch.ts` collaborator (-136 from 5963), then the session-state
  * block and the eager delegate reminders a turn carries ahead of its message moved into the
  * `turn-preludes.ts` collaborator (-98).
+ * RE-MEASURED 2026-10-27 at 5653: the per-family service tiers, `/fast` and the tier each request
+ * resolves to moved into the `service-tiers.ts` collaborator (-76).
  */
-const RUNTIME_CEILING = 5_800;
+const RUNTIME_CEILING = 5_700;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -156,6 +158,7 @@ const COLLABORATORS = [
 	"replan-title-refresh.ts",
 	"retry-fallback.ts",
 	"retry-runtime.ts",
+	"service-tiers.ts",
 	"session-approvals.ts",
 	"session-branch.ts",
 	"session-handoff.ts",
