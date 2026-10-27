@@ -308,10 +308,11 @@ describe("a reply that asks the user something ends the turn", () => {
 			await delay(20);
 			session.agent.emitExternalEvent({ type: "agent_end", messages: [msg] });
 			await session.waitForIdle();
-			// The `agent_end` tail runs off the event, not off the emit, so an
-			// assertion taken straight after the emit would see nothing and every
-			// negative control here would pass for the wrong reason.
-			await delay(200);
+			// The `agent_end` tail runs off the event, not off the emit, so an assertion taken straight
+			// after the emit would see nothing and every negative control here would pass for the
+			// wrong reason. The tail and every continuation it schedules are post-prompt work, so the
+			// outcome is read once none is left.
+			while (session.hasPostPromptWork) await delay(5);
 		}
 
 		/** Arm the evidence ledger with an unproven write, as a real turn would. */
