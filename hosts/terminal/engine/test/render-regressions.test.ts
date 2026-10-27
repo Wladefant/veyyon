@@ -4460,7 +4460,7 @@ describe("foreground-tool streaming on ED3-risk terminals", () => {
 			];
 			component.setLines(frameB);
 			tui.requestRender();
-			await term.waitForRender();
+			await settle(term, tui);
 			expect(visible(term)).toEqual(["chip-1", "chip-2", "chip-3", "loader", "todos", "editor"]);
 
 			// Frame C: a visible chip collapses (a shrink whose first change lands in
@@ -4488,7 +4488,7 @@ describe("foreground-tool streaming on ED3-risk terminals", () => {
 			];
 			component.setLines(frameC);
 			tui.requestRender();
-			await term.waitForRender();
+			await settle(term, tui);
 			expect(visible(term)).toEqual(["chip-1", "chip-2", "loader", "todos", "editor", ""]);
 		} finally {
 			tui.stop();
