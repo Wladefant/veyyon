@@ -2961,6 +2961,7 @@ const streamAnthropicOnce = (
 		};
 		let rawRequestDump: RawHttpRequestDump | undefined;
 		const cacheRequests: CacheRequestRecord[] = [];
+		output.usage.cacheRequests = cacheRequests;
 		/** Exact bytes of the last sent request body; materialized into a dump only on the 400/413 path. */
 		let anthropicWireBodyJson: string | undefined;
 		let activeAbortTracker = createAbortSourceTracker(options?.signal);

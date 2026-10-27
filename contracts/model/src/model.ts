@@ -209,7 +209,11 @@ export interface CacheRequestRecord {
 	requestedTtls?: ("5m" | "1h")[];
 	/** Model identifier as sent on the wire. */
 	model: string;
-	/** SHA256 hex digest of the system + tools wire serialization as sent. */
+	/**
+	 * SHA256 hex digest of the system + tools wire serialization exactly as sent.
+	 * Note: for OAuth tokens that carry a billing-header `cch` attestation in system[0],
+	 * dynamic cch values vary the prefixHash per request according to the exact wire bytes.
+	 */
 	prefixHash: string;
 	/** Provider request ID if returned in response headers or stream. */
 	requestId?: string;

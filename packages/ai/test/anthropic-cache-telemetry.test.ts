@@ -273,10 +273,12 @@ describe("Anthropic cache telemetry", () => {
 
 	it("keeps outgoing request body unchanged on wire", async () => {
 		let capturedParams: Record<string, unknown> | undefined;
+		let capturedOptions: Record<string, unknown> | undefined;
 		let serializedInOnPayload: string | undefined;
 
-		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation((params: unknown) => {
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation((params: unknown, options?: unknown) => {
 			capturedParams = params as Record<string, unknown>;
+			capturedOptions = options as Record<string, unknown>;
 			return createMockRequest(createEvents()) as never;
 		});
 
@@ -293,12 +295,46 @@ describe("Anthropic cache telemetry", () => {
 		await s.result();
 
 		expect(capturedParams).toBeDefined();
+		expect(capturedOptions?.serializedBody).toBeDefined();
 		expect(serializedInOnPayload).toBeDefined();
+		expect(capturedOptions?.serializedBody).toBe(serializedInOnPayload);
 		expect(JSON.stringify(capturedParams)).toBe(serializedInOnPayload);
 		expect(capturedParams?.model).toBe("claude-sonnet-4-5");
 		expect(capturedParams?.stream).toBe(true);
 		expect(capturedParams?.cacheRequests).toBeUndefined();
 		expect(capturedParams?.telemetry).toBeUndefined();
+	});
+
+	it("computes prefixHash over exact wire body with patched OAuth cch attestation", async () => {
+		let capturedOptions: Record<string, unknown> | undefined;
+
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation((_params: unknown, options?: unknown) => {
+			capturedOptions = options as Record<string, unknown>;
+			return createMockRequest(createEvents()) as never;
+		});
+
+		const s = streamAnthropic(MODEL, CONTEXT, {
+			apiKey: "sk-ant-oat-test",
+			isOAuth: true,
+		});
+		for await (const _ of s) {
+			// drain
+		}
+		const res = await s.result();
+
+		const usage = res.usage as Record<string, unknown>;
+		const req = (usage.cacheRequests as Array<Record<string, unknown>> | undefined)?.[0];
+		expect(req).toBeDefined();
+		expect(typeof req?.prefixHash).toBe("string");
+
+		// When isOAuth is true, Anthropic injects the billing header into system[0].
+		// The unpatched body has cch=00000, while the wire body and prefixHash reflect the patched cch.
+		const serializedWire = capturedOptions?.serializedBody as string | undefined;
+		expect(serializedWire).toBeDefined();
+		expect(serializedWire).toContain("cch=");
+		expect(serializedWire).not.toContain("cch=00000");
+		// createAnthropicCacheRequestRecord patches cch so prefixHash reflects the wire serialization
+		expect(req?.prefixHash).toMatch(/^[0-9a-f]{64}$/);
 	});
 
 	it("contains no prompt text, tool bodies, or secrets in telemetry records", async () => {
