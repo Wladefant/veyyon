@@ -36,6 +36,13 @@ function endpointFor(root: string, nonce: string): string {
  * users (on win32, the inherited ACL that the owner-only check refuses).
  */
 async function writeRecord(file: string, body: object, broad = false): Promise<void> {
+	const dir = path.dirname(file);
+	await fsp.mkdir(dir, { recursive: true });
+	if (process.platform === "win32") {
+		if (!broad) await applyOwnerOnlyWindowsAcl(dir);
+	} else {
+		await fsp.chmod(dir, broad ? 0o755 : 0o700);
+	}
 	await fsp.writeFile(file, JSON.stringify(body));
 	if (process.platform === "win32") {
 		if (!broad) await applyOwnerOnlyWindowsAcl(file);

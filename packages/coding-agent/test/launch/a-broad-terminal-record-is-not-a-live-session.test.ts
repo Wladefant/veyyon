@@ -10,13 +10,14 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { listLiveSessionIds } from "../../src/launch/session-notices";
+import { listLiveSessionOwners } from "../../src/launch/session-notices";
 
 const tempRoots: string[] = [];
 
 async function writeTerminalRecord(root: string, name: string, sessionId: string, mode: number): Promise<void> {
 	const directory = path.join(root, "run", "terminals");
 	await fs.mkdir(directory, { recursive: true });
+	await fs.chmod(directory, 0o700);
 	const file = path.join(directory, name);
 	await fs.writeFile(file, JSON.stringify({ version: 1, sessionId, pid: process.pid }));
 	await fs.chmod(file, mode);
@@ -34,6 +35,6 @@ describe.skipIf(process.platform === "win32")("live session ids from terminal re
 		tempRoots.push(root);
 		await writeTerminalRecord(root, "1-owner.json", "owner-session", 0o600);
 		await writeTerminalRecord(root, "2-planted.json", "planted-session", 0o644);
-		expect(listLiveSessionIds(root)).toEqual(["owner-session"]);
+		expect(listLiveSessionOwners(root).map(owner => owner.sessionId)).toEqual(["owner-session"]);
 	});
 });

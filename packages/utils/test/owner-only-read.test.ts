@@ -138,7 +138,7 @@ describe.skipIf(!posix)("owner-only discovery reads on POSIX", () => {
 	// WHY: the containing directory is also part of the trust boundary and must be owned by this process user.
 	it("refuses a parent directory owned by another user", async () => {
 		const file = await tempRecord(0o600);
-		const uid = process.getuid();
+		const uid = process.getuid?.() ?? 1000;
 		const getuid = spyOn(process, "getuid").mockReturnValue(uid + 1);
 		try {
 			await expect(readOwnerOnlyFile(file)).rejects.toThrow("parent directory is owned by another user");

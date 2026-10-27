@@ -356,7 +356,9 @@ describe("terminal-control-transport", () => {
 			cleanupActions.push(() => server.close());
 
 			const client = net.connect(socketPath);
-			cleanupActions.push(() => client.destroy());
+			cleanupActions.push(() => {
+				client.destroy();
+			});
 
 			const clientConnected = Promise.withResolvers<void>();
 			client.once("connect", () => clientConnected.resolve());
@@ -409,7 +411,9 @@ describe("terminal-control-transport", () => {
 			cleanupActions.push(() => server.close());
 
 			const client = net.connect(endpoint);
-			cleanupActions.push(() => client.destroy());
+			cleanupActions.push(() => {
+				client.destroy();
+			});
 			client.once("error", error => {
 				clientFailure.reject(new Error("Windows named-pipe client failed", { cause: error }));
 			});

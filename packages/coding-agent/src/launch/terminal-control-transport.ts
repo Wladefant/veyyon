@@ -43,11 +43,11 @@ const MAX_STDERR_DIAGNOSTIC_BYTES = 16 * 1024;
 
 export class VirtualTerminalSocket extends EventEmitter implements TerminalSocket {
 	readonly clientId: number;
-	private _destroyed = false;
-	private _writableLength = 0;
-	private _decoder?: StringDecoder;
-	private readonly _writeFn: (clientId: number, base64: string, cb?: (err?: Error | null) => void) => boolean;
-	private readonly _destroyFn: (clientId: number) => void;
+	#destroyed = false;
+	#writableLength = 0;
+	#decoder?: StringDecoder;
+	readonly #writeFn: (clientId: number, base64: string, cb?: (err?: Error | null) => void) => boolean;
+	readonly #destroyFn: (clientId: number) => void;
 
 	constructor(
 		clientId: number,
@@ -56,20 +56,20 @@ export class VirtualTerminalSocket extends EventEmitter implements TerminalSocke
 	) {
 		super();
 		this.clientId = clientId;
-		this._writeFn = writeFn;
-		this._destroyFn = destroyFn;
+		this.#writeFn = writeFn;
+		this.#destroyFn = destroyFn;
 	}
 
 	get destroyed(): boolean {
-		return this._destroyed;
+		return this.#destroyed;
 	}
 
 	get writableLength(): number {
-		return this._destroyed ? 0 : this._writableLength;
+		return this.#destroyed ? 0 : this.#writableLength;
 	}
 
 	setEncoding(encoding: BufferEncoding): this {
-		this._decoder = new StringDecoder(encoding);
+		this.#decoder = new StringDecoder(encoding);
 		return this;
 	}
 
@@ -78,7 +78,7 @@ export class VirtualTerminalSocket extends EventEmitter implements TerminalSocke
 		encodingOrCb?: BufferEncoding | ((err?: Error | null) => void),
 		cb?: (err?: Error | null) => void,
 	): boolean {
-		if (this._destroyed) {
+		if (this.#destroyed) {
 			const callback = typeof encodingOrCb === "function" ? encodingOrCb : cb;
 			callback?.(new Error("Socket is destroyed"));
 			return false;
@@ -95,20 +95,20 @@ export class VirtualTerminalSocket extends EventEmitter implements TerminalSocke
 
 		const buf = typeof chunk === "string" ? Buffer.from(chunk, encoding) : Buffer.from(chunk);
 		const base64 = buf.toString("base64");
-		this._writableLength += buf.length;
+		this.#writableLength += buf.length;
 
-		return this._writeFn(this.clientId, base64, err => {
-			this._writableLength = Math.max(0, this._writableLength - buf.length);
+		return this.#writeFn(this.clientId, base64, err => {
+			this.#writableLength = Math.max(0, this.#writableLength - buf.length);
 			callback?.(err);
 		});
 	}
 
 	destroy(error?: Error): this {
-		if (this._destroyed) return this;
-		this._destroyed = true;
-		this._destroyFn(this.clientId);
-		if (this._decoder) {
-			const rest = this._decoder.end();
+		if (this.#destroyed) return this;
+		this.#destroyed = true;
+		this.#destroyFn(this.clientId);
+		if (this.#decoder) {
+			const rest = this.#decoder.end();
 			if (rest.length > 0) {
 				this.emit("data", rest);
 			}
@@ -121,18 +121,18 @@ export class VirtualTerminalSocket extends EventEmitter implements TerminalSocke
 	}
 
 	_receiveChunk(buf: Buffer): void {
-		if (this._destroyed) return;
-		const payload = this._decoder ? this._decoder.write(buf) : buf;
-		if (!this._decoder || payload.length > 0) {
+		if (this.#destroyed) return;
+		const payload = this.#decoder ? this.#decoder.write(buf) : buf;
+		if (!this.#decoder || payload.length > 0) {
 			this.emit("data", payload);
 		}
 	}
 
 	_handleRemoteClose(): void {
-		if (this._destroyed) return;
-		this._destroyed = true;
-		if (this._decoder) {
-			const rest = this._decoder.end();
+		if (this.#destroyed) return;
+		this.#destroyed = true;
+		if (this.#decoder) {
+			const rest = this.#decoder.end();
 			if (rest.length > 0) {
 				this.emit("data", rest);
 			}
@@ -289,11 +289,11 @@ public class VeyyonTerminalPipeBroker {
         }
     }
 
-    private async Task HandleClientAsync(ClientSession session, CancellationToken token) {
+    private async Task HandleClientAsync(ClientSession session, CancellationToken cancellationToken) {
         byte[] buffer = new byte[65536];
         try {
-            while (!token.IsCancellationRequested && session.Stream.IsConnected && !session.Disposed) {
-                int bytesRead = await session.Stream.ReadAsync(buffer, 0, buffer.Length, token);
+            while (!cancellationToken.IsCancellationRequested && session.Stream.IsConnected && !session.Disposed) {
+                int bytesRead = await session.Stream.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
                 if (bytesRead <= 0) break;
                 string base64 = Convert.ToBase64String(buffer, 0, bytesRead);
                 WriteStdout("D " + session.Id + " " + base64);
