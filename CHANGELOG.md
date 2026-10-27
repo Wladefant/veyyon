@@ -12,6 +12,7 @@
 
 - `nonRegularKind` in `@veyyon/utils/fs-error` returns the phrase a refusal uses for an entry that is not a regular file, such as `a named pipe (FIFO)`.
 - `getKernelRunnerDir(language)` returns the directory an eval kernel caches its runner script in, `cache/<language>-runner` under the config root or `$XDG_CACHE_HOME/veyyon`.
+- `privateTempDir()` returns `<tmpdir>/veyyon-<uid>`, created at mode 700, and throws when that entry is a symbolic link, not a directory, owned by another uid or open to group or other.
 
 ### Changed
 
@@ -131,13 +132,16 @@
 - The `task` brief and shared context escaped twice and a `yield` result sent as a JSON string are repaired once, before validation, so approval, hooks, the `tool_execution_*` events and the tool receive the same arguments ([#896](https://github.com/santhreal/veyyon/issues/896)).
 - Fixed a run that failed after one or more tool steps (a credential lookup or provider call that threw) being settled on its earlier tool-use reply, so a transient failure there is now retried and `session_stop` hooks receive the failure.
 - An @-mentioned image is encoded for the active model, so a model that cannot decode WebP (Ollama, llama.cpp, LM Studio and other `stb`-backed local servers) receives PNG or JPEG instead of WebP, and with `images.autoResize` off the mention goes through the same canonical re-encode as the read tool.
+- The shell snapshot, the `local://` fallback root, the debug transcript, the `/share` HTML handed to a custom share script, the LLM request dump, PDF image extractions, git patches, task branch worktrees, screenshots, generated images, external-editor buffers, speech recordings and eval agent artifacts are written under `<tmpdir>/veyyon-<uid>` (mode 700) instead of by a fixed or guessable name in the shared temp directory, where another account could read them or replace them first.
 - A required tool call under an in-band tool dialect is asked for in the conversation text instead of being sent as a native `tool_choice` the dialect never reads.
 - Shake and duplicate elision leave a tool result, block or truncated middle in place when its marker is not smaller than it, and size a captioned image result by its caption, so `/shake` no longer reports a kept image as freed tokens.
 - A required tool call on a request that cannot force it (a model or host that rejects a forced `tool_choice`, a host without `tool_choice`, a remembered rejection, Ollama, Cursor, Devin, GitLab Duo, and Claude on Antigravity) is asked for in the request text, instead of the tool only being offered.
 - `grep` repairs a pattern rejected for an unpaired parenthesis by escaping only that parenthesis, so `(get|set)Value(` matches `getValue(` instead of the text `(get` or `set)Value(`, and `)(` matches the text `)(` instead of every line.
 - The shell `grep` and `rg` builtins reject a pattern whose `)` closes no group instead of matching every line: `grep -E ')('`, `grep -P ')('` and `rg ')('` exit 2, `grep -G '\)\('` and `grep -G '\('` exit 2 with GNU grep's `Unmatched ) or \)` and `Unmatched ( or \(`, and a bare `grep ')('` searches for the text `)(`.
+- The embedded dashboard is extracted into `<tmpdir>/veyyon-<uid>/stats-client` (mode 700) instead of `<tmpdir>/veyyon-stats-client`, where another account could place its own files first.
 - The command runner checks a subcommand's flags and arguments against its declarations before running it, so `veyyon licenses nosuch` and `veyyon licenses --zzzz` exit 2 instead of printing the notices at exit 0.
 - A missing argument that takes one of a fixed set of values lists the set, such as `Missing required argument: shell (one of: bash, zsh, fish, powershell)`.
+- The YouTube scraper downloads subtitles into `<tmpdir>/veyyon-<uid>` (mode 700) instead of by a guessable name in the shared temp directory.
 
 ## [1.5.10] - 2026-10-25
 
