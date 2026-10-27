@@ -83,23 +83,6 @@ const MINIMAX_ANTHROPIC_ADAPTIVE_EFFORT_MAP: Readonly<EffortMap> = {
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve the canonical thinking metadata for a spec. Called exactly once per
- * model by `buildModel`, after compat resolution.
- *
- * - Non-reasoning models never carry thinking.
- * - Models that reason natively but reject the wire effort param
- *   (`compat.supportsReasoningEffort: false` on openai-responses*) carry no
- *   thinking either: `reasoning: true, thinking: undefined` IS the encoding
- *   for "thinks, but exposes no control surface".
- * - The models.dev-declared surface (`reasoningOptions`) owns the ladder when
- *   present; an explicit `spec.thinking` owns it otherwise. The wire facts
- *   (`effortMap`, `supportsDisplay`, mandatory-reasoning floors) are
- *   backfilled around the declared ladder, never in place of it.
- * - A spec with no declared surface gets NO thinking config. There is no
- *   identity inference: guessing a ladder from the model id is how the picker
- *   used to offer tiers the endpoint rejects.
- */
-/**
  * Ollama declares its effort vocabulary server-wide, not per model:
  * `reasoning.effort` accepts low|medium|high|max (plus `none` to disable) for
  * every thinking model on both the local daemon and Ollama Cloud. models.dev
@@ -145,6 +128,23 @@ const BUDGET_CONTROL_EFFORTS: readonly Effort[] = [
 	Effort.XHigh,
 ];
 
+/**
+ * Resolve the canonical thinking metadata for a spec. Called exactly once per
+ * model by `buildModel`, after compat resolution.
+ *
+ * - Non-reasoning models never carry thinking.
+ * - Models that reason natively but reject the wire effort param
+ *   (`compat.supportsReasoningEffort: false` on openai-responses*) carry no
+ *   thinking either: `reasoning: true, thinking: undefined` IS the encoding
+ *   for "thinks, but exposes no control surface".
+ * - The models.dev-declared surface (`reasoningOptions`) owns the ladder when
+ *   present; an explicit `spec.thinking` owns it otherwise. The wire facts
+ *   (`effortMap`, `supportsDisplay`, mandatory-reasoning floors) are
+ *   backfilled around the declared ladder, never in place of it.
+ * - A spec with no declared surface gets NO thinking config. There is no
+ *   identity inference: guessing a ladder from the model id is how the picker
+ *   used to offer tiers the endpoint rejects.
+ */
 export function resolveModelThinking<TApi extends Api>(
 	spec: ModelSpec<TApi>,
 	compat: CompatOf<TApi>,

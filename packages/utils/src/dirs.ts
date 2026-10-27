@@ -35,7 +35,6 @@ import { sleepSync } from "./sleep";
 import { errorMessage, isRecord } from "./type-guards";
 import { parseYaml, syncYamlTextToSettings } from "./yaml-sync";
 
-/** App name (e.g. "veyyon") */
 /**
  * The lowercase slug used in filesystem paths.
  *

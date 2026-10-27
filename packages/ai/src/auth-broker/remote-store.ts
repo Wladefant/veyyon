@@ -784,11 +784,6 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	/**
-	 * Fire-and-forget `refreshSnapshot()` after a write. When the SSE stream is
-	 * active the broker will deliver the new generation push, so the extra GET
-	 * is wasted bandwidth and we skip it.
-	 */
-	/**
 	 * Report that this process's view of the broker's credentials has gone stale.
 	 *
 	 * Every caller here is a path that already succeeded at the thing the user
@@ -812,6 +807,11 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		);
 	}
 
+	/**
+	 * Fire-and-forget `refreshSnapshot()` after a write. When the SSE stream is
+	 * active the broker will deliver the new generation push, so the extra GET
+	 * is wasted bandwidth and we skip it.
+	 */
 	#maybeRefreshSnapshot(reason: string): void {
 		if (this.#streamingActive) return;
 		void this.refreshSnapshot().catch(error => {

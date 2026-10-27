@@ -2,9 +2,6 @@ import { clamp } from "@veyyon/utils/math";
 import type { Component } from "../tui";
 
 /**
- * Spacer component that renders empty lines
- */
-/**
  * Coerce a requested line count to a safe array length. `render` builds
  * `new Array(#lines)`, which throws `RangeError` for a negative, fractional,
  * NaN, or out-of-range value — so a public caller passing a computed height
@@ -20,6 +17,9 @@ function normalizeLineCount(lines: number): number {
 // legitimate request, and reserving it would waste memory in the render tree.
 const MAX_SPACER_LINES = 1 << 16;
 
+/**
+ * Spacer component that renders empty lines
+ */
 export class Spacer implements Component {
 	#lines: number;
 	#cached: string[] | undefined;

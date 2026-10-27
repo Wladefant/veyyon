@@ -105,19 +105,6 @@ export function wrapShellLineForClientTerminal(
 export { FLAGGED_BASH_PATTERNS } from "./bash-guard";
 
 /**
- * How the bash tool classifies one call.
- *
- * A named function rather than an inline class field so it can be exercised
- * without constructing a session. `BashTool.approval` is an instance field, so
- * a test reaching for `BashTool.prototype.approval` silently gets `undefined`
- * and measures the default tier instead of the guard: the suite passes while
- * proving nothing, which is the worst kind of green.
- *
- * The decisions are `critical` rather than `override`, because these are the
- * calls that must still stop in yolo, which is the mode every published
- * home-directory wipe happened in.
- */
-/**
  * The environment a bash call will actually run with: the process environment
  * with the call's own `env` argument spread over it, which is exactly what
  * `buildNonInteractiveEnv` hands the child.
@@ -168,6 +155,19 @@ export function extractEffectiveBashCommand(rawCommand: string, rawCwd?: string)
 	return { command, cwd };
 }
 
+/**
+ * How the bash tool classifies one call.
+ *
+ * A named function rather than an inline class field so it can be exercised
+ * without constructing a session. `BashTool.approval` is an instance field, so
+ * a test reaching for `BashTool.prototype.approval` silently gets `undefined`
+ * and measures the default tier instead of the guard: the suite passes while
+ * proving nothing, which is the worst kind of green.
+ *
+ * The decisions are `critical` rather than `override`, because these are the
+ * calls that must still stop in yolo, which is the mode every published
+ * home-directory wipe happened in.
+ */
 export function bashApprovalDecision(
 	args: unknown,
 	extraProtectedPaths: readonly string[] = [],

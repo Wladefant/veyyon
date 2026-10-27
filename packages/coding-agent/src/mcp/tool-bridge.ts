@@ -346,14 +346,6 @@ async function reconnectWithAbort(reconnect: MCPReconnect, signal?: AbortSignal)
 }
 
 /**
- * Create a unique tool name for an MCP tool.
- *
- * Prefixes with server name to avoid conflicts. If the tool name already
- * starts with the server name (e.g., server "puppeteer" with tool
- * "puppeteer_screenshot"), strips the redundant prefix to produce
- * "mcp__puppeteer_screenshot" instead of "mcp__puppeteer_puppeteer_screenshot".
- */
-/**
  * Reduce a server or tool name to the characters a tool name may contain.
  *
  * DIGITS ARE KEPT. They used to be replaced along with everything else, which
@@ -387,6 +379,14 @@ export function mcpToolNamePrefix(serverName: string): string {
 	return `mcp__${sanitizeMCPToolNamePart(serverName, "server")}_`;
 }
 
+/**
+ * Create a unique tool name for an MCP tool.
+ *
+ * Prefixes with server name to avoid conflicts. If the tool name already
+ * starts with the server name (e.g., server "puppeteer" with tool
+ * "puppeteer_screenshot"), strips the redundant prefix to produce
+ * "mcp__puppeteer_screenshot" instead of "mcp__puppeteer_puppeteer_screenshot".
+ */
 export function createMCPToolName(serverName: string, toolName: string): string {
 	const sanitizedServerName = sanitizeMCPToolNamePart(serverName, "server");
 	const sanitizedToolName = sanitizeMCPToolNamePart(toolName, "tool");

@@ -752,9 +752,6 @@ export function getTimeSeries(hours = 24, cutoff?: number | null, bucketMs = 60 
 }
 
 /**
- * Get daily performance time series data for the last N days.
- */
-/**
  * Get daily model usage time series data for the last N days.
  */
 export function getModelTimeSeries(days = 14, cutoff?: number | null, bucketMs = DAY_MS): ModelTimeSeriesPoint[] {

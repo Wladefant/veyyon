@@ -63,7 +63,6 @@ export function isScraperDegrade(value: unknown): value is ScraperDegrade {
 	return typeof value === "object" && value !== null && (value as ScraperDegrade).scraperDegrade === true;
 }
 
-/** Parse a URL, returning null on invalid input (a non-match, not a degrade). */
 /**
  * Parse a URL, or `null` when the string is not one.
  *

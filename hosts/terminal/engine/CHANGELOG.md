@@ -8,6 +8,7 @@
 - Esc and Ctrl+C paint on the next frame unless their handler arms a double-press window through the new `TUI.holdFrameForInput()`, which replaces the engine's one-frame hold on every Esc and Ctrl+C.
 - A key press lets the frame its handler requests and the next one skip the 30 fps cadence, and pulls forward a frame already waiting out the cadence, so an answer a handler awaits paints without an extra frame interval.
 - `FramePacer`'s comments in `core/frame-pacing.ts` are shorter, keeping the module under its size ceiling; behavior is unchanged.
+- Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
 
 ## [1.5.10] - 2026-10-25
 

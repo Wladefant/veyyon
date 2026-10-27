@@ -3129,15 +3129,15 @@ export class AgentSession {
 	 * - Expands file-based prompt templates by default
 	 * - During streaming, queues via steer() or followUp() based on streamingBehavior option
 	 * - Validates model and API key before sending (when not streaming)
-	 * @throws Error if streaming and no streamingBehavior specified
-	 * @throws Error if no model selected or no API key available (when not streaming)
-	 */
-	/**
+	 *
 	 * Returns `false` when the command was fully handled locally (extension or
 	 * custom-TS command consumed without calling the LLM). Returns `true` when
 	 * the prompt was forwarded to the agent — either directly or queued as a
 	 * steer/follow-up. Callers that render a UI or manage turn lifecycle (e.g.
 	 * the ACP agent) use this to know whether to expect an `agent_end` event.
+	 *
+	 * @throws Error if streaming and no streamingBehavior specified
+	 * @throws Error if no model selected or no API key available (when not streaming)
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<boolean> {
 		await this.#promptRefresh;
@@ -3928,13 +3928,6 @@ export class AgentSession {
 		this.#checkpoint.finish();
 	}
 
-	/**
-	 * Render context shared by the eager todo/task preludes. `toolRefs` resolves each
-	 * tool's wire name (matching `buildSystemPrompt`'s `toolRefs`) so the reminder names
-	 * the tool the model actually sees when an extension renames it; `taskBatch` gates
-	 * batch-call guidance that would steer toward a failing call shape when `task.batch`
-	 * is off (the flat single-spawn schema rejects `tasks`/`context`).
-	 */
 	#setModelWithProviderSessionReset(model: Model): void {
 		const currentModel = this.model;
 		if (currentModel) {

@@ -1720,20 +1720,6 @@ function fallbackServedModelFromUsage(source: AnthropicWireUsage): string | unde
 }
 
 /**
- * Price a fallback turn per the fallback billing cookbook §4:
- *   • A pre-served attempt with zero output/cache-creation is not billed
- *     (waived classifier block); its iteration is skipped.
- *   • Mid-stream refusals bill their attempting model's input+output at
- *     that model's normal rates.
- *   • The `fallback_message` attempt's input tokens are rebilled at the
- *     served model's cache-read rate (fallback credit — 10% of base input).
- *
- * Top-level `usage.input/output/cacheRead/cacheWrite` stay Anthropic's raw
- * served-attempt counts; `usage.cost` reflects the per-iteration attributed
- * total. Non-fallback turns skip this path entirely and use the requested
- * model at the normal `calculateCost` call.
- */
-/**
  * Resolve a served/iteration model id to its bundled catalog entry when
  * possible so the per-iteration cost uses the served model's pricing
  * (e.g. Opus 4.8 rates for a Fable→Opus fallback). Falls back to
@@ -1756,6 +1742,20 @@ function resolveIterationModel(
 	return requestModel;
 }
 
+/**
+ * Price a fallback turn per the fallback billing cookbook §4:
+ *   • A pre-served attempt with zero output/cache-creation is not billed
+ *     (waived classifier block); its iteration is skipped.
+ *   • Mid-stream refusals bill their attempting model's input+output at
+ *     that model's normal rates.
+ *   • The `fallback_message` attempt's input tokens are rebilled at the
+ *     served model's cache-read rate (fallback credit — 10% of base input).
+ *
+ * Top-level `usage.input/output/cacheRead/cacheWrite` stay Anthropic's raw
+ * served-attempt counts; `usage.cost` reflects the per-iteration attributed
+ * total. Non-fallback turns skip this path entirely and use the requested
+ * model at the normal `calculateCost` call.
+ */
 function calculateFallbackTurnCost(
 	requestModel: Model<"anthropic-messages">,
 	usage: Usage,

@@ -436,8 +436,10 @@ export class AskDialogComponent implements Component {
 	#submitScrollOffset = 0;
 	/** Pointer-highlighted option row on the active question tab (null clears). */
 	#hoveredRowIndex: number | null = null;
-	/** Pointer-highlighted tab id (null clears). Tabs keep hover separate from the active tab: */
-	/** activating on hover would silently change which question is being answered. */
+	/**
+	 * Pointer-highlighted tab id (null clears). Tabs keep hover separate from the active tab:
+	 * activating on hover would silently change which question is being answered.
+	 */
 	#hoveredTabId: string | null = null;
 	/**
 	 * The cross-fade between the row the pointer left and the row it arrived at,

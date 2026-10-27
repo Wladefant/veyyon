@@ -254,15 +254,6 @@ const PREAMBLE =
 const TRUNCATION_MARKER = "\n\n…[mental-model snapshot truncated at render budget]";
 
 /**
- * Format a sorted list of models into the final `<mental_models>` wrapper,
- * bounded by `budgetChars`. Per-model truncation is divided proportionally
- * across the visible models; an overflow is signalled with a marker so the
- * model can tell context is missing.
- *
- * Exported for unit testing of the budget contract — callers should go
- * through `loadMentalModelsBlock`.
- */
-/**
  * Minimum room for actual content beyond the wrapper. Below this, no
  * mental-model block can be meaningfully rendered.
  */
@@ -274,6 +265,15 @@ function minRenderBudgetChars(): number {
 	return cleanOverhead + MIN_CONTENT_ROOM_CHARS;
 }
 
+/**
+ * Format a sorted list of models into the final `<mental_models>` wrapper,
+ * bounded by `budgetChars`. Per-model truncation is divided proportionally
+ * across the visible models; an overflow is signalled with a marker so the
+ * model can tell context is missing.
+ *
+ * Exported for unit testing of the budget contract — callers should go
+ * through `loadMentalModelsBlock`.
+ */
 export function renderMentalModelsBlock(models: MentalModelSummary[], budgetChars: number): string {
 	if (models.length === 0) return "";
 
@@ -332,6 +332,9 @@ export function summarizeMentalModel(model: MentalModelSummary): string {
 	return `- ${model.id}: ${model.name}${tags}${refreshed}`;
 }
 
+/** Hard cap on input line count per side before LCS. Keeps the O(n*m) table tractable. */
+export const MAX_LCS_LINES = 1_000;
+
 /**
  * Render a unified-style line diff between the previous and current content
  * of a mental model. Hindsight's history endpoint returns the previous
@@ -343,9 +346,6 @@ export function summarizeMentalModel(model: MentalModelSummary): string {
  * TUI; output is then capped at `maxLines` so the rendered diff stays
  * readable. The cap is signalled inline.
  */
-/** Hard cap on input line count per side before LCS. Keeps the O(n*m) table tractable. */
-export const MAX_LCS_LINES = 1_000;
-
 export function diffMentalModelContent(previous: string | null, current: string, maxLines = 200): string {
 	const prevRaw = previous ? previous.split("\n") : [];
 	const currRaw = current ? current.split("\n") : [];

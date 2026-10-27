@@ -3029,17 +3029,6 @@ function findLastUserMessageIndex(messages: Message[]): number {
 }
 
 /**
- * Build `ConversationStateStructure.rootPromptMessagesJson` blob IDs for the
- * system prompt plus prior conversation history, as JSON blobs matching
- * Cursor's internal Vercel-AI-SDK-shaped message format.
- *
- * Cursor's server uses `rootPromptMessagesJson` (not `turns[]`) to build the
- * actual model prompt. `turns[]` is UI/display metadata. Without populating
- * this field, multi-turn conversations lose prior context — the model sees
- * only an empty placeholder where historical user turns should be.
- * The active user message is excluded because it is sent in the action.
- */
-/**
  * Build the `rootPromptMessagesJson` head: one placeholder system message, and nothing else.
  *
  * The caller's prompt is NOT put here. This server fetches these blobs and then rebuilds the
@@ -3055,6 +3044,17 @@ export function buildCursorSystemPromptJsons(): string[] {
 	return [JSON.stringify({ role: "system", content: "You are a helpful assistant." })];
 }
 
+/**
+ * Build `ConversationStateStructure.rootPromptMessagesJson` blob IDs for the
+ * system prompt plus prior conversation history, as JSON blobs matching
+ * Cursor's internal Vercel-AI-SDK-shaped message format.
+ *
+ * Cursor's server uses `rootPromptMessagesJson` (not `turns[]`) to build the
+ * actual model prompt. `turns[]` is UI/display metadata. Without populating
+ * this field, multi-turn conversations lose prior context — the model sees
+ * only an empty placeholder where historical user turns should be.
+ * The active user message is excluded because it is sent in the action.
+ */
 function buildRootPromptMessagesJson(
 	messages: Message[],
 	systemPromptIds: Uint8Array[],

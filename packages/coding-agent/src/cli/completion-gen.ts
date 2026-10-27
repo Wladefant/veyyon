@@ -352,7 +352,6 @@ function bashFlagCase(bin: string, flags: CompletionFlag[]): string {
 	return lines.join("\n");
 }
 
-/** `case` labels for every root flag that consumes the following token. */
 /**
  * Every spelling of a flag that consumes the token after it.
  *

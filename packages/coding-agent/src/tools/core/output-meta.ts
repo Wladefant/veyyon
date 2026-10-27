@@ -410,7 +410,6 @@ const kUnwrappedExecute = Symbol("OutputMeta.UnwrappedExecute");
 // Centralized artifact spill for large tool results
 // =============================================================================
 
-/** Resolved artifact spill config sourced from the session settings (or schema defaults). */
 /**
  * The head/tail WINDOW a spilled result keeps. Not the threshold that decides
  * whether it spills: `tools.artifactSpillThreshold` is read once, in

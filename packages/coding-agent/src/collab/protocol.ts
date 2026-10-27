@@ -708,9 +708,8 @@ export type CollabFrame =
 	 * chunking, a multi-MB session has to fit one giant frame inside the
 	 * 30 s first-welcome budget. The last chunk carries `final: true` so the
 	 * guest can finalize the replica session.
-	 */
-	/**
-	 * Wire entries, not the host's. Build them with {@link toWireSessionEntry}.
+	 *
+	 * `entries` holds wire entries, not the host's. Build them with {@link toWireSessionEntry}.
 	 *
 	 * Typed as the narrower shape on purpose. Declaring the host's `SessionEntry` here is what let
 	 * every undeclared field reach every guest: assignability runs the permissive way, so a host

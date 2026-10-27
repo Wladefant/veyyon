@@ -163,11 +163,6 @@ export interface StrippedToolCallsMarker {
 }
 
 /**
- * Build the session context from entries using tree traversal.
- * If leafId is provided, walks from that entry to root.
- * Handles compaction and branch summaries along the path.
- */
-/**
  * Re-attach the plaintext source of a legacy image-archive compaction as a
  * single text block, so an old session whose compaction persisted a frame
  * archive keeps showing its archived history after every context rebuild. The
@@ -233,6 +228,11 @@ export function resolveContextLeaf(
 	return (leafId ? byId.get(leafId) : undefined) ?? entries[entries.length - 1];
 }
 
+/**
+ * Build the session context from entries using tree traversal.
+ * If leafId is provided, walks from that entry to root.
+ * Handles compaction and branch summaries along the path.
+ */
 export function buildSessionContext(
 	entries: SessionEntry[],
 	leafId?: string | null,

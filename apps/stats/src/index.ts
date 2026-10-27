@@ -39,9 +39,6 @@ export type {
 } from "./types";
 
 /**
- * Format cost in dollars.
- */
-/**
  * Print stats summary to console.
  */
 async function printStats(): Promise<void> {

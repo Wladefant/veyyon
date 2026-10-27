@@ -348,7 +348,6 @@ class CodingAgentSettingsHooks implements SettingsStoreHooks {
 		);
 	}
 
-	/** Apply schema migrations to raw settings */
 	/**
 	 * Apply every field-level migration to one raw settings tree.
 	 *

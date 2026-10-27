@@ -463,6 +463,9 @@ export interface CacheLookupResult<T> {
 	fetchedAt: number;
 }
 
+/** The settings the GitHub cache reads. */
+type CacheSettingPath = "github.cache.softTtlSec" | "github.cache.hardTtlSec" | "github.cache.enabled";
+
 /**
  * Read one cache setting.
  *
@@ -475,9 +478,6 @@ export interface CacheLookupResult<T> {
  * setting had no effect (Law 10). Falling back to the default is still the right
  * behaviour, so the fallback stays; it is just no longer quiet.
  */
-/** The settings the GitHub cache reads. */
-type CacheSettingPath = "github.cache.softTtlSec" | "github.cache.hardTtlSec" | "github.cache.enabled";
-
 function readCacheSetting<T extends number | boolean>(
 	settings: Settings | undefined,
 	key: CacheSettingPath,

@@ -327,10 +327,6 @@ export function writeFrame(stdin: FrameSink, frame: string): boolean {
 }
 
 /**
- * Stdio transport for MCP servers.
- * Spawns a subprocess and communicates via stdin/stdout.
- */
-/**
  * How many recent stderr lines a server's tail keeps.
  *
  * Enough to carry a stack trace or a startup error, small enough that a chatty
@@ -352,6 +348,10 @@ const STDERR_TAIL_LINE_CHARS = 400;
 const STDIO_CLOSED_FIX =
 	"Fix: run `/mcp list` to find this server's name, then `/mcp reconnect <name>`. If the output above names a missing command or environment variable, fix that in the server's MCP config entry first.";
 
+/**
+ * Stdio transport for MCP servers.
+ * Spawns a subprocess and communicates via stdin/stdout.
+ */
 export class StdioTransport implements MCPTransport {
 	#process: Subprocess<"pipe", "pipe", "pipe"> | null = null;
 	/**

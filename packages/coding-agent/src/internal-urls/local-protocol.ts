@@ -232,7 +232,6 @@ export function resolveLocalRoot(options: LocalProtocolOptions, platform: NodeJS
 	return path.join(os.tmpdir(), "veyyon-local", safeSessionId(options));
 }
 
-/** Resolve a local:// URL to an on-disk path under the active session's local root. */
 /**
  * List the plan files in a session-local root as `local://` URLs, newest first.
  *
@@ -313,6 +312,7 @@ async function copyLocalEntries(sourceDir: string, destinationDir: string): Prom
 	}
 }
 
+/** Resolve a local:// URL to an on-disk path under the active session's local root. */
 export function resolveLocalUrlToPath(
 	input: string | InternalUrl,
 	options: LocalProtocolOptions,

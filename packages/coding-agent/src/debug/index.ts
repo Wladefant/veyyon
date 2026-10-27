@@ -37,7 +37,6 @@ import { clearArtifactCache, createDebugLogSource, createReportBundle, getArtifa
 import { collectSystemInfo, formatSystemInfo } from "./system-info";
 import { collectTerminalState, formatTerminalState } from "./terminal-info";
 
-/** Debug menu options */
 /**
  * The slice of the interactive context the debug selector uses.
  *
@@ -64,6 +63,7 @@ export type DebugSelectorContext = Pick<
 	| "ui"
 >;
 
+/** Debug menu options */
 const DEBUG_MENU_ITEMS: SelectItem[] = [
 	{ value: "open-artifacts", label: "Open: artifact folder", description: "Open session artifacts in file manager" },
 	{ value: "performance", label: "Report: performance issue", description: "Profile CPU, reproduce, then bundle" },

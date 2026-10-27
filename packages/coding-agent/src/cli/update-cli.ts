@@ -170,14 +170,6 @@ export type UpdateMethod = "binary" | "source";
 type UpdateTarget = { method: "binary"; path: string } | { method: "source"; path: string };
 
 /**
- * Classify an on-PATH veyyon path as a binary or source install.
- *
- * A source install links PATH's veyyon to `<checkout>/<SOURCE_LAUNCHER_TAIL>`,
- * so following the symlink (realpath) and matching that suffix is what tells the
- * two apart. Everything else is a standalone binary the updater can swap.
- * Exported for direct unit testing without a real install on disk.
- */
-/**
  * Does this path end at the in-checkout launcher, on either platform?
  *
  * Separators are normalized because the Windows shim stores a `\`-separated
@@ -259,6 +251,14 @@ function looksLikeShim(resolvedPath: string, body: string): boolean {
 	return body.startsWith("#!");
 }
 
+/**
+ * Classify an on-PATH veyyon path as a binary or source install.
+ *
+ * A source install links PATH's veyyon to `<checkout>/<SOURCE_LAUNCHER_TAIL>`,
+ * so following the symlink (realpath) and matching that suffix is what tells the
+ * two apart. Everything else is a standalone binary the updater can swap.
+ * Exported for direct unit testing without a real install on disk.
+ */
 export function resolveUpdateMethod(
 	veyyonPath: string,
 	readShim: (p: string) => string = defaultReadShim,
@@ -1265,9 +1265,6 @@ export async function replaceBinaryForUpdate(options: BinaryReplacementOptions):
 	}
 }
 
-/**
- * Download a release binary to a target path, replacing an existing file.
- */
 /**
  * Download release `expectedVersion` and swap it in at `targetPath`.
  *

@@ -350,21 +350,17 @@ export class PlanReviewOverlay implements Component {
 	}
 
 	/**
-	 * Hit-test an SGR mouse report (`\x1b[<b;x;yM/m`) against the click maps the
-	 * last render recorded. Returns true when consumed. The fullscreen overlay
-	 * paints from screen row 0, so a 1-based mouse row maps directly to the
-	 * rendered-line index. Wheel scrolls the body; pointer motion lights up the
-	 * hovered option row; a left click on an option activates it (select +
-	 * confirm), on a ToC row jumps to that section, and on the body column focuses
-	 * the body.
-	 */
-	/**
 	 * Hit-test an SGR mouse report against ModalShell chrome first (close glyph,
 	 * click-outside, footer chips), then fall back to the click maps the last
 	 * render recorded for the sidebar/body/options region. Those maps are keyed
 	 * by row-within-the-composed-body-content, so incoming screen rows are
 	 * translated via `#bodyRowOffset` (the shell's `bodyRowStart`) before
 	 * consulting them.
+	 *
+	 * Returns true when consumed. Wheel scrolls the body; pointer motion lights up the
+	 * hovered option row; a left click on an option activates it (select +
+	 * confirm), on a ToC row jumps to that section, and on the body column focuses
+	 * the body.
 	 */
 	#handleMouse(data: string): boolean {
 		return routeSgrMouseInput(data, event => {

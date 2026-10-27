@@ -243,8 +243,10 @@ export interface AutocompleteProvider {
 
 	/** Get inline hint text to show as dim ghost text after the cursor */
 	getInlineHint?(lines: string[], cursorLine: number, cursorCol: number): string | null;
-	/** Synchronously try to complete a slash command at the start of a line (no async I/O). */
-	/** Returns matched items and the full prefix, or null if not applicable. */
+	/**
+	 * Synchronously try to complete a slash command at the start of a line (no async I/O).
+	 * Returns matched items and the full prefix, or null if not applicable.
+	 */
 	trySyncSlashCompletion?(textBeforeCursor: string): AutocompleteSuggestions | null;
 	/**
 	 * Synchronously try to expand text immediately before the cursor (no async I/O).

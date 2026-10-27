@@ -39,10 +39,6 @@ export class KernelExecutionCancelledError extends Error {
 }
 
 /**
- * Options every kernel-backed language executor shares. Per-language option
- * interfaces structurally extend this; the base executor only reads these.
- */
-/**
  * Whether a language's kernel outlives one eval call.
  *
  * `session` keeps one kernel per session, so a later cell sees variables an earlier one defined, which
@@ -56,6 +52,10 @@ export class KernelExecutionCancelledError extends Error {
  */
 export type KernelMode = "session" | "per-call";
 
+/**
+ * Options every kernel-backed language executor shares. Per-language option
+ * interfaces structurally extend this; the base executor only reads these.
+ */
 export interface KernelExecutorBaseOptions {
 	cwd?: string;
 	timeoutMs?: number;

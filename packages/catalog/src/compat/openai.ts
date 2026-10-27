@@ -42,14 +42,6 @@ const GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS = 600_000;
 const DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS = 300_000;
 /** Kimi K2.6 can spend several minutes reasoning before the first visible token. */
 const KIMI_K26_REASONING_STREAM_IDLE_TIMEOUT_MS = 300_000;
-/**
- * Native Kimi K2.7 Code requires `thinking.type: "enabled"` and rejects
- * disabled thinking. Match the public id, its Fast variant, and the
- * `kimi-code/kimi-for-coding` alias (which keeps the family name).
- * Caller-disabled requests on non-native dialects (Fireworks `openai`,
- * OpenRouter `openrouter`, …) MUST keep their per-dialect disable shape —
- * gating on `isMoonshotKimi` is the caller's responsibility.
- */
 /** Xiaomi MiMo Pro on api.xiaomimimo.com can stall ~2min before the first event (issue #1770). */
 const XIAOMI_MIMO_STREAM_IDLE_TIMEOUT_MS = 300_000;
 /** Alibaba Coding Plan (coding-intl.dashscope) qwen models idle before the first event (issue #1770). */

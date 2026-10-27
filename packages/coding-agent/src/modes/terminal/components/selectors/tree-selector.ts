@@ -50,15 +50,15 @@ interface FlatNode {
 /** Filter mode for tree display */
 type FilterMode = TreeFilterMode;
 
-/**
- * Tree list component with selection and ASCII art visualization
- */
 /** Tool call info for lookup */
 interface ToolCallInfo {
 	name: string;
 	arguments: Record<string, unknown>;
 }
 
+/**
+ * Tree list component with selection and ASCII art visualization
+ */
 class TreeList implements Component {
 	#flatNodes: FlatNode[] = [];
 	#filteredNodes: FlatNode[] = [];

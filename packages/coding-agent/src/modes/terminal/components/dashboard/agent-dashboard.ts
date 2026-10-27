@@ -204,15 +204,6 @@ interface RosterExtras {
 }
 
 /**
- * The Live roster: one row per agent that exists, including the ones parked on
- * disk from previous runs.
- *
- * Deliberately NOT a configuration list. It only ever shows agents that exist,
- * which means a disabled specialist cannot appear in it at all: not by a filter
- * that could drift, but because a disabled agent is never spawned and so never
- * registers.
- */
-/**
  * Narrowest a model badge is worth drawing.
  *
  * `claude-son…` is a model you can recognise; `clau…` is four columns spent on
@@ -258,6 +249,15 @@ interface RosterColumns {
 	age: number;
 }
 
+/**
+ * The Live roster: one row per agent that exists, including the ones parked on
+ * disk from previous runs.
+ *
+ * Deliberately NOT a configuration list. It only ever shows agents that exist,
+ * which means a disabled specialist cannot appear in it at all: not by a filter
+ * that could drift, but because a disabled agent is never spawned and so never
+ * registers.
+ */
 class LiveRosterPane implements Component {
 	constructor(
 		private readonly agents: readonly LiveAgent[],

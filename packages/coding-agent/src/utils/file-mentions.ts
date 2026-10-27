@@ -46,14 +46,6 @@ function sanitizeMentionPath(rawPath: string): string | null {
 }
 
 /**
- * Whether an `@mention` names a file that is really there.
- *
- * The throw is how "absent" arrives, and absent is the ordinary answer: this runs against every candidate
- * a half-typed mention could mean, so most calls are misses by design. False also covers a path this
- * process cannot stat, which reaches the same place -- a file the session cannot read is not a file it can
- * attach to the prompt.
- */
-/**
  * Why this probe is silent about a fault.
  *
  * A half-typed `@`-mention is resolved against several candidates, so a miss is the ordinary answer

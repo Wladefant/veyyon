@@ -3096,11 +3096,6 @@ export class SessionManager {
 	}
 
 	/**
-	 * Create a new session.
-	 * @param cwd Working directory (stored in the session header)
-	 * @param sessionDir Optional session directory; defaults to the cwd-derived dir.
-	 */
-	/**
 	 * Start a fresh session at `cwd`.
 	 *
 	 * `sessionDir` pins where this session's files live. It is honoured for the
