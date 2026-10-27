@@ -28,7 +28,10 @@ import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils
 import { type LaunchParams, LaunchTool, type LaunchToolDetails } from "../../src/tools/shell/launch";
 import { makeToolSession } from "../helpers/tool-session";
 
+/** Long enough that every op of the sweep answers from the live record before the purge. */
 const CLEANUP_WAIT_MS = 4_000;
+/** A reused name reads no op before its purge, so it waits only past the restart that follows an exit. */
+const REUSED_CLEANUP_WAIT_MS = 1_000;
 
 let isolatedConfigRoot: IsolatedConfigRoot | undefined;
 const cleanupDirs: string[] = [];
@@ -162,7 +165,10 @@ async function purgedAll(tool: LaunchTool, names: string[]): Promise<boolean> {
 }
 
 /** A project whose process prints three lines and ends with `exitCode` after 300 ms. */
-async function project(exitCodes: number[]): Promise<{ tool: LaunchTool; scripts: Map<number, string> }> {
+async function project(
+	exitCodes: number[],
+	cleanupWaitMs = CLEANUP_WAIT_MS,
+): Promise<{ tool: LaunchTool; scripts: Map<number, string> }> {
 	const dir = await tempDir("veyyon-launch-purged-");
 	const scripts = new Map<number, string>();
 	for (const code of exitCodes) {
@@ -175,7 +181,7 @@ async function project(exitCodes: number[]): Promise<{ tool: LaunchTool; scripts
 	}
 	const session = makeToolSession({
 		cwd: dir,
-		settings: { get: key => (key === "launch.cleanupWaitMs" ? CLEANUP_WAIT_MS : undefined) },
+		settings: { get: key => (key === "launch.cleanupWaitMs" ? cleanupWaitMs : undefined) },
 	});
 	return { tool: new LaunchTool(session), scripts };
 }
@@ -256,7 +262,7 @@ describe("a launch operation answers the same before and after an exited process
 	}, 90_000);
 
 	it("answers a reused name with its newest generation", async () => {
-		const { tool, scripts } = await project([0, 3]);
+		const { tool, scripts } = await project([0, 3], REUSED_CLEANUP_WAIT_MS);
 		for (const code of [0, 3]) {
 			await answer(tool, {
 				op: "start",
