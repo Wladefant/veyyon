@@ -54,6 +54,22 @@ class KvObservationSafety(unittest.TestCase):
 
 
 
+def send_and_wait(runner_stdin, lines, request, deadline, frames=None):
+    if runner_stdin is not None:
+        runner_stdin.write(json.dumps(request) + "\n")
+        runner_stdin.flush()
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"timed out waiting for done frame for request {request.get('id')}")
+        line = lines.get(timeout=remaining)
+        frame = json.loads(line)
+        if frames is not None:
+            frames.append(frame)
+        if frame.get("type") == "done" and frame.get("id") == request.get("id"):
+            break
+
+
 @unittest.skipUnless(os.name == "nt", "requires an isolated Windows runner")
 class WindowsProcessSafety(unittest.TestCase):
     def test_runner_rejects_zero_signal_audit_without_a_process_operation(self):
@@ -71,21 +87,13 @@ class WindowsProcessSafety(unittest.TestCase):
             drain_thread = threading.Thread(target=drain, daemon=True)
             drain_thread.start()
             frames = []
-            def send_and_wait(request):
-                runner.stdin.write(json.dumps(request) + "\n")
-                runner.stdin.flush()
-                while True:
-                    remaining = max(0.1, deadline - time.monotonic())
-                    line = lines.get(timeout=remaining)
-                    frame = json.loads(line)
-                    frames.append(frame)
-                    if frame.get("type") == "done" and frame.get("id") == request.get("id"):
-                        break
-            send_and_wait({"id": "nonzero", "code": "import sys; sys.audit('os.kill', 123, 15)"})
-            send_and_wait({"id": "guard", "code": "import sys; sys.audit('os.kill', 123, 0)"})
+            send_and_wait(runner.stdin, lines, {"id": "nonzero", "code": "import sys; sys.audit('os.kill', 123, 15)"}, deadline, frames)
+            send_and_wait(runner.stdin, lines, {"id": "guard", "code": "import sys; sys.audit('os.kill', 123, 0)"}, deadline, frames)
             runner.stdin.write(json.dumps({"type": "exit"}) + "\n")
             runner.stdin.flush()
-            remaining = max(0.1, deadline - time.monotonic())
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("timed out waiting for runner to exit")
             remaining_output, errors = runner.communicate(timeout=remaining)
             for line in remaining_output.splitlines():
                 if line.strip():
@@ -105,6 +113,35 @@ class WindowsProcessSafety(unittest.TestCase):
                 runner.kill()
                 runner.wait(timeout=5)
             drain_thread.join(timeout=1)
+    def test_send_and_wait_enforces_hard_deadline_on_continuous_non_done_output(self):
+        lines = queue.Queue()
+        stop_feeder = threading.Event()
+        def feed_continuous_non_done():
+            while not stop_feeder.is_set():
+                lines.put(json.dumps({"type": "stdout", "data": "streaming chunk\n"}))
+                time.sleep(0.005)
+
+        feeder = threading.Thread(target=feed_continuous_non_done, daemon=True)
+        feeder.start()
+        try:
+            deadline = time.monotonic() + 0.2
+            start = time.monotonic()
+            with self.assertRaises(TimeoutError):
+                send_and_wait(None, lines, {"id": "cell1"}, deadline)
+            elapsed = time.monotonic() - start
+            self.assertGreaterEqual(elapsed, 0.15)
+            self.assertLess(elapsed, 2.0, "deadline check did not terminate promptly")
+        finally:
+            stop_feeder.set()
+            feeder.join(timeout=1)
+
+        lines_done = queue.Queue()
+        lines_done.put(json.dumps({"type": "stdout", "data": "first chunk\n"}))
+        lines_done.put(json.dumps({"type": "done", "id": "cell2", "status": "ok"}))
+        received = []
+        send_and_wait(None, lines_done, {"id": "cell2"}, time.monotonic() + 5, received)
+        self.assertEqual(len(received), 2)
+        self.assertEqual(received[1]["type"], "done")
 
     def test_kv_liveness_preserves_live_owner_and_detects_owned_child_exit(self):
         namespace = {"__veyyon_display": lambda *args, **kwargs: None}
