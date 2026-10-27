@@ -58,7 +58,7 @@ The same minimum-content guard exists again inside `AgentSession.handoff()` and 
   2. Converts the snapshot with `convertMessagesToLlm(...)` (applies the session `transformContext`, extension context + steering wrap, then `convertToLlm` + obfuscation), exactly as the loop does.
   3. Builds the provider `Context` with `agent.buildSideRequestContext(llmMessages, baseSystemPrompt)`: normalized tools and `transformProviderContext` (obfuscation) matching the loop. The **base** system prompt is pinned here, not a per-turn `before_agent_start` hook override, so the new session does not inherit prompt-specific hook state.
   4. Builds stream options with `prepareSimpleStreamOptions(...)`: `promptCacheKey = agent.promptCacheKey ?? agent.sessionId`, exactly the key the live turn routed the provider cache under (it can diverge from `this.sessionId` for tan/agent/shared sessions), a unique side `sessionId` (`<sid>:side:<snowflake>`) so OpenAI/Codex append-only state never mixes with the live turn, `serviceTier`/payload hooks mirrored from the session, and `preferWebsockets: false`.
-- Calls `generateHandoffFromContext(context, model, { streamOptions, completeImpl, telemetry, thinkingLevel })`, where `completeImpl` is the session's side transport (`AgentSession.sideComplete`, over `#sideStreamFn`) instead of the default `completeSimple` transport.
+- Calls `generateHandoffFromContext(context, model, { streamOptions, completeImpl, telemetry, thinkingLevel })`, where `completeImpl` is the session's side transport (`AgentSession.sideComplete`, over `ProviderTransport.sideStreamFn`) instead of the default `completeSimple` transport.
 
 ### 2) Generate and capture output
 

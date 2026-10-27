@@ -127,8 +127,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-27 at 5340: the latest images a tool addresses, the normalization of a
  * message's images for the active model and the description a text-only model reads in their place
  * moved into the `image-attachments.ts` collaborator (-115).
+ * RE-MEASURED 2026-10-27 at 5212: the response and raw SSE interceptors every request runs with,
+ * the raw SSE capture, the side stream function and the side-request option preparation moved into
+ * the `provider-transport.ts` collaborator (-128).
  */
-const RUNTIME_CEILING = 5_400;
+const RUNTIME_CEILING = 5_270;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -164,6 +167,7 @@ const COLLABORATORS = [
 	"post-prompt-tasks.ts",
 	"prompt-commands.ts",
 	"provider-sessions.ts",
+	"provider-transport.ts",
 	"provider-usage.ts",
 	"provider-wire.ts",
 	"queued-messages.ts",
