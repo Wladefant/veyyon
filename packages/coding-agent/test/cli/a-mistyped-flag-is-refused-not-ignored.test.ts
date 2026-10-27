@@ -21,6 +21,17 @@
  * message survives, and refusing would drop the message in order to report the flag. That row is
  * here too, because the boundary between "no value at all" and "a value the bootstrap removed" is
  * exactly what a future edit to this branch would blur.
+ *
+ * THE SUBCOMMAND THAT IGNORED A TYPO. A subcommand parses its own flags, and `static strict = false`
+ * told that parser to keep an unknown flag instead of refusing it. `veyyon trust --denny`, a typo of
+ * `--deny`, then fell through to the command's default action, which is APPROVE: the project's plugin
+ * registry was recorded as trusted at exit 0. `veyyon rollback --lisst` likewise ran as a bare
+ * rollback. The sweep below covers every registered command, so a new one that copies the lenient
+ * setting fails until it is recorded as a command that hands its argv to a parser of its own.
+ *
+ * NOT CAUGHT: a lenient command's own parser that keeps an unknown flag. `acp` is one: extension flags
+ * apply per `session/new`, against that session's directory, so the set of valid flags is not known
+ * when the server starts and an unknown flag is not refused there.
  */
 import { describe, expect, it } from "bun:test";
 import { parseArgs, reportUnrecognizedFlags } from "@veyyon/coding-agent/cli/args";
@@ -30,6 +41,8 @@ import {
 	STRING_VALUE_FLAGS,
 	VALUELESS_FLAGS,
 } from "@veyyon/coding-agent/cli/flag-tables";
+import { commands } from "@veyyon/coding-agent/cli-commands";
+import type { CliConfig, CommandCtor } from "@veyyon/utils/cli";
 import { CliUsageError } from "@veyyon/utils/cli-usage-error";
 
 /** Collect what the reporter writes instead of letting it reach the real stderr. */
@@ -185,5 +198,49 @@ describe("an unrecognized flag", () => {
 
 		expect(had).toBe(false);
 		expect(wrote).toBe(false);
+	});
+});
+
+const ctors = new Map<string, CommandCtor>();
+for (const entry of commands) {
+	ctors.set(entry.name, (await entry.load()) as CommandCtor);
+}
+const cliConfig = { bin: "veyyon", version: "0.0.0", commands: ctors } as CliConfig;
+
+/** What `run()` does first: parse `argv` against the command's declared flags and args. */
+function parseAs(name: string, argv: string[]): Promise<unknown> {
+	const ctor = ctors.get(name);
+	if (!ctor) throw new Error(`no registered command ${name}`);
+	const instance = new ctor(argv, cliConfig) as unknown as { parse(cmd: CommandCtor): Promise<unknown> };
+	return instance.parse(ctor);
+}
+
+describe("a subcommand's unrecognized flag", () => {
+	/**
+	 * The commands whose parse keeps an unknown flag, because `run()` hands the whole argv to a parser
+	 * of its own: `launch` and `acp` to the launch parser, `__complete` to the shell-completion protocol.
+	 * Every other command declares its flags, and an undeclared one is a typo.
+	 */
+	it("is kept only by the commands that parse their argv themselves", () => {
+		const lenient = [...ctors].filter(([, ctor]) => ctor.strict === false).map(([name]) => name);
+
+		expect(lenient.sort()).toEqual(["__complete", "acp", "launch"]);
+	});
+
+	for (const name of [...ctors.keys()].filter(name => ctors.get(name)?.strict !== false)) {
+		it(`is refused by ${name}`, async () => {
+			await expect(parseAs(name, ["--zzzz-not-a-flag"])).rejects.toThrow(CliUsageError);
+		});
+	}
+
+	/** The reported case: a misspelled refusal must never reach the approving default. */
+	it("refuses `trust --denny` before any decision is made", async () => {
+		await expect(parseAs("trust", ["--denny"])).rejects.toThrow(/denny/);
+	});
+
+	/** Anti-vacuity: the sweep loaded the real command table. */
+	it("sweeps the registered commands", () => {
+		expect(ctors.size).toBeGreaterThan(20);
+		expect(ctors.has("trust")).toBe(true);
 	});
 });

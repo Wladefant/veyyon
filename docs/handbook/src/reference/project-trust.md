@@ -26,7 +26,7 @@ veyyon trust           # show the code the project would run, and approve it
 veyyon trust --list    # show it without deciding
 veyyon trust --deny    # refuse, and remember the refusal
 veyyon trust --forget  # drop the decision
-veyyon trust path/to/file.ts   # decide one named file
+veyyon trust a.ts b.ts  # decide the named files
 ```
 
 Inside a session, `/trust` reports, and `/trust approve`, `/trust deny` and

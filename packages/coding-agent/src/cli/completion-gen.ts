@@ -153,6 +153,7 @@ export const FILE_ARGS: Record<string, true> = {
 	"plugin.targets": true,
 	"read.path": true,
 	"ttsr.snippet": true,
+	"trust.paths": true,
 };
 /**
  * Positionals that are free text until they start with `@`, which attaches a
