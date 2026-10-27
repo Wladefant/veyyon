@@ -58,7 +58,7 @@ function fixture(explicit = true, global = false) {
 			getAll: () => models,
 			getAvailable: () => models,
 			getApiKey: async () => "fake-key",
-			refreshSelectedModelMetadata: async model => model,
+			refreshSelectedModelMetadata: async (model: (typeof models)[number]) => model,
 			authStorage: { markUsageLimitReached: async () => ({ switched: false }) },
 			isSelectorSuppressed: (selector: string) => (cooldowns.get(selector.split(":")[0]) ?? 0) > Date.now(),
 			suppressSelector: (selector: string, until: number) => cooldowns.set(selector.split(":")[0], until),
