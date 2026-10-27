@@ -426,11 +426,20 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * agent storage, the session entry roles, the credential message and the model resolver) are
  * already here. Measured 2026-10-26 at 1505.
  *
+ * 1505 to 1508: `coding-agent/src/tools/core/repair/tool-repairs.ts`, the tool-specific repairs the
+ * cascade in `tools/core/repair/schema-repair.ts`, already here, runs before validation;
+ * `coding-agent/src/task/repair-args.ts`, the task prose decoder its `task` entry calls, which only
+ * the task tool and its renderer reached before; and `coding-agent/src/tools/core/repair/limits.ts`,
+ * the zero-import leaf holding the size bound all three share. The repairs ran inside the `task` and
+ * `yield` tools before; they run once on the call now, so approval and the tool receive the same
+ * arguments. Their other runtime imports (`@veyyon/utils`, `@veyyon/utils/json-parse` and
+ * `tools/core/builtin-names`) are already here. Measured 2026-10-27 at 1508.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1505;
+const LAUNCH_REACH_CEILING = 1508;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

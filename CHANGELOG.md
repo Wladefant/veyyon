@@ -85,6 +85,7 @@
 - A mid-session change to `session.memoryLimitGb`, `session.maxProcesses`, `session.writeBudgetGb` or `session.writeBudgetKill` applies to the live session budget at once instead of at the next bash, launch, write or edit call, so an eval kernel or MCP server started in between no longer joins a group with the old caps.
 - A disposed session no longer registers a new budget when its session manager later starts another conversation.
 - A `session.memoryLimitGb` the host cannot enforce is reported once, at session start, instead of at the first spawned command.
+- The `task` brief and shared context escaped twice and a `yield` result sent as a JSON string are repaired once, before validation, so approval, hooks, the `tool_execution_*` events and the tool receive the same arguments ([#896](https://github.com/santhreal/veyyon/issues/896)).
 - A required tool call under an in-band tool dialect is asked for in the conversation text instead of being sent as a native `tool_choice` the dialect never reads.
 - Shake and duplicate elision leave a tool result, block or truncated middle in place when its marker is not smaller than it, and size a captioned image result by its caption, so `/shake` no longer reports a kept image as freed tokens.
 - A required tool call on a request that cannot force it (a model or host that rejects a forced `tool_choice`, a host without `tool_choice`, a remembered rejection, Ollama, Cursor, Devin, GitLab Duo, and Claude on Antigravity) is asked for in the request text, instead of the tool only being offered.

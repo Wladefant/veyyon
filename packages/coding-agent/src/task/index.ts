@@ -44,7 +44,6 @@ import {
 import "../tools/agent/review";
 import { TOOL } from "../tools/core/builtin-names";
 import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
-import { repairTaskParams } from "./repair-args";
 import { appendAdvisory, composeSpawnAdvisory } from "./spawn-advisory";
 import { type CallSpawn, type SpawnCall, SpawnScheduler } from "./spawn-scheduler";
 import { taskToolView } from "./task-view";
@@ -458,7 +457,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
 	): Promise<AgentToolResult<TaskToolDetails>> {
-		const params = repairTaskParams(rawParams as TaskParams);
+		const params = rawParams as TaskParams;
 		const batchEnabled = this.#isBatchEnabled();
 		const validationError = validateShapeParams(batchEnabled, params) ?? validateSpawnParams(params, batchEnabled);
 		if (validationError) {
