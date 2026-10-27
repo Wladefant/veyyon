@@ -153,6 +153,7 @@ function bindingHasName(binding, name) {
   if (ts.isObjectBindingPattern(binding) || ts.isArrayBindingPattern(binding)) return binding.elements.some(element => !ts.isOmittedExpression(element) && bindingHasName(element.name, name));
   return false;
 }
+// Keep export paths even in checked packages: downstream importers may be unchecked.
 function moduleExportLeaves(file, exportName, seen = new Set()) {
   const key = `${file}\0${exportName}`;
   if (seen.size === 0 && exportLeafCache.has(key)) return new Set(exportLeafCache.get(key));
@@ -168,8 +169,7 @@ function moduleExportLeaves(file, exportName, seen = new Set()) {
   if (!pureBarrel(file)) {
     const hasExport = ast.statements.some(statement => {
       if (ts.isExportDeclaration(statement)) {
-        if (statement.isTypeOnly && typeOnlyCovered(file)) return false;
-        if (statement.exportClause && ts.isNamedExports(statement.exportClause)) return statement.exportClause.elements.some(element => (!element.isTypeOnly || !typeOnlyCovered(file)) && element.name.text === exportName);
+        if (statement.exportClause && ts.isNamedExports(statement.exportClause)) return statement.exportClause.elements.some(element => element.name.text === exportName);
         if (statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)) {
           if (!statement.exportClause) return exportName !== 'default';
           if (ts.isNamespaceExport(statement.exportClause)) return statement.exportClause.name.text === exportName;
@@ -189,7 +189,7 @@ function moduleExportLeaves(file, exportName, seen = new Set()) {
   const explicit = new Set();
   const stars = new Set();
   for (const statement of ast.statements) {
-    if (!ts.isExportDeclaration(statement) || (typeOnlyCovered(file) && statement.isTypeOnly) || !statement.moduleSpecifier || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
+    if (!ts.isExportDeclaration(statement) || !statement.moduleSpecifier || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
     const target = resolve(statement.moduleSpecifier.text, file);
     if (!target) continue;
     if (!statement.exportClause) {
@@ -197,7 +197,7 @@ function moduleExportLeaves(file, exportName, seen = new Set()) {
     } else if (ts.isNamespaceExport(statement.exportClause)) {
       if (exportName === '*' || exportName === statement.exportClause.name.text) for (const leaf of moduleLeaves(target, new Set(nextSeen))) explicit.add(leaf);
     } else if (ts.isNamedExports(statement.exportClause)) {
-      for (const item of statement.exportClause.elements) if ((!item.isTypeOnly || !typeOnlyCovered(file)) && (exportName === '*' || item.name.text === exportName)) {
+      for (const item of statement.exportClause.elements) if (exportName === '*' || item.name.text === exportName) {
         const original = item.propertyName?.text ?? item.name.text;
         for (const leaf of moduleExportLeaves(target, original, new Set(nextSeen))) explicit.add(leaf);
       }
@@ -218,7 +218,7 @@ function moduleLeaves(file, seen = new Set()) {
   const leaves = new Set();
   const { ast } = astFor(file);
   for (const statement of ast.statements) {
-    if (!ts.isExportDeclaration(statement) || (typeOnlyCovered(file) && (statement.isTypeOnly || statement.exportClause && ts.isNamedExports(statement.exportClause) && statement.exportClause.elements.every(item => item.isTypeOnly))) || !statement.moduleSpecifier || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
+    if (!ts.isExportDeclaration(statement) || !statement.moduleSpecifier || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
     const target = resolve(statement.moduleSpecifier.text, file);
     if (target) for (const leaf of moduleLeaves(target, new Set(nextSeen))) leaves.add(leaf);
   }
@@ -249,7 +249,7 @@ for (const file of sourceFiles) {
         edge(ordinaryReverse, dependency, file);
         for (const leaf of moduleLeaves(dependency)) edge(conservativeReverse, leaf, file);
       }
-    } else if (!pureBarrel(file) && ts.isExportDeclaration(statement) && (!typeOnlyCovered(file) || !statement.isTypeOnly) && statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)) {
+    } else if (!pureBarrel(file) && ts.isExportDeclaration(statement) && statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)) {
       const dependency = resolve(statement.moduleSpecifier.text, file);
       if (dependency) edge(ordinaryReverse, dependency, file);
     }

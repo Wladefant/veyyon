@@ -121,6 +121,10 @@ describe("OVH related-test selector", () => {
 				"packages/pkg-b/package.json": JSON.stringify({ name: "@fixture/pkg-b", version: "1.0.0" }),
 				"packages/pkg-b/test/foreign-type-consumer.test.ts":
 					'import type { SharedType } from "../../pkg-a/src/types.js";\nexport const foreignVal: SharedType = { value: "pkg-b" };\n',
+				"packages/pkg-b/test/foreign-barrel-type-consumer.test.ts":
+					'import type { SharedType } from "../../pkg-a/src/index.js";\nexport const foreignVal: SharedType = { value: "pkg-b" };\n',
+				"packages/pkg-b/test/foreign-barrel-binding-consumer.test.ts":
+					'import { SharedType } from "../../pkg-a/src/index.js";\nexport const foreignVal: SharedType = { value: "pkg-b" };\n',
 			});
 			fixtureDir = fixture.fixtureDir;
 			cleanupFixture = fixture.cleanup;
@@ -166,6 +170,8 @@ describe("OVH related-test selector", () => {
 			});
 			const selected = parseSelectedTests(output);
 			expect(selected).toContain("packages/pkg-b/test/foreign-type-consumer.test.ts");
+			expect(selected).toContain("packages/pkg-b/test/foreign-barrel-type-consumer.test.ts");
+			expect(selected).toContain("packages/pkg-b/test/foreign-barrel-binding-consumer.test.ts");
 		});
 	});
 });
