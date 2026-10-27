@@ -6,6 +6,10 @@
 
 - `summarizeCode()` returns a `Promise` and parses on libuv's thread pool instead of on the calling thread, where an 18,000-line TypeScript source held the event loop 68 ms.
 
+### Changed
+
+- The shell's built-in output filters compile their output-stage regular expressions the first time each filter applies instead of when the registry loads; a filter file loaded from config still rejects a bad regular expression at load.
+
 ### Fixed
 
 - `grep` repairs a pattern rejected for an unpaired parenthesis by escaping only that parenthesis, so `(get|set)Value(` matches `getValue(` instead of the text `(get` or `set)Value(`, and `)(` matches the text `)(` instead of every line.

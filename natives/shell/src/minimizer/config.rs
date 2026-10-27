@@ -170,7 +170,7 @@ impl MinimizerConfig {
 						cfg.legacy_filters_active = false;
 					}
 				}
-				match pipeline::parse_file(&contents, "user") {
+				match pipeline::parse_file(&contents, "user", pipeline::StageCompilation::Eager) {
 					Ok((pipelines, tests)) => {
 						if !pipelines.is_empty() {
 							cfg.user_pipelines = Some(Arc::new(PipelineRegistry { pipelines, tests }));

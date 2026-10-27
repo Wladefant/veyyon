@@ -14,6 +14,7 @@
 - `/effort` checks a level through one function the terminal and the text surfaces share, with no change to what either accepts or prints.
 - No user-visible change: `/export` path resolution moved from the session runtime into the HTML exporter.
 - IRC message delivery moved out of `AgentSession` into the `IrcDelivery` session collaborator, with no change to how a message is steered, queued, woken on or auto-replied to.
+- The first shell command of a session no longer compiles the output-stage regular expressions of every built-in output filter; each filter compiles them the first time it applies, so a first `ls` runs in 5 ms instead of 12 ms.
 
 ### Fixed
 

@@ -22,10 +22,14 @@
 //! 8. `max_lines`            — hard cap after head/tail
 //! 9. `on_empty`             — replace an empty result with a sentinel
 //!
-//! Pipelines never panic for the caller: regex compilation errors are
-//! surfaced when the pipeline is loaded, and runtime application is total.
+//! Pipelines never panic for the caller. A pipeline's command matchers compile
+//! when its file loads. Its output-stage regexes compile by
+//! [`StageCompilation`]: a user file compiles them at load, so a bad regex is
+//! reported there; the built-in registry compiles each pipeline's stages on its
+//! first use, and a test compiles every built-in eagerly. Runtime application
+//! is total.
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::OnceLock};
 
 use regex::{Regex, RegexSet};
 use serde::Deserialize;
@@ -128,7 +132,39 @@ pub struct CompiledMatchOutput {
 	unless:  Option<Regex>,
 }
 
-/// A pipeline with every regex pre-compiled.
+/// The output-stage definitions a pipeline compiles into [`Stages`].
+#[derive(Debug)]
+struct StageDefs {
+	replace:              Vec<ReplaceDef>,
+	match_output:         Vec<MatchOutputDef>,
+	strip_lines_matching: Vec<String>,
+	keep_lines_matching:  Vec<String>,
+	replace_after:        Vec<ReplaceDef>,
+}
+
+/// The regexes of stages 2 through 5, compiled from [`StageDefs`].
+#[derive(Debug)]
+struct Stages {
+	replace:       Vec<CompiledReplace>,
+	match_output:  Vec<CompiledMatchOutput>,
+	strip_lines:   Option<RegexSet>,
+	keep_lines:    Option<RegexSet>,
+	replace_after: Vec<CompiledReplace>,
+}
+
+/// When a pipeline's output-stage regexes compile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StageCompilation {
+	/// While the file loads, so a bad regex rejects the file.
+	Eager,
+	/// On the pipeline's first `apply`. A command then compiles the stages of
+	/// the one pipeline that claims it instead of every stage of every
+	/// pipeline.
+	OnFirstUse,
+}
+
+/// A pipeline with its command matchers compiled. Its output-stage regexes
+/// compile at load or on first use, by [`StageCompilation`].
 #[derive(Debug)]
 pub struct CompiledPipeline {
 	pub name:              String,
@@ -136,11 +172,6 @@ pub struct CompiledPipeline {
 	pub match_command:     Regex,
 	pub match_subcommand:  Option<Regex>,
 	pub strip_ansi:        bool,
-	pub replace:           Vec<CompiledReplace>,
-	pub match_output:      Vec<CompiledMatchOutput>,
-	pub strip_lines:       Option<RegexSet>,
-	pub keep_lines:        Option<RegexSet>,
-	pub replace_after:     Vec<CompiledReplace>,
 	pub truncate_lines_at: Option<usize>,
 	pub head_lines:        Option<usize>,
 	pub tail_lines:        Option<usize>,
@@ -148,24 +179,64 @@ pub struct CompiledPipeline {
 	pub on_empty:          Option<String>,
 	pub only_on_exit:      Vec<i32>,
 	pub except_on_exit:    Vec<i32>,
+	stage_defs:            StageDefs,
+	stages:                OnceLock<Result<Stages, String>>,
 }
 
 /// Compile an ordered regex-substitution list; `label` names the TOML key
 /// (`replace` or `replace_after`) in error messages.
-fn compile_replaces(rules: Vec<ReplaceDef>, label: &str) -> Result<Vec<CompiledReplace>, String> {
+fn compile_replaces(rules: &[ReplaceDef], label: &str) -> Result<Vec<CompiledReplace>, String> {
 	rules
-		.into_iter()
+		.iter()
 		.map(|rule| {
 			let pattern = Regex::new(&rule.pattern)
 				.map_err(|e| format!("invalid {label} pattern '{}': {e}", rule.pattern))?;
-			Ok(CompiledReplace { pattern, replacement: rule.replacement })
+			Ok(CompiledReplace { pattern, replacement: rule.replacement.clone() })
 		})
 		.collect()
 }
 
-/// Compile a raw TOML definition. Returns a descriptive error on regex
-/// issues.
-pub fn compile(name: String, def: PipelineDef) -> Result<CompiledPipeline, String> {
+/// Compile a line-filter set; `None` when the definition lists no patterns.
+fn compile_line_set(patterns: &[String], label: &str) -> Result<Option<RegexSet>, String> {
+	if patterns.is_empty() {
+		return Ok(None);
+	}
+	RegexSet::new(patterns)
+		.map(Some)
+		.map_err(|e| format!("invalid {label}: {e}"))
+}
+
+impl StageDefs {
+	fn compile(&self) -> Result<Stages, String> {
+		let replace = compile_replaces(&self.replace, "replace")?;
+		let replace_after = compile_replaces(&self.replace_after, "replace_after")?;
+		let match_output = self
+			.match_output
+			.iter()
+			.map(|rule| {
+				let pattern = Regex::new(&rule.pattern)
+					.map_err(|e| format!("invalid match_output pattern '{}': {e}", rule.pattern))?;
+				let unless = rule
+					.unless
+					.as_deref()
+					.map(|u| Regex::new(u).map_err(|e| format!("invalid match_output unless: {e}")))
+					.transpose()?;
+				Ok(CompiledMatchOutput { pattern, message: rule.message.clone(), unless })
+			})
+			.collect::<Result<Vec<_>, String>>()?;
+		let strip_lines = compile_line_set(&self.strip_lines_matching, "strip_lines_matching")?;
+		let keep_lines = compile_line_set(&self.keep_lines_matching, "keep_lines_matching")?;
+		Ok(Stages { replace, match_output, strip_lines, keep_lines, replace_after })
+	}
+}
+
+/// Compile a raw TOML definition: its command matchers now, its output stages
+/// by `stages`. Returns a descriptive error on regex issues.
+pub fn compile(
+	name: String,
+	def: PipelineDef,
+	stages: StageCompilation,
+) -> Result<CompiledPipeline, String> {
 	let match_command =
 		Regex::new(&def.match_command).map_err(|e| format!("invalid match_command: {e}"))?;
 	let match_subcommand = def
@@ -174,40 +245,17 @@ pub fn compile(name: String, def: PipelineDef) -> Result<CompiledPipeline, Strin
 		.map(|p| Regex::new(p).map_err(|e| format!("invalid match_subcommand: {e}")))
 		.transpose()?;
 
-	let replace = compile_replaces(def.replace, "replace")?;
-	let replace_after = compile_replaces(def.replace_after, "replace_after")?;
-
-	let match_output = def
-		.match_output
-		.into_iter()
-		.map(|rule| {
-			let pattern = Regex::new(&rule.pattern)
-				.map_err(|e| format!("invalid match_output pattern '{}': {e}", rule.pattern))?;
-			let unless = rule
-				.unless
-				.as_deref()
-				.map(|u| Regex::new(u).map_err(|e| format!("invalid match_output unless: {e}")))
-				.transpose()?;
-			Ok(CompiledMatchOutput { pattern, message: rule.message, unless })
-		})
-		.collect::<Result<Vec<_>, String>>()?;
-
-	let strip_lines = if def.strip_lines_matching.is_empty() {
-		None
-	} else {
-		Some(
-			RegexSet::new(&def.strip_lines_matching)
-				.map_err(|e| format!("invalid strip_lines_matching: {e}"))?,
-		)
+	let stage_defs = StageDefs {
+		replace:              def.replace,
+		match_output:         def.match_output,
+		strip_lines_matching: def.strip_lines_matching,
+		keep_lines_matching:  def.keep_lines_matching,
+		replace_after:        def.replace_after,
 	};
-	let keep_lines = if def.keep_lines_matching.is_empty() {
-		None
-	} else {
-		Some(
-			RegexSet::new(&def.keep_lines_matching)
-				.map_err(|e| format!("invalid keep_lines_matching: {e}"))?,
-		)
-	};
+	let compiled_stages = OnceLock::new();
+	if stages == StageCompilation::Eager {
+		let _ = compiled_stages.set(Ok(stage_defs.compile()?));
+	}
 
 	Ok(CompiledPipeline {
 		name,
@@ -215,11 +263,6 @@ pub fn compile(name: String, def: PipelineDef) -> Result<CompiledPipeline, Strin
 		match_command,
 		match_subcommand,
 		strip_ansi: def.strip_ansi,
-		replace,
-		match_output,
-		strip_lines,
-		keep_lines,
-		replace_after,
 		truncate_lines_at: def.truncate_lines_at,
 		head_lines: def.head_lines,
 		tail_lines: def.tail_lines,
@@ -227,6 +270,8 @@ pub fn compile(name: String, def: PipelineDef) -> Result<CompiledPipeline, Strin
 		on_empty: def.on_empty,
 		only_on_exit: def.only_on_exit,
 		except_on_exit: def.except_on_exit,
+		stage_defs,
+		stages: compiled_stages,
 	})
 }
 
@@ -258,9 +303,29 @@ impl CompiledPipeline {
 		false
 	}
 
-	/// Apply the full 9-stage pipeline to `input`.
+	/// The compiled output stages, compiling them on first use. `None` when a
+	/// regex fails to compile, which a user file reports at load and a test
+	/// rules out for the built-in filters.
+	fn stages(&self) -> Option<&Stages> {
+		self
+			.stages
+			.get_or_init(|| {
+				self.stage_defs.compile().inspect_err(|err| {
+					eprintln!("[veyyon-natives minimizer] filter '{}': {err}", self.name);
+				})
+			})
+			.as_ref()
+			.ok()
+	}
+
+	/// Apply the full 9-stage pipeline to `input`. Returns `input` unchanged
+	/// when the pipeline's stages fail to compile.
 	#[must_use]
 	pub fn apply<'a>(&self, input: &'a str) -> Cow<'a, str> {
+		let Some(stages) = self.stages() else {
+			return Cow::Borrowed(input);
+		};
+
 		// Stage 1: strip_ansi
 		let stage1: Cow<'_, str> = if self.strip_ansi {
 			Cow::Owned(primitives::strip_ansi(input))
@@ -269,11 +334,11 @@ impl CompiledPipeline {
 		};
 
 		// Stage 2: replace (ordered, line-by-line)
-		let stage2 = apply_replaces(stage1, &self.replace);
+		let stage2 = apply_replaces(stage1, &stages.replace);
 
 		// Stage 3: match_output short-circuit
-		if !self.match_output.is_empty() {
-			for rule in &self.match_output {
+		if !stages.match_output.is_empty() {
+			for rule in &stages.match_output {
 				if !rule.pattern.is_match(&stage2) {
 					continue;
 				}
@@ -288,11 +353,11 @@ impl CompiledPipeline {
 
 		// Stage 4: strip/keep lines (keep AND NOT strip; absent set = no
 		// constraint)
-		let stage4: Cow<'_, str> = if self.strip_lines.is_some() || self.keep_lines.is_some() {
+		let stage4: Cow<'_, str> = if stages.strip_lines.is_some() || stages.keep_lines.is_some() {
 			Cow::Owned(primitives::filter_lines_regex(
 				&stage2,
-				self.strip_lines.as_ref(),
-				self.keep_lines.as_ref(),
+				stages.strip_lines.as_ref(),
+				stages.keep_lines.as_ref(),
 			))
 		} else {
 			stage2
@@ -301,7 +366,7 @@ impl CompiledPipeline {
 		// Stage 5: replace_after (ordered, line-by-line) — post-filter so
 		// only surviving lines are substituted, pre-truncate so shortening
 		// substitutions (path compaction) see the full line.
-		let stage5 = apply_replaces(stage4, &self.replace_after);
+		let stage5 = apply_replaces(stage4, &stages.replace_after);
 
 		// Stage 6: truncate each line
 		let stage6: Cow<'_, str> = if let Some(n) = self.truncate_lines_at {
@@ -388,10 +453,16 @@ impl PipelineRegistry {
 	}
 }
 
-/// Parse and compile a full TOML file. Emits one `Err(String)` with all
+/// Parse and compile a full TOML file.
+///
+/// Output stages compile as `stages` selects. Emits one `Err(String)` with all
 /// parse/compile errors joined; a well-formed file with N filters returns
 /// `Ok((Vec<CompiledPipeline>, tests))`.
-pub fn parse_file(contents: &str, source_label: &str) -> Result<ParsedPipelineFile, String> {
+pub fn parse_file(
+	contents: &str,
+	source_label: &str,
+	stages: StageCompilation,
+) -> Result<ParsedPipelineFile, String> {
 	let file: PipelineFile =
 		toml::from_str(contents).map_err(|e| format!("[{source_label}] TOML parse error: {e}"))?;
 
@@ -406,7 +477,7 @@ pub fn parse_file(contents: &str, source_label: &str) -> Result<ParsedPipelineFi
 	let mut compiled = Vec::with_capacity(file.filters.len());
 	let mut errors = Vec::new();
 	for (name, def) in file.filters {
-		match compile(name.clone(), def) {
+		match compile(name.clone(), def, stages) {
 			Ok(pipeline) => compiled.push(pipeline),
 			Err(e) => errors.push(format!("[{source_label}] filter '{name}': {e}")),
 		}
@@ -481,7 +552,8 @@ mod tests {
 	use super::*;
 
 	fn compile_one(toml_src: &str) -> CompiledPipeline {
-		let (mut pipelines, _) = parse_file(toml_src, "test").expect("parse + compile");
+		let (mut pipelines, _) =
+			parse_file(toml_src, "test", StageCompilation::Eager).expect("parse + compile");
 		pipelines.pop().expect("one pipeline")
 	}
 
@@ -632,7 +704,7 @@ except_on_exit = [1, 2]
 	#[test]
 	fn unsupported_schema_errors() {
 		let src = "schema_version = 99\n[filters.foo]\nmatch_command = \"^foo$\"\n";
-		let err = parse_file(src, "bad").unwrap_err();
+		let err = parse_file(src, "bad", StageCompilation::Eager).unwrap_err();
 		assert!(err.contains("schema_version"));
 	}
 
@@ -655,7 +727,7 @@ name = "empty becomes sentinel"
 input = "> Task :a UP-TO-DATE\n"
 expected = "gradle: ok"
 "#;
-		let (pipelines, tests) = parse_file(src, "test").expect("ok");
+		let (pipelines, tests) = parse_file(src, "test", StageCompilation::Eager).expect("ok");
 		let registry = PipelineRegistry { pipelines, tests };
 		let outcomes = run_tests(&registry);
 		assert_eq!(outcomes.len(), 2);
@@ -665,6 +737,58 @@ expected = "gradle: ok"
 				"test {} failed: actual={:?} expected={:?}",
 				outcome.test_name, outcome.actual, outcome.expected
 			);
+		}
+	}
+
+	const BAD_STAGE: &str = "schema_version = 1\n[filters.bad]\nmatch_command = \
+	                         \"^bad$\"\nstrip_lines_matching = [\"(unclosed\"]\n";
+
+	#[test]
+	fn a_bad_stage_regex_rejects_an_eager_file_at_load() {
+		let err = parse_file(BAD_STAGE, "user", StageCompilation::Eager)
+			.expect_err("an eager file with a bad stage regex must not load");
+		assert!(err.contains("filter 'bad'") && err.contains("strip_lines_matching"), "{err}");
+	}
+
+	#[test]
+	fn a_bad_stage_regex_compiled_on_first_use_leaves_output_unchanged() {
+		let (pipelines, _) = parse_file(BAD_STAGE, "builtin", StageCompilation::OnFirstUse)
+			.expect("a file compiled on first use loads its matchers only");
+		let pipeline = &pipelines[0];
+		assert!(pipeline.matches("bad", None));
+		let input = "Downloading foo\nkept\n";
+		assert!(matches!(pipeline.apply(input), Cow::Borrowed(text) if text == input));
+		// The failed compile is kept, not retried on every command.
+		assert!(matches!(pipeline.apply(input), Cow::Borrowed(text) if text == input));
+	}
+
+	#[test]
+	fn stages_compiled_on_first_use_apply_as_eager_ones_do() {
+		let src = r#"
+schema_version = 1
+[filters.demo]
+match_command = "^demo$"
+strip_ansi = true
+replace = [{ pattern = "^warn: ", replacement = "W " }]
+strip_lines_matching = ["^Downloading"]
+replace_after = [{ pattern = "/home/[^/]+/", replacement = "~/" }]
+truncate_lines_at = 24
+on_empty = "demo: ok"
+[[filters.demo.match_output]]
+pattern = "ALL GREEN"
+message = "demo: green"
+unless = "(?i)fail"
+"#;
+		let inputs = [
+			"\u{1b}[31mwarn: x\u{1b}[0m\nDownloading foo\n/home/a/src/main.rs is long enough\n",
+			"ALL GREEN\n",
+			"ALL GREEN but FAIL\n",
+			"Downloading only\n",
+		];
+		let (eager, _) = parse_file(src, "test", StageCompilation::Eager).expect("eager");
+		let (lazy, _) = parse_file(src, "test", StageCompilation::OnFirstUse).expect("on first use");
+		for input in inputs {
+			assert_eq!(lazy[0].apply(input), eager[0].apply(input), "{input:?}");
 		}
 	}
 }

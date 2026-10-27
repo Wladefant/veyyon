@@ -24,7 +24,9 @@
 - `/effort` checks a level through one function the terminal and the text surfaces share, with no change to what either accepts or prints.
 - No user-visible change: `/export` path resolution moved from the session runtime into the HTML exporter.
 - IRC message delivery moved out of `AgentSession` into the `IrcDelivery` session collaborator, with no change to how a message is steered, queued, woken on or auto-replied to.
+- The first shell command of a session no longer compiles the output-stage regular expressions of every built-in output filter; each filter compiles them the first time it applies, so a first `ls` runs in 5 ms instead of 12 ms.
 - Cursor and GitLab Duo tool results, GitLab Duo goal prompts and the Antigravity and Google Cloud token refreshes each run through one shared implementation; no user-facing change.
+- The shell's built-in output filters compile their output-stage regular expressions the first time each filter applies instead of when the registry loads; a filter file loaded from config still rejects a bad regular expression at load.
 - `sgrEnd` is exported from `@veyyon/utils/ansi` and is the single definition `wrap` and `width` use; no user-facing change.
 
 ### Fixed
