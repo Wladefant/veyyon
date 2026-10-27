@@ -20,11 +20,11 @@ import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
 import type { ExtensionRunner, SessionBeforeSwitchResult } from "../../extensibility/extensions";
 import { AUTO_THINKING, type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "../../thinking";
-import type { CustomMessage } from "../messages";
 import { didSessionMessagesChange } from "../provider-replay-projection";
 import { startingServiceTierByFamily } from "../startup-model";
 import type { AdvisorRoster } from "./advisor-roster";
 import type { CheckpointRuntime, CheckpointSnapshot } from "./checkpoint-runtime";
+import type { NextTurnSnapshot } from "./next-turn-messages";
 import type { ProviderSessions } from "./provider-sessions";
 import type { ProviderWire } from "./provider-wire";
 import type { SessionScope } from "./session-scope";
@@ -34,8 +34,7 @@ import type { ToolDiscovery } from "./tool-discovery";
 
 /** Session fields a switch clears or replaces, and a failed switch puts back. */
 export interface SwitchedSessionFields {
-	readonly pendingNextTurnMessages: CustomMessage[];
-	readonly scheduledHiddenNextTurnGeneration: number | undefined;
+	readonly nextTurn: NextTurnSnapshot;
 	readonly baseSystemPrompt: string[];
 	readonly serviceTierByFamily: ServiceTierByFamily;
 }

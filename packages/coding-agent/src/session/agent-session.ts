@@ -313,6 +313,7 @@ import { LoopGuards } from "./runtime/loop-guards";
 import { lastDeliveredBlock, MemoryContext } from "./runtime/memory-context";
 import { MessagePersistence } from "./runtime/message-persistence";
 import { ModelHandoff } from "./runtime/model-handoff";
+import { NextTurnMessages } from "./runtime/next-turn-messages";
 import { PlanModeRuntime } from "./runtime/plan-mode-runtime";
 import { PostPromptTasks } from "./runtime/post-prompt-tasks";
 import { ProviderSessions } from "./runtime/provider-sessions";
@@ -714,9 +715,6 @@ export class AgentSession {
 	#eventListeners: AgentSessionEventListener[] = [];
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
 
-	/** Messages queued to be included with the next user prompt as context ("asides"). */
-	#pendingNextTurnMessages: CustomMessage[] = [];
-	#scheduledHiddenNextTurnGeneration: number | undefined = undefined;
 	#queuedMessageDrainScheduled = false;
 	/** Plan mode state, the approved-plan reference, and the decision ladder. */
 	readonly #planMode: PlanModeRuntime;
@@ -928,6 +926,16 @@ export class AgentSession {
 
 	/** Work a turn left behind after `prompt()` returned; see {@link PostPromptTasks}. */
 	readonly #postPrompt = new PostPromptTasks({ promptGeneration: () => this.#promptGeneration });
+	/** Hidden messages queued for the next turn and the turn scheduled on them; see {@link NextTurnMessages}. */
+	readonly #nextTurn = new NextTurnMessages({
+		promptGeneration: () => this.#promptGeneration,
+		postPrompt: this.#postPrompt,
+		promptWith: (message, prependMessages) =>
+			this.#promptWithMessage(message, getCustomMessageTextContent(message), {
+				prependMessages,
+				skipPostPromptRecoveryWait: true,
+			}),
+	});
 
 	/** Prompts in flight and the power assertion held while any runs. */
 	readonly #inFlight: TurnsInFlight;
@@ -1095,7 +1103,7 @@ export class AgentSession {
 			turnId: () => Math.max(0, this.#extensionEvents.turnIndex - 1),
 			sessionId: () => this.sessionId,
 			sessionFile: () => this.sessionFile,
-			queueContinuation: message => this.#queueHiddenNextTurnMessage(message, true),
+			queueContinuation: message => this.#nextTurn.queue(message, true),
 		});
 		this.#scope = new SessionScope({
 			sessionStore: this.sessionManager,
@@ -1660,13 +1668,9 @@ export class AgentSession {
 					{ deliverAs: "steer", triggerTurn: true },
 				);
 			},
-			parkForNextTurn: card => {
-				this.#pendingNextTurnMessages.push(card);
-			},
+			parkForNextTurn: card => this.#nextTurn.queue(card, false),
 			dropParkedAdvisorCards: () => {
-				if (this.#pendingNextTurnMessages.some(isAdvisorCard)) {
-					this.#pendingNextTurnMessages = this.#pendingNextTurnMessages.filter(m => !isAdvisorCard(m));
-				}
+				this.#nextTurn.remove(isAdvisorCard);
 			},
 			leaseSecretRuntime: () => this.leaseSecretRuntime(),
 			providerRedactor: () => this.providerRedactor,
@@ -1698,10 +1702,7 @@ export class AgentSession {
 			payloadHook: () => this.#config.payloadHook?.(),
 			sideComplete: this.#sideCompleteImpl,
 			effectiveServiceTier: model => this.#effectiveServiceTier(model),
-			clearNextTurnMessages: () => {
-				this.#pendingNextTurnMessages = [];
-				this.#scheduledHiddenNextTurnGeneration = undefined;
-			},
+			clearNextTurnMessages: () => this.#nextTurn.clear(),
 			cancelOwnAsyncJobs: () => this.#cancelOwnAsyncJobs(),
 			cancelPostPromptTasks: () => this.#cancelPostPromptTasks(),
 			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
@@ -1723,10 +1724,7 @@ export class AgentSession {
 			modelRegistry: () => this.#config.modelRegistry,
 			baseSystemPrompt: () => this.#toolActivation.baseSystemPrompt,
 			effectiveServiceTier: model => this.#effectiveServiceTier(model),
-			clearNextTurnMessages: () => {
-				this.#pendingNextTurnMessages = [];
-				this.#scheduledHiddenNextTurnGeneration = undefined;
-			},
+			clearNextTurnMessages: () => this.#nextTurn.clear(),
 			cancelOwnAsyncJobs: () => this.#cancelOwnAsyncJobs(),
 			endConversation: () => this.#endConversation(),
 			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
@@ -1751,21 +1749,16 @@ export class AgentSession {
 			whileDisconnectedFromAgent: run => this.#whileDisconnectedFromAgent(run),
 			reconcileAfterSwitch: () => this.#sessionSwitchReconciler?.(),
 			captureFields: () => ({
-				pendingNextTurnMessages: [...this.#pendingNextTurnMessages],
-				scheduledHiddenNextTurnGeneration: this.#scheduledHiddenNextTurnGeneration,
+				nextTurn: this.#nextTurn.snapshot(),
 				baseSystemPrompt: this.#toolActivation.baseSystemPrompt,
 				serviceTierByFamily: this.#serviceTierByFamily,
 			}),
 			restoreFields: fields => {
-				this.#pendingNextTurnMessages = fields.pendingNextTurnMessages;
-				this.#scheduledHiddenNextTurnGeneration = fields.scheduledHiddenNextTurnGeneration;
+				this.#nextTurn.restore(fields.nextTurn);
 				this.#toolActivation.baseSystemPrompt = fields.baseSystemPrompt;
 				this.#serviceTierByFamily = fields.serviceTierByFamily;
 			},
-			clearNextTurnMessages: () => {
-				this.#pendingNextTurnMessages = [];
-				this.#scheduledHiddenNextTurnGeneration = undefined;
-			},
+			clearNextTurnMessages: () => this.#nextTurn.clear(),
 			setServiceTierByFamily: byFamily => {
 				this.#serviceTierByFamily = byFamily;
 			},
@@ -1787,7 +1780,7 @@ export class AgentSession {
 	 * screen is already superseded. Trailing advisor cards are not answers and do not count.
 	 */
 	hasTerminalTextAnswerWithoutQueuedWork(): boolean {
-		if (this.agent.hasQueuedMessages() || this.#pendingNextTurnMessages.length > 0) return false;
+		if (this.agent.hasQueuedMessages() || this.#nextTurn.count > 0) return false;
 		const messages = this.agent.state.messages;
 		let tail = messages.length - 1;
 		while (tail >= 0 && isAdvisorCard(messages[tail])) tail--;
@@ -4806,10 +4799,9 @@ export class AgentSession {
 			}
 
 			// Inject any pending "nextTurn" messages as context alongside the user message
-			for (const msg of this.#pendingNextTurnMessages) {
+			for (const msg of this.#nextTurn.take()) {
 				messages.push(msg);
 			}
-			this.#pendingNextTurnMessages = [];
 
 			// Auto-read @filepath mentions
 			const fileMentions = extractFileMentions(expandedText);
@@ -5060,65 +5052,7 @@ export class AgentSession {
 	}
 
 	queueDeferredMessage(message: CustomMessage): void {
-		this.#queueHiddenNextTurnMessage(message, true);
-	}
-
-	#queueHiddenNextTurnMessage(message: CustomMessage, triggerTurn: boolean): void {
-		this.#pendingNextTurnMessages.push(message);
-		if (!triggerTurn) return;
-		const generation = this.#promptGeneration;
-		if (this.#scheduledHiddenNextTurnGeneration === generation) {
-			return;
-		}
-		this.#scheduledHiddenNextTurnGeneration = generation;
-		this.#postPrompt.schedule(
-			async () => {
-				if (this.#scheduledHiddenNextTurnGeneration === generation) {
-					this.#scheduledHiddenNextTurnGeneration = undefined;
-				}
-				if (this.#pendingNextTurnMessages.length === 0) {
-					return;
-				}
-				try {
-					await this.#promptQueuedHiddenNextTurnMessages();
-				} catch {
-					// Leave the hidden next-turn messages queued for the next explicit prompt.
-				}
-			},
-			{
-				generation,
-				onSkip: () => {
-					if (this.#scheduledHiddenNextTurnGeneration === generation) {
-						this.#scheduledHiddenNextTurnGeneration = undefined;
-					}
-				},
-			},
-		);
-	}
-
-	async #promptQueuedHiddenNextTurnMessages(): Promise<void> {
-		if (this.#pendingNextTurnMessages.length === 0) {
-			return;
-		}
-
-		const queuedMessages = [...this.#pendingNextTurnMessages];
-		this.#pendingNextTurnMessages = [];
-		const message = queuedMessages[queuedMessages.length - 1];
-		if (!message) {
-			return;
-		}
-
-		const prependMessages = queuedMessages.slice(0, -1);
-		const textContent = getCustomMessageTextContent(message);
-		try {
-			await this.#promptWithMessage(message, textContent, {
-				prependMessages,
-				skipPostPromptRecoveryWait: true,
-			});
-		} catch (error) {
-			this.#pendingNextTurnMessages = [...queuedMessages, ...this.#pendingNextTurnMessages];
-			throw error;
-		}
+		this.#nextTurn.queue(message, true);
 	}
 
 	async #promptAgentInitiatedMessage(
@@ -5183,7 +5117,7 @@ export class AgentSession {
 		const normalizedAppMessage = await normalizeAgentMessageImages(appMessage, this.model);
 		if (this.isStreaming) {
 			if (options?.deliverAs === "nextTurn") {
-				this.#queueHiddenNextTurnMessage(normalizedAppMessage, options?.triggerTurn ?? false);
+				this.#nextTurn.queue(normalizedAppMessage, options?.triggerTurn ?? false);
 				return false;
 			}
 
@@ -5199,7 +5133,7 @@ export class AgentSession {
 		if (options?.deliverAs === "nextTurn") {
 			if (options?.triggerTurn) {
 				if (this.#clientBridge?.deferAgentInitiatedTurns && !this.#allowAcpAgentInitiatedTurns) {
-					this.#queueHiddenNextTurnMessage(normalizedAppMessage, false);
+					this.#nextTurn.queue(normalizedAppMessage, false);
 					return false;
 				}
 				await this.#promptAgentInitiatedMessage(normalizedAppMessage, {
@@ -5213,7 +5147,7 @@ export class AgentSession {
 
 		if (options?.triggerTurn) {
 			if (this.#clientBridge?.deferAgentInitiatedTurns && !this.#allowAcpAgentInitiatedTurns) {
-				this.#queueHiddenNextTurnMessage(normalizedAppMessage, false);
+				this.#nextTurn.queue(normalizedAppMessage, false);
 				return false;
 			}
 			await this.#promptAgentInitiatedMessage(normalizedAppMessage);
@@ -5304,7 +5238,7 @@ export class AgentSession {
 		return (
 			this.agent.peekSteeringQueue().filter(isDisplayableQueuedMessage).length +
 			this.agent.peekFollowUpQueue().filter(isDisplayableQueuedMessage).length +
-			this.#pendingNextTurnMessages.length +
+			this.#nextTurn.count +
 			this.#promptsWaitingOnIdle
 		);
 	}
@@ -5444,7 +5378,7 @@ export class AgentSession {
 		try {
 			this.abortRetry();
 			this.#promptGeneration++;
-			this.#scheduledHiddenNextTurnGeneration = undefined;
+			this.#nextTurn.forgetRequestedTurn();
 			if (options?.preserveCompaction) {
 				// Manual `/compact` installed its own abort controller before
 				// this internal abort and must keep it alive (that marker is what makes
@@ -5473,9 +5407,7 @@ export class AgentSession {
 			// a subsequent prompt() can incorrectly observe the session as busy after an abort.
 			this.#endInFlight(true);
 			this.#stopHook.reset();
-			this.#pendingNextTurnMessages = this.#pendingNextTurnMessages.filter(
-				message => message.customType !== "session-stop-continuation",
-			);
+			this.#nextTurn.remove(message => message.customType === "session-stop-continuation");
 			// Safety net: if the agent loop aborted without producing an assistant
 			// message (e.g. failed before the first stream), the in-flight yield was
 			// never resolved or rejected by the normal message_end path. Reject it now
@@ -5487,12 +5419,9 @@ export class AgentSession {
 			// visible/persisted advice without triggering a turn (the agent is idle
 			// now): cards steered into the queue before the user stopped, plus any
 			// that arrived via enqueueAdvice mid-abort and were parked hidden in
-			// #pendingNextTurnMessages while the turn was still tearing down. Other
+			// the next-turn queue while the turn was still tearing down. Other
 			// deferred next-turn context (non-advisor) stays queued, in order.
-			const parkedAdvisorCards = this.#pendingNextTurnMessages.filter(isAdvisorCard);
-			if (parkedAdvisorCards.length > 0) {
-				this.#pendingNextTurnMessages = this.#pendingNextTurnMessages.filter(m => !isAdvisorCard(m));
-			}
+			const parkedAdvisorCards = this.#nextTurn.remove(isAdvisorCard);
 			for (const card of [...strandedAdvisorCards, ...parkedAdvisorCards]) {
 				this.#advisorRoster.preserveCard(card);
 			}
@@ -5579,8 +5508,7 @@ export class AgentSession {
 		this.#providerSessions.sync();
 		this.#memory.rekey();
 		this.#resetMemoryContextForNewTranscript();
-		this.#pendingNextTurnMessages = [];
-		this.#scheduledHiddenNextTurnGeneration = undefined;
+		this.#nextTurn.clear();
 
 		this.sessionManager.appendThinkingLevelChange(this.thinkingLevel, this.configuredThinkingLevel());
 		this.sessionManager.appendServiceTierChange(serviceTierEntry(this.#serviceTierByFamily));

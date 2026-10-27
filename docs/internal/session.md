@@ -56,6 +56,7 @@ every field of one subsystem and reaches the session through a host interface it
 |[`irc-delivery.ts`](../../packages/coding-agent/src/session/runtime/irc-delivery.ts)|Where an incoming IRC message goes: the `irc:incoming` record, the parent steer, the inbox, plan-mode context append or a wake turn with the blocked follow-ups it parks, the side-channel auto-reply for a sender awaiting an answer, and the resume and flush of records stranded after the last step boundary; it holds the IRC inbox|11|
 |[`irc-inbox.ts`](../../packages/coding-agent/src/session/runtime/irc-inbox.ts)|The peer IRC messages that arrived while a turn streamed and the auto-replies sent on the session's behalf, until a step boundary, an `irc` inbox call or the next prompt takes them; held by `irc-delivery.ts`, no host|0|
 |[`session-stop-hook.ts`](../../packages/coding-agent/src/session/runtime/session-stop-hook.ts)|The `session_stop` pass at a final stop and the chain of hidden continuations its handlers queue: the count behind `stop_hook_active`, the cap that ends a chain, and the drop of a result an abort or dispose overtook|7|
+|[`next-turn-messages.ts`](../../packages/coding-agent/src/session/runtime/next-turn-messages.ts)|The hidden messages queued for the next turn (extension `nextTurn` deliveries, advisor cards parked mid-abort, `session_stop` continuations) and the prompt generation of a turn a queued message requested that has not started; a prompt takes the queue ahead of its own message|3|
 
 Three rules hold for a new one:
 
