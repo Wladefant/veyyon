@@ -157,7 +157,7 @@ describe("config hot reload", () => {
 		const file = path.join(dir, "config.yml");
 		await fs.writeFile(
 			file,
-			"agent:\n  model: openai/old\n  sharedModel: true\ncompaction:\n  threshold: \"200000\"\n",
+			'agent:\n  model: openai/old\n  sharedModel: true\ncompaction:\n  threshold: "200000"\n',
 		);
 		const settings = await Settings.loadReadOnly({ agentDir: dir });
 		const output: string[] = [];
