@@ -380,7 +380,6 @@ const GRANDFATHERED: Readonly<Record<string, number>> = {
 	"packages/coding-agent/test/tool-execution-write-repaint.test.ts": 4,
 	"packages/coding-agent/test/tools/apply-patch-renderer.test.ts": 1,
 	"packages/coding-agent/test/tools/ask.test.ts": 28,
-	"packages/coding-agent/test/tools/browser-dispose-timeout.test.ts": 2,
 	"packages/coding-agent/test/tools/browser-lifecycle-leak.test.ts": 4,
 	"packages/coding-agent/test/tools/eval-fallback.test.ts": 6,
 	"packages/coding-agent/test/tools/fetch-binary-dispatch.test.ts": 1,
