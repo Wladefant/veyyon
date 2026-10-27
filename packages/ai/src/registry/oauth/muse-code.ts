@@ -1,5 +1,5 @@
 import { isCancellation } from "@veyyon/utils/abortable";
-import { withTimeoutSignal } from "@veyyon/utils/scoped-timeout";
+import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { isRecord } from "@veyyon/utils/type-guards";
 import * as AIError from "../../error";
 import type { FetchImpl } from "../../types";
@@ -45,9 +45,6 @@ export interface MuseCodeKeyResponse {
 	} | null;
 }
 
-function requestSignal(signal?: AbortSignal): AbortSignal {
-	return withTimeoutSignal(REQUEST_TIMEOUT_MS, signal);
-}
 
 export function parseMuseCodeCredential(value: string): MuseCodeCredential {
 	let payload: unknown;
@@ -80,45 +77,47 @@ export async function requestMuseCodeKey(
 	accessToken: string,
 	options: MuseCodeKeyRequestOptions = {},
 ): Promise<MuseCodeKeyResponse> {
-	const response = await (options.fetch ?? fetch)(MUSE_KEY_URL, {
-		method: "POST",
-		headers: {
-			Accept: "application/json",
-			Authorization: `Bearer ${accessToken}`,
-			"Content-Type": "application/json",
-			"x-api-version": API_VERSION,
-		},
-		body: JSON.stringify(options.onboard ? { onboard: true } : {}),
-		redirect: "error",
-		signal: requestSignal(options.signal),
-	});
-	const text = await response.text();
-	if (!response.ok) {
-		const excerpt = text.trim() ? ` ${text.slice(0, 500).trim()}` : "";
-		throw new AIError.OAuthError(`Muse Code key exchange failed: ${response.status}${excerpt}`, {
-			kind: "token-exchange",
-			provider: PROVIDER,
-			status: response.status,
+	return withScopedTimeoutSignal(REQUEST_TIMEOUT_MS, async signal => {
+		const response = await (options.fetch ?? fetch)(MUSE_KEY_URL, {
+			method: "POST",
+			headers: {
+				Accept: "application/json",
+				Authorization: `Bearer ${accessToken}`,
+				"Content-Type": "application/json",
+				"x-api-version": API_VERSION,
+			},
+			body: JSON.stringify(options.onboard ? { onboard: true } : {}),
+			redirect: "error",
+			signal,
 		});
-	}
-	let payload: unknown;
-	try {
-		payload = JSON.parse(text);
-	} catch (cause) {
-		throw new AIError.OAuthError("Muse Code key exchange returned invalid JSON", {
-			kind: "validation",
-			provider: PROVIDER,
-			status: response.status,
-			cause,
-		});
-	}
-	if (!isRecord(payload)) {
-		throw new AIError.OAuthError("Invalid Muse Code key response: expected object", {
-			kind: "validation",
-			provider: PROVIDER,
-		});
-	}
-	return payload as MuseCodeKeyResponse;
+		const text = await response.text();
+		if (!response.ok) {
+			const excerpt = text.trim() ? ` ${text.slice(0, 500).trim()}` : "";
+			throw new AIError.OAuthError(`Muse Code key exchange failed: ${response.status}${excerpt}`, {
+				kind: "token-exchange",
+				provider: PROVIDER,
+				status: response.status,
+			});
+		}
+		let payload: unknown;
+		try {
+			payload = JSON.parse(text);
+		} catch (cause) {
+			throw new AIError.OAuthError("Muse Code key exchange returned invalid JSON", {
+				kind: "validation",
+				provider: PROVIDER,
+				status: response.status,
+				cause,
+			});
+		}
+		if (!isRecord(payload)) {
+			throw new AIError.OAuthError("Invalid Muse Code key response: expected object", {
+				kind: "validation",
+				provider: PROVIDER,
+			});
+		}
+		return payload as MuseCodeKeyResponse;
+	}, options.signal);
 }
 
 function isTransientKeyExchangeFailure(error: unknown, signal?: AbortSignal): boolean {
@@ -344,6 +343,7 @@ export async function loginMuseCode(options: OAuthController): Promise<OAuthCred
 
 export async function refreshMuseCodeToken(
 	credentials: OAuthCredentials,
+	signal?: AbortSignal,
 	fetchImpl: FetchImpl = fetch,
 ): Promise<OAuthCredentials> {
 	const refreshToken = credentials.refresh.trim();
@@ -354,19 +354,25 @@ export async function refreshMuseCodeToken(
 		});
 	}
 	let response: Response;
+	let payload: unknown;
 	try {
-		response = await fetchImpl(MUSE_TOKEN_URL, {
-			method: "POST",
-			headers: {
-				Accept: "application/json",
-				"Content-Type": "application/x-www-form-urlencoded",
-			},
-			body: new URLSearchParams({
-				grant_type: "refresh_token",
-				client_id: MUSE_CLIENT_ID,
-				refresh_token: refreshToken,
-			}),
-		});
+		({ response, payload } = await withScopedTimeoutSignal(REQUEST_TIMEOUT_MS, async requestSignal => {
+			const response = await fetchImpl(MUSE_TOKEN_URL, {
+				method: "POST",
+				headers: {
+					Accept: "application/json",
+					"Content-Type": "application/x-www-form-urlencoded",
+				},
+				body: new URLSearchParams({
+					grant_type: "refresh_token",
+					client_id: MUSE_CLIENT_ID,
+					refresh_token: refreshToken,
+				}),
+				signal: requestSignal,
+			});
+			const payload: unknown = await response.json();
+			return { response, payload };
+		}, signal));
 	} catch (cause) {
 		throw new AIError.OAuthError("Muse Code token refresh request failed", {
 			kind: "token-refresh",
@@ -374,7 +380,6 @@ export async function refreshMuseCodeToken(
 			cause,
 		});
 	}
-	const payload = await response.json();
 	if (!response.ok || !isRecord(payload) || typeof payload.access_token !== "string") {
 		const detail =
 			isRecord(payload) && typeof payload.error_description === "string" ? payload.error_description : undefined;
@@ -393,5 +398,5 @@ export async function refreshMuseCodeToken(
 		refresh: newRefreshToken,
 		expires: credentialExpiryFromExpiresIn(expiresIn),
 	};
-	return attachMuseCodeApiKey(baseCreds, { fetch: fetchImpl, phase: "refresh", stored: credentials });
+	return attachMuseCodeApiKey(baseCreds, { fetch: fetchImpl, signal, phase: "refresh", stored: credentials });
 }
