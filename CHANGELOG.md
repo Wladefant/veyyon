@@ -75,6 +75,7 @@
 
 ### Fixed
 
+- `veyyon completions` with no shell lists the four accepted shells in its error again, which the subcommand flag check had dropped, and a bad shell prints the standard USAGE block.
 - `veyyon acp` fails `session/new` on a flag neither the launch parser nor the session's extensions recognize, with the flag and the nearest known one, instead of serving every session with the flag ignored.
 - `veyyon trust` exits 2 on an unknown flag instead of ignoring it, so a typo of `--deny` such as `--denny` no longer approves the project, and it accepts several paths and tab-completes them as files.
 - `veyyon rollback <version>` moves to the named version instead of failing with `Unexpected argument`, and `veyyon rollback` exits 2 on an unknown flag instead of ignoring it.
@@ -132,6 +133,7 @@
 - `grep` repairs a pattern rejected for an unpaired parenthesis by escaping only that parenthesis, so `(get|set)Value(` matches `getValue(` instead of the text `(get` or `set)Value(`, and `)(` matches the text `)(` instead of every line.
 - The shell `grep` and `rg` builtins reject a pattern whose `)` closes no group instead of matching every line: `grep -E ')('`, `grep -P ')('` and `rg ')('` exit 2, `grep -G '\)\('` and `grep -G '\('` exit 2 with GNU grep's `Unmatched ) or \)` and `Unmatched ( or \(`, and a bare `grep ')('` searches for the text `)(`.
 - The command runner checks a subcommand's flags and arguments against its declarations before running it, so `veyyon licenses nosuch` and `veyyon licenses --zzzz` exit 2 instead of printing the notices at exit 0.
+- A missing argument that takes one of a fixed set of values lists the set, such as `Missing required argument: shell (one of: bash, zsh, fish, powershell)`.
 
 ## [1.5.10] - 2026-10-25
 
