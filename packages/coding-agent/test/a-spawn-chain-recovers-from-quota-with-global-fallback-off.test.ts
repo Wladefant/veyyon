@@ -213,7 +213,7 @@ describe("spawn quota fallback", () => {
 					}).patterns[0],
 				);
 			}
-			expect([...healthyFirst].sort()).toEqual(selectors.slice(0, 2).sort());
+			expect([...healthyFirst]).toEqual([selectors[0]]);
 		} finally {
 			runtime.abort();
 		}
