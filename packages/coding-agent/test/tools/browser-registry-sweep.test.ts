@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import type { Subprocess } from "bun";
 import type { Browser } from "puppeteer-core";
-import { Settings } from "@veyyon/contracts/settings";
+import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/sdk";
 import { BrowserTool } from "@veyyon/coding-agent/tools/web/browser";
 import * as launch from "@veyyon/coding-agent/tools/web/browser/launch";
@@ -118,7 +118,7 @@ describe("browser registry sweep — close browsers when session releases tabs",
 });
 
 function makeCmuxKind(suffix: string): CmuxKind {
-	return { kind: "cmux", socketPath: `/tmp/veyyon-sweep-${suffix}.sock`, surface: `surface-${suffix}` };
+	return { kind: "cmux", socketPath: `/tmp/veyyon-sweep-${suffix}.sock` };
 }
 
 describe("browser registry sweep — one failed release never stops the sweep", () => {
