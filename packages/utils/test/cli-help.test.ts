@@ -98,9 +98,38 @@ describe("run() usage errors", () => {
 			process.exitCode = prevExitCode ?? 0;
 		}
 		const out = errs.join("");
-		expect(out).toContain("Error: Missing required argument: models");
+		expect(out).toContain("Error: Missing required argument: models\n");
 		expect(out).toContain("$ veyyon bench MODELS... [FLAGS]");
 		expect(out).not.toContain("dist/cli.js");
+	});
+
+	// Contract: a missing arg limited to a fixed set lists the set in the error, so the reader
+	// learns the accepted values without a second run with --help. An arg with no `options`
+	// keeps the bare message, which has no list to offer.
+	it("lists the accepted values when a fixed-choice argument is missing", async () => {
+		class ShellLikeCommand extends Command {
+			static args = {
+				shell: Args.string({ description: "target shell", required: true, options: ["bash", "zsh"] }),
+			};
+			async run(): Promise<void> {}
+		}
+		const commands: CommandEntry[] = [{ name: "completions", load: async () => ShellLikeCommand }];
+		const errs: string[] = [];
+		const stderrSpy = spyOn(process.stderr, "write").mockImplementation(chunk => {
+			errs.push(String(chunk));
+			return true;
+		});
+		const prevExitCode = process.exitCode;
+		let exitCode: number | string | undefined;
+		try {
+			await run({ bin: "veyyon", version: "0.0.0", argv: ["completions"], commands });
+			exitCode = process.exitCode;
+		} finally {
+			stderrSpy.mockRestore();
+			process.exitCode = prevExitCode ?? 0;
+		}
+		expect(exitCode).toBe(CLI_EXIT_USAGE);
+		expect(errs.join("")).toStartWith("Error: Missing required argument: shell (one of: bash, zsh)\n\n");
 	});
 
 	// Contract: `--help` USAGE renders a required variadic as `MODELS...`, never

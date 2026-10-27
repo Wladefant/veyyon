@@ -438,7 +438,10 @@ function namedArgs(argDefs: Record<string, ArgDescriptor>, positionals: readonly
 		}
 		args[argName] = value;
 		if (desc.required && value === undefined) {
-			throw new CliUsageError(`Missing required argument: ${argName}`);
+			// An arg limited to a fixed set lists that set, so the error states the accepted values
+			// instead of leaving them to --help.
+			const choices = desc.options ? ` (one of: ${desc.options.slice().join(", ")})` : "";
+			throw new CliUsageError(`Missing required argument: ${argName}${choices}`);
 		}
 		if (desc.options && typeof value === "string") assertOneOf(argName, desc.options, value);
 	}
