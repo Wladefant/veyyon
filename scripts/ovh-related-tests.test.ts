@@ -39,7 +39,7 @@ function runSelector(changedFiles: string[], options: SelectorRunOptions = {}): 
 
 function parseSelectedTests(output: string): string[] {
 	const match = output.match(/Selected related tests \((\d+)\):\n([\s\S]*?)(?:\n\(none\))?$/);
-	if (!match || !match[2]) return [];
+	if (!match?.[2]) return [];
 	return match[2]
 		.split("\n")
 		.map(line => line.trim())
