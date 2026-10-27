@@ -110,16 +110,11 @@ export async function serveTerminalControl(
 		}
 		socket.write(`${JSON.stringify(frame)}\n`);
 	};
-	// Acked deliveries, by the daemon's message id. The table lets a retry after a lost connection
-	// find the earlier request instead of enqueueing the message twice. Insertion order = age.
-	// Only settled records are evicted, so a pending id is never forgotten and re-enqueued.
-	//
-	// Crash window: from the ack until `target.deliver` runs, the message exists only in this process.
-	// A crash or close in that window loses it, although the daemon already holds the ack. The window
-	// is the time the terminal needs to reach the message on the chain.
+	// Delivery ids are scoped to the session that accepted them.
+	const deliveryKey = (sessionId: string, messageId: string): string => `${sessionId}\0${messageId}`;
 	const deliveries = new Map<
 		string,
-		{ status: DeliveryState; watchers: Set<net.Socket>; promise?: Promise<string> }
+		{ sessionId: string; messageId: string; status: DeliveryState; watchers: Set<net.Socket>; promise?: Promise<string> }
 	>();
 	const evictOldDeliveries = (): void => {
 		for (const [oldestId, oldest] of deliveries) {
@@ -130,11 +125,13 @@ export async function serveTerminalControl(
 	// One chain for acked and plain deliveries: messages reach the terminal in the order they were accepted.
 	let deliveryChain: Promise<void> = Promise.resolve();
 	let pendingDeliveries = 0;
-	const announceDelivery = (messageId: string, watchers: Iterable<net.Socket>, status: DeliveryState): void => {
-		const targets = new Set<net.Socket>(watchers);
+	const announceDelivery = (record: { sessionId: string; messageId: string; status: DeliveryState; watchers: Set<net.Socket> }): void => {
+		const targets = new Set<net.Socket>(record.watchers);
 		for (const socket of subscribers) targets.add(socket);
 		for (const socket of targets) {
-			send(socket, { event: { kind: "delivery", sessionId: publishedSessionId, messageId, ...status } });
+			if (record.sessionId === publishedSessionId) {
+				send(socket, { event: { kind: "delivery", sessionId: record.sessionId, messageId: record.messageId, ...record.status } });
+			}
 		}
 	};
 	const runDelivery = (sessionId: string, text: string, mode: "auto" | "steer" | "followUp"): Promise<string> => {
@@ -173,13 +170,14 @@ export async function serveTerminalControl(
 		text: string,
 		mode: "auto" | "steer" | "followUp",
 	): { accepted: true; messageId: string; state: DeliveryState["state"]; outcome?: string; error?: string } => {
-		const known = deliveries.get(messageId);
+		const key = deliveryKey(sessionId, messageId);
+		const known = deliveries.get(key);
 		if (known) {
 			if (known.status.state === "pending") {
 				known.watchers.add(socket);
 				return { accepted: true, messageId, state: "pending" };
 			}
-			send(socket, { event: { kind: "delivery", sessionId: publishedSessionId, messageId, ...known.status } });
+			send(socket, { event: { kind: "delivery", sessionId: known.sessionId, messageId, ...known.status } });
 			return {
 				accepted: true,
 				messageId,
@@ -187,27 +185,24 @@ export async function serveTerminalControl(
 				...(known.status.state === "delivered" ? { outcome: known.status.outcome } : { error: known.status.error }),
 			};
 		}
-		if (pendingDeliveries >= MAX_PENDING_DELIVERIES) {
-			throw new Error("Terminal busy: too many deliveries pending; retry later");
-		}
+		if (pendingDeliveries >= MAX_PENDING_DELIVERIES) throw new Error("Terminal busy: too many deliveries pending; retry later");
 		const deliveryPromise = runDelivery(sessionId, text, mode);
-		const record = {
-			status: { state: "pending" } as DeliveryState,
-			watchers: new Set([socket]),
-			promise: deliveryPromise,
-		};
-		deliveries.set(messageId, record);
+		const record = { sessionId, messageId, status: { state: "pending" } as DeliveryState, watchers: new Set([socket]), promise: deliveryPromise };
+		deliveries.set(key, record);
 		evictOldDeliveries();
 		void deliveryPromise.then(
-			outcome => {
-				record.status = { state: "delivered", outcome };
-			},
+			outcome => { record.status = { state: "delivered", outcome }; },
 			error => {
+				if (error instanceof TerminalNotReadyError || String(error).includes("session detached or changed")) {
+					deliveries.delete(key);
+					return;
+				}
 				record.status = { state: "failed", error: String(error) };
 			},
 		).then(() => {
-			announceDelivery(messageId, record.watchers, record.status);
+			if (record.status.state !== "pending") announceDelivery(record);
 			record.watchers.clear();
+			if (record.sessionId !== publishedSessionId) deliveries.delete(key);
 		});
 		return { accepted: true, messageId, state: "pending" };
 	};
@@ -263,31 +258,47 @@ export async function serveTerminalControl(
 								subscribers.add(socket);
 								startEvents();
 								const fullHistory = target.history();
-								let entries = fullHistory.slice(-HISTORY_FRAME_ENTRIES);
-								if (typeof request.cursor === "string" && request.cursor) {
-									const cursorIndex = fullHistory.findIndex(entry => entry.entryId === request.cursor);
-									if (cursorIndex >= 0) {
-										entries = fullHistory.slice(cursorIndex + 1);
-									}
+								const cursorIndex = typeof request.cursor === "string" && request.cursor
+									? fullHistory.findIndex(entry => entry.entryId === request.cursor)
+									: -1;
+								if (typeof request.cursor === "string" && request.cursor && cursorIndex < 0) {
+									throw new Error("Unknown history cursor; reconnect without a cursor to reset history");
 								}
-								send(socket, {
-									event: {
-										kind: "history",
-										sessionId: publishedSessionId,
-										entries,
-									},
-								});
-								for (const [messageId, record] of deliveries) {
+								const entries = cursorIndex >= 0 ? fullHistory.slice(cursorIndex + 1) : fullHistory.slice(-HISTORY_FRAME_ENTRIES);
+								const maxBytes = 512 * 1024;
+								const maxEntries = 100;
+								let chunk: typeof entries = [];
+								let chunkBytes = 0;
+								const chunks: typeof entries[] = [];
+								for (const entry of entries) {
+									const bytes = Buffer.byteLength(JSON.stringify(entry));
+									if (bytes > maxBytes) throw new Error(`History entry ${entry.entryId} exceeds ${maxBytes} byte frame limit`);
+									if (chunk.length && (chunk.length >= maxEntries || chunkBytes + bytes > maxBytes)) {
+										chunks.push(chunk);
+										chunk = [];
+										chunkBytes = 0;
+									}
+									chunk.push(entry);
+									chunkBytes += bytes;
+								}
+								if (chunk.length || !chunks.length) chunks.push(chunk);
+								for (let index = 0; index < chunks.length; index++) {
+									send(socket, {
+										event: {
+											kind: "history",
+											sessionId: publishedSessionId,
+											entries: chunks[index],
+										},
+									});
+									if (socket.writableNeedDrain) await new Promise<void>(resolve => socket.once("drain", resolve));
+								}
+								for (const [key, record] of deliveries) {
+									if (record.sessionId !== request.sessionId) continue;
 									if (record.status.state === "pending") {
 										record.watchers.add(socket);
 									} else {
 										send(socket, {
-											event: {
-												kind: "delivery",
-												sessionId: publishedSessionId,
-												messageId,
-												...record.status,
-											},
+											event: { kind: "delivery", sessionId: record.sessionId, messageId: record.messageId, ...record.status },
 										});
 									}
 								}
@@ -314,38 +325,43 @@ export async function serveTerminalControl(
 								}
 								if (typeof request.messageId === "string" && request.messageId) {
 									if (request.messageId.length > 128) throw new Error("Invalid delivery");
-									const known = deliveries.get(request.messageId);
+									const key = deliveryKey(request.sessionId, request.messageId);
+									const known = deliveries.get(key);
 									if (known) {
 										if (known.status.state === "delivered") {
 											result = known.status.outcome;
 											break;
 										}
-										if (known.status.state === "failed") {
-											throw new Error(known.status.error);
-										}
+										if (known.status.state === "failed") throw new Error(known.status.error);
 										if (known.promise) {
 											result = await known.promise;
 											break;
 										}
 									}
+									if (pendingDeliveries >= MAX_PENDING_DELIVERIES) throw new Error("Terminal busy: too many deliveries pending; retry later");
 									const deliveryPromise = runDelivery(request.sessionId, request.text, request.mode);
 									const record = {
+										sessionId: request.sessionId,
+										messageId: request.messageId,
 										status: { state: "pending" } as DeliveryState,
 										watchers: new Set<net.Socket>(),
 										promise: deliveryPromise,
 									};
-									deliveries.set(request.messageId, record);
+									deliveries.set(key, record);
 									evictOldDeliveries();
 									void deliveryPromise.then(
-										outcome => {
-											record.status = { state: "delivered", outcome };
-										},
+										outcome => { record.status = { state: "delivered", outcome }; },
 										error => {
+											if (error instanceof TerminalNotReadyError || String(error).includes("session detached or changed")) {
+												deliveries.delete(key);
+												return;
+											}
 											record.status = { state: "failed", error: String(error) };
 										},
 									).then(() => {
-										announceDelivery(request.messageId, record.watchers, record.status);
+										if (record.status.state !== "pending") announceDelivery(record);
 										record.watchers.clear();
+										if (record.sessionId !== publishedSessionId) deliveries.delete(key);
 									});
 									result = await deliveryPromise;
 									break;
@@ -353,7 +369,9 @@ export async function serveTerminalControl(
 								result = await runDelivery(request.sessionId, request.text, request.mode);
 								break;
 							case "deliveryStatus": {
-								const known = typeof request.messageId === "string" ? deliveries.get(request.messageId) : undefined;
+								const known = typeof request.messageId === "string"
+									? deliveries.get(deliveryKey(request.sessionId, request.messageId))
+									: undefined;
 								result = known ? known.status : { state: "unknown" };
 								break;
 							}
@@ -400,7 +418,13 @@ export async function serveTerminalControl(
 			await fs.rm(recordPath, { force: true });
 			return;
 		}
+		const previousSessionId = publishedSessionId;
 		publishedSessionId = identity.sessionId;
+		if (previousSessionId !== identity.sessionId) {
+			for (const [key, delivery] of deliveries) {
+				if (delivery.sessionId === previousSessionId && delivery.status.state !== "pending") deliveries.delete(key);
+			}
+		}
 	};
 	try {
 		await publish();

@@ -92,12 +92,14 @@ async function serve(
 	deliver: (text: string, mode: "auto" | "steer" | "followUp") => Promise<string>,
 	sessionId = "sess-live",
 	getHistory?: () => { entryId: string; text: string }[],
+	identityRef?: { sessionId: string },
 ) {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "terminal-reconnect-"));
 	cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+	const identity = identityRef ?? { sessionId };
 	const close = await serveTerminalControl(
 		{
-			identity: () => ({ sessionId, cwd: root, sessionFile: path.join(root, `${sessionId}.jsonl`) }),
+			identity: () => ({ sessionId: identity.sessionId, cwd: root, sessionFile: path.join(root, `${identity.sessionId}.jsonl`) }),
 			deliver,
 			abort: async () => false,
 			history: getHistory ?? (() => [{ entryId: "e-0", text: "initial entry" }]),
@@ -253,13 +255,96 @@ test("a reconnected subscriber with a cursor receives only missed history entrie
 	expect(hist2.event?.entries).toEqual([]);
 	client2.close();
 
-	// Client 3 connects with unknown cursor: falls back to bounded history
+	// Client 3 cannot safely resume from a cursor that is no longer in history.
 	const client3 = connect(owner);
 	client3.send({ id: "sub-c3", op: "subscribe", cursor: "unknown-cursor" });
-	await client3.next(frame => frame.id === "sub-c3");
-	const hist3 = await client3.next(frame => frame.event?.kind === "history");
-	expect(hist3.event?.entries?.map(e => e.entryId)).toEqual(["e-0", "e-1", "e-2"]);
+	const response3 = await client3.next(frame => frame.id === "sub-c3");
+	expect(response3.ok).toBe(false);
+	expect(response3.error).toContain("Unknown history cursor");
 	client3.close();
+});
+
+test("cursor replay sends every missed entry in bounded history frames", async () => {
+	const historyEntries = Array.from({ length: 1201 }, (_, index) => ({ entryId: `e-${index}`, text: `turn ${index}` }));
+	const owner = await serve(async () => "ok", "sess-large-history", () => historyEntries);
+	const client = connect(owner);
+	client.send({ id: "sub-large", op: "subscribe", cursor: "e-0" });
+	await client.next(frame => frame.id === "sub-large");
+	const replayed: Array<{ entryId: string; text: string }> = [];
+	for (let index = 0; index < 12; index++) {
+		const frame = await client.next(frame => frame.event?.kind === "history");
+		const entries = frame.event?.entries ?? [];
+		expect(Buffer.byteLength(JSON.stringify(frame))).toBeLessThan(1024 * 1024);
+		expect(entries.length).toBeLessThanOrEqual(100);
+		replayed.push(...entries);
+	}
+	expect(replayed).toHaveLength(1200);
+	expect(replayed[0]?.entryId).toBe("e-1");
+	expect(replayed.at(-1)?.entryId).toBe("e-1200");
+});
+test("a busy rejection does not retain the message id after the delivery queue drains", async () => {
+	const gate = Promise.withResolvers<void>();
+	const { promise: callsReached, resolve: resolveCallsReached } = Promise.withResolvers<void>();
+	let calls = 0;
+	const owner = await serve(async () => {
+		calls++;
+		if (calls === 64) resolveCallsReached();
+		await gate.promise;
+		return "done";
+	});
+	const client = connect(owner);
+	for (let index = 0; index < 64; index++) {
+		client.send({ id: `fill-${index}`, op: "deliver", text: "queued", mode: "auto", ack: true, messageId: `fill-${index}` });
+		await client.next(frame => frame.id === `fill-${index}`);
+	}
+	client.send({ id: "busy-first", op: "deliver", text: "retry me", mode: "auto", ack: true, messageId: "busy-retry" });
+	const rejected = await client.next(frame => frame.id === "busy-first");
+	expect(rejected.ok).toBe(false);
+	expect(rejected.error).toContain("Terminal busy");
+	gate.resolve();
+	await callsReached;
+	for (let index = 0; index < 64; index++) await client.next(frame => frame.event?.kind === "delivery");
+	client.send({ id: "busy-retry-again", op: "deliver", text: "retry me", mode: "auto", ack: true, messageId: "busy-retry" });
+	const accepted = await client.next(frame => frame.id === "busy-retry-again");
+	expect(accepted.result).toMatchObject({ accepted: true, messageId: "busy-retry", state: "pending" });
+});
+
+
+test("message ids and delivery announcements stay within their accepting session", async () => {
+	const identity = { sessionId: "sess-before-switch" };
+	const gate = Promise.withResolvers<void>();
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "terminal-reconnect-"));
+	cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+	const close = await serveTerminalControl({
+		identity: () => ({ sessionId: identity.sessionId, cwd: root, sessionFile: path.join(root, `${identity.sessionId}.jsonl`) }),
+		deliver: async text => { await gate.promise; return text; },
+		abort: async () => false,
+		history: () => [],
+		subscribe: () => () => {},
+	}, root);
+	cleanup.push(close);
+	const owner = await readOwner(root);
+	const oldClient = connect(owner);
+	oldClient.send({ id: "old-ack", op: "deliver", text: "old-session", mode: "auto", ack: true, messageId: "same-id" });
+	await oldClient.next(frame => frame.id === "old-ack");
+	const oldClosed = Promise.withResolvers<void>();
+	oldClient.socket.once("close", oldClosed.resolve);
+	identity.sessionId = "sess-after-switch";
+	await oldClosed.promise;
+	let updatedOwner: TerminalOwner;
+	do {
+		updatedOwner = await readOwner(root);
+	} while (updatedOwner.sessionId !== "sess-after-switch");
+	const newClient = connect(updatedOwner);
+	newClient.send({ id: "new-sub", op: "subscribe" });
+	const subscribed = await newClient.next(frame => frame.id === "new-sub");
+	expect(subscribed.ok).toBe(true);
+	newClient.send({ id: "new-ack", op: "deliver", text: "new-session", mode: "auto", ack: true, messageId: "same-id" });
+	const accepted = await newClient.next(frame => frame.id === "new-ack");
+	expect(accepted.result).toMatchObject({ accepted: true, messageId: "same-id", state: "pending" });
+	gate.resolve();
+	const newOutcome = await newClient.next(frame => frame.event?.kind === "delivery" && frame.messageId === "same-id");
+	expect(newOutcome.event?.sessionId).toBe("sess-after-switch");
 });
 
 test("concurrent or repeated deliveries with the same messageId share a single terminal turn", async () => {
