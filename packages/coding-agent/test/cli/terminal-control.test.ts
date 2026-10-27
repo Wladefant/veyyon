@@ -8,7 +8,7 @@ import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isRecord } from "@veyyon/utils";
+import { applyOwnerOnlyWindowsAcl, isRecord } from "@veyyon/utils";
 import { commands, resolveCliArgv } from "../../src/cli-commands";
 import {
 	discoverTerminalOwner,
@@ -69,6 +69,11 @@ async function readOwnerRecord(root: string): Promise<TerminalOwner> {
 		throw new Error("Invalid terminal owner record read from directory");
 	}
 	return parsed;
+}
+
+async function writePrivateFile(filePath: string, content: string): Promise<void> {
+	await fs.writeFile(filePath, content, { mode: 0o600 });
+	if (process.platform === "win32") await applyOwnerOnlyWindowsAcl(filePath);
 }
 
 async function pingEndpoint(
@@ -135,7 +140,8 @@ describe("terminal-control CLI and owner discovery client", () => {
 	beforeEach(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "term-ctrl-test-"));
 		terminalsDir = path.join(tempDir, "run", "terminals");
-		await fs.mkdir(terminalsDir, { recursive: true });
+		await fs.mkdir(terminalsDir, { recursive: true, mode: 0o700 });
+		if (process.platform === "win32") await applyOwnerOnlyWindowsAcl(terminalsDir);
 	});
 
 	afterEach(async () => {
@@ -260,7 +266,7 @@ describe("terminal-control CLI and owner discovery client", () => {
 				endpoint: process.platform === "win32" ? "\\\\.\\pipe\\test-p1" : path.join(tempDir, "p1.sock"),
 				token: "token-alpha",
 			};
-			await fs.writeFile(recordPath, JSON.stringify(owner));
+			await writePrivateFile(recordPath, JSON.stringify(owner));
 
 			const discovered = await discoverTerminalOwner("sess-target-1", tempDir);
 			expect(discovered.sessionId).toBe("sess-target-1");
@@ -294,8 +300,8 @@ describe("terminal-control CLI and owner discovery client", () => {
 				endpoint: process.platform === "win32" ? "\\\\.\\pipe\\test-p2" : path.join(tempDir, "p2.sock"),
 				token: "token-2",
 			};
-			await fs.writeFile(rec1, JSON.stringify(owner1));
-			await fs.writeFile(rec2, JSON.stringify(owner2));
+			await writePrivateFile(rec1, JSON.stringify(owner1));
+			await writePrivateFile(rec2, JSON.stringify(owner2));
 
 			await expect(discoverTerminalOwner("duplicate-session", tempDir)).rejects.toThrow(
 				'Multiple active terminal owners found for session "duplicate-session". Ambiguous owner.',
@@ -304,10 +310,10 @@ describe("terminal-control CLI and owner discovery client", () => {
 
 		it("ignores stale records from dead processes and corrupt files", async () => {
 			const corruptPath = path.join(terminalsDir, "corrupt.json");
-			await fs.writeFile(corruptPath, "{ invalid json");
+			await writePrivateFile(corruptPath, "{ invalid json");
 
 			const deadPidPath = path.join(terminalsDir, "999999-dead.json");
-			await fs.writeFile(
+			await writePrivateFile(
 				deadPidPath,
 				JSON.stringify({
 					version: 1,
@@ -321,7 +327,7 @@ describe("terminal-control CLI and owner discovery client", () => {
 			);
 
 			const livePath = path.join(terminalsDir, `${process.pid}-live.json`);
-			await fs.writeFile(
+			await writePrivateFile(
 				livePath,
 				JSON.stringify({
 					version: 1,
