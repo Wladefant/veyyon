@@ -413,11 +413,18 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * already here, and its runtime imports (the IRC bus, the agent registry, the IRC inbox and the
  * side-channel and steering prompt rows) are already here. Measured 2026-10-26 at 1502.
  *
+ * 1502 to 1504: `coding-agent/src/session/runtime/session-stop-hook.ts`, the session collaborator
+ * that runs the `session_stop` hook pass and queues its continuation, and
+ * `coding-agent/src/session/runtime/next-turn-messages.ts`, the collaborator that holds the hidden
+ * messages queued for the next turn. Both left `session/agent-session.ts`, already here. The first
+ * imports `@veyyon/utils` and `session/nudges.ts`, both already here; the second has only type
+ * imports. Measured 2026-10-26 at 1504.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1502;
+const LAUNCH_REACH_CEILING = 1504;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
