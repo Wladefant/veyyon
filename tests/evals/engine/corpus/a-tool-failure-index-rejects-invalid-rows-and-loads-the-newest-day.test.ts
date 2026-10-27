@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { loadNewestToolFailureIndex, parseToolFailureIndex } from "./tool-failure-index";
+import { loadNewestToolFailureIndex, parseToolFailureIndex, type ToolFailureIndexRow } from "./tool-failure-index";
 
 const tempRoots: string[] = [];
 
@@ -35,6 +35,19 @@ function row(overrides: Record<string, unknown> = {}): Record<string, unknown> {
 		...overrides,
 	};
 }
+function validRow(overrides: Partial<ToolFailureIndexRow> = {}): ToolFailureIndexRow {
+	return {
+		schema_version: 1,
+		tool: "read",
+		args_shape: { file_path: "string", recursive: "bool", enabled: "boolean" },
+		error_text: "The requested file was not found.",
+		session_id: "session-test-001",
+		file: "packages/example.ts",
+		line: 12,
+		timestamp: "2026-10-27T12:30:00.000Z",
+		...overrides,
+	};
+}
 
 function jsonl(...rows: unknown[]): string {
 	return rows.map((value) => JSON.stringify(value)).join("\n");
@@ -42,7 +55,7 @@ function jsonl(...rows: unknown[]): string {
 
 describe("tool-failure index row parsing", () => {
 	test("returns a valid version-1 row unchanged", () => {
-		const expected = row();
+		const expected = validRow();
 		const result = parseToolFailureIndex(jsonl(expected));
 
 		expect(result).toEqual({ records: [expected], rejections: [] });
@@ -118,7 +131,7 @@ describe("newest tool-failure index directory loading", () => {
 		for (const day of ["2026-10-25", "2026-10-27"]) {
 			const directory = path.join(root, day);
 			await fs.mkdir(directory, { recursive: true });
-			await fs.writeFile(path.join(directory, "tool-errors.jsonl"), jsonl(row({ session_id: `private-${day}` })));
+			await fs.writeFile(path.join(directory, "tool-errors.jsonl"), jsonl(validRow({ session_id: `private-${day}` })));
 			await fs.writeFile(
 				path.join(directory, "digest.json"),
 				JSON.stringify({ schema_version: 1, tool_case_count: 1, coverage_complete: day === "2026-10-27", producer_note: "ignored" }),
@@ -129,7 +142,7 @@ describe("newest tool-failure index directory loading", () => {
 
 		expect(result.day).toBe("2026-10-27");
 		expect(result.digest).toEqual({ schema_version: 1, tool_case_count: 1, coverage_complete: true });
-		expect(result.records).toEqual([row({ session_id: "private-2026-10-27" })]);
+		expect(result.records).toEqual([validRow({ session_id: "private-2026-10-27" })]);
 		expect(result.rejections).toEqual([]);
 	});
 	test("keeps digest counts aligned to source rows when a row is rejected", async () => {
