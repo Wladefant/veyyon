@@ -2,7 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Anthropic prompt-cache telemetry records (`Usage.cacheRequests`) capturing requested TTL, prefix hash, model, and request ID across provider attempts ([Refs #711](https://github.com/Wladefant/veyyon/pull/711)).
+
 ### Fixed
+- Extracted request IDs from `AnthropicApiError` instances and response headers in Anthropic stream attempt error handling ([Refs #711](https://github.com/Wladefant/veyyon/pull/711)).
 
 - Auth gateway refuses missing, malformed, wrong and revoked device bearers before provider dispatch. Device tokens can refresh per request ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
 - Gateway privacy guards credentials split across semantic SSE deltas and withholds Cursor diagnostics and raw request-debug dumps inside private requests ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
