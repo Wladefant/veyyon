@@ -181,9 +181,7 @@ import {
 	type InterruptedThinkingDetails,
 	isEmptyErrorTurn,
 	isUserInterruptAbort,
-	normalizeCustomMessagePayload,
 	SILENT_ABORT_MARKER,
-	SKILL_PROMPT_MESSAGE_TYPE,
 	USER_INTERRUPT_LABEL,
 } from "./messages";
 import { computeNonMessageBreakdown, computeNonMessageTokens, takeHeldAtRestReading } from "./non-message-tokens";
@@ -193,6 +191,12 @@ import { CompactionRuntime } from "./runtime/compaction-runtime";
 import { readCompactionSpanBack } from "./runtime/compaction-summarizer";
 import { ContextAccounting } from "./runtime/context-accounting";
 import { ConversationRelease } from "./runtime/conversation-release";
+import {
+	type CustomMessageFields,
+	CustomMessages,
+	type PromptCustomMessageOptions,
+	type SendCustomMessageOptions,
+} from "./runtime/custom-messages";
 import { DisplayCopy } from "./runtime/display-copy";
 import { ExitRecord } from "./runtime/exit-record";
 import { FinalizeReminders } from "./runtime/finalize-reminders";
@@ -454,32 +458,6 @@ async function sendModeContext(
 	);
 }
 
-/**
- * `details` with the text the queue chip shows for a queued custom message. Details that are not an
- * object are replaced, since the chip text needs a record to ride on.
- */
-function withQueueChipText<T>(details: T | undefined, queueChipText: string): T {
-	const base = details && typeof details === "object" ? (details as Record<string, unknown>) : {};
-	return { ...base, __queueChipText: queueChipText } as T;
-}
-
-/** A custom message as steer/follow-up delivery queues it, without starting a turn. */
-function queuedCustomMessage<T = unknown>(
-	message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
-	queueChipText?: string,
-): CustomMessage<T> {
-	const details = queueChipText !== undefined ? withQueueChipText(message.details, queueChipText) : message.details;
-	return {
-		role: "custom",
-		customType: message.customType,
-		content: message.content,
-		display: message.display,
-		details,
-		attribution: message.attribution ?? "agent",
-		timestamp: Date.now(),
-	};
-}
-
 export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -723,6 +701,8 @@ export class AgentSession {
 	});
 	/** Steers and follow-ups waiting on the agent's queues and the drain that starts a turn on them; see {@link QueuedMessages}. */
 	readonly #queue: QueuedMessages;
+	/** How a custom message reaches the conversation, by whether a turn is streaming; see {@link CustomMessages}. */
+	readonly #custom: CustomMessages;
 
 	/** Prompts in flight and the power assertion held while any runs. */
 	readonly #inFlight: TurnsInFlight;
@@ -866,7 +846,7 @@ export class AgentSession {
 			planModeEnabled: () => this.#planMode.enabled,
 			asyncEnabled: () => this.settings.get("async.enabled"),
 			emitIrcMessage: record => void this.#events.send({ type: "irc_message", message: record }),
-			appendToContext: record => this.#appendCustomMessageToContext(record),
+			appendToContext: record => this.#custom.append(record),
 			canAutoContinueForFollowUp: () => this.#queue.canAutoContinueForFollowUp(),
 			beginWakeTurn: () => {
 				this.#resetPromptMaintenanceState();
@@ -1446,6 +1426,20 @@ export class AgentSession {
 			textWithImages: (text, images) => this.#images.textWithImages(text, images),
 			scheduleContinue: () => this.#continuations.scheduleContinue(),
 			nextTurnCount: () => this.#nextTurn.count,
+		});
+		this.#custom = new CustomMessages({
+			images: this.#images,
+			nextTurn: this.#nextTurn,
+			queue: this.#queue,
+			agent: this.agent,
+			sessionStore: this.sessionManager,
+			startupHydration: () => this.#startupHydration,
+			isStreaming: () => this.isStreaming,
+			defersAgentInitiatedTurns: () =>
+				this.#clientBridge?.deferAgentInitiatedTurns === true && !this.#allowAcpAgentInitiatedTurns,
+			promptAgentInitiated: (message, options) => this.#promptAgentInitiatedMessage(message, options),
+			promptWithMessage: (message, text, options) => this.#promptWithMessage(message, text, options),
+			keywordNotices: text => createMagicKeywordNotices(this, text),
 		});
 		this.#sessionSwitch = this.#createSessionSwitch();
 		this.#sessionBranch = this.#createSessionBranch();
@@ -3230,66 +3224,12 @@ export class AgentSession {
 		return true;
 	}
 
+	/** Run a custom message as the prompt of a turn; see {@link CustomMessages.prompt}. */
 	async promptCustomMessage<T = unknown>(
-		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
-		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice"> & {
-			queueChipText?: string;
-			queueOnly?: boolean;
-		},
+		message: CustomMessageFields<T>,
+		options?: PromptCustomMessageOptions,
 	): Promise<void> {
-		const textContent = contentText(message.content, { separator: "" });
-
-		let keywordNotices: CustomMessage[] = [];
-		if (message.customType === SKILL_PROMPT_MESSAGE_TYPE && message.attribution === "user") {
-			const details = message.details;
-			let skillArgs = "";
-			if (details && typeof details === "object" && "args" in details && typeof details.args === "string") {
-				skillArgs = details.args;
-			}
-			keywordNotices = createMagicKeywordNotices(this, skillArgs);
-		}
-
-		if (options?.queueOnly) {
-			if (!options.streamingBehavior) {
-				throw new AgentBusyError();
-			}
-			// The keyword notices are text, so they carry no image to normalize.
-			for (const notice of keywordNotices)
-				this.#queue.enqueue(queuedCustomMessage(notice), options.streamingBehavior);
-			this.#queue.enqueue(
-				await this.#images.normalizeMessage(queuedCustomMessage(message, options.queueChipText)),
-				options.streamingBehavior,
-			);
-			return;
-		}
-		if (this.isStreaming) {
-			if (!options?.streamingBehavior) {
-				throw new AgentBusyError();
-			}
-			for (const notice of keywordNotices) {
-				await this.sendCustomMessage(notice, { deliverAs: options.streamingBehavior });
-			}
-			await this.sendCustomMessage(message, {
-				deliverAs: options.streamingBehavior,
-				queueChipText: options.queueChipText,
-			});
-			return;
-		}
-
-		const customMessage: CustomMessage<T> = {
-			role: "custom",
-			customType: message.customType,
-			content: message.content,
-			display: message.display,
-			details: message.details,
-			attribution: message.attribution ?? "agent",
-			timestamp: Date.now(),
-		};
-
-		await this.#promptWithMessage(customMessage, textContent, {
-			...options,
-			prependMessages: keywordNotices.length > 0 ? keywordNotices : undefined,
-		});
+		return this.#custom.prompt(message, options);
 	}
 
 	async #promptWithMessage(
@@ -3497,83 +3437,17 @@ export class AgentSession {
 	}
 
 	/**
-	 * Send a custom message to the session. Creates a CustomMessageEntry.
+	 * Send a custom message to the session, recorded as a custom message entry; see
+	 * {@link CustomMessages.send}.
 	 *
-	 * Handles three cases:
-	 * - Streaming: queue as steer/follow-up or store for next turn
-	 * - Not streaming + triggerTurn: appends to state/session, starts new turn unless the client cannot own it
-	 * - Not streaming + no trigger: appends to state/session, no turn
-	 *
-	 * @returns true iff this call synchronously started a new turn (awaited
-	 * `agent.prompt`); false when the message was queued/appended without a turn
-	 * — including when `triggerTurn` is downgraded because the client defers
-	 * agent-initiated turns. Callers that must mirror the resulting `agent_end`
-	 * use this to avoid acting on a turn that never ran.
+	 * @returns true iff this call started a turn and waited for it; false when the message was queued,
+	 * held or appended without one, including a `triggerTurn` the client defers.
 	 */
 	async sendCustomMessage<T = unknown>(
 		message: CustomMessagePayload<T>,
-		options?: {
-			triggerTurn?: boolean;
-			deliverAs?: "steer" | "followUp" | "nextTurn";
-			queueChipText?: string;
-			acceptTerminalEmptyStop?: boolean;
-		},
+		options?: SendCustomMessageOptions,
 	): Promise<boolean> {
-		// A message that starts a turn is a turn: it reaches the same tools, so it waits for the same
-		// hydration `prompt` waits for.
-		if (options?.triggerTurn) await this.#startupHydration;
-		const normalizedPayload = normalizeCustomMessagePayload<T>(message);
-		const details =
-			options?.queueChipText && options.deliverAs !== "nextTurn"
-				? withQueueChipText(normalizedPayload.details, options.queueChipText)
-				: normalizedPayload.details;
-		const appMessage: CustomMessage<T> = {
-			role: "custom",
-			customType: normalizedPayload.customType,
-			content: normalizedPayload.content,
-			display: normalizedPayload.display,
-			details,
-			attribution: normalizedPayload.attribution,
-			timestamp: Date.now(),
-		};
-		const normalizedAppMessage = await this.#images.normalizeMessage(appMessage);
-		if (this.isStreaming) {
-			if (options?.deliverAs === "nextTurn") {
-				this.#nextTurn.queue(normalizedAppMessage, options?.triggerTurn ?? false);
-				return false;
-			}
-
-			this.#queue.enqueue(normalizedAppMessage, options?.deliverAs === "followUp" ? "followUp" : "steer");
-			this.#queue.scheduleDrain();
-			return false;
-		}
-
-		if (options?.deliverAs === "nextTurn") {
-			if (options?.triggerTurn) {
-				if (this.#clientBridge?.deferAgentInitiatedTurns && !this.#allowAcpAgentInitiatedTurns) {
-					this.#nextTurn.queue(normalizedAppMessage, false);
-					return false;
-				}
-				await this.#promptAgentInitiatedMessage(normalizedAppMessage, {
-					acceptTerminalEmptyStop: options.acceptTerminalEmptyStop === true,
-				});
-				return true;
-			}
-			this.#appendCustomMessageToContext(normalizedAppMessage);
-			return false;
-		}
-
-		if (options?.triggerTurn) {
-			if (this.#clientBridge?.deferAgentInitiatedTurns && !this.#allowAcpAgentInitiatedTurns) {
-				this.#nextTurn.queue(normalizedAppMessage, false);
-				return false;
-			}
-			await this.#promptAgentInitiatedMessage(normalizedAppMessage);
-			return true;
-		}
-
-		this.#appendCustomMessageToContext(normalizedAppMessage);
-		return false;
+		return this.#custom.send(message, options);
 	}
 
 	/**
@@ -3701,12 +3575,6 @@ export class AgentSession {
 	setTitleSystemPrompt(prompt: string | undefined): void {
 		this.#replanTitle.systemPrompt = prompt;
 	}
-
-	// Auto-clear of completed/abandoned tasks was removed: the timer-driven
-	// splice mutated the canonical todo board between tool calls, so the model
-	// observed phase totals shrinking ("5 → 4") after marking tasks done. The
-	// `tasks.todoClearDelay` setting is now inert; completed tasks survive
-	// until the next explicit `todo` call removes them via `rm`/`drop`.
 
 	/**
 	 * Abort current operation and wait for agent to become idle.
@@ -4364,18 +4232,6 @@ export class AgentSession {
 				effectiveServiceTier: model => this.#tiers.effective(model),
 			},
 			args,
-		);
-	}
-
-	/** Append a custom message to the model's context and the session file without starting a turn. */
-	#appendCustomMessageToContext<T>(message: CustomMessage<T>): void {
-		this.agent.appendMessage(message);
-		this.sessionManager.appendCustomMessageEntry(
-			message.customType,
-			message.content,
-			message.display,
-			message.details,
-			message.attribution ?? "agent",
 		);
 	}
 

@@ -148,8 +148,11 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-27 at 4692: the release at dispose of the session's jobs, owned job manager,
  * eval kernels, session-scoped resources and MCP hold moved into the `session-release.ts`
  * collaborator, and the memory backends' release into `memory-context.ts` (-63).
+ * RE-MEASURED 2026-10-27 at 4548: how a custom message reaches the conversation, queued, held for
+ * the next turn, run as a turn or appended, and the custom-message prompt with its keyword notices
+ * moved into the `custom-messages.ts` collaborator (-144).
  */
-const RUNTIME_CEILING = 4_700;
+const RUNTIME_CEILING = 4_600;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -167,6 +170,7 @@ const COLLABORATORS = [
 	"compaction-summarizer.ts",
 	"context-accounting.ts",
 	"conversation-release.ts",
+	"custom-messages.ts",
 	"display-copy.ts",
 	"exit-record.ts",
 	"extension-event-forwarder.ts",
