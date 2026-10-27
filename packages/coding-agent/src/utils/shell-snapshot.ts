@@ -9,9 +9,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { logger, postmortem } from "@veyyon/utils";
+import type { Subprocess } from "bun";
 import fnEnvHelper from "./shell-snapshot-fn-env.sh" with { type: "text" };
 
 const cachedSnapshotPaths = new Map<string, string>();
+// One creation per shell at a time: a call that arrives while one runs shares its result, so parallel
+// first commands land in one persistent shell session and no snapshot is left outside the cache.
+const pendingSnapshots = new Map<string, Promise<string | null>>();
+// Snapshot shells still running, by the file each writes, so an exit mid-creation can stop them.
+const runningSnapshots = new Map<string, Subprocess>();
 const SNAPSHOT_TIMEOUT_MS = 2_000;
 
 /**
@@ -206,7 +212,8 @@ fi
 }
 
 /**
- * Create a shell snapshot, caching the result.
+ * Create a shell snapshot, caching the result. A call made while a snapshot of the same shell is being
+ * created waits for that one instead of starting another.
  * Returns the path to the snapshot file, or null if creation failed.
  */
 export async function getOrCreateSnapshot(
@@ -222,7 +229,18 @@ export async function getOrCreateSnapshot(
 	if (cached) {
 		cachedSnapshotPaths.delete(cacheKey);
 	}
+	const pending = pendingSnapshots.get(cacheKey);
+	if (pending) return pending;
+	const creation = createSnapshot(shell, env, cacheKey).finally(() => pendingSnapshots.delete(cacheKey));
+	pendingSnapshots.set(cacheKey, creation);
+	return creation;
+}
 
+async function createSnapshot(
+	shell: string,
+	env: Record<string, string | undefined>,
+	cacheKey: string,
+): Promise<string | null> {
 	// Skip on Windows (no .bashrc in standard location)
 	if (process.platform === "win32") {
 		return null;
@@ -277,6 +295,7 @@ export async function getOrCreateSnapshot(
 			timeout: SNAPSHOT_TIMEOUT_MS,
 			killSignal: "SIGKILL",
 		});
+		runningSnapshots.set(snapshotPath, child);
 
 		await child.exited;
 		if (child.exitCode === 0 && fs.existsSync(snapshotPath)) {
@@ -296,6 +315,7 @@ export async function getOrCreateSnapshot(
 	} catch {
 		// Snapshot creation failed, proceed without it
 	} finally {
+		runningSnapshots.delete(snapshotPath);
 		if (!succeeded) {
 			try {
 				fs.rmSync(snapshotPath, { force: true });
@@ -310,8 +330,14 @@ export async function getOrCreateSnapshot(
 
 // A snapshot can be gone before the process exits: a tmp cleaner (systemd-tmpfiles, an hourly wipe)
 // removes it, and the next `getOrCreateSnapshot` replaces it. `force` lets the loop reach every other
-// snapshot instead of stopping at the first that is missing.
+// snapshot instead of stopping at the first that is missing. A snapshot shell still running is killed
+// before its file is removed, since each `>>` in its script would otherwise create the file again.
 postmortem.register("shell-snapshot", () => {
+	for (const [snapshotPath, child] of runningSnapshots) {
+		child.kill("SIGKILL");
+		fs.rmSync(snapshotPath, { force: true });
+	}
+	runningSnapshots.clear();
 	for (const snapshotPath of cachedSnapshotPaths.values()) {
 		fs.rmSync(snapshotPath, { force: true });
 	}

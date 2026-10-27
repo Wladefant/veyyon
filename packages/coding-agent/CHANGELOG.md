@@ -57,6 +57,7 @@
 - A diff or read window of a multi-megabyte source copies the source to the block-boundary lookup in an event-loop turn of its own, so the copy no longer lengthens the turn that built the diff: a one-line edit of a 3.5 MB file held the loop longer than splitting the file.
 - `/mcp add` and `/mcp remove` in the terminal refuse a plain `scope`, `project`, `user` or `transport`, in any letter case, with the sentence print mode and ACP give instead of `Unknown argument`, and the terminal `/mcp smithery-search` refuses a trailing `scope` as it already refused `project` and `user`.
 - A whole-file read of a large source file no longer freezes the terminal while tree-sitter summarizes it: the parse runs off the event loop, so on an 18,000-line TypeScript file the longest event-loop stall falls from 69 ms to 1.4 ms, and four 6,000-line files read in one batch finish in 24 ms instead of 95 ms.
+- Shell commands that start together at the beginning of a session share one shell snapshot and one persistent shell instead of each creating a snapshot, one of which stayed in the tmp directory after exit, and a snapshot still being created at exit is stopped and removed.
 
 ## [1.5.10] - 2026-10-25
 
