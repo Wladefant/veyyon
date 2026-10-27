@@ -5,7 +5,7 @@ import * as AIError from "@veyyon/ai/error";
 import { isProviderRetryableError } from "@veyyon/ai/error";
 import { createMockModel, type MockContent, registerMockApi } from "@veyyon/ai/providers/mock";
 import { complete, completeSimple, stream, streamSimple } from "@veyyon/ai/stream";
-import type { Api, AssistantMessage, AssistantMessageEvent, Context, Model } from "@veyyon/ai/types";
+import type { Api, AssistantMessage, AssistantMessageEvent, CacheRequestRecord, Context, Model } from "@veyyon/ai/types";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import {
 	GEMINI_HEADER_RUNAWAY_THRESHOLD,
@@ -833,6 +833,46 @@ describe("thinking-loop cook fallback (result path)", () => {
 			expect(mock.calls).toHaveLength(1);
 			expect(result.stopReason).toBe("error");
 			expect(result.errorMessage).toContain(THINKING_LOOP_ERROR_MARKER);
+		} finally {
+			waitSpy.mockRestore();
+			clearCustomApis();
+		}
+	});
+
+	test("retains and propagates cacheRequests across thinking loop aborts without duplicates", async () => {
+		registerMockApi();
+		const waitSpy = spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		try {
+			const mock = createMockModel({ provider: "openrouter", id: "google/gemini-3.5-flash" });
+			const record1: CacheRequestRecord = {
+				requestStartedAt: 1000,
+				model: "gemini-3.5-flash",
+				prefixHash: "hash1",
+				cacheRead: 10,
+				cacheWrite: 20,
+			};
+			const record2: CacheRequestRecord = {
+				requestStartedAt: 2000,
+				model: "gemini-3.5-flash",
+				prefixHash: "hash2",
+				cacheRead: 30,
+				cacheWrite: 40,
+			};
+			mock.push({
+				...loopResponse(),
+				usage: { cacheRequests: [record1] },
+			});
+			mock.push({
+				content: ["Final cooked answer"],
+				usage: { cacheRequests: [record2] },
+			});
+
+			const result = await complete(mock.model, context());
+
+			expect(result.stopReason).toBe("stop");
+			expect(result.usage.cacheRequests).toBeDefined();
+			expect(result.usage.cacheRequests).toHaveLength(2);
+			expect(result.usage.cacheRequests).toEqual([record1, record2]);
 		} finally {
 			waitSpy.mockRestore();
 			clearCustomApis();

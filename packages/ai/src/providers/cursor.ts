@@ -727,7 +727,7 @@ class CursorRunStream {
 		try {
 			serverMessage = fromBinary(AgentServerMessageSchema, read.payload);
 		} catch (error) {
-			log("error", "parseServerMessage", { error: String(error) });
+			void logCursorDiagnostic("error", "parseServerMessage", { error: String(error) });
 			this.fail(error instanceof Error ? error : new Error(String(error)));
 			return false;
 		}
@@ -1235,7 +1235,7 @@ function answerInteractionQuery(query: InteractionQuery, h2Request: http2.Client
 		message: { case: "interactionResponse", value: response },
 	});
 	h2Request.write(frameConnectMessage(toBinary(AgentClientMessageSchema, clientMessage)));
-	log("interactionResponse", response.result.case ?? "unknown", { id: query.id });
+	void logCursorDiagnostic("interactionResponse", response.result.case ?? "unknown", { id: query.id });
 }
 
 /** Exported for tests: the response {@link answerInteractionQuery} sends for `query`. */
@@ -2132,7 +2132,7 @@ function sendExecClientThrow(h2Request: http2.ClientHttp2Stream, execMsg: ExecSe
 		message: { case: "execClientControlMessage", value: throwMessage },
 	});
 	h2Request.write(frameConnectMessage(toBinary(AgentClientMessageSchema, clientMessage)));
-	log("execClientControl", "throw", { id: execMsg.id, execId: execMsg.execId, error });
+	void logCursorDiagnostic("execClientControl", "throw", { id: execMsg.id, execId: execMsg.execId, error });
 	sendExecClientStreamClose(h2Request, execMsg);
 }
 
@@ -2819,7 +2819,7 @@ export function processInteractionUpdate(
 	state: BlockState,
 ): void {
 	const updateCase = update.message?.case;
-	log("interactionUpdate", updateCase, update.message?.value);
+	void logCursorDiagnostic("interactionUpdate", updateCase, update.message?.value);
 	// `Object.hasOwn`, not indexing: a variant named for an `Object.prototype`
 	// member would otherwise resolve to that member and be called as a handler.
 	if (updateCase === undefined || !Object.hasOwn(INTERACTION_UPDATE_HANDLERS, updateCase)) return;

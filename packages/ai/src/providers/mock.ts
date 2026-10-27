@@ -367,7 +367,7 @@ async function runMock(
 		provider: model.provider,
 		model: model.id,
 		responseId: response.responseId,
-		usage: emptyUsage(),
+		usage: mergeUsage(response.usage),
 		stopReason: "stop",
 		timestamp: startedAt,
 	};

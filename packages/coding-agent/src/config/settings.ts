@@ -444,7 +444,7 @@ export class Settings extends SettingsStore {
 	reloadConfig() {
 		return this.reloadSelectedConfig(
 			[
-				"modelRoles",
+				"defaultModel",
 				"agent.agents",
 				"agent.model",
 				"agent.sharedModel",
@@ -454,14 +454,8 @@ export class Settings extends SettingsStore {
 			{
 				defaultEffort:
 					"pickInitialThinkingLevel captures it at startup and resolveAgentThinkingLevel always supplies a concrete lane, frontmatter or AGENT_DEFAULT_EFFORT value, so a reload cannot honestly change dispatched worker effort.",
-				"modelRoles.default":
+				defaultModel:
 					"Main's initial provider/model selection is already bound; restart to change its configured default.",
-				...(this.getModelRole("default")?.includes("@")
-					? {
-							modelRoles:
-								"A startup-bound role references another role; restart to change the role map without changing its captured target.",
-						}
-					: {}),
 			},
 		);
 	}

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
-import { selectCloudflareLane } from "./lane-routing.mjs";
+import {
+	CLOUDFLARE_NIGHTLY_BRANCH,
+	selectCloudflareLane,
+	selectCloudflareTestMode,
+} from "./lane-routing.mjs";
 const SHARD_ENV_KEYS = ["VEYYON_CI_SHARD", "VEYYON_CI_SHARDS", "CF_SHARD_INDEX", "CF_SHARD_COUNT"];
 
 function laneCliEnv(scenario) {
@@ -143,4 +147,14 @@ test("route CLI parses CF_SHARD_INDEX and CF_SHARD_COUNT correctly", () => {
 	});
 	assert.equal(cfBuild.status, 0, cfBuild.stderr);
 	assert.equal(cfBuild.stdout.trim(), "tests|7|12");
+});
+
+test("only the exact nightly branch or CI_NIGHTLY selects full tests", () => {
+	assert.equal(selectCloudflareTestMode({ WORKERS_CI_BRANCH: "main" }), "related");
+	assert.equal(
+		selectCloudflareTestMode({ WORKERS_CI_BRANCH: CLOUDFLARE_NIGHTLY_BRANCH }),
+		"full",
+	);
+	assert.equal(selectCloudflareTestMode({ WORKERS_CI_BRANCH: "not-the-nightly-branch" }), "related");
+	assert.equal(selectCloudflareTestMode({ WORKERS_CI_BRANCH: "feature/ci", CI_NIGHTLY: "1" }), "full");
 });
