@@ -31,6 +31,20 @@ Primary compaction knobs (settings → Models → Compaction, or `config.yml`):
 recent user, assistant, and tool messages stay verbatim up to
 `compaction.keepRecentTokens` (default 10,000 tokens).
 
+Compaction also unloads search-activated tools (such as MCP tools or discoverable built-ins
+activated by `search_tool_bm25`) that were not called in the retained recent transcript.
+Unloaded tools remain in the discovery catalog and can be reactivated by a later search.
+Always-loaded essential tools and configured default tools stay active.
+Active discovered tools are also capped at `tools.maxDiscoveredTools` (default 40), evicting
+the least recently used (LRU) activated tools when new tools are activated beyond the limit.
+
+If the context size is still above `compaction.threshold` immediately after compaction
+(for example, when large system prompts and base tool schemas exceed the threshold),
+an automatic compaction guard prevents repeated compaction loops. The guard suppresses
+automatic compaction on subsequent turns until the transcript grows by at least
+`compaction.keepRecentTokens` worth of new tokens, and emits a warning explaining what
+occupies the space.
+
 Use `/handoff <focus>` when you explicitly want a new session. Handoff is not a
 compaction strategy, and automatic maintenance never selects it.
 

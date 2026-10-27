@@ -841,6 +841,7 @@ export class AgentSession {
 		effectiveServiceTier: model => this.#effectiveServiceTier(model),
 		baseSystemPrompt: () => this.#toolActivation.baseSystemPrompt,
 		nonMessageTokens: () => computeNonMessageTokens(this),
+		nonMessageBreakdown: () => computeNonMessageBreakdown(this),
 		estimateStoredContextTokens: () => this.#context.estimateStoredTokens(),
 		memoryBackendContext: preparation => collectMemoryBackendContext(this, preparation),
 		withPlanProtection: config => this.#planMode.withProtection(config),
@@ -1556,6 +1557,8 @@ export class AgentSession {
 				registry: this.#toolRegistry,
 				activeToolNames: () => this.getActiveToolNames(),
 				discoveryModeFor: toolCount => resolveEffectiveToolDiscoveryMode(this.settings, toolCount),
+				maxDiscoveredTools: () => this.settings.get("tools.maxDiscoveredTools"),
+				sessionMessages: () => this.messages,
 			},
 			config,
 		);
@@ -4106,6 +4109,7 @@ export class AgentSession {
 	 * variant forced the rebuild.
 	 */
 	async #syncAfterModelChange(previousEditMode: EditMode): Promise<void> {
+		this.#compaction.resetAutoCompactionGuard("model_change");
 		const currentEditMode = resolveActiveEditMode(this.settings, this.model);
 		const editModeChanged = previousEditMode !== currentEditMode && this.getActiveToolNames().includes(TOOL.edit);
 		// The system prompt selects model-specific policy even when it does not display the model id.
@@ -4137,10 +4141,7 @@ export class AgentSession {
 	}
 
 	async activateDiscoveredMCPTools(toolNames: string[]): Promise<string[]> {
-		const activation = this.#discovery.planMCPActivation(toolNames);
-		if (!activation) return [];
-		await this.setActiveToolsByName(activation.nextActive);
-		return activation.activated;
+		return this.activateDiscoveredTools(toolNames.filter(isMCPToolName));
 	}
 
 	// ── Generic tool discovery (covers built-in + MCP + extension) ────────────
@@ -4162,26 +4163,33 @@ export class AgentSession {
 	}
 
 	async activateDiscoveredTools(toolNames: string[]): Promise<string[]> {
-		const mcpNames = toolNames.filter(isMCPToolName);
-		const nonMcpNames = toolNames.filter(name => !isMCPToolName(name));
-		const activated: string[] = [];
-
-		if (mcpNames.length > 0) {
-			const activatedMcp = await this.activateDiscoveredMCPTools(mcpNames);
-			activated.push(...activatedMcp);
+		const plan = this.#discovery.planActivation(toolNames, {
+			messages: this.messages,
+		});
+		if (!plan.changed) return [];
+		this.#discovery.applyActivation(plan);
+		await this.setActiveToolsByName(plan.nextActive);
+		const selection = this.#discovery.selectedDiscovered();
+		if (!sameToolNames(this.sessionManager.getMCPToolSelection() ?? [], selection)) {
+			this.sessionManager.appendMCPToolSelection(selection);
 		}
+		return plan.activated;
+	}
 
-		// Built-ins and custom tools that are in the registry but not currently active.
-		if (nonMcpNames.length > 0) {
-			const newlyAdded = this.#discovery.selectLocal(nonMcpNames);
-			activated.push(...newlyAdded);
-			if (newlyAdded.length > 0) {
-				await this.setActiveToolsByName(this.getActiveToolNames().concat(newlyAdded));
-				this.#discovery.invalidate();
-			}
+	/**
+	 * Prune search-activated tools after history compaction that were not called in `messages`.
+	 * Default, config, and protected tools are never pruned.
+	 * Persists the reduced selection through `mcp_tool_selection`.
+	 */
+	async pruneDiscoveredToolsAfterCompaction(messages: readonly AgentMessage[]): Promise<void> {
+		const plan = this.#discovery.planCompactionPrune(messages);
+		if (!plan.changed) return;
+		this.#discovery.applyPrune(plan);
+		await this.setActiveToolsByName(plan.nextActive);
+		const selection = this.#discovery.selectedDiscovered();
+		if (!sameToolNames(this.sessionManager.getMCPToolSelection() ?? [], selection)) {
+			this.sessionManager.appendMCPToolSelection(selection);
 		}
-
-		return [...new Set(activated)];
 	}
 
 	/** The approval rung this session enforces; see {@link SessionApprovals.effectiveMode}. */

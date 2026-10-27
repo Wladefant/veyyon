@@ -18,7 +18,7 @@
  */
 
 import * as path from "node:path";
-import type { AgentTool } from "@veyyon/agent-core";
+import type { AgentMessage, AgentTool } from "@veyyon/agent-core";
 import { countToolsForAutoDiscovery, type EffectiveToolDiscoveryMode } from "../../discovery/mode";
 import {
 	buildDiscoverableToolSearchIndex,
@@ -38,6 +38,10 @@ export interface ToolDiscoveryHost {
 	activeToolNames(): string[];
 	/** `tools.discoveryMode` resolved for a registry of `toolCount` tools. */
 	discoveryModeFor(toolCount: number): EffectiveToolDiscoveryMode;
+	/** The maximum number of discovered tools allowed to remain active at once before LRU eviction. */
+	maxDiscoveredTools?(): number;
+	/** Recent session messages, used to derive tool recency for LRU eviction. */
+	sessionMessages?(): readonly AgentMessage[];
 }
 
 /** The session configuration discovery starts from. */
@@ -52,12 +56,59 @@ export interface ToolDiscoveryConfig {
 	defaultSelectedMCPServerNames?: Iterable<string>;
 	/** MCP tools a fresh session selects. */
 	defaultSelectedMCPToolNames?: Iterable<string>;
+	/** Maximum number of search-activated tools before LRU eviction (default 40). */
+	maxDiscoveredTools?: number;
+	/** Tool names that are protected from eviction or pruning. */
+	protectedToolNames?: Iterable<string>;
 }
 
 /** An MCP activation: the names it activated and the full active list that carries them. */
 export interface MCPActivation {
 	activated: string[];
 	nextActive: string[];
+}
+
+/** A discovery activation plan with LRU eviction when exceeding maxDiscoveredTools. */
+export interface DiscoveryActivationPlan {
+	readonly activated: string[];
+	readonly evicted: string[];
+	readonly nextActive: string[];
+	readonly changed: boolean;
+}
+
+/** A discovery compaction pruning plan that drops unused search-activated tools. */
+export interface DiscoveryPrunePlan {
+	readonly dropped: string[];
+	readonly nextActive: string[];
+	readonly changed: boolean;
+}
+
+/**
+ * Extract the last message index for each tool call found in `messages`.
+ * Inspects assistant tool calls and toolResult messages.
+ */
+export function extractToolLastCallIndices(messages: readonly AgentMessage[]): Map<string, number> {
+	const lastCalls = new Map<string, number>();
+	for (let i = 0; i < messages.length; i++) {
+		const message = messages[i];
+		if (!message) continue;
+		if (message.role === "assistant" && Array.isArray(message.content)) {
+			for (const block of message.content) {
+				if (block && typeof block === "object" && "type" in block && block.type === "toolCall" && "name" in block) {
+					const name = block.name;
+					if (typeof name === "string" && name.length > 0) {
+						lastCalls.set(name, i);
+					}
+				}
+			}
+		} else if (message.role === "toolResult" && "toolName" in message) {
+			const toolName = message.toolName;
+			if (typeof toolName === "string" && toolName.length > 0) {
+				lastCalls.set(toolName, i);
+			}
+		}
+	}
+	return lastCalls;
 }
 
 /** Whether two tool-name lists hold the same names in the same order. */
@@ -74,21 +125,46 @@ export class ToolDiscovery {
 	readonly #builtIn: Set<string>;
 	readonly #defaultMCPServers: ReadonlySet<string>;
 	readonly #defaultMCPTools: ReadonlySet<string>;
+	readonly #protected: Set<string>;
+	readonly #configMaxDiscovered?: number;
 	/** The configured default MCP selection each session file was opened with, by resolved path. */
 	readonly #sessionDefaults = new Map<string, string[]>();
+	readonly #searchActivated = new Map<string, number>();
+	#activationSeq = 0;
 	#searchIndex: DiscoverableToolSearchIndex | null = null;
 
 	constructor(host: ToolDiscoveryHost, config: ToolDiscoveryConfig) {
 		this.#host = host;
 		this.#mcpEnabled = config.mcpDiscoveryEnabled ?? false;
 		this.#builtIn = new Set(config.builtInToolNames ?? []);
-		this.#selectedMCP = new Set(config.initialSelectedMCPToolNames ?? []);
 		this.#defaultMCPServers = new Set(config.defaultSelectedMCPServerNames ?? []);
 		this.#defaultMCPTools = new Set(config.defaultSelectedMCPToolNames ?? []);
+		this.#protected = new Set(config.protectedToolNames ?? []);
+		this.#configMaxDiscovered = config.maxDiscoveredTools;
+
 		this.reindexMCPTools();
+
+		const initialSelected = Array.from(config.initialSelectedMCPToolNames ?? []);
+		this.#selectedMCP = new Set(this.selectableMCP(initialSelected.filter(isMCPToolName)));
+
+		for (const name of initialSelected) {
+			if (!isMCPToolName(name) && this.#host.registry.has(name)) {
+				this.#selectedLocal.add(name);
+			}
+		}
+
+		const configuredDefaults = new Set(this.configuredDefaultMCP());
+		for (const name of initialSelected) {
+			if (configuredDefaults.has(name) || this.#protected.has(name)) continue;
+			const tool = this.#host.registry.get(name);
+			if (this.#builtIn.has(name) && tool && tool.loadMode !== "discoverable") continue;
+			if (this.#selectedMCP.has(name) || this.#selectedLocal.has(name)) {
+				this.#searchActivated.set(name, ++this.#activationSeq);
+			}
+		}
+
 		this.pruneSelectedMCP();
 	}
-
 	/** Whether MCP tools are found through discovery. */
 	get mcpEnabled(): boolean {
 		return this.#mcpEnabled;
@@ -193,23 +269,172 @@ export class ToolDiscovery {
 		return this.#host.activeToolNames().filter(name => !isMCPToolName(name) && registry.has(name));
 	}
 
+	/** The maximum number of search-activated tools allowed before LRU eviction. */
+	get maxDiscoveredTools(): number {
+		const hostCap = this.#host.maxDiscoveredTools?.();
+		if (typeof hostCap === "number" && Number.isFinite(hostCap) && hostCap > 0) {
+			return hostCap;
+		}
+		if (
+			typeof this.#configMaxDiscovered === "number" &&
+			Number.isFinite(this.#configMaxDiscovered) &&
+			this.#configMaxDiscovered > 0
+		) {
+			return this.#configMaxDiscovered;
+		}
+		return 40;
+	}
+
+	/** Whether `name` is a protected default tool that must never evict. */
+	isProtected(name: string): boolean {
+		if (this.#protected.has(name)) return true;
+		if (this.#defaultMCPTools.has(name)) return true;
+		if (this.configuredDefaultMCP().includes(name)) return true;
+		const tool = this.#host.registry.get(name);
+		if (this.#builtIn.has(name) && (!tool || tool.loadMode !== "discoverable")) return true;
+		return !this.#searchActivated.has(name);
+	}
+
+	/** The currently active tools that were activated through search (and thus eligible for cap eviction or compaction pruning). */
+	searchActivatedTools(): string[] {
+		const active = new Set(this.#host.activeToolNames());
+		return Array.from(this.#searchActivated.keys()).filter(name => active.has(name));
+	}
+
+	/**
+	 * Plan the activation of discoverable tools (both MCP and local), enforcing the activation cap
+	 * and evicting LRU search tools by last tool call else activation order.
+	 */
+	planActivation(
+		toolNames: readonly string[],
+		options?: { messages?: readonly AgentMessage[] },
+	): DiscoveryActivationPlan {
+		const registry = this.#host.registry;
+		const active = new Set(this.#host.activeToolNames());
+		const toActivate: string[] = [];
+		const seen = new Set<string>();
+
+		for (const name of toolNames) {
+			if (seen.has(name) || !registry.has(name) || active.has(name)) continue;
+			if (isMCPToolName(name) && !this.#mcpTools.has(name)) continue;
+			seen.add(name);
+			toActivate.push(name);
+		}
+
+		if (toActivate.length === 0) {
+			return {
+				activated: [],
+				evicted: [],
+				nextActive: this.#host.activeToolNames(),
+				changed: false,
+			};
+		}
+
+		const currentSearchActive = this.searchActivatedTools();
+		const cap = this.maxDiscoveredTools;
+		const excess = Math.max(0, currentSearchActive.length + toActivate.length - cap);
+
+		let evicted: string[] = [];
+		if (excess > 0) {
+			const messages = options?.messages ?? this.#host.sessionMessages?.() ?? [];
+			const lastCalls = extractToolLastCallIndices(messages);
+			const sorted = [...currentSearchActive].sort((a, b) => {
+				const hasA = lastCalls.has(a);
+				const hasB = lastCalls.has(b);
+				if (!hasA && !hasB) {
+					return (this.#searchActivated.get(a) ?? 0) - (this.#searchActivated.get(b) ?? 0);
+				}
+				if (!hasA && hasB) return -1;
+				if (hasA && !hasB) return 1;
+				const callA = lastCalls.get(a)!;
+				const callB = lastCalls.get(b)!;
+				if (callA !== callB) return callA - callB;
+				return (this.#searchActivated.get(a) ?? 0) - (this.#searchActivated.get(b) ?? 0);
+			});
+			evicted = sorted.slice(0, excess);
+		}
+
+		const evictedSet = new Set(evicted);
+		const nextActive = this.#host
+			.activeToolNames()
+			.filter(name => !evictedSet.has(name))
+			.concat(toActivate);
+
+		return {
+			activated: toActivate,
+			evicted,
+			nextActive,
+			changed: true,
+		};
+	}
+
+	applyActivation(plan: DiscoveryActivationPlan): void {
+		if (!plan.changed) return;
+		for (const name of plan.evicted) {
+			this.#searchActivated.delete(name);
+			this.#selectedLocal.delete(name);
+			this.#selectedMCP.delete(name);
+		}
+		for (const name of plan.activated) {
+			if (!this.isProtected(name)) {
+				this.#searchActivated.set(name, ++this.#activationSeq);
+			}
+			if (isMCPToolName(name)) {
+				this.#selectedMCP.add(name);
+			} else {
+				this.#selectedLocal.add(name);
+			}
+		}
+		this.invalidate();
+	}
+
+	/**
+	 * Plan pruning of search-activated tools after compaction: drops any search-activated tool
+	 * not called in the retained `messages`. Protected and default tools are never pruned.
+	 */
+	planCompactionPrune(messages: readonly AgentMessage[]): DiscoveryPrunePlan {
+		const called = new Set(extractToolLastCallIndices(messages).keys());
+		const currentSearchActive = this.searchActivatedTools();
+		const toDrop = currentSearchActive.filter(name => !called.has(name));
+
+		if (toDrop.length === 0) {
+			return {
+				dropped: [],
+				nextActive: this.#host.activeToolNames(),
+				changed: false,
+			};
+		}
+
+		const dropSet = new Set(toDrop);
+		const nextActive = this.#host.activeToolNames().filter(name => !dropSet.has(name));
+
+		return {
+			dropped: toDrop,
+			nextActive,
+			changed: true,
+		};
+	}
+
+	applyPrune(plan: DiscoveryPrunePlan): void {
+		if (!plan.changed) return;
+		for (const name of plan.dropped) {
+			this.#searchActivated.delete(name);
+			this.#selectedLocal.delete(name);
+			this.#selectedMCP.delete(name);
+		}
+		this.invalidate();
+	}
+
 	/**
 	 * What activating the discoverable MCP tools among `toolNames` activates, or `undefined` when it
 	 * activates none. The selection itself follows the active list once the session applies it.
 	 */
 	planMCPActivation(toolNames: readonly string[]): MCPActivation | undefined {
-		const registry = this.#host.registry;
-		const nextSelected = new Set(this.#selectedMCP);
-		const activated = new Set<string>();
-		for (const name of toolNames) {
-			if (!isMCPToolName(name) || !this.#mcpTools.has(name) || !registry.has(name)) continue;
-			nextSelected.add(name);
-			activated.add(name);
-		}
-		if (activated.size === 0) return undefined;
+		const plan = this.planActivation(toolNames.filter(isMCPToolName));
+		if (!plan.changed) return undefined;
 		return {
-			activated: Array.from(activated),
-			nextActive: this.activeNonMCP().concat(this.selectableMCP(nextSelected)),
+			activated: plan.activated,
+			nextActive: plan.nextActive,
 		};
 	}
 
@@ -225,6 +450,7 @@ export class ToolDiscovery {
 			if (!registry.has(name) || active.has(name)) continue;
 			selected.push(name);
 			this.#selectedLocal.add(name);
+			this.#searchActivated.set(name, ++this.#activationSeq);
 		}
 		return selected;
 	}
@@ -232,6 +458,7 @@ export class ToolDiscovery {
 	/** Remove `name` from the local selection, after its registry entry went away. */
 	deselect(name: string): void {
 		this.#selectedLocal.delete(name);
+		this.#searchActivated.delete(name);
 	}
 
 	/**
@@ -252,6 +479,11 @@ export class ToolDiscovery {
 		const registry = this.#host.registry;
 		for (const name of this.#selectedLocal) {
 			if (!active.has(name) || isMCPToolName(name) || !registry.has(name)) this.#selectedLocal.delete(name);
+		}
+		for (const name of this.#searchActivated.keys()) {
+			if (!active.has(name)) {
+				this.#searchActivated.delete(name);
+			}
 		}
 		this.invalidate();
 	}

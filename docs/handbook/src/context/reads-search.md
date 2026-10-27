@@ -176,8 +176,13 @@ needs it, so the setting trades a fixed per-request cost for an occasional one.
 `tools.essentialOverride` sets which tools stay visible.
 
 A discovery search activates every match scoring at least half the best one. A weaker match is
-returned in `also_matched`, and a query that states its name activates it. An activated tool's
-schema is included in every later request of the session.
+returned in `also_matched`, and a query that states its name activates it.
+Activated tools are capped by `tools.maxDiscoveredTools` (default 40). When newly activated
+tools would exceed this cap, the least recently used (LRU) activated tools are unloaded first
+to keep the active schema footprint bounded. Additionally, context compaction automatically
+unloads any search-activated tools that were not called in the retained recent transcript
+(`compaction.keepRecentTokens`). Unloaded tools remain in the discovery index and can be
+reactivated by a subsequent search.
 
 Discovery ranks a tool on its full description and its one-line summary together. A compound word
 is indexed whole and in parts, so `sqlite` reaches `SQLite` and `java script` reaches `JavaScript`.
