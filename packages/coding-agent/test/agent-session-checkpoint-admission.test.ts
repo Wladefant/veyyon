@@ -132,7 +132,7 @@ async function createCheckpointHarness(
 			const events = new AssistantMessageEventStream();
 			queueMicrotask(() => {
 				events.push({ type: "start", partial: message });
-				events.push({ type: "done", reason: message.stopReason, message });
+				events.push({ type: "done", reason: message.stopReason === "toolUse" ? "toolUse" : "stop", message });
 			});
 			return events;
 		},
