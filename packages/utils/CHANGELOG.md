@@ -8,6 +8,10 @@
 
 - Sync upstream changes from santhreal/veyyon.
 
+### Fixed
+
+- An async atomic write keeps its staged file in exit cleanup until rename finishes, so an exit during replacement does not leave a temp file behind.
+
 ## [1.5.6] - 2026-10-10
 
 ### Breaking Changes

@@ -47,6 +47,45 @@ describe("atomicWriteFile", () => {
 		expect(tempSiblings(target)).toEqual([]);
 	});
 
+	/**
+	 * WHY: Dropping a temp from exit cleanup before rename completes leaves it
+	 * behind if the process exits during the rename. Pause the real rename at
+	 * its boundary, invoke the registered exit cleanup, then verify it removes
+	 * the staged file while the original target remains intact. A fake rename
+	 * failure alone would not exercise the exit-time leak.
+	 */
+	it("keeps the staged temp tracked until rename finishes", async () => {
+		const target = path.join(dir.path(), "interrupted-rename.txt");
+		await atomicWriteFile(target, "ORIGINAL");
+
+		const enteredRename = Promise.withResolvers<void>();
+		const resumeRename = Promise.withResolvers<void>();
+		const realRename = fsp.rename;
+		const renameSpy = spyOn(fsp, "rename").mockImplementation(async (source, destination) => {
+			if (String(source).endsWith(".tmp") && String(destination) === target) {
+				enteredRename.resolve();
+				await resumeRename.promise;
+			}
+			return realRename(source, destination);
+		});
+
+		const write = atomicWriteFile(target, "REPLACEMENT", { fsync: false });
+		try {
+			await enteredRename.promise;
+			const exitCleanup = process.listeners("exit").find(listener => listener.name === "removePendingTemps");
+			expect(exitCleanup).toBeDefined();
+			exitCleanup?.();
+			expect(tempSiblings(target)).toEqual([]);
+		} finally {
+			resumeRename.resolve();
+			renameSpy.mockRestore();
+		}
+
+		await expect(write).rejects.toThrow();
+		expect(fs.readFileSync(target, "utf8")).toBe("ORIGINAL");
+		expect(tempSiblings(target)).toEqual([]);
+	});
+
 	it("round-trips binary content byte for byte", async () => {
 		const target = path.join(dir.path(), "blob.bin");
 		const bytes = new Uint8Array([0, 1, 2, 253, 254, 255]);
