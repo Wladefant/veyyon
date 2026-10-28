@@ -7,10 +7,10 @@ import {
 	type SessionEntry,
 } from "@veyyon/agent-core/compaction";
 import { serializeConversation, serializeConversationForSummary } from "@veyyon/agent-core/compaction/utils";
-import type { AssistantMessage, Context, Message, Model } from "@veyyon/ai";
+import type { AssistantMessage, Context, Message } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
 import { DIALECTS } from "@veyyon/catalog/identity";
-import { requireBundledModel } from "./helpers";
+import { anthropicModel } from "./helpers";
 
 /**
  * WHY: compacting a session that had thinking on came back as
@@ -93,10 +93,6 @@ function branchEntries(): SessionEntry[] {
 		timestamp: new Date(index).toISOString(),
 		message,
 	}));
-}
-
-function anthropicModel(): Model {
-	return requireBundledModel("anthropic", "claude-sonnet-4-5");
 }
 
 /** Every byte a Context would put on the wire, as one string. */

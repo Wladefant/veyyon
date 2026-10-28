@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { SessionMessageEntry } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
+import type { AssistantMessage, ToolResultMessage, UserMessage } from "@veyyon/ai";
 import { emptyUsage } from "@veyyon/catalog/models";
 
 /**
@@ -31,7 +31,7 @@ export function messageEntries(): MessageEntries {
 	};
 }
 
-export function user(text: string): AgentMessage {
+export function user(text: string): UserMessage {
 	return { role: "user", content: [{ type: "text", text }], timestamp: 1 };
 }
 

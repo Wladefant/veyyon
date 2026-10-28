@@ -34,7 +34,7 @@ import {
 	type SessionMessageEntry,
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, ToolCall, ToolResultMessage, Usage } from "@veyyon/ai";
-import { requireBundledModel } from "./helpers";
+import { anthropicModel } from "./helpers";
 
 const SETTINGS = { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 1 };
 const TIMESTAMP = "2026-09-25T00:00:00.000Z";
@@ -50,10 +50,6 @@ const usage = (): Usage => ({
 	totalTokens: 0,
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 });
-
-function model() {
-	return requireBundledModel("anthropic", "claude-sonnet-4-5");
-}
 
 function messageEntry(message: AgentMessage): SessionMessageEntry {
 	return { type: "message", id: nextId("entry"), parentId: null, timestamp: TIMESTAMP, message };
@@ -139,7 +135,7 @@ async function compactPath(
 ): Promise<{ entry: CompactionEntry; preparation: CompactionPreparation }> {
 	const preparation = prepareCompaction(path, SETTINGS);
 	if (!preparation) throw new Error("expected the path to compact");
-	const result = await compact(preparation, model(), "test-key", undefined, undefined, {
+	const result = await compact(preparation, anthropicModel(), "test-key", undefined, undefined, {
 		completeImpl: async () => assistant([{ type: "text", text: `Summary ${++summaries} of the work so far.` }]),
 	});
 	const entry: CompactionEntry = {

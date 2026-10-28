@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { type CompactionPreparation, compact, DEFAULT_COMPACTION_SETTINGS } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, Model, UserMessage } from "@veyyon/ai";
-import { requireBundledModel } from "./helpers";
+import type { AssistantMessage, UserMessage } from "@veyyon/ai";
+import { anthropicModel } from "./helpers";
 
 /**
  * LOCKS OUT: a compaction result field populated by verbatim-copying a message
@@ -29,10 +29,6 @@ import { requireBundledModel } from "./helpers";
  */
 
 const MODEL_SUMMARY = "Refactored the loader and fixed the retry path. Two files touched.";
-
-function modelFixture(): Model {
-	return requireBundledModel("anthropic", "claude-sonnet-4-5");
-}
 
 function userMessage(text: string): UserMessage {
 	return { role: "user", content: [{ type: "text", text }], timestamp: 1 };
@@ -100,7 +96,7 @@ describe("a compaction result never re-emits an input message verbatim", () => {
 
 		const result = await compact(
 			preparation({ messagesToSummarize: inputs }),
-			modelFixture(),
+			anthropicModel(),
 			"test-key",
 			undefined,
 			undefined,
@@ -145,7 +141,7 @@ describe("a compaction result never re-emits an input message verbatim", () => {
 				turnPrefixMessages: [userMessage(prefixBait)],
 				isSplitTurn: true,
 			}),
-			modelFixture(),
+			anthropicModel(),
 			"test-key",
 			undefined,
 			undefined,

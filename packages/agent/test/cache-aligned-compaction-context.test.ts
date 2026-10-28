@@ -7,8 +7,9 @@ import {
 	modelServesPrefixCacheHits,
 } from "@veyyon/agent-core/compaction/cache-aligned-context";
 import { countTokens } from "@veyyon/agent-core/tokenizer";
-import type { AssistantMessage, Message, Model, Tool, ToolResultMessage, UserMessage } from "@veyyon/ai";
-import { requireBundledModel } from "./helpers";
+import type { AssistantMessage, Message, Model, Tool } from "@veyyon/ai";
+import { anthropicModel, requireBundledModel } from "./helpers";
+import { readResult, user } from "./support/compaction-session";
 
 /**
  * The cache-aligned compaction request replays the live session's provider prefix
@@ -23,18 +24,10 @@ import { requireBundledModel } from "./helpers";
  * turn an invalid request outright.
  */
 
-function anthropicModel(): Model {
-	return requireBundledModel("anthropic", "claude-sonnet-4-5");
-}
-
 /** Same row, with the prompt-cache capability turned off, as an unknown gateway resolves it. */
 function nonCachingModel(): Model {
 	const model = anthropicModel();
 	return { ...model, compat: { ...model.compat, supportsLongCacheRetention: false } } as Model;
-}
-
-function user(text: string, timestamp = 1): UserMessage {
-	return { role: "user", content: [{ type: "text", text }], timestamp };
 }
 
 function assistantText(text: string, timestamp = 2): AssistantMessage {
@@ -69,22 +62,11 @@ function assistantToolCalls(ids: string[], timestamp = 3): AssistantMessage {
 	} as AssistantMessage;
 }
 
-function toolResult(toolCallId: string, text: string, timestamp = 4): ToolResultMessage {
-	return {
-		role: "toolResult",
-		toolCallId,
-		toolName: "read",
-		content: [{ type: "text", text }],
-		isError: false,
-		timestamp,
-	};
-}
-
 function conversation(): Message[] {
 	return [
 		user("first question"),
 		assistantToolCalls(["call-1"]),
-		toolResult("call-1", "file contents"),
+		readResult("call-1", "file contents"),
 		assistantText("here is the answer"),
 	];
 }
@@ -176,7 +158,7 @@ describe("hasUnansweredToolCall", () => {
 		// the assistant turn and the tool execution that answers it.
 		expect(hasUnansweredToolCall([user("go"), assistantToolCalls(["call-1"])])).toBe(true);
 		expect(
-			hasUnansweredToolCall([user("go"), assistantToolCalls(["call-1", "call-2"]), toolResult("call-1", "done")]),
+			hasUnansweredToolCall([user("go"), assistantToolCalls(["call-1", "call-2"]), readResult("call-1", "done")]),
 		).toBe(true);
 	});
 
@@ -185,8 +167,8 @@ describe("hasUnansweredToolCall", () => {
 		expect(
 			hasUnansweredToolCall([
 				assistantToolCalls(["call-1", "call-2"]),
-				toolResult("call-2", "b"),
-				toolResult("call-1", "a"),
+				readResult("call-2", "b"),
+				readResult("call-1", "a"),
 			]),
 		).toBe(false);
 		expect(hasUnansweredToolCall([])).toBe(false);

@@ -7,11 +7,11 @@ import {
 	renderHandoffPrompt,
 } from "@veyyon/agent-core/compaction";
 import { ThinkingLevel } from "@veyyon/agent-core/thinking";
-import type { AssistantMessage, Model, ToolCall } from "@veyyon/ai";
+import type { AssistantMessage, ToolCall } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
 import { z } from "@veyyon/ai";
 import { Effort } from "@veyyon/catalog/effort";
-import { createAssistantMessage, requireBundledModel } from "./helpers";
+import { anthropicModel, createAssistantMessage } from "./helpers";
 
 function createAssistantError(errorStatus: number, errorMessage: string): AssistantMessage {
 	return {
@@ -33,10 +33,6 @@ function createHandoffTool(): AgentTool<typeof handoffToolSchema> {
 		intent: "omit",
 		execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
 	};
-}
-
-function getTestModel(): Model {
-	return requireBundledModel("anthropic", "claude-sonnet-4-5");
 }
 
 afterEach(() => {
@@ -66,7 +62,7 @@ describe("handoff helpers", () => {
 					{ type: "text", text: "## Next Steps\n1. Run the focused test" },
 				]),
 			);
-		const model = getTestModel();
+		const model = anthropicModel();
 		const systemPrompt = ["Live system prompt"];
 		const tools: AgentTool[] = [];
 		const messages: AgentMessage[] = [
@@ -119,7 +115,7 @@ describe("handoff helpers", () => {
 		const completeSimpleSpy = vi
 			.spyOn(ai, "completeSimple")
 			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "## Goal\nGo" }]));
-		const model = getTestModel();
+		const model = anthropicModel();
 		const context = {
 			systemPrompt: ["Live system prompt"],
 			tools: [],
@@ -165,7 +161,7 @@ describe("handoff helpers", () => {
 				),
 			)
 			.mockResolvedValueOnce(createAssistantMessage([{ type: "text", text: "## Goal\nRecovered on retry" }]));
-		const model = getTestModel();
+		const model = anthropicModel();
 		const tools = [createHandoffTool()];
 		const context = {
 			systemPrompt: ["Live system prompt"],
@@ -216,7 +212,7 @@ describe("handoff helpers", () => {
 		const completeSimpleSpy = vi
 			.spyOn(ai, "completeSimple")
 			.mockResolvedValueOnce(createAssistantError(400, "400 Bad Request: unsupported max_tokens; param=max_tokens"));
-		const model = getTestModel();
+		const model = anthropicModel();
 		const tools = [createHandoffTool()];
 		const context = {
 			systemPrompt: ["Live system prompt"],

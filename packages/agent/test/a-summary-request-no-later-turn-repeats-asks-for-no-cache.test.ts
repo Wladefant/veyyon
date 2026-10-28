@@ -36,27 +36,17 @@ import {
 	completeSimple,
 	type FetchImpl,
 	type Message,
-	type Model,
 	type ProviderSessionState,
 	type SimpleStreamOptions,
 	type Tool,
-	type ToolResultMessage,
-	type UserMessage,
 } from "@veyyon/ai";
 import * as logger from "@veyyon/utils/logger";
-import { requireBundledModel } from "./helpers";
+import { anthropicModel, requireBundledModel } from "./helpers";
+import { readResult, user } from "./support/compaction-session";
 
 const SESSION_KEY = "live-session";
 const SESSION_PROMPT = ["# Harness\nstable shared prefix", "# Project\nlocal rules"];
 const TOOLS: Tool[] = [{ name: "read", description: "read a file", parameters: { type: "object", properties: {} } }];
-
-function anthropicModel(): Model {
-	return requireBundledModel("anthropic", "claude-sonnet-4-5");
-}
-
-function user(text: string, timestamp = 1): UserMessage {
-	return { role: "user", content: [{ type: "text", text }], timestamp };
-}
 
 function assistantText(text: string, timestamp = 2): AssistantMessage {
 	return {
@@ -86,26 +76,15 @@ function assistantToolCall(id: string, timestamp = 3): AssistantMessage {
 	};
 }
 
-function toolResult(toolCallId: string, text: string, timestamp = 4): ToolResultMessage {
-	return {
-		role: "toolResult",
-		toolCallId,
-		toolName: "read",
-		content: [{ type: "text", text }],
-		isError: false,
-		timestamp,
-	};
-}
-
 /** The live conversation a mid-run compaction runs inside: every tool call answered. */
 function liveConversation(): Message[] {
 	return [
 		user("first question"),
 		assistantToolCall("call-1"),
-		toolResult("call-1", "first file"),
+		readResult("call-1", "first file"),
 		user("second question"),
 		assistantToolCall("call-2"),
-		toolResult("call-2", "second file"),
+		readResult("call-2", "second file"),
 	];
 }
 
@@ -113,9 +92,9 @@ function liveConversation(): Message[] {
 function splitTurn(): CompactionPreparation {
 	return {
 		firstKeptEntryId: "kept-entry",
-		messagesToSummarize: [user("first question"), assistantToolCall("call-1"), toolResult("call-1", "first file")],
+		messagesToSummarize: [user("first question"), assistantToolCall("call-1"), readResult("call-1", "first file")],
 		turnPrefixMessages: [user("second question"), assistantToolCall("call-2")],
-		recentMessages: [toolResult("call-2", "second file")],
+		recentMessages: [readResult("call-2", "second file")],
 		isSplitTurn: true,
 		tokensBefore: 100_000,
 		previousSummary: undefined,

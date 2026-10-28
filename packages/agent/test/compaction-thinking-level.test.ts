@@ -10,7 +10,7 @@ import {
 import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import type { Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
-import { createAssistantMessage, createUserMessage, requireBundledModel } from "./helpers";
+import { anthropicModel, createAssistantMessage, createUserMessage, requireBundledModel } from "./helpers";
 
 // Pins fix #1 of the compaction effort-override bug. Before this fix,
 // `generateHandoff` (and the three other compaction summarizers) hardcoded
@@ -32,10 +32,6 @@ import { createAssistantMessage, createUserMessage, requireBundledModel } from "
 // (`resolveCompactionEffort`) is shared across all three call sites in
 // `packages/agent/src/compaction/compaction.ts`.
 
-function getAnthropicModel(): Model {
-	return requireBundledModel("anthropic", "claude-sonnet-4-5");
-}
-
 function getGrokBuildModel(): Model {
 	return requireBundledModel("xai-oauth", "grok-4.20-0309-reasoning");
 }
@@ -54,7 +50,7 @@ describe("compaction thinking-level resolution (regression)", () => {
 		const spy = vi
 			.spyOn(ai, "completeSimple")
 			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "handoff" }]));
-		await generateHandoff(messages, getAnthropicModel(), "test-key", {
+		await generateHandoff(messages, anthropicModel(), "test-key", {
 			systemPrompt: ["sp"],
 			tools: [],
 			// thinkingLevel omitted — must default to high
@@ -68,7 +64,7 @@ describe("compaction thinking-level resolution (regression)", () => {
 		const spy = vi
 			.spyOn(ai, "completeSimple")
 			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "handoff" }]));
-		await generateHandoff(messages, getAnthropicModel(), "test-key", {
+		await generateHandoff(messages, anthropicModel(), "test-key", {
 			systemPrompt: ["sp"],
 			tools: [],
 			thinkingLevel: ThinkingLevel.Off,
@@ -83,7 +79,7 @@ describe("compaction thinking-level resolution (regression)", () => {
 		const spy = vi
 			.spyOn(ai, "completeSimple")
 			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "handoff" }]));
-		await generateHandoff(messages, getAnthropicModel(), "test-key", {
+		await generateHandoff(messages, anthropicModel(), "test-key", {
 			systemPrompt: ["sp"],
 			tools: [],
 			thinkingLevel: ThinkingLevel.Low,
@@ -115,7 +111,7 @@ describe("compaction thinking-level resolution (regression)", () => {
 		const spy = vi
 			.spyOn(ai, "completeSimple")
 			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "handoff" }]));
-		await generateHandoff(messages, getAnthropicModel(), "test-key", {
+		await generateHandoff(messages, anthropicModel(), "test-key", {
 			systemPrompt: ["sp"],
 			tools: [],
 			thinkingLevel: ThinkingLevel.Inherit,
@@ -167,7 +163,7 @@ describe("compact() propagates thinkingLevel to every durable summarizer", () =>
 			.spyOn(ai, "completeSimple")
 			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "summary" }]));
 
-		await compact(makePreparation(), getAnthropicModel(), "test-key", undefined, undefined, {
+		await compact(makePreparation(), anthropicModel(), "test-key", undefined, undefined, {
 			thinkingLevel: ThinkingLevel.Off,
 		});
 
@@ -184,7 +180,7 @@ describe("compact() propagates thinkingLevel to every durable summarizer", () =>
 			.spyOn(ai, "completeSimple")
 			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "summary" }]));
 
-		await compact(makePreparation(), getAnthropicModel(), "test-key", undefined, undefined, {
+		await compact(makePreparation(), anthropicModel(), "test-key", undefined, undefined, {
 			thinkingLevel: ThinkingLevel.Low,
 		});
 
@@ -200,7 +196,7 @@ describe("compact() propagates thinkingLevel to every durable summarizer", () =>
 			.spyOn(ai, "completeSimple")
 			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "summary" }]));
 
-		await compact(makePreparation(), getAnthropicModel(), "test-key", undefined, undefined);
+		await compact(makePreparation(), anthropicModel(), "test-key", undefined, undefined);
 
 		expect(spy).toHaveBeenCalledTimes(2);
 		for (const [, , opts] of spy.mock.calls) {

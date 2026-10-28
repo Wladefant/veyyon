@@ -1,15 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { type CompactionPreparation, compact, DEFAULT_COMPACTION_SETTINGS } from "@veyyon/agent-core/compaction";
-import type {
-	ApiKeyResolver,
-	AssistantMessage,
-	Context,
-	Model,
-	ProviderSessionState,
-	SimpleStreamOptions,
-} from "@veyyon/ai";
+import type { ApiKeyResolver, AssistantMessage, Context, ProviderSessionState, SimpleStreamOptions } from "@veyyon/ai";
 import { logger } from "@veyyon/utils";
-import { requireBundledModel } from "./helpers";
+import { anthropicModel } from "./helpers";
 
 const HOOK_SECRET = "SESSION_HOOK_SECRET_7f31";
 const MEMORY_SECRET = "SESSION_MEMORY_SECRET_28e4";
@@ -17,10 +10,6 @@ const LATE_SECRET = "SESSION_LATE_SECRET_b881";
 afterEach(() => {
 	vi.restoreAllMocks();
 });
-
-function modelFixture(): Model {
-	return requireBundledModel("anthropic", "claude-sonnet-4-5");
-}
 
 function userMessage(text: string) {
 	return { role: "user" as const, content: [{ type: "text" as const, text }], timestamp: Date.now() };
@@ -74,7 +63,7 @@ describe("compaction provider confidentiality boundary", () => {
 		// WHY: extraContext is appended after conversation conversion, so the final provider boundary must sanitize it.
 		const captures: string[] = [];
 
-		const result = await compact(preparation(), modelFixture(), "test-key", undefined, undefined, {
+		const result = await compact(preparation(), anthropicModel(), "test-key", undefined, undefined, {
 			extraContext: [`${HOOK_SECRET} hook-safe`, `memory-safe ${MEMORY_SECRET}`],
 			obfuscateProviderText: text => text.replaceAll(HOOK_SECRET, "#HOOK#").replaceAll(MEMORY_SECRET, "#MEMORY#"),
 			completeImpl: async (_model, context) => {
@@ -99,7 +88,7 @@ describe("compaction provider confidentiality boundary", () => {
 		const safe = "ordinary context remains byte stable";
 		const captures: string[] = [];
 
-		await compact(preparation(), modelFixture(), "test-key", undefined, undefined, {
+		await compact(preparation(), anthropicModel(), "test-key", undefined, undefined, {
 			extraContext: [raw, safe],
 			obfuscateProviderText: text => text.replaceAll(HOOK_SECRET, "#HOOK#"),
 			completeImpl: async (_model, context) => {
@@ -136,7 +125,7 @@ describe("compaction provider confidentiality boundary", () => {
 
 		const result = await compact(
 			preparation("https://summarizer.test/compact"),
-			modelFixture(),
+			anthropicModel(),
 			resolver,
 			undefined,
 			undefined,
@@ -171,7 +160,7 @@ describe("compaction provider confidentiality boundary", () => {
 		const providerState = new Map<string, ProviderSessionState>([["openai", replayState]]);
 		const observedOptions: SimpleStreamOptions[] = [];
 
-		await compact(preparation(), modelFixture(), "test-key", undefined, undefined, {
+		await compact(preparation(), anthropicModel(), "test-key", undefined, undefined, {
 			extraContext: [HOOK_SECRET],
 			providerSessionState: providerState,
 			obfuscateProviderText: text => text.replaceAll(HOOK_SECRET, "#HOOK#"),
@@ -193,7 +182,7 @@ describe("compaction provider confidentiality boundary", () => {
 		const completeImpl = vi.fn(async () => assistant("must not send"));
 		let caught: unknown;
 		try {
-			await compact(preparation(), modelFixture(), "test-key", undefined, undefined, {
+			await compact(preparation(), anthropicModel(), "test-key", undefined, undefined, {
 				extraContext: [HOOK_SECRET],
 				obfuscateProviderText: () => {
 					throw new Error(`failed on ${HOOK_SECRET}`);
@@ -228,7 +217,7 @@ describe("compaction provider confidentiality boundary", () => {
 		];
 		const captures: string[] = [];
 
-		await compact(preparationAtBoundary, modelFixture(), "test-key", undefined, undefined, {
+		await compact(preparationAtBoundary, anthropicModel(), "test-key", undefined, undefined, {
 			obfuscateProviderText: text => text.replaceAll(cutoffSecret, "#CUT#"),
 			completeImpl: async (_model, context) => {
 				captures.push(contextText(context));
@@ -260,7 +249,7 @@ describe("compaction provider confidentiality boundary", () => {
 		];
 		const captures: string[] = [];
 
-		await compact(keyPreparation, modelFixture(), "test-key", undefined, undefined, {
+		await compact(keyPreparation, anthropicModel(), "test-key", undefined, undefined, {
 			obfuscateProviderText: text => text.replaceAll(escapedKeySecret, "#ESCAPED_KEY#"),
 			completeImpl: async (_model, context) => {
 				captures.push(contextText(context));
@@ -294,7 +283,7 @@ describe("compaction provider confidentiality boundary", () => {
 		const completeImpl = vi.fn(async () => assistant("must not dispatch"));
 
 		await expect(
-			compact(collisionPreparation, modelFixture(), "test-key", undefined, undefined, {
+			compact(collisionPreparation, anthropicModel(), "test-key", undefined, undefined, {
 				obfuscateProviderText: text => text.replaceAll(argumentSecret, replacement),
 				completeImpl,
 			}),

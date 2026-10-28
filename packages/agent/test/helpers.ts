@@ -42,3 +42,8 @@ export function requireBundledModel(provider: GeneratedProvider, id: string): Mo
 	if (!model) throw new Error(`The bundled catalog has no ${provider}/${id} model`);
 	return model;
 }
+
+/** The bundled Claude Sonnet 4.5 model the compaction, summary and handoff suites run against. */
+export function anthropicModel(): Model {
+	return requireBundledModel("anthropic", "claude-sonnet-4-5");
+}

@@ -7,9 +7,9 @@ import {
 	DEFAULT_COMPACTION_SETTINGS,
 	generateHandoff,
 } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, Model } from "@veyyon/ai";
+import type { AssistantMessage } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
-import { createAssistantMessage, createUserMessage, requireBundledModel } from "./helpers";
+import { anthropicModel, createAssistantMessage, createUserMessage } from "./helpers";
 
 // Pins the fix for the "raw 401 surfaced as Compaction failed:" bug.
 //
@@ -49,10 +49,6 @@ function makeAssistantError(errorStatus: number | undefined, errorMessage: strin
 	};
 }
 
-function getAnthropicModel(): Model {
-	return requireBundledModel("anthropic", "claude-sonnet-4-5");
-}
-
 const handoffMessages: AgentMessage[] = [
 	{ role: "user", content: "begin", timestamp: 1 },
 	createAssistantMessage([{ type: "text", text: "ok" }]),
@@ -88,7 +84,7 @@ describe("compaction error-status propagation", () => {
 			),
 		);
 
-		const error = await generateHandoff(handoffMessages, getAnthropicModel(), "stale-key", {
+		const error = await generateHandoff(handoffMessages, anthropicModel(), "stale-key", {
 			systemPrompt: ["sp"],
 			tools: [],
 		}).catch(err => err);
@@ -107,7 +103,7 @@ describe("compaction error-status propagation", () => {
 			makeAssistantError(403, '403 {"error":{"type":"forbidden","message":"Access denied"}}'),
 		);
 
-		const error = await compact(makePreparation(), getAnthropicModel(), "stale-key").catch(err => err);
+		const error = await compact(makePreparation(), anthropicModel(), "stale-key").catch(err => err);
 
 		expect(error).toBeInstanceOf(Error);
 		const e = error as Error & { status?: number };
@@ -120,7 +116,7 @@ describe("compaction error-status propagation", () => {
 			makeAssistantError(undefined, "503 auth_unavailable: no auth available (providers=codex, model=gpt-5.4-mini)"),
 		);
 
-		const error = await generateHandoff(handoffMessages, getAnthropicModel(), "stale-key", {
+		const error = await generateHandoff(handoffMessages, anthropicModel(), "stale-key", {
 			systemPrompt: ["sp"],
 			tools: [],
 		}).catch(err => err);
