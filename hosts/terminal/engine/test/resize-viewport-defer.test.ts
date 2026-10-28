@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { type Component, type RenderScheduler, type RenderTimer, TUI, type ViewportTailProvider } from "@veyyon/tui";
+import { withEnv } from "../../../../packages/utils/test/helpers/restore-global";
 import { captureWrites } from "./helpers/terminal-output";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -24,25 +25,6 @@ const NO_MULTIPLEXER_ENV: Record<string, string | undefined> = {
 };
 const ALT_SCREEN_ENTER = "\x1b[?1049h";
 const ALT_SCREEN_EXIT = "\x1b[?1049l";
-
-async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: () => T | Promise<T>): Promise<T> {
-	const saved: Record<string, string | undefined> = {};
-	for (const key in patch) {
-		saved[key] = Bun.env[key];
-		const value = patch[key];
-		if (value === undefined) delete Bun.env[key];
-		else Bun.env[key] = value;
-	}
-	try {
-		return await run();
-	} finally {
-		for (const key in saved) {
-			const value = saved[key];
-			if (value === undefined) delete Bun.env[key];
-			else Bun.env[key] = value;
-		}
-	}
-}
 
 // Deterministic scheduler so the test drives the resize settle window itself
 // instead of waiting on the wall clock. Resize viewport paints are synchronous;
@@ -190,7 +172,7 @@ describe("non-multiplexer resize viewport fast path", () => {
 	}
 
 	it("paints only the viewport during a drag and never re-lays-out off-screen history", async () => {
-		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
+		await withEnv(NO_MULTIPLEXER_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const { tui, blocks, scheduler } = makeTui(term);
 			try {
@@ -232,7 +214,7 @@ describe("non-multiplexer resize viewport fast path", () => {
 	});
 
 	it("replays the full rewrapped history once the drag settles", async () => {
-		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
+		await withEnv(NO_MULTIPLEXER_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const { tui, blocks, scheduler } = makeTui(term);
 			try {
@@ -280,7 +262,7 @@ describe("non-multiplexer resize viewport fast path", () => {
 	});
 
 	it("keeps an interleaved live-block render on the viewport fast path instead of flashing a normal-screen full paint", async () => {
-		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
+		await withEnv(NO_MULTIPLEXER_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const { tui, scheduler } = makeTui(term);
 			try {
@@ -327,7 +309,7 @@ describe("non-multiplexer resize viewport fast path", () => {
 	});
 
 	it("keeps a forced render mid-drag on the viewport fast path instead of a destructive normal-screen replay", async () => {
-		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
+		await withEnv(NO_MULTIPLEXER_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const { tui, scheduler } = makeTui(term);
 			try {
@@ -375,7 +357,7 @@ describe("non-multiplexer resize viewport fast path", () => {
 	});
 
 	it("does not leave a pending settle paint after stop()", async () => {
-		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
+		await withEnv(NO_MULTIPLEXER_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const { tui, scheduler } = makeTui(term);
 			tui.start();
@@ -394,7 +376,7 @@ describe("non-multiplexer resize viewport fast path", () => {
 	});
 
 	it("uses the alternate screen during width-drag frames so terminal reflow cannot show wrapped fragments", async () => {
-		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
+		await withEnv(NO_MULTIPLEXER_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const scheduler = new DeferScheduler();
 			const blocks = Array.from(
@@ -439,7 +421,7 @@ describe("non-multiplexer resize viewport fast path", () => {
 	});
 
 	it("overwrites the viewport without a normal-screen clear mid-drag and still rewraps at settle", async () => {
-		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
+		await withEnv(NO_MULTIPLEXER_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const { tui, scheduler } = makeTui(term);
 			try {
@@ -501,7 +483,7 @@ describe("resize repaints in place on terminals that re-report size on alt-scree
 	// touches the alt buffer, so even a resize burst yields zero fast-path paints
 	// and zero scrollback erases, leaving no alt<->normal toggle to feed back on.
 	it("never borrows the alternate screen or emits ED3 across a resize burst", async () => {
-		await withEnvPatch(WARP_ENV, async () => {
+		await withEnv(WARP_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const { tui, scheduler } = makeTui(term);
 			try {
@@ -535,7 +517,7 @@ describe("resize repaints in place on terminals that re-report size on alt-scree
 	});
 
 	it("VEYYON_TUI_RESIZE_IN_PLACE=0 opts Warp back into the alt-screen fast path", async () => {
-		await withEnvPatch({ ...WARP_ENV, VEYYON_TUI_RESIZE_IN_PLACE: "0" }, async () => {
+		await withEnv({ ...WARP_ENV, VEYYON_TUI_RESIZE_IN_PLACE: "0" }, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const { tui, scheduler } = makeTui(term);
 			try {
@@ -555,7 +537,7 @@ describe("resize repaints in place on terminals that re-report size on alt-scree
 	});
 
 	it("VEYYON_TUI_RESIZE_IN_PLACE=1 forces the in-place path on an ordinary terminal", async () => {
-		await withEnvPatch({ ...NO_MULTIPLEXER_ENV, VEYYON_TUI_RESIZE_IN_PLACE: "1" }, async () => {
+		await withEnv({ ...NO_MULTIPLEXER_ENV, VEYYON_TUI_RESIZE_IN_PLACE: "1" }, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const { tui, scheduler } = makeTui(term);
 			try {

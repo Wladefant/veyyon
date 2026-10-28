@@ -19,7 +19,7 @@ import {
 	TurnEndedUpdateSchema,
 } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
 import * as piUtils from "@veyyon/utils";
-import { withEnv } from "./helpers";
+import { withEnv } from "../../utils/test/helpers/restore-global";
 
 const ORIGINAL_SECRET = "raw-payload-secret";
 const MUTATED_SECRET = "mutated-intermediate-secret";

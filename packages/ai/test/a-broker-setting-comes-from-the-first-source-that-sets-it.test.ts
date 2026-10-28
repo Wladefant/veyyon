@@ -21,7 +21,7 @@ import { getAuthBrokerTokenFilePath, resolveAuthBrokerConfig } from "@veyyon/ai/
 import { getGlobalConfigRootDir } from "@veyyon/utils/config-root";
 import { removeWithRetries } from "../../utils/src/temp";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../utils/test/helpers/isolated-config-root";
-import { withEnv } from "./helpers";
+import { withEnv } from "../../utils/test/helpers/restore-global";
 
 /** Precedence order, highest first. */
 const URL_SOURCES = ["env", "profile", "global"] as const;

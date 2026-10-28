@@ -6,34 +6,6 @@ import { Effort } from "@veyyon/catalog/effort";
 import type { ModelSpec } from "@veyyon/catalog/types";
 import { isEnoent } from "@veyyon/utils";
 
-export async function withEnv(
-	overrides: Record<string, string | undefined>,
-	fn: () => void | Promise<void>,
-): Promise<void> {
-	const previous = new Map<string, string | undefined>();
-	for (const key of Object.keys(overrides)) {
-		previous.set(key, Bun.env[key]);
-	}
-	try {
-		for (const [key, value] of Object.entries(overrides)) {
-			if (value === undefined) {
-				delete Bun.env[key];
-			} else {
-				Bun.env[key] = value;
-			}
-		}
-		await fn();
-	} finally {
-		for (const [key, value] of previous.entries()) {
-			if (value === undefined) {
-				delete Bun.env[key];
-			} else {
-				Bun.env[key] = value;
-			}
-		}
-	}
-}
-
 export async function waitForDelayOrAbort(delayMs: number, signal: AbortSignal | undefined): Promise<void> {
 	if (signal?.aborted) {
 		const reason = signal.reason;

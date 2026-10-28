@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { resolveAuthBrokerConfig } from "@veyyon/ai/auth-broker";
 import { removeWithRetries } from "../../utils/src/temp";
-import { withEnv } from "./helpers";
+import { withEnv } from "../../utils/test/helpers/restore-global";
 
 const CLEAR_BROKER_ENV = {
 	VEYYON_AUTH_BROKER_URL: undefined,

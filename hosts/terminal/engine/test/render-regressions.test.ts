@@ -10,6 +10,7 @@ import {
 	TERMINAL,
 	TUI,
 } from "@veyyon/tui";
+import { withEnv } from "../../../../packages/utils/test/helpers/restore-global";
 import { settleFrames } from "./helpers/settle-frames";
 import { captureWrites } from "./helpers/terminal-output";
 import { VirtualTerminal } from "./virtual-terminal";
@@ -240,31 +241,6 @@ function countMatches(lines: string[], pattern: RegExp): number {
 		if (pattern.test(line)) count += 1;
 	}
 	return count;
-}
-
-async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: () => T | Promise<T>): Promise<T> {
-	const saved: Record<string, string | undefined> = {};
-	for (const key in patch) {
-		saved[key] = Bun.env[key];
-		const value = patch[key];
-		if (value === undefined) {
-			delete Bun.env[key];
-		} else {
-			Bun.env[key] = value;
-		}
-	}
-	try {
-		return await run();
-	} finally {
-		for (const key in saved) {
-			const value = saved[key];
-			if (value === undefined) {
-				delete Bun.env[key];
-			} else {
-				Bun.env[key] = value;
-			}
-		}
-	}
 }
 
 describe("TUI terminal-state regressions", () => {
@@ -635,7 +611,7 @@ describe("TUI terminal-state regressions", () => {
 		// rows into the viewport. The resize EVENT must mark the frame
 		// geometry-changed regardless of the net dimension delta.
 		it("repaints after a resize round trip whose dimensions net out unchanged", async () => {
-			await withEnvPatch({ TMUX: undefined, STY: undefined, ZELLIJ: undefined }, async () => {
+			await withEnv({ TMUX: undefined, STY: undefined, ZELLIJ: undefined }, async () => {
 				const term = new VirtualTerminal(16, 6, 5);
 				const tui = new TUI(term);
 				const lines = rows("line-", 30);
@@ -680,7 +656,7 @@ describe("TUI terminal-state regressions", () => {
 			const originalPlatform = process.platform;
 			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
 			try {
-				await withEnvPatch({ TMUX: undefined, STY: undefined, ZELLIJ: undefined }, async () => {
+				await withEnv({ TMUX: undefined, STY: undefined, ZELLIJ: undefined }, async () => {
 					// Each logical line is 36 cols: wraps to 20+16 at width 20, fits on one row at width 40.
 					const logical = Array.from({ length: 10 }, (_v, i) => `L${i}:${"x".repeat(33)}`);
 					const term = new UnknownViewportTerminal(20, 4, 200);
@@ -1348,7 +1324,7 @@ describe("TUI terminal-state regressions", () => {
 			// geometry delta. Pure height changes repaint too: otherwise the terminal
 			// exposes blank rows that a later append can fill without growing
 			// scrollback.
-			await withEnvPatch({ TERMUX_VERSION: "0.118" }, async () => {
+			await withEnv({ TERMUX_VERSION: "0.118" }, async () => {
 				const term = new VirtualTerminal(120, 12);
 				const tui = new TUI(term);
 				const lines = rows("row-", 14);
@@ -1382,7 +1358,7 @@ describe("TUI terminal-state regressions", () => {
 			// of the viewport, and the next append wrote into that phantom space
 			// instead of scrolling a new row into native history, breaking row
 			// accounting and hiding the true frame tail.
-			await withEnvPatch({ TERMUX_VERSION: "0.118" }, async () => {
+			await withEnv({ TERMUX_VERSION: "0.118" }, async () => {
 				const term = new VirtualTerminal(16, 4, 100);
 				const tui = new TUI(term);
 				const lines = rows("row-", 12);
@@ -1561,7 +1537,7 @@ describe("TUI terminal-state regressions", () => {
 		// transcript to pane history. Live frames must keep repainting the
 		// viewport and leave reconciliation to explicit checkpoints.
 		it("tmux: dirty-scrollback live frames do not replay the transcript into pane history", async () => {
-			await withEnvPatch({ TMUX: "1", STY: undefined, ZELLIJ: undefined }, async () => {
+			await withEnv({ TMUX: "1", STY: undefined, ZELLIJ: undefined }, async () => {
 				const term = new VirtualTerminal(40, 5, 10_000);
 				const tui = new TUI(term);
 				const lines = rows("line-", 30);
@@ -1606,7 +1582,7 @@ describe("TUI terminal-state regressions", () => {
 		});
 
 		it("tmux: deleting a committed row re-anchors via commit resync without losing rows", async () => {
-			await withEnvPatch({ TMUX: "1", STY: undefined, ZELLIJ: undefined }, async () => {
+			await withEnv({ TMUX: "1", STY: undefined, ZELLIJ: undefined }, async () => {
 				const term = new UnknownViewportTerminal(40, 4, 10_000);
 				const tui = new TUI(term);
 				const component = new MutableLinesComponent([
@@ -1666,7 +1642,7 @@ describe("TUI terminal-state regressions", () => {
 			// to the pre-reflow viewport top — tmux reflowed the pane grid, so the
 			// anchors are stale and rows land in the wrong place.
 			it("repaints the viewport when a resize and an append land in one frame", async () => {
-				await withEnvPatch(TMUX_ENV, async () => {
+				await withEnv(TMUX_ENV, async () => {
 					const term = new VirtualTerminal(40, 12, 10_000);
 					const tui = new TUI(term);
 					const lines = rows("line-", 40);
@@ -1703,7 +1679,7 @@ describe("TUI terminal-state regressions", () => {
 			// "replay" cannot clear tmux pane history — it only appended a full
 			// duplicate copy of the transcript.
 			it("does not replay the transcript into pane history on a forced render after resize", async () => {
-				await withEnvPatch(TMUX_ENV, async () => {
+				await withEnv(TMUX_ENV, async () => {
 					const term = new VirtualTerminal(40, 12, 10_000);
 					const tui = new TUI(term);
 					const component = new MutableLinesComponent(rows("line-", 40));
@@ -2739,51 +2715,48 @@ describe("TUI terminal-state regressions", () => {
 			const originalPlatform = process.platform;
 			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
 			try {
-				await withEnvPatch(
-					{ WT_SESSION: "wt-test", WSL_DISTRO_NAME: "Ubuntu", WSL_INTEROP: undefined },
-					async () => {
-						// Simulate WSL: native viewport probe returns undefined unconditionally
-						// (kernel32.dll FFI cannot bind from a Linux user-space process).
-						const term = new UnknownViewportTerminal(32, 5);
-						const tui = new TUI(term);
-						// Bottom-anchored footer (prompt area) with streaming assistant rows above it.
-						// Seed the transcript so the viewport is already saturated — the footer pins
-						// to the last viewport row and streamed rows must appear above it.
-						const transcript = new MutableLinesComponent(rows("seed-", 4));
-						const footer = new MutableLinesComponent(["prompt>"]);
-						tui.addChild(transcript);
-						tui.addChild(footer);
+				await withEnv({ WT_SESSION: "wt-test", WSL_DISTRO_NAME: "Ubuntu", WSL_INTEROP: undefined }, async () => {
+					// Simulate WSL: native viewport probe returns undefined unconditionally
+					// (kernel32.dll FFI cannot bind from a Linux user-space process).
+					const term = new UnknownViewportTerminal(32, 5);
+					const tui = new TUI(term);
+					// Bottom-anchored footer (prompt area) with streaming assistant rows above it.
+					// Seed the transcript so the viewport is already saturated — the footer pins
+					// to the last viewport row and streamed rows must appear above it.
+					const transcript = new MutableLinesComponent(rows("seed-", 4));
+					const footer = new MutableLinesComponent(["prompt>"]);
+					tui.addChild(transcript);
+					tui.addChild(footer);
 
-						try {
-							tui.start();
+					try {
+						tui.start();
+						await settleFrames(term, tui);
+						expect(visible(term).map(line => line.trim())).toEqual([
+							"seed-0",
+							"seed-1",
+							"seed-2",
+							"seed-3",
+							"prompt>",
+						]);
+
+						// Stream tokens row-by-row. Each frame inserts a new row above the footer,
+						// mimicking an assistant response materializing during a turn.
+						for (let i = 0; i < 4; i++) {
+							transcript.setLines([...rows("seed-", 4), ...rows("token-", i + 1)]);
+							tui.requestRender();
 							await settleFrames(term, tui);
-							expect(visible(term).map(line => line.trim())).toEqual([
-								"seed-0",
-								"seed-1",
-								"seed-2",
-								"seed-3",
-								"prompt>",
-							]);
 
-							// Stream tokens row-by-row. Each frame inserts a new row above the footer,
-							// mimicking an assistant response materializing during a turn.
-							for (let i = 0; i < 4; i++) {
-								transcript.setLines([...rows("seed-", 4), ...rows("token-", i + 1)]);
-								tui.requestRender();
-								await settleFrames(term, tui);
-
-								const viewport = visible(term).map(line => line.trim());
-								// The most recently streamed token MUST land in the viewport without the
-								// user resizing the window. Pre-fix the viewport stayed frozen at the
-								// initial seed because deferredMutation returned a no-op render.
-								expect(viewport).toContain(`token-${i}`);
-								expect(viewport[viewport.length - 1]).toBe("prompt>");
-							}
-						} finally {
-							tui.stop();
+							const viewport = visible(term).map(line => line.trim());
+							// The most recently streamed token MUST land in the viewport without the
+							// user resizing the window. Pre-fix the viewport stayed frozen at the
+							// initial seed because deferredMutation returned a no-op render.
+							expect(viewport).toContain(`token-${i}`);
+							expect(viewport[viewport.length - 1]).toBe("prompt>");
 						}
-					},
-				);
+					} finally {
+						tui.stop();
+					}
+				});
 			} finally {
 				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
 			}
@@ -2797,7 +2770,7 @@ describe("TUI terminal-state regressions", () => {
 			const originalPlatform = process.platform;
 			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
 			try {
-				await withEnvPatch({ TMUX: undefined, STY: undefined, ZELLIJ: undefined }, async () => {
+				await withEnv({ TMUX: undefined, STY: undefined, ZELLIJ: undefined }, async () => {
 					const term = new UnknownViewportTerminal(32, 5);
 					const tui = new TUI(term);
 					// Assistant transcript that already overflows into scrollback, pinned footer below.
@@ -2861,36 +2834,33 @@ describe("TUI terminal-state regressions", () => {
 			const originalPlatform = process.platform;
 			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
 			try {
-				await withEnvPatch(
-					{ TMUX: undefined, STY: undefined, ZELLIJ: undefined, WT_SESSION: undefined },
-					async () => {
-						const term = new StaleBottomViewportTerminal(32, 5, 200);
-						const tui = new TUI(term);
-						const component = new MutableLinesComponent(rows("seed-", 12));
-						tui.addChild(component);
+				await withEnv({ TMUX: undefined, STY: undefined, ZELLIJ: undefined, WT_SESSION: undefined }, async () => {
+					const term = new StaleBottomViewportTerminal(32, 5, 200);
+					const tui = new TUI(term);
+					const component = new MutableLinesComponent(rows("seed-", 12));
+					tui.addChild(component);
 
-						try {
-							tui.start();
-							await settleFrames(term, tui);
-							expect(term.isNativeViewportAtBottom()).toBe(true);
+					try {
+						tui.start();
+						await settleFrames(term, tui);
+						expect(term.isNativeViewportAtBottom()).toBe(true);
 
-							term.scrollLines(-4);
-							const before = term.getBufferPosition();
-							const anchored = visible(term).map(line => line.trim());
-							expect(before.viewportY).toBeLessThan(before.baseY);
+						term.scrollLines(-4);
+						const before = term.getBufferPosition();
+						const anchored = visible(term).map(line => line.trim());
+						expect(before.viewportY).toBeLessThan(before.baseY);
 
-							component.setLines(["seed-EDIT", ...rows("seed-", 12).slice(1), ...rows("tail-", 4)]);
-							tui.requestRender();
-							await settleFrames(term, tui);
+						component.setLines(["seed-EDIT", ...rows("seed-", 12).slice(1), ...rows("tail-", 4)]);
+						tui.requestRender();
+						await settleFrames(term, tui);
 
-							const after = term.getBufferPosition();
-							expect(after.viewportY).toBe(before.viewportY);
-							expect(visible(term).map(line => line.trim())).toEqual(anchored);
-						} finally {
-							tui.stop();
-						}
-					},
-				);
+						const after = term.getBufferPosition();
+						expect(after.viewportY).toBe(before.viewportY);
+						expect(visible(term).map(line => line.trim())).toEqual(anchored);
+					} finally {
+						tui.stop();
+					}
+				});
 			} finally {
 				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
 			}
@@ -2908,7 +2878,7 @@ describe("TUI terminal-state regressions", () => {
 			const originalPlatform = process.platform;
 			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
 			try {
-				await withEnvPatch({ TMUX: undefined, STY: undefined, ZELLIJ: undefined }, async () => {
+				await withEnv({ TMUX: undefined, STY: undefined, ZELLIJ: undefined }, async () => {
 					const height = 8;
 					const term = new UnknownViewportTerminal(50, height, 500);
 					const writes = captureWrites(term);
@@ -2980,7 +2950,7 @@ describe("TUI terminal-state regressions", () => {
 			const originalPlatform = process.platform;
 			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
 			try {
-				await withEnvPatch(
+				await withEnv(
 					{
 						TMUX: undefined,
 						STY: undefined,
@@ -3035,46 +3005,43 @@ describe("TUI terminal-state regressions", () => {
 			const originalPlatform = process.platform;
 			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
 			try {
-				await withEnvPatch(
-					{ WT_SESSION: "wt-test", TMUX: undefined, STY: undefined, ZELLIJ: undefined },
-					async () => {
-						const term = new UnknownViewportTerminal(32, 5);
-						const tui = new TUI(term);
-						// Five-row transcript + one editor row saturates the viewport (height = 5).
-						// The user is at the tail — no scroll — but the probe still answers `undefined`.
-						const transcript = new MutableLinesComponent(rows("seed-", 5));
-						const editor = new MutableLinesComponent(["prompt> a"]);
-						tui.addChild(transcript);
-						tui.addChild(editor);
+				await withEnv({ WT_SESSION: "wt-test", TMUX: undefined, STY: undefined, ZELLIJ: undefined }, async () => {
+					const term = new UnknownViewportTerminal(32, 5);
+					const tui = new TUI(term);
+					// Five-row transcript + one editor row saturates the viewport (height = 5).
+					// The user is at the tail — no scroll — but the probe still answers `undefined`.
+					const transcript = new MutableLinesComponent(rows("seed-", 5));
+					const editor = new MutableLinesComponent(["prompt> a"]);
+					tui.addChild(transcript);
+					tui.addChild(editor);
 
-						try {
-							tui.start();
-							await settleFrames(term, tui);
+					try {
+						tui.start();
+						await settleFrames(term, tui);
 
-							const writes: string[] = [];
-							const realWrite = term.write.bind(term);
-							(term as unknown as { write: (s: string) => void }).write = (data: string) => {
-								writes.push(data);
-								realWrite(data);
-							};
+						const writes: string[] = [];
+						const realWrite = term.write.bind(term);
+						(term as unknown as { write: (s: string) => void }).write = (data: string) => {
+							writes.push(data);
+							realWrite(data);
+						};
 
-							// The wrap keystroke: editor grows from one to two visual rows. This is a
-							// pure append (`firstChanged === previousLines.length`, content grew) over
-							// a viewport already at capacity — exactly the branch that used to defer.
-							editor.setLines(["prompt> a", "wrap-row"]);
-							tui.requestRender();
-							await settleFrames(term, tui);
+						// The wrap keystroke: editor grows from one to two visual rows. This is a
+						// pure append (`firstChanged === previousLines.length`, content grew) over
+						// a viewport already at capacity — exactly the branch that used to defer.
+						editor.setLines(["prompt> a", "wrap-row"]);
+						tui.requestRender();
+						await settleFrames(term, tui);
 
-							// The #1635 anti-yank guarantee must survive: no destructive scrollback erase.
-							expect(writes.join("")).not.toContain("\x1b[3J");
-							// The wrap row paints in the same frame — viewportRepaint is non-destructive
-							// but writes the visible window, so the editor's new visual row is on screen.
-							expect(visible(term).map(line => line.trim())).toContain("wrap-row");
-						} finally {
-							tui.stop();
-						}
-					},
-				);
+						// The #1635 anti-yank guarantee must survive: no destructive scrollback erase.
+						expect(writes.join("")).not.toContain("\x1b[3J");
+						// The wrap row paints in the same frame — viewportRepaint is non-destructive
+						// but writes the visible window, so the editor's new visual row is on screen.
+						expect(visible(term).map(line => line.trim())).toContain("wrap-row");
+					} finally {
+						tui.stop();
+					}
+				});
 			} finally {
 				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
 			}
@@ -3089,46 +3056,43 @@ describe("TUI terminal-state regressions", () => {
 			const originalPlatform = process.platform;
 			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
 			try {
-				await withEnvPatch(
-					{ WT_SESSION: "wt-test", TMUX: undefined, STY: undefined, ZELLIJ: undefined },
-					async () => {
-						const term = new UnknownViewportTerminal(32, 5);
-						const tui = new TUI(term);
-						// Transcript + status + prompt; total six rows over a five-row viewport.
-						const transcript = new MutableLinesComponent(rows("seed-", 4));
-						const status = new MutableLinesComponent(["STATUS-OLD"]);
-						const prompt = new MutableLinesComponent(["prompt>"]);
-						tui.addChild(transcript);
-						tui.addChild(status);
-						tui.addChild(prompt);
+				await withEnv({ WT_SESSION: "wt-test", TMUX: undefined, STY: undefined, ZELLIJ: undefined }, async () => {
+					const term = new UnknownViewportTerminal(32, 5);
+					const tui = new TUI(term);
+					// Transcript + status + prompt; total six rows over a five-row viewport.
+					const transcript = new MutableLinesComponent(rows("seed-", 4));
+					const status = new MutableLinesComponent(["STATUS-OLD"]);
+					const prompt = new MutableLinesComponent(["prompt>"]);
+					tui.addChild(transcript);
+					tui.addChild(status);
+					tui.addChild(prompt);
 
-						try {
-							tui.start();
-							await settleFrames(term, tui);
+					try {
+						tui.start();
+						await settleFrames(term, tui);
 
-							const writes: string[] = [];
-							const realWrite = term.write.bind(term);
-							(term as unknown as { write: (s: string) => void }).write = (data: string) => {
-								writes.push(data);
-								realWrite(data);
-							};
+						const writes: string[] = [];
+						const realWrite = term.write.bind(term);
+						(term as unknown as { write: (s: string) => void }).write = (data: string) => {
+							writes.push(data);
+							realWrite(data);
+						};
 
-							// Slash-command toggle: an existing offscreen row flips its content and a
-							// new chrome row is inserted. firstChanged lands above the viewport top,
-							// length grew by one — a structural mutation, not a pure append.
-							status.setLines(["STATUS-NEW", "EXTRA"]);
-							tui.requestRender();
-							await settleFrames(term, tui);
+						// Slash-command toggle: an existing offscreen row flips its content and a
+						// new chrome row is inserted. firstChanged lands above the viewport top,
+						// length grew by one — a structural mutation, not a pure append.
+						status.setLines(["STATUS-NEW", "EXTRA"]);
+						tui.requestRender();
+						await settleFrames(term, tui);
 
-							expect(writes.join("")).not.toContain("\x1b[3J");
-							const view = visible(term).map(line => line.trim());
-							expect(view).toContain("STATUS-NEW");
-							expect(view).toContain("EXTRA");
-						} finally {
-							tui.stop();
-						}
-					},
-				);
+						expect(writes.join("")).not.toContain("\x1b[3J");
+						const view = visible(term).map(line => line.trim());
+						expect(view).toContain("STATUS-NEW");
+						expect(view).toContain("EXTRA");
+					} finally {
+						tui.stop();
+					}
+				});
 			} finally {
 				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
 			}
@@ -3418,7 +3382,7 @@ describe("TUI terminal-state regressions", () => {
 		});
 
 		it("tmux overlay hide repaints rows exposed by a shorter base frame", async () => {
-			await withEnvPatch({ TMUX: "1", STY: undefined, ZELLIJ: undefined }, async () => {
+			await withEnv({ TMUX: "1", STY: undefined, ZELLIJ: undefined }, async () => {
 				const term = new UnknownViewportTerminal(40, 3);
 				const tui = new TUI(term);
 				tui.addChild(new MutableLinesComponent(["base-0", "base-1", "base-2"]));
@@ -4069,7 +4033,7 @@ describe("TUI terminal-state regressions", () => {
 			// cursor off while the editor stayed in terminal-cursor mode (marker
 			// only, no software glyph), leaving Ghostty users with no visible
 			// caret at all. The preference must follow the constructor arg only.
-			await withEnvPatch(
+			await withEnv(
 				{
 					TERM_PROGRAM: "ghostty",
 					TERM: "xterm-ghostty",

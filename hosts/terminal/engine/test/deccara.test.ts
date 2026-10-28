@@ -9,6 +9,7 @@ import {
 	planDeccaraFills,
 } from "@veyyon/utils/deccara";
 import { applyBackgroundToLine } from "@veyyon/utils/sgr";
+import { withEnv } from "../../../../packages/utils/test/helpers/restore-global";
 import { settleFrames } from "./helpers/settle-frames";
 import { captureWrites } from "./helpers/terminal-output";
 import { VirtualTerminal } from "./virtual-terminal";
@@ -62,41 +63,6 @@ function countOccurrences(haystack: string, needle: string): number {
 		if (at === -1) return count;
 		count++;
 		from = at + needle.length;
-	}
-}
-
-async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: () => T | Promise<T>): Promise<T> {
-	const bunSnapshot: Record<string, string | undefined> = {};
-	const processSnapshot: Record<string, string | undefined> = {};
-	for (const key in patch) {
-		bunSnapshot[key] = Bun.env[key];
-		processSnapshot[key] = process.env[key];
-		const value = patch[key];
-		if (value === undefined) {
-			delete Bun.env[key];
-			delete process.env[key];
-		} else {
-			Bun.env[key] = value;
-			process.env[key] = value;
-		}
-	}
-	try {
-		return await run();
-	} finally {
-		for (const key in patch) {
-			const bunValue = bunSnapshot[key];
-			if (bunValue === undefined) {
-				delete Bun.env[key];
-			} else {
-				Bun.env[key] = bunValue;
-			}
-			const processValue = processSnapshot[key];
-			if (processValue === undefined) {
-				delete process.env[key];
-			} else {
-				process.env[key] = processValue;
-			}
-		}
 	}
 }
 
@@ -357,7 +323,7 @@ describe("TUI DECCARA integration", () => {
 	});
 
 	it("keeps padded fallback bytes when synchronized output is disabled", async () => {
-		await withEnvPatch(
+		await withEnv(
 			{ VEYYON_NO_SYNC_OUTPUT: "1", VEYYON_FORCE_SYNC_OUTPUT: undefined, VEYYON_TUI_SYNC_OUTPUT: undefined },
 			async () => {
 				setTerminalDeccara(true);

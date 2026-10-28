@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { type Component, CURSOR_MARKER, type NativeScrollbackLiveRegion, TUI } from "@veyyon/tui";
+import { withEnv } from "../../../../packages/utils/test/helpers/restore-global";
 import { settleFrames } from "./helpers/settle-frames";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -90,31 +91,6 @@ class VolatileLiveRegion implements Component, NativeScrollbackLiveRegion {
 	}
 }
 
-async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: () => T | Promise<T>): Promise<T> {
-	const saved: Record<string, string | undefined> = {};
-	for (const key in patch) {
-		saved[key] = Bun.env[key];
-		const value = patch[key];
-		if (value === undefined) {
-			delete Bun.env[key];
-		} else {
-			Bun.env[key] = value;
-		}
-	}
-	try {
-		return await run();
-	} finally {
-		for (const key in saved) {
-			const value = saved[key];
-			if (value === undefined) {
-				delete Bun.env[key];
-			} else {
-				Bun.env[key] = value;
-			}
-		}
-	}
-}
-
 function overrideProbe(term: VirtualTerminal, answer: boolean | undefined): void {
 	(term as unknown as { isNativeViewportAtBottom: () => boolean | undefined }).isNativeViewportAtBottom = () => answer;
 }
@@ -149,7 +125,7 @@ describe("issue #1974: tmux scrollback rendering", () => {
 	it("commits a streaming reply's scrolled-off head to pane history exactly once", async () => {
 		if (process.platform === "win32") return;
 
-		await withEnvPatch(TMUX_ENV, async () => {
+		await withEnv(TMUX_ENV, async () => {
 			const term = new VirtualTerminal(80, 8, 10_000);
 			// Real tmux/ProcessTerminal does not implement
 			// `isNativeViewportAtBottom`, so the renderer sees `undefined`
@@ -206,7 +182,7 @@ describe("issue #1974: tmux scrollback rendering", () => {
 	it("never emits ED3 (CSI 3 J) inside a tmux pane during streaming", async () => {
 		if (process.platform === "win32") return;
 
-		await withEnvPatch(TMUX_ENV, async () => {
+		await withEnv(TMUX_ENV, async () => {
 			const term = new VirtualTerminal(80, 8, 10_000);
 			overrideProbe(term, undefined);
 			const tui = new TUI(term);
@@ -242,7 +218,7 @@ describe("issue #1974: tmux scrollback rendering", () => {
 		// the visible pane.
 		if (process.platform === "win32") return;
 
-		await withEnvPatch(TMUX_ENV, async () => {
+		await withEnv(TMUX_ENV, async () => {
 			const term = new VirtualTerminal(80, 10, 10_000);
 			overrideProbe(term, undefined);
 			const tui = new TUI(term);

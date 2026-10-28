@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { type Component, TUI } from "@veyyon/tui";
+import { withEnv } from "../../../../packages/utils/test/helpers/restore-global";
 import { settleFrames } from "./helpers/settle-frames";
 import { captureWrites } from "./helpers/terminal-output";
 import { VirtualTerminal } from "./virtual-terminal";
@@ -37,31 +38,6 @@ class MutableLinesComponent implements Component {
 
 	render(width: number): string[] {
 		return this.#lines.map(line => line.slice(0, width));
-	}
-}
-
-async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: () => T | Promise<T>): Promise<T> {
-	const saved: Record<string, string | undefined> = {};
-	for (const key in patch) {
-		saved[key] = Bun.env[key];
-		const value = patch[key];
-		if (value === undefined) {
-			delete Bun.env[key];
-		} else {
-			Bun.env[key] = value;
-		}
-	}
-	try {
-		return await run();
-	} finally {
-		for (const key in saved) {
-			const value = saved[key];
-			if (value === undefined) {
-				delete Bun.env[key];
-			} else {
-				Bun.env[key] = value;
-			}
-		}
 	}
 }
 
@@ -143,7 +119,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 	});
 
 	it("coalesces a burst of multiplexer resize events into a single settled render", async () => {
-		await withEnvPatch(TMUX_ENV, async () => {
+		await withEnv(TMUX_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const tui = new TUI(term);
 			tui.addChild(new MutableLinesComponent(Array.from({ length: 20 }, (_v, i) => `line-${i}`)));
@@ -182,7 +158,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 	});
 
 	it("paints the viewport immediately on resize outside a multiplexer, then replays on settle", async () => {
-		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
+		await withEnv(NO_MULTIPLEXER_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const tui = new TUI(term);
 			tui.addChild(new MutableLinesComponent(Array.from({ length: 20 }, (_v, i) => `line-${i}`)));
@@ -223,7 +199,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 	});
 
 	it("cancels a pending multiplexer resize timer on stop()", async () => {
-		await withEnvPatch(TMUX_ENV, async () => {
+		await withEnv(TMUX_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const tui = new TUI(term);
 			tui.addChild(new MutableLinesComponent(Array.from({ length: 20 }, (_v, i) => `line-${i}`)));
@@ -245,7 +221,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 	});
 
 	it("supersedes a throttled render queued just before a multiplexer SIGWINCH", async () => {
-		await withEnvPatch(TMUX_ENV, async () => {
+		await withEnv(TMUX_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const tui = new TUI(term);
 			const lines = Array.from({ length: 20 }, (_v, i) => `line-${i}`);
@@ -290,7 +266,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 	});
 
 	it("defers a forced repaint that lands inside the multiplexer settle window", async () => {
-		await withEnvPatch(TMUX_ENV, async () => {
+		await withEnv(TMUX_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const tui = new TUI(term);
 			tui.addChild(new MutableLinesComponent(Array.from({ length: 20 }, (_v, i) => `line-${i}`)));
@@ -329,7 +305,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 	});
 
 	it("defers resetDisplay() that lands inside the multiplexer settle window", async () => {
-		await withEnvPatch(TMUX_ENV, async () => {
+		await withEnv(TMUX_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const tui = new TUI(term);
 			tui.addChild(new MutableLinesComponent(Array.from({ length: 20 }, (_v, i) => `line-${i}`)));
@@ -397,7 +373,7 @@ describe("multiplexer detection gates ED3 on resize", () => {
 
 	for (const [label, env] of strippedMuxTerms) {
 		it(`debounces the resize and emits no ED3 when only TERM=${label} marks the multiplexer`, async () => {
-			await withEnvPatch(env, async () => {
+			await withEnv(env, async () => {
 				const term = new VirtualTerminal(40, 10, 1000);
 				const tui = new TUI(term);
 				tui.addChild(new MutableLinesComponent(Array.from({ length: 20 }, (_v, i) => `line-${i}`)));
@@ -434,7 +410,7 @@ describe("multiplexer detection gates ED3 on resize", () => {
 
 	for (const [label, env] of CMUX_ENV_CASES) {
 		it(`debounces resize and emits no ED3 when ${label} marks CMUX with TERM=dumb`, async () => {
-			await withEnvPatch(env, async () => {
+			await withEnv(env, async () => {
 				const term = new VirtualTerminal(40, 10, 1000);
 				const tui = new TUI(term);
 				tui.addChild(new MutableLinesComponent(Array.from({ length: 20 }, (_v, i) => `line-${i}`)));
@@ -466,7 +442,7 @@ describe("multiplexer detection gates ED3 on resize", () => {
 	}
 
 	it("does not treat CMUX_SOCKET_PATH alone as a multiplexer session marker", async () => {
-		await withEnvPatch(CMUX_SOCKET_ONLY_ENV, async () => {
+		await withEnv(CMUX_SOCKET_ONLY_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const tui = new TUI(term);
 			tui.addChild(new MutableLinesComponent(Array.from({ length: 20 }, (_v, i) => `line-${i}`)));
@@ -490,7 +466,7 @@ describe("multiplexer detection gates ED3 on resize", () => {
 		});
 	});
 	it("still clears native scrollback (ED3) on a genuine direct-terminal resize", async () => {
-		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
+		await withEnv(NO_MULTIPLEXER_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const tui = new TUI(term);
 			tui.addChild(new MutableLinesComponent(Array.from({ length: 20 }, (_v, i) => `line-${i}`)));
