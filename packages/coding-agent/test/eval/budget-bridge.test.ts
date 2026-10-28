@@ -3,6 +3,7 @@ import { runEvalBudget } from "@veyyon/coding-agent/eval/budget-bridge";
 import type { Goal, GoalModeState } from "@veyyon/coding-agent/goals/state";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import type { UsageStatistics } from "@veyyon/kernel/session/session-entries";
+import { emptyUsageStatistics } from "@veyyon/kernel/session/session-entry-index";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**
@@ -30,18 +31,7 @@ function goal(over: Partial<Goal>): Goal {
 }
 
 function usage(output: number): UsageStatistics {
-	return {
-		input: 0,
-		output,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		orchestrationInput: 0,
-		orchestrationOutput: 0,
-		orchestrationCacheRead: 0,
-		premiumRequests: 0,
-		cost: 0,
-	};
+	return { ...emptyUsageStatistics(), output };
 }
 
 function session(over: {

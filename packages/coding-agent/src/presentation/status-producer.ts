@@ -12,6 +12,7 @@ import type { AgentMessage } from "@veyyon/agent-core";
 import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import type { AssistantMessage, UsageLimit, UsageReport } from "@veyyon/ai";
 import type { OAuthAccountIdentity } from "@veyyon/ai/auth-storage";
+import { emptyUsageStatistics } from "@veyyon/kernel/session/session-entry-index";
 import { asRecord } from "@veyyon/utils/type-guards";
 import type {
 	SessionFacts,
@@ -530,18 +531,7 @@ export class StatusPresentationProducer implements StatusDataSource {
 	}
 
 	getUsageStats(session: AgentSession): StatusUsageStats {
-		const aggregate = session.sessionManager?.getUsageStatistics?.() ?? {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			orchestrationInput: 0,
-			orchestrationOutput: 0,
-			orchestrationCacheRead: 0,
-			premiumRequests: 0,
-			cost: 0,
-		};
+		const aggregate = session.sessionManager?.getUsageStatistics?.() ?? emptyUsageStatistics();
 		return {
 			...aggregate,
 			tokensPerSecond: this.getTokensPerSecond(session),

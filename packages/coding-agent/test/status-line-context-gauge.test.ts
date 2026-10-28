@@ -31,6 +31,7 @@ import { renderSegment } from "@veyyon/coding-agent/modes/terminal/components/st
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { formatContextUsage } from "@veyyon/utils/format";
 import { NO_SESSION_FACTS } from "../src/modes/terminal/components/status-line/session-facts";
+import { segmentContext } from "./helpers/segment-context";
 
 beforeAll(async () => {
 	await initTheme();
@@ -43,7 +44,6 @@ interface GaugeOverrides {
 	contextLimit?: number;
 	contextLimitKind?: "window" | "compaction";
 	autoCompactEnabled?: boolean;
-	bar?: boolean;
 	streaming?: boolean;
 }
 
@@ -51,33 +51,11 @@ function gaugeContext(overrides: GaugeOverrides = {}): SegmentContext {
 	const contextWindow = overrides.contextWindow ?? 200_000;
 	const contextLimit = overrides.contextLimit ?? contextWindow;
 	const contextTokens = overrides.contextTokens ?? 0;
-	return {
+	return segmentContext({
 		facts: {
 			...NO_SESSION_FACTS,
 			model: { id: "test-model", name: "Test Model", supportsThinking: false },
 			streaming: overrides.streaming ?? false,
-		},
-		width: 120,
-		compactThinkingLevel: false,
-		options: overrides.bar ? { context_pct: { bar: true } } : {},
-		planMode: null,
-		loopMode: null,
-		prewalk: null,
-		goalMode: null,
-		vibeMode: null,
-		collab: null,
-		usageStats: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			orchestrationInput: 0,
-			orchestrationOutput: 0,
-			orchestrationCacheRead: 0,
-			premiumRequests: 0,
-			cost: 0,
-			tokensPerSecond: null,
 		},
 		contextPercent:
 			overrides.contextPercent !== undefined
@@ -89,13 +67,7 @@ function gaugeContext(overrides: GaugeOverrides = {}): SegmentContext {
 		contextLimit,
 		contextLimitKind: overrides.contextLimitKind ?? "window",
 		autoCompactEnabled: overrides.autoCompactEnabled ?? false,
-		agentCount: 0,
-		activeMs: 0,
-		activeRepo: null,
-		worktree: null,
-		git: { branch: null, status: null, pr: null },
-		usage: null,
-	} as unknown as SegmentContext;
+	});
 }
 
 describe("formatContextUsage", () => {
@@ -256,14 +228,14 @@ describe("context_total segment", () => {
 
 describe("context_pct segment", () => {
 	/**
-	 * Bar mode reports room LEFT twice — as a draining bar and as a labelled
+	 * The gauge reports room LEFT twice — as a draining bar and as a labelled
 	 * percentage — so the two halves of the gauge cannot contradict each other.
 	 * At 25% used, six of eight cells remain.
 	 */
-	it("drains the bar and labels the percentage in bar mode", () => {
+	it("drains the bar and labels the percentage", () => {
 		const rendered = renderSegment(
 			"context_pct",
-			gaugeContext({ contextTokens: 50_000, contextWindow: 200_000, contextLimit: 200_000, bar: true }),
+			gaugeContext({ contextTokens: 50_000, contextWindow: 200_000, contextLimit: 200_000 }),
 		);
 		const text = stripVTControlCharacters(rendered.content);
 		expect(text).toContain("▰▰▰▰▰▰▱▱");
@@ -276,7 +248,7 @@ describe("context_pct segment", () => {
 		const nearlyFull = stripVTControlCharacters(
 			renderSegment(
 				"context_pct",
-				gaugeContext({ contextTokens: 180_000, contextWindow: 200_000, contextLimit: 200_000, bar: true }),
+				gaugeContext({ contextTokens: 180_000, contextWindow: 200_000, contextLimit: 200_000 }),
 			).content,
 		);
 		expect(nearlyFull).toContain("▰▱▱▱▱▱▱▱");
@@ -286,7 +258,7 @@ describe("context_pct segment", () => {
 	/** A fresh session is all room, and reads as such. */
 	it("shows a full bar at the start of a session", () => {
 		const fresh = stripVTControlCharacters(
-			renderSegment("context_pct", gaugeContext({ contextTokens: 0, contextLimit: 200_000, bar: true })).content,
+			renderSegment("context_pct", gaugeContext({ contextTokens: 0, contextLimit: 200_000 })).content,
 		);
 		expect(fresh).toContain("▰▰▰▰▰▰▰▰");
 		expect(fresh).toContain("100% left");
@@ -294,9 +266,9 @@ describe("context_pct segment", () => {
 
 	/** Right after a compaction the percentage is unknown; the gauge says so
 	 * instead of printing a number it does not have. */
-	it("admits an unknown percentage in bar mode", () => {
+	it("admits an unknown percentage", () => {
 		const unknown = stripVTControlCharacters(
-			renderSegment("context_pct", gaugeContext({ contextPercent: null, bar: true })).content,
+			renderSegment("context_pct", gaugeContext({ contextPercent: null })).content,
 		);
 		expect(unknown).toContain("? left");
 	});

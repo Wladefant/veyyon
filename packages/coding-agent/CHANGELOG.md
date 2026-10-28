@@ -7,6 +7,7 @@
 - No user-visible change: the selectors, dialogs, dashboards and the Ctrl+P model cycle step through their rows, tabs and models with `wrapIndex` instead of hand-written wrap arithmetic.
 - No user-visible change: the pointer-band selectors and the MCP add wizard repaint on the result of `HoverController.set` instead of comparing the hovered row themselves.
 - No user-visible change: the emoji, internal-URL, GitHub-reference and prompt-action completions return `AppliedCompletion` instead of restating its shape.
+- No user-visible change: the status producer falls back to the kernel's `emptyUsageStatistics()` instead of restating the zero usage record.
 - The composer reads the draft's queue shorthand and magic keywords once per frame instead of once per drawn row, so a keystroke and its frame in a 400-line draft take about 20 µs instead of about 85 µs.
 - No user-visible change: a modal card is laid out and its chrome planned once per frame, and the body is painted against that plan (`layoutModalCard`, `planModalChrome`, `renderModalShell`).
 - A start with no usable credential reports the missing credential without building the whole model catalog, so it reaches the prompt in 72 ms instead of 112 ms, and the message counts providers instead of models.

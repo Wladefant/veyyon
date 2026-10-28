@@ -5,6 +5,7 @@ import { renderSegment } from "@veyyon/coding-agent/modes/terminal/components/st
 import type { SegmentContext } from "@veyyon/coding-agent/modes/terminal/components/status-line/types";
 import { calculateTokensPerSecond } from "@veyyon/coding-agent/presentation/token-rate";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { RESTING_USAGE_STATS, segmentContext } from "./helpers/segment-context";
 
 beforeAll(async () => {
 	await initTheme();
@@ -32,17 +33,7 @@ function assistantMessage(overrides?: Partial<AssistantMessage>): AssistantMessa
 }
 
 function ctxWithTokenRate(tokensPerSecond: number | null): SegmentContext {
-	return {
-		usageStats: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			premiumRequests: 0,
-			cost: 0,
-			tokensPerSecond,
-		},
-	} as unknown as SegmentContext;
+	return segmentContext({ usageStats: { ...RESTING_USAGE_STATS, tokensPerSecond } });
 }
 
 describe("token_rate status-line segment", () => {

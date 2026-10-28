@@ -6,6 +6,7 @@ import { initTheme, type ThemeColor, theme } from "@veyyon/coding-agent/theme/th
 import { normalizeApprovalMode } from "@veyyon/coding-agent/tools/core/approval";
 import { AUTONOMY_LABEL } from "@veyyon/coding-agent/tools/core/approval-modes";
 import { NO_SESSION_FACTS } from "../src/modes/terminal/components/status-line/session-facts";
+import { segmentContext } from "./helpers/segment-context";
 import { useFullColor } from "./helpers/theme-assertions";
 
 // Every assertion below names a colour, so the policy is declared rather than
@@ -41,7 +42,7 @@ function createGoalContext(opts: {
 	modelBudgetsEnabled?: boolean;
 }): SegmentContext {
 	const goal = opts.goal;
-	return {
+	return segmentContext({
 		facts: {
 			...NO_SESSION_FACTS,
 			streaming: opts.streaming ?? false,
@@ -56,42 +57,9 @@ function createGoalContext(opts: {
 			goalVerbose: opts.verbose ?? false,
 			goalModelBudgets: opts.modelBudgetsEnabled ?? true,
 		},
-		width: 120,
-		compactThinkingLevel: false,
-		options: {},
-		planMode: null,
-		loopMode: null,
-		prewalk: null,
 		goalMode: { enabled: true, paused: opts.paused ?? false },
-		vibeMode: null,
-		collab: null,
-		usageStats: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			orchestrationInput: 0,
-			orchestrationOutput: 0,
-			orchestrationCacheRead: 0,
-			premiumRequests: 0,
-			cost: 0,
-			tokensPerSecond: null,
-		},
-		contextPercent: 0,
-		contextWindow: 0,
-		contextLimit: 0,
-		contextLimitKind: "window" as const,
-		autoCompactEnabled: false,
-		agentCount: 0,
-		backgroundSessionCount: 0,
 		activeMs: opts.activeMs ?? 0,
-		activeRepo: null,
-		worktree: null,
-		git: { branch: null, status: null, pr: null },
-		account: null,
-		usage: null,
-	};
+	});
 }
 
 function plain(ctx: SegmentContext): string {

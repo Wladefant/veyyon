@@ -6,6 +6,7 @@ import { withIcon } from "@veyyon/coding-agent/theme/icon-label";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { theme } from "@veyyon/coding-agent/theme/theme-binding";
 import { formatNumber } from "@veyyon/utils/format";
+import { RESTING_USAGE_STATS, segmentContext } from "./helpers/segment-context";
 import { useFullColor } from "./helpers/theme-assertions";
 
 beforeAll(async () => {
@@ -13,22 +14,7 @@ beforeAll(async () => {
 });
 
 function ctxWith(usage: Partial<SegmentContext["usageStats"]>): SegmentContext {
-	return {
-		usageStats: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			orchestrationInput: 0,
-			orchestrationOutput: 0,
-			orchestrationCacheRead: 0,
-			premiumRequests: 0,
-			cost: 0,
-			tokensPerSecond: null,
-			...usage,
-		},
-	} as unknown as SegmentContext;
+	return segmentContext({ usageStats: { ...RESTING_USAGE_STATS, ...usage } });
 }
 
 describe("cache_hit status-line segment", () => {

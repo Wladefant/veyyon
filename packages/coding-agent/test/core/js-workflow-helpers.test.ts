@@ -4,6 +4,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { disposeAllVmContexts } from "@veyyon/coding-agent/eval/js/context-manager";
 import { executeJs, type JsResult } from "@veyyon/coding-agent/eval/js/executor";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
+import { emptyUsageStatistics } from "@veyyon/kernel/session/session-entry-index";
 import { TempDir } from "@veyyon/utils";
 
 // JS eval cold-starts a Bun worker; under --isolate + high CI concurrency that startup
@@ -85,18 +86,7 @@ describe("executeJs workflow helpers", () => {
 
 	it("falls back to session output tokens with no ceiling when Goal Mode is inactive", async () => {
 		const session = baseSession(tempDir.path(), sessionFile, {
-			getUsageStatistics: () => ({
-				input: 10,
-				output: 777,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 787,
-				orchestrationInput: 0,
-				orchestrationOutput: 0,
-				orchestrationCacheRead: 0,
-				premiumRequests: 0,
-				cost: 0,
-			}),
+			getUsageStatistics: () => ({ ...emptyUsageStatistics(), input: 10, output: 777, totalTokens: 787 }),
 		});
 		const result = await executeJs(
 			"return JSON.stringify([await budget.total(), await budget.spent(), (await budget.remaining()) === Infinity]);",
