@@ -34,7 +34,7 @@ import type { LspClient, ServerConfig, TextEdit } from "./types";
 import { fileToUri, summarizeDiagnosticMessages } from "./utils";
 
 /**
- * Runs `action` against the client of every server in `servers` other than a custom linter client.
+ * Runs `action` against the client of every server in `servers`, the LSP half of `splitServers`.
  * A server that fails does not stop the others.
  */
 async function forEachServerClient(
@@ -45,11 +45,8 @@ async function forEachServerClient(
 ): Promise<void> {
 	throwIfAborted(signal);
 	await Promise.allSettled(
-		servers.map(async ([_serverName, serverConfig]) => {
+		servers.map(async ([, serverConfig]) => {
 			throwIfAborted(signal);
-			if (serverConfig.createClient) {
-				return;
-			}
 			const client = await getOrCreateClient(serverConfig, cwd, undefined, signal);
 			throwIfAborted(signal);
 			await action(client);

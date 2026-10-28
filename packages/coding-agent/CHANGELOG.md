@@ -4,6 +4,7 @@
 
 ### Changed
 
+- The writethrough per-server loop drops a custom-linter check its callers already make; no user-facing change.
 - The RPC client and the agent run monitor recognize agent events through `AGENT_EVENT_TYPES` instead of their own copies of the list; no user-facing change.
 - Syncing a written file to its language servers and announcing its save share one per-server loop; no user-facing change.
 - The plugin manager runs its `bun` subcommands through the command runner the git cache refresh uses; no user-facing change.
