@@ -18,6 +18,7 @@
 
 ### Changed
 
+- The `tools.format` setting takes its dialect list from a table keyed by the catalog's `Dialect` type instead of a second copy of the catalog's list; no user-facing change.
 - The markit converters share one stream-acceptance rule, one XML parser with the 1,000,000 entity-expansion cap, and one repeated-element reader; no user-facing change.
 - Session memory banks and `memory stats` readers open their Mnemopi store through one builder, `createBankMemory`; no user-facing change.
 - `AgentParsingError` extends `SourcedParseError` from `@veyyon/utils` instead of copying its formatting; no user-facing change.
@@ -81,8 +82,8 @@
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
 - An extension command run on a session with no UI receives the extension runner's no-op UI context instead of a second copy of it; no user-facing change.
 - The theme loader and the status-rail animation read 256-color palette indices through `ansi256ToHex` in `@veyyon/utils/color` instead of two copies of the xterm table; no user-facing change.
-- The remote summarizer resolves an Azure model's deployment through the same `@veyyon/ai` helper as server-side compaction; no user-facing change.
-- Azure Responses turns, Azure chat-completions turns and server-side compaction resolve `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` through one helper in `providers/azure-deployment-names`; no user-facing change.
+- The remote summarizer resolves an Azure model's deployment through the same `@veyyon/ai` helper as Azure turns; no user-facing change.
+- Azure Responses turns and Azure chat-completions turns resolve `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` through one helper in `providers/azure-deployment-names`; no user-facing change.
 - Tool-argument coercion matches a JSON Schema `type` keyword through the validator's matcher instead of a copy of it; no user-facing change.
 - Cursor and GitLab Duo tool results, GitLab Duo goal prompts and the Antigravity and Google Cloud token refreshes each run through one shared implementation; no user-facing change.
 - The auth-broker discovery imports the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
@@ -182,6 +183,7 @@
 - The shell `grep` and `rg` builtins reject a pattern whose `)` closes no group instead of matching every line: `grep -E ')('`, `grep -P ')('` and `rg ')('` exit 2, `grep -G '\)\('` and `grep -G '\('` exit 2 with GNU grep's `Unmatched ) or \)` and `Unmatched ( or \(`, and a bare `grep ')('` searches for the text `)(`.
 - `veyyon-stats --json` and `--sync` print the sync count on stderr, so `veyyon-stats --json | jq` parses; the summary and the sync progress line come from one module that `veyyon stats` also uses.
 - The embedded dashboard is extracted into `<tmpdir>/veyyon-<uid>/stats-client` (mode 700) instead of `<tmpdir>/veyyon-stats-client`, where another account could place its own files first.
+- `sgrCarryAfter` returns only the styles still set at the end of the text, as one SGR sequence, so a multi-line `Text` streamed one styled line at a time no longer grows every replayed row by each colour an earlier line closed (2000 lines: 17238 ms to 217 ms) and no longer opens a row with empty colour runs.
 - The command runner checks a subcommand's flags and arguments against its declarations before running it, so `veyyon licenses nosuch` and `veyyon licenses --zzzz` exit 2 instead of printing the notices at exit 0.
 - A missing argument that takes one of a fixed set of values lists the set, such as `Missing required argument: shell (one of: bash, zsh, fish, powershell)`.
 - The YouTube scraper downloads subtitles into `<tmpdir>/veyyon-<uid>` (mode 700) instead of by a guessable name in the shared temp directory.
