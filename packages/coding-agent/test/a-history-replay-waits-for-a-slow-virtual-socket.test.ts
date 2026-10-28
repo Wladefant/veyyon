@@ -1,9 +1,8 @@
 // WHY: the Windows pipe socket never reports a full buffer (`writableNeedDrain`), so a history or delivery replay
 // that waited only on that flag wrote every chunk at once, passed the 1 MiB send limit and destroyed the
-// subscriber. The replay now waits on the bytes the socket still holds.
-// CLASS: any replay larger than the send limit on a socket whose consumer is slower than the producer.
-// GAP: the broker process itself is not run; the fake socket reproduces its contract, a write that
-// completes later and a `writableLength` that falls as it does.
+// subscriber. A concurrent history append must remain queued for replay rather than falling between snapshots.
+// CLASS: replay snapshots plus live history arriving while a slow consumer drains its socket.
+// GAP: the broker process itself is not run; the virtual socket deterministically blocks on its first write.
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs/promises";
@@ -18,6 +17,7 @@ class SlowVirtualSocket extends EventEmitter {
 	destroyed = false;
 	writableLength = 0;
 	peakWritableLength = 0;
+	writeHook: (() => void) | undefined;
 	readonly frames: Array<{
 		id?: string;
 		ok?: boolean;
@@ -28,19 +28,10 @@ class SlowVirtualSocket extends EventEmitter {
 			messageId?: string;
 			state?: string;
 			outcome?: string;
-			entries?: unknown[];
+			entries?: Array<{ entryId: string; text: string }>;
 		};
 	}> = [];
 	readonly replied = Promise.withResolvers<void>();
-	readonly #drain: NodeJS.Timeout;
-
-	constructor() {
-		super();
-		// A real interval on purpose: the contract under test is the replay waiting on bytes that leave over time.
-		this.#drain = setInterval(() => {
-			this.writableLength = Math.max(0, this.writableLength - 512 * 1024);
-		}, 5);
-	}
 
 	setEncoding(): this {
 		return this;
@@ -55,6 +46,11 @@ class SlowVirtualSocket extends EventEmitter {
 			const frame = JSON.parse(trimmed);
 			this.frames.push(frame);
 			if (frame.id === "sub") this.replied.resolve();
+			if (this.writeHook) {
+				const hook = this.writeHook;
+				this.writeHook = undefined;
+				hook();
+			}
 		}
 		return true;
 	}
@@ -62,7 +58,6 @@ class SlowVirtualSocket extends EventEmitter {
 	destroy(): this {
 		if (this.destroyed) return this;
 		this.destroyed = true;
-		clearInterval(this.#drain);
 		this.replied.resolve();
 		this.emit("close");
 		return this;
@@ -74,8 +69,6 @@ class FastVirtualSocket extends EventEmitter {
 	writableLength = 0;
 	readonly frames: Array<{
 		id?: string;
-		ok?: boolean;
-		result?: unknown;
 		event?: { kind?: string; sessionId?: string; messageId?: string; state?: string; outcome?: string };
 	}> = [];
 	readonly #onFrame?: () => void;
@@ -114,9 +107,7 @@ afterEach(async () => {
 
 test("a history replay and late delivery replay larger than the send limit waits for a slow virtual socket instead of destroying it", async () => {
 	const socket = new SlowVirtualSocket();
-	cleanup.push(() => {
-		socket.destroy();
-	});
+	cleanup.push(() => socket.destroy());
 	let accept: ((peer: transport.TerminalSocket) => void) | undefined;
 	const spy = spyOn(transport, "createTerminalControlTransport").mockImplementation(async (endpoint, onConnection) => {
 		accept = onConnection;
@@ -144,45 +135,45 @@ test("a history replay and late delivery replay larger than the send limit waits
 	const deliveryCount = 50;
 	const allSettled = Promise.withResolvers<void>();
 	const seeder = new FastVirtualSocket(() => {
-		const settled = seeder.frames.filter(
-			frame => frame.event?.kind === "delivery" && frame.event.state === "delivered",
-		).length;
+		const settled = seeder.frames.filter(frame => frame.event?.kind === "delivery" && frame.event.state === "delivered").length;
 		if (settled >= deliveryCount) allSettled.resolve();
 	});
-	cleanup.push(() => {
-		seeder.destroy();
-	});
+	cleanup.push(() => seeder.destroy());
 	accept?.(seeder as unknown as transport.TerminalSocket);
 
 	for (let index = 0; index < deliveryCount; index++) {
-		seeder.emit(
-			"data",
-			`${JSON.stringify({
-				version: 1,
-				token: owner.token,
-				sessionId: owner.sessionId,
-				id: `ack-${index}`,
-				op: "deliver",
-				text: `msg-${index}`,
-				mode: "auto",
-				ack: true,
-				messageId: `m-${index}`,
-			})}\n`,
-		);
+		seeder.emit("data", `${JSON.stringify({
+			version: 1,
+			token: owner.token,
+			sessionId: owner.sessionId,
+			id: `ack-${index}`,
+			op: "deliver",
+			text: `msg-${index}`,
+			mode: "auto",
+			ack: true,
+			messageId: `m-${index}`,
+		})}\n`);
 	}
 	await allSettled.promise;
 	seeder.destroy();
 
 	accept?.(socket as unknown as transport.TerminalSocket);
+	socket.writeHook = () => {
+		for (let index = 0; index < 1001; index++) {
+			const entry = { entryId: `new-${String(index).padStart(4, "0")}`, text: `new entry ${index}` };
+			history.push(entry);
+		}
+		socket.writableLength = 0;
+	};
 	socket.emit("data", `${JSON.stringify({ version: 1, token: owner.token, sessionId: owner.sessionId, id: "sub", op: "subscribe" })}\n`);
 	await socket.replied.promise;
 
+	const expectedIds = [...Array.from({ length: 400 }, (_, index) => `e-${index}`), ...Array.from({ length: 1001 }, (_, index) => `new-${String(index).padStart(4, "0")}`)];
+	const receivedIds = socket.frames.flatMap(frame => frame.event?.kind === "history" ? (frame.event.entries ?? []).map(entry => entry.entryId) : []);
 	expect(socket.destroyed).toBe(false);
 	expect(socket.frames.find(frame => frame.id === "sub")?.ok).toBe(true);
-	const replayed = socket.frames
-		.filter(frame => frame.event?.kind === "history")
-		.reduce((count, frame) => count + (frame.event?.entries?.length ?? 0), 0);
-	expect(replayed).toBe(400);
+	expect(receivedIds).toEqual(expectedIds);
+	expect(new Set(receivedIds).size).toBe(expectedIds.length);
 
 	const deliveryFrames = socket.frames.filter(frame => frame.event?.kind === "delivery");
 	expect(deliveryFrames).toHaveLength(deliveryCount);

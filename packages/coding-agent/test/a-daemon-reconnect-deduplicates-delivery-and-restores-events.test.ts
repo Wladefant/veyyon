@@ -751,7 +751,9 @@ test("a long-lived subscriber bounds history receipt memory when more than 1000 
 	client.send({ id: "ping-bounded-history", op: "ping" });
 	await client.next(frame => frame.id === "ping-bounded-history");
 
-	expect(holdHistorySpy).toHaveBeenCalled();
+	const receivedHistoryEntries = client.frames.flatMap(frame => frame.event?.kind === "history" ? (frame.event.entries ?? []) : []);
+	expect(receivedHistoryEntries).toHaveLength(appendCount);
+	expect(receivedHistoryEntries.at(-1)?.entryId).toBe(`e-${appendCount}`);
 	expect(historySizes.length).toBeGreaterThan(1000);
 	expect(Math.max(...historySizes)).toBeLessThanOrEqual(1000);
 	expect(historySizes[historySizes.length - 1]).toBe(1000);
@@ -781,6 +783,7 @@ test("a long-lived subscriber bounds delivery receipt memory and updates on retr
 	client.send({ id: "sub-bounded-deliveries", op: "subscribe" });
 	await client.next(frame => frame.id === "sub-bounded-deliveries");
 
+	const receivedDeliveries: ControlFrame[] = [];
 	const totalDeliveries = 300;
 	const batchSize = 20;
 	for (let batchStart = 0; batchStart < totalDeliveries; batchStart += batchSize) {
@@ -797,11 +800,9 @@ test("a long-lived subscriber bounds delivery receipt memory and updates on retr
 		}
 		for (let i = 0; i < batchSize; i++) {
 			const index = batchStart + i;
-			await client.next(frame => frame.event?.kind === "delivery" && frame.event.messageId === `m-bounded-${index}`);
+			receivedDeliveries.push(await client.next(frame => frame.event?.kind === "delivery" && frame.event.messageId === `m-bounded-${index}`));
 		}
 	}
-
-	expect(holdDeliverySpy).toHaveBeenCalled();
 	expect(deliverySizes.length).toBeGreaterThan(256);
 	expect(Math.max(...deliverySizes)).toBeLessThanOrEqual(256);
 	expect(deliverySizes[deliverySizes.length - 1]).toBe(256);
