@@ -14,7 +14,7 @@ import {
 } from "@veyyon/mnemopi/core/runtime-options";
 import { logger } from "@veyyon/utils";
 import { enterIsolatedConfigRoot } from "../../../packages/utils/test/helpers/isolated-config-root";
-import { restoreEnvSnapshot } from "../../../packages/utils/test/helpers/restore-global";
+import { restoreEnvSnapshot } from "./helpers/restore-env";
 
 const OLD_ENV = { ...process.env };
 

@@ -5,7 +5,7 @@ import { extractFacts } from "@veyyon/mnemopi/core/extraction";
 import { type ChatMessage, ExtractionClient } from "@veyyon/mnemopi/core/extraction/client";
 import { getExtractionStats, resetExtractionStats } from "@veyyon/mnemopi/core/extraction/diagnostics";
 import { CallableLlmBackend, resetHostLlmBackendForTests, setHostLlmBackend } from "@veyyon/mnemopi/core/llm-backends";
-import { restoreEnvSnapshot } from "../../../packages/utils/test/helpers/restore-global";
+import { restoreEnvSnapshot } from "./helpers/restore-env";
 
 const OLD_ENV = { ...process.env };
 

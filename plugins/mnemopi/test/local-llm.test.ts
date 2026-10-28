@@ -14,7 +14,7 @@ import {
 } from "@veyyon/mnemopi/core/local-llm-config";
 import { Mnemopi } from "@veyyon/mnemopi/core/memory";
 import { withMnemopiRuntimeOptions } from "@veyyon/mnemopi/core/runtime-options";
-import { restoreEnvSnapshot } from "../../../packages/utils/test/helpers/restore-global";
+import { restoreEnvSnapshot } from "./helpers/restore-env";
 
 const OLD_ENV = { ...process.env };
 

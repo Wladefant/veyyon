@@ -13,7 +13,7 @@ import {
 import { getExtractionStats, resetExtractionStats } from "@veyyon/mnemopi/core/extraction/diagnostics";
 import { CallableLlmBackend, resetHostLlmBackendForTests, setHostLlmBackend } from "@veyyon/mnemopi/core/llm-backends";
 import { type ResolvedMnemopiRuntimeOptions, withMnemopiRuntimeOptions } from "@veyyon/mnemopi/core/runtime-options";
-import { restoreEnvSnapshot } from "../../../packages/utils/test/helpers/restore-global";
+import { restoreEnvSnapshot } from "./helpers/restore-env";
 
 const OLD_ENV = { ...process.env };
 
