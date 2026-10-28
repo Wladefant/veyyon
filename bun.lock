@@ -180,6 +180,7 @@
         "@veyyon/agent-core": "catalog:",
         "@veyyon/ai": "catalog:",
         "@veyyon/catalog": "catalog:",
+        "@veyyon/natives": "catalog:",
         "@veyyon/plugin": "catalog:",
         "@veyyon/session": "catalog:",
         "@veyyon/settings": "catalog:",

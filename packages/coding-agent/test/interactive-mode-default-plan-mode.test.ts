@@ -246,7 +246,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 
 	it("restores active tools and plan state when prior-model restoration fails on plan exit", async () => {
 		const settings = Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false });
-		settings.setModelRole("plan", "anthropic/claude-haiku-4-5:high");
+		settings.set("agent.helpers", { ...settings.get("agent.helpers"), plan: { ...settings.get("agent.helpers").plan, model: "anthropic/claude-haiku-4-5:high" } });
 		const writeTool = makeTool("write");
 		const created = createHarness(settings, {
 			extraRegistryTools: [writeTool],

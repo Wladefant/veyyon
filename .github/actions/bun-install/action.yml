@@ -1,9 +1,9 @@
 name: "bun install (shared cache)"
 description: >
-   Ensure bun is on PATH, run `bun install --frozen-lockfile` with the
-   actions/cache-backed package store, then materialize the gitignored source
-   codegen so the tree is runnable from source. bun setup is skipped when the
-   runner already ships it and only fetched on runners that lack it.
+   Ensure the root packageManager-pinned bun version is on PATH, run
+   `bun install --frozen-lockfile` with the actions/cache-backed package store,
+   then materialize the gitignored source codegen so the tree is runnable.
+   A missing or mismatched runner bun is installed in a job-local directory.
 
 runs:
    using: composite
@@ -12,31 +12,47 @@ runs:
         id: env
         shell: bash
         run: |
-           # Only fetch bun when the runner doesn't already provide it, so we
-           # don't re-download bun from GitHub releases on every job.
-           if command -v bun >/dev/null 2>&1; then
-             echo "setup_bun=false" >> "$GITHUB_OUTPUT"
-             echo "bun present: $(bun --version)"
-           else
-             echo "setup_bun=true" >> "$GITHUB_OUTPUT"
-           fi
-      - name: Install bun when absent
-        if: steps.env.outputs.setup_bun == 'true'
-        shell: bash
-        run: |
-           # The pinned version has ONE owner, `packageManager` in the root
-           # package.json: it is what `oven-sh/setup-bun` reads when a workflow
-           # passes no version, and what scripts/test-sandbox/run.sh builds its
-           # guest from. A literal here would be a second pin to forget on the
-           # next bump, and the version is read here rather than passed between
-           # steps so the step is runnable (and tested) on its own.
+           # Read the only bun version pin from the root package manifest.
            version="$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"bun@\([^"]*\)".*/\1/p' package.json | head -n1)"
            if [ -z "$version" ]; then
              echo "::error title=bun pin missing::package.json declares no \"packageManager\": \"bun@<version>\"" >&2
              exit 1
            fi
            pin="bun-v${version}"
-           export BUN_INSTALL="${HOME}/.bun"
+           installed=""
+           if command -v bun >/dev/null 2>&1; then
+             installed="$(bun --version)"
+           fi
+           if [ "$installed" = "$version" ]; then
+             echo "setup_bun=false" >> "$GITHUB_OUTPUT"
+             echo "bun present at pinned version: $installed"
+           else
+             bun_install="${RUNNER_TEMP}/bun-${pin}"
+             echo "setup_bun=true" >> "$GITHUB_OUTPUT"
+             echo "BUN_INSTALL=${bun_install}" >> "$GITHUB_ENV"
+             if [ "${RUNNER_OS:-}" = "Windows" ]; then
+               cygpath -w "${bun_install}/bin" >> "$GITHUB_PATH"
+             else
+               echo "${bun_install}/bin" >> "$GITHUB_PATH"
+             fi
+             echo "bun ${installed:-missing}; installing pinned ${version} in job-local storage"
+           fi
+      - name: Install bun when absent or mismatched
+        if: steps.env.outputs.setup_bun == 'true'
+        shell: bash
+        run: |
+           # The version and install directory are selected by the detection
+           # step from the root packageManager pin and RUNNER_TEMP.
+           version="$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"bun@\([^"]*\)".*/\1/p' package.json | head -n1)"
+           if [ -z "$version" ]; then
+             echo "::error title=bun pin missing::package.json declares no \"packageManager\": \"bun@<version>\"" >&2
+             exit 1
+           fi
+           pin="bun-v${version}"
+           if [ -z "${BUN_INSTALL:-}" ]; then
+             echo "::error title=bun install directory missing::the detection step did not provide BUN_INSTALL" >&2
+             exit 1
+           fi
            attempt=1
            while ! curl -fsSL https://bun.sh/install | bash -s "${pin}"; do
              if [ "$attempt" -ge 3 ]; then

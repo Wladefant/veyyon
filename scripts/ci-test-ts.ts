@@ -476,6 +476,7 @@ export const repoScriptTests = [
 	"scripts/affected-workspace-selection-keeps-safe-coverage.test.ts",
 	"scripts/a-cloudflare-bucket-selection-preserves-test-files.test.ts",
 	"scripts/a-failing-test-chunk-does-not-stop-the-sequential-run.test.ts",
+	"scripts/a-file-open-waits-out-a-lease.test.ts",
 	"scripts/release-binaries-bytecode.test.ts",
 	"scripts/fix-changelogs.test.ts",
 	"scripts/require-changelog.test.ts",

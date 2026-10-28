@@ -1,7 +1,8 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
-// Owners, not the `@veyyon/utils` barrel: 1 module against 74.
+// Owners, not the `@veyyon/utils` barrel: 2 modules against 74.
 import { isEnoent } from "@veyyon/utils/fs-error";
+import { readFileText } from "@veyyon/utils/fs-io";
 import { theme } from "../theme/theme-binding";
 import type { Theme } from "../theme/theme-class";
 import { formatPathRelativeToCwd, resolveToCwd } from "../tools/core/path-utils";
@@ -569,7 +570,7 @@ function parseSymbolSpec(spec: string): { symbol: string; occurrence: number } {
 export async function resolveSymbolColumn(filePath: string, line: number, symbolSpec?: string): Promise<number> {
 	const lineNumber = Math.max(1, line);
 	try {
-		const fileText = await Bun.file(filePath).text();
+		const fileText = await readFileText(filePath);
 		const lines = fileText.split("\n");
 		const targetLine = lines[lineNumber - 1] ?? "";
 		if (!symbolSpec) {
@@ -600,7 +601,7 @@ export async function readLocationContext(filePath: string, line: number, contex
 	const targetLine = Math.max(1, line);
 	const surrounding = Math.max(0, contextLines);
 	try {
-		const fileText = await Bun.file(filePath).text();
+		const fileText = await readFileText(filePath);
 		const lines = fileText.split("\n");
 		if (lines.length === 0) return [];
 

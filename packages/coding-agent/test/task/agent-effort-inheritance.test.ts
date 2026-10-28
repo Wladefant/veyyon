@@ -56,14 +56,14 @@ describe("task agent effort inheritance", () => {
 		tempDir[Symbol.dispose]();
 	});
 
-	it("pins model, lane effort and child routing across a reload during dispatch", async () => {
+	it("pins model and lane effort across reload while child defaultModel stays startup-only", async () => {
 		const file = tempDir.join("config.yml");
 		const writeRouting = (model: string, effort: string) =>
 			fs.writeFile(
 				file,
 				JSON.stringify({
 					agent: { agents: { task: { model, thinkingLevel: effort } } },
-					modelRoles: { worker: model },
+					defaultModel: model,
 				}),
 			);
 		await writeRouting("openai/old", "low");
@@ -82,7 +82,7 @@ describe("task agent effort inheritance", () => {
 			// This is the real executor's destination-settings fork, after the
 			// deterministic barrier where a reload can land.
 			const child = await executorModule.createSubagentSettingsForCwd(options.settings!, tempDir.path());
-			bindings.push([options.modelOverride, options.thinkingLevel, child.getModelRole("worker")]);
+			bindings.push([options.modelOverride, options.thinkingLevel, child.get("defaultModel")]);
 			return result(options);
 		});
 		const tool = await TaskTool.create(
@@ -107,7 +107,8 @@ describe("task agent effort inheritance", () => {
 				}),
 			]);
 			await writeRouting("openai/new", "high");
-			await settings.reloadConfig();
+			const reload = await settings.reloadConfig();
+			expect(reload.restartRequired).toContain("defaultModel");
 		} finally {
 			resume.resolve();
 			await first;
@@ -118,7 +119,7 @@ describe("task agent effort inheritance", () => {
 		});
 		expect(bindings).toEqual([
 			[["openai/old"], "low", "openai/old"],
-			[["openai/new"], "high", "openai/new"],
+			[["openai/new"], "high", "openai/old"],
 		]);
 	}, 30000);
 

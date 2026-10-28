@@ -218,6 +218,8 @@ const CONTROLLER_ENTRY_POINTS = {
 	releaseDetachedTranscriptAnchors: "inert",
 	inheritDisplaceableTodo: "inert",
 	sendCompletionNotification: "inert",
+	// Holds events until a replay settles; the events it holds still run through `handleEvent`.
+	deferEventsUntil: "inert",
 } as const;
 
 const HELPER_ENTRY_POINTS = {
@@ -226,6 +228,7 @@ const HELPER_ENTRY_POINTS = {
 	transcript: "inert",
 	renderSessionContext: "mounts-tool-cards",
 	renderInitialMessages: "mounts-tool-cards",
+	replayInitialMessages: "mounts-tool-cards",
 	// Asserted inert below rather than assumed: its `toolResult` case is a
 	// deliberate no-op and its `assistant` case renders prose only.
 	addMessageToChat: "inert",
@@ -259,6 +262,7 @@ const DRIVEN_ENTRY_POINTS: readonly string[] = [
 	"EventController.handleEvent",
 	"UiHelpers.renderSessionContext",
 	"UiHelpers.renderInitialMessages",
+	"UiHelpers.replayInitialMessages",
 ];
 
 function createFixture(opts: { isStreaming?: boolean; messages?: AgentMessage[] } = {}) {
@@ -284,7 +288,7 @@ function createFixture(opts: { isStreaming?: boolean; messages?: AgentMessage[] 
 		chatContainer,
 		pendingTools: new Map(),
 		settledToolCalls: new Set<string>(),
-		ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() },
+		ui: { requestRender: vi.fn(), requestComponentRender: vi.fn(), terminal: { columns: 100 } },
 		statusLine: {
 			invalidate: vi.fn(),
 			markActivityStart: vi.fn(),
@@ -596,30 +600,32 @@ describe("a settled tool call can never re-mount as a live card", () => {
 	});
 
 	/**
-	 * The same rebuild reached through the caller production actually uses.
-	 * `renderInitialMessages` is what a focus attach, an overlay close and a
-	 * resume run; it clears the transcript and replays the session's own context.
-	 * Driving only the inner method would leave this path's clear-and-re-derive
+	 * The same rebuild reached through the callers production actually uses.
+	 * `renderInitialMessages` is what a focus attach and an overlay close run, and
+	 * `replayInitialMessages` is what a resume runs; both replay the session's own
+	 * context. Driving only the inner method would leave these paths' clear-and-re-derive
 	 * untested, which is exactly the shape of gap that shipped the defect.
 	 */
-	for (const toolName of ["ask", "read", "bash"]) {
-		it(`freezes a rebuilt '${toolName}' card when the rebuild ran through renderInitialMessages`, async () => {
-			const { helpers, chatContainer, controller } = createFixture({
-				isStreaming: false,
-				messages: [assistantCalling(toolName), toolResultMessage(toolName)],
+	for (const path of ["renderInitialMessages", "replayInitialMessages"] as const) {
+		for (const toolName of ["ask", "read", "bash"]) {
+			it(`freezes a rebuilt '${toolName}' card when the rebuild ran through ${path}`, async () => {
+				const { helpers, chatContainer, controller } = createFixture({
+					isStreaming: false,
+					messages: [assistantCalling(toolName), toolResultMessage(toolName)],
+				});
+
+				await helpers[path]();
+
+				const rebuilt = toolCardBytes(chatContainer);
+				expect(rebuilt.length).toBe(1);
+
+				for (const kind of REPLAYABLE) {
+					for (const event of replayFor(kind, toolName)) await controller.handleEvent(event);
+				}
+
+				expect(toolCardBytes(chatContainer)).toEqual(rebuilt);
 			});
-
-			helpers.renderInitialMessages();
-
-			const rebuilt = toolCardBytes(chatContainer);
-			expect(rebuilt.length).toBe(1);
-
-			for (const kind of REPLAYABLE) {
-				for (const event of replayFor(kind, toolName)) await controller.handleEvent(event);
-			}
-
-			expect(toolCardBytes(chatContainer)).toEqual(rebuilt);
-		});
+		}
 	}
 
 	/**

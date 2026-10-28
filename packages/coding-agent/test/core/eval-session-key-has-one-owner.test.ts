@@ -1,11 +1,11 @@
 /**
  * One owner for the key a retained eval kernel is stored under, and the two divergences that cost.
  *
- * WHY THIS SUITE EXISTS. A managed eval kernel is retained per (session, cwd, interpreter) so the
- * second cell can see what the first defined. That key is therefore the identity of the kernel: two
- * spellings of the same triple mean two interpreters running, twice the memory, and a cell that cannot
- * see the variable it just set. Python, Ruby and Julia each had their OWN copy of the key builder, and
- * copies drift:
+ * WHY THIS SUITE EXISTS. A managed eval kernel is retained per (session, runtime) so the second cell
+ * can see what the first defined. That key is therefore the identity of the kernel: two spellings of
+ * the same pair mean two interpreters running, twice the memory, and a cell that cannot see the
+ * variable it just set. Python, Ruby and Julia each had their OWN copy of the key builder, and copies
+ * drift:
  *
  *  - Python and Ruby canonicalised the interpreter path with `realpath`, so `/usr/bin/python3` and the
  *    versioned binary behind it keyed one session. Julia only called `path.resolve`, which does not
@@ -35,36 +35,65 @@ function key(options: {
 	cwd?: string;
 	interpreter?: string;
 	resolveInterpreterPath?: (interpreter: string, cwd: string) => string;
+	resolveDefaultRuntimeScope?: (cwd: string) => string;
 }): string {
 	return buildEvalSessionKey({
 		sessionId: options.sessionId ?? "python:session-1",
 		cwd: options.cwd ?? "/proj",
 		interpreter: options.interpreter,
 		resolveInterpreterPath: options.resolveInterpreterPath ?? asGiven,
+		resolveDefaultRuntimeScope: options.resolveDefaultRuntimeScope,
 	});
 }
 
-describe("the cwd in the key", () => {
-	/** A relative and an absolute spelling of one directory must be one kernel, not two. */
-	it("is resolved, so two spellings of one directory agree", () => {
-		const absolute = key({ cwd: path.resolve("proj/sub") });
-		const relative = key({ cwd: "proj/sub" });
-
-		expect(relative).toBe(absolute);
+describe("the cwd and the key", () => {
+	/**
+	 * THE kernel leak. A cwd in the key started a kernel per directory a session moved through and kept
+	 * every earlier one alive until the session ended. Each runner applies the cwd of every cell, so a
+	 * directory change keeps the one kernel.
+	 */
+	it("leaves the cwd out, so one session keeps one kernel in every directory", () => {
+		expect(key({ cwd: "/proj/a" })).toBe(key({ cwd: "/proj/b" }));
 	});
 
-	it("collapses a traversal to the directory it names", () => {
-		expect(key({ cwd: "/proj/sub/.." })).toBe(key({ cwd: "/proj" }));
+	/** A project venv selects a different Python, which a kernel cannot switch to after it started. */
+	it("keeps two directories apart when the cwd selects a different default runtime", () => {
+		const venvOf = (cwd: string): string => (cwd === path.resolve("/proj/a") ? "/proj/a/.venv" : "");
+
+		expect(key({ cwd: "/proj/a", resolveDefaultRuntimeScope: venvOf })).not.toBe(
+			key({ cwd: "/proj/b", resolveDefaultRuntimeScope: venvOf }),
+		);
+		expect(key({ cwd: "/proj/b", resolveDefaultRuntimeScope: venvOf })).toBe(
+			key({ cwd: "/proj/c", resolveDefaultRuntimeScope: venvOf }),
+		);
+	});
+
+	it("hands the default-runtime resolver the resolved cwd", () => {
+		const seen: string[] = [];
+
+		key({
+			cwd: "proj/sub/..",
+			resolveDefaultRuntimeScope: cwd => {
+				seen.push(cwd);
+				return "";
+			},
+		});
+
+		expect(seen).toEqual([path.resolve("proj")]);
+	});
+
+	/** A named interpreter is the runtime, so a project venv in the cwd does not change the kernel. */
+	it("ignores the default runtime when an interpreter is named", () => {
+		const venvOf = (cwd: string): string => `${cwd}/.venv`;
+
+		expect(key({ cwd: "/proj/a", interpreter: "/usr/bin/python3", resolveDefaultRuntimeScope: venvOf })).toBe(
+			key({ cwd: "/proj/b", interpreter: "/usr/bin/python3", resolveDefaultRuntimeScope: venvOf }),
+		);
 	});
 
 	it("is exported on its own, because the executors resolve their cwd before anything else", () => {
 		expect(normalizeSessionCwd("proj/sub")).toBe(path.resolve("proj/sub"));
 		expect(normalizeSessionCwd("/proj/./sub")).toBe(path.resolve("/proj/sub"));
-	});
-
-	/** Two projects are two kernels. The obvious half, asserted so a broken key cannot merge them. */
-	it("keeps different directories apart", () => {
-		expect(key({ cwd: "/proj/a" })).not.toBe(key({ cwd: "/proj/b" }));
 	});
 });
 
@@ -99,7 +128,7 @@ describe("the interpreter in the key", () => {
 	/** No interpreter named means the runtime chooses, and every such call shares one key. */
 	it("is empty when the caller named none", () => {
 		expect(key({})).toBe(key({ interpreter: undefined }));
-		expect(key({})).toBe("python:session-1\0/proj\0");
+		expect(key({})).toBe("python:session-1\0\0");
 	});
 
 	/**
@@ -142,16 +171,16 @@ describe("the separator between the parts", () => {
 	 * cannot be confused. This is the test that fails if someone "tidies" the separator into a colon.
 	 */
 	it("is a NUL byte, which cannot appear in a session id or a path", () => {
-		const built = key({ sessionId: "julia:s1", cwd: "/proj", interpreter: undefined });
+		const built = key({ sessionId: "julia:s1", interpreter: "/opt/julia/bin/julia" });
 
-		expect(built).toBe("julia:s1\0/proj\0");
+		expect(built).toBe("julia:s1\0/opt/julia/bin/julia\0");
 		expect(built.split("\0")).toHaveLength(3);
 	});
 
-	it("keeps two triples apart that a colon separator would merge", () => {
-		// With `::` these two both spell `a::b::c`. With NUL they cannot.
-		const first = key({ sessionId: "a", cwd: "/b::c", interpreter: undefined });
-		const second = key({ sessionId: "a::b", cwd: "/c", interpreter: undefined });
+	it("keeps two pairs apart that a colon separator would merge", () => {
+		// With `::` these two both spell `a::/b::/c::`. With NUL they cannot.
+		const first = key({ sessionId: "a", interpreter: "/b::/c" });
+		const second = key({ sessionId: "a::/b", interpreter: "/c" });
 
 		expect(first).not.toBe(second);
 	});

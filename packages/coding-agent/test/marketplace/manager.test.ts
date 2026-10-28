@@ -3,6 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { runTrustCommand } from "@veyyon/coding-agent/cli/trust-cli";
+import { listClaudePluginRoots } from "@veyyon/coding-agent/discovery/helpers";
 import { listVeyyonExtensionRoots } from "@veyyon/coding-agent/discovery/veyyon-extension-roots";
 import { getEnabledPlugins } from "@veyyon/coding-agent/extensibility/plugins/loader";
 import { PluginManager } from "@veyyon/coding-agent/extensibility/plugins/manager";
@@ -72,7 +74,7 @@ function createTestContext(): TestContext {
 	const dirs = {
 		mktRegistry: path.join(tmpDir, "marketplaces.json"),
 		instRegistry: path.join(tmpDir, "installed_plugins.json"),
-		projectInstRegistry: path.join(tmpDir, "project_installed_plugins.json"),
+		projectInstRegistry: path.join(tmpDir, "project", "installed_plugins.json"),
 		mktCache: path.join(tmpDir, "cache", "marketplaces"),
 		plugCache: path.join(tmpDir, "cache", "plugins"),
 	};
@@ -395,12 +397,14 @@ describe("MarketplaceManager", () => {
 		}
 	});
 
-	it("installPlugin with scope:project exposes the marketplace package to the runtime loader", async () => {
+	it("project installation requires approval and both discovery routes revoke changed payloads", async () => {
 		const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-mgr-home-"));
 		const projectAnchor = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-mgr-project-"));
 		try {
 			const userPluginsDir = path.join(tmpHome, CONFIG_DIR_NAME, "plugins");
 			const projectPluginsDir = path.join(projectAnchor, CONFIG_DIR_NAME, "plugins");
+			const agentDir = path.join(tmpHome, "profile", "agent");
+			fs.mkdirSync(path.join(projectAnchor, ".git"), { recursive: true });
 			fs.mkdirSync(projectPluginsDir, { recursive: true });
 			const manager = new MarketplaceManager({
 				marketplacesRegistryPath: path.join(tmpHome, CONFIG_DIR_NAME, "marketplaces.json"),
@@ -411,17 +415,41 @@ describe("MarketplaceManager", () => {
 			});
 
 			await manager.addMarketplace(FIXTURE_DIR);
-			await manager.installPlugin("hello-plugin", "test-marketplace", { scope: "project" });
+			const installed = await manager.installPlugin("hello-plugin", "test-marketplace", { scope: "project" });
+			const registryPath = path.join(projectPluginsDir, "installed_plugins.json");
+			const registry = await readInstalledPluginsRegistry(registryPath);
+			expect(registry.plugins["hello-plugin@test-marketplace"]?.[0].installPath).toBe(installed.installPath);
+			expect(installed.installPath).toBe(
+				path.join(projectPluginsDir, "cache", "plugins", "test-marketplace___hello-plugin___1.0.0"),
+			);
 
-			// Project-scope install must surface via the runtime loader when cwd is inside the anchor.
-			const enabled = await getEnabledPlugins(projectAnchor, { home: tmpHome });
-			expect(enabled.map(plugin => plugin.name)).toEqual(["hello-plugin"]);
-			expect(enabled[0].path).toBe(path.join(projectPluginsDir, "node_modules", "hello-plugin"));
+			const assertDiscovered = async (expected: boolean) => {
+				const opts = { home: tmpHome, pluginsRoot: userPluginsDir, agentDir };
+				const enabled = await getEnabledPlugins(projectAnchor, opts);
+				expect(enabled.filter(plugin => plugin.scope === "project").map(plugin => plugin.path)).toEqual(
+					expected ? [installed.installPath] : [],
+				);
+				const roots = await listClaudePluginRoots(tmpHome, projectAnchor, userPluginsDir, agentDir);
+				expect(roots.roots.filter(root => root.scope === "project").map(root => root.path)).toEqual(
+					expected ? [installed.installPath] : [],
+				);
+			};
+			const approve = () => runTrustCommand({
+				cwd: projectAnchor, agentDir, action: "approve", paths: [registryPath],
+			});
+			// Exercise real install, serialization, approval and both loaders without clearing their caches.
+			await assertDiscovered(false);
+			await approve();
+			await assertDiscovered(true);
+			fs.appendFileSync(path.join(installed.installPath, "extensions", "index.ts"), "// changed payload\n");
+			await assertDiscovered(false);
+			await approve();
+			await assertDiscovered(true);
 
 			// The runtime symlink and lockfile must live under the project plugins root.
 			const projectLink = path.join(projectPluginsDir, "node_modules", "hello-plugin");
 			expect(fs.realpathSync(projectLink)).toBe(
-				fs.realpathSync(path.join(userPluginsDir, "cache", "plugins", "test-marketplace___hello-plugin___1.0.0")),
+				fs.realpathSync(installed.installPath),
 			);
 			const projectLock = await Bun.file(path.join(projectPluginsDir, "veyyon-plugins.lock.json")).json();
 			expect(projectLock.plugins["hello-plugin"]).toEqual({
@@ -590,7 +618,7 @@ describe("MarketplaceManager", () => {
 		expect(fs.existsSync(instEntry.installPath)).toBe(true);
 
 		// Persisted to the project registry with project scope — and absent from the user registry.
-		const projectReg = await readInstalledPluginsRegistry(path.join(ctx.tmpDir, "project_installed_plugins.json"));
+		const projectReg = await readInstalledPluginsRegistry(path.join(ctx.tmpDir, "project", "installed_plugins.json"));
 		expect(projectReg.plugins["hello-plugin@test-marketplace"]?.[0].scope).toBe("project");
 		const userReg = await readInstalledPluginsRegistry(path.join(ctx.tmpDir, "installed_plugins.json"));
 		expect(userReg.plugins["hello-plugin@test-marketplace"]).toBeUndefined();
@@ -752,23 +780,23 @@ describe("MarketplaceManager", () => {
 		const userReg = await readInstalledPluginsRegistry(path.join(ctx.tmpDir, "installed_plugins.json"));
 		expect(userReg.plugins["hello-plugin@test-marketplace"]).toBeUndefined();
 
-		const projectReg = await readInstalledPluginsRegistry(path.join(ctx.tmpDir, "project_installed_plugins.json"));
+		const projectReg = await readInstalledPluginsRegistry(path.join(ctx.tmpDir, "project", "installed_plugins.json"));
 		expect(projectReg.plugins["hello-plugin@test-marketplace"]).toBeDefined();
 		expect(projectReg.plugins["hello-plugin@test-marketplace"]![0].scope).toBe("project");
 	});
 
-	it("uninstallPlugin does not delete cache dir when other scope still references it", async () => {
+	it("uninstallPlugin removes only its own scope's payload", async () => {
 		await ctx.manager.addMarketplace(FIXTURE_DIR);
 		const userEntry = await ctx.manager.installPlugin("hello-plugin", "test-marketplace", {
 			scope: "user",
 		});
-		// Same plugin+version → same cache path for the project-scope install.
-		await ctx.manager.installPlugin("hello-plugin", "test-marketplace", { scope: "project" });
+		const projectEntry = await ctx.manager.installPlugin("hello-plugin", "test-marketplace", { scope: "project" });
+		expect(projectEntry.installPath).not.toBe(userEntry.installPath);
 
 		await ctx.manager.uninstallPlugin("hello-plugin@test-marketplace", "user");
 
-		// Cache must still exist — project scope still references it.
-		expect(fs.existsSync(userEntry.installPath)).toBe(true);
+		expect(fs.existsSync(userEntry.installPath)).toBe(false);
+		expect(fs.existsSync(projectEntry.installPath)).toBe(true);
 	});
 
 	it("listInstalledPlugins marks user entry as shadowed when project entry exists for same ID", async () => {

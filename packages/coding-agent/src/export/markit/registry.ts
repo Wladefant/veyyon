@@ -1,4 +1,5 @@
 // Adapted from markit-ai (MIT). See ./NOTICE.
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { DocxConverter } from "./converters/docx";
 import { EpubConverter } from "./converters/epub";
@@ -30,7 +31,7 @@ export class Markit {
 	}
 
 	async convertFile(filePath: string, extra?: { imageDir?: string }): Promise<ConversionResult> {
-		const buffer = Buffer.from(await Bun.file(filePath).arrayBuffer());
+		const buffer = await fs.readFile(filePath);
 		const streamInfo: StreamInfo = {
 			localPath: filePath,
 			extension: path.extname(filePath).toLowerCase(),

@@ -539,9 +539,9 @@ function appendMatchLines(
  * The `  meta:` line listing a match's bindings, sorted by name; undefined when it has none.
  *
  * An ast-grep binding is a source range inside the match printed just above, so its value
- * restates bytes already delivered. A multi-node capture is joined onto one line, which makes
- * `$$$BODY` a second copy of the whole body; a single-node capture spanning lines arrives with its
- * newlines and entered the body carrying no line number at all, so no hashline anchor covered it.
+ * restates bytes already delivered. A multi-node capture is the source it spans, which makes
+ * `$$$BODY` a second copy of the whole body; a capture spanning lines arrives with its newlines
+ * and entered the body carrying no line number at all, so no hashline anchor covered it.
  * Over five patterns of this repository the bindings cost 8,414 tokens against 9,052 tokens of
  * match text. A value stays while it is short enough to be a convenience; past that the name
  * alone says the capture bound and the lines above hold it.

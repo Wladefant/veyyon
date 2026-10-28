@@ -18,3 +18,8 @@ export function shouldPrepaintLaunchCard(parsed: Args): boolean {
 	if (parsed.print || parsed.mode !== undefined) return false;
 	return process.stdin.isTTY === true && process.stdout.isTTY === true;
 }
+
+/** A bare `--resume` without `--fork`: the launch opens the session picker before any session exists. */
+export function opensSessionPicker(parsed: Pick<Args, "resume" | "fork">): boolean {
+	return parsed.resume === true && !parsed.fork;
+}

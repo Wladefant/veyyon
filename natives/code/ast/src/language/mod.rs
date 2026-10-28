@@ -6,7 +6,7 @@
 use std::{borrow::Cow, collections::HashMap, fmt, path::Path, sync::LazyLock};
 
 use ast_grep_core::{
-	Doc, Language, Node,
+	AstGrep, Doc, Language, Node,
 	matcher::{KindMatcher, Pattern, PatternBuilder, PatternError},
 	tree_sitter::{LanguageExt, StrDoc, TSLanguage, TSRange},
 };
@@ -172,6 +172,150 @@ impl LanguageExt for SupportLang {
 		}
 	}
 }
+
+/// A language as it parses a whole source file.
+///
+/// The same as its [`SupportLang`] for every language but PHP. A PHP source
+/// file parses under [`SupportLang::document_language`], and a pattern this
+/// type builds is made of that grammar's node kinds, so a search or rewrite
+/// over files builds its patterns and parses its files with one of these. A
+/// fragment of PHP code with no opening tag, which is what `astMatch` receives,
+/// parses under the PHP-only grammar of [`SupportLang::Php`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DocumentLang(SupportLang);
+
+/// A grammar a pattern is built for and a source parsed with: a
+/// [`SupportLang`] for a code fragment, a [`DocumentLang`] for a whole file.
+pub trait Grammar: LanguageExt + Copy {
+	/// The language this grammar parses.
+	fn support_lang(self) -> SupportLang;
+}
+
+impl Grammar for SupportLang {
+	fn support_lang(self) -> SupportLang {
+		self
+	}
+}
+
+impl Grammar for DocumentLang {
+	fn support_lang(self) -> SupportLang {
+		self.0
+	}
+}
+
+impl Language for DocumentLang {
+	fn kind_to_id(&self, kind: &str) -> u16 {
+		self.get_ts_language().id_for_node_kind(kind, true)
+	}
+
+	fn field_to_id(&self, field: &str) -> Option<u16> {
+		self
+			.get_ts_language()
+			.field_id_for_name(field)
+			.map(|f| f.get())
+	}
+
+	fn expando_char(&self) -> char {
+		self.0.expando_char()
+	}
+
+	fn pre_process_pattern<'q>(&self, query: &'q str) -> Cow<'q, str> {
+		self.0.pre_process_pattern(query)
+	}
+
+	fn build_pattern(&self, builder: &PatternBuilder) -> Result<Pattern, PatternError> {
+		match self.0 {
+			SupportLang::Php => build_php_document_pattern(*self, builder),
+			_ => builder.build(|src| StrDoc::try_new(src, *self)),
+		}
+	}
+
+	fn from_path<P: AsRef<Path>>(path: P) -> Option<Self> {
+		from_extension(path.as_ref()).map(Self)
+	}
+}
+
+impl LanguageExt for DocumentLang {
+	fn get_ts_language(&self) -> TSLanguage {
+		self.0.document_language()
+	}
+
+	fn injectable_languages(&self) -> Option<&'static [&'static str]> {
+		self.0.injectable_languages()
+	}
+
+	fn extract_injections<L: LanguageExt>(
+		&self,
+		root: Node<StrDoc<L>>,
+	) -> HashMap<String, Vec<TSRange>> {
+		self.0.extract_injections(root)
+	}
+}
+
+/// Build a PHP pattern out of the full grammar's node kinds.
+///
+/// That grammar reads text before an opening tag as HTML, so the pattern is
+/// parsed after one. A builder with a selector finds its node in that tree as
+/// in any other. A builder without one takes the node a single-node pattern
+/// consists of, and the root's first child is now always the opening tag, so
+/// [`single_after_open_tag`] takes that node from the children after the tag.
+///
+/// `PatternBuilder` keeps its source and selector private and lends the
+/// source only to the parse callback of `build`. Building an empty tree first
+/// shows which builder this is: without a selector that fails with
+/// `NoContent`, and with one it never does.
+fn build_php_document_pattern(
+	lang: DocumentLang,
+	builder: &PatternBuilder,
+) -> Result<Pattern, PatternError> {
+	let parse = |src: &str| StrDoc::try_new(&format!("<?php {src}"), lang);
+	if !matches!(builder.build(|_| StrDoc::try_new("", lang)), Err(PatternError::NoContent(_))) {
+		return builder.build(parse);
+	}
+	let mut parsed = None;
+	let stopped = builder.build(|src| -> Result<StrDoc<DocumentLang>, String> {
+		parsed = Some((src.to_owned(), parse(src)?));
+		// `build` would take the opening tag and the pattern for two nodes.
+		Err(String::new())
+	});
+	let Some((src, doc)) = parsed else {
+		return stopped;
+	};
+	single_after_open_tag(&AstGrep::doc(doc), src)
+}
+
+/// The single-node pattern after the opening tag, by the rule ast-grep applies
+/// to the root of a pattern without a selector: the root consists of one node,
+/// and that node is descended for as long as it consists of one node too.
+fn single_after_open_tag(
+	root: &AstGrep<StrDoc<DocumentLang>>,
+	src: String,
+) -> Result<Pattern, PatternError> {
+	let program = root.root();
+	let mut content = program.children().skip(1).peekable();
+	if content.peek().is_none() {
+		return Err(PatternError::NoContent(src));
+	}
+	let Some(mut node) = only_node(content) else {
+		return Err(PatternError::MultipleNode(src));
+	};
+	while let Some(child) = only_node(node.children()) {
+		node = child;
+	}
+	Ok(Pattern::from(node))
+}
+
+/// The node `children` consist of: one child, or one followed by a missing or
+/// kindless node, which some grammars append.
+fn only_node<'r, D: Doc>(mut children: impl Iterator<Item = Node<'r, D>>) -> Option<Node<'r, D>> {
+	let first = children.next()?;
+	match (children.next(), children.next()) {
+		(None, _) => Some(first),
+		(Some(second), None) if second.is_missing() || second.kind().is_empty() => Some(first),
+		_ => None,
+	}
+}
+
 fn extract_html_injections<L: LanguageExt>(root: Node<StrDoc<L>>) -> HashMap<String, Vec<TSRange>> {
 	let lang = root.lang();
 	let mut map = HashMap::new();
@@ -308,16 +452,21 @@ impl SupportLang {
 	/// Grammar for a whole source file.
 	///
 	/// Equal to [`LanguageExt::get_ts_language`] for every language but PHP. A
-	/// structural pattern is PHP code without an opening `<?php` tag, which
-	/// only the PHP-only grammar parses. A file can close the tag with `?>` and
-	/// continue as HTML, which only the full grammar parses: the PHP-only
-	/// grammar reports that HTML as a syntax error, after error recovery that
-	/// costs 767ms on a 191KB plugin source the full grammar parses in 18ms.
+	/// fragment of PHP code without an opening `<?php` tag parses only under
+	/// the PHP-only grammar. A file can close the tag with `?>` and continue as
+	/// HTML, which only the full grammar parses: the PHP-only grammar reports
+	/// that HTML as a syntax error, after error recovery that costs 767ms on a
+	/// 191KB plugin source the full grammar parses in 18ms.
 	pub fn document_language(self) -> TSLanguage {
 		match self {
 			Self::Php => tree_sitter_php::LANGUAGE_PHP.into(),
 			lang => lang.get_ts_language(),
 		}
+	}
+
+	/// This language as it parses a whole source file.
+	pub const fn document(self) -> DocumentLang {
+		DocumentLang(self)
 	}
 
 	/// The canonical lowercase name used as a stable key in alias maps,

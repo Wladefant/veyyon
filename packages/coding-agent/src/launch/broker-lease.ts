@@ -50,6 +50,22 @@ const LEGACY_LEASE_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
  * margin before that counts as proof the PID belongs to an earlier boot.
  */
 const LEGACY_BOOT_MARGIN_MS = 10 * 60 * 1_000;
+/** True while the broker running as `pid` still holds the lease in `runtimeDir`. */
+export async function brokerHoldsLease(runtimeDir: string, pid: number): Promise<boolean> {
+	try {
+		const raw: unknown = JSON.parse(await fs.readFile(daemonBrokerLeasePath(runtimeDir), "utf8"));
+		return (
+			typeof raw === "object" &&
+			raw !== null &&
+			"pid" in raw &&
+			raw.pid === pid &&
+			isProcessInstanceAlive(pid, "processIdentity" in raw && typeof raw.processIdentity === "string" ? raw.processIdentity : null)
+		);
+	} catch (error) {
+		if (isEnoent(error)) return false;
+		throw error;
+	}
+}
 
 /**
  * `owner`: an authenticated ping answered as the recorded PID.

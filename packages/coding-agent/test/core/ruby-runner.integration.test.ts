@@ -202,4 +202,26 @@ describe.skipIf(!SHOULD_RUN)("ruby runner subprocess", () => {
 			await kernel.shutdown();
 		}
 	});
+
+	/** One kernel serves a session in every directory, so the previous project leaves the load path. */
+	it("moves the cwd and the front of $LOAD_PATH with each cell", async () => {
+		using first = TempDir.createSync("@ruby-runner-cwd-first-");
+		using second = TempDir.createSync("@ruby-runner-cwd-second-");
+		const kernel = await RubyKernel.start({ cwd: first.path() });
+		const probe = [
+			`puts File.identical?(Dir.pwd, ${JSON.stringify(second.path())})`,
+			`puts $LOAD_PATH.first == ${JSON.stringify(second.path())}`,
+			`puts $LOAD_PATH.include?(${JSON.stringify(first.path())})`,
+			"puts $kept + 1",
+		].join("\n");
+		try {
+			await executeRubyWithKernel(kernel, "$kept = 41", { cwd: first.path() });
+			const result = await executeRubyWithKernel(kernel, probe, { cwd: second.path() });
+
+			expect(result.exitCode).toBe(0);
+			expect(result.output.trim().split("\n")).toEqual(["true", "true", "false", "42"]);
+		} finally {
+			await kernel.shutdown();
+		}
+	});
 });

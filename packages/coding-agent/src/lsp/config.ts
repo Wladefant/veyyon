@@ -434,6 +434,10 @@ function fileConfigSource(filePath: string): ConfigSource {
 }
 
 function readMarketplaceLspConfig(root: ClaudePluginRoot): NormalizedConfig | null {
+	// Project approval hashes only installPath. Ancestor catalogs are outside that
+	// payload and must not supply executable commands, even through an in-payload path.
+	if (root.scope === "project") return null;
+
 	const catalogPaths = [
 		path.resolve(root.path, "..", "..", "marketplace.json"),
 		path.resolve(root.path, "..", "..", ".claude-plugin", "marketplace.json"),

@@ -191,7 +191,7 @@ describe("config hot reload", () => {
 		const file = path.join(dir, "config.yml");
 		await fs.writeFile(
 			file,
-			"modelRoles:\n  worker: openai/old\nagent:\n  sharedModel: true\n  model: '@worker'\ndefaultEffort:\n  '*': low\n",
+			"agent:\n  sharedModel: true\n  model: openai/old\ndefaultEffort:\n  '*': low\n",
 		);
 		const settings = await Settings.loadReadOnly({ agentDir: dir });
 		const existing = settings.forkWithRuntimeOverrides();
@@ -199,7 +199,7 @@ describe("config hot reload", () => {
 		expect(resolve(settings)).toEqual(["openai/old"]);
 		await fs.writeFile(
 			file,
-			"modelRoles:\n  worker: openai/new\nagent:\n  sharedModel: true\n  model: '@worker'\ndefaultEffort:\n  '*': low\n",
+			"agent:\n  sharedModel: true\n  model: openai/new\ndefaultEffort:\n  '*': low\n",
 		);
 		const result = await settings.reloadConfig();
 		expect(resolve(settings)).toEqual(["openai/new"]);
@@ -207,7 +207,7 @@ describe("config hot reload", () => {
 		expect(resolveEffort({ defaultEffort: settings.get("defaultEffort") }).level as string).toBe("low");
 		expect(settings.get("hideThinkingBlock")).toBe(false);
 		expect(result.restartRequired).toEqual([]);
-		expect(result.changed.map(row => row.path)).toEqual(["modelRoles.worker"]);
+		expect(result.changed.map(row => row.path)).toEqual(["agent.model"]);
 		expect((await settings.reloadConfig()).changed).toEqual([]);
 	});
 
@@ -227,141 +227,138 @@ describe("config hot reload", () => {
 		});
 	});
 
-	it.each(["default"])("preserves startup role %s while applying a worker role in the same map", async role => {
+	it("preserves startup defaultModel while applying an agent model in the same file", async () => {
 		const dir = dirs();
 		const file = path.join(dir, "config.yml");
-		await fs.writeFile(file, JSON.stringify({ modelRoles: { [role]: "openai/old", worker: "openai/old" } }));
+		await fs.writeFile(file, JSON.stringify({ defaultModel: "openai/old", agent: { model: "openai/old" } }));
 		const settings = await Settings.loadReadOnly({ agentDir: dir });
-		await fs.writeFile(file, JSON.stringify({ modelRoles: { [role]: "openai/new", worker: "openai/new" } }));
+		await fs.writeFile(file, JSON.stringify({ defaultModel: "openai/new", agent: { model: "openai/new" } }));
 		const result = await settings.reloadConfig();
-		expect(settings.getModelRole(role)).toBe("openai/old");
-		expect(settings.getModelRole("worker")).toBe("openai/new");
-		expect(result.restartRequired).toContain(`modelRoles.${role}`);
+		expect(settings.get("defaultModel")).toBe("openai/old");
+		expect(settings.get("agent.model")).toBe("openai/new");
+		expect(result.restartRequired).toContain("defaultModel");
 		expect(result.outcomes).toContainEqual({
-			path: `modelRoles.${role}`,
+			path: "defaultModel",
 			status: "restart-required",
 			reason: expect.any(String),
 		});
-		expect(result.changed).toEqual([{ path: "modelRoles.worker", before: "openai/old", after: "openai/new" }]);
+		expect(result.changed).toEqual([{ path: "agent.model", before: "openai/old", after: "openai/new" }]);
 	});
 
-	it("retains alias-backed startup role targets without blocking direct lane changes", async () => {
+	it("retains startup defaultModel without blocking direct lane changes", async () => {
 		const dir = dirs();
 		const file = path.join(dir, "config.yml");
 		await fs.writeFile(
 			file,
-			"modelRoles:\n  default: '@worker'\n  worker: openai/old\nagent:\n  model: openai/old\n",
+			"defaultModel: openai/old\nagent:\n  model: openai/old\n",
 		);
 		const settings = await Settings.loadReadOnly({ agentDir: dir });
 		await fs.writeFile(
 			file,
-			"modelRoles:\n  default: '@worker'\n  worker: openai/new\nagent:\n  model: openai/new\n",
+			"defaultModel: openai/new\nagent:\n  model: openai/new\n",
 		);
 		const result = await settings.reloadConfig();
-		expect(result.restartRequired).toContain("modelRoles.worker");
-		expect(settings.getModelRole("worker")).toBe("openai/old");
+		expect(result.restartRequired).toContain("defaultModel");
+		expect(settings.get("defaultModel")).toBe("openai/old");
 		expect(settings.get("agent.model")).toBe("openai/new");
 	});
 
-	it.each(["direct", "alias"])(
-		"re-resolves the advisor runtime model on /reload-config via %s path without rebinding Main or existing forks",
-		async mode => {
-			const dir = dirs();
-			const file = path.join(dir, "config.yml");
-			const models = ["main-model", "advisor-old", "advisor-new"].map(id =>
-				buildModel({
-					id,
-					name: id,
-					api: "openai-responses",
-					provider: "openai",
-					baseUrl: "https://example.invalid",
-					reasoning: false,
-					input: ["text"],
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					contextWindow: 8192,
-					maxTokens: 2048,
+	it("re-resolves the advisor runtime model on /reload-config without rebinding Main or existing forks", async () => {
+		const dir = dirs();
+		const file = path.join(dir, "config.yml");
+		const models = ["main-model", "advisor-old", "advisor-new"].map(id =>
+			buildModel({
+				id,
+				name: id,
+				api: "openai-responses",
+				provider: "openai",
+				baseUrl: "https://example.invalid",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 8192,
+				maxTokens: 2048,
+			}),
+		);
+		const mainModel = models[0]!;
+		const modelRegistry = {
+			getAvailable: () => models,
+			find: (provider: string, id: string) => models.find(m => m.provider === provider && m.id === id),
+		} as unknown as ModelRegistry;
+
+		const writeAdvisor = (id: string) =>
+			fs.writeFile(
+				file,
+				JSON.stringify({
+					agent: {
+						helpers: { advisor: { model: `openai/${id}` } },
+						sharedModel: true,
+						model: "openai/main-model",
+					},
+					advisor: { enabled: true },
 				}),
 			);
-			const mainModel = models[0]!;
-			const modelRegistry = {
-				getAvailable: () => models,
-				find: (provider: string, id: string) => models.find(m => m.provider === provider && m.id === id),
-			} as unknown as ModelRegistry;
+		await writeAdvisor("advisor-old");
 
-			const writeAdvisor = (id: string) =>
-				fs.writeFile(
-					file,
-					JSON.stringify({
-						modelRoles:
-							mode === "direct" ? { advisor: `openai/${id}` } : { advisor: "@worker", worker: `openai/${id}` },
-						advisor: { enabled: true },
-						agent: { sharedModel: true, model: "openai/main-model" },
-					}),
-				);
-			await writeAdvisor("advisor-old");
+		const settings = await Settings.loadReadOnly({ agentDir: dir });
+		const existingFork = await createSubagentSettingsForCwd(settings, dir);
+		const agent = new Agent({
+			initialState: {
+				model: mainModel,
+				systemPrompt: ["Main"],
+				tools: [],
+				messages: [],
+			},
+		});
+		const sessionManager = SessionManager.inMemory(dir);
+		const session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+		});
+		liveSessions.push(session);
 
-			const settings = await Settings.loadReadOnly({ agentDir: dir });
-			const existingFork = await createSubagentSettingsForCwd(settings, dir);
-			const agent = new Agent({
-				initialState: {
-					model: mainModel,
-					systemPrompt: ["Main"],
-					tools: [],
-					messages: [],
-				},
-			});
-			const sessionManager = SessionManager.inMemory(dir);
-			const session = new AgentSession({
-				agent,
-				sessionManager,
-				settings,
-				modelRegistry,
-			});
-			liveSessions.push(session);
+		expect(session.isAdvisorActive()).toBe(true);
+		expect(session.getAdvisorAgent()?.state.model.id).toBe("advisor-old");
+		expect(session.model?.id).toBe("main-model");
+		expect(resolveAgentModel({ settings: existingFork, agentName: "task" }).patterns).toEqual([
+			"openai/main-model",
+		]);
 
-			expect(session.isAdvisorActive()).toBe(true);
-			expect(session.getAdvisorAgent()?.state.model.id).toBe("advisor-old");
-			expect(session.model?.id).toBe("main-model");
-			expect(resolveAgentModel({ settings: existingFork, agentName: "task" }).patterns).toEqual([
-				"openai/main-model",
-			]);
+		await writeAdvisor("advisor-new");
 
-			await writeAdvisor("advisor-new");
+		const output: string[] = [];
+		const runtime: SlashCommandRuntime = {
+			settings,
+			cwd: dir,
+			session,
+			sessionManager,
+			output: text => {
+				output.push(text);
+			},
+			refreshCommands: () => {},
+			reloadPlugins: async () => {},
+		};
 
-			const output: string[] = [];
-			const runtime: SlashCommandRuntime = {
-				settings,
-				cwd: dir,
-				session,
-				sessionManager,
-				output: text => {
-					output.push(text);
-				},
-				refreshCommands: () => {},
-				reloadPlugins: async () => {},
-			};
+		const dispatchResult = await executeAcpBuiltinSlashCommand("/reload-config", runtime);
+		expect(dispatchResult).toEqual({ consumed: true });
 
-			const dispatchResult = await executeAcpBuiltinSlashCommand("/reload-config", runtime);
-			expect(dispatchResult).toEqual({ consumed: true });
-
-			expect(session.getAdvisorAgent()?.state.model.id).toBe("advisor-new");
-			expect(session.model?.id).toBe("main-model");
-			expect(session.agent.state.model.id).toBe("main-model");
-			expect(resolveAgentModel({ settings: existingFork, agentName: "task" }).patterns).toEqual([
-				"openai/main-model",
-			]);
-			expect(existingFork.getModelRoles()).toEqual(
-				mode === "direct"
-					? { advisor: "openai/advisor-old" }
-					: { advisor: "@worker", worker: "openai/advisor-old" },
-			);
-			expect(output[0]).toContain("config: reloaded");
-			const advisor = session.getAdvisorAgent();
-			await executeAcpBuiltinSlashCommand("/reload-config", runtime);
-			expect(session.getAdvisorAgent()).toBe(advisor);
-			expect(output[1]).toContain("No effective routing changes.");
-		},
-	);
+		expect(session.getAdvisorAgent()?.state.model.id).toBe("advisor-new");
+		expect(session.model?.id).toBe("main-model");
+		expect(session.agent.state.model.id).toBe("main-model");
+		expect(resolveAgentModel({ settings: existingFork, agentName: "task" }).patterns).toEqual([
+			"openai/main-model",
+		]);
+		expect(existingFork.get("agent.helpers")).toEqual({
+			advisor: { model: "openai/advisor-old" },
+		});
+		expect(output[0]).toContain("config: reloaded");
+		const advisor = session.getAdvisorAgent();
+		await executeAcpBuiltinSlashCommand("/reload-config", runtime);
+		expect(session.getAdvisorAgent()).toBe(advisor);
+		expect(output[1]).toContain("No effective routing changes.");
+	});
 
 	it("names an unrecognized root key instead of silently accepting it", async () => {
 		const dir = dirs();
