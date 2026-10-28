@@ -97,9 +97,10 @@ type SpawnModel = Pick<ExecutorOptions, "modelOverride" | "thinkingLevel">;
 /** Tools an agent declares that plan mode keeps beside its read-only base set. */
 const PLAN_MODE_AGENT_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([TOOL.report_finding]);
 
-export function renderAgentUserPrompt(assignment: string): string {
+export function renderAgentUserPrompt(assignment: string, parentAgentId?: string): string {
 	return prompt.render(agentPrompts["agent/user-prompt"].text, {
 		assignment: assignment.trim(),
+		parentAgentId,
 	});
 }
 
@@ -554,7 +555,7 @@ async function runPreparedSpawn(
 		...inheritSpawnLayers(session, spawnCwd, spawn.agentName, spawn.agent.autoloadSkills),
 		cwd: spawnCwd,
 		agent: spawn.runAgent,
-		task: renderAgentUserPrompt(assignment),
+		task: renderAgentUserPrompt(assignment, session.getAgentId?.() ?? MAIN_AGENT_ID),
 		assignment,
 		context: session.settings.get("agent.batch") ? params.context?.trim() || undefined : undefined,
 		planReference: spawn.planReference,
