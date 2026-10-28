@@ -220,7 +220,7 @@ function createCompactionRuntimeHarness(
 		effectiveServiceTier: () => undefined,
 		baseSystemPrompt: () => "base",
 		memoryBackendContext: async () => "",
-		withPlanProtection: async (_c, fn) => fn(),
+		withPlanProtection: config => config,
 		promptCompaction: async () => undefined,
 		offloadAndApplyShakeRegions: async () => {},
 		rebasePendingContextSnapshotAfterHistoryRewrite: () => {},
