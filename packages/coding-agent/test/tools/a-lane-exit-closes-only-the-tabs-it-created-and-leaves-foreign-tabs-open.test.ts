@@ -254,7 +254,12 @@ function relayBrowser(lane: Lane): Browser {
 }
 
 /** The extension browser handle the registry would hold for `lane`, with `refCount` tab holds. */
-function extensionHandle(instance: string, lane: Lane, ownerSessionId: string, refCount: number): PuppeteerBrowserHandle {
+function extensionHandle(
+	instance: string,
+	lane: Lane,
+	ownerSessionId: string,
+	refCount: number,
+): PuppeteerBrowserHandle {
 	return {
 		key: `extension:${instance}`,
 		kind: { kind: "extension", instanceId: instance },
@@ -298,14 +303,29 @@ describe("a lane's exit releases its own tabs and nothing else", () => {
 		ext.emit("chrome.tabs.onCreated", [{ id: 902, url: "https://operator.example/" }]);
 		await until(() => relay.tabCount === 3, "owned popup adoption");
 
-		expect(relay.getTrackedTabs().map(tab => tab.tabId).sort((a, b) => a - b)).toEqual([100, 101, 102]);
+		expect(
+			relay
+				.getTrackedTabs()
+				.map(tab => tab.tabId)
+				.sort((a, b) => a - b),
+		).toEqual([100, 101, 102]);
 
 		await relay.close();
 		await until(() => !ext.open, "extension socket closed by the relay");
 
 		expect(relay.tabCount).toBe(0);
-		expect(ext.calls.filter(call => call.method === "chrome.tabs.remove").flatMap(tabIdsIn).sort((a, b) => a - b)).toEqual([100, 101, 102]);
-		expect(ext.calls.filter(call => call.method === "chrome.debugger.detach").flatMap(tabIdsIn).sort((a, b) => a - b)).toEqual([100, 101, 102]);
+		expect(
+			ext.calls
+				.filter(call => call.method === "chrome.tabs.remove")
+				.flatMap(tabIdsIn)
+				.sort((a, b) => a - b),
+		).toEqual([100, 101, 102]);
+		expect(
+			ext.calls
+				.filter(call => call.method === "chrome.debugger.detach")
+				.flatMap(tabIdsIn)
+				.sort((a, b) => a - b),
+		).toEqual([100, 101, 102]);
 		// Every command the relay ever sent addresses an owned tab, so no untracked tab was touched.
 		const touched = new Set(ext.calls.flatMap(tabIdsIn));
 		expect([...touched].sort((a, b) => a - b)).toEqual([100, 101, 102]);

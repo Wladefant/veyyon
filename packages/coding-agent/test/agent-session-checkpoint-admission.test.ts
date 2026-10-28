@@ -91,10 +91,7 @@ async function createCheckpointHarness(streamResponder: (streamCount: number, mo
 	process.env.VEYYON_CHECKPOINT_KEY = Buffer.alloc(32, 9).toString("base64");
 	let renewals = 0;
 	globalThis.fetch = Object.assign(
-		async (
-			input: Parameters<typeof globalThis.fetch>[0],
-			init: Parameters<typeof globalThis.fetch>[1],
-		) => {
+		async (input: Parameters<typeof globalThis.fetch>[0], init: Parameters<typeof globalThis.fetch>[1]) => {
 			const action = new URL(String(input)).pathname.split("/").pop();
 			const parsed: unknown = init?.body ? JSON.parse(String(init.body)) : undefined;
 			const ownerNode =
