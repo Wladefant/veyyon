@@ -4,9 +4,10 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { buildModel } from "@veyyon/catalog/build";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { groupSettingPaths } from "@veyyon/kernel/settings/store";
 import { resolveEffort } from "../src/config/effort-resolver";
 import type { ModelRegistry } from "../src/config/model-registry";
-import { Settings } from "../src/config/settings";
+import { type SettingPath, Settings } from "../src/config/settings";
 import { InputController, type InputControllerContext } from "../src/modes/terminal/controllers/input-controller";
 import { AgentSession } from "../src/session/agent-session";
 import { executeAcpBuiltinSlashCommand } from "../src/slash-commands/acp-builtins";
@@ -155,7 +156,10 @@ describe("config hot reload", () => {
 	it("dispatches the real text command with an off/on routing differential", async () => {
 		const dir = dirs();
 		const file = path.join(dir, "config.yml");
-		await fs.writeFile(file, "agent:\n  model: openai/old\n  sharedModel: true\n");
+		await fs.writeFile(
+			file,
+			'agent:\n  model: openai/old\n  sharedModel: true\ncompaction:\n  threshold: "200000"\n',
+		);
 		const settings = await Settings.loadReadOnly({ agentDir: dir });
 		const output: string[] = [];
 		const runtime: SlashCommandRuntime = {
@@ -175,12 +179,16 @@ describe("config hot reload", () => {
 				throw new Error("reload must not reload plugins");
 			},
 		};
-		await fs.writeFile(file, "agent:\n  model: openai/new\n  sharedModel: true\ndefaultEffort:\n  '*': high\n");
+		await fs.writeFile(
+			file,
+			"agent:\n  model: openai/new\n  sharedModel: true\ndefaultEffort:\n  '*': high\ncompaction:\n  threshold: \"400000\"\n",
+		);
 		expect(resolveAgentModel({ settings, agentName: "task" }).patterns).toEqual(["openai/old"]);
 		expect(await executeAcpBuiltinSlashCommand("/reload-config", runtime)).toEqual({ consumed: true });
 		expect(resolveAgentModel({ settings, agentName: "task" }).patterns).toEqual(["openai/new"]);
 		expect(output[0]).toContain('agent.model: applied ("openai/old" → "openai/new")');
 		expect(output[0]).toContain("agent.sharedModel: unchanged");
+		expect(output[0]).toContain('compaction.threshold: applied ("200000" → "400000")');
 		expect(output[0]).toContain("defaultEffort: restart-required — pickInitialThinkingLevel captures it at startup");
 		await executeAcpBuiltinSlashCommand("/reload-config", runtime);
 		expect(output[1]).toContain("No effective routing changes.");
@@ -369,6 +377,36 @@ describe("config hot reload", () => {
 		const result = await settings.reloadConfig();
 		expect(result.restartRequired).toEqual(expect.arrayContaining(["thinkingLevel", "agent.unknownSetting"]));
 		expect(settings.get("agent.model")).toBe("openai/new");
+	});
+	it("reloads compaction settings from disk and reports applied values", async () => {
+		const dir = dirs();
+		const file = path.join(dir, "config.yml");
+		await fs.writeFile(
+			file,
+			'compaction:\n  threshold: "200000"\n  idleThresholdTokens: 120000\n  keepRecentTokens: 20000\n',
+		);
+		const settings = await Settings.loadReadOnly({ agentDir: dir });
+
+		await fs.writeFile(
+			file,
+			'compaction:\n  threshold: "400000"\n  idleThresholdTokens: 240000\n  keepRecentTokens: 40000\n',
+		);
+		const result = await settings.reloadConfig();
+
+		expect(settings.getGroup("compaction")).toMatchObject({
+			threshold: "400000",
+			idleThresholdTokens: 240000,
+			keepRecentTokens: 40000,
+		});
+		expect(result.outcomes).toContainEqual({
+			path: "compaction.threshold",
+			status: "applied",
+		});
+		const unchanged = await settings.reloadConfig();
+		expect(unchanged.outcomes).toContainEqual({
+			path: "compaction.threshold",
+			status: "unchanged",
+		});
 	});
 
 	it("preserves override precedence and applies removed routing fields", async () => {
@@ -578,4 +616,138 @@ describe("config hot reload", () => {
 		expect(settings.get("agent.model")).toBe("openai/saved");
 		expect(await fs.readFile(file, "utf8")).toContain("openai/saved");
 	});
+	function setPath(obj: Record<string, unknown>, dottedPath: string, value: unknown): void {
+		const segments = dottedPath.split(".");
+		let current = obj;
+		for (let i = 0; i < segments.length - 1; i++) {
+			const seg = segments[i];
+			const next = current[seg];
+			if (!next || typeof next !== "object" || Array.isArray(next)) {
+				const nested: Record<string, unknown> = {};
+				current[seg] = nested;
+				current = nested;
+			} else {
+				current = next as Record<string, unknown>;
+			}
+		}
+		current[segments[segments.length - 1]] = value;
+	}
+
+	// WHY: /reload-config applies spawn routing plus the compaction group and nothing else. A path that
+	// is in the schema but in neither set must come back restart-required with its old value kept.
+	// CLASS: the table is pinned to the schema's own `compaction.*` paths by exact equality, so a new
+	// compaction setting turns this red until someone records a before/after for it. GAP: it does not
+	// prove that a running session re-reads the value; that is each consumer's own contract.
+	// Retired keys are folded into `compaction.threshold` on read, so a reload reports them unchanged.
+	const COMPACTION_RELOAD_CASES: readonly { path: string; before: unknown; after: unknown; retired?: true }[] = [
+		{ path: "compaction.enabled", before: true, after: false },
+		{ path: "compaction.remote", before: true, after: false },
+		{ path: "compaction.midTurnEnabled", before: true, after: false },
+		{ path: "compaction.strategy", before: "summary", after: "summary" },
+		{ path: "compaction.threshold", before: "200000", after: "400000" },
+		{ path: "compaction.thresholdTokens", before: 100000, after: 200000, retired: true },
+		{ path: "compaction.thresholdPercent", before: 80, after: 90, retired: true },
+		{ path: "compaction.model", before: "openai/old", after: "openai/new" },
+		{ path: "compaction.modelFallbackStrategy", before: "auto", after: "configured-only" },
+		{ path: "compaction.modelContextWindow", before: 200000, after: 400000 },
+		{ path: "compaction.handoffSaveToDisk", before: false, after: true },
+		{ path: "compaction.laneHandoffThresholdTokens", before: 100000, after: 200000 },
+		{ path: "compaction.reserveTokens", before: 16000, after: 32000 },
+		{ path: "compaction.keepRecentTokens", before: 10000, after: 20000 },
+		{ path: "compaction.autoContinue", before: true, after: false },
+		{ path: "compaction.remoteEndpoint", before: "https://old.invalid", after: "https://new.invalid" },
+		{ path: "compaction.idleEnabled", before: false, after: true },
+		{ path: "compaction.idleThresholdTokens", before: 120000, after: 240000 },
+		{ path: "compaction.idleTimeoutSeconds", before: 300, after: 600 },
+		{ path: "compaction.supersedeReads", before: true, after: false },
+		{ path: "compaction.dropUseless", before: true, after: false },
+	];
+
+	it("covers every compaction setting the schema declares", () => {
+		expect(COMPACTION_RELOAD_CASES.map(row => row.path).sort()).toEqual([...groupSettingPaths("compaction")].sort());
+	});
+
+	it("reloads every compaction setting from disk with an applied or unchanged outcome", async () => {
+		const dir = dirs();
+		const file = path.join(dir, "config.yml");
+		const oldRaw: Record<string, unknown> = {};
+		const newRaw: Record<string, unknown> = {};
+		for (const row of COMPACTION_RELOAD_CASES) {
+			setPath(oldRaw, row.path, row.before);
+			setPath(newRaw, row.path, row.after);
+		}
+		await fs.writeFile(file, JSON.stringify(oldRaw));
+		const settings = await Settings.loadReadOnly({ agentDir: dir });
+		await fs.writeFile(file, JSON.stringify(newRaw));
+
+		const result = await settings.reloadConfig();
+
+		expect(result.restartRequired).toEqual([]);
+		for (const row of COMPACTION_RELOAD_CASES) {
+			const expected = row.retired || JSON.stringify(row.before) === JSON.stringify(row.after) ? "unchanged" : "applied";
+			expect(result.outcomes).toContainEqual({ path: row.path, status: expected });
+			if (!row.retired) expect(settings.get(row.path as SettingPath)).toEqual(row.after);
+		}
+	});
+
+	it("rejects an invalid compaction value and keeps the previous one", async () => {
+		const dir = dirs();
+		const file = path.join(dir, "config.yml");
+		await fs.writeFile(
+			file,
+			JSON.stringify({ compaction: { keepRecentTokens: 20000 }, agent: { model: "openai/old" } }),
+		);
+		const settings = await Settings.loadReadOnly({ agentDir: dir });
+		await fs.writeFile(
+			file,
+			JSON.stringify({ compaction: { keepRecentTokens: "lots" }, agent: { model: "openai/new" } }),
+		);
+
+		await expect(settings.reloadConfig()).rejects.toThrow("Invalid config settings");
+
+		expect(settings.get("compaction.keepRecentTokens")).toBe(20000);
+		expect(settings.get("agent.model")).toBe("openai/old");
+	});
+
+	const RESTART_REQUIRED_BOUNDARY_CASES = [
+		{ category: "startup captured", path: "temperature", before: 0.2, after: 0.8 },
+		{ category: "outside routing and compaction", path: "git.enabled", before: true, after: false },
+		{ category: "outside routing and compaction", path: "retry.enabled", before: true, after: false },
+		{
+			category: "credential",
+			path: "dev.autoqaPush.token",
+			before: "dummy-token-initial",
+			after: "dummy-token-updated",
+		},
+		{ category: "credential", path: "firecrawl.apiKey", before: "dummy-key-initial", after: "dummy-key-updated" },
+	] as const;
+
+	it.each(RESTART_REQUIRED_BOUNDARY_CASES)(
+		"retains old value and reports restart-required for $path ($category)",
+		async ({ path: settingPath, before, after }) => {
+			const dir = dirs();
+			const file = path.join(dir, "config.yml");
+			const oldRaw: Record<string, unknown> = {};
+			setPath(oldRaw, settingPath, before);
+			await fs.writeFile(file, JSON.stringify(oldRaw, null, 2));
+
+			const settings = await Settings.loadReadOnly({ agentDir: dir });
+			expect(settings.get(settingPath as SettingPath)).toEqual(before);
+
+			const newRaw: Record<string, unknown> = {};
+			setPath(newRaw, settingPath, after);
+			await fs.writeFile(file, JSON.stringify(newRaw, null, 2));
+
+			const result = await settings.reloadConfig();
+
+			expect(settings.get(settingPath as SettingPath)).toEqual(before);
+			expect(result.restartRequired).toContain(settingPath);
+			expect(result.outcomes).toContainEqual(
+				expect.objectContaining({
+					path: settingPath,
+					status: "restart-required",
+				}),
+			);
+		},
+	);
 });
