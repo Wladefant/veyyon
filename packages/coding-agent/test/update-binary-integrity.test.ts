@@ -218,7 +218,7 @@ describe("a failed binary update leaves the installed binary intact", () => {
 			await updateViaBinaryAt(target, "1.2.3", SILENT_UPDATE_REPORTER).catch(() => {});
 
 			expect(urls).toHaveLength(1);
-			expect(urls[0]).toContain("https://github.com/santhreal/veyyon/releases/download/v1.2.3/");
+			expect(urls[0]).toContain("https://github.com/Wladefant/veyyon/releases/download/v1.2.3/");
 		});
 
 		it("never requests the sidecar when the binary download already failed", async () => {

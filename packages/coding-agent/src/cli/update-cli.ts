@@ -24,6 +24,7 @@ import {
 	isValidSemver,
 	logger,
 	readPipeText,
+	RELEASE_REPOSITORY,
 	removeTempPath,
 	stripWindowsExtendedLengthPathPrefix,
 	tryWithFileLock,
@@ -54,7 +55,7 @@ import {
 	refreshInstalledCompletions,
 } from "./completion-refresh";
 
-const REPO = "santhreal/veyyon";
+const REPO = RELEASE_REPOSITORY;
 /**
  * GitHub REST base for {@link REPO}. Veyyon ships only through GitHub Releases
  * (see the Distribution section in the root `AGENTS.md`): the `curl` installer
@@ -137,24 +138,16 @@ export interface BinaryReplacementOptions {
 	 * wrote correct?" (see {@link verifyBinaryVersion}).
 	 */
 	verifyInstalledVersion: (expectedVersion: string) => Promise<InstalledVersionVerification>;
-	/** Allow replacing custom or local builds when force is set. */
+	/** Allow replacing custom builds when force is set. */
 	force?: boolean;
 }
 
 /**
- * Detect if the currently running process was compiled as a local or custom build.
+ * Detect a custom build that updates must preserve. Local builds follow releases.
  */
 export function isCurrentProcessLocalOrCustom(): boolean {
-	if (BUILD_TAG) {
-		const tag = BUILD_TAG.toLowerCase();
-		if (tag.includes("local") || tag.includes("custom") || tag.length > 0) {
-			return true;
-		}
-	}
-	if (process.env.VEYYON_BUILD_LOCAL === "true") return true;
-	if (process.env.VEYYON_BUILD_TAG) {
-		const tag = process.env.VEYYON_BUILD_TAG.toLowerCase();
-		if (tag.includes("local") || tag.includes("custom") || tag.length > 0) {
+	for (const tag of [BUILD_TAG, process.env.VEYYON_BUILD_TAG]) {
+		if (tag && !/^(?:[0-9a-f]+-)?local$/i.test(tag)) {
 			return true;
 		}
 	}
@@ -162,7 +155,7 @@ export function isCurrentProcessLocalOrCustom(): boolean {
 }
 
 /**
- * Probe whether a target binary at `binPath` is a local or custom build.
+ * Probe whether a target binary at `binPath` is a custom build.
  */
 export async function isBinaryLocalOrCustom(binPath: string): Promise<boolean> {
 	if (isCurrentProcessLocalOrCustom()) {
@@ -180,7 +173,7 @@ export async function isBinaryLocalOrCustom(binPath: string): Promise<boolean> {
 		const result = await $`${binPath} --version`.quiet().nothrow();
 		if (result.exitCode === 0) {
 			const output = result.text().toLowerCase();
-			if (output.includes("local") || output.includes("custom")) {
+			if (output.includes("custom")) {
 				return true;
 			}
 		}
@@ -416,6 +409,7 @@ function defaultInstalledMethod(): UpdateMethod | undefined {
 export async function getLatestRelease(timeoutMs: number = RELEASE_METADATA_TIMEOUT_MS): Promise<ReleaseInfo> {
 	const url = `${GITHUB_LATEST_RELEASE_URL}`;
 	let response: Response;
+	logger.debug("Checking latest release", { url });
 	// A HEAD answer has no body to read, so the deadline ends when the headers do.
 	const deadline = scopedTimeoutSignal(timeoutMs);
 	try {
@@ -1284,7 +1278,7 @@ export async function replaceBinaryForUpdate(options: BinaryReplacementOptions):
 		}
 		if (!options.force && (await isBinaryLocalOrCustom(options.targetPath))) {
 			throw new Error(
-				`Refusing to replace ${options.targetPath}: it is a custom or local build. ` +
+				`Refusing to replace ${options.targetPath}: it is a custom build. ` +
 					`Re-run with --force to overwrite it anyway.`,
 			);
 		}
@@ -2144,7 +2138,7 @@ export async function runAutoUpdate(
 		: isCurrentProcessLocalOrCustom() || (targetPath ? await isBinaryLocalOrCustom(targetPath) : false);
 
 	if (isCustom) {
-		logger.info("Skipping automatic update: veyyon is a custom or local build", {
+		logger.info("Skipping automatic update: veyyon is a custom build", {
 			version: release.version,
 		});
 		await recordVersionSkip({ from: currentVersion, to: release.version, reason: "custom-build" }, historyPath);

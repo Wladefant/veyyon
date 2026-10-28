@@ -33,7 +33,7 @@ Next steps:
 
 When the directory was already on your `PATH`, there is nothing to reload and the list starts at the launch step.
 
-The installer never calls the GitHub API. It finds the newest release from where `https://github.com/santhreal/veyyon/releases/latest` redirects to, and downloads the binary from that same host. The GitHub API rate limit of 60 requests an hour per address does not apply to the install. No token is needed, and setting one has no effect on the install.
+The installer never calls the GitHub API. It finds the newest release from where `https://github.com/Wladefant/veyyon/releases/latest` redirects to, and downloads the binary from that same host. The GitHub API rate limit of 60 requests an hour per address does not apply to the install. No token is needed, and setting one has no effect on the install.
 
 ## Install on Windows
 
@@ -112,7 +112,7 @@ Release tags start with `v`, and `--ref 1.0.11` on POSIX or `-Ref 1.0.11` on Win
 The installer only installs a published release binary. It never clones the repository, never runs `bun install`, and never builds anything. To run an unreleased branch or commit, or to get Veyyon onto a platform with no release, clone the repository yourself:
 
 ```console
-$ git clone https://github.com/santhreal/veyyon.git
+$ git clone https://github.com/Wladefant/veyyon.git
 $ cd veyyon
 $ bun run setup      # installs workspace deps and builds @veyyon/natives
 $ bun dev --version
@@ -121,7 +121,7 @@ $ bun dev --version
 To pin a ref, check it out before you run setup:
 
 ```console
-$ git clone https://github.com/santhreal/veyyon.git
+$ git clone https://github.com/Wladefant/veyyon.git
 $ cd veyyon
 $ git checkout v1.0.11
 $ bun run setup
@@ -192,7 +192,7 @@ You see it once per update, on the first launch after it. `/changelog` opens the
 release notes on the web rather than printing them into your terminal.
 
 The check costs one request to `github.com`, and no request to the GitHub API.
-It reads the newest version out of where `https://github.com/santhreal/veyyon/releases/latest`
+It reads the newest version out of where `https://github.com/Wladefant/veyyon/releases/latest`
 redirects to, the same way the installer does, because the API is capped at 60
 requests an hour per address and that cap is shared by everyone behind it. A
 laptop is nowhere near it; an office, a CI fleet or a container host running

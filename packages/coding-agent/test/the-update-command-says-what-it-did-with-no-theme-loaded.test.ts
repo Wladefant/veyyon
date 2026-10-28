@@ -90,7 +90,7 @@ ${body}
 /** A child that answers `getLatestRelease`'s HEAD probe with a redirect to `version`'s tag. */
 function releaseStub(version: string): string {
 	return `globalThis.fetch = async () =>
-	new Response(null, { status: 302, headers: { location: "https://github.com/santhreal/veyyon/releases/tag/v${version}" } });
+	new Response(null, { status: 302, headers: { location: "https://github.com/Wladefant/veyyon/releases/tag/v${version}" } });
 `;
 }
 

@@ -25,6 +25,7 @@ import {
 	TERMINAL,
 	Text,
 } from "@veyyon/tui";
+import { RELEASE_REPOSITORY } from "@veyyon/utils";
 import { hsvToRgb } from "@veyyon/utils/color";
 import { encodeTextSized, type TextSizingScale } from "@veyyon/utils/text-sizing";
 import { COMPOSER_INSET_COLS } from "../modes/terminal/components/composer/composer-chrome";
@@ -199,7 +200,7 @@ export class ProtocolProbeComponent extends Container {
 			new Text(
 				[
 					`${theme.fg("muted", "Hyperlinks (OSC 8)")} — ${yesNo(hyperlinksOn)}`,
-					`  \x1b]8;;https://github.com/santhreal/veyyon\x07Veyyon repo\x1b]8;;\x07`,
+					`  \x1b]8;;https://github.com/${RELEASE_REPOSITORY}\x07Veyyon repo\x1b]8;;\x07`,
 				].join("\n"),
 				COMPOSER_INSET_COLS,
 				0,

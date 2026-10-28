@@ -110,7 +110,7 @@ describe("auto-update guard and opt-out controls", () => {
 					verifyInstalledVersion: okVerifier,
 					force: false,
 				}),
-			).rejects.toThrow(/Refusing to replace.*custom or local build/);
+			).rejects.toThrow(/Refusing to replace.*custom build/);
 
 			const content = await fs.readFile(target, "utf8");
 			expect(content).toContain("1.4.1 (a19ab2a13-custom)");

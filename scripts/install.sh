@@ -3,7 +3,7 @@ set -e
 
 # Veyyon installer
 # Usage: curl -fsSL https://get.veyyon.dev | sh
-#   or:  curl -fsSL https://raw.githubusercontent.com/santhreal/veyyon/main/scripts/install.sh | sh
+#   or:  curl -fsSL https://raw.githubusercontent.com/Wladefant/veyyon/main/scripts/install.sh | sh
 #
 # This installs the prebuilt self-contained binary: one verified download, no
 # toolchain, nothing from a package registry. It NEVER clones this repository and
@@ -16,7 +16,7 @@ set -e
 #
 # After install, launch with `vey` in any repo.
 
-REPO="santhreal/veyyon"
+REPO="Wladefant/veyyon"
 BIN_NAME="veyyon"
 ALIAS_NAME="vey"
 # Whether `$ALIAS_NAME` next to the binary is an alias THIS installer owns.
