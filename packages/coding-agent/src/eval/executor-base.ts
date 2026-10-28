@@ -516,6 +516,24 @@ export async function executeWithKernelBase<
 	});
 
 	const displayOutputs: KernelDisplayOutput[] = [];
+	/** The run's result over everything the sink holds, with `annotation` appended to the output. */
+	const finish = async (
+		outcome: Pick<KernelExecutionResult, "exitCode" | "cancelled" | "stdinRequested">,
+		annotation?: string,
+	): Promise<KernelExecutionResult> => {
+		const dumped = await sink.dump(annotation);
+		return {
+			...outcome,
+			truncated: dumped.truncated,
+			output: dumped.output,
+			artifactId: dumped.artifactId ?? undefined,
+			totalLines: dumped.totalLines,
+			totalBytes: dumped.totalBytes,
+			outputLines: dumped.outputLines,
+			outputBytes: dumped.outputBytes,
+			displayOutputs,
+		};
+	};
 	const deadlineMs = (resolveDeadlineMs ?? getExecutionDeadlineMs)(options);
 	let executionTimeoutMs: number | undefined;
 	const abortShield = createBridgeAbortShield(options?.signal);
@@ -572,73 +590,27 @@ export async function executeWithKernelBase<
 			const annotation = timedOut
 				? formatKernelTimeoutAnnotation(executionTimeoutMs ?? options?.idleTimeoutMs, result.kernelKilled ?? false)
 				: undefined;
-			const dumped = await sink.dump(annotation);
-			return {
-				exitCode: undefined,
-				cancelled: true,
-				truncated: dumped.truncated,
-				output: dumped.output,
-				artifactId: dumped.artifactId ?? undefined,
-				totalLines: dumped.totalLines,
-				totalBytes: dumped.totalBytes,
-				outputLines: dumped.outputLines,
-				outputBytes: dumped.outputBytes,
-				displayOutputs,
-				stdinRequested: !!result.stdinRequested,
-			};
+			return await finish(
+				{ exitCode: undefined, cancelled: true, stdinRequested: !!result.stdinRequested },
+				annotation,
+			);
 		}
 
 		if (result.stdinRequested) {
-			const dumped = await sink.dump("Kernel requested stdin; interactive input is not supported.");
-			return {
-				exitCode: 1,
-				cancelled: false,
-				truncated: dumped.truncated,
-				output: dumped.output,
-				artifactId: dumped.artifactId ?? undefined,
-				totalLines: dumped.totalLines,
-				totalBytes: dumped.totalBytes,
-				outputLines: dumped.outputLines,
-				outputBytes: dumped.outputBytes,
-				displayOutputs,
-				stdinRequested: true,
-			};
+			return await finish(
+				{ exitCode: 1, cancelled: false, stdinRequested: true },
+				"Kernel requested stdin; interactive input is not supported.",
+			);
 		}
 
-		const exitCode = result.status === "ok" ? 0 : 1;
-		const dumped = await sink.dump();
-		return {
-			exitCode,
-			cancelled: false,
-			truncated: dumped.truncated,
-			output: dumped.output,
-			artifactId: dumped.artifactId ?? undefined,
-			totalLines: dumped.totalLines,
-			totalBytes: dumped.totalBytes,
-			outputLines: dumped.outputLines,
-			outputBytes: dumped.outputBytes,
-			displayOutputs,
-			stdinRequested: false,
-		};
+		return await finish({ exitCode: result.status === "ok" ? 0 : 1, cancelled: false, stdinRequested: false });
 	} catch (err) {
 		if (isCancellationError(err, cancelledErrorClass) || abortShield.abortRequested || abortShield.signal?.aborted) {
 			const timedOut = abortShield.timedOut || isTimedOutCancellation(err, cancelledErrorClass, abortShield.signal);
-			const dumped = await sink.dump(
+			return await finish(
+				{ exitCode: undefined, cancelled: true, stdinRequested: false },
 				timedOut ? formatTimeoutAnnotation(executionTimeoutMs ?? options?.idleTimeoutMs) : undefined,
 			);
-			return {
-				exitCode: undefined,
-				cancelled: true,
-				truncated: dumped.truncated,
-				output: dumped.output,
-				artifactId: dumped.artifactId ?? undefined,
-				totalLines: dumped.totalLines,
-				totalBytes: dumped.totalBytes,
-				outputLines: dumped.outputLines,
-				outputBytes: dumped.outputBytes,
-				displayOutputs,
-				stdinRequested: false,
-			};
 		}
 		const error = err instanceof Error ? err : new Error(String(err));
 		logger.error(`${errorLogLabel} execution failed`, { error: error.message });

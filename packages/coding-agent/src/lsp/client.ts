@@ -810,6 +810,26 @@ export async function getOrCreateClient(
 	return clientPromise;
 }
 
+/** Sends `didOpen` for `content` at version 1 and records the document as open. */
+async function openDocument(
+	client: LspClient,
+	filePath: string,
+	uri: string,
+	content: string,
+	signal: AbortSignal | undefined,
+): Promise<void> {
+	const languageId = detectLanguageId(filePath);
+	throwIfAborted(signal);
+	await sendNotification(
+		client,
+		"textDocument/didOpen",
+		{ textDocument: { uri, languageId, version: 1, text: content } },
+		signal,
+	);
+	client.openFiles.set(uri, { version: 1, languageId });
+	client.lastActivity = Date.now();
+}
+
 /**
  * Ensure a file is opened in the LSP client.
  * Sends didOpen notification if the file is not already tracked.
@@ -847,25 +867,7 @@ export async function ensureFileOpen(client: LspClient, filePath: string, signal
 			if (isEnoent(err)) return;
 			throw err;
 		}
-		const languageId = detectLanguageId(filePath);
-		throwIfAborted(signal);
-
-		await sendNotification(
-			client,
-			"textDocument/didOpen",
-			{
-				textDocument: {
-					uri,
-					languageId,
-					version: 1,
-					text: content,
-				},
-			},
-			signal,
-		);
-
-		client.openFiles.set(uri, { version: 1, languageId });
-		client.lastActivity = Date.now();
+		await openDocument(client, filePath, uri, content, signal);
 	})();
 
 	fileOperationLocks.set(lockKey, openPromise);
@@ -936,23 +938,7 @@ export async function syncContent(
 
 		if (!info) {
 			// Open file with provided content instead of reading from disk
-			const languageId = detectLanguageId(filePath);
-			throwIfAborted(signal);
-			await sendNotification(
-				client,
-				"textDocument/didOpen",
-				{
-					textDocument: {
-						uri,
-						languageId,
-						version: 1,
-						text: content,
-					},
-				},
-				signal,
-			);
-			client.openFiles.set(uri, { version: 1, languageId });
-			client.lastActivity = Date.now();
+			await openDocument(client, filePath, uri, content, signal);
 			return;
 		}
 

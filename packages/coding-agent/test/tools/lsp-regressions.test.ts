@@ -187,6 +187,58 @@ describe("lsp regressions", () => {
 		}
 	});
 
+	// A second `didOpen` for a URI the server already holds is a protocol violation; servers
+	// answer it by discarding the document or by rejecting the open. A synced document is
+	// opened once, every later sync is a `didChange` at the next version, and asking to open
+	// it again sends nothing.
+	it("opens a synced document once and sends each later sync as the next numbered change", async () => {
+		const tempDir = TempDir.createSync("@veyyon-lsp-sync-once-");
+		try {
+			const server = installFakeLsp((message, srv) => {
+				if (message.method === "initialize") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
+				} else if (message.method === "shutdown") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: null });
+				} else if (message.method === "exit") {
+					srv.exit(0);
+				}
+			});
+			const config: ServerConfig = { command: "fake-lsp", fileTypes: ["ts"], rootMarkers: [] };
+			const client = await lspClient.getOrCreateClient(config, tempDir.path(), 1_000);
+			const filePath = path.join(tempDir.path(), "a.ts");
+			await Bun.write(filePath, "on disk");
+
+			await lspClient.syncContent(client, filePath, "one");
+			await lspClient.syncContent(client, filePath, "two");
+			await lspClient.ensureFileOpen(client, filePath);
+			await lspClient.syncContent(client, filePath, "three");
+			// Messages arrive in write order, so once "three" is in, everything before it is.
+			await server.waitFor(message => JSON.stringify(message.params ?? null).includes('"three"'), 2_000);
+
+			const documentMessages = server.received
+				.filter(message => message.method?.startsWith("textDocument/"))
+				.map(message => {
+					const params = message.params as {
+						textDocument: { version: number; text?: string };
+						contentChanges?: Array<{ text: string }>;
+					};
+					return [
+						message.method,
+						params.textDocument.version,
+						params.textDocument.text ?? params.contentChanges?.[0]?.text,
+					];
+				});
+			expect(documentMessages).toEqual([
+				["textDocument/didOpen", 1, "one"],
+				["textDocument/didChange", 2, "two"],
+				["textDocument/didChange", 3, "three"],
+			]);
+		} finally {
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
+	});
+
 	it("advertises workspace folder support during LSP initialization", async () => {
 		const tempDir = TempDir.createSync("@veyyon-lsp-workspace-folders-");
 		try {

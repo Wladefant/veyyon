@@ -4,6 +4,7 @@
 
 ### Changed
 
+- The reftable HEAD lookup, the LSP document open and the eval kernel's result each have one implementation shared by their sync and async or success and cancellation paths; no user-facing change.
 - The debug adapter client starts every adapter, and kills one that never connects, through one helper; the GitHub issue, PR and diff lookups return the cache's own lookup result type; and the custom tool loader declares its pending-action shape once; no user-facing change.
 - `check:types` covers `bench/`, and the code-review-reminder, rendering, session-compaction-stall and session-tree-nav benches compile and run against the current APIs; no user-facing change.
 - The streamed tool-argument preview copies each run of plain characters in a string argument at once instead of one character at a time, which cut the one-shot decode of a 160 KB `write` call from 1.75 ms to 0.68 ms and its live reveal in 100-character steps from 10.5 ms to 9.2 ms (median).

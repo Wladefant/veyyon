@@ -626,72 +626,49 @@ async function queryGitOrNull(
 	});
 }
 
+/** The HEAD state of a reftable repository from its symbolic HEAD (null when detached) and the commit HEAD resolves to. */
+function reftableHeadState(repository: GitRepository, symbolicRef: string | null, commit: string | null): GitHeadState {
+	if (symbolicRef === null) {
+		return { ...repository, kind: "detached", commit, headContent: commit || "" };
+	}
+	const branchName = symbolicRef.startsWith(LOCAL_BRANCH_PREFIX)
+		? symbolicRef.slice(LOCAL_BRANCH_PREFIX.length)
+		: null;
+	return {
+		...repository,
+		kind: "ref",
+		ref: symbolicRef,
+		branchName,
+		commit,
+		headContent: `${HEAD_REF_PREFIX} ${symbolicRef}`,
+	};
+}
+
 async function resolveHeadStateReftable(repository: GitRepository, signal?: AbortSignal): Promise<GitHeadState | null> {
 	const symResult = await queryGitOrNull(repository.repoRoot, ["symbolic-ref", "HEAD"], signal);
 	const revResult = await queryGitOrNull(repository.repoRoot, ["rev-parse", "--verify", "HEAD"], signal);
+	const symbolicRef = symResult && symResult.exitCode === 0 ? symResult.stdout.trim() : null;
 	const commit = revResult && revResult.exitCode === 0 ? revResult.stdout.trim() || null : null;
+	return reftableHeadState(repository, symbolicRef, commit);
+}
 
-	if (symResult && symResult.exitCode === 0) {
-		const ref = symResult.stdout.trim();
-		const branchName = ref.startsWith(LOCAL_BRANCH_PREFIX) ? ref.slice(LOCAL_BRANCH_PREFIX.length) : null;
-		return {
-			...repository,
-			kind: "ref",
-			ref,
-			branchName,
-			commit,
-			headContent: `${HEAD_REF_PREFIX} ${ref}`,
-		};
-	}
-
-	return {
-		...repository,
-		kind: "detached",
-		commit,
-		headContent: commit || "",
-	};
+/** Trimmed stdout of a read-only git command run synchronously, or null when it exits non-zero. */
+function queryGitSync(repoRoot: string, args: readonly string[]): string | null {
+	const result = Bun.spawnSync(["git", ...withShortLivedGitConfig(withNoOptionalLocks(args))], {
+		cwd: repoRoot,
+		env: buildGitEnv(),
+		stdout: "pipe",
+		stderr: "pipe",
+		windowsHide: true,
+	});
+	return result.exitCode === 0 ? result.stdout.toString("utf8").trim() : null;
 }
 
 function resolveHeadStateReftableSync(repository: GitRepository): GitHeadState | null {
 	ensureAvailable();
-	const symArgs = withShortLivedGitConfig(withNoOptionalLocks(["symbolic-ref", "HEAD"]));
-	const symResult = Bun.spawnSync(["git", ...symArgs], {
-		cwd: repository.repoRoot,
-		env: buildGitEnv(),
-		stdout: "pipe",
-		stderr: "pipe",
-		windowsHide: true,
-	});
-
-	const revArgs = withShortLivedGitConfig(withNoOptionalLocks(["rev-parse", "--verify", "HEAD"]));
-	const revResult = Bun.spawnSync(["git", ...revArgs], {
-		cwd: repository.repoRoot,
-		env: buildGitEnv(),
-		stdout: "pipe",
-		stderr: "pipe",
-		windowsHide: true,
-	});
-	const commit = revResult.exitCode === 0 ? new TextDecoder().decode(revResult.stdout).trim() || null : null;
-
-	if (symResult.exitCode === 0) {
-		const ref = new TextDecoder().decode(symResult.stdout).trim();
-		const branchName = ref.startsWith(LOCAL_BRANCH_PREFIX) ? ref.slice(LOCAL_BRANCH_PREFIX.length) : null;
-		return {
-			...repository,
-			kind: "ref",
-			ref,
-			branchName,
-			commit,
-			headContent: `${HEAD_REF_PREFIX} ${ref}`,
-		};
-	}
-
-	return {
-		...repository,
-		kind: "detached",
-		commit,
-		headContent: commit || "",
-	};
+	const symbolicRef = queryGitSync(repository.repoRoot, ["symbolic-ref", "HEAD"]);
+	const commit = queryGitSync(repository.repoRoot, ["rev-parse", "--verify", "HEAD"]) || null;
+	return reftableHeadState(repository, symbolicRef, commit);
 }
 
 async function readRef(repository: GitRepository, targetRef: string, signal?: AbortSignal): Promise<string | null> {
