@@ -21,6 +21,7 @@
 ### Changed
 
 - No user-visible change: the selectors, dialogs, dashboards and the Ctrl+P model cycle step through their rows, tabs and models with `wrapIndex` instead of hand-written wrap arithmetic.
+- No user-visible change: the pointer-band selectors and the MCP add wizard repaint on the result of `HoverController.set` instead of comparing the hovered row themselves.
 - The composer reads the draft's queue shorthand and magic keywords once per frame instead of once per drawn row, so a keystroke and its frame in a 400-line draft take about 20 µs instead of about 85 µs.
 - No user-visible change: a modal card is laid out and its chrome planned once per frame, and the body is painted against that plan (`layoutModalCard`, `planModalChrome`, `renderModalShell`).
 - A start with no usable credential reports the missing credential without building the whole model catalog, so it reaches the prompt in 72 ms instead of 112 ms, and the message counts providers instead of models.
@@ -111,6 +112,7 @@
 - The overall, per-model and per-folder totals read from one aggregate query, and the user-message table schema is written once for creation and for the rebuild of a stale table; no user-facing change.
 - `resultTextOf` joins a result's text blocks through `contentText` from `@veyyon/utils/content-text`; rendered output is unchanged.
 - No user-visible change: `Form`, `SettingsList` and `TabBar` step through their fields, rows, sections and tabs with `wrapIndex`.
+- `HoverController.set` returns whether the hovered row changed, so a caller repaints only on a change.
 - A height-capped `Editor` scrolls to the row its layout paints the cursor on instead of laying out the draft a second time, so a keystroke and its frame in a 4000-line draft take about 110 µs instead of about 165 µs.
 - An `Editor` undo step copies the draft's line array instead of deep-cloning every line, so a backspace in a 4000-line draft costs about 20 µs instead of about 340 µs and a full undo stack of that draft retains 3.5 MiB instead of 26.7 MiB.
 - No user-visible change: `TabBar.renderVertical` counts its visible rows with `clampLow`.
