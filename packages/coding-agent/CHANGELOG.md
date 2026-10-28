@@ -5,8 +5,10 @@
 ### Added
 
 - Added owner-local terminal-control credential rotation without restarting the terminal or active turn.
+- Added `tools.maxDiscoveredTools` (default 40), which caps active discovered tools and evicts the least recently used ([Refs #685](https://github.com/Wladefant/veyyon/issues/685)).
 
 ### Fixed
+- Compaction unloads discovered tools the retained transcript did not use, and automatic compaction stops looping when fixed context stays over the threshold ([Refs #685](https://github.com/Wladefant/veyyon/issues/685)).
 - Restored launch request replay, idle socket cleanup, recovery quarantine, and file-search test injection after upstream conflict resolution.
 - Plan mode stays on, with its plan tools and plan model, when restoring the pre-plan model or tools fails during exit.
 - Migrated tests off the removed model-roles settings API to `defaultModel` and `agent.helpers`, deleted the role-table tests whose contract no longer exists, and moved fetch-timeout to `withScopedTimeoutSignal` ([Refs #707](https://github.com/Wladefant/veyyon/issues/707)).
