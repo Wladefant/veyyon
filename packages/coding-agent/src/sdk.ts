@@ -1530,6 +1530,7 @@ class SessionStartup {
 			serviceTierByFamily: this.#serviceTierByFamily,
 			sessionManager: this.#sessionManager,
 			settings,
+			modelPatternFallbackKey: options.modelPatternFallbackKey ?? this.#modelSelection.modelPatternFallbackKey,
 			autoApprove: options.autoApprove,
 			bypassAllApprovals: options.bypassAllApprovals,
 			parentApprovalBypassed: options.parentApprovalBypassed,

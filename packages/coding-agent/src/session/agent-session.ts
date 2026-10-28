@@ -766,6 +766,10 @@ export class AgentSession {
 	 */
 	readonly #config: AgentSessionConfig;
 
+	get modelPatternFallbackKey(): string | undefined {
+		return this.#config.modelPatternFallbackKey;
+	}
+
 	readonly configWarnings: string[] = [];
 
 	#scopedModels: Array<{
