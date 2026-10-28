@@ -1029,6 +1029,8 @@ function reflowToWidth(lines: readonly string[], width: number): string[] {
 
 class StressComponent implements Component, Focusable {
 	focused = false;
+	/** The rows of the last render, cursor marker included: the frame the engine composes has it stripped. */
+	lastRender: readonly string[] = [];
 	#model: StressModel;
 	#reflow: boolean;
 
@@ -1041,7 +1043,9 @@ class StressComponent implements Component, Focusable {
 
 	render(width: number): string[] {
 		const lines = this.#model.renderedLines(width, this.focused);
-		return this.#reflow ? reflowToWidth(lines, width) : lines;
+		const rows = this.#reflow ? reflowToWidth(lines, width) : lines;
+		this.lastRender = rows;
+		return rows;
 	}
 }
 
@@ -1184,6 +1188,12 @@ class StressDriver {
 	#shadowCommitted = 0;
 	#shadowFrame: string[] = [];
 	#shadowFrameHeight = 0;
+	// Frame rows carrying a cursor marker, and the window top the previous
+	// frame derived: the two inputs of the engine's tail re-anchor that the
+	// committed counter does not carry. Both are the harness's own
+	// observations, never read from the engine.
+	#shadowCursorRows: number[] = [];
+	#shadowPrevWindowTop = 0;
 	#shadowFrameWidth = 0;
 	#shadowFrameOverlay = false;
 	#shadowFrameGeometryChanged = false;
@@ -1250,13 +1260,24 @@ class StressDriver {
 			// previous frame's emit must materialize from the frame that was on
 			// screen when they scrolled off, not from the frame about to render.
 			this.#syncShadowCommitted();
-			// Markers are engine-internal sentinels; the engine strips them from
-			// this same array immediately after render returns, and its commit
-			// ledger (prefix + audit) only ever sees stripped rows — mirror that
-			// exactly. (Also: stripVTControlCharacters would otherwise swallow
-			// everything after an APC introducer during normalization.)
-			const stripped = lines.map(line => (line.includes(CURSOR_MARKER) ? line.replaceAll(CURSOR_MARKER, "") : line));
-			this.#shadowFrame = stripped.map(line => expectedTerminalLine(line, width));
+			this.#shadowPrevWindowTop = this.#shadowWindowTop;
+			// The engine strips cursor markers while it composes the frame, so
+			// `lines` carries none; their rows come from the root children's own
+			// renders, in mount order. A child whose segment the engine reused
+			// without calling render() kept its rows, and so did its last render.
+			this.#shadowCursorRows = [];
+			let offset = 0;
+			for (const child of this.#tui.children) {
+				if (!(child instanceof StressComponent)) throw new Error("render stress mounts only StressComponent roots");
+				child.lastRender.forEach((row, index) => {
+					if (row.includes(CURSOR_MARKER)) this.#shadowCursorRows.push(offset + index);
+				});
+				offset += child.lastRender.length;
+			}
+			if (offset !== lines.length) {
+				throw new Error(`root children rendered ${offset} rows but the composed frame has ${lines.length}`);
+			}
+			this.#shadowFrame = lines.map(line => expectedTerminalLine(line, width));
 			this.#shadowFrameWidth = width;
 			this.#shadowFrameHeight = this.#term.rows;
 			this.#shadowFrameOverlay = this.#tui.hasOverlay();
@@ -2591,13 +2612,31 @@ class StressDriver {
 	}
 
 	/**
-	 * The frame row mapped to grid row 0: the frame tail anchored at the
-	 * viewport, floored at the committed boundary (rows already in native
-	 * history are never re-shown on the grid). Derived, never stored — every
-	 * stored copy of this value drifted from the engine on some seed.
+	 * The frame row mapped to grid row 0, by the engine's window law: the frame
+	 * tail anchored at the viewport, floored at the committed boundary (rows
+	 * already in native history are not re-shown on the grid). The exception is
+	 * the engine's tail re-anchor, which shows the frame tail without lowering
+	 * the commit index when the frame no longer reaches past the committed rows,
+	 * or when the live tail below them is shorter than the viewport while the
+	 * previous window already showed committed rows or a cursor marker sits in
+	 * that tail: the prompt never floats above blank rows. Derived per frame —
+	 * the committed counter is the engine's claim, the cursor rows and the
+	 * previous window top are the harness's own. A claim that counts a
+	 * collapsed frame's replaced row as committed puts the frame inside the
+	 * claim, where this law shows the tail as the engine does, so viewport
+	 * fidelity cannot see that row go missing from history;
+	 * `a-collapse-that-rewrites-a-recorded-row-puts-the-new-row-in-history.test.ts`
+	 * covers that class.
 	 */
 	get #shadowWindowTop(): number {
-		return Math.max(this.#shadowCommitted, this.#shadowFrame.length - Math.max(1, this.#shadowFrameHeight), 0);
+		const frameLength = this.#shadowFrame.length;
+		const height = Math.max(1, this.#shadowFrameHeight);
+		const committed = this.#shadowCommitted;
+		const reanchorsToTail =
+			frameLength <= committed ||
+			(frameLength - committed < height &&
+				(this.#shadowPrevWindowTop < committed || this.#shadowCursorRows.some(row => row >= committed)));
+		return reanchorsToTail ? Math.max(0, frameLength - height) : Math.max(committed, frameLength - height, 0);
 	}
 
 	/**
