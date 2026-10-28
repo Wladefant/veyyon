@@ -155,7 +155,7 @@ describe("ordered agent model auth resolution", () => {
 
 		const result = await resolveAgentModelChain(["qwen3.6-plus-free"], registry);
 
-		expect(result.model.provider).toBe("opencode-zen");
+		expect(result.model?.provider).toBe("opencode-zen");
 	});
 
 	test("uses the third model when the first two selectors are quota-suppressed", async () => {
@@ -184,7 +184,7 @@ describe("ordered agent model auth resolution", () => {
 			registry,
 		);
 
-		expect(result.model.provider).toBe("third-provider");
+		expect(result.model?.provider).toBe("third-provider");
 	});
 });
 
@@ -204,6 +204,6 @@ describe("session-sticky OAuth resolution", () => {
 		const result = await resolveAgentModelChain(["qwen3.6-plus-free"], registry, undefined, "agent-session");
 
 		expect(receivedSessionId).toBe("agent-session");
-		expect(result.model.provider).toBe("opencode-zen");
+		expect(result.model?.provider).toBe("opencode-zen");
 	});
 });
