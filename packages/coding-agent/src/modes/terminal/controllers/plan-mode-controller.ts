@@ -12,7 +12,7 @@ import type { CompactionOutcome } from "@veyyon/agent-core/compaction";
 import type { Model } from "@veyyon/ai";
 import { modelsAreEqual } from "@veyyon/catalog/models";
 import type { OverlayHandle } from "@veyyon/tui";
-import { errorMessage, formatNumber, isEnoent, prompt } from "@veyyon/utils";
+import { errorMessage, formatNumber, isEnoent, logger, prompt } from "@veyyon/utils";
 import type { ContextUsage } from "../../../extensibility/extensions";
 import { copyLocalRoot, listLocalPlanFileUrls, resolveLocalUrlToPath } from "../../../internal-urls/local-protocol";
 import {
@@ -99,6 +99,9 @@ export class PlanModeController {
 	/** Leaves plan mode for a session switch or resume: tools restored, no status message, model left as is. */
 	async clearTransientState(): Promise<void> {
 		if (!this.enabled && !this.paused) return;
+		this.enabled = false;
+		this.paused = false;
+		this.#pendingModelSwitch = undefined;
 		if (this.#previousTools !== undefined) {
 			await this.ctx.session.setActiveToolsByName(this.#previousTools);
 		}
@@ -192,6 +195,35 @@ export class PlanModeController {
 		} catch (error) {
 			this.ctx.showWarning(`Failed to switch model after streaming: ${errorMessage(error)}`);
 		}
+	}
+
+	/** Reconcile a live plan-role reassignment without changing the exit restore target. */
+	onHelperModelsChanged(): void {
+		if (!this.enabled || this.paused) return;
+
+		const resolved = this.ctx.session.resolveHelperModel("plan");
+		this.#pendingModelSwitch = undefined;
+		if (!resolved) {
+			this.ctx.showWarning(
+				`${helperSettingPath("plan", "model")} matches no available model; plan mode stays on the current model.`,
+			);
+			return;
+		}
+
+		const currentModel = this.ctx.session.model;
+		if (modelsAreEqual(currentModel, resolved.model)) {
+			if (resolved.thinkingLevel) this.ctx.session.setThinkingLevel(resolved.thinkingLevel);
+			return;
+		}
+
+		if (this.ctx.session.isStreaming) {
+			this.#pendingModelSwitch = { model: resolved.model, thinkingLevel: resolved.thinkingLevel };
+			return;
+		}
+
+		void this.ctx.session.setModelTemporary(resolved.model, resolved.thinkingLevel).catch(error => {
+			this.ctx.showWarning(`Failed to switch to plan model for plan mode: ${errorMessage(error)}`);
+		});
 	}
 
 	async enter(options?: { planFilePath?: string; workflow?: "parallel" | "iterative" }): Promise<void> {
@@ -297,7 +329,6 @@ export class PlanModeController {
 			await this.ctx.session.setModelTemporary(prev.model, prev.thinkingLevel);
 		}
 	}
-
 	/**
 	 * Idempotent post-compaction model transition for the plan-approval compact
 	 * path. The deferred pre-plan state is consumed on first application, so a
@@ -324,30 +355,38 @@ export class PlanModeController {
 			return;
 		}
 
+		// Close the event boundary before awaiting tool restoration so a helper update
+		// cannot enqueue work after plan mode has started exiting.
+		this.enabled = false;
+		// Drop any helper-model switch before the restore can enqueue the pre-plan model.
+		this.#pendingModelSwitch = undefined;
 		const previousTools = this.#previousTools;
-		if (previousTools && previousTools.length > 0) {
-			await this.ctx.session.setActiveToolsByName(previousTools);
-		}
-		if (this.#previousModelState) {
-			if (!options?.deferModelRestore) {
-				await this.#restorePlanPreviousModel(this.#previousModelState);
+		// Captured before any restore so a failed exit can put plan mode back as it was.
+		const planTools = this.ctx.session.getActiveToolNames();
+		const planModel = this.ctx.session.model;
+		const planThinkingLevel = this.ctx.session.configuredThinkingLevel();
+		try {
+			if (previousTools && previousTools.length > 0) {
+				await this.ctx.session.setActiveToolsByName(previousTools);
 			}
-			// If #applyPlanModeModel queued a deferred switch to the plan helper's model
-			// (because the session was streaming on entry), drop it now: we are
-			// leaving plan mode, so flushing it on the next agent_end would land the
-			// session on the plan model after the user has exited plan mode
-			// (issue #816). This runs even when deferModelRestore is set
-			// (compact-approval path): otherwise the stale plan switch survives and
-			// flushPendingModelSwitch() later clobbers the restored/execution model.
-			// Only clear when the pending target matches the plan model — leave
-			// any unrelated user-queued switch intact.
-			const pending = this.#pendingModelSwitch;
-			if (pending) {
-				const planResolution = this.ctx.session.resolveHelperModel("plan");
-				if (planResolution && modelsAreEqual(pending.model, planResolution.model)) {
-					this.#pendingModelSwitch = undefined;
+			if (this.#previousModelState) {
+				if (!options?.deferModelRestore) {
+					await this.#restorePlanPreviousModel(this.#previousModelState);
 				}
 			}
+		} catch (error) {
+			// The exit did not complete: reinstate the plan tools and plan model the user still sees.
+			this.enabled = true;
+			try {
+				await this.ctx.session.setActiveToolsByName(planTools);
+				if (planModel) {
+					await this.#restorePlanPreviousModel({ model: planModel, thinkingLevel: planThinkingLevel });
+				}
+			} catch (rollbackError) {
+				// Keep the original exit error as the thrown cause; report the rollback failure separately.
+				logger.warn("Plan mode exit rollback failed", { error: errorMessage(rollbackError) });
+			}
+			throw error;
 		}
 		this.ctx.session.setStandingResolveHandler?.(null);
 		this.ctx.session.setPlanModeState(undefined);

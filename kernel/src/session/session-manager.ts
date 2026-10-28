@@ -26,13 +26,19 @@ import {
 } from "./custom-message-payload";
 import { SESSION_EXIT_CUSTOM_TYPE } from "./exit-diagnostics";
 import type { OperatorNotices } from "./operator-notices";
-import { ColdEntryPayloads, MIN_COLD_LINE_BYTES, RECORD_ONLY_ENTRY_TYPES } from "./session-cold-payloads";
 import {
-	BRANCH_SETTINGS_ENTRY_TYPES,
+	ColdEntryPayloads,
+	LEADING_ENTRY_ID,
+	MIN_COLD_LINE_BYTES,
+	RECORD_ONLY_ENTRY_TYPES,
+} from "./session-cold-payloads";
+import {
 	type BuildSessionContextOptions,
 	buildSessionContext,
 	buildSessionContextFromPath,
 	compactedHistoryEnd,
+	contextCompaction,
+	RESIDENT_SETTINGS_ENTRY_TYPES,
 	resolveContextLeaf,
 	type SessionContext,
 	walkBranchPath,
@@ -123,8 +129,6 @@ const CHUNK_TARGET_CHARS = 1 << 20;
  * the compaction boundary.
  */
 interface PublishedLines {
-	/** The header line as published. A header that serializes differently needs the whole file. */
-	header: string;
 	/**
 	 * The entries whose lines open the file: the first `baseLength` items of `base`, an array that is or
 	 * was `#entries`. Such an array only ever grows by `push`, so those items stay the entries that were
@@ -574,8 +578,9 @@ export class SessionManager {
 	 * The attempt needs no schedule and no backoff, because a full-file publish is
 	 * self-sufficient: it writes every entry this manager holds, so ONE successful
 	 * rewrite makes the file whole again however many appends were refused before
-	 * it. It costs one serialization of the transcript, entries arrive at the pace
-	 * of a conversation, and a fault that is still there simply latches again.
+	 * it. An append takes the attempt on the disk chain (`#publishInBackground`),
+	 * so the entries that arrive before it runs share it and none of them waits on
+	 * it, and a fault that is still there simply latches again.
 	 */
 	#retryPersistenceAfterFailure(): boolean {
 		if (!this.#diskFailure) return false;
@@ -741,7 +746,7 @@ export class SessionManager {
 		this.#lastBodyLines = undefined;
 		const header = this.#headerLine();
 		const foreign = this.#foreignLines;
-		const lines: PublishedLines = { header, base: this.#entries, baseLength: 0, appended: [], entryOffsets: [] };
+		const lines: PublishedLines = { base: this.#entries, baseLength: 0, appended: [], entryOffsets: [] };
 		yield this.#titleSlotLine();
 		yield header;
 		let bytes = yield* this.#entryLines(lines, 0, SESSION_TITLE_SLOT_BYTES + Buffer.byteLength(header, "utf-8"));
@@ -775,10 +780,11 @@ export class SessionManager {
 	}
 
 	/**
-	 * The lines a tail rewrite writes after the first `keep` entries of `lines`, which end at byte
-	 * `keepBytes`. `lines` is cut back to those entries and extended to describe the new file.
+	 * The lines a tail rewrite writes after the first `keep` entries of `lines`, the first starting
+	 * at byte `start` of the new file. `lines` is cut back to those entries and extended to describe
+	 * the new file.
 	 */
-	*#tailLines(lines: PublishedLines, keep: number, keepBytes: number): Generator<string> {
+	*#tailLines(lines: PublishedLines, keep: number, start: number): Generator<string> {
 		this.#lastBodyBytes = 0;
 		this.#lastBodyLines = undefined;
 		// The plan matched every kept entry against `#entries`, so while the base is still that array the
@@ -790,7 +796,7 @@ export class SessionManager {
 			lines.appended.length = keep - lines.baseLength;
 		}
 		lines.entryOffsets.length = keep;
-		this.#lastBodyBytes = yield* this.#entryLines(lines, keep, keepBytes);
+		this.#lastBodyBytes = yield* this.#entryLines(lines, keep, start);
 		this.#lastBodyLines = lines;
 	}
 
@@ -801,13 +807,15 @@ export class SessionManager {
 	 *
 	 * `updatedFrom` is the earliest entry an in-place update may have changed. An entry replaced,
 	 * dropped or reordered since the publish ends the kept run too, because it no longer matches the
-	 * entry whose line is at that position.
+	 * entry whose line is at that position. The header is not kept: every tail rewrite writes the
+	 * title slot and the header again, so a header that changed (a moved working directory) costs
+	 * its own line, not the transcript.
 	 */
 	#tailRewritePlan(updatedFrom: number): { lines: PublishedLines; keep: number; keepBytes: number } | undefined {
 		const state = this.#publishedFileState;
 		const lines = state?.lines;
 		if (!state || !lines || !this.#storage.rewriteTailAtomic || this.#foreignLines.length > 0) return undefined;
-		if (lines.header !== this.#headerLine() || !this.#fileIsExactlyAsPublished()) return undefined;
+		if (!this.#fileIsExactlyAsPublished()) return undefined;
 		const entries = this.#entries;
 		const { base, baseLength, appended, entryOffsets } = lines;
 		let keep = Math.min(updatedFrom, entryOffsets.length, entries.length);
@@ -824,27 +832,38 @@ export class SessionManager {
 	}
 
 	/**
-	 * Publish the file at `sessionFile` atomically, writing only the lines after the kept prefix
-	 * when {@link #tailRewritePlan} finds one.
+	 * Publish the file at `sessionFile` atomically, writing only the head and the lines after the
+	 * kept prefix when {@link #tailRewritePlan} finds one. Returns how many bytes the kept lines moved.
 	 */
-	async #publishAtomically(sessionFile: string, epoch: number, updatedFrom: number): Promise<void> {
+	async #publishAtomically(sessionFile: string, epoch: number, updatedFrom: number): Promise<number> {
 		const options = { commitGuard: () => this.#diskEpoch === epoch };
 		const plan = this.#tailRewritePlan(updatedFrom);
 		if (!plan || !this.#storage.rewriteTailAtomic) {
 			await this.#storage.writeTextAtomic(sessionFile, this.#fileBody(), options);
-			return;
+			return 0;
 		}
 		// The arrays are rebuilt for the new file as its lines are written, so they stop
 		// describing the old one now.
 		const { lines, keep, keepBytes } = plan;
 		if (this.#publishedFileState?.lines === lines) this.#publishedFileState.lines = undefined;
+		// The first entry's line starts where the old title slot and header end. A header of another
+		// length moves every kept line by the difference, once, before the tail is written.
+		const headBytes = lines.entryOffsets[0]!;
+		const head = this.#titleSlotLine() + this.#headerLine();
+		const shift = Buffer.byteLength(head, "utf-8") - headBytes;
+		if (shift !== 0) {
+			const offsets = lines.entryOffsets;
+			for (let i = 0; i < keep; i++) offsets[i] = offsets[i]! + shift;
+		}
 		await this.#storage.rewriteTailAtomic(
 			sessionFile,
+			headBytes,
 			keepBytes,
-			this.#titleSlotLine(),
-			() => batchLines(this.#tailLines(lines, keep, keepBytes)),
+			head,
+			() => batchLines(this.#tailLines(lines, keep, keepBytes + shift)),
 			options,
 		);
+		return shift;
 	}
 
 	/**
@@ -965,6 +984,13 @@ export class SessionManager {
 		const foreign: string[] = [];
 		let liveWriterEntries = 0;
 		for (const raw of text.split("\n")) {
+			// Most entry lines open with their id, so a line this manager wrote is known
+			// without parsing it. Parsing every line was most of a refresh: 231ms of a
+			// 146MB transcript against 19ms for this match, and a refresh runs on every
+			// publish while another window holds the file. A line of any other shape takes
+			// the full parse below.
+			const leadingId = LEADING_ENTRY_ID.exec(raw)?.[1];
+			if (leadingId !== undefined && this.#isOwnId(leadingId)) continue;
 			if (!raw.trim()) continue;
 			let parsed: { type?: unknown; id?: unknown; customType?: unknown } | undefined;
 			try {
@@ -1082,8 +1108,27 @@ export class SessionManager {
 					this.#coolUnreachablePayloads();
 				}
 			},
-			{ epoch: startEpoch },
+			// A whole-file publish is how a fault heals, so a fault latched while this waited its turn
+			// is no reason to skip it. Skipping also stranded the fence `#publishInBackground` takes:
+			// every later append was absorbed for a publish that never ran, and `flush()` resolved
+			// with those entries in memory only.
+			{ epoch: startEpoch, ignorePriorError: true },
 		);
+	}
+
+	/**
+	 * Publish the whole transcript on the disk chain, and absorb every append into that publish
+	 * until it runs: the fence is taken now, at the epoch the publish runs under, so an append
+	 * landing before it starts sets `#atomicRewriteDirty` instead of writing on its own.
+	 *
+	 * A failure is latched and reported by `#noteDiskFailure`, and the next append retries it.
+	 */
+	#publishInBackground(): void {
+		this.#fileIsCurrent = false;
+		this.#rewriteRequired = true;
+		this.#atomicRewriteDirty = true;
+		this.#atomicRewriteFenceEpoch = this.#diskEpoch;
+		this.#rewriteAtomically().catch(() => undefined);
 	}
 
 	/**
@@ -1114,10 +1159,10 @@ export class SessionManager {
 				let published = false;
 				try {
 					const coldIdentity = this.#publishedFileState?.identity;
-					await this.#publishAtomically(sessionFile, epoch, updatedFrom);
+					const shift = await this.#publishAtomically(sessionFile, epoch, updatedFrom);
 					if (this.#diskEpoch !== epoch) return false;
 					this.#notePublishedFile();
-					this.#rebaseColdPayloads(coldIdentity);
+					this.#rebaseColdPayloads(coldIdentity, shift);
 					published = true;
 				} finally {
 					// Not written, so the next rewrite still owes these entries.
@@ -1139,10 +1184,9 @@ export class SessionManager {
 	#appendToSessionFile(entry: SessionEntry): void {
 		if (!this.#persist || !this.#sessionFile) return;
 		// A latched fault does not refuse this entry: it makes the entry the reason to
-		// try the file again. The retry marks the file divergent, so the branch below
-		// publishes the whole transcript rather than appending one line to a file that
-		// is missing everything since the fault.
-		this.#retryPersistenceAfterFailure();
+		// try the file again, with a publish of the whole transcript rather than one line
+		// appended to a file that is missing everything since the fault.
+		const retrying = this.#retryPersistenceAfterFailure();
 
 		// Lazy gate: a brand-new session is not written until it has an assistant
 		// message (or someone forced creation), so sessions that never produce
@@ -1165,6 +1209,19 @@ export class SessionManager {
 			this.#atomicRewriteDirty = true;
 			return;
 		}
+
+		// The retry publishes on the disk chain, not here. A fault that lasts made the
+		// synchronous rewrite below run once per entry, each one reading and writing the
+		// whole transcript on the event loop: 1.7s per entry on a 146MB session, so the
+		// window froze for every keystroke that appended. On the chain a burst of entries
+		// shares one publish, and the loop keeps running while it writes. Durability moves
+		// to the disk chain (`flush()`) for these entries, which were not reaching the
+		// file anyway.
+		if (retrying) {
+			this.#publishInBackground();
+			return;
+		}
+
 		// Cold/divergent: not on disk yet, or in-memory entries diverged from the
 		// file → rewrite the whole file synchronously and keep going.
 		if (!this.#fileIsCurrent || this.#rewriteRequired) {
@@ -1173,23 +1230,14 @@ export class SessionManager {
 		}
 
 		// Another window may have replaced the file since the writer was opened, in
-		// which case the handle addresses an inode nothing can reach any more. The
-		// merge that carries both histories needs to READ the file, which this
-		// synchronous path cannot do, so hand the entry to the atomic rewrite: it
-		// refreshes the foreign lines and republishes everything, including this
-		// entry. Durability moves to the disk chain (`flush()`) for this one entry,
-		// which is the cost of not writing it into a file that no longer exists.
+		// which case the handle addresses an inode nothing can reach any more. The merge
+		// that carries both histories needs to READ the file, which this synchronous path
+		// cannot do, so hand the entry to the atomic rewrite: it refreshes the foreign
+		// lines and republishes everything, including this entry. Durability moves to the
+		// disk chain (`flush()`) for this one entry, which is the cost of not writing it
+		// into a file that no longer exists.
 		if (this.#fileReplacedUnderWriter()) {
-			this.#fileIsCurrent = false;
-			this.#rewriteRequired = true;
-			// Take the fence NOW, at the epoch the rewrite below will run under, so an
-			// append landing before that task starts is absorbed by its loop
-			// (`#atomicRewriteDirty`) instead of falling to the synchronous rewrite,
-			// which cannot read and would publish a body missing the other window's
-			// lines: the loss this whole path exists to prevent.
-			this.#atomicRewriteDirty = true;
-			this.#atomicRewriteFenceEpoch = this.#diskEpoch;
-			void this.#rewriteAtomically();
+			this.#publishInBackground();
 			return;
 		}
 
@@ -1274,14 +1322,14 @@ export class SessionManager {
 	 * After a publish of this manager's that kept the bytes before its first rewritten entry, read
 	 * the cold entries in that prefix from the new file, so the one it replaced is released. `from`
 	 * is the identity the publish started from; cold entries recorded against any other object
-	 * stay on it.
+	 * stay on it. `shift` is how many bytes the publish moved the kept lines by.
 	 */
-	#rebaseColdPayloads(from: string | undefined): void {
+	#rebaseColdPayloads(from: string | undefined, shift: number): void {
 		const sessionFile = this.#sessionFile;
 		const to = this.#publishedFileState?.identity;
 		if (from === undefined || to === undefined || sessionFile === undefined) return;
 		if (this.#cold.pinnedIdentity !== from) return;
-		this.#cold.rebase(this.#entries, to, () => this.#openPinnedReader(sessionFile));
+		this.#cold.rebase(this.#entries, to, () => this.#openPinnedReader(sessionFile), shift);
 	}
 
 	#openPinnedReader(sessionFile: string): PinnedSessionReader | undefined {
@@ -1303,12 +1351,16 @@ export class SessionManager {
 	 * Runs only while every entry's line in the file is what the entry holds: after a load that
 	 * changed nothing, after this manager's own publish, and after a compaction the caller has
 	 * persisted ({@link coolCompactedHistory}). An in-place update not yet handed to
-	 * {@link rewriteEntries}, a publish in flight, or a line of another writer's stops it.
+	 * {@link rewriteEntries}, a publish in flight, or a line of another writer's stops it. So does a
+	 * file that is not the size this manager published: another writer appending to the same file
+	 * object moves every line this manager appended after it, so the offsets recorded for them
+	 * name another entry's bytes.
 	 *
-	 * The live context is the active branch from the newest compaction's keep boundary on, plus
-	 * every entry on the branch whose kind the settings walk of each context build reads. Everything
-	 * else, including other branches and every {@link RECORD_ONLY_ENTRY_TYPES} entry, reads back on
-	 * use.
+	 * The live context is the active branch from the keep boundary of the compaction the context
+	 * applies on ({@link compactedHistoryEnd}), that compaction, and every entry on the branch whose
+	 * kind the settings walk of each context build reads ({@link RESIDENT_SETTINGS_ENTRY_TYPES}).
+	 * Every other compaction moves its summary and its server-side window alone. Everything else,
+	 * including other branches and every {@link RECORD_ONLY_ENTRY_TYPES} entry, reads back on use.
 	 */
 	#coolUnreachablePayloads(): void {
 		const sessionFile = this.#sessionFile;
@@ -1321,12 +1373,14 @@ export class SessionManager {
 			this.#rewriteRequired ||
 			this.#firstUpdatedEntry !== Number.POSITIVE_INFINITY ||
 			this.#atomicRewriteFenceEpoch !== null ||
-			this.#foreignLines.length > 0
+			this.#foreignLines.length > 0 ||
+			!this.#fileIsExactlyAsPublished()
 		) {
 			return;
 		}
 		const path = this.#activePath();
-		const liveFrom = compactedHistoryEnd(path);
+		const applied = contextCompaction(path);
+		const liveFrom = compactedHistoryEnd(path, applied);
 		const { base, baseLength, appended, entryOffsets } = lines;
 		// A session that never branched has the whole file as its branch, in file order: an entry's
 		// index in the file is its index on the branch, and no set of the live entries is needed.
@@ -1341,7 +1395,7 @@ export class SessionManager {
 			live = new Set<SessionEntry>();
 			for (let i = 0; i < path.length; i++) {
 				const entry = path[i]!;
-				if (i >= liveFrom || BRANCH_SETTINGS_ENTRY_TYPES.has(entry.type)) live.add(entry);
+				if (i >= liveFrom || entry === applied || RESIDENT_SETTINGS_ENTRY_TYPES.has(entry.type)) live.add(entry);
 			}
 		}
 		const identity = state.identity;
@@ -1350,7 +1404,11 @@ export class SessionManager {
 		for (let i = 0; i < entryOffsets.length; i++) {
 			const entry = i < baseLength ? base[i]! : appended[i - baseLength]!;
 			if (!RECORD_ONLY_ENTRY_TYPES.has(entry.type)) {
-				if (live !== undefined ? live.has(entry) : i >= liveFrom || BRANCH_SETTINGS_ENTRY_TYPES.has(entry.type))
+				if (
+					live !== undefined
+						? live.has(entry)
+						: i >= liveFrom || entry === applied || RESIDENT_SETTINGS_ENTRY_TYPES.has(entry.type)
+				)
 					continue;
 			}
 			const offset = entryOffsets[i]!;
@@ -1865,7 +1923,6 @@ export class SessionManager {
 			size: layout.size,
 			identity: layout.identity,
 			lines: {
-				header: layout.header,
 				base: this.#entries,
 				baseLength: this.#entries.length,
 				appended: [],
@@ -2034,7 +2091,8 @@ export class SessionManager {
 			const hasAssistant = this.#historyContainsAssistantMessage();
 			if (this.#persist && this.#sessionFile && (sessionFileExisted || hasAssistant)) {
 				this.#forceFileCreation = true;
-				await this.#rewriteAtomically();
+				// Only the header changed, so a rewrite keeps every entry line already on disk.
+				await this.#rewriteAtomically(this.#entries.length);
 			}
 		} catch (error) {
 			let rollbackError: Error | undefined;
@@ -2357,7 +2415,8 @@ export class SessionManager {
 		try {
 			if (this.#persist && this.#sessionFile && this.#storage.existsStateSync(this.#sessionFile) !== "absent") {
 				this.#forceFileCreation = true;
-				await this.#rewriteAtomically();
+				// Only the header changed, so a rewrite keeps every entry line already on disk.
+				await this.#rewriteAtomically(this.#entries.length);
 			}
 		} catch (error) {
 			// Atomic persistence leaves the old transcript intact. Restore the

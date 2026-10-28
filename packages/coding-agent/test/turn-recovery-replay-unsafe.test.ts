@@ -316,7 +316,7 @@ describe("AgentSession transient-error recovery replay safety", () => {
 			"retry.maxRetries": 2,
 			"retry.modelFallback": false,
 		});
-		settings.setModelRole("default", `${gptModel.provider}/${gptModel.id}`);
+		settings.setDefaultModel(`${gptModel.provider}/${gptModel.id}`);
 		const session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
@@ -379,7 +379,7 @@ describe("AgentSession transient-error recovery replay safety", () => {
 			"retry.maxRetries": 2,
 			"retry.modelFallback": false,
 		});
-		settings.setModelRole("default", `${gptModel.provider}/${gptModel.id}`);
+		settings.setDefaultModel(`${gptModel.provider}/${gptModel.id}`);
 		const session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
@@ -441,7 +441,7 @@ describe("AgentSession transient-error recovery replay safety", () => {
 			"retry.maxRetries": 2,
 			"retry.modelFallback": false,
 		});
-		settings.setModelRole("default", `${gptModel.provider}/${gptModel.id}`);
+		settings.setDefaultModel(`${gptModel.provider}/${gptModel.id}`);
 		const session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
@@ -495,7 +495,7 @@ describe("AgentSession transient-error recovery replay safety", () => {
 			"retry.maxRetries": 2,
 			"retry.modelFallback": false,
 		});
-		settings.setModelRole("default", `${gptModel.provider}/${gptModel.id}`);
+		settings.setDefaultModel(`${gptModel.provider}/${gptModel.id}`);
 		const session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
@@ -555,7 +555,7 @@ describe("AgentSession transient-error recovery replay safety", () => {
 			"retry.maxRetries": 2,
 			"retry.modelFallback": false,
 		});
-		settings.setModelRole("default", `${gptModel.provider}/${gptModel.id}`);
+		settings.setDefaultModel(`${gptModel.provider}/${gptModel.id}`);
 		const session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
@@ -669,7 +669,7 @@ describe("AgentSession Fireworks Fast recovery replay safety", () => {
 			"retry.maxRetries": 2,
 			"retry.modelFallback": false,
 		});
-		settings.setModelRole("default", `${fastModel.provider}/${fastModel.id}`);
+		settings.setDefaultModel(`${fastModel.provider}/${fastModel.id}`);
 		const session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
@@ -733,7 +733,7 @@ describe("AgentSession Fireworks Fast recovery replay safety", () => {
 			"retry.maxRetries": 2,
 			"retry.modelFallback": false,
 		});
-		settings.setModelRole("default", `${fastModel.provider}/${fastModel.id}`);
+		settings.setDefaultModel(`${fastModel.provider}/${fastModel.id}`);
 		const session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
@@ -805,7 +805,7 @@ describe("AgentSession Fireworks Fast recovery replay safety", () => {
 			"retry.maxRetries": 2,
 			"retry.modelFallback": false,
 		});
-		settings.setModelRole("default", `${fastModel.provider}/${fastModel.id}`);
+		settings.setDefaultModel(`${fastModel.provider}/${fastModel.id}`);
 		const session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),

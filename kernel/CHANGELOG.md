@@ -16,17 +16,41 @@
 - Sync upstream changes from santhreal/veyyon.
 
 ## [1.5.6] - 2026-10-10
+### Breaking Changes
+
+- `SessionStorage.rewriteTailAtomic(path, headBytes, keepBytes, head, tail, options)` takes `headBytes`, the length of the file's first bytes `head` replaces, so a head of another length moves the kept bytes; it fails when `headBytes` exceeds `keepBytes`.
+
 ### Removed
 
 - Removed the plugin-id helpers and installed-registry re-exports from `@veyyon/kernel/loader/plugins/marketplace/types` and `marketplace/registry`; import them from `@veyyon/kernel/loader/plugins/plugin-id` and `installed-registry`.
 
 ### Changed
 
+- `SessionManager.setCwd` and `moveTo` rewrite only the title slot and the header and keep every entry line on disk, and every tail rewrite writes the header again instead of falling back to a whole-file write when it changed, so a cwd change on a 321 MB session takes 117–147 ms instead of 1.9–2.2 s and holds 230–244 MB resident instead of 1.3–1.8 GB.
+- Restoring a loaded session's payloads scans its entries in 8 ms slices that let input and rendering run between them, so resuming a 148 MB session blocks the event loop for at most 34-41 ms instead of 58-61 ms.
+- A streamed load reads the projection of a compacted entry under 1 KiB instead of parsing its whole line, so opening a 148 MB session takes 227 ms instead of 277 ms and holds 40.7 MB of JavaScript heap instead of 43.1 MB, and resuming it settles at 171 MB resident instead of 178 MB.
+- A compaction that a later compaction summarized moves its summary out of memory, live and on load, so a resumed 148 MB session with 162 compactions peaks at 261 MB resident instead of 292 MB.
+- Compacted history moves out of memory whatever the length of each entry's line, where entries under 1 KiB used to stay, so a resumed 148 MB session settles at 205 MB resident instead of 215 MB and peaks at 302 MB instead of 318 MB.
 - An enum setting whose configured value is not one of its members reads as the declaration's `invalid` member when one is declared, and as its default otherwise; `getInvalidValue` returns that member.
 - A setting whose configured value is not of its declared kind (a string for a boolean, `null` for an array, a non-finite number) reads as its default and is reported once; `hasDeclaredKind` states the rule.
 - `declareSettings` rejects a table in which one setting path is the parent of another, since one config key holds a value or a group of settings, not both.
 - `invalidValues` lists mismatched values from `--config` overlay files as well as the profile file, and each entry's `replaced` marks a value a read serves the default or fallback in place of.
 - Opening a session reads each distinct blob once instead of once per reference, and a missing blob logs one warning per open instead of one per reference.
+- A cold message entry keeps its message's `usage` in memory and records how many `toolCall` blocks its moved content held, which `coldToolCallCount` returns, so a spend tally over compacted history reads no assistant line back.
+- A streamed load that moves compacted history to disk parses the native skim of each line instead of the line and re-reads from the file only the entries that stay in memory, so a 146 MB session resumes to an editable prompt in 490 ms instead of 710 ms and peaks at 421 MB instead of 472 MB, and a 284 MB session opens in 440 ms instead of 720 ms.
+- A session moves the server-side window of every compaction a newer compaction summarized out of memory, live and on load, and keeps the compaction's other fields in memory, so a 146 MB session with 126 windows resumes to an editable prompt in 596 ms instead of 714 ms with a peak resident set of 394 MB instead of 431 MB, and a 393 MB session with 305 windows loads in 424 ms instead of 645 ms.
+- `readColdMessage(message)` returns a cold message stand-in's full message read back from the session file without keeping it in memory, and returns any other message as it is.
+- `session-cold-payloads` imports the logger from `@veyyon/utils/logger` instead of the `@veyyon/utils` barrel, so the read tool's module graph again loads no module through the barrel; no user-visible change.
+
+### Fixed
+
+- A session no longer moves compacted history out of memory after another window appended to its file, which read entries back from shifted offsets and failed compaction with "could not be read back from bytes".
+- A compacted entry whose recorded offset no longer holds its line is read back from where one scan of the session file finds its line, and is checked to be the same entry, instead of failing every later compaction for the life of the process.
+- A missing blob is logged once per process instead of once per reference on every open and every read-back of an entry, which logged one lost blob store as tens of thousands of warnings.
+- An append made while a write fault lasts no longer rewrites the whole session file on the caller's stack: the retry publishes on the disk chain and entries that arrive before it runs share it, so on a 146 MB session an append takes 0.1 ms instead of 570 ms and the longest event-loop stall falls from 1.3 s to 100 ms.
+- A write fault that lands while a recovery publish waits its turn no longer cancels that publish, which left every later entry in memory only and never written to a healthy disk.
+- Reading a session file back for another window's lines no longer parses the lines this session wrote, cutting the read from 304 ms to 107 ms on a 146 MB file.
+- `compactedHistoryEnd` and `contextCompaction` return the boundary the session context is built from, the newest compaction the branch's default model can read, so history a context sends after a resume onto another model is no longer moved out of memory and read back from disk on every build.
 
 ## [1.5.6] - 2026-10-13
 

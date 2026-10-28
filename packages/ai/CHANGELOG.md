@@ -7,6 +7,8 @@
 - Added Anthropic prompt-cache telemetry records (`Usage.cacheRequests`) capturing requested TTL, prefix hash, model, and request ID across provider attempts ([Refs #711](https://github.com/Wladefant/veyyon/pull/711)).
 
 ### Fixed
+- Restored OpenCode header module parsing after upstream comment conflicts.
+- Speech transport uses withScopedTimeoutSignal instead of the removed withTimeoutSignal ([Refs #707](https://github.com/Wladefant/veyyon/issues/707)).
 - Google Antigravity usage retains daily windows from the model listing when the quota summary names both counters but omits those windows ([issue](https://github.com/Wladefant/veyyon/issues/611)).
 - Extracted request IDs from `AnthropicApiError` instances and response headers in Anthropic stream attempt error handling ([Refs #711](https://github.com/Wladefant/veyyon/pull/711)).
 
@@ -43,6 +45,12 @@
 
 ### Fixed
 
+- A ChatGPT Codex turn, each of its websocket frames and its server-side compaction send `access_programs.cyber` set to the Daybreak program discovery offers for the model, `daybreak_blue` before `daybreak_red`, so security work is no longer refused with `cyber_policy` for lack of the field.
+- A Gemini, Vertex, Gemini CLI or Antigravity turn that decodes a large function call, such as a `write` of more than about 45 KB, waits up to 660 s for the call instead of ending at 120 s with `Provider stream stalled while waiting for the next event` and decoding the same call again on every retry.
+- Cursor's MCP state request (`mcp_state_exec_args`, exec field 36), sent before a call to a tool reached over MCP, is answered with the `pi-agent` server and the tools the turn advertised, instead of failed with `This client does not run Cursor exec field 36.` and a logged warning.
+- An OpenCode request sent without a session id, such as a session title or a task label, carries a process-stable `x-opencode-session` header instead of none, so the gateway no longer rejects it with `400 Request is missing x-opencode-session (type=MissingSessionID)`.
+- An Anthropic-messages endpoint that answers a forced `tool_choice` with a 400 naming the field (`tool_choice: type "tool" and "any" are not supported for this model.`, or Kimi's `tool_choice 'specified' is incompatible with thinking enabled`) is retried once with `tool_choice: auto` and sent `auto` for that model for the rest of the session, instead of failing the turn.
+- Claude Opus and Sonnet 5.5 and later, Fable and Mythos on Bedrock are sent `auto` in place of a forced tool choice they reject.
 - A Bedrock, Codex, Ollama or Gemini CLI endpoint that never answers ends the turn with `Timed out after N ms waiting for the first event`, classified as a retryable timeout, instead of `Request was aborted` or `The operation timed out.`, which read as a cancellation or named no phase.
 - An OAuth account ranking whose usage fetch misses its deadline tries unblocked accounts first and blocked ones by the soonest reset, as API-key ranking already did, instead of storage order.
 - A credential ranking whose usage fetch fails clears its 5–15 s deadline timer instead of leaving it armed.

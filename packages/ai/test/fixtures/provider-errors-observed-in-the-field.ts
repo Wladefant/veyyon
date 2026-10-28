@@ -217,6 +217,18 @@ export const OBSERVED_PROVIDER_ERRORS: readonly ObservedProviderError[] = [
 		verdict: "wall",
 		why: "A thinking model that takes no forced tool choice. The same request fails the same way, so only a request without the field can succeed.",
 	},
+	{
+		message:
+			'400 {"type":"error","error":{"type":"invalid_request_error","message":"tool_choice: type \\"tool\\" and \\"any\\" are not supported for this model."},"request_id":"req_011C00000000000000000000"}',
+		verdict: "wall",
+		why: "A Claude model that takes no forced tool choice. Re-sending the pin reproduces it; the provider rebuilds the request with an automatic choice instead.",
+	},
+	{
+		message:
+			'400 {"error":{"type":"invalid_request_error","message":"tool_choice \'specified\' is incompatible with thinking enabled"},"type":"error"}',
+		verdict: "wall",
+		why: "A Kimi model on an Anthropic-compatible endpoint that takes no forced tool choice while it thinks. The same request fails the same way; the provider rebuilds it with an automatic choice.",
+	},
 ];
 
 /**

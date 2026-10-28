@@ -7,7 +7,7 @@ use std::{
 	fs::File,
 	io::{self, Read, Write},
 	path::{Path, PathBuf},
-	process::{Command, Stdio},
+	process::Stdio,
 	sync::OnceLock,
 	time::Instant,
 };
@@ -1022,18 +1022,8 @@ fn spawn_reader(
 	args: &[OsString],
 	stdin: Option<File>,
 ) -> io::Result<CommandReader> {
-	let resolved = veyyon_uutils_ctx::resolve_program(program).ok_or_else(|| {
-		io::Error::new(
-			io::ErrorKind::NotFound,
-			format!("{}: no such program on the shell's PATH", program.to_string_lossy()),
-		)
-	})?;
-	let mut command = Command::new(resolved);
-	command
-		.args(args)
-		.current_dir(veyyon_uutils_ctx::cwd())
-		.env_clear()
-		.envs(veyyon_uutils_ctx::env_snapshot());
+	let mut command = veyyon_uutils_ctx::child_command(program, veyyon_uutils_ctx::cwd())?;
+	command.args(args);
 	if let Some(file) = stdin {
 		command.stdin(Stdio::from(file));
 	}
@@ -1826,7 +1816,7 @@ mod tests {
 		let err = Arc::new(Mutex::new(Vec::new()));
 		let io = ScopeIo {
 			stdin:                 Box::new(io::Cursor::new(stdin.as_bytes().to_vec())),
-			stdin_fd:              None,
+			fds:                   Vec::new(),
 			stdin_is_search_input: true,
 			stdout:                Box::new(SharedBuf(Arc::clone(&out))),
 			stdout_is_terminal:    false,
@@ -1955,7 +1945,7 @@ mod tests {
 		let err = Arc::new(Mutex::new(Vec::new()));
 		let io = ScopeIo {
 			stdin:                 Box::new(io::empty()),
-			stdin_fd:              None,
+			fds:                   Vec::new(),
 			stdin_is_search_input: false,
 			stdout:                Box::new(SharedBuf(Arc::clone(&out))),
 			stdout_is_terminal:    false,
@@ -1985,7 +1975,7 @@ mod tests {
 		let err = Arc::new(Mutex::new(Vec::new()));
 		let io = ScopeIo {
 			stdin:                 Box::new(io::empty()),
-			stdin_fd:              None,
+			fds:                   Vec::new(),
 			stdin_is_search_input: false,
 			stdout:                Box::new(SharedBuf(Arc::clone(&out))),
 			stdout_is_terminal:    false,
@@ -2014,7 +2004,7 @@ mod tests {
 		let err = Arc::new(Mutex::new(Vec::new()));
 		let io = ScopeIo {
 			stdin:                 Box::new(io::empty()),
-			stdin_fd:              None,
+			fds:                   Vec::new(),
 			stdin_is_search_input: false,
 			stdout:                Box::new(SharedBuf(Arc::clone(&out))),
 			stdout_is_terminal:    false,

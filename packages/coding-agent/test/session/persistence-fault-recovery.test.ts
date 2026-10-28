@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { AssistantMessage } from "@veyyon/ai";
 import { type OperatorNotice, OperatorNotices } from "@veyyon/kernel/session/operator-notices";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
@@ -40,6 +41,13 @@ import { isRecord, TempDir } from "@veyyon/utils";
  * publish, so a broken disk does not put a notice on screen per entry and a
  * second, different fault is not swallowed by the first one's flag.
  *
+ * THE BOUND: an append that retries does not publish on the caller's stack. It
+ * used to rewrite the whole file synchronously, once per entry for as long as the
+ * fault lasted, and on a 146MB transcript each of those held the event loop for
+ * 1.7s, so a window with a fault that would not clear froze on every entry. The
+ * retry is a publish on the disk chain, and the entries appended before it runs
+ * join it.
+ *
  * The rows drive a real `FileSessionStorage` on a real temp directory, with the
  * fault injected at the storage boundary (writer append, atomic publish and
  * synchronous publish), which is where a full disk or a denied directory
@@ -49,10 +57,12 @@ import { isRecord, TempDir } from "@veyyon/utils";
  * - A fault the storage layer reports as success. Nothing above the backend can
  *   detect that, and `session-storage-close-errors.test.ts` owns the writer's
  *   own error reporting.
- * - A backoff policy. There is none by design: the retry costs one serialization
- *   of the transcript per entry while the disk is broken, and entries arrive at
- *   the pace of a conversation. A row asserting a delay would be asserting a
- *   number nobody chose.
+ * - A time-based backoff. There is none: the retry runs on the disk chain, a
+ *   burst of entries shares it, and a fault that is still there latches again.
+ *   A row asserting a delay would be asserting a number nobody chose.
+ * - A synchronous publish that is slow for another reason (the exit flush, the
+ *   first write of a new file). Those are not retries, and this suite counts
+ *   only what an append does while a fault is latched.
  * - Two windows on one transcript. That is a different class and lives in
  *   `two-managers-on-one-transcript.test.ts`; a fault here never republishes
  *   somebody else's file, it republishes this manager's own entries.
@@ -69,14 +79,22 @@ import { isRecord, TempDir } from "@veyyon/utils";
  *   attempts, so `OperatorNotices` collapsing identical text cannot stand in for
  *   the latch.
  * - M19a the synchronous publish does not clear the reported fault: the
- *   recovery-through-an-append row red. M19b the same for the atomic publish: the
- *   recovery-through-a-flush row red. One row covering both paths was green under
- *   either mutant alone, which is why there are two.
+ *   recovery-through-the-exit-flush row red. M19b the same for the atomic publish:
+ *   the recovery-through-a-flush and recovery-through-an-append rows red. One row
+ *   covering both paths was green under either mutant alone, which is why there
+ *   are several.
  * - M20 `close()` drops its recovery publish: the close row red.
  * - M21 `flushSync()` drops its retry: the exit-flush row red.
  * - M22 the operator notice is raised on another source: the notice row red.
- * - M23 the append path drops its retry: 5 rows red.
+ * - M23 the append path drops its retry: the burst row red. The divergent-file
+ *   branch still heals the file, synchronously, which is the cost that row bounds.
  * - M24 `flush()` drops its retry: the recovery-through-a-flush row red.
+ * - M25 the retry publishes synchronously again: the burst row red.
+ * - M26 the background publish takes no fence: the burst row red, since each
+ *   entry of the burst falls to the synchronous rewrite.
+ * - M27 a fault latched while the publish waits its turn skips it: the
+ *   stale-fault row red, with every entry after the fault missing from a healthy
+ *   disk.
  */
 
 /** Fails every write while `failure` names an error, so a fault can start and stop. */
@@ -90,15 +108,39 @@ class FlakyFileStorage extends FileSessionStorage {
 		return Object.assign(new Error(`${this.failure} (attempt ${this.#attempt})`), { code: "ENOSPC" });
 	}
 
+	/**
+	 * While set, a refused writer append does not reject until a row calls `releaseRefusal()`,
+	 * the way a real write fails on an I/O completion that lands after other work has started.
+	 */
+	holdRefusals = false;
+	#heldRefusals: Array<() => void> = [];
+
+	/** Reject the oldest held writer append. */
+	releaseRefusal(): void {
+		const release = this.#heldRefusals.shift();
+		if (!release) throw new Error("no writer append is waiting to be refused");
+		release();
+	}
+
 	openWriter(path: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }): SessionStorageWriter {
 		const inner = super.openWriter(path, options);
 		const owner = this;
+		// A writer's flush waits for the appends queued before it, refused ones included.
+		const queued: Promise<unknown>[] = [];
 		return {
 			append(line: string): Promise<void> {
-				if (owner.failure) return Promise.reject(owner.#fault());
-				return inner.append(line);
+				if (!owner.failure) return inner.append(line);
+				const fault = owner.#fault();
+				if (!owner.holdRefusals) return Promise.reject(fault);
+				const { promise, reject } = Promise.withResolvers<void>();
+				owner.#heldRefusals.push(() => reject(fault));
+				queued.push(promise.catch(() => undefined));
+				return promise;
 			},
-			flush: () => inner.flush(),
+			flush: async () => {
+				await Promise.all(queued);
+				await inner.flush();
+			},
 			sync: () => inner.sync(),
 			isOpen: () => inner.isOpen(),
 			close: () => inner.close(),
@@ -106,12 +148,18 @@ class FlakyFileStorage extends FileSessionStorage {
 		};
 	}
 
+	/** Whole-file publishes attempted, healthy or not, so a row can bound how many a fault costs. */
+	atomicWrites = 0;
+	syncWrites = 0;
+
 	writeTextAtomic(path: string, content: string, options?: WriteTextAtomicOptions): Promise<void> {
+		this.atomicWrites += 1;
 		if (this.failure) return Promise.reject(this.#fault());
 		return super.writeTextAtomic(path, content, options);
 	}
 
 	writeTextSync(path: string, content: string): void {
+		this.syncWrites += 1;
 		if (this.failure) throw this.#fault();
 		super.writeTextSync(path, content);
 	}
@@ -236,8 +284,12 @@ describe("a persistence fault does not end the transcript", () => {
 		await manager.flush().catch(() => undefined);
 		expect(notices).toHaveLength(1);
 
-		for (let i = 1; i < 5; i++) manager.appendMessage({ role: "user", content: `refused-${i}`, timestamp: 20 + i });
-		await manager.flush().catch(() => undefined);
+		// One entry, then a wait for its retry to fail, four times over, so each entry
+		// really is a separate attempt against the broken disk.
+		for (let i = 1; i < 5; i++) {
+			manager.appendMessage({ role: "user", content: `refused-${i}`, timestamp: 20 + i });
+			await manager.flush().catch(() => undefined);
+		}
 
 		// Each of those four attempts raised a DIFFERENT error message (the injected
 		// fault counts its attempts), so `OperatorNotices`'s own collapsing of identical
@@ -255,9 +307,8 @@ describe("a persistence fault does not end the transcript", () => {
 		expect(notice?.text).toContain("still complete in this window");
 	});
 
-	// Two rows, one per publish path, because there are two places a successful publish
-	// can end the fault episode and each has to end it. A single row that both appends
-	// and flushes is green with either one of them broken.
+	// Three rows, one per way a publish can end the fault episode, because each has to
+	// end it. A single row that both appends and flushes is green with one of them broken.
 	it("speaks again for a second fault after a recovery through an append", async () => {
 		const { manager, storage, notices } = await fixture();
 
@@ -266,16 +317,37 @@ describe("a persistence fault does not end the transcript", () => {
 		await manager.flush().catch(() => undefined);
 		expect(notices).toHaveLength(1);
 
-		// No flush: the append itself is the publish that heals the file, through the
-		// synchronous rewrite the retry routes it to.
+		// The append is what retries: it starts the publish that heals the file. The
+		// flush publishes nothing of its own, since the append already took the latched
+		// fault; it waits for the append's publish to land.
 		storage.failure = undefined;
 		manager.appendMessage({ role: "user", content: "healthy", timestamp: 31 });
+		await manager.flush();
 
 		storage.failure = "EACCES: permission denied, write";
 		manager.appendMessage({ role: "user", content: "second-fault", timestamp: 32 });
 		// The writer rejects asynchronously, so the fault only reaches the manager on a
-		// later tick. The flush is what waits for it, not what heals anything: the
-		// recovery this row isolates already happened, at the append above.
+		// later tick. The flush is what waits for it.
+		await manager.flush().catch(() => undefined);
+
+		expect(notices).toHaveLength(2);
+		expect(notices[1]?.text).toContain("EACCES");
+	});
+
+	it("speaks again for a second fault after a recovery through the exit flush", async () => {
+		const { manager, storage, notices } = await fixture();
+
+		storage.failure = "ENOSPC: no space left on device, write";
+		manager.appendMessage({ role: "user", content: "first-fault", timestamp: 35 });
+		await manager.flush().catch(() => undefined);
+		expect(notices).toHaveLength(1);
+
+		// The synchronous publish is the one that heals here, and nothing else ran.
+		storage.failure = undefined;
+		manager.flushSync();
+
+		storage.failure = "EACCES: permission denied, write";
+		manager.appendMessage({ role: "user", content: "second-fault", timestamp: 36 });
 		await manager.flush().catch(() => undefined);
 
 		expect(notices).toHaveLength(2);
@@ -393,6 +465,69 @@ describe("a persistence fault does not end the transcript", () => {
 
 		const raw = await fs.readFile(file, "utf8");
 		for (const text of ["first", "answer", "clean", "clean-answer"]) {
+			expect(raw.split(`"${text}"`).length - 1).toBe(1);
+		}
+	});
+
+	it("publishes a burst of entries during a lasting fault once, and never on the appending caller's stack", async () => {
+		const { manager, storage, file } = await fixture();
+
+		storage.failure = "ENOSPC: no space left on device, write";
+		manager.appendMessage({ role: "user", content: "latches", timestamp: 100 });
+		await manager.flush().catch(() => undefined);
+		const atomicBefore = storage.atomicWrites;
+		const syncBefore = storage.syncWrites;
+
+		for (let i = 0; i < 20; i++) manager.appendMessage({ role: "user", content: `burst-${i}`, timestamp: 101 + i });
+		// Every append returned without writing the transcript: no whole-file publish ran
+		// inside any of them.
+		expect(storage.syncWrites).toBe(syncBefore);
+		expect(storage.atomicWrites).toBe(atomicBefore);
+
+		await manager.flush().catch(() => undefined);
+		// The first append started the retry and the other nineteen joined it.
+		expect(storage.atomicWrites - atomicBefore).toBe(1);
+		expect(storage.syncWrites).toBe(syncBefore);
+
+		// The burst is not lost to the bound: the next healthy attempt writes all of it.
+		storage.failure = undefined;
+		manager.appendMessage({ role: "user", content: "healed", timestamp: 200 });
+		await manager.flush();
+		const raw = await fs.readFile(file, "utf8");
+		for (const text of ["latches", "burst-0", "burst-19", "healed"]) {
+			expect(raw.split(`"${text}"`).length - 1).toBe(1);
+		}
+	});
+
+	it("writes the entries a healed disk can take even when a stale fault lands while their publish waits", async () => {
+		const { manager, storage, file } = await fixture();
+
+		storage.failure = "ENOSPC: no space left on device, write";
+		storage.holdRefusals = true;
+		manager.appendMessage({ role: "user", content: "refused-a", timestamp: 110 });
+		manager.appendMessage({ role: "user", content: "refused-b", timestamp: 111 });
+		// This flush holds the disk chain until both refusals have landed. The tick lets
+		// it reach the writer first; a refusal that lands before then is thrown by the
+		// flush at once and the chain is idle again.
+		const flushing = manager.flush().catch(() => undefined);
+		await sleep(0);
+		storage.releaseRefusal();
+		await sleep(0);
+
+		// The disk is back. This entry finds the first refusal latched and starts the
+		// publish that heals it, which queues behind the flush.
+		storage.failure = undefined;
+		manager.appendMessage({ role: "user", content: "retries", timestamp: 112 });
+		// The second refusal lands while that publish waits its turn. A publish that let
+		// it cancel the attempt left its fence standing: every later entry was absorbed
+		// into a publish that never ran, and the healthy disk never received any of them.
+		storage.releaseRefusal();
+		await flushing;
+
+		manager.appendMessage({ role: "user", content: "after", timestamp: 113 });
+		await manager.flush();
+		const raw = await fs.readFile(file, "utf8");
+		for (const text of ["first", "answer", "refused-a", "refused-b", "retries", "after"]) {
 			expect(raw.split(`"${text}"`).length - 1).toBe(1);
 		}
 	});

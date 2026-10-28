@@ -1,6 +1,7 @@
 import * as path from "node:path";
-// Owners, not the `@veyyon/utils` barrel: 2 modules against 74.
+// Owners, not the `@veyyon/utils` barrel: 3 modules against 74.
 import { isEnoent } from "@veyyon/utils/fs-error";
+import { readFileText } from "@veyyon/utils/fs-io";
 import { isRecord } from "@veyyon/utils/type-guards";
 
 export type NotebookCellType = "code" | "markdown" | "raw";
@@ -107,7 +108,7 @@ function validateNotebook(value: unknown, displayPath: string): NotebookDocument
 
 export async function readNotebookDocument(absolutePath: string, displayPath: string): Promise<NotebookDocument> {
 	try {
-		return validateNotebook(await Bun.file(absolutePath).json(), displayPath);
+		return validateNotebook(JSON.parse(await readFileText(absolutePath)), displayPath);
 	} catch (error) {
 		if (isEnoent(error)) throw new Error(`File not found: ${displayPath}`);
 		if (error instanceof SyntaxError) throw new Error(`Invalid JSON in notebook: ${displayPath}`);

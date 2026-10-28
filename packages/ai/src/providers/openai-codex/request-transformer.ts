@@ -5,7 +5,7 @@ import {
 	supportsCodexReasoningSummary,
 } from "@veyyon/catalog/identity";
 import { requireSupportedEffort } from "@veyyon/catalog/model-thinking";
-import type { Model } from "../../types";
+import type { CyberAccessProgram, Model } from "../../types";
 import { mapOpenAIReasoningEffort, repairResponsesToolPairs } from "../openai-shared";
 
 /** Reasoning replay scope for the Codex Responses API (`reasoning.context`). */
@@ -99,6 +99,7 @@ export interface RequestBody {
 	max_output_tokens?: number;
 	max_completion_tokens?: number;
 	service_tier?: "auto" | "default" | "flex" | "scale" | "priority" | null;
+	access_programs?: CodexAccessPrograms;
 	[key: string]: unknown;
 }
 
@@ -149,6 +150,37 @@ export function resolveCodexResponsesLite(model: CodexReasoningContextModel, req
 	if (env === "1" || env === "true") return true;
 	if (env === "0" || env === "false") return false;
 	return model.useResponsesLite === true;
+}
+
+/** The `access_programs` request field (codex-rs `AccessPrograms`). */
+export interface CodexAccessPrograms {
+	cyber: CyberAccessProgram;
+}
+
+/**
+ * The `access_programs` a Codex request carries for this model, or undefined to omit the field.
+ *
+ * Mirrors codex-rs `program_for_turn` for a ChatGPT account with Daybreak on, which is the codex-rs
+ * default from 0.163.0: the model's preferred Daybreak program, `daybreak_blue` before `daybreak_red`,
+ * when discovery advertises one for the signed-in account. The server judges a security request
+ * sent without the field under its automatic treatment, and its `cyber_policy` refusal message
+ * states that `access_programs.cyber` must be set to the appropriate tier.
+ *
+ * A model with no discovery metadata, or with no Daybreak program in it, omits the field and keeps
+ * the automatic treatment. codex-rs fails such a turn while Daybreak is on; omitting it lets a model
+ * that only offers `standard`, such as GPT-6 Astra, keep working.
+ *
+ * The turn body, its websocket frame and the server-side compaction body all read this, because
+ * codex-rs sends one program on every request of a turn, compaction included.
+ */
+export function resolveCodexAccessPrograms(
+	model: Pick<Model<"openai-codex-responses">, "accessPrograms">,
+): CodexAccessPrograms | undefined {
+	const offered = model.accessPrograms?.cyber;
+	if (offered === undefined) return undefined;
+	if (offered.includes("daybreak_blue")) return { cyber: "daybreak_blue" };
+	if (offered.includes("daybreak_red")) return { cyber: "daybreak_red" };
+	return undefined;
 }
 
 /**
@@ -421,6 +453,13 @@ export async function transformRequestBody(
 	const include = Array.isArray(options.include) ? options.include.slice() : [];
 	include.push("reasoning.encrypted_content");
 	body.include = Array.from(new Set(include));
+
+	const accessPrograms = resolveCodexAccessPrograms(model);
+	if (accessPrograms) {
+		body.access_programs = accessPrograms;
+	} else {
+		delete body.access_programs;
+	}
 
 	delete body.max_output_tokens;
 	delete body.max_completion_tokens;

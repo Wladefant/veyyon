@@ -57,6 +57,13 @@ Kernel shutdown:
 - Wait for process exit with `SHUTDOWN_GRACE_MS` budget.
 - Escalate to `SIGTERM` and finally `SIGKILL` if the process does not exit in time.
 
+Between cells: on Linux with glibc, the runner calls `malloc_trim(0)` after each cell and before the cell's `done`
+frame. glibc keeps a freed block under its mmap threshold inside its heap and returns only the top of
+the heap to the system; the trim returns the free pages inside the heap as well. A kernel that has
+reported a cell done holds the memory its namespace references and the interpreter's own. The walk
+takes under 1 ms on a heap with nothing to return and about 25 ms to return 1.4 GB. Other platforms
+and C libraries skip the trim.
+
 ## Wire protocol (NDJSON, host ↔ runner)
 
 One JSON object per line, UTF-8, `\n` terminated.
@@ -113,8 +120,9 @@ Unknown magic names raise `NameError: UsageError: ...` inside the cell.
 `python.kernelMode` controls retained kernel reuse:
 
 - `session` (default)
-  - Reuses kernel sessions keyed by namespaced eval session id plus normalized cwd and interpreter.
+  - Reuses kernel sessions keyed by namespaced eval session id and interpreter. The eval session id of a saved session is its session file, so a directory change keeps the kernel and its names; each cell runs in the session's current cwd, which is also the first `sys.path` entry. A directory with its own `.venv` or `venv` gets its own kernel, because that venv selects the interpreter.
   - Multiple owners can share the same retained kernel for that key.
+  - `/new`, `/resume` of another session and a handoff shut down the kernels the session's cells started; the next cell starts a new kernel. A kernel a spawned agent still shares stays running for that agent. A reload of the same session keeps its kernel.
   - Calls through the tool are exclusive, so tool invocations do not overlap.
   - A dead retained subprocess is replaced before execution.
   - If the subprocess dies during execution, it is replaced and the cell is retried once.

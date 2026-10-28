@@ -1524,12 +1524,10 @@ function b() {
 			expect(deliveries).toEqual([]);
 			expect(asyncJobManager.getRunningJobs()).toEqual([]);
 			// The call still ROUTES through the managed-job machinery (that is what
-			// gives the manual background key something to win), so the job exists and
-			// is recorded failed. What must not happen is a second telling: the
-			// foreground already threw this text, so its delivery stays acknowledged.
-			const recorded = asyncJobManager.getAllJobs();
-			expect(recorded.map(job => job.status)).toEqual(["failed"]);
-			expect(recorded[0]?.errorText).toContain("Command timed out after");
+			// gives the manual background key something to win), but the foreground
+			// already threw this text, so the job is released rather than retained:
+			// nothing is left to poll and nothing is owed a second telling.
+			expect(asyncJobManager.getAllJobs()).toEqual([]);
 			expect(asyncJobManager.hasPendingDeliveries()).toBe(false);
 			await asyncJobManager.dispose();
 		});

@@ -446,6 +446,7 @@ export class Settings extends SettingsStore {
 			[
 				"defaultModel",
 				"agent.agents",
+				"agent.helpers",
 				"agent.model",
 				"agent.sharedModel",
 				"agent.thinkingLevel",

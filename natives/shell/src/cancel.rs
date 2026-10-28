@@ -148,6 +148,25 @@ impl CancelToken {
 		}
 		false
 	}
+
+	/// Whether the timeout passed with no abort requested.
+	///
+	/// A token that is both aborted and past its timeout reports a
+	/// cancellation here, as [`CancelToken::heartbeat`] does: work that stops
+	/// on its timeout may keep what it found, work that was cancelled may not.
+	#[must_use]
+	pub fn timed_out(&self) -> bool {
+		if self
+			.flag
+			.as_ref()
+			.is_some_and(|flag| flag.cause().is_some())
+		{
+			return false;
+		}
+		self
+			.deadline
+			.is_some_and(|deadline| deadline < Instant::now())
+	}
 }
 
 #[derive(Clone, Default)]
@@ -159,6 +178,41 @@ impl AbortToken {
 			&& let Some(flag) = flag.upgrade()
 		{
 			flag.abort(reason);
+		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::time::Duration;
+
+	use super::{AbortReason, CancelToken};
+
+	/// Past its timeout, a token reports the timeout only while no abort was
+	/// requested: work stopped by a timeout keeps what it found, cancelled
+	/// work does not.
+	#[test]
+	fn a_token_reports_a_timeout_only_past_its_deadline_and_never_once_aborted() {
+		assert!(!CancelToken::new(None).timed_out(), "a token without a timeout timed out");
+		assert!(
+			!CancelToken::with_timeout(Some(Duration::from_mins(1))).timed_out(),
+			"a token timed out before its deadline"
+		);
+
+		let passed = CancelToken::new(Some(0));
+		std::thread::sleep(Duration::from_millis(1));
+		assert!(passed.timed_out(), "a token past its deadline did not report the timeout");
+		assert!(passed.heartbeat().is_err(), "a heartbeat past the deadline succeeded");
+
+		for timeout_ms in [None, Some(0)] {
+			let mut aborted = CancelToken::new(timeout_ms);
+			aborted.emplace_abort_token().abort(AbortReason::Signal);
+			std::thread::sleep(Duration::from_millis(1));
+			assert!(
+				!aborted.timed_out(),
+				"an aborted token with timeout {timeout_ms:?} reported a timeout"
+			);
+			assert!(aborted.aborted(), "an aborted token with timeout {timeout_ms:?} is not aborted");
 		}
 	}
 }

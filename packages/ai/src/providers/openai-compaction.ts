@@ -62,7 +62,11 @@ import {
 	CODEX_COMPACTION_TRIGGER_ITEM,
 	collectCodexCompactionV2Stream,
 } from "./openai-codex/compaction-v2";
-import { applyCodexResponsesLiteShape, resolveCodexResponsesLite } from "./openai-codex/request-transformer";
+import {
+	applyCodexResponsesLiteShape,
+	resolveCodexAccessPrograms,
+	resolveCodexResponsesLite,
+} from "./openai-codex/request-transformer";
 import { createOpenAICodexDirectRequest } from "./openai-codex-responses";
 import type { ResponseInput } from "./openai-responses-wire";
 import { buildResponsesInput, parseAzureDeploymentNameMap, resolveOpenAIRequestSetup } from "./openai-shared";
@@ -390,6 +394,10 @@ export const openAIResponsesServerCompaction: ServerCompactionTransport = {
 			// full uncached input again. Same key, same lineage, one cache.
 			const cacheKey = "promptCacheKey" in resolved ? resolved.promptCacheKey : undefined;
 			if (cacheKey) body.prompt_cache_key = cacheKey;
+			// The program the turn carries. A compaction sent without it is judged under the server's
+			// automatic treatment and refused with `cyber_policy` on the span the turn was allowed to send.
+			const accessPrograms = resolveCodexAccessPrograms(model);
+			if (accessPrograms) body.access_programs = accessPrograms;
 			if (resolveCodexResponsesLite(model, undefined)) {
 				applyCodexResponsesLiteShape(body);
 				body.include = Array.from(

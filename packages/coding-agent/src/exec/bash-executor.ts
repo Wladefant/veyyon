@@ -15,7 +15,7 @@ import {
 import { isExecutable, type ShellConfig } from "@veyyon/utils/procmgr";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { sessionCpuLimit } from "../session/cpu-limit";
-import { OutputSink } from "../session/streaming-output";
+import { LIVE_OUTPUT_INTERVAL_MS, OutputSink } from "../session/streaming-output";
 import { ProducerOutputGuard } from "../secrets/producer-output";
 import {
 	type OutputArtifactError,
@@ -615,7 +615,7 @@ async function runBash(
 		...(options?.spillThreshold !== undefined ? { spillThreshold: options.spillThreshold } : {}),
 		headBytes: resolveOutputSinkHeadBytes(settings),
 		maxColumns: resolveOutputMaxColumns(settings),
-		chunkThrottleMs: options?.onChunk ? (options.chunkThrottleMs ?? 50) : 0,
+		chunkThrottleMs: options?.onChunk ? (options.chunkThrottleMs ?? LIVE_OUTPUT_INTERVAL_MS) : 0,
 	});
 	if (options?.signal?.aborted) return cancelledResult(sink, "Command cancelled");
 

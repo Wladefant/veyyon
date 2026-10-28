@@ -1596,7 +1596,7 @@ export interface HarnessWriteSource {
  * construction instead of by remembering.
  *
  * Generic over the tail of the signature so it fits the LSP writethrough
- * (which carries a BunFile, a batch request and a deferred-diagnostics hook)
+ * (which carries a signal, a batch request and a deferred-diagnostics hook)
  * without this module importing the LSP layer.
  */
 export function budgetedFileCommit<A extends unknown[], R>(

@@ -27,8 +27,12 @@ export interface TerminalControlTarget {
 	subscribe(listener: (event: unknown) => void): () => void;
 }
 
+export interface TerminalControlOptions {
+	writeOwner?: (recordPath: string, record: TerminalOwner) => Promise<void>;
+}
+
 /** Optional protocol features this build serves. A peer that lacks one never sees the field. */
-export const TERMINAL_CAPABILITIES = ["deliver-ack", "session-notices"] as const;
+export const TERMINAL_CAPABILITIES = ["deliver-ack", "session-notices", "rotate"] as const;
 /** The newest assistant entries a subscriber is told about; older ones were seen by any earlier subscriber. */
 const HISTORY_FRAME_ENTRIES = 1000;
 const MAX_REMEMBERED_DELIVERIES = 256;
@@ -48,19 +52,24 @@ type DeliveryState =
 	| { state: "delivered"; outcome: string }
 	| { state: "failed"; error: string };
 
+/** Return the platform-specific endpoint used by terminal-control servers. */
+export function terminalControlEndpoint(directory: string, nonce: string, platform = process.platform): string {
+	return platform === "win32" ? `\\\\.\\pipe\\veyyon-terminal-${nonce}` : path.join(directory, `${nonce}.sock`);
+}
+
 /** The socket lives in the CLI process; neither this module nor a client opens a session file. */
 export async function serveTerminalControl(
 	target: TerminalControlTarget,
 	root = getConfigRootDir(),
+	options: TerminalControlOptions = {},
 ): Promise<() => void> {
 	const directory = path.join(root, "run", "terminals");
 	await fs.mkdir(directory, { recursive: true, mode: 0o700 });
 	if (process.platform === "win32") await applyOwnerOnlyWindowsAcl(directory);
 	else await fs.chmod(directory, 0o700);
 	const nonce = crypto.randomUUID();
-	const endpoint =
-		process.platform === "win32" ? `\\\\.\\pipe\\veyyon-terminal-${nonce}` : path.join(directory, `${nonce}.sock`);
-	const token = crypto.randomBytes(32).toString("hex");
+	const endpoint = terminalControlEndpoint(directory, nonce);
+	let token = crypto.randomBytes(32).toString("hex");
 	const recordPath = path.join(directory, `${process.pid}-${nonce}.json`);
 	const sockets = new Set<TerminalSocket>();
 	const subscribers = new Set<TerminalSocket>();
@@ -69,6 +78,7 @@ export async function serveTerminalControl(
 	let unsubscribe: (() => void) | undefined;
 	let refresh: NodeJS.Timeout | undefined;
 	let refreshing = false;
+	let publication: Promise<void> = Promise.resolve();
 	// No timer stays armed while no client is connected: a resting terminal wakes for no one. The
 	// owner poll runs only while a socket is open, the journal poll only while one is subscribed.
 	const reconcile = (): void => {
@@ -276,6 +286,16 @@ export async function serveTerminalControl(
 							case "abort":
 								result = await target.abort();
 								break;
+							case "rotate":
+								await publish(crypto.randomBytes(32).toString("hex"), request.token);
+								for (const peer of sockets) {
+									if (peer !== socket) peer.destroy();
+								}
+								subscribers.clear();
+								stopEvents();
+								for (const delivery of deliveries.values()) delivery.watchers.clear();
+								result = { rotated: true };
+								break;
 							case "ping":
 								result = { ...target.identity(), pid: process.pid, capabilities: TERMINAL_CAPABILITIES };
 								break;
@@ -293,32 +313,46 @@ export async function serveTerminalControl(
 			}
 		});
 	});
-	const publish = async (): Promise<void> => {
-		const identity = target.identity();
-		const build = getLoadedBuildIdentity();
-		const record: TerminalOwner = {
-			version: 1,
-			...identity,
-			pid: process.pid,
-			endpoint,
-			token,
-			loadedVersion: build.version,
-			loadedBuildSha: build.buildSha,
-			capabilities: TERMINAL_CAPABILITIES,
-		};
-		await atomicWriteFileWith(
-			recordPath,
-			async tempPath => {
-				await fs.writeFile(tempPath, JSON.stringify(record), { mode: 0o600 });
-				await applyOwnerOnlyWindowsAcl(tempPath);
-			},
-			{ mode: 0o600 },
-		);
-		if (closed) {
-			await fs.rm(recordPath, { force: true });
-			return;
-		}
-		publishedSessionId = identity.sessionId;
+	const writeOwner = options.writeOwner ?? (async (destination: string, record: TerminalOwner): Promise<void> => {
+		await atomicWriteFileWith(destination, async temporary => {
+			await applyOwnerOnlyWindowsAcl(temporary);
+			await fs.writeFile(temporary, JSON.stringify(record), { mode: 0o600 });
+		}, {
+			mode: 0o600,
+			// This credential dies with the process. No fallible flush may follow its atomic replacement.
+			fsync: false,
+			requireAtomicReplace: true,
+		});
+	});
+	const publish = (nextToken?: string, expectedToken?: string): Promise<void> => {
+		const run = publication.then(async () => {
+			if (closed) throw new Error("Terminal control is closed");
+			if (expectedToken !== undefined && expectedToken !== token) {
+				throw new Error("Terminal credential changed; rediscover its owner");
+			}
+			const identity = target.identity();
+			const credential = nextToken ?? token;
+			const build = getLoadedBuildIdentity();
+			const record: TerminalOwner = {
+				version: 1,
+				...identity,
+				pid: process.pid,
+				endpoint,
+				token: credential,
+				loadedVersion: build.version,
+				loadedBuildSha: build.buildSha,
+				capabilities: TERMINAL_CAPABILITIES,
+			};
+			await writeOwner(recordPath, record);
+			if (closed) {
+				await fs.rm(recordPath, { force: true });
+				throw new Error("Terminal control is closed");
+			}
+			token = credential;
+			publishedSessionId = identity.sessionId;
+		});
+		publication = run.catch(() => {});
+		return run;
 	};
 	try {
 		await publish();

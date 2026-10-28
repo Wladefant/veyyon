@@ -19,6 +19,11 @@ import { flagConsumesValue } from "./cli/flag-tables";
 
 export const commands: CommandEntry[] = [
 	{
+		name: "terminal-control",
+		load: () => import("./commands/terminal-control").then(m => m.default),
+		summary: { description: "Rotate a live terminal's control credential" },
+	},
+	{
 		name: "launch",
 		load: () => logger.time("import:commands/launch", () => import("./commands/launch").then(m => m.default)),
 		summary: { description: "AI coding assistant", hidden: true },

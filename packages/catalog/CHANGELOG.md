@@ -12,6 +12,11 @@
 
 - Gemini family discovery uses the renamed variant family.
 ## [1.5.6] - 2026-10-10
+### Added
+
+- `@veyyon/catalog/discovery/cursor-gen/agent_pb` defines Cursor's `McpStateExecArgs` and `McpStateExecResult` exec messages (field 36) and the `McpStateSuccess`, `McpStateServer`, `McpStateError` and `McpStateRejected` messages they carry.
+- Codex discovery reads `available_access_programs` into `Model.accessPrograms`, which the bundled catalog never contains, and the model cache schema moves to v14 so a Codex row cached without it is fetched again.
+
 ### Removed
 
 - Removed the `ANTIGRAVITY_PRIMARY_ENDPOINT` and `ANTIGRAVITY_SANDBOX_ENDPOINT` re-exports from `@veyyon/catalog/discovery/antigravity`; import them from `@veyyon/catalog/provider-endpoints` or `@veyyon/catalog/discovery`.
@@ -20,9 +25,11 @@
 
 - OpenAI-compatible and LiteLLM discovery take their request deadline from `withScopedTimeoutSignal` in `@veyyon/utils` and `toNonEmptyString` from the catalog's own helpers instead of private copies; no user-visible change.
 - The `OPENROUTER_API_ENDPOINT` documentation states which clients fall back to it; no user-visible change.
+- The model cache writes under `synchronous = NORMAL` in WAL mode instead of flushing the disk on every commit, so storing one provider's discovered models at startup takes 0.06–0.08 ms instead of 0.41–0.63 ms, and at most 0.87 ms instead of up to 38 ms.
 
 ### Fixed
 
+- Claude Opus and Sonnet 5.5 and later default to `supportsForcedToolChoice: false`, as Fable and Mythos already did, so a forced tool choice goes out as `auto` instead of drawing `400 tool_choice: type "tool" and "any" are not supported for this model.`; `rejectsForcedToolChoice` in `@veyyon/catalog/identity` states the rule.
 - Moonshot-hosted Kimi K2.7 Code ids spelled with underscores (`kimi_k2_7_code`) force thinking on through the OpenAI-compatible path, as they already did through the Anthropic-compatible one.
 
 ## [1.5.7] - 2026-10-15

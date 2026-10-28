@@ -30,6 +30,13 @@ export type AnthropicProviderSessionState = ProviderSessionState & {
 	 */
 	priorReasoningReplayDisabled: boolean;
 	/**
+	 * Runtime-learned: this endpoint answered a `tool_choice` of type `any` or
+	 * `tool` with a 400 rejecting the field, so every later request to this
+	 * (baseUrl, modelId) sends `auto` in its place, same behavior as an explicit
+	 * `compat.supportsForcedToolChoice: false`. Cleared on session close.
+	 */
+	forcedToolChoiceDisabled: boolean;
+	/**
 	 * Prompt-cache observations for this endpoint+model, so a miss can be judged
 	 * against the previous turn rather than guessed at. Kept here because the
 	 * cache identity is the conversation prefix, which is exactly what this key
