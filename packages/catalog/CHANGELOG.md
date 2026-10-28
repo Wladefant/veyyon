@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- GitHub Copilot discovery caps a tiered base model at the tighter of the billed default tier and max_prompt_tokens, and reads the tier boundary from max_prompt_tokens before context_max, so the base row no longer gets the ~1M window of its -1m sibling (oh-my-pi 508e263c0c2b8979e8bd3f0c404db044463d7cad, c668ce4e1c3b47abc96dabf33a6b9cdab7abf8ec, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - GitHub Copilot discovery prices a base model from the default tier Copilot reports, keeping the provider cache-write rate, instead of the bundled or default rate (oh-my-pi 27c1d6e8d4eceafd85b33c3294d88bd6cffd6dc3, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - Gemini family discovery uses the renamed variant family.
