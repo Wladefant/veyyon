@@ -7,6 +7,7 @@
 - Added owner-local terminal-control credential rotation without restarting the terminal or active turn.
 
 ### Fixed
+- Terminal-control delivery journals each operator answer by question id before injecting it, drops a replay of a consumed question (also after a restart) with a `DUPLICATE-ANSWER` log line, and re-injects an answer journaled but not yet injected after a crash ([Refs #668](https://github.com/Wladefant/veyyon/issues/668)).
 - Restored launch request replay, idle socket cleanup, recovery quarantine, and file-search test injection after upstream conflict resolution.
 - Plan mode stays on, with its plan tools and plan model, when restoring the pre-plan model or tools fails during exit.
 - Migrated tests off the removed model-roles settings API to `defaultModel` and `agent.helpers`, deleted the role-table tests whose contract no longer exists, and moved fetch-timeout to `withScopedTimeoutSignal` ([Refs #707](https://github.com/Wladefant/veyyon/issues/707)).
