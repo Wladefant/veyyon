@@ -4,12 +4,18 @@
 
 ### Fixed
 - Shell and Python/JS eval withhold recognizable credential records before live output and backing artifacts, and redact known secret values ([issue](https://github.com/Wladefant/veyyon/issues/682)).
+- Python eval refuses Windows signal-zero process probes and checks KV lock owners through non-signaling process handles ([issue](https://github.com/Wladefant/veyyon/issues/73)).
+- Task and qa-verifier spawns preserve configured model priority instead of reordering Luna and Flash by spawn identity ([Refs #692](https://github.com/Wladefant/veyyon/issues/692)).
+- Browser session cleanup continues after one tab release or orphan browser disposal fails.
 - Recovered daemons whose process tree cannot be proven gone now settle as `failed` with `ownershipUncertain`, are never restarted automatically, and allow manual replacement only when the configured ready port is free.
 - Launch retains stable handles for tracked descendants after a wrapper exits and waits for their teardown before restarting ([issue](https://github.com/Wladefant/veyyon/issues/530)).
 - Launch holds a daemon whose native process handle is unavailable in `stopping` instead of settling it as exited: its tree's death is unobservable, so no restart starts and a stop reports failure ([issue](https://github.com/Wladefant/veyyon/issues/530)).
 - Mixed-build IRC sends distinguish unknown sessions from receivers without notice support and report loaded build identities ([#551](https://github.com/Wladefant/veyyon/issues/551)).
 - Browser tabs owned by another session can no longer be reopened, reused, or run, and the tab inventory omits their names, titles, and URLs ([Refs #538](https://github.com/Wladefant/veyyon/issues/538)).
+- Fixed the coding-agent failing to parse after a merge left stray braces, a duplicated property block and a call to a removed private method in the session and task modules.
 
+- Spawn model lists fall back after quota failures with global fallback disabled, and new spawns move past the shared pools to the healthy fallback tail when both are suppressed ([issue](https://github.com/Wladefant/veyyon/issues/613)).
+- Explicit spawn lists stay closed when no later candidate resolves, instead of inheriting global fallback chains ([issue](https://github.com/Wladefant/veyyon/issues/613)).
 - Project plugins load only from the `installPath` entries of a project registry the operator has approved, through both the plugin loader and the Claude-plugin roots. The project directory's `package.json`, lockfile and `node_modules` are no longer read for project plugins. A registry whose directory resolves outside the project is refused, and an approval from a nested directory reaches the gate ([Refs #633](https://github.com/Wladefant/veyyon/issues/633)).
 - Argot teaches its handle table to a model named in `argot.encode.models` with a thinking selector (`provider/id:high`), drops or restores the table when a model switch crosses the allowlist, and records a deliberately untaught model as decode-only instead of logging an `ABSENT` handle table ([#648](https://github.com/Wladefant/veyyon/issues/648))
 - Closing a launch client during broker connection now rejects pending requests and destroys late sockets, so an empty broker can exit after its configured grace when all clients close ([Refs #517](https://github.com/Wladefant/veyyon/issues/517)).
@@ -29,6 +35,8 @@
 - Disposing a session's owner during kernel startup returns at once and releases the runner when startup completes, and a kernel whose stdin pipe stalls at shutdown is still signalled and reaches SIGKILL, so eval interpreters no longer outlive their session ([Refs #639](https://github.com/Wladefant/veyyon/issues/639)).
 - A JS eval context stays alive for an owner that attaches after another owner ends, so disposing the first owner no longer kills the second owner's in-flight cell ([Refs #639](https://github.com/Wladefant/veyyon/issues/639)).
 
+
+- Restored model selectors and assigned browser and bash helpers to their owning modules.
 ### Changed
 
 - `/reload-config` and `/reload` re-read rule layers and skills without restarting the session. The summary lists added, changed, and removed paths. Unreadable files keep the last good snapshot, and unchanged rules keep the existing advisor ([issue](https://github.com/Wladefant/veyyon/issues/577)).
@@ -38,7 +46,6 @@
 - Discover project skills from repository directories (.agents/skills, .github/skills, .claude/skills) with whole-folder trust verification ([Refs #469](https://github.com/Wladefant/veyyon/issues/469)).
 - Optional encrypted cloud checkpoints preserve native journals, artifacts, blobs, dirty files and version pins. The default-off client supports restore and explicit forks. Durable Object epochs fence synchronized prompt and tool admission. The existing `sessions` command alias remains available ([issue](https://github.com/Wladefant/veyyon/issues/567)).
 - Auth gateway accepts a server-only live device token map with `--device-tokens-file`. PC2 uses existing `pi-native` transport with a device bearer instead of provider credentials ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
-- Task and qa-verifier spawns share configured Gemini 3.8 Flash and GPT-6 Luna models evenly by spawn identity.
 - `deepseek` is a `web_search` provider and a `fetch` reader backend. Both use the `DEEPSEEK_API_KEY` that the DeepSeek model provider already reads, so a machine with a DeepSeek key searches and reads pages with no second credential.
 - Browser tab inventory lists only relay-controlled tabs, and approved close IDs apply only to ownerless relay-controlled tabs; lane-owned tabs remain protected ([Refs](https://github.com/Wladefant/veyyon/issues/538)).
 

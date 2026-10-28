@@ -13,8 +13,11 @@ import type {
 	ClientBridgeTerminalHandle,
 	ClientBridgeTerminalOutput,
 } from "@veyyon/kernel/session/client-bridge";
-
+import { errorMessage, isEnoent, lazy, logger, normalizePathForComparison, prompt, settleWithin } from "@veyyon/utils";
+import { SIGNAL_EXIT_BASE, signalNumber } from "@veyyon/utils/signal-exit";
+import { resolveAutoBackgroundWaitMs } from "../../async/auto-background";
 import type { AsyncJobManager } from "../../async/job-manager";
+
 import { type BashResult, executeBash } from "../../exec/bash-executor";
 import { formatExitCodeNotice } from "../../exec/exit-notice";
 import { buildNonInteractiveEnv } from "../../exec/non-interactive-env";
