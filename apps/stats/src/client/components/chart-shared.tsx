@@ -95,13 +95,18 @@ export function buildSharedPlugins(opts: {
 	};
 }
 
-/** Y-axis tick formatter + grid/tick styling shared by both charts. */
-export function buildSharedScales(opts: { chartTheme: ChartTheme; formatY: (n: number) => string }) {
-	const { chartTheme, formatY } = opts;
-	const sharedScaleBase = {
+/** Grid and tick styling every time-chart axis shares. */
+export function chartScaleBase(chartTheme: ChartTheme) {
+	return {
 		grid: { color: chartTheme.grid, drawBorder: false },
 		ticks: { color: chartTheme.tick, font: { size: 11 } },
 	};
+}
+
+/** Y-axis tick formatter + grid/tick styling shared by both charts. */
+export function buildSharedScales(opts: { chartTheme: ChartTheme; formatY: (n: number) => string }) {
+	const { chartTheme, formatY } = opts;
+	const sharedScaleBase = chartScaleBase(chartTheme);
 	const yScale = {
 		...sharedScaleBase,
 		ticks: {
@@ -148,6 +153,55 @@ export function styleDatasets(series: ChartSeries, styleFor: (index: number) => 
 		data: ds.data,
 		...styleFor(index),
 	}));
+}
+
+/** A time chart's data: one line per model when `byModel`, else stacked bars; the shape not drawn is null. */
+export function timeChartData(series: ChartSeries, byModel: boolean) {
+	return {
+		lineData: byModel
+			? {
+					labels: series.labels,
+					datasets: styleDatasets(series, i => lineDatasetStyle(MODEL_COLORS[i % MODEL_COLORS.length])),
+				}
+			: null,
+		barData: byModel
+			? null
+			: {
+					labels: series.labels,
+					datasets: styleDatasets(series, i => barDatasetStyle(MODEL_COLORS[i % MODEL_COLORS.length])),
+				},
+	};
+}
+
+/**
+ * Options for both shapes of {@link timeChartData} over one set of plugins and scales. The bar
+ * shape stacks its axes, pads its top by `bar.paddingTop`, and adds `bar.plugins` to the shared ones.
+ */
+export function timeChartOptions<P extends object, X extends object, Y extends object>(
+	plugins: P,
+	scales: { sharedScaleBase: X; yScale: Y },
+	bar: { plugins?: Record<string, object>; paddingTop: number },
+) {
+	return {
+		lineOptions: {
+			responsive: true,
+			maintainAspectRatio: false,
+			interaction: { mode: "index" as const, intersect: false },
+			plugins,
+			scales: { x: scales.sharedScaleBase, y: scales.yScale },
+		},
+		barOptions: {
+			responsive: true,
+			maintainAspectRatio: false,
+			interaction: { mode: "index" as const, intersect: false },
+			plugins: { ...plugins, ...bar.plugins },
+			scales: {
+				x: { ...scales.sharedScaleBase, stacked: true },
+				y: { ...scales.yScale, stacked: true },
+			},
+			layout: { padding: { top: bar.paddingTop } },
+		},
+	};
 }
 
 /**
