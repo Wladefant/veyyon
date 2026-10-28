@@ -407,6 +407,75 @@ describe("Tool Execution Display Wire and Export Projection", () => {
 				},
 			});
 		});
+
+		// A guest and an HTML export draw the same call in the same state: running until its result
+		// arrives, then succeeded or failed by the result's error flag. Both are read from the call
+		// block and from the result message, and a read and a tool with no renderer are each checked
+		// because they show the state through different fields.
+		it.each([
+			{ state: "running", isError: undefined, readStatus: "pending", icon: "pending" },
+			{ state: "succeeded", isError: false, readStatus: "success", icon: "done" },
+			{ state: "failed", isError: true, readStatus: "error", icon: "error" },
+		])("shows a $state call in the same state on the wire and in the export", ({ isError, readStatus, icon }) => {
+			for (const [name, args] of [
+				["read", { path: "src/app.ts" }],
+				["unknown_tool", { a: 1 }],
+			] as const) {
+				const result =
+					isError === undefined ? undefined : { content: [{ type: "text" as const, text: "output" }], isError };
+				const callEntry: SessionEntry = {
+					type: "message",
+					id: "call",
+					parentId: null,
+					timestamp: "2026-08-05T00:00:00.000Z",
+					message: {
+						role: "assistant",
+						content: [{ type: "toolCall", id: "tc-1", name, arguments: args }],
+						api: "anthropic-messages",
+						provider: "anthropic",
+						model: "claude-3-5-sonnet",
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "toolUse",
+						timestamp: 1000,
+					},
+				};
+				const entries: SessionEntry[] = [callEntry];
+				if (result) {
+					entries.push({
+						type: "message",
+						id: "result",
+						parentId: "call",
+						timestamp: "2026-08-05T00:00:01.000Z",
+						message: { role: "toolResult", toolCallId: "tc-1", toolName: name, ...result, timestamp: 1001 },
+					});
+				}
+				const calls = new Map([["tc-1", { toolName: name, args }]]);
+				const results = new Map(result ? [["tc-1", result]] : []);
+				const displays = [
+					...projectSessionEntriesForExport(entries),
+					...entries.map(entry => toWireSessionEntry(entry, calls, results)),
+				].map(entry => {
+					const message = (entry as { message: { role: string; content?: unknown; display?: unknown } }).message;
+					const display =
+						message.role === "assistant"
+							? (message.content as ReadonlyArray<{ display?: unknown }>)[0]?.display
+							: message.display;
+					return display as { readEntry?: { status: string }; generic?: { icon: string } } | undefined;
+				});
+				expect(displays).toHaveLength(entries.length * 2);
+				for (const display of displays) {
+					if (name === "read") expect(display?.readEntry?.status).toBe(readStatus);
+					else expect(display?.generic?.icon).toBe(icon);
+				}
+			}
+		});
 	});
 
 	describe("HTML export session projection", () => {
