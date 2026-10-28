@@ -127,7 +127,8 @@ describe("#685 discovered-tool regressions through a real AgentSession", () => {
 			if (!reply) throw new Error("unexpected extra provider call");
 			return completedStream(reply);
 		};
-		const sideStreamFn: StreamFn = requestModel => {
+		const sideStreamFn: StreamFn = (requestModel, ctx) => {
+			process.stderr.write(`DBG285 summarizer call #${summarizerCalls + 1} remaining=${summaries.length} sys=${JSON.stringify(requestModel.id)} ctx=${JSON.stringify(ctx).slice(0, 300)} ... tail=${JSON.stringify(ctx).slice(-1500)}\n`);
 			const summary = summaries.shift();
 			if (!summary) throw new Error("unexpected extra summarizer call");
 			summarizerCalls++;

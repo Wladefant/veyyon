@@ -1568,13 +1568,17 @@ export class AgentSession {
 			thunks.push(() => this.#ttsr.takePendingToolReminders());
 			return thunks;
 		});
+		// A tool the agent started with is protected, except one the session file restored through
+		// discovery: the SDK puts the restored selection into the agent's initial tools, and
+		// protecting those would make every reloaded discovered tool immune to the cap and to pruning.
+		const restoredByDiscovery = new Set(config.initialSelectedMCPToolNames ?? []);
+		const requestedNames = new Set(config.requestedToolNames ?? []);
 		const protectedToolNames =
 			config.protectedToolNames ??
 			new Set(
-				[
-					...(config.requestedToolNames ? Array.from(config.requestedToolNames) : []),
-					...this.agent.state.tools.map(t => t.name),
-				].filter(name => !isMCPToolName(name)),
+				[...requestedNames, ...this.agent.state.tools.map(t => t.name)].filter(
+					name => !isMCPToolName(name) && (requestedNames.has(name) || !restoredByDiscovery.has(name)),
+				),
 			);
 		this.#discovery = new ToolDiscovery(
 			{

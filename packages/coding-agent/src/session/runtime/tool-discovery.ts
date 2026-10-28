@@ -552,10 +552,10 @@ export class ToolDiscovery {
 		for (const name of this.#selectedLocal) {
 			if (active.has(name) && registry.has(name) && !isMCPToolName(name)) selected.add(name);
 		}
+		// Default and protected tools never enter #searchActivated; they precede every search-activated
+		// tool, matching the order the selection was persisted in. Array.sort is stable.
 		return Array.from(selected).sort(
-			(a, b) =>
-				(this.#searchActivated.get(a) ?? Number.MAX_SAFE_INTEGER) -
-				(this.#searchActivated.get(b) ?? Number.MAX_SAFE_INTEGER),
+			(a, b) => (this.#searchActivated.get(a) ?? 0) - (this.#searchActivated.get(b) ?? 0),
 		);
 	}
 

@@ -633,8 +633,9 @@ describe("config hot reload", () => {
 		current[segments[segments.length - 1]] = value;
 	}
 
-	// WHY: /reload-config applies spawn routing plus the compaction group and nothing else. A path that
-	// is in the schema but in neither set must come back restart-required with its old value kept.
+	// WHY: /reload-config applies spawn routing, the compaction group and the discovered-tool cap
+	// (tools.maxDiscoveredTools) and nothing else. A path that is in the schema but in none of those
+	// sets must come back restart-required with its old value kept.
 	// CLASS: the table is pinned to the schema's own `compaction.*` paths by exact equality, so a new
 	// compaction setting turns this red until someone records a before/after for it. GAP: it does not
 	// prove that a running session re-reads the value; that is each consumer's own contract.
@@ -661,10 +662,13 @@ describe("config hot reload", () => {
 		{ path: "compaction.idleTimeoutSeconds", before: 300, after: 600 },
 		{ path: "compaction.supersedeReads", before: true, after: false },
 		{ path: "compaction.dropUseless", before: true, after: false },
+		{ path: "tools.maxDiscoveredTools", before: 40, after: 80 },
 	];
 
-	it("covers every compaction setting the schema declares", () => {
-		expect(COMPACTION_RELOAD_CASES.map(row => row.path).sort()).toEqual([...groupSettingPaths("compaction")].sort());
+	it("covers every compaction setting the schema declares plus the discovered-tool cap", () => {
+		expect(COMPACTION_RELOAD_CASES.map(row => row.path).sort()).toEqual(
+			[...groupSettingPaths("compaction"), "tools.maxDiscoveredTools"].sort(),
+		);
 	});
 
 	it("reloads every compaction setting from disk with an applied or unchanged outcome", async () => {

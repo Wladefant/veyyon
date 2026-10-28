@@ -687,7 +687,8 @@ describe("AgentSession integration: cap, prune, persistence, and reload", () => 
 			initialState: {
 				model: createMockModel(),
 				systemPrompt: ["initial"],
-				tools: [readTool],
+				// The SDK starts a resumed session with the restored selection already active.
+				tools: [readTool, localTool],
 				messages: sessionManager.buildSessionContext().messages,
 			},
 		});
