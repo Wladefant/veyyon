@@ -6,11 +6,6 @@ import { sanitizeText } from "@veyyon/utils";
 import type { ToolView } from "@veyyon/view";
 import { requireTheme } from "../helpers/require-theme";
 
-async function theme() {
-	const t = await requireTheme("dark");
-	return t;
-}
-
 const COLLAPSED = { expanded: false } as const;
 const EXPANDED = { expanded: true } as const;
 
@@ -27,7 +22,7 @@ describe("the retain card", () => {
 	};
 
 	it("renders one inline bullet line per item with a count summary", async () => {
-		const uiTheme = await theme();
+		const uiTheme = await requireTheme("dark");
 		const bullet = uiTheme.format.bullet;
 		const result = { content: [{ type: "text", text: "3 memories stored." }], details: { count: 3 } };
 		const rendered = lines(retainToolView.renderResult(result, COLLAPSED, args), uiTheme);
@@ -44,7 +39,7 @@ describe("the retain card", () => {
 	});
 
 	it("truncates long memory content to one line", async () => {
-		const uiTheme = await theme();
+		const uiTheme = await requireTheme("dark");
 		const bullet = uiTheme.format.bullet;
 		const long = "x".repeat(400);
 		const result = { content: [{ type: "text", text: "1 memory stored." }], details: { count: 1 } };
@@ -59,7 +54,7 @@ describe("the retain card", () => {
 	});
 
 	it("shows pending bullet lines while the call streams", async () => {
-		const uiTheme = await theme();
+		const uiTheme = await requireTheme("dark");
 		const bullet = uiTheme.format.bullet;
 		const rendered = lines(retainToolView.renderCall(args, COLLAPSED), uiTheme);
 		expect(rendered.filter(line => line.includes(bullet))).toHaveLength(3);
@@ -68,7 +63,7 @@ describe("the retain card", () => {
 
 describe("the recall card", () => {
 	it("summarizes the match count and hides memories until expanded", async () => {
-		const uiTheme = await theme();
+		const uiTheme = await requireTheme("dark");
 		const result = {
 			content: [
 				{
@@ -89,7 +84,7 @@ describe("the recall card", () => {
 	});
 
 	it("flags an empty recall as a single warning line", async () => {
-		const uiTheme = await theme();
+		const uiTheme = await requireTheme("dark");
 		const result = { content: [{ type: "text", text: "No relevant memories found." }] };
 		const rendered = lines(recallToolView.renderResult(result, COLLAPSED, { query: "q" }), uiTheme);
 		expect(rendered).toHaveLength(1);
@@ -99,7 +94,7 @@ describe("the recall card", () => {
 
 describe("the reflect card", () => {
 	it("renders the synthesized answer under a concise header", async () => {
-		const uiTheme = await theme();
+		const uiTheme = await requireTheme("dark");
 		const result = { content: [{ type: "text", text: "Line one.\nLine two.\nLine three." }] };
 		const rendered = lines(reflectToolView.renderResult(result, EXPANDED, { query: "what do you know" }), uiTheme);
 		expect(rendered[0]).toContain("Reflect");

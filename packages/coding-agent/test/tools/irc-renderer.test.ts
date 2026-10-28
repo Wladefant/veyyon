@@ -6,11 +6,6 @@ import { type IrcViewArgs, type IrcViewResult, ircToolView } from "@veyyon/codin
 import { sanitizeText } from "@veyyon/utils";
 import { requireTheme } from "../helpers/require-theme";
 
-async function theme() {
-	const t = await requireTheme("dark");
-	return t;
-}
-
 const lines = (component: { render: (w: number) => readonly string[] }, width = 200) =>
 	sanitizeText(component.render(width).join("\n"))
 		.split("\n")
@@ -18,7 +13,7 @@ const lines = (component: { render: (w: number) => readonly string[] }, width = 
 
 /** The card the terminal draws for a result, which is the view through the host's own drawing. */
 async function card(result: IrcViewResult, args: IrcViewArgs, expanded = false): Promise<string[]> {
-	const uiTheme = await theme();
+	const uiTheme = await requireTheme("dark");
 	return lines(drawToolView(ircToolView.renderResult(result, { expanded }, args), uiTheme));
 }
 
