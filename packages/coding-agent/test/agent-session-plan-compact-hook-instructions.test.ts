@@ -26,6 +26,7 @@ import { Agent } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { requireBundledModel } from "../../agent/test/helpers";
@@ -49,14 +50,7 @@ function createAssistantResponse(text: string) {
 		api: "anthropic-messages" as const,
 		provider: "anthropic" as const,
 		model: "claude-sonnet-4-5",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop" as const,
 		timestamp: Date.now(),
 	};

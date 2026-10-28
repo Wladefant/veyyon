@@ -15,17 +15,11 @@
  */
 import { describe, expect, it } from "bun:test";
 import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { YieldTracker } from "@veyyon/coding-agent/session/runtime/yield-tracker";
 import { TOOL } from "@veyyon/coding-agent/tools/core/builtin-names";
 
-const usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = emptyUsage();
 
 function assistantCalling(...calls: Array<[name: string, id: string]>): AssistantMessage {
 	return {

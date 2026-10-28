@@ -25,6 +25,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { emptyUsage } from "@veyyon/catalog/models";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { ToolView } from "@veyyon/tool-render";
 import { removeWithRetries } from "@veyyon/utils";
@@ -434,14 +435,7 @@ describe("Tool Execution Display Wire and Export Projection", () => {
 						api: "anthropic-messages",
 						provider: "anthropic",
 						model: "claude-3-5-sonnet",
-						usage: {
-							input: 0,
-							output: 0,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 0,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
+						usage: emptyUsage(),
 						stopReason: "toolUse",
 						timestamp: 1000,
 					},
@@ -758,14 +752,7 @@ describe("Tool Execution Display Wire and Export Projection", () => {
 						model: "example",
 						stopReason: "toolUse",
 						timestamp: 0,
-						usage: {
-							input: 0,
-							output: 0,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 0,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
+						usage: emptyUsage(),
 					},
 				} as unknown as SessionEntry;
 				ctx.sessionManager.snapshotForReplication = () => ({ ...snapshot, entries: [entry] });

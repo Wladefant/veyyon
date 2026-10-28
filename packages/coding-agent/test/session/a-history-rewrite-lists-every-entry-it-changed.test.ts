@@ -5,6 +5,7 @@ import { Agent } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, ImageContent, TextContent, ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { SettingPath } from "@veyyon/coding-agent/config/settings-schema";
@@ -118,14 +119,7 @@ function verifyListedRewrites(manager: SessionManager): RewriteLog {
 	return log;
 }
 
-const usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = emptyUsage();
 
 const PNG: ImageContent = { type: "image", data: "iVBORw0KGgo", mimeType: "image/png" };
 

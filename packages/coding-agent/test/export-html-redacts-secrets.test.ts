@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { removeWithRetries } from "@veyyon/utils";
 import { exportFromFile } from "../src/export/html";
 import type { SessionData } from "../src/export/session-data";
@@ -85,14 +86,7 @@ describe("HTML export secret redaction", () => {
 						content: [
 							{ type: "fallback", from: { model: `before-${SECRET}` }, to: { model: `after-${SECRET}` } },
 						],
-						usage: {
-							input: 0,
-							output: 0,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 0,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
+						usage: emptyUsage(),
 					},
 				})}\n`,
 			);

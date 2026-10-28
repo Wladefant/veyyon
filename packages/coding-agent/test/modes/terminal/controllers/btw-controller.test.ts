@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage, Usage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { BtwPanelComponent } from "@veyyon/coding-agent/modes/terminal/components/dialogs/btw-panel";
 import { BtwController } from "@veyyon/coding-agent/modes/terminal/controllers/btw-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
@@ -8,14 +9,7 @@ import * as clipboard from "@veyyon/coding-agent/utils/clipboard";
 import { Container, type TUI } from "@veyyon/tui";
 import { replaceTabs } from "@veyyon/utils/tab-width";
 
-const usage: Usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage: Usage = emptyUsage();
 
 function createAssistantMessage(text: string): AssistantMessage {
 	return {

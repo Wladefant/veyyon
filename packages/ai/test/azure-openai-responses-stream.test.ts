@@ -5,6 +5,7 @@ import {
 } from "@veyyon/ai/providers/azure-openai-responses";
 import type { Context, FetchImpl, Model, ModelSpec, Tool } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const azureModel: Model<"azure-openai-responses"> = buildModel({
 	id: "gpt-5-mini",
@@ -41,14 +42,7 @@ function createAssistantMessage(text: string, textSignature?: string) {
 		api: "azure-openai-responses" as const,
 		provider: "azure" as const,
 		model: "gpt-5-mini",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop" as const,
 		timestamp: Date.now(),
 	};

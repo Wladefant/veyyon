@@ -24,6 +24,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { AGGRESSIVE_SHAKE_CONFIG, collectShakeRegions } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, ImageContent, TextContent, ToolResultMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { HistoryRewrites } from "@veyyon/coding-agent/session/runtime/history-rewrites";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
@@ -59,14 +60,7 @@ interface Scenario {
 
 const PNG: ImageContent = { type: "image", data: "iVBORw0KGgo", mimeType: "image/png" };
 
-const usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = emptyUsage();
 
 class Tape {
 	readonly #manager: SessionManager;

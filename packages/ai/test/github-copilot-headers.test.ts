@@ -7,7 +7,7 @@ import {
 	inferCopilotInitiator,
 } from "@veyyon/ai/providers/github-copilot-headers";
 import type { Message } from "@veyyon/ai/types";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 
 describe("inferCopilotInitiator", () => {
 	it("returns 'user' when there are no messages", () => {
@@ -23,14 +23,7 @@ describe("inferCopilotInitiator", () => {
 				api: "openai-completions",
 				provider: "github-copilot",
 				model: "gpt-4o",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: Date.now(),
 			},

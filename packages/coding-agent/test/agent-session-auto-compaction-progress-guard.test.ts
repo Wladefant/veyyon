@@ -5,6 +5,7 @@ import { Agent } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import { resolveThresholdTokens, shouldCompact } from "@veyyon/agent-core/compaction";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { loadExtensions } from "@veyyon/coding-agent/extensibility/extensions/loader";
@@ -1082,14 +1083,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
 			stopReason: "toolUse",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			timestamp: now - 180,
 		});
 		sessionManager.appendMessage({
@@ -1111,14 +1105,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 				provider: "anthropic",
 				model: "claude-sonnet-4-5",
 				stopReason: "toolUse",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				timestamp: ts,
 			});
 			sessionManager.appendMessage({

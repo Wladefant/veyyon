@@ -15,6 +15,7 @@ import * as AIError from "@veyyon/ai/error";
 import type { AssistantMessage, AssistantMessageEvent } from "@veyyon/ai/types";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { wrapLeakedThinkingStream } from "@veyyon/ai/utils/leaked-thinking-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 function msg(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
 	return {
@@ -23,14 +24,7 @@ function msg(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
 		api: "mock",
 		provider: "mock",
 		model: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 0,
 		...overrides,

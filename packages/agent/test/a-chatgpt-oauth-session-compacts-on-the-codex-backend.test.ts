@@ -58,6 +58,7 @@ import {
 import type { AssistantMessage, Model } from "@veyyon/ai";
 import { resetServerCompactionRouteCache } from "@veyyon/ai/providers/openai-compaction";
 import { buildOpenAIResponsesCompat } from "@veyyon/catalog/compat/openai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import type { ResolvedOpenAIResponsesCompat } from "@veyyon/catalog/types";
 import { OPENAI_HEADERS } from "@veyyon/catalog/wire/codex";
 import { createUserMessage, requireBundledModel } from "./helpers";
@@ -85,14 +86,7 @@ function makeAssistantStop(text: string): AssistantMessage {
 		api: "openai-completions",
 		provider: "openai-codex",
 		model: "gpt-5.1-codex",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 	};
 }
 

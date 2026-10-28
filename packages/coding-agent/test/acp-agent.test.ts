@@ -22,7 +22,7 @@ import {
 import type { Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 // One owner for how `/fast` names the state it changes, so this suite cannot drift
 // from the command the way it did when the wording became "priority tier".
 import { PRIORITY_TIER_COMMAND_LABEL } from "@veyyon/coding-agent/config/service-tier";
@@ -1487,14 +1487,7 @@ describe("ACP agent", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: TEST_MODELS[0].id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "aborted",
 			errorMessage: SILENT_ABORT_MARKER,
 			timestamp: Date.now(),

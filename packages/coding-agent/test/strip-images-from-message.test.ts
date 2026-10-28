@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { ImageContent, TextContent } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { stripImagesFromMessage } from "@veyyon/coding-agent/session/messages";
 
 const png = (data: string = "iVBORw0KGgo"): ImageContent => ({ type: "image", data, mimeType: "image/png" });
@@ -100,14 +101,7 @@ describe("stripImagesFromMessage", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "claude",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		};

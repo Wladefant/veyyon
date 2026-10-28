@@ -10,6 +10,7 @@ import { describe, expect, it } from "bun:test";
 import { transformMessages } from "@veyyon/ai/providers/transform-messages";
 import type { AssistantMessage, Message, Model, ToolCall, ToolResultMessage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const model: Model<"anthropic-messages"> = buildModel({
 	api: "anthropic-messages",
@@ -31,14 +32,7 @@ function assistant(content: AssistantMessage["content"], timestamp: number): Ass
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp,
 	};

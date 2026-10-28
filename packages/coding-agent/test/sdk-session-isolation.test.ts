@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { Rule } from "@veyyon/coding-agent/discovery/capability/rule";
@@ -227,14 +228,7 @@ describe("createAgentSession session storage isolation", () => {
 				api: model.api,
 				provider: model.provider,
 				model: model.id,
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: Date.now(),
 			});

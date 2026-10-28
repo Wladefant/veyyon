@@ -18,6 +18,7 @@ import type {
 	UserMessage,
 } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 /**
  * Regression test for: "each tool_use must have a single result. Found multiple tool_result blocks with id"
@@ -46,14 +47,7 @@ describe("Duplicate Tool Results Regression", () => {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude-3-5-sonnet-20241022",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp,
 	});
@@ -664,14 +658,7 @@ describe("Orphan Tool Result (handoff/compaction) Regression", () => {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude-3-5-sonnet-20241022",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: Date.now(),
 	});
@@ -763,14 +750,7 @@ describe("Orphan Tool Result (handoff/compaction) Regression", () => {
 				api: "anthropic-messages",
 				provider: "anthropic",
 				model: "claude-3-5-sonnet-20241022",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: Date.now(),
 			} as AssistantMessage,
@@ -982,14 +962,7 @@ describe("Orphan Tool Result (handoff/compaction) Regression", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "claude-3-5-sonnet-20241022",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "aborted",
 			timestamp: 1,
 		};

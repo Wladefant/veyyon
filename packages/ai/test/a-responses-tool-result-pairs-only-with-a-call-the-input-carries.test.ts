@@ -4,6 +4,7 @@ import { buildResponsesInput } from "@veyyon/ai/providers/openai-shared";
 import type { AssistantMessage, Context, Message, Model, ModelSpec, ToolCall } from "@veyyon/ai/types";
 import { createOpenAIResponsesHistoryPayload } from "@veyyon/ai/utils";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { mulberry32 } from "../../utils/test/helpers/mulberry32";
 
 /**
@@ -22,14 +23,7 @@ import { mulberry32 } from "../../utils/test/helpers/mulberry32";
  * which the generator excludes because the endpoint never issues one, and the order of items beyond pairing.
  */
 
-const usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = emptyUsage();
 
 function responsesModel(freeform: boolean): Model<"openai-responses"> {
 	return buildModel({

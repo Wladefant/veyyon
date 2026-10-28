@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@veyyon/agent-core";
 import { validateToolArguments } from "@veyyon/ai/utils/validation";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { canonicalSnapshotKey } from "@veyyon/coding-agent/edit/file-snapshot-store";
 import type { RenderResultOptions } from "@veyyon/coding-agent/extensibility/custom-tools/types";
@@ -344,14 +345,7 @@ describe("tool path arrays", () => {
 					api: "test",
 					provider: "test",
 					model: "test",
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					timestamp: 2,
 				},
 			},
@@ -415,14 +409,7 @@ describe("tool path arrays", () => {
 				api: "test",
 				provider: "test",
 				model: "test",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				timestamp: 2,
 				stopReason: "stop",
 			} as AgentMessage,

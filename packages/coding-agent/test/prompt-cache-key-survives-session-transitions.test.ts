@@ -31,6 +31,7 @@ import * as compactionModule from "@veyyon/agent-core/compaction";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockModel, registerMockApi } from "@veyyon/ai/providers/mock";
 import { getOpenAIPromptCacheKey } from "@veyyon/ai/providers/openai-shared";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -227,14 +228,7 @@ describe("provider prompt-cache key across session transitions", () => {
 			api: "mock",
 			provider: "mock",
 			model: "mock-model",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		});

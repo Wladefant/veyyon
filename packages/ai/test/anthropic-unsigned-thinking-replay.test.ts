@@ -3,6 +3,7 @@ import { renderDemotedThinking } from "@veyyon/ai/dialect";
 import { convertAnthropicMessages, streamAnthropic } from "@veyyon/ai/providers/anthropic";
 import type { AssistantMessage, Message, Model, ModelSpec, ToolResultMessage, UserMessage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 /**
  * Regression: Anthropic-compatible reasoning endpoints often emit `thinking`
@@ -42,14 +43,7 @@ function makeAssistantThinking(thinking: string, tail: AssistantMessage["content
 		api: "anthropic-messages",
 		provider: "custom-anthropic",
 		model: "reasoning-model",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: 0,
 	};
@@ -133,14 +127,7 @@ describe("Anthropic-compatible unsigned thinking replay (#2005)", () => {
 			api,
 			provider: api === "anthropic-messages" ? "custom-anthropic" : "openai",
 			model: "reasoning-model",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: 0,
 		});

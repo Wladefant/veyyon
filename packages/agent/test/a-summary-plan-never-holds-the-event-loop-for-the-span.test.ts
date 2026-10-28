@@ -12,6 +12,7 @@ import { measureSummarySource, SUMMARY_TRANSCRIPT_GLUE_BYTES } from "@veyyon/age
 import * as compactionUtils from "@veyyon/agent-core/compaction/utils";
 import type { AssistantMessage, Context, Message, Model } from "@veyyon/ai";
 import { DIALECTS } from "@veyyon/catalog/identity";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { TIME_SLICE_MS } from "@veyyon/utils";
 import { requireBundledModel } from "./helpers";
 
@@ -41,14 +42,7 @@ import { requireBundledModel } from "./helpers";
  * a dialect whose framing per message exceeds the glue only on a shape the corpus below lacks.
  */
 
-const usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = emptyUsage();
 
 function assistant(content: AssistantMessage["content"]): AssistantMessage {
 	return { role: "assistant", content, timestamp: 2, provider: "m", model: "m", api: "m", usage, stopReason: "stop" };

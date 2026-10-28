@@ -9,7 +9,7 @@ import * as envApiKeyModule from "@veyyon/ai/env-api-key";
 import { createMockModel, registerMockApi } from "@veyyon/ai/providers/mock";
 import * as aiStream from "@veyyon/ai/stream";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -581,14 +581,7 @@ describe("AgentSession retry delay cap", () => {
 						api: requestedModel.api,
 						provider: requestedModel.provider,
 						model: requestedModel.id,
-						usage: {
-							input: 0,
-							output: 0,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 0,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
+						usage: emptyUsage(),
 						stopReason: "stop",
 						timestamp: Date.now(),
 					};
@@ -697,14 +690,7 @@ describe("AgentSession retry delay cap", () => {
 						api: requestedModel.api,
 						provider: requestedModel.provider,
 						model: requestedModel.id,
-						usage: {
-							input: 0,
-							output: 0,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 0,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
+						usage: emptyUsage(),
 						stopReason: "stop",
 						timestamp: Date.now(),
 					};
@@ -821,14 +807,7 @@ describe("AgentSession retry delay cap", () => {
 						api: requestedModel.api,
 						provider: requestedModel.provider,
 						model: requestedModel.id,
-						usage: {
-							input: 0,
-							output: 0,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 0,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
+						usage: emptyUsage(),
 						stopReason: "stop",
 						timestamp: Date.now(),
 					};

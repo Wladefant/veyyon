@@ -12,7 +12,7 @@ import type { AssistantMessage, Message, ToolCall } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { AsyncJobManager } from "@veyyon/coding-agent/async";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { type SettingPath, Settings } from "@veyyon/coding-agent/config/settings";
@@ -1171,14 +1171,7 @@ describe("AgentSession TTSR resume gate", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "mock",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason,
 			timestamp: Date.now(),
 		};
@@ -1311,14 +1304,7 @@ describe("AgentSession TTSR resume gate", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "mock",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason,
 			timestamp: Date.now(),
 		});
@@ -1428,14 +1414,7 @@ describe("AgentSession TTSR resume gate", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "mock",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason,
 			timestamp: Date.now(),
 		});
@@ -1769,14 +1748,7 @@ describe("AgentSession TTSR resume gate", () => {
 				api: "anthropic-messages",
 				provider: "anthropic",
 				model: "mock",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "toolUse",
 				timestamp: Date.now(),
 			};
@@ -1878,14 +1850,7 @@ describe("AgentSession TTSR resume gate", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "mock",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		});
@@ -2026,14 +1991,7 @@ describe("AgentSession TTSR resume gate", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "mock",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		});
@@ -2130,14 +2088,7 @@ describe("AgentSession TTSR resume gate", () => {
 			api: sparkModel.api,
 			provider: sparkModel.provider,
 			model: sparkModel.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "error",
 			errorMessage: "context_length_exceeded: Your input exceeds the context window of this model.",
 			timestamp: Date.now(),
@@ -2149,14 +2100,7 @@ describe("AgentSession TTSR resume gate", () => {
 			api: codexModel.api,
 			provider: codexModel.provider,
 			model: codexModel.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		});

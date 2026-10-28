@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { claudeCodeSystemInstruction, streamAnthropic } from "@veyyon/ai/providers/anthropic";
 import type { Context, Model, ModelSpec } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const MODEL_SPEC: ModelSpec<"anthropic-messages"> = {
 	id: "claude-sonnet-4-5",
@@ -135,14 +136,7 @@ describe("Anthropic stable system-prefix caching", () => {
 						api: "anthropic-messages",
 						provider: "anthropic",
 						model: MODEL.id,
-						usage: {
-							input: 0,
-							output: 0,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 0,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
+						usage: emptyUsage(),
 						stopReason: "stop",
 						timestamp: 2,
 					},

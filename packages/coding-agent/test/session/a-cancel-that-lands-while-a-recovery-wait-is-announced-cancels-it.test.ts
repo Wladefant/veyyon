@@ -23,6 +23,7 @@ import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage, Model, ToolCall } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { RetryRecoveryMode } from "@veyyon/coding-agent/modes/retry-display";
@@ -109,14 +110,7 @@ function assistant(content: AssistantMessage["content"]): AssistantMessage {
 		api: model.api,
 		provider: model.provider,
 		model: model.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: Date.now(),
 	};

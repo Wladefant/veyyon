@@ -18,6 +18,7 @@ import type { AssistantMessage, AssistantMessageEvent, Message, ToolResultMessag
 import { Flag, is, recover } from "@veyyon/ai/error";
 import { createMockModel, type MockResponse } from "@veyyon/ai/providers/mock";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { parseJsonWithRepair } from "@veyyon/utils/json-parse";
 import { INTENT_FIELD } from "@veyyon/wire";
 import { type } from "arktype";
@@ -2214,14 +2215,7 @@ it("recovers from provider whitespace loop recovery without duplicating assistan
 					api: model.api,
 					provider: model.provider,
 					model: model.id,
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					stopReason: "stop",
 					timestamp: Date.now(),
 				});
@@ -3408,14 +3402,7 @@ describe("agentLoop kCursorExecResolved (issue #4348)", () => {
 					api: "cursor-agent",
 					provider: "cursor",
 					model: "cursor-composer-2.5",
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					stopReason: "stop",
 					timestamp: Date.now(),
 				};
@@ -3501,14 +3488,7 @@ describe("agentLoop kCursorExecResolved (issue #4348)", () => {
 						api: "cursor-agent",
 						provider: "cursor",
 						model: "cursor-composer-2.5",
-						usage: {
-							input: 0,
-							output: 0,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 0,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
+						usage: emptyUsage(),
 						stopReason: "toolUse",
 						timestamp: Date.now(),
 					};
@@ -3522,14 +3502,7 @@ describe("agentLoop kCursorExecResolved (issue #4348)", () => {
 						api: "cursor-agent",
 						provider: "cursor",
 						model: "cursor-composer-2.5",
-						usage: {
-							input: 0,
-							output: 0,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 0,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
+						usage: emptyUsage(),
 						stopReason: "stop",
 						timestamp: Date.now(),
 					};

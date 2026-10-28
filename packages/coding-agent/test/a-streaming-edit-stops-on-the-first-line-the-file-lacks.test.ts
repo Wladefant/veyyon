@@ -19,6 +19,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AssistantMessage, AssistantMessageEvent, ToolCall } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { StreamingEditGuard } from "@veyyon/coding-agent/session/runtime/streaming-edit-guard";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 
@@ -71,14 +72,7 @@ function messageWith(toolCall: ToolCall): AssistantMessage {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: 0,
 	};

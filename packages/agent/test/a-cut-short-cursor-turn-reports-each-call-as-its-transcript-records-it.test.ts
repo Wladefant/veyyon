@@ -30,6 +30,7 @@ import type { AssistantMessage, ToolCall, ToolResultMessage } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { type CursorExecResolvedCarrier, kCursorExecResolved } from "@veyyon/ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 /** What the exec channel did with one call before the turn was cut short. */
 type ExecState = "answered ok" | "answered with an error" | "still running";
@@ -44,15 +45,6 @@ interface Scenario {
 	/** The host's result hook; the agent installs its own when this is absent. */
 	cursorOnToolResult?: AgentOptions["cursorOnToolResult"];
 }
-
-const NO_USAGE: AssistantMessage["usage"] = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
 
 /** Every non-empty ordered subset of the exec states, under each cause, with and without an undispatched call. */
 function sweep(): Scenario[] {
@@ -98,7 +90,7 @@ async function runScenario(scenario: Scenario): Promise<Run> {
 				api: "cursor-agent",
 				provider: "cursor",
 				model: "composer",
-				usage: NO_USAGE,
+				usage: emptyUsage(),
 				stopReason: "toolUse",
 				timestamp: Date.now(),
 			};

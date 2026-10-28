@@ -25,6 +25,7 @@ import { streamSimple } from "@veyyon/ai/stream";
 import type { AssistantMessage, Context, Model, ModelSpec, TJsonSchema, TokenTaskBudget, Tool } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { removeSyncWithRetries } from "@veyyon/utils";
 import { type as arkType } from "arktype";
 import { withEnv } from "../../utils/test/helpers/restore-global";
@@ -287,14 +288,7 @@ describe("Anthropic request fingerprint alignment", () => {
 					api: "anthropic-messages",
 					provider: "anthropic",
 					model: ANTHROPIC_MODEL.id,
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					stopReason: "toolUse",
 					timestamp: Date.now(),
 				},
@@ -358,14 +352,7 @@ describe("Anthropic request fingerprint alignment", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: ANTHROPIC_MODEL.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		};

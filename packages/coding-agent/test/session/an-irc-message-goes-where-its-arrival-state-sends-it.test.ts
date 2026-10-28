@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { AgentEvent, AgentMessage, AgentPromptOptions } from "@veyyon/agent-core";
 import type { ImageContent } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import type { EphemeralTurnArgs, EphemeralTurnResult } from "@veyyon/coding-agent/session/agent-session-ephemeral-turn";
 import type { CustomMessage } from "@veyyon/coding-agent/session/messages";
@@ -168,14 +169,7 @@ class ArrivalHost implements IrcDeliveryHost {
 				api: "anthropic-messages",
 				provider: "anthropic",
 				model: "mock",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: Date.now(),
 			},

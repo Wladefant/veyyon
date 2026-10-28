@@ -4,7 +4,7 @@ import { convertMessages } from "@veyyon/ai/providers/openai-completions";
 import type { AssistantMessage, Model, ModelSpec, ThinkingContent, ToolCall } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 
 interface OpenAICompletionAssistantWireMessage {
 	role: "assistant";
@@ -52,14 +52,7 @@ function assistantToolCall(
 		api: model.api,
 		provider: model.provider,
 		model: model.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: Date.now(),
 	};
@@ -169,14 +162,7 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 				api: model.api,
 				provider: model.provider,
 				model: model.id,
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "toolUse",
 				timestamp: Date.now(),
 			};
@@ -212,14 +198,7 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 				api: model.api,
 				provider: model.provider,
 				model: model.id,
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "toolUse",
 				timestamp: Date.now(),
 			};
@@ -283,14 +262,7 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 				api: model.api,
 				provider: model.provider,
 				model: model.id,
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "toolUse",
 				timestamp: Date.now(),
 			};
@@ -360,14 +332,7 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 				api: model.api,
 				provider: model.provider,
 				model: model.id,
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "toolUse",
 				timestamp: Date.now(),
 			};
@@ -474,14 +439,7 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 				api: model.api,
 				provider: model.provider,
 				model: model.id,
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: Date.now(),
 			};
@@ -514,14 +472,7 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 				api: model.api,
 				provider: model.provider,
 				model: model.id,
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: Date.now(),
 			};
@@ -550,14 +501,7 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 				api: model.api,
 				provider: model.provider,
 				model: model.id,
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: Date.now(),
 			};

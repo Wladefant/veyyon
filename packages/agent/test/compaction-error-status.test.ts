@@ -9,6 +9,7 @@ import {
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { anthropicModel, createAssistantMessage, createUserMessage } from "./helpers";
 
 // Pins the fix for the "raw 401 surfaced as Compaction failed:" bug.
@@ -35,14 +36,7 @@ function makeAssistantError(errorStatus: number | undefined, errorMessage: strin
 		provider: "mock",
 		model: "mock",
 		api: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "error",
 		errorMessage,
 		...(errorStatus !== undefined ? { errorStatus } : {}),

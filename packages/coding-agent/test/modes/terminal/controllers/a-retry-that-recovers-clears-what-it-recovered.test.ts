@@ -16,6 +16,7 @@
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import type { RecoveredRetryError } from "@veyyon/coding-agent/extensibility/shared-events";
 import { AssistantMessageComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/assistant-message";
@@ -134,14 +135,7 @@ function erroredBlock(): AssistantMessageComponent {
 		model: "claude-sonnet-4-5",
 		stopReason: "error",
 		errorMessage: ERROR_TEXT,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		timestamp: 1_700_000_000_000,
 	};
 	return new AssistantMessageComponent(toAssistantMessageView(message));

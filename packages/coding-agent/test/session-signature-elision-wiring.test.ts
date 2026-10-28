@@ -27,6 +27,7 @@ import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage, Context, Message, Model, UserMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { convertMessages } from "@veyyon/ai/providers/google-shared";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -79,14 +80,7 @@ describe("AgentSession wires the signature settings into the request", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		} as AssistantMessage;

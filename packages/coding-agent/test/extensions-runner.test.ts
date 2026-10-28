@@ -8,6 +8,7 @@ import * as path from "node:path";
 import type { AgentMessage, AgentTool } from "@veyyon/agent-core";
 import type { ImageContent, TextContent } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { discoverAndLoadExtensions } from "@veyyon/coding-agent/extensibility/extensions/loader";
 import {
@@ -801,14 +802,7 @@ describe("ExtensionRunner", () => {
 				api: "anthropic-messages",
 				provider: "anthropic",
 				model: "claude-sonnet-4-5",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: 123,
 			};
@@ -865,14 +859,7 @@ describe("ExtensionRunner", () => {
 				api: "anthropic-messages",
 				provider: "anthropic",
 				model: "claude-sonnet-4-5",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: 123,
 			};

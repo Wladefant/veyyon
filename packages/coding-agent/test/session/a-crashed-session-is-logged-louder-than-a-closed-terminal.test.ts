@@ -26,6 +26,7 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -39,15 +40,6 @@ const EXIT_MESSAGE = "Session exit recorded";
 
 /** Every level the record can be written at, so a run can prove which one fired and which did not. */
 const LEVELS: readonly SessionExitLogLevel[] = ["debug", "warn", "error"];
-
-const emptyUsage = () => ({
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-});
 
 /** An assistant turn that finished. Something must be in the transcript or no record is written at all. */
 const settledAssistant = (): AssistantMessage => ({

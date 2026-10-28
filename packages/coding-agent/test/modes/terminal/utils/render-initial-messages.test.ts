@@ -12,9 +12,12 @@
  */
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
+
 import type { AgentMessage } from "@veyyon/agent-core";
-import type { AssistantMessage, ImageContent, Usage } from "@veyyon/ai";
+
+import type { AssistantMessage, ImageContent } from "@veyyon/ai";
 import { kStreamingPartialJson } from "@veyyon/ai/utils/block-symbols";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { UiHelpers } from "@veyyon/coding-agent/modes/terminal/utils/ui-helpers";
@@ -101,15 +104,6 @@ function makeCtx(): {
 	return { ctx, transcriptSpy, llmContextSpy, renderSessionContextSpy };
 }
 
-const emptyUsage: Usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
 const pngImage: ImageContent = {
 	type: "image",
 	data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
@@ -123,7 +117,7 @@ function assistantToolCall(id: string, name: string, args: Record<string, unknow
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude-sonnet",
-		usage: emptyUsage,
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: 1,
 	};
@@ -344,7 +338,7 @@ describe("UiHelpers.renderSessionContext — error-stop tool calls", () => {
 				api: "anthropic-messages",
 				provider: "anthropic",
 				model: "claude-sonnet",
-				usage: emptyUsage,
+				usage: emptyUsage(),
 				stopReason: "error",
 				errorMessage: "synthetic assistant stop error",
 				timestamp: 1,
@@ -395,7 +389,7 @@ describe("UiHelpers.renderSessionContext — mid-stream tool call rebuild", () =
 				api: "anthropic-messages",
 				provider: "anthropic",
 				model: "claude-sonnet",
-				usage: emptyUsage,
+				usage: emptyUsage(),
 				stopReason: "toolUse",
 				timestamp: 1,
 			},

@@ -15,6 +15,7 @@ import {
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import * as memoryBackend from "@veyyon/coding-agent/memory/backend";
@@ -641,14 +642,7 @@ describe("AgentSession message pipeline", () => {
 			api: "test",
 			provider: "test",
 			model: "test",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			timestamp: Date.now(),
 		} as const;
 

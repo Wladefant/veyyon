@@ -10,6 +10,7 @@ import { serializeConversation, serializeConversationForSummary } from "@veyyon/
 import type { AssistantMessage, Context, Message } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
 import { DIALECTS } from "@veyyon/catalog/identity";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { anthropicModel } from "./helpers";
 
 /**
@@ -52,14 +53,7 @@ function assistant(content: AssistantMessage["content"]): AssistantMessage {
 		provider: "mock",
 		model: "mock",
 		api: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 	};
 }

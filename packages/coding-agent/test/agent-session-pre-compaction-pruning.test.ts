@@ -4,6 +4,7 @@ import { Agent } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -17,15 +18,6 @@ const USELESS_ID = "call-useless-result";
 const STALE_READ_BYTES = "STALE_READ_ORIGINAL_BYTES\n".repeat(200);
 const NEW_READ_BYTES = "NEW_READ_ORIGINAL_BYTES\n".repeat(200);
 const USELESS_BYTES = "USELESS_ORIGINAL_BYTES\n".repeat(200);
-
-const usageZero = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
 
 describe("AgentSession threshold compaction input", () => {
 	let tempDir: TempDir;
@@ -82,7 +74,7 @@ describe("AgentSession threshold compaction input", () => {
 			content,
 			...apiInfo,
 			stopReason,
-			usage: usageZero,
+			usage: emptyUsage(),
 			timestamp: Date.now(),
 		});
 	}

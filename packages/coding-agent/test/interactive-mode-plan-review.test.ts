@@ -9,6 +9,7 @@ import { Agent, AgentBusyError, ThinkingLevel } from "@veyyon/agent-core";
 import type { AssistantMessage, Usage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as AIError from "@veyyon/ai/error";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { KeybindingsManager } from "@veyyon/coding-agent/config/keybindings";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
@@ -1848,14 +1849,7 @@ describe("InteractiveMode plan review rendering", () => {
 			api: "openai-completions",
 			provider: "github-copilot",
 			model: "gpt-4o",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "aborted",
 			timestamp: Date.now(),
 			...overrides,

@@ -47,6 +47,7 @@ import {
 	SERVER_COMPACTION_WIRE_APIS,
 	serverCompactionRouteAbsent,
 } from "@veyyon/ai/providers/openai-compaction";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { OPENAI_HEADERS } from "@veyyon/catalog/wire/codex";
 import { requireBundledModel } from "./helpers";
 
@@ -345,14 +346,7 @@ function makeAssistantStop(text: string): AgentMessage {
 		provider: "mock",
 		model: "mock",
 		api: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 	} as AgentMessage;
 }

@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { AssistantMessageComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/assistant-message";
 import { TranscriptContainer } from "@veyyon/coding-agent/modes/terminal/components/transcript/transcript-container";
@@ -147,14 +148,7 @@ function makeAssistantMessage(overrides: Partial<AssistantMessage> = {}): Assist
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
 		stopReason: "stop",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		timestamp: Date.now(),
 		...overrides,
 	};

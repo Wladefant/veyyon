@@ -38,7 +38,7 @@ import type { Context, KnownApi, Message, Model, SimpleStreamOptions, Tool, Tool
 import { carryRequiredToolCall, openAIToolCallForce, type WireToolCallForce } from "@veyyon/ai/utils/tool-choice";
 import { buildModel } from "@veyyon/catalog/build";
 import { GetUserJwtResponseSchema } from "@veyyon/catalog/discovery/devin-gen/exa/auth_pb/auth_pb";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import * as piUtils from "@veyyon/utils";
 import { type as arkType } from "arktype";
 import { restoreEnv } from "../../utils/test/helpers/restore-global";
@@ -837,14 +837,7 @@ describe("the instruction closes the last turn without opening a new one", () =>
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: 2,
 		};

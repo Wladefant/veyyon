@@ -26,6 +26,7 @@ import * as path from "node:path";
 import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { AsyncJobManager } from "@veyyon/coding-agent/async";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
@@ -51,14 +52,7 @@ function interruptedBashCall(): AssistantMessage {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: Date.now(),
 	};
@@ -292,14 +286,7 @@ describe("a late job result completes its interrupted call", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};

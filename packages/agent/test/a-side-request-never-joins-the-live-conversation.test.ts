@@ -32,6 +32,7 @@ import {
 	generateSummary,
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Message, SimpleStreamOptions, Tool } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { anthropicModel } from "./helpers";
 import { readResult, user } from "./support/compaction-session";
 
@@ -297,14 +298,7 @@ describe("real compaction and summarization callsites derive their side identity
 							errorMessage: "tool_choice only auto is supported by this model",
 							stopReason: "error",
 							errorStatus: 400,
-							usage: {
-								input: 0,
-								output: 0,
-								cacheRead: 0,
-								cacheWrite: 0,
-								totalTokens: 0,
-								cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-							},
+							usage: emptyUsage(),
 							timestamp: Date.now(),
 						};
 					}

@@ -24,6 +24,7 @@ import * as openaiResponses from "@veyyon/ai/providers/openai-responses-server";
 import * as piNative from "@veyyon/ai/providers/pi-native-server";
 import type { AssistantMessage } from "@veyyon/ai/types";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 type EncodeStream = (
 	events: AssistantMessageEventStream,
@@ -57,14 +58,7 @@ function partial(): AssistantMessage {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: MODEL,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 0,
 	};

@@ -5,6 +5,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, Context, Message } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import {
 	deobfuscateAgentMessages,
 	deobfuscateToolArguments,
@@ -124,14 +125,7 @@ describe("SecretObfuscator regex behavior", () => {
 			api: "test",
 			provider: "test",
 			model: "test",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: 1,
 		};
@@ -269,14 +263,7 @@ describe("deobfuscateAgentMessages (display restore)", () => {
 			api: "test",
 			provider: "test",
 			model: "test",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: 2,
 		};

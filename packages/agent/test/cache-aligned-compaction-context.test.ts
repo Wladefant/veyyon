@@ -8,6 +8,7 @@ import {
 } from "@veyyon/agent-core/compaction/cache-aligned-context";
 import { countTokens } from "@veyyon/agent-core/tokenizer";
 import type { AssistantMessage, Message, Model, Tool } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { anthropicModel, requireBundledModel } from "./helpers";
 import { readResult, user } from "./support/compaction-session";
 
@@ -50,14 +51,7 @@ function assistantToolCalls(ids: string[], timestamp = 3): AssistantMessage {
 		api: "anthropic-messages",
 		content: ids.map(id => ({ type: "toolCall" as const, id, name: "read", arguments: { path: id } })),
 		stopReason: "toolUse",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		timestamp,
 	} as AssistantMessage;
 }

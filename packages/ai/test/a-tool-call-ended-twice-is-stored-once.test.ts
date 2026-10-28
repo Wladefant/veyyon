@@ -23,6 +23,7 @@ import type { AssistantMessage, AssistantMessageEvent, ToolCall } from "@veyyon/
 import { type CursorExecResolvedCarrier, kCursorExecResolved } from "@veyyon/ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { wrapLeakedThinkingStream } from "@veyyon/ai/utils/leaked-thinking-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { wrapInbandToolStream } from "../src/dialect/owned-stream";
 import { newBlockState } from "./helpers/cursor-stream-harness";
 
@@ -33,14 +34,7 @@ function assistant(): AssistantMessage {
 		api: "mock",
 		provider: "mock",
 		model: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: 0,
 	};

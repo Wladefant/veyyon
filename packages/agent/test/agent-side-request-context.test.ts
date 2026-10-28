@@ -2,6 +2,7 @@ import { describe, expect, it, mock } from "bun:test";
 import { type AssistantMessage, type Context, z } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { Agent } from "../src/agent";
 import type { AgentTool } from "../src/types";
 
@@ -26,14 +27,7 @@ function testAssistantMessage(text: string): AssistantMessage {
 		api: "mock",
 		provider: "mock",
 		model: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: Date.now(),
 	};

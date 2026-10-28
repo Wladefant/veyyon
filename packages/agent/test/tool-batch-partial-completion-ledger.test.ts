@@ -17,6 +17,7 @@ import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { kCursorExecResolved, setStreamingPartialJson } from "@veyyon/ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { type } from "arktype";
 import { createUserMessage, identityConverter } from "./helpers";
 
@@ -28,15 +29,6 @@ import { createUserMessage, identityConverter } from "./helpers";
  *
  * These tests drive the real loop and assert on the strings the model reads.
  */
-
-const NO_USAGE = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
 
 function toolResultTexts(events: AgentEvent[]): string[] {
 	const seen = new Set<string>();
@@ -109,7 +101,7 @@ describe("partial completion ledger on a provider stream abort", () => {
 					api: "anthropic-messages",
 					provider: "anthropic",
 					model: "claude",
-					usage: NO_USAGE,
+					usage: emptyUsage(),
 					stopReason: "toolUse",
 					timestamp: Date.now(),
 				};
@@ -223,7 +215,7 @@ describe("partial completion ledger on a mid-batch interrupt", () => {
 					api: "anthropic-messages",
 					provider: "anthropic",
 					model: "claude",
-					usage: NO_USAGE,
+					usage: emptyUsage(),
 					stopReason: turn === 1 ? "toolUse" : "stop",
 					timestamp: Date.now(),
 				};
@@ -314,7 +306,7 @@ async function runStreamErrorTurn(options: {
 				api: "anthropic-messages",
 				provider: "anthropic",
 				model: "claude",
-				usage: NO_USAGE,
+				usage: emptyUsage(),
 				stopReason: "toolUse",
 				timestamp: Date.now(),
 			};
@@ -774,7 +766,7 @@ describe("a cut-short turn that left no placeholder to carry the ledger", () => 
 					api: "anthropic-messages",
 					provider: "anthropic",
 					model: "claude",
-					usage: NO_USAGE,
+					usage: emptyUsage(),
 					stopReason: "toolUse",
 					timestamp: Date.now(),
 				};
@@ -839,7 +831,7 @@ describe("a cut-short turn that left no placeholder to carry the ledger", () => 
 					api: "anthropic-messages",
 					provider: "anthropic",
 					model: "claude",
-					usage: NO_USAGE,
+					usage: emptyUsage(),
 					stopReason: "toolUse",
 					timestamp: Date.now(),
 				};
@@ -927,7 +919,7 @@ describe("a single call cut off after it entered execution", () => {
 					api: "anthropic-messages",
 					provider: "anthropic",
 					model: "claude",
-					usage: NO_USAGE,
+					usage: emptyUsage(),
 					stopReason: turn === 1 ? "toolUse" : "stop",
 					timestamp: Date.now(),
 				};
@@ -1032,7 +1024,7 @@ describe("a batch with one call cut off mid-execution and one never dispatched",
 					api: "anthropic-messages",
 					provider: "anthropic",
 					model: "claude",
-					usage: NO_USAGE,
+					usage: emptyUsage(),
 					stopReason: turn === 1 ? "toolUse" : "stop",
 					timestamp: Date.now(),
 				};

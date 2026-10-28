@@ -5,7 +5,7 @@ import { buildResponsesInput, supportsFreeformApplyPatch } from "@veyyon/ai/prov
 import type { Context, Model, ModelSpec, ProviderSessionState, Tool } from "@veyyon/ai/types";
 import { createOpenAIResponsesHistoryPayload, truncateResponseItemId } from "@veyyon/ai/utils";
 import { buildModel } from "@veyyon/catalog/build";
-import { type GeneratedProvider, getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, type GeneratedProvider, getBundledModel } from "@veyyon/catalog/models";
 import * as piUtils from "@veyyon/utils";
 import { type } from "arktype";
 
@@ -47,14 +47,6 @@ const issue5002XaiOAuthModel = buildModel({
 	maxTokens: 64000,
 } satisfies ModelSpec<"openai-responses">);
 
-const issue5002ZeroUsage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
 const issue5002EditTool: Tool = {
 	name: "edit",
 	customWireName: "apply_patch",
@@ -266,14 +258,7 @@ function makeAssistantMessage(
 		api: provider === "openai-codex" ? ("openai-codex-responses" as const) : ("openai-responses" as const),
 		provider,
 		model,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop" as const,
 		providerPayload: createOpenAIResponsesHistoryPayload(provider, items, incremental),
 		timestamp: Date.now(),
@@ -451,7 +436,7 @@ describe("OpenAI responses history payload", () => {
 					api: "openai-responses",
 					provider: "openai",
 					model: "gpt-5-mini",
-					usage: issue5002ZeroUsage,
+					usage: emptyUsage(),
 					stopReason: "toolUse",
 					timestamp: Date.now(),
 				},
@@ -537,7 +522,7 @@ describe("OpenAI responses history payload", () => {
 					api: "openai-responses",
 					provider: "xai-oauth",
 					model: issue5002XaiOAuthModel.id,
-					usage: issue5002ZeroUsage,
+					usage: emptyUsage(),
 					stopReason: "stop",
 					providerPayload: createOpenAIResponsesHistoryPayload("xai-oauth", nativeHistoryItems),
 					timestamp: Date.now(),
@@ -577,7 +562,7 @@ describe("OpenAI responses history payload", () => {
 					api: "openai-responses",
 					provider: "openai",
 					model: openaiModel.id,
-					usage: issue5002ZeroUsage,
+					usage: emptyUsage(),
 					stopReason: "stop",
 					providerPayload: createOpenAIResponsesHistoryPayload("openai", nativeHistoryItems),
 					timestamp: Date.now(),
@@ -964,14 +949,7 @@ describe("OpenAI responses history payload", () => {
 					api: "openai-responses",
 					provider: "openai",
 					model: "gpt-5-mini",
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					stopReason: "stop",
 					timestamp: Date.now(),
 				},
@@ -1003,14 +981,7 @@ describe("OpenAI responses history payload", () => {
 					api: "openai-responses",
 					provider: "openai",
 					model: "gpt-5-mini",
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					stopReason: "stop",
 					timestamp: Date.now(),
 				},
@@ -1042,14 +1013,7 @@ describe("OpenAI responses history payload", () => {
 					api: "openai-responses",
 					provider: "openai",
 					model: "gpt-5-mini",
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					stopReason: "stop",
 					timestamp: Date.now(),
 				},
@@ -1092,14 +1056,7 @@ describe("OpenAI responses history payload", () => {
 					api: "openai-responses",
 					provider: "openai",
 					model: "gpt-5-mini",
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					stopReason: "stop",
 					timestamp: Date.now(),
 				},
@@ -1225,14 +1182,7 @@ describe("OpenAI responses history payload", () => {
 					api: "openai-responses",
 					provider: "openai",
 					model: "gpt-5-mini",
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					stopReason: "error",
 					errorMessage: "Tool arguments were invalid.",
 					timestamp: Date.now(),
@@ -1277,14 +1227,7 @@ describe("OpenAI responses history payload", () => {
 					api: "openai-codex-responses",
 					provider: "openai-codex",
 					model: "gpt-5.2-codex",
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					stopReason: "error",
 					errorMessage: "Tool arguments were invalid.",
 					timestamp: Date.now(),

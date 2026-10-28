@@ -38,6 +38,7 @@ import {
 	ExecServerMessageSchema,
 	McpArgsSchema,
 } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { newBlockState } from "./helpers/cursor-stream-harness";
 
 const TOOL_CALL_ID = "call-mcp-1";
@@ -49,14 +50,7 @@ function cursorAssistantMessage(): AssistantMessage {
 		api: "cursor-agent",
 		provider: "cursor",
 		model: "cursor-composer-2.5",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 0,
 	};

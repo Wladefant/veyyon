@@ -20,6 +20,7 @@ import { AnthropicMessages } from "@veyyon/ai/providers/anthropic-client";
 import type { MessageParam } from "@veyyon/ai/providers/anthropic-wire";
 import type { AssistantMessage, Context, Model, ToolResultMessage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const fableModel: Model<"anthropic-messages"> = buildModel({
 	id: "claude-fable-5",
@@ -283,14 +284,7 @@ describe("anthropic fallback content-block replay policy", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "claude-opus-4-8",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: 0,
 		};
@@ -351,14 +345,7 @@ describe("anthropic assistant replay block ordering (tool_use partition)", () =>
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "claude-fable-5",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: 0,
 		};

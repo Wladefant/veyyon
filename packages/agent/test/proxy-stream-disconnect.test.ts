@@ -12,6 +12,7 @@ import { type ProxyMessageEventStream, streamProxy } from "@veyyon/agent-core/pr
 import type { AssistantMessageEvent, Context, FetchImpl, Model, ToolCall } from "@veyyon/ai";
 import { getStreamingPartialJson } from "@veyyon/ai/utils/block-symbols";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const mockModel: Model = buildModel({
 	id: "test-model",
@@ -64,14 +65,7 @@ async function collectEvents(stream: ProxyMessageEventStream, timeoutMs = 2000):
 	return events;
 }
 
-const baseUsage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const baseUsage = emptyUsage();
 
 describe("streamProxy — server disconnect without terminal event", () => {
 	it("emits an error event when server disconnects after start with no terminal event", async () => {

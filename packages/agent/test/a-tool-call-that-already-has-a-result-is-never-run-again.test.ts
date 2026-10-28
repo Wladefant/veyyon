@@ -34,6 +34,7 @@ import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentTool
 import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { type } from "arktype";
 import { createUserMessage, identityConverter } from "./helpers";
 
@@ -101,14 +102,7 @@ async function runTurn(options: { priorResult?: ToolResultMessage; includeUnansw
 				api: "cursor-agent",
 				provider: "cursor",
 				model: "cursor-grok-4.6-medium",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: first ? "toolUse" : "stop",
 				timestamp: Date.now(),
 			};

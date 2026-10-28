@@ -14,6 +14,7 @@ import { getStreamingPartialJson, setStreamingPartialJson } from "@veyyon/ai/uti
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { wrapLeakedThinkingStream } from "@veyyon/ai/utils/leaked-thinking-stream";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 /** Minimal assistant message; `content`/`stopReason` overridden per event. */
 function msg(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
@@ -23,14 +24,7 @@ function msg(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
 		api: "mock",
 		provider: "mock",
 		model: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 0,
 		...overrides,

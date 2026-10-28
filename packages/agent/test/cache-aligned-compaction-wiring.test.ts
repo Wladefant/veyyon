@@ -6,6 +6,7 @@ import {
 	SUMMARIZATION_SYSTEM_PROMPT,
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Context, Message, Model, Tool } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { anthropicModel } from "./helpers";
 import { readResult, user } from "./support/compaction-session";
 
@@ -42,14 +43,7 @@ function assistantToolCall(id: string, timestamp = 3): AssistantMessage {
 		api: "anthropic-messages",
 		content: [{ type: "toolCall", id, name: "read", arguments: { path: id } }],
 		stopReason: "toolUse",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		timestamp,
 	} as AssistantMessage;
 }

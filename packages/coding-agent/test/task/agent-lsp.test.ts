@@ -17,6 +17,7 @@ import * as worktreeModule from "@veyyon/coding-agent/task/worktree";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { removeWithRetries } from "@veyyon/utils";
 import "@veyyon/coding-agent/tools/agent/yield";
+import { emptyUsage } from "@veyyon/catalog/models";
 import type { AgentSessionEvent, PromptOptions } from "@veyyon/coding-agent/session/agent-session-types";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@veyyon/coding-agent/session/factory-options";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
@@ -37,14 +38,7 @@ function createAssistantStopMessage(text: string): AssistantMessage {
 		api: "openai-responses",
 		provider: "openai",
 		model: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: Date.now(),
 	};

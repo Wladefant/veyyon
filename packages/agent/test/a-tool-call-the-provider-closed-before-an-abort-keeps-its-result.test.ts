@@ -31,17 +31,9 @@ import {
 	setStreamingPartialJson,
 } from "@veyyon/ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { mulberry32 } from "../../utils/test/helpers/mulberry32";
 import { createUserMessage, identityConverter } from "./helpers";
-
-const NO_USAGE = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
 
 interface PlannedCall {
 	id: string;
@@ -159,7 +151,7 @@ async function runScenario(scenario: Scenario): Promise<Outcome> {
 					api: "anthropic-messages",
 					provider: "anthropic",
 					model: "claude",
-					usage: NO_USAGE,
+					usage: emptyUsage(),
 					stopReason: "toolUse",
 					timestamp: Date.now(),
 				};
@@ -289,7 +281,7 @@ function emptyPartial(): AssistantMessage {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude",
-		usage: NO_USAGE,
+		usage: emptyUsage(),
 		stopReason: "aborted",
 		timestamp: Date.now(),
 	};

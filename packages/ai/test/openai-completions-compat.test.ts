@@ -18,7 +18,7 @@ import type {
 } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import type { ResolvedOpenAICompat } from "@veyyon/catalog/types";
 import { sayHelloContext } from "./helpers";
 import { sseFetch } from "./helpers/fetch-mock";
@@ -186,14 +186,7 @@ describe("openai-completions compatibility", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		};
@@ -226,14 +219,7 @@ describe("openai-completions compatibility", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		};
@@ -265,14 +251,7 @@ describe("openai-completions compatibility", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		};
@@ -1279,14 +1258,7 @@ describe("kimi model detection via detectCompat", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
@@ -1318,14 +1290,7 @@ describe("kimi model detection via detectCompat", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
@@ -1372,14 +1337,7 @@ describe("kimi model detection via detectCompat", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
@@ -1441,14 +1399,7 @@ describe("kimi model detection via detectCompat", () => {
 			api: "anthropic-messages",
 			provider: "zai",
 			model: "claude-compatible",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
@@ -1508,14 +1459,7 @@ describe("kimi model detection via detectCompat", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
@@ -1594,14 +1538,7 @@ describe("kimi model detection via detectCompat", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
@@ -1689,14 +1626,7 @@ describe("kimi model detection via detectCompat", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
@@ -1787,14 +1717,7 @@ describe("kimi model detection via detectCompat", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
@@ -1871,14 +1794,7 @@ describe("kimi model detection via detectCompat", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
@@ -1941,14 +1857,7 @@ describe("kimi model detection via detectCompat", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
@@ -1984,14 +1893,7 @@ describe("kimi model detection via detectCompat", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
@@ -2282,14 +2184,7 @@ describe("anthropic cache control for OpenAI-compatible chat completions", () =>
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: 1,
 		};

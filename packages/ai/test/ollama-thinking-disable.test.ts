@@ -1,8 +1,13 @@
 import { describe, expect, it } from "bun:test";
-import type { AssistantMessage, Context, Tool, ToolResultMessage, Usage } from "@veyyon/ai";
+
+import type { AssistantMessage, Context, Tool, ToolResultMessage } from "@veyyon/ai";
 import { streamOllama } from "@veyyon/ai/providers/ollama";
+
 import { NON_VISION_IMAGE_PLACEHOLDER } from "@veyyon/ai/providers/vision-guard";
+
 import { buildModel } from "@veyyon/catalog/build";
+
+import { emptyUsage } from "@veyyon/catalog/models";
 
 interface OllamaChatMessagePayload {
 	role?: unknown;
@@ -30,15 +35,6 @@ function isOllamaChatRequestPayload(value: unknown): value is OllamaChatRequestP
 		(payload.tools === undefined || Array.isArray(payload.tools))
 	);
 }
-
-const emptyUsage: Usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
 
 function createReasoningOllamaModel(input: Array<"text" | "image"> = ["text"]) {
 	return buildModel({
@@ -223,7 +219,7 @@ describe("Ollama chat thinking controls", () => {
 					api: "ollama-chat",
 					provider: "ollama",
 					model: "llama",
-					usage: emptyUsage,
+					usage: emptyUsage(),
 					stopReason: "stop",
 					timestamp: now - 1,
 				},
@@ -268,7 +264,7 @@ describe("Ollama chat thinking controls", () => {
 					api: "ollama-chat",
 					provider: "ollama",
 					model: "llama",
-					usage: emptyUsage,
+					usage: emptyUsage(),
 					stopReason: "stop",
 					timestamp: now - 1,
 				},
@@ -309,7 +305,7 @@ describe("Ollama chat thinking controls", () => {
 			api: "ollama-chat",
 			provider: "ollama-cloud",
 			model: "deepseek-v4-flash",
-			usage: emptyUsage,
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: now,
 		};
@@ -361,7 +357,7 @@ describe("Ollama chat thinking controls", () => {
 			api: "ollama-chat",
 			provider: "ollama-cloud",
 			model: "deepseek-v4-flash",
-			usage: emptyUsage,
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: now,
 		};

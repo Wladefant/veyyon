@@ -3,6 +3,7 @@ import { renderDemotedThinking } from "@veyyon/ai/dialect";
 import { convertAnthropicMessages } from "@veyyon/ai/providers/anthropic";
 import type { AssistantMessage, Message, Model, ModelSpec, ToolResultMessage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { userMessage } from "./helpers";
 
 /**
@@ -50,14 +51,7 @@ function makeAssistant(
 		api: "anthropic-messages",
 		provider: "custom-anthropic",
 		model: "reasoning-model",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: 0,
 		...overrides,

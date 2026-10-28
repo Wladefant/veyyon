@@ -6,6 +6,7 @@ import type { Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as codexSessionState from "@veyyon/ai/providers/openai-codex/session-state";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -81,14 +82,7 @@ function createAssistantResponse(text: string) {
 		api: "anthropic-messages" as const,
 		provider: "anthropic" as const,
 		model: "claude-sonnet-4-5",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop" as const,
 		timestamp: Date.now(),
 	};

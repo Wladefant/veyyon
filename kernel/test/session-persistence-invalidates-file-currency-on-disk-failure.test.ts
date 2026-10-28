@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import {
 	FileSessionStorage,
@@ -84,14 +85,7 @@ describe("session persistence invalidates file currency on disk failure", () => 
 			provider: "mock",
 			model: "mock",
 			stopReason: "stop",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 		});
 		await sm.flush();
 

@@ -1,18 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { runPrintMode } from "@veyyon/coding-agent/modes/print-mode";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 
 function makeAssistantMessage(text: string): AssistantMessage {
 	const timestamp = Date.now();
-	const usage = {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	const usage = emptyUsage();
 	return {
 		role: "assistant",
 		content: [{ type: "text", text }],

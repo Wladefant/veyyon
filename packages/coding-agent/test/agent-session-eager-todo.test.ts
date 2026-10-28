@@ -4,6 +4,7 @@ import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
 import type { AssistantMessage, Context, ToolCall } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { PROMPTS } from "@veyyon/coding-agent/prompts/registry";
@@ -60,14 +61,7 @@ function createToolCallAssistantMessage(name: string, args: Record<string, unkno
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: Date.now(),
 	};

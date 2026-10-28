@@ -23,6 +23,7 @@ import {
 	ExecServerMessageSchema,
 	ReadArgsSchema,
 } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { newBlockState } from "./helpers/cursor-stream-harness";
 
 // Two tests here install a process-wide Cursor override. Left behind, one answers every later test
@@ -95,14 +96,7 @@ function toolResultContext(): Context {
 						arguments: { path: "package.json" },
 					},
 				],
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "toolUse",
 				timestamp: 2,
 			},
@@ -257,14 +251,7 @@ describe("Cursor history encoding", () => {
 				api: "cursor-agent",
 				provider: "cursor",
 				model: "cursor-composer-2.5",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: 0,
 			},
@@ -335,14 +322,7 @@ describe("Cursor history encoding", () => {
 							arguments: { pattern: "" },
 						},
 					],
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					stopReason: "toolUse",
 					timestamp: 2,
 				},
@@ -413,14 +393,7 @@ function cursorAssistantMessage(): AssistantMessage {
 		api: "cursor-agent",
 		provider: "cursor",
 		model: "cursor-composer-2.5",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 0,
 	};

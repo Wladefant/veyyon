@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { SUPERSEDED_NOTICE, USELESS_NOTICE } from "@veyyon/agent-core/compaction/pruning";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -41,14 +42,7 @@ describe("AgentSession per-turn prune", () => {
 	const NEW_READ_TEXT = "fresh file body";
 	const USELESS_TEXT = "match line\n".repeat(20000);
 
-	const usageZero = {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	const usageZero = emptyUsage();
 
 	function assistantCall(id: string, name: string, args: Record<string, unknown>, timestamp: number) {
 		return {
