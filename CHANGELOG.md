@@ -105,6 +105,7 @@
 - The shell's built-in output filters compile their output-stage regular expressions the first time each filter applies instead of when the registry loads; a filter file loaded from config still rejects a bad regular expression at load.
 - The overall, per-model and per-folder totals read from one aggregate query, and the user-message table schema is written once for creation and for the rebuild of a stale table; no user-facing change.
 - `resultTextOf` joins a result's text blocks through `contentText` from `@veyyon/utils/content-text`; rendered output is unchanged.
+- `TabBar.renderVertical(width, cursor, maxRows)` shows at most `maxRows` tabs, scrolling to keep the active tab in view, and `tabAt` hit-tests the rows shown.
 - `ProcessTerminal.drainInput` ends when the terminal answers a DA1 query written after the keyboard protocols are popped, instead of after a fixed 50 ms with no input, so leaving the TUI on a terminal that answers DA1 returns the shell prompt in about 10 ms instead of about 60 ms.
 - `check:types` covers `bench/` and `scripts/`, and `bench/_key-samples.ts` types its expected key ids as `KeyId`; no user-facing change.
 - An `Editor` asks its autocomplete provider again on the edit that changes an open suggestion list instead of 100 ms later, so typing `/mo` narrows the slash command list in 3 ms instead of 105 ms and an `@` file list follows each keystroke one frame later instead of after the timer.
@@ -125,6 +126,8 @@
 
 ### Fixed
 
+- Fixed the plan review card dropping its option rows off the bottom on narrow terminals where the footer shortcuts wrap.
+- Fixed the settings card cutting its last category tabs off the sidebar on terminals too short to list them all; the sidebar now scrolls to keep the selected tab in view.
 - A bash block's `$ command` header takes the new theme's colours after a theme change.
 - An expanded bash or eval block no longer states `… N more lines` under output it shows in full.
 - `agent://` and `artifact://` completion skips a registered artifacts path that is a file instead of failing, as `history://` completion already did.
