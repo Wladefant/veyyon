@@ -12,3 +12,10 @@ import { contentText } from "@veyyon/utils/content-text";
 export function toolResultText(result: { readonly content: unknown }, separator = "\n"): string {
 	return contentText(result.content, { separator });
 }
+
+/** The first text block of a tool result, or `""` when it has none. */
+export function firstToolResultText(result: {
+	readonly content: ReadonlyArray<{ type: string; text?: string }>;
+}): string {
+	return result.content.find(part => part.type === "text")?.text ?? "";
+}

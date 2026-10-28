@@ -23,6 +23,7 @@ import * as executorModule from "@veyyon/coding-agent/task/executor";
 import type { AgentDefinition, SingleResult, TaskParams } from "@veyyon/coding-agent/task/types";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
+import { firstToolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 // Spawning a task writes a session (and, for worktree runs, a checkout) under the
@@ -52,11 +53,6 @@ function createSession(options: { manager?: AsyncJobManager; settings?: Record<s
 		getSessionSpawns: () => "*",
 		asyncJobManager: options.manager,
 	});
-}
-
-function getFirstText(result: { content: Array<{ type: string; text?: string }> }): string {
-	const content = result.content.find(part => part.type === "text");
-	return content?.type === "text" ? (content.text ?? "") : "";
 }
 
 function makeResult(id: string, overrides: Partial<SingleResult> = {}): SingleResult {
@@ -173,7 +169,9 @@ describe("task spawn routing", () => {
 			task: "Review this.",
 		});
 
-		expect(getFirstText(result)).toContain('Agent "reviewer" is disabled (agent.agents.reviewer.enabled is false)');
+		expect(firstToolResultText(result)).toContain(
+			'Agent "reviewer" is disabled (agent.agents.reviewer.enabled is false)',
+		);
 		expect(runSpy).not.toHaveBeenCalled();
 	});
 
@@ -265,7 +263,7 @@ describe("task spawn routing", () => {
 		} as TaskParams);
 
 		// Tool returned while the job body is still gated on the deferred.
-		const text = getFirstText(result);
+		const text = firstToolResultText(result);
 		expect(text).toContain("Spawned agent `Spawnling`");
 		const jobId = result.details?.async?.jobId;
 		expect(jobId).toBeTruthy();
