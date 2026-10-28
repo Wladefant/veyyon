@@ -7,6 +7,7 @@
  */
 
 import { collapseWhitespace } from "@veyyon/utils/collapse-whitespace";
+import { contentText } from "@veyyon/utils/content-text";
 import { formatCount, truncate as truncateChars } from "@veyyon/utils/format";
 import { stringifyJsonSafe } from "@veyyon/utils/json";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
@@ -210,14 +211,7 @@ export function languageFromPath(filePath: string): string | null {
 
 /** Joined text blocks of a tool result ("" when absent). */
 export function resultTextOf(result: ToolResultLike | undefined): string {
-	if (!result || !Array.isArray(result.content)) return "";
-	const parts: string[] = [];
-	for (const block of result.content) {
-		if (isRecord(block) && block.type === "text" && "text" in block && typeof block.text === "string") {
-			parts.push(block.text);
-		}
-	}
-	return parts.join("\n");
+	return result && Array.isArray(result.content) ? contentText(result.content) : "";
 }
 
 /** Whether a tool result contains at least one valid image content block (non-allocating). */
