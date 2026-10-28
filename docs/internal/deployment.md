@@ -12,7 +12,7 @@ draft, then rebuilds `veyyon.dev` so the changelog records the now-public releas
 | --- | --- | --- |
 | `veyyon.dev`, `www.veyyon.dev` | The marketing site + handbook + changelog + install page | Cloudflare Pages project `veyyon` |
 | `get.veyyon.dev` | The `install.sh` script at its root, so `curl -fsSL https://get.veyyon.dev \| sh` works | Cloudflare Pages project `veyyon-get` |
-| `github.com/santhreal/veyyon/releases` | The platform binaries + checksums | GitHub Releases (published by CI) |
+| `github.com/Wladefant/veyyon/releases` | The platform binaries + checksums | GitHub Releases (published by CI) |
 
 ## Website
 
