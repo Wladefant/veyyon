@@ -13,5 +13,5 @@ You are the explicitly claimed successor for this slice. The durable checkpoint 
 Reuse these results where still valid. Recheck stale workspace, permission and external-state guards before continuing.
 Do not repeat completed external actions merely because this is a fresh lane. The checkpoint does not guarantee exactly-once external actions.
 
-{{{checkpoint}}}
+{{checkpoint}}
 {{/if}}
