@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added owner-local terminal-control credential rotation without restarting the terminal or active turn.
+
 ### Fixed
 - Plan mode stays on, with its plan tools and plan model, when restoring the pre-plan model or tools fails during exit.
 - Migrated tests off the removed model-roles settings API to `defaultModel` and `agent.helpers`, deleted the role-table tests whose contract no longer exists, and moved fetch-timeout to `withScopedTimeoutSignal` ([Refs #707](https://github.com/Wladefant/veyyon/issues/707)).
@@ -11,6 +15,7 @@
 - Task and qa-verifier spawns preserve configured model priority instead of reordering Luna and Flash by spawn identity ([Refs #692](https://github.com/Wladefant/veyyon/issues/692)).
 - Browser session cleanup continues after one tab release or orphan browser disposal fails.
 - Recovered daemons whose process tree cannot be proven gone now settle as `failed` with `ownershipUncertain`, are never restarted automatically, and allow manual replacement only when the configured ready port is free.
+- Terminal-control rotation refuses discovery records that are not owner-only before reading them.
 - Launch retains stable handles for tracked descendants after a wrapper exits and waits for their teardown before restarting ([issue](https://github.com/Wladefant/veyyon/issues/530)).
 - Launch holds a daemon whose native process handle is unavailable in `stopping` instead of settling it as exited: its tree's death is unobservable, so no restart starts and a stop reports failure ([issue](https://github.com/Wladefant/veyyon/issues/530)).
 - Mixed-build IRC sends distinguish unknown sessions from receivers without notice support and report loaded build identities ([#551](https://github.com/Wladefant/veyyon/issues/551)).
