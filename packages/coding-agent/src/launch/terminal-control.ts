@@ -405,6 +405,7 @@ export async function serveTerminalControl(
 								receipt.retainHistory(fullHistory.map(entry => entry.entryId));
 								for (const entry of fullHistory.slice(-HISTORY_FRAME_ENTRIES)) receipt.holdHistory(entry.entryId);
 								let pending = cursorIndex >= 0 ? fullHistory.slice(cursorIndex + 1) : fullHistory.slice(-HISTORY_FRAME_ENTRIES);
+								let replayCursor = fullHistory.at(-1)?.entryId;
 								// The socket joins the live feed only after replay, in the same tick as the last journal read, so
 								// a slow reader cannot be left with a failed subscribe that still streams, nor miss an entry that
 								// arrived while it drained.
@@ -417,9 +418,16 @@ export async function serveTerminalControl(
 										if (socket.destroyed) return;
 										send(socket, { event: { kind: "history", sessionId: publishedSessionId, entries: chunk } });
 									}
-									const latest = target.history().slice(-HISTORY_FRAME_ENTRIES);
+									const latest = target.history();
+									const replayIndex = replayCursor === undefined ? -1 : latest.findIndex(entry => entry.entryId === replayCursor);
+									// The receipt window bounds deduplication memory, not unread arrivals during a drain.
+									pending = replayCursor === undefined
+										? latest
+										: replayIndex >= 0
+											? latest.slice(replayIndex + 1)
+											: latest.slice(-HISTORY_FRAME_ENTRIES).filter(entry => !receipt.history.has(entry.entryId));
+									replayCursor = latest.at(-1)?.entryId;
 									receipt.retainHistory(latest.map(entry => entry.entryId));
-									pending = latest.filter(entry => !receipt.history.has(entry.entryId));
 									for (const entry of pending) receipt.holdHistory(entry.entryId);
 								}
 								if (socket.destroyed) return;
