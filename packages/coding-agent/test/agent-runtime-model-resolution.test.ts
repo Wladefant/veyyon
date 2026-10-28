@@ -121,7 +121,10 @@ describe("agent runtime model resolution", () => {
 		expect(result.resolvedModel).toBe("fallback/working-model");
 	});
 
-	it.each([{ tail: [] }, { tail: ["missing/unavailable-model"] }])("keeps the child boundary when no later candidate resolves (%j)", async ({ tail }) => {
+	it.each([
+		{ tail: [] },
+		{ tail: ["missing/unavailable-model"] },
+	])("keeps the child boundary when no later candidate resolves (%j)", async ({ tail }) => {
 		const primary = model("primary", "only-model");
 		let childFallbackKey: string | undefined;
 		let childFallbackChains: Record<string, string[]> | undefined;
@@ -200,12 +203,15 @@ describe("agent runtime model resolution", () => {
 
 	it("fails closed when every explicit agent model selector is absent from the catalog", async () => {
 		const defaultModel = model("zai", "glm-5.2");
-		const createSessionSpy = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async () => ({
-			session: createYieldingSession(),
-			extensionsResult: {},
-			setToolUIContext: () => {},
-			setToolNotifier: () => {},
-		}) as never);
+		const createSessionSpy = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(
+			async () =>
+				({
+					session: createYieldingSession(),
+					extensionsResult: {},
+					setToolUIContext: () => {},
+					setToolNotifier: () => {},
+				}) as never,
+		);
 
 		const result = await runSubprocess({
 			cwd: "/tmp",
