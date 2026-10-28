@@ -246,6 +246,69 @@ describe("atomicWriteFile", () => {
 			expect(tempSiblings(target)).toEqual([]);
 		});
 
+		it("rejects without backup displacement on rename failure when requireAtomicReplace is true", async () => {
+			const target = path.join(dir.path(), "producer-strict-recovery.txt");
+			await atomicWriteFile(target, "ORIGINAL", { mode: 0o600 });
+			const initialStat = fs.statSync(target);
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+			const realRename = fsp.rename;
+			let installAttempts = 0;
+			let displaced = false;
+			const renameSpy = spyOn(fsp, "rename").mockImplementation(async (oldPath, newPath) => {
+				if (oldPath === target || String(newPath).includes(".previous.")) {
+					displaced = true;
+				}
+				if (newPath === target && String(oldPath).endsWith(".tmp") && !String(oldPath).includes(".previous.")) {
+					installAttempts++;
+					throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+				}
+				await realRename(oldPath, newPath);
+			});
+			try {
+				await expect(
+					atomicWriteFileWith(
+						target,
+						async tmpPath => {
+							await fsp.writeFile(tmpPath, "PRODUCED");
+						},
+						{ mode: 0o600, requireAtomicReplace: true },
+					),
+				).rejects.toThrow("permission denied");
+			} finally {
+				renameSpy.mockRestore();
+				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+			}
+
+			expect(installAttempts).toBe(1);
+			expect(displaced).toBe(false);
+			expect(fs.existsSync(target)).toBe(true);
+			expect(fs.readFileSync(target, "utf8")).toBe("ORIGINAL");
+			if (originalPlatform !== "win32") {
+				expect(fs.statSync(target).mode & 0o777).toBe(0o600);
+			}
+			expect(fs.statSync(target).mode).toBe(initialStat.mode);
+			expect(tempSiblings(target)).toEqual([]);
+		});
+
+		it("replaces the file when requireAtomicReplace is true", async () => {
+			const target = path.join(dir.path(), "producer-strict-success.txt");
+			await atomicWriteFile(target, "ORIGINAL", { mode: 0o600 });
+			await atomicWriteFileWith(
+				target,
+				async tmpPath => {
+					await fsp.writeFile(tmpPath, "PRODUCED_STRICT");
+				},
+				{ mode: 0o600, requireAtomicReplace: true },
+			);
+
+			expect(fs.readFileSync(target, "utf8")).toBe("PRODUCED_STRICT");
+			if (process.platform !== "win32") {
+				expect(fs.statSync(target).mode & 0o777).toBe(0o600);
+			}
+			expect(tempSiblings(target)).toEqual([]);
+		});
+
 		it("preserves a symlinked target, updating the file it points to", async () => {
 			if (process.platform === "win32") return;
 			const realDir = path.join(dir.path(), "dotfiles");
@@ -487,6 +550,63 @@ describe("atomicWriteFile", () => {
 		expect(fs.readFileSync(target, "utf8")).toBe("ORIGINAL");
 		expect(tempSiblings(target)).toEqual([]);
 	});
+
+	/**
+	 * When requireAtomicReplace is true, a rename failure must not attempt the
+	 * Windows remove-and-retry fallback. The original file must remain untouched
+	 * at its path, private permissions must be preserved, and no backup displacement
+	 * or missing-file interval may occur.
+	 */
+	it("rejects immediately on rename error without backup displacement when requireAtomicReplace is true", async () => {
+		const target = path.join(dir.path(), "windows-strict-recovery.txt");
+		await atomicWriteFile(target, "ORIGINAL", { mode: 0o600 });
+		const initialStat = fs.statSync(target);
+		const originalPlatform = process.platform;
+		Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+		const realRename = fsp.rename;
+		let installAttempts = 0;
+		let displaced = false;
+		const renameSpy = spyOn(fsp, "rename").mockImplementation(async (oldPath, newPath) => {
+			if (oldPath === target || String(newPath).includes(".previous.")) {
+				displaced = true;
+			}
+			if (newPath === target && String(oldPath).endsWith(".tmp") && !String(oldPath).includes(".previous.")) {
+				installAttempts++;
+				throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" });
+			}
+			await realRename(oldPath, newPath);
+		});
+		try {
+			await expect(
+				atomicWriteFile(target, "NEW", { mode: 0o600, requireAtomicReplace: true }),
+			).rejects.toThrow("operation not permitted");
+		} finally {
+			renameSpy.mockRestore();
+			Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+		}
+
+		expect(installAttempts).toBe(1);
+		expect(displaced).toBe(false);
+		expect(fs.existsSync(target)).toBe(true);
+		expect(fs.readFileSync(target, "utf8")).toBe("ORIGINAL");
+		if (originalPlatform !== "win32") {
+			expect(fs.statSync(target).mode & 0o777).toBe(0o600);
+		}
+		expect(fs.statSync(target).mode).toBe(initialStat.mode);
+		expect(tempSiblings(target)).toEqual([]);
+	});
+
+	it("replaces the file and preserves requested mode when requireAtomicReplace is true", async () => {
+		const target = path.join(dir.path(), "windows-strict-success.txt");
+		await atomicWriteFile(target, "ORIGINAL", { mode: 0o600 });
+		await atomicWriteFile(target, "NEW_STRICT", { mode: 0o600, requireAtomicReplace: true });
+
+		expect(fs.readFileSync(target, "utf8")).toBe("NEW_STRICT");
+		if (process.platform !== "win32") {
+			expect(fs.statSync(target).mode & 0o777).toBe(0o600);
+		}
+		expect(tempSiblings(target)).toEqual([]);
+	});
 	/**
 	 * Directory fsync was wrapped in a catch-all, so EIO was reported as success
 	 * even though the rename's durability had not been established. The error is
@@ -693,6 +813,61 @@ describe("atomicWriteFile", () => {
 
 			expect(installAttempts).toBe(2);
 			expect(fs.readFileSync(target, "utf8")).toBe("ORIGINAL");
+			expect(tempSiblings(target)).toEqual([]);
+		});
+
+		/**
+		 * The sync writer must also honor requireAtomicReplace: immediately
+		 * surface rename failure without displacing the destination file.
+		 */
+		it("rejects immediately on rename error without backup displacement when requireAtomicReplace is true", () => {
+			const target = path.join(dir.path(), "sync-windows-strict-recovery.txt");
+			atomicWriteFileSync(target, "ORIGINAL", { mode: 0o600 });
+			const initialStat = fs.statSync(target);
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+			const realRename = fs.renameSync;
+			let installAttempts = 0;
+			let displaced = false;
+			const renameSpy = spyOn(fs, "renameSync").mockImplementation((oldPath, newPath) => {
+				if (oldPath === target || String(newPath).includes(".previous.")) {
+					displaced = true;
+				}
+				if (newPath === target && String(oldPath).endsWith(".tmp") && !String(oldPath).includes(".previous.")) {
+					installAttempts++;
+					throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" });
+				}
+				realRename(oldPath, newPath);
+			});
+			try {
+				expect(() =>
+					atomicWriteFileSync(target, "NEW", { mode: 0o600, requireAtomicReplace: true }),
+				).toThrow("operation not permitted");
+			} finally {
+				renameSpy.mockRestore();
+				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+			}
+
+			expect(installAttempts).toBe(1);
+			expect(displaced).toBe(false);
+			expect(fs.existsSync(target)).toBe(true);
+			expect(fs.readFileSync(target, "utf8")).toBe("ORIGINAL");
+			if (originalPlatform !== "win32") {
+				expect(fs.statSync(target).mode & 0o777).toBe(0o600);
+			}
+			expect(fs.statSync(target).mode).toBe(initialStat.mode);
+			expect(tempSiblings(target)).toEqual([]);
+		});
+
+		it("replaces the file when requireAtomicReplace is true", () => {
+			const target = path.join(dir.path(), "sync-windows-strict-success.txt");
+			atomicWriteFileSync(target, "ORIGINAL", { mode: 0o600 });
+			atomicWriteFileSync(target, "NEW_SYNC_STRICT", { mode: 0o600, requireAtomicReplace: true });
+
+			expect(fs.readFileSync(target, "utf8")).toBe("NEW_SYNC_STRICT");
+			if (process.platform !== "win32") {
+				expect(fs.statSync(target).mode & 0o777).toBe(0o600);
+			}
 			expect(tempSiblings(target)).toEqual([]);
 		});
 
@@ -1008,5 +1183,12 @@ describe("atomicWriteFilePreservingMode", () => {
 		// ...the target got the bytes, and its 0o600 mode was carried forward.
 		expect(fs.readFileSync(realTarget, "utf8")).toBe("after\n");
 		expect(fs.statSync(realTarget).mode & 0o777).toBe(0o600);
+	});
+
+	it("replaces the file when requireAtomicReplace is true", async () => {
+		const target = path.join(dir.path(), "preserve-strict-success.txt");
+		await fsp.writeFile(target, "before\n");
+		await atomicWriteFilePreservingMode(target, "after\n", { requireAtomicReplace: true });
+		expect(fs.readFileSync(target, "utf8")).toBe("after\n");
 	});
 });

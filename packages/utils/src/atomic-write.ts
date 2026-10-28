@@ -45,6 +45,16 @@ export interface AtomicWriteOptions {
 	 * does not matter and the extra `fsync` cost does.
 	 */
 	fsync?: boolean;
+	/**
+	 * Require atomic replacement without fallback. When `true`, if renaming
+	 * the temporary file over the destination fails, the writer rejects
+	 * immediately with the original rename error without displacing,
+	 * backing up, or removing the destination file (bypassing the Windows
+	 * `EPERM`/`EACCES`/`EEXIST` rename-clobber workaround).
+	 *
+	 * Defaults to `false`.
+	 */
+	requireAtomicReplace?: boolean;
 }
 
 // Monotonic per-process counter gives every in-flight writer a distinct name.
@@ -293,12 +303,16 @@ function closingAfterSync(operation: () => void, close: () => void): void {
 	if (operationError !== undefined) throw operationError;
 }
 
-async function renameTempOverTarget(tmpPath: string, target: string): Promise<void> {
+async function renameTempOverTarget(
+	tmpPath: string,
+	target: string,
+	requireAtomicReplace = false,
+): Promise<void> {
 	try {
 		await fsp.rename(tmpPath, target);
 		return;
 	} catch (error) {
-		if (!isRenameClobberError(error)) throw error;
+		if (requireAtomicReplace || !isRenameClobberError(error)) throw error;
 	}
 
 	// Windows lacks a consistently atomic replace-existing rename. Preserve the
@@ -374,8 +388,8 @@ export async function atomicWriteFile(
 	data: string | NodeJS.ArrayBufferView,
 	options: AtomicWriteOptions = {},
 ): Promise<void> {
-	const { mode = 0o600, fsync = true } = options;
-	await atomicWriteBytes(filePath, data, mode, fsync, false);
+	const { mode = 0o600, fsync = true, requireAtomicReplace = false } = options;
+	await atomicWriteBytes(filePath, data, mode, fsync, false, requireAtomicReplace);
 }
 
 async function atomicWriteBytes(
@@ -384,6 +398,7 @@ async function atomicWriteBytes(
 	mode: number,
 	fsync: boolean,
 	preserveModeExactly: boolean,
+	requireAtomicReplace = false,
 ): Promise<void> {
 	await atomicWriteFileWithImpl(
 		filePath,
@@ -395,7 +410,7 @@ async function atomicWriteBytes(
 				if (fsync) await handle.sync();
 			},
 		},
-		{ fsync, mode },
+		{ fsync, mode, requireAtomicReplace },
 	);
 }
 
@@ -418,9 +433,9 @@ async function atomicWriteBytes(
 export async function atomicWriteFilePreservingMode(
 	filePath: string,
 	data: string | NodeJS.ArrayBufferView,
-	options: { fsync?: boolean; defaultMode?: number } = {},
+	options: { fsync?: boolean; defaultMode?: number; requireAtomicReplace?: boolean } = {},
 ): Promise<void> {
-	const { fsync = true, defaultMode = 0o644 } = options;
+	const { fsync = true, defaultMode = 0o644, requireAtomicReplace = false } = options;
 	let mode = defaultMode;
 	let existed = true;
 	try {
@@ -429,7 +444,7 @@ export async function atomicWriteFilePreservingMode(
 		if (!isEnoent(error)) throw error;
 		existed = false;
 	}
-	await atomicWriteBytes(filePath, data, mode, fsync, existed);
+	await atomicWriteBytes(filePath, data, mode, fsync, existed, requireAtomicReplace);
 }
 
 /**
@@ -492,7 +507,7 @@ async function atomicWriteFileWithImpl(
 	writer: AtomicTempWriter,
 	options: AtomicWriteInternalOptions,
 ): Promise<void> {
-	const { fsync = true, fsyncTempFile = true, mode = 0o600 } = options;
+	const { fsync = true, fsyncTempFile = true, mode = 0o600, requireAtomicReplace = false } = options;
 	const { target, viaSymlink } = await resolveWriteTarget(filePath);
 	const dir = path.dirname(target);
 	if (!viaSymlink) await fsp.mkdir(dir, { recursive: true });
@@ -514,7 +529,7 @@ async function atomicWriteFileWithImpl(
 		// swapped staging entry.
 		assertRegularFileTarget(await fsp.lstat(tmpPath), tmpPath);
 		await assertReplaceableTarget(target);
-		await renameTempOverTarget(tmpPath, target);
+		await renameTempOverTarget(tmpPath, target, requireAtomicReplace);
 	} catch (error) {
 		await fsp.rm(tmpPath, { force: true, recursive: true }).catch(() => {});
 		throw withTargetInMessage(error, target, tmpPath);
@@ -556,7 +571,7 @@ export function atomicWriteFileSync(
 	data: string | NodeJS.ArrayBufferView,
 	options: AtomicWriteOptions = {},
 ): void {
-	const { mode = 0o600, fsync = true } = options;
+	const { mode = 0o600, fsync = true, requireAtomicReplace = false } = options;
 	const { target, viaSymlink } = resolveWriteTargetSync(filePath);
 	const dir = path.dirname(target);
 	if (!viaSymlink) fs.mkdirSync(dir, { recursive: true });
@@ -572,7 +587,7 @@ export function atomicWriteFileSync(
 		);
 		assertRegularFileTarget(fs.lstatSync(tmpPath), tmpPath);
 		assertReplaceableTargetSync(target);
-		renameTempOverTargetSync(tmpPath, target);
+		renameTempOverTargetSync(tmpPath, target, requireAtomicReplace);
 	} catch (error) {
 		try {
 			removeTempSync(tmpPath);
@@ -583,12 +598,12 @@ export function atomicWriteFileSync(
 }
 
 /** Blocking twin of {@link renameTempOverTarget}; see that function for the reasoning. */
-function renameTempOverTargetSync(tmpPath: string, target: string): void {
+function renameTempOverTargetSync(tmpPath: string, target: string, requireAtomicReplace = false): void {
 	try {
 		fs.renameSync(tmpPath, target);
 		return;
 	} catch (error) {
-		if (!isRenameClobberError(error)) throw error;
+		if (requireAtomicReplace || !isRenameClobberError(error)) throw error;
 	}
 
 	assertReplaceableTargetSync(target);
