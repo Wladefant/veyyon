@@ -19,6 +19,7 @@
 
 ### Changed
 
+- The composer reads the draft's queue shorthand and magic keywords once per frame instead of once per drawn row, so a keystroke and its frame in a 400-line draft take about 20 µs instead of about 85 µs.
 - No user-visible change: a modal card is laid out and its chrome planned once per frame, and the body is painted against that plan (`layoutModalCard`, `planModalChrome`, `renderModalShell`).
 - A start with no usable credential reports the missing credential without building the whole model catalog, so it reaches the prompt in 72 ms instead of 112 ms, and the message counts providers instead of models.
 - No user-visible change: compaction model keys and ACP model option values come from `formatModelString` instead of two private copies of it.
@@ -106,6 +107,7 @@
 - The shell's built-in output filters compile their output-stage regular expressions the first time each filter applies instead of when the registry loads; a filter file loaded from config still rejects a bad regular expression at load.
 - The overall, per-model and per-folder totals read from one aggregate query, and the user-message table schema is written once for creation and for the rebuild of a stale table; no user-facing change.
 - `resultTextOf` joins a result's text blocks through `contentText` from `@veyyon/utils/content-text`; rendered output is unchanged.
+- An `Editor` undo step copies the draft's line array instead of deep-cloning every line, so a backspace in a 4000-line draft costs about 20 µs instead of about 340 µs and a full undo stack of that draft retains 3.5 MiB instead of 26.7 MiB.
 - No user-visible change: `TabBar.renderVertical` counts its visible rows with `clampLow`.
 - `TabBar.renderVertical(width, cursor, maxRows)` shows at most `maxRows` tabs, scrolling to keep the active tab in view, and `tabAt` hit-tests the rows shown.
 - `ProcessTerminal.drainInput` ends when the terminal answers a DA1 query written after the keyboard protocols are popped, instead of after a fixed 50 ms with no input, so leaving the TUI on a terminal that answers DA1 returns the shell prompt in about 10 ms instead of about 60 ms.
