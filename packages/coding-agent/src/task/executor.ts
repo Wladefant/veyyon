@@ -33,7 +33,7 @@ import {
 	formatModelSelectorValue,
 	formatModelStringWithRouting,
 	resolveModelOverride,
-	resolveModelOverrideWithAuthFallback,
+	resolveAgentModelChain,
 } from "../config/model-resolver";
 import type { PromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily, resolveAgentServiceTier } from "../config/service-tier";
@@ -224,10 +224,9 @@ function installAgentRetryFallbackChain(args: {
 	settings: Settings;
 	candidates: AgentRetryFallbackCandidate[];
 	model: Model<Api> | undefined;
-	authFallbackUsed: boolean;
 }): string | undefined {
-	const { settings, candidates, model, authFallbackUsed } = args;
-	if (!model || authFallbackUsed || candidates.length === 0) return undefined;
+	const { settings, candidates, model } = args;
+	if (!model || candidates.length === 0) return undefined;
 
 	const selectedIndex = candidates.findIndex(
 		candidate => candidate.model.provider === model.provider && candidate.model.id === model.id,
@@ -1910,31 +1909,21 @@ async function resolveRunModel(ctx: ChildSessionContext): Promise<RunModel> {
 	throwIfRunAborted(monitor.abortSignal);
 	const modelRegistry = await openModelRegistry(options, monitor.abortSignal, ctx.awaitAbortable);
 	const resolution = await ctx.awaitAbortable(
-		resolveModelOverrideWithAuthFallback(
+		resolveAgentModelChain(
 			modelPatterns,
-			options.parentActiveModelPattern,
 			modelRegistry,
 			settings,
 			options.id,
 		),
 	);
-	const { model, authFallbackUsed } = resolution;
+	const { model } = resolution;
 	if (resolution.warning) {
 		logger.warn("Agent model resolution warning", { warning: resolution.warning, requested: modelPatterns });
-	}
-	if (authFallbackUsed && model) {
-		logger.warn("Agent model has no working credentials; falling back to parent session model", {
-			requested: modelPatterns,
-			parentModel: options.parentActiveModelPattern,
-			resolvedProvider: model.provider,
-			resolvedModel: model.id,
-		});
 	}
 	const retryFallbackKey = installAgentRetryFallbackChain({
 		settings,
 		candidates: resolveAgentRetryFallbackCandidates(modelPatterns, modelRegistry, settings),
 		model,
-		authFallbackUsed,
 	});
 	if (retryFallbackKey) {
 		logger.debug("Configured agent runtime model fallback chain", {

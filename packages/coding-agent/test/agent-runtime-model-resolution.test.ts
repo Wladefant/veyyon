@@ -104,6 +104,7 @@ describe("agent runtime model resolution", () => {
 			settings,
 			modelRegistry: {
 				refresh: async () => {},
+				getAll: () => [primary, fallback],
 				getAvailable: () => [primary, fallback],
 				getApiKey: async () => "test-key",
 			} as never,
@@ -149,6 +150,7 @@ describe("agent runtime model resolution", () => {
 			settings,
 			modelRegistry: {
 				refresh: async () => {},
+				getAll: () => [primary],
 				getAvailable: () => [primary],
 				getApiKey: async () => "test-key",
 			} as never,
@@ -185,6 +187,7 @@ describe("agent runtime model resolution", () => {
 			settings: Settings.isolated(),
 			modelRegistry: {
 				refresh: async () => {},
+				getAll: () => [routedModel],
 				getAvailable: () => [routedModel],
 				getApiKey: async () => "test-key",
 			} as never,
@@ -195,36 +198,27 @@ describe("agent runtime model resolution", () => {
 		expect(childFallbackChains?.["openrouter/z-ai/glm-4.7@cerebras"]).toEqual(["openrouter/z-ai/glm-4.7@fireworks"]);
 	});
 
-	it("defers unresolved explicit agent model selectors instead of picking an available default", async () => {
+	it("fails closed when every explicit agent model selector is absent from the catalog", async () => {
 		const defaultModel = model("zai", "glm-5.2");
-		let childModel: Model | undefined;
-		let childModelPattern: unknown;
-		let childModelPatternAuthFallback: unknown;
-		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
-			if (!options) throw new Error("Expected createAgentSession options");
-			childModel = options.model;
-			childModelPattern = options.modelPattern;
-			childModelPatternAuthFallback = options.modelPatternAuthFallback;
-			return {
-				session: createYieldingSession(),
-				extensionsResult: {},
-				setToolUIContext: () => {},
-				setToolNotifier: () => {},
-			} as never;
-		});
+		const createSessionSpy = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async () => ({
+			session: createYieldingSession(),
+			extensionsResult: {},
+			setToolUIContext: () => {},
+			setToolNotifier: () => {},
+		}) as never);
 
-		const agent: AgentDefinition = { name: "task", description: "test", systemPrompt: "test", source: "bundled" };
-		await runSubprocess({
+		const result = await runSubprocess({
 			cwd: "/tmp",
-			agent,
+			agent: { name: "task", description: "test", systemPrompt: "test", source: "bundled" },
 			task: "work",
 			index: 0,
-			id: "issue-4421",
+			id: "missing-chain",
 			modelOverride: ["openai-codex/gpt-5.5:auto"],
 			parentActiveModelPattern: "openai-codex/gpt-5.5",
 			settings: Settings.isolated(),
 			modelRegistry: {
 				refresh: async () => {},
+				getAll: () => [defaultModel],
 				getAvailable: () => [defaultModel],
 				getApiKey: async () => "test-key",
 			} as never,
@@ -232,8 +226,7 @@ describe("agent runtime model resolution", () => {
 			artifactsDir: isolatedArtifactsDir(),
 		});
 
-		expect(childModel).toBeUndefined();
-		expect(childModelPattern).toEqual(["openai-codex/gpt-5.5:auto"]);
-		expect(childModelPatternAuthFallback).toBe("openai-codex/gpt-5.5");
+		expect(result.error).toContain("openai-codex/gpt-5.5:auto: not found in the model catalog");
+		expect(createSessionSpy).not.toHaveBeenCalled();
 	});
 });

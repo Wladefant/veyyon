@@ -1299,75 +1299,75 @@ export function resolveModelOverride(
 }
 
 /**
- * Resolve a list of override patterns to the first matching model, with an
- * auth-aware fallback to the parent session's active model.
- *
- * If the resolved spawned agent model has no working credentials (provider has no
- * usable auth), and the parent's active model resolves with working auth,
- * use the parent's model instead. This prevents spawned agent dispatch from
- * silently routing to a provider the user can't actually call (e.g.
- * an agent model pointing at an unqualified id whose only available
- * provider variant has no configured credentials — see #985).
- *
- * `sessionId` is forwarded to `getApiKey` so that session-sticky OAuth
- * credentials resolve correctly during the pre-flight auth check. Without it,
- * providers with multiple OAuth accounts may return `undefined` even though
- * the credential is usable once the agent session starts — see #5325.
- *
- * Keyless-by-design providers (llama.cpp, ollama, lm-studio) advertise the
- * `kNoAuth` sentinel from `getApiKey` to signal that they do not require
- * credentials. Those are treated as authenticated here so an explicitly
- * configured local model is never silently rerouted to the parent's remote
- * provider (see #1008).
- *
- * If neither the spawned agent nor the parent has working auth, returns the
- * primary resolution unchanged so the existing error path still surfaces
- * a meaningful failure downstream.
+ * Resolve an ordered configured chain to its first unsuppressed model with
+ * working credentials. Parent-session models are deliberately not candidates:
+ * a nonempty configured chain is a closed selection boundary.
  */
-export async function resolveModelOverrideWithAuthFallback(
+export async function resolveAgentModelChain(
 	modelPatterns: string[],
-	parentActiveModelPattern: string | undefined,
-	modelRegistry: ModelLookupRegistry & Pick<ModelRegistry, "getApiKey">,
+	modelRegistry: Pick<ModelRegistry, "getAll" | "getAvailable" | "getApiKey"> &
+		Partial<Pick<ModelRegistry, "isSelectorSuppressed">>,
 	settings?: Settings,
 	sessionId?: string,
 ): Promise<{
 	model?: Model<Api>;
 	thinkingLevel?: ConfiguredThinkingLevel;
 	explicitThinkingLevel: boolean;
-	authFallbackUsed: boolean;
 	warning?: string;
 }> {
-	const primary = resolveModelOverride(modelPatterns, modelRegistry, settings);
-	if (!primary.model || !parentActiveModelPattern) {
-		return { ...primary, authFallbackUsed: false };
+	if (modelPatterns.length === 0) return { explicitThinkingLevel: false };
+	const allModels = modelRegistry.getAll();
+	const availableModels = modelRegistry.getAvailable();
+	const availableRegistry: ModelLookupRegistry = { getAvailable: () => availableModels };
+	const catalogRegistry: ModelLookupRegistry = { getAvailable: () => allModels };
+	const failures: string[] = [];
+	for (const pattern of modelPatterns) {
+		const availableResolution = resolveModelOverride([pattern], availableRegistry, settings);
+		const resolved = availableResolution.model
+			? availableResolution
+			: resolveModelOverride([pattern], catalogRegistry, settings);
+		if (!resolved.model) {
+			failures.push(`${pattern}: not found in the model catalog`);
+			continue;
+		}
+
+		const selector = formatModelString(resolved.model);
+		if (
+			modelRegistry.isSelectorSuppressed?.(pattern) ||
+			modelRegistry.isSelectorSuppressed?.(stripThinkingSelector(pattern)) ||
+			modelRegistry.isSelectorSuppressed?.(selector)
+		) {
+			failures.push(`${pattern}: ${selector} is suppressed by a rate limit or quota cooldown`);
+			continue;
+		}
+
+		let apiKey: string | undefined;
+		try {
+			apiKey = await modelRegistry.getApiKey(resolved.model, sessionId);
+		} catch {
+			// Provider errors may contain credentials or request data. Keep this
+			// operator-facing failure bounded to the known auth state.
+		}
+		if (apiKey !== kNoAuth && !isAuthenticated(apiKey)) {
+			failures.push(`${pattern}: ${selector} is missing working credentials`);
+			continue;
+		}
+		if (!availableModels.some(model => modelsAreEqual(model, resolved.model))) {
+			failures.push(`${pattern}: ${selector} is unavailable in the model registry`);
+			continue;
+		}
+		return {
+			model: resolved.model,
+			thinkingLevel: resolved.thinkingLevel,
+			explicitThinkingLevel: resolved.explicitThinkingLevel,
+			warning: resolved.warning,
+		};
 	}
 
-	const primaryKey = await modelRegistry.getApiKey(primary.model, sessionId);
-	if (primaryKey === kNoAuth || isAuthenticated(primaryKey)) {
-		return { ...primary, authFallbackUsed: false };
-	}
-
-	const fallback = resolveModelOverride(
-		[parentActiveModelPattern],
-		modelRegistry,
-		settings,
+	throw new Error(
+		`No configured task model is available. Configured chain: ${modelPatterns.join(" -> ")}. ` +
+			`Per-member failures: ${failures.join("; ")}.`,
 	);
-	if (!fallback.model) {
-		return { ...primary, authFallbackUsed: false };
-	}
-	if (modelsAreEqual(fallback.model, primary.model)) {
-		return { ...primary, authFallbackUsed: false };
-	}
-	const fallbackKey = await modelRegistry.getApiKey(fallback.model, sessionId);
-	if (!isAuthenticated(fallbackKey)) {
-		return { ...primary, authFallbackUsed: false };
-	}
-
-	return {
-		...fallback,
-		authFallbackUsed: true,
-		warning: primary.warning ?? fallback.warning,
-	};
 }
 
 
