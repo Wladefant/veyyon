@@ -22,8 +22,7 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@veyyon/coding-agent/config/settings";
-import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
+import { createTools } from "@veyyon/coding-agent/tools";
 import {
 	SEARCH_TYPES,
 	type SearchToolInput,
@@ -34,6 +33,7 @@ import {
 import { MULTI_FILE_PER_FILE_MATCHES } from "@veyyon/coding-agent/tools/search/text-search";
 import { removeWithRetries } from "@veyyon/utils";
 import { toolResultText } from "../helpers/tool-result-text";
+import { makeToolSessionAt } from "../helpers/tool-session";
 
 const SCHEMA_FIELDS = searchSchema.value.props.map(prop => String(prop.key));
 
@@ -46,16 +46,6 @@ const SCENARIOS: Record<SearchType, { callId: string; args: Record<string, unkno
 
 const CONTENT_LINE = /^\s*[*]?\d+\s*[|│:]/;
 const HASHLINE_HEADER = /^\[.+#[0-9A-F]{4}\]$/;
-
-function createTestSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => null,
-		getSessionSpawns: () => "*",
-		settings: Settings.isolated(),
-	};
-}
 
 async function withWorkspace<T>(body: (dir: string) => Promise<T>): Promise<T> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-search-advice-"));
@@ -78,7 +68,7 @@ async function withWorkspace<T>(body: (dir: string) => Promise<T>): Promise<T> {
 }
 
 async function searchText(cwd: string, scenario: { callId: string; args: Record<string, unknown> }): Promise<string> {
-	const tools = await createTools(createTestSession(cwd));
+	const tools = await createTools(makeToolSessionAt(cwd));
 	const tool = tools.find(entry => entry.name === "search");
 	if (!tool) throw new Error("search tool missing");
 	const result = await tool.execute(scenario.callId, scenario.args);

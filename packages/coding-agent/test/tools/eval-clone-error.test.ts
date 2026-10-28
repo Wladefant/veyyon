@@ -1,20 +1,8 @@
 import { afterAll, describe, expect, it } from "bun:test";
-import { Settings } from "@veyyon/coding-agent/config/settings";
 import { disposeAllVmContexts } from "@veyyon/coding-agent/eval/js/context-manager";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
 import { toolResultText } from "../helpers/tool-result-text";
-import { makeToolSession } from "../helpers/tool-session";
-
-function makeSession(): ToolSession {
-	return makeToolSession({
-		cwd: process.cwd(),
-		hasUI: false,
-		getSessionFile: () => null,
-		getSessionSpawns: () => null,
-		settings: Settings.isolated(),
-	});
-}
+import { makeToolSessionAt } from "../helpers/tool-session";
 
 /**
  * Tool-call args cross the worker boundary by structured clone, and functions
@@ -28,7 +16,7 @@ describe("EvalTool non-serializable tool args", () => {
 	});
 
 	it("fails the tool call inside the cell and keeps kernel state alive", async () => {
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 
 		const seed = await tool.execute("call-clone-seed", {
 			language: "js",

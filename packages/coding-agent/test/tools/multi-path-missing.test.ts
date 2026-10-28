@@ -2,25 +2,14 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@veyyon/coding-agent/config/settings";
-import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
+import { createTools } from "@veyyon/coding-agent/tools";
 import { isRecord, removeWithRetries } from "@veyyon/utils";
 import { toolResultText } from "../helpers/tool-result-text";
+import { makeToolSessionAt } from "../helpers/tool-session";
 
 // A multi-path search that includes an entry which does not exist on disk must
 // not abort the whole lookup. It should skip the missing entry and return
 // matches from the surviving entries with a non-fatal notice.
-
-function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => null,
-		getSessionSpawns: () => "*",
-		settings: Settings.isolated(),
-		...overrides,
-	};
-}
 
 function searchDetails(result: { details?: unknown }): Record<string, unknown> | undefined {
 	if (!isRecord(result.details) || !isRecord(result.details.result)) return undefined;
@@ -42,7 +31,7 @@ describe("multi-path tools tolerate missing entries", () => {
 	});
 
 	it("search text returns matches from existing paths and reports the missing one", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		if (!tool) throw new Error("Missing search tool");
 
@@ -63,7 +52,7 @@ describe("multi-path tools tolerate missing entries", () => {
 	});
 
 	it("search text errors only when every path is missing", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		if (!tool) throw new Error("Missing search tool");
 
@@ -77,7 +66,7 @@ describe("multi-path tools tolerate missing entries", () => {
 	});
 
 	it("search files returns matches from existing globs and reports the missing one", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		if (!tool) throw new Error("Missing search tool");
 
@@ -99,7 +88,7 @@ describe("multi-path tools tolerate missing entries", () => {
 	});
 
 	it("search files errors only when every glob's base directory is missing", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		if (!tool) throw new Error("Missing search tool");
 

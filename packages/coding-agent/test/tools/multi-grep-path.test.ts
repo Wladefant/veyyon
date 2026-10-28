@@ -2,24 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@veyyon/coding-agent/config/settings";
-import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
+import { createTools } from "@veyyon/coding-agent/tools";
 import { resolveExplicitSearchPaths } from "@veyyon/coding-agent/tools/core/path-utils";
 import { isRecord, removeWithRetries } from "@veyyon/utils";
 import { toolResultText } from "../helpers/tool-result-text";
+import { makeToolSessionAt } from "../helpers/tool-session";
 
 const isWindows = process.platform === "win32";
-
-function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => null,
-		getSessionSpawns: () => "*",
-		settings: Settings.isolated(),
-		...overrides,
-	};
-}
 
 function searchDetails(result: { details?: unknown }): Record<string, unknown> | undefined {
 	if (!isRecord(result.details) || !isRecord(result.details.result)) return undefined;
@@ -57,7 +46,7 @@ describe.skipIf(isWindows)("search with omitted paths", () => {
 	});
 
 	it("defaults to the workspace root when paths is omitted", async () => {
-		const tools = await createTools(createTestSession(cwd));
+		const tools = await createTools(makeToolSessionAt(cwd));
 		const tool = tools.find(entry => entry.name === "search");
 		if (!tool) throw new Error("Missing search tool");
 		// Callers that omit `path` would otherwise be rejected at schema
@@ -72,7 +61,7 @@ describe.skipIf(isWindows)("search with omitted paths", () => {
 	});
 
 	it("defaults to the workspace root when path is an empty JSON array", async () => {
-		const tools = await createTools(createTestSession(cwd));
+		const tools = await createTools(makeToolSessionAt(cwd));
 		const tool = tools.find(entry => entry.name === "search");
 		if (!tool) throw new Error("Missing search tool");
 
@@ -107,7 +96,7 @@ describe.skipIf(isWindows)("search across unrelated filesystem trees", () => {
 	});
 
 	it("returns matches from both trees without rooting the scan at /", async () => {
-		const tools = await createTools(createTestSession(cwd));
+		const tools = await createTools(makeToolSessionAt(cwd));
 		const tool = tools.find(entry => entry.name === "search");
 		if (!tool) throw new Error("Missing search tool");
 
@@ -202,7 +191,7 @@ describe.skipIf(isWindows)("search with explicit walker-pruned file targets", ()
 		// The directory walker prunes `.git` unconditionally, so folding the
 		// explicit file into the walk's glob union silently returned 0 matches.
 		// The file must be read directly as its own target.
-		const tools = await createTools(createTestSession(repo));
+		const tools = await createTools(makeToolSessionAt(repo));
 		const tool = tools.find(entry => entry.name === "search");
 		if (!tool) throw new Error("Missing search tool");
 
@@ -220,7 +209,7 @@ describe.skipIf(isWindows)("search with explicit walker-pruned file targets", ()
 	it("dedupes matches when a file target overlaps a directory target", async () => {
 		await fs.mkdir(path.join(repo, "src"), { recursive: true });
 		await Bun.write(path.join(repo, "src", "a.ts"), "needle-dup\n");
-		const tools = await createTools(createTestSession(repo));
+		const tools = await createTools(makeToolSessionAt(repo));
 		const tool = tools.find(entry => entry.name === "search");
 		if (!tool) throw new Error("Missing search tool");
 

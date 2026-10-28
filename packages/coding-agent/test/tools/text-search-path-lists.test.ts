@@ -16,30 +16,20 @@ import type {
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import type { Theme } from "@veyyon/coding-agent/theme/theme";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
-import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
+import { createTools } from "@veyyon/coding-agent/tools";
 import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
 import type { SessionEntry, SessionTreeNode } from "@veyyon/kernel/session/session-entries";
 import { ToolChoiceQueue } from "@veyyon/kernel/session/tool-choice-queue";
 import { Text } from "@veyyon/tui";
 import { isRecord, removeWithRetries } from "@veyyon/utils";
 import { toolResultText } from "../helpers/tool-result-text";
+import { makeToolSessionAt } from "../helpers/tool-session";
 
 /**
  * The production `search` entry, which is the card a session draws. `search` is a view the terminal
  * draws rather than a renderer module to import, so the suites below reach it through the registry.
  */
 const searchToolRenderer = toolRenderers.search;
-
-function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => null,
-		getSessionSpawns: () => "*",
-		settings: Settings.isolated(),
-		...overrides,
-	};
-}
 
 const plainTheme = {
 	fg: (_color: unknown, text: string) => text,
@@ -147,7 +137,7 @@ describe("tool path arrays", () => {
 	});
 
 	it("search accepts a semicolon-delimited path list", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -170,7 +160,7 @@ describe("tool path arrays", () => {
 	});
 
 	it("search accepts JSON-array string paths in direct execute", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -192,7 +182,7 @@ describe("tool path arrays", () => {
 	});
 
 	it("search expands delimited path entries", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -220,7 +210,7 @@ describe("tool path arrays", () => {
 	});
 
 	it("search keeps comma-delimited surviving entries when peers are missing", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -240,7 +230,7 @@ describe("tool path arrays", () => {
 		expect(details?.missingPaths).toEqual(["missing.txt"]);
 	});
 	it("records hashline snapshots for matched files", async () => {
-		const session = createTestSession(tempDir);
+		const session = makeToolSessionAt(tempDir);
 		const tools = await createTools(session);
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
@@ -264,7 +254,7 @@ describe("tool path arrays", () => {
 	});
 
 	it("search accepts a single string path through tool validation", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -295,7 +285,7 @@ describe("tool path arrays", () => {
 		await fs.mkdir(path.join(tmp, "apps", "[id]"), { recursive: true });
 		await Bun.write(path.join(tmp, "apps", "[id]", "page.tsx"), "bracket-needle\n");
 
-		const tools = await createTools(createTestSession(tmp));
+		const tools = await createTools(makeToolSessionAt(tmp));
 		const tool = tools.find(entry => entry.name === "search");
 		if (!tool) throw new Error("Missing search tool");
 
@@ -459,7 +449,7 @@ describe("tool path arrays", () => {
 	});
 
 	it("search keeps a single path that contains spaces", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -477,7 +467,7 @@ describe("tool path arrays", () => {
 	});
 
 	it("search accepts quoted directory paths", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -496,7 +486,7 @@ describe("tool path arrays", () => {
 	});
 
 	it("search formats absolute in-cwd paths relative to cwd", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -518,7 +508,7 @@ describe("tool path arrays", () => {
 
 	it("write reports absolute in-cwd targets relative to cwd", async () => {
 		const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "search-path-lists-"));
-		const tools = await createTools(createTestSession(tmp));
+		const tools = await createTools(makeToolSessionAt(tmp));
 		const tool = tools.find(entry => entry.name === "write");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing write tool");
@@ -537,7 +527,7 @@ describe("tool path arrays", () => {
 	});
 
 	it("read expands comma-delimited paths", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "read");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing read tool");
@@ -555,7 +545,7 @@ describe("tool path arrays", () => {
 	});
 
 	it("read keeps readable delimited paths when peers are missing", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "read");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing read tool");
@@ -576,7 +566,7 @@ describe("tool path arrays", () => {
 	});
 
 	it("search structure accepts quoted path and glob filters", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -596,7 +586,7 @@ describe("tool path arrays", () => {
 	});
 
 	it("search structure accepts a semicolon-delimited path list", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -618,7 +608,7 @@ describe("tool path arrays", () => {
 	});
 
 	it("search structure expands delimited path entries", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -650,7 +640,7 @@ describe("tool path arrays", () => {
 		await createSearchFixture(tmp);
 		const queue = new ToolChoiceQueue();
 		const tools = await createTools(
-			createTestSession(tmp, {
+			makeToolSessionAt(tmp, {
 				getToolChoiceQueue: () => queue,
 				buildToolChoice: () => ({ type: "tool" as const, name: "resolve" }),
 				steer: () => {},
@@ -688,7 +678,7 @@ describe("tool path arrays", () => {
 	});
 
 	it("search files accepts a semicolon-delimited path list", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -719,7 +709,7 @@ describe("tool path arrays", () => {
 	});
 
 	it("search files expands delimited path entries", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -747,7 +737,7 @@ describe("tool path arrays", () => {
 	});
 
 	it("search files keeps comma-delimited surviving entries when peers are missing", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -767,7 +757,7 @@ describe("tool path arrays", () => {
 		expect(details?.missingPaths).toEqual(["missing.txt"]);
 	});
 	it("search files keeps a single path that contains spaces", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -785,7 +775,7 @@ describe("tool path arrays", () => {
 		expect(details?.scopePath).toBe("folder with spaces");
 	});
 	it("search files accepts quoted directory patterns", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -807,7 +797,7 @@ describe("tool path arrays", () => {
 		const outsideDir = await fs.mkdtemp(path.join(path.dirname(tempDir), "find-outside-"));
 		try {
 			await Bun.write(path.join(outsideDir, "outside.txt"), "outside\n");
-			const tools = await createTools(createTestSession(tempDir));
+			const tools = await createTools(makeToolSessionAt(tempDir));
 			const tool = tools.find(entry => entry.name === "search");
 			expect(tool).toBeDefined();
 			if (!tool) throw new Error("Missing search tool");
@@ -831,7 +821,7 @@ describe("tool path arrays", () => {
 	});
 
 	it("search text accepts a bare semicolon-delimited directory list", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -859,7 +849,7 @@ describe("tool path arrays", () => {
 		await Bun.write(path.join(tmp, "nested", "alpha.txt"), "exact-needle nested alpha\n");
 		await Bun.write(path.join(tmp, "nested", "beta.txt"), "exact-needle nested beta\n");
 
-		const tools = await createTools(createTestSession(tmp));
+		const tools = await createTools(makeToolSessionAt(tmp));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -882,7 +872,7 @@ describe("tool path arrays", () => {
 	});
 
 	it("search text renders only file headings that have child lines", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -912,7 +902,7 @@ describe("tool path arrays", () => {
 		await Bun.write(path.join(tmp, "context.txt"), "#if FLAG\nneedle\n#endif\n");
 
 		const tools = await createTools(
-			createTestSession(tmp, {
+			makeToolSessionAt(tmp, {
 				settings: Settings.isolated({ "search.contextBefore": 1, "search.contextAfter": 1 }),
 			}),
 		);

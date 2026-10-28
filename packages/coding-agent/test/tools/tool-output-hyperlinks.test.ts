@@ -7,13 +7,13 @@ import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/c
 import { editToolView } from "@veyyon/coding-agent/edit/edit-view";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
 import { getThemeByName, initTheme } from "@veyyon/coding-agent/theme/theme";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { readToolView } from "@veyyon/coding-agent/tools/fs/read-view";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { writeToolView } from "@veyyon/coding-agent/tools/fs/write-view";
 import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
 import { removeSyncWithRetries } from "@veyyon/utils";
+import { makeToolSessionAt } from "../helpers/tool-session";
 
 /**
  * The production `search` entry, which is the card a session draws. `search` is a view the terminal
@@ -27,16 +27,6 @@ const TINY_PNG_BASE64 =
 
 function extractLinkUris(text: string): string[] {
 	return [...text.matchAll(/\x1b\]8;[^;]*;([^\x1b]+)\x1b\\/g)].map(match => match[1]!);
-}
-
-function createTestToolSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => null,
-		getSessionSpawns: () => "*",
-		settings: Settings.isolated(),
-	};
 }
 
 beforeAll(async () => {
@@ -64,7 +54,7 @@ describe("tool output OSC 8 file:// hyperlinks", () => {
 			const imgPath = path.join(dir, "task.png");
 			fs.writeFileSync(imgPath, Buffer.from(TINY_PNG_BASE64, "base64"));
 
-			const tool = new ReadTool(createTestToolSession(dir));
+			const tool = new ReadTool(makeToolSessionAt(dir));
 			const textRes = await tool.execute("t", { path: textPath });
 			const imgRes = await tool.execute("i", { path: imgPath });
 
@@ -102,7 +92,7 @@ describe("tool output OSC 8 file:// hyperlinks", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-link-write-"));
 		try {
 			const filePath = path.join(dir, "out.ts");
-			const tool = new WriteTool(createTestToolSession(dir));
+			const tool = new WriteTool(makeToolSessionAt(dir));
 			const res = await tool.execute("w", { path: filePath, content: "export const x = 1;\n" });
 			const rendered = drawToolView(
 				writeToolView.renderResult(

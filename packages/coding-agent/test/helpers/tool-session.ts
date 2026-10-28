@@ -63,6 +63,11 @@ export function makeToolSession(overrides: ToolSessionOverrides = {}): ToolSessi
 	return { ...inertSession(), settings: resolved as Settings, ...rest };
 }
 
+/** {@link makeToolSession} rooted at `cwd`, reading a fresh isolated settings store. */
+export function makeToolSessionAt(cwd: string, overrides: ToolSessionOverrides = {}): ToolSession {
+	return makeToolSession({ cwd, settings: Settings.isolated(), ...overrides });
+}
+
 /** The members every test session starts from, `settings` aside. */
 function inertSession(): Omit<ToolSession, "settings"> {
 	return {

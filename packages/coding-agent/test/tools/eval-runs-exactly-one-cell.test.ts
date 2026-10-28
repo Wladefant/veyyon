@@ -25,23 +25,11 @@
  * pinned is the shape a real run produces rather than a stub's idea of it.
  */
 import { afterAll, describe, expect, it } from "bun:test";
-import { Settings } from "@veyyon/coding-agent/config/settings";
 import { disposeAllVmContexts } from "@veyyon/coding-agent/eval/js/context-manager";
 import type { EvalToolDetails } from "@veyyon/coding-agent/eval/types";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
 import { toolResultText } from "../helpers/tool-result-text";
-import { makeToolSession } from "../helpers/tool-session";
-
-function makeSession(): ToolSession {
-	return makeToolSession({
-		cwd: process.cwd(),
-		hasUI: false,
-		getSessionFile: () => null,
-		getSessionSpawns: () => null,
-		settings: Settings.isolated(),
-	});
-}
+import { makeToolSessionAt } from "../helpers/tool-session";
 
 afterAll(() => {
 	disposeAllVmContexts();
@@ -55,7 +43,7 @@ describe("the details a successful run reports", () => {
 	 * instead would break the renderer with no type error at the tool boundary.
 	 */
 	it("reports exactly one cell, at index 0, carrying the code that was run", async () => {
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 		const result = await tool.execute("call-one", { language: "js", code: "console.log('alpha');", title: "greet" });
 		const details = result.details as EvalToolDetails;
 
@@ -75,7 +63,7 @@ describe("the details a successful run reports", () => {
 	 * renderer reading either one has to reach the same answer.
 	 */
 	it("agrees with itself about the language, in both the singular and the plural field", async () => {
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 		const result = await tool.execute("call-lang", { language: "js", code: "1 + 1;" });
 		const details = result.details as EvalToolDetails;
 
@@ -90,7 +78,7 @@ describe("the details a successful run reports", () => {
 	 * the exact bytes is what makes that visible.
 	 */
 	it("returns the cell's output verbatim rather than a joined accumulation", async () => {
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 		const result = await tool.execute("call-text", {
 			language: "js",
 			code: "console.log('one');\nconsole.log('two');",
@@ -108,7 +96,7 @@ describe("the details a failing run reports", () => {
 	 * nothing to show for a run the operator watched happen.
 	 */
 	it("still reports exactly one cell, marked error, when the code throws", async () => {
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 		const result = await tool.execute("call-throw", {
 			language: "js",
 			code: "console.log('before'); throw new Error('boom');",

@@ -6,23 +6,11 @@ import { create } from "@bufbuild/protobuf";
 import type { AgentEvent, AnyAgentTool } from "@veyyon/agent-core";
 import { prepareToolCall } from "@veyyon/agent-core/tool-call-preparation";
 import { GrepArgsSchema, ReadArgsSchema, ShellArgsSchema } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
-import { Settings } from "@veyyon/coding-agent/config/settings";
 import { CursorExecHandlers } from "@veyyon/coding-agent/cursor";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { isRecord, removeWithRetries } from "@veyyon/utils";
 import { type } from "arktype";
-
-function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => null,
-		getSessionSpawns: () => "*",
-		settings: Settings.isolated(),
-		...overrides,
-	};
-}
+import { makeToolSessionAt } from "./helpers/tool-session";
 
 function textMatchCount(details: unknown): number | undefined {
 	if (!isRecord(details) || details.type !== "text" || !isRecord(details.result)) return undefined;
@@ -37,7 +25,7 @@ describe("CursorExecHandlers.grep bridge", () => {
 	beforeEach(async () => {
 		cwd = await fs.mkdtemp(path.join(os.tmpdir(), "cursor-exec-test-"));
 		await Bun.write(path.join(cwd, "sample.txt"), "Hello World\nhello world\n");
-		searchTool = new SearchTool(createTestSession(cwd));
+		searchTool = new SearchTool(makeToolSessionAt(cwd));
 		handlers = new CursorExecHandlers({
 			cwd,
 			prepareToolCall: (tool, toolCall) => prepareToolCall(tool, toolCall, {}),
