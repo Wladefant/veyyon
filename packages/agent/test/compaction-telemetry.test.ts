@@ -35,6 +35,7 @@ import type { AgentMessage } from "@veyyon/agent-core/types";
 import type { AssistantMessage, Model, Usage } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
+import { createUserMessage } from "./helpers";
 
 const MODEL: Model = buildModel({
 	id: "mock-model",
@@ -91,10 +92,6 @@ function makeAssistantMessage(text: string, usage: Usage = makeUsage()): Assista
 	};
 }
 
-function makeUserMessage(text: string): AgentMessage {
-	return { role: "user", content: text, timestamp: Date.now() };
-}
-
 function chatSpans(spans: ReadableSpan[]): ReadableSpan[] {
 	return spans.filter(s => s.attributes[GenAIAttr.OperationName] === GenAIOperation.Chat);
 }
@@ -104,8 +101,8 @@ function spansByOneshotKind(spans: ReadableSpan[], kind: string): ReadableSpan[]
 }
 
 function makePreparation(overrides: Partial<CompactionPreparation> = {}): CompactionPreparation {
-	const messagesToSummarize: AgentMessage[] = [makeUserMessage("Hello"), makeAssistantMessage("Hi back")];
-	const recentMessages: AgentMessage[] = [makeUserMessage("Next question")];
+	const messagesToSummarize: AgentMessage[] = [createUserMessage("Hello"), makeAssistantMessage("Hi back")];
+	const recentMessages: AgentMessage[] = [createUserMessage("Next question")];
 	return {
 		firstKeptEntryId: "kept-1",
 		messagesToSummarize,
@@ -159,7 +156,7 @@ describe("compaction oneshot telemetry", () => {
 		const telemetry = resolveTelemetry(makeTelemetryConfig(), "session-split");
 		const preparation = makePreparation({
 			isSplitTurn: true,
-			turnPrefixMessages: [makeUserMessage("Inline mid-turn instruction")],
+			turnPrefixMessages: [createUserMessage("Inline mid-turn instruction")],
 		});
 		await compact(preparation, MODEL, "test-api-key", undefined, undefined, { telemetry });
 
@@ -186,7 +183,7 @@ describe("compaction oneshot telemetry", () => {
 		let caught: unknown;
 		try {
 			await generateSummary(
-				[makeUserMessage("Hi"), makeAssistantMessage("Hi back")],
+				[createUserMessage("Hi"), makeAssistantMessage("Hi back")],
 				MODEL,
 				4096,
 				"test-api-key",
@@ -217,7 +214,7 @@ describe("handoff oneshot telemetry", () => {
 		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValueOnce(makeAssistantMessage("## Goal\nContinue"));
 
 		const telemetry = resolveTelemetry(makeTelemetryConfig(), "session-handoff");
-		const messages: AgentMessage[] = [makeUserMessage("start"), makeAssistantMessage("starting")];
+		const messages: AgentMessage[] = [createUserMessage("start"), makeAssistantMessage("starting")];
 
 		const document = await generateHandoff(messages, MODEL, "test-api-key", {
 			systemPrompt: ["Live system prompt"],
@@ -250,7 +247,7 @@ describe("branch summary oneshot telemetry", () => {
 				id: "e1",
 				parentId: null,
 				timestamp: new Date().toISOString(),
-				message: makeUserMessage("first"),
+				message: createUserMessage("first"),
 			},
 			{
 				type: "message" as const,

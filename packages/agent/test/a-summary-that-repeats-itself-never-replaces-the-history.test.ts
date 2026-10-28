@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import type { AgentMessage } from "@veyyon/agent-core";
 import {
 	assertValidCompactionResult,
 	type CompactionPreparation,
@@ -12,6 +11,7 @@ import {
 import type { AssistantMessage, Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { createUserMessage } from "./helpers";
 
 /**
  * A compaction summary that repeats itself is refused, and the history it would
@@ -101,10 +101,6 @@ function assistantText(text: string): AssistantMessage {
 	} as AssistantMessage;
 }
 
-function userMessage(text: string): AgentMessage {
-	return { role: "user", content: text, timestamp: Date.now() };
-}
-
 function model(): Model {
 	const found = getBundledModel("openai-codex", "gpt-5.1-codex");
 	if (!found) throw new Error("Expected built-in openai-codex/gpt-5.1-codex to exist");
@@ -114,9 +110,9 @@ function model(): Model {
 function preparation(): CompactionPreparation {
 	return {
 		firstKeptEntryId: "kept-1",
-		messagesToSummarize: [userMessage("history msg")],
+		messagesToSummarize: [createUserMessage("history msg")],
 		turnPrefixMessages: [],
-		recentMessages: [userMessage("recent msg")],
+		recentMessages: [createUserMessage("recent msg")],
 		isSplitTurn: false,
 		tokensBefore: 221_568,
 		fileOps: createFileOps(),
@@ -264,7 +260,7 @@ describe("the other artifacts a compaction leaves behind refuse the same shape",
 	test("a degenerate handoff document is refused instead of being handed the files block", async () => {
 		vi.spyOn(ai, "completeSimple").mockResolvedValue(assistantText(DEGENERATE_RUN));
 
-		const error = await generateHandoff([userMessage("do the work")], model(), "test-key", {
+		const error = await generateHandoff([createUserMessage("do the work")], model(), "test-key", {
 			systemPrompt: ["sp"],
 			tools: [],
 		}).catch((caught: unknown) => caught);

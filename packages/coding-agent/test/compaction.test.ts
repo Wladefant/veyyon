@@ -28,6 +28,7 @@ import type {
 	ThinkingLevelChangeEntry,
 } from "@veyyon/kernel/session/session-entries";
 import { migrateSessionEntries } from "@veyyon/kernel/session/session-migrations";
+import { createUserMessage } from "../../agent/test/helpers";
 import { e2eApiKey } from "./helpers/e2e-session";
 
 // ============================================================================
@@ -155,10 +156,6 @@ function createMockUsage(input: number, output: number, cacheRead = 0, cacheWrit
 		totalTokens: input + output + cacheRead + cacheWrite,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
-}
-
-function createUserMessage(text: string): AgentMessage {
-	return { role: "user", content: text, timestamp: Date.now() };
 }
 
 function createAssistantMessage(text: string, usage?: Usage): AssistantMessage {

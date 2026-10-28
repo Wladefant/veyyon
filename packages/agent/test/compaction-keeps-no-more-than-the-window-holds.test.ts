@@ -8,6 +8,7 @@ import {
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Usage } from "@veyyon/ai";
 import { logger } from "@veyyon/utils";
+import { createUserMessage } from "./helpers";
 
 /**
  * THE REPORTED SYMPTOM: "Nothing to compact (session too small)" against a
@@ -45,10 +46,6 @@ function usage(promptTokens: number): Usage {
 	};
 }
 
-function userMessage(text: string): AgentMessage {
-	return { role: "user", content: text, timestamp: Date.now() };
-}
-
 function assistantMessage(text: string, promptTokens: number): AssistantMessage {
 	return {
 		role: "assistant",
@@ -77,7 +74,7 @@ function branch(turns: number, promptTokens: number): SessionEntry[] {
 	let parent: string | undefined;
 	for (let i = 0; i < turns; i++) {
 		const body = `turn ${i} ${"conversation text ".repeat(400)}`;
-		entries.push(entry(`user-${i}`, parent, userMessage(body)));
+		entries.push(entry(`user-${i}`, parent, createUserMessage(body)));
 		parent = `user-${i}`;
 		entries.push(entry(`assistant-${i}`, parent, assistantMessage(`reply ${i}`, promptTokens)));
 		parent = `assistant-${i}`;
