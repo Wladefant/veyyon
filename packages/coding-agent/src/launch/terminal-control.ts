@@ -5,6 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { applyOwnerOnlyWindowsAcl, atomicWriteFileWith, getConfigRootDir, postmortem } from "@veyyon/utils";
 import { getLoadedBuildIdentity } from "./build-info";
 import { createTerminalControlTransport, type TerminalSocket } from "./terminal-control-transport";
+import { TerminalReceipts } from "./terminal-receipts";
 
 /** Versioned, private discovery record. Only the owning terminal publishes this. */
 export interface TerminalOwner {
@@ -177,18 +178,26 @@ export async function serveTerminalControl(
 		}
 		socket.write(`${JSON.stringify(frame)}\n`);
 	};
-	// The history entry ids each subscriber already holds. A snapshot and the shared journal timer can
-	// both carry one entry; a subscriber is told about it once.
-	const heldEntries = new WeakMap<TerminalSocket, Set<string>>();
+	// Watcher, live and replay sends share one bounded receipt ledger per socket.
+	const receipts = new WeakMap<TerminalSocket, TerminalReceipts>();
+	const receiptFor = (socket: TerminalSocket): TerminalReceipts => {
+		let receipt = receipts.get(socket);
+		if (!receipt) {
+			receipt = new TerminalReceipts();
+			receipts.set(socket, receipt);
+		}
+		return receipt;
+	};
 	const forward = (socket: TerminalSocket, event: unknown): void => {
 		if (!isAppendedEvent(event)) {
 			send(socket, { event });
 			return;
 		}
-		const held = heldEntries.get(socket);
-		const entries = held ? event.entries.filter(entry => !held.has(entry.entryId)) : event.entries;
+		const receipt = receiptFor(socket);
+		receipt.retainHistory(target.history().map(entry => entry.entryId));
+		const entries = event.entries.filter(entry => !receipt.history.has(entry.entryId));
 		if (!entries.length) return;
-		for (const entry of entries) held?.add(entry.entryId);
+		for (const entry of entries) receipt.holdHistory(entry.entryId);
 		send(socket, { event: { ...event, entries } });
 	};
 	// Waits on the bytes the socket still holds, because the Windows pipe socket never reports a full buffer.
@@ -244,14 +253,21 @@ export async function serveTerminalControl(
 	// One chain for acked and plain deliveries: messages reach the terminal in the order they were accepted.
 	let deliveryChain: Promise<void> = Promise.resolve();
 	let pendingDeliveries = 0;
+	const sendDelivery = (
+		socket: TerminalSocket,
+		record: { sessionId: string; messageId: string; status: DeliveryState },
+	): void => {
+		if (socket.destroyed || !receiptFor(socket).holdDelivery(deliveryKey(record.sessionId, record.messageId), record.status)) return;
+		send(socket, { event: { kind: "delivery", sessionId: record.sessionId, messageId: record.messageId, ...record.status } });
+	};
 	const announceDelivery = (record: { sessionId: string; messageId: string; status: DeliveryState; watchers: Set<TerminalSocket> }): void => {
 		for (const socket of record.watchers) {
-			send(socket, { event: { kind: "delivery", sessionId: record.sessionId, messageId: record.messageId, ...record.status } });
+			sendDelivery(socket, record);
 		}
 		if (record.sessionId === publishedSessionId) {
 			for (const socket of subscribers) {
 				if (!record.watchers.has(socket)) {
-					send(socket, { event: { kind: "delivery", sessionId: record.sessionId, messageId: record.messageId, ...record.status } });
+					sendDelivery(socket, record);
 				}
 			}
 		}
@@ -299,10 +315,7 @@ export async function serveTerminalControl(
 				known.watchers.add(socket);
 				return { accepted: true, messageId, state: "pending" };
 			}
-			// A subscribed socket already received this settled record by replay or announcement.
-			if (!subscribers.has(socket)) {
-				send(socket, { event: { kind: "delivery", sessionId: known.sessionId, messageId, ...known.status } });
-			}
+			sendDelivery(socket, known);
 			return {
 				accepted: true,
 				messageId,
@@ -343,6 +356,7 @@ export async function serveTerminalControl(
 			clearTimeout(authDeadline);
 			sockets.delete(socket);
 			subscribers.delete(socket);
+			receipts.delete(socket);
 			for (const record of deliveries.values()) {
 				record.watchers.delete(socket);
 			}
@@ -387,8 +401,9 @@ export async function serveTerminalControl(
 								if (typeof request.cursor === "string" && request.cursor && cursorIndex < 0) {
 									throw new Error("Unknown history cursor; reconnect without a cursor to reset history");
 								}
-								// Everything in the snapshot is accounted for: either replayed below or older than the replay window.
-								const held = new Set(fullHistory.map(entry => entry.entryId));
+								const receipt = receiptFor(socket);
+								receipt.retainHistory(fullHistory.map(entry => entry.entryId));
+								for (const entry of fullHistory.slice(-HISTORY_FRAME_ENTRIES)) receipt.holdHistory(entry.entryId);
 								let pending = cursorIndex >= 0 ? fullHistory.slice(cursorIndex + 1) : fullHistory.slice(-HISTORY_FRAME_ENTRIES);
 								// The socket joins the live feed only after replay, in the same tick as the last journal read, so
 								// a slow reader cannot be left with a failed subscribe that still streams, nor miss an entry that
@@ -402,14 +417,15 @@ export async function serveTerminalControl(
 										if (socket.destroyed) return;
 										send(socket, { event: { kind: "history", sessionId: publishedSessionId, entries: chunk } });
 									}
-									pending = target.history().filter(entry => !held.has(entry.entryId));
-									for (const entry of pending) held.add(entry.entryId);
+									const latest = target.history().slice(-HISTORY_FRAME_ENTRIES);
+									receipt.retainHistory(latest.map(entry => entry.entryId));
+									pending = latest.filter(entry => !receipt.history.has(entry.entryId));
+									for (const entry of pending) receipt.holdHistory(entry.entryId);
 								}
 								if (socket.destroyed) return;
 								if (closed || request.sessionId !== publishedSessionId || request.sessionId !== target.identity().sessionId) {
 									throw new Error("Terminal session detached or changed; rediscover its owner");
 								}
-								heldEntries.set(socket, held);
 								subscribers.add(socket);
 								const isNewListener = !unsubscribe;
 								startEvents();
@@ -421,9 +437,9 @@ export async function serveTerminalControl(
 									if (record.status.state === "pending") {
 										record.watchers.add(socket);
 									} else {
-										send(socket, {
-											event: { kind: "delivery", sessionId: record.sessionId, messageId: record.messageId, ...record.status },
-										});
+										await waitForWritable(socket);
+										if (socket.destroyed) return;
+										sendDelivery(socket, record);
 									}
 								}
 								result = true;
@@ -508,6 +524,7 @@ export async function serveTerminalControl(
 									if (peer !== socket) peer.destroy();
 								}
 								subscribers.clear();
+								receipts.delete(socket);
 								stopEvents();
 								for (const delivery of deliveries.values()) delivery.watchers.clear();
 								result = { rotated: true };

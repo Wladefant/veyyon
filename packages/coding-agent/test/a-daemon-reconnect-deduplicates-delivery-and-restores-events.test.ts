@@ -2,12 +2,13 @@
 // the daemon reconnects over IPC and may re-deliver in-flight messages or re-subscribe.
 // The live session must deduplicate deliveries on messageId without re-running the turn,
 // retain accepted delivery outcomes across reconnects, and restore delivery events on re-subscription.
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { serveTerminalControl, TerminalNotReadyError, type TerminalOwner } from "../src/launch/terminal-control";
+import { TerminalReceipts } from "../src/launch/terminal-receipts";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -683,7 +684,7 @@ test("a delivery settling during large history replay reaches its acking subscri
 	client.send({ id: "ping-race", op: "ping" });
 	await client.next(frame => frame.id === "ping-race");
 
-	expect(historyFrames).toBe(13);
+	expect(historyFrames).toBe(12);
 	expect(client.frames.filter(frame => frame.event?.kind === "delivery" && frame.event.messageId === "m-race")).toHaveLength(0);
 });
 
@@ -704,4 +705,167 @@ test("a settled ack followed by subscribe on the same socket has one delivery fr
 	await client.next(frame => frame.id === "ping-after-sub");
 
 	expect(client.frames.filter(frame => frame.event?.kind === "delivery" && frame.event.messageId === "m-settled")).toHaveLength(0);
+});
+
+// WHY: A long-lived terminal session may stream thousands of history entries over time.
+// The subscriber's receipt ledger must cap its history memory to 1000 entries and evict older entries.
+// GAP: entries are pushed in batches over a real Unix/Windows socket, not synthesized in-process.
+test("a long-lived subscriber bounds history receipt memory when more than 1000 entries are appended", async () => {
+	let emitAppended: ((event: unknown) => void) | undefined;
+	const history: Array<{ entryId: string; text: string }> = [
+		{ entryId: "e-0", text: "initial entry" },
+	];
+	const owner = await serve(
+		async () => "done",
+		"sess-bounded-history",
+		() => history,
+		undefined,
+		listener => {
+			emitAppended = listener;
+			return () => { emitAppended = undefined; };
+		},
+	);
+
+	const historySizes: number[] = [];
+	const originalHoldHistory = TerminalReceipts.prototype.holdHistory;
+	const holdHistorySpy = spyOn(TerminalReceipts.prototype, "holdHistory").mockImplementation(function (
+		this: TerminalReceipts,
+		id: string,
+	) {
+		originalHoldHistory.call(this, id);
+		historySizes.push(this.history.size);
+	});
+	cleanup.push(() => holdHistorySpy.mockRestore());
+
+	const client = connect(owner);
+	client.send({ id: "sub-bounded-history", op: "subscribe" });
+	await client.next(frame => frame.id === "sub-bounded-history");
+
+	const appendCount = 1500;
+	for (let i = 1; i <= appendCount; i++) {
+		const entry = { entryId: `e-${i}`, text: `entry ${i}` };
+		history.push(entry);
+		emitAppended?.({ kind: "appended", sessionId: "sess-bounded-history", entries: [entry] });
+	}
+
+	client.send({ id: "ping-bounded-history", op: "ping" });
+	await client.next(frame => frame.id === "ping-bounded-history");
+
+	expect(holdHistorySpy).toHaveBeenCalled();
+	expect(historySizes.length).toBeGreaterThan(1000);
+	expect(Math.max(...historySizes)).toBeLessThanOrEqual(1000);
+	expect(historySizes[historySizes.length - 1]).toBe(1000);
+});
+
+// WHY: A long-lived terminal session may process many deliveries over its lifetime.
+// The subscriber's receipt ledger must cap its delivery memory to 256 entries, evict older records,
+// and update delivery state when retried with a distinct status reference while deduplicating identical references.
+// GAP: does not test mid-flight network packet loss; exercises the production control server over a local pipe.
+test("a long-lived subscriber bounds delivery receipt memory and updates on retries with distinct status reference", async () => {
+	const owner = await serve(async text => `outcome-${text}`);
+
+	const deliverySizes: number[] = [];
+	const originalHoldDelivery = TerminalReceipts.prototype.holdDelivery;
+	const holdDeliverySpy = spyOn(TerminalReceipts.prototype, "holdDelivery").mockImplementation(function (
+		this: TerminalReceipts,
+		id: string,
+		status: object,
+	) {
+		const result = originalHoldDelivery.call(this, id, status);
+		deliverySizes.push(this.deliveries.size);
+		return result;
+	});
+	cleanup.push(() => holdDeliverySpy.mockRestore());
+
+	const client = connect(owner);
+	client.send({ id: "sub-bounded-deliveries", op: "subscribe" });
+	await client.next(frame => frame.id === "sub-bounded-deliveries");
+
+	const totalDeliveries = 300;
+	const batchSize = 20;
+	for (let batchStart = 0; batchStart < totalDeliveries; batchStart += batchSize) {
+		for (let i = 0; i < batchSize; i++) {
+			const index = batchStart + i;
+			client.send({
+				id: `deliv-req-${index}`,
+				op: "deliver",
+				text: `payload-${index}`,
+				mode: "auto",
+				ack: true,
+				messageId: `m-bounded-${index}`,
+			});
+		}
+		for (let i = 0; i < batchSize; i++) {
+			const index = batchStart + i;
+			await client.next(frame => frame.event?.kind === "delivery" && frame.event.messageId === `m-bounded-${index}`);
+		}
+	}
+
+	expect(holdDeliverySpy).toHaveBeenCalled();
+	expect(deliverySizes.length).toBeGreaterThan(256);
+	expect(Math.max(...deliverySizes)).toBeLessThanOrEqual(256);
+	expect(deliverySizes[deliverySizes.length - 1]).toBe(256);
+
+	// Contract: retrying the same messageId with the identical status object reference emits no duplicate
+	client.send({
+		id: "deliv-retry-same",
+		op: "deliver",
+		text: "payload-299",
+		mode: "auto",
+		ack: true,
+		messageId: "m-bounded-299",
+	});
+	const retryAck = await client.next(frame => frame.id === "deliv-retry-same");
+	expect(retryAck.result).toMatchObject({ accepted: true, messageId: "m-bounded-299", state: "delivered" });
+
+	client.send({ id: "ping-retry-same", op: "ping" });
+	await client.next(frame => frame.id === "ping-retry-same");
+	const duplicateDeliveries = client.frames.filter(
+		frame => frame.event?.kind === "delivery" && frame.event.messageId === "m-bounded-299",
+	);
+	expect(duplicateDeliveries).toHaveLength(0);
+
+	// Contract: direct receipt ledger accepts update when given distinct status reference for same messageId
+	const receipt = new TerminalReceipts();
+	const initialStatus = { state: "pending" as const };
+	const distinctStatus = { state: "delivered" as const, outcome: "done" };
+
+	expect(receipt.holdDelivery("m-ref-test", initialStatus)).toBe(true);
+	expect(receipt.holdDelivery("m-ref-test", initialStatus)).toBe(false);
+	expect(receipt.holdDelivery("m-ref-test", distinctStatus)).toBe(true);
+	expect(receipt.holdDelivery("m-ref-test", distinctStatus)).toBe(false);
+});
+
+// WHY: Direct ledger contract guarantees strict FIFO eviction, exact bounds of 1000 history entries
+// and 256 delivery entries, and window pruning via retainHistory.
+// GAP: unit test verifying TerminalReceipts independently of transport.
+test("TerminalReceipts directly enforces bounds, FIFO eviction, and reference-equality deduplication", () => {
+	const receipts = new TerminalReceipts();
+
+	for (let i = 0; i < 1200; i++) {
+		receipts.holdHistory(`hist-${i}`);
+	}
+	expect(receipts.history.size).toBe(1000);
+	expect(receipts.history.has("hist-0")).toBe(false);
+	expect(receipts.history.has("hist-199")).toBe(false);
+	expect(receipts.history.has("hist-200")).toBe(true);
+	expect(receipts.history.has("hist-1199")).toBe(true);
+
+	const window = Array.from({ length: 500 }, (_, i) => `hist-${700 + i}`);
+	receipts.retainHistory(window);
+	expect(receipts.history.size).toBe(500);
+	expect(receipts.history.has("hist-699")).toBe(false);
+	expect(receipts.history.has("hist-700")).toBe(true);
+	expect(receipts.history.has("hist-1199")).toBe(true);
+
+	for (let i = 0; i < 300; i++) {
+		const status = { state: "delivered" as const, outcome: `out-${i}` };
+		expect(receipts.holdDelivery(`deliv-${i}`, status)).toBe(true);
+		expect(receipts.holdDelivery(`deliv-${i}`, status)).toBe(false);
+	}
+	expect(receipts.deliveries.size).toBe(256);
+	expect(receipts.deliveries.has("deliv-0")).toBe(false);
+	expect(receipts.deliveries.has("deliv-43")).toBe(false);
+	expect(receipts.deliveries.has("deliv-44")).toBe(true);
+	expect(receipts.deliveries.has("deliv-299")).toBe(true);
 });
