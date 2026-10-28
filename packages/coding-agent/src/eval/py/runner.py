@@ -50,6 +50,25 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+def _guard_windows_signal_zero() -> None:
+    """Reject accidental POSIX liveness probes before Windows can terminate a PID.
+
+    Audit hooks cover aliases of os.kill too. This is not a sandbox against
+    hostile code invoking native APIs directly.
+    """
+    if os.name != "nt":
+        return
+
+    def guard(event: str, args: tuple) -> None:
+        if event == "os.kill" and len(args) >= 2 and args[1] == 0:
+            raise PermissionError(
+                "os.kill(pid, 0) terminates the target on Windows; "
+                "use a non-signalling process handle wait for liveness"
+            )
+
+    sys.addaudithook(guard)
+
+
 def _guard_host_lifetime() -> None:
     """Bind this runner and its descendants to the host's lifetime."""
     parent_pid = os.getppid()
@@ -1429,6 +1448,7 @@ async def _main_async() -> None:
     sys.stdout = _StreamProxy("stdout")
     sys.stderr = _StreamProxy("stderr")
     _install_idle_sigint()
+    _guard_windows_signal_zero()
     _guard_host_lifetime()
     _start_capture_drain()
 
