@@ -3,6 +3,7 @@ import * as http2 from "node:http2";
 import { create, toBinary } from "@bufbuild/protobuf";
 import { streamCursor } from "@veyyon/ai/providers/cursor";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model } from "@veyyon/ai/types";
+import { frameConnectMessage } from "@veyyon/ai/utils/connect-frames";
 import { buildModel } from "@veyyon/catalog/build";
 import {
 	AgentServerMessageSchema,
@@ -28,13 +29,6 @@ import {
 // happened. `used_tokens` is the whole conversation measured with this turn's
 // reply already in it, so the prompt side is the gauge minus the completion.
 
-function frame(payload: Uint8Array): Buffer {
-	const header = Buffer.alloc(5);
-	header.writeUInt8(0, 0);
-	header.writeUInt32BE(payload.length, 1);
-	return Buffer.concat([header, Buffer.from(payload)]);
-}
-
 function tokenDeltaFrame(tokens: number): Buffer {
 	const message = create(AgentServerMessageSchema, {
 		message: {
@@ -44,7 +38,7 @@ function tokenDeltaFrame(tokens: number): Buffer {
 			}),
 		},
 	});
-	return frame(toBinary(AgentServerMessageSchema, message));
+	return frameConnectMessage(toBinary(AgentServerMessageSchema, message));
 }
 
 function checkpointFrame(usedTokens: number, maxTokens: number): Buffer {
@@ -56,7 +50,7 @@ function checkpointFrame(usedTokens: number, maxTokens: number): Buffer {
 			}),
 		},
 	});
-	return frame(toBinary(AgentServerMessageSchema, message));
+	return frameConnectMessage(toBinary(AgentServerMessageSchema, message));
 }
 
 function turnEndedFrame(): Buffer {
@@ -68,7 +62,7 @@ function turnEndedFrame(): Buffer {
 			}),
 		},
 	});
-	return frame(toBinary(AgentServerMessageSchema, message));
+	return frameConnectMessage(toBinary(AgentServerMessageSchema, message));
 }
 
 interface FakeCursorServer {

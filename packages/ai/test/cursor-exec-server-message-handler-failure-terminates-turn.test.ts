@@ -37,6 +37,7 @@ import type {
 	Model,
 	ToolResultMessage,
 } from "@veyyon/ai/types";
+import { frameConnectMessage } from "@veyyon/ai/utils/connect-frames";
 import { buildModel } from "@veyyon/catalog/build";
 import {
 	AgentServerMessageSchema,
@@ -53,13 +54,6 @@ import {
 afterEach(() => {
 	setProviderModuleOverrideForTest("cursor-agent");
 });
-
-function frameConnect(payload: Uint8Array): Buffer {
-	const header = Buffer.alloc(5);
-	header.writeUInt8(0, 0);
-	header.writeUInt32BE(payload.length, 1);
-	return Buffer.concat([header, Buffer.from(payload)]);
-}
 
 function grepToolResult(text: string): ToolResultMessage {
 	return {
@@ -190,7 +184,7 @@ describe("Cursor exec server message handler failure closes turn immediately", (
 				},
 			});
 
-			serverStream.write(frameConnect(toBinary(AgentServerMessageSchema, execMsg)));
+			serverStream.write(frameConnectMessage(toBinary(AgentServerMessageSchema, execMsg)));
 			// Server intentionally leaves stream open waiting for client response
 		});
 
@@ -275,7 +269,7 @@ describe("Cursor exec server message handler failure closes turn immediately", (
 				},
 			});
 
-			serverStream.write(frameConnect(toBinary(AgentServerMessageSchema, execMsg)));
+			serverStream.write(frameConnectMessage(toBinary(AgentServerMessageSchema, execMsg)));
 
 			let ended = false;
 			serverStream.on("data", (chunk: Buffer) => {
@@ -293,7 +287,7 @@ describe("Cursor exec server message handler failure closes turn immediately", (
 							},
 						},
 					});
-					serverStream.write(frameConnect(toBinary(AgentServerMessageSchema, turnEndedMsg)));
+					serverStream.write(frameConnectMessage(toBinary(AgentServerMessageSchema, turnEndedMsg)));
 					serverStream.end();
 				}
 			});
@@ -370,8 +364,8 @@ describe("Cursor exec server message handler failure closes turn immediately", (
 			});
 
 			// Send exec message followed immediately by turnEnded
-			serverStream.write(frameConnect(toBinary(AgentServerMessageSchema, execMsg)));
-			serverStream.write(frameConnect(toBinary(AgentServerMessageSchema, turnEndedMsg)));
+			serverStream.write(frameConnectMessage(toBinary(AgentServerMessageSchema, execMsg)));
+			serverStream.write(frameConnectMessage(toBinary(AgentServerMessageSchema, turnEndedMsg)));
 
 			serverStream.on("data", (chunk: Buffer) => {
 				if (chunk.length >= 5) {
@@ -460,8 +454,8 @@ describe("Cursor exec server message handler failure closes turn immediately", (
 			});
 
 			// Send exec message followed immediately by turnEnded
-			serverStream.write(frameConnect(toBinary(AgentServerMessageSchema, execMsg)));
-			serverStream.write(frameConnect(toBinary(AgentServerMessageSchema, turnEndedMsg)));
+			serverStream.write(frameConnectMessage(toBinary(AgentServerMessageSchema, execMsg)));
+			serverStream.write(frameConnectMessage(toBinary(AgentServerMessageSchema, turnEndedMsg)));
 		});
 
 		try {
@@ -637,8 +631,8 @@ describe("Cursor exec server message handler failure closes turn immediately", (
 			});
 
 			// Send exec message followed immediately by turnEnded
-			serverStream.write(frameConnect(toBinary(AgentServerMessageSchema, execMsg)));
-			serverStream.write(frameConnect(toBinary(AgentServerMessageSchema, turnEndedMsg)));
+			serverStream.write(frameConnectMessage(toBinary(AgentServerMessageSchema, execMsg)));
+			serverStream.write(frameConnectMessage(toBinary(AgentServerMessageSchema, turnEndedMsg)));
 
 			serverStream.on("wantTrailers", () => {
 				serverStream.sendTrailers({
@@ -723,7 +717,7 @@ describe("Cursor exec server message handler failure closes turn immediately", (
 			});
 
 			// Send turnEnded and immediately end stream with status 8 in trailers
-			serverStream.write(frameConnect(toBinary(AgentServerMessageSchema, turnEndedMsg)));
+			serverStream.write(frameConnectMessage(toBinary(AgentServerMessageSchema, turnEndedMsg)));
 
 			serverStream.on("wantTrailers", () => {
 				serverStream.sendTrailers({
@@ -818,7 +812,7 @@ describe("Cursor exec server message handler failure closes turn immediately", (
 			serverStream.respond({ ":status": 200, "content-type": "application/connect+proto" });
 			// Send invalid non-protobuf payload in a valid Connect frame
 			const invalidPayload = Buffer.from([0xff, 0xff, 0xff, 0xff, 0xff]);
-			serverStream.write(frameConnect(invalidPayload));
+			serverStream.write(frameConnectMessage(invalidPayload));
 		});
 
 		try {

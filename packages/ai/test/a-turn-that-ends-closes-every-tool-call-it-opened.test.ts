@@ -28,6 +28,7 @@ import { create, toBinary } from "@bufbuild/protobuf";
 import { streamCursor } from "@veyyon/ai/providers/cursor";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, ToolCall } from "@veyyon/ai/types";
 import { getStreamingPartialJson } from "@veyyon/ai/utils/block-symbols";
+import { frameConnectMessage } from "@veyyon/ai/utils/connect-frames";
 import { buildModel } from "@veyyon/catalog/build";
 import {
 	AgentServerMessageSchema,
@@ -43,13 +44,6 @@ import {
 /** Cursor's own id shape: the interaction call id and the function-call id, joined. */
 function callId(index: number): string {
 	return `call-1c6e0b52-3d47-4a19-9f80-2b7c5a4e6d13-${index}\nfc_74a2c9e1-5b83-4d0f-8c62-1e9a3f5b7d04_${index}`;
-}
-
-function frame(payload: Uint8Array): Buffer {
-	const header = Buffer.alloc(5);
-	header.writeUInt8(0, 0);
-	header.writeUInt32BE(payload.length, 1);
-	return Buffer.concat([header, Buffer.from(payload)]);
 }
 
 function encodeArgs(args: Record<string, unknown>): Record<string, Uint8Array> {
@@ -89,7 +83,7 @@ function startedFrame(id: string, name: string, args: Record<string, unknown>): 
 			}),
 		},
 	});
-	return frame(toBinary(AgentServerMessageSchema, message));
+	return frameConnectMessage(toBinary(AgentServerMessageSchema, message));
 }
 
 /** `partial_tool_call`: a cumulative snapshot of the args JSON text. */
@@ -105,7 +99,7 @@ function partialFrame(id: string, snapshot: string): Buffer {
 			}),
 		},
 	});
-	return frame(toBinary(AgentServerMessageSchema, message));
+	return frameConnectMessage(toBinary(AgentServerMessageSchema, message));
 }
 
 function turnEndedFrame(): Buffer {
@@ -117,7 +111,7 @@ function turnEndedFrame(): Buffer {
 			}),
 		},
 	});
-	return frame(toBinary(AgentServerMessageSchema, message));
+	return frameConnectMessage(toBinary(AgentServerMessageSchema, message));
 }
 
 interface FakeCursorServer {
