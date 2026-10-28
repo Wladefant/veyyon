@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import type { Dirent } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import * as path from "node:path";
-import { clamp, clamp01, clampLow } from "../src/math";
+import { clamp, clamp01, clampLow, wrapIndex } from "../src/math";
 import {
 	MEMBER_ROOTS,
 	MEMBERS,
@@ -79,6 +79,29 @@ describe("clampLow", () => {
 		expect(clampLow(Number.NaN, 2, 8)).toBe(2);
 		expect(clampLow(Number.POSITIVE_INFINITY, 2, 8)).toBe(2);
 		expect(clampLow(Number.NEGATIVE_INFINITY, 2, 8)).toBe(2);
+	});
+});
+
+describe("wrapIndex", () => {
+	it("leaves an index already on the ring where it is", () => {
+		for (let index = 0; index < 5; index++) expect(wrapIndex(index, 5)).toBe(index);
+	});
+
+	it("lands a step past either end on the other end", () => {
+		expect(wrapIndex(-1, 5)).toBe(4);
+		expect(wrapIndex(5, 5)).toBe(0);
+	});
+
+	it("wraps a step longer than the ring as many laps as it takes", () => {
+		expect(wrapIndex(-7, 5)).toBe(3);
+		expect(wrapIndex(12, 5)).toBe(2);
+		expect(wrapIndex(-10, 5)).toBe(0);
+	});
+
+	it("keeps a one-slot ring on its only slot, never on negative zero", () => {
+		expect(Object.is(wrapIndex(-1, 1), 0)).toBe(true);
+		expect(Object.is(wrapIndex(-2, 1), 0)).toBe(true);
+		expect(wrapIndex(3, 1)).toBe(0);
 	});
 });
 

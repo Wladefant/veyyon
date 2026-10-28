@@ -94,6 +94,22 @@ describe("Comms stream", () => {
 		dashboard.dispose();
 	});
 
+	/** Two views, so a step past either end lands on the other one. */
+	test("opens from Live on Left as well as Right, and Right from Comms returns to Live", async () => {
+		await IrcBus.global().send({ from: "0-Sub", to: "1-Sub", body: "visible only in comms" });
+		const dashboard = new AgentDashboard({ terminalHeight: 40, expandKeys: ["ctrl+o"] });
+		const frame = () => stripVTControlCharacters(dashboard.render(120).join("\n"));
+
+		const live = frame().includes("visible only in comms");
+		dashboard.handleInput("\x1b[D");
+		const afterLeft = frame().includes("visible only in comms");
+		dashboard.handleInput(RIGHT);
+		const afterRight = frame().includes("visible only in comms");
+
+		expect({ live, afterLeft, afterRight }).toEqual({ live: false, afterLeft: true, afterRight: false });
+		dashboard.dispose();
+	});
+
 	/** Oldest first: it is a log, and a log read bottom-up is not a log. */
 	test("orders messages oldest first", async () => {
 		const bus = IrcBus.global();

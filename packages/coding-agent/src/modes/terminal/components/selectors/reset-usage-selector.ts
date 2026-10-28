@@ -1,6 +1,6 @@
 import { type Component, ScrollView } from "@veyyon/tui";
 import { HoverController } from "@veyyon/tui/utils/hover-controller";
-import { clamp, clampLow, formatCount } from "@veyyon/utils";
+import { clamp, clampLow, formatCount, wrapIndex } from "@veyyon/utils";
 import { matchesKey } from "@veyyon/utils/keys";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import type { ResetUsageAccount } from "../../../../slash-commands/helpers/reset-usage";
@@ -172,13 +172,13 @@ export class ResetUsageSelectorComponent implements Component {
 
 		if (matchesSelectUp(keyData)) {
 			if (this.#accounts.length > 0) {
-				this.#selectedIndex = this.#selectedIndex === 0 ? this.#accounts.length - 1 : this.#selectedIndex - 1;
+				this.#selectedIndex = wrapIndex(this.#selectedIndex - 1, this.#accounts.length);
 			}
 			this.#pendingIndex = null;
 			this.#statusMessage = undefined;
 		} else if (matchesSelectDown(keyData)) {
 			if (this.#accounts.length > 0) {
-				this.#selectedIndex = this.#selectedIndex === this.#accounts.length - 1 ? 0 : this.#selectedIndex + 1;
+				this.#selectedIndex = wrapIndex(this.#selectedIndex + 1, this.#accounts.length);
 			}
 			this.#pendingIndex = null;
 			this.#statusMessage = undefined;
@@ -229,15 +229,7 @@ export class ResetUsageSelectorComponent implements Component {
 			onConfirm: () => this.handleInput("\n"),
 			onWheel: delta => {
 				if (this.#accounts.length > 0) {
-					const total = this.#accounts.length;
-					this.#selectedIndex =
-						delta < 0
-							? this.#selectedIndex === 0
-								? total - 1
-								: this.#selectedIndex - 1
-							: this.#selectedIndex === total - 1
-								? 0
-								: this.#selectedIndex + 1;
+					this.#selectedIndex = wrapIndex(this.#selectedIndex + delta, this.#accounts.length);
 					this.#pendingIndex = null;
 					this.#statusMessage = undefined;
 					this.#onRequestRender?.();

@@ -17,7 +17,7 @@ import type { ModelPerfStats } from "@veyyon/kernel/session/agent-storage";
 import { Ellipsis } from "@veyyon/natives";
 import { type Component, Input, ScrollView } from "@veyyon/tui";
 import { HoverController } from "@veyyon/tui/utils/hover-controller";
-import { clampLow, formatNumber } from "@veyyon/utils";
+import { clampLow, formatNumber, wrapIndex } from "@veyyon/utils";
 import { fuzzyRank } from "@veyyon/utils/fuzzy";
 import { matchesKey } from "@veyyon/utils/keys";
 import type { HoverFadeOptions } from "@veyyon/utils/motion";
@@ -548,7 +548,7 @@ export class ModelBrowser implements Component {
 		if (options.wrap ?? true) {
 			let index = this.#selectedIndex;
 			for (let step = 0; step < count; step++) {
-				index = (index + delta + count) % count;
+				index = wrapIndex(index + delta, count);
 				const item = this.#visibleItems[index];
 				if (item && !this.#isDisabled(item)) {
 					this.#setSelectedIndex(index);

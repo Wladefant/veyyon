@@ -14,7 +14,7 @@
  * - Esc: clear search (if active) then close
  */
 import { type Component, ScrollView, type Tab, TabBar } from "@veyyon/tui";
-import { clampLow, getMCPConfigPath, logger } from "@veyyon/utils";
+import { clampLow, getMCPConfigPath, logger, wrapIndex } from "@veyyon/utils";
 import { matchesKey } from "@veyyon/utils/keys";
 import { parseSgrMouse } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
@@ -222,13 +222,13 @@ export class ExtensionDashboard implements Component {
 	#stepTab(direction: number): void {
 		const count = this.#state.tabs.length;
 		if (count === 0) return;
-		let next = (this.#state.activeTabIndex + direction + count) % count;
+		let next = wrapIndex(this.#state.activeTabIndex + direction, count);
 		for (let i = 0; i < count; i++) {
 			const tab = this.#state.tabs[next];
 			if (tab && (tab.id === "all" || tab.count > 0 || !tab.enabled)) {
 				break;
 			}
-			next = (next + direction + count) % count;
+			next = wrapIndex(next + direction, count);
 		}
 		const tab = this.#state.tabs[next];
 		if (tab) this.#selectProviderById(tab.id);

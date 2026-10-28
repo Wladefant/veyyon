@@ -248,6 +248,30 @@ describe("AgentSession model persistence", () => {
 		expect(created.settings.get("defaultModel")).toBe(defaultRoleValue);
 	});
 
+	it("cycles backward from the first available model onto the last, and forward from there onto the first", async () => {
+		let available: Model<Api>[] = [];
+		const created = await createSession({
+			selectInitialModel: availableModels => {
+				available = availableModels;
+				if (availableModels.length <= 2 || !availableModels[0]) {
+					throw new Error("Expected at least three available models");
+				}
+				return availableModels[0];
+			},
+		});
+		const first = available[0];
+		const last = available[available.length - 1];
+		if (!first || !last) throw new Error("Expected the available models to have two ends");
+
+		const backward = await created.session.cycleModel("backward");
+		const forward = await created.session.cycleModel("forward");
+
+		expect([backward?.model, forward?.model].map(model => model && modelValue(model))).toEqual([
+			modelValue(last),
+			modelValue(first),
+		]);
+	});
+
 	it("restores the last active role model when switching sessions", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
 		const smolModel = getAnthropicModelOrThrow("claude-sonnet-4-6");

@@ -2,7 +2,7 @@ import { type Component, Text } from "@veyyon/tui";
 import { HoverController } from "@veyyon/tui/utils/hover-controller";
 import { formatMoreLines } from "@veyyon/utils/format";
 import { matchesKey } from "@veyyon/utils/keys";
-import { clampLow } from "@veyyon/utils/math";
+import { clampLow, wrapIndex } from "@veyyon/utils/math";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
@@ -144,9 +144,9 @@ export class CopySelectorComponent implements Component {
 		);
 
 		if (matchesSelectUp(keyData)) {
-			this.#cursorId = flat[idx === 0 ? flat.length - 1 : idx - 1]!.target.id;
+			this.#cursorId = flat[wrapIndex(idx - 1, flat.length)]!.target.id;
 		} else if (matchesSelectDown(keyData)) {
-			this.#cursorId = flat[idx === flat.length - 1 ? 0 : idx + 1]!.target.id;
+			this.#cursorId = flat[wrapIndex(idx + 1, flat.length)]!.target.id;
 		} else if (matchesSelectPageUp(keyData)) {
 			this.#cursorId = flat[Math.max(0, idx - this.#treeRows)]!.target.id;
 		} else if (matchesSelectPageDown(keyData)) {
@@ -175,8 +175,7 @@ export class CopySelectorComponent implements Component {
 						0,
 						flat.findIndex(n => n.target.id === this.#cursorId),
 					);
-					const next = delta < 0 ? (idx === 0 ? flat.length - 1 : idx - 1) : idx === flat.length - 1 ? 0 : idx + 1;
-					this.#cursorId = flat[next]!.target.id;
+					this.#cursorId = flat[wrapIndex(idx + delta, flat.length)]!.target.id;
 					this.#onRequestRender?.();
 				}
 			},

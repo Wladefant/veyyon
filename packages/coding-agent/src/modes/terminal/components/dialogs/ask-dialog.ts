@@ -12,7 +12,7 @@ import {
 } from "@veyyon/tui";
 import { clampLow, collapseWhitespace, formatCount, formatMoreLines, isRecord } from "@veyyon/utils";
 import { matchesKey } from "@veyyon/utils/keys";
-import { clamp } from "@veyyon/utils/math";
+import { clamp, wrapIndex } from "@veyyon/utils/math";
 import { HoverFade } from "@veyyon/utils/motion";
 import { routeSgrMouseInput } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
@@ -877,7 +877,7 @@ export class AskDialogComponent implements Component {
 
 	#switchTab(direction: 1 | -1): void {
 		const tabCount = this.questions.length + 1;
-		this.#activeTabIndex = (this.#activeTabIndex + direction + tabCount) % tabCount;
+		this.#activeTabIndex = wrapIndex(this.#activeTabIndex + direction, tabCount);
 		this.#submitScrollOffset = 0;
 		this.#hoveredRowIndex = null;
 	}

@@ -4458,6 +4458,7 @@
 			"withTimeout",
 			"workerHostEntry",
 			"wrapFetchForExtraCa",
+			"wrapIndex",
 			"writeGlobalAuthBrokerToken",
 			"writeGlobalAuthBrokerUrl",
 			"writeGlobalDefaultProfile",

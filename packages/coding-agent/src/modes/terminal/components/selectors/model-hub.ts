@@ -15,7 +15,7 @@ import { getOAuthProviders } from "@veyyon/ai/oauth";
 import { getCatalogProviderEntry } from "@veyyon/catalog/provider-models";
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import { type Component, ScrollView, type TUI } from "@veyyon/tui";
-import { clampLow, errorMessage } from "@veyyon/utils";
+import { clampLow, errorMessage, wrapIndex } from "@veyyon/utils";
 import { fuzzyFilter } from "@veyyon/utils/fuzzy";
 import { extractPrintableText, matchesKey } from "@veyyon/utils/keys";
 import { HoverFade } from "@veyyon/utils/motion";
@@ -1138,11 +1138,11 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 		if (matchesKey(data, "left") || matchesKey(data, "up") || matchesKey(data, "shift+tab")) {
-			strip.index = (strip.index - 1 + strip.chips.length) % strip.chips.length;
+			strip.index = wrapIndex(strip.index - 1, strip.chips.length);
 			return;
 		}
 		if (matchesKey(data, "right") || matchesKey(data, "down") || matchesKey(data, "tab")) {
-			strip.index = (strip.index + 1) % strip.chips.length;
+			strip.index = wrapIndex(strip.index + 1, strip.chips.length);
 			return;
 		}
 		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
@@ -1157,7 +1157,7 @@ export class ModelHubComponent implements Component {
 		let index = this.#entries.findIndex(entry => entry.id === this.#activeEntryId);
 		if (index < 0) index = 0;
 		for (let step = 0; step < count; step++) {
-			index = (index + delta + count) % count;
+			index = wrapIndex(index + delta, count);
 			const entry = this.#entries[index];
 			if (entry && !this.#isHopSkipped(entry)) {
 				// Scope changes keep an active assignment (scoping helps find the
@@ -1204,7 +1204,7 @@ export class ModelHubComponent implements Component {
 			const next = index + delta;
 			if (next < 0 || next >= count) {
 				if (!wrap) return from;
-				index = (next + count) % count;
+				index = wrapIndex(next, count);
 			} else {
 				index = next;
 			}

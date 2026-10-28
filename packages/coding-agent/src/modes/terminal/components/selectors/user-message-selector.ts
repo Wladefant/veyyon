@@ -1,7 +1,7 @@
 import { type Component, ScrollView } from "@veyyon/tui";
 import { HoverController } from "@veyyon/tui/utils/hover-controller";
 import { fuzzyFilter } from "@veyyon/utils/fuzzy";
-import { clamp } from "@veyyon/utils/math";
+import { clamp, wrapIndex } from "@veyyon/utils/math";
 import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { truncateToWidth } from "@veyyon/utils/width";
@@ -135,15 +135,7 @@ class UserMessageList implements Component {
 	/** Move the selection one step for a wheel notch (wraps like the arrow keys). */
 	handleWheel(delta: -1 | 1): void {
 		if (this.#filteredMessages.length === 0) return;
-		const total = this.#filteredMessages.length;
-		this.#selectedIndex =
-			delta < 0
-				? this.#selectedIndex === 0
-					? total - 1
-					: this.#selectedIndex - 1
-				: this.#selectedIndex === total - 1
-					? 0
-					: this.#selectedIndex + 1;
+		this.#selectedIndex = wrapIndex(this.#selectedIndex + delta, this.#filteredMessages.length);
 	}
 
 	/** Select the message under the pointer and confirm it, like Enter. */

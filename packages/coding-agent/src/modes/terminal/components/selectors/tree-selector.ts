@@ -4,6 +4,7 @@ import { type Component, Input } from "@veyyon/tui";
 import { HoverController } from "@veyyon/tui/utils/hover-controller";
 import { fuzzyMatch } from "@veyyon/utils/fuzzy";
 import { extractPrintableText, matchesKey } from "@veyyon/utils/keys";
+import { wrapIndex } from "@veyyon/utils/math";
 import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { formatToolCallLabel } from "@veyyon/utils/tool-call-label";
@@ -460,16 +461,14 @@ class TreeList implements Component {
 
 	/** Move the selection one step for a wheel notch (wraps like the arrow keys). */
 	handleWheel(delta: -1 | 1): void {
+		this.#stepSelection(delta);
+	}
+
+	/** Move the selection one entry, wrapping from either end of the list to the other. */
+	#stepSelection(delta: -1 | 1): void {
 		const total = this.#filteredNodes.length;
 		if (total === 0) return;
-		this.#selectedIndex =
-			delta < 0
-				? this.#selectedIndex === 0
-					? total - 1
-					: this.#selectedIndex - 1
-				: this.#selectedIndex === total - 1
-					? 0
-					: this.#selectedIndex + 1;
+		this.#selectedIndex = wrapIndex(this.#selectedIndex + delta, total);
 	}
 
 	/** Move to the entry under the pointer and jump to it, exactly as Enter does. */
@@ -779,9 +778,9 @@ class TreeList implements Component {
 
 	handleInput(keyData: string): void {
 		if (matchesSelectUp(keyData)) {
-			this.#selectedIndex = this.#selectedIndex === 0 ? this.#filteredNodes.length - 1 : this.#selectedIndex - 1;
+			this.#stepSelection(-1);
 		} else if (matchesSelectDown(keyData)) {
-			this.#selectedIndex = this.#selectedIndex === this.#filteredNodes.length - 1 ? 0 : this.#selectedIndex + 1;
+			this.#stepSelection(1);
 		} else if (matchesKey(keyData, "left")) {
 			// Page up
 			this.#selectedIndex = Math.max(0, this.#selectedIndex - this.#maxVisibleLines);
@@ -806,13 +805,13 @@ class TreeList implements Component {
 			// Cycle filter backwards
 			const modes: FilterMode[] = ["default", "no-tools", "user-only", "labeled-only", "all"];
 			const currentIndex = modes.indexOf(this.#filterMode);
-			this.#filterMode = modes[(currentIndex - 1 + modes.length) % modes.length];
+			this.#filterMode = modes[wrapIndex(currentIndex - 1, modes.length)];
 			this.#applyFilter();
 		} else if (matchesKey(keyData, "ctrl+o")) {
 			// Cycle filter forwards: default → no-tools → user-only → labeled-only → all → default
 			const modes: FilterMode[] = ["default", "no-tools", "user-only", "labeled-only", "all"];
 			const currentIndex = modes.indexOf(this.#filterMode);
-			this.#filterMode = modes[(currentIndex + 1) % modes.length];
+			this.#filterMode = modes[wrapIndex(currentIndex + 1, modes.length)];
 			this.#applyFilter();
 		} else if (matchesKey(keyData, "alt+d")) {
 			this.#filterMode = "default";

@@ -331,6 +331,32 @@ describe("AskDialogComponent", () => {
 		expect(onSubmit.mock.calls[0][0].results[1].selectedOptions).toEqual(["B2"]);
 	});
 
+	it("Shift+Tab from the first question wraps to Submit, and Tab from Submit wraps to the first question", () => {
+		const onSubmit = vi.fn();
+		const questions: ExtensionAskDialogQuestion[] = [
+			{ id: "q1", question: "Q1?", options: [{ label: "A1" }, { label: "B1" }] },
+			{ id: "q2", question: "Q2?", options: [{ label: "A2" }, { label: "B2" }] },
+		];
+		const component = new AskDialogComponent(questions, {
+			onSubmit,
+			onCancel: vi.fn(),
+			onPrompt: vi.fn(),
+		});
+
+		// Shift+Tab from Q1 -> Submit, Tab from Submit -> Q1.
+		component.handleInput(SHIFT_TAB);
+		component.handleInput(TAB);
+		// Down to B1, Enter answers Q1 and advances to Q2, Tab -> Submit, Enter submits.
+		component.handleInput(DOWN);
+		component.handleInput(ENTER);
+		component.handleInput(TAB);
+		component.handleInput(ENTER);
+
+		expect(onSubmit.mock.calls.length).toBe(1);
+		expect(onSubmit.mock.calls[0][0].results[0].selectedOptions).toEqual(["B1"]);
+		expect(onSubmit.mock.calls[0][0].results[1].selectedOptions).toEqual([]);
+	});
+
 	it("Submit tab shows unanswered warning but Enter still submits", () => {
 		const onSubmit = vi.fn();
 		const questions: ExtensionAskDialogQuestion[] = [

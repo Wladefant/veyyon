@@ -62,7 +62,7 @@ import {
 	Text,
 	type TUI,
 } from "@veyyon/tui";
-import { clampLow, errorMessage, formatAge, formatMoreLines, getProjectDir, logger } from "@veyyon/utils";
+import { clampLow, errorMessage, formatAge, formatMoreLines, getProjectDir, logger, wrapIndex } from "@veyyon/utils";
 import { matchesKey } from "@veyyon/utils/keys";
 import { routeSgrMouseInput } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
@@ -1294,7 +1294,7 @@ export class AgentDashboard extends Container {
 
 	#switchView(direction: 1 | -1): void {
 		const index = VIEW_ORDER.indexOf(this.#activeView);
-		this.#activeView = VIEW_ORDER[(index + direction + VIEW_ORDER.length) % VIEW_ORDER.length];
+		this.#activeView = VIEW_ORDER[wrapIndex(index + direction, VIEW_ORDER.length)];
 		this.#notice = undefined;
 		this.#liveHoveredIndex = -1;
 		if (this.#activeView === "live") this.#refreshLiveAgents();

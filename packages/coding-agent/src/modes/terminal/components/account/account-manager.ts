@@ -23,7 +23,7 @@
 import { getOAuthProviders } from "@veyyon/ai/oauth";
 import { type Component, Input } from "@veyyon/tui";
 import { HoverController } from "@veyyon/tui/utils/hover-controller";
-import { clampLow, collapseWhitespace } from "@veyyon/utils";
+import { clampLow, collapseWhitespace, wrapIndex } from "@veyyon/utils";
 import { fuzzyFilter } from "@veyyon/utils/fuzzy";
 import { extractPrintableText, matchesKey } from "@veyyon/utils/keys";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
@@ -577,7 +577,7 @@ export class AccountManagerComponent implements Component {
 				0,
 				filtered.findIndex(entry => entry.providerId === this.#activeProviderId),
 			);
-			const next = (current + direction + filtered.length) % filtered.length;
+			const next = wrapIndex(current + direction, filtered.length);
 			this.#selectProvider(filtered[next]?.providerId ?? this.#activeProviderId);
 			return;
 		}
@@ -595,7 +595,7 @@ export class AccountManagerComponent implements Component {
 						0,
 						rows.findIndex(row => row.credentialId === this.#selectedCredentialId()),
 					);
-		const next = (current + direction + count) % count;
+		const next = wrapIndex(current + direction, count);
 		const row = rows[next];
 		this.#bodySelection = row
 			? { kind: "account", credentialId: row.credentialId }

@@ -10,7 +10,7 @@
  */
 
 import { matchesKey } from "@veyyon/utils/keys";
-import { clampLow } from "@veyyon/utils/math";
+import { clampLow, wrapIndex } from "@veyyon/utils/math";
 import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
@@ -175,7 +175,7 @@ export class TabBar implements Component {
 		const len = this.#tabs.length;
 		if (len === 0) return;
 		for (let step = 1; step <= len; step++) {
-			const index = (((this.#activeIndex + delta * step) % len) + len) % len;
+			const index = wrapIndex(this.#activeIndex + delta * step, len);
 			if (!this.#tabs[index]?.muted) {
 				this.setActiveIndex(index);
 				return;

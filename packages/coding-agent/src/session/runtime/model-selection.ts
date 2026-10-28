@@ -13,6 +13,7 @@ import { modelsAreEqual } from "@veyyon/catalog/models";
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import { EPHEMERAL_MODEL_CHANGE_ROLE } from "@veyyon/kernel/session/session-entries";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { wrapIndex } from "@veyyon/utils/math";
 import { missingCredentialsMessage } from "../../config/missing-credentials";
 import { normalizeModelPatternList } from "../../config/model-pattern-list";
 import type { ModelRegistry } from "../../config/model-registry";
@@ -79,8 +80,7 @@ interface ModelSwitch {
 /** The entry one step from the current one; the first entry counts as current when none is. */
 function cycleStep<T>(entries: readonly T[], isCurrent: (entry: T) => boolean, direction: "forward" | "backward"): T {
 	const current = Math.max(0, entries.findIndex(isCurrent));
-	const count = entries.length;
-	return entries[direction === "forward" ? (current + 1) % count : (current - 1 + count) % count];
+	return entries[wrapIndex(current + (direction === "forward" ? 1 : -1), entries.length)];
 }
 
 export class ModelSelection {

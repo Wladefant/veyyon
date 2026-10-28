@@ -19,14 +19,15 @@
  * by `a-short-card-keeps-its-controls-on-screen`. A list card whose fixture is too short to scroll.
  */
 import { beforeAll, describe, expect, it } from "bun:test";
-import { stripVTControlCharacters } from "node:util";
 import { Settings } from "../../../../src/config/settings";
 import { initTheme } from "../../../../src/theme/theme";
-import { OVERLAY_SPECS } from "../../../helpers/overlay-specs";
-import { stubStdoutGeometry } from "../../../helpers/stdout-geometry";
+import {
+	cardsMovedByArrows,
+	ARROW_DOWN as DOWN,
+	framesAroundKeys,
+	ARROW_UP as UP,
+} from "../../../helpers/list-card-frames";
 
-const DOWN = "\x1b[B";
-const UP = "\x1b[A";
 const HEIGHTS = [8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 24, 30];
 const WIDTHS = [60, 80, 160];
 
@@ -59,41 +60,19 @@ const NOT_SWEPT = [
 	"ExtensionDashboard",
 	// The arrows move a text caret, not a list cursor.
 	"HookEditorComponent",
+	// Two sections under the fixture registry, so the list never scrolls.
+	"ModelHubComponent",
 	// An embedded list: the host that embeds it sizes it, not a card plan.
 	"OAuthSelectorComponent",
 	// Four options, each shown at the height `a-short-card-keeps-its-controls-on-screen` pins.
 	"PlanReviewOverlay",
+	// Two options, so the list never scrolls.
+	"QueueModeSelectorComponent",
 	// Its rows are the settings registry, not a fixture, so no fixture label marks the cursor's row.
 	"SettingsSelectorComponent",
+	// Two options, so the list never scrolls.
+	"ShowImagesSelectorComponent",
 ];
-
-/** The frames of the card `name` on a `width`x`rows` terminal before and after forty presses of `key`. */
-async function framesAroundMove(
-	name: string,
-	key: string,
-	width: number,
-	rows: number,
-): Promise<{ before: string; after: string }> {
-	const spec = OVERLAY_SPECS.find(candidate => candidate.name === name);
-	if (!spec) throw new Error(`no overlay spec named ${name}`);
-	const geometry = stubStdoutGeometry({ rows, columns: width });
-	const component = await spec.create(rows);
-	const frame = () =>
-		component
-			.render(width)
-			.map(line => stripVTControlCharacters(line))
-			.join("\n");
-	try {
-		const before = frame();
-		if (!("handleInput" in component) || typeof component.handleInput !== "function")
-			return { before, after: before };
-		for (let step = 0; step < 40; step++) component.handleInput(key);
-		return { before, after: frame() };
-	} finally {
-		component.dispose?.();
-		geometry.restore();
-	}
-}
 
 describe("a list card keeps its cursor on screen", () => {
 	for (const { card, key, cursor } of CURSOR_MOVES) {
@@ -101,7 +80,7 @@ describe("a list card keeps its cursor on screen", () => {
 			const hidden: string[] = [];
 			for (const rows of HEIGHTS) {
 				for (const width of WIDTHS) {
-					const { after } = await framesAroundMove(card, key, width, rows);
+					const { after } = await framesAroundKeys(card, new Array<string>(40).fill(key), width, rows);
 					if (!cursor.test(after)) hidden.push(`${width}x${rows}`);
 				}
 			}
@@ -110,16 +89,7 @@ describe("a list card keeps its cursor on screen", () => {
 	}
 
 	it("sweeps every card whose frame moves under the arrow keys, or lists why not", async () => {
-		const moving: string[] = [];
-		for (const spec of OVERLAY_SPECS) {
-			for (const key of [DOWN, UP]) {
-				const { before, after } = await framesAroundMove(spec.name, key, 80, 30);
-				if (before !== after) {
-					moving.push(spec.name);
-					break;
-				}
-			}
-		}
+		const moving = await cardsMovedByArrows();
 		const swept = new Set(CURSOR_MOVES.map(move => move.card));
 		expect(moving.filter(name => !swept.has(name))).toEqual(NOT_SWEPT);
 		expect([...swept].filter(name => !moving.includes(name))).toEqual([]);

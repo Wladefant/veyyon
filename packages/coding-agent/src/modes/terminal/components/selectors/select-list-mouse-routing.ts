@@ -1,5 +1,6 @@
 import { type Component, Container, type Input, type SelectList, type SettingsList, Spacer, Text } from "@veyyon/tui";
 import { matchesKey } from "@veyyon/utils/keys";
+import { wrapIndex } from "@veyyon/utils/math";
 import { routeSelectListMouse, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { theme } from "../../../../theme/theme-binding";
 import {
@@ -289,13 +290,13 @@ export function handleListNavigationKey(data: string, options: ListNavigationOpt
 	}
 
 	if (matchesSelectUp(data)) {
-		const next = selectedIndex === 0 ? (wrap ? totalItems - 1 : 0) : selectedIndex - 1;
+		const next = wrap ? wrapIndex(selectedIndex - 1, totalItems) : Math.max(0, selectedIndex - 1);
 		onMove(next);
 		return true;
 	}
 
 	if (matchesSelectDown(data)) {
-		const next = selectedIndex === totalItems - 1 ? (wrap ? 0 : totalItems - 1) : selectedIndex + 1;
+		const next = wrap ? wrapIndex(selectedIndex + 1, totalItems) : Math.min(totalItems - 1, selectedIndex + 1);
 		onMove(next);
 		return true;
 	}

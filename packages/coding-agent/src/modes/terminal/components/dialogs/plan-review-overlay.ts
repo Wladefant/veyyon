@@ -20,7 +20,7 @@
 import { Ellipsis } from "@veyyon/natives";
 import { type Component, Input, Markdown, type MarkdownTheme, ScrollView } from "@veyyon/tui";
 import { matchesKey } from "@veyyon/utils/keys";
-import { clampLow } from "@veyyon/utils/math";
+import { clampLow, wrapIndex } from "@veyyon/utils/math";
 import { routeSgrMouseInput } from "@veyyon/utils/mouse";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
 import { getMarkdownTheme } from "../../../../theme/markdown-theme";
@@ -421,7 +421,7 @@ export class PlanReviewOverlay implements Component {
 		const regions: Focus[] = this.#sidebarShown ? ["toc", "body", "actions"] : ["body", "actions"];
 		const current = regions.indexOf(this.#focus);
 		const base = current < 0 ? regions.length - 1 : current;
-		this.#setFocus(regions[(base + direction + regions.length) % regions.length]!);
+		this.#setFocus(regions[wrapIndex(base + direction, regions.length)]!);
 	}
 
 	#setFocus(focus: Focus): void {

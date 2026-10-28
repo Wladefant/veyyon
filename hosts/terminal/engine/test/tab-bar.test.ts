@@ -80,6 +80,24 @@ describe("TabBar", () => {
 		expect(changes).toEqual(["c", "a", "c"]);
 	});
 
+	it("steps past either end onto the other, skipping a muted tab at the far end", () => {
+		const tabs = [
+			{ id: "a", label: "A" },
+			{ id: "b", label: "B" },
+			{ id: "c", label: "C" },
+			{ id: "d", label: "D", muted: true },
+		];
+		const tabBar = new TabBar("", tabs, ansiTheme, 0);
+		const changes: string[] = [];
+		tabBar.onTabChange = tab => changes.push(tab.id);
+
+		tabBar.prevTab();
+		expect(changes).toEqual(["c"]);
+
+		tabBar.nextTab();
+		expect(changes).toEqual(["c", "a"]);
+	});
+
 	it("setTabs preserves the active tab by id without firing onTabChange", () => {
 		const tabBar = new TabBar(
 			"",
