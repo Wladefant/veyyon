@@ -7,6 +7,7 @@ import type { Context, FetchImpl, Model, TextContent } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { waitForDelayOrAbort } from "./helpers";
+import { sseResponse } from "./helpers/fetch-mock";
 
 const openAIResponsesModel = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
 const openAICompletionsModel = {
@@ -105,14 +106,6 @@ function createHangingFetch(): FetchImpl {
 	return mockFetch as typeof fetch;
 }
 
-function createSseResponse(events: unknown[]): Response {
-	const payload = `${events.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`).join("\n\n")}\n\n`;
-	return new Response(payload, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
-}
-
 function createNoProgressOpenAIResponsesStream(signal: AbortSignal | undefined): Response {
 	const encoder = new TextEncoder();
 	let interval: NodeJS.Timeout | undefined;
@@ -180,7 +173,7 @@ function createDelayedFetch(
 }
 
 function createOpenAIResponsesSuccessResponse(): Response {
-	return createSseResponse([
+	return sseResponse([
 		{ type: "response.created", response: { id: "resp_delayed" } },
 		{
 			type: "response.output_item.added",
@@ -215,7 +208,7 @@ function createOpenAIResponsesSuccessResponse(): Response {
 }
 
 function createOpenAICompletionsSuccessResponse(modelId: string): Response {
-	return createSseResponse([
+	return sseResponse([
 		{
 			id: "chatcmpl-delayed",
 			object: "chat.completion.chunk",
@@ -672,7 +665,7 @@ describe("OpenAI-family first-event timeouts", () => {
 	});
 
 	it("errors when OpenAI responses stream closes without a terminal response event", async () => {
-		const incompleteResponse = createSseResponse([
+		const incompleteResponse = sseResponse([
 			{ type: "response.created", response: { id: "resp_incomplete" } },
 			{
 				type: "response.output_item.added",
@@ -706,7 +699,7 @@ describe("OpenAI-family first-event timeouts", () => {
 	});
 
 	it("accepts response.done with a completed response as an OpenAI responses terminal event", async () => {
-		const completedResponse = createSseResponse([
+		const completedResponse = sseResponse([
 			{ type: "response.created", response: { id: "resp_done" } },
 			{
 				type: "response.output_item.added",
@@ -753,7 +746,7 @@ describe("OpenAI-family first-event timeouts", () => {
 	});
 
 	it("errors when Azure OpenAI responses stream closes without a terminal response event", async () => {
-		const incompleteResponse = createSseResponse([
+		const incompleteResponse = sseResponse([
 			{ type: "response.created", response: { id: "resp_incomplete_azure" } },
 			{
 				type: "response.output_item.added",
@@ -797,7 +790,7 @@ describe("OpenAI-family first-event timeouts", () => {
 	});
 
 	it("handles response.incomplete as a valid terminal event (not premature closure)", async () => {
-		const incompleteResponse = createSseResponse([
+		const incompleteResponse = sseResponse([
 			{ type: "response.created", response: { id: "resp_length_limited" } },
 			{
 				type: "response.output_item.added",

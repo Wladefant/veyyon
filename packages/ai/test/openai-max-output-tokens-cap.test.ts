@@ -3,6 +3,7 @@ import { streamSimple } from "@veyyon/ai/stream";
 import type { Context, FetchImpl, Model, ModelSpec } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { sseResponse } from "./helpers/fetch-mock";
 
 // Output-token wire policy for OpenAI-family providers:
 //   - Non-aggregator completions + non-OpenRouter responses: clamp to
@@ -86,8 +87,7 @@ function completionsSse(): Response {
 		},
 		"[DONE]",
 	];
-	const payload = `${events.map(e => `data: ${typeof e === "string" ? e : JSON.stringify(e)}`).join("\n\n")}\n\n`;
-	return new Response(payload, { status: 200, headers: { "content-type": "text/event-stream" } });
+	return sseResponse(events);
 }
 
 async function captureCompletionsBody(

@@ -17,26 +17,10 @@
  */
 import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
-import type { Context, FetchImpl, Model, ModelSpec } from "@veyyon/ai/types";
+import type { Context, Model, ModelSpec } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { getBundledModel } from "@veyyon/catalog/models";
-
-function createSseResponse(events: unknown[]): Response {
-	const payload = `${events
-		.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`)
-		.join("\n\n")}\n\n`;
-	return new Response(payload, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
-}
-
-function createMockFetch(events: unknown[]): FetchImpl {
-	async function mockFetch(_input: string | URL | Request, _init?: RequestInit): Promise<Response> {
-		return createSseResponse(events);
-	}
-	return Object.assign(mockFetch, { preconnect: fetch.preconnect });
-}
+import { sseFetch } from "./helpers/fetch-mock";
 
 function baseContext(): Context {
 	return {
@@ -71,7 +55,7 @@ function deltaChunk(model: Model<"openai-completions">, delta: Record<string, un
 describe("openai-completions keeps reasoning_content when delta.content is null", () => {
 	it("emits a thinking block for reasoning_content deltas paired with content:null", async () => {
 		const model = customReasoningModel();
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			deltaChunk(model, { content: null, reasoning_content: "分析" }),
 			deltaChunk(model, { content: null, reasoning_content: "步骤" }),
 			deltaChunk(model, { content: "2", reasoning_content: null }),
@@ -99,7 +83,7 @@ describe("openai-completions keeps reasoning_content when delta.content is null"
 
 	it("does not coerce a content:null delta into a text block when only reasoning_content is present", async () => {
 		const model = customReasoningModel();
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			deltaChunk(model, { content: null, reasoning_content: "only thinking" }),
 			deltaChunk(model, { content: "answer", reasoning_content: null }),
 			{

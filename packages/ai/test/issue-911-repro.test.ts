@@ -2,20 +2,11 @@ import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
 import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
-
-function createSseResponse(events: unknown[]): Response {
-	const payload = `${events
-		.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`)
-		.join("\n\n")}\n\n`;
-	return new Response(payload, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
-}
+import { sseResponse } from "./helpers/fetch-mock";
 
 function createMockFetch(events: unknown[]): FetchImpl {
 	return (async (_input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
-		return createSseResponse(events);
+		return sseResponse(events);
 	}) as typeof fetch;
 }
 

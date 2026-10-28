@@ -6,6 +6,7 @@ import { streamSimple } from "@veyyon/ai/stream";
 import type { Context, FetchImpl, ModelSpec } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
+import { sseResponse } from "./helpers/fetch-mock";
 
 const ctx: Context = {
 	systemPrompt: ["hi"],
@@ -26,8 +27,7 @@ function completionsSse(): Response {
 		},
 		"[DONE]",
 	];
-	const payload = `${events.map(e => `data: ${typeof e === "string" ? e : JSON.stringify(e)}`).join("\n\n")}\n\n`;
-	return new Response(payload, { status: 200, headers: { "content-type": "text/event-stream" } });
+	return sseResponse(events);
 }
 
 function responsesSse(): Response {

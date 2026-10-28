@@ -3,6 +3,7 @@ import { streamSimple } from "@veyyon/ai/stream";
 import type { Context, FetchImpl, Model, ProviderResponseMetadata } from "@veyyon/ai/types";
 import { normalizeProviderResponse, notifyProviderResponse } from "@veyyon/ai/utils/provider-response";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { sseResponse } from "./helpers/fetch-mock";
 
 describe("provider response metadata", () => {
 	it("normalizes response status, headers, and request id", () => {
@@ -54,14 +55,6 @@ describe("provider response metadata", () => {
 	});
 });
 
-function createSseResponse(events: unknown[], headers: Record<string, string> = {}): Response {
-	const payload = `${events.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`).join("\n\n")}\n\n`;
-	return new Response(payload, {
-		status: 200,
-		headers: { "content-type": "text/event-stream", ...headers },
-	});
-}
-
 describe("streamSimple onResponse propagation", () => {
 	it("invokes onResponse for the default openai-completions path through streamSimple", async () => {
 		const model: Model<"openai-completions"> = {
@@ -71,7 +64,7 @@ describe("streamSimple onResponse propagation", () => {
 
 		const fetchMock: FetchImpl = Object.assign(
 			async (_input: string | URL | Request, _init?: RequestInit): Promise<Response> =>
-				createSseResponse(
+				sseResponse(
 					[
 						{
 							id: "chatcmpl-onresponse",

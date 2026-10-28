@@ -3,6 +3,7 @@ import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions
 import { streamOpenAIResponses } from "@veyyon/ai/providers/openai-responses";
 import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { sseResponse } from "./helpers/fetch-mock";
 
 const openAIResponsesModel = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
 const openAICompletionsModel = {
@@ -16,14 +17,6 @@ function baseContext(): Context {
 	};
 }
 
-function createSseResponse(events: unknown[]): Response {
-	const payload = `${events.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`).join("\n\n")}\n\n`;
-	return new Response(payload, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
-}
-
 describe("StreamOptions.fetch override", () => {
 	it("routes openai-completions requests through the override", async () => {
 		const calls: Array<{ url: string }> = [];
@@ -31,7 +24,7 @@ describe("StreamOptions.fetch override", () => {
 		const customFetch: FetchImpl = Object.assign(
 			async (input: string | URL | Request, _init?: RequestInit) => {
 				calls.push({ url: String(input instanceof Request ? input.url : input) });
-				return createSseResponse([
+				return sseResponse([
 					{
 						id: "chatcmpl-test",
 						object: "chat.completion.chunk",
@@ -69,7 +62,7 @@ describe("StreamOptions.fetch override", () => {
 		const customFetch: FetchImpl = Object.assign(
 			async (input: string | URL | Request, _init?: RequestInit) => {
 				calls.push({ url: String(input instanceof Request ? input.url : input) });
-				return createSseResponse([
+				return sseResponse([
 					{ type: "response.created", response: { id: "resp_test" } },
 					{
 						type: "response.output_item.added",

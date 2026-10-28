@@ -1,24 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
-import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
+import type { Context, Model } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
-
-function createSseResponse(events: unknown[]): Response {
-	const payload = `${events
-		.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`)
-		.join("\n\n")}\n\n`;
-	return new Response(payload, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
-}
-
-function createMockFetch(events: unknown[]): FetchImpl {
-	async function mockFetch(_input: string | URL | Request, _init?: RequestInit): Promise<Response> {
-		return createSseResponse(events);
-	}
-	return Object.assign(mockFetch, { preconnect: fetch.preconnect });
-}
+import { sseFetch } from "./helpers/fetch-mock";
 
 function baseContext(): Context {
 	return {
@@ -68,7 +52,7 @@ function stopChunk(model: Model<"openai-completions">): unknown {
 describe("issue #1776 - MiniMax object-shaped tool arguments", () => {
 	it("preserves object-shaped streamed tool arguments without a serialization round-trip", async () => {
 		const model = getBundledModel<"openai-completions">("minimax-code-cn", "MiniMax-M3");
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			toolCallChunk(model, { name: "bash", arguments: { command: "printf '%s\\n' ok" } }),
 			stopChunk(model),
 			"[DONE]",
@@ -87,7 +71,7 @@ describe("issue #1776 - MiniMax object-shaped tool arguments", () => {
 
 	it("still assembles tool arguments streamed as the standard JSON-string deltas", async () => {
 		const model = getBundledModel<"openai-completions">("minimax-code-cn", "MiniMax-M3");
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			toolCallChunk(model, { name: "bash", arguments: '{"command":' }),
 			toolCallChunk(model, { arguments: ' "printf ok"}' }),
 			stopChunk(model),

@@ -1,24 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
-import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
+import type { Context, Model } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
-
-function createSseResponse(events: unknown[]): Response {
-	const payload = `${events
-		.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`)
-		.join("\n\n")}\n\n`;
-	return new Response(payload, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
-}
-
-function createMockFetch(events: unknown[]): FetchImpl {
-	async function mockFetch(_input: string | URL | Request, _init?: RequestInit): Promise<Response> {
-		return createSseResponse(events);
-	}
-	return Object.assign(mockFetch, { preconnect: fetch.preconnect });
-}
+import { sseFetch } from "./helpers/fetch-mock";
 
 function baseContext(): Context {
 	return {
@@ -77,7 +61,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 		const model = getBundledModel<"openai-completions">("minimax-code-cn", "MiniMax-M3");
 		// Two chunks; each carries a slice of the `input` string. The
 		// concatenation forms the real hashline patch.
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			toolCallChunk(model, {
 				name: "edit",
 				arguments: { input: "[foo.ts#A1B2]\nSWAP 91.=91:\n+    " },
@@ -112,7 +96,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 		// that re-emit the full args on every delta. `startsWith` collapses
 		// the merge to the latest cumulative snapshot instead of duplicating
 		// the shared prefix.
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			toolCallChunk(model, {
 				name: "edit",
 				arguments: { input: "[foo.ts#A1B2]\nSWAP 91.=91:" },
@@ -141,7 +125,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 
 	it("preserves keys that only appear in earlier chunks instead of dropping them with later chunks", async () => {
 		const model = getBundledModel<"openai-completions">("minimax-code-cn", "MiniMax-M3");
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			toolCallChunk(model, { name: "edit", arguments: { input: "[foo.ts#A1B2]\nDEL 5" } }),
 			toolCallChunk(model, { arguments: { dryRun: true } }),
 			stopChunk(model),
@@ -164,7 +148,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 	});
 	it("deep-merges object and array fragments for large task arguments", async () => {
 		const model = getBundledModel<"openai-completions">("minimax-code-cn", "MiniMax-M3");
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			toolCallChunk(model, {
 				name: "task",
 				arguments: {
@@ -225,7 +209,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 		// reconstructing the args the way the proxy does (concat + parse) and comparing
 		// against the source-side merged result.
 		const model = getBundledModel<"openai-completions">("minimax-code-cn", "MiniMax-M3");
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			toolCallChunk(model, {
 				name: "edit",
 				arguments: { input: "[foo.ts#A1B2]\nSWAP 91.=91:\n+    " },
@@ -260,7 +244,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 		// moves emission to `finishToolCallBlock`. The single-chunk path stays correct end-to-end:
 		// the proxy still concatenates ("" then the final delta) and parses to the same args.
 		const model = getBundledModel<"openai-completions">("minimax-code-cn", "MiniMax-M3");
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			toolCallChunk(model, { name: "edit", arguments: { input: "[foo.ts#A1B2]\nDEL 5" } }),
 			stopChunk(model),
 			"[DONE]",

@@ -5,6 +5,7 @@ import type { Context, FetchImpl, Model, ModelSpec, OpenAICompat, ProviderSessio
 import { buildModel } from "@veyyon/catalog/build";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { type } from "arktype";
+import { sseResponse } from "./helpers/fetch-mock";
 
 const testTool: Tool = {
 	name: "echo",
@@ -72,14 +73,6 @@ function getYieldDataSchema(parameters: unknown): Record<string, unknown> {
 		if (dataSchema !== undefined) return toRecord(dataSchema);
 	}
 	return {};
-}
-
-function createSseResponse(events: unknown[]): Response {
-	const payload = `${events.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`).join("\n\n")}\n\n`;
-	return new Response(payload, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
 }
 
 function captureCompletionsPayload(
@@ -302,7 +295,7 @@ describe("OpenAI tool strict mode", () => {
 						},
 					);
 				}
-				return createSseResponse([
+				return sseResponse([
 					{
 						id: "chatcmpl-retry",
 						object: "chat.completion.chunk",
@@ -362,7 +355,7 @@ describe("OpenAI tool strict mode", () => {
 						},
 					);
 				}
-				return createSseResponse([
+				return sseResponse([
 					{
 						id: "chatcmpl-openrouter-retry",
 						object: "chat.completion.chunk",
@@ -427,7 +420,7 @@ describe("OpenAI tool strict mode", () => {
 						{ status: 400, headers: { "content-type": "application/json" } },
 					);
 				}
-				return createSseResponse([
+				return sseResponse([
 					{
 						id: "chatcmpl-foundry-retry",
 						object: "chat.completion.chunk",
@@ -496,7 +489,7 @@ describe("OpenAI tool strict mode", () => {
 						{ status: 400, headers: { "content-type": "application/json" } },
 					);
 				}
-				return createSseResponse([
+				return sseResponse([
 					{
 						type: "response.output_item.added",
 						output_index: 0,
@@ -643,7 +636,7 @@ describe("OpenAI tool strict mode", () => {
 						},
 					);
 				}
-				return createSseResponse([
+				return sseResponse([
 					{
 						id: "chatcmpl-deepseek-retry",
 						object: "chat.completion.chunk",
