@@ -63,7 +63,7 @@ import {
 	openAIToolCallForce,
 } from "../utils/tool-choice";
 import type { CacheControlEphemeral } from "./anthropic-wire";
-import { parseAzureDeploymentNameMap } from "./azure-deployment-names";
+import { azureDeploymentName } from "./azure-deployment-names";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
 import type {
 	ChatCompletionAssistantMessageParam,
@@ -850,7 +850,7 @@ function createRequestSetup(
 	conversationId?: string,
 ): OpenAIRequestSetup & { baseUrl: string } {
 	const apiVersion = $env.AZURE_OPENAI_API_VERSION || "2024-10-21";
-	const deploymentName = parseAzureDeploymentNameMap($env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(model.id) ?? model.id;
+	const deploymentName = azureDeploymentName(model.id, $env);
 	const setup = resolveOpenAIRequestSetup(model, {
 		apiKey,
 		extraHeaders,

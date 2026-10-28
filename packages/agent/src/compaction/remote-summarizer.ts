@@ -19,7 +19,7 @@
  */
 
 import { ProviderHttpError } from "@veyyon/ai/error/classes";
-import { parseAzureDeploymentNameMap } from "@veyyon/ai/providers/azure-deployment-names";
+import { azureAwareWireModelId } from "@veyyon/ai/providers/azure-deployment-names";
 import type { FetchImpl, Model } from "@veyyon/ai/types";
 import { $env, logger, scopedTimeoutSignal, stringifyJson } from "@veyyon/utils";
 
@@ -70,13 +70,6 @@ export interface RemoteCompactionOptions {
 	model?: Model;
 	apiKey?: string;
 	sanitizeErrorText?: (text: string) => string;
-}
-
-/** Wire model id for a chat-completions summarizer, honoring Azure deployment mapping. */
-function resolveRemoteSummarizerModel(model: Model): string {
-	const requestModel = model.requestModelId ?? model.id;
-	if (model.api !== "azure-openai-responses") return requestModel;
-	return parseAzureDeploymentNameMap($env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(requestModel) ?? requestModel;
 }
 
 /**
@@ -152,7 +145,7 @@ function remoteCompactionBody(
 ): Record<string, unknown> {
 	if (!isChatCompletions) return { systemPrompt: request.systemPrompt, prompt: request.prompt };
 	return {
-		model: model ? resolveRemoteSummarizerModel(model) : undefined,
+		model: model ? azureAwareWireModelId(model, $env) : undefined,
 		messages: [
 			{ role: "system", content: request.systemPrompt },
 			{ role: "user", content: request.prompt },

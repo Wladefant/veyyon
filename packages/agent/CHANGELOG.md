@@ -6,6 +6,10 @@
 
 - `AGENT_EVENT_TYPES` in `@veyyon/agent-core/types` lists every agent event type and fails to compile when the event union gains a type it lacks.
 
+### Changed
+
+- The remote summarizer resolves an Azure model's deployment through the same `@veyyon/ai` helper as server-side compaction; no user-facing change.
+
 ### Fixed
 
 - A required tool call under an in-band tool dialect is asked for in the conversation text instead of being sent as a native `tool_choice` the dialect never reads.

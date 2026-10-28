@@ -57,6 +57,7 @@ import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { boundProviderErrorDetail, ProviderHttpError, readProviderErrorDetail } from "../error";
 import type { Api, CodexCompactionRequestContext, FetchImpl, Message, Model, ProviderSessionState } from "../types";
 import { conversationIdForOpenCode } from "../utils/opencode-headers";
+import { azureAwareWireModelId } from "./azure-deployment-names";
 import { resolveCodexAccessPrograms } from "./openai-codex/access-programs";
 import {
 	buildCodexCompactionV2Window,
@@ -66,7 +67,7 @@ import {
 import { applyCodexResponsesLiteShape, resolveCodexResponsesLite } from "./openai-codex/request-transformer";
 import { createOpenAICodexDirectRequest } from "./openai-codex-responses";
 import type { ResponseInput } from "./openai-responses-wire";
-import { buildResponsesInput, parseAzureDeploymentNameMap, resolveOpenAIRequestSetup } from "./openai-shared";
+import { buildResponsesInput, resolveOpenAIRequestSetup } from "./openai-shared";
 
 /**
  * What a provider that compacts server-side must implement. The compaction
@@ -282,13 +283,6 @@ function resolveAzureCompactRequest(
 	};
 }
 
-/** Wire model id for the compact call, honoring Azure deployment mapping. */
-function resolveCompactWireModel(model: Model<Api>): string {
-	const requestModel = model.requestModelId ?? model.id;
-	if (model.api !== "azure-openai-responses") return requestModel;
-	return parseAzureDeploymentNameMap($env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(requestModel) ?? requestModel;
-}
-
 /**
  * Encode the LLM messages of the compacted span as Responses-API input items
  * through the same encoder a live turn uses, with native-history replay on so
@@ -363,7 +357,7 @@ export const openAIResponsesServerCompaction: ServerCompactionTransport = {
 		// store: the official endpoint is stateless. The Codex host serves a
 		// different wire and shapes its own body below.
 		const body: Record<string, unknown> = {
-			model: resolveCompactWireModel(model),
+			model: azureAwareWireModelId(model, $env),
 			input,
 		};
 		if (request.instructions && request.instructions.trim().length > 0) {
