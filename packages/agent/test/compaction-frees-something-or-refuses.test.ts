@@ -24,6 +24,7 @@
  * a summary request that read nothing but the block into a refusal against a
  * full gauge.
  */
+
 import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { CustomMessageEntry, SessionEntry, SessionMessageEntry } from "@veyyon/agent-core/compaction";
@@ -34,47 +35,15 @@ import {
 	prepareCompaction,
 	resolveCompactionBoundaryIndex,
 } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, ToolResultMessage, Usage } from "@veyyon/ai";
+import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
+import { assistant, messageEntries, readResult, user } from "./support/compaction-session";
 
-let idCounter = 0;
-
-const usage = (): Usage => ({
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-});
-
-function entry(message: AgentMessage): SessionMessageEntry {
-	return { type: "message", id: `e-${idCounter++}`, parentId: null, timestamp: "2026-08-06T00:00:00.000Z", message };
-}
-
-const user = (text: string): AgentMessage => ({ role: "user", content: [{ type: "text", text }], timestamp: 1 });
-
-const assistant = (content: AssistantMessage["content"]): AssistantMessage => ({
-	role: "assistant",
-	content,
-	timestamp: 1,
-	provider: "mock",
-	model: "mock",
-	api: "mock",
-	usage: usage(),
-	stopReason: "stop",
-});
+const { entry, nextId } = messageEntries();
 
 const withCall = () => assistant([{ type: "toolCall", id: "c1", name: "read", arguments: { path: "big" } }]);
 
-const result = (text: string): ToolResultMessage =>
-	({
-		role: "toolResult",
-		toolCallId: "c1",
-		toolName: "read",
-		content: [{ type: "text", text }],
-		isError: false,
-		timestamp: 1,
-	}) as ToolResultMessage;
+const result = (text: string): ToolResultMessage => readResult("c1", text);
 
 const HUGE = "x".repeat(800_000);
 const settings = { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 30_000 };
@@ -85,7 +54,7 @@ const excluded = { excludedCustomMessageTypes: new Set([RESTATED]) };
 function custom(customType: string, content: string): CustomMessageEntry {
 	return {
 		type: "custom_message",
-		id: `e-${idCounter++}`,
+		id: nextId(),
 		parentId: null,
 		timestamp: "2026-08-06T00:00:00.000Z",
 		customType,
@@ -236,7 +205,6 @@ describe("a keep-nothing boundary puts the whole pre-compaction range behind it"
 	// "nothing is behind the boundary" — the exact opposite, aiming every pass at
 	// the entries it must not touch.
 	function branch(): SessionEntry[] {
-		idCounter = 0;
 		return [
 			entry(user("old question")),
 			entry(assistant([{ type: "text", text: "old answer" }])),
@@ -289,7 +257,6 @@ describe("the recent-token budget is not scaled by the harness", () => {
 	// unrelated harness the multiplier: the same conversation kept less and less
 	// as the tool set grew, for no reason the user could see or change.
 	function conversation(): SessionEntry[] {
-		idCounter = 0;
 		const entries: SessionEntry[] = [];
 		for (let i = 0; i < 12; i++) {
 			entries.push(entry(user(`question ${i} `.repeat(400))));
@@ -301,7 +268,7 @@ describe("the recent-token budget is not scaled by the harness", () => {
 	function keptWith(nonMessageTokens: number | undefined, promptTokens: number): number {
 		const entries = conversation();
 		const last = entries[entries.length - 1] as SessionMessageEntry;
-		(last.message as AssistantMessage).usage = { ...usage(), input: promptTokens };
+		(last.message as AssistantMessage).usage = { ...emptyUsage(), input: promptTokens };
 		const prepared = prepareCompaction(entries, settings, { nonMessageTokens });
 		return prepared ? prepared.recentMessages.length : -1;
 	}
