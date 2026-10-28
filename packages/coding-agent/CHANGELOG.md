@@ -7,6 +7,10 @@
 - Release preparation can defer local checks for a remote CI gate; the normal release command still runs checks ([#728](https://github.com/Wladefant/veyyon/issues/728)).
 - Collected verified tool-failure cases into the eval corpus; no user-facing change ([#704](https://github.com/Wladefant/veyyon/pull/704)).
 
+### Fixed
+
+- Deduplicate terminal deliveries by message id, retain accepted outcomes across daemon reconnects, replay missed events by subscriber cursor, and provide streaming snapshots to reconnecting subscribers ([#705](https://github.com/Wladefant/veyyon/issues/705)).
+
 ## [1.6.1] - 2026-10-28
 
 ### Changed
