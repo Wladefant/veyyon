@@ -50,21 +50,6 @@ const LEGACY_LEASE_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
  * margin before that counts as proof the PID belongs to an earlier boot.
  */
 const LEGACY_BOOT_MARGIN_MS = 10 * 60 * 1_000;
-/** The claim the lease at `leasePath` holds, or undefined when there is no lease or it holds no claim. */
-async function readClaim(leasePath: string): Promise<{ pid: number; instanceId: string } | undefined> {
-	let text: string;
-	try {
-		// fs.readFile, not Bun.file().text(): a Bun.file read does not ref the event loop, so a broker
-		// that reaches this await with nothing else pending can exit 0 mid-read.
-		text = await fs.readFile(leasePath, "utf8");
-	} catch (error) {
-		if (isEnoent(error)) return undefined;
-		throw error;
-	}
-	return parseClaim(text);
-}
-
-/** True when the lease at `leasePath` names a running process. */
 /** True while the broker running as `pid` still holds the lease in `runtimeDir`. */
 export async function brokerHoldsLease(runtimeDir: string, pid: number): Promise<boolean> {
 	try {
