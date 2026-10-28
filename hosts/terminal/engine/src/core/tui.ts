@@ -2763,10 +2763,16 @@ export class TUI extends Container {
 			this.#committedPrefixAuditRows = newlyFinalEnd;
 		}
 		const hasNewlyFinalRows = newlyFinalEnd > this.#committedPrefixAuditRows;
+		// A frame shorter than the committed rows collapsed into recorded content (a live suffix collapsing on
+		// abort/result). Only the rebase below judges it: the audit's one-edit tolerance would write a replaced
+		// row into the record, the rebase would then keep it counted as committed, and it would never reach history.
+		const frameLength = rawFrame.length;
+		const collapsed = !geometryChanged && !this.#clearScrollbackOnNextRender && frameLength < this.#committedRows;
 		const auditRan =
 			this.#hasEverRendered &&
 			!geometryChanged &&
 			!this.#clearScrollbackOnNextRender &&
+			!collapsed &&
 			(this.#renderStablePrefixRows < this.#committedPrefixAuditRows || hasNewlyFinalRows);
 		if (auditRan) {
 			const committedRowsBeforeAudit = this.#committedRows;
@@ -2776,18 +2782,14 @@ export class TUI extends Container {
 		// True when this frame is a strict, byte-identical PREFIX of the committed
 		// record — the viewport squeezed the transcript, history did not change.
 		let frameSqueezed = false;
-		// A frame that shrank below the committed row count collapsed content
-		// that was already recorded (a live suffix collapsing on abort/result).
 		// Re-base the commit index at the first divergence against the recorded
 		// prefix — frozen snapshots included; a collapse is precisely when the
 		// record and the frame part ways — so the surviving exact prefix stays
 		// recognized and is never re-shown or re-committed. Only genuinely new
 		// content repaints below it.
-		const frameLength = rawFrame.length;
-		if (!geometryChanged && !this.#clearScrollbackOnNextRender && frameLength < this.#committedRows) {
-			const limit = Math.min(this.#committedRows, frameLength);
-			const firstDiff = firstRowDivergence(rawFrame, this.#committedPrefix, limit);
-			const diverged = firstDiff >= 0 ? firstDiff : limit;
+		if (collapsed) {
+			const firstDiff = firstRowDivergence(rawFrame, this.#committedPrefix, frameLength);
+			const diverged = firstDiff >= 0 ? firstDiff : frameLength;
 			// A frame the viewport SQUEEZED is not a frame that diverged. When the
 			// pinned chrome (HUD rows plus footer) grows past the viewport the
 			// transcript is left no room, the frame collapses to a strict PREFIX of
@@ -2802,12 +2804,10 @@ export class TUI extends Container {
 			// repair exists for.
 			const contentDiverged = firstDiff >= 0;
 			frameSqueezed = !contentDiverged;
-			if (diverged < this.#committedRows) {
-				this.#committedRows = diverged;
-				this.#committedPrefixAuditRows = Math.min(this.#committedPrefixAuditRows, diverged);
-				this.#committedPrefix.length = diverged;
-				if (contentDiverged) committedRowsResynced = true;
-			}
+			this.#committedRows = diverged;
+			this.#committedPrefixAuditRows = Math.min(this.#committedPrefixAuditRows, diverged);
+			this.#committedPrefix.length = diverged;
+			if (contentDiverged) committedRowsResynced = true;
 		}
 		// Committed-prefix state this frame's commit math extends from
 		// (post-audit): drives the audit-mark advance after the emit.

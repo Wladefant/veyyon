@@ -11,6 +11,10 @@
 - `FramePacer`'s comments in `core/frame-pacing.ts` are shorter, keeping the module under its size ceiling; behavior is unchanged.
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
 
+### Fixed
+
+- A frame that shrinks below the rows already in scrollback and replaces one of the rows it keeps commits the new row to scrollback, instead of counting the old copy as that row and losing the new one once it scrolls off.
+
 ## [1.5.10] - 2026-10-25
 
 ### Added
