@@ -57,6 +57,7 @@
 
 - Restored model selectors and assigned browser and bash helpers to their owning modules.
 - A lazily created session with no file yet no longer fails the first prompt with ENOENT when its checkpoint ownership marker is checked ([Refs #716](https://github.com/Wladefant/veyyon/issues/716)).
+- Terminal-control delivery journals each operator answer by question id before injecting it, drops a replay of a consumed question (also after a restart) with a `DUPLICATE-ANSWER` log line, and re-injects an answer journaled but not yet injected after a crash ([Refs #668](https://github.com/Wladefant/veyyon/issues/668)).
 ### Changed
 
 - `/reload-config` and `/reload` re-read rule layers and skills without restarting the session. The summary lists added, changed, and removed paths. Unreadable files keep the last good snapshot, and unchanged rules keep the existing advisor ([issue](https://github.com/Wladefant/veyyon/issues/577)).
