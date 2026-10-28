@@ -31,10 +31,10 @@ import { REMOTE_COMPACTION_PRESERVE_KEY, type RemoteCompactionPreserveData } fro
 import type { Context, Message, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { getLatestCompactionEntry } from "@veyyon/kernel/session/session-context";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import { AgentSession } from "../src/session/agent-session";
@@ -82,8 +82,7 @@ function textOf(message: Message): string {
 }
 
 function bundled(ref: { provider: string; id: string }): Model {
-	const model = getBundledModel(ref.provider, ref.id);
-	if (!model) throw new Error(`Expected bundled ${ref.provider}/${ref.id}`);
+	const model = requireBundledModel(ref.provider, ref.id);
 	return model;
 }
 

@@ -35,7 +35,6 @@ import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ANTHROPIC_PROVIDER_SESSION_STATE_KEY } from "@veyyon/ai/providers/anthropic-session-state";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { buildModel } from "@veyyon/catalog/build";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -43,6 +42,7 @@ import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { MemoryContext } from "@veyyon/coding-agent/session/runtime/memory-context";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 import { createAssistantMessage } from "../helpers/agent-session-setup";
 
 interface Notice {
@@ -99,12 +99,6 @@ function fireworksModel(id: string): Model<Api> {
 	});
 }
 
-function bundled(provider: "anthropic" | "openai", id: string): Model<Api> {
-	const model = getBundledModel(provider, id);
-	if (!model) throw new Error(`Expected bundled test model ${provider}/${id} to exist`);
-	return model;
-}
-
 describe("the tier a session holds is the tier its requests carry", () => {
 	let tempDir: TempDir;
 	const cleanups: (() => Promise<void> | void)[] = [];
@@ -119,7 +113,7 @@ describe("the tier a session holds is the tier its requests carry", () => {
 	});
 
 	async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
-		const model = options.model ?? bundled("anthropic", "claude-sonnet-4-5");
+		const model = options.model ?? requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `auth-${cleanups.length}.db`));
 		authStorage.setRuntimeApiKey(model.provider, "test-key");
 		const sessionManager = options.sessionManager ?? SessionManager.inMemory(tempDir.path());
@@ -244,7 +238,7 @@ describe("the tier a session holds is the tier its requests carry", () => {
 
 		it("off returns the family to the tier the settings configure", async () => {
 			const h = await createHarness({
-				model: bundled("openai", "gpt-5.2"),
+				model: requireBundledModel("openai", "gpt-5.2"),
 				settings: { "tier.openai": "flex" },
 				startingTiers: { openai: "flex" },
 			});
@@ -256,7 +250,7 @@ describe("the tier a session holds is the tier its requests carry", () => {
 
 		it("off clears a family the settings configure as priority, the one tier with no baseline below it", async () => {
 			const h = await createHarness({
-				model: bundled("openai", "gpt-5.2"),
+				model: requireBundledModel("openai", "gpt-5.2"),
 				settings: { "tier.openai": "priority" },
 				startingTiers: { openai: "priority" },
 			});
@@ -266,7 +260,7 @@ describe("the tier a session holds is the tier its requests carry", () => {
 		});
 
 		it("off leaves a tier that is not priority where it is", async () => {
-			const h = await createHarness({ model: bundled("openai", "gpt-5.2") });
+			const h = await createHarness({ model: requireBundledModel("openai", "gpt-5.2") });
 			h.session.setServiceTierFamily("openai", "flex");
 			expect(h.session.setFastMode(false)).toBe(true);
 			expect(h.session.serviceTierByFamily).toEqual({ openai: "flex" });
@@ -274,7 +268,7 @@ describe("the tier a session holds is the tier its requests carry", () => {
 
 		it("reads a flex tier as off, so toggling it turns priority on", async () => {
 			const h = await createHarness({
-				model: bundled("openai", "gpt-5.2"),
+				model: requireBundledModel("openai", "gpt-5.2"),
 				settings: { "tier.openai": "flex" },
 				startingTiers: { openai: "flex" },
 			});

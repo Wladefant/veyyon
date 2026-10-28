@@ -12,8 +12,8 @@ import { measureSummarySource, SUMMARY_TRANSCRIPT_GLUE_BYTES } from "@veyyon/age
 import * as compactionUtils from "@veyyon/agent-core/compaction/utils";
 import type { AssistantMessage, Context, Message, Model } from "@veyyon/ai";
 import { DIALECTS } from "@veyyon/catalog/identity";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { TIME_SLICE_MS } from "@veyyon/utils";
+import { requireBundledModel } from "./helpers";
 
 /**
  * Planning a history summary never serializes the whole span in one event-loop turn when the
@@ -194,8 +194,7 @@ function chunks(count: number): AgentMessage[] {
 }
 
 function model(contextWindow: number): Model {
-	const found = getBundledModel("openai-codex", "gpt-5.1-codex");
-	if (!found) throw new Error("Expected built-in openai-codex/gpt-5.1-codex to exist");
+	const found = requireBundledModel("openai-codex", "gpt-5.1-codex");
 	return { ...found, contextWindow };
 }
 

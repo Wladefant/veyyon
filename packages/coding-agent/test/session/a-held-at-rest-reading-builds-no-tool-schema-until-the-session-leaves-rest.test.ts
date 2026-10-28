@@ -45,7 +45,6 @@ import * as path from "node:path";
 import type { AssistantMessage, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { measureContextGauge } from "@veyyon/coding-agent/config/compaction-strategy";
 import { readLaunchFacts, recordLaunchFacts, resetLaunchFactsForTest } from "@veyyon/coding-agent/config/launch-facts";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
@@ -68,6 +67,7 @@ import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
+import { requireBundledModel } from "../../../agent/test/helpers";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
 
 const PROVIDER = "anthropic";
@@ -76,9 +76,8 @@ const MODEL_ID = "claude-sonnet-4-5";
 const RECORDED_PERCENT = 70;
 
 function bundledModel(id = MODEL_ID): Model {
-	const model = getBundledModel(PROVIDER, id);
-	if (!model) throw new Error(`missing bundled model ${PROVIDER}/${id}`);
-	return model as Model;
+	const model = requireBundledModel(PROVIDER, id);
+	return model;
 }
 
 const sessions: AgentSession[] = [];

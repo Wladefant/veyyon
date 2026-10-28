@@ -6,9 +6,8 @@ import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import type { Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
 import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { logger } from "@veyyon/utils";
-import { createAssistantText } from "./helpers";
+import { createAssistantText, requireBundledModel } from "./helpers";
 
 /**
  * WHY: an internal pass that requests a fixed effort the model does not accept logs the move, and it
@@ -42,8 +41,7 @@ function captureWarnings(): Logged[] {
 }
 
 function freshRow(provider: string, id: string): Model {
-	const model = getBundledModel(provider, id);
-	if (!model) throw new Error(`Expected bundled ${provider}/${id}`);
+	const model = requireBundledModel(provider, id);
 	return { ...model, id: `${id}-${crypto.randomUUID()}` };
 }
 

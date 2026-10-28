@@ -24,7 +24,7 @@ import {
 	DEFAULT_COMPACTION_SETTINGS,
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Context, Model } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { requireBundledModel } from "./helpers";
 
 const CHUNK_COUNT = 24;
 const FAILING_MARKER = "[[chunk-10]]";
@@ -38,8 +38,7 @@ function chunk(index: number): AgentMessage {
 }
 
 function codexModel(id?: string): Model {
-	const found = getBundledModel("openai-codex", "gpt-5.1-codex");
-	if (!found) throw new Error("Expected built-in openai-codex/gpt-5.1-codex to exist");
+	const found = requireBundledModel("openai-codex", "gpt-5.1-codex");
 	return { ...found, id: id ?? found.id, contextWindow: 60_000 };
 }
 

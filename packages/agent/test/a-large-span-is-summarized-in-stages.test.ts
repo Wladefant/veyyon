@@ -13,7 +13,7 @@ import {
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Context, Message, Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { requireBundledModel } from "./helpers";
 
 /**
  * A span whose one-request summary never answers is summarized in stages, and
@@ -84,8 +84,7 @@ function errorResponse(message: string): AssistantMessage {
 
 /** The codex model with a window small enough that two dozen chunks form several segments. */
 function model(contextWindow = 60_000): Model {
-	const found = getBundledModel("openai-codex", "gpt-5.1-codex");
-	if (!found) throw new Error("Expected built-in openai-codex/gpt-5.1-codex to exist");
+	const found = requireBundledModel("openai-codex", "gpt-5.1-codex");
 	return { ...found, contextWindow };
 }
 

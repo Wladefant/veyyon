@@ -35,7 +35,6 @@ import * as path from "node:path";
 import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import type { ImageContent, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { SettingPath } from "@veyyon/coding-agent/config/settings-schema";
@@ -46,6 +45,7 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import * as imageVisionFallback from "@veyyon/coding-agent/utils/image-vision-fallback";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 import { createAssistantMessage } from "../helpers/agent-session-setup";
 
 const RED_1X1_PNG: ImageContent = {
@@ -86,8 +86,7 @@ function marker(data: string): ImageContent {
 }
 
 function sonnet(overrides: Partial<Model> = {}): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected the bundled anthropic/claude-sonnet-4-5 model");
+	const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 	return { ...model, ...overrides };
 }
 

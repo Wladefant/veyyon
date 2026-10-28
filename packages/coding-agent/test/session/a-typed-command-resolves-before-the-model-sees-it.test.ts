@@ -26,10 +26,9 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
-import type { Api, Message, Model } from "@veyyon/ai";
+import type { Message } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import type { PromptTemplate } from "@veyyon/coding-agent/config/prompt-templates";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -45,6 +44,7 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 import { createAssistantMessage } from "../helpers/agent-session-setup";
 
 /** The fake provider: what each request carried, and a response it may hold back. */
@@ -109,12 +109,6 @@ function lastUserText(messages: readonly Message[]): string {
 	return "";
 }
 
-function bundled(provider: "anthropic", id: string): Model<Api> {
-	const model = getBundledModel(provider, id);
-	if (!model) throw new Error(`Expected bundled test model ${provider}/${id} to exist`);
-	return model;
-}
-
 describe("a typed command resolves before the model sees it", () => {
 	let tempDir: TempDir;
 	const cleanups: (() => Promise<void> | void)[] = [];
@@ -130,7 +124,7 @@ describe("a typed command resolves before the model sees it", () => {
 	});
 
 	async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
-		const model = bundled("anthropic", "claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `auth-${cleanups.length}.db`));
 		authStorage.setRuntimeApiKey(model.provider, "test-key");
 		const provider: FakeProvider = { received: [], reviewerGrantedAtRequest: [], hold: undefined };
