@@ -41,9 +41,14 @@ describe("MCP reconnect storm (issue #1592)", () => {
 		removeSyncWithRetries(workDir);
 	});
 
-	function countSpawns(): number {
+	/** Milliseconds from the first spawn to each spawn, one entry per server process started. */
+	function spawnOffsetsMs(): number[] {
 		const text = fs.readFileSync(spawnLog, "utf8");
-		return text.split("\n").filter(line => line.trim().length > 0).length;
+		const times = text
+			.split("\n")
+			.filter(line => line.trim().length > 0)
+			.map(line => Number(line.split(" ")[1]));
+		return times.map(time => time - (times[0] ?? time));
 	}
 
 	it("stops respawning after a burst of immediate exits", async () => {
@@ -75,7 +80,8 @@ describe("MCP reconnect storm (issue #1592)", () => {
 				await Bun.sleep(5);
 			}
 
-			const spawns = countSpawns();
+			const offsets = spawnOffsetsMs();
+			const spawns = offsets.length;
 			// `RECONNECT_BURST_LIMIT` (5) is the per-server reconnect cap inside
 			// the burst window. The initial connect from `connectServers` adds
 			// one more spawn. On the "initialize + tools/list succeed, then
@@ -92,7 +98,14 @@ describe("MCP reconnect storm (issue #1592)", () => {
 			// `getConnectionStatus`/`waitForConnection` cannot hand callers a
 			// dead transport. Tools stay registered in the manager's tool list
 			// so the user can recover via `/mcp reconnect`.
-			expect(manager.getConnectionStatus("crashy")).toBe("disconnected");
+			// On failure the received object shows when each server started and
+			// what reached the fault surface, which separates a storm that
+			// stalled from one that ran slowly.
+			expect({
+				status: manager.getConnectionStatus("crashy"),
+				offsets,
+				faults: faults.map(fault => fault.text),
+			}).toMatchObject({ status: "disconnected" });
 
 			// The suspension used to be a file-log line only, so the tools stayed
 			// listed and every call failed with no word on the surface about why.
