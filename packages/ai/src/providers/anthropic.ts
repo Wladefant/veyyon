@@ -1724,11 +1724,16 @@ export function applyAnthropicUsageExtras(usage: Usage, source: AnthropicUsageLi
 
 function applyAnthropicAttemptUsage(
 	record: CacheRequestRecord,
-	source: {
-		cache_read_input_tokens?: number | null;
-		cache_creation_input_tokens?: number | null;
-		cache_creation?: { ephemeral_5m_input_tokens?: number | null; ephemeral_1h_input_tokens?: number | null } | null;
-	} | undefined,
+	source:
+		| {
+				cache_read_input_tokens?: number | null;
+				cache_creation_input_tokens?: number | null;
+				cache_creation?: {
+					ephemeral_5m_input_tokens?: number | null;
+					ephemeral_1h_input_tokens?: number | null;
+				} | null;
+		  }
+		| undefined,
 ): void {
 	if (!source) return;
 	if (source.cache_read_input_tokens != null) {
@@ -3104,12 +3109,7 @@ const streamAnthropicOnce = (
 					umansGatewayWebSearchHeader || injectedClientEffortHeaders
 						? { ...umansGatewayWebSearchHeader, ...injectedClientEffortHeaders }
 						: undefined;
-				const currentAttemptRecord = createAnthropicCacheRequestRecord(
-					params,
-					body,
-					isOAuthToken,
-					model,
-				);
+				const currentAttemptRecord = createAnthropicCacheRequestRecord(params, body, isOAuthToken, model);
 				cacheRequests.push(currentAttemptRecord);
 				const anthropicRequest = createAnthropicStreamRequest(
 					client,
