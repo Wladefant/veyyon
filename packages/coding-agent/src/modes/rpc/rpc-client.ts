@@ -7,6 +7,7 @@
 import { isPromise } from "node:util/types";
 import type { AgentEvent, AgentMessage, AgentToolResult, ThinkingLevel } from "@veyyon/agent-core";
 import type { CompactionResult } from "@veyyon/agent-core/compaction";
+import { AGENT_EVENT_TYPES } from "@veyyon/agent-core/types";
 import type { ImageContent, Model } from "@veyyon/ai";
 import { errorMessage, isRecord, ptree, readJsonl } from "@veyyon/utils";
 import type { FileSink } from "bun";
@@ -97,21 +98,8 @@ export function defineRpcClientTool<
 	return tool;
 }
 
-const agentEventTypes = new Set<AgentEvent["type"]>([
-	"agent_start",
-	"agent_end",
-	"turn_start",
-	"turn_end",
-	"message_start",
-	"message_update",
-	"message_end",
-	"tool_execution_start",
-	"tool_execution_update",
-	"tool_execution_end",
-]);
-
 const sessionEventTypes = new Set<AgentSessionEvent["type"]>([
-	...agentEventTypes,
+	...AGENT_EVENT_TYPES,
 	"auto_compaction_start",
 	"auto_compaction_end",
 	"auto_retry_start",
@@ -147,7 +135,7 @@ function isEventOf<T extends { type: string }>(value: unknown, types: ReadonlySe
 }
 
 function isAgentEvent(value: unknown): value is AgentEvent {
-	return isEventOf<AgentEvent>(value, agentEventTypes);
+	return isEventOf<AgentEvent>(value, AGENT_EVENT_TYPES);
 }
 
 function isAgentSessionEvent(value: unknown): value is AgentSessionEvent {

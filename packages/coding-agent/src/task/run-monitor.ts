@@ -5,6 +5,7 @@
  */
 
 import type { AgentEvent } from "@veyyon/agent-core";
+import { AGENT_EVENT_TYPES } from "@veyyon/agent-core/types";
 import type { Usage } from "@veyyon/ai";
 import { emptyUsage } from "@veyyon/catalog/models";
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
@@ -60,22 +61,8 @@ export function buildBudgetNotice(requests: number, budget: number): string {
 	return `[budget notice] You have used ${requests} requests in this run (soft budget: ${budget}). Wrap up now: finish the current step and yield your final report. At ${Math.ceil(budget * 1.5)} requests the run is force-stopped and you will be asked to yield whatever you have.`;
 }
 
-/** Agent event types to forward for progress tracking. */
-const agentEventTypes = new Set<AgentEvent["type"]>([
-	"agent_start",
-	"agent_end",
-	"turn_start",
-	"turn_end",
-	"message_start",
-	"message_update",
-	"message_end",
-	"tool_execution_start",
-	"tool_execution_update",
-	"tool_execution_end",
-]);
-
 const isAgentEvent = (event: AgentSessionEvent): event is AgentEvent =>
-	agentEventTypes.has(event.type as AgentEvent["type"]);
+	AGENT_EVENT_TYPES.has(event.type as AgentEvent["type"]);
 
 function getReportFindingKey(value: unknown): string | null {
 	if (!isRecord(value)) return null;
