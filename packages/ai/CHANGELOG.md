@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Bedrock stream failures retain their service status so transient server and throttling errors remain eligible for retry ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+
 ## [1.6.0] - 2026-10-28
 
 ### Breaking Changes
