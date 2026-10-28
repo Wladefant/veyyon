@@ -26,17 +26,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
-import { attachFaultSink, type Fault, isEnoent, TempDir } from "@veyyon/utils";
-
-async function fileExists(p: string): Promise<boolean> {
-	try {
-		await Bun.file(p).stat();
-		return true;
-	} catch (err) {
-		if (isEnoent(err)) return false;
-		throw err;
-	}
-}
+import { attachFaultSink, type Fault, pathExistsOrThrow, TempDir } from "@veyyon/utils";
 
 /** Make a directory untraversable, and say whether that actually denied us. */
 async function denyTraverse(dir: string): Promise<boolean> {
@@ -76,7 +66,7 @@ describe("SessionManager.close() with an unreachable artifacts directory", () =>
 			const artifactsDir = session.getArtifactsDir();
 			if (!sessionFile) throw new Error("Expected persistent session file");
 			if (!artifactsDir) throw new Error("Expected an artifacts directory");
-			expect(await fileExists(path.join(artifactsDir, "draft.txt"))).toBe(true);
+			expect(await pathExistsOrThrow(path.join(artifactsDir, "draft.txt"))).toBe(true);
 
 			if (!(await denyTraverse(artifactsDir))) return;
 			try {
@@ -90,14 +80,14 @@ describe("SessionManager.close() with an unreachable artifacts directory", () =>
 
 				await session.close();
 
-				expect(await fileExists(sessionFile)).toBe(true);
+				expect(await pathExistsOrThrow(sessionFile)).toBe(true);
 				expect(faults.map(fault => fault.source)).toContain("session");
 			} finally {
 				await fs.chmod(artifactsDir, 0o700).catch(() => {});
 			}
 
 			// And the draft is still in there, which is the thing that was actually being lost.
-			expect(await fileExists(path.join(artifactsDir, "draft.txt"))).toBe(true);
+			expect(await pathExistsOrThrow(path.join(artifactsDir, "draft.txt"))).toBe(true);
 		} finally {
 			detach();
 		}
@@ -122,6 +112,6 @@ describe("SessionManager.close() with an unreachable artifacts directory", () =>
 
 		await session.close();
 
-		expect(await fileExists(sessionFile)).toBe(false);
+		expect(await pathExistsOrThrow(sessionFile)).toBe(false);
 	});
 });

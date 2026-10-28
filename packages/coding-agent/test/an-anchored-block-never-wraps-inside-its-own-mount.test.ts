@@ -48,21 +48,18 @@ import type { ObservableSession } from "@veyyon/coding-agent/modes/terminal/sess
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { type AgentProgressPayload, TASK_SUBAGENT_PROGRESS_CHANNEL } from "@veyyon/coding-agent/task";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
-import type { TodoItem, TodoPhase } from "@veyyon/coding-agent/tools/agent/todo";
+import type { TodoPhase } from "@veyyon/coding-agent/tools/agent/todo";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Text } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
 import { getPaddingX } from "@veyyon/utils/tight-mode";
 import { visibleWidth } from "@veyyon/utils/width";
+import { todoPhase } from "./helpers/todo-phase";
 
 /** The width the mode hands a block, which is what the mount leaves it. */
 function contentColumns(terminalColumns: number): number {
 	return Math.max(1, terminalColumns - getPaddingX(ANCHORED_BLOCK_PADDING_X) * 2);
-}
-
-function phase(name: string, tasks: Array<[string, TodoItem["status"]]>): TodoPhase {
-	return { name, tasks: tasks.map(([content, status]) => ({ content, status })) };
 }
 
 function laneSessions(): ObservableSession[] {
@@ -112,15 +109,15 @@ function laneSessions(): ObservableSession[] {
 }
 
 const plan: readonly TodoPhase[] = [
-	phase("Foundation and core architecture setup for the new subsystem", [
+	todoPhase("Foundation and core architecture setup for the new subsystem", [
 		["read the rate limiter and its test across multiple packages and directories", "completed"],
 		["write the validating owner with exhaustive property assertions and invariant checks", "in_progress"],
 		["implement fallback mechanisms for when rate limiting is temporarily degraded", "pending"],
 	]),
-	phase("Migration and rollout across all service endpoints", [
+	todoPhase("Migration and rollout across all service endpoints", [
 		["fan the edits out to three directories and update all caller signatures", "pending"],
 	]),
-	phase("Validation and comprehensive end-to-end integration tests", [
+	todoPhase("Validation and comprehensive end-to-end integration tests", [
 		["run the suite across full terminal width spectrum and advance the plan", "pending"],
 	]),
 ];

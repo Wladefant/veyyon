@@ -27,7 +27,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { MnemopiSessionState } from "@veyyon/coding-agent/memory/mnemopi/state";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
-import * as logger from "@veyyon/utils/logger";
+import { captureWarnings, type WarnCapture } from "./helpers/capture-warnings";
 
 // No `useIsolatedAgentDir()` here, deliberately. That helper reaches
 // `config/settings`, which transitively loads the TUI, and this suite is a
@@ -36,33 +36,6 @@ import * as logger from "@veyyon/utils/logger";
 // `createScopedResources` never runs and no `AgentStorage` is ever opened. The
 // repo-wide preload tripwire still refuses any write into the real `~/.veyyon`,
 // so a path that did reach storage would fail loudly rather than silently.
-
-/** One captured `logger.warn` call. */
-interface WarnEntry {
-	message: string;
-	fields?: Record<string, unknown>;
-}
-
-/** A live `logger.warn` capture plus its restore hook. */
-interface WarnCapture {
-	entries: WarnEntry[];
-	restore: () => void;
-}
-
-/**
- * Capture `logger.warn` so containment is asserted rather than assumed.
- *
- * Swallowing the rejection in silence would also stop the crash, and would be
- * the wrong fix: an operator whose memory backend is broken has to be able to
- * find out why recall went quiet.
- */
-function captureWarnings(): WarnCapture {
-	const entries: WarnEntry[] = [];
-	const spy = vi.spyOn(logger, "warn").mockImplementation(((message: string, fields?: Record<string, unknown>) => {
-		entries.push({ message, fields });
-	}) as unknown as typeof logger.warn);
-	return { entries, restore: () => spy.mockRestore() };
-}
 
 /** Yield the event loop `turns` times so a floated rejection is observable, without a wall-clock delay. */
 async function drainEventLoop(turns = 4): Promise<void> {
@@ -167,6 +140,11 @@ function harness(options: { banks: FakeBank[]; config?: Record<string, unknown> 
 const AGENT_START: AgentSessionEvent = { type: "agent_start" } as AgentSessionEvent;
 const AGENT_END: AgentSessionEvent = { type: "agent_end", messages: [] } as unknown as AgentSessionEvent;
 
+/**
+ * `logger.warn` is captured so containment is asserted rather than assumed. Swallowing the
+ * rejection in silence would also stop the crash, and would be the wrong fix: an operator whose
+ * memory backend is broken has to be able to find out why recall went quiet.
+ */
 let warnings: WarnCapture | undefined;
 
 afterEach(() => {

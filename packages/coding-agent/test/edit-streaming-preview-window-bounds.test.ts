@@ -5,6 +5,7 @@ import { editToolView } from "@veyyon/coding-agent/edit/edit-view";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
 import * as themeModule from "@veyyon/coding-agent/theme/theme";
 import { previewWindowRows } from "@veyyon/coding-agent/tools/core/render-utils";
+import { requireTheme } from "./helpers/require-theme";
 
 /**
  * WHY:
@@ -47,9 +48,7 @@ afterAll(() => {
 
 async function getUiTheme() {
 	await themeModule.initTheme(false, undefined, undefined, "dark", "light");
-	const theme = await themeModule.getThemeByName("dark");
-	expect(theme).toBeDefined();
-	return theme!;
+	return requireTheme("dark");
 }
 
 describe("streaming edit preview visual window bounds", () => {

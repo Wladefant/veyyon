@@ -42,7 +42,6 @@ import * as path from "node:path";
 import { Agent, type AgentMessage, type StreamFn } from "@veyyon/agent-core";
 import type { AssistantMessage, Message, Model, Usage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -52,6 +51,7 @@ import type { CompactionEntry, SessionMessageEntry } from "@veyyon/kernel/sessio
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { requireBundledModel } from "../../agent/test/helpers";
+import { completedStream } from "./helpers/mock-turns";
 
 // ~25-30 tokens each: the cut math in the WHY comment depends on every turn
 // message sitting in this band, so the markers ride long sentences.
@@ -136,14 +136,6 @@ function assistantMessage(model: Model, text: string, input: number, output: num
 		usage: makeUsage(input, output),
 		timestamp: Date.now(),
 	};
-}
-
-function completedStream(message: AssistantMessage): AssistantMessageEventStream {
-	const stream = new AssistantMessageEventStream();
-	queueMicrotask(() => {
-		stream.push({ type: "done", reason: "stop", message });
-	});
-	return stream;
 }
 
 function compactionEntries(sessionManager: SessionManager): CompactionEntry[] {

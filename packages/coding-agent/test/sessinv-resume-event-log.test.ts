@@ -38,7 +38,6 @@ import * as path from "node:path";
 import { Agent, type AgentMessage, type StreamFn } from "@veyyon/agent-core";
 import type { AssistantMessage, Model, Usage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -47,6 +46,7 @@ import type { CompactionEntry, SessionEntry } from "@veyyon/kernel/session/sessi
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { requireBundledModel } from "../../agent/test/helpers";
+import { completedStream } from "./helpers/mock-turns";
 
 // Same ~25-30-token band as the round-trip suite: keepRecentTokens = 40 makes
 // the cut keep exactly the final turn, so the compaction boundary is pinned.
@@ -110,14 +110,6 @@ function assistantMessage(model: Model, text: string, input: number, output: num
 		usage: makeUsage(input, output),
 		timestamp: Date.now(),
 	};
-}
-
-function completedStream(message: AssistantMessage): AssistantMessageEventStream {
-	const stream = new AssistantMessageEventStream();
-	queueMicrotask(() => {
-		stream.push({ type: "done", reason: "stop", message });
-	});
-	return stream;
 }
 
 /** Identity signature of an entry list: type, id, and parent link, in order. */

@@ -17,6 +17,7 @@ import { InMemorySnapshotStore } from "@veyyon/hashline";
 import { getAnsiPolicy, setAnsiPolicy, Text, type TUI } from "@veyyon/tui";
 import { removeWithRetries } from "@veyyon/utils";
 import { visibleWidth } from "@veyyon/utils/width";
+import { requireTheme } from "../helpers/require-theme";
 import { createToolExecution } from "../helpers/tool-execution";
 
 /**
@@ -36,9 +37,7 @@ beforeAll(async () => {
 
 async function getUiTheme() {
 	await themeModule.initTheme(false, undefined, undefined, "dark", "light");
-	const theme = await themeModule.getThemeByName("dark");
-	expect(theme).toBeDefined();
-	return theme!;
+	return requireTheme("dark");
 }
 
 /** The card a call draws, at `width`, as the plain rows a reader sees. */

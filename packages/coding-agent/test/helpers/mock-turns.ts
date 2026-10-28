@@ -1,7 +1,17 @@
 import type { AgentMessage } from "@veyyon/agent-core";
-import type { Message, ToolResultMessage } from "@veyyon/ai";
+import type { AssistantMessage, Message, ToolResultMessage } from "@veyyon/ai";
 import type { MockResponse } from "@veyyon/ai/providers/mock";
+import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { toolResultText } from "./tool-result-text";
+
+/** A stream that ends with `message` on the next microtask: a provider that answered at once. */
+export function completedStream(message: AssistantMessage): AssistantMessageEventStream {
+	const stream = new AssistantMessageEventStream();
+	queueMicrotask(() => {
+		stream.push({ type: "done", reason: "stop", message });
+	});
+	return stream;
+}
 
 /** A scripted plain-text assistant turn that ends the loop. */
 export function stopReply(text: string): MockResponse {
