@@ -147,11 +147,12 @@ describe("explicit bounded lane successors", () => {
 	it("rechecks current agent permission before claiming the checkpoint", async () => {
 		await dispatch("Original");
 		const predecessor = executed[0].id;
-		settings.set("agent.agents", { task: { enabled: false } });
+		settings.override("agent.agents", { task: { enabled: false } });
+		expect(settings.get("agent.agents")?.task?.enabled).toBe(false);
 		const refused = await dispatch("Denied", predecessor);
 		expect(refused.isError).toBe(true);
 		expect(executed).toHaveLength(1);
-		settings.set("agent.agents", { task: { enabled: true } });
+		settings.override("agent.agents", { task: { enabled: true } });
 		await dispatch("Allowed", predecessor);
 		expect(executed).toHaveLength(2);
 		expect(executed[1].task).toContain(`Completed safe result from ${predecessor}`);
