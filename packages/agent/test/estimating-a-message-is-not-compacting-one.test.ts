@@ -26,36 +26,13 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import * as fs from "node:fs";
 import * as path from "node:path";
-import {
-	createModuleReachCache,
-	type ModuleReachResolution,
-	moduleReach,
-	moduleReachCount,
-	moduleSpecifiersIn,
-} from "@veyyon/utils/module-reach";
-import { workspaceModuleReachResolution } from "@veyyon/utils/module-reach-workspace";
+import { packageModuleReach } from "@veyyon/utils/module-reach-workspace";
 
 const SRC = path.join(import.meta.dir, "..", "src");
 const REPO_ROOT = path.join(SRC, "..", "..", "..");
 
-const RESOLUTION: ModuleReachResolution = workspaceModuleReachResolution(REPO_ROOT);
-const CACHE = createModuleReachCache();
-
-function reach(relative: string): number {
-	return moduleReachCount(path.join(SRC, relative), RESOLUTION, CACHE);
-}
-
-function reachedNames(relative: string): string[] {
-	return [...moduleReach(path.join(SRC, relative), RESOLUTION, CACHE)]
-		.map(file => path.relative(REPO_ROOT, file))
-		.sort();
-}
-
-function runtimeImportsOf(relative: string): string[] {
-	return moduleSpecifiersIn(fs.readFileSync(path.join(SRC, relative), "utf-8"));
-}
+const { reach, reachedNames, runtimeImportsOf } = packageModuleReach(REPO_ROOT, SRC);
 
 /**
  * RE-MEASURED 2026-08-26 at 10, down from 92. `tokenizer.ts` took `estimateTokensFromText` from the

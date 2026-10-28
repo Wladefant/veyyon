@@ -1,14 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import * as fs from "node:fs";
 import * as path from "node:path";
-import {
-	createModuleReachCache,
-	type ModuleReachResolution,
-	moduleReach,
-	moduleReachCount,
-	moduleSpecifiersIn,
-} from "@veyyon/utils/module-reach";
-import { workspaceModuleReachResolution } from "@veyyon/utils/module-reach-workspace";
+import { moduleReachCount } from "@veyyon/utils/module-reach";
+import { packageModuleReach } from "@veyyon/utils/module-reach-workspace";
 
 /**
  * Contracts: the two cuts that took the credential store off the streaming engine stay cut.
@@ -51,36 +44,10 @@ const SRC = path.join(import.meta.dir, "..", "src");
 const REPO_ROOT = path.join(SRC, "..", "..", "..");
 
 /**
- * The whole workspace resolved to source, derived from every package's `exports` field.
- *
- * `@veyyon/catalog` is reached for real, 120 modules of it through `env-api-key.ts`, so a resolution that
- * skipped it would report that leaf at 84 instead of 204 and every ceiling here would be measuring a graph
- * a third smaller than the one that ships. This gate used to list `@veyyon/utils` and `@veyyon/catalog` by
- * hand for exactly that reason, and listing is the problem: three other gates did the same and each listed
- * a different subset, one of them naming a package that does not exist. Every assertion here is an upper
- * bound or an absence, so a specifier the table does not know lowers the number and passes.
- * `@veyyon/utils/module-reach-workspace` derives the table instead, and
- * `packages/utils/test/module-reach-workspace.test.ts` holds the completeness check.
+ * The walks resolve the whole workspace from every package's `exports` field. `@veyyon/catalog` alone puts
+ * 120 modules behind `env-api-key.ts`, which a hand-listed resolution once left out of every ceiling here.
  */
-const RESOLUTION: ModuleReachResolution = workspaceModuleReachResolution(REPO_ROOT);
-
-/** One memo for the whole gate: every entry below walks the same shared graph. See `ModuleReachCache`. */
-const CACHE = createModuleReachCache();
-
-function reach(relative: string): number {
-	return moduleReachCount(path.join(SRC, relative), RESOLUTION, CACHE);
-}
-
-function reachedNames(relative: string): string[] {
-	return [...moduleReach(path.join(SRC, relative), RESOLUTION, CACHE)]
-		.map(file => path.relative(REPO_ROOT, file))
-		.sort();
-}
-
-/** The runtime specifiers one module names, which is what a "does not import X" claim is about. */
-function runtimeImportsOf(relative: string): string[] {
-	return moduleSpecifiersIn(fs.readFileSync(path.join(SRC, relative), "utf-8"));
-}
+const { resolution: RESOLUTION, reach, reachedNames, runtimeImportsOf } = packageModuleReach(REPO_ROOT, SRC);
 
 /**
  * Measured 2026-07-26 at 212, down from 277. The remaining graph is the credential store's real job:

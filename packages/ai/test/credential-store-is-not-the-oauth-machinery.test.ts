@@ -10,15 +10,8 @@ import {
 	serializeCredential,
 } from "@veyyon/ai/auth-credential-rows";
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
-import {
-	createModuleReachCache,
-	type ModuleReachResolution,
-	moduleReach,
-	moduleReachCount,
-	moduleSpecifiersIn,
-	typeOnlyModuleSpecifiersIn,
-} from "@veyyon/utils/module-reach";
-import { workspaceModuleReachResolution } from "@veyyon/utils/module-reach-workspace";
+import { moduleSpecifiersIn, typeOnlyModuleSpecifiersIn } from "@veyyon/utils/module-reach";
+import { packageModuleReach } from "@veyyon/utils/module-reach-workspace";
 
 /**
  * Contracts: writing a credential row does not import the OAuth machinery.
@@ -56,31 +49,7 @@ import { workspaceModuleReachResolution } from "@veyyon/utils/module-reach-works
 const SRC = path.join(import.meta.dir, "..", "src");
 const PACKAGES = path.join(SRC, "..", "..");
 
-/**
- * The whole workspace resolved to source, derived from every package's `exports` field.
- *
- * Every assertion here is an upper bound or an absence, so under-resolution makes all of them pass while
- * measuring less. This table was two packages listed by hand; the derivation in
- * `@veyyon/utils/module-reach-workspace` reads every manifest under `packages/` instead, so a package
- * cannot be missing from it. See the note in `module-reach-stays-cut.test.ts` for what listing them by hand
- * cost the gates that did it.
- */
-const RESOLUTION: ModuleReachResolution = workspaceModuleReachResolution(path.join(PACKAGES, ".."));
-
-/** One memo for the whole gate: every entry below walks the same shared graph. See `ModuleReachCache`. */
-const CACHE = createModuleReachCache();
-
-function reach(relative: string): number {
-	return moduleReachCount(path.join(SRC, relative), RESOLUTION, CACHE);
-}
-
-function reachedNames(relative: string): string[] {
-	return [...moduleReach(path.join(SRC, relative), RESOLUTION, CACHE)].map(file => path.relative(SRC, file)).sort();
-}
-
-function runtimeImportsOf(relative: string): string[] {
-	return moduleSpecifiersIn(require("node:fs").readFileSync(path.join(SRC, relative), "utf-8") as string);
-}
+const { reach, reachedNames, runtimeImportsOf } = packageModuleReach(path.join(PACKAGES, ".."), SRC, SRC);
 
 /**
  * Measured 2026-07-26 at 4: this module and the three utils OWNERS it takes a pure function from.

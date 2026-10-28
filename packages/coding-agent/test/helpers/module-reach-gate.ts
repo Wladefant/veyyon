@@ -1,14 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
-	createModuleReachCache,
 	dynamicImportSpecifiersIn,
 	type ModuleReachResolution,
-	moduleReach,
-	moduleReachCount,
 	resolveModuleSpecifier,
 } from "@veyyon/utils/module-reach";
-import { workspaceModuleReachResolution } from "@veyyon/utils/module-reach-workspace";
+import { packageModuleReach } from "@veyyon/utils/module-reach-workspace";
 
 /**
  * The shared setup every module-reach gate in this package walks with.
@@ -29,6 +26,8 @@ export const SRC = path.join(import.meta.dir, "..", "..", "src");
 
 /** The workspace `packages/` directory, which is what reached names are made relative to. */
 export const PACKAGES = path.join(SRC, "..", "..");
+
+const WALKS = packageModuleReach(path.join(PACKAGES, ".."), SRC, PACKAGES);
 
 /**
  * The workspace resolved to source, which is the entire point of this file, DERIVED from every package's
@@ -58,22 +57,16 @@ export const PACKAGES = path.join(SRC, "..", "..");
  * some of them by a factor of sixty, because the graph they walked stopped at four package boundaries.
  * Each ceiling below carries the re-measured number.
  */
-export const RESOLUTION: ModuleReachResolution = workspaceModuleReachResolution(path.join(PACKAGES, ".."));
+export const RESOLUTION: ModuleReachResolution = WALKS.resolution;
 
 /** One memo for the whole gate: every entry below walks the same shared graph. See `ModuleReachCache`. */
-export const CACHE = createModuleReachCache();
+export const CACHE = WALKS.cache;
 
-/** How many modules a path under `src/` instantiates, itself included. */
-export function reach(relative: string): number {
-	return moduleReachCount(path.join(SRC, relative), RESOLUTION, CACHE);
-}
-
-/** The same walk as {@link reach}, as names relative to `packages/`, sorted. */
-export function reachedNames(relative: string): string[] {
-	return [...moduleReach(path.join(SRC, relative), RESOLUTION, CACHE)]
-		.map(file => path.relative(PACKAGES, file))
-		.sort();
-}
+/**
+ * `reach` counts the modules a path under `src/` instantiates, itself included; `reachedNames` is the same
+ * walk as names relative to `packages/`, sorted.
+ */
+export const { reach, reachedNames } = WALKS;
 
 /** The tool dispatch table and every per-domain manifest beside it. */
 export function toolTables(): string[] {

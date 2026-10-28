@@ -27,7 +27,6 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import * as fs from "node:fs";
 import * as path from "node:path";
 import {
 	BUILTIN_SLASH_COMMAND_DECLARATIONS,
@@ -35,13 +34,7 @@ import {
 	type BuiltinSlashCommandDeclaration,
 } from "@veyyon/coding-agent/slash-commands/builtin-declarations";
 import { BUILTIN_SLASH_COMMANDS_INTERNAL } from "@veyyon/coding-agent/slash-commands/builtin-registry";
-import {
-	createModuleReachCache,
-	type ModuleReachResolution,
-	moduleReach,
-	moduleSpecifiersIn,
-} from "@veyyon/utils/module-reach";
-import { workspaceModuleReachResolution } from "@veyyon/utils/module-reach-workspace";
+import { packageModuleReach } from "@veyyon/utils/module-reach-workspace";
 
 const SRC = path.join(import.meta.dir, "..", "..", "src");
 const REPO_ROOT = path.join(SRC, "..", "..", "..");
@@ -55,18 +48,7 @@ const REPO_ROOT = path.join(SRC, "..", "..", "..");
  */
 const DECLARATIONS: readonly BuiltinSlashCommandDeclaration[] = BUILTIN_SLASH_COMMAND_DECLARATIONS;
 
-const RESOLUTION: ModuleReachResolution = workspaceModuleReachResolution(REPO_ROOT);
-const CACHE = createModuleReachCache();
-
-function reachedNames(relative: string): string[] {
-	return [...moduleReach(path.join(SRC, relative), RESOLUTION, CACHE)]
-		.map(file => path.relative(REPO_ROOT, file))
-		.sort();
-}
-
-function runtimeImportsOf(relative: string): string[] {
-	return moduleSpecifiersIn(fs.readFileSync(path.join(SRC, relative), "utf-8"));
-}
+const { reachedNames, runtimeImportsOf } = packageModuleReach(REPO_ROOT, SRC);
 
 describe("the declarations are a leaf", () => {
 	/**

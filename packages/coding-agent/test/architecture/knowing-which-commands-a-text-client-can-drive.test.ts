@@ -41,20 +41,9 @@ import {
 	TEXT_MODE_BUILTIN_DECLARATIONS,
 } from "@veyyon/coding-agent/slash-commands/text-mode-builtins";
 import { configuredThinkingLevelsForModel } from "@veyyon/coding-agent/thinking";
-import {
-	createModuleReachCache,
-	type ModuleReachResolution,
-	moduleReach,
-	moduleSpecifiersIn,
-} from "@veyyon/utils/module-reach";
-import { workspaceModuleReachResolution } from "@veyyon/utils/module-reach-workspace";
+import { moduleReach, moduleSpecifiersIn } from "@veyyon/utils/module-reach";
 import { requireBundledModel } from "../../../agent/test/helpers";
-
-const SRC = path.join(import.meta.dir, "..", "..", "src");
-const REPO_ROOT = path.join(SRC, "..", "..", "..");
-
-const RESOLUTION: ModuleReachResolution = workspaceModuleReachResolution(REPO_ROOT);
-const CACHE = createModuleReachCache();
+import { CACHE, RESOLUTION, SRC } from "../helpers/module-reach-gate";
 
 /** Every module `relative` statically reaches, as absolute paths, so an absence can be stated by name. */
 function reachedFrom(relative: string): string[] {

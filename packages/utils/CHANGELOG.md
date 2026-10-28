@@ -6,6 +6,7 @@
 
 ### Added
 
+- `packageModuleReach(repoRoot, src, namesRelativeTo?)` in `@veyyon/utils/module-reach-workspace` returns one package's `reach`, `reachedNames` and `runtimeImportsOf` over the workspace resolution with one shared memo; no user-facing change.
 - `nonRegularKind` in `@veyyon/utils/fs-error` returns the phrase a refusal uses for an entry that is not a regular file, such as `a named pipe (FIFO)`.
 - `getKernelRunnerDir(language)` returns the directory an eval kernel caches its runner script in, `cache/<language>-runner` under the config root or `$XDG_CACHE_HOME/veyyon`.
 - `privateTempDir()` returns `<tmpdir>/veyyon-<uid>`, created at mode 700, and throws when that entry is a symbolic link, not a directory, owned by another uid or open to group or other.

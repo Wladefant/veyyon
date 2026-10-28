@@ -23,18 +23,10 @@
 
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import {
-	createModuleReachCache,
-	type ModuleReachResolution,
-	moduleReach,
-	moduleReachCount,
-} from "@veyyon/utils/module-reach";
-import { workspaceModuleReachResolution } from "@veyyon/utils/module-reach-workspace";
+import { moduleReach, moduleReachCount } from "@veyyon/utils/module-reach";
+import { CACHE, RESOLUTION, SRC } from "../../helpers/module-reach-gate";
 
-const SRC = path.join(import.meta.dirname, "..", "..", "..", "src");
 const REPO_ROOT = path.resolve(SRC, "..", "..", "..");
-const RESOLUTION: ModuleReachResolution = workspaceModuleReachResolution(REPO_ROOT);
-const CACHE = createModuleReachCache();
 
 /** The CLI entry a launch runs, and the assembler that used to hold the edge. */
 const LAUNCH = path.join(SRC, "main.ts");
