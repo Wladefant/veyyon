@@ -407,7 +407,6 @@ function applyCodexSubscriptionFields(models: readonly ModelSpec[]): ModelSpec[]
 	return [...patched, CODEX_IMAGE_MODEL];
 }
 
-
 /**
  * First-party twin providers: same company serving the same models over the
  * same wire API under a different auth surface, which models.dev catalogs only
