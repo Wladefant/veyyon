@@ -27,6 +27,7 @@ import { CURRENT_SESSION_VERSION } from "@veyyon/kernel/session/session-entries"
 import { ImageBudget, ImageProtocol, setTerminalImageProtocol, TERMINAL, type TUI } from "@veyyon/tui";
 import { removeSyncWithRetries } from "@veyyon/utils";
 import { getKittyGraphics, setKittyGraphics } from "@veyyon/utils/kitty-graphics";
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const TS = new Date().toISOString();
 
@@ -167,22 +168,17 @@ function withViewer(fn: (viewer: AgentTranscriptViewer) => void): void {
 }
 
 describe("AgentTranscriptViewer", () => {
-	let rowsDesc: PropertyDescriptor | undefined;
+	let geometry: StubbedStdoutGeometry | undefined;
 
 	beforeEach(async () => {
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
 		initTheme();
-		rowsDesc = Object.getOwnPropertyDescriptor(process.stdout, "rows");
-		Object.defineProperty(process.stdout, "rows", { configurable: true, get: () => 24, set: () => {} });
+		geometry = stubStdoutGeometry({ rows: 24 });
 	});
 
 	afterEach(() => {
-		if (rowsDesc) {
-			Object.defineProperty(process.stdout, "rows", rowsDesc);
-		} else {
-			Object.defineProperty(process.stdout, "rows", { configurable: true, value: undefined, writable: true });
-		}
+		geometry?.restore();
 	});
 
 	it("aligns the title and body content on the same gutter", () => {

@@ -26,6 +26,7 @@ import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { TempDir } from "@veyyon/utils";
 import { LoopWatchdog } from "@veyyon/utils/loop-watchdog";
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../helpers/stdout-geometry";
 import { createTestAgentSession } from "../../helpers/test-agent-session";
 
 describe("the working clock ticks only while the agent works", () => {
@@ -33,7 +34,7 @@ describe("the working clock ticks only while the agent works", () => {
 	let mode: InteractiveMode;
 	let session: AgentSession;
 	let tempDir: TempDir;
-	let savedGeometry: Record<"columns" | "rows", PropertyDescriptor | undefined>;
+	let geometry: StubbedStdoutGeometry | undefined;
 
 	beforeAll(() => {
 		initTheme();
@@ -43,12 +44,7 @@ describe("the working clock ticks only while the agent works", () => {
 		vi.useFakeTimers({ now: new Date("2026-07-22T10:00:00Z") });
 		vi.spyOn(LoopWatchdog.prototype, "start").mockImplementation(() => {});
 		vi.spyOn(process.stdout, "write").mockReturnValue(true);
-		savedGeometry = {
-			columns: Object.getOwnPropertyDescriptor(process.stdout, "columns"),
-			rows: Object.getOwnPropertyDescriptor(process.stdout, "rows"),
-		};
-		Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
-		Object.defineProperty(process.stdout, "rows", { value: 40, configurable: true });
+		geometry = stubStdoutGeometry({ columns: 100, rows: 40 });
 		vi.spyOn(process.stdin, "resume").mockReturnValue(process.stdin);
 		vi.spyOn(process.stdin, "pause").mockReturnValue(process.stdin);
 		vi.spyOn(process.stdin, "setEncoding").mockReturnValue(process.stdin);
@@ -67,11 +63,7 @@ describe("the working clock ticks only while the agent works", () => {
 	afterEach(async () => {
 		mode?.stop();
 		vi.useRealTimers();
-		for (const key of ["columns", "rows"] as const) {
-			const descriptor = savedGeometry[key];
-			if (descriptor) Object.defineProperty(process.stdout, key, descriptor);
-			else delete (process.stdout as unknown as Record<string, unknown>)[key];
-		}
+		geometry?.restore();
 		vi.restoreAllMocks();
 		await session?.dispose();
 		authStorage?.close();

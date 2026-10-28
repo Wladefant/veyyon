@@ -6,6 +6,7 @@ import type { AgentProgress, SingleResult, TaskToolDetails } from "@veyyon/codin
 import { setThemeInstance, type Theme } from "@veyyon/coding-agent/theme/theme";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
 import { requireTheme } from "../helpers/require-theme";
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../helpers/stdout-geometry";
 
 /** The card the terminal draws from the task tool's view, which is what the product renders. */
 const taskToolRenderer = viewToolRenderer(taskToolView, { mergeCallAndResult: true });
@@ -13,18 +14,16 @@ const renderResult = taskToolRenderer.renderResult;
 
 const strip = (lines: readonly string[]): string => stripAnsi(lines.join("\n"));
 
-const originalRowsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+let geometry: StubbedStdoutGeometry | undefined;
 
 function setViewportRows(rows: number): void {
-	Object.defineProperty(process.stdout, "rows", { configurable: true, value: rows });
+	if (geometry) geometry.setRows(rows);
+	else geometry = stubStdoutGeometry({ rows });
 }
 
 function restoreViewportRows(): void {
-	if (originalRowsDescriptor) {
-		Object.defineProperty(process.stdout, "rows", originalRowsDescriptor);
-		return;
-	}
-	Reflect.deleteProperty(process.stdout, "rows");
+	geometry?.restore();
+	geometry = undefined;
 }
 
 function makeProgress(recentOutput: string[]): AgentProgress {

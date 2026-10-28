@@ -27,6 +27,7 @@ import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { estimateTokensFromText, TempDir } from "@veyyon/utils";
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "./helpers/stdout-geometry";
 import { createTestAgentSession } from "./helpers/test-agent-session";
 
 describe("composer draft token count (DS-6 dock)", () => {
@@ -34,7 +35,7 @@ describe("composer draft token count (DS-6 dock)", () => {
 	let mode: InteractiveMode;
 	let session: AgentSession;
 	let tempDir: TempDir;
-	let savedGeometry: Record<"columns" | "rows", PropertyDescriptor | undefined>;
+	let geometry: StubbedStdoutGeometry | undefined;
 
 	beforeAll(() => {
 		initTheme();
@@ -42,12 +43,7 @@ describe("composer draft token count (DS-6 dock)", () => {
 
 	beforeEach(async () => {
 		vi.spyOn(process.stdout, "write").mockReturnValue(true);
-		savedGeometry = {
-			columns: Object.getOwnPropertyDescriptor(process.stdout, "columns"),
-			rows: Object.getOwnPropertyDescriptor(process.stdout, "rows"),
-		};
-		Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
-		Object.defineProperty(process.stdout, "rows", { value: 40, configurable: true });
+		geometry = stubStdoutGeometry({ columns: 100, rows: 40 });
 		vi.spyOn(process.stdin, "resume").mockReturnValue(process.stdin);
 		vi.spyOn(process.stdin, "pause").mockReturnValue(process.stdin);
 		vi.spyOn(process.stdin, "setEncoding").mockReturnValue(process.stdin);
@@ -68,11 +64,7 @@ describe("composer draft token count (DS-6 dock)", () => {
 	});
 
 	afterEach(async () => {
-		for (const key of ["columns", "rows"] as const) {
-			const descriptor = savedGeometry[key];
-			if (descriptor) Object.defineProperty(process.stdout, key, descriptor);
-			else delete (process.stdout as unknown as Record<string, unknown>)[key];
-		}
+		geometry?.restore();
 		mode?.stop();
 		vi.restoreAllMocks();
 		await session?.dispose();

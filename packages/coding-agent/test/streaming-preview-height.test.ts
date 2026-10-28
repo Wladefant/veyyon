@@ -14,6 +14,7 @@ import { TUI } from "@veyyon/tui";
 import { removeWithRetries } from "@veyyon/utils";
 import { visibleWidth } from "@veyyon/utils/width";
 import { VirtualTerminal } from "../../../hosts/terminal/engine/test/virtual-terminal";
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "./helpers/stdout-geometry";
 import { createToolExecution } from "./helpers/tool-execution";
 
 // The streaming edit preview is a fixed-height tail window ("cursor"): the last
@@ -47,17 +48,12 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 	// Pin a tall, stable viewport so the "full window of real diff" height
 	// assertions don't shrink (and flake) under a short ambient terminal when the
 	// file runs inside the full suite. Restored in afterAll.
-	let originalRowsDescriptor: PropertyDescriptor | undefined;
+	let geometry: StubbedStdoutGeometry | undefined;
 	beforeAll(() => {
-		originalRowsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "rows");
-		Object.defineProperty(process.stdout, "rows", { value: 50, configurable: true });
+		geometry = stubStdoutGeometry({ rows: 50 });
 	});
 	afterAll(() => {
-		if (originalRowsDescriptor) {
-			Object.defineProperty(process.stdout, "rows", originalRowsDescriptor);
-		} else {
-			delete (process.stdout as { rows?: number }).rows;
-		}
+		geometry?.restore();
 	});
 
 	beforeEach(async () => {

@@ -34,6 +34,7 @@ import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { CURRENT_SESSION_VERSION } from "@veyyon/kernel/session/session-entries";
 import type { TUI } from "@veyyon/tui";
 import { removeSyncWithRetries } from "@veyyon/utils";
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const WIDTH = 100;
 const ROWS = 40;
@@ -143,24 +144,19 @@ function bodyText(rows: string[]): string {
 }
 
 describe("the transcript card answers the pointer", () => {
-	let rowsDesc: PropertyDescriptor | undefined;
+	let geometry: StubbedStdoutGeometry | undefined;
 
 	beforeEach(async () => {
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
 		initTheme();
-		rowsDesc = Object.getOwnPropertyDescriptor(process.stdout, "rows");
-		Object.defineProperty(process.stdout, "rows", { configurable: true, get: () => ROWS, set: () => {} });
+		geometry = stubStdoutGeometry({ rows: ROWS });
 	});
 
 	afterEach(() => {
 		for (const viewer of viewers) viewer.dispose();
 		viewers = [];
-		if (rowsDesc) {
-			Object.defineProperty(process.stdout, "rows", rowsDesc);
-		} else {
-			Object.defineProperty(process.stdout, "rows", { configurable: true, value: undefined, writable: true });
-		}
+		geometry?.restore();
 		vi.restoreAllMocks();
 		for (const dir of dirs) removeSyncWithRetries(dir);
 		dirs = [];

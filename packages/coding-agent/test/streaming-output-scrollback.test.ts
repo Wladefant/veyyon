@@ -11,6 +11,7 @@ import { resetKeybindingsForTests, setKeybindings } from "@veyyon/utils/keybindi
 import type { AssistantMessageView, AssistantSegment } from "@veyyon/wire/presentation";
 import { settleFrames } from "../../../hosts/terminal/engine/test/helpers/settle-frames";
 import { VirtualTerminal } from "../../../hosts/terminal/engine/test/virtual-terminal";
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "./helpers/stdout-geometry";
 import { createToolExecution } from "./helpers/tool-execution";
 
 // Long, path-like output that wraps at the box's inner width — the case that
@@ -94,9 +95,10 @@ class Footer implements Component {
 	}
 }
 
-const ORIGINAL_ROWS = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+let geometry: StubbedStdoutGeometry | undefined;
 function stubStdoutRows(rows: number): void {
-	Object.defineProperty(process.stdout, "rows", { configurable: true, value: rows });
+	if (geometry) geometry.setRows(rows);
+	else geometry = stubStdoutGeometry({ rows });
 }
 
 type ContentInput = Array<{ type: "text"; text: string } | { type: "thinking"; thinking: string }>;
@@ -162,8 +164,8 @@ describe("streaming tool output never sprays duplicate scrollback banners", () =
 	});
 	afterEach(() => {
 		resetKeybindingsForTests();
-		if (ORIGINAL_ROWS) Object.defineProperty(process.stdout, "rows", ORIGINAL_ROWS);
-		else Reflect.deleteProperty(process.stdout, "rows");
+		geometry?.restore();
+		geometry = undefined;
 	});
 
 	test("bash: growing partial output under a live predecessor does not duplicate banners", async () => {

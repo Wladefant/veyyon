@@ -42,6 +42,7 @@ import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { CURRENT_SESSION_VERSION, type SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import { removeSyncWithRetries } from "@veyyon/utils";
 import { ArgotSession, type Vocabulary } from "argot";
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "./helpers/stdout-geometry";
 
 const TS = new Date().toISOString();
 const HANDLE = "§db";
@@ -122,7 +123,7 @@ function makeViewer(file: string, expandArgot?: (e: SessionMessageEntry[]) => Se
 describe("the transcript viewer shows no raw handle", () => {
 	let dir: string;
 	let file: string;
-	let rowsDesc: PropertyDescriptor | undefined;
+	let geometry: StubbedStdoutGeometry | undefined;
 
 	const body = (viewer: AgentTranscriptViewer): string =>
 		viewer
@@ -134,8 +135,7 @@ describe("the transcript viewer shows no raw handle", () => {
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
 		initTheme();
-		rowsDesc = Object.getOwnPropertyDescriptor(process.stdout, "rows");
-		Object.defineProperty(process.stdout, "rows", { configurable: true, get: () => 40, set: () => {} });
+		geometry = stubStdoutGeometry({ rows: 40 });
 
 		dir = fs.mkdtempSync(path.join(os.tmpdir(), "argot-view-"));
 		file = path.join(dir, "__advisor.jsonl");
@@ -157,11 +157,7 @@ describe("the transcript viewer shows no raw handle", () => {
 	afterEach(() => {
 		for (const viewer of viewers) viewer.dispose();
 		viewers = [];
-		if (rowsDesc) {
-			Object.defineProperty(process.stdout, "rows", rowsDesc);
-		} else {
-			Object.defineProperty(process.stdout, "rows", { configurable: true, value: undefined, writable: true });
-		}
+		geometry?.restore();
 		removeSyncWithRetries(dir);
 	});
 

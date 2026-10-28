@@ -18,6 +18,7 @@ import { getAnsiPolicy, setAnsiPolicy, Text, type TUI } from "@veyyon/tui";
 import { removeWithRetries } from "@veyyon/utils";
 import { visibleWidth } from "@veyyon/utils/width";
 import { requireTheme } from "../helpers/require-theme";
+import { stubStdoutGeometry } from "../helpers/stdout-geometry";
 import { createToolExecution } from "../helpers/tool-execution";
 
 /**
@@ -107,8 +108,7 @@ describe("edit card", () => {
 		// Pin a tall viewport so previewWindowRows() (rows - reserve) lands at 30:
 		// collapsed stays at the 12-row fixed tail, expanded widens to the viewport
 		// less the headroom the settled card lands in.
-		const originalRowsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "rows");
-		Object.defineProperty(process.stdout, "rows", { value: 50, configurable: true });
+		const geometry = stubStdoutGeometry({ rows: 50 });
 		try {
 			const makeDiff = (length: number): string =>
 				Array.from({ length }, (_, index) => (index === 0 ? "-head-line-1" : `+tail-line-${index + 1}`)).join("\n");
@@ -137,11 +137,7 @@ describe("edit card", () => {
 			expect(expandedTall).not.toContain("head-line-1");
 			expect(expandedTall).toMatch(/\d+ earlier lines/);
 		} finally {
-			if (originalRowsDescriptor) {
-				Object.defineProperty(process.stdout, "rows", originalRowsDescriptor);
-			} else {
-				Reflect.deleteProperty(process.stdout, "rows");
-			}
+			geometry.restore();
 		}
 	});
 

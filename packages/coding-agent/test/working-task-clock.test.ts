@@ -24,6 +24,7 @@ import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { TempDir } from "@veyyon/utils";
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "./helpers/stdout-geometry";
 import { createTestAgentSession } from "./helpers/test-agent-session";
 
 describe("working line per-task elapsed clock", () => {
@@ -31,7 +32,7 @@ describe("working line per-task elapsed clock", () => {
 	let mode: InteractiveMode;
 	let session: AgentSession;
 	let tempDir: TempDir;
-	let savedGeometry: Record<"columns" | "rows", PropertyDescriptor | undefined>;
+	let geometry: StubbedStdoutGeometry | undefined;
 	const T0 = new Date("2026-07-22T10:00:00Z");
 
 	beforeAll(() => {
@@ -41,12 +42,7 @@ describe("working line per-task elapsed clock", () => {
 	beforeEach(async () => {
 		setSystemTime(T0);
 		vi.spyOn(process.stdout, "write").mockReturnValue(true);
-		savedGeometry = {
-			columns: Object.getOwnPropertyDescriptor(process.stdout, "columns"),
-			rows: Object.getOwnPropertyDescriptor(process.stdout, "rows"),
-		};
-		Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
-		Object.defineProperty(process.stdout, "rows", { value: 40, configurable: true });
+		geometry = stubStdoutGeometry({ columns: 100, rows: 40 });
 		vi.spyOn(process.stdin, "resume").mockReturnValue(process.stdin);
 		vi.spyOn(process.stdin, "pause").mockReturnValue(process.stdin);
 		vi.spyOn(process.stdin, "setEncoding").mockReturnValue(process.stdin);
@@ -63,11 +59,7 @@ describe("working line per-task elapsed clock", () => {
 	});
 
 	afterEach(async () => {
-		for (const key of ["columns", "rows"] as const) {
-			const descriptor = savedGeometry[key];
-			if (descriptor) Object.defineProperty(process.stdout, key, descriptor);
-			else delete (process.stdout as unknown as Record<string, unknown>)[key];
-		}
+		geometry?.restore();
 		mode?.stop();
 		vi.restoreAllMocks();
 		setSystemTime();

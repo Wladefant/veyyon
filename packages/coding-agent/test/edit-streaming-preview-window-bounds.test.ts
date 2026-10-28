@@ -6,6 +6,7 @@ import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool
 import * as themeModule from "@veyyon/coding-agent/theme/theme";
 import { previewWindowRows } from "@veyyon/coding-agent/tools/core/render-utils";
 import { requireTheme } from "./helpers/require-theme";
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "./helpers/stdout-geometry";
 
 /**
  * WHY:
@@ -28,22 +29,17 @@ import { requireTheme } from "./helpers/require-theme";
  * the host is drawn.
  */
 
-let originalRowsDescriptor: PropertyDescriptor | undefined;
+let geometry: StubbedStdoutGeometry | undefined;
 
 beforeAll(async () => {
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true, cwd: process.cwd() });
-	originalRowsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "rows");
 	// Viewport rows = 50 -> previewWindowRows() = 30
-	Object.defineProperty(process.stdout, "rows", { value: 50, configurable: true });
+	geometry = stubStdoutGeometry({ rows: 50 });
 });
 
 afterAll(() => {
-	if (originalRowsDescriptor) {
-		Object.defineProperty(process.stdout, "rows", originalRowsDescriptor);
-	} else {
-		Reflect.deleteProperty(process.stdout, "rows");
-	}
+	geometry?.restore();
 });
 
 async function getUiTheme() {

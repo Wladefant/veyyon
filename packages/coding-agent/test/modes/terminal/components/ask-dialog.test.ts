@@ -8,6 +8,7 @@ import { activityColorToken, getShimmerActivity, setShimmerActivity } from "@vey
 import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { setKeybindings } from "@veyyon/utils/keybindings";
 import { requireTheme } from "../../../helpers/require-theme";
+import { stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 import { useFullColor } from "../../../helpers/theme-assertions";
 
 const DOWN = "\x1b[B";
@@ -1175,28 +1176,32 @@ describe("AskDialogComponent", () => {
 				multi: true,
 			},
 		];
-		Object.defineProperty(process.stdout, "rows", { configurable: true, get: () => 40 });
-		const component = new AskDialogComponent(questions, {
-			onSubmit: vi.fn(),
-			onCancel: vi.fn(),
-			onPrompt: vi.fn(),
-		});
-		const questionTab = component.render(80);
-		expect(questionTab.length).toBe(40);
-		expect(questionTab.join("\n")).toContain("Ask");
-		expect(questionTab.join("\n")).toContain("[x]");
+		const geometry = stubStdoutGeometry({ rows: 40 });
+		try {
+			const component = new AskDialogComponent(questions, {
+				onSubmit: vi.fn(),
+				onCancel: vi.fn(),
+				onPrompt: vi.fn(),
+			});
+			const questionTab = component.render(80);
+			expect(questionTab.length).toBe(40);
+			expect(questionTab.join("\n")).toContain("Ask");
+			expect(questionTab.join("\n")).toContain("[x]");
 
-		// The submit tab renders at exactly the same height — the shell fills
-		// the terminal once; tab content never resizes the frame.
-		component.handleInput(TAB);
-		const submitTab = component.render(80);
-		expect(submitTab.length).toBe(questionTab.length);
+			// The submit tab renders at exactly the same height — the shell fills
+			// the terminal once; tab content never resizes the frame.
+			component.handleInput(TAB);
+			const submitTab = component.render(80);
+			expect(submitTab.length).toBe(questionTab.length);
 
-		// Toggling an option (which changes the review summary) does not
-		// resize the box either.
-		component.handleInput(SHIFT_TAB);
-		component.handleInput(SPACE);
-		expect(component.render(80).length).toBe(questionTab.length);
+			// Toggling an option (which changes the review summary) does not
+			// resize the box either.
+			component.handleInput(SHIFT_TAB);
+			component.handleInput(SPACE);
+			expect(component.render(80).length).toBe(questionTab.length);
+		} finally {
+			geometry.restore();
+		}
 	});
 
 	it("clears the custom answer when the Other prompt is submitted empty", async () => {

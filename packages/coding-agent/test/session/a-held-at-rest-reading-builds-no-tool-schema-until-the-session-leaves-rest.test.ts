@@ -71,6 +71,7 @@ import { stripAnsi } from "@veyyon/utils/strip-ansi";
 import { requireBundledModel } from "../../../agent/test/helpers";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
 import { requireTheme } from "../helpers/require-theme";
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../helpers/stdout-geometry";
 
 const PROVIDER = "anthropic";
 const MODEL_ID = "claude-sonnet-4-5";
@@ -403,17 +404,12 @@ describe("a resumed session's held reading states its resting usage without buil
 
 describe("the interactive host holds the reading until the session leaves rest", () => {
 	const modes: InteractiveMode[] = [];
-	let savedGeometry: Record<"columns" | "rows", PropertyDescriptor | undefined>;
+	let geometry: StubbedStdoutGeometry | undefined;
 
 	beforeEach(() => {
 		// The host draws into a mocked terminal of fixed geometry; frames still compose and commit.
 		vi.spyOn(process.stdout, "write").mockReturnValue(true);
-		savedGeometry = {
-			columns: Object.getOwnPropertyDescriptor(process.stdout, "columns"),
-			rows: Object.getOwnPropertyDescriptor(process.stdout, "rows"),
-		};
-		Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
-		Object.defineProperty(process.stdout, "rows", { value: 40, configurable: true });
+		geometry = stubStdoutGeometry({ columns: 100, rows: 40 });
 		vi.spyOn(process.stdin, "resume").mockReturnValue(process.stdin);
 		vi.spyOn(process.stdin, "pause").mockReturnValue(process.stdin);
 		vi.spyOn(process.stdin, "setEncoding").mockReturnValue(process.stdin);
@@ -424,11 +420,7 @@ describe("the interactive host holds the reading until the session leaves rest",
 
 	afterEach(() => {
 		for (const mode of modes.splice(0)) mode.stop();
-		for (const key of ["columns", "rows"] as const) {
-			const descriptor = savedGeometry[key];
-			if (descriptor) Object.defineProperty(process.stdout, key, descriptor);
-			else delete (process.stdout as unknown as Record<string, unknown>)[key];
-		}
+		geometry?.restore();
 		vi.restoreAllMocks();
 	});
 

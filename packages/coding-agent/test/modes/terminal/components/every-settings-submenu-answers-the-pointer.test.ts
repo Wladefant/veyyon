@@ -38,6 +38,7 @@ import {
 import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 let previousAnsiPolicy: AnsiPolicy;
 
@@ -54,18 +55,12 @@ afterAll(() => {
 	setAnsiPolicy(previousAnsiPolicy);
 });
 
-let geometryStub: { restore(): void } | undefined;
+let geometryStub: StubbedStdoutGeometry | undefined;
 
 beforeEach(async () => {
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
-	const rowsDesc = Object.getOwnPropertyDescriptor(process.stdout, "rows");
-	Object.defineProperty(process.stdout, "rows", { configurable: true, get: () => 40, set: () => {} });
-	geometryStub = {
-		restore() {
-			if (rowsDesc) Object.defineProperty(process.stdout, "rows", rowsDesc);
-		},
-	};
+	geometryStub = stubStdoutGeometry({ rows: 40 });
 });
 
 afterEach(() => {

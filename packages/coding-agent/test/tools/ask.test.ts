@@ -15,6 +15,7 @@ import { ToolAbortError } from "@veyyon/coding-agent/tools/core/tool-errors";
 import { stripAnsi } from "@veyyon/utils";
 import { type } from "arktype";
 import { requireTheme } from "../helpers/require-theme";
+import { stubStdoutGeometry } from "../helpers/stdout-geometry";
 
 function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
@@ -716,10 +717,9 @@ describe("AskTool custom input", () => {
 	});
 
 	it("enforces total title row budget under narrow terminals", async () => {
-		const originalColumns = process.stdout.columns;
 		// Force an 80-wide terminal so long descriptions would wrap to multiple
 		// rendered rows without per-line width truncation + total row budget.
-		Object.defineProperty(process.stdout, "columns", { value: 80, configurable: true });
+		const geometry = stubStdoutGeometry({ columns: 80 });
 		try {
 			const tool = new AskTool(createSession());
 			const editor = vi.fn(async (_title: string) => "custom");
@@ -749,11 +749,7 @@ describe("AskTool custom input", () => {
 			expect(title).toContain("Enter your response:");
 			expect(title).not.toContain("x".repeat(400));
 		} finally {
-			if (originalColumns === undefined) {
-				Object.defineProperty(process.stdout, "columns", { value: undefined, configurable: true });
-			} else {
-				Object.defineProperty(process.stdout, "columns", { value: originalColumns, configurable: true });
-			}
+			geometry.restore();
 		}
 	});
 
