@@ -3,7 +3,7 @@
  * and for carrying a required tool call the wire format cannot force.
  */
 import { AI_PROMPTS } from "../prompts/registry";
-import type { Context, ImageContent, Message, TextContent, Tool, ToolChoice } from "../types";
+import type { Context, ImageContent, Message, TextContent, Tool, ToolChoice, VideoContent } from "../types";
 
 /** OpenAI Completions API tool choice format */
 export type OpenAICompletionsToolChoice =
@@ -171,8 +171,8 @@ function appendInstruction(messages: readonly Message[], text: string): Message[
 }
 
 function appendText(
-	content: string | (TextContent | ImageContent)[],
+	content: string | (TextContent | ImageContent | VideoContent)[],
 	text: string,
-): string | (TextContent | ImageContent)[] {
+): string | (TextContent | ImageContent | VideoContent)[] {
 	return typeof content === "string" ? `${content}\n\n${text}` : [...content, { type: "text", text }];
 }

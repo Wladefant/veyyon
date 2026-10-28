@@ -832,6 +832,21 @@ describe("the instruction closes the last turn without opening a new one", () =>
 		]);
 	});
 
+	it("preserves video and image blocks when it appends the required call", () => {
+		const content = [
+			{ type: "video" as const, data: "ZmFrZQ==", mimeType: "video/mp4" },
+			{ type: "image" as const, data: "ZmFrZQ==", mimeType: "image/png" },
+		];
+		expect(carried([{ role: "user", content, timestamp: 1 }])).toEqual([
+			{
+				role: "user",
+				content: [...content, { type: "text", text: NAMED_TEXT }],
+				timestamp: 1,
+			},
+		]);
+		expect(content).toHaveLength(2);
+	});
+
 	it("adds a text block to a closing tool result", () => {
 		const result: Message = {
 			role: "toolResult",
