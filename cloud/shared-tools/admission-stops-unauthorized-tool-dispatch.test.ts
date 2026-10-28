@@ -602,6 +602,7 @@ describe("admission stops unauthorized tool dispatch", () => {
 			headers: {
 				...(await authFor(rig.signer, "a")),
 				"content-type": "application/json",
+				"x-request-id": "oversize-declared",
 				"content-length": String(BODY_LIMIT + 1),
 			},
 			body: stalled,

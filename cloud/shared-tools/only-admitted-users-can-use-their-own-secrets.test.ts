@@ -521,7 +521,7 @@ describe("only admitted users can use their own secrets", () => {
 		h.clock.now = NOW + 10 * 60_000 + 1;
 		expect(await h.admission.authorize(requestWith(headers), "search:public")).toBeNull();
 		h.net.state.status = 200;
-		h.clock.now = NOW + 10 * 60_000 + 30_000;
+		h.clock.now = NOW + 10 * 60_000 + 1 + 30_000;
 		expect(await h.admission.authorize(requestWith(headers), "search:public")).not.toBeNull();
 	});
 
