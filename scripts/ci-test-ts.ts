@@ -703,12 +703,12 @@ export function workspaceTestParallelism(pkg: string, requested: number): number
 	return workspacePackageParallelism[pkg] ?? requested;
 }
 
-function workspaceTestCommand(
-	pkg: string,
-	parallel: number,
-	options: { extraArgs?: string[]; smol?: boolean } = {},
-): TestCommand {
-	const { extraArgs = [], smol = false } = options;
+// Every workspace package command honors the output filter, so the CI `workspace`
+// and `native` buckets print failures and summaries rather than one line per
+// passing test: the hashline scale suites alone wrote ~340,000 `(pass)` lines to
+// each workspace job log.
+function workspaceTestCommand(pkg: string, parallel: number, options: { smol?: boolean } = {}): TestCommand {
+	const { smol = false } = options;
 	// `--smol` runs the test process with a smaller heap. The native/TUI/integration
 	// bucket asks for it because those suites load the native addon and browser-ish
 	// modules; without it a fat single invocation can OOM-kill (reported as exit 137).
@@ -723,7 +723,7 @@ function workspaceTestCommand(
 			...(smol ? ["--smol"] : []),
 			`--parallel=${workspaceTestParallelism(pkg, parallel)}`,
 			...perPackageArgs,
-			...extraArgs,
+			...onlyFailuresArgs,
 		],
 	};
 }
@@ -894,11 +894,9 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 			return [scriptTestCommand()];
 		case "local-ts":
 			return [
-				...fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8, { extraArgs: onlyFailuresArgs })),
-				...nativeAndIntegrationPackages.map(pkg =>
-					workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs, smol: true }),
-				),
-				...localOnlyWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs })),
+				...fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8)),
+				...nativeAndIntegrationPackages.map(pkg => workspaceTestCommand(pkg, 4, { smol: true })),
+				...localOnlyWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 4)),
 				...(await commandsForMode("coding-agent-heavy")),
 				scriptTestCommand(),
 			];
