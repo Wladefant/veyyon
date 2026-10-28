@@ -2,9 +2,9 @@ import * as fs from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { privateTempDirName } from "./app-identity";
 import { isEexist } from "./fs-error";
 import * as logger from "./logger";
-import { privateTempDirName } from "./private-temp-dir-name";
 import { sleepSync } from "./sleep";
 import { errorMessage } from "./type-guards";
 

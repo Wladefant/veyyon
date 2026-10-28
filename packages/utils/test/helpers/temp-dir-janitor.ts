@@ -42,7 +42,7 @@ import type * as nodeFs from "node:fs";
 import type { Dirent } from "node:fs";
 import type * as nodeOs from "node:os";
 import * as path from "node:path";
-import { privateTempDirName } from "../../src/private-temp-dir-name";
+import { privateTempDirName } from "../../src/app-identity";
 import { REAL_HOME, TEMP_HOME } from "./sandbox-home";
 
 /**
