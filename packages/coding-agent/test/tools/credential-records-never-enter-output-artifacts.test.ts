@@ -1,9 +1,12 @@
 // WHY: Credential inventories with benign labels could leak through live output and raw artifacts.
 // These tests sweep shell, JSON, Python, and PowerShell shapes; they do not cover encoded or arbitrary exfiltration.
 import { afterEach, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
+import { BLOCKED_OUTPUT_RECORD, ProducerOutputGuard } from "@veyyon/coding-agent/secrets/producer-output";
+import { OutputSink } from "@veyyon/coding-agent/session/streaming-output";
 
 const directories: string[] = [];
 afterEach(async () => {
