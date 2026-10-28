@@ -197,18 +197,12 @@ describe("config hot reload", () => {
 	it("changes new spawn routing and preserves existing forks", async () => {
 		const dir = dirs();
 		const file = path.join(dir, "config.yml");
-		await fs.writeFile(
-			file,
-			"agent:\n  sharedModel: true\n  model: openai/old\ndefaultEffort:\n  '*': low\n",
-		);
+		await fs.writeFile(file, "agent:\n  sharedModel: true\n  model: openai/old\ndefaultEffort:\n  '*': low\n");
 		const settings = await Settings.loadReadOnly({ agentDir: dir });
 		const existing = settings.forkWithRuntimeOverrides();
 		const resolve = (store: Settings) => resolveAgentModel({ settings: store, agentName: "task" }).patterns;
 		expect(resolve(settings)).toEqual(["openai/old"]);
-		await fs.writeFile(
-			file,
-			"agent:\n  sharedModel: true\n  model: openai/new\ndefaultEffort:\n  '*': low\n",
-		);
+		await fs.writeFile(file, "agent:\n  sharedModel: true\n  model: openai/new\ndefaultEffort:\n  '*': low\n");
 		const result = await settings.reloadConfig();
 		expect(resolve(settings)).toEqual(["openai/new"]);
 		expect(resolve(existing)).toEqual(["openai/old"]);
@@ -256,15 +250,9 @@ describe("config hot reload", () => {
 	it("retains startup defaultModel without blocking direct lane changes", async () => {
 		const dir = dirs();
 		const file = path.join(dir, "config.yml");
-		await fs.writeFile(
-			file,
-			"defaultModel: openai/old\nagent:\n  model: openai/old\n",
-		);
+		await fs.writeFile(file, "defaultModel: openai/old\nagent:\n  model: openai/old\n");
 		const settings = await Settings.loadReadOnly({ agentDir: dir });
-		await fs.writeFile(
-			file,
-			"defaultModel: openai/new\nagent:\n  model: openai/new\n",
-		);
+		await fs.writeFile(file, "defaultModel: openai/new\nagent:\n  model: openai/new\n");
 		const result = await settings.reloadConfig();
 		expect(result.restartRequired).toContain("defaultModel");
 		expect(settings.get("defaultModel")).toBe("openai/old");
@@ -330,9 +318,7 @@ describe("config hot reload", () => {
 		expect(session.isAdvisorActive()).toBe(true);
 		expect(session.getAdvisorAgent()?.state.model.id).toBe("advisor-old");
 		expect(session.model?.id).toBe("main-model");
-		expect(resolveAgentModel({ settings: existingFork, agentName: "task" }).patterns).toEqual([
-			"openai/main-model",
-		]);
+		expect(resolveAgentModel({ settings: existingFork, agentName: "task" }).patterns).toEqual(["openai/main-model"]);
 
 		await writeAdvisor("advisor-new");
 
@@ -355,9 +341,7 @@ describe("config hot reload", () => {
 		expect(session.getAdvisorAgent()?.state.model.id).toBe("advisor-new");
 		expect(session.model?.id).toBe("main-model");
 		expect(session.agent.state.model.id).toBe("main-model");
-		expect(resolveAgentModel({ settings: existingFork, agentName: "task" }).patterns).toEqual([
-			"openai/main-model",
-		]);
+		expect(resolveAgentModel({ settings: existingFork, agentName: "task" }).patterns).toEqual(["openai/main-model"]);
 		expect(existingFork.get("agent.helpers")).toEqual({
 			advisor: { model: "openai/advisor-old" },
 		});
@@ -688,7 +672,8 @@ describe("config hot reload", () => {
 
 		expect(result.restartRequired).toEqual([]);
 		for (const row of COMPACTION_RELOAD_CASES) {
-			const expected = row.retired || JSON.stringify(row.before) === JSON.stringify(row.after) ? "unchanged" : "applied";
+			const expected =
+				row.retired || JSON.stringify(row.before) === JSON.stringify(row.after) ? "unchanged" : "applied";
 			expect(result.outcomes).toContainEqual({ path: row.path, status: expected });
 			if (!row.retired) expect(settings.get(row.path as SettingPath)).toEqual(row.after);
 		}

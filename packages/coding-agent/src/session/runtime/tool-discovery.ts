@@ -166,13 +166,9 @@ export class ToolDiscovery {
 		// Bound restored search-activated selections to maxDiscoveredTools, keeping the most recent.
 		const cap = this.maxDiscoveredTools;
 		const keptSearch =
-			searchCandidates.length > cap
-				? searchCandidates.slice(searchCandidates.length - cap)
-				: searchCandidates;
+			searchCandidates.length > cap ? searchCandidates.slice(searchCandidates.length - cap) : searchCandidates;
 		const droppedSearch =
-			searchCandidates.length > cap
-				? new Set(searchCandidates.slice(0, searchCandidates.length - cap))
-				: null;
+			searchCandidates.length > cap ? new Set(searchCandidates.slice(0, searchCandidates.length - cap)) : null;
 
 		if (droppedSearch) {
 			for (const name of droppedSearch) {
@@ -509,7 +505,6 @@ export class ToolDiscovery {
 		}
 		this.invalidate();
 	}
-
 
 	/** Remove `name` from the local selection, after its registry entry went away. */
 	deselect(name: string): void {

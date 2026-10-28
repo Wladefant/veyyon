@@ -70,8 +70,8 @@ import { sessionTelemetryDetail } from "@veyyon/ai/instrumentation";
 import { clearAnthropicFastModeFallback } from "@veyyon/ai/providers/anthropic-session-state";
 import { streamSimple } from "@veyyon/ai/stream";
 import { CheckpointClient } from "../checkpoints/cloud-checkpoints";
-import { SynchronizedSession } from "../checkpoints/synchronized-session";
 import { persistSessionResumeCapability, readSessionOwnershipMarker } from "../checkpoints/session-ownership-marker";
+import { SynchronizedSession } from "../checkpoints/synchronized-session";
 // Session initialization registers usage backends without loading the AI package barrel.
 import "@veyyon/ai/usage/defaults";
 import { toolWireSchema } from "@veyyon/ai/utils/schema";
@@ -1530,9 +1530,12 @@ export class AgentSession {
 						}
 					}
 					if (!persisted) {
-						logger.warn("MCP event receipt sync failed after prompt delivery; event was delivered to the active session, but on-disk journal could not be synced and process restart may duplicate the event", {
-							error: errorMessage(lastError),
-						});
+						logger.warn(
+							"MCP event receipt sync failed after prompt delivery; event was delivered to the active session, but on-disk journal could not be synced and process restart may duplicate the event",
+							{
+								error: errorMessage(lastError),
+							},
+						);
 					}
 				}
 			},
@@ -4979,12 +4982,7 @@ export class AgentSession {
 					undefined,
 					ownershipMarker && ownershipPath
 						? (resumeToken, epoch) =>
-								persistSessionResumeCapability(
-									ownershipPath,
-									ownershipMarker,
-									resumeToken,
-									epoch,
-								)
+								persistSessionResumeCapability(ownershipPath, ownershipMarker, resumeToken, epoch)
 						: undefined,
 				);
 				const previous = this.agent.beforeToolCall;
@@ -4992,7 +4990,9 @@ export class AgentSession {
 					if (this.sessionManager.getSessionId() !== cloudSessionId) {
 						await this.#cloudOwnership!.close();
 						if (ownershipMarker)
-							throw new ToolAdmissionFatalError("Transferred session identity changed; tool admission is blocked");
+							throw new ToolAdmissionFatalError(
+								"Transferred session identity changed; tool admission is blocked",
+							);
 						return previous?.(context, signal);
 					}
 					try {

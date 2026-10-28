@@ -34,7 +34,10 @@ function createMockModel(): Model<"openai-responses"> {
 	});
 }
 
-function createTool(name: string, options?: { loadMode?: "essential" | "discoverable"; mcpServer?: string }): AgentTool {
+function createTool(
+	name: string,
+	options?: { loadMode?: "essential" | "discoverable"; mcpServer?: string },
+): AgentTool {
 	const schema = type({ value: "string" });
 	const tool: AgentTool = {
 		name,
@@ -352,10 +355,7 @@ describe("ToolDiscovery unit: LRU eviction cap and compaction prune", () => {
 		discovery.applyActivation(initialPlan);
 		active = initialPlan.nextActive;
 
-		const messages: AgentMessage[] = [
-			assistantToolCall("e1", "call_e1"),
-			toolResult("e1", "call_e1"),
-		];
+		const messages: AgentMessage[] = [assistantToolCall("e1", "call_e1"), toolResult("e1", "call_e1")];
 
 		const plan = discovery.planActivation(["t1", "t2", "t3"], { messages });
 		expect(plan.changed).toBe(true);
@@ -751,12 +751,7 @@ describe("AgentSession integration: cap, prune, persistence, and reload", () => 
 		sessions.push(session);
 
 		// Activate batch of 4 when cap is 2 -> returns only tools active at completion ([mcp3, mcp4])
-		const activated = await session.activateDiscoveredTools([
-			"mcp__s__t1",
-			"mcp__s__t2",
-			"mcp__s__t3",
-			"mcp__s__t4",
-		]);
+		const activated = await session.activateDiscoveredTools(["mcp__s__t1", "mcp__s__t2", "mcp__s__t3", "mcp__s__t4"]);
 		expect(activated).toEqual(["mcp__s__t3", "mcp__s__t4"]);
 		expect(session.getActiveToolNames()).toEqual(["read", "mcp__s__t3", "mcp__s__t4"]);
 		expect(session.getSelectedDiscoveredToolNames()).toEqual(["mcp__s__t3", "mcp__s__t4"]);

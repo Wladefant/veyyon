@@ -9,7 +9,7 @@
  * (the bar, the dead-end rescue tiers, the next turn) is `CompactionRecovery`'s. The post-turn check
  * that triggers a pass is `TurnContextCheck`'s; the pre-prompt and mid-run checks stay with the session.
  */
-import { resolveTelemetry, type AgentMessage } from "@veyyon/agent-core";
+import { type AgentMessage, resolveTelemetry } from "@veyyon/agent-core";
 import {
 	assertValidCompactionResult,
 	CompactionCancelledError,
@@ -861,7 +861,10 @@ export class CompactionRuntime {
 	 */
 	resetAutoCompactionGuard(reason?: string): void {
 		if (this.#autoCompactionGuard) {
-			logger.debug("Auto-compaction guard reset", { reason, priorPostSize: this.#autoCompactionGuard.postCompactionSize });
+			logger.debug("Auto-compaction guard reset", {
+				reason,
+				priorPostSize: this.#autoCompactionGuard.postCompactionSize,
+			});
 			this.#autoCompactionGuard = undefined;
 		}
 	}
@@ -991,4 +994,3 @@ export class CompactionRuntime {
 		this.#session.emitNotice("warning", warning, "compaction");
 	}
 }
-

@@ -25,8 +25,8 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import {
-	CompactionRuntime,
 	type CompactionHost,
+	CompactionRuntime,
 	type CompactionSession,
 } from "@veyyon/coding-agent/session/runtime/compaction-runtime";
 import type { CompactionEntry } from "@veyyon/kernel/session/session-entries";
@@ -43,7 +43,10 @@ const BRAVO_REQUEST =
 
 type AutoCompactionEnd = Extract<AgentSessionEvent, { type: "auto_compaction_end" }>;
 
-function createTool(name: string, options?: { loadMode?: "essential" | "discoverable"; mcpServer?: string }): AgentTool {
+function createTool(
+	name: string,
+	options?: { loadMode?: "essential" | "discoverable"; mcpServer?: string },
+): AgentTool {
 	return {
 		name,
 		description: `Tool ${name}`,
@@ -222,7 +225,9 @@ describe("#685 discovered-tool regressions through a real AgentSession", () => {
 		// The kept window carries the called tool's call and result; the discarded span is gone.
 		const stateMessages: AgentMessage[] = session.agent.state.messages;
 		const callNames = stateMessages.flatMap(message =>
-			message.role === "assistant" ? message.content.flatMap(block => (block.type === "toolCall" ? [block.name] : [])) : [],
+			message.role === "assistant"
+				? message.content.flatMap(block => (block.type === "toolCall" ? [block.name] : []))
+				: [],
 		);
 		expect(callNames).toEqual([usedMcp.name]);
 		const resultNames = stateMessages.flatMap(message => (message.role === "toolResult" ? [message.toolName] : []));
@@ -276,7 +281,9 @@ describe("#685 discovered-tool regressions through a real AgentSession", () => {
 		harness.queueReply(assistantMessage(model, "done", 120, 10));
 		await session.prompt(BRAVO_REQUEST);
 		const calledNames = session.agent.state.messages.flatMap(message =>
-			message.role === "assistant" ? message.content.flatMap(block => (block.type === "toolCall" ? [block.name] : [])) : [],
+			message.role === "assistant"
+				? message.content.flatMap(block => (block.type === "toolCall" ? [block.name] : []))
+				: [],
 		);
 		expect(calledNames).toEqual([recentlyCalled]);
 
@@ -380,9 +387,9 @@ describe("#685 repeated threshold passes through CompactionRuntime", () => {
 			phaseChanged: () => {},
 			scheduleAgentContinue: () => {},
 			scheduleAutoContinuePrompt: () => {},
-			secrets: () => ({} as never),
+			secrets: () => ({}) as never,
 			convertToLlmForSideRequest: () => [],
-			providerSessionState: () => ({} as never),
+			providerSessionState: () => ({}) as never,
 			effectiveServiceTier: () => undefined,
 			baseSystemPrompt: () => "base",
 			memoryBackendContext: async () => "",

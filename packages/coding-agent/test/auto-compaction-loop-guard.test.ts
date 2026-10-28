@@ -13,8 +13,8 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent, ContextUsageBreakdown } from "@veyyon/coding-agent/session/agent-session-types";
 import {
-	CompactionRuntime,
 	type CompactionHost,
+	CompactionRuntime,
 	type CompactionSession,
 } from "@veyyon/coding-agent/session/runtime/compaction-runtime";
 import {
@@ -35,7 +35,10 @@ function createMockModel(overrides?: Partial<Model<"openai-responses">>): Model<
 	});
 }
 
-function createTool(name: string, options?: { loadMode?: "essential" | "discoverable"; mcpServer?: string }): AgentTool {
+function createTool(
+	name: string,
+	options?: { loadMode?: "essential" | "discoverable"; mcpServer?: string },
+): AgentTool {
 	const schema = type({ value: "string" });
 	return {
 		name,
@@ -98,7 +101,8 @@ interface TestHarnessState {
 /** The warnings this suite is about: the guard's own notice, not the generic dead-end one. */
 function guardWarnings(state: TestHarnessState) {
 	return state.notices.filter(
-		n => n.category === "compaction" && n.level === "warning" && n.message.startsWith("Automatic compaction is paused"),
+		n =>
+			n.category === "compaction" && n.level === "warning" && n.message.startsWith("Automatic compaction is paused"),
 	);
 }
 
@@ -109,7 +113,9 @@ function guardWarnings(state: TestHarnessState) {
 function expectOneGuardNoticeAndAtMostOneDeadEnd(state: TestHarnessState): void {
 	expect(guardWarnings(state)).toHaveLength(1);
 	expect(state.notices.filter(n => n.message === compactionDeadEndWarning()).length).toBeLessThanOrEqual(1);
-	expect(state.notices.filter(n => n.category === "compaction" && n.level === "warning").length).toBeLessThanOrEqual(2);
+	expect(state.notices.filter(n => n.category === "compaction" && n.level === "warning").length).toBeLessThanOrEqual(
+		2,
+	);
 }
 
 function createCompactionRuntimeHarness(
@@ -235,9 +241,9 @@ function createCompactionRuntimeHarness(
 		phaseChanged: () => {},
 		scheduleAgentContinue: () => {},
 		scheduleAutoContinuePrompt: () => {},
-		secrets: () => ({} as never),
+		secrets: () => ({}) as never,
 		convertToLlmForSideRequest: () => [],
-		providerSessionState: () => ({} as never),
+		providerSessionState: () => ({}) as never,
 		effectiveServiceTier: () => undefined,
 		baseSystemPrompt: () => "base",
 		memoryBackendContext: async () => "",
