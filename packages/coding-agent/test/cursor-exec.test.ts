@@ -137,3 +137,51 @@ describe("CursorExecHandlers error results", () => {
 		expect(end?.isError).toBe(true);
 	});
 });
+
+describe("the shell stream bridge streams every text block of a result", () => {
+	const multiBlockTool: AnyAgentTool = {
+		name: "bash",
+		label: "bash",
+		description: "streams output split across several content blocks",
+		parameters: type({}),
+		execute: async (_id, _params, _signal, onUpdate) => {
+			onUpdate?.({
+				content: [
+					{ type: "text", text: "one " },
+					{ type: "image", data: "AAAA", mimeType: "image/png" },
+					{ type: "text", text: "two" },
+				],
+				details: {},
+			});
+			return {
+				content: [
+					{ type: "text", text: "one " },
+					{ type: "text", text: "two" },
+					{ type: "text", text: " three" },
+				],
+				details: {},
+			};
+		},
+	};
+
+	it("concatenates the text blocks of each update and of the final result, dropping images", async () => {
+		const events: AgentEvent[] = [];
+		const stdout: string[] = [];
+		const handlers = new CursorExecHandlers({
+			cwd: ".",
+			prepareToolCall: (tool, toolCall) => prepareToolCall(tool, toolCall, {}),
+			tools: new Map([["bash", multiBlockTool]]),
+			emitEvent: event => events.push(event),
+		});
+
+		await handlers.shellStream(create(ShellArgsSchema, { toolCallId: "call-multi", command: "ignored" }), {
+			onStdout: data => stdout.push(data),
+			onStderr: () => {},
+		});
+		expect(stdout).toEqual(["one two", " three"]);
+		const update = events.find(event => event.type === "tool_execution_update");
+		expect(update?.type === "tool_execution_update" && update.partialResult.content).toEqual([
+			{ type: "text", text: "one two" },
+		]);
+	});
+});

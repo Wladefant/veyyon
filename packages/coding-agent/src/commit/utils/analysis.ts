@@ -1,4 +1,5 @@
 import type { AssistantMessage, ToolCall } from "@veyyon/ai";
+import { assistantText } from "@veyyon/ai/utils/message-text";
 import type { ChangelogCategory, ConventionalAnalysis, ConventionalDetail } from "../types";
 
 export function extractToolCall(message: AssistantMessage, name: string): ToolCall | undefined {
@@ -6,11 +7,7 @@ export function extractToolCall(message: AssistantMessage, name: string): ToolCa
 }
 
 export function extractTextContent(message: AssistantMessage): string {
-	return message.content
-		.filter(content => content.type === "text")
-		.map(content => content.text)
-		.join("")
-		.trim();
+	return assistantText(message, "").trim();
 }
 
 /**

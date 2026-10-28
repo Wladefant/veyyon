@@ -18,6 +18,7 @@ import type {
 	ToolResultMessage,
 } from "@veyyon/ai";
 import { errorMessage, sanitizeText } from "@veyyon/utils";
+import { contentText } from "@veyyon/utils/content-text";
 import { resolveToCwd } from "./tools/core/path-utils";
 
 interface CursorExecBridgeOptions {
@@ -283,7 +284,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 		let streamedSanitizedText = "";
 		let canStreamSanitizedDelta = true;
 		const onUpdate: AgentToolUpdateCallback<unknown> = partialResult => {
-			const newRawText = partialResult.content.map(c => (c.type === "text" ? c.text : "")).join("");
+			const newRawText = contentText(partialResult.content, { separator: "" });
 			if (newRawText === rawText) {
 				return;
 			}
@@ -327,7 +328,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 
 		// onUpdate may not fire for every chunk — flush any remaining output
 		// from the final result that wasn't already streamed.
-		const finalRawText = result.content.map(c => (c.type === "text" ? c.text : "")).join("");
+		const finalRawText = contentText(result.content, { separator: "" });
 		if (finalRawText !== rawText) {
 			rawText = finalRawText;
 			sanitizedRawText = sanitizeText(finalRawText);
