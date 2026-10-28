@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- The root-changelog uniqueness check now applies per release; no user-facing change.
 - Deduplicate terminal deliveries by message id, retain accepted outcomes across daemon reconnects, replay missed events by subscriber cursor, and provide streaming snapshots to reconnecting subscribers ([#705](https://github.com/Wladefant/veyyon/issues/705)).
 
 ## [1.6.1] - 2026-10-28

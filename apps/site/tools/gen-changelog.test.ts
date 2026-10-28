@@ -468,6 +468,50 @@ describe("renderRootChangelog", () => {
 		// The drift guard relies on this — it regenerates and byte-compares.
 		expect(gen.renderRootChangelog(SAMPLE)).toBe(gen.renderRootChangelog(SAMPLE));
 	});
+
+	it("deduplicates package bullets within each release, but preserves the same wording across releases", () => {
+		const pkgA = [
+			"# Changelog",
+			"",
+			"## [1.6.0] - 2026-08-02",
+			"",
+			"### Fixed",
+			"",
+			"- Shared release bullet.",
+			"",
+		].join("\n");
+		const pkgB = [
+			"# Changelog",
+			"",
+			"## [1.6.0] - 2026-08-02",
+			"",
+			"### Fixed",
+			"",
+			"- Shared release bullet.",
+			"",
+		].join("\n");
+		const pkgC = [
+			"# Changelog",
+			"",
+			"## [1.5.6] - 2026-08-01",
+			"",
+			"### Fixed",
+			"",
+			"- Shared release bullet.",
+			"",
+		].join("\n");
+
+		const root = gen.renderRootChangelog([
+			{ name: "coding-agent", md: pkgA },
+			{ name: "tool-render", md: pkgB },
+			{ name: "another-package", md: pkgC },
+		]);
+		const newestRelease = root.split("## [1.6.0]")[1].split("## [1.5.6]")[0];
+		const olderRelease = root.split("## [1.5.6]")[1].split("## Upstream history")[0];
+
+		expect(newestRelease.split("\n").filter(line => line === "- Shared release bullet.")).toHaveLength(1);
+		expect(olderRelease.split("\n").filter(line => line === "- Shared release bullet.")).toHaveLength(1);
+	});
 });
 
 describe("fetchGitHubReleases", () => {
