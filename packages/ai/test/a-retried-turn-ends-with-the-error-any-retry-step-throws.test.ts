@@ -15,6 +15,7 @@ import type { AssistantMessage, AssistantMessageEvent, Context, Model } from "@v
 import { withEmptyCompletionRetry } from "@veyyon/ai/utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const CTX = {} as Context;
 const MODEL: Model<"openai-completions"> = buildModel({
@@ -39,14 +40,7 @@ function assistant(): AssistantMessage {
 		model: "test-model",
 		timestamp: 1,
 		stopReason: "stop",
-		usage: {
-			input: 10,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 10,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 10, totalTokens: 10 },
 	};
 }
 

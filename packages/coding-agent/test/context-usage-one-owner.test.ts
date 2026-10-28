@@ -26,6 +26,7 @@ import { Agent } from "@veyyon/agent-core";
 import { resolveThresholdTokens, shouldCompact } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, UserMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -41,14 +42,7 @@ function anchorWithPromptTokens(text: string, promptTokens: number) {
 	const base = assistantMsg(text);
 	return {
 		...base,
-		usage: {
-			input: promptTokens,
-			output: 8,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: promptTokens + 8,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: promptTokens, output: 8, totalTokens: promptTokens + 8 },
 	};
 }
 

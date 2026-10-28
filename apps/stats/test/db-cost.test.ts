@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { closeDb, getRecentRequests, initDb, insertMessageStats } from "@veyyon/stats/db";
 import type { MessageStats } from "@veyyon/stats/types";
 import { getStatsDbPath } from "@veyyon/utils";
@@ -21,14 +21,7 @@ function createCodexGptStats(entryId: string): MessageStats {
 		ttft: 100,
 		stopReason: "stop",
 		errorMessage: null,
-		usage: {
-			input: 1000,
-			output: 500,
-			cacheRead: 200,
-			cacheWrite: 0,
-			totalTokens: 1700,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1000, output: 500, cacheRead: 200, totalTokens: 1700 },
 		agentType: "main",
 	};
 }

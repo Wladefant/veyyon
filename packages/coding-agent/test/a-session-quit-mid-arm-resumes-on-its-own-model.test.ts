@@ -19,6 +19,7 @@ import { Agent } from "@veyyon/agent-core";
 import type { Api, AssistantMessage, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { Effort } from "@veyyon/catalog/effort";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { enterArm, leaveArm } from "@veyyon/coding-agent/autoresearch/arm-model";
 import { createSessionRuntime } from "@veyyon/coding-agent/autoresearch/state";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
@@ -93,14 +94,7 @@ describe("a session quit mid-arm resumes on its own model", () => {
 			api: ownModel.api,
 			provider: ownModel.provider,
 			model: ownModel.id,
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 			stopReason: "stop",
 			timestamp: Date.now(),
 		};

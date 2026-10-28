@@ -7,6 +7,7 @@
  * Run: bun packages/coding-agent/bench/session-tree-nav.bench.ts
  */
 
+import { emptyUsage } from "@veyyon/catalog/models";
 // Both moved out of `session-manager.ts` (the context builder to `session-context.ts`, the entry union to
 // `session-entries.ts`), which this script had not followed, so it had stopped running at all -- the same
 // way the parse-key bench had. A bench that cannot start publishes nothing and says nothing about it.
@@ -19,14 +20,7 @@ import { makeBench } from "@veyyon/utils/bench-harness";
 const MSG_COUNT = 100;
 const CODE_BLOCKS_PER_MSG = 5;
 
-const USAGE = {
-	input: 1,
-	output: 1,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 2,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const USAGE = { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 
 function makeId(i: number): string {
 	return `entry-${i.toString().padStart(6, "0")}`;

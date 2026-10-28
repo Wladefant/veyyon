@@ -33,6 +33,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { expandSessionMessageEntries } from "@veyyon/coding-agent/argot-wire";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentTranscriptViewer } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-transcript-viewer";
@@ -58,14 +59,7 @@ function loadedCodec(): ArgotSession {
 	return codec;
 }
 
-const USAGE = {
-	input: 1,
-	output: 1,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 2,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const USAGE = { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 
 function assistantLine(id: string, text: string): string {
 	return JSON.stringify({

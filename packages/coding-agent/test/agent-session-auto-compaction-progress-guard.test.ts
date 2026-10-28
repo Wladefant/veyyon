@@ -139,14 +139,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: 190000,
-				output: 1000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 191000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 190000, output: 1000, totalTokens: 191000 },
 			timestamp: Date.now(),
 		};
 	}
@@ -161,14 +154,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 			model: "claude-sonnet-4-5",
 			stopReason: "error" as const,
 			errorMessage: "prompt is too long: 250000 tokens > 200000 maximum",
-			usage: {
-				input: 250000,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 250000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 250000, totalTokens: 250000 },
 			timestamp: Date.now(),
 		};
 	}
@@ -573,14 +559,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 				provider: "anthropic",
 				model: "claude-sonnet-4-5",
 				stopReason: "stop",
-				usage: {
-					input: 1000,
-					output: 50,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 1050,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 1000, output: 50, totalTokens: 1050 },
 				timestamp: Date.now(),
 			});
 			sessionManager.appendMessage({ role: "user", content: "next", timestamp: Date.now() });
@@ -862,14 +841,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "length" as const,
-			usage: {
-				input: 10_000,
-				output: 1_000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 11_000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 10_000, output: 1_000, totalTokens: 11_000 },
 			timestamp: Date.now(),
 		};
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
@@ -905,14 +877,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 				provider: "anthropic",
 				model: "claude-sonnet-4-5",
 				stopReason: "stop",
-				usage: {
-					input: 100,
-					output: 10,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 110,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 100, output: 10, totalTokens: 110 },
 				timestamp: Date.now(),
 			});
 			sessionManager.appendMessage({ role: "user", content: "next", timestamp: Date.now() });
@@ -960,14 +925,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 				provider: "anthropic",
 				model: "claude-sonnet-4-5",
 				stopReason: "stop",
-				usage: {
-					input: 100,
-					output: 10,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 110,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 100, output: 10, totalTokens: 110 },
 				timestamp: Date.now(),
 			});
 			sessionManager.appendMessage({ role: "user", content: "next", timestamp: Date.now() });
@@ -1161,14 +1119,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: 5000,
-				output: 1000,
-				cacheRead: 85000,
-				cacheWrite: 0,
-				totalTokens: 91000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 5000, output: 1000, cacheRead: 85000, totalTokens: 91000 },
 			timestamp: now,
 		};
 		session.agent.emitExternalEvent({ type: "message_end", message: finalAssistant });
@@ -1452,14 +1403,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 				provider: "anthropic",
 				model: "claude-sonnet-4-5",
 				stopReason: "toolUse",
-				usage: {
-					input: 100,
-					output: 10,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 110,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 100, output: 10, totalTokens: 110 },
 				timestamp: Date.now() - 2,
 			});
 			sessionManager.appendMessage({

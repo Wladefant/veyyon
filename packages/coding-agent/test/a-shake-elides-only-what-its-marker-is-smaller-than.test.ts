@@ -29,6 +29,7 @@ import type { SessionEntry, ShakeConfig, ShakeRegion } from "@veyyon/agent-core/
 import * as compaction from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, ImageContent, TextContent } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -36,14 +37,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { requireBundledModel } from "../../agent/test/helpers";
 
-const usage = {
-	input: 16,
-	output: 8,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 24,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = { ...emptyUsage(), input: 16, output: 8, totalTokens: 24 };
 
 const PNG: ImageContent = { type: "image", data: "iVBORw0KGgo", mimeType: "image/png" };
 /** A write confirmation: one token, an order of magnitude below any marker. */

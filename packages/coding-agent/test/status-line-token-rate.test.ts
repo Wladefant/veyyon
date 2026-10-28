@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { renderSegment } from "@veyyon/coding-agent/modes/terminal/components/status-line/segments";
 import type { SegmentContext } from "@veyyon/coding-agent/modes/terminal/components/status-line/types";
 import { calculateTokensPerSecond } from "@veyyon/coding-agent/presentation/token-rate";
@@ -18,14 +19,7 @@ function assistantMessage(overrides?: Partial<AssistantMessage>): AssistantMessa
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude-sonnet-4.5",
-		usage: {
-			input: 10,
-			output: 50,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 60,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 10, output: 50, totalTokens: 60 },
 		stopReason: "stop",
 		timestamp: 1_000,
 		...overrides,

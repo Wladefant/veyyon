@@ -8,6 +8,7 @@ import {
 import type { Model } from "@veyyon/ai";
 import { buildResponsesInput, supportsFreeformApplyPatch } from "@veyyon/ai/providers/openai-shared";
 import type { Message } from "@veyyon/ai/types";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { buildSessionContext } from "@veyyon/kernel/session/session-context";
 import type { CompactionEntry, SessionEntry, SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import { requireBundledModel } from "../../../agent/test/helpers";
@@ -38,14 +39,7 @@ function msg(id: string, parentId: string | null, role: "user" | "assistant", te
 			api: "openai-responses",
 			provider: "openai",
 			model: "gpt-5.1",
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 			stopReason: "stop",
 			timestamp: 1,
 		},

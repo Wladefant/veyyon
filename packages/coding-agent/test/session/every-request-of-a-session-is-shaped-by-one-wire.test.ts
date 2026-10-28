@@ -16,6 +16,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import type { AssistantMessage, Context, Message, ToolResultMessage, UserMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { SecretRuntimeLease } from "@veyyon/coding-agent/session/agent-session-types";
 import {
@@ -42,14 +43,7 @@ function toolCall(id: string): AssistantMessage {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 		stopReason: "toolUse",
 		timestamp: TIMESTAMP,
 	};

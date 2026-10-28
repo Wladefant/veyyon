@@ -13,6 +13,7 @@ import type {
 } from "@veyyon/ai/types";
 import { createOpenAIResponsesHistoryPayload } from "@veyyon/ai/utils";
 import type { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
@@ -23,14 +24,7 @@ import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { requireBundledModel } from "../../agent/test/helpers";
 
 function createUsage(): Usage {
-	return {
-		input: 1,
-		output: 1,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 2,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	return { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 }
 
 function createUserHistoryPayload(provider = "openai"): ProviderPayload {

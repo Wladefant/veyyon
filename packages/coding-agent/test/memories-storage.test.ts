@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AssistantMessage, Context, Model, SimpleStreamOptions } from "@veyyon/ai";
 import * as ai from "@veyyon/ai/stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { startMemoryStartupTask } from "@veyyon/coding-agent/memory/local";
 import {
@@ -40,14 +41,7 @@ function assistantText(text: string): AssistantMessage {
 		api: "openai-responses",
 		provider: "openai",
 		model: "test-model",
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 		stopReason: "stop",
 		timestamp: Date.now(),
 	};

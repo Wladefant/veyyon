@@ -24,6 +24,7 @@ import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import type { ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockHandler, type MockModel } from "@veyyon/ai/providers/mock";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { resolveLocalUrlToPath } from "@veyyon/coding-agent/internal-urls/local-protocol";
@@ -144,14 +145,7 @@ describe("plan mode state across its boundaries", () => {
 				provider: model.provider,
 				model: model.id,
 				stopReason: "toolUse",
-				usage: {
-					input: 16,
-					output: 8,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 24,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 16, output: 8, totalTokens: 24 },
 				timestamp: Date.now(),
 			});
 			const result: ToolResultMessage = {

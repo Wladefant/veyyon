@@ -4,6 +4,7 @@ import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { ExtensionRuntime, loadExtensionFromFactory } from "@veyyon/coding-agent/extensibility/extensions/loader";
@@ -60,14 +61,7 @@ function assistantReply(
 		api: model.api,
 		provider: model.provider,
 		model: model.id,
-		usage: {
-			input: 10,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 10,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 10, totalTokens: 10 },
 		stopReason,
 		timestamp,
 	};

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { emptyUsage } from "@veyyon/catalog/models";
 import type { FileEntry, SessionHeader } from "@veyyon/kernel/session/session-entries";
 import { findMostRecentSession, resolveResumableSession } from "@veyyon/kernel/session/session-listing";
 import { loadEntriesFromFile } from "@veyyon/kernel/session/session-loader";
@@ -227,14 +228,7 @@ describe("SessionManager legacy session migration persistence", () => {
 			api: "anthropic-messages" as const,
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-20250514",
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 			stopReason: "stop" as const,
 			timestamp: Date.now(),
 		};

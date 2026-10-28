@@ -4,6 +4,7 @@ import { Agent } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, ImageContent, ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import {
 	normalizeCompactionStrategy,
 	resolveCompactionEngineAction,
@@ -16,14 +17,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { requireBundledModel } from "../../agent/test/helpers";
 
-const usage = {
-	input: 16,
-	output: 8,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 24,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = { ...emptyUsage(), input: 16, output: 8, totalTokens: 24 };
 
 describe("AgentSession shake", () => {
 	let tempDir: TempDir;
@@ -258,14 +252,7 @@ describe("AgentSession shake", () => {
 				content: [{ type: "text", text: "trigger" }],
 				...apiInfo,
 				stopReason: "stop",
-				usage: {
-					input: 10_000,
-					output: 1_000,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 11_000,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 10_000, output: 1_000, totalTokens: 11_000 },
 				timestamp: Date.now(),
 			};
 			session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });

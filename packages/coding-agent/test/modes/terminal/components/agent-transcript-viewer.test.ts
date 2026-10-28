@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import {
 	type AgentTranscriptRemote,
@@ -30,14 +31,7 @@ import { getKittyGraphics, setKittyGraphics } from "@veyyon/utils/kitty-graphics
 const TS = new Date().toISOString();
 
 function buildJsonl(): string {
-	const usage = {
-		input: 1,
-		output: 1,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 2,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	const usage = { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 	const lines = [
 		JSON.stringify({ type: "session", version: CURRENT_SESSION_VERSION, id: "adv", timestamp: TS, cwd: "/tmp" }),
 	];
@@ -74,14 +68,7 @@ function buildJsonl(): string {
 }
 
 function buildImageJsonl(): string {
-	const usage = {
-		input: 1,
-		output: 1,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 2,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	const usage = { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 	const entries = [
 		JSON.stringify({ type: "session", version: CURRENT_SESSION_VERSION, id: "adv", timestamp: TS, cwd: "/tmp" }),
 		JSON.stringify({

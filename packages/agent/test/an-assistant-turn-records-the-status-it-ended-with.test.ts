@@ -20,6 +20,7 @@ import type { AgentContext, AgentLoopConfig, StreamFn } from "@veyyon/agent-core
 import type { AssistantMessage, AssistantTurnStatus } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { createUserMessage, identityConverter } from "./helpers";
 
 type Ending =
@@ -48,14 +49,7 @@ function message(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
 		api: MODEL.api,
 		provider: MODEL.provider,
 		model: MODEL.id,
-		usage: {
-			input: 10,
-			output: 5,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 15,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 10, output: 5, totalTokens: 15 },
 		stopReason: "stop",
 		timestamp: Date.now(),
 		...overrides,

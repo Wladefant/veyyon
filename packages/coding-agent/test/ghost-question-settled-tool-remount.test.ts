@@ -49,6 +49,7 @@
  */
 import { beforeAll, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { ReadToolGroupComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/read-tool-group";
 import { ToolExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/tool-execution";
@@ -64,14 +65,7 @@ import { stripAnsi } from "@veyyon/utils";
 
 const CALL_ID = "call-ghost";
 
-const usage = {
-	input: 1,
-	output: 1,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 2,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 
 /**
  * `path` routes `read` into its group component; every other renderer ignores

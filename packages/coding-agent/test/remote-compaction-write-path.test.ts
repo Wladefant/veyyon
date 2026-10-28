@@ -38,6 +38,7 @@ import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { resetServerCompactionRouteCache } from "@veyyon/ai/providers/openai-compaction";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { resolveCompactionKind } from "@veyyon/coding-agent/presentation/summary-builder";
@@ -158,14 +159,7 @@ describe("a remote compaction result reaching the driver write path", () => {
 				provider: "openai",
 				model: model.id,
 				stopReason: "stop",
-				usage: {
-					input: 1000,
-					output: 100,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 1100,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 1000, output: 100, totalTokens: 1100 },
 				timestamp: Date.now(),
 			});
 		}
@@ -190,14 +184,7 @@ describe("a remote compaction result reaching the driver write path", () => {
 						provider: "openai",
 						model: "gpt-5.1",
 						stopReason: "stop",
-						usage: {
-							input: 1,
-							output: 1,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 2,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
+						usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 						timestamp: Date.now(),
 					},
 				});
@@ -341,14 +328,7 @@ describe("compaction.remote off: the local pass runs with the configured compact
 				provider: "openai",
 				model: model.id,
 				stopReason: "stop",
-				usage: {
-					input: 1000,
-					output: 100,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 1100,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 1000, output: 100, totalTokens: 1100 },
 				timestamp: Date.now(),
 			});
 		}
@@ -367,14 +347,7 @@ describe("compaction.remote off: the local pass runs with the configured compact
 					provider: requestModel.provider,
 					model: requestModel.id,
 					stopReason: "stop",
-					usage: {
-						input: 100,
-						output: 50,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 150,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: { ...emptyUsage(), input: 100, output: 50, totalTokens: 150 },
 					timestamp: Date.now(),
 				};
 				stream.push({ type: "done", reason: "stop", message });
@@ -477,14 +450,7 @@ describe("remote compaction with no resolvable credential", () => {
 				provider: "openai",
 				model: model.id,
 				stopReason: "stop",
-				usage: {
-					input: 1000,
-					output: 100,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 1100,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 1000, output: 100, totalTokens: 1100 },
 				timestamp: Date.now(),
 			});
 		}
@@ -503,14 +469,7 @@ describe("remote compaction with no resolvable credential", () => {
 						provider: "openai",
 						model: "gpt-5.1",
 						stopReason: "stop",
-						usage: {
-							input: 1,
-							output: 1,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 2,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
+						usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 						timestamp: Date.now(),
 					},
 				});
@@ -572,14 +531,7 @@ describe("remote compaction with no resolvable credential", () => {
 				provider: "openai",
 				model: "gpt-5.1",
 				stopReason: "stop",
-				usage: {
-					input: 1000,
-					output: 100,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 1100,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 1000, output: 100, totalTokens: 1100 },
 				timestamp: Date.now(),
 			});
 		}
@@ -638,14 +590,7 @@ describe("a compact route that answers 404 during a live session", () => {
 				provider: "openai",
 				model: "gpt-5.1",
 				stopReason: "stop",
-				usage: {
-					input: 1000,
-					output: 100,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 1100,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 1000, output: 100, totalTokens: 1100 },
 				timestamp: Date.now(),
 			});
 		}
@@ -664,14 +609,7 @@ describe("a compact route that answers 404 during a live session", () => {
 						provider: "openai",
 						model: "gpt-5.1",
 						stopReason: "stop",
-						usage: {
-							input: 1,
-							output: 1,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 2,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
+						usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 						timestamp: Date.now(),
 					},
 				});
@@ -728,14 +666,7 @@ describe("a compact route that answers 404 during a live session", () => {
 				provider: "openai",
 				model: "gpt-5.1",
 				stopReason: "stop",
-				usage: {
-					input: 1000,
-					output: 100,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 1100,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 1000, output: 100, totalTokens: 1100 },
 				timestamp: Date.now(),
 			});
 		}

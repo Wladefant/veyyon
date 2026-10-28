@@ -15,6 +15,7 @@ const arkSessionNotification = type({
 
 import type { Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { AcpAgent } from "@veyyon/coding-agent/modes/acp/acp-agent";
 import {
 	buildToolCallStartUpdate,
@@ -33,14 +34,7 @@ function makeAssistantMessage(text: string) {
 		api: "anthropic-messages" as const,
 		provider: "anthropic" as const,
 		model: "claude-sonnet-4-20250514",
-		usage: {
-			input: 10,
-			output: 5,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 15,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 10, output: 5, totalTokens: 15 },
 		stopReason: "stop" as const,
 		timestamp: Date.now(),
 	};
@@ -797,14 +791,7 @@ describe("ACP event mapper", () => {
 						input: { command: "echo hi" },
 					},
 				],
-				usage: {
-					input: 10,
-					output: 5,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 15,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 10, output: 5, totalTokens: 15 },
 				api: "anthropic-messages",
 				provider: "anthropic",
 				model: "claude-sonnet-4-20250514",

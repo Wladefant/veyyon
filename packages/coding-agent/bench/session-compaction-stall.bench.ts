@@ -19,6 +19,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { CURRENT_SESSION_VERSION } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { serializeTitleSlot } from "@veyyon/kernel/session/session-title-slot";
@@ -29,14 +30,7 @@ const ROUNDS = Number(process.env.ROUNDS ?? "5");
 const COMPACTION_EVERY = 440;
 const KEEP = 20;
 
-const usage = {
-	input: 1,
-	output: 1,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 2,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 
 function entryLine(i: number, filler: string): string {
 	const id = `e${String(i).padStart(7, "0")}`;

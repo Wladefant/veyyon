@@ -21,6 +21,7 @@ import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, Context } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -176,14 +177,7 @@ describe("the context rebuilt from a log that already holds an unpaired result",
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "claude-test",
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 			stopReason: "toolUse",
 			timestamp,
 		};

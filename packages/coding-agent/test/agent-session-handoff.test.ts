@@ -12,6 +12,7 @@ import type { AssistantMessage, Model, ToolCall } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { ExtensionRunner, loadExtensions } from "@veyyon/coding-agent/extensibility/extensions";
@@ -142,14 +143,7 @@ describe("AgentSession handoff", () => {
 			provider: model.provider,
 			model: model.id,
 			stopReason: "stop",
-			usage: {
-				input: 16,
-				output: 8,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 24,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 16, output: 8, totalTokens: 24 },
 			timestamp: Date.now() - 1,
 		});
 	});
@@ -214,14 +208,7 @@ describe("AgentSession handoff", () => {
 			provider: model.provider,
 			model: model.id,
 			stopReason: "stop",
-			usage: {
-				input: 10_000,
-				output: 1_000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 11_000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 10_000, output: 1_000, totalTokens: 11_000 },
 			timestamp: Date.now(),
 		};
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
@@ -390,14 +377,7 @@ describe("AgentSession handoff", () => {
 					provider: requestModel.provider,
 					model: requestModel.id,
 					stopReason: "stop",
-					usage: {
-						input: 1,
-						output: 1,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 2,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 					timestamp: Date.now(),
 				};
 				stream.push({ type: "done", reason: "stop", message });
@@ -997,14 +977,7 @@ describe("AgentSession handoff", () => {
 				{
 					content: ["ok"],
 					stopReason: "stop",
-					usage: {
-						input: 1_005,
-						output: 20,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 1_025,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: { ...emptyUsage(), input: 1_005, output: 20, totalTokens: 1_025 },
 				},
 			],
 		});
@@ -1033,14 +1006,7 @@ describe("AgentSession handoff", () => {
 			provider: "openai",
 			model: mock.id,
 			stopReason: "stop",
-			usage: {
-				input: 1_000,
-				output: 10,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 1_010,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1_000, output: 10, totalTokens: 1_010 },
 			timestamp: Date.now() - 1,
 		};
 		sessionManager.appendMessage(seedUser);
@@ -1124,14 +1090,7 @@ describe("AgentSession handoff", () => {
 			stopReason: "stop",
 			// Deflated: a before_provider_request compressor shrank the request, so the
 			// provider only billed ~1k prompt tokens for a ~20k-token conversation.
-			usage: {
-				input: 1_000,
-				output: 10,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 1_010,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1_000, output: 10, totalTokens: 1_010 },
 			timestamp: Date.now() - 1,
 		};
 		sessionManager.appendMessage(seedUser);
@@ -1205,14 +1164,7 @@ describe("AgentSession handoff", () => {
 				{
 					content: ["seed response"],
 					stopReason: "stop",
-					usage: {
-						input: 1_000,
-						output: 10,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 1_010,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: { ...emptyUsage(), input: 1_000, output: 10, totalTokens: 1_010 },
 				},
 			],
 		});
@@ -1291,14 +1243,7 @@ describe("AgentSession handoff", () => {
 				{
 					content: ["seed response"],
 					stopReason: "stop",
-					usage: {
-						input: 8_500,
-						output: 10,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 8_510,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: { ...emptyUsage(), input: 8_500, output: 10, totalTokens: 8_510 },
 				},
 				{ content: ["ok"], stopReason: "stop" },
 			],
@@ -1372,14 +1317,7 @@ describe("AgentSession handoff", () => {
 			provider: model.provider,
 			model: model.id,
 			stopReason: "toolUse",
-			usage: {
-				input: 10_000,
-				output: 1_000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 11_000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 10_000, output: 1_000, totalTokens: 11_000 },
 			timestamp: Date.now(),
 		};
 
@@ -1467,14 +1405,7 @@ describe("AgentSession handoff", () => {
 			provider: model.provider,
 			model: model.id,
 			stopReason: "stop",
-			usage: {
-				input: 10_000,
-				output: 1_000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 11_000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 10_000, output: 1_000, totalTokens: 11_000 },
 			timestamp: Date.now(),
 		};
 
@@ -1553,14 +1484,7 @@ describe("AgentSession handoff", () => {
 			provider: model.provider,
 			model: model.id,
 			stopReason: "stop",
-			usage: {
-				input: 16,
-				output: 8,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 24,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 16, output: 8, totalTokens: 24 },
 			timestamp: Date.now() - 1,
 		});
 
@@ -1607,14 +1531,7 @@ describe("AgentSession handoff", () => {
 			provider: model.provider,
 			model: model.id,
 			stopReason: "stop",
-			usage: {
-				input: 16,
-				output: 8,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 24,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 16, output: 8, totalTokens: 24 },
 			timestamp: Date.now() - 1,
 		});
 

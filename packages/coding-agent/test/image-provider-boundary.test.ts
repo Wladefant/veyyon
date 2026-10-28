@@ -5,6 +5,7 @@ import * as path from "node:path";
 import type { ApiKeyResolver, AssistantMessage, completeSimple, ImageContent, Model } from "@veyyon/ai";
 import { ProviderHttpError } from "@veyyon/ai/error";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { CustomToolContext } from "@veyyon/coding-agent/extensibility/custom-tools";
@@ -109,14 +110,7 @@ function successfulAssistant(text: string): AssistantMessage {
 		api: visionModel.api,
 		provider: visionModel.provider,
 		model: visionModel.id,
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 		stopReason: "stop",
 		timestamp: Date.now(),
 		content: [{ type: "text", text }],

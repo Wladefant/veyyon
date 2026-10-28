@@ -25,6 +25,7 @@ import {
 import type { AgentTool } from "@veyyon/agent-core/types";
 import type { AssistantMessage, Model, ServiceTier, ToolChoice, Usage } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const RAW_SENTINEL = "RAW_TELEMETRY_SECRET_7f31";
 const REPLACEMENT = "[SANITIZED]";
@@ -76,14 +77,7 @@ function telemetryFor(config: Partial<AgentTelemetryConfig>): AgentTelemetry {
 }
 
 function usage(): Usage {
-	return {
-		input: 11,
-		output: 5,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 16,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	return { ...emptyUsage(), input: 11, output: 5, totalTokens: 16 };
 }
 
 function assistant(content: AssistantMessage["content"], overrides: Partial<AssistantMessage> = {}): AssistantMessage {

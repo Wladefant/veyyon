@@ -32,6 +32,7 @@ import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentTool
 import { z } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import type { EventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { createUserMessage, identityConverter } from "./helpers";
 
 const MOCK_IDENT = { id: "mock-model", provider: "mock-provider" } as const;
@@ -735,14 +736,7 @@ describe("agent-loop OTEL instrumentation", () => {
 		const mock = createMockModel({ ...MOCK_IDENT });
 		await recordManualChatTelemetry(telemetry, {
 			model: mock.model,
-			usage: {
-				input: 10,
-				output: 5,
-				cacheRead: 2,
-				cacheWrite: 0,
-				totalTokens: 17,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 10, output: 5, cacheRead: 2, totalTokens: 17 },
 			finishReason: "stop",
 			responseText: "manual ok",
 			stepNumber: 7,

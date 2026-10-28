@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { syncAllSessions } from "@veyyon/stats/aggregator";
 import { closeDb, getBehaviorOverall, getFileOffset, initDb } from "@veyyon/stats/db";
 import { getAgentDir, getStatsDbPath } from "@veyyon/utils";
@@ -32,14 +33,7 @@ async function writeSessionFile(): Promise<string> {
 			api: "openai-responses",
 			provider: "openai",
 			model: "gpt-5.4",
-			usage: {
-				input: 1,
-				output: 2,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 3,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 2, totalTokens: 3 },
 			stopReason: "stop",
 			timestamp: Date.now(),
 			duration: 10,

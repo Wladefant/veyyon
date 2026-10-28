@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage, ToolCall } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -52,14 +53,7 @@ describe("the settle reads the turn that just ended", () => {
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
 			stopReason: "stop",
-			usage: {
-				input: 100,
-				output: 20,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 120,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 100, output: 20, totalTokens: 120 },
 			timestamp: Date.now(),
 		};
 	}
@@ -72,14 +66,7 @@ describe("the settle reads the turn that just ended", () => {
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
 			stopReason: "toolUse",
-			usage: {
-				input: 50,
-				output: 10,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 60,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 50, output: 10, totalTokens: 60 },
 			timestamp: Date.now(),
 		};
 	}

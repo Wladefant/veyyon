@@ -6,6 +6,7 @@
  * files run before it leave garbage that dies or stays alive across the window.
  */
 import type { Message } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { MessagePersistence } from "@veyyon/coding-agent/session/runtime/message-persistence";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { postmortem } from "@veyyon/utils";
@@ -33,14 +34,7 @@ function message(index: number): Message {
 				provider: "anthropic",
 				model: "claude-sonnet-4-5",
 				responseId: `msg_01${index.toString(36).padStart(22, "y")}`,
-				usage: {
-					input: 1,
-					output: 1,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 2,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 				stopReason: "toolUse",
 				timestamp,
 			};

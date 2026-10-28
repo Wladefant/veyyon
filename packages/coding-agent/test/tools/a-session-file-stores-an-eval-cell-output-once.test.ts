@@ -29,6 +29,7 @@ import { evalResultCodec, FROM_CELL0 } from "@veyyon/coding-agent/tools/shell/ev
 import { evalToolView } from "@veyyon/coding-agent/tools/shell/eval-view";
 // Register all domain codecs through the composition root
 import "@veyyon/coding-agent/tools/index";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { setAgentDir, TempDir } from "@veyyon/utils";
 import { captureDirOverrides, type DirOverridesSnapshot, restoreDirOverrides } from "@veyyon/utils/dirs";
@@ -43,14 +44,7 @@ function assistantCalling(ids: readonly string[]): AssistantMessage {
 		provider: "anthropic",
 		model: "claude-test",
 		stopReason: "toolUse",
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 	};
 }
 

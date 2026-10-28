@@ -39,6 +39,7 @@ import * as path from "node:path";
 import { Agent, countTokens } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as AIError from "@veyyon/ai/error";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { loadExtensions } from "@veyyon/coding-agent/extensibility/extensions/loader";
@@ -196,14 +197,7 @@ describe("a turn too large to summarize is truncated, not parked", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: 190000,
-				output: 1000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 191000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 190000, output: 1000, totalTokens: 191000 },
 			timestamp: Date.now(),
 		};
 	}

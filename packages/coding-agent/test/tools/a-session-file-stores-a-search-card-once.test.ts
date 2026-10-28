@@ -28,6 +28,7 @@ import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool
 import { initTheme, type Theme } from "@veyyon/coding-agent/theme/theme";
 // The composition root every host loads before it opens a session, which registers the result codecs.
 import "@veyyon/coding-agent/tools/index";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { SearchTool, type SearchToolDetails, type SearchToolInput } from "@veyyon/coding-agent/tools/search/search";
 import type { SearchDisplayFrom } from "@veyyon/coding-agent/tools/search/search-result-codec";
 import { searchToolView } from "@veyyon/coding-agent/tools/search/search-view";
@@ -142,14 +143,7 @@ function assistantCalling(ids: readonly string[]): AssistantMessage {
 		provider: "anthropic",
 		model: "claude-test",
 		stopReason: "toolUse",
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 	};
 }
 

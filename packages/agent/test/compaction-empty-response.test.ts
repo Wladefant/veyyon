@@ -11,6 +11,7 @@ import {
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Context, Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { createUserMessage, requireBundledModel } from "./helpers";
 
 /**
@@ -39,14 +40,7 @@ function makeEmptyStop(text?: string): AssistantMessage {
 		provider: "mock",
 		model: "mock",
 		api: "mock",
-		usage: {
-			input: 0,
-			output: 268,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 268,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), output: 268, totalTokens: 268 },
 		stopReason: "stop",
 	} as AssistantMessage;
 }

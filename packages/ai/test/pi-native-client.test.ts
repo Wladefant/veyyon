@@ -336,14 +336,7 @@ describe("streamPiNative event flow", () => {
 	it("pushes parsed events verbatim and resolves `.result()` on terminal `done`", async () => {
 		const final = baseAssistant({
 			content: [{ type: "text", text: "hi" }],
-			usage: {
-				input: 4,
-				output: 2,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 6,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 4, output: 2, totalTokens: 6 },
 		});
 		const partial = baseAssistant({ content: [{ type: "text", text: "hi" }] });
 		const events: AssistantMessageEvent[] = [

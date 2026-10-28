@@ -32,6 +32,7 @@ import { promisify } from "node:util";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@veyyon/ai";
 import type { InstrumentationLevel } from "@veyyon/ai/instrumentation";
+import { emptyUsage } from "@veyyon/catalog/models";
 import type { PendingContextSnapshot } from "@veyyon/coding-agent/session/agent-session-types";
 import { MessagePersistence } from "@veyyon/coding-agent/session/runtime/message-persistence";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
@@ -109,14 +110,7 @@ function assistant(text: string, timestamp: number, overrides: Partial<Assistant
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "mock",
-		usage: {
-			input: 400,
-			output: 20,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 420,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 400, output: 20, totalTokens: 420 },
 		stopReason: "stop",
 		timestamp,
 		...overrides,

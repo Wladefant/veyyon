@@ -17,6 +17,7 @@ import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as ai from "@veyyon/ai/stream";
 import type { SimpleStreamOptions } from "@veyyon/ai/types";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -381,14 +382,7 @@ describe("AgentSession tree navigation branch summary options", () => {
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
 			stopReason: "stop",
-			usage: {
-				input: 10,
-				output: 10,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 20,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 10, output: 10, totalTokens: 20 },
 			timestamp: 2,
 		});
 		sessionManager.appendMessage({
@@ -411,14 +405,7 @@ describe("AgentSession tree navigation branch summary options", () => {
 						provider: "anthropic",
 						model: "claude-sonnet-4-5",
 						stopReason: "stop",
-						usage: {
-							input: 10,
-							output: 10,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 20,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
+						usage: { ...emptyUsage(), input: 10, output: 10, totalTokens: 20 },
 						timestamp: 4,
 					},
 				});

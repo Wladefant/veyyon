@@ -9,6 +9,7 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { syncAllSessions } from "@veyyon/stats/aggregator";
 import { getOverallStats, getStatsByFolder, getStatsByModel } from "@veyyon/stats/db";
 import { DAY_MS, getSessionsDir } from "@veyyon/utils";
@@ -33,14 +34,7 @@ function assistant(id: string, model: string, timestamp: number): Record<string,
 			model,
 			stopReason: "stop",
 			timestamp,
-			usage: {
-				input: 10,
-				output: 5,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 15,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 10, output: 5, totalTokens: 15 },
 		},
 	};
 }

@@ -24,6 +24,7 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -90,14 +91,7 @@ describe("a stalled summary is not re-sent to the same model", () => {
 				provider: "anthropic" as const,
 				model: model.id,
 				stopReason: "stop" as const,
-				usage: {
-					input: 1000,
-					output: 100,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 1100,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 1000, output: 100, totalTokens: 1100 },
 				timestamp: Date.now(),
 			};
 			session.agent.appendMessage(user);
@@ -115,14 +109,7 @@ describe("a stalled summary is not re-sent to the same model", () => {
 			provider: "anthropic" as const,
 			model: model.id,
 			stopReason: "stop" as const,
-			usage: {
-				input: 190_000,
-				output: 1_000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 191_000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 190_000, output: 1_000, totalTokens: 191_000 },
 			timestamp: Date.now(),
 		};
 	}

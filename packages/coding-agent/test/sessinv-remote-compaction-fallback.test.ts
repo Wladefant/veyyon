@@ -38,6 +38,7 @@ import { REMOTE_COMPACTION_PRESERVE_KEY, resolveServerCompactionTransport } from
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -126,14 +127,7 @@ describe("compaction.remote on, endpoint failing: one compact request, one local
 				provider: "openai",
 				model: model.id,
 				stopReason: "stop",
-				usage: {
-					input: 1000,
-					output: 100,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 1100,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 1000, output: 100, totalTokens: 1100 },
 				timestamp: Date.now(),
 			});
 		}
@@ -149,14 +143,7 @@ describe("compaction.remote on, endpoint failing: one compact request, one local
 				provider: requestModel.provider,
 				model: requestModel.id,
 				stopReason: "stop",
-				usage: {
-					input: 100,
-					output: 50,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 150,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 100, output: 50, totalTokens: 150 },
 				timestamp: Date.now(),
 			};
 			const stream = new AssistantMessageEventStream();

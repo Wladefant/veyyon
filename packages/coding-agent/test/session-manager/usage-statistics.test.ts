@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 
 describe("SessionManager usage statistics", () => {
@@ -136,14 +137,7 @@ describe("SessionManager usage statistics", () => {
 			api: "openai-completions",
 			provider: "openai",
 			model: "gpt-4o",
-			usage: {
-				input: 10,
-				output: 5,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 15,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 10, output: 5, totalTokens: 15 },
 			stopReason: "stop",
 			timestamp: 2,
 		});

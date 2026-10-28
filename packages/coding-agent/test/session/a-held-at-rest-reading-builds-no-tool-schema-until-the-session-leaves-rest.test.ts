@@ -45,6 +45,7 @@ import * as path from "node:path";
 import type { AssistantMessage, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { measureContextGauge } from "@veyyon/coding-agent/config/compaction-strategy";
 import { readLaunchFacts, recordLaunchFacts, resetLaunchFactsForTest } from "@veyyon/coding-agent/config/launch-facts";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
@@ -181,14 +182,7 @@ async function resumeHeld(stamp: (nonMessageTokens: number) => number | null): P
 		provider: model.provider,
 		model: model.id,
 		stopReason: "stop",
-		usage: {
-			input: promptTokens,
-			output: 20,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: promptTokens + 20,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: promptTokens, output: 20, totalTokens: promptTokens + 20 },
 		...(recorded === null ? {} : { contextSnapshot: { promptTokens, nonMessageTokens: recorded } }),
 		timestamp: 2_000,
 	});
@@ -324,14 +318,7 @@ describe("a session takes its held reading when its first turn leaves rest", () 
 			provider: model.provider,
 			model: model.id,
 			stopReason: "stop",
-			usage: {
-				input: 10,
-				output: 5,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 15,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 10, output: 5, totalTokens: 15 },
 			timestamp: Date.now(),
 		};
 		const stream = new AssistantMessageEventStream();

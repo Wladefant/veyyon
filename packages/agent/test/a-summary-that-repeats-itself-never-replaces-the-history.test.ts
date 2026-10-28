@@ -10,6 +10,7 @@ import {
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { createUserMessage, requireBundledModel } from "./helpers";
 
 /**
@@ -88,14 +89,7 @@ function assistantText(text: string): AssistantMessage {
 		provider: "mock",
 		model: "mock",
 		api: "mock",
-		usage: {
-			input: 0,
-			output: 512,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 512,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), output: 512, totalTokens: 512 },
 		stopReason: "stop",
 	} as AssistantMessage;
 }

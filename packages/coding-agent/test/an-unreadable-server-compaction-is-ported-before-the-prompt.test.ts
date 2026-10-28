@@ -31,6 +31,7 @@ import { REMOTE_COMPACTION_PRESERVE_KEY, type RemoteCompactionPreserveData } fro
 import type { Context, Message, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { getLatestCompactionEntry } from "@veyyon/kernel/session/session-context";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
@@ -47,14 +48,7 @@ const MINTING = { provider: "openai", id: "gpt-5.1" } as const;
 const FOREIGN = { provider: "azure", id: "gpt-4-32k" } as const;
 
 function usage() {
-	return {
-		input: 1,
-		output: 1,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 2,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	return { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 }
 
 function streamReplying(model: Model, text: string): AssistantMessageEventStream {

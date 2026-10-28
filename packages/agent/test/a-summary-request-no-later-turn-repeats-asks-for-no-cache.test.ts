@@ -40,6 +40,7 @@ import {
 	type SimpleStreamOptions,
 	type Tool,
 } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import * as logger from "@veyyon/utils/logger";
 import { anthropicModel, requireBundledModel } from "./helpers";
 import { readResult, user } from "./support/compaction-session";
@@ -56,14 +57,7 @@ function assistantText(text: string, timestamp = 2): AssistantMessage {
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
 		stopReason: "stop",
-		usage: {
-			input: 10,
-			output: 10,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 20,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 10, output: 10, totalTokens: 20 },
 		timestamp,
 	};
 }

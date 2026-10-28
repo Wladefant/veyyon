@@ -7,6 +7,7 @@ import {
 	type SessionEntry,
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Usage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { logger } from "@veyyon/utils";
 import { createUserMessage } from "./helpers";
 
@@ -36,14 +37,7 @@ const NON_MESSAGE_TOKENS = 30_000;
 const PROMPT_TOKENS = 48_000;
 
 function usage(promptTokens: number): Usage {
-	return {
-		input: promptTokens,
-		output: 400,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: promptTokens + 400,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	return { ...emptyUsage(), input: promptTokens, output: 400, totalTokens: promptTokens + 400 };
 }
 
 function assistantMessage(text: string, promptTokens: number): AssistantMessage {

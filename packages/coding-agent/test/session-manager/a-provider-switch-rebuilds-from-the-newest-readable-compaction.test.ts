@@ -19,7 +19,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import { REMOTE_COMPACTION_PRESERVE_KEY, type RemoteCompactionPreserveData } from "@veyyon/agent-core/compaction";
-import { getBundledProviders } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledProviders } from "@veyyon/catalog/models";
 import { buildSessionContext, getEffectiveCompactionEntry } from "@veyyon/kernel/session/session-context";
 import type { CompactionEntry, SessionEntry, SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 
@@ -37,14 +37,7 @@ function msg(id: string, parentId: string, role: "user" | "assistant", text: str
 			api: "openai-responses",
 			provider: MINTING_PROVIDER,
 			model: "gpt-5.1",
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 			stopReason: "stop",
 			timestamp: 1,
 		},

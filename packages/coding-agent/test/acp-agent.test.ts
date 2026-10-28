@@ -120,14 +120,7 @@ function makeAssistantMessage(text: string, thinking?: string) {
 		api: "anthropic-messages" as const,
 		provider: "anthropic" as const,
 		model: TEST_MODELS[0].id,
-		usage: {
-			input: 10,
-			output: 5,
-			cacheRead: 2,
-			cacheWrite: 1,
-			totalTokens: 18,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 10, output: 5, cacheRead: 2, cacheWrite: 1, totalTokens: 18 },
 		stopReason: "stop" as const,
 		timestamp: Date.now(),
 	};
@@ -1358,14 +1351,7 @@ describe("ACP agent", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: TEST_MODELS[0].id,
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		});
@@ -1438,14 +1424,7 @@ describe("ACP agent", () => {
 			api: "openai-responses",
 			provider: "openai",
 			model: TEST_MODELS[1].id,
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		});

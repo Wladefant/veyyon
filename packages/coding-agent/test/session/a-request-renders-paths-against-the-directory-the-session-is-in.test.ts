@@ -29,6 +29,7 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { Context, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import {
@@ -95,14 +96,7 @@ const TRANSITIONS: Record<string, Transition> = {
 				provider: "anthropic",
 				model: "claude-sonnet-4-5",
 				stopReason: "stop",
-				usage: {
-					input: 1,
-					output: 1,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 2,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 				timestamp: 2,
 			});
 			await other.flush();

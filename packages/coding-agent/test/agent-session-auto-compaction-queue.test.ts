@@ -194,14 +194,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: 190000,
-				output: 1000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 191000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 190000, output: 1000, totalTokens: 191000 },
 			timestamp: Date.now(),
 		};
 
@@ -239,14 +232,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
 			stopReason: "stop",
-			usage: {
-				input: 1_000,
-				output: 100,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 1_100,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1_000, output: 100, totalTokens: 1_100 },
 			timestamp: Date.now(),
 		});
 		sessionManager.appendMessage({
@@ -283,14 +269,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
 			stopReason: "stop",
-			usage: {
-				input: 1_000,
-				output: 100,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 1_100,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1_000, output: 100, totalTokens: 1_100 },
 			timestamp: Date.now(),
 		});
 		sessionManager.appendMessage({ role: "user", content: "second turn", timestamp: Date.now() });
@@ -363,14 +342,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "toolUse" as const,
-			usage: {
-				input: 190000,
-				output: 1000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 191000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 190000, output: 1000, totalTokens: 191000 },
 			timestamp: now,
 		};
 
@@ -426,14 +398,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "toolUse" as const,
-			usage: {
-				input: 190000,
-				output: 1000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 191000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 190000, output: 1000, totalTokens: 191000 },
 			timestamp: now,
 		};
 		const trailingEmptyStop = {
@@ -443,14 +408,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: 191000,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 191001,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 191000, output: 1, totalTokens: 191001 },
 			timestamp: now + 1,
 		};
 
@@ -594,14 +552,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: 5000,
-				output: 1000,
-				cacheRead: 85000,
-				cacheWrite: 0,
-				totalTokens: 91000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 5000, output: 1000, cacheRead: 85000, totalTokens: 91000 },
 			timestamp: now,
 		};
 
@@ -649,14 +600,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: 5000,
-				output: 1000,
-				cacheRead: 85000,
-				cacheWrite: 0,
-				totalTokens: 91000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 5000, output: 1000, cacheRead: 85000, totalTokens: 91000 },
 			timestamp: now,
 		};
 
@@ -722,14 +666,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			model: "claude-sonnet-4-5",
 			stopReason: "error" as const,
 			errorMessage: "503 service unavailable: overloaded_error retry-after-ms=50",
-			usage: {
-				input: 100,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 100,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 100, totalTokens: 100 },
 			timestamp: now - 1,
 		};
 		session.agent.emitExternalEvent({ type: "message_end", message: retryableError });
@@ -745,14 +682,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: 5000,
-				output: 1000,
-				cacheRead: 85000,
-				cacheWrite: 0,
-				totalTokens: 91000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 5000, output: 1000, cacheRead: 85000, totalTokens: 91000 },
 			timestamp: now,
 		};
 		session.agent.emitExternalEvent({ type: "message_end", message: recoveredOverThreshold });
@@ -810,14 +740,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "toolUse" as const,
-			usage: {
-				input: 5000,
-				output: 1000,
-				cacheRead: 85000,
-				cacheWrite: 0,
-				totalTokens: 91000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 5000, output: 1000, cacheRead: 85000, totalTokens: 91000 },
 			timestamp: now,
 		};
 		session.agent.emitExternalEvent({ type: "message_end", message: orphanToolUse });
@@ -877,14 +800,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: 190000,
-				output: 1000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 191000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 190000, output: 1000, totalTokens: 191000 },
 			timestamp: Date.now(),
 		};
 
@@ -919,14 +835,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: 100,
-				output: 20,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 120,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 100, output: 20, totalTokens: 120 },
 			timestamp: Date.now(),
 		};
 

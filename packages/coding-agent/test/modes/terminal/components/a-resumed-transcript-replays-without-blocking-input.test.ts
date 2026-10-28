@@ -35,6 +35,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
 import type { AssistantMessage, UserMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { ChatTranscriptBuilder } from "@veyyon/coding-agent/modes/terminal/components/transcript/chat-transcript-builder";
@@ -61,14 +62,7 @@ const ui = {
 	terminal: { columns: WIDTH },
 } as unknown as TUI;
 
-const usage = {
-	input: 10,
-	output: 2,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 12,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = { ...emptyUsage(), input: 10, output: 2, totalTokens: 12 };
 
 function assistant(content: AssistantMessage["content"], stopReason: "stop" | "toolUse" | "error"): AssistantMessage {
 	return {

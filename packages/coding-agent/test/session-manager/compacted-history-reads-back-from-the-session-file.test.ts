@@ -141,6 +141,7 @@ import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as ai from "@veyyon/ai/stream";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { MemoryBackend } from "@veyyon/coding-agent/memory/backend";
@@ -273,14 +274,7 @@ function assistantTurn(text: string, timestamp: number): AssistantMessage {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 		stopReason: "stop",
 		timestamp,
 	};
@@ -1084,14 +1078,7 @@ async function crossThreshold(session: AgentSession): Promise<void> {
 	});
 	const turn: AssistantMessage = {
 		...assistantTurn("Done.", 40),
-		usage: {
-			input: 190_000,
-			output: 1_000,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 191_000,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 190_000, output: 1_000, totalTokens: 191_000 },
 	};
 	session.agent.emitExternalEvent({ type: "message_end", message: turn });
 	session.agent.emitExternalEvent({ type: "agent_end", messages: [turn] });

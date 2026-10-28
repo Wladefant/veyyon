@@ -27,7 +27,7 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AFTER_EDIT_CHECKS } from "@veyyon/coding-agent/config/settings-domains/editing";
@@ -56,14 +56,7 @@ function assistantFinal(text = "Implemented the requested changes across files."
 		model: "claude-sonnet-4-5",
 		provider: "anthropic",
 		api: "anthropic-messages",
-		usage: {
-			input: 10,
-			output: 5,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 15,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 10, output: 5, totalTokens: 15 },
 		stopReason: "stop",
 	};
 }

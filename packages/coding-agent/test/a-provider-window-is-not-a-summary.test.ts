@@ -21,6 +21,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai/types";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { buildSessionContext } from "@veyyon/kernel/session/session-context";
 import type {
 	CompactionEntry,
@@ -37,14 +38,7 @@ function assistantMessage(text: string): AssistantMessage {
 	return {
 		role: "assistant",
 		content: [{ type: "text", text }],
-		usage: {
-			input: 100,
-			output: 50,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 150,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 100, output: 50, totalTokens: 150 },
 		stopReason: "stop",
 		timestamp: Date.now(),
 		api: "openai-responses",

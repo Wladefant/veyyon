@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AssistantMessage, ImageContent } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import type { SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { getBlobsDir, setAgentDir, TempDir } from "@veyyon/utils";
@@ -90,14 +91,7 @@ describe("SessionManager signature persistence", () => {
 			api: "openai-codex-responses",
 			provider: "openai-codex",
 			model: "gpt-5.4",
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 			stopReason: "stop",
 			timestamp: 2,
 		});
@@ -151,14 +145,7 @@ describe("SessionManager signature persistence", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "claude-sonnet",
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 			stopReason: "toolUse",
 			timestamp: 1,
 		} satisfies AssistantMessage);
@@ -224,14 +211,7 @@ describe("SessionManager signature persistence", () => {
 			api: "openai-responses",
 			provider: "github-copilot",
 			model: "gpt-5-mini",
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 			stopReason: "stop",
 			providerPayload,
 			timestamp: 2,
@@ -276,14 +256,7 @@ describe("SessionManager signature persistence", () => {
 			api: "openai-codex-responses",
 			provider: "openai-codex",
 			model: "gpt-5.2-codex",
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 			stopReason: "stop",
 			providerPayload: { type: "openaiResponsesHistory", provider: "openai-codex", items: [reasoning] },
 			timestamp: 2,

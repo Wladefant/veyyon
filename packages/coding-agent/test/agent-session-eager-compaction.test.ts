@@ -108,14 +108,7 @@ function emitHighUsageTurn(session: AgentSession): void {
 		provider: "anthropic" as const,
 		model: "claude-sonnet-4-5",
 		stopReason: "stop" as const,
-		usage: {
-			input: 190_000,
-			output: 1_000,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 191_000,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 190_000, output: 1_000, totalTokens: 191_000 },
 		timestamp: Date.now(),
 	};
 	session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });

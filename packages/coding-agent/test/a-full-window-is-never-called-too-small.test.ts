@@ -18,6 +18,7 @@ import { Agent } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { requireBundledModel } from "../../agent/test/helpers";
@@ -61,14 +62,7 @@ function assistantResponse(promptTokens: number) {
 		provider: MODEL_PROVIDER,
 		model: MODEL_ID,
 		api: "openai-completions" as const,
-		usage: {
-			input: promptTokens,
-			output: 8,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: promptTokens + 8,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: promptTokens, output: 8, totalTokens: promptTokens + 8 },
 		stopReason: "stop" as const,
 	};
 }
