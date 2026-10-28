@@ -16,6 +16,9 @@ on:
         description: Build native addon for focused tests
         type: boolean
         default: false
+      cargo_packages:
+        description: JSON array of Cargo package names to test on the runner (empty skips)
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ inputs.target_sha || github.ref }}
@@ -237,6 +240,27 @@ jobs:
         env:
           CARGO_BUILD_JOBS: "2"
         run: bun run ci:build:native
+      - name: Run cargo tests
+        id: cargo
+        if: ${{ !cancelled() && inputs.cargo_packages != '' && matrix.index == 0 }}
+        env:
+          CARGO_BUILD_JOBS: "2"
+          CARGO_PACKAGES: ${{ inputs.cargo_packages }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_names="$(node -e "const p=JSON.parse(process.env.CARGO_PACKAGES);if(!Array.isArray(p)||p.length===0||p.length>10||p.some(x=>typeof x!=='string'||!/^[A-Za-z0-9_-]+$/.test(x)))throw new Error('cargo_packages needs 1..10 crate names');console.log(p.join('\n'))")"
+          mapfile -t packages <<< "$package_names"
+          args=(); for p in "${packages[@]}"; do args+=(-p "$p"); done
+          log="$RUNNER_TEMP/ovh-cargo-test.log"
+          status=0
+          timeout 840 cargo test --locked "${args[@]}" 2>&1 | tee "$log" || status=1
+          pass="$(sed -nE 's/^test result: [a-z]+\. ([0-9]+) passed.*/\1/p' "$log" | awk '{s+=$1} END{print s+0}')"
+          fail="$(sed -nE 's/^test result: [a-z]+\. [0-9]+ passed; ([0-9]+) failed.*/\1/p' "$log" | awk '{s+=$1} END{print s+0}')"
+          echo "OVH_CARGO_TOTAL packages=${packages[*]} pass=$pass fail=$fail"
+          ((pass>0)) || { echo '::error::No cargo tests ran'; status=1; }
+          ((fail==0)) || status=1
+          exit "$status"
       - name: Prepare bwrap runtime
         id: bwrap
         if: steps.install.outcome == 'success'

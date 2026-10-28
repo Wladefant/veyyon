@@ -51,3 +51,19 @@ test("a copied native journal without sidecars never resumes as an ordinary chec
 	await writeFile(file, `${JSON.stringify({ type: "session", id: "transfer", cwd: root, checkpointHandoff: identity })}\n`);
 	await expect(readSessionOwnershipMarker(file, "transfer")).rejects.toThrow(/marker is missing/i);
 });
+
+// WHY: a lazily created session has no file before its first persisted entry; the marker read raised ENOENT and blocked the
+// first prompt (#716). Gap: this drives the reader, not the whole prompt path; the admission test covers that path eagerly.
+test("a session whose file does not exist yet has no ownership marker", async () => {
+	const root = await mkdtemp(join(tmpdir(), "session-ownership-lazy-"));
+	roots.push(root);
+	await expect(readSessionOwnershipMarker(join(root, "not-yet-created.jsonl"), "lazy")).resolves.toBeNull();
+});
+
+test("a session file that cannot be read for any other reason still fails", async () => {
+	const root = await mkdtemp(join(tmpdir(), "session-ownership-unreadable-"));
+	roots.push(root);
+	const directoryInPlaceOfFile = join(root, "session.jsonl");
+	await mkdir(directoryInPlaceOfFile);
+	await expect(readSessionOwnershipMarker(directoryInPlaceOfFile, "lazy")).rejects.toThrow();
+});
