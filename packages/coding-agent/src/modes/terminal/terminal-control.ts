@@ -1,7 +1,7 @@
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { serveTerminalControl, TerminalNotReadyError } from "../../launch/terminal-control";
 import { isTerminalYieldToolResult } from "../../session/runtime/yield-tracker";
-import { OperatorAnswerInbox } from "../../session/operator-answer-inbox";
+import { OperatorAnswerInbox, operatorAnswerQuestionId } from "../../session/operator-answer-inbox";
 import type { InteractiveMode } from "./interactive-mode";
 
 export interface TerminalTurnProvenance {
@@ -106,16 +106,23 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<() =>
 		if (appended.length || !intact) entries = entries.concat(appended);
 		return entries;
 	};
-	const answers = new OperatorAnswerInbox(mode.sessionManager, async (text, behavior) => {
-		if (mode.isShuttingDown || !mode.isInitialized) throw new Error("Terminal is shutting down");
-		if (mode.session.isStreaming && behavior === "followUp") {
-			await mode.session.followUp(text);
-			return "queued";
-		}
-		// Steer also drains an idle session. Recovery must not depend on a REPL input callback.
-		await mode.session.steer(text);
-		return mode.session.isStreaming ? "steered" : "queued";
-	});
+	const answers = new OperatorAnswerInbox(
+		() => mode.sessionManager,
+		async (text, behavior) => {
+			if (mode.isShuttingDown || !mode.isInitialized) throw new Error("Terminal is shutting down");
+			if (mode.session.isStreaming && behavior === "followUp") {
+				await mode.session.followUp(text);
+				return "queued";
+			}
+			// Steer also drains an idle session. Recovery must not depend on a REPL input callback.
+			await mode.session.steer(text);
+			return mode.session.isStreaming ? "steered" : "queued";
+		},
+		questionId => {
+			const queued = mode.session.getQueuedMessages();
+			return [...queued.steering, ...queued.followUp].some(text => operatorAnswerQuestionId(text) === questionId);
+		},
+	);
 	await answers.recover();
 	return serveTerminalControl({
 		identity: () => ({
