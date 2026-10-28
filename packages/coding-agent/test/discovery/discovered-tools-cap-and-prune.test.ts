@@ -7,13 +7,13 @@ import { buildModel } from "@veyyon/catalog/build";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { CustomTool } from "@veyyon/coding-agent/extensibility/custom-tools/types";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { executeAcpBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/acp-builtins";
-import type { SlashCommandRuntime } from "@veyyon/coding-agent/slash-commands/types";
 import {
 	extractToolLastCallIndices,
 	ToolDiscovery,
 	type ToolDiscoveryHost,
 } from "@veyyon/coding-agent/session/runtime/tool-discovery";
+import { executeAcpBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/acp-builtins";
+import type { SlashCommandRuntime } from "@veyyon/coding-agent/slash-commands/types";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
@@ -71,7 +71,6 @@ function createCustomMcpTool(name: string): CustomTool {
 		},
 	};
 }
-
 
 function assistantToolCall(toolName: string, callId: string): AssistantMessage {
 	return {
@@ -1004,12 +1003,7 @@ describe("AgentSession integration: cap, prune, persistence, and reload", () => 
 		sessions.push(session);
 		await session.refreshMCPTools(mcpTools);
 		await session.activateDiscoveredTools(mcpTools.map(tool => tool.name));
-		expect(agent.state.tools.map(tool => tool.name)).toEqual([
-			"read",
-			"mcp__s__t1",
-			"mcp__s__t2",
-			"mcp__s__t3",
-		]);
+		expect(agent.state.tools.map(tool => tool.name)).toEqual(["read", "mcp__s__t1", "mcp__s__t2", "mcp__s__t3"]);
 
 		await fs.writeFile(file, "mcp:\n  discoveryMode: true\ntools:\n  maxDiscoveredTools: 1\n");
 		const output: string[] = [];

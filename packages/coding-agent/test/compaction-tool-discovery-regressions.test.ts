@@ -11,8 +11,8 @@
  * `pruneDiscoveredToolsAfterCompaction`; the prune runs inside `session.compact()`.
  */
 
-import * as fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool, type StreamFn } from "@veyyon/agent-core";
 import type { AssistantMessage, Model } from "@veyyon/ai";
@@ -255,7 +255,9 @@ describe("#685 discovered-tool regressions through a real AgentSession", () => {
 		session.setPlanReferencePath(planPath);
 		session.markPlanReferenceSent();
 
-		const authoritativePhases = [{ name: "Work", tasks: [{ content: "landed task", status: "in_progress" as const }] }];
+		const authoritativePhases = [
+			{ name: "Work", tasks: [{ content: "landed task", status: "in_progress" as const }] },
+		];
 		sessionManager.appendMessage({
 			role: "toolResult",
 			toolCallId: "todo-call",
@@ -289,9 +291,11 @@ describe("#685 discovered-tool regressions through a real AgentSession", () => {
 		expect(session.getPlanReferencePath()).toBe(planPath);
 
 		await session.prompt("Continue from the approved plan");
-		expect(session.agent.state.messages.some(message =>
-			message.role === "custom" && message.customType === "plan-mode-reference",
-		)).toBe(true);
+		expect(
+			session.agent.state.messages.some(
+				message => message.role === "custom" && message.customType === "plan-mode-reference",
+			),
+		).toBe(true);
 	});
 
 	it("evicts the least-recently-called discovery at the default cap of 40 once tool calls mark recent use", async () => {
