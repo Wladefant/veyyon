@@ -558,7 +558,9 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 		state.currentTokens = 105000;
 
 		const outcome = await runtime.runAutoCompaction("threshold", false);
-		expect(outcome).toBe(COMPACTION_CHECK_NONE);
+		// Context still sits over the bar with no headroom, so the existing dead-end contract blocks
+		// automatic continuation; the guard itself must stay unarmed (asserted below).
+		expect(outcome).toBe(COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION);
 
 		// Failure path must NOT arm the guard
 		expect(runtime.isAutoCompactionSuppressed()).toBe(false);
@@ -621,7 +623,9 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 
 		// No messages in branch -> prepareCompaction returns undefined (nothing to summarize)
 		const outcome = await runtime.runAutoCompaction("threshold", false);
-		expect(outcome).toBe(COMPACTION_CHECK_NONE);
+		// Nothing to summarize with no headroom is the existing dead end: continuation is blocked,
+		// but the guard must not arm (asserted below).
+		expect(outcome).toBe(COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION);
 
 		// No-op run must NOT arm the guard
 		expect(runtime.isAutoCompactionSuppressed()).toBe(false);
