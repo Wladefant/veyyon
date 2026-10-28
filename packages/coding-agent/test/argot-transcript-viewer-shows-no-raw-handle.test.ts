@@ -90,6 +90,8 @@ function userLine(id: string, content: string): string {
 	});
 }
 
+let viewers: AgentTranscriptViewer[] = [];
+
 function makeViewer(file: string, expandArgot?: (e: SessionMessageEntry[]) => SessionMessageEntry[]) {
 	const agents = new AgentRegistry();
 	agents.register({
@@ -101,7 +103,7 @@ function makeViewer(file: string, expandArgot?: (e: SessionMessageEntry[]) => Se
 		sessionFile: file,
 		status: "parked",
 	});
-	return new AgentTranscriptViewer({
+	const viewer = new AgentTranscriptViewer({
 		agentId: "Main/advisor",
 		registry: agents,
 		ui: { requestRender: () => {}, requestComponentRender: () => {} } as never,
@@ -113,6 +115,8 @@ function makeViewer(file: string, expandArgot?: (e: SessionMessageEntry[]) => Se
 		onClose: () => {},
 		onHubClose: () => {},
 	});
+	viewers.push(viewer);
+	return viewer;
 }
 
 describe("the transcript viewer shows no raw handle", () => {
@@ -151,6 +155,8 @@ describe("the transcript viewer shows no raw handle", () => {
 	});
 
 	afterEach(() => {
+		for (const viewer of viewers) viewer.dispose();
+		viewers = [];
 		if (rowsDesc) {
 			Object.defineProperty(process.stdout, "rows", rowsDesc);
 		} else {

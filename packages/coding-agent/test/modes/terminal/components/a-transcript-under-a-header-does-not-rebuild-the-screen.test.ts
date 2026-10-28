@@ -59,7 +59,7 @@ import type { AssistantMessageView } from "@veyyon/wire/presentation";
 import { countDestructivePaints } from "../../../../../../hosts/terminal/engine/test/helpers/destructive-paints";
 import { settleFrames } from "../../../../../../hosts/terminal/engine/test/helpers/settle-frames";
 import { VirtualTerminal } from "../../../../../../hosts/terminal/engine/test/virtual-terminal";
-import { createToolExecution } from "../../../helpers/tool-execution";
+import { type ToolExecutionBuilder, withToolExecutions } from "../../../helpers/tool-execution";
 
 const WIDTH = 100;
 
@@ -179,7 +179,11 @@ interface PaintCounts {
 	erases: number;
 }
 
-async function runBusyTurn(height: number, steps: number): Promise<{ busy: PaintCounts; control: PaintCounts }> {
+async function runBusyTurn(
+	height: number,
+	steps: number,
+	create: ToolExecutionBuilder,
+): Promise<{ busy: PaintCounts; control: PaintCounts }> {
 	const term = new VirtualTerminal(WIDTH, height, 20_000);
 	const paints = countDestructivePaints(term);
 	const tui = new TUI(term, true);
@@ -190,9 +194,9 @@ async function runBusyTurn(height: number, steps: number): Promise<{ busy: Paint
 	tui.setPinnedFooterChildCount(1);
 	const assistant = new AssistantMessageComponent(undefined, false);
 	const tools = ["build.sh", "test.sh", "lint.sh"].map(command =>
-		createToolExecution("bash", { command }, {}, undefined, tui, process.cwd()),
+		create("bash", { command }, {}, undefined, tui, process.cwd()),
 	);
-	const todo = createToolExecution("todo", interactionFixtures.todo!.args, {}, undefined, tui, process.cwd());
+	const todo = create("todo", interactionFixtures.todo!.args, {}, undefined, tui, process.cwd());
 	// The reply that arrives AFTER the board is what pushes the board's rows off
 	// the top of the window while its settle animation is still running, which is
 	// the only arrangement in which an animating block can rewrite rows the engine
@@ -253,7 +257,8 @@ async function runBusyTurn(height: number, steps: number): Promise<{ busy: Paint
 	}
 }
 
-// Concurrent for the reason the header cases are.
+// Concurrent for the reason the header cases are, so the blocks come from `withToolExecutions`: Bun
+// takes no per-test cleanup hook inside a concurrent test.
 describe("a busy turn does not rebuild the screen", () => {
 	const STEPS = 60;
 	for (const height of [24, 40]) {
@@ -261,7 +266,7 @@ describe("a busy turn does not rebuild the screen", () => {
 			// A multiplexer pane gates the divergence rebuild off, so the arm would
 			// pass without exercising anything it claims to cover.
 			expect(isInsideTerminalMultiplexer()).toBe(false);
-			const { busy, control } = await runBusyTurn(height, STEPS);
+			const { busy, control } = await withToolExecutions(create => runBusyTurn(height, STEPS, create));
 			// eslint-disable-next-line no-console
 			console.log(`busy height=${height}`, JSON.stringify({ busy, control }));
 			expect(busy.clears).toBe(0);

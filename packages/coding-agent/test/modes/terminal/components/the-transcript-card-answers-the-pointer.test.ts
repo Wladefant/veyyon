@@ -75,6 +75,7 @@ interface Harness {
 }
 
 let dirs: string[] = [];
+let viewers: AgentTranscriptViewer[] = [];
 
 function makeViewer(): Harness {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tv-pointer-"));
@@ -104,6 +105,7 @@ function makeViewer(): Harness {
 		onClose,
 		onHubClose: () => {},
 	});
+	viewers.push(viewer);
 	return { viewer, onClose, rows: () => [...viewer.render(WIDTH)] };
 }
 
@@ -152,6 +154,8 @@ describe("the transcript card answers the pointer", () => {
 	});
 
 	afterEach(() => {
+		for (const viewer of viewers) viewer.dispose();
+		viewers = [];
 		if (rowsDesc) {
 			Object.defineProperty(process.stdout, "rows", rowsDesc);
 		} else {
