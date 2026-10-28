@@ -81,6 +81,8 @@
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
 - An extension command run on a session with no UI receives the extension runner's no-op UI context instead of a second copy of it; no user-facing change.
 - The theme loader and the status-rail animation read 256-color palette indices through `ansi256ToHex` in `@veyyon/utils/color` instead of two copies of the xterm table; no user-facing change.
+- The remote summarizer resolves an Azure model's deployment through the same `@veyyon/ai` helper as server-side compaction; no user-facing change.
+- Azure Responses turns, Azure chat-completions turns and server-side compaction resolve `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` through one helper in `providers/azure-deployment-names`; no user-facing change.
 - Tool-argument coercion matches a JSON Schema `type` keyword through the validator's matcher instead of a copy of it; no user-facing change.
 - Cursor and GitLab Duo tool results, GitLab Duo goal prompts and the Antigravity and Google Cloud token refreshes each run through one shared implementation; no user-facing change.
 - The auth-broker discovery imports the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
