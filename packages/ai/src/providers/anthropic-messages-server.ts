@@ -571,6 +571,7 @@ export function encodeStream(
 			try {
 				for await (const ev of events) {
 					if (out.cancelled) return;
+					if (ev.type !== "done" && ev.type !== "error") lastPartial = ev.partial;
 					switch (ev.type) {
 						case "start":
 							ensureStart(ev.partial);

@@ -531,4 +531,45 @@ describe("anthropic-messages encodeStream", () => {
 		const delta = sse[1]!.data as { delta: { stop_reason: string } };
 		expect(delta.delta.stop_reason).toBe("end_turn");
 	});
+
+	it("reports the usage the last event carried when the stream ends without an explicit done", async () => {
+		const early: AssistantMessage = {
+			role: "assistant",
+			content: [],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "m",
+			usage: { ...emptyUsage(), input: 21, output: 0, cacheRead: 4, cacheWrite: 2 },
+			stopReason: "stop",
+			timestamp: 0,
+		};
+		const late: AssistantMessage = {
+			...early,
+			content: [{ type: "text", text: "partial answer" }],
+			usage: { ...emptyUsage(), input: 21, output: 9, cacheRead: 4, cacheWrite: 2 },
+		};
+		const sse = await collectSse(
+			encodeStream(
+				makeStream([
+					{ type: "start", partial: early },
+					{ type: "text_start", contentIndex: 0, partial: early },
+					{ type: "text_delta", contentIndex: 0, delta: "partial answer", partial: late },
+				]),
+				"m",
+			),
+		);
+		expect(sse.map(e => e.event)).toEqual([
+			"message_start",
+			"content_block_start",
+			"content_block_delta",
+			"content_block_stop",
+			"message_delta",
+			"message_stop",
+		]);
+		expect(sse[4]?.data).toEqual({
+			type: "message_delta",
+			delta: { stop_reason: "end_turn", stop_sequence: null },
+			usage: { input_tokens: 21, output_tokens: 9, cache_read_input_tokens: 4, cache_creation_input_tokens: 2 },
+		});
+	});
 });
