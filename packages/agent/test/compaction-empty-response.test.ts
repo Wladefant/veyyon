@@ -11,8 +11,7 @@ import {
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Context, Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
-import { createUserMessage } from "./helpers";
+import { createUserMessage, requireBundledModel } from "./helpers";
 
 /**
  * An empty model response is never a valid compaction result, and accepting one
@@ -57,9 +56,7 @@ function makeAborted(text?: string): AssistantMessage {
 }
 
 function getModel(): Model {
-	const model = getBundledModel("openai-codex", "gpt-5.1-codex");
-	if (!model) throw new Error("Expected built-in openai-codex/gpt-5.1-codex to exist");
-	return model;
+	return requireBundledModel("openai-codex", "gpt-5.1-codex");
 }
 
 function makePreparation(): CompactionPreparation {

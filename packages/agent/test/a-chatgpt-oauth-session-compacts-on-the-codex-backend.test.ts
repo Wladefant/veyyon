@@ -61,7 +61,7 @@ import { buildOpenAIResponsesCompat } from "@veyyon/catalog/compat/openai";
 import { getBundledModel } from "@veyyon/catalog/models";
 import type { ResolvedOpenAIResponsesCompat } from "@veyyon/catalog/types";
 import { OPENAI_HEADERS } from "@veyyon/catalog/wire/codex";
-import { createUserMessage } from "./helpers";
+import { createUserMessage, requireBundledModel } from "./helpers";
 
 /** The route the host serves compaction on: the ordinary turn route. */
 // A compaction rides a live conversation, so the transport requires the session
@@ -98,9 +98,7 @@ function makeAssistantStop(text: string): AssistantMessage {
 }
 
 function codexModel(): Model {
-	const model = getBundledModel("openai-codex", "gpt-5.1-codex");
-	if (!model) throw new Error("Expected built-in openai-codex/gpt-5.1-codex to exist");
-	return model;
+	return requireBundledModel("openai-codex", "gpt-5.1-codex");
 }
 
 function makePreparation(): CompactionPreparation {

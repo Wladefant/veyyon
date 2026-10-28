@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { type CompactionPreparation, compact, DEFAULT_COMPACTION_SETTINGS } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Model, UserMessage } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { requireBundledModel } from "./helpers";
 
 /**
  * LOCKS OUT: a compaction result field populated by verbatim-copying a message
@@ -31,9 +31,7 @@ import { getBundledModel } from "@veyyon/catalog/models";
 const MODEL_SUMMARY = "Refactored the loader and fixed the retry path. Two files touched.";
 
 function modelFixture(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected bundled compaction model");
-	return model;
+	return requireBundledModel("anthropic", "claude-sonnet-4-5");
 }
 
 function userMessage(text: string): UserMessage {

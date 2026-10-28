@@ -28,7 +28,7 @@ import type {
 	ThinkingLevelChangeEntry,
 } from "@veyyon/kernel/session/session-entries";
 import { migrateSessionEntries } from "@veyyon/kernel/session/session-migrations";
-import { createUserMessage } from "../../agent/test/helpers";
+import { createUserMessage, requireBundledModel } from "../../agent/test/helpers";
 import { e2eApiKey } from "./helpers/e2e-session";
 
 // ============================================================================
@@ -648,9 +648,7 @@ function makeSummarizerPreparation(settings?: Partial<CompactionSettings>) {
 }
 
 function getSummarizerModel(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
-	return model;
+	return requireBundledModel("anthropic", "claude-sonnet-4-5");
 }
 
 describe("compaction.remoteEndpoint summarizer", () => {

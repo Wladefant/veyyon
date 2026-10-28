@@ -40,16 +40,14 @@ import type {
 	ToolResultMessage,
 	UserMessage,
 } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { requireBundledModel } from "./helpers";
 
 const SESSION_ID = "live-session-id";
 const SESSION_PROMPT = ["# Harness\nstable shared prefix"];
 const TOOLS: Tool[] = [{ name: "read", description: "read a file", parameters: { type: "object", properties: {} } }];
 
 function anthropicModel(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("expected bundled anthropic/claude-sonnet-4-5");
-	return model;
+	return requireBundledModel("anthropic", "claude-sonnet-4-5");
 }
 
 function user(text: string, timestamp = 1): UserMessage {

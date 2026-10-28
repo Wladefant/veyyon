@@ -6,7 +6,7 @@ import {
 	SUMMARIZATION_SYSTEM_PROMPT,
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Context, Message, Model, Tool, ToolResultMessage, UserMessage } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { requireBundledModel } from "./helpers";
 
 /**
  * The positive half of cache-aligned compaction: when every precondition holds, the
@@ -22,9 +22,7 @@ const TOOLS: Tool[] = [{ name: "read", description: "read a file", parameters: {
 const HUGE_TOOL_OUTPUT = "T".repeat(9000);
 
 function anthropicModel(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected the bundled anthropic compaction model");
-	return model;
+	return requireBundledModel("anthropic", "claude-sonnet-4-5");
 }
 
 function user(text: string, timestamp = 1): UserMessage {

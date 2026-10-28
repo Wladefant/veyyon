@@ -34,7 +34,7 @@ import {
 	type SessionMessageEntry,
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, ToolCall, ToolResultMessage, Usage } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { requireBundledModel } from "./helpers";
 
 const SETTINGS = { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 1 };
 const TIMESTAMP = "2026-09-25T00:00:00.000Z";
@@ -52,9 +52,7 @@ const usage = (): Usage => ({
 });
 
 function model() {
-	const found = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!found) throw new Error("expected a bundled compaction model");
-	return found;
+	return requireBundledModel("anthropic", "claude-sonnet-4-5");
 }
 
 function messageEntry(message: AgentMessage): SessionMessageEntry {

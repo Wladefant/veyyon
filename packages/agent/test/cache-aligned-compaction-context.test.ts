@@ -9,6 +9,7 @@ import {
 import { countTokens } from "@veyyon/agent-core/tokenizer";
 import type { AssistantMessage, Message, Model, Tool, ToolResultMessage, UserMessage } from "@veyyon/ai";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { requireBundledModel } from "./helpers";
 
 /**
  * The cache-aligned compaction request replays the live session's provider prefix
@@ -24,9 +25,7 @@ import { getBundledModel } from "@veyyon/catalog/models";
  */
 
 function anthropicModel(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected the bundled anthropic compaction model");
-	return model;
+	return requireBundledModel("anthropic", "claude-sonnet-4-5");
 }
 
 /** Same row, with the prompt-cache capability turned off, as an unknown gateway resolves it. */

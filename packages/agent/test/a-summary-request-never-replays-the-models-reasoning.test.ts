@@ -10,7 +10,7 @@ import { serializeConversation, serializeConversationForSummary } from "@veyyon/
 import type { AssistantMessage, Context, Message, Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
 import { DIALECTS } from "@veyyon/catalog/identity";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { requireBundledModel } from "./helpers";
 
 /**
  * WHY: compacting a session that had thinking on came back as
@@ -96,9 +96,7 @@ function branchEntries(): SessionEntry[] {
 }
 
 function anthropicModel(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
-	return model;
+	return requireBundledModel("anthropic", "claude-sonnet-4-5");
 }
 
 /** Every byte a Context would put on the wire, as one string. */

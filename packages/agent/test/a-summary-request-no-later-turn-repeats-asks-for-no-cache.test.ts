@@ -45,15 +45,14 @@ import {
 } from "@veyyon/ai";
 import { getBundledModel } from "@veyyon/catalog/models";
 import * as logger from "@veyyon/utils/logger";
+import { requireBundledModel } from "./helpers";
 
 const SESSION_KEY = "live-session";
 const SESSION_PROMPT = ["# Harness\nstable shared prefix", "# Project\nlocal rules"];
 const TOOLS: Tool[] = [{ name: "read", description: "read a file", parameters: { type: "object", properties: {} } }];
 
 function anthropicModel(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("expected bundled anthropic/claude-sonnet-4-5");
-	return model;
+	return requireBundledModel("anthropic", "claude-sonnet-4-5");
 }
 
 function user(text: string, timestamp = 1): UserMessage {

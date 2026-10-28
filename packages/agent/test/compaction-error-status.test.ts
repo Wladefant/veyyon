@@ -9,8 +9,7 @@ import {
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
-import { createAssistantMessage, createUserMessage } from "./helpers";
+import { createAssistantMessage, createUserMessage, requireBundledModel } from "./helpers";
 
 // Pins the fix for the "raw 401 surfaced as Compaction failed:" bug.
 //
@@ -51,9 +50,7 @@ function makeAssistantError(errorStatus: number | undefined, errorMessage: strin
 }
 
 function getAnthropicModel(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
-	return model;
+	return requireBundledModel("anthropic", "claude-sonnet-4-5");
 }
 
 const handoffMessages: AgentMessage[] = [

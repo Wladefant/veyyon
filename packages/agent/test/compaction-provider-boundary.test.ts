@@ -8,8 +8,8 @@ import type {
 	ProviderSessionState,
 	SimpleStreamOptions,
 } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { logger } from "@veyyon/utils";
+import { requireBundledModel } from "./helpers";
 
 const HOOK_SECRET = "SESSION_HOOK_SECRET_7f31";
 const MEMORY_SECRET = "SESSION_MEMORY_SECRET_28e4";
@@ -19,9 +19,7 @@ afterEach(() => {
 });
 
 function modelFixture(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected bundled compaction model");
-	return model;
+	return requireBundledModel("anthropic", "claude-sonnet-4-5");
 }
 
 function userMessage(text: string) {

@@ -17,7 +17,7 @@ import {
 import type { Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
 import { getBundledModel } from "@veyyon/catalog/models";
-import { createAssistantText, createUserMessage } from "./helpers";
+import { createAssistantText, createUserMessage, requireBundledModel } from "./helpers";
 
 /**
  * Server-side (remote) compaction: the provider compacts the span through
@@ -29,9 +29,7 @@ import { createAssistantText, createUserMessage } from "./helpers";
  */
 
 function getOpenAIModel(): Model {
-	const model = getBundledModel("openai", "gpt-5.1");
-	if (!model) throw new Error("Expected built-in openai/gpt-5.1 to exist");
-	return model;
+	return requireBundledModel("openai", "gpt-5.1");
 }
 
 function makePreparation(overrides: Partial<CompactionPreparation> = {}): CompactionPreparation {

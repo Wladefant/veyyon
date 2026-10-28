@@ -13,8 +13,7 @@ import {
 } from "@veyyon/agent-core/compaction";
 import type { Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
-import { createAssistantText, createUserMessage } from "./helpers";
+import { createAssistantText, createUserMessage, requireBundledModel } from "./helpers";
 
 /**
  * Compaction has exactly two strategies — `summary` and `handoff` — and no
@@ -43,9 +42,7 @@ const REMOVED_PLACEHOLDER = "Remote compaction preserved provider-native history
 
 /** The exact provider that used to receive the private compaction path. */
 function getCodexModel(): Model {
-	const model = getBundledModel("openai-codex", "gpt-5.1-codex");
-	if (!model) throw new Error("Expected built-in openai-codex/gpt-5.1-codex to exist");
-	return model;
+	return requireBundledModel("openai-codex", "gpt-5.1-codex");
 }
 
 function makePreparation(overrides: Partial<CompactionPreparation> = {}): CompactionPreparation {

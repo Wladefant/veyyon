@@ -10,8 +10,7 @@ import {
 import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import type { Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
-import { createAssistantMessage, createUserMessage } from "./helpers";
+import { createAssistantMessage, createUserMessage, requireBundledModel } from "./helpers";
 
 // Pins fix #1 of the compaction effort-override bug. Before this fix,
 // `generateHandoff` (and the three other compaction summarizers) hardcoded
@@ -34,15 +33,11 @@ import { createAssistantMessage, createUserMessage } from "./helpers";
 // `packages/agent/src/compaction/compaction.ts`.
 
 function getAnthropicModel(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
-	return model;
+	return requireBundledModel("anthropic", "claude-sonnet-4-5");
 }
 
 function getGrokBuildModel(): Model {
-	const model = getBundledModel("xai-oauth", "grok-4.20-0309-reasoning");
-	if (!model) throw new Error("Expected built-in xai-oauth/grok-4.20-0309-reasoning to exist");
-	return model;
+	return requireBundledModel("xai-oauth", "grok-4.20-0309-reasoning");
 }
 
 const messages: AgentMessage[] = [

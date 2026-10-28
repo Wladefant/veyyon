@@ -11,6 +11,7 @@ import type { Message } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { buildSessionContext } from "@veyyon/kernel/session/session-context";
 import type { CompactionEntry, SessionEntry, SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 /**
  * The resume/rebuild contract for OpenAI server-side (remote) compaction.
@@ -122,9 +123,7 @@ function sessionEntries(activeModel?: string): SessionEntry[] {
 }
 
 function getOpenAIModel(): Model {
-	const model = getBundledModel("openai", "gpt-5.1");
-	if (!model) throw new Error("Expected built-in openai/gpt-5.1 to exist");
-	return model;
+	return requireBundledModel("openai", "gpt-5.1");
 }
 
 function summaryMessage(messages: AgentMessage[]) {

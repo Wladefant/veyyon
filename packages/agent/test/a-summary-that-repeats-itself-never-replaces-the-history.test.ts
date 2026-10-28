@@ -10,8 +10,7 @@ import {
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
-import { createUserMessage } from "./helpers";
+import { createUserMessage, requireBundledModel } from "./helpers";
 
 /**
  * A compaction summary that repeats itself is refused, and the history it would
@@ -102,9 +101,7 @@ function assistantText(text: string): AssistantMessage {
 }
 
 function model(): Model {
-	const found = getBundledModel("openai-codex", "gpt-5.1-codex");
-	if (!found) throw new Error("Expected built-in openai-codex/gpt-5.1-codex to exist");
-	return found;
+	return requireBundledModel("openai-codex", "gpt-5.1-codex");
 }
 
 function preparation(): CompactionPreparation {

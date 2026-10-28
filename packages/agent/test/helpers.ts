@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@veyyon/agent-core/types";
-import type { AssistantMessage, Message, UserMessage } from "@veyyon/ai";
-import { emptyUsage } from "@veyyon/catalog/models";
+import type { AssistantMessage, Message, Model, UserMessage } from "@veyyon/ai";
+import { emptyUsage, type GeneratedProvider, getBundledModel } from "@veyyon/catalog/models";
 
 export function createUserMessage(text: string, timestamp = Date.now()): UserMessage {
 	return { role: "user", content: text, timestamp };
@@ -34,4 +34,11 @@ export function createAssistantText(text: string): AssistantMessage {
  */
 export function identityConverter(messages: AgentMessage[]): Message[] {
 	return messages.filter((m): m is Message => m.role === "user" || m.role === "assistant" || m.role === "toolResult");
+}
+
+/** A model from the bundled catalog that a suite depends on; a model the catalog no longer ships fails the suite here. */
+export function requireBundledModel(provider: GeneratedProvider, id: string): Model {
+	const model = getBundledModel(provider, id);
+	if (!model) throw new Error(`The bundled catalog has no ${provider}/${id} model`);
+	return model;
 }

@@ -11,8 +11,7 @@ import type { AssistantMessage, Model, ToolCall } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
 import { z } from "@veyyon/ai";
 import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
-import { createAssistantMessage } from "./helpers";
+import { createAssistantMessage, requireBundledModel } from "./helpers";
 
 function createAssistantError(errorStatus: number, errorMessage: string): AssistantMessage {
 	return {
@@ -37,11 +36,7 @@ function createHandoffTool(): AgentTool<typeof handoffToolSchema> {
 }
 
 function getTestModel(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) {
-		throw new Error("Expected built-in anthropic model to exist");
-	}
-	return model;
+	return requireBundledModel("anthropic", "claude-sonnet-4-5");
 }
 
 afterEach(() => {
