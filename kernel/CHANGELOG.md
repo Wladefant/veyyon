@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Terminal ownership checks now refuse a terminal record other local users can read or write, failing closed instead of parsing it.
+
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.

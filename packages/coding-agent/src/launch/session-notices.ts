@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { atomicWriteFileSync, getConfigRootDir, isProcessAlive } from "@veyyon/utils";
+import { atomicWriteFileSync, getConfigRootDir, isProcessAlive, readOwnerOnlyFileSync } from "@veyyon/utils";
 import type { TerminalOwner } from "./terminal-control";
 
 /**
@@ -103,8 +103,9 @@ export function listLiveSessionOwners(root = getConfigRootDir(), exceptSessionId
 	for (const file of files) {
 		if (!file.endsWith(".json")) continue;
 		let owner: Partial<TerminalOwner>;
+		// A record another user could have written is skipped, the same as one that does not parse.
 		try {
-			owner = JSON.parse(fs.readFileSync(path.join(directory, file), "utf8"));
+			owner = JSON.parse(readOwnerOnlyFileSync(path.join(directory, file)));
 		} catch {
 			continue;
 		}

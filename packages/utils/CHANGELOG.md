@@ -6,6 +6,14 @@
 
 ### Changed
 
+- Added strict atomic replacement for credential writes without a destructive fallback.
+
+### Added
+
+- Added `readOwnerOnlyFile` and `readOwnerOnlyFileSync`, which reject unsafe parent directories and discovery-record paths, verify owner-only file and parent ACLs plus the required SYSTEM ACE on Windows, and refuse insecure records before parsing; `verifyOwnerOnlyWindowsAclSync` provides synchronous Windows ACL checks.
+
+### Changed
+
 - Sync upstream changes from santhreal/veyyon.
 
 ### Fixed

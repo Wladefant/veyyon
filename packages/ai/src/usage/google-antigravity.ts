@@ -580,15 +580,15 @@ async function fetchAntigravityUsage(params: UsageFetchParams, ctx: UsageFetchCo
 	const endpoints = baseUrl ? [baseUrl] : ANTIGRAVITY_ENDPOINTS.slice();
 
 	// The summary is authoritative for every counter/window it names. The model
-	// listing can supplement counters the summary omitted, but never replace one.
+	// listing can supplement counter/window pairs the summary omitted, but never replace one.
 	const summary = await postAntigravityCall(ctx, params, endpoints, RETRIEVE_USER_QUOTA_SUMMARY_PATH, accessToken);
 	let summaryReport: UsageReport | undefined;
-	let summaryCounters = new Set<string>();
+	const summaryWindows = new Set<string>();
 	if (isUserQuotaSummaryResponse(summary?.data)) {
 		summaryReport = buildReportFromQuotaSummary(summary.data, params, credential, nowMs, summary.endpoint);
-		summaryCounters = new Set(summaryReport.limits.map(limit => limit.id.slice(limit.id.indexOf(":") + 1).split(":")[0]!));
-		if (summaryReport.limits.length > 0 && summaryCounters.has("google") && summaryCounters.has("claude-gpt")) {
-			return summaryReport;
+		for (const limit of summaryReport.limits) {
+			const counter = limit.id.slice(limit.id.indexOf(":") + 1).split(":")[0]!;
+			summaryWindows.add(`${counter}:${limit.scope.windowId}`);
 		}
 	}
 
@@ -607,7 +607,7 @@ async function fetchAntigravityUsage(params: UsageFetchParams, ctx: UsageFetchCo
 		...summaryReport.limits,
 		...listingReport.limits.filter(limit => {
 			const counter = limit.id.slice(limit.id.indexOf(":") + 1).split(":")[0]!;
-			return !summaryCounters.has(counter);
+			return !summaryWindows.has(`${counter}:${limit.scope.windowId}`);
 		}),
 	].sort((a, b) => (a.amount.remainingFraction ?? 1) - (b.amount.remainingFraction ?? 1));
 	return { ...summaryReport, limits: mergedLimits };

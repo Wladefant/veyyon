@@ -2,21 +2,36 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added owner-local terminal-control credential rotation without restarting the terminal or active turn.
+
 ### Fixed
 - Restored launch request replay, idle socket cleanup, recovery quarantine, and file-search test injection after upstream conflict resolution.
+- Plan mode stays on, with its plan tools and plan model, when restoring the pre-plan model or tools fails during exit.
+- Migrated tests off the removed model-roles settings API to `defaultModel` and `agent.helpers`, deleted the role-table tests whose contract no longer exists, and moved fetch-timeout to `withScopedTimeoutSignal` ([Refs #707](https://github.com/Wladefant/veyyon/issues/707)).
+- `/reload-config` reloads advisor models from `agent.helpers` without rebinding Main or existing workers.
+- Shell and Python/JS eval withhold recognizable credential records before live output and backing artifacts, and redact known secret values ([issue](https://github.com/Wladefant/veyyon/issues/682)).
 - Python eval refuses Windows signal-zero process probes and checks KV lock owners through non-signaling process handles ([issue](https://github.com/Wladefant/veyyon/issues/73)).
 - Task and qa-verifier spawns preserve configured model priority instead of reordering Luna and Flash by spawn identity ([Refs #692](https://github.com/Wladefant/veyyon/issues/692)).
 - Browser session cleanup continues after one tab release or orphan browser disposal fails.
 - Recovered daemons whose process tree cannot be proven gone now settle as `failed` with `ownershipUncertain`, are never restarted automatically, and allow manual replacement only when the configured ready port is free.
+- Terminal-control rotation refuses discovery records that are not owner-only before reading them.
 - Launch retains stable handles for tracked descendants after a wrapper exits and waits for their teardown before restarting ([issue](https://github.com/Wladefant/veyyon/issues/530)).
 - Launch holds a daemon whose native process handle is unavailable in `stopping` instead of settling it as exited: its tree's death is unobservable, so no restart starts and a stop reports failure ([issue](https://github.com/Wladefant/veyyon/issues/530)).
 - Mixed-build IRC sends distinguish unknown sessions from receivers without notice support and report loaded build identities ([#551](https://github.com/Wladefant/veyyon/issues/551)).
 - Browser tabs owned by another session can no longer be reopened, reused, or run, and the tab inventory omits their names, titles, and URLs ([Refs #538](https://github.com/Wladefant/veyyon/issues/538)).
 - Fixed the coding-agent failing to parse after a merge left stray braces, a duplicated property block and a call to a removed private method in the session and task modules.
 
+- Terminal-control pipes and discovery records restrict Windows access to the owner and SYSTEM; readers refuse records in unsafe directories or at device paths before parsing ([Refs #580](https://github.com/Wladefant/veyyon/issues/580)).
+
 - Spawn model lists fall back after quota failures with global fallback disabled, and new spawns move past the shared pools to the healthy fallback tail when both are suppressed ([issue](https://github.com/Wladefant/veyyon/issues/613)).
 - Explicit spawn lists stay closed when no later candidate resolves, instead of inheriting global fallback chains ([issue](https://github.com/Wladefant/veyyon/issues/613)).
 - Project plugins load only from the `installPath` entries of a project registry the operator has approved, through both the plugin loader and the Claude-plugin roots. The project directory's `package.json`, lockfile and `node_modules` are no longer read for project plugins. A registry whose directory resolves outside the project is refused, and an approval from a nested directory reaches the gate ([Refs #633](https://github.com/Wladefant/veyyon/issues/633)).
+- Project plugin approvals now cover the exact registry bytes and every named in-project install folder, so payload changes require approval again ([Refs #666](https://github.com/Wladefant/veyyon/issues/666)).
+- Relative project plugin install paths now resolve once from the registry directory and use the same absolute path for approval, discovery and LSP configuration ([Refs #666](https://github.com/Wladefant/veyyon/issues/666)).
+- Project-scoped marketplace installs now keep payloads inside the owning project so trust can approve them without allowing profile-cache paths ([Refs #666](https://github.com/Wladefant/veyyon/issues/666)).
+- Project plugins no longer use LSP commands from ancestor marketplace catalogs outside their approved payload ([Refs #666](https://github.com/Wladefant/veyyon/issues/666)).
 - Argot teaches its handle table to a model named in `argot.encode.models` with a thinking selector (`provider/id:high`), drops or restores the table when a model switch crosses the allowlist, and records a deliberately untaught model as decode-only instead of logging an `ABSENT` handle table ([#648](https://github.com/Wladefant/veyyon/issues/648))
 - Closing a launch client during broker connection now rejects pending requests and destroys late sockets, so an empty broker can exit after its configured grace when all clients close ([Refs #517](https://github.com/Wladefant/veyyon/issues/517)).
 - Reviewer prompts now enforce exact-head, gate-safe, verdict-only reviews and declare `task`, `qa-verifier`, and `haiku` as child roles ([#566](https://github.com/Wladefant/veyyon/issues/566)).

@@ -22,11 +22,12 @@
  * - The trust store is keyed by the real relative POSIX path of `SKILL.md`.
  */
 import { createHash, type Hash } from "node:crypto";
-import type { Dirent, Stats } from "node:fs";
+import type { Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { errorMessage, logger } from "@veyyon/utils";
 import type { ProjectExecutable } from "./project-trust";
+import { scanBoundedFolder, type BoundedFolderFile } from "./bounded-folder-hash";
 
 export const PROJECT_SKILL_HASH_DOMAIN = "veyyon:project-skill:v1";
 
@@ -51,13 +52,6 @@ export interface ProjectSkillSnapshot extends ProjectExecutable {
 	content: string;
 }
 
-interface SkillFolderFile {
-	relativePath: string;
-	/** Real path of the file, verified to lie inside the project root. */
-	absolutePath: string;
-	/** Size from the scan. A read that disagrees means the file changed under the scan. */
-	size: number;
-}
 
 /**
  * Describe one candidate project skill, or null when it is not valid,
@@ -140,147 +134,8 @@ export async function describeProjectSkill(
 		return null;
 	}
 
-	// Scan metadata only: paths and sizes, bounded. Content is streamed below.
-	const files: SkillFolderFile[] = [];
-	let totalBytes = 0;
-	const visitedAncestors = new Set<string>();
-
-	function refuseOverLimit(limit: string, details: Record<string, unknown>): false {
-		logger.warn(`project skill trust: skill folder exceeds ${limit}, not trusted`, details);
-		return false;
-	}
-
-	async function collectFiles(currentDir: string, currentDirRel: string, depth: number): Promise<boolean> {
-		if (depth > PROJECT_SKILL_LIMITS.maxDepth) {
-			return refuseOverLimit("the maximum directory depth", {
-				dir: currentDir,
-				maxDepth: PROJECT_SKILL_LIMITS.maxDepth,
-			});
-		}
-
-		let realCurrent: string;
-		try {
-			realCurrent = await fs.realpath(currentDir);
-		} catch (err) {
-			logger.warn("project skill trust: unreadable directory in skill folder", {
-				dir: currentDir,
-				error: errorMessage(err),
-			});
-			return false;
-		}
-
-		const relFromRoot = path.relative(canonicalRoot, realCurrent);
-		if (relFromRoot === "" || relFromRoot.startsWith("..") || path.isAbsolute(relFromRoot)) {
-			logger.warn("project skill trust: directory escapes project root", {
-				dir: currentDir,
-				target: realCurrent,
-				canonicalRoot,
-			});
-			return false;
-		}
-
-		if (visitedAncestors.has(realCurrent)) {
-			logger.warn("project skill trust: symlink cycle detected in skill folder", {
-				dir: currentDir,
-				target: realCurrent,
-			});
-			return false;
-		}
-
-		let entries: Dirent[];
-		try {
-			entries = await fs.readdir(currentDir, { withFileTypes: true });
-		} catch (err) {
-			logger.warn("project skill trust: failed to read directory", {
-				dir: currentDir,
-				error: errorMessage(err),
-			});
-			return false;
-		}
-
-		entries.sort((a, b) => a.name.localeCompare(b.name));
-
-		visitedAncestors.add(realCurrent);
-
-		for (const entry of entries) {
-			const entryPath = path.join(currentDir, entry.name);
-			const entryRel = currentDirRel ? `${currentDirRel}/${entry.name}` : entry.name;
-
-			let realEntry: string;
-			try {
-				realEntry = await fs.realpath(entryPath);
-			} catch (err) {
-				logger.warn("project skill trust: unreadable entry or broken symlink in skill folder", {
-					entry: entryPath,
-					error: errorMessage(err),
-				});
-				return false;
-			}
-
-			const entryRelFromRoot = path.relative(canonicalRoot, realEntry);
-			if (entryRelFromRoot === "" || entryRelFromRoot.startsWith("..") || path.isAbsolute(entryRelFromRoot)) {
-				logger.warn("project skill trust: entry escapes project root", {
-					entry: entryPath,
-					target: realEntry,
-					canonicalRoot,
-				});
-				return false;
-			}
-
-			let stat: Stats;
-			try {
-				stat = await fs.stat(realEntry);
-			} catch (err) {
-				logger.warn("project skill trust: failed to stat entry", {
-					entry: entryPath,
-					error: errorMessage(err),
-				});
-				return false;
-			}
-
-			if (stat.isDirectory()) {
-				const success = await collectFiles(entryPath, entryRel, depth + 1);
-				if (!success) return false;
-			} else if (stat.isFile()) {
-				if (files.length >= PROJECT_SKILL_LIMITS.maxFiles) {
-					return refuseOverLimit("the maximum file count", {
-						dir: currentDir,
-						maxFiles: PROJECT_SKILL_LIMITS.maxFiles,
-					});
-				}
-				if (stat.size > PROJECT_SKILL_LIMITS.maxFileBytes) {
-					return refuseOverLimit("the maximum file size", {
-						file: entryPath,
-						size: stat.size,
-						maxFileBytes: PROJECT_SKILL_LIMITS.maxFileBytes,
-					});
-				}
-				totalBytes += stat.size;
-				if (totalBytes > PROJECT_SKILL_LIMITS.maxTotalBytes) {
-					return refuseOverLimit("the maximum total size", {
-						dir: currentDir,
-						maxTotalBytes: PROJECT_SKILL_LIMITS.maxTotalBytes,
-					});
-				}
-				files.push({ relativePath: entryRel, absolutePath: realEntry, size: stat.size });
-			} else {
-				logger.warn("project skill trust: unsupported file type", { path: entryPath });
-				return false;
-			}
-		}
-
-		visitedAncestors.delete(realCurrent);
-		return true;
-	}
-
-	const collected = await collectFiles(skillDir, "", 0);
-	if (!collected) {
-		return null;
-	}
-
-	// Deterministic sort by relative path
-	files.sort((a, b) => (a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0));
-
+	const files = await scanBoundedFolder(realSkillDir, canonicalRoot, PROJECT_SKILL_LIMITS, false);
+	if (!files) return null;
 	// Prefer the exact hashed path; only Windows falls back to case-insensitive lookup.
 	const definitionName = path.basename(skillFile);
 	const definition =
@@ -322,7 +177,7 @@ export async function describeProjectSkill(
  * Returns null when the file's size differs from the scan's, meaning it changed
  * between the scan and the read. The caller must then refuse the folder.
  */
-async function hashSkillFolderFile(hash: Hash, file: SkillFolderFile, keep: boolean): Promise<Buffer | null> {
+async function hashSkillFolderFile(hash: Hash, file: BoundedFolderFile, keep: boolean): Promise<Buffer | null> {
 	const handle = await fs.open(file.absolutePath, "r");
 	try {
 		const buffer = Buffer.allocUnsafe(HASH_READ_CHUNK_BYTES);

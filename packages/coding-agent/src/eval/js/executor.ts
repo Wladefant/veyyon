@@ -1,6 +1,7 @@
 import { errorMessage, isCancellation, isTimeoutError } from "@veyyon/utils";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { OutputSink } from "../../session/streaming-output";
+import { ProducerOutputGuard } from "../../secrets/producer-output";
 import type { ToolSession } from "../../tools";
 import { inlineBudgetFor } from "../../tools/core/output-artifact";
 import {
@@ -79,6 +80,7 @@ function formatJsTimeoutAnnotation(timeoutMs: number | undefined): string {
 export async function executeJs(code: string, options: JsExecutorOptions): Promise<JsResult> {
 	const displayOutputs: JsDisplayOutput[] = [];
 	const outputSink = new OutputSink({
+		outputGuard: new ProducerOutputGuard(options.session.obfuscateProviderText),
 		artifactPath: options.artifactPath,
 		artifactId: options.artifactId,
 		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(options.session.settings),
@@ -132,6 +134,15 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 				signal,
 				onText: chunk => outputSink.push(chunk),
 				onDisplay: output => {
+					if (output.type === "json") {
+						try {
+							const serialized = JSON.stringify(output.data);
+							const filtered = new ProducerOutputGuard(options.session.obfuscateProviderText).sanitize(serialized);
+							output = { type: "json", data: filtered === serialized ? output.data : "[credential output withheld]" };
+						} catch {
+							output = { type: "json", data: "[credential output withheld]" };
+						}
+					}
 					if (output.type === "status") {
 						// Timeout-control events drive the eval watchdog only; never
 						// store or render them as cell output.
