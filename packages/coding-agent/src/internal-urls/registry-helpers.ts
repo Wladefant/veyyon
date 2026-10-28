@@ -76,6 +76,26 @@ export function artifactsDirsFromRegistry(): string[] {
 }
 
 /**
+ * Entry names of every artifacts dir in {@link artifactsDirsFromRegistry}, in dir
+ * order. A candidate that is missing, or is a file rather than a dir, adds none.
+ * A name present in two dirs appears twice; completion callers dedupe by id.
+ */
+export async function artifactFileNamesFromRegistry(): Promise<string[]> {
+	const names: string[] = [];
+	for (const dir of artifactsDirsFromRegistry()) {
+		let entries: string[];
+		try {
+			entries = await fs.readdir(dir);
+		} catch (err) {
+			if (isMissingPath(err)) continue;
+			throw err;
+		}
+		for (const name of entries) names.push(name);
+	}
+	return names;
+}
+
+/**
  * Recursively scan artifacts dirs for agent session transcripts, keyed by
  * agent id (the `.jsonl` basename). Used by `history://` so transcripts of
  * agents no longer in the registry (unregistered one-shot helpers, released

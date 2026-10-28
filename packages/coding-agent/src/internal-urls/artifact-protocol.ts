@@ -14,7 +14,7 @@ import * as path from "node:path";
 // Owners, not the `@veyyon/utils` barrel: 2 modules against 74.
 import { formatBoundedList } from "@veyyon/utils/format";
 import { isEnoent } from "@veyyon/utils/fs-error";
-import { artifactsDirsFromRegistry } from "./registry-helpers";
+import { artifactFileNamesFromRegistry, artifactsDirsFromRegistry } from "./registry-helpers";
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, UrlCompletion } from "./types";
 
 const MAX_INLINE_ARTIFACT_BYTES = 8 * 1024 * 1024;
@@ -169,18 +169,9 @@ export class ArtifactProtocolHandler implements ProtocolHandler {
 
 	async complete(): Promise<UrlCompletion[]> {
 		const ids = new Set<string>();
-		for (const dir of artifactsDirsFromRegistry()) {
-			let files: string[];
-			try {
-				files = await fs.readdir(dir);
-			} catch (err) {
-				if (isEnoent(err)) continue;
-				throw err;
-			}
-			for (const f of files) {
-				const m = f.match(/^(\d+)\./);
-				if (m) ids.add(m[1]!);
-			}
+		for (const name of await artifactFileNamesFromRegistry()) {
+			const m = name.match(/^(\d+)\./);
+			if (m) ids.add(m[1]!);
 		}
 		return Array.from(ids)
 			.sort((a, b) => Number(a) - Number(b))

@@ -64,6 +64,7 @@
 
 ### Fixed
 
+- `agent://` and `artifact://` completion skips a registered artifacts path that is a file instead of failing, as `history://` completion already did.
 - Aborting LSP workspace diagnostics ends the checker and every process it started and returns within milliseconds; it used to end only the checker and wait for its children to release the output pipes, which took 4.3 s with a child that ran for 5 s and never returned while a child kept running.
 - A socket-mode debug adapter such as dlv that exits before it is reachable fails `debug launch` with `DAP adapter exited (code N): <adapter stderr>` as soon as it exits, instead of `Adapter process exited before socket was ready` on Linux and `<adapter> did not connect within 10000ms` after the whole readiness timeout elsewhere.
 - An MCP transport that closes while the reconnection that produced it is still settling, such as a streamable-HTTP event stream that ends while the tool list is in flight, starts a new reconnection or trips the crash breaker instead of staying listed as connected, and the close of a connection a manual reconnect already replaced no longer tears down the live one.
