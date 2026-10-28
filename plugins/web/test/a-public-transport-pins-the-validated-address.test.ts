@@ -251,6 +251,21 @@ describe("public fetch transport honours cancellation", () => {
 		expect(dials[0]?.socket.destroyed).toBe(true);
 	});
 
+	// WHY: an abort that fires while the dial is still settling has already dispatched by the time the
+	// reader subscribes, so listening alone hangs the request forever. A dial that settles late must
+	// still reject with the abort reason and destroy the socket.
+	it("aborting while the dial is still settling rejects and destroys the socket", async () => {
+		const socket = new FakeTlsSocket([], false);
+		const dial = Promise.withResolvers<PinnedTlsSocket>();
+		const transport = createNodePublicFetchTransport(() => dial.promise);
+		const controller = new AbortController();
+		const pending = transport.get(SOURCE, VETTED_ADDRESS, controller.signal);
+		controller.abort(new Error("caller gave up"));
+		dial.resolve(socket);
+		await expect(pending).rejects.toThrow("caller gave up");
+		expect(socket.destroyed).toBe(true);
+	});
+
 	it("cancelling the body stream destroys the socket", async () => {
 		const { transport, dials } = harnessWith([httpReply(["HTTP/1.1 200 OK", "Content-Length: 10"], "0123456789")], false);
 		const response = await transport.get(SOURCE, VETTED_ADDRESS, new AbortController().signal);

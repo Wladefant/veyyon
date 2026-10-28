@@ -442,7 +442,9 @@ class SocketReader {
 		socket.on("end", () => this.#finish());
 		socket.on("close", () => this.#finish());
 		socket.on("error", (error: Error) => this.#fail(error));
-		signal.addEventListener("abort", this.#onAbort, { once: true });
+		// An abort that fired while the dial was settling has already dispatched, so listening alone would never see it.
+		if (signal.aborted) this.#onAbort();
+		else signal.addEventListener("abort", this.#onAbort, { once: true });
 	}
 
 	/** Reads the status line and header fields, bounded by {@link MAX_HEAD_BYTES}. */

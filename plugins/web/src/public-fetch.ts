@@ -92,7 +92,7 @@ const ACCEPTED_TYPES: Record<string, true> = {
 const ACCEPTED_CHARSETS: Record<string, true> = { "utf-8": true, "us-ascii": true };
 /** Host suffixes that name the local machine or a private network, refused before DNS. */
 const LOCAL_SUFFIXES: readonly string[] = ["localhost", "localdomain", "local", "internal", "home.arpa"];
-const SKIPPED_TAGS: Record<string, true> = { SCRIPT: true, STYLE: true, TEMPLATE: true };
+const SKIPPED_TAGS: Record<string, true> = { SCRIPT: true, STYLE: true, TEMPLATE: true, HEAD: true, TITLE: true };
 const BLOCK_TAGS: Record<string, true> = {
 	ADDRESS: true,
 	ARTICLE: true,
@@ -375,6 +375,7 @@ interface HtmlNode {
 
 interface HtmlDocument {
 	body: HtmlNode | null;
+	childNodes?: ArrayLike<HtmlNode>;
 }
 
 /**
@@ -384,9 +385,13 @@ interface HtmlDocument {
  */
 function readableText(html: string): string {
 	const document: HtmlDocument = parseHTML(html).document;
-	if (!document.body) return "";
+	// linkedom leaves `body` empty when the markup has no <body> tag, as in a bare `<p>text</p>` fragment.
+	// The text is then the document's own children, with the head-only tags skipped by the walk.
+	const body = document.body;
+	const roots: ArrayLike<HtmlNode> = body?.childNodes?.length ? [body] : (document.childNodes ?? []);
 	const out: string[] = [];
-	const stack: Array<HtmlNode | string> = [document.body];
+	const stack: Array<HtmlNode | string> = [];
+	for (let i = roots.length - 1; i >= 0; i--) stack.push(roots[i]);
 	for (;;) {
 		const item = stack.pop();
 		if (item === undefined) break;
