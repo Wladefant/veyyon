@@ -56,6 +56,7 @@
 
 
 - Restored model selectors and assigned browser and bash helpers to their owning modules.
+- A lazily created session with no file yet no longer fails the first prompt with ENOENT when its checkpoint ownership marker is checked ([Refs #716](https://github.com/Wladefant/veyyon/issues/716)).
 ### Changed
 
 - `/reload-config` and `/reload` re-read rule layers and skills without restarting the session. The summary lists added, changed, and removed paths. Unreadable files keep the last good snapshot, and unchanged rules keep the existing advisor ([issue](https://github.com/Wladefant/veyyon/issues/577)).
