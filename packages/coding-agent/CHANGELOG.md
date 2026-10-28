@@ -6,6 +6,10 @@
 
 - Collected verified tool-failure cases into the eval corpus; no user-facing change ([#704](https://github.com/Wladefant/veyyon/pull/704)).
 
+### Fixed
+
+- Deduplicate terminal deliveries by message id, retain accepted outcomes across daemon reconnects, replay missed events by subscriber cursor, and provide streaming snapshots to reconnecting subscribers ([#705](https://github.com/Wladefant/veyyon/issues/705)).
+
 ## [1.6.1] - 2026-10-28
 
 ### Changed
@@ -74,7 +78,6 @@
 - The end-of-turn context check recovers an overflow, retries an overflow stamped with the pre-promotion model, recovers a length stop and runs threshold maintenance in separate methods instead of one 231-line method; no user-visible change.
 
 ### Fixed
-- Deduplicate terminal deliveries by message id, retain accepted outcomes across daemon reconnects, replay missed events by subscriber cursor, and provide streaming snapshots to reconnecting subscribers ([#705](https://github.com/Wladefant/veyyon/issues/705)).
 
 - MCP push event streams now skip a frame with an invalid or mismatched occurrence and advance past its cursor instead of cancelling and replaying the same frame forever ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
 - Restored launch request replay, idle socket cleanup, recovery quarantine, and file-search test injection after upstream conflict resolution.
