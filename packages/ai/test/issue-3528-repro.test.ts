@@ -43,8 +43,9 @@ import { describe, expect, it } from "bun:test";
 import { renderDemotedThinking } from "@veyyon/ai/dialect";
 import { convertMessages } from "@veyyon/ai/providers/openai-completions";
 import { applyChatCompletionsReasoningParams, type OpenAICompletionsParams } from "@veyyon/ai/providers/openai-shared";
-import type { AssistantMessage, Message, Model, ModelSpec, ThinkingContent, UserMessage } from "@veyyon/ai/types";
+import type { AssistantMessage, Message, Model, ModelSpec, ThinkingContent } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { userMessage } from "./helpers";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -75,10 +76,6 @@ function llamaCppQwenModel(overrides?: Partial<ModelSpec<"openai-completions">>)
 		maxTokens: 131_072,
 		...overrides,
 	} satisfies ModelSpec<"openai-completions">);
-}
-
-function userMessage(text: string): UserMessage {
-	return { role: "user", content: text, timestamp: 0 };
 }
 
 function assistantWithReasoning(reasoning: string, answer: string): AssistantMessage {

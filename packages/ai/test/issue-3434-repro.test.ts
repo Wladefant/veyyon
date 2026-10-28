@@ -14,8 +14,9 @@
 import { describe, expect, it } from "bun:test";
 import { renderDemotedThinking } from "@veyyon/ai/dialect";
 import { convertMessages } from "@veyyon/ai/providers/openai-completions";
-import type { AssistantMessage, Message, Model, ModelSpec, UserMessage } from "@veyyon/ai/types";
+import type { AssistantMessage, Message, Model, ModelSpec } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { userMessage } from "./helpers";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -54,10 +55,6 @@ function zaiAnthropicMessage(thinkingText: string): AssistantMessage {
 		stopReason: "stop",
 		timestamp: 0,
 	};
-}
-
-function userMessage(text: string): UserMessage {
-	return { role: "user", content: text, timestamp: 0 };
 }
 
 function zaiOpenAITarget(): Model<"openai-completions"> {

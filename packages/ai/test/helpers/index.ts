@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Context, Model } from "@veyyon/ai/types";
+import type { Context, Model, UserMessage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import type { ModelSpec } from "@veyyon/catalog/types";
@@ -67,6 +67,11 @@ export function createCodexModel(
 		...(efforts ? { reasoningOptions: { efforts } } : {}),
 		...spec,
 	});
+}
+
+/** A user turn with plain-text content, stamped 0 so nothing a suite builds from it reads the clock. */
+export function userMessage(text: string): UserMessage {
+	return { role: "user", content: text, timestamp: 0 };
 }
 
 /** One user turn saying hello, the smallest context a provider stream accepts. */

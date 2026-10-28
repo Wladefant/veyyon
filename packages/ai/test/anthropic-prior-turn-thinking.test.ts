@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { renderDemotedThinking } from "@veyyon/ai/dialect";
 import { convertAnthropicMessages } from "@veyyon/ai/providers/anthropic";
-import type { AssistantMessage, Message, Model, ModelSpec, ToolResultMessage, UserMessage } from "@veyyon/ai/types";
+import type { AssistantMessage, Message, Model, ModelSpec, ToolResultMessage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { userMessage } from "./helpers";
 
 /**
  * Cross-model `anthropic-messages` continuations must preserve the prior
@@ -37,10 +38,6 @@ function makeAnthropicModel(overrides: Partial<ModelSpec<"anthropic-messages">> 
 		reasoning: true,
 		...overrides,
 	} as ModelSpec<"anthropic-messages">);
-}
-
-function makeUser(text: string): UserMessage {
-	return { role: "user", content: text, timestamp: 0 };
 }
 
 function makeAssistant(
@@ -113,7 +110,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 		const target = makeAnthropicModel({ id: "reasoning-model-v2" });
 		const priorThinkingText = "Plan: read README, then summarize.";
 		const messages: Message[] = [
-			makeUser("Summarize README"),
+			userMessage("Summarize README"),
 			makeAssistant(
 				[
 					{ type: "thinking", thinking: priorThinkingText, thinkingSignature: "sig_v1" },
@@ -129,7 +126,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 				],
 				{ model: "reasoning-model-v2", stopReason: "stop" },
 			),
-			makeUser("Now translate it to Spanish"),
+			userMessage("Now translate it to Spanish"),
 		];
 
 		const params = convertAnthropicMessages(messages, target, false);
@@ -154,7 +151,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 		// invariant).
 		const target = makeAnthropicModel();
 		const messages: Message[] = [
-			makeUser("Summarize README"),
+			userMessage("Summarize README"),
 			makeAssistant([
 				{ type: "thinking", thinking: "plan", thinkingSignature: "sig_same" },
 				{ type: "toolCall", id: "toolu_prior", name: "read", arguments: { path: "README.md" } },
@@ -167,7 +164,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 				],
 				{ stopReason: "stop" },
 			),
-			makeUser("And now in Spanish"),
+			userMessage("And now in Spanish"),
 		];
 
 		const params = convertAnthropicMessages(messages, target, false);
@@ -184,7 +181,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 		// any thinking content from the same turn is replayed.
 		const target = makeAnthropicModel({ id: "reasoning-model-v2" });
 		const messages: Message[] = [
-			makeUser("Summarize README"),
+			userMessage("Summarize README"),
 			makeAssistant(
 				[
 					{ type: "thinking", thinking: "visible reasoning", thinkingSignature: "sig" },
@@ -201,7 +198,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 				],
 				{ model: "reasoning-model-v2", stopReason: "stop" },
 			),
-			makeUser("Translate"),
+			userMessage("Translate"),
 		];
 
 		const params = convertAnthropicMessages(messages, target, false);
@@ -224,7 +221,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 			baseUrl: "https://api.anthropic.com",
 		});
 		const messages: Message[] = [
-			makeUser("Summarize README"),
+			userMessage("Summarize README"),
 			makeAssistant(
 				[
 					{ type: "thinking", thinking: "visible reasoning", thinkingSignature: "sig_custom" },
@@ -245,7 +242,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 					stopReason: "stop",
 				},
 			),
-			makeUser("Translate"),
+			userMessage("Translate"),
 		];
 
 		const params = convertAnthropicMessages(messages, target, false);
@@ -287,7 +284,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 			const sourceModel = targetCase.id === "claude-sonnet-4-6" ? "claude-opus-4-8" : "claude-sonnet-4-6";
 			const reasoning = `Need to preserve the plan while switching to ${targetCase.name}.`;
 			const messages: Message[] = [
-				makeUser("Read the project notes"),
+				userMessage("Read the project notes"),
 				makeAssistant(
 					[
 						{ type: "thinking", thinking: reasoning, thinkingSignature: "sig_source" },
@@ -301,7 +298,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 					model: targetCase.id,
 					stopReason: "stop",
 				}),
-				makeUser("Continue from those notes."),
+				userMessage("Continue from those notes."),
 			];
 
 			const params = convertAnthropicMessages(messages, target, false);
@@ -337,7 +334,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 			const reasoning = `Need to inspect the layout before editing with ${modelCase.id}.`;
 			const toolCallId = `toolu_${modelCase.id.replaceAll("-", "_")}`;
 			const messages: Message[] = [
-				makeUser("Fix the layout"),
+				userMessage("Fix the layout"),
 				makeAssistant(
 					[
 						{ type: "thinking", thinking: reasoning, thinkingSignature: "" },
@@ -346,7 +343,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 					{ provider: "anthropic", model: modelCase.id },
 				),
 				toolResult(toolCallId, "view body"),
-				makeUser("Continue."),
+				userMessage("Continue."),
 			];
 
 			const params = convertAnthropicMessages(messages, target, false);
@@ -381,7 +378,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 			const reasoning = `Internal reasoning that should not leak for ${modelCase.id}.`;
 			const toolCallId = `toolu_${modelCase.id.replaceAll("-", "_")}`;
 			const messages: Message[] = [
-				makeUser("Fix the layout"),
+				userMessage("Fix the layout"),
 				makeAssistant(
 					[
 						{ type: "thinking", thinking: reasoning, thinkingSignature: undefined },
@@ -390,7 +387,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 					{ provider: "anthropic", model: modelCase.id },
 				),
 				toolResult(toolCallId, "view body"),
-				makeUser("Continue."),
+				userMessage("Continue."),
 			];
 
 			const params = convertAnthropicMessages(messages, target, false);
@@ -416,7 +413,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 		});
 		const toolCallId = "toolu_redacted_dropped";
 		const messages: Message[] = [
-			makeUser("Fix the layout"),
+			userMessage("Fix the layout"),
 			makeAssistant(
 				[
 					{ type: "thinking", thinking: "Private discarded reasoning.", thinkingSignature: undefined },
@@ -426,7 +423,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 				{ provider: "anthropic", model: "claude-sonnet-4-6" },
 			),
 			toolResult(toolCallId, "view body"),
-			makeUser("Continue."),
+			userMessage("Continue."),
 		];
 
 		const params = convertAnthropicMessages(messages, target, false);
@@ -447,7 +444,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 			baseUrl: "https://api.anthropic.com",
 		});
 		const messages: Message[] = [
-			makeUser("Fix the layout"),
+			userMessage("Fix the layout"),
 			makeAssistant(
 				[
 					{ type: "thinking", thinking: "Completed signed reasoning.", thinkingSignature: "sig_complete" },
@@ -457,7 +454,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 				],
 				{ provider: "anthropic", model: "claude-sonnet-4-6", stopReason: "error" },
 			),
-			makeUser("Continue."),
+			userMessage("Continue."),
 		];
 
 		const params = convertAnthropicMessages(messages, target, false);
@@ -481,7 +478,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 		// `replayUnsignedThinking: true`.
 		const target = makeAnthropicModel({ id: "reasoning-model-v2" });
 		const messages: Message[] = [
-			makeUser("Summarize README"),
+			userMessage("Summarize README"),
 			makeAssistant(
 				[
 					{ type: "thinking", thinking: "anthropic reasoning", thinkingSignature: "sig_anthropic" },
@@ -497,7 +494,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 				],
 				{ model: "reasoning-model-v2", stopReason: "stop" },
 			),
-			makeUser("Translate"),
+			userMessage("Translate"),
 		];
 
 		const params = convertAnthropicMessages(messages, target, false);
@@ -513,7 +510,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 		// accept unsigned native thinking as their semantic-carry analogue.
 		const target = makeAnthropicModel();
 		const messages: Message[] = [
-			makeUser("Summarize README"),
+			userMessage("Summarize README"),
 			makeAssistant(
 				[
 					{ type: "thinking", thinking: "openai chain-of-thought", thinkingSignature: "" },
@@ -533,7 +530,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 				],
 				{ stopReason: "stop" },
 			),
-			makeUser("Translate"),
+			userMessage("Translate"),
 		];
 
 		const params = convertAnthropicMessages(messages, target, false);
@@ -558,7 +555,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/acct/gate/anthropic",
 		});
 		const messages: Message[] = [
-			makeUser("Summarize README"),
+			userMessage("Summarize README"),
 			makeAssistant(
 				[
 					{ type: "thinking", thinking: "prior reasoning", thinkingSignature: "sig_prior" },
@@ -574,7 +571,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 				],
 				{ provider: "cloudflare-ai-gateway", model: "cf-anthropic/claude-opus-4-8", stopReason: "stop" },
 			),
-			makeUser("Translate"),
+			userMessage("Translate"),
 		];
 
 		const params = convertAnthropicMessages(messages, target, false);
@@ -601,7 +598,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 				"https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/publishers/anthropic/models/claude-opus-4-8@20260215:streamRawPredict",
 		});
 		const messages: Message[] = [
-			makeUser("Summarize README"),
+			userMessage("Summarize README"),
 			makeAssistant(
 				[
 					{ type: "thinking", thinking: "sonnet reasoning", thinkingSignature: "sig_sonnet" },
@@ -617,7 +614,7 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 				],
 				{ provider: "google-vertex", model: "claude-opus-4-8@20260215", stopReason: "stop" },
 			),
-			makeUser("Translate"),
+			userMessage("Translate"),
 		];
 
 		const params = convertAnthropicMessages(messages, target, false);

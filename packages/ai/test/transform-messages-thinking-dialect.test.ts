@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { getDialectDefinition, renderDemotedThinking } from "@veyyon/ai/dialect";
 import { transformMessages } from "@veyyon/ai/providers/transform-messages";
-import type { Api, AssistantMessage, Message, Model, ModelSpec, UserMessage } from "@veyyon/ai/types";
+import type { Api, AssistantMessage, Message, Model, ModelSpec } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { userMessage } from "./helpers";
 
 /**
  * Cross-provider model switches (e.g. Anthropic → Gemini mid-session) cannot
@@ -35,10 +36,6 @@ function makeModel<T extends Api>(api: T, provider: string, id: string): Model<T
 		contextWindow: 200_000,
 		reasoning: true,
 	} as ModelSpec<T>);
-}
-
-function user(text: string): UserMessage {
-	return { role: "user", content: text, timestamp: 0 };
 }
 
 /** A prior assistant turn authored by an Anthropic model: signed thinking + a text reply. */
@@ -89,7 +86,7 @@ function transformedAssistant(messages: Message[], target: Model<Api>): Assistan
 describe("transformMessages cross-provider thinking demotion → canonical dialect", () => {
 	it("renders Anthropic reasoning as a Gemini ```thinking fence when switching to a Gemini target", () => {
 		const gemini = makeModel("google-generative-ai", "google", "gemini-3-pro-preview");
-		const assistant = transformedAssistant([user("weather in Paris?"), anthropicThinkingTurn()], gemini);
+		const assistant = transformedAssistant([userMessage("weather in Paris?"), anthropicThinkingTurn()], gemini);
 
 		// No native thinking block survives the cross-provider hop.
 		expect(assistant.content.some(b => b.type === "thinking")).toBe(false);
@@ -115,7 +112,7 @@ describe("transformMessages cross-provider thinking demotion → canonical diale
 		// into structured history — demotion falls back to a neutral `<think>`
 		// block instead, while still preserving the reasoning.
 		const gpt = makeModel("openai-responses", "openai", "gpt-5");
-		const assistant = transformedAssistant([user("weather in Paris?"), anthropicThinkingTurn()], gpt);
+		const assistant = transformedAssistant([userMessage("weather in Paris?"), anthropicThinkingTurn()], gpt);
 
 		const first = assistant.content[0];
 		expect(first?.type).toBe("text");
@@ -154,7 +151,7 @@ describe("transformMessages cross-provider thinking demotion → canonical diale
 		for (const target of targets) {
 			const model = makeModel("anthropic-messages", "anthropic", target.id);
 			const assistant = transformedAssistant(
-				[user(`weather in Paris for ${target.name}?`), geminiThinkingTurn()],
+				[userMessage(`weather in Paris for ${target.name}?`), geminiThinkingTurn()],
 				model,
 			);
 
@@ -187,7 +184,7 @@ describe("transformMessages cross-provider thinking demotion → canonical diale
 			],
 		};
 
-		const assistant = transformedAssistant([user("weather in Paris?"), turn], claude);
+		const assistant = transformedAssistant([userMessage("weather in Paris?"), turn], claude);
 
 		expect(assistant.content).toHaveLength(1);
 		const first = assistant.content[0];
@@ -211,7 +208,7 @@ describe("transformMessages cross-provider thinking demotion → canonical diale
 			],
 		};
 
-		const assistant = transformedAssistant([user("weather in Paris?"), turn], claude);
+		const assistant = transformedAssistant([userMessage("weather in Paris?"), turn], claude);
 
 		expect(assistant.content).toHaveLength(1);
 		const first = assistant.content[0];
@@ -230,7 +227,7 @@ describe("transformMessages cross-provider thinking demotion → canonical diale
 			provider: "google",
 			model: "gemini-3-pro-preview",
 		};
-		const assistant = transformedAssistant([user("weather in Paris?"), sameModelTurn], gemini);
+		const assistant = transformedAssistant([userMessage("weather in Paris?"), sameModelTurn], gemini);
 
 		const first = assistant.content[0];
 		expect(first?.type).toBe("thinking");
