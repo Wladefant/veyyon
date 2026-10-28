@@ -147,7 +147,7 @@ export interface BinaryReplacementOptions {
  */
 export function isCurrentProcessLocalOrCustom(): boolean {
 	for (const tag of [BUILD_TAG, process.env.VEYYON_BUILD_TAG]) {
-		if (tag && !/^(?:[0-9a-f]+-)?local$/i.test(tag)) {
+		if (tag && (tag.toLowerCase().includes("custom") || !/(?:^|-)local$/i.test(tag))) {
 			return true;
 		}
 	}
