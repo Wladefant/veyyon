@@ -53,6 +53,7 @@ afterEach(async () => {
 test("production prompt and tool admission both stop when the cloud lease is lost", async () => {
 	tempDir = TempDir.createSync("@checkpoint-admission-");
 	authStorage = await AuthStorage.create(join(tempDir.path(), "auth.db"));
+	authStorage.setRuntimeApiKey("openai", "test-key");
 	const model = createMockModel({ provider: "openai", id: "gpt-test" }).model;
 	const modelRegistry = new ModelRegistry(authStorage);
 	const settings = Settings.isolated({ "checkpoints.enabled": true, "compaction.enabled": false, "todo.enabled": false });
