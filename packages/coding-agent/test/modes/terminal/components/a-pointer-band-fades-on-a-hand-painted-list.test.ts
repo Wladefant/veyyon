@@ -68,7 +68,7 @@ import { hoverBandAt, selectionBand } from "@veyyon/coding-agent/modes/terminal/
 import { SessionSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/session-selector";
 import { TreeSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/tree-selector";
 import { UserMessageSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/user-message-selector";
-import { getThemeByName, initTheme, setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
+import { initTheme, setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
 import type { HistoryEntry, HistoryStorage } from "@veyyon/kernel/session/history-storage";
 import type { SessionEntry, SessionTreeNode } from "@veyyon/kernel/session/session-entries";
 import type { SessionInfo } from "@veyyon/kernel/session/session-listing";
@@ -76,6 +76,7 @@ import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy, TERMINAL } from "@veyyon
 import { motionClock } from "@veyyon/utils/motion";
 import { bandRgb, hexRgb, rgbDistance } from "../../../helpers/band-colors";
 import { useHandTickedMotion } from "../../../helpers/hand-ticked-motion";
+import { requireTheme } from "../../../helpers/require-theme";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const WIDTH = 110;
@@ -403,8 +404,7 @@ beforeEach(async () => {
 	// 256-colour branch instead, which is how a band test stays green while the band is broken.
 	originalColorterm = Bun.env.COLORTERM;
 	Bun.env.COLORTERM = "truecolor";
-	const loaded = await getThemeByName("titanium");
-	if (!loaded) throw new Error("titanium theme unavailable in test env");
+	const loaded = await requireTheme("titanium");
 	if (loaded.getColorMode() !== "truecolor") throw new Error(`titanium built as ${loaded.getColorMode()}`);
 	setThemeInstance(loaded);
 	policy = getAnsiPolicy();

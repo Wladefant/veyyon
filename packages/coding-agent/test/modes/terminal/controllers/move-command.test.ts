@@ -4,7 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { CommandController } from "@veyyon/coding-agent/modes/terminal/controllers/command-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { requireTheme } from "../../../helpers/require-theme";
 
 function createMoveContext(sourceDir: string) {
 	const state = { cwd: sourceDir, movedTo: undefined as string | undefined };
@@ -42,8 +43,7 @@ function createMoveContext(sourceDir: string) {
 
 describe("CommandController /move", () => {
 	beforeAll(async () => {
-		const theme = await getThemeByName("dark");
-		if (!theme) throw new Error("Expected dark theme");
+		const theme = await requireTheme("dark");
 		setThemeInstance(theme);
 	});
 

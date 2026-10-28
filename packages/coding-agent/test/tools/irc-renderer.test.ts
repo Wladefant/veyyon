@@ -1,15 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
 import type { IrcMessage } from "@veyyon/coding-agent/task/irc-bus";
-import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
 import type { IrcDetails } from "@veyyon/coding-agent/tools/agent/irc";
 import { type IrcViewArgs, type IrcViewResult, ircToolView } from "@veyyon/coding-agent/tools/agent/irc-view";
 import { sanitizeText } from "@veyyon/utils";
+import { requireTheme } from "../helpers/require-theme";
 
 async function theme() {
-	const t = await getThemeByName("dark");
-	expect(t).toBeDefined();
-	return t!;
+	const t = await requireTheme("dark");
+	return t;
 }
 
 const lines = (component: { render: (w: number) => readonly string[] }, width = 200) =>

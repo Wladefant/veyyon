@@ -1,7 +1,8 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { renderStatusLine } from "@veyyon/coding-agent/modes/terminal/draw";
-import { getThemeByName, initTheme } from "@veyyon/coding-agent/theme/theme";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { sanitizeText } from "@veyyon/utils";
+import { requireTheme } from "../../../helpers/require-theme";
 
 beforeAll(async () => {
 	await initTheme();
@@ -9,8 +10,7 @@ beforeAll(async () => {
 
 describe("renderStatusLine", () => {
 	it("flattens newlines in description so a tool cannot break the header", async () => {
-		const uiTheme = (await getThemeByName("dark"))!;
-		expect(uiTheme).toBeDefined();
+		const uiTheme = await requireTheme("dark");
 		const rendered = sanitizeText(
 			renderStatusLine(
 				{ icon: "success", title: "SSH", description: "[router] $ set -e\ncat > /etc/apt/sources.list" },
@@ -24,8 +24,7 @@ describe("renderStatusLine", () => {
 	});
 
 	it("flattens newlines in meta entries", async () => {
-		const uiTheme = (await getThemeByName("dark"))!;
-		expect(uiTheme).toBeDefined();
+		const uiTheme = await requireTheme("dark");
 		const rendered = sanitizeText(
 			renderStatusLine({ icon: "success", title: "X", meta: ["first\nsecond", "third"] }, uiTheme),
 		);
@@ -35,8 +34,7 @@ describe("renderStatusLine", () => {
 	});
 
 	it("flattens CRLF the same way as LF", async () => {
-		const uiTheme = (await getThemeByName("dark"))!;
-		expect(uiTheme).toBeDefined();
+		const uiTheme = await requireTheme("dark");
 		const rendered = sanitizeText(
 			renderStatusLine({ icon: "success", title: "X", description: "a\r\nb\rc" }, uiTheme),
 		);

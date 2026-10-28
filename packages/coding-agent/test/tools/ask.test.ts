@@ -7,13 +7,14 @@ import type {
 	ExtensionUISelectItem,
 } from "@veyyon/coding-agent/extensibility/extensions";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
-import { getThemeByName, initTheme } from "@veyyon/coding-agent/theme/theme";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { AskTool } from "@veyyon/coding-agent/tools/agent/ask";
 import { askToolView } from "@veyyon/coding-agent/tools/agent/ask-view";
 import { ToolAbortError } from "@veyyon/coding-agent/tools/core/tool-errors";
 import { stripAnsi } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireTheme } from "../helpers/require-theme";
 
 function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
@@ -459,8 +460,7 @@ describe("AskTool option descriptions", () => {
 	});
 
 	it("renders descriptions under labels in ask call previews", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("dark");
 		const rendered = drawToolView(
 			askToolView.renderCall(
 				{
@@ -478,7 +478,7 @@ describe("AskTool option descriptions", () => {
 				},
 				{ expanded: true, partial: false },
 			),
-			theme!,
+			theme,
 		);
 		const renderedLines = stripAnsi(rendered.render(120).join("\n")).split("\n");
 		const labelLine = renderedLines.findIndex(line => line.includes("Use local credentials"));
@@ -939,9 +939,8 @@ describe("AskTool custom input", () => {
 		expect(result.content[0].text).toContain("alpha");
 		expect(result.content[0].text).toContain("custom detail");
 
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		const rendered = drawToolView(askToolView.renderResult(result, { expanded: true, partial: false }), theme!);
+		const theme = await requireTheme("dark");
+		const rendered = drawToolView(askToolView.renderResult(result, { expanded: true, partial: false }), theme);
 		const renderedText = stripAnsi(rendered.render(120).join("\n"));
 		expect(renderedText).toContain("alpha");
 		expect(renderedText).toContain("custom detail");
@@ -1027,9 +1026,8 @@ describe("AskTool multiline custom input rendering", () => {
 
 		expect(result.details?.customInput).toBe(multilineText);
 
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		const rendered = drawToolView(askToolView.renderResult(result, { expanded: true, partial: false }), theme!);
+		const theme = await requireTheme("dark");
+		const rendered = drawToolView(askToolView.renderResult(result, { expanded: true, partial: false }), theme);
 		const renderedText = stripAnsi(rendered.render(120).join("\n"));
 
 		// All three lines should appear
@@ -1039,7 +1037,7 @@ describe("AskTool multiline custom input rendering", () => {
 
 		// Count success glyphs — should be exactly one for the custom input block.
 		// The key contract is that continuation lines do NOT get their own glyph.
-		const successGlyph = theme!.symbol("status.success");
+		const successGlyph = theme.symbol("status.success");
 		const successIconCount = (
 			renderedText.match(new RegExp(successGlyph.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []
 		).length;
@@ -1082,9 +1080,8 @@ describe("AskTool multiline custom input rendering", () => {
 			context,
 		);
 
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		const rendered = drawToolView(askToolView.renderResult(result, { expanded: true, partial: false }), theme!);
+		const theme = await requireTheme("dark");
+		const rendered = drawToolView(askToolView.renderResult(result, { expanded: true, partial: false }), theme);
 		const renderedText = stripAnsi(rendered.render(120).join("\n"));
 
 		expect(renderedText).toContain("second line");
@@ -1345,34 +1342,32 @@ describe("AskTool option markers", () => {
 	// via the header; the selected-marker distinction is locked at the theme.
 
 	it("renders a single-choice call with the block marker and a non-multi header", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("dark");
 		const rendered = drawToolView(
 			askToolView.renderCall(
 				{ question: "Pick one", options: [{ label: "Alpha" }, { label: "Beta" }] },
 				{ expanded: true, partial: false },
 			),
-			theme!,
+			theme,
 		);
 		const text = stripAnsi(rendered.render(120).join("\n"));
-		expect(text).toContain(`${theme!.radio.unselected} Alpha`);
-		expect(text).toContain(`${theme!.radio.unselected} Beta`);
+		expect(text).toContain(`${theme.radio.unselected} Alpha`);
+		expect(text).toContain(`${theme.radio.unselected} Beta`);
 		// Single-choice: the header carries no "multi" marker.
 		expect(text).not.toContain("multi");
 	});
 
 	it("renders a multi-select call with the block marker and a multi header", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("dark");
 		const rendered = drawToolView(
 			askToolView.renderCall(
 				{ question: "Pick many", options: [{ label: "Alpha" }, { label: "Beta" }], multi: true },
 				{ expanded: true, partial: false },
 			),
-			theme!,
+			theme,
 		);
 		const text = stripAnsi(rendered.render(120).join("\n"));
-		expect(text).toContain(`${theme!.checkbox.unchecked} Alpha`);
+		expect(text).toContain(`${theme.checkbox.unchecked} Alpha`);
 		// Multi-select is disclosed in the header.
 		expect(text).toContain("multi");
 	});
@@ -1381,16 +1376,14 @@ describe("AskTool option markers", () => {
 		// This is the contract that actually matters (symbols.ts): unselected markers
 		// are shared, but a selected radio (`▣`) must never be the same glyph as a
 		// checked checkbox (`■`), or single-choice selection would look like multi.
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		expect(theme!.radio.selected).not.toBe(theme!.checkbox.checked);
-		expect(theme!.radio.selected).toBe("▣");
-		expect(theme!.checkbox.checked).toBe("■");
+		const theme = await requireTheme("dark");
+		expect(theme.radio.selected).not.toBe(theme.checkbox.checked);
+		expect(theme.radio.selected).toBe("▣");
+		expect(theme.checkbox.checked).toBe("■");
 	});
 
 	it("keeps option rows stable across repeated renders", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("dark");
 		const options = [
 			{ label: "TypeScript" },
 			{ label: "Rust" },
@@ -1408,7 +1401,7 @@ describe("AskTool option markers", () => {
 				{ questions: [{ id: "fav_lang", question: "Which programming language?", options }] },
 				{ expanded: true, partial: true },
 			),
-			theme!,
+			theme,
 		);
 
 		const firstCall = stripAnsi(renderedCall.render(120).join("\n"));
@@ -1435,7 +1428,7 @@ describe("AskTool option markers", () => {
 				},
 				{ expanded: true, partial: false },
 			),
-			theme!,
+			theme,
 		);
 		const firstResult = stripAnsi(renderedResult.render(120).join("\n"));
 		const secondResult = stripAnsi(renderedResult.render(120).join("\n"));
@@ -1445,8 +1438,7 @@ describe("AskTool option markers", () => {
 	});
 
 	it("keeps single-question option rows stable across repeated renders", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("dark");
 		// The question body comes from the Markdown render cache, which returns
 		// the SAME array on every render of identical text at identical width.
 		// Appending option rows in place would poison that cached entry, so a
@@ -1456,7 +1448,7 @@ describe("AskTool option markers", () => {
 				{ question: "Which **language** do you prefer?", options: [{ label: "OptionDupCanary" }] },
 				{ expanded: true, partial: false },
 			),
-			theme!,
+			theme,
 		);
 		const first = stripAnsi(renderedCall.render(120).join("\n"));
 		const second = stripAnsi(renderedCall.render(120).join("\n"));
@@ -1476,7 +1468,7 @@ describe("AskTool option markers", () => {
 				},
 				{ expanded: true, partial: false },
 			),
-			theme!,
+			theme,
 		);
 		const firstResult = stripAnsi(renderedResult.render(120).join("\n"));
 		const secondResult = stripAnsi(renderedResult.render(120).join("\n"));
@@ -1484,8 +1476,7 @@ describe("AskTool option markers", () => {
 		expect(secondResult.match(/OptionDupCanary/g)?.length).toBe(1);
 	});
 	it("renders single-choice result selection with a filled radio marker", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("dark");
 		const rendered = drawToolView(
 			askToolView.renderResult(
 				{
@@ -1494,16 +1485,15 @@ describe("AskTool option markers", () => {
 				},
 				{ expanded: true, partial: false },
 			),
-			theme!,
+			theme,
 		);
 		const text = stripAnsi(rendered.render(120).join("\n"));
-		expect(text).toContain(theme!.radio.selected);
-		expect(text).not.toContain(theme!.checkbox.checked);
+		expect(text).toContain(theme.radio.selected);
+		expect(text).not.toContain(theme.checkbox.checked);
 	});
 
 	it("renders multi-select result selections with checkbox markers", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("dark");
 		const rendered = drawToolView(
 			askToolView.renderResult(
 				{
@@ -1512,18 +1502,17 @@ describe("AskTool option markers", () => {
 				},
 				{ expanded: true, partial: false },
 			),
-			theme!,
+			theme,
 		);
 		const text = stripAnsi(rendered.render(120).join("\n"));
-		expect(text).toContain(theme!.checkbox.checked);
-		expect(text).not.toContain(theme!.radio.selected);
+		expect(text).toContain(theme.checkbox.checked);
+		expect(text).not.toContain(theme.radio.selected);
 	});
 });
 
 describe("askToolView malformed call args", () => {
 	it("renders double-encoded questions string instead of crashing the TUI", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("dark");
 		// Models occasionally JSON-encode the questions array as a string; a bare
 		// string passes a truthy `.length` check but has no `.map` (TUI crash).
 		const doubleEncoded = JSON.stringify([
@@ -1531,7 +1520,7 @@ describe("askToolView malformed call args", () => {
 		]);
 		const rendered = drawToolView(
 			askToolView.renderCall({ questions: doubleEncoded } as never, { expanded: true, partial: false }),
-			theme!,
+			theme,
 		);
 		const text = stripAnsi(rendered.render(120).join("\n"));
 		expect(text).toContain("[q1]");
@@ -1540,12 +1529,11 @@ describe("askToolView malformed call args", () => {
 	});
 
 	it("falls back to the error frame for unparseable questions without throwing", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("dark");
 		for (const questions of ["[{trunc", 42, { 0: { id: "x" } }]) {
 			const rendered = drawToolView(
 				askToolView.renderCall({ questions } as never, { expanded: true, partial: true }),
-				theme!,
+				theme,
 			);
 			const text = stripAnsi(rendered.render(120).join("\n"));
 			expect(text).toContain("No question provided");
@@ -1553,8 +1541,7 @@ describe("askToolView malformed call args", () => {
 	});
 
 	it("drops malformed question entries and option items while keeping valid ones", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("dark");
 		const rendered = drawToolView(
 			askToolView.renderCall(
 				{
@@ -1566,7 +1553,7 @@ describe("askToolView malformed call args", () => {
 				} as never,
 				{ expanded: true, partial: true },
 			),
-			theme!,
+			theme,
 		);
 		const text = stripAnsi(rendered.render(120).join("\n"));
 		expect(text).toContain("[ok]");

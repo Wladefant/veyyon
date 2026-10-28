@@ -44,11 +44,12 @@ import { hoverBandAt } from "@veyyon/coding-agent/modes/terminal/components/sele
 import { SelectorController } from "@veyyon/coding-agent/modes/terminal/controllers/selector-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import type { AccountInventory } from "@veyyon/coding-agent/session/account-inventory";
-import { getThemeByName, initTheme, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { initTheme, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy, TERMINAL, type TUI } from "@veyyon/tui";
 import { motionClock } from "@veyyon/utils/motion";
 import { bandRgb, rgbDistance } from "../../../helpers/band-colors";
 import { useHandTickedMotion } from "../../../helpers/hand-ticked-motion";
+import { requireTheme } from "../../../helpers/require-theme";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const WIDTH = 110;
@@ -209,8 +210,7 @@ beforeEach(async () => {
 	// instead, which is how a band test stays green while the band is broken.
 	originalColorterm = Bun.env.COLORTERM;
 	Bun.env.COLORTERM = "truecolor";
-	const loaded = await getThemeByName("titanium");
-	if (!loaded) throw new Error("titanium theme unavailable in test env");
+	const loaded = await requireTheme("titanium");
 	if (loaded.getColorMode() !== "truecolor") throw new Error(`titanium built as ${loaded.getColorMode()}`);
 	setThemeInstance(loaded);
 	policy = getAnsiPolicy();

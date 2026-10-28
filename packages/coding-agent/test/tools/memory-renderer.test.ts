@@ -1,15 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
 import type { Theme } from "@veyyon/coding-agent/theme/theme";
-import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
 import { recallToolView, reflectToolView, retainToolView } from "@veyyon/coding-agent/tools/agent/memory-view";
 import { sanitizeText } from "@veyyon/utils";
 import type { ToolView } from "@veyyon/view";
+import { requireTheme } from "../helpers/require-theme";
 
 async function theme() {
-	const t = await getThemeByName("dark");
-	expect(t).toBeDefined();
-	return t!;
+	const t = await requireTheme("dark");
+	return t;
 }
 
 const COLLAPSED = { expanded: false } as const;

@@ -27,8 +27,9 @@ import {
 } from "@veyyon/coding-agent/config/model-resolver";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { ModelPickerComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-picker";
-import { getThemeByName, setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
+import { requireTheme } from "../../../helpers/require-theme";
 
 function makeModel(provider: string, id: string): Model {
 	return buildModel({
@@ -96,8 +97,7 @@ function openPicker(settings: Settings): { render: () => string; enter: () => Mo
 }
 
 beforeAll(async () => {
-	const dark = await getThemeByName("dark");
-	if (!dark) throw new Error("dark theme failed to load");
+	const dark = await requireTheme("dark");
 	setThemeInstance(dark);
 });
 

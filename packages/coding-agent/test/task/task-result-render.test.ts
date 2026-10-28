@@ -3,8 +3,9 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { viewToolRenderer } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
 import { taskToolView } from "@veyyon/coding-agent/task/task-view";
 import type { AgentProgress, SingleResult, TaskToolDetails } from "@veyyon/coding-agent/task/types";
-import { getThemeByName, setThemeInstance, type Theme } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance, type Theme } from "@veyyon/coding-agent/theme/theme";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
+import { requireTheme } from "../helpers/require-theme";
 
 /** The card the terminal draws from the task tool's view, which is what the product renders. */
 const taskToolRenderer = viewToolRenderer(taskToolView, { mergeCallAndResult: true });
@@ -129,8 +130,7 @@ describe("task live progress rendering", () => {
 
 	beforeAll(async () => {
 		await Settings.init({ inMemory: true });
-		const loaded = await getThemeByName("dark");
-		if (!loaded) throw new Error("theme unavailable");
+		const loaded = await requireTheme("dark");
 		uiTheme = loaded;
 		setThemeInstance(uiTheme);
 	});

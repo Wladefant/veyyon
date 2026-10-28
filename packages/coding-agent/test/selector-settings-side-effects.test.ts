@@ -4,9 +4,10 @@ import { getBundledModel } from "@veyyon/catalog/models";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { SelectorController } from "@veyyon/coding-agent/modes/terminal/controllers/selector-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { AUTO_THINKING } from "@veyyon/coding-agent/thinking";
 import { requireBundledModel } from "../../agent/test/helpers";
+import { requireTheme } from "./helpers/require-theme";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 let settingsState: SettingsTestState | undefined;
@@ -123,8 +124,7 @@ describe("selector setting side effects", () => {
 	});
 
 	it("/model picker sets the interactive session model", async () => {
-		const testTheme = await getThemeByName("dark");
-		if (!testTheme) throw new Error("Failed to load dark theme for model selector test");
+		const testTheme = await requireTheme("dark");
 		setThemeInstance(testTheme);
 
 		const nextModel = requireBundledModel("openai", "gpt-5.6") ?? getBundledModel("openai", "gpt-5.5");
@@ -173,8 +173,7 @@ describe("selector setting side effects", () => {
 	});
 
 	it("temporary /switch picker updates the session model", async () => {
-		const testTheme = await getThemeByName("dark");
-		if (!testTheme) throw new Error("Failed to load dark theme for quick-role picker test");
+		const testTheme = await requireTheme("dark");
 		setThemeInstance(testTheme);
 
 		const smol = buildModel({

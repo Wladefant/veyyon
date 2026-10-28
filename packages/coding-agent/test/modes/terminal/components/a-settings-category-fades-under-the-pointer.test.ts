@@ -35,11 +35,12 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
-import { getThemeByName, initTheme, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { initTheme, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy, TERMINAL } from "@veyyon/tui";
 import { motionClock } from "@veyyon/utils/motion";
 import { bandRgb, rgbDistance } from "../../../helpers/band-colors";
 import { useHandTickedMotion } from "../../../helpers/hand-ticked-motion";
+import { requireTheme } from "../../../helpers/require-theme";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const WIDTH = 160;
@@ -118,8 +119,7 @@ beforeEach(async () => {
 	await initTheme(false);
 	originalColorterm = Bun.env.COLORTERM;
 	Bun.env.COLORTERM = "truecolor";
-	const loaded = await getThemeByName("titanium");
-	if (!loaded) throw new Error("titanium theme unavailable in test env");
+	const loaded = await requireTheme("titanium");
 	if (loaded.getColorMode() !== "truecolor") throw new Error(`titanium built as ${loaded.getColorMode()}`);
 	setThemeInstance(loaded);
 	policy = getAnsiPolicy();

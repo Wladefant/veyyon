@@ -22,15 +22,15 @@ import {
 	EXECUTION_STREAMING_LINE_CAP,
 	StreamedOutputLines,
 } from "@veyyon/coding-agent/modes/terminal/components/transcript/execution-shared";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
+import { requireTheme } from "../../../helpers/require-theme";
 
 const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
 
 beforeEach(async () => {
-	const theme = await getThemeByName("dark");
-	expect(theme).toBeDefined();
-	setThemeInstance(theme!);
+	const theme = await requireTheme("dark");
+	setThemeInstance(theme);
 });
 
 type ExecutionBlock = BashExecutionComponent | EvalExecutionComponent;

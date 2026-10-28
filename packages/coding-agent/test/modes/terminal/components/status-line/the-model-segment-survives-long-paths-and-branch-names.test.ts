@@ -45,8 +45,9 @@ import type { QuietSegmentBounds } from "@veyyon/coding-agent/modes/terminal/com
 import { FLOOR_SPENDABLE } from "@veyyon/coding-agent/modes/terminal/components/status-line/quiet-row";
 import { BASE_MODE_STATES } from "@veyyon/coding-agent/modes/terminal/components/status-line/segments";
 import type { StatusLinePreset } from "@veyyon/coding-agent/modes/terminal/components/status-line/types";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { AUTONOMY_LABEL } from "@veyyon/coding-agent/tools/core/approval-modes";
+import { requireTheme } from "../../../../helpers/require-theme";
 import { makeStatusLineProducer } from "../../../../helpers/status-line-session";
 import { useTrackedTempDirs } from "../../../../helpers/tracked-temp-dir";
 
@@ -128,8 +129,7 @@ function renderedIds(bounds: readonly QuietSegmentBounds[]): Set<string> {
 
 beforeAll(async () => {
 	await Settings.init({ inMemory: true });
-	const loaded = await getThemeByName("dark");
-	if (!loaded) throw new Error("theme unavailable");
+	const loaded = await requireTheme("dark");
 	setThemeInstance(loaded);
 
 	// A cwd deep enough to fill the path budget, in a repo whose HEAD names the

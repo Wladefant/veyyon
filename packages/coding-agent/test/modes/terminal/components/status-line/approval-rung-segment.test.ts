@@ -14,10 +14,11 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { SEGMENTS } from "@veyyon/coding-agent/modes/terminal/components/status-line/segments";
 import type { SegmentContext } from "@veyyon/coding-agent/modes/terminal/components/status-line/types";
-import { getThemeByName, setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
 import { AUTONOMY_LABEL } from "@veyyon/coding-agent/tools/core/approval-modes";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
 import { NO_SESSION_FACTS } from "../../../../../src/modes/terminal/components/status-line/session-facts";
+import { requireTheme } from "../../../../helpers/require-theme";
 
 interface ModeOverrides {
 	/** Configured `tools.approvalMode`; omit to leave it unset. */
@@ -68,8 +69,7 @@ function renderMode(over: ModeOverrides): { visible: boolean; text: string } {
 
 beforeAll(async () => {
 	await Settings.init({ inMemory: true });
-	const loaded = await getThemeByName("dark");
-	if (!loaded) throw new Error("theme unavailable");
+	const loaded = await requireTheme("dark");
 	setThemeInstance(loaded);
 });
 

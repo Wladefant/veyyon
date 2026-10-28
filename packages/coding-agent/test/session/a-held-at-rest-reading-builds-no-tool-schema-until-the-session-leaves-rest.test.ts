@@ -62,13 +62,14 @@ import {
 	isAtRestReadingDeferred,
 	takeHeldAtRestReading,
 } from "@veyyon/coding-agent/session/non-message-tokens";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
 import { requireBundledModel } from "../../../agent/test/helpers";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
+import { requireTheme } from "../helpers/require-theme";
 
 const PROVIDER = "anthropic";
 const MODEL_ID = "claude-sonnet-4-5";
@@ -208,8 +209,7 @@ beforeAll(async () => {
 	authStorage = await AuthStorage.create(path.join(sharedDir, "auth.db"));
 	authStorage.setRuntimeApiKey(PROVIDER, "anthropic-test-key");
 	modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir, "models.yml"));
-	const theme = await getThemeByName("dark");
-	if (!theme) throw new Error("theme unavailable");
+	const theme = await requireTheme("dark");
 	setThemeInstance(theme);
 });
 

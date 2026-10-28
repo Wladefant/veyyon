@@ -3,8 +3,9 @@ import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/sett
 import { viewToolRenderer } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
 import type { AgentProgress, SingleResult, TaskToolDetails } from "@veyyon/coding-agent/task";
 import { taskToolView } from "@veyyon/coding-agent/task/task-view";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { formatDuration, formatNumber } from "@veyyon/utils";
+import { requireTheme } from "../helpers/require-theme";
 
 /** The card the terminal draws from the task tool's view, which is what the product renders. */
 const taskToolRenderer = viewToolRenderer(taskToolView, { mergeCallAndResult: true });
@@ -13,9 +14,8 @@ describe("task renderer: nested live rendering", () => {
 	beforeAll(async () => {
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true, cwd: process.cwd() });
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		setThemeInstance(theme!);
+		const theme = await requireTheme("dark");
+		setThemeInstance(theme);
 	});
 
 	afterEach(() => {
@@ -93,7 +93,7 @@ describe("task renderer: nested live rendering", () => {
 	}
 
 	async function render(progress: AgentProgress): Promise<string> {
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
 			results: [],
@@ -219,7 +219,7 @@ describe("task renderer: nested live rendering", () => {
 	});
 
 	it("formats running progress stats with tool icon, context window, and cost", async () => {
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const text = await render(
 			makeRunningProgress({
 				toolCount: 19,
@@ -241,7 +241,7 @@ describe("task renderer: nested live rendering", () => {
 	});
 
 	it("renders a static result header and static running task row", async () => {
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
 			results: [],
@@ -272,7 +272,7 @@ describe("task renderer: nested live rendering", () => {
 	});
 
 	it("wraps the completed run summary in bracket glyphs, dropping the Total: label", async () => {
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const ok = makeCompletedSubResult("Alpha", "did the thing");
 		const bad: SingleResult = { ...makeCompletedSubResult("Beta", "blew up"), exitCode: 1, error: "boom" };
 		const details: TaskToolDetails = {

@@ -23,11 +23,11 @@
 import { describe, expect, it } from "bun:test";
 import { toolWireSchema } from "@veyyon/ai/utils/schema";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
-import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { bashEnvForDisplay, bashToolView } from "@veyyon/coding-agent/tools/shell/bash-view";
 import { isRecord, sanitizeText } from "@veyyon/utils";
 import { INTENT_FIELD } from "@veyyon/wire";
+import { requireTheme } from "./helpers/require-theme";
 import { makeToolSession } from "./helpers/tool-session";
 
 /** The env the preview states for every prefix of a buffer, in arrival order. */
@@ -135,13 +135,12 @@ describe("the streamed env preview ends at the env object", () => {
 	});
 
 	it("draws the pending card lead with the env entries and never the working directory as one", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("dark");
 		const view = bashToolView.renderCall(
 			{ __partialJson: '{"env":{"A":"1"},"command":"ls -la","cwd":"/srv/app","i":"Listing"}'.slice(0, 44) },
 			{ expanded: false, partial: true },
 		);
-		const rows = sanitizeText(drawToolView(view, theme!).render(120).join("\n"));
+		const rows = sanitizeText(drawToolView(view, theme).render(120).join("\n"));
 		expect(rows).toContain('A="1"');
 		expect(rows).not.toContain('command="');
 		expect(rows).not.toContain('cwd="');

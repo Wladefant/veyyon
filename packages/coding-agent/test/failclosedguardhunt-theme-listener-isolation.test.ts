@@ -37,7 +37,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import {
 	getCurrentThemeName,
-	getThemeByName,
 	getThemeEpoch,
 	onThemeChange,
 	setTheme,
@@ -46,6 +45,7 @@ import {
 	type ThemeChangeEvent,
 } from "@veyyon/coding-agent/theme/theme";
 import { logger } from "@veyyon/utils";
+import { requireTheme } from "./helpers/require-theme";
 
 /** One captured `logger.warn` call. */
 interface WarnEntry {
@@ -79,8 +79,7 @@ let warnings: WarnCapture | undefined;
 let releaseListener: (() => void) | undefined;
 
 beforeAll(async () => {
-	const loaded = await getThemeByName("dark");
-	if (!loaded) throw new Error("Expected the built-in dark theme to exist");
+	const loaded = await requireTheme("dark");
 	dark = loaded;
 });
 

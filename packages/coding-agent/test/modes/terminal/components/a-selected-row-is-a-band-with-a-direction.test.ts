@@ -37,18 +37,12 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { hoverBandAt, selectionBand } from "@veyyon/coding-agent/modes/terminal/components/selectors/selector-helpers";
 import { resetGroundTintsForTest, setDetectedTerminalGround } from "@veyyon/coding-agent/theme/ground-tints";
-import {
-	getThemeByName,
-	hoverBand,
-	initTheme,
-	setThemeInstance,
-	theme,
-	visibleGroundHex,
-} from "@veyyon/coding-agent/theme/theme";
+import { hoverBand, initTheme, setThemeInstance, theme, visibleGroundHex } from "@veyyon/coding-agent/theme/theme";
 import { Ellipsis } from "@veyyon/natives";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
 import { hexRgb } from "../../../helpers/band-colors";
+import { requireTheme } from "../../../helpers/require-theme";
 
 /** The grey a real terminal reports, so the ramp resolves out of something that is not black. */
 const TERMINAL_GREY = "#1e2127";
@@ -95,8 +89,7 @@ async function useMode(mode: "truecolor" | "256color"): Promise<void> {
 		delete (Bun.env as Record<string, string | undefined>).COLORTERM;
 		Bun.env.TERM = "linux";
 	}
-	const loaded = await getThemeByName("titanium");
-	if (!loaded) throw new Error("titanium theme unavailable in test env");
+	const loaded = await requireTheme("titanium");
 	if (loaded.getColorMode() !== mode) throw new Error(`titanium built as ${loaded.getColorMode()}, wanted ${mode}`);
 	setThemeInstance(loaded);
 }

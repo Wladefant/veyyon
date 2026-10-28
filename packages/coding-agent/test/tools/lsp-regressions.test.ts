@@ -46,7 +46,6 @@ import {
 } from "@veyyon/coding-agent/lsp/utils";
 import { lspToolView } from "@veyyon/coding-agent/lsp/view";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
-import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { detectLanguageId } from "@veyyon/coding-agent/utils/lang-from-path";
 import { makeToolSession } from "../helpers/tool-session";
@@ -75,6 +74,7 @@ import type { Subprocess } from "bun";
 import DEFAULTS from "../../src/lsp/defaults.json" with { type: "json" };
 import { getLanguageFromPath } from "../../src/utils/lang-from-path";
 import { installFakeLsp, type RpcMessage } from "../helpers/fake-lsp";
+import { requireTheme } from "../helpers/require-theme";
 import { toolResultText } from "../helpers/tool-result-text";
 
 type BunSpawnOptions = Bun.SpawnOptions.SpawnOptions<
@@ -956,9 +956,7 @@ describe("lsp regressions", () => {
 	});
 
 	it("sanitizes symbol metadata in the card a host draws", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		const uiTheme = theme!;
+		const uiTheme = await requireTheme("dark");
 
 		const call = drawToolView(
 			lspToolView.renderCall(
@@ -997,9 +995,7 @@ describe("lsp regressions", () => {
 	});
 
 	it("sanitizes tabs in a drawn diagnostic row", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		const uiTheme = theme!;
+		const uiTheme = await requireTheme("dark");
 
 		const result = drawToolView(
 			lspToolView.renderResult(

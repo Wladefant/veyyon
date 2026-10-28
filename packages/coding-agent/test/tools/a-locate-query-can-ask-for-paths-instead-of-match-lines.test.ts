@@ -19,11 +19,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
 import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
 import { SEARCH_TYPES, SearchTool, type SearchToolDetails } from "@veyyon/coding-agent/tools/search/search";
 import { MULTI_FILE_PER_FILE_MATCHES, type TextSearchDetails } from "@veyyon/coding-agent/tools/search/text-search";
 import { removeWithRetries } from "@veyyon/utils";
+import { requireTheme } from "../helpers/require-theme";
 import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
@@ -135,8 +135,7 @@ describe("a locate query can ask for paths instead of match lines", () => {
 				paths: true,
 			});
 			const textResult = textDetailsOf(result);
-			const theme = await getThemeByName("dark");
-			expect(theme).toBeDefined();
+			const theme = await requireTheme("dark");
 			// Through the search renderer, since the text card is a view the terminal draws rather than
 			// a renderer module to import.
 			const frame = searchToolRenderer
@@ -146,7 +145,7 @@ describe("a locate query can ask for paths instead of match lines", () => {
 						details: { type: "text", result: textResult } as unknown as SearchToolDetails,
 					},
 					{ expanded: false, isPartial: false },
-					theme!,
+					theme,
 					{ type: "text", input: NEEDLE } as never,
 				)
 				.render(100);

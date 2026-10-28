@@ -1,12 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import type { RenderResultOptions } from "@veyyon/coding-agent/extensibility/custom-tools/types";
-import { getThemeByName, type Theme } from "@veyyon/coding-agent/theme/theme";
+import type { Theme } from "@veyyon/coding-agent/theme/theme";
 import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
 import type { FileSearchDetails, FileSearchRenderArgs } from "@veyyon/coding-agent/tools/search/file-search";
 import type { SearchToolDetails, SearchToolInput } from "@veyyon/coding-agent/tools/search/search";
 import type { Component } from "@veyyon/tui";
 import { sanitizeText } from "@veyyon/utils";
 import { visibleWidth } from "@veyyon/utils/width";
+import { requireTheme } from "../helpers/require-theme";
 import { expectNotAccented, useFullColor } from "../helpers/theme-assertions";
 
 /**
@@ -44,9 +45,7 @@ const fileSearchRenderer = {
 describe("the files search card", () => {
 	useFullColor();
 	it("indents inline glob output and avoids accent-colored success headers", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		const uiTheme = theme!;
+		const uiTheme = await requireTheme("dark");
 		const result = {
 			content: [{ type: "text", text: "" }],
 			details: {
@@ -78,9 +77,7 @@ describe("the files search card", () => {
 	});
 
 	it("renders a timed-out empty scan as incomplete instead of a definitive no-files claim", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		const uiTheme = theme!;
+		const uiTheme = await requireTheme("dark");
 		// `truncated` with zero files only happens on the timeout path — the
 		// scan died mid-walk, so "No files found" would be a false claim.
 		const result = {
@@ -103,9 +100,7 @@ describe("the files search card", () => {
 	});
 
 	it("renders a genuinely empty result as no files found", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		const uiTheme = theme!;
+		const uiTheme = await requireTheme("dark");
 		const result = {
 			content: [{ type: "text", text: "No files found matching pattern" }],
 			details: {
@@ -130,8 +125,7 @@ describe("fileSearchRenderer truncation reasons", () => {
 	 * cap; both being present once rendered "truncated: limit 200 results, limit
 	 * 200 results". Exactly one reason may appear. */
 	it("emits the result-cap reason once when details and limits both carry it", async () => {
-		const theme = await getThemeByName("dark");
-		const uiTheme = theme!;
+		const uiTheme = await requireTheme("dark");
 		const result = {
 			content: [{ type: "text", text: "" }],
 			details: {
@@ -153,8 +147,7 @@ describe("fileSearchRenderer truncation reasons", () => {
 	/** The limits-only path (no details.resultLimitReached) must still surface
 	 * the cap — deduping may not silently drop the reason entirely. */
 	it("still emits the reason when only meta.limits carries the cap", async () => {
-		const theme = await getThemeByName("dark");
-		const uiTheme = theme!;
+		const uiTheme = await requireTheme("dark");
 		const result = {
 			content: [{ type: "text", text: "" }],
 			details: {
@@ -183,7 +176,7 @@ describe("fileSearchRenderer row layout", () => {
 	useFullColor();
 
 	it("respects collapsed vs expanded line budgets with a railed overflow indicator", async () => {
-		const uiTheme = (await getThemeByName("dark"))!;
+		const uiTheme = await requireTheme("dark");
 		const files = Array.from({ length: 15 }, (_, i) => `src/file_${i}.ts`);
 		const result = { content: [{ type: "text", text: "" }], details: { fileCount: 15, files } };
 		const rail = uiTheme.symbol("block.rail");
@@ -218,7 +211,7 @@ describe("fileSearchRenderer row layout", () => {
 	});
 
 	it("formats directory headers without the file indent and files with it", async () => {
-		const uiTheme = (await getThemeByName("dark"))!;
+		const uiTheme = await requireTheme("dark");
 		const result = {
 			content: [{ type: "text", text: "" }],
 			details: { fileCount: 3, files: ["src/", "src/index.ts", "src/util.ts"] },
@@ -242,7 +235,7 @@ describe("fileSearchRenderer row layout", () => {
 	});
 
 	it("budgets body width against the block content width so a row never wraps", async () => {
-		const uiTheme = (await getThemeByName("dark"))!;
+		const uiTheme = await requireTheme("dark");
 		const longPath =
 			"src/very/deep/nested/directory/structure/that/is/exceptionally/long/and/will/overflow/if/not/budgeted/correctly/index.ts";
 		const result = { content: [{ type: "text", text: "" }], details: { fileCount: 1, files: [longPath] } };

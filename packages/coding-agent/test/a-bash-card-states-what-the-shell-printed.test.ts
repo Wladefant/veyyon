@@ -25,13 +25,14 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { previewWindowRows } from "@veyyon/coding-agent/tools/core/render-utils";
 import { BASH_DEFAULT_PREVIEW_LINES } from "@veyyon/coding-agent/tools/shell/bash";
 import { type BashViewArgs, type BashViewResult, bashToolView } from "@veyyon/coding-agent/tools/shell/bash-view";
 import { type AnsiPolicy, getAnsiPolicy, ImageProtocol, setAnsiPolicy, TERMINAL } from "@veyyon/tui";
 import { sanitizeText } from "@veyyon/utils";
 import type { FramedBlockView, ToolView, ToolViewContext } from "@veyyon/view";
+import { requireTheme } from "./helpers/require-theme";
 
 type MutableTerminalInfo = {
 	imageProtocol: ImageProtocol | null;
@@ -58,9 +59,8 @@ describe("the bash card", () => {
 
 	/** The rows a host draws for a call, as the words a reader sees. */
 	async function callRows(args: BashViewArgs, context: ToolViewContext = COLLAPSED, width = 120): Promise<string[]> {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		return [...drawToolView(bashToolView.renderCall(args, context), theme!).render(width)];
+		const theme = await requireTheme("dark");
+		return [...drawToolView(bashToolView.renderCall(args, context), theme).render(width)];
 	}
 
 	/** The rows a host draws for a settled result, as the words a reader sees. */
@@ -70,9 +70,8 @@ describe("the bash card", () => {
 		context: ToolViewContext = COLLAPSED,
 		width = 120,
 	): Promise<string[]> {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		return [...drawToolView(bashToolView.renderResult(result, context, args), theme!).render(width)];
+		const theme = await requireTheme("dark");
+		return [...drawToolView(bashToolView.renderResult(result, context, args), theme).render(width)];
 	}
 
 	const text = (lines: readonly string[]): string => sanitizeText(lines.join("\n"));
@@ -109,16 +108,15 @@ describe("the bash card", () => {
 	});
 
 	it("draws a pending call as one rail row carrying the command", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("dark");
 		const lines = Bun.stripANSI(
-			drawToolView(bashToolView.renderCall({ command: "sleep 30" }, { expanded: false, partial: true }), theme!)
+			drawToolView(bashToolView.renderCall({ command: "sleep 30" }, { expanded: false, partial: true }), theme)
 				.render(60)
 				.join("\n"),
 		).split("\n");
 		// A pending call hangs on a rail: one row, the rail glyph down its left, the command beside
 		// it. There is no header, because a title reading "Bash" over `$ sleep 30` names nothing.
-		const rail = theme!.symbol("block.rail");
+		const rail = theme.symbol("block.rail");
 		expect(lines).toEqual([`${rail}  $ sleep 30 `]);
 		expect(lines[0]).not.toContain("Bash");
 	});
@@ -317,9 +315,8 @@ describe("the bash card", () => {
 	});
 
 	it("carries its own styling run on every line of a multi-line command", async () => {
-		const uiTheme = await getThemeByName("dark");
-		expect(uiTheme).toBeDefined();
-		setThemeInstance(uiTheme!);
+		const uiTheme = await requireTheme("dark");
+		setThemeInstance(uiTheme);
 		const command = 'for f in a b; do\n\techo "$f"\ndone';
 		const rendered = await resultRows(
 			{ content: [{ type: "text", text: "" }], details: {}, isError: false },
@@ -500,8 +497,7 @@ describe("the bash card", () => {
 		// The card is drawn once per repaint; with a long transcript and a 50KB tail that is the hot
 		// path that pinned the main thread. The block behind the card keys its cache on the rows and
 		// the width, so an unchanged card at an unchanged width does no string work at all.
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("dark");
 		const output = Array.from({ length: 200 }, (_, i) => `line ${i}: payload ${"x".repeat(20)}`).join("\n");
 		const component = drawToolView(
 			bashToolView.renderResult(
@@ -513,7 +509,7 @@ describe("the bash card", () => {
 				COLLAPSED,
 				{ command: "printf '%s' big" },
 			),
-			theme!,
+			theme,
 		);
 
 		const first = component.render(120);

@@ -22,11 +22,12 @@ import { UiHelpers } from "@veyyon/coding-agent/modes/terminal/utils/ui-helpers"
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "@veyyon/coding-agent/session/messages";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Container } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
 import { requireBundledModel } from "../../agent/test/helpers";
+import { requireTheme } from "./helpers/require-theme";
 
 type StubEditor = {
 	setText: (text: string) => void;
@@ -728,9 +729,8 @@ describe("UiHelpers / InputController against derived queued custom display", ()
 	let fixture: SessionFixture | undefined;
 
 	beforeEach(async () => {
-		const themeInstance = await getThemeByName("dark");
-		expect(themeInstance).toBeDefined();
-		setThemeInstance(themeInstance!);
+		const themeInstance = await requireTheme("dark");
+		setThemeInstance(themeInstance);
 	});
 
 	afterEach(async () => {

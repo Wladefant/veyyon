@@ -1,8 +1,9 @@
 import { beforeAll, describe, expect, it, vi } from "bun:test";
 import { CommandController } from "@veyyon/coding-agent/modes/terminal/controllers/command-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { useIsolatedGlobalSettings } from "../../../helpers/isolated-global-settings";
+import { requireTheme } from "../../../helpers/require-theme";
 
 // `executeBash` initializes the GLOBAL Settings singleton itself, so a session
 // stub alone leaves it loading the developer's real ~/.veyyon agent.db.
@@ -19,8 +20,7 @@ function createContainer() {
 
 describe("bash shortcut command", () => {
 	beforeAll(async () => {
-		const theme = await getThemeByName("dark");
-		if (!theme) throw new Error("Expected dark theme");
+		const theme = await requireTheme("dark");
 		setThemeInstance(theme);
 	});
 
@@ -110,8 +110,7 @@ describe.each([
 	["%", "handlePythonCommand", "pythonComponent", "pendingPythonComponents", "Python execution failed"],
 ] as const)("the %s shortcut", (_prefix, handler, slot, pendingList, failure) => {
 	beforeAll(async () => {
-		const theme = await getThemeByName("dark");
-		if (!theme) throw new Error("Expected dark theme");
+		const theme = await requireTheme("dark");
 		setThemeInstance(theme);
 	});
 

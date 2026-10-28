@@ -1,10 +1,11 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { editToolView } from "@veyyon/coding-agent/edit/edit-view";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
-import { getThemeByName, initTheme, type Theme } from "@veyyon/coding-agent/theme/theme";
+import { initTheme, type Theme } from "@veyyon/coding-agent/theme/theme";
 import { readToolView } from "@veyyon/coding-agent/tools/fs/read-view";
 import { writeToolView } from "@veyyon/coding-agent/tools/fs/write-view";
 import type { Component } from "@veyyon/tui";
+import { requireTheme } from "../helpers/require-theme";
 
 interface InvalidPathCase {
 	readonly name: string;
@@ -20,8 +21,7 @@ let uiTheme: Theme;
 
 beforeAll(async () => {
 	await initTheme(false, undefined, undefined, "dark", "light");
-	const theme = await getThemeByName("dark");
-	if (!theme) throw new Error("dark theme missing");
+	const theme = await requireTheme("dark");
 	uiTheme = theme;
 });
 

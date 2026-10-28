@@ -57,8 +57,9 @@ import {
 	FLOOR_SPENDABLE,
 	MIN_LOCATION_PART,
 } from "@veyyon/coding-agent/modes/terminal/components/status-line/quiet-row";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { stripAnsi } from "@veyyon/utils";
+import { requireTheme } from "../../../../helpers/require-theme";
 import { makeStatusLineProducer } from "../../../../helpers/status-line-session";
 import { useTrackedTempDirs } from "../../../../helpers/tracked-temp-dir";
 
@@ -174,8 +175,7 @@ function roomForTheZone(bounds: readonly QuietSegmentBounds[]): number {
 
 beforeAll(async () => {
 	await Settings.init({ inMemory: true });
-	const loaded = await getThemeByName("dark");
-	if (!loaded) throw new Error("theme unavailable");
+	const loaded = await requireTheme("dark");
 	setThemeInstance(loaded);
 
 	// A path deep enough that the zone is under pressure at every width in the sweep, in a repo

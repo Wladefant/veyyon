@@ -16,6 +16,7 @@ import { getThemeByName, highlightCode } from "@veyyon/coding-agent/theme/theme"
 // meaning the same stream the moment either is tuned. The FRAGMENTS below stay
 // local on purpose -- they are code-flavored, not the shared width-adversarial pool.
 import { fuzzStrings } from "@veyyon/utils/adversarial-strings";
+import { requireTheme } from "./helpers/require-theme";
 
 // Code-flavored adversarial fragments: unbalanced delimiters, unterminated
 // strings/comments, keywords, operators, unicode/wide/emoji identifiers, control
@@ -89,13 +90,12 @@ const HIGHLIGHT_CORPUS: readonly string[] = [];
 
 describe("highlightCode fuzz", () => {
 	it("never throws and always returns a string array on adversarial code", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("dark");
 		fuzzStrings({ seed: 0x11_9c_0de, iterations: 6000, corpus: HIGHLIGHT_CORPUS, build: buildCode }, (code, rand) => {
 			const lang = LANGS[Math.floor(rand() * LANGS.length)];
 			let lines: string[];
 			try {
-				lines = highlightCode(code, lang, theme!);
+				lines = highlightCode(code, lang, theme);
 			} catch (e) {
 				throw new Error(`highlightCode(${JSON.stringify(code)}, ${lang}) threw: ${e}`);
 			}
@@ -113,7 +113,7 @@ describe("highlightCode fuzz", () => {
 			const code = `${"{".repeat(depth)}x${"}".repeat(depth)}`;
 			let lines: string[];
 			try {
-				lines = highlightCode(code, "json", theme!);
+				lines = highlightCode(code, "json", theme);
 			} catch (e) {
 				throw new Error(`highlightCode(nested depth ${depth}) threw: ${e}`);
 			}

@@ -1,8 +1,9 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import { getThemeByName, initTheme } from "@veyyon/coding-agent/theme/theme";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { previewWindowRows } from "@veyyon/coding-agent/tools/core/render-utils";
 import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
 import { sanitizeText } from "@veyyon/utils";
+import { requireTheme } from "../helpers/require-theme";
 
 beforeAll(async () => {
 	await initTheme();
@@ -13,8 +14,7 @@ const sshToolRenderer = toolRenderers.ssh!;
 
 describe("the ssh card", () => {
 	it("keeps the status header on one line when the command spans multiple lines", async () => {
-		const uiTheme = (await getThemeByName("dark"))!;
-		expect(uiTheme).toBeDefined();
+		const uiTheme = await requireTheme("dark");
 		const command = ["set -e", "cat > /etc/apt/sources.list <<'EOF'", "# mirrors", "EOF"].join("\n");
 		const component = sshToolRenderer.renderResult(
 			{ content: [{ type: "text", text: "" }] },
@@ -40,8 +40,7 @@ describe("the ssh card", () => {
 	});
 
 	it("keeps the pending-call header on one line for multiline commands", async () => {
-		const uiTheme = (await getThemeByName("dark"))!;
-		expect(uiTheme).toBeDefined();
+		const uiTheme = await requireTheme("dark");
 		const command = "set -e\ndo-something";
 		const component = sshToolRenderer.renderCall(
 			{ host: "router", command },
@@ -61,8 +60,7 @@ describe("the ssh card", () => {
 	});
 
 	it("keeps partial results pending until the final SSH result", async () => {
-		const uiTheme = (await getThemeByName("dark"))!;
-		expect(uiTheme).toBeDefined();
+		const uiTheme = await requireTheme("dark");
 		const renderHeader = (isPartial: boolean) =>
 			sanitizeText(
 				sshToolRenderer
@@ -79,8 +77,7 @@ describe("the ssh card", () => {
 		expect(renderHeader(false)).toContain("⇄ SSH: [sccpu]");
 	});
 	it("renders the collapsed command as a viewport tail window in every state — no stream→final expansion", async () => {
-		const uiTheme = (await getThemeByName("dark"))!;
-		expect(uiTheme).toBeDefined();
+		const uiTheme = await requireTheme("dark");
 		const total = previewWindowRows() + 5;
 		const command = Array.from({ length: total }, (_, i) => `step_${i}`).join("\n");
 		const render = (opts: { expanded: boolean; isPartial: boolean }) =>

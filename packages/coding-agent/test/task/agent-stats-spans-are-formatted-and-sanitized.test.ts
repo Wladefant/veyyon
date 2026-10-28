@@ -20,15 +20,15 @@ import {
 	STATS_DOT,
 	sanitizeRecentOutput,
 } from "@veyyon/coding-agent/task/agent-stats";
-import { getThemeByName, type Theme } from "@veyyon/coding-agent/theme/theme";
+import type { Theme } from "@veyyon/coding-agent/theme/theme";
 import type { ViewSpan } from "@veyyon/view";
+import { requireTheme } from "../helpers/require-theme";
 
 describe("agent-stats", () => {
 	let uiTheme: Theme;
 
 	beforeAll(async () => {
-		const loaded = await getThemeByName("dark");
-		if (!loaded) throw new Error("dark theme unavailable");
+		const loaded = await requireTheme("dark");
 		uiTheme = loaded;
 	});
 

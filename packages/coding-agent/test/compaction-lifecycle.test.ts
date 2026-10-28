@@ -2,8 +2,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:te
 import { CompactionCancelledError, type CompactionResult } from "@veyyon/agent-core/compaction";
 import { CommandController } from "@veyyon/coding-agent/modes/terminal/controllers/command-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
-import { getThemeByName, setThemeInstance, type Theme, theme } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance, type Theme, theme } from "@veyyon/coding-agent/theme/theme";
 import { Container, Spacer } from "@veyyon/tui";
+import { requireTheme } from "./helpers/require-theme";
 
 /**
  * Contract under test: `CommandController.executeCompaction` must not leak
@@ -83,8 +84,7 @@ describe("executeCompaction UI lifecycle", () => {
 		// Capture the prior global theme first so afterAll can restore it and not
 		// couple later suites sharing this process to our dark override.
 		priorTheme = theme;
-		const dark = await getThemeByName("dark");
-		if (!dark) throw new Error("Expected dark theme");
+		const dark = await requireTheme("dark");
 		setThemeInstance(dark);
 	});
 

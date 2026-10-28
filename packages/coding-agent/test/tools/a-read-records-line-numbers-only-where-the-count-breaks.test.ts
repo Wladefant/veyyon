@@ -26,12 +26,13 @@ import {
 	resetRegisteredArtifactDirsForTests,
 } from "@veyyon/coding-agent/internal-urls/registry-helpers";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
-import { getThemeByName, initTheme } from "@veyyon/coding-agent/theme/theme";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool, type ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
 import { readToolView } from "@veyyon/coding-agent/tools/fs/read-view";
 import { zip } from "@veyyon/coding-agent/utils/zip";
 import { removeWithRetries } from "@veyyon/utils";
+import { requireTheme } from "../helpers/require-theme";
 import { makeToolSession } from "../helpers/tool-session";
 
 const LINES = Array.from({ length: 12 }, (_, i) => `row ${i + 1} of the fixture`);
@@ -147,8 +148,7 @@ describe("a read records line numbers only where the count breaks", () => {
 		const result = await new ReadTool(session()).execute("r", { path: `${path.join(tmpDir, "notes.txt")}:4-7` });
 		const details = JSON.parse(JSON.stringify(result.details)) as ReadToolDetails;
 		expect(details.displayContent?.lineNumbers).toBeUndefined();
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("dark");
 
 		const card = drawToolView(
 			readToolView.renderResult(
@@ -156,7 +156,7 @@ describe("a read records line numbers only where the count breaks", () => {
 				{ expanded: true, partial: false },
 				{ path: "notes.txt:4-7" },
 			),
-			theme!,
+			theme,
 		);
 		const drawnRows = Bun.stripANSI(card.render(120).join("\n"))
 			.split("\n")

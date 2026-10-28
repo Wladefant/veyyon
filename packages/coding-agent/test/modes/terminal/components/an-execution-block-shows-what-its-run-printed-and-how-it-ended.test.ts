@@ -21,9 +21,10 @@ import {
 	EXECUTION_MAX_DISPLAY_COLUMNS,
 	EXECUTION_PREVIEW_LINES,
 } from "@veyyon/coding-agent/modes/terminal/components/transcript/execution-shared";
-import { getThemeByName, setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
 import { ImageProtocol, setTerminalImageProtocol, TERMINAL, type TUI } from "@veyyon/tui";
 import { formatMoreLines } from "@veyyon/utils/format";
+import { requireTheme } from "../../../helpers/require-theme";
 import { useFullColor } from "../../../helpers/theme-assertions";
 
 const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
@@ -38,8 +39,7 @@ const BLOCKS: Array<[string, () => ExecutionBlock]> = [
 ];
 
 beforeAll(async () => {
-	const dark = await getThemeByName("dark");
-	if (!dark) throw new Error("Expected the built-in dark theme");
+	const dark = await requireTheme("dark");
 	setThemeInstance(dark);
 });
 

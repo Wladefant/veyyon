@@ -38,10 +38,11 @@ import {
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { executeAcpBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/acp-builtins";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { getProjectDir, setProjectDir, TempDir } from "@veyyon/utils";
 import { requireBundledModel } from "../../../agent/test/helpers";
+import { requireTheme } from "../helpers/require-theme";
 
 type Transform = (context: Context, model: Model) => Context | Promise<Context>;
 
@@ -175,8 +176,7 @@ describe("a request renders paths against the directory the session is in", () =
 		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		model = bundled;
 		// The terminal `/move` row presents its confirmation through the active theme.
-		const dark = await getThemeByName("dark");
-		if (!dark) throw new Error("Expected the dark theme to exist");
+		const dark = await requireTheme("dark");
 		setThemeInstance(dark);
 	});
 

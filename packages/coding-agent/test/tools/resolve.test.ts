@@ -1,11 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
-import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ResolveTool } from "@veyyon/coding-agent/tools/agent/resolve";
 import { resolveToolView } from "@veyyon/coding-agent/tools/agent/resolve-view";
 import { sanitizeText } from "@veyyon/utils";
+import { requireTheme } from "../helpers/require-theme";
 import { useFullColor } from "../helpers/theme-assertions";
 
 // Several cases below assert the exact painted bytes of a rendered block, which
@@ -143,9 +143,7 @@ describe("ResolveTool", () => {
 });
 
 it("renders a highlighted apply summary", async () => {
-	const theme = await getThemeByName("dark");
-	expect(theme).toBeDefined();
-	const uiTheme = theme!;
+	const uiTheme = await requireTheme("dark");
 
 	const component = drawToolView(
 		resolveToolView.renderResult(
@@ -173,9 +171,7 @@ it("renders a highlighted apply summary", async () => {
 });
 
 it("keeps the inverse block color across the full line (no mid-line fg reset)", async () => {
-	const theme = await getThemeByName("dark");
-	expect(theme).toBeDefined();
-	const uiTheme = theme!;
+	const uiTheme = await requireTheme("dark");
 
 	const component = drawToolView(
 		resolveToolView.renderResult(

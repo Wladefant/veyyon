@@ -1,8 +1,9 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { HookSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/hook-selector";
-import { getThemeByName, setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
 import { visibleWidth } from "@veyyon/utils/width";
 import { cardBodyLines } from "./helpers/modal-card";
+import { requireTheme } from "./helpers/require-theme";
 import { useFullColor } from "./helpers/theme-assertions";
 
 /**
@@ -14,10 +15,7 @@ import { useFullColor } from "./helpers/theme-assertions";
 const CARD_AREA = 200;
 
 beforeAll(async () => {
-	const theme = await getThemeByName("dark");
-	if (!theme) {
-		throw new Error("Failed to load dark theme for tests");
-	}
+	const theme = await requireTheme("dark");
 	setThemeInstance(theme);
 });
 describe("HookSelectorComponent", () => {

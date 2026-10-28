@@ -25,7 +25,7 @@ import * as fs from "node:fs";
 import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
-import { getThemeByName, initTheme, type Theme } from "@veyyon/coding-agent/theme/theme";
+import { initTheme, type Theme } from "@veyyon/coding-agent/theme/theme";
 // The composition root every host loads before it opens a session, which registers the result codecs.
 import "@veyyon/coding-agent/tools/index";
 import { SearchTool, type SearchToolDetails, type SearchToolInput } from "@veyyon/coding-agent/tools/search/search";
@@ -34,6 +34,7 @@ import { searchToolView } from "@veyyon/coding-agent/tools/search/search-view";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { setAgentDir, TempDir } from "@veyyon/utils";
 import { captureDirOverrides, type DirOverridesSnapshot, restoreDirOverrides } from "@veyyon/utils/dirs";
+import { requireTheme } from "../helpers/require-theme";
 import { makeToolSession } from "../helpers/tool-session";
 
 /** Each file's matches sit on non-adjacent lines, and one past line 9, so rows elide and pad. */
@@ -184,8 +185,7 @@ describe("a session file stores a search card once", () => {
 		await initTheme();
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
-		const dark = await getThemeByName("dark");
-		if (!dark) throw new Error("dark theme missing");
+		const dark = await requireTheme("dark");
 		theme = dark;
 	});
 

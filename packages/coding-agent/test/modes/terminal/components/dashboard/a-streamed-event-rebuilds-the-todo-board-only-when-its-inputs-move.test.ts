@@ -39,19 +39,13 @@ import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/c
 import { RAIL_IDLE_STEP_MS } from "@veyyon/coding-agent/modes/terminal/draw/rail-motion";
 import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import {
-	getThemeByName,
-	initTheme,
-	setThemeInstance,
-	stopThemeWatcher,
-	type Theme,
-	theme,
-} from "@veyyon/coding-agent/theme/theme";
+import { initTheme, setThemeInstance, stopThemeWatcher, type Theme, theme } from "@veyyon/coding-agent/theme/theme";
 import type { TodoPhase } from "@veyyon/coding-agent/tools/agent/todo";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TUI } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
 import { VirtualTerminal } from "../../../../../../../hosts/terminal/engine/test/virtual-terminal";
+import { requireTheme } from "../../../../helpers/require-theme";
 
 const COLUMNS = 100;
 const ROWS = 24;
@@ -131,8 +125,7 @@ const UNEVENTED_INPUTS: Record<string, (ctx: EdgeContext) => Promise<void> | voi
 	},
 	"the theme is swapped": async () => {
 		// Every load builds a new instance, so this is a swap even when `dark` is already active.
-		const fresh = await getThemeByName("dark");
-		if (!fresh) throw new Error("expected the shipped dark theme to load");
+		const fresh = await requireTheme("dark");
 		setThemeInstance(fresh);
 	},
 };

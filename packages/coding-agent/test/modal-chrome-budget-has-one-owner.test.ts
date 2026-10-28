@@ -48,9 +48,10 @@ import {
 } from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-shell";
 import { ModelHubComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-hub";
 import { SessionSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/session-selector";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import type { SessionInfo } from "@veyyon/kernel/session/session-listing";
 import type { TUI } from "@veyyon/tui";
+import { requireTheme } from "./helpers/require-theme";
 
 const UP = "\x1b[A";
 const DOWN = "\x1b[B";
@@ -257,8 +258,7 @@ describe("no component restates the chrome arithmetic", () => {
 
 describe("planModalChrome is the contract callers size against", () => {
 	beforeAll(async () => {
-		const theme = await getThemeByName("dark");
-		if (!theme) throw new Error("Failed to load dark theme");
+		const theme = await requireTheme("dark");
 		setThemeInstance(theme);
 	});
 
@@ -348,8 +348,7 @@ describe("planModalChrome is the contract callers size against", () => {
 
 describe("ModelHub strip row", () => {
 	beforeAll(async () => {
-		const theme = await getThemeByName("dark");
-		if (!theme) throw new Error("Failed to load dark theme");
+		const theme = await requireTheme("dark");
 		setThemeInstance(theme);
 	});
 
@@ -425,8 +424,7 @@ describe("ModelHub strip row", () => {
 
 describe("session picker card height", () => {
 	beforeAll(async () => {
-		const theme = await getThemeByName("dark");
-		if (!theme) throw new Error("Failed to load dark theme");
+		const theme = await requireTheme("dark");
 		setThemeInstance(theme);
 	});
 
@@ -491,8 +489,7 @@ describe("session picker card height", () => {
 
 describe("ModelHub chain list windowing", () => {
 	beforeAll(async () => {
-		const theme = await getThemeByName("dark");
-		if (!theme) throw new Error("Failed to load dark theme");
+		const theme = await requireTheme("dark");
 		setThemeInstance(theme);
 	});
 

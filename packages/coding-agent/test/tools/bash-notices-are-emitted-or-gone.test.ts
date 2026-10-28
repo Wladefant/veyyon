@@ -1,11 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
-import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { BashTool, type BashToolDetails } from "@veyyon/coding-agent/tools/shell/bash";
 import { bashToolView } from "@veyyon/coding-agent/tools/shell/bash-view";
 import { sanitizeText } from "@veyyon/utils";
 import { useIsolatedGlobalSettings } from "../helpers/isolated-global-settings";
+import { requireTheme } from "../helpers/require-theme";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**
@@ -95,15 +95,14 @@ describe("a retired bash notice costs the payload nothing", () => {
 
 describe("a persisted bash result reads its notices from the footer", () => {
 	async function render(text: string, details: Record<string, unknown>, isError: boolean): Promise<string> {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("dark");
 		const component = drawToolView(
 			bashToolView.renderResult(
 				{ content: [{ type: "text", text }], details: details as BashToolDetails, isError },
 				{ expanded: false, partial: false },
 				{ command: "echo hi" },
 			),
-			theme!,
+			theme,
 		);
 		return sanitizeText(component.render(120).join("\n"));
 	}

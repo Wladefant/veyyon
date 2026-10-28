@@ -6,13 +6,14 @@ import * as url from "node:url";
 import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/config/settings";
 import { editToolView } from "@veyyon/coding-agent/edit/edit-view";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
-import { getThemeByName, initTheme } from "@veyyon/coding-agent/theme/theme";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { readToolView } from "@veyyon/coding-agent/tools/fs/read-view";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { writeToolView } from "@veyyon/coding-agent/tools/fs/write-view";
 import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
 import { removeSyncWithRetries } from "@veyyon/utils";
+import { requireTheme } from "../helpers/require-theme";
 import { makeToolSessionAt } from "../helpers/tool-session";
 
 /**
@@ -46,7 +47,7 @@ afterAll(() => {
 describe("tool output OSC 8 file:// hyperlinks", () => {
 	it("links plain text and image read titles to the resolved filesystem path", async () => {
 		settings.override("tui.hyperlinks", "always");
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-link-read-"));
 		try {
 			const textPath = path.join(dir, "task.txt");
@@ -88,7 +89,7 @@ describe("tool output OSC 8 file:// hyperlinks", () => {
 
 	it("links the write header to the absolute path it wrote", async () => {
 		settings.override("tui.hyperlinks", "always");
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-link-write-"));
 		try {
 			const filePath = path.join(dir, "out.ts");
@@ -112,7 +113,7 @@ describe("tool output OSC 8 file:// hyperlinks", () => {
 
 	it("resolves scoped search links against cwd, not the (sub)scope path", async () => {
 		settings.override("tui.hyperlinks", "always");
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		// Scoped search: scope dir (`searchPath`) is below cwd, and the grouped
 		// display paths are cwd-relative. Resolving against searchPath would double
 		// the `src` prefix (`/proj/src/src/...`).
@@ -152,7 +153,7 @@ describe("tool output OSC 8 file:// hyperlinks", () => {
 
 	it("resolves scoped ast-grep links against cwd, not the (sub)scope path", async () => {
 		settings.override("tui.hyperlinks", "always");
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const projectRoot = path.resolve("/tmp/veyyon-project");
 		const srcRoot = path.join(projectRoot, "src");
 		const interactiveModePath = path.join(srcRoot, "interactive-mode.ts");
@@ -188,7 +189,7 @@ describe("tool output OSC 8 file:// hyperlinks", () => {
 
 	it("links the edit header to the absolute details.path even when the arg path is relative", async () => {
 		settings.override("tui.hyperlinks", "always");
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const editPath = path.resolve("/tmp/veyyon-project/src/a.ts");
 		const rendered = drawToolView(
 			editToolView.renderResult(
