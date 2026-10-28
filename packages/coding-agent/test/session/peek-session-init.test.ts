@@ -1,32 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { createAssistantMessage } from "../helpers/agent-session-setup";
 import { useTempDirs } from "../helpers/temp-dirs";
 
 const makeTempDir = useTempDirs();
-
-function assistantMessage(text: string) {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected built-in anthropic model to exist");
-	return {
-		role: "assistant" as const,
-		content: [{ type: "text" as const, text }],
-		api: model.api,
-		provider: model.provider,
-		model: model.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop" as const,
-		timestamp: Date.now(),
-	};
-}
 
 describe("SessionManager.peekSessionInit", () => {
 	it("returns the latest session_init contract (tools/spawns/readSummarize) and the header cwd", async () => {
@@ -44,7 +22,7 @@ describe("SessionManager.peekSessionInit", () => {
 			readSummarize: false,
 		});
 		// Flush buffered entries (header + inits) so the lock-free peek can read them off disk.
-		manager.appendMessage(assistantMessage("flush"));
+		manager.appendMessage(createAssistantMessage("flush"));
 
 		const peek = await SessionManager.peekSessionInit(sessionFile);
 		expect(peek?.cwd).toBe(manager.getCwd());
@@ -60,7 +38,7 @@ describe("SessionManager.peekSessionInit", () => {
 		const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
 		const sessionFile = manager.getSessionFile();
 		if (!sessionFile) throw new Error("Expected a persisted session file path");
-		manager.appendMessage(assistantMessage("hi"));
+		manager.appendMessage(createAssistantMessage("hi"));
 
 		const peek = await SessionManager.peekSessionInit(sessionFile);
 		expect(peek?.cwd).toBe(manager.getCwd());
