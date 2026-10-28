@@ -69,6 +69,7 @@ import { emptyUsage, getBundledModel, getBundledModels, getBundledProviders } fr
 import * as piUtils from "@veyyon/utils";
 import { type as arkType } from "arktype";
 import { restoreEnv } from "../../utils/test/helpers/restore-global";
+import { sseResponse } from "./helpers/fetch-mock";
 
 // ---------------------------------------------------------------------------
 // JSON-expressibility walker (test-local mirror of the mapJsonStrings domain)
@@ -202,11 +203,6 @@ const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 function asFetch(implementation: (input: string | URL | Request, init?: RequestInit) => Promise<Response>): FetchImpl {
 	return Object.assign(implementation, { preconnect: fetch.preconnect });
-}
-
-function sseResponse(...chunks: unknown[]): Response {
-	const body = chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join("");
-	return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
 /** Top-level `candidates` chunk (public Generative Language + Vertex). */
@@ -489,7 +485,7 @@ function startGeminiCli(cap: CaptureHook): Streamish {
 		batteryContext(),
 		{
 			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
-			fetch: asFetch(async () => sseResponse({ response: genaiChunk("hi") })),
+			fetch: asFetch(async () => sseResponse([{ response: genaiChunk("hi") }])),
 			signal: controller.signal,
 			onPayload: payload => {
 				const result = cap(payload);
@@ -518,7 +514,7 @@ function startGoogle(cap: CaptureHook): Streamish {
 		batteryContext(),
 		{
 			apiKey: "test-key",
-			fetch: asFetch(async () => sseResponse(genaiChunk("hi"))),
+			fetch: asFetch(async () => sseResponse([genaiChunk("hi")])),
 			signal: controller.signal,
 			onPayload: payload => {
 				const result = cap(payload);
@@ -536,7 +532,7 @@ function startVertex(cap: CaptureHook): Streamish {
 		if (url.includes("oauth2.googleapis.com/token") || url.includes("metadata.google.internal")) {
 			return new Response(JSON.stringify({ access_token: "token", expires_in: 3600 }));
 		}
-		return sseResponse(genaiChunk("hi"));
+		return sseResponse([genaiChunk("hi")]);
 	});
 	return streamGoogleVertex(
 		buildModel({
@@ -670,7 +666,7 @@ function startOpenAICompletions(cap: CaptureHook): Streamish {
 		batteryContext(),
 		{
 			apiKey: "test-key",
-			fetch: asFetch(async () => sseResponse("[DONE]")),
+			fetch: asFetch(async () => sseResponse(["[DONE]"])),
 			signal: AbortSignal.abort(),
 			onPayload: payload => cap(payload),
 		},
@@ -705,7 +701,7 @@ function startOpenrouter(cap: CaptureHook): Streamish {
 	// Responses request build (VEYYON_OPENROUTER_RESPONSES unset).
 	return streamSimple(getBundledModel("openrouter", "anthropic/claude-sonnet-4"), batteryContext(), {
 		apiKey: "test-key",
-		fetch: asFetch(async () => sseResponse("[DONE]")),
+		fetch: asFetch(async () => sseResponse(["[DONE]"])),
 		signal: AbortSignal.abort(),
 		onPayload: payload => cap(payload),
 	});
@@ -734,7 +730,7 @@ function startPiNative(cap: CaptureHook): Streamish {
 		stopReason: "stop",
 		timestamp: 0,
 	};
-	const fetchImpl = asFetch(async () => sseResponse({ type: "done", reason: "stop", message: doneMessage }));
+	const fetchImpl = asFetch(async () => sseResponse([{ type: "done", reason: "stop", message: doneMessage }]));
 	return streamPiNative(
 		buildModel({
 			id: "claude-sonnet-4-5",

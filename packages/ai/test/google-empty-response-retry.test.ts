@@ -5,15 +5,11 @@ import { streamGoogleGenAI } from "@veyyon/ai/providers/google-shared";
 import { streamGoogleVertex } from "@veyyon/ai/providers/google-vertex";
 import type { AssistantMessageEvent, Context, FetchImpl, Model } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { sseResponse } from "./helpers/fetch-mock";
 
 // A Gemini turn that finishes with `finishReason: STOP` but carries only an empty text part —
 // the well-known "empty response" failure. Delivered as-is, the agent receives a blank message
 // and silently halts, so the provider must retry instead of surfacing it.
-
-function sse(...chunks: unknown[]): Response {
-	const body = chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join("");
-	return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
-}
 
 /** Top-level `candidates` shape (public Generative Language + Vertex). */
 function genaiChunk(text: string): Record<string, unknown> {
@@ -87,7 +83,7 @@ describe("Google empty-response retry (public + Vertex path)", () => {
 		let calls = 0;
 		const fetchMock: FetchImpl = async () => {
 			calls += 1;
-			return calls === 1 ? sse(genaiChunk("")) : sse(genaiChunk("Hello!"));
+			return calls === 1 ? sseResponse([genaiChunk("")]) : sseResponse([genaiChunk("Hello!")]);
 		};
 
 		const stream = streamGoogle(genaiModel, context, { apiKey: "k", fetch: fetchMock });
@@ -105,7 +101,7 @@ describe("Google empty-response retry (public + Vertex path)", () => {
 		let calls = 0;
 		const fetchMock: FetchImpl = async () => {
 			calls += 1;
-			return sse(genaiChunk(""));
+			return sseResponse([genaiChunk("")]);
 		};
 
 		const stream = streamGoogle(genaiModel, context, { apiKey: "k", fetch: fetchMock });
@@ -130,7 +126,7 @@ describe("Google empty-response retry (public + Vertex path)", () => {
 			calls += 1;
 			order.push(`fetch:${calls}`);
 			bodies.push(JSON.parse(String(init?.body)));
-			const response = sse(genaiChunk(calls === 1 ? "" : "Done"));
+			const response = sseResponse([genaiChunk(calls === 1 ? "" : "Done")]);
 			response.headers.set("x-request-id", `request-${calls}`);
 			return response;
 		};
@@ -186,7 +182,7 @@ describe("Google empty-response retry (public + Vertex path)", () => {
 					headers: { "x-request-id": "regional-request" },
 				});
 			}
-			const response = sse(genaiChunk("global"));
+			const response = sseResponse([genaiChunk("global")]);
 			response.headers.set("x-request-id", "global-request");
 			return response;
 		};
@@ -232,7 +228,7 @@ describe("Google empty-response retry (public + Vertex path)", () => {
 			apiKey: "k",
 			fetch: async () => {
 				order.push("fetch");
-				return sse(genaiChunk("must not stream"));
+				return sseResponse([genaiChunk("must not stream")]);
 			},
 			onResponse: async () => {
 				order.push("response");
@@ -264,7 +260,7 @@ describe("Google empty-response retry (public + Vertex path)", () => {
 			if (url.includes("oauth2.googleapis.com/token") || url.includes("metadata.google.internal")) {
 				return new Response(JSON.stringify({ access_token: "token", expires_in: 3600 }));
 			}
-			return sse(...chunks);
+			return sseResponse([...chunks]);
 		};
 
 		const stream = streamGoogleVertex(vertexModel, context, {
@@ -321,7 +317,7 @@ describe("Google empty-response retry (public + Vertex path)", () => {
 			if (url.includes("oauth2.googleapis.com/token") || url.includes("metadata.google.internal")) {
 				return new Response(JSON.stringify({ access_token: "token", expires_in: 3600 }));
 			}
-			return sse(...chunks);
+			return sseResponse([...chunks]);
 		};
 
 		const stream = streamGoogleVertex(vertexModel, context, {
@@ -350,7 +346,7 @@ describe("Google empty-response retry (Cloud Code Assist path)", () => {
 		const fetchMock: FetchImpl = async () => {
 			calls += 1;
 			// Cloud Code Assist re-fetches `response.url` on retry; synthetic Responses default it to "".
-			const response = calls === 1 ? sse(ccaChunk("")) : sse(ccaChunk("Done."));
+			const response = calls === 1 ? sseResponse([ccaChunk("")]) : sseResponse([ccaChunk("Done.")]);
 			Object.defineProperty(response, "url", { value: "https://example.com/v1internal:streamGenerateContent" });
 			return response;
 		};
@@ -392,7 +388,7 @@ describe("Google empty-response retry (Cloud Code Assist path)", () => {
 		];
 
 		const fetchMock: FetchImpl = async () => {
-			const response = sse(...chunks);
+			const response = sseResponse([...chunks]);
 			Object.defineProperty(response, "url", { value: "https://example.com/v1internal:streamGenerateContent" });
 			return response;
 		};
@@ -419,11 +415,13 @@ describe("Google empty-response retry (Cloud Code Assist path)", () => {
 		let calls = 0;
 		const fetchMock: FetchImpl = async () => {
 			calls += 1;
-			const response = sse({
-				response: {
-					candidates: [{ content: { parts: [] }, finishReason: "SAFETY" }],
+			const response = sseResponse([
+				{
+					response: {
+						candidates: [{ content: { parts: [] }, finishReason: "SAFETY" }],
+					},
 				},
-			});
+			]);
 			Object.defineProperty(response, "url", { value: "https://example.com/v1internal:streamGenerateContent" });
 			return response;
 		};

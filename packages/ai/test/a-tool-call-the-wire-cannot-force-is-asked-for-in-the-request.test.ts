@@ -51,6 +51,7 @@ import { getBundledModel } from "@veyyon/catalog/models";
 import * as piUtils from "@veyyon/utils";
 import { type as arkType } from "arktype";
 import { restoreEnv } from "../../utils/test/helpers/restore-global";
+import { sseResponse } from "./helpers/fetch-mock";
 
 const NAMED_INSTRUCTION = "This turn must call the `respond` tool.";
 const ANY_INSTRUCTION = "This turn must call one of the available tools.";
@@ -88,11 +89,6 @@ const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 function asFetch(implementation: (input: string | URL | Request, init?: RequestInit) => Promise<Response>): FetchImpl {
 	return Object.assign(implementation, { preconnect: fetch.preconnect });
-}
-
-function sseResponse(...chunks: unknown[]): Response {
-	const body = chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join("");
-	return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
 function genaiChunk(text: string): Record<string, unknown> {
@@ -260,7 +256,7 @@ function completionsSetup(label: string, model: Model<"openai-completions">, for
 					model,
 					requestContext(),
 					mapped(model, toolChoice, onPayload, signal, {
-						fetch: asFetch(async () => sseResponse("[DONE]")),
+						fetch: asFetch(async () => sseResponse(["[DONE]"])),
 					}),
 				),
 			),
@@ -292,7 +288,7 @@ function responsesSetup(label: string, model: Model<"openai-responses">, forces:
 					model,
 					requestContext(),
 					mapped(model, toolChoice, onPayload, signal, {
-						fetch: asFetch(async () => sseResponse("[DONE]")),
+						fetch: asFetch(async () => sseResponse(["[DONE]"])),
 					}),
 				),
 			),
@@ -307,7 +303,7 @@ function openrouterSetup(label: string, model: Model, forces: boolean): Setup {
 			capture((onPayload, signal) =>
 				streamSimple(model, requestContext(), {
 					apiKey: "test-key",
-					fetch: asFetch(async () => sseResponse("[DONE]")),
+					fetch: asFetch(async () => sseResponse(["[DONE]"])),
 					signal,
 					toolChoice,
 					onPayload,
@@ -339,7 +335,7 @@ function geminiCliSetup(label: string, provider: string, id: string, forces: boo
 					requestContext(),
 					mapped(model, toolChoice, onPayload, signal, {
 						apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
-						fetch: asFetch(async () => sseResponse({ response: genaiChunk("hi") })),
+						fetch: asFetch(async () => sseResponse([{ response: genaiChunk("hi") }])),
 					}),
 				),
 			),
@@ -471,7 +467,7 @@ const CASES: Record<KnownApi, ApiCase> = {
 							requestContext(),
 							mapped(model, toolChoice, onPayload, signal, {
 								apiKey: token,
-								fetch: asFetch(async () => sseResponse({ type: "response.output_text.delta", delta: "hi" })),
+								fetch: asFetch(async () => sseResponse([{ type: "response.output_text.delta", delta: "hi" }])),
 							}),
 						);
 					}),
@@ -502,7 +498,7 @@ const CASES: Record<KnownApi, ApiCase> = {
 							model,
 							requestContext(),
 							mapped(model, toolChoice, onPayload, signal, {
-								fetch: asFetch(async () => sseResponse(genaiChunk("hi"))),
+								fetch: asFetch(async () => sseResponse([genaiChunk("hi")])),
 							}),
 						);
 					}),
@@ -534,7 +530,7 @@ const CASES: Record<KnownApi, ApiCase> = {
 							if (url.includes("oauth2.googleapis.com/token") || url.includes("metadata.google.internal")) {
 								return new Response(JSON.stringify({ access_token: "token", expires_in: 3600 }));
 							}
-							return sseResponse(genaiChunk("hi"));
+							return sseResponse([genaiChunk("hi")]);
 						});
 						return streamGoogleVertex(model, requestContext(), {
 							...mapped(model, toolChoice, onPayload, signal, { fetch: fetchImpl }),
