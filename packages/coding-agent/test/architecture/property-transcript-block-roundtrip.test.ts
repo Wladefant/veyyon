@@ -26,7 +26,6 @@ import type { AgentMessage } from "@veyyon/session";
 import type { TranscriptBlock } from "@veyyon/wire/presentation";
 import {
 	blockIdFor,
-	contentToText,
 	defaultToolText,
 	isDisplayed,
 	toTranscriptBlock,
@@ -276,66 +275,36 @@ describe("prompt projections preserve text and synthetic provenance", () => {
 	});
 });
 
-describe("contentToText extracts wire-visible text across content structures", () => {
-	test("preserves string content verbatim", () => {
-		expect(contentToText("hello world")).toBe("hello world");
-		expect(contentToText("")).toBe("");
+describe("custom and hook projections keep every text chunk boundary", () => {
+	const content = [
+		{ type: "text", text: "" },
+		{ type: "text", text: "first" },
+		{ type: "image", data: "AAAA", mimeType: "image/png" },
+		{ type: "text", text: "" },
+		{ type: "text", text: "last" },
+	];
+
+	test("a custom message joins its text blocks with a newline, empty ones included, images dropped", () => {
+		const message = { role: "custom", customType: "note", content, display: true, timestamp: 1 };
+		const block = toTranscriptBlock(message as unknown as AgentMessage, { index: 0 });
+		if (block.kind !== "custom") throw new Error(block.kind);
+		expect(block.text).toBe("\nfirst\n\nlast");
 	});
 
-	test("returns empty string for empty block array and empty text blocks", () => {
-		expect(contentToText([])).toBe("");
-		expect(contentToText([{ type: "text", text: "" }])).toBe("");
+	test("a hook message joins its text blocks the same way", () => {
+		const message = { role: "hookMessage", customType: "pre-run", content, timestamp: 1 };
+		const block = toTranscriptBlock(message as unknown as AgentMessage, { index: 0 });
+		if (block.kind !== "hook") throw new Error(block.kind);
+		expect(block.text).toBe("\nfirst\n\nlast");
 	});
 
-	test("skips leading empty text blocks without prepending newline to following text", () => {
-		expect(
-			contentToText([
-				{ type: "text", text: "" },
-				{ type: "text", text: "hello" },
-			]),
-		).toBe("hello");
-	});
-
-	test("preserves empty text blocks after the first nonempty block", () => {
-		expect(
-			contentToText([
-				{ type: "text", text: "first" },
-				{ type: "text", text: "" },
-				{ type: "text", text: "last" },
-			]),
-		).toBe("first\n\nlast");
-	});
-
-	test("returns empty string for image-only content", () => {
-		expect(contentToText([{ type: "image", mimeType: "image/png" }])).toBe("");
-	});
-
-	test("joins multipart text blocks with newline separator", () => {
-		expect(
-			contentToText([
-				{ type: "text", text: "line 1" },
-				{ type: "text", text: "line 2" },
-			]),
-		).toBe("line 1\nline 2");
-	});
-
-	test("skips image and non-text blocks in mixed multipart content", () => {
-		expect(
-			contentToText([
-				{ type: "text", text: "before" },
-				{ type: "image", mimeType: "image/jpeg" },
-				null,
-				{ type: "other", text: "ignored" },
-				{ type: "text", text: "after" },
-			]),
-		).toBe("before\nafter");
-	});
-
-	test("returns empty string for non-string non-array inputs", () => {
-		expect(contentToText(undefined)).toBe("");
-		expect(contentToText(null)).toBe("");
-		expect(contentToText(123)).toBe("");
-		expect(contentToText({ text: "not in an array" })).toBe("");
+	test("content that is neither a string nor a block list projects no text", () => {
+		for (const malformed of [undefined, null, 123, { text: "not in an array" }]) {
+			const message = { role: "custom", customType: "note", content: malformed, display: true, timestamp: 1 };
+			const block = toTranscriptBlock(message as unknown as AgentMessage, { index: 0 });
+			if (block.kind !== "custom") throw new Error(block.kind);
+			expect(block.text).toBe("");
+		}
 	});
 });
 

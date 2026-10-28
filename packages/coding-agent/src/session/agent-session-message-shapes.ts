@@ -5,19 +5,10 @@
  */
 
 import type { AgentMessage } from "@veyyon/agent-core";
-import type { AssistantMessage, ImageContent, TextContent } from "@veyyon/ai";
+import type { AssistantMessage } from "@veyyon/ai";
 import { getStringProperty, isRecord } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
 import type { TitleConversationTurn } from "../tiny/message-preproc";
-
-export function customMessageContentText(content: string | (TextContent | ImageContent)[]): string {
-	if (typeof content === "string") return content;
-	const parts: string[] = [];
-	for (const part of content) {
-		if (part.type === "text") parts.push(part.text);
-	}
-	return parts.join("\n");
-}
 
 export function stringProperty(value: object, key: string): string | undefined {
 	const field = Object.getOwnPropertyDescriptor(value, key)?.value;

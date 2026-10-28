@@ -9,6 +9,7 @@
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, Message, ToolResultMessage } from "@veyyon/ai";
 import { collapseWhitespace } from "@veyyon/utils/collapse-whitespace";
+import { contentText } from "@veyyon/utils/content-text";
 import { replaceTabs } from "@veyyon/utils/tab-width";
 import { isRecord } from "@veyyon/utils/type-guards";
 import { truncateToWidth } from "@veyyon/utils/width";
@@ -27,12 +28,9 @@ import type {
 } from "@veyyon/wire/presentation";
 import { resolveAbortLabel, shouldRenderAbortReason } from "../session/messages";
 import { TRUNCATE_LENGTHS } from "../tools/core/render-limits";
-import { contentToText } from "./content-text";
 import { projectCustomDisplay, readCustomLevel } from "./custom-display";
 import { toBranchSummaryView, toCompactionSummaryView } from "./summary-builder";
 import { buildToolExecutionBlock } from "./tool-execution";
-
-export { contentToText } from "./content-text";
 
 /** Everything the builder needs that a message does not carry. */
 export interface TranscriptBuildOptions {
@@ -81,7 +79,7 @@ export function collectToolCallArgs(messages: readonly AgentMessage[]): Map<stri
 
 /** Text chunks in a prompt concatenate without adding separators. */
 export function userMessageText(message: Extract<AgentMessage, { role: "developer" | "user" }> | Message): string {
-	return contentToText(message.content, "");
+	return contentText(message.content, { separator: "" });
 }
 
 export function toUserMessageView(message: Extract<AgentMessage, { role: "developer" | "user" }>): UserMessageView {
@@ -445,7 +443,7 @@ export function toTranscriptBlock(message: AgentMessage, options: TranscriptBuil
 				kind: "custom",
 				id,
 				customKind: customType,
-				text: contentToText(message.content, "\n", true),
+				text: contentText(message.content),
 				level,
 				timestamp,
 			};
@@ -463,7 +461,7 @@ export function toTranscriptBlock(message: AgentMessage, options: TranscriptBuil
 				kind: "hook",
 				id,
 				hookName,
-				text: contentToText(message.content, "\n", true),
+				text: contentText(message.content),
 				timestamp,
 			};
 			if (display !== undefined) {

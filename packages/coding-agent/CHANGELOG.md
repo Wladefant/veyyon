@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Transcript, custom-display and rewind-report text now flatten message content through the shared `contentText` owner instead of two local copies; no user-facing change.
 - Hooks and extensions now share one definition of the `tool_result` event types, so a hook's `ToolResultEvent.isError` is typed `boolean`, matching what the extension runner delivers.
 - The bash and eval blocks run from the composer draw through one execution block that folds streamed chunks at the next draw and builds its header once, so an eval block drawn after each of 5000 streamed chunks takes 47 ms instead of 575 ms.
 - The `tools.format` setting takes its dialect list from a table keyed by the catalog's `Dialect` type instead of a second copy of the catalog's list; no user-facing change.
