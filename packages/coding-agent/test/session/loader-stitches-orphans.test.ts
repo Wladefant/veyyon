@@ -7,6 +7,7 @@ import { loadEntriesFromFileStream, parseSessionContent } from "@veyyon/kernel/s
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { isRecord, setAgentDir, TempDir } from "@veyyon/utils";
 import { captureDirOverrides, type DirOverridesSnapshot, restoreDirOverrides } from "@veyyon/utils/dirs";
+import { mulberry32 } from "../../../utils/test/helpers/mulberry32";
 
 /**
  * WHY: entries form a tree keyed by `parentId`, and the branch walk climbs from a leaf
@@ -117,18 +118,6 @@ function damagedContent(cwd: string, damage: readonly string[]): string {
 		JSON.stringify(messageEntry("e4", "e3", "fourth")),
 	];
 	return `${lines.join("\n")}\n`;
-}
-
-/** A deterministic generator, so a failing seed reproduces. */
-function mulberry32(seed: number): () => number {
-	let state = seed >>> 0;
-	return () => {
-		state = (state + 0x6d2b79f5) >>> 0;
-		let t = state;
-		t = Math.imul(t ^ (t >>> 15), t | 1);
-		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
 }
 
 describe("a broken parent chain costs only the records that cannot be read", () => {

@@ -26,21 +26,11 @@ import {
 	frameConnectMessage,
 	MAX_CONNECT_FRAME_PAYLOAD,
 } from "@veyyon/ai/utils/connect-frames";
+import { mulberry32 } from "../../utils/test/helpers/mulberry32";
 
 interface Frame {
 	flags: number;
 	payload: number[];
-}
-
-function prng(seed: number): () => number {
-	let state = seed >>> 0;
-	return () => {
-		state = (state + 0x6d2b79f5) >>> 0;
-		let t = state;
-		t = Math.imul(t ^ (t >>> 15), t | 1);
-		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
 }
 
 const FLAG_CHOICES = [0, CONNECT_COMPRESSED_FLAG, CONNECT_END_STREAM_FLAG, 0xff];
@@ -105,7 +95,7 @@ function plain(taken: { flags: number; payload: Buffer }[]): Frame[] {
 describe("ConnectFrameReader", () => {
 	it("yields the same frames for every cut of the stream", () => {
 		for (let seed = 1; seed <= 400; seed++) {
-			const next = prng(seed);
+			const next = mulberry32(seed);
 			const frames = randomFrames(next);
 			const stream = encode(frames);
 			for (const maxRead of [1, 3, 6, 64, stream.length]) {

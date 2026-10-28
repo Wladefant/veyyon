@@ -49,6 +49,7 @@ import {
 import { formatOutputNotice, type OutputMeta, stripOutputNotice } from "@veyyon/coding-agent/tools/core/output-notice";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
+import { mulberry32 } from "../../utils/test/helpers/mulberry32";
 import { useIsolatedGlobalSettings } from "./helpers/isolated-global-settings";
 import { makeToolSession } from "./helpers/tool-session";
 import { useTrackedTempDirs } from "./helpers/tracked-temp-dir";
@@ -63,17 +64,6 @@ afterAll(async () => {
 });
 
 const bytes = (text: string): number => Buffer.byteLength(text, "utf-8");
-
-function mulberry32(seed: number): () => number {
-	let state = seed >>> 0;
-	return () => {
-		state = (state + 0x6d2b79f5) >>> 0;
-		let t = state;
-		t = Math.imul(t ^ (t >>> 15), t | 1);
-		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
-}
 
 /** One, two, three and four byte characters, so a byte cut can land inside any of them. */
 const FILLER = ["a", "b", " ", "é", "中", "😀"];

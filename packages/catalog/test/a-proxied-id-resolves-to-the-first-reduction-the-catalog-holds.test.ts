@@ -19,6 +19,7 @@
  * are not swept.
  */
 import { describe, expect, it } from "bun:test";
+import { mulberry32 } from "../../utils/test/helpers/mulberry32";
 import {
 	type ModelReferenceCandidate,
 	type ModelReferenceLookup,
@@ -54,18 +55,6 @@ function readOrder(query: string): string[] {
 
 function reference(id: string): ModelReferenceCandidate {
 	return { id, provider: "p", cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } };
-}
-
-/** A deterministic 32-bit generator, so a failing seed reproduces. */
-function mulberry32(seed: number): () => number {
-	let state = seed >>> 0;
-	return () => {
-		state = (state + 0x6d2b79f5) >>> 0;
-		let t = state;
-		t = Math.imul(t ^ (t >>> 15), t | 1);
-		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
 }
 
 const PREFIXES = ["", "[Kiro] ", "【gcli转】", "vendor/", "Vendor/", "a/b/", " "];
