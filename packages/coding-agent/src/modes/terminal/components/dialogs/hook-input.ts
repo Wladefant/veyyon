@@ -22,7 +22,6 @@ import {
 	type ModalShellGeometry,
 	type ModalShortcut,
 	modalWidthForTitle,
-	planModalChrome,
 	renderModalShell,
 } from "../chrome/modal-shell";
 import { routeModalChrome } from "../selectors/select-list-mouse-routing";
@@ -227,14 +226,6 @@ export class HookInputComponent extends Container {
 		}
 
 		const shortcuts = this.#shortcuts();
-		const chrome = planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth: dims.contentWidth,
-			shortcuts,
-			hoveredShortcutId: this.#hoveredShortcutId,
-		});
-
 		const body: string[] = [];
 		for (const child of this.children) {
 			if (child === this.#input) this.#inputBodyLine = body.length;
@@ -246,7 +237,7 @@ export class HookInputComponent extends Container {
 			sizing,
 			areaWidth: renderWidth,
 			areaHeight: height,
-			body: body.slice(0, chrome.maxBodyRows),
+			body,
 			preferredBodyRows: body.length,
 			shortcuts,
 			hoveredShortcutId: this.#hoveredShortcutId,

@@ -27,7 +27,6 @@ import {
 	CARD_BODY_COL_INSET,
 	type ModalShellGeometry,
 	type ModalShortcut,
-	planModalChrome,
 	pointerMotionEnabled,
 	renderModalShell,
 } from "../chrome/modal-shell";
@@ -576,14 +575,6 @@ export class MCPAddWizard implements Component {
 		}
 
 		const shortcuts = this.#shortcuts();
-		const chrome = planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth: dims.contentWidth,
-			shortcuts,
-			hoveredShortcutId: this.#hoveredShortcutId,
-		});
-
 		// The body is assembled child by child rather than through the container
 		// so each option's LINES are known: an option row can wrap, and a hit map
 		// built from child order would then answer the wrong option.
@@ -610,7 +601,7 @@ export class MCPAddWizard implements Component {
 			sizing,
 			areaWidth: width,
 			areaHeight: height,
-			body: body.slice(0, chrome.maxBodyRows),
+			body,
 			preferredBodyRows: body.length,
 			shortcuts,
 			hoveredShortcutId: this.#hoveredShortcutId,
