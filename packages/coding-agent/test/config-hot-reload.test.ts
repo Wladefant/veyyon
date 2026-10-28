@@ -638,14 +638,15 @@ describe("config hot reload", () => {
 	// CLASS: the table is pinned to the schema's own `compaction.*` paths by exact equality, so a new
 	// compaction setting turns this red until someone records a before/after for it. GAP: it does not
 	// prove that a running session re-reads the value; that is each consumer's own contract.
-	const COMPACTION_RELOAD_CASES: readonly { path: string; before: unknown; after: unknown }[] = [
+	// Retired keys are folded into `compaction.threshold` on read, so a reload reports them unchanged.
+	const COMPACTION_RELOAD_CASES: readonly { path: string; before: unknown; after: unknown; retired?: true }[] = [
 		{ path: "compaction.enabled", before: true, after: false },
 		{ path: "compaction.remote", before: true, after: false },
 		{ path: "compaction.midTurnEnabled", before: true, after: false },
 		{ path: "compaction.strategy", before: "summary", after: "summary" },
 		{ path: "compaction.threshold", before: "200000", after: "400000" },
-		{ path: "compaction.thresholdTokens", before: 100000, after: 200000 },
-		{ path: "compaction.thresholdPercent", before: 80, after: 90 },
+		{ path: "compaction.thresholdTokens", before: 100000, after: 200000, retired: true },
+		{ path: "compaction.thresholdPercent", before: 80, after: 90, retired: true },
 		{ path: "compaction.model", before: "openai/old", after: "openai/new" },
 		{ path: "compaction.modelFallbackStrategy", before: "auto", after: "configured-only" },
 		{ path: "compaction.modelContextWindow", before: 200000, after: 400000 },
@@ -683,9 +684,9 @@ describe("config hot reload", () => {
 
 		expect(result.restartRequired).toEqual([]);
 		for (const row of COMPACTION_RELOAD_CASES) {
-			const expected = JSON.stringify(row.before) === JSON.stringify(row.after) ? "unchanged" : "applied";
+			const expected = row.retired || JSON.stringify(row.before) === JSON.stringify(row.after) ? "unchanged" : "applied";
 			expect(result.outcomes).toContainEqual({ path: row.path, status: expected });
-			expect(settings.get(row.path as SettingPath)).toEqual(row.after);
+			if (!row.retired) expect(settings.get(row.path as SettingPath)).toEqual(row.after);
 		}
 	});
 
