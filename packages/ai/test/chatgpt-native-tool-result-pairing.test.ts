@@ -257,4 +257,38 @@ describe("native ChatGPT tool history pairing", () => {
 			&& typeof item.content === "string" && item.content.includes("orphaned snapshot result"));
 		expect(staleNotes).toHaveLength(1);
 	});
+	it("retains real tool result when separated from assistant toolCall by user message boundary after native snapshot", async () => {
+		const model = createCodexModel("gpt-5.1-codex");
+		const snapshot = nativeAssistant(model, {
+			dt: false,
+			content: textAndCall("call_snap"),
+			items: [
+				nativeFunctionCall("call_snap"),
+				{ type: "function_call_output", call_id: "call_snap", output: "snap result" },
+			],
+		});
+		const canonicalAssistant = {
+			role: "assistant",
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			content: [{ type: "toolCall", id: "call_live", name: "bash", arguments: { command: "ls" } }],
+			stopReason: "toolUse",
+			usage: { ...zeroCost, totalTokens: 0, cost: { ...zeroCost, total: 0 } },
+			timestamp: 1000,
+		} as AssistantMessage;
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "Resume from snapshot.", timestamp: 0 },
+				snapshot,
+				canonicalAssistant,
+				{ role: "user", content: "User boundary before tool result.", timestamp: 1500 },
+				result("call_live", "bash", "REAL"),
+			],
+		};
+
+		const input = (await buildTransformedCodexRequestBody(model, context, undefined)).input as WireItem[];
+		const liveOutput = input.find(item => item.type === "function_call_output" && item.call_id === "call_live");
+		expect(liveOutput?.output).toBe("REAL");
+	});
 });

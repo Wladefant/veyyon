@@ -1036,7 +1036,6 @@ class ToolResultPairing {
 	) {
 		this.#model = model;
 		this.#preserveNativeCodexHistory = preserveNativeCodexHistory;
-		if (preserveNativeCodexHistory) return;
 		for (let index = 0; index < messages.length; index++) {
 			const msg = messages[index];
 			if (msg.role === "toolResult") {
