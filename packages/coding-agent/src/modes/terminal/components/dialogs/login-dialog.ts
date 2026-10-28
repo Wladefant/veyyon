@@ -2,16 +2,16 @@ import { type Component, Input, type TUI } from "@veyyon/tui";
 import { getKeybindings } from "@veyyon/utils/keybindings";
 import { matchesKey } from "@veyyon/utils/keys";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
-import { padding } from "@veyyon/utils/padding";
 import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
 import { theme } from "../../../../theme/theme-binding";
 import { copyToClipboard } from "../../../../utils/clipboard";
 import { openPath } from "../../../../utils/open";
-import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
 import {
 	CARD_BODY_COL_INSET,
 	type ModalShellGeometry,
 	type ModalShortcut,
+	planModalChrome,
 	renderModalShell,
 } from "../chrome/modal-shell";
 import { routeModalChrome } from "../selectors/select-list-mouse-routing";
@@ -189,10 +189,10 @@ export class LoginDialogComponent implements Component {
 		// wraps it mid-token, so the card takes the wider sizing to keep a typical
 		// URL on one row.
 		const sizing = sizingForArea(MODAL_SIZING_LARGE, termHeight);
-		const dims = computeModalDims(width, termHeight, sizing);
+		const dims = layoutModalCard(width, termHeight, sizing);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: termHeight }, () => padding(width));
+			return emptyModalArea(width, termHeight);
 		}
 
 		// Lay the card out from state: where to go, what is happening, what is
@@ -240,16 +240,17 @@ export class LoginDialogComponent implements Component {
 			}
 		}
 
-		const shell = renderModalShell({
-			title: this.#title,
-			sizing,
-			areaWidth: width,
-			areaHeight: termHeight,
-			body,
-			shortcuts: this.#chips(),
-			hoveredShortcutId: this.#hoveredShortcutId,
-			showClose: true,
-		});
+		const shell = renderModalShell(
+			planModalChrome(dims, {
+				shortcuts: this.#chips(),
+				hoveredShortcutId: this.#hoveredShortcutId,
+			}),
+			{
+				title: this.#title,
+				body,
+				showClose: true,
+			},
+		);
 		this.#shellGeometry = shell.geometry;
 		return shell.lines;
 	}

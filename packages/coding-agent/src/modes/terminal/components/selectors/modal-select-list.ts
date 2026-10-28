@@ -10,9 +10,9 @@ import {
 	type SelectListTheme,
 } from "@veyyon/tui";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
-import { padding } from "@veyyon/utils/padding";
 import {
-	computeModalDims,
+	emptyModalArea,
+	layoutModalCard,
 	MODAL_SIZING_MEDIUM,
 	type ModalSizing,
 	modalWidthForContent,
@@ -21,6 +21,7 @@ import {
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
+	planModalChrome,
 	pointerMotionEnabled,
 	renderModalShell,
 	SELECT_LIST_SHORTCUTS,
@@ -195,7 +196,7 @@ export class ModalSelectListComponent implements Component {
 	 *
 	 * The medium card is 60% of the terminal, which cut `/mcp`'s usage hints and descriptions while
 	 * a third of the screen stood empty. Only the floor rises, to the width the list reports it
-	 * needs, so a list that already fits keeps the shared proportions and `computeModalDims` still
+	 * needs, so a list that already fits keeps the shared proportions and `layoutModalCard` still
 	 * caps the card at the sizing's maximum and the terminal's edge.
 	 */
 	#sizing(termHeight: number): ModalSizing {
@@ -212,10 +213,10 @@ export class ModalSelectListComponent implements Component {
 	render(width: number): string[] {
 		const termHeight = this.#getTerminalRows();
 		const sizing = this.#sizing(termHeight);
-		const dims = computeModalDims(width, termHeight, sizing);
+		const dims = layoutModalCard(width, termHeight, sizing);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: termHeight }, () => padding(width));
+			return emptyModalArea(width, termHeight);
 		}
 
 		const body = [...this.#list.render(dims.contentWidth)];
@@ -224,18 +225,19 @@ export class ModalSelectListComponent implements Component {
 			this.#bodyRowsHighWater = 0;
 		}
 		this.#bodyRowsHighWater = Math.max(this.#bodyRowsHighWater, body.length);
-		const shell = renderModalShell({
-			title: this.#title,
-			sizing,
-			areaWidth: width,
-			areaHeight: termHeight,
-			body,
-			preferredBodyRows: this.#bodyRowsHighWater,
-			tipCandidates: this.#tipCandidates,
-			shortcuts: this.#shortcuts(),
-			hoveredShortcutId: this.#hoveredShortcutId,
-			showClose: true,
-		});
+		const shell = renderModalShell(
+			planModalChrome(dims, {
+				shortcuts: this.#shortcuts(),
+				hoveredShortcutId: this.#hoveredShortcutId,
+				tipCandidates: this.#tipCandidates,
+			}),
+			{
+				title: this.#title,
+				body,
+				preferredBodyRows: this.#bodyRowsHighWater,
+				showClose: true,
+			},
+		);
 		this.#shellGeometry = shell.geometry;
 		return shell.lines;
 	}

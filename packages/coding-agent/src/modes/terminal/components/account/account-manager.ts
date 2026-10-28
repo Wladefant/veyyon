@@ -27,7 +27,6 @@ import { clampLow, collapseWhitespace } from "@veyyon/utils";
 import { fuzzyFilter } from "@veyyon/utils/fuzzy";
 import { extractPrintableText, matchesKey } from "@veyyon/utils/keys";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
-import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
 import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
 import { formatProviderName } from "../../../../session/account-format";
@@ -35,7 +34,7 @@ import type { AccountInventory, AccountRow } from "../../../../session/account-i
 import { accountsForProvider, selectedButRotated } from "../../../../session/account-inventory";
 import { theme } from "../../../../theme/theme-binding";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
@@ -1101,14 +1100,14 @@ export class AccountManagerComponent implements Component {
 		// by the overlay — and because the card is bottom-anchored, the clip comes off the TOP. The
 		// title row and the `[x]` disappear, and every row in `#shellGeometry` is then off by the
 		// clipped amount, so the close glyph, the footer chips and the whole split answer to clicks
-		// several rows away from where they are painted. `computeModalDims` already refuses a screen
+		// several rows away from where they are painted. `layoutModalCard` already refuses a screen
 		// too small to draw on, which is the case a minimum height was standing in for.
 		const height = this.#terminalHeight ?? (process.stdout.rows || 40);
 		const sizing = sizingForArea(MODAL_SIZING_LARGE, height);
-		const dims = computeModalDims(width, height, sizing);
+		const dims = layoutModalCard(width, height, sizing);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: height }, () => padding(width));
+			return emptyModalArea(width, height);
 		}
 		const contentWidth = dims.contentWidth;
 		const sidebarWidth = this.#sidebarWidth();
@@ -1118,10 +1117,7 @@ export class AccountManagerComponent implements Component {
 
 		const shortcuts = this.#shortcuts();
 		const tipCandidates = this.#notice ? [this.#notice] : undefined;
-		const chrome = planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth,
+		const chrome = planModalChrome(dims, {
 			shortcuts,
 			hoveredShortcutId: this.#hoveredShortcutId,
 			tipCandidates,
@@ -1166,15 +1162,9 @@ export class AccountManagerComponent implements Component {
 			body.push(fit(sidebarLines[i] ?? "", sidebarWidth) + paneSep + fit(paneLines[i] ?? "", bodyWidth));
 		}
 
-		const shell = renderModalShell({
+		const shell = renderModalShell(chrome, {
 			title: "Accounts",
-			sizing,
-			areaWidth: width,
-			areaHeight: height,
 			body,
-			shortcuts,
-			tipCandidates,
-			hoveredShortcutId: this.#hoveredShortcutId,
 			showClose: true,
 		});
 		this.#shellGeometry = shell.geometry;

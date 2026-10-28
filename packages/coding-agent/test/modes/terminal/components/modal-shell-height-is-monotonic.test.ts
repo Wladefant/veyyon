@@ -35,6 +35,7 @@ import { stripVTControlCharacters } from "node:util";
 import * as modalGeometry from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-geometry";
 import {
 	computeModalDims,
+	layoutModalCard,
 	MODAL_SIZING_LARGE,
 	MODAL_SIZING_MEDIUM,
 	type ModalSizing,
@@ -61,15 +62,9 @@ function cardHeight(rows: number, base: ModalSizing = MODAL_SIZING_LARGE): numbe
 /** Rows the card's BODY gets, which is what a list actually fills. */
 function bodyRows(rows: number, base: ModalSizing = MODAL_SIZING_LARGE): number {
 	const sizing = sizingForArea(base, rows);
-	const dims = computeModalDims(WIDTH, rows, sizing);
-	if (!dims) return 0;
-	return planModalChrome({
-		sizing,
-		modalHeight: dims.modalHeight,
-		contentWidth: dims.contentWidth,
-		shortcuts: [{ label: "esc close" }],
-		hoveredShortcutId: null,
-	}).maxBodyRows;
+	const card = layoutModalCard(WIDTH, rows, sizing);
+	if (!card) return 0;
+	return planModalChrome(card, { shortcuts: [{ label: "esc close" }] }).maxBodyRows;
 }
 
 /** Sizings the module exports, read off the namespace so a new one needs no edit here. */
@@ -335,25 +330,11 @@ describe("Content-sized cards are unaffected", () => {
 	it("still shrinks a card that asks for its content height", () => {
 		const rows = 30;
 		const sizing = sizingForArea(MODAL_SIZING_MEDIUM, rows);
-		const dims = computeModalDims(WIDTH, rows, sizing);
-		if (!dims) throw new Error("the area was too small to paint");
-		const plan = planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth: dims.contentWidth,
-			shortcuts: [{ label: "esc close" }],
-			hoveredShortcutId: null,
-		});
+		const layout = layoutModalCard(WIDTH, rows, sizing);
+		if (!layout) throw new Error("the area was too small to paint");
+		const plan = planModalChrome(layout, { shortcuts: [{ label: "esc close" }] });
 
-		const card = renderModalShell({
-			areaWidth: WIDTH,
-			areaHeight: rows,
-			sizing,
-			title: "Pick one",
-			body: ["one", "two", "three"],
-			shortcuts: [{ label: "esc close" }],
-			preferredBodyRows: 3,
-		});
+		const card = renderModalShell(plan, { title: "Pick one", body: ["one", "two", "three"], preferredBodyRows: 3 });
 
 		// `renderModalShell` paints the whole AREA, so the card is the run of rows
 		// between its borders rather than the length of what it returned.

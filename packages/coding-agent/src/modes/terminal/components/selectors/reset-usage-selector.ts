@@ -3,14 +3,14 @@ import { HoverController } from "@veyyon/tui/utils/hover-controller";
 import { clampLow, formatCount } from "@veyyon/utils";
 import { matchesKey } from "@veyyon/utils/keys";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
-import { padding } from "@veyyon/utils/padding";
 import type { ResetUsageAccount } from "../../../../slash-commands/helpers/reset-usage";
 import { theme } from "../../../../theme/theme-binding";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
+	planModalChrome,
 	pointerMotionEnabled,
 	renderModalShell,
 } from "../chrome/modal-shell";
@@ -262,23 +262,24 @@ export class ResetUsageSelectorComponent implements Component {
 	render(width: number): readonly string[] {
 		const height = process.stdout.rows || 40;
 		const sizing = sizingForArea(MODAL_SIZING_MEDIUM, height);
-		const dims = computeModalDims(width, height, sizing);
+		const dims = layoutModalCard(width, height, sizing);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: height }, () => padding(width));
+			return emptyModalArea(width, height);
 		}
 
-		const shell = renderModalShell({
-			title: "Spend reset",
-			sizing,
-			areaWidth: width,
-			areaHeight: height,
-			body: this.#buildBody(dims.contentWidth),
-			tipCandidates: this.#tipCandidates(),
-			shortcuts: this.#pendingIndex !== null ? RESET_PENDING_SHORTCUTS : RESET_SHORTCUTS,
-			hoveredShortcutId: this.#hoveredShortcutId,
-			showClose: true,
-		});
+		const shell = renderModalShell(
+			planModalChrome(dims, {
+				shortcuts: this.#pendingIndex !== null ? RESET_PENDING_SHORTCUTS : RESET_SHORTCUTS,
+				hoveredShortcutId: this.#hoveredShortcutId,
+				tipCandidates: this.#tipCandidates(),
+			}),
+			{
+				title: "Spend reset",
+				body: this.#buildBody(dims.contentWidth),
+				showClose: true,
+			},
+		);
 		this.#shellGeometry = shell.geometry;
 		this.#listRowStart = shell.geometry?.bodyRowStart ?? 0;
 		return shell.lines;

@@ -6,7 +6,6 @@ import { fuzzyMatch } from "@veyyon/utils/fuzzy";
 import { extractPrintableText, matchesKey } from "@veyyon/utils/keys";
 import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
-import { padding } from "@veyyon/utils/padding";
 import { formatToolCallLabel } from "@veyyon/utils/tool-call-label";
 import { truncateToWidth } from "@veyyon/utils/width";
 import type { TreeFilterMode } from "../../../../config/settings-schema";
@@ -15,7 +14,7 @@ import { theme } from "../../../../theme/theme-binding";
 import { shortenPath, TRUNCATE_LENGTHS } from "../../../../tools/core/render-utils";
 import { canonicalizeMessage } from "../../../../utils/thinking-display";
 import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
@@ -1051,23 +1050,20 @@ export class TreeSelectorComponent implements Component {
 	render(width: number): readonly string[] {
 		const height = process.stdout.rows || 40;
 		const sizing = sizingForArea(MODAL_SIZING_LARGE, height);
-		const dims = computeModalDims(width, height, sizing);
+		const dims = layoutModalCard(width, height, sizing);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: height }, () => padding(width));
+			return emptyModalArea(width, height);
 		}
 
 		const query = this.#treeList.getSearchQuery();
 		const searchLine = query
 			? `${theme.fg("muted", "Search:")} ${theme.fg("accent", query)}`
 			: theme.fg("dim", "Type to search");
-		const chrome = planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth: dims.contentWidth,
+		const chrome = planModalChrome(dims, {
 			shortcuts: TREE_SHORTCUTS,
 			hoveredShortcutId: this.#hoveredShortcutId,
-			hasSearch: true,
+			searchLine,
 		});
 
 		let body: readonly string[];
@@ -1081,15 +1077,9 @@ export class TreeSelectorComponent implements Component {
 			body = this.#treeList.render(dims.contentWidth);
 		}
 
-		const shell = renderModalShell({
+		const shell = renderModalShell(chrome, {
 			title: "Session Tree",
-			sizing,
-			areaWidth: width,
-			areaHeight: height,
 			body,
-			searchLine,
-			shortcuts: TREE_SHORTCUTS,
-			hoveredShortcutId: this.#hoveredShortcutId,
 			showClose: true,
 		});
 		this.#shellGeometry = shell.geometry;

@@ -37,20 +37,17 @@ import { buildModel } from "@veyyon/catalog/build";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import {
-	computeModalDims,
+	layoutModalCard,
 	MODAL_SIZING_LARGE,
 	sizingForArea,
 } from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-geometry";
-import {
-	minModalChromeRows,
-	planModalChrome,
-	renderModalShell,
-} from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-shell";
+import { minModalChromeRows, planModalChrome } from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-shell";
 import { ModelHubComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-hub";
 import { SessionSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/session-selector";
 import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import type { SessionInfo } from "@veyyon/kernel/session/session-listing";
 import type { TUI } from "@veyyon/tui";
+import { paintCard } from "./helpers/modal-card";
 import { requireTheme } from "./helpers/require-theme";
 
 const UP = "\x1b[A";
@@ -251,7 +248,7 @@ describe("no component restates the chrome arithmetic", () => {
 		const restated = "const chrome = 3 + sizing.vPad + Math.max(sizing.footerLines, 1);";
 		expect(/vPad/.test(restated) && /footerLines/.test(restated)).toBe(true);
 		// And the sanctioned call must not match either form.
-		const sanctioned = "const chrome = planModalChrome({ sizing, modalHeight: dims.modalHeight, contentWidth });";
+		const sanctioned = "const chrome = planModalChrome(card, { shortcuts });";
 		expect(/\bmodalHeight\s*-\s*\d/.test(sanctioned)).toBe(false);
 	});
 });
@@ -266,10 +263,8 @@ describe("planModalChrome is the contract callers size against", () => {
 
 	function renderBody(rows: number, bodyRows: number): string[] {
 		const sizing = sizingForArea(MODAL_SIZING_LARGE, rows);
-		const dims = computeModalDims(200, rows, sizing);
-		if (!dims) throw new Error("no dims");
 		const body = Array.from({ length: bodyRows }, (_, i) => `BODY-${i}`);
-		const shell = renderModalShell({
+		const shell = paintCard({
 			title: "T",
 			sizing,
 			areaWidth: 200,
@@ -283,14 +278,9 @@ describe("planModalChrome is the contract callers size against", () => {
 
 	function budgetFor(rows: number): number {
 		const sizing = sizingForArea(MODAL_SIZING_LARGE, rows);
-		const dims = computeModalDims(200, rows, sizing);
-		if (!dims) throw new Error("no dims");
-		return planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth: dims.contentWidth,
-			shortcuts: SHORTCUTS,
-		}).maxBodyRows;
+		const card = layoutModalCard(200, rows, sizing);
+		if (!card) throw new Error("no card");
+		return planModalChrome(card, { shortcuts: SHORTCUTS }).maxBodyRows;
 	}
 
 	/**
@@ -333,14 +323,10 @@ describe("planModalChrome is the contract callers size against", () => {
 	test("maxBodyRows plus chrome equals the modal height it was planned for", () => {
 		for (const rows of [24, 30, 40, 60]) {
 			const sizing = sizingForArea(MODAL_SIZING_LARGE, rows);
-			const dims = computeModalDims(200, rows, sizing)!;
-			const plan = planModalChrome({
-				sizing,
-				modalHeight: dims.modalHeight,
-				contentWidth: dims.contentWidth,
-				shortcuts: SHORTCUTS,
-			});
-			expect(plan.nonBody + plan.maxBodyRows).toBe(dims.modalHeight);
+			const card = layoutModalCard(200, rows, sizing);
+			if (!card) throw new Error("no card");
+			const plan = planModalChrome(card, { shortcuts: SHORTCUTS });
+			expect(plan.nonBody + plan.maxBodyRows).toBe(card.modalHeight);
 			expect(plan.maxBodyRows).toBeGreaterThan(0);
 		}
 	});

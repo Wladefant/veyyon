@@ -61,7 +61,7 @@ import { withIcon } from "../../../../theme/icon-label";
 import { getCurrentThemeName, getSettingsListTheme, theme } from "../../../../theme/theme";
 import { INHERIT_EFFORT_OPTION_VALUE } from "../../../../thinking";
 import { getTabBarTheme } from "../../shared";
-import { computeModalDims, MODAL_SIZING_SETTINGS, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_SETTINGS, sizingForArea } from "../chrome/modal-geometry";
 import {
 	BREADCRUMB_HOVER_ID,
 	type ModalShellGeometry,
@@ -1527,7 +1527,7 @@ export class SettingsSelectorComponent implements Component {
 		this.#viewportTooSmall = true;
 		this.#shellGeometry = null;
 		this.#contentRowCount = 0;
-		const lines = Array.from({ length: termHeight }, () => padding(width));
+		const lines = emptyModalArea(width, termHeight);
 		const messages =
 			width >= 40
 				? ["Settings needs a larger terminal · resize or press Esc to close"]
@@ -1544,7 +1544,7 @@ export class SettingsSelectorComponent implements Component {
 	render(width: number): readonly string[] {
 		const termHeight = Math.max(1, process.stdout.rows || 40);
 		const sizing = sizingForArea(MODAL_SIZING_SETTINGS, termHeight);
-		const dims = computeModalDims(width, termHeight, sizing);
+		const dims = layoutModalCard(width, termHeight, sizing);
 		if (!dims || dims.contentWidth < MIN_SETTINGS_CONTENT_WIDTH) return this.#renderTooSmall(width, termHeight);
 		this.#viewportTooSmall = false;
 
@@ -1554,15 +1554,13 @@ export class SettingsSelectorComponent implements Component {
 		const selectedDescription = selectedItem && !selectedItem.heading ? selectedItem.description : undefined;
 		const tipCandidates = selectedDescription ? [truncateToWidth(selectedDescription, contentWidth)] : SETTINGS_TIPS;
 		const settingsShortcuts = this.#settingsShortcuts();
-		const maxBodyRows = planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth,
+		const chrome = planModalChrome(dims, {
 			shortcuts: settingsShortcuts,
 			hoveredShortcutId: this.#hoveredShortcutId,
 			tipCandidates,
-			hasSearch: true,
-		}).maxBodyRows;
+			searchLine: this.#searchChromeLine(contentWidth),
+		});
+		const maxBodyRows = chrome.maxBodyRows;
 		if (maxBodyRows < 1) return this.#renderTooSmall(width, termHeight);
 
 		const sidebarWidth = this.#sidebarWidth(contentWidth);
@@ -1608,19 +1606,12 @@ export class SettingsSelectorComponent implements Component {
 		const openSubmenuLabel = list?.hasOpenSubmenu() ? list.getOpenSubmenuLabel() : undefined;
 		const breadcrumb = openSubmenuLabel ? ` ${theme.nav.cursor} ${openSubmenuLabel}` : undefined;
 
-		const shell = renderModalShell({
+		const shell = renderModalShell(chrome, {
 			title: "Settings",
 			breadcrumb,
 			breadcrumbClickable: true,
 			breadcrumbHovered: this.#hoveredShortcutId === BREADCRUMB_HOVER_ID,
-			sizing,
-			areaWidth: width,
-			areaHeight: termHeight,
 			body,
-			searchLine: this.#searchChromeLine(contentWidth),
-			tipCandidates,
-			shortcuts: settingsShortcuts,
-			hoveredShortcutId: this.#hoveredShortcutId,
 			showClose: true,
 		});
 

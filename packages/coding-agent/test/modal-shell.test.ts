@@ -13,11 +13,11 @@ import {
 	hitTestModalChrome,
 	type ModalShortcut,
 	minModalChromeRows,
-	renderModalShell,
 	renderModalShortcuts,
 	SETTINGS_BROWSE_SHORTCUTS,
 } from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-shell";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { paintCard } from "./helpers/modal-card";
 
 await initTheme(false, "unicode", false, "titanium", "light");
 
@@ -55,7 +55,7 @@ describe("ModalShell", () => {
 	});
 
 	it("paints title, search, tip, and centered shortcut chips", () => {
-		const { lines, geometry } = renderModalShell({
+		const { lines, geometry } = paintCard({
 			title: "Settings",
 			sizing: MODAL_SIZING_SETTINGS,
 			areaWidth: 100,
@@ -66,7 +66,6 @@ describe("ModalShell", () => {
 			shortcuts: SETTINGS_BROWSE_SHORTCUTS,
 			showClose: true,
 		});
-		expect(geometry).not.toBeNull();
 		const plain = lines.map(l => stripVTControlCharacters(l)).join("\n");
 		expect(plain).toContain("Settings");
 		expect(plain).toContain("[x]");
@@ -76,7 +75,7 @@ describe("ModalShell", () => {
 		expect(plain).toContain("enter change");
 		// Floating: empty pad rows around the card.
 		expect(lines[0]?.trim()).toBe("");
-		expect(geometry!.bodyRowStart).toBeGreaterThan(0);
+		expect(geometry.bodyRowStart).toBeGreaterThan(0);
 	});
 
 	it("wraps footer chips and fits tip candidates", () => {
@@ -169,7 +168,7 @@ describe("ModalShell", () => {
 		// A search + tip overlay whose chrome alone (search 2 + tip 2 + footer 4 +
 		// borders 2) exceeds the modal height must shed the tip/pad, not shear off
 		// the bottom border (regression: card.slice cut the last rows).
-		const { lines, geometry } = renderModalShell({
+		const { lines } = paintCard({
 			title: "Model Hub",
 			sizing: MODAL_SIZING_LARGE,
 			areaWidth: 80,
@@ -184,7 +183,6 @@ describe("ModalShell", () => {
 			],
 			showClose: true,
 		});
-		expect(geometry).not.toBeNull();
 		const painted = lines.filter(l => stripVTControlCharacters(l).trim().length > 0);
 		const bottom = stripVTControlCharacters(painted[painted.length - 1] ?? "");
 		// Bottom border row must be the sharp bottom-left/right corners, intact.
@@ -198,7 +196,7 @@ describe("ModalShell", () => {
 	});
 
 	it("exposes clickable close and shortcut hit rects", () => {
-		const { geometry } = renderModalShell({
+		const { geometry } = paintCard({
 			title: "Settings",
 			sizing: MODAL_SIZING_SETTINGS,
 			areaWidth: 100,
@@ -207,10 +205,9 @@ describe("ModalShell", () => {
 			shortcuts: SETTINGS_BROWSE_SHORTCUTS,
 			showClose: true,
 		});
-		expect(geometry).not.toBeNull();
-		expect(geometry!.closeColStart).toBeGreaterThan(0);
-		expect(geometry!.shortcutHits.some(h => h.id === "close")).toBe(true);
-		const close = hitTestModalChrome(geometry, geometry!.titleRow, geometry!.closeColStart + 1, {
+		expect(geometry.closeColStart).toBeGreaterThan(0);
+		expect(geometry.shortcutHits.some(h => h.id === "close")).toBe(true);
+		const close = hitTestModalChrome(geometry, geometry.titleRow, geometry.closeColStart + 1, {
 			leftClick: true,
 		});
 		expect(close).toEqual({ kind: "close" });
@@ -259,7 +256,7 @@ describe("minModalChromeRows", () => {
 		for (const sizing of [MODAL_SIZING_LARGE, MODAL_SIZING_MEDIUM, MODAL_SIZING_SETTINGS]) {
 			const body = Array.from({ length: 40 }, (_, i) => `  row ${i}`);
 			const areaHeight = 40;
-			const { lines, geometry } = renderModalShell({
+			const { lines, geometry } = paintCard({
 				title: "Card",
 				sizing,
 				areaWidth: 120,
@@ -267,15 +264,14 @@ describe("minModalChromeRows", () => {
 				body,
 				shortcuts: [{ label: "esc close" }],
 			});
-			expect(geometry).not.toBeNull();
 
-			expect(geometry!.modalHeight - geometry!.bodyRowCount).toBe(minModalChromeRows(sizing));
+			expect(geometry.modalHeight - geometry.bodyRowCount).toBe(minModalChromeRows(sizing));
 			// The geometry is only trustworthy if it describes the frame that was
 			// actually produced. The render must fill the area it was handed exactly,
 			// and the card it reports must fit inside that area: a chrome row spent
 			// past the edge would still satisfy the arithmetic above while clipping.
 			expect(lines.length).toBe(areaHeight);
-			expect(geometry!.modalHeight).toBeLessThanOrEqual(areaHeight);
+			expect(geometry.modalHeight).toBeLessThanOrEqual(areaHeight);
 		}
 	});
 
@@ -283,7 +279,7 @@ describe("minModalChromeRows", () => {
 	 *  an exact budget would be wrong in the direction that overfills the card.
 	 *  Stated as a test so the docstring's claim is checked, not just asserted. */
 	it("is a minimum, and a search line costs more than it", () => {
-		const withoutSearch = renderModalShell({
+		const withoutSearch = paintCard({
 			title: "Card",
 			sizing: MODAL_SIZING_LARGE,
 			areaWidth: 120,
@@ -291,7 +287,7 @@ describe("minModalChromeRows", () => {
 			body: Array.from({ length: 40 }, (_, i) => `  row ${i}`),
 			shortcuts: [{ label: "esc close" }],
 		});
-		const withSearch = renderModalShell({
+		const withSearch = paintCard({
 			title: "Card",
 			sizing: MODAL_SIZING_LARGE,
 			areaWidth: 120,
@@ -301,8 +297,8 @@ describe("minModalChromeRows", () => {
 			shortcuts: [{ label: "esc close" }],
 		});
 
-		expect(withoutSearch.geometry!.bodyRowCount - withSearch.geometry!.bodyRowCount).toBe(2);
-		expect(withSearch.geometry!.modalHeight - withSearch.geometry!.bodyRowCount).toBe(
+		expect(withoutSearch.geometry.bodyRowCount - withSearch.geometry.bodyRowCount).toBe(2);
+		expect(withSearch.geometry.modalHeight - withSearch.geometry.bodyRowCount).toBe(
 			minModalChromeRows(MODAL_SIZING_LARGE) + 2,
 		);
 	});

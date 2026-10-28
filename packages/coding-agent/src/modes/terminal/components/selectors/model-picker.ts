@@ -9,12 +9,11 @@ import type { Component, TUI } from "@veyyon/tui";
 import { errorMessage } from "@veyyon/utils";
 import { matchesKey } from "@veyyon/utils/keys";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
-import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth } from "@veyyon/utils/width";
 import type { ModelRegistry } from "../../../../config/model-registry";
 import type { Settings } from "../../../../config/settings";
 import { theme } from "../../../../theme/theme-binding";
-import { computeModalDims, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	planModalChrome,
@@ -248,10 +247,10 @@ export class ModelPickerComponent implements Component {
 	render(width: number): string[] {
 		const termRows = this.#tui.terminal?.rows || process.stdout.rows || 40;
 		const sizing = sizingForArea(MODAL_SIZING_MEDIUM, termRows);
-		const dims = computeModalDims(width, termRows, sizing);
+		const dims = layoutModalCard(width, termRows, sizing);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: termRows }, () => padding(width));
+			return emptyModalArea(width, termRows);
 		}
 
 		const shortcuts = [
@@ -270,10 +269,7 @@ export class ModelPickerComponent implements Component {
 		// line was the eighth, three unnamed rows that happened to add up. Change
 		// `vPad`, `footerLines`, either bracketing line, or the browser frame and
 		// it silently starts dropping the bottom of the list.
-		const chrome = planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth: dims.contentWidth,
+		const chrome = planModalChrome(dims, {
 			shortcuts,
 			hoveredShortcutId: this.#hoveredShortcutId,
 		});
@@ -290,14 +286,9 @@ export class ModelPickerComponent implements Component {
 			...this.#browser.render(dims.contentWidth),
 			theme.fg("muted", truncateToWidth(hint, dims.contentWidth)),
 		];
-		const shell = renderModalShell({
+		const shell = renderModalShell(chrome, {
 			title: "Switch Model",
-			sizing,
-			areaWidth: width,
-			areaHeight: termRows,
 			body,
-			shortcuts,
-			hoveredShortcutId: this.#hoveredShortcutId,
 			showClose: true,
 		});
 		this.#shellGeometry = shell.geometry;

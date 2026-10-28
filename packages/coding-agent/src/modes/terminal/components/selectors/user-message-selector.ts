@@ -3,14 +3,14 @@ import { HoverController } from "@veyyon/tui/utils/hover-controller";
 import { fuzzyFilter } from "@veyyon/utils/fuzzy";
 import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
-import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth } from "@veyyon/utils/width";
 import { theme } from "../../../../theme/theme-binding";
 import { matchesSelectCancel } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
+	planModalChrome,
 	pointerMotionEnabled,
 	renderModalShell,
 } from "../chrome/modal-shell";
@@ -320,10 +320,10 @@ export class UserMessageSelectorComponent implements Component {
 	render(width: number): readonly string[] {
 		const height = process.stdout.rows || 40;
 		const sizing = sizingForArea(MODAL_SIZING_MEDIUM, height);
-		const dims = computeModalDims(width, height, sizing);
+		const dims = layoutModalCard(width, height, sizing);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: height }, () => padding(width));
+			return emptyModalArea(width, height);
 		}
 
 		const body = [
@@ -332,16 +332,17 @@ export class UserMessageSelectorComponent implements Component {
 			...this.#messageList.render(dims.contentWidth),
 		];
 
-		const shell = renderModalShell({
-			title: "Branch from Message",
-			sizing,
-			areaWidth: width,
-			areaHeight: height,
-			body,
-			shortcuts: USER_MESSAGE_SHORTCUTS,
-			hoveredShortcutId: this.#hoveredShortcutId,
-			showClose: true,
-		});
+		const shell = renderModalShell(
+			planModalChrome(dims, {
+				shortcuts: USER_MESSAGE_SHORTCUTS,
+				hoveredShortcutId: this.#hoveredShortcutId,
+			}),
+			{
+				title: "Branch from Message",
+				body,
+				showClose: true,
+			},
+		);
 		this.#shellGeometry = shell.geometry;
 		// The body leads with a hint line and a blank before the list's own rows.
 		this.#listRowStart = (shell.geometry?.bodyRowStart ?? 0) + 2;

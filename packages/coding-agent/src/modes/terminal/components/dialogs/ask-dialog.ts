@@ -34,11 +34,17 @@ import { ASK_OTHER_OPTION_LABEL } from "../../../../tools/agent/ask-option-label
 import { getTabBarTheme } from "../../shared";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
 import { CountdownTimer } from "../chrome/countdown-timer";
-import { computeModalDims, HOOK_EDITOR_TEXT_PAD_COLS, MODAL_SIZING_LARGE } from "../chrome/modal-geometry";
+import {
+	emptyModalArea,
+	HOOK_EDITOR_TEXT_PAD_COLS,
+	layoutModalCard,
+	MODAL_SIZING_LARGE,
+} from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
 	minModalChromeRows,
+	planModalChrome,
 	pointerMotionEnabled,
 	renderModalShell,
 } from "../chrome/modal-shell";
@@ -559,27 +565,33 @@ export class AskDialogComponent implements Component {
 	render(width: number): readonly string[] {
 		const termHeight = process.stdout.rows || 40;
 		const sizing = MODAL_SIZING_LARGE;
-		const dims = computeModalDims(width, termHeight, sizing);
-		const contentWidth = dims?.contentWidth ?? Math.max(1, width - 4);
+		const dims = layoutModalCard(width, termHeight, sizing);
+		if (!dims) {
+			this.#shellGeometry = null;
+			this.#listPointerMap = null;
+			return emptyModalArea(width, termHeight);
+		}
+		const contentWidth = dims.contentWidth;
 		const headerLines = this.#renderHeader(contentWidth);
 		// ModalShell's own chrome (top/close bar, footer divider, bottom border,
 		// vertical padding, footer band) reserves CHROME_ROWS outside the body;
 		// the header rows are part of the body we hand it, so subtract those too.
-		const bodyRows = Math.max(MIN_BODY_ROWS, (dims?.modalHeight ?? termHeight) - headerLines.length - CHROME_ROWS);
+		const bodyRows = Math.max(MIN_BODY_ROWS, dims.modalHeight - headerLines.length - CHROME_ROWS);
 		const bodyLines = this.#isSubmitTab()
 			? this.#renderSubmitBody(contentWidth, bodyRows)
 			: this.#renderQuestionBody(contentWidth, bodyRows);
 
-		const shell = renderModalShell({
-			title: this.#titleText(),
-			sizing,
-			areaWidth: width,
-			areaHeight: termHeight,
-			body: [...headerLines, ...bodyLines.lines],
-			shortcuts: this.#buildShortcuts(bodyLines.indicator),
-			hoveredShortcutId: this.#hoveredShortcutId,
-			showClose: true,
-		});
+		const shell = renderModalShell(
+			planModalChrome(dims, {
+				shortcuts: this.#buildShortcuts(bodyLines.indicator),
+				hoveredShortcutId: this.#hoveredShortcutId,
+			}),
+			{
+				title: this.#titleText(),
+				body: [...headerLines, ...bodyLines.lines],
+				showClose: true,
+			},
+		);
 		this.#shellGeometry = shell.geometry;
 		// Pointer map for the option list: frame row of the list's first rendered
 		// line plus the unclipped row starts from this render. Null on the submit

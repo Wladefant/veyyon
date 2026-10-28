@@ -7,6 +7,7 @@
  * renderer, and the chrome rows it reserves, are in `modal-shell.ts`.
  */
 import { clamp, clampLow } from "@veyyon/utils/math";
+import { padding } from "@veyyon/utils/padding";
 
 /**
  * Columns of padding on EACH side of the hook editor's title and hint rows in the embedded
@@ -151,6 +152,29 @@ export function computeModalDims(areaWidth: number, areaHeight: number, sizing: 
 	const topPad = Math.max(0, Math.floor((areaHeight - modalHeight) / 2));
 	const contentWidth = Math.max(1, modalWidth - 2 - 2 * Math.max(1, sizing.hPad));
 	return { modalWidth, modalHeight, leftPad, topPad, contentWidth };
+}
+
+/**
+ * A card laid out on one terminal area: the dimensions {@link computeModalDims} gives it, with the
+ * sizing and the area they were computed from. `planModalChrome` reserves the card's chrome inside
+ * it and `renderModalShell` paints that plan, so a card is laid out once per frame, by its caller,
+ * and the shell paints the card the caller sized its body for.
+ */
+export interface ModalCardLayout extends ModalDims {
+	readonly sizing: ModalSizing;
+	readonly areaWidth: number;
+	readonly areaHeight: number;
+}
+
+/** Lay a card out on an area, or null when the area is too small to paint one. */
+export function layoutModalCard(areaWidth: number, areaHeight: number, sizing: ModalSizing): ModalCardLayout | null {
+	const dims = computeModalDims(areaWidth, areaHeight, sizing);
+	return dims === null ? null : { ...dims, sizing, areaWidth, areaHeight };
+}
+
+/** The frame of an area too small for a card: one blank row per area row. */
+export function emptyModalArea(areaWidth: number, areaHeight: number): string[] {
+	return Array.from({ length: areaHeight }, () => padding(areaWidth));
 }
 
 /**

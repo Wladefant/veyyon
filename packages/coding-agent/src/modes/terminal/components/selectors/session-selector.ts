@@ -14,10 +14,11 @@ import { withIcon } from "../../../../theme/icon-label";
 import { theme } from "../../../../theme/theme-binding";
 import { shortenPath } from "../../../../tools/core/render-utils";
 import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
+	planModalChrome,
 	pointerMotionEnabled,
 	renderModalShell,
 } from "../chrome/modal-shell";
@@ -1081,10 +1082,10 @@ export class SessionSelectorComponent extends Container {
 	render(width: number): readonly string[] {
 		const termHeight = this.#getTerminalRows();
 		const sizing = sizingForArea(MODAL_SIZING_LARGE, termHeight, !this.#fillHeight);
-		const dims = computeModalDims(width, termHeight, sizing);
+		const dims = layoutModalCard(width, termHeight, sizing);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: termHeight }, () => padding(width));
+			return emptyModalArea(width, termHeight);
 		}
 
 		const body: string[] = [];
@@ -1121,25 +1122,26 @@ export class SessionSelectorComponent extends Container {
 		// the area. Shrinking the area instead — `min(termHeight, body + chrome +
 		// 2 * vMargin)` — looked equivalent and was not. The margin it added is the
 		// slack the shell centres INTO, so a card that then hit the height floor in
-		// `computeModalDims` filled the shrunken area exactly, took a top pad of
+		// `layoutModalCard` filled the shrunken area exactly, took a top pad of
 		// zero, and the component returned fewer rows than the screen. Every row of
 		// slack landed under the card: at 39 rows a three-row list drew a 26-row
 		// card against the top edge with 13 blank rows below it, and the shorter
 		// the list the further up the card went. A folder with one session — the
 		// state `/new` leaves behind — was the worst case, which is what made it
 		// look intermittent rather than monotone in list length.
-		const shell = renderModalShell({
-			title: "Resume Session",
-			breadcrumb: this.#scope === "all" ? " · all projects" : " · current folder",
-			sizing,
-			areaWidth: width,
-			areaHeight: termHeight,
-			body,
-			preferredBodyRows: this.#bodyRowsHighWater,
-			shortcuts,
-			hoveredShortcutId: this.#hoveredShortcutId,
-			showClose: true,
-		});
+		const shell = renderModalShell(
+			planModalChrome(dims, {
+				shortcuts,
+				hoveredShortcutId: this.#hoveredShortcutId,
+			}),
+			{
+				title: "Resume Session",
+				breadcrumb: this.#scope === "all" ? " · all projects" : " · current folder",
+				body,
+				preferredBodyRows: this.#bodyRowsHighWater,
+				showClose: true,
+			},
+		);
 
 		this.#shellGeometry = shell.geometry;
 		this.#listLineOffset = (shell.geometry?.bodyRowStart ?? 0) + this.#listLineOffset;

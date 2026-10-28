@@ -19,7 +19,6 @@ import { type KeyId, matchesKey } from "@veyyon/utils/keys";
 import { clampLow } from "@veyyon/utils/math";
 import { HoverFade } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
-import { padding } from "@veyyon/utils/padding";
 import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth } from "@veyyon/utils/width";
 import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
@@ -33,7 +32,7 @@ import {
 	matchesSelectUp,
 } from "../../utils/keybinding-matchers";
 import { CountdownTimer } from "../chrome/countdown-timer";
-import { computeModalDims, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
@@ -936,10 +935,10 @@ export class HookSelectorComponent extends Container {
 
 		const height = process.stdout.rows || 40;
 		const sizing = sizingForArea(MODAL_SIZING_MEDIUM, height);
-		const dims = computeModalDims(renderWidth, height, sizing);
+		const dims = layoutModalCard(renderWidth, height, sizing);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: height }, () => padding(renderWidth));
+			return emptyModalArea(renderWidth, height);
 		}
 		if (this.#lastRenderWidth !== dims.contentWidth) {
 			this.#lastRenderWidth = dims.contentWidth;
@@ -947,25 +946,17 @@ export class HookSelectorComponent extends Container {
 		}
 
 		const shortcuts = this.#shortcuts();
-		const chrome = planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth: dims.contentWidth,
+		const chrome = planModalChrome(dims, {
 			shortcuts,
 			hoveredShortcutId: this.#hoveredShortcutId,
 		});
 
 		const body = this.#assembleBody(dims.contentWidth, chrome.maxBodyRows);
 
-		const shell = renderModalShell({
+		const shell = renderModalShell(chrome, {
 			title: truncateToWidth(this.#cardTitle + this.#countdownSuffix, dims.contentWidth, Ellipsis.Unicode),
-			sizing,
-			areaWidth: renderWidth,
-			areaHeight: height,
 			body,
 			preferredBodyRows: body.length,
-			shortcuts,
-			hoveredShortcutId: this.#hoveredShortcutId,
 			showClose: true,
 		});
 		this.#shellGeometry = shell.geometry;

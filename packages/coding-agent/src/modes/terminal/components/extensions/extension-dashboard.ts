@@ -33,7 +33,7 @@ import { setMcpServerEnabled } from "../../../../mcp/config-writer";
 import { theme } from "../../../../theme/theme-binding";
 import { getTabBarTheme } from "../../shared";
 import { matchesAppInterrupt } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	planModalChrome,
@@ -251,10 +251,10 @@ export class ExtensionDashboard implements Component {
 	render(width: number): readonly string[] {
 		const height = this.#terminalRows();
 		const sizing = sizingForArea(MODAL_SIZING_LARGE, height);
-		const dims = computeModalDims(width, height, sizing);
+		const dims = layoutModalCard(width, height, sizing);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: height }, () => padding(width));
+			return emptyModalArea(width, height);
 		}
 		const contentWidth = dims.contentWidth;
 
@@ -270,10 +270,7 @@ export class ExtensionDashboard implements Component {
 		// on the bottom row selected a row that was not on screen. The floor was
 		// the same trap: `Math.max(5, …)` asked for five content rows on a card
 		// that could show fewer, overrunning again.
-		const chrome = planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth,
+		const chrome = planModalChrome(dims, {
 			shortcuts: EXT_SHORTCUTS,
 			hoveredShortcutId: this.#hoveredShortcutId,
 		});
@@ -285,14 +282,9 @@ export class ExtensionDashboard implements Component {
 		const body: string[] = [...tabLines];
 		for (let i = 0; i < contentRows; i++) body.push(bodyLines[i] ?? "");
 
-		const shell = renderModalShell({
+		const shell = renderModalShell(chrome, {
 			title: "Extension Control Center",
-			sizing,
-			areaWidth: width,
-			areaHeight: height,
 			body,
-			shortcuts: [...EXT_SHORTCUTS],
-			hoveredShortcutId: this.#hoveredShortcutId,
 			showClose: true,
 		});
 

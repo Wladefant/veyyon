@@ -16,10 +16,11 @@ import {
 	matchesSelectPageUp,
 	matchesSelectUp,
 } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
 import {
 	CARD_BODY_COL_INSET,
 	type ModalShellGeometry,
+	planModalChrome,
 	pointerMotionEnabled,
 	renderModalShell,
 	SELECT_LIST_SHORTCUTS,
@@ -372,26 +373,27 @@ export class HistorySearchComponent implements Component {
 	render(width: number): readonly string[] {
 		const height = process.stdout.rows || 40;
 		const sizing = sizingForArea(MODAL_SIZING_MEDIUM, height);
-		const dims = computeModalDims(width, height, sizing);
+		const dims = layoutModalCard(width, height, sizing);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: height }, () => padding(width));
+			return emptyModalArea(width, height);
 		}
 
 		const searchLine = this.#searchInput.render(dims.contentWidth)[0] ?? "";
 		const body = [...this.#resultsList.render(dims.contentWidth)];
 
-		const shell = renderModalShell({
-			title: "Search History",
-			sizing,
-			areaWidth: width,
-			areaHeight: height,
-			body,
-			searchLine,
-			shortcuts: SELECT_LIST_SHORTCUTS,
-			hoveredShortcutId: this.#hoveredShortcutId,
-			showClose: true,
-		});
+		const shell = renderModalShell(
+			planModalChrome(dims, {
+				shortcuts: SELECT_LIST_SHORTCUTS,
+				hoveredShortcutId: this.#hoveredShortcutId,
+				searchLine,
+			}),
+			{
+				title: "Search History",
+				body,
+				showClose: true,
+			},
+		);
 		this.#shellGeometry = shell.geometry;
 		this.#listRowStart = shell.geometry?.bodyRowStart ?? 0;
 		return shell.lines;

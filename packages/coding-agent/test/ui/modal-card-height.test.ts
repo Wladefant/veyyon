@@ -28,21 +28,20 @@ import {
 	MODAL_SIZING_MEDIUM,
 } from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-geometry";
 import {
-	type ModalShellInput,
 	type ModalShellResult,
 	minModalChromeRows,
-	renderModalShell,
 	SELECT_LIST_SHORTCUTS,
 } from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-shell";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { type ModalCardInput, paintCard } from "../helpers/modal-card";
 
 await initTheme(false, "unicode", false, "titanium", "titanium");
 
 const AREA_WIDTH = 100;
 const AREA_HEIGHT = 40;
 
-function shell(overrides: Partial<ModalShellInput> = {}) {
-	return renderModalShell({
+function shell(overrides: Partial<ModalCardInput> = {}) {
+	return paintCard({
 		title: "Version",
 		sizing: MODAL_SIZING_MEDIUM,
 		areaWidth: AREA_WIDTH,
@@ -62,7 +61,6 @@ function shell(overrides: Partial<ModalShellInput> = {}) {
  */
 function cardRows(result: ModalShellResult): string[] {
 	const geo = result.geometry;
-	if (!geo) throw new Error("expected geometry");
 	return result.lines
 		.slice(geo.cardRowStart, geo.cardRowEnd)
 		.map(line => stripVTControlCharacters(line).slice(geo.cardColStart, geo.cardColEnd).trimEnd());
@@ -73,7 +71,7 @@ describe("without preferredBodyRows", () => {
 		// The option is opt-in. Every existing surface renders exactly as before.
 		const dims = computeModalDims(AREA_WIDTH, AREA_HEIGHT, MODAL_SIZING_MEDIUM);
 
-		expect(shell().geometry?.modalHeight).toBe(dims!.modalHeight);
+		expect(shell().geometry.modalHeight).toBe(dims!.modalHeight);
 	});
 
 	it("pads the short body out to that height", () => {
@@ -91,8 +89,8 @@ describe("without preferredBodyRows", () => {
 
 describe("with preferredBodyRows", () => {
 	it("draws a card sized for the rows asked for", () => {
-		const full = shell().geometry!.modalHeight;
-		const sized = shell({ preferredBodyRows: 7 }).geometry!.modalHeight;
+		const full = shell().geometry.modalHeight;
+		const sized = shell({ preferredBodyRows: 7 }).geometry.modalHeight;
 
 		expect(sized).toBeLessThan(full);
 		// Chrome is the top border, a vPad row above AND below the body, the footer
@@ -143,7 +141,7 @@ describe("with preferredBodyRows", () => {
 		// A caller may honestly want 200 rows. The margins still win.
 		const capped = shell({ preferredBodyRows: 200 }).geometry!;
 
-		expect(capped.modalHeight).toBe(shell().geometry!.modalHeight);
+		expect(capped.modalHeight).toBe(shell().geometry.modalHeight);
 	});
 
 	it("keeps a body row even when asked for none", () => {
@@ -168,7 +166,7 @@ describe("on a terminal too short for the request", () => {
 		// The shrink order (tip gap, tip, vPad, reserved footer padding) is what
 		// keeps the bottom border on a 24-row terminal, and asking for a body
 		// height must not route around it.
-		const tight = renderModalShell({
+		const tight = paintCard({
 			title: "Version",
 			sizing: MODAL_SIZING_MEDIUM,
 			areaWidth: AREA_WIDTH,

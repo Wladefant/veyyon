@@ -13,19 +13,19 @@ import { Container, Editor, Spacer, Text, type TUI } from "@veyyon/tui";
 import { errorMessage } from "@veyyon/utils";
 import { matchesKey } from "@veyyon/utils/keys";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
-import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth } from "@veyyon/utils/width";
 import { getEditorTheme, theme } from "../../../../theme/theme";
 import { editInTerminal, getEditorCommand, NO_EDITOR_CONFIGURED } from "../../../../utils/external-editor";
 import { actionKeyHint } from "../../utils/key-hint";
 import { matchesAppExternalEditor, matchesAppFollowUp, matchesAppInterrupt } from "../../utils/keybinding-matchers";
 import {
-	computeModalDims,
+	emptyModalArea,
 	HOOK_EDITOR_TEXT_PAD_COLS,
+	layoutModalCard,
 	MODAL_SIZING_MEDIUM,
 	sizingForArea,
 } from "../chrome/modal-geometry";
-import { type ModalShellGeometry, type ModalShortcut, renderModalShell } from "../chrome/modal-shell";
+import { type ModalShellGeometry, type ModalShortcut, planModalChrome, renderModalShell } from "../chrome/modal-shell";
 import { routeModalChrome } from "../selectors/select-list-mouse-routing";
 
 export interface HookEditorOptions {
@@ -162,10 +162,10 @@ export class HookEditorComponent extends Container {
 
 		const height = process.stdout.rows || 40;
 		const sizing = sizingForArea(MODAL_SIZING_MEDIUM, height);
-		const dims = computeModalDims(renderWidth, height, sizing);
+		const dims = layoutModalCard(renderWidth, height, sizing);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: height }, () => padding(renderWidth));
+			return emptyModalArea(renderWidth, height);
 		}
 
 		const shortcuts = this.#shortcuts();
@@ -174,17 +174,18 @@ export class HookEditorComponent extends Container {
 			for (const line of child.render(dims.contentWidth)) body.push(line);
 		}
 
-		const shell = renderModalShell({
-			title: truncateToWidth(this.#cardTitle, dims.contentWidth, Ellipsis.Unicode),
-			sizing,
-			areaWidth: renderWidth,
-			areaHeight: height,
-			body,
-			preferredBodyRows: body.length,
-			shortcuts,
-			hoveredShortcutId: this.#hoveredShortcutId,
-			showClose: true,
-		});
+		const shell = renderModalShell(
+			planModalChrome(dims, {
+				shortcuts,
+				hoveredShortcutId: this.#hoveredShortcutId,
+			}),
+			{
+				title: truncateToWidth(this.#cardTitle, dims.contentWidth, Ellipsis.Unicode),
+				body,
+				preferredBodyRows: body.length,
+				showClose: true,
+			},
+		);
 		this.#shellGeometry = shell.geometry;
 		return shell.lines;
 	}

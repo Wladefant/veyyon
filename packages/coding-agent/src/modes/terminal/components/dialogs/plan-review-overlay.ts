@@ -31,11 +31,12 @@ import {
 	matchesSelectDown,
 	matchesSelectUp,
 } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_LARGE } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
 	minModalChromeRows,
+	planModalChrome,
 	renderModalShell,
 } from "../chrome/modal-shell";
 import { fit } from "../chrome/overlay-box";
@@ -829,8 +830,12 @@ export class PlanReviewOverlay implements Component {
 	render(width: number): readonly string[] {
 		const termHeight = process.stdout.rows || 40;
 		const sizing = MODAL_SIZING_LARGE;
-		const dims = computeModalDims(width, termHeight, sizing);
-		const contentWidth = dims?.contentWidth ?? Math.max(1, width - 4);
+		const dims = layoutModalCard(width, termHeight, sizing);
+		if (!dims) {
+			this.#shellGeometry = null;
+			return emptyModalArea(width, termHeight);
+		}
+		const contentWidth = dims.contentWidth;
 
 		const sidebarShown = this.#sidebarVisible(contentWidth);
 		this.#sidebarShown = sidebarShown;
@@ -846,7 +851,7 @@ export class PlanReviewOverlay implements Component {
 		// prompt, slider, options, and the annotate mini-editor) plus ModalShell's
 		// own fixed chrome (see CHROME_ROWS).
 		const belowRegionRows = 1 + promptLines.length + sliderLines.length + optionLines.length + annotateLines.length;
-		const regionRows = Math.max(MIN_BODY_ROWS, (dims?.modalHeight ?? termHeight) - CHROME_ROWS - belowRegionRows);
+		const regionRows = Math.max(MIN_BODY_ROWS, dims.modalHeight - CHROME_ROWS - belowRegionRows);
 
 		const bodyLines = this.#buildBody(bodyContentWidth);
 		this.#scrollView.setLines(bodyLines);
@@ -886,16 +891,17 @@ export class PlanReviewOverlay implements Component {
 		}
 		for (const line of annotateLines) content.push(line);
 
-		const shell = renderModalShell({
-			title: OVERLAY_TITLE,
-			sizing,
-			areaWidth: width,
-			areaHeight: termHeight,
-			body: content,
-			shortcuts: this.#buildShortcuts(),
-			hoveredShortcutId: this.#hoveredShortcutId,
-			showClose: true,
-		});
+		const shell = renderModalShell(
+			planModalChrome(dims, {
+				shortcuts: this.#buildShortcuts(),
+				hoveredShortcutId: this.#hoveredShortcutId,
+			}),
+			{
+				title: OVERLAY_TITLE,
+				body: content,
+				showClose: true,
+			},
+		);
 		this.#shellGeometry = shell.geometry;
 		this.#bodyRowOffset = shell.geometry?.bodyRowStart ?? 0;
 		this.#sidebarClickMaxCol = sidebarShown ? (shell.geometry?.leftPad ?? 0) + 2 + sidebarWidth + 1 : 0;

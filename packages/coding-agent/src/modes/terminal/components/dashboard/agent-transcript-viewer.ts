@@ -35,7 +35,7 @@ import { getEditorTheme, theme } from "../../../../theme/theme";
 import { replaceTabs, shortenPath, truncateToWidth } from "../../../../tools/core/render-utils";
 import type { ObservableSession, SessionObserverRegistry } from "../../session-observer-registry";
 import { matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
+import { layoutModalCard, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
 import { type ModalShellGeometry, type ModalShortcut, planModalChrome, renderModalShell } from "../chrome/modal-shell";
 import { COMPOSER_INSET_COLS } from "../composer/composer-chrome";
 import { routeModalChrome } from "../selectors/select-list-mouse-routing";
@@ -605,7 +605,7 @@ export class AgentTranscriptViewer implements Component {
 	render(width: number): readonly string[] {
 		const termHeight = process.stdout.rows || 40;
 		const sizing = sizingForArea(MODAL_SIZING_LARGE, termHeight);
-		const dims = computeModalDims(width, termHeight, sizing);
+		const dims = layoutModalCard(width, termHeight, sizing);
 		if (!dims) {
 			this.#shellGeometry = null;
 			return new Array(termHeight).fill(" ".repeat(width));
@@ -637,11 +637,9 @@ export class AgentTranscriptViewer implements Component {
 		// One owner for "how many rows do I get": the shell truncates a body that
 		// runs long, so the scroll viewport is sized from the same plan the card
 		// paints with, minus the rows this body spends on its own chrome.
-		const plan = planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth,
+		const plan = planModalChrome(dims, {
 			shortcuts,
+			hoveredShortcutId: this.#hoveredShortcutId,
 			tipCandidates: statsLine ? [statsLine] : undefined,
 		});
 		const bodyChrome = headerLines.length + 1 + editorLines.length + (noticeLine ? 1 : 0);
@@ -661,16 +659,10 @@ export class AgentTranscriptViewer implements Component {
 		if (noticeLine) body.push(noticeLine);
 		for (const editorLine of editorLines) body.push(`${RAIL_PAD}${editorLine}`);
 
-		const shell = renderModalShell({
+		const shell = renderModalShell(plan, {
 			title: `Transcript ${theme.sep.dot} ${this.deps.agentId}`,
-			sizing,
-			areaWidth: width,
-			areaHeight: termHeight,
 			body,
 			preferredBodyRows: plan.maxBodyRows,
-			shortcuts,
-			hoveredShortcutId: this.#hoveredShortcutId,
-			tipCandidates: statsLine ? [statsLine] : undefined,
 			showClose: true,
 		});
 		this.#shellGeometry = shell.geometry;

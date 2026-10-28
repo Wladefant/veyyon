@@ -17,7 +17,7 @@ import {
 	matchesSelectPageUp,
 	matchesSelectUp,
 } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
@@ -276,9 +276,9 @@ export class CopySelectorComponent implements Component {
 	render(width: number): readonly string[] {
 		const height = process.stdout.rows || 40;
 		const sizing = sizingForArea(MODAL_SIZING_LARGE, height);
-		const dims = computeModalDims(width, height, sizing);
+		const dims = layoutModalCard(width, height, sizing);
 		if (!dims) {
-			return Array.from({ length: height }, () => padding(width));
+			return emptyModalArea(width, height);
 		}
 
 		const flat = this.#flatten();
@@ -293,10 +293,7 @@ export class CopySelectorComponent implements Component {
 		// what the card shows (it reserves nine at this sizing, and the separator is
 		// a tenth), and the shell truncates the overrun silently — the bottom of the
 		// preview, which is the pane you are reading before you copy.
-		const chrome = planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth: dims.contentWidth,
+		const chrome = planModalChrome(dims, {
 			shortcuts: COPY_SHORTCUTS,
 			hoveredShortcutId: this.#hoveredShortcutId,
 		});
@@ -312,14 +309,9 @@ export class CopySelectorComponent implements Component {
 			...this.#renderPreview(inner, selected, previewRows),
 		];
 
-		const shell = renderModalShell({
+		const shell = renderModalShell(chrome, {
 			title: "Copy to clipboard",
-			sizing,
-			areaWidth: width,
-			areaHeight: height,
 			body,
-			shortcuts: COPY_SHORTCUTS,
-			hoveredShortcutId: this.#hoveredShortcutId,
 			showClose: true,
 		});
 		this.#shellGeometry = shell.geometry;

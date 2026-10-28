@@ -16,8 +16,15 @@ Source: `src/modes/terminal/components/chrome/modal-shell.ts` (rendering, footer
 
 - `sizingForArea(sizing, areaHeight, forceCompact?)` is the only way to reach the compact strip: it sets `h_pad=1`, `v_pad=0` and leaves `v_margin` alone. It reads the area height itself through `modalNeedsCompactPadding`, so no card restates the decision.
 - `computeModalDims`: preferred width = `area.w * width_pct`, clamped to `[min_width, min(area.w-4, max_width)]`; height = `area.h - 2*v_margin`.
-- Returns null geometry and clears hit rectangles when `w < 20` or `h < 6`.
 - Card is centered with blank underpaint.
+
+## Rendering a card
+
+1. `layoutModalCard(areaWidth, areaHeight, sizing)` lays the card out on the area. It returns null when `w < 20` or `h < 6`; the caller then paints `emptyModalArea(areaWidth, areaHeight)` and clears its hit rectangles.
+2. `planModalChrome(card, { shortcuts, hoveredShortcutId, tipCandidates, searchLine })` reserves the chrome, shrinking the tip gap, the tip, `v_pad` and the footer padding in that order on a short card. `maxBodyRows` is the number of body rows the card shows.
+3. `renderModalShell(plan, content)` paints that plan. A body row past `maxBodyRows` is dropped.
+
+A caller that sizes its body reads `maxBodyRows` from the plan it paints, so the body is sized against the chrome the card draws.
 
 ## Chrome anatomy
 
