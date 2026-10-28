@@ -4,6 +4,7 @@
 
 ### Changed
 
+- The `tools.format` setting takes its dialect list from a table keyed by the catalog's `Dialect` type instead of a second copy of the catalog's list; no user-facing change.
 - The markit converters share one stream-acceptance rule, one XML parser with the 1,000,000 entity-expansion cap, and one repeated-element reader; no user-facing change.
 - Session memory banks and `memory stats` readers open their Mnemopi store through one builder, `createBankMemory`; no user-facing change.
 - `AgentParsingError` extends `SourcedParseError` from `@veyyon/utils` instead of copying its formatting; no user-facing change.
