@@ -8,7 +8,7 @@
 
 ### Changed
 
-- The remote summarizer resolves an Azure model's deployment through the same `@veyyon/ai` helper as server-side compaction; no user-facing change.
+- The remote summarizer resolves an Azure model's deployment through the same `@veyyon/ai` helper as Azure turns; no user-facing change.
 
 ### Fixed
 

@@ -6,8 +6,11 @@
  * 404. Four request paths name a deployment: an Azure Responses turn (body
  * `model`), an Azure chat-completions turn (URL `/deployments/<name>`), Azure
  * server-side compaction (body `model`), and the remote summarizer when the
- * session model is an Azure one (body `model`). Two of them had their own copy
- * of the lookup, and no test read the variable at all.
+ * session model is an Azure one (body `model`). Three of them resolve the map
+ * through `@veyyon/ai/providers/azure-deployment-names`; server-side compaction
+ * keeps its own copy in `openai-compaction.ts`, a file locked by
+ * `scripts/the-codex-compaction-route-is-locked.test.ts`, and this suite holds
+ * that copy to the same behavior. Before this suite no test read the variable.
  *
  * WHAT CLASS THIS CLOSES: a path that ignores the map, parses it differently,
  * maps a model that Azure does not serve, or lets the map override a deployment
