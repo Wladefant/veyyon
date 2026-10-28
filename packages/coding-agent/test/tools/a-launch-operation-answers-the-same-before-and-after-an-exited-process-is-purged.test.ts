@@ -18,7 +18,6 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { closeDaemonClients, createDaemonBrokerClient } from "@veyyon/coding-agent/launch/client";
@@ -26,6 +25,7 @@ import { daemonCompletionsPath } from "@veyyon/coding-agent/launch/paths";
 import { resetLaunchExitWatchesForTests } from "@veyyon/coding-agent/tools/shell/launch-exit-watch";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
 import { type LaunchParams, LaunchTool, type LaunchToolDetails } from "../../src/tools/shell/launch";
+import { useTempDirs } from "../helpers/temp-dirs";
 import { makeToolSession } from "../helpers/tool-session";
 
 /** Long enough that every op of the sweep answers from the live record before the purge. */
@@ -34,7 +34,7 @@ const CLEANUP_WAIT_MS = 4_000;
 const REUSED_CLEANUP_WAIT_MS = 1_000;
 
 let isolatedConfigRoot: IsolatedConfigRoot | undefined;
-const cleanupDirs: string[] = [];
+const makeTempDir = useTempDirs();
 
 beforeAll(() => {
 	isolatedConfigRoot = enterIsolatedConfigRoot("launch-purged-name");
@@ -48,17 +48,7 @@ afterAll(() => {
 afterEach(async () => {
 	await closeDaemonClients();
 	resetLaunchExitWatchesForTests();
-	while (cleanupDirs.length > 0) {
-		const dir = cleanupDirs.pop();
-		if (dir) await fs.rm(dir, { recursive: true, force: true });
-	}
 });
-
-async function tempDir(prefix: string): Promise<string> {
-	const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-	cleanupDirs.push(dir);
-	return dir;
-}
 
 /** What one tool call returned: its text, or the message it failed with. */
 type Answer = { text: string } | { error: string };
@@ -169,7 +159,7 @@ async function project(
 	exitCodes: number[],
 	cleanupWaitMs = CLEANUP_WAIT_MS,
 ): Promise<{ tool: LaunchTool; scripts: Map<number, string> }> {
-	const dir = await tempDir("veyyon-launch-purged-");
+	const dir = makeTempDir("veyyon-launch-purged-");
 	const scripts = new Map<number, string>();
 	for (const code of exitCodes) {
 		const script = path.join(dir, `exit-${code}.ts`);
@@ -287,8 +277,8 @@ describe("a launch operation answers the same before and after an exited process
 	});
 
 	it("rejects a store written before records kept a state and spec, rather than serving it", async () => {
-		const projectDir = await tempDir("veyyon-launch-v1-project-");
-		const runtimeDir = await tempDir("veyyon-launch-v1-runtime-");
+		const projectDir = makeTempDir("veyyon-launch-v1-project-");
+		const runtimeDir = makeTempDir("veyyon-launch-v1-runtime-");
 		const now = Date.now();
 		await fs.writeFile(
 			daemonCompletionsPath(runtimeDir),

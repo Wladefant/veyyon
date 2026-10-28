@@ -14,9 +14,8 @@
  * WHAT IT DOES NOT CATCH: processes that never exit (running services stay alive
  * and registered until explicitly stopped).
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
 import { resetSettingsForTest, Settings } from "../../src/config/settings";
@@ -26,8 +25,9 @@ import { managedDaemonDir, managedDaemonMetaPath } from "../../src/launch/paths"
 import type { DaemonSpec } from "../../src/launch/protocol";
 import { getSettingDef } from "../../src/modes/terminal/components/selectors/settings-defs";
 import { shutdownBroker, waitUntil } from "../helpers/daemon-broker";
+import { useTempDirs } from "../helpers/temp-dirs";
 
-const cleanupDirs: string[] = [];
+const makeTempDir = useTempDirs();
 let isolatedConfigRoot: IsolatedConfigRoot | undefined;
 
 beforeAll(() => {
@@ -39,23 +39,10 @@ afterAll(() => {
 	isolatedConfigRoot = undefined;
 });
 
-async function tempDir(prefix: string): Promise<string> {
-	const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-	cleanupDirs.push(dir);
-	return dir;
-}
-
-afterEach(async () => {
-	while (cleanupDirs.length > 0) {
-		const dir = cleanupDirs.pop();
-		if (dir) await fs.rm(dir, { recursive: true, force: true });
-	}
-});
-
 describe("an exited launch process is purged after the configured cleanup wait", () => {
 	it("retains an exited process immediately and purges it after cleanupWaitMs", async () => {
-		const projectDir = await tempDir("launch-cleanup-project-");
-		const runtimeDir = await tempDir("launch-cleanup-runtime-");
+		const projectDir = makeTempDir("launch-cleanup-project-");
+		const runtimeDir = makeTempDir("launch-cleanup-runtime-");
 		const scriptPath = path.join(projectDir, "quick-exit.ts");
 		await Bun.write(scriptPath, `console.log("READY"); setTimeout(() => process.exit(0), 100);\n`);
 
@@ -118,8 +105,8 @@ describe("an exited launch process is purged after the configured cleanup wait",
 	}, 15_000);
 
 	it("retains exited processes indefinitely when cleanupWaitMs is 0", async () => {
-		const projectDir = await tempDir("launch-cleanup-zero-project-");
-		const runtimeDir = await tempDir("launch-cleanup-zero-runtime-");
+		const projectDir = makeTempDir("launch-cleanup-zero-project-");
+		const runtimeDir = makeTempDir("launch-cleanup-zero-runtime-");
 		const scriptPath = path.join(projectDir, "quick-exit-zero.ts");
 		await Bun.write(scriptPath, `console.log("READY"); setTimeout(() => process.exit(0), 50);\n`);
 
@@ -168,8 +155,8 @@ describe("an exited launch process is purged after the configured cleanup wait",
 	}, 15_000);
 
 	it("cancels the purge timer when the process is started again with the same name", async () => {
-		const projectDir = await tempDir("launch-cleanup-restart-project-");
-		const runtimeDir = await tempDir("launch-cleanup-restart-runtime-");
+		const projectDir = makeTempDir("launch-cleanup-restart-project-");
+		const runtimeDir = makeTempDir("launch-cleanup-restart-runtime-");
 		const exitScript = path.join(projectDir, "exit-script.ts");
 		const longScript = path.join(projectDir, "long-script.ts");
 		await Bun.write(exitScript, `console.log("READY"); setTimeout(() => process.exit(0), 100);\n`);
@@ -227,8 +214,8 @@ describe("an exited launch process is purged after the configured cleanup wait",
 	}, 15_000);
 
 	it("purges expired historical daemons from disk on broker recovery", async () => {
-		const projectDir = await tempDir("launch-cleanup-recovery-project-");
-		const runtimeDir = await tempDir("launch-cleanup-recovery-runtime-");
+		const projectDir = makeTempDir("launch-cleanup-recovery-project-");
+		const runtimeDir = makeTempDir("launch-cleanup-recovery-runtime-");
 
 		// Pre-seed an expired daemon directory on disk.
 		const expiredDir = managedDaemonDir(runtimeDir, "historical-dead");
@@ -280,8 +267,8 @@ describe("an exited launch process is purged after the configured cleanup wait",
 	}, 15_000);
 
 	it("keeps an exited record in list, describe and logs during the wait, then answers from its completion record", async () => {
-		const projectDir = await tempDir("launch-cleanup-query-project-");
-		const runtimeDir = await tempDir("launch-cleanup-query-runtime-");
+		const projectDir = makeTempDir("launch-cleanup-query-project-");
+		const runtimeDir = makeTempDir("launch-cleanup-query-runtime-");
 		const scriptPath = path.join(projectDir, "log-exit.ts");
 		await fs.writeFile(scriptPath, `console.log("HELLO_WORLD"); setTimeout(() => process.exit(0), 50);\n`);
 
@@ -374,8 +361,8 @@ describe("an exited launch process is purged after the configured cleanup wait",
 	}, 15_000);
 
 	it("clears cleanup timers on broker shutdown without holding the event loop open", async () => {
-		const projectDir = await tempDir("launch-cleanup-shutdown-project-");
-		const runtimeDir = await tempDir("launch-cleanup-shutdown-runtime-");
+		const projectDir = makeTempDir("launch-cleanup-shutdown-project-");
+		const runtimeDir = makeTempDir("launch-cleanup-shutdown-runtime-");
 		const scriptPath = path.join(projectDir, "quick-exit-shutdown.ts");
 		await fs.writeFile(scriptPath, `console.log("READY"); setTimeout(() => process.exit(0), 50);\n`);
 

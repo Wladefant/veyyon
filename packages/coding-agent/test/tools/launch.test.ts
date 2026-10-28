@@ -1,6 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
 import { createDaemonBrokerClient, type DaemonBrokerClient } from "../../src/launch/client";
@@ -8,8 +6,9 @@ import { daemonBrokerEndpoint, daemonBrokerLeasePath } from "../../src/launch/pa
 import { registerDaemonProjectPresence } from "../../src/launch/presence";
 import type { DaemonSpec } from "../../src/launch/protocol";
 import { shutdownBroker, waitUntil } from "../helpers/daemon-broker";
+import { useTempDirs } from "../helpers/temp-dirs";
 
-const cleanupDirs: string[] = [];
+const makeTempDir = useTempDirs();
 
 // The broker worker is the veyyon CLI (inherits this process's env) and runs the
 // legacy-layout migration gate at startup; a real ~/.veyyon in the both-layouts conflict
@@ -27,12 +26,6 @@ afterAll(() => {
 	isolatedConfigRoot = undefined;
 });
 
-async function tempDir(prefix: string): Promise<string> {
-	const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-	cleanupDirs.push(dir);
-	return dir;
-}
-
 function processExists(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
@@ -42,17 +35,10 @@ function processExists(pid: number): boolean {
 	}
 }
 
-afterEach(async () => {
-	while (cleanupDirs.length > 0) {
-		const dir = cleanupDirs.pop();
-		if (dir) await fs.rm(dir, { recursive: true, force: true });
-	}
-});
-
 describe("daemon broker", () => {
 	it("shares PTY output and input across project clients", async () => {
-		const projectDir = await tempDir("veyyon-daemon-project-");
-		const runtimeDir = await tempDir("veyyon-daemon-runtime-");
+		const projectDir = makeTempDir("veyyon-daemon-project-");
+		const runtimeDir = makeTempDir("veyyon-daemon-runtime-");
 		const scriptPath = path.join(projectDir, "service.ts");
 		await Bun.write(
 			scriptPath,
@@ -142,8 +128,8 @@ setInterval(() => {}, 1000);
 	// stop, which is why the operator-visible regression shipped. This drives the
 	// real broker stop path end to end.
 	it("reports SIGTERM (not a misleading exit code) when a PTY daemon is stopped", async () => {
-		const projectDir = await tempDir("veyyon-daemon-stopsig-project-");
-		const runtimeDir = await tempDir("veyyon-daemon-stopsig-runtime-");
+		const projectDir = makeTempDir("veyyon-daemon-stopsig-project-");
+		const runtimeDir = makeTempDir("veyyon-daemon-stopsig-runtime-");
 		const scriptPath = path.join(projectDir, "idle.ts");
 		// Prints READY, then idles forever so the only way out is our stop signal.
 		await Bun.write(scriptPath, `process.stdout.write("READY\\n");\nsetInterval(() => {}, 1000);\n`);
@@ -179,8 +165,8 @@ setInterval(() => {}, 1000);
 	}, 20_000);
 
 	it("stops non-persistent daemons after the last project veyyon exits", async () => {
-		const projectDir = await tempDir("veyyon-daemon-exit-project-");
-		const runtimeDir = await tempDir("veyyon-daemon-exit-runtime-");
+		const projectDir = makeTempDir("veyyon-daemon-exit-project-");
+		const runtimeDir = makeTempDir("veyyon-daemon-exit-runtime-");
 		const scriptPath = path.join(projectDir, "service.ts");
 		await Bun.write(scriptPath, `process.stdout.write("READY\\n"); setInterval(() => {}, 1000);\n`);
 		const presence = await registerDaemonProjectPresence(projectDir, runtimeDir);
@@ -240,8 +226,8 @@ setInterval(() => {}, 1000);
 	}, 20_000);
 
 	it("keeps detached daemons alive through broker replacement", async () => {
-		const projectDir = await tempDir("veyyon-daemon-detached-project-");
-		const runtimeDir = await tempDir("veyyon-daemon-detached-runtime-");
+		const projectDir = makeTempDir("veyyon-daemon-detached-project-");
+		const runtimeDir = makeTempDir("veyyon-daemon-detached-runtime-");
 		const scriptPath = path.join(projectDir, "service.ts");
 		await Bun.write(scriptPath, `process.stdout.write("READY\\n"); setInterval(() => {}, 1000);\n`);
 		const first = await createDaemonBrokerClient(projectDir, { runtimeDir, idleGraceMs: 5_000 });
@@ -312,8 +298,8 @@ setInterval(() => {}, 1000);
 	// used to report "Ready: <match>" AND "Readiness timed out" with no hint of
 	// which condition failed. The snapshot now names the unmet condition(s).
 	it("names the unmet readiness condition when start times out", async () => {
-		const projectDir = await tempDir("veyyon-daemon-ready-project-");
-		const runtimeDir = await tempDir("veyyon-daemon-ready-runtime-");
+		const projectDir = makeTempDir("veyyon-daemon-ready-project-");
+		const runtimeDir = makeTempDir("veyyon-daemon-ready-runtime-");
 		const scriptPath = path.join(projectDir, "service.ts");
 		await Bun.write(scriptPath, `process.stdout.write("LISTENING\\n"); setInterval(() => {}, 1000);\n`);
 		// Reserve an ephemeral port and release it so nothing accepts connections there.
