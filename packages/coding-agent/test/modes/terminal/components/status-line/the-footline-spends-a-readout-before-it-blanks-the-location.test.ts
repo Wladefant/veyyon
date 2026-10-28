@@ -51,7 +51,7 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { StatusLineComponent } from "@veyyon/coding-agent/modes/terminal/components/status-line/component";
+import type { StatusLineComponent } from "@veyyon/coding-agent/modes/terminal/components/status-line/component";
 import type { QuietSegmentBounds } from "@veyyon/coding-agent/modes/terminal/components/status-line/quiet-row";
 import {
 	FLOOR_SPENDABLE,
@@ -61,6 +61,7 @@ import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { stripAnsi } from "@veyyon/utils";
 import { requireTheme } from "../../../../helpers/require-theme";
 import { makeStatusLineProducer } from "../../../../helpers/status-line-session";
+import { useStatusRowsInARepo } from "../../../../helpers/status-rows-in-a-repo";
 import { useTrackedTempDirs } from "../../../../helpers/tracked-temp-dir";
 
 /** The branch the reported frame was recorded on. */
@@ -76,6 +77,7 @@ const DRAFT_READOUT = "~21 tok";
 const REPORTED_WIDTH = 78;
 
 const makeTempDir = useTrackedTempDirs("veyyon-statusline-draft-floor-");
+const statusRow = useStatusRowsInARepo();
 
 let deepCwd = "";
 /** A directory that is not a repository, so `compact` -- which has no `path` -- shows no zone. */
@@ -88,7 +90,7 @@ function makeSession(cwd: () => string) {
 
 /** The component in the state the frame was recorded in: plan mode, a rung, a draft estimate. */
 function draftFootline(): StatusLineComponent {
-	const statusLine = new StatusLineComponent(makeSession(() => deepCwd));
+	const statusLine = statusRow(makeSession(() => deepCwd));
 	statusLine.setPlanModeStatus({ enabled: true, paused: false });
 	return statusLine;
 }
@@ -99,7 +101,7 @@ function draftFootline(): StatusLineComponent {
  * this is what an operator on `compact` sees in any directory that is not checked out.
  */
 function footlineWithNoLocation(): StatusLineComponent {
-	const statusLine = new StatusLineComponent(makeSession(() => plainCwd));
+	const statusLine = statusRow(makeSession(() => plainCwd));
 	statusLine.updateSettings({ preset: "compact" } as never);
 	statusLine.setPlanModeStatus({ enabled: true, paused: false });
 	return statusLine;
@@ -112,7 +114,7 @@ function footlineWithNoLocation(): StatusLineComponent {
  * the only thing standing between the zone and a stale width.
  */
 function footlineEndingOnAMode(): StatusLineComponent {
-	const statusLine = new StatusLineComponent(makeSession(() => deepCwd));
+	const statusLine = statusRow(makeSession(() => deepCwd));
 	statusLine.updateSettings({ preset: "minimal" } as never);
 	statusLine.setPlanModeStatus({ enabled: true, paused: false });
 	return statusLine;
@@ -127,7 +129,7 @@ function footlineEndingOnAMode(): StatusLineComponent {
  * zone was fitted against a budget of zero and never asked again.
  */
 function footlineWithoutASpendableTail(): StatusLineComponent {
-	const statusLine = new StatusLineComponent(makeSession(() => deepCwd));
+	const statusLine = statusRow(makeSession(() => deepCwd));
 	statusLine.updateSettings({ preset: "compact" } as never);
 	statusLine.setPlanModeStatus({ enabled: true, paused: false });
 	return statusLine;
@@ -180,7 +182,7 @@ beforeAll(async () => {
 
 	// A path deep enough that the zone is under pressure at every width in the sweep, in a repo
 	// whose HEAD names the branch from the frame. `git.head.resolveSync` reads `.git/HEAD`, so
-	// this is the whole fixture: no `git init`, no subprocess.
+	// this is the whole fixture: no `git init`, and `useStatusRowsInARepo` stubs the processes.
 	deepCwd = path.join(makeTempDir(), "platform-services", "ingest-pipeline", "normalizer");
 	mkdirSync(path.join(deepCwd, ".git"), { recursive: true });
 	writeFileSync(path.join(deepCwd, ".git", "HEAD"), `ref: refs/heads/${BRANCH}\n`);

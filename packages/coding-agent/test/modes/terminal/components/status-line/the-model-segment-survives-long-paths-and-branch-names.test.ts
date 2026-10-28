@@ -17,8 +17,8 @@
  *     a fixture directory whose `.git/HEAD` names a 63-column branch, so `path`
  *     and `git` together fill most of the row on any machine. `git.head.resolveSync`
  *     reads that file, so the branch needs no git process and no network. The
- *     `git status`, default-branch and `gh` lookups a row starts are stubbed, and
- *     every row is disposed after its test, so no lookup outlives the test.
+ *     `git status`, default-branch and `gh` lookups a row starts are stubbed by
+ *     `useStatusRowsInARepo`, which disposes every row after its test.
  *   - The shed order is observed as an INVARIANT over a full width sweep rather
  *     than pinned at the three widths in the report: the set of right-group parts
  *     on screen must always be a suffix of the documented ranking, and a part that
@@ -37,11 +37,11 @@
  * `status-line-running-agents.test.ts` owns that contract. Nothing here checks
  * the text inside a segment -- colour, provider icon, or thinking-level suffix.
  */
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { StatusLineComponent } from "@veyyon/coding-agent/modes/terminal/components/status-line/component";
+import type { StatusLineComponent } from "@veyyon/coding-agent/modes/terminal/components/status-line/component";
 import { STATUS_LINE_PRESETS } from "@veyyon/coding-agent/modes/terminal/components/status-line/presets";
 import type { QuietSegmentBounds } from "@veyyon/coding-agent/modes/terminal/components/status-line/quiet-row";
 import { FLOOR_SPENDABLE } from "@veyyon/coding-agent/modes/terminal/components/status-line/quiet-row";
@@ -49,9 +49,9 @@ import { BASE_MODE_STATES } from "@veyyon/coding-agent/modes/terminal/components
 import type { StatusLinePreset } from "@veyyon/coding-agent/modes/terminal/components/status-line/types";
 import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { AUTONOMY_LABEL } from "@veyyon/coding-agent/tools/core/approval-modes";
-import * as git from "@veyyon/coding-agent/utils/git";
 import { requireTheme } from "../../../../helpers/require-theme";
 import { makeStatusLineProducer } from "../../../../helpers/status-line-session";
+import { useStatusRowsInARepo } from "../../../../helpers/status-rows-in-a-repo";
 import { useTrackedTempDirs } from "../../../../helpers/tracked-temp-dir";
 
 /**
@@ -109,13 +109,10 @@ const makeTempDir = useTrackedTempDirs("veyyon-statusline-wide-location-");
 
 let wideCwd = "";
 
-/** Every row a test built; `afterEach` disposes them. */
-const rows: StatusLineComponent[] = [];
+const statusRow = useStatusRowsInARepo();
 
 function makeRow(modelId: string): StatusLineComponent {
-	const row = new StatusLineComponent(makeStatusLineProducer({ cwd: () => wideCwd, modelId }));
-	rows.push(row);
-	return row;
+	return statusRow(makeStatusLineProducer({ cwd: () => wideCwd, modelId }));
 }
 
 /** The right edge of the location zone on the line just rendered, in columns. */
@@ -146,17 +143,6 @@ beforeAll(async () => {
 	wideCwd = path.join(makeTempDir(), "platform-services", "ingest-pipeline", "normalizer");
 	mkdirSync(path.join(wideCwd, ".git"), { recursive: true });
 	writeFileSync(path.join(wideCwd, ".git", "HEAD"), `ref: refs/heads/${WIDE_BRANCH}\n`);
-});
-
-beforeEach(() => {
-	vi.spyOn(git.status, "summary").mockResolvedValue(null);
-	vi.spyOn(git.branch, "default").mockResolvedValue(null);
-	vi.spyOn(git.github, "run").mockResolvedValue({ exitCode: 1, stdout: "", stderr: "" });
-});
-
-afterEach(() => {
-	for (const row of rows.splice(0)) row.dispose();
-	vi.restoreAllMocks();
 });
 
 describe("the model segment survives long paths and branch names", () => {
