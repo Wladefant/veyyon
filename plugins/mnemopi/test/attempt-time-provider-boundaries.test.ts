@@ -13,19 +13,9 @@ import {
 	type ResolvedMnemopiRuntimeOptions,
 	withMnemopiRuntimeOptions,
 } from "@veyyon/mnemopi/core/runtime-options";
+import { restoreEnvSnapshot } from "../../../packages/utils/test/helpers/restore-global";
 
 const OLD_ENV = { ...process.env };
-
-function restoreEnv(): void {
-	for (const key in process.env) {
-		if (!(key in OLD_ENV)) delete process.env[key];
-	}
-	for (const key in OLD_ENV) {
-		const value = OLD_ENV[key];
-		if (value === undefined) delete process.env[key];
-		else process.env[key] = value;
-	}
-}
 
 function openAiSse(text: string): Response {
 	const chunk = (delta: unknown, finishReason: string | null) =>
@@ -70,7 +60,7 @@ function projection(secret: string, label: string): MnemopiProviderTextSanitizer
 }
 
 afterEach(() => {
-	restoreEnv();
+	restoreEnvSnapshot(OLD_ENV);
 	resetEmbeddingProviderForTests();
 	resetHostLlmBackendForTests();
 });
