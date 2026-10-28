@@ -1009,10 +1009,13 @@ describe("AgentSession integration: cap, prune, persistence, and reload", () => 
 		const output: string[] = [];
 		const runtime: SlashCommandRuntime = {
 			session,
+			sessionManager,
 			settings,
 			output: text => output.push(text),
 			cwd: tempDir.path(),
-		} as SlashCommandRuntime;
+			refreshCommands: () => {},
+			reloadPlugins: async () => {},
+		};
 		expect(await executeAcpBuiltinSlashCommand("/reload-config", runtime)).toEqual({ consumed: true });
 
 		expect(agent.state.tools.map(tool => tool.name)).toEqual(["read", "mcp__s__t3"]);

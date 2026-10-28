@@ -483,6 +483,11 @@ class SessionStartup {
 		const hooks = createRequestHooks(this.#secretRuntime, this.#extensionRunner);
 		const agent = this.#createAgent(prompt, hooks);
 		const session = this.#createSession(agent, hooks, promptTemplates, slashCommands);
+		// The session constructor can drop restored discoveries above the current cap.
+		// Reapply that bounded set before recording the prompt or sending the first request.
+		if (session.getActiveToolNames().length < this.#initialTools.initialToolNames.length) {
+			await session.setActiveToolsByName(session.getActiveToolNames());
+		}
 		this.#recordSessionStart(session);
 		this.#attachSession(session);
 		this.#startReplenishment();
