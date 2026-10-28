@@ -386,7 +386,7 @@ export class CompactionRuntime {
 			this.#session.sessionManager.coolCompactedHistory();
 			this.#session.agent.replaceMessages(this.#session.buildDisplaySessionContext().messages);
 			await this.#pruneDiscoveredTools(this.#session.agent.state.messages);
-			this.#host.resetAllAdvisorRuntimes();
+			this.#host.afterHistoryCompacted();
 			this.#host.rebasePendingContextSnapshotAfterHistoryRewrite();
 			await this.#host.emitSessionEvent({
 				type: "auto_compaction_end",
@@ -793,6 +793,7 @@ export class CompactionRuntime {
 		this.#session.sessionManager.coolCompactedHistory();
 		this.#session.agent.replaceMessages(this.#session.buildDisplaySessionContext().messages);
 		await this.#pruneDiscoveredTools(this.#session.agent.state.messages);
+		this.#host.afterHistoryCompacted();
 		this.#host.rebasePendingContextSnapshotAfterHistoryRewrite();
 		if (codexCompaction) {
 			this.#resetCodexProviderAfterCompaction(codexCompaction);

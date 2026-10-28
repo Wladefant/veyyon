@@ -1,17 +1,24 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
 import type { AssistantMessage, Model, ToolResultMessage, UserMessage } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import type { CustomTool } from "@veyyon/coding-agent/extensibility/custom-tools/types";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { executeAcpBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/acp-builtins";
+import type { SlashCommandRuntime } from "@veyyon/coding-agent/slash-commands/types";
 import {
 	extractToolLastCallIndices,
 	ToolDiscovery,
 	type ToolDiscoveryHost,
 } from "@veyyon/coding-agent/session/runtime/tool-discovery";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
-import type { CustomTool } from "@veyyon/coding-agent/extensibility/custom-tools/types";
+
+let tempDir: TempDir | undefined;
 
 function createMockModel(): Model<"openai-responses"> {
 	return buildModel({
@@ -466,6 +473,8 @@ describe("AgentSession integration: cap, prune, persistence, and reload", () => 
 		for (const session of sessions.splice(0)) {
 			await session.dispose();
 		}
+		await tempDir?.remove();
+		tempDir = undefined;
 	});
 
 	it("enforces tools.maxDiscoveredTools cap and evicts LRU search tools on activateDiscoveredTools", async () => {
@@ -967,14 +976,14 @@ describe("AgentSession integration: cap, prune, persistence, and reload", () => 
 	});
 
 	it("shrinks active schemas and persists selection when a hot reload lowers the cap", async () => {
+		tempDir = TempDir.createSync("@discovered-tools-cap-reload-");
+		const file = path.join(tempDir.path(), "config.yml");
+		await fs.writeFile(file, "mcp:\n  discoveryMode: true\ntools:\n  maxDiscoveredTools: 3\n");
+		const settings = await Settings.loadReadOnly({ agentDir: tempDir.path() });
 		const readTool = createTool("read", { loadMode: "essential" });
 		const mcpTools = ["mcp__s__t1", "mcp__s__t2", "mcp__s__t3"].map(name => createCustomMcpTool(name));
 		const toolRegistry = new Map<string, AgentTool>([[readTool.name, readTool]]);
 		const sessionManager = SessionManager.inMemory();
-		const settings = Settings.isolated({
-			"mcp.discoveryMode": true,
-			"tools.maxDiscoveredTools": 3,
-		});
 		const agent = new Agent({
 			initialState: {
 				model: createMockModel(),
@@ -1002,8 +1011,15 @@ describe("AgentSession integration: cap, prune, persistence, and reload", () => 
 			"mcp__s__t3",
 		]);
 
-		settings.set("tools.maxDiscoveredTools", 1);
-		await session.refreshMCPTools(mcpTools);
+		await fs.writeFile(file, "mcp:\n  discoveryMode: true\ntools:\n  maxDiscoveredTools: 1\n");
+		const output: string[] = [];
+		const runtime: SlashCommandRuntime = {
+			session,
+			settings,
+			output: text => output.push(text),
+			cwd: tempDir.path(),
+		} as SlashCommandRuntime;
+		expect(await executeAcpBuiltinSlashCommand("/reload-config", runtime)).toEqual({ consumed: true });
 
 		expect(agent.state.tools.map(tool => tool.name)).toEqual(["read", "mcp__s__t3"]);
 		expect(sessionManager.buildSessionContext().selectedMCPToolNames).toEqual(["mcp__s__t3"]);

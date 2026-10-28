@@ -126,6 +126,8 @@ export class ToolDiscovery {
 	readonly #searchActivated = new Map<string, number>();
 	#activationSeq = 0;
 	#searchIndex: DiscoverableToolSearchIndex | null = null;
+	/** Restored selections over the cap that must leave the already-loaded agent schemas. */
+	readonly restoredCapDrops: ReadonlySet<string>;
 
 	constructor(host: ToolDiscoveryHost, config: ToolDiscoveryConfig) {
 		this.#host = host;
@@ -169,6 +171,7 @@ export class ToolDiscovery {
 			searchCandidates.length > cap ? searchCandidates.slice(searchCandidates.length - cap) : searchCandidates;
 		const droppedSearch =
 			searchCandidates.length > cap ? new Set(searchCandidates.slice(0, searchCandidates.length - cap)) : null;
+		this.restoredCapDrops = droppedSearch ?? new Set();
 
 		if (droppedSearch) {
 			for (const name of droppedSearch) {
@@ -467,6 +470,31 @@ export class ToolDiscovery {
 			}
 		}
 		this.invalidate();
+	}
+
+	/** Enforce a reduced cap without waiting for the next discovery search. */
+	planCapReduction(): DiscoveryPrunePlan {
+		const active = this.searchActivatedTools();
+		const excess = active.length - this.maxDiscoveredTools;
+		if (excess <= 0) {
+			return { dropped: [], nextActive: this.#host.activeToolNames(), changed: false };
+		}
+		const calls = extractToolLastCallIndices(this.#host.sessionMessages?.() ?? []);
+		active.sort((a, b) => {
+			const lastA = calls.get(a);
+			const lastB = calls.get(b);
+			if (lastA === undefined && lastB !== undefined) return -1;
+			if (lastA !== undefined && lastB === undefined) return 1;
+			if (lastA !== undefined && lastB !== undefined && lastA !== lastB) return lastA - lastB;
+			return (this.#searchActivated.get(a) ?? 0) - (this.#searchActivated.get(b) ?? 0);
+		});
+		const dropped = active.slice(0, excess);
+		const droppedSet = new Set(dropped);
+		return {
+			dropped,
+			nextActive: this.#host.activeToolNames().filter(name => !droppedSet.has(name)),
+			changed: true,
+		};
 	}
 
 	/**

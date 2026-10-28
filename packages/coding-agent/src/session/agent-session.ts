@@ -1596,6 +1596,9 @@ export class AgentSession {
 				protectedToolNames,
 			},
 		);
+		if (this.#discovery.restoredCapDrops.size > 0) {
+			this.agent.setTools(this.agent.state.tools.filter(tool => !this.#discovery.restoredCapDrops.has(tool.name)));
+		}
 		this.#toolActivation = new ToolActivation(this, {
 			registry: this.#toolRegistry,
 			discovery: this.#discovery,
@@ -1606,7 +1609,7 @@ export class AgentSession {
 		});
 		const persistInitialMCPToolSelection =
 			config.persistInitialMCPToolSelection ?? this.sessionManager.getBranch().length === 0;
-		if (this.#discovery.mcpEnabled && persistInitialMCPToolSelection) {
+		if (this.#discovery.mcpEnabled && (persistInitialMCPToolSelection || this.#discovery.restoredCapDrops.size > 0)) {
 			const currentSelectedMCPToolNames = this.getSelectedMCPToolNames();
 			if (!sameToolNames(this.sessionManager.getMCPToolSelection() ?? [], currentSelectedMCPToolNames)) {
 				this.sessionManager.appendMCPToolSelection(currentSelectedMCPToolNames);
@@ -4243,6 +4246,18 @@ export class AgentSession {
 			this.sessionManager.appendMCPToolSelection(selection);
 		}
 		return plan.activated;
+	}
+
+	/** Apply a hot-reloaded lower cap to active schemas and the saved selection. */
+	async enforceDiscoveredToolCap(): Promise<void> {
+		const plan = this.#discovery.planCapReduction();
+		if (!plan.changed) return;
+		this.#discovery.applyPrune(plan);
+		await this.setActiveToolsByName(plan.nextActive);
+		const selection = this.#discovery.selectedDiscovered();
+		if (!sameToolNames(this.sessionManager.getMCPToolSelection() ?? [], selection)) {
+			this.sessionManager.appendMCPToolSelection(selection);
+		}
 	}
 
 	/**
