@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-10-28
+
+### Fixed
+
+- Fixed the installed binary exiting at startup with `Cannot find module './file-lock'` when it opened `agent.db` ([#733](https://github.com/Wladefant/veyyon/pull/733)).
+- Fixed the compiled binary failing at startup with `Cannot find module './file-lock'` when opening `agent.db`: SQLite store helpers now load their lazy dependencies through the bundled `require`.
+
 ## [1.6.2] - 2026-10-28
 
 ### Added
