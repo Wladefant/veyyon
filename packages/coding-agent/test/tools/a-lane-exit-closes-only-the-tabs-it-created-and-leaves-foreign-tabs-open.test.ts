@@ -274,7 +274,7 @@ function seedTab(name: string, browser: PuppeteerBrowserHandle, targetId: string
 		browser,
 		targetId,
 		state: "alive",
-		info: { url: "about:blank", viewport: { width: 800, height: 600 } },
+		info: { url: "about:blank", viewport: { width: 800, height: 600 }, targetId },
 		pending: new Map(),
 		ownerSessionId,
 		worker: new FakeTabWorker(),
