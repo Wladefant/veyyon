@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Session memory banks and `memory stats` readers open their Mnemopi store through one builder, `createBankMemory`; no user-facing change.
 - `AgentParsingError` extends `SourcedParseError` from `@veyyon/utils` instead of copying its formatting; no user-facing change.
 - The session's terminal-yield tracking and the subprocess executor decide whether a `yield` ends a run through one predicate; no user-facing change.
 - `local://` and `memory://` confine a resolved path to their root through one shared real-path check; no user-facing change.

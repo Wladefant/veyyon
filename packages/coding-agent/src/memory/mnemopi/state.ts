@@ -3,7 +3,7 @@ import type { AgentMessage } from "@veyyon/agent-core";
 // Owners, not the `@veyyon/utils` barrel: 2 modules against 74.
 import { assistantTextFromUnknown } from "@veyyon/ai/utils/message-text";
 import type * as MnemopiNs from "@veyyon/mnemopi";
-import type { Mnemopi, RecallResult } from "@veyyon/mnemopi";
+import type { Mnemopi, MnemopiOptions, RecallResult } from "@veyyon/mnemopi";
 import type * as MnemopiCoreNs from "@veyyon/mnemopi/core";
 import type { LocalModelInitializer } from "@veyyon/mnemopi/core";
 import * as logger from "@veyyon/utils/logger";
@@ -688,7 +688,7 @@ function createScopedResources(config: MnemopiBackendConfig): MnemopiScopedResou
 	const open = (bank: string): MnemopiScopedMemory => {
 		const existing = memories.get(bank);
 		if (existing) return existing;
-		const scoped = { bank, memory: createMemory(config, bank) };
+		const scoped = { bank, memory: createBankMemory(config, bank, { proactiveLinking: config.proactiveLinking }) };
 		memories.set(bank, scoped);
 		return scoped;
 	};
@@ -791,8 +791,11 @@ function normalizeRecallQuery(query: string): string {
 		.trim();
 }
 
-function createMemory(config: MnemopiBackendConfig, bank: string): Mnemopi {
-	const providerOptions = config.providerOptions as Record<string, unknown>;
+/**
+ * The Mnemopi store for `bank`, written as the coding agent, with the configured provider options and
+ * then `overrides` applied.
+ */
+export function createBankMemory(config: MnemopiBackendConfig, bank: string, overrides: MnemopiOptions): Mnemopi {
 	const { Mnemopi } = requireMnemopi();
 	return new Mnemopi({
 		dbPath: resolveBankDbPath(config, bank),
@@ -801,9 +804,9 @@ function createMemory(config: MnemopiBackendConfig, bank: string): Mnemopi {
 		authorId: "coding-agent",
 		authorType: "agent",
 		channelId: bank,
-		...providerOptions,
-		proactiveLinking: config.proactiveLinking,
-	} as ConstructorParameters<typeof Mnemopi>[0]);
+		...(config.providerOptions as Record<string, unknown>),
+		...overrides,
+	} as MnemopiOptions);
 }
 
 export function resolveBankDbPath(config: MnemopiBackendConfig, bank: string): string {

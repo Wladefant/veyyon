@@ -30,6 +30,7 @@ import {
 	truncateApproxTokens,
 } from "./config";
 import {
+	createBankMemory,
 	dedupeScopedTargets,
 	getMnemopiScopedBanks,
 	getMnemopiScopedDbPaths,
@@ -38,9 +39,7 @@ import {
 	loadMnemopiCore,
 	type MnemopiScopedMemory,
 	MnemopiSessionState,
-	requireMnemopi,
 	requireMnemopiCore,
-	resolveBankDbPath,
 	setMnemopiSessionState,
 } from "./state";
 
@@ -305,24 +304,9 @@ function createStatsTargets(
 	const config = loadMnemopiConfig(session.settings, agentDir);
 	const targets = getMnemopiScopedBanks(config).map(bank => ({
 		bank,
-		memory: createStatsMemory(config, bank),
+		memory: createBankMemory(config, bank, { reconcile: false }),
 	}));
 	return { targets, owned: targets.map(target => target.memory) };
-}
-
-function createStatsMemory(config: MnemopiBackendConfig, bank: string): Mnemopi {
-	const providerOptions = config.providerOptions as Record<string, unknown>;
-	const { Mnemopi } = requireMnemopi();
-	return new Mnemopi({
-		dbPath: resolveBankDbPath(config, bank),
-		bank,
-		sessionId: bank,
-		authorId: "coding-agent",
-		authorType: "agent",
-		channelId: bank,
-		...providerOptions,
-		reconcile: false,
-	} as ConstructorParameters<typeof Mnemopi>[0]);
 }
 
 function renderMnemopiStats(targets: readonly MnemopiScopedMemory[]): string {
