@@ -31,6 +31,7 @@ import * as registry from "@veyyon/coding-agent/tools/web/browser/registry";
 import { getTab } from "@veyyon/coding-agent/tools/web/browser/tab-supervisor";
 import { setAgentDir, TempDir } from "@veyyon/utils";
 import { captureDirOverrides, type DirOverridesSnapshot, restoreDirOverrides } from "@veyyon/utils/dirs";
+import { toolResultText } from "../helpers/tool-result-text";
 import { CHROMIUM_AVAILABLE } from "./browser/chromium";
 
 let server: http.Server;
@@ -67,12 +68,8 @@ function serve(request: http.IncomingMessage, response: http.ServerResponse): vo
 	response.end(`<!doctype html><title>${url.pathname}</title><pre id="sent">${sent}</pre>`);
 }
 
-function text(result: { content: ReadonlyArray<{ type: string; text?: string }> }): string {
-	return result.content.map(part => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
-}
-
 async function run(name: string, code: string): Promise<string> {
-	return text(await tool.execute("run", { action: "run", name, code }));
+	return toolResultText(await tool.execute("run", { action: "run", name, code }));
 }
 
 async function failure(params: Record<string, unknown>, signal?: AbortSignal): Promise<Error> {

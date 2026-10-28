@@ -34,6 +34,7 @@ import {
 import { getTab } from "@veyyon/coding-agent/tools/web/browser/tab-supervisor";
 import { setAgentDir, TempDir } from "@veyyon/utils";
 import { captureDirOverrides, type DirOverridesSnapshot, restoreDirOverrides } from "@veyyon/utils/dirs";
+import { toolResultText } from "../helpers/tool-result-text";
 import { CHROMIUM_AVAILABLE } from "./browser/chromium";
 
 let server: http.Server;
@@ -55,12 +56,8 @@ function serve(request: http.IncomingMessage, response: http.ServerResponse): vo
 	response.end(`<!doctype html><title>${url.pathname}</title><pre id="sent">${sent}</pre>`);
 }
 
-function text(result: { content: ReadonlyArray<{ type: string; text?: string }> }): string {
-	return result.content.map(part => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
-}
-
 async function run(name: string, code: string): Promise<string> {
-	return text(await tool.execute("run", { action: "run", name, code }));
+	return toolResultText(await tool.execute("run", { action: "run", name, code }));
 }
 
 async function refusal(params: Record<string, unknown>, on: BrowserTool = tool): Promise<string> {
@@ -118,7 +115,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("a tab moved with visible", () => {
 		const hiddenKey = getTab("mover")?.browser.key;
 		requests.length = 0;
 
-		const moved = text(await tool.execute("open", { action: "open", name: "mover", visible: true }));
+		const moved = toolResultText(await tool.execute("open", { action: "open", name: "mover", visible: true }));
 		expect(moved).toContain('Moved tab "mover" from headless hidden to headless browser (visible) in context "shop"');
 		expect(moved).toContain(`URL: ${base}/home`);
 		expect(moved).toContain(`Carried 1 cookie and localStorage for ${base}`);
@@ -145,7 +142,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("a tab moved with visible", () => {
 			`await tab.goto(${JSON.stringify(`${base}/login?user=cleared`)}); await tab.goto(${JSON.stringify(`${base}/home`)});`,
 		);
 		requests.length = 0;
-		const back = text(await tool.execute("open", { action: "open", name: "mover", visible: false }));
+		const back = toolResultText(await tool.execute("open", { action: "open", name: "mover", visible: false }));
 		expect(back).toContain('Moved tab "mover" from headless visible to headless browser (hidden) in context "shop"');
 		expect(getTab("mover")?.browser.key).toBe("headless:1");
 		expect(requests[0]).toBe("/home sid=cleared");
@@ -156,7 +153,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("a tab moved with visible", () => {
 		setVisibleLaunchesHeadlessForTest(true);
 		await tool.execute("open", { action: "open", name: "stay", url: `${base}/a` });
 		await tool.execute("open", { action: "open", name: "stay", visible: true });
-		const again = text(await tool.execute("open", { action: "open", name: "stay", url: `${base}/b` }));
+		const again = toolResultText(await tool.execute("open", { action: "open", name: "stay", url: `${base}/b` }));
 		expect(again).toContain('Reused tab "stay" on headless browser (visible)');
 		await tool.execute("close", { action: "close", name: "stay" });
 	}, 90_000);
@@ -203,7 +200,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("a tab moved with visible", () => {
 		);
 		await tool.execute("close", { action: "close", name: "prof-2" });
 		requests.length = 0;
-		const moved = text(await tool.execute("open", { action: "open", name: "prof-1", visible: true }));
+		const moved = toolResultText(await tool.execute("open", { action: "open", name: "prof-1", visible: true }));
 		expect(moved).toContain(
 			'Moved tab "prof-1" from headless hidden profile "movable" to headless browser (visible, profile "movable")',
 		);
