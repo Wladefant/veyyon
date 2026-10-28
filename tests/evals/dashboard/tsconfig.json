@@ -1,6 +1,6 @@
 {
 	"extends": "../../../packages/tsconfig.workspace.json",
-	"include": [".", "../../test/web/*.test.tsx"],
+	"include": [".", "../test/web/*.test.tsx"],
 	"compilerOptions": {
 		"lib": ["ES2024", "DOM", "DOM.Iterable", "DOM.AsyncIterable"],
 		"noEmit": true,

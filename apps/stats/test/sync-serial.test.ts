@@ -1,16 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { syncAllSessions } from "@veyyon/stats/aggregator";
 import { getOverallStats } from "@veyyon/stats/db";
 import { getSessionsDir } from "@veyyon/utils";
 import { installStatsTestIsolation } from "./helpers/temp-agent";
+import { installWorkerStandIn } from "./helpers/worker-stand-in";
 
 installStatsTestIsolation("@pi-stats-sync-serial-");
-
-afterEach(() => {
-	vi.restoreAllMocks();
-});
 
 async function writeSessionFile(options?: { includeCost?: boolean }): Promise<void> {
 	const sessionDir = path.join(getSessionsDir(), "--tmp--sync-serial");
@@ -49,14 +46,17 @@ async function writeSessionFile(options?: { includeCost?: boolean }): Promise<vo
 describe("stats sync serial mode", () => {
 	it("honors workers: 1 without spawning a worker", async () => {
 		await writeSessionFile();
-		const workerSpy = vi.spyOn(globalThis, "Worker");
+		const workers = installWorkerStandIn(new Error("workers: 1 must not start a worker"));
+		try {
+			const synced = await syncAllSessions({ workers: 1 });
+			const overall = getOverallStats();
 
-		const synced = await syncAllSessions({ workers: 1 });
-		const overall = getOverallStats();
-
-		expect(synced.files).toBe(1);
-		expect(overall.totalRequests).toBe(1);
-		expect(workerSpy).not.toHaveBeenCalled();
+			expect(synced.files).toBe(1);
+			expect(overall.totalRequests).toBe(1);
+			expect(workers.constructed).toBe(0);
+		} finally {
+			workers.restore();
+		}
 	});
 
 	it("syncs legacy session usage without a cost breakdown", async () => {
@@ -72,25 +72,31 @@ describe("stats sync serial mode", () => {
 
 	it("uses the serial parser by default on macOS", async () => {
 		await writeSessionFile();
-		vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-		const workerSpy = vi.spyOn(globalThis, "Worker");
+		const platform = Object.getOwnPropertyDescriptor(process, "platform");
+		Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+		const workers = installWorkerStandIn(new Error("macOS must parse serially"));
+		try {
+			const synced = await syncAllSessions();
+			const overall = getOverallStats();
 
-		const synced = await syncAllSessions();
-		const overall = getOverallStats();
-
-		expect(synced.files).toBe(1);
-		expect(overall.totalRequests).toBe(1);
-		expect(workerSpy).not.toHaveBeenCalled();
+			expect(synced.files).toBe(1);
+			expect(overall.totalRequests).toBe(1);
+			expect(workers.constructed).toBe(0);
+		} finally {
+			workers.restore();
+			if (platform) Object.defineProperty(process, "platform", platform);
+		}
 	});
 
 	it("spawns a worker pool when callers explicitly request workers: 2 with a single file", async () => {
 		await writeSessionFile();
 		const workerProbe = new Error("worker probe");
-		const workerSpy = vi.spyOn(globalThis, "Worker").mockImplementation(() => {
-			throw workerProbe;
-		});
-
-		await expect(syncAllSessions({ workers: 2 })).rejects.toBe(workerProbe);
-		expect(workerSpy).toHaveBeenCalled();
+		const workers = installWorkerStandIn(workerProbe);
+		try {
+			await expect(syncAllSessions({ workers: 2 })).rejects.toBe(workerProbe);
+			expect(workers.constructed).toBe(1);
+		} finally {
+			workers.restore();
+		}
 	});
 });

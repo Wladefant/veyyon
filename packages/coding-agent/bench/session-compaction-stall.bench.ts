@@ -19,7 +19,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { CURRENT_SESSION_VERSION, type SessionEntry } from "@veyyon/kernel/session/session-entries";
+import { CURRENT_SESSION_VERSION } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { serializeTitleSlot } from "@veyyon/kernel/session/session-title-slot";
 
@@ -144,11 +144,10 @@ const stalls: number[] = [];
 const walls: number[] = [];
 for (let round = 0; round < ROUNDS; round++) {
 	const tail = manager.getEntries().slice(-KEEP);
-	const elided = tail.find(
-		(entry): entry is Extract<SessionEntry, { type: "message" }> =>
-			entry.type === "message" && entry.message.role === "toolResult",
-	);
-	if (elided === undefined) throw new Error("the kept tail holds no tool result to elide");
+	const elided = tail.find(entry => entry.type === "message" && entry.message.role === "toolResult");
+	if (elided?.type !== "message" || elided.message.role !== "toolResult") {
+		throw new Error("the kept tail holds no tool result to elide");
+	}
 	await sleep(50);
 	longest = 0;
 	last = performance.now();
