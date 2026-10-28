@@ -1,20 +1,22 @@
 /**
  * WHY: a Streamable HTTP server binds every request after `initialize` to the session it assigned
- * in `Mcp-Session-Id`, and an operator's configured headers (auth, routing) must reach the server on
+ * in `Mcp-Session-Id`, and the headers configured for a server (auth, routing) must reach it on
  * every request. The transport sends five kinds of request — a JSON-RPC request, a notification,
  * the answer to a server-to-client request, the SSE listener's GET and the closing DELETE — and each
  * once assembled its own headers. A kind that dropped the session id was rejected by the server
- * as sessionless; a kind that dropped the configured headers went out unauthenticated.
+ * as sessionless; a kind that dropped the configured headers went out unauthenticated. A POST
+ * without `Accept: application/json, text/event-stream` is rejected by a spec-following server.
  *
  * The class closed: every request kind carries the configured headers and, once assigned, the
- * session id; POSTs carry the JSON-RPC content headers and a configured header replaces the
- * transport's own; the legacy SSE transport's POSTs carry the configured headers before and after
- * an auth refresh.
+ * session id; every POST, including a direct `callMCP`, carries the JSON-RPC content headers, and a
+ * configured header replaces the transport's own; the legacy SSE transport's POSTs carry the
+ * configured headers before and after an auth refresh.
  *
- * WHAT IT DOES NOT CATCH: a request kind added to either transport is not swept; it joins this
- * table by hand. Header values the server rejects for other reasons are out of scope.
+ * WHAT IT DOES NOT CATCH: a request kind added to a transport is not discovered; each test lists
+ * the kinds it drives. Header values a server rejects for other reasons are out of scope.
  */
 import { afterEach, describe, expect, it } from "bun:test";
+import { callMCP } from "@veyyon/coding-agent/mcp/json-rpc";
 import { HttpTransport } from "@veyyon/coding-agent/mcp/transports/http";
 import { LegacySseTransport } from "@veyyon/coding-agent/mcp/transports/sse";
 
@@ -161,6 +163,27 @@ describe("the legacy HTTP+SSE transport", () => {
 		expect(posts.map(h => [h.get("authorization"), h.get("x-route"), h.get("content-type")])).toEqual([
 			["Bearer stale", "blue", "application/json"],
 			["Bearer fresh", "green", "application/json"],
+		]);
+	});
+});
+
+describe("a direct JSON-RPC call", () => {
+	it("posts the JSON-RPC content headers", async () => {
+		const posts: Headers[] = [];
+		server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				posts.push(req.headers);
+				const body = (await req.json()) as { id: string };
+				return Response.json({ jsonrpc: "2.0", id: body.id, result: { tools: [] } });
+			},
+		});
+
+		const response = await callMCP(`http://127.0.0.1:${server.port}/mcp`, "tools/list");
+
+		expect(response.result).toEqual({ tools: [] });
+		expect(posts.map(h => [h.get("content-type"), h.get("accept")])).toEqual([
+			["application/json", "application/json, text/event-stream"],
 		]);
 	});
 });

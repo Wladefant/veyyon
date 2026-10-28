@@ -7,6 +7,7 @@
 import * as AIError from "@veyyon/ai/error";
 import { isAbortError, logger, readSseJson, Snowflake } from "@veyyon/utils";
 import { isRecord } from "@veyyon/utils/type-guards";
+import { JSON_RPC_POST_HEADERS } from "../json-rpc";
 import { createMCPTimeout, getNeverAbortSignal, isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
 import type {
 	JsonRpcMessage,
@@ -29,12 +30,6 @@ import {
 } from "./transport-failure";
 
 const HTTP_SSE_CONNECT_TIMEOUT_MS = 1_000;
-
-/** The content headers of a JSON-RPC POST, which the server may answer as JSON or as an SSE stream. */
-const JSON_RPC_POST_HEADERS: Readonly<Record<string, string>> = {
-	"Content-Type": "application/json",
-	Accept: "application/json, text/event-stream",
-};
 
 const mcpToolArgsAttemptFactory = Symbol("mcpToolArgsAttemptFactory");
 

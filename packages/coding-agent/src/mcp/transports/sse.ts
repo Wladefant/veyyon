@@ -1,5 +1,6 @@
 import * as AIError from "@veyyon/ai/error";
 import { isAbortError, logger, readSseEvents, Snowflake } from "@veyyon/utils";
+import { JSON_RPC_POST_HEADERS } from "../json-rpc";
 import { createMCPTimeout, getNeverAbortSignal, resolveMCPTimeoutMs } from "../timeout";
 import type {
 	JsonRpcMessage,
@@ -330,11 +331,7 @@ export class LegacySseTransport implements MCPTransport {
 	): Promise<Response> {
 		const endpointUrl = this.#endpointUrl;
 		if (!endpointUrl) throw new Error(mcpNotConnectedMessage({ url: this.#config.url }, "POST"));
-		const postHeaders = (): Record<string, string> => ({
-			"Content-Type": "application/json",
-			Accept: "application/json, text/event-stream",
-			...this.#config.headers,
-		});
+		const postHeaders = (): Record<string, string> => ({ ...JSON_RPC_POST_HEADERS, ...this.#config.headers });
 		let response = await fetch(endpointUrl, {
 			method: "POST",
 			headers: postHeaders(),
