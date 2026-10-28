@@ -5,6 +5,11 @@
 ## [1.6.0] - 2026-10-28
 
 ### Breaking Changes
+- Cursor and GitLab Duo tool results, GitLab Duo goal prompts and the Antigravity and Google Cloud token refreshes each run through one shared implementation; no user-facing change.
+- Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
+- The auth-broker discovery imports the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
+- The OpenAI Responses wire drops its second copy of the six types it shared with the Chat Completions wire and imports the five it uses, the Kimi Code and Synthetic shim builds one set of forwarded options and one stream pipe for both wires, and Cursor's buffered shell output is sent by one function; no user-facing change.
+- The auth gateway's Anthropic Messages, OpenAI Chat, OpenAI Responses and pi-native streaming encoders write through one response body, `gatewayResponseStream` in `@veyyon/ai/auth-gateway/response-stream`, instead of four copies of its abort, cancel and error handling; no user-facing change.
 
 - `@veyyon/ai/auth-gateway/http` no longer exports `json`, `resolvePeer`, `timingSafeEqual` or `isAuthorized`; import them from `@veyyon/ai/auth-gateway` or `@veyyon/ai/utils/http-server`, which also exports `BearerAllowList`.
 - `providers/openai-shared` exports `repairResponsesToolPairs`, which repairs an unpaired tool call and an unpaired tool output in one pass and returns the input itself when every call is paired, in place of `repairOrphanResponsesToolOutputs` and `repairOrphanResponsesToolCalls`; `BuildResponsesInputOptions.repairOrphanOutputs` has no effect, since `buildResponsesInput` repairs every input it builds.

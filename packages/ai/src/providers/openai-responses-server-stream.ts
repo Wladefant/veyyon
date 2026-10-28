@@ -6,6 +6,7 @@
  */
 
 import { errorMessage } from "@veyyon/utils/type-guards";
+import { gatewayResponseStream } from "../auth-gateway/response-stream";
 import type { AuthGatewayParsedRequest, AuthGatewayStreamControl, FrameSink } from "../auth-gateway/types";
 import type { AssistantMessage, AssistantMessageEvent, AssistantMessageEventStream, ToolCall } from "../types";
 import {
@@ -445,47 +446,19 @@ export function encodeStream(
 	_options?: AuthGatewayParsedRequest["options"],
 	control?: AuthGatewayStreamControl,
 ): ReadableStream<Uint8Array> {
-	const encoder = new TextEncoder();
 	const responseId = makeRespId();
-	let cancelled = control?.signal?.aborted === true;
-	const markCancelled = () => {
-		cancelled = true;
-	};
-	control?.signal?.addEventListener("abort", markCancelled, { once: true });
-
-	return new ReadableStream<Uint8Array>({
-		async start(controller) {
-			const sink: FrameSink = {
-				get cancelled() {
-					return cancelled;
-				},
-				enqueue: frame => controller.enqueue(encoder.encode(frame)),
-			};
-			const writer = new ResponsesStreamWriter(sink, responseId, requestedModelId);
-			try {
-				if (cancelled) {
-					controller.close();
-					return;
-				}
+	return gatewayResponseStream(control, out => {
+		const writer = new ResponsesStreamWriter(out, responseId, requestedModelId);
+		return {
+			run: async () => {
 				for await (const ev of events) {
-					if (cancelled) return;
+					if (out.cancelled) return;
 					writer.apply(ev);
 				}
 				await writer.finish(events);
-				controller.close();
-			} catch (err) {
-				if (!cancelled) {
-					writer.fail(err);
-					controller.close();
-				}
-			} finally {
-				control?.signal?.removeEventListener("abort", markCancelled);
-			}
-		},
-		cancel(reason) {
-			cancelled = true;
-			control?.signal?.removeEventListener("abort", markCancelled);
-			control?.onCancel?.(reason);
-		},
+				out.close();
+			},
+			fail: err => writer.fail(err),
+		};
 	});
 }
