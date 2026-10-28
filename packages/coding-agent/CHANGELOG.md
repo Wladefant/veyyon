@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Nested lanes see their delegating ancestors separately from other lanes in IRC and receive their parent identity with the assignment ([Refs #738](https://github.com/Wladefant/veyyon/issues/738)).
 ## [1.6.5] - 2026-10-28
 
 - Spawned agents try configured model candidates in order and stop when no candidate is usable instead of inheriting the parent model ([issue](https://github.com/Wladefant/superboard/issues/1535)).
