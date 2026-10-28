@@ -228,8 +228,17 @@ export class DapClient {
 			() => rejectTimeout(new Error(`${adapter.name} did not connect within ${timeoutMs}ms`)),
 			timeoutMs,
 		);
+		// An adapter that dies before dialing back fails the spawn with its own exit
+		// as soon as the exit lands, instead of waiting out the readiness timeout.
+		const exitedFirst = proc.exited.then(
+			() => Promise.reject(adapterExitedError(proc)),
+			() => Promise.reject(adapterExitedError(proc)),
+		);
+		// The race may settle on the connection; the adapter's later exit is then
+		// the client's to report, not this race's.
+		exitedFirst.catch(() => {});
 		try {
-			const rawSocket = await Promise.race([connPromise, timeoutPromise]);
+			const rawSocket = await Promise.race([connPromise, timeoutPromise, exitedFirst]);
 			const { readable, writeSink, socket } = wrapBunSocket(rawSocket);
 			const client = new DapClient(adapter, cwd, proc, { readable, writeSink, socket });
 			proc.exited.then(() => client.#handleProcessExit());
@@ -451,7 +460,7 @@ export class DapClient {
 		if (!(flushResult instanceof Promise)) return;
 
 		if (this.#adapterExited) {
-			throw this.#exitedError();
+			throw adapterExitedError(this.proc);
 		}
 
 		const { promise: guardPromise, reject: guardReject, resolve: guardResolve } = Promise.withResolvers<void>();
@@ -463,7 +472,7 @@ export class DapClient {
 			WRITE_MESSAGE_TIMEOUT_MS,
 		);
 		const rejectOnExit = () => {
-			guardReject(this.#exitedError());
+			guardReject(adapterExitedError(this.proc));
 		};
 		this.#pendingWriteExitRejectors.add(rejectOnExit);
 
@@ -507,7 +516,7 @@ export class DapClient {
 			reason ??
 				(this.proc.exitCode === null
 					? new Error(`DAP adapter ${this.adapter.name} disposed`)
-					: this.#exitedError()),
+					: adapterExitedError(this.proc)),
 		);
 		try {
 			this.#socket?.end();
@@ -657,26 +666,11 @@ export class DapClient {
 	#handleProcessExit(): void {
 		if (this.#disposed) return;
 		this.#disposed = true;
-		this.#rejectPendingRequests(this.#exitedError());
+		this.#rejectPendingRequests(adapterExitedError(this.proc));
 	}
 
 	/**
-	 * What the adapter's exit says, from the adapter's own stderr. One sentence
-	 * for every route that discovers the exit: the exit handler, and a write that
-	 * hit the closed pipe first.
-	 */
-	#exitedError(): Error {
-		const stderr = this.proc.peekStderr().trim();
-		const exitCode = this.proc.exitCode;
-		return new Error(
-			stderr
-				? `DAP adapter exited (code ${exitCode}): ${stderr}`
-				: `DAP adapter exited unexpectedly (code ${exitCode})`,
-		);
-	}
-
-	/**
-	 * The same sentence, once the exit that closed the pipe has actually landed.
+	 * The {@link adapterExitedError} sentence, once the exit that closed the pipe has landed.
 	 * A write can lose the race with the exit handler by a tick, and reporting
 	 * `code null` with empty stderr would throw away the reason. Bounded, because
 	 * a pipe can also break while the process lives, and then there is nothing to
@@ -695,7 +689,7 @@ export class DapClient {
 		if (this.proc.exitCode === null) {
 			return new Error(`DAP adapter ${this.adapter.name} write failed: ${errorMessage(writeError)}`);
 		}
-		return this.#exitedError();
+		return adapterExitedError(this.proc);
 	}
 
 	#rejectPendingRequests(error: Error): void {
@@ -704,6 +698,21 @@ export class DapClient {
 		}
 		this.#pendingRequests.clear();
 	}
+}
+
+/**
+ * What an adapter's exit says, from the adapter's own stderr. One sentence for
+ * every route that discovers the exit: the exit handler, a write that hit the
+ * closed pipe first, and a socket adapter that died before it was reachable.
+ */
+function adapterExitedError(proc: DapClientState["proc"]): Error {
+	const stderr = proc.peekStderr().trim();
+	const exitCode = proc.exitCode;
+	return new Error(
+		stderr
+			? `DAP adapter exited (code ${exitCode}): ${stderr}`
+			: `DAP adapter exited unexpectedly (code ${exitCode})`,
+	);
 }
 
 async function isUnixSocketReady(socketPath: string): Promise<boolean> {
@@ -715,17 +724,26 @@ async function isUnixSocketReady(socketPath: string): Promise<boolean> {
 	}
 }
 
-/** Poll a condition until it returns true, or timeout/process exit. */
+/**
+ * Poll a condition until it returns true. An adapter that exits first fails the
+ * wait with its own exit, read once `exited` has settled: a failed adapter's
+ * stderr is drained by then. That settle is bounded by `EXIT_REASON_GRACE_MS`.
+ */
 async function waitForCondition(
 	check: () => boolean | Promise<boolean>,
 	timeoutMs: number,
-	proc: { exitCode: number | null },
+	proc: DapClientState["proc"],
 ): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
 		if (await check()) return;
 		if (proc.exitCode !== null) {
-			throw new Error("Adapter process exited before socket was ready");
+			await settleWithin(
+				proc.exited.catch(() => {}),
+				EXIT_REASON_GRACE_MS,
+				undefined,
+			);
+			throw adapterExitedError(proc);
 		}
 		await Bun.sleep(50);
 	}
