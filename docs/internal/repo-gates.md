@@ -8,13 +8,12 @@ taste.
 
 `checks.yml` is the fast gate on every push to `main` and every PR. It runs on GitHub-hosted runners
 and covers workspace type checking and linting, Rust formatting and clippy, secret scanning of the
-commits the change adds, changelog coherence, global-state isolation on changed suites, and the repo
-script gates.
+commits the change adds, changelog coherence, and the repo script gates.
 
 `ci.yml` is the build and runtime gate on `main`, PRs and release dispatches, entirely on
 GitHub-hosted runners (`ubuntu-22.04`, `macos-14`, and the OS matrix — no self-hosted dependency). It
-compiles the product and native addons, runs the full test matrix, and exercises the installers and
-CLI runtime. Dispatched at a `v*` tag it also builds the per-platform binaries, verifies their
+compiles the product and native addons, runs the full test matrix and the global-state isolation
+check of changed suites, and exercises the installers and CLI runtime. Dispatched at a `v*` tag it also builds the per-platform binaries, verifies their
 SHA-256 sidecars and runtime smoke tests, publishes the GitHub release, and redeploys
 `veyyon.dev/changelog`. That is the whole published surface.
 
@@ -28,6 +27,14 @@ every push paid for it twice against a roughly 20-job account ceiling.
 behind an artifact lookup, a toolchain install and a runner queue: a rewrapped doc comment turned
 `main` red about 70 minutes into a run and skipped all seven TypeScript test jobs behind it. Do not
 add a second copy to a native job.
+
+## The leak check of changed suites runs in `ci.yml`
+
+`scripts/test-sandbox/find-test-leaks.ts` needs the native addon, because a suite that cannot load
+gives no leak verdict. In `checks.yml` the job compiled the addon from scratch on every push: run
+40613633477 spent 306 s of the job's 6.3 minutes on that build and one second on the check, the
+longest job in that workflow. In `ci.yml` the `test_leaks` job takes the addon through
+`ts-test-env`, from the run's own build or the cached artifact `native_artifact_lookup` found.
 
 ## A per-push cost must buy a per-push answer
 

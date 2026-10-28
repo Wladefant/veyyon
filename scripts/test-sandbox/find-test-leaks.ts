@@ -268,7 +268,7 @@ if (import.meta.main) {
 
 	// A file that could not RUN has no leak verdict, and the exit code used to call
 	// that clean: a suite with an import error printed "1 failed to run" and exited
-	// 0. Both gates built on this script, checks.yml's per-commit `test-leaks` and the
+	// 0. Both gates built on this script, ci.yml's per-commit `test_leaks` and the
 	// nightly sweep, therefore reported green for a tree where the suites never loaded,
 	// which is precisely the state the sweep exists to notice. `runnerFailed` is
 	// already computed and already printed; the exit code just has to agree.

@@ -470,8 +470,8 @@ export const repoScriptTests = [
 	// this comment: the deleted-suite lock reads the array's string literals from source.
 	"scripts/a-package-script-runs-in-an-existing-directory.test.ts",
 	"scripts/stray-output-path.test.ts",
-	// The leak tracer's own contract tests. Also run by the `test-leaks` job in
-	// checks.yml and by the nightly leak sweep, but listed here too because those jobs
+	// The leak tracer's own contract tests. Also run by the `test_leaks` job in
+	// ci.yml and by the nightly leak sweep, but listed here too because those jobs
 	// gate the TRACER, and this list is what proves no script suite runs nowhere.
 	"scripts/test-sandbox/find-test-leaks.test.ts",
 	// The sandbox driver's own refusal contract: a pinned unavailable rung, no rung

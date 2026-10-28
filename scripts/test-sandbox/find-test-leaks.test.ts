@@ -429,7 +429,7 @@ describe("driving the real runner", () => {
 /**
  * The exit code, which is the only part of this script CI reads.
  *
- * `checks.yml` runs the gate on every commit and `leak-sweep.yml` runs it nightly,
+ * `ci.yml` runs the gate on every commit and `leak-sweep.yml` runs it nightly,
  * and both decide pass or fail from the status alone. It used to return 0 whenever
  * no leak was FOUND, which is not the same as there being none: a file whose import
  * throws never produces a verdict, so a run printed "1 failed to run" and exited

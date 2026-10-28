@@ -469,6 +469,101 @@ jobs:
            if: ${{ !cancelled() }}
            run: bun run ci:test:coding-agent:native
 
+   # A suite that leaves a `VEYYON_*` variable, the working directory, or the active
+   # profile changed makes every file that runs after it order-dependent, and the
+   # failures land in innocent suites: a lingering `VEYYON_NO_TITLE` made three
+   # title-generator suites fail while each passed alone, and two suites exported the
+   # developer's real agent dir to the whole process. `scripts/test-sandbox/find-test-leaks.ts`
+   # runs each file in its own process with a tracer preloaded and diffs the globals.
+   #
+   # Scoped to the test files this push/PR CHANGED, not the whole repo: a full sweep is
+   # one process per file (~1700 files in the coding-agent tree alone) and belongs in a
+   # nightly, while the gate that matters is "the suite you just wrote does not leak".
+   #
+   # The job used to run in checks.yml and compile the native addon there from scratch on
+   # every push: run 40613633477 spent 306 s of the job's 6.3 minutes in that build and one
+   # second leak-checking, and it was the longest job in Checks. Here it takes the addon the
+   # way every test bucket does, from this run's build or the cached artifact the lookup found.
+   #
+   # The ceiling is an hour because one process per file is the cost, and a change that
+   # relocates a directory puts every suite under it in the changed set: a tree-wide move
+   # reached 1504 of 3329 files before a 30-minute ceiling cancelled the job, which reports
+   # nothing about the tree. A pure move is excluded below, so an ordinary push still
+   # answers in a minute or two and the ceiling only ever binds on a restructuring.
+   test_leaks:
+      name: Global-state leaks (changed suites)
+      runs-on: ubuntu-22.04
+      needs: [native_linux_x64, native_artifact_lookup]
+      # A tag push and a dispatch have no changed set: a new ref's `before` is all zeros.
+      if: >-
+         ${{ !cancelled() && needs.native_linux_x64.result != 'failure' &&
+         (github.event_name == 'pull_request' ||
+         (github.event_name == 'push' &&
+         github.event.before != '0000000000000000000000000000000000000000')) }}
+      timeout-minutes: 60
+      steps:
+         - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+           with:
+              # Full history so the base commit below is reachable for the diff.
+              fetch-depth: 0
+         # The shared install composite, not a bare `bun install`, because it also
+         # materializes the gitignored `tool-views.generated.js`. Without it any
+         # changed suite that reaches `src/export/html` dies at module PARSE time
+         # with "Cannot find module", and the tracer reports "loaded, but its own
+         # tests failed (no leak verdict)": the gate goes red naming the suite while
+         # the real cause is a missing build artifact, and it leak-checks nothing.
+         - uses: ./.github/actions/bun-install
+         # The native addon, because suites that touch grep/PTY/hashline need it and a
+         # suite that fails to RUN gives no leak verdict at all; and the sandbox image,
+         # because the tracer spawns one `bun test` per file and those children face the
+         # sandbox gate, so the whole tracer runs inside the boundary.
+         - uses: ./.github/actions/ts-test-env
+           with:
+              native-result: ${{ needs.native_linux_x64.result }}
+              lookup-run-id: ${{ needs.native_artifact_lookup.outputs.linux-x64-run-id }}
+              source-hash: ${{ needs.native_artifact_lookup.outputs.source-hash }}
+              github-token: ${{ secrets.GITHUB_TOKEN }}
+         - name: Tracer self-tests
+           # The tracer's own contract tests, so a broken tracer fails loudly here instead
+           # of silently reporting every changed suite as clean.
+           run: bash scripts/test-sandbox/run.sh bun test scripts/test-sandbox/find-test-leaks.test.ts
+         - name: Leak-check changed test files
+           env:
+              LEAK_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+           run: |
+              set -euo pipefail
+              # `mapfile ... < <(git ...)` reports the exit status of mapfile, never of
+              # the process substitution, so neither `-e` nor `pipefail` sees a failing
+              # git. An unreachable LEAK_BASE then produced an empty array, the gate
+              # printed "No test files changed" and exited 0, and a push whose suites
+              # were never leak-checked reported green. Capture first: a plain
+              # assignment is a status `-e` does see.
+              #
+              # A force-push makes `github.event.before` name a commit that no longer
+              # exists, and the diff then dies with "Invalid symmetric difference
+              # expression" and exit 128 — a red gate that measured nothing and says
+              # nothing about the tree. Rewriting history is legitimate, so fall back
+              # to the parent commit and say which base was used. Never fall back to
+              # "nothing changed": that is the silent green this gate exists to stop.
+              if ! git cat-file -e "${LEAK_BASE}^{commit}" 2>/dev/null; then
+                echo "LEAK_BASE ${LEAK_BASE} is unreachable (history was rewritten); using HEAD~1 instead."
+                LEAK_BASE="$(git rev-parse HEAD~1)"
+              fi
+              echo "Leak base: ${LEAK_BASE}"
+              # `-M100%` pairs only byte-identical moves, and `r` drops those pairs: a suite whose
+              # bytes did not change cannot leak something its old path did not. A move that also
+              # edited the file is not paired at that threshold, so it arrives as an addition and is
+              # still checked.
+              changed_list="$(git diff --name-only --diff-filter=dr -M100% "$LEAK_BASE"...HEAD -- '*.test.ts')"
+              if [ -z "$changed_list" ]; then
+                echo "No test files changed; nothing to leak-check."
+                exit 0
+              fi
+              mapfile -t changed <<<"$changed_list"
+              printf 'Leak-checking %d changed test file(s):\n' "${#changed[@]}"
+              printf '  %s\n' "${changed[@]}"
+              bash scripts/test-sandbox/run.sh bun scripts/test-sandbox/find-test-leaks.ts "${changed[@]}"
+
    test_smoke:
       name: Test CLI smoke (TS)
       runs-on: ubuntu-22.04
