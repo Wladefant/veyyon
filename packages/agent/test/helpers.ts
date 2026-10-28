@@ -2,8 +2,8 @@ import type { AgentMessage } from "@veyyon/agent-core/types";
 import type { AssistantMessage, Message, UserMessage } from "@veyyon/ai";
 import { emptyUsage } from "@veyyon/catalog/models";
 
-export function createUserMessage(text: string): UserMessage {
-	return { role: "user", content: text, timestamp: Date.now() };
+export function createUserMessage(text: string, timestamp = Date.now()): UserMessage {
+	return { role: "user", content: text, timestamp };
 }
 
 export function createAssistantMessage(
@@ -20,6 +20,11 @@ export function createAssistantMessage(
 		stopReason,
 		timestamp: Date.now(),
 	};
+}
+
+/** An assistant message that replies with one text block and stops. */
+export function createAssistantText(text: string): AssistantMessage {
+	return createAssistantMessage([{ type: "text", text }]);
 }
 
 /**

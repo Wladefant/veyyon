@@ -10,6 +10,7 @@ import {
 import type { AssistantMessage, Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { createAssistantMessage, createUserMessage } from "./helpers";
 
 // Pins the fix for the "raw 401 surfaced as Compaction failed:" bug.
 //
@@ -26,26 +27,6 @@ import { getBundledModel } from "@veyyon/catalog/models";
 // `createSummarizationError` helper backs all four summarizer throw
 // sites in `packages/agent/src/compaction/compaction.ts`, so verifying
 // one site is sufficient to lock the contract.
-
-function makeAssistantStop(content: AssistantMessage["content"]): AssistantMessage {
-	return {
-		role: "assistant",
-		content,
-		timestamp: Date.now(),
-		provider: "mock",
-		model: "mock",
-		api: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop",
-	};
-}
 
 function makeAssistantError(errorStatus: number | undefined, errorMessage: string): AssistantMessage {
 	return {
@@ -77,22 +58,18 @@ function getAnthropicModel(): Model {
 
 const handoffMessages: AgentMessage[] = [
 	{ role: "user", content: "begin", timestamp: 1 },
-	makeAssistantStop([{ type: "text", text: "ok" }]),
+	createAssistantMessage([{ type: "text", text: "ok" }]),
 ];
-
-function makeUserMessage(text: string, timestamp = Date.now()): AgentMessage {
-	return { role: "user", content: text, timestamp };
-}
 
 function makePreparation(overrides: Partial<CompactionPreparation> = {}): CompactionPreparation {
 	return {
 		firstKeptEntryId: "kept-1",
 		messagesToSummarize: [
-			makeUserMessage("history msg"),
-			makeAssistantStop([{ type: "text", text: "history reply" }]),
+			createUserMessage("history msg"),
+			createAssistantMessage([{ type: "text", text: "history reply" }]),
 		],
-		turnPrefixMessages: [makeUserMessage("turn prefix msg")],
-		recentMessages: [makeUserMessage("recent msg")],
+		turnPrefixMessages: [createUserMessage("turn prefix msg")],
+		recentMessages: [createUserMessage("recent msg")],
 		isSplitTurn: true,
 		tokensBefore: 12_345,
 		fileOps: createFileOps(),

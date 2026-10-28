@@ -12,26 +12,7 @@ import * as ai from "@veyyon/ai";
 import { z } from "@veyyon/ai";
 import { Effort } from "@veyyon/catalog/effort";
 import { getBundledModel } from "@veyyon/catalog/models";
-
-function createAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
-	return {
-		role: "assistant",
-		content,
-		timestamp: Date.now(),
-		provider: "mock",
-		model: "mock",
-		api: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop",
-	};
-}
+import { createAssistantMessage } from "./helpers";
 
 function createAssistantError(errorStatus: number, errorMessage: string): AssistantMessage {
 	return {

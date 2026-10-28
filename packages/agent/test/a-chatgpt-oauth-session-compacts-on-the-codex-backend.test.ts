@@ -48,7 +48,6 @@
  * one assertion until this file is green.
  */
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import type { AgentMessage } from "@veyyon/agent-core";
 import {
 	type CompactionPreparation,
 	compactWithProvider,
@@ -62,6 +61,7 @@ import { buildOpenAIResponsesCompat } from "@veyyon/catalog/compat/openai";
 import { getBundledModel } from "@veyyon/catalog/models";
 import type { ResolvedOpenAIResponsesCompat } from "@veyyon/catalog/types";
 import { OPENAI_HEADERS } from "@veyyon/catalog/wire/codex";
+import { createUserMessage } from "./helpers";
 
 /** The route the host serves compaction on: the ordinary turn route. */
 // A compaction rides a live conversation, so the transport requires the session
@@ -97,10 +97,6 @@ function makeAssistantStop(text: string): AssistantMessage {
 	};
 }
 
-function makeUserMessage(text: string, timestamp = Date.now()): AgentMessage {
-	return { role: "user", content: text, timestamp };
-}
-
 function codexModel(): Model {
 	const model = getBundledModel("openai-codex", "gpt-5.1-codex");
 	if (!model) throw new Error("Expected built-in openai-codex/gpt-5.1-codex to exist");
@@ -110,9 +106,9 @@ function codexModel(): Model {
 function makePreparation(): CompactionPreparation {
 	return {
 		firstKeptEntryId: "kept-1",
-		messagesToSummarize: [makeUserMessage("history msg"), makeAssistantStop("history reply")],
+		messagesToSummarize: [createUserMessage("history msg"), makeAssistantStop("history reply")],
 		turnPrefixMessages: [],
-		recentMessages: [makeUserMessage("recent msg")],
+		recentMessages: [createUserMessage("recent msg")],
 		isSplitTurn: false,
 		tokensBefore: 221_568,
 		fileOps: createFileOps(),
