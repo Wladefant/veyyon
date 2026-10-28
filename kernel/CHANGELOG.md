@@ -7,6 +7,10 @@
 ### Added
 
 - `SessionManager.sync()` fsyncs file-backed session writes before callers acknowledge durable receipts, and `YieldQueue` retains notices when prompt injection fails ([#592](https://github.com/Wladefant/veyyon/issues/592)).
+### Fixed
+
+- Terminal ownership checks now refuse a terminal record other local users can read or write, failing closed instead of parsing it.
+
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.
