@@ -21,6 +21,7 @@
 - A `-p` or `--mode json` run starts background model discovery once its first response starts streaming instead of when its session is created, which sends the first request about 33 ms sooner and cut a run against a provider that answers in 300 ms and streams for 150 ms from 580.8 ms to 560.0 ms (median of 15).
 - A launch with no llama.cpp server running no longer rewrites the llama.cpp model-cache row and syncs `models.db` four times, which cut a print run against a provider that answers in 300 ms and streams for 150 ms from 558.3 ms to 553.9 ms (median of 15).
 - `read` and the CLI `@` attachment import the entry-kind phrase from `@veyyon/utils/fs-error`, which adds no module to any import graph; no user-facing change.
+- The config-root, global-config and path-comparison helpers are imported from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
 - The provider-refusal check and the Mnemopi per-bank target dedupe each have one definition; no user-facing change.
 - `/todo` with an unknown verb in the TUI lists the accepted verbs, the message ACP shows, instead of the full usage.
 - `veyyon ttsr scan` compiles rule conditions, globs and scopes with the functions a session uses instead of a copy of them; no user-facing change.
@@ -62,10 +63,12 @@
 - How a custom message reaches the conversation, queued, held for the next turn, run as a turn or appended, and the custom-message prompt with its keyword notices moved out of the session class into the `CustomMessages` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
 - Cursor and GitLab Duo tool results, GitLab Duo goal prompts and the Antigravity and Google Cloud token refreshes each run through one shared implementation; no user-facing change.
+- The auth-broker discovery imports the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
 - The models.dev overlay keeps only the providers a catalog descriptor maps, in memory and in `models-dev.json`, so a model refresh parses 2.26 MB instead of 5.96 MB and a cached whole file is rewritten in cut form at its next renewal.
 - `writeModelCache` takes `{ skipUnchanged }`, and a model manager created with `failureRestartsBackoff: false` rewrites a cache row after a failed dynamic fetch only when the row's content changes.
 - `check:types` covers `bench/` and `scripts/`, and the recovery session-chain bench writes `SWAP` hunks, so it runs again; no user-facing change.
 - The `SideCompleteImpl` documentation names `ProviderTransport.sideComplete` as the transport the session's own side requests run on ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The machine budget and the settings store import the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
 - The shell's built-in output filters compile their output-stage regular expressions the first time each filter applies instead of when the registry loads; a filter file loaded from config still rejects a bad regular expression at load.
 - `check:types` covers `bench/` and `scripts/`, and `bench/_key-samples.ts` types its expected key ids as `KeyId`; no user-facing change.
 - An `Editor` asks its autocomplete provider again on the edit that changes an open suggestion list instead of 100 ms later, so typing `/mo` narrows the slash command list in 3 ms instead of 105 ms and an `@` file list follows each keystroke one frame later instead of after the timer.
@@ -75,6 +78,7 @@
 - `sgrEnd` is exported from `@veyyon/utils/ansi` and is the single definition `wrap` and `width` use; no user-facing change.
 - `privateTempDirName(uid)` in `@veyyon/utils/app-identity` is the single definition of the `veyyon-<uid>` name `privateTempDir()` creates; no user-facing change.
 - A subcommand's unknown flag is reported as `Unknown flag: --jsno` followed by the declared flag it resembles (``Did you mean `--json`?``), instead of node:util's advice about positionals that start with `-`.
+- The config root, the global `config.yml` reader and its writer moved out of `@veyyon/utils/dirs` into `@veyyon/utils/config-root`, `@veyyon/utils/global-config` and `@veyyon/utils/global-config-write`, the path-comparison helpers into `@veyyon/utils/path` and `pickProcessEnv` into `@veyyon/utils/dir-env-keys`; the `@veyyon/utils` entry point exports every moved name, and a deep import of one from `@veyyon/utils/dirs` imports it from its new module instead.
 
 ### Removed
 
