@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [1.6.4] - 2026-10-28
+
+### Fixed
+
+- Fixed the Windows binary exiting a few seconds after startup with `The owner-only Windows ACL operation failed (... SeSecurityPrivilege ...)` once its terminal ownership directory had been protected by an earlier launch.
+
+## [1.6.3] - 2026-10-28
+
+### Fixed
+
+- Fixed the installed binary exiting at startup with `Cannot find module './file-lock'` when it opened `agent.db` ([#733](https://github.com/Wladefant/veyyon/pull/733)).
+
+## [1.6.2] - 2026-10-28
+
+### Added
+
+- Added `tools.maxDiscoveredTools` (default 40), which caps active discovered tools and evicts the least recently used ([Refs #685](https://github.com/Wladefant/veyyon/issues/685)).
+
 ### Changed
 
 - Release preparation can defer local checks for a remote CI gate; the normal release command still runs checks ([#728](https://github.com/Wladefant/veyyon/issues/728)).
@@ -9,9 +27,11 @@
 
 ### Fixed
 
+- The root-changelog uniqueness check now applies per release; no user-facing change.
 - Deduplicate terminal deliveries by message id, retain accepted outcomes across daemon reconnects, replay missed events by subscriber cursor, and provide streaming snapshots to reconnecting subscribers ([#705](https://github.com/Wladefant/veyyon/issues/705)).
 - Spawned agents try configured model candidates in order and stop when no candidate is usable instead of inheriting the parent model ([issue](https://github.com/Wladefant/superboard/issues/1535)).
 - Spawn chains retain supported OpenRouter route-suffixed and Bedrock inference-profile selectors without admitting unavailable providers ([issue](https://github.com/Wladefant/superboard/issues/1536)).
+- Compaction unloads discovered tools the retained transcript did not use, and automatic compaction stops looping when fixed context stays over the threshold ([Refs #685](https://github.com/Wladefant/veyyon/issues/685)).
 
 ## [1.6.1] - 2026-10-28
 
@@ -24,6 +44,9 @@
 ### Added
 
 - Added owner-local terminal-control credential rotation without restarting the terminal or active turn.
+
+### Fixed
+
 - Complete opt-in draft MCP Events polling, push streams, and verified webhook subscription lifecycles ([Refs Wladefant/veyyon#592](https://github.com/Wladefant/veyyon/issues/592)).
 - Route configured per-server MCP Events notices as untrusted data to the owning session ([Refs Wladefant/veyyon#592](https://github.com/Wladefant/veyyon/issues/592)).
 - Discover project skills from repository directories (.agents/skills, .github/skills, .claude/skills) with whole-folder trust verification ([Refs #469](https://github.com/Wladefant/veyyon/issues/469)).
@@ -39,56 +62,13 @@
 - A composer prediction ends with a dim `· tab to accept` hint showing the configured Tab key; the hint leaves with the suggestion when you type or press Tab, and a row too narrow for both drops the hint before it hides the suggestion.
 - `read` refuses a re-read whose every displayed row is still shown byte for byte under the same header by an earlier read result in context, returning a one-line pointer to that output instead of the content; no argument overrides the refusal, a pruned, shaken or compacted earlier result no longer counts, and no read is refused while an extension handles the `context` event.
 - The account card's signed-out login note offers `f` to forget it, which stops the card and `/account` from reporting a login you do not intend to sign back in.
-
-### Changed
-
-- `/reload-config` and `/reload` re-read rule layers and skills without restarting the session. The summary lists added, changed, and removed paths. Unreadable files keep the last good snapshot, and unchanged rules keep the existing advisor ([issue](https://github.com/Wladefant/veyyon/issues/577)).
-- Extension navigation no longer uses an origin allowlist. HTTP and HTTPS origins pass without configuration. The separate production-host refusal remains.
-- A provider request carries a payload hook only while an extension handles `before_provider_request`, so a session with no such handler skips cloning and re-serializing every request body, which cut request building on a 300-turn transcript from 0.90 ms to 0.26 ms per request.
-- The lexical bracket scan behind `read` windows and edit previews, used for a source tree-sitter cannot parse, dispatches on character codes, skips a block comment with one search and scans each mode in its own function in `utils/block-context.ts`, so a lookup on a 9,815-line TypeScript file with a syntax error takes 0.85 ms instead of 7.74 ms, and on a 4,083-line `.txt` file 1.20 ms instead of 12.70 ms (median of 15 alternating rounds of 40 lookups); every boundary line is unchanged.
-- The status line fits its footline in one `QuietRowFit` pass in `status-line/quiet-row.ts` that keeps each half's joined text and width instead of re-joining the halves after every shed, so composing a default footline takes 999 ns instead of 1,454 ns at 160 columns and 9.46 µs instead of 12.15 µs at 60 columns, where it sheds zones (median of nine rounds of 20,000 calls); the drawn row is unchanged.
-- `StatusLineComponent` builds a frame's segment context through `#locationContext`, `#gitFacts` and `contextGaugeReadings`, and `renderLocation` and the `model` segment build their text in per-step functions; the drawn row and the git lookups it starts are unchanged.
-- The launch-facts recorder compares a recorded entry field by field instead of serializing both copies, so a status-row redraw that changes no recorded fact files in 338 ns instead of 1,119 ns, and a `git status` that finds the recorded tree in 528 ns instead of 1,313 ns (median of seven alternating processes of 450,000 calls).
-- The end-of-turn context check moved out of `AgentSession` into the `TurnContextCheck` session collaborator, and the starting service tier into session startup; no user-facing change.
-- The `composer.predictions.mode` row in `/settings` is named "Suggest Next Message" instead of repeating its "Composer Predictions" heading.
-- The retry ladder decides each attempt through `#parkUsageLimit`, `#switchModel` and `#closeUnrecoverable` in `session/runtime/retry-runtime.ts`; every retry, model or credential switch, wait and event is unchanged.
-- The settled edit card parses a hashline payload for its file only when neither the call nor the result names one, so re-rendering the card of a 2,000-line hashline edit takes 0.95 µs instead of 274 µs (median of seven rounds of 2,000 renders), and the call, result and multi-file cards are built in per-step functions in `edit/edit-view.ts`; every card is unchanged.
-- The `/models` hub maps a Roles-view key to its command through `rolesCommandFor`, routes each pointer report through its own wheel, motion and click step, and draws Roles-view and sidebar rows in per-row functions in `modes/terminal/components/selectors/model-hub.ts`; every frame, key and pointer action is unchanged.
-- The extension loader resolves each import of an extension's module graph through `graphSpecifiers`, `resolveGraphEdge` and `resolveBareDependencyEntry` in `extensibility/plugins/legacy-pi-compat.ts`; every module it hooks and every native-addon loader it rewrites is unchanged.
-- The `lsp` tool's `rename_file` action resolves its target, asks each server, merges their edits, applies them and notifies the servers in per-step functions in `lsp/index.ts`; every preview, applied edit, discarded overlap and notification is unchanged.
-- The patch parser reads each hunk in place instead of copying the rest of the diff for every hunk and every `@@` line, so a 400-hunk patch parses in 0.71 ms instead of 1.78 ms (median of three runs of 15 alternating rounds), and it reads a hunk's header, nested `@@` markers and body in per-step functions in `edit/diff.ts`; every parsed hunk and every parse error is unchanged.
-- The PDF converter reads a page's content stream through `skipStringLiteral`, `tokenEnd` and `skipInlineImageData` in `export/markit/converters/pdf/extract.ts`; the tokens of every stream that does not end in `<` are unchanged.
-- The PPTX converter reads its slide order, each slide and each slide's pictures and notes in per-step functions in `export/markit/converters/pptx.ts`, and the PPTX and XLSX converters read a part's relationships through `readPartRelationships` in `export/markit/converters/opc-relationships.ts`; a deck or workbook whose parts sit at their conventional names converts to the same markdown.
-- `readPartRelationships` resolves a root-level part's targets with the package root as their base without a separate root case; converted output is unchanged.
-- The `launch` result card reads each op's rows, the `logs` frame and the collapse cap in per-step functions in `tools/shell/launch-view.ts`, and a pty-backed `logs` card no longer scans the text it does not show, so a 1 MiB log renders in 0.0014 ms instead of 0.54 ms (median of 200 alternating rounds); every card is unchanged.
-- The emoji, GitHub reference, internal URL and prompt-action autocomplete providers declare their results as `AutocompleteSuggestions`; no user-visible change.
-- The `tools.intentTracing` entry in `system-prompt-builder/gate-registry.ts` states the `resolveIntentField` resolver `createAgentSession` passes to the agent; no user-visible change.
-- The RPC server answers each command through its own entry of `RPC_COMMAND_HANDLERS` in `modes/rpc/rpc-commands.ts`, and builds its extension UI context in `modes/rpc/rpc-ui-context.ts`; every response is unchanged.
-- RPC `set_host_tools` checks that a host tool's `parameters` is an object through `isRecord` from `@veyyon/utils`; the accepted and rejected definitions are unchanged.
-- The `task` tool schedules its spawns through `SpawnScheduler` in `task/spawn-scheduler.ts`, runs each spawn through `task/spawn-run.ts` and builds its spawn advisories in `task/spawn-advisory.ts`; every result is unchanged.
-- The `task` tool validates a batch call and builds its approval lines in per-shape functions, `SpawnScheduler` admits a background spawn in its own step, and `executeBash` releases a stopped run and annotates an interrupted one in their own functions; every result is unchanged.
-- The collab guest's ask dialog loop is split into one method per question kind and one per guest pick in `extension-ui-controller.ts`; no user-visible change.
-- `executeBash` plans the command, joins the CPU budget, leases the persistent shell, arms the abort and deadline, and settles the result in single-purpose steps instead of one 270-line function; a builtin command runs in 0.08 ms and a 20,000-line `seq` in 0.9 ms per call, unchanged.
-- The task card appends every agent, review, finding and nested-call row into one list instead of building and spreading a list per section; its rows are unchanged across a 6,000-card corpus, and drawing that corpus takes 1115 ms instead of 1305 ms.
-- A streamed delta sets the working message once, from the last tool call that states an intent, instead of once per call, and asks no earlier call's tool to derive an intent, so 4,000 deltas over six tool calls set it 340 times instead of 24,000 and a message update takes 4.5 µs instead of 5.3 µs (median of seven).
-- The terminal event controller starts a message, ends a message, settles a tool result and ends a retry in single-purpose steps, and a user message's local-echo signature is defined once in `transcript-composer.ts`; the transcript is unchanged.
-- `/usage` groups reports by provider, lists saved resets, collects limit rows and draws each row in single-purpose functions instead of one 180-line function; its output is unchanged across a 20,000-case corpus.
-- `/session` builds its provider, message, token, cost, language-server and MCP sections in single-purpose functions; its output is unchanged across a 20,000-case corpus.
-- `/share` runs the custom share script and the default share in separate steps, `/memory` runs each subcommand in its own method, `/move` checks and creates its target in one step, and `/compact` merges its instructions and mode in one function; no user-visible change.
-- `/mcp` runs its Smithery search, deploy and login steps from `mcp-smithery-commands.ts`, its OAuth login and reauthorization from `mcp-oauth-login.ts`, its list, resource, prompt and notification reports from `mcp-server-reports.ts` and its messages from `mcp-command-output.ts`, and `MCPOAuthFlow.storedCredential` builds the credential row a login stores; its output is unchanged across a 20,000-case corpus.
-- The composer's Esc handling, submission, `/queue` dispatch, follow-up and image-path paste run in single-purpose methods, its key listeners install once per editor, and the tiny-title download row is defined in `tiny-title-download-row.ts`; no user-visible change.
-- A session switch or reload captures its rollback, enters the target transcript, loads it and rolls back a failure in single-purpose steps instead of one 269-line method, and reads the branch once to restore the thinking selector and service tier; behavior is unchanged across 11,160 generated switch and injected-fault cases.
-- The end-of-turn context check recovers an overflow, retries an overflow stamped with the pre-promotion model, recovers a length stop and runs threshold maintenance in separate methods instead of one 231-line method; no user-visible change.
-
-### Fixed
-
 - MCP push event streams now skip a frame with an invalid or mismatched occurrence and advance past its cursor instead of cancelling and replaying the same frame forever ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
 - Restored launch request replay, idle socket cleanup, recovery quarantine, and file-search test injection after upstream conflict resolution.
 - Tool admission on a synchronized cloud session ends the run when write authority is lost, instead of letting the model re-sample against the fence; every admission throw, including a transient `assertWritable` failure, now ends the run (fail closed) ([Refs #715](https://github.com/Wladefant/veyyon/issues/715)).
 - Plan mode stays on, with its plan tools and plan model, when restoring the pre-plan model or tools fails during exit.
 - Migrated tests off the removed model-roles settings API to `defaultModel` and `agent.helpers`, deleted the role-table tests whose contract no longer exists, and moved fetch-timeout to `withScopedTimeoutSignal` ([Refs #707](https://github.com/Wladefant/veyyon/issues/707)).
 - `/reload-config` reloads advisor models from `agent.helpers` without rebinding Main or existing workers.
-- `/reload-config` also applies the compaction settings; every other setting outside spawn routing still requires a restart ([Refs #685](https://github.com/Wladefant/veyyon/issues/685)).
+- `/reload-config` also applies the compaction settings and `tools.maxDiscoveredTools`; every other setting outside spawn routing still requires a restart ([Refs #685](https://github.com/Wladefant/veyyon/issues/685)).
 - Shell and Python/JS eval withhold recognizable credential records before live output and backing artifacts, and redact known secret values ([issue](https://github.com/Wladefant/veyyon/issues/682)).
 - Python eval refuses Windows signal-zero process probes and checks KV lock owners through non-signaling process handles ([issue](https://github.com/Wladefant/veyyon/issues/73)).
 - Task and qa-verifier spawns preserve configured model priority instead of reordering Luna and Flash by spawn identity ([Refs #692](https://github.com/Wladefant/veyyon/issues/692)).
@@ -151,6 +131,46 @@
 - A bash command whose caller cancels while the call joins the session CPU budget returns as cancelled without running, instead of running to completion and reporting success.
 - A `/queue` or `=>` line submitted with Enter whose first message fails to send comes back to the editor as the `=>` queue it was, with its pending images and their links, instead of leaving the editor empty.
 - `veyyon commit` edits a changelog's Unreleased section line by line, so adding or deleting an entry keeps the section's prose, categories outside Keep a Changelog, wrapped and nested entries and the file's final newline instead of dropping them, a `### toString` heading no longer stops the changelog from being read, an entry differing from a proposed one only in case, spacing or a trailing period counts as the same entry for duplicates and deletions, and a changelog the proposal leaves unchanged is no longer rewritten, staged or reported as updated.
+
+### Changed
+
+- `/reload-config` and `/reload` re-read rule layers and skills without restarting the session. The summary lists added, changed, and removed paths. Unreadable files keep the last good snapshot, and unchanged rules keep the existing advisor ([issue](https://github.com/Wladefant/veyyon/issues/577)).
+- Extension navigation no longer uses an origin allowlist. HTTP and HTTPS origins pass without configuration. The separate production-host refusal remains.
+- A provider request carries a payload hook only while an extension handles `before_provider_request`, so a session with no such handler skips cloning and re-serializing every request body, which cut request building on a 300-turn transcript from 0.90 ms to 0.26 ms per request.
+- The lexical bracket scan behind `read` windows and edit previews, used for a source tree-sitter cannot parse, dispatches on character codes, skips a block comment with one search and scans each mode in its own function in `utils/block-context.ts`, so a lookup on a 9,815-line TypeScript file with a syntax error takes 0.85 ms instead of 7.74 ms, and on a 4,083-line `.txt` file 1.20 ms instead of 12.70 ms (median of 15 alternating rounds of 40 lookups); every boundary line is unchanged.
+- The status line fits its footline in one `QuietRowFit` pass in `status-line/quiet-row.ts` that keeps each half's joined text and width instead of re-joining the halves after every shed, so composing a default footline takes 999 ns instead of 1,454 ns at 160 columns and 9.46 µs instead of 12.15 µs at 60 columns, where it sheds zones (median of nine rounds of 20,000 calls); the drawn row is unchanged.
+- `StatusLineComponent` builds a frame's segment context through `#locationContext`, `#gitFacts` and `contextGaugeReadings`, and `renderLocation` and the `model` segment build their text in per-step functions; the drawn row and the git lookups it starts are unchanged.
+- The launch-facts recorder compares a recorded entry field by field instead of serializing both copies, so a status-row redraw that changes no recorded fact files in 338 ns instead of 1,119 ns, and a `git status` that finds the recorded tree in 528 ns instead of 1,313 ns (median of seven alternating processes of 450,000 calls).
+- The end-of-turn context check moved out of `AgentSession` into the `TurnContextCheck` session collaborator, and the starting service tier into session startup; no user-facing change.
+- The `composer.predictions.mode` row in `/settings` is named "Suggest Next Message" instead of repeating its "Composer Predictions" heading.
+- The retry ladder decides each attempt through `#parkUsageLimit`, `#switchModel` and `#closeUnrecoverable` in `session/runtime/retry-runtime.ts`; every retry, model or credential switch, wait and event is unchanged.
+- The settled edit card parses a hashline payload for its file only when neither the call nor the result names one, so re-rendering the card of a 2,000-line hashline edit takes 0.95 µs instead of 274 µs (median of seven rounds of 2,000 renders), and the call, result and multi-file cards are built in per-step functions in `edit/edit-view.ts`; every card is unchanged.
+- The `/models` hub maps a Roles-view key to its command through `rolesCommandFor`, routes each pointer report through its own wheel, motion and click step, and draws Roles-view and sidebar rows in per-row functions in `modes/terminal/components/selectors/model-hub.ts`; every frame, key and pointer action is unchanged.
+- The extension loader resolves each import of an extension's module graph through `graphSpecifiers`, `resolveGraphEdge` and `resolveBareDependencyEntry` in `extensibility/plugins/legacy-pi-compat.ts`; every module it hooks and every native-addon loader it rewrites is unchanged.
+- The `lsp` tool's `rename_file` action resolves its target, asks each server, merges their edits, applies them and notifies the servers in per-step functions in `lsp/index.ts`; every preview, applied edit, discarded overlap and notification is unchanged.
+- The patch parser reads each hunk in place instead of copying the rest of the diff for every hunk and every `@@` line, so a 400-hunk patch parses in 0.71 ms instead of 1.78 ms (median of three runs of 15 alternating rounds), and it reads a hunk's header, nested `@@` markers and body in per-step functions in `edit/diff.ts`; every parsed hunk and every parse error is unchanged.
+- The PDF converter reads a page's content stream through `skipStringLiteral`, `tokenEnd` and `skipInlineImageData` in `export/markit/converters/pdf/extract.ts`; the tokens of every stream that does not end in `<` are unchanged.
+- The PPTX converter reads its slide order, each slide and each slide's pictures and notes in per-step functions in `export/markit/converters/pptx.ts`, and the PPTX and XLSX converters read a part's relationships through `readPartRelationships` in `export/markit/converters/opc-relationships.ts`; a deck or workbook whose parts sit at their conventional names converts to the same markdown.
+- `readPartRelationships` resolves a root-level part's targets with the package root as their base without a separate root case; converted output is unchanged.
+- The `launch` result card reads each op's rows, the `logs` frame and the collapse cap in per-step functions in `tools/shell/launch-view.ts`, and a pty-backed `logs` card no longer scans the text it does not show, so a 1 MiB log renders in 0.0014 ms instead of 0.54 ms (median of 200 alternating rounds); every card is unchanged.
+- The emoji, GitHub reference, internal URL and prompt-action autocomplete providers declare their results as `AutocompleteSuggestions`; no user-visible change.
+- The `tools.intentTracing` entry in `system-prompt-builder/gate-registry.ts` states the `resolveIntentField` resolver `createAgentSession` passes to the agent; no user-visible change.
+- The RPC server answers each command through its own entry of `RPC_COMMAND_HANDLERS` in `modes/rpc/rpc-commands.ts`, and builds its extension UI context in `modes/rpc/rpc-ui-context.ts`; every response is unchanged.
+- RPC `set_host_tools` checks that a host tool's `parameters` is an object through `isRecord` from `@veyyon/utils`; the accepted and rejected definitions are unchanged.
+- The `task` tool schedules its spawns through `SpawnScheduler` in `task/spawn-scheduler.ts`, runs each spawn through `task/spawn-run.ts` and builds its spawn advisories in `task/spawn-advisory.ts`; every result is unchanged.
+- The `task` tool validates a batch call and builds its approval lines in per-shape functions, `SpawnScheduler` admits a background spawn in its own step, and `executeBash` releases a stopped run and annotates an interrupted one in their own functions; every result is unchanged.
+- The collab guest's ask dialog loop is split into one method per question kind and one per guest pick in `extension-ui-controller.ts`; no user-visible change.
+- `executeBash` plans the command, joins the CPU budget, leases the persistent shell, arms the abort and deadline, and settles the result in single-purpose steps instead of one 270-line function; a builtin command runs in 0.08 ms and a 20,000-line `seq` in 0.9 ms per call, unchanged.
+- The task card appends every agent, review, finding and nested-call row into one list instead of building and spreading a list per section; its rows are unchanged across a 6,000-card corpus, and drawing that corpus takes 1115 ms instead of 1305 ms.
+- A streamed delta sets the working message once, from the last tool call that states an intent, instead of once per call, and asks no earlier call's tool to derive an intent, so 4,000 deltas over six tool calls set it 340 times instead of 24,000 and a message update takes 4.5 µs instead of 5.3 µs (median of seven).
+- The terminal event controller starts a message, ends a message, settles a tool result and ends a retry in single-purpose steps, and a user message's local-echo signature is defined once in `transcript-composer.ts`; the transcript is unchanged.
+- `/usage` groups reports by provider, lists saved resets, collects limit rows and draws each row in single-purpose functions instead of one 180-line function; its output is unchanged across a 20,000-case corpus.
+- `/session` builds its provider, message, token, cost, language-server and MCP sections in single-purpose functions; its output is unchanged across a 20,000-case corpus.
+- `/share` runs the custom share script and the default share in separate steps, `/memory` runs each subcommand in its own method, `/move` checks and creates its target in one step, and `/compact` merges its instructions and mode in one function; no user-visible change.
+- `/mcp` runs its Smithery search, deploy and login steps from `mcp-smithery-commands.ts`, its OAuth login and reauthorization from `mcp-oauth-login.ts`, its list, resource, prompt and notification reports from `mcp-server-reports.ts` and its messages from `mcp-command-output.ts`, and `MCPOAuthFlow.storedCredential` builds the credential row a login stores; its output is unchanged across a 20,000-case corpus.
+- The composer's Esc handling, submission, `/queue` dispatch, follow-up and image-path paste run in single-purpose methods, its key listeners install once per editor, and the tiny-title download row is defined in `tiny-title-download-row.ts`; no user-visible change.
+- A session switch or reload captures its rollback, enters the target transcript, loads it and rolls back a failure in single-purpose steps instead of one 269-line method, and reads the branch once to restore the thinking selector and service tier; behavior is unchanged across 11,160 generated switch and injected-fault cases.
+- The end-of-turn context check recovers an overflow, retries an overflow stamped with the pre-promotion model, recovers a length stop and runs threshold maintenance in separate methods instead of one 231-line method; no user-visible change.
 
 ### Removed
 

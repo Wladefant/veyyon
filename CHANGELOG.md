@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [1.6.4] - 2026-10-28
+
+### Fixed
+
+- Fixed the Windows binary exiting a few seconds after startup with `The owner-only Windows ACL operation failed (... SeSecurityPrivilege ...)` once its terminal ownership directory had been protected by an earlier launch.
+- Fixed `applyOwnerOnlyWindowsAcl` failing with `SeSecurityPrivilege` when it re-applied the owner-only ACL to an already protected path, which ended every Windows launch after the first.
+
+## [1.6.3] - 2026-10-28
+
+### Fixed
+
+- Fixed the installed binary exiting at startup with `Cannot find module './file-lock'` when it opened `agent.db` ([#733](https://github.com/Wladefant/veyyon/pull/733)).
+- Fixed the compiled binary failing at startup with `Cannot find module './file-lock'` when opening `agent.db`: SQLite store helpers now load their lazy dependencies through the bundled `require`.
+
+## [1.6.2] - 2026-10-28
+
+### Added
+
+- Added `tools.maxDiscoveredTools` (default 40), which caps active discovered tools and evicts the least recently used ([Refs #685](https://github.com/Wladefant/veyyon/issues/685)).
+
 ### Changed
 
 - Release preparation can defer local checks for a remote CI gate; the normal release command still runs checks ([#728](https://github.com/Wladefant/veyyon/issues/728)).
@@ -11,7 +31,9 @@
 
 ### Fixed
 
+- The root-changelog uniqueness check now applies per release; no user-facing change.
 - Deduplicate terminal deliveries by message id, retain accepted outcomes across daemon reconnects, replay missed events by subscriber cursor, and provide streaming snapshots to reconnecting subscribers ([#705](https://github.com/Wladefant/veyyon/issues/705)).
+- Compaction unloads discovered tools the retained transcript did not use, and automatic compaction stops looping when fixed context stays over the threshold ([Refs #685](https://github.com/Wladefant/veyyon/issues/685)).
 
 ## [1.6.1] - 2026-10-28
 
@@ -30,21 +52,6 @@
 ### Added
 
 - Added owner-local terminal-control credential rotation without restarting the terminal or active turn.
-- Complete opt-in draft MCP Events polling, push streams, and verified webhook subscription lifecycles ([Refs Wladefant/veyyon#592](https://github.com/Wladefant/veyyon/issues/592)).
-- Route configured per-server MCP Events notices as untrusted data to the owning session ([Refs Wladefant/veyyon#592](https://github.com/Wladefant/veyyon/issues/592)).
-- Discover project skills from repository directories (.agents/skills, .github/skills, .claude/skills) with whole-folder trust verification ([Refs #469](https://github.com/Wladefant/veyyon/issues/469)).
-- Optional encrypted cloud checkpoints preserve native journals, artifacts, blobs, dirty files and version pins. The default-off client supports restore and explicit forks. Durable Object epochs fence synchronized prompt and tool admission. The existing `sessions` command alias remains available ([issue](https://github.com/Wladefant/veyyon/issues/567)).
-- Auth gateway accepts a server-only live device token map with `--device-tokens-file`. PC2 uses existing `pi-native` transport with a device bearer instead of provider credentials ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
-- `deepseek` is a `web_search` provider and a `fetch` reader backend. Both use the `DEEPSEEK_API_KEY` that the DeepSeek model provider already reads, so a machine with a DeepSeek key searches and reads pages with no second credential.
-- Browser tab inventory lists only relay-controlled tabs, and approved close IDs apply only to ownerless relay-controlled tabs; lane-owned tabs remain protected ([Refs](https://github.com/Wladefant/veyyon/issues/538)).
-- Terminal provider HTTP 429 and 402 lane errors notify `model_routing.py record-error` without waiting. The reporter uses a hidden child, a 10-second timeout and payload-free failure logs ([Refs](https://github.com/Wladefant/superboard/issues/451)).
-- `irc` sends a durable notice to another session with `to: "session:<id>"` or `to: "session:all"`. A session reads its notices at the start of each prompt and at step boundaries, shows them to the model and forwards them to its running lanes, so a warning survives a dropped terminal pipe and reaches the lanes ([Refs](https://github.com/Wladefant/veyyon/issues/537)).
-- A delivered cross-session notice carries a header with the sender, the send and delivery times (Europe/Berlin and UTC) and the delay when it is late. A notice older than 2 hours (`ttlMinutes` on the send sets another limit) is not injected; the sender gets a "Not delivered" notice ([Refs](https://github.com/Wladefant/veyyon/pull/539)).
-- Topic replenishment pauses producer dispatch while downstream verification is blocked and resumes within existing worker caps once pressure clears ([Refs https://github.com/Wladefant/veyyon/issues/549](https://github.com/Wladefant/veyyon/issues/549)).
-- Composer predictions show the message you are likely to send next as dim text in the empty composer after each turn, inserted by Tab and sent only by Enter; `composer.predictions.mode` selects `off` (the default, which sends no request), `chatgpt-pro`, which requests a ChatGPT Codex prediction on GPT-6 Astra or GPT-6.1 Sol only with the token of a ChatGPT Pro plan Codex login, never a routed or API-key credential, may count against that account's usage limits, and otherwise sends nothing and shows as greyed out in `/settings`, or `custom`, which uses the first model with credentials in `composer.predictions.model`, chosen from any provider in the settings model picker; a stored `composer.predictions.enabled: false` loads as `off`.
-- A composer prediction ends with a dim `· tab to accept` hint showing the configured Tab key; the hint leaves with the suggestion when you type or press Tab, and a row too narrow for both drops the hint before it hides the suggestion.
-- `read` refuses a re-read whose every displayed row is still shown byte for byte under the same header by an earlier read result in context, returning a one-line pointer to that output instead of the content; no argument overrides the refusal, a pruned, shaken or compacted earlier result no longer counts, and no read is refused while an extension handles the `context` event.
-- The account card's signed-out login note offers `f` to forget it, which stops the card and `/account` from reporting a login you do not intend to sign back in.
 - `prepareToolCall` in `@veyyon/agent-core/tool-call-preparation` and `Agent.prepareExternalToolCall` strip the intent field from a tool call's arguments, repair, validate and transform them as the agent loop does, for a provider that runs tool calls itself during the stream.
 - `Agent.buildSideRequestContext` takes an optional model, defaulting to the agent's, and normalizes messages and tools for that model.
 - Added Anthropic prompt-cache telemetry records (`Usage.cacheRequests`) capturing requested TTL, prefix hash, model, and request ID across provider attempts ([Refs #711](https://github.com/Wladefant/veyyon/pull/711)).
@@ -256,13 +263,28 @@
 
 ### Fixed
 
+- Complete opt-in draft MCP Events polling, push streams, and verified webhook subscription lifecycles ([Refs Wladefant/veyyon#592](https://github.com/Wladefant/veyyon/issues/592)).
+- Route configured per-server MCP Events notices as untrusted data to the owning session ([Refs Wladefant/veyyon#592](https://github.com/Wladefant/veyyon/issues/592)).
+- Discover project skills from repository directories (.agents/skills, .github/skills, .claude/skills) with whole-folder trust verification ([Refs #469](https://github.com/Wladefant/veyyon/issues/469)).
+- Optional encrypted cloud checkpoints preserve native journals, artifacts, blobs, dirty files and version pins. The default-off client supports restore and explicit forks. Durable Object epochs fence synchronized prompt and tool admission. The existing `sessions` command alias remains available ([issue](https://github.com/Wladefant/veyyon/issues/567)).
+- Auth gateway accepts a server-only live device token map with `--device-tokens-file`. PC2 uses existing `pi-native` transport with a device bearer instead of provider credentials ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
+- `deepseek` is a `web_search` provider and a `fetch` reader backend. Both use the `DEEPSEEK_API_KEY` that the DeepSeek model provider already reads, so a machine with a DeepSeek key searches and reads pages with no second credential.
+- Browser tab inventory lists only relay-controlled tabs, and approved close IDs apply only to ownerless relay-controlled tabs; lane-owned tabs remain protected ([Refs](https://github.com/Wladefant/veyyon/issues/538)).
+- Terminal provider HTTP 429 and 402 lane errors notify `model_routing.py record-error` without waiting. The reporter uses a hidden child, a 10-second timeout and payload-free failure logs ([Refs](https://github.com/Wladefant/superboard/issues/451)).
+- `irc` sends a durable notice to another session with `to: "session:<id>"` or `to: "session:all"`. A session reads its notices at the start of each prompt and at step boundaries, shows them to the model and forwards them to its running lanes, so a warning survives a dropped terminal pipe and reaches the lanes ([Refs](https://github.com/Wladefant/veyyon/issues/537)).
+- A delivered cross-session notice carries a header with the sender, the send and delivery times (Europe/Berlin and UTC) and the delay when it is late. A notice older than 2 hours (`ttlMinutes` on the send sets another limit) is not injected; the sender gets a "Not delivered" notice ([Refs](https://github.com/Wladefant/veyyon/pull/539)).
+- Topic replenishment pauses producer dispatch while downstream verification is blocked and resumes within existing worker caps once pressure clears ([Refs https://github.com/Wladefant/veyyon/issues/549](https://github.com/Wladefant/veyyon/issues/549)).
+- Composer predictions show the message you are likely to send next as dim text in the empty composer after each turn, inserted by Tab and sent only by Enter; `composer.predictions.mode` selects `off` (the default, which sends no request), `chatgpt-pro`, which requests a ChatGPT Codex prediction on GPT-6 Astra or GPT-6.1 Sol only with the token of a ChatGPT Pro plan Codex login, never a routed or API-key credential, may count against that account's usage limits, and otherwise sends nothing and shows as greyed out in `/settings`, or `custom`, which uses the first model with credentials in `composer.predictions.model`, chosen from any provider in the settings model picker; a stored `composer.predictions.enabled: false` loads as `off`.
+- A composer prediction ends with a dim `· tab to accept` hint showing the configured Tab key; the hint leaves with the suggestion when you type or press Tab, and a row too narrow for both drops the hint before it hides the suggestion.
+- `read` refuses a re-read whose every displayed row is still shown byte for byte under the same header by an earlier read result in context, returning a one-line pointer to that output instead of the content; no argument overrides the refusal, a pruned, shaken or compacted earlier result no longer counts, and no read is refused while an extension handles the `context` event.
+- The account card's signed-out login note offers `f` to forget it, which stops the card and `/account` from reporting a login you do not intend to sign back in.
 - MCP push event streams now skip a frame with an invalid or mismatched occurrence and advance past its cursor instead of cancelling and replaying the same frame forever ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
 - Restored launch request replay, idle socket cleanup, recovery quarantine, and file-search test injection after upstream conflict resolution.
 - Tool admission on a synchronized cloud session ends the run when write authority is lost, instead of letting the model re-sample against the fence; every admission throw, including a transient `assertWritable` failure, now ends the run (fail closed) ([Refs #715](https://github.com/Wladefant/veyyon/issues/715)).
 - Plan mode stays on, with its plan tools and plan model, when restoring the pre-plan model or tools fails during exit.
 - Migrated tests off the removed model-roles settings API to `defaultModel` and `agent.helpers`, deleted the role-table tests whose contract no longer exists, and moved fetch-timeout to `withScopedTimeoutSignal` ([Refs #707](https://github.com/Wladefant/veyyon/issues/707)).
 - `/reload-config` reloads advisor models from `agent.helpers` without rebinding Main or existing workers.
-- `/reload-config` also applies the compaction settings; every other setting outside spawn routing still requires a restart ([Refs #685](https://github.com/Wladefant/veyyon/issues/685)).
+- `/reload-config` also applies the compaction settings and `tools.maxDiscoveredTools`; every other setting outside spawn routing still requires a restart ([Refs #685](https://github.com/Wladefant/veyyon/issues/685)).
 - Shell and Python/JS eval withhold recognizable credential records before live output and backing artifacts, and redact known secret values ([issue](https://github.com/Wladefant/veyyon/issues/682)).
 - Python eval refuses Windows signal-zero process probes and checks KV lock owners through non-signaling process handles ([issue](https://github.com/Wladefant/veyyon/issues/73)).
 - Task and qa-verifier spawns preserve configured model priority instead of reordering Luna and Flash by spawn identity ([Refs #692](https://github.com/Wladefant/veyyon/issues/692)).

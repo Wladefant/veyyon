@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [1.6.4] - 2026-10-28
+
+### Fixed
+
+- Fixed `applyOwnerOnlyWindowsAcl` failing with `SeSecurityPrivilege` when it re-applied the owner-only ACL to an already protected path, which ended every Windows launch after the first.
+
+## [1.6.3] - 2026-10-28
+
+### Fixed
+
+- Fixed the compiled binary failing at startup with `Cannot find module './file-lock'` when opening `agent.db`: SQLite store helpers now load their lazy dependencies through the bundled `require`.
+
 ## [1.6.0] - 2026-10-28
 
 ### Added

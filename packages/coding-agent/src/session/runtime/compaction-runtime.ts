@@ -9,13 +9,14 @@
  * (the bar, the dead-end rescue tiers, the next turn) is `CompactionRecovery`'s. The post-turn check
  * that triggers a pass is `TurnContextCheck`'s; the pre-prompt and mid-run checks stay with the session.
  */
-import { resolveTelemetry } from "@veyyon/agent-core";
+import { type AgentMessage, resolveTelemetry } from "@veyyon/agent-core";
 import {
 	assertValidCompactionResult,
 	CompactionCancelledError,
 	type CompactionPreparation,
 	type CompactionResult,
 	type CompactionSettings,
+	DEFAULT_COMPACTION_SETTINGS,
 	DEFAULT_RESERVE_TOKENS,
 	formatCompactionThreshold,
 	getRemoteCompactionPreserveData,
@@ -23,6 +24,7 @@ import {
 	remoteCompactionReplayableBy,
 	renderTailElisionArtifact,
 	renderTailElisionMarker,
+	resolveThresholdTokens,
 	resolveThresholdWithOrigin,
 	rollbackTailElisions,
 	stripRemoteCompactionPreserveData,
@@ -51,7 +53,7 @@ import type { SessionBeforeCompactResult } from "../../extensibility/extensions"
 import type { CompactOptions } from "../../extensibility/extensions/types";
 import type { GoalAbortReason } from "../../goals/state";
 import { compactionModelCandidates } from "../agent-session-model-targets";
-import type { AgentSessionEvent } from "../agent-session-types";
+import type { AgentSessionEvent, ContextUsageBreakdown } from "../agent-session-types";
 import {
 	type AutoCompactionReason,
 	CompactionRecovery,
@@ -64,12 +66,20 @@ import {
 	type CompactionSummarizerHost,
 	type CompactionSummarizerSession,
 } from "./compaction-summarizer";
+import type { NonMessageBreakdown } from "./context-accounting";
 
 /** What {@link CompactionRuntime} reads from the session's public surface. */
 export interface CompactionSession extends CompactionSummarizerSession, CompactionRecoverySession {
 	dedupeRedundantToolResults(): Promise<{ toolResultsDropped: number; tokensFreed: number; artifactId?: string }>;
 	buildDisplaySessionContext(): SessionContext;
 	abort(options?: { goalReason?: GoalAbortReason; reason?: string; preserveCompaction?: boolean }): Promise<void>;
+	/** Prune search-activated tools after history compaction that were not called in `messages`. */
+	pruneDiscoveredToolsAfterCompaction?(messages: readonly AgentMessage[]): Promise<void>;
+	/** Current context usage by category from context accounting. */
+	getContextBreakdown?(options?: {
+		contextWindow?: number;
+		pendingMessages?: AgentMessage[];
+	}): ContextUsageBreakdown | undefined;
 }
 
 /** What {@link CompactionRuntime} needs from the session beyond its public surface. */
@@ -79,6 +89,8 @@ export interface CompactionHost extends CompactionSummarizerHost, CompactionReco
 	promptGeneration(): number;
 	/** Tokens the system prompt and the tool catalog add to every request. */
 	nonMessageTokens(): number;
+	/** Where the fixed tokens go: system prompt, tool definitions, skills, system context. */
+	nonMessageBreakdown?(): NonMessageBreakdown;
 	resetAllAdvisorRuntimes(): void;
 	/** Rebuild what was read from the replaced history: the plan reference, the advisors and the todo list. */
 	afterHistoryCompacted(): void;
@@ -103,6 +115,14 @@ function compactionRecord(
 		preserveData,
 	};
 }
+interface AutoCompactionGuardState {
+	readonly postCompactionSize: number;
+	readonly resumeThreshold: number;
+	readonly contextWindow: number;
+	readonly modelKey: string;
+	readonly sessionId: string | undefined;
+	readonly branchLength: number;
+}
 
 export class CompactionRuntime {
 	readonly #session: CompactionSession;
@@ -118,6 +138,8 @@ export class CompactionRuntime {
 	// switch to a smaller window), so the operator's configured amount is never
 	// silently reinterpreted. See #noticeCompactionThresholdClamp.
 	#compactionClampNoticeWindow: number | undefined = undefined;
+	/** Armed when auto-compaction leaves context >= threshold; suppresses future auto-compaction until growth boundary. */
+	#autoCompactionGuard: AutoCompactionGuardState | undefined = undefined;
 	readonly #summarizer: CompactionSummarizer;
 	readonly #recovery: CompactionRecovery;
 
@@ -154,6 +176,7 @@ export class CompactionRuntime {
 		if (this.#compactionAbortController) {
 			throw new Error("Compaction already in progress");
 		}
+		this.resetAutoCompactionGuard("manual_compact");
 		// Resolve the `/compact <mode>` subcommand up front so input validation
 		// runs before we disconnect/abort the active agent operation below.
 		const compactMode = options?.mode ? findCompactMode(options.mode) : undefined;
@@ -362,7 +385,8 @@ export class CompactionRuntime {
 			);
 			this.#session.sessionManager.coolCompactedHistory();
 			this.#session.agent.replaceMessages(this.#session.buildDisplaySessionContext().messages);
-			this.#host.resetAllAdvisorRuntimes();
+			await this.#pruneDiscoveredTools(this.#session.agent.state.messages);
+			this.#host.afterHistoryCompacted();
 			this.#host.rebasePendingContextSnapshotAfterHistoryRewrite();
 			await this.#host.emitSessionEvent({
 				type: "auto_compaction_end",
@@ -534,6 +558,11 @@ export class CompactionRuntime {
 		const compactionSettings = this.#session.settings.getGroup("compaction");
 		// Idle compaction has its own gate; `compaction.enabled` governs the rest.
 		if (reason !== "idle" && !compactionSettings.enabled) return COMPACTION_CHECK_NONE;
+		if (this.isAutoCompactionSuppressed()) {
+			const action = resolveCompactionEngineAction(compactionSettings.strategy);
+			await this.#emitEmptyAutoCompactionEnd(action, "skipped");
+			return COMPACTION_CHECK_NONE;
+		}
 		const generation = this.#host.promptGeneration();
 		this.#summarizer.forgetPayloadGap();
 		const suppressContinuation = options.suppressContinuation === true;
@@ -666,6 +695,7 @@ export class CompactionRuntime {
 			if (deadEndWarning) {
 				this.#session.emitNotice("warning", deadEndWarning, "compaction");
 			}
+			this.#evaluateAutoCompactionGuard();
 			return compactionCheckOutcome(continuationScheduled, progress.deadEnd);
 		} catch (error) {
 			this.#rollbackCompactionTailElisions(preparation);
@@ -762,8 +792,9 @@ export class CompactionRuntime {
 		await this.#persistCompactionTailElisions(preparation);
 		this.#session.sessionManager.coolCompactedHistory();
 		this.#session.agent.replaceMessages(this.#session.buildDisplaySessionContext().messages);
-		this.#host.rebasePendingContextSnapshotAfterHistoryRewrite();
+		await this.#pruneDiscoveredTools(this.#session.agent.state.messages);
 		this.#host.afterHistoryCompacted();
+		this.#host.rebasePendingContextSnapshotAfterHistoryRewrite();
 		if (codexCompaction) {
 			this.#resetCodexProviderAfterCompaction(codexCompaction);
 		} else {
@@ -788,5 +819,179 @@ export class CompactionRuntime {
 			sessionId: this.#session.sessionId,
 			compaction,
 		});
+	}
+
+	/**
+	 * Prune search-activated tools after history compaction that were not called in retained messages.
+	 * Swallows errors so a pruning failure does not fail the compaction that already committed.
+	 */
+	async #pruneDiscoveredTools(messages: readonly AgentMessage[]): Promise<void> {
+		try {
+			await this.#session.pruneDiscoveredToolsAfterCompaction?.(messages);
+		} catch (error) {
+			logger.warn("Pruning discovered tools after compaction failed", { error: errorMessage(error) });
+		}
+	}
+
+	/**
+	 * Whether the auto-compaction guard is currently suppressing automatic compaction passes.
+	 * True when an earlier auto-compaction pass left context >= threshold and total context has
+	 * not yet grown by at least `keepRecentTokens` above the post-compaction size.
+	 */
+	isAutoCompactionSuppressed(): boolean {
+		const guard = this.#autoCompactionGuard;
+		if (!guard) return false;
+
+		if (this.#shouldResetAutoCompactionGuard(guard)) {
+			this.#autoCompactionGuard = undefined;
+			return false;
+		}
+
+		const currentTokens = this.#estimateCurrentContextTokens(guard.contextWindow);
+		if (currentTokens >= guard.resumeThreshold) {
+			this.#autoCompactionGuard = undefined;
+			return false;
+		}
+
+		return true;
+	}
+
+	/**
+	 * Reset the auto-compaction guard. Called on manual compact, model change, session switch, or
+	 * history resets so prior guard state never suppresses an unrelated session or model.
+	 */
+	resetAutoCompactionGuard(reason?: string): void {
+		if (this.#autoCompactionGuard) {
+			logger.debug("Auto-compaction guard reset", {
+				reason,
+				priorPostSize: this.#autoCompactionGuard.postCompactionSize,
+			});
+			this.#autoCompactionGuard = undefined;
+		}
+	}
+
+	#shouldResetAutoCompactionGuard(guard: AutoCompactionGuardState): boolean {
+		const currentSessionId = this.#session.sessionId;
+		if (currentSessionId && guard.sessionId && currentSessionId !== guard.sessionId) {
+			return true;
+		}
+		const model = this.#session.model;
+		const currentModelKey = model ? `${model.provider}/${model.id}` : "";
+		if (currentModelKey !== guard.modelKey) {
+			return true;
+		}
+		const currentWindow = model?.contextWindow ?? 0;
+		if (currentWindow !== guard.contextWindow) {
+			return true;
+		}
+		const branchLength = this.#session.sessionManager.getBranch().length;
+		if (branchLength < guard.branchLength) {
+			return true;
+		}
+		return false;
+	}
+
+	#estimateCurrentContextTokens(contextWindow: number): number {
+		const breakdown = this.#session.getContextBreakdown?.({ contextWindow });
+		if (breakdown) {
+			return breakdown.usedTokens;
+		}
+		const usage = this.#session.getContextUsage?.({ contextWindow });
+		if (usage && usage.tokens > 0) {
+			return usage.tokens;
+		}
+		const nonMessage = this.#host.nonMessageTokens?.() ?? 0;
+		const stored = this.#host.estimateStoredContextTokens?.() ?? 0;
+		return nonMessage + stored;
+	}
+
+	#getContextSplits(contextWindow: number): {
+		totalTokens: number;
+		systemPromptTokens: number;
+		toolDefinitionsTokens: number;
+		historyTokens: number;
+	} {
+		const breakdown = this.#session.getContextBreakdown?.({ contextWindow });
+		if (breakdown) {
+			const systemPromptTokens =
+				breakdown.systemPromptTokens + (breakdown.systemContextTokens ?? 0) + (breakdown.skillsTokens ?? 0);
+			const toolDefinitionsTokens = breakdown.systemToolsTokens;
+			const historyTokens = breakdown.messagesTokens;
+			const totalTokens = breakdown.usedTokens;
+			return { totalTokens, systemPromptTokens, toolDefinitionsTokens, historyTokens };
+		}
+		const nonMessage = this.#host.nonMessageTokens?.() ?? 0;
+		const stored = this.#host.estimateStoredContextTokens?.() ?? 0;
+		const usage = this.#session.getContextUsage?.({ contextWindow });
+		const totalTokens = usage?.tokens ?? nonMessage + stored;
+		const nonMsg = this.#host.nonMessageBreakdown?.();
+		const systemPromptTokens = nonMsg
+			? nonMsg.systemPromptTokens + nonMsg.systemContextTokens + nonMsg.skillsTokens
+			: Math.floor(nonMessage / 2);
+		const toolDefinitionsTokens = nonMsg ? nonMsg.toolsTokens : Math.max(0, nonMessage - systemPromptTokens);
+		const historyTokens = Math.max(0, totalTokens - nonMessage);
+		return { totalTokens, systemPromptTokens, toolDefinitionsTokens, historyTokens };
+	}
+
+	#formatAutoCompactionGuardWarning(
+		totalTokens: number,
+		thresholdTokens: number,
+		keepRecentTokens: number,
+		splits: { systemPromptTokens: number; toolDefinitionsTokens: number; historyTokens: number },
+	): string {
+		const dominant =
+			splits.systemPromptTokens >= splits.toolDefinitionsTokens && splits.systemPromptTokens >= splits.historyTokens
+				? "system prompt"
+				: splits.toolDefinitionsTokens >= splits.historyTokens
+					? "tool definitions"
+					: "history";
+		return (
+			`Automatic compaction is paused: context size after compaction (${totalTokens.toLocaleString()} tokens) ` +
+			`remains at or above the compaction threshold (${thresholdTokens.toLocaleString()} tokens) with largest split ${dominant}. ` +
+			`Context split: system prompt ~${splits.systemPromptTokens.toLocaleString()} tokens, ` +
+			`tool definitions ~${splits.toolDefinitionsTokens.toLocaleString()} tokens, ` +
+			`history ~${splits.historyTokens.toLocaleString()} tokens. ` +
+			`Future auto-compaction is suppressed until context grows by at least ${keepRecentTokens.toLocaleString()} tokens above post-compaction size.`
+		);
+	}
+
+	#evaluateAutoCompactionGuard(): void {
+		const model = this.#session.model;
+		const contextWindow = model?.contextWindow ?? 0;
+		if (contextWindow <= 0) return;
+
+		const compactionSettings = this.#session.settings.getGroup("compaction");
+		const thresholdTokens = resolveThresholdTokens(contextWindow, compactionSettings);
+		const splits = this.#getContextSplits(contextWindow);
+
+		if (splits.totalTokens < thresholdTokens) {
+			this.#autoCompactionGuard = undefined;
+			return;
+		}
+
+		const keepRecentTokens = Math.max(
+			1,
+			compactionSettings.keepRecentTokens ?? DEFAULT_COMPACTION_SETTINGS.keepRecentTokens ?? 10000,
+		);
+		const resumeThreshold = splits.totalTokens + keepRecentTokens;
+		const branchLength = this.#session.sessionManager.getBranch().length;
+		const modelKey = model ? `${model.provider}/${model.id}` : "";
+
+		this.#autoCompactionGuard = {
+			postCompactionSize: splits.totalTokens,
+			resumeThreshold,
+			contextWindow,
+			modelKey,
+			sessionId: this.#session.sessionId,
+			branchLength,
+		};
+
+		const warning = this.#formatAutoCompactionGuardWarning(
+			splits.totalTokens,
+			thresholdTokens,
+			keepRecentTokens,
+			splits,
+		);
+		this.#session.emitNotice("warning", warning, "compaction");
 	}
 }
