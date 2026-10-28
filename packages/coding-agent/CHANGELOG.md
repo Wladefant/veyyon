@@ -50,6 +50,7 @@
 - The release at dispose of the session's background jobs, owned job manager, eval kernels, session-scoped resources and MCP hold moved out of the session class into the `SessionRelease` session collaborator, and the memory backends' release into `MemoryContext` ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - How a custom message reaches the conversation, queued, held for the next turn, run as a turn or appended, and the custom-message prompt with its keyword notices moved out of the session class into the `CustomMessages` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
+- An extension command run on a session with no UI receives the extension runner's no-op UI context instead of a second copy of it; no user-facing change.
 
 ### Fixed
 

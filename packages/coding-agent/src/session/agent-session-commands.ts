@@ -13,12 +13,12 @@ import { errorMessage, logger, settleWithin } from "@veyyon/utils";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands/types";
-import type { ExtensionCommandContext, ExtensionRunner, ExtensionUIContext } from "../extensibility/extensions";
+import type { ExtensionCommandContext, ExtensionRunner } from "../extensibility/extensions";
 import { createExtensionModelQuery } from "../extensibility/extensions/model-api";
+import { noOpUIContext } from "../extensibility/extensions/runner";
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
 import type { HookCommandContext } from "../extensibility/hooks/types";
 import { parseSlashCommand, resolveSlashCommand } from "../slash-commands/helpers/parse";
-import { theme } from "../theme/theme-binding";
 import { parseCommandArgs } from "../utils/command-args";
 import { SHUTDOWN_DISPOSE_TIMEOUT_MS } from "./agent-session-types";
 import { USER_INTERRUPT_LABEL } from "./messages";
@@ -44,31 +44,6 @@ export interface SessionCommandHost extends DetachedAbortTarget {
 	reload(): Promise<void>;
 	obfuscateProviderText(text: string): string;
 }
-
-const noOpUIContext: ExtensionUIContext = {
-	select: async (_title, _options, _dialogOptions) => undefined,
-	confirm: async (_title, _message, _dialogOptions) => false,
-	input: async (_title, _placeholder, _dialogOptions) => undefined,
-	notify: () => {},
-	onTerminalInput: () => () => {},
-	setStatus: () => {},
-	setWorkingMessage: () => {},
-	setWidget: () => {},
-	setTitle: () => {},
-	setEditorText: () => {},
-	pasteToEditor: () => {},
-	getEditorText: () => "",
-	editor: async () => undefined,
-	addAutocompleteProvider: () => {},
-	get theme() {
-		return theme;
-	},
-	getAllThemes: () => Promise.resolve([]),
-	getTheme: () => Promise.resolve(undefined),
-	setTheme: _theme => Promise.resolve({ success: false, error: "UI not available" }),
-	getToolsExpanded: () => false,
-	setToolsExpanded: () => {},
-};
 
 /**
  * Try to execute an extension command. Returns true if command was found and executed.

@@ -166,7 +166,8 @@ export async function emitSessionShutdownEvent(extensionRunner: ExtensionRunner 
 	return false;
 }
 
-const noOpUIContext: ExtensionUIContext = {
+/** The UI context of a session with no UI attached: every prompt resolves empty and every setter is ignored. */
+export const noOpUIContext: ExtensionUIContext = {
 	select: async (_title, _options, _dialogOptions) => undefined,
 	confirm: async (_title, _message, _dialogOptions) => false,
 	input: async (_title, _placeholder, _dialogOptions) => undefined,
