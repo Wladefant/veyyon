@@ -20,7 +20,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { Effort } from "@veyyon/catalog/effort";
-import { calculateCost, getBundledModels, getModelPricing } from "@veyyon/catalog/models";
+import { calculateCost, emptyUsage, getBundledModels, getModelPricing } from "@veyyon/catalog/models";
 import {
 	applyCommandCodeContract,
 	COMMAND_CODE_COSTS,
@@ -52,15 +52,7 @@ function servedSpec(id: string): ModelSpec<"openai-completions"> {
 }
 
 function usage(fields: Partial<Usage>): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		...fields,
-	};
+	return { ...emptyUsage(), ...fields };
 }
 
 describe("a Command Code model arrives priced", () => {

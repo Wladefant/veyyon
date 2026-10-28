@@ -164,14 +164,7 @@ describe("AssistantMessageComponent streaming thinking pulse", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
-			usage: {
-				input: 0,
-				output,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: output,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), output, totalTokens: output },
 			stopReason: "stop",
 			timestamp: Date.now(),
 		};

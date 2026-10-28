@@ -30,6 +30,7 @@ import type { AgentEvent, AgentLoopConfig, AgentTool } from "@veyyon/agent-core/
 import type { AssistantMessage } from "@veyyon/ai";
 import { z } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { createUserMessage, identityConverter } from "./helpers";
 
 interface RecordedSpan {
@@ -106,15 +107,7 @@ function makeUsage(
 	totalTokens = input + output,
 	extras: Partial<AssistantMessage["usage"]> = {},
 ) {
-	return {
-		input,
-		output,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		...extras,
-	};
+	return { ...emptyUsage(), input, output, totalTokens, ...extras };
 }
 
 interface TestTool {

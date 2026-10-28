@@ -204,14 +204,7 @@ describe("a payload too large for every summarizer is cut, not parked", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: CONTEXT_WINDOW - 2_000,
-				output: 1_000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: CONTEXT_WINDOW - 1_000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: CONTEXT_WINDOW - 2_000, output: 1_000, totalTokens: CONTEXT_WINDOW - 1_000 },
 			timestamp: Date.now(),
 		};
 	}

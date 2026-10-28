@@ -40,6 +40,7 @@ import { clearCustomApis } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import type { Api } from "@veyyon/ai/types";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry, type ProviderConfigInput } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -54,12 +55,10 @@ const ELISION_MODEL_ID = "advisor-model";
 const ELISION_SOURCE = "ext://advisor-elision-test";
 
 const usage = (input: number, output: number): Usage => ({
+	...emptyUsage(),
 	input,
 	output,
-	cacheRead: 0,
-	cacheWrite: 0,
 	totalTokens: input + output,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 });
 
 function assistantMessage(model: Model<Api>, text: string): AssistantMessage {

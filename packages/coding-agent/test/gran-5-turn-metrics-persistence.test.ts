@@ -37,13 +37,13 @@ function assistantWithTurnMetrics(): AssistantMessage {
 		status: "ok",
 		ttftMs: 500, // 1500ms generation window
 		usage: {
+			...emptyUsage(),
 			input: 100,
 			output: 300,
 			cacheRead: 20,
 			cacheWrite: 10,
 			totalTokens: 430,
 			reasoningTokens: 40,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
 		upstreamProvider: "Anthropic",
 	});

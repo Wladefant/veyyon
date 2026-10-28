@@ -18,7 +18,7 @@ import {
 import { estimateTokens } from "@veyyon/agent-core/compaction/token-estimate";
 import * as ai from "@veyyon/ai";
 import type { AssistantMessage, Model, Usage } from "@veyyon/ai/types";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { buildSessionContext } from "@veyyon/kernel/session/session-context";
 import type {
 	CompactionEntry,
@@ -149,12 +149,12 @@ function buildLargeSessionEntries(): SessionEntry[] {
 
 function createMockUsage(input: number, output: number, cacheRead = 0, cacheWrite = 0): Usage {
 	return {
+		...emptyUsage(),
 		input,
 		output,
 		cacheRead,
 		cacheWrite,
 		totalTokens: input + output + cacheRead + cacheWrite,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
 }
 

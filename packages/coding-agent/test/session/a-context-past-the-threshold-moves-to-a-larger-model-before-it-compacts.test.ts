@@ -20,6 +20,7 @@ import * as compactionModule from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -32,14 +33,7 @@ import { type } from "arktype";
 const OVERFLOW_ERROR = "context_length_exceeded: Your input exceeds the context window of this model.";
 
 function usage(input: number): AssistantMessage["usage"] {
-	return {
-		input,
-		output: 10,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: input + 10,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	return { ...emptyUsage(), input, output: 10, totalTokens: input + 10 };
 }
 
 function assistantFrom(

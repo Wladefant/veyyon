@@ -35,6 +35,7 @@ import type { AgentMessage } from "@veyyon/agent-core/types";
 import type { AssistantMessage, Model, Usage } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { createUserMessage } from "./helpers";
 
 const MODEL: Model = buildModel({
@@ -70,12 +71,12 @@ function makeTelemetryConfig(): AgentTelemetryConfig {
 
 function makeUsage(input = 120, output = 80, cacheRead = 0, cacheWrite = 0): Usage {
 	return {
+		...emptyUsage(),
 		input,
 		output,
 		cacheRead,
 		cacheWrite,
 		totalTokens: input + output + cacheRead + cacheWrite,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
 }
 

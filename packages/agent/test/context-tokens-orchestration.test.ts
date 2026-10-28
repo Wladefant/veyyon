@@ -1,17 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { calculateContextTokens, calculatePromptTokens } from "@veyyon/agent-core/compaction";
 import type { Usage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 function usage(overrides: Partial<Usage>): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		...overrides,
-	};
+	return { ...emptyUsage(), ...overrides };
 }
 
 describe("calculateContextTokens", () => {

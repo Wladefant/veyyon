@@ -4,6 +4,7 @@ import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { ExtensionRuntime, loadExtensionFromFactory } from "@veyyon/coding-agent/extensibility/extensions/loader";
@@ -36,14 +37,7 @@ function activeGoalState(): GoalModeState {
 }
 
 function highUsage(input: number) {
-	return {
-		input,
-		output: 100,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: input + 100,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	return { ...emptyUsage(), input, output: 100, totalTokens: input + 100 };
 }
 
 describe("AgentSession mid-run threshold compaction", () => {

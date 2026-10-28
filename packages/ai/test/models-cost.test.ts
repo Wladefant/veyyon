@@ -76,13 +76,13 @@ describe("calculateCost", () => {
 			},
 		};
 		const usage: Usage = {
+			...emptyUsage(),
 			input: 100,
 			output: 20,
 			cacheRead: 50,
 			cacheWrite: 10,
 			totalTokens: 250,
 			orchestration: { input: 25, output: 40, cacheRead: 5 },
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		};
 
 		calculateCost(model, usage);

@@ -42,14 +42,7 @@ const isPlanApprovedCall = (args: unknown[]): boolean =>
 	(args[1] as { synthetic?: boolean }).synthetic === true;
 
 function usageWithInput(input: number): Usage {
-	return {
-		input,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: input,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	return { ...emptyUsage(), input, totalTokens: input };
 }
 
 function assistantWithUsage(overrides: Partial<AssistantMessage> = {}): AssistantMessage {

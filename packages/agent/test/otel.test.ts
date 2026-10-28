@@ -631,14 +631,7 @@ describe("agent-loop OTEL instrumentation", () => {
 		await recordManualChatTelemetry(telemetry, {
 			model: mock.model,
 			responseModel: "manual-model",
-			usage: {
-				input: 7,
-				output: 3,
-				totalTokens: 10,
-				cacheRead: 0,
-				cacheWrite: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 7, output: 3, totalTokens: 10 },
 			stepNumber: 1,
 		});
 		expect(events).toHaveLength(1);

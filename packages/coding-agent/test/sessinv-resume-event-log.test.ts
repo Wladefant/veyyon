@@ -38,6 +38,7 @@ import * as path from "node:path";
 import { Agent, type AgentMessage, type StreamFn } from "@veyyon/agent-core";
 import type { AssistantMessage, Model, Usage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -89,14 +90,7 @@ function stateText(message: AgentMessage): string {
 }
 
 function makeUsage(input: number, output: number): Usage {
-	return {
-		input,
-		output,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: input + output,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	return { ...emptyUsage(), input, output, totalTokens: input + output };
 }
 
 function assistantMessage(model: Model, text: string, input: number, output: number): AssistantMessage {
