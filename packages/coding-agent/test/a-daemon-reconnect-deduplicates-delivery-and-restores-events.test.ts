@@ -646,3 +646,62 @@ test("a retried acked delivery on a subscribed socket announces its settled outc
 	await client.next(frame => frame.id === "ping");
 	expect(client.frames.filter(frame => frame.event?.kind === "delivery")).toEqual([]);
 });
+
+// WHY: A delivery can settle after a socket accepts an ack but while that same socket replays more than
+// one MiB of history. The announcement and replay must share one receipt. GAP: this does not test a slow
+// operating-system pipe; it holds replay open across many real-server history frames.
+test("a delivery settling during large history replay reaches its acking subscriber once", async () => {
+	const gate = Promise.withResolvers<void>();
+	const history = Array.from({ length: 1201 }, (_, index) => ({
+		entryId: `e-${index}`,
+		text: `turn ${index} ${"x".repeat(1024)}`,
+	}));
+	const owner = await serve(async () => {
+		await gate.promise;
+		return "during-replay";
+	}, "sess-replay-race", () => history);
+	const client = connect(owner);
+	client.send({ id: "ack-race", op: "deliver", text: "race", mode: "auto", ack: true, messageId: "m-race" });
+	expect((await client.next(frame => frame.id === "ack-race")).result).toMatchObject({
+		accepted: true,
+		messageId: "m-race",
+		state: "pending",
+	});
+
+	client.send({ id: "sub-race", op: "subscribe", cursor: "e-0" });
+	let historyFrames = 0;
+	for (let index = 0; index < 12; index++) {
+		await client.next(frame => {
+			if (frame.event?.kind !== "history") return false;
+			historyFrames++;
+			return true;
+		});
+		if (index === 0) gate.resolve();
+	}
+	await client.next(frame => frame.id === "sub-race");
+	await client.next(frame => frame.event?.kind === "delivery" && frame.event.messageId === "m-race");
+	client.send({ id: "ping-race", op: "ping" });
+	await client.next(frame => frame.id === "ping-race");
+
+	expect(historyFrames).toBe(13);
+	expect(client.frames.filter(frame => frame.event?.kind === "delivery" && frame.event.messageId === "m-race")).toHaveLength(0);
+});
+
+// WHY: A settled ack is announced to its socket before that socket subscribes, then subscribe replay
+// sends the same record again. A receipt ledger must suppress that duplicate across both send paths.
+// GAP: the settling-during-replay case above covers a pending record's announcement/replay boundary.
+test("a settled ack followed by subscribe on the same socket has one delivery frame", async () => {
+	const owner = await serve(async () => "settled");
+	const client = connect(owner);
+	client.send({ id: "ack-before-sub", op: "deliver", text: "once", mode: "auto", ack: true, messageId: "m-settled" });
+	await client.next(frame => frame.id === "ack-before-sub");
+	await client.next(frame => frame.event?.kind === "delivery" && frame.event.messageId === "m-settled");
+
+	client.send({ id: "subscribe-after-ack", op: "subscribe" });
+	await client.next(frame => frame.id === "subscribe-after-ack");
+	await client.next(frame => frame.event?.kind === "history");
+	client.send({ id: "ping-after-sub", op: "ping" });
+	await client.next(frame => frame.id === "ping-after-sub");
+
+	expect(client.frames.filter(frame => frame.event?.kind === "delivery" && frame.event.messageId === "m-settled")).toHaveLength(0);
+});
