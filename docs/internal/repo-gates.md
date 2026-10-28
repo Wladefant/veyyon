@@ -43,16 +43,17 @@ because the account's five concurrent macOS slots were being spent four at a tim
 an artifact the commit had not changed. `scripts/install-methods-coverage.test.ts` fails if a monitor
 comes back onto the push path.
 
-## Two coding-agent buckets run two chunks at a time
+## Three coding-agent buckets run two chunks at a time
 
 The coding-agent UI, runtime and native buckets share one runner job. Each bucket is split into
 chunks of 5 or 10 files, and each chunk is its own `bun test` process. `ciChunksAtOnce` in
 `codingAgentBucketPlans` (`scripts/ci-test-ts.ts`) sets how many chunk processes of one bucket CI
-runs side by side: two for the runtime and native buckets, one for the singleton and UI buckets.
+runs side by side: two for the UI, runtime and native buckets, one for the singleton bucket.
 Run 40581477474 spent 10.9 minutes on the native bucket and 4.3 on the runtime bucket, one chunk
-at a time, in the longest job of the run. The width multiplies the job's peak RSS, never one
-process's. `scripts/no-coding-agent-bucket-runs-as-one-process.test.ts` fails when a mode that
-reaches the singleton bucket runs more than one chunk at a time.
+at a time, in the longest job of the run. The UI bucket took 128 s one chunk at a time and 66 s two
+at a time on four pinned CPUs, with the sum of its chunk times up 5%. The width multiplies the job's
+peak RSS, never one process's. `scripts/no-coding-agent-bucket-runs-as-one-process.test.ts` fails
+when a mode that reaches the singleton bucket runs more than one chunk at a time.
 
 ## Why the changelog gate is push-based
 

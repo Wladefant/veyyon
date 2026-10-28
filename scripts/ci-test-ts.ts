@@ -187,9 +187,12 @@ export const validModes: Record<Mode, true> = {
 // Each chunk is its own process with its own heap, so the width bounds the job's
 // total RSS (width x one chunk, about 1.3 GB at the worst) and never what one
 // process holds. The singleton bucket stays at 1, because nothing may run beside a
-// global-state suite. The UI bucket stays at 1: its suites are bound by CPU and
-// frame timers. The runtime and native buckets mostly wait on child processes,
-// sockets and timers, so two at a time on the 4-vCPU runner roughly halves them.
+// global-state suite. The UI bucket's suites spend most of their time waiting on
+// frame timers, so two of its chunks side by side on the 4-vCPU runner took the
+// bucket from 128 s to 66 s with the chunk-time sum up 5%; three took it to 56 s with
+// the sum up 33%, which is contention a frame-timed suite should not run under. The
+// runtime and native buckets mostly wait on child processes, sockets and timers, so
+// two at a time roughly halves them as well.
 interface CodingAgentBucketPlan {
 	label: string;
 	parallel: number;
@@ -200,7 +203,7 @@ interface CodingAgentBucketPlan {
 
 export const codingAgentBucketPlans: Record<CodingAgentBucket, CodingAgentBucketPlan> = {
 	singleton: { label: "singleton/global-state bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 1 },
-	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 5, ciChunksAtOnce: 1 },
+	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 5, ciChunksAtOnce: 2 },
 	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 2 },
 	native: { label: "native/tooling/browser/unit bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 2 },
 };
