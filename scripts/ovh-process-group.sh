@@ -10,15 +10,20 @@ cleanup() {
   (( cleaning )) && return
   cleaning=1
   if [[ -n "$child_pid" ]]; then
-    # Keep retrying through the setsid startup window; the leader fallback also
-    # covers the interval before it has established its process group.
     for ((i = 0; i < 10; i++)); do
-      kill -TERM -- "-$child_pid" 2>/dev/null || true
       kill -TERM "$child_pid" 2>/dev/null || true
+      kill -TERM -- "-$child_pid" 2>/dev/null || true
+      if ! kill -0 "$child_pid" 2>/dev/null && ! kill -0 -- "-$child_pid" 2>/dev/null; then
+        break
+      fi
       sleep 0.1
     done
-    kill -KILL -- "-$child_pid" 2>/dev/null || true
-    kill -KILL "$child_pid" 2>/dev/null || true
+    if kill -0 "$child_pid" 2>/dev/null; then
+      kill -KILL "$child_pid" 2>/dev/null || true
+    fi
+    if kill -0 -- "-$child_pid" 2>/dev/null; then
+      kill -KILL -- "-$child_pid" 2>/dev/null || true
+    fi
     wait "$child_pid" 2>/dev/null || true
   fi
 }

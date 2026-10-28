@@ -17,17 +17,22 @@ if child == 0:
  grandchild=os.fork()
  if grandchild == 0:
   if mode == 'stubborn': signal.signal(signal.SIGTERM,signal.SIG_IGN)
-  open(os.environ['PIDFILE']+'.grandchild','w').write(str(os.getpid()))
+  publish_pid(os.environ['PIDFILE']+'.grandchild',[os.getpid()])
   time.sleep(60); os._exit(0)
- open(os.environ['PIDFILE']+'.child','w').write(str(os.getpid()))
+ publish_pid(os.environ['PIDFILE']+'.child',[os.getpid()])
  time.sleep(60); os._exit(0)
+def publish_pid(path, pids):
+ temp=path+'.tmp.'+str(os.getpid())
+ with open(temp,'w') as file: file.write(' '.join(map(str,pids)))
+ os.replace(temp,path)
 def read_pid(path):
- try: return int(open(path).read())
+ try:
+  with open(path) as file: return int(file.read())
  except (FileNotFoundError, ValueError): return None
 deadline=time.monotonic()+3
 while (read_pid(os.environ['PIDFILE']+'.child') is None or read_pid(os.environ['PIDFILE']+'.grandchild') is None) and time.monotonic()<deadline: time.sleep(.005)
-pids=[os.getpid(),child,read_pid(os.environ['PIDFILE']+'.child'),read_pid(os.environ['PIDFILE']+'.grandchild')]
-open(os.environ['PIDFILE'],'w').write(' '.join(map(str,pids)))
+pids=list(dict.fromkeys([os.getpid(),child,read_pid(os.environ['PIDFILE']+'.child'),read_pid(os.environ['PIDFILE']+'.grandchild')]))
+publish_pid(os.environ['PIDFILE'],pids)
 if mode == 'exit': os._exit(0)
 time.sleep(60)
 """
@@ -70,6 +75,7 @@ def run_case(name, command, expected, sig=None, need_tree=False):
             if need_tree:
                 wait_for_file(pidfile, proc)
                 pids = [int(pid) for pid in pidfile.read_text().split()]
+                require(len(pids) == len(set(pids)), f"{name}: PID file contains duplicate PIDs: {pids}")
             if sig is not None:
                 os.kill(proc.pid, sig)
             status = proc.wait(timeout=4)
