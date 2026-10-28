@@ -1,10 +1,10 @@
 // Adapted from markit-ai (MIT). See ../NOTICE.
 
 import { createTurndown, normalizeTablesHtml } from "@veyyon/utils/turndown";
-import { XMLParser } from "fast-xml-parser";
 import { resolveArchiveMemberPath, unzip, unzipText } from "../../../utils/zip";
 import type { ConversionResult, Converter, StreamInfo } from "../types";
-import { xmlNodeText } from "./xml-text";
+import { acceptsStream } from "./accepts-stream";
+import { createMarkitXmlParser, xmlList, xmlNodeText } from "./xml-text";
 
 const EXTENSIONS = [".epub"];
 const MIMETYPES = ["application/epub", "application/epub+zip", "application/x-epub+zip"];
@@ -53,25 +53,18 @@ export class EpubConverter implements Converter {
 	name = "epub";
 
 	accepts(streamInfo: StreamInfo): boolean {
-		if (streamInfo.extension && EXTENSIONS.includes(streamInfo.extension)) return true;
-		if (streamInfo.mimetype && MIMETYPES.some(m => streamInfo.mimetype?.startsWith(m))) return true;
-		return false;
+		return acceptsStream(streamInfo, EXTENSIONS, MIMETYPES);
 	}
 
 	async convert(input: Buffer, _streamInfo: StreamInfo): Promise<ConversionResult> {
 		const entries = unzip(input);
-		const parser = new XMLParser({
-			ignoreAttributes: false,
-			attributeNamePrefix: "@_",
-			textNodeName: "#text",
-			processEntities: { maxTotalExpansions: 1_000_000 },
-		});
+		const parser = createMarkitXmlParser();
 		// Find content.opf path from container.xml
 		const containerXml = unzipText(entries, "META-INF/container.xml");
 		if (!containerXml) throw new Error("Invalid EPUB: missing container.xml");
 		const container = parser.parse(containerXml) as ContainerDoc;
 		const rootfile = container.container?.rootfiles?.rootfile;
-		const opfPath = Array.isArray(rootfile) ? rootfile[0]["@_full-path"] : rootfile?.["@_full-path"];
+		const opfPath = xmlList(rootfile)[0]?.["@_full-path"];
 		if (!opfPath) throw new Error("Invalid EPUB: missing rootfile path");
 		// Parse content.opf
 		const opfXml = unzipText(entries, opfPath);
@@ -89,14 +82,14 @@ export class EpubConverter implements Converter {
 		};
 		// Build manifest map (id → href)
 		const manifestItems = opf.package?.manifest?.item;
-		const itemList = Array.isArray(manifestItems) ? manifestItems : manifestItems ? [manifestItems] : [];
+		const itemList = xmlList(manifestItems);
 		const manifest = new Map<string, string>();
 		for (const item of itemList) {
 			manifest.set(item["@_id"], item["@_href"]);
 		}
 		// Get spine order
 		const spineItems = opf.package?.spine?.itemref;
-		const spineList = Array.isArray(spineItems) ? spineItems : spineItems ? [spineItems] : [];
+		const spineList = xmlList(spineItems);
 		const spineOrder = spineList.map(s => s["@_idref"]);
 		// Resolve file paths
 		const basePath = opfPath.includes("/") ? opfPath.substring(0, opfPath.lastIndexOf("/")) : "";

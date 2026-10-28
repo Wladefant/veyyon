@@ -315,7 +315,6 @@ const NAMED_BY_NO_TEST: readonly string[] = [
 	"packages/coding-agent/src/eval/py/session-namespace.ts",
 	"packages/coding-agent/src/eval/session-id.ts",
 	"packages/coding-agent/src/export/markit/converters/docx.ts",
-	"packages/coding-agent/src/export/markit/converters/epub.ts",
 	"packages/coding-agent/src/export/markit/converters/pptx.ts",
 	"packages/coding-agent/src/export/redact-snapshot.ts",
 	"packages/coding-agent/src/extensibility/session-handler-types.ts",

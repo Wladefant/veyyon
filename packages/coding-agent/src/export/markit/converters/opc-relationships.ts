@@ -8,6 +8,7 @@
 import * as path from "node:path";
 import type { XMLParser } from "fast-xml-parser";
 import { resolveArchiveMemberPath, type Unzipped, unzipText } from "../../../utils/zip";
+import { xmlList } from "./xml-text";
 
 interface RelationshipNode {
 	"@_Id"?: string;
@@ -42,7 +43,7 @@ export function readPartRelationships(
 	const relsXml = unzipText(entries, relsPath);
 	if (!relsXml) return relationships;
 	const list = (parser.parse(relsXml) as RelationshipsDoc).Relationships?.Relationship;
-	for (const node of Array.isArray(list) ? list : list ? [list] : []) {
+	for (const node of xmlList(list)) {
 		const id = node["@_Id"];
 		const target = node["@_Target"];
 		if (!id || !target || node["@_TargetMode"] === "External") continue;
