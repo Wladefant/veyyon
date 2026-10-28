@@ -24,12 +24,6 @@ function makeSession(cwd: string): ToolSession {
 	};
 }
 
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 // Only the deterministic, fast disk reads — plain file line/range reads and
 // directory listings — are non-abortable: a turn interrupt that fires mid-read
 // must not surface "Operation aborted" on a read that would have completed
@@ -53,7 +47,7 @@ describe("plain-file and directory reads ignore an already-aborted signal", () =
 		const filePath = path.join(testDir, "range.txt");
 		fs.writeFileSync(filePath, Array.from({ length: 40 }, (_, i) => `line-${i + 1}`).join("\n"));
 
-		const result = await tool.execute("call-range", { path: `${filePath}:20-22` }, abortedSignal());
+		const result = await tool.execute("call-range", { path: `${filePath}:20-22` }, AbortSignal.abort());
 		const output = toolResultText(result);
 
 		expect(result.isError).toBeFalsy();
@@ -65,7 +59,7 @@ describe("plain-file and directory reads ignore an already-aborted signal", () =
 		const filePath = path.join(testDir, "multi.txt");
 		fs.writeFileSync(filePath, Array.from({ length: 40 }, (_, i) => `line-${i + 1}`).join("\n"));
 
-		const result = await tool.execute("call-multi", { path: `${filePath}:2-3,30-31` }, abortedSignal());
+		const result = await tool.execute("call-multi", { path: `${filePath}:2-3,30-31` }, AbortSignal.abort());
 		const output = toolResultText(result);
 
 		expect(result.isError).toBeFalsy();
@@ -78,7 +72,7 @@ describe("plain-file and directory reads ignore an already-aborted signal", () =
 			fs.writeFileSync(path.join(testDir, `f-${i}.txt`), "");
 		}
 
-		const result = await tool.execute("call-dir", { path: testDir }, abortedSignal());
+		const result = await tool.execute("call-dir", { path: testDir }, AbortSignal.abort());
 		const output = toolResultText(result);
 
 		expect(result.isError).toBeFalsy();
@@ -99,7 +93,7 @@ describe("plain-file and directory reads ignore an already-aborted signal", () =
 		fs.writeFileSync(filePath, "hello\nworld\n");
 
 		await expect(
-			tool.execute("call-conflicts", { path: `${filePath}:conflicts` }, abortedSignal()),
+			tool.execute("call-conflicts", { path: `${filePath}:conflicts` }, AbortSignal.abort()),
 		).rejects.toBeInstanceOf(ToolAbortError);
 	});
 });

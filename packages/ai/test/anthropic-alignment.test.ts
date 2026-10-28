@@ -61,12 +61,6 @@ const UMANS_ANTHROPIC_MODEL: Model<"anthropic-messages"> = buildModel({
 	maxTokens: 32_768,
 });
 
-function createAbortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 type CaptureAnthropicOptions = {
 	isOAuth?: boolean;
 	metadata?: { user_id?: string; account_uuid?: string; accountId?: string; account_id?: string };
@@ -96,7 +90,7 @@ function captureAnthropicPayload(
 	const stream = streamAnthropic(model, context, {
 		apiKey: "sk-ant-oat-test",
 		isOAuth: options?.isOAuth ?? true,
-		signal: createAbortedSignal(),
+		signal: AbortSignal.abort(),
 		metadata: options?.metadata,
 		thinkingEnabled: options?.thinkingEnabled,
 		reasoning: options?.reasoning,
@@ -125,7 +119,7 @@ function captureSimpleAnthropicPayload(
 	const { promise, resolve, reject } = Promise.withResolvers<unknown>();
 	const stream = streamSimple(model, context, {
 		apiKey: "sk-ant-oat-test",
-		signal: createAbortedSignal(),
+		signal: AbortSignal.abort(),
 		reasoning,
 		onPayload: payload => resolve(payload),
 	});

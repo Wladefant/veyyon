@@ -38,12 +38,6 @@ import type { AssistantMessage, Context, FetchImpl, Model, ModelSpec } from "@ve
 import { buildModel } from "@veyyon/catalog/build";
 import { getBundledModel } from "@veyyon/catalog/models";
 
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 function sseDoneResponse(): Response {
 	return new Response("data: [DONE]\n\n", {
 		status: 200,
@@ -96,7 +90,7 @@ async function capturePayload(
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	streamOpenAICompletions(model, context, {
 		apiKey: "test-key",
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => resolve(payload),
 		...opts,
 		fetch: mockFetch(),

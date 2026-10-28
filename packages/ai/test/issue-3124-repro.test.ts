@@ -154,16 +154,10 @@ function toolHistoryContext(): Context {
 	};
 }
 
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 function captureBedrockPayload(context: Context): Promise<BedrockToolConfigPayload> {
 	const { promise, resolve } = Promise.withResolvers<BedrockToolConfigPayload>();
 	void streamBedrock(model(), context, {
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		toolChoice: "none",
 		onPayload: payload => {
 			resolve(isBedrockToolConfigPayload(payload) ? payload : {});

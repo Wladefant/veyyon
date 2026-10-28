@@ -7,12 +7,6 @@ const testContext: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: 0 }],
 };
 
-function createAbortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 function captureResponsesPayload(
 	model: Model<"openai-responses">,
 	reasoning: "minimal" | "low" | "medium" | "high" | "xhigh",
@@ -20,7 +14,7 @@ function captureResponsesPayload(
 	const { promise, resolve } = Promise.withResolvers<Record<string, unknown>>();
 	streamOpenAIResponses(model, testContext, {
 		apiKey: "test-key",
-		signal: createAbortedSignal(),
+		signal: AbortSignal.abort(),
 		reasoning,
 		reasoningSummary: "auto",
 		onPayload: payload => resolve(payload as Record<string, unknown>),

@@ -8,17 +8,11 @@ const context: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
 };
 
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 async function capturePayload(model: Model<"openai-completions">): Promise<Record<string, unknown>> {
 	const { promise, resolve } = Promise.withResolvers<Record<string, unknown>>();
 	streamOpenAICompletions(model, context, {
 		apiKey: "test-key",
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		reasoning: "high",
 		onPayload: payload => resolve(payload as Record<string, unknown>),
 	});

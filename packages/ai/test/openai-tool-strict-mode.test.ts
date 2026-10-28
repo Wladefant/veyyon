@@ -54,12 +54,6 @@ const testContext: Context = {
 	tools: [testTool],
 };
 
-function createAbortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 function toRecord(value: unknown): Record<string, unknown> {
 	return value != null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
@@ -82,7 +76,7 @@ function captureCompletionsPayload(
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	streamOpenAICompletions(model, context, {
 		apiKey: "test-key",
-		signal: createAbortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => resolve(payload),
 	});
 	return promise;
@@ -92,7 +86,7 @@ function captureResponsesPayload(model: Model<"openai-responses">, context: Cont
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	streamOpenAIResponses(model, context, {
 		apiKey: "test-key",
-		signal: createAbortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => resolve(payload),
 	});
 	return promise;

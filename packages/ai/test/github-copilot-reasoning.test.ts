@@ -9,18 +9,12 @@ const testContext: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
 };
 
-function createAbortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 function captureResponsesPayload(model: Model<"openai-responses">): Promise<unknown> {
 	const { promise, resolve, reject } = Promise.withResolvers<unknown>();
 	const stream = streamOpenAIResponses(model, testContext, {
 		apiKey: "ghu_test_copilot_token",
 		reasoning: Effort.High,
-		signal: createAbortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => resolve(payload),
 	});
 	// A failure before the request is built never reaches `onPayload`, so
@@ -40,7 +34,7 @@ function captureAnthropicPayload(model: Model<"anthropic-messages">): Promise<un
 		isOAuth: false,
 		reasoning: Effort.High,
 		thinkingEnabled: true,
-		signal: createAbortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => resolve(payload),
 	});
 	// A failure before the request is built never reaches `onPayload`, so

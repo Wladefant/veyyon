@@ -45,12 +45,6 @@ type AnthropicPayload = {
 	}>;
 };
 
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 async function makeRedPng(width: number, height: number): Promise<string> {
 	const seed = Buffer.from(RED_1X1_PNG_BASE64, "base64");
 	const upscaled = await new Bun.Image(seed).resize(width, height, { filter: "nearest" }).png().bytes();
@@ -89,7 +83,7 @@ function capturePayload(context: Context): Promise<AnthropicPayload> {
 	void streamAnthropic(model, context, {
 		apiKey: "sk-ant-test",
 		isOAuth: false,
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => {
 			resolve(payload as AnthropicPayload);
 			return undefined;

@@ -31,12 +31,6 @@ const gpt4oMiniSpec: ModelSpec<"openai-completions"> = (() => {
 	return { ...rest, compat: compatConfig };
 })();
 
-function createAbortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 function toObject(value: unknown): Record<string, unknown> | null {
 	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
 }
@@ -109,7 +103,7 @@ async function captureOpenAICompletionsPayload(
 	streamOpenAICompletions(model, context, {
 		apiKey: "test-key",
 		fetch: fetchMock,
-		signal: createAbortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => resolve(payload),
 		...options,
 	});
@@ -845,7 +839,7 @@ describe("openai-completions compatibility", () => {
 		streamOpenAICompletions(model, baseContext(), {
 			apiKey: "test-key",
 			reasoning: "high",
-			signal: createAbortedSignal(),
+			signal: AbortSignal.abort(),
 			onPayload: payload => resolve(payload),
 		});
 		const payload = await promise;
@@ -872,7 +866,7 @@ describe("openai-completions compatibility", () => {
 			{
 				apiKey: "test-key",
 				reasoning: "max",
-				signal: createAbortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload: payload => resolve(payload),
 				maxTokens: 65_536,
 			},
@@ -912,7 +906,7 @@ describe("openai-completions compatibility", () => {
 				fetch: fetchMock,
 				reasoning: "high",
 				toolChoice: { type: "tool", name: "read" },
-				signal: createAbortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload: payload => resolve(payload),
 			},
 		);
@@ -1054,7 +1048,7 @@ describe("openai-completions compatibility", () => {
 		streamOpenAICompletions(model, baseContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
-			signal: createAbortedSignal(),
+			signal: AbortSignal.abort(),
 			onPayload: payload => resolve(payload),
 		});
 
@@ -1423,7 +1417,7 @@ describe("kimi model detection via detectCompat", () => {
 				apiKey: "test-key",
 				fetch: fetchMock,
 				reasoning: "high",
-				signal: createAbortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload: payload => resolve(payload),
 			},
 		);
@@ -1492,7 +1486,7 @@ describe("kimi model detection via detectCompat", () => {
 				apiKey: "test-key",
 				fetch: fetchMock,
 				reasoning: "high",
-				signal: createAbortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload: payload => resolve(payload),
 			},
 		);
@@ -1558,7 +1552,7 @@ describe("kimi model detection via detectCompat", () => {
 			{
 				apiKey: "test-key",
 				fetch: fetchMock,
-				signal: createAbortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload: payload => resolve(payload),
 			},
 		);
@@ -1659,7 +1653,7 @@ describe("kimi model detection via detectCompat", () => {
 				// Forced tool choice triggers `disableReasoningOnForcedToolChoice`
 				// for Kimi, suppressing reasoning_effort on the wire body.
 				toolChoice: { type: "tool", name: "read" },
-				signal: createAbortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload: payload => resolve(payload),
 			},
 		);
@@ -1751,7 +1745,7 @@ describe("kimi model detection via detectCompat", () => {
 				fetch: fetchMock,
 				reasoning: "high",
 				toolChoice: { type: "tool", name: "read" },
-				signal: createAbortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload: payload => resolve(payload),
 			},
 		);
@@ -1838,7 +1832,7 @@ describe("kimi model detection via detectCompat", () => {
 				apiKey: "test-key",
 				fetch: fetchMock,
 				reasoning: "high",
-				signal: createAbortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload: payload => resolve(payload),
 			},
 		);
@@ -1922,7 +1916,7 @@ describe("kimi model detection via detectCompat", () => {
 				apiKey: "test-key",
 				fetch: fetchMock,
 				reasoning,
-				signal: createAbortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload: payload => resolve(payload),
 			},
 		);
@@ -2404,7 +2398,7 @@ describe("openrouterVariant request integration", () => {
 		streamOpenAICompletions(model, baseContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
-			signal: createAbortedSignal(),
+			signal: AbortSignal.abort(),
 			openrouterVariant: "nitro",
 			onPayload: payload => resolve(payload),
 		});
@@ -2424,7 +2418,7 @@ describe("openrouterVariant request integration", () => {
 		streamOpenAICompletions(model, baseContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
-			signal: createAbortedSignal(),
+			signal: AbortSignal.abort(),
 			openrouterVariant: "nitro",
 			onPayload: payload => resolve(payload),
 		});
@@ -2442,7 +2436,7 @@ describe("openrouterVariant request integration", () => {
 		streamOpenAICompletions(model, baseContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
-			signal: createAbortedSignal(),
+			signal: AbortSignal.abort(),
 			openrouterVariant: "nitro",
 			onPayload: payload => resolve(payload),
 		});

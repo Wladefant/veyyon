@@ -22,12 +22,6 @@ import { buildModel } from "@veyyon/catalog/build";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { type } from "arktype";
 
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 function bedrockModel(): Model<"openai-completions"> {
 	const base = getBundledModel("openai", "gpt-4o-mini");
 	return buildModel({
@@ -49,7 +43,7 @@ async function capturePayload(
 	streamOpenAICompletions(bedrockModel(), context, {
 		...opts,
 		apiKey: "test-key",
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => resolve(payload),
 	});
 	return (await promise) as Record<string, unknown>;

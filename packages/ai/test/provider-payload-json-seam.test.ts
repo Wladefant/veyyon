@@ -204,12 +204,6 @@ function asFetch(implementation: (input: string | URL | Request, init?: RequestI
 	return Object.assign(implementation, { preconnect: fetch.preconnect });
 }
 
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 function sseResponse(...chunks: unknown[]): Response {
 	const body = chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join("");
 	return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
@@ -283,7 +277,7 @@ function startAnthropic(cap: CaptureHook): Streamish {
 		batteryContext(),
 		{
 			apiKey: "test-key",
-			signal: abortedSignal(),
+			signal: AbortSignal.abort(),
 			onPayload: payload => cap(payload),
 		},
 	);
@@ -306,7 +300,7 @@ function startAzure(cap: CaptureHook): Streamish {
 		apiKey: "test-key",
 		azureBaseUrl: model.baseUrl,
 		azureApiVersion: "v1",
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => cap(payload),
 	});
 }
@@ -328,7 +322,7 @@ function startBedrock(cap: CaptureHook): Streamish {
 		batteryContext(),
 		{
 			apiKey: "test-key",
-			signal: abortedSignal(),
+			signal: AbortSignal.abort(),
 			fetch: asFetch(async () => new Response("", { status: 200 })),
 			onPayload: payload => cap(payload),
 		},
@@ -677,7 +671,7 @@ function startOpenAICompletions(cap: CaptureHook): Streamish {
 		{
 			apiKey: "test-key",
 			fetch: asFetch(async () => sseResponse("[DONE]")),
-			signal: abortedSignal(),
+			signal: AbortSignal.abort(),
 			onPayload: payload => cap(payload),
 		},
 	);
@@ -700,7 +694,7 @@ function startOpenAIResponses(cap: CaptureHook): Streamish {
 		batteryContext(),
 		{
 			apiKey: "test-key",
-			signal: abortedSignal(),
+			signal: AbortSignal.abort(),
 			onPayload: payload => cap(payload),
 		},
 	);
@@ -712,7 +706,7 @@ function startOpenrouter(cap: CaptureHook): Streamish {
 	return streamSimple(getBundledModel("openrouter", "anthropic/claude-sonnet-4"), batteryContext(), {
 		apiKey: "test-key",
 		fetch: asFetch(async () => sseResponse("[DONE]")),
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => cap(payload),
 	});
 }
@@ -723,7 +717,7 @@ function startKimiCode(cap: CaptureHook): Streamish {
 	const model = getBundledModel("kimi-code", "kimi-for-coding") as Model<"openai-completions">;
 	return streamKimi(model, batteryContext(), {
 		apiKey: "test-key",
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => cap(payload),
 	});
 }

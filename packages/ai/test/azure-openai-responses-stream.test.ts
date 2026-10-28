@@ -19,12 +19,6 @@ const azureModel: Model<"azure-openai-responses"> = buildModel({
 	maxTokens: 128000,
 });
 
-function createAbortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 function createSseResponse(events: unknown[]): Response {
 	const sse = `${events.map(event => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`;
 	const encoder = new TextEncoder();
@@ -71,7 +65,7 @@ async function captureAzurePayload(
 		azureBaseUrl: model.baseUrl,
 		azureApiVersion: "v1",
 		...options,
-		signal: createAbortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => resolve(payload as Record<string, unknown>),
 	});
 	return promise;
@@ -216,7 +210,7 @@ describe("azure openai responses streaming", () => {
 			{
 				apiKey: "test-key",
 				fetch: fetchMock as FetchImpl,
-				signal: createAbortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload,
 			},
 		).result();

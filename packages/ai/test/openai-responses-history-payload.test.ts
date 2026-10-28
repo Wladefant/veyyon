@@ -19,12 +19,6 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-function createAbortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 function createCodexToken(accountId: string): string {
 	const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
 	const payload = Buffer.from(
@@ -220,7 +214,7 @@ function captureResponsesPayload(
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	streamOpenAIResponses(model, context, {
 		apiKey: "test-key",
-		signal: createAbortedSignal(),
+		signal: AbortSignal.abort(),
 		providerSessionState,
 		...options,
 		onPayload: payload => resolve(payload),
@@ -232,7 +226,7 @@ function captureCodexPayload(model: Model<"openai-codex-responses">, context: Co
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	streamOpenAICodexResponses(model, context, {
 		apiKey: createCodexToken("acc_test"),
-		signal: createAbortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => resolve(payload),
 	});
 	return promise;
