@@ -5,6 +5,7 @@ import { PlanReviewOverlay } from "@veyyon/coding-agent/modes/terminal/component
 import type { HookSelectorSlider } from "@veyyon/coding-agent/modes/terminal/components/selectors/hook-selector";
 import { getThemeByName, setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
 import { setKeybindings } from "@veyyon/utils/keybindings";
+import { requireTheme } from "../../../helpers/require-theme";
 import { useFullColor } from "../../../helpers/theme-assertions";
 
 const UP = "\x1b[A";
@@ -37,8 +38,7 @@ describe("PlanReviewOverlay", () => {
 	// impossible. Declare the policy rather than inherit it from the terminal.
 	useFullColor();
 	beforeAll(async () => {
-		darkTheme = await getThemeByName("dark");
-		if (!darkTheme) throw new Error("Failed to load dark theme");
+		darkTheme = await requireTheme("dark");
 	});
 
 	beforeEach(() => {

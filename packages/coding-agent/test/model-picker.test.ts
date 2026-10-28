@@ -10,6 +10,7 @@ import {
 } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-picker";
 import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
+import { requireTheme } from "./helpers/require-theme";
 
 function normalize(lines: readonly string[]): string {
 	return stripVTControlCharacters(lines.join("\n")).replace(/\s+/g, " ").trim();
@@ -89,10 +90,7 @@ const ESC = "\x1b";
 
 describe("ModelPicker", () => {
 	beforeAll(async () => {
-		testTheme = await getThemeByName("dark");
-		if (!testTheme) {
-			throw new Error("Failed to load dark theme for ModelPicker tests");
-		}
+		testTheme = await requireTheme("dark");
 	});
 
 	test("disables models below the current context size and picks the first enabled one", () => {

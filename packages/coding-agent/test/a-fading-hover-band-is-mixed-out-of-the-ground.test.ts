@@ -26,16 +26,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { modalRevealGround } from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-shell";
 import { selectionBand } from "@veyyon/coding-agent/modes/terminal/components/selectors/selector-helpers";
-import {
-	getSelectListTheme,
-	getSettingsListTheme,
-	getThemeByName,
-	setThemeInstance,
-	theme,
-} from "@veyyon/coding-agent/theme/theme";
+import { getSelectListTheme, getSettingsListTheme, setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
 import { getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
 import { visibleWidth } from "@veyyon/utils/width";
 import { bandRgb, hexRgb, rgbDistance } from "./helpers/band-colors";
+import { requireTheme } from "./helpers/require-theme";
 
 const originalColorterm = Bun.env.COLORTERM;
 const originalAnsiPolicy = getAnsiPolicy();
@@ -51,8 +46,7 @@ async function useTheme(name: string, mode: "truecolor" | "256color"): Promise<v
 	const originalTerm = Bun.env.TERM;
 	if (mode === "256color") Bun.env.TERM = "linux";
 	try {
-		const loaded = await getThemeByName(name);
-		if (!loaded) throw new Error(`${name} theme unavailable in test env`);
+		const loaded = await requireTheme(name);
 		if (loaded.getColorMode() !== mode) throw new Error(`${name} built as ${loaded.getColorMode()}, wanted ${mode}`);
 		setThemeInstance(loaded);
 	} finally {

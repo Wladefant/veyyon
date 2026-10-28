@@ -40,18 +40,12 @@ import {
 } from "@veyyon/coding-agent/modes/terminal/components/status-line/state-grammar";
 import type { SegmentContext } from "@veyyon/coding-agent/modes/terminal/components/status-line/types";
 import { SYMBOL_PRESETS } from "@veyyon/coding-agent/theme/symbols";
-import {
-	createTheme,
-	getBuiltinThemes,
-	getThemeByName,
-	setThemeInstance,
-	type Theme,
-	theme,
-} from "@veyyon/coding-agent/theme/theme";
+import { createTheme, getBuiltinThemes, setThemeInstance, type Theme, theme } from "@veyyon/coding-agent/theme/theme";
 import { AUTONOMY_LABEL } from "@veyyon/coding-agent/tools/core/approval-modes";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
 import { visibleWidth } from "@veyyon/utils/width";
 import { NO_SESSION_FACTS } from "../../../../../src/modes/terminal/components/status-line/session-facts";
+import { requireTheme } from "../../../../helpers/require-theme";
 
 /** The context patch that turns one base mode on, keyed by its id in the table. */
 const ACTIVATORS: Record<string, Partial<SegmentContext>> = {
@@ -141,8 +135,7 @@ let priorTheme: Theme | undefined;
 
 beforeAll(async () => {
 	await Settings.init({ inMemory: true });
-	priorTheme = await getThemeByName("dark");
-	if (!priorTheme) throw new Error("theme unavailable");
+	priorTheme = await requireTheme("dark");
 	setThemeInstance(priorTheme);
 });
 

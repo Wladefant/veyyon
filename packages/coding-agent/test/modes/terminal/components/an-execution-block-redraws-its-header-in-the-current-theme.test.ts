@@ -13,8 +13,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { BashExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/bash-execution";
 import { EvalExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/eval-execution";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
+import { requireTheme } from "../../../helpers/require-theme";
 
 const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
 
@@ -26,8 +27,7 @@ const BLOCKS: Array<[string, () => ExecutionBlock]> = [
 ];
 
 async function useTheme(name: string): Promise<void> {
-	const theme = await getThemeByName(name);
-	if (!theme) throw new Error(`Expected the built-in ${name} theme`);
+	const theme = await requireTheme(name);
 	setThemeInstance(theme);
 }
 

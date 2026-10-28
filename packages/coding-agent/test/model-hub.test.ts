@@ -16,6 +16,7 @@ import { getThemeByName, setThemeInstance, theme } from "@veyyon/coding-agent/th
 import { configuredThinkingLevelsForModel } from "@veyyon/coding-agent/thinking";
 import type { TUI } from "@veyyon/tui";
 import { requireBundledModel } from "../../agent/test/helpers";
+import { requireTheme } from "./helpers/require-theme";
 
 function normalize(lines: readonly string[]): string {
 	return stripVTControlCharacters(lines.join("\n")).replace(/\s+/g, " ").trim();
@@ -169,10 +170,7 @@ const ESC = "\x1b";
 
 describe("ModelHub", () => {
 	beforeAll(async () => {
-		testTheme = await getThemeByName("dark");
-		if (!testTheme) {
-			throw new Error("Failed to load dark theme for ModelHub tests");
-		}
+		testTheme = await requireTheme("dark");
 	});
 
 	afterEach(() => {

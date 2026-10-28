@@ -7,6 +7,7 @@ import { AskDialogComponent } from "@veyyon/coding-agent/modes/terminal/componen
 import { activityColorToken, getShimmerActivity, setShimmerActivity } from "@veyyon/coding-agent/theme/shimmer";
 import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { setKeybindings } from "@veyyon/utils/keybindings";
+import { requireTheme } from "../../../helpers/require-theme";
 import { useFullColor } from "../../../helpers/theme-assertions";
 
 const DOWN = "\x1b[B";
@@ -24,8 +25,7 @@ function render(component: AskDialogComponent): string {
 
 describe("AskDialogComponent", () => {
 	beforeAll(async () => {
-		darkTheme = await getThemeByName("dark");
-		if (!darkTheme) throw new Error("Failed to load dark theme");
+		darkTheme = await requireTheme("dark");
 	});
 
 	beforeEach(() => {
