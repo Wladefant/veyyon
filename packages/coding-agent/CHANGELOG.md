@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Plan mode stays on, with its plan tools and plan model, when restoring the pre-plan model or tools fails during exit.
 - Migrated tests off the removed model-roles settings API to `defaultModel` and `agent.helpers`, deleted the role-table tests whose contract no longer exists, and moved fetch-timeout to `withScopedTimeoutSignal` ([Refs #707](https://github.com/Wladefant/veyyon/issues/707)).
 - `/reload-config` reloads advisor models from `agent.helpers` without rebinding Main or existing workers.
 - Python eval refuses Windows signal-zero process probes and checks KV lock owners through non-signaling process handles ([issue](https://github.com/Wladefant/veyyon/issues/73)).

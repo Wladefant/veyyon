@@ -12,7 +12,7 @@ import type { CompactionOutcome } from "@veyyon/agent-core/compaction";
 import type { Model } from "@veyyon/ai";
 import { modelsAreEqual } from "@veyyon/catalog/models";
 import type { OverlayHandle } from "@veyyon/tui";
-import { errorMessage, formatNumber, isEnoent, prompt } from "@veyyon/utils";
+import { errorMessage, formatNumber, isEnoent, logger, prompt } from "@veyyon/utils";
 import type { ContextUsage } from "../../../extensibility/extensions";
 import { copyLocalRoot, listLocalPlanFileUrls, resolveLocalUrlToPath } from "../../../internal-urls/local-protocol";
 import {
@@ -361,13 +361,32 @@ export class PlanModeController {
 		// Drop any helper-model switch before the restore can enqueue the pre-plan model.
 		this.#pendingModelSwitch = undefined;
 		const previousTools = this.#previousTools;
-		if (previousTools && previousTools.length > 0) {
-			await this.ctx.session.setActiveToolsByName(previousTools);
-		}
-		if (this.#previousModelState) {
-			if (!options?.deferModelRestore) {
-				await this.#restorePlanPreviousModel(this.#previousModelState);
+		// Captured before any restore so a failed exit can put plan mode back as it was.
+		const planTools = this.ctx.session.getActiveToolNames();
+		const planModel = this.ctx.session.model;
+		const planThinkingLevel = this.ctx.session.configuredThinkingLevel();
+		try {
+			if (previousTools && previousTools.length > 0) {
+				await this.ctx.session.setActiveToolsByName(previousTools);
 			}
+			if (this.#previousModelState) {
+				if (!options?.deferModelRestore) {
+					await this.#restorePlanPreviousModel(this.#previousModelState);
+				}
+			}
+		} catch (error) {
+			// The exit did not complete: reinstate the plan tools and plan model the user still sees.
+			this.enabled = true;
+			try {
+				await this.ctx.session.setActiveToolsByName(planTools);
+				if (planModel) {
+					await this.#restorePlanPreviousModel({ model: planModel, thinkingLevel: planThinkingLevel });
+				}
+			} catch (rollbackError) {
+				// Keep the original exit error as the thrown cause; report the rollback failure separately.
+				logger.warn("Plan mode exit rollback failed", { error: errorMessage(rollbackError) });
+			}
+			throw error;
 		}
 		this.ctx.session.setStandingResolveHandler?.(null);
 		this.ctx.session.setPlanModeState(undefined);
