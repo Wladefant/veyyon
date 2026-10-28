@@ -11,7 +11,11 @@ import { privateTempDir } from "@veyyon/utils/temp";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
 import { getContentType } from "./content-type";
-import { buildDirectoryResource, ensureWithinRoot as ensureWithinRootShared } from "./filesystem-resource";
+import {
+	buildDirectoryResource,
+	ensureWithinRoot as ensureWithinRootShared,
+	realPathWithinRoot,
+} from "./filesystem-resource";
 import { parseInternalUrl } from "./parse";
 import { validateRelativePath } from "./relative-path";
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, UrlCompletion } from "./types";
@@ -377,31 +381,15 @@ async function resolveLocalTarget(url: InternalUrl, opts: LocalProtocolOptions):
 
 	const relativePath = extractRelativePath(url);
 	const targetPath = relativePath ? path.resolve(resolvedRoot, relativePath) : resolvedRoot;
-	ensureWithinRoot(targetPath, resolvedRoot);
 
 	if (targetPath === resolvedRoot) {
 		return { kind: "listing", root: resolvedRoot };
 	}
 
-	const parentDir = path.dirname(targetPath);
-	try {
-		const realParent = await fs.realpath(parentDir);
-		ensureWithinRoot(realParent, resolvedRoot);
-	} catch (error) {
-		if (!isEnoent(error)) throw error;
+	const realTargetPath = await realPathWithinRoot(targetPath, resolvedRoot, "local");
+	if (realTargetPath === null) {
+		throw new Error(`Local file not found: ${url.href}`);
 	}
-
-	let realTargetPath: string;
-	try {
-		realTargetPath = await fs.realpath(targetPath);
-	} catch (error) {
-		if (isEnoent(error)) {
-			throw new Error(`Local file not found: ${url.href}`);
-		}
-		throw error;
-	}
-
-	ensureWithinRoot(realTargetPath, resolvedRoot);
 
 	const stat = await fs.stat(realTargetPath);
 	if (stat.isDirectory()) {
