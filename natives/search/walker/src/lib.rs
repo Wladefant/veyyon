@@ -2268,7 +2268,8 @@ fn walk_parallel_dir<'scope, E, S, H>(
 			return;
 		},
 		Err(ReadDirError::Walk(WalkError::InvalidData { path, message })) => {
-			// A malformed listing ends both walks; the file-candidate walk reported these too.
+			// A malformed listing ends both walks; the file-candidate walk reported these
+			// too.
 			shared.record_dir_failure(path, message);
 			recycle_parallel_scratch(scratch);
 			return;
@@ -6219,8 +6220,12 @@ mod tests {
 			options,
 			filter: request.filter.clone(),
 			matcher: FastIgnore::new(options, request.overrides),
+			collect: false,
+			strict_dir_errors: false,
+			#[cfg(target_os = "linux")]
+			stat_emitted: false,
 		};
-		let sink = |_: &FileCandidate| Ok::<_, Infallible>(ParallelWalkControl::Continue);
+		let sink = |_: &Entry<'_>| Ok::<_, Infallible>(ParallelWalkControl::Continue);
 		let heartbeat = || Ok::<(), Infallible>(());
 		let shared = ParallelWalkShared::new(&sink, &heartbeat);
 		let root_ignore = context.matcher.root_state(&context.root);

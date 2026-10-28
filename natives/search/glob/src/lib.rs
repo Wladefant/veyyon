@@ -561,7 +561,9 @@ mod tests {
 		assert_eq!(walk_depth_bound("src/{a,{b/c,d/e/f}}/*.ts"), 5);
 		assert_eq!(walk_depth_bound("{a,b}"), 1);
 		assert_eq!(walk_depth_bound("[{]a/b"), 2);
-		assert_eq!(walk_depth_bound("\\{a/b,c\\}"), 2);
+		// The engine reads `\` as an escape on Unix and as a separator on Windows, so
+		// this pattern counts one separator on Unix and two on Windows.
+		assert_eq!(walk_depth_bound("\\{a/b,c\\}"), if cfg!(windows) { 3 } else { 2 });
 		assert_eq!(walk_depth_bound("{a,b"), usize::MAX);
 		assert_eq!(walk_depth_bound(&format!("{}a{}", "{".repeat(64), "}".repeat(64))), usize::MAX);
 	}
