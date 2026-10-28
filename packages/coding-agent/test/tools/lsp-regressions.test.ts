@@ -103,12 +103,15 @@ function textStream(text: string): ReadableStream<Uint8Array> {
 	return body;
 }
 
+/** A process that has already exited, carrying the fields a real `Subprocess` has once it exits. */
 function completedProcess(stdout = "", stderr = "", exitCode = 0): Subprocess {
 	return {
 		pid: 12_345,
 		stdout: textStream(stdout),
 		stderr: textStream(stderr),
 		exited: Promise.resolve(exitCode),
+		exitCode,
+		killed: false,
 		kill: () => {},
 	} as Subprocess;
 }
@@ -1145,6 +1148,32 @@ describe("lsp regressions", () => {
 			expect(buildCalls[0]?.cmd.slice(2).sort()).toEqual(["./...", "./service/...", "./tools/helper/..."]);
 			expect(textResult(result)).toContain("Workspace diagnostics (");
 			expect(textResult(result)).toContain("go build");
+		} finally {
+			tempDir.removeSync();
+		}
+	});
+
+	// cargo writes its diagnostics to stderr. A capture that keeps only the last 32 KiB of
+	// stderr (the failure-trace tail) drops the first diagnostics of a long run, which are the
+	// ones the 50-line window shows.
+	it("shows a checker's first diagnostics when it writes more stderr than the failure trace keeps", async () => {
+		const tempDir = TempDir.createSync("@veyyon-lsp-cargo-stderr-");
+		const line = (n: number) => `src/main.rs:${n}:1: error[E0425]: cannot find value ${"x".repeat(1024)}`;
+		const stderr = Array.from({ length: 60 }, (_, i) => line(i + 1)).join("\n");
+		const spawnCalls: BunSpawnCall[] = [];
+		recordBunSpawn(spawnCalls, cmd => (cmd[0] === "cargo" ? { stderr, exitCode: 101 } : {}));
+
+		try {
+			await Bun.write(path.join(tempDir.path(), "Cargo.toml"), '[package]\nname = "fixture"\nversion = "0.0.0"\n');
+
+			const tool = new LspTool(makeLspSession(tempDir.path()));
+			const output = textResult(await tool.execute("cargo-stderr", { action: "diagnostics", file: "*" }));
+
+			expect(spawnCalls.map(call => call.cmd)).toEqual([["cargo", "check", "--message-format=short"]]);
+			expect(output).toContain(line(1));
+			expect(output).toContain(line(50));
+			expect(output).not.toContain(line(51));
+			expect(output).toContain("[…10ln elided…]");
 		} finally {
 			tempDir.removeSync();
 		}
